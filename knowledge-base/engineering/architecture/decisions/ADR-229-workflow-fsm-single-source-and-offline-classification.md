@@ -4,7 +4,8 @@
 
 ## Status
 
-Accepted. Amended 2026-09-19 (#8325), 2026-09-21 (#8399) and 2026-09-22 (#8470).
+Accepted. Amended 2026-09-19 (#8325), 2026-09-21 (#8399), 2026-09-22 (#8470)
+and 2026-09-23 (PR #8627).
 
 ## Context
 
@@ -63,7 +64,10 @@ mirroring `DECLARED_SUB_STEPS` under the same parity block; it still has one
 consumer.]** **[Amended 2026-09-21 (#8399): `sub_steps` now carries `brainstorm`,
 `plan`, `postmerge` and `ship`, each anchored to the SKILL.md section that
 invokes `compound` (a textual anchor: it proves the call is named there, not
-that it is the only or an unconditional one); the view still has one consumer.]** A `bun -e` read of the const from that script was weighed at
+that it is the only or an unconditional one); the view still has one consumer.]**
+**[Amended 2026-09-23 (PR #8627): `ship` also carries `review`, anchored to
+§Phase 1.5 and §Phase 5.5 under the same textual-anchor limits; see the
+2026-09-23 re-baseline. The view still has one consumer.]** A `bun -e` read of the const from that script was weighed at
 review (bun is present wherever the classifier runs) and not taken — see the
 Alternatives table — so the mirror stays.
 
@@ -130,6 +134,7 @@ the base, which closes the rename escape.
 | Read the const from bash via `bun -e` instead of keeping a mirrored view | Considered at review: bun is mandatory on the operator machine and in the CI scripts shard, so the premise "bash cannot read a TS const" is false where the classifier runs. Not taken in this PR: it trades one parity test for a runtime dependency on the plugin's TS module from repo tooling, and reverses a decision the plan carried through review. Either is defensible; the reason recorded here is that the mirror was the decision reviewed, not that the alternative cannot work |
 | Enrol the transition probe in the follow-through sweeper | The sweeper runs on a hosted runner against a fresh checkout, where the gitignored invocation log cannot exist; measured: FAIL on every sweep — the #6042 locality error one row up, reproduced |
 | Restore a CI schedule for the rule-metrics aggregator | Removed deliberately under #6042: fresh checkouts committed all-zero snapshots that clobbered the real local aggregate |
+| Declare `ship → review` as a transition edge (PR #8627) | Wrong meaning: ship CALLS review, it does not hand off to it. The `compound → X` tail from ship's own Phase 2 survives the edge, and any review after ship becomes legal-if-taken. Declared as a `ship` sub-step instead |
 | Raise emission coverage via SKILL.md prose | Emission via SKILL.md is LIVE, not stalled: ADR-179 decision 9 (#7482, 2026-08-13) inverted the `source incidents.sh` form into `SOLEUR_RULE_APPLIED` markers captured hook-side — 21 sites across 7 lifecycle skills on `main`, 869 `applied` events in the live `.jsonl` logs across all roots on 2026-09-18 (excluding rotated archives). The audit's "4 of 10 skills" was a grep for the string `incidents.sh`, which the inverted transport no longer contains. Widening the remaining ~80 uncovered rules is a per-rule choice, not a mechanism gap, and out of scope here |
 
 ## Consequences
@@ -201,10 +206,40 @@ the base, which closes the rename escape.
   post-merge with no `work`). `ship → plan` 50 → 51 and `postmerge → plan`
   33 → 34 shift through the collapse and stay undeclared by ruling (second-feature
   starts). `review → ship` stays at 51 — it is not a collapse candidate (below).
-  No collapse can launder a review skip: `K compound X` becomes a declared pair
-  only when X is K's own declared successor, and none of those is `ship`; the one
-  entry that would hide a skip, `review: ["compound"]`, is forbidden by the
-  "value is not a declared successor" invariant.
+  **[PR #8627: no longer true — the `review` sub-step of `ship` takes 3 of the 51;
+  see the 2026-09-23 re-baseline.]** No collapse can launder a review skip:
+  `K compound X` becomes a declared pair only when X is K's own declared
+  successor, and none of those is `ship`; the one entry that would hide a skip,
+  `review: ["compound"]`, is forbidden by the "value is not a declared successor"
+  invariant. **[PR #8627: this argument covers `compound` only. For the `review`
+  sub-step the property that holds is narrower — no pair INTO `ship` changes; see
+  the 2026-09-23 re-baseline for what the collapse does mask.]**
+- **Re-baselined 2026-09-23 (PR #8627, `review` as a `ship` sub-step):** same
+  procedure, ONE frozen copy of the log read by both views. Before:
+  `undeclared=324 sessions=1300 pairs=4995 nonnode=4205 substep=195 read=10869
+  dropped=0`; after: `undeclared=291 sessions=1295 pairs=4960 nonnode=4205
+  substep=230 read=10869 dropped=0`. Deltas −33 undeclared / −35 pairs / +35
+  substep, the same identity. Collapsed: all 29 `ship → review` rows, and the
+  tails behind them — `review → postmerge` −4, `review → ship` −3,
+  `compound → postmerge` −1 (this ADR's own example session), `review → plan`
+  −1, `review → review` −1. Most of the 29 follow ship's own `preflight` (the
+  Phase 5.5 shape) or start within minutes of the ship record (Phase 1.5); the
+  rest are reviews that end the session long after ship. Exposed: `ship → ship`
+  +5 and `ship → plan` +1 (undeclared by ruling): −39 + 6 = −33. **The accepted
+  cost.** The log records starts only, so the collapse drops ANY `review` whose
+  previous kept node is `ship`, whatever caused it, together with that review's
+  own outgoing edges. `ship review work` reads as the declared `ship → work`
+  (0 rows measured). A ship run again after a review reads as the undeclared
+  self-loop `ship → ship`, which is still reported: of the 5 new such sessions,
+  2 are review's own exit gate (`review/SKILL.md` runs `compound` then `ship`),
+  shaped `ship … review compound ship`, and 3 go review → ship directly. No
+  pair INTO `ship` changes: `plan → ship`, `postmerge → ship` and
+  `brainstorm → ship` are unchanged. **#8470:** the classifier's own
+  `review → ship` count falls by 3 (all shaped `ship … review ship`), so the
+  #8399 ruling's 51 is comparable only with the #8470 triage's count, never with
+  a post-#8627 classifier run. The triage deliberately does not collapse
+  `review` behind `ship`; it keeps its own inline collapse and is unchanged, so
+  the two instruments now differ on that one shape by design.
 - There is no follow-through probe. One was written, could not PASS where the
   sweeper runs (Alternatives table), and as an operator-run script was a
   wrapper around `classify --summary` restating this section's numbers — the
@@ -372,6 +407,8 @@ the base, which closes the rename escape.
   unmodelled designed call: ship Phase 1.5 can run `review` inside ship, which
   neither the edge set nor `sub_steps` expresses, so `ship review compound
   postmerge` reads `ship → review` plus `compound → postmerge`.
+  **[Modelled 2026-09-23 (PR #8627): declared as a `ship` sub-step; see the
+  2026-09-23 re-baseline.]**
 
 ## Verification
 
@@ -384,11 +421,14 @@ the base, which closes the rename escape.
   lifecycle set. Since #8399 also: the exact four-key sub-step set, the view's
   `sub_steps` and `transitions` key sets named outright, and a SKILL.md anchor
   test — every entry's value is invoked (`skill: soleur:<V>`, not a
-  `compound-capture` prefix) inside the section that owns it, scoped per key,
-  with a check count equal to the entry count. Runs
+  `compound-capture` prefix) inside the section that owns it. Since PR #8627
+  the anchor test is per entry (the `ANCHORS` map), one check per heading,
+  with the anchor pair set equal to the sub-step pair set and a check count of
+  at least the entry count; the exact set now carries `ship: compound, review`.
+  Runs
   in the required `grok-fidelity` CI check (and as a pre-push gate under the
   Grok harness only).
-- `scripts/classify-workflow-transitions.test.sh` — 39 assertions (the
+- `scripts/classify-workflow-transitions.test.sh` — 42 assertions (the
   `MIN_CASES` floor) including a
   present-but-unparseable log failing loudly, sub-skill hops not laundering the
   enclosing transition, rotated `.jsonl.gz` archives read, timestamp order
@@ -400,7 +440,10 @@ the base, which closes the rename escape.
   (`ship compound` now collapses, and unsorted order would pair the declared
   `compound → ship`), a loop over `plan`/`postmerge`/`ship` whose key list is
   pinned to the real view, the `plan → ship` and `postmerge → ship` exposure
-  cases, and a pure timestamp-order case with no sub-step.
+  cases, and a pure timestamp-order case with no sub-step. Since PR #8627:
+  `ship review compound postmerge` collapses, `work review ship` stays
+  reported (the control, exact row), and `ship review work` reads as declared
+  (the accepted cost).
 - `scripts/measure-plan-sharp-edges-turns.test.sh` — 21 assertions over
   synthesized transcripts: turns are requestId groups in file order, the
   invocation may sit in any record of its turn, the catalogue is matched by
