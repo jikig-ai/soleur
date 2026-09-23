@@ -195,7 +195,7 @@ replacement first.
   - **legacy** — neither set: the soleur-ai key from `prd_terraform`. This is the before state only.
 - **A dedicated App, `soleur-infra`,** installed on `jikig-ai` alone, on the selected repositories
   Terraform manages, with permissions derived from the resource types Terraform manages —
-  `environments:write` included, which is what eventually lets R6 close.
+  `environments:write` included, which is what eventually lets R6 (#8610) close.
 - **Board sync does not use it.** `board-status-sync.yml` runs on `pull_request`/`issues`, stays
   Tier A, and mints from its own least-privilege App, `soleur-board`
   (`organization_projects:write` plus the read scopes its GraphQL queries need), whose key lives in
@@ -288,7 +288,7 @@ The contract it enforces, and the four guards that stand beside it:
    <repo-path>` indirection and fails closed on an unresolvable path), and the loader step precedes
    every one of them.
 3. **Guard 3 — the root-key allowlist arm.** `apply-git-data-root-key.yml` admits exactly a forget of
-   the two custody addresses and nothing else. The arm is one-shot; R6 deletes it.
+   the two custody addresses and nothing else. The arm is one-shot; R6 (#8610) deletes it.
 4. **Guard 4 — `removed` blocks forget, never destroy.** Every `removed` block names an address that
    exists in that root's state, carries `lifecycle { destroy = false }`, and appears in the
    `-target=` list of the workflow that plans it. This has a guard of its own rather than a bullet in
@@ -311,12 +311,12 @@ These are **not** accepted as closed.
 
 | # | Residual | Status |
 |---|---|---|
-| R1 | The soleur-ai **runtime** key in Doppler `prd` is readable by `DOPPLER_TOKEN_PRD` and by every `prd_*` branch-config repo-secret token. The App holds `administration:write` on `jikig-ai/soleur`, so a holder can rewrite an environment's deployment-branch policy — which defeats D2 — and can use `contents:write` plus its ruleset-bypass listing to change scripts that `main` jobs run. | **OPEN.** Own issue at `priority/p1-high`, `type/security`, ranked on its own risk (the runtime key reaches two third-party installations **today**), not merely as a cutover precondition. Blocks #8211 and the first real git-data cutover. **D2 stays `proposed` until it closes.** Detective control meanwhile: `scheduled-terraform-drift.yml` (Tier B) plans the `github_repository_environment*` resources and the `infra/github` rulesets, so a rewritten policy or bypass list surfaces as drift on that job's existing email and Sentry route. |
+| R1 | The soleur-ai **runtime** key in Doppler `prd` is readable by `DOPPLER_TOKEN_PRD` and by every `prd_*` branch-config repo-secret token. The App holds `administration:write` on `jikig-ai/soleur`, so a holder can rewrite an environment's deployment-branch policy — which defeats D2 — and can use `contents:write` plus its ruleset-bypass listing to change scripts that `main` jobs run. | **OPEN — [#8609](https://github.com/jikig-ai/soleur/issues/8609).** Filed at `p1-high`, `type/security`, ranked on its own risk (the runtime key reaches two third-party installations **today**), not merely as a cutover precondition. Blocks #8211 and the first real git-data cutover. **D2 stays `proposed` until it closes.** Detective control meanwhile: `scheduled-terraform-drift.yml` (Tier B) plans the `github_repository_environment*` resources and the `infra/github` rulesets, so a rewritten policy or bypass list surfaces as drift on that job's existing email and Sentry route. |
 | R2 | Web-platform root state is Tier-A readable and holds other Terraform-minted secrets. | **PRE-EXISTING, accepted by ADR-220.** Narrowed here: the two `doppler_secret.github_app_*` mirrors leave that state. |
 | R3 | Tier-B dry runs can no longer be dispatched from a branch ref. | **ACCEPTED.** A branch-ref Tier-B dispatch is exactly the reach this ADR closes. |
 | R4 | The PR plan no longer shows live drift. | **ACCEPTED.** `scheduled-terraform-drift.yml` owns drift; the plan comment header says so. |
 | R5 | The four credentials were branch-reachable in a public repository before this change. Moving them does not revoke copies taken earlier. | **OPEN until rotation completes.** Rotation is **required**, not optional (CPO condition): each credential is rotated one at a time, new value first, canary, then delete. #8209 does not close until the per-credential invalidation probes (AC16) pass. A dated Art. 33 **assessment** — REACHABILITY-ONLY disposition, evidence limbs INCONCLUSIVE until shown clean — is filed in `knowledge-base/legal/audits/` and indexed in the breach register. |
-| R6 | The Tier-B environment secrets are operator-seeded, because the Terraform identity cannot write environment secrets until the infra App exists. | **OPEN, follow-up issue.** Target design: keep `doppler_service_token.git_data_root_read` in the (by then Tier-B) root-key state and publish it with `github_actions_environment_secret` under the infra App. That issue also drops the dangling `-target=` lines of the forgotten addresses and deletes Guard 3's one-shot arm. |
+| R6 | The Tier-B environment secrets are operator-seeded, because the Terraform identity cannot write environment secrets until the infra App exists. | **OPEN — [#8610](https://github.com/jikig-ai/soleur/issues/8610).** Target design: keep `doppler_service_token.git_data_root_read` in the (by then Tier-B) root-key state and publish it with `github_actions_environment_secret` under the infra App. That issue also drops the dangling `-target=` lines of the forgotten addresses and deletes Guard 3's one-shot arm. |
 | R7 | Before this change the Tier-A backend keys were **read/write** on `soleur-terraform-state`, so a branch actor could tamper with web-platform state — for example by swapping a `doppler_service_token.key` that a later `main` run publishes. | **FOLDED IN; closes at the runbook's state-key step (O5b).** D4's read-only Tier-A key plus `TF_STATE_AWS_*` in Tier B, with every backend-credential extraction in a Tier-B job preferring the Tier-B pair. Every **writer** of that bucket must be Tier B before the swap, `apply-sentry-infra.yml`'s apply job included. Required in-PR by both the CTO and the architecture reviews. |
 
 ## Statuses
@@ -324,7 +324,7 @@ These are **not** accepted as closed.
 | Decision | Status | Flips when |
 |---|---|---|
 | D1 tiers | `adopting` | AC12–AC16 pass: the three names are absent from `prd_terraform`, the App key there hashes equal to the sentinel, and the per-credential invalidation probes return `401`/verify-failure. |
-| D2 boundary | `proposed` | **R1 closes** (and R7 closes at O5b). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
+| D2 boundary | `proposed` | **R1 (#8609) closes** (and R7 closes at O5b). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
 | D3 carrier | `adopting` | The Tier-B project is populated and its read token is seeded on all four environments, and the canary reads `source=tier_b`. |
 | D4 Tier-A substitutes | `adopting` | The read-only Hetzner token returns `token_readonly` on a write, and the Tier-A state pair returns `403` on a put and `200` on a get. |
 | D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. |
@@ -428,11 +428,11 @@ guards are only legible next to the harm they bound.
 | A4 | Put the four credentials directly into GitHub environment secrets, with no Doppler hop | Loses AP-008 (Doppler is the source of truth). Every rotation becomes a multi-environment `gh secret set` with no audit trail in Doppler. |
 | A5 | Keep full-refresh PR plans with read-only credentials | No read-only Doppler credential exists on the Developer plan, and an account-level R2 read token reads every bucket's objects. The placeholder path was measured instead. |
 | A6 | Move the PR plan behind a reviewer-gated environment with an all-branches policy | Branch bytes execute with the credentials (providers, `external` data). A human acknowledgement on branch bytes is not a secret boundary — ADR-220's own finding. |
-| A7 | Terraform-manage `DOPPLER_TOKEN_GIT_DATA_ROOT` as an environment secret now | The correct end state, adopted by R6. Not merge-safe here: until the infra App exists the provider is still the soleur-ai App (403 on environment secrets), and a partially applied rotation arm could revoke the old token before the new environment secret exists. |
+| A7 | Terraform-manage `DOPPLER_TOKEN_GIT_DATA_ROOT` as an environment secret now | The correct end state, adopted by R6 (#8610). Not merge-safe here: until the infra App exists the provider is still the soleur-ai App (403 on environment secrets), and a partially applied rotation arm could revoke the old token before the new environment secret exists. |
 | A8 | Keep the sha-compare integrity guard instead of `--preserve-env` | It made correctness depend on an external config's contents, and hard-failed apply-on-merge whenever an unrelated same-named secret appeared in `prd`, which `prd_terraform` inherits. `--preserve-env` makes precedence a code property. |
 | A9 | Board sync on `pull_request_target` with the infra App | Hands an App with administration and environment write to a fork-triggerable job. A board-only App in Tier A is least privilege. |
 | A10 | Grant `environments:write` to the soleur-ai App | Widens the permissions of a customer-installed App, and every installation must re-approve. |
-| A11 | Evict the soleur-ai runtime key from `prd` in this change | Needs runtime and host bootstrap changes (hash-bound cloud-init, immutable redeploy). Deferred as R1 with its own issue — and R1 is why D2 is not `accepted`. |
+| A11 | Evict the soleur-ai runtime key from `prd` in this change | Needs runtime and host bootstrap changes (hash-bound cloud-init, immutable redeploy). Deferred as R1 (#8609) — and R1 is why D2 is not `accepted`. |
 | A12 | A `tier` variable plus an apply-refusing precondition in HCL | Terraform cannot tell a plan from an apply in configuration. A token-mode run that tried to write would fail anyway: the PR `GITHUB_TOKEN` is read-only and the Doppler and R2 placeholders are rejected by the vendor APIs. No property needs it. |
 
 ## References
