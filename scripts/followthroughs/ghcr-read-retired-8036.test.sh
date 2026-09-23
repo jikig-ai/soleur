@@ -197,6 +197,8 @@ run_case "leg 3: latest verdict result=verify_failed -> ACTION REQUIRED (5), not
 # a closed ALLOWLIST (`ok` | `reused_local_reload`), so every other class is ACTION REQUIRED.
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail cosign_absent)"; } > "$(fx leg3b)"
 run_case "leg 3: result=cosign_absent is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3b)"
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail unsigned)"; } > "$(fx leg3f)"
+run_case "leg 3: result=unsigned is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3f)"
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail wrong_identity)"; } > "$(fx leg3d)"
 run_case "leg 3: result=wrong_identity is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3d)"
 # A host that ran the new script but emitted NO verify verdict is ACTION REQUIRED with its own
@@ -297,49 +299,98 @@ run_case "rows exist but no ci-deploy marker -> TRANSIENT (2), never PASS" 2 "TR
 # guard-vacuity-floor builds its mutant from the `if` plus the CONTIGUOUS simple assignments over
 # it, and a constant declared further up would be unbound in that slice and die under `set -u`,
 # scoring as a construction failure instead of as the floor firing.
-printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
 # Sits EXACTLY on the suite's count, raised in the same edit that settled it — the sibling
 # CI_DEPLOY_ASSERT_FLOOR pays the same price. A floor one below the count is not headroom, it is
 # how many assertions can be deleted before the one guard that detects truncation notices.
-# ── EXPLAIN-vs-CODE DRIFT GUARD (#8600 post-merge). `--explain` is the contract a reader gets on a
-#    machine with no credentials, and it drifted the moment the legs were corrected: it still said
-#    leg 1 graded only `deploy_ghcr_auth`, leg 2 counted every row in the window, and leg 3 failed
-#    on the single literal `verify_failed`. All three were false, and nothing could see it, because
-#    the text and the grader are different lines of the same file with no assertion between them.
-#    Anchored on the tokens the GRADER actually uses, over a comment-stripped read of the SUT, so a
-#    future leg change reds this row rather than silently making the contract a lie.
+# ── EXPLAIN-vs-CODE DRIFT GUARD (#8600 post-merge; rebuilt after the #8636 review).
+#    `--explain`, the file header and the PASS/ACTION summaries are FOUR prose copies of one
+#    contract, and all four drifted when the legs were corrected.
+#
+#    TWO EARLIER VERSIONS OF THIS GUARD WERE VACUOUS, both measured by review:
+#      * v1 derived "what the grader uses" from `grep -vE '^[[:space:]]*#' "$SUT"`, but the
+#        `--explain` heredoc is not comment-prefixed, so every token the TEXT named was present in
+#        that "source" by construction. The left conjunct was always true and the guard was blind
+#        in the direction the defect actually ran.
+#      * v2 asserted bare TOKENS. `grep -qF ok` matches the word "token"; and a sentence saying
+#        "leg 1 does NOT grade deploy_ghcr_helper" satisfies a presence test for that token.
+#    So this version asserts the CLAIM with a content anchor (cq-assert-anchor-not-bare-token),
+#    and leg 3 is not asserted at all -- its allowlist is SINGLE-SOURCED from LEG3_ALLOW_PAT, which
+#    both the grader's `case` arm and the heredoc read, making that drift unrepresentable.
+GRADER_SRC="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/ {next} !/^[[:space:]]*#/' "$SUT")"
 _ex="$("$SUT" --explain 2>&1)"
-_src_nocomment="$(grep -vE '^[[:space:]]*#' "$SUT")"
+# The header slice runs to the first executable line, not a hard-coded line count: a line-number
+# window silently stops covering the header the moment anything is inserted above it.
+_hdr="$(awk '/^[^#]/{exit} {print}' "$SUT")"
 
-# Every marker token leg 1 conjoins must be NAMED in --explain.
-for _tok in deploy_ghcr_auth deploy_ghcr_helper na_absent; do
-  if grep -qF -- "$_tok" <<<"$_src_nocomment" && ! grep -qF -- "$_tok" <<<"$_ex"; then
-    fail "--explain omits '$_tok', which the grader uses"
-  else
-    pass "--explain names the grader's '$_tok'"
-  fi
-done
-
-# Leg 3's allowlist members must both be named, and the retired single-literal framing must be gone.
-for _tok in ok reused_local_reload; do
-  grep -qF -- "$_tok" <<<"$_ex" || fail "--explain omits leg 3 allowlist member '$_tok'"
-done
-pass "--explain names both leg 3 allowlist members"
-if grep -qE "is not 'result=verify_failed'" <<<"$_ex"; then
-  fail "--explain still describes leg 3 as the single-literal test the grader no longer performs"
+# MEMBERSHIP IS PINNED, not just single-sourced. Single-sourcing stops prose and code disagreeing;
+# it does nothing about the set being WIDENED. Measured: adding `unsigned` to LEG3_ALLOW_PAT left
+# the whole suite green while a host running unsigned images graded PASS. The allowlist is a
+# security decision, so changing it must mean deliberately changing this line too.
+if grep -qF "readonly LEG3_ALLOW_PAT='ok|reused_local_reload'" "$SUT"; then
+  pass "leg 3's allowlist is exactly {ok, reused_local_reload}"
 else
-  pass "--explain no longer describes leg 3 as a single-literal test"
+  fail "leg 3's allowlist membership changed - widening it silently weakens signature verification"
+fi
+if grep -qF '"$lver" =~ ^($LEG3_ALLOW_PAT)$' <<<"$GRADER_SRC"; then
+  pass "leg 3's allowlist is single-sourced (grader reads LEG3_ALLOW_PAT), so its prose cannot drift"
+else
+  fail "leg 3's allowlist is no longer single-sourced -- the grader stopped reading LEG3_ALLOW_PAT"
+fi
+if grep -qF 'case "$swept" in' <<<"$GRADER_SRC" && ! grep -qF 'leg 1  latest' <<<"$GRADER_SRC"; then
+  pass "GRADER_SRC isolates the grader (carries the case arm, excludes the --explain body)"
+else
+  fail "GRADER_SRC extraction is wrong - it must contain the grader and NOT the --explain heredoc"
 fi
 
-# Leg 2 must state the post-marker scoping, not a bare window count.
-if grep -qiE 'newer than' <<<"$_ex"; then
-  pass "--explain states leg 2's post-marker scoping"
-else
-  fail "--explain describes leg 2 as a bare window count; the grader scopes it to rows newer than the latest marker"
-fi
-unset _ex _src_nocomment _tok
+# CLAIM ANCHORS, not token presence. Each pins a phrase that only a CORRECT description contains,
+# in BOTH prose copies, so a negation ("does NOT grade the helper") reds instead of passing.
+_claim_helper="AND 'deploy_ghcr_helper=none'"
+_claim_helper_hdr="\`deploy_ghcr_auth=none\` AND \`deploy_ghcr_helper=none\`"
+_claim_postmarker="NEWER THAN"
+grep -qF -- "$_claim_helper" <<<"$_ex" \
+  && pass "--explain states leg 1's helper CONJUNCTION, not merely the token" \
+  || fail "--explain no longer states leg 1 as auth AND helper"
+grep -qF -- "$_claim_helper_hdr" <<<"$_hdr" \
+  && pass "the file header states leg 1's helper conjunction" \
+  || fail "the file header no longer states leg 1 as auth AND helper"
+grep -qF -- "$_claim_postmarker" <<<"$_ex" && grep -qF -- "$_claim_postmarker" <<<"$_hdr" \
+  && pass "both prose copies scope leg 2 to rows NEWER THAN the latest marker" \
+  || fail "a prose copy describes leg 2 as a bare window count"
 
-MIN_CHECKS=34
+# The reverse direction -- prose claiming a check the GRADER dropped. Anchored on the conjunction,
+# never on the bare name `dhelper`, which also appears in the read loop and the REPORT string.
+if grep -qF -- "$_claim_helper" <<<"$_ex" \
+   && ! grep -qE '\$dauth" == "none" *&& *"\$dhelper" == "none"' <<<"$GRADER_SRC"; then
+  fail "--explain claims a deploy_ghcr_helper check the grader no longer CONJOINS into leg 1"
+else
+  pass "--explain's helper claim is backed by the grader's leg-1 conjunction"
+fi
+if grep -qF -- "$_claim_postmarker" <<<"$_ex" && ! grep -qF 'mts[mid]' <<<"$GRADER_SRC"; then
+  fail "--explain claims post-marker scoping the grader's fold does not implement"
+else
+  pass "--explain's post-marker claim is backed by the grader's fold"
+fi
+# `na_absent` must be described as a BYPASS, not folded into the conjunction: the grader passes it
+# without consulting either carrier token.
+grep -qF 'na_absent' <<<"$GRADER_SRC" \
+  && { grep -qiE 'na_absent.*(clean|bypass)' <<<"$_ex" \
+       && pass "--explain describes swept=na_absent as passing leg 1" \
+       || fail "--explain omits that swept=na_absent passes leg 1 without consulting the carriers"; } \
+  || fail "guard anchor 'na_absent' is no longer in the grader - re-point this row"
+
+# The retired single-literal framing must be gone from EVERY operator-facing surface, including
+# the PASS and ACTION REQUIRED summaries that land in a public issue comment.
+if grep -qE "is not 'result=verify_failed'|verdict is result=verify_failed" "$SUT"; then
+  fail "a summary or comment still frames leg 3 as the single literal verify_failed"
+else
+  pass "no surface frames leg 3 as a single-literal test"
+fi
+unset _ex _hdr GRADER_SRC _claim_helper _claim_helper_hdr _claim_postmarker
+
+
+
+printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
+MIN_CHECKS=39
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1

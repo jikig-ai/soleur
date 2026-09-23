@@ -13,11 +13,20 @@
 # nothing." A host that is down, that never ran the new script, or whose log channel is dark also
 # emits no `relogin_failed`. So the criterion is graded here as a CONJUNCTION, per host:
 #
-#   leg 1  the host's LATEST `SOLEUR_DEPLOY_GHCR_CONFIG` marker carries a `swept=` token AND reads
-#          `deploy_ghcr_auth=none`;
-#   leg 2  the host emitted ZERO `stage=relogin_failed` rows since earliest (the operator's own
-#          criterion, kept verbatim);
-#   leg 3  the host's LATEST `IMAGE_VERIFY*` verdict is not `result=verify_failed`.
+#   leg 1  the host's LATEST `SOLEUR_DEPLOY_GHCR_CONFIG` marker carries a `swept=` token AND BOTH
+#          carriers read clean: `deploy_ghcr_auth=none` AND `deploy_ghcr_helper=none`. (docker
+#          resolves ghcr.io through a `credHelpers` entry with or without an auths entry.)
+#          `swept=na_absent` BYPASSES the carrier check entirely and passes: no deploy config
+#          exists, so the tokens read `na` and are not consulted.
+#   leg 2  the host emitted ZERO `stage=relogin_failed` rows NEWER THAN its latest marker -- not
+#          zero rows since earliest. `earliest` is set past the apply on purpose, so the window is
+#          EXPECTED to hold pre-1c rows; counting those latched the tracker shut permanently.
+#   leg 3  the host's LATEST `IMAGE_VERIFY*` verdict is in the closed allowlist
+#          (see LEG3_ALLOW_PAT). A host with markers but NO verdict is ACTION REQUIRED too.
+#
+#   THIS LIST AND THE `--explain` BLOCK BELOW ARE TWO COPIES OF ONE CONTRACT. #8636 corrected
+#   `--explain` and left this one standing, so the file contradicted itself 100 lines apart; the
+#   suite's drift guard now reads BOTH.
 #
 # `swept=` IS THE VERSION DISCRIMINATOR, NOT `deploy_ghcr_auth=none`. An earlier draft graded on
 # the `none` token alone, reasoning that the whole pre-1c fleet reads `inline`. That is an
@@ -71,11 +80,17 @@
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS               >=1 host observed and EVERY host satisfies all three legs. Close #8036.
 #   1 = FAIL               some host fails leg 1 or leg 2 — the retirement has not landed there,
-#                          or the prelude re-login is still firing.
+#                          or the prelude re-login is still firing. ALSO returned when a host
+#                          emitted relogin rows but no marker at all: it cannot be graded, and
+#                          silently dropping it would let an ungraded host read as absent.
 #   5 = ACTION REQUIRED    every host passes legs 1 and 2, but some host's latest IMAGE_VERIFY
-#                          verdict is result=verify_failed: signature verification is broken on a
+#                          verdict is not in the LEG3_ALLOW_PAT allowlist — or emitted no
+#                          verdict at all. Signature verification is broken (or unobserved) on a
 #                          host whose GHCR read path IS retired. A human decision, and the one
-#                          outcome a `swept=yes` host can still have that nothing else pages on.
+#                          outcome a `swept=yes` host can still have that nothing else pages on:
+#                          `cosign_absent` is in this set and fired 89/89 in the 7 days to
+#                          2026-09-22, so grading only the literal `verify_failed` closed the
+#                          tracker over exactly the condition the retirement exists to end.
 #   2 = NOT YET            creds unset, query tool missing/failing, earliest in the future, zero
 #                          rows, or zero ci-deploy markers since earliest (no deploy yet).
 #   3 = CANNOT ESTABLISH   SOLEUR_FT_EARLIEST unset/empty/malformed, rows that do not decode as
@@ -122,6 +137,12 @@ QUERY="${GHCR_RETIRED_8036_BQ:-$SCRIPT_DIR/../betterstack-query.sh}"
 # must cover. Widening that refusal to name non-secrets is the wrong repair — it dilutes what
 # the guard asserts. The name was the defect.
 MARKER_LITERAL='SOLEUR_DEPLOY_GHCR_CONFIG'
+# LEG 3 ALLOWLIST, DEFINED ONCE. The grader's `case` arm and the `--explain` text both read this,
+# so they cannot drift apart -- #8636 found them already disagreeing, and an assertion that the
+# two match is weaker than making them one value. `_PAT` is the case-arm form; `_HUMAN` is the
+# rendered set for prose.
+readonly LEG3_ALLOW_PAT='ok|reused_local_reload'
+readonly LEG3_ALLOW_HUMAN="{${LEG3_ALLOW_PAT//|/, }}"
 RELOGIN_LITERAL='stage=relogin_failed'
 VERIFY_LITERAL='IMAGE_VERIFY'
 
@@ -153,7 +174,14 @@ PROBE-READY ghcr-read-retired-8036
            markers but NO verdict is ACTION REQUIRED too, never a pass.
   NOT graded: home_ghcr_auth / root_ghcr_auth — both are unreachable from webhook.service
            (ProtectHome=read-only; root's home is 0700) and ride the 1d follow-up.
-  exits:   0 PASS | 1 FAIL (leg 1 or 2) | 5 ACTION REQUIRED (leg 3) | 2 NOT YET | 3 CANNOT ESTABLISH
+  also refuses: a result set saturated at --limit (exit 2). The query keeps the NEWEST rows, so a
+           truncated read drops the OLDEST — exactly where a surviving pre-1c relogin sits, and
+           leg 2 grades an ABSENCE over that window.
+  caveat on a PASS: a host reporting 'deploy_creds_store=set' has a GLOBAL credential helper
+           configured. Leg 1 verified the CONFIG carries no ghcr.io carrier, but this probe cannot
+           read what that helper stores; the per-host report says so on its own line.
+  exits:   0 PASS | 1 FAIL (leg 1 or 2, or any ungraded relogin-only host) | 5 ACTION REQUIRED
+           (leg 3) | 2 NOT YET / saturated | 3 CANNOT ESTABLISH
   network: none in this mode
 EXPLAIN
   exit 0
@@ -396,7 +424,10 @@ while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrel
   # the deploy proceeds, so every one of those was closing the tracker over a broken verify.
   # A host with markers but NO verify verdict is ACTION REQUIRED with its own sentence, never a
   # pass — but never a FAIL either, so it cannot latch the tracker shut.
-  case "$lver" in ok|reused_local_reload) leg3=pass ;; *) leg3=fail ;; esac
+  # `[[ =~ ]]`, NOT `case $var)`. In a case pattern an expanded variable is ONE glob, so `|`
+  # inside it is a literal character, not an alternator -- measured: every `ok` verdict fell
+  # through to ACTION REQUIRED. In an ERE `|` alternates, so the single source survives.
+  if [[ "$lver" =~ ^($LEG3_ALLOW_PAT)$ ]]; then leg3=pass; else leg3=fail; fi
   if [[ "$leg1" == "pass" && "$leg2" == "pass" && "$leg3" == "pass" ]]; then
     grade="ok"; n_pass=$((n_pass + 1))
   elif [[ "$leg1" != "pass" || "$leg2" != "pass" ]]; then
@@ -445,7 +476,8 @@ fi
 
 if [[ "$n_action" -gt 0 ]]; then
   echo "ACTION REQUIRED: ${n_action} of ${HOSTS_TOTAL} host(s) have the GHCR read path retired (legs 1 and 2"
-  echo "      pass) but their latest ${VERIFY_LITERAL} verdict is result=verify_failed — signature"
+  echo "      pass) but their latest ${VERIFY_LITERAL} verdict is NOT in ${LEG3_ALLOW_HUMAN},"
+  echo "      or is absent entirely — signature"
   echo "      verification is broken there. Under IMAGE_VERIFY_MODE=warn the deploy PROCEEDS, and no"
   echo "      Sentry rule matches this class, so this line is the only notification. Check whether the"
   echo "      sweep clipped the co-resident zot auths entry before reading it as an unrelated defect."
@@ -454,8 +486,10 @@ if [[ "$n_action" -gt 0 ]]; then
 fi
 
 echo "PASS: ${n_pass} host(s) observed since ${EARLIEST}, and every one satisfies all three legs —"
-echo "      latest ${MARKER_LITERAL} carries a 'swept=' token with deploy_ghcr_auth=none, zero"
-echo "      '${RELOGIN_LITERAL}', and no verify_failed. The host-side GHCR read path is retired."
+echo "      latest ${MARKER_LITERAL} carries a 'swept=' token with deploy_ghcr_auth=none AND"
+echo "      deploy_ghcr_helper=none, zero '${RELOGIN_LITERAL}' AFTER that host's latest marker,"
+echo "      and a latest ${VERIFY_LITERAL} verdict in ${LEG3_ALLOW_HUMAN}. The host-side"
+echo "      GHCR read path is retired."
 echo "      Close #8036."
 printf '%s' "$REPORT"
 exit 0
