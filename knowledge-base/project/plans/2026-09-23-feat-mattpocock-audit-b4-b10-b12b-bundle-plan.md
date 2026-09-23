@@ -24,6 +24,43 @@ null-guardrail finding) and the second half of B12 (a skill-composition map in t
 Founder decision 2026-09-23. Small prose-only edits to four plugin files: the three targets plus one
 alignment line in `brainstorm-techniques`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23.
+
+**Passes run:**
+- the halt gates: 4.6 user-brand, 4.7 observability (the probe verb was checked with
+  `probe-verb-gate.sh`, rc 0), 4.8 PAT (0 hits), and 4.9, 4.10 and 4.11 (not triggered);
+- Phase 4.45 self-audit and verify-the-negative, on the standard tier;
+- spec-flow-analyzer;
+- pattern-recognition-specialist.
+
+The fan-out was kept proportionate to a four-file prose change, not the full agent roster.
+
+### Key Improvements
+
+1. **B4 gains the missing states:**
+   - headless or pipeline brainstorm asks nothing, closing what a lookup can answer and parking
+     the rest;
+   - pending lookups are collected before exit, and a failed one parks its branch;
+   - an out-of-scope branch is parked as soon as it opens.
+2. **B10 is scoped to code and config defects a repo check could catch.** Workflow missteps no
+   longer turn every run into a `none` proposal.
+3. **One guard proposal per item** across step 3.6, step 4 and Error-to-Workflow Feedback.
+4. **Constitution Promotion is edited so the headless "never auto-apply" rule holds.** Without the
+   two edits, its headless auto-accept would contradict it, and its interactive gate would never
+   show a finding from a run with no deviations.
+5. **The help map is robust to rendering:**
+   - blank lines around it (AC4's extract needs the trailing one);
+   - an 83-character on-ramp line;
+   - a Codex verbatim-render note.
+
+### New Considerations Discovered
+
+- The brainstorm prose says "user". The new text follows it; "founder" stays in Why-notes only.
+- Compound's Constitution Promotion headless path auto-accepts hook proposals
+  (`compound/SKILL.md:392`), so any new proposal class needs an explicit carve-out there.
+
 ## Research Insights
 
 **Premise Validation.** Cited references checked at plan time:
@@ -72,14 +109,19 @@ phase re-runs `--check` after editing (AC6), so an edit that moves a gated block
   `BRAINSTORM_CHILD_SKILLS` in brainstorm, and `LIFECYCLE_HANDOFF_SENTINEL` in compound. None of
   these sit in the edited regions.
 - `scripts/lint-agents-compound-sync.sh`. It anchors on compound step 8 (the
-  `<!-- rule-threshold: 115 -->` sentinel and the per-rule-cap phrase). The B10 edit stays in
-  steps 3-5 and in `### Empty Case`, and does not touch step 8.
+  `<!-- rule-threshold: 115 -->` sentinel and the per-rule-cap phrase). The B10 edit touches:
+  - steps 3.6, 4, 5 and 7, and `### Empty Case`;
+  - one clause in `### Error-to-Workflow Feedback`;
+  - two clauses in `### Constitution Promotion`.
+
+  It never touches step 8. The deepen self-audit confirmed this against
+  `lint-agents-compound-sync.sh`: its sentinel is at step 8, `compound/SKILL.md:297`.
 - `bash scripts/markdown-lint.sh <files>` (the lefthook `*.md` hook). The baseline is clean on all
   four targets (`4 file(s) clean`).
 
-**Precedent.** `test-fix-loop/SKILL.md` Phase 0 already detects a repo's test command (CLAUDE.md,
-`package.json` `scripts.test`, Makefile, and others). B10's "read the repo's own check command
-first" reuses that discovery order instead of inventing one. `go.md` step 5 gives the canonical
+**Precedent.** `test-fix-loop/SKILL.md` `### Detect Test Runner` picks a single test command,
+first match wins. B10 needs every lint, typecheck and test command, so it borrows the list of
+sources (manifests, `Makefile`/`Justfile`), not the first-match order. `go.md` step 5 gives the canonical
 lifecycle: plan → work → review → qa (UI gate) → compound → ship, with postmerge after ship.
 `drain-labeled-backlog` delegates to `soleur:one-shot`. `drain-prs` takes open PRs through
 `soleur:review`. `product-roadmap` `next` routes to `soleur:go`.
@@ -187,10 +229,16 @@ skipped whenever a brainstorm exists, and it is not B4's named target.
 - `plugins/soleur/skills/brainstorm/SKILL.md`: `#### 1.2 Collaborative Dialogue` only (B4).
 - `plugins/soleur/skills/brainstorm-techniques/SKILL.md`: the `**Exit Condition:**` line under
   `### Phase 1: Understand the Idea` only (B4 alignment, see Research Insights).
-- `plugins/soleur/skills/compound/SKILL.md`: `## Phase 1.5: Deviation Analyst (Sequential)`. The
-  edit covers steps 3.6 (new), 4, 5 and 7, plus `### Empty Case` (B10). Step 8 is not touched.
-- `plugins/soleur/commands/help.md`: the `### Claude Code`, `### Devin CLI` and `### Grok Build`
-  fenced blocks (B12b).
+- `plugins/soleur/skills/compound/SKILL.md` (B10):
+  - `## Phase 1.5: Deviation Analyst (Sequential)`: steps 3.6 (new), 4, 5 and 7, plus
+    `### Empty Case`;
+  - one clause in `### Error-to-Workflow Feedback`;
+  - two clauses in `### Constitution Promotion`.
+
+  Step 8 is not touched.
+- `plugins/soleur/commands/help.md` (B12b):
+  - the `### Claude Code`, `### Devin CLI` and `### Grok Build` fenced blocks;
+  - one sentence on the Codex bullet in `## Step 2.5`.
 
 **Must not change:** any `description:` frontmatter line, `plugins/soleur/commands/go.md`,
 `knowledge-base/product/competitive-intelligence.md` (owned by `#8648`), and
@@ -208,16 +256,21 @@ every clause.
 ### 1. B4: brainstorm §1.2 dialogue discipline
 
 Keep the `**one at a time**` sentence and the `**Guidelines**` bullets exactly as they are. Replace
-the single line `**Exit condition:** Continue until the idea is clear OR user says "proceed"` with:
+the single line `**Exit condition:** Continue until the idea is clear OR user says "proceed"` with
+the text below.
+
+The file's instruction prose says "user", not "founder", so the new text does too. The leads end
+in a colon like `**Guidelines (...):**`.
 
 ```markdown
-**Dialogue discipline.** This orders and ends the dialogue. It never batches it: still one question per turn.
+**Dialogue discipline:** This orders and ends the dialogue. It never batches it: still one question per turn.
 
-- **Keep a list of open decision branches.** Seed it from the feature description and the Phase 1.1 research. Each answer can close a branch or open new ones.
+- **Keep a list of open decision branches.** Seed it from the feature description and the Phase 1.1 research. Each answer can close a branch or open new ones. If a branch falls outside the feature's stated scope, park it as soon as it opens instead of walking it.
 - **Ask in dependency order.** Before asking, check whether the answer depends on another decision that is still open. If it does, ask that upstream decision first. A downstream question waits until the question it depends on is answered.
-- **Look facts up; do not ask them.** If the agent can find a fact (codebase, knowledge base, live docs, a pricing page), it is never a question for the founder. Run the lookup in the background (a Task agent or a parallel tool call) and keep asking the questions that do not depend on it. Only the questions downstream of the pending fact wait for it.
+- **Look facts up; do not ask them.** If the agent can find a fact (codebase, knowledge base, live docs, a pricing page), it is never a question for the user. Run the lookup in the background (a Task agent or a parallel tool call) and keep asking the questions that do not depend on it. Only the questions downstream of the pending fact wait for it. Before leaving this phase, including on "proceed", collect any pending lookups. A returned fact closes the branches it answers. A failed lookup parks its branch.
+- **Headless:** In pipeline or headless mode (the predicate in Phase 0.4 Lane Auto-Detect), ask nothing. Resolve every branch a lookup can answer and park the rest.
 
-**Exit condition:** The dialogue is done when every open decision branch has been walked (answered) or explicitly parked (the founder deferred it, or it needs information nobody has yet). Nothing is silently assumed. Record parked branches in the brainstorm document's Open Questions section (Phase 3.5). If the founder says "proceed" first, stop asking and record every unwalked branch there as parked.
+**Exit condition:** The dialogue is done when every open decision branch has been walked (answered) or explicitly parked (the user deferred it, or it needs information nobody has yet). Nothing is silently assumed. Record parked branches in the brainstorm document's Open Questions section (Phase 3.5). If the user says "proceed" first, stop asking and record every unwalked branch there as parked.
 ```
 
 In `brainstorm-techniques/SKILL.md`, replace
@@ -232,25 +285,30 @@ with:
 
 Insert a new step **3.6** after step 3.5 (`**Ingest recent hook incidents.**`) and before step 4.
 Match step 3.5's shape. The `3.6.` lead is a paragraph, followed by a blank line and then
-**non-indented** bullets. The indented form fails markdownlint MD007/MD032, which Kieran confirmed
-by simulating it.
+**flat, non-indented** bullets. The indented form fails markdownlint MD007/MD032, which Kieran
+confirmed by simulating it. Class labels use Phase 0.5's `**label**` style.
 
 ```markdown
-3.6. **Null-guardrail check.** A deviation scan only sees broken rules, so a failure class with no guard at all never shows up in it. Check for it directly. Scope: each Phase 0.5 inventory item triaged `recurring`, and each deviation from step 3.
+3.6. **Null-guardrail check.** A deviation scan only sees broken rules, so a failure class with no guard at all never shows up in it. Check for it directly. Scope:
 
-- **Read the repo's own check commands first.** Collect every lint, typecheck and test command, not just the first one found. Look in `package.json` `scripts`, `Makefile`/`Justfile` targets, language manifests (`pyproject.toml`, `Cargo.toml`, `go.mod`), and pre-commit config (`lefthook.yml`, `.husky/`, `.pre-commit-config.yaml`). Pre-commit config is both a check and the thing that runs it. Then find what runs each command: `grep -l` the command name over `.github/workflows/` and `.claude/hooks/`. Read only the files that match, never a whole directory. Follow one level of wrapper, such as a `make ci` that calls `lint`. Step 4 reuses this `.claude/hooks` result.
-- **Classify each item.**
-  - `covered`: an existing hook, CI check or lint rule runs on the paths where the failure happened. Name it.
-  - `unwired`: a check exists but nothing runs it on those paths. This includes a CI job whose path filter skips them. When unsure, classify as `unwired`.
-  - `none`: no guardrail at all for this failure class.
-- **Propose, without duplicating.** An `unwired` item proposes wiring the existing check in, never a second guard. A `none` item proposes the smallest guard that would have caught the class, following step 4's hierarchy. If the item already has a proposal from Error-to-Workflow Feedback or step 4, annotate that proposal with the classification instead of adding a second one.
-- **Headless.** When `HEADLESS_MODE=true`, never apply a null-guardrail proposal automatically. Record it in the learning's `## Session Errors` only.
+- each Phase 0.5 inventory item triaged `recurring` that is a code or config defect a repo check could catch in principle (lint, typecheck, test, format);
+- each deviation from step 3.
+
+Workflow missteps that no repo check can catch stay with step 4 and Error-to-Workflow Feedback. If the scope is empty, skip this step.
+
+- **Read the repo's own check commands first.** Collect every lint, typecheck and test command, not just the first one found. Look in `package.json` `scripts`, `Makefile`/`Justfile` targets, language manifests (`pyproject.toml`, `Cargo.toml`, `go.mod`), and pre-commit config (`lefthook.yml`, `.husky/`, `.pre-commit-config.yaml`). Pre-commit config is both a check and the thing that runs it. Then find what runs each command: `grep -l` the command name over the CI config (`.github/workflows/`, `.gitlab-ci.yml`, `.circleci/`) and `.claude/hooks/`. Read only the files that match, never a whole directory. A missing directory counts as absent, not as an error. Follow one level of wrapper, such as a `make ci` that calls `lint`. Step 4 reuses this `.claude/hooks` result.
+- **Classify each item** as one of:
+  - **covered**: an existing hook, CI check or lint rule runs on the paths where the failure happened. Name it.
+  - **unwired**: a check exists but nothing runs it on those paths. This includes a CI job whose path filter skips them. When unsure, choose this.
+  - **none**: no guardrail at all for this failure class.
+- **Propose without duplicating.** An **unwired** item proposes wiring the existing check in, never a second guard. A **none** item proposes the smallest guard that would have caught the class, following step 4's hierarchy. Each item gets at most one guard proposal. If Error-to-Workflow Feedback or step 4 already proposed one, annotate that proposal with the classification instead of adding another.
+- **Headless.** Never apply a null-guardrail proposal automatically. When `HEADLESS_MODE=true`, record it in the learning's `## Session Errors` only.
 ```
 
-Then make these small edits:
+Then make these small edits. Each one anchors on existing text.
 
-- **Step 4.** Also skip the proposal when step 3.6 classified the item `covered`, and note the
-  check that covers it. Reuse step 3.6's `.claude/hooks` scan rather than repeating it.
+- **Step 4.** Also skip the proposal when step 3.6 classified the item **covered**, and note the
+  check that covers it. Reuse step 3.6's `.claude/hooks` scan when it ran, instead of repeating it.
 - **Step 5.** Report a step-3.6 finding that is not already attached to a deviation with the
   **existing** Deviation template:
   - `Rule violated: none (null guardrail)`
@@ -258,31 +316,48 @@ Then make these small edits:
   - `Proposed enforcement`: the wiring step, or the smallest new guard.
 
   Add no second template.
-- **Step 7.** Extend "each deviation" to "each deviation and each `unwired` or `none` finding".
+- **Step 7.** Change `Present each deviation to the user via` to
+  `Present each deviation and each unwired or none finding to the user via`.
   Step 6 is unchanged, because Phase 0.5 items already reach `## Session Errors`.
-- **`### Empty Case`.** Change the opening condition to: "If step 3 finds no deviations and
-  step 3.6 finds no `unwired` or `none` item". Keep the rest of the sentence.
+- **`### Error-to-Workflow Feedback`.** Add this to the end of its "If yes" bullet:
+  `If step 3.6 already classified this item, annotate that proposal instead of adding a second.`
+- **`### Constitution Promotion`.**
+  - At the end of the `**Headless mode:**` paragraph, add:
+    `Never auto-accept a null-guardrail finding (Rule violated: none (null guardrail)).`
+  - In `**1. Deviation Analyst proposals (if any):**`, change
+    `If Phase 1.5 produced deviations` to `If Phase 1.5 produced deviations or step-3.6 findings`.
+  - Without these two edits, the headless path auto-accepts the proposal that step 3.6 forbids,
+    and the interactive path never shows a finding from a run with no deviations.
+- **`### Empty Case`.** Change the opening condition to "If step 3 finds no deviations and
+  step 3.6 finds no unwired or none item". Keep the rest of the sentence.
 
 ### 3. B12b: help composition map
 
 In each of the three harness blocks, add this section inside the fenced `text` block, between the
-`WORKFLOW SKILLS` list and `AGENTS:`. The text must be byte-identical in all three blocks and must
-contain no blank line. Skill names are bare, as `WORKFLOW SKILLS` already renders them. Do not
-write the `operator-*` token here: that would satisfy the per-block `components.test.ts` assertion
-even if the real SKILLS line were deleted.
+`WORKFLOW SKILLS` list and `AGENTS:`. Put one blank line before the map and one after it, and no
+blank line inside it. The text must be byte-identical in all three blocks.
+
+Skill names are bare, as `WORKFLOW SKILLS` already renders them. Do not write the `operator-*`
+token here: it would satisfy the per-block `components.test.ts` assertion even if the real SKILLS
+line were deleted.
 
 ```text
 HOW THE SKILLS FIT TOGETHER:
   Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
                (go starts at brainstorm by default; qa for UI changes and
                compound for learnings run between review and ship)
-  On-ramps:    one-shot              go sends fixes and scoped builds here; runs plan to ship
+  On-ramps:    one-shot              go sends fixes and scoped builds; plan to ship
                drain-labeled-backlog runs one-shot over a labeled issue backlog
                drain-prs             takes open PRs through review to merge
                product-roadmap       its "next" step says where to enter the flow
   Standalone:  most other skills run on their own, for example the legal, flag,
                cron and operator families, incident, invoice and community
 ```
+
+In `## Step 2.5`, append this sentence to the **Codex** bullet:
+`Render the HOW THE SKILLS FIT TOGETHER map verbatim.`
+Without it, Codex's skill-mention substitution could rewrite `go` or `one-shot` inside the map
+and break its alignment.
 
 Add no `### ` heading. The `components.test.ts` per-block split depends on the three existing ones.
 
@@ -342,8 +417,8 @@ checks outside `set -e`.
 - [ ] **AC1 (B4).**
   - In the §1.2 body, `awk '/^#### 1\.2 Collaborative Dialogue/{f=1;next} /^### Phase 2:/{f=0} f' "$F_B"`,
     each of these anchors matches at least once: `**one at a time**`,
-    `**Ask in dependency order.**`, `**Look facts up; do not ask them.**`, `explicitly parked`,
-    `Open Questions`.
+    `**Ask in dependency order.**`, `**Look facts up; do not ask them.**`, `**Headless:**`,
+    `explicitly parked`, `Open Questions`. `founder` matches zero times.
   - `grep -F -c 'explicitly parked' "$F_T"` ≥ 1.
   - `grep -F -c 'Continue until the idea is clear' "$F_B"` = 0, and the same count on `"$F_T"`
     = 0.
@@ -352,7 +427,7 @@ checks outside `set -e`.
   each of these anchors matches at least once:
   - `3.6. **Null-guardrail check.**`
   - `recurring`
-  - `unwired`
+  - `**unwired**`
   - `no guardrail at all`
   - `package.json`
   - `lefthook.yml`
@@ -365,6 +440,10 @@ checks outside `set -e`.
   `grep -n -e '^3\.5\. ' -e '^3\.6\. ' -e '^4\. \*\*Propose' "$F_C"` are strictly increasing.
   The `### Empty Case` body,
   `awk '/^### Empty Case/{f=1;next} /^<!-- phase-1.6-start -->/{f=0} f' "$F_C"`, contains `3.6`.
+  The `### Constitution Promotion` body,
+  `awk '/^### Constitution Promotion/{f=1;next} /^### Route Learning/{f=0} f' "$F_C"`, contains
+  both `none (null guardrail)` and `step-3.6 findings`. The `### Error-to-Workflow Feedback` body
+  contains `step 3.6`.
 - [ ] **AC3 (B10 lint shape).** `bash scripts/markdown-lint.sh "$F_C"` reports the file clean.
   This catches the indented-bullet MD007/MD032 shape.
 - [ ] **AC4 (B12b).**
@@ -378,6 +457,7 @@ checks outside `set -e`.
     The check was validated red and green on a synthetic file at plan time.
   - `grep -F -c 'operator-*' "$F_H"` is unchanged from `origin/main` (6). The map adds no
     `operator-*` token.
+  - `grep -F -c 'map verbatim' "$F_H"` = 1 (the Codex render note).
 - [ ] **AC5 (scope).**
   - `git diff --name-only origin/main...HEAD` lists only:
     - the four `F_*` files;
@@ -438,7 +518,17 @@ Files lists.
   session type error. The item is `covered`, and no new-guard proposal is made.
 - A compound run in headless mode with a `none` finding. The finding is recorded in Session
   Errors, and nothing is applied.
-- `/soleur:help` on each harness renders the map once, between WORKFLOW SKILLS and AGENTS.
+- A brainstorm in pipeline or headless mode. No question is asked; branches a lookup can answer
+  are closed, and the rest are parked in Open Questions.
+- The user says "proceed" while a background lookup is still running. The lookup is collected
+  before §1.2 exits. If it failed, its branch is parked.
+- A compound run whose only session error is "skill not found". That is a workflow misstep, outside
+  step 3.6's scope, so there is no null-guardrail proposal and the Empty Case wording applies.
+- A compound run in a repo with no `.github/workflows/` directory. That counts as absent, not as an
+  error.
+- A headless compound run with a `none` finding. Constitution Promotion does not auto-accept it.
+- `/soleur:help` on each harness renders the map once, between WORKFLOW SKILLS and AGENTS. Codex
+  renders it verbatim.
 
 ## Non-Goals
 
