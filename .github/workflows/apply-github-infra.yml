@@ -222,11 +222,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }

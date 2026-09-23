@@ -273,6 +273,40 @@ run_loader "dp.st.TIERB-FIXTURE" "" "" "$("$REAL_JQ" -n '{DOPPLER_PROJECT:"p",DO
 said "privileged_empty" && pass "row8: names the verdict" || fail "row8: no verdict word"
 
 # ======================================================================
+# ROW 8b — the R7 backend alias. The R2 backend reads AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY; after operator step O5b the prd_terraform pair under those names
+# is READ-ONLY, so a Tier-B apply that used it could not write state. The read/write pair
+# lives in Tier B as TF_STATE_AWS_*, and the loader aliases it onto the plain names so the
+# 44 extract sites need only `${AWS_ACCESS_KEY_ID:-<legacy read>}`.
+# ======================================================================
+run_loader "dp.st.TIERB-FIXTURE" "" "" "$(full_payload)"
+env_has "AWS_ACCESS_KEY_ID"     && pass "row8b: aliases the backend key id"     || fail "row8b: no AWS_ACCESS_KEY_ID"
+env_has "AWS_SECRET_ACCESS_KEY" && pass "row8b: aliases the backend secret"     || fail "row8b: no AWS_SECRET_ACCESS_KEY"
+# The alias must carry the TIER-B value, not the Tier-A one -- an alias pointing at the
+# wrong pair is the R7 defect with the appearance of the fix.
+grep -qE '^AWS_ACCESS_KEY_ID<<' "$LOADER_DIR/github_env" \
+  && grep -qF -- "rw-key" "$LOADER_DIR/github_env" \
+  && pass "row8b: the alias carries the Tier-B read/write value" \
+  || fail "row8b: alias present but not the Tier-B value"
+
+# ROW 8c — half-set backend pair is a refusal, same reason as the git-data pair.
+HALFTF="$("$REAL_JQ" -n '{HCLOUD_TOKEN:"x", TF_STATE_AWS_ACCESS_KEY_ID:"only-the-id"}')"
+run_loader "dp.st.TIERB-FIXTURE" "" "" "$HALFTF"
+[[ "$LOADER_RC" -ne 0 ]] && pass "row8c: half-set backend pair is a refusal" || fail "row8c: exited 0"
+said "tf_state_key_pair_half_set" && pass "row8c: names the verdict" || fail "row8c: no verdict word"
+
+# ROW 8d — NO Tier-B state pair: the loader must NOT alias, so the extract steps' legacy
+# fallback is what supplies the backend. Without this row, an alias that fired
+# unconditionally (exporting an empty AWS_ACCESS_KEY_ID) would look identical to success
+# and would SHADOW the legacy read at every one of the 44 sites.
+run_loader "dp.st.TIERB-FIXTURE" "" "" "$("$REAL_JQ" -n '{HCLOUD_TOKEN:"x"}')"
+if env_has "AWS_ACCESS_KEY_ID"; then
+  fail "row8d: aliased AWS_ACCESS_KEY_ID with no Tier-B pair — an empty alias shadows the legacy fallback at every extract site"
+else
+  pass "row8d: no alias without a Tier-B pair (legacy fallback stays reachable)"
+fi
+
+# ======================================================================
 # ROW 9 — the --preserve-env SENTINEL. This is the executable proof of the precedence
 # property Guard 2 asserts statically: without the flag, a value planted in a
 # Tier-A-writable config SHADOWS the loader's value, which is exactly the substitution
@@ -304,7 +338,7 @@ fi
 # SELFTEST_PASSES is a literal on the line immediately above its use: a constant bound
 # further up is UNBOUND in guard-vacuity-floor.test.sh's mutant slice, so the mutant
 # dies at `set -u` and the floor scores CONSTRUCTION rather than FIRING.
-MIN_ASSERTIONS=28
+MIN_ASSERTIONS=34
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   FAILURES+=("ANTI-VACUITY FLOOR: $REAL real assertions ran, expected >= $MIN_ASSERTIONS — rows were skipped or truncated")

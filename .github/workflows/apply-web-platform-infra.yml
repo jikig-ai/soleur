@@ -144,8 +144,16 @@ on:
       #     (hr-menu-option-ack-not-prod-write-auth), and this token only guards a mis-dispatch.
       # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
       # the other.
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §confirm and the gate model
+      # (#8209) plan_only only ever SKIPS steps; the gates above stay unconditional.
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §plan_only
+      plan_only:
+        description: "[web-host-replace, git-data-host-replace] Rehearsal: credentials, init, plan and the path's own gate, then STOP before any apply, -replace, SSH or host contact. Operator step O4b."
+        required: false
+        default: false
+        type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. Only web-host-create, web-host-replace, git-data-host-create, workspaces-luks-recut and inngest-volume-recut carry an `environment:` REVIEWER gate. Since #8209/ADR-239 every OTHER target carries `environment: infra-privileged`, which has no reviewer but IS pinned to `main` — so a dispatch from a branch is refused, and for those targets the gate chain, the destroy-guard and the id-pin remain the rest of the protection. The exact token is in the runbook for the target you are firing, and in that target's job header in this file — deliberately not enumerated here, because this string accreted one clause per target and no operator reads a field label that long. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, workspaces-luks-recut, inngest-volume-recut. Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -562,11 +570,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -1755,11 +1763,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -2034,11 +2042,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -2143,7 +2151,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
@@ -2305,7 +2313,7 @@ jobs:
 
           # G17's live half. Read the ATTACHMENT from the Hetzner API, not from terraform state — the
           # plan's own before.id is Guard 1's job, and two pins against one source is one pin.
-          HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null)" || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           LIVE_ID=""
           if [[ -n "$HCLOUD_TOKEN" ]]; then
@@ -2390,9 +2398,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -2590,11 +2598,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -2665,7 +2673,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
@@ -2825,11 +2833,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -2903,7 +2911,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
@@ -3092,7 +3100,7 @@ jobs:
         # a fresh empty one. A name lookup cannot be forged by a typo.
         run: |
           set -euo pipefail
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::registry-luks-recut ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot run the live existence probe. Fail-closed: an unreadable signal is not evidence of absence."
             exit 1
@@ -3203,7 +3211,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::warning::pre-rehearsal stock probe SKIPPED: HCLOUD_TOKEN unreadable. stock_preflight_gate still applies later."
             exit 0
@@ -3517,11 +3525,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -3587,7 +3595,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read they fail-close on EVERY
           # dispatch (an outage, not a tripwire). Doppler-fetched secrets are NOT auto-masked by
           # Actions (unlike secrets.*); this one carries destroy authority over the whole fleet.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::registry-luks-recut ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot run the live existence probe or PROVE stock. Fail-closed."
@@ -4176,11 +4184,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -4261,7 +4269,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
@@ -4281,6 +4289,7 @@ jobs:
           grep -E '^Plan:' tfplan.txt || true
 
       - name: Stamp boot-trail run anchor (git-data replace)
+        if: inputs.plan_only != true
         id: boot_anchor
         # (#8178, AP-027) See the twin in git_data_host_create. The anchor matters MORE here:
         # a replace destroys and recreates the host, and `host_name` pins the host rather than
@@ -4293,6 +4302,7 @@ jobs:
           printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
           printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
       - name: Terraform apply (git-data-host -replace) — both-volumes-preserved assert
+        if: inputs.plan_only != true
         id: apply
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -4352,7 +4362,11 @@ jobs:
         # birth job and driven by tests/scripts/test-git-data-boot-signal-poll.sh. The
         # `Dispatch summary` below turns an apply/poll outcome pair that never produced a
         # verdict (including an empty outcome from a renamed step id) red.
-        if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
+        # MERGED, not a second `if:` key. Belt-and-braces: with the apply skipped
+        # `steps.apply.outcome` is 'skipped' and neither arm matches, but relying on that
+        # would leave the guard implicit and an edit to the apply's own condition would
+        # silently re-arm this step (#8209).
+        if: ${{ !cancelled() && inputs.plan_only != true && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -4369,6 +4383,7 @@ jobs:
           exit "$rc"
 
       - name: Post-replace readiness note (non-SSH)
+        if: inputs.plan_only != true
         # git-data is a deny-all blind host: this CI runner canNOT SSH it and canNOT reach it
         # over the private net. Two gates ran in THIS job: the destroy-guard + post-apply jq
         # asserts, and (#8178) the boot-signal poll above, which reads the host's
@@ -4481,9 +4496,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -4676,9 +4691,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -4901,9 +4916,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -5143,7 +5158,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read the gate would
           # fail-closed on EVERY dispatch, and a gate that always fails is an outage, not a
           # tripwire. Read-only; masked before any later step can echo it.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
@@ -5389,9 +5404,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -5577,7 +5592,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on
           # EVERY dispatch, and a gate that always fails is an outage, not a tripwire.
           # Read-only; masked before any later step can echo it.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
@@ -5601,9 +5616,11 @@ jobs:
       # event from its replacement's — on a replace that means a healthy predecessor
       # yields a GREEN run with the new host's boot never verified.
       - name: Stamp boot-trail run anchor (replace)
+        if: inputs.plan_only != true
         run: printf 'BOOT_TRAIL_SINCE=%s\n' "$(date -u +%s)" >> "$GITHUB_ENV"
 
       - name: Terraform apply (web-host replace)
+        if: inputs.plan_only != true
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -5626,7 +5643,8 @@ jobs:
 
       # ADR-128 R2/R3/R4/R5 — the SAME extracted reader web_host_create runs.
       - name: Surface fresh-host Sentry breadcrumb trail (best-effort — R2/R3/R4/R5)
-        if: always()
+        # MERGED, not a second `if:` key (#8209; see the runbook's plan_only section).
+        if: always() && inputs.plan_only != true
         env:
           JOB_STATUS: ${{ job.status }}
           # #7946: bound from the repo secret, not fetched from Doppler — see the
@@ -5987,9 +6005,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -6115,7 +6133,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above. Without this read the gate fails closed
           # on EVERY dispatch — an outage, not a tripwire. stock-preflight-coverage.test.ts
           # asserts this read exists per gated job.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
@@ -6401,9 +6419,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -6714,9 +6732,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi

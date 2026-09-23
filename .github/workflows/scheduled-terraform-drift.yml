@@ -78,8 +78,8 @@ jobs:
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
         run: |
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"

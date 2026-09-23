@@ -142,6 +142,25 @@ def check(name, cond, detail=""):
     out.append("%s\t%s\t%s" % ("ok" if cond else "FAIL", name,
                                str(detail)[:400].replace("\t", " ").replace("\n", " ")))
 
+DOPPLER_RUN = re.compile(r"doppler\s+run\b")
+# COMMAND POSITION. `doppler run` and `doppler secrets get` appear in this repo's workflows far
+# more often inside COMMENTS and inside `::error::` prose than as commands — "without this read the
+# `doppler run` wrapper fail-closes" is a sentence, not an invocation. A census anchored on the bare
+# token scores every one of those, so the anchor is SYNTACTIC: the token must sit where a command
+# can start (line start, or after `|`, `;`, `&&`, `||`, `(`, `$(`, `{`, `!`, `then`, `do`, `else`,
+# optionally behind VAR=value prefixes), on a line that is not a shell comment.
+CMD_POS = re.compile(r"(?:^|[|;&({!]|\$\(|&&|\|\||\bthen\b|\bdo\b|\belse\b)\s*"
+                     r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)*$")
+
+def cmd_sites(body, pat):
+    """(line, match) for every `pat` hit that sits in command position on a non-comment line."""
+    for line in CONT.sub(" ", body).split("\n"):
+        if line.lstrip().startswith("#"):
+            continue
+        for m in pat.finditer(line):
+            if CMD_POS.search(line[:m.start()]):
+                yield line, m
+
 SEC_REF = re.compile(r"secrets\s*\.\s*(" + "|".join(ENV_SECRETS) + r")(?![A-Za-z0-9_])", re.I)
 DYNAMIC = re.compile(r"tojson\s*\(\s*secrets\s*\)|secrets\s*\[", re.I)
 ENV_EXPR = re.compile(r"\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -355,15 +374,15 @@ check("G1f: no `pull_request_target` Tier-B job checks out the pull request's ow
 
 # AC3 — a tier_b_names read from prd_terraform outside the loader's legacy arm
 PRD_TF = re.compile(r"(?:-c|--config)[= ]+prd_terraform\b")
+DOPPLER_SECRETS_GET = re.compile(r"doppler\s+secrets\s+get\s+([A-Za-z_][A-Za-z0-9_]*)")
 ac3 = []
 for rel, (doc, text) in sorted(docs.items()):
     if rel == LOADER_REL:
         continue
     for j in [x for x in jobs if x.rel == rel]:
         for s in j.steps:
-            body = CONT.sub(" ", str(s.get("run") or ""))
-            for m in re.finditer(r"doppler\s+secrets\s+get\s+([A-Za-z_][A-Za-z0-9_]*)([^\n]*)", body):
-                if m.group(1) in TIER_B_NAMES and PRD_TF.search(m.group(2)):
+            for line, m in cmd_sites(str(s.get("run") or ""), DOPPLER_SECRETS_GET):
+                if m.group(1) in TIER_B_NAMES and PRD_TF.search(line[m.end():]):
                     ac3.append("%s [%s]" % (j.id, m.group(1)))
 check("G1g: no workflow step reads a tier_b_names entry with `-c prd_terraform` outside the loader "
       "(%s) [AC3]" % os.path.join(".github", LOADER_REL), not ac3, sorted(set(ac3))[:8])
@@ -388,32 +407,33 @@ for j in tierb:
                 re.search(r"AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)\s*=", body)):
             continue
         n_extract += 1
-        i_tf = min([body.index(x) for x in ("${TF_STATE_AWS_ACCESS_KEY_ID", "$TF_STATE_AWS_ACCESS_KEY_ID")
+        # Either Tier-B backend pair counts: `TF_STATE_AWS_*` for the shared
+        # `soleur-terraform-state` roots, `GIT_DATA_ROOT_STATE_AWS_*` for the root-key root, whose
+        # state moved to `soleur-terraform-state-privileged` (ADR-239 D3/D7). Both are loader
+        # exports; what the row forbids is reading the `prd_terraform` pair FIRST.
+        i_tf = min([body.index(x) for x in ("${TF_STATE_AWS_ACCESS_KEY_ID", "$TF_STATE_AWS_ACCESS_KEY_ID",
+                                            "${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID", "$GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID")
                     if x in body] or [len(body) + 1])
         i_legacy = min([m.start() for m in re.finditer(r"doppler\s+secrets\s+get\s+AWS_ACCESS_KEY_ID", body)] or [len(body) + 2])
         if i_tf > i_legacy:
             bad_extract.append("%s [%s]" % (j.id, (s.get("name") or "<unnamed>")))
-check("G1i: every \"Extract backend credentials\"-shaped step in a Tier-B job reads TF_STATE_AWS_* "
-      "before any prd_terraform AWS_* fallback [AC7b; %d such steps]" % n_extract,
+check("G1i: every \"Extract backend credentials\"-shaped step in a Tier-B job reads its Tier-B "
+      "backend pair (TF_STATE_AWS_*, or GIT_DATA_ROOT_STATE_AWS_* for the root-key root) before any "
+      "prd_terraform AWS_* fallback [AC7b; %d such steps]" % n_extract,
       not bad_extract, sorted(set(bad_extract))[:8])
 
 # ── Guard 2 ────────────────────────────────────────────────────────────────────────
-DOPPLER_RUN = re.compile(r"doppler\s+run\b")
 BASH_CALL = re.compile(r"(?<![\w/-])bash\s+(?!-)([\"']?)([^\s\"';|&)]+)\1")
 
 def invocations(body):
-    """Each `doppler run` invocation's own argument text: up to the ` -- ` separator or the end of
-    its (continuation-joined) line. `[^\\n]` is a bracket expression, not "any char but newline",
-    so the slice is taken by index rather than by a negated class."""
-    flat = CONT.sub(" ", body)
-    for m in DOPPLER_RUN.finditer(flat):
-        rest = flat[m.end():]
-        cut = len(rest)
-        for pat in (" -- ", "\n"):
-            k = rest.find(pat)
-            if k != -1:
-                cut = min(cut, k)
-        yield flat[m.start():m.end() + cut]
+    """Each `doppler run` invocation's own argument text: from the token up to the ` -- ` separator
+    or the end of its (continuation-joined) line. `[^\\n]` in an ERE is a bracket expression
+    excluding backslash and the letter n, not "any char but newline", so the slice is taken by
+    index rather than by a negated class."""
+    for line, m in cmd_sites(body, DOPPLER_RUN):
+        rest = line[m.end():]
+        k = rest.find(" -- ")
+        yield line[m.start():m.end() + (k if k != -1 else len(rest))]
 
 def script_targets(body):
     flat = CONT.sub(" ", body)

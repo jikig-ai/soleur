@@ -601,3 +601,57 @@ this chain, this arithmetic moves with it. That is still far better than the 360
 default the 30 was chosen against, but it is 4.5x the number that comment defends, and saying
 otherwise would be naming a property the change does not have. Genuinely releasing it needs a
 SEPARATE WORKFLOW (workflow_run), not a chained job — tracked, not done here.
+
+## confirm and the gate model
+
+Relocated from `apply-web-platform-infra.yml`'s `confirm:` field label (ADR-231 byte
+budget; the field's own comment already said no operator reads a label that long).
+
+`confirm` is a TYPO-GUARD, never the authorization. Each job accepts only its own literal,
+so a token typed for one target cannot authorize another, and birth and replace tokens are
+always distinct -- a token typed for a birth cannot authorize a destroy.
+
+**What actually gates each target.**
+
+- `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
+  and `inngest-volume-recut` carry an `environment:` with a REVIEWER. The reviewer click
+  is the human authorization on those paths.
+- Since #8209 / ADR-239 D2 every OTHER target carries `environment: infra-privileged`.
+  That environment has no reviewer -- it serves unattended jobs -- but its
+  deployment-branch policy admits `main` only, so a dispatch from any other ref is refused
+  before the job starts.
+- For the reviewer-less targets the gate chain, the destroy-guard and the id-pin remain
+  the rest of the protection. Those are `registry-luks-recut`, `registry-host-replace`,
+  `registry-region-migrate`, `inngest-host-replace` and `git-data-host-replace`, all of
+  which destroy or replace production hosts.
+
+**What changed, and what did not.** Before #8209 those five ran the SELECTED REF, so each
+gate was supplied by the branch it polices. They now run main's gate. The limitation is
+narrowed, not removed: a deliberate actor who can land a commit on `main` still reaches
+them. ADR-169 and ADR-220 carry superseding callouts to the same effect.
+
+## plan_only
+
+`plan_only` (boolean dispatch input, default false) is the incident-recovery REHEARSAL
+arm, honoured by `web_host_replace` and `git_data_host_replace`. It runs the credential
+load, `terraform init`, `terraform plan` and the path's own gate, then stops.
+
+Three properties make it safe to add to a destructive job, and the census asserts all
+three:
+
+1. It only ever SKIPS steps. Every mutating step from the boot-trail anchor onward carries
+   `inputs.plan_only != true`, so a true value can make the job do less and never more.
+2. The set of guarded steps is DERIVED from the mutating set, not hand-kept -- a newly
+   added apply step with no guard is red.
+3. Input validation, the typo-guard and the environment gate are UNCONDITIONAL, so
+   `plan_only` is not a way around any of them.
+
+**A note for anyone adding a guard here.** A second `if:` on a step is a duplicate YAML
+key. The parser accepts it and the LAST one wins, so an inserted guard reads as present
+and is dead. Merge into the existing expression instead (`always() && inputs.plan_only !=
+true`), and verify by PARSING the file rather than by reading the diff.
+
+Operator step **O4b** dispatches both paths this way from `main` before the eviction (O10)
+removes the legacy credential fallback. Without it, a recovery path that fails closed is
+first discovered during the incident it exists to fix. See
+`infra-credential-tiers-8209.md`.

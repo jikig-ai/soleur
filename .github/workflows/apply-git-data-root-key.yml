@@ -83,9 +83,9 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi

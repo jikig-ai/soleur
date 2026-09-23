@@ -231,6 +231,40 @@ runs:
           exit 1
         fi
 
+        # ---- Alias the Tier-B state key onto the plain backend names ---------
+        #
+        # (#8209 R7) The R2 backend reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, and
+        # those names in `prd_terraform` become READ-ONLY at operator step O5b -- a branch
+        # can then no longer forge state that a later `main` apply acts on. The read/write
+        # pair lives in Tier B under TF_STATE_AWS_*, so alias it here rather than at all 44
+        # read sites: every `Extract backend credentials` step becomes
+        # `"${AWS_ACCESS_KEY_ID:-$(doppler secrets get …)}"`, which takes the Tier-B value
+        # when the loader supplied one and falls back to the legacy read otherwise. That
+        # fallback is what makes this merge-safe before the operator moves the key.
+        #
+        # ALL-OR-NONE, for the same reason as the git-data pair below: a half-set backend
+        # credential authenticates as nobody and presents as an R2 auth error rather than
+        # as a missing secret.
+        tf_id="$(printf '%s' "$payload" | jq -r '.TF_STATE_AWS_ACCESS_KEY_ID // ""')"
+        tf_secret="$(printf '%s' "$payload" | jq -r '.TF_STATE_AWS_SECRET_ACCESS_KEY // ""')"
+        if [[ -n "$tf_id" && -n "$tf_secret" ]]; then
+          # Heredoc delimiters, the same shape as every other export above. An R2 key
+          # holds no newline today, but a `K=V` line truncates at the first one if it ever
+          # does, and a half-written backend credential fails as an auth error rather than
+          # as a malformed value.
+          adelim="SOLEUR_EOF_$(openssl rand -hex 12)"
+          {
+            printf 'AWS_ACCESS_KEY_ID<<%s\n%s\n%s\n' "$adelim" "$tf_id" "$adelim"
+            printf 'AWS_SECRET_ACCESS_KEY<<%s\n%s\n%s\n' "$adelim" "$tf_secret" "$adelim"
+          } >> "$GITHUB_ENV"
+          echo "::notice title=infra-privileged::tf_state_key=tier_b (read/write; prd_terraform AWS_* is the read-only Tier-A pair after O5b)"
+        elif [[ -n "$tf_id" || -n "$tf_secret" ]]; then
+          echo "::error title=infra-privileged::verdict=tf_state_key_pair_half_set — exactly one of TF_STATE_AWS_ACCESS_KEY_ID / _SECRET_ACCESS_KEY is set in soleur-infra-privileged/prd. A half-set backend credential authenticates as nobody and surfaces as an R2 auth error rather than as a missing secret."
+          emit source "tier_b"
+          emit git_data_root_state_bucket ""
+          exit 1
+        fi
+
         # ---- The git-data root-key state key pair: all-or-none ---------------
         #
         # Read back from $GITHUB_ENV's source of truth (the payload), not from the
