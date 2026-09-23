@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test-helpers.sh, which composes a prior EXIT trap with its own sandbox cleanup; a trap set
 # AFTER the source would replace that cleanup and leak the incident sandbox.
 fixture_dir=""
-trap 'rm -rf "${fixture_dir:-}" || :' EXIT
+trap '[[ -z "${fixture_dir:-}" ]] || rm -rf "$fixture_dir" || :' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$SCRIPT_DIR/../../.."
@@ -245,6 +245,8 @@ SELF="$SCRIPT_DIR/${BASH_SOURCE[0]##*/}"
 # Prints the line numbers of executable lines (full-line comments skipped) that still contain
 # a pipe once logical-or operators are removed. Any pipe counts, however the consumer is
 # spelled (grep -F -q, --quiet, head, awk exit, a trailing-pipe continuation).
+# Deliberately strict and quote-blind: a regex alternation inside a string or a trailing
+# comment containing a pipe also counts. Rewrite such a line rather than weaken the scanner.
 pipe_lines_in() {
   local p=$'\x7c' ln=0 line hits=()
   while IFS= read -r line || [[ -n "$line" ]]; do

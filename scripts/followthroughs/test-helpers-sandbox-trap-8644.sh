@@ -33,7 +33,8 @@ for f in "$dir"/*.test.sh; do
   [[ -f "$f" ]] || continue
   verdict="$(awk '
     src == 0 && /^[[:space:]]*(source|\.)[[:space:]].*test-helpers\.sh/ { src = NR }
-    src && NR > src && /^[[:space:]]*trap .*EXIT/ { late = 1 }
+    /^[[:space:]]*#/ { next }
+    src && NR > src && /^[[:space:]]*trap .*[[:space:]](EXIT|0)([[:space:]]|$)/ { late = 1 }
     /_soleur_sb_cleanup/ { ok = 1 }
     END { print (src ? 1 : 0), ((late && !ok) ? 1 : 0) }
   ' "$f")" || { echo "CANNOT ESTABLISH: awk failed on $f" >&2; exit 3; }

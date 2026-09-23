@@ -247,8 +247,9 @@ differs from the shipped file, `## Review Amendments` below is authoritative.**
   - **H1**: the `awk` line-1 needle becomes a filler path. Expect the "needle on line 1" row to FAIL.
   - **H2**: the needle moves to the last line of `big` instead of line 1. Expect the row to stay PASS.
   - **Measured at /work** (`env -i PATH=/usr/bin:/bin bash --noprofile --norc`, real grep): M1 RED 5/5 (`Passed: 22 / Failed: 1`, needle row); M2 decoy row RED; M3 needle row RED at 643 bytes; M4 (decoy row deleted) floor tripped at 22 < 23; H1 needle row RED; H2 GREEN 23/0; M5 (the `references/` call site re-inlined as a pipe) GREEN 23/0, the documented residual that AC2 catches. Fixed suite GREEN 10/10, 5 of them with SIGPIPE ignored as on CI.
+  - **Superseded by the review battery** (31-row suite): see `## Review Amendments`. M1-M5, H1 and H2 were re-run there, and M5 now goes RED through TS8.
 - [ ] **AC5**: The PR body contains `Ref #7005` and neither `Closes #7005` nor `Fixes #7005`.
-- [ ] **AC6**: The diff touches only `plugins/soleur/test/vendor-bundle-coverage.test.sh` and the review scope-out probe `scripts/followthroughs/test-helpers-sandbox-trap-8644.sh` (#8659), plus the pipeline's own artifacts: `knowledge-base/project/plans/2026-09-23-fix-vendor-bundle-coverage-sigpipe-race-plan.md`, `knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/**`, and any generated `knowledge-base/INDEX.md`.
+- [ ] **AC6**: The diff touches only `plugins/soleur/test/vendor-bundle-coverage.test.sh` and the review scope-out probe `scripts/followthroughs/test-helpers-sandbox-trap-8644.sh` (#8659), plus the compound outputs (the learning under `knowledge-base/project/learnings/test-failures/` and one routed bullet in `plugins/soleur/skills/plan/references/plan-sharp-edges.md`), plus the pipeline's own artifacts: `knowledge-base/project/plans/2026-09-23-fix-vendor-bundle-coverage-sigpipe-race-plan.md`, `knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/**`, and any generated `knowledge-base/INDEX.md`.
 
 ## Guard Contract
 
