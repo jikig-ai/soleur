@@ -59,6 +59,12 @@ export interface ClaudeCostMarker {
   // Correlation id — `conversationId` for sessions, `runId ?? cronName` for crons.
   id: string;
   capture_status: CaptureStatus;
+  // #8611 — cron claude-eval runs only (optional; other emitters omit them). Whether the run
+  // FAILED and the CLI's reason token (e.g. `error_max_budget_usd`), plus its turn count. All
+  // three are closed-shape values validated at parse time — no result or error TEXT.
+  is_error?: boolean | null;
+  subtype?: string | null;
+  num_turns?: number | null;
 }
 
 /**

@@ -489,32 +489,47 @@ Rows before 2026-09-19 (PR #8344) decode to a STRING `.message`; the
 `type == "object"` guard skips them — same cause as the compound-promote
 decode above (measured dark on the 2026-09-14/15 fires).
 
-Ranked SQL (run against `remote(t520508_..._logs)`):
+Ranked SQL. Since #8344 (2026-09-19) pino fields nest under `raw.message`, so every marker field
+is read as `JSONExtract*(raw, 'message', '<field>')`. The top-level form `JSONExtract*(raw, '<field>')`
+returns 0/empty on every row and reads as "no spend" (#8611, measured: $0 top-level vs $159.81
+nested over the same 356 cron markers). `remote(...)` alone is the hot table, which covers only
+recent hours; for any longer window, union it with the S3 archive as below.
 
 ```sql
--- Per-cron spend/token totals over the window (per-run marker)
-SELECT JSONExtractString(raw, 'source') AS source,
+-- Per-source spend over a window (per-run marker; cron sources only)
+SELECT JSONExtractString(raw, 'message', 'source') AS source,
        count() AS runs,
-       sum(JSONExtractFloat(raw, 'cost_usd')) AS cost_usd
-FROM remote(t520508_..._logs)
-WHERE raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+       round(sum(JSONExtractFloat(raw, 'message', 'cost_usd')), 2) AS cost_usd,
+       countIf(JSONExtractBool(raw, 'message', 'is_error')) AS failed_runs
+FROM (SELECT dt, raw FROM remote($BS_TABLE)
+      UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+WHERE dt > now() - INTERVAL 30 DAY
+  AND raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+  AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
 GROUP BY source ORDER BY cost_usd DESC FORMAT JSONEachRow
 
 -- Per-model spend attribution (per-run marker)
-SELECT JSONExtractString(raw, 'model') AS model,
+SELECT JSONExtractString(raw, 'message', 'model') AS model,
        count() AS turns,
-       sum(JSONExtractFloat(raw, 'cost_usd')) AS cost_usd
-FROM remote(t520508_..._logs)
-WHERE raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+       round(sum(JSONExtractFloat(raw, 'message', 'cost_usd')), 2) AS cost_usd
+FROM (SELECT dt, raw FROM remote($BS_TABLE)
+      UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+WHERE dt > now() - INTERVAL 30 DAY AND raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
 GROUP BY model ORDER BY cost_usd DESC FORMAT JSONEachRow
 
 -- Daily authoritative org total (Admin report)
-SELECT dt, JSONExtractString(raw, 'date') AS day,
-       JSONExtractFloat(raw, 'cost_usd') AS org_cost_usd
-FROM remote(t520508_..._logs)
+SELECT dt, JSONExtractString(raw, 'message', 'date') AS day,
+       JSONExtractFloat(raw, 'message', 'cost_usd') AS org_cost_usd
+FROM (SELECT dt, raw FROM remote($BS_TABLE)
+      UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
 WHERE raw LIKE '%"SOLEUR_CLAUDE_COST_DAILY":true%'
 ORDER BY dt DESC LIMIT 30 FORMAT JSONEachRow
 ```
+
+The `"SOLEUR_CLAUDE_COST":true` key match (with `:true`) keeps the `SOLEUR_CLAUDE_COST_DAILY`
+org-total rows out of a per-run sum. Rows before #8344 carry `message` as a string and read 0 here.
+Since #8611 the per-run marker also carries `is_error`, `subtype` (e.g. `error_max_budget_usd`)
+and `num_turns` for cron claude-eval runs.
 
 The markers carry `conversationId`/`runId`, token counts, cost, model, and
 `source` — no PII, and the daily marker is field-allowlisted so `api_key_id`/

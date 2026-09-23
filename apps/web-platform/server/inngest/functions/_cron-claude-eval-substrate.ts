@@ -97,6 +97,11 @@ export interface ParsedEvalResult {
     costUsd?: number;
     usage?: SpawnResult["usage"];
     model: string | null;
+    // #8611 — whether the run FAILED (budget cap, credit, max turns) and why. `null` when the
+    // CLI omitted the field or sent a malformed value; never passed through unvalidated.
+    isError: boolean | null;
+    subtype: string | null;
+    numTurns: number | null;
   };
   // The human-readable `result` text (the CLI's final assistant output OR, on
   // an API error, the error message). Folded into stdoutTail so the I8
@@ -140,6 +145,9 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
     modelUsage?: Record<string, unknown>;
     result?: unknown;
     permission_denials?: unknown;
+    is_error?: unknown;
+    subtype?: unknown;
+    num_turns?: unknown;
   };
   return {
     // `fieldPresent` splits "no denials" from "the CLI stopped emitting the
@@ -161,6 +169,16 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
           }
         : undefined,
       model: Object.keys(r.modelUsage ?? {})[0] ?? null,
+      isError: typeof r.is_error === "boolean" ? r.is_error : null,
+      // A closed token shape, so no free text (and no newline) can ride into a log line.
+      subtype:
+        typeof r.subtype === "string" && /^[a-z_]{1,64}$/.test(r.subtype)
+          ? r.subtype
+          : null,
+      numTurns:
+        Number.isInteger(r.num_turns) && (r.num_turns as number) >= 0
+          ? (r.num_turns as number)
+          : null,
     },
     resultText:
       typeof r.result === "string"
@@ -1146,6 +1164,9 @@ export async function spawnClaudeEval(args: {
           cache_creation_input_tokens:
             evalCost?.usage?.cache_creation_input_tokens ?? null,
           capture_status: captureStatus,
+          is_error: evalCost?.isError ?? null,
+          subtype: evalCost?.subtype ?? null,
+          num_turns: evalCost?.numTurns ?? null,
         });
         // #8076 — one positive marker per run that had a filing-shaped deny;
         // fail-open like the cost marker, and silent at 0 (a heartbeat would
