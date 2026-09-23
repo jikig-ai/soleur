@@ -45,13 +45,13 @@ Nothing here edits `apps/web-platform/infra/`.
 
 ## Phase 3 — PR-3: record anchors (#8532)
 
-- [ ] 3.1 `records` field plus schema.
-- [ ] 3.2 `check_records_resolve` and `check_record_anchors_named` over a ledger-declared `RECORD_SURFACES` (R11) with a count floor and CODEOWNERS pin; MB-15/16.
-- [ ] 3.3 Add `// ledger: <store id>` to the store elements in `model.c4`, and the Inngest store's missing at-rest posture.
-- [ ] 3.4 Regenerate `model.likec4.json` in the same commit; run the C4 freshness and parity suites.
-- [ ] 3.5 Register: the five CLO amendments, each with a dated amendment marker, plus the visible `(encryption-posture ledger: <id>)` clauses.
-- [ ] 3.6 Record the amendment convention in the register's maintenance section, which has none today.
-- [ ] 3.7 Route the register edits through the CLO before marking the PR ready.
+- [x] 3.1 `records` field plus schema (and `record_surfaces`; 56 records on 17 rows).
+- [x] 3.2 `check_records_resolve` and `check_record_anchors_named` over a ledger-declared `RECORD_SURFACES` (R11) with a count floor and CODEOWNERS pin; MB-15/16.
+- [x] 3.3 Add the ledger clause comments to the store elements in `model.c4` (12 clauses, 8 elements), and the Inngest server's root-disk at-rest posture plus the passphrase cache on `inngestRedis`.
+- [x] 3.4 Regenerate `model.likec4.json` in the same commit; run the C4 freshness and parity suites (all pass).
+- [x] 3.5 Register: the five CLO amendments (plus PA-1/2/21/22/36 and the cross-cutting encryption bullet), each with a dated amendment marker, plus the visible `(encryption-posture ledger: <id>)` clauses.
+- [x] 3.6 Record the amendment convention in the register's maintenance section, which has none today.
+- [x] 3.7 Route the register edits through the CLO before marking the PR ready. DISCHARGED with conditions: all 44 register pairs are in `records` (done); follow-ups filed as #8624 (PA-14 amendment + published claim review) and #8625 (no Hetzner backups; Art. 32(1)(c)). ADR-243 records the binding.
 
 ## Phase 4 — PR-4: the web-host root-disk images (operator-gated)
 
@@ -63,5 +63,5 @@ Nothing here edits `apps/web-platform/infra/`.
 ## Phase 5 — close-out
 
 - [ ] 5.1 Verify each AC against the measured value, amending any that the measurement contradicts.
-- [ ] 5.2 File the `soleur:gdpr-gate` Art. 32 at-rest capability gap the CLO reported.
-- [ ] 5.3 Label #8532 `domain/legal` as well as `domain/engineering`.
+- [x] 5.2 File the `soleur:gdpr-gate` Art. 32 at-rest capability gap the CLO reported. Already tracked as #8526; not re-filed.
+- [x] 5.3 Label #8532 `domain/legal` as well as `domain/engineering`.

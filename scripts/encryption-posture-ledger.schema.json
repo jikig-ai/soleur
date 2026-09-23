@@ -13,6 +13,11 @@
       "type": "integer",
       "minimum": 0
     },
+    "record_surfaces": {
+      "description": "#8532 PR-3 (Guard 3): the files that state a store's at-rest posture (the Article 30 register, model.c4). Every clause '(encryption-posture ledger: <store id> — at rest: <mechanism>)' in these files must name a live row that lists the clause's section in its records. The list lives here, not in the script, so the check is fixturable; the test suite floors its length on the committed ledger and CODEOWNERS pins this file.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "store_classes": {
       "description": "R7: the CHECKED partition. A Terraform resource type here is treated as a persistent store and MUST carry a ledger row. Extending this is the single place a new store class enters.",
       "type": "object",
@@ -54,6 +59,11 @@
           "description": "Resource address (hcloud_volume.x / cloudflare_r2_bucket.y) or logical name for a non-IaC store (supabase.prd)."
         },
         "kind": { "enum": ["guest-luks-volume", "provider-bucket", "provider-db", "log-sink", "secret-store", "host-root-disk"] },
+        "records": {
+          "description": "#8532 PR-3 (Guard 3): where this store's at-rest posture is restated. Each entry is '<path>' or '<path>#<heading prefix>'; the path must be in record_surfaces. The section must carry exactly one clause for this store, and its mechanism must equal this row's. The check asserts and never writes.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "multiplicity": {
           "description": "#8532 PR-2 (Guard 2): REQUIRED when the store's Terraform block declares for_each or count, or is instantiated by a module; FORBIDDEN on a singleton. instances lists the instance keys the row covers; a for_each over a var.<map> with a default literal is compared against that literal. Any other shape must also name gated_by (the variable, local or module call deciding how many instances exist), which must occur in the block's expression and in exception.reevaluate_when.",
           "type": "object",

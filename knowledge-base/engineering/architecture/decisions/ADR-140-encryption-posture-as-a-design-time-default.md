@@ -210,7 +210,7 @@ NOT reopened here.
 The `non_store_types` seed was mechanical: every type that was not obviously a volume or a
 bucket went in, with no per-type reason. One type was wrong. `hcloud_server` is now a store
 class (`host-root-disk`), because the root disks hold LUKS passphrases or tokens that fetch
-them, the persistent journal, and the Inngest SQLite state. ADR-242 also makes the
+them, the persistent journal, and the Inngest SQLite directory. ADR-242 also makes the
 positive-work floor exact and requires a `for_each`/`count` row to declare its instances. The
 rationale lives there. The other `non_store_types` entries still carry no reason (see
 ADR-242, Alternatives).

@@ -85,7 +85,7 @@ STORE_CLASS_KIND_ENUM = {
 }
 # The validator never reads the schema file; the test suite pins these three
 # sets equal to the schema's so the two cannot drift silently.
-STORE_KEYS = {"store", "kind", "device_binding", "at_rest", "multiplicity"}
+STORE_KEYS = {"store", "kind", "device_binding", "at_rest", "multiplicity", "records"}
 CERT_VERIFICATION_VALUES = {"on", "off"}
 
 TRACKING_ISSUE_RE = re.compile(r"^#[0-9]+$")
@@ -738,6 +738,193 @@ def check_instance_multiplicity(
         # MUTATION-TARGET: MB-24 end
 
 
+# --- #8532 PR-3: record anchors (Guard 3) ----------------------------------
+
+CLAUSE_TOKEN = "(encryption-posture ledger:"
+CLAUSE_RE = re.compile(
+    r"\(encryption-posture ledger: (?P<id>[A-Za-z0-9_.-]+) — at rest: "
+    r"(?P<mech>[A-Za-z0-9_.:-]+)\)"
+)
+HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*$", re.MULTILINE)
+
+
+def surface_sections(path_str: str, text: str) -> list[tuple[str | None, int, int]]:
+    """[(heading text or None, start, end)]. A markdown surface is split at its
+    headings, because one store is stated under several processing activities
+    and each statement must agree on its own. Any other surface is one section."""
+    if not path_str.endswith(".md"):
+        return [(None, 0, len(text))]
+    heads = list(HEADING_RE.finditer(text))
+    out: list[tuple[str | None, int, int]] = [
+        (None, 0, heads[0].start() if heads else len(text))
+    ]
+    for i, h in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        out.append((h.group(1), h.start(), end))
+    return out
+
+
+def _selector_matches(heading: str | None, sel: str) -> bool:
+    """`Processing Activity 1` selects `Processing Activity 1 — Accounts`, never
+    `Processing Activity 13`: the prefix must end at a non-alphanumeric."""
+    if heading is None:
+        return False
+    return heading == sel or (
+        heading.startswith(sel) and not heading[len(sel)].isalnum()
+    )
+
+
+def _section_label(path_str: str, heading: str | None) -> str:
+    return f"{path_str}#{heading.split(' — ', 1)[0]}" if heading else path_str
+
+
+def _clause_tokens(text: str, start: int, end: int) -> list[int]:
+    """Offsets of every clause token in [start, end), minus documented templates
+    (`<store id>`), which the register's maintenance section uses."""
+    out = []
+    i = text.find(CLAUSE_TOKEN, start, end)
+    while i != -1:
+        if not text.startswith(" <", i + len(CLAUSE_TOKEN)):
+            out.append(i)
+        i = text.find(CLAUSE_TOKEN, i + 1, end)
+    return out
+
+
+def _load_surfaces(
+    ledger: dict, repo_root: Path, fails: list[str]
+) -> dict[str, str]:
+    texts: dict[str, str] = {}
+    for sp in ledger.get("record_surfaces", []):
+        try:
+            path = (repo_root / sp).resolve()
+            path.relative_to(repo_root.resolve())
+        except (ValueError, OSError):
+            path = None
+        if path is None or not path.is_file():
+            fails.append(
+                f"FAIL: record_surfaces entry {sp} is not a file inside the "
+                "repository -> fix the path or remove the entry"
+            )
+            continue
+        texts[sp] = read_text(path)
+    return texts
+
+
+def check_records_resolve(
+    ledger: dict, texts: dict[str, str], fails: list[str]
+) -> None:
+    """Forward: each stores[].records entry names one section of a record
+    surface, which carries exactly one clause for this store, whose mechanism
+    EQUALS the row's. Equality, not a regex over prose: an additive-only
+    register holds superseded text beside current text."""
+    surfaces = set(ledger.get("record_surfaces", []))
+    for row in ledger["stores"]:
+        sid = row["store"]
+        mech = row["at_rest"]["mechanism"]
+        for rec in row.get("records", []):
+            path_str, _, sel = rec.partition("#")
+            if path_str not in surfaces:
+                fails.append(
+                    f"FAIL: {sid} record {rec} names a file that is not in "
+                    "record_surfaces -> add the file to record_surfaces, so the "
+                    "reverse check reads it too"
+                )
+                continue
+            text = texts.get(path_str)
+            if text is None:
+                continue  # reported by _load_surfaces
+            if sel:
+                hits = [
+                    s for s in surface_sections(path_str, text)
+                    if _selector_matches(s[0], sel)
+                ]
+                if len(hits) != 1:
+                    fails.append(
+                        f"FAIL: {sid} record {rec}: the section selector matches "
+                        f"{len(hits)} headings -> it must select exactly one"
+                    )
+                    continue
+                _h, st, en = hits[0]
+            else:
+                st, en = 0, len(text)
+            clauses = [
+                m for m in (CLAUSE_RE.match(text, i) for i in _clause_tokens(text, st, en))
+                if m and m.group("id") == sid
+            ]
+            # MUTATION-TARGET: MB-26 start (one clause per store per section)
+            if len(clauses) > 1:
+                fails.append(
+                    f"FAIL: clause for {sid} occurs {len(clauses)} times in {rec} "
+                    "-> keep one; an amended cell supersedes in prose, not by a "
+                    "second clause"
+                )
+                continue
+            # MUTATION-TARGET: MB-26 end
+            if not clauses:
+                fails.append(
+                    f"FAIL: no clause for {sid} in {rec} -> add "
+                    f"(encryption-posture ledger: {sid} — at rest: {mech}) where "
+                    "the section states this store's at-rest posture, or drop "
+                    "the record"
+                )
+                continue
+            # MUTATION-TARGET: MB-15 start (the record agrees with the row)
+            if clauses[0].group("mech") != mech:
+                fails.append(
+                    f"FAIL: {sid} record {rec} states at rest: "
+                    f"{clauses[0].group('mech')} but the row's mechanism is "
+                    f"{mech} -> correct whichever one is wrong, in the same PR"
+                )
+            # MUTATION-TARGET: MB-15 end
+
+
+def check_record_anchors_named(
+    ledger: dict, texts: dict[str, str], fails: list[str]
+) -> None:
+    """Reverse: every clause in every record surface parses, names a live row,
+    and sits in a section that row's records list. A renamed store cannot leave
+    an orphan clause, and a clause cannot exist that no forward check reads."""
+    rows = {s["store"]: s for s in ledger["stores"]}
+    for sp, text in texts.items():
+        for heading, st, en in surface_sections(sp, text):
+            label = _section_label(sp, heading)
+            for i in _clause_tokens(text, st, en):
+                m = CLAUSE_RE.match(text, i)
+                if not m:
+                    # MUTATION-TARGET: MB-28 start (a clause-shaped token must parse)
+                    fails.append(
+                        f"FAIL: malformed encryption-posture clause in {label} "
+                        "-> write it as (encryption-posture ledger: <store id> "
+                        "— at rest: <mechanism>), with an em dash"
+                    )
+                    # MUTATION-TARGET: MB-28 end
+                    continue
+                sid = m.group("id")
+                if sid not in rows:
+                    # MUTATION-TARGET: MB-16 start (a clause must name a live row)
+                    fails.append(
+                        f"FAIL: {label} carries a clause for {sid}, which names "
+                        "no stores[] row -> rename the clause with the store, or "
+                        "remove it"
+                    )
+                    # MUTATION-TARGET: MB-16 end
+                    continue
+                recs = rows[sid].get("records", [])
+                listed = any(
+                    r == sp
+                    or (r.startswith(sp + "#") and _selector_matches(heading, r[len(sp) + 1 :]))
+                    for r in recs
+                )
+                # MUTATION-TARGET: MB-27 start (the row lists every section it is stated in)
+                if not listed:
+                    fails.append(
+                        f"FAIL: {label} carries a clause for {sid}, which its "
+                        f"row's records do not list -> add \"{label}\" to "
+                        f"{sid}.records"
+                    )
+                # MUTATION-TARGET: MB-27 end
+
+
 def check_live_coverage_floor(ledger: dict, fails: list[str]) -> None:
     """R8b (#6902 / ADR-141): the ledger must retain at least
     `live_coverage_floor` stores whose at_rest.live_verification == "available"
@@ -1069,7 +1256,7 @@ REQUIRED_TOP = (
 # Optional top-level keys (additive; do NOT bump schema_version). #6902/ADR-141:
 # live_coverage_floor is a self-declared integer arming the live-coverage floor
 # (see check_live_coverage_floor). Absent => 0 => floor inactive.
-OPTIONAL_TOP = ("live_coverage_floor",)
+OPTIONAL_TOP = ("live_coverage_floor", "record_surfaces")
 
 
 def _validate_exception(exc: dict, prefix: str) -> list[str]:
@@ -1102,6 +1289,11 @@ def _validate_store(s: dict, i: int) -> list[str]:
     unexpected = sorted(set(s) - STORE_KEYS)
     if unexpected:
         errs.append(f"{prefix} has unexpected key(s) {unexpected}")
+    if "records" in s and (
+        not isinstance(s["records"], list)
+        or not all(isinstance(x, str) and x for x in s["records"])
+    ):
+        errs.append(f"{prefix}.records must be a list of non-empty strings")
     if "multiplicity" in s:
         mu = s["multiplicity"]
         if (
@@ -1204,6 +1396,12 @@ def validate_ledger(ledger) -> list[str]:
             if not isinstance(v["mechanisms"], list) or not v["mechanisms"]:
                 errs.append(f"store_classes.{t}.mechanisms must be a non-empty list")
 
+    if "record_surfaces" in ledger and (
+        not isinstance(ledger["record_surfaces"], list)
+        or not all(isinstance(x, str) and x for x in ledger["record_surfaces"])
+    ):
+        errs.append("record_surfaces must be a list of non-empty strings")
+
     if not isinstance(ledger["non_store_types"], list):
         errs.append("non_store_types must be a list")
     if not isinstance(ledger["non_iac_stores"], list):
@@ -1282,6 +1480,10 @@ def run_sweep(
 
     for conn in ledger["connections"]:
         check_connection(conn, today, repo_root, fails)
+
+    texts = _load_surfaces(ledger, repo_root, fails)
+    check_records_resolve(ledger, texts, fails)
+    check_record_anchors_named(ledger, texts, fails)
 
     n_stores = len(ledger["stores"])
     n_connections = len(ledger["connections"])

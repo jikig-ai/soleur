@@ -1267,6 +1267,145 @@ run_mutation "MB-24/module" "MB-24" "$REPO_P2_MOD" "$LEDGER_P2_MOD_BAD"
 run_mutation "MB-25" "MB-25" "$REPO_P2" "$LEDGER_P2_SOLO"
 
 # ===========================================================================
+# #8532 PR-3 — record anchors (Guard 3). A record surface (the Article 30
+# register, model.c4) states a store's at-rest posture through a visible,
+# self-describing clause:
+#   (encryption-posture ledger: <store id> — at rest: <mechanism>)
+# compared by EQUALITY with the row's mechanism, never by a regex over prose.
+# Forward: each stores[].records entry ("path" or "path#<heading prefix>")
+# resolves to exactly one clause for that store in that section, and agrees.
+# Reverse: every clause in every record_surfaces file names a live row that
+# lists that section. Anchors are per SECTION: one store is stated under
+# several processing activities.
+# ===========================================================================
+REPO_P3="$TMPDIR_TEST/p3"
+write_file "$REPO_P3/apps/web-platform/infra/v.tf" <<'EOF'
+resource "hcloud_volume" "v" {
+  name = "soleur-v"
+}
+
+resource "hcloud_volume" "w" {
+  name = "soleur-w"
+}
+EOF
+# mk_p3_register <pa1-clause> <pa13-clause> [extra line appended to PA-1]
+mk_p3_register() {
+  write_file "$REPO_P3/kb/register.md" <<EOF
+# Register
+
+## Processing Activity 1 — Accounts
+
+| **(e) At rest** | Stored on the volume. $1 |
+${3:-}
+
+## Processing Activity 13 — Queue
+
+| **(e) At rest** | Queue data. $2 |
+
+## Register Maintenance
+
+A store's posture is anchored as (encryption-posture ledger: <store id> — at rest: <mechanism>).
+EOF
+}
+write_file "$REPO_P3/kb/model.c4" <<'EOF'
+model {
+  vol = container "Volume" {
+    // (encryption-posture ledger: hcloud_volume.v — at rest: plaintext-exception)
+    description "the volume"
+  }
+}
+EOF
+CL_V='(encryption-posture ledger: hcloud_volume.v — at rest: plaintext-exception)'
+
+# mk_p3_ledger <out> <v-records-json> [surfaces-json]
+mk_p3_ledger() {
+  local out="$1" recs="$2" surfaces="${3:-[\"kb/register.md\", \"kb/model.c4\"]}"
+  {
+    echo '{ "schema_version": 1,'
+    echo "  \"record_surfaces\": $surfaces,"
+    echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+    echo '  "non_store_types": [], "non_iac_stores": [], "stores": ['
+    mk_exc_row "hcloud_volume.v" "" "$REEVAL_DEF" | sed "s|\"kind\": \"guest-luks-volume\",|\"kind\": \"guest-luks-volume\", \"records\": $recs,|"
+    echo '    ,'
+    mk_exc_row "hcloud_volume.w" "" "$REEVAL_DEF"
+    echo '  ], "connections": [] }'
+  } | write_file "$out"
+}
+RECS_OK='["kb/register.md#Processing Activity 1", "kb/register.md#Processing Activity 13", "kb/model.c4"]'
+LEDGER_P3_OK="$TMPDIR_TEST/p3-ok.json"
+mk_p3_ledger "$LEDGER_P3_OK" "$RECS_OK"
+
+mk_p3_register "$CL_V" "$CL_V"
+run_case_reports "P3 must-PASS: clauses agree per section; a row with no records; a template line" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P3" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+
+# Guard 3 matrix #3: the record contradicts the row's mechanism.
+mk_p3_register "$CL_V" '(encryption-posture ledger: hcloud_volume.v — at rest: luks)'
+cp -r "$REPO_P3" "$TMPDIR_TEST/p3-mech"; REPO_P3_MECH="$TMPDIR_TEST/p3-mech"
+run_case_reports "P3 record states a different mechanism than the row -> FAIL" 1 \
+  "hcloud_volume.v record kb/register.md#Processing Activity 13 states at rest: luks but the row's mechanism is plaintext-exception" \
+  --repo-sweep --repo-root "$REPO_P3_MECH" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+
+# Guard 3 matrix #2: the anchored clause duplicated inside one section.
+mk_p3_register "$CL_V" "$CL_V" "| **(g) Security** | Also on the volume. $CL_V |"
+cp -r "$REPO_P3" "$TMPDIR_TEST/p3-dup"; REPO_P3_DUP="$TMPDIR_TEST/p3-dup"
+run_case_reports "P3 clause occurs twice in one section -> FAIL" 1 \
+  "clause for hcloud_volume.v occurs 2 times in kb/register.md#Processing Activity 1" \
+  --repo-sweep --repo-root "$REPO_P3_DUP" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+
+# Guard 3 matrix #1: a clause naming a store id no row has (a renamed store).
+mk_p3_register "$CL_V" "$CL_V" "| **(g) Security** | Old volume. (encryption-posture ledger: hcloud_volume.gone — at rest: plaintext-exception) |"
+cp -r "$REPO_P3" "$TMPDIR_TEST/p3-ghost"; REPO_P3_GHOST="$TMPDIR_TEST/p3-ghost"
+run_case_reports "P3 clause names a store id with no row -> FAIL" 1 \
+  "kb/register.md#Processing Activity 1 carries a clause for hcloud_volume.gone, which names no stores[] row" \
+  --repo-sweep --repo-root "$REPO_P3_GHOST" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+
+# A clause in a section the row's records do not list (reverse completeness).
+LEDGER_P3_PA1="$TMPDIR_TEST/p3-pa1.json"
+mk_p3_ledger "$LEDGER_P3_PA1" '["kb/register.md#Processing Activity 1", "kb/model.c4"]'
+mk_p3_register "$CL_V" "$CL_V"
+run_case_reports "P3 clause in a section the row does not list -> FAIL" 1 \
+  "kb/register.md#Processing Activity 13 carries a clause for hcloud_volume.v, which its row's records do not list" \
+  --repo-sweep --repo-root "$REPO_P3" --ledger "$LEDGER_P3_PA1" --today "$TODAY"
+
+# A listed section with no clause (forward resolution).
+mk_p3_register "$CL_V" "no anchor here"
+cp -r "$REPO_P3" "$TMPDIR_TEST/p3-none"; REPO_P3_NONE="$TMPDIR_TEST/p3-none"
+run_case_reports "P3 listed section carries no clause -> FAIL" 1 \
+  "no clause for hcloud_volume.v in kb/register.md#Processing Activity 13" \
+  --repo-sweep --repo-root "$REPO_P3_NONE" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+
+# A clause-shaped token that does not parse (a hyphen where the em dash goes).
+mk_p3_register "$CL_V" "$CL_V" "| **(g)** | (encryption-posture ledger: hcloud_volume.v - at rest: plaintext-exception) |"
+cp -r "$REPO_P3" "$TMPDIR_TEST/p3-bad"; REPO_P3_BAD="$TMPDIR_TEST/p3-bad"
+run_case_reports "P3 malformed clause -> FAIL, never skipped" 1 \
+  "malformed encryption-posture clause in kb/register.md#Processing Activity 1" \
+  --repo-sweep --repo-root "$REPO_P3_BAD" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+
+mk_p3_register "$CL_V" "$CL_V"
+LEDGER_P3_NOSURF="$TMPDIR_TEST/p3-nosurf.json"
+mk_p3_ledger "$LEDGER_P3_NOSURF" "$RECS_OK" '["kb/register.md"]'
+run_case_reports "P3 a record on a file outside record_surfaces -> FAIL (the reverse check would not see it)" 1 \
+  "hcloud_volume.v record kb/model.c4 names a file that is not in record_surfaces" \
+  --repo-sweep --repo-root "$REPO_P3" --ledger "$LEDGER_P3_NOSURF" --today "$TODAY"
+LEDGER_P3_MISSING="$TMPDIR_TEST/p3-missing.json"
+mk_p3_ledger "$LEDGER_P3_MISSING" "$RECS_OK" '["kb/register.md", "kb/model.c4", "kb/gone.md"]'
+run_case_reports "P3 a record surface that does not exist -> FAIL" 1 \
+  "record_surfaces entry kb/gone.md is not a file" \
+  --repo-sweep --repo-root "$REPO_P3" --ledger "$LEDGER_P3_MISSING" --today "$TODAY"
+LEDGER_P3_AMBIG="$TMPDIR_TEST/p3-ambig.json"
+mk_p3_ledger "$LEDGER_P3_AMBIG" '["kb/register.md#Processing Activity", "kb/model.c4"]'
+run_case_reports "P3 a section selector matching two headings -> FAIL ambiguous" 1 \
+  "matches 2 headings" \
+  --repo-sweep --repo-root "$REPO_P3" --ledger "$LEDGER_P3_AMBIG" --today "$TODAY"
+
+run_mutation "MB-15" "MB-15" "$REPO_P3_MECH" "$LEDGER_P3_OK"
+run_mutation "MB-26" "MB-26" "$REPO_P3_DUP" "$LEDGER_P3_OK"
+run_mutation "MB-16" "MB-16" "$REPO_P3_GHOST" "$LEDGER_P3_OK"
+run_mutation "MB-27" "MB-27" "$REPO_P3" "$LEDGER_P3_PA1"
+run_mutation "MB-28" "MB-28" "$REPO_P3_BAD" "$LEDGER_P3_OK"
+
+# ===========================================================================
 # Live-coverage floor (#6902 / ADR-141): an OPTIONAL top-level
 # `live_coverage_floor` integer. When >= 1, the ledger must retain at least
 # that many stores whose at_rest.live_verification == "available" — the one
@@ -1548,6 +1687,7 @@ done <<<"$REAL_IDS"
 REAL_COPY="$TMPDIR_TEST/real-copy"
 mkdir -p "$REAL_COPY"
 ( cd "$REPO_TRUE_ROOT" && git ls-files -z -- ':(glob)apps/*/infra/**' ':(glob)infra/**' ':(glob)docs/legal/**' \
+      knowledge-base/legal/article-30-register.md knowledge-base/engineering/architecture/diagrams/model.c4 \
     | xargs -0 -I{} cp --parents {} "$REAL_COPY/" )
 REAL_TODAY="2026-09-23"
 run_case_reports "AC-2c baseline: the committed ledger PASSES on a faithful copy of the tree" 0 "0 failing checks" \
@@ -1570,6 +1710,41 @@ printf '\nresource "hcloud_server" "web_extra" {\n  name = "soleur-extra"\n}\n' 
 run_case_reports "Guard 2 #4: a new hcloud_server block with no row -> FAIL unledgered" 1 \
   "unledgered store hcloud_server.web_extra" \
   --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
+# AC-3a on the real record surfaces: a store renamed in the ledger alone leaves
+# its register clauses naming nothing (Guard 3 #1), and a mechanism changed in
+# the ledger alone contradicts every record of it (Guard 3 #3).
+REAL_COPY_B="$TMPDIR_TEST/real-copy-b"
+mkdir -p "$REAL_COPY_B"
+( cd "$REPO_TRUE_ROOT" && git ls-files -z -- ':(glob)apps/*/infra/**' ':(glob)infra/**' ':(glob)docs/legal/**' \
+      knowledge-base/legal/article-30-register.md knowledge-base/engineering/architecture/diagrams/model.c4 \
+    | xargs -0 -I{} cp --parents {} "$REAL_COPY_B/" )
+python3 - "$REAL_LEDGER" "$TMPDIR_TEST/real-rename.json" "$TMPDIR_TEST/real-flip.json" <<'PYEOF2'
+import json, sys
+l = json.load(open(sys.argv[1]))
+for s in l["stores"]:
+    if s["store"] == "hcloud_server.inngest":
+        s["store"] = "hcloud_server.inngest_renamed"
+json.dump(l, open(sys.argv[2], "w"))
+l = json.load(open(sys.argv[1]))
+for s in l["stores"]:
+    if s["store"] == "supabase.prd":
+        s["at_rest"]["mechanism"] = "provider-managed:some-other-attestation"
+json.dump(l, open(sys.argv[3], "w"))
+PYEOF2
+run_case_reports "AC-3a a store renamed in the ledger only -> its register clauses FAIL" 1 \
+  "carries a clause for hcloud_server.inngest, which names no stores[] row" \
+  --repo-sweep --repo-root "$REAL_COPY_B" --ledger "$TMPDIR_TEST/real-rename.json" --today "$REAL_TODAY"
+run_case_reports "AC-3a a mechanism changed in the ledger only -> its records FAIL" 1 \
+  "supabase.prd record knowledge-base/legal/article-30-register.md#Processing Activity 1 states at rest: provider-managed:supabase-postgres-aes256 but the row's mechanism is provider-managed:some-other-attestation" \
+  --repo-sweep --repo-root "$REAL_COPY_B" --ledger "$TMPDIR_TEST/real-flip.json" --today "$REAL_TODAY"
+# Guard 3 matrix #4: deleting a surface from the committed ledger's
+# record_surfaces would silently un-gate every clause in it. Reported through
+# printf + exit, never through the verdict helper it protects (ADR-193).
+REAL_SURFACES="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("record_surfaces", [])))' "$REAL_LEDGER")"
+if [[ "$REAL_SURFACES" -lt 2 ]]; then
+  printf 'GUARD FAIL: the committed ledger lists %s record_surfaces, expected >= 2 (register + model.c4)\n' "$REAL_SURFACES" >&2
+  exit 2
+fi
 if [[ "$REAL_N" -lt 7 ]]; then
   printf 'GUARD FAIL: AC-1a loop covered %s catalogued ids, expected >= 7\n' "$REAL_N" >&2
   exit 2
@@ -1585,7 +1760,7 @@ fi
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=103
+MIN_CASES=120
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

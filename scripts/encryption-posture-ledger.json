@@ -1,6 +1,10 @@
 {
   "schema_version": 1,
   "live_coverage_floor": 2,
+  "record_surfaces": [
+    "knowledge-base/legal/article-30-register.md",
+    "knowledge-base/engineering/architecture/diagrams/model.c4"
+  ],
   "store_classes": {
     "hcloud_volume": {
       "kind": "guest-luks-volume",
@@ -151,6 +155,13 @@
     {
       "store": "hcloud_volume.git_data",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 36",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.git_data",
         "attachment": "hcloud_volume_attachment.git_data",
@@ -158,7 +169,7 @@
       },
       "at_rest": {
         "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/git-data.tf:264 (format = \"ext4\", no LUKS apparatus)",
+        "evidence": "apps/web-platform/infra/git-data.tf:264 (format = \"ext4\", no LUKS apparatus) CORRECTED 2026-09-23 (#8532): the citation above is a line number; the content anchor is apps/web-platform/infra/git-data.tf, resource \"hcloud_volume\" \"git_data\".",
         "defends_against": "nothing at the volume layer; the pre-cutover rollback backstop pending the DL-2 wipe",
         "does_not_defend": "a seized/snapshot disk exposes any git data still resident on this volume",
         "disclosed_as": "not-publicly-claimed",
@@ -174,6 +185,12 @@
     {
       "store": "hcloud_volume.git_data_luks",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 36",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.git_data_luks",
         "attachment": "hcloud_volume_attachment.git_data_luks",
@@ -191,6 +208,15 @@
     {
       "store": "hcloud_volume.inngest_redis",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 13",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 21",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 22",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 27",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 31",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.inngest_redis",
         "attachment": "hcloud_volume_attachment.inngest_redis",
@@ -216,6 +242,15 @@
     {
       "store": "hcloud_volume.inngest_redis_luks",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 13",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 21",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 22",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 27",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 31",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.inngest_redis_luks",
         "attachment": "hcloud_volume_attachment.inngest_redis_luks",
@@ -233,6 +268,9 @@
     {
       "store": "hcloud_volume.registry",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.registry",
         "attachment": "hcloud_volume_attachment.registry",
@@ -291,6 +329,12 @@
     {
       "store": "hcloud_volume.workspaces",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "multiplicity": {
         "instances": [
           "web-1",
@@ -320,6 +364,12 @@
     {
       "store": "hcloud_volume.workspaces_luks",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.workspaces_luks",
         "attachment": "hcloud_volume_attachment.workspaces_luks",
@@ -337,6 +387,9 @@
     {
       "store": "r2.terraform_state_backend",
       "kind": "provider-bucket",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 12"
+      ],
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
         "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) — in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation, now substantiated",
@@ -351,6 +404,9 @@
     {
       "store": "redis.session_store",
       "kind": "provider-db",
+      "records": [
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "at_rest": {
         "mechanism": "plaintext-exception",
         "evidence": "model.c4:218 models sessionStore as 'TLS, requirepass, EU (Phase 4a)'; at-rest posture unstated in code",
@@ -369,6 +425,9 @@
     {
       "store": "supabase.inngest",
       "kind": "provider-db",
+      "records": [
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "at_rest": {
         "mechanism": "provider-managed:supabase-postgres-aes256",
         "evidence": "Supabase Postgres AES-256 at-rest encryption (Supabase security documentation); the Inngest metadata Postgres project",
@@ -383,6 +442,12 @@
     {
       "store": "supabase.prd",
       "kind": "provider-db",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "at_rest": {
         "mechanism": "provider-managed:supabase-postgres-aes256",
         "evidence": "Supabase encrypts Postgres data at rest with AES-256 (Supabase security documentation)",
@@ -431,11 +496,20 @@
     {
       "store": "hcloud_server.inngest",
       "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 13",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 21",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 22",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 27",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 31",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "at_rest": {
         "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/inngest-host.tf, resource \"hcloud_server\" \"inngest\". Root-disk contents: cloud-init-inngest.yml writes /etc/default/inngest-luks (0600 root:root, the cached INNGEST_REDIS_LUKS_KEY), /etc/default/inngest-doppler (0600, a DOPPLER_TOKEN) and /etc/default/soleur-sentry-dsn (0600). inngest-bootstrap.sh writes /etc/default/inngest-server (0640 root:deploy, a DOPPLER_TOKEN scoped to project soleur-inngest) and starts inngest with --sqlite-dir /var/lib/inngest, a plain root-disk directory.",
+        "evidence": "apps/web-platform/infra/inngest-host.tf, resource \"hcloud_server\" \"inngest\". Root-disk contents: cloud-init-inngest.yml writes /etc/default/inngest-luks (0600 root:root, the cached INNGEST_REDIS_LUKS_KEY), /etc/default/inngest-doppler (0600, a DOPPLER_TOKEN) and /etc/default/soleur-sentry-dsn (0600). inngest-bootstrap.sh writes /etc/default/inngest-server (0640 root:deploy, a DOPPLER_TOKEN scoped to project soleur-inngest) and starts inngest with --sqlite-dir /var/lib/inngest, a plain root-disk directory that inngest-bootstrap.sh calls vestigial in the durable Postgres+Redis mode.",
         "defends_against": "nothing at the device layer: Hetzner root disks carry no encryption, and one can be added only when the host is rebuilt",
-        "does_not_defend": "a seized or snapshot-imaged root disk exposes the passphrase of hcloud_volume.inngest_redis_luks (so that volume's LUKS defends nothing against a full-host seizure), Inngest's SQLite run and queue state under /var/lib/inngest (event payloads are user-derived, #5150, #5450), and two Doppler tokens",
+        "does_not_defend": "a seized or snapshot-imaged root disk exposes the passphrase of hcloud_volume.inngest_redis_luks (so that volume's LUKS defends nothing against a full-host seizure), Inngest's SQLite directory /var/lib/inngest (vestigial in the durable Postgres+Redis mode per inngest-bootstrap.sh, load-bearing only in the Redis-not-ready fallback; whether it holds residual state is not measured), whose payloads would be user-derived if populated (#5150, #5450), and two Doppler tokens",
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:a CI runner cannot see guest-side disk state (ADR-141), and no host emitter reports root-disk posture today",
         "exception": {
@@ -449,6 +523,13 @@
     {
       "store": "hcloud_server.web",
       "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 8",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "multiplicity": {
         "instances": [
           "web-1",
@@ -473,6 +554,11 @@
     {
       "store": "hcloud_server.git_data",
       "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 36",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "at_rest": {
         "mechanism": "plaintext-exception",
         "evidence": "apps/web-platform/infra/git-data.tf, resource \"hcloud_server\" \"git_data\". Root-disk contents: cloud-init-git-data.yml write_files /etc/default/git-data-doppler (0600 root:root; a DOPPLER_TOKEN that can fetch GIT_DATA_LUKS_KEY, never the key itself) and /etc/default/git-data-betterstack (0600), plus the Sentry DSN baked into /usr/local/bin/git-data-emit (0755). The bare repositories live on the attached volumes, not the root disk.",
@@ -491,6 +577,10 @@
     {
       "store": "hcloud_server.registry",
       "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 8",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)"
+      ],
       "at_rest": {
         "mechanism": "plaintext-exception",
         "evidence": "apps/web-platform/infra/zot-registry.tf, resource \"hcloud_server\" \"registry\". Root-disk contents: cloud-init-registry.yml writes /etc/default/registry-doppler (0600, a DOPPLER_TOKEN that can fetch REGISTRY_LUKS_KEY) and /etc/zot/htpasswd (0600, bcrypt hashes of the zot pull and push tokens), and sets journald Storage=persistent for the zot container's logs. Image blobs live on the LUKS-mapped hcloud_volume.registry at /var/lib/zot.",

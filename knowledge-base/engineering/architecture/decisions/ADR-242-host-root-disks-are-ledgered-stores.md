@@ -34,7 +34,9 @@ ledger's own rows depended on without saying so:
   passphrase of the LUKS volume beside them.
 - The web hosts' persistent journal holds the app container's stdout and stderr. #8617 found
   outbound recipient addresses in that class of data.
-- The Inngest SQLite state (`/var/lib/inngest`) lives on the root disk.
+- Inngest's SQLite directory (`/var/lib/inngest`) is on the root disk. It is vestigial in the durable
+  Postgres+Redis mode and load-bearing only in the Redis-not-ready fallback; whether it holds
+  residual state is not measured.
 
 The ledger stated none of this, so no gate could reach it.
 
@@ -89,4 +91,5 @@ metadata endpoint serving `user_data` to root. It is not the disk.
 
 ## C4 impact
 
-None. This changes how existing hosts are recorded, not the containers or their relationships.
+No new element or relationship. `model.c4` gains ledger clauses on existing store elements and the
+Inngest server's root-disk posture in its description (ADR-243 owns the clause convention).
