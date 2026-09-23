@@ -349,32 +349,10 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
   #
   # It does not take the rebase-main lock: this hook already holds it (acquired above) and the
   # resolver is documented as taking none, so there is no re-entrancy here.
-  # >>> regen-resolver-lookup (byte-identical in .claude/ and .openhands/ pre-merge-rebase.sh;
-  #     .claude/hooks/pre-merge-rebase-regen-lookup.test.sh compares the two)
-  # The resolver comes from the PLUGIN first (#8542 follow-up, ADR-235 amendment). A self-hosted
-  # repo has no plugins/soleur/ of ours, so a $WORK_DIR-only lookup found nothing there and the
-  # merge was denied; and a copy inside $WORK_DIR is the tree being MERGED, whose sibling
-  # render-c4-model.sh the resolver would then execute. So ${CLAUDE_PLUGIN_ROOT} (bare, no `:-`
-  # default -- ADR-179 A12) wins when it names soleur. That name check is DEFENCE-IN-DEPTH, not a
-  # boundary (ADR-179 A11: this repo's own tracked plugin.json names soleur, so a shadowing copy
-  # passes it). The in-repo copy stays as the fallback for this repository's own sessions, where
-  # the project hook runs without CLAUDE_PLUGIN_ROOT. Absolutized here because the call below
-  # runs from inside $WORK_DIR.
-  REGEN_RESOLVER=""
-  _regen_root=""
-  if [[ -n "${CLAUDE_PLUGIN_ROOT+set}" && -n "${CLAUDE_PLUGIN_ROOT}" ]]; then
-    _regen_root="$(cd "${CLAUDE_PLUGIN_ROOT}" 2>/dev/null && pwd -P)" || _regen_root=""
-  fi
-  if [[ -n "$_regen_root" && -f "$_regen_root/scripts/resolve-regenerable-conflicts.sh" ]] \
-     && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$_regen_root/.claude-plugin/plugin.json" 2>/dev/null; then
-    REGEN_RESOLVER="$_regen_root/scripts/resolve-regenerable-conflicts.sh"
-  elif [[ -f "$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh" ]]; then
-    REGEN_RESOLVER="$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
-  fi
-  # <<< regen-resolver-lookup
+  REGEN_RESOLVER="$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
   REGEN_ERR=""
   REGEN_OK=0
-  if [[ -n "$REGEN_RESOLVER" ]]; then
+  if [[ -f "$REGEN_RESOLVER" ]]; then
     # CAPTURE stderr, never discard it. This was `>/dev/null 2>&1`, which falsified the
     # resolver's central design contract -- "the distinction lives in stderr, prefixed
     # `not applicable:` or `regen failed:`, where a human reads it" -- at the one call site
