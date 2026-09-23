@@ -158,6 +158,12 @@ runs:
         # reachability can also widen without touching this array — a change to
         # a generator's OUTPUT FORMAT (e.g. weakness-miner.sh emitting learning
         # titles instead of bare basenames) moves the other input silently.
+        #
+        # `test` is content-scoped too since #6907: it aggregates the
+        # encryption-posture sweep, whose surface is the ledger, every *.tf,
+        # every file under apps/*/infra/, and the docs/legal/ disclosed_as
+        # anchors the ledger cites. That surface is disjoint from
+        # {weakness-digest.md} today; re-derive it before adding a path here.
         ALLOWED_PATHS=(
           "knowledge-base/project/weakness-digest.md"
         )
@@ -241,6 +247,16 @@ runs:
         fi
         if ! python3 scripts/lint-credential-path-literals.py "${PATHS[@]}"; then
           echo "::error::lint-credential-path-literals found a resolvable credential-file path in the bot diff — refusing to create the PR or post synthetics (#6882 earned green)."
+          exit 1
+        fi
+        # Refuse off-main runs (#6907 review). The branch below is cut from the
+        # ref the workflow checked out, and ALLOWED_PATHS bounds only what THIS
+        # step stages, not the PR diff. A workflow_dispatch on any other branch
+        # would carry that branch's commits into a PR whose every required
+        # check (including `test`, which now holds the encryption-posture sweep)
+        # is fabricated green below — the unreachability argument would not hold.
+        if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+          echo "::error::bot-pr-with-synthetic-checks must run from refs/heads/main (got '${GITHUB_REF:-unset}'): an off-main branch would ship its own commits under fabricated required checks."
           exit 1
         fi
         DATE_SUFFIX="$(date -u +%Y-%m-%d)"

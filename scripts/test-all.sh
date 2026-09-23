@@ -607,6 +607,9 @@ source "$_REL_LIB"
 #   webplat  only apps/web-platform vitest
 #   bun      3 named bun tests + plugins/soleur + blog-link-validation
 #   scripts  11 pre-suite bash/python + the plugins/soleur/test/*.test.sh glob (SUITE_GLOBS)
+#   scripts-heavy  the three cost-heaviest registrations, carved out of `scripts` so a
+#            dedicated 3-leg ci.yml matrix can run them one-per-leg (#8006). Included
+#            in `all`, so a local full-gate run covers them unchanged.
 #   infra    ONLY the CI-registered apps/web-platform/infra/ runner (#7103 R5(a)).
 #            This is the "TEST_GROUP asks" arm of the relevance gate below: an
 #            explicit ask bypasses the diff check, so an infra run is reachable
@@ -621,15 +624,15 @@ source "$_REL_LIB"
 #            group — the matrix keeps running the full shards — and it does not
 #            satisfy the ship-time full-gate requirement (ADR-183).
 #
-# See `.github/workflows/ci.yml` test-{webplat,bun,scripts} jobs + the
+# See `.github/workflows/ci.yml` test-{webplat,bun,scripts,scripts-heavy} jobs + the
 # synthetic `test` aggregator. See plan
 # `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`.
 TEST_GROUP="${TEST_GROUP:-${1:-all}}"
 case "$TEST_GROUP" in
-  all|webplat|bun|scripts|infra|affected) ;;
+  all|webplat|bun|scripts|scripts-heavy|infra|affected) ;;
   *)
-    echo "ERROR: TEST_GROUP must be one of: all, webplat, bun, scripts, infra, affected (got: $TEST_GROUP)" >&2
-    echo "Usage: bash scripts/test-all.sh [all|webplat|bun|scripts|infra|affected]" >&2
+    echo "ERROR: TEST_GROUP must be one of: all, webplat, bun, scripts, scripts-heavy, infra, affected (got: $TEST_GROUP)" >&2
+    echo "Usage: bash scripts/test-all.sh [all|webplat|bun|scripts|scripts-heavy|infra|affected]" >&2
     echo "   or: TEST_GROUP=<value> bash scripts/test-all.sh" >&2
     exit 2
     ;;
@@ -650,7 +653,7 @@ esac
 # It fires HERE — after TEST_GROUP is validated so the message can name it, but before
 # tc_acquire and before the first suite — so a refused run costs nothing and never takes the
 # advisory lock that a legitimate sibling run is queued on.
-# SCRIPTS_SHARD IS SCOPED TO THE SCRIPTS GROUP, AND SAYS SO LOUDLY (#7902 review).
+# SCRIPTS_SHARD IS SCOPED TO THE TWO SCRIPTS GROUPS, AND SAYS SO LOUDLY (#7902 review).
 #
 # `_shard_selects` sits at the chokepoint, so it is group-agnostic by construction — with the
 # variable set and any other TEST_GROUP it partitions that group too. Measured before this guard
@@ -658,20 +661,22 @@ esac
 # `TEST_GROUP=infra` hit the zero-assignment refusal with a message about the scripts count that
 # made no sense for infra.
 #
-# CI is unaffected either way — the variable is bound only on ci.yml's test-scripts job, which
-# passes `scripts` positionally. This is for the developer who exports it once and then runs a
-# different group: an explicit refusal beats both a confusing exit 2 and a silently sharded gate.
-if [[ -n "${SCRIPTS_SHARD+x}" && "$TEST_GROUP" != "scripts" ]]; then
+# CI is unaffected either way — the variable is bound only on ci.yml's test-scripts and
+# test-scripts-heavy jobs, which pass `scripts` and `scripts-heavy` positionally (#8006). This
+# is for the developer who exports it once and then runs a different group: an explicit refusal
+# beats both a confusing exit 2 and a silently sharded gate.
+if [[ -n "${SCRIPTS_SHARD+x}" && "$TEST_GROUP" != "scripts" && "$TEST_GROUP" != "scripts-heavy" ]]; then
   echo "ERROR: SCRIPTS_SHARD is set but TEST_GROUP is '$TEST_GROUP'." >&2
-  echo "       The partition is scoped to the scripts group; applying it to another group would" >&2
-  echo "       silently run a fraction of that group and report success. Unset SCRIPTS_SHARD, or" >&2
-  echo "       run the scripts group." >&2
+  echo "       The partition is scoped to the scripts and scripts-heavy groups; applying it to" >&2
+  echo "       another group would silently run a fraction of that group and report success." >&2
+  echo "       Unset SCRIPTS_SHARD, or run one of the scripts groups." >&2
   exit 2
 fi
 
 # THE CARRIER IS CONSUMED HERE, AND MUST NOT BE INHERITED (#7902 review, P1).
 #
-# `SCRIPTS_SHARD` arrives as a JOB-LEVEL `env:` on ci.yml's test-scripts job, so it is in the
+# `SCRIPTS_SHARD` arrives as a JOB-LEVEL `env:` on ci.yml's test-scripts and
+# test-scripts-heavy jobs, so it is in the
 # environment of every step AND every descendant process. Four suites registered INTO the scripts
 # group spawn a sandboxed copy of this runner with `TEST_GROUP=all` — they would inherit the
 # variable, hit the refusal directly above, and exit 2 inside every arm. Measured on
@@ -725,11 +730,16 @@ if (( _ENUMERATE == 0 )) && [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_
 fi
 
 # `affected` widens EVERY want_*, deliberately: the selection is not a shard — it happens
-# per-suite at the run_suite chokepoint via _suite_affected, so all four registration
+# per-suite at the run_suite chokepoint via _suite_affected, so all five registration
 # families must still walk. Folding the filter into these predicates would decline whole
 # groups silently (a `bun`-only diff would erase every scripts suite without a counted
 # decline), which is exactly the "green that is not evidence" shape ADR-181 closes.
 want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" || "$TEST_GROUP" == "affected" ]]; }
+# `scripts-heavy` (#8006): the three cost-heaviest registrations live under this gate so
+# ci.yml's dedicated test-scripts-heavy matrix partitions them one-per-leg. `all` must
+# include them — dropping that arm would silently remove the most expensive suites from
+# every full-gate run (ship Phase 4, lefthook, main-health-monitor).
+want_scripts_heavy() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts-heavy" || "$TEST_GROUP" == "affected" ]]; }
 want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun"     || "$TEST_GROUP" == "affected" ]]; }
 want_webplat() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "webplat" || "$TEST_GROUP" == "affected" ]]; }
 # `infra` is reachable from `all` (so a default local run covers it when the diff is
@@ -850,9 +860,9 @@ skipped=0
 # derived from CI's order (C), never from a developer's.
 # SCOPE NOTE: this filter lives at the chokepoint, so it is GROUP-AGNOSTIC — with SCRIPTS_SHARD
 # set and TEST_GROUP=all it would partition the webplat/bun/infra registrations too. That is not
-# reachable today (the variable is bound only on ci.yml's test-scripts job, and
-# main-health-monitor.yml's TEST_GROUP=all run does not set it), and the name says `SCRIPTS_`
-# for that reason. Anyone binding it more widely must revisit this.
+# reachable today (the variable is bound only on ci.yml's test-scripts and test-scripts-heavy
+# jobs, and main-health-monitor.yml's TEST_GROUP=all run does not set it), and the name says
+# `SCRIPTS_` for that reason. Anyone binding it more widely must revisit this.
 _shard_ordinal=0
 _shard_assigned=0
 
@@ -2339,6 +2349,15 @@ if want_scripts; then
   # isolation against webhook contamination, and withholding the free-text bwrap_err from the
   # public issue comment. Mutation-proved at authoring (5/5 killed).
   run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
+  # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
+  # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
+  # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides
+  # #8036's closure. Load-bearing arms: the grade is a CONJUNCTION, never the pure absence the
+  # operator's criterion literally stated (a host that never deploys emits no relogin_failed
+  # either); the `swept=` token is the version discriminator rather than `deploy_ghcr_auth=none`,
+  # which a freshly provisioned PRE-1c host also reads; `na` fails closed; and a row from a
+  # non-ci-deploy producer quoting this very tracker's body is field-isolated out.
+  run_suite "scripts/ghcr-read-retired-8036" bash scripts/followthroughs/ghcr-read-retired-8036.test.sh
   # #8097: exit-code harness for the SEND_FAILED-alert readback follow-through. Registered
   # explicitly (orphan-suite class above). Its exit code is the closure of #8097 (0 closes; 3 =
   # instrument did not answer / web-1 dark; 5 = a named cause for a human; 1 is NEVER emitted
@@ -2376,6 +2395,14 @@ if want_scripts; then
   # the defect alarm. The suite also pins FAIL-precedence over PASS, fault-to-TRANSIENT on each
   # of the three queries, and the missing-creds arm (TRANSIENT, never a spurious FAIL page).
   run_suite "scripts/ship-merge-mergebase-verdict-8151" bash scripts/followthroughs/ship-merge-mergebase-verdict-8151.test.sh
+  # #8006: exit-code harness for the test-scripts* leg-duration soak probe. Registered
+  # explicitly (orphan-suite class above). Its exit code is the closure of #8006 (0 closes;
+  # 1 = a qualifying leg breached the 900 s bound; 2 = NOT YET — under-sampled, unclocked,
+  # or every run non-qualifying; 3 = gh failed). Load-bearing arms: a run qualifies ONLY
+  # when all 8 post-carve-out legs are present, green, and measured — a skipped leg is
+  # unmeasurable and fail-closed, never a green leg; and a pre-merge run (no
+  # test-scripts-heavy legs) is stale data, not a small sample.
+  run_suite "scripts/ci-leg-durations-8006" bash scripts/followthroughs/ci-leg-durations-8006.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -2741,27 +2768,10 @@ if want_scripts; then
   # Its mutation battery (~70 s, sandboxed copies, every row asserts it landed). Committed and
   # registered rather than left in a transcript, so its kills protect something tomorrow.
   run_suite "tests/scripts/registry-delivery-change-mutation-battery" bash tests/scripts/test-registry-delivery-change-mutation-battery.sh
-  # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites. Registered, not ad-hoc: its previous incarnations
-  # lived in a session transcript, so their "15/15 caught" protected nothing the next day — and
-  # when it was finally committed it found 15 of its mutations surviving, including a seam that
-  # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
-  # neither mutates the worktree nor depends on suite ordering here (#7277).
-  #
-  # RELEVANCE-GATED (ADR-181). At ~860 s this is the single most expensive suite in the runner —
-  # about 32% of a full local run — and it guards a script most PRs never touch. The predicate is
-  # referenced BY NAME: no path literal may appear on a `run_suite` line, because
-  # lint-orphan-test-suites.sh reads registration out of those lines and a `*.test.sh` literal
-  # sitting there would be extracted as a registration, so an inline list would certify a
-  # DIFFERENT suite than the one this gate executes. (Since #7402 the extraction is anchored on
-  # the COMMAND — the token after `bash` — not on the whole line, which narrows but does not
-  # remove the hazard: a path literal in command position is still read as a registration.)
-  if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
-    run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
-  else
-    _relevance_declined=$((_relevance_declined + 1))
-    skip_suite "tests/scripts/registry-gate-mutation-battery" "relevance" \
-      "bash tests/scripts/test-registry-gate-mutation-battery.sh"
-  fi
+  # MOVED to the scripts-heavy carve-out near the end of this file (#8006): at ~860 s the
+  # registry-gate-mutation-battery is the single most expensive registration in the runner,
+  # so the dedicated test-scripts-heavy matrix carries it one-suite-per-leg. Its
+  # RELEVANCE-GATED (ADR-181) `_diff_touches` arm and provenance comment moved with it.
   # Registered explicitly, next to its D10 sibling. Nothing auto-discovers tests/scripts/: this
   # file's *.test.sh globs cannot match the `test-*` prefix, and scripts/lint-orphan-test-suites.sh
   # walks the whole repo but only for the `*.test.sh` SUFFIX, which this file does not carry. An
@@ -3176,7 +3186,8 @@ if want_scripts; then
   # real advisory lock.
   run_suite "scripts/test-all-affected" bash scripts/test-all-affected.test.sh
   run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
-  run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
+  # MOVED: scripts/battery-tag-authorship-mutations now registers under want_scripts_heavy
+  # in the carve-out near the end of this file (#8006).
   # The patterns are declared ONCE, at the top of this file, and published by
   # `--print-suite-globs` so scripts/lint-orphan-test-suites.sh reads the same list this loop
   # expands. Nested loop rather than one flat `for f in ${SUITE_GLOBS[@]}`: the flat form
@@ -3271,23 +3282,59 @@ if want_infra; then
   fi
 fi
 
-# The guard-script fixture runner. Its own MIN_SUITES floor (11 as of #7429, which added the
-# signal-propagation guard as the 11th fixture suite) is what makes a silently empty run fail
-# rather than pass, so registering it here inherits that floor instead of re-implementing one.
-# The number is stated here for the reader; the runner is the authority — re-derive with
-# `grep '^MIN_SUITES=' .github/scripts/test/run-all.sh` rather than trusting this comment.
+# --- SCRIPTS-HEAVY: THE COST CARVE-OUT (#8006) ----------------------------------------------
 #
-# THE FLOOR AND A DECLINE ARE DIFFERENT OUTCOMES. The floor still applies whenever the runner
-# runs, but it is not evaluated at all when the runner is DECLINED — nothing inside it executes.
-# What distinguishes "declined" from "ran and found nothing" is skip_suite's output, which names
-# the suite, the reason, and the exact re-run command. Reading the floor as coverage of a run
-# that never happened is the same green-that-is-not-evidence shape ADR-181 closes one level up.
+# The three cost-heaviest registrations are gated by want_scripts_heavy, not want_scripts:
+# ci.yml runs them on a dedicated `test-scripts-heavy` matrix so each lands on its own leg,
+# while the lighter scripts group fans out over five legs. TEST_GROUP=all still covers all
+# three — want_scripts_heavy's `all` arm is what keeps the ship gate, the lefthook battery
+# and main-health-monitor running them.
 #
-# RELEVANCE-GATED (ADR-181) — declined on 56% of recent commits. `run_suite … bash
-# .github/scripts/test/run-all.sh` keeps its
-# command shape byte-for-byte because scripts/lint-orphan-test-suites.sh's REQUIRED_RUNNERS check
-# anchors on the COMMAND, not the label.
-if want_scripts; then
+# The column-0 `if`/`fi` shape is load-bearing: scripts-shard-totality.test.sh's Guard 1b
+# derives the heavy reference set from `^if want_scripts_heavy; then$` .. `^fi$` regions, so
+# an inlined or indented gate leaves the reference EMPTY — and the guard reds, which is the
+# intended fail-closed shape.
+if want_scripts_heavy; then
+  # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites. Registered, not ad-hoc: its previous incarnations
+  # lived in a session transcript, so their "15/15 caught" protected nothing the next day — and
+  # when it was finally committed it found 15 of its mutations surviving, including a seam that
+  # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
+  # neither mutates the worktree nor depends on suite ordering here (#7277).
+  #
+  # RELEVANCE-GATED (ADR-181). At ~860 s this is the single most expensive suite in the runner —
+  # about 32% of a full local run — and it guards a script most PRs never touch. The predicate is
+  # referenced BY NAME: no path literal may appear on a `run_suite` line, because
+  # lint-orphan-test-suites.sh reads registration out of those lines and a `*.test.sh` literal
+  # sitting there would be extracted as a registration, so an inline list would certify a
+  # DIFFERENT suite than the one this gate executes. (Since #7402 the extraction is anchored on
+  # the COMMAND — the token after `bash` — not on the whole line, which narrows but does not
+  # remove the hazard: a path literal in command position is still read as a registration.)
+  if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
+    run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "tests/scripts/registry-gate-mutation-battery" "relevance" \
+      "bash tests/scripts/test-registry-gate-mutation-battery.sh"
+  fi
+  # Sits between its battery siblings by cost, not by theme: ~380 s measured on the CI leg,
+  # which is what earns it a dedicated leg rather than a home in the light group.
+  run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
+  # The guard-script fixture runner. Its own MIN_SUITES floor (11 as of #7429, which added the
+  # signal-propagation guard as the 11th fixture suite) is what makes a silently empty run fail
+  # rather than pass, so registering it here inherits that floor instead of re-implementing one.
+  # The number is stated here for the reader; the runner is the authority — re-derive with
+  # `grep '^MIN_SUITES=' .github/scripts/test/run-all.sh` rather than trusting this comment.
+  #
+  # THE FLOOR AND A DECLINE ARE DIFFERENT OUTCOMES. The floor still applies whenever the runner
+  # runs, but it is not evaluated at all when the runner is DECLINED — nothing inside it executes.
+  # What distinguishes "declined" from "ran and found nothing" is skip_suite's output, which names
+  # the suite, the reason, and the exact re-run command. Reading the floor as coverage of a run
+  # that never happened is the same green-that-is-not-evidence shape ADR-181 closes one level up.
+  #
+  # RELEVANCE-GATED (ADR-181) — declined on 56% of recent commits. `run_suite … bash
+  # .github/scripts/test/run-all.sh` keeps its
+  # command shape byte-for-byte because scripts/lint-orphan-test-suites.sh's REQUIRED_RUNNERS check
+  # anchors on the COMMAND, not the label.
   if _diff_touches "${GITHUB_SCRIPTS_SUITE_PATHS[@]}"; then
     run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
   else

@@ -368,6 +368,27 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # even reached, so a wrapper that never runs is caught ahead of the count; (c) its bound is a
 # literal adjacent to the test, so it is mutant-CONSTRUCTIBLE. Measured at promotion: 28/28 with
 # 14 assertions driven RED before the fix, and a fixture non-vacuity control of its own.
+# `apps/web-platform/infra/git-data-store-device-census.test.sh` and
+# `apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh` added by #8211 — Guard 1 and
+# Guard 2 of the git-data LUKS-at-birth payload. PROMOTED as FILES, not deferred, and not by
+# raising MAX_DEFERRED: this gate's own FAIL message says "do NOT raise this number", the ledger
+# is shrink-only, and deferring suites that MEET the covered bar would grow a set that is only
+# allowed to shrink. Promoting the files is the narrower of the two prescribed moves;
+# `apps/web-platform/infra/` stays deferred, per the #7772 reasoning above.
+# Both qualify on all three counts, measured on the as-written suites (2026-09-23):
+#   (a) the floor is `-lt` over a count the suite itself accumulates — census over MUTANTS_RUN,
+#       bootstrap-store-verify over its assertion call sites — so a neutered assertion machinery
+#       drives the count down rather than passing vacuously;
+#   (b) each carries an instrument self-test that exits 1 BEFORE the floor is reached: with
+#       `pass()` neutered to a no-op, census exits 1 on `FAIL INSTRUMENT: pass()/fail() self-test
+#       read "0 1 1", expected "1 1 1"` and bootstrap-store-verify on `FAIL CANARY: pass()/fail()
+#       did not each move their counter by one` (control GREEN for both: 76/0 with 11 mutants, and
+#       121/0);
+#   (c) each bound is a literal adjacent to the test, so it is mutant-CONSTRUCTIBLE — raising
+#       MUTANT_FLOOR 11 -> 999 fires `FAIL MUTANT FLOOR: only 11 mutants executed`, and raising
+#       MIN_ASSERTIONS 90 -> 999 fires `FAIL: ran only 121 assertion call sites`. Both report via
+#       `printf` + `exit 1` rather than through the `fail()` they backstop (ADR-193), so they
+#       survive a neutered assertion machinery.
 # `apps/web-platform/scripts/sentry-monitors-audit.test.sh` added by #7997 — the suite gained its
 # FIRST anti-vacuity floor there (review round two), which is what put it in this population at
 # all. The file had previously carried a deliberate no-floor note citing this gate and #7585; that
@@ -570,7 +591,34 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # `printf` + `exit 1` and never routed through the verdict helpers it backstops
 # (ADR-193); and the bound (`EXPECTED_CASES=20`) is a literal directly adjacent to the
 # `if`, so the mutant is CONSTRUCTIBLE.
-PROMOTED_FILES='^(\.claude/hooks/follow-through-directive-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh)$'
+# `.claude/hooks/pre-merge-rebase-parity.test.sh` added by #8570 (ADR-240) — same shape as the
+# two entries above, different origin. ADR-240 retired the hand-ported hook mirror this suite was
+# written to COMPARE against, which halved its cases and left it with no case floor at all; adding
+# one made a previously floor-LESS file floor-BEARING inside `.claude/hooks/`, a DEFERRED_DIRS
+# member, so the ledger grew 47 -> 48 by construction. PROMOTED rather than ratcheted, per the
+# FAIL message. It qualifies: `MIN_CASES=12` is a literal on its own line directly above its `if`,
+# compared against `PASS + FAIL` incremented at the call sites, and reported by `printf` + `exit 1`
+# rather than through pass()/fail() (ADR-193). Attribution was measured, not assumed — a detached
+# worktree at origin/main ran this guard 23/0 with the ledger at 47, which is what ruled out main's
+# own new `apps/web-platform/infra/inngest-nic-wait.test.sh` as the cause.
+# `apps/web-platform/scripts/dev-ledger-parity.test.sh` added by #8521 — the per-ref dev
+# ledger-parity guard's suite (check + classify-missing, #8520), born floor-bearing in the same
+# deferred directory, which grew the ledger 47 -> 48 and reddened ARM 5c. PROMOTED, not deferred,
+# and not by raising MAX_DEFERRED, for the reason every sibling entry gives (the FAIL message:
+# "cover it … do NOT raise this number"; the ledger is shrink-only), so the ledger returns to 47.
+# It qualifies on the same shape as its #8597 sibling: the floor is `-lt` over `$CASES`,
+# incremented at the CALL SITES and never inside pass()/fail(); emitted by `printf` + `exit 1`,
+# never through the verdict helpers (ADR-193); an instrument self-test exits 1 before any row if
+# either helper fails to count; and the bound (`EXPECTED_CASES=100`) is a literal on the line
+# directly above its `if`, so the mutant is CONSTRUCTIBLE.
+# `apps/web-platform/scripts/anthropic-key-distinctness.test.sh` added by #8618 (#8505) — the
+# CI/prd Anthropic key fingerprint-distinctness suite, born floor-bearing in the same deferred
+# directory (ledger 47 -> 48, ARM 5c red). PROMOTED on the same grounds: the floor
+# `(( PASS + FAIL < 17 ))` is emitted by `printf` + `exit 1`, never through pass()/fail(), with an
+# ADR-193 helper self-test ahead of any row and a literal bound in the `if` itself. The floor was
+# a one-line `if …; fi` at first, which build_mutant cannot slice (it needs a standalone `fi`),
+# so it scored CONSTRUCTION until split across lines.
+PROMOTED_FILES='^(\.claude/hooks/follow-through-directive-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"

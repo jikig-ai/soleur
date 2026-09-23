@@ -1,9 +1,9 @@
 ---
-title: Revert the zot pull-site flip to GHCR-primary
+title: Revert the zot pull-site flip to GHCR-primary (RETRACTED — no host-side GHCR read path exists)
 issue: "#6122"
 adr: ADR-096
 severity: P1 (deploy/boot path)
-last_reviewed: 2026-09-22
+last_reviewed: 2026-09-23
 ---
 
 # Revert the zot pull-site flip → GHCR-primary (#6122 / ADR-096)
@@ -25,10 +25,18 @@ last_reviewed: 2026-09-22
 > only a personal one.
 >
 > **If zot is down, the failure is a zot/registry-host problem and must be fixed as one.**
-> See "What to do instead" below. This document is kept, rather than deleted, because the
-> revert becomes correct again the moment a working non-personal GHCR pull credential or a
-> second mirror exists — and because a reader who remembers this procedure needs to find
-> the retraction, not a 404.
+> See "What to do instead" below. This document is kept, rather than deleted, because a
+> reader who remembers this procedure needs to find the retraction, not a 404.
+>
+> **Amendment 2026-09-23 (#8036 1c) — A CREDENTIAL IS NO LONGER ENOUGH TO RE-ARM THIS.**
+> The paragraph above used to say the revert "becomes correct again the moment a working
+> non-personal GHCR pull credential or a second mirror exists". That is now false, and
+> dangerously so: 1c **deleted the host-side GHCR read path from `ci-deploy.sh`** — the
+> prelude login, the re-fetch/relogin helper, and the GHCR leg of the pull. There is no
+> code left for a credential to authenticate. Restoring this procedure needs a **code
+> change** (restoring a host-side pull path) *and* a credential, in that order. Minting a
+> PAT and running the steps below would take production from "zot degraded" to "no pull
+> path at all", with the deploy failing terminally at `image_pull_failed`.
 
 The Phase-3 pull-site migration is **dark-launch gated**: every pull site (ci-deploy.sh
 rolling deploy, soleur-host-bootstrap.sh + cloud-init.yml fresh boot) prefers the
@@ -199,10 +207,22 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
 
 ## When to revert
 
+> ⚠ **#8036 1c (2026-09-23) removed the `registry:"ghcr-fallback"` signal, and it did NOT remove
+> the condition that signal reported — it removed the fallback.** The host-side GHCR read path is
+> deleted, so a rolling deploy whose zot pull fails no longer falls back to a second registry: it
+> tries the #6512 local-cache reload (same-version reloads only) and otherwise ends
+> `image_pull_failed` with the old container still live. Everywhere below that names five signals,
+> read FOUR; everywhere that says a host "fell back to GHCR and served correctly", read "the
+> deploy failed and the previous release kept serving". The live degradation signals for the
+> rolling path are now `registry:"zot-gate-degraded"`, `registry:"local-cache"` and
+> `image_pull_failed`. The three fresh-boot `stage:` signals are UNCHANGED — cloud-init still has
+> its GHCR fallback (that is 5.3b / #8036 1d).
+
 - The **fallback-rate alarm** fires (see below). Since #6285 it pages on the **first**
-  matching event, not a spike: a `registry:"ghcr-fallback"` / `stage:"inngest_ghcr_fallback"` /
-  `stage:"app_ghcr_fallback"` event means a host *tried* zot and failed — that deploy/boot took
-  the slower fallback path and zot is degraded.
+  matching event, not a spike: a `stage:"inngest_ghcr_fallback"` / `stage:"app_ghcr_fallback"`
+  event means a host *tried* zot and failed — that BOOT took the slower fallback path and zot is
+  degraded. (The rolling-deploy member of this list, `registry:"ghcr-fallback"`, was retired with
+  the fallback itself; see the banner above.)
   > ⚠ **`stage:"app_ghcr_served"` (#6462) does NOT belong in that list — it means the opposite.**
   > Its dominant route is a `/v2/` **probe-miss**, where zot was **never attempted** and the GHCR
   > pull succeeded first try. Triaging it as "tried zot and failed" sends you down the pull path
@@ -233,15 +253,24 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
 
 - Any Phase-5 retirement step (5.3 fallback-branch removal) is discovered premature.
 
-Note: a *single* transient `ghcr-fallback` is self-healing — the host already fell back to GHCR
-and served correctly, so a one-blip page is **not** by itself a reason to revert. But since
+Note: a *single* transient fresh-boot `*_ghcr_fallback` is self-healing — that host fell back to
+GHCR and booted correctly, so a one-blip page is **not** by itself a reason to revert. But since
 #6285 the alarm pages on that blip **by design** (a per-group threshold above 0 is silently
-unreachable on this signal's grouping — see the resource comment), so **do not dismiss the page
-as noise**: triage it. Revert is for a *sustained* zot degradation. **If the noise is
-`zot-gate-degraded (probe_unreachable)` pre-cutover, mute that Sentry ISSUE — never the rule**
-(the rule also carries `ghcr-fallback`, the only no-SSH page gating the irreversible 5.5 PAT
-revoke; a per-issue mute cannot pre-suppress it because `ghcr-fallback` mints a fresh group per
-deploy). The real fix for `probe_unreachable` is the zot host, not the alarm.
+unreachable on these signals' grouping — see the resource comment), so **do not dismiss the page
+as noise**: triage it. Revert is for a *sustained* zot degradation.
+
+> **This self-healing note no longer extends to the rolling deploy.** Since #8036 1c there is no
+> fallback on that path, so the rolling-deploy equivalent of a "one-blip fallback" is a FAILED
+> DEPLOY (`image_pull_failed`, old container live) rather than a slower successful one. Treat a
+> rolling-path page as a real outage of the release, not as a latency event.
+
+**If the noise is `zot-gate-degraded (probe_unreachable)` pre-cutover, mute that Sentry ISSUE —
+never the rule.** The claim that used to stand here — that the rule "also carries `ghcr-fallback`,
+the only no-SSH page gating the irreversible 5.5 PAT revoke" — was retired with that signal in
+#8036 1c, and it had already been spent: the PAT it was gating the revoke of has been revoked
+since 2026-07-29. What the mute would now take with it is the three fresh-boot signals, which is
+reason enough to keep muting the ISSUE rather than the rule. The real fix for `probe_unreachable`
+is the zot host, not the alarm.
 
 ## Immediate revert (≈30 s, no deploy) — unset the gate
 
@@ -250,10 +279,16 @@ deploy). The real fix for `probe_unreachable` is the zot host, not the alarm.
 > destination. It short-circuits pulls to GHCR, and GHCR can no longer serve them, so
 > running this during a zot outage converts a degraded pull path into no pull path.
 >
-> It remains valid for one thing: **deliberately standing the zot pull path down** when
-> GHCR has been given a working pull credential again (see ADR-096's amendment for the
-> testable condition). Confirm that first — `docker pull` a private tag with the host's
-> GHCR credential and see it succeed — then use this.
+> **Since #8036 1c it is not valid for anything.** This section previously blessed one use
+> — standing the zot pull path down once GHCR had a working credential — gated on an
+> on-host `docker pull` check. Both halves are gone: there is no host-side GHCR read code
+> for a credential to use, and the confirmation step required a shell on the host, which
+> no repo tool provides and which `hr-no-ssh-fallback-in-runbooks` forbids as a runbook
+> step. (1c also sweeps the deploy docker config's `ghcr.io` entry on every deploy, so the
+> credential that check wanted to exercise is removed as a matter of course.)
+>
+> Do not run the commands below. They are retained only so the mechanism is documented for
+> whoever restores a host-side pull path.
 
 Removing `ZOT_REGISTRY_URL` from Doppler `prd` makes `zot_gate_and_login` /
 the cloud-init + bootstrap gates short-circuit to GHCR on the **next** pull:
@@ -267,11 +302,23 @@ doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/de
 Effect, with no further action:
 
 - **Rolling deploys** (`ci-deploy.sh`): the next `deploy` webhook resolves `ZOT_REGISTRY_URL`
-  empty → `ZOT_ACTIVE=0` → the unchanged private-GHCR pull. No fallback attempt, no probe.
-- **Fresh boots** (cloud-init/bootstrap): the seed/app/inngest blocks resolve the URL empty →
-  pull straight from GHCR (`/run/soleur-image-ref` = the GHCR ref).
+  empty → `ZOT_ACTIVE=0`, which **since #8036 1c is TERMINAL**. There is no GHCR leg to fall
+  through to. The only remaining tier is `_try_local_cache_reload`, and it applies **only** to a
+  same-version `web` redeploy; an inngest deploy and every new-version deploy go straight to
+  `image_pull_failed` (the OLD container stays live — downtime-safe, but nothing ships).
+- **Fresh boots** (cloud-init/bootstrap): still resolve the URL empty → pull straight from GHCR
+  (`/run/soleur-image-ref` = the GHCR ref). 1c did **not** touch the fresh-boot path — that is
+  1d scope — so this bullet is still accurate, and it is now the ONLY one that is. The boot
+  path's GHCR login uses the same PAT that has been revoked since 2026-07-29, so it fails too;
+  it simply fails on a different code path.
 - **Already-running containers** are untouched (the flip only affects *pulls*, and revert
   changes nothing about a container already running).
+
+**The sweep is one-way and reverting the code does not undo it.** Since #8036 1c every deploy
+removes any `ghcr.io` entry from the deploy docker config. Reverting the PR restores the code but
+not the credential: the pre-1c prelude would re-run `docker login ghcr.io` with a PAT revoked
+since 2026-07-29, a failed login writes no `auths` entry, and `GHCR_MINTER_DISABLED=true` means no
+replacement can be minted. Plan on that being gone for good.
 
 Re-arm later by re-adding the secret (the Terraform `doppler_secret.zot_registry_url` will
 re-create it on the next operator apply, or set it manually):
@@ -301,8 +348,12 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   was wrong: only the `registry:` pair carries that prefix (ci-deploy.sh's jq payload writes
   `feature`/`op`), while every `stage:` query is **bare** because neither boot-path emitter
   writes those tags. Sentry tag matching is exact — a prefixed `stage:` query matches nothing.
-  - `registry:"ghcr-fallback"` — a host *attempted* zot and the pull failed, then fell back
-    (ci-deploy.sh `registry_pull_event`, rolling deploy);
+  - `registry:"ghcr-fallback"` — **RETIRED by #8036 1c (2026-09-23).** It meant "a host attempted
+    zot, the pull failed, and it fell back". There is no fallback on the rolling-deploy path any
+    more, so the emit site is deleted and this query is permanently empty. Its successor evidence
+    is `registry:"local-cache"` (a same-version reload rescued from the host's own image store)
+    and `image_pull_failed` (everything else). Listed rather than deleted so a reader finding
+    zero rows does not read it as a new silence.
   - `registry:"zot-gate-degraded"` — zot is CONFIGURED but the gate could not activate it
     (probe unreachable / pull creds absent / login failed), so the deploy used GHCR WITHOUT
     ever running a zot pull (ci-deploy.sh `zot_gate_degraded_event`). This catches the
@@ -331,12 +382,14 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
 
 - **Alert rule** — `sentry_issue_alert.zot_mirror_fallback_rate`, APPLY-CREATED and live now
   (it is **not** armed at cutover; `zot-gate-degraded` emits pre-flip today). It pages on the
-  **first** event matching any of the FIVE signals: `registry:{"ghcr-fallback",
-  "zot-gate-degraded"}` / `stage:{"inngest_ghcr_fallback", "app_ghcr_fallback",
+  **first** event matching any of the FOUR signals (five before #8036 1c):
+  `registry:{"zot-gate-degraded"}` / `stage:{"inngest_ghcr_fallback", "app_ghcr_fallback",
   "app_ghcr_served"}`
   (`event_frequency count > 0 / 1h`, `filter_match = "any"`). Fire-on-first is required, not a
-  preference: the count is per Sentry issue-group and `ghcr-fallback` mints a fresh group per
-  deploy, so any threshold above 0 is unreachable on that signal (#6285). It also matches
+  preference: the count is per Sentry issue-group, and the retired `ghcr-fallback` was the member
+  that minted a fresh group per deploy, so any threshold above 0 was unreachable on it (#6285).
+  The threshold stays at 0 for the survivors as well — a value above 0 is fleet-shape-dependent
+  on every one of them. It also matches
   `zot-soak-6122.sh`, which FAILs the Phase-5 gate on >=1 fallback. A healthy post-cutover fleet
   emits ZERO.
 - **On page:** confirm zot health, then run the Immediate revert above if the degradation is

@@ -255,6 +255,26 @@ exactly as it does in the snapshot. On a page displaying a credential, capture
 neither: read the value with `agent-browser get value <sel>` into a file, use it,
 and shred the file.
 
+**When the credential is TEXT, not an input, `get value` finds nothing — use
+`eval`, and never let its output reach the transcript.** Measured on the Anthropic
+Console key panel (#8505): the fresh key is leaf text, zero `<input>` holds it.
+Redirect `eval`'s stdout straight into a file created mode 0600, then print only
+its length and prefix. Run both lines in ONE Bash call — `umask` does not carry
+across calls — and note the file holds a JSON *string* (quoted); unwrap it with
+`json.load`, never by printing it:
+
+```bash
+umask 077
+agent-browser eval "(()=>{const m=document.body.innerText.match(/sk-ant-[A-Za-z0-9_-]{20,}/);return m?m[0]:''})()" > "${SCRATCH:?}/key.json"
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(len(v), v.startswith("sk-ant-"))' "${SCRATCH:?}/key.json"
+```
+
+Neither redactor is a backstop here: `redact-a11y-snapshot.py` and the MCP proxy
+key on an accessibility node's NAME, so a raw key string returned by `eval` or by
+the MCP's `browser_run_code_unsafe` passes both unredacted. Return a length or a
+fixed code from any in-page script, never the value, and catch every error inside
+the script so a thrown message cannot carry the value out either.
+
 ### Login Flow
 
 `fill @e2` needs a ref, and a ref comes from a snapshot — so the login step

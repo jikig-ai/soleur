@@ -1331,9 +1331,9 @@ _authmap_root() {
 write_files:
   - path: /home/git/.ssh/authorized_keys
     content: |
-      command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
-      command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
-      command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_remove_pubkey}
+      command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_transport_pubkey}
+      command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_provision_pubkey}
+      command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_remove_pubkey}
     owner: root:root
     permissions: '0644'
 YML
@@ -1505,8 +1505,8 @@ B="$TMP/am-m17"; _authmap_root "$B"
 python3 - "$B/cloud-init-git-data.yml" <<'PYX'
 import io,sys
 p=sys.argv[1]; s=io.open(p,encoding='utf-8').read()
-s=s.replace('git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}','git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}')
-s=s.replace('git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}','git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}')
+s=s.replace('git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_transport_pubkey}','git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_provision_pubkey}')
+s=s.replace('git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_provision_pubkey}','git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_transport_pubkey}')
 io.open(p,'w',encoding='utf-8').write(s)
 PYX
 _am "B4: a 2-SWAP at link 1 HOLDs — bijective, three-distinct, wrong authorities" 1 "PERMUTED" "$B"

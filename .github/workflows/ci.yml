@@ -53,8 +53,9 @@ permissions:
 # consecutive `main` pushes the group was occupied at creation on 7 (24%),
 # costing a median 393s; on the other 22 the first job started a median of 4s
 # after creation and the window's WORST time-to-`test` came from a run whose
-# group was EMPTY. The median saving is ZERO. See the dispatch note in the
-# `test-scripts` job for the full population and the reproduction command.
+# group was EMPTY. The median saving is ZERO. See the dispatch cohort table in
+# knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
+# for the full population and the reproduction command.
 #
 # THE COST, STATED PLAINLY. Peak concurrent `main` CI runs rises from 1 to the
 # burst depth. The same measurement identifies the runner pool as the binding
@@ -357,16 +358,15 @@ jobs:
   # LUKS — never name similarity), and every plaintext/cert-off exception carries a
   # live tracking issue + unexpired expires_on.
   #
-  # ADVISORY, NOT BLOCKING. This job is absent from scripts/required-checks.txt, the
-  # CI-Required ruleset (infra/github/ruleset-ci-required.tf), the canonical parity
-  # JSON (scripts/ci-required-ruleset-canonical-required-status-checks.json), and the
-  # bot action CHECK_NAMES (.github/actions/bot-pr-with-synthetic-checks/action.yml),
-  # so a PR can merge with it red. It exists to SOAK an attributable green streak
-  # before promotion (#6901; ADR-117 measure-then-arm). The promotion is a five-site
-  # byte-consistent coupling — see the arming tracking issue #6907 and the ADR-140
-  # Amendment (2026-07-24, #6901) for the canonical recipe (15368 integration_id +
-  # add-to-required-checks.txt + sound-by-unreachability fabrication, NOT CodeQL's
-  # non-15368 omit shape, which would wedge every PR at "Expected — Waiting").
+  # BLOCKING since #6907 through `test`'s needs: (rationale, soak evidence and the
+  # bot-PR unreachability argument: ADR-140 addendum of 2026-09-23).
+  #
+  # The job must be able to conclude `failure` on a red sweep. A job-level
+  # `continue-on-error`, a step-level `if:` or `continue-on-error`, or any change to
+  # the step's run line (`|| true`, `--today`, `--repo-root`, `--check-templates`)
+  # fails OPEN: needs.encryption-posture.result reads success over a red or unrun
+  # sweep. A job-level `if:` fails CLOSED (the leg reads skipped and `test` reds) but
+  # wedges every PR it skips. ci-test-aggregator-diagnosis.test.sh W3 pins all of it.
   #
   # The full checkout (no paths filter) is load-bearing: --repo-sweep is whole-repo.
   encryption-posture:
@@ -867,22 +867,28 @@ jobs:
             NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
             NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
 
-  # --- Test matrix: 3 shards + synthetic aggregator ---
+  # --- Test matrix: 4 leg jobs + synthetic aggregator ---
   #
-  # The single `test` job was split into three parallel shards
-  # (test-webplat / test-bun / test-scripts) so install + typecheck +
-  # vitest + bun-test workloads run concurrently. The synthetic `test`
+  # The single `test` job was split into parallel leg jobs
+  # (test-webplat / test-bun / test-scripts / test-scripts-heavy) so install +
+  # typecheck + vitest + bun-test workloads run concurrently. test-scripts
+  # and test-scripts-heavy are positional shard matrices over the same
+  # runner; the other two are single legs (test-webplat is itself a 2-way
+  # vitest --shard matrix). The synthetic `test`
   # aggregator (below) is the required status check on branch-protection
   # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
-  # every merge. Each shard invokes scripts/test-all.sh with the
-  # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`).
+  # every merge. Each leg invokes scripts/test-all.sh with the
+  # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`/
+  # `scripts-heavy`).
   # See plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
   #
   # NOTE for future maintainers: keep `actions/checkout`, `oven-sh/setup-bun`,
   # `actions/setup-node`, and `actions/cache` SHA pins in lockstep across
-  # test-webplat / test-bun / test-scripts. When bumping any action, edit
-  # all three job blocks in the same commit; this YAML has no include or
-  # anchor mechanism so the duplication is structural.
+  # test-webplat / test-bun / test-scripts — plus `actions/checkout` and
+  # `oven-sh/setup-bun` on test-scripts-heavy (it carries no setup-node or
+  # cache). When bumping any action, edit every job block that carries it in
+  # the same commit; this YAML has no include or anchor mechanism so the
+  # duplication is structural.
   # 2-way vitest --shard matrix. Vitest natively supports `--shard=K/N`;
   # `test:ci` forwards `--shard=$VITEST_SHARD` when VITEST_SHARD is set.
   # `tsc --noEmit` is independent of shard and runs only on shard 1 to
@@ -989,157 +995,22 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
-    # MATRIX SHARDED (#7902). This job was ~90% of CI's wall clock and CI's wall clock had
-    # outgrown web-platform-release.yml's await-ci ceiling, so every deploy was fail-closing on
-    # a healthy build. Measured on run 34152496134: 35.25 min across 374 registered suites.
+    # MATRIX SHARDED (#7902), K=5 after the heavy carve-out (#8006). The three
+    # cost-heaviest registrations moved to `test-scripts-heavy` below; what is
+    # left is ~39 min of light suite work, so five positional round-robin legs
+    # measure ~7.8 min each plus setup.
     #
-    # K=3 IS DERIVED, NOT ASSUMED. Per-suite durations were taken from that run's own job log
-    # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
-    # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order.
-    #
-    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 392 at time of writing; see the STALE stanza) — slowest-leg
-    # minutes, group total 35.25 min:
-    #
-    #   K=2 -> 21.91   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
-    #
-    # HOW TO RE-DERIVE (a table nobody can reproduce is not evidence): take a real test-scripts
-    # job log, keep only the `--- <label> ---` marks whose label appears in
-    # `bash scripts/test-all.sh --enumerate scripts`, and attribute each mark's span to the NEXT
-    # REGISTERED mark — folding nested child-runner marks into their parent. Sanity check: the
-    # attributed total must equal the job's wall clock (35.25 vs 35.77 min here). Attributing
-    # per-mark instead under-counts every suite that wraps a nested runner.
-    #
-    # K=4 measures worse than K=3 here. That is NOT a property of K: it is a property of THIS
-    # suite set. Adding two suites and removing one swung K=3 between 15.09 and 20.70 minutes
-    # during this PR's own review, purely from ordinal position. Any change to the registered
-    # suite set invalidates this table — RE-SIMULATE before touching K.
-    #
-    # STALE BY SEVENTEEN SUITES (re-measured 2026-09-10). The table above was simulated on a
-    # 374-suite order. `bash scripts/test-all.sh --enumerate scripts` returns 392 at this
-    # commit — this PR added 2 (ci-concurrency-key, ci-test-aggregator-diagnosis) and renamed
-    # 1; the rest arrived on `main` while this branch was open.
-    #
-    # DO NOT TRUST THE LITERAL ABOVE EITHER. It read 389, then 391, within hours of when this line was
-    # written and 391 after one rebase. The count is not a fact about the repo, it is a
-    # fact about a commit, and the only safe use of it is to re-run the enumeration.
-    # THE COUNT IS A MOVING TARGET AND EVERY NUMBER BELOW IS KEYED TO A SUPERSEDED ORDER:
-    # re-enumerate before treating any K as chosen (#8006 carries this). The 2026-09-08 note
-    # this replaces read "the set 375 -> 376", which was true when written and is not now.
-    #
-    # The original single-suite note, retained because its mechanism still holds:
-    # plugins/soleur/test/await-ci-ceiling-invariants.test.sh (renamed 2026-09-09 to
-    # workflow-run-deploy-invariants.test.sh, #5806) took the set 375 -> 376. Measured
-    # effect: it registers at ordinal 189, so the 8.14-min floor suite (ordinal 148) keeps its leg,
-    # but 187 of the 375 pre-existing suites move legs. The per-leg minutes above were NOT
-    # re-simulated — the Phase 0 job log they came from is a pre-shard run of a job shape that no
-    # longer exists on main, and re-deriving it needs a post-merge log. Post-merge AC25 measures
-    # the real thing anyway.
-    #
-    # AN EARLIER REVISION CLAIMED AN ORDER-INDEPENDENT SAFETY BOUND HERE. IT WAS WRONG — the
-    # retraction is kept because the argument is tempting and someone will rebuild it.
-    #
-    # It read: the group is 35.25 min = 2115s, so any leg of any partition is bounded by 2115s;
-    # plus the worst measured queue (1260s) that is 3375s, inside the 3600s ceiling with 225s to
-    # spare; therefore no reordering can push time-to-`test` past the gate. All three premises are
-    # wrong, measured over the same 25-run window:
-    #
-    #   * 2115s is ONE SAMPLE, not a bound. Max observed `test-scripts` duration is 2339s.
-    #   * 1260s is not the worst queue. Two runs in the window queued 1345s and 1433s.
-    #   * The sum OMITS A TERM. Time-to-`test` also includes the `test` aggregator's own runner
-    #     wait, measured at 619s on run 34214304922 and absent from the arithmetic entirely.
-    #
-    # Worst-case with the measured maxima: 2339 + 1433 + 619 = 4391s, well past 3600s. Composing a
-    # worst-case leg with a mid-case queue does not yield a bound, and calling the result "225s to
-    # spare" was fiction. There is no order-independent bound under this ceiling on current data.
-    #
-    # What actually makes the raise safe is narrower and worth stating plainly: the shard cuts the
-    # LEG term (the only term this PR controls), the soft-ceiling warning measures the real
-    # quantity every release, and AC25 checks the result post-merge over the first three runs. If
-    # AC25 misses, the answer is a larger K or a shorter CI — not a bigger ceiling. Making leg
-    # composition an owned fact rather than a positional accident (LPT over a checked-in duration
-    # table) is tracked as a follow-up, not shipped here.
-    #
-    # The floor no K can beat is the longest single suite —
-    # `tests/scripts/registry-gate-mutation-battery` at 8.14 min, 23% of the group on its own.
-    # K=3 landed 15.09 min on the 374-suite order this table was simulated over. On the then-376-suite
-    # order that actually ships it does NOT: re-simulated at review time, K=3 is 20.73 min and both
-    # K=4 (18.02) and K=5 (10.77) beat it, so the "K=3 is the optimum" conclusion above does not
-    # hold for this tree and is retracted. K=3 remains SAFE (totality holds for any K, and the
-    # order-independent bound below covers the wall clock); it is simply no longer known-optimal.
-    # Re-simulate before treating any K as chosen — the method above is reproducible from the
-    # archived job log in about two minutes, and "needs a post-merge log" (claimed in an earlier
-    # revision of this comment) is not true: the pre-shard log is exactly what the method consumes.
-    # Extra legs are not free — see the retracted dispatch note below; they draw on the same runner
-    # pool whose availability produces the multi-minute staggers.
-    #
-    # NOTE ON DISPATCH — RETRACTED TWICE, NOW REPLACED BY A MEASUREMENT.
-    #
-    # Revisions 1 and 2 each asserted a single MECHANISM, and each was retracted by the next
-    # reader. Revision 1: the multi-minute gaps between run creation and job start are runner-pool
-    # contention. Revision 2: dispatch is ~1s and the gaps are this file's own `concurrency` group
-    # serialising each main push behind its predecessor's `test`.
-    #
-    # BOTH ARE TRUE, OF DIFFERENT COHORTS. That is why each looked like a refutation of the other:
-    # they were measured on different runs. This revision states the population instead of the
-    # mechanism, so there is nothing left to retract.
-    #
-    # MEASURED 2026-09-09 over 29 consecutive `main` push CI runs (2026-09-07T09:02:01Z ->
-    # 2026-09-09T07:50:05Z, the committed TSV's true bounds; an earlier revision of this note
-    # labelled the upper bound 14:22Z, ~6.5h wider than the data it cites). "Group occupied at creation" = the predecessor run's `test` had not yet
-    # completed when this run was created. Jobs with `runner_id: null` or zero steps are EXCLUDED
-    # (they never acquired a runner, so they say nothing about availability). "Start spread" is
-    # measured over the 23 jobs with NO `needs:` (20 after the 2026-09-14 fold) — a group release starts those simultaneously, so
-    # any spread across them is runner availability by construction. `test` and `critical-css-gate`
-    # have `needs:` and are excluded from spread for that reason.
-    #
-    #   cohort                    n         first-job delay    queue term        start spread
-    #   group OCCUPIED            7 (24%)   med 460s max 1249s med 393s max 1245s med  68s max  913s
-    #   group DRAINED            22 (76%)   med   4s max  731s 0                  med 412s max 1708s
-    #   all                      29         —                  —                  med 292s max 1708s
-    #
-    # THE MODEL IS ADDITIVE, NOT EITHER/OR:
-    #     time-to-test = queue (only when the group is occupied) + runner availability + execution
-    # The queue term is workload-dependent: large on a merge-burst day, exactly zero on a normal
-    # one. On 2026-09-07 15:16-17:58 five consecutive runs were queue-bound; the queue is real.
-    # It is not the dominant term across the population — it binds on ~a quarter of runs, and the
-    # window's WORST time-to-test (4156s) came from a run whose group was EMPTY.
-    #
-    # WHAT THE PER-SHA KEY BUYS. It removes the queue term unconditionally rather than
-    # probabilistically. Its median wall-clock saving is ZERO, because the median run has no queue
-    # term to remove. It is justified on SEMANTICS — a run's gated quantity should not contain an
-    # unbounded term belonging to a different commit — not on wall clock (ADR-217, Decision 1).
-    # It raises peak runner concurrency, and the table above says the pool is the binding
-    # constraint on 76% of runs, so this could make the median WORSE. That is the declared risk.
-    #
-    # REPRODUCTION (two-stage jq: `gh --jq` does NOT forward `--arg`):
-    #   for p in 1 2 3 4 5 6; do
-    #     gh api "/repos/{owner}/{repo}/actions/runs?event=push&branch=main&per_page=100&page=$p" \
-    #       --jq '.workflow_runs[] | select(.name=="CI") | [.created_at,.id,.conclusion] | @tsv'
-    #   done | sort -ru | awk -F'\t' '$1>="<start>" && $1<="<end>"' > ci-win.tsv
-    #   while IFS=$'\t' read -r created rid concl; do
-    #     gh api "/repos/{owner}/{repo}/actions/runs/$rid/jobs?per_page=100" > j.json
-    #     jq -r --arg rid "$rid" --arg created "$created" \
-    #       '.jobs[] | [$rid,$created,.name,(.started_at//""),(.completed_at//""),
-    #                   (.conclusion//""),(.runner_id|tostring),(.steps|length|tostring)] | @tsv' j.json
-    #   done < ci-win.tsv > jobs.tsv
-    #
-    # `sort -ru` is load-bearing: GitHub's pagination is not stable while new runs are being
-    # created, so a plain `sort -r` can carry the same run on two pages and inflate the
-    # population. The raw `jobs.tsv` this table was computed from is committed at
-    # knowledge-base/project/specs/feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/
-    # measurement-jobs-2026-09-09.tsv, so the arithmetic is checkable without re-querying.
-    #
-    # A PRIOR RUN OF THIS SAME COMMAND, over a population reported as 35, published med 332s /
-    # max 1708s for the drained spread and a 20%/80% split. Re-derived here at 29 runs it is
-    # med 412s / max 1708s and 24%/76%. Every MAXIMUM and the ENTIRE occupied cohort (n=7; 460/
-    # 1249, 393/1245) reproduce to the second; the medians and the population do not. The
-    # conclusions above are invariant across both readings, which is why they are stated as
-    # cohort shape rather than as a headline number. Do not cite a median from this block without
-    # re-running the command — cite the shape.
+    # Positional sharding means leg membership is an ORDINAL ACCIDENT — adding
+    # or renaming one suite re-rolls every leg, so no K table in this file can
+    # outlive a registration change. Before touching K, re-derive per-suite
+    # durations from this run's own `suite-timings-*` artifacts and re-simulate
+    # the actual round-robin under C collation; the method, the measured
+    # tables, and the runner-availability data live in
+    # knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/3", "2/3", "3/3"]
+        shard: ["1/5", "2/5", "3/5", "4/5", "5/5"]
     # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
     #
     # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
@@ -1157,22 +1028,19 @@ jobs:
     #
     # So `timeout-minutes` is the ONLY bound on a CI leg and it is SILENT — a job-kill produces no
     # annotation. It must therefore sit above the repo's own DECLARED EXPECTATION for the work on
-    # this leg (that advisory budget), because a silent kill below a duration the repo itself
+    # this leg, because a silent kill below a duration the repo itself
     # calls legitimate is indistinguishable from a hang:
     #
-    #   rest-of-leg 6.95 min + that suite's declared budget (41.67 min, itself ~1.5x its own
-    #     measured max) = 48.62 min
-    #   x1.2 (the convention that sized await-ci's timeout-minutes over CEILING_S before #5806
-    #        deleted that job; the ratio is kept because the reasoning was never about that job) = 58.3
-    #   -> 60
+    #   light leg ~8 min nominal after the #8006 carve-out. No light suite carries a
+    #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
+    #     moved to test-scripts-heavy, whose own derivation sits on that job.
+    #   -> 60 stays as the hang cap; it is ~6x the nominal leg, not a leg estimate.
     #
-    # An earlier revision of this PR set 30, sized against the leg's NOMINAL 15.09 min. That
-    # was a new silent-kill path: the same battery measures 14.3-27.9 min and its own budget
+    # An earlier revision of this file set 30, sized against the leg's NOMINAL value. That
+    # was a new silent-kill path: the battery measures 14.3-27.9 min and its own budget
     # comment notes load alone moves it 1.9x, so a healthy slow run would have been killed
     # with no diagnostic — #7902's failure mode relocated from the deploy gate into CI and
-    # made silent. Do NOT lower this to fit a leg estimate, and do NOT lower the 2500000 ms
-    # budget to fit this: it is the repo's stated expectation for that suite, and shrinking it to
-    # fit an unrelated cap re-creates this trap one layer down.
+    # made silent. Do NOT lower this to fit a leg estimate.
     #
     # This does not bound the deploy gate and is not trying to — see ADR-212. Its job is
     # capping a hung leg at 1 hour instead of GitHub's 6-hour default.
@@ -1315,6 +1183,87 @@ jobs:
           # nothing to upload and that is not a fault. The cost is that a leg which
           # SHOULD have produced timings and did not fails silently — acceptable
           # while this data is advisory input to #8006 and gates nothing.
+          if-no-files-found: warn
+          retention-days: 14
+
+  # #8006 — the three cost-heaviest registrations, one suite per leg.
+  #
+  # Carved out of `test-scripts`: positional round-robin cannot keep the
+  # registry-gate-mutation-battery (~9 min nominal, 14-28 under load), the
+  # tag-authorship mutation battery (~6 min) and the .github fixture runner
+  # (~6 min) from sharing a leg — on the measured order they DID share one,
+  # which is where the 31-39 min long pole came from. A dedicated 3-leg
+  # matrix over `want_scripts_heavy` gives each its own leg; the light group
+  # fans out to five legs above.
+  #
+  # TOOLCHAIN PARITY IS ASSERTED, NOT ASSUMED. scripts-shard-runtime-coverage.test.sh
+  # extracts BOTH job blocks and requires every runtime a scripts-group suite
+  # invokes to be installed in each — today's three members are bash+git only,
+  # but a future heavy registration must not red for want of a binary (#7332's
+  # exact shape), so the install steps below mirror test-scripts verbatim.
+  test-scripts-heavy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+    # Same silent-bound reasoning as test-scripts, one suite per leg:
+    #   worst leg = registry battery's declared budget (41.67 min, ~1.5x its
+    #     own measured max) + setup ~5 min = ~47 min; x1.2 -> 56 -> 60.
+    #   The budget is the repo's DECLARED expectation; a timeout below it is
+    #   a silent kill on a legitimate run. Do NOT lower either to fit an estimate.
+    timeout-minutes: 60
+    env:
+      GITLEAKS_VERSION: "8.24.2"
+      GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
+      # Same two-channel shape as test-scripts: the group arrives POSITIONALLY
+      # (`bash scripts/test-all.sh scripts-heavy`), the shard through the env.
+      SCRIPTS_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0
+          likec4 --version
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Run scripts-heavy tests (bash + python3 + bun)
+        run: bash scripts/test-all.sh scripts-heavy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_TIMING_LOG: ${{ runner.temp }}/suite-timings.tsv
+
+      - name: Upload per-suite timings
+        # `always()`: same as test-scripts — a failed or killed leg is exactly
+        # the leg whose timings the next partition decision needs.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # `scripts-heavy-` prefix is LOAD-BEARING, not cosmetic: artifact
+          # names are immutable within a run under upload-artifact v4, so
+          # reusing `suite-timings-scripts-N` here collides with the light
+          # job's legs and reds every run.
+          name: suite-timings-scripts-heavy-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/suite-timings.tsv
           if-no-files-found: warn
           retention-days: 14
 
@@ -1499,12 +1448,12 @@ jobs:
   #
   # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
   # branch-protection ruleset 14145388's `test` required check. It carries
-  # three distinct values: (a) cross-layer truing — converts three shard
+  # three distinct values: (a) cross-layer truing — converts six leg-job
   # `conclusion`s into the single required-context conclusion the ruleset
   # already expects by name; (b) drift-resilience — survives a future
   # ruleset edit that changes the required-context list, as long as the
   # `test` name still gates merge; (c) observability — single PR-status
-  # row to inspect, not three. Removing this job orphans the ruleset's
+  # row to inspect, not six. Removing this job orphans the ruleset's
   # `test` required check and breaks every PR merge.
   #
   # The name `test` MUST match the required-context name on ruleset
@@ -1523,10 +1472,10 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    needs: [test-webplat, test-bun, test-scripts, web-platform-build]
+    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture]
     if: always()
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads four `needs.*.result` strings (measured
+    # Bounds a HUNG job (#7902). This job only reads six `needs.*.result` strings (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
@@ -1549,7 +1498,9 @@ jobs:
           WEBPLAT_RESULT: ${{ needs.test-webplat.result }}
           BUN_RESULT: ${{ needs.test-bun.result }}
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
+          SCRIPTS_HEAVY_RESULT: ${{ needs.test-scripts-heavy.result }}
           BUILD_RESULT: ${{ needs.web-platform-build.result }}
+          POSTURE_RESULT: ${{ needs.encryption-posture.result }}
           # The event is a CLASSIFIER INPUT, not decoration. Supersession is only
           # reachable where `cancel-in-progress` is true, which since #7931 part 1
           # is pull_request only — see the SUPERSEDED arm below.
@@ -1583,9 +1534,10 @@ jobs:
           # under the shell Actions uses (`bash --noprofile --norc -eo pipefail`).
           fail=0
           # Single colon-delimited list, iterated twice: once to classify each leg,
-          # once (inner) to read that leg's siblings. Adding a 4th shard is still a
-          # one-line edit here, plus needs: + env:.
-          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "web-platform-build:$BUILD_RESULT" )
+          # once (inner) to read that leg's siblings. Adding a leg is still a
+          # one-line edit here, plus needs: + env: — test-scripts-heavy (#8006)
+          # and encryption-posture (#6907) are the worked examples.
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "test-scripts-heavy:$SCRIPTS_HEAVY_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" )
           for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
@@ -1607,7 +1559,7 @@ jobs:
                 # The comment above claims the classifier is correct whether a
                 # timed-out leg reads `cancelled` or `failure`; this arm is where
                 # that claim has to be honoured.
-                if [[ "$shard" == "test-scripts" ]]; then
+                if [[ "$shard" == "test-scripts" || "$shard" == "test-scripts-heavy" ]]; then
                   # A matrix rollup: "the job log" is not one log.
                   echo "$shard: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation before assuming assertions." >&2
                 else
@@ -1659,7 +1611,7 @@ jobs:
           if [[ $fail -ne 0 ]]; then
             exit 1
           fi
-          echo "All four legs green (three shards + web-platform-build)."
+          echo "All six legs green (four shards + web-platform-build + encryption-posture)."
 
   # E2E job runs inside the official Playwright container so Chromium + OS deps
   # are pre-installed at the matching Playwright version. Container tag, digest,

@@ -67,7 +67,10 @@ git_data_boot_sql() {
                      JSONExtractString(raw,'hooks_path')   AS hooks_path,
                      JSONExtractString(raw,'provision')    AS provision,
                      JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
-                     JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit
+                     JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit,
+                     JSONExtractString(raw,'fence_on_mapper') AS fence_on_mapper,
+                     JSONExtractString(raw,'erasure_probe') AS erasure_probe,
+                     JSONExtractString(raw,'plaintext_empty') AS plaintext_empty
               FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
                     UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
               WHERE dt > fromUnixTimestamp($anchor)
@@ -225,7 +228,11 @@ git_data_boot_poll() {
 # from it (the message used to re-spell the five names, so a sixth would have made it lie).
 # git-data-emit.test.sh's consumer-roster guard reads THIS declaration (anchored on
 # `GIT_DATA_BOOT_TERMINAL=`), so a name added here without a producer change REDs that suite.
-GIT_DATA_BOOT_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit"
+# (#8211) fence_on_mapper, erasure_probe and plaintext_empty join it: the bootstrap MEASURES
+# each (the fence's findmnt SOURCE, a real erasure run as `git`, the read-only plaintext
+# count), and a host missing any of them must not release a replace. The SQL above projects
+# each one; a name read here but not projected is absent from every row and reads as drift.
+GIT_DATA_BOOT_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty"
 git_data_boot_check_invariants() {
   local kind="$1" row="$2" f
   # shellcheck disable=SC2086
