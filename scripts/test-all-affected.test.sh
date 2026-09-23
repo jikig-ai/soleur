@@ -45,12 +45,12 @@ echo "--- Part A: the structural contract ---"
 # A1 — the group is accepted by validation, and the usage text names it. Both halves:
 # accepting the token without documenting it would be the discoverability defect this
 # mode exists to fix (agents must be able to FIND the substitute the refusals prescribe).
-if grep -q 'all|webplat|bun|scripts|infra|affected)' "$TARGET"; then
+if grep -q 'all|webplat|bun|scripts|scripts-heavy|infra|affected)' "$TARGET"; then
   pass "A1 — validation case accepts affected"
 else
   fail "A1 — validation case does not list affected"
 fi
-if grep -q 'must be one of: all, webplat, bun, scripts, infra, affected' "$TARGET"; then
+if grep -q 'must be one of: all, webplat, bun, scripts, scripts-heavy, infra, affected' "$TARGET"; then
   pass "A1 — usage error text names affected"
 else
   fail "A1 — usage error text omits affected"
@@ -59,7 +59,7 @@ fi
 # A2 — every want_* widens to affected. Selection happens per-registration at the
 # run_suite chokepoint; a want_* that excluded affected would silently remove that
 # group's suites from the denominator — the invisible-coverage defect ADR-181 recorded.
-for fn in want_scripts want_bun want_webplat want_infra; do
+for fn in want_scripts want_scripts_heavy want_bun want_webplat want_infra; do
   if grep -E "^${fn}\(\)" "$TARGET" | grep -q '"affected"'; then
     pass "A2 — $fn registers under affected"
   else

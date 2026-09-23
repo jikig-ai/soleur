@@ -85,13 +85,15 @@ permissions:
 # earlier revision of this comment claimed "nothing mechanically couples them",
 # which was false for gitleaks and likec4 and would have sent a future bumper
 # past two guards that exist:
-#   GITLEAKS_*        -> 4 sites: ci.yml (test-scripts), secret-scan.yml,
+#   GITLEAKS_*        -> 5 sites: ci.yml (test-scripts + test-scripts-heavy),
+#                        secret-scan.yml,
 #                        .github/actions/bot-pr-with-synthetic-checks/action.yml,
 #                        and here. Guarded by Test 5 of
 #                        plugins/soleur/test/required-checks-canonical-parity.test.sh
 #                        (this file added to its list by #7307).
-#   LIKEC4_VERSION    -> 5 sites: Dockerfile, package.json (x2),
-#                        plugins/soleur/scripts/render-c4-model.sh, ci.yml, and here.
+#   LIKEC4_VERSION    -> 6 sites: Dockerfile, package.json (x2),
+#                        plugins/soleur/scripts/render-c4-model.sh,
+#                        ci.yml (test-scripts + test-scripts-heavy), and here.
 #                        Guarded by apps/web-platform/test/c4-likec4-version-pin.test.ts
 #                        (this file added by #7307). NB the install below writes
 #                        the literal, not "likec4@${LIKEC4_VERSION}", because that

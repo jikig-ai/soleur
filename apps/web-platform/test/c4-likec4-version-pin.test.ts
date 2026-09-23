@@ -64,12 +64,19 @@ describe("likec4 CLI / client-renderer version parity", () => {
     expect(scriptMatch![1]).toBe(cliVersion);
 
     const ci = readRepo(".github/workflows/ci.yml");
-    const ciMatch = ci.match(/npm install -g likec4@([0-9][^\s"'`]*)/);
+    // matchAll, not match: `test-scripts-heavy` installs likec4 too, so ci.yml
+    // carries TWO `npm install -g likec4@` lines — a first-match read would
+    // never see the second copy drift.
+    const ciMatches = [
+      ...ci.matchAll(/npm install -g likec4@([0-9][^\s"'`]*)/g),
+    ];
     expect(
-      ciMatch,
+      ciMatches.length,
       "ci.yml must install a pinned `likec4@<version>` for the freshness test",
-    ).toBeTruthy();
-    expect(ciMatch![1]).toBe(cliVersion);
+    ).toBeGreaterThan(0);
+    for (const m of ciMatches) {
+      expect(m[1]).toBe(cliVersion);
+    }
 
     // 5th surface (#7307): main-health-monitor.yml installs likec4 so that
     // c4-model-freshness.test.sh actually RUNS there — without the CLI that suite
