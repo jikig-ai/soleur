@@ -473,11 +473,16 @@ locals {
     FROM {{source}}
     WHERE time BETWEEN {{start_time}} AND {{end_time}}
       AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'inngest-server.service'
-      AND multiSearchAny(JSONExtractString(raw, 'message', 'error'), ['invalid status code: 524'])
+      AND multiSearchAny(JSONExtractString(raw, 'message', 'error'), ['invalid status code: 524', 'error parsing stream: error reading response body', 'Your server reset the connection while we were reading the reply'])
     GROUP BY time
   SQL
-  # S7 SLOT (#8611 Phase 0): the streaming spike's stream-cut error text is appended to the
-  # needle array above as a second literal once measured. One array, one alert.
+  # The two later needles are the inngest-server v1.19.4 `error` texts for a step STREAM that
+  # dropped mid-response, measured in the #8611 spike (streaming-spike.md): S7's network cut and
+  # app kill -> "error parsing stream: error reading response body to check for status code:
+  # unexpected end of JSON input"; S3's ~20-min drop -> "Your server reset the connection while we
+  # were reading the reply: Unexpected ending response". Under streaming a 524 should not recur,
+  # so these are the live form of the same failure. A web deploy that kills a running step also
+  # matches — one page per such deploy is the accepted cost. One array, one alert.
 
   # (2) and (3) read the per-run marker at its nested path (pino fields sit under raw.message since
   # #8344; the top-level form reads 0 on every row). The `"SOLEUR_CLAUDE_COST":true` key match keeps

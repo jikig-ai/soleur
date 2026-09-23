@@ -55,7 +55,7 @@ bytes. The SDK controller never sees a cancel. Each cancel reports
 `op: "inngest-stream-consumer-cancel"`, which is the only measurement of the production drop rate.
 `inngest` is pinned **exactly** at `3.54.2`, and `stream-detach.test.ts` pins `stream.js` by content
 hash: any SDK change re-opens this section. `inngest@4.21.0` fixes `createStream` upstream; the wrapper
-is deleted with that upgrade.
+is deleted with that upgrade (#8628).
 
 ### 2. At most one Claude child per (function, run), and a late retry gets the finished result
 
@@ -123,7 +123,7 @@ one. Caps and the alert threshold are recalibrated after 14 funded days (#8613).
 - A dropped stream is survivable once: the retry joins the live child (or gets its result). With
   `retries: 1`, a second drop in the same run fails it — spend wasted, not doubled. Raising `retries`
   was **not** done here: it applies to every step of these functions (clone, commit/PR, issue filing),
-  whose idempotency is unverified. Decide it from the cancel telemetry.
+  whose idempotency is unverified. Decide it from the cancel telemetry (#8613).
 - A web deploy still kills running Claude children; the retry then spawns a fresh child (correct).
 - The BYOK leader loop is not behind the guard. A drop during its `claude` step re-runs that step and
   bills the founder's key again — a risk that exists today, which streaming does not increase. The
@@ -134,7 +134,7 @@ one. Caps and the alert threshold are recalibrated after 14 funded days (#8613).
 | Alternative | Why not |
 |---|---|
 | Streaming without the wrapper | One dropped stream crashes the web process (§1), and an unsigned request can reach the same path. |
-| Upgrade to `inngest@4` now | Fixes `createStream`, but is a major-version migration across ~70 functions and three middlewares, untested against server v1.19.4, and would need the whole spike re-run. Deferred; its trigger is "delete stream-detach.ts". |
+| Upgrade to `inngest@4` now | Fixes `createStream`, but is a major-version migration across ~70 functions and three middlewares, untested against server v1.19.4, and would need the whole spike re-run. Deferred to #8628. |
 | Detach-and-poll (plan Fix 1B) | Plan review found nine defects, all caused by runs that sleep while a detached child works. |
 | Cap every step below ~20 min | Sessions run 5–25 min, and the one observed drop (~20.5 min) looks random, not a limit. |
 | Private `serveHost` | Breaks cron planning: only the public-host registration re-plans crons (#5159). |
