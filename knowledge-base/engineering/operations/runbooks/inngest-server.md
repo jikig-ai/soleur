@@ -356,6 +356,14 @@ reads `event.data.issue_number`) accept a `data` object. Route-controlled keys
   -d '{"event":"cron/bug-fixer.manual-trigger","data":{"issue_number":4383}}'
 ```
 
+**Throttle and per-run cap (#8611, ADR-243).** The 18 Claude-spawning functions carry
+`throttle {limit 2, period 1h}` (`apps/web-platform/server/inngest/cron-budgets.ts`). A `202` does
+not mean the run started: a third fire within the hour is **queued**, not rejected, and runs (and
+bills) later. Check `routine_runs_list` for up to an hour before re-firing. Each fire is a new run
+with its own `--max-budget-usd` cap (`CLAUDE_BUDGET_USD`); a cap hit shows as a FAILED run with
+reason `budget-capped` and `subtype=error_max_budget_usd` on the cost marker
+(`betterstack-log-query.md`).
+
 The allowlist is derived from `EXPECTED_CRON_FUNCTIONS`
 (`apps/web-platform/server/inngest/cron-manifest.ts`) — a non-allowlisted event
 returns 400. Non-plain-object `data` returns 400; the per-cron field validation

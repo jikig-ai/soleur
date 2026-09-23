@@ -434,6 +434,20 @@ No SSH or firewall hypothesis is in play, so `hr-ssh-diagnosis-verify-firewall` 
   workspace.
 - **Brand-survival threshold:** `single-user incident`
 
+Named, scoped side effects (review panel):
+
+- **Email ingress probe delay (operator-facing):** the account-wide `cron-platform` concurrency slot
+  is now held for a whole claude-eval run instead of released at the ~100 s 524, so the 06:00
+  `cron-email-ingress-probe` can wait behind `cron-bug-fixer` for up to ~50 min. Delayed, never
+  dropped or duplicated; statutory deadline reminders keep their schedule, a little later.
+- **Routines UI (every signed-in founder):** live rows for `cron-daily-triage` and
+  `cron-follow-through-monitor` now appear, because both write `routine_run_progress` through
+  `spawnClaudeEval`. The table's SELECT is any-authenticated (ADR-077 single-operator assumption);
+  the rows carry system ids only. Scoped out under ADR-077.
+- **Email-triage notify duplicate (operator only):** a stream dropped after `notifyOfflineUser`
+  returns re-runs that step once (`retries: 1`) and can send a second non-statutory ping. The owner
+  is one fixed operator account, so no founder receives it. Scoped out.
+
 Controls: spike rows S4–S6 prove retry, non-retry and multi-step semantics on the pinned server
 before 1A can be chosen. Phase 6 exercises one BYOK leader-loop turn on the operator's own founder
 account and one email-triage run. The rollback is one line (remove `streaming`). `requires_cpo_signoff: true`;
@@ -449,26 +463,35 @@ liveness_signal:
   configured_in: "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts; apps/web-platform/infra/sentry/cron-monitors.tf"
 error_reporting:
   destination: "Sentry web-platform project (SENTRY_DSN) via reportSilentFallback (layer: sentry-correlation); pino WARN+ to Better Stack source 2457081 via the app_container_warn_filter (layer: pino)"
-  fail_loud: "inngest-server 'invalid status code: 524' or the S7 stream-cut literal -> Better Stack alert; single-flight join or missing runId -> reportSilentFallback"
+  fail_loud: "inngest-server 'invalid status code: 524' or a dropped-stream literal -> Better Stack alert; missing runId or a key collision -> reportSilentFallback (error); a join -> warnSilentFallback"
 failure_modes:
   - mode: "any step request exceeds the Cloudflare origin timeout"
-    detection: "logtail_exploration_alert counting inngest-server rows with 'invalid status code: 524' (layer: inngest_journald, all priorities for inngest-server.service, observed)"
+    detection: "logtail_exploration_alert inngest_step_524 counting inngest-server rows whose message.error is 'invalid status code: 524' (layer: vector — Source 1 inngest_journald; PRIORITY 6 rows ship as observed, #6551, pinned by Guard 2)"
     alert_route: "Better Stack alert -> operator email"
   - mode: "a streamed response is cut or misparsed (streaming-specific)"
-    detection: "second literal in the same exploration: the inngest-server error text recorded by spike row S7"
+    detection: "the same exploration's two dropped-stream needles: S7 'error parsing stream: error reading response body' and S3 'Your server reset the connection while we were reading the reply' (layer: vector — Source 1)"
     alert_route: "Better Stack alert -> operator email"
-  - mode: "a retry arrives while the first Claude child is live, or runId is missing"
-    detection: "reportSilentFallback op=claude-eval-singleflight-join / op=claude-eval-singleflight-no-runid (layer: sentry-correlation)"
-    alert_route: "Sentry issue -> operator email"
+  - mode: "a step stream's consumer disconnects (drop, deploy kill, unsigned caller abort)"
+    detection: "warnSilentFallback op=inngest-stream-consumer-cancel, tags signed/fn (layer: pino, mirrored to Sentry at warning); drain errors op=inngest-stream-drain-error"
+    alert_route: "Sentry, queryable (warning level, no page); the rate of signed:true events is the production drop rate"
+  - mode: "stream-detach wrapper fails, so a dropped stream's leaked SDK heartbeat throws"
+    detection: "server/crash-handlers.ts uncaughtException -> Sentry fatal + process exit (layer: sentry-correlation); the container restart is visible in the deploy/uptime monitors"
+    alert_route: "Sentry fatal issue -> operator email"
+  - mode: "a retry arrives while the first Claude child is live, or runId is missing, or two different spawns collide in one run"
+    detection: "op=claude-eval-singleflight-join (warning) / op=claude-eval-singleflight-no-runid (error) / op=claude-eval-singleflight-key-collision (error) (layer: sentry-correlation)"
+    alert_route: "join: Sentry, queryable; no-runid and key-collision: Sentry issue -> operator email on first seen"
   - mode: "per-run budget cap hit"
-    detection: "cost marker is_error=true with the verified budget-stop subtype (layer: pino) plus the existing scheduled-output-missing Sentry event"
-    alert_route: "Sentry -> operator email"
+    detection: "cost marker is_error=true, subtype error_max_budget_usd (layer: vector — Source 3 SOLEUR_CLAUDE_COST); classifyEvalFatal budget-capped class turns the cron's Sentry monitor red with the reason (layer: Sentry monitor)"
+    alert_route: "Sentry monitor miss/error -> operator email; per-cron cap_hits query in the runbook"
   - mode: "daily spend above threshold, or the cost stream goes silent"
-    detection: "burn exploration sum(JSONExtractFloat(raw,'message','cost_usd')) > 15 per 24h; separate stuck-at-zero exploration on the count of non-null cost markers"
+    detection: "burn exploration sum(JSONExtractFloat(raw,'message','cost_usd')) > local.claude_cost_daily_burn_usd (25) per trailing 24h — a floor, null-cost markers count $0; separate capture-dark exploration on the count of non-null cost markers (layer: vector — Source 3)"
     alert_route: "Better Stack alert -> operator email"
   - mode: "credit exhausted"
-    detection: "cron-anthropic-credit-probe (hourly, existing) + cost marker is_error=true"
-    alert_route: "credit-probe heartbeat RED -> operator email (existing)"
+    detection: "cron-anthropic-credit-probe (hourly, existing) + cost marker is_error=true (layer: Sentry monitor)"
+    alert_route: "credit-probe Sentry monitor RED -> operator email (existing)"
+  - mode: "a founder BYOK leader turn re-runs after billing (double bill)"
+    detection: "leader-loop SOLEUR_CLAUDE_COST marker with attempt > 0, or two markers for one (id, turn) (layer: vector — Source 3)"
+    alert_route: "72h rollback trigger (below) -> revert + founder notice/refund"
 logs:
   where: "Better Stack Logs source 2457081 (soleur-inngest-vector-prd): app container pino WARN+ (markers nested under raw.message since #8344) and inngest-server journald"
   retention: "Better Stack source retention (hot + S3 archive via s3Cluster union)"
@@ -532,6 +555,14 @@ dropped after the child finished gets that result instead of a new session; a **
 at once. Row 6 therefore now expects **1** spawn (the retry receives the first result), and a new row 9
 asserts a fresh spawn once the TTL has passed. Rows 1, 5, 7 and 8 are unchanged. Removing the retention
 reds rows 6 and 9 (mutation run).
+
+**Second implementation revision (2026-09-23, review panel; ADR-243 §2).** `SETTLED_TTL_MS` is now
+**2 hours**: a dropped step's retry can queue behind another claude-eval cron on the account-wide
+`cron-platform` concurrency slot for longer than 15 minutes. Row 10 pins the minimum. Rows 6 and 9
+now cross a real macrotask / an async timer advance, so a retention dropped on a microtask reds them
+(the earlier rows passed by timing). A second spawn in one run with a **different** prompt is refused
+(row 11, op `claude-eval-singleflight-key-collision`). Rows 1 and 6 assert exactly one cost marker and
+one `routine_run_progress` upsert per joined run. The join is reported at warning level.
 
 ### Guard 2 — every alert queries what its emitter writes, and nothing more
 
@@ -615,16 +646,25 @@ count), the apply workflow's `-target=` list, and the observed emitter shapes:
    Also run one BYOK leader-loop turn **that includes a tool call** on the operator's own founder
    account, and let one email-triage run happen naturally. For the leader turn, check the bill as
    well as the attempts: the `leader-loop` `SOLEUR_CLAUDE_COST` markers for that conversation must
-   show exactly one marker per turn, and their summed cost must equal the conversation's
-   `cumulativeCents`. A duplicate turn marker is a double bill. Then read Better Stack: exactly one cost marker per run id,
+   number exactly the turns the run executed (one per `turn`, every `attempt` 0). Comparing their sum
+   to `cumulativeCents` proves nothing: both are written in the same step, so a re-run doubles them
+   together. A duplicate turn marker, or `attempt > 0`, is a double bill. Then read Better Stack: exactly one cost marker per run id,
    zero 524s, one attempt per run (the leader turn included), and a committed PR or issue per cron.
 
 **Rollback trigger (CPO condition, 72h after deploy, automated in `soleur:ship`'s follow-through).**
-Any of the following means reverting the `streaming` line immediately, without waiting for triage:
+Any of the following means reverting the `streaming` line immediately, without waiting for triage.
+Both read the fields #8611 added to the leader-loop `SOLEUR_CLAUDE_COST` marker (`turn`, `attempt`);
+before them the marker's only correlation field was the conversation id, so a double bill looked
+exactly like a real second turn:
 
-- a `leader-loop` cost marker duplicated for the same (conversation, turn);
-- a `persist-failure` with reason `anthropic_timeout`;
-- an inngest-server log line showing a `turn-*-claude` step at attempt > 0.
+- a `leader-loop` marker with `attempt > 0`;
+- more than one `leader-loop` marker for the same (`id`, `turn`).
+
+A web deploy that kills an in-flight leader turn also produces `attempt > 0`, and no pre-merge
+baseline of leader-turn retries exists. So each hit is checked against the deploy log for that
+minute: a hit that coincides with a deploy is recorded, not reverted. `persist-failure` with reason
+`anthropic_timeout` is **not** a detector: a dropped stream completes the step (no persist failure),
+and the classifier labels every unknown error `anthropic_timeout`. It stays a liveness signal only.
 
 If it fires, the founder whose key was hit gets a direct notice and a refund of the duplicate spend.
 Founders are not notified in advance, because no change is intended for them.
@@ -751,7 +791,9 @@ pre-exhaustion burn alert is in scope (operator decision). The Console workspace
 **Status:** reviewed — **approved with conditions** (2026-09-23). All four conditions are applied:
 (1) spike row S8 reproduces the real leader-loop chain and fails the branch if a memoized step
 re-runs; (2) S7 re-runs with `retries: 3` and records the re-run count as the BYOK exposure;
-(3) Phase 6 checks the leader turn's bill (one cost marker per turn, summed to `cumulativeCents`),
+(3) Phase 6 checks the leader turn's bill (one cost marker per turn, every `attempt` 0 — see the
+Phase 6 wording; the `cumulativeCents` comparison was dropped at review because it doubles with the
+markers),
 using a turn with a tool call; (4) a 72h rollback trigger, with a direct notice and refund to any
 affected founder. The CPO also floated excluding BYOK functions from streaming, since leader turns
 are capped at 60s and gain nothing. Decided (CTO call, recorded): no. A second serve handler is a

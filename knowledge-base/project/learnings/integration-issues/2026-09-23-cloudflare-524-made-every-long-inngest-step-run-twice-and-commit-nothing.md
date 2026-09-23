@@ -44,17 +44,32 @@ The prompt-caching email was a red herring for this workload. The direct Message
 one-offs hours apart (no reuse within the TTL), or below Haiku's 4,096-token minimum. The Claude
 Code/Agent SDK traffic, which is excluded from that email, already hits cache at over 97%.
 
-## Solution (planned — PR #8611)
+## Solution (shipped — PR #8611, ADR-243)
 
-A Phase 0 spike on the pinned server behind a real Cloudflare tunnel decides the branch:
+A Phase 0 spike on the pinned server behind a real Cloudflare tunnel chose **Branch A** over
+detach-and-poll:
 
-- **Branch A:** Inngest SDK `streaming: "force"` (heartbeat bytes keep the proxy open), plus a
-  single-flight guard in `spawnClaudeEval`.
-- **Branch B (fallback):** detach and poll.
-
-Also in the PR: `--max-budget-usd` per spawn site (the Opus 5 → Opus 5.5 audit-tier re-pin it
-planned landed first on main via #8601), a
-manual-trigger throttle, and Better Stack alerts on inngest-server 524s and on daily spend.
+- **Streaming.** `serve({ streaming: "force" })` answers 201 at once and writes a heartbeat byte
+  every 3 s, so the proxy never times out (spike S2: zero 524s on a 3-minute step).
+- **The most reusable finding: the SDK's streaming crashes the process on a dropped stream.**
+  `inngest` 3.54.2's `createStream` clears its heartbeat only in `finalize()` and has no `cancel()`,
+  so a consumer disconnect makes every tick throw from a timer — an `uncaughtException`, which the
+  app's crash handler turns into `process.exit(1)`. The spike missed it on plain `next start` (which
+  only logs) and measured it once the S7 rows installed the production crash handler.
+  `server/inngest/stream-detach.ts` re-streams the body and drains the SDK stream instead of
+  cancelling it; `inngest` is pinned exactly and the helper is content-hash-pinned in its test. The v4
+  upgrade (#8628) fixes it upstream.
+- **Single-flight + settled result.** `spawnClaudeEval` joins a live child for the same
+  `(cronName, runId)` and returns a finished child's result for 2 hours, so a dropped-stream retry
+  never starts a second paid session (spike S7c/S7e: one spawn).
+- **Substrate-owned budget.** `spawnClaudeEval` appends `--max-budget-usd` from the cron's own
+  `CLAUDE_BUDGET_USD` entry and refuses a caller-supplied one; a capped run is its own fatal class
+  (`budget-capped`), so it turns the cron red instead of reading as a clean exit.
+- Also: a 2/hour manual-fire throttle (a rate limit, not a spend bound), Better Stack alerts on
+  inngest-server 524s / dropped streams, a $25 trailing-24 h spend floor and a dark-telemetry alarm,
+  and `turn`/`attempt` on the founder BYOK leader-loop cost marker so a double-billed turn is
+  detectable. The Opus 5 → Opus 5.5 audit-tier re-pin the plan called for landed first on main via
+  #8601.
 
 ## Key insight
 

@@ -241,6 +241,16 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > to the $159.81, so the window is clean. The ledger's re-measure query (`source LIKE cron:%`)
 > must exclude `source = cron:cron-ux-audit`, or that spend is booked twice, once as COGS and
 > once as R&D.
+>
+> **Superseded 2026-09-23 (#8611 review):** three statements above need correcting. (1) "#8611
+> … re-pins `AUDIT_MODEL`": the re-pin landed on main via #8601; #8611 only planned it. (2) The
+> ~$208/month projection covers the **previously metered sites only**. Once `cron-daily-triage`
+> and `cron-follow-through-monitor` are metered and the window's calendar mix is normalised (it
+> held 2 Mondays and no 1st-of-month runs), the whole fleet is more likely **~$240–340/month**. The
+> sensitivity's break-even of 21 users is therefore a **lower bound** on the post-fix count, not an
+> estimate of it. (3) "its per-run cap is the $10 audit-tier default": at review, n=1 was treated as
+> no data and the audit-tier default was raised to **$15**, so cron-ux-audit's cap is now $15. The
+> ledger's re-measure recipe now excludes `source = cron:cron-ux-audit`.
 
 ## Monthly Burn
 
@@ -257,7 +267,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Claude Code Max 20x — seat 1 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Claude Code Max 20x — seat 2 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Anthropic API (CI) | 0.00 (unmetered) [expenses.md@2026-07-30] | `expenses.md` |
-| Anthropic API (claude-eval cron fleet) | 516.00 [expenses.md@2026-09-23] | `expenses.md` (18 Claude spawn sites; measured 2026-09-23 from the `SOLEUR_CLAUDE_COST` markers' `cost_usd` — the **pre-#8611 funded-day run-rate**; the ~$208 post-fix figure is a projection and is NOT booked — see the #8611 fleet note) |
+| Anthropic API (claude-eval cron fleet) | 516.00 [expenses.md@2026-09-23] | `expenses.md` (measured over 16 of 18 Claude spawn sites, 2026-09-23 from the `SOLEUR_CLAUDE_COST` markers' `cost_usd` — the **pre-#8611 funded-day run-rate**; the ~$208 post-fix figure is a projection and is NOT booked — see the #8611 fleet note) |
 | Hetzner CX33 (grok-dogfood, operator dogfood host) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Primary IPv4 (grok-dogfood) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
 | xAI API (Grok 4.5 dogfood) | 0.14 (accruing) [expenses.md@2026-07-16] | `expenses.md` (metered — see note) |
@@ -312,6 +322,11 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 > still a floor because of part (b): CI is still `unmetered`. Part (b) is unchanged. Figures
 > and arithmetic are in the `[2026-09-23 Review note — #8611 fleet]` at the top of this
 > document.
+>
+> **Superseded 2026-09-23 (#8611 review):** "The fleet row no longer makes the R&D subtotal a
+> floor" is wrong. The fleet figure is itself partial — measured over 16 of 18 spawn sites, and it
+> omits `cron-compound-promote` and `cron-weekly-release-digest`, which draw the same key over
+> HTTP — so the fleet row is a second reason the subtotal is a floor, alongside CI.
 
 ### Product COGS
 
@@ -432,7 +447,7 @@ Effective **net revenue per user after Stripe fees: ~$48/month** (EU floor) to ~
 | Product COGS | 354.47 [expenses.md@2026-09-22] | 48 | ⌈354.47 ÷ 48⌉ = **8 users** |
 | All-in | ≥1,294.32 [expenses.md@2026-09-23] | 48 | **≥27 users** (⌈1,294.32 ÷ 48⌉ = ⌈26.97⌉ = 27 on the measured floor) |
 
-COGS rounds up to **8 users** at both prices. The measured all-in floor is **27 users** at both $49 gross and $48 net. Stripe fee drag no longer splits the count, because both quotients (26.41 and 26.97) round up to the same integer. It had split 16 / 17 on the pre-fleet $778.32 floor. The claude-eval cron fleet is now measured and booked at its pre-#8611 funded-day run-rate (the 2026-09-23 #8611 fleet note). All-in is still a floor, because CI is unmetered and two HTTP-drawing crons are outside the fleet figure. If #8611's ~$208/mo post-fix projection holds, all-in is ≥$986.32 and the break-even is **21 users** at both prices (⌈20.13⌉ / ⌈20.55⌉).
+COGS rounds up to **8 users** at both prices. The measured all-in floor is **27 users** at both $49 gross and $48 net. Stripe fee drag no longer splits the count, because both quotients (26.41 and 26.97) round up to the same integer. It had split 16 / 17 on the pre-fleet $778.32 floor. The claude-eval cron fleet is now measured and booked at its pre-#8611 funded-day run-rate (the 2026-09-23 #8611 fleet note). All-in is still a floor, because CI is unmetered and two HTTP-drawing crons are outside the fleet figure. If #8611's ~$208/mo post-fix projection holds (previously metered sites only; the whole fleet is more likely ~$240–340/mo once daily-triage and follow-through are metered and the calendar mix is normalised), all-in is ≥$986.32 and the break-even is **≥21 users** at both prices (⌈20.13⌉ / ⌈20.55⌉) — a lower bound.
 
 ## Scaling Triggers
 

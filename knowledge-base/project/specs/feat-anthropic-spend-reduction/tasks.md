@@ -45,12 +45,13 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 ## Phase 5 — Alerts, ADR, C4, ledger
 
-- [x] 5.1 Add the 524 (plus the S7 literal), burn ($15/day, nested path, `"SOLEUR_CLAUDE_COST":true` key match, `cron:` sources) and stuck-at-zero explorations and alerts to `betterstack-logs-alerts.tf`. Aggregates only; no `PRIORITY` filter; confirm the 86400 `query_period`.
+- [x] 5.1 (burn threshold raised to $25 at review) Add the 524 (plus the S7 literal), burn ($15/day, nested path, `"SOLEUR_CLAUDE_COST":true` key match, `cron:` sources) and stuck-at-zero explorations and alerts to `betterstack-logs-alerts.tf`. Aggregates only; no `PRIORITY` filter; confirm the 86400 `query_period`.
 - [x] 5.2 (no edge rule added; ADR-243 Consequences records the accepted exposure) Add `-target=` lines for every new resource to `apply-web-platform-infra.yml`; reconcile every other `logtail_exploration` consumer; add the Cloudflare edge rule only if the custom-rule quota allows.
 - [x] 5.3 Write `test/infra/inngest-step-524-alert.test.sh` (Guard 2 rows 1–6); register it in `infra-validation.yml`; `terraform validate`; add `scripts/probe-inngest-524-count.sh` (prints `count=<n>`).
 - [x] 5.4 Write ADR-243 (re-verify the ordinal across all `origin/*` refs) and amend ADR-033, covering the spike result, alternatives, streaming contract, single-flight (AP-013), cap table, throttle and alert thresholds.
 - [x] 5.5 Fix the C4 edge in `model.c4`, regenerate `model.likec4.json`, and run the five C4 tests.
 - [x] 5.6 Update `knowledge-base/operations/expenses.md` and `knowledge-base/finance/cost-model.md` with the `cost_usd`-derived funded-day figure (~$17/day, ~$516/month pre-fix).
+- [x] 5.8 Review panel (14 seats) fixes applied: substrate-owned `--max-budget-usd`, 2 h settled-result window + key-collision refusal, `budget-capped` fatal class, leader-loop marker `turn`/`attempt`, stream-detach drop attribution, Guard 2 hardening, caps re-derived (n=1 = no data), docs sweep.
 - [ ] 5.7 CPO sign-off recorded (approved with conditions); confirm S7/S8 results satisfy it.
 
 ## Phase 6 — Post-merge check (in `soleur:ship`, once credit is present)

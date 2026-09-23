@@ -205,3 +205,7 @@ but its 401 travels inside the streamed JSON envelope: the HTTP status line of e
 including an unsigned one (spike: 201 + `x-inngest-sdk` headers, envelope `status: 401`, no function
 ran). `signature-verify.test.ts` asserts the envelope. Anything that reads the HTTP status of
 `/api/inngest` POSTs as the signature verdict must read the envelope instead.
+
+The SDK is now pinned **exactly** at `inngest` `3.54.2` (ADR-243 §1: its `createStream` heartbeat
+leak is worked around by `server/inngest/stream-detach.ts` and content-hash-pinned in that module's
+test), superseding the Context's `inngest@^3` range. The v4 upgrade is #8628.

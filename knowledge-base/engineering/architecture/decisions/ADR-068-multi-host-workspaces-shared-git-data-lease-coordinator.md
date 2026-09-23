@@ -1421,3 +1421,8 @@ plaintext git object data paged out from under the LUKS posture the whole `git_d
 apparatus exists to establish. Encrypted swap (random-key dm-crypt) would work but adds a
 second crypt device to a host already barred from ADR-115's reboot primitive. **Bound memory
 instead** — which is what `MemoryMax=`/`MemorySwapMax=0` on the gc unit do.
+
+## Amendment — 2026-09-23 (#8611, ADR-243)
+
+Adding a second host that serves `/api/inngest` step calls reopens ADR-243 §2 (the process-local
+single-flight guard that stops duplicate paid Claude sessions assumes one step-executing host).
