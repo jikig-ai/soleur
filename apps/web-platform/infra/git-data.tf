@@ -510,7 +510,7 @@ resource "hcloud_server" "git_data" {
   # AND NOTHING WOULD REPORT IT. The Doppler install runcmd has no `set -e`, and the LUKS
   # block's `set -euo pipefail` is line 1 of the heredoc that `doppler run` EXECUTES — so
   # if the binary is missing or wrong-arch it never runs at all. The boot "succeeds" with
-  # /mnt/git-data-luks unmounted: at-rest encryption absent while every artifact claims it
+  # /mnt/git-data unmounted: at-rest encryption absent while every artifact claims it
   # is present. `runcmd` is once-per-instance so no reboot repairs it, and ADR-115
   # excludes git-data from the reboot primitive anyway — the host must be REPLACED.
   #
@@ -544,9 +544,13 @@ resource "hcloud_volume" "git_data" {
   }
 }
 
+# (#8211) automount = false, matching rung2-rehearsal/rehearsal.tf and the provider default (so
+# the plan shows no change). Since #8211 nothing mounts this plaintext volume after boot: the
+# bootstrap only mounts it read-only, briefly, to prove it holds no repository.
 resource "hcloud_volume_attachment" "git_data" {
   volume_id = hcloud_volume.git_data.id
   server_id = hcloud_server.git_data.id
+  automount = false
 }
 
 # --- Deny-all PUBLIC ingress firewall ----------------------------------------

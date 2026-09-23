@@ -16,7 +16,11 @@ whether it worked (`hr-no-ssh-fallback-in-runbooks`).
 The real cutover does not exist yet. It is blocked on all of:
 
 - **#8211** — rebuild the real modes on real mechanisms (freeze model, same-version redeploy, rollback
-  split, `web-1-swap` membership, the endpoint guard for the copy).
+  split, `web-1-swap` membership, the endpoint guard for the copy). **Split in two.** PR1 (PR #8564,
+  ADR-239) moves the store onto the LUKS mapper at boot and ships the store assertion; it builds no
+  real mode. The real modes (`proof`, `flip`, and a flag-off-only `rollback`) are PR2, which also
+  carries the ADR-220 D6 fresh replace with its `GIT_DATA_LUKS_KEY` and volume rotation. See
+  [The LUKS-serving render](#the-luks-serving-render-pr1-of-8211).
 - **#8209** — evict the repo-secret-reachable credentials from `prd_terraform` (its own ADR).
 - **#7226 / #5914** — pin the SSH host keys of web-1 and git-data (ADR-237). Staged; the open items
   are the [host-key pinning post-merge sequence](#host-key-pinning-post-merge-sequence-7226-5914)
@@ -180,10 +184,15 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
    `pinned web-1 ecdsa-sha2-nistp256 SHA256:ARBTzhY4hCGXKwWZ2j9aOc4zZefBYgAxJncoVglvuok` and
    `workspaces-luks re-assert PASSED`.
 2. **Rung-2 re-rehearsal, then the evidence-only PR.** Dispatch `git-data-rung2-rehearsal.yml`
-   (`REHEARSE-GIT-DATA`, `dry_run=false`, `--ref main`) right after merge, then land its evidence in an
+   (`REHEARSE-GIT-DATA`, `dry_run=false`, `--ref main`), then land its evidence in an
    evidence-only PR ([two-PR sequence](git-data-rung2-rehearsal.md#changing-the-payload-the-two-pr-sequence);
    PR #8511 is the payload PR and deleted the old evidence file). Until that PR merges, **birth and
    replace refuse, including an emergency replace** — see "The rung-2 emergency-replace gap" below.
+   - **HELD until PR #8564 merges** (the operator ruling on DC-2, posted on #5914). PR #8564 changes
+     the same hash-bound payload, so a rehearsal dispatched for #8511 alone is voided by that merge.
+     One rehearsal after PR #8564 covers both payloads. It must read the values in
+     [The LUKS-serving render](#the-luks-serving-render-pr1-of-8211). This lengthens the gap in "The
+     rung-2 emergency-replace gap"; that is the accepted price of not paying for two rehearsals.
 3. **`git-data-host-replace`.**
    - The replace rotates the host key (`-replace` of `tls_private_key.git_data_host_ssh`),
      `git_data_boot_verify` passes (it includes the cloud-init boot proof that sshd serves exactly the
@@ -328,6 +337,119 @@ merge.
   host, and every pinned consumer fails `host_key_mismatch reason=changed`. Never use a pre-#8511 tag
   after step 3.
 
+## The LUKS-serving render (PR1 of #8211)
+
+PR #8564 makes the git-data render serve `/mnt/git-data` from the LUKS mapper `/dev/mapper/git-data`
+at boot. There is no plaintext/LUKS toggle, no runtime repoint, and no separate cutover run that
+moves the device. Why, what it costs, and which gaps are accepted: **ADR-239**. This section is only
+what to do.
+
+**The serving change is the ADR-237 step-3 replace.** It is the same `git-data-host-replace` that
+publishes the host-key pin — PR #8564 adds no second replace. It runs while `GIT_DATA_STORE_ENABLED`
+is off and the store holds no repository, and the fresh host comes up on the mapper.
+
+**The #8511 rung-2 re-rehearsal is held until PR #8564 merges.** PR #8564 changes the hash-bound
+payload, so it voids any evidence rehearsed for #8511 alone. Rehearsing #8511 first would buy a
+rehearsal that PR #8564's merge immediately invalidates. The hold is posted on #5914; it replaces
+"dispatch the rehearsal right after merge" in host-key post-merge step 2. One rehearsal on `main`,
+after PR #8564 merges, covers both payloads and serves both ADR-237 post-merge step 2 and PR
+#8564's own gate.
+
+The rehearsal must read, in `boot_complete`:
+
+```text
+luks_mounted=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes
+```
+
+and its reboot arm must read `luks_reopen_ok action=reopened target=/mnt/git-data`. Any other
+`target`, or any terminal boolean reading `no`, is a FAIL: see
+[the rehearsal runbook](git-data-rung2-rehearsal.md#the-pr-8564-payload-what-the-rehearsal-must-read).
+
+### Two reads to record before dispatching step 3
+
+Both are linked from the replace run's summary. Neither touches a host.
+
+1. **The flag is not `true`.** Dispatch `git-data-cutover.yml` from `main`. Before the replace it
+   refuses at the precheck with:
+
+   ```text
+   verdict=git_data_host_key_unavailable reason=absent
+   ```
+
+   That line is the proof. `git-data-flag-precheck.sh` reads `GIT_DATA_STORE_ENABLED` and refuses
+   `flag_already_true` **before** it reads the pin, so reaching the pin refusal means the flag was
+   not `true`.
+
+2. **The flag has never been `true`, for the CLO record.** Page back through the config log until
+   the oldest entry predates the host's birth (2026-09-14):
+
+   ```bash
+   doppler configs logs -p soleur -c prd --page 1 --number 100
+   doppler configs logs get <log-id> -p soleur -c prd
+   ```
+
+   Open any entry naming `GIT_DATA_STORE_ENABLED`. Record the oldest date the paging reached, so
+   the record says how far back the evidence goes rather than implying it is unbounded.
+
+### Boot order on the replace: what is already published when the poll reds
+
+Measured against `apply-web-platform-infra.yml`, `git-data.tf` and
+`.github/actions/dispatch-web-redeploy/source-run-gate.sh`, not asserted from the plan:
+
+- In job `git_data_host_replace`, the step `Terraform apply (git-data-host -replace)` (id `apply`)
+  runs **before** the step `Poll for the git-data boot-completion signal (replace)` (id `poll`).
+  `doppler_secret.git_data_ssh_host_key` carries `depends_on = [hcloud_server.git_data]` and is
+  written by that apply. **So a red boot poll leaves the new pin already published to `prd`.**
+- `git-data-pin-redeploy.yml` triggers on the apply workflow's `workflow_run` `completed`, whatever
+  the conclusion, so the follower run does start. Its gate then reads the source run's job
+  conclusions and proceeds **only** when `git_data_host_replace` concluded `success`. A boot-poll
+  red fails that job, so `source-run-gate.sh` emits a `::warning::` and skips: **the redeploy does
+  not fire by itself.**
+- Recovery for that skip is a dispatch with **no** `source_run_id`, because passing the same id
+  re-reads the same non-success and skips again:
+
+  ```bash
+  gh workflow run git-data-pin-redeploy.yml --ref main
+  ```
+
+### If the fresh host fails a boot check after step 3
+
+Applies to `plaintext_unverified`, `plaintext_residue`, `luks_residue`, `fence_on_mapper=no` and
+`erasure_probe=no`.
+
+**Start with a read, never with another replace.** A second replace re-runs the same render against
+the same volumes and reproduces the same FATAL, while destroying the host whose boot events are the
+evidence.
+
+1. Read the host's boot events. Better Stack carries `stage:bootstrap` with the FATAL reason;
+   Sentry carries the same event through the `git_data_boot_fatal` rule:
+
+   ```bash
+   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+     --since '<replace dispatch, UTC>' --grep 'FATAL'
+   ```
+
+2. Count the Art. 17 refusals opened by the window. No marker was written, so every Delete Account
+   since the replace was **refused** — the deletion itself completed and nothing was left behind,
+   because the store is empty, but each refusal is an Art. 17 event. Sweep the repository ids with
+   the query under [Store not empty](#store-not-empty-store_not_empty) (step 3), widening its period
+   to the replace dispatch, reading `extra.gitDataRepoId`.
+3. **The fix is forward: PR, then rehearsal, then the evidence PR, then the replace.** That is hours
+   to days. There is no shortcut, and the decision to hold or proceed is the operator's.
+4. **There is no revert to a pre-PR1 tag.** Any tag without PR #8564 must also postdate PR #8511
+   (see "The rung-2 emergency-replace gap"), and no rung-2 evidence exists for #8511's template
+   alone — so such a tag cannot be birthed or replaced either. A pre-#8511 tag is worse still: it
+   publishes no pin, and after step 3 every pinned consumer then fails `host_key_mismatch
+   reason=changed`.
+5. After the forward fix lands and a green replace reports `boot_complete` with every terminal
+   boolean `yes`, **re-drive each swept id** and record each one on the Art. 17 record, so the
+   register shows a discharge and not only a refusal.
+
+`plaintext_residue` is the one branch that is not forward-only: the plaintext volume holds something,
+it is retained and was only ever mounted read-only, so nothing has been lost. Stop, escalate to the
+CLO, bump **#8571** (copy mode), and block the wipe until that decision is taken. Do not wipe either
+volume — the contents are the evidence.
+
 ## Verdict map
 
 | Where you are | What the run reads | What to do |
@@ -359,13 +481,19 @@ merge.
 | The `prd` read token is empty | `verdict=flag_token_absent` (exit 5) | The `DOPPLER_TOKEN_PRD` repo secret is unset or not passed to this run. Restore it, then re-dispatch. |
 | The flag read failed | `verdict=flag_read_failed reason=<word>` (exit 5) | `network`: re-dispatch. `auth_invalid`, `forbidden`, `config_not_found`, `scope_mismatch`: the token behind `DOPPLER_TOKEN_PRD` is revoked, lacks `prd` read, or resolves another config; replace it, then re-dispatch. `unknown`: re-dispatch once, then open an issue. |
 | The flag is already on | `verdict=flag_already_true` (exit 5) | **Incident.** See "Flag already on" below. |
-| The store root is not mounted on a device | `verdict=old_store_unmounted` (exit 5) | The plaintext volume is not mounted. Read the host's git-data boot events in Sentry before anything else, then re-dispatch the replace; both volumes are retained. |
-| The store root is already the LUKS mapper | `verdict=already_cut_over` (exit 5) | Something repointed the mount outside the cutover. Open an incident. |
+| The store root is not mounted on a device | `verdict=old_store_unmounted` (exit 5) | Read the host's git-data boot events in Sentry before anything else; both volumes are retained. **Before** the step-3 replace this means the plaintext volume did not mount, and the remedy is to re-dispatch the replace. **After** it, the mapper did not mount, which is a boot FATAL: follow "If the fresh host fails a boot check after step 3" and do not re-dispatch a replace first. |
+| The store root is already the LUKS mapper, **after** the ADR-237 step-3 replace | `verdict=already_cut_over` (exit 5) | **Expected until PR2.** PR #8564 makes the mapper the serving device from boot, and the dry run still asks the pre-PR1 question. PR2 generalizes `proof` to read it as a pass. Nothing to do. |
+| The store root is already the LUKS mapper, **before** the step-3 replace | `verdict=already_cut_over` (exit 5) | The live host predates PR #8564 and should still be serving the plaintext volume, so something changed the mount outside the render. Open an incident. |
 | The store holds repositories | `verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. |
 | A probe could not be answered | `verdict=probe_failed rc=<n>` (exit 5) | `rc=124`: the 30 s bound expired; re-dispatch. `rc=255`: ssh transport failed; read the heartbeat, then re-dispatch. `rc=141`: the answer was larger than the cap. `rc=96`: the answer did not match the expected pattern. Any `probe_failed` from the store-empty probe can also mean the store root changed device between probes, is a dangling symlink, or has no repositories directory. None of these is transient, and an empty store on its expected device produces none of them: do not re-dispatch in a loop; open an incident. No `rc`: the first probe left nothing for the second to compare; re-dispatch once. |
 | The pre-receive fence is not intact | `verdict=fence_not_intact reason=<word>` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
 | The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_<name>` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
-| A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do; the real cutover is #8211. |
+| A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do; the real modes are PR2 of #8211. |
+| The fresh host could not verify the retained plaintext volume | Better Stack / Sentry `stage:bootstrap` `FATAL: plaintext_unverified reason=<mount\|source\|journal\|umount>` | The volume was mounted read-only or not at all, so nothing was written and nothing was lost. No store marker exists, so every erasure refuses. `reason=journal` is the known dirty-journal gap the rehearsal cannot reproduce (ADR-239). Follow "If the fresh host fails a boot check after step 3". |
+| The retained plaintext volume holds repository entries | `FATAL: plaintext_residue count=<n>` | **Stop.** The data is read-only on a retained volume. Escalate to the CLO, bump #8571 (copy mode) and block the wipe. Do not wipe or replace. See the residue paragraph in "If the fresh host fails a boot check after step 3". |
+| The LUKS volume itself holds repository entries | `FATAL: luks_residue count=<n>` | An adopted volume carries content this register has not recorded. No marker is written and the host serves nothing. Treat it as "Store not empty": open an incident and route it to the CLO before any erasure or wipe. |
+| The pre-receive fence did not land on the mapper | `FATAL: fence_on_mapper=no`, and `boot_complete` `fence_on_mapper=no` | The hooks landed under the mountpoint instead of on the serving device, so a push would run an unfenced hook. No marker is written. Forward fix; follow "If the fresh host fails a boot check after step 3". |
+| The boot erasure self-probe failed | `FATAL: erasure_probe=no`, and `boot_complete` `erasure_probe=no` | The bootstrap removed the marker before the FATAL, so the Art. 17 path is fail-closed rather than silently broken. Forward fix, and sweep and re-drive the refused ids; follow "If the fresh host fails a boot check after step 3". |
 
 L3 and L7 are different faults: L3 is reachability (NIC, sshd, host), L7 is authorization (the key).
 Read the private-NIC heartbeat before treating an L7 verdict as a key problem.

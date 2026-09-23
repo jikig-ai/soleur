@@ -349,6 +349,94 @@ PY
     else
       fail "the strip damaged ${n_bad} rendered payload(s)" "$(grep '^BAD ' <<<"$shebang_out" | head -6)"
     fi
+
+    # ── 3b. (#8211, ADR-239) THE SERVED LAYOUT, read off the RENDER ───────────────────
+    #
+    # Read here rather than off the template because this is the document the host is handed:
+    # a strip or an interpolation that dropped one of these lines would leave the template
+    # correct and the boot wrong. Before #8211 the render mounted the PLAINTEXT volume by a raw
+    # by-id glob at /mnt/git-data, gave it an fstab line, and parked the LUKS mapper beside it at
+    # /mnt/git-data-luks — so the store every script acts on was the unencrypted one while every
+    # artifact attested encryption. Each arm below is one half of that state.
+    #
+    # `layout_sites` is the set of lines that MOUNT, CREATE or REGISTER a mountpoint. Scoping to
+    # it keeps the /mnt/git-data-luks arm honest: the boot emitter's redaction pattern names the
+    # pre-#8211 path on purpose (it must still redact repository paths from an older host's
+    # rows), and a blanket grep would read that as a layout regression.
+    layout_sites() {
+      grep -nE '(^|[^[:alnum:]_.-])(mount|mountpoint|mkdir)([[:space:]]|$)|>>[[:space:]]*/etc/fstab' "$1"
+    }
+    _sites="$(layout_sites "$RENDER" || true)"
+
+    CASES=$((CASES + 1))
+    _fstab="$(grep -nE '>>[[:space:]]*/etc/fstab' "$RENDER" || true)"
+    _n_fstab="$(printf '%s' "$_fstab" | grep -c . || true)"
+    if [[ "$_n_fstab" -eq 1 ]] \
+       && printf '%s\n' "$_fstab" | grep -qF '/dev/mapper/git-data /mnt/git-data ext4'; then
+      pass "the render writes EXACTLY ONE fstab line, and it is /dev/mapper/git-data at /mnt/git-data"
+    else
+      fail "the render's fstab appends are not the single mapper line" \
+        "n=${_n_fstab} lines=[$(printf '%s' "$_fstab" | tr '\n' '/')]"
+    fi
+
+    CASES=$((CASES + 1))
+    _legacy="$(printf '%s\n' "$_sites" | grep -F '/mnt/git-data-luks' || true)"
+    if [[ -z "$_legacy" ]]; then
+      pass "no layout site names the pre-#8211 /mnt/git-data-luks"
+    else
+      fail "a mount/mkdir/fstab site still names /mnt/git-data-luks" "$(printf '%s' "$_legacy" | head -4)"
+    fi
+
+    CASES=$((CASES + 1))
+    _ptfstab="$(grep -nE '>>[[:space:]]*/etc/fstab' "$RENDER" | grep -F 'scsi-0HC_Volume_' || true)"
+    if [[ -z "$_ptfstab" ]]; then
+      pass "no fstab line for a by-id block device — nothing remounts the plaintext volume after boot"
+    else
+      fail "the render writes an fstab line for a by-id device" "$(printf '%s' "$_ptfstab" | head -4)"
+    fi
+
+    CASES=$((CASES + 1))
+    # A raw glob is the #6604 shape: `mount /dev/disk/by-id/scsi-0HC_Volume_* …` binds whichever
+    # device the shell expands first, with no discriminator. The bootstrap's `for dev in …` LUKS
+    # selection loop is not a mount and is deliberately not matched.
+    _glob="$(grep -nE '(^|[^[:alnum:]_.-])mount[[:space:]][^|;&]*scsi-0HC_Volume_\*' "$RENDER" || true)"
+    if [[ -z "$_glob" ]]; then
+      pass "no raw-glob mount of a by-id block device"
+    else
+      fail "the render mounts a scsi-0HC_Volume_* glob" "$(printf '%s' "$_glob" | head -4)"
+    fi
+
+    CASES=$((CASES + 1))
+    # Every mount whose TARGET is the served root must source the mapper. This is the arm that
+    # would have caught the pre-#8211 render directly.
+    _at_root="$(grep -nE '(^|[^[:alnum:]_.-])mount[[:space:]][^|;&]*[[:space:]]/mnt/git-data([[:space:]]|$)' "$RENDER" || true)"
+    _bad_root="$(printf '%s\n' "$_at_root" | grep -v '/dev/mapper/git-data' | grep -E '.' || true)"
+    if [[ -n "$_at_root" && -z "$_bad_root" ]]; then
+      pass "every mount at /mnt/git-data sources /dev/mapper/git-data ($(printf '%s' "$_at_root" | grep -c .) site(s))"
+    else
+      fail "a mount at /mnt/git-data does not source the mapper, or none exists at all" \
+        "at_root=[$(printf '%s' "$_at_root" | tr '\n' '/')] bad=[$(printf '%s' "$_bad_root" | tr '\n' '/')]"
+    fi
+
+    # ── 3c. Both render branches fit under the Hetzner cap ─────────────────────────────
+    #
+    # The plaintext volume id is interpolated into user_data, so the render has two branches:
+    # attached (the birth state) and detached (where the host ends up). The budget gate only
+    # ever measured the first. Measured through the budget script's own seam, so this arm and
+    # the gate cannot disagree about what "the render" is.
+    CASES=$((CASES + 1))
+    _b_set="$(bash "$BUDGET" --json 2>/dev/null || true)"
+    _b_empty="$(GIT_DATA_BUDGET_VOLUME_ID="" bash "$BUDGET" --json 2>/dev/null || true)"
+    _s_set="$(sed -n 's/.*"stored":\([0-9]*\).*/\1/p' <<<"$_b_set")"
+    _s_empty="$(sed -n 's/.*"stored":\([0-9]*\).*/\1/p' <<<"$_b_empty")"
+    _cap="$(sed -n 's/.*"cap":\([0-9]*\).*/\1/p' <<<"$_b_set")"
+    if [[ -n "$_s_set" && -n "$_s_empty" && -n "$_cap" ]] \
+       && [[ "$_s_set" -lt "$_cap" && "$_s_empty" -lt "$_cap" ]]; then
+      pass "both render branches are under the ${_cap} B cap (volume id set ${_s_set} B, empty ${_s_empty} B)"
+    else
+      fail "a render branch is over the Hetzner cap, or could not be measured" \
+        "set=${_s_set:-unmeasured} empty=${_s_empty:-unmeasured} cap=${_cap:-unmeasured}"
+    fi
   fi
 fi
 
@@ -424,16 +512,17 @@ fi
 # nobody read before exit, the suite printed a clean total and exited 0. A floor enforced
 # through the suspect cannot witness the suspect.
 #
-# Zero headroom against the current count (10 unconditional arms + the render arm + arm 4's
-# four probes = 15), so any deletion is loud — and so is a silently skipped conditional arm,
-# because a skipped arm never increments. Ratchet when adding arms.
-if [[ "$CASES" -lt 15 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= 15.\n' "$CASES" >&2
+# Zero headroom against the current count (10 unconditional arms + the render arm + arm 3b's
+# five layout arms + arm 3c's two-branch budget arm + arm 4's four probes = 21), so any deletion
+# is loud — and so is a silently skipped conditional arm, because a skipped arm never
+# increments. Ratchet when adding arms.
+if [[ "$CASES" -lt 21 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= 21.\n' "$CASES" >&2
   printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
   printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 15)\n' "$CASES"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 21)\n' "$CASES"
 
 printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
