@@ -4,7 +4,7 @@
 //
 // Canonical on-disk format of the compiled LikeC4 model (model.likec4.json),
 // shared by all three writers so they emit byte-identical files (ADR-235):
-//   - scripts/regenerate-c4-model.sh            (via c4-canonical-cli.mjs)
+//   - plugins/soleur/scripts/render-c4-model.sh (via c4-canonical-cli.mjs)
 //   - apps/web-platform/server/c4-render.ts      (via the apps/ mirror)
 //   - plugins/soleur/scripts/generate-c4-from-components.ts
 //

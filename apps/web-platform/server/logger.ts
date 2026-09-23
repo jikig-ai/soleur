@@ -1,6 +1,7 @@
 import pino from "pino";
 import * as Sentry from "@sentry/nextjs";
 
+import { redactEmailAddresses, redactErrorForEmit } from "./pii-redact";
 import { REDACT_PATHS } from "./sensitive-keys";
 import { renameUserIdToHash } from "./userid-pseudonymize";
 
@@ -81,6 +82,41 @@ function mirrorToSentry(
   }
 }
 
+// Value-based address redaction on the way IN (#8532 PR-0). `REDACT_PATHS`
+// matches key NAMES, so an address inside a string value — most often an
+// `err.message` echoed by a vendor SDK — reached journald, Better Stack and
+// (through mirrorToSentry) Sentry verbatim. This runs in the logMethod hook,
+// BEFORE mirrorToSentry and before pino renders, so every logger in this
+// module and every createChildLogger child is covered. Only top-level string
+// values and the `err`/`error` keys are walked: this is the hot path.
+export function redactLogArgs(args: unknown[]): unknown[] {
+  try {
+    return args.map((arg) => {
+      if (typeof arg === "string") return redactEmailAddresses(arg);
+      if (arg instanceof Error) return redactErrorForEmit(arg);
+      if (typeof arg !== "object" || arg === null || Array.isArray(arg)) return arg;
+      let out: Record<string, unknown> | null = null;
+      for (const [k, v] of Object.entries(arg as Record<string, unknown>)) {
+        const r =
+          k === "err" || k === "error"
+            ? redactErrorForEmit(v)
+            : typeof v === "string"
+              ? redactEmailAddresses(v)
+              : v;
+        if (r !== v) {
+          out ??= { ...(arg as Record<string, unknown>) };
+          out[k] = r;
+        }
+      }
+      return out ?? arg;
+    });
+  } catch {
+    // A throwing getter on a caller's object. Losing the log line would lose
+    // the error context the caller was recording; emit it as given.
+    return args;
+  }
+}
+
 // `REDACT_PATHS` is derived from a single sensitive-key list shared with
 // the Sentry scrubber (`./sensitive-keys`). Pino's `fast-redact` has no
 // recursive wildcard, so each canonical key is enumerated at top level
@@ -122,16 +158,14 @@ const logger = pino({
   hooks: {
     logMethod(args, method, levelNum) {
       const levelName = pino.levels.labels[levelNum] ?? "info";
-      mirrorToSentry(levelNum, levelName, args);
+      const safeArgs = redactLogArgs(args as unknown[]);
+      mirrorToSentry(levelNum, levelName, safeArgs);
       // method is the level-bound pino fn (e.g., logger.warn); apply
       // forwards args verbatim. The Pino types expect a fixed-shape array;
       // we pass through the same args we received.
       // eslint-disable-next-line prefer-rest-params -- pino's hook
       // contract gives args as a tuple; .apply is the documented form.
-      return (method as (...a: unknown[]) => void).apply(
-        this,
-        args as unknown as unknown[],
-      );
+      return (method as (...a: unknown[]) => void).apply(this, safeArgs);
     },
   },
   // Single source of truth for `userId` → `userIdHash` pseudonymisation at
