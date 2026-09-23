@@ -219,8 +219,9 @@ skipped whenever a brainstorm exists, and it is not B4's named target.
   `brainstorm-techniques/references/phase-boundaries.md`.
 - A flow map in `go.md`. `go.md` holds the eval-gated routing table, and P6 needs only the listing
   surface.
-- A new test asserting the map. The existing per-block `components.test.ts` assertion plus AC4's
-  parity check cover it (Sharp Edges: ≤3-file static invariants need no new infrastructure).
+- A new test asserting the map. AC4's parity check covers it during work and review; no CI check
+  pins the three copies byte-identical (the per-block `components.test.ts` assertion checks only
+  `operator-*`). Accepted per decision-challenge T5.
 - The repo-level finding, `unknown`, the two-finding cap, the second template and the
   open-decision count. See "Plan review, applied" above.
 
@@ -339,6 +340,13 @@ note into step 3.6's last bullet ("Report it with step 5's template as `Rule vio
 guardrail)`") and shortened the step-4, Error-to-Workflow and headless clauses. Every clause and AC
 anchor is kept, and the result is 56839 bytes. The ceiling was not raised.
 
+**Review-round amendment.** The compression above dropped the "not already attached to a
+deviation" condition while step 3.6's scope still took in step-3 deviations, which four review
+seats traced to a double proposal and a wrong `Rule violated` label. Review narrowed step 3.6 to
+Phase 0.5 recurring code/config items only, reverted step 4 to its original text, and put the
+`Existing enforcement: unwired: <check>` or `none` field back into step 3.6's report clause. Step 5
+itself is not edited: the template note lives in step 3.6. The file is 56815 bytes.
+
 ### 3. B12b: help composition map
 
 In each of the three harness blocks, add this section inside the fenced `text` block, between the
@@ -395,7 +403,7 @@ error_reporting:
   fail_loud: true
 failure_modes:
   - mode: the help map drifts between the three harness blocks
-    detection: the AC4 cmp parity command, plus the components.test.ts per-block assertion
+    detection: the AC4 cmp parity command (run during work and review; no CI check pins it)
     alert_route: a red AC during soleur:work and review
   - mode: the compound edit moves the step-8 rule-threshold sentinel
     detection: scripts/lint-agents-compound-sync.sh

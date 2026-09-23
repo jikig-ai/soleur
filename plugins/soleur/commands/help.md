@@ -69,14 +69,15 @@ WORKFLOW SKILLS (invoked via /soleur:go or directly via Skill tool):
 
 HOW THE SKILLS FIT TOGETHER:
   Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
-               (go starts at brainstorm by default; qa for UI changes and
-               compound for learnings run between review and ship)
-  On-ramps:    one-shot              go sends fixes and scoped builds; plan to ship
-               drain-labeled-backlog runs one-shot over a labeled issue backlog
+               (go starts at brainstorm by default; qa runs the plan's test
+               scenarios and compound captures learnings between review and ship)
+  On-ramps:    one-shot              plan through postmerge in one run (go sends
+                                     fixes and scoped builds here)
+               drain-labeled-backlog one-shot on one code-area cluster of a backlog
                drain-prs             takes open PRs through review to merge
                product-roadmap       its "next" step says where to enter the flow
   Standalone:  most other skills run on their own, for example the legal, flag,
-               cron and operator families, incident, invoice and community
+               cron and operator families, invoice and community
 
 AGENTS: [N] agents across [M] categories
   review    ([count])  Code review, security, performance, patterns
@@ -122,14 +123,15 @@ WORKFLOW SKILLS (invoked via /soleur:go or directly as /soleur:<skill>):
 
 HOW THE SKILLS FIT TOGETHER:
   Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
-               (go starts at brainstorm by default; qa for UI changes and
-               compound for learnings run between review and ship)
-  On-ramps:    one-shot              go sends fixes and scoped builds; plan to ship
-               drain-labeled-backlog runs one-shot over a labeled issue backlog
+               (go starts at brainstorm by default; qa runs the plan's test
+               scenarios and compound captures learnings between review and ship)
+  On-ramps:    one-shot              plan through postmerge in one run (go sends
+                                     fixes and scoped builds here)
+               drain-labeled-backlog one-shot on one code-area cluster of a backlog
                drain-prs             takes open PRs through review to merge
                product-roadmap       its "next" step says where to enter the flow
   Standalone:  most other skills run on their own, for example the legal, flag,
-               cron and operator families, incident, invoice and community
+               cron and operator families, invoice and community
 
 AGENTS: [N] agents across [M] categories
   review    ([count])  Code review, security, performance, patterns
@@ -175,14 +177,15 @@ WORKFLOW SKILLS (invoked via /go or directly via slash command):
 
 HOW THE SKILLS FIT TOGETHER:
   Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
-               (go starts at brainstorm by default; qa for UI changes and
-               compound for learnings run between review and ship)
-  On-ramps:    one-shot              go sends fixes and scoped builds; plan to ship
-               drain-labeled-backlog runs one-shot over a labeled issue backlog
+               (go starts at brainstorm by default; qa runs the plan's test
+               scenarios and compound captures learnings between review and ship)
+  On-ramps:    one-shot              plan through postmerge in one run (go sends
+                                     fixes and scoped builds here)
+               drain-labeled-backlog one-shot on one code-area cluster of a backlog
                drain-prs             takes open PRs through review to merge
                product-roadmap       its "next" step says where to enter the flow
   Standalone:  most other skills run on their own, for example the legal, flag,
-               cron and operator families, incident, invoice and community
+               cron and operator families, invoice and community
 
 AGENTS: [N] agents across [M] categories
   (same category breakdown as Claude block)

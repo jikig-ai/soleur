@@ -7,8 +7,8 @@ recorded here so `ship` can surface them.
 
 - **Suggestion:** after about 5 brainstorm questions, offer the founder a "park the rest?" option.
 - **Why it was not applied:** it uses one of `AskUserQuestion`'s 4 option slots on every question
-  past the threshold, and a fixed threshold is a product-taste call. The plan already shows the
-  count of open decisions, and an early "proceed" already parks everything that remains.
+  past the threshold, and a fixed threshold is a product-taste call. An early "proceed" already parks
+  everything that remains.
 
 ## T2: label the help-map rows by goal (CPO, taste)
 

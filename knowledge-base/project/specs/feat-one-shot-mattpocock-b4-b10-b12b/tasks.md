@@ -20,7 +20,7 @@ Plan: `knowledge-base/project/plans/2026-09-23-feat-mattpocock-audit-b4-b10-b12b
 - [x] 2.3 B10: in `plugins/soleur/skills/compound/SKILL.md` Phase 1.5, insert step 3.6. The
   paragraph lead is followed by a blank line and flat bullets. Scope it to recurring code or
   config defects, and use the **covered** / **unwired** / **none** labels.
-- [x] 2.4 B10: edit steps 4, 5 and 7 and `### Empty Case`. Add the one clause in
+- [x] 2.4 B10: edit step 7 and `### Empty Case` (step 5's template is referenced from step 3.6; steps 4 and 5 unchanged after review). Add the one clause in
   `### Error-to-Workflow Feedback` and the two clauses in `### Constitution Promotion` (headless
   never auto-accepts; the interactive gate includes step-3.6 findings). Do not touch step 8.
 - [x] 2.5 B12b: add the byte-identical `HOW THE SKILLS FIT TOGETHER:` block to the Claude Code,
