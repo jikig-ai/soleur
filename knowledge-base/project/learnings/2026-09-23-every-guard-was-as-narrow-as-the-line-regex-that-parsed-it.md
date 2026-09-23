@@ -111,16 +111,19 @@ summary line has not been killed.
    unquoted or hyphenated labels, two keys per line, `override.tf`, denial phrasings, clause
    variants). Recovery: comment- and string-aware `hcl_views()`, loose clause detection, and new
    fixture families. **Prevention:** write the language's view and its grammar-shape fixtures
-   before any guard logic. This is routed to `work/SKILL.md` below.
+   before any guard logic. This is routed to `work/SKILL.md` (the parse-view bullet in the plan-reading list).
 2. **The mutation battery only deleted marked regions, so 17 survivors sat inside regexes, the
    splitter and gate derivation.** Recovery: semantic mutants MB-17 to MB-33. **Prevention:** the
    `review/SKILL.md` #7438 bullet already requires enumerating the battery's AXES. The author side
-   never read it, so the work-skill bullet below points the author at it before any battery is
-   claimed.
+   never read it. The routed `work/SKILL.md` bullet was cut to 208 bytes to fit the skill's size
+   ceiling, so it carries only the parse-view rule and does NOT point at #7438. The work skill has
+   about 20 bytes of headroom left (measured against `origin/main` on 2026-09-23), so the reviewer-side
+   rule stays the enforcement point.
 3. **`run_mutation` scored a missing end marker (a truncated mutant exits 0) and crashes as
    KILLED.** Recovery: unique-region, mutant-differs and summary-line checks, plus positive
-   controls. **Prevention:** the same routed bullet requires "prints its own summary line" as the
-   kill precondition.
+   controls. **Prevention:** the kill precondition ("the mutant prints the SUT's own summary line")
+   is already in `review/SKILL.md` (the #7438 bullet: a destroyed mutant otherwise reports PASS).
+   The routed work-skill bullet does not repeat it.
 4. **The first design-pass fix (a free-text `gated_by` field) was itself an unchecked-list
    bypass.** Recovery: `instances: []` plus a `reevaluate_when` derived from the block expression.
    **Prevention:** when fixing a "nothing checks X" finding, the fix must not add a new field that
