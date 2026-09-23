@@ -53,6 +53,28 @@ Live standing alarms over this source:
   `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row.
+- **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
+  `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
+  so the email names the condition, never a row:
+  - **`logtail_exploration_alert.inngest_step_524`** (every 300 s over 900 s) —
+    `soleur-inngest-step-524-prd`. Pages on any inngest-server journald row whose `message.error`
+    is `invalid status code: 524`: a step outlived Cloudflare's ~100 s origin timeout, and the
+    retry may have started a second paid Claude session. Readback, no pipe:
+    `doppler run -p soleur -c prd_terraform -- bash scripts/probe-inngest-524-count.sh` prints
+    `count=<n>` for the last 24 h. Then read the Inngest run for the cron that fired in that window,
+    and look for two `SOLEUR_CLAUDE_COST` markers with one `run_id`.
+  - **`logtail_exploration_alert.claude_cost_daily_burn`** (hourly, trailing 24 h) —
+    `soleur-claude-cost-daily-burn-prd`. Pages when the cron `SOLEUR_CLAUDE_COST` markers' summed
+    `cost_usd` exceeds **$15**. Rank the spend with the per-source SQL under
+    [Querying Anthropic cost markers](#querying-anthropic-cost-markers-soleur_claude_cost--_daily).
+    A single source far above its `--max-budget-usd` cap (`server/inngest/cron-budgets.ts`), or two
+    markers per run id, is the lead.
+  - **`logtail_exploration_alert.claude_cost_capture_dark`** (hourly, trailing 24 h) —
+    `soleur-claude-cost-capture-dark-prd`. Pages when 24 h holds no cron cost marker with a
+    non-null `cost_usd` AND no credit-probe RED row (`op=anthropic-credit-exhausted` /
+    `anthropic-key-invalid`). The marker path is broken (the emitter, Vector, or the field moved
+    again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
+    credit probe's Sentry monitor.
 - **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
