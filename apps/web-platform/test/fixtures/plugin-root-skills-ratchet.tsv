@@ -148,4 +148,4 @@
 5	plugins/soleur/skills/work/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 1	plugins/soleur/skills/work/SKILL.md	./scripts/dev.sh
 1	plugins/soleur/skills/work/SKILL.md	bash scripts/regenerate-c4-model.sh
-6	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh
+7	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh
