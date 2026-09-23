@@ -248,12 +248,42 @@ fi
 findings=0
 _finding() { findings=$((findings + 1)); printf '  %s\n' "$*"; }
 
+# THE HAND-OFF LEDGER. The per-rule loop below defers some declared names to the
+# frozen-rule pass instead of reporting them itself. A deferral is only safe if
+# something downstream actually classifies the name — and for one shape it does
+# not (see the reconciliation after the pin). Every deferral is recorded here and
+# reconciled at the end, so "handed off" can never read as "compared".
+handed_off=()
+
 echo "sentry_alert live fidelity: comparing ${ref_count} declared rule(s) against ${live_count} live in-scope rule(s)"
 
 # ── Per-rule, field-by-field ────────────────────────────────────────────────
 while IFS= read -r name; do
   [[ -n "$name" ]] || continue
   if ! jq -e --arg n "$name" 'has($n)' >/dev/null <<<"$live_proj"; then
+    # ABSENT FROM THE PROJECTION IS NOT ABSENT FROM SENTRY. `project_live` keeps
+    # every IN-SCOPE workflow, so a declared name that is missing here while the
+    # RAW payload still carries it means the live rule left the scope — it gained
+    # a trigger type the provider cannot express (Sentry CAN add one to an existing
+    # workflow; #8267 is the adjacent case, where Seer CREATED a workflow carrying
+    # one). That is a different failure with a
+    # different remedy: `DELETED or RENAMED` says "an apply can recreate it", and
+    # an apply is NOT a repair here. Hand it to the frozen-rule pass below, which
+    # reports it as MANAGED RULE GAINED EXCLUDED TRIGGER.
+    #
+    # THE DEFERRAL IS RECORDED, NOT ASSUMED. The census can only classify members
+    # of `$O`, which excludes every Terraform-FROZEN name — so a declared name
+    # whose live bearer is frozen lands in `$F`, is compared against the CAPTURE
+    # rather than against the reference, and emits nothing at all when it matches
+    # the capture. Measured: that shape printed `PASS (all 29 in-scope rules
+    # match …)` at rc=0 while 28 were compared, which is the silent-clean verdict
+    # this probe exists to prevent. The ledger plus the reconciliation after the
+    # pin is what makes the hand-off total; it is also what keeps the PASS line's
+    # `${ref_count}` honest, since an unreconciled deferral always emits.
+    if jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null <<<"$live_json"; then
+      handed_off+=("$name")
+      continue
+    fi
     _finding "DELETED or RENAMED: '$name' is declared in the Sentry root and absent from live Sentry. An apply can recreate a deleted rule; a rule renamed in the UI needs the name restored (Terraform owns \`name\`, so the next apply would otherwise create a SECOND rule)."
     continue
   fi
@@ -372,6 +402,13 @@ done < <(jq -r 'keys[]' <<<"$live_proj")
 #     not pinned (Sentry edits its own defaults; pinning one filed a P1 over a
 #     vendor change), so disabling or retargeting it is not detected here.
 #     Anything else = UNMANAGED-FROZEN.
+#   * MANAGED RULE GAINED EXCLUDED TRIGGER: a census member whose name the
+#     reference declares and which is the name of no IN-SCOPE live workflow. That
+#     is a Terraform-managed rule Sentry added an unmanageable trigger type to, so
+#     it left the projection scope: nothing above compares it any more. Reported
+#     before the KNOWN arm and excluded from the census tally — matching it as a
+#     "registered Sentry default" is exactly how it used to pass in silence. An
+#     apply does not repair it; the finding says what does.
 #
 # THE EXCLUDED SET IS READ FROM THE MODULE, not restated: the module carries a
 # main expression, so `include` is refused ("library should only have function
@@ -441,7 +478,8 @@ fi
 set +e
 frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson live "$live_json" \
     --argjson fz "$frozen_names_json" --slurpfile cap "$FROZEN_CAPTURE" \
-    --slurpfile vd "$VENDOR_DEFAULTS" '
+    --slurpfile vd "$VENDOR_DEFAULTS" \
+    --argjson refnames "$(jq -c 'keys' <<<"$ref_proj")" '
   def excl_type: [ .triggers.conditions[]?.type ] as $t | any($ex[]; . as $e | $t | index($e));
   # Key order is not data: the live API does not sort keys, and `tojson`
   # preserves insertion order (F13 reds without this canonicalisation). Every
@@ -459,11 +497,58 @@ frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson liv
   def fields: { triggerConditions: trig, triggerLogicType: .triggers.logicType,
                 frequency: (.config // {}).frequency, environment: .environment,
                 actionFilters: filt };
+  # LIVE STRINGS ARE SCRUBBED BEFORE THEY ARE PRINTED. The probe stdout is
+  # `cat`-ed verbatim into a PUBLIC issue body between ``` fences, and a workflow
+  # name is written by the vendor whose unilateral edits this probe exists to
+  # detect. Measured: a name carrying a newline terminates the finding line, and
+  # the remainder renders as markdown once it escapes the fence (a 3-space-indented
+  # fence closes it), and reaches the Actions runner as its own `::`-prefixed line.
+  # `_safe` already does this for the two env values; this is the same treatment
+  # for the values the API supplies. Cap well under the issue-body limit so one name cannot push the
+  # body past it and abort the filer.
+  def safe: tostring | gsub("[\u0000-\u001f\u007f\u2028\u2029]"; "") | .[0:200];
+  # {id, name} membership, used for KNOWN and for GAINED alike. BOTH sides are
+  # `tostring`-normalised, not only on the probe side: $KNOWN is built from
+  # `{id: (.id | tostring), …}` while $GAINED holds RAW live workflows, so a
+  # one-sided normalisation compares a number against a string and returns false
+  # for a member that IS present. Measured in jq: with a numeric id the raw form
+  # answers false where the string form answers true. The live API returns string
+  # ids today, so every fixture derived from the capture passes either way — which
+  # is exactly why this cannot be caught by a suite row.
+  def is_in($set): . as $w | any($set[]; (.id | tostring) == ($w.id | tostring) and .name == $w.name);
   $cap[0] as $CAP
-  | ([ ($CAP[] | {id: (.id | tostring), name}), ($vd[0][] | {id: (.id | tostring), name}) ]) as $KNOWN
+  # THE CAPTURE HALF OF KNOWN IS NARROWED to the capture entries this set is
+  # ABOUT: excluded-type, and not frozen in Terraform. Built from every capture
+  # entry (as it was), KNOWN held all 28 managed rules too — so a managed rule
+  # that left the scope, or one dropped from Terraform while still live, matched
+  # by {id, name} and was accepted in silence with rc=0, having been compared by
+  # nothing. The registry half is unchanged: those entries are excluded-type by
+  # construction (that is why they are registered) — asserted, not enforced here.
+  # The `$fz` clause is a structural invariant rather than a measured guard: every
+  # arm that consults $KNOWN requires `.name == $w.name` and every $w comes from
+  # $O, which already excludes frozen names, so dropping it is an equivalent
+  # mutation. It stays so the set means what its comment says it means.
+  | ([ ($CAP[] | select(excl_type and ((.name as $n | $fz | index($n)) | not)) | {id: (.id | tostring), name}),
+       ($vd[0][] | {id: (.id | tostring), name}) ]) as $KNOWN
+  | ($live | map(select(excl_type | not) | .name)) as $INSCOPE
   | ($live | map(select(.name as $n | $fz | index($n)))) as $F
   | ($live | map(select(excl_type and (.name as $n | $fz | index($n) | not)))) as $O
-  | "COUNT \([ $fz[] as $n | select(any($F[]; .name == $n)) ] | length) \($fz | length) \($O | map(select((.id | tostring) as $i | .name as $n | any($KNOWN[]; .id == $i and .name == $n))) | length)",
+  # GAINED: a census member whose name the reference DECLARES (so Terraform manages
+  # it) and which is the name of no in-scope live workflow. The second condition is
+  # what keeps a same-name excluded COPY of a healthy managed rule out of this arm —
+  # the managed rule itself never left scope, so that copy is still UNMANAGED-FROZEN.
+  | ($O | map(select(((.name as $n | $refnames | index($n)) != null)
+                     and ((.name as $n | $INSCOPE | index($n)) == null)))) as $GAINED
+  # The third field counts registered defaults ONLY: KNOWN and not GAINED, so the
+  # tally agrees with the finding arm, which puts GAINED before KNOWN. The case it
+  # covers is the REGISTRY half, which the narrowing above does not touch: a name
+  # carried by both alert-reference.json and vendor-default-workflows.json is
+  # reported as GAINED and would otherwise also be counted as a registered default.
+  # Against the CAPTURE half the subtraction is an equivalent mutation (the capture
+  # entry of a managed rule is not excluded-type, so it is not in $KNOWN) — measured
+  # 2026-09-23, mutation row 7 survived at 63/63, and no fixture instantiates the
+  # registry overlap, so that row says nothing about this clause either way.
+  | "COUNT \([ $fz[] as $n | select(any($F[]; .name == $n)) ] | length) \($fz | length) \($O | map(select(is_in($KNOWN) and (is_in($GAINED) | not))) | length)",
     ( $F | group_by(.name) | map(select(length > 1) | .[0].name)[]
       | "FINDING FROZEN DUPLICATE: \($q)\(.)\($q) names more than one live workflow; the pin cannot tell which one the capture describes." ),
     ( $fz[] as $n
@@ -485,14 +570,18 @@ frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson liv
         end ),
     ( $O[] as $w
       | if ($w.name | type) != "string" or $w.name == "" then
-          "FINDING UNMANAGED-FROZEN: an excluded-type live workflow (id \($w.id | tojson)) has an empty or non-string name; the pin cannot match it to the capture."
+          "FINDING UNMANAGED-FROZEN: an excluded-type live workflow (id \($w.id | safe | tojson)) has an empty or non-string name; the pin cannot match it to the capture."
         elif ([ $O[] | select(.name == $w.name) ] | length) > 1 then
-          "FINDING UNMANAGED-FROZEN DUPLICATE: \($q)\($w.name)\($q) names more than one live excluded-type workflow (this one id \($w.id | tojson)); a registered default is matched by id AND name, so a copy borrowing its name is not accepted."
-        elif any($KNOWN[]; .id == ($w.id | tostring) and .name == $w.name) then empty
+          "FINDING UNMANAGED-FROZEN DUPLICATE: \($q)\($w.name | safe)\($q) names more than one live excluded-type workflow (this one id \($w.id | tojson)); a registered default is matched by id AND name, so a copy borrowing its name is not accepted.\(if ($w.name as $n | $refnames | index($n)) != null then " This name is ALSO declared in the Sentry root, so one of these may be a Terraform-managed rule that gained an excluded trigger: GET both ids before touching either, and register neither as a vendor default." else "" end)"
+        # BEFORE the KNOWN arm, deliberately: a managed rule that left scope must be
+        # reported, never absorbed by an identity match.
+        elif ($w | is_in($GAINED)) then
+          "FINDING MANAGED RULE GAINED EXCLUDED TRIGGER: \($q)\($w.name | safe)\($q) (id \($w.id | safe | tojson)) carries the NAME of a sentry_alert the reference declares — matched by name only, because the Terraform side carries no id for a rule it would Create, so GET this id and compare it against Terraform state before writing to it; if the name is declared but this id is not the managed rule, the managed one is DELETED and Terraform still points at the old id. Live Sentry now carries trigger type(s) \([ $w.triggers.conditions[]? | select(.type as $t | any($ex[]; . == $t)) | .type ] | join(",")) the provider cannot express, so it left the fidelity scope and nothing compares it. An apply is NOT a repair: provider v0.15.7 reads that trigger by type only (legacy_trigger_conditions) and any write re-sends it as comparison: true or drops it, and scripts/sentry-issue-alert-create-tripwire.sh refuses such a write once a refresh surfaces it. Repair live state instead: GET /api/0/organizations/<org>/workflows/<id>/, remove that trigger from the body, PUT it back, then GET it again — the rule returns to scope and is compared field-for-field. If the trigger is intended, the rule cannot stay a native sentry_alert: take it out of Terraform management in a reviewed PR with removed { from = sentry_alert.<label> lifecycle { destroy = false } } — deleting the block plans a DESTROY instead, which the destroy gate reds."
+        elif ($w | is_in($KNOWN)) then empty
         elif any($KNOWN[]; .name == $w.name) then
-          "FINDING UNMANAGED-FROZEN: \($q)\($w.name)\($q) (id \($w.id | tojson)) carries the name of a registered Sentry default under a DIFFERENT id, so it is not that default. GET it and compare with the registered id before trusting it."
+          "FINDING UNMANAGED-FROZEN: \($q)\($w.name | safe)\($q) (id \($w.id | safe | tojson)) carries the name of a registered Sentry default under a DIFFERENT id, so it is not that default. GET it and compare with the registered id before trusting it."
         else
-          "FINDING UNMANAGED-FROZEN: \($q)\($w.name)\($q) is live with an excluded trigger type (\([ $w.triggers.conditions[]?.type ] | join(","))), is not frozen in Terraform, and is in neither the committed capture nor apps/web-platform/infra/sentry/vendor-default-workflows.json, so neither projection side nor this pin checks it. If Sentry created it (createdBy null), register {id, name} in vendor-default-workflows.json."
+          "FINDING UNMANAGED-FROZEN: \($q)\($w.name | safe)\($q) is live with an excluded trigger type (\([ $w.triggers.conditions[]?.type | safe ] | join(","))), is not frozen in Terraform, and is in neither the committed capture nor apps/web-platform/infra/sentry/vendor-default-workflows.json, so neither projection side nor this pin checks it. FIRST `git grep -nw <name> apps/web-platform/infra/sentry/issue-alerts.tf`: if the name IS declared there it is Terraform-managed and must NOT be registered as a vendor default (the apply job projects its reference from the plan, where a refreshed legacy trigger takes the rule out of tf scope, so a managed rule that gained an excluded trigger reaches THIS arm rather than the GAINED one). Only if it is undeclared, and Sentry created it (createdBy null), register {id, name} in vendor-default-workflows.json."
         end )
 ' 2>"$jq_err")
 rc=$?
@@ -510,6 +599,21 @@ if [[ "$frozen_live" -eq 0 ]]; then
   _finding "FROZEN PIN EMPTY: the frozen-rule pin compared nothing: none of the ${frozen_tf} Terraform-frozen rule(s) is live."
 fi
 
+# ── RECONCILE THE HAND-OFF ──────────────────────────────────────────────────
+# Every name the per-rule loop deferred must have been NAMED by the pin. A
+# deferral the pin never mentions was compared by nothing: the loop skipped it
+# because some live workflow bears the name, and the pin skipped it because the
+# workflow is either Terraform-frozen and equal to its capture entry, or absent
+# from the census for a reason the loop could not see. Either way the REFERENCE's
+# declaration of that name went unchecked, and without this the run reports a
+# clean verdict over it (measured: rc=0, `all 29 in-scope rules match`, 28
+# compared). Matching on the quoted name is the same anchor every pin finding
+# prints, so a name that appears in ANY pin finding counts as classified.
+for _ho in ${handed_off[@]+"${handed_off[@]}"}; do
+  grep -qF -- "'${_ho}'" <<<"$frozen_report" && continue
+  _finding "UNRECONCILED HAND-OFF: '$(_safe "$_ho")' is declared in the Sentry root and some live workflow bears that name, but NOTHING compared the declaration: the per-rule loop deferred it to the frozen-rule pin, and the pin never named it. The reference entry for this rule is UNVERIFIED by this run. A well-formed Terraform projection cannot declare a frozen name (tf_legacy_floor in tests/scripts/lib/sentry-alert-projection.jq refuses it), so on the daily job compare the committed reference against apps/web-platform/infra/sentry/*.tf and regenerate alert-reference.json per that directory README if they disagree. Touch NOTHING in Sentry."
+done
+
 if [[ "$findings" -eq 0 ]]; then
   # The verdict carries the mode. A grep for `PASS (all N` in a log must not be
   # satisfiable by a fixture run. `live fidelity FAILED` below is a CONTRACT with
@@ -524,5 +628,5 @@ if [[ "$findings" -eq 0 ]]; then
 fi
 
 echo "ERROR: sentry_alert live fidelity FAILED — ${findings} divergence(s) between live Sentry and the reference at ${REFERENCE} (frozen-rule pin anchor: ${FROZEN_CAPTURE})." >&2
-echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture." >&2
+echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture; MANAGED RULE GAINED EXCLUDED TRIGGER is a Terraform-managed rule that left the comparison scope because live Sentry added a trigger type the provider cannot express, and an apply will NOT repair it (repair live state, or take the rule out of Terraform management)." >&2
 exit 1
