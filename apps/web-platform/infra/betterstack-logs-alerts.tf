@@ -420,3 +420,282 @@ resource "logtail_exploration_alert" "registry_store_not_luks" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #8611 / ADR-243: Anthropic spend — a step outliving the proxy, and the daily burn ───────────
+#
+# WHY THESE EXIST. The self-hosted Inngest server calls every step at the Cloudflare-proxied
+# serveHost, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
+# outlives that gets a 524, `retries: 1` re-invokes it while the first Claude session is still
+# running, and the run fails anyway: 51% of 30-day cron spend was those duplicates and a $50
+# top-up lasted ~39 h. Three standing alarms, one per question:
+#   (1) inngest_step_524         — is a step being cut at the proxy again? (per 15 min)
+#   (2) claude_cost_daily_burn   — is the cron fleet spending more than $25 in 24 h?
+#   (3) claude_cost_capture_dark — has the cost telemetry itself gone dark for 24 h?
+# (2) cannot fire on silence (treat_as_zero reads "no rows" as $0), which is why (3) exists.
+# (2) is a FLOOR on spend, not the total: a marker with a null cost_usd (a timeout, a no-result or
+# parse-error exit, the HTTP-transport crons compound-promote / weekly-release-digest / the credit
+# probe) sums as $0, and a run killed mid-flight emits no marker at all.
+#
+# AGGREGATES ONLY. Every select below is a count or a sum. The inngest-server line can carry
+# queue-item payloads (email data) and a Cloudflare 524 page carries an IP, so no exploration here
+# selects a message column or groups on free text. The drift guard asserts it.
+#
+# LIVE-PROBED 2026-09-23 via betterstack-query.sh, template variables substituted by hand
+# ({{source}} = hot remote() UNION ALL s3Cluster archive, columns dt/raw):
+#   (1) 2026-09-16..09-23: 18 matching rows (all `_SYSTEMD_UNIT=inngest-server.service`,
+#       PRIORITY 6, message.error = 'invalid status code: 524', message.msg = 'error handling queue
+#       item'); negative control 'invalid status code: 523' -> 0 rows.
+#   (2) 24 h ending 09-14 23:59:59 -> $34.41 (pages), ending 09-21 23:59:59 -> $28.35 (pages),
+#       ending 09-22 23:59:59 -> $0 (credit exhausted, quiet).
+#   (3) 24 h ending 09-22 23:59:59 -> 27 (arm A 3 + arm B 24, quiet); both arms neutralised ->
+#       one row with value 0 (the page fires).
+#
+# THE DAILY WINDOW. (2) and (3) aggregate the WHOLE evaluation window into one row instead of
+# `GROUP BY {{time}}`: with query_period 86400 the bucket would be snapped to a day, and a
+# calendar-aligned bucket splits a trailing 24 h across two partial days — $40 of spend would read
+# as two sub-$25 buckets, and every early-UTC evaluation of (3) would see a near-empty bucket and
+# page. The window filter is therefore on the `dt` COLUMN, never on the `time` alias: here the
+# alias is a constant, so `time BETWEEN …` would be always-true and sum the source's entire
+# history (measured in the probe: $58.64 for a day whose real total is $34.41).
+# query_period 86400 is NOT validated client-side by the logtail provider (v11.2.0 schema:
+# "The query evaluation window in seconds", no bound) and the largest live precedent in this file
+# is 5400. If the API rejects it, the create fails the apply step loudly (no silent state); fall
+# back to 5400 and scale (2) to $25 x 5400 / 86400 ~= $1.56 per window (local.claude_cost_daily_burn_usd
+# is the single place to change), recorded in ADR-243.
+#
+# CREDIT EXHAUSTION IS NOT A TELEMETRY FAILURE. (3)'s arm B counts the credit probe's own
+# `anthropic-credit-exhausted` / `anthropic-key-invalid` rows (hourly while RED), so a zero-spend
+# day with no credit is quiet. That page is the credit probe's (Sentry monitor
+# scheduled-anthropic-credit-probe), not this rule's.
+locals {
+  # (1) Field-isolated rather than `raw LIKE '%…524%'`: GitHub webhook payloads (issue and PR
+  # bodies) reach this source, and this very incident's issues quote the literal. No PRIORITY
+  # filter — the live lines are PRIORITY 6. They ship even though vector.toml's inngest_journald
+  # source lists `include_matches.PRIORITY = 0..4`: OBSERVED (18 rows, 2026-09-16..23), the source's
+  # `include_units` admits the unit independently of the PRIORITY match (Vector appears to OR the
+  # two; the same mechanism is the suspect in #6551). That behaviour is load-bearing for this alert
+  # and is pinned by vector-pii-scrub.test.sh; scripts/probe-inngest-524-count.sh prints unit_rows
+  # as the positive control, so "no inngest-server rows ship" can never read as "no 524s".
+  inngest_step_524_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'inngest-server.service'
+      AND multiSearchAny(JSONExtractString(raw, 'message', 'error'), ['invalid status code: 524', 'error parsing stream: error reading response body', 'Your server reset the connection while we were reading the reply'])
+    GROUP BY time
+  SQL
+  # The two later needles are the inngest-server v1.19.4 `error` texts for a step STREAM that
+  # dropped mid-response, measured in the #8611 spike (streaming-spike.md): S7's network cut and
+  # app kill -> "error parsing stream: error reading response body to check for status code:
+  # unexpected end of JSON input"; S3's ~20-min drop -> "Your server reset the connection while we
+  # were reading the reply: Unexpected ending response". Under streaming a 524 should not recur,
+  # so these are the live form of the same failure. A web deploy that kills a running step also
+  # matches — one page per such deploy is the accepted cost. One array, one alert.
+
+  # (2) and (3) read the per-run marker at its nested path (pino fields sit under raw.message since
+  # #8344; the top-level form reads 0 on every row). The `"SOLEUR_CLAUDE_COST":true` key match keeps
+  # the SOLEUR_CLAUDE_COST_DAILY org-total rows out; `component = 'claude-cost'` keeps an echoed
+  # issue body out; `source LIKE 'cron:%'` keeps founder BYOK sessions out (their spend is not the
+  # operator key's).
+  claude_cost_daily_burn_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, sum(JSONExtractFloat(raw, 'message', 'cost_usd')) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+      AND JSONExtractString(raw, 'message', 'component') = 'claude-cost'
+      AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
+  SQL
+
+  claude_cost_capture_dark_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND (
+        (raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+          AND JSONExtractString(raw, 'message', 'component') = 'claude-cost'
+          AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
+          AND JSONExtract(raw, 'message', 'cost_usd', 'Nullable(Float64)') IS NOT NULL)
+        OR (JSONExtractString(raw, 'message', 'feature') = 'cron-anthropic-credit-probe'
+          AND JSONExtractString(raw, 'message', 'op') IN ('anthropic-credit-exhausted', 'anthropic-key-invalid'))
+      )
+  SQL
+
+  # The burn threshold, in dollars per trailing 24 h. $25 clears a healthy Monday (the per-site
+  # medians already sum ~$13 before daily-triage and follow-through, newly metered by #8611) and a
+  # 1st-of-quarter day, while staying under the $28–34 duplicate-storm days probed above.
+  # Recalibrate after 14 funded days (#8613). Interpolated into the alert's value AND its email text.
+  claude_cost_daily_burn_usd = 25
+
+  claude_spend_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms"
+}
+
+resource "logtail_exploration" "inngest_step_524" {
+  name      = "soleur-inngest-step-524-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.inngest_step_524_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_step_524" {
+  exploration_id = logtail_exploration.inngest_step_524.id
+  name           = "soleur-inngest-step-524-prd"
+
+  # One 524 is already a double-billed run, so any row in 15 minutes pages. recovery_period covers
+  # two windows, so one quiet window between two cron fires does not close the incident.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 1800
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The Inngest server lost a function step's response: HTTP 524 through Cloudflare, or a streamed step response that dropped mid-flight ('error parsing stream' / 'reset the connection'). A web deploy that killed a running step also matches. The retry joins the live Claude child when the single-flight guard holds (Sentry op claude-eval-singleflight-join). Runbook: ${local.claude_spend_runbook_url}"
+  metadata = {
+    runbook = local.claude_spend_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+resource "logtail_exploration" "claude_cost_daily_burn" {
+  name      = "soleur-claude-cost-daily-burn-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.claude_cost_daily_burn_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "claude_cost_daily_burn" {
+  exploration_id = logtail_exploration.claude_cost_daily_burn.id
+  name           = "soleur-claude-cost-daily-burn-prd"
+
+  # See local.claude_cost_daily_burn_usd for the threshold's rationale. The window is a trailing
+  # 24 h checked hourly; spend ages out of it, so recovery needs no slack.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = local.claude_cost_daily_burn_usd
+  check_period        = 3600
+  query_period        = 86400
+  confirmation_period = 0
+  recovery_period     = 3600
+  # An empty window is $0 spent — healthy. Silence is claude_cost_capture_dark's job.
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The claude-eval cron fleet spent more than USD ${local.claude_cost_daily_burn_usd} of operator Anthropic credit in the last 24 h (SOLEUR_CLAUDE_COST cost_usd, cron sources; a floor: null-cost markers sum as $0). Runbook: ${local.claude_spend_runbook_url}"
+  metadata = {
+    runbook = local.claude_spend_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+resource "logtail_exploration" "claude_cost_capture_dark" {
+  name      = "soleur-claude-cost-capture-dark-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.claude_cost_capture_dark_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "claude_cost_capture_dark" {
+  exploration_id = logtail_exploration.claude_cost_capture_dark.id
+  name           = "soleur-claude-cost-capture-dark-prd"
+
+  # Pages when a trailing 24 h holds neither a cron cost marker with a non-null cost_usd nor a
+  # credit-probe RED row. The cron fleet runs many times a day, so a whole day of neither means the
+  # marker path (emitter, Vector, or the nested field) is broken — and the burn alert above is blind.
+  alert_type          = "threshold"
+  operator            = "lower_than"
+  value               = 1
+  check_period        = 3600
+  query_period        = 86400
+  confirmation_period = 0
+  recovery_period     = 3600
+  # The inverse of every sibling's reason: a missing value must read as 0 so silence FIRES.
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "No claude-eval cron cost marker with a cost_usd (and no credit-probe RED row) reached Better Stack in 24 h: the spend telemetry is dark, so the daily burn alert cannot fire. Runbook: ${local.claude_spend_runbook_url}"
+  metadata = {
+    runbook = local.claude_spend_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

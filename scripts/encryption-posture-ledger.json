@@ -403,6 +403,20 @@
       }
     },
     {
+      "store": "cloudflare_r2_bucket.terraform_state_privileged",
+      "kind": "provider-bucket",
+      "at_rest": {
+        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public. This is the TIER-B state bucket (soleur-terraform-state-privileged, infra-privileged-environment.tf) introduced by #8209/ADR-241: its read/write keys live only in the soleur-infra-privileged Doppler project and reach a job only as a main-only GitHub environment secret, so unlike r2.terraform_state_backend its credentials are not reachable from a branch workflow. Same provider mechanism, narrower credential exposure.",
+        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
+        "retrieved_on": "2026-09-23",
+        "defends_against": "physical-media compromise of the privileged Terraform state store",
+        "does_not_defend": "a leaked Tier-B R2 token; Terraform state contains resource metadata and any non-sensitive-marked values. At-rest encryption is not the control #8209 relies on — the control is that no branch-reachable credential can read this bucket.",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+      }
+    },
+    {
       "store": "redis.session_store",
       "kind": "provider-db",
       "records": [

@@ -11,6 +11,11 @@ import {
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import { emitClaudeCostMarker } from "@/server/claude-cost-marker";
 import { emitCronTier2Deferred } from "@/server/cron-liveness-marker";
+import {
+  ANTHROPIC_CREDIT_EXHAUSTED_RE,
+  isAnthropicCreditExhausted,
+  reportAnthropicCreditExhausted,
+} from "@/server/anthropic-credit";
 import type { SpawnResult } from "./_cron-claude-eval-substrate";
 import type { Octokit } from "@octokit/core";
 
@@ -559,11 +564,18 @@ export async function postDiscordWebhook(args: {
 export class AnthropicApiError extends Error {
   readonly status: number;
   readonly bodyExcerpt?: string;
-  constructor(status: number, bodyExcerpt?: string) {
+  /**
+   * #8505: classified ONCE by the transport from the FULL raw body, so the
+   * credit probe and the credit marker cannot disagree (the excerpt is
+   * redaction-formatted and cut to 600 chars).
+   */
+  readonly creditExhausted: boolean;
+  constructor(status: number, bodyExcerpt?: string, creditExhausted = false) {
     super(`Anthropic API ${status}${bodyExcerpt ? `: ${bodyExcerpt}` : ""}`);
     this.name = "AnthropicApiError";
     this.status = status;
     this.bodyExcerpt = bodyExcerpt;
+    this.creditExhausted = creditExhausted;
   }
 }
 
@@ -625,9 +637,20 @@ export async function postAnthropicMessage(args: {
       // Body unreadable (already consumed / stream error) — status alone still
       // throws a typed error; the canary falls back to the status-only branch.
     }
+    // #8505: the named, routed credit-exhaustion marker for every HTTP-transport
+    // cron on the operator key. Reported here (not at each call site) so the
+    // canary, compound-promote and weekly-release-digest cannot drift apart.
+    const creditExhausted = isAnthropicCreditExhausted(rawBody);
+    if (creditExhausted) {
+      reportAnthropicCreditExhausted({
+        source: `cron:${args.markerSource ?? "unknown"}`,
+        status: resp.status,
+      });
+    }
     throw new AnthropicApiError(
       resp.status,
       formatTailForSentry(rawBody)?.slice(0, 600),
+      creditExhausted,
     );
   }
 
@@ -1390,7 +1413,8 @@ export function formatTailForSentry(tail?: string): string | undefined {
 // and fixture-pinned against the real incident tail: classify-by-string-match is
 // brittle to Anthropic copy changes, so an UNMATCHED non-zero exit degrades to
 // benign-but-recorded (green + reason in Sentry), never a silent drop.
-export const ANTHROPIC_CREDIT_EXHAUSTED_RE = /credit balance is too low/i;
+// Defined in server/anthropic-credit.ts (#8505), which also owns the named marker.
+export { ANTHROPIC_CREDIT_EXHAUSTED_RE };
 export const ANTHROPIC_AUTH_FAILURE_RE =
   /invalid x-api-key|authentication_error|\binvalid api key\b/i;
 // Spawn-fault markers in a captured tail (the child never really ran).
@@ -1400,7 +1424,14 @@ export type EvalFatalClass =
   | "credit-exhausted"
   | "auth-failure"
   | "spawn-fault"
-  | "timeout";
+  | "timeout"
+  // #8611: the run hit its per-run `--max-budget-usd` ceiling (result subtype
+  // `error_max_budget_usd`) and stopped before finishing its work.
+  | "budget-capped";
+
+// The claude CLI's result-event subtype for a run stopped by `--max-budget-usd`
+// (string taken from the pinned @anthropic-ai/claude-code binary; #8611).
+export const CLAUDE_BUDGET_STOP_SUBTYPE = "error_max_budget_usd";
 
 /**
  * Classify a non-zero claude-eval spawn result as FATAL (must page) or benign.
@@ -1409,9 +1440,19 @@ export type EvalFatalClass =
 export function classifyEvalFatal(
   spawnResult: Pick<
     SpawnResult,
-    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail"
+    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail" | "subtype"
   >,
 ): { fatal: boolean; fatalClass?: EvalFatalClass; reason?: string } {
+  // Read from the parsed result event, not the tail: whatever the exit code, a
+  // capped run did not finish, and a green monitor would hide it (#8611).
+  if (spawnResult.subtype === CLAUDE_BUDGET_STOP_SUBTYPE) {
+    return {
+      fatal: true,
+      fatalClass: "budget-capped",
+      reason:
+        "claude-eval stopped at its per-run --max-budget-usd cap (error_max_budget_usd; caps in server/inngest/cron-budgets.ts)",
+    };
+  }
   if (spawnResult.abortedByTimeout) {
     return {
       fatal: true,
@@ -1474,7 +1515,13 @@ export interface EvalHeartbeatDecision {
 export function resolveBestEffortEvalOk(
   spawnResult: Pick<
     SpawnResult,
-    "ok" | "exitCode" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
+    | "ok"
+    | "exitCode"
+    | "abortedByTimeout"
+    | "durationMs"
+    | "stdoutTail"
+    | "stderrTail"
+    | "subtype"
   >,
 ): EvalHeartbeatDecision {
   const sentryExtra: Record<string, unknown> = {
@@ -1485,7 +1532,8 @@ export function resolveBestEffortEvalOk(
     stderrTail: formatTailForSentry(spawnResult.stderrTail),
   };
 
-  if (spawnResult.ok) {
+  // A capped run can exit 0, so the cap check runs before the clean-exit shortcut.
+  if (spawnResult.ok && spawnResult.subtype !== CLAUDE_BUDGET_STOP_SUBTYPE) {
     return { ok: true, sentryExtra };
   }
 

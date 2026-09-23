@@ -867,6 +867,12 @@ jobs:
       - name: Run registry store-not-LUKS alert drift guard (#8408)
         run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
 
+      # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
+      # queries the emitter's real shape and field path, aggregates only, every -target line, and
+      # its mutation rows.
+      - name: Run Anthropic-spend alerts drift guard (#8611)
+        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
+
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
       # guard above sweeps: orphan-reaper.test.sh backs terraform_data.orphan_reaper_install (its
@@ -2086,6 +2092,69 @@ jobs:
       - name: Generate CI SSH key
         run: ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
 
+      # (#8209, ADR-241 D4) TIER A. This job runs on `pull_request`, so it is reachable
+      # from ANY branch of this public repository and must therefore hold nothing whose
+      # disclosure is unbounded. It gets bounded substitutes instead, and the plan below
+      # runs `-refresh=false` so it never needs the real ones.
+      #
+      # Measured (probe M8, Terraform 1.10.5, web-platform root): `terraform plan
+      # -refresh=false` with placeholder Doppler and R2 credentials, the workflow's own
+      # GITHUB_TOKEN for the GitHub provider and a real Hetzner token succeeds, reading
+      # 14 to add / 3 to change / 6 to destroy. A full-refresh plan reads 15/3/6; the one
+      # extra address is live drift, which is scheduled-terraform-drift's job, not this
+      # one's. So the placeholders cost the PR comment nothing it was entitled to.
+      #
+      # `--preserve-env` on the plan step below is what makes these WIN. Without it
+      # `doppler run` would override them with the real prd_terraform values in the
+      # before state, and AC5 would be testing nothing on the PR that introduces it.
+      - name: Tier-A plan credentials (bounded substitutes)
+        env:
+          # The job's OWN credential: scoped to this run, expires with it, read-only.
+          # Terraform's github provider runs in TOKEN mode when this is set and no infra
+          # App key is (main.tf).
+          PLAN_ACTIONS_CREDENTIAL: ${{ github.token }}
+          # A Hetzner token with the READ permission only. Falls back to the read/write
+          # HCLOUD_TOKEN in the before state so this merges before operator step O5; that
+          # fallback disappears with the name at O10. A DIFFERENT NAME on purpose: a
+          # same-named Tier-A value could shadow the Tier-B one, and this one cannot.
+          # Tier-A repo secret: this job keeps it, and reads the read-only Hetzner
+          # value through it. It is the credential #8209 is NARROWING, not removing.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # Read the read-only Hetzner value FIRST, so every write to $GITHUB_ENV can be
+          # one grouped redirect (shellcheck SC2129) rather than four separate ones.
+          RO="$(doppler secrets get HCLOUD_TOKEN_READONLY --plain 2>/dev/null)" || RO=""
+          if [[ -z "$RO" ]]; then
+            RO="$(doppler secrets get HCLOUD_TOKEN --plain 2>/dev/null)" || RO=""
+            echo "::warning title=infra-privileged::source=legacy HCLOUD_TOKEN_READONLY is absent from prd_terraform, so the PR plan is using the read/write HCLOUD_TOKEN. Expected before operator step O5; after O10 it means the read-only token was never minted."
+          fi
+          # An explicit `if`, not `[[ ... ]] && printf`. Under the runner's `-e` the
+          # AND-OR form is exempt only while another command follows it; move it to the
+          # end of the body and the step aborts when RO is empty (measured:
+          # `bash -e -c '[[ -n "" ]] && printf x'` exits 1). That would be an abort on the
+          # exact path the fallback exists to serve.
+          rodelim="SOLEUR_EOF_$(openssl rand -hex 12)"
+          if [[ -n "$RO" ]]; then printf '::add-mask::%s\n' "$RO"; fi
+          {
+            printf 'TF_VAR_github_plan_actions_credential=%s\n' "$PLAN_ACTIONS_CREDENTIAL"
+            # Well-formed but inert. The FORMATS were measured in M8 because a malformed
+            # value fails provider CONFIGURATION (which a -refresh=false plan still does)
+            # rather than an API call (which it does not): `dp.pt.` is the Doppler
+            # personal-token prefix, and an R2 token is 40 chars of [a-z0-9].
+            printf 'TF_VAR_doppler_token_tf=%s\n' "dp.pt.tierAplaceholderNotARealToken0000000000"
+            printf 'TF_VAR_cf_api_token_r2=%s\n' "0000000000tierAplaceholder0000000000zzzz"
+            # HEREDOC DELIMITER for the one value that is not a literal. `$RO` is read from
+            # `prd_terraform`, which the branch-nameable `DOPPLER_TOKEN_WRITE` repo secret
+            # can write until operator step O11 — and THIS job runs on `pull_request`, so a
+            # `K=V` write of `tok\nBASH_ENV=/tmp/x` would give a branch actor code execution
+            # in a job holding `pull-requests: write`. The two placeholders above are
+            # in-line literals and cannot carry a newline.
+            printf 'TF_VAR_hcloud_token<<%s\n%s\n%s\n' "$rodelim" "$RO" "$rodelim"
+          } >> "$GITHUB_ENV"
+
       - name: Extract backend credentials
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -2136,8 +2205,21 @@ jobs:
           # are new abort conditions on a body that has never run under them, which is a
           # different change from repairing errexit. #7304.
           set +e
-          PLAN_OUTPUT=$(doppler run --name-transformer tf-var -- \
-            terraform plan -no-color -input=false \
+          # (#8209, ADR-241 D4) `--preserve-env=<names>` is NAMED, not bare. The named
+          # form keeps exactly the four Tier-A substitutes the step above exported and
+          # lets Doppler supply everything else, which is what makes this PR's own CI
+          # exercise the Tier-A path in BOTH states -- without it, the before state
+          # overrides all four with the real prd_terraform values and AC5 tests nothing.
+          # Measured: `--preserve-env=TF_VAR_hcloud_token` keeps the environment value;
+          # the SOURCE name (HCLOUD_TOKEN) does not, and there is no DOPPLER_PRESERVE_ENV
+          # variable form.
+          #
+          # `-refresh=false` is what lets the placeholders work at all: a refresh calls
+          # the Doppler and R2 APIs, a config-vs-state plan does not (M8). The cost is
+          # that this comment no longer shows live drift -- which is
+          # scheduled-terraform-drift's job, and the comment header says so.
+          PLAN_OUTPUT=$(doppler run --preserve-env=TF_VAR_github_plan_actions_credential,TF_VAR_doppler_token_tf,TF_VAR_cf_api_token_r2,TF_VAR_hcloud_token --name-transformer tf-var -- \
+            terraform plan -refresh=false -no-color -input=false \
             "${VAR_ARGS[@]}" 2>&1)
           PLAN_EXIT=$?
           set -e

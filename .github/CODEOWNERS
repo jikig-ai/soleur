@@ -219,7 +219,7 @@
 /tests/scripts/lib/git-data-host-birth-gate.sh          @deruelle
 /tests/scripts/test-no-tofu-ssh.sh                      @deruelle
 
-# Encryption-posture ledger and its record surfaces (#8532, ADR-140, ADR-242, ADR-243). The ledger's
+# Encryption-posture ledger and its record surfaces (#8532, ADR-140, ADR-242, ADR-245). The ledger's
 # record_surfaces list decides which files the Guard 3 anchor check reads. Dropping an entry
 # is caught by the forward check for every row that still records that file; a surface that is
 # REPLACED, or dropped together with every record pointing at it, is caught only by the test

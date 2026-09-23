@@ -107,4 +107,4 @@ metadata endpoint serving `user_data` to root. It is not the disk.
 ## C4 impact
 
 No new element or relationship. `model.c4` gains ledger clauses on existing store elements and the
-Inngest server's root-disk posture in its description (ADR-243 owns the clause convention).
+Inngest server's root-disk posture in its description (ADR-245 owns the clause convention).

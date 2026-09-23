@@ -240,6 +240,30 @@ row() {
   fi
 }
 
+# A fixture-manifest row: point SOLEUR_SHARD_MANIFEST at a synthesized manifest for
+# exactly one guard invocation. The env prefix on `guard_rc` scopes the override to
+# that call — it cannot leak into neighbouring rows. Used for rows whose mutation is
+# in the ASSIGNMENT TABLE rather than in tracked source, so no pristine restore is
+# needed (the committed manifest is never touched).
+frow() {
+  local id="$1" fixture="$2" want="$3" desc="$4"
+  local rc
+  rc=$(SOLEUR_SHARD_MANIFEST="$fixture" guard_rc)
+  if [[ "$want" == "RED" ]]; then
+    if (( rc != 0 )); then
+      pass "$id — guard went RED as required ($desc)"
+    else
+      fail "$id — SURVIVOR: guard stayed GREEN under '$desc'"
+    fi
+  else
+    if (( rc == 0 )); then
+      pass "$id — guard stayed GREEN as required ($desc)"
+    else
+      fail "$id — guard went RED on a must-PASS input ($desc); it is over-tight: $(tail -3 "$WORK/guard_out" | tr '\n' ' ')"
+    fi
+  fi
+}
+
 # --- CONTROL: the unmutated tree must be GREEN ----------------------------------------------
 #
 # Read FIRST. If the control is not green the whole battery is VOID rather than passing, and
@@ -256,7 +280,11 @@ fi
 # --- Row 1: off-by-one in the partition -------------------------------------------------------
 # Residue class 0 is then matched by no k, so ~1/N of all registrations run on no leg while
 # every declared leg reports green.
-row "ROW1" "$RUNNER" \
+# `SOLEUR_SHARD_MANIFEST=off` scopes this row (and ROW4 below) to POSITIONAL mode: the
+# committed manifest makes the mod-expression dead code under the default path, and a
+# mutation nobody executes reports a survivor. The env prefix binds to this `row` call
+# alone — it cannot leak into later rows' guard invocations.
+SOLEUR_SHARD_MANIFEST=off row "ROW1" "$RUNNER" \
   '(( (_shard_ordinal - 1) % _SHARD_N != _SHARD_K - 1 ))' \
   '(( (_shard_ordinal - 1) % _SHARD_N != _SHARD_K ))' \
   RED "off-by-one: residue class 0 assigned to no leg"
@@ -281,7 +309,7 @@ row "ROW3" "$RUNNER" \
 
 # --- Row 4: two legs claim the same label -----------------------------------------------------
 # Union is correct; the MULTISET is wrong. A totality-only check passes here.
-row "ROW4" "$RUNNER" \
+SOLEUR_SHARD_MANIFEST=off row "ROW4" "$RUNNER" \
   '  if (( _SHARD_N > 0 )) && (( (_shard_ordinal - 1) % _SHARD_N != _SHARD_K - 1 )); then
     return 1
   fi' \
@@ -332,7 +360,7 @@ row "ROW5D" "$CI_YML" \
 # Both increment `suites`. Filtering only one makes every leg emit the skip_suite registrations,
 # so per-leg denominators and the epilogue's decline accounting disagree.
 row "ROW7" "$RUNNER" \
-  '  _shard_selects || return 0
+  '  _shard_selects "$label" || return 0
   if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi
   suites=$((suites + 1))
   skipped=$((skipped + 1))' \
@@ -438,6 +466,91 @@ row "ROW10" "$RUNNER" \
   '^([0-9]+)/([0-9]+)$' \
   RED "the digit class is ranged rather than enumerated (collation-widened, unbounded)"
 
+# --- Manifest-mode rows (#8006) ---------------------------------------------------------------
+#
+# The committed manifest makes assignment a label LOOKUP, so the battery must prove the
+# fallback contract around it, not just the positional path above. Fixture manifests are
+# synthesized in $WORK and bound per-call through SOLEUR_SHARD_MANIFEST — the committed
+# table is never mutated (the ⊆ lint in scripts-shard-manifest.test.sh is what guards
+# table hygiene; these rows score the TOTALITY guard only).
+MANIFEST_FILE="$REPO_ROOT/scripts/suite-shard-legs.tsv"
+if [[ ! -f "$MANIFEST_FILE" ]]; then
+  fail "MANIFEST-SETUP — scripts/suite-shard-legs.tsv is absent; the manifest rows below cannot be scored"
+else
+  # M-fixture set: minus-one, plus-phantom, header-only (all-synthesized per the
+  # fixture rule — each derives from the committed table + one mechanical edit).
+  awk '!/^#/ && !done {done=1; next} 1' "$MANIFEST_FILE" > "$WORK/manifest-minus-one.tsv"
+  cp "$MANIFEST_FILE" "$WORK/manifest-phantom.tsv"
+  printf 'phantom/never-registered-suite\t1\n' >> "$WORK/manifest-phantom.tsv"
+  grep '^#' "$MANIFEST_FILE" > "$WORK/manifest-empty.tsv"
+  [[ -s "$WORK/manifest-minus-one.tsv" && -s "$WORK/manifest-phantom.tsv" && -s "$WORK/manifest-empty.tsv" ]] \
+    || { echo "FATAL: fixture manifests did not materialise" >&2; exit 2; }
+
+  # M1: a registered label the table does NOT know still lands on exactly one leg —
+  # the hash fallback keeps totality while the manifest is one label stale.
+  frow "M1" "$WORK/manifest-minus-one.tsv" GREEN \
+    "a label absent from the manifest is still assigned to exactly one leg (hash fallback)"
+
+  # M2: a table row naming nothing registered consumes no leg weight and no coverage —
+  # the runner ignores it (the ⊆ lint, not this guard, is what flags phantoms).
+  frow "M2" "$WORK/manifest-phantom.tsv" GREEN \
+    "a phantom manifest row is inert for coverage"
+
+  # M3: an empty table degrades the whole group to hash fallback — still total.
+  frow "M3" "$WORK/manifest-empty.tsv" GREEN \
+    "an empty manifest assigns every label by hash with totality intact"
+fi
+
+# M4: two untabled labels must not silently collide onto one leg — under the all-hash
+# path every label spreads deterministically. Bespoke (not row()/frow()): it reads leg
+# membership directly rather than the guard verdict. The pair is derived, not guessed —
+# its cksum residues mod N are verified to differ first, or the row is void.
+if [[ -s "$WORK/manifest-empty.tsv" ]]; then
+  _reg=$(env -u SCRIPTS_SHARD TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --enumerate scripts 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 | sort)
+  _a="" _b=""
+  while IFS= read -r _cand && [[ -z "$_b" ]]; do
+    _r=$(( ($(printf '%s' "$_cand" | cksum | cut -d' ' -f1) % 5) + 1 ))
+    if [[ -z "$_a" ]]; then _a="$_cand"; _ra=$_r
+    elif (( _r != _ra )); then _b="$_cand"; _rb=$_r; fi
+  done <<< "$_reg"
+  if [[ -z "$_b" ]]; then
+    fail "M4 — could not find two registered labels with distinct cksum residues mod 5"
+  else
+    _la=$(SOLEUR_SHARD_MANIFEST="$WORK/manifest-empty.tsv" \
+          env SCRIPTS_SHARD="$_ra/5" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+          bash "$RUNNER" --enumerate scripts 2>/dev/null | grep -c "^SUITE_REGISTRATION	${_a}$")
+    _lb=$(SOLEUR_SHARD_MANIFEST="$WORK/manifest-empty.tsv" \
+          env SCRIPTS_SHARD="$_rb/5" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+          bash "$RUNNER" --enumerate scripts 2>/dev/null | grep -c "^SUITE_REGISTRATION	${_b}$")
+    if [[ "$_la" == "1" && "$_lb" == "1" ]]; then
+      pass "M4 — two untabled labels hash to distinct legs ($_a→leg$_ra, $_b→leg$_rb)"
+    else
+      fail "M4 — untabled labels did not land on their hashed legs ($_a on leg$_ra: $_la, $_b on leg$_rb: $_lb)"
+    fi
+  fi
+fi
+
+# M5: dropping the label argument at a call site must not silently degrade — the
+# arity check makes it a refusal, so a leg that cannot place registrations exits 2
+# and the guard sees missing coverage. Anchor is multi-line because both call sites
+# read `_shard_selects "$label" || return 0` identically.
+row "M5" "$RUNNER" \
+  '  _shard_selects "$label" || return 0
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi' \
+  '  _shard_selects || return 0
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi' \
+  RED "skip_suite drops the label argument (lookup is unkeyed; arity check must refuse)"
+
+# M6: the skip_suite label is LOAD-BEARING under the lookup — it must be the label the
+# suite would run under, or the declined arm emits a phantom the run arm never claimed.
+# The reference keeps the run_suite literal, so a renamed skip label both orphans the
+# real suite and emits one nobody registered.
+row "M6" "$RUNNER" \
+  '    skip_suite "scripts/cf-tunnel-liveness-gate-mutations" "relevance" \' \
+  '    skip_suite "scripts/cf-tunnel-liveness-gate-mutations-MUT6" "relevance" \' \
+  RED "a skip_suite label that is not the run_suite label"
+
 # --- MUST-PASS non-canonical input ------------------------------------------------------------
 # Raising a leg's ceiling AND keeping the partition intact must NOT red the guard: it is a
 # totality guard, not a performance guard. The anchor carries the preceding justification line
@@ -452,7 +565,8 @@ row "MUSTPASS" "$CI_YML" \
   GREEN "an unrelated ceiling edit that changes no assignment"
 
 # --- ASSERTION FLOOR ---------------------------------------------------------------------------
-MIN_ROWS=15
+# 15 positional/ci rows + M1..M4 (4) + M5 + M6 = 21.
+MIN_ROWS=21
 TOTAL=$(( PASS + FAIL ))
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The battery did not run to completion.\n' "$TOTAL" "$MIN_ROWS" >&2

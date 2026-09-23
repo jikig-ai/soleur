@@ -188,6 +188,9 @@ interface HandlerArgs {
     info: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
   };
+  // Inngest's zero-based attempt of the current execution (#8611: carried on the turn's cost
+  // marker). Optional so direct test invocations need not supply it.
+  attempt?: number;
 }
 
 // AC10 — the failure-reason taxonomy admitted on `action_sends.failure_reason`.
@@ -271,6 +274,7 @@ export async function agentOnSpawnRequestedHandler({
   event,
   step,
   logger,
+  attempt,
 }: HandlerArgs): Promise<
   | { acknowledged: true; artifactUrl: string }
   | { acknowledged: false; failureReason: string }
@@ -696,7 +700,9 @@ export async function agentOnSpawnRequestedHandler({
               // Cost-attribution marker (plan Phase 1). The leader loop knows
               // its model directly from the leader module config (the same
               // value that keys MODEL_PRICING above).
-              { source: "leader-loop", model: leaderModule.model },
+              // turn + attempt (#8611): attempt > 0 here means this step re-ran after
+              // billing the founder's key once — the 72h rollback trigger's signal.
+              { source: "leader-loop", model: leaderModule.model, turn: n, attempt },
             );
             return sdkResult;
           },

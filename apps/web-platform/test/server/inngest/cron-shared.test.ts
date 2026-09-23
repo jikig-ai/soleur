@@ -82,6 +82,10 @@ import {
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
 import type { Octokit } from "@octokit/core";
+import {
+  ANTHROPIC_CREDIT_EXHAUSTED_FEATURE,
+  ANTHROPIC_CREDIT_EXHAUSTED_OP,
+} from "@/server/anthropic-credit";
 
 function octokitReturning(issues: Array<{ updated_at: string; created_at?: string; state?: string }>) {
   const request = vi.fn().mockResolvedValue({ data: issues });
@@ -1104,6 +1108,107 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     ).rejects.toThrow("Anthropic API 503");
   });
 
+  // #8505 — the transport is the credit-marker chokepoint for every HTTP-transport
+  // cron (credit-probe canary, compound-promote, weekly-release-digest).
+  describe("#8505 credit-exhaustion marker", () => {
+    const creditBody =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}';
+    const creditReports = () =>
+      reportSilentFallbackSpy.mock.calls.filter(
+        ([, ctx]) => (ctx as { op?: string }).op === ANTHROPIC_CREDIT_EXHAUSTED_OP,
+      );
+
+    beforeEach(() => reportSilentFallbackSpy.mockClear());
+
+    it("reports once with source=cron:<markerSource> on a credit 400, and still throws AnthropicApiError", async () => {
+      fetchSpy.mockResolvedValue(new Response(creditBody, { status: 400 }));
+      const err = await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+        markerSource: "cron-anthropic-credit-probe",
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(AnthropicApiError);
+      // Classified once, from the full body, for the probe to read.
+      expect((err as AnthropicApiError).creditExhausted).toBe(true);
+      const reports = creditReports();
+      expect(reports).toHaveLength(1);
+      const [errArg, ctx] = reports[0] as [
+        unknown,
+        { feature: string; tags: Record<string, string>; extra: Record<string, unknown> },
+      ];
+      // Message path (err = null) — the Error path loses its tags to the pino mirror.
+      expect(errArg).toBeNull();
+      expect(ctx.feature).toBe(ANTHROPIC_CREDIT_EXHAUSTED_FEATURE);
+      expect(ctx.tags.source).toBe("cron:cron-anthropic-credit-probe");
+      expect(ctx.extra.status).toBe(400);
+      // Only the constant marker leaves the transport, never the vendor body.
+      expect(JSON.stringify(reports[0])).not.toContain("credit balance is too low to access");
+    });
+
+    it("does NOT report a 2xx whose content happens to contain the credit text", async () => {
+      fetchSpy.mockResolvedValue(
+        okResponse({
+          content: [{ type: "text", text: "PR: alert when your credit balance is too low" }],
+          stop_reason: "end_turn",
+        }),
+      );
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "summarize" }],
+        markerSource: "cron-weekly-release-digest",
+      });
+      expect(creditReports()).toHaveLength(0);
+    });
+
+    it("falls back to source=cron:unknown when no markerSource is threaded", async () => {
+      fetchSpy.mockResolvedValue(new Response(creditBody, { status: 400 }));
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }).catch(() => undefined);
+      const reports = creditReports();
+      expect(reports).toHaveLength(1);
+      expect((reports[0][1] as { tags: Record<string, string> }).tags.source).toBe("cron:unknown");
+    });
+
+    it.each([
+      [429, '{"type":"error","error":{"type":"rate_limit_error","message":"rate limited"}}'],
+      [500, "upstream error"],
+      [529, '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'],
+      [400, '{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be positive"}}'],
+      [400, '{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits."}}'],
+    ])("does NOT report on status %i with a non-credit body", async (status, body) => {
+      fetchSpy.mockResolvedValue(new Response(body, { status }));
+      const err = await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+        markerSource: "cron-compound-promote",
+      }).catch((e: unknown) => e);
+      expect(creditReports()).toHaveLength(0);
+      expect((err as AnthropicApiError).creditExhausted).toBe(false);
+    });
+
+    it("does NOT report on a network failure (redacted rethrow path)", async () => {
+      fetchSpy.mockRejectedValue(new TypeError("fetch failed"));
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }).catch(() => undefined);
+      expect(creditReports()).toHaveLength(0);
+    });
+  });
+
   it("rethrows a redacted error on a fetch network failure (never leaks the api key)", async () => {
     const apiKey = "sk-ant-" + "synthetic-network-key";
     fetchSpy.mockRejectedValue(new TypeError("fetch failed"));
@@ -1244,6 +1349,13 @@ describe("classifyEvalFatal", () => {
     expect(c.fatalClass).toBe("spawn-fault");
   });
 
+  it("#8611: a run stopped by --max-budget-usd → fatal budget-capped, from the result subtype (not the tail)", () => {
+    const c = classifyEvalFatal({ ...base, subtype: "error_max_budget_usd" });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("budget-capped");
+    expect(c.reason).toMatch(/max-budget-usd/);
+  });
+
   it("plain non-zero with no marker → NOT fatal (benign)", () => {
     const c = classifyEvalFatal({ ...base, stdoutTail: "Reached max turns; no artifact." });
     expect(c.fatal).toBe(false);
@@ -1282,6 +1394,21 @@ describe("resolveBestEffortEvalOk (classify-fatal heartbeat)", () => {
     expect(d.ok).toBe(true); // <-- flip-all would have made this false (false page)
     expect(d.errorSummary).toMatch(/non-zero/i);
     expect(d.sentryExtra.fatalClass).toBe("benign");
+  });
+
+  it("#8611: a capped run that EXITED 0 is still ok:false (the clean-exit shortcut must not hide it)", () => {
+    const d = resolveBestEffortEvalOk({
+      ok: true,
+      exitCode: 0,
+      abortedByTimeout: false,
+      durationMs: 42,
+      stdoutTail: "",
+      stderrTail: "",
+      subtype: "error_max_budget_usd",
+    });
+    expect(d.ok).toBe(false);
+    expect(d.sentryExtra.fatalClass).toBe("budget-capped");
+    expect(d.errorSummary).toMatch(/max-budget-usd/);
   });
 
   it("clean exit (ok:true) → ok:true, no reason", () => {

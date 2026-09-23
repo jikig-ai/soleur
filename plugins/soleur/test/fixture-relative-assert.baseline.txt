@@ -252,7 +252,7 @@
 4	plugins/soleur/scripts/domain-model-drift.sh
 5	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
-11	plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh
+2	plugins/soleur/scripts/render-c4-model.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
 1	plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
@@ -299,6 +299,7 @@
 1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
+21	plugins/soleur/test/regenerate-shard-manifest.test.sh
 7	plugins/soleur/test/resolve-target-decision.test.sh
 10	plugins/soleur/test/scripts-shard-totality-mutations.sh
 2	plugins/soleur/test/scripts-shard-totality.test.sh
@@ -376,7 +377,6 @@
 29	scripts/prod-version-drift-check.test.sh
 5	scripts/raise-tmp-tmpfs-ceiling.sh
 3	scripts/raise-tmp-tmpfs-ceiling.test.sh
-2	scripts/regenerate-c4-model.sh
 1	scripts/registry-pull-path-health.sh
 1	scripts/registry-restore-from-ghcr.sh
 5	scripts/rename-guard.test.sh

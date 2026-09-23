@@ -51,7 +51,7 @@ Nothing here edits `apps/web-platform/infra/`.
 - [x] 3.4 Regenerate `model.likec4.json` in the same commit; run the C4 freshness and parity suites (all pass).
 - [x] 3.5 Register: the five CLO amendments (plus PA-1/2/21/22/36 and the cross-cutting encryption bullet), each with a dated amendment marker, plus the visible `(encryption-posture ledger: <id>)` clauses.
 - [x] 3.6 Record the amendment convention in the register's maintenance section, which has none today.
-- [x] 3.7 Route the register edits through the CLO before marking the PR ready. DISCHARGED with conditions: all 44 register pairs are in `records` (done); follow-ups filed as #8624 (PA-14 amendment + published claim review) and #8625 (no Hetzner backups; Art. 32(1)(c)). ADR-243 records the binding.
+- [x] 3.7 Route the register edits through the CLO before marking the PR ready. DISCHARGED with conditions: all 44 register pairs are in `records` (done); follow-ups filed as #8624 (PA-14 amendment + published claim review) and #8625 (no Hetzner backups; Art. 32(1)(c)). ADR-245 records the binding.
 
 ## Phase 4 — PR-4: the web-host root-disk images (operator-gated)
 

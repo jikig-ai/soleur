@@ -1,6 +1,6 @@
 ---
 title: "Codex web engine — CLO decision packet"
-date: 2026-09-22
+date: 2026-09-23
 status: pending-mode-specific-clo-disposition
 customer_content_status: blocked
 ---
@@ -24,13 +24,13 @@ Issue a separate **approve, approve with restrictions, or reject** disposition f
 
 ## Observed qualification boundary
 
-On 2026-09-22, the local Codex CLI v0.155.1 completed one isolated, read-only, ephemeral synthetic text request and returned the required sentinel. This confirms only basic account access and response. It does not qualify the Soleur Web transport, attachments, approvals, cancellation, reconciliation, provider deletion, usage accounting, or deployed application. Production Doppler has no `OPENAI_API_KEY` secret, so API-key live qualification remains unavailable until an authorized test workspace supplies a key through Web settings. No customer repository content was sent.
+The 2026-09-22 local Codex CLI smoke and 2026-09-23 local App Server/transport probes completed isolated read-only synthetic text turns. The latter confirmed a terminal response, neutral usage event, and unique event IDs through the local Soleur transport. `thread/delete` returned an empty acknowledgement, and a later `thread/read` returned `thread not loaded`; these observations do not establish provider-side erasure or retention. They do not qualify authenticated Soleur Web conversation or routine execution, attachments, approvals, cancellation, reconciliation, usage persistence, or the deployed application. API-key live qualification remains unavailable until an authorized synthetic test workspace supplies a key through Web settings; no global Soleur API key is required. No customer repository content was sent.
 
 ## Required disposition record
 
 The CLO should record, for **each mode independently**: decision and date; account/agreement evidence reference; allowed data classes and cohort; location/transfer finding; retention and provider-erasure finding; billing and administrator owner; restrictions and review expiry. An internal synthetic-only allowance may be narrower than customer-content approval. Blank fields or public policy alone mean **pending**.
 
-## Disposition status as of 2026-09-22
+## Disposition status as of 2026-09-23
 
 No CLO disposition has been received or recorded for either mode. This packet is
 not an approval and cannot authorize customer-content processing. The exact

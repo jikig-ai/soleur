@@ -1,5 +1,5 @@
 ---
-title: "ADR-243: Records that state at-rest posture are bound to the ledger by an equality clause"
+title: "ADR-245: Records that state at-rest posture are bound to the ledger by an equality clause"
 status: accepted
 date: 2026-09-23
 issue: 8532
@@ -9,12 +9,14 @@ amends:
 tags: [encryption-posture, ledger, article-30, c4, gdpr, art-30, art-32]
 ---
 
-# ADR-243: Records that state at-rest posture are bound to the ledger by an equality clause
+# ADR-245: Records that state at-rest posture are bound to the ledger by an equality clause
 
 ## Status
 
 `accepted`, implemented by the #8532 ledger PR (PR-3 of its plan). The ordinal is provisional
-and gets re-checked against `origin/main` at merge.
+and gets re-checked against `origin/main` at merge. **Renumbered 2026-09-24 from ADR-243**, which
+`main` assigned to the Inngest/Cloudflare streaming decision (#8611). Issue comments and PR text
+written before this date say "ADR-243" and mean this record.
 
 ## Context
 
