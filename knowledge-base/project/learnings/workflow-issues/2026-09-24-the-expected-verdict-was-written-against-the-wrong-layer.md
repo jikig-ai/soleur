@@ -97,6 +97,16 @@ the layer it feeds is a guess.
    topology. **Prevention:** after a topology/count change, grep the NUMERIC referent (`/5`,
    `three legs`, `eight ways`, `K+1`) repo-wide, not the sentence you remember writing — same
    class as the subject-not-phrasing sweep rule.
+8. **`${!_shard_mvar}` indirection tripped `lint-shell-trace-credential-refusal.py`** —
+   `SIGNAL_INDIRECT` reads `${!name}` as a runtime-selected credential expansion, so the
+   heavy arm's indirect lookup put `test-all.sh` in scope for the xtrace refusal. It failed
+   BOTH the advisory `--changed` job (lint-bot-statuses) AND the blocking repo-wide
+   registered suite (leg 2/6 → aggregator red → sibling legs cancelled). Local verification
+   missed it because the repo-wide arm wasn't in the targeted-test list.
+   **Prevention:** for changes to `scripts/test-all.sh` specifically, run the file's OWN
+   registered lint suites (`lint-shell-trace-credential-refusal-repo` walks the whole repo
+   but is scored per-file) — and remember indirect expansion is a credential-class signal in
+   this tree: bind values per arm, keep only the NAME indirect for messages.
 
 ## What did NOT need fixing
 

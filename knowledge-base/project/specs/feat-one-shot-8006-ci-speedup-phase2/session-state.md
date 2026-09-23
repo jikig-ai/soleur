@@ -61,7 +61,11 @@ None blocking. Subagent had no Skill/Task tool — `plan` and `deepen-plan` were
   - `_mrest` duplicate unset removed; `_shard_mn=0`→`""` so headerless manifests print `n='<none>'`; superseded first trap in manifest test removed.
 - **Deferred (documented, not fixed):** `EXECUTED < 1` belt-and-suspenders floor retained; empty-label TSV rows (`\t3`) skip silently — same behavior as the lint, hash fallback covers the label anyway; heavy malformed list is a documented class-sample, not the full 10.
 
+### CI incident + fix (post-review, caught by CI not local tests)
+- `${!_shard_mvar}` indirection in the heavy arm tripped `lint-shell-trace-credential-refusal.py`'s `SIGNAL_INDIRECT` — failed advisory lint-bot-statuses AND blocking leg 2/6 (`lint-shell-trace-credential-refusal-repo` suite) → aggregator red → siblings cancelled on run 35933331636. Fixed in `5b879c2888`: bind `_shard_mset`/`_shard_mval` per group arm directly; variable NAME alone still drives error messages. Verified: lint clean, smokes green, no battery anchors touched.
+- Timing signal from the cancelled run (pre-lint-fix bytes, still representative): light 1/6 7m12s, 6/6 7m53s; heavy 7m46s/5m34s/6m52s; mutations halves ~1m35s each. Consistent with the ~8–8.5m target pending the clean run 35934029494.
+- Compound learning written: `learnings/workflow-issues/2026-09-24-the-expected-verdict-was-written-against-the-wrong-layer.md` (8 session errors incl. this lint trip).
+
 ### Remaining
-- Re-run touched suites (guard, battery halves, manifest+generator tests), commit, push
-- Compound+archive, ready, CI timing measurement vs ~8.5m target
-- Post-merge: soak probe keeps #8006 open until 3 qualifying runs pass
+- CI run 35934029494 (push 5b879c2888): green + leg timing measurement vs ~8.5m target
+- Merge when green; post-merge soak probe keeps #8006 open until 3 qualifying runs pass
