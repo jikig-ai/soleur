@@ -514,9 +514,9 @@ resource "hcloud_server" "registry" {
   # `registry-luks-recut` dispatch path, which is destroy-guarded and scoped. This is disclosure,
   # not a new hazard — but until #6460's DR remediation lands, "the plan shows the registry being
   # replaced" is a STOP, not a proceed. The repin improves the odds the Hetzner CREATE
-  # call succeeds. It does NOT make the replace safe: the live volume is still plaintext ext4,
-  # so a fresh host boots into cloud-init-registry.yml's `refusing-non-luks-device` FATAL and
-  # comes up dark. That is #6929's recut. Improving the odds of one step is not authorization.
+  # call succeeds; a fresh host still meets cloud-init-registry.yml's `blkid` arms (history of
+  # the pre-2026-08-10 FATAL: runbooks/registry-luks-recut-6929.md, "cannot perform a recut").
+  # Improving the odds of one step is not authorization.
   user_data = base64gzip(replace(templatefile("${path.module}/cloud-init-registry.yml", {
     # Mount the zot storage volume by its specific id (server.tf/cloud-init.yml by-id
     # pattern). Known at plan time; the attachment is a separate resource.

@@ -239,7 +239,13 @@ BEGIN
   )
   SELECT p_workspace_id, p_execution_kind, p_conversation_id, p_routine_id,
          p_routine_run_id, COALESCE(s.default_engine_id, 'claude-code'),
-         COALESCE(s.default_auth_mode, 'managed'), 'registry-pending', 'queued', p_created_by
+         COALESCE(s.default_auth_mode, 'managed'),
+         CASE COALESCE(s.default_engine_id, 'claude-code')
+           WHEN 'codex' THEN 'codex-v1'
+           WHEN 'claude-code' THEN 'claude-code-v1'
+           ELSE 'registry-pending'
+         END,
+         'queued', p_created_by
     FROM (SELECT default_engine_id, default_auth_mode FROM public.workspace_engine_settings
            WHERE workspace_id = p_workspace_id) s
   RIGHT JOIN (SELECT 1) sentinel ON true

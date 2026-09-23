@@ -266,7 +266,7 @@ on:
           volume, and it is the one arm that still works while the SSH bridge is down.
           IRREVERSIBLE: Cloudflare will not re-issue the old secret.
           registry-luks-recut DESTROYS the zot store (a disposable GHCR mirror); do NOT use
-          registry-host-replace for that — it preserves the volume and darks the registry.
+          registry-host-replace for that — it keeps the volume, so it cannot recut.
           web-host-create BIRTHS a declared-but-absent web host; it is additive-only and
           needs `web_host_key` + `confirm=BIRTH-<key>`. web-host-replace DESTROYS AND
           RECREATES an existing web host (both volumes preserved by omission); it needs
@@ -3560,7 +3560,7 @@ jobs:
           POSTURE_PROBE_RESULT: ${{ needs.registry_pull_path_gate.outputs.probe_result }}
         # THE THREE -replace FLAGS ARE THE POINT. Replacing the volume alone leaves the old host
         # mounting a device that no longer exists; replacing the host alone preserves the
-        # plaintext volume and hits the blkid FATAL. They move TOGETHER or not at all.
+        # volume, which is a host replace, not a recut. They move TOGETHER or not at all.
         run: |
           set -uo pipefail
           # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
@@ -3629,7 +3629,7 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/registry-luks-recut-gate.sh"
           if ! registry_luks_recut_gate tfplan.json "$EXPECTED_VOLUME_ID" "$PROBE_RESULT"; then
             echo "::error::registry-luks-recut destroy-guard ABORTED. The counter line above names the failing check; each has a named exit in knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md:"
-            echo "::error::  • volume_provisioned=0 → the plan PRESERVES the store volume. That is the registry-host-replace footgun: the host would boot cloud-init against the still-plaintext device and FATAL. Re-dispatch with all three -replace flags (this job supplies them; a 0 here means the resource is absent from the -target set or already replaced)."
+            echo "::error::  • volume_provisioned=0 → the plan PRESERVES the store volume. A plan that keeps the volume is a host replace: it cannot re-encrypt or empty the store. Re-dispatch with all three -replace flags (this job supplies them; a 0 here means the resource is absent from the -target set or already replaced)."
             echo "::error::  • volume_id_mismatch=1 → the address resolves to a DIFFERENT physical volume than you authorized, or the plan carries no before.id. STOP and reconcile terraform state — do not re-fire with a different id until you know why."
             echo "::error::  • luks_key_touched=1 → the isolated Doppler config lacks the key, so terraform wants to create/update it. Run the operator's untargeted apply per the OPERATOR_APPLIED_EXCLUSIONS contract so the key lands, then re-dispatch."
             echo "::error::  • logs_secret_destroyed=1 → the fresh host would brick (the 3-secret boot guard FATALs without BETTERSTACK_LOGS_TOKEN). Reconcile the plan."

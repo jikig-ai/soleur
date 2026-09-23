@@ -35,7 +35,10 @@ set -euo pipefail
 #   2  usage error — TEST_GROUP took an unsupported value (predates the above), OR the
 #      relevance-predicate data file is missing, OR scripts/lib/repo-write-boundary.sh is missing
 #      or stale (added #7652 — a gate whose boundary is undefined refuses rather than running at
-#      reduced meaning). Both are "this runner cannot run", not a
+#      reduced meaning), OR apps/web-platform/node_modules is absent while the webplat group is
+#      selected (#8580 — the arm's suites all resolve binaries out of the app's install, so the
+#      group cannot run at all; the refusal names the `npm ci` remediation). All are "this
+#      runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
 #   4  REFUSED before anything ran. TWO producers, both overridden by SOLEUR_ALLOW_FULL_GATE=1:
@@ -2240,6 +2243,12 @@ if want_scripts; then
   # (exit 0 would auto-close the issue). Explicit run_suite —
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
+  # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
+  # logic behind scheduled-actions-queue-health.yml — live queue depth +
+  # delivered-vs-entitled concurrency + median live queued age ->
+  # HEALTHY/SATURATED/UNDER_ASSIGNED/UNKNOWN. Explicit run_suite —
+  # scripts/*.test.sh is covered by no glob here.
+  run_suite "scripts/actions-queue-health" bash scripts/actions-queue-health.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -2726,6 +2735,58 @@ fi
 # land in the gated project and be silently declined. That guard runs in the
 # repo-wide project, so it is never gated by the thing it guards.
 if want_webplat; then
+  # --- Precondition: apps/web-platform deps present (#2398 arm of #8580) -----
+  #
+  # Every suite in this arm resolves a binary out of the app's install — the
+  # vitest projects via `npm run test:ci`, and ccla-add plus its followthroughs
+  # companion via `apps/web-platform/node_modules/.bin/tsx` (see the registration
+  # comments below). With the app's node_modules absent, the arm does not fail
+  # here — it fails DEEP, well inside the suite, as `vitest: not found` (#2398's
+  # exact report), after the suite's own setup has already run. So the check
+  # runs FIRST, at arm entry, and names the deterministic recovery.
+  #
+  # Three alternatives considered and rejected:
+  #   * skip_suite — this runner is a gate; a declined webplat arm reports
+  #     green-shaped output over coverage it never obtained (the ADR-181
+  #     vacuity class). An unmet precondition is a REFUSAL, not a decline.
+  #   * a sibling worktree's vitest — vitest.config.ts imports resolve
+  #     against THIS checkout's tree, never the sibling's node_modules, so a
+  #     borrowed binary still dies on config imports. Only an install in this
+  #     worktree satisfies the arm.
+  #   * a conditional registration — this file's run_suite sites are parsed
+  #     STATICALLY for the shard-totality reference (see the markdown-lint
+  #     registration comment in the scripts arm); gating one on install state
+  #     counts it in the reference and assigns it to no leg.
+  #
+  # rc 2, the "this runner cannot run" class (missing prerequisite), not 4 —
+  # 4 means "refused before anything ran", and under TEST_GROUP=all the
+  # earlier groups HAVE already run by the time control reaches this block.
+  # Exempt under --enumerate for the same reason the refusal guards above are:
+  # an enumerate pass starts no suite and resolves no binary, and the
+  # shard-totality guard enumerates on legs that install no node deps at all.
+  # Exempt under SANDBOX_RECORD for the identical reason: the coverage-notice
+  # suite's sandbox arms replace run_suite with a recorder, so no suite starts
+  # and no binary resolves — refusing there would make every arm measure this
+  # refusal instead of the gate under test (the CI test-scripts shard installs
+  # no app deps, so the refusal would fire unconditionally).
+  if (( _ENUMERATE == 0 )) && [[ -z "${SANDBOX_RECORD:-}" ]]; then
+    # The arm's dependency set is vitest AND tsx (ccla-add + its followthroughs
+    # companion exec tsx directly, per the comment above) — probing vitest alone
+    # would let a partial install fail deep in exactly the way this guard exists
+    # to prevent.
+    _missing_webplat_bins=()
+    for _b in vitest tsx; do
+      [[ -x "apps/web-platform/node_modules/.bin/$_b" ]] || _missing_webplat_bins+=("$_b")
+    done
+    if (( ${#_missing_webplat_bins[@]} > 0 )); then
+      echo "ERROR: refusing the webplat arm — apps/web-platform/node_modules is absent or incomplete." >&2
+      echo "       Missing bin(s): ${_missing_webplat_bins[*]}. Every suite in this group resolves" >&2
+      echo "       a binary from the app's install and would fail deep. Install the deps, then re-run:" >&2
+      echo "           npm ci --ignore-scripts --prefix apps/web-platform" >&2
+      exit 2
+    fi
+  fi
+
   # `component` runs ALWAYS, alongside repo-wide. #7498 evaluated gating it and
   # declined on measurement: at ~80 s it is a ~39 s expected saving, "statistically
   # the same quantity this PR already declined for the union predicate", and taking
@@ -3090,7 +3151,7 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         echo "        WHAT CHANGED:" >&2
         printf '%s\n' "$_repo_fatal" | while IFS=$'\t' read -r _sev _dim _detail; do
           echo "          [$_dim] $_detail" >&2
-          echo "                 next: $(repo_boundary_next_action "$_dim")" >&2
+          echo "                 next: $(repo_boundary_next_action "$_dim" "$_detail")" >&2
         done
         echo "" >&2
         _rb_head_before="$(printf '%s\n' "$_repo_state_before" | sed -n 's/^head\t//p')"
@@ -3100,12 +3161,18 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
           echo "        HEAD after : ${_rb_head_after}" >&2
           echo "        (good-sha is the BEFORE value; bad-sha is the AFTER value.)" >&2
         fi
-        echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
-        echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
-        echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2
-        echo "          3. restore the checkout, then remove the fixture's files" >&2
-        echo "        A suite whose fixture cd fails, or whose git -C operand is empty, runs git in" >&2
-        echo "        the caller CWD (#7553/#7652)." >&2
+        # The recovery recipe is HEAD/worktree surgery — a config, refs, or shallow FATAL has no
+        # good-sha/bad-sha and nothing to restore, so printing the steps there would send the
+        # operator through irrelevant ref surgery. The per-dimension `next:` line above carries
+        # each of those dimensions' own remedy.
+        if printf '%s\n' "$_repo_fatal" | grep -qE '^FATAL[[:space:]]+(head|worktree)'; then
+          echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
+          echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
+          echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2
+          echo "          3. restore the checkout, then remove the fixture's files" >&2
+          echo "        A suite whose fixture cd fails, or whose git -C operand is empty, runs git in" >&2
+          echo "        the caller CWD (#7553/#7652)." >&2
+        fi
       fi
 
       if [[ -n "$_repo_report" ]]; then

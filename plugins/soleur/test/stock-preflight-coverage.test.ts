@@ -257,8 +257,31 @@ const callsGate = (job: Job) => /\bstock_preflight_gate\s+tfplan\.json\b/.test(j
 // five destroy paths. A gate that always fails is an outage, not a tripwire.
 const sourcesGate = (job: Job) =>
   /^\s*source\s+\S*stock-preflight-gate\.sh/m.test(jobBody(job));
+/** The local actions a job `uses:`, so a credential supplied by a composite action is visible. */
+function jobUses(job: Job): string[] {
+  return (job.steps ?? []).map((s) => String((s as { uses?: string }).uses ?? ""));
+}
+
+// (#8209, ADR-239) THE PROPERTY, RESTATED — "the job OBTAINS a Hetzner token", not "the job
+// performs this particular read".
+//
+// The property this guards is unchanged and still the one that matters: the stock preflight
+// gate needs a Hetzner token, and a job that calls it without one aborts EVERY dispatch —
+// an outage wearing a tripwire's clothes, as the assertion below says.
+//
+// What changed is where the token comes from. Before #8209 every gated job read it inline
+// with `doppler secrets get HCLOUD_TOKEN` from `prd_terraform`; those reads are now
+// redundant (the infra-credentials loader exports the name for the whole job) and WRONG
+// after operator step O10, when that name no longer exists in `prd_terraform` and the read
+// resolves empty — so the job would fail closed on a credential it already holds.
+//
+// So the first conjunct becomes a disjunction over the two ways a token can arrive, and the
+// `export` conjunct is untouched. This is NOT a weakening: a job that calls the gate with
+// NEITHER source still fails, which is the whole point, and the loader limb is anchored on
+// the action PATH rather than on a step name, so renaming the step cannot satisfy it.
 const readsToken = (job: Job) =>
-  /doppler secrets get HCLOUD_TOKEN\b/.test(jobBody(job)) &&
+  (/doppler secrets get HCLOUD_TOKEN\b/.test(jobBody(job)) ||
+    jobUses(job).includes("./.github/actions/infra-credentials")) &&
   /\bexport HCLOUD_TOKEN\b/.test(jobBody(job));
 
 beforeAll(() => {

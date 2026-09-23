@@ -327,6 +327,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 #         envelope 119, as written 0, arm-A positive control 119, rows carrying store_escrow= 0.
 #         So arm B is not yet exercisable live: no delivered heartbeat carries the field until the
 #         next registry replace. (iii)/(iv) above are its evidence that the SQL is live.
+#         [Delivered on boot 5639cc07, 2026-09-22: heartbeats now carry store_escrow=.]
 #
 # NO BOOT GRACE FOR ARM A. On the last registry replace boot (b3ec6c3b) 342 of 342 heartbeat rows
 # read `store_luks=yes ` and none read `absent`: the mapper is open before the first heartbeat, so

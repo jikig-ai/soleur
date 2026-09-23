@@ -108,10 +108,53 @@ jobs:
           # PRs, defeating the rate-budget purpose that is the reason for #5585.
           # Route-level isolation relies on the anchored lib/supabase/ clients +
           # DB RLS policies (migrations, anchored). See ADR-032 amendment.
-          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$|scripts/dev-suite-mutex\.sh$|\.github/actions/dev-migration-drift-probe/)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$|scripts/dev-suite-mutex\.sh$|\.github/actions/dev-migration-drift-probe/|apps/web-platform/scripts/lint-migration-immutability)'; then
             printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'tenant=false\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Assert on-main migration files immutable
+        # Third leg of migration hygiene (#8583, after the #4241
+        # unmerged-apply gate and the #7964 drift probe): once a
+        # supabase/migrations file is merged it is effectively applied —
+        # a later in-place edit is skipped by run-migrations.sh's
+        # already_applied short-circuit and drifts the dev ledger
+        # (the #8507/138_agent_engine_runs.sql incident). Pure-git check,
+        # ~1s, no secrets — safe to run unconditionally on every event,
+        # including merge_group where the heavier job is skipped by
+        # design (the queue TOCTOU arm). Placement AFTER filter keeps
+        # outputs.tenant written even when this step reds.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -uo pipefail
+          base_ref="${BASE_REF:-main}"
+          base_ref="${base_ref#refs/heads/}"
+          GUARD_PATH="apps/web-platform/scripts/lint-migration-immutability.sh"
+          GUARD_COPY="$RUNNER_TEMP/migration-immutability-guard.sh"
+          # Anti-self-neuter: when the script already exists on the base
+          # ref, run THAT copy — a PR must not weaken the guard that
+          # judges it (ci.yml's ci-e2e-classify.sh precedent). The
+          # fallback to the checkout copy is valid ONLY during the
+          # guard's introduction window (path never existed on base) —
+          # if the script ever existed on base but `git show` now fails,
+          # it was deleted on main, and falling back would let a
+          # follow-up PR ship a neutered copy + a mutation (two-PR
+          # neuter). Deleted-guard recovery is deliberately loud:
+          # restore the script in a normal PR, or merge via
+          # admin/ruleset bypass. Same answer if main's copy is ever
+          # systematically broken — the base copy judges every PR
+          # including its own fix, so recovery there is also a
+          # ruleset-bypass merge.
+          if git show "origin/${base_ref}:$GUARD_PATH" > "$GUARD_COPY" 2>/dev/null && [[ -s "$GUARD_COPY" ]]; then
+            echo "migration-immutability: running base-ref copy of $GUARD_PATH"
+            bash "$GUARD_COPY" --from-pr-diff --repo "$GITHUB_WORKSPACE"
+          elif [[ -z "$(git log -1 --format=%H "origin/${base_ref}" -- "$GUARD_PATH" 2>/dev/null)" ]]; then
+            echo "::notice::$GUARD_PATH absent on origin/$base_ref (introduction window) — running checkout copy"
+            bash "$GUARD_PATH" --from-pr-diff
+          else
+            echo "::error::$GUARD_PATH was deleted on origin/$base_ref — refusing to judge with a PR-controlled copy; restore the guard (or merge via admin/ruleset bypass)" >&2
+            exit 1
           fi
 
   tenant-integration:

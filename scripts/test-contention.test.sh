@@ -469,7 +469,16 @@ mkdir -p "$SS_ROOT/locks"
 # (green locally, red in CI: the vitest-unstub-can't-clear-inherited-env class
 # from work/SKILL.md). The CI-exemption arm below re-sets CI=true explicitly.
 lock_env() {
-  env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+  # The TC_* knobs are scrubbed too: a caller running this suite under a
+  # raised-budget wrapper (the ship battery exports TC_LOCK_TIMEOUT=14400
+  # TC_RUNTIME_CEILING_S=39600) would otherwise leak ambient budgets into
+  # arms that assume the shipped defaults — Q11's 6h-old tickets are not
+  # stale under a 39600s ceiling, and Q14's sanitize-to-default arm reads
+  # the ambient TC_LOCK_TIMEOUT. Arms that need a non-default set it after
+  # the scrub via `lock_env env VAR=...`.
+  env -u CI -u TC_LOCK_TIMEOUT -u TC_RUNTIME_CEILING_S -u TC_QUEUE_TIMEOUT \
+      -u TC_QUEUE_POLL_S -u TC_WAIT_HEARTBEAT_S \
+      SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
       TC_PROC_ROOT="$FAKE_PROC" TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" \
       "$@"
 }
@@ -1804,7 +1813,524 @@ else
   fail "G2 empty ceiling did not take the default; expected 1, got: $G2_EMPTY"
 fi
 
-MIN_CASES=128
+# ===========================================================================
+# Phase 3b — FIFO ticket queue (#8579)
+#
+# The defect these arms pin: flock -w has no application-level queue, so a
+# holder outlasting TC_LOCK_TIMEOUT released EVERY waiter at once. Now each
+# waiter mints a flock-anchored ticket and only the queue head calls
+# acquire_lock. Ordering is made deterministic the way the suite's lock arms
+# do it: a waiter's shell stays alive on a trailing `sleep` after tc_acquire
+# returns (the ticket fd outlives the call inside its owning shell, exactly
+# like _SESSION_LOCK_FDS), and every step gates on `await_held`-style flock -n
+# probes of ticket files or `await_line` log watches — never a wall-clock
+# guess that a process has reached a state.
+# ===========================================================================
+
+echo "=== Phase 3b: FIFO ticket queue (#8579) ==="
+
+# Spawn a queued waiter running tc_acquire under the lock_env variables,
+# holding its shell (and therefore its ticket fd, and the main lock once
+# acquired) for <hold_s> after the call returns. Prints the pid of the REAL
+# bash process — `( exec env ... )` replaces the subshell, so kill -9 on the
+# printed pid is what drops the ticket fd (the Q3/Q5 arms depend on that).
+spawn_waiter() {
+  local tag="$1" lname="$2" budget="$3" hold_s="${4:-30}" qtimeout="${5:-60}"
+  ( exec env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+      TC_PROC_ROOT="$FAKE_PROC" TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" \
+      TC_QUEUE_POLL_S=1 TC_WAIT_HEARTBEAT_S=1 TC_QUEUE_TIMEOUT="$qtimeout" \
+      bash -c "source '$LIB'; tc_acquire '$lname' '$budget'; echo RC=\$?; sleep '$hold_s'" \
+  ) > "$TESTROOT/$tag.log" 2>&1 &
+  echo $!
+}
+
+# Block until $pat appears in file $1 (bounded; polls at 100ms).
+await_line() {
+  local f="$1" pat="$2" max="${3:-150}" i
+  for (( i = 0; i < max; i++ )); do
+    if [[ -f "$f" ]] && grep -qE "$pat" "$f" 2>/dev/null; then return 0; fi
+    sleep 0.1
+  done
+  return 1
+}
+
+# Count outcome lines a waiter has emitted (proceed = ACQUIRED or CONTENDED).
+proceed_count() {
+  grep -cE 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' "$1" 2>/dev/null || true
+}
+
+# --- Q1: free lock — WAITING -> QUEUED -> ACQUIRED ordering -----------------
+# `timeout 30` on every synchronous tc_acquire driver: a wedge mutant (is_head
+# never true, dropped budget check) must RED, not stall the suite for the
+# default 3600s queue budget.
+lock_env timeout 30 bash -c "source '$LIB'; tc_acquire 8579-t1 3; echo RC=\$?" \
+  > "$TESTROOT/q-t1.txt" 2>&1 || true
+_w="$(awk '/LOCK_WAITING/{print NR; exit}' "$TESTROOT/q-t1.txt")"
+_q="$(awk '/LOCK_QUEUED/{print NR; exit}' "$TESTROOT/q-t1.txt")"
+_a="$(awk '/LOCK_ACQUIRED/{print NR; exit}' "$TESTROOT/q-t1.txt")"
+cases=$((cases + 1))
+if [[ -n "$_w" && -n "$_q" && -n "$_a" ]] && (( _w < _q && _q < _a )) \
+   && [[ "$(grep -cE 'RC=0' "$TESTROOT/q-t1.txt" || true)" -ge 1 ]]; then
+  pass "Q1: LOCK_WAITING -> LOCK_QUEUED -> LOCK_ACQUIRED ordering on a free lock, rc=0"
+else
+  fail "Q1: queue ordering broken; got: $(cat "$TESTROOT/q-t1.txt")"
+fi
+# The ticket's fd died with the waiter's shell: the file exists but is
+# flock-free now (kernel release, no reaper — the AC5b property on tickets).
+_t1_ticket="$(find "$SS_ROOT/locks/8579-t1.queue.d" -name '0*' -type f | head -1 || true)"
+cases=$((cases + 1))
+if [[ -n "$_t1_ticket" ]] && flock -w 0 -x "$_t1_ticket" -c true 2>/dev/null; then
+  pass "Q1: the ticket file is released when the waiter's shell exits"
+else
+  fail "Q1: ticket '$_t1_ticket' still held after owner exit (or never minted)"
+fi
+# A mutation minting but never flocking the ticket survives Q1's order check
+# but is caught by the Q2 arm's "B must not proceed" assertion below.
+
+# --- Q2/Q3: the defect's regression arm — serialized release ----------------
+# Main lock held for the whole arm; waiter A's lock budget (2s) expires so A
+# proceeds CONTENDED while STILL HOLDING its ticket. B mints second and must
+# emit no proceed line while A's ticket is held — pre-queue code released B
+# with A. (Guard 1 rows 1 and 5.)
+HELD2="$SS_ROOT/locks/8579-t2.lock"
+: > "$HELD2"
+flock -x "$HELD2" -c 'sleep 90' & H2_PID=$!
+await_held "$HELD2" || { cases=$((cases + 1)); fail "Q2 fixture: holder never took 8579-t2"; }
+A_PID="$(spawn_waiter qa 8579-t2 2 90)"
+B_PID=""
+if await_line "$TESTROOT/qa.log" 'LOCK_CONTENDED_PROCEEDING' 100; then
+  cases=$((cases + 1))
+  pass "Q2 fixture: waiter A proceeded contended while holding ticket 1"
+else
+  cases=$((cases + 1))
+  fail "Q2 fixture: A never proceeded contended; got: $(cat "$TESTROOT/qa.log" 2>/dev/null)"
+fi
+B_PID="$(spawn_waiter qb 8579-t2 2 90)"
+if await_line "$TESTROOT/qb.log" 'LOCK_QUEUED' 100; then
+  cases=$((cases + 1))
+  pass "Q2 fixture: waiter B minted its ticket while A's was held"
+else
+  cases=$((cases + 1))
+  fail "Q2 fixture: B never minted a ticket; got: $(cat "$TESTROOT/qb.log" 2>/dev/null)"
+fi
+# Observation window: A's ticket is still held (its shell sleeps 90s), so B
+# must sit at position 2 emitting NOTHING but heartbeats. 3 s at a 1 s poll
+# is many full queue cycles — long enough that a broken head-check (mutation
+# "return 0 unconditionally") has already proceeded B contended.
+sleep 3
+cases=$((cases + 1))
+if [[ "$(proceed_count "$TESTROOT/qb.log")" -eq 0 ]]; then
+  pass "Q2/Guard-1 row 1: B emitted no proceed line while ticket 1 was held"
+else
+  fail "Q2/Guard-1 row 1: B proceeded while A's ticket was held: $(grep -E 'LOCK_ACQUIRED|LOCK_CONTENDED' "$TESTROOT/qb.log")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'position=2' "$TESTROOT/qb.log" || true)" -ge 1 ]]; then
+  pass "Q2/Guard-1 row 5: B's heartbeat reports position=2 inside the wait window"
+else
+  fail "Q2/Guard-1 row 5: no position=2 beat; got: $(grep HEARTBEAT "$TESTROOT/qb.log" | head -3)"
+fi
+# Q3: kill A's whole shell -> ticket 1 releases via the kernel -> B becomes
+# head and reaches its own (contended) proceed. Release is serialized by
+# ticket release, not by a shared timer.
+kill -9 "$A_PID" 2>/dev/null || true
+wait "$A_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if await_line "$TESTROOT/qb.log" 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' 150; then
+  pass "Q3/AC3: after the head's shell died, B became head and proceeded (no reaper)"
+else
+  fail "Q3/AC3: B never proceeded after A's ticket released; got: $(cat "$TESTROOT/qb.log")"
+fi
+kill "$B_PID" "$H2_PID" 2>/dev/null || true
+wait "$B_PID" "$H2_PID" 2>/dev/null || true
+
+# --- Q4: FIFO order across three waiters (Guard 1 rows 2, 3, 6) -------------
+# C mints a THIRD ticket behind A and B: a head-check that counts only the
+# immediately-previous ticket, or probes `>` instead of `<`, lets C proceed
+# early. Serials can be non-contiguous (a killed middle waiter leaves a gap),
+# so order is asserted as mint order, not adjacency.
+HELD4="$SS_ROOT/locks/8579-t4.lock"
+: > "$HELD4"
+flock -x "$HELD4" -c 'sleep 90' & H4_PID=$!
+await_held "$HELD4" || { cases=$((cases + 1)); fail "Q4 fixture: holder never took 8579-t4"; }
+W1_PID="$(spawn_waiter w1 8579-t4 2 90)"
+await_line "$TESTROOT/w1.log" 'LOCK_QUEUED' 100 || true
+# W1's 2s lock budget expires on the held main lock — it proceeds CONTENDED
+# and its shell exec's into `sleep 90`, keeping ticket 1 held the whole time.
+# (A kill landing mid-acquire_lock would orphan the flock -w CHILD, which
+# inherits the ticket fd and holds it until its own -w resolves — bounded by
+# timeout_s, the same inheritance _SESSION_LOCK_FDS has always had. These
+# arms therefore kill only waiters that are past the acquire call or still in
+# the queue stage.)
+await_line "$TESTROOT/w1.log" 'LOCK_CONTENDED_PROCEEDING' 100 || true
+W2_PID="$(spawn_waiter w2 8579-t4 2 90)"
+await_line "$TESTROOT/w2.log" 'LOCK_QUEUED' 100 || true
+W3_PID="$(spawn_waiter w3 8579-t4 2 90)"
+await_line "$TESTROOT/w3.log" 'LOCK_QUEUED' 100 || true
+sleep 3
+cases=$((cases + 1))
+if [[ "$(proceed_count "$TESTROOT/w2.log")" -eq 0 ]] \
+   && [[ "$(proceed_count "$TESTROOT/w3.log")" -eq 0 ]]; then
+  pass "Q4/Guard-1 rows 2,3: neither W2 nor W3 proceeds while ticket 1 is held"
+else
+  fail "Q4/Guard-1 rows 2,3: a non-head waiter proceeded; w2=$(proceed_count "$TESTROOT/w2.log") w3=$(proceed_count "$TESTROOT/w3.log")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'position=3' "$TESTROOT/w3.log" || true)" -ge 1 ]]; then
+  pass "Q4/Guard-1 row 6: third waiter's heartbeat reports position=3"
+else
+  fail "Q4/Guard-1 row 6: no position=3 beat; got: $(grep -E 'position=' "$TESTROOT/w3.log" | head -3)"
+fi
+# Release serial order: kill the head holder's shell; W2 proceeds (its 2s
+# lock budget contends on HELD4 — the ORDER of proceeds is the assertion).
+kill -9 "$W1_PID" 2>/dev/null || true
+wait "$W1_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if await_line "$TESTROOT/w2.log" 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' 150; then
+  pass "Q4: W2 proceeded next after ticket 1 released (FIFO order held)"
+else
+  fail "Q4: W2 never became head; got: $(cat "$TESTROOT/w2.log")"
+fi
+cases=$((cases + 1))
+if [[ "$(proceed_count "$TESTROOT/w3.log")" -eq 0 ]]; then
+  pass "Q4: W3 still queued while W2 ran (one release at a time)"
+else
+  fail "Q4: W3 proceeded before W2's ticket released — ordering broken"
+fi
+kill -9 "$W2_PID" 2>/dev/null || true
+wait "$W2_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if await_line "$TESTROOT/w3.log" 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' 150; then
+  pass "Q4: W3 proceeded last — release order equals mint order"
+else
+  fail "Q4: W3 never proceeded; got: $(cat "$TESTROOT/w3.log")"
+fi
+kill "$W3_PID" "$H4_PID" 2>/dev/null || true
+wait "$W3_PID" "$H4_PID" 2>/dev/null || true
+
+# --- Q5: SIGKILL of a mid-QUEUE waiter releases its ticket (kernel release) --
+# K1 is the contended head holding ticket 1 through its exec'd sleep; K2 sits
+# in the queue stage (poll loop — no flock -w child), K3 behind it. kill -9
+# K2's shell mid-queue: the kernel releases ticket 2 with no reaper, K3's
+# heartbeat drops to position=2, and killing K1 then promotes K3 to head.
+HELD5="$SS_ROOT/locks/8579-t5.lock"
+: > "$HELD5"
+flock -x "$HELD5" -c 'sleep 90' & H5_PID=$!
+await_held "$HELD5" || { cases=$((cases + 1)); fail "Q5 fixture: holder never took 8579-t5"; }
+K1_PID="$(spawn_waiter k1 8579-t5 2 90)"
+await_line "$TESTROOT/k1.log" 'LOCK_CONTENDED_PROCEEDING' 100 || true
+K2_PID="$(spawn_waiter k2 8579-t5 2 90)"
+await_line "$TESTROOT/k2.log" 'LOCK_QUEUED' 100 || true
+K3_PID="$(spawn_waiter k3 8579-t5 2 90)"
+await_line "$TESTROOT/k3.log" 'LOCK_QUEUED' 100 || true
+sleep 1
+kill -9 "$K2_PID" 2>/dev/null || true
+wait "$K2_PID" 2>/dev/null || true
+# K2's ticket file may outlive it by ~one poll interval (the queue-wait
+# `sleep` child also inherits the fd) — bounded, then released by the kernel.
+cases=$((cases + 1))
+_k2_ticket="$SS_ROOT/locks/8579-t5.queue.d/00000002"
+_t2_free=0
+for (( _i = 0; _i < 50; _i++ )); do
+  if flock -w 0 -x "$_k2_ticket" -c true 2>/dev/null; then _t2_free=1; break; fi
+  sleep 0.1
+done
+if [[ "$_t2_free" == "1" ]]; then
+  pass "Q5/AC3: a mid-queue SIGKILLed waiter's ticket releases via the kernel (no reaper)"
+else
+  fail "Q5/AC3: ticket 2 still held 5s after kill -9 of its owner"
+fi
+cases=$((cases + 1))
+if await_line "$TESTROOT/k3.log" 'position=2' 100; then
+  pass "Q5: K3's heartbeat dropped to position=2 after K2's death"
+else
+  fail "Q5: K3 never observed K2's release; got: $(grep -E 'position=' "$TESTROOT/k3.log" | tail -3)"
+fi
+# The load-bearing negative: K2's slot is now FREE but ticket 1 is still held,
+# so K3 must still NOT proceed. This is the only fixture where "scan every
+# earlier ticket" differs from "check the immediate predecessor" — an
+# is_head that probes only serial-1 files would wrongly promote K3 here.
+cases=$((cases + 1))
+sleep 3
+if [[ "$(proceed_count "$TESTROOT/k3.log")" -eq 0 ]]; then
+  pass "Q5/Guard-1 row 4: K3 stays queued behind held ticket 1 with ticket 2 free (non-contiguous queue)"
+else
+  fail "Q5/Guard-1 row 4: K3 proceeded while ticket 1 was still held — predecessor-only head check"
+fi
+kill -9 "$K1_PID" 2>/dev/null || true
+wait "$K1_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if await_line "$TESTROOT/k3.log" 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' 150; then
+  pass "Q5: K3 became head and proceeded once ticket 1 released"
+else
+  fail "Q5: K3 never proceeded; got: $(cat "$TESTROOT/k3.log")"
+fi
+kill "$K3_PID" "$H5_PID" 2>/dev/null || true
+wait "$K3_PID" "$H5_PID" 2>/dev/null || true
+
+# --- Q6: queue timeout proceeds contended, never aborts (AC4) ----------------
+# B sits behind A's held ticket with TC_QUEUE_TIMEOUT=2. The escape emits the
+# canonical LOCK_CONTENDED token (triage grep) plus queue_timeout=1.
+HELD6="$SS_ROOT/locks/8579-t6.lock"
+: > "$HELD6"
+flock -x "$HELD6" -c 'sleep 90' & H6_PID=$!
+await_held "$HELD6" || { cases=$((cases + 1)); fail "Q6 fixture: holder never took 8579-t6"; }
+G1_PID="$(spawn_waiter g1 8579-t6 30 90)"   # head, holds ticket
+await_line "$TESTROOT/g1.log" 'LOCK_QUEUED' 100 || true
+lock_env env TC_QUEUE_POLL_S=1 TC_WAIT_HEARTBEAT_S=1 TC_QUEUE_TIMEOUT=2 \
+  bash -c "source '$LIB'; tc_acquire 8579-t6 60; echo RC=\$?" \
+  > "$TESTROOT/g2.log" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_QUEUE_TIMEOUT' "$TESTROOT/g2.log" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING.*queue_timeout=1' "$TESTROOT/g2.log" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'RC=0' "$TESTROOT/g2.log" || true)" -ge 1 ]]; then
+  pass "Q6/AC4: TC_QUEUE_TIMEOUT on a non-head emits LOCK_QUEUE_TIMEOUT + queue_timeout=1, rc=0"
+else
+  fail "Q6/AC4: queue-timeout arm wrong; got: $(cat "$TESTROOT/g2.log")"
+fi
+# Mutation control: the queue-timeout line must NOT be the only banner — the
+# proceed must keep the LOCK_CONTENDED token or work/SKILL.md's triage grep
+# loses the run.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_CONTENDED' "$TESTROOT/g2.log" || true)" -ge 1 ]]; then
+  pass "Q6: the queue-timeout escape keeps the canonical LOCK_CONTENDED token"
+else
+  fail "Q6: queue-timeout emitted no LOCK_CONTENDED — invisible to triage grep"
+fi
+kill "$G1_PID" "$H6_PID" 2>/dev/null || true
+wait "$G1_PID" "$H6_PID" 2>/dev/null || true
+
+# --- Q7: stubbed session-state degrades to direct acquire (AC5) --------------
+# The capacity suite injects a session-state stub defining only acquire_lock —
+# no _session_state_init_dirs, no LOCK_DIR. The queue must say so and fall
+# through, never abort and never mint.
+STUB_SS_Q="$TESTROOT/stub-session-state.sh"
+cat > "$STUB_SS_Q" <<'EOF'
+acquire_lock() { echo "STUB_ACQUIRED name=$1 budget=$2"; return 0; }
+EOF
+lock_env env TC_SESSION_STATE="$STUB_SS_Q" \
+  bash -c "source '$LIB'; tc_acquire 8579-t7 3; echo RC=\$?" \
+  > "$TESTROOT/q-t7.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_QUEUE_DEGRADED' "$TESTROOT/q-t7.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'STUB_ACQUIRED name=8579-t7' "$TESTROOT/q-t7.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'RC=0' "$TESTROOT/q-t7.txt" || true)" -ge 1 ]]; then
+  pass "Q7/AC5: stubbed session-state emits LOCK_QUEUE_DEGRADED then acquires directly, rc=0"
+else
+  fail "Q7/AC5: degrade path broken; got: $(cat "$TESTROOT/q-t7.txt")"
+fi
+cases=$((cases + 1))
+if [[ ! -d "$SS_ROOT/locks/8579-t7.queue.d" ]]; then
+  pass "Q7: the degraded run mints no queue directory"
+else
+  fail "Q7: a queue dir appeared under a stubbed session-state"
+fi
+
+# --- Q8: every skip path mints nothing (AC6) --------------------------------
+# The Phase-3 skip arms (kill switch, CI, missing lib, missing flock, missing
+# acquire_lock, empty name) already ran above and assert LOCK_WAITING absent.
+# The queue must sit behind the same gauntlet: none of those runs may have
+# created a *.queue.d entry under the shared locks dir.
+cases=$((cases + 1))
+# Names that returned BEFORE the wait: kill switch, CI, no flock, missing
+# session-state lib, missing acquire_lock. (6789-free/-testall/-noci/-noclock
+# are REAL acquire arms — they correctly mint tickets and must not be counted.)
+_skip_qdirs=""
+for _n in 6789-ks 6789-ci 6789-noflock 6789-missinglib 6789-nolockfn; do
+  [[ -d "$SS_ROOT/locks/$_n.queue.d" ]] && _skip_qdirs="$_skip_qdirs $_n.queue.d"
+done
+if [[ -z "$_skip_qdirs" ]]; then
+  pass "Q8/AC6: no skip path created a queue directory"
+else
+  fail "Q8/AC6: skip paths minted queue state:$_skip_qdirs"
+fi
+
+# --- Q9: heartbeat position + LOCK_WAIT_OVERRUN token (AC8) ------------------
+# A queued waiter past its LOCK budget keeps beating; the token switches to
+# LOCK_WAIT_OVERRUN and every beat carries position=N. Budget=2s lock, queue
+# timeout long, heartbeat 1s.
+HELD9="$SS_ROOT/locks/8579-t9.lock"
+: > "$HELD9"
+flock -x "$HELD9" -c 'sleep 90' & H9_PID=$!
+await_held "$HELD9" || { cases=$((cases + 1)); fail "Q9 fixture: holder never took 8579-t9"; }
+P1_PID="$(spawn_waiter p1 8579-t9 30 90)"
+await_line "$TESTROOT/p1.log" 'LOCK_QUEUED' 100 || true
+P2_PID="$(spawn_waiter p2 8579-t9 2 90 30)"
+await_line "$TESTROOT/p2.log" 'LOCK_QUEUED' 100 || true
+sleep 4   # past p2's 2s lock budget while still queued behind ticket 1
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*position=2' "$TESTROOT/p2.log" || true)" -ge 1 ]]; then
+  pass "Q9/AC8: queue-stage beats carry position=2 with the LOCK_WAIT_HEARTBEAT token"
+else
+  fail "Q9/AC8: no position=2 heartbeat; got: $(grep BANNER "$TESTROOT/p2.log" | head -3)"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAIT_OVERRUN.*waited=[0-9]+s of [0-9]+s' "$TESTROOT/p2.log" || true)" -ge 1 ]]; then
+  pass "Q9/AC8: past the lock budget the beat token switches to LOCK_WAIT_OVERRUN (kept the waited= shape)"
+else
+  fail "Q9/AC8: no LOCK_WAIT_OVERRUN beat; got: $(grep BANNER "$TESTROOT/p2.log" | tail -3)"
+fi
+# Pin the heartbeat's bound to the COMBINED queue+lock budget, not a shape:
+# p2 minted with TC_QUEUE_TIMEOUT=30 and a 2s lock budget, so beats must read
+# "of 32s" — a mutant passing only the lock budget would print "of 2s".
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAIT_(HEARTBEAT|OVERRUN).*of 32s' "$TESTROOT/p2.log" || true)" -ge 1 ]]; then
+  pass "Q9: the beat's bound is the combined queue+lock budget (32s), not the lock budget alone"
+else
+  fail "Q9: heartbeat bound is not queue+lock (32s); got: $(grep -oE 'of [0-9]+s' "$TESTROOT/p2.log" | sort -u | tr '\n' ' ')"
+fi
+kill "$P1_PID" "$P2_PID" "$H9_PID" 2>/dev/null || true
+wait "$P1_PID" "$P2_PID" "$H9_PID" 2>/dev/null || true
+
+# --- Q10: structural pins for the queue path (AC9 + Guard 1 assembly) --------
+# The ordering property's single chokepoint is _tc_queue_is_head under .alloc.
+# Pin the load-bearing shapes so a refactor can't silently reintroduce a -w
+# wait (#7697) or drop the critical section. The scan runs from the queue
+# marker through END of tc_acquire — the queue stage lives INSIDE tc_acquire,
+# so a range that stops at its signature would exempt exactly the place the
+# defect would re-enter.
+QSRC="$(awk '/^# FIFO ticket queue \(#8579\)/{f=1} f{print}' "$LIB")"
+cases=$((cases + 1))
+# Strip comment lines first — the block's own header documents the -w ban in
+# prose, and a naive grep counts the documentation as the violation. Pin the
+# POSITIVE invariant, not the token: every flock invocation in the queue path
+# (helpers AND tc_acquire's queue stage) must carry -n. That catches `-w`,
+# `--wait`, and a bare blocking `flock -x file -c …` alike — all members of
+# the unbounded/parked-wait class #7697 measured.
+if [[ "$(grep -vE '^\s*#' <<<"$QSRC" | grep -E 'flock +-' | grep -vcE 'flock +-n' || true)" -eq 0 ]]; then
+  pass "Q10/AC9: every flock in the queue path is a -n probe (no -w/--wait/blocking form)"
+else
+  fail "Q10/AC9: a non-(-n) flock appeared in the queue path — the #7697 masked-SIGALRM defect is reachable again"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE '10#[^0-9]' <<<"$QSRC" || true)" -ge 3 ]]; then
+  pass "Q10: serial comparisons force decimal (10#) — %08d filenames are not valid octal"
+else
+  fail "Q10: serial comparisons lack 10# — 00000008-style serials would arithmetic-error"
+fi
+# The count above is a presence pin; this arm exercises the defect itself:
+# serials minted to 8 would arithmetic-error without 10# on a leading-zero
+# %08d name. Drive _tc_queue_position directly over a serial-9 ticket set.
+cases=$((cases + 1))
+OCT_DIR="$SS_ROOT/locks/8579-oct.queue.d"
+mkdir -p "$OCT_DIR"
+: > "$OCT_DIR/00000008"
+if env -u CI bash -c "source '$LIB'; LOCK_DIR='$SS_ROOT/locks' _tc_queue_position '$OCT_DIR' 9" 2>/dev/null | grep -qx '1'; then
+  pass "Q10: position over a leading-zero serial (00000008) computes without an octal error"
+else
+  fail "Q10: position over 00000008 failed — a %08d serial reached unguarded arithmetic"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cF '_tc_alloc_lock' <<<"$QSRC" || true)" -ge 3 ]]; then
+  pass "Q10: mint AND head-check both run inside the .alloc critical section"
+else
+  fail "Q10: mint or head-check dropped the .alloc guard — created-but-unlocked tickets become observable"
+fi
+# The ticket fd must outlive tc_acquire (held for the RUN's lifetime, like
+# _SESSION_LOCK_FDS). A "cleanup" closing it on return re-creates the
+# simultaneous-release defect one level down — pin that the lib never closes
+# _TC_TICKET_FD on a success path.
+cases=$((cases + 1))
+if [[ "$(grep -cE '_TC_TICKET_FD.*>&-' <<<"$(awk '/^tc_acquire\(\)/,/^}/' "$LIB")" || true)" -eq 0 ]]; then
+  pass "Q10: tc_acquire never closes the ticket fd (kernel release on exit only)"
+else
+  fail "Q10: tc_acquire closes _TC_TICKET_FD — the ticket no longer outlives the call"
+fi
+
+# --- Q11: ticket sweep — old unlocked tickets removed, held never ------------
+# Under .alloc the mint sweeps unlocked tickets older than TC_RUNTIME_CEILING_S.
+# Held tickets of ANY age must survive, and max+1 must never regress below a
+# live ticket (a swept-and-reminted serial colliding with a live one would
+# break the ordering proof).
+SWEEP_DIR="$SS_ROOT/locks/8579-t11.queue.d"
+mkdir -p "$SWEEP_DIR"
+: > "$SWEEP_DIR/00000001"
+: > "$SWEEP_DIR/00000002"
+touch -d '6 hours ago' "$SWEEP_DIR/00000001"          # unlocked + old -> swept
+# 00000002: old but HELD -> never swept
+touch -d '6 hours ago' "$SWEEP_DIR/00000002"
+flock -x "$SWEEP_DIR/00000002" -c 'sleep 30' & HELD_T=$!
+await_held "$SWEEP_DIR/00000002" || { cases=$((cases + 1)); fail "Q11 fixture: held ticket probe failed"; }
+# TC_QUEUE_TIMEOUT=2: the assertions only need the mint (sweep + serial) to
+# have run — without it this arm waits out the held ticket's 30s sleep.
+# TC_RUNTIME_CEILING_S is pinned to the shipped default so the 6h-old fixture
+# is stale (21600 > 14400) even under a raised-budget ambient env.
+lock_env env TC_QUEUE_TIMEOUT=2 TC_RUNTIME_CEILING_S=14400 \
+  timeout 30 bash -c "source '$LIB'; tc_acquire 8579-t11 3; echo RC=\$?" \
+  > "$TESTROOT/q-t11.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ ! -e "$SWEEP_DIR/00000001" ]] && [[ -e "$SWEEP_DIR/00000002" ]]; then
+  pass "Q11: sweep removed the old unlocked ticket and kept the old HELD one"
+else
+  fail "Q11: sweep wrong — 00000001 exists=$([[ -e "$SWEEP_DIR/00000001" ]] && echo y || echo n), 00000002 exists=$([[ -e "$SWEEP_DIR/00000002" ]] && echo y || echo n)"
+fi
+cases=$((cases + 1))
+_new_ticket="$(find "$SWEEP_DIR" -name '0*' -type f -newer "$SWEEP_DIR/00000002" | head -1 || true)"
+if [[ -n "$_new_ticket" ]] && [[ "${_new_ticket##*/}" > "00000002" ]]; then
+  pass "Q11: the fresh serial (${_new_ticket##*/}) is above the live held ticket (no regression)"
+else
+  fail "Q11: mint regressed below the live ticket; dir: $(ls "$SWEEP_DIR")"
+fi
+kill "$HELD_T" 2>/dev/null || true
+wait "$HELD_T" 2>/dev/null || true
+
+# --- Q12: structural — tc_acquire still has only fail-open exits -------------
+# The queue adds paths; every one must still return 0. Arm 23's extractor
+# asserts all returns are 0 — bump nothing there, but pin here that no new
+# `exit`/`return 1` leaked into tc_acquire's body.
+TC_BODY="$(awk '/^tc_acquire\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$LIB")"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\s*(exit|return [^0])' <<<"$TC_BODY" || true)" -eq 0 ]]; then
+  pass "Q12/AC6: tc_acquire with the queue stage still fails open on every path"
+else
+  fail "Q12/AC6: a non-zero exit leaked into tc_acquire: $(grep -nE '^\s*(exit|return [^0])' <<<"$TC_BODY")"
+fi
+
+# --- Q13: mint failure degrades to direct acquire (never aborts) -------------
+# Only the no_state_root degrade arm was fixtured above; the mint_failed arm
+# (queue dir resolved, mint broke) is the one that would fire on a wedged
+# .alloc or an unwritable ticket path. Pre-hold .alloc past the 50x50ms retry
+# budget to force it.
+MDIR="$SS_ROOT/locks/8579-t13.queue.d"
+mkdir -p "$MDIR"
+flock -x "$MDIR/.alloc" -c 'sleep 8' & ALLOC_H=$!
+await_held "$MDIR/.alloc" || { cases=$((cases + 1)); fail "Q13 fixture: .alloc never held"; }
+lock_env timeout 30 bash -c "source '$LIB'; tc_acquire 8579-t13 3; echo RC=\$?" \
+  > "$TESTROOT/q-t13.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE 'BANNER LOCK_QUEUE_DEGRADED reason=mint_failed' "$TESTROOT/q-t13.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' "$TESTROOT/q-t13.txt" || true)" -ge 1 ]] \
+   && grep -q 'RC=0' "$TESTROOT/q-t13.txt"; then
+  pass "Q13: a mint failure emits BANNER LOCK_QUEUE_DEGRADED then proceeds, rc=0"
+else
+  fail "Q13: mint-failure arm missing or run aborted; got: $(cat "$TESTROOT/q-t13.txt")"
+fi
+kill "$ALLOC_H" 2>/dev/null || true
+wait "$ALLOC_H" 2>/dev/null || true
+
+# --- Q14: operator-knob sanitization (never-abort / never-wedge) -------------
+# TC_QUEUE_TIMEOUT=0 would satisfy `^[0-9]+$` but never fire
+# `(( budget > 0 && waited >= budget ))` — an unbounded queue wait, the wedge
+# the knob exists to prevent. Non-numeric values are unbound-var aborts under
+# set -u arithmetic. Both must normalize to the defaults.
+cases=$((cases + 1))
+# TC_LOCK_TIMEOUT is pinned because TC_QUEUE_TIMEOUT's default DERIVES from
+# it — an ambient raised budget would read as "not sanitized".
+_knobs="$(env TC_LOCK_TIMEOUT=3600 TC_QUEUE_TIMEOUT=0 TC_QUEUE_POLL_S=0 bash -c "source '$LIB'; echo \"\$TC_QUEUE_TIMEOUT \$TC_QUEUE_POLL_S\"" 2>/dev/null)"
+if [[ "$_knobs" == "3600 5" ]]; then
+  pass "Q14: zero-valued queue knobs normalize to defaults (no unbounded wait, no busy-spin)"
+else
+  fail "Q14: zero knobs not sanitized; got '$_knobs'"
+fi
+cases=$((cases + 1))
+_knobs="$(env TC_LOCK_TIMEOUT=3600 TC_QUEUE_TIMEOUT=abc TC_QUEUE_POLL_S=abc bash -c "source '$LIB'; echo \"\$TC_QUEUE_TIMEOUT \$TC_QUEUE_POLL_S\"" 2>/dev/null)"
+if [[ "$_knobs" == "3600 5" ]]; then
+  pass "Q14: non-numeric queue knobs normalize to defaults (no set -u arithmetic abort)"
+else
+  fail "Q14: garbage knobs not sanitized; got '$_knobs'"
+fi
+
+MIN_CASES=160
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2
