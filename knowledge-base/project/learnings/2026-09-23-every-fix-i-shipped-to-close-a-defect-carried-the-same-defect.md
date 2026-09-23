@@ -263,6 +263,27 @@ ratchet, because the ratchet references none of the changed files.
   **Prevention:** read the runner's own invocation (`grep run_suite scripts/test-all.sh`)
   rather than inferring it from the filename.
 
+- **The green-but-incomplete check set recurred, and I watched it happen.** Hours after
+  writing the bullet above and routing it into `review/SKILL.md`, `main` moved again, the
+  PR went `CONFLICTING` a second time, and the monitor reported
+  `ALL CHECKS SETTLED: pass=9 fail=0`. Nine. The same branch reports 57 when a merge ref
+  exists. A settled, all-green check set with no red anywhere is the exact shape of this
+  failure, which is why it is worth its own entry: **the signal is the COUNT, not the
+  colour.** Recovery: merged `origin/main` again (two conflicts, both append-only — the
+  `PROMOTED_FILES` union for the second time, and a generated `model.likec4.json` taken
+  from main and regenerated). **Prevention:** a check-set monitor must assert a plausible
+  check COUNT alongside "no failures", or it will report a suppressed run as success. Mine
+  now does (`[ "$n" -gt 20 ]`).
+
+- **Resolved a 4 KB single-line regex conflict by set operations, not by transcription.**
+  Not an error — recorded because the alternative was, and the alternative is the default.
+  `PROMOTED_FILES` is one alternation of 51 escaped paths on one line; a hand-merge that
+  drops one entry leaves that suite's anti-vacuity floor uncovered while every aggregate
+  arm in the file still balances, so the per-file pin is the only thing that would ever
+  notice. Parsed both sides, unioned, asserted duplicate-free, printed what each side
+  contributed. **Prevention:** when a conflict is in a machine-generated or
+  machine-consumed list, resolve it with a program and print the set difference.
+
 - **Boundary call, stated rather than buried:** `git-data-rung2-rehearsal.test.sh` matches
   the `git-data-*.test.sh` glob the operator fenced off for the parallel #8211 session. I
   measured that PR #8564 does not touch that file before editing it, and the alternative
