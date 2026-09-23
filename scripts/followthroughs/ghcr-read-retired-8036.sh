@@ -302,15 +302,25 @@ PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_LITERAL" '
   | if ($row | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-"
     else
       (($row.raw // null) | if type == "string" then (fromjson? // null) else . end) as $r
-      | if ($r | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-\t-\t-\t-"
+      | if ($r | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-\t-\t-\t-\t0"
         else
           (($r.message // $r.MESSAGE // "") | tostring) as $m
           | (if ($r.SYSLOG_IDENTIFIER // "") == "ci-deploy" then "1" else "0" end) as $sid
           | (($r._MACHINE_ID // "") | tostring
               | if test("^[0-9a-f]{32}$") then . else "-" end) as $mid
-          | ((($r.__REALTIME_TIMESTAMP // "") | tostring | tonumber?)
-              // ((($row.dt // "") | tostring)[0:19] + "Z"
-                   | (strptime("%Y-%m-%d %H:%M:%SZ") | mktime) * 1000000)? // -1) as $ts
+          # `// null` here too: `"" | tonumber?` yields EMPTY, and `empty as $x` emits nothing, so
+          # the entire row disappeared before any refusal could see it -- the same vanishing-row
+          # bug as $tsdt, one binding earlier.
+          | ((($r.__REALTIME_TIMESTAMP // "") | tostring | tonumber?) // null) as $tsus
+          # `// null` INSIDE the binding: `expr? as $x` with a failing expr produces NO OUTPUT,
+          # which drops the whole row before it can reach the unclocked refusal -- measured, a
+          # graded row with an empty `dt` vanished and the host graded PASS.
+          | (((($row.dt // "") | tostring)[0:19] + "Z"
+               | (strptime("%Y-%m-%d %H:%M:%SZ") | mktime) * 1000000)? // null) as $tsdt
+          | (($tsus // $tsdt) // -1) as $ts
+          # COARSE=1 means the second-granularity `dt` fallback supplied this timestamp, so an
+          # equal comparison against another row is an UNKNOWN ordering rather than a tie.
+          | (if $tsus then "0" else "1" end) as $coarse
           | if ($m | test("(^| )" + $mt + " ")) then
               [ "1", $sid, $mid, ($ts|tostring), "marker",
                 (($m | capture(" swept=(?<v>[a-z_]+)").v) // "-"),
@@ -318,16 +328,16 @@ PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_LITERAL" '
                 "-",
                 (($m | capture(" deploy_cfg=(?<v>[a-z_]+)").v) // "-"),
                 (($m | capture(" deploy_creds_store=(?<v>[a-z_]+)").v) // "-"),
-                (($m | capture(" deploy_ghcr_helper=(?<v>[a-z_]+)").v) // "-") ]
+                (($m | capture(" deploy_ghcr_helper=(?<v>[a-z_]+)").v) // "-"), $coarse ]
             elif ($m | test("stage=relogin_failed")) then
-              [ "1", $sid, $mid, ($ts|tostring), "relogin", "-", "-", "-", "-", "-", "-" ]
+              [ "1", $sid, $mid, ($ts|tostring), "relogin", "-", "-", "-", "-", "-", "-", $coarse ]
             elif ($m | test("^IMAGE_VERIFY: ok( |$)")) then
-              [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-", "ok", "-", "-", "-" ]
+              [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-", "ok", "-", "-", "-", $coarse ]
             elif ($m | test("^IMAGE_VERIFY_FAIL: result=[a-z_]+")) then
               [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-",
                 ($m | capture("^IMAGE_VERIFY_FAIL: result=(?<c>[a-z_]+)").c),
-                "-", "-", "-" ]
-            else [ "1", $sid, $mid, ($ts|tostring), "other", "-", "-", "-", "-", "-", "-" ] end
+                "-", "-", "-", $coarse ]
+            else [ "1", $sid, $mid, ($ts|tostring), "other", "-", "-", "-", "-", "-", "-", $coarse ] end
           | join("\t")
         end
     end
@@ -350,28 +360,32 @@ RELEVANT="$(printf '%s\n' "$PARSED" | awk -F'\t' -v e="$EARLIEST_US" \
 # `PASS ... relogin_failed_in_window=0`, and so did one with no usable timestamp; a pre-1c dirty
 # marker with no machine id was invisible too, because MARKERS_NO_MID was only consulted when
 # MARKERS_WITH_MID was zero -- one good marker hid every unattributable one.
-UNCLOCKED="$(printf '%s\n' "$PARSED" | awk -F'\t' 'NF >= 11 && $1 == "1" && $2 == "1" && ($4 + 0) < 0 { n++ } END { print n + 0 }')"
+# SAME SCOPE AS THE ATTRIBUTION REFUSAL. Written pre-gate with no kind filter, this refused on
+# rows nothing grades -- a `ci-deploy` line such as `IMAGE_VERIFY_MODE=warn selected for this
+# deploy` with no clock latched the tracker to exit 3 permanently on an otherwise compliant fleet.
+UNCLOCKED="$(printf '%s\n' "$PARSED" | awk -F'\t' 'NF >= 12 && $1 == "1" && $2 == "1" \
+  && ($5 == "marker" || $5 == "relogin" || $5 == "verify") && ($4 + 0) < 0 { n++ } END { print n + 0 }')"
 if [[ "$UNCLOCKED" -gt 0 ]]; then
   echo "CANNOT ESTABLISH: ${UNCLOCKED} ci-deploy row(s) carry no usable timestamp (neither" >&2
   echo "                  __REALTIME_TIMESTAMP nor a parseable dt). Legs 2 and 3 grade an absence" >&2
   echo "                  over a time window, which a row with no clock cannot be placed in." >&2
   exit 3
 fi
-RELOGIN_NO_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 == "-" && $5 == "relogin" { n++ } END { print n + 0 }')"
-if [[ "$RELOGIN_NO_MID" -gt 0 ]]; then
-  echo "CANNOT ESTABLISH: ${RELOGIN_NO_MID} ${RELOGIN_LITERAL} row(s) since $EARLIEST carry no usable" >&2
-  echo "                  _MACHINE_ID, so they cannot be attributed to a host. Leg 2 grades their" >&2
-  echo "                  ABSENCE, so dropping them would report zero while rows were seen." >&2
+# ONE PREDICATE OVER EVERY GRADED KIND, not a list. This was written as two kind-specific
+# counters (`relogin`, `marker`) and the third graded kind -- `verify` -- was omitted, so an
+# unattributable `IMAGE_VERIFY_FAIL: result=unsigned` was still silently dropped and a host whose
+# real latest verdict was `unsigned` graded PASS. That is the same hand-enumerated-list failure
+# the negation guards died of: a list is a claim about which members exist, and it is wrong the
+# moment one is added. `$RELEVANT` already contains exactly the kinds the grader reads.
+UNATTRIBUTED="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 == "-" { n++ } END { print n + 0 }')"
+if [[ "$UNATTRIBUTED" -gt 0 ]]; then
+  echo "CANNOT ESTABLISH: ${UNATTRIBUTED} graded ci-deploy row(s) since $EARLIEST carry no usable" >&2
+  echo "                  _MACHINE_ID, so they cannot be attributed to a host. Legs 1-3 are graded" >&2
+  echo "                  PER HOST and legs 2-3 grade an absence, so dropping them would report" >&2
+  echo "                  zero while rows were seen." >&2
   exit 3
 fi
-MARKERS_NO_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 == "-" && $5 == "marker" { n++ } END { print n + 0 }')"
-if [[ "$MARKERS_NO_MID" -gt 0 ]]; then
-  echo "CANNOT ESTABLISH: ${MARKERS_NO_MID} ci-deploy ${MARKER_LITERAL} line(s) since $EARLIEST carry" >&2
-  echo "                  no usable _MACHINE_ID. One attributable marker must not make an" >&2
-  echo "                  unattributable one invisible - leg 1 is per host." >&2
-  exit 3
-fi
-MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
+MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
 
 
 # Per-host fold in timestamp order. A host is a group iff it emitted at least one MARKER: a host
@@ -388,16 +402,24 @@ MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-
 # `nrel_all` is carried alongside so the report can still say rows were seen and ignored.
 # Output: <mid> <swept> <deploy_auth> <n_relogin_post_marker> <latest_verify> <n_marker>
 #         <deploy_cfg> <deploy_creds_store> <deploy_ghcr_helper> <n_relogin_all>
-HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-"' | sort -t$'\t' -k3,3 -k4,4n | awk -F'\t' '
+HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 != "-"' | sort -t$'\t' -k3,3 -k4,4n | awk -F'\t' '
   {
     mid = $3; kind = $5
     if (kind == "marker") {
       seen[mid] = 1; swept[mid] = $6; dauth[mid] = $7; nmark[mid]++
       dcfg[mid] = $9; dstore[mid] = $10; dhelper[mid] = $11
-      if (($4 + 0) > (mts[mid] + 0)) mts[mid] = $4 + 0
+      if (($4 + 0) > (mts[mid] + 0)) { mts[mid] = $4 + 0; mcoarse[mid] = ($12 == "1") }
     } else if (kind == "relogin") {
       rel[mid] = rel[mid] " " ($4 + 0); nrelall[mid]++
-    } else if (kind == "verify") { lver[mid] = $8 }
+      if ($12 == "1") acoarse[mid SUBSEP nrelall[mid]] = 1
+    } else if (kind == "verify") {
+      lver[mid] = $8
+      # A reload breadcrumb is not a verification RESULT, so it must not overwrite the record of
+      # the last real one: measured, `unsigned` then `reused_local_reload` reported only the
+      # reload, and the word `unsigned` appeared nowhere in the public comment even though this
+      # line is the only notification for that class.
+      if ($8 != "reused_local_reload") lreal[mid] = $8
+    }
   }
   END {
     for (m in seen) {
@@ -408,11 +430,22 @@ HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-"' | sort -
       # as the close authorisation. A tie is an UNKNOWN ordering, and on a leg that grades an
       # absence an unknown must count AGAINST the pass. This does not weaken the latch fix: a
       # pre-1c relogin sits strictly BEFORE the marker and is still excluded.
-      for (i = 1; i <= c; i++) if (a[i] != "" && (a[i] + 0) >= (mts[m] + 0)) n++
-      printf "%s\t%s\t%s\t%d\t%s\t%d\t%s\t%s\t%s\t%d\n", m, swept[m], dauth[m], n,
+      # STRICT `>` again, plus an explicit UNKNOWN. `>=` was adopted so a second-granularity tie
+      # could not be missed, but it made a pre-1c relogin that is genuinely EARLIER than the
+      # marker -- and merely ties after dt truncation -- FAIL a clean host permanently, which is
+      # the latch this probe exists to avoid, in the other direction. A tie is now neither passed
+      # nor failed: it is reported as unknown and refused above.
+      amb = 0
+      for (i = 1; i <= c; i++) {
+        if (a[i] == "") continue
+        if ((a[i] + 0) > (mts[m] + 0)) n++
+        else if ((a[i] + 0) == (mts[m] + 0) && (mcoarse[m] || acoarse[m SUBSEP i])) amb++
+      }
+      printf "%s\t%s\t%s\t%d\t%s\t%d\t%s\t%s\t%s\t%d\t%d\t%s\n", m, swept[m], dauth[m], n,
         (lver[m] == "" ? "-" : lver[m]), nmark[m],
         (dcfg[m] == "" ? "-" : dcfg[m]), (dstore[m] == "" ? "-" : dstore[m]),
-        (dhelper[m] == "" ? "-" : dhelper[m]), nrelall[m]
+        (dhelper[m] == "" ? "-" : dhelper[m]), nrelall[m], amb,
+        (lreal[m] == "" ? "-" : lreal[m])
     }
   }' | sort)"
 
@@ -424,7 +457,7 @@ HOSTS_TOTAL="$(printf '%s\n' "$HOSTS" | awk 'NF { n++ } END { print n + 0 }')"
 # since `earliest` is positive evidence that the PRE-1c prelude is still running there; reporting
 # that as TRANSIENT ("no deploy has run yet") would name a cause the probe measured the opposite
 # of. It is a FAIL with its own sentence.
-RELOGIN_ONLY="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-"' | awk -F'\t' '
+RELOGIN_ONLY="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 != "-"' | awk -F'\t' '
   { if ($5 == "marker") mark[$3] = 1; if ($5 == "relogin") rel[$3] = 1 }
   END { for (m in rel) if (!(m in mark)) n++; print n + 0 }')"
 
@@ -437,9 +470,20 @@ fi
 
 n_fail=0; n_action=0; n_pass=0
 REPORT=""
-while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrelall; do
+while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrelall amb lreal; do
   [[ -n "$mid" ]] || continue
   short="${mid:0:12}"
+  # AN UNKNOWN ORDERING IS NEITHER A PASS NOR A FAIL. A relogin whose timestamp EQUALS the latest
+  # marker's, where either side came from the second-granularity `dt` fallback, could be before or
+  # after it. Grading it either way is a guess: passing re-opens the fail-open hole, failing
+  # latched a clean host shut. Refuse and say so.
+  if [[ "${amb:-0}" -gt 0 ]]; then
+    echo "CANNOT ESTABLISH: host ${short} has ${amb} ${RELOGIN_LITERAL} row(s) whose ordering against" >&2
+    echo "                  its latest marker is UNKNOWN - equal timestamps, with at least one side" >&2
+    echo "                  taken from the second-granularity 'dt' fallback rather than" >&2
+    echo "                  __REALTIME_TIMESTAMP. Leg 2 cannot be graded from that." >&2
+    exit 3
+  fi
   leg1=fail; leg2=fail; leg3=fail
   # LEG 1 — the host runs the new script AND presents no ghcr.io credential from the deploy config.
   # `swept` is "-" when the token is ABSENT, i.e. the pre-1c script: that is the version
@@ -490,7 +534,11 @@ while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrel
     # PASS (it asserts nothing about verification), but calling it "signature verification is
     # broken" misdiagnoses a designed path and, because the #5955 seccomp redeploy targets
     # v<running_version> by construction, it is routine rather than exceptional.
-    grade="ACTION REQUIRED (no cosign ran on the latest deploy - same-version local-cache reload)"
+    if [[ "$lreal" != "-" && "$lreal" != "ok" ]]; then
+      grade="ACTION REQUIRED (no cosign ran on the latest deploy - same-version local-cache reload; last real verdict=${lreal})"
+    else
+      grade="ACTION REQUIRED (no cosign ran on the latest deploy - same-version local-cache reload)"
+    fi
     n_action=$((n_action + 1))
   else
     grade="ACTION REQUIRED (latest IMAGE_VERIFY is result=${lver})"; n_action=$((n_action + 1))

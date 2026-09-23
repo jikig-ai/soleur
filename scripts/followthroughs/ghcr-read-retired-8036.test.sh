@@ -203,6 +203,7 @@ run_case "leg 3: result=cosign_absent is ACTION REQUIRED (5), not a silent PASS"
 #    work records firing 89/89 -- graded PASS as soon as a later reload breadcrumb arrived.
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail cosign_absent)"; row "$HA" "$T3" "$(verify_fail reused_local_reload)"; } > "$(fx launder)"
 run_case "leg 3: a reused_local_reload AFTER cosign_absent does not launder it into a PASS" 5 "ACTION REQUIRED:" "$(fx launder)"
+run_case "leg 3: the reload sentence names the last REAL verdict, so it cannot hide it" 5 "last real verdict=cosign_absent" "$(fx launder)"
 
 #    And the weaker form: a host whose ONLY verdict is the reload breadcrumb ran no cosign at all,
 #    which the leg's own contract says is ACTION REQUIRED ("markers but NO verdict"). Admitting the
@@ -212,6 +213,47 @@ run_case "leg 3: a host whose only verdict is reused_local_reload (cosign never 
 
 # Classes adjacent to the laundering one, so a use-site widening to either is caught too (the
 # coverage previously existed only for the class review happened to name).
+# ── THE REFUSALS, DRIVEN. All three exit-3 arms were unpinned and unexercised: deleting them
+#    left the suite green, and the `verify` kind was missing from the attribution list entirely,
+#    so an unattributable `unsigned` was dropped and the host graded PASS.
+for _k in marker relogin verify; do
+  case "$_k" in
+    marker)  _m="$(marker yes none)" ;;
+    relogin) _m="$RELOGIN_MSG" ;;
+    verify)  _m="$(verify_fail unsigned)" ;;
+  esac
+  { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"
+    jq -cn --arg ts "$T3" --arg msg "$_m" \
+      '{dt:"2026-09-02 10:00:00.000000", raw:({SYSLOG_IDENTIFIER:"ci-deploy", __REALTIME_TIMESTAMP:$ts, message:$msg}|tojson)}'
+  } > "$(fx "nomid_$_k")"
+  run_case "a ${_k} row with no _MACHINE_ID is REFUSED, never dropped" 3 "CANNOT ESTABLISH:" "$(fx "nomid_$_k")"
+done
+unset _k _m
+
+# A row with no usable clock, on a graded kind, is refused; an UNGRADED ci-deploy row without one
+# must NOT latch the tracker (that scoping bug refused on lines nothing grades).
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"
+  jq -cn --arg mid "$HA" --arg msg "$RELOGIN_MSG" \
+    '{dt:"", raw:({SYSLOG_IDENTIFIER:"ci-deploy", _MACHINE_ID:$mid, message:$msg}|tojson)}'
+} > "$(fx noclock)"
+run_case "a graded row with no usable timestamp is REFUSED, never dropped" 3 "CANNOT ESTABLISH:" "$(fx noclock)"
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"
+  jq -cn --arg mid "$HA" \
+    '{dt:"", raw:({SYSLOG_IDENTIFIER:"ci-deploy", _MACHINE_ID:$mid, message:"IMAGE_VERIFY_MODE=warn selected for this deploy"}|tojson)}'
+} > "$(fx noclock_ungraded)"
+run_case "an UNGRADED ci-deploy row with no timestamp does not latch the tracker -> PASS" 0 "PASS:" "$(fx noclock_ungraded)"
+
+# An ordering that is UNKNOWN must be refused, not guessed. Both rows fall back to `dt` (second
+# granularity) at the same second, so the relogin could be before or after the marker: passing it
+# re-opens the fail-open hole, failing it latched a clean host shut (measured - a relogin 0.8s
+# EARLIER than the marker was graded FAIL under `>=`).
+{ jq -cn --arg mid "$HA" --arg msg "$(marker yes none)" \
+    '{dt:"2026-09-02 10:00:00.100000", raw:({SYSLOG_IDENTIFIER:"ci-deploy",_MACHINE_ID:$mid,message:$msg}|tojson)}'
+  jq -cn --arg mid "$HA" --arg msg "$RELOGIN_MSG" \
+    '{dt:"2026-09-02 10:00:00.900000", raw:({SYSLOG_IDENTIFIER:"ci-deploy",_MACHINE_ID:$mid,message:$msg}|tojson)}'
+  row "$HA" "$T3" "$VERIFY_OK"; } > "$(fx ambig)"
+run_case "a relogin tying the latest marker at dt second-granularity is REFUSED, not guessed" 3 "CANNOT ESTABLISH:" "$(fx ambig)"
+
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail rekor_unreachable)"; } > "$(fx leg3g)"
 run_case "leg 3: result=rekor_unreachable is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3g)"
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail inspect_failed)"; } > "$(fx leg3h)"
@@ -348,6 +390,14 @@ _pin_one() {  # <exact line> <what it says>
   local n; n="$(grep -cxF -- "$1" <<<"$GRADER_SRC" || true)"
   if [[ "$n" != 1 ]]; then fail "contract constant not found exactly once (${n}x) -- $2"; _pin_fail=1; fi
 }
+# The refusals must be pinned as CODE, not only exercised: they are the only thing standing
+# between an absence leg and a silently-dropped row, and deleting all three left the suite at
+# 42/34/0. One predicate covers every graded kind, so pin that rather than a list of kinds.
+if grep -qF '$3 == "-" { n++ }' <<<"$GRADER_SRC"; then
+  pass "the attribution refusal covers every graded kind via one predicate, not a list"
+else
+  fail "the attribution refusal is gone or was narrowed to a list of kinds - an unlisted kind is dropped silently"
+fi
 _pin_one "readonly LEG3_ALLOW_RE='ok'" "leg 3 allowlist membership"
 _pin_one "readonly LEG1_CLAIM=\"a 'swept=' token AND both carriers clean: deploy_ghcr_auth=none AND deploy_ghcr_helper=none\"" "LEG1_CLAIM"
 _pin_one "readonly LEG2_CLAIM=\"zero '\${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker (not zero rows in the window)\"" "LEG2_CLAIM"
@@ -397,7 +447,7 @@ if grep -E '"\$dauth" == "none"' <<<"$GRADER_SRC" | grep -q '"\$dhelper" == "non
 else
   fail "the grader no longer conjoins deploy_ghcr_auth and deploy_ghcr_helper, which every prose copy claims"
 fi
-if grep -qF '>= (mts[m] + 0)) n++' <<<"$GRADER_SRC"; then
+if grep -qF '> (mts[m] + 0)) n++' <<<"$GRADER_SRC"; then
   pass "the fold still scopes leg 2 to rows at-or-after the host's latest marker"
 else
   fail "the fold no longer compares against the latest marker - leg 2 is back to a bare window count"
@@ -423,7 +473,7 @@ unset _ex _hdr GRADER_SRC _claim_helper _claim_helper_hdr _claim_postmarker
 
 
 printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
-MIN_CHECKS=42
+MIN_CHECKS=50
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1
