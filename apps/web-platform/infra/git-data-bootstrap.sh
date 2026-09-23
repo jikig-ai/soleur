@@ -62,46 +62,29 @@ assert_not_symlink() {
   fi
 }
 
-# 1. The substrate MUST be on the block volume. cloud-init mounts it by STABLE by-id device
-#    (cloud-init-git-data.yml:117 pins scsi-0HC_Volume_${git_data_volume_id}); this glob is only
-#    a degraded-remount FALLBACK reached iff that pinned mount was lost. #6604 note: the
-#    glob-ambiguity #6604 fixes ("once a LUKS volume attaches beside the LIVE plaintext /mnt/data,
-#    the glob binds the wrong device") is a WEB-1 condition — it does NOT bite here. On the
-#    git-data host the plaintext mount is already by-id-pinned at boot, and if this fallback runs
-#    on the 2-volume set it FAILS LOUD (a multi-device `mount` errors → the mountpoint check below
-#    exits 1), never silently mounting the wrong volume. The LUKS store is selected by an explicit
-#    `cryptsetup isLuks` discriminator below (§1b), not a positional glob.
+# 1. THE STORE IS THE LUKS MAPPER, AT /mnt/git-data (#8211, ADR-239). One section, where there
+#    used to be two: §1 mounted the PLAINTEXT volume here by a raw `scsi-0HC_Volume_*` glob and
+#    §1b re-asserted the LUKS mapper at /mnt/git-data-luks, so the served root was plaintext while
+#    every artifact attested encryption. cloud-init's luks_open heredoc now mounts the mapper at
+#    /mnt/git-data and nothing mounts the plaintext volume after boot. This section re-asserts that
+#    IDEMPOTENTLY: if a boot race left the mapper closed, luksOpen it (the LUKS device is the
+#    attached volume `cryptsetup isLuks` recognizes; the passphrase arrives ONLY as the
+#    Doppler-injected GIT_DATA_LUKS_KEY env, piped via stdin, never argv) and mount it. Then the
+#    SOURCE — not mountedness — must EQUAL the mapper. There is NO plaintext fallback (NFR-026).
+#    STORE_DEVICE/STORE_VERIFIED are the test seams every store script shares (contract C1/C2).
+STORE_DEVICE="${GIT_DATA_STORE_DEVICE:-/dev/mapper/git-data}"
+STORE_VERIFIED="${GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified}"
 mkdir -p "$GIT_DATA_ROOT"
 if ! mountpoint -q "$GIT_DATA_ROOT"; then
-  log "volume not mounted at $GIT_DATA_ROOT — attempting mount"
-  mount /dev/disk/by-id/scsi-0HC_Volume_* "$GIT_DATA_ROOT" || true
-fi
-if ! mountpoint -q "$GIT_DATA_ROOT"; then
-  log "FATAL: git-data block volume is not mounted at $GIT_DATA_ROOT"
-  exit 1
-fi
-
-# 1b. Fresh LUKS-at-rest volume (Sub-PR 3.D cutover target). cloud-init already
-#     luksOpened + mounted it at /mnt/git-data-luks under `doppler run`; re-assert
-#     IDEMPOTENTLY here — if a boot race left the mapper closed, luksOpen it (the
-#     LUKS device is the attached volume that `cryptsetup isLuks` recognizes; the
-#     passphrase arrives ONLY as the Doppler-injected GIT_DATA_LUKS_KEY env, piped
-#     via stdin, never argv). FAIL LOUD if the key env is absent or the volume is
-#     not mounted — the LUKS volume is git-data-cutover.sh's FRESH_ROOT (rsync
-#     target); NEVER fall back to an unencrypted mount (NFR-026).
-LUKS_ROOT="/mnt/git-data-luks"
-LUKS_MAPPER="/dev/mapper/git-data"
-mkdir -p "$LUKS_ROOT"
-if ! mountpoint -q "$LUKS_ROOT"; then
-  if [[ ! -e "$LUKS_MAPPER" ]]; then
+  if [[ ! -e "$STORE_DEVICE" ]]; then
     [[ -n "${GIT_DATA_LUKS_KEY:-}" ]] || {
-      log "FATAL: GIT_DATA_LUKS_KEY empty — refusing to unlock the LUKS cutover volume unencrypted"
+      log "FATAL: GIT_DATA_LUKS_KEY empty — refusing to unlock the LUKS store unencrypted"
       exit 1
     }
     # #6604 note: this glob is SAFE by construction — the loop selects the LUKS device by an
-    # explicit `cryptsetup isLuks` discriminator, so a second (plaintext) volume in the set is
-    # skipped, not mis-bound. This is the CORRECT form of the "which device is LUKS" predicate;
-    # the web-1 ambiguity #6604 fixes is the INVERSE (a raw-glob mount with no discriminator).
+    # explicit `cryptsetup isLuks` discriminator, so the plaintext volume in the set is skipped,
+    # not mis-bound. The web-1 ambiguity #6604 fixes is the INVERSE (a raw-glob mount with no
+    # discriminator), which is exactly the form this section no longer has.
     luks_dev=""
     for dev in /dev/disk/by-id/scsi-0HC_Volume_*; do
       [[ -e "$dev" ]] || continue
@@ -119,20 +102,14 @@ if ! mountpoint -q "$LUKS_ROOT"; then
       exit 1
     }
   fi
-  mount "$LUKS_MAPPER" "$LUKS_ROOT" || true
+  mount "$STORE_DEVICE" "$GIT_DATA_ROOT" || true
 fi
-if ! mountpoint -q "$LUKS_ROOT"; then
-  log "FATAL: fresh LUKS cutover volume is not mounted at $LUKS_ROOT — refusing to continue"
-  exit 1
-fi
-# (#7204 review) MOUNTEDNESS IS NOT IDENTITY. `mountpoint -q` is satisfied by ANY device, so
-# every check downstream of it — and the boot_complete `luks_mounted=yes` tag — was really
-# asserting "something is mounted here", not "the LUKS mapper is mounted here". That is the
-# one remaining way to reach a serving host with user source code on a plaintext device while
-# every artifact attests encryption (#6588). Assert the SOURCE, not just the mountpoint.
-_luks_src="$(findmnt -n -o SOURCE "$LUKS_ROOT" 2>/dev/null || true)"
-if [ "$_luks_src" != "$LUKS_MAPPER" ]; then
-  log "FATAL: $LUKS_ROOT is mounted from '$_luks_src', expected '$LUKS_MAPPER' — refusing to continue on a non-LUKS device"
+# (#7204 review) MOUNTEDNESS IS NOT IDENTITY: `mountpoint -q` is satisfied by ANY device. Compared
+# by EQUALITY, never prefix or glob, and by --mountpoint (the mount AT the root, not the one
+# containing it). This is the single serving assertion; the post-bootstrap duplicate is gone.
+_served_src="$(findmnt -n -o SOURCE --mountpoint "$GIT_DATA_ROOT" 2>/dev/null || true)"
+if [ "$_served_src" != "$STORE_DEVICE" ]; then
+  log "FATAL: $GIT_DATA_ROOT is served by '${_served_src:-nothing}', expected '$STORE_DEVICE' — refusing to continue on a non-LUKS device"
   exit 1
 fi
 
@@ -306,14 +283,6 @@ git config --system safe.directory "$REPO_ROOT/*"
 # 7. Liveness assert — fail LOUD if any invariant is unmet (the post-merge
 #    readiness/cutover gate surfaces it; never leave a half-provisioned host
 #    silently "green" — hr-fresh-host-provisioning-reachable-from-terraform-apply).
-mountpoint -q "$GIT_DATA_ROOT" || {
-  log "FATAL: volume unmounted post-bootstrap"
-  exit 1
-}
-mountpoint -q "$LUKS_ROOT" || {
-  log "FATAL: LUKS cutover volume unmounted post-bootstrap"
-  exit 1
-}
 [[ -x "$PRE_RECEIVE" ]] || {
   log "FATAL: pre-receive hook missing/not executable"
   exit 1
@@ -378,7 +347,105 @@ done
   log "FATAL: git-data-provision.sh missing/not executable — bare repos cannot be provisioned before first push"
   exit 1
 }
-log "bootstrap complete: plaintext volume mounted, LUKS cutover volume mounted at $LUKS_ROOT, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, fail-closed placeholder hook active, push-options advertised"
+log "bootstrap substrate ready: LUKS store served at $GIT_DATA_ROOT, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, fail-closed placeholder hook active, push-options advertised"
+
+# 7b. STORE VERIFICATION (#8211, ADR-239; Guard 2). The store scripts refuse until the marker
+# written below exists and names this mapper's filesystem UUID (contract C1/C2), so NO store action
+# is possible until every step here has passed — the wrappers and authorized_keys land in
+# write_files, before runcmd, and a Delete Account arriving mid-bootstrap is refused, never
+# reported `erased`. Each step passes or ends in a named `log "FATAL: …"` (stage=bootstrap).
+# The sentinel lines delimit ONE unit that git-data-bootstrap-store-verify.test.sh extracts and
+# drives without root; keep every step-2..5 line between them.
+# ---- BEGIN store-verify unit ----
+_plaintext_volume=absent _plaintext_empty=no _served_repos=unknown _fence_on_mapper=no _erasure_probe=no
+# A re-run must not inherit a marker a previous run wrote: the marker means "THIS run passed".
+rm -f "$STORE_VERIFIED"
+# Every entry under <root>/repositories — not only *.git (a partial `x/` is still user data) —
+# except the provision/remove lock dotfiles and lost+found. Fails (pipefail) if find cannot read.
+_repo_count() {
+  [ -d "$1/repositories" ] || { echo 0; return 0; }
+  find "$1/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf x | wc -c
+}
+# 2. THE PLAINTEXT VOLUME HOLDS NO REPOSITORY. Only when a plaintext volume id was rendered.
+#    Mounted read-only and briefly: `noload` because plain `ro` on ext4 can still replay the
+#    journal; under a private `mktemp -d` parent (0700) so the volume's own root mode never
+#    exposes it; nosuid/nodev/noexec because nothing on it may run. The SOURCE is verified, not
+#    only the count: a failed or no-op mount leaves an empty directory that counts as 0.
+#    A dirty journal means the on-disk tree is not the whole truth, so nothing is counted.
+#    The data is safe on every FATAL: the volume is retained and was never written.
+_pt_id="${GIT_DATA_PLAINTEXT_VOLUME_ID:-}"
+if [ -n "$_pt_id" ]; then
+  _plaintext_volume=present
+  [[ "$_pt_id" =~ ^[0-9]+$ ]] || { log "FATAL: plaintext_unverified reason=source — volume id '$_pt_id' is not numeric"; exit 1; }
+  _pt_dev="${GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id}"
+  _pt_dir="$(mktemp -d)"
+  _pt_mnt="$_pt_dir/mnt"
+  _pt_mounted=0
+  mkdir "$_pt_mnt"
+  _pt_release() {
+    if [ "$_pt_mounted" = 1 ]; then
+      _pt_mounted=0
+      umount "$_pt_mnt" || { log "FATAL: plaintext_unverified reason=umount — $_pt_dev is still mounted read-only at $_pt_mnt"; exit 1; }
+    fi
+    rmdir "$_pt_mnt" "$_pt_dir" 2>/dev/null || true
+  }
+  trap _pt_release EXIT
+  mount -o ro,noload,nosuid,nodev,noexec "$_pt_dev" "$_pt_mnt" || { log "FATAL: plaintext_unverified reason=mount — could not mount $_pt_dev read-only"; exit 1; }
+  _pt_mounted=1
+  _pt_src="$(findmnt -n -o SOURCE --mountpoint "$_pt_mnt" 2>/dev/null || true)"
+  _pt_got="$(realpath -e "$_pt_src" 2>/dev/null || true)"
+  _pt_want="$(realpath -e "$_pt_dev" 2>/dev/null || true)"
+  if [ -z "$_pt_got" ] || [ "$_pt_got" != "$_pt_want" ]; then
+    log "FATAL: plaintext_unverified reason=source — $_pt_mnt is served by '${_pt_src:-nothing}', not $_pt_dev"
+    exit 1
+  fi
+  _pt_sb="$(dumpe2fs -h "$_pt_dev" 2>/dev/null)" || { log "FATAL: plaintext_unverified reason=journal — dumpe2fs could not read the $_pt_dev superblock"; exit 1; }
+  if printf '%s\n' "$_pt_sb" | awk '/^Filesystem features:/ && / needs_recovery( |$)/{f=1} END{exit !f}'; then
+    log "FATAL: plaintext_unverified reason=journal — $_pt_dev has needs_recovery set; its tree was not counted"
+    exit 1
+  fi
+  _pt_n="$(_repo_count "$_pt_mnt")" || { log "FATAL: plaintext_unverified reason=mount — $_pt_dev repositories/ is unreadable"; exit 1; }
+  _pt_release
+  trap - EXIT
+  [ "$_pt_n" -eq 0 ] || { log "FATAL: plaintext_residue count=$_pt_n — the plaintext volume still holds repositories/ entries"; exit 1; }
+fi
+_plaintext_empty=yes
+# 3. THE SERVED STORE HOLDS NOTHING UNKNOWN (luks_residue). Counted with the same exclusions,
+#    BEFORE the probe writes its lock dotfile. Unknown content on an adopted volume blocks the
+#    host rather than being served.
+_served_repos="$(_repo_count "$GIT_DATA_ROOT")" || _served_repos=unreadable
+[ "$_served_repos" = 0 ] || { log "FATAL: luks_residue count=$_served_repos — $REPO_ROOT on the served store is not empty"; exit 1; }
+# 4. THE FENCE SITS ON THE MAPPER. The hook was installed at step 5 above; -T resolves the mount
+#    that CONTAINS it, so a hook on the root disk (an unmounted store) reads as not-the-mapper.
+_fence_src="$(findmnt -n -o SOURCE -T "$PRE_RECEIVE" 2>/dev/null || true)"
+[ "$_fence_src" = "$STORE_DEVICE" ] || { log "FATAL: fence_on_mapper=no — $PRE_RECEIVE is on '${_fence_src:-nothing}', not $STORE_DEVICE"; exit 1; }
+_fence_on_mapper=yes
+# 5a. THE MARKER — the ONLY writer. One line: the mapper's filesystem UUID, so a mapper reopened
+#     on a different volume refuses. Atomic (same-directory temp + mv), 0644, root-owned because
+#     root creates it. In /etc: it survives a reboot, and nothing mounts the plaintext volume
+#     after boot, so the verification stays true.
+_store_uuid="$(findmnt -n -o UUID --mountpoint "$GIT_DATA_ROOT" 2>/dev/null || true)"
+[ -n "$_store_uuid" ] || { log "FATAL: store marker not written — $GIT_DATA_ROOT reports no filesystem UUID"; exit 1; }
+install -d -m0755 -o root -g root "$(dirname "$STORE_VERIFIED")"
+_marker_tmp="$(mktemp "$STORE_VERIFIED.XXXXXX")"
+printf '%s\n' "$_store_uuid" > "$_marker_tmp"
+chmod 0644 "$_marker_tmp"
+mv -f "$_marker_tmp" "$STORE_VERIFIED"
+# 5b. THE ERASURE PROBE — a real no-op erasure through the real wrapper, as `git`, which needs
+#     the marker. `env -i` comes BEFORE runuser: `runuser -u` without -l keeps its caller's env,
+#     so `runuser … env -i` would briefly run a git-uid process holding GIT_DATA_LUKS_KEY in
+#     /proc/<pid>/environ. runuser by absolute path: env -i's PATH does not include /usr/sbin.
+#     boot-probe-0 passes the id validation; its 0-byte lock dotfile is invisible to gc (*.git
+#     only) and to every count above. A failure REMOVES the marker before the FATAL.
+_probe_rc=0
+_probe_err="$(env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=boot-probe-0 /usr/sbin/runuser -u git -- "${GIT_DATA_REMOVE_BIN:-/usr/local/bin/git-data-remove.sh}" 2>&1 >/dev/null)" || _probe_rc=$?
+if [ "$_probe_rc" -ne 0 ] || [[ "$_probe_err" != *"not present (no-op)"* ]]; then
+  rm -f "$STORE_VERIFIED"
+  log "FATAL: erasure_probe=no rc=$_probe_rc — a no-op erasure as git did not succeed: ${_probe_err:-no stderr}"
+  exit 1
+fi
+_erasure_probe=yes
+# ---- END store-verify unit ----
 
 # 8. (#6982, W1 / ADR-149 item 4) THE BOOT-COMPLETION SIGNAL — the post-apply signal this
 # host never had, emitted only here so its mere ARRIVAL means every assertion above passed.
@@ -390,11 +457,12 @@ log "bootstrap complete: plaintext volume mounted, LUKS cutover volume mounted a
 # they are emitted because the CONSUMER asserts on them, so a weakened assert shows up as a
 # false rather than a missing event.
 #
-# WORDING PINNED (AC30): `luks_mounted` is about the DEVICE. It says NOTHING about the
-# repositories being encrypted at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume
-# until the cutover, and duplicating that false claim into telemetry would be the Art. 30
-# defect in a second artifact. df% is GIT_DATA_ROOT (the volume that fills). No repo paths,
-# no UUIDs: four booleans and an integer carry no identifier by construction.
+# WORDING PINNED (AC30): `luks_mounted` is about the DEVICE: $GIT_DATA_ROOT is served by the
+# mapper (§1). Since #8211 REPO_ROOT is on that device; the booleans from 7b (fence_on_mapper,
+# erasure_probe, plaintext_empty) are what attest the rest, and each is reached only on pass.
+# Values are exactly yes/no: the readers grep `"<field>":"yes"`, so a third value would pass
+# unchecked. df% is GIT_DATA_ROOT (the volume that fills). No repo paths, no UUIDs: booleans,
+# present/absent and integers carry no identifier by construction.
 # ipcent too: inodes exhaust ahead of bytes (see 6c), so bytes-only reads healthy to ENOSPC.
 # `|| true` because read returns 1 on an empty df and this script is `set -e`.
 read -r _disk_pct _inode_pct < <(df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
@@ -459,5 +527,8 @@ if [[ -x "$GIT_DATA_EMIT" ]]; then
   "$GIT_DATA_EMIT" "git-data bootstrap complete" boot_complete info "" \
     "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
     "nft_metadata_drop=${_nft_drop}" "luks_reopen_unit=${_reopen_unit}" \
+    "fence_on_mapper=${_fence_on_mapper}" "erasure_probe=${_erasure_probe}" \
+    "plaintext_empty=${_plaintext_empty}" "plaintext_volume=${_plaintext_volume}" \
+    "served_repos=${_served_repos}" \
     "disk_pct=${_disk_pct:-unknown}" "inode_pct=${_inode_pct:-unknown}" || true
 fi
