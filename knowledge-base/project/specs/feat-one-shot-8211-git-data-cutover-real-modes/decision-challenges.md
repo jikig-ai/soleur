@@ -31,7 +31,7 @@ rollback to plaintext.
     assertion in one render, so that state never exists.
 - **What it costs:**
   - Once the flag is on, rollback means turning the flag off. Data stays on LUKS, and there is no
-    path back to plaintext (recorded in ADR-238).
+    path back to plaintext (recorded in ADR-239).
   - ADR-068 D10 is reversed.
   - The copy machinery is deferred to the first key rotation of a *populated* store.
   - The CTO asked for the pre-replace emptiness check to be enforced in the replace job. It is
@@ -85,6 +85,6 @@ to recommend. It also listed replacing `git-data-pin-redeploy.yml` in this PR.
 
 ## Operator rulings (2026-09-22)
 
-- **DC-1:** accepted — LUKS from boot (ADR-238).
+- **DC-1:** accepted — LUKS from boot (ADR-239).
 - **DC-2:** accepted — split into PR1/PR2, and hold the #8511 rung-2 re-rehearsal until PR1 merges so one rehearsal covers both.
 - **DC-3:** not ruled; the fold-ins stay in PR1 as the brief directed.

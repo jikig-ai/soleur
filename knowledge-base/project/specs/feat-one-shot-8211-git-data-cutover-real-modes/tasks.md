@@ -7,7 +7,7 @@ Plan: `knowledge-base/project/plans/2026-09-22-feat-git-data-cutover-real-modes-
 - 1.1 Comment on #5914: hold ADR-237 post-merge step 2 (the #8511 rung-2 rehearsal) until PR1
   merges, so one rehearsal covers both payloads.
 - 1.2 Re-probe PR #8563 (#8209). Record its file list, and stay out of it.
-- 1.3 Re-probe ADR-238 across `origin/*` refs.
+- 1.3 Re-probe ADR-239 across `origin/*` refs.
 - 1.4 Enumerate the suites that pin the old layout:
   `git grep -ln 'scsi-0HC_Volume_\|git-data-luks\|GIT_DATA_BOOT_TERMINAL' -- tests/ scripts/ apps/web-platform/infra/ plugins/soleur/test/`.
 
@@ -51,10 +51,10 @@ Plan: `knowledge-base/project/plans/2026-09-22-feat-git-data-cutover-real-modes-
 
 ## 4. Docs and records
 
-- 4.1 ADR-238 via `soleur:architecture`. Amend ADR-068 D10, and ADR-220 D6 with "pending PR2".
+- 4.1 ADR-239 via `soleur:architecture`. Amend ADR-068 D10, and ADR-220 D6 with "pending PR2".
 - 4.2 `model.c4` `gitDataStore` AT REST. Regenerate `model.likec4.json`. Run the c4 tests.
-- 4.3 Article 30: the PA-36 (g)(2) addendum, and the mechanism Superseded markers on PA-36 (g)(1)
-  and PA-2 (g)(13).
+- 4.3 Article 30: the PA-36 (g)(2) addendum, and the mechanism Superseded markers on PA-36 (g)(1),
+  PA-1 (g)(13) and PA-2 (g)(17).
 - 4.4 Runbooks:
   - 4.4.1 the #8511 hold;
   - 4.4.2 the pre-replace reads, quoting the exact precheck line;
@@ -91,7 +91,7 @@ Plan: `knowledge-base/project/plans/2026-09-22-feat-git-data-cutover-real-modes-
   - 4b.8.1 the unconditional pin-redeploy dispatch after a failed step-3 replace;
   - 4b.8.2 recovery starts with a Sentry or Better Stack read;
   - 4b.8.3 the refused-id sweep and re-drive after the forward fix.
-- 4b.9 ADR-238 and the PA-36 addendum say that `erased` means unlinked (blocks stay readable to a
+- 4b.9 ADR-239 and the PA-36 addendum say that `erased` means unlinked (blocks stay readable to a
   holder of the LUKS key until rotation).
 
 ## 5. Verification and ship

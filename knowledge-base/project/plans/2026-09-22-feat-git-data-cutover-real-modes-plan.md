@@ -27,7 +27,7 @@ test-design-reviewer, user-impact-reviewer.
 ### Key improvements
 
 1. **The mechanism changed**, from a runtime rsync plus repoint to a LUKS-only render delivered by
-   the next ordinary replace (ADR-238). This removes two defects the literal design carried: the
+   the next ordinary replace (ADR-239). This removes two defects the literal design carried: the
    repoint did not survive a replace, and a fixed mapper assertion on a plaintext host would have
    refused every Art. 17 erasure.
 2. **The erasure path fails closed.** A positive `store-verified` marker, bound to the mapper's
@@ -67,7 +67,7 @@ are routine. The CTO ruled for an **immutable, cloud-init-rendered serving store
 the advisor consult, for its simplest form (**"B-lite"**): the git-data render **always serves the
 LUKS mapper at `/mnt/git-data`**. There is no plaintext/luks toggle. The serving-device change
 happens at the next ordinary `git_data_host_replace` (ADR-237's pin-publishing step 3), while the
-flag is off and the store is empty. This reverses ADR-068 D10 (new ADR-238). #8101's wrapper
+flag is off and the store is empty. This reverses ADR-068 D10 (new ADR-239). #8101's wrapper
 assertion, a fixed `/dev/mapper/git-data`, becomes correct as written, because the new layout and
 the new wrappers arrive in the same render.
 
@@ -79,7 +79,7 @@ the new wrappers arrive in the same render.
   - the mapper assertion plus a positive `store-verified` marker in every store-acting script;
   - boot-time proofs on real hardware: plaintext emptiness, fence on the mapper, and an erasure
     self-probe;
-  - ADR-238 and its amendments, and the C4 and PA-36 addenda;
+  - ADR-239 and its amendments, and the C4 and PA-36 addenda;
   - the operator's two fold-ins: archive the host-key-pinning spec directory, and a compound pass
     on that PR's ship-phase errors.
 
@@ -141,7 +141,7 @@ the rung-2 evidence for PR1's template lands in an evidence-only PR.
 - **ADR corpus (mechanism check).** ADR-068 D10 rejected "born-on-LUKS" because "revisiting it
   would rewrite a cutover path that is already built and tested". That rationale is false today:
   #8189 deleted the path, which had never run (ADR-220 Context). Reversing D10 is legitimate and is
-  an ADR deliverable of this plan (ADR-238).
+  an ADR deliverable of this plan (ADR-239).
 - **Rung-2 state.** `origin/main` carries NO `git-data-rung2-boot-evidence.env` (PR #8511, a
   payload PR, deleted it; its re-rehearsal has not run). Birth and replace already refuse. A
   hash-bound PR that lands before that rehearsal shares it; one that lands after costs a second
@@ -180,7 +180,7 @@ the rung-2 evidence for PR1's template lands in an evidence-only PR.
   `hr-prod-host-config-change-immutable-redeploy`. It is replaced by the LUKS-serving render.
 - A plaintext/luks mode selector: a selector file or variable, a luks-mode interlock, a PR2
   transition guard, and a tier-2 rollback to plaintext. Their only property is a rollback to a store
-  that has never held data. The advisor proposed the cut; the CTO ruled on it. Recorded in ADR-238
+  that has never held data. The advisor proposed the cut; the CTO ruled on it. Recorded in ADR-239
   as a lost capability.
 - A new rung-2 evidence key or gate code. P10 is already bought by the template hash, because the
   layout change is a template change. `git_data_rung2_bound_files` binds the template and every
@@ -254,11 +254,12 @@ the rung-2 evidence for PR1's template lands in an evidence-only PR.
   the split below;
   in-container flag proof via the app's warn-level startup line read from Better Stack (SSH
   `docker inspect` and `/health` rejected); rebuild `dispatch-web-redeploy/` rather than add an
-  action; ADR-238 plus amendments to ADR-068 D10, ADR-220 D6, ADR-237 D6.
+  action; ADR-239 plus amendments to ADR-068 D10, ADR-220 D6, ADR-237 D6.
 - **CLO:** provider volume deletion suffices for the plaintext volume only because it never held
   a repository; record repository count at the flip, absence of Hetzner snapshots/backups of
   `hcloud_volume.git_data`, the destroying apply, and the soak. PR1 adds a PA-36 (g)(2) addendum
-  worded "fires on the merge of PR #N"; (g)(1)/(13) stay DRAFTED until `findmnt` reads the mapper.
+  worded "fires on the merge of PR #N"; PA-36 (g)(1), PA-1 (g)(13) and PA-2 (g)(17) stay DRAFTED
+  until `findmnt` reads the mapper.
   No `docs/legal/**` edit.
 - **CPO:** sign-off with conditions (see Domain Review).
 
@@ -270,7 +271,7 @@ the rung-2 evidence for PR1's template lands in an evidence-only PR.
 | Assert `/dev/mapper/git-data` unconditionally in the three wrappers (#8101 item 2). | Erasure is not flag-gated. A fixed mapper assertion on a host that still serves plaintext would refuse every Delete Account. | Correct under B-lite: layout and wrappers ship in one render, so no host ever runs the new wrappers over the plaintext layout. Kept as #8101 wrote it, with the `GIT_DATA_STORE_DEVICE` test seam. |
 | Rebuild the freeze, repoint and reload on real mechanisms (#8211). | Freeze has no writer; repoint is not replace-durable; the reload units never existed. | The durable mechanism is the replace. The reload is a same-version redeploy (the #5875 item-4 precedent; PR2). Freeze and rsync are needed only for a future populated-store rotation. |
 | Replace `git-data-pin-redeploy.yml` in this PR (brief). | Not hash-bound; unrelated to the rung-2 window. | Moved to PR2 (split recommendation; recorded as a decision challenge). |
-| Rollback remounts plaintext after the flag goes off (#8101 AC). | There is no plaintext serving layout after PR1. | Rollback is flag-off only (PR2); data stays on LUKS. PR2's rollback refuses a plaintext path explicitly. ADR-238 records the lost capability. |
+| Rollback remounts plaintext after the flag goes off (#8101 AC). | There is no plaintext serving layout after PR1. | Rollback is flag-off only (PR2); data stays on LUKS. PR2's rollback refuses a plaintext path explicitly. ADR-239 records the lost capability. |
 | #8211 must page on `git_data_replication_push` pin faults before the flip. | That is a Sentry rule in `apps/web-platform/infra/sentry/issue-alerts.tf`, which another session owns. | Tracked in #8572 as a flip precondition. PR2's real mode refuses until it exists. |
 | A windowed `prd` flag-write credential. | None exists (`DOPPLER_TOKEN_WRITE` is `prd_terraform`-scoped). #8209 is redesigning the credential chain in parallel. | Not built here. PR2 consumes it through an interface agreed with #8209 and refuses `verdict=flag_write_credential_absent` until then. Tracked in #8573. |
 
@@ -405,7 +406,7 @@ The on-host check in step 2 above is the mechanical gate. It reads the real volu
 runs before any erasure can be answered. That meets the CTO's condition more strongly than a
 proxy read in the replace job. It also keeps a `prd` token out of `apply-web-platform-infra.yml`,
 which #8209 is redesigning. The CTO accepted this deviation on devex review, and it is recorded in
-ADR-238.
+ADR-239.
 
 The runbook adds one recorded step before the ADR-237 step-3 replace. Both reads are linked in the
 replace run summary:
@@ -511,7 +512,7 @@ The real modes refuse with these verdicts: `precondition_8209_open`,
 - `knowledge-base/engineering/architecture/diagrams/model.c4`, plus the regenerated
   `model.likec4.json`.
 - `knowledge-base/legal/article-30-register.md`: the PA-36 (g)(2) addendum, and Superseded markers
-  on PA-36 (g)(1) and PA-2 (g)(13) as to mechanism.
+  on PA-36 (g)(1), PA-1 (g)(13) and PA-2 (g)(17) as to mechanism.
 - `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md` and
   `git-data-rung2-rehearsal.md`.
 - `scripts/encryption-posture-ledger.json`: only if its git-data entry names the deleted repoint.
@@ -520,8 +521,8 @@ The real modes refuse with these verdicts: `precondition_8209_open`,
 
 - `apps/web-platform/infra/git-data-store-device-census.test.sh` (Guard 1), registered in
   `scripts/test-all.sh`.
-- `knowledge-base/engineering/architecture/decisions/ADR-238-git-data-serves-from-luks-at-birth.md`
-  (the ordinal is provisional).
+- `knowledge-base/engineering/architecture/decisions/ADR-239-git-data-serves-from-luks-at-birth.md`
+  (ADR-239; ADR-238 is taken on another branch).
 - A learning under `knowledge-base/project/learnings/` from the compound pass, or an extension of
   an existing one.
 - `knowledge-base/project/specs/feat-one-shot-8211-git-data-cutover-real-modes/decision-challenges.md`
@@ -535,7 +536,7 @@ The real modes refuse with these verdicts: `precondition_8209_open`,
   - The rehearsal's plaintext volume is freshly formatted, so it never boots the production case: a
     volume last mounted read-write by a destroyed host, with a dirty journal (spec-flow P1-6).
   - If `noload` then refuses the mount, step 2 fails closed as `plaintext_unverified`.
-  - This is a known P10 gap, recorded in ADR-238. The failure is safe and its recovery is written
+  - This is a known P10 gap, recorded in ADR-239. The failure is safe and its recovery is written
     down.
 - **Reboot.** The bootstrap runs once per instance. A reboot emits `luks_reopen_ok target=…` from
   the reopen unit, not `boot_complete`. The marker and the scripts' device check cover the reboot
@@ -669,7 +670,7 @@ at_rest:
     evidence: "implied by device_binding: every store-acting script asserts findmnt SOURCE of /mnt/git-data equals /dev/mapper/git-data and requires /etc/git-data/store-verified (Guard 1); boot_complete luks_mounted and fence_on_mapper prove it per instance"
     defends_against: "a seized, RMA'd or snapshot-imaged block volume; a boot or replace that would otherwise serve the plaintext volume"
     does_not_defend: "root on the unlocked host, a leaked GIT_DATA_LUKS_KEY together with volume access, or a leaked git-data root key (ADR-220 D4)"
-    disclosed_as: "knowledge-base/legal/article-30-register.md PA-36 (g)(1) and PA-2 (g)(13), DRAFTED / NOT-YET-ACTIVE until findmnt reads the mapper in production (not a docs/legal claim)"
+    disclosed_as: "knowledge-base/legal/article-30-register.md PA-36 (g)(1), PA-1 (g)(13) and PA-2 (g)(17), DRAFTED / NOT-YET-ACTIVE until findmnt reads the mapper in production (not a docs/legal claim)"
     live_verification: "available: boot_complete luks_mounted and fence_on_mapper in Better Stack; PR2 proof mode"
   - store: "hcloud_volume.git_data (plaintext; attached, unmounted after boot, until the wipe)"
     mechanism: "plaintext-exception"
@@ -721,9 +722,9 @@ None: there is no new vendor resource.
 
 ### ADR
 
-- **Create ADR-238** via `soleur:architecture`: "git-data serves its store from LUKS at birth". The
-  ordinal is provisional; it was probed free across all `origin/*` refs on 2026-09-22, and
-  `soleur:ship` re-verifies it.
+- **Create ADR-239** via `soleur:architecture`: "git-data serves its store from LUKS at birth". The
+  plan first probed ADR-238, which another branch took; the operator assigned ADR-239 on
+  2026-09-22, and `soleur:ship` re-verifies it.
   - **Decision:**
     - the render always mounts `/dev/mapper/git-data` at `/mnt/git-data`;
     - the plaintext volume is checked read-only once per instance and never mounted after that;
@@ -741,11 +742,11 @@ None: there is no new vendor resource.
   - **Alternatives:** the table above.
   - **Status:** `adopting` until a production instance reports
     `luks_mounted=yes fence_on_mapper=yes erasure_probe=yes`.
-- **Amend ADR-068 D10**: superseded by ADR-238.
+- **Amend ADR-068 D10**: superseded by ADR-239.
 - **Amend ADR-220 D6**: there is no runtime repoint; the serving change is the first replace of the
   new render. The rotation of the LUKS key and volume before the flip is marked "pending PR2".
 - ADR-237 D6 is amended in PR2.
-- If the ordinal is renumbered, sweep `grep -rn 'ADR-238' knowledge-base/project/{plans,specs}/`.
+- If the ordinal is renumbered, sweep `grep -rn 'ADR-239' knowledge-base/project/{plans,specs}/`.
 
 ### C4 views
 
@@ -766,7 +767,7 @@ read.
 
 ### Sequencing
 
-ADR-238 is authored in PR1 with status `adopting`. It flips to `accepted` on the production
+ADR-239 is authored in PR1 with status `adopting`. It flips to `accepted` on the production
 `boot_complete` above.
 
 ## Guard Contract
@@ -869,11 +870,11 @@ release a production replace or a rung-2 evidence PASS.
   - Run `terraform init -input=false`.
   - Wrap the plan in a single
     `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan`.
-- [ ] ADR-238 exists (`adopting`) and records everything listed under Consequences above. ADR-068
+- [ ] ADR-239 exists (`adopting`) and records everything listed under Consequences above. ADR-068
   D10 and ADR-220 D6 carry dated amendments.
 - [ ] `model.c4` `gitDataStore` is updated, and the c4 syntax, render and count-parity tests pass.
-- [ ] PA-36 (g)(2) addendum, worded "fires on the merge of PR #N". PA-36 (g)(1) and PA-2 (g)(13)
-  get Superseded markers only as to mechanism. No `docs/legal/**` edit.
+- [ ] PA-36 (g)(2) addendum, worded "fires on the merge of PR #N". PA-36 (g)(1), PA-1 (g)(13) and
+  PA-2 (g)(17) get Superseded markers only as to mechanism. No `docs/legal/**` edit.
 - [ ] The runbook covers:
   - the hold on the #8511 rehearsal until PR1 merges;
   - the pre-replace reads, with the exact precheck line;
@@ -1042,7 +1043,7 @@ Scenarios.
   script compares it with `findmnt -n -o UUID --mountpoint "$MOUNT_ROOT"`, so a mapper reopened on a
   different volume refuses.
 - **`erased` means unlinked, not physically destroyed.** Deleted blocks stay readable to a holder
-  of the LUKS key until the key or the volume is rotated (D6, PR2). ADR-238 and the PA-36 addendum
+  of the LUKS key until the key or the volume is rotated (D6, PR2). ADR-239 and the PA-36 addendum
   say so.
 - **Deferred to PR2** (it touches app code): `removeGitDataRepo` should require a positive stderr
   sentinel (`erased bare repo` or `not present (no-op)`) as well as exit 0. PR1 adds the
