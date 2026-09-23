@@ -179,5 +179,8 @@ if [[ "$rc" == 78 && ! -s "$FIX/calls" ]]; then pass "refuses to run under bash 
 TOTAL=$((PASS + FAIL))
 printf '=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Anti-vacuity floor: 17 assertions today. Report outside the helpers.
-if (( TOTAL < 17 )); then printf '[FATAL] only %d assertions ran (floor 17)\n' "$TOTAL" >&2; exit 1; fi
+if (( PASS + FAIL < 17 )); then
+  printf '[FATAL] only %d assertions ran (floor 17)\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
 (( FAIL == 0 ))
