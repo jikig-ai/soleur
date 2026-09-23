@@ -37,6 +37,14 @@ assert_file_exists "$LEFTHOOK" "lefthook.yml exists"
 assert_file_exists "$VERIFY" "vendor-pin-verify.yml exists"
 echo ""
 
+# Capture + herestring, not a pipe into grep -q: under pipefail the early exit can fail
+# the producer (EPIPE rc 2 on CI) -> false "not covered". Ref #7005.
+glob_item_contains() {
+  local items
+  items="$(grep -E '^[[:space:]]+-[[:space:]]' "$1" || true)"
+  grep -qF -- "$2" <<<"$items"
+}
+
 # --- Enumerate + classify every skills/*/NOTICE via the shared predicate ---
 echo "TS1: classify every skills/*/NOTICE with the schema predicate"
 declare -a CONFORMING=()
@@ -70,7 +78,7 @@ echo ""
 
 # --- incident/NOTICE must NOT conform (schema exclusion) ---
 echo "TS3: incident/NOTICE is excluded by the shared predicate"
-if printf '%s\n' "${NONCONFORMING[@]:-}" | grep -qx "incident"; then
+if grep -qx "incident" <<<"$(printf '%s\n' "${NONCONFORMING[@]:-}")"; then
   echo "  PASS: incident/NOTICE classified non-conforming (skipped)"
   PASS=$((PASS + 1))
 else
@@ -88,7 +96,7 @@ for slug in "${CONFORMING[@]}"; do
   # the NOTICE path (NOTICE_FILE=...) and must NOT satisfy this check: deleting
   # the glob while the run line remains has to go RED. Verified against the
   # test's own predicate: `grep -qF "$prefix/NOTICE"` alone matches both lines.
-  if grep -E '^[[:space:]]+-[[:space:]]' "$LEFTHOOK" | grep -qF "$prefix/NOTICE"; then
+  if glob_item_contains "$LEFTHOOK" "$prefix/NOTICE"; then
     echo "  PASS: $slug NOTICE covered by a lefthook glob"
     PASS=$((PASS + 1))
   else
@@ -96,7 +104,7 @@ for slug in "${CONFORMING[@]}"; do
     FAIL=$((FAIL + 1))
   fi
 
-  if grep -E '^[[:space:]]+-[[:space:]]' "$LEFTHOOK" | grep -qF "$prefix/references/"; then
+  if glob_item_contains "$LEFTHOOK" "$prefix/references/"; then
     echo "  PASS: $slug references/ covered by a lefthook glob"
     PASS=$((PASS + 1))
   else
@@ -112,8 +120,8 @@ for slug in "${CONFORMING[@]}"; do
   # (the default bundle — its built-in NOTICE is that bundle's). `run: true`
   # or a dropped NOTICE_FILE fails here.
   run_lines="$(grep -E '^[[:space:]]+run:.*vendor-pin-integrity\.sh' "$LEFTHOOK" || true)"
-  if printf '%s\n' "$run_lines" | grep -qF "NOTICE_FILE=\"$prefix/NOTICE\"" \
-     || printf '%s\n' "$run_lines" | grep -qF "skills/$slug/scripts/vendor-pin-integrity.sh"; then
+  if grep -qF "NOTICE_FILE=\"$prefix/NOTICE\"" <<<"$run_lines" \
+     || grep -qF "skills/$slug/scripts/vendor-pin-integrity.sh" <<<"$run_lines"; then
     echo "  PASS: $slug lefthook run: invokes vendor-pin-integrity.sh against its own NOTICE"
     PASS=$((PASS + 1))
   else
@@ -172,4 +180,21 @@ else
 fi
 echo ""
 
-print_results 19
+echo "TS7: glob_item_contains is size/timing-immune and item-scoped (#7005)"
+fixture_dir="$(mktemp -d)"
+big="$fixture_dir/big.yml"
+decoy="$fixture_dir/decoy.yml"
+needle="plugins/soleur/skills/needle-bundle/NOTICE"
+awk -v n="$needle" 'BEGIN { printf "      - \"%s\"\n", n; for (i = 0; i < 6000; i++) printf "      - \"plugins/soleur/skills/filler-%05d/references/**\"\n", i }' > "$big"
+printf '      run: NOTICE_FILE="%s" bash x.sh\n' "$needle" > "$decoy"
+big_bytes=$(( $(wc -c < "$big") ))
+# 262144 = 4x the 64 KiB pipe capacity: the old pipe shape is deterministically RED here
+# (measured 30/30 false negatives at 354 KB). The floor keeps this row non-vacuous.
+rc=0; { (( big_bytes >= 262144 )) && glob_item_contains "$big" "$needle"; } || rc=$?
+assert_eq 0 "$rc" "needle on line 1 of a ${big_bytes}-byte (>= 262144) producer is found"
+rc=0; glob_item_contains "$decoy" "$needle" || rc=$?
+assert_eq 1 "$rc" "needle only on a run: line is not glob coverage"
+rm -rf "$fixture_dir"
+echo ""
+
+print_results 23
