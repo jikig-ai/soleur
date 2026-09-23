@@ -658,8 +658,14 @@ run_case_reports "TS-18 disclosed_as anchor does not resolve for a plaintext-exc
 # A mutation that does NOT flip its fixture means the branch was vacuous.
 # ===========================================================================
 
+# run_mutation <label> <markers> <repo> <ledger> [expected_rc]
+# <markers> is a space-separated list; every listed region is deleted. The
+# default expectation is FAIL->PASS (rc 0). expected_rc=1 asserts the mutant
+# still FAILs: that is how a check whose verdict is shared with another (the
+# floor) is proven to hold that verdict on its own.
 run_mutation() {
-  local mb="$1" marker="$2" repo="$3" ledger="$4"
+  local mb="$1" markers="$2" repo="$3" ledger="$4" want="${5:-0}"
+  local marker="$markers"
   local base_rc=0
   python3 "$SUT" --repo-sweep --repo-root "$repo" --ledger "$ledger" --today "$TODAY" >/dev/null 2>&1 || base_rc=$?
   if [[ "$base_rc" != "1" ]]; then
@@ -668,25 +674,41 @@ run_mutation() {
   fi
   local mb_safe="${mb//\//_}"
   local mutated="$TMPDIR_TEST/mutated_${mb_safe}.py"
-  sed "/# MUTATION-TARGET: ${marker} start/,/# MUTATION-TARGET: ${marker} end/d" "$SUT" > "$mutated"
+  cp "$SUT" "$mutated"
+  local m
+  for m in $markers; do
+    if ! grep -qF "# MUTATION-TARGET: ${m} start" "$mutated"; then
+      fail "$mb marker $m exists in the SUT" "no '# MUTATION-TARGET: ${m} start' line"
+      return
+    fi
+    sed -i "/# MUTATION-TARGET: ${m} start/,/# MUTATION-TARGET: ${m} end/d" "$mutated"
+  done
   if ! python3 -c "import py_compile,sys; py_compile.compile(sys.argv[1], doraise=True)" "$mutated" >/dev/null 2>&1; then
     fail "$mb mutated script must still compile" "syntax error after deleting $marker"
     return
   fi
   local mut_rc=0
   python3 "$mutated" --repo-sweep --repo-root "$repo" --ledger "$ledger" --today "$TODAY" >/dev/null 2>&1 || mut_rc=$?
-  if [[ "$mut_rc" == "0" ]]; then
+  if [[ "$want" == "0" && "$mut_rc" == "0" ]]; then
     pass "$mb ($marker): deleting the branch flips FAIL->PASS (branch is load-bearing)"
-  else
+  elif [[ "$want" == "0" ]]; then
     fail "$mb ($marker): deleting the branch flips FAIL->PASS (branch is load-bearing)" \
       "mutated exit=$mut_rc (expected 0) — branch may be VACUOUS, or another independent check still fails"
+  elif [[ "$mut_rc" == "$want" ]]; then
+    pass "$mb ($marker): the mutant still FAILs (the remaining check holds the verdict alone)"
+  else
+    fail "$mb ($marker): the mutant still FAILs (the remaining check holds the verdict alone)" \
+      "mutated exit=$mut_rc (expected $want)"
   fi
 }
 
-# --- MB-1: delete the unledgered-store branch -> a dedicated TS-1-derived
-# fixture (a second, ledgered-under-the-wrong-address resource) must regress.
-# The floor check is deliberately UNAFFECTED (same total counts) so this
-# isolates the per-address branch specifically. ---
+# --- MB-1: the unledgered-store branch. Since #8532 PR-1 the floor is exact
+# (check_store_id_accounted + check_non_iac_identity), so an unledgered address
+# always reds the floor too and no fixture can isolate MB-1 by verdict alone.
+# The old decoy row (a second row ledgered under a non-*.tf address) is now a
+# FAIL in its own right. So MB-1 is proven two ways: deleting the floor alone
+# leaves the FAIL standing (MB-1 holds the verdict by itself), and deleting
+# both flips it. ---
 REPO_MB1="$TMPDIR_TEST/mb1"
 mk_git_data_base "$REPO_MB1"
 cat >> "$REPO_MB1/apps/web-platform/infra/git-data-luks.tf" <<'EOF'
@@ -719,24 +741,6 @@ write_file "$LEDGER_MB1" <<'EOF'
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:no host probe in this fixture"
       }
-    },
-    {
-      "store": "hcloud_volume.nonexistent_luks",
-      "kind": "guest-luks-volume",
-      "at_rest": {
-        "mechanism": "plaintext-exception",
-        "evidence": "decoy row for the MB-1 fixture -- not a real *.tf resource",
-        "defends_against": "n/a -- fixture decoy row exercising the count-only floor path",
-        "does_not_defend": "a leaked service-role credential or a compromised host with the volume already unlocked",
-        "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:fixture decoy row",
-        "exception": {
-          "justification": "fixture decoy row exercising the count-only positive-work floor",
-          "tracking_issue": "#1",
-          "reevaluate_when": "never -- fixture decoy row",
-          "expires_on": "2099-01-01"
-        }
-      }
     }
   ],
   "connections": []
@@ -744,7 +748,8 @@ write_file "$LEDGER_MB1" <<'EOF'
 EOF
 run_case_reports "MB-1 fixture baseline: orphan_luks unledgered -> FAIL" 1 "unledgered store hcloud_volume.orphan_luks" \
   --repo-sweep --repo-root "$REPO_MB1" --ledger "$LEDGER_MB1" --today "$TODAY"
-run_mutation "MB-1" "MB-1" "$REPO_MB1" "$LEDGER_MB1"
+run_mutation "MB-1/floor-only" "MB-22" "$REPO_MB1" "$LEDGER_MB1" 1
+run_mutation "MB-1" "MB-1 MB-22" "$REPO_MB1" "$LEDGER_MB1"
 
 # --- MB-2: delete the citation-resolution step (accept the row's word) ->
 # TS-2 AND TS-3 must both regress. ---
@@ -818,6 +823,203 @@ run_case_reports "MB-12 baseline: non-IaC row present -> PASS" 0 "encryption-pos
 run_case_reports "MB-12: deleting the non-IaC store row -> FAIL positive-work floor" 1 \
   "positive-work floor" \
   --repo-sweep --repo-root "$REPO_MB12" --ledger "$LEDGER_MB12_BAD" --today "$TODAY"
+
+# ===========================================================================
+# #8532 PR-1 — floor and anchor integrity.
+#   P1-ID   check_non_iac_identity   every catalogued id names a stores[] row
+#   P1-ACC  check_store_id_accounted every row is a *.tf store-class address or
+#                                    a catalogued id, and no id repeats
+#   P1-UNQ  resolve_disclosed_as     an anchor must occur EXACTLY once
+#   P1-LUKS check_luks_disclosure    #8527: a luks row's disclosure line must
+#                                    claim encryption and must not deny it
+# Together ID + ACC make the positive-work floor exact: before them, deleting
+# the committed supabase.prd row left the live sweep green (measured).
+# ===========================================================================
+REPO_P1="$TMPDIR_TEST/p1-empty"  # no apps/ dir: every row here is non-IaC
+mkdir -p "$REPO_P1"
+
+# mk_provider_row <store> — one provider-managed row JSON fragment.
+mk_provider_row() {
+  cat <<EOF
+    {
+      "store": "$1",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:Supabase-SOC2-Type-II",
+        "evidence": "Supabase trust center compliance page",
+        "attestation_url": "https://supabase.com/security",
+        "retrieved_on": "2026-06-01",
+        "defends_against": "a seized or decommissioned physical disk at the provider",
+        "does_not_defend": "a leaked service-role key or an RLS bypass",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no probe in this fixture"
+      }
+    }
+EOF
+}
+
+# mk_catalog_ledger <out> <catalog-json-array> <row-id>... — an empty-repo
+# ledger whose catalog and rows are given independently.
+mk_catalog_ledger() {
+  local out="$1" catalog="$2"; shift 2
+  {
+    echo '{ "schema_version": 1, "store_classes": {}, "non_store_types": [],'
+    echo "  \"non_iac_stores\": $catalog,"
+    echo '  "stores": ['
+    local first=1 id
+    for id in "$@"; do
+      [[ "$first" == 1 ]] || echo '    ,'
+      first=0
+      mk_provider_row "$id"
+    done
+    echo '  ], "connections": [] }'
+  } | write_file "$out"
+}
+
+LEDGER_P1_OK="$TMPDIR_TEST/p1-ok.json"
+mk_catalog_ledger "$LEDGER_P1_OK" '["supabase.prd", "doppler.secrets"]' supabase.prd doppler.secrets
+run_case_reports "P1-ID must-PASS: every catalogued id names a row" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P1" --ledger "$LEDGER_P1_OK" --today "$TODAY"
+
+LEDGER_P1_ID_DEL="$TMPDIR_TEST/p1-id-del.json"
+mk_catalog_ledger "$LEDGER_P1_ID_DEL" '["supabase.prd", "doppler.secrets"]' doppler.secrets
+run_case_reports "P1-ID catalogued row deleted -> FAIL naming the id" 1 \
+  "non_iac_stores entry supabase.prd names no stores[] row" \
+  --repo-sweep --repo-root "$REPO_P1" --ledger "$LEDGER_P1_ID_DEL" --today "$TODAY"
+
+LEDGER_P1_ID_CASE="$TMPDIR_TEST/p1-id-case.json"
+mk_catalog_ledger "$LEDGER_P1_ID_CASE" '["Supabase.prd"]' supabase.prd
+run_case_reports "P1-ID catalogued id differs from the row only in case -> FAIL" 1 \
+  "non_iac_stores entry Supabase.prd names no stores[] row" \
+  --repo-sweep --repo-root "$REPO_P1" --ledger "$LEDGER_P1_ID_CASE" --today "$TODAY"
+
+LEDGER_P1_ACC="$TMPDIR_TEST/p1-acc.json"
+mk_catalog_ledger "$LEDGER_P1_ACC" '["supabase.prd"]' supabase.prd doppler.secrets
+run_case_reports "P1-ACC row that is neither a *.tf address nor catalogued -> FAIL" 1 \
+  "stores[] row doppler.secrets is not accounted for" \
+  --repo-sweep --repo-root "$REPO_P1" --ledger "$LEDGER_P1_ACC" --today "$TODAY"
+
+LEDGER_P1_DUP="$TMPDIR_TEST/p1-dup.json"
+mk_catalog_ledger "$LEDGER_P1_DUP" '["supabase.prd"]' supabase.prd supabase.prd
+run_case_reports "P1-ACC duplicate stores[] id (floor slack) -> FAIL" 1 \
+  "duplicate stores[] row supabase.prd" \
+  --repo-sweep --repo-root "$REPO_P1" --ledger "$LEDGER_P1_DUP" --today "$TODAY"
+
+# A row keyed on a *.tf address whose TYPE is not a store class is outside the
+# floor's tf_store_count, so it is slack exactly like an uncatalogued id.
+REPO_P1_NST="$TMPDIR_TEST/p1-nst"
+write_file "$REPO_P1_NST/apps/web-platform/infra/server.tf" <<'EOF'
+resource "hcloud_server" "web" {
+  name = "soleur-web-platform"
+}
+EOF
+LEDGER_P1_NST="$TMPDIR_TEST/p1-nst.json"
+{
+  echo '{ "schema_version": 1, "store_classes": {}, "non_store_types": ["hcloud_server"],'
+  echo '  "non_iac_stores": [], "stores": ['
+  mk_provider_row "hcloud_server.web"
+  echo '  ], "connections": [] }'
+} > "$LEDGER_P1_NST"
+run_case_reports "P1-ACC row keyed on a non-store-class *.tf address -> FAIL" 1 \
+  "stores[] row hcloud_server.web is not accounted for" \
+  --repo-sweep --repo-root "$REPO_P1_NST" --ledger "$LEDGER_P1_NST" --today "$TODAY"
+
+# --- disclosed_as uniqueness (P1-UNQ). A plaintext-exception fixture whose
+# document carries NO encryption vocabulary, so the only thing that can fail
+# is the resolver itself. ---
+REPO_P1_UNQ="$TMPDIR_TEST/p1-unq"
+write_file "$REPO_P1_UNQ/apps/web-platform/infra/inngest-redis.tf" <<'EOF'
+resource "hcloud_volume" "inngest_redis" {
+  name = "soleur-inngest-redis"
+}
+EOF
+write_file "$REPO_P1_UNQ/docs/legal/privacy-policy.md" <<'EOF'
+# Privacy Policy
+
+## Job Queue Storage
+
+In-flight job payloads are held on a volume before processing.
+
+## Retention
+
+See Job Queue Storage above for where payloads are held.
+EOF
+LEDGER_P1_UNQ_TWICE="$TMPDIR_TEST/p1-unq-twice.json"
+cp "$LEDGER_TS17" "$LEDGER_P1_UNQ_TWICE"  # the P1-UNQ document names this anchor twice
+run_case_reports "P1-UNQ disclosed_as anchor occurs twice -> FAIL ambiguous" 1 \
+  "is ambiguous (anchor occurs 2 times" \
+  --repo-sweep --repo-root "$REPO_P1_UNQ" --ledger "$LEDGER_P1_UNQ_TWICE" --today "$TODAY"
+LEDGER_P1_UNQ_ONCE="$TMPDIR_TEST/p1-unq-once.json"
+sed 's|privacy-policy.md:Job Queue Storage|privacy-policy.md:## Job Queue Storage|' \
+  "$LEDGER_TS17" > "$LEDGER_P1_UNQ_ONCE"
+run_case_reports "P1-UNQ must-PASS: the same document, anchor occurring once" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P1_UNQ" --ledger "$LEDGER_P1_UNQ_ONCE" --today "$TODAY"
+LEDGER_P1_UNQ_NONE="$TMPDIR_TEST/p1-unq-none.json"
+sed 's#privacy-policy.md:Job Queue Storage#privacy-policy.md:No Such Anchor Xyzzy#' \
+  "$LEDGER_TS17" > "$LEDGER_P1_UNQ_NONE"
+run_case_reports "P1-UNQ disclosed_as anchor absent -> FAIL, a message distinct from ambiguous" 1 \
+  "does not resolve (anchor not found" \
+  --repo-sweep --repo-root "$REPO_P1_UNQ" --ledger "$LEDGER_P1_UNQ_NONE" --today "$TODAY"
+
+# --- #8527 (P1-LUKS). The git-data apparatus fixture, its row pointed at a
+# synthesized disclosure line. The anchor text itself is removed from the line
+# before either predicate runs, so an anchor spelled "Encrypted …" cannot
+# satisfy the claim on the body's behalf. ---
+mk_luks_disclosure_case() {
+  local name="$1" line="$2"
+  local repo="$TMPDIR_TEST/p1-luks-$name"
+  mk_git_data_base "$repo"
+  printf '# Privacy Policy\n\n%s\n' "$line" | write_file "$repo/docs/legal/privacy-policy.md"
+  local ledger="$TMPDIR_TEST/p1-luks-$name.json"
+  mk_git_data_ledger "$TMPDIR_TEST/p1-luks-$name-base.json"
+  sed 's#"disclosed_as": "not-publicly-claimed"#"disclosed_as": "docs/legal/privacy-policy.md:Encrypted storage"#' \
+    "$TMPDIR_TEST/p1-luks-$name-base.json" > "$ledger"
+  P1_REPO="$repo"; P1_LEDGER="$ledger"
+}
+
+mk_luks_disclosure_case ok '- **Encrypted storage:** the volume is **LUKS-encrypted (encryption at rest)**.'
+run_case_reports "P1-LUKS must-PASS: disclosure line claims encryption" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
+
+# The register's own mandated form: the naive LUKS|encrypt regex PASSES this.
+mk_luks_disclosure_case absent '- **Encrypted storage:** encryption at rest is ABSENT for this volume.'
+REPO_P1_LUKS_ABSENT="$P1_REPO"; LEDGER_P1_LUKS_ABSENT="$P1_LEDGER"
+run_case_reports "P1-LUKS disclosure says encryption at rest is ABSENT -> FAIL denies" 1 \
+  "denies encryption on its anchor line" \
+  --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
+
+mk_luks_disclosure_case not '- **Encrypted storage:** this volume is not encrypted.'
+run_case_reports "P1-LUKS disclosure says 'not encrypted' -> FAIL denies" 1 \
+  "denies encryption on its anchor line" \
+  --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
+
+mk_luks_disclosure_case unenc '- **Encrypted storage:** workspace data sits on an unencrypted volume.'
+run_case_reports "P1-LUKS disclosure says 'unencrypted' -> FAIL denies" 1 \
+  "denies encryption on its anchor line" \
+  --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
+
+mk_luks_disclosure_case drift '- **Encrypted storage:** workspace data is stored on a Hetzner volume.'
+REPO_P1_LUKS_DRIFT="$P1_REPO"; LEDGER_P1_LUKS_DRIFT="$P1_LEDGER"
+run_case_reports "P1-LUKS disclosure drifted: only the anchor says Encrypted -> FAIL no claim" 1 \
+  "does not claim encryption on its anchor line" \
+  --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
+
+mk_luks_disclosure_case dup "$(printf -- '- **Encrypted storage:** LUKS-encrypted.\n- **Encrypted storage:** LUKS-encrypted.')"
+run_case_reports "P1-LUKS luks disclosure anchor occurs twice -> FAIL ambiguous" 1 \
+  "is ambiguous (anchor occurs 2 times" \
+  --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
+
+# --- Mutation rows MB-17..MB-21 (+ MB-22, the floor's own FAIL branch, which
+# P1-ID shares a verdict with). ---
+run_mutation "MB-17/floor-only" "MB-22" "$REPO_P1" "$LEDGER_P1_ID_DEL" 1
+run_mutation "MB-17" "MB-17 MB-22" "$REPO_P1" "$LEDGER_P1_ID_DEL"
+run_mutation "MB-18" "MB-18" "$REPO_P1_UNQ" "$LEDGER_P1_UNQ_TWICE"
+run_mutation "MB-19" "MB-19" "$REPO_P1_UNQ" "$LEDGER_P1_UNQ_NONE"
+run_mutation "MB-20/absent" "MB-20" "$REPO_P1_LUKS_ABSENT" "$LEDGER_P1_LUKS_ABSENT"
+run_mutation "MB-20/drift" "MB-20" "$REPO_P1_LUKS_DRIFT" "$LEDGER_P1_LUKS_DRIFT"
+run_mutation "MB-21/uncatalogued" "MB-21" "$REPO_P1" "$LEDGER_P1_ACC"
+run_mutation "MB-21/duplicate" "MB-21" "$REPO_P1" "$LEDGER_P1_DUP"
+run_mutation "MB-21/non-store-type" "MB-21" "$REPO_P1_NST" "$LEDGER_P1_NST"
 
 # ===========================================================================
 # Live-coverage floor (#6902 / ADR-141): an OPTIONAL top-level
@@ -1078,6 +1280,27 @@ REPO_TRUE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 run_case "--check-templates against the real repo tree does not error" 0 \
   --check-templates --repo-root "$REPO_TRUE_ROOT"
 
+# AC-1a against the COMMITTED ledger: deleting any catalogued row must fail
+# the sweep and name the id. Before #8532 PR-1, deleting supabase.prd here
+# reported "19 -> 18 stores ... 0 failing checks -> PASS".
+REAL_LEDGER="$REPO_TRUE_ROOT/scripts/encryption-posture-ledger.json"
+REAL_IDS="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["non_iac_stores"]))' "$REAL_LEDGER")"
+REAL_N=0
+while IFS= read -r rid; do
+  [[ -n "$rid" ]] || continue
+  REAL_N=$((REAL_N + 1))
+  rl="$TMPDIR_TEST/real-minus-${REAL_N}.json"
+  python3 -c 'import json,sys; l=json.load(open(sys.argv[1])); l["stores"]=[s for s in l["stores"] if s["store"]!=sys.argv[2]]; json.dump(l,open(sys.argv[3],"w"))' \
+    "$REAL_LEDGER" "$rid" "$rl"
+  run_case_reports "AC-1a committed ledger minus catalogued row $rid -> FAIL naming it" 1 \
+    "non_iac_stores entry $rid names no stores[] row" \
+    --repo-sweep --repo-root "$REPO_TRUE_ROOT" --ledger "$rl"
+done <<<"$REAL_IDS"
+if [[ "$REAL_N" -lt 7 ]]; then
+  printf 'GUARD FAIL: AC-1a loop covered %s catalogued ids, expected >= 7\n' "$REAL_N" >&2
+  exit 2
+fi
+
 # Hermeticity (h): the SUT must never shell out to gh/curl or hit the network.
 if grep -qE 'gh api|subprocess\.run\(\s*\[.?(gh|curl)|urllib\.request|requests\.(get|post)|http\.client|socket\.' "$SUT"; then
   fail "H1 hermeticity: SUT contains no network/gh/curl calls" "found a banned token in $SUT"
@@ -1088,7 +1311,7 @@ fi
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=30
+MIN_CASES=77
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

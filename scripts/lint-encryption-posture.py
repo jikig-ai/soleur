@@ -471,12 +471,68 @@ def check_positive_work_floor(
     non_iac_count = len(ledger["non_iac_stores"])
     expected = tf_store_count + non_iac_count
     actual = len(ledger["stores"])
+    # MUTATION-TARGET: MB-22 start (positive-work floor FAIL branch)
     if actual < expected:
         fails.append(
             f"FAIL: positive-work floor: expected >= {expected} stores "
             f"({tf_store_count} from *.tf + {non_iac_count} non-IaC) but "
             f"ledger has {actual} -> restore the missing stores[] row(s)"
         )
+    # MUTATION-TARGET: MB-22 end
+
+
+def check_non_iac_identity(ledger: dict, fails: list[str]) -> None:
+    """#8532 PR-1: every id the floor counts must name a row that exists.
+
+    The floor COUNTS the catalog and never joined it to stores[], so deleting
+    the committed supabase.prd row left one unit of slack and the sweep green.
+    Exact, case-sensitive match: store ids are addresses, not labels."""
+    row_ids = {s["store"] for s in ledger["stores"]}
+    # MUTATION-TARGET: MB-17 start (catalogued id must name a row)
+    for cid in ledger["non_iac_stores"]:
+        if cid not in row_ids:
+            fails.append(
+                f"FAIL: non_iac_stores entry {cid} names no stores[] row -> "
+                f"restore the {cid} row, or remove {cid} from non_iac_stores "
+                "if the store is gone"
+            )
+    # MUTATION-TARGET: MB-17 end
+
+
+def check_store_id_accounted(
+    ledger: dict, tf_inventory: dict[str, list[str]], fails: list[str]
+) -> None:
+    """#8532 PR-1, the forward direction: every stores[] row resolves to a
+    *.tf address of a store-class type or to a non_iac_stores entry, and no
+    id repeats. With check_non_iac_identity and MB-1 this makes the floor
+    exact by construction: a row outside both operands, or a second copy of
+    one, is spare count a deleted row could hide behind."""
+    store_classes = ledger["store_classes"]
+    tf_store_addrs = {
+        addr
+        for type_, addrs in tf_inventory.items()
+        if type_ in store_classes
+        for addr in addrs
+    }
+    catalog = set(ledger["non_iac_stores"])
+    seen: set[str] = set()
+    for row in ledger["stores"]:
+        sid = row["store"]
+        # MUTATION-TARGET: MB-21 start (row accounted + unique)
+        if sid in seen:
+            fails.append(
+                f"FAIL: duplicate stores[] row {sid} -> merge the rows; a "
+                "second copy is floor slack a deleted row can hide behind"
+            )
+        elif sid not in tf_store_addrs and sid not in catalog:
+            fails.append(
+                f"FAIL: stores[] row {sid} is not accounted for (no *.tf "
+                "resource of a store_classes type at that address, and not in "
+                f"non_iac_stores) -> fix the address, or catalogue {sid} in "
+                "non_iac_stores"
+            )
+        # MUTATION-TARGET: MB-21 end
+        seen.add(sid)
 
 
 def check_live_coverage_floor(ledger: dict, fails: list[str]) -> None:
@@ -614,28 +670,69 @@ def check_exception_block(
     # MUTATION-TARGET: MB-9 end
 
 
+NOT_FOUND = "does not resolve (path/anchor not found)"
+
+
 def resolve_disclosed_as(
     value: str, repo_root: Path
-) -> tuple[str | None, str | None]:
-    """`path:anchor` -> (text region around the anchor, path) or (None, None)
-    if unresolvable. Hermetic: refuses to escape repo_root (h)."""
+) -> tuple[str | None, int, str | None]:
+    """`path:anchor` -> (file text, anchor offset, None) when the anchor occurs
+    EXACTLY once, else (None, -1, reason). Zero and many are distinct reasons:
+    a moved anchor and an ambiguous one need different fixes. Hermetic:
+    refuses to escape repo_root (h)."""
     if ":" not in value:
-        return None, None
+        return None, -1, NOT_FOUND
     path_str, anchor = value.split(":", 1)
     try:
         path = (repo_root / path_str).resolve()
         path.relative_to(repo_root.resolve())
     except (ValueError, OSError):
-        return None, None
+        return None, -1, NOT_FOUND
     if not path.is_file():
-        return None, None
+        return None, -1, NOT_FOUND
     text = read_text(path)
-    idx = text.find(anchor)
-    if idx == -1:
-        return None, None
-    start = max(0, idx - 300)
-    end = min(len(text), idx + 300)
-    return text[start:end], path_str
+    n = text.count(anchor) if anchor else 0
+    # MUTATION-TARGET: MB-19 start (anchor absent -> fail closed)
+    if n == 0:
+        return None, -1, "does not resolve (anchor not found in the file)"
+    # MUTATION-TARGET: MB-19 end
+    # MUTATION-TARGET: MB-18 start (anchor ambiguous -> fail closed)
+    if n > 1:
+        return None, -1, (
+            f"is ambiguous (anchor occurs {n} times in {path_str}; it must "
+            "occur exactly once)"
+        )
+    # MUTATION-TARGET: MB-18 end
+    return text, text.find(anchor), None
+
+
+def _anchor_window(text: str, idx: int) -> str:
+    return text[max(0, idx - 300) : min(len(text), idx + 300)]
+
+
+def _anchor_line(text: str, idx: int, anchor: str) -> str:
+    """The whole line holding the anchor, with the anchor itself removed so a
+    label spelled "Encrypted ..." cannot make the claim on the body's behalf."""
+    start = text.rfind("\n", 0, max(idx, 0)) + 1
+    end = text.find("\n", max(idx, 0))
+    line = text[start : end if end != -1 else len(text)]
+    return line.replace(anchor, " ", 1)
+
+
+# #8527. Evaluated on the anchor LINE, never a window: the register's own
+# mandated "encryption at rest is ABSENT" form sits next to positive claims in
+# most measured windows. A denial anywhere on the line wins over a claim, so
+# this fails CLOSED on a claim phrased near a negation ("not only encrypted",
+# "no plaintext copy"): rephrase the disclosure rather than the predicate.
+ENCRYPTION_CLAIM_RE = re.compile(r"\bLUKS\b|\bencrypt", re.IGNORECASE)
+ENCRYPTION_DENIAL_RE = re.compile(
+    r"\b(?:not|never|no|without)[\s-]+(?:\w+[\s-]+)?encrypt"
+    r"|\bun-?encrypt"
+    r"|\bencrypt\w*(?:\s+\w+){0,3}\s+(?:is|are|was|were)\s+"
+    r"(?:absent|not|disabled|off|missing|unavailable)\b"
+    r"|\bplaintext\b",
+    re.IGNORECASE,
+)
 
 
 def check_disclosed_as_not_encrypted(
@@ -647,17 +744,17 @@ def check_disclosed_as_not_encrypted(
     # MUTATION-TARGET: MB-11 start
     if not disclosed or disclosed == "not-publicly-claimed":
         return
-    region, _cite = resolve_disclosed_as(disclosed, repo_root)
-    if region is None:
+    text, idx, err = resolve_disclosed_as(disclosed, repo_root)
+    if text is None:
         # Fail CLOSED: a plaintext-exception naming a disclosure anchor that does
         # not resolve cannot be verified against reality -- the exact join gap R5
-        # exists to close. A moved/bogus anchor must not pass silently.
+        # exists to close. A moved/bogus/ambiguous anchor must not pass silently.
         fails.append(
-            f"FAIL: {store} disclosed_as {disclosed} does not resolve "
-            "(path/anchor not found) -> cannot verify the disclosure claim; "
-            "fix the anchor or set disclosed_as: not-publicly-claimed"
+            f"FAIL: {store} disclosed_as {disclosed} {err} -> cannot verify "
+            "the disclosure claim; fix the anchor or set disclosed_as: "
+            "not-publicly-claimed"
         )
-    elif re.search(r"LUKS|encrypt", region, re.IGNORECASE):
+    elif re.search(r"LUKS|encrypt", _anchor_window(text, idx), re.IGNORECASE):
         fails.append(
             f"FAIL: {store} disclosed_as {disclosed} asserts encryption while "
             "mechanism is plaintext-exception -> correct the disclosure to "
@@ -666,13 +763,49 @@ def check_disclosed_as_not_encrypted(
     # MUTATION-TARGET: MB-11 end
 
 
+def check_luks_disclosure(
+    store: str, ar: dict, repo_root: Path, fails: list[str]
+) -> None:
+    """#8527: a luks row's disclosure is the public "encrypted at rest" claim,
+    so its anchor line must CLAIM encryption and must not DENY it. Checked on
+    the anchor line only (see ENCRYPTION_DENIAL_RE)."""
+    disclosed = ar.get("disclosed_as", "")
+    if not disclosed or disclosed == "not-publicly-claimed":
+        return
+    text, idx, err = resolve_disclosed_as(disclosed, repo_root)
+    if text is None:
+        fails.append(
+            f"FAIL: {store} disclosed_as {disclosed} {err} -> cannot verify "
+            "the encryption claim; fix the anchor or set disclosed_as: "
+            "not-publicly-claimed"
+        )
+        return
+    line = _anchor_line(text, idx, disclosed.split(":", 1)[1])
+    # MUTATION-TARGET: MB-20 start (luks disclosure must claim, never deny)
+    if ENCRYPTION_DENIAL_RE.search(line):
+        fails.append(
+            f"FAIL: {store} disclosed_as {disclosed} denies encryption on its "
+            "anchor line while mechanism is luks -> correct the disclosure or "
+            "the row"
+        )
+    elif not ENCRYPTION_CLAIM_RE.search(line):
+        fails.append(
+            f"FAIL: {store} disclosed_as {disclosed} does not claim encryption "
+            "on its anchor line (the anchor text itself does not count) -> "
+            "re-anchor on the sentence that makes the claim"
+        )
+    # MUTATION-TARGET: MB-20 end
+
+
 def check_at_rest(row: dict, today: date, repo_root: Path, fails: list[str]) -> None:
     store = row["store"]
     ar = row["at_rest"]
     mech = ar["mechanism"]
     does_not_defend_check(f"{store} at_rest", ar.get("does_not_defend", ""), fails)
     if mech == "luks":
-        return  # resolved separately by check_luks_row()
+        # The apparatus is resolved separately by check_luks_row().
+        check_luks_disclosure(store, ar, repo_root, fails)
+        return
     if mech.startswith("provider-managed:"):
         check_provider_managed(store, ar, today, fails)
         return
@@ -702,14 +835,16 @@ def check_connection(conn: dict, today: date, repo_root: Path, fails: list[str])
         check_exception_block(f"{label} in_transit", it, today, fails)
         disclosed = it.get("disclosed_as")
         if disclosed and disclosed != "not-publicly-claimed":
-            region, _cite = resolve_disclosed_as(disclosed, repo_root)
-            if region is None:
+            text, idx, err = resolve_disclosed_as(disclosed, repo_root)
+            if text is None:
                 fails.append(
-                    f"FAIL: {label} disclosed_as {disclosed} does not resolve "
-                    "(path/anchor not found) -> cannot verify the disclosure "
-                    "claim; fix the anchor or set disclosed_as: not-publicly-claimed"
+                    f"FAIL: {label} disclosed_as {disclosed} {err} -> cannot "
+                    "verify the disclosure claim; fix the anchor or set "
+                    "disclosed_as: not-publicly-claimed"
                 )
-            elif re.search(r"LUKS|encrypt|TLS|verifi", region, re.IGNORECASE):
+            elif re.search(
+                r"LUKS|encrypt|TLS|verifi", _anchor_window(text, idx), re.IGNORECASE
+            ):
                 fails.append(
                     f"FAIL: {label} disclosed_as {disclosed} asserts secure "
                     "transport while cert_verification is off -> correct the "
@@ -915,6 +1050,8 @@ def run_sweep(
     tf_inventory = scan_tf_inventory(tf_files, cache)
     tf_store_count = check_resource_partition(ledger, tf_inventory, fails)
     check_positive_work_floor(ledger, tf_store_count, fails)
+    check_non_iac_identity(ledger, fails)
+    check_store_id_accounted(ledger, tf_inventory, fails)
     check_live_coverage_floor(ledger, fails)
 
     for row in ledger["stores"]:

@@ -26,12 +26,12 @@ Nothing here edits `apps/web-platform/infra/`.
 
 ## Phase 1 — floor and anchor integrity
 
-- [ ] 1.1 `check_non_iac_identity`: every catalogued id resolves to a row.
-- [ ] 1.2 `resolve_disclosed_as`: exactly-one-occurrence, distinct messages for 0 and for more than 1.
-- [ ] 1.3 Close #8527: run the disclosure check on `luks` rows, positive direction.
-- [ ] 1.4 Delete the now-false honesty note from the `hcloud_volume.registry` row.
-- [ ] 1.5 Cases plus mutation rows MB-17/18/19; each must flip FAIL to PASS when its guard is deleted.
-- [ ] 1.6 Raise `MIN_CASES` to the new count.
+- [x] 1.1 `check_non_iac_identity`: every catalogued id resolves to a row. Plus `check_store_id_accounted` (plan PR-1 item 4, R10): every row is a store-class `.tf` address or catalogued, no id repeats; `git_data.baked_credentials_on_host` catalogued. Floor now exact: 12 + 7 = 19.
+- [x] 1.2 `resolve_disclosed_as`: exactly-one-occurrence, distinct messages for 0 and for more than 1.
+- [x] 1.3 Close #8527: run the disclosure check on `luks` rows, positive direction (`check_luks_disclosure`: anchor line, anchor text removed, denial wins over claim).
+- [x] 1.4 Supersede (dated, append-only) the now-false honesty note on the `hcloud_volume.registry` row.
+- [x] 1.5 Cases plus mutation rows MB-17..MB-21 (plan numbering) and MB-22 on the floor's FAIL branch: MB-1 and MB-17 share a verdict with the now-exact floor, so each is proven by "floor deleted alone still FAILs" plus "both deleted flips to PASS".
+- [x] 1.6 Raise `MIN_CASES` to the new count (30 -> 77).
 
 ## Phase 2 — PR-2: host root disks
 
