@@ -234,8 +234,25 @@ for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_MOUNT_ROOT GIT_D
 done
 if grep -qF -- '-u GIT_DATA_ROOT' <<< "$_exec"; then pass "C: git-data-gc.service also strips GIT_DATA_ROOT (gc's own mount seam)"
 else fail "C: git-data-gc.service ExecStart does not strip GIT_DATA_ROOT" "$_exec"; fi
+if grep -qF -- '-u GIT_DATA_EMIT' <<< "$_exec"; then pass "C: git-data-gc.service also strips GIT_DATA_EMIT (an injected one is root exec in the unit)"
+else fail "C: git-data-gc.service ExecStart does not strip GIT_DATA_EMIT" "$_exec"; fi
 if grep -qE 'doppler run .*-- /usr/bin/env -u ' <<< "$_exec"; then pass "C: the env -u strip runs AFTER doppler run, so an injected seam is removed"
 else fail "C: env -u does not sit between doppler run and the gc script" "$_exec"; fi
+
+# C2 — THE BOOTSTRAP IS THE OTHER DOPPLER CONSUMER, and it was the unstripped one. gc's unit
+# strips its seams; the bootstrap invocation in cloud-init did not, so a key added to
+# prd_git_data retargeted the marker (every erasure then refuses — an Art. 17 denial of
+# service on a boot that reports green) or, through GIT_DATA_REMOVE_BIN, ran an arbitrary
+# binary as root at boot. Found by review, not by this census, which is why the row exists.
+_boot_exec="$(grep -E 'doppler run .*git-data-bootstrap\.sh' "$TEMPLATE" | head -1)"
+if [ -n "$_boot_exec" ]; then pass "C2: the bootstrap invocation is present in the template"
+else fail "C2: could not find the bootstrap's doppler invocation in $TEMPLATE"; fi
+for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_REMOVE_BIN GIT_DATA_PLAINTEXT_DEV; do
+  if grep -qF -- "-u $v" <<< "$_boot_exec"; then pass "C2: the bootstrap invocation strips $v"
+  else fail "C2: the bootstrap invocation does not strip $v" "$_boot_exec"; fi
+done
+if grep -qE 'doppler run .*-- /usr/bin/env -u ' <<< "$_boot_exec"; then pass "C2: the bootstrap's env -u strip runs AFTER doppler run"
+else fail "C2: env -u does not sit between doppler run and the bootstrap" "$_boot_exec"; fi
 
 # ── ARM D — the sshd environment path is closed ────────────────────────────────────────────
 # Comment-stripped, because the runcmd stage's own rationale quotes "AcceptEnv LANG LC_*" and a
@@ -540,7 +557,11 @@ fi
 # six refusal rows x3 = 18, the not_mapper emit 1, and the second look-alike 1 is inside the
 # 18); G 27 (landed control 1, rows 1/5/8/9 x2, row 2 x2, row 3 x3, row 4 x3, row 6 x3,
 # rows 7a/7b/7c x2). Measured total: 76.
-FLOOR=76
+# +7 (#8211, review finding 3): C gains the GIT_DATA_EMIT strip (1) and C2, the bootstrap's
+# own strip — presence 1, four seams 4, ordering 1. Raised in the same edit that adds the
+# rows: slack in a floor is how many assertions can be deleted before the one guard that
+# detects truncation notices. Measured total: 83.
+FLOOR=83
 _ran=$((passes + fails))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

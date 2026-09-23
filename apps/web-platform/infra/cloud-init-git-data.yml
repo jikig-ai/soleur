@@ -888,13 +888,23 @@ runcmd:
         ( printf 'sshd host-key proof: %s\n' "$_hk_verdict" >> "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
         exit 1
       fi
+    fi
       # (#8211) THE CLIENT-ENVIRONMENT PATH IS CLOSED — ENFORCED HERE, not only linted. The store
       # scripts' test seams (GIT_DATA_STORE_*, GIT_DATA_MOUNT_ROOT) are environment variables, so a
       # client that could set one would point the Art. 17 erasure at a store of its choosing.
       # AcceptEnv may carry only LANG and LC_* (the image default), and PermitUserEnvironment must
       # read exactly `no`. Same FATAL shape and already-routed stage as the host-key proof above.
+      if [ "$_sshd_T_rc" -ne 0 ]; then
+        # A check that cannot run is not a check that passed. The rc!=0 arm above WARNS and
+        # continues, which is right for "the effective config was not measured" in general —
+        # but this control gates the seams that steer the Art. 17 erasure, so unmeasurable is
+        # refused here rather than assumed good. Without this the block was skipped entirely
+        # whenever sshd -T failed, and the comment above claimed ENFORCED.
+        _env_bad="sshd -T unavailable (rc=$_sshd_T_rc); client-environment path unverified; "
+      else
       _env_bad=$(printf '%s\n' "$_sshd_T_dump" | awk '$1=="acceptenv"{for(i=2;i<=NF;i++) if($i!="lang" && $i!~/^lc_/) printf "acceptenv %s; ", $i}')
       printf '%s\n' "$_sshd_T_dump" | grep -qx 'permituserenvironment no' || _env_bad="$${_env_bad}permituserenvironment not no; "
+      fi
       if [ -n "$_env_bad" ]; then
         _env_detail=/run/git-data-sshd-env.err
         ( umask 077; printf 'sshd client-environment path open: %s\n' "$_env_bad" > "$_env_detail" ) 2>/dev/null || true
@@ -904,7 +914,6 @@ runcmd:
         ( printf 'sshd client-environment path open: %s\n' "$_env_bad" >> "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
         exit 1
       fi
-    fi
     # (#7227) THE RESTART WARNING GETS ITS OWN CAUSE; it shipped `detail=""`. It does NOT
     # reuse $_sshd_detail: reaching here means `sshd -t` PASSED, so that file is empty and
     # its literal would blame the config check that succeeded. SUBSTITUTION, not `2>>` on the
@@ -1281,7 +1290,14 @@ runcmd:
     # heredoc, so it binds the doppler CHILD — the parent's on_err was never replaced and is
     # still armed here. Deleting the handler also removes the `_detail` name collision that
     # defeats R3(3b)'s name-keyed guard search.
-    doppler run --project soleur --config ${doppler_config_name} -- bash /usr/local/bin/git-data-bootstrap.sh 2>>"$GIT_DATA_RUNCMD_DETAIL"
+    # (#8211) STRIP THE TEST-ONLY SEAMS, for the reason git-data-gc.service strips them: the
+    # bootstrap reads GIT_DATA_STORE_VERIFIED, GIT_DATA_STORE_DEVICE, GIT_DATA_REMOVE_BIN and
+    # GIT_DATA_PLAINTEXT_DEV from whatever environment doppler hands it, so a key added to
+    # prd_git_data would retarget the marker (every erasure then refuses forever, an Art. 17
+    # denial of service on a boot that reports green) or, via GIT_DATA_REMOVE_BIN, run an
+    # arbitrary binary as root at boot. The consumers default independently, so this is the
+    # producer half of the same guard.
+    doppler run --project soleur --config ${doppler_config_name} -- /usr/bin/env -u GIT_DATA_STORE_DEVICE -u GIT_DATA_STORE_VERIFIED -u GIT_DATA_MOUNT_ROOT -u GIT_DATA_REPO_ROOT -u GIT_DATA_ROOT -u GIT_DATA_EMIT -u GIT_DATA_REMOVE_BIN -u GIT_DATA_PLAINTEXT_DEV bash /usr/local/bin/git-data-bootstrap.sh 2>>"$GIT_DATA_RUNCMD_DETAIL"
 
   # (#6982, W4) Arm the maintenance timer. MUST-TOLERATE (Phase 0.4): a timer that fails to
   # enable is a degraded steady state, not a reason to abort a boot.
