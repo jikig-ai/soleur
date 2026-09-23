@@ -102,8 +102,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       # FIRST step that could matter: validate the dispatch before anything reads a secret or
       # contacts a provider. Every untrusted input is routed through `env:` and never
@@ -146,9 +149,9 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -182,7 +185,7 @@ jobs:
           set -euo pipefail
           # `rehearsal_run_id` is required by the root but irrelevant to a destroy — every
           # address is already in state. This run's own id satisfies the ^[0-9]+$ validation.
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
               -var "rehearsal_run_id=${GITHUB_RUN_ID}"
           echo "teardown-only complete"
@@ -195,7 +198,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var "rehearsal_run_id=${GITHUB_RUN_ID}"
 
@@ -277,7 +280,7 @@ jobs:
           # chasing a failure that is already repaired. Taken before the apply so no event
           # this rehearsal produces can fall outside the window.
           echo "RUNG2_SENTRY_SINCE=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_ENV"
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
           echo "host=${REHEARSAL_PREFIX}${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
 
@@ -315,7 +318,7 @@ jobs:
           # The >= 12 floor is deliberately tighter than the artifact redactor's >= 4: a short
           # value masked here would carpet the RENDERED log for every reader, and the two
           # non-secrets nearest the line (`soleur` 6, `jikigai-eu` 10) sit below it.
-          doppler run -p soleur -c prd_terraform -- bash -c '
+          doppler run --preserve-env -p soleur -c prd_terraform -- bash -c '
             for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD \
                      SENTRY_ISSUE_RO_TOKEN SENTRY_ISSUE_RW_TOKEN \
                      AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
@@ -373,7 +376,7 @@ jobs:
             # reported as "the host reported a fatal" -- the exact mis-blame the sentinel
             # block below exists to prevent.
             set +e
-            doppler run -p soleur -c prd_terraform -- \
+            doppler run --preserve-env -p soleur -c prd_terraform -- \
               bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
                 --host-name "$REHEARSAL_HOST" \
                 --evidence-url "$url" \
@@ -536,7 +539,7 @@ jobs:
           REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
         run: |
           set -euo pipefail
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           printf '::add-mask::%s\n' "$TOKEN"
           # EXACT NAME, never a prefix match. `?name=` is an exact filter on the Hetzner side,
           # so this cannot reach `soleur-git-data` (the production host) or a leftover survivor
@@ -599,7 +602,7 @@ jobs:
             fi
             echo "--- reboot probe attempt ${attempt}/20 ---"
             rc=0
-            doppler run -p soleur -c prd_terraform -- \
+            doppler run --preserve-env -p soleur -c prd_terraform -- \
               bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
                 --host-name "$REHEARSAL_HOST" \
                 --evidence-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
@@ -694,7 +697,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ -s /tmp/rung2/capture.log ]] || { echo "no capture.log to redact (the step died before its first tee)"; exit 0; }
-          doppler run -p soleur -c prd_terraform -- python3 - <<'PY'
+          doppler run --preserve-env -p soleur -c prd_terraform -- python3 - <<'PY'
           import os
           src, dst = "/tmp/rung2/capture.log", "/tmp/rung2/capture.redacted.log"
           text = open(src, encoding="utf-8", errors="replace").read()
@@ -805,7 +808,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
               -var "rehearsal_run_id=${GITHUB_RUN_ID}"
 
@@ -825,7 +828,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           printf '::add-mask::%s\n' "$TOKEN"
           body="$(curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
                     'https://api.hetzner.cloud/v1/servers?per_page=50')" || {

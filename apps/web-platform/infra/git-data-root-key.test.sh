@@ -3,13 +3,17 @@
 # (#8189, ADR-220) Drift-guards for the git-data root-key root and its apply workflow.
 #
 # WHAT THIS PROTECTS (plan Guard 6 root half, Guard 8, AC5):
-#   - apps/web-platform/infra/git-data-root-key/ keeps its DISTINCT state key, prevent_destroy on
-#     the five key-bearing addresses, exactly the D-1 address set, the parent's variable names with
-#     no default, and none of: output, nonsensitive(, local_file, local-exec, provisioner,
-#     terraform_remote_state (the last also across the parent root's *.tf).
+#   - apps/web-platform/infra/git-data-root-key/ keeps its DISTINCT state key (with NO bucket
+#     literal since #8209 — the partial backend's bucket is supplied by the workflow, which this
+#     suite also pins), prevent_destroy on the five key-bearing addresses, exactly the D-1 address
+#     set MINUS the two addresses #8209 custody-transferred (each accounted for by name in a
+#     `removed` block whose own lifecycle says `destroy = false`), the parent's variable names, and
+#     none of: output, nonsensitive(, local_file, local-exec, provisioner, terraform_remote_state
+#     (the last also across the parent root's *.tf).
 #   - .github/workflows/apply-git-data-root-key.yml stays dispatch-only, SHA-pinned, reviewer-gated,
 #     serialized on the replace job's `git-data-state` literal with cancel-in-progress `is False`,
-#     applies only an additive plan (a create of exactly the D-1 address set, or a no-op; no
+#     applies only an additive plan (a create of exactly the D-1 address set, a no-op, or the
+#     one-shot #8209 `8209_custody_forget` arm's forget of exactly the two custody addresses; no
 #     import, no moved address, no re-mint of an anchored key; NO rotation exception), gates the
 #     apply on that refusal (no `if:` / `continue-on-error` from the allowlist through the apply),
 #     prints the fingerprint from Terraform state only when it equals the Hetzner object's, never
@@ -39,6 +43,7 @@
 #   F6   G8     fixture  a no-op carrying previous_address (moved)                   G8.fixture-moved
 #   F7   G8     fixture  tls key create with the fingerprint committed               G8.remint-refused
 #   F8   G8     fixture  state fingerprint differs from the Hetzner object's         G8.fingerprint-mismatch
+#   F9   G8     fixture  HCLOUD_TOKEN absent from the job environment (#8209)        G8.fingerprint-token-absent
 #   M1   G8     code     add an output block with nonsensitive( to the root          ROOT.census
 #   M2   G8     code     remove the notify-root-key-apply job                         G8.notify-job
 #   M3   G6     code     delete cancel-in-progress on the apply job                   G6.apply-cancel-in-progress-false
@@ -52,7 +57,7 @@
 #   M11  G8     code     widen the jq allowlist to accept ["forget"]                  G8.fixture-forget
 #   M12  G8     code     terraform_wrapper: true                                      WF.setup-terraform
 #   M13  G8     code     drop -lockfile=readonly from init                            WF.init-readonly-lock
-#   M14  D-1    code     ignore_changes on the repo secret                            ROOT.github-secret-no-ignore-changes
+#   M14  D-1    code     destroy = true on the FIRST removed block (#8209)            ROOT.no-adopt
 #   M15  G8     code     continue-on-error: true on the allowlist step                G8.allowlist-gates-apply
 #   M16  G8     code     if: always() on the apply step                               G8.allowlist-gates-apply
 #   M17  G8     code     notify job if: gains a trailing `&& false`                   G8.notify-job
@@ -62,6 +67,10 @@
 #   M21  G8     code     drop the importing check from `additive`                     G8.fixture-importing
 #   M22  G8     code     fingerprint step reads the saved plan, not state             G8.fingerprint-match
 #   M23  G8     code     neuter the state-vs-Hetzner equality                         G8.fingerprint-mismatch
+#   M24  D-1    code     drop `from` from a removed block (#8209)                     ROOT.forgotten-pair
+#   M25  D-1    code     re-pin a `bucket` literal in the partial backend (#8209)     ROOT.backend-key
+#   M26  G8     code     drop -backend-config="bucket=…" from init (#8209)            WF.init-backend-config
+#   M27  D-1    code     re-declare the repo secret WITH ignore_changes (#8209)       ROOT.github-secret-no-ignore-changes
 #
 # Registered in .github/workflows/infra-validation.yml (run: bash <this path>).
 set -uo pipefail
@@ -78,7 +87,7 @@ APPLY_WF="${GD_ROOT_KEY_APPLY_WF:-${ROOT}/.github/workflows/apply-web-platform-i
 INFRA_VALIDATION_WF="${ROOT}/.github/workflows/infra-validation.yml"
 CHILD="${GD_ROOT_KEY_CHILD:-0}"
 
-MUTANT_FLOOR=31
+MUTANT_FLOOR=36
 
 passes=0
 fails=0
@@ -192,7 +201,36 @@ files, t = code(rk)
 print("FILES=%d" % len(files))
 addrs = sorted("%s.%s" % m for m in re.findall(r'^\s*resource\s+"([a-z0-9_]+)"\s+"([a-z0-9_]+)"', t, re.M))
 print("ADDRS=%s" % ",".join(addrs))
-print("ADOPT=%d" % len(re.findall(r'^\s*(data|import|moved|removed|module|check)\b', t, re.M)))
+# (#8209, ADR-241) `removed` LEAVES the flat ban and gets its own facts. The other five stay at
+# zero. The ban was right while the root declared the whole D-1 set; #8209 custody-transfers two
+# addresses out of it with `removed { lifecycle { destroy = false } }`, so the question is no
+# longer "is there a removed block" but "is it one of exactly two named addresses, and is it a
+# FORGET". `destroy` is read from each block's OWN lifecycle by brace counting below: a file-wide
+# grep for `destroy = false` is satisfied by the OTHER removed block, and what it would let
+# through is a real `terraform destroy` of a live credential.
+print("ADOPT=%d" % len(re.findall(r'^\s*(data|import|moved|module|check)\b', t, re.M)))
+
+def bodies(text, header_re):  # every match's body, brace-counted (block() returns only the first)
+    out = []
+    for m in re.finditer(header_re, text, re.M):
+        i = text.index("{", m.start())
+        depth = 0
+        for j in range(i, len(text)):
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    out.append(text[i + 1:j])
+                    break
+    return out
+
+rem = []
+for rb in bodies(t, r'^\s*removed\s*\{'):
+    lc = block(rb, r'^\s*lifecycle\s*\{') or ""
+    rem.append((top_attrs(rb).get("from", ""), 1 if top_attrs(lc).get("destroy") == "false" else 0))
+print("REMOVED_COUNT=%d" % len(rem))
+print("REMOVED=%s" % ",".join(sorted("%s:%d" % r for r in rem)))
 
 backend = block(t, r'^\s*backend\s+"s3"\s*\{') or ""
 ba = top_attrs(backend)
@@ -234,6 +272,10 @@ print("ATTR_DENV=%s|%s" % (a.get("slug", ""), a.get("project", "")))
 a = res("doppler_secret", "git_data_root_ssh_private_key")
 print("ATTR_DSEC=%s|%s|%s|%s|%s" % (a.get("name", ""), a.get("value", ""), a.get("visibility", ""),
                                     a.get("project", ""), a.get("config", "")))
+# ATTR_DTOK / ATTR_GHSEC read the two addresses #8209 custody-transferred out of this root. Both
+# now resolve to empty, and the ROOT.read-token / ROOT.github-secret cases assert the custody
+# transfer instead of the shape. The probes are KEPT so that a PR re-declaring either resource is
+# measured rather than silently unobserved, and so residual R6 (#8610) has the shape facts to hand.
 a = res("doppler_service_token", "git_data_root_read")
 print("ATTR_DTOK=%s|%s|%s" % (a.get("access", ""), a.get("project", ""), a.get("config", "")))
 gb = block(t, r'^\s*resource\s+"github_actions_secret"\s+"doppler_token_git_data_root"\s*\{') or ""
@@ -288,26 +330,57 @@ if [[ "${_files:-0}" -lt 1 ]]; then
   exit 1
 fi
 
+# (#8209, ADR-241) THE DECLARED SET IS D-1 MINUS EXACTLY THE TWO CUSTODY-TRANSFERRED ADDRESSES.
+# The old literal (seven) was right while this root owned the read token and the repo secret. #8209
+# transfers custody of that pair to a main-only environment secret and FORGETS them here, so the
+# root declares five. The pair is not simply dropped from the census: _want_forgotten below pins it
+# by name in the very next case, so "five declared" can never be reached by deleting a sixth
+# resource outright.
+_want_forgotten="doppler_service_token.git_data_root_read github_actions_secret.doppler_token_git_data_root"
 cases=$((cases + 1))
-_want_addrs="doppler_environment.git_data_root_prd,doppler_project.git_data_root,doppler_secret.git_data_root_ssh_private_key,doppler_service_token.git_data_root_read,github_actions_secret.doppler_token_git_data_root,hcloud_ssh_key.git_data_root,tls_private_key.git_data_root"
+_want_addrs="doppler_environment.git_data_root_prd,doppler_project.git_data_root,doppler_secret.git_data_root_ssh_private_key,hcloud_ssh_key.git_data_root,tls_private_key.git_data_root"
 if [[ "$(fact "$ROOT_FACTS" ADDRS)" == "$_want_addrs" ]]; then
-  pass "ROOT.address-set: exactly the seven D-1 addresses are declared"
+  pass "ROOT.address-set: exactly the five post-#8209 addresses are declared (D-1 minus the custody-transferred pair)"
 else
-  fail "ROOT.address-set: declared addresses differ from D-1" "got: $(fact "$ROOT_FACTS" ADDRS)"
+  fail "ROOT.address-set: declared addresses differ from D-1 minus the custody-transferred pair" "got: $(fact "$ROOT_FACTS" ADDRS)"
 fi
 
+# The other half of the census: the two addresses that left the declared set are ACCOUNTED FOR by
+# name, as forgets. Without this, ROOT.address-set alone would be satisfied by a PR that deletes
+# either resource (a plan that DESTROYS a live credential) instead of forgetting it.
+_want_removed="doppler_service_token.git_data_root_read:1,github_actions_secret.doppler_token_git_data_root:1"
 cases=$((cases + 1))
-if [[ "$(fact "$ROOT_FACTS" ADOPT)" == "0" ]]; then
-  pass "ROOT.no-adopt: no data/import/moved/removed/module/check block"
+if [[ "$(fact "$ROOT_FACTS" REMOVED)" == "$_want_removed" ]]; then
+  pass "ROOT.forgotten-pair: both custody-transferred addresses are named in a removed block with destroy = false"
 else
-  fail "ROOT.no-adopt: $(fact "$ROOT_FACTS" ADOPT) data/import/moved/removed/module/check block(s) in the root"
+  fail "ROOT.forgotten-pair: the two #8209 custody-transferred addresses are not both forgotten by name" \
+    "got: $(fact "$ROOT_FACTS" REMOVED) want: ${_want_removed}"
 fi
 
+# The flat ban stays at zero for data/import/moved/module/check. `removed` is admitted ONLY for the
+# two addresses above and ONLY with `destroy = false` in that block's own lifecycle (brace-scoped in
+# the probe). A file-wide grep, or one that ends its slice at the first column-0 `}`, would be
+# satisfied by the OTHER block's lifecycle or by a commented-out line — and what it would let
+# through is an apply that DESTROYS the git-data host's own Doppler read token.
+cases=$((cases + 1))
+if [[ "$(fact "$ROOT_FACTS" ADOPT)" == "0" && "$(fact "$ROOT_FACTS" REMOVED_COUNT)" == "2" \
+      && "$(fact "$ROOT_FACTS" REMOVED)" == "$_want_removed" ]]; then
+  pass "ROOT.no-adopt: no data/import/moved/module/check block, and exactly two removed blocks — the #8209 pair, both destroy = false"
+else
+  fail "ROOT.no-adopt: adoption/removal blocks drifted" \
+    "adopt=$(fact "$ROOT_FACTS" ADOPT) removed_count=$(fact "$ROOT_FACTS" REMOVED_COUNT) removed=$(fact "$ROOT_FACTS" REMOVED)"
+fi
+
+# (#8209, ADR-241 D7) PARTIAL BACKEND. The old literal pinned bucket=soleur-terraform-state, and it
+# was right while the bucket was the isolation boundary. M7 measured that it is not — the Tier-A
+# prd_terraform AWS_* pair lists that bucket and reads this very object — so the bucket left the .tf
+# and is supplied at init time by the workflow. The KEY is still pinned (it is what keeps the root
+# key out of the web-platform state), and `bucket` must now be ABSENT here.
 cases=$((cases + 1))
 if [[ "$(fact "$ROOT_FACTS" BACKEND_KEY)" == '"web-platform/git-data-root-key/terraform.tfstate"' \
       && "$(fact "$ROOT_FACTS" BACKEND_KEY_COUNT)" == "1" \
-      && "$(fact "$ROOT_FACTS" BACKEND_BUCKET)" == '"soleur-terraform-state"' ]]; then
-  pass "ROOT.backend-key: one backend key, web-platform/git-data-root-key/terraform.tfstate, in soleur-terraform-state"
+      && -z "$(fact "$ROOT_FACTS" BACKEND_BUCKET)" ]]; then
+  pass "ROOT.backend-key: one backend key, web-platform/git-data-root-key/terraform.tfstate, and no bucket literal (partial backend)"
 else
   fail "ROOT.backend-key: backend key/bucket drifted" \
     "key=$(fact "$ROOT_FACTS" BACKEND_KEY) count=$(fact "$ROOT_FACTS" BACKEND_KEY_COUNT) bucket=$(fact "$ROOT_FACTS" BACKEND_BUCKET)"
@@ -360,31 +433,58 @@ else
   fail "ROOT.doppler-secret: secret shape drifted" "$(fact "$ROOT_FACTS" ATTR_DSEC)"
 fi
 
+# (#8209, ADR-241) THE TWO CUSTODY-TRANSFERRED ADDRESSES. Both cases used to pin the resource's
+# SHAPE; the resources are gone, so each now pins the custody transfer itself — absent from the
+# declared set AND forgotten by name with destroy = false. The cases are NOT deleted, because what
+# they guard did not go away: an apply that DESTROYS doppler_service_token.git_data_root_read tears
+# down the git-data host's own Doppler read token, and the host loses its key at the next restart;
+# destroying github_actions_secret.doppler_token_git_data_root deletes the repo secret the cutover
+# job still reads until the operator has seeded the environment copy (O7) and deleted it (O11).
+_declared() { [[ ",$(fact "$ROOT_FACTS" ADDRS)," == *",$1,"* ]]; }
+_forgotten() { [[ ",$(fact "$ROOT_FACTS" REMOVED)," == *",$1:1,"* ]]; }
+
 cases=$((cases + 1))
-if [[ "$(fact "$ROOT_FACTS" ATTR_DTOK)" == '"read"|doppler_project.git_data_root.name|doppler_environment.git_data_root_prd.slug' ]]; then
-  pass "ROOT.read-token: access read on its own prd config"
+if ! _declared doppler_service_token.git_data_root_read && _forgotten doppler_service_token.git_data_root_read; then
+  pass "ROOT.read-token: doppler_service_token.git_data_root_read is undeclared and forgotten (destroy = false), not destroyed"
 else
-  fail "ROOT.read-token: service token shape drifted" "$(fact "$ROOT_FACTS" ATTR_DTOK)"
+  fail "ROOT.read-token: the read token is neither declared-and-shaped nor cleanly forgotten" \
+    "declared=$(fact "$ROOT_FACTS" ADDRS) removed=$(fact "$ROOT_FACTS" REMOVED) — a destroy strands the running git-data host at its next restart"
 fi
 
 cases=$((cases + 1))
-if [[ "$(fact "$ROOT_FACTS" ATTR_GHSEC)" == '"soleur"|"DOPPLER_TOKEN_GIT_DATA_ROOT"|doppler_service_token.git_data_root_read.key' ]]; then
-  pass "ROOT.github-secret: repo secret DOPPLER_TOKEN_GIT_DATA_ROOT = the read token's key"
+if ! _declared github_actions_secret.doppler_token_git_data_root && _forgotten github_actions_secret.doppler_token_git_data_root; then
+  pass "ROOT.github-secret: github_actions_secret.doppler_token_git_data_root is undeclared and forgotten (destroy = false), not destroyed"
 else
-  fail "ROOT.github-secret: repo secret shape drifted" "$(fact "$ROOT_FACTS" ATTR_GHSEC)"
+  fail "ROOT.github-secret: the repo secret is neither declared-and-shaped nor cleanly forgotten" \
+    "declared=$(fact "$ROOT_FACTS" ADDRS) removed=$(fact "$ROOT_FACTS" REMOVED) — a destroy deletes the secret git-data-cutover.yml reads until operator step O11"
 fi
 
+# The ignore_changes ban survives the custody transfer, but it must not pass VACUOUSLY: with the
+# resource gone the probe counts zero occurrences in an empty block, which would read green even if
+# the address had simply been deleted. So it is conjoined with "the address is accounted for" —
+# declared (and then still free of ignore_changes, so a rotation reaches the secret in the same
+# apply) or forgotten by name.
 cases=$((cases + 1))
-if [[ "$(fact "$ROOT_FACTS" GHSEC_IGNORE_CHANGES)" == "0" ]]; then
-  pass "ROOT.github-secret-no-ignore-changes: a rotation reaches the repo secret in the same apply"
+if [[ "$(fact "$ROOT_FACTS" GHSEC_IGNORE_CHANGES)" == "0" ]] \
+   && { _declared github_actions_secret.doppler_token_git_data_root || _forgotten github_actions_secret.doppler_token_git_data_root; }; then
+  pass "ROOT.github-secret-no-ignore-changes: no ignore_changes on the repo secret, and the address is accounted for (declared or forgotten)"
 else
-  fail "ROOT.github-secret-no-ignore-changes: ignore_changes on the repo secret would strand a rotated token"
+  fail "ROOT.github-secret-no-ignore-changes: ignore_changes on the repo secret would strand a rotated token, and an unaccounted-for address would make this vacuous" \
+    "ignore_changes=$(fact "$ROOT_FACTS" GHSEC_IGNORE_CHANGES) removed=$(fact "$ROOT_FACTS" REMOVED)"
 fi
 
+# (#8209, ADR-241) The variable set grew from four to eight: main.tf now selects one of three
+# provider-auth modes (legacy soleur-ai key / Tier-B soleur-infra App / PR-token) by which of the
+# four new names is non-empty. The old "none defaulted" literal was right when every name was a
+# required prd_terraform mirror; the six defaults are all `= ""`, which is what lets this root merge
+# BEFORE the operator has provisioned the Tier-B identity (ADR-065) — main.tf reads "" as
+# "not supplied". The SENSITIVITY literal stays strict and equals the variable count: every one of
+# these eight is credential-bearing, so none may lose `sensitive = true`.
 cases=$((cases + 1))
-if [[ "$(fact "$ROOT_FACTS" VARS)" == "doppler_token_tf,github_app_id,github_app_private_key,hcloud_token" \
-      && "$(fact "$ROOT_FACTS" VAR_DEFAULTS)" == "0" && "$(fact "$ROOT_FACTS" VAR_SENSITIVE)" == "4" ]]; then
-  pass "ROOT.variables: exactly the four prd_terraform names, all sensitive, none defaulted"
+_want_vars="doppler_token_tf,github_app_id,github_app_private_key,github_infra_app_id,github_infra_app_installation_id,github_infra_app_private_key,github_plan_actions_credential,hcloud_token"
+if [[ "$(fact "$ROOT_FACTS" VARS)" == "$_want_vars" \
+      && "$(fact "$ROOT_FACTS" VAR_DEFAULTS)" == "6" && "$(fact "$ROOT_FACTS" VAR_SENSITIVE)" == "8" ]]; then
+  pass "ROOT.variables: exactly the eight three-mode names, all eight sensitive, six defaulted to \"\""
 else
   fail "ROOT.variables: variable set/defaults/sensitivity drifted" \
     "vars=$(fact "$ROOT_FACTS" VARS) defaults=$(fact "$ROOT_FACTS" VAR_DEFAULTS) sensitive=$(fact "$ROOT_FACTS" VAR_SENSITIVE)"
@@ -464,6 +564,12 @@ print("SETUP_TF=%d|%s|%d" % (len(st), resolve(w.get("terraform_version", "")),
 runs = [str(s.get("run", "")) for j in jobs.values() for s in (j.get("steps") or [])]
 init = [r for r in runs if re.search(r"\bterraform init\b", r)]
 print("INIT_READONLY=%d" % (1 if init and all("-lockfile=readonly" in r and "-input=false" in r for r in init) else 0))
+# (#8209, ADR-241 D7) The root's backend is PARTIAL, so the bucket has to arrive here. Count the
+# inits that pass a NON-EMPTY -backend-config bucket; `terraform init -input=false` with a missing
+# required backend argument hard-fails, so "partial backend" must not become "no backend config
+# anywhere". A bare `-backend-config="bucket="` does not count.
+bcfg = [r for r in init if re.search(r'-backend-config="bucket=\S[^"]*"', r)]
+print("INIT_BACKEND_BUCKET=%d|%d" % (len(init), len(bcfg)))
 plan_out = [r for r in runs if re.search(r"terraform plan\b[^\n]*-out \"\$RUNNER_TEMP/tfplan\"", r)]
 applyr = [r for r in runs if re.search(r"terraform apply\b[^\n]*\"\$RUNNER_TEMP/tfplan\"", r)]
 print("PLAN_APPLY_SAVED=%d|%d" % (len(plan_out), len(applyr)))
@@ -505,11 +611,26 @@ if al:
     open(os.path.join(work, "allowlist.sh"), "w").write(body)
     m = re.search(r"<<'JQ'\n(.*?)\nJQ\n", body, re.S)
     prog = m.group(1) if m else ""
-    prog_nostr = re.sub(r'"(?:[^"\\]|\\.)*"', '""', prog)
+    # (#8209) EXTRACTOR FIX, not a widening. The field scan is `\.NAME` over the program with
+    # string literals blanked; a jq COMMENT is neither, so the new arm's prose ("...in access.tf
+    # can never apply...") was read as a field named `tf`. A comment cannot read a field at run
+    # time, so full-line comments are dropped first — exactly as the HCL probe above does — and the
+    # permitted field set stays at the four the workflow is allowed to read. A real new read, being
+    # on a code line, still shows up.
+    prog_code = "\n".join("" if re.match(r"^\s*#", l) else l for l in prog.splitlines())
+    prog_nostr = re.sub(r'"(?:[^"\\]|\\.)*"', '""', prog_code)
     fields = sorted(set(re.findall(r"\.([A-Za-z_][A-Za-z0-9_]*)", prog_nostr)))
     print("JQ_FIELDS=%s" % ",".join(fields))
     m = re.search(r"def create_addrs:\s*\[(.*?)\];", prog, re.S)
     print("CREATE_SET=%s" % (",".join(sorted(re.findall(r'"([^"]+)"', m.group(1)))) if m else ""))
+    m = re.search(r"def custody_forget_addrs:\s*\[(.*?)\];", prog, re.S)
+    print("CUSTODY_SET=%s" % (",".join(sorted(re.findall(r'"([^"]+)"', m.group(1)))) if m else ""))
+    # EVERY verdict name this step can EMIT, comment-stripped. Comment-stripping is load-bearing,
+    # not hygiene: the workflow's prose quotes verdict names it no longer emits (the removed
+    # `unreadable hcloud_token_empty` is named in the comment that explains why it went), and a raw
+    # scan would report those as emitted and demand coverage for a string no run can produce.
+    body_code = "\n".join("" if re.match(r"^\s*#", l) else l for l in body.splitlines())
+    print("ALLOW_VERDICTS=%s" % ",".join(sorted(set(re.findall(r"verdict=([a-z_]+)", body_code)))))
     ai = [i for i, s in enumerate(steps) if s is al][0]
     ap = [i for i, s in enumerate(steps) if re.search(r"terraform apply\b", str(s.get("run", "")))]
     print("ALLOWLIST_BEFORE_APPLY=%d" % (1 if ap and all(ai < i for i in ap) else 0))
@@ -530,6 +651,10 @@ if fp:
     fields = sorted(set(re.findall(r"\.([A-Za-z_][A-Za-z0-9_]*)", re.sub(r'"(?:[^"\\]|\\.)*"', '""', m.group(1))))) if m else []
     print("FP_SOURCE=%d|%s|%s" % (len(shows), 1 if m else 0, ",".join(fields)))
     print("FP_WD=%s" % resolve(fp.get("working-directory", "")))
+    # Same census for the fingerprint step's refusal reasons; `unreadable() {` (the definition)
+    # has no space before its operand and is not counted.
+    body_code = "\n".join("" if re.match(r"^\s*#", l) else l for l in body.splitlines())
+    print("FP_REASONS=%s" % ",".join(sorted(set(re.findall(r"\bunreadable ([a-z_]+)", body_code)))))
 
 notify = jobs.get("notify-root-key-apply") or {}
 needs = notify.get("needs") or []
@@ -650,6 +775,18 @@ else
   fail "WF.init-readonly-lock: a terraform init without -lockfile=readonly/-input=false"
 fi
 
+# The other end of ROOT.backend-key's partial backend. The .tf no longer carries `bucket`, so if the
+# workflow stops supplying one, nothing anywhere does — and `terraform init -input=false` hard-fails
+# on the missing required argument instead of falling back to anything.
+cases=$((cases + 1))
+_ibb="$(fact "$WF_FACTS" INIT_BACKEND_BUCKET)"
+if [[ "${_ibb%%|*}" -ge 1 && "${_ibb%%|*}" == "${_ibb##*|}" ]]; then
+  pass "WF.init-backend-config: every terraform init supplies -backend-config=\"bucket=…\" for the partial backend (${_ibb%%|*} site(s))"
+else
+  fail "WF.init-backend-config: terraform init sites vs sites passing a non-empty -backend-config bucket = ${_ibb/|/ vs }" \
+    "the .tf pins no bucket since #8209; an init without one cannot resolve the backend at all"
+fi
+
 cases=$((cases + 1))
 if [[ "$(fact "$WF_FACTS" PLAN_APPLY_SAVED)" == "1|1" && "$(fact "$WF_FACTS" ALLOWLIST_BEFORE_APPLY)" == "1" ]]; then
   pass "WF.saved-plan: plan -out \$RUNNER_TEMP/tfplan, the allowlist step runs before the one apply of that saved plan"
@@ -697,13 +834,37 @@ fi
 
 # The workflow keeps a LITERAL create set (it cannot parse HCL at run time); the set it must equal is
 # derived from the root's *.tf, so adding or dropping a resource without the allowlist fails here.
+#
+# (#8209, ADR-241 D7) THREE CONJUNCTS. The old literal was `create_addrs == declared` and it was
+# right when the two sets were the same seven addresses. #8209 splits them, so the parity is now
+# stated on both lists AND on their intersection:
+#
+#   1. create_addrs == the root's declared set (the five). It briefly carried the two
+#      custody-transferred addresses too; that was removed, because an allowlist that does not
+#      parse HCL and says what MAY be created must not name two things that may not.
+#   2. custody_forget_addrs == exactly the two addresses the root forgets. A third address
+#      quietly added there would let an arbitrary `forget` past an allowlist whose whole job is
+#      to refuse non-additive plans.
+#   3. The two lists are DISJOINT. An address in BOTH tells the same apply that it may CREATE
+#      that resource and may FORGET it — one reviewed run both adopting and abandoning one
+#      credential — and it is the state this root was in until #8209 removed the overlap. HONEST
+#      NOTE: with (1) and (2) both stated as exact equalities, an overlap cannot occur without
+#      also breaking one of them, so this conjunct cannot fail alone today. It is kept because it
+#      is what makes the FAILURE NAME the overlap instead of printing two set diffs, and because
+#      R6 (#8610) will loosen (2) when it deletes the arm — at which point disjointness is the
+#      only clause still forbidding the overlap.
 cases=$((cases + 1))
 _create_set="$(fact "$WF_FACTS" CREATE_SET)"
-if [[ -n "$_create_set" && "$_create_set" == "$(fact "$ROOT_FACTS" ADDRS)" ]]; then
-  pass "G8.create-set-parity: the allowlist's create_addrs literal equals the root's declared address set"
+_custody_set="$(fact "$WF_FACTS" CUSTODY_SET)"
+_want_custody="$(printf '%s\n' $_want_forgotten | sort | paste -sd, -)"
+_want_create="$(fact "$ROOT_FACTS" ADDRS)"
+_both="$(comm -12 <(tr ',' '\n' <<<"$_create_set" | sort -u) <(tr ',' '\n' <<<"$_custody_set" | sort -u) | paste -sd, -)"
+if [[ -n "$_create_set" && "$_create_set" == "$_want_create" \
+      && "$_custody_set" == "$_want_custody" && -z "$_both" ]]; then
+  pass "G8.create-set-parity: create_addrs equals the root's declared set, custody_forget_addrs is exactly the two forgotten addresses, and the two lists are disjoint"
 else
-  fail "G8.create-set-parity: create_addrs differs from the addresses declared in the root's *.tf" \
-    "allowlist=${_create_set:-<none extracted>} root=$(fact "$ROOT_FACTS" ADDRS)"
+  fail "G8.create-set-parity: create_addrs/custody_forget_addrs differ from the root's declared and forgotten addresses, or overlap" \
+    "create=${_create_set:-<none extracted>} want=${_want_create} custody=${_custody_set:-<none extracted>} want=${_want_custody} in-both=${_both:-<none>} — an address in BOTH lists lets one apply be told it may create a resource and may forget it"
 fi
 
 cases=$((cases + 1))
@@ -789,7 +950,22 @@ esac
 [[ "${STUB_CURL_RC:-0}" -eq 0 ]] || exit "$STUB_CURL_RC"
 cat "$HETZNER_FIXTURE"
 SH
-chmod +x "$STUB/terraform" "$STUB/doppler" "$STUB/curl"
+# (#8209) The fingerprint step derives the Hetzner object's fingerprint with ssh-keygen and then
+# re-validates the SHA256 form. That last check is unreachable with a modern ssh-keygen, so the
+# stub delegates to the REAL binary and only diverges when STUB_SSHKEYGEN_FP is set — modelling an
+# ssh-keygen whose `-E sha256` is unsupported and which prints MD5 colon-hex instead. Without it
+# `hetzner_fingerprint_malformed` would be a refusal no case could drive.
+REAL_SSH_KEYGEN="$(command -v ssh-keygen)"
+cat > "$STUB/ssh-keygen" <<SH
+#!/usr/bin/env bash
+if [[ -n "\${STUB_SSHKEYGEN_FP:-}" ]]; then
+  cat >/dev/null
+  printf '256 %s synthetic-not-a-key (ED25519)\n' "\$STUB_SSHKEYGEN_FP"
+  exit 0
+fi
+exec "$REAL_SSH_KEYGEN" "\$@"
+SH
+chmod +x "$STUB/terraform" "$STUB/doppler" "$STUB/curl" "$STUB/ssh-keygen"
 
 # Fingerprint-anchor workspaces: one with the committed fingerprint file, one without.
 WS_NONE="$WORK/ws-none"
@@ -813,6 +989,15 @@ run_allowlist() {  # <fixture-file> <workspace: none|anchored|unset> [show-rc] -
              RUNNER_TEMP="$WORK" bash -e "$WORK/allowlist.sh" 2>&1)"
   A_RC=$?
 }
+
+# (#8209) REACHABILITY LEDGERS. Every verdict the allowlist step can emit, and every refusal
+# reason the fingerprint step can emit, is recorded here by the case that DRIVES it; the two
+# assertions after the fingerprint cases require the driven set to equal the set the workflow
+# actually emits (comment-stripped). A verdict no run can produce is a string an operator greps
+# for during an incident and never finds — this repo held exactly one such name
+# (`hcloud_token_empty`) until #8209 removed it, and nothing would have noticed.
+ALLOW_VERDICTS_SEEN=""
+FP_REASONS_SEEN=""
 
 SENT="SYNTHETIC-SENTINEL-not-a-key-0000"
 TOKEN_SENT="SYNTHETIC-TOKEN-not-a-token-1111"
@@ -864,6 +1049,8 @@ done
 
 # allowlist step
 _ok() {  # <case-id> <desc> <fixture> <workspace>
+  ALLOW_VERDICTS_SEEN="${ALLOW_VERDICTS_SEEN}ok
+"
   run_allowlist "$3" "$4"
   cases=$((cases + 1))
   if [[ "$A_RC" -eq 0 && "${A_OUT%%$'\n'*}" == "verdict=ok" && "$A_OUT" != *"$SENT"* ]]; then
@@ -873,6 +1060,8 @@ _ok() {  # <case-id> <desc> <fixture> <workspace>
   fi
 }
 _refused() {  # <case-id> <desc> <fixture> <workspace> <verdict> [expected-line] [matrix-row] [show-rc]
+  ALLOW_VERDICTS_SEEN="${ALLOW_VERDICTS_SEEN}$5
+"
   [[ "${7:-}" == "row" ]] && declared=$((declared + 1))
   run_allowlist "$3" "$4" "${8:-0}"
   cases=$((cases + 1))
@@ -884,7 +1073,15 @@ _refused() {  # <case-id> <desc> <fixture> <workspace> <verdict> [expected-line]
   fi
 }
 
-FX_CREATE="$(fixture create "$(all7 '["create"]')")"
+# (#8209, ADR-241 D7) RE-BASELINED. `all7 '["create"]'` used to be the whole D-1 set creating, and
+# was accepted because create_addrs held all seven. create_addrs is now the five DECLARED addresses
+# only, so a create of either custody address is correctly refused — and the plan a real transition
+# apply produces is five creates plus two FORGETS, which is what this fixture now models. Using the
+# old seven-create shape here would have tested that the allowlist accepts a plan the root can no
+# longer produce.
+FX_CREATE="$(fixture create "$(all7 '["create"]' \
+  doppler_service_token.git_data_root_read '["forget"]' \
+  github_actions_secret.doppler_token_git_data_root '["forget"]')")"
 : > "$WORK/fx-empty.json"
 
 # VERDICT-HELPER SELF-TEST, both directions. Drive _ok and _refused once with a known-GREEN and once
@@ -912,16 +1109,26 @@ if [[ -n "$_st_bad" ]]; then
 fi
 passes=$_st_p; fails=$_st_f; cases=$_st_c; mutants=$_st_m; declared=$_st_d
 
-_ok "G8.allow-create-only" "all seven D-1 addresses create, no fingerprint committed" "$FX_CREATE" none
+_ok "G8.allow-create-only" "the five declared addresses create and the two custody addresses forget, no fingerprint committed" "$FX_CREATE" none
 _ok "G8.allow-noop" "no-op everywhere" "$(fixture noop "$(all7 '["no-op"]')")" none
 _ok "G8.anchor-scoped" "fingerprint committed, only the Hetzner object is re-created" \
   "$(fixture hkeycre "$(all7 '["no-op"]' hcloud_ssh_key.git_data_root '["create"]')")" anchored
 _ok "G8.importing-null" "explicit importing:null on a create is not an import" \
   "$(fixture impnull "[$(rc_entry tls_private_key.git_data_root '["create"]' "" '"importing":null')]")" none
+# (#8209, ADR-241 D7) The one-shot 8209_custody_forget arm, executed: the two custody addresses may
+# FORGET, and nothing else may. G8.fixture-forget below already pins that a third address's forget
+# is refused; this pins that a DELETE of a custody address — the difference between a custody
+# transfer and tearing down the git-data host's read credential — is refused too.
+_ok "G8.allow-custody-forget" "the two #8209 custody addresses forget, everything else no-op" \
+  "$(fixture custfgt "$(all7 '["no-op"]' doppler_service_token.git_data_root_read '["forget"]' \
+     github_actions_secret.doppler_token_git_data_root '["forget"]')")" none
 
 _refused "G8.fixture-forget" "tls_private_key.git_data_root forget" \
   "$(fixture forget "$(all7 '["no-op"]' tls_private_key.git_data_root '["forget"]')")" none \
   git_data_root_key_non_additive "refused tls_private_key.git_data_root forget" row
+_refused "G8.fixture-custody-delete" "a DELETE of a custody address (the arm admits forget only)" \
+  "$(fixture custdel "$(all7 '["no-op"]' doppler_service_token.git_data_root_read '["delete"]')")" none \
+  git_data_root_key_non_additive "refused doppler_service_token.git_data_root_read delete"
 _refused "G8.fixture-token-replace" "read-token replace (no rotation exception)" \
   "$(fixture tokrepl "$(all7 '["no-op"]' doppler_service_token.git_data_root_read '["delete","create"]' github_actions_secret.doppler_token_git_data_root '["update"]')")" none \
   git_data_root_key_non_additive "refused doppler_service_token.git_data_root_read delete,create" row
@@ -986,10 +1193,19 @@ hetzner_fixture() {  # <name> <key-count> <name-field> -> path; every listed key
   printf '{"ssh_keys":[%s]}\n' "$keys" > "$p"
   printf '%s' "$p"
 }
-run_fingerprint() {  # <state-fixture> <hetzner-fixture> [state-rc] [curl-rc] -> sets F_RC F_OUT F_SUMMARY
+# (#8209, ADR-241) THE TOKEN NOW COMES FROM THE JOB ENVIRONMENT. The step used to run its own
+# inline `doppler secrets get HCLOUD_TOKEN -c prd_terraform`, which the credential census forbids
+# outside .github/actions/infra-credentials; the loader exports HCLOUD_TOKEN through GITHUB_ENV
+# instead, and the step reads `${HCLOUD_TOKEN:-}`. The FIXTURE therefore supplies it the way the
+# real job does — through the environment — rather than through the `doppler` stub. Pass
+# <token-absent>=absent to drive the genuinely-unset path (covered by G8.fingerprint-token-absent).
+run_fingerprint() {  # <state-fx> <hetzner-fx> [state-rc] [curl-rc] [absent] [ssh-keygen-fp] -> F_RC F_OUT F_SUMMARY
   : > "$WORK/step-summary.md"
+  local tok="$TOKEN_SENT"
+  [[ "${5:-}" == "absent" ]] && tok=""
   F_OUT="$(cd "$WORK" && env PATH="$STUB:$PATH" STATE_FIXTURE="$1" HETZNER_FIXTURE="$2" FIXTURE="$FX_CREATE" \
-             STUB_STATE_RC="${3:-0}" STUB_CURL_RC="${4:-0}" HC_TOKEN="$TOKEN_SENT" RUNNER_TEMP="$WORK" \
+             STUB_STATE_RC="${3:-0}" STUB_CURL_RC="${4:-0}" HCLOUD_TOKEN="$tok" HC_TOKEN="$TOKEN_SENT" \
+             STUB_SSHKEYGEN_FP="${6:-}" RUNNER_TEMP="$WORK" \
              GITHUB_STEP_SUMMARY="$WORK/step-summary.md" bash -e "$WORK/fingerprint.sh" 2>&1)"
   F_RC=$?
   F_SUMMARY="$(cat "$WORK/step-summary.md")"
@@ -1008,6 +1224,8 @@ else
 fi
 
 _fp_refused() {  # <case-id> <desc> <verdict-and-reason> [matrix-row] -- uses F_RC/F_OUT already set
+  case "$3" in *reason=*) FP_REASONS_SEEN="${FP_REASONS_SEEN}${3##*reason=}
+" ;; esac
   cases=$((cases + 1))
   if [[ "$F_RC" -ne 0 && "$F_OUT" == *"::error::verdict=$3"* && "$F_OUT" != *"git_data_root_key_fingerprint=SHA256"* ]] && fp_clean; then
     pass "$1: $2 -> refused verdict=$3"
@@ -1057,6 +1275,54 @@ _fp_refused "G8.fingerprint-hetzner-count" "two keys under the label" \
 run_fingerprint "$(state_fixture a "$FP_A")" "$(hetzner_fixture forged 1 soleur-git-data-rooT)"
 _fp_refused "G8.fingerprint-hetzner-name" "one key under the label with the wrong name" \
   "git_data_root_key_fingerprint_unreadable reason=hetzner_key_name"
+# F9 (#8209): the token path is real and must stay covered. If the loader exported nothing —
+# expected before operator step O10, and on each of its refusal paths — the step must refuse by
+# name rather than call Hetzner unauthenticated and read the refusal as a fingerprint mismatch.
+declared=$((declared + 1))
+run_fingerprint "$(state_fixture a "$FP_A")" "$HZ_ONE" 0 0 absent
+_fp_refused "G8.fingerprint-token-absent" "HCLOUD_TOKEN absent from the job environment" \
+  "git_data_root_key_fingerprint_unreadable reason=hcloud_token_read_failed" row
+
+# (#8209) The last three refusals the step can emit. They were emitted-but-undriven, which is the
+# same class of hole as a verdict no run can produce: the reachability assertion below now forbids
+# both directions, so these are not optional extras.
+printf 'this is not JSON\n' > "$WORK/hz-garbage.json"
+run_fingerprint "$(state_fixture a "$FP_A")" "$WORK/hz-garbage.json"
+_fp_refused "G8.fingerprint-hetzner-malformed" "the Hetzner listing is not JSON" \
+  "git_data_root_key_fingerprint_unreadable reason=hetzner_list_malformed"
+printf '{"ssh_keys":[{"id":0,"name":"soleur-git-data-root","fingerprint":"aa:bb:cc","public_key":"NOT-AN-SSH-PUBLIC-KEY"}]}\n' \
+  > "$WORK/hz-notakey.json"
+run_fingerprint "$(state_fixture a "$FP_A")" "$WORK/hz-notakey.json"
+_fp_refused "G8.fingerprint-ssh-keygen-failed" "the listed public_key is not an SSH public key" \
+  "git_data_root_key_fingerprint_unreadable reason=ssh_keygen_failed"
+run_fingerprint "$(state_fixture a "$FP_A")" "$HZ_ONE" 0 0 "" "MD5:aa:bb:cc:dd:ee:ff"
+_fp_refused "G8.fingerprint-hetzner-fp-malformed" "ssh-keygen succeeds but prints an MD5 fingerprint" \
+  "git_data_root_key_fingerprint_unreadable reason=hetzner_fingerprint_malformed"
+
+# ── VERDICT REACHABILITY, both directions ─────────────────────────────────────
+# Emitted-but-undriven is a verdict an operator will grep for and never find explained by a test;
+# driven-but-unemitted is a case asserting on a string the workflow cannot produce. Requiring
+# EQUALITY forbids both. Scoped to the two step bodies this suite executes (allowlist and
+# fingerprint); the init step's own verdict is not extracted and is out of scope here.
+cases=$((cases + 1))
+_av_seen="$(printf '%s' "$ALLOW_VERDICTS_SEEN" | sed '/^$/d' | sort -u | paste -sd, -)"
+_av_emitted="$(fact "$WF_FACTS" ALLOW_VERDICTS)"
+if [[ -n "$_av_emitted" && "$_av_seen" == "$_av_emitted" ]]; then
+  pass "G8.allowlist-verdicts-reachable: every verdict the allowlist step emits is driven by a case here, and no case asserts on one it cannot emit"
+else
+  fail "G8.allowlist-verdicts-reachable: the allowlist's emitted verdict names and the ones this suite drives differ" \
+    "emitted=${_av_emitted:-<none extracted>} driven=${_av_seen:-<none>}"
+fi
+
+cases=$((cases + 1))
+_fp_seen="$(printf '%s' "$FP_REASONS_SEEN" | sed '/^$/d' | sort -u | paste -sd, -)"
+_fp_emitted="$(fact "$WF_FACTS" FP_REASONS)"
+if [[ -n "$_fp_emitted" && "$_fp_seen" == "$_fp_emitted" ]]; then
+  pass "G8.fingerprint-reasons-reachable: every refusal reason the fingerprint step emits is driven by a case here, and no case asserts on one it cannot emit"
+else
+  fail "G8.fingerprint-reasons-reachable: the fingerprint step's emitted reasons and the ones this suite drives differ" \
+    "emitted=${_fp_emitted:-<none extracted>} driven=${_fp_seen:-<none>} — an emitted-but-undriven name is the hcloud_token_empty class of defect"
+fi
 
 # ── 4. MUTATION BATTERY (parent run only) ──────────────────────────────────────────
 MUTANT=""
@@ -1171,21 +1437,52 @@ if [[ "$CHILD" != "1" ]]; then
   if mutate exclusion-removed "$APPLY_WF" "1/0" '\|^      - "!apps/web-platform/infra/git-data-root-key/\*\*"$|d'; then
     expect_red exclusion-removed APPLY.path-exclusion GD_ROOT_KEY_APPLY_WF="$MUTANT"
   fi
-  # M11 jq allowlist widened to accept forget
-  if mutate jq-forget "$WF" "1/1" 's/(\.\[1\] == \["no-op"\] or expected_create)/(.[1] == ["no-op"] or .[1] == ["forget"] or expected_create)/'; then
+  # M11 jq allowlist widened to accept forget. RE-ANCHORED (#8209): `additive` gained the
+  # `or custody_forget` clause, so the old anchor's `... or expected_create)` no longer exists.
+  # The edit widens the typed two-address arm into an untyped "any forget".
+  if mutate jq-forget "$WF" "1/1" 's/or expected_create or custody_forget)/or expected_create or custody_forget or .[1] == ["forget"])/'; then
     expect_red jq-forget G8.fixture-forget GD_ROOT_KEY_WORKFLOW="$MUTANT"
   fi
   # M12 terraform_wrapper true
   if mutate wrapper-true "$WF" "1/1" 's/^          terraform_wrapper: false$/          terraform_wrapper: true/'; then
     expect_red wrapper-true WF.setup-terraform GD_ROOT_KEY_WORKFLOW="$MUTANT"
   fi
-  # M13 -lockfile=readonly dropped
-  if mutate no-readonly "$WF" "1/1" 's/terraform init -input=false -lockfile=readonly$/terraform init -input=false/'; then
+  # M13 -lockfile=readonly dropped. RE-ANCHORED (#8209): the init line now ends in a `\`
+  # continuation carrying -backend-config, so the old end-of-line anchor no longer matched.
+  if mutate no-readonly "$WF" "1/1" 's/terraform init -input=false -lockfile=readonly \\$/terraform init -input=false \\/'; then
     expect_red no-readonly WF.init-readonly-lock GD_ROOT_KEY_WORKFLOW="$MUTANT"
   fi
-  # M14 ignore_changes on the repo secret
-  if mutate ignore-changes "$RK_DIR/access.tf" "0/3" 's/^  plaintext_value = doppler_service_token\.git_data_root_read\.key$/&\n  lifecycle {\n    ignore_changes = [plaintext_value]\n  }/' root; then
-    expect_red ignore-changes ROOT.github-secret-no-ignore-changes GD_ROOT_KEY_DIR="$MUTANT"
+  # M14 RE-TARGETED (#8209): github_actions_secret.doppler_token_git_data_root is no longer a
+  # resource, so there is no plaintext_value line to hang ignore_changes on. The edit that matters
+  # now is `destroy = false` -> `destroy = true` on the FIRST removed block only: a forget becomes a
+  # real destroy of the git-data host's Doppler read token. Leaving the second block untouched is
+  # the point — a file-wide grep for `destroy = false`, or one whose slice ends at the first
+  # column-0 `}`, still finds the other block's and stays green.
+  if mutate destroy-true "$RK_DIR/access.tf" "1/1" '0,/^    destroy = false$/s//    destroy = true/' root; then
+    expect_red destroy-true ROOT.no-adopt GD_ROOT_KEY_DIR="$MUTANT"
+  fi
+  # M24 (#8209) the forgotten address is dropped by name: `removed {}` with no `from` is not a
+  # custody transfer, and the census must not accept the pair as "accounted for".
+  if mutate forget-unnamed "$RK_DIR/access.tf" "1/0" '/^  from = doppler_service_token\.git_data_root_read$/d' root; then
+    expect_red forget-unnamed ROOT.forgotten-pair GD_ROOT_KEY_DIR="$MUTANT"
+  fi
+  # M25 (#8209) the bucket literal creeps back into the partial backend: the state object would be
+  # written to the SHARED bucket the Tier-A prd_terraform keys can read.
+  if mutate backend-bucket "$RK_DIR/main.tf" "0/1" 's|^    key  *= "web-platform/git-data-root-key/terraform.tfstate"$|    bucket                      = "soleur-terraform-state"\n&|' root; then
+    expect_red backend-bucket ROOT.backend-key GD_ROOT_KEY_DIR="$MUTANT"
+  fi
+  # M26 (#8209) the workflow stops supplying the bucket: with no literal in the .tf either, the
+  # partial backend resolves nowhere.
+  if mutate init-no-bucket "$WF" "1/0" '/-backend-config="bucket=\${STATE_BUCKET}"$/d'; then
+    expect_red init-no-bucket WF.init-backend-config GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M27 (#8209) THE VACUITY ROW for ROOT.github-secret-no-ignore-changes. That case counted
+  # ignore_changes inside a github_actions_secret block that #8209 deleted, so it was a green
+  # asserting over nothing and had NO mutant. Re-declaring the resource WITH ignore_changes
+  # restores the exact situation the case exists to refuse — a rotated token that never reaches
+  # the repo secret — and proves the ban itself, not just the accounted-for conjunct, still fires.
+  if mutate ghsec-ignore-changes "$RK_DIR/access.tf" "0/8" '$a resource "github_actions_secret" "doppler_token_git_data_root" {\n  repository      = "soleur"\n  secret_name     = "DOPPLER_TOKEN_GIT_DATA_ROOT"\n  plaintext_value = "SYNTHETIC-not-a-token"\n  lifecycle {\n    ignore_changes = [plaintext_value]\n  }\n}' root; then
+    expect_red ghsec-ignore-changes ROOT.github-secret-no-ignore-changes GD_ROOT_KEY_DIR="$MUTANT"
   fi
 
   # M15 continue-on-error on the allowlist: the refusal would annotate and the apply would still run
@@ -1244,8 +1541,16 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
   printf '\n=== git-data-root-key: %d passed, %d failed, %d skipped ===\n\n' "$passes" "$fails" "$skips"
   exit 1
 fi
-ASSERT_FLOOR_BASE=87
-ASSERT_FLOOR_MUTANTS=48
+# ZERO SLACK, raised in the same edit that added rows (#8209). BASE 87 -> 92: ROOT.forgotten-pair,
+# WF.init-backend-config, G8.allow-custody-forget, G8.fixture-custody-delete and
+# G8.fingerprint-token-absent. 92 -> 97: the three fingerprint refusals that were emitted but
+# undriven (hetzner_list_malformed, ssh_keygen_failed, hetzner_fingerprint_malformed) plus the
+# two verdict-reachability assertions that now forbid that hole in both directions.
+# MUTANTS 48 -> 54: three new code rows (M24/M25/M26). 54 -> 56: M27, the vacuity row for
+# ROOT.github-secret-no-ignore-changes. Each code row contributes its landing assertion and
+# its expect_red.
+ASSERT_FLOOR_BASE=97
+ASSERT_FLOOR_MUTANTS=56
 _floor=$((ASSERT_FLOOR_BASE + ASSERT_FLOOR_MUTANTS * (${CHILD:-0} != 1)))
 if [[ "$cases" -lt "$_floor" ]]; then
   printf '\n[FATAL] assertion floor: only %d assertion(s) ran, floor is %d. Arms were deleted, skipped, or the suite exited early.\n' \

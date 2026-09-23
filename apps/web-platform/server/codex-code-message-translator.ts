@@ -64,11 +64,32 @@ function usagePayload(params: RecordLike): EngineEventPayload | null {
   };
 }
 
+function tokenUsageSnapshot(params: RecordLike): EngineEventPayload | null {
+  const tokenUsage = asRecord(params.tokenUsage);
+  const last = asRecord(tokenUsage?.last);
+  const inputTokens = finiteNonNegative(last?.inputTokens);
+  const outputTokens = finiteNonNegative(last?.outputTokens);
+  if (inputTokens === null || outputTokens === null) return null;
+  return {
+    type: "usage",
+    usage: {
+      native: [{ unit: "input_tokens", value: inputTokens }, { unit: "output_tokens", value: outputTokens }],
+      cost: { provenance: "unavailable" },
+    },
+  };
+}
+
+function turnIdentity(params: RecordLike): string | null {
+  const turn = asRecord(params.turn);
+  return safeProviderId(turn ? turn.id : params.turnId);
+}
+
 const RECOGNIZED_METHODS = new Set([
   "item/agentMessage/delta",
   "item/commandExecution/requestApproval",
   "turn/started",
   "turn/completed",
+  "thread/tokenUsage/updated",
 ]);
 
 function turnStatus(value: unknown): Extract<EngineEventPayload, { type: "status" }> ["status"] | null {
@@ -151,8 +172,9 @@ export function translateCodexAppServerEvent(event: unknown): CodexTranslatedEve
   }
 
   if (method === "turn/started" || method === "turn/completed") {
-    const turnId = safeProviderId(params.turnId);
-    const status = turnStatus(method === "turn/started" ? "started" : params.status);
+    const turnId = turnIdentity(params);
+    const turn = asRecord(params.turn);
+    const status = turnStatus(method === "turn/started" ? "started" : (turn ? turn.status : params.status));
     if (!turnId || !status) return [];
     const events: CodexTranslatedEvent[] = [];
     if (method === "turn/completed") {
@@ -316,7 +338,10 @@ function hasSafeIdentity(method: string, params: RecordLike | null): boolean {
     return safeProviderId(params.itemId) !== null;
   }
   if (method === "turn/started" || method === "turn/completed") {
-    return safeProviderId(params.turnId) !== null;
+    return turnIdentity(params) !== null;
+  }
+  if (method === "thread/tokenUsage/updated") {
+    return safeProviderId(params.threadId) !== null && safeProviderId(params.turnId) !== null;
   }
   return true;
 }
@@ -328,6 +353,7 @@ export async function* translateCodexAppServerStream(
 ): AsyncIterable<EngineEvent> {
   if (!safeProviderId(runId)) throw new Error("codex_run_id_invalid");
   let sequence = 0;
+  const pendingUsage = new Map<string, EngineEventPayload>();
   for await (const event of events) {
     const record = asRecord(event);
     if (record?.kind === "codex-replay") {
@@ -342,11 +368,26 @@ export async function* translateCodexAppServerStream(
     if (method && RECOGNIZED_METHODS.has(method) && !hasSafeIdentity(method, asRecord(record?.params))) {
       throw new Error("codex_message_invalid");
     }
+    const params = asRecord(record?.params);
+    if (method === "thread/tokenUsage/updated" && params) {
+      const usage = tokenUsageSnapshot(params);
+      if (!usage) throw new Error("codex_usage_invalid");
+      pendingUsage.set(params.turnId as string, usage);
+      continue;
+    }
+    const completedTurnId = method === "turn/completed" && params ? turnIdentity(params) : null;
+    const finalUsage = completedTurnId ? pendingUsage.get(completedTurnId) : null;
+    if (completedTurnId && finalUsage) {
+      pendingUsage.delete(completedTurnId);
+      sequence += 1;
+      yield { runId, eventId: `codex:turn:${completedTurnId}:usage:${sequence}`, sequence, payload: finalUsage };
+    }
     for (const translated of translateCodexAppServerEvent(event)) {
+      if (finalUsage && translated.payload.type === "usage") continue;
       sequence += 1;
       yield {
         runId,
-        eventId: `codex:${translated.sourceId}`,
+        eventId: `codex:${translated.sourceId}:${sequence}`,
         sequence,
         payload: translated.payload,
       };
