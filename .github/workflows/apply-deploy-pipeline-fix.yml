@@ -202,6 +202,7 @@ jobs:
           fi
 
   apply:
+    environment: infra-privileged
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
@@ -232,8 +233,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Verify DOPPLER_TOKEN
         env:
@@ -251,8 +255,8 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
@@ -291,7 +295,7 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          doppler run --name-transformer tf-var -- \
+          doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
             -target=terraform_data.docker_seccomp_config \
@@ -568,7 +572,7 @@ jobs:
           # Free safety improvement worth naming: with `use_lockfile = false`, a break-glass
           # apply run outside CI now fails closed with a stale-plan error instead of silently
           # last-writer-wins.
-          doppler run --name-transformer tf-var -- \
+          doppler run --preserve-env --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
       - name: Tear down cloudflared SSH bridge
@@ -695,7 +699,7 @@ jobs:
           # So guard on CONTENT: require the decode to succeed AND to yield the template's
           # own marker line. sha256sum is reached only through that gate.
           b64=""; console_rc=0
-          b64="$(doppler run --name-transformer tf-var -- \
+          b64="$(doppler run --preserve-env --name-transformer tf-var -- \
             terraform console -var="ssh_key_path=${CI_SSH_PUB}" \
             <<<'nonsensitive(base64encode(local.webhook_doppler_token_env))' 2>/dev/null)" || console_rc=$?
           b64="${b64//\"/}"
@@ -784,7 +788,7 @@ jobs:
           # -lock-timeout so a cancelled re-push cannot leave the S3 backend lock held and
           # block every later apply on the sole no-SSH remediation path.
           rc=0
-          doppler run --name-transformer tf-var -- \
+          doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan \
               -replace=terraform_data.deploy_pipeline_fix \
               -target=terraform_data.deploy_pipeline_fix \
