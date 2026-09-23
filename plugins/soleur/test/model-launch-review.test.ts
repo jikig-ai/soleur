@@ -253,6 +253,26 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("every superseded id is still a source pair mapping to its OWN tier's current id", () => {
+    // The table-driven tests quantify over the pairs that EXIST, so deleting a
+    // pair leaves them green. Pin the superseded set explicitly (grow it at each
+    // launch): a removed pair means real stale ids stop being auto-fixed.
+    const SUPERSEDED: Record<string, string> = {
+      "claude-opus-5": "claude-opus-5-5",
+      "claude-opus-4-8": "claude-opus-5-5",
+      "claude-opus-4-7": "claude-opus-5-5",
+      "claude-opus-4-6": "claude-opus-5-5",
+      "claude-sonnet-4-6": "claude-sonnet-5",
+      "claude-sonnet-4-5": "claude-sonnet-5",
+      "claude-fable-5": "claude-fable-5-1",
+    };
+    const table = new Map(parseAutofixPairs());
+    for (const [from, to] of Object.entries(SUPERSEDED)) {
+      expect(table.get(from), `superseded '${from}' must map to '${to}'`).toBe(to);
+      expect(CURRENT_IDS).toContain(to);
+    }
+  });
+
   test("AUTOFIX_PAIRS is single-hop and every target is a current id", () => {
     const pairs = parseAutofixPairs();
     const sources = new Set(pairs.map(([from]) => from));
@@ -628,9 +648,9 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     writeFileSync(join(dir, "cron-a.ts"), `export const M = "claude-opus-4-7";\n`);
     writeFileSync(join(dir, "cron-b.ts"), `export const M = "claude-sonnet-4-6";\n`);
     expect(run(["--fix"], root).status).toBe(0);
-    // Per-tier map: opus → opus-5, sonnet → sonnet-5 (not a single global target).
-    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toContain("claude-opus-5");
-    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toContain("claude-sonnet-5");
+    // Per-tier map: opus → opus-5-5, sonnet → sonnet-5 (not a single global target).
+    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toBe(`export const M = "claude-opus-5-5";\n`);
+    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toBe(`export const M = "claude-sonnet-5";\n`);
     rmSync(root, { recursive: true, force: true });
   });
 });
