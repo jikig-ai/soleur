@@ -52,6 +52,14 @@
 # intentionally omitted (see the CodeQL block above). Enforced file-vs-file by
 # plugins/soleur/test/required-checks-canonical-parity.test.sh. Grouped below to
 # mirror infra/github/ruleset-ci-required.tf tiers for legibility.
+#
+# `test` is a CONTENT-SCOPED fabrication since #6907: its needs: include the
+# encryption-posture ledger sweep, so a bot PR's synthetic `test` green is
+# sound only while the bot action's ALLOWED_PATHS ({weakness-digest.md}) stays
+# disjoint from the sweep's surface (the ledger, every *.tf, every file under
+# apps/*/infra/, and the docs/legal/ disclosed_as anchors). Re-derive that
+# intersection before widening ALLOWED_PATHS; see the ADR-140 addendum of
+# 2026-09-23.
 test
 dependency-review
 e2e
