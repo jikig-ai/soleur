@@ -135,10 +135,11 @@ None blocking. `scripts/markdown-lint.sh` reports `knowledge-base/project/` is i
    permanently.** `exec` with only redirections applies ALL of them to the
    shell — the trailing `2>/dev/null` redirected the process's stderr, so every
    later `>&2` banner vanished while rc stayed 0. Fixed with brace-group
-   scoping (`{ exec {fd}>>file; } 2>/dev/null`). The same idiom
-   (`eval "exec ${fd}>&-" 2>/dev/null`) exists in `session-state.sh`'s
-   `release_lock` and `_acquire_lock_impl` failure arm — latent bug, out of
-   scope, candidate for a follow-up issue.
+   scoping (`{ exec {fd}>>file; } 2>/dev/null`). (Corrected during review: the
+   similar-looking `eval "exec ${fd}>&-" 2>/dev/null` in `session-state.sh` is
+   NOT the same defect — there the `2>/dev/null` binds to the `eval` builtin
+   and ends with it, while only the fd-close inside the evaluated string
+   persists. No latent bug there.)
 2. **fd inheritance holds tickets past owner death.** A `kill -9`'d waiter
    mid-`acquire_lock` leaves its `flock -w` child holding the ticket fd until
    the child's `-w` resolves (bounded by `timeout_s`); same for a trailing

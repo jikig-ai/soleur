@@ -70,6 +70,10 @@ TC_SESSION_STATE="${TC_SESSION_STATE:-$_tc_lib_dir/../../plugins/soleur/scripts/
 # rejection). Source of the 2700 s figure is ADR-133's recorded baseline rather
 # than a fresh measurement — see the addendum for why one was not taken.
 TC_LOCK_TIMEOUT="${TC_LOCK_TIMEOUT:-3600}"
+# Shape-assert: a non-numeric value used to degrade to a graceful rc=99
+# contended path via `flock -w`; since #8579 it also reaches `(( ))`
+# arithmetic, where garbage is a fatal unbound-var abort under `set -u`.
+[[ "$TC_LOCK_TIMEOUT" =~ ^[0-9]+$ ]] || TC_LOCK_TIMEOUT=3600
 
 # How often to announce, while blocked, that this run is queued rather than hung.
 #
@@ -101,7 +105,10 @@ TC_QUEUE_POLL_S="${TC_QUEUE_POLL_S:-5}"
 # a non-numeric TC_QUEUE_TIMEOUT is an unbound-var arithmetic error under
 # `set -u` (aborts tc_acquire — violates never-abort), and TC_QUEUE_POLL_S=0
 # makes _tc_queue_wait's `sleep` fail into a busy-spin on .alloc.
-[[ "$TC_QUEUE_TIMEOUT" =~ ^[0-9]+$ ]] || TC_QUEUE_TIMEOUT="$TC_LOCK_TIMEOUT"
+# [1-9] not [0-9]: `budget=0` never satisfies `_tc_queue_wait`'s
+# `(( budget > 0 && waited >= budget ))` — 0 would be an UNBOUNDED wait, the
+# wedge the knob exists to prevent.
+[[ "$TC_QUEUE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || TC_QUEUE_TIMEOUT="$TC_LOCK_TIMEOUT"
 [[ "$TC_QUEUE_POLL_S" =~ ^[1-9][0-9]*$ ]] || TC_QUEUE_POLL_S=5
 
 # Wall-clock ceiling above which a test-all.sh run is treated as no longer
@@ -124,10 +131,15 @@ TC_QUEUE_POLL_S="${TC_QUEUE_POLL_S:-5}"
 # ceiling below it would curtail live work.
 #
 # 14400 s is ~2.5x that reading. Note the working margin is smaller than the raw ratio:
-# _RUN_START_EPOCH is stamped before tc_acquire, so up to TC_LOCK_TIMEOUT (3600 s) of
-# queueing is charged against the ceiling, leaving ~10800 s of execution budget — ~1.87x.
-# Charging the wait is deliberate (it is the holder's own lifetime that must be bounded),
-# but a future tuner should size against 10800, not 14400.
+# _RUN_START_EPOCH is stamped before tc_acquire, so up to
+# TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT (7200 s at defaults — the ticket queue's
+# wait plus the lock wait, #8579) is charged against the ceiling, leaving
+# ~7200 s of execution budget — ~1.25x. Charging the wait is deliberate (it is
+# the holder's own lifetime that must be bounded), but a future tuner should
+# size against 7200, not 14400.
+# NOT sanitized here: tc_report's sibling filter deliberately treats an
+# unusable ceiling as "filter disabled — count every sibling" (fail-open to
+# honest capacity). Callers doing arithmetic on it validate locally.
 TC_RUNTIME_CEILING_S="${TC_RUNTIME_CEILING_S:-14400}"
 
 # --- Capacity probes -------------------------------------------------------
@@ -1027,6 +1039,7 @@ _tc_wait_heartbeat() {
 
 _TC_TICKET_FD=""
 _TC_TICKET_SERIAL=""
+_TC_TICKET_QDIR=""
 
 # Resolve the ticket-queue dir for lock <name>, creating it. rc 1 when the
 # session-state layer is stubbed or the state root is unresolvable (the
@@ -1034,12 +1047,24 @@ _TC_TICKET_SERIAL=""
 # the caller then degrades to today's direct-acquire path.
 _tc_queue_dir() {
   local name="${1:-}"
-  [[ -n "$name" ]] || return 1
+  # `name` becomes a path component; a `/` or `..` would escape LOCK_DIR for
+  # the mint's creates and the sweep's rm. Callers pass literals today, but
+  # the charset assert costs one line and the failure arm already degrades.
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
   declare -F _session_state_init_dirs >/dev/null 2>&1 || return 1
-  _session_state_init_dirs 2>/dev/null || true
+  # session-state.sh already ran init at source time; re-run only when the
+  # dir is missing (deleted post-source) — it forks `git rev-parse`.
+  [[ -n "${LOCK_DIR:-}" && -d "$LOCK_DIR" ]] || _session_state_init_dirs 2>/dev/null || true
   [[ -n "${LOCK_DIR:-}" ]] || return 1
   local qdir="$LOCK_DIR/$name.queue.d"
   mkdir -p "$qdir" 2>/dev/null || return 1
+  # mkdir -p silently succeeds on a pre-existing dir. When LOCK_DIR resolves to
+  # the /tmp orphan fallback (session-state.sh, outside any repo) a different
+  # local user could own it first and symlink qdir at a victim directory —
+  # the mint's `: >` and `>>` would then truncate/append attacker-chosen
+  # paths. -d + ! -L + -O closes the cross-user case; residual same-user
+  # TOCTOU is the documented threat-model boundary.
+  [[ -d "$qdir" && ! -L "$qdir" && -O "$qdir" ]] || return 1
   printf '%s\n' "$qdir"
 }
 
@@ -1078,13 +1103,26 @@ _tc_alloc_unlock() {
 # gone (flock is fd-bound — AC5b).
 _tc_ticket_sweep() {
   local qdir="$1" f base mt now="${EPOCHSECONDS:-0}"
+  # Local ceiling validation: arithmetic on a non-numeric knob resolves it as
+  # a variable name (0), which would sweep EVERY unlocked ticket. The global
+  # knob stays unsanitized because tc_report's fail-open contract depends on
+  # reading the raw value (see the TC_RUNTIME_CEILING_S assignment above).
+  local _sweep_ceiling=14400
+  [[ "$TC_RUNTIME_CEILING_S" =~ ^[0-9]+$ ]] && _sweep_ceiling=$(( 10#$TC_RUNTIME_CEILING_S ))
   for f in "$qdir"/*; do
     [[ -e "$f" ]] || continue
     base="${f##*/}"
     [[ "$base" =~ ^[0-9]+$ ]] || continue
-    if flock -n -x "$f" -c true 2>/dev/null; then
-      mt="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
-      if (( now - mt > ${TC_RUNTIME_CEILING_S:-14400} )); then
+    # A failed probe is "held" OR "can't open" (EACCES/foreign uid on the
+    # shared common-dir) — indistinguishable to flock but not to -r/-w. An
+    # unflockable file would otherwise be a permanent head-of-line blocker
+    # that is also never swept; treat unreadable/unwritable as sweepable.
+    if flock -n -x "$f" -c true 2>/dev/null \
+       || [[ ! -r "$f" || ! -w "$f" ]]; then
+      # stat failure must fail toward KEEPING (this file's convention), not
+      # toward "infinitely old" — a swept-everything outcome on a stat hiccup.
+      mt="$(stat -c %Y "$f" 2>/dev/null)" || continue
+      if (( now - mt > _sweep_ceiling )); then
         rm -f "$f" 2>/dev/null || true
       fi
     fi
@@ -1097,11 +1135,14 @@ _tc_ticket_sweep() {
 # _TC_TICKET_FD + _TC_TICKET_SERIAL. rc 1 on any failure — caller degrades.
 _tc_ticket_mint() {
   local qdir="$1" f base max=0 tfile
-  # Idempotent like _acquire_lock_impl: a second tc_acquire in one shell would
-  # otherwise mint serial N+1 while serial N is still held BY ITSELF — a
-  # self-block for the full TC_QUEUE_TIMEOUT, then a contended proceed.
-  [[ -n "$_TC_TICKET_FD" && -n "$_TC_TICKET_SERIAL" ]] && return 0
-  _TC_TICKET_FD=""; _TC_TICKET_SERIAL=""
+  # Idempotent like _acquire_lock_impl: a second tc_acquire for the SAME queue
+  # in one shell would otherwise mint serial N+1 while serial N is still held
+  # BY ITSELF — a self-block for the full TC_QUEUE_TIMEOUT. A DIFFERENT queue
+  # would orphan the first fd's bookkeeping scalar (the kernel still holds the
+  # lock — bounded by process exit), so degrade that call rather than mint.
+  [[ -n "$_TC_TICKET_FD" && -n "$_TC_TICKET_SERIAL" ]] \
+    && { [[ "$_TC_TICKET_QDIR" == "$qdir" ]] || return 1; return 0; }
+  _TC_TICKET_FD=""; _TC_TICKET_SERIAL=""; _TC_TICKET_QDIR=""
   _tc_alloc_lock "$qdir" || return 1
 
   _tc_ticket_sweep "$qdir"
@@ -1114,6 +1155,10 @@ _tc_ticket_mint() {
   done
   _TC_TICKET_SERIAL=$((max + 1))
   tfile="$(printf '%s/%08d' "$qdir" "$_TC_TICKET_SERIAL")"
+  # A planted symlink at the minted name would make `: >` truncate and `>>`
+  # append an attacker-chosen path (only reachable under the same-user threat
+  # model, since _tc_queue_dir already rejected a foreign-owned queue dir).
+  [[ -L "$tfile" ]] && { _tc_alloc_unlock; return 1; }
   if ! : > "$tfile" 2>/dev/null; then
     _tc_alloc_unlock; return 1
   fi
@@ -1122,11 +1167,16 @@ _tc_ticket_mint() {
     if [[ -n "$_TC_TICKET_FD" ]]; then
       { eval "exec ${_TC_TICKET_FD}>&-"; } 2>/dev/null || true
     fi
-    _TC_TICKET_FD=""; _TC_TICKET_SERIAL=""
-    rm -f "$tfile" 2>/dev/null || true
+    _TC_TICKET_FD=""; _TC_TICKET_SERIAL=""; _TC_TICKET_QDIR=""
+    # Deliberately no `rm -f "$tfile"`: under broken flock exclusion (NFS on
+    # the shared git-common-dir) the flock could have failed because ANOTHER
+    # host's minter holds this exact file — rm would unlink a live ticket's
+    # directory entry. A created-but-unlocked leftover blocks nothing and the
+    # sweep collects it.
     _tc_alloc_unlock; return 1
   fi
   printf '%s %s %s\n' "$$" "${PWD##*/}" "${EPOCHSECONDS:-0}" >>"$tfile" 2>/dev/null || true
+  _TC_TICKET_QDIR="$qdir"
   _tc_alloc_unlock
   return 0
 }
@@ -1151,9 +1201,9 @@ _tc_queue_is_head() {
 
 # Advisory position for the heartbeat: 1 + the count of strictly-earlier
 # tickets still held. No .alloc — a stale reading changes a log line, never a
-# decision. (A probe CAN land inside a concurrent mint's create→flock window
-# and fail that mint → LOCK_QUEUE_DEGRADED: microsecond window, benign
-# outcome, accepted.)
+# decision. It also cannot collide with a concurrent mint's create→flock
+# window: a minting serial is always max+1, strictly greater than the
+# prober's own serial, so the `base < serial` filter skips it untouched.
 _tc_queue_position() {
   local qdir="$1" serial="$2" f base n=1
   for f in "$qdir"/*; do
@@ -1168,12 +1218,16 @@ _tc_queue_position() {
 
 # Poll the head-check every TC_QUEUE_POLL_S until head (rc 0) or budget (rc 1).
 # A bounded wait that still ends in proceed — never an abort.
+# SECONDS, not ${EPOCHSECONDS:-0}: bash <5 lacks EPOCHSECONDS, and the
+# `${EPOCHSECONDS:-0}` fallback pins `waited` at 0 forever — the budget would
+# never fire and the wait would be unbounded, the wedge this knob exists to
+# prevent. SECONDS is integer wall-clock and exists on bash 3.2.
 _tc_queue_wait() {
   local qdir="$1" serial="$2" budget="${3:-$TC_QUEUE_TIMEOUT}"
-  local t0="${EPOCHSECONDS:-0}" waited=0
+  local t0="$SECONDS" waited=0
   while :; do
     if _tc_queue_is_head "$qdir" "$serial"; then return 0; fi
-    waited=$(( ${EPOCHSECONDS:-0} - t0 ))
+    waited=$(( SECONDS - t0 ))
     (( budget > 0 && waited >= budget )) && return 1
     sleep "${TC_QUEUE_POLL_S:-5}"
   done
@@ -1188,6 +1242,10 @@ tc_acquire() {
   # suppressible that way).
   local name="${1:-}"
   local timeout_s="${2:-$TC_LOCK_TIMEOUT}"
+  # A non-numeric budget used to degrade to rc=99 contended via `flock -w`;
+  # it now also reaches `(( ))` arithmetic (heartbeat bound), where garbage is
+  # a fatal unbound-var abort under `set -u`. Normalize, never abort.
+  [[ "$timeout_s" =~ ^[0-9]+$ ]] || timeout_s=3600
   if [[ -z "$name" ]]; then
     echo "[contention] LOCK_UNAVAILABLE: tc_acquire called with no lock name; proceeding without serialization." >&2
     return 0
@@ -1249,9 +1307,11 @@ tc_acquire() {
   # always-firing hits.
   echo "[contention] LOCK_WAITING: '$name' — waiting up to ${timeout_s}s for the advisory lock." >&2
 
-  # The two readings bracket the blocking call and nothing else. `_tc_ms_since`
-  # is called AFTER the end reading is captured, so its command substitution
-  # cannot inflate the number it formats.
+  # The two readings bracket the WHOLE wait — queue stage plus the blocking
+  # acquire — so `waited` on a queue_timeout arm measures the ticket wait, not
+  # a lock wait (the `queue_timeout=1` suffix carries that distinction).
+  # `_tc_ms_since` is called AFTER the end reading is captured, so its command
+  # substitution cannot inflate the number it formats.
   local t0="${EPOCHREALTIME:-}" t1 waited
 
   # --- FIFO ticket queue (#8579) -------------------------------------------
@@ -1262,12 +1322,14 @@ tc_acquire() {
   if _qdir="$(_tc_queue_dir "$name" 2>/dev/null)" && [[ -n "$_qdir" ]]; then
     if _tc_ticket_mint "$_qdir"; then
       _qt_serial="$_TC_TICKET_SERIAL"
-      echo "[contention] LOCK_QUEUED: '$name' holds ticket ${_qt_serial} — earlier queued runs release first." >&2
+      printf "[contention] LOCK_QUEUED: '%s' holds ticket %08d — earlier queued runs release first.\n" "$name" "$_qt_serial" >&2
     else
-      echo "[contention] LOCK_QUEUE_DEGRADED reason=mint_failed — direct bounded acquire; queue not engaged." >&2
+      # BANNER, not a plain line: a degraded run silently loses the FIFO
+      # protection, and the triage grep only surfaces BANNER-tagged lines.
+      echo "[contention] BANNER LOCK_QUEUE_DEGRADED reason=mint_failed — direct bounded acquire; queue not engaged." >&2
     fi
   else
-    echo "[contention] LOCK_QUEUE_DEGRADED reason=no_state_root — direct bounded acquire; queue not engaged." >&2
+    echo "[contention] BANNER LOCK_QUEUE_DEGRADED reason=no_state_root — direct bounded acquire; queue not engaged." >&2
   fi
 
   # The heartbeat brackets the WHOLE wait — queue stage plus lock stage — so

@@ -22,7 +22,8 @@ proceed-with-banner, never abort, `rc=0`. `scripts/test-all.sh` and
      loop (no `flock -w` anywhere; #7697), mint `serial = 1 + max(numeric entries)`, create the
      file, `flock -x` it, write `pid worktree epoch` content — all inside the `.alloc` critical
      section; sweep unlocked tickets older than `TC_RUNTIME_CEILING_S` in the same hold.
-- [x] 1.3 Add `_tc_queue_position <qdir> <serial>` — under `.alloc`, count strictly-earlier
+- [x] 1.3 Add `_tc_queue_position <qdir> <serial>` — deliberately WITHOUT `.alloc`
+  (advisory heartbeat reading; a stale value changes a log line, never a decision) — count strictly-earlier
      ticket files still `flock -n`-held; emits `position=N`.
 - [x] 1.4 Add `_tc_queue_wait <qdir> <serial> <budget_s>` — poll head-check every
      `TC_QUEUE_POLL_S` (default 5); rc 0 at head, rc 1 at `TC_QUEUE_TIMEOUT` (default =
