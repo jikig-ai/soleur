@@ -16,7 +16,7 @@ Nothing here edits `apps/web-platform/infra/`.
 - [ ] 0.1 Re-verify the chain before editing: the three interpolated `throw` sites, the `email_send` catch that mirrors them, `logger.ts` having no serializers, and journald `Storage=persistent` on the web host.
 - [ ] 0.2 Write the failing test first: drive a refused send through the real emitter and assert no substring of the input address appears in the emitted record.
 - [ ] 0.3 Replace the interpolations with synthetic messages that keep the failure class and drop the value.
-- [ ] 0.4 Add the `err` serializer (or scoped equivalent) so a future throw cannot reintroduce the class.
+- [x] 0.4 Class fix at the emit seams (leaf `pii-redact.ts`, observability emitters, `logger.ts` logMethod hook, `sentry-scrub.ts` value layer) — not a pino serializer, per R8. Shipped in PR #8617.
 - [ ] 0.5 Sweep `apps/web-platform/server/` for the same shape and classify every hit.
 - [ ] 0.6 Confirm `docs/legal/privacy-policy.md` is unchanged and now true.
 
@@ -46,7 +46,7 @@ Nothing here edits `apps/web-platform/infra/`.
 ## Phase 3 — PR-3: record anchors (#8532)
 
 - [ ] 3.1 `records` field plus schema.
-- [ ] 3.2 `check_records_resolve` and `check_record_anchors_named` over a hard-coded `RECORD_SURFACES`; MB-15/16.
+- [ ] 3.2 `check_records_resolve` and `check_record_anchors_named` over a ledger-declared `RECORD_SURFACES` (R11) with a count floor and CODEOWNERS pin; MB-15/16.
 - [ ] 3.3 Add `// ledger: <store id>` to the store elements in `model.c4`, and the Inngest store's missing at-rest posture.
 - [ ] 3.4 Regenerate `model.likec4.json` in the same commit; run the C4 freshness and parity suites.
 - [ ] 3.5 Register: the five CLO amendments, each with a dated amendment marker, plus the visible `(encryption-posture ledger: <id>)` clauses.

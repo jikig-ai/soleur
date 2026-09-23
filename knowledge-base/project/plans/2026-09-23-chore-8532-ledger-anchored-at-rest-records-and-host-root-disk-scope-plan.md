@@ -135,7 +135,7 @@ The operator's decision: **fix the code, keep the sentence.**
 ### PR-3 — record anchors (#8532)
 
 1. `records: ["path:anchor", …]`, sibling to `disclosed_as`, resolved by the same function. Separate field because the predicates are opposite: `disclosed_as` is checked for contradiction of a public claim, `records` for agreement with an internal one.
-2. `check_records_resolve` (forward) and `check_record_anchors_named` (reverse, over a hard-coded `RECORD_SURFACES`) so a renamed store cannot leave an orphan anchor. The surface list is hard-coded, not ledger-declared: a ledger-declared list is deletable by the same commit that breaks the prose.
+2. `check_records_resolve` (forward) and `check_record_anchors_named` (reverse, over `RECORD_SURFACES`) so a renamed store cannot leave an orphan anchor. Where the surface list lives is decided by 3c below (R11 reversed an earlier hard-coded-in-script design).
 3. Carrier: a **visible, self-describing** clause carrying the mechanism, compared by **equality** rather than by regex over prose — `(encryption-posture ledger: <store id> — at rest: <mechanism>)`. Measured, a regex cannot work here: the register is additive-only, so an amended cell holds superseded text beside current text, and 8 of 10 windows around one store id contain both `LUKS` and `plaintext`. The same clause form goes in `model.c4` as a `//` comment (HTML comments are not valid in that DSL; C4 is an internal record, so the visibility rule that governs the register does not bind there — stated rather than left as an unexplained asymmetry).
 3b. **Cardinality: per section, not per file.** A store legitimately appears under several processing activities — measured, `hcloud_volume.git_data` in three, `inngest_redis` in three. A file-unique rule would let only one cell be anchored and leave the rest as ungated prose, which is worse than no anchor. Anchors resolve **within their PA section**, and every occurrence must resolve and agree. File-level uniqueness stays where it belongs, on `disclosed_as`.
 3c. `RECORD_SURFACES` moves **into the ledger**, not the script. Hard-coding a repo path makes the check untestable under the synthesized-fixture rule, which would leave it either silently passing on an absent file or unfixturable. Protect the list with a count floor that reports directly, plus a CODEOWNERS pin on the ledger and the register.
@@ -159,7 +159,7 @@ Four images (`398857857, 406654994, 407991378, 411798619`) of server **`12393147
 
 ## Files to Edit
 
-**PR-0:** `apps/web-platform/server/email-triage/outbound-compliance.ts` (four interpolations at the `throw` sites), `apps/web-platform/server/logger.ts` (an `err` serializer as the class fix), plus the covering test under `apps/web-platform/test/`.
+**PR-0 (shipped as PR #8617):** `apps/web-platform/server/email-triage/outbound-compliance.ts` (the two leaking interpolations, per R6), a leaf `server/pii-redact.ts` wired into `observability.ts`, the `logger.ts` `logMethod` hook and `sentry-scrub.ts` (the class fix; not a pino serializer, per R8), `sensitive-keys.ts`, the offline gate notification and aborted-turn summary for outbound-email tools, and the three published legal documents scoped by CLO ruling. Tests under `apps/web-platform/test/server/`.
 
 **PR-1:** `scripts/lint-encryption-posture.py` (`resolve_disclosed_as` uniqueness, `check_non_iac_identity`, the `luks` direction of the disclosure check), `scripts/lint-encryption-posture.test.sh` (cases + MB-17/18/19), `scripts/encryption-posture-ledger.json` (delete the "asserted rather than linted for a luks row" honesty note from `hcloud_volume.registry`, which PR-1 makes false).
 
@@ -287,7 +287,7 @@ exception:
 | 4 | delete a surface from `RECORD_SURFACES` | RED via the surface-count floor |
 
 **Harness rows.** Mutate the fixture register so the anchor text appears twice; one must-PASS where a row legitimately carries no `records` yet.
-**Anchor.** `RECORD_SURFACES` is hard-coded in the script, so removing a surface is a code diff a reviewer sees, not a ledger edit.
+**Anchor.** `RECORD_SURFACES` lives in the ledger (3c, per R11), protected by a count floor that reports directly and a CODEOWNERS pin, so removing a surface is both a reviewed ledger diff and a floor failure.
 
 ## Observability
 
@@ -395,3 +395,19 @@ Five agents reviewed this plan (simplicity per mechanism, Kieran, DHH, architect
 | R16 | Five PRs is more structure than the work needs; PR-1 → PR-2 is not a real dependency | Collapsed: #6907 first, then one ledger PR (old 1+2+3+4a), with PR-0 shipping independently and 4b operator-gated |
 
 **Kept against a reviewer's recommendation.** `check_instance_multiplicity` survives DHH's cut: he argued the `for_each` instances have identical posture by construction, but `workspaces_luks` is a singleton while `workspaces` is `for_each`, so web-2 has no encrypted volume — the divergence is live today.
+
+## CPO Sign-off (2026-09-23)
+
+**Verdict: SIGN-OFF WITH CONDITIONS.** The plan reduces user harm and adds no new store. Conditions and their disposition:
+
+| # | Condition | Disposition |
+|---|---|---|
+| C1 | R15, the account-deletion dialog, is a user-facing misrepresentation. Reword the copy, do not widen deletion; CLO review of copy and policy required; must land before this ledger PR is marked ready | #8095 widened, raised to P1, moved to Phase 4, CPO's drafted copy attached |
+| C2 | "Files to Edit" and Guard 3's Anchor contradicted R6, R8 and R11 | Corrected in place above |
+| C3 | Purge the refusal-path copies from Sentry, don't only record them (AC-0c-ii) | Owed after PR #8617 merges; recorded in its PIR and in Article 30 PA-28 §(c) |
+| C4 | PR-0 ships first, and AC-0c-i is checked automatically after deploy | PR #8617 is PR-0; the production check is on its post-merge list |
+| C5 | Every retained root-disk image needs a real expiry date, not "until #6178 closes" | Binding on PR-4a (AC-4c) |
+
+**Correction to R8 (architecture review of PR #8617, measured).** The five marker loggers (`claude-cost`, `compound-promote`, `cron-liveness`, `cron-filing-deny`, `cert-reissue`) log no `err`, so they were never the reason a pino serializer could not deliver the class fix. The reason that holds is that `mirrorToSentry` runs in the `logMethod` hook before pino renders. PR #8617 puts the redaction in that hook.
+
+**PR-0 outcome that changes this plan's premise.** The CLO ruled that "the plaintext recipient address is never stored" could not stand, even with the code fixed: the address and body also persist in the drafting agent conversation (#3418). The published sentences are now scoped to "our outbound-email records". The operator's "keep the sentence" is honoured in form, not in scope.
