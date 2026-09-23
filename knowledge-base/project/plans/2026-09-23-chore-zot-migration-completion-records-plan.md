@@ -14,6 +14,49 @@ pr: 8666
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. **Sections enhanced:** 6 (Research Insights, Phase 1.2, Phase 2, section 4, Acceptance Criteria, Sharp Edges).
+**Agents used:**
+
+- **Plan phase:** learnings-researcher, functional-discovery, soleur:engineering:cto, the scoped advisor consult, spec-flow-analyzer.
+- **Plan review:** dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer.
+- **Deepen:** git-history-analyzer, a verify-the-negative pass.
+
+**Halt gates:**
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | present; threshold `none`; Files to Edit are all under `knowledge-base/`, not a sensitive path |
+| 4.7 Observability | skipped: pure-docs plan |
+| 4.8 PAT | no match |
+| 4.9 UI | skipped: no UI surface |
+| 4.10 Encryption | skipped: no `.tf`, cloud-init or migration file edited, and no store is introduced |
+| 4.11 Guard | skipped: no guard deliverable |
+| 4.55 Downtime | skipped: no downtime operation |
+
+### Key Improvements
+
+1. **#7077.** All three acceptance items verified on `main`. The positive bridge probe (item 2) is cut, because building it would re-break the #7278 inventory caller.
+2. **#8036 1d.** Sequenced after #8660 on three independent grounds:
+   - the #8660 test collision
+   - `host_scripts_content_hash` and the coherence preflight
+   - `hcloud_server.inngest` has no `ignore_changes=[user_data]`, so 1d needs a planned inngest replace
+3. **Section 4.** The ADR-169 vs 5.3b write-up now covers four options in neutral order. It adds three facts that bind every option:
+   - "stop GHCR push" is not a toggle: buildx pushes to GHCR, and `crane copy` fills zot from there
+   - the host GHCR egress still carries the anonymous cosign and zot-image pulls
+   - #8660 sequencing
+4. **Records corrected before posting:**
+   - 1.8 is marked `[~]`, not `[x]`: two of its checks never ran (DC1)
+   - #6427's scope names the real soak keys (`appboot`, `appserved`, `freshboot`, `gate`) and the emit sites that survive 5.3b
+   - #6073 loses `action-required` too, so the SLA cron cannot re-add p0
+5. **#7077 and #6073 are closed directly** (DC3). The PR carries no closing keyword, and AC4 asserts the empty set, URL forms included.
+
+### New Considerations Discovered
+
+- 5.3b's "remove GHCR egress allow" would break cosign verification (`COSIGN_IMAGE=ghcr.io/sigstore/…`) and the registry host's own boot (`zot_image_*` = `ghcr.io/project-zot/…`). Posted as a fact in section 4, not decided.
+- B3's CI-side GHCR read uses `secrets.GITHUB_TOKEN`, not a PAT (`apply-web-platform-infra.yml`), so 5.4/5.5 (PAT and minter retirement) do not depend on the push.
+
 ## Overview
 
 This plan covers the ADR-096 (GHCR-to-zot) work that is left after #8651. #8651 is being
@@ -163,6 +206,32 @@ Not applicable. No mechanism is justified by a cost or performance saving.
 
 - Cite by content anchor, not line number (`cq-cite-content-anchor-not-line-number`). The one exception is the Status block's "lines 9-17", which this plan edits.
 - Amend ADRs in place. Do not claim a new ordinal.
+
+### Deepen-pass verification (2026-09-24)
+
+**Attribution** (git-history-analyzer, against `origin/main`). All confirmed:
+
+- #7252 removed the live bridge gate.
+- #7516 added the zot-primary `ZIREF` path.
+- #6424 corrected the "load-bearing at Phase-5" text in ADR-096 and `issue-alerts.tf`.
+- #8600 deleted the prelude GHCR login and made the 6565 probe one-legged.
+- #8543 fixed cosign verify for #8037.
+- Run `31681702541` and "392 pulls" appear in ADR-096 and the revert runbook.
+- All 8 cited SHAs are ancestors of `origin/main` (`git merge-base --is-ancestor`).
+
+**Negative claims** (verify-the-negative pass). All 9 confirmed:
+
+- No test or lint reads ADR-096's Status block or the registry-oidc `tasks.md`. `[~]` already appears there (item 1.5).
+- Only `registry-zot-inventory.yml` skips the bridge login, and `zot-inventory.sh` "B2 — origin reachability FIRST" probes `/v2/`.
+- `soleur-host-bootstrap.sh` is in `local.host_script_files`.
+- `inngest-host.tf` says "Deliberately NO lifecycle.ignore_changes=[user_data]".
+- No workflow or issue carries a `zot-soak-6122.sh` follow-through directive.
+- `FAIL_QUERIES` is exactly `gate`/`freshboot`/`appboot`/`appserved` (floor asserts 4).
+- `cloud-init.yml` emits `app_ghcr_fallback` and `app_ghcr_served`.
+- `cloud-init-inngest.yml` emits `inngest_ghcr_fallback`. So does the dead colocated block in `cloud-init.yml` (`web_colocate_inngest` defaults to `false`).
+- The ADR-169 restore reads GHCR with `secrets.GITHUB_TOKEN`.
+
+**Rule IDs.** Every `hr-`/`wg-`/`cq-` id cited here resolves to an active `[id: …]` in `AGENTS.md`.
 
 ## Implementation Phases
 
