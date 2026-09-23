@@ -532,5 +532,53 @@ fi
 #   doppler run -p soleur -c prd_terraform -- \
 #     scripts/betterstack-query.sh --since <window> --grep inngest_ghcr_fallback --grep inngest_zot
 
-echo "PASS: 0 ghcr-fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s), and #$BLOCKER is CLOSED — since $START. zot-primary soak holds on Sentry evidence, which is forgeable with the public DSN: before 5.3-5.5, corroborate the dedicated host's inngest_zot on Better Stack (scripts/betterstack-query.sh --grep 'stage=inngest_zot'). Then safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
+# ── The WEB-HOST blocker arm (#8651).
+#
+# WHY A SECOND BLOCKER. The arm above proves the DEDICATED INNGEST host survives a dead GHCR.
+# It proves nothing about the WEB hosts, and on 2026-09-23 a `web-host-replace` of web-2 booted
+# DARK: cloud-init's 3-second `/v2/` probe lost, REF stayed the GHCR ref, and the pull 401'd on
+# the already-revoked PAT (run 35912244388; `soleur-hostscript-seed failed` stage=pull,
+# `ghcr_login_fail: … denied` + `pull_err: … unauthorized`). `web-1` is the PRE-EXISTING sole
+# live web host, so the same replace strands the web tier. 5.3 must not be authorized while a
+# fresh web boot is dark.
+#
+# WHY THIS IS NOT ANOTHER FAIL_QUERIES ENTRY — and the reason is structural, not stylistic.
+# A dark host DIES at stage=pull, before reaching anything that emits the stage a counter would
+# read. A counter of a stage the corpse cannot emit is vacuous by construction. This is the same
+# blindness #6500 recorded for the inngest host ("the host emits its boot trace only if it gets
+# far enough to run the emitter") and is exactly why the existing `app_ghcr_served` query does
+# NOT cover this case: #6462 added it for a probe-miss whose pull then SUCCEEDS ("the ref stays
+# the GHCR ref, the pull succeeds first try"). A pull that FAILS is silent.
+# APP_ZOT does not rescue it either — it is a floor on SUCCESSES (>=1 zot-served fresh boot), so
+# a single historical success satisfies it while the CURRENT fresh-boot path is broken. "At
+# least one boot worked once" and "a boot works now" are different claims; only the first is
+# measured here.
+#
+# So this arm gates on a HUMAN verdict, exactly as the #6500 arm does, and for the same reason:
+# the evidence reachable by query is structurally incomplete, so issue state is the honest
+# instrument. It fails in the opposite direction to the counters (it cannot be satisfied by a
+# stale success, and it can be satisfied by a careless close — hence the COMPLETED gate below).
+# ⚠ Do not delete this arm to make the gate pass, and do not close #8651 to bypass it.
+WEB_BLOCKER=8651
+web_st_json=$(gh issue view "$WEB_BLOCKER" --repo github.com/jikig-ai/soleur --json state,stateReason 2>/dev/null)
+web_st=$(printf '%s' "$web_st_json" | jq -r '.state // empty' 2>/dev/null)
+web_st_reason=$(printf '%s' "$web_st_json" | jq -r '.stateReason // empty' 2>/dev/null)
+# Fail SAFE on an unreadable state, same rule as the #6500 arm: "could not measure" is never
+# "the measurement is false".
+if [[ "$web_st" != "OPEN" && "$web_st" != "CLOSED" ]]; then
+  echo "TRANSIENT: cannot read #$WEB_BLOCKER state (got '${web_st:-<empty>}') — retry next sweep. Is GH_TOKEN declared in the directive's secrets= clause?" >&2
+  exit 2
+fi
+if [[ "$web_st" == "OPEN" ]]; then
+  echo "FAIL(blocked-web): soak criteria hold and #$BLOCKER is settled, but #$WEB_BLOCKER is OPEN — a fresh web-host boot was measured DARK (zot probe lost, GHCR ref retained, 401 on the revoked PAT). web-1 is the sole live web host and a replace of it strands the web tier. NOT authorized to retire GHCR."
+  exit 1
+fi
+# CLOSED is not consent — same reasoning as the #6500 arm: GitHub returns CLOSED for every
+# closure reason, and autonomous triage operates over this backlog.
+if [[ "$web_st" == "CLOSED" && "$web_st_reason" != "COMPLETED" ]]; then
+  echo "FAIL(web-blocker-closed-not-completed): #$WEB_BLOCKER is CLOSED with stateReason='${web_st_reason:-<empty>}', not COMPLETED — a not-planned/duplicate/triage close is not evidence a fresh web boot reaches zot. Re-open it, or close it as completed only once a web-host replace has been OBSERVED booting zot-served."
+  exit 1
+fi
+
+echo "PASS: 0 ghcr-fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s), and #$BLOCKER + #$WEB_BLOCKER are both CLOSED as COMPLETED — since $START. zot-primary soak holds on Sentry evidence, which is forgeable with the public DSN: before 5.3-5.5, corroborate the dedicated host's inngest_zot on Better Stack (scripts/betterstack-query.sh --grep 'stage=inngest_zot'). Then safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
 exit 0
