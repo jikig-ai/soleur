@@ -195,8 +195,19 @@ Declared gaps, each with an issue:
 - `soleur:<unknown>` is reported, not gated; a typo is a different defect. The
   set is diffed pre/post remediation so a hand rewrite cannot go quietly green.
 - "Canonical resolves on every harness" is verified on Grok (`grok-fidelity`)
-  and Claude; Codex and Devin are declared uncovered (#8306). The gate's promise
-  is "no harness-specific form in agent-read prose", not "resolves everywhere".
+  and Claude. The gate's promise is "no harness-specific form in agent-read
+  prose", not "resolves everywhere".
+
+  > **Amended 2026-09-23 (ADR-240, #8390 bundle).** This clause previously read
+  > "Codex and Devin are declared uncovered (#8306)". The citation was WRONG —
+  > #8306 is the `.openhands`/`.gemini` mirror-completeness issue, not a
+  > discovery gap — and the status is now stale. Codex and Devin DISCOVERY is
+  > covered by the `harness-discovery` CI job, which installs the plugin
+  > hermetically and asserts the vendor CLI registered the manifest's declared
+  > skill set. The job is **advisory**: it becomes enforcing when #8574 closes,
+  > so until then a red there blocks nothing. What is covered is REGISTRATION
+  > only — not invocability (ADR-236), not which copy was loaded, and not
+  > cross-root uniqueness (ADR-224 decision 5 keeps that).
 
 **`--fix` requires a clean tree.** It rewrites tracked files in place and is the
 remedy the gate's failure message prescribes. A grok slash and a root-relative

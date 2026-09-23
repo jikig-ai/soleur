@@ -664,6 +664,15 @@ model {
   hetzner -> betterstack "Ships SOLEUR_PRIVATE_NIC from web-1 (the §3 private-NIC guard, #6438 §3/ADR-123) to the shared Logs source 2457081 — detect + emit + alarm, NO reboot (unlike the registry's self-converging guard). ALSO pings the web_nic_guard liveness heartbeat every healthy run so the fault-emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC that never fires is indistinguishable from a dead guard). Distinct from the Vector journald edge above" { technology "curl → Better Stack Logs + heartbeat (HTTPS)" }
   betterstack -> hetzner "Origin uptime probe at the LB-fronted app.soleur.ai surface (betteruptime_monitor.app/soleur_apex) — covers web-1 (the app A-record → web-1, dns.tf); the #5933 per-host web-<n> probe was RETIRED (CF 521, no per-host origin vhost). web-2 (the fsn1 warm standby) was retired 2026-07-17 (#6538/#6463). var.web_hosts has two keys again: the cattle web-2 (10.0.1.11, #6969) is a serving-weight-0 standby outside the app A record, so this probe does not cover it. SINCE #7884/ADR-222 a THIRD probe on this surface reads database readiness: betteruptime_monitor.app_health ('soleur app database readiness', the adopted hand-made monitor 4226366) is a KEYWORD monitor on https://app.soleur.ai/health requiring the compact-JSON pair supabase:connected, JSON quotes included and no space (180 s checks, 180 s confirmation). /health answers HTTP 200 in every database state, so only the body tells a database outage apart; the keyword is coupled to the /health serialization and pinned by health-keyword-monitor-contract.test.ts. The monitor never calls Supabase itself — it reads the app's own service-role REST check" { technology "HTTPS via CF edge" }
   github -> sigstore "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)" { technology "HTTPS (cosign)" }
+
+  // Vendor-CLI supply-chain edges (ADR-240, 2026-09-23). CI DOWNLOADS AND RUNS these
+  // third-party binaries, which is an access relationship in the same class as the
+  // sigstore/ghcr edges above — modelled for the same reason. The grokBuild edge is
+  // not new behaviour: `grok-fidelity` has installed a vendor CLI over the network
+  // since it was written and the edge was simply never recorded.
+  github -> codex "CI installs a pinned CLI (npm @openai/codex) and asserts it registers the manifest's declared skill set (harness-discovery, ADR-240)" { technology "HTTPS (npm) + CLI" }
+  github -> devin "CI installs a pinned CLI (versioned static.devin.ai setup script) and asserts it registers the manifest's declared skill set (harness-discovery, ADR-240)" { technology "HTTPS (curl) + CLI" }
+  github -> platform.grokBuild "CI installs the Grok CLI (x.ai install.sh) and runs the inspect-contract + golden-path eval (grok-fidelity)" { technology "HTTPS (curl) + CLI" }
   // ADR-136 / #6780 — the config-refresh channel for the dedicated Inngest host. CI ALSO
   // keyless-signs a SECOND artifact (the config bundle's manifest blob), dual-pushes it to
   // GHCR + zot, and the inngest host pulls+verifies+applies it in-place. Distinct from the

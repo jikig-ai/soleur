@@ -65,6 +65,25 @@ file's own semantics ("this registry is Claude-canonical").
    unanchored matchers, dead SessionStart source matchers in `.devin`, and
    cross-registry double-fire.
 
+## Amendment — 2026-09-23 (ADR-240, #8390 item 2): the WAIT primitive
+
+`plugins/soleur/lib/harness.ts` `pollInstructions("devin")` told a Devin session to
+"use **get_output** with timeout for long loops". That contradicts the measured
+capability recorded in `devin/INSTRUCTIONS.md` (Tools table and the Polling / watches
+bullet): `get_output` only READS a backgrounded shell, and nothing wakes the agent on
+its output. The consequence is the worst shape — the agent believes it is waiting while
+nothing will ever wake it, so a merge or CI watch stalls silently.
+
+The wait primitive is therefore a background **`run_subagent`** running an exit-coded
+poll loop, one exit code per actionable transition. Its completion notification is the
+only wake primitive Devin has, so the loop must EXIT to report. Mutations stay in the
+foreground. `get_output` keeps its documented role: reading a backgrounded shell.
+
+Two tests asserted the old string and were flipped FIRST; they now require
+`run_subagent` and assert `get_output` is ABSENT, because absence is the property and
+no `toContain` on the replacement expresses it. The wire names are unchanged — this
+amendment is about which of them can WAIT.
+
 ## Consequences
 
 - Devin gets honest, measured parity for the triaged hook set instead of
