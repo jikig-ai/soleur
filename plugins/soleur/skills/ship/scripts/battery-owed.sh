@@ -25,9 +25,9 @@
 # "not 42 ⇒ run", which is safe no matter how the script dies.
 #
 # WHY THIS EXISTS (#8247). CI's required `test` context aggregates
-# test-webplat + test-bun + test-scripts + web-platform-build, of which the first
-# three are the same three `test-all.sh` shards this battery runs — on the pushed
-# head. The skill also mandates re-running the battery after any post-Phase-4
+# test-webplat + test-bun + test-scripts + test-scripts-heavy + web-platform-build,
+# of which the first four are the same `test-all.sh` shards this battery runs —
+# on the pushed head. The skill also mandates re-running the battery after any post-Phase-4
 # change (a review fix, a main sync, an advisor fix), and on that re-run path the
 # work is frequently a pure duplicate. Measured on PR #8233: two full batteries, ~70 min, the second
 # finishing against a head whose 26/26 required checks were already green on the
@@ -374,9 +374,10 @@ fi
 # Every condition held.
 # ---------------------------------------------------------------------------
 # No "and these suites go unrun" note here, deliberately: it would be FALSE.
-# test-all.sh registers every suite inside one of want_scripts / want_bun /
-# want_webplat / want_infra, and CI's required `test` context runs the first
-# three plus web-platform-build. The only local-only residue is the infra group,
+# test-all.sh registers every suite inside one of want_scripts /
+# want_scripts_heavy / want_bun / want_webplat / want_infra, and CI's required
+# `test` context runs the first four plus web-platform-build. The only
+# local-only residue is the infra group,
 # which condition 2 refuses on. An earlier revision claimed a residue that does
 # not exist, which both overstated the risk and contradicted this file's own
 # containment argument.

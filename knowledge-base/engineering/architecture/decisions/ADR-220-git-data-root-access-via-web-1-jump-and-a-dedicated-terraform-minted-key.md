@@ -385,6 +385,13 @@ The authenticated hop is written by a workflow step into a fixed-path `ssh_confi
     is environment-gated to `main`; the replace job has no `environment:`, so a replace dispatched from
     a branch supplies that branch's own anchor. Against a repository-write actor the replace path's
     anchor is not outside reach (#8093).
+
+    > **Superseded 2026-09-22 (#8209, ADR-241 D2):** `git_data_host_replace` now carries
+    > `environment: infra-privileged`, whose deployment-branch policy admits `main` only, so a
+    > replace dispatched from a branch is refused before the job starts and can no longer supply
+    > its own anchor. The reachable set narrows from "anyone with repository write" to "anyone who
+    > can land a commit on `main`". The residual named above is not closed by that -- it is
+    > narrowed -- and the remaining reach is tracked as ADR-241's residual R1.
 - **Token delivery: the fallback is taken.** Doppler service-account identities need the Team or
   Enterprise plan, and the workplace is on the Developer plan. The fallback's three guards, as delivered:
   1. A reference census allows `DOPPLER_TOKEN_GIT_DATA_ROOT` under `.github/` only in the `cutover` job of
@@ -553,3 +560,86 @@ records what changes in them.
 - **New constraint from ADR-237.** Setting `GIT_DATA_STORE_ENABLED` requires the pin present in `prd`
   **and** #5914 closed (the app's unpinned fallback arm deleted). The runbook's precondition list
   carries it.
+
+### 2026-09-22 (#8209): the custody goal gets a boundary — ADR-241's credential tiers
+
+[ADR-241](./ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md) decides the
+eviction this ADR deferred. Earlier entries are not rewritten; this entry records what changes in
+them.
+
+- **D2, "The custody goal is nominal today" — now carried by ADR-241's Tier-B boundary, not yet
+  discharged.** That clause said the separate root "does not protect against a repo-secret holder"
+  and named #8209 as the decision that would. ADR-241 D1–D2 is that decision: credentials are split
+  into a branch-reachable Tier A and a main-only Tier B, and a Tier-B credential is delivered only as
+  a GitHub environment secret on an environment whose deployment-branch policy admits `main` only.
+  `web-platform-infra-apply`, the environment this ADR's D2 already reuses, is one of the four Tier-B
+  environments, and ADR-241's census asserts its `main` policy from the Terraform sources on every
+  PR. What does **not** change: an environment is still a human gate, not the boundary — the
+  *branch policy* is the boundary, and ADR-241 D2 is explicit that it holds whether or not reviewers
+  are configured.
+- **D4, "Repo-secret reach (#8209)" — addressed, not closed.** That residual named two paths to the
+  root key: the repo secret and the R2 state object. ADR-241 D7 moves both. The repo secret
+  `DOPPLER_TOKEN_GIT_DATA_ROOT` becomes an **environment secret on `web-platform-infra-apply` under
+  the same name** at operator step O7 of the #8209 runbook, so `git-data-cutover.yml` needs no edit
+  (its `cutover` job already declares that environment, and an environment secret overrides a
+  repo secret of the same name); the Terraform-minted token and the repo secret are forgotten by
+  Terraform with `removed { … lifecycle { destroy = false } }` and then revoked out of band. The
+  state object moves to a second R2 bucket, `soleur-terraform-state-privileged`, read only by a
+  bucket-scoped Tier-B token — which **reverses D2.1 as amended on 2026-09-15**: that reversal put
+  the root-key state in the shared bucket because `CF_API_TOKEN_R2` is account-wide and no credential
+  can mint a bucket-scoped token (ADR-130). The token is still operator-minted; what changed is the
+  measurement that the `prd_terraform` `AWS_*` keys are **bucket-scoped**, so a bucket they are not
+  scoped to is genuinely out of reach. **This residual is not closed until ADR-241's residual R1
+  closes.** R1 is the soleur-ai *runtime* key in Doppler `prd`, readable by `DOPPLER_TOKEN_PRD` and
+  by every `prd_*` branch-config repo-secret token; the App holds `administration:write` on
+  `jikig-ai/soleur`, so a holder can rewrite the very deployment-branch policy the new boundary rests
+  on. Until R1 closes, the move stops a branch workflow from *naming* the secret; it does not stop a
+  `prd` repo-secret holder. R1 is filed at `priority/p1-high`, `type/security` and blocks #8211's
+  real cutover.
+- **D5 — the "D2–D3 credential and lifetime" row.** Its 2026-09-15 flip condition reads "#7226, #8209
+  and #8211 land". Restated with the #8209 limb made precise, the other two unchanged:
+
+  | Decision | Status | Flips to `accepted` when |
+  |---|---|---|
+  | D2–D3 credential and lifetime | `proposed` | #7226 (ADR-237 reaching `accepted`, per the 2026-09-21 entry) and #8211 land, **and** the #8209 limb is satisfied — which is not the merge of #8209's PR but ADR-241's own D2 reaching `accepted`, i.e. ADR-241 residual **R1** closed and **R7** closed at the runbook's state-key step. Merging #8209 alone leaves the boundary nominal against a `prd` repo-secret holder, which is the same gap this row was opened for. |
+
+  The D1a, D1b and D4 rows are unchanged.
+- **No change to the root's additive-only contract.** #8209 adds exactly one typed allowlist arm,
+  `8209_custody_forget`, admitting a forget of exactly the two custody addresses
+  (`github_actions_secret.doppler_token_git_data_root`, `doppler_service_token.git_data_root_read`)
+  and nothing else. It is one-shot: ADR-241's residual R6 deletes it once that forget has landed.
+  That is the D3 rule as written — any change is a reviewed PR with a typed arm — not an exception to
+  it.
+- **The backend becomes partial.** `git-data-root-key/main.tf` drops its literal `bucket`, so
+  `terraform init` takes `-backend-config=bucket=$BUCKET`: the privileged bucket when the credential
+  loader exported the `GIT_DATA_ROOT_STATE_*` pair (all-or-none; a half-set pair is refused), the
+  legacy bucket otherwise, and the legacy bucket **refused** once the repo variable
+  `GIT_DATA_ROOT_STATE_MIGRATED=1` is set. D2.2 still holds by placement: the nested root collapses
+  into its parent in `detect-changes`, so the PR `plan` job never initializes it and needs no backend
+  config. If the legacy fallback were ever taken after the old object is gone, `init` would yield an
+  empty state — and the existing `git_data_root_key_remint_refused` gate, keyed on the committed
+  fingerprint file, refuses that plan. A re-mint stays structurally unreachable.
+
+### 2026-09-23 (#8211, PR #8564): the store is served from LUKS at birth (ADR-239)
+
+[ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md) reverses ADR-068 D10: the git-data render
+always mounts `/dev/mapper/git-data` at `/mnt/git-data`. Earlier entries are not rewritten; this
+entry records what changes in them.
+
+- **D6 — there is no runtime repoint.** D6 and the 2026-09-15 amendment both assume the serving
+  device moves inside a cutover run, on the route D10 kept. That step does not exist and is not
+  being rebuilt: `user_data` is `ForceNew`, so a mount moved by a script does not survive the next
+  replace, and an in-place host config change is barred by
+  `hr-prod-host-config-change-immutable-redeploy`. **The serving change is the first
+  `git_data_host_replace` of the new render** — ADR-237's post-merge step 3 — applied while the
+  store is empty and `GIT_DATA_STORE_ENABLED` is off. Nothing in the cutover workflow moves a
+  device any more.
+- **D6 — the rotation is pending PR2.** The fresh replace immediately before the real cutover,
+  which rotates the `GIT_DATA_LUKS_KEY` and the LUKS volume (and, since ADR-237, the SSH host key),
+  is **pending PR2 of #8211** and is gated there on a recent `proof` run and on `served_repos=0`
+  re-asserted before the volume is replaced. PR1 builds none of it. Until that rotation runs,
+  `erased` on the Art. 17 path means **unlinked**: the blocks stay readable to a holder of the LUKS
+  key.
+- **Unchanged.** D1a, D1b, D2, D3, D4 and D5 are untouched. The access path, the dedicated root key
+  and the read credential are the same; ADR-239 changes what the host serves, not how CI reaches
+  root on it.

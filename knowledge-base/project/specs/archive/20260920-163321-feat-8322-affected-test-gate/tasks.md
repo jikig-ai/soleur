@@ -41,7 +41,7 @@ Spec: `knowledge-base/project/specs/feat-8322-affected-test-gate/spec.md`
 
 ## Phase 4 — ADR + disclosure
 
-- [x] 4.1 `knowledge-base/engineering/architecture/decisions/ADR-238-*.md` — default flip; amends ADR-181, ADR-133, ADR-183, ADR-196 (Decision 6's hook-hatch claim is false post-#8322); records the enumerate interpretation + token-edge deferral + dual-axis subsumption note. (ADR-227 was claimed by a sibling branch between plan and Phase 0; ADR-229 was claimed by #8301 mid-review — renumbered to ADR-230, then to ADR-233 after upstream claimed 230-232 mid-pipeline, then to ADR-234 when the next sync claimed 233, and to ADR-237 when the one after that claimed 234, and to ADR-238 when the post-merge sync claimed 237 — the #8301 ship-note precedent.)
+- [x] 4.1 `knowledge-base/engineering/architecture/decisions/ADR-240-*.md` — default flip; amends ADR-181, ADR-133, ADR-183, ADR-196 (Decision 6's hook-hatch claim is false post-#8322); records the enumerate interpretation + token-edge deferral + dual-axis subsumption note. (ADR-227 was claimed by a sibling branch between plan and Phase 0; ADR-229 was claimed by #8301 mid-review — renumbered to ADR-230, then to ADR-233 after upstream claimed 230-232 mid-pipeline, then to ADR-234 when the next sync claimed 233, and to ADR-237 when the one after that claimed 234, and to ADR-238 when the post-merge sync claimed 237, and to ADR-240 when the #8596 merge claimed 238 — the #8301 ship-note precedent.)
 - [x] 4.2 Disclosure sweep: `test-all.sh` header/`--help`, `ship` Phase 4, `work` §9 — affected+ratchets does not test suite×suite interaction; CI sharded full is the backstop; retired middle mode documented.
 
 ## Phase 5 — Verification

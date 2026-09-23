@@ -54,7 +54,7 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # falls back to half the max_tokens (measured 64000 → 32000 on #6934), so a
 # stale pin here degrades every cron that passes --model. This was skewed at
 # 2.1.79 vs package.json's 2.1.197 until #6934.
-RUN npm install -g @anthropic-ai/claude-code@2.1.219
+RUN npm install -g @anthropic-ai/claude-code@2.1.280
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
 # Global install (NOT a package.json dep) — same pattern as the line above —

@@ -21,10 +21,12 @@ empty-store window**. Two independent failures ended that premise:
 1. **The premise was retracted (#7071).** The host→GHCR edge is dead: the read PAT is revoked
    (`GET api.github.com/user` → 401) and the pull-token minter is disabled (403 DENIED). Nothing
    covers the window. It is a total pull outage until the store is refilled.
-2. **The operand went dark.** `registry_pull_event ghcr-fallback` is emitted in `ci-deploy.sh`
-   only inside the *success* branch of `_ghcr_pull_or_recover`, i.e. only after a **successful**
-   GHCR pull. With the credential revoked it can never fire, so the operand that most directly
-   measured "is the fallback healthy" is permanently zero.
+2. **The operand went dark.** `registry_pull_event ghcr-fallback` was emitted in `ci-deploy.sh`
+   only inside the *success* branch of the GHCR pull helper, i.e. only after a **successful**
+   GHCR pull. With the credential revoked it could never fire, so the operand that most directly
+   measured "is the fallback healthy" was permanently zero. *(Since #8036 1c, 2026-09-23, both
+   the helper and the emit site are deleted — see Named residual 3. The reasoning above is kept
+   as written because it is what the gate's change rests on; only its tense has moved.)*
 
 On 2026-07-30 the gate was changed to refuse unconditionally. That was correct at the time and
 wrong to leave standing: it made the recut unfireable during exactly the incident it exists to
@@ -240,6 +242,25 @@ the removal is not a regression on what this gate asserts. What changes is the r
    `local-cache`, with no `.tf` diff for a reviewer to catch). Tracked separately. The
    compensating control is the chained restore, which *bounds the very window the alert was
    supposed to page on*.
+
+   > **Resolved 2026-09-23 (#8036 item 1c). Dark → DELETED; the rule is narrowed, not retired.**
+   > `registry_pull_event ghcr-fallback` had no reachable success arm, so the residual above was
+   > "an operand that cannot fire". 1c deleted the GHCR leg of the pull path, which turns that
+   > into "an operand that cannot exist" — the emit site is gone from `ci-deploy.sh`. The
+   > `zot_mirror_fallback_rate` Sentry rule was NARROWED to its other four conditions rather than
+   > retired (the in-code `RETIREMENT TRIPWIRE (#6285)` gave that instruction and it was
+   > executed), and `zot-soak-6122.sh`'s `FAIL_QUERIES[rolling]` entry went with it, together
+   > with its runtime cardinality floor (5 → 4, in the same edit — moving one without the other
+   > is the defect that floor exists to catch). #7295, which tracked this residual, closes with
+   > that PR. The semantic split this paragraph declined to invert is untouched: `local-cache`
+   > still means what it meant, and it is now the only tier between a zot miss and
+   > `image_pull_failed` — **but it is a NARROW tier, and the window arithmetic must not budget
+   > it as general coverage.** `_try_local_cache_reload` opens `[[ "$image_kind" == "web" ]] ||
+   > return 1` and reuses the ALREADY-RUNNING image, so it rescues only a **same-version `web`
+   > redeploy**. It does not apply to the inngest deploy site (`pull_image_with_fallback
+   > inngest`) and it does not apply to any new-version deploy — which is every ordinary
+   > release. For those paths a zot miss has **zero** tiers and goes straight to
+   > `image_pull_failed`.
 4. **`registry-region-migrate` is an unguarded bypass to the same creates** (#6946): no confirm
    token, no id-pin, no live posture probe, no D10. An operator whose recut aborts can fire it
    instead. Wiring D10 there needs a posture probe and an id-pin it does not have — a materially
@@ -510,7 +531,15 @@ for one class of destroy, so the change is recorded here rather than only in ADR
 ### What changed
 
 `registry-host-replace` is `workflow_dispatch`-only and carries **no `environment:` reviewer gate
-and no typed `confirm` token** — verified against the job's own guard. So before #7555 the entire
+and no typed `confirm` token** — verified against the job's own guard.
+
+> **Superseded in part, 2026-09-22 (#8209, ADR-241 D2):** the job now declares
+> `environment: infra-privileged`. That is still **not a reviewer gate** — the environment has no
+> reviewers by design, because it serves unattended jobs — so the sentence above remains true of
+> the *human* authorization. What changed is the branch reach: the environment's deployment-branch
+> policy admits `main` only, so a dispatch from any other ref is refused before the job starts.
+
+ So before #7555 the entire
 human authorization for recreating the fleet's sole pull path was *an operator deliberately typed
 a dispatch*. Nothing in the repo fired it, which is why `apps/web-platform/infra/cloud-init-registry.yml`
 could merge and sit **inert** — the defect #7555 exists to remove.

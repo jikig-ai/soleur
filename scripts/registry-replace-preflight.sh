@@ -163,7 +163,9 @@ fi
 
 # ── P2 — ADVISORY ONLY. THIS MUST NEVER BECOME A GATE. ─────────────────────────────────────
 # `registry=ghcr-fallback` is emitted only INSIDE the success branch of a GHCR pull
-# (`if _ghcr_pull_or_recover "$perr"` in ci-deploy.sh). Per #7071 the host->GHCR read PAT is
+# (the GHCR fallback leg in ci-deploy.sh, DELETED by #8036 1c on 2026-09-23 — the surviving
+# helper is `_pull_with_transient_retry`, which is registry-neutral and serves zot). Per #7071
+# the host->GHCR read PAT is
 # revoked (401) and the minter is disabled (403 DENIED), so that branch CANNOT succeed and the
 # event CANNOT fire. A gate keyed on this operand reads CLEAN whether the fleet is healthy or the
 # fallback is destroyed — it is a dark operand, which is the exact defect class the D10 rewrite

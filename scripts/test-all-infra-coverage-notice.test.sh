@@ -224,7 +224,7 @@ echo "=== test-all.sh infra coverage-notice suite ==="echo "=== test-all.sh infr
 # --- THE CORE INVARIANT, over the full group x diff matrix ---------------------------------
 # The claim and the invocation must agree in EVERY cell. This is the assertion the defect
 # would have failed in three of them.
-for group in all webplat bun scripts infra; do
+for group in all webplat bun scripts scripts-heavy infra; do
   for in_diff in 1 0; do
     run_arm "$group" "$in_diff" 0 || continue
     claims_covered=0
@@ -237,10 +237,10 @@ for group in all webplat bun scripts infra; do
   done
 done
 
-# --- The three CI shards specifically, on an infra-touching diff ----------------------------
+# --- The four CI shards specifically, on an infra-touching diff ----------------------------
 # Named individually because these are the exact invocations ci.yml uses, and the defect was
 # invisible anywhere else.
-for group in webplat bun scripts; do
+for group in webplat bun scripts scripts-heavy; do
   run_arm "$group" 1 0 || continue
   if grep -q 'IS covered above' <<<"$ARM_OUT"; then
     fail "CI shard '$group' claims infra coverage it does not have"

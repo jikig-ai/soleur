@@ -12,12 +12,16 @@
 #       image:"inngest") — so a vacuous "zero fallbacks because nothing deployed" cannot
 #       close the tracker. Proof the flip was actually exercised.
 #
-# The five watched signals and their emitters (anchored on EMIT NAMES, not line numbers —
-# ADR-096 mandates this; line citations rot). FIVE emit functions across four files, in TWO
+# The FOUR watched signals and their emitters (anchored on EMIT NAMES, not line numbers —
+# ADR-096 mandates this; line citations rot). FOUR emit functions across four files, in TWO
 # schema families (feature/op-prefixed vs bare-stage) — that split is the whole reason the
-# queries differ:
-#   registry:"ghcr-fallback"       ci-deploy.sh  `registry_pull_event ghcr-fallback`
-#                                  jq tags: {feature, op, registry, image}
+# queries differ.
+#
+# A FIFTH, `registry:"ghcr-fallback"` (ci-deploy.sh `registry_pull_event ghcr-fallback`), was
+# removed by #8036 1c along with the host-side GHCR read path that emitted it. It had been
+# structurally dark since #7071 — ADR-169 Named residual 3, tracked as #7295 — because the
+# credential the fallback needed was revoked on 2026-07-29; 1c deleted the emitter, so the
+# signal moved from "cannot fire" to "cannot exist".
 #   registry:"zot-gate-degraded"   ci-deploy.sh  `zot_gate_degraded_event`
 #                                  jq tags: {feature, op, registry, zot_gate_reason}
 #   stage:"inngest_ghcr_fallback"  cloud-init.yml calls `soleur-boot-emit inngest_ghcr_fallback`
@@ -51,7 +55,7 @@
 # Proven live on the bare-vs-prefixed question: stage:"bootstrap_complete" → 9 events; the
 # same query prefixed with feature/op → 0. (Caveat, so the evidence is not over-read: that
 # beacon comes from a FOURTH emitter, `_sentry_emit` in soleur-host-bootstrap.sh, which emits
-# none of the five watched signals. It shares soleur-boot-emit's {stage,host_id,region} shape,
+# none of the four watched signals. It shares soleur-boot-emit's {stage,host_id,region} shape,
 # so it demonstrates the bare-vs-prefixed behaviour and covers [freshboot]'s schema; it does
 # NOT independently cover `_emit`'s {stage,image_ref,host_id,detail}, which [appboot] and
 # [appserved] ride. Both are pinned by the op-contract test's tag-key legs instead — see
@@ -79,9 +83,11 @@
 # inferring completeness from "+1 signal". ADR-096 has already had to publicly correct one
 # over-claim; do not author a second.
 #
-#   COVERED (the five FAIL_QUERIES below): rolling-deploy pull fallback; gate-degraded;
-#     inngest fresh-boot fallback; app fresh-boot fallback (post-probe-hit branch);
-#     app fresh-boot GHCR-served (#6462 — covers the probe-miss branch AND post-flip).
+#   COVERED (the four FAIL_QUERIES below): gate-degraded; inngest fresh-boot fallback; app
+#     fresh-boot fallback (post-probe-hit branch); app fresh-boot GHCR-served (#6462 — covers
+#     the probe-miss branch AND post-flip). The rolling-deploy pull fallback left this list
+#     with #8036 1c: the rolling deploy has no GHCR leg to fall back to, so the path it
+#     covered no longer exists rather than having gone unwatched.
 #   NOT COVERED 1/2 — Sentry-dark. ci-deploy.sh returns early when doppler, DOPPLER_TOKEN, or
 #     ZOT_REGISTRY_URL is absent, BEFORE every zot_gate_degraded_event call site: the fleet
 #     emits NOTHING to Sentry (journald only). Caught ONLY by the insufficient-sample arm
@@ -261,8 +267,12 @@ sentry_count() {
 # remediation differs: appboot = zot was attempted and the pull failed (chase the pull path);
 # appserved without appboot = the /v2/ probe missed and zot was never attempted (chase the
 # probe — #6416 / #6288). Collapsing them would erase that routing.
+# #8036 1c: `[rolling]` (registry:"ghcr-fallback") was dropped here AND the floor below moved
+# 5 -> 4 IN THE SAME EDIT. Dropping the operand without moving the floor is the exact defect the
+# floor exists to catch — it makes every sweep a permanent `exit 2` TRANSIENT — and moving the
+# floor without dropping the operand leaves the soak counting a signal nothing can emit.
+# ci-deploy.sh no longer has a GHCR leg, so `registry_pull_event ghcr-fallback` has no call site.
 declare -A FAIL_QUERIES=(
-  [rolling]='feature:supply-chain op:image-pull registry:"ghcr-fallback"'
   [gate]='feature:supply-chain op:image-pull registry:"zot-gate-degraded"'
   [freshboot]='stage:"inngest_ghcr_fallback"'
   [appboot]='stage:"app_ghcr_fallback"'
@@ -276,8 +286,8 @@ declare -A FAIL_QUERIES=(
 # abort a failed `declare`. Without this line the only thing between "the array is gone" and
 # "retire GHCR" is a CI test that parses source text — but CI parses while the sweeper
 # executes. Mirrors the same floor in scripts/followthrough-exec-bit.test.sh.
-if (( ${#FAIL_QUERIES[@]} != 5 )); then
-  echo "TRANSIENT: FAIL_QUERIES has ${#FAIL_QUERIES[@]} entries, expected 5 — refusing to report a verdict on a partial FAIL set." >&2
+if (( ${#FAIL_QUERIES[@]} != 4 )); then
+  echo "TRANSIENT: FAIL_QUERIES has ${#FAIL_QUERIES[@]} entries, expected 4 — refusing to report a verdict on a partial FAIL set." >&2
   exit 2
 fi
 
@@ -309,12 +319,14 @@ if [[ "$FALLBACKS" -gt 0 ]]; then
   # Per-signal counts, not just the total: the remediation differs by signal.
   # gate-degraded = zot was never ATTEMPTED (the gate degraded → fleet silently on GHCR;
   #   chase the mirror/network path — #6416 / #6288).
-  # ghcr-fallback = zot WAS attempted and the pull failed (chase the pull path).
+  # (The retired `ghcr-fallback` signal used to sit here — "zot WAS attempted and the pull
+  # failed". Post-#8036 1c that state is reported by IMAGE_PULL journald breadcrumbs and
+  # `image_pull_failed`, not by a Sentry fallback tag, because there is no fallback left.)
   # inngest_/app_ghcr_fallback = a fresh boot could not pull from zot.
   # app-served = a fresh boot was served by GHCR. Its DOMINANT route is a /v2/ probe-miss,
   # where the GHCR pull succeeds first try and app-freshboot stays 0 — so app-served > 0 with
   # app-freshboot == 0 means "chase the probe", not "chase the pull". See the FAIL_QUERIES note.
-  echo "FAIL: $FALLBACKS fallback event(s) since $START (rolling=${COUNTS[rolling]} gate-degraded=${COUNTS[gate]} inngest-freshboot=${COUNTS[freshboot]} app-freshboot=${COUNTS[appboot]} app-served=${COUNTS[appserved]}) — the fleet was served by GHCR. Investigate before retiring GHCR (do NOT proceed to 5.3-5.5)."
+  echo "FAIL: $FALLBACKS fallback event(s) since $START (gate-degraded=${COUNTS[gate]} inngest-freshboot=${COUNTS[freshboot]} app-freshboot=${COUNTS[appboot]} app-served=${COUNTS[appserved]}) — the fleet was served by GHCR. Investigate before retiring GHCR (do NOT proceed to 5.3-5.5)."
   exit 1
 fi
 

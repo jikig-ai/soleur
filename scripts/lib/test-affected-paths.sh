@@ -173,6 +173,9 @@ ALWAYS_ON_SUITES=(
   "scripts/skill-freshness-aggregate"
   "scripts/sweep-followthroughs"
   "scripts/tunnel-connector-census"
+  # #8563's Tier-B credential census — a repo-global property census over every
+  # workflow + Terraform tier declaration; no diff-scoped edge can reach it.
+  "tests/scripts/infra-privileged-tier-census"
   "scripts/verify-lockfile-guards"
   "scripts/verify-marketplace-ruleset"
   "scripts/cron-artifact-age"
