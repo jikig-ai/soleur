@@ -26,6 +26,7 @@ import {
   census,
   readIndex,
   readPopulation,
+  regionPolicyForPath,
   type CensusResult,
   type Index,
 } from "../lib/harness-parity";
@@ -36,6 +37,8 @@ const OWN_COMMAND_FILES = ":(glob)plugins/soleur/commands/*.md";
 /** Same, for the population half — NOT `POPULATION_GLOBS`, for the same reason. */
 const OWN_CODEX_SKILLS = ":(glob)plugins/soleur/codex/skills/*/SKILL.md";
 const OWN_DEVIN_SKILLS = ":(glob)plugins/soleur/devin/skills/*/SKILL.md";
+/** The references half of NG-P (#8317), added 2026-09-23. */
+const OWN_SKILL_REFERENCES = ":(glob)plugins/soleur/skills/*/references/**/*.md";
 
 function lsFiles(pathspec: string): string[] {
   return execFileSync("git", ["ls-files", "--full-name", "--", pathspec], { cwd: REPO_ROOT, encoding: "utf-8" })
@@ -87,13 +90,26 @@ describe("harness-parity tree census (Guard 3)", () => {
   // EXPECTED_SOLEUR_AGENT_COUNT; this is its counterpart, counted from THIS file's own literal
   // pathspecs rather than from POPULATION_GLOBS.
   test("the population is exactly the tracked doc set the globs name, minus the path exclusions", () => {
+    // THE ADMISSION PROOF. This is the only assertion that proves `readPopulation()`
+    // actually ENUMERATED the references docs; the policy assertions below exercise
+    // `regionPolicyForPath` (the regex) and never `gitLsFiles` (the enumeration), and
+    // two different engines interpret these pathspecs. Adding the glob to
+    // POPULATION_GLOBS without adding it here reds exactly here, by design.
+    const referenceDocs = lsFiles(OWN_SKILL_REFERENCES).filter((p) => !p.endsWith("/SKILL.md"));
     const expected =
       lsFiles(OWN_SKILL_DIRS).length +
       lsFiles(OWN_COMMAND_FILES).length +
       lsFiles(OWN_CODEX_SKILLS).length +
-      lsFiles(OWN_DEVIN_SKILLS).length -
+      lsFiles(OWN_DEVIN_SKILLS).length +
+      referenceDocs.length -
       EXCLUDED_BY_PATH.size;
     expect(expected).toBeGreaterThan(100);
+    // Per-source floors, not one union figure: a single total is dispatch-blind — it
+    // cannot name WHICH glob went empty and it tolerates a large partial loss. Measured
+    // 2026-09-23: skills 102, commands 3, codex 3, devin 3, references 115.
+    expect(lsFiles(OWN_SKILL_DIRS).length).toBeGreaterThanOrEqual(99);
+    expect(lsFiles(OWN_COMMAND_FILES).length).toBeGreaterThanOrEqual(2);
+    expect(referenceDocs.length).toBeGreaterThanOrEqual(110);
     expect(docs.length).toBe(expected);
     // Every excluded path must be one the globs would otherwise have admitted — an exclusion
     // naming a path outside the population is dead weight that reads as a deliberate carve-out.
@@ -102,6 +118,7 @@ describe("harness-parity tree census (Guard 3)", () => {
       ...lsFiles(OWN_COMMAND_FILES),
       ...lsFiles(OWN_CODEX_SKILLS),
       ...lsFiles(OWN_DEVIN_SKILLS),
+      ...referenceDocs,
     ]);
     expect([...EXCLUDED_BY_PATH.keys()].filter((p) => !admitted.has(p))).toEqual([]);
   });
@@ -122,8 +139,45 @@ describe("harness-parity tree census (Guard 3)", () => {
 
   test("the population is non-empty and carries no nested SKILL.md (N4, N12)", () => {
     expect(result.docsExamined).toBeGreaterThan(0);
-    expect(docs.map((d) => d.path).filter((p) => p.includes("/references/"))).toEqual([]);
+    // `/references/` docs ARE members since 2026-09-23 (#8317, the references half).
+    // What stays excluded is a SKILL.md NESTED under references/: the entry file is
+    // `skills/*/SKILL.md`, and a reference doc that happens to carry that basename is
+    // a sample, not a second entry point (N12).
+    expect(docs.map((d) => d.path).filter((p) => /\/references\/.*\/?SKILL\.md$/.test(p))).toEqual([]);
     expect(docs.map((d) => d.path)).not.toContain("plugins/soleur/commands/help.md");
+  });
+
+  // The REGEX proof, distinct from the admission proof above. It enumerates the
+  // references paths independently and resolves each through `regionPolicyForPath`,
+  // never through `doc.regionPolicy`: `readPopulation`'s `?? g.regionPolicy` fallback
+  // would restore the right answer in production and hide a `**` regression entirely.
+  test("every references doc resolves to the skill policy through regionPolicyForPath", () => {
+    const referenceDocs = lsFiles(OWN_SKILL_REFERENCES).filter((p) => !p.endsWith("/SKILL.md"));
+    expect(referenceDocs.length).toBeGreaterThanOrEqual(110);
+    const wrong = referenceDocs.filter((p) => regionPolicyForPath(p) !== "skill");
+    expect(
+      wrong,
+      `${wrong.length} references doc(s) resolve to no policy — globToRegex lost its ` +
+        `\`**\` handling, or the references glob left POPULATION_GLOBS. The census would ` +
+        `still report clean: readPopulation falls back to \`?? g.regionPolicy\`.`,
+    ).toEqual([]);
+
+    // Deepest paths exercise `**` specifically. Measured 2026-09-23: 25 `.md` files at
+    // depth 7 or 8 (13 and 12). A `**` that degraded to `[^/]+` resolves these to
+    // undefined while leaving the depth-6 ones green, so the assertion above alone
+    // would not name the regression.
+    const deep = referenceDocs.filter((p) => p.split("/").length >= 7);
+    expect(deep.length).toBeGreaterThanOrEqual(20);
+    expect(deep.filter((p) => regionPolicyForPath(p) !== "skill")).toEqual([]);
+
+    // The companion: the carve-out for a nested SKILL.md is scoped to the REFERENCES
+    // glob. Applied globally it would return undefined for every real skill entry file
+    // — invisible in production behind the same `??` fallback, and only the fixtures
+    // would red.
+    expect(regionPolicyForPath("plugins/soleur/skills/plan/SKILL.md")).toBe("skill");
+    expect(regionPolicyForPath("plugins/soleur/codex/skills/go/SKILL.md")).toBe("skill");
+    expect(regionPolicyForPath("plugins/soleur/devin/skills/go/SKILL.md")).toBe("skill");
+    expect(regionPolicyForPath("plugins/soleur/skills/plan/references/SKILL.md")).toBeUndefined();
   });
 
   test("no doc carries a malformed or unbalanced harness-forms marker", () => {
