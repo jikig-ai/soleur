@@ -52,7 +52,7 @@ import {
 } from "@/server/cron-liveness-marker";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
-import { AUDIT_MODEL } from "@/server/inngest/model-tiers";
+import { AUDIT_CLI_ARGS } from "@/server/inngest/model-tiers";
 
 // =============================================================================
 // Constants
@@ -72,13 +72,12 @@ export const MAX_TURN_DURATION_MS = 60 * 60 * 1000;
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8.
-// Uses AUDIT_MODEL (opus) for strong cross-layer reasoning over the
+// Uses AUDIT_CLI_ARGS (opus, high effort) for strong cross-layer reasoning over the
 // codebase architecture (routes, server functions, Inngest functions, DB
 // schema, infra Terraform, Soleur plugin skills) vs diagram DSL.
 const CLAUDE_CODE_FLAGS = [
   "--print",
-  "--model",
-  AUDIT_MODEL,
+  ...AUDIT_CLI_ARGS,
   "--max-turns",
   "60",
   "--allowedTools",

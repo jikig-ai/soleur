@@ -11,8 +11,19 @@
 //   EXECUTION_MODEL (sonnet) — the execution-class crons that do bounded,
 //     well-scoped automation (bug-fixer, triage, content, digests, etc.).
 //   AUDIT_MODEL (opus-5-5)   — the deep-audit crons that need stronger
-//     multi-step reasoning (agent-native-audit, competitive-analysis,
-//     growth-audit, legal-audit, ux-audit).
+//     multi-step reasoning (agent-native-audit, architecture-diagram-sync,
+//     competitive-analysis, growth-audit, legal-audit, ux-audit).
+//
+// Audit effort (#8603): the audit tier also pins reasoning effort. The pinned
+// CLI's bundled row for claude-opus-5-5 carries `default_effort: "medium"`
+// (Opus 5's was high), so leaving effort unset silently lowered audit depth at
+// the 5 → 5.5 swap. AUDIT_EFFORT = "high" restores it. The audit crons pass
+// model and effort together by spreading AUDIT_CLI_ARGS — never by naming
+// AUDIT_MODEL / AUDIT_EFFORT directly (model-tiers.test.ts Guard 1). Execution
+// crons deliberately pass no `--effort` and stay on the CLI default (ADR-053
+// amendment 2026-09-23). An unknown --effort VALUE is a silent fallback, not an
+// error: claude-cli-pin-knows-models.test.ts probes the pinned CLI with this
+// exact tuple.
 //
 // PURE SSOT EXTRACTION (as of #5106) — that PR changed no model assignment;
 // every cron kept the model it had. Same-tier re-pins land here since. Per ADR-053, re-tiering a cron (e.g. moving an
@@ -44,3 +55,23 @@ export const EXECUTION_MODEL = SONNET_MODEL;
 
 /** Deep-audit crons run on opus-5-5. Pinned exactly; re-tiering is out of scope (ADR-053). */
 export const AUDIT_MODEL = "claude-opus-5-5" as const;
+
+/**
+ * Reasoning effort for the audit tier. The CLI default for claude-opus-5-5 is
+ * `medium`; the audit crons are the deep multi-step judgment workloads that
+ * justify the opus tier, so they run at `high`. Re-decide at each model launch
+ * against the new row's `default_effort` (model-launch-review SKILL.md row 3).
+ */
+export const AUDIT_EFFORT = "high" as const;
+
+/**
+ * The ONLY place the audit model and effort are paired. Audit crons spread this
+ * into their CLAUDE_CODE_FLAGS before the `"--"` end-of-options marker (a flag
+ * after it becomes prompt text, #4017).
+ */
+export const AUDIT_CLI_ARGS = [
+  "--model",
+  AUDIT_MODEL,
+  "--effort",
+  AUDIT_EFFORT,
+] as const;
