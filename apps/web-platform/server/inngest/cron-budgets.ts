@@ -41,3 +41,9 @@ export function budgetFlags(site: string): string[] {
   if (usd === undefined) throw new Error(`cron-budgets: no budget for "${site}"`);
   return ["--max-budget-usd", String(usd)];
 }
+
+// Manual-fire bound (#8611 Fix 3): every `soleur:trigger-cron` fire is a new run with a fresh
+// per-run cap, which is how the 2026-09-19/20 extra runs happened. At most 2 starts per function
+// per hour; Inngest queues (does not drop) the excess. Verified honored by the pinned self-hosted
+// server in the #8611 streaming spike (2 ran, 2 queued). Spread into every spawn site's config.
+export const CLAUDE_EVAL_THROTTLE = Object.freeze({ limit: 2, period: "1h" } as const);

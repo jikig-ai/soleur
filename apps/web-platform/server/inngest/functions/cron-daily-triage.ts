@@ -52,7 +52,7 @@ import {
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { sweepableRunReports } from "./_cron-run-reports";
-import { budgetFlags } from "@/server/inngest/cron-budgets";
+import { budgetFlags, CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
 // 86-140, with one diff at step 3d: prompt enforces IDEMPOTENT search-before-
@@ -301,6 +301,7 @@ export const cronDailyTriage = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 4 * * *" },

@@ -52,7 +52,7 @@ import { inngest } from "@/server/inngest/client";
 import { getPluginPath } from "@/server/plugin-path";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { AUDIT_MODEL } from "@/server/inngest/model-tiers";
-import { budgetFlags } from "@/server/inngest/cron-budgets";
+import { budgetFlags, CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
 // Constants
@@ -529,6 +529,7 @@ export const cronUxAudit = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 9 1 * *" },

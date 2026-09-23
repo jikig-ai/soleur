@@ -72,7 +72,7 @@ import { inngest } from "@/server/inngest/client";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
-import { budgetFlags } from "@/server/inngest/cron-budgets";
+import { budgetFlags, CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
 // Constants
@@ -891,6 +891,7 @@ export const cronBugFixer = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [{ cron: "0 6 * * *" }, { event: "cron/bug-fixer.manual-trigger" }],
   cronBugFixerHandler as unknown as Parameters<typeof inngest.createFunction>[2],

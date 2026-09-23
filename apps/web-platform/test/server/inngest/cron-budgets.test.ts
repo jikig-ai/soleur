@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { CLAUDE_BUDGET_USD, budgetFlags } from "@/server/inngest/cron-budgets";
+import { CLAUDE_BUDGET_USD, CLAUDE_EVAL_THROTTLE, budgetFlags } from "@/server/inngest/cron-budgets";
 
 const FN_DIR = join(__dirname, "../../../server/inngest/functions");
 const SUBSTRATE = "_cron-claude-eval-substrate.ts";
@@ -43,6 +43,16 @@ describe("cron budgets — #8611", () => {
       const src = readFileSync(join(FN_DIR, `${site}.ts`), "utf8");
       // Anchored on the call shape with the site's own key: a copy-pasted sibling key must red.
       expect(src, site).toMatch(new RegExp(`\\.\\.\\.budgetFlags\\(\\s*"${site}"\\s*\\)`));
+    }
+  });
+
+  it("every spawn site's createFunction config carries the shared manual-fire throttle", () => {
+    expect(CLAUDE_EVAL_THROTTLE).toEqual({ limit: 2, period: "1h" });
+    for (const site of spawnSites()) {
+      const src = readFileSync(join(FN_DIR, `${site}.ts`), "utf8");
+      // Scoped to the registration's config object, so a throttle mentioned elsewhere cannot satisfy it.
+      const config = src.slice(src.indexOf("inngest.createFunction(")).split(/\n\s*\},?\n/)[0];
+      expect(config, site).toMatch(/\bthrottle:\s*\{\s*\.\.\.CLAUDE_EVAL_THROTTLE\s*\}/);
     }
   });
 
