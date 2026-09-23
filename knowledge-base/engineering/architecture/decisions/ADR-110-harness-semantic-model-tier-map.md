@@ -56,9 +56,9 @@ Workflow pins (`workflow-model-pins.test.ts`) migrate only `cheap` / `standard` 
 
 Live Grok SKUs confirmed at `/work` against docs.x.ai Text API catalog and `grok models` on CLI 1.0.29. CLI spawn slugs are only `grok-4.6` (default) and `grok-4.5`. Status flipped Proposed → Accepted in the same PR that ships `harness-model-map.ts`.
 
-## Addendum — 2026-09-23 (Grok 4.7 launch)
+## Addendum — 2026-09-23 (Grok 4.7 launch, #8601)
 
-xAI released Grok 4.7 (`grok-4.7`) on 2026-09-21. Live `grok models` on CLI 1.0.40 (run 2026-09-23) lists `grok-4.7` (default), `grok-4.7-build-fast`, `grok-4.6`, `grok-4.5`. The list is server-fetched (`~/.grok/models_cache.json` carries `etag`/`fetched_at` from `cli-chat-proxy.grok.com/v1/models`), so older CLIs resolve `grok-4.7` too. `standard`/`strong`/`advisor` move to `grok-4.7`; `cheap` stays `grok-4.5`.
+xAI released Grok 4.7 (`grok-4.7`) on 2026-09-21. Live `grok models` on CLI 1.0.40 (run 2026-09-23) lists `grok-4.7` (default), `grok-4.7-build-fast`, `grok-4.6`, `grok-4.5`. The list is server-fetched (`~/.grok/models_cache.json` carries `etag`/`fetched_at` from `cli-chat-proxy.grok.com/v1/models`), so older CLIs should list `grok-4.7` too (inferred from the server-fetched list; not run on an older CLI). `standard`/`strong`/`advisor` move to `grok-4.7`; `cheap` stays `grok-4.5`.
 
 docs.x.ai model catalog, per MTok (input / cached input / output, under 200k tokens; above 200k each doubles):
 

@@ -61,10 +61,7 @@ describe("harness-model-map (ADR-110)", () => {
   });
 
   test("grok fixture map uses live CLI spawn slugs", () => {
-    // cheap is grok-4.5 — the lowest cached-input rate among the slugs
-    // `grok models` lists (grok-4.7-build-fast bills 2x). grok-build-0.1 is an
-    // xAI API SKU (docs.x.ai Text API), NOT a Grok Build CLI spawn slug; do not
-    // pin it here. Evidence: ADR-110 addendum 2026-09-23.
+    // cheap ≠ grok-build-0.1 (API SKU, not a CLI slug). Rationale: ADR-110 addendum 2026-09-23.
     expect(resolveModelTier("cheap", "grok")).toBe("grok-4.5");
     expect(resolveModelTier("standard", "grok")).toBe("grok-4.7");
     expect(resolveModelTier("strong", "grok")).toBe("grok-4.7");
@@ -167,14 +164,6 @@ describe("workflow inline resolver is a copy of TIER_MAPS (no import in workflow
     const fence = extractFence(
       readFileSync(join(SKILLS_DIR, PINNED_WORKFLOWS[0]), "utf-8"),
     );
-    expect(fence).toContain(`cheap: '${TIER_MAPS.claude.cheap}'`);
-    expect(fence).toContain(`standard: '${TIER_MAPS.claude.standard}'`);
-    expect(fence).toContain(`strong: '${TIER_MAPS.claude.strong}'`);
-    expect(fence).toContain(`advisor: '${TIER_MAPS.claude.advisor}'`);
-    expect(fence).toContain(`cheap: '${TIER_MAPS.grok.cheap}'`);
-    expect(fence).toContain(`standard: '${TIER_MAPS.grok.standard}'`);
-    expect(fence).toContain(`strong: '${TIER_MAPS.grok.strong}'`);
-    expect(fence).toContain(`advisor: '${TIER_MAPS.grok.advisor}'`);
     const litRe =
       /\{ cheap: '([^']+)', standard: '([^']+)', strong: '([^']+)', advisor: '([^']+)', inherit: '([^']+)' \}/g;
     const lits = [...fence.matchAll(litRe)];
@@ -205,17 +194,89 @@ describe("workflow inline resolver is a copy of TIER_MAPS (no import in workflow
     expect(src).not.toContain(MAP_FENCE_START);
   });
 
-  test("workflow discovery still finds the seven pin files", () => {
-    const found: string[] = [];
+  test("the set of fenced workflows equals PINNED_WORKFLOWS (no unlisted or dropped fence)", () => {
+    // Membership, not presence: a new workflow carrying a stale fence, or a
+    // PINNED_WORKFLOWS entry removed while its fence stays, must red.
+    const fenced: string[] = [];
+    let scanned = 0;
     for (const skill of readdirSync(SKILLS_DIR)) {
       const wfDir = join(SKILLS_DIR, skill, "workflows");
       if (!existsSync(wfDir)) continue;
       for (const f of readdirSync(wfDir)) {
-        if (f.endsWith(".workflow.js")) found.push(`${skill}/workflows/${f}`);
+        if (!f.endsWith(".workflow.js")) continue;
+        scanned++;
+        const rel = `${skill}/workflows/${f}`;
+        if (readFileSync(join(SKILLS_DIR, rel), "utf-8").includes(MAP_FENCE_START)) {
+          fenced.push(rel);
+        }
       }
     }
+    expect(scanned).toBeGreaterThan(PINNED_WORKFLOWS.length); // exemptions exist (agent-native-audit)
+    expect(fenced.sort()).toEqual([...PINNED_WORKFLOWS].sort());
+  });
+
+  test("the inlined fence EXECUTES like resolveModelTier(detectHarness(env)) and rewrites opts.model", () => {
+    // The fence re-implements harness detection and wraps the host `agent`;
+    // text equality cannot see an inverted map choice, a dropped marker, or a
+    // disabled wrapper. Run it.
+    console.warn = () => {};
+    const envCases: Array<Record<string, string>> = [
+      {},
+      { CLAUDECODE: "1" },
+      { GROK_HOME: "/h/.grok" },
+      { GROK_AGENT: "1" },
+      { GROK_DEFAULT_MODEL: "grok-4.7" },
+      { GROK_SUBAGENTS: "1" },
+      { CLAUDECODE: "1", GROK_HOME: "/h/.grok" },
+      { CODEX_THREAD_ID: "t" },
+    ];
+    let checked = 0;
     for (const rel of PINNED_WORKFLOWS) {
-      expect(found).toContain(rel);
+      const src = readFileSync(join(SKILLS_DIR, rel), "utf-8");
+      const start = src.indexOf(MAP_FENCE_START);
+      const end = src.indexOf(MAP_FENCE_END);
+      const body = src.slice(src.lastIndexOf("\n", start) + 1, end);
+      for (const e of envCases) {
+        const seen: unknown[] = [];
+        const host = (_p: unknown, opts: { model?: string }) => {
+          seen.push(opts?.model);
+          return null;
+        };
+        const load = new Function(
+          "process",
+          "agent",
+          `${body}\nreturn { resolveWorkflowModel, agent };`,
+        ) as (proc: unknown, a: unknown) => {
+          resolveWorkflowModel: (t: string) => string;
+          agent: (p: unknown, o: { model?: string }) => unknown;
+        };
+        const fence = load({ env: { ...e } }, host);
+        const harness = detectHarness(env(e));
+        for (const tier of SEMANTIC_TIERS) {
+          const want = resolveModelTier(tier, harness);
+          expect(fence.resolveWorkflowModel(tier), `${rel} ${JSON.stringify(e)} ${tier}`).toBe(want);
+          fence.agent("p", { model: tier });
+          expect(seen.at(-1), `${rel} wrapper ${JSON.stringify(e)} ${tier}`).toBe(want);
+          checked++;
+        }
+      }
     }
+    expect(checked).toBe(PINNED_WORKFLOWS.length * envCases.length * SEMANTIC_TIERS.length);
+  });
+
+  test("every model: literal in a pinned workflow is a semantic tier, never a vendor SKU", () => {
+    const tiers = new Set<string>(SEMANTIC_TIERS);
+    let literals = 0;
+    for (const rel of PINNED_WORKFLOWS) {
+      const src = readFileSync(join(SKILLS_DIR, rel), "utf-8");
+      const outside =
+        src.slice(0, src.indexOf(MAP_FENCE_START)) +
+        src.slice(src.indexOf(MAP_FENCE_END) + MAP_FENCE_END.length);
+      for (const m of outside.matchAll(/\bmodel:\s*'([^']+)'/g)) {
+        literals++;
+        expect(tiers.has(m[1]), `${rel}: model '${m[1]}' is not a semantic tier`).toBe(true);
+      }
+    }
+    expect(literals).toBeGreaterThan(0);
   });
 });

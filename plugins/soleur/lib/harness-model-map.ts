@@ -5,11 +5,9 @@
  * `strong`, `advisor`, `inherit`), never a vendor SKU. This module is the
  * single table to bump when Anthropic or xAI rename a generation.
  *
- * Grok SKUs confirmed 2026-09-23 (docs.x.ai catalog + `grok models` on CLI
- * 1.0.40) — evidence in the ADR-110 addendum 2026-09-23.
- * cheap = grok-4.5: same $2/$6 list price as grok-4.7, lowest cached-input rate
- * ($0.30) among CLI slugs; grok-4.7-build-fast bills 2x; grok-build-0.1 is an
- * API SKU, not a CLI slug.
+ * Grok SKUs confirmed 2026-09-23 (docs.x.ai + `grok models` on CLI 1.0.40).
+ * Slug choice and prices: ADR-110 addendum 2026-09-23. grok-build-0.1 is an
+ * API SKU, not a CLI slug — never pin it.
  *
  * Workflow runtime has no import/filesystem. Each pinned `*.workflow.js` inlines
  * a copy of TIER_MAPS behind `<!-- harness-model-map:start/end -->`; 
