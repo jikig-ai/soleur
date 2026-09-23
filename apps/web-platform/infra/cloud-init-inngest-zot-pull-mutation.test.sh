@@ -107,8 +107,26 @@ _pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTI
   git config commit.gpgsign false
   git add -A
   git commit -qm "sandbox baseline"
-  git config tag.gpgSign false
-  git tag -a -m "sandbox pin fixture" "vinngest-$_pin_tag"
+  # A LOOSE REF, not `git tag` (#8539). Guard A reads this fixture with `git tag --list
+  # 'vinngest-v*'`, which is a READ and sees a loose ref exactly as it sees an annotated tag —
+  # so the fixture never needed a tag-AUTHORING verb. Writing the ref keeps this battery out of
+  # `scripts/battery-tag-authorship.test.sh`'s offender set without spending one of that
+  # ledger's 12 exemption slots (ADR-207 §5: a ceiling raised to make a run green is not a
+  # ceiling). The ref is inside $SANDBOX_ROOT/.git, which this suite created; nothing here can
+  # reach the live repo's refs/tags.
+  #
+  # DECLARED, not silently exploited (review). A direct write to `.git/refs/tags/` is that
+  # guard's OWN under-approximation #7 — "authors a tag carrying no `git` token at all" — so
+  # this route is invisible to it by the guard's own admission, and it was taken on the day that
+  # ledger hit its ceiling (12 <= 12). Two facts keep it honest rather than an evasion: the
+  # write is confined to a sandbox this suite builds, and the LIGHTWEIGHT ref is behaviourally
+  # identical to the annotated tag it replaced for every operation the code under test performs
+  # (`git tag --list`, `rev-parse <tag>^{commit}`, `show <tag>:<path>` — all verified). It
+  # DIVERGES on `rev-parse <tag>` bare, `cat-file -t`, `for-each-ref %(objecttype)` and
+  # `describe` without `--tags`; if Guard A ever grows a row touching tag-object identity, this
+  # fixture will pass where production fails, and nothing here would notice.
+  mkdir -p .git/refs/tags
+  git rev-parse HEAD > ".git/refs/tags/vinngest-$_pin_tag"
 ) > "$WORK/gitfixture.log" 2>&1 || { cat "$WORK/gitfixture.log" >&2; die "could not build the sandbox git fixture for Guard A"; }
 # Assert the exclusion actually held. A tar --exclude whose pattern stops matching (a leading
 # `./` dropped, say) silently reinstates 162 MB per case, and the only symptom is a battery
@@ -441,6 +459,227 @@ if [[ "$G1_PROBE_RC" -eq 2 ]]; then
   PASS=$((PASS + 1)); echo "  KILLED:   g1-row13-harness-probe — an unlanded mutation ABORTS (rc=2)"
 else
   FAIL=$((FAIL + 1)); echo "  SURVIVED: g1-row13-harness-probe — an unlanded mutation did not abort (rc=$G1_PROBE_RC)"
+fi
+
+# =======================================================================================
+# #8539 NIC-G1 rows: the private-NIC fallback is present, reloaded, and gates the zot login.
+# Rows 1-11 are the plan's Guard 1 mutation matrix (the plan's "Guard 1"; the suite section is
+# named NIC-G1 because this battery already has a Guard 1). Each names the NIC-G1 assertion it
+# must red; a row that reds on something else is MISROUTED, not killed. Order is checked by the
+# guard on parsed runcmd LIST positions of the RENDER, so every SRC mutation below reaches the
+# guard through terraform's own templatefile + strip — the path the bytes take to the host.
+# =======================================================================================
+# Shared mutator prelude. Every anchor is asserted to occur EXACTLY once, so a mutator whose
+# anchor drifted fails loudly (and case_mutate turns that into a HARNESS ABORT) instead of
+# no-opping.
+NG1_PY='
+import re,sys
+p=sys.argv[1]; s=open(p).read()
+CALL="  - /usr/local/bin/soleur-inngest-nic-wait ${inngest_private_ip} || true\n"
+RELOAD="  - networkctl reload || /usr/local/bin/inngest-boot-phone-home.sh private_nic_reload_failed \"rc=$?\"\n"
+def once(a, t=None):
+    t = s if t is None else t
+    assert t.count(a)==1, "anchor not found exactly once: %r" % a
+def rep(a, b):
+    once(a); return s.replace(a, b, 1)
+def item_end(t, pos):
+    first = t.index("\n", pos) + 1
+    for m in re.finditer(r"^.*$", t[first:], re.M):
+        if re.match(r"^(  - |  #|\S)", m.group(0)):
+            return first + m.start()
+    raise AssertionError("runcmd item end not found")
+def save(t): open(p,"w").write(t)
+'
+# Row 1: move the NIC-wait call to AFTER the zot-login item (the item that follows it).
+NG1_ROW1_MUT="$NG1_PY"'
+once(CALL)
+i=s.index(CALL); t=s[:i]+s[i+len(CALL):]
+m=re.compile(r"^  - ", re.M).search(t, i)
+assert m, "item after the call not found"
+e=item_end(t, m.start())
+assert "docker login \"$ZOT_EP\"" in t[m.start():e], "the item after the call is not the zot login"
+save(t[:e]+CALL+t[e:])
+'
+case_mutate ng1-row1-call-after-zot-login "NIC-G1 row1:" "$SRC" "$NG1_ROW1_MUT"
+# Row 2: REORDER (not delete) the reload to after the call.
+case_mutate ng1-row2-reload-after-call "NIC-G1 row2:" "$SRC" "$NG1_PY"'
+once(CALL); t=rep(RELOAD, "")
+save(t.replace(CALL, CALL+RELOAD, 1))
+'
+# Row 3: delete the reload.
+case_mutate ng1-row3-reload-deleted "NIC-G1 row3:" "$SRC" "$NG1_PY"'
+save(rep(RELOAD, ""))
+'
+# Row 4: keep the compliant call and add a SECOND call later in runcmd.
+case_mutate ng1-row4-second-call-later "NIC-G1 row4: runcmd carries exactly ONE" "$SRC" "$NG1_PY"'
+once(CALL)
+a="  - groupadd -f deploy\n"
+save(rep(a, a+CALL))
+'
+# Row 5: the literal at the call site. The render is IDENTICAL (the stub binds 10.0.1.40), which
+# is exactly why this row reads the source raw.
+case_mutate ng1-row5-literal-at-call-site "NIC-G1 row5: the one NIC-wait call site" "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - /usr/local/bin/soleur-inngest-nic-wait 10.0.1.40 || true\n"))
+'
+# Row 6 (both variants the matrix names): widen the match scope.
+case_mutate ng1-row6a-driver-to-type-ether "NIC-G1 row6:" "$SRC" "$NG1_PY"'
+save(rep("      Driver=virtio_net\n", "      Type=ether\n"))
+'
+case_mutate ng1-row6b-name-loses-negation "NIC-G1 row6:" "$SRC" "$NG1_PY"'
+save(rep("      Name=!eth0\n", "      Name=eth0\n"))
+'
+# Row 7: a name that sorts BEFORE netplan's 10-netplan-* would win over the good case.
+case_mutate ng1-row7-sorts-before-netplan "NIC-G1 row7:" "$SRC" "$NG1_PY"'
+save(rep("  - path: /etc/systemd/network/99-soleur-private-fallback.network\n",
+         "  - path: /etc/systemd/network/05-soleur-private-fallback.network\n"))
+'
+# Row 8: the derived set. A new private-net action ahead of the call.
+case_mutate ng1-row8-curl-registry-before-call "NIC-G1 row8:" "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - curl -fsS --max-time 5 http://10.0.1.30:5000/v2/ || true\n"+CALL))
+'
+# Row 9: the guard'"'"'s OWN dispatch renders an empty runcmd. "0 items checked" must red.
+case_mutate ng1-row9-empty-runcmd "NIC-G1 anti-vacuity: " "$GUARD" "$NG1_PY"'
+a="  bash \"$SCRIPT_DIR/inngest-userdata-budget.sh\" \"$NG1_RENDER\" > \"$NG1_DIR/budget.log\" 2>&1 || true\n"
+save(rep(a, a+"  echo \"runcmd: []\" > \"$NG1_RENDER\"\n"))
+'
+# Row 10: the binding in the real root. The budget render uses its own stub map and cannot see
+# this, so the guard reads inngest-host.tf raw.
+case_mutate ng1-row10-binding-to-registry-ip "NIC-G1 row10:" "inngest-host.tf" "$NG1_PY"'
+save(rep("    inngest_private_ip   = local.inngest_private_ip\n",
+         "    inngest_private_ip   = local.registry_private_ip\n"))
+'
+# Row 11: byte-equality. Dropping UseMTU=yes leaves a well-formed file that silently runs the
+# private link at 1500 on Hetzner'"'"'s 1450 net.
+case_mutate ng1-row11-usemtu-dropped "NIC-G1 row11:" "$SRC" "$NG1_PY"'
+save(rep("      UseMTU=yes\n", ""))
+'
+
+# --- NIC-G1 must-PASS inputs: non-canonical files the guard must stay GREEN on --------------
+# A guard that reds on these is over-fitted to the canonical bytes; one that is never run on
+# them could be. Same landed-diff discipline as case_mutate; a HELD row requires rc=0.
+case_must_pass() {
+  local id="$1" target="$2" mutator="$3"
+  TOTAL=$((TOTAL + 1))
+  local dir="$WORK/case-$id"
+  rm -rf "$dir"
+  cp -a "$SANDBOX_ROOT" "$dir" || die "case $id: could not copy sandbox"
+  local tgt="$dir/$INFRA_REL/$target"
+  [[ -f "$tgt" ]] || die "case $id: target $target is not in the sandbox"
+  local before="$WORK/case-$id.before"
+  cp "$tgt" "$before" || die "case $id: could not back up $target"
+  python3 -c "$mutator" "$tgt" || die "case $id: must-PASS edit failed to apply — this case tested NOTHING"
+  diff -q "$before" "$tgt" >/dev/null 2>&1 && die "case $id: must-PASS edit did not change $target — this case tested NOTHING"
+  local log="$WORK/case-$id.log"
+  local rc; rc="$(run_guard "$dir/$INFRA_REL" "$log")"
+  if [[ "$rc" != "0" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  BROKE:    $id — a non-canonical but COMPLIANT input went RED (rc=$rc); the guard is over-fitted:"
+    grep -E '^  FAIL' "$log" | head -5 | sed 's/^/               /'
+    return
+  fi
+  PASS=$((PASS + 1))
+  echo "  HELD:     $id — compliant non-canonical input stays GREEN"
+}
+# POSITIVE CONTROL for case_must_pass itself. Both must-PASS rows below reported HELD
+# unconditionally at review: the helper owns its own verdict, so neutering it is invisible to
+# TOTAL, to PASS/FAIL conservation and to BATTERY_MIN_ROWS alike. These rows are the only ones
+# asserting the guard is not OVER-fitted, so an unbacked HELD is the whole over-fit axis going
+# dark. Drive it with an input that MUST red the guard and require it to say BROKE.
+_mp_f=$FAIL
+case_must_pass ng1-harness-mustpass-can-report-broke "$SRC" "$NG1_PY"'
+save(rep(RELOAD, ""))
+' >/dev/null
+if [[ "$FAIL" -ne $((_mp_f + 1)) ]]; then
+  printf '[FATAL] harness: case_must_pass did not flag an input that reds the guard — every HELD above is unbacked\n' >&2
+  exit 1
+fi
+FAIL=$_mp_f; TOTAL=$((TOTAL - 1))
+echo "  HARNESS:  case_must_pass can report BROKE (positive control)"
+
+# (i) Two unrelated runcmd items reordered ahead of the call, and blank lines inserted.
+case_must_pass ng1-mustpass-reordered-and-blank-lines "$SRC" "$NG1_PY"'
+once(CALL); once(RELOAD)
+g="  - groupadd -f docker\n  - groupadd -f deploy\n"
+t=rep(g, "")
+t=t.replace(CALL, "\n\n"+g+"\n"+CALL+"\n", 1).replace(RELOAD, RELOAD+"\n\n", 1)
+save(t)
+'
+# --- NIC-G1 escapes: real private-net uses the pre-review derivation scored as NOT-a-use ------
+# Each of these was measured GREEN against the pristine guard at review. They are must-RED rows,
+# not mutations of the guard: the guard was working exactly as written, and its predicate was
+# narrower than the property its name claims. A mutation battery structurally cannot find these.
+case_mutate ng1-escape-absolute-path-curl "NIC-G1 row8:" "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - /usr/bin/curl -sf http://10.0.1.30:5000/v2/ || true\n"+CALL))
+'
+case_mutate ng1-escape-wget "NIC-G1 row8:" "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - wget -qO- http://10.0.1.30:5000/v2/ || true\n"+CALL))
+'
+case_mutate ng1-escape-variable-target "NIC-G1 row8:" "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - curl -sf \"$ZOT_EP/v2/\" || true\n"+CALL))
+'
+case_mutate ng1-escape-networkd-shadow-in-run "NIC-G1 row7b:" "$SRC" "$NG1_PY"'
+w="  - path: /run/systemd/network/00-hijack.network\n    content: |\n      [Match]\n      Driver=virtio_net\n\n      [Network]\n      DHCP=no\n    owner: root:root\n    permissions: \x27\x27\x270644\x27\x27\x27\n"
+save(rep(CALL, CALL).replace("write_files:\n", "write_files:\n"+w, 1))
+'
+# must-PASS: the GHCR login with its flags reordered. This form was a FALSE RED before review --
+# docker_target returned the -u flag VALUE, so a public login scored as a private-net use and an
+# unrelated edit would have reddened rows 1 and 8.
+case_must_pass ng1-mustpass-ghcr-login-flags-first "$SRC" "$NG1_PY"'
+a="docker login ghcr.io -u \"$GHCR_READ_USER\" --password-stdin"
+b="docker login -u \"$GHCR_READ_USER\" --password-stdin ghcr.io"
+save(rep(a, b))
+'
+
+# (ii) A config WRITE that names the endpoint, ahead of the call. The canonical file already
+# carries two (the ZOT_EP daemon.json write and the soleur-zot-read creds bake; the baseline and
+# the guard'"'"'s own must-PASS count cover them); this adds a third of the same class.
+case_must_pass ng1-mustpass-endpoint-config-write-before-call "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - echo \"ZOT_EP=${zot_registry_endpoint}\" > /etc/default/soleur-zot-ep\n"+CALL))
+'
+
+# --- NIC-G1 harness row: neuter the ORDER comparison; the battery must notice ------------
+# Make row 1's comparison compare a list position to itself. The neutered guard is still green on
+# the unmutated tree, so only the mutation rows can see it — and row 1 must then come back NOT
+# killed. If it still reports KILLED, the battery's row-1 verdict does not depend on the
+# comparison it claims to test.
+NG1_HARN_ROOT="$WORK/harness-ng1-root"
+rm -rf "$NG1_HARN_ROOT"
+cp -a "$SANDBOX_ROOT" "$NG1_HARN_ROOT" || die "NIC-G1 harness: could not copy sandbox"
+NG1_HARN_GUARD="$NG1_HARN_ROOT/$INFRA_REL/$GUARD"
+cp "$NG1_HARN_GUARD" "$WORK/harness-ng1.before" || die "NIC-G1 harness: could not back up the guard"
+python3 -c '
+import sys
+p=sys.argv[1]; s=open(p).read()
+old="\"(( NG1_CALL_POS >= 0 && NG1_CALL_POS + 1 == NG1_FIRST_USE_POS ))\""
+new="\"(( NG1_CALL_POS >= 0 && NG1_FIRST_USE_POS == NG1_FIRST_USE_POS ))\""
+assert s.count(old)==1, "row-1 order comparison not found exactly once"
+open(p,"w").write(s.replace(old,new,1))
+' "$NG1_HARN_GUARD" || die "NIC-G1 harness: the order-comparison neuter did not apply — the harness row tested NOTHING"
+diff -q "$WORK/harness-ng1.before" "$NG1_HARN_GUARD" >/dev/null 2>&1 \
+  && die "NIC-G1 harness: the neuter did not change the guard — the harness row tested NOTHING"
+NG1_HARN_BASE_RC="$(run_guard "$NG1_HARN_ROOT/$INFRA_REL" "$WORK/harness-ng1-base.log")"
+[[ "$NG1_HARN_BASE_RC" == "0" ]] \
+  || die "NIC-G1 harness: the neutered guard is not green on the UNMUTATED tree (rc=$NG1_HARN_BASE_RC) — the row would be meaningless"
+NG1_HARN_OUT="$( SANDBOX_ROOT="$NG1_HARN_ROOT"; case_mutate ng1-harness-row1-self-compare "NIC-G1 row1:" "$SRC" "$NG1_ROW1_MUT" )" \
+  || die "NIC-G1 harness: the row-1 case aborted under the neutered guard"
+TOTAL=$((TOTAL + 1))
+if [[ "$NG1_HARN_OUT" == *"KILLED:"* ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  SURVIVED: ng1-harness-row1-self-compare — row 1 still reports KILLED with the order comparison neutered"
+else
+  PASS=$((PASS + 1))
+  echo "  KILLED:   ng1-harness-row1-self-compare — neutering the order comparison flips row 1 off KILLED ($(printf '%s' "$NG1_HARN_OUT" | grep -oE 'SURVIVED|MISROUTED' | head -1))"
+fi
+
+# --- Anti-vacuity floor over the whole battery ----------------------------------------------
+# Deleting a row (or its dispatch line) otherwise leaves `N/N mutants killed` and exit 0, with the
+# property that row pinned now unexercised. The bound is the MEASURED row count of a green run,
+# EXACT-as-floor (no slack). Reported with printf + exit, never through the verdict counters it
+# backstops (ADR-193). Bump it in the same edit that adds a row.
+BATTERY_MIN_ROWS=46
+if (( TOTAL < BATTERY_MIN_ROWS )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d. A row was deleted or its dispatch line removed.\n' "$TOTAL" "$BATTERY_MIN_ROWS" >&2
+  exit 1
 fi
 
 echo ""

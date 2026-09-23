@@ -19,6 +19,7 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Dedicated-host cutover (#6178) | [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178) |
 | Read ANY host/unit state | [§ Reading host state without SSH](#reading-host-state-without-ssh) |
 | Scheduler dead after a host replace | [§ Inherited `done`](#inherited-done-after-a-host-replace-7228) |
+| Private-NIC boot event after a host replace (#8539) | [§ Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539) |
 | Flush latch stands on a `done` host / `op=arm` refused at G3.7 | expected — [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
 
@@ -90,6 +91,88 @@ it. For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serve
 **Measured 2026-09-17:** two replaces and 76 minutes with no live scheduler, because the cause
 was invisible until the host journal was read — see
 [§ Reading host state without SSH](#reading-host-state-without-ssh) for the read that finds it.
+
+### Reading the private-NIC boot event (#8539)
+
+**From the next `inngest-host-replace` onward** — merging changes nothing; `runcmd` is
+once-per-instance, so the helper runs on a host CREATE and not on a reboot — every fresh inngest
+boot emits **exactly one** private-NIC event just before the zot login. Later boots of the same
+host are converged by the `.network` file alone and emit nothing, so an absence on a reboot is
+expected, not a fault. It goes to Better Stack as a `SOLEUR_INNGEST_BOOT_STAGE` marker and to
+Sentry as the same stage (`host_name soleur-inngest`), carrying a byte-identical detail string.
+The stage is one of `private_nic_ok`, `private_nic_timeout` or `private_nic_probe_fault`. It
+reports whether the private NIC, which Hetzner hot-attaches after boot, held its address in
+time. The static networkd fallback `/etc/systemd/network/99-soleur-private-fallback.network`
+is what configures a late NIC. The design is recorded in the ADR-115 amendment of 2026-09-22.
+
+Read it with this query. It needs the Better Stack ClickHouse read connection
+(`BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD` in Doppler `soleur/prd_terraform`), so run it under
+`doppler run -p soleur -c prd_terraform --`:
+
+```
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+  --since 30d --grep SOLEUR_INNGEST_BOOT_STAGE --limit 2000 \
+  | jq -R -r 'fromjson? | .raw? | fromjson?
+      | select(.marker == "SOLEUR_INNGEST_BOOT_STAGE")
+      | select(.stage | startswith("private_nic_"))
+      | "\(.dt) \(.stage) \(.detail)"'
+```
+
+`--grep` compiles to an unanchored ClickHouse `raw LIKE '%…%'` over a source every host
+multiplexes into, and `_` is a single-character wildcard there — so grepping `private_nic_`
+directly returns thousands of unrelated web-1 rows and none of these. The marker is the coarse
+prefilter; the `jq` decode is what actually selects. `fromjson?` at both levels is load-bearing:
+without it one malformed line aborts the whole read and the result reads as "never emitted".
+
+The detail string is `boot=<8>.waited_s=<n>.by=<b>.egress=<dev>` on `ok`,
+`boot=<8>.waited_s=150.links=<entries>` on `timeout`, and `boot=<8>.waited_s=<n>.reason=<r>` on
+`probe_fault`. `boot=` is the first 8 characters of the boot id. `waited_s` is the loop counter times two, so
+it is a FLOOR on the elapsed wait, not a measurement of it — each iteration also forks `ip` and
+`grep`. Read the fields as follows.
+
+**`by=` (on `private_nic_ok`): which networkd file configured the interface holding the address.**
+
+| Value | Meaning | Next step |
+| --- | --- | --- |
+| `10-netplan-<if>` | Ordinary boot: cloud-init rendered the NIC itself, and the fallback stayed inert. | None. |
+| `99-soleur-private-fallback` | The race happened and the fallback healed it. Sentry level is warning, at any `waited_s` (usually `0`, because the early `networkctl reload` heals the link first). | None for this boot. Count these: they are the evidence that the race recurs. |
+| `none` | networkd reports no file for the link, so something other than networkd configured it (for example an image udev hook). | Record it on #8539; the fallback is not what is working. |
+| `nonetworkctl` | `networkctl` is missing on the image, so the fallback cannot have been working. | Record it on #8539. |
+| anything else | A networkd file we do not ship took the link — a vendor file under `/usr/lib/systemd/network/`, or a drop-in. | Read it on the host's next replace and record it on #8539; the fallback is not what is working. |
+
+**`egress=` (on `private_nic_ok`): the device of the default route.** It should be `eth0`. Any
+other device means the private DHCP took the default route, and the event is warning level.
+Public egress (apt, Sentry, Better Stack) then runs over the private net, which has no NAT
+gateway. Record it on #8539 with the boot's full detail string.
+
+**`links=` (on `private_nic_timeout`): every non-loopback link except `eth0`, `docker*`,
+`veth*` and `br-*`, as `<if>:<networkd setup>:<driver>:<v4|nov4>`, joined by `--`.**
+
+| Value | Meaning |
+| --- | --- |
+| `none` | No such link exists: the attach never reached the guest within 150 s. |
+| `<if>:unmanaged:virtio_net:...` | The link arrived but the fallback did not take it (networkd did not match or did not act). |
+| `<if>:<setup>:<driver>:...` with a driver other than `virtio_net` | The fallback's `Driver=virtio_net` assumption is wrong for this image. |
+| `<if>:configured:...:v4` | The link is configured with a different address than expected: drift between the template's IP and the attach. |
+| `nonetworkctl` | `networkctl` is missing, so no link state could be read. |
+| an entry ending `--cut` | The detail string hit its 120-char cap and trailing entries were dropped. |
+
+**A `timeout` or a `probe_fault` PAGES.** `sentry_alert.web_private_nic_boot_gate`
+(`apps/web-platform/infra/sentry/issue-alerts.tf`) filters on the `stage` tag with **no host
+condition**, and every host bakes the same `var.sentry_dsn` — so these two stages from the
+inngest host match a rule whose name still says `web-host-…`. Judge severity by the event's
+`host_name` tag, not by the rule name: on web-1 the condition self-heals, on inngest it means
+the zot pull is about to fail and the sole scheduler will not come up. Nothing is keyed on
+`oci-pull-ALL-LEGS-FAILED`, so this is the earliest automated warning you get. `private_nic_ok`
+matches no filter and is query-only by design — a healthy replace must not page. A `private_nic_probe_fault` means no measurement was possible (`reason=`
+is `noarg`, `noip`, `nogrep` or `iprc`); the pull outcome markers that follow still say whether
+the boot worked.
+
+**Absence is detected by query only, and nothing pages on it.** If a boot has a `pre-zot-pull`
+marker and no `private_nic_*` marker within ±15 minutes of it on the same host, the helper
+crashed or never ran. Read the `pre-zot-pull` rows with the same query, `--grep pre-zot-pull`,
+and compare timestamps. `zot-login-*` is not a valid reference: the empty-credentials path emits
+`zot-creds-EMPTY` instead.
 
 ## Reading host state without SSH
 
