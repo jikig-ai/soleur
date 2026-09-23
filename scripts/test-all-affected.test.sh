@@ -70,7 +70,7 @@ done
 # A3 — the affected check sits INSIDE run_suite, after _shard_selects (shard ordinals
 # must be consumed identically in every mode) and before the enumerate/exec diverge.
 _affect_line=$(grep -n '! _suite_affected "$label"' "$TARGET" | head -1 | cut -d: -f1)
-_shard_line=$(grep -n '_shard_selects || return 0' "$TARGET" | head -1 | cut -d: -f1)
+_shard_line=$(grep -n '_shard_selects "$label" || return 0' "$TARGET" | head -1 | cut -d: -f1)
 if [[ -n "$_affect_line" && -n "$_shard_line" && "$_affect_line" -gt "$_shard_line" ]]; then
   pass "A3 — _suite_affected is consulted after _shard_selects inside run_suite"
 else
