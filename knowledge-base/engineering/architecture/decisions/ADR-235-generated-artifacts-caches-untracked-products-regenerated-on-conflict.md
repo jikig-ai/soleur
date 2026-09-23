@@ -245,6 +245,8 @@ maps a canonicalize failure to its existing failure contract without publishing:
 - **Customer repos have no resolver.** `resolve-regenerable-conflicts.sh` calls
   `scripts/regenerate-c4-model.sh`, which exists only in this repo. A customer's residual true
   overlaps stay conflicted until one of their writers re-renders.
+  > **Superseded 2026-09-23 (#8542 follow-up):** the renderer moved into the plugin and the
+  > resolver runs it from there; see *Amendment — 2026-09-23* below.
 - **Rollout.** The app and the regenerated artifact ship from one merge. The plugin reaches
   self-hosted customers on their next plugin update; until then an older plugin still writes the
   raw one-line format, and each switch between writers rewrites the whole file. Upgrading is the remedy. No migration
@@ -273,3 +275,70 @@ maps a canonicalize failure to its existing failure contract without publishing:
 | A bot that resyncs PRs that go DIRTY | Treats the symptom. The resolver already covers the residual. |
 | Indent 2 or sorted keys | Identical merge outcomes (measured), at +59% bytes for indent 2. |
 | A layout-free artifact, with the browser laying out views | Would remove the residual too, but it changes rendering. Deferred as #8541. |
+
+## Amendment — 2026-09-23 (#8542 follow-up): the regeneration command is plugin-owned
+
+Supersedes the 2026-09-22 scope limit *"Customer repos have no resolver."* The gap was not that
+the resolvable set is too small; it was that the set's one command lived in the wrong repository.
+So the fix moves the command and leaves the set alone.
+
+**What moved.** The renderer is `plugins/soleur/scripts/render-c4-model.sh` (history kept from
+`scripts/regenerate-c4-model.sh`). It takes `--root <repo>`, runs the canonicalizer beside itself,
+passes `--ignore-scripts` to `npx` as the TS producer does, and needs only one `.c4` source: a
+`soleur:sync` repo carries `spec.c4`, `views.c4` and `generated-components.c4` but never
+`model.c4`, so the old all-three guard refused every synced repo. The old path is a wrapper kept
+for lefthook and the docs. It is **not** an arm of the resolver.
+
+**The one arm.** `bash <plugin-root>/scripts/render-c4-model.sh --root <repo>`. The plugin root is
+the resolver's own directory, made absolute before the script `cd`s into the repo. A bare
+`${CLAUDE_PLUGIN_ROOT}` is used only when no renderer sits beside the resolver. That order is the
+control. The `plugin.json` name check runs on whichever root is used, and it is defence-in-depth,
+not a boundary: this repo's own tracked `plugin.json` names `soleur`, so a shadowing copy inside a
+merged tree passes it (ADR-179 A11, A17). No part of the argv comes from the repo being merged.
+Each argv-producing line carries an `ARGV-SOURCE` marker, and the suite pins the set of markers.
+
+**Still one member; the manifest stays rejected.** `model.likec4.json` is the only generated file
+Soleur commits into a customer repo, and the plugin now owns its renderer. A manifest would bring
+back a command supplied by the repo, which is the thing this amendment removes.
+
+**New refusals.** Each one leaves the tree byte-identical:
+
+- **An untracked or ignored `.c4` in the artifact's directory.** likec4 compiles every `.c4` it
+  finds, so a local `generated-components.c4` would end up in a committed model that the merge
+  never saw. Untracked files that are not ignored already fail the clean-tree check.
+- **A regen that writes any path besides the conflicted one.** `git merge --abort` keeps unstaged
+  changes and untracked files. So the unwind restores and removes those paths itself. The tree was
+  clean at entry, so every such path was written during the run.
+- **An interrupt.** The `INT`/`TERM`/`HUP` trap now exits after aborting. A trap that returned
+  resumed the loop. With two members, the loop then deleted the second path, and nothing restored
+  it (measured through the test seam).
+
+The arm's output is captured and its tail goes into the `bail` message. The arm runs under
+`timeout` (600 s, matching the TS producer) where `timeout` exists. A progress line comes first.
+The success marker names `arm=` and `root=`.
+
+**Call sites.** Both `pre-merge-rebase.sh` hooks now share a byte-identical lookup. They prefer an
+identity-checked `${CLAUDE_PLUGIN_ROOT}` and fall back to the in-repo copy. `sync-pr-behind.sh`
+falls back to `${CLAUDE_PLUGIN_ROOT}` when it runs from ship's mktemp snapshot, which has no
+siblings. The skills (`merge-pr`, `drain-prs`, `ship`, `architecture`) and the settle reference
+invoke the resolver and the renderer through `${CLAUDE_PLUGIN_ROOT}`. The resolver suite fails on
+any repo-relative invocation left in skills, commands, agents or hooks.
+
+**Unchanged coverage bound.** This only helps merges run locally through a Soleur skill or hook.
+GitHub's *Update branch* button and server-side auto-merge still resolve nothing.
+
+**Residuals, recorded:**
+
+- A resolver loaded from the merged tree runs that tree's renderer. This depends on the call
+  site. The script cannot defend against it, which is why the hooks now look in the plugin first.
+- A regen that writes an **ignored** stray file is not detected. The P3 check sees unstaged
+  changes and untracked files that are not ignored.
+- Stock macOS has no `timeout`, so the arm runs without a bound there.
+- `resolve-regenerable-conflicts.test.sh` row 3 failed 4 times in about 150 full-suite runs, all
+  under heavy parallel load. Each time the SUT exited 1 with nothing printed after its first progress
+  line, and left `MERGE_HEAD` behind. Not reproduced in isolation (0/40), and the cause is not
+  established.
+
+**Verification.** `resolve-regenerable-conflicts.test.sh` (73 cases, including the Guard Contract
+rows), `render-c4-model.test.sh` (a real likec4 render of the `soleur:sync` shape),
+`pre-merge-rebase-regen-lookup.test.sh`, `sync-pr-behind.test.sh`, `c4-model-freshness.test.sh`.

@@ -9,6 +9,7 @@ amended_by:
   - "#7474 (2026-08-11) — producer presence as a fourth precondition; see ## Amendment 2026-08-11"
   - "#7450 (2026-08-12) — the skills secret-gate subset; decisions 8/9/10 and the §R1 settlement from the CTO ruling; then amendment items A10 (§R3 measured on the skill surface) and A11 (root-outside-worktree REJECTED); see ## Amendment — 2026-08-12"
   - "#8401 (2026-09-20) — amendment item A16: arm 3 is no longer confined to Step 0.5; the session-start dispatch is gated on the reaper capability token. Supersedes decision 11's confinement."
+  - "#8542 follow-up (2026-09-23) — amendment item A17: an in-payload SIBLING resolved from an absolutized BASH_SOURCE is a sanctioned code-root anchor; see ## Amendment — 2026-09-23"
   - "#8308 (2026-09-19) — decision 11 (the dual-harness resolution ORDER for /soleur:go's three session gates) and amendment item A15 (${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT} rejected); see ## Amendment — 2026-09-19"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
@@ -1164,3 +1165,28 @@ but carries no Soleur manifest) had collapsed into one value with two different 
 **#8402 is closed in this same PR**, so the recorded inconsistency above — go.md's arm 3 being
 strictly stricter than the 67-block fleet — no longer holds. The fleet now uses the same
 identity-selected recipe.
+
+## Amendment — 2026-09-23 (#8542 follow-up): a payload script may run its own sibling
+
+### Amendment item A17 — an in-payload sibling resolved from an absolutized `BASH_SOURCE`
+
+The classification rule above bans a `git rev-parse --show-toplevel` code root, and it sanctions
+`BASH_SOURCE` for a payload script's own location. A17 records a consequence of that. A payload
+script may **execute a sibling in the same payload**, found from its own `BASH_SOURCE`, under
+three conditions:
+
+1. The directory is made absolute **before** the script changes directory. A relative
+   `BASH_SOURCE` resolved after a `cd` into the caller's repo points into that repo.
+2. The sibling comes first. A bare `${CLAUDE_PLUGIN_ROOT}`, with no `:-` default (A12), is used
+   only when the sibling is absent. An inherited variable is the weaker provenance.
+3. The `plugin.json` name check runs on whichever root is used, and the code calls it
+   defence-in-depth rather than a control. Per A11 it is a shape check. This repo's own tracked
+   manifest names `soleur`, so a copy inside a merged tree passes it.
+
+A sibling has the same provenance as the script that runs it, so it adds no trust edge. It also
+buys nothing when the script itself was loaded from an untrusted tree. That is a property of the
+call site, and the fix belongs there.
+
+**Instances.** `sync-pr-behind.sh` already found `resolve-regenerable-conflicts.sh` this way, and
+the resolver now finds `render-c4-model.sh` the same way. The rationale lives in ADR-235's
+2026-09-23 amendment; this item records only the anchoring rule.

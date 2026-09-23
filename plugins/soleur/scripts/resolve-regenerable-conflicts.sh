@@ -85,7 +85,9 @@ bail() {
   # would make it live. Asserting here costs one line.
   [[ -n "$REPO_ROOT" ]] || { echo "[regen-on-conflict] $* (no repo root; nothing unwound)" >&2; exit 1; }
   git -C "$REPO_ROOT" merge --abort 2>/dev/null || true
-  echo "[regen-on-conflict] $*" >&2
+  # One next action on every refusal. The caller falls back to its own behaviour; the operator
+  # reading this needs to know nothing was committed and what to do about the cause.
+  echo "[regen-on-conflict] $* — merge aborted, nothing committed; fix the cause and re-run, or merge $BASE by hand" >&2
   exit 1
 }
 
