@@ -387,11 +387,18 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Devin CLI)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **exec** with adequate timeout for short `gh` probes.",
-        // SOLEUR-DEBT: prescribed, not live-verified. The claim that `get_output` cannot
-        // wait is MEASURED (devin/INSTRUCTIONS.md §Polling, envelope-capture §7); the
-        // replacement loop below is not yet exercised against a live Devin session.
-        // Upgrade trigger: re-run the live wait check when Devin auth is available in CI
-        // (ADR-240 records the state; #8390 item 2 is the origin).
+        // SOLEUR-DEBT: partially live-verified. Measured 2026-09-23 on Devin CLI
+        // 3000.11.1 (authenticated, `devin -p` in a scratch repo): `run_subagent` DOES
+        // arm a background subagent and the parent continues — "Subagent <id> is running
+        // in the background". The wake-on-completion half is NOT yet verified: the
+        // probe's foreground step hit headless mode's confirmation gate ("rejected a
+        // tool call that requires confirmation"), and finishing it needs
+        // `--permission-mode dangerous`, which auto-approves every tool.
+        // The claim this bullet replaces — that `get_output` cannot wait — is fully
+        // measured (devin/INSTRUCTIONS.md §Polling, envelope-capture §7).
+        // Upgrade trigger: re-run the probe under a permission mode that admits the
+        // foreground write, or from an interactive trusted session (ADR-240 records the
+        // state; #8390 item 2 is the origin).
         "- Arm the wait as a background **run_subagent** running an exit-coded poll loop: one exit code per actionable transition (`MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`, check failure). Its completion notification is the only wake primitive, so the loop must EXIT to report.",
         "- Mutations (`gh pr update-branch`, the merge itself) stay in the foreground — never inside the waiting subagent.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
