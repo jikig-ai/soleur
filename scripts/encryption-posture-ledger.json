@@ -571,7 +571,7 @@
           "justification": "The root disk cannot be encrypted in place. The user_data-baked copies of the same credentials are recorded separately (git_data.baked_credentials_on_host) because their threat is the metadata endpoint, not the disk.",
           "tracking_issue": "#8620",
           "reevaluate_when": "the next git-data host replace (apply_target=git-data-host-replace; git-data is excluded from the per-PR -target list, ADR-103), at which the root disk is encrypted or the token file is replaced by a fetch that needs no stored credential",
-          "expires_on": "2026-12-11"
+          "expires_on": "2026-12-04"
         }
       }
     },
@@ -593,7 +593,7 @@
           "justification": "The root disk cannot be encrypted in place. The registry holds container images, not user data, so the exposure is credentials only.",
           "tracking_issue": "#8620",
           "reevaluate_when": "the next registry host replace (registry-host-replace-dispatch.yml), at which the root disk is encrypted or the token file is replaced by a fetch that needs no stored credential",
-          "expires_on": "2027-01-08"
+          "expires_on": "2026-12-11"
         }
       }
     },
@@ -611,7 +611,7 @@
           "justification": "The rehearsal boots what production boots, so its root disk mirrors git-data's. Encrypting it alone would rehearse a boot that does not exist.",
           "tracking_issue": "#8620",
           "reevaluate_when": "the host is born again on every rehearsal run, so every birth is a rebuild window. Re-evaluate when hcloud_server.git_data's root disk is encrypted, which the rehearsal must then mirror",
-          "expires_on": "2027-01-22"
+          "expires_on": "2026-12-18"
         }
       }
     },
@@ -619,8 +619,7 @@
       "store": "hcloud_server.grok_dogfood",
       "kind": "host-root-disk",
       "multiplicity": {
-        "instances": [],
-        "gated_by": "local.grok_dogfood_enabled"
+        "instances": []
       },
       "at_rest": {
         "mechanism": "plaintext-exception",
@@ -633,13 +632,13 @@
           "justification": "The host does not exist while var.enable_grok_dogfood is false. The row exists so the host cannot be born unledgered.",
           "tracking_issue": "#8620",
           "reevaluate_when": "when local.grok_dogfood_enabled first turns on (var.enable_grok_dogfood = true): the birth is the rebuild window, so decide the root-disk posture before the first apply",
-          "expires_on": "2027-02-05"
+          "expires_on": "2026-12-22"
         }
       }
     },
     {
       "store": "hetzner.web1_inngest_cutover_snapshots",
-      "kind": "host-root-disk",
+      "kind": "provider-image",
       "records": [
         "knowledge-base/legal/article-30-register.md#Processing Activity 8",
         "knowledge-base/legal/article-30-register.md#Processing Activity 13"

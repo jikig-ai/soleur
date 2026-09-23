@@ -58,20 +58,19 @@
           "type": "string",
           "description": "Resource address (hcloud_volume.x / cloudflare_r2_bucket.y) or logical name for a non-IaC store (supabase.prd)."
         },
-        "kind": { "enum": ["guest-luks-volume", "provider-bucket", "provider-db", "log-sink", "secret-store", "host-root-disk"] },
+        "kind": { "enum": ["guest-luks-volume", "provider-bucket", "provider-db", "log-sink", "secret-store", "host-root-disk", "provider-image"] },
         "records": {
           "description": "#8532 PR-3 (Guard 3): where this store's at-rest posture is restated. Each entry is '<path>' or '<path>#<heading prefix>'; the path must be in record_surfaces. The section must carry exactly one clause for this store, and its mechanism must equal this row's. The check asserts and never writes.",
           "type": "array",
           "items": { "type": "string" }
         },
         "multiplicity": {
-          "description": "#8532 PR-2 (Guard 2): REQUIRED when the store's Terraform block declares for_each or count, or is instantiated by a module; FORBIDDEN on a singleton. instances lists the instance keys the row covers; a for_each over a var.<map> with a default literal is compared against that literal. Any other shape must also name gated_by (the variable, local or module call deciding how many instances exist), which must occur in the block's expression and in exception.reevaluate_when.",
+          "description": "#8532 PR-2 (Guard 2): REQUIRED when the store's Terraform block declares for_each or count, or is instantiated by a module; FORBIDDEN on a singleton. instances lists the instance keys the row covers; a for_each over a var.<map> with a default literal is compared against that literal. Any other shape (count, a non-var for_each, a module-instantiated block) must declare instances: [] and name one of the var./local./module. identifiers in its expression in exception.reevaluate_when; its instances cannot be verified.",
           "type": "object",
           "required": ["instances"],
           "additionalProperties": false,
           "properties": {
-            "instances": { "type": "array", "items": { "type": "string" } },
-            "gated_by": { "type": "string" }
+            "instances": { "type": "array", "items": { "type": "string" } }
           }
         },
         "device_binding": {

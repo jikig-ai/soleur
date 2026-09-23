@@ -1029,8 +1029,9 @@ run_mutation "MB-21/non-store-type" "MB-21" "$REPO_P1_NST" "$LEDGER_P1_NST"
 # the ledger said nothing. Shapes:
 #   for_each = var.<map> with a resolvable default literal -> instances compared
 #   count, any other for_each, a module-instantiated block  -> fail CLOSED unless
-#     the row declares instances + gated_by, gated_by occurs in the expression,
-#     and the exception's reevaluate_when names it
+#     the row declares instances: [] (nothing can verify a list) and its
+#     exception's reevaluate_when names a var./local./module. gate from the
+#     block's own expression
 #   singleton                                              -> must NOT declare
 # ===========================================================================
 
@@ -1124,7 +1125,7 @@ mk_mult_ledger() {
 
 REEVAL_DEF="when the fixture volume is next re-provisioned"
 WS_OK='{ "instances": ["web-1", "web-2"] }'
-EXTRA_OK='{ "instances": [], "gated_by": "local.extra_enabled" }'
+EXTRA_OK='{ "instances": [] }'
 EXTRA_REEVAL='when local.extra_enabled first turns on (var.enable_extra)'
 
 REPO_P2="$TMPDIR_TEST/p2-mult"
@@ -1169,15 +1170,15 @@ run_case_reports "P2-MULT count-gated row with no multiplicity -> FAIL closed" 1
   --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_CNT_NONE" --today "$TODAY"
 
 LEDGER_P2_CNT_GATE="$TMPDIR_TEST/p2-cnt-gate.json"
-mk_mult_ledger "$LEDGER_P2_CNT_GATE" "$WS_OK" "" '{ "instances": [], "gated_by": "var.something_else" }' "$EXTRA_REEVAL"
-run_case_reports "P2-MULT gated_by absent from the count expression -> FAIL" 1 \
-  "gated_by var.something_else does not occur in its expression" \
+mk_mult_ledger "$LEDGER_P2_CNT_GATE" "$WS_OK" "" '{ "instances": ["0"] }' "$EXTRA_REEVAL"
+run_case_reports "P2-MULT a count-gated row declaring an unverifiable instance list -> FAIL" 1 \
+  "whose instances this check cannot verify, yet it declares a list" \
   --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_CNT_GATE" --today "$TODAY"
 
 LEDGER_P2_CNT_REEVAL="$TMPDIR_TEST/p2-cnt-reeval.json"
 mk_mult_ledger "$LEDGER_P2_CNT_REEVAL" "$WS_OK" "" "$EXTRA_OK" "at the next quarterly review"
 run_case_reports "P2-MULT reevaluate_when does not name the gate -> FAIL" 1 \
-  "exception.reevaluate_when must name local.extra_enabled" \
+  "exception.reevaluate_when must name one of local.extra_enabled" \
   --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_CNT_REEVAL" --today "$TODAY"
 
 # A store-class block inside a module source directory is instantiated once
@@ -1208,7 +1209,7 @@ run_case_reports "P2-MULT module-instantiated block with no multiplicity -> FAIL
   "hcloud_volume.inner is instantiated by module.vols" \
   --repo-sweep --repo-root "$REPO_P2_MOD" --ledger "$LEDGER_P2_MOD_BAD" --today "$TODAY"
 LEDGER_P2_MOD_OK="$TMPDIR_TEST/p2-mod-ok.json"
-mk_mod_ledger "$LEDGER_P2_MOD_OK" '{ "instances": ["vols"], "gated_by": "module.vols" }' "when module.vols gains a count or for_each"
+mk_mod_ledger "$LEDGER_P2_MOD_OK" '{ "instances": [] }' "when module.vols gains a count or for_each"
 run_case_reports "P2-MULT must-PASS: module-instantiated block gated on its module call" 0 "0 failing checks" \
   --repo-sweep --repo-root "$REPO_P2_MOD" --ledger "$LEDGER_P2_MOD_OK" --today "$TODAY"
 
@@ -1256,6 +1257,133 @@ run_case_reports "P2-SCHEMA a misspelled row key is rejected, never ignored" 1 \
   "unexpected key(s) ['multiplicty']" \
   --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_TYPO" --today "$TODAY"
 
+# A multi-line for_each (the idiomatic `{ for k, v in var.x : k => v }`) is read
+# whole, so its gate is visible; it is a shape this check cannot resolve.
+REPO_P2_ML="$TMPDIR_TEST/p2-ml"
+write_file "$REPO_P2_ML/apps/web-platform/infra/variables.tf" <<'EOF'
+variable "web_hosts" {
+  default = {
+    "web-1" = { location = "hel1" }
+  }
+}
+EOF
+write_file "$REPO_P2_ML/apps/web-platform/infra/ml.tf" <<'EOF'
+resource "hcloud_volume" "ml" {
+  for_each = {
+    for k, v in var.web_hosts : k => v
+  }
+  name = "soleur-${each.key}"
+}
+EOF
+mk_ml_ledger() {
+  {
+    echo '{ "schema_version": 1,'
+    echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+    echo '  "non_store_types": [], "non_iac_stores": [], "stores": ['
+    mk_exc_row "hcloud_volume.ml" "$2" "$3"
+    echo '  ], "connections": [] }'
+  } | write_file "$1"
+}
+LEDGER_P2_ML_BAD="$TMPDIR_TEST/p2-ml-bad.json"
+mk_ml_ledger "$LEDGER_P2_ML_BAD" "" "$REEVAL_DEF"
+run_case_reports "P2-MULT multi-line for_each is read whole -> FAIL closed naming the full expression" 1 \
+  "hcloud_volume.ml is for_each = { for k, v in var.web_hosts : k => v }, which this check cannot resolve" \
+  --repo-sweep --repo-root "$REPO_P2_ML" --ledger "$LEDGER_P2_ML_BAD" --today "$TODAY"
+LEDGER_P2_ML_OK="$TMPDIR_TEST/p2-ml-ok.json"
+mk_ml_ledger "$LEDGER_P2_ML_OK" '{ "instances": [] }' "when var.web_hosts gains a host"
+run_case_reports "P2-MULT must-PASS: multi-line for_each gated on var.web_hosts" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P2_ML" --ledger "$LEDGER_P2_ML_OK" --today "$TODAY"
+
+# The sweep reads what is COMMITTED. In a git work tree an untracked *.tf (or a
+# gitignored *.tfvars) changes nothing; the moment it is tracked, it counts.
+# Outside a git tree (every other fixture here) a .terraform/ cache is skipped.
+git_clean() {
+  local unset_args=() v
+  for v in $(compgen -e); do [[ "$v" == GIT_* ]] && unset_args+=(-u "$v"); done
+  env "${unset_args[@]}" git "$@"
+}
+REPO_P2_GIT="$TMPDIR_TEST/p2-git"
+mk_git_data_base "$REPO_P2_GIT"
+git_clean -C "$REPO_P2_GIT" init -q
+git_clean -C "$REPO_P2_GIT" add -A
+write_file "$REPO_P2_GIT/apps/web-platform/infra/untracked.tf" <<'EOF'
+resource "hcloud_volume" "untracked" {
+  name = "soleur-untracked"
+}
+EOF
+printf 'web_hosts = {}\n' | write_file "$REPO_P2_GIT/apps/web-platform/infra/terraform.tfvars"
+run_case_reports "P2-HERMETIC an untracked *.tf and a *.tfvars do not change the verdict" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P2_GIT" --ledger "$LEDGER_TS1" --today "$TODAY"
+git_clean -C "$REPO_P2_GIT" add apps/web-platform/infra/untracked.tf
+run_case_reports "P2-HERMETIC control: the same file, tracked, is an unledgered store" 1 \
+  "unledgered store hcloud_volume.untracked" \
+  --repo-sweep --repo-root "$REPO_P2_GIT" --ledger "$LEDGER_TS1" --today "$TODAY"
+REPO_P2_TFC="$TMPDIR_TEST/p2-tfcache"
+mk_git_data_base "$REPO_P2_TFC"
+write_file "$REPO_P2_TFC/apps/web-platform/infra/.terraform/modules/x/main.tf" <<'EOF'
+resource "hcloud_volume" "cached" {
+  name = "provider-cache-copy"
+}
+EOF
+run_case_reports "P2-HERMETIC a .terraform/ provider cache is not scanned" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P2_TFC" --ledger "$LEDGER_TS1" --today "$TODAY"
+
+# The floor's operands must be disjoint sets (MB-29): one address in two
+# Terraform roots, a catalogued id that is also a *.tf address, a catalogue
+# entry listed twice.
+REPO_P2_ROOTS="$TMPDIR_TEST/p2-roots"
+for r in a b; do
+  write_file "$REPO_P2_ROOTS/apps/$r/infra/v.tf" <<'EOF'
+resource "hcloud_volume" "v" {
+  name = "soleur-v"
+}
+EOF
+done
+LEDGER_P2_ROOTS="$TMPDIR_TEST/p2-roots.json"
+{
+  echo '{ "schema_version": 1,'
+  echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+  echo '  "non_store_types": [], "non_iac_stores": [], "stores": ['
+  mk_exc_row "hcloud_volume.v" "" "$REEVAL_DEF"
+  echo '  ], "connections": [] }'
+} | write_file "$LEDGER_P2_ROOTS"
+run_case_reports "P2-UNIQ one store address declared in two Terraform roots -> FAIL" 1 \
+  "store address hcloud_volume.v is declared by 2 *.tf blocks" \
+  --repo-sweep --repo-root "$REPO_P2_ROOTS" --ledger "$LEDGER_P2_ROOTS" --today "$TODAY"
+LEDGER_P2_DUPCAT="$TMPDIR_TEST/p2-dupcat.json"
+mk_catalog_ledger "$LEDGER_P2_DUPCAT" '["supabase.prd", "supabase.prd"]' supabase.prd
+run_case_reports "P2-UNIQ a catalogue entry listed twice -> FAIL" 1 \
+  "non_iac_stores entry supabase.prd is listed more than once" \
+  --repo-sweep --repo-root "$REPO_P1" --ledger "$LEDGER_P2_DUPCAT" --today "$TODAY"
+REPO_P2_OVL="$TMPDIR_TEST/p2-ovl"
+write_file "$REPO_P2_OVL/apps/web-platform/infra/v.tf" <<'EOF'
+resource "hcloud_volume" "v" {
+  name = "soleur-v"
+}
+EOF
+LEDGER_P2_OVL="$TMPDIR_TEST/p2-ovl.json"
+sed 's/"non_iac_stores": \[\]/"non_iac_stores": ["hcloud_volume.v"]/' "$LEDGER_P2_ROOTS" > "$TMPDIR_TEST/p2-ovl.tmp"
+write_file "$LEDGER_P2_OVL" < "$TMPDIR_TEST/p2-ovl.tmp"
+run_case_reports "P2-UNIQ a catalogued id that is also a *.tf address -> FAIL" 1 \
+  "non_iac_stores entry hcloud_volume.v is also a *.tf store address" \
+  --repo-sweep --repo-root "$REPO_P2_OVL" --ledger "$LEDGER_P2_OVL" --today "$TODAY"
+
+# A row at a store-class address conforms to that class (MB-30).
+LEDGER_P2_CLS="$TMPDIR_TEST/p2-cls.json"
+{
+  echo '{ "schema_version": 1,'
+  echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+  echo '  "non_store_types": [], "non_iac_stores": [], "stores": ['
+  mk_provider_row "hcloud_volume.v"
+  echo '  ], "connections": [] }'
+} | write_file "$LEDGER_P2_CLS"
+run_case_reports "P2-CLASS a row whose kind differs from its store class -> FAIL" 1 \
+  "hcloud_volume.v kind provider-db differs from its store class kind guest-luks-volume" \
+  --repo-sweep --repo-root "$REPO_P2_OVL" --ledger "$LEDGER_P2_CLS" --today "$TODAY"
+run_case_reports "P2-CLASS a mechanism its store class does not admit -> FAIL" 1 \
+  "is not one its store class admits (plaintext-exception)" \
+  --repo-sweep --repo-root "$REPO_P2_OVL" --ledger "$LEDGER_P2_CLS" --today "$TODAY"
+
 run_mutation "MB-14/add-key" "MB-14" "$REPO_P2_ADD" "$LEDGER_P2_OK"
 run_mutation "MB-14/second-member" "MB-14" "$REPO_P2" "$LEDGER_P2_SECOND"
 run_mutation "MB-14/no-multiplicity" "MB-14" "$REPO_P2" "$LEDGER_P2_NOMULT"
@@ -1265,6 +1393,10 @@ run_mutation "MB-24/gate" "MB-24" "$REPO_P2" "$LEDGER_P2_CNT_GATE"
 run_mutation "MB-24/reeval" "MB-24" "$REPO_P2" "$LEDGER_P2_CNT_REEVAL"
 run_mutation "MB-24/module" "MB-24" "$REPO_P2_MOD" "$LEDGER_P2_MOD_BAD"
 run_mutation "MB-25" "MB-25" "$REPO_P2" "$LEDGER_P2_SOLO"
+run_mutation "MB-24/multi-line" "MB-24" "$REPO_P2_ML" "$LEDGER_P2_ML_BAD"
+run_mutation "MB-29/two-roots" "MB-29" "$REPO_P2_ROOTS" "$LEDGER_P2_ROOTS"
+run_mutation "MB-29/dup-catalogue" "MB-29" "$REPO_P1" "$LEDGER_P2_DUPCAT"
+run_mutation "MB-30" "MB-30" "$REPO_P2_OVL" "$LEDGER_P2_CLS"
 
 # ===========================================================================
 # #8532 PR-3 — record anchors (Guard 3). A record surface (the Article 30
@@ -1399,6 +1531,19 @@ run_case_reports "P3 a section selector matching two headings -> FAIL ambiguous"
   "matches 2 headings" \
   --repo-sweep --repo-root "$REPO_P3" --ledger "$LEDGER_P3_AMBIG" --today "$TODAY"
 
+# Only H1/H2 headings split a section: an H3 is a sub-part of its processing
+# activity, and a `#` line inside a fenced code block is code, not a heading.
+mk_p3_register "$CL_V" "$CL_V" "$(printf '### Amendment note\n\n```bash\n# example query\n```')"
+cp -r "$REPO_P3" "$TMPDIR_TEST/p3-sub"; REPO_P3_SUB="$TMPDIR_TEST/p3-sub"
+run_case_reports "P3 must-PASS: an H3 and a fenced code comment do not split a section" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P3_SUB" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+# Only the one documented template, verbatim, is exempt.
+mk_p3_register "$CL_V" "$CL_V" "| **(g)** | (encryption-posture ledger: <hcloud_volume.v> — at rest: luks) |"
+cp -r "$REPO_P3" "$TMPDIR_TEST/p3-tpl"; REPO_P3_TPL="$TMPDIR_TEST/p3-tpl"
+run_case_reports "P3 a clause starting with < that is not the exact template -> FAIL malformed" 1 \
+  "malformed encryption-posture clause in kb/register.md#Processing Activity 1" \
+  --repo-sweep --repo-root "$REPO_P3_TPL" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+mk_p3_register "$CL_V" "$CL_V"
 run_mutation "MB-15" "MB-15" "$REPO_P3_MECH" "$LEDGER_P3_OK"
 run_mutation "MB-26" "MB-26" "$REPO_P3_DUP" "$LEDGER_P3_OK"
 run_mutation "MB-16" "MB-16" "$REPO_P3_GHOST" "$LEDGER_P3_OK"
@@ -1680,73 +1825,131 @@ while IFS= read -r rid; do
     "non_iac_stores entry $rid names no stores[] row" \
     --repo-sweep --repo-root "$REPO_TRUE_ROOT" --ledger "$rl"
 done <<<"$REAL_IDS"
-# AC-2c / Guard 2 matrix #4 against a COPY of the real tree: the committed
-# ledger must PASS on the faithful copy (so the needle rows below are not read
-# off an already-red tree), then fail on one added web host and on one new,
-# unledgered hcloud_server block.
-REAL_COPY="$TMPDIR_TEST/real-copy"
-mkdir -p "$REAL_COPY"
-( cd "$REPO_TRUE_ROOT" && git ls-files -z -- ':(glob)apps/*/infra/**' ':(glob)infra/**' ':(glob)docs/legal/**' \
-      knowledge-base/legal/article-30-register.md knowledge-base/engineering/architecture/diagrams/model.c4 \
-    | xargs -0 -I{} cp --parents {} "$REAL_COPY/" )
+# AC-2b/2c, Guard 2 matrix #4 and AC-3a against COPIES of the real tree. Every
+# subject and needle below is DERIVED from the committed ledger and the parsed
+# variables.tf default, so an unrelated edit (a server_type change, a new
+# record surface, a renamed row) cannot red this suite while the sweep is green.
+# The copy is the ledger's own inputs: the *.tf/infra scope, every
+# record_surfaces file and every disclosed_as document.
 REAL_TODAY="2026-09-23"
-run_case_reports "AC-2c baseline: the committed ledger PASSES on a faithful copy of the tree" 0 "0 failing checks" \
-  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
-python3 - "$REAL_COPY/apps/web-platform/infra/variables.tf" <<'PYEOF2'
-import sys
-p = sys.argv[1]; s = open(p).read()
-old = '"web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }'
-assert s.count(old) == 1, "web_hosts default literal moved; update this fixture"
-open(p, "w").write(s.replace(old, old + '\n    "web-3" = { location = "hel1", private_ip = "10.0.1.12" }'))
-PYEOF2
-run_case_reports "AC-2c a web host added to var.web_hosts without a ledger edit -> FAIL" 1 \
-  "hcloud_server.web covers instances [web-1, web-2] but var.web_hosts declares [web-1, web-2, web-3]" \
-  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
-run_case_reports "AC-2b the same edit also reds hcloud_volume.workspaces" 1 \
-  "hcloud_volume.workspaces covers instances [web-1, web-2] but var.web_hosts declares [web-1, web-2, web-3]" \
-  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
-printf '\nresource "hcloud_server" "web_extra" {\n  name = "soleur-extra"\n}\n' \
-  >> "$REAL_COPY/apps/web-platform/infra/grok-dogfood.tf"
-run_case_reports "Guard 2 #4: a new hcloud_server block with no row -> FAIL unledgered" 1 \
-  "unledgered store hcloud_server.web_extra" \
-  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
-# AC-3a on the real record surfaces: a store renamed in the ledger alone leaves
-# its register clauses naming nothing (Guard 3 #1), and a mechanism changed in
-# the ledger alone contradicts every record of it (Guard 3 #3).
-REAL_COPY_B="$TMPDIR_TEST/real-copy-b"
-mkdir -p "$REAL_COPY_B"
-( cd "$REPO_TRUE_ROOT" && git ls-files -z -- ':(glob)apps/*/infra/**' ':(glob)infra/**' ':(glob)docs/legal/**' \
-      knowledge-base/legal/article-30-register.md knowledge-base/engineering/architecture/diagrams/model.c4 \
-    | xargs -0 -I{} cp --parents {} "$REAL_COPY_B/" )
-python3 - "$REAL_LEDGER" "$TMPDIR_TEST/real-rename.json" "$TMPDIR_TEST/real-flip.json" <<'PYEOF2'
+# mk_real_copy <name> — the copy lands at $TMPDIR_TEST/<name>.
+mk_real_copy() {
+  local dst="$TMPDIR_TEST/$1"
+  mkdir -p "$dst"
+  python3 - "$REAL_LEDGER" > "$TMPDIR_TEST/real-extra-paths" <<'PYEOF2'
 import json, sys
 l = json.load(open(sys.argv[1]))
+paths = set(l.get("record_surfaces", []))
 for s in l["stores"]:
-    if s["store"] == "hcloud_server.inngest":
-        s["store"] = "hcloud_server.inngest_renamed"
-json.dump(l, open(sys.argv[2], "w"))
-l = json.load(open(sys.argv[1]))
-for s in l["stores"]:
-    if s["store"] == "supabase.prd":
-        s["at_rest"]["mechanism"] = "provider-managed:some-other-attestation"
-json.dump(l, open(sys.argv[3], "w"))
+    d = s["at_rest"].get("disclosed_as", "")
+    if ":" in d:
+        paths.add(d.split(":", 1)[0])
+for c in l["connections"]:
+    d = c["in_transit"].get("disclosed_as", "")
+    if ":" in d:
+        paths.add(d.split(":", 1)[0])
+print("\n".join(sorted(paths)))
 PYEOF2
+  local extra=()
+  mapfile -t extra < "$TMPDIR_TEST/real-extra-paths"
+  ( cd "$REPO_TRUE_ROOT" && git ls-files -z -- ':(glob)apps/**/*.tf' ':(glob)infra/**/*.tf' \
+        ':(glob)apps/*/infra/**' "${extra[@]}" \
+      | xargs -0 -I{} cp --parents {} "$dst/" )
+}
+REAL_COPY="$TMPDIR_TEST/real-copy"
+mk_real_copy real-copy
+run_case_reports "AC-2c baseline: the committed ledger PASSES on a faithful copy of the tree" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
+
+# Add ONE key to the var.web_hosts default without touching the ledger. The
+# expected message is built from the parsed default plus that key, and from
+# each for_each row's declared instances.
+python3 - "$SUT" "$REAL_COPY/apps/web-platform/infra/variables.tf" "$REAL_LEDGER" \
+  > "$TMPDIR_TEST/real-webhost-needles" <<'PYEOF2'
+import importlib.util, json, re, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("lep", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+tf = Path(sys.argv[2]); keys = m.resolve_var_map_keys(tf, "web_hosts", {})
+assert keys, "var.web_hosts default did not resolve"
+new = "web-zz9"
+assert new not in keys
+s = tf.read_text()
+v = re.search(r'variable\s+"web_hosts"\s*\{', s)
+d = re.compile(r"^(\s*)default\s*=\s*\{\s*$", re.M).search(s, v.end())
+s = s[: d.end()] + f'\n    "{new}" = {{ location = "hel1", private_ip = "10.0.1.99" }}' + s[d.end():]
+tf.write_text(s)
+want = ", ".join(sorted(keys + [new]))
+l = json.load(open(sys.argv[3]))
+rows = [r for r in l["stores"] if sorted(r.get("multiplicity", {}).get("instances", [])) == sorted(keys)]
+assert len(rows) >= 2, "expected the web_hosts for_each rows to declare the parsed keys"
+for r in rows:
+    have = ", ".join(sorted(r["multiplicity"]["instances"]))
+    print(f"{r['store']} covers instances [{have}] but var.web_hosts declares [{want}]")
+PYEOF2
+while IFS= read -r needle; do
+  run_case_reports "AC-2b/2c a key added to var.web_hosts without a ledger edit -> FAIL: ${needle%% covers*}" 1 \
+    "$needle" \
+    --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
+done < "$TMPDIR_TEST/real-webhost-needles"
+printf '\nresource "hcloud_server" "zz_unledgered" {\n  name = "soleur-zz"\n}\n' \
+  > "$REAL_COPY/apps/web-platform/infra/zz-unledgered.tf"
+run_case_reports "Guard 2 #4: a new hcloud_server block with no row -> FAIL unledgered" 1 \
+  "unledgered store hcloud_server.zz_unledgered" \
+  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
+
+# AC-3a: a store renamed in the ledger alone leaves its register clauses naming
+# nothing (Guard 3 #1); a mechanism changed in the ledger alone contradicts the
+# record (Guard 3 #3). Subjects are the first rows carrying a register record.
+REAL_COPY_B="$TMPDIR_TEST/real-copy-b"
+mk_real_copy real-copy-b
+python3 - "$REAL_LEDGER" "$TMPDIR_TEST/real-rename.json" "$TMPDIR_TEST/real-flip.json" \
+  > "$TMPDIR_TEST/real-3a-needles" <<'PYEOF2'
+import json, sys
+src = sys.argv[1]
+reg = "knowledge-base/legal/article-30-register.md#"
+l = json.load(open(src))
+with_reg = [s for s in l["stores"] if any(r.startswith(reg) for r in s.get("records", []))]
+assert with_reg, "no row carries a register record"
+victim = with_reg[0]["store"]
+for s in l["stores"]:
+    if s["store"] == victim:
+        s["store"] = victim + "_renamed"
+json.dump(l, open(sys.argv[2], "w"))
+l = json.load(open(src))
+flip = next(s for s in l["stores"] if s in [r for r in l["stores"]
+            if any(x.startswith(reg) for x in r.get("records", []))]
+            and s["at_rest"]["mechanism"].startswith("provider-managed:"))
+old = flip["at_rest"]["mechanism"]; new = old + "-flipped"
+flip["at_rest"]["mechanism"] = new
+rec = next(r for r in flip["records"] if r.startswith(reg))
+json.dump(l, open(sys.argv[3], "w"))
+print(f"carries a clause for {victim}, which names no stores[] row")
+print(f"{flip['store']} record {rec} states at rest: {old} but the row's mechanism is {new}")
+PYEOF2
+{ IFS= read -r NEEDLE_RENAME; IFS= read -r NEEDLE_FLIP; } < "$TMPDIR_TEST/real-3a-needles"
 run_case_reports "AC-3a a store renamed in the ledger only -> its register clauses FAIL" 1 \
-  "carries a clause for hcloud_server.inngest, which names no stores[] row" \
+  "$NEEDLE_RENAME" \
   --repo-sweep --repo-root "$REAL_COPY_B" --ledger "$TMPDIR_TEST/real-rename.json" --today "$REAL_TODAY"
-run_case_reports "AC-3a a mechanism changed in the ledger only -> its records FAIL" 1 \
-  "supabase.prd record knowledge-base/legal/article-30-register.md#Processing Activity 1 states at rest: provider-managed:supabase-postgres-aes256 but the row's mechanism is provider-managed:some-other-attestation" \
+run_case_reports "AC-3a a mechanism changed in the ledger only -> its record FAILS" 1 \
+  "$NEEDLE_FLIP" \
   --repo-sweep --repo-root "$REAL_COPY_B" --ledger "$TMPDIR_TEST/real-flip.json" --today "$REAL_TODAY"
-# Guard 3 matrix #4: deleting a surface from the committed ledger's
-# record_surfaces would silently un-gate every clause in it. Reported through
-# printf + exit, never through the verdict helper it protects (ADR-193).
-REAL_SURFACES="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("record_surfaces", [])))' "$REAL_LEDGER")"
-if [[ "$REAL_SURFACES" -lt 2 ]]; then
-  printf 'GUARD FAIL: the committed ledger lists %s record_surfaces, expected >= 2 (register + model.c4)\n' "$REAL_SURFACES" >&2
-  exit 2
-fi
-if [[ "$REAL_N" -lt 7 ]]; then
-  printf 'GUARD FAIL: AC-1a loop covered %s catalogued ids, expected >= 7\n' "$REAL_N" >&2
+
+# Guard 3 matrix #4. Dropping a surface from record_surfaces is caught by the
+# forward check for every row that still records it; what nothing else catches
+# is a surface REPLACED, or dropped together with every record pointing at it.
+# So pin the canonical pair by path, reported through printf + exit and never
+# through the verdict helper it protects (ADR-193).
+for canon in knowledge-base/legal/article-30-register.md knowledge-base/engineering/architecture/diagrams/model.c4; do
+  if ! python3 -c 'import json,sys; sys.exit(0 if sys.argv[2] in json.load(open(sys.argv[1])).get("record_surfaces", []) else 1)' \
+      "$REAL_LEDGER" "$canon"; then
+    printf 'GUARD FAIL: the committed ledger record_surfaces no longer lists %s\n' "$canon" >&2
+    exit 2
+  fi
+done
+REAL_CATALOG_N="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["non_iac_stores"]))' "$REAL_LEDGER")"
+if [[ "$REAL_N" -lt 1 || "$REAL_N" -ne "$REAL_CATALOG_N" ]]; then
+  printf 'GUARD FAIL: AC-1a loop covered %s catalogued ids, the ledger catalogues %s\n' "$REAL_N" "$REAL_CATALOG_N" >&2
   exit 2
 fi
 
@@ -1760,7 +1963,7 @@ fi
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=121
+MIN_CASES=137
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

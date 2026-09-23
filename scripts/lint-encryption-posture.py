@@ -63,6 +63,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -76,6 +77,7 @@ STORE_KIND_ENUM = {
     "log-sink",
     "secret-store",
     "host-root-disk",
+    "provider-image",
 }
 STORE_CLASS_KIND_ENUM = {
     "guest-luks-volume",
@@ -120,26 +122,66 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _tracked_files(repo_root: Path, pathspecs: list[str]) -> list[Path] | None:
+    """Tracked files matching `pathspecs` when repo_root is the top of a git work
+    tree, else None. The sweep must give the same verdict on every checkout
+    (ADR-140, "Layer A is hermetic"), so it reads what is COMMITTED: an untracked
+    `.tf`, a gitignored `*.tfvars`, or a `.terraform/` provider cache on one
+    machine must not change it. Every inherited GIT_* variable is dropped first:
+    GIT_DIR beats `-C`, so under a git hook it would answer for another repo."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True, env=env,
+        ).stdout.strip()
+        if Path(top).resolve() != repo_root.resolve():
+            return None
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "-z", "--", *pathspecs],
+            capture_output=True, check=True, env=env,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    paths = [repo_root / p for p in out.decode("utf-8", "replace").split("\0") if p]
+    return sorted(p for p in paths if p.is_file())
+
+
+def _walk(root: Path, pattern: str) -> list[Path]:
+    """Filesystem fallback for a tree that is not a git work tree (the test
+    fixtures). Never descends into a `.terraform/` provider cache."""
+    return sorted(
+        p for p in root.rglob(pattern)
+        if p.is_file() and ".terraform" not in p.relative_to(root).parts
+    )
+
+
 def find_tf_files(repo_root: Path) -> list[Path]:
     """apps/**/*.tf + (top-level) infra/**/*.tf — the R7 scan scope."""
+    tracked = _tracked_files(repo_root, [":(glob)apps/**/*.tf", ":(glob)infra/**/*.tf"])
+    if tracked is not None:
+        return tracked
     files: list[Path] = []
     for base in ("apps", "infra"):
         root = repo_root / base
         if root.is_dir():
-            files.extend(sorted(p for p in root.rglob("*.tf") if p.is_file()))
+            files.extend(_walk(root, "*.tf"))
     return files
 
 
 def find_infra_files(repo_root: Path) -> list[Path]:
     """Every file under apps/*/infra/ — the R1 clause-(a) LUKS apparatus scope
     (cloud-init, bootstrap, OR cutover; any file, not just *.tf)."""
+    tracked = _tracked_files(repo_root, [":(glob)apps/*/infra/**"])
+    if tracked is not None:
+        return tracked
     files: list[Path] = []
     apps_dir = repo_root / "apps"
     if apps_dir.is_dir():
         for app_dir in sorted(p for p in apps_dir.iterdir() if p.is_dir()):
             infra_dir = app_dir / "infra"
             if infra_dir.is_dir():
-                files.extend(sorted(p for p in infra_dir.rglob("*") if p.is_file()))
+                files.extend(_walk(infra_dir, "*"))
     return files
 
 
@@ -451,7 +493,7 @@ def check_resource_partition(
     store_classes = ledger["store_classes"]
     non_store_types = set(ledger["non_store_types"])
     ledgered_store_addrs = {s["store"] for s in ledger["stores"]}
-    tf_store_count = 0
+    tf_store_addrs: set[str] = set()
     for type_, addrs in tf_inventory.items():
         # MUTATION-TARGET: MB-5 start (unknown resource type -> FAIL, fail-closed)
         if type_ not in store_classes and type_ not in non_store_types:
@@ -463,7 +505,7 @@ def check_resource_partition(
             continue
         # MUTATION-TARGET: MB-5 end
         if type_ in store_classes:
-            tf_store_count += len(addrs)
+            tf_store_addrs.update(addrs)
             # MUTATION-TARGET: MB-1 start (unledgered-store detection)
             for addr in addrs:
                 if addr not in ledgered_store_addrs:
@@ -472,7 +514,7 @@ def check_resource_partition(
                         f"to the ledger for {addr}"
                     )
             # MUTATION-TARGET: MB-1 end
-    return tf_store_count
+    return len(tf_store_addrs)
 
 
 def check_positive_work_floor(
@@ -481,9 +523,11 @@ def check_positive_work_floor(
     """R8: expected is computed from the *.tf scan + the committed
     non_iac_stores catalog — NEVER from the ledger's own stores[] length, so a
     deleted row cannot silently lower the floor it's measured against."""
-    non_iac_count = len(ledger["non_iac_stores"])
+    # Distinct counts on every operand: repetition is reported by name
+    # (MB-21 rows, MB-29 addresses and catalogue), never absorbed as slack here.
+    non_iac_count = len(set(ledger["non_iac_stores"]))
     expected = tf_store_count + non_iac_count
-    actual = len(ledger["stores"])
+    actual = len({s["store"] for s in ledger["stores"]})
     # MUTATION-TARGET: MB-22 start (positive-work floor FAIL branch)
     if actual < expected:
         fails.append(
@@ -528,6 +572,31 @@ def check_store_id_accounted(
         for addr in addrs
     }
     catalog = set(ledger["non_iac_stores"])
+    # MUTATION-TARGET: MB-29 start (the floor's operands are disjoint sets)
+    declared: dict[str, int] = {}
+    for type_, addrs in tf_inventory.items():
+        if type_ in store_classes:
+            for addr in addrs:
+                declared[addr] = declared.get(addr, 0) + 1
+    for addr, n in sorted(declared.items()):
+        if n > 1:
+            fails.append(
+                f"FAIL: store address {addr} is declared by {n} *.tf blocks "
+                "(separate Terraform roots) and one ledger row cannot tell them "
+                "apart -> rename one of the resources"
+            )
+    for cid in sorted(catalog & set(declared)):
+        fails.append(
+            f"FAIL: non_iac_stores entry {cid} is also a *.tf store address -> "
+            "remove it from non_iac_stores; the *.tf scan already counts it"
+        )
+    for cid in sorted({c for c in ledger["non_iac_stores"]
+                       if ledger["non_iac_stores"].count(c) > 1}):
+        fails.append(
+            f"FAIL: non_iac_stores entry {cid} is listed more than once -> "
+            "list it once"
+        )
+    # MUTATION-TARGET: MB-29 end
     seen: set[str] = set()
     for row in ledger["stores"]:
         sid = row["store"]
@@ -579,24 +648,40 @@ def block_meta_args(block: str) -> dict[str, str]:
     nested `labels = { count = ... }` or a dynamic block is not read)."""
     out: dict[str, str] = {}
     depth = 0
-    for raw in block.splitlines():
-        line = _strip_hcl_comment(raw)
+    lines = [_strip_hcl_comment(raw) for raw in block.splitlines()]
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         if depth == 1:
             m = META_ARG_RE.match(line)
             if m:
-                out[m.group(1)] = m.group(2)
+                # An expression that opens a bracket continues until it closes
+                # (`for_each = {` / `for k, v in var.x : k => v` / `}`), so the
+                # whole expression is what the gate check reads.
+                expr = [m.group(2)]
+                bal = _bracket_balance(m.group(2))
+                while bal > 0 and i + 1 < len(lines):
+                    i += 1
+                    expr.append(lines[i].strip())
+                    bal += _bracket_balance(lines[i])
+                    depth += lines[i].count("{") - lines[i].count("}")
+                out[m.group(1)] = " ".join(x for x in expr if x)
         depth += line.count("{") - line.count("}")
+        i += 1
     return out
+
+
+def _bracket_balance(s: str) -> int:
+    return sum(s.count(o) - s.count(c) for o, c in ("{}", "[]", "()"))
 
 
 def resolve_var_map_keys(tf_file: Path, var_name: str, cache: dict[Path, str]) -> list[str] | None:
     """Top-level keys of `variable "<var_name>" { default = { ... } }` declared in
     the same Terraform root (directory) as tf_file, or None when there is no
-    such literal. A tfvars file in that root may override the default, so its
-    presence makes the literal unauthoritative -> None (fail closed)."""
+    such literal. The committed default is the authority: `*.tfvars` is
+    gitignored here, the apply reads its TF_VAR_* inputs from Doppler, and the
+    web-host membership check already treats this literal as canonical."""
     root = tf_file.parent
-    if any(root.glob("*.tfvars")) or any(root.glob("*.tfvars.json")):
-        return None
     var_re = re.compile(r'variable\s+"' + re.escape(var_name) + r'"\s*\{')
     for f in sorted(root.glob("*.tf")):
         text = cache.get(f)
@@ -639,6 +724,9 @@ def module_calls_by_dir(tf_files: list[Path], cache: dict[Path, str]) -> dict[Pa
                 d = (f.parent / src.group(1)).resolve()
                 out.setdefault(d, []).append(m.group(1))
     return out
+
+
+GATE_RE = re.compile(r"(?<![\w.])(?:var|local|module)\.[A-Za-z_][A-Za-z0-9_-]*")
 
 
 def _names_token(token: str, text: str) -> bool:
@@ -714,26 +802,30 @@ def check_instance_multiplicity(
         else:
             desc = f"for_each = {fe}"
             haystack = fe
+        gates = sorted(set(GATE_RE.findall(haystack)))
+        reeval = (row["at_rest"].get("exception") or {}).get("reevaluate_when") or ""
         # MUTATION-TARGET: MB-24 start (unresolvable multiplicity fails closed)
-        if mult is None or "gated_by" not in mult:
+        if mult is None:
             fails.append(
                 f"FAIL: {sid} is {desc}, which this check cannot resolve -> "
-                "declare multiplicity.instances and multiplicity.gated_by, and "
-                "name the gate in exception.reevaluate_when"
+                "declare multiplicity with instances: [] and name the gate "
+                f"({', '.join(gates) or 'none found'}) in exception.reevaluate_when"
             )
-        elif not _names_token(mult["gated_by"], haystack):
+        elif mult["instances"]:
             fails.append(
-                f"FAIL: {sid} multiplicity.gated_by {mult['gated_by']} does not "
-                f"occur in its expression ({desc}) -> name the variable, local "
-                "or module call that decides how many instances exist"
+                f"FAIL: {sid} is {desc}, whose instances this check cannot "
+                "verify, yet it declares a list -> declare instances: [] (an "
+                "unverified list reads as coverage it does not have)"
             )
-        elif not _names_token(
-            mult["gated_by"],
-            ((row["at_rest"].get("exception") or {}).get("reevaluate_when") or ""),
-        ):
+        elif not gates:
             fails.append(
-                f"FAIL: {sid} exception.reevaluate_when must name "
-                f"{mult['gated_by']} -> the gate flipping is what reopens this row"
+                f"FAIL: {sid} is {desc}, which names no var./local./module. gate "
+                "-> split the block into singletons, or gate it on a variable"
+            )
+        elif not any(_names_token(g, reeval) for g in gates):
+            fails.append(
+                f"FAIL: {sid} exception.reevaluate_when must name one of "
+                f"{', '.join(gates)} -> the gate flipping is what reopens this row"
             )
         # MUTATION-TARGET: MB-24 end
 
@@ -745,16 +837,29 @@ CLAUSE_RE = re.compile(
     r"\(encryption-posture ledger: (?P<id>[A-Za-z0-9_.-]+) — at rest: "
     r"(?P<mech>[A-Za-z0-9_.:-]+)\)"
 )
-HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*$", re.MULTILINE)
+HEADING_RE = re.compile(r"^#{1,2}[ \t]+(.+?)[ \t]*$", re.MULTILINE)
+FENCE_RE = re.compile(r"^[ \t]*(```|~~~)", re.MULTILINE)
+CLAUSE_TEMPLATE = "(encryption-posture ledger: <store id> — at rest: <mechanism>)"
+
+
+def _fenced_spans(text: str) -> list[tuple[int, int]]:
+    marks = [m.start() for m in FENCE_RE.finditer(text)]
+    return [(marks[i], marks[i + 1]) for i in range(0, len(marks) - 1, 2)]
 
 
 def surface_sections(path_str: str, text: str) -> list[tuple[str | None, int, int]]:
     """[(heading text or None, start, end)]. A markdown surface is split at its
-    headings, because one store is stated under several processing activities
-    and each statement must agree on its own. Any other surface is one section."""
+    H1/H2 headings, because one store is stated under several processing
+    activities and each statement must agree on its own. An H3+ heading is a
+    sub-part of its section, and a `#` line inside a fenced code block is code,
+    not a heading. Any other surface is one section."""
     if not path_str.endswith(".md"):
         return [(None, 0, len(text))]
-    heads = list(HEADING_RE.finditer(text))
+    fences = _fenced_spans(text)
+    heads = [
+        h for h in HEADING_RE.finditer(text)
+        if not any(a <= h.start() < b for a, b in fences)
+    ]
     out: list[tuple[str | None, int, int]] = [
         (None, 0, heads[0].start() if heads else len(text))
     ]
@@ -779,12 +884,13 @@ def _section_label(path_str: str, heading: str | None) -> str:
 
 
 def _clause_tokens(text: str, start: int, end: int) -> list[int]:
-    """Offsets of every clause token in [start, end), minus documented templates
-    (`<store id>`), which the register's maintenance section uses."""
+    """Offsets of every clause token in [start, end), minus the one documented
+    template (CLAUSE_TEMPLATE, verbatim), which the register's maintenance
+    section quotes. Anything else clause-shaped must parse."""
     out = []
     i = text.find(CLAUSE_TOKEN, start, end)
     while i != -1:
-        if not text.startswith(" <", i + len(CLAUSE_TOKEN)):
+        if not text.startswith(CLAUSE_TEMPLATE, i):
             out.append(i)
         i = text.find(CLAUSE_TOKEN, i + 1, end)
     return out
@@ -1187,6 +1293,32 @@ def check_luks_disclosure(
     # MUTATION-TARGET: MB-20 end
 
 
+def check_class_conformance(ledger: dict, fails: list[str]) -> None:
+    """A row at a store-class address carries that class's kind and one of its
+    mechanisms. Without this, `store_classes.<type>.mechanisms` is decoration:
+    a row could claim `luks` on a class that admits only plaintext-exception."""
+    classes = ledger["store_classes"]
+    for row in ledger["stores"]:
+        parsed = parse_address(row["store"])
+        if not parsed or parsed[0] not in classes:
+            continue
+        cls = classes[parsed[0]]
+        mech = row["at_rest"]["mechanism"]
+        # MUTATION-TARGET: MB-30 start (row conforms to its store class)
+        if row["kind"] != cls["kind"]:
+            fails.append(
+                f"FAIL: {row['store']} kind {row['kind']} differs from its "
+                f"store class kind {cls['kind']} -> use {cls['kind']}"
+            )
+        if not any(mech == m or mech.startswith(m + ":") for m in cls["mechanisms"]):
+            fails.append(
+                f"FAIL: {row['store']} mechanism {mech} is not one its store "
+                f"class admits ({', '.join(cls['mechanisms'])}) -> add it to "
+                "store_classes or correct the row"
+            )
+        # MUTATION-TARGET: MB-30 end
+
+
 def check_at_rest(row: dict, today: date, repo_root: Path, fails: list[str]) -> None:
     store = row["store"]
     ar = row["at_rest"]
@@ -1298,15 +1430,11 @@ def _validate_store(s: dict, i: int) -> list[str]:
         mu = s["multiplicity"]
         if (
             not isinstance(mu, dict)
-            or set(mu) - {"instances", "gated_by"}
+            or set(mu) - {"instances"}
             or not isinstance(mu.get("instances"), list)
             or not all(isinstance(x, str) for x in mu["instances"])
-            or ("gated_by" in mu and not isinstance(mu["gated_by"], str))
         ):
-            errs.append(
-                f"{prefix}.multiplicity must be {{instances: [string], "
-                "gated_by?: string}"
-            )
+            errs.append(f"{prefix}.multiplicity must be {{instances: [string]}}")
     if "kind" in s and s["kind"] not in STORE_KIND_ENUM:
         errs.append(f"{prefix}.kind invalid: {s.get('kind')!r}")
     if "at_rest" in s and isinstance(s["at_rest"], dict):
@@ -1470,6 +1598,7 @@ def run_sweep(
     check_non_iac_identity(ledger, fails)
     check_store_id_accounted(ledger, tf_inventory, fails)
     check_instance_multiplicity(ledger, tf_files, cache, fails)
+    check_class_conformance(ledger, fails)
     check_live_coverage_floor(ledger, fails)
 
     for row in ledger["stores"]:

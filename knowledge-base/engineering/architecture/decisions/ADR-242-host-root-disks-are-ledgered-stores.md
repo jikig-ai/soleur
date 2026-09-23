@@ -53,17 +53,21 @@ backstop, while web-2's copy is web-2's live `/mnt/data` with no LUKS sibling.
    only when its host is rebuilt. The `expires_on` dates are staggered review dates, not
    remediation deadlines. For a host that cannot be rebuilt as such (`rehearsal`, born each
    run; `grok_dogfood`, not yet born), the window is its birth. All six are tracked in #8620.
-2. **A row covers every instance of its block, or the sweep fails.** A block with `for_each`
-   or `count`, or one instantiated by a module, needs a `multiplicity` declaration on its row.
-   A `for_each` over `var.<map>` whose default literal resolves in the same Terraform root is
-   compared key for key. Every other shape fails closed unless the row names its `gated_by`
-   (a variable, local or module call). That gate must appear in the block's expression and in
-   the exception's `reevaluate_when`. A singleton must not declare `multiplicity`.
+2. **A multi-instance block must say so on its row.** A block with `for_each` or `count`, or
+   one instantiated by a module, needs a `multiplicity` declaration on its row. A `for_each`
+   written exactly as `var.<map>`, whose default literal resolves in the same Terraform root,
+   is compared key for key. Every other shape (`count`, a `for` expression, a module call)
+   cannot be verified: the row must declare `instances: []`, because an unchecked list would
+   read as coverage it does not have. Its exception's `reevaluate_when` must name one of the
+   `var.`/`local.`/`module.` identifiers in the block's own expression, which the check
+   derives rather than taking from the row. A singleton must not declare `multiplicity`.
 3. **The floor is exact.** Every catalogued non-IaC id must name a row. Every row must be a
    store-class `.tf` address or a catalogued id, and ids may not repeat. A row at a
-   store-class address must be a real block. Together these make
-   `rows == tf_store_count + |non_iac_stores|` hold by construction, so there is no slack for a
-   deleted row to hide in.
+   store-class address must be a real block. The operands must be disjoint sets: an address
+   declared in two Terraform roots, a catalogued id that is also a `.tf` address, and a
+   catalogue entry listed twice each fail by name. Given that, `rows == tf_store_count +
+   |non_iac_stores|` holds by construction, so there is no slack for a deleted row to hide in.
+   A row also conforms to its store class: the class's `kind`, and one of its `mechanisms`.
 4. **Each LUKS row's `does_not_defend` names where its passphrase lives**, including the
    root-disk copy or the token that fetches it.
 
@@ -81,11 +85,21 @@ metadata endpoint serving `user_data` to root. It is not the disk.
 
 ## Consequences
 
-- The sweep reports 25 stores (18 from `*.tf` plus 7 catalogued), with no slack.
-- Adding a key to `var.web_hosts`, or setting `enable_grok_dogfood`, fails the gate until
-  the ledger is updated. That is the intent: a new host is a new root disk.
-- The multiplicity resolver reads only a variable's `default` literal. A `*.tfvars` file in the
-  same root makes the literal unauthoritative, and the check then fails closed.
+- At merge the sweep reports 26 stores (18 from `*.tf` plus 8 catalogued), with no slack.
+- Adding a key to the `var.web_hosts` default fails the gate until the ledger is updated: a new
+  host is a new root disk. Flipping a count gate (`enable_grok_dogfood`) does NOT: Layer A reads
+  committed code, and the gate is flipped by a dispatch input. What Layer A guarantees for a
+  gated block is that its row exists, admits it covers an unknown set, and names the gate that
+  reopens it.
+- The multiplicity resolver reads the committed `default` literal. The sweep reads only tracked
+  files (`git ls-files`), so an untracked `.tf`, a gitignored `*.tfvars` or a `.terraform/` cache
+  on one machine cannot change its verdict; `*.tfvars` is gitignored here and the apply reads
+  its `TF_VAR_*` inputs from Doppler.
+- Host rows keep `expires_on` inside ADR-140's 90-day window as review dates; the rebuild
+  window is in `reevaluate_when`.
+- The web-1 snapshot images are a catalogued row of kind `provider-image`, not a root disk.
+  They are the first store a CI runner could observe directly (`GET /v1/images`), which is
+  ADR-141's arming trigger; nothing polls them yet.
 - Root-disk posture has no live signal. Every host row's `live_verification` is `unavailable`,
   because a CI runner cannot see guest-side disk state (ADR-141).
 
