@@ -33,3 +33,9 @@ brief's stated direction. Each one is recorded here instead of being applied sil
 
 - **Stated direction:** "the plan's deliverable is a close-comment with evidence" (#7077). For #6073: "close with evidence or relabel; decide".
 - **Plan does:** posts the evidence comment and runs `gh issue close --reason completed` in the work phase. The PR carries no closing keyword. Chosen by DHH's plan review. Neither closure depends on this PR's diff, and closing now removes the SLA-cron race on #6073.
+
+## DC4 — the brief's bottom line is corrected, not repeated (review P1)
+
+- **Stated direction:** "state plainly: the gap between today and 'migration complete' is not engineering; it is one authorization act on #6122".
+- **What was posted:** the corrected chain. The soak cannot pass until #8651 closes (`zot-soak-6122.sh` carries a `WEB_BLOCKER=8651` arm and needs `app_zot` evidence). Its recorded FAIL needs a re-armed window. Then come the #6500/#6122 authorizations, the ADR-169 option choice, and the build that option sets.
+- **Why:** the sentence as given is falsified by a gate in the repo. The #6122 comment was revised on 2026-09-24, and the plan paragraph carries a superseded marker.
