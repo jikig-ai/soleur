@@ -94,7 +94,7 @@ _stub="$SANDBOX/stubbin"; assert_fixture_dir "$_stub"; mkdir -p "$_stub"
   printf 'out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && out="$2"; shift; done\n'
   printf 'printf %s "$(printf "\\033")" "$(printf "\\033")" "$(printf "\\033")" "$(printf "\\033")"\n' \
     "'%s[2m15:32:23.971%s[0m %s[31mERROR%s[0m likec4 Invalid /r/m.c4\\n'"
-  printf 'printf %s > "$out"\n' "'{\"elements\":{\"a\":{}},\"relations\":{},\"views\":{}}'"
+  printf 'printf %s | tee "$out" >/dev/null\n' "'{\"elements\":{\"a\":{}},\"relations\":{},\"views\":{}}'"
 } > "$_stub/npx"
 chmod +x "$_stub/npx"
 _sr="$SANDBOX/stubrepo"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/$DIAG"
