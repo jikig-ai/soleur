@@ -438,7 +438,6 @@ a1_idiom_ban() {
   # not preservation of it.
   local _a1_roots=(
     "$REPO_ROOT/.claude/hooks"
-    "$REPO_ROOT/.openhands/hooks"
     "$REPO_ROOT/plugins/soleur/scripts/lib"
   )
   while IFS= read -r f; do
@@ -469,13 +468,17 @@ a1_idiom_ban() {
   # (1) The REQUIRED set is pinned as literals here, independent of the array the
   #     walk uses. Deriving "expected" from `_a1_roots` would be a tautology —
   #     deleting an entry shrinks both sides and the comparison still holds.
-  #     Measured: with only the per-root-contributed check below, dropping
-  #     `.openhands/hooks` from the array left this gate GREEN at 83 files.
+  #     Measured: with only the per-root-contributed check below, dropping a
+  #     whole root from the array leaves this gate GREEN while scanning less.
+  #     Re-derived after ADR-240 / #8306 retired the second harness tree: the
+  #     two surviving roots contribute 105 `*.sh` files (101 from
+  #     `.claude/hooks`, 4 from `plugins/soleur/scripts/lib`), counted from the
+  #     tree with the same `find` this walk uses — not by subtracting from the
+  #     83 the three-root arrangement once reported.
   # (2) Each root must actually have CONTRIBUTED a file, because `find … 2>/dev/null`
   #     swallows a root that is present in the array but missing on disk.
   local _a1_required=(
     ".claude/hooks"
-    ".openhands/hooks"
     "plugins/soleur/scripts/lib"
   )
   local _a1_narrowed="" req present

@@ -303,39 +303,19 @@ needs the unpublished camelCase `filePath`.
 
 Tracked in **#7173**.
 
-### The `.openhands/` mirror
+### Reason classes on this side
 
-The three mirrors (`guardrails.sh`, `pre-merge-rebase.sh`,
-`worktree-write-guard.sh`) keep a **minimal in-place** type assertion rather than
-this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
-different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask` and no kill
-switch). What each reason class does there is decided in
-[ADR-165][adr165]. **Read that table carefully: its rows are labelled with the
-`.openhands` mirror's OWN vocabulary, which is a different enum that still has
-an `unparseable` member** (`.openhands/hooks/*.sh` set their own
-`*_ENVELOPE_SHAPE` from their own inline `jq` and never source this library).
-The `.claude` column reads `ask` for every class, so the #7275 split changed
-those hooks' behaviour not at all — but do not read its row labels as this
-file's enum. ADR-165 carries an errata saying so.
+The payload classes deny, and `jq_missing` plus the `internal:*` classes fail
+**open, loudly**, because the repair for a missing `jq` is itself a tool call
+that a deny would also block.
 
-On this side: the payload classes deny, and `jq_missing` plus the `internal:*`
-classes fail **open, loudly**, because the repair for a missing `jq` is itself a
-tool call that a deny would also block.
-
-This is an in-place decision, not an unexamined gap. Convergence onto the shared
-extractor would buy DRY and three jq forks down to one on a non-primary harness,
-and would pay for it with a cross-tree fail-hard `source` — whose only precedent
-in that file (`freeze-lock.sh`) is deliberately fail-**soft** for reasons that do
-not apply to an input helper.
-
-The divergence is **executable**, not just documented:
-`pre-merge-rebase-parity.test.sh` asserts all three classes. That matters because
-that suite's header records two prior silent divergences between the harnesses,
-both undetected precisely because nothing ran the comparison.
+(A second, hand-ported harness tree once kept its own minimal in-place type
+assertion against a different envelope and a different enum; that tree was
+retired in ADR-240 / #8306, so there is no longer a second vocabulary to
+disambiguate here.)
 
 [adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md
 [adr156]: ../../knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md
-[adr165]: ../../knowledge-base/engineering/architecture/decisions/ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md
 
 ## Incident telemetry (ADR-2)
 
@@ -780,7 +760,7 @@ layer covers the merges no PreToolUse hook sees (web UI, admin, CI-queued).
 - **Best-effort, not a boundary.** Bypassed by merging from `main`, the web UI,
   an admin merge, a CI-queued `--auto` merge (title, body and labels can all
   change in the queue window — and `--auto` is the workflow's *mandated* merge
-  form, so this is the common case), the OpenHands harness, and the
+  form, so this is the common case), and the
   `OWNER/REPO#N` / full-issue-URL reference forms the canonical scanner does not
   recognise. `main` **does** carry server-side rulesets with required status
   checks, so a durable backstop can be added there; none covers this class today.

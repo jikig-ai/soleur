@@ -172,14 +172,16 @@ assert "merge --no-commit is out of declared scope (allowed)" '[[ $rc -eq 0 ]]' 
 out="$(bash "$SUT" --bogus 'git commit' 2>&1)"; rc=$?
 assert "unknown flag exits 2" '[[ $rc -eq 2 ]]' "rc=$rc out=$out"
 
-# ── End-to-end through the hook copies ───────────────────────────────────────
-# The canonical script is only half the control: each harness's hook must
-# RECOGNIZE the command shapes the script refuses. A trigger regex narrower
-# than COMMIT_RE leaves arms the script could refuse never reached. These arms
-# feed real envelopes through both hook copies on fixture repos.
+# ── End-to-end through the .claude hook ──────────────────────────────────────
+# The canonical script is only half the control: the hook must RECOGNIZE the
+# command shapes the script refuses. A trigger regex narrower than COMMIT_RE
+# leaves arms the script could refuse never reached. These arms feed real
+# envelopes through the hook on fixture repos.
+#
+# The hand-ported hook mirror these arms were originally doubled against was retired
+# on 2026-09-23 (ADR-240, closes #8306); only the `.claude` half remains.
 REPO_ROOT="$(cd "$DIR/../.." && git rev-parse --show-toplevel)"
 CLAUDE_HOOK="$REPO_ROOT/.claude/hooks/guardrails.sh"
-OH_HOOK="$REPO_ROOT/.openhands/hooks/guardrails.sh"
 
 # The .claude hook delegates to the plugin script when it can resolve it —
 # `$REPO_ROOT/plugins/soleur/scripts/precommit-guard.sh` under the hook's own
@@ -189,30 +191,7 @@ mkdir -p "$MAIN_REPO/plugins/soleur/scripts" "$FEAT_REPO/plugins/soleur/scripts"
 cp "$SUT" "$MAIN_REPO/plugins/soleur/scripts/precommit-guard.sh"
 cp "$SUT" "$FEAT_REPO/plugins/soleur/scripts/precommit-guard.sh"
 
-if command -v jq >/dev/null 2>&1 && [[ -f "$CLAUDE_HOOK" && -f "$OH_HOOK" ]]; then
-
-  # .openhands envelope: {tool_input:{command}, working_dir}, deny = exit 2.
-  oh_decision() { # $1 = command, $2 = working_dir
-    jq -nc --arg c "$1" --arg w "$2" \
-      '{tool_input:{command:$c}, working_dir:$w}' \
-      | (cd "$2" && bash "$OH_HOOK" 2>/dev/null) \
-      | jq -r '.decision // "allow"' 2>/dev/null
-  }
-
-  d="$(oh_decision 'git commit -m x' "$MAIN_REPO")"
-  assert "openhands hook: plain commit on main denies" '[[ "$d" == "deny" ]]' "got: '$d'"
-
-  d="$(oh_decision 'LEFTHOOK=0 git commit -m x' "$MAIN_REPO")"
-  assert "openhands hook: env-prefix commit on main denies (regex parity)" '[[ "$d" == "deny" ]]' "got: '$d'"
-
-  d="$(oh_decision 'git commit -m x' "$FEAT_REPO")"
-  assert "openhands hook: commit on feature branch allows" '[[ "$d" != "deny" ]]' "got: '$d'"
-
-  d="$(oh_decision "git -C $FEAT_REPO commit -m x && git -C $MAIN_REPO commit -m x" "$FEAT_REPO")"
-  assert "openhands hook: mixed -C chain denies when ANY commit lands on main" '[[ "$d" == "deny" ]]' "got: '$d'"
-
-  d="$(oh_decision "git -C $FEAT_REPO commit -m x" "$MAIN_REPO")"
-  assert "openhands hook: -C feature from a main working_dir allows" '[[ "$d" != "deny" ]]' "got: '$d'"
+if command -v jq >/dev/null 2>&1 && [[ -f "$CLAUDE_HOOK" ]]; then
 
   # .claude envelope: {tool_name:"Bash", tool_input:{command}, cwd} — allow is
   # EMPTY output; deny is a permissionDecision JSON. INCIDENTS_REPO_ROOT
@@ -239,8 +218,10 @@ if command -v jq >/dev/null 2>&1 && [[ -f "$CLAUDE_HOOK" && -f "$OH_HOOK" ]]; th
   assert "claude hook: -C feature from a main cwd allows" '[[ "$d" == "allow" ]]' "got: '$d'"
 
 else
-  for _ in 1 2 3 4 5 6 7 8 9; do
-    CASES=$((CASES + 1)); fail "hook end-to-end arms skipped (jq or a hook copy missing)"
+  # One placeholder per arm inside the `if`, so a missing jq or hook fails the
+  # suite loudly instead of quietly shrinking the assertion count past the floor.
+  for _ in 1 2 3 4; do
+    CASES=$((CASES + 1)); fail "hook end-to-end arms skipped (jq or the .claude hook missing)"
   done
 fi
 
@@ -256,7 +237,11 @@ fi
 # ── Anti-vacuity floor (ADR-193 #1) ──────────────────────────────────────────
 # Ratchet when adding arms; read a floor failure on an otherwise-green run as
 # "you added assertions, update this number".
-PRECOMMIT_MIN_ASSERTIONS=30
+#
+# Lowered 30 -> 25 on 2026-09-23 when the hand-ported hook mirror was retired
+# (ADR-240, closes #8306): its five end-to-end hook arms went with it. The floor
+# is the new MEASURED count — nothing else shrank.
+PRECOMMIT_MIN_ASSERTIONS=25
 if (( CASES < PRECOMMIT_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PRECOMMIT_MIN_ASSERTIONS" >&2

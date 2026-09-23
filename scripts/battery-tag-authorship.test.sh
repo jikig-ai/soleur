@@ -408,9 +408,10 @@ while (( depth < DEPTH_BOUND )); do
       CLOSURE["$cand"]=1; added=$((added + 1))
     done < <(
       # NO DIRECTORY ALLOWLIST. An earlier revision enumerated top-level dirs
-      # (scripts|plugins|apps|tests|.github|.claude) and therefore could not reach
-      # `.openhands/hooks/pre-merge-rebase.sh`, which `pre-merge-rebase-parity.test.sh` — a
-      # battery suite — invokes by path. That is UNDER-approximation, i.e. fail-OPEN: a real
+      # (scripts|plugins|apps|tests|.github|.claude) and therefore could not reach a hook a
+      # battery suite invokes by path from outside those dirs — measured on the hand-ported
+      # sibling harness tree, since retired in ADR-240 / #8306, but the defect is the allowlist,
+      # not that tree. That is UNDER-approximation, i.e. fail-OPEN: a real
       # tag author outside the listed dirs was invisible. The plan's design is explicit that any
       # tracked executable path literal joins the closure, so the allowlist is the defect. The
       # `-f` test below is what bounds this; a prose mention of a non-existent path is dropped.

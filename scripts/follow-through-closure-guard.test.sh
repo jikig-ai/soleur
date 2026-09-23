@@ -516,10 +516,12 @@ sweep() {  # reads NUL-delimited paths on stdin; prints matching "file:line" rec
 # THE CORPUS IS EVERY TRACKED SHELL FILE, not a hand-listed set of directories.
 #
 # The Property says "no shell call site IN THE REPOSITORY". A five-root walk
-# (.github scripts plugins tests apps) does not deliver that: measured, 93 tracked shell files
-# live outside it — 82 of them under `.claude/hooks`, which is the PreToolUse/SessionStart
-# execution surface, plus `.openhands/`, `test/`, `bin/` and any repo-root script. Planting the
-# hazard in any of them was invisible.
+# (.github scripts plugins tests apps) does not deliver that: re-measured 2026-09-23 with
+# `git ls-files -- '*.sh' '*.bash' '*.zsh'`, 109 tracked shell files live outside it — 101 of
+# them under `.claude/hooks`, which is the PreToolUse/SessionStart execution surface, plus
+# `knowledge-base/`, `test/`, `bin/` and any repo-root script. (The earlier 93/82 reading also
+# counted the hand-ported sibling harness tree retired in ADR-240 / #8306.) Planting the hazard
+# in any of them was invisible.
 #
 # Deriving from `git ls-files` fixes three things at once and removes a hand-maintained list:
 #   - coverage equals the property's own noun (the repository), and grows by itself;

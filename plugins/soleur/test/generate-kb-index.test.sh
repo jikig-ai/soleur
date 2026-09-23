@@ -481,7 +481,6 @@ for doc in \
   "$REPO_ROOT/plugins/soleur/skills/spec-templates/SKILL.md" \
   "$REPO_ROOT/plugins/soleur/skills/brainstorm/SKILL.md" \
   "$REPO_ROOT/plugins/soleur/agents/engineering/research/learnings-researcher.md" \
-  "$REPO_ROOT/.openhands/skills/learnings-researcher/SKILL.md" \
   "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md"
 do
   label="prose parity: $(basename "$(dirname "$doc")")/$(basename "$doc")"
@@ -578,7 +577,11 @@ fi
 # floor that exists to notice the silence — the suite prints a total and exits 0.
 # A floor enforced through the suspect cannot witness the suspect.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=62
+# 62 -> 61 (ADR-240 / #8306): the hand-ported sibling harness tree was retired,
+# and its `learnings-researcher/SKILL.md` was one of the prose-parity consumers
+# iterated above — one fewer consumer, one fewer assertion. Measured on a green
+# run after the removal (61 dispatched), not subtracted from the old value.
+MIN_ASSERTIONS=61
 total_assertions=$((PASS + FAIL))
 if [[ "$total_assertions" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \

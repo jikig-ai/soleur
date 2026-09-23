@@ -275,19 +275,27 @@ if [[ "$MODE" == "--repo-sweep" ]]; then
   # must not red the gate, whereas an expected root going missing means the walk
   # stopped covering it. Measured from this producer's own output, not from memory.
   # Re-derived 2026-09-08 against this producer, by running the arithmetic rather than
-  # narrating it: these 13 roots hold 1,334 of the 1,345 swept files. The original
+  # narrating it: those 13 roots held 1,334 of the 1,345 swept files. The original
   # 8-root set held 1,136, leaving 209 outside the assertion against a floor slack of
-  # 145 -- so dropping .grok/ (67) and .openhands/ (63) would have passed BOTH guards
+  # 145 -- so dropping .grok/ (67) and the 63-file hand-ported mirror would have passed BOTH guards
   # at 1,215 files, which is exactly the narrowing this assertion exists to catch.
+  #
+  # Amended 2026-09-23 (#8306, ADR-240): the two hand-ported mirror roots were RETIRED (the
+  # hand-ported mirrors are deleted from the tree), so the set is 11 roots. They are
+  # removed rather than kept-and-failing: a root that no longer exists cannot be
+  # "stopped being walked", and leaving it here would red the gate on every run.
+  # This is the one edit this array may take -- a root going missing while the
+  # directory still exists is the narrowing above, and stays a failure.
   #
   # The 11 still uncovered are: two one-file roots (infra, spike) whose last *.md can
   # legitimately be deleted, and the nine repo-root *.md (AGENTS.md, README.md and
   # friends), which are files rather than roots and so have no directory to assert.
   # The count floor is their only cover. That is a deliberate trade; it is stated with
   # the real numbers because an earlier revision of this comment claimed 1,325/20 and
-  # listed .gemini as uncovered while it is a member below -- a justification narrated
-  # from memory instead of measured, in the paragraph justifying the trade.
-  EXPECTED_ROOTS=(.claude .gemini .github .grok .openhands apps docs knowledge-base plugins scripts test tests todos)
+  # listed a since-retired root as uncovered while it was a member below -- a justification narrated
+  # from memory instead of measured, in the paragraph justifying the trade. (That root is
+  # no longer a member, and no longer exists; see the 2026-09-23 amendment above.)
+  EXPECTED_ROOTS=(.claude .github .grok apps docs knowledge-base plugins scripts test tests todos)
   actual_roots="$(printf '%s\0' "${FILES[@]}" | cut -z -d/ -f1 | tr '\0' '\n' | LC_ALL=C sort -u)"
   missing=""
   for r in "${EXPECTED_ROOTS[@]}"; do

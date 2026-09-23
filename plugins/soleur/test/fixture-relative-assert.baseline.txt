@@ -244,7 +244,6 @@
 4	.claude/hooks/skill-invocation-logger.test.sh
 55	.github/scripts/test/fixtures-validate-infra-templates.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
-2	.openhands/hooks/stop-hook.sh
 2	plugins/soleur/hooks/stop-hook.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
 5	plugins/soleur/scripts/lib/operator-script.sh

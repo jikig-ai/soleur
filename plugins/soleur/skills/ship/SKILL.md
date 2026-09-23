@@ -1656,9 +1656,10 @@ bash scripts/check-adr-ordinals.sh
    unrelated ADR now holds that ordinal. Check the CLAUSE LABEL too: a provisional ADR
    drafted with `D1/D2/D3` sections that ships restructured leaves `ADR-<n> D3` dangling on
    both halves, and a pure ordinal bump does not fix it. **Why:** #7195 — nine `ADR-158 D3`
-   citations shipped in `.openhands/hooks/`, five inside the agent-facing deny string; the
-   plan's prescribed sweep globbed a per-feature `plans/` directory that does not exist
-   (it holds flat files) and never covered `.openhands/` at all.
+   citations shipped in a hand-ported hook mirror, five inside the agent-facing deny string;
+   the plan's prescribed sweep globbed a per-feature `plans/` directory that does not exist
+   (it holds flat files) and never covered that mirror at all. (The mirror itself was retired
+   2026-09-23 — ADR-240 — but the lesson is about the sweep's reach, not that directory.)
 3. Re-run `check-adr-ordinals.sh` → must exit 0. Commit + push.
 
 **The collision window extends through Phase 7** (mirrors the migration-number-collision re-check in work Phase 2): a sibling's ADR can land on `main` and be pulled into the branch by a **BEHIND auto-sync AFTER this gate ran**. After any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`, re-run `check-adr-ordinals.sh` and renumber-during-ship before the next merge attempt (see Phase 7 "ADR-ordinal collision after a sync").
