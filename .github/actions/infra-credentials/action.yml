@@ -152,10 +152,26 @@ runs:
           # before-state fallback. That ORDER is the same one census row G1g's allowance is
           # anchored on, and it means a job that only needs to GET from Hetzner stops using
           # a destroy-capable token as soon as O5 lands.
+          #
+          # `DOPPLER_TOKEN=` IS LOAD-BEARING, and its absence is why the first version of
+          # this block was a no-op. Arm 2 below prefixes its own read; this one did not,
+          # and the step's `env:` binds only DP_INFRA/DP_LEGACY/GIT_DATA_ROOT_STATE_MIGRATED
+          # — never DOPPLER_TOKEN. So the read ran UNAUTHENTICATED, `doppler` exited
+          # non-zero, `2>/dev/null` hid the reason, `|| legacy_hcloud=""` turned it into a
+          # value, and the outage fix above exported nothing while looking like it had run.
+          #
+          # That is the could-not-measure/measured-bad collapse, and it lands on the arm
+          # whose entire job is to be invisible when it works: the warning below would have
+          # blamed a missing SECRET for what was a missing TOKEN, so the operator reading it
+          # would have gone to Doppler to add a key that was already there. Auth failure and
+          # absent-key are now separated, and the reason is carried into the message.
           legacy_hcloud=""
+          legacy_err_file="$(mktemp)"
           for n in HCLOUD_TOKEN_READONLY HCLOUD_TOKEN; do
-            legacy_hcloud="$(doppler secrets get "$n" --plain -p soleur -c prd_terraform 2>/dev/null)" || legacy_hcloud=""
-            [[ -n "$legacy_hcloud" ]] && break
+            if legacy_hcloud="$(DOPPLER_TOKEN="$DP_LEGACY" doppler secrets get "$n" --plain -p soleur -c prd_terraform 2>>"$legacy_err_file")"; then
+              [[ -n "$legacy_hcloud" ]] && break
+            fi
+            legacy_hcloud=""
           done
           if [[ -n "$legacy_hcloud" ]]; then
             # Doppler-fetched values are NOT auto-masked by Actions (unlike `secrets.*`), and
@@ -179,8 +195,18 @@ runs:
             # NOT fatal: a Tier-A job that never touches Hetzner is a legitimate caller, and
             # every consumer already fail-closes loudly on an empty token with a message
             # naming its own gate. Say so here so the two are distinguishable in the log.
-            echo "::warning title=infra-privileged::source=legacy hcloud_token=unreadable — neither HCLOUD_TOKEN_READONLY nor HCLOUD_TOKEN could be read from prd_terraform. Any step that needs a Hetzner token will fail closed and name itself."
+            # Distinguish "the token cannot authenticate" from "the key is not there". The
+            # first is a broken caller and the operator fixes DOPPLER_TOKEN; the second is
+            # the expected state after O10 and needs no action. Grep the CLI's own stderr
+            # rather than guessing from an exit code, and never echo the stderr itself — a
+            # Doppler auth error can quote the token prefix.
+            if grep -qiE 'unauthor|invalid.*token|authentication' "$legacy_err_file"; then
+              echo "::error title=infra-privileged::source=legacy verdict=legacy_token_unauthorized — DOPPLER_TOKEN (Tier A) was rejected by Doppler when reading prd_terraform. This is a broken credential, NOT a missing secret: do not add keys to Doppler. Check the DOPPLER_TOKEN repo secret."
+            else
+              echo "::warning title=infra-privileged::source=legacy hcloud_token=absent — the Tier-A token authenticated, but neither HCLOUD_TOKEN_READONLY nor HCLOUD_TOKEN exists in prd_terraform. Expected after operator step O10. Any step that needs a Hetzner token will fail closed and name itself."
+            fi
           fi
+          rm -f "$legacy_err_file"
 
           emit source "legacy"
           emit git_data_root_state_bucket "$LEGACY_BUCKET"

@@ -115,13 +115,27 @@ case "$args" in
   # The legacy arm's Tier-A reads. Keyed PER NAME so a test can make the read-only token
   # present or absent INDEPENDENTLY of the read/write one -- a stub answering the same for
   # both could not tell "prefers READONLY" from "reads whatever it is given".
-  "secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform")
-    [[ -n "${STUB_HCLOUD_RO:-}" ]] || exit 1
-    printf '%s' "$STUB_HCLOUD_RO"; exit 0
-    ;;
+  #
+  # AND THE STUB AUTHENTICATES. The real `doppler` rejects a read with no DOPPLER_TOKEN,
+  # and the step's `env:` block does not bind one -- so the legacy read is only reachable
+  # because the arm prefixes `DOPPLER_TOKEN="$DP_LEGACY"` inline. A stub that answers
+  # regardless of the token cannot see that prefix being dropped, and the first version of
+  # this arm HAD dropped it: every read failed, `|| legacy_hcloud=""` turned the failure
+  # into a value, and rows 1b/1c would have gone green over an arm that exported nothing.
+  # The refusal text is shaped like Doppler's own so the arm's auth-vs-absence grep is
+  # exercised against something it would actually meet.
+  "secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform"|\
   "secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform")
-    [[ -n "${STUB_HCLOUD_RW:-}" ]] || exit 1
-    printf '%s' "$STUB_HCLOUD_RW"; exit 0
+    if [[ "${DOPPLER_TOKEN:-}" != "${STUB_EXPECT_LEGACY_TOKEN:-dp.st.LEGACY-FIXTURE}" ]]; then
+      echo "Doppler Error: Invalid Auth token (unauthorized)" >&2
+      exit 1
+    fi
+    case "$args" in
+      *HCLOUD_TOKEN_READONLY*) v="${STUB_HCLOUD_RO:-}" ;;
+      *)                       v="${STUB_HCLOUD_RW:-}" ;;
+    esac
+    [[ -n "$v" ]] || exit 1
+    printf '%s' "$v"; exit 0
     ;;
 esac
 
@@ -160,6 +174,7 @@ run_loader() {
     STUB_DOWNLOAD_RC="$download_rc" \
     STUB_HCLOUD_RO="${STUB_HCLOUD_RO:-}" \
     STUB_HCLOUD_RW="${STUB_HCLOUD_RW:-}" \
+    STUB_EXPECT_LEGACY_TOKEN="${STUB_EXPECT_LEGACY_TOKEN:-dp.st.LEGACY-FIXTURE}" \
     GITHUB_ENV="$case_dir/github_env" \
     GITHUB_OUTPUT="$case_dir/github_output" \
     bash --noprofile --norc -eo pipefail "$WORK/loader.sh" \
@@ -202,6 +217,12 @@ full_payload() {
     DOPPLER_PROJECT: "soleur-infra-privileged",
     DOPPLER_CONFIG: "prd",
     DOPPLER_ENVIRONMENT: "prd",
+    # The FOURTH metadata name. It has no fixture in the original row4 loop, and it is the
+    # worst member to lose: exporting DOPPLER_TOKEN into $GITHUB_ENV repoints every later
+    # `doppler run --preserve-env` in the job to authenticate as the TIER-B PRIVILEGED
+    # token -- strictly worse than the DOPPLER_PROJECT leak the row was written for.
+    # Dropping it from META_FILTER was a one-word edit that stayed green.
+    DOPPLER_TOKEN: "dp.st.CARRIER-METADATA-NOT-A-SECRET",
     DOPPLER_TOKEN_TF: "dp.pt.FIXTURE-NOT-A-REAL-TOKEN",
     HCLOUD_TOKEN: "hcloud-fixture",
     CF_API_TOKEN_R2: "cf-fixture",
@@ -262,7 +283,7 @@ grep -qF -- "$PEM_E" "$LOADER_DIR/github_env" \
 # failure from a loader that reported success.
 # ======================================================================
 run_loader "dp.st.TIERB-FIXTURE" "" "" "$(full_payload)"
-for k in DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT; do
+for k in DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT DOPPLER_TOKEN; do
   if env_has "$k"; then fail "row4: leaked $k into GITHUB_ENV (would repoint every later doppler run)"
   else pass "row4: filtered $k"; fi
 done
@@ -324,10 +345,23 @@ env_has "AWS_ACCESS_KEY_ID"     && pass "row8b: aliases the backend key id"     
 env_has "AWS_SECRET_ACCESS_KEY" && pass "row8b: aliases the backend secret"     || fail "row8b: no AWS_SECRET_ACCESS_KEY"
 # The alias must carry the TIER-B value, not the Tier-A one -- an alias pointing at the
 # wrong pair is the R7 defect with the appearance of the fix.
-grep -qE '^AWS_ACCESS_KEY_ID<<' "$LOADER_DIR/github_env" \
-  && grep -qF -- "rw-key" "$LOADER_DIR/github_env" \
-  && pass "row8b: the alias carries the Tier-B read/write value" \
-  || fail "row8b: alias present but not the Tier-B value"
+# SCOPED to the alias block. A file-wide `grep -F rw-key` is satisfied by the generic
+# export loop's own TF_STATE_AWS_ACCESS_KEY_ID / TF_VAR_tf_state_aws_access_key_id lines,
+# which carry that value three times before the alias is reached -- so the assertion held
+# with the alias pointing at a literal, at the SECRET in the id slot, or at nothing of the
+# sort. The heredoc body is the line immediately after the `KEY<<delim` header.
+_alias_val() { awk -v k="$1" '$0 ~ "^"k"<<" {getline; print; exit}' "$LOADER_DIR/github_env"; }
+[[ "$(_alias_val AWS_ACCESS_KEY_ID)" == "rw-key" ]] \
+  && pass "row8b: the alias carries the Tier-B read/write KEY ID" \
+  || fail "row8b: AWS_ACCESS_KEY_ID aliases $(_alias_val AWS_ACCESS_KEY_ID), want the Tier-B rw-key"
+[[ "$(_alias_val AWS_SECRET_ACCESS_KEY)" == "rw-secret" ]] \
+  && pass "row8b: the alias carries the Tier-B read/write SECRET" \
+  || fail "row8b: AWS_SECRET_ACCESS_KEY aliases $(_alias_val AWS_SECRET_ACCESS_KEY), want the Tier-B rw-secret"
+# ...and the two are not the SAME value. An alias that put the secret in the id slot
+# satisfied every check above it, and is exactly the R7 defect wearing the fix's clothes.
+[[ "$(_alias_val AWS_ACCESS_KEY_ID)" != "$(_alias_val AWS_SECRET_ACCESS_KEY)" ]] \
+  && pass "row8b: the id and secret slots carry DIFFERENT values" \
+  || fail "row8b: id and secret slots carry the same value"
 
 # ROW 8c — half-set backend pair is a refusal, same reason as the git-data pair.
 HALFTF="$("$REAL_JQ" -n '{HCLOUD_TOKEN:"x", TF_STATE_AWS_ACCESS_KEY_ID:"only-the-id"}')"
@@ -381,12 +415,48 @@ grep -qF -- "rw-token" "$LOADER_DIR/github_env" \
 # token while naming its own gate. Making this fatal would break those callers.
 STUB_HCLOUD_RO="" STUB_HCLOUD_RW="" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
 [[ "$LOADER_RC" -eq 0 ]] && pass "row1d: no Hetzner token is not fatal for a non-Hetzner caller" || fail "row1d: rc=$LOADER_RC"
-said "hcloud_token=unreadable" && pass "row1d: names the condition" || fail "row1d: silent"
+said "hcloud_token=absent" && pass "row1d: names the condition" || fail "row1d: silent"
+# ...and names it as an ABSENCE, never as an auth failure. The two send an operator to
+# opposite places: "absent" is the expected state after O10 and needs no action, while a
+# rejected token means the DOPPLER_TOKEN repo secret is broken. Conflating them is what
+# sends someone to Doppler to add a key that is already there.
+said "legacy_token_unauthorized" \
+  && fail "row1d: reported an AUTH failure for an authenticated read with no key present" \
+  || pass "row1d: does not misreport an absent key as an auth failure"
 if env_has "HCLOUD_TOKEN"; then
   fail "row1d: exported an EMPTY HCLOUD_TOKEN — shadows nothing and hides the cause"
 else
   pass "row1d: exports no empty HCLOUD_TOKEN"
 fi
+
+# ROW 1g — THE READ IS AUTHENTICATED, and an auth failure is reported AS one.
+#
+# This row exists because the defect it kills shipped: the arm's `doppler secrets get` had
+# no `DOPPLER_TOKEN=` prefix while the Tier-B arm below it did, the step's `env:` binds no
+# DOPPLER_TOKEN, and `2>/dev/null || legacy_hcloud=""` converted the resulting auth failure
+# into an empty string. The arm then took its "no token available" branch and warned about
+# a missing SECRET. Every symptom of the fix working was present; nothing was exported.
+#
+# Driving a WRONG token is the only way to separate the two: with the prefix present the
+# arm meets Doppler's rejection and must say so; with the prefix deleted the read inherits
+# whatever DOPPLER_TOKEN the job has (in the real action: none) and the distinction is
+# unreachable.
+STUB_EXPECT_LEGACY_TOKEN="dp.st.SOME-OTHER-TOKEN" STUB_HCLOUD_RO="ro-token" STUB_HCLOUD_RW="rw-token" \
+  run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+said "legacy_token_unauthorized" \
+  && pass "row1g: a rejected Tier-A token is reported as an AUTH failure" \
+  || fail "row1g: Doppler rejected the token and the arm did not say so — a broken credential reads as a missing secret"
+if env_has "HCLOUD_TOKEN"; then
+  fail "row1g: exported an HCLOUD_TOKEN from a read that was never authorized"
+else
+  pass "row1g: exports nothing when the read was refused"
+fi
+# NON-VACUITY CONTROL for 1e: the SAME fixture with the RIGHT token must export the value.
+# Without this, an arm that never exports anything at all would pass both 1g assertions.
+STUB_HCLOUD_RO="ro-token" STUB_HCLOUD_RW="rw-token" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+grep -qF -- "ro-token" "$LOADER_DIR/github_env" \
+  && pass "row1g-control: the same fixture with the correct token DOES export" \
+  || fail "row1g-control: the authenticated read exported nothing — 1g proved nothing"
 
 # ROW 1f — $GITHUB_ENV INJECTION. The legacy value comes from `prd_terraform`, which the
 # branch-nameable `DOPPLER_TOKEN_WRITE` repo secret can write until operator step O11. With
@@ -457,6 +527,33 @@ fi
 # slice, because the verdict block that reads the array is not in it -- so the floor is
 # "enforced THROUGH the machinery it guards" and a one-line edit disarming every assertion
 # disarms the floor too. ADR-193.
+# ---- LATE dispatch re-validation (the launder defence) --------------------
+#
+# The instrument self-test at the top is a POINT-IN-TIME sample: it proves the helpers
+# worked once, before any row, and never looks again. One line inserted after it --
+#
+#     fail() { PASSES=$((PASSES + 1)); printf '[ok-LAUNDERED] %s\n' "$1"; }
+#
+# -- routes every subsequent failure into the PASS counter. The failures vanish, the
+# floor below still reconciles because the inflation exactly replaces them, and the suite
+# prints "N passed, 0 failed" over a SUT with its decision logic deleted. Measured: the
+# whole META_FILTER removed plus that one line = green.
+#
+# So re-drive both helpers HERE, after every row, and require both counters to move. A
+# laundered fail() increments PASSES instead of FAILURES and is caught by the second
+# clause. Reported with printf + exit, never through the helpers under test.
+_LATE_P="$PASSES"; _LATE_F="${#FAILURES[@]}"
+pass "late dispatch re-validation: pass() still increments (EXPECTED)"
+fail "late dispatch re-validation: fail() still records (EXPECTED — not a real failure)"
+if [[ "$PASSES" -ne "$((_LATE_P + 1))" || "${#FAILURES[@]}" -ne "$((_LATE_F + 1))" ]]; then
+  printf 'LATE DISPATCH RE-VALIDATION FAILED: pass() moved %s->%s (want +1), fail() moved %s->%s (want +1). The assertion machinery was neutered or laundered AFTER the opening self-test.\n' \
+    "$_LATE_P" "$PASSES" "$_LATE_F" "${#FAILURES[@]}" >&2
+  exit 2
+fi
+# Undo the two synthetic verdicts so the floor and the summary below count real rows only.
+PASSES=$((PASSES - 1))
+unset 'FAILURES[-1]'
+
 printf '\n%s: %s passed, %s failed\n' "$SUITE" "$((PASSES - 1))" "${#FAILURES[@]}"
 if [[ "${#FAILURES[@]}" -gt 0 ]]; then
   printf '  - %s\n' "${FAILURES[@]}"
@@ -468,7 +565,7 @@ fi
 # scores CONSTRUCTION FAILURE rather than FIRES. The literal is safe because the self-test
 # already asserts `PASSES == 1` at that point and aborts otherwise.
 SELFTEST_PASSES=1
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=52
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s real assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$MIN_ASSERTIONS" >&2
