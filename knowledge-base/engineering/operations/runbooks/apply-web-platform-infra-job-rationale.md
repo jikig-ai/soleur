@@ -692,3 +692,22 @@ The guards on the post-apply steps (the failure notification, the drift probe) a
 with the apply skipped, `steps.apply.outcome` is `'skipped'` and neither arm of those conditions
 matches anyway. Relying on that would leave the guard implicit, and an edit to the apply step's own
 condition would silently re-arm a step that must not run in a rehearsal.
+
+### plan_only, and the one step that deliberately has no guard
+
+`git_data_host_replace`'s boot-signal poll carries NO `inputs.plan_only != true` conjunct,
+and that is deliberate rather than an omission.
+
+It would be redundant. With the apply step skipped, `steps.apply.outcome` is `'skipped'`, so
+neither arm of the poll's `(outcome == 'success' || outcome == 'failure')` matches and the step
+already cannot run in a rehearsal. The step is also not MUTATING by Guard 5's definition — no
+`terraform apply`, no `ssh`/`scp` — so census row G5a does not ask for one.
+
+And it is not free. `tests/scripts/test-git-data-boot-signal-poll.sh` pins that `if:` line
+verbatim as case **S19**, and that file belongs to the parallel #8211 session (PR #8564), which
+has commits against it. Adding a redundant conjunct here bought belt-and-braces and broke a
+contract another PR depends on — measured, in CI, as one red suite out of 163.
+
+The sibling `web_host_replace` Sentry-surface step DOES carry the guard, because there the step
+runs on `always()` and would otherwise query Sentry for a fresh host that was never created.
+That asymmetry is the rule working, not drift: the guard goes where the step could actually run.

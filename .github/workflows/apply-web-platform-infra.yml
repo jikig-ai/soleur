@@ -4362,7 +4362,8 @@ jobs:
         # birth job and driven by tests/scripts/test-git-data-boot-signal-poll.sh. The
         # `Dispatch summary` below turns an apply/poll outcome pair that never produced a
         # verdict (including an empty outcome from a renamed step id) red.
-        if: ${{ !cancelled() && inputs.plan_only != true && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
+        # No plan_only conjunct: redundant, and breaks an S19 pin.
+        if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -5639,7 +5640,6 @@ jobs:
 
       # ADR-128 R2/R3/R4/R5 — the SAME extracted reader web_host_create runs.
       - name: Surface fresh-host Sentry breadcrumb trail (best-effort — R2/R3/R4/R5)
-        # MERGED, not a 2nd `if:` key (#8209).
         if: always() && inputs.plan_only != true
         env:
           JOB_STATUS: ${{ job.status }}
