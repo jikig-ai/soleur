@@ -470,7 +470,7 @@ a1_idiom_ban() {
   #     deleting an entry shrinks both sides and the comparison still holds.
   #     Measured: with only the per-root-contributed check below, dropping a
   #     whole root from the array leaves this gate GREEN while scanning less.
-  #     Re-derived after ADR-240 / #8306 retired the second harness tree: the
+  #     Re-derived after ADR-245 / #8306 retired the second harness tree: the
   #     two surviving roots contribute 105 `*.sh` files (101 from
   #     `.claude/hooks`, 4 from `plugins/soleur/scripts/lib`), counted from the
   #     tree with the same `find` this walk uses — not by subtracting from the

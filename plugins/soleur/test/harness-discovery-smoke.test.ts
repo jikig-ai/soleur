@@ -14,7 +14,7 @@ import {
 } from "../scripts/harness-discovery-smoke";
 import { MIN_MANIFEST_DECLARED_SKILLS } from "./lib/population-floors";
 
-// Guard 6 of the harness-parity hardening bundle (ADR-240).
+// Guard 6 of the harness-parity hardening bundle (ADR-245).
 //
 // Every row below is a PURE-function case over SYNTHESIZED output — never a copied
 // transcript (`cq-test-fixtures-synthesized-only`). The shapes mirror what was measured

@@ -1,7 +1,7 @@
 # Harness-parity gate map
 
 Which gate owns which property, what a RED usually means, and where the remaining
-work is tracked. This table lives here rather than in an ADR (ADR-240) because it
+work is tracked. This table lives here rather than in an ADR (ADR-245) because it
 changes every time a gate is added, and an ADR is not the home for a table with
 that lifecycle.
 
@@ -28,7 +28,7 @@ CI job rather than a file at all.
 | `plugins/soleur/test/harness-parity-tree.test.ts` + `plugins/soleur/test/harness-parity.test.ts` | Every component reference in agent-read prose is the canonical `soleur:<name>` / registry id — skills, commands, the Codex/Devin shims, and `skills/*/references/**` | A harness-specific form (`/plan`, `$soleur:plan`) or a bare agent leaf (dead on Grok) entered the corpus. `harness-parity-census.ts --fix` repairs the mechanical shapes on a clean tree | ADR-226. The references half closes with #8570; **agent bodies stay open on #8317**, blocked on a `name:` frontmatter carve-out |
 | `apps/web-platform/test/plugin-root-anchoring.test.ts` (command + secret-gate axes) | No customer-facing command or secret-gate script is reached through a CWD-controllable anchor | Zero tolerance — rewrite as `"${CLAUDE_PLUGIN_ROOT}/…"` with no default | #7450 (closed) |
 | `apps/web-platform/test/plugin-root-anchoring.test.ts` (skills ratchet axis) | The non-gate CWD-controllable anchors cannot GROW | A NEW anchor, or an existing one gaining occurrences. Do NOT add a baseline row — fix the anchor | #7453 owns migrating the existing rows (open) |
-| `plugins/soleur/test/harness-discovery-smoke.test.ts` + the `harness-discovery` job in `.github/workflows/ci.yml` | Codex and Devin, installed hermetically from the checkout, register every skill their manifest's roots declare, with ONE multiplicity mode per run | Exit 1 = a real set or multiplicity mismatch. Exit 3 = UNRESOLVED (CLI absent, install failed, version drift, or a structurally unreadable listing) and is never a pass | ADR-240; #8574 owns promoting the job to required (open) |
+| `plugins/soleur/test/harness-discovery-smoke.test.ts` + the `harness-discovery` job in `.github/workflows/ci.yml` | Codex and Devin, installed hermetically from the checkout, register every skill their manifest's roots declare, with ONE multiplicity mode per run | Exit 1 = a real set or multiplicity mismatch. Exit 3 = UNRESOLVED (CLI absent, install failed, version drift, or a structurally unreadable listing) and is never a pass | ADR-245; #8574 owns promoting the job to required (open) |
 | `plugins/soleur/test/components.test.ts` (`ACKED_CROSS_ROOT_DUPES`) | Slash-name uniqueness across harness component namespaces | A new cross-root duplicate. The discovery gate above proves REGISTRATION, not uniqueness — this is where uniqueness lives | ADR-224 decision 5; #8236 (open) |
 | `plugins/soleur/test/devin-cloud-mode.test.ts` | The cloud-mode marker fleet is byte-identical across its curated set | A skill's cloud-mode block drifted | ADR-221 |
 | `plugins/soleur/test/workflow-fidelity.test.ts` | Grok routing semantics, asserted without reading the invoke block's bytes | The routing contract changed. This is the anchor OUTSIDE the Grok block's own md5 pin | #6320 (closed) |
@@ -55,7 +55,7 @@ no check.
 ## Vendor-CLI pins
 
 `harness-discovery` drives two third-party CLIs, pinned exactly and asserted at
-install time (ADR-240):
+install time (ADR-245):
 
 | CLI | Pin | Install path | Depth of the pin |
 |---|---|---|---|

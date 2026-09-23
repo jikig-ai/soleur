@@ -666,9 +666,23 @@ print("PERMS=%s" % ",".join("%s:%s" % kv for kv in sorted(perms.items())))
 print("JOBS=%s" % ",".join(sorted((d.get("jobs") or {}).keys())))
 j = d["jobs"]["rehearse"]
 print("ENVIRONMENT=%s" % j.get("environment"))
-unpinned = [s["uses"] for s in j["steps"]
-            if "uses" in s and (("@" not in s["uses"]) or len(s["uses"].split("@")[1]) != 40)]
+# A `./`-prefixed LOCAL composite action has no SHA to pin, by construction: it is resolved
+# from the checked-out tree, so it is already pinned -- to this very commit -- and there is no
+# third-party supply chain for a tag to be moved under. Requiring `@<40 hex>` of one makes the
+# repo's own composite actions unusable here, which is what #8209's credential loader
+# (`./.github/actions/infra-credentials`) ran into.
+#
+# Counted separately rather than silently dropped, and a THIRD-PARTY floor kept below: the
+# exemption must not be able to empty the population it exempts from. If every `uses:` in this
+# job became local, `unpinned` would be empty for the wrong reason and this assertion would
+# pass while proving nothing.
+uses = [s["uses"] for s in j["steps"] if "uses" in s]
+local = [u for u in uses if u.startswith("./")]
+third = [u for u in uses if not u.startswith("./")]
+unpinned = [u for u in third if ("@" not in u) or len(u.split("@")[1]) != 40]
 print("UNPINNED=%s" % ",".join(unpinned))
+print("LOCAL_USES=%d" % len(local))
+print("THIRD_PARTY_USES=%d" % len(third))
 PY
 )" || _wf_out=""
 
@@ -733,8 +747,17 @@ PY
 
   cases=$((cases + 1))
   [[ -z "$(_wf UNPINNED)" ]] \
-    && pass "every action is SHA-pinned" \
+    && pass "every third-party action is SHA-pinned ($(_wf THIRD_PARTY_USES) examined, $(_wf LOCAL_USES) repo-local exempt)" \
     || fail "unpinned action(s): $(_wf UNPINNED)"
+
+  # ANTI-VACUITY for the exemption above. A `./` action carries no SHA by construction, so the
+  # exemption is correct -- but it is also the shape that would let this assertion pass over an
+  # empty set. Require at least one third-party `uses:` to have actually been examined.
+  cases=$((cases + 1))
+  [[ "$(_wf THIRD_PARTY_USES)" -ge 1 ]] \
+    && pass "the SHA-pin assertion examined at least one third-party action (it is not vacuous)" \
+    || fail "no third-party action in the rehearse job — the SHA-pin assertion above examined NOTHING" \
+         "every uses: is repo-local, so the exemption swallowed the whole population"
 
   # ── 13. THE CAPTURE POLL ACTUALLY POLLS (behavioural — this arm EXECUTES the step) ──
   #
@@ -2110,13 +2133,13 @@ fi
 #     1  no evidence file => still exactly one decision, never zero
 #   ----
 #     6   (measured against the as-written file: 94 + 6 = 100 = 100 passed, 0 failed)
-if [[ "$cases" -lt 100 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 100.\n' "$cases" >&2
+if [[ "$cases" -lt 104 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 104.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 100)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 104)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

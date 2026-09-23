@@ -531,7 +531,15 @@ for one class of destroy, so the change is recorded here rather than only in ADR
 ### What changed
 
 `registry-host-replace` is `workflow_dispatch`-only and carries **no `environment:` reviewer gate
-and no typed `confirm` token** — verified against the job's own guard. So before #7555 the entire
+and no typed `confirm` token** — verified against the job's own guard.
+
+> **Superseded in part, 2026-09-22 (#8209, ADR-241 D2):** the job now declares
+> `environment: infra-privileged`. That is still **not a reviewer gate** — the environment has no
+> reviewers by design, because it serves unattended jobs — so the sentence above remains true of
+> the *human* authorization. What changed is the branch reach: the environment's deployment-branch
+> policy admits `main` only, so a dispatch from any other ref is refused before the job starts.
+
+ So before #7555 the entire
 human authorization for recreating the fleet's sole pull path was *an operator deliberately typed
 a dispatch*. Nothing in the repo fired it, which is why `apps/web-platform/infra/cloud-init-registry.yml`
 could merge and sit **inert** — the defect #7555 exists to remove.

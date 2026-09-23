@@ -179,7 +179,7 @@ assert "unknown flag exits 2" '[[ $rc -eq 2 ]]' "rc=$rc out=$out"
 # envelopes through the hook on fixture repos.
 #
 # The hand-ported hook mirror these arms were originally doubled against was retired
-# on 2026-09-23 (ADR-240, closes #8306); only the `.claude` half remains.
+# on 2026-09-23 (ADR-245, closes #8306); only the `.claude` half remains.
 REPO_ROOT="$(cd "$DIR/../.." && git rev-parse --show-toplevel)"
 CLAUDE_HOOK="$REPO_ROOT/.claude/hooks/guardrails.sh"
 
@@ -239,7 +239,7 @@ fi
 # "you added assertions, update this number".
 #
 # Lowered 30 -> 25 on 2026-09-23 when the hand-ported hook mirror was retired
-# (ADR-240, closes #8306): its five end-to-end hook arms went with it. The floor
+# (ADR-245, closes #8306): its five end-to-end hook arms went with it. The floor
 # is the new MEASURED count — nothing else shrank.
 PRECOMMIT_MIN_ASSERTIONS=25
 if (( CASES < PRECOMMIT_MIN_ASSERTIONS )); then

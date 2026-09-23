@@ -57,7 +57,7 @@ GIT_ROOT=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | s
 [[ "$FILE_PATH" == *"/.worktrees/"* ]] && exit 0
 
 # Allow writes to the .claude/ directory (settings, hooks, memory). The sibling
-# hand-ported harness tree had its own allow line here until ADR-240 / #8306
+# hand-ported harness tree had its own allow line here until ADR-245 / #8306
 # retired it; the allow narrowed with the tree.
 RELATIVE_PATH="${FILE_PATH#"$GIT_ROOT"/}"
 [[ "$RELATIVE_PATH" == .claude/* ]] && exit 0

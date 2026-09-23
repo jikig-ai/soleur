@@ -1,6 +1,6 @@
 /**
  * Tool-map coverage — every Claude Code tool an agent-read doc names has a stated
- * Codex and Devin translation (#8318, ADR-240).
+ * Codex and Devin translation (#8318, ADR-245).
  *
  * WHY A TABLE AND NOT A BLOCKLIST. #8318's original proposal was a born-blocking
  * blocklist of "bare mechanism nouns" (`Skill tool`, `Task tool`, `subagent_type`).
@@ -43,7 +43,7 @@ import { PLUGIN_ROOT } from "./agent-registry";
  * translation. Dropping it would narrow the gate to make a green easier, which is the
  * one move this file exists to prevent.
  *
- * STALENESS IS AN ACCEPTED RISK, recorded in ADR-240: a derived `PascalCase tool`
+ * STALENESS IS AN ACCEPTED RISK, recorded in ADR-245: a derived `PascalCase tool`
  * detector was cut at plan review (it needs its own false-positive list). The
  * vocabulary is refreshed when Claude Code adds tools; this comment's date is the
  * last time that happened.

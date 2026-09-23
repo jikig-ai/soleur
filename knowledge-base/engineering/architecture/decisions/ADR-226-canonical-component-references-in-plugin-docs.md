@@ -10,7 +10,7 @@ Accepted.
 
 Soleur ships one component tree — 98 skills, 3 commands, 67 registry agents — to four harnesses
 WITH ADAPTERS IN `harness.ts`, each invoking a component with its own syntax. (The repo carries
-four harness trees — `.agents`, `.codex`, `.devin`, `.grok` (`.gemini` and `.openhands` retired 2026-09-23, ADR-240); this PR's own
+four harness trees — `.agents`, `.codex`, `.devin`, `.grok` (`.gemini` and `.openhands` retired 2026-09-23, ADR-245); this PR's own
 learning file records that "ships to four harnesses" is false as an unqualified claim. Four is the
 number `detectHarness` discriminates and `formatSkillInvocation` renders for, which is the set this
 decision is about. The other two have no adapter branch, so this gate says nothing about them.)
@@ -98,7 +98,7 @@ author's loop.
    a sigil.
 2. **Population and index are derived, never listed.** Population:
    `:(glob)plugins/soleur/{skills,codex/skills,devin/skills}/*/SKILL.md`,
-   `:(glob)plugins/soleur/commands/*.md` and, since 2026-09-23 (ADR-240),
+   `:(glob)plugins/soleur/commands/*.md` and, since 2026-09-23 (ADR-245),
    `:(glob)plugins/soleur/skills/*/references/**/*.md` — each glob carrying its
    region policy. Read `POPULATION_GLOBS` for the live set; this sentence is a
    description of it, never the authority.
@@ -173,7 +173,7 @@ Declared gaps, each with an issue:
   worded is broader than those three nouns, so treat that as a floor, not a census. No
   canonical word exists to allowlist against; the adapters translate the noun
   themselves.
-- **NG-P** (#8317, P1) — **half discharged 2026-09-23 (ADR-240, #8570); the
+- **NG-P** (#8317, P1) — **half discharged 2026-09-23 (ADR-245, #8570); the
   measurements below stand as taken and are not edited.** The REFERENCES half is
   now in `POPULATION_GLOBS` and remediated: the three blockers this bullet names
   for it (no `**` in `globToRegex`, the two `regionPolicyForPath` fixtures pinning
@@ -211,7 +211,7 @@ Declared gaps, each with an issue:
   and Claude. The gate's promise is "no harness-specific form in agent-read
   prose", not "resolves everywhere".
 
-  > **Amended 2026-09-23 (ADR-240, #8390 bundle).** This clause previously read
+  > **Amended 2026-09-23 (ADR-245, #8390 bundle).** This clause previously read
   > "Codex and Devin are declared uncovered (#8306)". The citation was WRONG —
   > #8306 is the `.openhands`/`.gemini` mirror-completeness issue, not a
   > discovery gap — and the status is now stale. Codex and Devin DISCOVERY is

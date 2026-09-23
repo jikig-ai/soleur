@@ -520,7 +520,7 @@ sweep() {  # reads NUL-delimited paths on stdin; prints matching "file:line" rec
 # `git ls-files -- '*.sh' '*.bash' '*.zsh'`, 109 tracked shell files live outside it — 101 of
 # them under `.claude/hooks`, which is the PreToolUse/SessionStart execution surface, plus
 # `knowledge-base/`, `test/`, `bin/` and any repo-root script. (The earlier 93/82 reading also
-# counted the hand-ported sibling harness tree retired in ADR-240 / #8306.) Planting the hazard
+# counted the hand-ported sibling harness tree retired in ADR-245 / #8306.) Planting the hazard
 # in any of them was invisible.
 #
 # Deriving from `git ls-files` fixes three things at once and removes a hand-maintained list:

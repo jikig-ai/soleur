@@ -143,5 +143,5 @@ still close nothing.
 - `plugins/soleur/skills/review/scripts/emit-review-trailer.sh` (producer)
 - `.claude/hooks/pre-merge-rebase.sh`, `plugins/soleur/skills/ship/SKILL.md`
   (consumers; an `.openhands/hooks/pre-merge-rebase.sh` mirror was a third until
-  the port was retired 2026-09-23, ADR-240)
+  the port was retired 2026-09-23, ADR-245)
 - ADR-015 (decoupled work/ship for review gates) — same domain, prior art

@@ -2758,10 +2758,115 @@ describe("betteruptime_team_member.ops is a per-merge -targeted managed resource
 //     Terraform pins reviewers.users, but nothing else fails RED pre-merge if a
 //     future edit empties it — this test is that guard. ────────────────────────
 describe("github_repository_environment declares a non-empty reviewers.users (DP-11 F8)", () => {
+  // (#8209, ADR-241 D2) THE PROPERTY WIDENED, not weakened.
+  //
+  // This guard was written when every environment in this root was a cutover GATE whose
+  // protection WAS the reviewer, so "reviewers.users is non-empty" and "this environment
+  // is protected" were the same sentence. ADR-241 introduces a second, deliberately
+  // reviewer-less class: `infra-privileged` serves the UNATTENDED Tier-B jobs
+  // (apply-on-merge, the scheduled drift check), which a reviewer gate would block by
+  // design. Adding a reviewer to satisfy the old spelling would have broken the thing
+  // the environment exists to do.
+  //
+  // The real hazard was never "zero reviewers" on its own — it is an environment that
+  // auto-approves AND admits any branch. A main-only deployment-branch policy makes
+  // "auto-approve" mean "auto-approve a run that is already on main", which is a
+  // protection, just a different one. So the invariant is now: EVERY environment
+  // carries at least one of the two, and an environment with NEITHER is RED.
+  //
+  // That widening is a DISJUNCTION, and a disjunction is strictly WEAKER than either
+  // side — so on its own it would have silently retired the old property for every
+  // environment that already satisfied it. `REVIEWERS_RATCHET` below is what keeps the
+  // old property where it applied: the two-of-two limb is available only to
+  // environments that never gated on a human. (An earlier draft of this comment claimed
+  // the widening was "strictly STRONGER". It was not, and emptying
+  // `web_platform_infra_apply`'s reviewer list passed under it.)
+  // Returns, per environment, the SET of branch_patterns its deployment policies declare.
+  //
+  // A set rather than a boolean, because the property is "`main` is the ONLY pattern",
+  // not "`main` is AMONG the patterns". Those differ by one appended resource:
+  //
+  //   resource "github_repository_environment_deployment_policy" "infra_privileged_any" {
+  //     environment    = github_repository_environment.infra_privileged.environment
+  //     branch_pattern = "*"
+  //   }
+  //
+  // GitHub UNIONs deployment policies, so that one block re-opens the environment to
+  // every branch while a `main` policy is still present and still correct. An extractor
+  // that `continue`s past a non-`main` pattern cannot see it: the appended resource is
+  // invisible rather than disqualifying, and the guard stays green while the boundary
+  // #8209 buys is gone. Collect every pattern and let the caller demand exactly {"main"}.
+  //
+  // `files` is a parameter — the same seam `collectSshProvisioned` carries — so the
+  // direction test below can drive a SYNTHETIC tree through the REAL walk. Without it
+  // nothing can exercise the must-trip side: every policy on the live tree says "main",
+  // so deleting the pattern test entirely leaves this suite green.
+  const policyPatternsFor = (
+    files: string[] = listInfraTfFiles(),
+  ): Map<string, Set<string>> => {
+    const found = new Map<string, Set<string>>();
+    const re =
+      /resource\s+"github_repository_environment_deployment_policy"\s+"[A-Za-z0-9_]+"\s*\{([\s\S]*?)\n\}/g;
+    for (const file of files) {
+      const stripped = stripComments(readFileSync(file, "utf8"));
+      let m: RegExpExecArray | null;
+      re.lastIndex = 0;
+      while ((m = re.exec(stripped)) !== null) {
+        const body = m[1];
+        const ref = body.match(
+          /environment\s*=\s*github_repository_environment\.([A-Za-z0-9_]+)\.environment/,
+        );
+        if (!ref) continue;
+        const pat = body.match(/branch_pattern\s*=\s*"([^"]*)"/);
+        // A policy with no readable pattern is counted as an UNKNOWN pattern, not
+        // skipped: "I could not parse it" must not render as "it is main-only".
+        const set = found.get(ref[1]) ?? new Set<string>();
+        set.add(pat ? pat[1] : "__UNPARSED__");
+        found.set(ref[1], set);
+      }
+    }
+    return found;
+  };
+  const policyPatterns = policyPatternsFor();
+  const isMainOnly = (env: string): boolean => {
+    const pats = policyPatterns.get(env);
+    return pats !== undefined && pats.size === 1 && pats.has("main");
+  };
+  const mainOnlyPolicyEnvs = new Set(
+    [...policyPatterns.keys()].filter((e) => isMainOnly(e)),
+  );
+
+  // Environments that carried a non-empty `reviewers.users` before #8209 widened the
+  // property below. They keep it.
+  //
+  // WHY A RATCHET AND NOT A RE-DERIVATION: the widened limb is `reviewers OR main-only
+  // policy`, and a disjunction is strictly WEAKER than either side. Before #8209 the
+  // property was `reviewers`, full stop — so emptying `web_platform_infra_apply`'s
+  // reviewer list (a UI click, or deleting four lines of HCL) would now PASS on the
+  // branch-policy limb, converting the sole human authorization for a host birth into
+  // an auto-approve with no test going red. That is the exact harm the `#6730` comment
+  // above says declaring the environment in terraform exists to prevent, and the
+  // widening would have re-opened it.
+  //
+  // So the disjunction is available only to environments that never had reviewers. For
+  // everything in this set the property is unchanged: reviewers, and a branch policy on
+  // top of them is additive.
+  //
+  // MEASURED off the tree, not guessed: these are every environment that carries a
+  // non-empty `reviewers.users` today. The loop below asserts each one is still IN the
+  // population, so renaming or deleting an environment cannot quietly drop it out of the
+  // ratchet — a ratchet nobody can fail is the same as no ratchet.
+  const REVIEWERS_RATCHET = new Set([
+    "workspaces_luks_cutover",
+    "inngest_cutover",
+    "inngest_config_signing",
+    "web_platform_infra_apply",
+  ]);
+
   test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
     const header =
       /resource\s+"github_repository_environment"\s+"([A-Za-z0-9_]+)"\s*\{/g;
-    const envs: { name: string; users: string }[] = [];
+    const envs: { name: string; users: string; body: string }[] = [];
     for (const file of listInfraTfFiles()) {
       const stripped = stripComments(readFileSync(file, "utf8"));
       let m: RegExpExecArray | null;
@@ -2787,7 +2892,7 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
         }
         const body = stripped.slice(openBrace, end + 1);
         const rev = body.match(/reviewers\s*\{[^}]*users\s*=\s*\[([^\]]*)\]/);
-        envs.push({ name, users: (rev?.[1] ?? "").trim() });
+        envs.push({ name, users: (rev?.[1] ?? "").trim(), body });
       }
     }
 
@@ -2802,16 +2907,122 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // authorization for a host birth into an auto-approve, with no test going red.
     // Declaring it in terraform is what brings it under the loop below.
     expect(names).toContain("web_platform_infra_apply");
+    // (#8209) The reviewer-less Tier-B environment must be IN the population, or the
+    // widened property below is vacuous for exactly the class it was widened for.
+    expect(names).toContain("infra_privileged");
+    // And the policy extractor must have found something, or every environment would
+    // trivially satisfy the branch-policy limb and the check would pass for the wrong
+    // reason. A zero-match extractor is the worst outcome: it still prints a verdict.
+    expect(
+      mainOnlyPolicyEnvs.size,
+      "the deployment-policy extractor matched NOTHING — the branch-policy limb below would be vacuous",
+    ).toBeGreaterThan(0);
 
+    const seenRatchet = new Set<string>();
     for (const env of envs) {
       const ids = env.users
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+
+      if (REVIEWERS_RATCHET.has(env.name)) {
+        seenRatchet.add(env.name);
+        expect(
+          ids.length,
+          `github_repository_environment.${env.name} is in REVIEWERS_RATCHET and its reviewers.users is EMPTY. ` +
+            `This environment gated on a human before #8209; the branch-policy limb is not available to it. ` +
+            `Removing its reviewers converts a human authorization into an auto-approve (DP-11 F8; #6730).`,
+        ).toBeGreaterThan(0);
+        continue;
+      }
+
+      // A reviewer-less environment relies entirely on the branch policy, so the policy
+      // must be main-ONLY (see policyPatternsFor) AND the environment must actually be
+      // configured to consult custom policies. `custom_branch_policies = false` makes
+      // every named pattern inert; `protected_branches = true` admits every protected
+      // branch regardless of pattern. Both are one-word edits that GitHub accepts and
+      // that leave the `main` policy resource sitting there looking correct.
+      const dbp = env.body.match(/deployment_branch_policy\s*\{([^}]*)\}/);
+      const custom =
+        dbp !== null && /custom_branch_policies\s*=\s*true/.test(dbp[1]);
+      const notProtected =
+        dbp !== null && /protected_branches\s*=\s*false/.test(dbp[1]);
+      const policyIntact = isMainOnly(env.name) && custom && notProtected;
       expect(
-        ids.length,
-        `github_repository_environment.${env.name} has an EMPTY reviewers.users — a zero-reviewer environment auto-approves (DP-11 F8)`,
-      ).toBeGreaterThan(0);
+        ids.length > 0 || policyIntact,
+        `github_repository_environment.${env.name} has no reviewers, so it is gated only by its branch policy — ` +
+          `and that gate is not intact. Needs all three: exactly one deployment policy whose branch_pattern is ` +
+          `"main" (saw ${JSON.stringify([...(policyPatterns.get(env.name) ?? [])])}), ` +
+          `custom_branch_policies = true (saw ${custom}), protected_branches = false (saw ${notProtected}). ` +
+          `Otherwise any branch can deploy to it and read its secrets (DP-11 F8; #8209 ADR-241 D2).`,
+      ).toBe(true);
+    }
+
+    // A ratchet entry that is not in the population enforces nothing. This is the
+    // difference between "this environment still requires a human" and "an environment
+    // by that name was renamed away and nobody noticed".
+    for (const name of REVIEWERS_RATCHET) {
+      expect(
+        seenRatchet.has(name),
+        `REVIEWERS_RATCHET names ${name}, but no github_repository_environment by that name was found in the ` +
+          `infra root. Either it was renamed (update the ratchet and confirm the new name still has reviewers) ` +
+          `or it was deleted. An unmatched ratchet entry is an unenforced one.`,
+      ).toBe(true);
+    }
+  });
+
+  // The must-trip side of the branch-policy limb. Every deployment policy on the live
+  // tree says `branch_pattern = "main"`, so on the real tree the limb is green whether
+  // the pattern test works or is deleted outright — the guard above can only ever
+  // demonstrate its pass branch. `policyPatternsFor(files)` takes the file list for
+  // exactly this reason: a synthetic tree goes through the REAL walk, not a re-derived
+  // copy of it that could drift from the thing shipping.
+  test("a second, wider deployment policy DISQUALIFIES an environment (branch-policy limb)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tf-policy-direction-"));
+    try {
+      const f = join(dir, "synthetic.tf");
+      const mainPolicy = `
+resource "github_repository_environment_deployment_policy" "synthetic_main" {
+  repository     = "soleur"
+  environment    = github_repository_environment.synthetic.environment
+  branch_pattern = "main"
+}
+`;
+      writeFileSync(f, mainPolicy);
+      expect(
+        [...(policyPatternsFor([f]).get("synthetic") ?? [])],
+        "a lone main policy must read as exactly {main} — otherwise the negative below proves nothing",
+      ).toEqual(["main"]);
+
+      // GitHub UNIONs deployment policies. Appending this re-opens the environment to
+      // every branch while the `main` policy is still present and still correct.
+      writeFileSync(
+        f,
+        mainPolicy +
+          `
+resource "github_repository_environment_deployment_policy" "synthetic_any" {
+  repository     = "soleur"
+  environment    = github_repository_environment.synthetic.environment
+  branch_pattern = "*"
+}
+`,
+      );
+      const pats = policyPatternsFor([f]).get("synthetic");
+      expect(pats, "the second policy was not seen at all").toBeDefined();
+      expect(
+        pats!.size === 1 && pats!.has("main"),
+        `appending a branch_pattern = "*" policy left the environment reading as main-only ` +
+          `(patterns: ${JSON.stringify([...pats!])}). Any branch could deploy to it and read its secrets.`,
+      ).toBe(false);
+
+      // And a commented-out wider policy must NOT disqualify — the walk strips comments,
+      // so this pins the extractor against the opposite error (reporting a phantom).
+      writeFileSync(f, mainPolicy + `\n# branch_pattern = "*"\n`);
+      expect([...(policyPatternsFor([f]).get("synthetic") ?? [])]).toEqual([
+        "main",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -2907,8 +3118,26 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
     expect(jobBlock).toContain("expected_registry_store_volume_id");
   });
 
-  test("declares NO environment: (a zero-reviewer environment auto-approves — DP-11 F8)", () => {
-    expect(/^\s+environment:/m.test(jobBlock)).toBe(false);
+  test("declares no environment that auto-approves from any branch (DP-11 F8)", () => {
+    // (#8209, ADR-241 D2) THE PROPERTY, RESTATED — this test used to assert `environment:`
+    // was ABSENT, and its own title gave the reason: "a zero-reviewer environment
+    // auto-approves". That reason is the real property, and absence was only one way to
+    // satisfy it. This job now declares `infra-privileged`, which has no reviewer but IS
+    // pinned to `main`, so it cannot auto-approve a branch dispatch — the hazard the
+    // original assertion was written against.
+    //
+    // The teeth are preserved by composition, not by trust: the DP-11 F8 suite above reds
+    // on ANY environment carrying neither reviewers nor a main-only policy, so the
+    // allowlist here cannot be widened into a fake gate without that suite failing.
+    const m = /^\s+environment:\s*(\S+)\s*$/m.exec(jobBlock);
+    if (m) {
+      expect(
+        m[1],
+        `registry_luks_recut declares environment: ${m[1]}. Only a reviewer-gated environment ` +
+          `or the main-pinned infra-privileged is admissible here; anything else can auto-approve ` +
+          `a dispatch from an arbitrary branch onto a destructive recut (DP-11 F8).`,
+      ).toBe("infra-privileged");
+    }
   });
 
   test("pins timeout-minutes below GitHub's 360-minute default", () => {
@@ -3867,12 +4096,16 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // that fires once, ever -- but a collapsed REPLACE, on the path with no human approver.
     //
     // The limitation ships stated rather than implied, here and in the step's own ::error::
-    // and the runbook: this job has no `environment:` and therefore no
-    // deployment_branch_policy, so workflow_dispatch runs the SELECTED REF's scripts and the
-    // gate is supplied by the branch it polices. It holds against an accidental collapse
-    // merged and dispatched from main; it does NOT hold against a deliberate actor with
-    // repository write. Giving the five replace-class targets an environment is tracked
-    // separately -- it is a fleet-wide policy call, not a local fix.
+    // and the runbook.
+    //
+    // (#8209, ADR-241 D2) UPDATED. This job used to carry no `environment:` and therefore no
+    // deployment_branch_policy, so a workflow_dispatch ran the SELECTED REF's scripts and the
+    // gate was supplied by the branch it polices. The "fleet-wide policy call" this comment
+    // deferred has now been made: the five replace-class targets carry
+    // `environment: infra-privileged`, pinned to `main`, so a non-main dispatch is refused
+    // before the job starts. The limitation is NARROWED, not removed — a deliberate actor who
+    // can land a commit on `main` still reaches it — which is why the assertion below still
+    // pins that the message says so.
     const replaceBlock = extractJobBlock(wf, "git_data_host_replace");
     expect(replaceBlock).toMatch(
       /^\s*git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+" \|\| rc=\$\?$/m,

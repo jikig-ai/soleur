@@ -10,7 +10,7 @@
 
 ## Context
 
-> **Status note, 2026-09-23 (ADR-240, #8306).** The `.openhands/` mirror this describes was RETIRED and deleted from the tree. Nothing below is withdrawn — the reasoning stands as recorded, and it is the reason the re-entry criterion in ADR-240 requires a generator rather than another hand port. Read every present-tense claim about that mirror as historical.
+> **Status note, 2026-09-23 (ADR-245, #8306).** The `.openhands/` mirror this describes was RETIRED and deleted from the tree. Nothing below is withdrawn — the reasoning stands as recorded, and it is the reason the re-entry criterion in ADR-245 requires a generator rather than another hand port. Read every present-tense claim about that mirror as historical.
 
 ADR-157 fixed the `.claude` harness's posture: a PreToolUse hook that cannot
 fully parse its input **asks**. It never continues silently and it never denies.

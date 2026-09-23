@@ -9,7 +9,7 @@
 
 The `freeze` capability (`.claude/hooks/lib/freeze-lock.sh` + the `guardrails:freeze-edit-lock` branch) lets an operator or agent scope every file-editing tool call to a single allowed path prefix. Unlike `worktree-write-guard.sh` (stateless — it derives its decision from `git worktree list`), freeze needs **persistent runtime state**: a single line at `<repo-root>/.claude/.freeze-lock` holding the active allowed prefix, mutated via `freeze-lock.sh {set|clear}`.
 
-> **Status note, 2026-09-23 (ADR-240, #8306).** The `.openhands/` mirror this ADR
+> **Status note, 2026-09-23 (ADR-245, #8306).** The `.openhands/` mirror this ADR
 > reasons about was RETIRED and deleted, and `tests/hooks/test_openhands_guardrails.sh`
 > went with it — so the sentence below claiming that suite makes a break "fail CI" is
 > HISTORICAL, not a live coverage claim. The freeze-lock substrate and its failure

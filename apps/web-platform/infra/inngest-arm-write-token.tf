@@ -123,8 +123,13 @@ resource "github_repository_environment_deployment_policy" "inngest_cutover_main
 #   2. apply-web-platform-infra.yml, job `inngest_volume_recut` — unconditional injection, but
 #      that job declares `environment: inngest-cutover`, so the human ack still gates it.
 #   3. apply-web-platform-infra.yml, job `inngest_host_replace`, the #7228 inherited-`done`
-#      preflight (added 2026-09-17) — UNCONDITIONAL injection into a job with NO `environment:`
-#      key. This is the FIRST resolution site with neither of the two bounds above.
+#      preflight (added 2026-09-17) — UNCONDITIONAL injection. Still the FIRST resolution site
+#      with neither of the two bounds above, and still the residual this comment is about.
+#      AMENDED 2026-09-23 (#8209, ADR-241 D2): the "job with NO `environment:` key" clause is
+#      no longer true — that job now declares `environment: infra-privileged`. That is NOT a
+#      third bound: the environment has no reviewers by design, so nothing human gates it. What
+#      it adds is branch reach — the deployment-branch policy admits `main` only, so the
+#      injection is unreachable from a dispatch on any other ref.
 #
 # An earlier revision of this comment asserted the residual was "bounded by the conditional
 # injection … and the post-cutover revoke". Consumer 3 falsifies the first half, and this file

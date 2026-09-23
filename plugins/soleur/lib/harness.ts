@@ -399,7 +399,7 @@ export function pollInstructions(harness: Harness): string {
         // Upgrade trigger: re-run the probe under a permission mode that admits the
         // foreground write, or from an interactive trusted session. The measurement
         // lives in `devin/INSTRUCTIONS.md` §Polling with an amendment to ADR-223 (Devin
-        // wire names) — NOT in ADR-240, which states in as many words that the wait
+        // wire names) — NOT in ADR-245, which states in as many words that the wait
         // primitive is a fact about Devin's TOOLS rather than about that decision.
         // #8390 item 2 is the origin.
         //

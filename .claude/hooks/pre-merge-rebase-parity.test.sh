@@ -2,7 +2,7 @@
 # Review-evidence gate + envelope contract for the `.claude` hooks (#6724, #7173).
 #
 # The hand-ported hook mirror this file was originally written against was retired
-# on 2026-09-23 (ADR-240, closes #8306). Every arm that existed to COMPARE the
+# on 2026-09-23 (ADR-245, closes #8306). Every arm that existed to COMPARE the
 # two copies has been reduced to its `.claude` half and now stands alone; the
 # filename keeps its `-parity` suffix only so CI globs and history stay stable.
 #
@@ -402,7 +402,7 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed, $SKIPPED skipped
 
 # --- ANTI-VACUITY FLOOR (ADR-193) -----------------------------------------------------------
 # Absolute and hand-ratcheted, NOT derived from the run. `FAIL -eq 0` alone is satisfied by a
-# suite that executed nothing, and this file is unusually exposed to that: ADR-240's retirement
+# suite that executed nothing, and this file is unusually exposed to that: ADR-245's retirement
 # removed every comparison arm, halving the case count in one edit, and a later edit that guts
 # the rest the same way would report `0/0 passed, 0 failed` and exit 0.
 #

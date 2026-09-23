@@ -19,7 +19,7 @@ defect classes surfaced, and each one is a case of a label being trusted in plac
 
 ### 1. "Non-required" governs the merge gate and nothing else
 
-ADR-240 asserted, in as many words, that a red `harness-discovery` "blocks nothing" because the job
+ADR-245 asserted, in as many words, that a red `harness-discovery` "blocks nothing" because the job
 is not a required check. That is true of the MERGE gate — the job is absent from the `test`
 aggregator's `needs:`, so it cannot block a PR.
 
@@ -40,7 +40,7 @@ grep for every consumer of the run it belongs to.
 **The trap in the fix:** `continue-on-error` and "required" are mutually destructive. A required
 check that cannot fail the run is worse than no check, so the line that makes the job safe today
 MUST be deleted in the same change that promotes it. That coupling is recorded at the job, in
-ADR-240, and in `plugins/soleur/test/README.md`, because a future promotion PR will not read all
+ADR-245, and in `plugins/soleur/test/README.md`, because a future promotion PR will not read all
 three.
 
 ### 2. A canonicalizer over a widened corpus rewrites quoted evidence
@@ -97,7 +97,7 @@ run, a read of the two rewritten sentences, a guard run at `origin/main`.
 
 ## Session Errors
 
-- **Asserted in ADR-240 that a red advisory job blocks nothing.** — Recovery: review found it; added
+- **Asserted in ADR-245 that a red advisory job blocks nothing.** — Recovery: review found it; added
   `continue-on-error`, corrected the ADR, and recorded the promotion coupling at three sites. —
   **Prevention:** before describing a CI job as advisory, grep for consumers of
   `workflow_run` + that workflow's name; "not in `needs:`" is not the whole answer.

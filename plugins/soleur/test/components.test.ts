@@ -1330,7 +1330,7 @@ describe("plugin slash-name uniqueness", () => {
   // exactly ONCE — the double-listing was an earlier version's behaviour. Codex
   // 0.156.1 IS the harness that lists both roots (`go`/`help`/`sync` twice),
   // which is what this ack set exists for. The `harness-discovery` gate
-  // (ADR-240) now measures the multiplicity of both on every CI run, so this
+  // (ADR-245) now measures the multiplicity of both on every CI run, so this
   // claim stops being a comment anybody has to trust.
   //
   // Derived from ACKED_CROSS_ROOT_DUPES rather than restated: two parallel

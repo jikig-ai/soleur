@@ -280,7 +280,7 @@ if [[ "$MODE" == "--repo-sweep" ]]; then
   # 145 -- so dropping .grok/ (67) and the 63-file hand-ported mirror would have passed BOTH guards
   # at 1,215 files, which is exactly the narrowing this assertion exists to catch.
   #
-  # Amended 2026-09-23 (#8306, ADR-240): the two hand-ported mirror roots were RETIRED (the
+  # Amended 2026-09-23 (#8306, ADR-245): the two hand-ported mirror roots were RETIRED (the
   # hand-ported mirrors are deleted from the tree), so the set is 11 roots. They are
   # removed rather than kept-and-failing: a root that no longer exists cannot be
   # "stopped being walked", and leaving it here would red the gate on every run.

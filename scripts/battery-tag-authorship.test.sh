@@ -410,7 +410,7 @@ while (( depth < DEPTH_BOUND )); do
       # NO DIRECTORY ALLOWLIST. An earlier revision enumerated top-level dirs
       # (scripts|plugins|apps|tests|.github|.claude) and therefore could not reach a hook a
       # battery suite invokes by path from outside those dirs — measured on the hand-ported
-      # sibling harness tree, since retired in ADR-240 / #8306, but the defect is the allowlist,
+      # sibling harness tree, since retired in ADR-245 / #8306, but the defect is the allowlist,
       # not that tree. That is UNDER-approximation, i.e. fail-OPEN: a real
       # tag author outside the listed dirs was invisible. The plan's design is explicit that any
       # tracked executable path literal joins the closure, so the allowlist is the defect. The

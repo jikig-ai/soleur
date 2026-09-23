@@ -2,7 +2,7 @@
 /**
  * harness-discovery-smoke — prove Codex and Devin DISCOVER the skill set their
  * manifests declare, by installing the plugin hermetically from this checkout and
- * asking the vendor CLI what it registered (ADR-240; the unfiled item 6 of #8390's
+ * asking the vendor CLI what it registered (ADR-245; the unfiled item 6 of #8390's
  * bundle).
  *
  * WHAT THIS PROVES, AND WHAT IT DOES NOT.

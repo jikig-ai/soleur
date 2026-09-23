@@ -696,7 +696,7 @@ and a direct `emit_incident` call produce byte-identical rows, differing only in
 anchor**. It does **not** reject `plugins/soleur/scripts/resolve-git-root.sh` in its live use
 as a **workspace/data** root by `hooks/stop-hook.sh` and `hooks/welcome-hook.sh`, which is
 correct under item 7's code-root/data-root distinction. (An `.openhands/hooks/stop-hook.sh`
-was a third such use until the port was retired 2026-09-23, ADR-240.) Stated because a one-line rejection read out of context invites deleting a
+was a third such use until the port was retired 2026-09-23, ADR-245.) Stated because a one-line rejection read out of context invites deleting a
 working helper.
 
 ### Classification rule for the remaining corpus (#7453 needs no re-deciding)

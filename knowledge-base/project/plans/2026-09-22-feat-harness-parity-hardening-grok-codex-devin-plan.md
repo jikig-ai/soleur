@@ -27,7 +27,7 @@ Soleur ships one plugin tree to four supported harnesses: Claude Code, Grok Buil
 | 4 | `skills/*/references/**` is outside the census (measured today: **152** non-canonical sites in **20** docs) | #8317 (references half) | Widen the population + remediate. The agent-body half stays on #8317 → **Ref #8317** |
 | 5 | Plugin script paths use four forms; the path guard covers `commands/` and the secret-gate subset only | #7453 | **Split.** PR-1 adds a content-keyed ratchet over skills. The ~106-line migration stays deferred on #7453 → **Ref #7453** |
 | 6 | Codex and Devin are never exercised in CI | unfiled | Hermetic `harness-discovery` CI job (non-required; pinning deferred to **#8574**) + ADR-226 correction |
-| 7 | `.openhands/` and `.gemini/` are stale, unmaintained ports | #8306 | Delete both trees, sweep live references, ADR-240 → **Closes #8306** (obsolete) |
+| 7 | `.openhands/` and `.gemini/` are stale, unmaintained ports | #8306 | Delete both trees, sweep live references, ADR-245 → **Closes #8306** (obsolete) |
 
 **Split decision (explicit).** PR-1 is this branch and ships items 1, 2, 3, 4 (references), 5 (ratchet only), 6 and 7, in per-item commits (dependencies named in Technical Approach). Two pieces are deferred, each to an existing or newly filed tracker:
 
@@ -52,7 +52,7 @@ The CTO recommended four PRs. That challenges the operator's bundle direction an
 | "Devin has no equivalent" | True, and #8236 said "there is no devin-plugin-smoke to build" in a different context (the shim deletion). **Measured now:** Devin CLI 3000.11.1, with an isolated `HOME`, a scratch git repo whose `.devin/config.json` holds `requiredPlugins: [{source: "local", path: "<checkout>/plugins/soleur"}]`, and **no auth**, runs `devin skills list` → exactly the 102 `soleur:` names, each once | Build the Devin arm on this measured, auth-free path |
 | Codex can only be probed with auth | False. **Measured (re-run 2026-09-23 on Codex CLI 0.156.1, which is also `npm view @openai/codex version`; behaviour unchanged from the 0.155.1 run):** Codex CLI with an isolated `CODEX_HOME` runs `codex plugin marketplace add <checkout>` → `codex plugin add soleur@soleur` → `codex debug prompt-input`, with no auth. It renders the skills list: 105 `- soleur:<name>:` entries, **102 unique**. `go`/`help`/`sync` appear twice (roots `codex/skills` and `skills`, both declared in `.codex-plugin/plugin.json` `skills`) | This duplicate is the known `ACKED_CROSS_ROOT_DUPES` case (`components.test.ts`), tracked by #8236, which is blocked on the Command Center POSTAMBLE. The gate needs no ack list: a name found in *k* declared roots may be listed 1 or *k* times, and that is derived from the manifests |
 | ADR-226 cites #8306 for "Codex and Devin are declared uncovered" | True mis-citation. #8306 is the `.openhands`/`.gemini` mirror-completeness issue | Amend ADR-226: coverage is now the `harness-discovery` gate; drop the #8306 citation |
-| OpenHands/Gemini "old and not maintained" | `.openhands/` 69 tracked files (63 **skill** ports under `.openhands/skills/`, 5 hooks, `hooks.json`), `.gemini/` 6. The **ports** are not advertised: no OpenHands hit in `plugins/soleur/docs/**`, `README.md` or the plugin manifests, and the 5 "Gemini" hits in `docs/**` are the Google model and the `gemini-imagegen` skill, not the `.gemini/` port. `lib/harness.ts`'s `Harness` union has neither. Live references in ~25 non-history files, mostly hook parity tests | Delete both, sweep live references (list derived by `git grep` inside the PR), ADR-240 |
+| OpenHands/Gemini "old and not maintained" | `.openhands/` 69 tracked files (63 **skill** ports under `.openhands/skills/`, 5 hooks, `hooks.json`), `.gemini/` 6. The **ports** are not advertised: no OpenHands hit in `plugins/soleur/docs/**`, `README.md` or the plugin manifests, and the 5 "Gemini" hits in `docs/**` are the Google model and the `gemini-imagegen` skill, not the `.gemini/` port. `lib/harness.ts`'s `Harness` union has neither. Live references in ~25 non-history files, mostly hook parity tests | Delete both, sweep live references (list derived by `git grep` inside the PR), ADR-245 |
 
 ## Research Insights
 
@@ -133,7 +133,7 @@ Two advisor suggestions were later cut at plan review: the span checker and the 
 
 Its suggestion to grandfather `plan-sharp-edges.md` wholesale is **not** taken: that catalogue is agent-read on every harness (plan Phase 6.5 loads it), so its instructional references must be canonical. Verbatim historical quotes get `harness-forms` regions instead. On the question of why Codex double-lists `go`/`help`/`sync`, the cause is already measured: two declared `skills` roots in `.codex-plugin/plugin.json` (`./skills`, `./codex/skills`). It is tracked by #8236. The gate derives the allowed multiplicity from the manifests, so the allowance ends on its own when #8236 removes a root.
 
-**ADR ordinal:** **two** origin refs claim ADR-238 (`origin/feat-8322-affected-test-gate`, `origin/feat-ci-test-shard-speedup` — re-probed 2026-09-23), so one of them must renumber to 239 and ADR-239 is at materially higher collision risk than a free ordinal. This plan therefore uses **ADR-240**. Still provisional until merge: ship's ADR-Ordinal Collision Gate re-verifies, and on a renumber the sweep covers this plan and `tasks.md`.
+**ADR ordinal:** **two** origin refs claim ADR-238 (`origin/feat-8322-affected-test-gate`, `origin/feat-ci-test-shard-speedup` — re-probed 2026-09-23), so one of them must renumber to 239 and ADR-239 is at materially higher collision risk than a free ordinal. This plan therefore uses **ADR-245**. Still provisional until merge: ship's ADR-Ordinal Collision Gate re-verifies, and on a renumber the sweep covers this plan and `tasks.md`.
 
 **Functional overlap (1.5b):** functional-discovery searched three registries; none overlaps (closest: `anthropics/claude-plugins-official` plugin-dev, which is general, not a gate). Nothing installed.
 
@@ -176,7 +176,7 @@ Deletions go first so no later gate measures paths that are about to disappear (
    - `plugins/soleur/skills/ship/SKILL.md`: drop the `.openhands/hooks/` clause from the citation paragraph. A past-tense rewording would still carry the token.
    - `plugins/soleur/NOTICE`: remove the `../../.openhands/skills/ticket-triage/SKILL.md` attribution entry. The source agent's own entry stays.
    - `knowledge-base/engineering/architecture/diagrams/model.c4`: in the guardrails element description, remove the `.openhands/hooks/` mirrors clause and `.openhands/hooks.json`. Then run `bash scripts/regenerate-c4-model.sh` and commit the regenerated `model.likec4.json`, which CI byte-diffs against the `.c4` sources.
-   - `knowledge-base/engineering/platform-portability-comparison.md`: add a dated "Retired 2026-09-22 (ADR-240)" banner to the OpenHands and Gemini columns. It is a comparison record, so the history stays.
+   - `knowledge-base/engineering/platform-portability-comparison.md`: add a dated "Retired 2026-09-22 (ADR-245)" banner to the OpenHands and Gemini columns. It is a comparison record, so the history stays.
 3. Leave historical corpora untouched: learnings, specs, plans, brainstorms, digests, audits, competitive docs, and ADR bodies other than the Phase 7 amendments.
 4. Run `bash scripts/test-all.sh` before pushing, because these hook suites are shared with live guards.
 
@@ -184,7 +184,7 @@ Deletions go first so no later gate measures paths that are about to disappear (
 
 1. RED first. In `plugins/soleur/test/harness.test.ts`, rename "devin documents get_output merge-deploy polling" to "devin arms merge-deploy waits as a background run_subagent loop". Assert that the output contains `run_subagent`, `exit-coded`, `BEHIND`, `/soleur:postmerge`, `/soleur:ship` and `NEVER ask`, and that it **does not contain `get_output` at all**. Keep `/soleur:ship`: it is asserted today, and a rewrite that drops it silently weakens the test (verify sweep, 2026-09-23). In `plugins/soleur/test/devin-harness.test.ts` ("explains skill loading and owned polling…"), replace `toContain("get_output")` with `toContain("run_subagent")` plus `not.toContain("get_output")`.
 2. GREEN. Rewrite the long-loop bullet of `pollInstructions()` `case "devin"`: "Arm the wait as a background **run_subagent** running an exit-coded poll loop: one exit code per actionable transition (`MERGED`, `BEHIND`, `DIRTY`, check failure). Its completion notification is the only wake primitive, so the loop must exit to report. Mutations (`gh pr update-branch`, merge) stay in the foreground." Keep `exec` for short probes. The bullet must not name `get_output`; `devin/INSTRUCTIONS.md` already explains why it cannot wait.
-3. Live check (advisor). The claim that `get_output` cannot wait is measured (envelope-capture §7), but the replacement loop is not yet exercised. With the locally authenticated Devin CLI, run one headless `devin -p` session that arms a background `run_subagent` exit-coded loop over a synthetic condition, such as a loop that exits 3 once a scratch file exists, which a later foreground step creates. Confirm the parent wakes on the subagent's completion. Put the outcome in the PR body. If the session cannot run (auth or cost gate), say so there too, and ADR-240 records the loop as *prescribed, not live-verified*. In that case the unverified state must also be **harvestable**, not only ADR prose: emit a `SOLEUR-DEBT:` marker next to the `pollInstructions()` devin bullet naming the upgrade trigger ("re-run the live wait check when Devin auth is available in CI"), so `soleur:harvest-debt` finds it (test-design F10). An untested prescription otherwise ships to every Devin session with no expiry.
+3. Live check (advisor). The claim that `get_output` cannot wait is measured (envelope-capture §7), but the replacement loop is not yet exercised. With the locally authenticated Devin CLI, run one headless `devin -p` session that arms a background `run_subagent` exit-coded loop over a synthetic condition, such as a loop that exits 3 once a scratch file exists, which a later foreground step creates. Confirm the parent wakes on the subagent's completion. Put the outcome in the PR body. If the session cannot run (auth or cost gate), say so there too, and ADR-245 records the loop as *prescribed, not live-verified*. In that case the unverified state must also be **harvestable**, not only ADR prose: emit a `SOLEUR-DEBT:` marker next to the `pollInstructions()` devin bullet naming the upgrade trigger ("re-run the live wait check when Devin auth is available in CI"), so `soleur:harvest-debt` finds it (test-design F10). An untested prescription otherwise ships to every Devin session with no expiry.
 
 ### Phase 3 — Grok invoke block gate + backfill (item 1) — commit `feat(harness): every skill carries the Grok invoke block`
 
@@ -230,7 +230,7 @@ Phase order note: this comes **before** the tool map, which reuses the widened p
    - **Failure message** (CTO devex): the tool name, the first doc and line that uses it, the table(s) missing it (`plugins/soleur/codex/INSTRUCTIONS.md` and/or `plugins/soleur/devin/INSTRUCTIONS.md`), and a row template to paste.
    - **Floors (per source, not one union figure; test-design F2).** The "294 before widening's +115" narration was wrong: measured 2026-09-23, `readPopulation()` is 107 docs and `discoverAgentPaths()` is 67, so the population is **174 before widening and 289 after** — the ≥280 union floor has 9 docs of headroom, not ~130. A single union floor is also dispatch-blind: it cannot name which glob went empty, and it tolerates a large partial loss. So assert a floor per source against an independently enumerated count, in the idiom `harness-parity-tree.test.ts` already uses (`expected = lsFiles(…) + …; expect(docs.length).toBe(expected)`): skills ≥ 99, references ≥ 110, agents ≥ 65, commands ≥ 2, plus the ≥ 280 union. Re-measure at work time and write the measured numbers, with their date, into the test's source comment.
    - **Must-PASS fixture:** a synthesized doc that embeds the full canonical Grok block (the mechanism nouns `Skill tool`, `Task tool`, `spawn_subagent`) passes, which validates the gate against the post-backfill tree.
-   - The derived `PascalCase tool` detector and the reverse check are **cut** (DHH, simplicity). Staleness of the vocabulary is an accepted risk. ADR-240's gate table records that the vocabulary is refreshed when Claude Code adds tools.
+   - The derived `PascalCase tool` detector and the reverse check are **cut** (DHH, simplicity). Staleness of the vocabulary is an accepted risk. ADR-245's gate table records that the vocabulary is refreshed when Claude Code adds tools.
 3. GREEN: give **every** used-but-unmapped name a row in both tables. Measured: `SendMessage` (review, work), `TaskList` (work, 4 docs), `TaskUpdate` (`work/references/work-agent-teams.md`), `RemoteTrigger` (brainstorm). Re-run the gate to catch any others.
    - Codex (`plugins/soleur/codex/INSTRUCTIONS.md`): `SendMessage` → "`followup_task` gives an existing agent a new task and triggers its turn, keeping its context; `send_message` passes a message without a turn". This is **measured** on Codex 0.156.1: the `codex debug prompt-input` collaboration-tools text lists `spawn_agent`, `followup_task`, `send_message`, `wait_agent`, `interrupt_agent` and `list_agents`. `TaskCreate / TaskList / TaskUpdate` → "the available plan tool or the project's file-based task tracking". `RemoteTrigger` → "no equivalent; report the unsupported gate".
    - Devin (`plugins/soleur/devin/INSTRUCTIONS.md`): `SendMessage` → "`read_subagent` reads a subagent's result; there is no continue-with-context send, so re-spawn with `run_subagent`, passing the prior report". Verify `read_subagent` against Devin's docs and `devin-matcher-parity.test.sh` `DEVIN_TOOLS` at work time; if it is unverified, state the degradation only. `TaskCreate / TaskList / TaskUpdate` → "`todo_write` tool". `RemoteTrigger` → "no equivalent; report the unsupported gate".
@@ -284,15 +284,15 @@ Phase order note: this comes **before** the tool map, which reuses the widened p
 3. CI: a `harness-discovery` job in `.github/workflows/ci.yml` next to `grok-fidelity`, with `timeout-minutes: 10`, `ubuntu-latest`, checkout and setup-bun (the same SHA pins as `grok-fidelity`).
    - Codex step: `npm i -g @openai/codex@0.156.1` (exact pin, unlike `grok-fidelity`'s unpinned Grok install; Kieran 14), then assert `codex --version` equals the pin — exiting 3 `version-mismatch:<got>!=<pin>` otherwise — and run `bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness codex`. The version assertion is symmetric with the Devin arm's (test-design F12); `grok-fidelity` ends its install step with `grok --version` for the same reason, so a silently empty install reds.
    - Devin step: install a pinned version. Work task: check whether `install.sh` accepts a version. If it does not, fetch it with `curl -fsSL --max-time 60`, record its sha256 in the step, and assert that `devin --version` equals the pin, exiting 3 `version-mismatch` otherwise. **If the installer cannot pin at all, the job exits 3 — it never falls back to "whatever installed"** (test-design F12). Then run `bun … --harness devin`.
-   - **Not** added to `infra/github/ruleset-ci-required.tf` (#8574). A one-line YAML comment points to ADR-240 (ADR-231: rationale lives outside the workflow).
+   - **Not** added to `infra/github/ruleset-ci-required.tf` (#8574). A one-line YAML comment points to ADR-245 (ADR-231: rationale lives outside the workflow).
 4. `scripts/codex-plugin-smoke.mjs` is **left unchanged** (simplicity): it is the operator-local check of an installed plugin and its hooks.
 5. Work-phase issue comments:
-   - **#8574:** add a pin-freshness criterion (CTO devex): before the check becomes required, a monthly comparison of the two pins against `npm view @openai/codex version` and Devin's current release. Who owns bumping the pins is recorded in ADR-240. Note the drift already observed: the plan was written against Codex 0.155.1 and `npm` was at 0.156.1 a day later.
+   - **#8574:** add a pin-freshness criterion (CTO devex): before the check becomes required, a monthly comparison of the two pins against `npm view @openai/codex version` and Devin's current release. Who owns bumping the pins is recorded in ADR-245. Note the drift already observed: the plan was written against Codex 0.155.1 and `npm` was at 0.156.1 a day later.
    - **#8236:** the Devin measurement (each name listed once on 3000.11.1).
 
-### Phase 8 — ADRs, C4, issue hygiene — commit `docs(adr): ADR-240 retire OpenHands/Gemini; CI discovery for Codex/Devin; amend ADR-226/165`
+### Phase 8 — ADRs, C4, issue hygiene — commit `docs(adr): ADR-245 retire OpenHands/Gemini; CI discovery for Codex/Devin; amend ADR-226/165`
 
-1. **ADR-240**, written with `soleur:architecture`: "Retire the OpenHands and Gemini ports; prove Codex and Devin discovery in CI." It records three things:
+1. **ADR-245**, written with `soleur:architecture`: "Retire the OpenHands and Gemini ports; prove Codex and Devin discovery in CI." It records three things:
    - **The retirement.** The supported set is Claude Code, Grok Build, Codex and Devin. The re-entry criterion is a `Harness` union member in `lib/harness.ts` plus a generator, never a hand port.
    - **The CI vendor-CLI policy.** Pinned versions, UNRESOLVED ≠ PASS, non-required until #8574's soak, and a named owner for bumping the pins.
 
@@ -300,11 +300,11 @@ Phase order note: this comes **before** the tool map, which reuses the widened p
    - **The Devin wait primitive** (live-verified or prescribed per Phase 2.3) is a fact about Devin's tools → an amendment to **ADR-223** (Devin wire names), with the operative text staying in `devin/INSTRUCTIONS.md`.
    - **The harness-gate map** (test file → property → usual fix → tracker) → `plugins/soleur/test/README`, not an ADR.
 
-   ADR-240's scope line also records what the discovery gate does **not** prove (architecture finding 9): a name listed once proves that name is registered, not *which* copy was loaded — for `go`/`help`/`sync` the shim body differs from the canonical skill. This sits next to ADR-236's "registration, not invocability".
+   ADR-245's scope line also records what the discovery gate does **not** prove (architecture finding 9): a name listed once proves that name is registered, not *which* copy was loaded — for `go`/`help`/`sync` the shim body differs from the canonical skill. This sits next to ADR-236's "registration, not invocability".
 
    Alternatives: keep the ports under assert+exempt (#8306 shape 1); generators (#8306 shape 2); split into four PRs (CTO, DHH). The ordinal is provisional. ADR-238 is claimed on **two** origin refs (`origin/feat-8322-affected-test-gate`, `origin/feat-ci-test-shard-speedup`), so 239 is likely consumed by whichever renumbers; this plan takes **240**. Ship's ADR-Ordinal Collision Gate re-verifies, and on renumber the sweep covers this plan and tasks.md.
 2. **ADR-226:** add a dated status/amendment line. Codex and Devin *discovery* is **covered by an advisory job; it becomes enforcing when #8574 closes** — do not write "is now covered" while the check is non-required (architecture finding 7). The "(#8306)" citation was wrong. "Canonical resolves everywhere" is proven for name registration, not for the model resolving every reference.
-3. **ADR-165:** add a status note. Its OpenHands arm is retired by ADR-240; the Claude posture is unchanged.
+3. **ADR-165:** add a status note. Its OpenHands arm is retired by ADR-245; the Claude posture is unchanged.
 4. **ADR-224:** add a dated amendment (architecture finding 1). Its §"Per-harness discovery" currently says "**Devin — measured.** `devin skills list` reports `/soleur:go`… from `skills/` **and** `devin/skills/`" (twice) and "**Codex — inferred, NOT measured**". Both are now stale: Devin 3000.11.1 lists each name **once**, and Codex 0.156.1 **is** measured as listing both roots via `codex debug prompt-input`. Record `harness-discovery` as the standing instrument. Fixing only the matching comment in `components.test.ts` (Phase 1) would leave the ADR contradicting the measurement.
 5. **ADR-156 and ADR-221:** add dated status notes (architecture finding 6). Both describe the `.openhands` mirror as live — ADR-156 in its decision scope, ADR-221 in a reference — so both go stale on deletion. ADR-157 and ADR-179 mention it only in passing and stay as they are.
 6. There is **no ADR-179 amendment** (DHH, simplicity). The #7453 re-scope goes in an issue comment (the issue-hygiene step).
@@ -312,12 +312,12 @@ Phase order note: this comes **before** the tool map, which reuses the widened p
    - The only change is the guardrails description edit (Phase 1) and its regenerated `model.likec4.json`.
    - Checked and already modeled, with no new element: the human actor `founder`; the external systems `codex`, `devin` and `platform.grokBuild`; their `-> platform.plugin` delivery edges; and GitHub Actions CI (`github`).
    - OpenHands and Gemini were never elements, so nothing is removed.
-   - The new CI job adds no actor, system or store. It does add a **relationship**, and the model records comparable supply-chain edges (`github -> sigstore`, `github -> ghcr`), so add `github -> codex` and `github -> devin`: "CI installs a pinned CLI and asserts skill discovery (ADR-240)" (architecture finding 8). CI now downloads and runs vendor binaries (npm `@openai/codex`, `curl | bash` from `cli.devin.ai`); "adds no access relationship" would contradict that. The existing `grok-fidelity` job's `curl … x.ai/cli/install.sh` is unmodelled — add `github -> platform.grokBuild` on the same grounds rather than inheriting the omission.
+   - The new CI job adds no actor, system or store. It does add a **relationship**, and the model records comparable supply-chain edges (`github -> sigstore`, `github -> ghcr`), so add `github -> codex` and `github -> devin`: "CI installs a pinned CLI and asserts skill discovery (ADR-245)" (architecture finding 8). CI now downloads and runs vendor binaries (npm `@openai/codex`, `curl | bash` from `cli.devin.ai`); "adds no access relationship" would contradict that. The existing `grok-fidelity` job's `curl … x.ai/cli/install.sh` is unmodelled — add `github -> platform.grokBuild` on the same grounds rather than inheriting the omission.
    - Run `bash plugins/soleur/test/c4-count-parity.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts`.
 8. Issue hygiene (work/ship phase, via `gh`):
    - **#8317:** the references half has landed; the agent half remains, with its re-measured count.
    - **#7453:** the ratchet has landed (four forms, measured baseline). The citation is ADR-179, not ADR-177. The Devin prerequisite is that `devin skills show` prints the raw `${CLAUDE_PLUGIN_ROOT}` token, and delivery-time substitution on Devin CLI and Devin Cloud is unmeasured.
-   - **#6791 and #7173:** their OpenHands sub-items are obsolete per ADR-240.
+   - **#6791 and #7173:** their OpenHands sub-items are obsolete per ADR-245.
    - **PR body:** `Closes #8390`, `Closes #8318`, `Closes #8306`, `Ref #8317`, `Ref #7453`, `Ref #8574`.
 
 ## Alternative Approaches Considered
@@ -334,7 +334,7 @@ Phase order note: this comes **before** the tool map, which reuses the widened p
 | Widen the census to agent bodies too (#8317 full) | Blocked on the frontmatter `name:` carve-out | #8317 |
 | Make `harness-discovery` required now | Vendor output fragility; needs a soak | #8574 |
 | Fix Codex `go`/`help`/`sync` duplicates by deleting shims | #8236 is blocked on the Command Center POSTAMBLE replacement (ADR-113) | #8236 |
-| Generate `.openhands`/`.gemini` from source (#8306 shape 2) | The operator retired these harnesses | ADR-240 re-entry criterion |
+| Generate `.openhands`/`.gemini` from source (#8306 shape 2) | The operator retired these harnesses | ADR-245 re-entry criterion |
 
 ## User-Brand Impact
 
@@ -429,7 +429,7 @@ Rows 6a–6c were one row (test-design F7): one row perturbing two axes hides a 
 
 **Harness rows:** a suite edit must RED: turning `not.toContain("get_output")` into `toContain` reddens against the fixed text. A must-PASS non-canonical input passes: a bullet that names `run_subagent` in bold (`**run_subagent**`), which the plain `toContain("run_subagent")` still matches.
 
-**Anchor.** INSTRUCTIONS.md holds the measured claim (envelope-capture §7), and the Phase 2.3 live check (or its disclosed absence) is recorded in ADR-240.
+**Anchor.** INSTRUCTIONS.md holds the measured claim (envelope-capture §7), and the Phase 2.3 live check (or its disclosed absence) is recorded in ADR-245.
 
 ### Guard 3 — Tool-map coverage
 
@@ -540,7 +540,7 @@ Rows 6a–6d were one row (test-design F3): form (d) is a different regex branch
 - [x] AC5: the ratchet axis goes RED on the Guard 5 row-2 fixture and GREEN on the committed tree. `git diff --quiet origin/main -- apps/web-platform/server/safe-bash.ts` exits 0.
 - [x] AC6: `bun test plugins/soleur/test/harness-discovery-smoke.test.ts` passes, the `harness-discovery` CI job is green on the PR for both arms, **both arms' `--version` outputs equal the pin literals in `ci.yml`**, and `harness-discovery` does not appear in `infra/github/ruleset-ci-required.tf`.
 - [x] AC7: `git ls-files .openhands .gemini` prints nothing, and `git grep -lE '\.openhands|openhands|OpenHands|\.gemini/|GEMINI\.md' -- .claude plugins scripts tests .github apps lefthook.yml` prints nothing.
-- [x] AC8: ADR-240 exists; ADR-226, ADR-165, **ADR-224, ADR-156 and ADR-221** carry dated amendment/status lines; ADR-226 no longer cites #8306 for Codex/Devin coverage and describes the discovery job as advisory until #8574; and ADR-224 no longer claims Devin double-lists or that Codex is unmeasured.
+- [x] AC8: ADR-245 exists; ADR-226, ADR-165, **ADR-224, ADR-156 and ADR-221** carry dated amendment/status lines; ADR-226 no longer cites #8306 for Codex/Devin coverage and describes the discovery job as advisory until #8574; and ADR-224 no longer claims Devin double-lists or that Codex is unmeasured.
 - [x] AC9: `c4-count-parity.test.sh`, `c4-code-syntax.test.ts` and `c4-render.test.ts` pass, the committed `model.likec4.json` equals the output of `scripts/regenerate-c4-model.sh`, and `model.c4` no longer mentions `.openhands`.
 
 ### Non-Functional Requirements
@@ -595,7 +595,7 @@ Rows 6a–6d were one row (test-design F3): form (d) is a different regex branch
 
 - Universal Grok block: correct (a curated set is how coverage decayed).
 - Closing #8318 by table coverage: correct.
-- ADR-240: warranted.
+- ADR-245: warranted.
 
 Changes the CTO asked for, all folded into this plan:
 
@@ -604,7 +604,7 @@ Changes the CTO asked for, all folded into this plan:
 - Floor plus exact-set checks, with a loud failure on a format change.
 - Run `scripts/test-all.sh` before pushing, because the hook suites are shared with live guards.
 - Ratchet by content identity, not by count.
-- A detector for tool names derived from the corpus. It was later cut at plan review (DHH, simplicity); staleness is accepted and recorded in ADR-240.
+- A detector for tool names derived from the corpus. It was later cut at plan review (DHH, simplicity); staleness is accepted and recorded in ADR-245.
 - Add an ADR-226 status line.
 
 The CTO recommended splitting into four PRs. That is kept as a User-Challenge (the operator asked for a bundle); per-item commits are the mitigation.
@@ -628,7 +628,7 @@ The panel was DHH, Kieran and code-simplicity (eng), plus CTO (named panel, deve
 
 - **Kieran:** the Phase 2 self-contradiction and the Guard 2 must-PASS failing on today's INSTRUCTIONS (both dissolved by the simpler `not.toContain("get_output")` guard); the census/tool-map phase order (swapped); the ≥300 floor that could never be met (now 280, re-measured); the missing `RemoteTrigger`/`TaskUpdate` rows; the `guard-vacuity-floor.test.sh` `MIN_FIRING_SUITES` floor; the `ticket-triage-mirror-parity` registration hunt (none exists, since it runs via the glob); `model.likec4.json` regeneration; the `**` replace order; the N12 nested-SKILL.md fixture; the `??` fallback masking Guard 4 row 2; ratchet form (d); commit dependencies; the expected set keyed on dir basenames; and the unpinned Grok precedent.
 - **DHH / simplicity (cuts):** the `readdirSync` cross-check; the exemption map; the `GROK_INVOKE_BLOCK` lib export; the INSTRUCTIONS extraction test; the PascalCase detector and reverse check; `RATCHET_CEILING`; the `--fix` span checker; the Phase 0 baseline file; the ADR-179 amendment; the shared discovery lib and `ACKED_CROSS_ROOT_DUPES` move (replaced by manifest-derived multiplicity); the artifact upload; the `codex-plugin-smoke.mjs` refactor; the "every mutation row exercised" ceremony gate; and AC11 (moved into Technical Approach).
-- **CTO devex:** actionable failure messages (Guards 1, 3, 5 and 6); an exit-3 reason taxonomy; a pin-freshness owner (ADR-240, #8574); and a gate map in ADR-240.
+- **CTO devex:** actionable failure messages (Guards 1, 3, 5 and 6); an exit-3 reason taxonomy; a pin-freshness owner (ADR-245, #8574); and a gate map in ADR-245.
 - **Simplicity (hidden assumption):** the `components.test.ts` comment claimed Devin double-lists, but 3000.11.1 lists each name once, so the comment is corrected in Phase 1. The per-harness multiplicity rule (1 or *k*) tolerates either vendor behaviour.
 
 **Taste / User-Challenge, persisted to `decision-challenges.md`:** the bundle split (CTO: four PRs; DHH: at least Phase 7 separately).
@@ -637,7 +637,7 @@ The panel was DHH, Kieran and code-simplicity (eng), plus CTO (named panel, deve
 
 The first deepen-plan run was cut short by a rate limit. On resume, three passes ran against the plan on disk. All findings were applied; the plan was not re-planned.
 
-- **Architecture (9 findings).** ADR-224 was left contradicting the new measurement → a dated amendment is now Phase 8 work and part of AC8. Multiplicity became one inferred mode per harness run rather than a per-name test. Exit 3 was narrowed to a structurally unreadable listing, so a real partial loss exits 1 instead of reading as "could not check". ADR-240's scope was cut to the retirement plus the CI vendor-CLI policy; the Devin wait primitive moves to an ADR-223 amendment and the gate map to `plugins/soleur/test/README`. ADR-156 and ADR-221 join the amendment list. ADR-226's wording became "advisory until #8574". C4 gains the vendor-CLI edges.
+- **Architecture (9 findings).** ADR-224 was left contradicting the new measurement → a dated amendment is now Phase 8 work and part of AC8. Multiplicity became one inferred mode per harness run rather than a per-name test. Exit 3 was narrowed to a structurally unreadable listing, so a real partial loss exits 1 instead of reading as "could not check". ADR-245's scope was cut to the retirement plus the CI vendor-CLI policy; the Devin wait primitive moves to an ADR-223 amendment and the gate map to `plugins/soleur/test/README`. ADR-156 and ADR-221 join the amendment list. ADR-226's wording became "advisory until #8574". C4 gains the vendor-CLI edges.
 - **Test design (12 findings, score 7.6/10 B).** F1 was the critical one: the Phase 4 basename rule as written disabled the primary population glob, and the `??` fallback would have hidden it in production. F2 replaced a narrated floor (`294`, which contradicted the tree) with per-source floors. F3/F4 gave the ratchet the anti-vacuity arms of `fixture-relative-assert.test.sh` and its own `git ls-files` enumerator. F5 factored `resolveExit()` so the two exit-code rows have a seam. The remaining findings split bundled mutation rows, named the three constants Phase 4 moves, and made AC4 assert its denominator.
 - **Verify-the-negative sweep (~70 claims re-measured).** Seven were wrong: the tool-map population (174/289, not 294), the ADR-179 citation (item A10, not 5), the `:-` site count (106 lines / 107 occurrences, not 105), the Codex pin (0.156.1 — the pin drifted within a day of the plan being written), the `**`-exercising path count (25 `.md`, not 29), the ADR ordinal (two refs claim 238, so this plan takes 240), and the `.openhands` composition (skill ports, not agent ports). Everything else held, including all five target issues still being OPEN with no closing PR.
 
@@ -691,9 +691,9 @@ The first deepen-plan run was cut short by a rate limit. On resume, three passes
 | `--fix` eats a real path byte in references | Clean-tree `--fix`, a full human diff review, and `harness-forms` regions around verbatim quotes |
 | The OpenHands sweep weakens a live Claude guard | Only the OpenHands arms are removed, `scripts/test-all.sh` runs before push, and the `worktree-write-guard` change only narrows an allow |
 | The backfill pushes a SKILL.md past a size gate | Measured: the only per-file SKILL.md byte gate is `scripts/lint-skill-body-budget.py` (`plugins/soleur/test/skill-body-budget.json`, ADR-229). It covers 10 lifecycle skills (brainstorm, deepen-plan, one-shot, qa, compound, plan, postmerge, review, ship, work), all of which already carry the block, so the backfill adds 0 bytes to budgeted files. The Phase 2 bullet edit is in `lib/harness.ts`, which is not budgeted. Run the full `bun test plugins/soleur/test` after the backfill anyway |
-| The ADR-240 ordinal collides | ship's ADR-Ordinal Collision Gate, plus a renumber sweep over plan and tasks |
+| The ADR-245 ordinal collides | ship's ADR-Ordinal Collision Gate, plus a renumber sweep over plan and tasks |
 | A Devin `requiredPlugins` local source behaves differently on a CI runner | Measured locally on an empty isolated HOME. The first CI run is the verification, and the job is non-required |
-| The Devin `run_subagent` wait loop does not wake the parent as prescribed | Phase 2.3 live check. If it fails, the bullet is revised before merge and ADR-240 records it |
+| The Devin `run_subagent` wait loop does not wake the parent as prescribed | Phase 2.3 live check. If it fails, the bullet is revised before merge and ADR-245 records it |
 
 ## Sharp Edges
 

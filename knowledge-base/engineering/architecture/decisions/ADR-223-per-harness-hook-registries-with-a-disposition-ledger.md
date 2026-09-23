@@ -65,7 +65,7 @@ file's own semantics ("this registry is Claude-canonical").
    unanchored matchers, dead SessionStart source matchers in `.devin`, and
    cross-registry double-fire.
 
-## Amendment — 2026-09-23 (ADR-240, #8390 item 2): the WAIT primitive
+## Amendment — 2026-09-23 (ADR-245, #8390 item 2): the WAIT primitive
 
 `plugins/soleur/lib/harness.ts` `pollInstructions("devin")` told a Devin session to
 "use **get_output** with timeout for long loops". That contradicts the measured

@@ -49,7 +49,7 @@ FAIL=0
 PATTERN='\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'
 
 # A second, hand-ported harness hook tree was in this pathspec from #7173 until
-# it was retired in ADR-240 / #8306; its glob is gone with the tree. The scope
+# it was retired in ADR-245 / #8306; its glob is gone with the tree. The scope
 # rule is unchanged — growth happens by naming a file or a directory taken to
 # zero, never by widening a glob.
 hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh' \

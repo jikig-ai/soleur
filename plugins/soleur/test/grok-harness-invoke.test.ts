@@ -6,7 +6,7 @@ import { join, resolve } from "path";
 import { MIN_TRACKED_SKILLS } from "./lib/population-floors";
 
 // grok-harness-invoke.test.ts — Guard 1 of the harness-parity hardening bundle
-// (#8390, ADR-240).
+// (#8390, ADR-245).
 //
 // PROPERTY: every skill entry file Grok Build can load carries EXACTLY ONE Grok
 // invoke block, byte-equal to the canonical block, sitting before the first `# `

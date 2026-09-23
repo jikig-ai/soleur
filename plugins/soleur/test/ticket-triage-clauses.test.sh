@@ -5,7 +5,7 @@
 #
 # `ticket-triage-mirror-parity.test.sh` asserted that the intake pre-check block was
 # BYTE-IDENTICAL between two copies: the Claude agent (`agents/support/ticket-triage.md`)
-# and the OpenHands mirror (`.openhands/skills/ticket-triage/SKILL.md`). ADR-240 retired
+# and the OpenHands mirror (`.openhands/skills/ticket-triage/SKILL.md`). ADR-245 retired
 # the OpenHands port, so the identity assertion lost its second operand and the suite was
 # deleted with the tree it guarded.
 #

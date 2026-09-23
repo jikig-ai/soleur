@@ -318,7 +318,7 @@ printf '\n'
 # 3 -> 4 on 2026-09-09 for the entry above. The ceiling counts members; it does not certify them.
 # Raising it on a MEASURED zero-leak member is the intended use — silently carving one out is not.
 #
-# 4 -> 3 on 2026-09-23 (ADR-240 / #8306): the hand-ported sibling harness tree was retired, and
+# 4 -> 3 on 2026-09-23 (ADR-245 / #8306): the hand-ported sibling harness tree was retired, and
 # with it the retired mirror's guardrails suite, the same-basename over-count member above.
 # Measured after the removal, not subtracted: the walk prints 3 members. Lowering the ceiling is
 # the ratchet's normal direction — the member is gone, not carved out.

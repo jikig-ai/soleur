@@ -577,7 +577,7 @@ fi
 # floor that exists to notice the silence — the suite prints a total and exits 0.
 # A floor enforced through the suspect cannot witness the suspect.
 # ---------------------------------------------------------------------------
-# 62 -> 61 (ADR-240 / #8306): the hand-ported sibling harness tree was retired,
+# 62 -> 61 (ADR-245 / #8306): the hand-ported sibling harness tree was retired,
 # and its `learnings-researcher/SKILL.md` was one of the prose-parity consumers
 # iterated above — one fewer consumer, one fewer assertion. Measured on a green
 # run after the removal (61 dispatched), not subtracted from the old value.

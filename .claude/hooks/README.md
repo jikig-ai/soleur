@@ -311,7 +311,7 @@ that a deny would also block.
 
 (A second, hand-ported harness tree once kept its own minimal in-place type
 assertion against a different envelope and a different enum; that tree was
-retired in ADR-240 / #8306, so there is no longer a second vocabulary to
+retired in ADR-245 / #8306, so there is no longer a second vocabulary to
 disambiguate here.)
 
 [adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md

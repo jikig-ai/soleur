@@ -180,7 +180,7 @@ Per-harness discovery, stated at the strength the evidence actually carries.
 `/soleur:sync` from `skills/` **and** `devin/skills/`, each `[user,model]`. That is
 decision 5's condition observed live on a real harness.
 
-> **Amended 2026-09-23 (ADR-240, #8390 bundle) — BOTH readings above are stale,
+> **Amended 2026-09-23 (ADR-245, #8390 bundle) — BOTH readings above are stale,
 > in opposite directions.** Re-measured on Devin CLI **3000.11.1**: `devin skills
 > list` reports each of the 102 `soleur:` names exactly **ONCE**. Devin DEDUPS
 > across declared roots; the double-listing recorded above was an earlier
@@ -218,7 +218,7 @@ anything, and nothing in the repo captures it. Codex's additive-vs-replace
 behaviour here rests on the manifest declaring `./skills` explicitly, which is
 inference from configuration, not measurement.
 
-> **Amended 2026-09-23 (ADR-240, #8390 bundle): Codex is now MEASURED.** On Codex
+> **Amended 2026-09-23 (ADR-245, #8390 bundle): Codex is now MEASURED.** On Codex
 > CLI **0.156.1**, with an isolated `CODEX_HOME` and no auth, `codex plugin
 > marketplace add <checkout>` → `codex plugin add soleur@soleur` → `codex debug
 > prompt-input` renders the skills list: 105 entries for 102 unique names, with

@@ -20,7 +20,7 @@ import {
   MIN_TRACKED_SKILLS,
 } from "./lib/population-floors";
 
-// Guard 3 of the harness-parity hardening bundle (#8318, ADR-240).
+// Guard 3 of the harness-parity hardening bundle (#8318, ADR-245).
 //
 // PROPERTY: every Claude Code tool name used in an agent-read doc has a row in BOTH
 // the Codex and the Devin `## Tools` table.

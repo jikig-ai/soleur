@@ -68,7 +68,7 @@ automated.
   records the first three's freshness.
 - `scripts/ensure-kb-index.sh [--soft]` regenerates the index trio. Every reader calls it
   first: `kb-search`, `learnings-researcher` (whose `.openhands` copy went with the
-  retired port, 2026-09-23, ADR-240),
+  retired port, 2026-09-23, ADR-245),
   `learning-retrieval-bench.sh`, the `prepare` lifecycle script, and both SessionStart
   registries.
 - `scripts/rule-prune.sh` runs `rule-metrics-aggregate.sh` ahead of its own read.

@@ -36,7 +36,7 @@ export const MIN_TRACKED_COMMANDS = 2;
 
 /**
  * Tracked `plugins/soleur/skills/*\/references/**\/*.md` — the NG-P references half that
- * entered the parity population in ADR-240. Measured 2026-09-23: **115**.
+ * entered the parity population in ADR-245. Measured 2026-09-23: **115**.
  */
 export const MIN_TRACKED_REFERENCES = 110;
 

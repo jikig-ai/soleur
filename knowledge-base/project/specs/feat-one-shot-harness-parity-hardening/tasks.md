@@ -7,7 +7,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 ## Phase 1: Setup
 
 - [ ] 1.1 Re-measure every count in the plan's Research Reconciliation. Numbers go into the PR body later.
-- [ ] 1.2 Re-probe the ADR-240 ordinal across all `origin/*` refs.
+- [ ] 1.2 Re-probe the ADR-245 ordinal across all `origin/*` refs.
 
 ## Phase 2: Core Implementation (commit order)
 
@@ -44,7 +44,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
   - [ ] 2.7.3 Find out whether Devin's `install.sh` accepts a pinned version. If not, use sha256 plus a `--version` assertion.
   - [ ] 2.7.4 `harness-discovery` job in `ci.yml` (setup-bun, `@openai/codex@0.156.1`, pinned Devin), not added to `ruleset-ci-required.tf`
 - [ ] 2.8 ADRs + C4
-  - [ ] 2.8.1 ADR-240 (retirement, vendor-CLI CI policy and pin owner, Devin wait primitive, gate map), written with `soleur:architecture`
+  - [ ] 2.8.1 ADR-245 (retirement, vendor-CLI CI policy and pin owner, Devin wait primitive, gate map), written with `soleur:architecture`
   - [ ] 2.8.2 ADR-226 amendment/status line (drop the #8306 citation); ADR-165 status note
   - [ ] 2.8.3 C4 tests: `c4-count-parity.test.sh`, `c4-code-syntax.test.ts`, `c4-render.test.ts`
 

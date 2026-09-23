@@ -31,6 +31,7 @@ env:
 
 jobs:
   drift-check:
+    environment: infra-privileged
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -60,8 +61,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate CI SSH key
         run: |
@@ -74,8 +78,8 @@ jobs:
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
         run: |
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
@@ -102,7 +106,7 @@ jobs:
           if grep -q 'variable "ssh_key_path"' variables.tf 2>/dev/null; then
             VAR_ARGS+=(-var="ssh_key_path=${CI_SSH_PUB}")
           fi
-          PLAN_OUTPUT=$(doppler run --name-transformer tf-var -- \
+          PLAN_OUTPUT=$(doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan -detailed-exitcode -no-color -input=false \
             "${VAR_ARGS[@]}" 2>&1)
           EXIT_CODE=$?
@@ -1319,6 +1323,7 @@ jobs:
   # never unpauses or edits anything. Rides the same twice-daily Inngest dispatch as drift-check
   # (no new schedule/Inngest function).
   heartbeat-live-reconcile:
+    environment: infra-privileged
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -1351,8 +1356,11 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Reconcile live heartbeats
         id: reconcile
@@ -1774,13 +1782,17 @@ jobs:
   # git-data host as a leaked rehearsal — and the remedy an operator would reach for on that
   # report is a destroy.
   rung2-rehearsal-orphan-sweep:
+    environment: infra-privileged
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Sweep for orphaned rung-2 rehearsal hosts
         id: sweep
@@ -1808,7 +1820,7 @@ jobs:
           RUNG2_CONFIGS_FLOOR: 13
         run: |
           set -euo pipefail
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           printf '::add-mask::%s\n' "$TOKEN"
           # SERVERS ARE NOT THE ONLY THING A PARTIAL TEARDOWN LEAVES, and they are not the
           # expensive one. A destroy that dies partway most often strands the two 10 GB volumes
