@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, existsSync, statSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, existsSync, statSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 
 /**
@@ -45,9 +46,11 @@ import { resolve } from "node:path";
  * which there are several — from being read as execution paths.
  *
  * DELIBERATELY OUT OF SCOPE — stated rather than implied:
- *   - The NON-gate `plugins/soleur/skills/ ** ` sites (~105 `${CLAUDE_PLUGIN_ROOT:-…}`
- *     occurrences plus some bare-CWD-relative `bash plugins/soleur/scripts/…`)
- *     remain deferred to #7453. Only the gate subset is enforced here.
+ *   - The NON-gate `plugins/soleur/skills/ ** ` sites are RATCHETED (no growth) by the
+ *     third axis at the bottom of this file, added 2026-09-23. The MIGRATION of the
+ *     existing ones stays deferred to #7453; measured then: 238 tracked docs, 186
+ *     code-context occurrences, 101 distinct (path, text) rows. Only the gate subset
+ *     is zero-tolerance.
  *   - `preflight/SKILL.md` carries two UNCONDITIONAL `$(git rev-parse --show-toplevel)`
  *     anchors (`parse-form-a.awk`, `probe-verb-gate.sh`). Same threat shape,
  *     arguably worse, but not secret-emission gates — routed to #7453 with a
@@ -1364,5 +1367,254 @@ describe("plugin-root anchoring — skills secret-gate subset (#7450)", () => {
     // `plugins/soleur/skills/incident/test/redact-sentinel.test.sh` Test 20, which
     // runs in a DIFFERENT test-all shard (`want_scripts` vs `want_webplat`).
     expect(assertions).toBe(18);
+  });
+});
+
+/* ========================================================================== *
+ * THIRD AXIS — the #7453 ratchet over ALL skill docs (PR-1 slice).
+ *
+ * The two axes above are ZERO-TOLERANCE and scoped: the customer-facing command
+ * surface, and the skills SECRET-GATE subset. Both stay exactly as they are. This
+ * axis is a RATCHET over the rest: every CWD-controllable executed anchor in
+ * `plugins/soleur/skills/ ** /*.md` is pinned by (path, normalized text) with a
+ * multiplicity count, so the existing debt cannot GROW while the migration itself
+ * stays deferred to #7453.
+ *
+ * WHY ITS OWN ENUMERATOR. `skillFiles()` is a readdir/realpath walk that collects
+ * only files named SKILL.md. Widening it would do two wrong things at once: it
+ * would also widen the secret-gate axis this comment just said is unchanged
+ * (breaking its `EXPECTED_GATE_REFS` identity pin, 13 rows, adopted in #7450 A10
+ * precisely to replace a `>= 4` floor), and it walks DISK rather than the index,
+ * so untracked `.md` under `skills/` would enter the ratchet — the same hazard
+ * that got Guard 1's readdir cross-check cut. `skillDocFiles()` below reads
+ * `git ls-files`, and `R0` pins that the two populations cannot silently diverge.
+ * ========================================================================== */
+
+const RATCHET_BASELINE = resolve(__dirname, "fixtures/plugin-root-skills-ratchet.tsv");
+
+/**
+ * Corpus floors — MEASURED 2026-09-23 by an independent reimplementation of the
+ * extractor (same fence/inline logic, written separately and compared): 238 tracked
+ * docs, 186 code-context occurrences, 101 distinct (path, text) rows. The floors sit
+ * below those with a narrowing budget, not a safety margin.
+ *
+ * They exist for the authoring case specifically: a broken extractor at authoring time
+ * yields an EMPTY baseline, a green suite, and an R3 dispatch row that can never fire —
+ * so the floors are what stop this axis from shipping vacuous. Lower them only when a
+ * migration genuinely DELETES sites (that is #7453's job), never to admit new ones.
+ */
+const RATCHET_MIN_FILES = 220;
+const RATCHET_MIN_ROWS = 90;
+
+/** Every tracked markdown doc under the skills tree — the INDEX, never the disk. */
+function skillDocFiles(): string[] {
+  return execFileSync("git", ["ls-files", "--full-name", "--", ":(glob)plugins/soleur/skills/**/*.md"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+  })
+    .split("\n")
+    .filter((l) => l.length > 0)
+    .sort();
+}
+
+interface RatchetSite {
+  /** repo-relative */
+  file: string;
+  /** the matched anchor, whitespace-collapsed — NEVER a line number (#7453 keys on content) */
+  text: string;
+  form: "a" | "b" | "c" | "d";
+}
+
+const RUNNER = String.raw`(?:bash|sh|bun|node|python3|source|\.)`;
+
+/**
+ * The four CWD-controllable forms. Each is a SEPARATE regex branch, which is why
+ * the mutation matrix drives one row per form rather than one row for "a new site":
+ * form (d) shares no code path with form (a).
+ */
+const RATCHET_FORMS: readonly { form: RatchetSite["form"]; re: RegExp }[] = [
+  // (a) a default-valued expansion: the default is what runs when the variable is unset.
+  { form: "a", re: /\$\{CLAUDE_PLUGIN_ROOT:[-?][^}]*\}/g },
+  // (b) an unanchored repo-relative path in RUNNER position.
+  { form: "b", re: new RegExp(String.raw`\b${RUNNER}\s+plugins/soleur/[A-Za-z0-9._/-]+`, "g") },
+  // (c) the same with a leading `./`.
+  { form: "c", re: new RegExp(String.raw`\b${RUNNER}\s+\./plugins/soleur/[A-Za-z0-9._/-]+`, "g") },
+  // (d) a runner-position `scripts/…` operand with no variable prefix — skill-relative
+  //     or repo-root, both of which resolve against the CWD.
+  { form: "d", re: new RegExp(String.raw`\b${RUNNER}\s+\.?/?scripts/[A-Za-z0-9._/-]+`, "g") },
+];
+
+/** Code context only — fence bodies and inline spans, mirroring `gateRefsIn`. */
+function ratchetSitesIn(rel: string, src: string): RatchetSite[] {
+  const lines = src.split("\n");
+  const { fences } = parse(rel, src);
+  const inFence = (i: number) => fences.some((f) => i > f.startIdx && i < f.endIdx);
+  const out: RatchetSite[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const segments = inFence(i) ? [lines[i]] : [...lines[i].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    for (const seg of segments) {
+      for (const { form, re } of RATCHET_FORMS) {
+        for (const m of seg.matchAll(re)) {
+          out.push({ file: rel, text: m[0].replace(/\s+/g, " ").trim(), form });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** `Map<"path\ttext", count>` — the shape the baseline file serializes. */
+function tallySites(sites: readonly RatchetSite[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const s of sites) {
+    const key = `${s.file}\t${s.text}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function readBaseline(): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!existsSync(RATCHET_BASELINE)) return out;
+  for (const line of readFileSync(RATCHET_BASELINE, "utf8").split("\n")) {
+    if (!line || line.startsWith("#")) continue;
+    const [count, file, text] = line.split("\t");
+    out.set(`${file}\t${text}`, Number(count));
+  }
+  return out;
+}
+
+function serializeBaseline(counts: Map<string, number>): string {
+  const rows = [...counts.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, n]) => `${n}\t${key}`);
+  return `${RATCHET_HEADER}\n${rows.join("\n")}\n`;
+}
+
+const RATCHET_HEADER = [
+  "# plugin-root-skills-ratchet.tsv — the #7453 debt, pinned so it cannot GROW.",
+  "#",
+  "# count<TAB>repo-relative-path<TAB>normalized-matched-text",
+  "#",
+  "# Keyed on CONTENT, never on a line number, so an edit ABOVE a site does not",
+  "# invalidate the row. DO NOT add rows to make a red run pass: a new row is a new",
+  "# CWD-controllable anchor, which is the thing this file exists to stop. Fix the",
+  "# anchor instead — `${CLAUDE_PLUGIN_ROOT}/…`, no default. The migration of the",
+  "# rows already here is tracked in #7453.",
+  "#",
+  "# Regenerate (only after DELETING sites, never to admit new ones):",
+  "#   SOLEUR_WRITE_RATCHET_BASELINE=1 npx vitest run test/plugin-root-anchoring.test.ts",
+  "# The writer refuses to write below the corpus floors, so a broken extractor",
+  "# cannot silently install an empty baseline that every later run then satisfies.",
+].join("\n");
+
+describe("plugin-root anchoring — skills ratchet (#7453 PR-1 slice)", () => {
+  const files = skillDocFiles();
+  const sites = files.flatMap((f) => ratchetSitesIn(f, readFileSync(resolve(REPO_ROOT, f), "utf8")));
+  const live = tallySites(sites);
+
+  let assertions = 0;
+  const check = <T>(actual: T) => {
+    assertions += 1;
+    return expect(actual);
+  };
+
+  // GUARDED WRITER. A writer is safer than no writer: the reason to fear one is
+  // self-certification, and the floors below are what remove it. Copied in shape
+  // from plugins/soleur/test/fixture-relative-assert.test.sh, which refuses to
+  // rewrite its baseline from a failed or truncated scan.
+  if (process.env.SOLEUR_WRITE_RATCHET_BASELINE === "1") {
+    if (files.length < RATCHET_MIN_FILES || live.size < RATCHET_MIN_ROWS) {
+      throw new Error(
+        `FATAL: scan looks wrong (files=${files.length}, rows=${live.size}); baseline NOT rewritten`,
+      );
+    }
+    writeFileSync(RATCHET_BASELINE, serializeBaseline(live));
+  }
+
+  const baseline = readBaseline();
+
+  it("R0: the ratchet population is the tracked index, and a superset of the secret-gate axis", () => {
+    // Corpus floor, separate from the site count: a scan that collapses to a handful
+    // of files satisfies any row-count check that descends with it.
+    check(files.length).toBeGreaterThanOrEqual(RATCHET_MIN_FILES);
+    // The two enumerators cannot silently diverge. `skillFiles()` returns absolute
+    // paths; this axis is keyed repo-relative.
+    const docSet = new Set(files);
+    const missing = skillFiles()
+      .map((f) => f.replace(REPO_ROOT + "/", ""))
+      .filter((f) => !docSet.has(f));
+    check(missing).toEqual([]);
+  });
+
+  it("R1: the committed baseline is non-empty and above its corpus floor", () => {
+    // Without this, a broken extractor at AUTHORING time yields an empty baseline,
+    // a green suite, and an R3 dispatch row that can never fire — the vacuity this
+    // whole axis would otherwise ship with.
+    check(baseline.size).toBeGreaterThanOrEqual(RATCHET_MIN_ROWS);
+  });
+
+  it("R2: no site is new, and no site gained occurrences", () => {
+    const grown: string[] = [];
+    for (const [key, n] of live) {
+      const was = baseline.get(key);
+      if (was === undefined) {
+        const [file, text] = key.split("\t");
+        grown.push(
+          `${file}: NEW CWD-controllable anchor \`${text}\` — rewrite it as ` +
+            `"\${CLAUDE_PLUGIN_ROOT}/…" (no default). Do NOT add a baseline row; the ` +
+            `migration of the existing rows is tracked in #7453.`,
+        );
+      } else if (n > was) {
+        const [file, text] = key.split("\t");
+        grown.push(`${file}: \`${text}\` occurs ${n} times, baseline pins ${was}`);
+      }
+    }
+    check(grown).toEqual([]);
+  });
+
+  it("R3: no baseline row is stale (all listed at once)", () => {
+    const stale = [...baseline.entries()]
+      .filter(([key, n]) => (live.get(key) ?? 0) !== n)
+      .map(([key, n]) => `${key.replace("\t", ": ")} (baseline ${n}, live ${live.get(key) ?? 0})`);
+    check(stale).toEqual([]);
+  });
+
+  it("R4: the comparator is driven in BOTH directions", () => {
+    // An always-RED comparator and a working one are indistinguishable from R2/R3
+    // passing on the real tree. Drive a deliberately drifted baseline through the
+    // same comparison and require it to FAIL, then require the real one to pass.
+    const drifted = new Map(baseline);
+    const firstKey = [...drifted.keys()].sort()[0];
+    drifted.set(firstKey, (drifted.get(firstKey) ?? 0) + 1);
+    const staleUnderDrift = [...drifted.entries()].filter(([k, n]) => (live.get(k) ?? 0) !== n);
+    check(staleUnderDrift.length).toBeGreaterThan(0);
+    const staleUnderReal = [...baseline.entries()].filter(([k, n]) => (live.get(k) ?? 0) !== n);
+    check(staleUnderReal).toEqual([]);
+  });
+
+  it("R5: every form MEASURED to occur is represented in the live corpus", () => {
+    // Per-form representation, not one union count: each form is a separate regex
+    // branch, so a branch that stopped matching leaves the total high while its own
+    // class goes silently unguarded.
+    //
+    // Form (c) — `bash ./plugins/soleur/…` — is ANTICIPATED, not measured: it has ZERO
+    // live occurrences (measured 2026-09-23: a 98, b 23, c 0, d 65). It stays in the
+    // matcher because it is the same hazard one `./` over, and requiring it to be
+    // REPRESENTED would red the gate on a tree that simply does not contain it. What
+    // guards it is R2: a first (c) site is a row absent from the baseline, which is a
+    // RED with the paste-ready rewrite in the message. Distinguishing the two is the
+    // point — "this form cannot occur" and "this form is unguarded" are different
+    // claims, and only the second is a defect.
+    const byForm = new Map<string, number>();
+    for (const s of sites) byForm.set(s.form, (byForm.get(s.form) ?? 0) + 1);
+    check([...(["a", "b", "d"] as const)].filter((f) => (byForm.get(f) ?? 0) === 0)).toEqual([]);
+  });
+
+  it("R6: the suite ran every assertion (anti-vacuity floor)", () => {
+    // Absolute and hand-ratcheted, same contract as G7 and the command surface's
+    // floor. Raised in the SAME edit that adds an assertion, never in a later pass.
+    expect(assertions).toBe(8);
   });
 });
