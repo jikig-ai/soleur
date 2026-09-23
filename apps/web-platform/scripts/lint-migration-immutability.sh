@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Lint: on-main migration files are immutable (issue 8583 — the third leg
 # of migration hygiene, after the unmerged-apply gate #4241 and the
-# dev-ledger drift probe #7964).
+# #4241 dev-ledger drift probe, made fail-loud per #7964).
 #
 # Once a file under apps/web-platform/supabase/migrations/ is merged to
 # main it is, for all practical purposes, applied: tenant-integration
@@ -31,12 +31,16 @@
 # the base ref's tree is skipped as "new", whatever its number.
 #
 # Usage:
-#   bash lint-migration-immutability.sh --from-pr-diff
+#   bash lint-migration-immutability.sh --from-pr-diff [--repo <dir>]
 #       CI mode. base = origin/${BASE_REF:-main}, head = HEAD, plus a
-#       best-effort `git fetch --quiet origin main` (mirrors
-#       run-migrations.sh:124). On merge_group github.base_ref is empty,
-#       so the default re-checks the queued candidate against the newest
-#       origin/main — the sibling-merged-in-flight arm.
+#       best-effort `git fetch` of the base ref (mirrors the pre-loop
+#       fetch in run-migrations.sh). --repo lets CI run a copy of this
+#       script extracted elsewhere (the workflow executes the BASE-ref
+#       copy via `git show` so a PR cannot weaken the guard that judges
+#       it) while operating on the checkout. On merge_group
+#       github.base_ref is empty, so the default re-checks the queued
+#       candidate against the newest origin/main — the
+#       sibling-merged-in-flight arm.
 #   bash lint-migration-immutability.sh --base <ref> --head <ref> [--repo <dir>]
 #       Explicit refs for tests and local runs. No fetch is attempted.
 #
@@ -67,14 +71,22 @@ _assert_repo_root() {
 
 usage() {
   cat <<'USAGE'
-Usage: lint-migration-immutability.sh --from-pr-diff
+Usage: lint-migration-immutability.sh --from-pr-diff [--repo <dir>]
        lint-migration-immutability.sh --base <ref> --head <ref> [--repo <dir>]
 
 Fails when a PR mutates, deletes, or renames a supabase/migrations/*.sql
 file that already exists on the base ref. New files (numbers beyond
 max-on-base) are free to iterate; *.down.sql is exempt.
 
+Exit codes:
+  0  no on-main migration file was mutated (prints `migration-immutability: clean`)
+  1  one or more on-main files differ (each named via ::error::)
+  2  cannot measure (bad args, unresolvable ref, failed diff, wrong repo root)
+
 Remediation: land the change as a new NNN_*.sql migration.
+Break-glass: a file that is on main but was NEVER successfully applied
+(apply failed → no ledger row → no drift) may still need an in-place fix;
+that path is a deliberate, auditable admin/ruleset-bypass merge — see #8583.
 USAGE
 }
 
@@ -89,29 +101,36 @@ if [[ $# -lt 1 ]]; then
   exit 2
 fi
 
+need_value() {
+  # A flag as the last arg leaves $#=1: `${2:-}` yields "" and `shift 2`
+  # is a non-zero no-op that leaves $1 unchanged — the while loop would
+  # re-match the same flag forever (an agent-facing hang, not an error).
+  [[ $# -ge 2 ]] && return 0
+  echo "lint-migration-immutability: $1 requires a value" >&2
+  exit 2
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --from-pr-diff) FROM_PR_DIFF=1; shift ;;
-    --base) BASE="${2:-}"; shift 2 ;;
-    --head) HEAD="${2:-}"; shift 2 ;;
-    --repo) REPO="${2:-}"; shift 2 ;;
+    --base) need_value "$@"; BASE="$2"; shift 2 ;;
+    --head) need_value "$@"; HEAD="$2"; shift 2 ;;
+    --repo) need_value "$@"; REPO="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "lint-migration-immutability: unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
 
 if [[ "$FROM_PR_DIFF" == "1" ]]; then
-  # --repo lets CI invoke a copy of this script extracted elsewhere (the
-  # workflow runs the BASE-ref copy via `git show` so a PR cannot weaken
-  # the guard that judges it) while still operating on the checkout.
+  if [[ -n "$BASE" || -n "$HEAD" ]]; then
+    echo "lint-migration-immutability: --from-pr-diff cannot be combined with --base/--head" >&2
+    exit 2
+  fi
   [[ -z "$REPO" ]] && REPO="$REPO_ROOT"
   base_ref="${BASE_REF:-main}"
   base_ref="${base_ref#refs/heads/}"
   BASE="origin/$base_ref"
   HEAD="HEAD"
-  # Best-effort refresh so a stale local origin/main cannot false-green
-  # (CI always fetches fresh; this covers local runs).
-  git -C "$REPO" fetch --quiet --no-tags origin main 2>/dev/null || true
 else
   if [[ -z "$BASE" || -z "$HEAD" ]]; then
     echo "lint-migration-immutability: --base and --head are both required (or use --from-pr-diff)" >&2
@@ -122,8 +141,20 @@ else
 fi
 
 # An explicit --repo may point at a fixture repo that IS a valid root on
-# its own terms — assert the same migrations-dir identity there.
+# its own terms — assert the same migrations-dir identity there. The
+# assertion precedes the fetch below deliberately: the fetch is a WRITE
+# (updates refs/remotes/*, appends to the reflog, writes FETCH_HEAD) and
+# must not land in a wrongly-resolved repository — sibling precedent at
+# lint-migration-fk-preconditions.sh.
 _assert_repo_root "$REPO" || exit 2
+
+if [[ "$FROM_PR_DIFF" == "1" ]]; then
+  # Best-effort refresh so a stale local origin/<base> cannot false-green
+  # (CI always fetches fresh; this covers local runs). Failure is warned,
+  # not silent — a stale base weakens the add-collides arm.
+  git -C "$REPO" fetch --quiet --no-tags origin "$base_ref" 2>/dev/null \
+    || echo "::warning::lint-migration-immutability: best-effort fetch of origin/$base_ref failed; comparing against possibly-stale ref"
+fi
 
 # ---------- resolve refs (fail closed) ----------
 if ! git -C "$REPO" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
@@ -141,9 +172,12 @@ fi
 # are not C-quoted (a quoted literal would not match an ls-tree pathspec
 # and would silently classify as "new"). Kept in a temp file because a
 # bash variable cannot hold NUL bytes.
-DIFF_FILE="$(mktemp)"
+if ! DIFF_FILE="$(mktemp)"; then
+  echo "::error::lint-migration-immutability: mktemp failed; failing closed." >&2
+  exit 2
+fi
 trap 'rm -f "$DIFF_FILE"' EXIT
-if ! git -C "$REPO" diff --no-renames --name-only -z "$BASE...$HEAD" -- 'apps/web-platform/supabase/migrations/*.sql' > "$DIFF_FILE" 2>/dev/null; then
+if ! git -C "$REPO" diff --no-renames --name-only -z "$BASE...$HEAD" -- 'apps/web-platform/supabase/migrations/*.sql' > "$DIFF_FILE"; then
   echo "::error::lint-migration-immutability: git diff $BASE...$HEAD failed; failing closed." >&2
   exit 2
 fi
@@ -162,20 +196,34 @@ while IFS= read -r -d '' rel; do
     *.down.sql) exempt_down=$((exempt_down + 1)); continue ;;
   esac
 
-  if ! base_ent=$(git -C "$REPO" ls-tree "$BASE" -- "$rel" 2>/dev/null); then
+  if ! base_ent=$(git -C "$REPO" ls-tree "$BASE" -- "$rel" </dev/null); then
     # rc != 0 is an oracle failure, not "absent" (absent is rc 0 + empty)
     # — degrading it to skipped-new would be a silent false-green.
     echo "::error::lint-migration-immutability: ls-tree failed for '$rel' at $BASE; failing closed." >&2
     exit 2
   fi
   if [[ -z "$base_ent" ]]; then
-    # Not on the base ref — free to iterate regardless of number.
+    # Not on the base ref — free to iterate regardless of number, but the
+    # head entry must be a REGULAR blob: a symlink (120000) or gitlink
+    # (160000) admitted here is a persistent unguarded mutation channel —
+    # the runner follows the link at apply time while the ledgered blob
+    # stays byte-identical (review: E6).
+    if ! head_new=$(git -C "$REPO" ls-tree "$HEAD" -- "$rel" </dev/null); then
+      echo "::error::lint-migration-immutability: ls-tree failed for '$rel' at $HEAD; failing closed." >&2
+      exit 2
+    fi
+    new_mode=$(printf '%s\n' "$head_new" | awk '{print $1}')
+    if [[ "$new_mode" != "100644" && "$new_mode" != "100755" ]]; then
+      echo "::error::$rel: new migration path is not a regular file (mode ${new_mode:-absent}) — symlinks/gitlinks cannot be ledgered safely" >&2
+      violations=$((violations + 1))
+      continue
+    fi
     skipped_new=$((skipped_new + 1))
     continue
   fi
 
   checked=$((checked + 1))
-  if ! head_ent=$(git -C "$REPO" ls-tree "$HEAD" -- "$rel" 2>/dev/null); then
+  if ! head_ent=$(git -C "$REPO" ls-tree "$HEAD" -- "$rel" </dev/null); then
     echo "::error::lint-migration-immutability: ls-tree failed for '$rel' at $HEAD; failing closed." >&2
     exit 2
   fi
@@ -197,6 +245,7 @@ done < "$DIFF_FILE"
 if [[ "$violations" -gt 0 ]]; then
   echo "" >&2
   echo "::error::lint-migration-immutability: $violations on-main migration mutation(s) — see #8583" >&2
+  echo "::error::  Reproduce locally: bash apps/web-platform/scripts/lint-migration-immutability.sh --base origin/main --head HEAD" >&2
   echo "migration-immutability: RED (touched=$touched on-main-checked=$checked new=$skipped_new down-exempt=$exempt_down violations=$violations)"
   exit 1
 fi
@@ -207,7 +256,7 @@ if [[ "$touched" -gt 0 && "$checked" -eq 0 ]]; then
   # all-new-migrations PR, but it must be VISIBLE so a stubbed/broken
   # oracle cannot produce a clean-looking report indistinguishable from
   # a real check (mutation matrix row 6).
-  echo "::notice::migration-immutability: 0 on-main migration files checked — all $touched touched path(s) are new or exempt"
+  echo "::notice::lint-migration-immutability: 0 on-main migration files checked — all $touched touched path(s) are new or exempt"
 fi
 
 echo "migration-immutability: clean (touched=$touched on-main-checked=$checked new=$skipped_new down-exempt=$exempt_down)"

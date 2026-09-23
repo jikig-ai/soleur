@@ -37,10 +37,30 @@ are the gates' own, recorded in the plan's "Deepen-Plan Pass" section.
 ## Work Phase
 - Status: complete — guard + suite + workflow wiring implemented; 10/10 matrix rows green;
   FK-lint regression, orphan lint, fixture baselines, workflow lints, vacuity floor all green.
-  Residual follow-up issue for the unmerged-apply self-mutation arm still to be filed at ship time.
+  Residual follow-up arm is covered by existing issue #8521 (verified during review).
 
 ## Review Phase
-- Status: pending.
+- Status: panel complete — 11 seats, 10 SHIP / 1 NO-SHIP (test-design, suite-completeness
+  grounds — all mechanical). Design-validity pass KEEP/SOUND; design-pass fixes landed
+  `e12e27a4a1` (fail-closed ls-tree rc, base-copy execution via `git show`, stronger T10/T11
+  wiring assertions, `-z` enumeration, BASE_REF normalization).
+- Panel findings fixed inline (uncommitted at time of writing → next commit):
+  dangling-flag infinite loop (`need_value`), T10/T11 invocation-specific greps,
+  `--from-pr-diff` e2e fixture arm (file:// origin remote), ls-tree rc≠0 arm (rc 2),
+  assertion floor (CASES/EXPECTED_CASES, direct printf+exit), fetch moved after
+  `_assert_repo_root`, base_ref-aware fetch + warning, two-PR neuter closed
+  (`git log` existence check — deleted-guard-on-base now fails closed),
+  symlink/gitlink admission refused on new files (E6 unguarded channel), mode-only
+  change arm, `--from-pr-diff`+`--base` combo rejected, break-glass remediation text
+  (never-applied on-main file → auditable ruleset-bypass path), `migration-rollback.md`
+  §Emergency Deploy Blocking updated, stale `run-migrations.sh:124` citation in the FK
+  sibling repointed to a content anchor, suite promoted into guard-vacuity-floor
+  PROMOTED_FILES (deferred ledger stays 47; bound adjacent to `if` for mutant
+  constructibility), fixture-relative baseline regenerated (+1 row: the guard's
+  `git -C` fetch site).
+- Suite now 20/20; shellcheck clean on both scripts; vacuity gate 23/23 (FIRES-verified).
+- Deferred residual: unmerged-apply self-mutation arm is covered by existing issue #8521 —
+  no new issue needed; cite #8521 in the PR body.
 
 ## QA Phase
 - Status: pending.

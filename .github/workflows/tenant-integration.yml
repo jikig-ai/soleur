@@ -134,13 +134,27 @@ jobs:
           GUARD_COPY="$RUNNER_TEMP/migration-immutability-guard.sh"
           # Anti-self-neuter: when the script already exists on the base
           # ref, run THAT copy — a PR must not weaken the guard that
-          # judges it (ci.yml's ci-e2e-classify.sh precedent). Fallback
-          # to the checkout copy covers the guard's own introduction PR
-          # and any PR before its first merge.
+          # judges it (ci.yml's ci-e2e-classify.sh precedent). The
+          # fallback to the checkout copy is valid ONLY during the
+          # guard's introduction window (path never existed on base) —
+          # if the script ever existed on base but `git show` now fails,
+          # it was deleted on main, and falling back would let a
+          # follow-up PR ship a neutered copy + a mutation (two-PR
+          # neuter). Deleted-guard recovery is deliberately loud:
+          # restore the script in a normal PR, or merge via
+          # admin/ruleset bypass. Same answer if main's copy is ever
+          # systematically broken — the base copy judges every PR
+          # including its own fix, so recovery there is also a
+          # ruleset-bypass merge.
           if git show "origin/${base_ref}:$GUARD_PATH" > "$GUARD_COPY" 2>/dev/null && [[ -s "$GUARD_COPY" ]]; then
+            echo "migration-immutability: running base-ref copy of $GUARD_PATH"
             bash "$GUARD_COPY" --from-pr-diff --repo "$GITHUB_WORKSPACE"
-          else
+          elif [[ -z "$(git log -1 --format=%H "origin/${base_ref}" -- "$GUARD_PATH" 2>/dev/null)" ]]; then
+            echo "::notice::$GUARD_PATH absent on origin/$base_ref (introduction window) — running checkout copy"
             bash "$GUARD_PATH" --from-pr-diff
+          else
+            echo "::error::$GUARD_PATH was deleted on origin/$base_ref — refusing to judge with a PR-controlled copy; restore the guard (or merge via admin/ruleset bypass)" >&2
+            exit 1
           fi
 
   tenant-integration:
