@@ -539,7 +539,7 @@ jobs:
           REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
         run: |
           set -euo pipefail
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           printf '::add-mask::%s\n' "$TOKEN"
           # EXACT NAME, never a prefix match. `?name=` is an exact filter on the Hetzner side,
           # so this cannot reach `soleur-git-data` (the production host) or a leftover survivor
@@ -828,7 +828,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           printf '::add-mask::%s\n' "$TOKEN"
           body="$(curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
                     'https://api.hetzner.cloud/v1/servers?per_page=50')" || {

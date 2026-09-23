@@ -2461,7 +2461,7 @@ jobs:
         # function and a regression in it would otherwise be unobserved at the moment it matters.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (inngest-volume-recut) failed — the plaintext AOF volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state)."
             echo "::error::RECOVERY: dispatch '-f apply_target=inngest-host-replace'. Do NOT re-dispatch inngest-volume-recut, and do NOT dispatch inngest-host — both ABORT, and both aborts are correct."
@@ -2705,7 +2705,7 @@ jobs:
           # leaves the registry DOWN. Emit a self-documenting recovery annotation, then fail hard
           # (gating behavior unchanged). Serving is covered by the ADR-096 GHCR dark-launch
           # fallback; the store volume is preserved (guarded), so re-dispatch re-creates the host.
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             # "GHCR fallback covers serving" was RETRACTED by #7071 — the host->GHCR read PAT is
             # revoked (401) and the minter is disabled (403 DENIED), so no host pulls from GHCR
@@ -2942,7 +2942,7 @@ jobs:
           # A mid-migration apply failure (old volume/host gone, new create fails — quota/stock/boot)
           # leaves the registry DOWN. Serving is covered by the ADR-096 GHCR dark-launch fallback;
           # the store is a GHCR mirror (re-fills), so re-dispatch re-creates the host + fresh volume.
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             # Same #7071 retraction as above. Do not reinstate the fallback claim.
             echo "::error::terraform apply (registry-region-migrate) failed — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-region-migrate to retry the fresh-region create"
@@ -3719,7 +3719,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             # NOTE the corrected claim. This message previously said "GHCR fallback covers
             # serving" — the #7071-retracted premise, asserted to an operator mid-incident, on
@@ -4319,7 +4319,7 @@ jobs:
           # volumes are preserved (guarded), so re-dispatch recovers from them. Writes FAIL, not
           # corrupt (single-writer at replicas=1 → no split-brain). Emit a self-documenting
           # recovery annotation, then fail hard (gating behavior unchanged).
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them"
             exit 1
@@ -4561,7 +4561,7 @@ jobs:
         # the encrypted volume + attachment each show a create. This is additive — zero downtime.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (workspaces-luks-cutover) failed — the encrypted volume was not provisioned. The live plaintext /mnt/data is UNTOUCHED (additive create); re-dispatch to retry."
             exit 1
@@ -4758,7 +4758,7 @@ jobs:
         # the LUKS volume shows BOTH a delete AND a create (replace); the attachment shows a create.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (workspaces-luks-recut) failed — the orphaned volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state). The LIVE plaintext /mnt/data is UNTOUCHED (different volume) so serving is unaffected. RECOVERY: re-dispatch workspaces-luks-recut with the SAME confirm + expected_luks_volume_id — a re-dispatch plans a bare create which the gate's recovery arm accepts (before==null → id-pin is a no-op), completing the raw-volume + attachment create."
             exit 1
@@ -5201,7 +5201,7 @@ jobs:
         # illusion of a second opinion.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is safe and is the normal remedy. Partial-create nuance: if the failure was BEFORE the server landed (its volume/heartbeats created, server not), the retry still plans exactly one server create WITH its NIC and volume attachment, and the gate passes. If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses — and completing that host by hand does NOT fix it: cloud-init runcmd is once-per-instance and has already finished on a host with no private IP, so attaching the NIC afterwards leaves the app unconfigured. That host must be REPLACED, not completed."
             exit 1
@@ -5634,7 +5634,7 @@ jobs:
         # post-mortem arrives after the original host is gone.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (web-host-replace for ${WEB_HOST_KEY}) failed. This operation DESTROYS BEFORE IT CREATES, so ${WEB_HOST_KEY} may be gone: check the apply output for whether the destroy completed. If the destroy landed and the create did not (out-of-stock is the documented cause, #6393/#6400), TWO states are reachable and they have OPPOSITE recoveries — determine which one before acting, via terraform state or a Hetzner API existence probe. (a) The create never returned an id, so the resource is ABSENT FROM STATE: re-dispatching THIS target plans zero replaces and the gate correctly refuses; the recovery is apply_target=web-host-create, additive and graded against the birth contract. (b) The create returned an id and a later step failed, so the resource is IN state and TAINTED: that plans delete+create, which THIS gate PASSES, so re-dispatch web-host-replace — web-host-create would be refused by the birth gate on its destroy arm. The earlier wording asserted both halves at once ("ABSENT from the provider but PRESENT in state as tainted ... the gate will refuse it"), which is self-refuting and sent the operator to the wrong remedy in case (b). The workspaces volume was preserved by omission and re-attaches to the new host."
             exit 1
@@ -6180,7 +6180,7 @@ jobs:
         # ARM, which runs BEFORE apply, so a bad plan is refused rather than post-mortem'd.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (git-data-host-create) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is normally the correct remedy, and the gate's requirement arm accepts a no-op on every member the server's creation does not entail, so a partial apply does NOT wedge the retry."
             echo "::error::TWO EXCEPTIONS. (1) If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses. Completing that host by hand does not fix it: cloud-init runcmd is once-per-instance and has already finished, and ADR-115 excludes git-data from the reboot primitive — that host must be REPLACED, not completed. (2) If the failure names doppler_config.git_data_prd already existing, the config was created outside terraform; a re-dispatch CANNOT succeed because the Doppler API returns 400 'Name is already in use' rather than adopting it. Run 'terraform import doppler_config.git_data_prd soleur.prd_git_data' first. See the runbook's partial-birth decision tree."

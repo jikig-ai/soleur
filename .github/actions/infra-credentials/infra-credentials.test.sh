@@ -30,12 +30,20 @@ FAILURES=()
 pass() { PASSES=$((PASSES + 1)); printf '[ok] %s\n' "$1"; }
 fail() { FAILURES+=("$1"); printf '[FAIL] %s\n' "$1"; }
 
-# Canonical fixture-root guard (copied byte-for-byte; fixture-scan.py does not
-# recognise an inline `case` rewrite of it).
+# Canonical fixture-root guard, copied BYTE-FOR-BYTE from
+# plugins/soleur/test/test-helpers.sh. `fixture-dir-operand-assert.test.sh` compares the
+# inline definition against that source and reds on drift -- my first version was a
+# two-arm paraphrase that checked only absoluteness, which passes the cases it thought of
+# and misses `..`, `/proc`, `/` and the empty string. That is the whole reason the ratchet
+# compares bytes rather than behaviour.
 assert_fixture_dir() {
-  case "$1" in
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
     /*) : ;;
-    *) printf 'FIXTURE ROOT NOT ABSOLUTE: %s\n' "$1" >&2; exit 2 ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
 
@@ -331,23 +339,32 @@ fi
 
 # ---- Verdict --------------------------------------------------------------
 #
-# The floor APPENDS to FAILURES, which is what the verdict reads. A floor that bumped a
-# side counter would exit non-zero only by accident, via the ledger reconciliation, and
-# would print a message accusing the helpers of tampering.
+# Failures print FIRST, then the floor. The floor must enforce ITSELF -- a direct printf
+# and its own `exit 1`, never a `FAILURES+=(...)` that the verdict block below reads.
 #
-# SELFTEST_PASSES is a literal on the line immediately above its use: a constant bound
-# further up is UNBOUND in guard-vacuity-floor.test.sh's mutant slice, so the mutant
-# dies at `set -u` and the floor scores CONSTRUCTION rather than FIRING.
+# That was a real defect here, and guard-vacuity-floor.test.sh named it exactly: its
+# mutant slices the `if` plus the CONTIGUOUS simple assignments above it, zeroes every
+# counter, and runs THAT. A floor whose body only appends to an array exits 0 in that
+# slice, because the verdict block that reads the array is not in it -- so the floor is
+# "enforced THROUGH the machinery it guards" and a one-line edit disarming every assertion
+# disarms the floor too. ADR-193.
+printf '\n%s: %s passed, %s failed\n' "$SUITE" "$((PASSES - 1))" "${#FAILURES[@]}"
+if [[ "${#FAILURES[@]}" -gt 0 ]]; then
+  printf '  - %s\n' "${FAILURES[@]}"
+fi
+
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`. The subtrahend was
+# `SELFTEST_PASSES`, bound ~200 lines up at the instrument self-test -- and a name bound
+# further up is UNBOUND in the mutant slice, so the mutant dies at `set -u` and the floor
+# scores CONSTRUCTION FAILURE rather than FIRES. The literal is safe because the self-test
+# already asserts `PASSES == 1` at that point and aborts otherwise.
+SELFTEST_PASSES=1
 MIN_ASSERTIONS=34
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
-  FAILURES+=("ANTI-VACUITY FLOOR: $REAL real assertions ran, expected >= $MIN_ASSERTIONS — rows were skipped or truncated")
-  printf 'ANTI-VACUITY FLOOR: %s real assertions, expected >= %s\n' "$REAL" "$MIN_ASSERTIONS" >&2
-fi
-
-printf '\n%s: %s passed, %s failed\n' "$SUITE" "$REAL" "${#FAILURES[@]}"
-if [[ "${#FAILURES[@]}" -gt 0 ]]; then
-  printf '  - %s\n' "${FAILURES[@]}"
+  printf 'ANTI-VACUITY FLOOR: only %s real assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
+
+[[ "${#FAILURES[@]}" -eq 0 ]] || exit 1
 exit 0

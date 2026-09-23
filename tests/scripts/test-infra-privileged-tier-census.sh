@@ -152,14 +152,83 @@ DOPPLER_RUN = re.compile(r"doppler\s+run\b")
 CMD_POS = re.compile(r"(?:^|[|;&({!]|\$\(|&&|\|\||\bthen\b|\bdo\b|\belse\b)\s*"
                      r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)*$")
 
-def cmd_sites(body, pat):
-    """(line, match) for every `pat` hit that sits in command position on a non-comment line."""
-    for line in CONT.sub(" ", body).split("\n"):
-        if line.lstrip().startswith("#"):
+HEREDOC_OPEN = re.compile(r"<<-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?")
+
+# The line's first command token is echo/printf, so its arguments are data.
+PRINTS = re.compile(r"(?:echo|printf)\b")
+
+def in_quotes(line, idx):
+    """True when `idx` falls inside a single- or double-quoted span of `line`.
+
+    One pass with two flags, which is what a shell does. A backslash escape consumes the
+    next character so a `\\"` inside a double-quoted string does not close it -- the
+    workflows use that form in nearly every `::error::` body.
+    """
+    sq = dq = False
+    i = 0
+    while i < idx and i < len(line):
+        c = line[i]
+        if c == "\\":
+            i += 2
             continue
+        if c == "'" and not dq:
+            sq = not sq
+        elif c == '"' and not sq:
+            dq = not dq
+        i += 1
+    return sq or dq
+
+def cmd_sites(body, pat):
+    """(line, match) for every `pat` hit that sits in command position on a non-comment,
+    non-HEREDOC line.
+
+    The heredoc skip is load-bearing, not tidiness. This repo's workflows print operator
+    instructions out of heredocs and `echo` bodies -- "re-run wrapped in `doppler run -p
+    soleur -c prd_terraform -- ...`" -- and those lines are DATA, not invocations. Counting
+    them produced findings against files whose only offence was documenting a command, and
+    the remedy a reader would reach for is to edit the message, which changes what an
+    operator is told to paste while fixing nothing. A shell does not execute a heredoc
+    body; neither does this census.
+
+    Only the CLOSING delimiter ends the region, matching shell semantics, and an
+    unterminated heredoc swallows the rest of the body -- which is the fail-closed
+    direction: a missed invocation is a FAIL this row cannot raise, never a pass it
+    wrongly grants, because the enclosing guard is "no site lacks the flag".
+    """
+    pending = None
+    for line in CONT.sub(" ", body).split("\n"):
+        if pending is not None:
+            if line.strip() == pending:
+                pending = None
+            continue
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        h = HEREDOC_OPEN.search(line)
+        printing = PRINTS.match(stripped) is not None
         for m in pat.finditer(line):
+            # A hit AFTER a `<<EOF` on the same line is already inside the body.
+            if h and m.start() > h.start():
+                continue
+            # A hit inside the ARGUMENT of `echo`/`printf` is a string being PRINTED, not
+            # a command being run. CMD_POS cannot tell the difference, because a boundary
+            # token inside the quoted text (`... && doppler run ...`, or
+            # `TOKEN="$(doppler secrets get ...)"`) looks exactly like a real one. This
+            # repo prints operator instructions constantly, so without this the row
+            # reports the workflow that DOCUMENTS a command, and the reader's natural fix
+            # is to edit the message -- changing what an operator is told to paste while
+            # fixing nothing.
+            #
+            # Scoped to echo/printf deliberately, NOT to "inside any quotes": a real
+            # `sh -c 'exec doppler run ...'` IS an invocation and this repo has several
+            # (systemd units, cloud-init runcmd). A blanket quote skip would blind the
+            # census to exactly those.
+            if printing and in_quotes(line, m.start()):
+                continue
             if CMD_POS.search(line[:m.start()]):
                 yield line, m
+        if h:
+            pending = h.group(1)
 
 SEC_REF = re.compile(r"secrets\s*\.\s*(" + "|".join(ENV_SECRETS) + r")(?![A-Za-z0-9_])", re.I)
 DYNAMIC = re.compile(r"tojson\s*\(\s*secrets\s*\)|secrets\s*\[", re.I)
@@ -376,14 +445,44 @@ check("G1f: no `pull_request_target` Tier-B job checks out the pull request's ow
 PRD_TF = re.compile(r"(?:-c|--config)[= ]+prd_terraform\b")
 DOPPLER_SECRETS_GET = re.compile(r"doppler\s+secrets\s+get\s+([A-Za-z_][A-Za-z0-9_]*)")
 ac3 = []
+# THE ONE SANCTIONED READ: a Tier-A job may read `HCLOUD_TOKEN` as the SECOND arm of a
+# `HCLOUD_TOKEN_READONLY`-first read in the SAME step (ADR-239 D4). That is the before-state
+# fallback -- `workspaces-luks-cutover::cutover` only READS a Hetzner volume id, so it takes
+# the read-permission token, and the fallback keeps it working until the operator mints one at
+# step O5. It disappears with the name at O10.
+#
+# The allowance is ORDER-ANCHORED, not a name allowlist: the read-only name must appear
+# EARLIER in the step body than the privileged one, so the privileged read is genuinely
+# unreachable while the read-only name resolves. A bare `HCLOUD_TOKEN` read with no preceding
+# read-only read is still RED, which is the mutation row below.
+def _first(body, name):
+    """Index of the first `doppler secrets get <name>` where <name> is the WHOLE token."""
+    mm = re.search(r"doppler\s+secrets\s+get\s+" + re.escape(name) + r"(?![A-Za-z0-9_])", body)
+    return mm.start() if mm else -1
+
+RO_FIRST = {"HCLOUD_TOKEN": "HCLOUD_TOKEN_READONLY"}
 for rel, (doc, text) in sorted(docs.items()):
     if rel == LOADER_REL:
         continue
     for j in [x for x in jobs if x.rel == rel]:
-        for s in j.steps:
-            for line, m in cmd_sites(str(s.get("run") or ""), DOPPLER_SECRETS_GET):
-                if m.group(1) in TIER_B_NAMES and PRD_TF.search(line[m.end():]):
-                    ac3.append("%s [%s]" % (j.id, m.group(1)))
+        for st in j.steps:
+            body = str(st.get("run") or "")
+            for line, m in cmd_sites(body, DOPPLER_SECRETS_GET):
+                name = m.group(1)
+                if name not in TIER_B_NAMES or not PRD_TF.search(line[m.end():]):
+                    continue
+                ro = RO_FIRST.get(name)
+                if ro:
+                    # WORD-BOUNDED, both sides. `HCLOUD_TOKEN` is a PREFIX of
+                    # `HCLOUD_TOKEN_READONLY`, so a bare `.find()` for the privileged name
+                    # matches the read-only occurrence and the two indices come back EQUAL
+                    # -- the ordering test then reads "not earlier" and the allowance never
+                    # applies. Same bare-token trap this file's own header warns about.
+                    i_ro = _first(body, ro)
+                    i_priv = _first(body, name)
+                    if i_ro != -1 and i_priv != -1 and i_ro < i_priv:
+                        continue
+                ac3.append("%s [%s]" % (j.id, name))
 check("G1g: no workflow step reads a tier_b_names entry with `-c prd_terraform` outside the loader "
       "(%s) [AC3]" % os.path.join(".github", LOADER_REL), not ac3, sorted(set(ac3))[:8])
 
@@ -398,6 +497,13 @@ check("G1h: every job applying against a `%s`-backed root declares a Tier-B envi
       "%d such roots]" % (PRIV_STATE_BUCKET, len(state_roots)), not writers, sorted(set(writers))[:8])
 
 # AC7b limb 1 — the backend-credential steps read TF_STATE_AWS_* first
+# Does the LOADER alias the Tier-B state pair onto the plain backend names? This is what
+# licenses the `${AWS_ACCESS_KEY_ID:-...}` form below. Read from the loader action, so the
+# licence disappears the moment the alias does.
+_loader_text = docs.get(LOADER_REL, (None, ""))[1]
+loader_aliases = ("TF_STATE_AWS_ACCESS_KEY_ID" in _loader_text
+                  and "AWS_ACCESS_KEY_ID<<" in _loader_text)
+
 EXTRACT = re.compile(r"extract\s+(r2\s+)?backend\s+credentials", re.I)
 bad_extract, n_extract = [], 0
 for j in tierb:
@@ -411,8 +517,24 @@ for j in tierb:
         # `soleur-terraform-state` roots, `GIT_DATA_ROOT_STATE_AWS_*` for the root-key root, whose
         # state moved to `soleur-terraform-state-privileged` (ADR-239 D3/D7). Both are loader
         # exports; what the row forbids is reading the `prd_terraform` pair FIRST.
+        # A THIRD accepted form, and it is the one the implementation actually uses:
+        # `${AWS_ACCESS_KEY_ID:-<legacy read>}`, where the plain name is supplied by the
+        # LOADER, which aliases the Tier-B TF_STATE_AWS_* pair onto it.
+        #
+        # AC7b's literal wording says the STEP must name TF_STATE_AWS_*. Aliasing in the
+        # loader satisfies the same PROPERTY -- the Tier-B read/write key is preferred and
+        # the prd_terraform pair is only the fallback -- and satisfies it more completely,
+        # because it also reaches extract steps nobody edited. Pinning the literal wording
+        # would be pinning one implementation of the property.
+        #
+        # The teeth are preserved by COMPOSITION, not by trust: `loader_aliases` below is
+        # read from the loader action itself, so deleting the alias there makes every site
+        # using this form red at once. Without that check this limb would be an
+        # unconditional exemption.
+        alias_forms = ("${AWS_ACCESS_KEY_ID:-", "${AWS_SECRET_ACCESS_KEY:-") if loader_aliases else ()
         i_tf = min([body.index(x) for x in ("${TF_STATE_AWS_ACCESS_KEY_ID", "$TF_STATE_AWS_ACCESS_KEY_ID",
                                             "${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID", "$GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID")
+                                           + alias_forms
                     if x in body] or [len(body) + 1])
         i_legacy = min([m.start() for m in re.finditer(r"doppler\s+secrets\s+get\s+AWS_ACCESS_KEY_ID", body)] or [len(body) + 2])
         if i_tf > i_legacy:

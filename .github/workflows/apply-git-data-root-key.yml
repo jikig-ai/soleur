@@ -226,7 +226,8 @@ jobs:
           state_fp="$(terraform show -json | jq -r '.values.root_module.resources[] | select(.address == "tls_private_key.git_data_root") | .values.public_key_fingerprint_sha256')" \
             || unreadable state_read_failed
           [[ "$state_fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || unreadable state_fingerprint_malformed
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)" || unreadable hcloud_token_read_failed
+          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
+          [[ -n "$TOKEN" ]] || unreadable hcloud_token_read_failed
           [[ -n "$TOKEN" ]] || unreadable hcloud_token_empty
           printf '::add-mask::%s\n' "$TOKEN"
           body="$(printf 'Authorization: Bearer %s\n' "$TOKEN" | curl -sS -f --max-time 30 -H @- \

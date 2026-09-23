@@ -27,7 +27,7 @@ cd "$INFRA_DIR"
 DOPPLER_ARGS=(--project soleur --config prd_terraform)
 
 # --- Expected origin: canonical source, never a hardcoded 10.0.1.10 -----------------
-WEB1_IP=$(doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+WEB1_IP=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform console <<<'var.web_hosts["web-1"].private_ip' 2>/dev/null \
   | tr -d '"' | tr -d '[:space:]')
 if [[ ! "$WEB1_IP" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then

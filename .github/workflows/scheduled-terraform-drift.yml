@@ -1820,7 +1820,7 @@ jobs:
           RUNG2_CONFIGS_FLOOR: 13
         run: |
           set -euo pipefail
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           printf '::add-mask::%s\n' "$TOKEN"
           # SERVERS ARE NOT THE ONLY THING A PARTIAL TEARDOWN LEAVES, and they are not the
           # expensive one. A destroy that dies partway most often strands the two 10 GB volumes
