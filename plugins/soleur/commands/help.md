@@ -45,6 +45,8 @@ Detect the active harness before printing commands:
 
 Use the matching column in Step 3 below.
 
+<!-- The HOW THE SKILLS FIT TOGETHER map below is inspired by the ask-matt flow map in mattpocock/skills (MIT, Copyright (c) 2026 Matt Pocock). -->
+
 ## Step 3: Output the Help Reference
 
 Present one harness-appropriate overview. Replace placeholder counts with actual values from Step 2, using the naming rules in Step 2.5.
