@@ -20,7 +20,6 @@
 
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLAUDE_BUDGET_USD } from "@/server/inngest/cron-budgets";
 
 // --- Module mocks (hoisted by vitest) ---------------------------------------
 

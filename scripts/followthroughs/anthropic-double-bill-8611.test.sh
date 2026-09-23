@@ -49,11 +49,12 @@ run_case "query helper 'nothing was queried' is CANNOT ESTABLISH" 3 3 ""
 run_case "missing credential is CANNOT ESTABLISH"                 3 0 "$(row 40 3 0 3 12 12)" BETTERSTACK_QUERY_PASSWORD=
 run_case "non-numeric merge floor is CANNOT ESTABLISH"            3 0 "$(row 40 3 0 3 12 12)" FT8611_MERGE_EPOCH=abc
 
-# Anti-vacuity floor, reported outside the helpers it backstops.
-if [ "$passes" -lt 11 ] && [ "${#FAILURES[@]}" -eq 0 ]; then
-  printf 'FAIL: only %s cases ran (expected 11)\n' "$passes"; exit 1
-fi
 if [ "${#FAILURES[@]}" -gt 0 ]; then
   printf '%s passed, %s failed\n' "$passes" "${#FAILURES[@]}"; exit 1
+fi
+# Anti-vacuity floor, reported outside the helpers it backstops (ADR-193: printf + exit 1).
+if [[ "$passes" -lt 11 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 11)\n' "$passes" >&2
+  exit 1
 fi
 printf '%s passed, 0 failed\n' "$passes"

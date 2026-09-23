@@ -35,7 +35,6 @@
 // (deleted in the same commit).
 
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
 import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   mintInstallationToken,
