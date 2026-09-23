@@ -48,6 +48,8 @@ assert_fixture_dir() {
 
 SANDBOX="$(mktemp -d)"; assert_fixture_dir "$SANDBOX"
 trap 'rm -rf "$SANDBOX"' EXIT
+# The resolver stages sources under XDG_CACHE_HOME; keep that inside the sandbox too.
+export XDG_CACHE_HOME="$SANDBOX/xdg-cache"
 
 MODEL="knowledge-base/engineering/architecture/diagrams/model.likec4.json"
 SRC="knowledge-base/engineering/architecture/diagrams/model.c4"
@@ -63,7 +65,7 @@ mkfix() {
   git init -q --bare "$up"
 
   mkdir -p "$wt/knowledge-base/engineering/architecture/diagrams" \
-           "$wt/plugins/soleur/scripts" "$wt/scripts"
+           "$wt/plugins/soleur/scripts" "$wt/plugins/soleur/.claude-plugin"
   printf 'first\nx\nlast\n' > "$wt/$SRC"
   printf '{"v":"base"}\n' > "$wt/$MODEL"
   printf 'readme base\n' > "$wt/README.md"
@@ -74,13 +76,18 @@ mkfix() {
   # name and exited 6 against the live worktree. Copying it makes that walk land in $wt.
   cp "$SCRIPT_DIR/sync-pr-behind.sh" "$wt/plugins/soleur/scripts/"
   cp "$SCRIPT_DIR/resolve-regenerable-conflicts.sh" "$wt/plugins/soleur/scripts/"
-  cat > "$wt/scripts/regenerate-c4-model.sh" <<STUB
+  # The resolver runs the renderer BESIDE ITSELF (ADR-235 amendment), so the stub goes there
+  # with a plugin.json the resolver's identity check accepts. It takes the real renderer's
+  # `--root <staging> --out <file>` argv as the resolver passes it, and refuses any other shape.
+  printf '{\n  "name": "soleur"\n}\n' > "$wt/plugins/soleur/.claude-plugin/plugin.json"
+  cat > "$wt/plugins/soleur/scripts/render-c4-model.sh" <<STUB
 #!/usr/bin/env bash
 set -euo pipefail
-R="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
-printf '{"from":"%s|%s"}\n' "\$(head -1 "\$R/$SRC")" "\$(tail -1 "\$R/$SRC")" > "\$R/$MODEL"
+[[ "\$#" -eq 4 && "\$1" == "--root" && -d "\$2" && "\$3" == "--out" ]] || { echo "stub renderer: bad argv: \$*" >&2; exit 64; }
+R="\$2"
+printf '{"from":"%s|%s"}\n' "\$(head -1 "\$R/$SRC")" "\$(tail -1 "\$R/$SRC")" | tee "\$4" >/dev/null
 STUB
-  chmod +x "$wt/scripts/regenerate-c4-model.sh"
+  chmod +x "$wt/plugins/soleur/scripts/render-c4-model.sh"
   _git "$wt" init -q -b main
   # Identity in LOCAL config, not only on `_git`'s `-c`: the SUT's own merge runs in this
   # repo and reads config, so without these it only had an identity where the developer's

@@ -231,6 +231,11 @@ maps a canonicalize failure to its existing failure contract without publishing:
 | `apps/web-platform/server/c4-render.ts` (diagram editor) | the app; commits to customer repos | `apps/web-platform/lib/c4-canonical.mjs`, a byte-identical mirror |
 | `plugins/soleur/scripts/generate-c4-from-components.ts` (`soleur:sync`) | customer repos, from the installed plugin | direct import |
 
+> **Superseded 2026-09-23 (#8542 follow-up):** the first row's writer is now
+> `plugins/soleur/scripts/render-c4-model.sh` (lefthook through the `scripts/regenerate-c4-model.sh`
+> wrapper, and the resolver), which runs in this repo and in customer repos from the installed
+> plugin and reaches the canonicalizer beside itself. See *Amendment — 2026-09-23* below.
+
 - **Why a mirror.** No single path is reachable by all three writers. The app's Docker build
   context is `apps/web-platform` only, and a plugin install has no `apps/`. Byte identity is
   asserted by both the bun and the vitest suite, so a PR touching either copy runs the check.
@@ -245,6 +250,8 @@ maps a canonicalize failure to its existing failure contract without publishing:
 - **Customer repos have no resolver.** `resolve-regenerable-conflicts.sh` calls
   `scripts/regenerate-c4-model.sh`, which exists only in this repo. A customer's residual true
   overlaps stay conflicted until one of their writers re-renders.
+  > **Superseded 2026-09-23 (#8542 follow-up):** the renderer moved into the plugin and the
+  > resolver runs it from there; see *Amendment — 2026-09-23* below.
 - **Rollout.** The app and the regenerated artifact ship from one merge. The plugin reaches
   self-hosted customers on their next plugin update; until then an older plugin still writes the
   raw one-line format, and each switch between writers rewrites the whole file. Upgrading is the remedy. No migration
@@ -273,3 +280,78 @@ maps a canonicalize failure to its existing failure contract without publishing:
 | A bot that resyncs PRs that go DIRTY | Treats the symptom. The resolver already covers the residual. |
 | Indent 2 or sorted keys | Identical merge outcomes (measured), at +59% bytes for indent 2. |
 | A layout-free artifact, with the browser laying out views | Would remove the residual too, but it changes rendering. Deferred as #8541. |
+
+## Amendment — 2026-09-23 (#8542 follow-up): the regeneration command is plugin-owned
+
+Supersedes the 2026-09-22 scope limit *"Customer repos have no resolver."* The gap was not that
+the resolvable set is too small; it was that the set's one command lived in the wrong repository.
+So the fix moves the command and leaves the set alone.
+
+**What moved.** The renderer is `plugins/soleur/scripts/render-c4-model.sh` (history kept from
+`scripts/regenerate-c4-model.sh`). It takes `--root <dir>` and `--out <file>`, runs the
+canonicalizer beside itself, passes `--ignore-scripts` to `npx`, and accepts any tree with one
+`.c4`, `.likec4` or `.like-c4` source: a `soleur:sync` repo carries `spec.c4`, `views.c4` and
+`generated-components.c4` but never `model.c4`, so the old all-three guard refused every synced
+repo. It runs likec4 without `CI`/`FORCE_COLOR` and strips ANSI before its diagnostic gate: under
+`CI=true` likec4 switched to a timestamped coloured reporter the gate could not match, and a syntax
+error published a truncated model at rc 0 (measured; the TS producer had the same defect and was
+fixed with it). The old path is a wrapper kept for lefthook and the docs; it is not an arm.
+
+**How the resolver renders: from git objects, before touching the worktree.** `git merge-tree`
+yields the merged tree without touching anything. Only the tracked, cleanly merged `.c4`,
+`.likec4` and `.like-c4` blobs of the artifact's directory are copied out of that tree's objects
+into a private staging dir (`${XDG_CACHE_HOME:-~/.cache}/soleur`, mode 0700), and the one arm runs
+there: `bash <plugin-root>/scripts/render-c4-model.sh --root <staging> --out <file>`. Only after a
+successful render does the resolver re-check that HEAD has not moved and the tree is still clean
+(`--untracked-files=all`), `git merge --no-commit`, write the rendered bytes, assert the index is
+exactly the merged tree plus those bytes, commit, and undo the commit if a hook changed its tree.
+Consequences, each measured by the review panel against the previous in-worktree design:
+
+- Nothing untracked, ignored, symlinked or configured in the worktree reaches the render, so the
+  model is derived from exactly the merged sources by construction.
+- The renderer cannot write the worktree, so there is no stray-write unwind to delete or revert the
+  operator's concurrent work, and every render failure, timeout or kill leaves the tree untouched.
+- `node_modules/.bin/likec4`, `.npmrc` and likec4 configs in the repo never reach the render root,
+  and npx walking up from the staging dir reaches only the operator's own files.
+
+**Refusals.** Each leaves the tree byte-identical and prints `SOLEUR_REGEN_ON_CONFLICT rc=1
+class=… reason=…`: a symlink or submodule anywhere under the artifact's directory, a likec4 config
+there (`likec4.config.*`, `.likec4rc`; the js/ts forms are code, and rendering without a tracked
+config would not be the repo's model), a merge that would overwrite an untracked or ignored file,
+HEAD moving or the tree changing during the render, a conflict other than a plain content conflict,
+and any render failure.
+
+**The plugin root.** The resolver's own directory, made absolute before any `cd`; an absolute bare
+`${CLAUDE_PLUGIN_ROOT}` only when no renderer sits beside the resolver, and only after a regenerable
+conflict has been classified. The `plugin.json` name check is defence-in-depth, not a boundary: this
+repo's tracked `plugin.json` names `soleur`, so a shadowing copy passes it (ADR-179 A11, A17). Each
+argv-producing line carries an `ARGV-SOURCE` marker; the suite pins every assignment site.
+
+**Trust.** The plugin, not the repo, chooses the command, and no part of its argv comes from the
+repo. That is not a sandbox. The merged tree is trusted input, as it already is: the resolver's own
+`git commit` fires the clone's hooks (lefthook reads `lefthook.yml` from the merged tree), and git
+runs merge drivers, filters and `fsmonitor` as configured. The staging dir closes the channels the
+renderer itself would open; it does not claim to close git's.
+
+**Still one member; the manifest stays rejected.** `model.likec4.json` is the only generated file
+Soleur commits into a customer repo, and the plugin now owns its renderer. A manifest would bring
+back a command supplied by the repo, which is the thing this amendment removes.
+
+**Call sites.** The skills (`merge-pr`, `drain-prs`, `ship`, `architecture`, `work`) invoke the
+resolver and the renderer through `${CLAUDE_PLUGIN_ROOT}`; reference files, where the loader does
+not substitute it, say `<plugin-root>`. The resolver suite fails on any repo-relative invocation in
+skills, commands, agents, plugin hooks or the rule corpus. The `pre-merge-rebase.sh` hooks are this
+repository's project hooks, not the plugin's, so they keep loading the in-repo copy.
+
+**Unchanged coverage bound.** This only helps merges run locally through a Soleur skill or hook.
+GitHub's *Update branch* button and server-side auto-merge still resolve nothing.
+
+**Residuals, recorded:**
+
+- A resolver loaded out of the merged tree (this repo's pre-merge hook) runs that tree's renderer;
+  in this repo that tree is ours.
+- Stock macOS has neither `timeout` nor `gtimeout`, so the render runs without a bound there.
+- A signal during `git commit` exits with the signal's status after a commit may have been made;
+  the resolver does not claim "nothing committed" in that window.
+- `apps/web-platform/server/c4-render.ts` renders tenant workspaces in place and would load a
+  tenant's likec4 config; tracked as #8623, since there the repo author is not trusted.
