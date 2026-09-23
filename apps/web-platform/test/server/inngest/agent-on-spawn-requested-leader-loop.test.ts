@@ -462,6 +462,29 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(typeof patch.artifact_url).toBe("string");
   });
 
+  it("#8611: the leader-loop cost marker carries the turn index and the Inngest attempt (the double-bill signal)", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce(endTurnResponse({ cacheRead: 0, cacheCreate: 0 }));
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+      attempt: 2,
+    });
+    expect(persistTurnCostAwaitableSpy).toHaveBeenCalled();
+    // The spy's typed signature stops at `input`; the 6th positional arg is the cost marker.
+    const marker = (persistTurnCostAwaitableSpy.mock.calls[0] as unknown[])[5] as {
+      source: string;
+      turn?: number;
+      attempt?: number;
+    };
+    expect(marker.source).toBe("leader-loop");
+    expect(Number.isInteger(marker.turn)).toBe(true);
+    expect(marker.attempt).toBe(2);
+  });
+
   it("AC17: cache_read + cache_creation tokens flow through persistTurnCostAwaitable", async () => {
     anthropicCreateSpy.mockResolvedValueOnce(
       endTurnResponse({ cacheRead: 1000, cacheCreate: 500 }),

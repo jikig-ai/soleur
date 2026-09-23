@@ -7,6 +7,7 @@ import {
   EXPECTED_CRON_FUNCTIONS,
 } from "@/server/inngest/cron-manifest";
 import { ROUTINE_METADATA, type RoutineMeta } from "@/server/inngest/routine-metadata";
+import { CLAUDE_BUDGET_USD, CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 import {
   STUCK_THRESHOLD_MS,
   ORPHAN_IGNORE_MS,
@@ -56,6 +57,10 @@ export interface RunSummary {
 export interface RoutineListItem extends RoutineMeta {
   fnId: string;
   lastRun: RunSummary | null;
+  // #8611: a Claude-spawning routine's per-run `--max-budget-usd` cap and manual-fire throttle,
+  // so an agent can state the cost of a fire before making it (null for non-Claude routines).
+  claudeBudgetUsd: number | null;
+  manualFireThrottle: { limit: number; period: string } | null;
 }
 
 export interface RecentRun extends RunSummary {
@@ -163,6 +168,8 @@ export async function listRoutinesWithLastRun(
       fnId,
       ...ROUTINE_METADATA[fnId],
       lastRun: byId.get(fnId) ?? null,
+      claudeBudgetUsd: CLAUDE_BUDGET_USD[fnId] ?? null,
+      manualFireThrottle: fnId in CLAUDE_BUDGET_USD ? { ...CLAUDE_EVAL_THROTTLE } : null,
     }),
   );
 }

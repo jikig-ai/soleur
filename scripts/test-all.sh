@@ -2537,6 +2537,10 @@ if want_scripts; then
   # requirement (a manual fire cannot close it), and the rc-3 forwarding — whose first revision
   # `exit 3`'d inside a `$(...)` and so exited a subshell; the suite's case 7 caught it.
   run_suite "scripts/compound-promote-outcome-8281" bash scripts/followthroughs/compound-promote-outcome-8281.test.sh
+  # #8611: exit-code harness for the 72h streaming rollback trigger (double-billed paid Claude
+  # calls). Each FAIL arm is driven by one field; the dark-channel arm (0 markers ⇒ FAIL) pins
+  # "could not measure" apart from a clean zero.
+  run_suite "scripts/anthropic-double-bill-8611" bash scripts/followthroughs/anthropic-double-bill-8611.test.sh
   # #8151 AC-PM1: exit-code harness for the event-ship-merge merge-base verdict probe.
   # Registered explicitly (orphan-suite class above). Same CONTAMINATION arm as #6297/#8281:
   # every live Better Stack hit for the probe's marker strings has been a `"caller":"api"`

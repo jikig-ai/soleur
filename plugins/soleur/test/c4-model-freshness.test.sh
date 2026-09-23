@@ -11,8 +11,9 @@
 # Auto-discovered by the `scripts` group glob in scripts/test-all.sh and run in
 # the `test-scripts` CI shard, which installs likec4@1.50.0 (see
 # .github/workflows/ci.yml, mirroring the gitleaks-install precedent). Renders
-# via scripts/regenerate-c4-model.sh --out <temp> so the render + validate logic
-# is IDENTICAL to the hook's — they can never disagree on what "fresh" means.
+# via plugins/soleur/scripts/render-c4-model.sh --out <temp> — the one renderer, which the
+# hook reaches through the scripts/regenerate-c4-model.sh wrapper and the merge resolver
+# runs directly — so no two of them can disagree on what "fresh" means.
 #
 # Locally (no global likec4), `npx -y likec4@1.50.0` downloads the pinned CLI on
 # first run; CI's global install makes it instant.
@@ -23,13 +24,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-REGEN="$REPO_ROOT/scripts/regenerate-c4-model.sh"
+REGEN="$REPO_ROOT/plugins/soleur/scripts/render-c4-model.sh"
 COMMITTED="$REPO_ROOT/knowledge-base/engineering/architecture/diagrams/model.likec4.json"
 
 echo "=== C4 model freshness (model.likec4.json vs .c4 sources) ==="
 echo ""
 
-assert_file_exists "$REGEN" "regenerate-c4-model.sh exists"
+assert_file_exists "$REGEN" "render-c4-model.sh exists"
 assert_file_exists "$COMMITTED" "committed model.likec4.json exists"
 
 if [[ "$FAIL" -gt 0 ]]; then
@@ -43,8 +44,8 @@ FRESH="$TMP/fresh.likec4.json"
 # Render + validate via the shared primitive (off-tree, never touches the tree).
 # A non-zero exit here means the .c4 SOURCE is broken (the script refuses to
 # render an empty/invalid model) — surface that distinctly from drift.
-if ! bash "$REGEN" --out "$FRESH" >"$TMP/regen.log" 2>&1; then
-  echo "  FAIL: regenerate-c4-model.sh could not produce a valid model from the .c4 sources" >&2
+if ! bash "$REGEN" --root "$REPO_ROOT" --out "$FRESH" >"$TMP/regen.log" 2>&1; then
+  echo "  FAIL: render-c4-model.sh could not produce a valid model from the .c4 sources" >&2
   sed 's/^/    /' "$TMP/regen.log" >&2
   FAIL=$((FAIL + 1))
   print_results
