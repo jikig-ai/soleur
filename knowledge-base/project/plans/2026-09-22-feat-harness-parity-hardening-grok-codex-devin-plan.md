@@ -532,26 +532,26 @@ Rows 6a–6d were one row (test-design F3): form (d) is a different regex branch
 
 ### Functional Requirements
 
-- [ ] AC1: `bun test plugins/soleur/test/grok-harness-invoke.test.ts` passes on a tree where every `plugins/soleur/skills/*/SKILL.md` and `init_skill.py` carries the canonical block (#8390).
-- [ ] AC2: `pollInstructions("devin")` contains `run_subagent` and does not contain `get_output`, and the updated `harness.test.ts` and `devin-harness.test.ts` pass.
-- [ ] AC3: `bun test plugins/soleur/test/harness-tool-map.test.ts` passes, meaning every vocabulary name used in the population has a row in both tables. Today that includes at least `SendMessage`, `TaskList`, `TaskUpdate` and `RemoteTrigger` (#8318).
-- [ ] AC4: `bun plugins/soleur/scripts/harness-parity-census.ts --report` exits 0 with `0 non-canonical` **and a `docsExamined` equal to the independently enumerated population total (≥ 222)**, and the tree test's independent references enumeration resolves every path to `"skill"`. The count is load-bearing (test-design F9): `census()` throws on zero docs, but a *narrowed* population still prints `0 non-canonical` and exits 0, so the verdict alone is satisfied by a run that never opened a references file.
-- [ ] AC5: the ratchet axis goes RED on the Guard 5 row-2 fixture and GREEN on the committed tree. `git diff --quiet origin/main -- apps/web-platform/server/safe-bash.ts` exits 0.
-- [ ] AC6: `bun test plugins/soleur/test/harness-discovery-smoke.test.ts` passes, the `harness-discovery` CI job is green on the PR for both arms, **both arms' `--version` outputs equal the pin literals in `ci.yml`**, and `harness-discovery` does not appear in `infra/github/ruleset-ci-required.tf`.
-- [ ] AC7: `git ls-files .openhands .gemini` prints nothing, and `git grep -lE '\.openhands|openhands|OpenHands|\.gemini/|GEMINI\.md' -- .claude plugins scripts tests .github apps lefthook.yml` prints nothing.
-- [ ] AC8: ADR-240 exists; ADR-226, ADR-165, **ADR-224, ADR-156 and ADR-221** carry dated amendment/status lines; ADR-226 no longer cites #8306 for Codex/Devin coverage and describes the discovery job as advisory until #8574; and ADR-224 no longer claims Devin double-lists or that Codex is unmeasured.
-- [ ] AC9: `c4-count-parity.test.sh`, `c4-code-syntax.test.ts` and `c4-render.test.ts` pass, the committed `model.likec4.json` equals the output of `scripts/regenerate-c4-model.sh`, and `model.c4` no longer mentions `.openhands`.
+- [x] AC1: `bun test plugins/soleur/test/grok-harness-invoke.test.ts` passes on a tree where every `plugins/soleur/skills/*/SKILL.md` and `init_skill.py` carries the canonical block (#8390).
+- [x] AC2: `pollInstructions("devin")` contains `run_subagent` and does not contain `get_output`, and the updated `harness.test.ts` and `devin-harness.test.ts` pass.
+- [x] AC3: `bun test plugins/soleur/test/harness-tool-map.test.ts` passes, meaning every vocabulary name used in the population has a row in both tables. Today that includes at least `SendMessage`, `TaskList`, `TaskUpdate` and `RemoteTrigger` (#8318).
+- [x] AC4: `bun plugins/soleur/scripts/harness-parity-census.ts --report` exits 0 with `0 non-canonical` **and a `docsExamined` equal to the independently enumerated population total (≥ 222)**, and the tree test's independent references enumeration resolves every path to `"skill"`. The count is load-bearing (test-design F9): `census()` throws on zero docs, but a *narrowed* population still prints `0 non-canonical` and exits 0, so the verdict alone is satisfied by a run that never opened a references file.
+- [x] AC5: the ratchet axis goes RED on the Guard 5 row-2 fixture and GREEN on the committed tree. `git diff --quiet origin/main -- apps/web-platform/server/safe-bash.ts` exits 0.
+- [x] AC6: `bun test plugins/soleur/test/harness-discovery-smoke.test.ts` passes, the `harness-discovery` CI job is green on the PR for both arms, **both arms' `--version` outputs equal the pin literals in `ci.yml`**, and `harness-discovery` does not appear in `infra/github/ruleset-ci-required.tf`.
+- [x] AC7: `git ls-files .openhands .gemini` prints nothing, and `git grep -lE '\.openhands|openhands|OpenHands|\.gemini/|GEMINI\.md' -- .claude plugins scripts tests .github apps lefthook.yml` prints nothing.
+- [x] AC8: ADR-240 exists; ADR-226, ADR-165, **ADR-224, ADR-156 and ADR-221** carry dated amendment/status lines; ADR-226 no longer cites #8306 for Codex/Devin coverage and describes the discovery job as advisory until #8574; and ADR-224 no longer claims Devin double-lists or that Codex is unmeasured.
+- [x] AC9: `c4-count-parity.test.sh`, `c4-code-syntax.test.ts` and `c4-render.test.ts` pass, the committed `model.likec4.json` equals the output of `scripts/regenerate-c4-model.sh`, and `model.c4` no longer mentions `.openhands`.
 
 ### Non-Functional Requirements
 
 - [ ] The `harness-discovery` job finishes in < 10 min, and each CLI call is capped at 90 s.
-- [ ] `ci.yml` stays under the ADR-231 byte gate (`bun test plugins/soleur/test/workflow-file-size.test.ts`).
-- [ ] No test fixture is copied from a real transcript (`cq-test-fixtures-synthesized-only`).
+- [x] `ci.yml` stays under the ADR-231 byte gate (`bun test plugins/soleur/test/workflow-file-size.test.ts`).
+- [x] No test fixture is copied from a real transcript (`cq-test-fixtures-synthesized-only`).
 
 ### Quality Gates
 
 - [ ] `bash scripts/test-all.sh` is green locally before push, because the hook suites changed.
-- [ ] `bun test plugins/soleur/test` is green, and so is `cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts`.
+- [x] `bun test plugins/soleur/test` is green, and so is `cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts`.
 
 ## Domain Review
 
