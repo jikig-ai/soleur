@@ -61,7 +61,22 @@ if [[ "$PASS" -ne $((_p0 + 1)) || "$FAIL" -ne $((_f0 + 1)) ]]; then
 fi
 PASS=0; FAIL=0
 
+# Canonical fixture-root guard, copied BYTE-FOR-BYTE (fixture-relative-assert.test.sh pins this
+# form; an inline `case` of my own is not recognised). Every write below lands under $WORK, and
+# `rm -rf` on a relative or degenerate root is the accident it exists to refuse.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 WORK="$(mktemp -d "$TMPDIR/inngest-nic-wait.XXXXXXXX")" || die2 "mktemp failed"
+assert_fixture_dir "$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 

@@ -107,8 +107,15 @@ _pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTI
   git config commit.gpgsign false
   git add -A
   git commit -qm "sandbox baseline"
-  git config tag.gpgSign false
-  git tag -a -m "sandbox pin fixture" "vinngest-$_pin_tag"
+  # A LOOSE REF, not `git tag` (#8539). Guard A reads this fixture with `git tag --list
+  # 'vinngest-v*'`, which is a READ and sees a loose ref exactly as it sees an annotated tag —
+  # so the fixture never needed a tag-AUTHORING verb. Writing the ref keeps this battery out of
+  # `scripts/battery-tag-authorship.test.sh`'s offender set without spending one of that
+  # ledger's 12 exemption slots (ADR-207 §5: a ceiling raised to make a run green is not a
+  # ceiling). The ref is inside $SANDBOX_ROOT/.git, which this suite created; nothing here can
+  # reach the live repo's refs/tags.
+  mkdir -p .git/refs/tags
+  git rev-parse HEAD > ".git/refs/tags/vinngest-$_pin_tag"
 ) > "$WORK/gitfixture.log" 2>&1 || { cat "$WORK/gitfixture.log" >&2; die "could not build the sandbox git fixture for Guard A"; }
 # Assert the exclusion actually held. A tar --exclude whose pattern stops matching (a leading
 # `./` dropped, say) silently reinstates 162 MB per case, and the only symptom is a battery
