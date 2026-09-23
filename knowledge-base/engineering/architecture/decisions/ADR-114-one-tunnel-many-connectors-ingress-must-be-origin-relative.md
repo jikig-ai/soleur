@@ -367,6 +367,8 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 >   the instant the attach lands. A NIC-less connector is a *converging* state, not a stuck
 >   one. The already-running case is separately covered by `web-private-nic-guard.timer`.
 >
+>   **Contested 2026-09-22: see [ADR-115 amendment (#8539)](ADR-115-dedicated-host-private-nic-boot-convergence.md).**
+>
 > Because the state converges on its own, this is a rejection rather than a deferral — the ADR
 > cannot call the state self-healing and simultaneously hold an open item to fix it. **Revival
 > condition:** evidence that per-connection origin resolution is false, or an owner for the

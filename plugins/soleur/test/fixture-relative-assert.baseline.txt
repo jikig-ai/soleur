@@ -170,6 +170,7 @@
 1	apps/web-platform/infra/inngest-inventory.test.sh
 11	apps/web-platform/infra/inngest-luks-cutover.sh
 1	apps/web-platform/infra/inngest-luks-cutover.test.sh
+7	apps/web-platform/infra/inngest-nic-wait.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh
 1	apps/web-platform/infra/inngest.test.sh
