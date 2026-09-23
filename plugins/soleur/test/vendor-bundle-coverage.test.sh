@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test-helpers.sh, which composes a prior EXIT trap with its own sandbox cleanup; a trap set
 # AFTER the source would replace that cleanup and leak the incident sandbox.
 fixture_dir=""
-trap '[[ -z "${fixture_dir:-}" ]] || rm -rf "$fixture_dir" || :' EXIT
+trap '[[ -z "${fixture_dir:-}" ]] || rm -rf "${fixture_dir:-}" || :' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$SCRIPT_DIR/../../.."
