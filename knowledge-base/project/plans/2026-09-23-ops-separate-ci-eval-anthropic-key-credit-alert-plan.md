@@ -14,6 +14,57 @@ requires_cpo_signoff: false
 
 # ops: separate the CI/eval Anthropic key from production and alert on credit exhaustion
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23. **Reviewers:** runtime-claim verifier, terraform-architect,
+security-sentinel, code-simplicity-reviewer. A reduced panel was used deliberately: the planning
+subagent had just hit an API session limit (HTTP 429), so the fan-out was capped at 4.
+
+### Key improvements
+1. **The marker design is confirmed against source.** `reportSilentFallback(null, …)` takes the
+   `captureMessage` branch, and `SilentFallbackOptions` carries `tags` (`observability.ts`,
+   `SilentFallbackOptions`). `mirrorToSentry` has **no** `captureMessage` branch, so the message path
+   is never duplicated. `Client.captureException` short-circuits on `checkOrSetAlreadyCaught`
+   (`@sentry/core` 10.59.0). The probe calls `postAnthropicMessage` with `markerSource: CRON_NAME`, so
+   moving the report into the transport keeps the probe covered.
+2. **Terraform upsert is resolved.** `doppler_secret` Create *is* `resourceSecretUpdate` (a
+   `ChangeRequest` upsert, provider v1.21.2), and `github_actions_secret` Create is
+   `CreateOrUpdateRepoSecret` (PUT). No `import {}` block is needed. Phase 4.1 is closed.
+3. **Precondition `error_message` must be static.** Terraform hard-errors when an `error_message`
+   references a sensitive value, so no interpolation is allowed.
+4. **Key custody hardened (security P1).** The MCP redact proxy is name-keyed (a11y-tree
+   `- role "name": value` lines only) and has no content pattern for `sk-ant-…`. Any non-tree string
+   returned or thrown by `browser_run_code_unsafe` passes unredacted. The capture script therefore
+   wraps everything in `try/catch`, returns only a validated integer, and writes with
+   `{mode: 0o600, flag: "wx"}` (atomic mode, no chmod TOCTOU). The pattern is added to
+   `agent-browser/SKILL.md` §Credential safety.
+5. **Distinctness script hardened (security P2).** Hash via stdin (`printf '%s' "$v" | sha256sum`,
+   `printf` is a builtin), never as an argv of an external binary. The test asserts the synthesized
+   value is absent from stdout **and** stderr.
+
+### Review decisions (and what was not taken)
+- **New ADR kept, not an ADR-033 amendment** (simplicity suggested amending). The ADR-033 amendment is
+  claimed by sibling PR #8611, so amending it here would collide. The partition decision is also
+  orthogonal to ADR-033's subject (cron spawn substrate).
+- **Variables move to `infra/variables.tf`** (terraform-architect): all 51 root variables live there,
+  and `seo-config-rules.test.ts` treats out-of-file variables as drift. Rebasing over #8611's append is
+  a trivial conflict. AC7's `variables.tf` clause is dropped.
+- **`value`, not the deprecated `plaintext_value`,** on `github_actions_secret` (6.12.1 marks
+  `plaintext_value` `Deprecated: "Use value."`). The `supabase_access_token` precedent is left alone.
+- **`-target` coverage** is enforced by `plugins/soleur/test/terraform-target-parity.test.ts`
+  §"Non-SSH resource coverage (#5566)" (`expect(uncovered).toEqual([])`). No new parity test is needed.
+- **C4, ledger row and runbook kept.** The C4 tests and the expense-ledger convention are repo gates.
+  The runbook is written for this mint, with a short "reuse for #8614" note rather than a parameterized
+  procedure (simplicity).
+- **Scope boundary restated:** ~15 claude-eval subprocess crons pass the operator key into a spawned
+  CLI and classify credit via `classifyEvalFatal`. They are not a new chokepoint here (Cut List), and
+  the canary on the same balance pages within the hour.
+- **Unverified:** that `frequency_minutes = 1440` is accepted by `jianyuan/sentry` 0.15.7. It is
+  settled by `terraform validate` on the Sentry root in the work phase; fall back to the largest
+  accepted value if rejected.
+- **AC5 rewritten:** credit was topped up at ~15:05 UTC on 2026-09-23, so no live exhaustion exists
+  post-merge.
+
 ## Overview
 
 CI and manual eval runs (promptfoo grids, `claude-code-action` jobs, the `ci.yml` real-turn gates)
@@ -101,7 +152,7 @@ This unblocks #8497 (a powered B5 rerun needs a budget-isolated key) and the aut
 - Anthropic workspaces: per-workspace monthly spend limits exist (Console, *Spend limits* tab). You cannot set limits on the Default Workspace. Org limits always apply. The Admin API can create workspaces but has no spend-limit field. Service-account keys survive the removal of the creating user. Source: <https://platform.claude.com/docs/en/manage-claude/workspaces> (retrieved 2026-09-23).
 - `@anthropic-ai/sdk` ^0.93.0: a 400 throws `BadRequestError` (a subclass of `APIError`) with `.status = 400`. `.message` is `"400 {json}"` and contains the vendor text; this matches WEB-PLATFORM-3X's title verbatim.
 - `jianyuan/sentry` 0.15.7: native `event_frequency_count {interval, value}` (strict `>`; `value = 0` means at least 1 event) and `first_seen_event`. `frequency_minutes` values already taken: 5, 10–27, 30, 31, 60–63.
-- `DopplerHQ/doppler` 1.21.2 and `integrations/github` 6.12.1 (pinned in `apps/web-platform/infra/.terraform.lock.hcl`). Whether `doppler_secret` create upserts an existing unmanaged `ci/ANTHROPIC_API_KEY`, or needs an `import {}` block, is **unverified** and is resolved in Phase 4.1.
+- `DopplerHQ/doppler` 1.21.2 and `integrations/github` 6.12.1 (pinned in `apps/web-platform/infra/.terraform.lock.hcl`). Whether `doppler_secret` create upserts an existing unmanaged `ci/ANTHROPIC_API_KEY`, or needs an `import {}` block, was **resolved at deepen**: both upsert on create (Enhancement Summary item 2).
 
 **CLAUDE.md / AGENTS conventions carried.** `hr-all-infrastructure-provisioning-servers` (secrets through Terraform), `hr-tf-variable-no-operator-mint-default` (the justified exception is below), `hr-exhaust-all-automated-options-before` and `hr-never-label-any-step-as-manual-without` (Playwright attempt first), `hr-dev-prd-distinct-supabase-projects` (the distinctness pattern mirrored), `cq-silent-fallback-must-mirror-to-sentry`, `cq-test-fixtures-synthesized-only`, `hr-observability-as-plan-quality-gate`.
 
@@ -121,9 +172,12 @@ issue, so the choice is not "fixed" back into the broken shape.
 The Console shows a new key once. The value must go from the page to Doppler without entering the
 transcript:
 
-- **Primary.** Use `browser_run_code_unsafe` in the plugin Playwright MCP (its output is redacted in
-  flight by `playwright-mcp-redact-proxy.py`). Read the key element's text in the MCP's Node process
-  and write it to a `0600` file under the session scratchpad. Return only its byte length.
+- **Primary.** Use `browser_run_code_unsafe` in the plugin Playwright MCP. The redact proxy is
+  **name-keyed only** and does not catch a raw `sk-ant-…` string, so it is not a backstop here. The
+  script reads the key element's text in the MCP's Node process, writes it with
+  `fs.writeFileSync(path, v, {mode: 0o600, flag: "wx"})`, and wraps everything in `try/catch`, so that
+  neither a thrown message nor the return value can carry the key. It returns only a validated integer
+  byte length, or a fixed error code.
 - **Fallback, if the run-code context cannot write files.** The documented `agent-browser` pattern:
   `agent-browser get text <sel>` redirected to the `0600` file.
 
@@ -192,23 +246,23 @@ rule's failure mode:
 
 3.2 `apps/web-platform/scripts/anthropic-key-distinctness.sh` (new).
 - Enumerate configs from `doppler configs -p soleur --json` and select `ci` plus every name matching `^prd($|_)`, derived rather than hard-coded.
-- For each, read `ANTHROPIC_API_KEY` with `--plain` into a local variable. Print `<config> <sha256[:12]>`, `<config> ABSENT`, or `<config> ERROR`.
+- For each, read `ANTHROPIC_API_KEY` with `--plain` into a local variable and hash it via stdin (`printf '%s' "$v" | sha256sum`, where `printf` is a builtin). Never pass the value as an argument to an external binary, because it would land in argv/`ps`. Print `<config> <sha256[:12]>`, `<config> ABSENT`, or `<config> ERROR`.
 - Exit 1 if `ci` is absent or equals any `prd*` fingerprint. Exit 2 on any Doppler error, or when fewer than one `prd*` config is enumerated (the anti-vacuity floor). Print `DISTINCT` and exit 0 otherwise.
 - No `set -x`, no value on stdout or stderr, and `unset` after hashing.
 
 ### Phase 4 — Terraform wiring
 
-4.1 **Resolve the upsert question first.** Read the `DopplerHQ/doppler` 1.21.2 `doppler_secret` create path in the provider source. If create does not upsert an existing name, add `import { to = doppler_secret.ci_anthropic_api_key[0]  id = "soleur.ci.ANTHROPIC_API_KEY" }` using the provider's documented id format. For `github_actions_secret`, create is a PUT (upsert), so no import is needed. Confirm in the 6.12.1 source.
+4.1 **Upsert: resolved at deepen.** Both resources upsert on create (see Enhancement Summary item 2), so no `import {}` block is needed.
 
-4.2 `apps/web-platform/infra/anthropic-ci-key.tf` (new; declares its own variables so `infra/variables.tf`, which #8611 edits, stays untouched):
+4.2 `apps/web-platform/infra/anthropic-ci-key.tf` (new; resources only). The two variables go in `infra/variables.tf` (repo convention, see Enhancement Summary):
 - `variable "anthropic_api_key_ci"`: sensitive, default `""`. Sourced as `TF_VAR_anthropic_api_key_ci` from `prd_terraform/ANTHROPIC_API_KEY_CI`.
 - `variable "anthropic_api_key"`: sensitive, default `""`. Already present as a TF_VAR because `prd_terraform` inherits `prd`'s `ANTHROPIC_API_KEY`. It is read **only** by preconditions, so it never lands in state.
 - `locals { ci_key_set = nonsensitive(var.anthropic_api_key_ci != "") }`.
 - `doppler_secret.ci_anthropic_api_key`: `count = local.ci_key_set ? 1 : 0`; `project = "soleur"`, `config = "ci"`, `name = "ANTHROPIC_API_KEY"`, `visibility = "masked"`, and **no** `ignore_changes`.
-- `github_actions_secret.anthropic_api_key`: same count; `repository = "soleur"`, `secret_name = "ANTHROPIC_API_KEY"`, `plaintext_value = var.anthropic_api_key_ci`.
-- Both carry `lifecycle { precondition { condition = var.anthropic_api_key_ci != var.anthropic_api_key && startswith(var.anthropic_api_key_ci, "sk-ant-") … } }`.
+- `github_actions_secret.anthropic_api_key`: same count; `repository = "soleur"`, `secret_name = "ANTHROPIC_API_KEY"`, `value = var.anthropic_api_key_ci` (not the deprecated `plaintext_value`).
+- Both carry `lifecycle { precondition { condition = var.anthropic_api_key_ci != var.anthropic_api_key && startswith(var.anthropic_api_key_ci, "sk-ant-")  error_message = "<static text, no interpolation>" } }`. An `error_message` that references either sensitive variable makes `terraform plan` hard-error.
 
-4.3 `.github/workflows/apply-web-platform-infra.yml`: add `-target=doppler_secret.ci_anthropic_api_key` and `-target=github_actions_secret.anthropic_api_key` directly after `-target=github_actions_secret.supabase_access_token`. Run any existing `-target` coverage or parity test the repo has for this list (grep `supabase_access_token` under `apps/web-platform/infra/*.test.sh` and `tests/`) and extend it if it enumerates the list.
+4.3 `.github/workflows/apply-web-platform-infra.yml`: add `-target=doppler_secret.ci_anthropic_api_key` and `-target=github_actions_secret.anthropic_api_key` directly after `-target=github_actions_secret.supabase_access_token`. Coverage is enforced by `plugins/soleur/test/terraform-target-parity.test.ts` §"Non-SSH resource coverage (#5566)"; run it. `scheduled-terraform-drift.yml` plans the full root and re-evaluates the precondition each run, which is benign with static inputs.
 
 ### Phase 5 — Console mint (Playwright first) and the reusable runbook
 
@@ -262,7 +316,7 @@ rule's failure mode:
 - `apps/web-platform/infra/anthropic-ci-key.tf`
 - `knowledge-base/engineering/operations/runbooks/anthropic-console-workspace-key.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-242-anthropic-keys-partitioned-by-spend-limited-workspace.md` (ordinal provisional)
-- `apps/web-platform/test/server/email-triage/summarize.test.ts` (only if no summarizer suite exists; otherwise extend it)
+- `apps/web-platform/test/server/email-triage/summarize.test.ts` (verified at deepen: no summarizer suite exists)
 
 ## Files to Edit
 
@@ -276,9 +330,11 @@ rule's failure mode:
 - `.github/workflows/apply-web-platform-infra.yml` (two `-target=` lines only)
 - `knowledge-base/operations/expenses.md` (row 57, one vendor-limits row, `last_updated`)
 - `plugins/soleur/skills/eval-harness/README.md` (Prerequisites line only; no `description:` edit, so the budget check does not apply)
+- `plugins/soleur/skills/agent-browser/SKILL.md` (§Credential safety: add the `browser_run_code_unsafe` capture pattern; the redact proxy does not cover run-code output)
+- `apps/web-platform/infra/variables.tf` (append `anthropic_api_key_ci` and `anthropic_api_key`, both sensitive with `default = ""`)
 - `knowledge-base/engineering/architecture/diagrams/model.c4`, `views.c4`
 
-**Not edited (sibling #8611's area):** `_cron-claude-eval-substrate.ts`, `claude-cost-marker.ts`, `model-tiers.ts`, `app/api/inngest/route.ts`, `infra/betterstack-logs-alerts.tf`, `infra/main.tf`, `infra/variables.tf`, `infra-validation.yml`, `scheduled-terraform-drift.yml`, `knowledge-base/finance/cost-model.md`, the ADR-033 amendment.
+**Not edited (sibling #8611's area):** `_cron-claude-eval-substrate.ts`, `claude-cost-marker.ts`, `model-tiers.ts`, `app/api/inngest/route.ts`, `infra/betterstack-logs-alerts.tf`, `infra/main.tf` (`infra/variables.tf` is shared: append only, then rebase), `infra-validation.yml`, `scheduled-terraform-drift.yml`, `knowledge-base/finance/cost-model.md`, the ADR-033 amendment.
 
 ## Open Code-Review Overlap
 
@@ -412,7 +468,7 @@ in_transit:
 | 5 | `ci` ABSENT | RED (exit 1) |
 | 6 | Script edited to hard-code `prd` only and a new `prd_new` branch equals `ci` | RED via row 3's fixture shape (a derived list catches it; a hard-coded one does not) |
 
-**Harness rows.** (a) Must-PASS: every config distinct, and a `prd_x` config that is ABSENT (the contract permits a `prd*` config without the key) → exit 0 with `DISTINCT`. (b) A suite edit that stubs `doppler` to always succeed with identical hashes must turn row 1's expectation red; the suite asserts the exit **code and** the `DISTINCT` literal, and fails on `0 passed`. (c) The suite asserts stdout never contains the synthesized value (`sk-ant-test-…`).
+**Harness rows.** (a) Must-PASS: every config distinct, and a `prd_x` config that is ABSENT (the contract permits a `prd*` config without the key) → exit 0 with `DISTINCT`. (b) A suite edit that stubs `doppler` to always succeed with identical hashes must turn row 1's expectation red; the suite asserts the exit **code and** the `DISTINCT` literal, and fails on `0 passed`. (c) The suite asserts neither stdout nor stderr contains the synthesized value (`sk-ant-test-…`), and the script header states "no `set -x`".
 
 **Anchor.** The script reads live Doppler state at run time. No stored hash exists to drift with it.
 
@@ -491,7 +547,7 @@ The ADR describes the state after the mint. If the mint slips post-merge (Phase 
 - [ ] **AC4 (P3).** The unit, transport, summarizer and probe suites from Phase 1 pass. The real-logger regression case shows the tagged event survives.
 - [ ] **AC5 (P3/P4).** The operator topped up credit at ~15:05 UTC on 2026-09-23 (a 1-token prd canary returned HTTP 200 at 15:06), so no natural exhaustion event is available post-merge. AC5 is therefore: (a) the unit-level evidence of AC4, including the real-logger case, plus (b) post-merge, the credit-probe run at the next :47 completes green and Sentry Discover shows **0** new `feature:pino-mirror` credit events after that run (recorded query count, not eyeballed). The first live marker is observed at the next real exhaustion; it is not simulated against production.
 - [ ] **AC6 (P4).** `sentry_alert.anthropic_credit_exhausted` exists live, enabled, with `fallthroughType: ActiveMembers`. It is verified by the `scheduled-sentry-alert-drift` reference diff being green after apply, and by the op-contract test.
-- [ ] **AC7 (P5).** `.github/workflows/apply-web-platform-infra.yml` contains exactly the two new `-target=` lines. `git diff origin/main -- apps/web-platform/infra/variables.tf apps/web-platform/infra/main.tf knowledge-base/finance/cost-model.md` is empty.
+- [ ] **AC7 (P5).** `.github/workflows/apply-web-platform-infra.yml` contains exactly the two new `-target=` lines. `git diff origin/main -- apps/web-platform/infra/main.tf knowledge-base/finance/cost-model.md` is empty. `terraform-target-parity.test.ts` is green.
 - [ ] **AC8 (P6).** `expenses.md` row 57 names `soleur-ci-eval`, the $100/month cap and the eval-harness surface. The amount stays `0.00`. The vendor-limits table carries the new row.
 - [ ] **AC9.** The ADR file exists at its final ordinal. The C4 edits render. `c4-code-syntax`, `c4-render` and `c4-count-parity` are green.
 - [ ] **AC10.** The two deferral issues (tag loss; cron-monitor routing) are filed and linked in the PR body, and #8614 carries a comment naming the production-key retirement.
