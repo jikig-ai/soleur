@@ -43,6 +43,12 @@ assert_fixture_dir() {
 
 SANDBOX="$(mktemp -d)"; assert_fixture_dir "$SANDBOX"
 trap 'rm -rf "$SANDBOX"' EXIT
+# The fixture repos below are written with git: take the shared fixture env (prefix sweep of every
+# inherited GIT_*, a discovery ceiling at the sandbox, hermetic config, a pinned identity) so a
+# hook-exported GIT_DIR can never point these writes at the caller's repository.
+# shellcheck source=lib/git-fixture-env.sh
+source "$SCRIPT_DIR/lib/git-fixture-env.sh"
+git_fixture_env "$SANDBOX" || { printf '[FATAL] git_fixture_env refused %s\n' "$SANDBOX" >&2; exit 1; }
 DIAG="knowledge-base/engineering/architecture/diagrams"
 
 echo "=== render-c4-model (plugin-owned renderer) ==="

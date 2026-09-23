@@ -138,6 +138,14 @@ the "appeasement" guard was the fix.
     the fix.
     **Prevention:** see the second Key Insight.
 
+20. **CI failed `fixture-env-adoption` (unconverted suites 24, ceiling 23).** The new
+    `render-c4-model.test.sh` writes fixture repos with `git` without the shared fixture env.
+    The ratchet selection in #15 did not include this gate, because the gate references no
+    changed file. Recovery: `git_fixture_env "$SANDBOX"` in the suite.
+    **Prevention:** before pushing, a new `plugins/soleur/test/*.sh` that runs `git` must source
+    `lib/git-fixture-env.sh`. Add `fixture-env-adoption.test.sh` to the repo-global ratchet set
+    alongside fixture-relative-assert, P1a and the trap lint (evidence added to #8322).
+
 ## Related
 
 - ADR-235 (amendment 2026-09-23): the git-objects design and its residuals.
