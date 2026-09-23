@@ -87,14 +87,14 @@ done
 # `TEST_GROUP="${TEST_GROUP:-${1:-all}}"`, so an inherited TEST_GROUP=all would silently widen
 # the child past the group under test while the positional argument said `scripts`.
 enumerate_leg() {
-  local spec="$1" out="$2"
+  local spec="$1" out="$2" group="${3:-scripts}"
   if [[ "$spec" == "-" ]]; then
-    env -u SCRIPTS_SHARD TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
-      bash "$RUNNER" --enumerate scripts 2>/dev/null \
+    env -u SCRIPTS_SHARD TEST_GROUP="$group" SOLEUR_DISABLE_SESSION_STATE=1 \
+      bash "$RUNNER" --enumerate "$group" 2>/dev/null \
       | grep '^SUITE_REGISTRATION' | cut -f2 > "$out"
   else
-    env SCRIPTS_SHARD="$spec" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
-      bash "$RUNNER" --enumerate scripts 2>/dev/null \
+    env SCRIPTS_SHARD="$spec" TEST_GROUP="$group" SOLEUR_DISABLE_SESSION_STATE=1 \
+      bash "$RUNNER" --enumerate "$group" 2>/dev/null \
       | grep '^SUITE_REGISTRATION' | cut -f2 > "$out"
   fi
 }
@@ -370,11 +370,231 @@ else
   fail "SCRIPTS_SHARD unset enumerated $_un registrations, expected the full $REF_N"
 fi
 
+# === Guard 1b — scripts-heavy group totality =================================================
+#
+# The three cost-heaviest registrations live under `want_scripts_heavy` and are partitioned by
+# the dedicated `test-scripts-heavy` matrix job (one suite per leg). EVERY property asserted for
+# the scripts group above must hold here too — a mis-wired heavy matrix makes all three legs run
+# all three suites (or none) while staying green, and the required `test` check rolls the result
+# up the same way.
+#
+# Deliberate differences from the scripts pass, all derived from the group's shape:
+#   - the reference is STATIC-ONLY: the heavy registrations are literal `run_suite`/`skip_suite`
+#     lines, no glob expansion exists under `want_scripts_heavy`;
+#   - the non-vacuity floor is >= 1, not >= 100 — three registrations is the whole point;
+#   - non-canonical K rows use {2,3} only: K>3 legs are syntactically valid but own nothing, so
+#     they hit the zero-assignment refusal by DESIGN — that boundary is pinned as a refusal row
+#     below rather than traversed as a totality case.
+echo ""
+echo "=== Guard 1b: scripts-heavy group totality ==="
+
+# --- Heavy reference set: static extraction over `if want_scripts_heavy; then` .. `fi` --------
+awk '
+  /^if want_scripts_heavy; then$/ { inb=1; next }
+  inb && /^fi$/                   { inb=0; next }
+  inb && /^[[:space:]]*(run_suite|skip_suite) "/ {
+    line=$0
+    sub(/^[[:space:]]*(run_suite|skip_suite) "/, "", line)
+    idx=index(line, "\"")
+    if (idx > 0) { lbl=substr(line, 1, idx-1); if (lbl !~ /\$/) print lbl }
+  }
+' "$RUNNER" | sort -u > "$WORK/ref_heavy"
+REF_H=$(wc -l < "$WORK/ref_heavy" | tr -d ' ')
+
+if (( REF_H >= 1 )); then
+  pass "heavy reference set derived independently: $REF_H registration(s) under want_scripts_heavy"
+else
+  fail "heavy reference set is EMPTY — the want_scripts_heavy extraction returned nothing (group renamed? gate removed?), so every comparison below would be vacuous"
+fi
+
+# --- Heavy matrix leg list, read from the test-scripts-heavy job block -------------------------
+awk '
+  /^  test-scripts-heavy:$/ { inj=1; next }
+  inj && /^  [a-z0-9_-]+:$/ { inj=0 }
+  inj && /shard:/ {
+    line=$0
+    while (match(line, /"[0-9]+\/[0-9]+"/)) {
+      print substr(line, RSTART+1, RLENGTH-2)
+      line = substr(line, RSTART+RLENGTH)
+    }
+  }
+' "$CI_YML" > "$WORK/legs_heavy"
+LEGS_H=$(wc -l < "$WORK/legs_heavy" | tr -d ' ')
+
+if (( LEGS_H >= 1 )); then
+  pass "ci.yml declares $LEGS_H test-scripts-heavy matrix leg(s): $(tr '\n' ' ' < "$WORK/legs_heavy")"
+else
+  fail "ci.yml's test-scripts-heavy job declares no strategy.matrix.shard values — the heavy partition is not wired, so no union can be checked"
+fi
+
+if (( LEGS_H >= 1 )); then
+  # Same wire hazard as the scripts group: declared values say nothing about what the leg
+  # RECEIVES. Only the `SCRIPTS_SHARD: ${{ matrix.shard }}` interpolation inside the
+  # test-scripts-heavy job block carries the per-leg value.
+  _wire_h=$(awk '
+    /^  test-scripts-heavy:$/ { inj=1; next }
+    inj && /^  [A-Za-z0-9_-]+:$/ { exit }
+    inj { print }
+  ' "$CI_YML" | grep -cE '^[[:space:]]*SCRIPTS_SHARD:[[:space:]]*\$\{\{[[:space:]]*matrix\.shard[[:space:]]*\}\}[[:space:]]*$' || true)
+  if [[ "$_wire_h" == "1" ]]; then
+    pass "the heavy matrix is WIRED: test-scripts-heavy binds SCRIPTS_SHARD to \${{ matrix.shard }} exactly once"
+  else
+    fail "the heavy matrix->env wire is missing or not an interpolation ($_wire_h matches). A literal or absent SCRIPTS_SHARD makes every heavy leg run the same (or the full) set while all leg values stay declared and every other row here stays green."
+  fi
+
+  declare -a _hks=() _hns=()
+  while IFS= read -r spec; do
+    _hks+=( "${spec%%/*}" )
+    _hns+=( "${spec##*/}" )
+  done < "$WORK/legs_heavy"
+  _distinct_hk=$(printf '%s\n' "${_hks[@]}" | sort -u | wc -l | tr -d ' ')
+  _distinct_hn=$(printf '%s\n' "${_hns[@]}" | sort -u | wc -l | tr -d ' ')
+  if (( _distinct_hk == LEGS_H && _distinct_hn == 1 && ${_hns[0]} == LEGS_H )); then
+    pass "the $LEGS_H heavy legs carry $LEGS_H distinct k values over a single N=${_hns[0]}"
+  else
+    fail "heavy leg specs are inconsistent: $_distinct_hk distinct k over $_distinct_hn distinct N (values: $(tr '\n' ' ' < "$WORK/legs_heavy")). A leg count that disagrees with N leaves the missing residue class assigned to no leg while every declared leg reports green."
+  fi
+
+  # --- The heavy union ----------------------------------------------------------------------
+  : > "$WORK/union_heavy"
+  _leg_i=0
+  while IFS= read -r spec; do
+    _leg_i=$(( _leg_i + 1 ))
+    enumerate_leg "$spec" "$WORK/hleg_$_leg_i" scripts-heavy
+    _n=$(wc -l < "$WORK/hleg_$_leg_i" | tr -d ' ')
+    if (( _n >= 1 )); then
+      pass "heavy leg $spec enumerated $_n assigned registration(s)"
+    else
+      fail "heavy leg $spec enumerated ZERO registrations — a leg assigned nothing is a leg whose green means nothing"
+    fi
+    cat "$WORK/hleg_$_leg_i" >> "$WORK/union_heavy"
+  done < "$WORK/legs_heavy"
+
+  UNION_HN=$(wc -l < "$WORK/union_heavy" | tr -d ' ')
+  UNION_HU=$(sort -u "$WORK/union_heavy" | wc -l | tr -d ' ')
+  if (( UNION_HN == UNION_HU )); then
+    pass "no heavy registration is assigned to more than one leg ($UNION_HN assignments, $UNION_HU distinct)"
+  else
+    _dupes=$(sort "$WORK/union_heavy" | uniq -d | head -5 | tr '\n' ' ')
+    fail "$(( UNION_HN - UNION_HU )) duplicate heavy assignment(s): first few: $_dupes"
+  fi
+
+  sort -u "$WORK/union_heavy" > "$WORK/union_heavy_sorted"
+  if totality_holds "$WORK/ref_heavy" "$WORK/union_heavy_sorted"; then
+    pass "TOTALITY: the union of all heavy legs equals the independently derived heavy reference set ($REF_H registrations)"
+  else
+    _missing=$(comm -23 "$WORK/ref_heavy" "$WORK/union_heavy_sorted" | head -10 | tr '\n' ' ')
+    _extra=$(comm -13 "$WORK/ref_heavy" "$WORK/union_heavy_sorted" | head -10 | tr '\n' ' ')
+    fail "HEAVY TOTALITY VIOLATED. Assigned to NO leg: ${_missing:-none}. Assigned but absent from the reference: ${_extra:-none}."
+  fi
+fi
+
+# --- POSITIVE CONTROL on the heavy comparison -------------------------------------------------
+if [[ -s "$WORK/ref_heavy" ]]; then
+  head -n -1 "$WORK/ref_heavy" > "$WORK/control_heavy_dropped_one"
+  if totality_holds "$WORK/ref_heavy" "$WORK/control_heavy_dropped_one"; then
+    fail "POSITIVE CONTROL (heavy): the totality comparison reports two sets differing by one registration as IDENTICAL."
+  else
+    pass "positive control (heavy): the totality comparison detects a single dropped registration"
+  fi
+else
+  fail "POSITIVE CONTROL (heavy) could not run — the heavy reference set is empty"
+fi
+
+# --- Non-canonical K rows, bounded by the group's registration count ---------------------------
+#
+# K must stay <= REF_H: a leg index beyond the registration count is syntactically valid but
+# owns nothing and must REFUSE (pinned separately below), so it cannot be traversed as a
+# totality case. For the 3-member group, {2,3} exercises 2+1 and 1+1+1 — both still total.
+for altK in 2 3; do
+  if (( altK > REF_H )); then continue; fi
+  : > "$WORK/alt_hunion"
+  for k in $(seq 1 "$altK"); do
+    enumerate_leg "$k/$altK" "$WORK/alt_hleg" scripts-heavy
+    cat "$WORK/alt_hleg" >> "$WORK/alt_hunion"
+  done
+  _an=$(wc -l < "$WORK/alt_hunion" | tr -d ' ')
+  sort -u "$WORK/alt_hunion" > "$WORK/alt_hsorted"
+  _au=$(wc -l < "$WORK/alt_hsorted" | tr -d ' ')
+  if (( _an == _au )) && diff -q "$WORK/ref_heavy" "$WORK/alt_hsorted" >/dev/null 2>&1; then
+    pass "non-canonical heavy K=$altK is also total and duplicate-free"
+  else
+    fail "heavy K=$altK is not total/duplicate-free ($_an assignments, $_au distinct, reference $REF_H) — the heavy partition is correct only for the configured K"
+  fi
+done
+
+# --- A valid spec BEYOND the heavy registration count is refused, not traversed ----------------
+#
+# SCRIPTS_SHARD=4/5 over a 3-registration group passes every syntactic check and matches no
+# ordinal — the leg must hit the zero-assignment refusal (exit 2) rather than report green over
+# zero coverage. Assert the message, not just the rc.
+_over_h=$(( REF_H + 1 ))
+_over_h_err=$(env SCRIPTS_SHARD="${_over_h}/5" TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate scripts-heavy 2>&1 >/dev/null || true)
+if grep -qF 'assigned 0 of' <<<"$_over_h_err"; then
+  pass "a valid-but-empty heavy assignment (${_over_h}/5, beyond $REF_H registrations) is refused by the zero-assignment check"
+else
+  fail "SCRIPTS_SHARD=${_over_h}/5 under scripts-heavy was not refused (got: ${_over_h_err:-<no output>}) — the leg would report green over zero coverage"
+fi
+
+# --- The heavy group obeys the SAME malformed-spec refusal -------------------------------------
+_mal_h_ok=1
+for bad in "0/3" "abc" "" "１/３"; do
+  env SCRIPTS_SHARD="$bad" TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --enumerate scripts-heavy >/dev/null 2>&1
+  _rc=$?
+  if (( _rc != 2 )); then
+    _mal_h_ok=0
+    fail "malformed SCRIPTS_SHARD='$bad' under scripts-heavy exited $_rc, expected 2 (fail closed)"
+  fi
+done
+if (( _mal_h_ok == 1 )); then
+  pass "every malformed SCRIPTS_SHARD spec fails closed with exit 2 under scripts-heavy"
+fi
+
+# --- The scope widening did NOT open other groups -----------------------------------------------
+#
+# The runner's group-scope refusal was widened to {scripts, scripts-heavy}; this row pins the
+# boundary it must NOT have crossed: SCRIPTS_SHARD on an unrelated group still refuses.
+env SCRIPTS_SHARD="1/3" TEST_GROUP=webplat SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate webplat >/dev/null 2>&1
+_rc=$?
+if (( _rc == 2 )); then
+  pass "SCRIPTS_SHARD on an unrelated group (webplat) is still refused — the scope widening stayed scoped"
+else
+  fail "SCRIPTS_SHARD under TEST_GROUP=webplat exited $_rc, expected 2 — the widened group-scope check admits groups it must refuse"
+fi
+
+# --- Unset runs the full heavy group -----------------------------------------------------------
+enumerate_leg "-" "$WORK/unset_heavy" scripts-heavy
+_un_h=$(sort -u "$WORK/unset_heavy" | wc -l | tr -d ' ')
+if (( _un_h == REF_H )); then
+  pass "SCRIPTS_SHARD unset enumerates the full heavy group ($_un_h) — local runs are unaffected"
+else
+  fail "SCRIPTS_SHARD unset enumerated $_un_h heavy registrations, expected the full $REF_H"
+fi
+
+# --- TEST_GROUP=all still covers the heavy group ------------------------------------------------
+#
+# `want_scripts_heavy` includes `all` so the ship gate, lefthook and main-health-monitor keep
+# running the heavy suites. If the want_* helper drops `all`, the three most expensive suites
+# silently leave every full-gate run — and nothing else here notices (this file scopes its
+# other rows to per-group enumeration).
+env -u SCRIPTS_SHARD TEST_GROUP=all SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate all 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 \
+  | sort -u > "$WORK/enum_all"
+_missing_all=$(comm -23 "$WORK/ref_heavy" "$WORK/enum_all" | tr '\n' ' ')
+if [[ -z "$_missing_all" ]]; then
+  pass "TEST_GROUP=all covers every heavy registration — the full gate cannot silently lose them"
+else
+  fail "TEST_GROUP=all is missing heavy registration(s): $_missing_all — want_scripts_heavy dropped the 'all' arm, so the ship gate and monitor silently lost the most expensive suites"
+fi
+
 # --- ASSERTION FLOOR --------------------------------------------------------------------------
 #
 # Reported with printf + exit 1, NEVER through fail() — the helper this floor exists to
 # backstop is exactly the thing one edit disarms (ADR-193).
-MIN_ROWS=16
+MIN_ROWS=30
 TOTAL=$(( PASS + FAIL ))
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The suite did not run to completion, so its verdict is not evidence.\n' "$TOTAL" "$MIN_ROWS" >&2
