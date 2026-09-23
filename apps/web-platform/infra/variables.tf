@@ -594,6 +594,17 @@ variable "supabase_access_token" {
   sensitive   = true
 }
 
+variable "anthropic_api_key_ci" {
+  description = "Anthropic API key for CI and manual evals, minted in the spend-limited soleur-ci-eval Console workspace (#8505). Value from Doppler prd_terraform ANTHROPIC_API_KEY_CI via TF_VAR_anthropic_api_key_ci. Written to Doppler ci/ANTHROPIC_API_KEY and the ANTHROPIC_API_KEY repo secret by anthropic-ci-key.tf. Console-minted: the Admin API cannot set a workspace spend limit and no Anthropic provider exists (runbooks/anthropic-console-workspace-key.md). Distinctness from the production key is proven live by scripts/anthropic-key-distinctness.sh, not here (ADR-244). No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = startswith(var.anthropic_api_key_ci, "sk-ant-")
+    error_message = "anthropic_api_key_ci must be an sk-ant- key (#8505)."
+  }
+}
+
 # --- Inngest IaC (PR-F follow-up, #3960) -------------------------------------
 # 3 new variables (down from plan's 7). Inngest signing/event keys are
 # TF-generated via random_id (see inngest.tf); no operator mint required.
@@ -709,7 +720,7 @@ variable "ghcr_read_user" {
 }
 
 variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN; consumed by ci-deploy.sh (host pull + cosign .sig fetch auth) + cloud-init fresh-boot login. NO default."
+  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN. CONSUMERS \u2014 THREE fresh-boot login sites, not one: apps/web-platform/infra/cloud-init.yml (web host, root, writes root\u0027s docker config), apps/web-platform/infra/soleur-host-bootstrap.sh (web host, root, writes the SAME root config \u2014 so retiring only the cloud-init site would leave root_ghcr_auth=inline and make a 1d close criterion ungreenable), and apps/web-platform/infra/cloud-init-inngest.yml (inngest host, templated from inngest-host.tf). An earlier revision of this description said \u0027cloud-init fresh-boot login ONLY\u0027, which would have sent the 1d grep to one of the three. The ci-deploy.sh consumer (host pull + cosign .sig fetch auth) was RETIRED in #8036 item 1c on 2026-09-23 \u2014 the deploy path no longer reads this secret at all, and it sweeps any inline ghcr.io entry out of the deploy docker config on every deploy. The boot path still reads it and is tracked as 1d. The divergence is named here on purpose: the next engineer to grep GHCR_READ_TOKEN lands on why two host postures disagree instead of re-deriving it. NO default."
   type        = string
   sensitive   = true
 }

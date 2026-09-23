@@ -949,6 +949,22 @@ review time. CPO sign-off is required before `soleur:work` begins (see Domain Re
   because this PR touches `apps/web-platform/infra`, so CI runs M8 on the real runner.
 - [ ] **AC6.** `wc -c .github/workflows/apply-web-platform-infra.yml` ≤ 488,000, and
   `plugins/soleur/test/workflow-file-size.test.ts` passes.
+  > **Measured 2026-09-23, after merging `origin/main` at `b365c4d592`: 488,104 — 104 over.**
+  > Attributed, not excused: this branch's own contribution is 487,980 (held under the margin
+  > through four rounds, twice by relocating prose to the job-rationale runbook). The overage
+  > is 124 bytes main added in #8618 (#8505), two `-target=` lines for the spend-capped
+  > Anthropic key. The file also grew 482,408 → 482,532 on `main` in one day from unrelated
+  > work, so this margin is now shared across concurrent PRs rather than owned by this one.
+  >
+  > NOT absorbed by trimming further. Every remaining byte this branch adds to that file is
+  > operator-facing text (the `confirm` description, the `legacy_app_key_evicted` refusal) or a
+  > `# Rationale: … §<id>` pointer that a sibling gate requires to resolve. Shaving those to
+  > offset another PR's content would make the artifact worse to protect a number.
+  >
+  > **The gate that blocks is ADR-231's 490,000, and it passes with 1,896 bytes of headroom**
+  > (`workflow-file-size.test.ts` 9/9). AC6's 488,000 was a self-imposed cushion under it.
+  > Operator decision: accept the 104, or re-cut the cushion now that the file has multiple
+  > concurrent authors.
 - [ ] **AC7.** `git diff origin/main --name-only` contains none of `.github/workflows/git-data-cutover.yml`,
   `.github/workflows/git-data-pin-redeploy.yml`, `apps/web-platform/infra/git-data-cutover.sh`, or any
   git-data rollback or wipe script.

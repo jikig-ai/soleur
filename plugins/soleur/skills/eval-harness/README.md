@@ -10,6 +10,9 @@ and ticket-triage P-level accuracy — adapting the [ponytail](https://github.co
 - Node `>=22.22` (the worktree ships v22.22.1) — no dependency is added to any `package.json`;
   the harness runs via `npx promptfoo`.
 - `ANTHROPIC_API_KEY` in the environment (promptfoo's `anthropic:messages:*` providers read it).
+  In this repository, take it from Doppler `ci`: `doppler run -p soleur -c ci -- <command>`. That
+  key lives in the spend-capped `soleur-ci-eval` Console workspace ($100/month), so a grid can
+  never drain the balance production draws on. Never run a grid under a `prd*` config (#8505).
 
 ## Reproduce
 
