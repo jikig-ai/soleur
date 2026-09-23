@@ -66,9 +66,22 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=Fixture GIT_AUTHOR_EMAIL=fixture@example.invalid
 export GIT_COMMITTER_NAME=Fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
 
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
+# the verbatim body; see plugins/soleur/test/test-helpers.sh).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-case "$tmp" in /*) : ;; *) printf 'FATAL: mktemp returned a relative path\n' >&2; exit 1 ;; esac
+assert_fixture_dir "$tmp"
 
 GUARD="$tmp/guard.sh"
 cp "$GUARD_SRC" "$GUARD"
@@ -120,7 +133,7 @@ put "$SEED" 002_b.down.sql "B-down"
 put "$SEED" 128_x.sql "X"
 git -C "$SEED" add -A && git -C "$SEED" commit -qm 'c1 base'
 C1=$(git -C "$SEED" rev-parse HEAD)
-git -C "$SEED" mv "$MDIR/128_x.sql" "$MDIR/131_x.sql"
+git -C "$SEED" mv "$SEED/$MDIR/128_x.sql" "$SEED/$MDIR/131_x.sql"
 git -C "$SEED" commit -qm 'c2 main renames 128_x -> 131_x'
 put "$SEED" 130_y.sql "Y"
 git -C "$SEED" add -A && git -C "$SEED" commit -qm 'c3 add 130_y'
@@ -425,7 +438,7 @@ CASES=$((CASES + 1))
 # The checkout renamed 143_old -> 143_new but origin's feat still carries the
 # old name. The PR must never count as "another live branch" that owns G.
 feat_case 143_old.sql="R3"
-git -C "$WORK" mv "$MDIR/143_old.sql" "$MDIR/143_new.sql"
+git -C "$WORK" mv "$WORK/$MDIR/143_old.sql" "$WORK/$MDIR/143_new.sql"
 git -C "$WORK" commit -qm 'rename, not pushed'
 ledger "143_old.sql|$(blob_of R3)"
 run_check --head-branch feat
@@ -1060,7 +1073,7 @@ wiring_failures() {
     'Release dev-suite mutex'; do
     n=$(grep -cxF "      - name: $name" "$wf" || true)
     if [[ "$n" != "1" ]]; then echo "step '$name' appears $n times (want 1)"; continue; fi
-    at[$name]=$(grep -nxF "      - name: $name" "$wf" | cut -d: -f1)
+    at[$name]=$(grep -nxF "      - name: $name" "$wf" | cut -d: -f1 || true)
   done
   local heavy
   heavy=$(grep -nxF '  tenant-integration:' "$wf" | cut -d: -f1 || true)

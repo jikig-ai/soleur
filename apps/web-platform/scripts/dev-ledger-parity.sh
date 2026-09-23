@@ -142,9 +142,23 @@ bounded() {  # bounded <seconds> <cmd...>
   if [[ -n "$TIMEOUT_BIN" ]]; then "$TIMEOUT_BIN" -k 5 "$s" "$@"; else "$@"; fi
 }
 
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
+# the verbatim body; see plugins/soleur/test/test-helpers.sh).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+# --repo and every root derived from it must be absolute (the git -C operands below).
 _assert_repo_root() {
-  [[ -n "$1" && -d "$1/$MIG_REL" ]] && return 0
-  cannot_measure config "--repo '${1:-<unset>}' does not contain $MIG_REL"
+  [[ -n "$1" && -d "$1/$MIG_REL" ]] || cannot_measure config "--repo '${1:-<unset>}' does not contain $MIG_REL"
+  assert_fixture_dir "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -160,8 +174,10 @@ ogit() { GIT_NO_LAZY_FETCH=1 git -C "$OWN" "$@"; }
 owners_repo() {
   local base_branch="$1"
   [[ -n "$OWN" ]] && return 0
+  assert_fixture_dir "$REPO"
   OWN=$(mktemp -d "${TMPDIR:-/tmp}/dev-ledger-owners.XXXXXX") \
     || cannot_measure config "mktemp failed"
+  assert_fixture_dir "$OWN"
   CLEAN+=("$OWN")
   git init -q --bare "$OWN" || cannot_measure config "git init of the throwaway owner repo failed"
 
@@ -344,6 +360,7 @@ cmd_check() {
   done
   [[ -n "$base" ]] || cannot_measure config "--base is required"
   _assert_repo_root "$REPO"
+  assert_fixture_dir "$REPO"
   git -C "$REPO" rev-parse --verify --quiet "$base^{commit}" >/dev/null \
     || cannot_measure config "cannot resolve --base '$base'"
   if [[ -n "$head_branch" && ! "$head_branch" =~ ^[A-Za-z0-9._/-]+$ ]]; then
