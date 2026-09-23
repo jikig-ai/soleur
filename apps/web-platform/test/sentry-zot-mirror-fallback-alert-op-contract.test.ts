@@ -9,10 +9,15 @@ import { beforeAll, describe, it, expect } from "vitest";
 // The `zot-mirror-fallback-rate` Sentry issue-alert pages on the FIRST runtime
 // zot→GHCR fallback / gate-degrade event (event_frequency count > 0 / 1h, #6285),
 // matching the OR of FOUR runtime signals (filter_match="any"):
-//   - registry == "ghcr-fallback"      (ci-deploy.sh rolling-deploy pull fallback)
 //   - registry == "zot-gate-degraded"  (ci-deploy.sh dark-gate degrade beacon)
 //   - stage    == "inngest_ghcr_fallback" (cloud-init.yml inngest fresh-boot pull)
 //   - stage    == "app_ghcr_fallback"     (cloud-init.yml app-image fresh-boot pull, #6278 Phase 1b)
+//   - stage    == "app_ghcr_served"       (cloud-init.yml app-image fresh-boot GHCR-served, #6462)
+//
+// #8036 1c removed a FIFTH, `registry == "ghcr-fallback"`. `ci-deploy.sh` no longer has a GHCR
+// leg, so `registry_pull_event ghcr-fallback` has no call site and the value cannot be emitted.
+// The alarm's condition and the soak's FAIL_QUERIES entry were both dropped in that PR, together
+// with the soak's runtime cardinality floor — which is what the parity legs below now pin at 4.
 //
 // The inngest/app boot events carry only `stage` (no feature/op), so the filter is
 // `any` over the tag-VALUES, not `all` over feature+op. Each tag string is pinned
@@ -173,16 +178,22 @@ function scopeResourceWithComment(name: string): string {
 }
 
 describe("zot-mirror-fallback-rate alert op contract", () => {
-  it("ci-deploy.sh emits the supply-chain image-pull tags + both registry values", () => {
+  it("ci-deploy.sh emits the supply-chain image-pull tags + the surviving registry value", () => {
     expect(ciDeploy).toContain(`feature: "supply-chain"`);
     expect(ciDeploy).toContain(`op: "image-pull"`);
-    // Pin the exact EMIT forms, not the bare tag literals: `ghcr-fallback` also
-    // appears in several ci-deploy.sh comments, so a bare `toContain("ghcr-fallback")`
-    // would stay GREEN even if the emit CALL were renamed — the silent-DARK failure
-    // this guard exists to catch. `registry_pull_event ghcr-fallback` (the call site)
-    // and `registry: "zot-gate-degraded"` (the jq tag literal) are emit-only.
-    expect(ciDeploy).toContain("registry_pull_event ghcr-fallback");
+    // Pin the exact EMIT FORM, not the bare tag literal: `zot-gate-degraded` also appears in
+    // ci-deploy.sh comments, so a bare `toContain("zot-gate-degraded")` would stay GREEN even
+    // if the emit CALL were renamed — the silent-DARK failure this guard exists to catch.
     expect(ciDeploy).toContain(`registry: "zot-gate-degraded"`);
+  });
+
+  // #8036 1c, the OTHER direction — and the one that is not a restatement. The leg above pins
+  // that a surviving emitter is still there; this pins that the RETIRED one cannot come back.
+  // Anchored on the CALL SITE (`registry_pull_event ghcr-fallback`), never on the bare token:
+  // ci-deploy.sh still discusses the retirement in prose, and a bare-token assertion would red
+  // on the comment that explains the deletion — failing for the opposite of the right reason.
+  it("ci-deploy.sh has no ghcr-fallback emit site left (#8036 1c residual-zero)", () => {
+    expect(ciDeploy).not.toContain("registry_pull_event ghcr-fallback");
   });
 
   // The soak's bare `stage:"..."` queries depend on the TAG KEY being literally `stage` in
@@ -236,8 +247,7 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     expect(cloudInit).toContain(`"app_zot" info`);
   });
 
-  it("issue-alerts.tf pins all five signal tag-values (any-match OR)", () => {
-    expect(tf).toContain(`value = "ghcr-fallback"`);
+  it("issue-alerts.tf pins all four signal tag-values (any-match OR)", () => {
     expect(tf).toContain(`value = "zot-gate-degraded"`);
     expect(tf).toContain(`value = "inngest_ghcr_fallback"`);
     expect(tf).toContain(`value = "app_ghcr_fallback"`);
@@ -312,11 +322,14 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   it("the soak gate's FAIL set equals the alarm's watched signal set (derived, both sides)", () => {
     const alarm = alarmFilterSet();
     // Guard against a vacuous pass if either extraction silently yields nothing.
-    // 4 -> 5 with #6462's app_ghcr_served. The soak's RUNTIME cardinality floor
-    // (zot-soak-6122.sh `${#FAIL_QUERIES[@]} != 5`) must move in lockstep: CI parses
-    // the source, the sweeper executes it, and both must agree.
-    expect(alarm.size).toBe(5);
-    expect(soakFailQueries().size).toBe(5);
+    // 4 -> 5 with #6462's app_ghcr_served, then 5 -> 4 with #8036 1c's retirement of
+    // `ghcr-fallback`. The soak's RUNTIME cardinality floor (zot-soak-6122.sh
+    // `${#FAIL_QUERIES[@]} != 4`) must move in lockstep: CI parses the source, the sweeper
+    // executes it, and both must agree — a floor left at 5 over a 4-entry array makes every
+    // sweep a permanent `exit 2` TRANSIENT, which nothing but this pin catches before the
+    // sweeper does, a day later, as a comment on the tracker.
+    expect(alarm.size).toBe(4);
+    expect(soakFailQueries().size).toBe(4);
     // Derived equality on BOTH sides — deliberately no canonical list here. A
     // WATCHED constant would be a third source of truth, not a parity test; this
     // shape gives "a 5th signal added to the alarm breaks CI" for free.
@@ -337,10 +350,7 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   //   stage: query makes it match zero events FOREVER, silently restoring the very
   //   blindness this PR removes. Proven live: stage:"bootstrap_complete" => 9 events,
   //   feature:supply-chain op:image-pull stage:"bootstrap_complete" => 0.
-  it("pins the WHOLE query string for all five signals (the prefix trap)", () => {
-    expect(soakQueryFor("ghcr-fallback")).toBe(
-      'feature:supply-chain op:image-pull registry:"ghcr-fallback"',
-    );
+  it("pins the WHOLE query string for all four signals (the prefix trap)", () => {
     expect(soakQueryFor("zot-gate-degraded")).toBe(
       'feature:supply-chain op:image-pull registry:"zot-gate-degraded"',
     );
