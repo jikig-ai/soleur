@@ -296,7 +296,7 @@ rule's failure mode:
 
 6.2 `plugins/soleur/skills/eval-harness/README.md` Prerequisites: run eval grids under `doppler run -p soleur -c ci --` so manual evals bill the capped workspace, never a `prd*` key.
 
-6.3 ADR (provisional **ADR-242**; the ordinal is re-verified by `soleur:ship`'s ADR-Ordinal Collision Gate, and #8611 claims ADR-241), *"Anthropic keys are partitioned by blast radius into spend-limited Console workspaces"*. It records:
+6.3 ADR (provisional **ADR-243**; the ordinal is re-verified by `soleur:ship`'s ADR-Ordinal Collision Gate, and #8611 claims ADR-241), *"Anthropic keys are partitioned by blast radius into spend-limited Console workspaces"*. It records:
 - Decision: one workspace per consumer class (ci-eval now; prd-cron in #8614), each with a monthly spend limit; Terraform distributes each key from a `prd_terraform` input slot; the org balance stays shared.
 - Alternatives considered: separate key in the Default Workspace (no cap possible; rejected); separate Anthropic org (separate billing; overkill); Admin API automation (cannot set limits; no admin key).
 - Consequences: a workspace-cap hit is a distinct, soft-skipped CI failure class.
@@ -315,7 +315,7 @@ rule's failure mode:
 - `apps/web-platform/scripts/anthropic-key-distinctness.test.sh`
 - `apps/web-platform/infra/anthropic-ci-key.tf`
 - `knowledge-base/engineering/operations/runbooks/anthropic-console-workspace-key.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-242-anthropic-keys-partitioned-by-spend-limited-workspace.md` (ordinal provisional)
+- `knowledge-base/engineering/architecture/decisions/ADR-243-anthropic-keys-partitioned-by-spend-limited-workspace.md` (ordinal provisional)
 - `apps/web-platform/test/server/email-triage/summarize.test.ts` (verified at deepen: no summarizer suite exists)
 
 ## Files to Edit
@@ -515,7 +515,7 @@ in_transit:
 
 ### ADR
 
-Create provisional **ADR-242**, *Anthropic keys are partitioned by blast radius into spend-limited Console workspaces* (Phase 6.3), through `soleur:architecture`. The ordinal is re-verified at ship.
+Create provisional **ADR-243**, *Anthropic keys are partitioned by blast radius into spend-limited Console workspaces* (Phase 6.3), through `soleur:architecture`. The ordinal is re-verified at ship.
 
 ### C4 views
 
@@ -559,7 +559,7 @@ The ADR describes the state after the mint. If the mint slips post-merge (Phase 
 ### Engineering (CTO lens: carried in this plan)
 
 **Status:** reviewed
-**Assessment:** The architectural decision is the per-consumer workspace partition (ADR-242). The high-leverage correctness finding is the fleet-wide `reportSilentFallback` tag loss, which is deferred with evidence and sidestepped locally by the message path. The work stays out of #8611's substrate and budget files.
+**Assessment:** The architectural decision is the per-consumer workspace partition (ADR-243). The high-leverage correctness finding is the fleet-wide `reportSilentFallback` tag loss, which is deferred with evidence and sidestepped locally by the message path. The work stays out of #8611's substrate and budget files.
 
 ### Operations
 

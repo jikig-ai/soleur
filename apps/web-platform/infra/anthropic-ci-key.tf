@@ -6,7 +6,7 @@
 # key is minted in the Console (the Admin API cannot set a workspace spend limit and
 # there is no Anthropic Terraform provider); the procedure and its records live in
 # knowledge-base/engineering/operations/runbooks/anthropic-console-workspace-key.md.
-# ADR-242 records the partition decision.
+# ADR-243 records the partition decision.
 #
 # Both writers below are the ONLY Terraform writers of these two slots. Neither
 # carries `ignore_changes`, so a hand edit of Doppler `ci` or of the repo secret is

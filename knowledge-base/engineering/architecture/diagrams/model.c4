@@ -309,7 +309,7 @@ model {
   // ---- External systems (third-party, outside the platform boundary) ------
   anthropic = system "Anthropic API" {
     #external
-    description "Claude LLM for agent reasoning and tool use"
+    description "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
   }
   github = system "GitHub" {
     #external
@@ -581,6 +581,8 @@ model {
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }
   api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
+  github -> anthropic "CI Claude turns (claude-code-action, ci.yml real-turn gates) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-243)" { technology "HTTPS" }
+  evalharness -> anthropic "promptfoo eval grids on the soleur-ci-eval workspace key (Doppler ci; ADR-243)" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }
   tunnel -> coordinator "Routes traffic" { technology "HTTPS" }
   // #6425: the tunnel's ACTUAL ingress delivery, previously unmodelled — `tunnel -> coordinator`
