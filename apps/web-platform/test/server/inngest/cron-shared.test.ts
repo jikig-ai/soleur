@@ -1104,6 +1104,81 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     ).rejects.toThrow("Anthropic API 503");
   });
 
+  // #8505 — the transport is the credit-marker chokepoint for every HTTP-transport
+  // cron (credit-probe canary, compound-promote, weekly-release-digest).
+  describe("#8505 credit-exhaustion marker", () => {
+    const creditBody =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}';
+    const creditReports = () =>
+      reportSilentFallbackSpy.mock.calls.filter(
+        ([, ctx]) => (ctx as { op?: string }).op === "anthropic-credit-exhausted",
+      );
+
+    beforeEach(() => reportSilentFallbackSpy.mockClear());
+
+    it("reports once with source=cron:<markerSource> on a credit 400, and still throws AnthropicApiError", async () => {
+      fetchSpy.mockResolvedValue(new Response(creditBody, { status: 400 }));
+      const err = await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+        markerSource: "cron-anthropic-credit-probe",
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(AnthropicApiError);
+      const reports = creditReports();
+      expect(reports).toHaveLength(1);
+      const [errArg, ctx] = reports[0] as [unknown, { feature: string; tags: Record<string, string> }];
+      // Message path (err = null) — the Error path loses its tags to the pino mirror.
+      expect(errArg).toBeNull();
+      expect(ctx.feature).toBe("anthropic-credit");
+      expect(ctx.tags.source).toBe("cron:cron-anthropic-credit-probe");
+    });
+
+    it("falls back to source=cron:unknown when no markerSource is threaded", async () => {
+      fetchSpy.mockResolvedValue(new Response(creditBody, { status: 400 }));
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }).catch(() => undefined);
+      const reports = creditReports();
+      expect(reports).toHaveLength(1);
+      expect((reports[0][1] as { tags: Record<string, string> }).tags.source).toBe("cron:unknown");
+    });
+
+    it.each([
+      [429, '{"type":"error","error":{"type":"rate_limit_error","message":"rate limited"}}'],
+      [500, "upstream error"],
+      [529, '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'],
+      [400, '{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be positive"}}'],
+      [400, '{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits."}}'],
+    ])("does NOT report on status %i with a non-credit body", async (status, body) => {
+      fetchSpy.mockResolvedValue(new Response(body, { status }));
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+        markerSource: "cron-compound-promote",
+      }).catch(() => undefined);
+      expect(creditReports()).toHaveLength(0);
+    });
+
+    it("does NOT report on a network failure (redacted rethrow path)", async () => {
+      fetchSpy.mockRejectedValue(new TypeError("fetch failed"));
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }).catch(() => undefined);
+      expect(creditReports()).toHaveLength(0);
+    });
+  });
+
   it("rethrows a redacted error on a fetch network failure (never leaks the api key)", async () => {
     const apiKey = "sk-ant-" + "synthetic-network-key";
     fetchSpy.mockRejectedValue(new TypeError("fetch failed"));

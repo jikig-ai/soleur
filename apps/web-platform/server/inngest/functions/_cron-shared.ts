@@ -11,6 +11,11 @@ import {
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import { emitClaudeCostMarker } from "@/server/claude-cost-marker";
 import { emitCronTier2Deferred } from "@/server/cron-liveness-marker";
+import {
+  ANTHROPIC_CREDIT_EXHAUSTED_RE,
+  isAnthropicCreditExhausted,
+  reportAnthropicCreditExhausted,
+} from "@/server/anthropic-credit";
 import type { SpawnResult } from "./_cron-claude-eval-substrate";
 import type { Octokit } from "@octokit/core";
 
@@ -624,6 +629,15 @@ export async function postAnthropicMessage(args: {
     } catch {
       // Body unreadable (already consumed / stream error) — status alone still
       // throws a typed error; the canary falls back to the status-only branch.
+    }
+    // #8505: the named, routed credit-exhaustion marker for every HTTP-transport
+    // cron on the operator key. Reported here (not at each call site) so the
+    // canary, compound-promote and weekly-release-digest cannot drift apart.
+    if (isAnthropicCreditExhausted(rawBody)) {
+      reportAnthropicCreditExhausted({
+        source: `cron:${args.markerSource ?? "unknown"}`,
+        status: resp.status,
+      });
     }
     throw new AnthropicApiError(
       resp.status,
@@ -1390,7 +1404,8 @@ export function formatTailForSentry(tail?: string): string | undefined {
 // and fixture-pinned against the real incident tail: classify-by-string-match is
 // brittle to Anthropic copy changes, so an UNMATCHED non-zero exit degrades to
 // benign-but-recorded (green + reason in Sentry), never a silent drop.
-export const ANTHROPIC_CREDIT_EXHAUSTED_RE = /credit balance is too low/i;
+// Defined in server/anthropic-credit.ts (#8505), which also owns the named marker.
+export { ANTHROPIC_CREDIT_EXHAUSTED_RE };
 export const ANTHROPIC_AUTH_FAILURE_RE =
   /invalid x-api-key|authentication_error|\binvalid api key\b/i;
 // Spawn-fault markers in a captured tail (the child never really ran).
