@@ -34,6 +34,7 @@ import {
 import { inngest } from "@/server/inngest/client";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { reportSilentFallback } from "@/server/observability";
+import { budgetFlags } from "@/server/inngest/cron-budgets";
 
 const FUNCTION_NAME = "event-ship-merge";
 
@@ -52,6 +53,7 @@ const CLAUDE_CODE_FLAGS = [
   EXECUTION_MODEL,
   "--max-turns",
   "40",
+  ...budgetFlags("event-ship-merge"), // #8611 per-run dollar ceiling (cron-budgets.ts)
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
   "--plugin-dir",

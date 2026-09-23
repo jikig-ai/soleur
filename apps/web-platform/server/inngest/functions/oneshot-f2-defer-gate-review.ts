@@ -31,6 +31,7 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { budgetFlags } from "@/server/inngest/cron-budgets";
 
 const FUNCTION_NAME = "oneshot-f2-defer-gate-review";
 
@@ -42,6 +43,7 @@ const CLAUDE_CODE_FLAGS = [
   "--print",
   "--max-turns",
   "25",
+  ...budgetFlags("oneshot-f2-defer-gate-review"), // #8611 per-run dollar ceiling (cron-budgets.ts)
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep",
   "--",

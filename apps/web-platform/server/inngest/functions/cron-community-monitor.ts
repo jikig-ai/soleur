@@ -100,6 +100,7 @@ import {
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { budgetFlags } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
 // Constants
@@ -143,6 +144,7 @@ const CLAUDE_CODE_FLAGS = [
   EXECUTION_MODEL,
   "--max-turns",
   "80",
+  ...budgetFlags("cron-community-monitor"), // #8611 per-run dollar ceiling (cron-budgets.ts)
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep",
   "--",

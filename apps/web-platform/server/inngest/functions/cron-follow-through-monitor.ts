@@ -95,6 +95,7 @@ import {
 // Re-export for test parity (cron-follow-through-monitor.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { budgetFlags } from "@/server/inngest/cron-budgets";
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
 // 73-145, with three idempotency guards (A/B/C) added for Inngest replay
@@ -302,6 +303,7 @@ export const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model", EXECUTION_MODEL,
   "--max-turns", "30",
+  ...budgetFlags("cron-follow-through-monitor"), // #8611 per-run dollar ceiling (cron-budgets.ts)
   "--allowedTools",
   "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh label create:*),Read,Glob,Grep",
   "--",
