@@ -185,7 +185,7 @@ if $DRY_RUN; then
   echo "  cd ${PROVISIONING_DIR} && terraform destroy"
   echo "  rm -rf ${PROVISIONING_DIR}/cloudflare.tf"
   echo ""
-  echo "Next step: soleur:provision-hetzner ${SLUG}"
+  echo "Next step: type /soleur:provision-doppler ${SLUG} <org> <repo> yourself (user-invoked; Soleur cannot run it, ADR-236)"
   exit 0
 fi
 
@@ -238,4 +238,4 @@ else
 fi
 
 echo ""
-echo "Next step: soleur:provision-hetzner ${SLUG}"
+echo "Next step: type /soleur:provision-doppler ${SLUG} <org> <repo> yourself (user-invoked; Soleur cannot run it, ADR-236)"

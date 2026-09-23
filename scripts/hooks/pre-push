@@ -112,7 +112,9 @@ if [[ ${#bun_tests[@]} -gt 0 ]]; then
   fi
 
   if [[ ${#vitest_tests[@]} -gt 0 ]]; then
-    if ! (cd apps/web-platform && npx vitest run "${vitest_tests[@]/#apps\/web-platform\//}" 2>&1); then
+    # Pinned .bin only -- npx falls back to a registry fetch when the app
+    # install is absent, the #7927 unpinned-resolution class (#8580 review).
+    if ! (cd apps/web-platform && { [ -x node_modules/.bin/vitest ] || { echo "pre-push: apps/web-platform/node_modules/.bin/vitest missing -- run: npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && ./node_modules/.bin/vitest run "${vitest_tests[@]/#apps\/web-platform\//}" 2>&1); then
       failed=1
     fi
   fi
