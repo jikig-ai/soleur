@@ -136,7 +136,7 @@ dark since #7071, so there is no window to protect.
       the `na_*` and `failed` tokens.
 - [x] 7.4 Probe leg 2: count `relogin_failed` only NEWER than the host's latest marker (the latch
       made #8036 permanently unclosable on any host that saw one pre-1c deploy in the window).
-- [x] 7.5 Probe leg 3: closed allowlist (`ok` | `reused_local_reload`); `cosign_absent`,
+- [x] 7.5 Probe leg 3: closed allowlist (`ok` only -- see LEG3_ALLOW_RE); `cosign_absent`,
       `wrong_identity`, `unsigned` and a missing verdict are ACTION REQUIRED, not PASS.
 - [x] 7.6 Probe: saturation guard — an absence verdict over a truncated window is not evidence.
 - [x] 7.7 Probe suite 19 -> 28 rows; `MIN_CHECKS` raised to 28 in the same edit and mutation-proven.

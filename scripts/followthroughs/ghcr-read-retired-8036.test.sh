@@ -197,6 +197,19 @@ run_case "leg 3: latest verdict result=verify_failed -> ACTION REQUIRED (5), not
 # a closed ALLOWLIST (`ok` | `reused_local_reload`), so every other class is ACTION REQUIRED.
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail cosign_absent)"; } > "$(fx leg3b)"
 run_case "leg 3: result=cosign_absent is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3b)"
+# ── LEG 3, THE LAUNDERING CASE (#8636 security review). `reused_local_reload` is emitted by
+#    `_try_local_cache_reload` on the arm where the registry did NOT serve and cosign was SKIPPED.
+#    It was in the allowlist, so a host whose real verdict was `cosign_absent` -- the class this
+#    work records firing 89/89 -- graded PASS as soon as a later reload breadcrumb arrived.
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail cosign_absent)"; row "$HA" "$T3" "$(verify_fail reused_local_reload)"; } > "$(fx launder)"
+run_case "leg 3: a reused_local_reload AFTER cosign_absent does not launder it into a PASS" 5 "ACTION REQUIRED:" "$(fx launder)"
+
+#    And the weaker form: a host whose ONLY verdict is the reload breadcrumb ran no cosign at all,
+#    which the leg's own contract says is ACTION REQUIRED ("markers but NO verdict"). Admitting the
+#    breadcrumb made "no verification" indistinguishable from "verification passed".
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail reused_local_reload)"; } > "$(fx reload_only)"
+run_case "leg 3: a host whose only verdict is reused_local_reload (cosign never ran) -> ACTION REQUIRED" 5 "ACTION REQUIRED:" "$(fx reload_only)"
+
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail unsigned)"; } > "$(fx leg3f)"
 run_case "leg 3: result=unsigned is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3f)"
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail wrong_identity)"; } > "$(fx leg3d)"
@@ -314,7 +327,7 @@ run_case "rows exist but no ci-deploy marker -> TRANSIENT (2), never PASS" 2 "TR
 #      * v2 asserted bare TOKENS. `grep -qF ok` matches the word "token"; and a sentence saying
 #        "leg 1 does NOT grade deploy_ghcr_helper" satisfies a presence test for that token.
 #    So this version asserts the CLAIM with a content anchor (cq-assert-anchor-not-bare-token),
-#    and leg 3 is not asserted at all -- its allowlist is SINGLE-SOURCED from LEG3_ALLOW_PAT, which
+#    and leg 3 is not asserted at all -- its allowlist is SINGLE-SOURCED from LEG3_ALLOW_RE, which
 #    both the grader's `case` arm and the heredoc read, making that drift unrepresentable.
 GRADER_SRC="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/ {next} !/^[[:space:]]*#/' "$SUT")"
 _ex="$("$SUT" --explain 2>&1)"
@@ -323,22 +336,22 @@ _ex="$("$SUT" --explain 2>&1)"
 _hdr="$(awk '/^[^#]/{exit} {print}' "$SUT")"
 
 # MEMBERSHIP IS PINNED, not just single-sourced. Single-sourcing stops prose and code disagreeing;
-# it does nothing about the set being WIDENED. Measured: adding `unsigned` to LEG3_ALLOW_PAT left
+# it does nothing about the set being WIDENED. Measured: adding `unsigned` to LEG3_ALLOW_RE left
 # the whole suite green while a host running unsigned images graded PASS. The allowlist is a
 # security decision, so changing it must mean deliberately changing this line too.
 # Over GRADER_SRC, as a WHOLE LINE, and exactly once. Grepping the SUT let a historical-note
-# comment ("was, before the widening: readonly LEG3_ALLOW_PAT='ok|reused_local_reload'") satisfy
+# comment ("was, before the widening: readonly LEG3_ALLOW_RE='ok|reused_local_reload'") satisfy
 # the pin while the live assignment was widened -- measured, and that is this file's dominant
 # commenting idiom, so it is a likely edit rather than a contrived one.
-if [[ "$(grep -cxF "readonly LEG3_ALLOW_PAT='ok|reused_local_reload'" <<<"$GRADER_SRC")" == 1 ]]; then
-  pass "leg 3's allowlist is exactly {ok, reused_local_reload}, pinned on the live assignment"
+if [[ "$(grep -cxF "readonly LEG3_ALLOW_RE='ok'" <<<"$GRADER_SRC")" == 1 ]]; then
+  pass "leg 3's allowlist is exactly {ok}, pinned on the live assignment"
 else
   fail "leg 3's allowlist membership changed - widening it silently weakens signature verification"
 fi
-if grep -qF '"$lver" =~ ^($LEG3_ALLOW_PAT)$' <<<"$GRADER_SRC"; then
-  pass "leg 3's allowlist is single-sourced (grader reads LEG3_ALLOW_PAT), so its prose cannot drift"
+if grep -qF '"$lver" =~ ^($LEG3_ALLOW_RE)$' <<<"$GRADER_SRC"; then
+  pass "leg 3's allowlist is single-sourced (grader reads LEG3_ALLOW_RE), so its prose cannot drift"
 else
-  fail "leg 3's allowlist is no longer single-sourced -- the grader stopped reading LEG3_ALLOW_PAT"
+  fail "leg 3's allowlist is no longer single-sourced -- the grader stopped reading LEG3_ALLOW_RE"
 fi
 # EXTRACTION MUST BE PROVEN TO HAVE FIRED, positively. If the awk range start stops matching --
 # e.g. `[[ "${1:-}" == "--explain" ]]` reformatted to `= "--explain"`, identical bash semantics --
@@ -364,8 +377,8 @@ fi
 # identically, so eyeballing --explain could not tell them apart. Perturb-and-observe is the only
 # check that can: a value the literal cannot contain must appear in the rendered output.
 _probe_pat='ok|reused_local_reload|zzprobe'
-if LEG3_ALLOW_PAT="$_probe_pat" LEG3_ALLOW_HUMAN="{${_probe_pat//|/, }}" \
-     bash -c 'sed "s/^readonly LEG3_ALLOW_PAT=.*/readonly LEG3_ALLOW_PAT='"'"'$0'"'"'/" "$1" > "$2"; bash "$2" --explain' \
+if LEG3_ALLOW_RE="$_probe_pat" LEG3_ALLOW_HUMAN="{${_probe_pat//|/, }}" \
+     bash -c 'sed "s/^readonly LEG3_ALLOW_RE=.*/readonly LEG3_ALLOW_RE='"'"'$0'"'"'/" "$1" > "$2"; bash "$2" --explain' \
      "$_probe_pat" "$SUT" "$WORK/sut-probe.sh" 2>/dev/null | grep -qF 'zzprobe'; then
   pass "--explain INTERPOLATES the leg-3 allowlist (single-sourced, not a matching literal)"
 else
@@ -375,10 +388,62 @@ unset _probe_pat
 
 _claim_helper="AND 'deploy_ghcr_helper=none'"
 _claim_helper_hdr="\`deploy_ghcr_auth=none\` AND \`deploy_ghcr_helper=none\`"
-_claim_postmarker="NEWER THAN"
+# NEGATION-RESISTANT PHRASES, not bare substrings. Measured: prose reading "Leg 2 is NOT scoped
+# to rows NEWER THAN the marker -- it is a bare count since earliest." still contains `NEWER THAN`,
+# and "'swept=na_absent' is NOT treated as clean and does NOT bypass the carriers." still matches
+# `na_absent.*(clean|bypass)`. Both passed. These anchors carry the assertion, so a negation
+# cannot quote them intact.
+_claim_postmarker="NEWER THAN that host's latest marker — not zero rows in"
 # SLICED to leg 1's own paragraph, and negation-aware. `grep -qF` over the whole text is still a
 # presence test: measured, a heredoc reading "…AND 'deploy_ghcr_helper=none' is the OLD contract,
 # now RETIRED: leg 1 grades the auths token alone." contains the anchor verbatim and passed.
+# THE SUMMARY BLOCKS ARE A THIRD READ SURFACE. `--explain` and the header were guarded; the
+# PASS summary (which authorises closing #8036 in a PUBLIC issue comment), the ACTION REQUIRED
+# headline (the only notification for its class -- no Sentry rule matches it) and the FAIL
+# remediation text were not. Measured: reverting all three to their pre-#8636 single-carrier,
+# whole-window wording left the suite green at 39/39.
+# PER BLOCK, not over their union. A union grep passes on whichever copy happens to carry the
+# anchor: measured, `AND 'deploy_ghcr_helper=none'` exists verbatim in the FAIL block, so the row
+# went green while the PASS block -- the one that authorises closing #8036 in a public comment --
+# had been reverted to main's single-carrier wording.
+_pass_blk="$(awk '/^echo "PASS:/,/Close #8036/' "$SUT")"
+_act_blk="$(awk '/^  echo "ACTION REQUIRED:/,/^  printf/' "$SUT")"
+_fail_blk="$(awk '/^  echo "FAIL:/,/^  printf/' "$SUT")"
+# Each block has a DIFFERENT job, so each gets the assertion that fits it. The ACTION REQUIRED
+# headline states that legs 1 and 2 PASSED and then describes leg 3; requiring it to restate leg
+# 1's carriers would be a false red, and papering over that by loosening the shared row is how a
+# guard stops discriminating. Its leg-3 constant is asserted separately below.
+for _blk in pass fail; do
+  case "$_blk" in
+    pass) _body="$_pass_blk"; _label="PASS summary (authorises closing #8036)" ;;
+    fail) _body="$_fail_blk"; _label="FAIL remediation text" ;;
+  esac
+  if [[ -z "$_body" ]]; then
+    fail "$_label: block slice is empty - re-point this row"
+  elif ! grep -qF 'deploy_ghcr_helper=none' <<<"$_body"; then
+    fail "$_label no longer states leg 1's helper carrier"
+  elif ! grep -qF "AFTER that host's latest marker" <<<"$_body"; then
+    fail "$_label describes leg 2 without its post-marker scoping"
+  else
+    pass "$_label states leg 1's helper carrier and leg 2's post-marker scoping"
+  fi
+done
+if [[ -z "$_act_blk" ]]; then
+  fail "ACTION REQUIRED block slice is empty - re-point this row"
+elif grep -qF 'legs 1 and 2' <<<"$_act_blk"; then
+  pass "ACTION REQUIRED headline scopes itself to a leg-3 outcome on hosts that passed legs 1 and 2"
+else
+  fail "ACTION REQUIRED headline no longer states that legs 1 and 2 passed"
+fi
+unset _blk _body _label _pass_blk _act_blk _fail_blk
+# The two verdict blocks must interpolate the leg-3 constant, never restate it.
+if [[ "$(grep -cF 'NOT in ${LEG3_ALLOW_HUMAN}' "$SUT")" == 1 ]] \
+   && [[ "$(grep -cF 'verdict in ${LEG3_ALLOW_HUMAN}' "$SUT")" == 1 ]]; then
+  pass "both verdict summaries interpolate the leg-3 allowlist constant"
+else
+  fail "a verdict summary no longer interpolates \${LEG3_ALLOW_HUMAN} - it can now drift from the grader"
+fi
+
 _leg1="$(awk '/^    leg 1 /,/^    leg 2 /' <<<"$_ex")"
 if ! grep -qF -- "$_claim_helper" <<<"$_leg1"; then
   fail "--explain's leg 1 paragraph no longer states the auth AND helper conjunction"
@@ -390,9 +455,16 @@ fi
 grep -qF -- "$_claim_helper_hdr" <<<"$_hdr" \
   && pass "the file header states leg 1's helper conjunction" \
   || fail "the file header no longer states leg 1 as auth AND helper"
-grep -qF -- "$_claim_postmarker" <<<"$_ex" && grep -qF -- "$_claim_postmarker" <<<"$_hdr" \
-  && pass "both prose copies scope leg 2 to rows NEWER THAN the latest marker" \
-  || fail "a prose copy describes leg 2 as a bare window count"
+_leg2_ex="$(awk '/^    leg 2 /,/^    leg 3 /' <<<"$_ex")"
+if ! grep -qF -- "$_claim_postmarker" <<<"$_leg2_ex"; then
+  fail "--explain's leg 2 paragraph no longer carries the post-marker scoping phrase"
+elif grep -qiE 'NOT scoped|bare count|is NOT limited' <<<"$_leg2_ex"; then
+  fail "--explain's leg 2 paragraph carries the anchor but negates it"
+elif ! grep -qF -- 'NEWER THAN its latest marker -- not' <<<"$_hdr"; then
+  fail "the file header describes leg 2 as a bare window count"
+else
+  pass "both prose copies scope leg 2 to rows newer than the latest marker, un-negated"
+fi
 
 # The reverse direction -- prose claiming a check the GRADER dropped. Anchored on the conjunction,
 # never on the bare name `dhelper`, which also appears in the read loop and the REPORT string.
@@ -412,25 +484,33 @@ else
 fi
 # `na_absent` must be described as a BYPASS, not folded into the conjunction: the grader passes it
 # without consulting either carrier token.
-grep -qF 'na_absent' <<<"$GRADER_SRC" \
-  && { grep -qiE 'na_absent.*(clean|bypass)' <<<"$_ex" \
-       && pass "--explain describes swept=na_absent as passing leg 1" \
-       || fail "--explain omits that swept=na_absent passes leg 1 without consulting the carriers"; } \
-  || fail "guard anchor 'na_absent' is no longer in the grader - re-point this row"
+if ! grep -qF 'na_absent' <<<"$GRADER_SRC"; then
+  fail "guard anchor 'na_absent' is no longer in the grader - re-point this row"
+elif ! grep -qF "'swept=na_absent' (no deploy docker config exists yet) is CLEAN" <<<"$_ex"; then
+  fail "--explain omits that swept=na_absent passes leg 1 without consulting the carriers"
+else
+  pass "--explain states swept=na_absent is clean, in a phrase a negation cannot quote intact"
+fi
 
 # The retired single-literal framing must be gone from EVERY operator-facing surface, including
 # the PASS and ACTION REQUIRED summaries that land in a public issue comment.
-if grep -qE "is not 'result=verify_failed'|verdict is result=verify_failed" "$SUT"; then
-  fail "a summary or comment still frames leg 3 as the single literal verify_failed"
+# POSITIVE anchor, not a phrase-shaped negative. Measured: rewording the headline to
+# "verdict reads verify_failed" evaded both alternatives of the old ERE while naming the one
+# literal the grader stopped grading. `verify_failed` may appear ONLY inside --explain's
+# enumeration of the classes leg 3 rejects; anywhere else it is the retired framing.
+_vf_outside="$(grep -nE '^[[:space:]]*(echo|printf)' "$SUT" | grep -c 'verify_failed' || true)"
+if [[ "${_vf_outside:-0}" -gt 0 ]]; then
+  fail "verify_failed is named on $_vf_outside operator-facing echo/printf line(s) - the retired single-literal framing"
 else
-  pass "no surface frames leg 3 as a single-literal test"
+  pass "no operator-facing emission names verify_failed as leg 3's criterion"
 fi
+unset _vf_outside
 unset _ex _hdr GRADER_SRC _claim_helper _claim_helper_hdr _claim_postmarker
 
 
 
 printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
-MIN_CHECKS=40
+MIN_CHECKS=46
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1

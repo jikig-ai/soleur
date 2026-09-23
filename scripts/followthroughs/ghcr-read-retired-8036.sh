@@ -22,7 +22,7 @@
 #          zero rows since earliest. `earliest` is set past the apply on purpose, so the window is
 #          EXPECTED to hold pre-1c rows; counting those latched the tracker shut permanently.
 #   leg 3  the host's LATEST `IMAGE_VERIFY*` verdict is in the closed allowlist
-#          (see LEG3_ALLOW_PAT). A host with markers but NO verdict is ACTION REQUIRED too.
+#          (see LEG3_ALLOW_RE). A host with markers but NO verdict is ACTION REQUIRED too.
 #
 #   THIS LIST AND THE `--explain` BLOCK BELOW ARE TWO COPIES OF ONE CONTRACT. #8636 corrected
 #   `--explain` and left this one standing, so the file contradicted itself 100 lines apart; the
@@ -84,7 +84,7 @@
 #                          emitted relogin rows but no marker at all: it cannot be graded, and
 #                          silently dropping it would let an ungraded host read as absent.
 #   5 = ACTION REQUIRED    every host passes legs 1 and 2, but some host's latest IMAGE_VERIFY
-#                          verdict is not in the LEG3_ALLOW_PAT allowlist — or emitted no
+#                          verdict is not in the LEG3_ALLOW_RE allowlist — or emitted no
 #                          verdict at all. Signature verification is broken (or unobserved) on a
 #                          host whose GHCR read path IS retired. A human decision, and the one
 #                          outcome a `swept=yes` host can still have that nothing else pages on:
@@ -141,8 +141,25 @@ MARKER_LITERAL='SOLEUR_DEPLOY_GHCR_CONFIG'
 # so they cannot drift apart -- #8636 found them already disagreeing, and an assertion that the
 # two match is weaker than making them one value. `_PAT` is the case-arm form; `_HUMAN` is the
 # rendered set for prose.
-readonly LEG3_ALLOW_PAT='ok|reused_local_reload'
-readonly LEG3_ALLOW_HUMAN="{${LEG3_ALLOW_PAT//|/, }}"
+# LEG 3 ALLOWLIST = `ok` ALONE. `reused_local_reload` was admitted here and it is WRONG: it is not
+# emitted by `verify_image_signature` at all. `_try_local_cache_reload` emits it on the arm where
+# the registry did NOT serve and cosign was therefore SKIPPED -- "zot did not serve; reusing the
+# already-verified running image". The bits were verified at their ORIGINAL deploy, but the event
+# asserts nothing about verification NOW, so admitting it let a non-verification breadcrumb satisfy
+# a verification leg. Measured (#8636 review): a host emitting `cosign_absent` and then
+# `reused_local_reload` graded PASS with "Close #8036." -- the 89/89 class this probe exists to
+# catch, LAUNDERED by a later reload. It also contradicted this leg's own stated contract, that a
+# host with markers but no verdict is ACTION REQUIRED: a host that ran no cosign at all passed.
+# A `reused_local_reload` latest verdict is now ACTION REQUIRED (exit 5, a human decision), never
+# FAIL -- it does not latch the tracker, and the next real deploy emits `ok`.
+#
+# NAMED `_RE`, NOT `_PAT`. `lint-shell-trace-credential-refusal.py` matches
+# `[A-Z][A-Z0-9_]*_(TOKEN|KEY|SECRET|PASSWORD|PAT)` and read a `_PAT` suffix as Personal Access
+# Token, demanding this constant be covered by the xtrace credential refusal -- which would have
+# diluted what that refusal asserts to cover a public regex. Measured: it redded a REQUIRED
+# context (1 violation in 1237 files, zero on main).
+readonly LEG3_ALLOW_RE='ok'
+readonly LEG3_ALLOW_HUMAN="{${LEG3_ALLOW_RE//|/, }}"
 RELOGIN_LITERAL='stage=relogin_failed'
 VERIFY_LITERAL='IMAGE_VERIFY'
 
@@ -427,7 +444,7 @@ while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrel
   # `[[ =~ ]]`, NOT `case $var)`. In a case pattern an expanded variable is ONE glob, so `|`
   # inside it is a literal character, not an alternator -- measured: every `ok` verdict fell
   # through to ACTION REQUIRED. In an ERE `|` alternates, so the single source survives.
-  if [[ "$lver" =~ ^($LEG3_ALLOW_PAT)$ ]]; then leg3=pass; else leg3=fail; fi
+  if [[ "$lver" =~ ^($LEG3_ALLOW_RE)$ ]]; then leg3=pass; else leg3=fail; fi
   if [[ "$leg1" == "pass" && "$leg2" == "pass" && "$leg3" == "pass" ]]; then
     grade="ok"; n_pass=$((n_pass + 1))
   elif [[ "$leg1" != "pass" || "$leg2" != "pass" ]]; then

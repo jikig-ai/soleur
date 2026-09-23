@@ -632,7 +632,7 @@ close grade is therefore a **conjunction**, per host, over the window since the 
    > and its value is the drift signal. `home_ghcr_auth` is **not graded** — see the scope correction
    > above.
 2. zero `stage=relogin_failed` rows — the operator's stated criterion; **and**
-3. a latest `IMAGE_VERIFY*` verdict that is not `result=verify_failed`.
+3. a latest `IMAGE_VERIFY*` verdict in the leg-3 allowlist (see LEG3_ALLOW_RE).
 
 Leg 3 exists because devex review measured that **no Sentry rule matches `result=verify_failed`** —
 `grep -n 'cosign\|verify_failed' apps/web-platform/infra/sentry/issue-alerts.tf` returns **zero hits**.
@@ -792,7 +792,7 @@ error_reporting:
 
 failure_modes:
   - mode:        "The sweep deletes or corrupts the zot auths entry that shares the deploy docker config"
-    detection:   "IMAGE_VERIFY_FAIL: result=<class> in journald, graded per host as leg 3 of scripts/followthroughs/ghcr-read-retired-8036.sh (latest-verdict-per-_MACHINE_ID, closed allowlist ok|reused_local_reload)"
+    detection:   "IMAGE_VERIFY_FAIL: result=<class> in journald, graded per host as leg 3 of scripts/followthroughs/ghcr-read-retired-8036.sh (latest-verdict-per-_MACHINE_ID, closed allowlist `ok` (see LEG3_ALLOW_RE))"
     alert_route: "the follow-through sweeper comments on #8036 (exit 5 = ACTION REQUIRED). NOT #8037: that tracker is CLOSED, so its sweeper only evaluates inside a closed-set lookback and cannot carry this leg. There is no Sentry rule for cosign verdicts (grep issue-alerts.tf: zero hits), which is why the leg is carried by the probe."
   - mode:        "zot is unreachable or unconfigured, and there is no longer a second registry"
     detection:   "registry=zot-gate-degraded Sentry event (zot_gate_degraded_event) and, on a total miss, op:image-pull pull_result:* via pull_failure_event"
