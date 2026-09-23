@@ -55,7 +55,10 @@ EnvironmentFile=-/etc/default/git-data-doppler
 # its default passphrase derives from the token that sits on the same disk. TMPDIR on tmpfs for
 # the same reason the reopen unit has it: git-data-emit's _devalue mktemp must not land on disk.
 Environment=TMPDIR=/dev/shm
-ExecStart=/bin/sh -c 'exec /usr/local/bin/doppler run --project soleur --config prd_git_data --no-fallback -- /usr/local/bin/git-data-gc.sh'
+# (#8211, ADR-239) `env -u` strips the test-only seams AFTER doppler has injected the config,
+# so a key in prd_git_data can never point gc's store assertion at another device, marker or
+# root. GIT_DATA_ROOT is gc's own mount seam (its name for GIT_DATA_MOUNT_ROOT).
+ExecStart=/bin/sh -c 'exec /usr/local/bin/doppler run --project soleur --config prd_git_data --no-fallback -- /usr/bin/env -u GIT_DATA_STORE_DEVICE -u GIT_DATA_STORE_VERIFIED -u GIT_DATA_MOUNT_ROOT -u GIT_DATA_REPO_ROOT -u GIT_DATA_ROOT /usr/local/bin/git-data-gc.sh'
 
 # MemoryMax is an OOM boundary for THIS cgroup, so a runaway repack is killed here rather
 # than letting the kernel choose — the other candidates on this host are sshd and the git

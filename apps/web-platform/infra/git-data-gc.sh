@@ -71,6 +71,20 @@ if ! mountpoint -q "$GIT_DATA_ROOT" 2>/dev/null; then
     "mount=absent" || true
   exit 1
 fi
+# (#8211, ADR-239, same as git-data-remove.sh) The mounted store must be the VERIFIED mapper:
+# SOURCE equals the mapper, the bootstrap's marker holds this filesystem's UUID, findmnt(8)
+# absent fails closed. Exit 1, so git-data-gc-failure.service's OnFailure pages as well.
+STORE_DEVICE="${GIT_DATA_STORE_DEVICE:-/dev/mapper/git-data}"
+STORE_VERIFIED="${GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified}"
+store_fatal() {
+  log "FATAL: $1"
+  [[ -x "$EMIT" ]] && "$EMIT" "SOLEUR_GIT_DATA_GC store not verified" gc fatal "" "$2" || true
+  exit 1
+}
+command -v findmnt >/dev/null 2>&1 || store_fatal "cannot verify the store device: findmnt unavailable" "store=findmnt_unavailable"
+[ "$(findmnt -n -o SOURCE --mountpoint "$GIT_DATA_ROOT" 2>/dev/null)" = "$STORE_DEVICE" ] || store_fatal "store at $GIT_DATA_ROOT is not served by $STORE_DEVICE" "store=not_mapper"
+store_uuid="$(findmnt -n -o UUID --mountpoint "$GIT_DATA_ROOT" 2>/dev/null)" || store_uuid=""
+[ -n "$store_uuid" ] && [ -s "$STORE_VERIFIED" ] && [ "$(head -n 1 "$STORE_VERIFIED")" = "$store_uuid" ] || store_fatal "store not verified: $STORE_VERIFIED absent or not bound to this volume" "store=unverified"
 if [[ ! -d "$REPO_ROOT" ]]; then
   log "FATAL: repo root $REPO_ROOT absent on a mounted volume"
   [[ -x "$EMIT" ]] && "$EMIT" "SOLEUR_GIT_DATA_GC repo root absent" gc fatal "" \
