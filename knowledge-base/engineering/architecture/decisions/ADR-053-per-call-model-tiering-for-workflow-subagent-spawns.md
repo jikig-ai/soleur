@@ -200,6 +200,19 @@ EOF
 Run it, then ask whether the new model's **cache-read** rate — not its headline input/output rate
 — changes any tier decision. On 2026-09-03 that share was 100.00% at 3.35M tokens/spawn.
 
+## Addendum — 2026-09-23 (Opus 5.5 launch, PR #8601)
+
+Claude Opus 5.5 (`claude-opus-5-5`, a dateless pinned snapshot) was released 2026-09-22 at
+$4/$20 per MTok, with cache reads at 5% of input ($0.20). Surface 5b's `AUDIT_MODEL` moved
+`claude-opus-5` → `claude-opus-5-5` (`server/inngest/model-tiers.ts`), together with the
+`@anthropic-ai/claude-code` pin 2.1.219 → 2.1.280, the first CLI whose bundled model table
+carries the id (the #6934 half-`max_tokens` class). The 2026-09-03 tables above are left as
+recorded; at Opus 5.5 prices the Opus row reads 4 / 20 (2.5× cheaper than Fable 5.1 on input)
+and its cache-read rate equals Sonnet 5's. The tiering decision itself is unchanged: the swap
+is same-tier and cheaper per token. Opus 5.5's API default effort is `medium` (Opus 5: `high`);
+the CLI sets effort itself, so this is a flag for the model-launch-review Thinking-API item,
+not a config change.
+
 ## Alternatives considered
 
 | Alternative | Rejected because |

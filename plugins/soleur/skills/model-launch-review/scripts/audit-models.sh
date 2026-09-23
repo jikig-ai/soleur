@@ -44,9 +44,10 @@ ROOT="${ROOT%/}"   # normalize: trailing slash breaks rel() prefix-strip
 # skill table + https://platform.claude.com/docs/en/about-claude/models/overview.md
 # (pricing: https://platform.claude.com/docs/en/about-claude/pricing.md).
 AUTOFIX_PAIRS=(
-  "claude-opus-4-8=claude-opus-5"
-  "claude-opus-4-7=claude-opus-5"
-  "claude-opus-4-6=claude-opus-5"
+  "claude-opus-5=claude-opus-5-5"
+  "claude-opus-4-8=claude-opus-5-5"
+  "claude-opus-4-7=claude-opus-5-5"
+  "claude-opus-4-6=claude-opus-5-5"
   "claude-sonnet-4-6=claude-sonnet-5"
   "claude-sonnet-4-5=claude-sonnet-5"
   "claude-fable-5=claude-fable-5-1"
@@ -434,6 +435,7 @@ echo "    MODEL_PRICING rows against the claude-api source-of-truth; never auto-
 echo "  - tier-map: re-check cron model literals + ADR-053 / plugins/soleur/AGENTS.md policy vs new pricing."
 echo "    (workflow-model-pins.test.ts PIN_ALLOWLIST is a don't-mutate invariant, not a pricing surface.)"
 echo "  - dormant: gh issue list --state open -L 200 --search 'deferred model OR pricing'"
+echo "  - grok tier-map (item 6, agent-run): compare 'grok models' + docs.x.ai against TIER_MAPS.grok."
 echo "  - thinking-API shape: the REQUEST side sets no thinking params and needs no action."
 echo "    The RESPONSE side is NOT inert: a thinking-by-default model puts a thinking block"
 echo "    FIRST, so any reader indexing a fixed content position silently returns empty"
