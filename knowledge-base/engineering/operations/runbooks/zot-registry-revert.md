@@ -44,6 +44,12 @@ self-hosted zot registry **only when `ZOT_REGISTRY_URL` is present in Doppler `p
 fast `/v2/` probe answers AND the pull login succeeds**. Any miss falls back to the
 private-GHCR path — which, per the banner above, is now a path that fails.
 
+> **Superseded 2026-09-23 (#8036 item 1c, PR #8600):** `ci-deploy.sh` has no GHCR leg any more.
+> A gate miss on a rolling deploy now fails terminally at `image_pull_failed` (unless the
+> same-version local-cache rescue applies). The GHCR fallback above survives only on the fresh-boot
+> paths, where it presents a revoked credential; a fresh web boot currently fails (#8651, fix in
+> PR #8660).
+
 **Historical note (what this paragraph used to say).** It described revert as a safe
 Doppler flag flip because "GHCR remains dual-pushed + break-glass through the entire soak
 (the interim classic PAT stays live until Phase 5.5)". Both halves have since changed:
@@ -57,7 +63,8 @@ ADR-096 at HEAD still says the cutover has not happened, that the soak "remains 
 but not sufficient to authorize 5.3–5.5", and that the ADR stays *Adopting*; #6122 and
 #6500 are both still OPEN, and the `zot-soak-6122` follow-through explicitly refuses to
 exit 0 while #6500 is open. The credential was lost, not retired — which is worse, because
-nothing that gates the retirement was satisfied.
+nothing that gates the retirement was satisfied. (**Superseded 2026-09-24:** ADR-096's `## Status`
+block now records the 2026-07-17 cutover and the 5.3a/5.3b split; #6122 and #6500 are still open.)
 
 ## Cutover record (#6122)
 
@@ -251,7 +258,8 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
   > *refused*; an unconfigured NIC gives *timeout* + ping loss** — that distinguisher is what
   > made #6400 look like "zot mysteriously down".
 
-- Any Phase-5 retirement step (5.3 fallback-branch removal) is discovered premature.
+- Any remaining Phase-5 retirement step (5.3b fresh-boot fallback removal) is discovered premature.
+  5.3a (the `ci-deploy.sh` GHCR read path) is already done and cannot be reverted by this runbook.
 
 Note: a *single* transient fresh-boot `*_ghcr_fallback` is self-healing — that host fell back to
 GHCR and booted correctly, so a one-blip page is **not** by itself a reason to revert. But since
@@ -355,8 +363,9 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
     and `image_pull_failed` (everything else). Listed rather than deleted so a reader finding
     zero rows does not read it as a new silence.
   - `registry:"zot-gate-degraded"` — zot is CONFIGURED but the gate could not activate it
-    (probe unreachable / pull creds absent / login failed), so the deploy used GHCR WITHOUT
-    ever running a zot pull (ci-deploy.sh `zot_gate_degraded_event`). This catches the
+    (probe unreachable / pull creds absent / login failed). Since #8036 1c there is no GHCR leg,
+    so the deploy then fails terminally at `image_pull_failed` unless the same-version local-cache
+    rescue applies (ci-deploy.sh `zot_gate_degraded_event`). This catches the
     host-up-heartbeat-green-but-pull-cred-broken case the others miss.
   - `stage:"inngest_ghcr_fallback"` — a fresh-boot inngest pull attempted zot and fell back
     (cloud-init `soleur-boot-emit`). **Bare**, no prefix.
@@ -373,7 +382,7 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   | Message | Means | Do |
   |---|---|---|
   | `FAIL: N fallback event(s)` | a host really was GHCR-served | this runbook — triage by signal, above |
-  | `FAIL(no-freshboot-evidence)` | **zero fallbacks AND zero zot-served fresh boots** — the fleet is UNOBSERVED, not clean. `cloud-init.yml` is `ignore_changes`-pinned, so the beacon only ships on a rebuild | do NOT revert zot. Recreate a web host inside the window, or wait — the fleet recreates ~1.3×/day |
+  | `FAIL(no-freshboot-evidence)` | **zero fallbacks AND zero zot-served fresh boots** — the fleet is UNOBSERVED, not clean. `cloud-init.yml` is `ignore_changes`-pinned, so the beacon only ships on a rebuild | do NOT revert zot. Do NOT recreate a web host to generate evidence while #8651 is open: a fresh web boot currently fails. Wait for #8651 / PR #8660 (no web fresh boot has happened since 2026-07-27; see the Cutover record) |
   | `FAIL(no-inngest-freshboot-evidence)` | zero fallbacks, but the dedicated `soleur-inngest` host reported no zot-served fresh boot on Sentry in the window. Its reporting only exists on a host BUILT from the #6500 template | do NOT revert zot. If no replace has run in the window: dispatch `apply-web-platform-infra.yml` with `apply_target=inngest-host-replace` in an ADR-100 window (check `INNGEST_CUTOVER_FLIP` first). If one did: read `scripts/betterstack-query.sh --grep 'stage=inngest_zot' --grep sentry-emit-FAILED --grep SOLEUR_INNGEST_BOOT_TRACE_LOST` for the window before replacing again — `inngest_zot` plus `sentry-emit-FAILED` is a delivery fault (DSN or egress), not a missing boot |
   | `FAIL(blocked)` / `FAIL(blocker-closed-but-condition-unmet)` | the soak's criteria hold, but #6500 (the dedicated inngest host's zot-primary pull + Sentry reporting — the pre-#7462 "GHCR-only, invisible to these queries" description is superseded) is still open — or was closed while the code lacks the zot path or the Sentry call sites | do NOT revert zot, and do NOT close #6500 to clear it. Close it as completed only after an operator verifies the replaced host (`RESULT: PASS`) |
 
@@ -392,8 +401,9 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   on every one of them. It also matches
   `zot-soak-6122.sh`, which FAILs the Phase-5 gate on >=1 fallback. A healthy post-cutover fleet
   emits ZERO.
-- **On page:** confirm zot health, then run the Immediate revert above if the degradation is
-  not resolving. Do not wait for the soak sweep.
+- **On page:** confirm zot health and repair zot (`apply_target=registry-host-replace`, as above). Do NOT run the
+  Immediate revert above: per the banner at the top, it removes the only working pull path and
+  turns "zot degraded" into "no pull path at all". Do not wait for the soak sweep.
 
 All signals are Sentry/Better Stack events (no SSH, no dashboard eyeballing required —
 `hr-no-ssh-fallback-in-runbooks`, `hr-no-dashboard-eyeball-pull-data-yourself`). The zot host

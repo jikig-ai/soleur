@@ -47,7 +47,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No `spec
    - the host GHCR egress still carries the anonymous cosign and zot-image pulls
    - #8660 sequencing
 4. **Records corrected before posting:**
-   - 1.8 is marked `[~]`, not `[x]`: two of its checks never ran (DC1)
+   - 1.8 is marked `[~]`, not `[x]`: two of its checks never ran (DC1). **Superseded 2026-09-24:** ticked `[x]` on live measurement; see DC1.
    - #6427's scope names the real soak keys (`appboot`, `appserved`, `freshboot`, `gate`) and the emit sites that survive 5.3b
    - #6073 loses `action-required` too, so the SLA cron cannot re-add p0
 5. **#7077 and #6073 are closed directly** (DC3). The PR carries no closing keyword, and AC4 asserts the empty set, URL forms included.
@@ -72,9 +72,13 @@ the code or with what production has done:
 | 1 | #7077 inngest mirror fail-closed invariant | **Already satisfied.** All three acceptance items hold on `main`. Item 2 holds by its property, not by the mechanism the issue proposed. | Evidence comment, then `gh issue close 7077 --reason completed` in the work phase |
 | 2 | #8036 item 1d (retire boot-time `docker login ghcr.io`) | **Sequenced after #8660. Not implemented here.** Every 1d site is in a file #8660 edits or a test #8660 edits, and one is inside the host-script content hash. | Sequencing comment on #8036. Supersession-condition comment on #6410 (it stays open) |
 | 3a | ADR-096 top `## Status` block | Stale. It still says the flip is inert until provisioning (1.8) and backfill (1.9) | Rewrite the block (lines 9-17 only) |
-| 3b | `feat-registry-oidc-migration/tasks.md` | 1.9 and 2.4 are done but unticked. 1.8 is half done: the host serves, but its two named checks have no recorded run. 5.3 is not split | Tick 1.9 and 2.4 with evidence. Mark 1.8 `[~]` (partial) with a note naming the two unrun checks. Split 5.3 into 5.3a (done) and 5.3b |
+| 3b | `feat-registry-oidc-migration/tasks.md` | 1.9 and 2.4 are done but unticked. 1.8 is half done (superseded 2026-09-24: done, see DC1): the host serves, but its two named checks have no recorded run. 5.3 is not split | Tick 1.9 and 2.4 with evidence. Mark 1.8 `[~]` (partial) with a note naming the two unrun checks. Split 5.3 into 5.3a (done) and 5.3b |
 | 3c | #6073, #6122, #6630, #6427 | Stale labels, stale close criteria, stale scope | `gh` edits and comments, listed below |
 | 4 | ADR-169 against 5.3b deadlock | Needs an operator decision | Options A and B written up below and posted to #6122. **No option is chosen** |
+
+> **Superseded 2026-09-24 (review P1):** the bottom line below is wrong. The soak cannot pass until #8651 closes (its
+> `WEB_BLOCKER` arm; it also needs `app_zot` evidence), and its FAIL verdict needs a re-armed window. The corrected
+> chain is in the revised #6122 comment. The paragraph is kept as the record of what the brief asked for.
 
 **The bottom line, stated plainly: the gap between today and "migration complete" is not engineering.
 It is one authorization act on #6122. That act has been reserved to the operator twice and has not
@@ -441,80 +445,15 @@ with the repo's `.markdownlint.json` over the two edited files, and `bash script
 
 ## 4. ADR-169 against 5.3b deadlock (write-up for the operator; no option is chosen)
 
-The text below is posted to #6122 as-is by task 2.6.
-
-```markdown
-## Decision needed: 5.3b's "stop GHCR push" deletes ADR-169's restore source
-
-**The deadlock.** ADR-169 authorizes `registry-luks-recut` (destroying and re-creating production's only image store) **only when CI has just proven that every pinned image can be re-materialised into an empty registry from GHCR** (predicate A1: "every pin resolves at GHCR"; A2: rehearsed restore into a throwaway registry; engine `scripts/registry-restore-from-ghcr.sh`). GHCR qualifies because of ADR-169's *independence criterion*: "a gate on an irreversible destroy may not depend on the component whose failure motivates it". CI's GHCR read path is not prod zot.
-
-ADR-096 task 5.3b includes **stop GHCR push**. Once it lands, every release after it is missing from GHCR. A1 then fails on the first new pin, and the recut can never be authorized again. The recut is the only lever for a store-level fault like the 2026-08-03 crash loop (#7247). ADR-096's 5.3a amendment already says that stopping the push "breaks ADR-169's restore". So 5.3b is blocked twice: by the soak (recorded FAIL; #6500 open) and by this. Passing the soak removes only the first block.
-
-Two ways out. Neither is chosen here.
-
-### Option A — build #6126: a second registry as the restore source
-
-A second zot instance that CI pushes to directly. After that, ADR-169's A1/A2 read from it instead of GHCR, and 5.3b can stop the GHCR push.
-
-- **What it takes:**
-  - a second registry host, volume, firewall and private-network membership (Terraform, `zot-registry.tf` pattern)
-  - its own isolated Doppler credentials, a heartbeat, and LUKS at rest (ADR-140 encryption-posture gate)
-  - a CI route for the push (a second tunnel hostname or a bridge target)
-  - a third mirror target in `reusable-release.yml` and both inngest workflows
-  - `registry-restore-from-ghcr.sh` re-sourced, with its suite
-  - an ADR-169 amendment. Its own Alternatives table rejected "Require a second mirror to exist" only because the mirror *did not exist*, so building it removes that reason for rejection.
-- **Recurring cost:** about **€19.49/month net** if the replica uses the same type as the primary, `cpx22` (ADR-096 amendment 2026-08-06), plus the volume. A replica has no reason to match the primary's type. At the same type, registry-host cost roughly doubles.
-- **What it buys beyond unblocking 5.3b:** it closes ADR-096 clause (g) ("production has one registry and no fallback"), and it is the only route to the zero-downtime blue/green restore that ADR-169's Consequences name as out of scope. #6126's re-evaluation criteria were declared MET on 2026-08-04, after the 22-hour crash loop.
-- **Risks:**
-  - **Independence must be built in.** The replica has to be fed by CI, not by zot `sync` or pull-through from prod. A replica fed from prod inherits prod's store fault and fails the independence criterion.
-  - **Mirror-miss semantics must be decided:**
-    - If the mirror target is release-blocking, a replica outage blocks releases, and that failure surface doubles.
-    - If it is non-blocking, the restore source can be silently stale. A1 against the replica must then refuse on any missing pin (it already refuses on GHCR).
-  - Same provider and region means the two copies can fail together. #6126 records that multi-writer zot over shared R2 is unsafe (no cross-instance GC or lock). A CI-fed replica is a second writer, so it needs its own store, not the primary's.
-  - It is the largest option: several PRs (Terraform, cloud-init, CI, restore engine, tests, ADR).
-
-### Option B — amend the ADRs instead of building a registry
-
-Change what ADR-169's gate reads, or what 5.3b removes. Three variants, from most to least change:
-
-- **B1 — re-source to an OCI export in R2.** At release time CI writes each required pin, and its `sha256-<hex>` signature tag, as an OCI layout into an R2 bucket. A1/A2 then read R2.
-  - **Independence:** holds. R2 is not prod zot.
-  - **Cost:** R2 storage for the `FLOOR = 4` required pins over a retention window. That is a few GB, cents per month.
-  - **Work:** one bucket and credential in Terraform, one CI step, and the restore engine re-sourced.
-  - **Risks:**
-    - #6126 already warns that an R2 S3 credential "likely isn't TF-generable (provider v4)". That is the no-default-var merge trap (`hr-tf-variable-no-operator-mint-default`).
-    - A silently missed export is a missing restore source, so the export step must be release-blocking or parity-checked.
-    - The bucket is a new persistent store and needs a declared encryption posture.
-- **B2 — re-source to a volume snapshot or zot's own backup.** Cheapest on infrastructure: task 1.5 already deferred a snapshot cron.
-  - **Independence:** a snapshot is a copy of the prod store. A store fault that predates the snapshot survives into it. That is the exact dependency the independence criterion forbids.
-  - **What adopting it means:** ADR-169's criterion would have to be weakened or scoped, and not just its source changed. Stated so the trade is visible.
-- **B3 — keep GHCR as a CI-only restore source; narrow 5.3b.**
-  - **What changes:** drop "stop GHCR push" from 5.3b and amend ADR-096, not ADR-169. CI keeps pushing to GHCR and reading it back with its own `GITHUB_TOKEN`, not a PAT. Hosts never read GHCR, and 5.4 and 5.5 (minter retirement, PAT rotate and revoke) do not depend on the push.
-  - **Cost:** no new infrastructure. GHCR stays as a publish surface, and private-package storage continues.
-  - **Risks:**
-    - "Off GHCR" stays incomplete for good. GHCR remains a supply-chain surface that the migration set out to retire.
-    - ADR-169's source still depends on GitHub, a vendor outside our control.
-    - A1 then relies on two things: GHCR never pruning a pinned version, and GitHub continuing to let the Actions token read private repo-linked packages. That is the platform behaviour that already surprised us once: the App-token denial in #6073.
-
-### Three facts for whichever option is chosen
-
-- **"Stop GHCR push" is not a toggle.** It applies to A, B1 and B2; B3 keeps the push. Today the web image is built by buildx with `push: true` to `ghcr.io`, and zot is then filled by `crane copy` from GHCR to zot on the runner. `reusable-release.yml` says why: "the buildx container driver cannot reach the" runner bridge. Stopping the GHCR push therefore means re-plumbing the release build and the zot signature step first, for example by building locally and pushing to zot directly.
-
-- **5.3b's "remove GHCR egress allow" needs re-scoping before any option ships.** Anonymous public pulls still go to `ghcr.io`: the cosign verifier (`ci-deploy.sh` `COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign@sha256:…`) and zot's own image (`zot-registry.tf` `zot_image_*` = `ghcr.io/project-zot/…`). Cutting host egress to ghcr.io breaks signature verification and the registry host's boot, whichever option wins.
-- **5.3b is also sequenced after PR #8660 (#8651).** The fresh-boot GHCR branches it deletes are still the only non-zot arm, until a zot-served fresh web boot is observed.
-
-**Bottom line.** The gap between today and "migration complete" is not engineering. It is one authorization act on this issue. The operator has reserved that act twice: closing #6500 (2026-07-15) and the soak's enrolment or `RESULT: PASS` (2026-09-23). It has not been taken. Choosing an option in this comment is part of the same act. What each option costs before 5.3b:
-
-- **A:** several PRs, plus about €19.49/month if the replica uses the same type.
-- **B1:** one slice: a bucket, a CI step, and the restore engine re-sourced.
-- **B2:** no new infrastructure, but ADR-169's independence criterion has to be weakened.
-- **B3:** no new build. GHCR push stays.
-```
+**Superseded 2026-09-24:** the write-up was revised after review and the posted comment is now the only copy:
+https://github.com/jikig-ai/soleur/issues/6122#issuecomment-5803873046. The revision added an Option 0 (do nothing),
+evened the per-option costs (the release-build re-plumb applies to A, B1 and B2; B2 needs a snapshot job and a
+restore redesign), corrected the bottom line (below), and put two explicit questions to the operator.
 
 ## Files to Edit
 
 - `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md`: the `## Status` block only (lines 9-17). This does not overlap #8660's append at 1273+.
-- `knowledge-base/project/specs/feat-registry-oidc-migration/tasks.md`: 1.9 and 2.4 ticked with evidence. 1.8 marked `[~]` with a partial note. 5.3 split into 5.3a (done) and 5.3b (open).
+- `knowledge-base/project/specs/feat-registry-oidc-migration/tasks.md`: 1.8, 1.9 and 2.4 ticked with evidence (1.8 was planned as `[~]`; superseded, see DC1). 5.3 split into 5.3a (done) and 5.3b (open).
 
 ## Files to Create
 
@@ -584,7 +523,7 @@ value, token prefix or host address is added. The one private IP already appears
   - The 2.4 and 2.5 `jq -e` asserts exit 0.
   - #6630's body contains `**Amended 2026-09-23` and `ZOT_GATE: active`, and no longer contains `PRELUDE: docker login ghcr.io ok`.
   - #6427's body contains `## Scope (narrowed 2026-09-23)`.
-  - #6122's section-4 comment contains `### Option A`, `### Option B` and `**Bottom line.**`. `grep -ciE 'we recommend|we should|recommended option|prefer(red)? option'` over it prints `0`.
+  - #6122's section-4 comment (revised 2026-09-24) contains `**Option 0`, `**Option A`, `**Option B1`, `**Option B2`, `**Option B3` and `### Questions for the operator`. `grep -ciE 'we recommend|we should|recommended option|prefer(red)? option'` over it prints `0`.
 - [x] **AC6 (reserved acts untouched).** `git diff origin/main...HEAD -- scripts/` is empty, and `gh issue view 6500 --json state --jq .state` is `OPEN`. No task re-arms `zot-soak-6122.sh`, closes #6500, or performs 5.3b, 5.4, 5.5, 5.6 or #6129.
 - [x] **AC7.** `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0. This is the gate's own invocation, not a hand-picked file list.
 
