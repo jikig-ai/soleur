@@ -939,38 +939,38 @@ with extra whitespace. Both must still classify correctly.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `hcloud_server.inngest` is unchanged except for its `user_data`. `network.tf` gains
+- [x] AC1 `hcloud_server.inngest` is unchanged except for its `user_data`. `network.tf` gains
       only a comment edit, and no `hcloud_server_network`/`network {}` change exists in the diff
       (`git diff origin/main -- apps/web-platform/infra/network.tf | grep '^[+-][^+-]' | grep -v '^[+-][[:space:]]*#' | wc -l`
       → `0`; the `wc -l` form, because a bare `grep -v` exits 1 on the pass case). The only
       added line in `inngest-host.tf` is the var-map key
       (`git diff origin/main -- apps/web-platform/infra/inngest-host.tf | grep -c '^+[^+]'` → `1`).
-- [ ] AC2 The rendered user_data (terraform `templatefile` + strip, through the new suite) contains
+- [x] AC2 The rendered user_data (terraform `templatefile` + strip, through the new suite) contains
       `/etc/systemd/network/99-soleur-private-fallback.network` with exactly the Phase 2 content.
       It also contains one `networkctl reload` item and one NIC-wait call carrying `10.0.1.40`
       (rendered from `${inngest_private_ip}`) immediately before the zot login.
-- [ ] AC3 `bash apps/web-platform/infra/inngest-nic-wait.test.sh` passes, runs the declared scenario
+- [x] AC3 `bash apps/web-platform/infra/inngest-nic-wait.test.sh` passes, runs the declared scenario
       count, and every Guard 2 mutation row reds against a mutated copy.
-- [ ] AC4 `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` and
+- [x] AC4 `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` and
       `bash apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh` pass, with every
       Guard 1 row red on its mutation and both must-PASS inputs green.
-- [ ] AC5 `bash apps/web-platform/infra/inngest-userdata-budget.sh` reports stored < 32,768 B
+- [x] AC5 `bash apps/web-platform/infra/inngest-userdata-budget.sh` reports stored < 32,768 B
       (expected ≈ 15.5-16.5 KB; baseline 14,964 B), and the size test passes.
-- [ ] AC6 The new suite is registered in `infra-validation.yml`, and
+- [x] AC6 The new suite is registered in `infra-validation.yml`, and
       `bash scripts/lint-orphan-test-suites.sh` is green.
-- [ ] AC7 Every explicit inngest render map passes the new key: every file in
+- [x] AC7 Every explicit inngest render map passes the new key: every file in
       `git grep -l 'web_host_private_ips *=' -- apps` is also in
       `git grep -l 'inngest_private_ip *=' -- apps`. `network.tf`/`server.tf` also match the
       latter; that is a superset, which is fine. `comm -23` of the two sorted lists prints nothing.
-- [ ] AC8 `cloud-init-inngest.yml` contains no hardcoded `10.0.1.40` on a CODE line. Comments
+- [x] AC8 `cloud-init-inngest.yml` contains no hardcoded `10.0.1.40` on a CODE line. Comments
       legitimately name it (for example the `#6178 diag` comment at :1670), so the check is scoped:
       `grep -v '^[[:space:]]*#' apps/web-platform/infra/cloud-init-inngest.yml | grep '10\.0\.1\.40' | wc -l`
       → `0` (the `wc -l` form, because `grep -c` exits 1 when it counts 0).
-- [ ] AC9 ADR-115 carries the 2026-09-22 amendment, the three alternatives rows, and `8539` in
+- [x] AC9 ADR-115 carries the 2026-09-22 amendment, the three alternatives rows, and `8539` in
       `amended_by`. `network.tf:9-13` no longer claims the inline block force-replaces.
-- [ ] AC10 The C4 tests and `plugins/soleur/test/c4-count-parity.test.sh` pass after the
+- [x] AC10 The C4 tests and `plugins/soleur/test/c4-count-parity.test.sh` pass after the
       `model.c4` description edit.
-- [ ] AC11 The runbook subsection exists and its query command is the same as the
+- [x] AC11 The runbook subsection exists and its query command is the same as the
       `discoverability_test.command`.
 - [ ] AC12 PR body: `Closes #8539`. `Ref #6438`, `Ref #6500`, `Ref #6122`, with no closing
       keyword in any form next to 6500, 6122 or 6438. The body also states that delivery is the
