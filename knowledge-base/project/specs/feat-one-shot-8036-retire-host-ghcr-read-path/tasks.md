@@ -168,7 +168,7 @@ dark since #7071, so there is no window to protect.
       not exist as written, and what it is now.
 - [x] 7.27 CI: neutralize two resolvable `${HOME}/.docker/config.json` literals; move the
       `cloud-init.yml` prose to `server.tf` to get back under the gzip budget without raising it.
-- [ ] 7.28 SHIP-TIME (hygiene, NOT a blocker): strike the `soleur:followthrough` directive from
+- [x] 7.28 DONE 2026-09-23: struck the `soleur:followthrough` directive from
       #6400's body, which still names the deleted `deploy-ghcr-pull-recovery-6400.sh`.
       **Severity corrected by measurement.** The review panel reported this as a post-merge
       breakage — the sweeper hitting `script missing in repo HEAD` and failing indefinitely. It
@@ -178,3 +178,6 @@ dark since #7071, so there is no window to protect.
       print, not the run's `exit 1`.) Worth striking anyway: a reopen, or a raised
       `CLOSED_LOOKBACK_DAYS`, would make a dangling script path live. No repo-local gate can see
       it, because the reference is in a GitHub issue body.
+      Applied by indenting the directive one space so it no longer matches the sweeper's
+      column-0 anchor (`/^<!-- *soleur:followthrough/`), with a note above it saying why. The
+      record of what was enrolled is preserved rather than deleted.
