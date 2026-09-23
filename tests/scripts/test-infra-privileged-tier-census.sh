@@ -46,7 +46,10 @@
 # `--preserve-env` SENTINEL row (Guard 2 row 5) belongs to
 # `.github/actions/infra-credentials/infra-credentials.test.sh` (AC4), which runs the real Doppler
 # CLI; a static census cannot observe an environment override. Guard 3 is
-# `tests/scripts/test-git-data-root-token-census.sh` and Guard 5 is the `plan_only` shape guard.
+# `tests/scripts/test-git-data-root-token-census.sh`. Guard 5 -- the `plan_only` shape guard --
+# is rows G5a/G5b/G5c below, with fixture `replace.yml` and mutants g5-a/g5-b/g5-c. (This line
+# previously CLAIMED Guard 5 existed while nothing implemented it; it was the only hit in the
+# whole repo for `plan_only` outside .yml and knowledge-base/.)
 #
 # Harness conventions (plan › Guard Contract; ADR-193): the instrument self-test drives both
 # helpers once each; mutation rows copy a PRISTINE fixture, assert the edit LANDED (md5 change
@@ -814,9 +817,74 @@ check("G4e: every step that reads GITHUB_APP_PRIVATE_KEY from Doppler refuses th
       (len(app_key_sites) >= (4 if CHECK_GIT else 0)) and not app_key_missing,
       "sites=%d live=%s missing=%s" % (len(app_key_sites), CHECK_GIT, app_key_missing[:5]))
 
+# ── Guard 5: `plan_only` only ever SUBTRACTS ────────────────────────────────────────
+#
+# ADR-241 D-Guard-5 declares this and NOTHING implemented it: `git grep plan_only` over every
+# non-yml, non-knowledge-base file returned one hit, and it was the comment at the top of THIS
+# file claiming the guard exists. Seven `if: inputs.plan_only != true` keys across two recovery
+# jobs were pinned by nothing -- deleting any one of them, or inverting one to `== true`, was
+# caught by no test.
+#
+# It is not cosmetic. `plan_only` is operator step O4b: a REHEARSAL of both host-replace paths
+# from `main`, run before O10 removes the legacy credential fallback, precisely because those
+# paths fail closed on a recovery route during the incident they exist to fix. A rehearsal that
+# silently performs the apply is worse than no rehearsal -- it destroys a live host while the
+# operator believes they are dry-running.
+#
+# Three properties, from the ADR's own wording: every MUTATING step carries the guard, no step
+# is ENABLED by it, and the input-validation / interlock / typo-guard steps stay UNCONDITIONAL.
+PLAN_ONLY_JOBS = {"web_host_replace", "git_data_host_replace"}
+# The apply is wrapped (`doppler run ... -- terraform apply`), so `terraform apply` is NOT at
+# a command boundary and cmd_sites correctly refuses it. Reuse the census's own APPLY matcher
+# -- the same one G1h derives the state-writer set from -- and add host contact on top.
+HOST_CONTACT = re.compile(r"(^|[|;&(]\s*)(ssh|scp)\s", re.M)
+GATE_NAME = re.compile(r"interlock|validate\s+dispatch|verify\s+required|preflight", re.I)
+GUARD = re.compile(r"inputs\.plan_only\s*!=\s*true")
+ENABLED_BY = re.compile(r"inputs\.plan_only\s*==\s*true|!\s*\(?\s*inputs\.plan_only\s*!=\s*true")
+
+p5_jobs, p5_unguarded, p5_enabled, p5_cond_gates, n_mut, n_gate = set(), [], [], [], 0, 0
+for j in jobs:
+    if j.name not in PLAN_ONLY_JOBS:
+        continue
+    p5_jobs.add(j.name)
+    for st in j.steps:
+        nm = str(st.get("name") or st.get("uses") or "")
+        cond = str(st.get("if") or "")
+        body = str(st.get("run") or "")
+        if ENABLED_BY.search(cond):
+            p5_enabled.append("%s / %s" % (j.name, nm[:50]))
+        # MUTATING -> must carry the guard. Command position, so a `terraform apply` named in
+        # an `echo` of operator instructions (this repo prints those constantly) is not a step
+        # that applies anything.
+        if APPLY.search(body) or any(True for _l, _m in cmd_sites(body, HOST_CONTACT)):
+            n_mut += 1
+            if not GUARD.search(cond):
+                p5_unguarded.append("%s / %s [if=%s]" % (j.name, nm[:40], cond[:40] or "<none>"))
+        # GATE -> must be unconditional. A gate that acquires ANY `if:` is a gate an operator
+        # can arrange to skip, which is the opposite of what these steps are for.
+        if GATE_NAME.search(nm):
+            n_gate += 1
+            if cond.strip():
+                p5_cond_gates.append("%s / %s [if=%s]" % (j.name, nm[:40], cond[:40]))
+
+check("G5a: every mutating step in the plan_only recovery jobs carries `inputs.plan_only != true` "
+      "[%d jobs, %d mutating steps]" % (len(p5_jobs), n_mut),
+      # Population floors on the LIVE tree only; on a synthetic fixture the rows assert the
+      # implication (whatever IS there obeys the rule), so a mutant reds for what it mutates.
+      (not CHECK_GIT or (len(p5_jobs) == len(PLAN_ONLY_JOBS) and n_mut >= 2)) and not p5_unguarded,
+      "jobs=%s mutating=%d unguarded=%s" % (sorted(p5_jobs), n_mut, p5_unguarded[:5]))
+check("G5b: no step in those jobs is ENABLED by plan_only — the input only ever SUBTRACTS "
+      "[%d jobs]" % len(p5_jobs),
+      (not CHECK_GIT or len(p5_jobs) == len(PLAN_ONLY_JOBS)) and not p5_enabled,
+      "enabled=%s" % p5_enabled[:5])
+check("G5c: the input-validation, interlock and typo-guard steps stay UNCONDITIONAL "
+      "[%d gate steps]" % n_gate,
+      (not CHECK_GIT or (len(p5_jobs) == len(PLAN_ONLY_JOBS) and n_gate >= 4)) and not p5_cond_gates,
+      "gates=%d conditional=%s" % (n_gate, p5_cond_gates[:5]))
+
 print("\n".join(out))
 PY
-CENSUS_ROWS=17
+CENSUS_ROWS=20
 
 # census_rows <tsv> <err> — reports every row of one census run through pass()/fail().
 census_rows() {
@@ -1023,6 +1091,69 @@ jobs:
             exit 1
           fi
           echo "$PEM" > /dev/null
+EOF
+
+# The two plan_only recovery jobs, in fixture form. Guard 5's rows can only ever demonstrate
+# their PASS branch against the live tree -- every mutating step there already carries the
+# guard -- so without this the three rows would be green whether the checks worked or were
+# deleted outright.
+cat > "$FIX/tree/.github/workflows/replace.yml" <<'EOF'
+name: fixture replace paths
+on:
+  workflow_dispatch:
+    inputs:
+      plan_only:
+        type: boolean
+        default: false
+jobs:
+  web_host_replace:
+    runs-on: ubuntu-24.04
+    environment: infra-privileged
+    steps:
+      - name: Validate dispatch inputs
+        run: |
+          set -euo pipefail
+          test -n "${CONFIRM:-x}"
+      - name: Verify required secrets present
+        run: |
+          set -euo pipefail
+          test -n "${T:-x}"
+      - name: Terraform plan
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform -- terraform plan
+        env:
+          T: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+      - name: Terraform apply (web-host replace)
+        if: inputs.plan_only != true
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform -- terraform apply -auto-approve
+        env:
+          T: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+  git_data_host_replace:
+    runs-on: ubuntu-24.04
+    environment: infra-privileged
+    steps:
+      - name: Rung-2 rehearsal interlock
+        run: |
+          set -euo pipefail
+          test -n "${R:-x}"
+      - name: Authorization-map interlock
+        run: |
+          set -euo pipefail
+          test -n "${A:-x}"
+      - name: Coherence preflight
+        run: |
+          set -euo pipefail
+          test -n "${C:-x}"
+      - name: Terraform apply (git-data-host -replace)
+        if: inputs.plan_only != true
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform -- terraform apply -auto-approve
+        env:
+          T: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
 EOF
 
 cat > "$FIX/tree/scripts/tierb-helper.sh" <<'EOF'
@@ -1353,6 +1484,33 @@ if mutate g1-g2-genuine-ro-first "$MUTDIR/tree/.github/workflows/tiera.yml" 2 \
   fi
 fi
 
+# ── Guard 5 ─────────────────────────────────────────────────────────────────────────
+# Row 5a — drop the guard from ONE apply step. This is the edit nothing caught: seven of
+# these keys shipped pinned by no test, and an O4b rehearsal that silently applies destroys a
+# live host while the operator believes they are dry-running.
+MUTDIR="$(fixcopy g5-a)"; assert_fixture_dir "$MUTDIR"
+if mutate g5-a-guard-dropped "$MUTDIR/tree/.github/workflows/replace.yml" 1 \
+     '0,/^        if: inputs.plan_only != true$/{/^        if: inputs.plan_only != true$/d}'; then
+  fixcensus "$MUTDIR" "$T/mut/g5-a.tsv" ""
+  mutant_red g5-a-guard-dropped wf_row "$T/mut/g5-a.tsv" "G5a:"
+fi
+# Row 5b — INVERT one guard so the step is ENABLED by plan_only. The rehearsal then does the
+# one thing it exists not to do, and G5a alone stays green because the guard is still there.
+MUTDIR="$(fixcopy g5-b)"; assert_fixture_dir "$MUTDIR"
+if mutate g5-b-guard-inverted "$MUTDIR/tree/.github/workflows/replace.yml" 4 \
+     's/^        if: inputs.plan_only != true$/        if: inputs.plan_only == true/'; then
+  fixcensus "$MUTDIR" "$T/mut/g5-b.tsv" ""
+  mutant_red g5-b-guard-inverted wf_row "$T/mut/g5-b.tsv" "G5b:"
+fi
+# Row 5c — give an INTERLOCK an `if:`. A gate an operator can arrange to skip is the opposite
+# of a gate, and this is the shape a "make the rehearsal quieter" edit naturally takes.
+MUTDIR="$(fixcopy g5-c)"; assert_fixture_dir "$MUTDIR"
+if mutate g5-c-gate-conditional "$MUTDIR/tree/.github/workflows/replace.yml" 1 \
+     '/^      - name: Authorization-map interlock$/a\        if: inputs.plan_only != true'; then
+  fixcensus "$MUTDIR" "$T/mut/g5-c.tsv" ""
+  mutant_red g5-c-gate-conditional wf_row "$T/mut/g5-c.tsv" "G5c:"
+fi
+
 # ── G1i-pre: the alias LICENCE, in both directions ───────────────────────────────────
 # Row i1 — replace the two real alias exports with a COMMENT naming both tokens. A raw
 # substring test over action.yml's text reads True here, licenses the
@@ -1473,14 +1631,14 @@ fi
 }
 
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
-MUTANT_FLOOR=23
+MUTANT_FLOOR=26
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
 # Assertion FLOOR: live census 16 + harness 7 + mutants 17 x 2 = 57 (exact).
 _ran=$((passes + fails))
-FLOOR=71
+FLOOR=80
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
