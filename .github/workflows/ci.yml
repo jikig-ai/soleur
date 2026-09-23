@@ -1464,13 +1464,30 @@ jobs:
             echo "::error::harness-discovery[devin] setup-script-digest-mismatch — refusing to execute; got $(sha256sum /tmp/devin-setup.sh | cut -d' ' -f1)"
             exit 3
           }
-          bash /tmp/devin-setup.sh
+          # The setup script INSTALLS and then starts an interactive login, which cannot
+          # succeed headless: it prints "Welcome to Devin CLI! / Error: Login canceled" and
+          # exits 1 AFTER reporting a successful install. Measured 2026-09-23 on this job's
+          # first live run.
+          #
+          # Under `bash -e` — GitHub's default shell, as the Codex step above already warns —
+          # that killed this step at this line, which ALSO skipped the PATH export and the
+          # version assertion below. Those are the only parts that gate anything, so the pin
+          # was silently not checked, and the discovery step that follows passed only because
+          # `~/.local/bin` happens to be on ubuntu-latest's default PATH. Luck, not design.
+          #
+          # So: tolerate the script's exit code and let the VERSION ASSERTION be this step's
+          # verdict. That costs no coverage — a genuinely failed install shows up below as an
+          # unparseable version and still exits 3. `</dev/null` makes the login give up at
+          # once instead of waiting on a TTY that will never arrive.
+          setup_rc=0
+          bash /tmp/devin-setup.sh </dev/null || setup_rc=$?
+          echo "harness-discovery[devin] setup-script rc=${setup_rc} (non-zero EXPECTED: post-install interactive login)"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.local/bin:$PATH"
           raw="$(devin --version 2>&1 || true)"
           got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
           [ "$got" = "$DEVIN_PIN" ] || {
-            echo "::error::harness-discovery[devin] version-mismatch:${got:-<unparsed>}!=${DEVIN_PIN} raw=${raw:0:200}"
+            echo "::error::harness-discovery[devin] version-mismatch:${got:-<unparsed>}!=${DEVIN_PIN} setup_rc=${setup_rc} raw=${raw:0:200}"
             exit 3
           }
 
