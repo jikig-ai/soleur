@@ -19,7 +19,7 @@ Out of scope, and must not be touched:
 
 - [ ] 1.1 ADR-096: replace only the `## Status` block (from `## Status` up to, not including, `## Amendment 2026-07-30`) with the plan's Phase 1.1 text. Keep the header bullet `- **Status:** Adopting`.
 - [ ] 1.2 `knowledge-base/project/specs/feat-registry-oidc-migration/tasks.md`:
-  - [ ] 1.2.1 Mark 1.8 `[~]` and add the partial evidence note (serving evidence; AC11 not run with 4 admitted secrets; `paused = true` heartbeat).
+  - [x] 1.2.1 Tick 1.8 `[x]` with evidence (serving; live heartbeat `up`; config holds exactly the 4 admitted secrets). Supersedes the planned `[~]`; see DC1.
   - [ ] 1.2.2 Tick 1.9 with its evidence note.
   - [ ] 1.2.3 Tick 2.4 with its evidence note.
   - [ ] 1.2.4 Replace the 5.3 line with 5.3a `[x]` (cites #8600 / #8636) and 5.3b `[ ]`.

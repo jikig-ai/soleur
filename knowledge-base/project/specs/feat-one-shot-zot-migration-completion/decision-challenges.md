@@ -12,6 +12,13 @@ brief's stated direction. Each one is recorded here instead of being applied sil
 - **Why:** ticking a gate that never ran writes a false record. The scoped advisor consult and the session model agree. The plan-review simplicity pass chose a single `[~]` line over an 1.8a/1.8b split, because nothing references the sub-items.
 - **Default if nobody objects:** `[~]` stands.
 
+> **Superseded 2026-09-24 (work phase): 1.8 is ticked `[x]`.** Both "not run" premises were re-measured and are false:
+>
+> - **Heartbeat.** Better Stack `soleur-registry-prd` reads `status=up paused=false`. The `paused = true` in `zot-registry.tf` is source-only by design (`ignore_changes = [paused]`). Its own comment says live state has been armed since 2026-07-16 (ADR-117).
+> - **Isolation.** `soleur-registry`/`prd` holds exactly the 4 non-`DOPPLER_*` names the boot self-check admits. The "EXACTLY 2" wording predates #6244 and #6895.
+>
+> The brief's direction ("tick 1.8") therefore stands. The 1.8 note says the isolation check was measured by listing the config's secret names, not by minting a scoped token.
+
 ## DC2 — the bottom-line sentence carries a per-option build cost
 
 - **Stated direction:** "state plainly: the gap between today and 'migration complete' is not engineering; it is one authorization act on #6122".

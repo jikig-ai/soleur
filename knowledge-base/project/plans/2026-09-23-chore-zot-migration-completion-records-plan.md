@@ -264,7 +264,7 @@ The header bullet `- **Status:** Adopting` (line 3) stays as it is. The ADR is s
 **1.2 `knowledge-base/project/specs/feat-registry-oidc-migration/tasks.md`.** Make these edits
 in place. Do not rewrite any other line.
 
-- `- [ ] 1.8` → `- [~] 1.8 …` (`[~]` is this file's existing partial marker; see 1.5). Append this note (DC1 in `specs/feat-one-shot-zot-migration-completion/decision-challenges.md`):
+- **Superseded 2026-09-24 (DC1): 1.8 is ticked `[x]`.** The live heartbeat reads `up`, and the config holds exactly the 4 admitted secrets. The original instruction follows. `- [ ] 1.8` → `- [~] 1.8 …` (`[~]` is this file's existing partial marker; see 1.5). Append this note (DC1 in `specs/feat-one-shot-zot-migration-completion/decision-challenges.md`):
   > **Partial — evidence:** deployed and serving. The first zot-served web pull was 2026-07-17T19:51:49Z, with 392 zot-served pulls in the 90 days to 2026-09-22 (`runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). Every serving boot passed the fail-closed boot self-check in `cloud-init-registry.yml` ("Isolation self-check — the load-bearing, fail-CLOSED defense"). **Not done:**
   > - The pre-flip scoped-token isolation assertion (isolation-fix plan AC11) has no recorded run. The admitted set is now **4** (`ZOT_PULL_TOKEN`, `ZOT_PUSH_TOKEN`, `BETTERSTACK_LOGS_TOKEN`, `REGISTRY_LUKS_KEY`), not "EXACTLY 2".
   > - "Heartbeat green" is not met: `betteruptime_heartbeat.registry_prd` is still `paused = true` in `apps/web-platform/infra/zot-registry.tf`.
@@ -566,7 +566,7 @@ value, token prefix or host address is added. The one private IP already appears
   - does not contain `inert until` (the unedited copy on `main` does, so this check is red before 1.1)
   - `git diff -U0 origin/main...HEAD -- <ADR-096>` shows exactly one `@@` hunk, and it starts at or before line 17
 - [ ] **AC3.** Each of these `grep -cE` checks over the registry-oidc `tasks.md` returns `1`:
-  - `^- \[~\] 1\.8 `, with separate `grep -c` checks that `AC11` and `paused = true` each appear at least once
+  - `^- \[x\] 1\.8 ` (was `[~]`; superseded 2026-09-24 by live measurement, see DC1)
   - `^- \[x\] 1\.9 `
   - `^- \[x\] 2\.4 `
   - `^- \[x\] 5\.3a .*#8600`

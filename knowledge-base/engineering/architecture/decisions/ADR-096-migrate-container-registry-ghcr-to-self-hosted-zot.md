@@ -8,12 +8,16 @@
 
 ## Status
 
-**Adopting.** The IaC foundations (Phase 1), dual-push (Phase 2), and the dark-launch pull-site
-flip (Phase 3) are merged. The flip is inert until the operator provisions (1.8) + backfills
-(1.9) zot and the entry gate (`zot-entry-gate.sh`) passes. This ADR flips to **accepted** after
-the Phase-5 soak (`zot-soak-6122.sh`: ≥7 days, zero fallback events across all four watched
-signals, sufficient zot sample — necessary but not sufficient; see the alarm-parity note below)
-and GHCR-push retirement (5.3–5.5).
+**Adopting — cut over, not yet accepted.** zot has served production pulls since
+**2026-07-17T19:51:49Z** and has been the **sole** pull path since about 2026-07-29, when the GHCR
+read PAT was revoked outside any repo change (amendments 2026-07-30 and 2026-09-22; cutover record
+in `runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). A zot-served *fresh* web boot has
+not yet been observed (`stage:"app_zot"` has 0 events; #8651). Retirement is partial.
+**5.3a** (the `ci-deploy.sh` GHCR read path) was delivered on 2026-09-23 by #8036 item 1c; see the
+task-5.3 amendment. **5.3b, 5.4, 5.5 and 5.6 are pending** behind the #6122 soak authorization.
+The backfilled `zot-soak-6122.sh` verdict is a recorded FAIL, and #6500 is open. 5.3b's
+"stop GHCR push" also collides with ADR-169, whose restore gate reads GHCR (see #6122). This ADR
+flips to **accepted** at 5.6.
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
