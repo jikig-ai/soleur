@@ -1,6 +1,6 @@
 ---
 feature: c4-model-mergeable
-plan: knowledge-base/project/plans/2026-09-22-fix-c4-model-mergeable-line-per-value-plan.md
+plan: knowledge-base/project/plans/archive/20260922-133038-2026-09-22-fix-c4-model-mergeable-line-per-value-plan.md
 lane: cross-domain
 issue: 8542
 ---
