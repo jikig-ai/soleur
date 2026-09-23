@@ -3,7 +3,7 @@
 # (#7228 Phase 2; the plan's "loud emitter", a real cq-silent-fallback-must-mirror-to-sentry
 # violation that every plan reviewer independently voted to KEEP).
 #
-# THE DEFECT. The emitter is the SINGLE delivery path for all eight SOLEUR_INNGEST_BOOT_STAGE
+# THE DEFECT. The emitter is the SINGLE delivery path for EVERY SOLEUR_INNGEST_BOOT_STAGE
 # markers — the entire diagnosis of a boot failure on a host with no SSH. It opened with
 #
 #     [ -r "$tok_file" ] || exit 0
@@ -261,18 +261,19 @@ else
   MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | head -1 \
     | grep -oE '[a-z0-9_]+=' | tr -d '=' | sort -u)"
   # Non-vacuity: an extraction that found nothing must not report parity. The floor is the ACTUAL
-  # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`) — a `-ge 10` passed at 13 while three keys were
+  # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`; 18 -> 19: #8539 threads `inngest_private_ip`) — a `-ge 10` passed at 13 while three keys were
   # missing from both sides, which is precisely the state it was supposed to make visible.
   assert "AC5 key-set parity: the .tf call site's keys were extracted" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 18 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 19 ]]"
   # ...and an OVER-extraction bound, the direction the floor above is blind to. A range whose end
   # anchor stops matching runs to EOF and harvests unrelated assignments; that is not a missing
   # key and should not be reported as one. 17 is the call site's actual key count, so this is
-  # exact in both directions when paired with the floor. (16 -> 17: #6894 added
+  # exact in both directions when paired with the floor. 19 is the count as of #8539.
+# (16 -> 17: #6894 added
   # `inngest_luks_volume_id`, the additive volume's id the two-device resolver needs, and this
   # suite's map was not updated in the same commit — so the over-read guard fired on a real key.)
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 18 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 19 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \

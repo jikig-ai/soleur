@@ -281,7 +281,7 @@ write_files:
       [ -n "$SOLEUR_INNGEST_BS_TOKEN_FILE" ] && tok_file="$SOLEUR_INNGEST_BS_TOKEN_FILE"
       # --- #7228: this emitter must be able to report its OWN death ------------------------
       # These three arms were `|| exit 0` and `curl >/dev/null 2>&1` — exit 0, no output, no
-      # trace. This script is the SINGLE delivery path for all eight SOLEUR_INNGEST_BOOT_STAGE
+      # trace. This script is the SINGLE delivery path for EVERY SOLEUR_INNGEST_BOOT_STAGE
       # markers, i.e. the entire diagnosis of a boot failure on a host with no SSH, so a silent
       # failure here does not degrade the trace, it DELETES it. Paired with the tmpfs defect
       # (every write of this token file lives in `runcmd:`, which cloud-init runs on FIRST BOOT
@@ -510,15 +510,23 @@ write_files:
       command -v grep >/dev/null 2>&1 || fault nogrep
       i=0
       found=0
+      probe_ran=0
       while [ "$i" -lt 75 ]; do
         out=$(ip -4 -o addr show 2>/dev/null)
         rc=$?
-        [ "$rc" -eq 0 ] || { W=$((i * 2)); fault iprc; }
-        if printf '%s\n' "$out" | grep -qwF -- "$EXP"; then found=1; break; fi
+        # A single failing `ip` is a TRANSIENT instrument fault, never "the address is absent"
+        # (#6415). probe_ran records whether the instrument EVER worked, so the fault arm fires
+        # only if it never did. Faulting on the FIRST non-zero rc ended the wait at t=4s of a
+        # 150s budget on a netlink hiccup -- inside the hot-attach window this helper exists
+        # for -- and let the zot login proceed NIC-less, i.e. #8539 again. Mirrors
+        # soleur-wait-nic's probe_ran/exit-capture shape, which the plan specifies.
+        [ "$rc" -eq 0 ] && probe_ran=1
+        if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qwF -- "$EXP"; then found=1; break; fi
         i=$((i + 1))
         sleep 2
       done
       W=$((i * 2))
+      [ "$found" -eq 1 ] || [ "$probe_ran" -eq 1 ] || fault iprc
       HASNC=0
       command -v networkctl >/dev/null 2>&1 && HASNC=1
       if [ "$found" -eq 1 ]; then
@@ -538,7 +546,9 @@ write_files:
         LVL=info
         [ "$BY" = "99-soleur-private-fallback" ] && LVL=warning
         [ "$EG" != "eth0" ] && [ "$EG" != "unknown" ] && LVL=warning
-        emit private_nic_ok "$LVL" "boot=$BOOT.waited_s=$W.by=$BY.egress=$EG"
+        D="boot=$BOOT.waited_s=$W.by=$BY.egress=$EG"
+        [ "$(len "$D")" -le 120 ] || D=$(printf '%s' "$D" | cut -c1-120)
+        emit private_nic_ok "$LVL" "$D"
         exit 0
       fi
       BASE="boot=$BOOT.waited_s=$W.links="
@@ -573,7 +583,7 @@ write_files:
           [ "$(len "$BASE$c--cut")" -le 120 ] || break
           L="$c"
         done
-        L="$L--cut"
+        if [ -n "$L" ]; then L="$L--cut"; else L="cut"; fi
       fi
       emit private_nic_timeout warning "$BASE$L"
       exit 0
@@ -691,7 +701,7 @@ runcmd:
   # after networkd started. As early as possible, so a private NIC that has already appeared is
   # configured long before the zot login. Links whose matching file is unchanged (eth0, a NIC
   # netplan already configured) are left alone. Fail-open: runcmd is ONE /bin/sh.
-  - networkctl reload || true
+  - networkctl reload || /usr/local/bin/inngest-boot-phone-home.sh private_nic_reload_failed "rc=$?"
 
   # Apply SSH hardening immediately.
   - systemctl restart sshd

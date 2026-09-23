@@ -23,9 +23,24 @@ git-data has a reboot-safe storage unlock (`git-data-luks-reopen.service`, a Dop
 oneshot, proven by the rung-2 reset arm). The reboot primitive is STILL not adopted for
 git-data; see the amendment under the blocker.
 
-**Amended 2026-09-22 (#8539):** the inngest host converges a late-attached private NIC with a
-separate primitive, a static networkd fallback, not the reboot. The reboot grant above stays
-registry-only; see the amendment under the blocker.
+**Amended 2026-09-22 (#8539):** the inngest host is given a separate primitive for converging a
+late-attached private NIC — a static networkd fallback, not the reboot. The reboot grant above
+stays registry-only; see the amendment under the blocker.
+
+> **This amendment's converge claim is `adopting`, not accepted.** The code is inert at merge:
+> `runcmd` is once-per-instance and nothing replaces the host on merge, so the primitive reaches
+> production only via an operator-dispatched `apply_target=inngest-host-replace` plus a
+> human-approved `cutover-inngest.yml -f op=resume`. It stays a mechanism-level argument until a
+> boot emits `private_nic_ok … by=99-soleur-private-fallback`; that falsification criterion is
+> restated under §Alternatives and is enrolled as a follow-through on #8539
+> (`scripts/followthroughs/inngest-private-nic-8539.sh`). Until then, read the sentence above as
+> "is designed to converge", not "converges".
+
+The "REGISTRY host only" line at the top of this Status block is about the **reboot** primitive
+and is unchanged by this amendment: the fallback file is a different mechanism, so extending it
+to inngest does not require clearing the normative blockers, which bind the reboot and replace
+primitives only. That distinction is argued under the blocker; it is restated here because the
+top line otherwise reads as forbidding exactly what this amendment does.
 
 **Amended 2026-07-15 (#6497)** to cover boot-baked *credentials* alongside the private NIC —
 also registry-host-scoped, and carrying a **second** normative blocker of its own, because the
@@ -344,6 +359,12 @@ scope of this amendment, stated so the ADR does not contradict itself:
 - **Decision §3 ("emit on every run") is met once per boot on inngest,** which has no cron: one
   `private_nic_ok` / `private_nic_timeout` / `private_nic_probe_fault` event to Better Stack and
   Sentry.
+- **The rejected "netplan drop-in" row's third ground — fidelity — is answered, not ignored.**
+  That row was rejected partly because a reboot "gets correct MTU and routes from cloud-init's
+  own renderer". The fallback file carries `UseMTU=yes`, so the MTU comes from the same DHCP
+  lease Hetzner's datasource would have rendered (1450 on this network), and routes come from
+  the same lease. The fidelity argument therefore does not separate the two on this host. The
+  other two grounds (subset trigger, unbudgeted re-apply) are rebutted above.
 - **Status of the converge claim: adopting.** It is a mechanism-level argument until a boot
   emits `private_nic_ok ... by=99-soleur-private-fallback`. Status's "registry only" line still
   holds for the REBOOT primitive; this primitive is separate and grants no self-reboot authority.

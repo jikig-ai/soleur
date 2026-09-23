@@ -835,6 +835,19 @@ family. No Better Stack edge lists boot stages, so none changes. Run `apps/web-p
 Authored now. The converge claim is marked **adopting** until the first raced boot reports
 `private_nic_ok by=99-soleur-private-fallback`.
 
+## Byte budget spent (recorded at review)
+
+The Hetzner 32,768 B cap is NOT the binding gate; `INNGEST_GZIP_BUDGET = 18_000` in
+`plugins/soleur/test/cloud-init-user-data-size.test.ts` is, and it is a bare literal with no ADR
+behind it. Measured: `origin/main` 14,560 B -> this branch 16,268 B (+1,708), i.e. the margin to
+the enforced gate went 3,440 B -> 1,732 B. **This change consumed about half of the remaining
+CI-enforced budget**, and the review's own fixes added ~80 B more. The next feature of this size
+reds that suite. Recorded rather than silently inherited: ADR-185 documents this exact artifact
+shape (a literal bracketing a measurement, quietly becoming a capacity ceiling nobody decided)
+for the registry host, and names `HETZNER_CAP - 8_000` as the one figure authored AS policy --
+against which 18,000 is 6,768 B stricter. Raising it deserves an ADR-185-style derivation, not a
+bump; deliberately not done here, because this PR should not also re-decide fleet budget policy.
+
 ## Guard Contract
 
 ### Guard 1 — The NIC fallback is present, reloaded, and gates the zot login
@@ -960,8 +973,11 @@ with extra whitespace. Both must still classify correctly.
       `bash scripts/lint-orphan-test-suites.sh` is green.
 - [x] AC7 Every explicit inngest render map passes the new key: every file in
       `git grep -l 'web_host_private_ips *=' -- apps` is also in
-      `git grep -l 'inngest_private_ip *=' -- apps`. `network.tf`/`server.tf` also match the
-      latter; that is a superset, which is fine. `comm -23` of the two sorted lists prints nothing.
+      `git grep -l 'inngest_private_ip *=' -- apps`. The latter is a superset, which is fine —
+      but the extra members are the test suites that assert the binding, NOT `network.tf`/
+      `server.tf`: those REFERENCE `local.inngest_private_ip` and never assign the render key,
+      so they cannot match this AC's own regex (corrected at review). `comm -23` of the two
+      sorted lists prints nothing.
 - [x] AC8 `cloud-init-inngest.yml` contains no hardcoded `10.0.1.40` on a CODE line. Comments
       legitimately name it (for example the `#6178 diag` comment at :1670), so the check is scoped:
       `grep -v '^[[:space:]]*#' apps/web-platform/infra/cloud-init-inngest.yml | grep '10\.0\.1\.40' | wc -l`
@@ -975,9 +991,15 @@ with extra whitespace. Both must still classify correctly.
 - [ ] AC12 PR body: `Closes #8539`. `Ref #6438`, `Ref #6500`, `Ref #6122`, with no closing
       keyword in any form next to 6500, 6122 or 6438. The body also states that delivery is the
       post-merge `inngest-host-replace` + human-approved `op=resume`.
-- [x] AC13 The follow-up issue exists (#8562, filed at plan time) and the #6438 comment is posted (planning session). The PR body carries `Ref #8562`.
+- [x] AC13 The follow-up issue exists (#8562, filed at plan time) and the #6438 comment is
+      posted (planning session). *(Corrected at review: this box was born ticked in the
+      plan-creation commit, and carried a third clause — "The PR body carries `Ref #8562`" —
+      that no commit could have satisfied, because the body is written by ship. That clause is
+      moved to AC14, which is correctly still open. A ticked box asserting a delivery that never
+      happened is read as fact by the next session.)*
 
 - [ ] AC14 The PR body's first line answers "does merging this alone change production?": **No.**
+      The body also carries `Ref #8562` (moved here from AC13 at review).
       The merge apply's `-target` allow-list contains no `hcloud_server.*`
       (`inngest-host.tf:507-511` records this), so the host changes only through the post-merge
       replace.

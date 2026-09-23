@@ -114,6 +114,17 @@ _pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTI
   # ledger's 12 exemption slots (ADR-207 §5: a ceiling raised to make a run green is not a
   # ceiling). The ref is inside $SANDBOX_ROOT/.git, which this suite created; nothing here can
   # reach the live repo's refs/tags.
+  #
+  # DECLARED, not silently exploited (review). A direct write to `.git/refs/tags/` is that
+  # guard's OWN under-approximation #7 — "authors a tag carrying no `git` token at all" — so
+  # this route is invisible to it by the guard's own admission, and it was taken on the day that
+  # ledger hit its ceiling (12 <= 12). Two facts keep it honest rather than an evasion: the
+  # write is confined to a sandbox this suite builds, and the LIGHTWEIGHT ref is behaviourally
+  # identical to the annotated tag it replaced for every operation the code under test performs
+  # (`git tag --list`, `rev-parse <tag>^{commit}`, `show <tag>:<path>` — all verified). It
+  # DIVERGES on `rev-parse <tag>` bare, `cat-file -t`, `for-each-ref %(objecttype)` and
+  # `describe` without `--tags`; if Guard A ever grows a row touching tag-object identity, this
+  # fixture will pass where production fails, and nothing here would notice.
   mkdir -p .git/refs/tags
   git rev-parse HEAD > ".git/refs/tags/vinngest-$_pin_tag"
 ) > "$WORK/gitfixture.log" 2>&1 || { cat "$WORK/gitfixture.log" >&2; die "could not build the sandbox git fixture for Guard A"; }
@@ -465,7 +476,7 @@ NG1_PY='
 import re,sys
 p=sys.argv[1]; s=open(p).read()
 CALL="  - /usr/local/bin/soleur-inngest-nic-wait ${inngest_private_ip} || true\n"
-RELOAD="  - networkctl reload || true\n"
+RELOAD="  - networkctl reload || /usr/local/bin/inngest-boot-phone-home.sh private_nic_reload_failed \"rc=$?\"\n"
 def once(a, t=None):
     t = s if t is None else t
     assert t.count(a)==1, "anchor not found exactly once: %r" % a
@@ -569,6 +580,22 @@ case_must_pass() {
   PASS=$((PASS + 1))
   echo "  HELD:     $id — compliant non-canonical input stays GREEN"
 }
+# POSITIVE CONTROL for case_must_pass itself. Both must-PASS rows below reported HELD
+# unconditionally at review: the helper owns its own verdict, so neutering it is invisible to
+# TOTAL, to PASS/FAIL conservation and to BATTERY_MIN_ROWS alike. These rows are the only ones
+# asserting the guard is not OVER-fitted, so an unbacked HELD is the whole over-fit axis going
+# dark. Drive it with an input that MUST red the guard and require it to say BROKE.
+_mp_f=$FAIL
+case_must_pass ng1-harness-mustpass-can-report-broke "$SRC" "$NG1_PY"'
+save(rep(RELOAD, ""))
+' >/dev/null
+if [[ "$FAIL" -ne $((_mp_f + 1)) ]]; then
+  printf '[FATAL] harness: case_must_pass did not flag an input that reds the guard — every HELD above is unbacked\n' >&2
+  exit 1
+fi
+FAIL=$_mp_f; TOTAL=$((TOTAL - 1))
+echo "  HARNESS:  case_must_pass can report BROKE (positive control)"
+
 # (i) Two unrelated runcmd items reordered ahead of the call, and blank lines inserted.
 case_must_pass ng1-mustpass-reordered-and-blank-lines "$SRC" "$NG1_PY"'
 once(CALL); once(RELOAD)
@@ -577,6 +604,32 @@ t=rep(g, "")
 t=t.replace(CALL, "\n\n"+g+"\n"+CALL+"\n", 1).replace(RELOAD, RELOAD+"\n\n", 1)
 save(t)
 '
+# --- NIC-G1 escapes: real private-net uses the pre-review derivation scored as NOT-a-use ------
+# Each of these was measured GREEN against the pristine guard at review. They are must-RED rows,
+# not mutations of the guard: the guard was working exactly as written, and its predicate was
+# narrower than the property its name claims. A mutation battery structurally cannot find these.
+case_mutate ng1-escape-absolute-path-curl "NIC-G1 row8:" "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - /usr/bin/curl -sf http://10.0.1.30:5000/v2/ || true\n"+CALL))
+'
+case_mutate ng1-escape-wget "NIC-G1 row8:" "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - wget -qO- http://10.0.1.30:5000/v2/ || true\n"+CALL))
+'
+case_mutate ng1-escape-variable-target "NIC-G1 row8:" "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - curl -sf \"$ZOT_EP/v2/\" || true\n"+CALL))
+'
+case_mutate ng1-escape-networkd-shadow-in-run "NIC-G1 row7b:" "$SRC" "$NG1_PY"'
+w="  - path: /run/systemd/network/00-hijack.network\n    content: |\n      [Match]\n      Driver=virtio_net\n\n      [Network]\n      DHCP=no\n    owner: root:root\n    permissions: \x27\x27\x270644\x27\x27\x27\n"
+save(rep(CALL, CALL).replace("write_files:\n", "write_files:\n"+w, 1))
+'
+# must-PASS: the GHCR login with its flags reordered. This form was a FALSE RED before review --
+# docker_target returned the -u flag VALUE, so a public login scored as a private-net use and an
+# unrelated edit would have reddened rows 1 and 8.
+case_must_pass ng1-mustpass-ghcr-login-flags-first "$SRC" "$NG1_PY"'
+a="docker login ghcr.io -u \"$GHCR_READ_USER\" --password-stdin"
+b="docker login -u \"$GHCR_READ_USER\" --password-stdin ghcr.io"
+save(rep(a, b))
+'
+
 # (ii) A config WRITE that names the endpoint, ahead of the call. The canonical file already
 # carries two (the ZOT_EP daemon.json write and the soleur-zot-read creds bake; the baseline and
 # the guard'"'"'s own must-PASS count cover them); this adds a third of the same class.
@@ -623,7 +676,7 @@ fi
 # property that row pinned now unexercised. The bound is the MEASURED row count of a green run,
 # EXACT-as-floor (no slack). Reported with printf + exit, never through the verdict counters it
 # backstops (ADR-193). Bump it in the same edit that adds a row.
-BATTERY_MIN_ROWS=41
+BATTERY_MIN_ROWS=46
 if (( TOTAL < BATTERY_MIN_ROWS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d. A row was deleted or its dispatch line removed.\n' "$TOTAL" "$BATTERY_MIN_ROWS" >&2
   exit 1

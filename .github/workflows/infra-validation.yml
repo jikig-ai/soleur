@@ -613,7 +613,7 @@ jobs:
     # So at 20 minutes the job was already at 1200/1030 = 1.17x before this PR.
     #   observed deploy-script-tests max (10 runs, successful only) : 1030 s
     #   + the #8189 additions (measured locally, budgeted high)     : +90 s
-    #   new basis                                                    : ~1120 s
+    #   new basis                                                    : ~1120 s (basis refreshed at #8539 review: ~1204 s after +84 s of new inngest suites, 1.35x against the 1620 s ceiling -- still fits, no bump needed)
     #   1120 x 1.4 = 1568 s = 26.1 min -> 27
     # 20 -> 27 minutes. At 20 the margin would be 1200/1120 = 1.07x, i.e. one slow runner away
     # from a cancel that lands on whatever step the clock runs out in.

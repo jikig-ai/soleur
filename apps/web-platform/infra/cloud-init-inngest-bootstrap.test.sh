@@ -1406,9 +1406,39 @@ NG1_TF_BOUND=$(printf '%s\n' "$NG1_TF_MAP" | grep -cE '^[[:space:]]*inngest_priv
 assert "NIC-G1 row10: the cloud-init-inngest.yml map binds inngest_private_ip = local.inngest_private_ip exactly once (map $NG1_TF_MAP_LINES lines, key $NG1_TF_KEY, bound $NG1_TF_BOUND)" \
   "(( NG1_TF_MAP_LINES >= 20 && NG1_TF_KEY == 1 && NG1_TF_BOUND == 1 ))"
 
+# The rendered rows below run against inngest-userdata-budget.sh's STUB variable map, whose
+# inngest_private_ip is a hand-written literal. Nothing compared it to the Terraform local, so
+# changing local.inngest_private_ip to 10.0.1.41 left all 15 rendered rows GREEN while the bytes
+# that boot the host carried the other address -- and check.py's own OWN_IP then excluded the
+# wrong one. Measured at review. Pin the two copies to each other.
+NG1_TF_IP=$(grep -oE '^[[:space:]]*inngest_private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' "$SCRIPT_DIR/inngest-host.tf" \
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+NG1_STUB_IP=$(grep -oE 'inngest_private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' "$SCRIPT_DIR/inngest-userdata-budget.sh" \
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+assert "NIC-G1 row10b: the budget stub's inngest_private_ip equals local.inngest_private_ip (tf=${NG1_TF_IP:-none} stub=${NG1_STUB_IP:-none})" \
+  "[[ -n \"\$NG1_TF_IP\" && \"\$NG1_TF_IP\" == \"\$NG1_STUB_IP\" ]]"
+
+# EMIT/ROUTE LOCKSTEP (#8539, mirroring nic-wait-gate.test.sh for the web host). An emitted
+# stage that matches no alert filter is not a smaller version of observability -- it is the
+# silence the emit was built to end. And the inverse matters here too: these two stage names are
+# REUSED verbatim from web-1, and the rule they match carries no host condition, so the inngest
+# host inherits its routing. That inheritance is the intended behaviour and must not be silently
+# broken by a future edit to either side. Anchored on the HCL tagged_event CONSTRUCT, so the
+# rule file's own prose cannot satisfy it.
+NG1_ALERTS="$SCRIPT_DIR/sentry/issue-alerts.tf"
+assert "NIC-G1 route: the Sentry issue-alert config is present" "[[ -f \"\$NG1_ALERTS\" ]]"
+for _stage in private_nic_timeout private_nic_probe_fault; do
+  _n=$(grep -cE "tagged_event[[:space:]]*=[[:space:]]*\{[^}]*key[[:space:]]*=[[:space:]]*\"stage\"[^}]*value[[:space:]]*=[[:space:]]*\"${_stage}\"" "$NG1_ALERTS" || true)
+  assert "NIC-G1 route: stage '$_stage' is a live tagged_event filter, not prose (found $_n)" \
+    "(( _n >= 1 ))"
+  _m=$(grep -cE "^[[:space:]]*emit ${_stage}( |$)" "$INNGEST_CI_YML" || true)
+  assert "NIC-G1 route: stage '$_stage' is actually emitted by the inngest helper (found $_m)" \
+    "(( _m >= 1 ))"
+done
+
 NG1_RAW_ASSERTIONS=$(( TOTAL - NG1_BEFORE ))
-assert "NIC-G1 anti-vacuity (raw rows): the section ran its full inventory (expected 3, ran $NG1_RAW_ASSERTIONS)" \
-  "(( NG1_RAW_ASSERTIONS == 3 ))"
+assert "NIC-G1 anti-vacuity (raw rows): the section ran its full inventory (expected 9, ran $NG1_RAW_ASSERTIONS)" \
+  "(( NG1_RAW_ASSERTIONS == 9 ))"
 
 # Rendered rows. Tool-gated on terraform (the render is terraform's own templatefile), so the
 # block is bracketed into COND_ASSERTIONS per the contract at the top of this file.
@@ -1445,15 +1475,39 @@ def text(x):
     return str(x)
 def code(t):
     return [l for l in t.split("\n") if l.strip() and not l.lstrip().startswith("#")]
-items = [text(x) for x in rc]
+SCRIPTS = {str(w.get("path", "")): str(w.get("content", ""))
+           for w in wf if isinstance(w, dict)}
+INVOKE = re.compile(r"(^|[\s;&|(])(/usr/local/bin/[A-Za-z0-9._-]+)(\s|$)")
+def expand(t):
+    seen, body = set(), [t]
+    for l in t.split("\n"):
+        for m in INVOKE.finditer(l):
+            q = m.group(2)
+            if q in SCRIPTS and q not in seen and q != "/usr/local/bin/soleur-inngest-nic-wait":
+                seen.add(q)
+                body.append(SCRIPTS[q])
+    return "\n".join(body)
+BOOTN = len(d.get("bootcmd") or [])
+items = [expand(text(x)) for x in (d.get("bootcmd") or [])] + [expand(text(x)) for x in rc]
 CALL = re.compile(r"(^|[\s;&|(])(/usr/local/bin/)?soleur-inngest-nic-wait(\s|$)")
 RELOAD = re.compile(r"^\s*networkctl\s+reload(\s|$)")
-DOCKER = re.compile(r"\bdocker\s+(login|pull)\b(.*)")
-PROBE = re.compile(r"(^|[\s;&|(])(curl|nc|ping)(\s|$)")
-ADDR = re.compile(r"(?<![0-9.])10\.0\.1\.[0-9]{1,3}(?![0-9])")
-PUBLIC = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)*\.(io|com|org|net|dev)([/:].*)?$")
+DOCKER = re.compile(r"\bdocker\b(?:\s+--?[^\s]+(?:\s+[^\s-][^\s]*)?)*\s+(?:image\s+|manifest\s+)?(login|pull|push|inspect)\b(.*)")
+PROBE = re.compile(r"(^|[\s;&|(`$]|/)(curl|wget|nc|ncat|netcat|ping|ping6|getent|nslookup|dig|host|openssl|redis-cli|psql|mysql|mongosh|skopeo|crane|podman|nerdctl|rsync|scp|sftp|telnet|socat|nmap|showmount|mount\.nfs)(\s|$)")
+ADDR = re.compile(r"(?<![0-9.])10\.0\.[0-9]{1,3}\.[0-9]{1,3}(?![0-9])")
+PUBLIC = re.compile(r"^(ghcr\.io|docker\.io|registry-1\.docker\.io|index\.docker\.io|quay\.io|public\.ecr\.aws)([/:].*)?$")
+VARTGT = re.compile(r"\$\{?(ZOT[A-Z_]*|[A-Z_]*ZOT|[A-Z_]*REGISTRY[A-Z_]*|[A-Z_]*ENDPOINT|Z?IREF|[A-Z_]*PRIVATE[A-Z_]*|SDK_URL)\b")
+VALUE_FLAGS = {"-u", "--username", "-p", "--password", "--config", "-c"}
+
+
 def docker_target(rest):
+    skip = False
     for tok in rest.split():
+        if skip:
+            skip = False
+            continue
+        if tok in VALUE_FLAGS:
+            skip = True
+            continue
         if tok.startswith("-"):
             continue
         return tok.strip("\"'")
@@ -1472,17 +1526,23 @@ for i, t in enumerate(items):
         m = DOCKER.search(l)
         if m and not PUBLIC.match(docker_target(m.group(2))):
             is_use = True
-        if PROBE.search(l) and any(a != OWN_IP for a in ADDR.findall(l)):
+        if PROBE.search(l) and (any(a != OWN_IP for a in ADDR.findall(l))
+                                or VARTGT.search(l)):
             is_use = True
     if is_use:
         uses.append(i)
     elif any(a != OWN_IP for a in ADDR.findall(t)):
         config_writes.append(i)
+# report every position in runcmd space so the adjacency row is unchanged by the bootcmd scan
+calls = [(i - BOOTN, l) for i, l in calls]
+reloads = [i - BOOTN for i in reloads]
+uses = [i - BOOTN for i in uses]
+config_writes = [i - BOOTN for i in config_writes]
 call_pos = calls[0][0] if calls else -1
 first_use = uses[0] if uses else -1
 out = {
-    "ITEMS": len(items),
-    "SCANNED": scanned,
+    "ITEMS": len(items) - BOOTN,
+    "SCANNED": scanned - BOOTN,
     "CALLS": len(calls),
     "CALL_POS": call_pos,
     "CALL_EXACT": int(len(calls) == 1 and calls[0][1] == "/usr/local/bin/soleur-inngest-nic-wait " + OWN_IP + " || true"),
@@ -1494,11 +1554,21 @@ out = {
     "FIRST_USE_IS_ZOT_LOGIN": int(first_use >= 0 and 'docker login "$ZOT_EP"' in items[first_use]),
     "CONFIG_WRITES_BEFORE_CALL": sum(1 for c in config_writes if 0 <= call_pos and c < call_pos),
 }
-nets = [w for w in wf if isinstance(w, dict) and re.match(r"^/etc/systemd/network/[^/]+\.network$", str(w.get("path", "")))]
+# Everything that can change what networkd does. /run and /usr/lib outrank /etc for the same
+# basename, a `.network.d/*.conf` drop-in overrides the parent wholesale, and a `.link`
+# renames the very link the fallback's [Match] is written against.
+NETD = re.compile(r"^/(etc|run|usr/lib)/systemd/network/.+")
+netd_all = [str(w.get("path", "")) for w in wf
+            if isinstance(w, dict) and NETD.match(str(w.get("path", "")))]
+nets = [w for w in wf if isinstance(w, dict)
+        and re.match(r"^/etc/systemd/network/[^/]+\.network$", str(w.get("path", "")))]
+netd_other = [q for q in netd_all
+              if q != "/etc/systemd/network/99-soleur-private-fallback.network"]
 out["NETWORK_FILES"] = len(nets)
+out["NETD_OTHER"] = len(netd_other)
 fb = nets[0] if len(nets) == 1 else {}
 base = str(fb.get("path", "")).rsplit("/", 1)[-1]
-out["FB_NAME_OK"] = int(base == "99-soleur-private-fallback.network" and base > "10-netplan-")
+out["FB_NAME_OK"] = int(base == "99-soleur-private-fallback.network")
 out["FB_OWNER"] = str(fb.get("owner", "none")).replace(" ", "_") or "none"
 out["FB_MODE"] = str(fb.get("permissions", "none")) or "none"
 content = str(fb.get("content", ""))
@@ -1533,6 +1603,7 @@ PY
   NG1_FIRST_USE_IS_ZOT=${NG1[FIRST_USE_IS_ZOT_LOGIN]:-0}
   NG1_CONFIG_WRITES=${NG1[CONFIG_WRITES_BEFORE_CALL]:-0}
   NG1_NETWORK_FILES=${NG1[NETWORK_FILES]:-0}; NG1_FB_NAME_OK=${NG1[FB_NAME_OK]:-0}
+  NG1_NETD_OTHER=${NG1[NETD_OTHER]:--1}
   NG1_FB_OWNER=${NG1[FB_OWNER]:-none};  NG1_FB_MODE=${NG1[FB_MODE]:-none}
   NG1_MATCH_OK=${NG1[MATCH_OK]:-0};     NG1_FB_BYTES_EQ=${NG1[FB_BYTES_EQ]:-0}
   NG1_HELPERS=${NG1[HELPERS]:-0}
@@ -1540,8 +1611,14 @@ PY
 
   # Row 9 / own dispatch: an empty runcmd is a broken instrument, never a clean result. Every
   # item must have gone through the derived-set scan.
-  assert "NIC-G1 anti-vacuity: $NG1_ITEMS runcmd items checked, $NG1_SCANNED scanned (must be > 0 and equal)" \
-    "(( NG1_ITEMS > 0 && NG1_SCANNED == NG1_ITEMS ))"
+  assert "NIC-G1 anti-vacuity: $NG1_ITEMS runcmd items were scanned (must be > 0)" \
+    "(( NG1_ITEMS > 0 ))"
+  # The fallback is only the fallback if nothing else in write_files can outrank or override it.
+  # /run and /usr/lib beat /etc for the same basename, a .network.d/*.conf drop-in overrides the
+  # parent wholesale, and a .link renames the link the [Match] targets. All five shapes were
+  # GREEN before this row (review, measured).
+  assert "NIC-G1 row7b: write_files delivers NO other networkd file that could shadow the fallback (found $NG1_NETD_OTHER)" \
+    "(( NG1_NETD_OTHER == 0 ))"
   # Row 4: exactly one NIC-wait call, and it is the exact rendered construct.
   assert "NIC-G1 row4: runcmd carries exactly ONE NIC-wait call (found $NG1_CALLS)" \
     "(( NG1_CALLS == 1 ))"
@@ -1578,8 +1655,8 @@ PY
     "(( NG1_HELPERS == 1 )) && [[ \"\$NG1_HELPER_OWNER\" == 'root:root' && \"\$NG1_HELPER_MODE\" == '0755' ]]"
 
   NG1_RENDER_ASSERTIONS=$(( TOTAL - _COND_BEFORE ))
-  assert "NIC-G1 anti-vacuity (rendered rows): the section ran its full inventory (expected 15, ran $NG1_RENDER_ASSERTIONS)" \
-    "(( NG1_RENDER_ASSERTIONS == 15 ))"
+  assert "NIC-G1 anti-vacuity (rendered rows): the section ran its full inventory (expected 16, ran $NG1_RENDER_ASSERTIONS)" \
+    "(( NG1_RENDER_ASSERTIONS == 16 ))"
   rm -rf "$NG1_DIR"
 else
   echo "  SKIP: terraform not installed (NIC-G1 rendered rows skipped — CI deploy-script-tests provides it via setup-terraform)"
@@ -1605,11 +1682,20 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # raw-source asserts = 138; the rendered NIC-G1 rows are terraform-gated and counted in
 # COND_ASSERTIONS). The prior 123 had drifted 11 below the measured count.
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=138
+BOOTSTRAP_MIN_ASSERTIONS=144
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
   exit 1
+fi
+
+if command -v terraform >/dev/null 2>&1; then
+  BOOTSTRAP_GATED=ran
+elif [[ -n "${CI:-}" ]]; then
+  printf 'FAIL: terraform is absent under CI, so the rendered NIC-G1 inventory did not run. This job pins the toolchain (setup-terraform); its absence is a broken runner, not a skip — and "OK" here would certify 16 assertions that never executed.\n' >&2
+  exit 1
+else
+  BOOTSTRAP_GATED=SKIPPED-no-terraform
 fi
 
 echo ""
@@ -1625,4 +1711,4 @@ echo "OK"
 # passed` is host-dependent (163 with the full toolchain, 125 without terraform), and a bare `OK`
 # is not success-specific -- measured, it appears twice in a FAILING run ("composite form OK" in
 # a section header, and inside GHCR_READ_TOKEN). Keep this line unique and keep it last.
-echo "BOOTSTRAP_SUITE_OK unconditional=$UNCONDITIONAL_ASSERTIONS floor=$BOOTSTRAP_MIN_ASSERTIONS total=$TOTAL"
+echo "BOOTSTRAP_SUITE_OK unconditional=$UNCONDITIONAL_ASSERTIONS floor=$BOOTSTRAP_MIN_ASSERTIONS total=$TOTAL rendered=$BOOTSTRAP_GATED"

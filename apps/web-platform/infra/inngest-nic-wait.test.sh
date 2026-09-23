@@ -166,6 +166,11 @@ case "$sig" in
   "-4|-o|addr|show|")
     n=0; [ -f "$C/state/addr_calls" ] && read -r n < "$C/state/addr_calls"
     n=$((n + 1)); printf "%s\n" "$n" > "$C/state/addr_calls"
+    if [ -f "$C/fx/ip_rc_seq" ]; then
+      read -r seq < "$C/fx/ip_rc_seq"
+      rc=$(printf "%s " $seq | cut -d" " -f"$n")
+      [ -n "$rc" ] || rc=0
+    fi
     [ "$rc" -eq 0 ] || exit "$rc"
     cat "$C/fx/addr_base"
     read -r k < "$C/fx/appear_after"
@@ -301,6 +306,21 @@ ck() {
 }
 eq() { [[ "$1" == "$2" ]]; }
 num() { [[ "$1" -eq "$2" ]]; }
+
+# ck() SELF-TEST. The pass/fail check above proves the COUNTERS move; it says nothing about the
+# helper that DECIDES which one to call. Every scenario assertion routes through ck(), so a ck()
+# that always takes the pass branch is invisible to the counters, to the conservation check and
+# to MIN_SCENARIO_CHECKS alike -- measured at review: 368 passed, 0 failed, exit 0, with every
+# assertion neutered. Drive it with a predicate that MUST fail and require FAIL to move.
+_ck_p=$PASS; _ck_f=$FAIL
+ck "instrument self-test: ck() must be able to REJECT" eq "soleur-a" "soleur-b" >/dev/null
+if [[ "$FAIL" -ne $((_ck_f + 1)) || "$PASS" -ne "$_ck_p" ]]; then
+  printf '[FATAL] instrument self-test: ck() did not record a failure for a false predicate (PASS %s->%s, FAIL %s->%s)\n' \
+    "$_ck_p" "$PASS" "$_ck_f" "$FAIL" >&2
+  exit 1
+fi
+# The self-test spent one verdict and one case; unwind all three so the floors stay exact.
+PASS=$_ck_p; FAIL=$_ck_f; cases=$((cases - 1))
 detail_clean() { # <detail>: <=120, only A-Za-z0-9=.:_-, starts boot=<8>.
   local d="$1"
   [[ ${#d} -le 120 ]] && [[ "$d" =~ ^[A-Za-z0-9=.:_-]+$ ]] && [[ "$d" == "boot=$BOOT8."* ]]
@@ -421,8 +441,8 @@ s8() {
   new_case s8; present_on_enp7s0 0 "$NETPLAN7"; echo 1 > "$C/fx/ip_rc"
   run_helper "$EXP_IP"; invariants s8
   ck "s8: ip rc=1 -> private_nic_probe_fault, not timeout" eq "$SE_STAGE" private_nic_probe_fault
-  ck "s8: detail reason=iprc ('$SE_DETAIL')" eq "$SE_DETAIL" "boot=$BOOT8.waited_s=0.reason=iprc"
-  ck "s8: 0 sleeps (got $SLEEPS)" num "$SLEEPS" 0
+  ck "s8: detail reason=iprc ('$SE_DETAIL')" eq "$SE_DETAIL" "boot=$BOOT8.waited_s=150.reason=iprc"
+  ck "s8: the full budget was spent before faulting (got $SLEEPS)" num "$SLEEPS" 75
 }
 s9() {
   new_case s9; present_on_enp7s0 0 "$NETPLAN7"
@@ -574,8 +594,37 @@ else
 fi
 
 # --- 3. dispatch: Test Scenarios 1-17 (incl. 3b, 3c) + harness must-PASS rows --------------------
-SCENARIOS=(s1 s2 s3 s3b s3c s4 s5 s6 s7 s8 s9 s10 s12 s13 s14 s15 s16 s17 h_eth1 h_whitespace s11)
-DECLARED_SCENARIOS=21
+s8b() {
+  # #8539 review: a TRANSIENT `ip` failure is not "the address is absent". The pre-fix helper
+  # faulted on the FIRST non-zero rc, so a netlink hiccup at iteration 2 ended the wait at 4s of
+  # a 150s budget and let the zot login run NIC-less -- the very failure this helper exists to
+  # prevent. No fixture could express this before: fx/ip_rc was one static rc for every call.
+  new_case s8b; present_on_enp7s0 3 "$NETPLAN7"; echo "1 1 0 0 0" > "$C/fx/ip_rc_seq"
+  run_helper "$EXP_IP"; invariants s8b
+  ck "s8b: a transient ip failure does NOT fault -- it converges" eq "$SE_STAGE" private_nic_ok
+  ck "s8b: the wait continued past the failures (got $SLEEPS)" num "$SLEEPS" 3
+  ck "s8b: detail reports the real wait ('$SE_DETAIL')" \
+    eq "$SE_DETAIL" "boot=$BOOT8.waited_s=6.by=10-netplan-enp7s0.egress=eth0"
+}
+
+s8c() {
+  # The DISCRIMINATING case for probe_ran, and the one my first fix shipped without: the
+  # instrument fails transiently, RECOVERS, and the address is still genuinely absent. That is
+  # a real timeout, not "could not measure" -- mislabelling it probe_fault would send the
+  # operator to an instrument problem while the NIC is the problem (#6415, inverted).
+  new_case s8c
+  add_link enp7s0 virtio_net
+  nc_list_row 3 enp7s0 off unmanaged
+  echo "1 1 0" > "$C/fx/ip_rc_seq"
+  run_helper "$EXP_IP"; invariants s8c
+  ck "s8c: a RECOVERED instrument + absent address is a timeout, not a probe fault" \
+    eq "$SE_STAGE" private_nic_timeout
+  ck "s8c: detail names the link, not a reason= ('$SE_DETAIL')" \
+    eq "$SE_DETAIL" "boot=$BOOT8.waited_s=150.links=enp7s0:unmanaged:virtio_net:nov4"
+}
+
+SCENARIOS=(s1 s2 s3 s3b s3c s4 s5 s6 s7 s8 s8b s8c s9 s10 s12 s13 s14 s15 s16 s17 h_eth1 h_whitespace s11)
+DECLARED_SCENARIOS=23
 scenarios_run=0
 for s in "${SCENARIOS[@]}"; do
   echo "- $s"
@@ -593,7 +642,7 @@ if [[ $((PASS + FAIL)) -ne "$cases" ]]; then
   printf '[FATAL] anti-vacuity floor: %s verdicts for %s checks — a verdict was discarded\n' "$((PASS + FAIL))" "$cases" >&2
   exit 1
 fi
-MIN_SCENARIO_CHECKS=351
+MIN_SCENARIO_CHECKS=382
 if [[ "$cases" -lt $MIN_SCENARIO_CHECKS ]]; then
   printf '[FATAL] anti-vacuity floor: only %s scenario checks ran, expected at least %s\n' "$cases" "$MIN_SCENARIO_CHECKS" >&2
   exit 1
@@ -644,6 +693,20 @@ PY
   }
   NL=$'\n'
 
+  # POSITIVE CONTROL for mutant_end itself. Every row below routes its verdict through
+  # mutant_end, which computes `red` and then chooses pass() or fail(). Forcing that choice made
+  # all rows report "killed" with nothing behind them, at 368/0 green — invisible to the
+  # counters, to the conservation check and to MUT_EXPECTED_ROWS. Drive it with a mutation that
+  # changes bytes but not behaviour, so it MUST survive, and require mutant_end to say so.
+  _me_f=$FAIL; _me_rows=$rows_run
+  mutant_begin; mutant_sub 'W=$((i * 2))' 'W=$(( i * 2 ))'
+  mutant_end "harness control: a semantically-neutral edit must be reported SURVIVED" s1 s2 s4 >/dev/null
+  if [[ "$FAIL" -ne $((_me_f + 1)) ]]; then
+    printf '[FATAL] harness: mutant_end did not report a surviving mutant — every "killed" below is unbacked\n' >&2
+    exit 1
+  fi
+  FAIL=$_me_f; cases=$((cases - 1)); rows_run=$_me_rows
+
   mutant_begin; mutant_sub "emit private_nic_timeout warning \"\$BASE\$L\"${NL}exit 0" "emit private_nic_timeout warning \"\$BASE\$L\"${NL}exit 1"
   mutant_end "row 1: timeout arm exit 0 -> exit 1" s4 s13 s15
   mutant_begin; mutant_sub 'grep -qwF' 'grep -qF'
@@ -662,8 +725,13 @@ PY
   mutant_end "row 7: remove the empty-argument guard" s9
   mutant_begin; mutant_sub '*) BY=$(basename "$NF" .network) ;;' '*) BY=10-netplan-enp7s0 ;;'
   mutant_end "row 8: fixed by= instead of the Network File basename" s1 s3 s3b s14
-  mutant_begin; mutant_sub "[ \"\$rc\" -eq 0 ] || { W=\$((i * 2)); fault iprc; }${NL}" ''
-  mutant_end "row 9: failing ip treated as absent" s8
+  mutant_begin; mutant_sub "[ \"\$rc\" -eq 0 ] && probe_ran=1${NL}" ''
+  mutant_end "row 9: a failing ip is treated as absent (probe_ran never set)" s8c
+  # #8539 review: the pre-fix shape faulted on the FIRST non-zero rc, so one netlink hiccup
+  # ended the wait. Reverting to it must red the transient-recovery scenario, or the fix is
+  # pinned by nothing.
+  mutant_begin; mutant_sub "[ \"\$rc\" -eq 0 ] && probe_ran=1" "[ \"\$rc\" -eq 0 ] || { W=\$((i * 2)); fault iprc; }"
+  mutant_end "row 9b: fault on the FIRST transient ip failure (the pre-fix defect)" s8b
   # row 10 is below (the suite's own dispatch).
   mutant_begin; mutant_sub '.waited_s=' ' waited_s=' 3
   mutant_end "row 11: join fields with a space instead of ." s13 s1 s9
@@ -705,7 +773,7 @@ PY
     fail "harness: silent soleur-boot-emit stub did not red exactly-one-event (why:$RED_WHY)"
   fi
 
-  MUT_EXPECTED_ROWS=17
+  MUT_EXPECTED_ROWS=18
   if [[ "$rows_run" -lt $MUT_EXPECTED_ROWS ]]; then
     printf '[FATAL] anti-vacuity floor: only %s mutation/harness rows ran, expected %s — a row was deleted\n' "$rows_run" "$MUT_EXPECTED_ROWS" >&2
     exit 1
