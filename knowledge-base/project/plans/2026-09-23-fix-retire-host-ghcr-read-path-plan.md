@@ -305,7 +305,7 @@ BEFORE                                            AFTER
 ------                                            -----
 ghcr_prelude_and_login                            prefetch_deploy_secrets
   ├─ read /etc/default/soleur-ghcr-read             ├─ prefetch SENTRY_* from Doppler   (kept — #7095)
-  ├─ prefetch SENTRY_* from Doppler                 ├─ sweep ghcr.io auths from deploy + home cfg  (NEW)
+  ├─ prefetch SENTRY_* from Doppler                 ├─ sweep the ghcr.io auth from the DEPLOY cfg  (NEW)
   ├─ docker login ghcr.io          ──┐              └─ _ghcr_cfg_probe ×3 → SOLEUR_DEPLOY_GHCR_CONFIG
   │    └─ on failure:               │                                                    (kept — 1b)
   │       refetch_ghcr_and_relogin ─┤ DELETED
@@ -350,7 +350,9 @@ falls through to cannot authenticate. 1c makes the outcome honest instead of arr
 ### The sweep, and why it is in-script and idempotent
 
 The 1b marker's first post-apply reading measured a revoked `ghcr.io` inline auth in **both** the
-effective deploy config and the legacy home config. The sweep removes the key from both:
+effective deploy config and the legacy home config. The sweep removes the key from the **deploy**
+config only — see the scope correction above for why the home one is structurally unreachable
+from `webhook.service`, and why grading on it would keep #8036 open forever:
 
 ```bash
 # Registry-native and key-scoped: `docker logout <reg>` removes exactly that registry's entry and
@@ -428,8 +430,9 @@ Classes delivered, all in `apps/web-platform/infra/ci-deploy.test.sh`:
 
 - `T-1c-1` residual-zero: the committed `ci-deploy.sh` contains **zero** `docker login ghcr.io`
   invocations and no `refetch_ghcr_and_relogin` definition. RED today (three call sites exist).
-- `T-1c-2` the sweep removes an inline `ghcr.io` auth from BOTH the deploy config and the home config
-  in one deploy, and leaves the co-resident zot auths entry **equal as a JSON value** (`jq -S '.auths'` compare).
+- `T-1c-2` the sweep removes an inline `ghcr.io` auth from the DEPLOY config in one deploy, leaves
+  the HOME config byte-identical, and leaves the co-resident zot auths entry **equal as a JSON
+  value** (`jq -S '.auths'` compare).
 - `T-1c-3` idempotence: a second deploy over an already-clean config performs **no write** (mtime
   unchanged) — folded into `T-1c-2`'s fixture rather than given its own row, since the defect it
   catches is one redundant config write.
@@ -441,9 +444,16 @@ Classes delivered, all in `apps/web-platform/infra/ci-deploy.test.sh`:
   `image_pull_failed`, and issues **zero** `docker pull` against a `ghcr.io/` ref.
 - `T-1c-7` the transient retry still fires on the **zot** arm with the `PULL_TRANSIENT_RETRY_SLEEPS`
   schedule, and its break-glass empty-value disable lever still works (**P7**).
-- `T-1c-8` harness row (must-PASS, non-canonical): a config whose `auths` object exists but has no
-  `ghcr.io` key, and a config with no `auths` key at all, both pass the sweep untouched.
+- `T-1c-8` the swept config keeps mode 0600 and its owning uid, asserted explicitly rather than
+  as "unchanged" (an unchanged-assertion passes against a sweep that never ran).
 - `T-1c-9` harness row (must-RED): stubbing the sweep to a no-op must red `T-1c-2` and `T-1c-4`.
+
+  > The two identifiers above disagreed with `## Test Scenarios` in an earlier draft of this plan
+  > — this list gave `T-1c-8` as an untouched-config harness row, while Test Scenarios gave it as
+  > the mode/ownership row. `## Test Scenarios` is this plan's declared single source of truth for
+  > the `T-1c-*` set, so it wins and this list is corrected to match. The untouched-config cases
+  > it named are covered, as `## Edge Cases` rows, by the `#8036 1b` marker matrix
+  > (`credsstore` / `noghcr` / `absent`), which asserts `swept=no` or `swept=na` for each.
 
 **Do NOT author rows for `_try_local_cache_reload`.** An earlier draft added three (same-version
 rescue, no-candidate hard fail, new-version fallthrough) on a domain-review finding that its
@@ -477,7 +487,7 @@ deletion.
 
   ```bash
   prefetch_deploy_secrets      # the SENTRY_* loop (the #7095 comment moves with it, intact)
-  sweep_stale_registry_auth    # the two _sweep_ghcr_auth calls
+  sweep_stale_registry_auth    # the deploy-config sweep (ONE config; see the scope correction)
   emit_registry_config_marker  # _ghcr_cfg_probe ×3 + SOLEUR_DEPLOY_GHCR_CONFIG
   ```
 
@@ -863,8 +873,11 @@ docker config the deploy user can write retains a `ghcr.io` inline auth across d
 presentation:** every `_docker_login_capture <registry> …` call site — the function is the single
 chokepoint through which every `docker login` in the script flows (verified: the script contains no
 bare `docker login`), so the assertion is "no `_docker_login_capture` call site names `ghcr.io`",
-which survives a new login site being added. (2) **Credential at rest:** the two *writable* configs
-`sweep_stale_registry_auth` covers, adjacent at one call site. *(The earlier draft derived the sweep
+which survives a new login site being added. (2) **Credential at rest:** the ONE writable config
+`sweep_stale_registry_auth` covers — `$GHCR_DOCKER_CONFIG`, on `/mnt/data`. The home config is
+probed and deliberately NOT written (it is unreachable under `ProtectHome=read-only`), exactly as
+root's is; an earlier draft of this guard said "two", which contradicted the scope correction this
+plan's own Technical Approach derives. *(The earlier draft derived the sweep
 list and the probe list from one shared array to defend against a third config being probed but not
 swept. Cut: a generic solution to a two-element problem no diff is proposing — root's config is
 probed and deliberately not written.)*
@@ -1007,7 +1020,10 @@ individually: (a) no LLM or external API processes operator-session-derived data
 brand-survival threshold is `none`, not `single-user incident`; (c) no new cron or workflow reads
 `knowledge-base/project/learnings/` or `knowledge-base/project/specs/`; (d) no new artifact-distribution
 surface. The one credential-adjacent fact cuts the safe way: the change **removes** a revoked bearer
-token from two at-rest files and from every outbound deploy request.
+token from the deploy docker config (one at-rest file, swept on every deploy) and from every
+outbound deploy request. *(Corrected at implementation: an earlier draft said “two at-rest
+files”. The home config cannot be written from `webhook.service` — see the scope correction —
+so it is observed by the 1b marker and cleared under 1d, not here.)*
 
 ## Architecture Decision (ADR/C4)
 
@@ -1182,7 +1198,7 @@ Every path below was verified to exist on this branch (`[[ -e ]]`). The tables n
 
 | File | Edit |
 |---|---|
-| `apps/web-platform/infra/ci-deploy.sh` | Delete `refetch_ghcr_and_relogin()`. **Split** `ghcr_prelude_and_login()` into `prefetch_deploy_secrets` / `sweep_stale_registry_auth` / `emit_registry_config_marker`; add `_sweep_ghcr_auth()` and its two calls **before** `_ghcr_cfg_probe`; add a closed-vocabulary `swept=yes\|no\|na` token to the `SOLEUR_DEPLOY_GHCR_CONFIG` marker — `na` for the jq-absent case, matching the `inline\|none\|na` shape every other token on that marker already uses. **Do not also keep a conditional `PRELUDE: swept stale ghcr.io auth` log line**: two emitters for one property means two query shapes for the probe, and an earlier draft had the Observability section grading off the line while the risk table graded off the token. Delete the auth arm of `_ghcr_pull_or_recover()`; rename → `_pull_with_transient_retry()`; add a ref parameter. In `pull_image_with_fallback()`: delete the GHCR fallback branch and the stale `RETIREMENT TRIPWIRE` comment, delete the `ZOT_ACTIVE=0` GHCR tail, route the zot arm through the retry helper. Rename `GHCR_DOCKER_CONFIG` → `DEPLOY_DOCKER_CONFIG_FILE` and fix its header comment. **Four ref-correctness fixes surfaced in domain review:** (i) `pull_auth_recovery_event "${IMAGE}:${TAG}" transient_recovered` reads the *global* `IMAGE`, which on the zot arm is still the `ghcr.io/…` ref (reassignment happens only after success) — must take the ref parameter; (ii) both `docker pull "${IMAGE}:${TAG}"` loop positions, same; (iii) `pull_failure_event "${IMAGE}:${TAG}" …` on the `ZOT_ACTIVE=1` both-failed arm already names a GHCR ref for a zot failure — pre-1c ambiguous, post-1c actively false; (iv) **preserve the FR-C1 breadcrumb** `logger … "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} reason=…"`, which sits *physically inside* the deleted branch — drop its `— falling back to GHCR` suffix and move it **below** the retry loop so it reports the final attempt's stderr. Its own in-code note records that its absence is what sent the 2026-07-29 (v0.244.1) diagnosis at the tunnel instead of the registry. |
+| `apps/web-platform/infra/ci-deploy.sh` | Delete `refetch_ghcr_and_relogin()`. **Split** `ghcr_prelude_and_login()` into `prefetch_deploy_secrets` / `sweep_stale_registry_auth` / `emit_registry_config_marker`; add the deploy-config sweep **before** `_ghcr_cfg_probe`; add a closed-vocabulary `swept=yes\|no\|na` token to the `SOLEUR_DEPLOY_GHCR_CONFIG` marker — `na` for the jq-absent case, matching the `inline\|none\|na` shape every other token on that marker already uses. **Do not also keep a conditional `PRELUDE: swept stale ghcr.io auth` log line**: two emitters for one property means two query shapes for the probe, and an earlier draft had the Observability section grading off the line while the risk table graded off the token. Delete the auth arm of `_ghcr_pull_or_recover()`; rename → `_pull_with_transient_retry()`; add a ref parameter. In `pull_image_with_fallback()`: delete the GHCR fallback branch and the stale `RETIREMENT TRIPWIRE` comment, delete the `ZOT_ACTIVE=0` GHCR tail, route the zot arm through the retry helper. Do NOT rename `GHCR_DOCKER_CONFIG` (the rename was CUT at plan review — no property, 9 sites plus its test, and the ADR clause it needed existed only because of it); fix its header comment instead. **Four ref-correctness fixes surfaced in domain review:** (i) `pull_auth_recovery_event "${IMAGE}:${TAG}" transient_recovered` reads the *global* `IMAGE`, which on the zot arm is still the `ghcr.io/…` ref (reassignment happens only after success) — must take the ref parameter; (ii) both `docker pull "${IMAGE}:${TAG}"` loop positions, same; (iii) `pull_failure_event "${IMAGE}:${TAG}" …` on the `ZOT_ACTIVE=1` both-failed arm already names a GHCR ref for a zot failure — pre-1c ambiguous, post-1c actively false; (iv) **preserve the FR-C1 breadcrumb** `logger … "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} reason=…"`, which sits *physically inside* the deleted branch — drop its `— falling back to GHCR` suffix and move it **below** the retry loop so it reports the final attempt's stderr. Its own in-code note records that its absence is what sent the 2026-07-29 (v0.244.1) diagnosis at the tunnel instead of the registry. |
 | `apps/web-platform/infra/ci-deploy.test.sh` | Add `T-1c-1` … `T-1c-15`. Delete/rewrite: the `§1A` block, `#6400` AC1/AC2/AC4/AC14, `#6497` T-5B-17 and T-5B-18, `#7095` T-7095-4 and T-6, the `#6525` GHCR-scoped rows (re-point at zot), and the `#8036 1b` marker block (re-point at the post-sweep expectations). **Delete** `HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")` and everything asserting over it — once the function is gone the extraction yields an empty string and every assertion over it is vacuously true. |
 
 ### Consumers that fail loudly
@@ -1253,46 +1269,56 @@ accurate); its `GHCR_READ_USER` assertions (they target `cloud-init.yml`, not `c
 
 ### Functional Requirements
 
-- [ ] **AC-F1** `apps/web-platform/infra/ci-deploy.sh` contains **zero** `_docker_login_capture ghcr.io` call sites and no `refetch_ghcr_and_relogin` definition. Measured baseline on this branch: **2** and **1** respectively (plus **1** `registry_pull_event ghcr-fallback` site and **9** `GHCR_DOCKER_CONFIG` references), so the guard is proven by driving those to zero, not by a grep that was already zero. *(impl: `ci-deploy.sh` › `prefetch_deploy_secrets()` / `sweep_stale_registry_auth()` / `emit_registry_config_marker()`; test: `T-1c-1`)*
-- [ ] **AC-F2** A deploy over `$GHCR_DOCKER_CONFIG` carrying an inline `ghcr.io` auth leaves no `ghcr.io` key, and leaves the co-resident zot auths entry **equal as a JSON value** (`jq -S '.auths'` compare). *(Deploy config only — `${HOME}/.docker/config.json` is unreachable under `ProtectHome=read-only`; see the scope correction in `## Technical Approach`.)* *(test: `T-1c-2`)*
-- [ ] **AC-F3** A second deploy over already-clean configs performs no write (mtime unchanged). *(test: `T-1c-2`, which absorbed the former `T-1c-3`)*
-- [ ] **AC-F4** The `SOLEUR_DEPLOY_GHCR_CONFIG` marker reads `deploy_ghcr_auth=none` after the sweep and carries a `swept=yes\|no\|na` token distinguishing "arrived clean" from "arrived dirty and was swept". *(impl: `ci-deploy.sh` › `_ghcr_cfg_probe()` + the marker emit; test: `T-1c-4`)*
-- [ ] **AC-F5** The `SENTRY_INGEST_DOMAIN` / `SENTRY_PROJECT_ID` / `SENTRY_PUBLIC_KEY` prefetch still runs and still precedes `zot_gate_and_login`. *(impl: `ci-deploy.sh` › `prefetch_deploy_secrets()`; test: `T-1c-5`)*
-- [ ] **AC-F6** `ZOT_ACTIVE=0` with no local-cache candidate ends in `pull_failure_event` → `final_write_state 1 image_pull_failed`, issues **zero** `docker pull` against any `ghcr.io/` ref, and leaves the previous container running. *(test: `T-1c-6`; the local-cache tier's own three arms are covered by the pre-existing `#6512` block, cited not duplicated)*
-- [ ] **AC-F7** **(P7)** The bounded transient retry fires on the **zot** arm with the `PULL_TRANSIENT_RETRY_SLEEPS` schedule, and its empty-value break-glass disable lever still works. *(impl: `ci-deploy.sh` › `_pull_with_transient_retry()`; test: `T-1c-7`)*
-- [ ] **AC-F8** Every pull-path emitter names the ref actually pulled: `docker pull`, `pull_auth_recovery_event` and `pull_failure_event` all take the ref parameter, never the global `IMAGE`. *(test: `T-1c-13`)*
-- [ ] **AC-F9** The FR-C1 zot-stderr breadcrumb survives the branch deletion, drops its `— falling back to GHCR` suffix, and reports the **final** attempt's stderr. *(test: `T-1c-14`)*
+- [x] **AC-F1** `apps/web-platform/infra/ci-deploy.sh` contains **zero** `_docker_login_capture ghcr.io` call sites and no `refetch_ghcr_and_relogin` definition. Measured baseline on this branch: **2** and **1** respectively (plus **1** `registry_pull_event ghcr-fallback` site and **9** `GHCR_DOCKER_CONFIG` references), so the guard is proven by driving those to zero, not by a grep that was already zero. *(impl: `ci-deploy.sh` › `prefetch_deploy_secrets()` / `sweep_stale_registry_auth()` / `emit_registry_config_marker()`; test: `T-1c-1`)*
+- [x] **AC-F2** A deploy over `$GHCR_DOCKER_CONFIG` carrying an inline `ghcr.io` auth leaves no `ghcr.io` key, and leaves the co-resident zot auths entry **equal as a JSON value** (`jq -S '.auths'` compare). *(Deploy config only — `${HOME}/.docker/config.json` is unreachable under `ProtectHome=read-only`; see the scope correction in `## Technical Approach`.)* *(test: `T-1c-2`)*
+- [x] **AC-F3** A second deploy over already-clean configs performs no write (mtime unchanged). *(test: `T-1c-2`, which absorbed the former `T-1c-3`)*
+- [x] **AC-F4** The `SOLEUR_DEPLOY_GHCR_CONFIG` marker reads `deploy_ghcr_auth=none` after the sweep and carries a `swept=yes\|no\|na` token distinguishing "arrived clean" from "arrived dirty and was swept". *(impl: `ci-deploy.sh` › `_ghcr_cfg_probe()` + the marker emit; test: `T-1c-4`)*
+- [x] **AC-F5** The `SENTRY_INGEST_DOMAIN` / `SENTRY_PROJECT_ID` / `SENTRY_PUBLIC_KEY` prefetch still runs and still precedes `zot_gate_and_login`. *(impl: `ci-deploy.sh` › `prefetch_deploy_secrets()`; test: `T-1c-5`)*
+- [x] **AC-F6** `ZOT_ACTIVE=0` with no local-cache candidate ends in `pull_failure_event` → `final_write_state 1 image_pull_failed`, issues **zero** `docker pull` against any `ghcr.io/` ref, and leaves the previous container running. *(test: `T-1c-6`; the local-cache tier's own three arms are covered by the pre-existing `#6512` block, cited not duplicated)*
+- [x] **AC-F7** **(P7)** The bounded transient retry fires on the **zot** arm with the `PULL_TRANSIENT_RETRY_SLEEPS` schedule, and its empty-value break-glass disable lever still works. *(impl: `ci-deploy.sh` › `_pull_with_transient_retry()`; test: `T-1c-7`)*
+- [x] **AC-F8** Every pull-path emitter names the ref actually pulled: `docker pull`, `pull_auth_recovery_event` and `pull_failure_event` all take the ref parameter, never the global `IMAGE`. *(test: `T-1c-13`)*
+- [x] **AC-F9** The FR-C1 zot-stderr breadcrumb survives the branch deletion, drops its `— falling back to GHCR` suffix, and reports the **final** attempt's stderr. *(test: `T-1c-14`)*
 - [ ] **AC-F10** *(cut at plan review.)* It asserted that a new-version deploy whose zot pull fails must not serve the running image. True and important — and already asserted by the pre-existing `#6512` row whose PASS string is *"new-version deploy (running image is an older version) → tier does NOT fire, hard image_pull_failed (no stale-bits rollback)"*. `_try_local_cache_reload` is not edited here; the existing case is cited in the PR body instead.
-- [ ] **AC-F11** `scripts/followthroughs/ghcr-read-retired-8036.sh --explain` prints `PROBE-READY` and makes zero network calls.
+- [x] **AC-F11** `scripts/followthroughs/ghcr-read-retired-8036.sh --explain` prints `PROBE-READY` and makes zero network calls.
 - [ ] **AC-F12** #8036 carries the `follow-through` label (verified to exist: `gh label list` → `follow-through — External dependency awaiting verification`) and a `<!-- soleur:followthrough script=scripts/followthroughs/ghcr-read-retired-8036.sh earliest=<apply+1d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->` directive. **No new secret wiring is required** — all three are already wired in `.github/workflows/scheduled-followthrough-sweeper.yml` and already consumed by sibling probes (`bwrap-probe-selfreport-8016.sh`, `betterstack-roundtrip-latency-7855.sh`, `anthropic-admin-key-6297.sh`), so the workflow edit is the directive only.
 
 ### Non-Functional Requirements
 
-- [ ] **AC-N1** The always-failing Doppler GHCR reads leave the deploy's critical path. Asserted **deterministically over the code**, not over a stopwatch: with the suite's `doppler` process mock in trace mode, a deploy issues **zero** `secrets get GHCR_READ_USER` and **zero** `secrets get GHCR_READ_TOKEN` calls (baseline on this branch: up to 3 + 3 with 5 s sleeps between, on every deploy, all failing). *(test: `T-1c-16`)*
+- [x] **AC-N1** The always-failing Doppler GHCR reads leave the deploy's critical path. Asserted **deterministically over the code**, not over a stopwatch: with the suite's `doppler` process mock in trace mode, a deploy issues **zero** `secrets get GHCR_READ_USER` and **zero** `secrets get GHCR_READ_TOKEN` calls (baseline on this branch: up to 3 + 3 with 5 s sleeps between, on every deploy, all failing). *(test: `T-1c-16`)*
   > **Standing panel check (`cq-ac-must-not-depend-on-concurrent-sessions`) applied.** The original wording was *"deploy wall-clock does not regress"* — an ambient-timing assertion a busy host, a slow network or a concurrent build could flip with no line of the diff changing. It measured the machine, not the change. Rewritten as a call-count assertion over the existing process mock. Every other AC was scanned for the same shape and none carries it.
-- [ ] **AC-N2** No credential value, username, config content or helper name reaches `logger`, Sentry or any sink — journald ships unscrubbed to Better Stack. The sweep logs a fixed string only.
+- [x] **AC-N2** No credential value, username, config content or helper name reaches `logger`, Sentry or any sink — journald ships unscrubbed to Better Stack. The sweep logs a fixed string only.
 - [ ] **AC-N3** *(cut at plan review.)* It asserted the swept files keep mode 0600 / `deploy:deploy`,
   justified by a `chmod --reference` propagating a wrong mode from the fail-soft `mkdir -p` path. Two
   reviewers independently falsified it: `--reference` propagates the file's **own** mode, so the
   scenario is a no-op by construction — and once the sweep body became `docker logout`, which writes the
   file with docker's own mode, there is no `chmod` in the change at all. One mode assertion rides inside
   `T-1c-2`'s fixture.
-- [ ] **AC-N4** No `ssh`, no `systemctl`, no Doppler secret-write, no vendor-dashboard and no operator step appears anywhere in the shipped diff or the PR body (`hr-never-label-any-step-as-manual-without`, `hr-ship-message-no-operator-checklist`).
-- [ ] **AC-N5** NFR register assessment run against `knowledge-base/engineering/architecture/nfr-register.md`.
+- [x] **AC-N4** No `ssh`, no `systemctl`, no Doppler secret-write, no vendor-dashboard and no operator step appears anywhere in the shipped diff or the PR body (`hr-never-label-any-step-as-manual-without`, `hr-ship-message-no-operator-checklist`).
+- [x] **AC-N5** NFR register assessment run against `knowledge-base/engineering/architecture/nfr-register.md`.
+  **Verdict: no register row moves, and the register does not cover the property this change
+  touches.** Searched for a redundancy / availability / failover / pull-path NFR; there is none.
+  The closest rows are NFR-018 (Canary Upgrade, `Not Implemented`, evidence *"single-instance
+  deployment; rollback via previous Docker tag"*) and NFR-032 (Automatic Rollback on KPI Alert),
+  neither of which mentions the registry, and NFR-041's `Container Registry (zot) store volume`
+  row, which is about encryption at rest and is untouched. The single-pull-path property this
+  change consummates is governed by **ADR-169**, which is amended in this PR, not by the
+  register. Recorded as an assessment with a verdict rather than as an edit: adding a row here
+  would be inventing an NFR the register has never carried, inside a PR that is not about the
+  register's coverage.
 
 ### Quality Gates
 
-- [ ] **AC-Q1** `bash apps/web-platform/infra/ci-deploy.test.sh` green, with `T-1c-1` … `T-1c-15` present and each proven RED on `origin/main`'s script before the deletion (constitution: *"proven by a RED, never a green"*).
-- [ ] **AC-Q2** `bash apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` green, with AC20 clauses (1) and (2) still asserting the cloud-init bake.
-- [ ] **AC-Q3** `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts`, `scripts/followthroughs/zot-soak-6122.test.sh` and `tests/scripts/test-sentry-alert-live-fidelity.sh` all green on the four-signal set.
+- [x] **AC-Q1** `bash apps/web-platform/infra/ci-deploy.test.sh` green, with `T-1c-1` … `T-1c-15` present and each proven RED on `origin/main`'s script before the deletion (constitution: *"proven by a RED, never a green"*).
+- [x] **AC-Q2** `bash apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` green, with AC20 clauses (1) and (2) still asserting the cloud-init bake.
+- [x] **AC-Q3** `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts`, `scripts/followthroughs/zot-soak-6122.test.sh` and `tests/scripts/test-sentry-alert-live-fidelity.sh` all green on the four-signal set.
 - [ ] **AC-Q4** *(cut at plan review — no window exists to protect.)* An earlier form ordered the soak
   floor move ahead of the emitter deletion "so no window exists in which the soak counts an operand
   nothing can emit". But the operand has been structurally dark since #7071 — it emits nothing **today** —
   and ADR-096's 2026-09-22 amendment records the soak is not enrolled in the sweeper. The ordering
   protected against a state change that is not one. Same commit; the parity is enforced by Guard 2.
-- [ ] **AC-Q5** `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` is **run** *(TypeScript — use the repo's TS runner, not `bash`)* (not merely assumed) — it is what proves the `ci-deploy.sh` edit will be delivered rather than sit in git.
-- [ ] **AC-Q6** `plugins/soleur/test/c4-count-parity.test.sh` green **and its entry count observed to have moved** (not merely exit 0); `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` green.
-- [ ] **AC-Q7** Residual sweep over **executable paths only** — `apps/`, `scripts/`, `.github/`, `tests/`:
+- [x] **AC-Q5** `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` is **run** *(TypeScript — use the repo's TS runner, not `bash`)* (not merely assumed) — it is what proves the `ci-deploy.sh` edit will be delivered rather than sit in git.
+- [x] **AC-Q6** `plugins/soleur/test/c4-count-parity.test.sh` green **and its entry count observed to have moved** (not merely exit 0); `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` green.
+- [x] **AC-Q7** Residual sweep over **executable paths only** — `apps/`, `scripts/`, `.github/`, `tests/`:
   `rg -n 'refetch_ghcr_and_relogin|ghcr_prelude_and_login|_ghcr_pull_or_recover|registry_pull_event ghcr-fallback' apps scripts .github tests`
   returns hits only in files this PR edits.
   > **Rescoped at plan review, from a measured failure.** The earlier form claimed residual-zero across
@@ -1303,18 +1329,18 @@ accurate); its `GHCR_READ_USER` assertions (they target `cloud-init.yml`, not `c
   > this plan's own carve-out argument, applied to a class it had not enumerated. The old form was also
   > simultaneously too narrow: it omitted `_ghcr_pull_or_recover`, so it policed two renames and missed
   > one. **Off-code citations of a renamed symbol stay put**; the sweep governs code, not history.
-- [ ] **AC-Q8** The three ADR amendments and the `model.c4` edit are in **this** PR, not a follow-up (the rule migrated out of `AGENTS.rules.md` in PR #8034 and is now enforced at `plan` Phase 2.10 — cite the phase, not an `AGENTS.md` id, which no longer resolves).
+- [x] **AC-Q8** The three ADR amendments and the `model.c4` edit are in **this** PR, not a follow-up (the rule migrated out of `AGENTS.rules.md` in PR #8034 and is now enforced at `plan` Phase 2.10 — cite the phase, not an `AGENTS.md` id, which no longer resolves).
 - [ ] **AC-Q9** **The PR body's FIRST line answers "does merging this alone mutate production?" — and the answer is YES.** `.github/workflows/apply-deploy-pipeline-fix.yml` is `on: push: branches: [main]` with `paths:` listing `apps/web-platform/infra/ci-deploy.sh`, and `apply-web-platform-infra.yml` is `on: push: branches: [main]` with `paths: apps/web-platform/infra/**`. Both fire on merge, so the merge click **is** the per-command production authorization for the script push and the Sentry-rule apply — there is no separate operator dispatch (`hr-menu-option-ack-not-prod-write-auth`).
 - [ ] **AC-Q10** `Closes #7295` in the PR body (not the title). **`Ref #8036`, never `Closes #8036`** — #8036's close criterion is graded post-apply by the follow-through probe, so `Closes` would auto-close it at merge, before the criterion can be measured, producing a false-resolved state. #6565 and #6630 receive narrowing comments and stay open. #6400's tracker receives the probe-retirement comment. The 1d follow-up issue is filed with milestone `Phase 4: Validate + Scale`.
-- [ ] **AC-Q11** `scripts/lint-guard-contract.py` passes over this plan's `## Guard Contract`; `scripts/lint-infra-no-human-steps.py` passes over the plan file.
-- [ ] **AC-Q12** The new follow-through script passes **its own family's gates**, which an earlier draft omitted: `scripts/followthrough-exec-bit.test.sh` (every `scripts/followthroughs/*.sh` committed `100755`), `scripts/followthrough-predicate-parity.test.sh`, `scripts/lint-followthrough-varq-ban.test.sh`, `plugins/soleur/test/ship-followthrough-directive.test.sh`, `plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts`.
+- [x] **AC-Q11** `scripts/lint-guard-contract.py` passes over this plan's `## Guard Contract`; `scripts/lint-infra-no-human-steps.py` passes over the plan file.
+- [x] **AC-Q12** The new follow-through script passes **its own family's gates**, which an earlier draft omitted: `scripts/followthrough-exec-bit.test.sh` (every `scripts/followthroughs/*.sh` committed `100755`), `scripts/followthrough-predicate-parity.test.sh`, `scripts/lint-followthrough-varq-ban.test.sh`, `plugins/soleur/test/ship-followthrough-directive.test.sh`, `plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts`.
 
 ## Test Scenarios
 
 ### Acceptance Tests (RED phase targets)
 
 - **T-1c-1** Given the committed `ci-deploy.sh`, when the residual scan runs, then zero `_docker_login_capture ghcr.io` call sites and no `refetch_ghcr_and_relogin` definition are found. *(RED today — measured baseline: `_docker_login_capture ghcr.io` = **2** call sites, `refetch_ghcr_and_relogin` definitions = **1**.)*
-- **T-1c-2** Given a deploy config and a home config each carrying an inline `ghcr.io` auth plus a zot auths entry, when one deploy runs, then the `ghcr.io` key is gone, the zot entry is **equal as a JSON value** (`jq -S` compare — `docker logout` re-serializes the document, so a byte compare is written to fail), each file is still mode 0600 owned by the deploy user, and a **second** deploy over the now-clean configs changes no mtime. *(Absorbs the former `T-1c-3` — the defect it caught alone was one redundant config write — and the former `AC-N3`'s single useful assertion.)*
+- **T-1c-2** Given a deploy config carrying an inline `ghcr.io` auth plus a zot auths entry, and a home config carrying one too, when one deploy runs, then the DEPLOY config's `ghcr.io` key is gone, the HOME config is byte-identical (the scope correction's testable form), the zot entry is **equal as a JSON value** (`jq -S` compare — `docker logout` re-serializes the document, so a byte compare is written to fail), each file is still mode 0600 owned by the deploy user, and a **second** deploy over the now-clean configs changes no mtime. *(Absorbs the former `T-1c-3` — the defect it caught alone was one redundant config write — and the former `AC-N3`'s single useful assertion.)*
 - **T-1c-4** Given the sweep has run, when the marker is emitted, then it reads `deploy_ghcr_auth=none swept=yes` on the first deploy and `deploy_ghcr_auth=none swept=no` on the second. `home_ghcr_auth` is reported but **not graded** — it is unreachable under `ProtectHome=read-only`.
 - **T-1c-5** Given a deploy, when the emitted order is inspected, then the SENTRY_* prefetch precedes the first `ZOT_GATE` line.
 - **T-1c-6** Given `ZOT_ACTIVE=0` and no local-cache candidate, when the pull runs, then zero `docker pull` targets a `ghcr.io/` ref and the deploy ends `image_pull_failed` with the old container running.
@@ -1341,7 +1367,7 @@ accurate); its `GHCR_READ_USER` assertions (they target `cloud-init.yml`, not `c
 - A config file with no `auths` key at all → untouched.
 - A config file that is unparseable JSON → untouched, `deploy_cfg=unparseable` on the marker, no abort under `set -euo pipefail`.
 - `jq` absent from `PATH` → sweep is a no-op, every marker token is `na`, deploy proceeds.
-- `${HOME}` unset → the home probe and the home sweep both no-op rather than operating on `/.docker/config.json`.
+- `${HOME}` unset → the home PROBE no-ops rather than reading `/.docker/config.json`. There is no home sweep to no-op; see the scope correction.
 - The config file is read-only → the sweep declines rather than aborting the deploy.
 - The Better Stack query returns rows whose `raw` payload quotes this tracker's body containing
   `stage=relogin_failed`, with `SYSLOG_IDENTIFIER` ≠ `ci-deploy` → the probe ignores them.

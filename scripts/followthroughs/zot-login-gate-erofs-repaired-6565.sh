@@ -82,7 +82,16 @@ fi
 # Per-record (NDJSON, one journald record per line): extract _MACHINE_ID and classify the message.
 # Both fields live in the same record line, so no jq dependency is needed (mirrors the instrument
 # soak's no-jq discipline). A record is:
-#   OK      — `PRELUDE: docker login ghcr.io ok…` OR `ZOT_GATE: active — docker login … ok…`
+#   OK      — `ZOT_GATE: active — docker login … ok…`
+#
+#             ONE-LEGGED SINCE #8036 1c (2026-09-23). This requirement used to be a disjunction
+#             whose other arm was `PRELUDE: docker login ghcr.io ok…`. That line no longer
+#             exists: 1c deleted the host-side GHCR login. Keeping the dead disjunct would not
+#             have been harmless — a disjunction is satisfied by either arm, so it could never
+#             fail on the GHCR half and its presence implied a second source of OK evidence
+#             that is not there. The zot gate's login is now the only thing that can satisfy
+#             this probe, which also means a zot-dark host produces NO ok line at all and is
+#             correctly reported as unproven rather than passed.
 #   EROFS   — a `… FAILED …` login line carrying class=cred_store OR kw=…erofs (the repair target)
 # ZOT_GATE_DEGRADED reason lines and non-login states are neither and are ignored for coverage.
 declare -A HOST_OK=()      # machine_id -> count of OK lines
@@ -101,7 +110,7 @@ while IFS= read -r line; do
 
   is_ok=0 is_erofs=0
   # OK: an authenticated login. Anchor on the outcome phrase, not a bare "ok".
-  if printf '%s' "$line" | grep -qE 'PRELUDE: docker login ghcr\.io ok|ZOT_GATE: active .* docker login .* ok'; then
+  if printf '%s' "$line" | grep -qE 'ZOT_GATE: active .* docker login .* ok'; then
     is_ok=1
   fi
   # EROFS/cred_store FAILURE: a FAILED login line still carrying the repair-target signature.

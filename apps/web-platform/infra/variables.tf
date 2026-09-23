@@ -668,7 +668,7 @@ variable "ghcr_read_user" {
 }
 
 variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN; consumed by ci-deploy.sh (host pull + cosign .sig fetch auth) + cloud-init fresh-boot login. NO default."
+  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN. CONSUMER: cloud-init fresh-boot login ONLY. The ci-deploy.sh consumer (host pull + cosign .sig fetch auth) was RETIRED in #8036 item 1c on 2026-09-23 \u2014 the deploy path no longer reads this secret at all, and it sweeps any inline ghcr.io entry out of the deploy docker config on every deploy. The boot path still reads it and is tracked as 1d. The divergence is named here on purpose: the next engineer to grep GHCR_READ_TOKEN lands on why two host postures disagree instead of re-deriving it. NO default."
   type        = string
   sensitive   = true
 }

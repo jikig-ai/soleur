@@ -6,14 +6,6 @@ date: 2026-07-04
 
 # ADR-087: Cosign deploy-verify: host-net ephemeral verifier over private GHCR (no container-allowlist widening)
 
-> **Note (2026-07-06, #6122):** the deploy-time cosign verifier topology decided here is
-> **unaffected** and stays active. Only the *credential-provisioning* arm (how the host authenticates
-> the private pull + `.sig` fetch, ADR-088 D1) is changing: ADR-088's App-token minter was proven
-> infeasible (GHCR refuses App tokens), so #6122 migrates the registry off GHCR to self-hosted zot.
-> When that lands, "GHCR" in this ADR becomes the zot endpoint and the mounted docker-config carries
-> the zot OIDC bearer instead of a GHCR PAT — the `--network host` + pinned-trusted-root + offline
-> verify shape is identical.
-
 ## Context
 
 `apps/web-platform/infra/ci-deploy.sh` cosign-verifies the app image signature on
@@ -91,6 +83,36 @@ runtime code — only by a deploy-time verify step.
   retains the deprecated `--offline` under the frozen SHA (see Decision).
 
 ## Decision
+
+> **The 2026-07-06 (#6122) header note that used to sit at the top of this file has MOVED HERE,
+> as a decided fact rather than a forward-looking one — it described a migration that has since
+> completed, and a reader met it before the Context that gives it meaning.** It read: the
+> deploy-time cosign verifier topology decided here is unaffected and stays active; only the
+> *credential-provisioning* arm (how the host authenticates the private pull + `.sig` fetch,
+> ADR-088 D1) changes, because ADR-088's App-token minter was proven infeasible (GHCR refuses App
+> tokens), so #6122 migrates the registry off GHCR to self-hosted zot — after which "GHCR" in
+> this ADR means the zot endpoint, the mounted docker-config carries the zot credential instead
+> of a GHCR PAT, and the `--network host` + pinned-trusted-root + offline verify shape is
+> identical.
+>
+> **That substitution is now COMPLETE, in both halves, and #8036 1c (2026-09-23) finished it.**
+> The mounted config carries the zot entry that `zot_gate_and_login` writes, and it no longer
+> carries a GHCR one at all: the host-side GHCR login is deleted and `sweep_stale_registry_auth`
+> removes any inline `ghcr.io` entry left on disk, once per deploy. Read every remaining "GHCR"
+> in this ADR's Decision and Consequences as naming the zot endpoint.
+>
+> **ONE REQUIREMENT IS UNCHANGED AND MUST STAY VERBATIM:** the mounted config must carry an
+> **inline** `auths.<registry>.auth` entry, **never** a `credsStore`/`credHelpers` indirection.
+> The distroless cosign image ships no credential helper, so an indirection silently
+> UNAUTHORIZEs the `.sig` fetch. This is registry-independent and survives every substitution
+> above — it is a property of the verifier image, not of which registry is being talked to.
+>
+> **Naming caveat.** The script symbol holding that path is still `GHCR_DOCKER_CONFIG`
+> (`${DOCKER_CONFIG}/config.json`). The name is a fossil after 1c: nothing GHCR-related is
+> written there any more. The rename was weighed and CUT — it maps to no property, costs nine
+> sites plus its test, and the only ADR clause that would have needed amending existed because
+> of the rename. The symbol's header comment in `ci-deploy.sh` says the same thing; cite that
+> comment, not this paragraph, when reading the code.
 
 Adopt **Design B′**. `verify_image_signature` runs exactly one cosign container:
 

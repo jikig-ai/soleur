@@ -1426,7 +1426,8 @@ _doppler_get_observed() {
 #   SOLEUR_DEPLOY_CRED_FAIL secret=<NAME> rc=<n> empty=<0|1> err="<bounded stderr tail>"
 #
 # WHY RETRY, AND WHY BOUNDED (R25). `zot_gate_and_login` is annotated "Fail-open: never aborts
-# the deploy", and cloud-init bakes /etc/default/soleur-ghcr-read SPECIFICALLY so a cold-boot
+# the deploy", and cloud-init bakes /etc/default/soleur-ghcr-read (for its OWN fresh-boot login;
+# #8036 1c retired this script's reader of that file) so a cold-boot
 # deploy proceeds when Doppler answers empty at the boot instant. A transient Doppler blip must
 # therefore never change the OUTCOME of a deploy; a bounded retry absorbs the blip so it cannot
 # be MISREPORTED as a dead credential. It is not an outage-waiting loop: the caller degrades onto
@@ -1942,8 +1943,10 @@ _pull_with_transient_retry() {
     # #8036 1c: the auth-denied recovery leg lived here. It classified the stderr as
     # `auth_denied` and then called `refetch_ghcr_and_relogin` to re-fetch the GHCR PAT and retry
     # the pull once. Both are gone: the PAT has been revoked since 2026-07-29, so the recovery
-    # could not succeed, and there is no GHCR pull left for it to recover. `#6400 AC3`'s anchor on
-    # the `_pull_result_is_auth_denied "$(tail -c 400 "$perr"` call shape went with it.
+    # could not succeed, and there is no GHCR pull left for it to recover. #6400 AC3 anchored on
+    # that leg's classifier CALL SHAPE, so it went with it — and the replacement anchor is written
+    # WITHOUT quoting the retired call, because AC3 passed on an earlier draft of this very
+    # comment (a bare-token assertion satisfied by prose explaining the deletion).
     #
     # `_pull_result_is_auth_denied` itself SURVIVES — `pull_failure_event` still calls it for its
     # `pull_result` classification, so an auth-shaped failure from zot is still labelled as one on
@@ -2101,7 +2104,16 @@ pull_image_with_fallback() {
     rm -f "$perr" 2>/dev/null || true
     return 0
   fi
-  pull_failure_event "${IMAGE}:${TAG}" "zot gate is dark (ZOT_ACTIVE=0) and no local-cache candidate — there is no second registry since #8036 1c" "${RECOVERY_STAGE:-}"
+  # NAME THE CAUSE THE GATE MEASURED, never just "there was no registry". Pre-1c a doppler-less
+  # or zot-unreachable host fell through to the GHCR path and, if that also failed, the deploy
+  # died later at resolve_env_file with a SPECIFIC reason (`doppler_unavailable`,
+  # `doppler_token_missing`, `doppler_fetch_failed`). Post-1c the pull is the first thing that
+  # cannot proceed, so that specificity would be LOST unless it is carried here — the operator
+  # would get a bare `image_pull_failed` for a credential problem. `ZOT_GATE_STATUS` is set by
+  # zot_gate_and_login to exactly the condition it measured (dark | no_credential_source-era
+  # `dark` | cred_read_failed | probe_unreachable | login_failed), and its matching
+  # ZOT_GATE_DEGRADED journald line carries the same reason, so the two agree by construction.
+  pull_failure_event "${IMAGE}:${TAG}" "no registry: zot gate status=${ZOT_GATE_STATUS:-unknown} (ZOT_ACTIVE=0) and no local-cache candidate. Since #8036 1c there is no GHCR fallback to attempt — see the ZOT_GATE_DEGRADED line for the measured reason." "${RECOVERY_STAGE:-}"
   rm -f "$perr" 2>/dev/null || true
   return 1
 }

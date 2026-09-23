@@ -199,10 +199,22 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
 
 ## When to revert
 
+> ⚠ **#8036 1c (2026-09-23) removed the `registry:"ghcr-fallback"` signal, and it did NOT remove
+> the condition that signal reported — it removed the fallback.** The host-side GHCR read path is
+> deleted, so a rolling deploy whose zot pull fails no longer falls back to a second registry: it
+> tries the #6512 local-cache reload (same-version reloads only) and otherwise ends
+> `image_pull_failed` with the old container still live. Everywhere below that names five signals,
+> read FOUR; everywhere that says a host "fell back to GHCR and served correctly", read "the
+> deploy failed and the previous release kept serving". The live degradation signals for the
+> rolling path are now `registry:"zot-gate-degraded"`, `registry:"local-cache"` and
+> `image_pull_failed`. The three fresh-boot `stage:` signals are UNCHANGED — cloud-init still has
+> its GHCR fallback (that is 5.3b / #8036 1d).
+
 - The **fallback-rate alarm** fires (see below). Since #6285 it pages on the **first**
-  matching event, not a spike: a `registry:"ghcr-fallback"` / `stage:"inngest_ghcr_fallback"` /
-  `stage:"app_ghcr_fallback"` event means a host *tried* zot and failed — that deploy/boot took
-  the slower fallback path and zot is degraded.
+  matching event, not a spike: a `stage:"inngest_ghcr_fallback"` / `stage:"app_ghcr_fallback"`
+  event means a host *tried* zot and failed — that BOOT took the slower fallback path and zot is
+  degraded. (The rolling-deploy member of this list, `registry:"ghcr-fallback"`, was retired with
+  the fallback itself; see the banner above.)
   > ⚠ **`stage:"app_ghcr_served"` (#6462) does NOT belong in that list — it means the opposite.**
   > Its dominant route is a `/v2/` **probe-miss**, where zot was **never attempted** and the GHCR
   > pull succeeded first try. Triaging it as "tried zot and failed" sends you down the pull path
@@ -233,15 +245,24 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
 
 - Any Phase-5 retirement step (5.3 fallback-branch removal) is discovered premature.
 
-Note: a *single* transient `ghcr-fallback` is self-healing — the host already fell back to GHCR
-and served correctly, so a one-blip page is **not** by itself a reason to revert. But since
+Note: a *single* transient fresh-boot `*_ghcr_fallback` is self-healing — that host fell back to
+GHCR and booted correctly, so a one-blip page is **not** by itself a reason to revert. But since
 #6285 the alarm pages on that blip **by design** (a per-group threshold above 0 is silently
-unreachable on this signal's grouping — see the resource comment), so **do not dismiss the page
-as noise**: triage it. Revert is for a *sustained* zot degradation. **If the noise is
-`zot-gate-degraded (probe_unreachable)` pre-cutover, mute that Sentry ISSUE — never the rule**
-(the rule also carries `ghcr-fallback`, the only no-SSH page gating the irreversible 5.5 PAT
-revoke; a per-issue mute cannot pre-suppress it because `ghcr-fallback` mints a fresh group per
-deploy). The real fix for `probe_unreachable` is the zot host, not the alarm.
+unreachable on these signals' grouping — see the resource comment), so **do not dismiss the page
+as noise**: triage it. Revert is for a *sustained* zot degradation.
+
+> **This self-healing note no longer extends to the rolling deploy.** Since #8036 1c there is no
+> fallback on that path, so the rolling-deploy equivalent of a "one-blip fallback" is a FAILED
+> DEPLOY (`image_pull_failed`, old container live) rather than a slower successful one. Treat a
+> rolling-path page as a real outage of the release, not as a latency event.
+
+**If the noise is `zot-gate-degraded (probe_unreachable)` pre-cutover, mute that Sentry ISSUE —
+never the rule.** The claim that used to stand here — that the rule "also carries `ghcr-fallback`,
+the only no-SSH page gating the irreversible 5.5 PAT revoke" — was retired with that signal in
+#8036 1c, and it had already been spent: the PAT it was gating the revoke of has been revoked
+since 2026-07-29. What the mute would now take with it is the three fresh-boot signals, which is
+reason enough to keep muting the ISSUE rather than the rule. The real fix for `probe_unreachable`
+is the zot host, not the alarm.
 
 ## Immediate revert (≈30 s, no deploy) — unset the gate
 
@@ -301,8 +322,12 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   was wrong: only the `registry:` pair carries that prefix (ci-deploy.sh's jq payload writes
   `feature`/`op`), while every `stage:` query is **bare** because neither boot-path emitter
   writes those tags. Sentry tag matching is exact — a prefixed `stage:` query matches nothing.
-  - `registry:"ghcr-fallback"` — a host *attempted* zot and the pull failed, then fell back
-    (ci-deploy.sh `registry_pull_event`, rolling deploy);
+  - `registry:"ghcr-fallback"` — **RETIRED by #8036 1c (2026-09-23).** It meant "a host attempted
+    zot, the pull failed, and it fell back". There is no fallback on the rolling-deploy path any
+    more, so the emit site is deleted and this query is permanently empty. Its successor evidence
+    is `registry:"local-cache"` (a same-version reload rescued from the host's own image store)
+    and `image_pull_failed` (everything else). Listed rather than deleted so a reader finding
+    zero rows does not read it as a new silence.
   - `registry:"zot-gate-degraded"` — zot is CONFIGURED but the gate could not activate it
     (probe unreachable / pull creds absent / login failed), so the deploy used GHCR WITHOUT
     ever running a zot pull (ci-deploy.sh `zot_gate_degraded_event`). This catches the
@@ -331,12 +356,14 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
 
 - **Alert rule** — `sentry_issue_alert.zot_mirror_fallback_rate`, APPLY-CREATED and live now
   (it is **not** armed at cutover; `zot-gate-degraded` emits pre-flip today). It pages on the
-  **first** event matching any of the FIVE signals: `registry:{"ghcr-fallback",
-  "zot-gate-degraded"}` / `stage:{"inngest_ghcr_fallback", "app_ghcr_fallback",
+  **first** event matching any of the FOUR signals (five before #8036 1c):
+  `registry:{"zot-gate-degraded"}` / `stage:{"inngest_ghcr_fallback", "app_ghcr_fallback",
   "app_ghcr_served"}`
   (`event_frequency count > 0 / 1h`, `filter_match = "any"`). Fire-on-first is required, not a
-  preference: the count is per Sentry issue-group and `ghcr-fallback` mints a fresh group per
-  deploy, so any threshold above 0 is unreachable on that signal (#6285). It also matches
+  preference: the count is per Sentry issue-group, and the retired `ghcr-fallback` was the member
+  that minted a fresh group per deploy, so any threshold above 0 was unreachable on it (#6285).
+  The threshold stays at 0 for the survivors as well — a value above 0 is fleet-shape-dependent
+  on every one of them. It also matches
   `zot-soak-6122.sh`, which FAILs the Phase-5 gate on >=1 fallback. A healthy post-cutover fleet
   emits ZERO.
 - **On page:** confirm zot health, then run the Immediate revert above if the degradation is

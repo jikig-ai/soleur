@@ -13,7 +13,14 @@
 #                           NO class= and NO rc= (the gate had no failure to name)
 #   (b) no login attempted — a bounded, named non-login state:
 #                           zot  → `reason=probe_unreachable` / `reason=creds_absent`
-#                           ghcr → `PRELUDE: … skipping …` (carries NO reason= field:
+#                           ghcr → UNREACHABLE SINCE #8036 1c (2026-09-23): the host-side GHCR
+#                           login was deleted, so this state can no longer be entered and this
+#                           probe can never classify a row into it. The remaining two states
+#                           still produce rows, so the ANY_LINES non-vacuity check below is
+#                           still satisfiable and the probe does not force TRANSIENT. Kept in
+#                           the taxonomy as a named dead state rather than deleted, so a future
+#                           reader finding zero ghcr rows does not read it as a new silence.
+#                           It was: `PRELUDE: … skipping …` (carried NO reason= field:
 #                                  reason= is emitted only by zot_gate_degraded_event,
 #                                  which is zot-only — GHCR is journald-only by decision)
 #   (c) login failed      — carries rc= AND class= AND stderr_chars= AND stdout_chars=

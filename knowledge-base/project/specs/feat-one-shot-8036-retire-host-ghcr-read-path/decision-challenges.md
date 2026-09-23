@@ -79,3 +79,90 @@ pending this answer.
 
 **Default if unanswered:** keep `cosign-verify-live-8037.sh` in place; the new probe carries the
 cosign leg; file the overdue retirement as its own issue rather than folding it in here.
+
+---
+
+## Challenges surfaced during implementation (`soleur:work`, 2026-09-23)
+
+### DC-W1 — the plan contradicted itself on the sweep's scope, three ways
+
+`## Technical Approach` derives, at length and from `webhook.service`'s own unit file, that the
+sweep can cover the **deploy** config only: `/home` is under `ProtectHome=read-only` and absent
+from `ReadWritePaths`, so a home write fails soft and would **silently never sweep**, while any
+acceptance criterion graded on `home_ghcr_auth=none` would read `inline` forever and #8036 could
+never close. `AC-F2` and `T-1c-4` agree with that.
+
+Five other sites did not: the ASCII architecture diagram ("sweep ghcr.io auths from deploy + home
+cfg"), the sentence introducing the sweep code ("removes the key from both"), Phase 2's function
+map ("the two `_sweep_ghcr_auth` calls"), `## Files to Edit` ("its two calls"), `T-1c-2`'s fixture
+("a deploy config and a home config each"), and Guard 1's assembly ("the two *writable* configs").
+
+**Disposition: implemented the scope correction; corrected the six stale sites in the plan.** The
+scope correction is the reasoned, measured section and the ACs follow it. `T-1c-2` now asserts the
+home config is left **byte-identical**, which is the testable form of "observed, not swept" — a
+stronger row than the one the stale prose asked for, because it would catch a future edit that
+tried the unreachable write and failed soft.
+
+### DC-W2 — `## Files to Edit` still prescribed a rename that Phase 2 had CUT
+
+It said "Rename `GHCR_DOCKER_CONFIG` → `DEPLOY_DOCKER_CONFIG_FILE`", while Phase 2 and the
+structural map both record the rename as cut at plan review (no property, 9 sites plus its test,
+and an ADR clause that existed only because of the rename). **Disposition: honoured the CUT**, and
+corrected `## Files to Edit`. The symbol's header comment is fixed instead, which is what actually
+misleads.
+
+### DC-W3 — Phase 1 and `## Test Scenarios` gave `T-1c-8` two different contracts
+
+Phase 1 listed it as an untouched-config harness row; Test Scenarios gave it as the mode/ownership
+row. **Disposition: `## Test Scenarios` wins** — the plan declares it the single source of truth
+for the `T-1c-*` set, in the same paragraph that records an earlier draft carrying three different
+contracts for these identifiers. The untouched-config cases Phase 1 named are covered by the
+`#8036 1b` marker matrix (`credsstore` / `noghcr` / `absent` → `swept=no` / `swept=na`).
+
+### DC-W4 — the suite's default zot-DARK mode modelled a state in which no deploy can succeed
+
+Not a plan defect; a consequence the plan named (`ZOT_ACTIVE=0` becomes terminal) whose blast
+radius on the test harness it did not size. Before 1c a zot-dark deploy fell through to GHCR, and
+the suite's default mode relied on that: the GHCR mock serves every pull, so "a deploy ran" was
+expressible without zot. After 1c a zot-dark deploy cannot complete, so **every** row that merely
+needed a deploy to reach its subject was asserting against the failure path.
+
+**Disposition: zot is armed by default in the harness**, with `MOCK_ZOT_DARK=1` as the explicit
+opt-out for the rows that are *about* the dark gate. 38 rows moved; the taxonomy and the reason
+for each is recorded in the PR body.
+
+### DC-W5 — #7095's fail-open contract cannot hold, and the capability was already gone
+
+`T-7095-6` pinned "a network-shaped Doppler read failure must still **complete** the deploy, on
+the baked GHCR creds". That is unachievable after 1c: the same failing read degrades
+`ZOT_REGISTRY_URL`, and there is no second registry to complete on.
+
+**This is a real narrowing and is recorded as one rather than absorbed.** But the capability was
+lost on **2026-07-29**, not here: completing "on the baked GHCR creds" required those creds to
+work, and the GHCR read PAT has been revoked since then, so the live fleet has taken
+`image_pull_failed` down this path for ~8 weeks. The row passed only because the suite's mock
+serves GHCR pulls unconditionally — a fixture that outlived the thing it modelled.
+
+**Disposition: the row is narrowed to what is still true and still worth pinning** — the prelude
+must degrade *loudly without aborting*, proven positively by a downstream emission rather than by
+an exit code. The residual, stated plainly: on a host whose Doppler is blipping, a deploy now
+fails at the pull where before 2026-07-29 it would have completed.
+
+### DC-W6 — a diagnostic specificity loss, repaid rather than accepted
+
+`resolve_env_file`'s `doppler_unavailable` / `doppler_token_missing` / `doppler_fetch_failed`
+terminal reasons are now unreachable through a full deploy, because the pull fails first. Left
+alone, an operator would get a bare `image_pull_failed` for a credential problem.
+
+**Disposition: the terminal `pull_failure_event` on the zot-dark arm carries `ZOT_GATE_STATUS`**,
+and its matching `ZOT_GATE_DEGRADED: reason=<measured>` journald line names the same condition.
+The re-pointed rows assert **both** — a row asserting only `image_pull_failed` would pass against
+a version that reports a credential problem as a bare registry outage.
+
+### DC-W7 — declined, carried forward: `cosign-verify-live-8037.sh` is not deleted here
+
+Plan review proposed deleting it and executing its overdue `# RETIREMENT:` clause, since #8037 is
+closed. **Declined as out of scope for the 1c ruling** (it is DC-2 in this file). The consequence
+is handled rather than ignored: because the sweeper only evaluates a closed issue's probe inside
+its closed-set lookback, the `verify_failed` detection that probe would have provided is carried
+as **leg 3** of `ghcr-read-retired-8036.sh`, on an open tracker, needing no Terraform apply.
