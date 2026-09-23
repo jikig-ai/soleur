@@ -17,6 +17,35 @@ lane: cross-domain
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spec.md` exists for this
 one-shot branch.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23 (headless, one-shot pipeline).
+
+**Halt gates.**
+
+- Passed: 4.6 User-Brand Impact (threshold `none` with its sensitive-path reason line), 4.7 Observability (all 5 fields; `probe-verb-gate.sh` accepts the command), 4.8 PAT sweep (no hits), 4.11 Guard Contract (`lint-guard-contract.py`: 3 entries, green; assembly is structural).
+- Skipped by trigger: 4.5 network-outage, 4.55 downtime, 4.9 UI wireframe, 4.10 encryption posture.
+
+**Agents used.** test-design-reviewer, security-sentinel, observability-coverage-reviewer, architecture-strategist, and a verify-the-negative sweep at the standard tier. The sweep confirmed all 8 negative claims.
+
+**Key improvements.**
+
+1. **Runtime observability.** The CLI's silent effort fallback is now mirrored to Sentry from the substrate stderr handler, via `warnSilentFallback` with op `claude-effort-fallback`. Before this, it reached only a pino line in Better Stack with no alert. Every failure mode now names its observability layer. The max-turns overrun is recorded honestly as an accepted, unalerted gap.
+2. **Guard hardening.**
+   - The id grep is anchored on both sides (`LC_ALL=C`, `-e … --`), so a Bedrock-prefixed or longer token cannot vouch for an id. Measured on 2.1.280.
+   - The id harvest accepts any quote style (new row M7).
+   - The Guard 3 control is built from `AUDIT_CLI_ARGS`.
+   - Timeouts and exec errors are asserted before the needle, so they cannot read as "warning reworded".
+   - Mutation rows run on `mkdtemp` copies.
+   - AC4 greps the CI log for `checked 3 ids @ 2.1.280`.
+3. **Spawn hygiene.** The spawn uses `cwd` + temp HOME + `CLAUDE_CONFIG_DIR` + `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` + `DISABLE_AUTOUPDATER`, and the leak line now says "hygiene, not isolation".
+4. **ADR-053 amendment.** It now marks the superseded sentence inline, extends the pin-surface lifecycle row, and corrects the stale "53 crons" count. SKILL.md row 3 re-reads `default_effort` for every tier.
+
+**New considerations discovered.**
+
+- `gen-models.sh` parses `^export const AUDIT_MODEL` line by line. That constrains how the new constants may be named.
+- Max-turns is classified benign, so a high-effort run that exhausts its turns checks in green.
+
 ## Overview
 
 This plan covers two coupled changes to how the Inngest crons start the `claude` CLI, shipped as one PR.
@@ -77,7 +106,6 @@ This plan covers two coupled changes to how the Inngest crons start the `claude`
   - A package.json name/version identity read plus a separate `--version` spawn (P3): the single Guard 3 spawn's `--version` output covers it.
   - A runtime-export id enumeration next to the regex harvest (P3): the harvest plus the ⊇ floor covers it.
   - Quote-boundary blob row (P3): the regex accepts it by construction.
-  - `DISABLE_*` / `CLAUDE_CONFIG_DIR` env vars: `--version` short-circuits, and the measured run needed only `PATH` + `HOME`.
   - The `audit-models.sh` pointer: the SKILL.md sentence covers it.
 - **C4 — a runtime `CLAUDE_CLI_EFFORT_LEVELS` const array compared against the CLI's `Valid values:` list → nothing in P1–P5 needs it.** The TS union type plus Guard 3's probe of the one value actually used is enough.
 
@@ -141,9 +169,14 @@ This plan covers two coupled changes to how the Inngest crons start the `claude`
 - `apps/web-platform/test/server/inngest/model-tiers.test.ts`: import `stripComments` from the new helper, then add Guard 1 (a new `describe`) and the identity pins `AUDIT_EFFORT === "high"` and `AUDIT_CLI_ARGS` deep-equals `["--model", AUDIT_MODEL, "--effort", AUDIT_EFFORT]`. Update the header list (e).
 - (`audit-models.sh` is unchanged. The new test's header cross-references `[2b]`, and the SKILL.md sentence below records the CI twin. Plan-review cut the duplicate pointer.)
 - `plugins/soleur/skills/model-launch-review/SKILL.md`:
-  - Checklist row 3 (Thinking-API shape): replace the stale `measured … effort:"high"` with the per-model `default_effort` field (claude-opus-5-5: `medium`). Add that audit crons override it via `AUDIT_EFFORT`, and at each launch the operator re-reads the new row's `default_effort` and re-decides `AUDIT_EFFORT`.
+  - Checklist row 3 (Thinking-API shape): replace the stale `measured … effort:"high"` with the per-model `default_effort` field (claude-opus-5-5: `medium`). Add that audit crons override it via `AUDIT_EFFORT`. At each launch, re-read `default_effort` for EVERY tier's row. Re-decide `AUDIT_EFFORT` for the audit tier, and note execution-tier drift, which is accepted by ADR-053 and left on the default.
   - Step 2b paragraph: rewrite it as an ordered procedure. (1) Bump the pin in `apps/web-platform/package.json` and the `Dockerfile` global. (2) Regenerate `package-lock.json`, honouring the existing release-age note (`--min-release-age=0` only as an operator waiver). (3) Then run the id swap, all in ONE PR. State plainly that `claude-cli-pin-knows-models.test.ts` now gates this in CI, so an id-swap PR opened before the bump goes red. Say that `[2b]` stays the hand-run check for candidate versions.
   - Do not touch the frontmatter `description:`.
+- `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts`: in the stderr `line` handler (the `rlErr.on("line", …)` next to `logger.error({ fn: cronName, stream: "stderr" }, redacted)`), add a once-per-run mirror.
+  - When `/Unknown --effort value/` matches, call `warnSilentFallback(null, { feature: cronName, op: "claude-effort-fallback", message: "claude CLI ignored --effort (unknown value); run fell back to the default effort", extra: { line: redacted } })`.
+  - Why: `cq-silent-fallback-must-mirror-to-sentry`. The CLI's fallback is a silent degraded mode, and today its only trace is a pino line in Better Stack with no alert.
+  - Cover it in `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts` with a synthesized stderr line. The mirror fires once, and a benign stderr line does not fire it.
+- `apps/web-platform/Dockerfile`: comment only. Add the test file's name to the existing "KEEP IN SYNC" comment above `npm install -g @anthropic-ai/claude-code@…`, so the coupling is visible from both sides.
 - `knowledge-base/engineering/architecture/decisions/ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md`: amend the 2026-09-23 addendum. See `## Architecture Decision (ADR/C4)`.
 
 ### Files to Create
@@ -166,26 +199,33 @@ The test file's header comment carries three things:
    - The Dockerfile `npm install -g @anthropic-ai/claude-code@(\S+)` must match exactly once, and must equal it.
    - package.json ↔ lockfile agreement is not restated, because `npm ci` already fails on it.
    - The failure message names both values and says: bump package.json, regenerate the lockfile, and edit `apps/web-platform/Dockerfile` in one PR (see model-launch-review SKILL.md step 2b and its release-age note).
-2. **Id set (runs on every host).** The `[2b]` harvest `/"claude-(opus|sonnet|haiku|fable)-[0-9a-z-]+"/g` over `stripComments(source)` of `model-tiers.ts` and `leader-prompts/constants.ts`. Measured today: exactly the three ids on lines 46, 49 and 50.
+2. **Id set (runs on every host).** The `[2b]` harvest, widened to any quote style: `/["'`](claude-(?:opus|sonnet|haiku|fable)-[0-9a-z-]+)["'`]/g` over `stripComments(source)` of `model-tiers.ts` and `leader-prompts/constants.ts`. Measured today: exactly the three ids on lines 46, 49 and 50.
    - Anti-vacuity floor: the set ⊇ `{AUDIT_MODEL, EXECUTION_MODEL, HAIKU_MODEL}` (imported constants, so set identity rather than a count).
-   - Every id must match `^[a-z0-9-]+$` before it is put into a regex.
+   - Every id must match `^claude-[a-z0-9-]+$` before it is put into a regex. The `claude-` prefix also rules out a leading `-` being read as a grep option.
 3. **Bundle and dispatch (the binary-dependent tests).**
    - `bin = join(APP_ROOT, "node_modules/@anthropic-ai/claude-code-linux-x64/claude")`, and nowhere else. Never resolve through the scope directory: the sibling `claude-agent-sdk*` packages carry sonnet ids.
    - `MUST_RUN = Boolean(process.env.CI) || process.env.GITHUB_ACTIONS === "true" || (process.platform === "linux" && process.arch === "x64")`. The CI terms matter only if a runner is ever not linux-x64; say so in a comment.
    - If `bin` is absent and `MUST_RUN`, throw with `cd apps/web-platform && npm ci`. Otherwise `describe.skip` only this block, with a stderr reason, following the `engines-floor.ts` precedent.
-4. **Probe helper.** `bundleHasId(file, id)` runs `grep -aqE "<id>([^0-9A-Za-z-]|$)" <file>` via `spawnSync` (argv array, no shell), with `env: { LC_ALL: "C", PATH }`. In a UTF-8 locale, a byte after the id that is not valid UTF-8 would fail the bracket class and report a present id as absent. Status 0 means present, 1 means absent, and anything else throws. That covers the "could not look" versus "absent" conflation (#5100).
-5. **Per-id assertion.** Collect every ABSENT id, then call `expect(absent).toEqual([])`. The message names the ids and the pin, and says to bump to a version whose bundle carries them. Collecting first means the loop quantifies over all ids and does not stop at the first.
+4. **Probe helper.** `bundleHasId(file, id)` takes the bundle PATH as a parameter (so mutation rows run on copies in `mkdtemp`, never on the shared `node_modules`) and runs `grep -aqE -e "(^|[^0-9A-Za-z.-])<id>([^0-9A-Za-z-]|$)" -- <file>` via `spawnSync` (argv array, no shell), with `env: { LC_ALL: "C", PATH }`. In a UTF-8 locale, a byte after the id that is not valid UTF-8 would fail the bracket class and report a present id as absent. Status 0 means present, 1 means absent, and anything else throws. That covers the "could not look" versus "absent" conflation (#5100).
+   - The left boundary is new relative to `[2b]`, which anchors only the right side. It stops an id embedded in a longer token, such as `us.anthropic.<id>` (the Bedrock provider id), from counting.
+   - Measured on 2.1.280: all three ids still match through the model-table row's `first_party:"<id>"` entry, and `claude-opus-9-9` does not.
+   - Grep presence is a proxy for "the bundled model table knows this id". The Property says so.
+5. **Per-id assertion.** Log `checked <N> ids @ <pin>` to stdout when this path runs; AC4 greps the CI job log for it. Collect every ABSENT id, then call `expect(absent).toEqual([])`. The message names the ids and the pin, and says to bump to a version whose bundle carries them. Collecting first means the loop quantifies over all ids and does not stop at the first.
 6. **Real-bundle negative control.** `bundleHasId(bin, "claude-zz-not-a-model-0")` must be false.
 7. **Helper unit rows (synthesized in `mkdtemp`, never under the repo).**
    - `\0claude-opus-5-5-20260101\0` does NOT vouch for `claude-opus-5-5` (prefix shadowing).
    - `…\0claude-opus-5-5` at EOF with no trailing byte DOES (must-PASS non-canonical: the `$` boundary).
    - A missing file throws.
 8. **Guard 3 + identity (one spawn).**
-   - Run `spawnSync(bin, ["--print", ...AUDIT_CLI_ARGS, "--version"], {env: {PATH: "/usr/bin:/bin", HOME: <mkdtemp>}, timeout: 20_000, encoding: "utf8"})`. Spreading the tuple ties the probe to what the crons actually pass. Measured: this argv shape exits 0 and prints the version.
-   - Expect `status === 0`, and stdout starting with the pin followed by one space. This is the behavioral proof that the grepped file is the pinned build; a stale install fails here with the `npm ci` remedy.
+   - Run `spawnSync(bin, ["--print", ...AUDIT_CLI_ARGS, "--version"], {cwd: <tmpHome>, env: {PATH: "/usr/bin:/bin", HOME: <tmpHome>, CLAUDE_CONFIG_DIR: <tmpHome>/.claude, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1"}, timeout: 20_000, encoding: "utf8"})`.
+     - The traffic flag mirrors the production spawn in `_cron-claude-eval-substrate.ts`.
+     - `cwd` keeps the child out of the checkout, where `.git/config` holds the job token.
+     - Both are free insurance against a future CLI that phones home before parsing `--version`. Security review restored them after plan-review had cut the env vars. Spreading the tuple ties the probe to what the crons actually pass. Measured: this argv shape exits 0 and prints the version.
+   - First assert `r.error === undefined && r.signal === null`, with stderr in the message. A timeout or exec failure must not read as "warning reworded".
+   - Then expect `status === 0`, and stdout starting with the pin followed by one space. This is the behavioral proof that the grepped file is the pinned build; a stale install fails here with the `npm ci` remedy.
    - Expect no `/effort/i` anywhere in stdout + stderr.
-   - **Positive control:** `["--print", "--model", AUDIT_MODEL, "--effort", "not-a-level", "--version"]` MUST contain `Unknown --effort value`. If a CLI bump rewords the warning, the control fails and forces a needle update. It never passes silently.
-   - Remove the temp HOME in `afterAll`. The measured run wrote `$HOME/.claude*`.
+   - **Positive control:** build it from `AUDIT_CLI_ARGS` by replacing only the element after `"--effort"`. Assert that index was found, use the same env/cwd as the probe, and apply the same error/signal pre-check. The output MUST contain `Unknown --effort value`. If a CLI bump rewords the warning, the control fails and forces a needle update. It never passes silently.
+   - Both spawns share one helper `runCli(binPath, args)`, so harness rows can point it at a stub copy. Remove the temp HOME in `afterAll`. The measured run wrote `$HOME/.claude*`.
    - Set the test timeout explicitly to 60 s.
 
 ## Implementation Phases
@@ -218,7 +258,9 @@ The test file's header comment carries three things:
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** the scheduled audit reports (agent-native, architecture-diagram drift, competitive analysis, growth/SEO, legal, UX) that the operator reads as GitHub issues are missing, or come out shallower. That happens if an argv misorder makes a cron fail, or if a silent effort fallback makes it reason at `medium`. No end-user page, account or data is touched.
-- **If this leaks, the user's data is exposed via:** no new exposure vector. The change adds a CLI argv flag and a CI-only test that runs the already-shipped pinned binary with `--version`, a hermetic env and no credentials.
+- **If this leaks, the user's data is exposed via:** no new exposure vector. The change adds a CLI argv flag and a CI-only test that runs the already-shipped pinned binary with `--version`.
+  - The spawn gets an explicit minimal env, which is env hygiene, not isolation. The child runs as the same user as vitest, so the `contents: read` `GITHUB_TOKEN` in the test-webplat step env (and in `.git/config` via `actions/checkout`) is reachable in principle.
+  - The residual risk is bounded. The binary is integrity-checked against the lockfile, `--version` exits in about 0.09 s, and production runs the same bytes with far more secrets in reach.
 - **Brand-survival threshold:** `none`
 - `threshold: none, reason: the touched apps/web-platform/server/inngest/ paths only change internal operator-cron CLI argv (an effort level) and add a CI test; no user data, auth, billing or user-facing surface is read or written.`
 
@@ -232,23 +274,26 @@ liveness_signal:
   configured_in: ".github/workflows/ci.yml (test-webplat job) + apps/web-platform/server/inngest/functions/cron-*.ts SENTRY_MONITOR_SLUG"
 error_reporting:
   destination: "Sentry (web-platform project, SENTRY_DSN) via reportSilentFallback / cron classify-fatal path; CI failure annotations for the guard"
-  fail_loud: "vitest assertion `bump @anthropic-ai/claude-code … to a version whose bundle carries <ids>` / `Unknown --effort value` in the guard; at runtime the CLI stderr line `Warning: Unknown --effort value` reaches logger.error({fn, stream: 'stderr'}) and stderrTail"
+  fail_loud: "CI: the vitest assertion naming the absent ids / pin mismatch / effort warning (layer 6: test-webplat job log, required `test` check). Runtime: the substrate mirrors the CLI stderr line `Unknown --effort value` to Sentry via warnSilentFallback(op=claude-effort-fallback) (layer 2); without that mirror the line would only be a Sentry breadcrumb plus a pino line in Better Stack with no alert"
 failure_modes:
   - mode: "a tier model id absent from the pinned CLI bundle (#6934 half-max_tokens)"
-    detection: "Guard 2 per-id boundary-anchored grep -a in CI (test-webplat)"
+    detection: "layer 6 (test-webplat vitest failure in the workflow run log): Guard 2 per-id boundary-anchored grep -a"
     alert_route: "required `test` check red, PR cannot merge"
   - mode: "AUDIT_EFFORT value not accepted by the pinned CLI (silent fallback to medium)"
-    detection: "Guard 3 `--effort <v> --version` probe (no /effort/i output) with a positive control"
-    alert_route: "required `test` check red"
+    detection: "layer 6: Guard 3 `--effort <v> --version` probe (no /effort/i output) with a positive control; at runtime (a binary that drifted from the pin, e.g. a CLAUDE_BIN override) layer 2: warnSilentFallback op=claude-effort-fallback from the substrate stderr handler"
+    alert_route: "required `test` check red; at runtime a Sentry issue on feature=<cron name>, op=claude-effort-fallback"
   - mode: "audit tuple dropped, bypassed with a raw --model AUDIT_MODEL, extra --effort appended, moved after `--`, or spread into a non-audit cron"
-    detection: "Guard 1 source walk + exported-array assertions"
+    detection: "layer 6: Guard 1 source walk (a)-(e) + identity pins"
     alert_route: "required `test` check red"
   - mode: "package.json / Dockerfile CLI pins drift (package.json / lockfile drift is already an npm ci failure)"
-    detection: "Guard 2 pin-agreement assertion"
+    detection: "layer 6: Guard 2 pin-agreement assertion (runs on every host)"
     alert_route: "required `test` check red"
-  - mode: "high effort pushes an audit cron past its wall-clock budget or max-turns"
-    detection: "existing abortedByTimeout / max-turns classification in spawnClaudeEval -> FAILED cron issue + Sentry cron monitor error check-in"
+  - mode: "high effort pushes an audit cron past its wall-clock budget (timeout)"
+    detection: "layer 1/2: abortedByTimeout is classified fatal by classifyEvalFatal -> Sentry cron monitor error check-in + FAILED cron issue"
     alert_route: "Sentry cron monitor alert + auto-filed FAILED GitHub issue"
+  - mode: "high effort exhausts --max-turns before the audit finishes (accepted, unalerted gap)"
+    detection: "layer 2 context only: max-turns is classified benign in _cron-shared.ts, so the monitor checks in green with fatalClass=benign in sentryExtra and the output-aware producers (growth-audit, competitive-analysis) turn red only when no artifact was produced; no page"
+    alert_route: "none by design (pre-existing ADR-033 classify-fatal decision); visible as a fatalClass=benign check-in and in the audit issue body"
 logs:
   where: "CI job log for test-webplat; runtime claude stderr is logged via pino logger.error({fn, stream:'stderr'}) and shipped by the host Vector agent to Better Stack Logs source 2457081"
   retention: "GitHub Actions logs 90 days; Better Stack per source retention"
@@ -300,7 +345,7 @@ Every row below is applied by hand during `soleur:work`, then reverted, with the
 
 ### Guard 2 — pinned claude-code CLI bundle knows every tier model id
 
-**Property.** Every Claude model id declared in `model-tiers.ts` or `leader-prompts/constants.ts` occurs, boundary-anchored, in the linux-x64 platform binary of the exact `@anthropic-ai/claude-code` version pinned by package.json and the Dockerfile.
+**Property.** Every Claude model id declared in `model-tiers.ts` or `leader-prompts/constants.ts` occurs, boundary-anchored on both sides, in the linux-x64 platform binary of the exact `@anthropic-ai/claude-code` version pinned by package.json and the Dockerfile. Grep presence stands in for "the bundled model table knows this id".
 
 **Assembly.**
 
@@ -316,9 +361,10 @@ Every row below is applied by hand during `soleur:work`, then reverted, with the
 | M1 | `AUDIT_MODEL = "claude-opus-9-9"` (id absent from 2.1.280) | RED |
 | M2 | SECOND MEMBER: add `export const X_MODEL = "claude-opus-9-9" as const;` to `constants.ts` after the compliant ids | RED (collect-all loop, not first-only) |
 | M3 | Dockerfile pin `2.1.279` while package.json says `2.1.280` | RED (pin agreement, on every host) |
-| M4 | Stale install: `node_modules` holds a different claude-code version than the pin | RED (`--version` identity, with the `npm ci` remedy) |
+| M4 | Stale install, simulated by pointing the helpers at a `mkdtemp` copy whose `--version` differs (a stub script) | RED (`--version` identity, with the `npm ci` remedy) |
 | M5 | DISPATCH: delete the bundle directory with `CI=true` | RED (throws; never skips) |
 | M6 | DISPATCH: break the harvest regex so the id set is empty | RED (⊇ floor) |
+| M7 | Add a SINGLE-QUOTED `export const Y_MODEL = 'claude-opus-9-9';` to `constants.ts` | RED (the quote-agnostic harvest sees it) |
 
 **Harness rows:**
 
@@ -357,15 +403,21 @@ Every row below is applied by hand during `soleur:work`, then reverted, with the
 
 ### ADR
 
-Amend **ADR-053** (`knowledge-base/engineering/architecture/decisions/ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md`). In the "Addendum — 2026-09-23 (Opus 5.5 launch, PR #8601)", keep the recorded sentence and follow it with a dated paragraph, "Amendment — 2026-09-23 (#8603)":
+Amend **ADR-053** (`knowledge-base/engineering/architecture/decisions/ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md`). In the "Addendum — 2026-09-23 (Opus 5.5 launch, PR #8601)", keep the recorded sentence. Mark it inline with **(Superseded 2026-09-23, #8603 — see Amendment below.)**, following the ADR's own Context-section precedent. Then follow it with a dated paragraph, "Amendment — 2026-09-23 (#8603)":
 
 - Surface 5b now pins **effort alongside the model**: `AUDIT_EFFORT = "high"` in `model-tiers.ts`.
-- The reason: claude-opus-5-5's CLI-bundled `default_effort` is `medium`. The CLI "sets effort itself" from that per-model row, so leaving effort unset silently lowered audit reasoning depth at the 5 to 5.5 swap.
-- Execution-tier crons stay on the CLI default.
+- The reason: claude-opus-5-5's CLI-bundled `default_effort` is `medium`, so the Opus 5 → 5.5 swap moved the effective audit effort from high to medium. The CLI "sets effort itself" from that per-model row, so leaving effort unset silently lowered audit reasoning depth at the 5 to 5.5 swap.
+- Execution-tier crons stay on the CLI default. Their drift at a future launch is accepted on purpose, and it is visible because SKILL.md row 3 re-reads `default_effort` for every tier's row.
 - A change to `AUDIT_EFFORT` is a same-tier tuning change, not re-tiering.
 - The pinned-CLI guard (Guards 2/3) makes "the pinned CLI knows the tier ids and accepts the effort value" a CI invariant. It is no longer only a hand-run audit item.
 
-Also add one row to `## Alternatives considered`: *"Leave effort to the CLI's per-model default | The default moved medium←high at the 5→5.5 swap with no argv change; a tier whose rationale is reasoning depth cannot inherit an unowned default."*
+Also:
+
+- Add one row to `## Alternatives considered`: *"Leave effort to the CLI's per-model default | The default moved high → medium at the Opus 5 → 5.5 swap with no argv change; a tier whose rationale is reasoning depth cannot inherit an unowned default."*
+- In `## Pin-surface lifecycle`, extend the "Inngest cron constants" row: `AUDIT_EFFORT` is a pinned value whose failure mode is a silent fallback to the default, not a loud failure. Guard 3 and the substrate Sentry mirror cover it.
+- Correct surface 5b's "consumed by 53 `cron-*.ts` functions". The measured count is 6; say it is consumed via `AUDIT_CLI_ARGS`.
+
+Considered and not taken: an `EXECUTION_CLI_ARGS` tuple so that both tiers have the same shape (architecture-strategist advisory). It touches 10 more crons, outside the operator's scope, and walk (c) already gives the execution tier its chokepoint.
 
 ### C4 views
 
@@ -398,7 +450,7 @@ None. Checked all 75 open `code-review` issues against every planned path (`mode
 - [ ] AC1: `model-tiers.ts` exports `AUDIT_EFFORT = "high" as const` and `AUDIT_CLI_ARGS = ["--model", AUDIT_MODEL, "--effort", AUDIT_EFFORT] as const`. The header comment lists all 6 audit crons.
 - [ ] AC2: Guard 1 walks (a), (b), (d) and (e) pass on the final tree. That is the mechanical check: the spread appears in exactly the six audit crons, before `"--"`, and no code line names `AUDIT_MODEL`/`AUDIT_EFFORT` or an `--effort` literal. `git grep -l -F '...AUDIT_CLI_ARGS' -- apps/web-platform/server/inngest/functions` listing the six files is supporting evidence only.
 - [ ] AC3: `model-tiers.test.ts` contains Guard 1: walks (a)-(e), the `AUDIT_CRONS` table and both identity pins. `claude-cli-pin-knows-models.test.ts` runs its pin-agreement and id-floor tests on every host.
-- [ ] AC4: `apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts` exists, runs (not skipped) in CI `test-webplat`, and passes against 2.1.280. Its log line states the ids checked and the pin measured.
+- [ ] AC4: `apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts` exists and passes against 2.1.280. The CI `test-webplat` job log for the PR head contains `checked 3 ids @ 2.1.280`, which proves the binary block ran and was not skipped. Check it with `gh run view <id> --log` and grep.
 - [ ] AC5: Every row in `## Guard Contract` (every M and H row) was applied and reverted during `soleur:work`, with the observed RED/PASS recorded in the PR body. Guard 3's two vacuity demonstrations are recorded too.
 - [ ] AC6: `./node_modules/.bin/tsc --noEmit` and the targeted vitest files listed in Implementation Phase 2 pass from `apps/web-platform`.
 - [ ] AC7: ADR-053 carries the "Amendment — 2026-09-23 (#8603)" paragraph and the new Alternatives row.
@@ -406,15 +458,17 @@ None. Checked all 75 open `code-review` issues against every planned path (`mode
 - [ ] AC9: `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 after implementation.
 - [ ] AC10: The PR body contains `Closes #8603` and states the cost note (about 12 audit-tier runs a month move from medium to high effort).
 - [ ] AC11: The PR body links the Agent SDK follow-up #8643.
+- [ ] AC12: `cron-claude-eval-substrate.test.ts` passes a synthesized stderr line containing `Unknown --effort value` through the substrate and asserts `warnSilentFallback` fired exactly once with `op: "claude-effort-fallback"`. A benign stderr line leaves it uncalled.
 
 ## Test Scenarios
 
 - Given the current tree (crons name `AUDIT_MODEL` directly, and there is no tuple), when Guard 1 runs, then it fails naming all six crons (RED baseline).
-- Given the six edits, when Guard 1 runs, then it passes. Given any single M1–M9 mutation, it fails with a message naming the file.
+- Given the six edits, when Guard 1 runs, then it passes. Given any single M1–M6 mutation, it fails with a message naming the file.
 - Given `npm ci` at the 2.1.280 lockfile on linux-x64, when Guard 2 runs, then the pins agree, `--version` prints `2.1.280 (Claude Code)`, and each of `claude-opus-5-5`, `claude-sonnet-5` and `claude-haiku-4-5-20251001` is present.
 - Given `AUDIT_MODEL = "claude-opus-9-9"`, when Guard 2 runs, then it fails naming `claude-opus-9-9` and the bump remediation.
 - Given `CI=true` and no bundle directory, when the suite loads, then it throws (no skip).
 - Given `--effort not-a-level`, when the Guard 3 control runs, then the output contains `Unknown --effort value` (the control holds).
+- Given a cron spawn whose CLI prints `Warning: Unknown --effort value 'x' …` twice on stderr, when the substrate reads it, then one `warnSilentFallback` (op `claude-effort-fallback`, feature = cron name) fires and the pino stderr log is unchanged.
 
 ## Domain Review
 
@@ -480,7 +534,9 @@ Panel: DHH, Kieran, code-simplicity (per mechanism), and the named-panel CTO (de
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `soleur:work`.
 - Do NOT grep the `@anthropic-ai` scope or `node_modules/.bin/claude`. Under `--ignore-scripts` the `.bin` shim points at the stub `bin/claude.exe`, and the scope contains `claude-agent-sdk*`, which carries sonnet ids. The probe target is `node_modules/@anthropic-ai/claude-code-linux-x64/claude` and nothing else.
-- `claude --version` writes `$HOME/.claude*`. Always spawn with a temp HOME and `CLAUDE_CONFIG_DIR`. Never inherit the developer's or the runner's.
+- `claude --version` writes `$HOME/.claude*`. Always spawn with a temp HOME, `CLAUDE_CONFIG_DIR` and `cwd`. Never inherit the developer's or the runner's.
+- `plugins/soleur/skills/eval-harness/scripts/gen-models.sh` and its test read `^export const AUDIT_MODEL` line by line and expect the `claude-…` literal on that line. Keep `AUDIT_MODEL`'s declaration line byte-identical. Name the new constants `AUDIT_EFFORT` / `AUDIT_CLI_ARGS`, never with an `AUDIT_MODEL` prefix.
+- Run the Guard Contract mutation rows on `mkdtemp` copies or stubs, never by editing the shared `node_modules`. Record a verdict per test file, because Guard 3 M1 also turns the `AUDIT_EFFORT === "high"` pin in `model-tiers.test.ts` red.
 - Unpack any candidate tarball **outside** the repo (`mktemp -d`), per model-launch-review SKILL.md. Do not commit fixture blobs containing real model ids under a scanned path; synthesize them in `mkdtemp`.
 - Put `...AUDIT_CLI_ARGS,` exactly where `"--model", AUDIT_MODEL,` was, directly after `"--print",` and **before** `"--"`. The `cron-ux-audit.ts` array has `--mcp-config` entries and comments near the end, so never append.
 - `.github/workflows/scheduled-marketplace-drift.yml` pins its own `CLI_VERSION` (2.1.228) for the plugin-update drift probe. That is a different consumer from the cron runtime, which resolves `/app/node_modules/.bin/claude`. It is deliberately NOT part of Guard 2's pin agreement. Do not "fix" it in this PR.

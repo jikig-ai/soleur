@@ -11,25 +11,30 @@ Plan: `knowledge-base/project/plans/2026-09-23-feat-audit-cron-effort-and-cli-mo
   - [ ] 1.2.3 Identity pins: `AUDIT_EFFORT === "high"`, and `AUDIT_CLI_ARGS` deep-equals `["--model", AUDIT_MODEL, "--effort", AUDIT_EFFORT]`.
 - [ ] 1.3 Create `apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts`.
   - [ ] 1.3.1 Header: the "next CLI bump" checklist, a cross-reference to `audit-models.sh [2b]`, and the walk (c) chokepoint note.
-  - [ ] 1.3.2 Pin agreement (package.json exact semver = Dockerfile) and the id harvest over `stripComments(source)` with its ⊇ floor. Both run on every host.
-  - [ ] 1.3.3 Binary block: `MUST_RUN` dispatch (throw with the `npm ci` remedy), `bundleHasId` (`LC_ALL=C`; rc ≥ 2 throws), per-id collect-all, real-bundle negative control.
+  - [ ] 1.3.2 Pin agreement (package.json exact semver = Dockerfile) and the quote-agnostic id harvest over `stripComments(source)` with its ⊇ floor (`^claude-[a-z0-9-]+$` validation). Both run on every host.
+  - [ ] 1.3.3 Binary block: `MUST_RUN` dispatch (throw with the `npm ci` remedy), `bundleHasId(path, id)` (two-sided boundary, `LC_ALL=C`, `-e … --`; rc ≥ 2 throws), per-id collect-all, the `checked N ids @ <pin>` log line, real-bundle negative control.
   - [ ] 1.3.4 Blob rows: prefix shadow, EOF must-PASS, missing file throws.
-  - [ ] 1.3.5 Guard 3: one spawn of `--print ...AUDIT_CLI_ARGS --version` in a temp HOME, asserting the pin prefix, no `/effort/i`, and the `not-a-level` positive control.
+  - [ ] 1.3.5 Guard 3: a `runCli(binPath, args)` helper with `cwd`, temp HOME, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1`.
+    - Spawn `--print ...AUDIT_CLI_ARGS --version` and pre-check error/signal.
+    - Assert the pin prefix and no `/effort/i` in the output.
+    - Build the positive control from the tuple with the effort value replaced by `not-a-level`.
 - [ ] 1.4 Confirm RED: Guard 1 fails on the six crons, and the effort half fails to compile until `AUDIT_EFFORT` exists.
 
 ## Phase 2: Core Implementation (GREEN)
 
 - [ ] 2.1 `model-tiers.ts`: add `AUDIT_EFFORT = "high" as const` and `AUDIT_CLI_ARGS`. Fix the header comment to list 6 crons and add the effort paragraph.
+- [ ] 2.1b `_cron-claude-eval-substrate.ts`: a once-per-run `warnSilentFallback` (op `claude-effort-fallback`) when a stderr line matches `/Unknown --effort value/`. Add the test to `cron-claude-eval-substrate.test.ts` (AC12).
+- [ ] 2.1c `apps/web-platform/Dockerfile`: name the new test file in the "KEEP IN SYNC" comment. Comment only.
 - [ ] 2.2 In the six audit crons, change the import to `AUDIT_CLI_ARGS` and replace `"--model", AUDIT_MODEL,` with `...AUDIT_CLI_ARGS,` in the same position, before `"--"`.
 - [ ] 2.3 Run `./node_modules/.bin/vitest run` on the targeted files and `./node_modules/.bin/tsc --noEmit` from `apps/web-platform`.
 
 ## Phase 3: Testing and verification
 
-- [ ] 3.1 Apply every Guard Contract row by hand and revert it. Record RED/PASS and the two Guard 3 vacuity demonstrations for the PR body.
+- [ ] 3.1 Apply every Guard Contract row by hand, on `mkdtemp` copies or stubs for binary rows, and revert it. Record a verdict per test file. Record RED/PASS and the two Guard 3 vacuity demonstrations for the PR body.
 - [ ] 3.2 Run `bash plugins/soleur/test/c4-count-parity.test.sh` and `bun test plugins/soleur/test/model-launch-review.test.ts`.
 
 ## Phase 4: Docs and ADR
 
-- [ ] 4.1 ADR-053: add the "Amendment — 2026-09-23 (#8603)" paragraph and a new row in Alternatives considered.
-- [ ] 4.2 model-launch-review `SKILL.md`: rewrite row 3 (`default_effort` / `AUDIT_EFFORT`) and turn step 2b into an ordered procedure that names the CI gate.
+- [ ] 4.1 ADR-053: add the inline superseded note, the "Amendment — 2026-09-23 (#8603)" paragraph, the Alternatives row and the pin-surface lifecycle row. Correct the "53 crons" count to 6.
+- [ ] 4.2 model-launch-review `SKILL.md`: rewrite row 3 (re-read `default_effort` for every tier, re-decide `AUDIT_EFFORT`) and turn step 2b into an ordered procedure that names the CI gate.
 - [ ] 4.3 PR body: `Closes #8603`, a link to #8643, and the cost note (about 12 audit-tier runs a month move from medium to high effort).
