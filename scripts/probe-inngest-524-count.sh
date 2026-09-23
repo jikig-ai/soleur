@@ -17,9 +17,16 @@
 # Credentials: BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, e.g.
 #   doppler run -p soleur -c prd_terraform -- bash scripts/probe-inngest-524-count.sh
 #
+# POSITIVE CONTROL. The same query also counts EVERY inngest-server row in the window
+# (`unit_rows`, printed to stderr so stdout stays the single `count=<n>` line the plan's
+# discoverability_test compares). The 524 rows are PRIORITY 6 and reach Better Stack only because
+# vector.toml's inngest_journald unit match admits them despite its PRIORITY 0..4 list (observed;
+# see the .tf comment). If that path ever goes dark, count would read 0 for the wrong reason — so
+# unit_rows=0 is "could not measure" (exit 3), never a healthy count=0.
+#
 # Exit: 0 with `count=<n>` on a measured answer; non-zero with NO count line when the answer could
-# not be measured (missing creds, query failure, unparseable result, or the SQL local not found).
-# A failed measurement never prints `count=0`.
+# not be measured (missing creds, query failure, unparseable result, the SQL local not found, or
+# zero inngest-server rows in the window). A failed measurement never prints `count=0`.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -32,7 +39,7 @@ if [ -z "$UNIT" ] || [ -z "$NEEDLES" ]; then
   exit 2
 fi
 
-QUERY="SELECT count() AS n FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1) WHERE dt > now() - INTERVAL 24 HOUR AND ${UNIT} AND ${NEEDLES} FORMAT JSONEachRow"
+QUERY="SELECT countIf(${NEEDLES}) AS n, count() AS unit_rows FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1) WHERE dt > now() - INTERVAL 24 HOUR AND ${UNIT} FORMAT JSONEachRow"
 
 OUT="$(bash scripts/betterstack-query.sh "$QUERY")"
 rc=$?
@@ -41,15 +48,21 @@ if [ "$rc" -ne 0 ]; then
   exit "$rc"
 fi
 
-N="$(printf '%s\n' "$OUT" | python3 -c 'import json,sys
+PAIR="$(printf '%s\n' "$OUT" | python3 -c 'import json,sys
 rows=[json.loads(l) for l in sys.stdin if l.strip()]
 assert len(rows)==1, f"expected one row, got {len(rows)}"
-n=int(rows[0]["n"])
-assert n>=0
-print(n)')"
+n=int(rows[0]["n"]); u=int(rows[0]["unit_rows"])
+assert 0<=n<=u
+print(n, u)')"
 prc=$?
-if [ "$prc" -ne 0 ] || [ -z "$N" ]; then
+read -r N UNIT_ROWS <<<"$PAIR"
+if [ "$prc" -ne 0 ] || [ -z "${N:-}" ] || [ -z "${UNIT_ROWS:-}" ]; then
   printf 'probe-inngest-524-count: unparseable result — no measurement\n' >&2
+  exit 3
+fi
+printf 'unit_rows=%s\n' "$UNIT_ROWS" >&2
+if [ "$UNIT_ROWS" -eq 0 ]; then
+  printf 'probe-inngest-524-count: zero inngest-server rows reached Better Stack in 24 h — the path the alert reads is dark, so count cannot be trusted; no measurement\n' >&2
   exit 3
 fi
 printf 'count=%s\n' "$N"

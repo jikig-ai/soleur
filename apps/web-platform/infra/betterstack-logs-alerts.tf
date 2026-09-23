@@ -429,9 +429,12 @@ resource "logtail_exploration_alert" "registry_store_not_luks" {
 # running, and the run fails anyway: 51% of 30-day cron spend was those duplicates and a $50
 # top-up lasted ~39 h. Three standing alarms, one per question:
 #   (1) inngest_step_524         — is a step being cut at the proxy again? (per 15 min)
-#   (2) claude_cost_daily_burn   — is the cron fleet spending more than $15 in 24 h?
+#   (2) claude_cost_daily_burn   — is the cron fleet spending more than $25 in 24 h?
 #   (3) claude_cost_capture_dark — has the cost telemetry itself gone dark for 24 h?
 # (2) cannot fire on silence (treat_as_zero reads "no rows" as $0), which is why (3) exists.
+# (2) is a FLOOR on spend, not the total: a marker with a null cost_usd (a timeout, a no-result or
+# parse-error exit, the HTTP-transport crons compound-promote / weekly-release-digest / the credit
+# probe) sums as $0, and a run killed mid-flight emits no marker at all.
 #
 # AGGREGATES ONLY. Every select below is a count or a sum. The inngest-server line can carry
 # queue-item payloads (email data) and a Cloudflare 524 page carries an IP, so no exploration here
@@ -449,15 +452,16 @@ resource "logtail_exploration_alert" "registry_store_not_luks" {
 #
 # THE DAILY WINDOW. (2) and (3) aggregate the WHOLE evaluation window into one row instead of
 # `GROUP BY {{time}}`: with query_period 86400 the bucket would be snapped to a day, and a
-# calendar-aligned bucket splits a trailing 24 h across two partial days — $30 of spend would read
-# as two sub-$15 buckets, and every early-UTC evaluation of (3) would see a near-empty bucket and
+# calendar-aligned bucket splits a trailing 24 h across two partial days — $40 of spend would read
+# as two sub-$25 buckets, and every early-UTC evaluation of (3) would see a near-empty bucket and
 # page. The window filter is therefore on the `dt` COLUMN, never on the `time` alias: here the
 # alias is a constant, so `time BETWEEN …` would be always-true and sum the source's entire
 # history (measured in the probe: $58.64 for a day whose real total is $34.41).
 # query_period 86400 is NOT validated client-side by the logtail provider (v11.2.0 schema:
 # "The query evaluation window in seconds", no bound) and the largest live precedent in this file
 # is 5400. If the API rejects it, the create fails the apply step loudly (no silent state); fall
-# back to 5400 and scale (2) to $15 x 5400 / 86400 ~= $0.94 per window, recorded in ADR-243.
+# back to 5400 and scale (2) to $25 x 5400 / 86400 ~= $1.56 per window (local.claude_cost_daily_burn_usd
+# is the single place to change), recorded in ADR-243.
 #
 # CREDIT EXHAUSTION IS NOT A TELEMETRY FAILURE. (3)'s arm B counts the credit probe's own
 # `anthropic-credit-exhausted` / `anthropic-key-invalid` rows (hourly while RED), so a zero-spend
@@ -466,8 +470,12 @@ resource "logtail_exploration_alert" "registry_store_not_luks" {
 locals {
   # (1) Field-isolated rather than `raw LIKE '%…524%'`: GitHub webhook payloads (issue and PR
   # bodies) reach this source, and this very incident's issues quote the literal. No PRIORITY
-  # filter — the live lines are PRIORITY 6 and ship because the inngest_journald source forwards
-  # every priority for that unit.
+  # filter — the live lines are PRIORITY 6. They ship even though vector.toml's inngest_journald
+  # source lists `include_matches.PRIORITY = 0..4`: OBSERVED (18 rows, 2026-09-16..23), the source's
+  # `include_units` admits the unit independently of the PRIORITY match (Vector appears to OR the
+  # two; the same mechanism is the suspect in #6551). That behaviour is load-bearing for this alert
+  # and is pinned by vector-pii-scrub.test.sh; scripts/probe-inngest-524-count.sh prints unit_rows
+  # as the positive control, so "no inngest-server rows ship" can never read as "no 524s".
   inngest_step_524_sql = <<-SQL
     SELECT {{time}} AS time, count(*) AS value
     FROM {{source}}
@@ -511,6 +519,12 @@ locals {
           AND JSONExtractString(raw, 'message', 'op') IN ('anthropic-credit-exhausted', 'anthropic-key-invalid'))
       )
   SQL
+
+  # The burn threshold, in dollars per trailing 24 h. $25 clears a healthy Monday (the per-site
+  # medians already sum ~$13 before daily-triage and follow-through, newly metered by #8611) and a
+  # 1st-of-quarter day, while staying under the $28–34 duplicate-storm days probed above.
+  # Recalibrate after 14 funded days (#8613). Interpolated into the alert's value AND its email text.
+  claude_cost_daily_burn_usd = 25
 
   claude_spend_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms"
 }
@@ -560,7 +574,7 @@ resource "logtail_exploration_alert" "inngest_step_524" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The Inngest server got HTTP 524 calling a function step through Cloudflare: a step outlived the proxy timeout, and a retry may have started a second paid Claude session. Runbook: ${local.claude_spend_runbook_url}"
+  incident_cause = "The Inngest server lost a function step's response: HTTP 524 through Cloudflare, or a streamed step response that dropped mid-flight ('error parsing stream' / 'reset the connection'). A web deploy that killed a running step also matches. The retry joins the live Claude child when the single-flight guard holds (Sentry op claude-eval-singleflight-join). Runbook: ${local.claude_spend_runbook_url}"
   metadata = {
     runbook = local.claude_spend_runbook_url
   }
@@ -597,11 +611,11 @@ resource "logtail_exploration_alert" "claude_cost_daily_burn" {
   exploration_id = logtail_exploration.claude_cost_daily_burn.id
   name           = "soleur-claude-cost-daily-burn-prd"
 
-  # $15 is ~2x the post-fix funded-day rate (~$7); recalibrate after 14 funded days (ADR-243). The
-  # window is a trailing 24 h checked hourly; spend ages out of it, so recovery needs no slack.
+  # See local.claude_cost_daily_burn_usd for the threshold's rationale. The window is a trailing
+  # 24 h checked hourly; spend ages out of it, so recovery needs no slack.
   alert_type          = "threshold"
   operator            = "higher_than"
-  value               = 15
+  value               = local.claude_cost_daily_burn_usd
   check_period        = 3600
   query_period        = 86400
   confirmation_period = 0
@@ -617,7 +631,7 @@ resource "logtail_exploration_alert" "claude_cost_daily_burn" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The claude-eval cron fleet spent more than $15 of operator Anthropic credit in the last 24 h (SOLEUR_CLAUDE_COST cost_usd, cron sources). Runbook: ${local.claude_spend_runbook_url}"
+  incident_cause = "The claude-eval cron fleet spent more than USD ${local.claude_cost_daily_burn_usd} of operator Anthropic credit in the last 24 h (SOLEUR_CLAUDE_COST cost_usd, cron sources; a floor: null-cost markers sum as $0). Runbook: ${local.claude_spend_runbook_url}"
   metadata = {
     runbook = local.claude_spend_runbook_url
   }

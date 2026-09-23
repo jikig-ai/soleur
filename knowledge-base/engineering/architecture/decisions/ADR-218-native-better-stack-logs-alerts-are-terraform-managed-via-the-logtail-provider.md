@@ -283,3 +283,31 @@ PR-2 of #8296 falsifies "It ships PAUSED", but PR-1 and its push apply did; PR-2
 
 One known gap is open: `on_missing_data = "treat_as_zero"` reads a probe pipeline that has gone
 silent as healthy, so this alert cannot page on a dead producer. The paging fix is tracked in #8516.
+
+## Amendment — 2026-09-23 (#8611, ADR-243): three more Logs alerts
+
+Appended, not edited. #8611 adds three `logtail_exploration_alert` resources to
+`betterstack-logs-alerts.tf`, which takes the Terraform-managed Logs alert count from **3 to 6**
+(#6894 made two; #8408's `registry_store_not_luks` made three, without an amendment here). The
+free-tier alert-count cap recorded above as undocumented is still undocumented. If an apply is
+refused on count, that refusal is the measurement, and it lands here.
+
+The 2026-09-18 amendment asked the next alert to name its signal class and show that no existing
+alert covers it:
+
+- **`inngest_step_524`**: this one IS the stateless per-bucket class the Decision describes. It
+  counts inngest-server rows per 15 min whose `message.error` carries a lost-step-response text
+  (the 524 and the two spike-measured stream-drop texts). No existing alert reads inngest-server's
+  step-transport errors.
+- **`claude_cost_daily_burn`**: this one is **not** per-bucket. It is a **whole-window sum**:
+  one row per evaluation, summing `cost_usd` over a trailing 24 h (`query_period` 86400) and
+  filtered on the `dt` column. With a `{{time}}` bucket, a trailing day would split across two
+  calendar buckets. No existing alert reads spend.
+- **`claude_cost_capture_dark`**: this one is **not** per-bucket either. It is an **absence
+  alarm**: `lower_than 1` over `treat_as_zero`, so silence fires. It is the first Logs alert in
+  this file built to page on a dead producer, the gap the 2026-09-21 amendment leaves open for the
+  LUKS alert (#8516). It watches only the cost-marker path.
+
+So the Decision's framing of native Logs alerts as "stateless per-bucket signals" now covers
+four of the six. The two exceptions are recorded in ADR-243 §3, and their shapes are pinned by
+`apps/web-platform/test/infra/inngest-step-524-alert.test.sh`.
