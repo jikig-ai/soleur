@@ -367,7 +367,7 @@ jobs:
           fetch_rc=0
           timeout 60 git fetch --no-tags --depth=1 origin "$base_ref" || fetch_rc=$?
           if [[ "$fetch_rc" != "0" ]]; then
-            echo "::error::could not fetch origin/$base_ref (git rc=$fetch_rc) — not caused by this PR; re-run the job"
+            echo "::error::git fetch of origin/$base_ref exited rc=$fetch_rc, so the guard copy cannot be staged; re-run the job"
             exit 1
           fi
           case "$LEDGER_GUARD" in
