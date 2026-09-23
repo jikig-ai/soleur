@@ -410,7 +410,7 @@ jobs:
       - name: Lint the tracked Markdown corpus
         run: bash scripts/markdown-lint.sh --repo-sweep
       # The gate's OWN suite runs here, not in test-all.sh's scripts group: it drives the
-      # real pinned binary through a hermetic sandbox, and the `test-scripts` legs install
+      # real pinned binary through a hermetic sandbox, and the `test-scripts*` legs install
       # no node deps, so this is the only CI job where it can execute rather than abort on
       # a RED control. Ordered after the sweep so a corpus regression is reported as a
       # corpus regression, not as a suite failure.

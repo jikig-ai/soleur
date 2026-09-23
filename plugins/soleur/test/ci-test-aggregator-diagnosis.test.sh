@@ -129,13 +129,13 @@ echo "  instrument self-test: pass() and fail() both move"
 
 # ── Execution harness ────────────────────────────────────────────────────────
 # Executes an extracted body under the shell GitHub Actions actually uses.
-# $6 is the 4th leg (web-platform-build, #8136); it defaults to success so the
-# three-shard rows keep stating their FULL triple while the build rows below
-# name the 4th value explicitly.
-run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] ; sets OUT/RC
+# $6 is the 4th leg (web-platform-build, #8136); $7 the 5th (test-scripts-heavy, #8006).
+# Both default to success so the three-shard rows keep stating their FULL triple while
+# the build and heavy rows below name their own values explicitly.
+run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] [$7=scripts-heavy] ; sets OUT/RC
   OUT="$SANDBOX/out.$RANDOM.$RANDOM"
   ( WEBPLAT_RESULT="$2" BUN_RESULT="$3" SCRIPTS_RESULT="$4" EVENT_NAME="$5" \
-      BUILD_RESULT="${6:-success}" \
+      BUILD_RESULT="${6:-success}" SCRIPTS_HEAVY_RESULT="${7:-success}" \
       bash --noprofile --norc -eo pipefail "$1" ) >"$OUT" 2>&1
   RC=$?
 }
@@ -163,7 +163,7 @@ expect_line() {  # $1=label $2=body $3..$5=results $6=event $7=needle $8=want_rc
 # and each row's verdict is arbitrary. This runs FIRST and aborts on failure.
 _c0=$fails
 expect_line "CONTROL all-green" "$BODY" success success success push \
-  "All four legs green (three shards + web-platform-build)." 0
+  "All five legs green (four shards + web-platform-build)." 0
 if [ "$fails" -ne "$_c0" ]; then
   printf '\nCONTROL ROW FAILED — the battery is VOID, not failing. The unmutated\n' >&2
   printf 'aggregator body does not emit its own success line, so every mutation\n' >&2
@@ -211,6 +211,26 @@ fi
 run_body "$BODY" success success success push skipped
 if [ "$RC" -eq 1 ] && grep -qF -- "web-platform-build: SKIPPED" "$OUT"; then pass; else
   fail "R1g a skipped web-platform-build reads as success — the fail-open the header forbids (rc=$RC)"
+fi
+
+# R1h/R1i/R1j — the 5th leg (test-scripts-heavy): same contract as the other matrix job.
+# Red ALONE fails and names itself; skipped ALONE is not success; and the failure arm must
+# use MATRIX wording for it too — `== "test-scripts"` alone would emit the single-log
+# pointer R1e forbids, on the job where it is equally untrue.
+run_body "$BODY" success success success push success failure
+if [ "$RC" -eq 1 ] && grep -qF -- "test-scripts-heavy: FAILED" "$OUT"; then pass; else
+  fail "R1h a red test-scripts-heavy with every other leg green must fail the aggregator and name the leg (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
+fi
+run_body "$BODY" success success success push success skipped
+if [ "$RC" -eq 1 ] && grep -qF -- "test-scripts-heavy: SKIPPED" "$OUT"; then pass; else
+  fail "R1i a skipped test-scripts-heavy reads as success — the same fail-open R1g pins on the build leg (rc=$RC)"
+fi
+# R1j re-runs the FAILURE fixture: reading $OUT here without this call asserts the
+# matrix needle against R1i's SKIPPED output — a stale-file read that fails for the
+# wrong reason no matter what the failure arm says.
+run_body "$BODY" success success success push success failure
+if grep -qF -- "matrix" "$OUT"; then pass; else
+  fail "R1j the test-scripts-heavy failure message does not say 'matrix' — the failure arm special-cases only test-scripts, but this job is a matrix rollup too (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
 fi
 
 # Two legs cancelled on a pull_request run: the run was superseded.
@@ -280,7 +300,7 @@ done
 # CONTROL; repeated here across the other event name so the event gate cannot
 # be implemented as "always fail on pull_request".
 expect_line "Hb must-PASS all-green on pull_request" "$BODY" success success success pull_request \
-  "All four legs green (three shards + web-platform-build)." 0
+  "All five legs green (four shards + web-platform-build)." 0
 
 # ── MUTATION BATTERY ─────────────────────────────────────────────────────────
 # Each row mutates a COPY of the extracted body, asserts the mutation LANDED
@@ -363,7 +383,7 @@ fi
 # Every row above executes the extracted `run:` body against env vars the HARNESS
 # supplies. That proves the classifier is right and says NOTHING about whether
 # the workflow feeds it the right values, or whether the `test` job still watches
-# all three shards. Both are one-line edits with no local symptom.
+# all four leg jobs. Both are one-line edits with no local symptom.
 _ciy="$REPO_ROOT/.github/workflows/ci.yml"
 _wiring=$(python3 - "$_ciy" <<'PYW'
 import sys, yaml
@@ -379,7 +399,7 @@ for st in job.get("steps") or []:
 if step is None:
     print("NOSTEP"); raise SystemExit
 env = step.get("env") or {}
-want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts", "BUILD_RESULT": "web-platform-build"}
+want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts", "SCRIPTS_HEAVY_RESULT": "test-scripts-heavy", "BUILD_RESULT": "web-platform-build"}
 bad = []
 for var, shard in want.items():
     v = str(env.get(var, ""))
@@ -406,8 +426,8 @@ n = [n] if isinstance(n, str) else list(n)
 print(len(n))
 PYN
 )
-if [ "$_nshards" -eq 4 ]; then pass; else
-  fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 4 (three test-* shards + web-platform-build, #8136) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
+if [ "$_nshards" -eq 5 ]; then pass; else
+  fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 5 (four test-* shards + web-platform-build, #8136) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
 fi
 
 # ── Verdict ──────────────────────────────────────────────────────────────────
@@ -423,13 +443,15 @@ TOTAL=$((passes + fails))
 #   1 instrument self-test + 1 control + 7 classification (R1,R1b,R2,R3,R3b,R4,R5)
 # + 3 failure-arm honesty (R1c no guessed mechanism, R1d names the ambiguity,
 #   R1e matrix rollup is not one log)
+# + 3 heavy-leg honesty (R1h names the leg, R1i skipped is not success,
+#   R1j matrix rollup is not one log)
 # + 2 event-gate (24b absent-SUPERSEDED, 24b says-something)
 # + 1 second-member (25) + 3 swallow (24, one per non-success result value)
 # + 1 must-PASS (Hb) + 4 mutants + 1 harness (Ha)
 # + 2 wiring (W1 env->needs mapping, W2 shard cardinality)
 # + 3 event/value cardinality (E1 merge_group, E1 workflow_dispatch,
-#   E3 out-of-enum result) = 29
-MIN_ROWS=29
+#   E3 out-of-enum result) = 32
+MIN_ROWS=32
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
