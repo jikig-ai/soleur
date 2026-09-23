@@ -988,7 +988,11 @@ fi
 # ----------------------------------------------------------------------
 echo "G2-P5: classifier emits wrong order / too few lines -> UNCLASSIFIED, exit 1"
 CASES=$((CASES + 1))
-with_stub_classifier 'mapfile -t l; for ((i=${#l[@]}-1;i>=0;i--)); do printf "orphan\t%s\n" "${l[$i]%%|*}"; done'
+# Exactly one verdict per NON-EMPTY input line, reversed: the count matches, so
+# only the per-line identity check can reject it (the here-string feeding the
+# classifier carries a trailing empty line; counting it would decide the row
+# by count instead).
+with_stub_classifier 'mapfile -t l; for ((i=${#l[@]}-1;i>=0;i--)); do [[ -n "${l[$i]}" ]] && printf "orphan\t%s\n" "${l[$i]%%|*}"; done; exit 0'
 ledger "150_inflight.sql|$(blob_of IF)" "199_gone.sql|$(blob_of GONE)"
 run_probe true
 rc_order=$rc; out_order=$out
