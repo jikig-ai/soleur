@@ -146,6 +146,22 @@ the "appeasement" guard was the fix.
     `lib/git-fixture-env.sh`. Add `fixture-env-adoption.test.sh` to the repo-global ratchet set
     alongside fixture-relative-assert, P1a and the trap lint (evidence added to #8322).
 
+21. **CI failed the commit-hook rows, which passed locally.** `scripts/test-all.sh` sets
+    `core.hooksPath` through inherited `GIT_CONFIG_*` for the whole run, and environment config
+    outranks a fixture repo's own `.git/hooks`. So under CI the hooks never ran: the
+    hook-rewrite rows exited 0, and the signal-during-commit row passed without testing
+    anything. Recovery: the suite takes `git_fixture_env` (its prefix sweep drops the setting),
+    plus a control row asserting that a fixture pre-commit hook actually runs. Reproduced red
+    locally by exporting the same `GIT_CONFIG_*` values.
+    **Prevention:** any suite whose rows depend on a fixture's hooks must take the fixture env
+    and carry a "hooks run" control row. A standalone local run does not reproduce the CI
+    environment, so test locally under the `GIT_CONFIG_*` values `test-all.sh` exports.
+22. **The poll's BEHIND auto-sync merged and pushed while I had an uncommitted edit.** The
+    merge did not touch the edited file, so nothing was lost. Recovery: stopped the Monitor,
+    verified there was no MERGE_HEAD and only the intended diff, re-ran the suites, committed.
+    **Prevention:** stop the Phase 7 poll before editing the PR worktree, and re-arm it after
+    the push. The poll is a second writer on the same index.
+
 ## Related
 
 - ADR-235 (amendment 2026-09-23): the git-objects design and its residuals.
