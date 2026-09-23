@@ -212,7 +212,10 @@ cases=$((cases + 1)); row "H2 commented-out description ignored" 0 "1 descriptio
 # H5 — a heredoc body never moves the header. A column-0 `}` or `KEY=value` inside
 # one is text, not structure; honouring it would hide the description after it.
 d=$(fx h5); assert_fixture_dir "$d"
-printf 'resource "doppler_project" "p" {\n  name = <<EOT\n}\nFOO=bar\nresource "x" "y" {\nEOT\n  description = %s\n}\n' "$(lit "$(x 256)")" > "$d/a.tf"
+# The opener is assembled at run time: a literal one in this file's source reads as a real
+# heredoc to guard-vacuity-floor.test.sh, which then skips every line after it — this floor too.
+hd_open='<''<EOT'
+printf 'resource "doppler_project" "p" {\n  name = %sEOT\n}\nFOO=bar\nresource "x" "y" {\nEOT\n  description = %s\n}\n' "${hd_open%EOT}" "$(lit "$(x 256)")" > "$d/a.tf"
 cases=$((cases + 1)); row "H5 heredoc body is not structure" 1 "doppler_project.p description is 256 bytes" "$d/a.tf"
 d=$(fx h5b); assert_fixture_dir "$d"
 printf '/*\n}\nFOO=bar\n*/\nresource "doppler_project" "p" {\n  description = "ok"\n}\n' > "$d/a.tf"
