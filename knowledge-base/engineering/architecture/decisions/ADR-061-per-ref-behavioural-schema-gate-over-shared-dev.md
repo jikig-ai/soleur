@@ -79,3 +79,98 @@ Separately, content drift accumulated for months: 26 rows on 2026-09-21. The cau
 - An open PR's applied migrations no longer red main or the scheduled probe, as long as the PR's branch still holds them. Deleting such a branch unmerged, or removing the file from it, turns its rows ownerless, which reds main until the file is restored or dev is reconciled. The annotation says so.
 - An abandoned branch stops protecting its rows once its head commit is more than 30 whole days old: the verdict becomes `stale`, blocking, and names the branch. On the scheduled surface each blocking class also emits one Sentry event.
 - Repair procedures: `knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md` §Content drift and Part 1. Self-service reconcile is tracked in #8605.
+
+## Amendment 2026-09-23 (#8605, #8606): closed-PR ownership and a dev reconcile path
+
+**Status:** Accepted. **Issues:** #8605, #8606. Append-only: every section above is unchanged, and
+two of its sentences are superseded by name below.
+
+### Context
+
+Under the previous amendment, a branch whose pull request was closed without merging, and whose
+branch was never deleted, kept its applied dev rows in-flight forever, because nothing in git records
+PR state. The only way to discard an applied-but-unmerged version was a hand-run SQL session with a dev
+credential. Separately, `run-migrations.sh` resolved its unmerged-apply pathspec against the current
+directory, so from `apps/web-platform` (where `tenant-integration.yml` and `rls-authz-fuzz.yml` run it)
+every file read as "not on origin/main" (#8606, fixed by anchoring both pathspecs with
+`:(top,literal)`; from the repo root, the prd path, they name the same paths as before).
+
+### Decision
+
+1. **Ownership rule, restated.** A missing-on-main row is an in-flight `::warning::` if and only if the
+   conditions of the previous amendment hold AND at least one fresh live holder branch has an open pull
+   request, has none, or has a latest closed pull request whose head is not the branch's current tip.
+   When every fresh holder's latest pull request closed AT the branch tip, the verdict is `closed-grace`
+   (a warning) for `CLOSED_GRACE_H=24` hours after the close, then `closed` (blocking, with a Sentry
+   event on the scheduled surface). The evidence is bound to the commit (`head.sha` == branch tip), never
+   the branch name, so a re-pushed or recreated branch is not condemned by an old PR. A closed holder is
+   decided before the stale tiers run.
+2. **The classifier reads PR state.** `classify-missing` calls `GET /repos/{repo}/pulls?head=…` with the
+   job's `GITHUB_TOKEN` and `pull-requests: read`, only for fresh owner branches (a probe with no fresh
+   candidate makes no call), memoised per run. It stays fail-closed: 401/403/404 exit as `config`
+   (naming the status), 429/5xx get one retry and then exit as `transient`, and a malformed body exits
+   as `transient`; the probe reports any of these as UNCLASSIFIED (blocking).
+3. **DC-1: a CI path writes to the shared DEV ledger and schema, never prd.** `dev-ledger-reconcile.yml`
+   runs `apps/web-platform/scripts/dev-ledger-reconcile.sh`, a writer kept in its own file (it sources the
+   read-only guard as a library, so the guard `tenant-integration.yml` extracts stays write-free). For one
+   pull request it discards the rows that PR owns: in one `psql --single-transaction` unit it deletes each
+   ledger row by compare-and-set on filename AND `content_sha` (raising unless exactly one row matched) and
+   runs the paired `.down.sql` when there is one, newest `applied_at` first, under the dev-suite mutex
+   (proceeding only on `DEV_SUITE_MUTEX_ACQUIRED`), with `lock_timeout`/`statement_timeout`. It runs
+   automatically when a same-repo PR is closed without merging (`pull_request_target`, base-branch
+   workflow, no PR-head code executed) and on `workflow_dispatch` from `main` (dry run by default).
+   - **Authorization boundary:** repo write access, the same boundary that already lets a PR's CI apply
+     its SQL to dev. Fork PRs are excluded (they never applied anything). An OPEN PR's rows can be
+     discarded only by its author (`github.triggering_actor`) and only for rows with a paired `.down.sql`.
+   - **Why the PR's own `.down.sql` may run with the dev credential under `pull_request_target`:** it is
+     refused on any backslash byte (psql would run a meta-command such as `\!` from a `-f` file), checked
+     before any mutex or database contact; on transaction-control and non-transactional statements, matched
+     on a view with comments, strings and dollar-quoted bodies stripped; and it runs with `GH_TOKEN` unset.
+     A single wrapping `BEGIN`/`COMMIT` pair is normalized away. This is why the path is not a
+     `contributor` path in C4: forks are excluded, and same-repo authors already hold the credential
+     through PR CI.
+   - **Dev only:** the workflow asserts the `dev_scheduled` Doppler config resolves to `environment=dev`
+     and holds no `SUPABASE_ACCESS_TOKEN`, and the writer checks `DOPPLER_ENVIRONMENT=dev` in-process
+     before any `psql`.
+4. **Policy 2, relaxed and bounded.** An applied-but-unmerged version may be discarded (down plus CAS
+   delete) instead of restored, only when the PR carries its paired `.down.sql`. The primary fix for an
+   edited-after-apply migration stays "restore the applied body and ship a new migration". A CLOSED PR's
+   row with no `.down.sql` is discarded ledger-only; its objects stay on dev, and the workflow files an
+   `action-required` issue naming the residue.
+5. **Later-row safety.** A down body that uses `CASCADE` or redefines shared objects (`CREATE OR
+   REPLACE`, policies, grants, `ALTER FUNCTION`/`PROCEDURE`) is refused while the ledger holds any row
+   applied at or after this PR's earliest row, because it could drop another branch's objects or revert
+   main's later definition. `allow_later_rows` (dispatch only, never the close path) overrides after a dry
+   run lists those rows. Residual: detection is by `applied_at`, so an object an out-of-order apply created
+   before this PR's row and that depends on it is not seen.
+
+**Superseded sentences** (previous amendment, Decision 1 and Consequences): "It uses git only: a bare
+owner repo and one blobless fetch of origin's heads. No GitHub API, no new permissions." (now: git plus
+the `pull-requests: read` lookup above) and "Self-service reconcile is tracked in #8605." (now:
+`dev-ledger-reconcile.yml`).
+
+### Rejected alternatives (additions)
+
+- **`pull_request: closed` as the trigger.** It runs the workflow copy from the PR's merge ref, i.e.
+  PR-controlled YAML with the dev secret.
+- **Dispatch with `--ref <branch>`.** It runs the branch's YAML, and branches predating the workflow
+  cannot dispatch it.
+- **Refuse every closed PR's row that has no `.down.sql`.** Contradicts the operator's direction; the
+  residue is disclosed and filed instead.
+- **A warning-only `closed` verdict with dispatch-only reconcile.** Leaves closed PRs' rows unowned
+  indefinitely.
+- **Degrade a transient PR-state failure to an in-flight warning.** Contradicts the fail-closed
+  direction; one retry is used instead.
+- **An audit table on dev.** A migration that would also land on prd; the PR comment, job summary and
+  `action-required` issue carry the audit trail.
+
+### Consequences
+
+- Closing a migration PR unmerged with its branch retained discards its dev rows within minutes. A
+  refused or failed close-time run files an `action-required` issue and turns blocking after 24 hours.
+- A PR closed by a `GITHUB_TOKEN`-authenticated workflow fires no `pull_request_target` event and relies
+  on the grace. A PR closed with "delete branch" reads `orphan` (blocking, no grace) until the close-time
+  run lands, as before, now bounded by minutes; the orphan line carries a `gh pr list` lookup hint.
+- The detection ceiling for a close-time run that never happened is about 30 hours (the 24-hour grace
+  plus the 6-hour probe cadence).
+- A GitHub API outage on an authoritative probe can red main while fresh owners exist (fail-closed).
