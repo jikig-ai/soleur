@@ -387,7 +387,13 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Devin CLI)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **exec** with adequate timeout for short `gh` probes.",
-        "- Use **get_output** with timeout for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        // SOLEUR-DEBT: prescribed, not live-verified. The claim that `get_output` cannot
+        // wait is MEASURED (devin/INSTRUCTIONS.md §Polling, envelope-capture §7); the
+        // replacement loop below is not yet exercised against a live Devin session.
+        // Upgrade trigger: re-run the live wait check when Devin auth is available in CI
+        // (ADR-240 records the state; #8390 item 2 is the origin).
+        "- Arm the wait as a background **run_subagent** running an exit-coded poll loop: one exit code per actionable transition (`MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`, check failure). Its completion notification is the only wake primitive, so the loop must EXIT to report.",
+        "- Mutations (`gh pr update-branch`, the merge itself) stay in the foreground — never inside the waiting subagent.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/soleur:ship` merge: poll release workflows, invoke `/soleur:postmerge <PR>`, then emit `<promise>DONE</promise>`.",
         "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",
