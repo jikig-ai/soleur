@@ -2188,12 +2188,16 @@ if [ -s "$TMP/sshd-stage.sh" ]; then
   # (f) the assertion emits on the EXISTING literal stage at level warning — never fatal (the
   # rung-2 gate contract), never via a derived "$STAGE" (row (c) covers the reassignment half).
   _s2_n_fatal=$(printf '%s\n' "$_s2_code" | tr -d '\\\n' | grep -oE 'git-data-emit[[:space:]]+"[^"]*"[[:space:]]+[A-Za-z_"$]+[[:space:]]+fatal' | wc -l | tr -d ' ' || true)
-  # (#7226) 1 -> 2: the host-key boot proof is the second, deliberate fatal (Guard 6). The
-  # DIRECTIVE assertion still must not emit fatal; the two fatal messages are pinned by name.
-  if [ "$_s2_n_fatal" = "2" ] \
+  # (#7226) 1 -> 2: the host-key boot proof is the second, deliberate fatal (Guard 6).
+  # (#8211) 2 -> 3: the client-environment proof is the third. The store scripts' seams are
+  # environment variables, so an AcceptEnv/PermitUserEnvironment that lets a client set one
+  # points the Art. 17 erasure at a store of its choosing — a fatal, not a lint. The DIRECTIVE
+  # assertion still must not emit fatal; the three fatal messages are pinned by name.
+  if [ "$_s2_n_fatal" = "3" ] \
      && printf '%s\n' "$_s2_code" | grep -qF '"git-data sshd -t REJECTED the config" sshd_config fatal' \
-     && printf '%s\n' "$_s2_code" | grep -qF '"git-data sshd host-key proof FAILED" sshd_config fatal'; then pass; else
-    fail "S2(f): the sshd stage has ${_s2_n_fatal} fatal emit(s), expected exactly 2 (sshd -t REJECTED, host-key proof FAILED) — the drop-in assertion must not emit fatal" ""; fi
+     && printf '%s\n' "$_s2_code" | grep -qF '"git-data sshd host-key proof FAILED" sshd_config fatal' \
+     && printf '%s\n' "$_s2_code" | grep -qF '"git-data sshd client-environment path open" sshd_config fatal'; then pass; else
+    fail "S2(f): the sshd stage has ${_s2_n_fatal} fatal emit(s), expected exactly 3 (sshd -t REJECTED, host-key proof FAILED, client-environment path open) — the drop-in assertion must not emit fatal" ""; fi
   # (g) >= 4 emits on the bare literal `sshd_config_warn warning`: -t could-not-run, restart
   # failed, directive absent, -T could-not-run. Continuations joined first: one level sits on
   # a continued line.
@@ -3128,7 +3132,7 @@ if [ "$INJECT" != "sentinel-in-capture-log" ]; then
   touch /out/sentinel.ok || fixture_fail "could not create the durable /out/sentinel.ok artifact"
 fi
 
-MOUNTERR='mount: /mnt/git-data-luks: mount(2) system call failed: No such process.'
+MOUNTERR='mount: /mnt/git-data: mount(2) system call failed: No such process.'
 mk_dmesg() { i=1; while [ "$i" -le 20 ]; do echo "[   12.3456$i] EXT4-fs (dm-0): mounting with quota feature but no quota format module line $i"; i=$((i+1)); done; }
 
 # ORDER A — the shipped ordering: dmesg first, failing stderr last.
@@ -3417,7 +3421,8 @@ if [ -s "$_R3B_SRC" ]; then
   # (iv) THE MESSAGE-LITERAL SET, not a count.
   _r3b_msgs="$(printf '%s\n' "$_r3b_fatal" | awk -F'|' '{print $6}' | sed 's/^"//; s/"$//' | sort || true)"
   # (#7226) + the host-key boot proof's fatal (Guard 6), on the same routed stage sshd_config.
-  _r3b_want="$(printf '%s\n' 'git-data $STAGE FAILED' 'git-data LUKS stage FAILED' 'git-data sshd -t REJECTED the config' 'git-data sshd host-key proof FAILED' | sort)"
+  # (#8211) + the client-environment proof's fatal, same stage for the same reason.
+  _r3b_want="$(printf '%s\n' 'git-data $STAGE FAILED' 'git-data LUKS stage FAILED' 'git-data sshd -t REJECTED the config' 'git-data sshd host-key proof FAILED' 'git-data sshd client-environment path open' | sort)"
   if [ "$_r3b_msgs" = "$_r3b_want" ]; then pass; else
     fail "R3(3b)(iv): the fatal-site message set does not match" \
          "got=[$(printf '%s' "$_r3b_msgs" | tr '\n' '/')] want=[$(printf '%s' "$_r3b_want" | tr '\n' '/')]"

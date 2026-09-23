@@ -613,7 +613,7 @@ jobs:
     # So at 20 minutes the job was already at 1200/1030 = 1.17x before this PR.
     #   observed deploy-script-tests max (10 runs, successful only) : 1030 s
     #   + the #8189 additions (measured locally, budgeted high)     : +90 s
-    #   new basis                                                    : ~1120 s
+    #   new basis                                                    : ~1120 s (basis refreshed at #8539 review: ~1204 s after +84 s of new inngest suites, 1.35x against the 1620 s ceiling -- still fits, no bump needed)
     #   1120 x 1.4 = 1568 s = 26.1 min -> 27
     # 20 -> 27 minutes. At 20 the margin would be 1200/1120 = 1.07x, i.e. one slow runner away
     # from a cancel that lands on whatever step the clock runs out in.
@@ -1047,6 +1047,16 @@ jobs:
       # probe-fault-is-not-absence arm (#6415) are actually asserted rather than string-matched.
       - name: Run first-boot NIC-wait gate guard (#6441 ADR-114 I1 defer-not-abort + 3 arms)
         run: bash apps/web-platform/infra/nic-wait-gate.test.sh
+
+      # LOAD-BEARING registration (explicit, no glob). Behavioural, not grep-only: it renders
+      # cloud-init-inngest.yml through terraform templatefile + local.inngest_rationale_strip
+      # (inngest-userdata-budget.sh; this job sets up terraform), extracts soleur-inngest-nic-wait
+      # and the 99-soleur-private-fallback.network file from the RENDERED write_files, and
+      # EXECUTES the helper against stub `ip`/`networkctl`/emitters: fail-open, exactly one
+      # private_nic_* event per channel, byte-identical <=120-char detail, plus the Guard 2
+      # mutation battery (#8539).
+      - name: Run inngest private-NIC wait guard (#8539 late-attached NIC, one event, fail-open)
+        run: bash apps/web-platform/infra/inngest-nic-wait.test.sh
 
       - name: Run /workspaces LUKS drift observability guard (#6604 emit tags/DSN + daily probe + gate)
         run: bash apps/web-platform/infra/luks-monitor.test.sh
@@ -1606,6 +1616,16 @@ jobs:
       - name: Run git-data bare-repo erasure (Art. 17) tests
         run: bash apps/web-platform/infra/git-data-remove.test.sh
 
+      # (#8211, ADR-239) Guard 1: only a verified, mapper-served store is acted on. The
+      # population is DERIVED from the file() bindings in modules/git-data-userdata/main.tf —
+      # the same set the rung-2 birth gate hashes — so a FIFTH store-acting payload added to
+      # the render later cannot slip past four per-script suites. Also carries git-data-gc.sh's
+      # runtime C1 rows (no other suite executes gc), the sshd client-environment lint and the
+      # gc.service `env -u` seam strip. Guard 1's mutation rows 1-9 are self-tests that mutate
+      # a temporary copy and must RED.
+      - name: Run git-data store-device census (Guard 1, #8211)
+        run: bash apps/web-platform/infra/git-data-store-device-census.test.sh
+
       # (#8043 F7/F9, Guard 3) The git account cannot rewrite its own authorization map or the
       # hook it is fenced by. Static arm over the bootstrap's last-writer literals; runtime arm
       # applies them in the pinned image and proves sshd accepts the map (with a negative
@@ -1621,6 +1641,15 @@ jobs:
       # a runtime arm that drives the script and the OnFailure reporter against stubs.
       - name: Run git-data LUKS boot-reopen guards (Guard 1, #8210)
         run: bash apps/web-platform/infra/git-data-luks-reopen.test.sh
+
+      # (#8211, ADR-239) Guard 2: an instance proves its layout before any store action is
+      # allowed. The bootstrap's store-verification steps are extracted from their sentinel
+      # comments and driven WITHOUT ROOT against stub mount/umount/dumpe2fs/findmnt/runuser
+      # binaries, so a CI runner adjudicates the plaintext-volume check, the luks_residue count,
+      # the fence-on-mapper read, the store marker and the erasure probe for real. Guard 2's
+      # mutation rows 1, 2, 3, 5 and 7 are self-tests that must RED.
+      - name: Run git-data bootstrap store-verification guards (Guard 2, #8211)
+        run: bash apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh
 
       # (#6680, ADR-220) git-data-cutover's read-only proof: the access gate precedes every store
       # probe, the store probes fail closed (a failed read is probe_failed, never a store state),

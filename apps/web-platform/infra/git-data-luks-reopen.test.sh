@@ -93,9 +93,12 @@ ok "$(grep -qE 'RUNDIR="\$\{GIT_DATA_REOPEN_RUNDIR:-/run/git-data-luks-reopen\}"
 ok "$(grep -qE 'DEVICE_WAIT="\$\{GIT_DATA_REOPEN_DEVICE_WAIT:-30\}"' "$SCRIPT_BODY"; echo $?)" "S10 DEVICE_WAIT seam defaults to 30"
 ok "$(grep -qE 'GIT_DATA_LUKS_DEV.*\^/dev/disk/by-id/scsi-0HC_Volume_\[0-9\]\+\$' "$SCRIPT_BODY"; echo $?)" "S11 phase config asserts the device-pin shape (M23)"
 ok "$(grep -qE 'GIT_DATA_DOPPLER_CONFIG.*\^\[a-z0-9_\]\+\$' "$SCRIPT_BODY"; echo $?)" "S11b phase config asserts the config-name shape (M23)"
-# S11c — the fstab target is allowlisted to the two legal states. Without it the decrypted store
-# follows whatever a garbled fstab append names, started by PID 1.
-ok "$(grep -qF '/mnt/git-data|/mnt/git-data-luks)' "$SCRIPT_BODY"; echo $?)" "S11c phase target allowlists the two legal mount points"
+# S11c — the fstab target is allowlisted to the ONE legal state (#8211: the mapper is born at
+# /mnt/git-data). Without it the decrypted store follows whatever a garbled fstab append names,
+# started by PID 1. The runtime rows target-legacy/target-rogue prove the refusal; this pins the arm.
+ok "$(grep -qxE '[[:space:]]*/mnt/git-data\) : ;;' "$SCRIPT_BODY"; echo $?)" "S11c phase target allowlists exactly /mnt/git-data"
+n=$(grep -c '/mnt/git-data-luks' "$SCRIPT_BODY" || true)
+ok "$((n != 0))" "S11d the pre-#8211 /mnt/git-data-luks is named nowhere in the script body (got $n)"
 n=$(grep -c 'doppler run --project soleur ' "$SCRIPT" || true)
 ok "$((n != 0))" "S12 no 'doppler run --project soleur ' literal anywhere in the script (p_doppler_config_scope is not line-anchored)"
 
@@ -562,7 +565,7 @@ new_fixture() {
   assert_fixture_dir "$FX"; assert_fixture_dir "$RUNDIR"
   rm -rf "$FX"; mkdir -p "$FX" "$RUNDIR"
   : > "$FX/calls.log"
-  printf '/mnt/git-data-luks\n' > "$FX/fstab_target"
+  printf '/mnt/git-data\n' > "$FX/fstab_target"
   export FX RUNDIR
 }
 run_script() {
@@ -605,10 +608,10 @@ ok "$([ "$(cat "$FX/key_seen")" = "stub-passphrase-0000" ]; echo $?)" "S1 the pa
 # not applied (measured: the row then FAILED on key_seen itself, which is the one file allowed).
 key_absent() { ! grep -arqF --exclude=key_seen -- "stub-passphrase-0000" "$FX" "$RUNDIR" 2>/dev/null; echo $?; }
 ok "$(key_absent)" "S1n the passphrase appears in NO fixture artifact other than key_seen (argv/stdout/stderr/run dir)" "$(grep -arlF --exclude=key_seen -- 'stub-passphrase-0000' "$FX" "$RUNDIR" 2>/dev/null)"
-ok "$(calls_of "|systemctl|" | grep -q 'start mnt-git\\x2ddata\\x2dluks.mount'; echo $?)" "S1 PID-1 mount started via the escaped fstab unit (M10)"
+ok "$(calls_of "|systemctl|" | grep -qx 'mount|systemctl|start mnt-git\\x2ddata.mount'; echo $?)" "S1 PID-1 mount started via the escaped fstab unit (M10)"
 ok "$(grep -q 'luks_reopen_ok info' "$FX/emit.log"; echo $?)" "S1 success emit at luks_reopen_ok/info"
 ok "$(grep -q 'action=reopened' "$FX/emit.log"; echo $?)" "S1 action=reopened"
-ok "$(grep -q 'target=/mnt/git-data-luks' "$FX/emit.log"; echo $?)" "S1 target= tag"
+ok "$(grep -qE '(^| )target=/mnt/git-data( |$)' "$FX/emit.log"; echo $?)" "S1 target=/mnt/git-data tag (exact token)"
 ok "$(grep -q 'restarts=0' "$FX/emit.log"; echo $?)" "S1 restarts= tag"
 ok "$([ ! -e "$RUNDIR/action" ] && [ ! -e "$RUNDIR/log" ]; echo $?)" "S1 phase/log files removed on success"
 ok "$(( $(order_ok) != 1 ))" "S1 ORDER: every stub call is tagged with a declared phase in declared order (M11/M15)" "$(cat "$FX/calls.log")"
@@ -684,7 +687,8 @@ open-sigterm|touch "$FX/luksopen_kill"|open|
 identity|touch "$FX/mapper_open"; echo /dev/sdz > "$FX/status_device"|identity|/dev/sdz
 target-none|: > "$FX/fstab_target"|target|fstab
 target-two|printf '/mnt/a\n/mnt/b\n' > "$FX/fstab_target"|target|fstab
-target-rogue|printf '/mnt/rogue\n' > "$FX/fstab_target"|target|neither
+target-rogue|printf '/mnt/rogue\n' > "$FX/fstab_target"|target|not /mnt/git-data
+target-legacy|printf '/mnt/git-data-luks\n' > "$FX/fstab_target"|target|'/mnt/git-data-luks', not
 mount|echo 1 > "$FX/mount_start_rc"; printf 'wrong fs type, bad option, bad superblock\n' > "$FX/journal"|mount|bad superblock
 identity-mount|touch "$FX/mounted"; echo /dev/sdb1 > "$FX/mount_source"|identity-mount|/dev/sdb1
 emit|echo 2 > "$FX/emit_rc"|emit|structural

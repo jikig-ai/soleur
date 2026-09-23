@@ -1565,14 +1565,6 @@
             "comparison": {
               "key": "registry",
               "match": "eq",
-              "value": "ghcr-fallback"
-            },
-            "type": "tagged_event"
-          },
-          {
-            "comparison": {
-              "key": "registry",
-              "match": "eq",
               "value": "zot-gate-degraded"
             },
             "type": "tagged_event"

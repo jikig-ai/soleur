@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# git-data cutover — a READ-ONLY PROOF until #8211 (epic #5274 / ADR-068 / ADR-220).
+# git-data cutover — a READ-ONLY PROOF until #8211 PR2 (epic #5274 / ADR-068 / ADR-220).
 #
 # WHAT THIS SCRIPT DOES TODAY. It proves, without changing anything on any host, that the
 # reviewer-gated cutover job can reach root on the git-data host and that the store is in the
@@ -26,12 +26,15 @@
 # WHAT IT NO LONGER DOES. The rsync / freeze / repoint / flag-flip / rollback / wipe body was
 # deleted (git history keeps it). Its freeze and reload called systemd units that do not
 # exist on either host, and a second run after a repoint could rsync a store onto itself.
-# The real modes are rebuilt on real mechanisms in #8211. The rebuilt copy must carry hooks in
-# both passes and re-run the fence probe against the fresh root, expecting the mapper, before
-# any flag flip (#8101, carried by #8211). Until then, a caller that still
-# asks for one (DRY_RUN other than 1, ROLLBACK or CONFIRM_WIPE other than 0) is refused with
-# `verdict=real_cutover_unreconciled` (exit 5) BEFORE any remote call. Defaults: DRY_RUN=1,
-# ROLLBACK=0, CONFIRM_WIPE=0 (unset or empty takes the default).
+# #8211 is split in two (ADR-239). PR1 moves the store itself: the git-data render now serves
+# the LUKS mapper at /mnt/git-data from boot, the bootstrap plants the fence on it, and the
+# serving change reaches production at the next ordinary git-data replace. There is nothing to
+# copy, because the store has never held a repository. The real modes (proof, flip, and a
+# flag-off-only rollback) arrive in #8211's PR2. After that replace the dry run reads
+# `already_cut_over` (exit 5): expected until PR2 rebuilds the proof. Until PR2, a caller
+# that still asks for a real mode (DRY_RUN other than 1, ROLLBACK or CONFIRM_WIPE other than
+# 0) is refused with `verdict=real_cutover_unreconciled` (exit 5) BEFORE any remote call.
+# Defaults: DRY_RUN=1, ROLLBACK=0, CONFIRM_WIPE=0 (unset or empty takes the default).
 #
 # NO DOPPLER. The flag read moved to its own workflow step (git-data-flag-precheck.sh) so the
 # `prd` read token never reaches the process that handles host bytes. This script reads no

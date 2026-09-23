@@ -2060,7 +2060,12 @@ git_data_authorization_map_gate() {
   # be changed — which is the intended fail-closed direction (an added option is exactly M27),
   # but it means the fix is deliberate co-editing, not a surprise. Widening this to a
   # subset-match would forfeit M27 entirely.
-  local _canon_opts='no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty'
+  # (#8211) no-user-rc added in lockstep with cloud-init-git-data.yml's authorized_keys
+  # block. This is the deliberate co-edit the paragraph above prescribes: the template is
+  # hash-bound and this file is not, so the gate HELD on the live root until this literal
+  # matched. no-user-rc stops sshd sourcing ~/.ssh/rc for the git user, one more way a
+  # file on the store could execute at session start beside the forced command.
+  local _canon_opts='no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc'
   declare -A _slot_var=()          # script name -> template variable name
   local _line _script _tvar
   while IFS= read -r _line; do

@@ -281,7 +281,7 @@ write_files:
       [ -n "$SOLEUR_INNGEST_BS_TOKEN_FILE" ] && tok_file="$SOLEUR_INNGEST_BS_TOKEN_FILE"
       # --- #7228: this emitter must be able to report its OWN death ------------------------
       # These three arms were `|| exit 0` and `curl >/dev/null 2>&1` — exit 0, no output, no
-      # trace. This script is the SINGLE delivery path for all eight SOLEUR_INNGEST_BOOT_STAGE
+      # trace. This script is the SINGLE delivery path for EVERY SOLEUR_INNGEST_BOOT_STAGE
       # markers, i.e. the entire diagnosis of a boot failure on a host with no SSH, so a silent
       # failure here does not degrade the trace, it DELETES it. Paired with the tmpfs defect
       # (every write of this token file lives in `runcmd:`, which cloud-init runs on FIRST BOOT
@@ -427,6 +427,169 @@ write_files:
     owner: root:root
     permissions: '0600'
 
+  # --- #8539: converge a LATE-ATTACHED private NIC before the zot pull ---------------------
+  # hcloud_server_network.inngest attaches AFTER the server boots whenever public networking is
+  # on (hcloud provider v1.63.0 does the same for an inline `network {}` block), so cloud-init
+  # can render its network config before the private NIC exists. A NIC hot-plugged after that
+  # is left unmanaged by networkd and never gets 10.0.1.40 without a reboot or an in-guest
+  # action (#6400: ~14 days on the registry; 2026-09-22: still unusable 97 s after the attach,
+  # zot pull `i/o timeout`, GHCR 401, boot aborted, scheduler dark ~59 min).
+  # This static file IS that in-guest action. `99-` sorts after cloud-init's `10-netplan-*`,
+  # so a NIC netplan already configured keeps its file (the reload leaves a link alone when its
+  # matching file is unchanged, systemd v255 networkd-link.c link_reconfigure). It only takes
+  # a virtio link that is not eth0 and that nothing else matched. DHCP is what cloud-init's
+  # Hetzner datasource renders for a private network, so address, routes and MTU come from the
+  # same source. The [DHCPv4] lines stop the private DHCP from steering DNS, hostname or the
+  # clock; UseMTU=yes keeps Hetzner's 1450 MTU (the key defaults to off). RequiredForOnline=no
+  # keeps a never-configured fallback link from holding network-online.target. ADR-115
+  # amendment 2026-09-22 records the choice against a reboot, a wait alone, and inline network.
+  - path: /etc/systemd/network/99-soleur-private-fallback.network
+    content: |
+      [Match]
+      Driver=virtio_net
+      Name=!eth0
+
+      [Link]
+      RequiredForOnline=no
+
+      [Network]
+      DHCP=ipv4
+      LinkLocalAddressing=no
+      IPv6AcceptRA=no
+
+      [DHCPv4]
+      UseMTU=yes
+      UseDNS=no
+      UseDomains=no
+      UseHostname=no
+      UseNTP=no
+      SendHostname=no
+      RouteMetric=1024
+    owner: root:root
+    permissions: '0644'
+
+  # #8539: wait (bounded) for the expected private address before the zot login, and say in
+  # ONE event what happened. It never aborts the boot, never reboots and never writes network
+  # config: the file above is the only converge primitive. usage: <expected-ip>. Always exit 0.
+  # Stages: private_nic_ok | private_nic_timeout | private_nic_probe_fault, sent to Better Stack
+  # (inngest-boot-phone-home.sh) and Sentry (soleur-boot-emit) with a BYTE-IDENTICAL detail
+  # string, built here from soleur-boot-emit's charset and capped here at 120 chars, because
+  # the phone-home does not cut and the Sentry emitter does. boot= comes first so a cut never
+  # drops the join key. Fields join with `.`, link entries with `--`.
+  #   ok:      boot=<8>.waited_s=<n>.by=<network file basename|none|nonetworkctl>.egress=<dev>
+  #            warning when by= is the fallback (the race happened and was healed) or when the
+  #            default route left eth0 (a private DHCP taking egress).
+  #   timeout: boot=<8>.waited_s=150.links=<if>:<setup>:<driver>:<v4|nov4>--... (or none)
+  #   fault:   boot=<8>.waited_s=<n>.reason=<noarg|noip|nogrep|iprc>
+  # waited_s is the loop counter x2, never the clock. A failing `ip` is a probe fault, never
+  # "absent". The empty-argument guard exists because `grep -qwF -- ""` matches every line.
+  # Written brace-free (templatefile) with no comment lines inside, since the strip removes them.
+  # Test seams, never set in production: SOLEUR_NICWAIT_ROOT prefixes /proc and /sys reads.
+  - path: /usr/local/bin/soleur-inngest-nic-wait
+    content: |
+      #!/bin/sh
+      EXP="$1"
+      R=""
+      [ -n "$SOLEUR_NICWAIT_ROOT" ] && R="$SOLEUR_NICWAIT_ROOT"
+      case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
+      part() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9_-' | tr -s '-'; }
+      len() { printf '%s' "$1" | wc -c | tr -cd '0-9'; }
+      BOOT=$(tr -cd 'A-Za-z0-9' < "$R/proc/sys/kernel/random/boot_id" 2>/dev/null | cut -c1-8)
+      [ -n "$BOOT" ] || BOOT=unknown
+      emit() {
+        inngest-boot-phone-home.sh "$1" "$3"
+        soleur-boot-emit "$1" "$2" "$3"
+      }
+      fault() {
+        emit private_nic_probe_fault warning "boot=$BOOT.waited_s=$W.reason=$1"
+        exit 0
+      }
+      W=0
+      [ -n "$EXP" ] || fault noarg
+      command -v ip >/dev/null 2>&1 || fault noip
+      command -v grep >/dev/null 2>&1 || fault nogrep
+      i=0
+      found=0
+      probe_ran=0
+      while [ "$i" -lt 75 ]; do
+        out=$(ip -4 -o addr show 2>/dev/null)
+        rc=$?
+        # A single failing `ip` is a TRANSIENT instrument fault, never "the address is absent"
+        # (#6415). probe_ran records whether the instrument EVER worked, so the fault arm fires
+        # only if it never did. Faulting on the FIRST non-zero rc ended the wait at t=4s of a
+        # 150s budget on a netlink hiccup -- inside the hot-attach window this helper exists
+        # for -- and let the zot login proceed NIC-less, i.e. #8539 again. Mirrors
+        # soleur-wait-nic's probe_ran/exit-capture shape, which the plan specifies.
+        [ "$rc" -eq 0 ] && probe_ran=1
+        if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qwF -- "$EXP"; then found=1; break; fi
+        i=$((i + 1))
+        sleep 2
+      done
+      W=$((i * 2))
+      [ "$found" -eq 1 ] || [ "$probe_ran" -eq 1 ] || fault iprc
+      HASNC=0
+      command -v networkctl >/dev/null 2>&1 && HASNC=1
+      if [ "$found" -eq 1 ]; then
+        IF=$(printf '%s\n' "$out" | grep -wF -- "$EXP" | head -n 1 | awk '{print $2}')
+        BY=nonetworkctl
+        if [ "$HASNC" -eq 1 ]; then
+          NF=$(networkctl --no-pager status "$IF" 2>/dev/null | sed -n 's/^[[:space:]]*Network File:[[:space:]]*//p' | head -n 1)
+          case "$NF" in
+            ''|n/a) BY=none ;;
+            *) BY=$(basename "$NF" .network) ;;
+          esac
+        fi
+        EG=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)
+        [ -n "$EG" ] || EG=unknown
+        BY=$(part "$BY")
+        EG=$(part "$EG")
+        LVL=info
+        [ "$BY" = "99-soleur-private-fallback" ] && LVL=warning
+        [ "$EG" != "eth0" ] && [ "$EG" != "unknown" ] && LVL=warning
+        D="boot=$BOOT.waited_s=$W.by=$BY.egress=$EG"
+        [ "$(len "$D")" -le 120 ] || D=$(printf '%s' "$D" | cut -c1-120)
+        emit private_nic_ok "$LVL" "$D"
+        exit 0
+      fi
+      BASE="boot=$BOOT.waited_s=$W.links="
+      if [ "$HASNC" -ne 1 ]; then
+        emit private_nic_timeout warning "$BASE"nonetworkctl
+        exit 0
+      fi
+      LIST=$(networkctl --no-pager --no-legend list 2>/dev/null)
+      ENTRIES=""
+      for d in "$R"/sys/class/net/*; do
+        [ -e "$d" ] || continue
+        n=$(basename "$d")
+        case "$n" in lo|eth0|docker*|veth*|br-*) continue ;; esac
+        su=$(printf '%s\n' "$LIST" | awk -v l="$n" '$2 == l {print $5; exit}')
+        [ -n "$su" ] || su=unknown
+        dv=$(readlink "$d/device/driver" 2>/dev/null)
+        if [ -n "$dv" ]; then dv=$(basename "$dv"); else dv=nodrv; fi
+        v=nov4
+        ip -4 -o addr show dev "$n" 2>/dev/null | grep -q 'inet ' && v=v4
+        e="$(part "$n"):$(part "$su"):$(part "$dv"):$v"
+        if [ -n "$ENTRIES" ]; then ENTRIES="$ENTRIES $e"; else ENTRIES="$e"; fi
+      done
+      [ -n "$ENTRIES" ] || ENTRIES=none
+      FULL=$(printf '%s' "$ENTRIES" | sed 's/ /--/g')
+      if [ "$(len "$BASE$FULL")" -le 120 ]; then
+        L="$FULL"
+      else
+        L=""
+        for e in $ENTRIES; do
+          c="$e"
+          [ -n "$L" ] && c="$L--$e"
+          [ "$(len "$BASE$c--cut")" -le 120 ] || break
+          L="$c"
+        done
+        if [ -n "$L" ]; then L="$L--cut"; else L="cut"; fi
+      fi
+      emit private_nic_timeout warning "$BASE$L"
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
   # --- #7228: re-stage the boot-trace token on EVERY boot, not just the first ------------
   # THE DEFECT. Every write of /run/inngest-bs-logs-token lives inside `runcmd:`. cloud-init
   # runs runcmd on FIRST BOOT ONLY, and /run is tmpfs — cleared on every reboot. No unit
@@ -533,6 +696,12 @@ runcmd:
     printf '%s' '${betterstack_logs_token}' > /run/inngest-bs-logs-token
     chmod 600 /run/inngest-bs-logs-token 2>/dev/null
     /usr/local/bin/inngest-boot-phone-home.sh runcmd-entered "host booted"
+
+  # #8539: make networkd read 99-soleur-private-fallback.network, which write_files created
+  # after networkd started. As early as possible, so a private NIC that has already appeared is
+  # configured long before the zot login. Links whose matching file is unchanged (eth0, a NIC
+  # netplan already configured) are left alone. Fail-open: runcmd is ONE /bin/sh.
+  - networkctl reload || /usr/local/bin/inngest-boot-phone-home.sh private_nic_reload_failed "rc=$?"
 
   # Apply SSH hardening immediately.
   - systemctl restart sshd
@@ -1201,6 +1370,12 @@ runcmd:
   # below. (The GHCR bake above has the same defect; left alone here as pre-existing.)
   - ( umask 0177 && printf 'ZOT_REGISTRY_ENDPOINT=%s\nZOT_PULL_USER=%s\nZOT_PULL_TOKEN=%s\n' '${zot_registry_endpoint}' '${zot_pull_user}' '${zot_pull_token}' > /etc/default/soleur-zot-read )
 
+  # #8539: the zot login below is this runcmd's FIRST use of the private network. Wait
+  # (bounded, 150 s) for this host's private address and emit one private_nic_* event saying
+  # what happened. Never aborts: on a timeout the login and pull proceed and fail loudly as
+  # before, and the event says why. The address is the Terraform-bound local, not a literal.
+  - /usr/local/bin/soleur-inngest-nic-wait ${inngest_private_ip} || true
+
   # zot login from the baked creds. PLACEMENT IS LOAD-BEARING: the bootstrap image ships its
   # own zot_login, but that runs AFTER the image has been pulled — it cannot authorize the pull
   # that fetches the image containing it. The same ordering argument the web host's cloud-init
@@ -1670,7 +1845,7 @@ runcmd:
     # #6178 diag: loopback :8288 is healthy but the web-host->10.0.1.40:8288 registry-probe 500s —
     # capture the private-net readiness: self-curl the private IP, the configured 10.0.1.x NIC
     # addr(s), what :8288 is bound to (0.0.0.0 vs 127.0.0.1), and the nftables allowlist chain.
-    priv="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://10.0.1.40:8288/ 2>&1)"
+    priv="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://${inngest_private_ip}:8288/ 2>&1)"
     nic="$(ip -o -4 addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | tr '\n' ',')"
     bind="$(ss -tlnH 2>/dev/null | grep ':8288' | awk '{print $4}' | tr '\n' ',')"
     nft="$(nft list chain inet soleur_inngest input 2>/dev/null | tr '\n' ' ' | head -c 160)"

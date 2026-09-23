@@ -47,7 +47,7 @@ const WORK_REFS = [
 ];
 
 /** Shard names `scripts/test-all.sh` accepts besides the unsharded default `all`. */
-const SHARDS = ["webplat", "bun", "scripts", "infra"] as const;
+const SHARDS = ["webplat", "bun", "scripts", "scripts-heavy", "infra"] as const;
 
 const FALLBACK_ANCHOR = "Full-suite fallback (projects with no CI-enforced full-suite gate)";
 const POINTER = "**Full-suite fallback**";
@@ -141,7 +141,10 @@ function shardTokensOn(line: string): string[] {
     const v = e.slice("TEST_GROUP=".length);
     if (v !== "all") found.push(v);
   }
-  const positional = line.match(/scripts\/test-all\.sh\s+([A-Za-z]+)/);
+  // `[A-Za-z-]+`, not `[A-Za-z]+`: `scripts-heavy` is a real group name, and a
+  // hyphenless class would capture only the `scripts` prefix — mis-reading a
+  // heavy-group prescription as the light group rather than flagging a shard at all.
+  const positional = line.match(/scripts\/test-all\.sh\s+([A-Za-z-]+)/);
   if (positional && (SHARDS as readonly string[]).includes(positional[1])) found.push(positional[1]);
 
   // #7936 — a THIRD way to select a subset, added by #7902: SCRIPTS_SHARD=k/N partitions

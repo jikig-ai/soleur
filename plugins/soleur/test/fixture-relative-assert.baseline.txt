@@ -130,7 +130,7 @@
 3	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-13	apps/web-platform/infra/ci-deploy.sh
+15	apps/web-platform/infra/ci-deploy.sh
 3	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
@@ -142,6 +142,8 @@
 1	apps/web-platform/infra/disk-monitor.sh
 10	apps/web-platform/infra/disk-monitor.test.sh
 4	apps/web-platform/infra/generate-apex-rollback-pr.sh
+2	apps/web-platform/infra/git-data-bootstrap.sh
+2	apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh
 2	apps/web-platform/infra/git-data-gc.sh
 1	apps/web-platform/infra/git-data-luks.test.sh
 2	apps/web-platform/infra/git-data-pre-receive.sh
@@ -170,6 +172,7 @@
 1	apps/web-platform/infra/inngest-inventory.test.sh
 11	apps/web-platform/infra/inngest-luks-cutover.sh
 1	apps/web-platform/infra/inngest-luks-cutover.test.sh
+7	apps/web-platform/infra/inngest-nic-wait.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh
 1	apps/web-platform/infra/inngest.test.sh

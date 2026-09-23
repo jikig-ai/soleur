@@ -1348,10 +1348,24 @@ def check_exception_block(
             f"(as of {today.isoformat()}) -> renew the exception with a new "
             "expires_on or remove the exception"
         )
+    else:
+        # Advance notice, not a failure (#6907). The sweep blocks merge through
+        # `test`, so an expiry is a repo-wide merge freeze on the day it lands;
+        # this line is the only warning an operator gets before that day.
+        days_left = (date.fromisoformat(expires_on) - today).days
+        if days_left <= EXPIRY_WARN_DAYS:
+            print(
+                f"::warning::encryption-posture: {label} exception expires in "
+                f"{days_left} day(s) ({expires_on}); tracking {exc.get('tracking_issue', '?')} "
+                "-> renew or remove it before then, or every PR goes red on that date"
+            )
     # MUTATION-TARGET: MB-9 end
 
 
 NOT_FOUND = "does not resolve (path/anchor not found)"
+
+# Days before an exception's expires_on at which the sweep starts warning.
+EXPIRY_WARN_DAYS = 14
 
 
 def resolve_disclosed_as(
@@ -1999,13 +2013,17 @@ def main(argv: list[str]) -> int:
         if not default_ledger:
             print(f"ERROR: --ledger {ledger_path} not found", file=sys.stderr)
             return 2
-        # Graceful degrade (R0/R11): the real seed ledger is a SEPARATE
-        # deliverable (the audit). Until it lands, --repo-sweep must not break CI.
+        # FAIL, not a graceful skip (#6907). The skip existed while the seed
+        # ledger was a separate deliverable; since the sweep blocks merge
+        # through `test`, reading a missing ledger as a pass would make
+        # deleting it a one-line bypass of the gate.
         print(
-            "encryption-posture: ledger not yet seeded "
-            "(scripts/encryption-posture-ledger.json absent) -> PASS (skipped)"
+            "FAIL: encryption-posture ledger missing "
+            "(scripts/encryption-posture-ledger.json absent) -> restore it; "
+            "the sweep is merge-blocking and cannot pass without a ledger",
+            file=sys.stderr,
         )
-        return 0
+        return 1
 
     try:
         ledger = load_json(ledger_path)

@@ -410,6 +410,15 @@ mk_exception_ledger "$LEDGER_TS7" '{
 run_case_reports "TS-7 plaintext-exception all fields + future expires_on -> PASS" 0 "encryption-posture:" \
   --repo-sweep --repo-root "$REPO_EXC" --ledger "$LEDGER_TS7" --today "$TODAY"
 
+# An exception within 14 days of expiry WARNS and still passes (#6907). Once the
+# sweep is merge-blocking, an expiry is a repo-wide merge freeze on the day it
+# lands; the warning is the only advance notice. The far-future control proves
+# the warning is date-driven rather than always printed.
+run_case_reports "TS-7b exception expiring in 7 days -> PASS with an advance warning" 0 "expires in 7 day(s)" \
+  --repo-sweep --repo-root "$REPO_EXC" --ledger "$LEDGER_TS7" --today "2098-12-25"
+TS7C_OUT="$(python3 "$SUT" --repo-sweep --repo-root "$REPO_EXC" --ledger "$LEDGER_TS7" --today "$TODAY" 2>&1)" || true
+if grep -qF "expires in" <<<"$TS7C_OUT"; then fail "TS-7c far-future exception prints no expiry warning" "output: $TS7C_OUT"; else pass "TS-7c far-future exception prints no expiry warning"; fi
+
 # ---------------------------------------------------------------------------
 # TS-8: unknown resource type absent from store_classes/non_store_types
 #       -> FAIL fail-closed
@@ -2035,11 +2044,13 @@ EOF
 run_case_reports "--json FAILs on schema-invalid ledger" 1 "ledger schema" \
   --json --repo-root "$REPO_TS1" --ledger "$LEDGER_BADSCHEMA"
 
-# Graceful degrade: no scripts/encryption-posture-ledger.json and no --ledger
-# override -> exit 0 with a "not yet seeded" note (must not break CI pre-audit).
+# A MISSING default ledger FAILs (#6907). It used to degrade to "not yet
+# seeded -> PASS" while the real ledger was a separate deliverable; once the
+# sweep blocks merge through `test`, that degrade made `git rm` of the ledger a
+# one-line bypass of the gate.
 REPO_NOLEDGER="$TMPDIR_TEST/noledger"
 mkdir -p "$REPO_NOLEDGER/scripts"
-run_case_reports "repo-sweep degrades gracefully when the ledger is not yet seeded" 0 "not yet seeded" \
+run_case_reports "repo-sweep FAILs when the default ledger is missing" 1 "ledger missing" \
   --repo-sweep --repo-root "$REPO_NOLEDGER"
 
 # An EXPLICIT --ledger that doesn't exist is a hard error (exit 2) — distinct
@@ -2230,7 +2241,7 @@ fi
 # the fixed case count plus the cases DERIVED from the committed ledger (one per
 # catalogued id, one per web_hosts row), so retiring a store changes both sides
 # together. Reported via printf + exit, never through the verdict helpers.
-MIN_STATIC=171
+MIN_STATIC=173
 WEBHOST_N="$(grep -c . "$TMPDIR_TEST/real-webhost-needles" || true)"
 MIN_CASES=$((MIN_STATIC + REAL_N + WEBHOST_N))
 echo
