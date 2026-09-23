@@ -2101,6 +2101,7 @@ jobs:
           # end of the body and the step aborts when RO is empty (measured:
           # `bash -e -c '[[ -n "" ]] && printf x'` exits 1). That would be an abort on the
           # exact path the fallback exists to serve.
+          rodelim="SOLEUR_EOF_$(openssl rand -hex 12)"
           if [[ -n "$RO" ]]; then printf '::add-mask::%s\n' "$RO"; fi
           {
             printf 'TF_VAR_github_plan_actions_credential=%s\n' "$PLAN_ACTIONS_CREDENTIAL"
@@ -2110,7 +2111,13 @@ jobs:
             # personal-token prefix, and an R2 token is 40 chars of [a-z0-9].
             printf 'TF_VAR_doppler_token_tf=%s\n' "dp.pt.tierAplaceholderNotARealToken0000000000"
             printf 'TF_VAR_cf_api_token_r2=%s\n' "0000000000tierAplaceholder0000000000zzzz"
-            printf 'TF_VAR_hcloud_token=%s\n' "$RO"
+            # HEREDOC DELIMITER for the one value that is not a literal. `$RO` is read from
+            # `prd_terraform`, which the branch-nameable `DOPPLER_TOKEN_WRITE` repo secret
+            # can write until operator step O11 — and THIS job runs on `pull_request`, so a
+            # `K=V` write of `tok\nBASH_ENV=/tmp/x` would give a branch actor code execution
+            # in a job holding `pull-requests: write`. The two placeholders above are
+            # in-line literals and cannot carry a newline.
+            printf 'TF_VAR_hcloud_token<<%s\n%s\n%s\n' "$rodelim" "$RO" "$rodelim"
           } >> "$GITHUB_ENV"
 
       - name: Extract backend credentials

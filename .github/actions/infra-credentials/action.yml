@@ -131,6 +131,57 @@ runs:
             exit 1
           fi
           echo "::warning title=infra-privileged::source=legacy verdict=privileged_source_missing — this job read its credentials from Doppler prd_terraform (Tier A). Expected before operator step O3; after O10 it means the Tier-B environment secret is missing and this run is using credentials that no longer exist."
+
+          # THE LEGACY ARM MUST SUPPLY WHAT IT REPLACED, not merely decline.
+          #
+          # Several Tier-B steps read `$HCLOUD_TOKEN` from the JOB environment rather than
+          # from inside a `doppler run` wrapper — the stock-preflight gates, the drift
+          # orphan sweep, the rung-2 hard reset, the root-key fingerprint attestation. Each
+          # of those used to carry its own inline `doppler secrets get HCLOUD_TOKEN` read,
+          # and each of those reads was removed in this change because census row G1g (AC3)
+          # forbids a Tier-B name being read from `prd_terraform` outside THIS action.
+          #
+          # Satisfying that row by DELETING the read rather than by MOVING it here would
+          # have made the legacy arm export nothing at all, so between merge and operator
+          # step O3 every one of those steps would abort on an empty token — the outage
+          # their own comments warn about ("an outage, not a tripwire"), and a direct
+          # contradiction of this PR's merge-safety claim. The read belongs here, where the
+          # census sanctions it, not nowhere.
+          #
+          # Read-only first (operator step O5 mints it), then the read/write token as the
+          # before-state fallback. That ORDER is the same one census row G1g's allowance is
+          # anchored on, and it means a job that only needs to GET from Hetzner stops using
+          # a destroy-capable token as soon as O5 lands.
+          legacy_hcloud=""
+          for n in HCLOUD_TOKEN_READONLY HCLOUD_TOKEN; do
+            legacy_hcloud="$(doppler secrets get "$n" --plain -p soleur -c prd_terraform 2>/dev/null)" || legacy_hcloud=""
+            [[ -n "$legacy_hcloud" ]] && break
+          done
+          if [[ -n "$legacy_hcloud" ]]; then
+            # Doppler-fetched values are NOT auto-masked by Actions (unlike `secrets.*`), and
+            # this token carries destroy authority over the whole prod fleet. Mask PER LINE:
+            # a single blob mask leaves every interior line of a multi-line value unmasked.
+            while IFS= read -r ln; do
+              [[ -n "$ln" ]] && printf '::add-mask::%s\n' "$ln"
+            done <<< "$legacy_hcloud"
+            # HEREDOC DELIMITER, never `K=V`. This value comes from `prd_terraform`, which
+            # `DOPPLER_TOKEN_WRITE` — a REPO secret any branch can name — can write until
+            # operator step O11. With the `K=V` form a value of `tok\nBASH_ENV=/tmp/x` writes
+            # TWO lines into $GITHUB_ENV, and Actions honours `BASH_ENV` (and `LD_PRELOAD`)
+            # in every later `run:` step: arbitrary code execution in a main-only job, from a
+            # branch, through the very substitution path this action exists to close.
+            # `--preserve-env` is no defence — the loader is the thing doing the write. The
+            # Tier-B export loop and the AWS alias below already use this form; this arm was
+            # the only one that departed from it.
+            ldelim="SOLEUR_EOF_$(openssl rand -hex 12)"
+            printf 'HCLOUD_TOKEN<<%s\n%s\n%s\n' "$ldelim" "$legacy_hcloud" "$ldelim" >> "$GITHUB_ENV"
+          else
+            # NOT fatal: a Tier-A job that never touches Hetzner is a legitimate caller, and
+            # every consumer already fail-closes loudly on an empty token with a message
+            # naming its own gate. Say so here so the two are distinguishable in the log.
+            echo "::warning title=infra-privileged::source=legacy hcloud_token=unreadable — neither HCLOUD_TOKEN_READONLY nor HCLOUD_TOKEN could be read from prd_terraform. Any step that needs a Hetzner token will fail closed and name itself."
+          fi
+
           emit source "legacy"
           emit git_data_root_state_bucket "$LEGACY_BUCKET"
           exit 0

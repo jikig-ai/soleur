@@ -60,8 +60,9 @@ if [[ "$PASSES" -ne 1 || "${#FAILURES[@]}" -ne 1 ]]; then
     "$PASSES" "${#FAILURES[@]}" >&2
   exit 2
 fi
-SELFTEST_PASSES=1
-SELFTEST_FAILURES=1
+# Only the PASSES side is read (by the floor). `FAILURES` is reset wholesale on the next
+# line, so a failures counterpart would be a symmetry artifact implying a subtraction that
+# does not exist.
 FAILURES=()
 
 # ---- Extract the run: body ------------------------------------------------
@@ -111,6 +112,17 @@ case "$args" in
     cat "${STUB_PAYLOAD:?}"
     exit 0
     ;;
+  # The legacy arm's Tier-A reads. Keyed PER NAME so a test can make the read-only token
+  # present or absent INDEPENDENTLY of the read/write one -- a stub answering the same for
+  # both could not tell "prefers READONLY" from "reads whatever it is given".
+  "secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform")
+    [[ -n "${STUB_HCLOUD_RO:-}" ]] || exit 1
+    printf '%s' "$STUB_HCLOUD_RO"; exit 0
+    ;;
+  "secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform")
+    [[ -n "${STUB_HCLOUD_RW:-}" ]] || exit 1
+    printf '%s' "$STUB_HCLOUD_RW"; exit 0
+    ;;
 esac
 
 echo "STUB-MISS: doppler $args" >&2
@@ -146,6 +158,8 @@ run_loader() {
     STUB_CALLS="$case_dir/calls" \
     STUB_PAYLOAD="$case_dir/payload.json" \
     STUB_DOWNLOAD_RC="$download_rc" \
+    STUB_HCLOUD_RO="${STUB_HCLOUD_RO:-}" \
+    STUB_HCLOUD_RW="${STUB_HCLOUD_RW:-}" \
     GITHUB_ENV="$case_dir/github_env" \
     GITHUB_OUTPUT="$case_dir/github_output" \
     bash --noprofile --norc -eo pipefail "$WORK/loader.sh" \
@@ -156,6 +170,20 @@ run_loader() {
 }
 
 out_get() { grep -E "^$1=" "$LOADER_DIR/github_output" | tail -1 | cut -d= -f2- || true; }
+
+# The KEYS a $GITHUB_ENV file actually defines, parsed the way Actions parses it: a
+# `NAME<<DELIM` line opens a body that is DATA until the delimiter line, and a `NAME=` line
+# outside a body is a key. A bare grep cannot tell the two apart, so it would report a
+# contained value as an injection -- failing in the opposite direction from the defect and
+# reading just as convincingly.
+env_keys() {
+  awk '
+    pending != "" { if ($0 == pending) pending = ""; next }
+    /^[A-Za-z_][A-Za-z0-9_]*<</ { k = $0; sub(/<<.*/, "", k); print k
+                                  d = $0; sub(/^[^<]*<</, "", d); pending = d; next }
+    /^[A-Za-z_][A-Za-z0-9_]*=/  { k = $0; sub(/=.*/, "", k); print k }
+  ' "$LOADER_DIR/github_env"
+}
 env_has() { grep -qE "^$1<<" "$LOADER_DIR/github_env"; }
 said()    { grep -qF -- "$1" "$LOADER_DIR/stdout"; }
 
@@ -196,8 +224,12 @@ run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
 [[ "$(out_get git_data_root_state_bucket)" == "soleur-terraform-state" ]] \
   && pass "row1: legacy bucket" || fail "row1: bucket=$(out_get git_data_root_state_bucket)"
 said "privileged_source_missing" && pass "row1: names the verdict" || fail "row1: no verdict word"
-# The legacy arm must not call Doppler at all — it only decides.
-[[ ! -s "$LOADER_DIR/calls" ]] && pass "row1: makes no Doppler call" || fail "row1: called Doppler"
+# The legacy arm may read TIER A (that is its job — see row 1b), but it must never touch
+# the PRIVILEGED project: a job with no Tier-B token has no business reaching for one, and
+# a read there would mean the arm selection is not actually gating the privileged access.
+grep -q 'secrets download' "$LOADER_DIR/calls" \
+  && fail "row1: legacy arm read the privileged project" \
+  || pass "row1: legacy arm never reads soleur-infra-privileged"
 
 # ======================================================================
 # ROW 2 — neither token: fail CLOSED, and say why.
@@ -315,6 +347,77 @@ else
 fi
 
 # ======================================================================
+# ROW 1b — THE LEGACY ARM MUST SUPPLY HCLOUD_TOKEN, not merely decline.
+#
+# Several Tier-B steps read `$HCLOUD_TOKEN` from the JOB environment rather than from
+# inside a `doppler run` wrapper (the stock-preflight gates, the drift orphan sweep, the
+# rung-2 hard reset, the root-key fingerprint attestation). Their own inline reads were
+# removed because census row G1g forbids reading a Tier-B name from `prd_terraform`
+# outside this action — so if the legacy arm exports nothing, every one of them aborts
+# between merge and operator step O3. That is the outage their comments warn about, and
+# it would falsify this PR's merge-safety claim.
+# ======================================================================
+STUB_HCLOUD_RO="ro-token" STUB_HCLOUD_RW="rw-token" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+[[ "$LOADER_RC" -eq 0 ]] && pass "row1b: legacy arm still exits 0" || fail "row1b: rc=$LOADER_RC"
+if env_has "HCLOUD_TOKEN"; then
+  pass "row1b: legacy arm exports HCLOUD_TOKEN"
+else
+  fail "row1b: legacy arm exported NO HCLOUD_TOKEN — every out-of-wrapper consumer aborts before O3"
+fi
+grep -qF -- "ro-token" "$LOADER_DIR/github_env" \
+  && pass "row1b: prefers the READ-ONLY token when present" \
+  || fail "row1b: exported value is not the read-only token"
+
+# ROW 1c — the before-state fallback. Until operator step O5 mints HCLOUD_TOKEN_READONLY
+# the read-only name does not exist, and the read/write token must still be supplied or
+# the same outage occurs for the whole merge->O5 window.
+STUB_HCLOUD_RO="" STUB_HCLOUD_RW="rw-token" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+grep -qF -- "rw-token" "$LOADER_DIR/github_env" \
+  && pass "row1c: falls back to the read/write token before O5" \
+  || fail "row1c: no fallback — merge->O5 window has no Hetzner token"
+
+# ROW 1d — neither present: a WARNING, not a hard failure. A Tier-A job that never touches
+# Hetzner is a legitimate caller, and every consumer already fail-closes loudly on an empty
+# token while naming its own gate. Making this fatal would break those callers.
+STUB_HCLOUD_RO="" STUB_HCLOUD_RW="" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+[[ "$LOADER_RC" -eq 0 ]] && pass "row1d: no Hetzner token is not fatal for a non-Hetzner caller" || fail "row1d: rc=$LOADER_RC"
+said "hcloud_token=unreadable" && pass "row1d: names the condition" || fail "row1d: silent"
+if env_has "HCLOUD_TOKEN"; then
+  fail "row1d: exported an EMPTY HCLOUD_TOKEN — shadows nothing and hides the cause"
+else
+  pass "row1d: exports no empty HCLOUD_TOKEN"
+fi
+
+# ROW 1f — $GITHUB_ENV INJECTION. The legacy value comes from `prd_terraform`, which the
+# branch-nameable `DOPPLER_TOKEN_WRITE` repo secret can write until operator step O11. With
+# a `K=V` export a value carrying a newline writes a SECOND line into $GITHUB_ENV, and
+# Actions honours `BASH_ENV` / `LD_PRELOAD` in every later `run:` step — arbitrary code
+# execution in a main-only job, from a branch, through the substitution path this action
+# exists to close. The heredoc-delimiter form contains it.
+STUB_HCLOUD_RO="$(printf 'tok\nBASH_ENV=/tmp/pwn')" STUB_HCLOUD_RW="" \
+  run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+if env_keys | grep -qx 'BASH_ENV'; then
+  fail "row1f: a newline in the Tier-A value DEFINED a second GITHUB_ENV key (BASH_ENV) — branch-to-main code execution"
+else
+  pass "row1f: a newline in the Tier-A value defines no second GITHUB_ENV key"
+fi
+# Non-vacuity: the parser must be able to SEE a key, or the assertion above passes because
+# it found nothing at all rather than because nothing was injected.
+env_keys | grep -qx 'HCLOUD_TOKEN' \
+  && pass "row1f: the env parser resolves the real key (the check is not vacuous)" \
+  || fail "row1f: env parser found no keys — the injection assertion above proved nothing"
+env_has "HCLOUD_TOKEN" && pass "row1f: the value is still exported (contained, not dropped)" \
+  || fail "row1f: containment dropped the value"
+
+# ROW 1e — the Tier-B arm must NOT make these Tier-A reads. In tier_b mode the value comes
+# from the privileged project; reading prd_terraform there would re-introduce exactly the
+# dependency this change removes, and the stub would record the call.
+run_loader "dp.st.TIERB-FIXTURE" "dp.st.LEGACY-FIXTURE" "" "$(full_payload)"
+grep -q 'secrets get HCLOUD_TOKEN' "$LOADER_DIR/calls" \
+  && fail "row1e: tier_b arm read HCLOUD_TOKEN from prd_terraform" \
+  || pass "row1e: tier_b arm makes no prd_terraform Hetzner read"
+
+# ======================================================================
 # ROW 9 — the --preserve-env SENTINEL. This is the executable proof of the precedence
 # property Guard 2 asserts statically: without the flag, a value planted in a
 # Tier-A-writable config SHADOWS the loader's value, which is exactly the substitution
@@ -324,8 +427,14 @@ fi
 # measure our belief about it.
 # ======================================================================
 if command -v doppler > /dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
+  # The expansion MUST happen in the INNER process. Written as
+  # `-- printf '%s' "${SOLEUR_SENTINEL:-}"` the OUTER shell expands it first — where the
+  # variable is unset — so `printf` receives an empty literal and SENT_A is "" regardless
+  # of what --preserve-env does. That is not a weak assertion, it is an unsatisfiable one:
+  # the row would take the `else` branch and report the precedence property BROKEN on every
+  # authorized run. `sh -c` defers the expansion to the process `doppler run` execs.
   SENT_A="$(SOLEUR_SENTINEL=loader-value doppler run --preserve-env=SOLEUR_SENTINEL \
-    -p soleur -c prd_terraform -- printf '%s' "${SOLEUR_SENTINEL:-}" 2>/dev/null || echo UNAVAILABLE)"
+    -p soleur -c prd_terraform -- sh -c 'printf "%s" "${SOLEUR_SENTINEL:-}"' 2>/dev/null || echo UNAVAILABLE)"
   if [[ "$SENT_A" == "loader-value" ]]; then
     pass "row9: --preserve-env keeps the environment value (vendor-measured)"
   elif [[ "$SENT_A" == "UNAVAILABLE" ]]; then
@@ -359,7 +468,7 @@ fi
 # scores CONSTRUCTION FAILURE rather than FIRES. The literal is safe because the self-test
 # already asserts `PASSES == 1` at that point and aborts otherwise.
 SELFTEST_PASSES=1
-MIN_ASSERTIONS=34
+MIN_ASSERTIONS=45
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s real assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$MIN_ASSERTIONS" >&2

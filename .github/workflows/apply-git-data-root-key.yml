@@ -72,6 +72,11 @@ jobs:
           terraform_wrapper: false
 
       - name: Load infra credentials (tiered)
+        # `id:` is load-bearing, not decoration: this root's backend is PARTIAL since
+        # #8209, so the init below reads `steps.creds.outputs.git-data-root-state-bucket`.
+        # Without an id that output is unreferenceable and `terraform init -input=false`
+        # fails on a missing required backend argument.
+        id: creds
         uses: ./.github/actions/infra-credentials
         with:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
@@ -96,7 +101,27 @@ jobs:
 
       - name: Terraform init (root-key root, readonly lock)
         working-directory: ${{ env.ROOT_KEY_DIR }}
-        run: terraform init -input=false -lockfile=readonly
+        env:
+          # (#8209, ADR-239 D7) The root's backend lost its `bucket` literal, because a
+          # distinct state KEY inside a SHARED bucket was never isolation: the Tier-A
+          # prd_terraform AWS_* pair lists `soleur-terraform-state` and reads this very
+          # object. The bucket now comes from the loader, which picks the privileged one
+          # once the operator has moved the object (step O8) and the legacy one before.
+          STATE_BUCKET: ${{ steps.creds.outputs.git-data-root-state-bucket }}
+        run: |
+          set -euo pipefail
+          # REFUSE rather than prompt. The loader emits an EMPTY bucket on each of its
+          # three refusal paths (half-set key pair, legacy-after-migration, failed
+          # privileged read), and an unguarded interpolation would hand `terraform init`
+          # an empty `-backend-config=bucket=`, which under `-input=false` fails with a
+          # vendor message naming neither the tier nor the operator step that fixes it.
+          if [[ -z "${STATE_BUCKET:-}" ]]; then
+            echo "::error::verdict=git_data_root_state_bucket_unresolved the infra-credentials loader emitted no bucket, so this root cannot be initialized. Read the loader's own verdict earlier in this job: it names which refusal fired. See knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
+            exit 1
+          fi
+          echo "::notice::git_data_root_state_bucket=${STATE_BUCKET}"
+          terraform init -input=false -lockfile=readonly \
+            -backend-config="bucket=${STATE_BUCKET}"
 
       - name: Terraform plan
         working-directory: ${{ env.ROOT_KEY_DIR }}
@@ -140,7 +165,27 @@ jobs:
             "tls_private_key.git_data_root"
           ];
           def expected_create: .[0] as $a | .[1] == ["create"] and any(create_addrs[]; . == $a);
-          def additive: .[2] == null and .[3] == null and (.[1] == ["no-op"] or expected_create);
+
+          # (#8209, ADR-239 D7 / ADR-220 D3) THE ONE-SHOT `8209_custody_forget` ARM.
+          #
+          # This root is additive-only with no exceptions, and a `removed` block plans
+          # `["forget"]`, which is neither a no-op nor a create. Without this arm the two
+          # custody forgets in access.tf can never apply AND the root cannot apply at all
+          # — every dispatch is refused as non-additive. ADR-220 D3's rule is that any
+          # non-additive change is a reviewed PR that adds a TYPED arm; this is that arm.
+          #
+          # It admits exactly the two custody addresses and nothing else: a third address,
+          # a DELETE of either, an import or a moved address all still fall through to the
+          # refusal. It is ONE-SHOT — residual R6 (#8610) deletes it once the operator's O8
+          # dispatch has applied the forgets, which is also when the `removed` blocks and
+          # the two addresses below go.
+          def custody_forget_addrs: [
+            "doppler_service_token.git_data_root_read",
+            "github_actions_secret.doppler_token_git_data_root"
+          ];
+          def custody_forget: .[0] as $a | .[1] == ["forget"] and any(custody_forget_addrs[]; . == $a);
+
+          def additive: .[2] == null and .[3] == null and (.[1] == ["no-op"] or expected_create or custody_forget);
           if length != 1 or (.[0] | type) != "object"
              or (.[0].resource_changes | type) != "array"
              or (.[0].resource_changes | length) == 0
@@ -186,7 +231,7 @@ jobs:
               exit 1
               ;;
             verdict=git_data_root_key_non_additive)
-              echo "::error::${verdict} this root is additive-only: a create of exactly the seven D-1 addresses or a no-op, never an import or a moved address. Any rotation is a reviewed PR that adds a typed arm (ADR-220 D3)."
+              echo "::error::${verdict} this root is additive-only: a create of exactly the seven D-1 addresses, a no-op, or the one-shot 8209_custody_forget arm (a forget of exactly doppler_service_token.git_data_root_read and github_actions_secret.doppler_token_git_data_root) — never a delete, an import or a moved address. Any other change is a reviewed PR that adds a typed arm (ADR-220 D3)."
               printf '%s\n' "${report#*$'\n'}"
               exit 1
               ;;
