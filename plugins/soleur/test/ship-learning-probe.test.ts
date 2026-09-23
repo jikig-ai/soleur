@@ -198,7 +198,9 @@ function fixture(): { root: string; work: string; git: (a: string[]) => string }
   git(["commit", "-q", "-m", "learning: old"]);
   git(["remote", "add", "origin", "../origin.git"]);
   git(["push", "-q", "origin", "HEAD:refs/heads/main"]);
-  git(["fetch", "-q", "origin", "main"]);
+  // `--no-tags`: a bare fetch auto-follows tags, which `scripts/battery-tag-authorship.test.sh`
+  // classifies as tag authorship. The fixture needs the remote-tracking ref, never tags.
+  git(["fetch", "-q", "--no-tags", "origin", "main"]);
   git(["checkout", "-q", "-b", "feat-x"]);
   writeFileSync(join(work, "code.txt"), "change\n");
   git(["add", "code.txt"]);
@@ -402,15 +404,21 @@ describe("ship Phase 2 probe verdicts", () => {
     expectVerdict(work, work, "absent", "-euo pipefail");
   });
 
-  test("row 21 — a TAG named origin/main does not outrank the remote-tracking ref → absent", () => {
+  test("row 21 — a ref named origin/main higher in precedence does not shadow the tracking ref → absent", () => {
     const { work, git } = fixture();
     const base = git(["rev-parse", "HEAD~1"]).trim();
     advanceMain(work, git);
     git(["merge", "-q", "--no-edit", "origin/main"]);
-    // `origin/main` as a REV resolves refs/tags/ before refs/remotes/, so a pushed tag of that name
-    // would otherwise rewind the range and re-admit main's learning. The block names
-    // refs/remotes/origin/main outright, so the tag is inert.
-    git(["tag", "origin/main", base]);
+    // `origin/main` as a REV resolves refs/tags/ AND refs/heads/ before refs/remotes/ (gitrevisions
+    // §SPECIFYING REVISIONS), so either would rewind the range and re-admit main's learning. The
+    // block names refs/remotes/origin/main outright, so both are inert.
+    //
+    // A BRANCH, not the tag the security seat named: measured, both shadow the tracking ref
+    // identically (`git rev-parse origin/main` returns the shadowing ref and warns "refname
+    // 'origin/main' is ambiguous"), and this fixture reaches the same precedence class without
+    // spending an entry from `scripts/battery-tag-authorship.test.sh`'s exemption ledger, whose
+    // ceiling is full at 12 and whose raise is an ADR-207 edit.
+    git(["branch", "origin/main", base]);
     expectVerdict(work, work, "absent");
   });
 
