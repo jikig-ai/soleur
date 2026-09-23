@@ -1924,12 +1924,19 @@ resource "sentry_alert" "workspaces_luks_drift" {
 # degraded signal (mirror_status=degraded → Slack ⚠️ + ::warning::) that merged in
 # #6274 / PR #6276.
 #
-# logic_type="any" over the FOUR runtime signal tag-VALUES (NOT feature+op "all"):
-# the two ci-deploy.sh signals carry feature/op, but the inngest/app fresh-boot
+# logic_type="any" over the runtime signal tag-VALUES (NOT feature+op "all"): the
+# ci-deploy.sh signal carries feature/op, but the inngest/app fresh-boot
 # soleur-boot-emit events (cloud-init.yml) carry only `stage` — an all-match on
-# feature+op would silently exclude the boot paths. Signals:
-#   registry ∈ {ghcr-fallback, zot-gate-degraded}         (ci-deploy.sh rolling-deploy)
-#   stage    ∈ {inngest_ghcr_fallback, app_ghcr_fallback} (cloud-init.yml fresh boot)
+# feature+op would silently exclude the boot paths. Signals, FOUR since #8036 1c:
+#   registry ∈ {zot-gate-degraded}                        (ci-deploy.sh rolling-deploy)
+#   stage    ∈ {inngest_ghcr_fallback, app_ghcr_fallback,
+#               app_ghcr_served}                          (cloud-init.yml fresh boot)
+#
+# #8036 1c removed a FIFTH, `registry = "ghcr-fallback"`. It was already structurally dark
+# (#7071 / ADR-169 Named residual 3, tracked as #7295): the credential it depended on has
+# been revoked since 2026-07-29, so the fallback it reported could not succeed. 1c deleted
+# the emitter, which is what turned "dark" into "cannot exist". The remaining four all still
+# have live call sites — `zot-gate-degraded` in ci-deploy.sh, the other three in cloud-init.
 #
 # ═══ WHY value = 0, AND WHY IT MUST STAY 0 (#6285) ═══
 #
@@ -1956,25 +1963,34 @@ resource "sentry_alert" "workspaces_luks_drift" {
 # >1). On a fresh per-deploy group, value = 1 means ">1" and a single event does NOT
 # page.
 #
-# CHANGE-TRIGGER. Do not raise above 0 without re-deriving against ci-deploy.sh's
+# CHANGE-TRIGGER. Do not raise above 0 without re-deriving against the surviving emitters'
 # message construction. Parity: zot-soak-6122.sh FAILs the Phase-5 gate on >=1 fallback
 # — a threshold above 0 is strictly less sensitive than the gate it exists to pre-warn.
 #
-# GROUPING is per-signal asymmetric (`ghcr-fallback` fresh per deploy; `zot-gate-degraded`
-# per reason — 3 fixed literals; `app_ghcr_fallback` and `app_ghcr_served` each a dedicated
-# static message; `inngest_ghcr_fallback` the shared always-hot `soleur-boot-emit` group).
+# GROUPING is per-signal asymmetric (`zot-gate-degraded` per reason — 3 fixed literals;
+# `app_ghcr_fallback` and `app_ghcr_served` each a dedicated static message;
+# `inngest_ghcr_fallback` the shared always-hot `soleur-boot-emit` group). The retired
+# `ghcr-fallback` was the one that minted a FRESH group per deploy — noted because the
+# mute-safety argument below used to lean on that property and no longer can.
 # It no longer affects WHETHER a group pages at value = 0 — every group fires on its first
 # event — but it is load-bearing for HOW to quiet noise safely (below). Relevant to the
 # threshold again only if value is ever raised.
 #
-# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. All five signals share one rule
+# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. All four signals share one rule
 # (logic_type = "any"), so muting the RULE to escape `zot-gate-degraded` noise also kills
-# `ghcr-fallback` — the only no-SSH page gating the IRREVERSIBLE ADR-096 5.5 PAT
-# rotate+revoke. Muting the noisy Sentry ISSUE is safe by construction for the ORIGINAL
-# four: `zot-gate-degraded` groups on a stable reason literal, so a mute pins to that group
-# only; `ghcr-fallback` mints a FRESH group per deploy, so no pre-existing mute can ever
-# pre-suppress it. Pre-cutover the dominant noise is `probe_unreachable` — that is zot's
-# probe genuinely failing (the real fix is the zot host, not the alarm).
+# the three fresh-boot signals.
+#
+# The claim that used to stand here — that `ghcr-fallback` was "the only no-SSH page gating
+# the IRREVERSIBLE ADR-096 5.5 PAT rotate+revoke" — was retired with the signal in #8036 1c,
+# and it is worth stating why rather than just deleting it: the page it described was gating
+# a rotate+revoke of a PAT that has been REVOKED since 2026-07-29, so by the time 1c ran it
+# was guarding a step already taken. `zot-gate-degraded` is now the rolling-deploy half of
+# this rule on its own.
+#
+# Muting the noisy Sentry ISSUE is safe by construction for `zot-gate-degraded`: it groups on
+# a stable reason literal, so a mute pins to that group only. Pre-cutover the dominant noise
+# is `probe_unreachable` — that is zot's probe genuinely failing (the real fix is the zot
+# host, not the alarm).
 #
 # ⚠ `app_ghcr_served` (#6462) IS THE EXCEPTION — the mute-is-safe argument above does NOT
 # extend to it, and this is the one signal where a reflexive mute is destructive. It is the
@@ -2003,7 +2019,7 @@ resource "sentry_alert" "workspaces_luks_drift" {
 #      can be tuned without touching ghcr-fallback. That is a real fix, not a mute. Since
 #      #6589 the split costs only the resource block — the apply plans the full root, so
 #      there is no `-target=` entry to add — plus the op-contract's alarm⇔soak parity (which
-#      currently pins alarm.size == soakFailQueries().size == 5). Deferred, not dismissed:
+#      pins alarm.size == soakFailQueries().size == 4 since #8036 1c). Deferred, not dismissed:
 #      see #6462's PR.
 #
 # Distinct `frequency_minutes = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
@@ -2025,7 +2041,11 @@ resource "sentry_alert" "zot_mirror_fallback_rate" {
     {
       logic_type = "any-short"
       conditions = [
-        { tagged_event = { key = "registry", match = "eq", value = "ghcr-fallback" } },
+        # #8036 1c: `registry = "ghcr-fallback"` was REMOVED here, not retired with the rule.
+        # `ci-deploy.sh` no longer has a GHCR leg, so `registry_pull_event ghcr-fallback` has no
+        # call site and the value can never be emitted again. The in-code tripwire this deletion
+        # executed (`RETIREMENT TRIPWIRE (#6285)`) said exactly this: NARROW the filters to the
+        # signals that still emit, because retiring the rule blinds the survivors.
         { tagged_event = { key = "registry", match = "eq", value = "zot-gate-degraded" } },
         { tagged_event = { key = "stage", match = "eq", value = "inngest_ghcr_fallback" } },
         { tagged_event = { key = "stage", match = "eq", value = "app_ghcr_fallback" } },

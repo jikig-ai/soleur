@@ -124,7 +124,9 @@ fi
 # fast-follow after a signed release is confirmed live.
 #
 # The app image is now a PRIVATE GHCR package (#6005), so the host authenticates via
-# a scoped `read:packages` credential (ghcr_prelude_and_login below) before pulling.
+# a scoped `read:packages` credential before pulling — which is why CI still pushes and pulls
+# GHCR. The HOST side of that read was retired in #8036 1c; CI's is untouched (dual-push + the
+# ADR-169 restore path).
 # The verifier is a SHA-pinned distroless cosign CONTAINER (no host install). Per
 # ADR-087 (Design B′) it runs `--network host` so the OCI-attached signature fetch
 # rides the host's UNRESTRICTED egress — the #5046/ADR-052 container egress firewall
@@ -168,11 +170,15 @@ export DOCKER_CONFIG="$DEPLOY_DOCKER_CONFIG_DIR"
 # the write fails safe onto the root fs (login still works; per-deploy re-login self-heals).
 mkdir -p "$DOCKER_CONFIG" 2>/dev/null || true
 chmod 700 "$DOCKER_CONFIG" 2>/dev/null || true
-# The config FILE is written by ghcr_prelude_and_login (host pull auth) and mounted :ro into the
-# ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry, NEVER a
-# credStore/credHelpers indirection (the distroless cosign image has no credential helper; an
-# indirection silently UNAUTHORIZEs the .sig fetch — ADR-087). Relocation changes the PATH only,
-# not this content contract. Single source of truth: DERIVE the mount-READ path from the exported
+# The config FILE is written by `zot_gate_and_login` (the zot pull auth) and mounted :ro into the
+# ephemeral cosign verifier for the `.sig` fetch. ADR-087's content contract — an INLINE
+# `auths.<registry>.auth` entry, NEVER a credStore/credHelpers indirection (the distroless cosign
+# image has no credential helper; an indirection silently UNAUTHORIZEs the .sig fetch) — still
+# governs whatever entry is in it. The SYMBOL NAME is a fossil: #8036 1c retired the host-side
+# GHCR login that used to write the ghcr.io entry, and `sweep_stale_registry_auth` now removes
+# any such entry left over, so the only auth this file carries in steady state is zot's. The
+# rename to a truthful name was weighed and CUT (no property, 9 sites here plus its test, and an
+# ADR amendment that existed only because of the rename) — this comment is the fix. Single source of truth: DERIVE the mount-READ path from the exported
 # DOCKER_CONFIG so the login-WRITE path ($DOCKER_CONFIG/config.json) and the cosign mount-READ
 # path can never be split by an independent override.
 readonly GHCR_DOCKER_CONFIG="${DOCKER_CONFIG}/config.json"
@@ -646,8 +652,10 @@ cosign_verify_event() {
 
 # _pull_result_is_auth_denied <stderr-content>: the SINGLE source of truth for
 # "is this docker pull stderr a credential-capability denial?" (#6400). Both
-# pull_failure_event's classifier AND the pull-site recovery gate
-# (_ghcr_pull_or_recover) call this predicate so they agree BY CONSTRUCTION — a
+# pull_failure_event's classifier AND — until #8036 1c retired it — the pull-site auth-recovery
+# gate called this predicate so they agreed BY CONSTRUCTION. The recovery gate is gone; the
+# classifier still uses it, so an auth-shaped zot failure is still LABELLED as one on the way out.
+# Keep it single-sourced rather than inlining the regex at the one surviving caller — a
 # second copy of the regex would drift (cq/paren-safety class). It classifies the
 # stderr CONTENT passed as $1, never a file path: the caller must pass
 # `tail -c 400 "$perr"`, not "$perr", or the match silently no-ops (security/P2-E).
@@ -658,7 +666,8 @@ _pull_result_is_auth_denied() {
 # _pull_result_is_transient <stderr-content>: the SINGLE source of truth for "is this docker
 # pull stderr a TRANSIENT/network failure that a warm retry can absorb?" (#6525). Same anti-drift
 # contract as _pull_result_is_auth_denied: BOTH pull_failure_event's `network` classifier arm AND
-# the pull-site retry gate (_ghcr_pull_or_recover) call this predicate, so they agree BY
+# the pull-site retry gate (_pull_with_transient_retry, #8036 1c — was _ghcr_pull_or_recover)
+# call this predicate, so they agree BY
 # CONSTRUCTION — a second inline copy of the regex would drift. Classifies the stderr CONTENT ($1),
 # never a file path. The token set is verified NON-OVERLAPPING with the auth-denied class handled by
 # _pull_result_is_auth_denied above AND with the manifest-unknown/not-found class handled by
@@ -1054,8 +1063,8 @@ _login_hatch() {
 # Sharp edges, all of which this file has already been bitten by once:
 #   1. `local _rec` and the assignment are SEPARATE statements. `local x="$(cmd)"` makes `local`
 #      the exit status and SWALLOWS the rc (the file already knows this — see the
-#      `local prelude_stage` / `prelude_stage="$(refetch_ghcr_and_relogin)"` split in
-#      `ci-deploy.sh` › `ghcr_prelude_and_login()`).
+#      `local prelude_stage` / `prelude_stage="$(…)"` split that stood in this file's GHCR
+#      prelude until #8036 1c deleted it).
 #   2. `2>&3 3>&-` order, and `1>&3`-style ordering generally: the stream you dup FIRST is
 #      resolved against the fd table as it stands at that moment.
 #   3. `$(…)` strips trailing newlines, so `stdout_chars` (`${#_o}`, measured after the inner
@@ -1545,74 +1554,18 @@ zot_gate_degraded_event() {
   fi
 }
 
-# refetch_ghcr_and_relogin (#6400): re-fetch the CURRENT prd GHCR read credential,
-# re-run `docker login ghcr.io` into the SAME docker config the cosign verifier
-# mounts :ro, and return a STAGE code so the caller can discriminate the failure.
-# Echoes on stdout exactly one of: recovered | refetch_unavailable | relogin_failed
+# #8036 1c: `refetch_ghcr_and_relogin()` was DELETED here, together with the ~37-line header
+# block that documented its typed stdout control channel. Both of its callers — the prelude's
+# §1A stale-baked-cred arm and `_ghcr_pull_or_recover`'s auth-denied leg — went with it: the
+# credential it re-fetched (`GHCR_READ_TOKEN`, Doppler soleur/prd) has been REVOKED since
+# 2026-07-29, so every re-fetch+relogin it performed was a guaranteed failure, twice per deploy,
+# 89 times a week. That is what `stage=relogin_failed` was reporting.
 #
-# ############################################################################################
-# # THIS FUNCTION'S STDOUT IS A TYPED CONTROL CHANNEL. DO NOT WRITE TO IT.                   #
-# ############################################################################################
-# It communicates BY STDOUT STRING, and two callers parse that string:
-# `ghcr_prelude_and_login()` (`prelude_stage=`) and `_ghcr_pull_or_recover()`
-# (`stage="$(refetch_ghcr_and_relogin)"` -> `[[ "$stage" == "recovered" ]]`). In
-# `ghcr_prelude_and_login()` the stage is then interpolated RAW into its `STILL FAILED after
-# Doppler re-fetch (stage=…)` logger line. So NOTHING inside this function may write to
-# stdout except the three stage literals. In particular, #6497 added stderr capture here, and
-# the reflexive way to do that — `2>&1` at the FUNCTION level — has two failure modes from one
-# edit:
-#   LEAK: docker's stderr merges into this function's stdout -> into $prelude_stage -> into
-#     journald -> Vector -> Better Stack, VERBATIM AND UNCLASSIFIED. A Sentry-scoped payload
-#     assertion would never see it.
-#   SILENT RECOVERY LOSS: `stage` becomes "transport recovered", the `==` compare fails, the
-#     #6400 recovery is discarded, and the private pull fails-closed — degrading the exact
-#     deploy path this helper exists to protect.
-# The capture therefore wraps the `docker login` INVOCATION ONLY (see _docker_login_capture),
-# and the class is emitted to journald from inside this function rather than returned (a named
-# global cannot escape the `$(…)` subshell every caller runs this in — see below).
-# Returns 0 IFF stage==recovered (the login status IS the exit status — this is the
-# load-bearing difference from §1A's inline body, whose trailing `dt=""` (exit 0)
-# would make the function return 0 on every path and muddy the `recovered` signal
-# the pull-site gate keys on). Token via --password-stdin only; kept `local` + unset
-# after so no child process env carries it. The recovered auth ENTRY is carried by
-# the `docker login ghcr.io` filesystem write into $GHCR_DOCKER_CONFIG (persists past
-# the `$(…)` subshell this helper runs in) — the SAME file the prelude wrote and the
-# cosign verifier mounts :ro, so a recovered pull does not then 401 the .sig fetch
-# (P2-F). (The `export GHCR_READ_USER` below is defensive-only — it is swallowed by the
-# subshell and no downstream reader consumes the env var; the docker-config write is
-# what authenticates.) Guarded on doppler + DOPPLER_TOKEN (prd-root scoped).
-refetch_ghcr_and_relogin() {
-  command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]] || { printf refetch_unavailable; return 1; }
-  local du="" dt="" n=0
-  n=0; until du="$(timeout 45 doppler secrets get GHCR_READ_USER  --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$du" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
-  n=0; until dt="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$dt" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
-  [[ -n "$du" && -n "$dt" ]] || { dt=""; printf refetch_unavailable; return 1; }
-  # #6497: this login's stderr was discarded (`>/dev/null 2>&1`). It is now captured and
-  # classified — but read the STDOUT warning above before touching this: the capture wraps the
-  # `docker login` INVOCATION ONLY (inside _docker_login_capture), never this function.
-  if _docker_login_capture ghcr.io "$du" "$dt"; then
-    LOGIN_ERR=""
-    export GHCR_READ_USER="$du"; dt=""; printf recovered; return 0
-  fi
-  # journald ONLY, and emitted from HERE rather than returned to the caller. Two reasons, both
-  # load-bearing:
-  #   1. This function is called ONLY as `stage="$(refetch_ghcr_and_relogin)"` — from
-  #      `ghcr_prelude_and_login()` and `_ghcr_pull_or_recover()`, at BOTH sites a
-  #      command substitution, i.e. a SUBSHELL. A named global set here (the RECOVERY_STAGE
-  #      pattern, which works for _ghcr_pull_or_recover precisely because that one is called
-  #      DIRECTLY) is DISCARDED at the boundary. Verified. So the class cannot be returned; it
-  #      must be emitted where it is computed.
-  #   2. `logger` writes to journald, not to this function's stdout, so it cannot contaminate the
-  #      typed control channel. GHCR is journald-only by decision anyway (Sentry quota), and
-  #      Better Stack already ingests SYSLOG_IDENTIFIER=ci-deploy, so the class is fully
-  #      discoverable there.
-  local rclass rhatch
-  rclass="$(_docker_login_failure_class "${LOGIN_ERR:-}")"
-  rhatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
-  LOGIN_ERR=""
-  logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED after Doppler re-fetch class=$rclass ${rhatch:-} (registry=ghcr)"
-  dt=""; printf relogin_failed; return 1
-}
+# The classifier helpers it shared with the zot gate — `_docker_login_capture`,
+# `_docker_login_failure_class`, `_docker_login_http_status`, `_login_hatch`, `_login_kw`,
+# `_login_tok` — all SURVIVE: `zot_gate_and_login` still calls them. Only the GHCR call sites
+# are gone. Likewise `_pull_result_is_auth_denied` and `_pull_result_is_transient`, which
+# `pull_failure_event` still uses for its `pull_result` classification.
 
 # _ghcr_cfg_probe <label> <path>: append four CLOSED-VOCABULARY tokens describing one docker
 # config file to _GHCR_CFG_MARKER (#8036 1b). Form B, the `_login_kw` discipline: every value is a
@@ -1666,42 +1619,30 @@ _ghcr_cfg_probe() {
   _GHCR_CFG_MARKER="${_GHCR_CFG_MARKER} ${label}_cfg=${cfg} ${label}_ghcr_auth=${auth} ${label}_creds_store=${store} ${label}_ghcr_helper=${helper}"
 }
 
-# ghcr_prelude_and_login: fetch the deploy-time secrets the pull + verify + telemetry
-# need INTO this script's OWN env, then authenticate the host docker daemon to the
-# now-PRIVATE GHCR packages (#6005). Runs BEFORE the first `docker pull` — the
-# existing resolve_env_file download (~:1010) runs AFTER pull+verify and hands
-# secrets to the CONTAINER via --env-file, so those values are NEVER in this script's
-# env at pull/verify time. Without this: (a) the private pull fails-closed, and
-# (b) the WARN cosign telemetry is dark (SENTRY_* unset at verify time), blinding the
-# very soak gate the ENFORCE flip depends on. Best-effort + fail-open: a missing GHCR
-# credential does not abort here (the pull's own failure path + pull_failure_event
-# surface it loudly); missing SENTRY_* just means a dark event, exactly as today. The
-# token is captured into a var and piped via --password-stdin — NEVER argv/logs, and
-# unset immediately after login so it never reaches a child process env.
-# #6497: the `docker login ghcr.io` below no longer discards its stderr (`>/dev/null 2>&1`) —
-# it is captured, classified with the SAME registry-neutral classifier the zot gate uses (two
-# classifiers drift), and summarized by the closed-vocabulary hatch. The class rides the PRELUDE
-# journald line ONLY — no Sentry emit for GHCR (volume; see the call site).
-ghcr_prelude_and_login() {
-  # (#6090) Prefer BAKED GHCR read-creds (cloud-init writes /etc/default/soleur-ghcr-read,
-  # deploy:deploy 0600 — the app-pull analogue of the seed-pull bake) so the app pull +
-  # cosign verify authenticate on a cold host even when Doppler answers EMPTY at the boot
-  # instant (the exact #6090 failure class, one layer down: an empty fetch here skipped the
-  # login → anonymous private pull → cosign .sig fetch 401 → verify_failed → app never binds
-  # :9000 → peer fan-out degraded). Doppler stays the fallback, HARDENED (timeout 45 + 3-try
-  # retry) to match cloud-init's ghcr_login. GHCR_READ_USER is a username (safe to export);
-  # the TOKEN reaches `docker login` via --password-stdin only and is unset so no child env
-  # (docker/cosign subprocess) ever carries it.
-  local k ghcr_user="" ghcr_token=""
-  # SOLEUR_GHCR_READ_FILE overrides the baked-cred path for tests ONLY; production is the
-  # unchanged /etc/default/soleur-ghcr-read (cloud-init writes it deploy:deploy 0600).
-  local ghcr_read_file="${SOLEUR_GHCR_READ_FILE:-/etc/default/soleur-ghcr-read}"
-  if [[ -r "$ghcr_read_file" ]]; then
-    # shellcheck disable=SC1091
-    . "$ghcr_read_file" 2>/dev/null || true
-    ghcr_user="${GHCR_READ_USER:-}"; ghcr_token="${GHCR_READ_TOKEN:-}"
-    unset GHCR_READ_TOKEN   # keep the token out of THIS process env + its children
-  fi
+# #8036 1c split `ghcr_prelude_and_login()` into the three unrelated jobs it had grown into. The
+# name had become actively misleading: the function's LARGEST responsibility was never the GHCR
+# login, and deleting it wholesale with the login would have taken the SENTRY_* prefetch with it.
+# `deploy_prelude()` was rejected as the replacement — "prelude" names WHEN the code runs, not
+# what it does, so it moves the confusion to the next reader instead of removing it.
+#
+#   prefetch_deploy_secrets      refresh SENTRY_* from Doppler into THIS script's env
+#   sweep_stale_registry_auth    remove the revoked ghcr.io auth from the deploy docker config
+#   emit_registry_config_marker  the #8036 1b SOLEUR_DEPLOY_GHCR_CONFIG line
+#
+# THE CALL ORDER AT THE SINGLE CALL SITE IS LOAD-BEARING TWICE OVER, and the split is what makes
+# that visible there rather than buried a hundred lines inside one function:
+#   sweep BEFORE emit  — so the marker reports the POST-sweep state and can carry `swept=`.
+#   sweep BEFORE zot_gate_and_login — so the zot login's write into the same config file is
+#                        never racing the sweep's rewrite of it.
+
+# prefetch_deploy_secrets: fetch the deploy-time secrets the pull + verify + telemetry need INTO
+# this script's OWN env, before any pull/verify emitter. The existing resolve_env_file download
+# runs AFTER pull+verify and hands secrets to the CONTAINER via --env-file, so those values are
+# NEVER in this script's env at pull/verify time. Without this the WARN cosign telemetry is dark
+# (SENTRY_* unset at verify time), blinding the soak gate the ENFORCE flip depends on.
+# Best-effort + fail-open: a failed read just means a dark event, exactly as before.
+prefetch_deploy_secrets() {
+  local k
   if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
     # SENTRY_* refresh for the verify/pull telemetry curls.
     #
@@ -1710,10 +1651,10 @@ ghcr_prelude_and_login() {
     # assignment: on a revoked token the read yields "" and `printf -v` writes that empty string
     # over the value sourced from /etc/default/soleur-doppler-token at the top of this script
     # (verified: `X=preset; printf -v X %s "$(false || true)"` leaves X empty — bash does not skip
-    # the assignment). Because ghcr_prelude_and_login runs BEFORE zot_gate_and_login and before
-    # every pull/verify emitter, that blanked all seven `[[ -n $SENTRY_INGEST_DOMAIN && … ]]`
-    # guards and took the host Sentry-dark — silently destroying, ~1400 lines later, the exact
-    # mitigation the baking exists to provide. It is why 341 unit failures over 5.7h paged nobody.
+    # the assignment). Because this runs BEFORE zot_gate_and_login and before every pull/verify
+    # emitter, that blanked all seven `[[ -n $SENTRY_INGEST_DOMAIN && … ]]` guards and took the
+    # host Sentry-dark — silently destroying, ~1400 lines later, the exact mitigation the baking
+    # exists to provide. It is why 341 unit failures over 5.7h paged nobody.
     #
     # Now: read through the instrument, and assign ONLY on a non-empty result. A failed read is
     # reported (SOLEUR_DEPLOY_CRED_FAIL) and leaves the baked value standing. `2 2 0` = 2 attempts,
@@ -1727,96 +1668,92 @@ ghcr_prelude_and_login() {
       export "$k"
     done
     unset _sentry_v
-    # Hardened Doppler fallback for any GHCR cred the bake did not supply.
-    # #7095: the hand-rolled `until` loops here were `2>/dev/null` — 3 attempts, and if all three
-    # came back empty the function simply carried on with an empty string and let the "not both
-    # present" line below name two causes it had measured neither of. `_doppler_get_or_report`
-    # keeps the schedule IDENTICAL (3 tries, 5s apart — the same shape cloud-init's ghcr_login
-    # uses) and adds the one thing that was missing: it says rc, empty and the stderr tail.
-    # `|| true` is load-bearing under `set -e`: a failed read is NOT fatal here — the pull's own
-    # failure path and pull_failure_event surface it loudly, and the baked-cred cold-boot path
-    # (#6090) depends on this function staying fail-open.
-    if [[ -z "$ghcr_user" ]]; then
-      _doppler_get_or_report GHCR_READ_USER ghcr_user 3 5 1 || true
-    fi
-    if [[ -z "$ghcr_token" ]]; then
-      _doppler_get_or_report GHCR_READ_TOKEN ghcr_token 3 5 1 || true
-    fi
-  elif [[ -z "$ghcr_user" || -z "$ghcr_token" ]]; then
-    logger -t "$LOG_TAG" "PRELUDE: doppler/DOPPLER_TOKEN unavailable and baked GHCR creds incomplete — skipping GHCR login + SENTRY prefetch"
-  fi
-  export GHCR_READ_USER="$ghcr_user"   # username, not a secret (matches prior exported behavior)
-  if [[ -n "$ghcr_user" && -n "$ghcr_token" ]]; then
-    # #6497: this login's stderr was discarded too. BOTH prelude logins are classified — this
-    # one (baked/first creds) and the post-refetch one inside refetch_ghcr_and_relogin. If only
-    # the second were classified, the BAKED-CRED FAILURE SHAPE would be lost, and that shape is
-    # the #6090/#6400 recurrence signal.
-    if _docker_login_capture ghcr.io "$ghcr_user" "$ghcr_token"; then
-      LOGIN_ERR=""
-      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok (private-package pull authenticated)"
-    else
-      local gclass ghatch
-      gclass="$(_docker_login_failure_class "${LOGIN_ERR:-}")"
-      ghatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
-      LOGIN_ERR=""
-      # journald only — no new Sentry emit source. This path is reachable ~2x/deploy x 6-12
-      # deploys/day for an already-diagnosed failure; a second sink buys nothing and spends the
-      # quota that real end-user error events need. Better Stack already ingests
-      # SYSLOG_IDENTIFIER=ci-deploy, so `--grep PRELUDE` finds it.
-      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED with baked/first creds class=$gclass ${ghatch:-} (registry=ghcr)"
-      # §1A (#6090 recurrence, web-2 fsn1 warm-standby 2026-07-13): the baked GHCR read token
-      # is PRESENT but STALE — a fresh host's baked /etc/default/soleur-ghcr-read token ages
-      # out by deploy time, and the EMPTY-only Doppler fallback above only re-fetches an
-      # ABSENT cred, never a present-but-invalid one. Pre-fix, this login just failed non-
-      # fatally → anonymous private pull → registry 401 → Sentry `image pull failed
-      # (auth_denied)` → image_pull_failed → the warm standby never serves. Fix: on a login
-      # FAILURE (not only EMPTY), re-fetch the CURRENT creds from Doppler (hardened timeout
-      # 45 + 3-try idiom, mirroring the EMPTY path) and retry docker login ONCE. Fail-open: a
-      # retry miss still lets the pull's own failure path + pull_failure_event surface loudly.
-      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED with baked/first creds — re-fetching current creds from Doppler and retrying"
-      # #6400: §1A's inline re-fetch/relogin is now the shared refetch_ghcr_and_relogin
-      # helper (identical observable behavior — recover on a login FAILURE — plus the
-      # staged return the pull-site gate needs). The helper self-guards on
-      # doppler/DOPPLER_TOKEN (stage=refetch_unavailable when absent) and keeps the
-      # retried token out of any child env.
-      # `|| true` is load-bearing: ci-deploy runs under `set -euo pipefail`, and the
-      # helper returns non-zero on a recovery miss — a bare assignment would abort the
-      # whole deploy on that nonzero (we parse the stage STRING, the rc is irrelevant here).
-      local prelude_stage
-      prelude_stage="$(refetch_ghcr_and_relogin)" || true
-      if [[ "$prelude_stage" == "recovered" ]]; then
-        logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok after Doppler re-fetch (recovered stale baked cred)"
-      else
-        logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io STILL FAILED after Doppler re-fetch (stage=$prelude_stage) — private pull may fail-closed"
-      fi
-    fi
   else
-    # #7095: this line USED to assert its own cause — "(baked file absent + doppler
-    # empty/unavailable)" — while measuring neither half of it. It is the line web-1 printed on
-    # all eight failed releases of 2026-07-30, and it was wrong about the first half on every
-    # one of them. It now reports what was actually observed; the per-secret
-    # SOLEUR_DEPLOY_CRED_FAIL markers above carry rc/empty/err for each read that came back with
-    # nothing. The `PRELUDE: GHCR_READ_{USER,TOKEN} not both present` prefix is preserved
-    # verbatim so existing journald searches and runbooks still find it.
-    local _baked="absent"
-    [[ -r "$ghcr_read_file" ]] && _baked="present"
-    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present (baked_file=$_baked user_empty=$([[ -z "$ghcr_user" ]] && echo 1 || echo 0) token_empty=$([[ -z "$ghcr_token" ]] && echo 1 || echo 0)) — skipping docker login"
+    # #8036 1c: this arm used to be `elif [[ -z "$ghcr_user" || -z "$ghcr_token" ]]`, a sibling of
+    # the `if` above testing two locals that no longer exist. Deleting those two locals and
+    # leaving the `elif` would expand two UNBOUND variables under `set -euo pipefail` and abort
+    # the deploy AT THE PRELUDE — before any emitter runs. It is a plain `else` now, and its
+    # message drops the GHCR clause it can no longer be about.
+    logger -t "$LOG_TAG" "PRELUDE: doppler/DOPPLER_TOKEN unavailable — skipping SENTRY prefetch (baked values stand)"
   fi
-  # The mounted $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier
-  # reuses; the token local goes out of scope when the function returns.
-  ghcr_token=""
-  # #8036 1b: ONE journald line describing the three docker configs a GHCR credential could come
-  # from, after both login attempts. `effective=deploy_cfg` names the one the CLI presents
-  # ($DOCKER_CONFIG). home_cfg is the pre-#6565 location; root_cfg answers the root-vs-deploy split
-  # (a measured `unreadable` from the deploy user is itself the answer). Closed vocabulary only —
-  # never the username (GHCR_READ_USER is a personal login and this sink is unscrubbed). journald
-  # only, no Sentry: same volume rationale as the PRELUDE lines. SOLEUR_GHCR_CONFIG_ROOT_PATH is a
-  # TEST-ONLY override (mirrors SOLEUR_GHCR_READ_FILE).
+}
+
+# sweep_stale_registry_auth: remove the revoked `ghcr.io` credential from the docker config the
+# deploy CLI actually presents, once per deploy, idempotently (#8036 1c).
+#
+# WHY IT IS NEEDED AT ALL. Deleting the login stops WRITING the entry; it does not remove the one
+# already on disk. The 1b marker measured it on the live fleet: `effective=deploy_cfg`,
+# `deploy_ghcr_auth=inline` — a revoked classic PAT, inline, in the config that is also mounted
+# :ro into the ephemeral cosign verifier. That entry is why a *public* Sigstore image pull
+# returned `denied` (GHCR refuses an authenticated request bearing a revoked token where it would
+# have served the same bytes anonymously): `cosign_absent`, 89 times in 89 deploys.
+#
+# SCOPE: the DEPLOY config only ($GHCR_DOCKER_CONFIG, under /mnt/data). NOT ${HOME}/.docker.
+# ci-deploy.sh runs under webhook.service with `ProtectHome=read-only` and /home absent from its
+# ReadWritePaths, so a home write cannot succeed from this unit — it would fail SOFT (the `-w`
+# test is false on a read-only mount) and therefore silently never sweep, while any acceptance
+# criterion graded on `home_ghcr_auth=none` read `inline` forever. The home entry is a pre-#6565
+# fossil written by no live code path (since the DOCKER_CONFIG relocation the deploy user's own
+# logins go to $DEPLOY_DOCKER_CONFIG_DIR); it is OBSERVED by the marker below, not swept, and it
+# rides the 1d follow-up alongside root's config, which is unreadable from here for the same
+# structural reason. `credential-persist-home-guard.test.sh` names the $HOME write as recurrence
+# class #1 with its own CI gate — do not "fix" this by widening the scope.
+#
+# WHY `docker logout` AND NOT A HAND-ROLLED `jq` REWRITE: it is the registry's own removal verb
+# and already this repo's idempotent-teardown idiom; it preserves the co-resident zot auths entry
+# BY CONSTRUCTION rather than by a carefully-scoped `del()`; it writes the file with docker's own
+# mode, which removes a `chmod --reference` hazard entirely; and it additionally clears a
+# `credHelpers["ghcr.io"]` indirection that a `del(.auths…)` would leave behind.
+#
+# Sets SWEPT_STATE (yes|no|na) as an out-parameter for the marker. Never aborts the deploy.
+SWEPT_STATE=na
+sweep_stale_registry_auth() {
+  local f="$GHCR_DOCKER_CONFIG"
+  SWEPT_STATE=na
+  # jq is a HARD dependency of the close criterion, and its absence must fail CLOSED, not quietly
+  # pass: with no jq the sweep no-ops AND `_ghcr_cfg_probe` emits `*_ghcr_auth=na`, so the probe's
+  # `deploy_ghcr_auth=none` requirement refuses the host rather than grading it clean.
+  command -v jq >/dev/null 2>&1 || { SWEPT_STATE=na; return 0; }
+  # Refuse a symlink: `docker logout` would rewrite the LINK's target under a path we did not
+  # vet, and the marker's own probe is already symlink-aware — the two must agree.
+  [[ -f "$f" && ! -L "$f" && -w "$f" ]] || { SWEPT_STATE=na; return 0; }
+  # The predicate mirrors `_ghcr_cfg_probe`'s read, only BROADER (it fires on any non-null
+  # `.auths["ghcr.io"]`, where the probe requires a non-empty `.auth` string). Broader in this
+  # direction is safe and deliberate: it keeps `deploy_ghcr_auth=none` implying "the key is gone"
+  # after a sweep. A bare `.auths["ghcr.io"]` would be FALSY on an explicit JSON null and skip it,
+  # hence the `select(. != null)`.
+  if jq -e '.auths["ghcr.io"] | select(. != null)' "$f" >/dev/null 2>&1; then
+    DOCKER_CONFIG="$(dirname "$f")" docker logout ghcr.io >/dev/null 2>&1 || true
+    SWEPT_STATE=yes                               # a sweep was performed this deploy
+  else
+    SWEPT_STATE=no                                # already clean: no write, mtime unchanged
+  fi
+  return 0
+}
+
+# emit_registry_config_marker: #8036 1b. ONE journald line describing the three docker configs a
+# GHCR credential could come from, plus the `swept=` token 1c added. `effective=deploy_cfg` names
+# the one the CLI presents ($DOCKER_CONFIG). home_cfg is the pre-#6565 location; root_cfg answers
+# the root-vs-deploy split (a measured `unreadable` from the deploy user is itself the answer).
+# Closed vocabulary only — never the username (GHCR_READ_USER is a personal login and this sink is
+# unscrubbed). journald only, no Sentry: same volume rationale as the retired PRELUDE lines.
+# SOLEUR_GHCR_CONFIG_ROOT_PATH is a TEST-ONLY override.
+#
+# READ `root_ghcr_auth=inline` AS EXPECTED, NOT AS A HALF-LANDED CHANGE. After 1c the root slot
+# reads `inline` permanently: cloud-init's boot-time `ghcr_login` runs as root with DOCKER_CONFIG
+# unset, so it writes /root/.docker/config.json, and retiring THAT login is 1d scope. A reader
+# seeing `deploy_ghcr_auth=none swept=yes root_ghcr_auth=inline` is looking at a fully-landed 1c.
+emit_registry_config_marker() {
   _GHCR_CFG_MARKER=""
   _ghcr_cfg_probe deploy "$GHCR_DOCKER_CONFIG"
   _ghcr_cfg_probe home "${HOME:-}/.docker/config.json"
   _ghcr_cfg_probe root "${SOLEUR_GHCR_CONFIG_ROOT_PATH:-/root/.docker/config.json}"
-  logger -t "$LOG_TAG" "SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg${_GHCR_CFG_MARKER}"
+  # `swept=` sits with `effective=` because it is a DEPLOY-scoped fact, not a per-config one —
+  # and its PRESENCE is what the #8036 close-criterion probe uses to tell a post-1c host from a
+  # freshly provisioned PRE-1c one. `deploy_ghcr_auth=none` alone cannot: `docker login ghcr.io`
+  # currently FAILS, and a failed login writes no auths entry, so a brand-new pre-1c host reads
+  # `none` on its first deploy. The pre-1c script cannot emit this token at all.
+  logger -t "$LOG_TAG" "SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg swept=${SWEPT_STATE}${_GHCR_CFG_MARKER}"
   _GHCR_CFG_MARKER=""
 }
 
@@ -1828,7 +1765,8 @@ ghcr_prelude_and_login() {
 # (1.8) + backfills (1.9) zot. The zot `docker login` writes a second auths entry into
 # the SAME $GHCR_DOCKER_CONFIG the cosign verifier mounts :ro — so Edge B (insecure .sig
 # fetch auth) is satisfied ATOMICALLY with the pull cred. Fail-open: never aborts the
-# deploy. Runs AFTER ghcr_prelude_and_login (which already prefetched SENTRY_* + guarded
+# deploy. Runs AFTER prefetch_deploy_secrets + sweep_stale_registry_auth (which prefetched
+# SENTRY_*, swept the stale ghcr.io auth out of the shared config, and guarded
 # doppler/DOPPLER_TOKEN). Token reaches `docker login` via --password-stdin (never argv).
 # #6497: login stderr is NO LONGER discarded — the old `>/dev/null 2>&1` here is exactly why
 # WEB-PLATFORM-5B was undiagnosable. It is captured INTO A VARIABLE (never a temp file — see
@@ -1889,7 +1827,7 @@ zot_gate_and_login() {
       # enough on its own here: vector.service runs `doppler run -- vector` off the SAME token and
       # survives only because it started before the revocation, so any restart takes this marker's
       # sole route off the box with it. The Sentry emit uses the BAKED DSN components, which now
-      # survive a dead token (see ghcr_prelude_and_login), giving two independent vendors again.
+      # survive a dead token (see prefetch_deploy_secrets), giving two independent vendors again.
       zot_gate_degraded_event cred_read_failed
       return 0
     fi
@@ -1950,25 +1888,37 @@ zot_gate_and_login() {
   ztoken=""
 }
 
-# _ghcr_pull_or_recover <perr> (#6400 + #6525): pull ${IMAGE}:${TAG} from GHCR and, on a
-# recoverable failure (classified from the stderr CONTENT, not the file path), recover in-band
-# before giving up. TWO recovery classes, disjoint by construction:
-#   • AUTH-denied (#6400): re-fetch the prd cred, relogin, and retry the pull EXACTLY ONCE. This
-#     branch NEVER loops — a genuinely-invalid prd cred would burn the deploy window (Sharp Edge).
-#   • TRANSIENT/network (#6525): a timeout / connection-reset / EOF / no-such-host / registry-5xx
-#     blip retries with a bounded, capped backoff (PULL_TRANSIENT_RETRY_SLEEPS, default "2 4" =
-#     2 retries, ≤6 s added wall-clock/leg). This is the fix for the "first attempt fails, rerun
-#     succeeds" shape (#6525): pre-#6525 a transient stderr took the return-1 path with ZERO retries.
-# Returns 0 on success (first pull OR either recovered retry). On failure returns 1 and sets the
-# global RECOVERY_STAGE for the caller's pull_failure_event tag: empty for a non-recoverable class
-# (manifest/unknown — pull_failure_event fires byte-identically to pre-#6400); transient_exhausted
-# only when a TRANSIENT failure spent all its retries (the Sentry transient-vs-durable
-# discriminator, #6415/#6565). Retry stays at ONE level — the caller (pull_image_with_fallback)
-# does NOT retry; zot is already an immediate different-registry fallback upstream (one-level-retry
-# rule, 2026-06-30). Fail-open: a recovery miss leaves the terminal image_pull_failed state
-# unchanged. `200>&-` closes the FD-200 advisory lock for the pull children (#5062), preserved.
-_ghcr_pull_or_recover() {
-  local perr="$1"
+# _pull_with_transient_retry <ref> <perr> (was _ghcr_pull_or_recover, #6400 + #6525): pull
+# ${ref}:${TAG} and, on a TRANSIENT/network failure (classified from the stderr CONTENT, not the
+# file path), retry with a bounded, capped backoff (PULL_TRANSIENT_RETRY_SLEEPS, default "2 4" =
+# 2 retries, \u22646 s added wall-clock/leg) before giving up. This is the fix for the "first attempt
+# fails, rerun succeeds" shape (#6525): pre-#6525 a transient stderr took the return-1 path with
+# ZERO retries.
+#
+# The SECOND recovery class this function used to carry \u2014 AUTH-denied (#6400): re-fetch the prd
+# GHCR cred, relogin, retry the pull exactly once \u2014 was deleted by #8036 1c along with the
+# credential it depended on. See the note above the body.
+#
+# Returns 0 on success (first pull OR a recovered retry). On failure returns 1 and sets the global
+# RECOVERY_STAGE for the caller's pull_failure_event tag: empty for a non-recoverable class
+# (manifest/unknown \u2014 pull_failure_event fires byte-identically); transient_exhausted only when a
+# TRANSIENT failure spent all its retries (the Sentry transient-vs-durable discriminator,
+# #6415/#6565). Retry stays at ONE level \u2014 the caller (pull_image_with_fallback) does NOT retry.
+# Fail-open: a miss leaves the terminal image_pull_failed state unchanged. `200>&-` closes the
+# FD-200 advisory lock for the pull children (#5062), preserved.
+# #8036 1c: `_ghcr_pull_or_recover` -> `_pull_with_transient_retry <ref> <perr>`. The auth-denied
+# recovery leg (re-fetch the revoked PAT, re-login, retry the pull) was deleted with the rest of
+# the host-side GHCR read path. What remains is REGISTRY-NEUTRAL and now serves the zot arm: the
+# bounded transient-retry loop (#6525) plus the manifest/unknown arm.
+#
+# KEEPING IT IS THE WHOLE POINT. Deleting the function wholesale would have removed the pull
+# path's ONLY retry — the zot arm was a bare `docker pull` with none — on the path that is about
+# to carry production alone, and left the seven T-6525-* rows exercising nothing. So it takes a
+# REF PARAMETER instead of reading the global `$IMAGE`, which also fixes a pre-existing
+# ambiguity: on the zot arm `$IMAGE` is still the ghcr.io ref until after a successful pull, so
+# every emitter inside this loop used to name a registry it had not contacted.
+_pull_with_transient_retry() {
+  local ref="$1" perr="$2"
   RECOVERY_STAGE=""
   # #6525 transient backoff schedule. PULL_TRANSIENT_RETRY_SLEEPS is a test-only override seam
   # (mirrors the SOLEUR_GHCR_READ_FILE precedent); tests pass "0 0" for a zero-sleep 2-retry loop.
@@ -1981,35 +1931,23 @@ _ghcr_pull_or_recover() {
   local -a _sleeps=( ${PULL_TRANSIENT_RETRY_SLEEPS-2 4} )
   local max=${#_sleeps[@]} attempt=0 detail
   while :; do
-    if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+    if docker pull "${ref}:${TAG}" 200>&- 2>"$perr"; then
       # attempt>0 ⇒ we are here only after ≥1 TRANSIENT retry (attempt increments ONLY on the
-      # transient arm below), so this breadcrumb is DISJOINT from the auth block's `recovered`.
-      [[ "$attempt" -gt 0 ]] && pull_auth_recovery_event "${IMAGE}:${TAG}" transient_recovered
+      # transient arm below). Pre-1c this breadcrumb was also DISJOINT from a sibling `recovered`
+      # emitted by the auth block; that block is gone, so `transient_recovered` is now the only
+      # label this function emits. It names `$ref`, never the global $IMAGE.
+      [[ "$attempt" -gt 0 ]] && pull_auth_recovery_event "${ref}:${TAG}" transient_recovered
       return 0
     fi
-    # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E). The
-    # inline `tail` here (rather than reusing the `detail` computed just below) is INTENTIONAL: #6400
-    # AC3 anchors on the literal `_pull_result_is_auth_denied "$(tail -c 400 "$perr"` call shape to
-    # prove content-not-path classification. `$perr` is unchanged since the pull, so the re-read below
-    # is byte-identical and cheap (a ≤400-byte file read); do not "simplify" it away — it breaks AC3.
-    if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
-      # ---- #6400 auth recovery, VERBATIM — keeps its OWN inner success `return 0`, then a
-      # terminal `return 1`: auth is recover-once-then-terminal and MUST NOT loop (a
-      # MOCK_GHCR_PULL_DENY_ALWAYS cred would otherwise burn the window — AC2/AC14 guard this).
-      # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the deploy
-      # under set -euo. We parse the stage STRING (not the rc, which is discarded via `|| true`).
-      local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
-      if [[ "$stage" == "recovered" ]]; then
-        if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
-          pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op — label stays `recovered`
-          return 0
-        fi
-        RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
-      else
-        RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
-      fi
-      return 1
-    fi
+    # #8036 1c: the auth-denied recovery leg lived here. It classified the stderr as
+    # `auth_denied` and then called `refetch_ghcr_and_relogin` to re-fetch the GHCR PAT and retry
+    # the pull once. Both are gone: the PAT has been revoked since 2026-07-29, so the recovery
+    # could not succeed, and there is no GHCR pull left for it to recover. `#6400 AC3`'s anchor on
+    # the `_pull_result_is_auth_denied "$(tail -c 400 "$perr"` call shape went with it.
+    #
+    # `_pull_result_is_auth_denied` itself SURVIVES — `pull_failure_event` still calls it for its
+    # `pull_result` classification, so an auth-shaped failure from zot is still labelled as one on
+    # the way out; it just no longer triggers a recovery attempt against a second registry.
     detail="$(tail -c 400 "$perr" 2>/dev/null)"
     if _pull_result_is_transient "$detail" && (( attempt < max )); then
       # transient blip with retries left → back off and retry the SAME registry.
@@ -2095,88 +2033,75 @@ pull_image_with_fallback() {
   perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
   if [[ "$ZOT_ACTIVE" == "1" ]]; then
     local zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}"
-    if docker pull "${zot_ref}:${TAG}" 200>&- 2>"$perr"; then
+    # #8036 1c: the zot pull now runs THROUGH the bounded transient-retry helper. Pre-1c it was a
+    # bare `docker pull` with no retry at all, and the retry lived inside the GHCR fallback leg
+    # this change deletes — so routing it here is what keeps the capability rather than losing it
+    # with the leg. The helper takes the ref explicitly, so its emitters name zot, not $IMAGE.
+    if _pull_with_transient_retry "$zot_ref" "$perr"; then
       IMAGE="$zot_ref"
       registry_pull_event zot "$image_kind" "$TAG"
       rm -f "$perr" 2>/dev/null || true
       return 0
     fi
-    # zot attempted but failed → ATOMIC fallback to GHCR (IMAGE stays the ghcr ref, so
-    # cosign follows the GHCR RepoDigest with NO insecure flag). This is the soak gate's
-    # watched event; surfaced loudly, not journald-only.
+    # #8036 1c: the "ATOMIC fallback to GHCR" branch stood here, carrying the
+    # `RETIREMENT TRIPWIRE (#6285)` comment whose own instruction was "ADR-096 task 5.3 deletes
+    # this branch — do NOT retire sentry_issue_alert.zot_mirror_fallback_rate, NARROW its filters
+    # to the signals that still emit". Both halves are executed: the branch is gone, and the
+    # alarm's `registry = "ghcr-fallback"` condition was removed while its other four stayed
+    # (apps/web-platform/infra/sentry/issue-alerts.tf), together with the matching
+    # `FAIL_QUERIES[rolling]` entry and its cardinality floor in
+    # scripts/followthroughs/zot-soak-6122.sh. That tripwire was itself stale when executed — it
+    # said the soak's FAIL set was "FOUR entries, not two"; it was five, and is now four.
     #
-    # RETIREMENT TRIPWIRE (#6285): ADR-096 task 5.3 deletes this branch. That darkens exactly
-    # ONE of the FIVE signals watched by sentry_issue_alert.zot_mirror_fallback_rate
-    # (infra/sentry/issue-alerts.tf): registry:"ghcr-fallback", emitted just below.
+    # `registry_pull_event` is therefore never invoked with a ghcr-fallback argument anywhere in
+    # this script. Written without the literal call form on purpose: the residual-zero guard and
+    # the Sentry op-contract test both anchor on that exact string, so a prose copy would red them.
     #
-    # The other pull-fallback signals live in cloud-init.yml — a separate fresh-boot path,
-    # separate deletions. Their survival across 5.3 is NOT uniform, so do not read them as one
-    # group:
-    #   app_ghcr_fallback / inngest_ghcr_fallback — fire on the zot MISS, before any GHCR pull
-    #     succeeds, so "stop GHCR push" does not darken them.
-    #   app_ghcr_served (#6462) — DIFFERENT. It fires AFTER the pull loop resolves, and on its
-    #     dominant route (a /v2/ probe-miss) the GHCR pull SUCCEEDED. Once 5.3 revokes the PAT
-    #     that pull 401s instead, so the boot takes the N>=5 -> exit 1 path and dies emitting no
-    #     app_ghcr_served at all. It is not "darkened by push retirement" like its siblings —
-    #     it is darkened by the boot failing. Post-5.3, its silence means the opposite of
-    #     healthy. This is precisely why the soak must be trustworthy BEFORE 5.3, not after.
-    # zot_gate_degraded_event (defined below; name-anchored — the prior `:630` cite had rotted onto
-    # a bare comment line) is GATE-emitted and survives 5.3 outright.
-    #
-    # So do NOT retire that alarm here — NARROW its filters_v2 to the signals that still
-    # emit. Retiring it blinds the survivors, and zot-gate-degraded is currently its
-    # HIGHEST-volume signal. This deletion also kills the soak gate's FAIL_QUERIES[rolling]
-    # entry (zot-soak-6122.sh) while its three other entries survive — re-point the soak in
-    # the same slice (#6427). NOTE the soak's FAIL set is now FOUR entries, not two
-    # ([rolling] [gate] [freshboot] [appboot], #6435); anchor on the array keys, not on line
-    # numbers, and expect its parity test to go RED until the soak and the alarm agree again.
-    # FR-C1: $perr was captured for this pull and then DISCARDED on the zot arm — this
-    # line said only "zot pull failed", so the one operator-visible record of the miss
-    # never said WHY. On 2026-07-29 (v0.244.1) that silence is what sent the diagnosis
-    # at the tunnel instead of the registry. The GHCR arms below already route $perr
-    # through pull_failure_event's `tail -c 400`; this makes the zot arm symmetric.
+    # FR-C1 breadcrumb. $perr was captured for this pull and then DISCARDED on the zot arm — the
+    # line said only "zot pull failed", so the one operator-visible record of the miss never said
+    # WHY. On 2026-07-29 (v0.244.1) that silence is what sent the diagnosis at the tunnel instead
+    # of the registry. It sits BELOW the retry loop now rather than above it, so it reports the
+    # FINAL attempt's stderr rather than the first, and it no longer claims a GHCR fallback that
+    # cannot happen.
     #
     # Collapsed to ONE line (tr '\n' '|') and stripped of control bytes, mirroring the
-    # inngest-bootstrap stderr_tail idiom: journald records are newline-delimited and
-    # Vector parses per line, so an uncollapsed tail would SPLIT this record — the
-    # reason would land on a line that no longer carries the IMAGE_PULL marker the
-    # Better Stack query greps for, which is a worse failure than saying nothing.
-    # Bounded at 400 bytes for the same reason every sibling is: a docker pull can emit
-    # kilobytes of retry noise, and journald truncates long records unpredictably.
+    # inngest-bootstrap stderr_tail idiom: journald records are newline-delimited and Vector
+    # parses per line, so an uncollapsed tail would SPLIT this record — the reason would land on
+    # a line that no longer carries the IMAGE_PULL marker the Better Stack query greps for, which
+    # is a worse failure than saying nothing. Bounded at 400 bytes for the same reason every
+    # sibling is: a docker pull can emit kilobytes of retry noise, and journald truncates long
+    # records unpredictably.
     local zot_perr_tail
     zot_perr_tail=$(tail -c 400 "$perr" 2>/dev/null | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' || true)
-    logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} reason=${zot_perr_tail:-<no stderr captured>} — falling back to GHCR"
-    # #6400: GHCR fallback leg now recovers on a login-ok/pull-deny cred (retry once).
-    if _ghcr_pull_or_recover "$perr"; then
-      registry_pull_event ghcr-fallback "$image_kind" "$TAG"
-      rm -f "$perr" 2>/dev/null || true
-      return 0
-    fi
-    # #6512: both registries failed. Rescue a genuine same-version `web` reload of the
-    # RUNNING container's already-verified image before the hard failure (P2-5: this covers
-    # the ZOT_ACTIVE both-failed exit).
+    logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} reason=${zot_perr_tail:-<no stderr captured>}"
+    # #6512: the registry failed. Rescue a genuine same-version `web` reload of the RUNNING
+    # container's already-verified image before the hard failure. Post-1c this is the ONLY tier
+    # between a zot miss and image_pull_failed, which makes its version gate
+    # (`[[ "$_rt" == *":$TAG" ]]`) the only thing standing between a zot outage and serving stale
+    # bits — it is not edited here, deliberately.
     if _try_local_cache_reload "$image_kind"; then
       rm -f "$perr" 2>/dev/null || true
       return 0
     fi
-    pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
+    # Name the ref actually attempted. Pre-1c this said "${IMAGE}:${TAG}" — a ghcr.io ref — for a
+    # zot failure: ambiguous then, actively false now that no GHCR pull can occur.
+    pull_failure_event "${zot_ref}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
     rm -f "$perr" 2>/dev/null || true
     return 1
   fi
-  # zot dark (not configured/unreachable) → unchanged GHCR path, now with pull-site
-  # recovery (#6400): a baked cred that logs in but cannot pull is re-fetched + retried.
-  if _ghcr_pull_or_recover "$perr"; then
-    rm -f "$perr" 2>/dev/null || true
-    return 0
-  fi
-  # #6512: both registries failed on the zot-dark path too — same rescue for a genuine
-  # same-version `web` reload of the RUNNING container's already-verified image (P2-5:
-  # covers the ZOT_ACTIVE=0 exit).
+  # #8036 1c: ZOT_ACTIVE=0 IS NOW A TERMINAL STATE. Pre-1c a zot-dark deploy fell through to the
+  # GHCR path; there is no second registry any more, so the order is local-cache rescue, then
+  # pull_failure_event -> image_pull_failed, which keeps the OLD container live (downtime-safe)
+  # and pages.
+  #
+  # This is not new risk. A zot-dark deploy ALREADY ended in image_pull_failed, because the GHCR
+  # arm it fell through to could not authenticate with a credential revoked on 2026-07-29. 1c
+  # makes the outcome honest instead of arriving via a 401 two registries later.
   if _try_local_cache_reload "$image_kind"; then
     rm -f "$perr" 2>/dev/null || true
     return 0
   fi
-  pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
+  pull_failure_event "${IMAGE}:${TAG}" "zot gate is dark (ZOT_ACTIVE=0) and no local-cache candidate — there is no second registry since #8036 1c" "${RECOVERY_STAGE:-}"
   rm -f "$perr" 2>/dev/null || true
   return 1
 }
@@ -2221,7 +2146,7 @@ verify_image_signature() {
   # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
   # through the host's unrestricted egress (no ghcr.io in the container allowlist),
   # and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
-  # ghcr_prelude_and_login) is mounted :ro so cosign can authenticate that fetch.
+  # zot_gate_and_login) is mounted :ro so cosign can authenticate that fetch.
   # Trust is the locally-pinned trusted_root.json (mounted :ro) with `--offline`, so
   # no live Fulcio/Rekor/TUF egress is needed. `docker pull` of the image does NOT
   # pull the .sig referrer, so the fetch (host egress) is still required.
@@ -3133,10 +3058,22 @@ if [[ "$AVAIL_KB" -lt "$MIN_DISK_KB" ]]; then
   exit 1
 fi
 
-# #6005: authenticate the host docker daemon to the now-PRIVATE GHCR packages and
-# prefetch SENTRY_* into this script's env BEFORE any pull/verify. Covers BOTH the
-# web-platform and inngest pull sites below. Fail-open (never aborts the deploy).
-ghcr_prelude_and_login
+# Prefetch SENTRY_* into this script's env BEFORE any pull/verify emitter, sweep the revoked
+# ghcr.io credential out of the deploy docker config, then report what the three configs hold.
+# Covers BOTH the web-platform and inngest pull sites below. All three are fail-open and never
+# abort the deploy. (#6005; split and de-GHCR'd by #8036 1c.)
+#
+# THE ORDER OF THESE THREE LINES IS THE CONTRACT, and both halves of it are load-bearing:
+#   sweep BEFORE emit — the marker must report the POST-sweep state, and its `swept=` token is
+#     the close criterion's version discriminator. Reversed, the marker reports a state the
+#     deploy then changes, and #8036 can never be graded closed.
+#   sweep BEFORE zot_gate_and_login — the zot login writes a second auths entry into the SAME
+#     $GHCR_DOCKER_CONFIG. Reversed, `docker logout ghcr.io` would rewrite the file underneath
+#     that write. (`docker logout` is registry-scoped, so the zot entry survives either way; the
+#     ordering removes the race, not a correctness gap in the verb.)
+prefetch_deploy_secrets
+sweep_stale_registry_auth
+emit_registry_config_marker
 # #6122/ADR-096: evaluate the zot dark-launch gate (probe + pull login) once, covering
 # BOTH pull sites. Sets ZOT_ACTIVE; strict no-op (GHCR path) until zot is provisioned.
 zot_gate_and_login
