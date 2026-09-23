@@ -500,6 +500,75 @@ else
   fi
 fi
 
+
+# --- Arm 8c: TEST_GROUP=affected is the scoped substitute BOTH refusals prescribe -------------
+#
+# Both refusals tell the refused caller to run `TEST_GROUP=affected` instead — an instruction
+# that exits 4 is a dead end, not a substitute. These arms pin that the prescribed path actually
+# proceeds under each antecedent. The recorder replaces run_suite wholesale, so these arms
+# assert the REFUSAL exemption only — the decline semantics live in
+# scripts/test-all-group-affected.test.sh, which is the suite that owns them
+# (renamed out of the #8322 add/add collision; that name belongs to the
+# declared-edge selector's suite).
+run_arm subg-affected SOLEUR_SUBAGENT=1 TEST_GROUP=affected
+CASES=$((CASES + 1))
+if [[ "$ARM_RC" -eq 0 ]]; then
+  pass "SOLEUR_SUBAGENT=1 does not refuse TEST_GROUP=affected (rc=$ARM_RC)"
+else
+  fail "the prescribed substitute was refused by the subagent clause (rc=$ARM_RC) — a dead-end refusal"
+fi
+CASES=$((CASES + 1))
+if [[ "$ARM_SUITES" -ge $((NORMAL_SUITES - 5)) ]]; then
+  pass "the subagent-affected run reaches suite registration ($ARM_SUITES of $NORMAL_SUITES)"
+else
+  fail "the subagent-affected run recorded $ARM_SUITES suite(s) against a baseline of $NORMAL_SUITES"
+fi
+
+run_arm sib-affected TC_PROC_ROOT="$SIB_PROC_F" TEST_GROUP=affected
+CASES=$((CASES + 1))
+if [[ "$ARM_RC" -eq 0 ]]; then
+  pass "a measured sibling does not refuse TEST_GROUP=affected (rc=$ARM_RC)"
+else
+  fail "the prescribed substitute was refused by the sibling clause (rc=$ARM_RC) — a dead-end refusal"
+fi
+CASES=$((CASES + 1))
+if [[ "$ARM_SUITES" -ge $((NORMAL_SUITES - 5)) ]]; then
+  pass "the sibling-affected run reaches suite registration ($ARM_SUITES of $NORMAL_SUITES)"
+else
+  fail "the sibling-affected run recorded $ARM_SUITES suite(s) against a baseline of $NORMAL_SUITES"
+fi
+
+# The substitute must be NAMED in the refusal text — a refusal prescribing an unnamed command
+# sends the refused agent to guess, and guessing is how full gates get re-run under the hatch.
+# Since #8322 a bare invocation is the affected gate, which is exempt — the refusal only fires
+# on a FULL-shaped ask, so these arms invoke with --full (the shape the refusal guards).
+CASES=$((CASES + 1))
+if ARM_ARGV=--full run_arm refuse2 SOLEUR_SUBAGENT=1 && grep -qF 'TEST_GROUP=affected bash scripts/test-all.sh' <<<"$ARM_OUT"; then
+  pass "the subagent refusal names TEST_GROUP=affected as the substitute"
+else
+  fail "the subagent refusal does not name TEST_GROUP=affected"
+fi
+CASES=$((CASES + 1))
+if ARM_ARGV=--full run_arm sibrefuse2 TC_PROC_ROOT="$SIB_PROC_F" && grep -qF 'TEST_GROUP=affected bash scripts/test-all.sh' <<<"$ARM_OUT"; then
+  pass "the sibling refusal names TEST_GROUP=affected as the substitute"
+else
+  fail "the sibling refusal does not name TEST_GROUP=affected"
+fi
+
+# --- Arm 8d: the skills name the mechanical scoped path -------------------------------------
+# The clause anchor below pins that both skills still carry the hand-selection instruction;
+# this pins that they also name the mechanical substitute — prose without the command is the
+# hand-derived list this mode exists to retire.
+for skill in "$WORK_SKILL" "$REVIEW_SKILL"; do
+  rel="${skill#"$REPO_ROOT"/}"
+  CASES=$((CASES + 1))
+  if [[ -f "$skill" ]] && grep -qF 'TEST_GROUP=affected bash scripts/test-all.sh' "$skill"; then
+    pass "$rel names the TEST_GROUP=affected scoped path"
+  else
+    fail "$rel does not name TEST_GROUP=affected as the scoped path"
+  fi
+done
+
 # --- Arm 9: the sanctioned hooks carry the hatch on FULL-shaped invocations ------------------
 #
 # Arm 5 proves the hatch WORKS. Nothing proved the invocations that depend on it still SET it,

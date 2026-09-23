@@ -91,6 +91,9 @@ ALWAYS_ON_SUITES=(
   "scripts/test-all-runtime-ceiling"
   "scripts/test-all-webplat-gate"
   "scripts/test-all-affected"
+  # #8591's TEST_GROUP=affected mutation suite — a runner-SUT property battery
+  # like its sibling above; renamed out of the add/add collision with #8322's.
+  "scripts/test-all-group-affected"
   "scripts/test-contention"
   "scripts/suite-exit-class-parity"
   "scripts/battery-tag-authorship"
