@@ -53,14 +53,19 @@ Separately, content drift accumulated for months: 26 rows on 2026-09-21. The cau
 
 1. **Ownership on the authoritative ledger probe** (push to main, main dispatch, the scheduled probe). A missing-on-main row is an in-flight `::warning::` if and only if:
    - its filename never appeared in main's history;
-   - a live `origin` branch that is not merged into main, with a commit in the last 30 days, holds it among its files that are **not on main**, by exact name, identical blob, or slug.
+   - a live `origin` branch whose tip is not an ancestor of main, and whose head commit is dated within the last 30 whole days, holds it among its **top-level** migration files that are **not on main**, by exact name, identical blob, or slug. `gh-readonly-queue/*` refs own nothing. A head dated more than a day in the future, or undated, counts as stale: the committer date is set by whoever pushes.
 
-   **An ownerless row counts as main's**, because no other ref can fix it, so it blocks. So does a row whose only owner is stale (more than 30 days), a row whose name is in main's history, and any row that cannot be classified. Content drift always blocks.
+   **An ownerless row counts as main's**, because no other ref can fix it, so it blocks. So does a row whose only owner is stale, a row whose name is in main's history, and any row that cannot be classified. Content drift always blocks. A row that is on main's tip by the time the classifier fetches (it merged after the probe read main) is reported `merged`, a warning.
    - The blob and slug tiers are load-bearing. Exact-name matching alone would red main for the whole life of a PR that renamed its applied migration.
-   - Restricting ownership to files absent from main is also load-bearing. Every branch carries main's files, so without that restriction a merged rename would "own" the never-merged original from every branch.
-   - Implemented by `apps/web-platform/scripts/dev-ledger-parity.sh classify-missing`, which `.github/actions/dev-migration-drift-probe/action.yml` calls under `fail-on-ledger-drift`. It uses git only: a throwaway bare repo and one blobless fetch of origin's heads. No GitHub API, no new permissions.
-2. **Policy: a migration applied to shared dev is immutable, merged or not.** A change ships as a new migration file. `dev-ledger-parity.sh check`, run by `tenant-integration.yml` before apply as the base-ref copy, is the per-ref half. It fails the owning PR when an unmerged migration was edited (A1), renamed (A2) or deleted (A4) after CI applied it, so the PR's own CI goes red, which this ADR's Decision requires.
+   - Restricting ownership to files absent from main is also load-bearing. Every branch carries main's files, so without that restriction a merged rename would "own" the never-merged original from every branch. It is also why "not merged" can be read from ancestry: a squash-merged branch that was never deleted still counts as live, but after the squash its files are on main and own nothing.
+   - Implemented by `apps/web-platform/scripts/dev-ledger-parity.sh classify-missing`, which `.github/actions/dev-migration-drift-probe/action.yml` calls under `fail-on-ledger-drift`. It uses git only: a bare owner repo and one blobless fetch of origin's heads. No GitHub API, no new permissions.
+2. **Policy: a migration applied to shared dev is immutable, merged or not.** A change ships as a new migration file. `dev-ledger-parity.sh check` is the per-ref half. `tenant-integration.yml` runs it before apply; it is the base-ref copy whenever main carries the script (the checkout copy only in the introduction window), extracted and executed in the same step. It fails the owning PR when an unmerged migration was edited (A1), renamed (A2) or deleted (A4) after CI applied it, so the PR's own CI goes red, which this ADR's Decision requires. A row another fresh branch holds by exact name **at the applied blob**, and did not inherit from this PR's history, is treated as that PR's in-flight row instead.
    - **Accepted cost:** fix-up migrations become permanent on prd, and the migration count grows faster.
+   - **What the PR-side check cannot see:**
+     - A4 reads the blobs reachable in `main..<PR head>` on origin. A force-push that drops the applying commit, or a migration body that existed only inside a merge commit's conflict resolution, leaves no trace to match.
+     - An independent fresh branch that holds the row at the applied blob still excuses it. That branch is not in the PR's diff, so this is visible only as a `::warning::` in the check's log.
+     - The check is a snapshot before apply. Writes after it (the PR's own runner copy, migration bodies with dev credentials, the mutex failing open, #8049) are outside it; the post-merge probe on main remains the backstop.
+   - **The main side is not a history check.** Between the push in which an open PR deletes, or renames and re-slugs, an applied migration, and the push in which it restores it, that row has no owner, so main's probe reds. The PR's own check is red over the same window and names the fix.
 
 ### Rejected alternatives (additions)
 
@@ -71,6 +76,6 @@ Separately, content drift accumulated for months: 26 rows on 2026-09-21. The cau
 
 ### Consequences
 
-- An open PR's applied migrations no longer red main or the scheduled probe. Deleting such a branch unmerged turns its rows ownerless, which reds main until a dev reconcile. The annotation says so.
-- An abandoned branch stops protecting its rows 30 days after its last commit: the verdict becomes `stale`, blocking, and names the branch.
+- An open PR's applied migrations no longer red main or the scheduled probe, as long as the PR's branch still holds them. Deleting such a branch unmerged, or removing the file from it, turns its rows ownerless, which reds main until the file is restored or dev is reconciled. The annotation says so.
+- An abandoned branch stops protecting its rows once its head commit is more than 30 whole days old: the verdict becomes `stale`, blocking, and names the branch. On the scheduled surface each blocking class also emits one Sentry event.
 - Repair procedures: `knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md` §Content drift and Part 1. Self-service reconcile is tracked in #8605.
