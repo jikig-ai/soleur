@@ -52,6 +52,49 @@ describe("Codex App Server event translator", () => {
     ]);
   });
 
+  it("accepts the v2 App Server turn envelope observed in live qualification", () => {
+    expect(translateCodexAppServerEvent({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+    })).toEqual([
+      { sourceId: "turn:turn-1:status", payload: { type: "status", status: "completed" } },
+    ]);
+  });
+
+  it("emits the final per-turn usage snapshot once before terminal status", async () => {
+    const messages = (async function* () {
+      yield { method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress", items: [] } } };
+      yield { method: "thread/tokenUsage/updated", params: { threadId: "thread-1", turnId: "turn-1", tokenUsage: { last: { inputTokens: 4, outputTokens: 1 }, total: { inputTokens: 4, outputTokens: 1 } } } };
+      yield { method: "thread/tokenUsage/updated", params: { threadId: "thread-1", turnId: "turn-1", tokenUsage: { last: { inputTokens: 8, outputTokens: 3 }, total: { inputTokens: 8, outputTokens: 3 } } } };
+      yield { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } } };
+    })();
+    const events = [];
+    for await (const event of translateCodexAppServerStream(messages, "run-live")) events.push(event);
+    expect(events).toEqual([
+      { runId: "run-live", eventId: "codex:turn:turn-1:status:1", sequence: 1, payload: { type: "status", status: "running" } },
+      { runId: "run-live", eventId: "codex:turn:turn-1:usage:2", sequence: 2, payload: { type: "usage", usage: { native: [{ unit: "input_tokens", value: 8 }, { unit: "output_tokens", value: 3 }], cost: { provenance: "unavailable" } } } },
+      { runId: "run-live", eventId: "codex:turn:turn-1:status:3", sequence: 3, payload: { type: "status", status: "completed" } },
+    ]);
+  });
+
+  it("rejects an unsafe v2 turn identity", async () => {
+    const messages = (async function* () {
+      yield { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "bad\nturn", status: "completed", items: [] } } };
+    })();
+    await expect((async () => {
+      for await (const _event of translateCodexAppServerStream(messages, "run-live")) { /* no-op */ }
+    })()).rejects.toThrowError("codex_message_invalid");
+  });
+
+  it("fails closed on malformed token usage instead of sending misleading totals", async () => {
+    const messages = (async function* () {
+      yield { method: "thread/tokenUsage/updated", params: { threadId: "thread-1", turnId: "turn-1", tokenUsage: { last: { inputTokens: -1, outputTokens: 2 } } } };
+    })();
+    await expect((async () => {
+      for await (const _event of translateCodexAppServerStream(messages, "run-live")) { /* no-op */ }
+    })()).rejects.toThrowError("codex_usage_invalid");
+  });
+
   it("wraps events with the bound run and contiguous sequences", async () => {
     const messages = (async function* () {
       yield { method: "item/agentMessage/delta", params: { itemId: "item-3", delta: "hi" } };
@@ -60,9 +103,22 @@ describe("Codex App Server event translator", () => {
     const events = [];
     for await (const event of translateCodexAppServerStream(messages, "run-1")) events.push(event);
     expect(events).toEqual([
-      { runId: "run-1", eventId: "codex:item:item-3:delta", sequence: 1, payload: { type: "text", text: "hi" } },
-      { runId: "run-1", eventId: "codex:turn:turn-2:status", sequence: 2, payload: { type: "status", status: "completed" } },
+      { runId: "run-1", eventId: "codex:item:item-3:delta:1", sequence: 1, payload: { type: "text", text: "hi" } },
+      { runId: "run-1", eventId: "codex:turn:turn-2:status:2", sequence: 2, payload: { type: "status", status: "completed" } },
     ]);
+  });
+
+  it("assigns unique live event IDs across repeated deltas and turn status changes", async () => {
+    const messages = (async function* () {
+      yield { method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } } };
+      yield { method: "item/agentMessage/delta", params: { itemId: "item-1", delta: "A" } };
+      yield { method: "item/agentMessage/delta", params: { itemId: "item-1", delta: "B" } };
+      yield { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } } };
+    })();
+    const events = [];
+    for await (const event of translateCodexAppServerStream(messages, "run-live")) events.push(event);
+    expect(events).toHaveLength(4);
+    expect(new Set(events.map((event) => event.eventId)).size).toBe(events.length);
   });
 
   it("fails closed when a recognized event has no safe identity", async () => {
