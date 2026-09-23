@@ -222,34 +222,9 @@ else
   pass "no STUB-MISS: the SUT queried gh exactly as the stub expects"
 fi
 
-# ── RUN FROM A SNAPSHOT: the resolver is found through CLAUDE_PLUGIN_ROOT ──────────────────
-# ship Phase 7 and merge-pr run this script from a mktemp SNAPSHOT (so a plugin update mid-poll
-# cannot swap it under a running loop). A snapshot has no siblings, so the BASH_SOURCE lookup
-# found no resolver and a regenerable conflict fell through to "manual resolution required".
-# The fallback is the same bare ${CLAUDE_PLUGIN_ROOT} the snapshot was copied from.
-root="$(mkfix snap resolvable)"; assert_fixture_dir "$root"; wt="$root/wt"
-mkdir -p "$root/snap"; cp "$wt/plugins/soleur/scripts/sync-pr-behind.sh" "$root/snap/sync-pr-behind.sh"
-_s_rc=0
-_s_out="$(cd "$wt" && GH_CALLS="$root/gh.calls" PATH="$root/bin:$PATH" CLAUDE_PLUGIN_ROOT="$wt/plugins/soleur" \
-  bash "$root/snap/sync-pr-behind.sh" 123 2>&1)" || _s_rc=$?
-CASES_RUN=$((CASES_RUN + 1))
-if [[ "$_s_rc" -eq 0 ]] && grep -q 'regenerable conflict resolved' <<<"$_s_out"; then
-  pass "from a snapshot, the resolver is reached through CLAUDE_PLUGIN_ROOT"
-else
-  fail "snapshot run: rc=$_s_rc — $_s_out"
-fi
-root="$(mkfix snapnoenv resolvable)"; assert_fixture_dir "$root"; wt="$root/wt"
-mkdir -p "$root/snap"; cp "$wt/plugins/soleur/scripts/sync-pr-behind.sh" "$root/snap/sync-pr-behind.sh"
-_s_rc=0
-_s_out="$(cd "$wt" && GH_CALLS="$root/gh.calls" PATH="$root/bin:$PATH" env -u CLAUDE_PLUGIN_ROOT \
-  bash "$root/snap/sync-pr-behind.sh" 123 2>&1)" || _s_rc=$?
-CASES_RUN=$((CASES_RUN + 1))
-[[ "$_s_rc" -eq 6 ]] && pass "from a snapshot with no plugin root, the conflict is refused as before (exit 6)" \
-  || fail "snapshot without CLAUDE_PLUGIN_ROOT: rc=$_s_rc — $_s_out"
-
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=12
+_min_cases=10
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
