@@ -1,5 +1,5 @@
 ---
-plan: knowledge-base/project/plans/2026-09-22-fix-ship-phase2-branch-scoped-learning-probe-plan.md
+plan: knowledge-base/project/plans/archive/20260923-144327-2026-09-22-fix-ship-phase2-branch-scoped-learning-probe-plan.md
 issue: 8470
 pr: 8567
 lane: cross-domain

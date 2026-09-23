@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-22-fix-ship-phase2-branch-scoped-learning-probe-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260923-144327-2026-09-22-fix-ship-phase2-branch-scoped-learning-probe-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 
