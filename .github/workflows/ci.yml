@@ -358,16 +358,15 @@ jobs:
   # LUKS — never name similarity), and every plaintext/cert-off exception carries a
   # live tracking issue + unexpired expires_on.
   #
-  # ADVISORY, NOT BLOCKING. This job is absent from scripts/required-checks.txt, the
-  # CI-Required ruleset (infra/github/ruleset-ci-required.tf), the canonical parity
-  # JSON (scripts/ci-required-ruleset-canonical-required-status-checks.json), and the
-  # bot action CHECK_NAMES (.github/actions/bot-pr-with-synthetic-checks/action.yml),
-  # so a PR can merge with it red. It exists to SOAK an attributable green streak
-  # before promotion (#6901; ADR-117 measure-then-arm). The promotion is a five-site
-  # byte-consistent coupling — see the arming tracking issue #6907 and the ADR-140
-  # Amendment (2026-07-24, #6901) for the canonical recipe (15368 integration_id +
-  # add-to-required-checks.txt + sound-by-unreachability fabrication, NOT CodeQL's
-  # non-15368 omit shape, which would wedge every PR at "Expected — Waiting").
+  # BLOCKING since #6907 through `test`'s needs: (rationale, soak evidence and the
+  # bot-PR unreachability argument: ADR-140 addendum of 2026-09-23).
+  #
+  # The job must be able to conclude `failure` on a red sweep. A job-level
+  # `continue-on-error`, a step-level `if:` or `continue-on-error`, or any change to
+  # the step's run line (`|| true`, `--today`, `--repo-root`, `--check-templates`)
+  # fails OPEN: needs.encryption-posture.result reads success over a red or unrun
+  # sweep. A job-level `if:` fails CLOSED (the leg reads skipped and `test` reds) but
+  # wedges every PR it skips. ci-test-aggregator-diagnosis.test.sh W3 pins all of it.
   #
   # The full checkout (no paths filter) is load-bearing: --repo-sweep is whole-repo.
   encryption-posture:
@@ -1349,12 +1348,12 @@ jobs:
   #
   # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
   # branch-protection ruleset 14145388's `test` required check. It carries
-  # three distinct values: (a) cross-layer truing — converts five leg-job
+  # three distinct values: (a) cross-layer truing — converts six leg-job
   # `conclusion`s into the single required-context conclusion the ruleset
   # already expects by name; (b) drift-resilience — survives a future
   # ruleset edit that changes the required-context list, as long as the
   # `test` name still gates merge; (c) observability — single PR-status
-  # row to inspect, not five. Removing this job orphans the ruleset's
+  # row to inspect, not six. Removing this job orphans the ruleset's
   # `test` required check and breaks every PR merge.
   #
   # The name `test` MUST match the required-context name on ruleset
@@ -1373,10 +1372,10 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build]
+    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture]
     if: always()
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads five `needs.*.result` strings (measured
+    # Bounds a HUNG job (#7902). This job only reads six `needs.*.result` strings (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
@@ -1401,6 +1400,7 @@ jobs:
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
           SCRIPTS_HEAVY_RESULT: ${{ needs.test-scripts-heavy.result }}
           BUILD_RESULT: ${{ needs.web-platform-build.result }}
+          POSTURE_RESULT: ${{ needs.encryption-posture.result }}
           # The event is a CLASSIFIER INPUT, not decoration. Supersession is only
           # reachable where `cancel-in-progress` is true, which since #7931 part 1
           # is pull_request only — see the SUPERSEDED arm below.
@@ -1434,10 +1434,10 @@ jobs:
           # under the shell Actions uses (`bash --noprofile --norc -eo pipefail`).
           fail=0
           # Single colon-delimited list, iterated twice: once to classify each leg,
-          # once (inner) to read that leg's siblings. Adding a shard is still a
+          # once (inner) to read that leg's siblings. Adding a leg is still a
           # one-line edit here, plus needs: + env: — test-scripts-heavy (#8006)
-          # is the worked example.
-          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "test-scripts-heavy:$SCRIPTS_HEAVY_RESULT" "web-platform-build:$BUILD_RESULT" )
+          # and encryption-posture (#6907) are the worked examples.
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "test-scripts-heavy:$SCRIPTS_HEAVY_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" )
           for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
@@ -1511,7 +1511,7 @@ jobs:
           if [[ $fail -ne 0 ]]; then
             exit 1
           fi
-          echo "All five legs green (four shards + web-platform-build)."
+          echo "All six legs green (four shards + web-platform-build + encryption-posture)."
 
   # E2E job runs inside the official Playwright container so Chromium + OS deps
   # are pre-installed at the matching Playwright version. Container tag, digest,

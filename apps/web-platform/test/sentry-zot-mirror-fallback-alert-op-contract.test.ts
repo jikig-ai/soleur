@@ -488,6 +488,29 @@ describe("web-host-terminal-boot-fatal comment anchors (#6429 / #6424 repeat-off
 // equal the committed live capture, so a stale or edited block reds here instead of
 // silently documenting a rule that does not exist. The live half (enabled, detector,
 // threshold, action) is scripts/sentry-alert-live-fidelity.sh.
+// A trigger/condition `comparison` is POLYMORPHIC in both the capture and the live
+// API: `true` for the lifecycle and high-priority triggers, an ARRAY for
+// `seer_activity_trigger` (`["pr_ready_for_review"]`), and an object for
+// `event_frequency_count` / `event_unique_user_frequency_count` / `tagged_event`.
+// Declaring it as one object shape was a cast that the other entries falsify, so the
+// two use sites below narrow through an ASSERTED guard instead.
+type FrequencyComparison = { value: number; interval: string };
+type TagComparison = { key: string; match: string; value: string };
+type Comparison = boolean | unknown[] | Record<string, unknown>;
+const isFrequency = (c: Comparison): c is FrequencyComparison =>
+  typeof c === "object" &&
+  c !== null &&
+  !Array.isArray(c) &&
+  typeof (c as Record<string, unknown>).value === "number" &&
+  typeof (c as Record<string, unknown>).interval === "string";
+const isTag = (c: Comparison): c is TagComparison =>
+  typeof c === "object" &&
+  c !== null &&
+  !Array.isArray(c) &&
+  typeof (c as Record<string, unknown>).key === "string" &&
+  typeof (c as Record<string, unknown>).match === "string" &&
+  typeof (c as Record<string, unknown>).value === "string";
+
 const CAPTURE = JSON.parse(
   readFileSync(
     join(
@@ -502,10 +525,10 @@ const CAPTURE = JSON.parse(
   enabled: boolean;
   detectorIds: string[];
   config: { frequency: number };
-  triggers: { conditions: Array<{ type: string; comparison: { value: number; interval: string } }> };
+  triggers: { conditions: Array<{ type: string; comparison: Comparison }> };
   actionFilters: Array<{
     logicType: string;
-    conditions: Array<{ type: string; comparison: { key: string; match: string; value: string } }>;
+    conditions: Array<{ type: string; comparison: Comparison }>;
     actions: Array<{ type: string; config: { targetType: string }; data: { fallthroughType: string } }>;
   }>;
 }>;
@@ -570,9 +593,15 @@ describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 
             /tagged_event\s*=\s*\{\s*key\s*=\s*"([^"]*)",\s*match\s*=\s*"([^"]*)",\s*value\s*=\s*"([^"]*)"\s*\}/g,
           ),
         ].map((m) => `${m[1]}|${m[2]}|${m[3]}`);
-        const capTags = af.conditions
-          .filter((c) => c.type === "tagged_event")
-          .map((c) => `${c.comparison.key}|${c.comparison.match}|${c.comparison.value}`);
+        const tagConditions = af.conditions.filter((c) => c.type === "tagged_event");
+        // Assert the shape before mapping, never skip an element silently: a
+        // `tagged_event` whose comparison is not {key, match, value} must RED here
+        // rather than vanish from the comparison set.
+        expect(tagConditions.every((c) => isTag(c.comparison))).toBe(true);
+        const capTags = tagConditions.map((c) => {
+          if (!isTag(c.comparison)) throw new Error(`${label}: tagged_event comparison is not {key, match, value}`);
+          return `${c.comparison.key}|${c.comparison.match}|${c.comparison.value}`;
+        });
         // Guard against a vacuous equality of two empty lists.
         expect(capTags.length).toBeGreaterThan(0);
         expect(af.conditions).toHaveLength(capTags.length);
@@ -606,6 +635,14 @@ describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 
           (c) => c.type === "event_unique_user_frequency_count",
         );
         expect(trig).toHaveLength(1);
+        // Narrow through the guard, asserted: the frozen rules' threshold trigger
+        // carries {value, interval}; anything else must red rather than destructure
+        // two `undefined`s into a passing comparison.
+        // Throw-only here: it narrows for TypeScript AND carries the label. The tag
+        // site above keeps an up-front `.every()` expect as well, because there the
+        // assertion is over the WHOLE filtered set before any mapping — a different
+        // property from "this one element has the right shape".
+        if (!isFrequency(trig[0].comparison)) throw new Error(`${label}: threshold comparison is not {value, interval}`);
         const { value, interval } = trig[0].comparison;
         const recorded = body.match(
           /^#?\s*#\s*Live trigger: event_unique_user_frequency_count \{value = (\d+), interval = "([^"]+)"\}/m,
