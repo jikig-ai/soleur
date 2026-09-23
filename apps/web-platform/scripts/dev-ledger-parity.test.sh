@@ -93,9 +93,19 @@ BIN="$tmp/bin"
 mkdir -p "$BIN"
 cat > "$BIN/psql" <<'SH'
 #!/usr/bin/env bash
-# Fake psql: logs argv NUL-delimited, then emits the scripted ledger.
+# Fake psql: logs argv NUL-delimited, then emits the scripted ledger. When
+# DLP_PSQL_EXPECT_SQL is set, any other -c statement is refused (a second,
+# writing call would otherwise be invisible to every row).
 if [[ -n "${DLP_PSQL_LOG:-}" ]]; then
   { printf 'CALL\0'; for a in "$@"; do printf '%s\0' "$a"; done; } >> "$DLP_PSQL_LOG"
+fi
+if [[ -n "${DLP_PSQL_EXPECT_SQL:-}" ]]; then
+  prev=""; sql=""
+  for a in "$@"; do [[ "$prev" == "-c" ]] && sql="$a"; prev="$a"; done
+  if [[ "$sql" != "$DLP_PSQL_EXPECT_SQL" ]]; then
+    [[ -n "${DLP_PSQL_UNEXPECTED:-}" ]] && printf 'unexpected SQL\n' >> "$DLP_PSQL_UNEXPECTED"
+    exit 97
+  fi
 fi
 rc="${DLP_FAKE_PSQL_RC:-0}"
 if [[ "$rc" != "0" ]]; then echo "psql: fake failure" >&2; exit "$rc"; fi
@@ -104,12 +114,20 @@ exit 0
 SH
 cat > "$BIN/doppler" <<'SH'
 #!/usr/bin/env bash
-# Fake doppler: drop `run -p … -c … --`, exec the rest.
+# Fake doppler: log argv (when asked), drop `run -p … -c … --`, exec the rest.
+if [[ -n "${DLP_DOPPLER_LOG:-}" ]]; then printf '%s\n' "$*" >> "$DLP_DOPPLER_LOG"; fi
 while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
 shift
 exec "$@"
 SH
-chmod +x "$BIN/psql" "$BIN/doppler"
+cat > "$BIN/curl" <<'SH'
+#!/usr/bin/env bash
+# Fake curl (Sentry store): log argv, answer 200, never touch the network.
+if [[ -n "${DLP_CURL_LOG:-}" ]]; then printf '%s\n' "$*" >> "$DLP_CURL_LOG"; fi
+printf '200'
+SH
+chmod +x "$BIN/psql" "$BIN/doppler" "$BIN/curl"
+WANT_SQL="SELECT filename || '|' || COALESCE(content_sha, '') FROM public._schema_migrations ORDER BY filename"
 export PATH="$BIN:$PATH"
 
 blob_of() { printf '%s\n' "$1" | git hash-object --stdin; }
@@ -197,13 +215,22 @@ feat_case() {
   git -C "$WORK" push -q -f origin feat
 }
 
-# run_check [extra args...] — Guard 1 against WORK. Sets out, rc.
+# run_check [extra args...] — Guard 1 against WORK. Sets out, rc. Every run
+# is also held to ONE psql call issuing exactly the fixed SELECT; a breach is
+# recorded and reddens the STUB row at the end of the suite.
+STUB_BREACHES=""
 run_check() {
+  : > "$tmp/run-psql.log"; : > "$tmp/run-psql-unexpected.log"
   set +e
   out=$(DATABASE_URL_POOLER="postgres://pooler.fixture.invalid/db" DATABASE_URL="" \
+    DLP_PSQL_LOG="$tmp/run-psql.log" DLP_PSQL_EXPECT_SQL="$WANT_SQL" DLP_PSQL_UNEXPECTED="$tmp/run-psql-unexpected.log" \
     DLP_FAKE_LEDGER="$LEDGER" bash "$GUARD" check --base origin/main --repo "$WORK" "$@" 2>&1)
   rc=$?
   set -e
+  local calls
+  calls=$(tr -cd '\0' < "$tmp/run-psql.log" | wc -c)
+  [[ "$calls" -gt 0 ]] && calls=$(tr '\0' '\n' < "$tmp/run-psql.log" | grep -cx 'CALL' || true)
+  if [[ "$calls" -gt 1 || -s "$tmp/run-psql-unexpected.log" ]]; then STUB_BREACHES+=" [$*: calls=$calls]"; fi
 }
 run_check_g() {  # same, against an explicit guard file ($1)
   local g="$1"; shift
@@ -278,7 +305,7 @@ CASES=$((CASES + 1))
 feat_case 145_slugme.sql="S-v2"
 ledger "144_slugme.sql|$(blob_of S-v1)"
 run_check --head-branch feat
-if [[ "$rc" == "1" ]] && has "144_slugme.sql" && has "by slug" && has "re-slug yours"; then
+if [[ "$rc" == "1" ]] && has "144_slugme.sql" && has "by slug" && has "give yours a different slug"; then
   pass "A2 slug with the re-slug hint"
 else
   fail "expected rc=1 A2 by slug + re-slug hint; got rc=$rc out=$out"
@@ -337,8 +364,8 @@ out=$(DLP_FAKE_PSQL_RC=2 DATABASE_URL_POOLER="postgres://p" DLP_FAKE_LEDGER="$LE
   bash "$GUARD" check --base origin/main --repo "$WORK" --head-branch feat 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && has "not caused by this PR; re-run the job"; then
-  pass "psql failure is a transient cannot-measure"
+if [[ "$rc" == "2" ]] && has "psql rc=2" && has "re-run the job"; then
+  pass "a connection failure is cannot-measure, naming the psql exit"
 else
   fail "expected rc=2 transient; got rc=$rc out=$out"
 fi
@@ -403,15 +430,15 @@ else
 fi
 
 # ----------------------------------------------------------------------
-echo "G1-10: a candidate needs ownership and origin is unreachable -> rc 2 transient"
+echo "G1-10: a candidate needs ownership and origin is unreachable -> rc 2 cannot-measure"
 CASES=$((CASES + 1))
 feat_case 143_new.sql="R3"
 ledger "143_old.sql|$(blob_of R3)"
 poison_origin
 run_check --head-branch feat
 heal_origin
-if [[ "$rc" == "2" ]] && has "re-run the job"; then
-  pass "owner fetch failure is transient, not a pass and not a violation"
+if [[ "$rc" == "2" ]] && has "fetching origin branch heads failed" && has "not a verdict on the migrations"; then
+  pass "owner fetch failure is cannot-measure, not a pass and not a violation"
 else
   fail "expected rc=2 transient; got rc=$rc out=$out"
 fi
@@ -442,10 +469,162 @@ git -C "$WORK" mv "$WORK/$MDIR/143_old.sql" "$WORK/$MDIR/143_new.sql"
 git -C "$WORK" commit -qm 'rename, not pushed'
 ledger "143_old.sql|$(blob_of R3)"
 run_check --head-branch feat
-if [[ "$rc" == "1" ]] && has "by blob" && ! has "::notice::"; then
+if [[ "$rc" == "1" ]] && has "by blob" && ! has "treated as that PR's in-flight row"; then
   pass "the PR's own branch is excluded from ownership"
 else
   fail "expected rc=1 with no ownership notice; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-13: one PR commit deletes an applied migration and adds a DIFFERENT one -> rc 1 by history (no rename-detection crash)"
+CASES=$((CASES + 1))
+# Rename detection must read blob contents the blobless owner repo does not
+# hold; without --no-renames git dies here and every re-run exits 2.
+feat_case 146_a.sql="A146 original body"
+git -C "$WORK" rm -q "$WORK/$MDIR/146_a.sql"
+put "$WORK" 147_zzz.sql "an entirely different body"
+git -C "$WORK" add -A
+git -C "$WORK" commit -qm 'drop 146_a and add 147_zzz in one commit'
+git -C "$WORK" push -q -f origin feat
+ledger "146_a.sql|$(blob_of 'A146 original body')"
+run_check --head-branch feat
+if [[ "$rc" == "1" ]] && has "146_a.sql" && has "by history"; then
+  pass "delete+add in one commit is judged, not crashed"
+else
+  fail "expected rc=1 A4 by history; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-14: a branch stacked on this PR still holds G at the applied blob -> it does NOT launder the violation"
+CASES=$((CASES + 1))
+feat_case 143_old.sql="R3"
+git -C "$SEED" fetch -q origin
+git -C "$SEED" switch -q -C stacked origin/feat
+put "$SEED" 191_child.sql "CHILD"
+git -C "$SEED" add -A && git -C "$SEED" commit -qm 'stacked child'
+git -C "$SEED" push -q -f origin HEAD:refs/heads/stacked
+git -C "$SEED" switch -q main
+git -C "$WORK" mv "$WORK/$MDIR/143_old.sql" "$WORK/$MDIR/143_new.sql"
+git -C "$WORK" commit -qm 'rename after apply'
+git -C "$WORK" push -q -f origin feat
+ledger "143_old.sql|$(blob_of R3)"
+run_check --head-branch feat
+git -C "$SEED" push -q origin --delete stacked
+if [[ "$rc" == "1" ]] && has "by blob" && ! has "treated as that PR's in-flight row"; then
+  pass "an owner that inherited G from this PR's history is not an independent owner"
+else
+  fail "expected rc=1 (stacked branch must not launder); got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-15: the only exact-name holder is STALE -> the PR is not excused"
+CASES=$((CASES + 1))
+feat_case 161_old.sql="OLD"
+ledger "160_old.sql|$(blob_of OLD)"
+run_check --head-branch feat
+if [[ "$rc" == "1" ]] && has "160_old.sql" && has "by blob"; then
+  pass "a stale holder owns nothing on the PR side either"
+else
+  fail "expected rc=1; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-16: a candidate carrying one of MAIN's blobs is not this PR's history -> rc 0"
+CASES=$((CASES + 1))
+feat_case 148_ok.sql="OK"
+ledger "127_y.sql|$(blob_of Y)"
+run_check --head-branch feat
+if [[ "$rc" == "0" ]] && has "candidates=1"; then
+  pass "A4 reads only base..head, never base's own history"
+else
+  fail "expected rc=0; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-17: a ledger filename outside the whitelist is counted, never echoed (check side)"
+CASES=$((CASES + 1))
+ledger "148_ok.sql|$(blob_of OK)" "evil::error::pwn.sql|$(blob_of OK)"
+run_check --head-branch feat
+if [[ "$rc" == "0" ]] && ! has "pwn" && has "skipped 1 ledger row"; then
+  pass "log-injection vector closed on the PR side"
+else
+  fail "expected rc=0, counted, not echoed; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-18: a second '|' in a ledger line cannot overwrite the real row's sha"
+CASES=$((CASES + 1))
+feat_case 140_x.sql="X140-v2"
+ledger "140_x.sql|$(blob_of X140-v1)" "140_x.sql|$(blob_of X140-v2)|"
+run_check --head-branch feat
+if [[ "$rc" == "1" ]] && has "$(blob_of X140-v1)" && has "skipped 1 ledger row"; then
+  pass "exactly one delimiter per row; the forged row is skipped"
+else
+  fail "expected rc=1 A1 with the forged row skipped; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-19: an invalid --head-branch skips A4 with a warning instead of blocking"
+CASES=$((CASES + 1))
+feat_case 148_ok.sql="OK"
+ledger "199_zz.sql|$(blob_of ZZ)"
+run_check --head-branch 'bad..name'
+if [[ "$rc" == "0" ]] && has "is not a valid branch name"; then
+  pass "a branch-name problem is a warning, not a Doppler-config accusation"
+else
+  fail "expected rc=0 + warning; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-20: a valid --head-branch that is not on origin -> rc 2, named"
+CASES=$((CASES + 1))
+run_check --head-branch no-such-branch
+if [[ "$rc" == "2" ]] && has "is not a branch on origin"; then
+  pass "a missing head branch cannot silently disable A4"
+else
+  fail "expected rc=2; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-21: a migration filename in the tree outside the whitelist is a warning (the runner skips it), not exit 2"
+CASES=$((CASES + 1))
+feat_case "150 bad.sql"="BAD"
+ledger
+run_check --head-branch feat
+if [[ "$rc" == "0" ]] && has "outside the runner's whitelist" && ! has "150 bad"; then
+  pass "unsafe tree filename is counted, not echoed, and not blamed on config"
+else
+  fail "expected rc=0 + warning; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-22: psql exit codes are classed by what they measured"
+CASES=$((CASES + 1))
+feat_case 148_ok.sql="OK"
+ledger
+set +e
+out3=$(DLP_FAKE_PSQL_RC=3 DATABASE_URL_POOLER="postgres://p" DLP_FAKE_LEDGER="$LEDGER" bash "$GUARD" check --base origin/main --repo "$WORK" 2>&1); rc3=$?
+out124=$(DLP_FAKE_PSQL_RC=124 DATABASE_URL_POOLER="postgres://p" DLP_FAKE_LEDGER="$LEDGER" bash "$GUARD" check --base origin/main --repo "$WORK" 2>&1); rc124=$?
+set -e
+if [[ "$rc3" == "2" && "$rc124" == "2" ]] && grep -qF "a re-run will not help" <<<"$out3" \
+  && grep -qF "timed out" <<<"$out124" && grep -qF "re-run the job" <<<"$out124"; then
+  pass "SQL error -> config; timeout -> transient"
+else
+  fail "psql classes wrong: rc3=$rc3 [$out3] rc124=$rc124 [$out124]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G1-23: the COMMITTED blob is compared, not an uncommitted working copy"
+CASES=$((CASES + 1))
+feat_case 148_ok.sql="OK"
+ledger "148_ok.sql|$(blob_of OK)"
+put "$WORK" 148_ok.sql "OK but edited and not committed"
+run_check --head-branch feat
+git -C "$WORK" checkout -q -- "$WORK/$MDIR/148_ok.sql"
+if [[ "$rc" == "0" ]] && has "ledgered-match=1"; then
+  pass "the guard reads what main's probe will read after merge"
+else
+  fail "expected rc=0 on the committed blob; got rc=$rc out=$out"
 fi
 
 echo "== Guard 1: must-PASS =="
@@ -519,8 +698,8 @@ branch other-f main "" 144_slugme.sql="S-v1"
 feat_case 145_slugme.sql="S-v2"
 ledger "144_slugme.sql|$(blob_of S-v1)"
 run_check --head-branch feat
-if [[ "$rc" == "0" ]] && has "::notice::" && has "other-f" && has "skipped-owned=1"; then
-  pass "another PR's in-flight row is skipped with a notice naming it"
+if [[ "$rc" == "0" ]] && has "::warning::ledger-parity: 144_slugme.sql" && has "other-f" && has "skipped-owned=1"; then
+  pass "another PR's in-flight row is skipped with a warning naming it"
 else
   fail "expected rc=0 + notice naming other-f; got rc=$rc out=$out"
 fi
@@ -676,7 +855,7 @@ STATE1=$(git_state)
 echo "G2-1: row on no live branch -> orphan"
 CASES=$((CASES + 1))
 run_classify "199_gone.sql|$(blob_of GONE)"$'\n'
-if [[ "$rc" == "0" && "$out" == "orphan${T}199_gone.sql" ]] && grep -qF 'ledger-classify: in-flight=0 stale=0 orphan=1' <<<"$err"; then
+if [[ "$rc" == "0" && "$out" == "orphan${T}199_gone.sql" ]] && grep -qF 'ledger-classify: in-flight=0 stale=0 merged=0 orphan=1' <<<"$err"; then
   pass "ownerless row is an orphan, summary on stderr"
 else
   fail "expected orphan; got rc=$rc out=[$out] err=[$err]"
@@ -800,7 +979,7 @@ echo "G2-p1: exact / blob / slug owners -> in-flight with the tier"
 CASES=$((CASES + 1))
 run_classify "150_inflight.sql|$(blob_of IF)"$'\n'"151_renamed_old.sql|$(blob_of RN)"$'\n'"154_sluggy.sql|$(blob_of SLUG-v1)"$'\n'
 want="in-flight${T}150_inflight.sql${T}inflight-a${T}exact"$'\n'"in-flight${T}151_renamed_old.sql${T}inflight-renamed${T}blob"$'\n'"in-flight${T}154_sluggy.sql${T}inflight-slug${T}slug"
-if [[ "$rc" == "0" && "$out" == "$want" ]] && grep -qF 'in-flight=3 stale=0 orphan=0' <<<"$err"; then
+if [[ "$rc" == "0" && "$out" == "$want" ]] && grep -qF 'in-flight=3 stale=0 merged=0 orphan=0' <<<"$err"; then
   pass "all three ownership tiers"
 else
   fail "expected [$want]; got rc=$rc out=[$out] err=[$err]"
@@ -812,7 +991,7 @@ CASES=$((CASES + 1))
 poison_origin
 run_classify ""
 heal_origin
-if [[ "$rc" == "0" && -z "$out" ]] && grep -qF 'in-flight=0 stale=0 orphan=0' <<<"$err"; then
+if [[ "$rc" == "0" && -z "$out" ]] && grep -qF 'in-flight=0 stale=0 merged=0 orphan=0' <<<"$err"; then
   pass "nothing to classify stays offline"
 else
   fail "expected rc=0 offline; got rc=$rc out=[$out] err=[$err]"
@@ -856,6 +1035,121 @@ if [[ "$rc" == "0" && "$out" == "in-flight${T}160_old.sql${T}fresh-too${T}exact"
   pass "freshness is decided across all holders before stale is reported"
 else
   fail "expected in-flight via fresh-too; got rc=$rc out=[$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p6: tier precedence — a blob holder beats a slug holder"
+CASES=$((CASES + 1))
+branch kx main "" 171_other.sql="KXB"
+branch ky main "" 174_same.sql="KY-body"
+run_classify "173_same.sql|$(blob_of KXB)"$'\n'
+git -C "$SEED" push -q origin --delete kx ky
+if [[ "$out" == "in-flight${T}173_same.sql${T}kx${T}blob" ]]; then
+  pass "exact > blob > slug"
+else
+  fail "expected kx via blob; got [$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p7: two fresh holders -> the lexically smallest, deterministically"
+CASES=$((CASES + 1))
+branch ka2 main "" 175_dup.sql="DUP"
+branch ka1 main "" 175_dup.sql="DUP"
+run_classify "175_dup.sql|$(blob_of DUP)"$'\n'
+git -C "$SEED" push -q origin --delete ka1 ka2
+if [[ "$out" == "in-flight${T}175_dup.sql${T}ka1${T}exact" ]]; then
+  pass "ties resolve to one stable owner"
+else
+  fail "expected ka1; got [$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p8: a FRESH blob holder beats a STALE exact-name holder"
+CASES=$((CASES + 1))
+branch kfb main "" 162_other.sql="OLD"
+run_classify "160_old.sql|$(blob_of OLD)"$'\n'
+git -C "$SEED" push -q origin --delete kfb
+if [[ "$out" == "in-flight${T}160_old.sql${T}kfb${T}blob" ]]; then
+  pass "freshness is decided across every tier before stale is reported"
+else
+  fail "expected in-flight via kfb blob; got [$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p9: a head dated 30 days + 1 hour ago is still fresh (30 whole days)"
+CASES=$((CASES + 1))
+branch b30 main "@$(( $(date +%s) - 30 * 86400 - 3600 )) +0000" 176_b30.sql="B30"
+run_classify "176_b30.sql|$(blob_of B30)"$'\n'
+git -C "$SEED" push -q origin --delete b30
+if [[ "$out" == "in-flight${T}176_b30.sql${T}b30${T}exact" ]]; then
+  pass "the boundary is > 30 whole days"
+else
+  fail "expected in-flight at 30 days; got [$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p10: a pre-content-sha row (empty sha) is classified, not refused"
+CASES=$((CASES + 1))
+run_classify "199_gone.sql|"$'\n'
+if [[ "$rc" == "0" && "$out" == "orphan${T}199_gone.sql" ]]; then
+  pass "an empty sha only skips the blob tier"
+else
+  fail "expected orphan rc=0; got rc=$rc out=[$out] err=[$err]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p11: a head dated in the FUTURE is stale, never fresh forever"
+CASES=$((CASES + 1))
+branch fut main "@$(( $(date +%s) + 3 * 86400 )) +0000" 177_fut.sql="FUT"
+run_classify "177_fut.sql|$(blob_of FUT)"$'\n'
+git -C "$SEED" push -q origin --delete fut
+if [[ "$out" == "stale${T}177_fut.sql${T}fut${T}future-dated" ]]; then
+  pass "a pusher-set date cannot keep a row in-flight"
+else
+  fail "expected stale future-dated; got [$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p12: a row whose file is on the base tip NOW -> merged (non-blocking)"
+CASES=$((CASES + 1))
+run_classify "130_y.sql|$(blob_of Y)"$'\n'
+if [[ "$rc" == "0" && "$out" == "merged${T}130_y.sql" ]] && grep -qF 'merged=1' <<<"$err"; then
+  pass "a merge between probe and classifier is not reported as an orphan"
+else
+  fail "expected merged; got rc=$rc out=[$out] err=[$err]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p13: a file in a migrations SUBDIRECTORY owns nothing (the runner never applies it)"
+CASES=$((CASES + 1))
+git -C "$SEED" switch -q -C subdir-owner main
+mkdir -p "$SEED/$MDIR/sub"
+printf 'SUB\n' > "$SEED/$MDIR/sub/196_sub.sql"
+git -C "$SEED" add -A && git -C "$SEED" commit -qm 'subdir file'
+git -C "$SEED" push -q -f origin HEAD:refs/heads/subdir-owner
+git -C "$SEED" switch -q main
+run_classify "196_sub.sql|$(blob_of SUB)"$'\n'
+git -C "$SEED" push -q origin --delete subdir-owner
+if [[ "$out" == "orphan${T}196_sub.sql" ]]; then
+  pass "only top-level migrations are owned"
+else
+  fail "expected orphan; got [$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-p14: a reused owner cache (DLP_OWNERS_CACHE) prunes a deleted branch between calls"
+CASES=$((CASES + 1))
+CACHE="$tmp/owners-cache"
+branch cached main "" 178_cache.sql="CACHE"
+set +e
+o1=$(printf '%s\n' "178_cache.sql|$(blob_of CACHE)" | DLP_OWNERS_CACHE="$CACHE" bash "$GUARD" classify-missing --base-branch main --repo "$WORK" 2>/dev/null)
+git -C "$SEED" push -q origin --delete cached
+o2=$(printf '%s\n' "178_cache.sql|$(blob_of CACHE)" | DLP_OWNERS_CACHE="$CACHE" bash "$GUARD" classify-missing --base-branch main --repo "$WORK" 2>/dev/null)
+set -e
+if [[ "$o1" == "in-flight${T}178_cache.sql${T}cached${T}exact" && "$o2" == "orphan${T}178_cache.sql" && -f "$CACHE/HEAD" ]]; then
+  pass "the cache is reused and never keeps a deleted owner"
+else
+  fail "cache reuse wrong: first=[$o1] second=[$o2]"
 fi
 
 echo "== Guard 2: harness =="
@@ -942,7 +1236,8 @@ CASES=$((CASES + 1))
 ledger "150_inflight.sql|$(blob_of IF)"
 run_probe true
 if [[ "$rc" == "0" ]] && has "::warning::  - 150_inflight.sql (in-flight: unmerged on live branch inflight-a via exact" \
-  && has "ledger-classify: in-flight=1 stale=0 orphan=0" && ! has "Missing-on-main:" \
+  && ! printf '%s\n' "$out" | grep -q '^::error::' \
+  && has "ledger-classify: in-flight=1 stale=0 merged=0 orphan=0" && ! has "Missing-on-main:" \
   && grep -qx 'drift-detected=true' "$tmp/gho"; then
   pass "an open PR's applied row no longer reds main (ADR-061 per-ref)"
 else
@@ -955,7 +1250,7 @@ CASES=$((CASES + 1))
 ledger "199_gone.sql|$(blob_of GONE)"
 run_probe true
 if [[ "$rc" == "1" ]] && has "::error::Missing-on-main:" && has "::error::  - 199_gone.sql" \
-  && has "no live branch owns these rows"; then
+  && has "no fresh live branch owns these rows" && grep -qx 'drift-detected=true' "$tmp/gho"; then
   pass "orphans still fail closed on authoritative refs"
 else
   fail "expected rc=1 orphan block; got rc=$rc out=$out"
@@ -975,7 +1270,8 @@ echo "G2-P9: stale-only owner under fail-on -> error naming branch and age, exit
 CASES=$((CASES + 1))
 ledger "160_old.sql|$(blob_of OLD)"
 run_probe true
-if [[ "$rc" == "1" ]] && has "::error::  - 160_old.sql (stale: only owner old-branch has had no commit for 31 days"; then
+if [[ "$rc" == "1" ]] && has "::error::  - 160_old.sql (stale: owner old-branch has no commit dated within the last 30 days (age: 31)" \
+  && has "::error::dev-Supabase has _schema_migrations rows whose only owner branch is stale"; then
   pass "stale owner blocks, named"
 else
   fail "expected rc=1 stale error; got rc=$rc out=$out"
@@ -992,7 +1288,7 @@ u=$(line_no "ledger-classify: UNCLASSIFIED (rows=2 rc=2)")
 h=$(line_no "::error::Unclassified:")
 r=$(line_no "::error::  - 150_inflight.sql")
 if [[ "$rc" == "1" && -n "$u" && -n "$h" && -n "$r" && "$u" -lt "$h" && "$h" -lt "$r" ]] \
-  && ! has "Missing-on-main:" && has "not evidence of drift"; then
+  && ! has "Missing-on-main:" && has "ownership could not be established"; then
   pass "fail-closed classification is labelled, not dressed as drift"
 else
   fail "expected UNCLASSIFIED before Unclassified: rows; got rc=$rc u=$u h=$h r=$r out=$out"
@@ -1056,59 +1352,186 @@ else
   fail "suspicious row echoed or not counted: rc=$rc out=$out"
 fi
 
+# ----------------------------------------------------------------------
+echo "G2-P-stderr: classifier diagnostics are prefixed so none can become an annotation"
+CASES=$((CASES + 1))
+with_stub_classifier 'cat >/dev/null; echo "::error::boom" >&2; exit 2'
+ledger "199_gone.sql|$(blob_of GONE)"
+run_probe true
+restore_classifier
+if [[ "$rc" == "1" ]] && has "  classifier: ::error::boom" && ! printf '%s\n' "$out" | grep -qx '::error::boom'; then
+  pass "classifier stderr is neutralised"
+else
+  fail "expected prefixed classifier stderr; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-bad: unsafe branch, bogus verdict, or correct lines with rc!=0 -> UNCLASSIFIED each"
+CASES=$((CASES + 1))
+ledger "199_gone.sql|$(blob_of GONE)"
+with_stub_classifier 'mapfile -t l; printf "in-flight\t%s\tbad;branch\texact\n" "${l[0]%%|*}"'
+run_probe true; o1=$out; r1=$rc
+with_stub_classifier 'mapfile -t l; printf "bogus\t%s\n" "${l[0]%%|*}"'
+run_probe true; o2=$out; r2=$rc
+with_stub_classifier 'mapfile -t l; printf "orphan\t%s\n" "${l[0]%%|*}"; exit 2'
+run_probe true; o3=$out; r3=$rc
+restore_classifier
+if [[ "$r1$r2$r3" == "111" ]] && grep -qF "UNCLASSIFIED (rows=1 line=1 malformed)" <<<"$o1" \
+  && grep -qF "UNCLASSIFIED (rows=1 line=1 unknown verdict)" <<<"$o2" && grep -qF "UNCLASSIFIED (rows=1 rc=2)" <<<"$o3"; then
+  pass "every malformed classifier answer fails closed with its reason"
+else
+  fail "expected three UNCLASSIFIED with reasons; got [$r1] $o1 || [$r2] $o2 || [$r3] $o3"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-sha: a malformed content_sha is reported as drift, never echoed"
+CASES=$((CASES + 1))
+printf '%s\n' '001_a.sql|ABCinjected::error::x' "002_b.sql|$(blob_of B)" > "$LEDGER"
+run_probe true
+if [[ "$rc" == "1" ]] && has "001_a.sql (applied=<malformed content_sha, not echoed>" && ! has "ABCinjected"; then
+  pass "the content_sha column cannot inject annotations"
+else
+  fail "expected malformed-sha drift, not echoed; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-blob: an in-flight row matched by blob/slug says the owner must restore the name"
+CASES=$((CASES + 1))
+ledger "151_renamed_old.sql|$(blob_of RN)"
+run_probe true
+if [[ "$rc" == "0" ]] && has "matched via blob — that PR must restore the applied name before it merges" && ! has "merging clears it"; then
+  pass "merging clears only exact-name rows"
+else
+  fail "expected the restore-the-name wording; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-merged: a merged verdict is a warning, not a red"
+CASES=$((CASES + 1))
+with_stub_classifier 'mapfile -t l; printf "merged\t%s\n" "${l[0]%%|*}"'
+ledger "199_gone.sql|$(blob_of GONE)"
+run_probe true
+restore_classifier
+if [[ "$rc" == "0" ]] && has "::warning::  - 199_gone.sql (now on origin/main" && ! has "Missing-on-main:"; then
+  pass "a probe/classifier race does not red main"
+else
+  fail "expected rc=0 merged warning; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-sentry: with sentry-dsn set, each blocking class emits one static event; in-flight emits none"
+CASES=$((CASES + 1))
+CURLLOG="$tmp/curl.log"
+: > "$CURLLOG"
+ledger "199_gone.sql|$(blob_of GONE)"
+export DLP_CURL_LOG="$CURLLOG" SENTRY_DSN="https://pubkey@sentry.fixture.invalid/12345"
+run_probe true
+n_orphan=$(grep -c '"ledger_class":"orphan"' "$CURLLOG" || true)
+: > "$CURLLOG"
+ledger "150_inflight.sql|$(blob_of IF)"
+run_probe true
+n_inflight=$(grep -c 'sentry' "$CURLLOG" || true)
+unset DLP_CURL_LOG SENTRY_DSN
+if [[ "$n_orphan" == "1" && "$n_inflight" == "0" ]] && ! grep -q '199_gone' "$CURLLOG"; then
+  pass "the scheduled surface's red is reported off-box, class names only"
+else
+  fail "expected 1 orphan event and 0 in-flight events; got orphan=$n_orphan inflight=$n_inflight"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-args: the probe reads the ledger through dev_scheduled with the content_sha column"
+CASES=$((CASES + 1))
+DOPLOG="$tmp/doppler.log"; PSQLLOG="$tmp/probe-psql.log"
+: > "$DOPLOG"; : > "$PSQLLOG"
+ledger
+export DLP_DOPPLER_LOG="$DOPLOG" DLP_PSQL_LOG="$PSQLLOG"
+run_probe true
+unset DLP_DOPPLER_LOG DLP_PSQL_LOG
+if grep -qE '(^| )-c dev_scheduled( |$)' "$DOPLOG" && tr '\0' '\n' < "$PSQLLOG" | grep -qF 'COALESCE(content_sha'; then
+  pass "doppler config and SQL column pinned"
+else
+  fail "probe read the wrong config or column: doppler=[$(cat "$DOPLOG")]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-bound: the classifier call is bounded, and the stale threshold agrees across files"
+CASES=$((CASES + 1))
+g_days=$(sed -n 's/^readonly STALE_DAYS=\([0-9][0-9]*\)$/\1/p' "$GUARD")
+a_days=$(sed -n 's/^[[:space:]]*STALE_DAYS_LABEL=\([0-9][0-9]*\)$/\1/p' "$PROBE")
+if grep -qF 'cls_out=$(timeout -k 5 90 bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing' "$PROBE" \
+  && [[ -n "$g_days" && "$g_days" == "$a_days" ]]; then
+  pass "timeout wrapper present; STALE_DAYS=$g_days in both"
+else
+  fail "unbounded classifier call or threshold drift: guard=$g_days action=$a_days"
+fi
+
 echo "== Wiring: tenant-integration.yml and action.yml =="
 
-# wiring_failures <workflow> — prints one line per broken wiring property.
-wiring_failures() {
-  local wf="$1" n name
-  local -A at=()
-  for name in \
-    'Resolve dev-ledger-parity guard state' \
-    'Lint migration FK preconditions' \
-    'Resolve dev-ledger-parity guard (base-ref copy)' \
-    'Acquire dev-suite mutex' \
-    'Detect dev-vs-main migration drift' \
-    'Assert unmerged migrations match the dev ledger' \
-    'Apply migrations to dev' \
-    'Release dev-suite mutex'; do
-    n=$(grep -cxF "      - name: $name" "$wf" || true)
-    if [[ "$n" != "1" ]]; then echo "step '$name' appears $n times (want 1)"; continue; fi
-    at[$name]=$(grep -nxF "      - name: $name" "$wf" | cut -d: -f1 || true)
-  done
-  local heavy
-  heavy=$(grep -nxF '  tenant-integration:' "$wf" | cut -d: -f1 || true)
-  [[ -n "$heavy" ]] || { echo "heavy job header missing"; return; }
-  [[ -n "${at['Resolve dev-ledger-parity guard state']:-}" && "${at['Resolve dev-ledger-parity guard state']}" -lt "$heavy" ]] \
-    || echo "ledger_guard step is not in detect-changes"
-  lt() { [[ -n "${at[$1]:-}" && -n "${at[$2]:-}" && "${at[$1]}" -lt "${at[$2]}" ]] || echo "order: '$1' must precede '$2'"; }
-  lt 'Lint migration FK preconditions' 'Resolve dev-ledger-parity guard (base-ref copy)'
-  lt 'Resolve dev-ledger-parity guard (base-ref copy)' 'Acquire dev-suite mutex'
-  lt 'Detect dev-vs-main migration drift' 'Assert unmerged migrations match the dev ledger'
-  lt 'Assert unmerged migrations match the dev ledger' 'Apply migrations to dev'
-  lt 'Assert unmerged migrations match the dev ledger' 'Release dev-suite mutex'
-  # step bodies: from the name line to the next step or job header
-  body() { awk -v s="      - name: $1" 'f && (/^      - / || /^  [a-z]/) {exit} $0 == s {f=1} f' "$wf"; }
-  body 'Assert unmerged migrations match the dev ledger' | grep -qF 'bash "$RUNNER_TEMP/dev-ledger-parity.sh" check' \
-    || echo "check step does not execute the resolved RUNNER_TEMP copy"
-  local rb
-  rb=$(body 'Resolve dev-ledger-parity guard (base-ref copy)')
-  for arm in 'deleted)' '*)'; do
-    awk -v a="$arm" 'index($0, a) && $0 ~ /^[[:space:]]*(deleted|\*)\)/ {f=1} f && /exit 1/ {ok=1} f && /;;/ {exit} END {exit !ok}' <<<"$rb" \
-      || echo "resolve step arm '$arm' does not exit 1"
-  done
-  grep -qF 'git show "origin/${base_ref}:$GUARD_PATH"' <<<"$rb" || echo "resolve step does not extract the base-ref copy"
-  local dc
-  dc=$(awk -v h="$heavy" 'NR >= h {exit} f {print} /^  detect-changes:$/ {f=1}' "$wf")
-  grep -qE '^[[:space:]]+fetch-depth: 0$' <<<"$dc" || echo "detect-changes lost fetch-depth: 0"
-  grep -qE '^[[:space:]]+ledger_guard: \$\{\{ steps\.ledger_guard\.outputs\.state \}\}$' <<<"$dc" || echo "detect-changes does not export ledger_guard"
-  grep -qF 'apps/web-platform/scripts/dev-ledger-parity' <<<"$dc" || echo "anchor alternation lacks dev-ledger-parity"
-  grep -qE 'LEDGER_GUARD: \$\{\{ needs\.detect-changes\.outputs\.ledger_guard \}\}' "$wf" || echo "resolve step does not read the detect-changes output"
+# wf_static <workflow> — prints one line per broken STRUCTURAL property, read
+# from the parsed YAML (never from text a comment could also carry).
+wf_static() {
+  python3 - "$1" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+jobs = doc["jobs"]
+bad = []
+dc, hv = jobs["detect-changes"], jobs["tenant-integration"]
+def step(job, name):
+    got = [s for s in job["steps"] if s.get("name") == name]
+    if len(got) != 1:
+        bad.append(f"step {name!r} appears {len(got)} times (want 1)")
+        return None
+    return got[0]
+st = step(dc, "Resolve dev-ledger-parity guard state")
+if st is not None and st.get("id") != "ledger_guard":
+    bad.append("state step lost id ledger_guard")
+if dc.get("outputs", {}).get("ledger_guard") != "${{ steps.ledger_guard.outputs.state }}":
+    bad.append("detect-changes does not export ledger_guard")
+co = [s for s in dc["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+if not co or co[0].get("with", {}).get("fetch-depth") != 0:
+    bad.append("detect-changes lost fetch-depth: 0")
+flt = [s for s in dc["steps"] if s.get("id") == "filter"]
+run = flt[0]["run"] if flt else ""
+if "apps/web-platform/scripts/dev-ledger-parity" not in run:
+    bad.append("anchor alternation lacks dev-ledger-parity")
+if 'git log --format= --name-only "origin/${BASE_REF}..HEAD" -- apps/web-platform/supabase/migrations/' not in run:
+    bad.append("detect-changes no longer scans the PR's own migration history")
+names = [s.get("name") for s in hv["steps"]]
+def idx(n):
+    return names.index(n) if n in names else -1
+order = ["Lint migration FK preconditions", "Acquire dev-suite mutex", "Detect dev-vs-main migration drift",
+         "Assert unmerged migrations match the dev ledger", "Preflight schema-vs-ledger consistency check",
+         "Apply migrations to dev", "Release dev-suite mutex"]
+pos = [idx(n) for n in order]
+if -1 in pos or pos != sorted(pos):
+    bad.append(f"heavy-job step order broken: {list(zip(order, pos))}")
+if "Resolve dev-ledger-parity guard (base-ref copy)" in names:
+    bad.append("a separate staging step reopened the extract-then-run window")
+ck = step(hv, "Assert unmerged migrations match the dev ledger")
+if ck is not None:
+    for k in ("if", "continue-on-error"):
+        if k in ck:
+            bad.append(f"check step carries {k!r}: its verdict could be skipped or ignored")
+    env = ck.get("env", {})
+    want = {"LEDGER_GUARD": "${{ needs.detect-changes.outputs.ledger_guard }}",
+            "HEAD_BRANCH": "${{ github.head_ref || github.ref_name }}",
+            "DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}"}
+    for k, v in want.items():
+        if env.get(k) != v:
+            bad.append(f"check step env {k} is {env.get(k)!r}")
+    if ck.get("shell") is not None:
+        bad.append("check step overrides the default shell")
+probes = [s for s in hv["steps"] if s.get("uses") == "./.github/actions/dev-migration-drift-probe"]
+if len(probes) != 2 or any(p.get("env", {}).get("DLP_OWNERS_CACHE") != "${{ runner.temp }}/dev-ledger-owners" for p in probes):
+    bad.append("the two probe calls do not share the owner cache")
+print("\n".join(bad))
+PY
 }
 
 # ----------------------------------------------------------------------
-echo "W-0: the real workflow satisfies every wiring property (AC3, AC4)"
+echo "W-0: the real workflow satisfies every structural wiring property (AC3, AC4)"
 CASES=$((CASES + 1))
-wf_out=$(wiring_failures "$WF")
+wf_out=$(wf_static "$WF")
 if [[ -z "$wf_out" ]]; then
   pass "wiring intact"
 else
@@ -1131,32 +1554,208 @@ CASES=$((CASES + 1))
 wf_mutant '
 import re
 blk = re.search(r"(      - name: Assert unmerged migrations match the dev ledger\n.*?)(?=\n      - |\n  [a-z])", s, re.S).group(1) + "\n"
+assert s.count(blk) == 1
 s = s.replace(blk, "", 1)
 anchor = "      - name: Preflight WORM-vs-cascade contradiction check\n"
+assert s.count(anchor) == 1
 s = s.replace(anchor, blk + anchor, 1)
 '
-if [[ -n "$(wiring_failures "$tmp/wf-mut.yml")" ]]; then pass "misplaced check detected"; else fail "moving the check past apply went unseen"; fi
+if [[ -n "$(wf_static "$tmp/wf-mut.yml")" ]]; then pass "misplaced check detected"; else fail "moving the check past apply went unseen"; fi
 
 # ----------------------------------------------------------------------
-echo "W-13: check runs the checkout copy instead of \$RUNNER_TEMP -> wiring RED"
-CASES=$((CASES + 1))
-wf_mutant 's = s.replace("bash \"$RUNNER_TEMP/dev-ledger-parity.sh\" check", "bash apps/web-platform/scripts/dev-ledger-parity.sh check")'
-if [[ -n "$(wiring_failures "$tmp/wf-mut.yml")" ]]; then pass "self-judging invocation detected"; else fail "checkout-copy invocation went unseen"; fi
-
-# ----------------------------------------------------------------------
-echo "W-14: resolve step's deleted) arm loses its exit 1 -> wiring RED"
+echo "W-13: continue-on-error or an if: on the check step -> wiring RED (each)"
 CASES=$((CASES + 1))
 wf_mutant '
-import re
-s = re.sub(r"(deleted\)\n(?:.*\n)*?)(\s*)exit 1\n", r"\1\2true\n", s, count=1)
+h = "      - name: Assert unmerged migrations match the dev ledger\n"
+assert s.count(h) == 1
+s = s.replace(h, h + "        continue-on-error: true\n", 1)
 '
-if [[ -n "$(wiring_failures "$tmp/wf-mut.yml")" ]]; then pass "fail-open deleted arm detected"; else fail "deleted) arm without exit 1 went unseen"; fi
+r1=$(wf_static "$tmp/wf-mut.yml")
+wf_mutant '
+h = "      - name: Assert unmerged migrations match the dev ledger\n"
+assert s.count(h) == 1
+s = s.replace(h, h + "        if: github.event_name == '"'"'push'"'"'\n", 1)
+'
+r2=$(wf_static "$tmp/wf-mut.yml")
+if [[ -n "$r1" && -n "$r2" ]]; then pass "a discardable verdict is detected"; else fail "continue-on-error/if went unseen: [$r1] [$r2]"; fi
+
+# ----------------------------------------------------------------------
+echo "W-14: HEAD_BRANCH or LEDGER_GUARD rewired -> wiring RED"
+CASES=$((CASES + 1))
+wf_mutant '
+o = "HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}"
+assert s.count(o) == 1
+s = s.replace(o, "HEAD_BRANCH: ${{ github.head_ref }}", 1)
+'
+r1=$(wf_static "$tmp/wf-mut.yml")
+wf_mutant '
+o = "LEDGER_GUARD: ${{ needs.detect-changes.outputs.ledger_guard }}"
+assert s.count(o) == 1
+s = s.replace(o, "LEDGER_GUARD: introduction", 1)
+'
+r2=$(wf_static "$tmp/wf-mut.yml")
+if [[ -n "$r1" && -n "$r2" ]]; then pass "env rewiring detected"; else fail "env rewiring went unseen: [$r1] [$r2]"; fi
 
 # ----------------------------------------------------------------------
 echo "W-15: detect-changes loses fetch-depth: 0 -> wiring RED"
 CASES=$((CASES + 1))
 wf_mutant 's = s.replace("fetch-depth: 0", "fetch-depth: 2", 1)'
-if [[ -n "$(wiring_failures "$tmp/wf-mut.yml")" ]]; then pass "shallow detect-changes detected"; else fail "fetch-depth change went unseen"; fi
+if [[ -n "$(wf_static "$tmp/wf-mut.yml")" ]]; then pass "shallow detect-changes detected"; else fail "fetch-depth change went unseen"; fi
+
+# ---- behavioural: the extracted check step, state step and filter, run for real ----
+extract_step() {  # $1 = job, $2 = step name or id:<id>, $3 = out file
+  python3 - "$WF" "$1" "$2" "$3" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+key = sys.argv[3]
+steps = doc["jobs"][sys.argv[2]]["steps"]
+if key.startswith("id:"):
+    got = [s for s in steps if s.get("id") == key[3:]]
+else:
+    got = [s for s in steps if s.get("name") == key]
+assert len(got) == 1, f"expected one step {key!r}, got {len(got)}"
+open(sys.argv[4], "w").write(got[0]["run"])
+PY
+  if [[ ! -s "$3" ]]; then printf 'FATAL: step extraction for %s is empty\n' "$2" >&2; exit 1; fi
+}
+CHECK_STEP="$tmp/check-step.sh"; STATE_STEP="$tmp/state-step.sh"; FILTER_STEP="$tmp/filter-step.sh"
+extract_step tenant-integration "Assert unmerged migrations match the dev ledger" "$CHECK_STEP"
+extract_step detect-changes "Resolve dev-ledger-parity guard state" "$STATE_STEP"
+extract_step detect-changes "id:filter" "$FILTER_STEP"
+
+# A small repo pair for the steps: origin2 (bare) and wk2 (the job's checkout).
+O2="$tmp/origin2.git"; S2="$tmp/seed2"; W2="$tmp/wk2"; RT="$tmp/runner-temp"
+mkdir -p "$RT"
+git init -q --bare -b main "$O2"
+git clone -q "file://$O2" "$S2" 2>/dev/null
+git -C "$S2" switch -q -c main
+mkdir -p "$S2/$MDIR" "$S2/apps/web-platform/scripts"
+printf 'X\n' > "$S2/$MDIR/001_x.sql"
+git -C "$S2" add -A && git -C "$S2" commit -qm base && git -C "$S2" push -q origin main
+GUARD_REL="apps/web-platform/scripts/dev-ledger-parity.sh"
+set_base_guard() {  # none | empty | <script body>
+  mkdir -p "$S2/apps/web-platform/scripts"   # git rm drops the emptied directory
+  case "$1" in
+    none) git -C "$S2" rm -q --ignore-unmatch "$S2/$GUARD_REL" ;;
+    empty) : > "$S2/$GUARD_REL"; git -C "$S2" add -A ;;
+    *) printf '%s\n' "$1" > "$S2/$GUARD_REL"; git -C "$S2" add -A ;;
+  esac
+  git -C "$S2" commit -q --allow-empty -m "base guard: ${1:0:20}" && git -C "$S2" push -q origin main
+}
+git clone -q "file://$O2" "$W2" 2>/dev/null
+git -C "$W2" switch -q -c feat
+mkdir -p "$W2/apps/web-platform/scripts"
+printf 'echo "ledger-parity: clean (checkout-copy)"\n' > "$W2/$GUARD_REL"
+git -C "$W2" add -A && git -C "$W2" commit -qm 'checkout copy of the guard'
+
+run_check_step() {  # $1 = LEDGER_GUARD
+  set +e
+  out=$(cd "$W2" && LEDGER_GUARD="$1" BASE_REF=main HEAD_BRANCH=feat DOPPLER_TOKEN=x \
+    RUNNER_TEMP="$RT" GITHUB_WORKSPACE="$W2" bash --noprofile --norc -eo pipefail "$CHECK_STEP" 2>&1)
+  rc=$?
+  set -e
+}
+
+# ----------------------------------------------------------------------
+echo "W-B1: base tip carries the guard -> the BASE copy runs, whatever the state says"
+CASES=$((CASES + 1))
+set_base_guard 'echo "ledger-parity: clean (base-copy) args=$*"'
+run_check_step base; o1=$out; r1=$rc
+run_check_step introduction; o2=$out; r2=$rc
+if [[ "$r1$r2" == "00" ]] && grep -qF "(base-copy) args=check --base origin/main --repo $W2 --head-branch feat" <<<"$o1" \
+  && grep -qF "(base-copy)" <<<"$o2" && ! grep -qF "checkout-copy" <<<"$o1$o2"; then
+  pass "a PR cannot substitute its own guard when base has one"
+else
+  fail "base copy not used: [$r1] $o1 || [$r2] $o2"
+fi
+
+# ----------------------------------------------------------------------
+echo "W-B2: base lacks the guard -> introduction runs the checkout copy; deleted/unknown/base fail closed"
+CASES=$((CASES + 1))
+set_base_guard none
+run_check_step introduction; oi=$out; ri=$rc
+run_check_step deleted; rd=$rc
+run_check_step unknown; ru=$rc
+run_check_step base; rb=$rc
+run_check_step ""; re=$rc
+if [[ "$ri" == "0" ]] && grep -qF "checkout-copy" <<<"$oi" && [[ "$rd$ru$rb$re" == "1111" ]]; then
+  pass "only the introduction window runs a PR-controlled copy"
+else
+  fail "state arms wrong: intro=$ri [$oi] deleted=$rd unknown=$ru base=$rb empty=$re"
+fi
+
+# ----------------------------------------------------------------------
+echo "W-B3: an empty base copy, a silent guard, or a RED guard -> the step fails"
+CASES=$((CASES + 1))
+set_base_guard empty
+run_check_step base; r1=$rc
+set_base_guard 'exit 0'
+run_check_step base; r2=$rc; o2=$out
+set_base_guard 'echo "ledger-parity: RED (violations=1)"; exit 1'
+run_check_step base; r3=$rc
+if [[ "$r1$r2$r3" == "111" ]] && grep -qF "printed no ledger-parity summary line" <<<"$o2"; then
+  pass "a guard that did not measure cannot pass"
+else
+  fail "expected 1/1/1; got empty=$r1 silent=$r2 [$o2] red=$r3"
+fi
+
+run_state_step() {  # $1 = EVENT_NAME, $2 = BASE_REF
+  : > "$tmp/gho-state"
+  set +e
+  out=$(cd "$W2" && EVENT_NAME="$1" BASE_REF="$2" GITHUB_OUTPUT="$tmp/gho-state" \
+    bash --noprofile --norc -eo pipefail "$STATE_STEP" 2>&1)
+  rc=$?
+  set -e
+  state=$(sed -n 's/^state=//p' "$tmp/gho-state")
+}
+
+# ----------------------------------------------------------------------
+echo "W-S1: the detect-changes state step reports base / deleted / introduction / unknown / n/a"
+CASES=$((CASES + 1))
+# The check step's --depth=1 fetch made this clone shallow; detect-changes is a
+# full clone (fetch-depth: 0), so restore full history first.
+if [[ -f "$W2/.git/shallow" ]]; then git -C "$W2" fetch -q --unshallow origin; fi
+git -C "$W2" fetch -q origin
+run_state_step pull_request main; s_base=$state; r1=$rc            # a (RED) guard sits on the base tip
+set_base_guard none
+git -C "$W2" fetch -q origin
+run_state_step pull_request main; s_deleted=$state; r2=$rc
+run_state_step pull_request nope; s_unknown=$state; r3=$rc
+run_state_step merge_group main; s_na=$state; r4=$rc
+git -C "$W2" update-ref refs/remotes/origin/intro "$(git -C "$S2" rev-list --max-parents=0 HEAD)"
+run_state_step pull_request intro; s_intro=$state; r5=$rc
+if [[ "$r1$r2$r3$r4$r5" == "00000" && "$s_base" == "base" && "$s_deleted" == "deleted" && "$s_unknown" == "unknown" \
+  && "$s_na" == "n/a" && "$s_intro" == "introduction" ]]; then
+  pass "every state, and the step never exits non-zero"
+else
+  fail "states: base=$s_base deleted=$s_deleted unknown=$s_unknown na=$s_na intro=$s_intro rcs=$r1$r2$r3$r4$r5"
+fi
+
+# ----------------------------------------------------------------------
+echo "W-F1: a PR that added then deleted a migration still triggers the suite (A4 needs the heavy job)"
+CASES=$((CASES + 1))
+git -C "$W2" switch -q -C del-only origin/main
+printf 'TMP\n' > "$W2/$MDIR/150_tmp.sql"
+git -C "$W2" add -A && git -C "$W2" commit -qm 'add'
+git -C "$W2" rm -q "$W2/$MDIR/150_tmp.sql" && git -C "$W2" commit -qm 'delete'
+printf 'readme\n' > "$W2/README.md"; git -C "$W2" add -A && git -C "$W2" commit -qm 'unrelated'
+: > "$tmp/gho-filter"
+set +e
+out=$(cd "$W2" && EVENT_NAME=pull_request BASE_REF=main GITHUB_OUTPUT="$tmp/gho-filter" bash --noprofile --norc -eo pipefail "$FILTER_STEP" 2>&1); r1=$?
+t1=$(sed -n 's/^tenant=//p' "$tmp/gho-filter")
+set -e
+git -C "$W2" switch -q -C no-mig origin/main
+printf 'readme\n' > "$W2/README.md"; git -C "$W2" add -A && git -C "$W2" commit -qm 'unrelated only'
+: > "$tmp/gho-filter"
+set +e
+out2=$(cd "$W2" && EVENT_NAME=pull_request BASE_REF=main GITHUB_OUTPUT="$tmp/gho-filter" bash --noprofile --norc -eo pipefail "$FILTER_STEP" 2>&1); r2=$?
+t2=$(sed -n 's/^tenant=//p' "$tmp/gho-filter")
+set -e
+if [[ "$r1$r2" == "00" && "$t1" == "true" && "$t2" == "false" ]]; then
+  pass "history-only migration changes run the check; unrelated PRs still skip"
+else
+  fail "filter: del-only=$t1 (rc=$r1 $out) no-mig=$t2 (rc=$r2 $out2)"
+fi
 
 # ----------------------------------------------------------------------
 echo "W-AC5: action.yml carries the repair, ownership and fail-closed lines; no raw row echo"
@@ -1164,7 +1763,7 @@ CASES=$((CASES + 1))
 miss=""
 grep -qF 'Repair: knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md §Content drift' "$ACTION" || miss+=" repair"
 grep -qF 'dev-ledger-parity.sh check (#8521)' "$ACTION" || miss+=" check-pointer"
-grep -qF 'no live branch owns these rows' "$ACTION" || miss+=" ownerless"
+grep -qF 'no fresh live branch owns these rows' "$ACTION" || miss+=" ownerless"
 grep -qF 'UNCLASSIFIED' "$ACTION" || miss+=" unclassified"
 # Scoped to the extracted probe step, and to $f as a whole word ($fn in the
 # rpc-body step names a committed allowlist entry, not a ledger row).
@@ -1188,10 +1787,25 @@ fi
 # Vacuity floor: reported via printf + exit, never through fail(). The bound
 # sits directly above its `if` so guard-vacuity-floor's mutant slice carries it.
 # ----------------------------------------------------------------------
+# ----------------------------------------------------------------------
+echo "G1-STUB: no check run issued more than one psql call, or any SQL but the fixed SELECT"
+CASES=$((CASES + 1))
+if [[ -z "$STUB_BREACHES" ]]; then
+  pass "one read-only SELECT per run, every run"
+else
+  fail "psql contract breached:$STUB_BREACHES"
+fi
+
 echo ""
-EXPECTED_CASES=65
+EXPECTED_CASES=99
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: only %s of %s cases ran — suite is truncated\n' "$CASES" "$EXPECTED_CASES" >&2
+  exit 1
+fi
+# Every case records exactly one verdict: a row that stops counting its verdict
+# (or counts two) is caught here, not by the CASES floor above.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf 'FATAL: %s verdicts for %s cases — a case lost or doubled its verdict\n' "$((PASS + FAIL))" "$CASES" >&2
   exit 1
 fi
 echo "dev-ledger-parity.test.sh: $PASS passed, $FAIL failed ($CASES cases)"

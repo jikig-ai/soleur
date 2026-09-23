@@ -97,6 +97,7 @@ runs:
         DOPPLER_PROJECT: ${{ inputs.doppler-project }}
         DOPPLER_CONFIG: ${{ inputs.doppler-config }}
         FAIL_ON_DRIFT: ${{ inputs.fail-on-ledger-drift }}
+        SENTRY_DSN: ${{ inputs.sentry-dsn }}
       run: |
         set -uo pipefail
         # Refresh origin/main locally so `git ls-tree` reflects merged state.
@@ -155,9 +156,18 @@ runs:
           # `git ls-tree origin/main -- <path>` returns `<mode> <type> <sha> <path>`.
           # Empty stdout means the file is not on origin/main (missing-class drift).
           ls_out=$(git ls-tree origin/main -- "$path" 2>/dev/null || true)
+          # content_sha is dev state a PR's migration can write: never echo a
+          # value that is not a 40-hex blob id (annotation injection), and never
+          # hand one to the classifier (it would refuse the whole batch).
+          sha_ok="true"
+          [[ -z "$sha_applied" || "$sha_applied" =~ ^[0-9a-f]{40}$ ]] || sha_ok="false"
           if [[ -z "$ls_out" ]]; then
             missing_drift+="$f"$'\n'
-            missing_pairs+="$f|$sha_applied"$'\n'
+            if [[ "$sha_ok" == "true" ]]; then
+              missing_pairs+="$f|$sha_applied"$'\n'
+            else
+              missing_pairs+="$f|"$'\n'
+            fi
             continue
           fi
           # Compare git blob sha (column 3 of ls-tree output) with the sha
@@ -166,7 +176,9 @@ runs:
           # than surface a noisy "applied before content-sha tracking" line.
           [[ -z "$sha_applied" ]] && continue
           main_blob_sha=$(awk '{print $3}' <<<"$ls_out")
-          if [[ "$sha_applied" != "$main_blob_sha" ]]; then
+          if [[ "$sha_ok" != "true" ]]; then
+            content_drift+="$f (applied=<malformed content_sha, not echoed> main=$main_blob_sha)"$'\n'
+          elif [[ "$sha_applied" != "$main_blob_sha" ]]; then
             content_drift+="$f (applied=$sha_applied main=$main_blob_sha)"$'\n'
           fi
         done <<<"$applied"
@@ -191,11 +203,14 @@ runs:
         orphans="$missing_drift"
         inflight_lines=""
         stale_lines=""
+        merged_lines=""
         unclassified=""
         if [[ "$FAIL_ON_DRIFT" == "true" && -n "$missing_pairs" ]]; then
           cls_err=$(mktemp)
           cls_rc=0
-          cls_out=$(bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing \
+          # Bounded: this runs inside the dev-suite mutex window on push, and a
+          # hang must land on the UNCLASSIFIED arm, not on the job timeout.
+          cls_out=$(timeout -k 5 90 bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing \
             --base-branch main --repo "$GITHUB_WORKSPACE" <<<"$missing_pairs" 2>"$cls_err") || cls_rc=$?
           cls_summary=$(grep -m1 '^ledger-classify: ' "$cls_err" || true)
           mapfile -t want_files < <(printf '%s' "$missing_drift" | sed '/^$/d')
@@ -203,36 +218,49 @@ runs:
           # Line i must name file i — a count match alone would accept a
           # reordered or substituted verdict set.
           cls_ok="true"
-          [[ "$cls_rc" == "0" && "${#got_lines[@]}" == "${#want_files[@]}" ]] || cls_ok="false"
+          cls_reason="rc=$cls_rc"
+          if [[ "$cls_rc" != "0" ]]; then
+            cls_ok="false"
+          elif [[ "${#got_lines[@]}" != "${#want_files[@]}" ]]; then
+            cls_ok="false"; cls_reason="count got=${#got_lines[@]} want=${#want_files[@]}"
+          fi
           branch_re='^[A-Za-z0-9._/<>-]+$'
+          STALE_DAYS_LABEL=30
           orphans=""
           if [[ "$cls_ok" == "true" ]]; then
             for i in "${!want_files[@]}"; do
               v="" vf="" vb="" vx=""
               IFS=$'\t' read -r v vf vb vx <<<"${got_lines[$i]}"
-              if [[ "$vf" != "${want_files[$i]}" ]]; then cls_ok="false"; break; fi
+              if [[ "$vf" != "${want_files[$i]}" ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) names another file"; break; fi
               case "$v" in
                 in-flight)
-                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^(exact|blob|slug)$ ]]; then cls_ok="false"; break; fi
-                  inflight_lines+="  - $vf (in-flight: unmerged on live branch $vb via $vx — merging clears it; deleting the branch unmerged turns main red)"$'\n' ;;
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^(exact|blob|slug)$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; break; fi
+                  if [[ "$vx" == "exact" ]]; then
+                    inflight_lines+="  - $vf (in-flight: unmerged on live branch $vb via exact name — merging clears it; deleting the branch unmerged turns main red)"$'\n'
+                  else
+                    inflight_lines+="  - $vf (in-flight: live branch $vb holds this migration under another name, matched via $vx — that PR must restore the applied name before it merges, or this row becomes an orphan)"$'\n'
+                  fi ;;
                 stale)
-                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^[0-9]+$ ]]; then cls_ok="false"; break; fi
-                  stale_lines+="  - $vf (stale: only owner $vb has had no commit for $vx days — push to it, or have the dev apply reverted and delete the branch; #8605)"$'\n' ;;
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^([0-9]+|future-dated|undated)$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; break; fi
+                  stale_lines+="  - $vf (stale: owner $vb has no commit dated within the last $STALE_DAYS_LABEL days (age: $vx) — push to it, or have the dev apply reverted and delete the branch; #8605)"$'\n' ;;
+                merged)
+                  merged_lines+="  - $vf (now on origin/main: it merged after this probe fetched main; the next run sees it)"$'\n' ;;
                 orphan)
                   orphans+="$vf"$'\n' ;;
                 *)
-                  cls_ok="false"; break ;;
+                  cls_ok="false"; cls_reason="line=$((i + 1)) unknown verdict"; break ;;
               esac
             done
           fi
           if [[ "$cls_ok" != "true" ]]; then
             inflight_lines=""
             stale_lines=""
+            merged_lines=""
             orphans=""
             unclassified="$missing_drift"
             drift_seen="true"
             # FIRST, so the failure is never read as drift.
-            echo "::error::ledger-classify: UNCLASSIFIED (rows=${#want_files[@]} rc=$cls_rc) — could not classify missing-on-main rows; not evidence of drift; failing closed"
+            echo "::error::ledger-classify: UNCLASSIFIED (rows=${#want_files[@]} $cls_reason) — these rows ARE missing on origin/main, but their ownership could not be established; failing closed"
             echo "::error::Unclassified:"
             while IFS= read -r f; do
               [[ -z "$f" ]] && continue
@@ -253,6 +281,14 @@ runs:
             echo "::warning::$l"
           done <<<"$inflight_lines"
         fi
+        if [[ -n "$merged_lines" ]]; then
+          drift_seen="true"
+          echo "::warning::dev-Supabase has _schema_migrations rows that reached origin/main while this probe ran:"
+          while IFS= read -r l; do
+            [[ -z "$l" ]] && continue
+            echo "::warning::$l"
+          done <<<"$merged_lines"
+        fi
         if [[ -n "$stale_lines" ]]; then
           drift_seen="true"
           echo "::error::dev-Supabase has _schema_migrations rows whose only owner branch is stale (no commit for more than 30 days):"
@@ -266,7 +302,7 @@ runs:
           echo "::${sev}::dev-Supabase has _schema_migrations rows whose file is NOT on origin/main."
           echo "::${sev}::See #4241 + knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md for revert procedure."
           if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
-            echo "::${sev}::no live branch owns these rows — a dev reconcile is required (learning gap 2; #8605)"
+            echo "::${sev}::no fresh live branch owns these rows, or their filename is in origin/main's history — a dev reconcile is required (learning gap 2; #8605)"
           fi
           echo "::${sev}::Missing-on-main:"
           while IFS= read -r f; do
@@ -288,8 +324,33 @@ runs:
           echo "No dev-vs-main migration drift detected."
         fi
         echo "drift-detected=${drift_seen}" >> "$GITHUB_OUTPUT"
+        # The scheduled surface (the only caller passing sentry-dsn) has no human
+        # reading its red run, so a blocking class there also emits one Sentry
+        # event per class. Static message; class names only, never row text.
+        if [[ "$FAIL_ON_DRIFT" == "true" && -n "${SENTRY_DSN:-}" ]]; then
+          ledger_classes=""
+          [[ -n "$orphans" ]] && ledger_classes+=" orphan"
+          [[ -n "$stale_lines" ]] && ledger_classes+=" stale"
+          [[ -n "$unclassified" ]] && ledger_classes+=" unclassified"
+          [[ -n "$content_drift" ]] && ledger_classes+=" content-drift"
+          if [[ -n "$ledger_classes" ]]; then
+            s_key=$(printf '%s' "$SENTRY_DSN" | sed -E 's#^https?://([^@:]+)(:[^@]*)?@.*#\1#')
+            s_host=$(printf '%s' "$SENTRY_DSN" | sed -E 's#^https?://[^@]+@([^/]+)/.*#\1#')
+            s_proj=$(printf '%s' "$SENTRY_DSN" | sed -E 's#.*/([0-9]+)/?$#\1#')
+            for cls in $ledger_classes; do
+              s_payload=$(jq -nc --arg cls "$cls" '{message:"dev ledger drift", level:"error", platform:"other", tags:{feature:"dev-migration-drift", op:"ledger-drift", ledger_class:$cls}}')
+              s_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST "https://${s_host}/api/${s_proj}/store/" \
+                -H "Content-Type: application/json" \
+                -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_client=dev-ledger-drift-gha/1.0, sentry_key=${s_key}" \
+                --data "$s_payload" 2>/dev/null || echo "000")
+              if [[ "$s_code" != "200" && "$s_code" != "202" ]]; then
+                echo "::warning::dev ledger drift: Sentry event for class $cls not accepted (HTTP $s_code); the red run is the only signal."
+              fi
+            done
+          fi
+        fi
         # Fail closed AFTER emitting every annotation so the run log names all
-        # drifted rows, not just the first. In-flight rows alone never fail.
+        # drifted rows, not just the first. In-flight and merged rows alone never fail.
         if [[ "$FAIL_ON_DRIFT" == "true" ]] \
           && [[ -n "$orphans" || -n "$stale_lines" || -n "$unclassified" || -n "$content_drift" ]]; then
           exit 1

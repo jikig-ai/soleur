@@ -111,6 +111,18 @@ jobs:
           # DB RLS policies (migrations, anchored). See ADR-032 amendment.
           if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$|scripts/dev-suite-mutex\.sh$|\.github/actions/dev-migration-drift-probe/|apps/web-platform/scripts/lint-migration-immutability|apps/web-platform/scripts/dev-ledger-parity)'; then
             printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A PR that added a migration, let CI apply it, then deleted it has no
+          # NET migration diff, yet its dev ledger row becomes an orphan: the
+          # dev-ledger-parity check must still run (#8521 A4). Scan the PR's
+          # own commits, not just the net diff.
+          if ! MIG_HIST=$(git log --format= --name-only "origin/${BASE_REF}..HEAD" -- apps/web-platform/supabase/migrations/); then
+            echo "::error::git log of this PR's migration history failed; failing detect-changes closed." >&2
+            exit 1
+          fi
+          if [[ -n "$MIG_HIST" ]]; then
+            printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'tenant=false\n' >> "$GITHUB_OUTPUT"
           fi
@@ -345,53 +357,6 @@ jobs:
         working-directory: apps/web-platform
         run: bash scripts/lint-migration-fk-preconditions.sh --from-pr-diff
 
-      # Stage the copy of dev-ledger-parity.sh that judges this run (#8521):
-      # the BASE-REF copy whenever it exists, so a PR cannot weaken the guard
-      # that judges it (#8597's anti-self-neuter pattern). The state comes from
-      # detect-changes, which has full history. No Doppler / DB access here.
-      # This does not stop a PR from editing THIS workflow or rewriting the
-      # dev ledger with its own dev credentials — both are visible in review,
-      # and the post-merge drift probe on main is outside the PR's control.
-      - name: Resolve dev-ledger-parity guard (base-ref copy)
-        env:
-          LEDGER_GUARD: ${{ needs.detect-changes.outputs.ledger_guard }}
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          set -uo pipefail
-          base_ref="${BASE_REF:-main}"
-          base_ref="${base_ref#refs/heads/}"
-          GUARD_PATH="apps/web-platform/scripts/dev-ledger-parity.sh"
-          GUARD_COPY="$RUNNER_TEMP/dev-ledger-parity.sh"
-          # The check step compares against origin/$base_ref; this shallow
-          # checkout may not carry it yet.
-          fetch_rc=0
-          timeout 60 git fetch --no-tags --depth=1 origin "$base_ref" || fetch_rc=$?
-          if [[ "$fetch_rc" != "0" ]]; then
-            echo "::error::git fetch of origin/$base_ref exited rc=$fetch_rc, so the guard copy cannot be staged; re-run the job"
-            exit 1
-          fi
-          case "$LEDGER_GUARD" in
-            base)
-              if ! git show "origin/${base_ref}:$GUARD_PATH" > "$GUARD_COPY" || [[ ! -s "$GUARD_COPY" ]]; then
-                echo "::error::could not extract $GUARD_PATH from origin/$base_ref — refusing to judge with a PR-controlled copy"
-                exit 1
-              fi
-              echo "dev-ledger-parity: running the base-ref copy from origin/$base_ref"
-              ;;
-            introduction)
-              echo "::notice::$GUARD_PATH never existed on origin/$base_ref (introduction window) — running the checkout copy"
-              cp "$GUARD_PATH" "$GUARD_COPY"
-              ;;
-            deleted)
-              echo "::error::$GUARD_PATH was removed from origin/$base_ref — refusing to judge with a PR-controlled copy. Retire the guard by removing the script and its workflow steps together in one PR."
-              exit 1
-              ;;
-            *)
-              echo "::error::unknown ledger_guard state '$LEDGER_GUARD' from detect-changes — failing closed"
-              exit 1
-              ;;
-          esac
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
@@ -507,6 +472,11 @@ jobs:
       # a feature branch stays warning-only: that ref is not authoritative.
       - name: Detect dev-vs-main migration drift
         uses: ./.github/actions/dev-migration-drift-probe
+        env:
+          # Classifier owner repo reused by the pre- and post-section probes
+          # (fetched with --prune each call). Only main-ref code writes it: PR
+          # runs never reach the classifier, and the PR check builds its own.
+          DLP_OWNERS_CACHE: ${{ runner.temp }}/dev-ledger-owners
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
           fail-on-rpc-body-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
@@ -517,24 +487,81 @@ jobs:
       # dev project, and the runner never re-applies a ledgered filename. So a
       # PR that edits (A1), renames (A2) or deletes (A4) a migration after CI
       # applied it keeps dev on the OLD body: its own tests pass against the
-      # stale schema, and main's drift probe reds after merge. This step fails
-      # the PR instead — before apply (A1 makes the runner skip the stale file,
-      # so a dependent migration would otherwise fail inside apply first) and
-      # inside the mutex window. It fails rather than re-applying: re-running
-      # an edited idempotent body leaves the old body's objects behind
-      # silently (#8520's 075 policy / 122 index). Read-only: one SELECT.
-      # HEAD_BRANCH is empty on push / dispatch; github.head_ref only via env:.
+      # stale schema, and main's drift probe reds. This step fails the PR
+      # instead — before apply (A1 makes the runner skip the stale file, so a
+      # dependent migration would otherwise fail inside apply first) and inside
+      # the mutex window. It fails rather than re-applying: re-running an edited
+      # idempotent body leaves the old body's objects behind silently (#8520's
+      # 075 policy / 122 index). Read-only: one SELECT.
+      #
+      # The guard that judges the PR is the BASE-REF copy whenever origin/<base>
+      # carries it — a PR must not weaken it (#8597's anti-self-neuter pattern).
+      # It is extracted and executed in THIS step, so no PR-controlled step runs
+      # between extraction and execution. The checkout copy runs only in the
+      # introduction window (never on base, per detect-changes' full-history
+      # state); a guard removed from base, or any other state, fails closed.
+      # This does not stop a PR from editing THIS workflow or rewriting the dev
+      # ledger with its own dev credentials — both are visible in review, and the
+      # post-merge drift probe on main is outside the PR's control. A broken
+      # base copy judges every PR including its own fix: recovery is a
+      # ruleset-bypass merge, as for the immutability guard above.
+      #
+      # HEAD_BRANCH: the PR head, or the dispatched branch; github.head_ref and
+      # github.ref_name only via env:.
       - name: Assert unmerged migrations match the dev ledger
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          LEDGER_GUARD: ${{ needs.detect-changes.outputs.ledger_guard }}
           BASE_REF: ${{ github.base_ref }}
-          HEAD_BRANCH: ${{ github.head_ref }}
+          HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           set -uo pipefail
           base_ref="${BASE_REF:-main}"
           base_ref="${base_ref#refs/heads/}"
-          doppler run -p soleur -c dev_scheduled -- \
-            bash "$RUNNER_TEMP/dev-ledger-parity.sh" check --base "origin/$base_ref" --repo "$GITHUB_WORKSPACE" --head-branch "$HEAD_BRANCH"
+          GUARD_PATH="apps/web-platform/scripts/dev-ledger-parity.sh"
+          GUARD_COPY="$(mktemp "$RUNNER_TEMP/dev-ledger-parity.XXXXXX")"
+          fetch_rc=0
+          timeout 60 git fetch --no-tags --depth=1 origin "$base_ref" || fetch_rc=$?
+          if [[ "$fetch_rc" != "0" ]]; then
+            echo "::error::git fetch of origin/$base_ref exited rc=$fetch_rc, so the guard copy cannot be staged; re-run the job"
+            exit 1
+          fi
+          if git cat-file -e "origin/${base_ref}:$GUARD_PATH" 2>/dev/null; then
+            # The base tip carries the guard: that copy judges, whatever the state says.
+            if ! git show "origin/${base_ref}:$GUARD_PATH" > "$GUARD_COPY" || [[ ! -s "$GUARD_COPY" ]]; then
+              echo "::error::could not extract $GUARD_PATH from origin/$base_ref — refusing to judge with a PR-controlled copy"
+              exit 1
+            fi
+            echo "dev-ledger-parity: running the base-ref copy from origin/$base_ref"
+          else
+            case "$LEDGER_GUARD" in
+              introduction)
+                echo "::notice::$GUARD_PATH never existed on origin/$base_ref (introduction window) — running the checkout copy"
+                cp "$GUARD_PATH" "$GUARD_COPY"
+                ;;
+              deleted)
+                echo "::error::$GUARD_PATH was removed from origin/$base_ref — refusing to judge with a PR-controlled copy. Retire the guard by removing the script and its workflow steps together in one PR."
+                exit 1
+                ;;
+              *)
+                echo "::error::origin/$base_ref lacks $GUARD_PATH but detect-changes reported ledger_guard='$LEDGER_GUARD' — failing closed"
+                exit 1
+                ;;
+            esac
+          fi
+          if [[ ! -s "$GUARD_COPY" ]]; then
+            echo "::error::the staged dev-ledger-parity guard is empty — refusing to report a pass it did not measure"
+            exit 1
+          fi
+          guard_rc=0
+          guard_out=$(doppler run -p soleur -c dev_scheduled -- \
+            bash "$GUARD_COPY" check --base "origin/$base_ref" --repo "$GITHUB_WORKSPACE" --head-branch "$HEAD_BRANCH") || guard_rc=$?
+          printf '%s\n' "$guard_out"
+          if ! printf '%s\n' "$guard_out" | grep -qE '^ledger-parity: (clean|RED) \('; then
+            echo "::error::the dev-ledger-parity guard printed no ledger-parity summary line (rc=$guard_rc) — it did not complete a measurement"
+            exit 1
+          fi
+          exit "$guard_rc"
 
       # Preflight: schema-vs-ledger consistency check (#4338). Logic
       # lives in apps/web-platform/scripts/preflight-schema-vs-ledger.sh
@@ -666,6 +693,11 @@ jobs:
       - name: Re-probe dev-vs-main migration drift (post-section)
         if: always()
         uses: ./.github/actions/dev-migration-drift-probe
+        env:
+          # Classifier owner repo reused by the pre- and post-section probes
+          # (fetched with --prune each call). Only main-ref code writes it: PR
+          # runs never reach the classifier, and the PR check builds its own.
+          DLP_OWNERS_CACHE: ${{ runner.temp }}/dev-ledger-owners
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
           fail-on-rpc-body-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
