@@ -43,7 +43,7 @@ The five files `.grok/agents/soleur-engineering-research-{best-practices-researc
 
 ### FR4: ADR-110 addendum
 
-An addendum dated 2026-09-23 states that Grok 1.0.41 ignores `haiku` and `cheap` with a catalog warning, recognizes `grok-4.5` then can have it overwritten by the headless client's `SetSessionModel`, and that the chosen fix is to omit `model` on the Grok research stubs. Decision 4 is unchanged.
+An addendum dated 2026-09-23 states that Grok 1.0.41 ignores `haiku` and `cheap` with a catalog warning, recognizes `grok-4.5` then can have it overwritten by the headless client's `SetSessionModel`, and that the chosen fix is to omit `model` on the Grok research stubs. It also states that `subagent_model_inheritance` was unset (documented default off) and that the session's spawn tool exposed neither a `model` argument nor an agent-type argument. Decision 4 is unchanged.
 
 ## Technical Requirements
 

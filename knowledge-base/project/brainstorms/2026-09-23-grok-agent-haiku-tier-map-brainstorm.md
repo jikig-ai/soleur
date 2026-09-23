@@ -25,6 +25,8 @@ Issue #8604 (open, no comments) asked for a live Grok 1.0.40+ measurement before
 
 `origin/main` has 5 stubs with `model: haiku` and 62 with `model: inherit` (`git grep -h '^model:' origin/main -- '.grok/agents/*.md'`). ADR-110 decision 4 still holds: the harness does not accept semantic tiers in agent spawn, so the Claude files stay on `haiku` and the generator must not write the word `cheap`.
 
+`subagent_model_inheritance` is unset in `~/.grok/config.toml` and in the environment, which is the documented default (off). The user guide says turning it on hides the spawn `model` argument and rejects a spawn that still names one. This session's spawn tool had no `model` argument and no agent-type argument, so inheritance never had a named model to reject. That is the behaviour to record: the flag is off, and the current spawn schema does not carry a model pin at all.
+
 Pinning `grok-4.5` would put a catalog slug on a session profile. A client that stops overwriting it would downgrade the whole session, not a research child. The 2026-09-23 ADR-110 addendum already says the Grok cheap-versus-standard gap is cached input only. Dropping the line matches today's effective behavior and removes the warning.
 
 ## User-Brand Impact
