@@ -1019,3 +1019,20 @@ Guard Contract rows plus these arcs:
   `2026-09-23-a-pr-must-not-control-the-guard-that-judges-it.md`,
   `2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md`
 - **Prior plan whose §M2 premise this corrects:** `2026-09-21-fix-tenant-integration-shared-fixture-contention-plan.md`
+
+## Review-phase amendments (2026-09-23)
+
+The 11-agent review changed the design in ways the sections above do not show. They stay as the pre-review record; this is what shipped.
+
+- **No separate staging step.** "Resolve dev-ledger-parity guard (base-ref copy)" was removed. The check step `Assert unmerged migrations match the dev ledger` now extracts and runs the guard itself, so no PR-controlled step runs between extraction and execution. The base tip's copy wins whenever it exists. The step fails if the copy is empty or the guard prints no `ledger-parity:` summary line.
+- **Owner skip is stricter.** A row is excused only when a fresh branch holds it by exact name AND at the applied blob, and did not inherit it from this PR's history. The skip is a `::warning::`, not a `::notice::`.
+- **Committed blobs.** `check` reads `git ls-tree HEAD`, which is the blob main's probe compares after merge, not a working-copy `hash-object`. Only top-level migrations count, on both sides.
+- **A4 uses `--no-renames`.** Rename detection needs blob contents the blobless owner repo does not have.
+- **Classifier.** A new `merged` verdict (warning) covers a merge between the probe's fetch and the classifier's. Future-dated or undated heads are `stale`. The owner build is one `diff-tree --stdin` plus one history pass. `DLP_OWNERS_CACHE` is shared by the two probe calls on main runs.
+- **Action.** A malformed `content_sha` is never echoed. The classifier call is bounded (`timeout 90`). UNCLASSIFIED carries its reason. The scheduled surface emits one Sentry event per blocking class.
+- **Workflow.** The history of a PR that only touched migrations now triggers the suite. Dispatch runs pass `github.ref_name` as the head branch.
+- **Residuals** are recorded in ADR-061 §Amendment 2026-09-23: A4 cannot see force-pushed or merge-only bodies, an independent branch holding the applied blob still excuses a PR, the check is a pre-apply snapshot, and the main side has no history tier.
+- **Timings (AC8, AC10b).**
+  - Owner build against the real origin: 17.2 s and 26.9 s on a loaded workstation, before the `diff-tree` rewrite.
+  - The review's performance pass measured the post-rewrite build path at about 7–12 s, dominated by the fetch.
+  - AC10b: run 35872133761 took 32 s end to end and reported no drift. The classifier was not exercised live.
