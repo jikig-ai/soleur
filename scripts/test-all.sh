@@ -697,7 +697,12 @@ fi
 # error, not a degrade. The default path being absent IS a degrade — a fresh clone or
 # a mid-rebase checkout must still partition.
 _shard_manifest_active=0
-_shard_manifest_map=""   # packed "|label=leg|label=leg|" — bash 3.2, no declare -A
+# Parallel indexed arrays, not an assoc map (bash 3.2) and NOT a packed-string
+# pseudo-map either: a "|label=leg|" blob + `case` glob lookup backtracks over
+# ~480 delimiters and measured >2min for one enumerate; a linear array scan
+# with literal == is ~1.4s for the same 482x482 workload.
+_shard_m_labels=()
+_shard_m_legs=()
 if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" ]]; then
   _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs.tsv"
   if [[ -n "${SOLEUR_SHARD_MANIFEST+x}" ]]; then
@@ -751,23 +756,24 @@ if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" ]]; then
           echo "       Regenerate: python3 scripts/regenerate-shard-manifest.py --write" >&2
           exit 2
         fi
-        # `|` cannot appear in a registered label (they are repo paths), so it is a
-        # safe field delimiter in the packed map.
-        case "$_shard_manifest_map" in
-          *"|${_mlbl}="*)
+        # Index loop, not `"${arr[@]}"`: an empty array's @-expansion is an unbound-
+        # variable death under `set -u` on bash 3.2 (macOS's shipped shell).
+        for (( _mdup = 0; _mdup < ${#_shard_m_labels[@]}; _mdup++ )); do
+          if [[ "$_mlbl" == "${_shard_m_labels[_mdup]}" ]]; then
             echo "ERROR: ${_shard_mfile}: '$_mlbl' listed twice." >&2
             echo "       Regenerate: python3 scripts/regenerate-shard-manifest.py --write" >&2
             exit 2
-            ;;
-        esac
-        _shard_manifest_map="${_shard_manifest_map}|${_mlbl}=${_mleg}"
+          fi
+        done
+        _shard_m_labels+=("$_mlbl")
+        _shard_m_legs+=("$_mleg")
         _shard_mcount=$(( _shard_mcount + 1 ))
       done < "$_shard_mfile"
       _shard_manifest_active=1
       echo "[shard] manifest assignment active: ${_shard_mcount} label(s) from ${_shard_mfile}" >&2
     fi
   fi
-  unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _shard_mcount
+  unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _mrest _mdup _shard_mcount
 fi
 
 # THE CARRIER IS CONSUMED HERE, AND MUST NOT BE INHERITED (#7902 review, P1).
@@ -990,13 +996,13 @@ _shard_selects() {
     # manifest does not table — a suite added since the last regeneration — hashes
     # onto a leg deterministically (POSIX cksum), so inserting a suite never moves an
     # existing assignment and assignment is collation-independent.
-    local _leg=0
-    case "$_shard_manifest_map" in
-      *"|$label="*)
-        _leg="${_shard_manifest_map##*"|$label="}"
-        _leg=$(( 10#${_leg%%|*} ))
-        ;;
-    esac
+    local _leg=0 _mi
+    for (( _mi = 0; _mi < ${#_shard_m_labels[@]}; _mi++ )); do
+      if [[ "$label" == "${_shard_m_labels[_mi]}" ]]; then
+        _leg=$(( 10#${_shard_m_legs[_mi]} ))
+        break
+      fi
+    done
     if (( _leg == 0 )); then
       _leg=$(( ($(printf '%s' "$label" | cksum | cut -d' ' -f1) % _SHARD_N) + 1 ))
     fi
