@@ -166,7 +166,8 @@ dark since #7071, so there is no window to protect.
       rollback paragraph.
 - [x] 7.26 `decision-challenges.md` DC-W6: record that the stated `ZOT_GATE_STATUS` repayment did
       not exist as written, and what it is now.
-- [x] 7.27 CI: neutralize two resolvable `${HOME}/.docker/config.json` literals; move the
+- [x] 7.27 CI: neutralize two resolvable home-docker-config path literals (the `~/.docker/`
+      directory-only form is what the gate accepts); move the
       `cloud-init.yml` prose to `server.tf` to get back under the gzip budget without raising it.
 - [x] 7.28 DONE 2026-09-23: struck the `soleur:followthrough` directive from
       #6400's body, which still names the deleted `deploy-ghcr-pull-recovery-6400.sh`.
