@@ -469,7 +469,16 @@ mkdir -p "$SS_ROOT/locks"
 # (green locally, red in CI: the vitest-unstub-can't-clear-inherited-env class
 # from work/SKILL.md). The CI-exemption arm below re-sets CI=true explicitly.
 lock_env() {
-  env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+  # The TC_* knobs are scrubbed too: a caller running this suite under a
+  # raised-budget wrapper (the ship battery exports TC_LOCK_TIMEOUT=14400
+  # TC_RUNTIME_CEILING_S=39600) would otherwise leak ambient budgets into
+  # arms that assume the shipped defaults — Q11's 6h-old tickets are not
+  # stale under a 39600s ceiling, and Q14's sanitize-to-default arm reads
+  # the ambient TC_LOCK_TIMEOUT. Arms that need a non-default set it after
+  # the scrub via `lock_env env VAR=...`.
+  env -u CI -u TC_LOCK_TIMEOUT -u TC_RUNTIME_CEILING_S -u TC_QUEUE_TIMEOUT \
+      -u TC_QUEUE_POLL_S -u TC_WAIT_HEARTBEAT_S \
+      SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
       TC_PROC_ROOT="$FAKE_PROC" TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" \
       "$@"
 }
@@ -2244,7 +2253,10 @@ flock -x "$SWEEP_DIR/00000002" -c 'sleep 30' & HELD_T=$!
 await_held "$SWEEP_DIR/00000002" || { cases=$((cases + 1)); fail "Q11 fixture: held ticket probe failed"; }
 # TC_QUEUE_TIMEOUT=2: the assertions only need the mint (sweep + serial) to
 # have run — without it this arm waits out the held ticket's 30s sleep.
-lock_env env TC_QUEUE_TIMEOUT=2 timeout 30 bash -c "source '$LIB'; tc_acquire 8579-t11 3; echo RC=\$?" \
+# TC_RUNTIME_CEILING_S is pinned to the shipped default so the 6h-old fixture
+# is stale (21600 > 14400) even under a raised-budget ambient env.
+lock_env env TC_QUEUE_TIMEOUT=2 TC_RUNTIME_CEILING_S=14400 \
+  timeout 30 bash -c "source '$LIB'; tc_acquire 8579-t11 3; echo RC=\$?" \
   > "$TESTROOT/q-t11.txt" 2>&1 || true
 cases=$((cases + 1))
 if [[ ! -e "$SWEEP_DIR/00000001" ]] && [[ -e "$SWEEP_DIR/00000002" ]]; then
@@ -2302,14 +2314,16 @@ wait "$ALLOC_H" 2>/dev/null || true
 # the knob exists to prevent. Non-numeric values are unbound-var aborts under
 # set -u arithmetic. Both must normalize to the defaults.
 cases=$((cases + 1))
-_knobs="$(env TC_QUEUE_TIMEOUT=0 TC_QUEUE_POLL_S=0 bash -c "source '$LIB'; echo \"\$TC_QUEUE_TIMEOUT \$TC_QUEUE_POLL_S\"" 2>/dev/null)"
+# TC_LOCK_TIMEOUT is pinned because TC_QUEUE_TIMEOUT's default DERIVES from
+# it — an ambient raised budget would read as "not sanitized".
+_knobs="$(env TC_LOCK_TIMEOUT=3600 TC_QUEUE_TIMEOUT=0 TC_QUEUE_POLL_S=0 bash -c "source '$LIB'; echo \"\$TC_QUEUE_TIMEOUT \$TC_QUEUE_POLL_S\"" 2>/dev/null)"
 if [[ "$_knobs" == "3600 5" ]]; then
   pass "Q14: zero-valued queue knobs normalize to defaults (no unbounded wait, no busy-spin)"
 else
   fail "Q14: zero knobs not sanitized; got '$_knobs'"
 fi
 cases=$((cases + 1))
-_knobs="$(env TC_QUEUE_TIMEOUT=abc TC_QUEUE_POLL_S=abc bash -c "source '$LIB'; echo \"\$TC_QUEUE_TIMEOUT \$TC_QUEUE_POLL_S\"" 2>/dev/null)"
+_knobs="$(env TC_LOCK_TIMEOUT=3600 TC_QUEUE_TIMEOUT=abc TC_QUEUE_POLL_S=abc bash -c "source '$LIB'; echo \"\$TC_QUEUE_TIMEOUT \$TC_QUEUE_POLL_S\"" 2>/dev/null)"
 if [[ "$_knobs" == "3600 5" ]]; then
   pass "Q14: non-numeric queue knobs normalize to defaults (no set -u arithmetic abort)"
 else
