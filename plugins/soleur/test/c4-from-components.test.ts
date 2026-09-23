@@ -32,6 +32,7 @@ import {
   generateSpecC4,
   generateViewPage,
   generateViewsC4,
+  likec4ChildEnv,
   loadComponentDir,
   parseComponentDoc,
   toId,
@@ -228,7 +229,7 @@ describe("assessRender — three gates", () => {
   });
 
   it("does not false-fail on a workspace path containing the ANCHORED marker words", () => {
-    // regenerate-c4-model.sh anchors two of its three alternations for exactly
+    // render-c4-model.sh anchors two of its three alternations for exactly
     // this reason: likec4 echoes `workspace: /abs/path`, so `^Invalid ` and the
     // indented `Line N:` form cannot match a repo path mid-line.
     const diagnostics = "workspace: /home/u/Invalid Line 3: dir/repo\n";
@@ -237,7 +238,7 @@ describe("assessRender — three gates", () => {
 
   it("DOES trip on `Could not resolve` anywhere on the line — faithful to the shell", () => {
     // Deliberately unanchored upstream ("`Could not resolve` is a distinctive
-    // likec4 phrase", regenerate-c4-model.sh:92). A checkout path containing that
+    // likec4 phrase", render-c4-model.sh's DIAG_RE comment). A checkout path containing that
     // exact phrase would false-FAIL. That residual risk is inherited on purpose:
     // AC5 requires mirroring the shell gate, and diverging here would make the
     // producer and the script disagree about what a source fault is.
@@ -251,6 +252,36 @@ describe("assessRender — three gates", () => {
 // ---------------------------------------------------------------------------
 // countModelJson — the key mapping assessRender depends on
 // ---------------------------------------------------------------------------
+
+// Under CI likec4 switches to a timestamped, ANSI-coloured reporter. Measured on 1.50.0 under
+// CI=true: `ESC[2m15:32:23.971ESC[0m ESC[1mESC[31mERRORESC[0m ESC[1mESC[36mlikec4ESC[0m Invalid <f>`
+// and `    ESC[2mLine 4: ESC[22m…`. Anchored patterns match neither raw form, so a syntax error
+// became a truncated model at rc 0 — the scheduled Architecture Diagram Sync runs with CI set.
+describe("likec4 diagnostics under CI", () => {
+  const E = "\x1b";
+  const ciInvalid = `${E}[2m15:32:23.971${E}[0m ${E}[1m${E}[31mERROR${E}[0m ${E}[1m${E}[36mlikec4${E}[0m Invalid /r/m.c4`;
+  const ciLine = `    ${E}[2mLine 4: ${E}[22m${E}[31mExpecting token${E}[39m`;
+  const g = { elementCount: 3, relationshipCount: 1, generatedRelationships: 1 };
+
+  it("fails a CI-formatted `Invalid` line on its own (no Line row to lean on)", () => {
+    expect(assessRender({ diagnostics: ciInvalid, ...g }).status).toBe("failed");
+  });
+  it("fails a CI-formatted, ANSI-wrapped `Line N:` row on its own", () => {
+    expect(assessRender({ diagnostics: ciLine, ...g }).status).toBe("failed");
+  });
+  it("still passes a clean CI-formatted INFO stream", () => {
+    const info = `${E}[2m15:32:23.413${E}[0m ${E}[1m${E}[32mINFO ${E}[0m ${E}[1m${E}[36mlikec4.lang${E}[0m workspace: /r/Invalid dir`;
+    expect(assessRender({ diagnostics: info, ...g }).status).toBe("ok");
+  });
+  it("likec4ChildEnv drops CI and FORCE_COLOR, sets NO_COLOR, keeps the rest", () => {
+    const env = likec4ChildEnv({ CI: "true", FORCE_COLOR: "1", PATH: "/bin", HOME: "/h" });
+    expect(env.CI).toBeUndefined();
+    expect(env.FORCE_COLOR).toBeUndefined();
+    expect(env.NO_COLOR).toBe("1");
+    expect(env.PATH).toBe("/bin");
+    expect(env.HOME).toBe("/h");
+  });
+});
 
 describe("countModelJson — pinned against a REAL likec4 artifact", () => {
   // This is the one thing no assessRender test can cover. assessRender takes
@@ -337,12 +368,12 @@ describe("generateC4", () => {
 // ---------------------------------------------------------------------------
 
 describe("drift guards", () => {
-  const regenScript = readFileSync(join(REPO_ROOT, "scripts/regenerate-c4-model.sh"), "utf8");
+  const regenScript = readFileSync(join(REPO_ROOT, "plugins/soleur/scripts/render-c4-model.sh"), "utf8");
 
   // AC4. Both-gates validation (diagnostic stream AND element count) is only safe
   // while the pin holds — likec4's diagnostic WORDING is version-specific, which is
   // exactly why c4-render.ts refuses to gate on it.
-  it("pins likec4 to the same version as regenerate-c4-model.sh", () => {
+  it("pins likec4 to the same version as render-c4-model.sh", () => {
     const m = regenScript.match(/^LIKEC4_VERSION="([^"]+)"/m);
     expect(m).not.toBeNull();
     expect(LIKEC4_VERSION).toBe(m![1]);
@@ -360,7 +391,7 @@ describe("drift guards", () => {
   // across a probe corpus rather than string equality — the shell uses POSIX
   // `[[:space:]]` and JS uses `\s`, so a literal comparison would be a false
   // signal in both directions.
-  it("matches regenerate-c4-model.sh's DIAG_RE on an identical probe corpus", () => {
+  it("matches render-c4-model.sh's DIAG_RE on an identical probe corpus", () => {
     const m = regenScript.match(/^DIAG_RE='([^']+)'/m);
     expect(m).not.toBeNull();
     const shellEquivalent = new RegExp(m![1].replace(/\[\[:space:\]\]/g, "\\s"), "m");
@@ -374,6 +405,9 @@ describe("drift guards", () => {
       "done in 1.2s",
       "invalid lowercase should not match",
       "some Invalid mid-line text should not match",
+      "15:32:23.971 ERROR likec4 Invalid /r/m.c4",
+      "15:32:23 WARN likec4.lang Invalid /r/m.c4",
+      "15:32:23.413 INFO likec4.lang workspace: /r/Invalid dir",
     ];
     for (const p of probes) {
       expect([p, DIAG_RE.test(p)]).toEqual([p, shellEquivalent.test(p)]);
@@ -388,7 +422,7 @@ describe("drift guards", () => {
   it("contains no instruction to mirror c4-render.ts's stderr handling", () => {
     const src = readFileSync(join(REPO_ROOT, "plugins/soleur/lib/c4-from-components.ts"), "utf8");
     expect(src).not.toMatch(/mirror\s+c4-render/i);
-    expect(src).toMatch(/regenerate-c4-model\.sh/);
+    expect(src).toMatch(/render-c4-model\.sh/);
   });
 });
 
