@@ -9,24 +9,26 @@ import ts from "typescript";
  * guards before #8603's review. Each comment character is replaced with a space
  * and newlines are kept, so line numbers and columns still match the file.
  *
- * Shared by model-tiers.test.ts (source walks) and
- * claude-cli-pin-knows-models.test.ts (model-id harvest) so both guards read
- * the same comment-free text.
+ * Shared by every TypeScript source-walk guard under test/ so they all read the
+ * same comment-free text — a hand-copied regex stripper is the defect this
+ * replaced, twice (learning 2026-06-12, then #8603).
  */
-export function stripComments(src: string): string {
-  const file = ts.createSourceFile("x.ts", src, ts.ScriptTarget.Latest, false);
+export function stripComments(src: string, fileName = "x.ts"): string {
+  // The file name picks the parser's language variant (`.tsx` parses JSX).
+  const file = ts.createSourceFile(fileName, src, ts.ScriptTarget.Latest, true);
   const ranges = new Map<number, number>();
   const collect = (list: ts.CommentRange[] | undefined) => {
     for (const r of list ?? []) ranges.set(r.pos, r.end);
   };
+  // Walk every TOKEN, not just AST nodes: a comment right before a closing
+  // `}` or `)` is leading trivia of that punctuation token, which
+  // forEachChild never visits (the #8603 migration caught exactly that).
   const visit = (node: ts.Node) => {
     collect(ts.getLeadingCommentRanges(src, node.pos));
     collect(ts.getTrailingCommentRanges(src, node.end));
-    ts.forEachChild(node, visit);
+    for (const child of node.getChildren(file)) visit(child);
   };
   visit(file);
-  // Comments after the last token hang off the end-of-file token.
-  collect(ts.getLeadingCommentRanges(src, file.endOfFileToken.pos));
 
   const chars = src.split("");
   for (const [pos, end] of ranges) {

@@ -199,12 +199,15 @@ describe("audit-cron effort pin — #8603 Guard 1", () => {
 
   it("stripComments keeps line numbers and never eats code after a `/*` inside a comment", () => {
     const out = stripComments(
-      '// globs like bot-fix/* here\nconst x = ["--model", "claude-x"]; // tail\n/** doc */\nconst u = "http://z";',
+      '// globs like bot-fix/* here\nconst x = ["--model", "claude-x"]; // tail\n/** doc */\nconst u = "http://z";\ntype T = {\n  a: string;\n  // before-brace\n};',
     ).split("\n");
-    expect(out).toHaveLength(4);
+    expect(out).toHaveLength(8);
     expect(out[1]).toContain('["--model", "claude-x"]');
     expect(out[1]).not.toContain("tail");
     expect(out[3]).toContain('"http://z"');
+    // A comment before a closing punctuation token is trivia of that token.
+    expect(out[6]).not.toContain("before-brace");
+    expect(out.join("\n")).not.toMatch(/globs|doc|tail/);
     for (const f of files) {
       const raw = readFileSync(join(FUNCTIONS_DIR, f), "utf8");
       expect(code.get(f)!.length, `${f}: stripComments changed the line count`).toBe(
