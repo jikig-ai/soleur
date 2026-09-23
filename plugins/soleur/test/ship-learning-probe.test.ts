@@ -29,6 +29,17 @@ const FENCE = /^\s*(`{3,}|~{3,})/;
 
 const LEARNINGS = "knowledge-base/project/learnings";
 
+// window-assembly: phase2Section — complete against PHASE 2's OWN decision surface, and
+// nothing wider. Three assertions carry that claim: the whole-FILE heading count (exactly one
+// `## Phase 2: Capture Learnings`, so a second section cannot hold a probe this window never
+// sees), the exactly-one-fence rule inside the slice (so the executed block is unambiguous),
+// and the prose+indented scan over the slice (so an unfenced or four-space-indented command
+// cannot re-enter a repo-wide probe beside the fenced one). The one consumer that lives
+// OUTSIDE the slice — the `## Headless Mode Detection` bullet — is pinned separately by a
+// whole-file regex in the dispatch test.
+// NOT complete against: any other phase. A repo-wide learnings probe added to Phase 1.5, or a
+// checklist line elsewhere in ship/SKILL.md, is outside this window by construction and is not
+// asserted here.
 /** The Phase 2 section: from the heading to the next `## ` heading that is not inside a fence. */
 function phase2Section(skill: string): string[] | null {
   const lines = skill.split("\n");
