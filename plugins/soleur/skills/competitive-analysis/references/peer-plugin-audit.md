@@ -74,7 +74,7 @@ Use the raw output as the mapping target. Do not assume prior catalog counts —
 
 ## Step 5 — Semantic mapping via Task delegation
 
-Spawn the `competitive-intelligence` agent with the extended prompt template below. The skill (not the agent) invokes Task directly — one hop.
+Spawn the `soleur:product:competitive-intelligence` agent with the extended prompt template below. The skill (not the agent) invokes Task directly — one hop.
 
 ### Task prompt template
 
@@ -103,9 +103,11 @@ Commands (<K>): <ls output>
 
 # Discipline
 - SEMANTIC MATCHING, not name matching. Examples:
-  - Their senior-architect → Soleur architecture-strategist + ddd-architect + cto
-  - Their financial-analyst → Soleur revenue-analyst + financial-reporter
-  - Their content-creator → Soleur copywriter + content-writer
+  - Their senior-architect → soleur:engineering:review:architecture-strategist +
+    soleur:engineering:design:ddd-architect + soleur:engineering:cto
+  - Their financial-analyst → soleur:finance:revenue-analyst +
+    soleur:finance:financial-reporter
+  - Their content-creator → soleur:marketing:copywriter + content-writer
   Report these as overlap, not as gaps.
 - CPO gate: every port recommendation MUST name the specific founder outcome
   it unblocks. If unspecified, the recommendation auto-converts to
