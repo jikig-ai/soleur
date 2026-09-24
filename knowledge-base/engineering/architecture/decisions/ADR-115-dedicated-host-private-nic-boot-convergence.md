@@ -370,6 +370,9 @@ scope of this amendment, stated so the ADR does not contradict itself:
   holds for the REBOOT primitive; this primitive is separate and grants no self-reboot authority.
 - **Provider fact corrected:** Context point 1 (in place). Three rows are added to
   §Alternatives.
+- **Addendum 2026-09-23 (#8651):** the web host's fresh boot now ships the same fallback file
+  and reload. The scope is recorded in [ADR-123](./ADR-123-web-host-private-nic-self-report-no-self-converge.md)'s
+  amendment of that date. The reboot primitive stays registry-only.
 
 ### Authority note
 

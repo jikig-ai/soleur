@@ -18,7 +18,7 @@ After presenting the Summary Report, offer appropriate testing based on project 
 
 ```markdown
 **"Want to run browser tests on the affected pages?"**
-1. Yes - run `/test-browser`
+1. Yes - run `soleur:test-browser`
 2. No - skip
 ```
 
@@ -26,7 +26,7 @@ After presenting the Summary Report, offer appropriate testing based on project 
 
 ```markdown
 **"Want to run Xcode simulator tests on the app?"**
-1. Yes - run `/xcode-test`
+1. Yes - run `soleur:xcode-test`
 2. No - skip
 ```
 
@@ -34,8 +34,8 @@ After presenting the Summary Report, offer appropriate testing based on project 
 
 ```markdown
 **"Want to run end-to-end tests?"**
-1. Web only - run `/test-browser`
-2. iOS only - run `/xcode-test`
+1. Web only - run `soleur:test-browser`
+2. iOS only - run `soleur:xcode-test`
 3. Both - run both commands
 4. No - skip
 ```
@@ -45,7 +45,7 @@ After presenting the Summary Report, offer appropriate testing based on project 
 Spawn a subagent to run browser tests (preserves main context):
 
 ```text
-Task general-purpose("Run /test-browser for PR #[number]. Test all affected pages, check for console errors, handle failures by creating todos and fixing.")
+Task general-purpose("Run soleur:test-browser for PR #[number]. Test all affected pages, check for console errors, handle failures by creating todos and fixing.")
 ```
 
 The subagent will:
@@ -89,14 +89,14 @@ connect: `agent-browser/SKILL.md` §"Wrapping the server".
 6. Create P1 todos for any failures
 7. Fix and retry until all tests pass
 
-**Standalone:** `/test-browser [PR number]`
+**Standalone:** `soleur:test-browser [PR number]`
 
 ## If User Accepts iOS Testing
 
 Spawn a subagent to run Xcode tests (preserves main context):
 
 ```text
-Task general-purpose("Run /xcode-test for scheme [name]. Build for simulator, install, launch, take screenshots, check for crashes.")
+Task general-purpose("Run soleur:xcode-test for scheme [name]. Build for simulator, install, launch, take screenshots, check for crashes.")
 ```
 
 The subagent will:
@@ -111,4 +111,4 @@ The subagent will:
 8. Create P1 todos for any failures
 9. Fix and retry until all tests pass
 
-**Standalone:** `/xcode-test [scheme]`
+**Standalone:** `soleur:xcode-test [scheme]`
