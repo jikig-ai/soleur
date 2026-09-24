@@ -725,42 +725,42 @@ infrastructure, and no new store or connection (Phases 2.7, 2.8 and 2.11 skip).
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `bash plugins/soleur/test/resolve-target-decision.test.sh` exits 0, with the floor
+- [x] AC1: `bash plugins/soleur/test/resolve-target-decision.test.sh` exits 0, with the floor
   raised to the derived total stated in its derivation comment. `TOTAL=` and `MIN_ROWS=` stay
   directly above the floor `if`. A failed CONTROL exits **2** (VOID), distinct from a row failure
   (exit 1).
-- [ ] AC2: **The requested row (L1).** The fixture commit touches `apps/web-platform/x.ts`, and
+- [x] AC2: **The requested row (L1).** The fixture commit touches `apps/web-platform/x.ts`, and
   both runs reads return `[]` on all 4 lookups. Expected:
   - `rc=1` and `should_deploy=false`;
   - exactly one `skip_reason=` line in `$GITHUB_OUTPUT`, with the value `release_run_missing`
     (so it is not `no_release_run`);
   - stdout contains `deployable paths (apps/web-platform/x.ts`. This is the diff-touching branch,
     not the diff-uncomputable one.
-- [ ] AC3: `bash plugins/soleur/test/workflow-run-deploy-invariants.test.sh` exits 0:
+- [x] AC3: `bash plugins/soleur/test/workflow-run-deploy-invariants.test.sh` exits 0:
   - G9 reports no orphan or phantom for `release_run_missing`;
   - P1, P2, P3 and the G8 token rows pass;
   - the floor is raised.
-- [ ] AC4: the PR body carries a mutation-evidence table covering Guard 1 mutations 1–8, Guard 2
+- [x] AC4: the PR body carries a mutation-evidence table covering Guard 1 mutations 1–8, Guard 2
   mutations 1–7 and harness rows H1/H3/H5. Each entry records the mutation, the PyYAML region
   diff proving it landed, CONTROL passed, the named row present in `FAILURES`, and the observed
   rc. A mutation that did not land, or one that tripped CONTROL instead of its named row, is
   recorded as a failure and redone, never as a kill.
-- [ ] AC5: `bash scripts/prod-version-drift-check.test.sh` stays green (B8 path_filter parity; B9
+- [x] AC5: `bash scripts/prod-version-drift-check.test.sh` stays green (B8 path_filter parity; B9
   unchanged because `timeout-minutes: 15` is unchanged).
-- [ ] AC6: `python3 scripts/lint-workflow-errexit-capture.py` (no args; it scans every workflow)
+- [x] AC6: `python3 scripts/lint-workflow-errexit-capture.py` (no args; it scans every workflow)
   prints `lint-workflow-errexit-capture: clean` (baseline: clean, 83 workflows).
-- [ ] AC7: `bash plugins/soleur/test/c4-count-parity.test.sh` green (backs "no C4 impact").
-- [ ] AC8: ADR-217 carries the `> **Addendum (2026-09-24).**` under §3. §3 row 1 no longer says
+- [x] AC7: `bash plugins/soleur/test/c4-count-parity.test.sh` green (backs "no C4 impact").
+- [x] AC8: ADR-217 carries the `> **Addendum (2026-09-24).**` under §3. §3 row 1 no longer says
   an empty lookup alone means `on.push.paths` declined. §2's trust ladder has the run-discovery
   (locator-only) step. Consequence 4's counts match G9's extractor output. References lists
   `resolve-target-decision.test.sh`.
-- [ ] AC9: anchored, not bare-token (`cq-assert-anchor-not-bare-token`):
+- [x] AC9: anchored, not bare-token (`cq-assert-anchor-not-bare-token`):
   - `grep -cF "skip_reason == 'release_run_missing'" .github/workflows/web-platform-release.yml` returns 1 (the `notify-gated` `if:`);
   - `grep -cE '^\s*release_run_missing\)' .github/workflows/web-platform-release.yml` returns 1 (the `case` arm);
   - `grep -cE 'fail_closed .*"release_run_missing"$' .github/workflows/web-platform-release.yml` returns 2 (the two diff-arm producers).
-- [ ] AC10: `bash plugins/soleur/test/deploy-arm.test.sh` stays green with no edit. It pins the
+- [x] AC10: `bash plugins/soleur/test/deploy-arm.test.sh` stays green with no edit. It pins the
   resolve-target structure that `deploy-arm.sh` keys on.
-- [ ] AC11: `grep -c 'fetch-depth' <(awk '/^  resolve-target:/{f=1;next} f&&/^  [a-z][a-z0-9-]*:$/{exit} f' .github/workflows/web-platform-release.yml)`
+- [x] AC11: `grep -c 'fetch-depth' <(awk '/^  resolve-target:/{f=1;next} f&&/^  [a-z][a-z0-9-]*:$/{exit} f' .github/workflows/web-platform-release.yml)`
   returns 0 (the checkout stays depth 1; P2 pins the same property in-suite).
 
 ### Post-merge (automated verification, no operator step)

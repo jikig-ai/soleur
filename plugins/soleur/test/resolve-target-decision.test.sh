@@ -167,7 +167,7 @@ mkshallow() {  # $1=sha — prints the path of a fresh depth-1 clone holding onl
   assert_fixture_dir "$d"
   git init -q "$d"
   git -C "$d" remote add origin "file://$SRC"
-  git -C "$d" fetch -q --depth=1 origin "$1"
+  git -C "$d" fetch -q --no-tags --depth=1 origin "$1"
   printf '%s' "$d"
 }
 CLONE_APP=$(mkshallow "$SHA_APP")
