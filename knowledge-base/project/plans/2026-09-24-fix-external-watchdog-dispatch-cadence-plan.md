@@ -13,6 +13,70 @@ brand_survival_threshold: aggregate pattern
 
 # fix: reliable ~15-min cadence for the external Inngest watchdog and zot restart-loop check
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24.
+**Sections enhanced:** Proposed Solution, Behaviour details, Implementation Phases, Files, User-Brand
+Impact, Observability, Guard Contract, ADR/C4, Test Scenarios, Acceptance Criteria, Sharp Edges.
+**Agents used:**
+- soleur:engineering:review:architecture-strategist
+- soleur:engineering:review:security-sentinel
+- soleur:engineering:review:observability-coverage-reviewer
+- soleur:engineering:review:test-design-reviewer
+- soleur:engineering:research:best-practices-researcher (Sentry Crons semantics)
+- a verify-the-negative and self-audit grep pass (standard tier)
+
+**Deepen gates passed:** 4.6 User-Brand, 4.7 Observability (probe executed: 0.4 s,
+prints `workflow_runs`), 4.8 PAT (a false positive on the Cloudflare variable name was reworded),
+4.10 Encryption, 4.11 Guard Contract (`lint-guard-contract.py` green).
+4.55 Downtime did not fire: the change ships through the normal canary deploy and replaces no host.
+
+### Key Improvements
+
+1. **Markers now reach Better Stack.** Vector's `app_container_warn_filter` ships only pino level
+   40 and above, so info-level tick and boot lines would never leave the host. They are now a
+   WARN structured marker, `SOLEUR_WATCHDOG_DISPATCH`, emitted through a new emitter in
+   `server/cron-liveness-marker.ts`, which is the repo's marker precedent.
+2. **The mint path is decoupled from the Inngest code tree.** The clock mints with
+   `createProbeOctokit` + `generateInstallationToken` directly, not through `_cron-shared.ts`. A
+   dependency-cruiser rule forbids `server/watchdog-dispatch-clock*` from importing `server/inngest/`.
+3. **Redaction does not depend on Octokit.** Every failure reports a *new* `Error(redactToken(msg, token))`
+   and never forwards the raw Octokit error object.
+4. **Token blast radius is stated honestly.** `actions:write` can dispatch any workflow, including
+   the privileged `op=` ones. That is still narrower than the full grant the precedent mints today.
+5. **Tests are made mutation-sensitive.**
+   - The two-layer catch now gets its own observable (`tick_escaped`).
+   - A pinned pattern for the `unhandledRejection` spy under vitest fake timers.
+   - `deps.table` isolation.
+   - Exact-boundary cases for the late cutoff, jitter bounds, a single jitter draw per slot, and
+     the dedup cutoff.
+6. **Guard 1 gains new rows.** It now checks that the trigger set is exactly
+   `{schedule, workflow_dispatch}` and that no CI or e2e config sets `SOLEUR_HOST_ID`. The margin
+   floor is now derived per member from `max_runtime_minutes`.
+7. **Architecture corrections.**
+   - The exemption cites ADR-033, not ADR-063 (ADR-063 is the reminder substrate).
+   - The fleet-uniqueness rule is re-homed to ADR-068 Bucket B.
+   - The failure-domain table gains the "web-1 app container, where Inngest also executes" row.
+   - The clock arms beside the reapers and is stopped synchronously on SIGTERM.
+   - The C4 wording becomes "fourth substrate". The web-2 description loses its "scheduler-less"
+     label.
+
+### New Considerations Discovered
+
+- **The canary container's logs are not shipped.** Vector matches `CONTAINER_NAME` exactly, so a
+  run the canary dispatches cannot be attributed in Better Stack. This is accepted and documented.
+- **Precedents.**
+  - `startStuckActiveReaper` in `agent-runner.ts`: a `setInterval` loop with `reportSilentFallback`
+    and `clearInterval` on SIGTERM, plus its test `test/agent-runner-stuck-active-reaper.test.ts`.
+  - `server/cron-liveness-marker.ts`: a WARN marker on a dedicated pino instance with no breadcrumb
+    hook, fail-open.
+
+  The clock follows both.
+- **Sentry Crons expectations are driven by the crontab.** A check-in within the margin satisfies
+  its slot, and extra check-ins are harmless. The docs do not spell out the exact algorithm, so the
+  slot-scoped rule is written to be correct under either reading: crontab-driven, or next tick
+  after the last check-in.
+
 ## Overview
 
 The two GitHub Actions watchdogs `scheduled-inngest-health` (declared `*/15`) and
@@ -69,7 +133,7 @@ cadence that source actually delivers.
 - **API contract, probed live on 2026-09-24:**
   - An unauthenticated `curl -fsS "https://api.github.com/repos/jikig-ai/soleur/actions/workflows/scheduled-inngest-health.yml/runs?per_page=3"`
     returned `total_count: 1445` with runs **newest first**. The public-repo runs list is therefore
-    readable with no credential, which the discoverability test and AC11 depend on. Its `created_at`, `event`,
+    readable with no credential, which the discoverability test depends on. Its `created_at`, `event`,
     `status` and `conclusion` fields are present.
   - `generateInstallationToken(installationId, { minRemainingMs?, permissions?, repositories? })`
     (`apps/web-platform/server/github-app.ts`) accepts a permission scope-down.
@@ -210,7 +274,7 @@ cadence that source actually delivers.
 
 - #8495 is the target. #8539 holds the outage evidence.
 - #8450 covers the concurrency budget. #6374 is the watchdog monitor gap.
-- #5542 is the original crash-loop. #6291 is the zot alarm.
+- #5542 is the incident the watchdog workflow header cites as its origin ("the ~3.5h silent crash-loop"). #6291 is the zot alarm.
 - #8077 is the no-live-scheduler arm. #7230 decouples Inngest execution from web-1.
 - #8595 (open) is the cadence-parity gap in the monitor registry tests.
 - #8593 (open) is the unbounded `gh` enumeration gate.
@@ -259,9 +323,14 @@ function. It runs on **every deployed web host**: web-1 and web-2 through the de
 entry, it checks whether the current wall-clock slot is due and not yet handled. If so, it runs one
 **tick**:
 
-1. It mints a GitHub App installation token, scoped `permissions: { actions: "write" }` and
-   `repositories: [REPO_NAME]`. It uses the existing `mintInstallationToken`, the same credential
-   path `cron-main-health-monitor` uses today.
+1. It mints a GitHub App installation token scoped to `permissions: { actions: "write" }` and
+   `repositories: ["soleur"]`. It calls `createProbeOctokit()` →
+   `GET /repos/jikig-ai/soleur/installation` → `generateInstallationToken(id, {...})` directly,
+   inside the clock module. That is the same App and key `cron-main-health-monitor` uses, but it
+   does not go through the Inngest tree's `_cron-shared.ts`.
+   - The precedent mints the **full** grant. This is the repo's first mint narrowed to `actions`.
+   - Repository names in `repositories` are already proven by the
+     `DEFAULT_CRON_TOKEN_PERMISSIONS` callers.
 2. It reads the workflow's newest run (`GET …/actions/workflows/{file}/runs?per_page=1`) and skips
    if **this slot already has a run**, meaning one was created at or after `slotStart − 60 s`.
 3. Otherwise it sends `POST …/actions/workflows/{file}/dispatches` with `ref: main`.
@@ -304,13 +373,13 @@ entry, it checks whether the current wall-clock slot is due and not yet handled.
 | Option | P1 (fires while Inngest is down) | P2 (bounded cadence) | P4 (dead trigger detected + fallback) | P5 (no new key custody / no PAT) | P6 (no human step, Terraform where infra) | Verdict |
 |---|---|---|---|---|---|---|
 | **A. In-process polling clock in the web server (chosen)** | Yes. It runs on web-1 and web-2, never on the dedicated Inngest host | Yes. Slot-aligned, and dispatched runs start within seconds | Yes. A second host's clock is a live backup. Sentry pages when both are dead, and the GH `schedule:` fallback stays | Yes. It reuses the App key already in the web runtime, with the token scoped to `actions:write` on one repo | Yes. It ships in the image on the normal merge deploy, and the only infra change is a Sentry margin in Terraform | **Chosen** |
-| B. Cloudflare Worker cron trigger (`cloudflare_workers_script` + `cloudflare_workers_cron_trigger`) | Yes, and it is also independent of the web hosts | Yes | Yes | **No.** The Worker needs an App private key as a secret. The only key is the `soleur-ai` App's (3 installations, 2 outside the org), and ADR-241 is narrowing that key's custody. A narrow dedicated App cannot be created through Terraform | **No.** `var.cf_api_token` lacks Workers Scripts:Edit, and a new narrow CF token must be hand-minted: the `cf-cert-reissue-token.tf` header records that minting needs "API Tokens: Edit" (CF error 9109). The repo has no Workers today, so this would be a new substrate | Rejected for now. It is the upgrade path if web-host coupling ever matters (ADR-246, #7230) |
+| B. Cloudflare Worker cron trigger (`cloudflare_workers_script` + `cloudflare_workers_cron_trigger`) | Yes, and it is also independent of the web hosts | Yes | Yes | **No.** The Worker needs an App private key as a secret. The only key is the `soleur-ai` App's (3 installations, 2 outside the org), and ADR-241 is narrowing that key's custody. A narrow dedicated App cannot be created through Terraform | **No.** the root's default Cloudflare API token (the `cf_api_token` input, a Cloudflare credential, not a GitHub one) lacks Workers Scripts:Edit, and a new narrow CF token must be hand-minted: the `cf-cert-reissue-token.tf` header records that minting needs "API Tokens: Edit" (CF error 9109). The repo has no Workers today, so this would be a new substrate | Rejected for now. It is the upgrade path if web-host coupling ever matters (ADR-246, #7230) |
 | C. Inngest cron dispatch (the `main-health-monitor` precedent) | **No.** An Inngest cron cannot fire while Inngest is down (ADR-033 anti-circularity) | Yes | Partly | Yes | Yes | Rejected for inngest-health. It would work for zot, but a second mechanism for one workflow buys nothing over A |
 | D. systemd timer on a host | web/zot: yes. inngest: no | Yes | Yes | **No.** The App key would land on a host filesystem outside the app container | **No.** A host config change needs an immutable redeploy (`hr-prod-host-config-change-immutable-redeploy`) with approval gates | Rejected |
 | E. Better Stack monitor as trigger or probe | Probe: yes | Yes | Yes | **No.** A static token means a PAT, and a direct probe copies the HMAC and CF Access secrets into a vendor | Yes (Terraform) | Rejected (Cut List) |
 | F. Retune Sentry margins only | No change | **No.** The worst gap is ~7 h | Detection stays ~7 h | Yes | Yes | Rejected: the detection latency is not acceptable |
 
-**The exemption from `new-scheduled-cron-prefer-inngest` / ADR-063 is explicit and narrow.** The
+**The exemption from `new-scheduled-cron-prefer-inngest` / ADR-033 (the canonical scheduled-work pattern, which the hook's header names as its source rule) is explicit and narrow.** The
 repo default ("new scheduled work goes on Inngest") stands. This clock covers the documented
 exception class: *a watcher of the scheduling substrate, or of what the substrate depends on,
 cannot be scheduled by that substrate* (ADR-033 anti-circularity). The gate-override header on the
@@ -336,10 +405,11 @@ The hook itself does not fire. Both workflows already exist, and no new
    │    poll (never throws): for each entry, S = slotStartAt(now, interval)                        │
    │      skip if handledSlot==S or inFlight or now < S+jitter(S) or now >= S+interval-2min        │
    │      tick(S) under ONE deadline (TICK_DEADLINE_MS = 90 s, injected timers):                  │
-   │        mintInstallationToken({actions:"write"}, repositories:["soleur"])                      │
+   │        createProbeOctokit→GET installation→generateInstallationToken({actions:"write"},      │
+   │          repositories:["soleur"])  (no import from server/inngest/)                          │
    │        GET runs?per_page=1 → skip iff created_at >= S-60 s   (read error → fail-OPEN)         │
    │        POST dispatches {ref:"main"}                                                          │
-   │      finally: handledSlot=S, inFlight=false; info log {host, slot, workflow, outcome}         │
+   │      finally: handledSlot=S, inFlight=false; WARN marker SOLEUR_WATCHDOG_DISPATCH {outcome}   │
    │      failure → reportSilentFallback(op∈{mint,dedup-read,dispatch}, extra.reason) [try/catch] │
    └───────────────────────────────┬───────────────────────────────────────────────────────────────┘
                                    │ HTTPS, App installation token
@@ -356,7 +426,8 @@ The hook itself does not fire. Both workflows already exist, and no new
 | Inngest scheduler (dedicated host 10.0.1.40) | **Yes.** The clocks run on the web hosts | The watchdog run itself: the `nolive`/dedicated/down arms, an error check-in, and a page |
 | Inngest web unit (quiesced or crashed) | **Yes** | Same |
 | Zot registry host | **Yes** | The zot alarm run: a `[ci/zot-restart-loop]` issue |
-| One web host (web-1 or web-2) | **Yes, from the other host** | Better Stack uptime (web-1 serves the app), while dispatch continues |
+| web-1 app container, which is also where Inngest EXECUTES functions (`sdk_url` → 10.0.1.10, ADR-033 corollary / ADR-243) | **Yes, but only from web-2.** web-2 was retired once before (#6538); if `var.web_hosts` drops to one host, re-derive (ADR-246 reversal trigger) | Better Stack uptime on app.soleur.ai; web-2's clock keeps dispatching; the GH fallback and Sentry are behind it |
+| web-2 only | **Yes, from web-1** | web-2 has no public ingress (ADR-143 R1), so detection is its absence-alerted `web_nic_guard` / `web_zot_consumer` Better Stack heartbeats (ADR-143 R1(a)) |
 | Both web hosts | **No** | Better Stack uptime, a Sentry missed check-in within 30 min, and the GH `schedule:` fallback still runs, late |
 | GitHub API / Actions | No, and the GH fallback is impaired too | Sentry missed check-in (Sentry is independent of GitHub) |
 
@@ -390,7 +461,7 @@ The hook itself does not fire. Both workflows already exist, and no new
   timer leaks (Kieran P1-2).
   - Octokit calls also get `request: { signal }` as belt-and-braces. The `@octokit/request` fetch
     wrapper honours it.
-  - `mintInstallationToken`'s `GET /installation` has no timeout of its own. Only
+  - The installation lookup (`GET /installation` via `createProbeOctokit`) has no timeout of its own. Only
     `generateInstallationToken` is bounded (`GITHUB_GENERATE_TIMEOUT_MS = 30_000`,
     `github-app.ts`), which is why the whole tick sits under one deadline.
 - **Fail-open on the read, fail-safe on the dispatch.**
@@ -402,24 +473,68 @@ The hook itself does not fire. Both workflows already exist, and no new
     The token is redacted with `redactToken`.
   - A failed slot is **not** retried by the same host. The other host's clock covers it, and the
     next slot re-attempts.
-- **Never takes the server down.** `crash-handlers.ts` exits the process on `unhandledRejection`,
-  so the error paths are fenced:
-  - The poll body runs in `try/catch`.
-  - Each tick is `void runTick(...).catch(logOnly).finally(clearInFlight)`.
-  - `reportSilentFallback` is wrapped in its own `try/catch`.
-- **Every tick logs** at info level: `{ host, slot, workflow, outcome: dispatched | skipped_slot_has_run | failed | disarmed }`.
-  This is how the runbook answers "is it running?" and "which host sent this run?". The Actions
-  list shows the same App bot for every host.
-- **Sentry flood on a disabled workflow is bounded by design.** A disabled workflow returns 422 on
-  every tick: at most 96 events a day for inngest from each host. Sentry groups them into one issue.
-  The CTO suggested `mirrorWarnWithDebounce`, but its 5-min TTL is shorter than the 15-min cadence,
-  so it would suppress nothing. The plan declines it and records that here.
-- **Token.** `mintInstallationToken({ tokenMinLifetimeMs: 5 * 60_000, permissions: { actions: "write" }, repositories: [REPO_NAME] })`.
-  `actions:write` also grants reading runs. `generateInstallationToken`'s cache key includes the
-  scope (#5046).
-- **Dispatch code is inlined in the clock module (about 12 lines).** `cron-main-health-monitor.ts`
-  is not touched. Extracting a shared helper from a working production dispatcher buys no listed
-  property.
+- **Never takes the server down, and each fence is observable on its own.**
+  `crash-handlers.ts` exits the process on `unhandledRejection`, so there are three fences:
+  1. **Inner fence.** `runTickSafely` wraps the tick body in `try/catch/finally`. `finally` clears
+     `inFlight` and sets `handledSlot`.
+  2. **Outer fence.** The poll does `void runTickSafely(...).catch(e => emit({ outcome: "tick_escaped" }))`.
+  3. **Reporter fence.** `report` sits inside its own `try/catch`.
+
+  `tick_escaped` must never happen, and a test pins that (Guard 2). Because each fence has its own
+  observable, removing one fence cannot be hidden by another.
+- **Every tick emits a WARN structured marker, `SOLEUR_WATCHDOG_DISPATCH`.** It goes through a new
+  `emitWatchdogDispatch(m)` in `apps/web-platform/server/cron-liveness-marker.ts`. That file's
+  conventions apply: a dedicated pino instance with no `logMethod` breadcrumb hook, fail-open, and
+  a top-level boolean discriminator. **The WARN level is load-bearing**: Vector's
+  `app_container_warn_filter` (`apps/web-platform/infra/vector.toml`) ships only pino level ≥ 40
+  to Better Stack, so an info line would never leave the host.
+  - **Fields:** `{ host_id, workflow, slot, outcome, op?, reason?, status?, run_id?, run_event? }`.
+    `outcome` ∈ `armed | disarmed | dispatched | skipped_slot_has_run | failed | tick_escaped`.
+  - **Skip details.** A skip carries the suppressing run's `run_id` and `run_event`. That
+    distinguishes "a GH tick got there first", "the other host got there first" and "wrongly
+    suppressed".
+  - **Volume.** About (4 + 1) per hour × 2 hosts ≈ 240 rows/day.
+  - **Canary.** Vector matches `CONTAINER_NAME` exactly, so the canary's markers are not shipped.
+    A slot the canary dispatches shows in `gh run list` with no matching marker. This is
+    documented, not fixed.
+- **Redaction does not depend on Octokit behaviour.**
+  - `let token = ""` is declared before the `try`, so the `catch` can see it.
+  - Every failure path (mint, dedup-read, dispatch, and the timeout rejection) reports a **new**
+    `Error(redactToken(e.message, token))` with `name` copied over. It **never** forwards the raw
+    Octokit error, whose `request`/`response` objects would otherwise ship through
+    `reportSilentFallback` → pino + `Sentry.captureException`.
+  - `extra` carries only `{ workflow, reason, status }`, where `status` is a number. There is no
+    `response.data`, no URL, no headers and no token.
+  - This matches `cron-main-health-monitor.ts`'s rebuild-don't-forward shape.
+- **A 422 flood from a disabled workflow is bounded by design.** Each tick reports it: at most 96
+  events a day for inngest, per host. Sentry groups them into one issue. The CTO suggested
+  `mirrorWarnWithDebounce`, but its 5-min TTL is shorter than the 15-min cadence, so it would
+  suppress nothing. That suggestion is declined here, deliberately.
+- **Token.** Minted in-module:
+  `generateInstallationToken(installationId, { minRemainingMs: 5 * 60_000, permissions: { actions: "write" }, repositories: ["soleur"] })`.
+  - `actions:write` also grants reading runs.
+  - The cache key includes the scope (#5046).
+  - `REPO_OWNER`/`REPO_NAME` are local constants: `"jikig-ai"` / `"soleur"`.
+- **Independence from the Inngest code tree is enforced.** The clock imports only
+  `@/server/github/probe-octokit`, `@/server/github-app`, `@/server/observability` and
+  `@/server/cron-liveness-marker`. A new `forbidden` rule in
+  `apps/web-platform/.dependency-cruiser.cjs` forbids `^server/watchdog-dispatch-` from importing
+  `^server/inngest/`. Otherwise a future edit could route the watcher through the thing it watches.
+- **The table is its own dependency-free module.** It lives in
+  `apps/web-platform/server/watchdog-dispatch-table.ts` with no imports, so the parity test stays
+  a pure file read. `startWatchdogDispatchClock` takes `deps.table`, which defaults to
+  `WATCHDOG_DISPATCH_TABLE`.
+- **Dispatch code is inlined in the clock module** (about 12 lines). `cron-main-health-monitor.ts`
+  is not touched.
+- **Boot and shutdown follow the reaper precedent.**
+  - `const watchdogClock = startWatchdogDispatchClock()` goes directly after
+    `const ccIdleReaperTimer = startCcIdleReaper()`. That is inside `app.prepare().then(...)` and
+    before `server.listen`, exactly like `startStuckActiveReaper`/`startCcIdleReaper`.
+  - In the SIGTERM handler, `watchdogClock.stop()` is called **synchronously** next to
+    `clearInterval(ccIdleReaperTimer)`, before any `await`.
+- **No ADR-078 drain participation.** A tick is bounded at 90 s and spawns no children. A tick
+  killed by a container swap is covered by the other host, and the new container's first poll
+  re-reads the current slot. ADR-246 records this.
 - **Sentry margin budget (inngest).** Check-in time = slot + jitter (≤ 2.5 min) + poll granularity
   (≤ 0.5 min) + queue + runtime. The `probe` job has `timeout-minutes: 8`, and `connector_census`
   (≤ 5 min) runs in parallel. That gives ≤ 11 min plus queue against a 15-min margin, leaving about
@@ -442,16 +557,22 @@ The hook itself does not fire. Both workflows already exist, and no new
 
 #### Phase 1: Clock module + boot wiring
 
-- Create `apps/web-platform/server/watchdog-dispatch-clock.ts` with these exports:
-  - `WATCHDOG_DISPATCH_TABLE`, as `{ workflowFile, monitorSlug, intervalMinutes, eligibility }`;
-  - `slotStartAt`, `slotAlreadyHasRun`, `shouldArmWatchdogClock`;
-  - `startWatchdogDispatchClock(deps?)` → `{ stop }`.
-
-  `deps` injects `now`, `random`, `mint`, `octokitFor`, `report`, `log`, `setInterval`,
-  `clearInterval`, `setTimeout` and `clearTimeout`. There is no test-only code in this module.
-- Wire it into `apps/web-platform/server/index.ts`: arm after `server.listen`, and call `stop()` in
-  the SIGTERM handler beside `clearInterval(ccIdleReaperTimer)`.
-- **Exit:** the clock tests are GREEN.
+- Create `apps/web-platform/server/watchdog-dispatch-table.ts`, a module with no imports. It
+  exports `WATCHDOG_DISPATCH_TABLE`, typed as
+  `ReadonlyArray<{ workflowFile, monitorSlug, intervalMinutes, eligibility }>`.
+- Create `apps/web-platform/server/watchdog-dispatch-clock.ts`. It exports `slotStartAt`,
+  `slotAlreadyHasRun`, `shouldArmWatchdogClock`, and `startWatchdogDispatchClock(deps?)`, which
+  returns `{ stop }`.
+  - `deps` injects `table`, `now`, `random`, `mint`, `octokitFor`, `report`, `emit`,
+    `setInterval`, `clearInterval`, `setTimeout` and `clearTimeout`.
+  - The module has no test-only code, and it does not import `server/inngest/`.
+- Add `emitWatchdogDispatch` + `WatchdogDispatchMarker` to `apps/web-platform/server/cron-liveness-marker.ts`,
+  following that file's marker conventions.
+- Add the `forbidden` rule `watchdog-clock-not-via-inngest` to `apps/web-platform/.dependency-cruiser.cjs`.
+- Wire the clock into `apps/web-platform/server/index.ts`. Place it after `startCcIdleReaper()`,
+  and call `watchdogClock.stop()` synchronously in SIGTERM beside `clearInterval(ccIdleReaperTimer)`.
+- **Exit:** the clock tests are GREEN, and the dep-cruiser gate
+  (`apps/web-platform/server/README.md` §Client/server import boundary) passes.
 
 #### Phase 2: Sentry monitors + workflow headers
 
@@ -478,15 +599,17 @@ The hook itself does not fire. Both workflows already exist, and no new
   - Add a "How the external watchdogs are triggered" subsection to
     `knowledge-base/engineering/operations/runbooks/inngest-server.md`. It answers four questions
     with commands, none of them SSH (CTO devex F3):
-    1. **Is it running?** The Better Stack query `watchdog-dispatch-clock` grouped by host (through
-       `scripts/betterstack-query.sh`), plus the `gh run list` cadence one-liner from AC11.
+    1. **Is it running?** Run `scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH`
+       (under `doppler run -p soleur -c prd_terraform`) and check `host_name` for
+       `soleur-web-platform` and `soleur-web-2`. Also use the `gh run list` cadence one-liner from
+       AC11.
     2. **How do I stop it?** `gh workflow disable <file>` stops both the clock's dispatches (they
        422) and the fallback. A revert is the full removal.
     3. **How do I add or remove a table row?** The checklist: the table row with its
        `eligibility`, `workflow_dispatch:` plus `concurrency` with `cancel-in-progress: false` on
        the workflow, the margin rationale in `cron-monitors.tf`, the slug list in the Guard 1
        assertion, and the C4 edge prose.
-    4. **Which host sent a run?** The tick logs.
+    4. **Which host sent a run?** The `SOLEUR_WATCHDOG_DISPATCH` marker's `host_name` and `run_id`. A dispatched run with no marker came from the canary, which is not shipped.
 
     It also notes that `ci-deploy.sh`'s comment "The canary fires no crons" is no longer strictly
     true: the canary carries a clock for its few-minute life.
@@ -512,25 +635,33 @@ The hook itself does not fire. Both workflows already exist, and no new
 
 ## Files to Create
 
+- `apps/web-platform/server/watchdog-dispatch-table.ts`
 - `apps/web-platform/server/watchdog-dispatch-clock.ts`
 - `apps/web-platform/test/server/watchdog-dispatch-clock.test.ts`
 - `knowledge-base/engineering/architecture/decisions/ADR-246-watchdog-dispatch-clock-runs-in-the-web-server.md` (provisional ordinal)
 
 ## Files to Edit
 
-- `apps/web-platform/server/index.ts`: arm after listen, stop on SIGTERM.
-- `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts`: the Guard 1 describe
-  block.
-- `apps/web-platform/infra/sentry/cron-monitors.tf`: zot margin 120 → 30, plus both rationale
+- `apps/web-platform/server/index.ts`: arm the clock after `startCcIdleReaper()`, and stop it
+  synchronously on SIGTERM.
+- `apps/web-platform/server/cron-liveness-marker.ts`: add `emitWatchdogDispatch` (a WARN marker,
+  `SOLEUR_WATCHDOG_DISPATCH`).
+- `apps/web-platform/.dependency-cruiser.cjs`: add the `watchdog-clock-not-via-inngest` forbidden
+  rule.
+- `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts`: add the Guard 1
+  describe block, plus `workflowOn` (YAML-parsed, using the existing `yaml` dep) and
+  `monitorFieldBySlug` helpers.
+- `apps/web-platform/infra/sentry/cron-monitors.tf`: zot margin 120 → 30, and both rationale
   comments.
 - `.github/workflows/scheduled-inngest-health.yml`: header comment only.
 - `.github/workflows/scheduled-zot-restart-loop.yml`: header comment only.
-- `knowledge-base/engineering/architecture/diagrams/model.c4`: a new `api -> github` edge, plus
-  three prose fixes located by anchor text (see ADR/C4).
-- `knowledge-base/engineering/operations/runbooks/inngest-server.md`: the trigger subsection.
-- `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`: the stale zot cadence.
+- `knowledge-base/engineering/architecture/diagrams/model.c4`: add the new `api -> github` edge,
+  and fix prose located by anchor text (see ADR/C4).
+- `knowledge-base/engineering/operations/runbooks/inngest-server.md`: add the trigger subsection.
+- `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`: fix the stale zot
+  cadence, and add the `SOLEUR_WATCHDOG_DISPATCH` marker to the marker catalogue.
 - `knowledge-base/engineering/architecture/decisions/ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md`:
-  a one-line cross-reference under the anti-circularity corollary.
+  add a one-line cross-reference.
 
 ## Alternative Approaches Considered
 
@@ -543,7 +674,7 @@ The option table under Proposed Solution is the decision record, and ADR-246 car
   watchdogs if web-host coupling matters", to be re-evaluated when #7230 lands.
 - **v1 of this plan used a self-re-arming `setTimeout` chain**, and plan-review replaced it with
   polling (see the note under Proposed Solution).
-- **A bespoke cadence-probe script was cut.** AC12 reads Sentry, and AC11 uses `gh run list`
+- **A bespoke cadence-probe script was cut.** AC10 reads Sentry, and AC11 uses `gh run list`
   instead.
 - **Other GHA-cron watchers** (e.g. `scheduled-prod-version-drift`, margin 360) are **not** added.
   They are not watchers of the scheduling substrate, so under ADR-246's eligibility rule they
@@ -561,8 +692,18 @@ The option table under Proposed Solution is the decision record, and ADR-246 car
     queueing, and the watchdog's 45-min give-up window.
 - **If this leaks, the user's workflow is exposed via:** a GitHub App installation token logged in
   a dispatch error.
-  - The token is scoped to `actions:write` on `jikig-ai/soleur` only (`repositories: [REPO_NAME]`)
-    and is redacted by `redactToken` before any log or Sentry event.
+  - The token is scoped to `actions:write` on `jikig-ai/soleur` only (`repositories: ["soleur"]`)
+    and is redacted before any log or Sentry event (a new Error is built from the redacted
+    message; the raw Octokit error is never forwarded).
+  - **What `actions:write` can do if the token leaks within its 1 h life:**
+    - dispatch **any** `workflow_dispatch` workflow with any inputs on any existing ref, including
+      privileged ones such as `cutover-inngest.yml op=rollback|quiesce-web`;
+    - disable workflows, including these two watchdogs;
+    - cancel or re-run runs;
+    - delete logs, artifacts and caches.
+
+    GitHub cannot scope a token to specific workflows. This is still narrower than the full
+    installation grant `cron-main-health-monitor` mints today.
   - No user data flows through this path. The clock sends a workflow filename and `ref: main`.
 - **Brand-survival threshold:** `aggregate pattern`. The harm is platform-wide detection latency,
   not one user's data. No per-PR CPO sign-off is needed.
@@ -571,50 +712,60 @@ The option table under Proposed Solution is the decision record, and ADR-246 car
 
 ```yaml
 liveness_signal:
-  what: "Sentry cron monitors scheduled-inngest-health (*/15, margin 15) and scheduled-zot-restart-loop (0 * * * *, margin 30), fed by each workflow's final sentry-heartbeat step; after this change they measure clock + dispatch + run end to end"
+  what: "Sentry cron monitors scheduled-inngest-health (*/15, margin 15) and scheduled-zot-restart-loop (0 * * * *, margin 30), fed by each workflow's final sentry-heartbeat step; after this change they measure clock + dispatch + run end to end. Per-tick in-surface marker SOLEUR_WATCHDOG_DISPATCH (WARN) from each web host"
   cadence: "15 min (inngest-health) / 60 min (zot); a dead trigger pages within interval + margin = 30 min / 90 min"
   alert_target: "Sentry monitor-failure issue -> operator page (failure_issue_threshold = 1)"
-  configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf (sentry_cron_monitor.scheduled_inngest_health, sentry_cron_monitor.zot_restart_loop_alarm); clock table in apps/web-platform/server/watchdog-dispatch-clock.ts"
+  configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf (sentry_cron_monitor.scheduled_inngest_health, sentry_cron_monitor.zot_restart_loop_alarm); apps/web-platform/server/watchdog-dispatch-table.ts; apps/web-platform/server/cron-liveness-marker.ts (emitWatchdogDispatch)"
 
 error_reporting:
-  destination: "Sentry web-platform project via reportSilentFallback (@/server/observability), feature=watchdog-dispatch-clock, op in {arm, mint, dedup-read, dispatch}, extra.workflow, extra.reason in {timeout, http, throw}"
-  fail_loud: "info log 'watchdog-dispatch-clock tick' with {host, slot, workflow, outcome} on every tick; outcome=failed plus a Sentry event per failed tick; boot line 'watchdog-dispatch-clock disarmed reason=...' plus an op=arm Sentry event when disarmed in production"
+  destination: "Sentry web-platform project via reportSilentFallback (@/server/observability), feature=watchdog-dispatch-clock, op in {arm, mint, dedup-read, dispatch}, extra {workflow, reason in {timeout, http, throw}, status}"
+  fail_loud: "SOLEUR_WATCHDOG_DISPATCH marker with outcome=failed|tick_escaped|disarmed (WARN, reaches Better Stack) plus a Sentry event; the per-slot missed check-in pages if every host fails"
 
 failure_modes:
-  - mode: "clock disarmed in production (SOLEUR_HOST_ID missing)"
-    detection: "op=arm Sentry event at boot; Sentry missed check-in within 30 min if every host is disarmed"
+  - mode: "clock disarmed in production (SOLEUR_HOST_ID empty)"
+    detection: "pino (layer 2: reportSilentFallback op=arm -> Sentry captureException) + vector app_container_journald Source 3 -> Better Stack (outcome=disarmed marker); Sentry monitor missed check-in if every host is disarmed"
     alert_route: "Sentry issue + monitor-failure page"
   - mode: "dispatch returns 4xx/5xx (workflow disabled, scope wrong, GitHub API outage)"
-    detection: "reportSilentFallback op=dispatch per failed tick; the other host's tick may still succeed; missed check-in if all fail"
+    detection: "pino layer 2 reportSilentFallback op=dispatch reason=http status=N -> Sentry; vector Source 3 marker outcome=failed; Sentry monitor missed check-in if both hosts fail the slot"
     alert_route: "Sentry issue + monitor-failure page"
   - mode: "dedup read fails"
-    detection: "reportSilentFallback op=dedup-read; the tick still dispatches (fail-open)"
+    detection: "pino layer 2 reportSilentFallback op=dedup-read -> Sentry; the tick still dispatches (fail-open)"
     alert_route: "Sentry issue (non-paging)"
   - mode: "tick hangs"
-    detection: "90 s tick deadline -> reason=timeout event; inFlight cleared so the next slot proceeds"
+    detection: "90 s tick deadline -> reportSilentFallback reason=timeout -> Sentry; marker outcome=failed; inFlight cleared so the next slot proceeds"
     alert_route: "Sentry issue"
-  - mode: "one web host down"
-    detection: "Better Stack uptime (web-1 serves the app); the other host keeps dispatching, so no missed check-in"
+  - mode: "a fence breaks (tick_escaped)"
+    detection: "vector Source 3 marker outcome=tick_escaped -> Better Stack; Guard 2 pins it never happens"
+    alert_route: "Sentry issue via the same reportSilentFallback call"
+  - mode: "web-1 app container down (also the Inngest execution host)"
+    detection: "Better Stack uptime monitor on app.soleur.ai; web-2 clock keeps dispatching, so the Sentry monitor stays ok"
     alert_route: "Better Stack incident"
+  - mode: "web-2 down"
+    detection: "absence-alerted Better Stack heartbeats web_nic_guard / web_zot_consumer (ADR-143 R1(a)); web-1 clock keeps dispatching"
+    alert_route: "Better Stack heartbeat incident"
   - mode: "both web hosts down"
-    detection: "Better Stack uptime; Sentry missed check-in within 30 min; GH schedule fallback still runs late"
+    detection: "Better Stack uptime; Sentry monitor missed check-in within 30 min; GH schedule fallback still runs late"
     alert_route: "Better Stack incident + Sentry page"
   - mode: "systematic duplicate dispatches"
-    detection: "tick logs show two outcome=dispatched for one {workflow, slot}; gh run list shows two workflow_dispatch runs within one slot"
+    detection: "workflow run log (gh run list: two workflow_dispatch runs in one slot) + vector Source 3 markers (two outcome=dispatched for one {workflow, slot})"
     alert_route: "postmerge AC11 read; non-paging (duplicates are harmless)"
 
 logs:
-  where: "web container stdout (pino) -> journald (--log-driver journald) -> Vector -> Better Stack Logs, hosts soleur-web-1 and soleur-web-2 (web-2 ships per ADR-143 R1(c)); search 'watchdog-dispatch-clock'"
-  retention: "Better Stack Logs source retention (existing web-platform source policy)"
+  where: "web container stdout (pino WARN) -> journald (--log-driver journald) -> vector app_container_journald (Source 3, CONTAINER_NAME=soleur-web-platform exactly; the canary is NOT shipped) -> app_container_warn_filter (level >= 40) -> Better Stack Logs; host_name soleur-web-platform (web-1) and soleur-web-2; query: scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH"
+  retention: "Better Stack Logs source retention (hot ~40 min + s3 archive; betterstack-query.sh unions both)"
 
 discoverability_test:
-  command: "curl -fsS --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/scheduled-inngest-health.yml/runs?per_page=3"
+  command: "curl -fsS --max-time 10 'https://api.github.com/repos/jikig-ai/soleur/actions/workflows/scheduled-inngest-health.yml/runs?per_page=3'"
   expected_output: "workflow_runs"
 ```
 
-The `discoverability_test` reads the public Actions runs list, which is the signal that shows
-cadence, without auth. It proves an operator can read that signal locally and without SSH. It
-does not assert health: AC11 and AC12 do that after the merge.
+The `discoverability_test` reads the public Actions runs list without auth. That list is the
+cadence signal. The test proves an operator can read that signal locally with no SSH, and
+preflight Check 10 can execute it; measured, it ran in 0.4 s. It does not assert health: AC9–AC11
+do that after the merge.
+
+There is one residual risk: the anonymous GitHub rate limit is 60 requests an hour per IP, so a
+shared runner could see a 403.
 
 ## Encryption Posture
 
@@ -645,84 +796,108 @@ exception:
 
 ### Guard 1 — Watchdog dispatch table ↔ workflow ↔ Sentry monitor parity
 
-**Property.** Every entry in `WATCHDOG_DISPATCH_TABLE` meets all of the following:
+**Property.** Every entry in `WATCHDOG_DISPATCH_TABLE` satisfies all of the following:
 
 - it has a non-empty `eligibility`;
-- its workflow has a `workflow_dispatch` trigger, and `concurrency.group` with
-  `cancel-in-progress: false`;
-- its workflow's fallback `on.schedule` includes the interval's crontab;
+- its workflow's trigger set is exactly `{schedule, workflow_dispatch}`, because a
+  `pull_request`/`push` trigger would let unrelated runs suppress slots;
+- its workflow declares a top-level `concurrency` with `cancel-in-progress: false`;
+- its fallback `on.schedule` includes the interval's crontab;
 - its `sentry-heartbeat` `monitor-slug` equals the table slug;
 - the same-named `sentry_cron_monitor` has that crontab and a `checkin_margin_minutes` in
-  `[MARGIN_FLOOR, intervalMinutes]`, so a dead trigger pages within `2 × interval`. `MARGIN_FLOOR`
-  = 12, derived from the margin budget (jitter 2.5 + poll 0.5 + runtime 8), not arbitrary.
+  `[ceil(3 + max_runtime_minutes), intervalMinutes]`. That floor is jitter (2.5) + poll (0.5) +
+  that monitor's own `max_runtime_minutes`, so a dead trigger pages within `2 × interval`.
 
-`scheduled-inngest-health` is additionally pinned to `intervalMinutes <= 15`, with an assertion
-message that cites #8495.
+In addition:
 
-**Assembly.** The chokepoint is `WATCHDOG_DISPATCH_TABLE`, the only array
-`startWatchdogDispatchClock` iterates. The new describe block in
-`sentry-monitor-iac-parity.test.ts` imports it and reuses that file's existing extractors
-(`workflowCrons`, `monitorCrontabBySlug`, `heartbeatSlugFiles`). It reads each member's
-`.github/workflows/<file>` and `cron-monitors.tf`. The pure predicate `marginWithinBudget(margin,
-interval)` lives in the test file, not in production code.
+- `scheduled-inngest-health` is pinned to `intervalMinutes <= 15`, with an assertion message
+  citing #8495.
+- **No `.github/workflows/*.yml` and no e2e/playwright config sets `SOLEUR_HOST_ID`.** The arm
+  predicate borrows that ADR-068 placement signal, so setting it in CI would arm the clock in CI.
+
+**Assembly.** The chokepoint is `WATCHDOG_DISPATCH_TABLE` in the dependency-free
+`server/watchdog-dispatch-table.ts`. It is the only array that `startWatchdogDispatchClock` (via
+`deps.table`'s default) iterates.
+
+The new describe block in `sentry-monitor-iac-parity.test.ts` imports the table and reads:
+
+- each member's workflow, through `workflowOn(file)` (a YAML parse of `on` and the top-level
+  `concurrency`, using the existing `yaml` dependency) plus the existing
+  `workflowCrons`/`heartbeatSlugFiles`;
+- `cron-monitors.tf`, through the existing `monitorCrontabBySlug` and a new
+  `monitorFieldBySlug(tf, slug, field)` for `checkin_margin_minutes` and `max_runtime_minutes`;
+- the `SOLEUR_HOST_ID` absence check, which walks `.github/workflows/` and
+  `apps/web-platform/playwright*.config.ts`.
+
+The pure predicate `marginWithinBudget(margin, interval, maxRuntime)` lives in the test file.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Change `sentry_cron_monitor.zot_restart_loop_alarm.checkin_margin_minutes` back to 120 | RED |
-| 2 | Empty `WATCHDOG_DISPATCH_TABLE` (own dispatch). The block asserts that the table's slugs **equal** `{scheduled-inngest-health, scheduled-zot-restart-loop}` and that `checked === table.length`, so "0 checked" cannot pass | RED |
-| 3 | Append a third, non-compliant entry after the two compliant ones: `{scheduled-prod-version-drift.yml, 15, eligibility: ""}` | RED (the second member after a compliant first, plus empty eligibility) |
+| 1 | Set `zot_restart_loop_alarm.checkin_margin_minutes` back to 120 | RED |
+| 2 | Empty `WATCHDOG_DISPATCH_TABLE` (own dispatch). The block asserts the slug set **equals** `{scheduled-inngest-health, scheduled-zot-restart-loop}` and `checked === table.length` | RED |
+| 3 | Set `eligibility: ""` on the zot entry, the second member after a compliant first | RED |
 | 4 | Remove `workflow_dispatch:` from `scheduled-zot-restart-loop.yml` | RED |
 | 5 | Set `cancel-in-progress: true` on `scheduled-inngest-health.yml` | RED |
-| 6 | Change the inngest workflow's `monitor-slug:` to `scheduled-inngest-health-x` | RED (the existing #6374 block plus the new block) |
-| 7 | Relax inngest to `intervalMinutes: 30`, moving its cron and monitor to `*/30` in the same diff (consistent but slower) | RED (the #8495 pin) |
+| 6 | Add `pull_request:` to the zot workflow's `on:` | RED |
+| 7 | Relax inngest to `intervalMinutes: 30`, and move its cron and monitor to `*/30` in the same diff | RED (the #8495 pin) |
+| 8 | Add `SOLEUR_HOST_ID: x` to any workflow `env:` | RED |
 
 **Harness rows:**
 
 | # | Suite edit | Expected |
 |---|---|---|
-| H1 | Make the block's `workflowCrons` call return `[]` | RED (the crontab-membership assertion fails for every member) |
-| H2 | Must-PASS: `marginWithinBudget(15, 15)` (margin equals interval, the inclusive boundary) and `marginWithinBudget(20, 30)` (non-canonical, permitted) | PASS (a predicate that rejects everything fails here) |
+| H1 | Make the block's `workflowCrons` call return `[]` | RED (crontab membership fails for every member) |
+| H2 | Must-PASS `marginWithinBudget(15, 15, 8)` (inclusive boundary) and `marginWithinBudget(20, 30, 10)` (non-canonical, permitted); must-RED `(120, 60, 10)` and `(10, 15, 8)` | PASS/RED as listed (a predicate that rejects everything fails the PASS rows) |
 
-**Anchor.** One diff can edit all three files consistently, so the guard proves consistency. Row 7
-is the anchor: the `<= 15` pin is a named assertion that cites #8495, so slowing the cadence means
-deleting a reviewable line rather than moving three values. The live Sentry config is re-read at
-postmerge (AC12).
+**Anchor.** One diff can edit all three files consistently, so this guard proves consistency. Row 7
+is the anchor: the `<= 15` pin is a named assertion that cites #8495. The live Sentry config is
+re-read at postmerge (AC10).
 
-### Guard 2 — A tick can never take the server down or stall the clock
+### Guard 2 — A tick can never take the server down, stall the clock, or route through Inngest
 
-**Property.** Whatever a tick does, whether it dispatches, skips, throws in mint, read or
-dispatch, hangs past the deadline, or has `report` itself throw:
+**Property.** Whatever a tick does — dispatch, skip, throw in mint/read/dispatch, hang past the
+deadline, or have `report` itself throw — all of the following hold:
 
 - no `unhandledRejection` is emitted;
-- the entry's `inFlight` is cleared;
+- no marker with `outcome: "tick_escaped"` is emitted;
+- that entry's `inFlight` is cleared;
 - the next due slot is ticked;
-- after the tick settles, no timer is left pending except the one poll interval (no leaked
-  deadline timer).
+- after the tick settles, exactly **one** timer is pending (the poll interval), so no deadline
+  timer leaks.
 
-**Assembly.** The single chokepoint is `runTickSafely(entry, S)`. It is the only caller of the
-tick body, and the poll loop is its only caller. It holds the `withTimeout` race, the catch, and the
-`finally` that clears `inFlight` and sets `handledSlot`.
+Separately, the clock module never imports `server/inngest/`.
+
+**Assembly.** `runTickSafely(entry, S)` is the only caller of the tick body, and the poll is its
+only caller. Three fences are nested there:
+
+1. the inner `try/catch/finally`;
+2. the outer `.catch` → `tick_escaped`;
+3. the `report` wrapper.
+
+The import boundary is enforced by the dependency-cruiser rule `watchdog-clock-not-via-inngest`.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Remove the `.catch` on `runTickSafely`, then inject a mint that rejects | RED: a `process.on("unhandledRejection")` spy records a call |
-| 2 | Drop the try/catch around `report`, then inject a `report` that throws | RED: same spy |
-| 3 | Move the `inFlight = false` from `finally` into the success path (a REORDER, not a delete), then inject a dispatch that rejects | RED: the next slot's tick never runs, and the case observes at the next due slot |
-| 4 | Remove the `clearTimeout` from `withTimeout` | RED: `vi.getTimerCount()` after the tick settles is 2, not 1 |
-| 5 | Poll only the first table entry (`table.slice(0, 1)`) | RED: the zot entry is never ticked (the second member) |
+| 1 | Remove the inner `catch`, then inject a mint that rejects | RED: `tick_escaped` marker emitted (the outer fence caught it) |
+| 2 | Remove the `report` try/catch, then inject a `report` that throws | RED: `tick_escaped` marker emitted |
+| 3 | Move `inFlight = false` from `finally` into the success path (a REORDER, not a delete), then inject a dispatch that rejects | RED: the next due slot is never ticked (observed at that slot) |
+| 4 | Remove `clearTimeout` from `withTimeout` | RED: `vi.getTimerCount()` after settle is 2, not 1 |
+| 5 | Poll only `table.slice(0, 1)` | RED: the zot entry (second member) is never ticked |
+| 6 | Import `mintInstallationToken` from `server/inngest/functions/_cron-shared.ts` | RED: dependency-cruiser `watchdog-clock-not-via-inngest` |
 
 **Harness rows:**
 
 | # | Suite edit | Expected |
 |---|---|---|
-| H1 | Never advance the fake timers (the poll would never run) | RED: the case asserts exactly 1 POST |
-| H2 | Must-PASS: a tick whose dedup read throws still dispatches, and the next slot still ticks | PASS |
+| H1 | Never advance the fake timers | RED: the case asserts exactly 1 POST to `…/scheduled-inngest-health.yml/dispatches` |
+| H2 | Must-PASS: the dedup read throws, yet the tick dispatches and the next slot still ticks | PASS |
 
-**Anchor.** None outside the commit. This is a behavioural property of code under test.
+**Anchor.** None outside the commit. This is a behavioural property of code under test, plus a
+static import rule.
 
 ## Infrastructure (IaC)
 
@@ -772,14 +947,23 @@ The apply is Terraform-only and in place, and neither path involves a human step
   short. It covers:
   - the decision;
   - the failure-domain table;
-  - the eligibility rule: the explicit, narrow exemption from ADR-063 /
-    `new-scheduled-cron-prefer-inngest`, plus the required `eligibility` field;
+  - the eligibility rule: the explicit, narrow exemption from ADR-033's canonical scheduled-work
+    pattern / `new-scheduled-cron-prefer-inngest`, plus the required `eligibility` field;
   - how ADR-033's anti-circularity corollary is satisfied: two web-host clocks, the native
     `schedule:` fallback, and Sentry as the outer layer;
-  - the fleet-uniqueness rule in one sentence. ADR-027 is one replica per host, so a
-    side-effecting in-process timer must dedup fleet-wide (here: jitter plus the slot-scoped read);
+  - the fleet rule in one sentence. Per ADR-068, each deployed web host runs its own copy. A timer
+    whose external side effect is not idempotent per slot must dedup fleet-wide; here that is
+    jitter plus the slot-scoped read. Under ADR-027 this is Bucket B, duplicate-tolerant. The
+    existing reapers need no dedup, and this rule does not make them non-compliant;
+  - why the clock does not join the ADR-078 cron drain: ticks are ≤ 90 s with no children, the
+    other host covers a killed tick, and the first poll re-reads the slot;
   - the rejected alternatives (the option table);
-  - the reversal triggers: #7230, or a Workers substrate plus a narrow dispatch App.
+  - the reversal triggers:
+    - #7230 lands;
+    - a Workers substrate plus a narrow dispatch App appears;
+    - `var.web_hosts` drops to a single host. Then re-derive; the Worker (option B) becomes the
+      default, because the one-host clock sits in the Inngest execution container.
+  - **Relates to:** ADR-033, ADR-068, ADR-143 D2, ADR-241.
 
   Risks (restored escalations, comment volume, the canary) stay in this plan and the PR body, not
   in the ADR.
@@ -811,14 +995,17 @@ All three files were read in full: `model.c4`, `views.c4` and `spec.c4`.
    `views.c4` needs no change: both endpoints are already in `containers`, and `context` derives
    `platform.webapp -> github`.
 2. In the `github -> sentry` edge, the sentence containing the anchor "8 GHA-`schedule:`-fired"
-   gets a parenthetical: "(scheduled-inngest-health and -zot-restart-loop are also fired by the
-   web server's dispatch clock, #8495)". **Every number, and the anchor phrases "8 GHA-`schedule:`-fired"
+   gets this parenthetical: "(scheduled-inngest-health and -zot-restart-loop are also fired by a
+   fourth substrate — web-server-scheduled, GHA-executed — the dispatch clock, ADR-246/#8495)". **Every number, and the anchor phrases "8 GHA-`schedule:`-fired"
    and "and 6 `workflow_dispatch`-only", stay verbatim.** `c4-count-parity.test.sh` greps them, and
    C2/C3 are derived from `on.schedule` presence, which does not change.
 3. In the tunnel element, the text "*/15 connector census in scheduled-inngest-health.yml" becomes
    "…(web-server-dispatched every 15 min, #8495; GHA cron fallback)".
 4. Fix the comment "(scheduled-zot-restart-loop.yml, */30)" to "(scheduled-zot-restart-loop.yml,
    hourly, web-server-dispatched — #8495)".
+5. In both the tunnel element and the `hetzner -> tunnel` edge, web-2 is described as
+   "a scheduler-less standby". Append "(runs the #8495 watchdog dispatch clock)" there, because
+   web-2 now has an active duty.
 
 The pre-existing overclaim in the `api -> supabase` edge ("every GitHub App-token use") is **not**
 edited here. It was already false for every `mintInstallationToken` caller. The work phase files it
@@ -895,6 +1082,14 @@ gated on a soak.
   workflows would be a self-inflicted storm.
 - **Every error path must be fenced.** `crash-handlers.ts` exits on `unhandledRejection`, so a
   forgotten `.catch` in the clock would take down the user-facing server (Guard 2).
+- **`SOLEUR_HOST_ID` is a borrowed signal.** It is the ADR-068 lease-placement id, resolved on a
+  best-effort basis by `ci-deploy.sh`. If a future test or CI job sets it while
+  `NODE_ENV=production`, the clock arms there. Guard 1 row 8 pins "no workflow or e2e config sets
+  it".
+- **Log at WARN, never info.** Vector's `app_container_warn_filter` drops pino level < 40, so an
+  info marker is invisible off-host.
+- **Never forward the raw Octokit error to `reportSilentFallback`.** Rebuild it from the redacted
+  message.
 - **The ADR-246 ordinal is provisional.** On a renumber, run
   `grep -rn 'ADR-246' knowledge-base/project/{plans,specs}/` and sweep.
 
@@ -923,7 +1118,7 @@ apply run on merge.
 - Margin arithmetic: added to the `cron-monitors.tf` rationale.
 - Devex:
   - the runbook answers "running?", "stop?", "change the table?" and "which host?";
-  - every tick is logged at info level;
+  - every tick emits a WARN `SOLEUR_WATCHDOG_DISPATCH` marker (info would be dropped by Vector's warn filter);
   - the `eligibility` field is required and the "one-row change" wording is fixed;
   - there is a change-the-table checklist.
 
@@ -955,103 +1150,159 @@ and the unhandled rejection. The polling redesign then made its chain-specific P
 
 ### Clock (`apps/web-platform/test/server/watchdog-dispatch-clock.test.ts`, RED first)
 
-- **C1 Arm predicate.**
-  - `production` with host id `"  "` → disarmed, with one `op=arm` report.
+**Harness conventions (from test-design review):**
+
+- Every scenario passes `deps.table` explicitly. Single-entry tables isolate a workflow; C11,
+  C15 and Guard 2 row 5 use the two-entry table.
+- POST counts are asserted **per workflow path**, never in aggregate.
+- **`unhandledRejection` spy pattern:**
+  1. Save `const realSetImmediate = setImmediate` **before** `vi.useFakeTimers()`, because vitest
+     4 fakes `setImmediate`.
+  2. Advance only with `vi.advanceTimersByTimeAsync`.
+  3. Before asserting, `await new Promise(r => realSetImmediate(r))`.
+  4. Add the `process.on("unhandledRejection", spy)` listener in `beforeEach` and remove it in
+     `afterEach`.
+- `setInterval` is injected and returns `{ unref: vi.fn() }`. C1 asserts `unref` was called.
+
+**Scenarios:**
+
+- **C1 arm predicate.**
+  - `production` with host id `"  "` → disarmed. There is one `op=arm` report and a `disarmed`
+    marker.
   - `test` with a host id → disarmed, with no report.
-  - `production` with `hetzner-123` → armed, with one interval timer.
-- **C2 Slot math.**
+  - `production` with `hetzner-123` → armed. The interval is registered and `unref` is called.
+- **C2 slot math.**
   - `slotStartAt(:15:30.000, 15)` = `:15:00`.
+  - `slotStartAt(:14:59.999, 15)` = `:00:00`.
+  - `slotStartAt(:15:00.000, 15)` = `:15:00`.
   - `slotStartAt(00:00:00, 60)` = `00:00`.
-- **C3 Skip, same slot.** The newest run was created at `:15:02` (a GH tick). The poll at `:15:40`,
-  with jitter 30 s, makes no POST, and the outcome is `skipped_slot_has_run`.
-- **C4 Regression against the age window.** The newest run was created at `:05`. The poll at
-  `:15:40` makes a POST.
-- **C5 Empty list.** With zero runs, the tick makes a POST.
-- **C6 Read fails.** The runs read throws. The tick still makes a POST, reports `op=dedup-read`, and
-  the next slot still ticks.
-- **C7 Failures.** Each case must report with the token string absent from the payload (the
-  `redactToken` check), clear `inFlight`, make the next slot tick, and never fire the
-  `unhandledRejection` spy:
-  - the mint throws (`op=mint`, `reason=throw`);
-  - the dispatch returns 422 (`op=dispatch`, `reason=http`, `status=422`);
-  - the dispatch never settles and the 90-s deadline is advanced (`reason=timeout`).
-- **C8 Stale queued run.** The newest run is `queued` and was created 20 min ago. The tick makes a
-  POST.
-- **C9 Once per slot.** Five consecutive polls inside one due slot make exactly one read and at
-  most one POST.
-- **C10 Late cutoff.** A process that boots at `S + 13:30` on a 15-min entry does not tick slot
-  `S`, and does tick `S + 15`.
-- **C11 Two hosts.** Two clock instances share one fake GitHub, with jitters of 40 s and 100 s,
-  and a run becomes visible 3 s after its POST. The slot gets exactly 1 POST.
-- **C12 Token scope and request shape.**
-  - The mint is called with `permissions: { actions: "write" }` and `repositories: ["soleur"]`.
+- **C3 skip, same slot.** The newest run was created at `:15:02` (a GH tick). A poll at `:15:40`
+  with jitter 30 s makes no POST to the inngest path. The marker reads
+  `outcome=skipped_slot_has_run` and carries `run_id` and `run_event`.
+- **C4 regression against the age window.** The newest run was created at `:05`. It may be
+  `completed` or `queued`; both are one parameterised case, and C8 is folded into this one. A poll
+  at `:15:40` → exactly 1 POST.
+- **C4b dedup cutoff exactness.** A run created at exactly `S − 60 s` → skip. At
+  `S − 60.001 s` → POST.
+- **C5 empty list.** Zero runs → 1 POST.
+- **C6 read fails.** The runs read throws. The tick still makes 1 POST, reports `op=dedup-read`,
+  and the next slot still ticks.
+- **C7 failures and redaction.** Each case below must report a payload with no token in `message`
+  and no `request`, `response` or `headers` keys. The `emit` and `report` spies never receive the
+  token string. `inFlight` is cleared, the next slot ticks, and neither `unhandledRejection` nor
+  `tick_escaped` fires. The cases:
+  - The mint throws (`op=mint`, `reason=throw`).
+  - The fake Octokit throws an error whose `message`, `request.headers.authorization` and
+    `response.data` all contain the token (`op=dispatch`, `reason=http`, `status=422`).
+  - The dispatch never settles, then the clock advances past 90 s (`reason=timeout`).
+- **C9 once per slot.** Five polls inside one due slot → exactly 1 read and at most 1 POST.
+- **C10 late cutoff.**
+  - A boot at `S + 13:30` on a 15-min entry → no tick for `S`, then a tick for `S + 15`.
+  - Exact boundary: `S + 12:59.999` ticks, and `S + 13:00.000` does not.
+- **C11 two hosts.** Two clock instances share one fake GitHub. Their jitters are 40 s and 100 s,
+  and a run becomes visible 3 s after its POST → exactly 1 POST. This holds only because the
+  jitters land on different 30 s polls. Jitters of 40 s and 45 s give 2 POSTs by design.
+- **C12 token scope and request shape.**
+  - `generateInstallationToken` is called with `permissions: { actions: "write" }` and
+    `repositories: ["soleur"]`.
   - The POST goes to `/repos/jikig-ai/soleur/actions/workflows/scheduled-inngest-health.yml/dispatches`
-    with body `{ ref: "main" }`.
-- **C13 Stop.** `stop()` → 0 timers. A tick still in flight settles without scheduling anything.
+    with body `{ ref: "main" }`, with no `inputs`.
+- **C13 stop.** `stop()` is called while a tick is in flight. Once that tick settles, there are 0
+  timers and no new tick.
+- **C14 jitter bounds.** With `random = () => 0`, there is no tick at `S + 29.999 s` and a tick at
+  `S + 30 s`. With `random` → max, the tick comes at `S + 150 s`, not before.
+- **C15 one draw per slot per entry.** `random` returns `[0.999, 0]` → no POST by `S + 120 s`
+  (a fresh draw on every poll would tick at `S + 60 s`). `random` is called exactly once per entry
+  per slot, and each entry gets its own draws.
+- **C16 marker level and discriminator.** Every `emitWatchdogDispatch` call writes at pino level
+  **40**, with `SOLEUR_WATCHDOG_DISPATCH: true`. Test this in the marker's own unit test, or
+  through an injected pino destination.
 
 ### Parity (new describe block in `sentry-monitor-iac-parity.test.ts`)
 
-- **P1 Live repo.** Every Guard 1 property holds. The table slugs equal the expected set, and
+- **P1 live repo.** Every Guard 1 property holds, including the trigger set, the `concurrency`
+  shape and the absence of `SOLEUR_HOST_ID`. The slug set equals the expected set, and
   `checked === table.length`.
-- **P2 `marginWithinBudget`.** Test the boundary cases H2 against the predicate, plus a
-  must-RED case `(120, 60)`.
-- **P3 The #8495 pin** holds, and its assertion message cites the issue.
+- **P2 `marginWithinBudget`.** Runs the H2 rows.
+- **P3 the #8495 pin.** The pin holds, and the assertion message cites the issue.
+
+### Static
+
+- **S1 dependency-cruiser.** The import-boundary gate (`apps/web-platform/server/README.md`)
+  passes, and the new rule `watchdog-clock-not-via-inngest` exists.
 
 ### Regression
 
-- The #8495 trigger condition is GitHub delivering `*/15` at a 2–7 h cadence. Given that condition,
-  when the clock is armed, then `scheduled-inngest-health` gets one `workflow_dispatch` run per
-  15-min slot. Covered by C3/C4/C9/C11 and, live, by AC11.
+- Given GitHub delivers `*/15` only every 2–7 h (the #8495 trigger condition), when the clock is
+  armed, then `scheduled-inngest-health` gets one `workflow_dispatch` run per 15-min slot. C3,
+  C4, C9 and C11 cover this; AC11 covers it live.
 
 ## Acceptance Criteria
 
 ### Pre-merge
 
-- [ ] **AC1** Scenarios C1–C13 are written first and seen failing (RED) against a stub, then pass
-  with
+- [ ] **AC1** Scenarios C1–C16 are written first and seen failing against a stub, then pass:
   `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/watchdog-dispatch-clock.test.ts`.
-- [ ] **AC2** `./node_modules/.bin/vitest run test/server/inngest/sentry-monitor-iac-parity.test.ts
-  test/server/inngest/function-registry-count.test.ts test/server/inngest/cron-main-health-monitor.test.ts`
-  passes. Guard 1 rows 1, 2, 3 and 7 were each applied once locally and observed RED. The work log
-  records the four RED outputs.
+- [ ] **AC2** This passes:
+  `./node_modules/.bin/vitest run test/server/inngest/sentry-monitor-iac-parity.test.ts test/server/inngest/function-registry-count.test.ts test/server/inngest/cron-main-health-monitor.test.ts`.
+  Guard 1 rows 1, 3, 7 and 8 and Guard 2 row 6 were each applied once locally and observed RED.
+  The work log records those five RED outputs.
 - [ ] **AC3** In `apps/web-platform/infra/sentry/cron-monitors.tf`:
   - `zot_restart_loop_alarm` has `checkin_margin_minutes = 30`;
   - `scheduled_inngest_health` stays at `15`;
   - both crontabs are byte-identical to `origin/main`;
   - `terraform -chdir=apps/web-platform/infra/sentry validate` passes, and `fmt -check` is clean.
-- [ ] **AC4** The C4 checks are green, and the new `api -> github` watchdog edge exists:
-  - `bash plugins/soleur/test/c4-count-parity.test.sh` passes 10/10, with C1–C6 unchanged;
-  - `c4-code-syntax.test.ts` passes;
-  - `c4-render.test.ts` passes.
-- [ ] **AC5** The workflow diffs are comment-only. This must print nothing:
+- [ ] **AC4** The C4 checks pass and the edits are in place:
+  - `bash plugins/soleur/test/c4-count-parity.test.sh` reports 10/10, with C1–C6 unchanged;
+  - `c4-code-syntax.test.ts` and `c4-render.test.ts` pass;
+  - the new `api -> github` watchdog edge exists;
+  - web-2's "scheduler-less standby" text is annotated in both places.
+- [ ] **AC5** The workflow diffs are comment-only. This prints nothing:
 
   ```bash
   git diff origin/main -- .github/workflows/scheduled-inngest-health.yml .github/workflows/scheduled-zot-restart-loop.yml \
     | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-][[:space:]]*(#|$)'
   ```
 
-  `head -1` of each file still equals `# <!-- gate-override: new-scheduled-cron-prefer-inngest -->`.
-- [ ] **AC6** `ADR-246-*.md` exists with its Decision, the failure-domain table, the eligibility
-  rule, Alternatives, and reversal triggers. ADR-033 carries the cross-reference. The ordinal was
-  re-verified at ship.
-- [ ] **AC7** `bash .claude/hooks/new-scheduled-cron-prefer-inngest.test.sh` passes.
-- [ ] **AC8** The PR body is correct:
+  `head -1` of each file still equals
+  `# <!-- gate-override: new-scheduled-cron-prefer-inngest -->`.
+- [ ] **AC6** `ADR-246-*.md` exists and contains:
+  - Decision;
+  - the failure-domain table;
+  - the eligibility rule citing ADR-033;
+  - the ADR-068 Bucket-B fleet rule;
+  - the ADR-078 rationale;
+  - Alternatives;
+  - reversal triggers, including a single `var.web_hosts` host.
+
+  ADR-033 carries the cross-reference, and the ordinal was re-verified at ship.
+- [ ] **AC7** `bash .claude/hooks/new-scheduled-cron-prefer-inngest.test.sh` passes, and the
+  web-platform dependency-cruiser gate passes.
+- [ ] **AC8** The PR body:
   - its first line states that merging this PR alone changes production, through
-    `web-platform-release.yml` (the clock) and `apply-sentry-infra.yml` (the zot margin), with no
-    dispatch;
-  - it uses `Closes #8495`, not in the title;
-  - it links the Cloudflare Worker `deferred-scope-out` issue, the #8595 comment, and the separate
-    C4 `api -> supabase` overclaim issue.
+    `web-platform-release.yml` (the clock on both web hosts) and `apply-sentry-infra.yml` (the zot
+    margin), with no dispatch;
+  - it uses `Closes #8495`, and not in the title;
+  - it links the Cloudflare-Worker `deferred-scope-out` issue, the #8595 comment, and the
+    separate issue for the C4 `api -> supabase` "every GitHub App-token use" overclaim;
+  - it renders `decision-challenges.md`.
 
-### Post-merge (production, all API-read; `hr-no-dashboard-eyeball-pull-data-yourself`)
+### Post-merge (production, all read through APIs; `hr-no-dashboard-eyeball-pull-data-yourself`)
 
-- [ ] **AC9** Within 30 min of `web-platform-release.yml` completing:
-  `bash scripts/betterstack-query.sh` returns `watchdog-dispatch-clock armed` for both
-  `soleur-web-1` and `soleur-web-2`, and no `disarmed` row.
-- [ ] **AC10** At least 50 min after the deploy, the Sentry API reports the `scheduled-inngest-health`
-  and `scheduled-zot-restart-loop` monitors as `ok`, and the live `zot_restart_loop_alarm` margin
-  reads 30.
-- [ ] **AC11** At least 50 min after the deploy, measure the gaps with:
+- [ ] **AC9** Within 30 min of `web-platform-release.yml` completing, this returns at least one
+  row per host: `soleur-web-platform` (web-1) and `soleur-web-2`.
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH
+  ```
+
+  Each host must have one row with `"outcome":"armed"` and none with `"disarmed"` or
+  `"tick_escaped"`. The canary is not shipped by design.
+- [ ] **AC10** At least 50 min after the deploy, the Sentry API reports both monitors,
+  `scheduled-inngest-health` and `scheduled-zot-restart-loop`, as `ok`. The live
+  `zot_restart_loop_alarm` margin reads 30. Also confirm no Sentry event with
+  `feature=watchdog-dispatch-clock` `op=mint`, which proves the narrowed `actions` mint works.
+- [ ] **AC11** At least 50 min after the deploy, run:
 
   ```bash
   gh run list --workflow scheduled-inngest-health.yml --limit 20 --json createdAt,event \
@@ -1060,7 +1311,8 @@ and the unhandled rejection. The polling redesign then made its chain-specific P
            max_gap_min: ([range(1;length) as $i | ((.[$i].createdAt|fromdate) - (.[$i-1].createdAt|fromdate))/60] | max // 0)}'
   ```
 
-  It must report `dispatched >= 3` and `max_gap_min <= 17`. No two `workflow_dispatch` runs may
-  fall in one 15-min slot more than once.
+  The output must show `dispatched >= 3` and `max_gap_min <= 17`. No more than one 15-min slot
+  may hold two `workflow_dispatch` runs.
 
-  If AC9–AC11 fail, postmerge reopens #8495 with the output attached.
+  If AC9, AC10 or AC11 fails, postmerge reopens #8495 with the output attached.
+
