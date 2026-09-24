@@ -56,8 +56,8 @@ BASE="https://deploy.soleur.ai/hooks"
 # reason flag`) puts the TERMINAL STATE in the `flag` field (done/aborted/rolled-back) and
 # a CAUSE in `reason` (flip-complete/dbsize-nonzero/…) — so we key on `"flag":"<state>"`,
 # NOT `reason` (which never equals `done`/`aborted`). Arg $1 = floor timestamp in the
-# `betterstack-query.sh` literal `--since` form `YYYY-MM-DD HH:MM:SS` (its ClickHouse cast
-# rejects the ISO `T…Z` form). Echoes EXACTLY one terminal token to stdout: done |
+# `betterstack-query.sh` literal `--since` form `YYYY-MM-DD HH:MM:SS` (the reader also accepts
+# ISO-8601 `T…Z` and normalises it to this form since #7761). Echoes EXACTLY one terminal token to stdout: done |
 # rolled-back | aborted | timeout. NEVER echoes a raw Better Stack row (a value could ride
 # along) — only the extracted flag token. A confirm-PATH (query) failure is announced on
 # stderr distinctly from an FSM-not-terminal state, so a timeout names the right subsystem.
