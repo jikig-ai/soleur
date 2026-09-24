@@ -46,7 +46,7 @@ minter disabled.
 - FR4: Update all **push** sites to push to zot: `build-inngest-bootstrap-image.yml`, `reusable-release.yml` (build+push + cosign sign step).
 - FR5: Update all **pull** sites to log in to zot: `ci-deploy.sh` (`ghcr_prelude_and_login` + inngest-bootstrap pull + cosign verifier config), `soleur-host-bootstrap.sh`, `cloud-init.yml` (fresh-boot extract + main app pull).
 - FR6: Preserve cosign: verify the offline verifier fetches `.sig` from zot with the minted credential; `COSIGN_IDENTITY_REGEXP` (GitHub Actions OIDC) unchanged.
-- FR7: Cutover sequence: dual-push (GHCR + zot) → validate zot pull E2E on a host → flip pull sites → retire GHCR push after soak.
+- FR7: Cutover sequence: dual-push (GHCR + zot) → validate zot pull E2E on a host → flip pull sites → retire GHCR push after soak. (**Superseded 2026-09-24:** the operator's `DECISION: B3` on #6122 keeps the GHCR push as ADR-169's CI-only restore source; see ADR-096 "Amendment 2026-09-24 (#6122)".)
 
 <!-- lint-infra-ignore start -->
 ## Technical Requirements
@@ -55,7 +55,7 @@ minter disabled.
 - TR2: Minter keypair/JWKS for zot trust; control-plane signs, zot validates. Security-review the trust model (SECURITY DEFINER of the supply chain).
 - TR3: Observability: minter failures + zot health reachable from Sentry/Better Stack without SSH (`hr-no-ssh-fallback-in-runbooks`, `hr-observability-as-plan-quality-gate`). zot-down must alert before it gates a host boot.
 - TR4: Break-glass: keep interim GHCR PAT documented as fallback until zot HA is proven; do not revoke early (`decision-challenges.md` incident note).
-- TR5: Rotate the exposed classic PAT (overwritten during the 2026-07-05 minter misfire).
+- TR5: Rotate the exposed classic PAT (overwritten during the 2026-07-05 minter misfire). (**Done 2026-09-24:** the owning account is the operator's own; it holds no PAT and the Doppler value returns 401. See task 5.5 and ADR-096 "Amendment 2026-09-24 (#6122)".)
 - TR6: Retire on completion: `ghcr-read-credential.tf`, `ghcr-minter-doppler-token.tf` (or repurpose to zot), and the GHCR `GHCR_MINTER_DISABLED` gate.
 
 <!-- lint-infra-ignore end -->
