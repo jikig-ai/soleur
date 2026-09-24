@@ -334,57 +334,9 @@ export function C4Canvas({
   );
 }
 
-/**
- * Non-fatal warnings / fatal parse errors surfaced inline above the editor, plus
- * an honest "source edited" staleness note. The rendered diagram comes from a
- * precomputed `model.likec4.json` that is regenerated out-of-band (never at
- * runtime), so after a Save the diagram is stale until it is re-rendered. The
- * `stale` strip reuses this same banner slot — no new overlay/modal/toast.
- */
-export function C4Diagnostics({
-  diagnostics,
-  hasModel,
-  stale = false,
-}: {
-  diagnostics: Diagnostic[];
-  hasModel: boolean;
-  /** True once the user has saved a source edit this session — the precomputed
-   *  diagram has not been re-rendered, so it may not reflect the edit. */
-  stale?: boolean;
-}) {
-  if (diagnostics.length === 0 && !stale) return null;
-  return (
-    <div className="border-b border-soleur-border-default text-xs">
-      {stale && (
-        <div className="bg-amber-500/10 px-3 py-2 text-amber-300">
-          <p className="font-semibold">
-            Source edited — rendered diagram may be out of date
-          </p>
-          <p className="mt-0.5 text-amber-300/80">
-            The diagram is precomputed; it refreshes after the model is
-            re-rendered out-of-band.
-          </p>
-        </div>
-      )}
-      {diagnostics.length > 0 && (
-        <div className="bg-red-500/10 px-3 py-2 text-red-300">
-          <p className="mb-1 font-semibold">
-            {hasModel
-              ? "Diagram warnings"
-              : "Diagram has errors — fix the source in the Code view"}
-          </p>
-          <ul className="space-y-0.5">
-            {diagnostics.slice(0, 8).map((d, i) => (
-              <li key={i}>
-                line {d.line}: {d.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
+// The diagnostics / staleness banner lives in its own light module so tests can
+// render it without the canvas/editor runtime; re-exported so import sites stay.
+export { C4Diagnostics, SUPERSEDED_LINE } from "./c4-diagnostics";
 
 /** Editable .c4 source panel (file tabs + CodeMirror + Save → PUT → reload). */
 export function C4CodePanel({
@@ -397,8 +349,10 @@ export function C4CodePanel({
   dirPath: string;
   /** Called after a successful save. `rerendered` is true when the server
    *  regenerated the diagram (the rendered model is fresh); false when the
-   *  out-of-band re-render failed or was skipped (diagram may be stale). */
-  onSaved: (rerendered: boolean) => void | Promise<void>;
+   *  server-side re-render failed or was skipped (diagram may be stale).
+   *  `diagnostic` is the server's reason, passed only when present, so the
+   *  parent's stale banner can state it (#8695). */
+  onSaved: (rerendered: boolean, diagnostic?: string) => void | Promise<void>;
   height?: string;
 }) {
   const files = useMemo(() => Object.keys(data.sources), [data.sources]);
@@ -509,9 +463,12 @@ export function C4CodePanel({
           ? "Saved — diagram updated."
           : diagnostic
             ? `Saved — ${diagnostic}`
-            : "Saved — diagram will update after re-render.",
+            : // No reason: a newer source change superseded this render (#8695).
+              "Saved — a newer change replaced this one before it was rendered.",
       );
-      await onSaved(rerendered);
+      // One arg when there is no diagnostic, so a parent (and its tests) see
+      // exactly `onSaved(rerendered)`.
+      await (diagnostic ? onSaved(rerendered, diagnostic) : onSaved(rerendered));
     } catch (e) {
       setSaveMsg(e instanceof Error ? e.message : "Save failed");
     } finally {

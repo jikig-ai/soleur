@@ -44,6 +44,10 @@ export default function C4Diagram({
   // See c4-workspace.tsx: stale flips true only when the server's post-save
   // re-render (#4964) failed; on success the reloaded dump is fresh.
   const [stale, setStale] = useState(false);
+  // The save's reason (#8695). onSaved switches to the Diagram tab, unmounting
+  // C4CodePanel and its `Saved — <diagnostic>` line, so the banner is the only
+  // place left to show it. Every save overwrites it.
+  const [staleDiagnostic, setStaleDiagnostic] = useState<string | null>(null);
 
   return (
     <div className="mb-4 overflow-hidden rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/40">
@@ -82,6 +86,7 @@ export default function C4Diagram({
             diagnostics={data.diagnostics}
             hasModel={!!data.dump}
             stale={stale}
+            staleDiagnostic={staleDiagnostic}
           />
           {tab === "diagram" && (
             <div className="relative h-[600px] w-full">
@@ -94,9 +99,12 @@ export default function C4Diagram({
                 data={data}
                 dirPath={dirPath}
                 height="560px"
-                onSaved={async (rerendered) => {
+                onSaved={async (rerendered, diagnostic) => {
                   await reload();
                   setStale(!rerendered);
+                  setStaleDiagnostic(
+                    !rerendered && diagnostic ? diagnostic : null,
+                  );
                   setTab("diagram");
                 }}
               />
