@@ -38,14 +38,18 @@ const RERENDER_OUTCOME_GUIDANCE =
   "to you — and do NOT tell them the diagram will refresh by itself. What you can do " +
   "depends on the diagnostic: an unresolved reference (for example a missing `spec.c4`) " +
   "is a source error you can fix with this tool, after confirming the change with the " +
-  "user; \"Save again to retry\" means you may offer to save the same content again; " +
+  "user; \"Save again\" (to retry, in a moment, or in a few minutes) means you may offer to " +
+  "save the same content again after that wait — and if a retry returns the same diagnostic, " +
+  "stop offering retries and pass on any advice to contact support; " +
   "an unsupported file (a likec4 config file, a symbolic link or a submodule), a " +
   "diagrams folder that is a link or submodule, a folder that is too large, a GitHub " +
   "access problem or an unreadable folder must be changed by the user in their GitHub " +
   "repository — you cannot fix those with this tool. Never remove or shrink diagram " +
   "content, and never re-save or retry, to work around a diagnostic without the user's " +
-  "confirmation. When `rerendered` is false and there is NO `rerenderDiagnostic`, a " +
-  "newer save is rendering the diagram — say it will update shortly.";
+  "confirmation. When `rerendered` is false and there is NO `rerenderDiagnostic`, a newer " +
+  "change to the diagram source was saved before this one was rendered, so this save did " +
+  "not update the diagram: say so, do NOT say it will update by itself, and offer to save " +
+  "again to render the latest version.";
 
 export const C4_TOOL_DESCRIPTION =
   "Edit a canonical LikeC4 architecture diagram source and commit it. " +
