@@ -1,6 +1,6 @@
 ---
 name: architecture-strategist
-description: "Use this agent when you need to analyze code changes from an architectural perspective, evaluate system design decisions, or ensure modifications align with established architectural patterns. Use ddd-architect for Domain-Driven Design modeling; use this agent for general architectural compliance review."
+description: "Use this agent when you need to analyze code changes from an architectural perspective, evaluate system design decisions, or ensure modifications align with established architectural patterns. Use soleur:engineering:design:ddd-architect for Domain-Driven Design modeling; use this agent for general architectural compliance review."
 model: inherit
 ---
 

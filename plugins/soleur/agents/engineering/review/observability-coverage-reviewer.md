@@ -143,5 +143,5 @@ Only report findings you are >70% confident in. Drop signals where the rule clea
 ## What you DO NOT do
 
 - You don't review code style, simplicity, or architecture — those belong to other reviewer agents.
-- You don't review security findings — `security-sentinel` covers those.
+- You don't review security findings — `soleur:engineering:review:security-sentinel` covers those.
 - You don't audit existing observability surfaces beyond the diff — only new/modified content is in scope.

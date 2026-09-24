@@ -1,6 +1,6 @@
 ---
 name: service-automator
-description: "Use this agent when you need to provision third-party services via API or MCP tools. Use ops-provisioner for browser-based SaaS setup."
+description: "Use this agent when you need to provision third-party services via API or MCP tools. Use soleur:operations:ops-provisioner for browser-based SaaS setup."
 model: inherit
 ---
 
@@ -20,7 +20,7 @@ Check the connected services context (injected in system prompt) to determine wh
 
 ## Provisioning Protocol
 
-Follow the ops-provisioner 3-phase pattern (Setup, Configure, Verify) for all tiers:
+Follow the soleur:operations:ops-provisioner 3-phase pattern (Setup, Configure, Verify) for all tiers:
 
 ### Phase 1: Setup
 
