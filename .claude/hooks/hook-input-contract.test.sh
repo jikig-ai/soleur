@@ -37,29 +37,29 @@ SKIPPED=0
 # machine cannot exit 0 emitting no line at all.
 #
 # It is for a HUMAN reading the log. An earlier version of this comment said the
-# summary "is the only thing an aggregate runner reads", which is false and was
-# load-bearing for the wrong reason: `run_suite` in scripts/test-all.sh branches
-# on the EXIT CODE alone and never parses this line. So the aggregate-level half
-# of #7190 item 5 is NOT closed by this change — a skipped suite still records
-# `ok` upstream. What is closed is legibility: the skip is now counted and
-# visible instead of silently shrinking the denominator.
+# summary "is the only thing an aggregate runner reads", which is false:
+# `run_suite` in scripts/test-all.sh branches on the EXIT CODE alone and never
+# parses this line. That is why the jq precondition below now exits 3 rather
+# than 0 (#8616) — the exit code is the only channel upstream reads.
 summary() { echo; echo "=== hook-input-contract: $PASS/$TOTAL pass, $SKIPPED skipped ==="; }
 
-# jq absent → SKIP, deliberately retained. #7190 item 5 asked us to consider a
-# hard failure here and justify either way. Rejected, four reasons:
-#   (a) CI has jq, so a hard-fail is unreachable there — dead code guarding a
-#       hypothetical image change;
-#   (b) if CI ever lost jq, this suite is struck along with everything else, so
-#       the hard-fail buys no earlier signal;
-#   (c) it turns a green test-all.sh red on a jq-less dev machine for an
-#       environment reason, not a defect;
-#   (d) it buys false comfort while 21 SIBLING suites still skip silently in
-#       exactly that scenario.
-# If aggregate skip-invisibility is the real concern the fix is skip-accounting
-# in test-all.sh — one place, all 22 suites — and that is not this change.
-# What IS fixed here: the skip is now COUNTED and PRINTED rather than invisible.
+# jq absent → UNRESOLVED (exit 3). #7190 item 5 kept a SKIP (exit 0) here for
+# four reasons; #8616 reversed that decision, and each reason is answered:
+#   (a) "CI has jq, so a hard-fail is unreachable there." True, and CI behaviour
+#       does not change. The change targets local and non-CI runs, where "not
+#       measured" read as green.
+#   (b) "If CI lost jq, this suite is struck along with everything else." The
+#       unguarded jq suites do go red without jq, but the guarded ones read `ok`
+#       inside that red run, which misstates which suites measured anything.
+#   (c) "It turns test-all.sh red on a jq-less machine for an environment
+#       reason." The verdict is UNRESOLVED (3), not FAIL: the line below names
+#       the environment as the cause. Not-green is still correct — the hooks
+#       this suite tests call jq and are disarmed on that machine too.
+#   (d) "False comfort while 21 sibling suites still skip." All of them were
+#       converted together, and hook-suite-dep-unresolved.test.sh stops any
+#       from drifting back (it holds the taxonomy).
 command -v jq >/dev/null 2>&1 || {
-  SKIPPED=$((SKIPPED + 1)); echo "SKIP: jq missing — whole suite"; summary; exit 0
+  SKIPPED=$((SKIPPED + 1)); echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; summary; exit 3
 }
 
 # ADR-129 rule (c): ONE owning trap for every tempfile this suite allocates.
