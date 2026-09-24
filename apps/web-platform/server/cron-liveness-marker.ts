@@ -302,7 +302,7 @@ export function emitRunReportSweep(m: RunReportSweepMarker): void {
 // ---------------------------------------------------------------------------
 // Marker 8 — SOLEUR_WATCHDOG_DISPATCH
 // ---------------------------------------------------------------------------
-// One line per watchdog dispatch-clock event (#8495, ADR-246): the boot-time
+// One line per watchdog dispatch-clock event (#8495, ADR-248): the boot-time
 // arm decision and every tick outcome, from each web host. `run_id`/`run_event`
 // on a skip name the run that already covered the slot, which separates "a GH
 // schedule tick got there first" from "the other host got there first".

@@ -36,7 +36,7 @@
 #
 # Closes #6291.
 #
-# TRIGGERS (#8495, ADR-246). PRIMARY: the web server's watchdog dispatch clock
+# TRIGGERS (#8495, ADR-248). PRIMARY: the web server's watchdog dispatch clock
 # (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every
 # hourly slot from both web hosts — GitHub's `schedule:` delivered this cron only once
 # every 2-7 h. FALLBACK: the `schedule:` cron below (kept byte-identical; the Sentry

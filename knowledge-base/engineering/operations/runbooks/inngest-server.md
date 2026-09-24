@@ -585,6 +585,54 @@ jq -r '.services.inngest_journal_tail' /tmp/ds.json | tr '|' '\n' | grep -iE 'co
 The tail is `|`-folded in the payload, hence the `tr`. A host-level restart is the WRONG lever
 here (it worsens `EMAXCONNSESSION`); this step is log inspection only, not remediation.
 
+## How the external watchdogs are triggered (#8495, ADR-248)
+
+`scheduled-inngest-health.yml` (every 15 min) and `scheduled-zot-restart-loop.yml` (hourly)
+are started by `workflow_dispatch` from the **watchdog dispatch clock** inside the web-platform
+server (`apps/web-platform/server/watchdog-dispatch-clock.ts`), on every deployed web host. Their
+`schedule:` crons are only the fallback: GitHub delivered them once every 2–7 h. The clock is
+not an Inngest function because it watches Inngest. The Sentry monitors
+(`scheduled-inngest-health`, `scheduled-zot-restart-loop`) now measure clock + dispatch + run
+end to end.
+
+1. **Is it running?** Each web host logs one `armed` row at boot and about five tick rows an
+   hour:
+
+   ```bash
+   doppler run -p soleur -c prd_terraform -- \
+     bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH
+   ```
+
+   Expect `host_name` rows for both `soleur-web-platform` (web-1) and `soleur-web-2`. The run
+   cadence itself is public:
+
+   ```bash
+   gh run list --workflow scheduled-inngest-health.yml --limit 20 --json createdAt,event \
+     | jq -r '.[] | "\(.createdAt) \(.event)"'
+   ```
+
+   Healthy is one `workflow_dispatch` run per 15-min slot. A `disarmed` row, or a Sentry event
+   with `feature=watchdog-dispatch-clock op=arm`, means `SOLEUR_HOST_ID` was empty at boot.
+2. **How do I stop it?** `gh workflow disable scheduled-inngest-health.yml` (or the zot file)
+   stops both the clock's dispatches (they fail with a reported 422) and the fallback cron.
+   Reverting the PR removes the clock.
+3. **How do I add or remove a table row?** Edit `WATCHDOG_DISPATCH_TABLE`
+   (`apps/web-platform/server/watchdog-dispatch-table.ts`) with a non-empty `eligibility`
+   argument (ADR-248: the job must watch the scheduling substrate or what it depends on;
+   anything else belongs on the Inngest dispatch pattern). The workflow needs
+   `workflow_dispatch:` + its fallback `schedule:` and no other trigger, plus a `concurrency`
+   group with `cancel-in-progress: false`. Budget the monitor margin in
+   `apps/web-platform/infra/sentry/cron-monitors.tf` (jitter 2.5 + poll 0.5 + max runtime, at
+   most one interval), update the expected slug set in `sentry-monitor-iac-parity.test.ts`,
+   and the `api -> github` watchdog edge in `model.c4`. The parity test enforces the rest.
+4. **Which host sent a run?** The marker's `host_name`, `slot` and outcome; a skipped tick
+   names the run that already covered the slot (`run_id`, `run_event`). A dispatched run with
+   no matching marker came from the canary container, whose logs are not shipped.
+
+`ci-deploy.sh`'s note that "the canary fires no crons" is no longer strictly true: the canary
+carries a clock for its few minutes of life, and the slot-scoped read keeps it from
+double-dispatching.
+
 ## External watchdog: functions-query degraded + restart `lock_contention` — #6407
 
 Two soft/benign states the external inngest health watchdog handles WITHOUT paging or

@@ -1,8 +1,8 @@
 // Workflows the web server's watchdog dispatch clock fires via
-// `workflow_dispatch` (#8495, ADR-246). Deliberately import-free so the Sentry
+// `workflow_dispatch` (#8495, ADR-248). Deliberately import-free so the Sentry
 // parity test can read it as a pure module.
 //
-// ELIGIBILITY (ADR-246): a row belongs here ONLY if the workflow watches the
+// ELIGIBILITY (ADR-248): a row belongs here ONLY if the workflow watches the
 // scheduling substrate or something that substrate depends on, so it cannot be
 // scheduled by that substrate (ADR-033 anti-circularity). Any other scheduled
 // job uses the Inngest dispatch pattern (cron-main-health-monitor) instead.

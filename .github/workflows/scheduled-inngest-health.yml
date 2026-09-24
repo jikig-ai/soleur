@@ -28,7 +28,7 @@
 #
 # Tracks #5542.
 #
-# TRIGGERS (#8495, ADR-246). PRIMARY: the web server's watchdog dispatch clock
+# TRIGGERS (#8495, ADR-248). PRIMARY: the web server's watchdog dispatch clock
 # (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every
 # 15-min slot from both web hosts — GitHub's `schedule:` delivered this */15 cron only
 # once every 2-7 h, so a real Inngest outage went unseen for hours. FALLBACK: the

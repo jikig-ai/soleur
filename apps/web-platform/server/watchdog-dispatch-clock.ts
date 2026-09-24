@@ -1,4 +1,4 @@
-// Watchdog dispatch clock (#8495, ADR-246).
+// Watchdog dispatch clock (#8495, ADR-248).
 //
 // GitHub Actions `schedule:` drops ticks: the external Inngest watchdog
 // (*/15) measured one run every 2-7 h, so an Inngest outage went unseen for

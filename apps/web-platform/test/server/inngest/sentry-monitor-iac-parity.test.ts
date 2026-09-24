@@ -573,7 +573,7 @@ describe("GHA schedule cron ↔ monitor crontab parity (#8450)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Watchdog dispatch clock parity (#8495, ADR-246 Guard 1).
+// Watchdog dispatch clock parity (#8495, ADR-248 Guard 1).
 // The web server's dispatch clock (server/watchdog-dispatch-clock.ts) is now
 // the PRIMARY trigger for the workflows in WATCHDOG_DISPATCH_TABLE; each
 // workflow's own `schedule:` cron is the fallback. This block pins that the
@@ -642,7 +642,7 @@ describe("Watchdog dispatch clock parity (#8495)", () => {
       checked++;
       const tag = entry.monitorSlug;
       if (entry.eligibility.trim().length === 0) {
-        problems.push(`${tag}: empty eligibility (ADR-246 requires an anti-circularity argument)`);
+        problems.push(`${tag}: empty eligibility (ADR-248 requires an anti-circularity argument)`);
       }
       const doc = workflowDoc(entry.workflowFile);
       const on = (doc.on ?? {}) as Record<string, unknown>;

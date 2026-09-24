@@ -177,7 +177,7 @@ app.prepare().then(() => {
   // .unref() already prevents shutdown blocking (see startCcIdleReaper).
   const ccIdleReaperTimer = startCcIdleReaper();
 
-  // #8495 / ADR-246 — the watchdog dispatch clock: fires workflow_dispatch for
+  // #8495 / ADR-248 — the watchdog dispatch clock: fires workflow_dispatch for
   // the external Inngest watchdog (every 15 min) and the zot restart-loop alarm
   // (hourly), because GitHub Actions `schedule:` drops most of their ticks. Not
   // an Inngest function on purpose (it watches Inngest). Arms only on a deployed

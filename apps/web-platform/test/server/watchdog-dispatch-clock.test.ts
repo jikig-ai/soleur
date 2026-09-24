@@ -1,7 +1,7 @@
 // #8495 — watchdog dispatch clock. GitHub Actions `schedule:` drops ticks (the
 // external Inngest watchdog measured one run every 2-7 h against a declared
 // */15), so the web server fires `workflow_dispatch` on a reliable wall clock.
-// ADR-246 owns the rationale; this file pins the behaviour (plan Test Scenarios
+// ADR-248 owns the rationale; this file pins the behaviour (plan Test Scenarios
 // C1-C15 + Guard 2). Every scenario injects its table, so a two-entry table is
 // used only where the second member is the point (C11, C15).
 

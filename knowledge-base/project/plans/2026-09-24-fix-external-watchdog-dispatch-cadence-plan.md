@@ -335,7 +335,7 @@ entry, it checks whether the current wall-clock slot is due and not yet handled.
    if **this slot already has a run**, meaning one was created at or after `slotStart − 60 s`.
 3. Otherwise it sends `POST …/actions/workflows/{file}/dispatches` with `ref: main`.
 
-| Workflow | Slug | Interval | Due at | Skip rule | Eligibility (ADR-246) |
+| Workflow | Slug | Interval | Due at | Skip rule | Eligibility (ADR-248) |
 |---|---|---|---|---|---|
 | `scheduled-inngest-health.yml` | `scheduled-inngest-health` | 15 min | slot + per-slot random jitter of 30–150 s | newest run `created_at >= slotStart − 60 s` | watches the Inngest scheduler, so it cannot be scheduled by it (ADR-033 anti-circularity) |
 | `scheduled-zot-restart-loop.yml` | `scheduled-zot-restart-loop` | 60 min | same | same | watches the registry the Inngest host pulls its image from at boot (#8539), so it shares that failure domain |
@@ -373,7 +373,7 @@ entry, it checks whether the current wall-clock slot is due and not yet handled.
 | Option | P1 (fires while Inngest is down) | P2 (bounded cadence) | P4 (dead trigger detected + fallback) | P5 (no new key custody / no PAT) | P6 (no human step, Terraform where infra) | Verdict |
 |---|---|---|---|---|---|---|
 | **A. In-process polling clock in the web server (chosen)** | Yes. It runs on web-1 and web-2, never on the dedicated Inngest host | Yes. Slot-aligned, and dispatched runs start within seconds | Yes. A second host's clock is a live backup. Sentry pages when both are dead, and the GH `schedule:` fallback stays | Yes. It reuses the App key already in the web runtime, with the token scoped to `actions:write` on one repo | Yes. It ships in the image on the normal merge deploy, and the only infra change is a Sentry margin in Terraform | **Chosen** |
-| B. Cloudflare Worker cron trigger (`cloudflare_workers_script` + `cloudflare_workers_cron_trigger`) | Yes, and it is also independent of the web hosts | Yes | Yes | **No.** The Worker needs an App private key as a secret. The only key is the `soleur-ai` App's (3 installations, 2 outside the org), and ADR-241 is narrowing that key's custody. A narrow dedicated App cannot be created through Terraform | **No.** the root's default Cloudflare API token (the `cf_api_token` input, a Cloudflare credential, not a GitHub one) lacks Workers Scripts:Edit, and a new narrow CF token must be hand-minted: the `cf-cert-reissue-token.tf` header records that minting needs "API Tokens: Edit" (CF error 9109). The repo has no Workers today, so this would be a new substrate | Rejected for now. It is the upgrade path if web-host coupling ever matters (ADR-246, #7230) |
+| B. Cloudflare Worker cron trigger (`cloudflare_workers_script` + `cloudflare_workers_cron_trigger`) | Yes, and it is also independent of the web hosts | Yes | Yes | **No.** The Worker needs an App private key as a secret. The only key is the `soleur-ai` App's (3 installations, 2 outside the org), and ADR-241 is narrowing that key's custody. A narrow dedicated App cannot be created through Terraform | **No.** the root's default Cloudflare API token (the `cf_api_token` input, a Cloudflare credential, not a GitHub one) lacks Workers Scripts:Edit, and a new narrow CF token must be hand-minted: the `cf-cert-reissue-token.tf` header records that minting needs "API Tokens: Edit" (CF error 9109). The repo has no Workers today, so this would be a new substrate | Rejected for now. It is the upgrade path if web-host coupling ever matters (ADR-248, #7230) |
 | C. Inngest cron dispatch (the `main-health-monitor` precedent) | **No.** An Inngest cron cannot fire while Inngest is down (ADR-033 anti-circularity) | Yes | Partly | Yes | Yes | Rejected for inngest-health. It would work for zot, but a second mechanism for one workflow buys nothing over A |
 | D. systemd timer on a host | web/zot: yes. inngest: no | Yes | Yes | **No.** The App key would land on a host filesystem outside the app container | **No.** A host config change needs an immutable redeploy (`hr-prod-host-config-change-immutable-redeploy`) with approval gates | Rejected |
 | E. Better Stack monitor as trigger or probe | Probe: yes | Yes | Yes | **No.** A static token means a PAT, and a direct probe copies the HMAC and CF Access secrets into a vendor | Yes (Terraform) | Rejected (Cut List) |
@@ -383,7 +383,7 @@ entry, it checks whether the current wall-clock slot is due and not yet handled.
 repo default ("new scheduled work goes on Inngest") stands. This clock covers the documented
 exception class: *a watcher of the scheduling substrate, or of what the substrate depends on,
 cannot be scheduled by that substrate* (ADR-033 anti-circularity). The gate-override header on the
-first line of `scheduled-inngest-health.yml` already records this. ADR-246 restates it as the
+first line of `scheduled-inngest-health.yml` already records this. ADR-248 restates it as the
 table's **eligibility rule**:
 
 - Each `WATCHDOG_DISPATCH_TABLE` entry carries a required, non-empty `eligibility` string, and
@@ -426,7 +426,7 @@ The hook itself does not fire. Both workflows already exist, and no new
 | Inngest scheduler (dedicated host 10.0.1.40) | **Yes.** The clocks run on the web hosts | The watchdog run itself: the `nolive`/dedicated/down arms, an error check-in, and a page |
 | Inngest web unit (quiesced or crashed) | **Yes** | Same |
 | Zot registry host | **Yes** | The zot alarm run: a `[ci/zot-restart-loop]` issue |
-| web-1 app container, which is also where Inngest EXECUTES functions (`sdk_url` → 10.0.1.10, ADR-033 corollary / ADR-243) | **Yes, but only from web-2.** web-2 was retired once before (#6538); if `var.web_hosts` drops to one host, re-derive (ADR-246 reversal trigger) | Better Stack uptime on app.soleur.ai; web-2's clock keeps dispatching; the GH fallback and Sentry are behind it |
+| web-1 app container, which is also where Inngest EXECUTES functions (`sdk_url` → 10.0.1.10, ADR-033 corollary / ADR-243) | **Yes, but only from web-2.** web-2 was retired once before (#6538); if `var.web_hosts` drops to one host, re-derive (ADR-248 reversal trigger) | Better Stack uptime on app.soleur.ai; web-2's clock keeps dispatching; the GH fallback and Sentry are behind it |
 | web-2 only | **Yes, from web-1** | web-2 has no public ingress (ADR-143 R1), so detection is its absence-alerted `web_nic_guard` / `web_zot_consumer` Better Stack heartbeats (ADR-143 R1(a)) |
 | Both web hosts | **No** | Better Stack uptime, a Sentry missed check-in within 30 min, and the GH `schedule:` fallback still runs, late |
 | GitHub API / Actions | No, and the GH fallback is impaired too | Sentry missed check-in (Sentry is independent of GitHub) |
@@ -534,7 +534,7 @@ The hook itself does not fire. Both workflows already exist, and no new
     `clearInterval(ccIdleReaperTimer)`, before any `await`.
 - **No ADR-078 drain participation.** A tick is bounded at 90 s and spawns no children. A tick
   killed by a container swap is covered by the other host, and the new container's first poll
-  re-reads the current slot. ADR-246 records this.
+  re-reads the current slot. ADR-248 records this.
 - **Sentry margin budget (inngest).** Check-in time = slot + jitter (≤ 2.5 min) + poll granularity
   (≤ 0.5 min) + queue + runtime. The `probe` job has `timeout-minutes: 8`, and `connector_census`
   (≤ 5 min) runs in parallel. That gives ≤ 11 min plus queue against a 15-min margin, leaving about
@@ -579,7 +579,7 @@ The hook itself does not fire. Both workflows already exist, and no new
 - `apps/web-platform/infra/sentry/cron-monitors.tf`:
   - `zot_restart_loop_alarm.checkin_margin_minutes` 120 → **30**.
   - Rewrite both rationale comment blocks. They should state: primary trigger = the dispatch clock
-    (ADR-246), GH `schedule:` = fallback, the margin-budget arithmetic above, and dead-trigger
+    (ADR-248), GH `schedule:` = fallback, the margin-budget arithmetic above, and dead-trigger
     detection = interval + margin.
   - Crontabs are unchanged.
 - Header comments only in both workflows: name the primary trigger and the fallback. **No
@@ -591,7 +591,7 @@ The hook itself does not fire. Both workflows already exist, and no new
 
 #### Phase 3: ADR + C4 + runbooks
 
-- Create `knowledge-base/engineering/architecture/decisions/ADR-246-watchdog-dispatch-clock-runs-in-the-web-server.md`.
+- Create `knowledge-base/engineering/architecture/decisions/ADR-248-watchdog-dispatch-clock-runs-in-the-web-server.md`.
   The ordinal is provisional, and `soleur:ship`'s ADR-ordinal gate re-checks it. On a renumber,
   sweep this plan and `tasks.md`.
 - C4 edits (see the Architecture Decision section).
@@ -638,7 +638,7 @@ The hook itself does not fire. Both workflows already exist, and no new
 - `apps/web-platform/server/watchdog-dispatch-table.ts`
 - `apps/web-platform/server/watchdog-dispatch-clock.ts`
 - `apps/web-platform/test/server/watchdog-dispatch-clock.test.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-246-watchdog-dispatch-clock-runs-in-the-web-server.md` (provisional ordinal)
+- `knowledge-base/engineering/architecture/decisions/ADR-248-watchdog-dispatch-clock-runs-in-the-web-server.md` (provisional ordinal)
 
 ## Files to Edit
 
@@ -665,7 +665,7 @@ The hook itself does not fire. Both workflows already exist, and no new
 
 ## Alternative Approaches Considered
 
-The option table under Proposed Solution is the decision record, and ADR-246 carries it.
+The option table under Proposed Solution is the decision record, and ADR-248 carries it.
 
 - **Cloudflare Worker (option B)** is the named upgrade path. The trigger is **#7230** (Inngest
   execution decoupled from web-1), or a Workers substrate plus a narrow single-repo
@@ -677,7 +677,7 @@ The option table under Proposed Solution is the decision record, and ADR-246 car
 - **A bespoke cadence-probe script was cut.** AC10 reads Sentry, and AC11 uses `gh run list`
   instead.
 - **Other GHA-cron watchers** (e.g. `scheduled-prod-version-drift`, margin 360) are **not** added.
-  They are not watchers of the scheduling substrate, so under ADR-246's eligibility rule they
+  They are not watchers of the scheduling substrate, so under ADR-248's eligibility rule they
   belong on the Inngest dispatch pattern (`main-health-monitor`). That is separate work, and this
   plan files nothing for it.
 
@@ -942,7 +942,7 @@ The apply is Terraform-only and in place, and neither path involves a human step
 
 ### ADR
 
-- **Create ADR-246** (provisional ordinal): *"Watchers of the scheduling substrate are triggered
+- **Create ADR-248** (provisional ordinal): *"Watchers of the scheduling substrate are triggered
   by an in-process web-server dispatch clock, not by Inngest or by GitHub cron alone."* Keep it
   short. It covers:
   - the decision;
@@ -968,7 +968,7 @@ The apply is Terraform-only and in place, and neither path involves a human step
   Risks (restored escalations, comment volume, the canary) stay in this plan and the PR body, not
   in the ADR.
 - **Amend** ADR-033 with a single cross-reference line under the anti-circularity corollary that
-  points to ADR-246.
+  points to ADR-248.
 
 ### C4 views
 
@@ -986,7 +986,7 @@ All three files were read in full: `model.c4`, `views.c4` and `spec.c4`.
 
 1. Add a second `api -> github` edge next to the existing edge whose description begins
    "Workstream tab: reads connected-repo issues":
-   - description: "Watchdog dispatch clock (#8495, ADR-246): an in-process poll on each web host
+   - description: "Watchdog dispatch clock (#8495, ADR-248): an in-process poll on each web host
      (not Inngest) dispatches scheduled-inngest-health.yml every 15 min and
      scheduled-zot-restart-loop.yml hourly with an actions:write App token; `schedule:` crons stay
      as fallback; check-ins still flow github -> sentry";
@@ -996,7 +996,7 @@ All three files were read in full: `model.c4`, `views.c4` and `spec.c4`.
    `platform.webapp -> github`.
 2. In the `github -> sentry` edge, the sentence containing the anchor "8 GHA-`schedule:`-fired"
    gets this parenthetical: "(scheduled-inngest-health and -zot-restart-loop are also fired by a
-   fourth substrate — web-server-scheduled, GHA-executed — the dispatch clock, ADR-246/#8495)". **Every number, and the anchor phrases "8 GHA-`schedule:`-fired"
+   fourth substrate — web-server-scheduled, GHA-executed — the dispatch clock, ADR-248/#8495)". **Every number, and the anchor phrases "8 GHA-`schedule:`-fired"
    and "and 6 `workflow_dispatch`-only", stay verbatim.** `c4-count-parity.test.sh` greps them, and
    C2/C3 are derived from `on.schedule` presence, which does not change.
 3. In the tunnel element, the text "*/15 connector census in scheduled-inngest-health.yml" becomes
@@ -1061,7 +1061,7 @@ gated on a soak.
   - With jitter and the slot-scoped read, a collision is estimated at about 5% of slots. That
     figure is an estimate (uniform 120-s window, ~3 s visibility), not a measurement.
   - A collision yields one serialized, harmless duplicate.
-  - If postmerge shows systematic duplicates, the named escalation is a DB slot claim (ADR-246).
+  - If postmerge shows systematic duplicates, the named escalation is a DB slot claim (ADR-248).
 - **GitHub API dependency.** If api.github.com is down, both the clock and the fallback fail, and
   Sentry reports missed check-ins. This is accepted.
 - **Classifier coverage (out of scope).** Which label a run inside the 09-22 window would have
@@ -1090,8 +1090,8 @@ gated on a soak.
   info marker is invisible off-host.
 - **Never forward the raw Octokit error to `reportSilentFallback`.** Rebuild it from the redacted
   message.
-- **The ADR-246 ordinal is provisional.** On a renumber, run
-  `grep -rn 'ADR-246' knowledge-base/project/{plans,specs}/` and sweep.
+- **The ADR-248 ordinal is provisional.** On a renumber, run
+  `grep -rn 'ADR-248' knowledge-base/project/{plans,specs}/` and sweep.
 
 ## Domain Review
 
@@ -1266,7 +1266,7 @@ and the unhandled rejection. The polling redesign then made its chain-specific P
 
   `head -1` of each file still equals
   `# <!-- gate-override: new-scheduled-cron-prefer-inngest -->`.
-- [ ] **AC6** `ADR-246-*.md` exists and contains:
+- [ ] **AC6** `ADR-248-*.md` exists and contains:
   - Decision;
   - the failure-domain table;
   - the eligibility rule citing ADR-033;

@@ -79,7 +79,7 @@ Plan (deepened 2026-09-24): `knowledge-base/project/plans/2026-09-24-fix-externa
 
 ## Phase 3: ADR + C4 + runbooks
 
-- [ ] 3.1 Write ADR-246 (provisional ordinal). It must cover:
+- [ ] 3.1 Write ADR-248 (provisional ordinal). It must cover:
   - the decision and the failure-domain table;
   - the eligibility rule, citing ADR-033;
   - the ADR-068 Bucket-B fleet rule and the ADR-078 non-participation rationale;

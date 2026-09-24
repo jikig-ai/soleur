@@ -32,7 +32,7 @@
 # (`scheduled_prod_version_drift`, `zot_restart_loop_alarm`) to hourly cadence
 # with larger margins (360/120) sized for GHA schedule-delivery jitter, not
 # Inngest's. Since #8495 `zot_restart_loop_alarm` and `scheduled_inngest_health`
-# are dispatched by the web server's watchdog clock (ADR-246), so their margins
+# are dispatched by the web server's watchdog clock (ADR-248), so their margins
 # are budgeted for a reliable clock instead (zot 120 -> 30; see each resource).
 # Daily/weekly monitors use 30-240 min as their observed jitter dictates.
 # The TR9 substrate-migration sequence completed the move off GHA hourly cron
@@ -662,7 +662,7 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
 # NOT Inngest-fired — a self-hosted inngest cron cannot detect inngest being down;
 # that blind spot is the exact #5542 failure this watchdog closes; see the workflow's
 # gate-override header. PRIMARY trigger since #8495: the web server's watchdog dispatch
-# clock (apps/web-platform/server/watchdog-dispatch-clock.ts, ADR-246) fires
+# clock (apps/web-platform/server/watchdog-dispatch-clock.ts, ADR-248) fires
 # workflow_dispatch every 15-min slot from both web hosts; the workflow's own
 # `schedule:` cron is only the FALLBACK (GHA measured one scheduled run per 2-7 h).
 # checkin_margin_minutes = 15 is budgeted for that reliable clock: jitter (<= 2.5 min)
@@ -1055,7 +1055,7 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 # a separate host so an Inngest cron on the watched fleet would be a dark-alarm risk).
 #
 # PRIMARY trigger since #8495: the web server's watchdog dispatch clock
-# (apps/web-platform/server/watchdog-dispatch-clock.ts, ADR-246) fires workflow_dispatch every
+# (apps/web-platform/server/watchdog-dispatch-clock.ts, ADR-248) fires workflow_dispatch every
 # hourly slot from both web hosts; the workflow's `schedule:` cron is only the FALLBACK. The old
 # margin of 120 (2× the interval) existed to absorb GHA `schedule:` jitter (measured gaps up to
 # 243 min on the old */30 cadence); a dispatched run starts within seconds, so it is re-derived:
@@ -1160,7 +1160,7 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 # noise. That is verbatim the failure this monitor exists to prevent, caused by its own
 # margin. The two sibling monitors cited by the old rationale carry the same defect; it is
 # pre-existing and out of scope here, but their constants are not evidence. (#8495 later
-# moved those two siblings onto the web-server watchdog dispatch clock, ADR-246; this
+# moved those two siblings onto the web-server watchdog dispatch clock, ADR-248; this
 # monitor's workflow is not a watcher of the scheduling substrate, so it stays GHA-fired.)
 #
 # 360 exceeds the measured max gap (243) with headroom, and matches the jitter the checker's
