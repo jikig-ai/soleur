@@ -17,6 +17,7 @@ open_limbs: "two limbs INCONCLUSIVE and not run: (L3) workspace-resident, untrac
 exposure_window: "Opens 2026-06-05T11:41:52Z (Web Platform Release of #4965 complete; the in-place render first reached production). Closes on the first production deploy carrying PR #8687, which has NOT merged at the date of this record. Sub-window A, 2026-06-05T11:41:52Z to 2026-06-16T13:54:22Z: the PUT route checked no flag."
 tier_classification: "Tier 1 — an internal assessment record. No public document is edited, no right is narrowed, no processing is added. The mirror/SHA/heading gates are NOT engaged."
 semver: "No TC_VERSION bump."
+addendum_2026_09_24: "Review reconciliation (§Addendum — 2026-09-24). Renders of tenant content evidenced: exactly 3 on reachable history, not \"at least 2 and at most 3\" (the §L2(e) path-filtered listing omitted three no-change commits). Window opening corrected to 2026-06-05T11:40:39Z (deploy dispatch), moving no render. Window closes on the production deploy that follows the merge of PR #8687, not on the merge. Determination unchanged: REACHABILITY-ONLY, PROVISIONAL."
 ---
 
 # CLO assessment — #8623 prior exposure of the C4 re-render to tenant likec4 configuration
@@ -439,3 +440,160 @@ On a flip:
 This record is **append-only**. A later limb result, a changed disposition or a correction is
 added as a dated addendum below, citing the text it annotates and amending nothing above it. That
 is the 2026-06-29 precedent's convention.
+
+## Addendum — 2026-09-24 (review reconciliation)
+
+**Why this addendum exists.** A code-quality review of PR #8687 found that §L2(e) contradicts
+itself. The third-party row gives the in-window commits as "3 (1 save, 2 re-renders)". The
+**Reading** and the breach-register row then say "at least 2 and at most 3" renders. A re-render
+commit only follows a `.c4` save commit made in the **same request**. So 2 in-window re-renders
+need at least 2 in-window saves. The stated upper bound of 3 was also the repository's **total**
+save count, not its in-window count. The review offered two explanations: the window opened
+earlier than recorded, or the save/re-render split was miscounted. Both were re-derived,
+read-only, on 2026-09-24. The instruments were the same as before: least-privilege App
+installation tokens (`contents: read`, `metadata: read`), counts and anonymous indices only, and
+no tenant identifier recorded. **The split was miscounted. The window start is late by at most
+73 seconds, and that does not move any render.** The determination is unchanged.
+
+### A1 — cause: the path-filtered listing omits no-change commits
+
+§L2(e) was taken from `GET /repos/{o}/{r}/commits?path=knowledge-base/engineering/architecture/diagrams`
+on the default branch. That listing uses history simplification. It leaves out any commit that
+does not change the path. The writer produces such commits in two cases:
+
+- **A save of unchanged content.** `writeC4Diagram` PUTs through the Contents API with the
+  current blob sha. GitHub records a commit even when the content is byte-identical, and that
+  commit changes no file. The render still runs after it: the `.c4` branch in `writeC4Diagram`
+  does not check whether the content changed.
+- **A render that regenerates an identical model.** `rerenderAndCommit` commits
+  `model.likec4.json` the same way, so it too can produce a commit that changes no file.
+
+The re-derivation listed **every** App-attributed commit carrying the writer's fixed messages, on
+**every branch**, **without** a path filter, and read the changed-file count of each one.
+
+### A2 — the reconciled census
+
+The repository is the one third-party repository §L2(e) already named. The times below are
+offsets from the #4965 deploy. Tenant commit timestamps are not recorded.
+
+| Commit (App-attributed) | When | Files changed | Seen by the §L2(e) listing? |
+|---|---|---|---|
+| `.c4` save | before #4965 merged (about 1 h 56 min before the deploy) | 1 | yes |
+| `.c4` save | before #4965 merged (about 50 min before the deploy) | 1 | yes |
+| `.c4` save | deploy + about 27 min | **0** | **no** |
+| re-render | 3 s after that save | 1 | yes |
+| `.c4` save | deploy + about 2 h 20 min | 1 | yes |
+| re-render | 4 s after that save | 1 | yes |
+| `.c4` save | deploy + about 2 h 33 min | **0** | **no** |
+| re-render | 4 s after that save | **0** | **no** |
+
+- **In the window: 3 `.c4` save commits and 3 re-render commits, paired one to one** within 3 to
+  4 seconds of each other. The earlier record counted "1 save, 2 re-renders" because three of
+  these six commits change no file.
+- **Before the window: 2 save commits and no re-render.** Both predate the #4965 merge commit
+  (2026-06-05T11:32:39Z). They ran on a container that had no render.
+- **Repository totals: 5 save commits and 3 re-render commits**, not the 3 and 2 in the §L2(e)
+  table. The "at most 3" was therefore the path-filtered total. Had it been the path-filtered
+  in-window figure (1), it would have fallen below the lower bound of 2. That is the
+  contradiction the review found.
+- **Every other readable repository** has no App editor commit in the window, on any branch,
+  with no path filter. The operator-owned repositories still show 2 saves, both on 2026-06-04,
+  before the window, and no re-render. `jikig-ai/soleur` has none at any ref.
+- **After 2026-06-16T13:54:22Z** (the `c4-edit` gate) there are **0** App editor commits in any
+  readable repository. That is unchanged.
+
+**Bounds, restated.** A re-render commit proves a render ran and succeeded, so it is the lower
+bound: **3**. A render only follows a `.c4` save commit in the same request, so the in-window
+saves are the upper bound: **3**. **The renders of tenant content that GitHub evidences
+number exactly 3.** All 3 ran in one third-party repository, in sub-window A, on 2026-06-05, and
+each one succeeded.
+
+This holds for the history reachable today. A save commit later removed by a force-push or a
+branch deletion would not be listed. Such a removal could raise the upper bound, but it cannot
+lower the lower bound of 3. Only the L4 telemetry could close that residual, and L4 remains NOT
+RUN.
+
+**The committed tree at each of the 6 in-window commits** was walked directly by true tree modes.
+This includes the three no-change commits that §L2(c)'s path-filtered walk could not have listed.
+At each of the six: `diagrams` present, **0** configs, **0** symlinks, **0** gitlinks, not
+truncated, and each is a single-parent commit. §L2(c)'s finding that the tree was clean at every
+commit that touched it now covers every commit a render followed.
+
+### A3 — the window opening, re-derived
+
+For the #4965 merge commit, the Web Platform Release run's job and step times are:
+
+- image push completed 11:38:13Z;
+- the deploy webhook was dispatched **11:40:39Z**;
+- "Verify deploy script completion" ended 11:41:49Z, and "Verify deploy health and version"
+  ended **11:41:49Z**;
+- the run completed 11:41:52Z (the instant this record's frontmatter and §The exposure window use).
+
+So the new container began serving at some moment between 11:40:39Z and 11:41:49Z. The stated
+opening is late by up to 73 seconds. **Corrected opening, taken at the conservative end:
+2026-06-05T11:40:39Z.** Sub-window A opens at the same instant, and its end at
+2026-06-16T13:54:22Z is unchanged.
+
+The correction moves no render. No App editor commit exists in any readable repository between
+the last pre-window save (about 50 minutes before the deploy) and the first in-window save (about
+27 minutes after it). The miscount in A1 fully explains the review's finding, and the window was
+not the cause.
+
+### A4 — coverage figures that also need correcting
+
+- **§L2(a) "5 are empty (no commits)".** Those 5 repositories were classed as empty because
+  GitHub reported `size: 0` for them. That field is a size rounded to whole kilobytes, and it is
+  not a commit count. **Only 1 of the 5 has no branch.** The other 4 (3 operator-owned and 1
+  third-party) hold **1 commit each**. The default-branch HEAD scan, the history scan and the
+  render census (§L2(b), (c), (e)) skipped them. The branch-tip walk (§L2(d)) did not. They were
+  read on 2026-09-24:
+  - **0** App editor commits;
+  - **0** commits touching `diagrams`;
+  - 1 commit touching an ancestor path, which does not make it a link;
+  - `diagrams` absent at all 4 tips.
+- **Corrected coverage.** 33 repositories are listed and 32 are readable. **31 of the readable
+  repositories are non-empty** (12 operator-owned, 19 third-party), not "27". The §L2(c)
+  population ("26 non-empty repositories other than `jikig-ai/soleur`") is **30**. The §L2(e)
+  third-party population ("18 read") is **19**.
+- **§L2(d) "112 across 20 third-party repositories".** The 20 are the readable third-party
+  repositories. One of them has no branch. **The 112 branch tips lie in 19 non-empty
+  third-party repositories:** 111 across the 18 that report a non-zero size, and 1 in the
+  size-0 repository that has a commit. The operator-side "11" is 11 tips across the 11
+  operator-owned repositories other than `jikig-ai/soleur`, and all 11 are non-empty. A re-walk
+  on 2026-09-24 gave the same figures: 112 and 11 tips, `diagrams` present at 2, and **0**
+  configs, symlinks or gitlinks.
+
+### A5 — the exposure window closes on the production deploy of PR #8687, not on its merge
+
+- The render code that PR #8687 replaces keeps running until a container built from a commit
+  that contains the PR is serving. Merging the PR does not stop it.
+- The closing instant should be read with the same instrument used for the opening in A3: the
+  Web Platform Release run for the first `main` commit that contains the PR. Take the conservative
+  end, which is that run's "Verify deploy health and version" step completing successfully.
+- **The window closes on that deploy, which follows the merge of PR #8687.** It had not happened
+  at the date of this addendum, and the window remains open.
+- If that deploy fails or is rolled back, the window stays open until a later deploy succeeds.
+- If PR #8687 closes unmerged, the window stays open and this record must be addended.
+
+### A6 — what changes and what does not
+
+| Item | Was | Now |
+|---|---|---|
+| Renders of tenant content evidenced (§L2(e) Reading, §L3, §Findings L2(e), §Conditions) | "at least 2 and at most 3" / "2-3" / "2 to 3" | **exactly 3** on reachable history (lower bound 3 is firm; upper bound 3 subject to the force-push residual in A2) |
+| §L2(e) third-party row | 3 saves, 2 re-renders; in window 3 (1 save, 2 re-renders) | 5 saves, 3 re-renders; in window 6 (3 saves, 3 re-renders) |
+| Window / sub-window A opening | 2026-06-05T11:41:52Z | **2026-06-05T11:40:39Z** (conservative; no render moves) |
+| Window close | "first production deploy carrying PR #8687" | unchanged in substance; instrument pinned in A5 |
+| Non-empty readable repositories | 27 (26 besides `jikig-ai/soleur`) | 31 (30 besides `jikig-ai/soleur`) |
+| §L2(d) third-party tips | "112 across 20" | 112 across **19 non-empty** (20 read, 1 with no branch) |
+| Configs / symlinks / gitlinks at any point read | 0 / 0 / 0 | 0 / 0 / 0, now including the 3 no-change commits and the 4 previously skipped repositories |
+
+**Determination unchanged.** The matter stays **REACHABILITY-ONLY** and **PROVISIONAL**.
+`art_33_triggered` and `art_34_triggered` stay `false`, and no evidence of use was found.
+Replacing "2-3" with "3" narrows the bound. It does not add a finding. Each of the 3 renders read
+a committed tree that was clean, and that tree has now been walked directly at each render.
+
+The open limbs are unchanged. L3 is NOT RUN and INCONCLUSIVE, now bounded by 3 renders in one
+workspace. L4 is NOT RUN and INCONCLUSIVE, and it is also the only instrument that could close the
+force-push residual in A2. The L1(e) and L2(f) sub-limbs stay INCONCLUSIVE. The breach-register
+row's figures were corrected in-cell on the same date, with the superseded text quoted in the
+register's §Corrections — 2026-09-24.
