@@ -299,11 +299,6 @@ export const CANARY_EMPTY_PLACEHOLDER = "${CANARY_EMPTY}";
 // (capture-host-specific), so capture points it at a mkdtemp dir via
 // C4_RENDER_STAGING_ROOT and the projection replaces that path with this token.
 export const CANARY_C4_STAGING_PLACEHOLDER = "${CANARY_C4_STAGING}";
-const KNOWN_PLACEHOLDERS = [
-  CANARY_WS_PLACEHOLDER,
-  CANARY_EMPTY_PLACEHOLDER,
-  CANARY_C4_STAGING_PLACEHOLDER,
-];
 
 // bwrap option arities for the projection parser. `null` = classify as a
 // bind-like 2-arg (src, dest). An unrecognized `--option` throws (fail loud →
