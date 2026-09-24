@@ -433,11 +433,11 @@ if [ "$_n_carried" -ge 2 ]; then pass; else
   fail "G3-13b resolve-target emits $_n_carried of the 2 carried trust values (mirror_verified, docker_pushed) — with neither present the prohibition row above passes vacuously, and release-outcome loses the values it reports"
 fi
 
-# ═══ GUARD 7 — the five states, and the two that must stay GREEN ═════════════
+# ═══ GUARD 7 — the six states, and the two that must stay GREEN ══════════════
 # Discovered from the job body, never from a list of expected states.
 for st in no_release_run upstream_concluded_unpublished release_failed; do
   if grep -qF "$st" "$W/resolve.blk"; then pass; else
-    fail "G7 resolve-target has no '$st' state — the five-state resolution is incomplete and states will be collapsed"
+    fail "G7 resolve-target has no '$st' state — the state resolution is incomplete and states will be collapsed"
   fi
 done
 # The two clean skips must exit 0 (green); the failure state must exit non-zero.
@@ -470,6 +470,51 @@ case "$_ng" in
   *"conclusion != 'success'"*) pass ;;
   *) fail "G7 notify-gated does not fire on a non-success CI conclusion; with await-ci gone a RED CI on main would produce a GREEN release run and ZERO notifications" ;;
 esac
+
+# ═══ PATHSPEC COUPLING + CHECKOUT DEPTH (2026-09-24) ═════════════════════════
+# resolve-target's empty-lookup clean skip is now DECIDED by a diff against
+# RELEASE_PATH_FILTER, so three copies of "what should have deployed" must agree:
+# on.push.paths (GitHub glob dialect) -> path_filter (git pathspec) -> the step's
+# RELEASE_PATH_FILTER. B8 in scripts/prod-version-drift-check.test.sh binds
+# path_filter to the drift checker's PATHSPEC, a separate file (the anchor).
+_pc=$(python3 - "$REL" <<'PYPC'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+on = d.get(True) or d.get("on")      # PyYAML reads the bare `on:` key as boolean True
+pf = d["jobs"]["release"]["with"]["path_filter"]
+rt = d["jobs"]["resolve-target"]["steps"]
+res = next(s for s in rt if s.get("id") == "resolve")
+rpf = res.get("env", {}).get("RELEASE_PATH_FILTER", "")
+co = [s for s in rt if str(s.get("uses", "")).startswith("actions/checkout@")]
+depth = "missing" if len(co) != 1 else str((co[0].get("with") or {}).get("fetch-depth", "unset"))
+trans, bad = [], []
+for p in on["push"]["paths"]:
+    neg = p.startswith("!")
+    core = p[1:] if neg else p
+    if core.endswith("/**") and "*" not in core[:-3]:
+        base = core[:-2]                 # 'X/**' -> 'X/'
+        trans.append(":(exclude)" + base if neg else base)
+    else:
+        bad.append(p)
+print("P1=" + ("ok" if rpf == pf else "drift rpf=%r path_filter=%r" % (rpf, pf)))
+print("P2=" + depth)
+if bad:
+    print("P3=untranslatable %r" % bad)
+else:
+    print("P3=" + ("ok" if sorted(trans) == sorted(pf.split()) else "drift on.push.paths->%r path_filter=%r" % (sorted(trans), sorted(pf.split()))))
+PYPC
+)
+_p1=$(printf '%s\n' "$_pc" | sed -n 's/^P1=//p'); _p2=$(printf '%s\n' "$_pc" | sed -n 's/^P2=//p'); _p3=$(printf '%s\n' "$_pc" | sed -n 's/^P3=//p')
+if [ "$_p1" = "ok" ]; then pass; else
+  fail "P1 resolve-target's RELEASE_PATH_FILTER is not byte-identical to jobs.release.with.path_filter ($_p1) — the empty-lookup diff would decide 'docs-only' against a different definition than the release gate uses"
+fi
+case "$_p2" in
+  unset|1) pass ;;
+  *) fail "P2 resolve-target's checkout declares fetch-depth=$_p2 — plugins/soleur/scripts/deploy-arm.sh keys the deploy arm on the checkout's '--depth=1 origin <sha>' log line, so any other depth silently moves ship/postmerge onto the fallback key. Deepen inside step 'resolve' instead" ;;
+esac
+if [ "$_p3" = "ok" ]; then pass; else
+  fail "P3 on.push.paths and path_filter disagree ($_p3) — the clean skip now depends on path_filter meaning exactly what on.push.paths means. Globs other than 'X/**' and '!X/**' are a translation FAIL, not a skip"
+fi
 
 # ═══ GUARD 5 — every ceiling on the new path is DERIVED, never restated ══════
 # TERMINATE AT THE JOB BOUNDARY TOO. The budget step is the LAST step of
@@ -879,7 +924,18 @@ if [ "$_n_consumers" -ge 5 ]; then pass; else
   fail "G8 the consumer extraction found only $_n_consumers call site(s) — the broken predicate found 2 and this PR swept six. The extraction has narrowed; a 'no violations' verdict from it is unfalsifiable"
 fi
 
-_undis=""
+# The arm-naming predicate, as ONE function, so the must-PASS/must-RED rows below
+# score the SAME predicate the loop uses rather than a paraphrase of it.
+# `.event == "push"` (2026-09-24) is resolve-target's UNFILTERED fallback read:
+# it takes no search params and names the arm client-side in its jq select.
+g8_names_arm() {
+  case "$1" in
+    *"--event workflow_run"*|*"--event push"*|*"event=push"*|*"event=workflow_run"*|*'EVENT_ARM'*|*'.event == "push"'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_undis=""; _g8_fallback_win=""
 while IFS= read -r hit; do
   [ -n "$hit" ] || continue
   _f="${hit%%:*}"; _rest="${hit#*:}"; _ln="${_rest%%:*}"
@@ -892,16 +948,27 @@ while IFS= read -r hit; do
   # unrelated `--event` elsewhere vouch for this call site.)
   _lo=$(( _ln > 3 ? _ln - 3 : 1 )); _hi=$(( _ln + 12 ))
   _win=$(sed -n "${_lo},${_hi}p" "$REPO_ROOT/$_f" 2>/dev/null)
-  case "$_win" in
-    *"--event workflow_run"*|*"--event push"*|*"event=push"*|*"event=workflow_run"*|*'EVENT_ARM'*) : ;;
-    *) _undis="${_undis}${hit}
-" ;;
+  case "$hit" in
+    *'web-platform-release.yml/runs?per_page=100'*) _g8_fallback_win="$_win" ;;
   esac
+  g8_names_arm "$_win" || _undis="${_undis}${hit}
+"
 done <<< "$_consumers"
 
 if [ -z "$_undis" ]; then pass; else
   fail "G8 consumer(s) select a web-platform-release run without naming an arm — after the split each merge produces BOTH, so these read the wrong half ~50% of the time:
 $_undis"
+fi
+# G8 MUST-PASS: resolve-target's unfiltered fallback read is discovered as a
+# consumer AND accepted, via its client-side `.event == "push"` select.
+if [ -n "$_g8_fallback_win" ] && g8_names_arm "$_g8_fallback_win"; then pass; else
+  fail "G8 MUST-PASS: resolve-target's unfiltered fallback read (runs?per_page=100) was not discovered, or its window was not accepted — expected its jq select to name the push arm with .event == \"push\""
+fi
+# G8 MUST-RED: the same window with that select removed must still be flagged —
+# otherwise the new token is accepted from somewhere other than the select.
+_g8_stripped=${_g8_fallback_win//'.event == "push"'/}
+if [ -n "$_g8_fallback_win" ] && ! g8_names_arm "$_g8_stripped"; then pass; else
+  fail "G8 MUST-RED: the fallback window with '.event == \"push\"' removed was still accepted — something else in the window names an arm, so the fallback's own select is unguarded"
 fi
 
 # The mutant predicate is the SUITE'S OWN GUARDS, not a paraphrase of them.
@@ -1082,10 +1149,12 @@ TOTAL=$((passes + fails))
 # + 2 G13 ordering-guard coverage (floor, and no ungated acting step)
 # + 3 G5 #8149 review (comment-stripper self-test, G5-23 one budget step, G5-22
 #   exactly-one binding) = 70
+# + 3 pathspec coupling / checkout depth (P1, P2, P3)
+# + 2 G8 fallback-read rows (must-PASS, must-RED) = 75
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=70
+MIN_ROWS=75
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

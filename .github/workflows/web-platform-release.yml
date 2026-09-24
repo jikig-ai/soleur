@@ -174,7 +174,7 @@ jobs:
   # `workflow_run` consumer. The artifact may only CONFIRM the SHA; it may never
   # supply it.
   #
-  # ═══ THE FIVE STATES, AND WHY TWO OF THEM MUST STAY GREEN ═══
+  # ═══ THE SIX STATES, AND WHY TWO OF THEM MUST STAY GREEN ═══
   #
   # A `workflow_run` trigger inherits NEITHER of the two path gates that decide
   # whether this workflow should have run at all: this file's `on.push.paths`
@@ -186,7 +186,13 @@ jobs:
   # distinguish the real failure it exists to catch. Collapsing it the other way
   # ("no release -> skip") silently swallows a genuinely failed release.
   #
-  #   no run for this SHA        -> clean skip, GREEN  (on.push.paths declined)
+  #   no run found after 4 lookups (filtered search + unfiltered list)
+  #     AND the SHA's diff touches no deployable path
+  #                              -> clean skip, GREEN  (on.push.paths declined)
+  #   no run found, but the diff touches deployable paths (or cannot be computed)
+  #                              -> fail closed, LOUD  (release_run_missing — the
+  #                                 runs search is lagging; an empty answer alone
+  #                                 never proves a push was declined, ADR-217)
   #   run exists, published none -> clean skip, GREEN  (check_changed declined)
   #   run exists, still running  -> bounded liveness poll (below)
   #   run exists, release FAILED -> fail closed, LOUD
@@ -220,6 +226,8 @@ jobs:
     # (max(ci, release) + resolve-target + migrate + verify-migrations + deploy), so it is
     # sized on its own execution: 3x the measured max rounds to under a minute, and 15 is the
     # #8020 floor convention every ci.yml ceiling already uses. RAISING it reds B9 by name.
+    # Since 2026-09-24 a run that finds no release run retries its lookup (3 x 20 s), so
+    # docs-only runs take up to ~60 s longer; 15 m still leaves >=14x headroom.
     # Consequence, not sizing: the liveness poll on the RELEASE run below is dead by
     # construction under ADR-217 D3(b) (this arm queues behind the release run on the shared
     # concurrency group, so the release is done before this job starts). If a future edit
@@ -242,6 +250,9 @@ jobs:
       release_result: ${{ steps.resolve.outputs.release_result }}
       should_deploy: ${{ steps.resolve.outputs.should_deploy }}
       skip_reason: ${{ steps.resolve.outputs.skip_reason }}
+      # primary | retry_<N> | fallback — how the release run was found. Anything but
+      # `primary` means GitHub's filtered runs search was lagging (also a ::warning::).
+      lookup_path: ${{ steps.resolve.outputs.lookup_path }}
       soft_breach: ${{ steps.budget.outputs.soft_breach }}
       soft_elapsed_s: ${{ steps.budget.outputs.soft_elapsed_s }}
       soft_ceiling_s: ${{ steps.budget.outputs.soft_ceiling_s }}
@@ -259,6 +270,11 @@ jobs:
       # `release` job, and that warning was not applied to the jobs rehomed onto this
       # arm. Unpinned, every ceiling this job parses would come from whatever main
       # HEAD is at deploy time rather than from the SHA being deployed.
+      # DEPTH 1, DELIBERATELY — do not add `fetch-depth`. plugins/soleur/scripts/deploy-arm.sh
+      # (used by ship and postmerge) identifies the deploy arm by this checkout's
+      # `--depth=1 origin <sha>` log line. The one path that needs the parent commit (the
+      # empty-lookup diff check in step `resolve`) deepens lazily by SHA instead.
+      # workflow-run-deploy-invariants.test.sh P2 pins this.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -285,14 +301,30 @@ jobs:
           D_MIRROR_VERIFIED: ${{ needs.release.outputs.mirror_verified }}
           D_RESULT: ${{ needs.release.result }}
           DISPATCH_SHA: ${{ github.sha }}
+          # The git-pathspec definition of "a commit that should have deployed", read
+          # by the empty-lookup diff check below. BYTE-IDENTICAL to
+          # jobs.release.with.path_filter (a job cannot read another job's `with:`, and
+          # `env` is not available inside a reusable-workflow `with:`, so it is copied).
+          # plugins/soleur/test/workflow-run-deploy-invariants.test.sh P1 pins the copy,
+          # and P3 pins path_filter against on.push.paths.
+          RELEASE_PATH_FILTER: "apps/web-platform/ plugins/soleur/ :(exclude)plugins/soleur/docs/ :(exclude)plugins/soleur/test/"
         run: |
           set -euo pipefail
+          # A read that fails closed inside ANY $( ) now kills the caller too, instead
+          # of the caller carrying on with an empty value. Measured: without it, a
+          # lookup written as `x=$(fn)` whose fn holds a failing gh_api read ends rc 0
+          # with two verdicts, the last a GREEN no_release_run.
+          shopt -s inherit_errexit
+          # Annotations go to the job's REAL stdout on fd 3. Every gh_api read runs
+          # inside `x=$( … )`, so an ::error:: echoed to plain stdout from there was
+          # captured into x and never reached the log.
+          exec 3>&1
 
           emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
           # A clean skip leaves the run GREEN. It is not a failure; it is the
           # correct outcome for a push that legitimately published nothing.
           clean_skip() {
-            echo "::notice::deploy skipped — $2"
+            echo "::notice::deploy skipped — $2" >&3
             emit head_sha "${1:-}"; emit version ""; emit tag ""
             emit released "false"; emit docker_pushed "false"
             emit mirror_verified "false"; emit release_result "skipped"
@@ -302,7 +334,7 @@ jobs:
           # Fail closed and LOUD. Reserved for states where a release SHOULD
           # exist and does not, or exists and is broken.
           fail_closed() {
-            echo "::error::deploy blocked — $1"
+            echo "::error::deploy blocked — $1" >&3
             # EMIT head_sha HERE TOO. Without it every fail-closed state — which is
             # every state that fires notify-gated — leaves the operator's Slack
             # message rendering an EMPTY commit and version, because the message
@@ -415,18 +447,93 @@ jobs:
           # SHA that DID publish, so the deploy silently never happens and the run
           # stays green — the worst outcome reached through the mechanism built to
           # prevent it.
-          runs_json=$(gh_api \
-            "repos/$REPO/actions/workflows/web-platform-release.yml/runs?event=push&head_sha=$WR_HEAD_SHA&per_page=50" \
-            --jq '[.workflow_runs[] | {id: .id, status: .status, conclusion: .conclusion}]')
-          run_id=$(printf '%s' "$runs_json" | jq -r --arg own "$OWN_RUN_ID" \
-            '[.[] | select((.id|tostring) != $own)] | sort_by(.id) | last | .id // ""')
+          #
+          # AN EMPTY ANSWER IS NOT EVIDENCE OF NO RUN (2026-09-24, run 36050118687).
+          # `event` and `head_sha` are documented SEARCH parameters, and the search
+          # answered [] for a SHA whose push-arm release had published 13 minutes
+          # earlier; the old code read that as "on.push.paths declined it" and ended
+          # green without deploying. So: up to RELEASE_LOOKUP_ATTEMPTS lookups, each
+          # reading the filtered search and then, only if that is empty, the
+          # UNFILTERED list (no search params; measured current while the search
+          # was stale). Written as plain statements in this shell, never as a
+          # function inside `$( )` — see inherit_errexit above.
+          RELEASE_LOOKUP_ATTEMPTS=4
+          RELEASE_LOOKUP_BACKOFF_S=20
+          run_id=""; lookup_path=""; _lookup=0
+          while :; do
+            _lookup=$((_lookup + 1))
+            runs_json=$(gh_api \
+              "repos/$REPO/actions/workflows/web-platform-release.yml/runs?event=push&head_sha=$WR_HEAD_SHA&per_page=50" \
+              --jq '[.workflow_runs[] | {id: .id, status: .status, conclusion: .conclusion}]')
+            run_id=$(printf '%s' "$runs_json" | jq -r --arg own "$OWN_RUN_ID" \
+              '[.[] | select((.id|tostring) != $own)] | sort_by(.id) | last | .id // ""')
+            if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+              if [ "$_lookup" -eq 1 ]; then lookup_path="primary"; else lookup_path="retry_$_lookup"; fi
+              break
+            fi
+            # The fallback: a LOCATOR only. Identity is still bound below against the
+            # trusted event (artifact head_sha and run_id), so this read cannot supply
+            # it. The push run is created at push time, one CI duration before this
+            # arm starts, so it is on page 1 (~1.4 days of this workflow's runs).
+            all_json=$(gh_api \
+              "repos/$REPO/actions/workflows/web-platform-release.yml/runs?per_page=100" \
+              --jq '[.workflow_runs[] | {id: .id, event: .event, head_branch: .head_branch, head_sha: .head_sha}]')
+            # `.event == "push"` also excludes THIS run, which is always a
+            # workflow_run event. `.head_branch == "main"` is defence in depth: the
+            # artifact carries no branch, so if on.push.branches is ever widened a
+            # non-main push run at this SHA would otherwise pass the identity checks.
+            run_id=$(printf '%s' "$all_json" | jq -r --arg sha "$WR_HEAD_SHA" \
+              '[.[] | select(.event == "push" and .head_branch == "main" and .head_sha == $sha) | .id] | sort_by(.) | last // ""')
+            if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+              lookup_path="fallback"
+              break
+            fi
+            run_id=""
+            [ "$_lookup" -ge "$RELEASE_LOOKUP_ATTEMPTS" ] && break
+            echo "no push-arm run found for $WR_HEAD_SHA (lookup $_lookup/$RELEASE_LOOKUP_ATTEMPTS) — retrying in ${RELEASE_LOOKUP_BACKOFF_S}s"
+            sleep "$RELEASE_LOOKUP_BACKOFF_S"
+          done
 
-          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
-            # STATE 1 — no push-arm run exists for this SHA. The push did not match
-            # this file's `on.push.paths` denylist, so there was nothing to deploy.
-            clean_skip "$WR_HEAD_SHA" "no Web Platform Release run exists for this SHA (on.push.paths declined it)" "no_release_run"
+          if [ -z "$run_id" ]; then
+            # STATE 1 — no push-arm run was found by either read on any lookup. That
+            # means "on.push.paths declined it" ONLY if this SHA's own diff touches no
+            # deployable path; otherwise a release was due and the lookup is lagging.
+            #
+            # resolve-target's checkout is depth 1 BY DESIGN (see the checkout step),
+            # so deepen lazily, only on this rare path. A failed deepen is not
+            # swallowed: it surfaces as the diff's own non-zero rc just below.
+            : > "$RUNNER_TEMP/git.err"
+            if ! git cat-file -e "${WR_HEAD_SHA}~1^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=2 origin "$WR_HEAD_SHA" >/dev/null 2>>"$RUNNER_TEMP/git.err" || true
+            fi
+            set -f
+            _drc=0
+            # shellcheck disable=SC2086  # deliberate word-split into git pathspecs, as check_changed does
+            _changed=$(git diff --name-only "${WR_HEAD_SHA}~1" "$WR_HEAD_SHA" -- $RELEASE_PATH_FILTER 2>>"$RUNNER_TEMP/git.err") || _drc=$?
+            set +f
+            if [ "$_drc" -ne 0 ]; then
+              fail_closed "no push-arm release run was found for $WR_HEAD_SHA after $RELEASE_LOOKUP_ATTEMPTS lookups, and its diff could not be computed (git rc=$_drc: $(tr -d '\r' <"$RUNNER_TEMP/git.err" | tr '\n' ' ' | sed 's/%/%25/g' | head -c 200)), so on.push.paths declining it cannot be proven — refusing to treat this as a docs-only push" "release_run_missing"
+            fi
+            if [ -n "$_changed" ]; then
+              # Filenames reach an ::error:: annotation: strip CR, escape % (the runner
+              # decodes %0A), cap the length.
+              _files=$(printf '%s\n' "$_changed" | head -n 3 | tr -d '\r' | tr '\n' ' ' | sed 's/%/%25/g' | head -c 300)
+              fail_closed "no push-arm release run was found for $WR_HEAD_SHA after $RELEASE_LOOKUP_ATTEMPTS lookups (filtered + unfiltered), but its diff touches deployable paths ($_files) — a release was due and GitHub run search is most likely lagging" "release_run_missing"
+            fi
+            clean_skip "$WR_HEAD_SHA" "no Web Platform Release run exists for this SHA and its diff touches no deployable path (on.push.paths declined it)" "no_release_run"
           fi
+          case "$run_id" in
+            *[!0-9]*) fail_closed "resolved run id '$(printf '%s' "$run_id" | tr -d '\r\n' | sed 's/%/%25/g' | head -c 40)' is not numeric" "github_api_unavailable" ;;
+          esac
           echo "release run: $run_id"
+          emit lookup_path "$lookup_path"
+          if [ "$lookup_path" != "primary" ]; then
+            if [ "$lookup_path" = "fallback" ]; then _via="unfiltered-fallback"; else _via="retry-$_lookup"; fi
+            # Not paging — the deploy proceeds. But a filtered search that STAYS stale
+            # would otherwise leave every deploy riding page 1 of the unfiltered list
+            # with no visible sign.
+            echo "::warning::release run $run_id found via $_via — the filtered runs search was lagging" >&3
+          fi
 
           # ── Liveness poll — DEFENSIVE, and unreachable in this topology ─────
           # Blocklist shape, inherited from await-ci: keep waiting while the run is
@@ -445,7 +552,7 @@ jobs:
           #
           # The loop is therefore dead code on both paths today (a docs-only push
           # creates no push-arm run at all, and takes the no_release_run clean skip
-          # before reaching here). It is kept because reason 2 is a property of the
+          # — after the lookup retries and the diff check — before reaching here). It is kept because reason 2 is a property of the
           # concurrency key, not of this job: change that key so the arms stop
           # sharing a group — which a future edit might do to parallelise them —
           # and this loop becomes live again -- and the only warning is this job's
@@ -1967,6 +2074,7 @@ jobs:
        needs.resolve-target.outputs.skip_reason == 'identity_mismatch' ||
        needs.resolve-target.outputs.skip_reason == 'schema_mismatch' ||
        needs.resolve-target.outputs.skip_reason == 'github_api_unavailable' ||
+       needs.resolve-target.outputs.skip_reason == 'release_run_missing' ||
        needs.resolve-target.outputs.skip_reason == 'release_outputs_incomplete' ||
        needs.resolve-target.outputs.skip_reason == 'bad_sha')
     runs-on: ubuntu-latest
@@ -2024,13 +2132,25 @@ jobs:
               CAUSE='the upstream event carried a malformed head_sha' ;;
             github_api_unavailable)
               CAUSE='a GitHub API read failed three times while resolving the deploy target — this says nothing about the release itself, and re-running resolve-target is the normal recovery' ;;
+            release_run_missing)
+              CAUSE='no release run could be found for this SHA although its changes touch the web platform — GitHub run search is most likely lagging. Use "Re-run failed jobs" on THIS run; if resolve-target fails the same way again, wait about 15 minutes and retry. Do not re-run the push-arm release, which already published' ;;
             *)
               CAUSE=$(printf 'CI concluded %s for this SHA' "${CI_CONCLUSION:-unknown}") ;;
           esac
+          # THE NEXT STEP DEPENDS ON THE CAUSE. For a lookup failure the release is fine
+          # and the recovery is re-running THIS run's failed jobs; telling the operator to
+          # "re-run the release" would contradict the CAUSE above and rebuild a release
+          # that already published.
+          case "${SKIP_REASON:-}" in
+            release_run_missing|github_api_unavailable)
+              NEXT='Inspect the resolve-target job, then use "Re-run failed jobs" on this run.' ;;
+            *)
+              NEXT='Inspect the resolve-target job, then re-run the release once CI is green for this SHA.' ;;
+          esac
           # shellcheck disable=SC2016  # single-quoted printf format: backticks are literal markdown
-          MESSAGE=$(printf '*:no_entry: Web Platform deploy GATED — prod NOT updated*\n\n%s for %s`%s`, so the prod cutover was blocked (fail-closed) and production is still on the previous build. Inspect the resolve-target job, then re-run the release once CI is green for this SHA.\n\n%s' \
+          MESSAGE=$(printf '*:no_entry: Web Platform deploy GATED — prod NOT updated*\n\n%s for %s`%s`, so the prod cutover was blocked (fail-closed) and production is still on the previous build. %s\n\n%s' \
             "$CAUSE" \
-            "$VER_LABEL" "$SHORT_SHA" "$RUN_URL")
+            "$VER_LABEL" "$SHORT_SHA" "$NEXT" "$RUN_URL")
           # shellcheck disable=SC2016  # $text is a jq variable, not a shell expansion
           PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
           # `|| echo 000` keeps a curl transport failure on the ::warning path —
