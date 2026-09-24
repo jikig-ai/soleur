@@ -55,6 +55,11 @@ TAG="inngest-cutover-flip"
 GUARD="7761"
 MID_A="aaaaaaaa11111111aaaaaaaa11111111"
 MID_B="bbbbbbbb22222222bbbbbbbb22222222"
+# A fixture pin file, never the live cloud-init-inngest.yml: a suite that read the live pin would
+# change meaning under every pin bump, and a relocated copy of the probe cannot find it.
+PIN_DIGEST="sha256:$(printf 'a%.0s' {1..64})"
+PIN_FIXTURE="$WORK/pin-fixture.yml"
+printf '    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.9@%s\n' "$PIN_DIGEST" > "$PIN_FIXTURE"
 
 # ONE ANCHOR EPOCH. Every timestamp derives from NOW, captured once, so the fresh/deadline arms do
 # not depend on how long the suite takes to run. The probe grades silence by AGE: past
@@ -271,7 +276,7 @@ fi
 # =============================================================================================
 echo "TEST: an unsupplied boundary is TRANSIENT, not a pass"
 f="$WORK/rows-empty"; : > "$f"
-rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER=)"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
 expect "boundary-absent" 2 probe_channel_dark
 
 echo "TEST: an unparseable boundary is TRANSIENT, not silently widened"
@@ -634,9 +639,6 @@ grep -qF "'armed'" "$WORK/probe-out" && pass "doppler-armed names the disagreein
 # =============================================================================================
 # #7695 — the DERIVED boundary arm (the fallback if the committed sidecar is ever removed)
 # =============================================================================================
-PIN_DIGEST="sha256:$(printf 'a%.0s' {1..64})"
-PIN_FIXTURE="$WORK/pin-fixture.yml"
-printf '    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.9@%s\n' "$PIN_DIGEST" > "$PIN_FIXTURE"
 
 # The HOURLY host probe row: the timestamp lives ONLY on the outer object as a ClickHouse-shaped
 # `dt` (space-separated, no T, no Z), and the message is a flat key=value string.
