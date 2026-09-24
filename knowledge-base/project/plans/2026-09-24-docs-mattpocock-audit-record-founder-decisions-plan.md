@@ -327,40 +327,40 @@ None. `gh issue list --label code-review --state open` bodies were searched for
 
 Run from the worktree root. Let `CI=knowledge-base/product/competitive-intelligence.md`.
 
-- [ ] AC1 (T2): for every number on the open-issues line,
+- [x] AC1 (T2): for every number on the open-issues line,
   `grep -F '**Open issues from the bundles:**' "$CI" | grep -o '#[0-9]*' | sort -u`, then
   `gh issue view N --json state` prints `OPEN`. `#8505` and `#8497` appear on the `**Closed since:**`
   line, with `#8505` next to `#8618`.
-- [ ] AC2 (T2): the `| B5 |` row does not contain `` open: `#8497` ``.
-- [ ] AC3 (T3/T4 residue): each of these prints `0`:
+- [x] AC2 (T2): the `| B5 |` row does not contain `` open: `#8497` ``.
+- [x] AC3 (T3/T4 residue): each of these prints `0`:
   `grep -c 'Not bundled — remains advisory' "$CI"`, `grep -c 'B4 and B10 never filed' "$CI"`,
   `grep -c 'already covers this in more depth' "$CI"`, `grep -c 'flow map did not' "$CI"`.
-- [ ] AC4 (T3): for each prefix `| B4 | Bundled (founder decision 2026-09-23)`,
+- [x] AC4 (T3): for each prefix `| B4 | Bundled (founder decision 2026-09-23)`,
   `| B10 | Bundled (founder decision 2026-09-23)` and
   `| B12 (second half) | Bundled (founder decision 2026-09-23)`, `grep -F "<prefix>" "$CI"` prints
   exactly one line, and that line contains `#8647` and `e5a725a5e1`. (Scoped by prefix because the
   dated §4 table also has `| B4 |`, `| B5 |` and `| B10 |` rows, which stay untouched.)
-- [ ] AC5 (T3): the Scope note line (`grep -F 'The audit itself filed nothing'`) and the §5 banner
+- [x] AC5 (T3): the Scope note line (`grep -F 'The audit itself filed nothing'`) and the §5 banner
   line (`grep -F 'they were filed as five bundles'`) each contain `#8647`.
-- [ ] AC6 (T4): `grep -c 'Reject — already covered by the hooks listed above.' "$CI"` prints `1`.
-- [ ] AC7 (T1): `diff <(git show origin/main:"$CI" | grep -F 'The most valuable thing a Tier-1 peer') <(grep -F 'The most valuable thing a Tier-1 peer' "$CI")` prints nothing.
-- [ ] AC8 (declines): `awk '/^\*\*Inspire-only ideas, declined/{f=1;next} f&&/^- /{n++} f&&/^$/&&n{exit} END{print n}' "$CI"`
+- [x] AC6 (T4): `grep -c 'Reject — already covered by the hooks listed above.' "$CI"` prints `1`.
+- [x] AC7 (T1): `diff <(git show origin/main:"$CI" | grep -F 'The most valuable thing a Tier-1 peer') <(grep -F 'The most valuable thing a Tier-1 peer' "$CI")` prints nothing.
+- [x] AC8 (declines): `awk '/^\*\*Inspire-only ideas, declined/{f=1;next} f&&/^- /{n++} f&&/^$/&&n{exit} END{print n}' "$CI"`
   prints `7`, and six of those bullets contain `Revisit` or `#5994` (the ADR-151 bullet names
   where it belongs instead).
-- [ ] AC9 (no register entry): `git diff --name-only origin/main -- knowledge-base/project/rejected/`
+- [x] AC9 (no register entry): `git diff --name-only origin/main -- knowledge-base/project/rejected/`
   prints nothing.
-- [ ] AC10 (archive): `git diff -M --name-status origin/main` shows `R` lines moving
+- [x] AC10 (archive): `git diff -M --name-status origin/main` shows `R` lines moving
   `plans/2026-09-23-docs-mattpocock-skills-audit-record-reconcile-plan.md` and every file of
   `specs/feat-ci-mattpocock-skills-audit/` to `archive/<YYYYMMDD-HHMMSS>-…` paths, and neither old
   path exists.
-- [ ] AC11 (references): the §8 `git grep` prints nothing.
-- [ ] AC12 (dissent record): `grep -c '^- \*\*Founder decision 2026-09-23:\*\*'` on the archived
+- [x] AC11 (references): the §8 `git grep` prints nothing.
+- [x] AC12 (dissent record): `grep -c '^- \*\*Founder decision 2026-09-23:\*\*'` on the archived
   `decision-challenges.md` prints `4`.
-- [ ] AC13 (scope): `git diff --name-only origin/main` shows no path outside `$CI`, the archive
+- [x] AC13 (scope): `git diff --name-only origin/main` shows no path outside `$CI`, the archive
   renames, and this branch's own plan and spec directory (plus `knowledge-base/INDEX.md` if a hook
   regenerates it).
-- [ ] AC14 (lint): `bash scripts/markdown-lint.sh "$CI"` exits 0.
-- [ ] AC15 (one PR): `gh pr list --head feat-one-shot-mattpocock-audit-record-founder-decisions --state all --json number --jq length`
+- [x] AC14 (lint): `bash scripts/markdown-lint.sh "$CI"` exits 0.
+- [x] AC15 (one PR): `gh pr list --head feat-one-shot-mattpocock-audit-record-founder-decisions --state all --json number --jq length`
   prints `1`.
 
 ## Non-Goals
