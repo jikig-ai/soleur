@@ -215,6 +215,13 @@ jobs:
     if: needs.detect-changes.outputs.tenant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # pull-requests: read is for the drift probe's ledger classifier only: it
+    # reads each fresh owner branch's pull-request state (closed-grace/closed,
+    # ADR-061 amendment for #8605). The repo is public, so this exposes nothing a
+    # PR author cannot already read. PR-mode runs never reach the classifier.
+    permissions:
+      contents: read
+      pull-requests: read
     # Per-ref mutex on the ONE shared dev Supabase project, declared at JOB level
     # -- deliberately NOT at workflow level. #7055 made this key repo-wide; #8048
     # scoped it back per-ref after the repo-wide form starved the queue (measured
@@ -479,6 +486,7 @@ jobs:
           DLP_OWNERS_CACHE: ${{ runner.temp }}/dev-ledger-owners
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          github-token: ${{ github.token }}
           fail-on-rpc-body-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
           fail-on-ledger-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
 
@@ -700,6 +708,7 @@ jobs:
           DLP_OWNERS_CACHE: ${{ runner.temp }}/dev-ledger-owners
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          github-token: ${{ github.token }}
           fail-on-rpc-body-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
           fail-on-ledger-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
 
