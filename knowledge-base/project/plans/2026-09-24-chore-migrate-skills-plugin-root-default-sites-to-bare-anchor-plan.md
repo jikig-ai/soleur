@@ -1294,13 +1294,13 @@ by reading four literals under `safe-bash.ts`'s CODEOWNERS.
 
 ## Acceptance Criteria
 
-- [ ] **AC1** Payload markdown carries no default-armed anchor and no Pattern C.
+- [x] **AC1** Payload markdown carries no default-armed anchor and no Pattern C.
   - `git grep -l -F -e 'CLAUDE_PLUGIN_ROOT:' -e 'CLAUDE_PLUGIN_ROOT-' -- 'plugins/soleur/**/*.md' | wc -l`
     prints 0.
   - `git grep -l -F 'show-toplevel)/plugins/soleur/' -- 'plugins/soleur/**/*.md' | wc -l` prints
     0.
   - `bash scripts/plugin-root-anchor-debt.sh` prints `anchor-debt-files=0`.
-- [ ] **AC2** Every remaining non-markdown `${CLAUDE_PLUGIN_ROOT:-` under `plugins/soleur/` is a
+- [x] **AC2** Every remaining non-markdown `${CLAUDE_PLUGIN_ROOT:-` under `plugins/soleur/` is a
   documented Non-Goal. `git grep -n -F '${CLAUDE_PLUGIN_ROOT:-' -- plugins/soleur ':!*.md'` lists
   lines only in:
   - `hooks/devin-session-start.sh`
@@ -1311,15 +1311,15 @@ by reading four literals under `safe-bash.ts`'s CODEOWNERS.
     `skills/git-worktree/test/lease-protects-active.test.sh`
 
   The AC walk classifies every listed line.
-- [ ] **AC3** Check 10 resolves both files via `"${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/…"`.
+- [x] **AC3** Check 10 resolves both files via `"${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/…"`.
   `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` passes with 0 failures,
   including the inverted test and the unset-root decoy row, which leaves the ledger file absent.
-- [ ] **AC3b** (one-time P3 check, replacing Guard 3) Every `${CLAUDE_PLUGIN_ROOT}/<path>` in
+- [x] **AC3b** (one-time P3 check, replacing Guard 3) Every `${CLAUDE_PLUGIN_ROOT}/<path>` in
   `plugins/soleur/skills/**/*.md` names an existing `plugins/soleur/<path>`, and none starts with
   `plugins/`. Run it once with a Node one-liner or a shell loop over
   `git grep -ohE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*'` that strips a trailing `.` and skips
   an empty tail and the `<name>`-placeholder tails. Record the operand count and 0 missing.
-- [ ] **AC4** Guards 1, 2 and 4 went RED in `phase1-red-run.txt` with the exact expected counts
+- [x] **AC4** Guards 1, 2 and 4 went RED in `phase1-red-run.txt` with the exact expected counts
   from Phase 1 step 6, and they are green after the migration. The counts are:
   - Guard 1: 31 files for (i) and 31 for (ii);
   - Guard 2: 3 + 2 + 0;
@@ -1328,18 +1328,18 @@ by reading four literals under `safe-bash.ts`'s CODEOWNERS.
   The live-scan dispatch controls pass.
   `vitest run test/plugin-root-anchoring.test.ts` passes. One observed-RED run per guard is
   recorded.
-- [ ] **AC5** `safe-bash.ts`:
+- [x] **AC5** `safe-bash.ts`:
   - The identity pin passes.
   - `git diff origin/main -U0 -- apps/web-platform/server/safe-bash.ts | grep -E '^[-+]' | grep -E 'RegExp|DENYLIST *=|String\.raw'`
     is empty. The only permitted non-comment change besides the carve-out constants is `export`
     added to `TRAILING_SAFE_REDIRECT`'s declaration, with its value byte-identical.
   - `vitest run test/safe-bash.test.ts test/plugin-root-list-carveout-coupling.test.ts` passes,
     including every Phase 7 negative and the exact count of 4.
-- [ ] **AC6** The ratchet lost exactly the form-(a) data rows.
+- [x] **AC6** The ratchet lost exactly the form-(a) data rows.
   `diff <(grep -v '^#' <old>) <(grep -v '^#' <new>)` shows only `<` lines, 38 of them, each
   containing `CLAUDE_PLUGIN_ROOT:`. `RATCHET_MIN_ROWS` is below the new count, and the docstring
   records the measurement.
-- [ ] **AC7** Read surface:
+- [x] **AC7** Read surface:
   - Guard 4 (a)–(d) is green. That covers the notice, the closed-rule sentence and the sentinel
     first line on every `bash`/`sh` fence, across exactly the five docs.
   - `git grep -n -F -e 'plugins/soleur/skills/brainstorm/references/' -e 'plugins/soleur/skills/review/references/review-e2e' -e '](../ship/references/settle-then-admin-merge.md)' -e '](./references/settle-then-admin-merge.md)' -- 'plugins/soleur/**/*.md'`
@@ -1347,25 +1347,25 @@ by reading four literals under `safe-bash.ts`'s CODEOWNERS.
   - No added line introduces a CWD-relative plugin path:
     `git diff origin/main -U0 -- plugins/soleur | grep -E '^\+' | grep -F './plugins/soleur'`
     is empty. The notice avoids that spelling by design.
-- [ ] **AC7b** `admin-merge-ready-wiring.test.sh` passes, with three rows:
+- [x] **AC7b** `admin-merge-ready-wiring.test.sh` passes, with three rows:
   - the positive row: the stub ran and the `gh` merge ledger is non-empty;
   - the unreplaced-sentinel row, under `env -u`: exit 5, `ADMIN-MERGE ABORTED: plugin root
     unresolved`, and the merge-ledger file still empty;
   - the decoy twin row: the pre-migration block writes the decoy ledger.
-- [ ] **AC7c** In `schedule/SKILL.md`, the `prompt: |` template carries no `CLAUDE_PLUGIN_ROOT`,
+- [x] **AC7c** In `schedule/SKILL.md`, the `prompt: |` template carries no `CLAUDE_PLUGIN_ROOT`,
   and `concurrent-ship.test.sh` (T1, T1c and the new template row) passes.
-- [ ] **AC8** The derived regression sweep in `## Test Scenarios` passes with 0 failures.
+- [x] **AC8** The derived regression sweep in `## Test Scenarios` passes with 0 failures.
   `scripts/battery-tag-authorship.test.sh`'s closure member count equals the Phase 0 value.
-- [ ] **AC9** ADR-179 carries `## Amendment — 2026-09-24 (#7453)` with A18–A20, including the
+- [x] **AC9** ADR-179 carries `## Amendment — 2026-09-24 (#7453)` with A18–A20, including the
   Tier-1 exit-127 table, plus an `amended_by:` entry. The deferral bullet is struck through.
   ADR-093's "Amended by" line names the whole skills surface.
-- [ ] **AC10** No docstring or comment in `apps/web-platform/{server,test,scripts}` says the skills
+- [x] **AC10** No docstring or comment in `apps/web-platform/{server,test,scripts}` says the skills
   `:-` sites are live or deferred to #7453. Run
   `git grep -n -e '#7453' -e '~105' -- apps/web-platform/server apps/web-platform/test apps/web-platform/scripts`
   and review every hit in the AC walk.
-- [ ] **AC11** `bash plugins/soleur/test/c4-count-parity.test.sh`, `c4-code-syntax.test.ts` and
+- [x] **AC11** `bash plugins/soleur/test/c4-count-parity.test.sh`, `c4-code-syntax.test.ts` and
   `c4-render.test.ts` pass.
-- [ ] **AC12** Real-harness contact, **with the plugin relocated away from the CWD**, so the
+- [x] **AC12** Real-harness contact, **with the plugin relocated away from the CWD**, so the
   installed copy and a CWD copy are different files (security review P1).
   - **Setup.** `cp -r plugins/soleur "$TMP/soleur-plugin"`, then run
     `claude -p --plugin-dir "$TMP/soleur-plugin"` from this worktree. Plant canary edits in the
