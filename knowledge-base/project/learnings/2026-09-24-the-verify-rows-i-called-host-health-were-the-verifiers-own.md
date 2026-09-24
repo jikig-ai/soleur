@@ -117,6 +117,18 @@ at a second live full-`prd` token, `web-probes-read`, which #8632's premise had 
     `FLOOR_BLOCKS` raised 19 → 20 in the same edit. **Prevention:** already documented (work: a
     file-selected suite set cannot see a battery that encodes a baseline-derived count). When a
     guard has a `*-mutation.test.sh` sibling, run the sibling too.
+17. **The first rotation apply failed on web-1 with `envfile_absent`, after the old token was
+    already revoked.** The helper refused an absent `/etc/default/luks-monitor` by design ("refuse to
+    invent it"). I never measured that precondition on the live host, and #8706 had already found
+    the host timer dark with "the unit fails before emitting" as a candidate cause. Because the
+    refusal came after the revocation, it left the host with no working token, not with the old one.
+    The failure also tainted the installer, so every later infra apply would have reddened until a
+    fix landed. Recovery: #8632 follow-up PR, the helper creates the file (after the proof, 0600,
+    rollback to absent), and the tainted resource re-fires on that merge. **Prevention:** a refusal
+    on a production host path is a claim about the live host's state. Before shipping one, find
+    read-only evidence of that state, such as an existing emitter row or a prior apply's output. And
+    order it against what the same apply has already done: a refusal that runs after an
+    irreversible step no longer protects the old state.
 
 ## Tags
 category: workflow-patterns
