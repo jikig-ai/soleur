@@ -46,6 +46,8 @@
 #     with the web-host-replace dispatch once the merge apply is green (runbooks/web-host-replace.md).
 #   - No same-name replace: without create_before_destroy it deletes first, and with it Doppler must
 #     accept two same-named tokens, which nobody has probed.
+#   - Reverting a rename is NOT a rollback: it mints a third token (needs [ack-destroy] again, and
+#     re-fires the installers). To roll forward, rename again with a new date suffix.
 # Rotated 2026-09-24 from web-probes-read (created 2026-07-18; retained web-1 snapshot 411798619 very
 # likely holds it, #8705).
 # Verify: bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh (prints ROTATED; a

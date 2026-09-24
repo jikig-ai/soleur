@@ -26,7 +26,10 @@
 # Credential: the token-list endpoint needs a WORKPLACE token (a read service token gets HTTP 403
 # there, measured 2026-09-24), so this reads DOPPLER_TOKEN_TF (dp.pt., Tier-B) from the
 # environment, else soleur-infra-privileged/prd, else the pre-#8209-O10 fallback
-# soleur/prd_terraform; the verdict line names which source answered. The Authorization header
+# soleur/prd_terraform; the verdict line names which source answered. RESIDUAL: until #8209 O11,
+# soleur/prd_terraform is writable by DOPPLER_TOKEN_WRITE (ADR-241 D6), so a value planted there
+# could point this read at another workplace's listing. A src=soleur/prd_terraform verdict is only
+# as trustworthy as that config. The Authorization header
 # travels to curl on a file descriptor (curl -K), never in argv, and the value never enters any
 # child's environment. Nothing here echoes a command line.
 #
@@ -130,11 +133,12 @@ def clean(s):
 
 
 def stamp(s):
-    """Parse an ISO-8601 instant; fractional seconds tolerated (any precision, truncated to µs)."""
+    """Parse an ISO-8601 instant; fractional seconds of any precision, normalised to 6 digits so
+    datetime.fromisoformat accepts it on Python < 3.11 too."""
     m = STAMP.fullmatch(s) if isinstance(s, str) else None
     if not m:
         raise ValueError(f"not an ISO-8601 instant: {clean(s)}")
-    frac = (m.group(2) or "")[:7]
+    frac = "." + (m.group(2) or ".")[1:7].ljust(6, "0")
     zone = "+00:00" if m.group(3) == "Z" else m.group(3)
     return datetime.fromisoformat(m.group(1) + frac + zone)
 

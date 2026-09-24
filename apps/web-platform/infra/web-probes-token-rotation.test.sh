@@ -808,6 +808,8 @@ cases=$((cases + 1)); v_row "G3-R7 a replacement created exactly at the cut-off 
 cases=$((cases + 1)); v_row "G3-R7b a paged listing is inconclusive" \
   '{"page":1,"tokens":[{"slug":"bbbb2222-fixture","name":"web-probes-read-2026-09-24","created_at":"2026-09-24T13:00:00Z"}]}' UNAVAILABLE 2
 cases=$((cases + 1)); v_row "G3-H1 rotated listing with unrelated tokens and millisecond stamps" "$ROTATED_JSON" ROTATED 0
+cases=$((cases + 1)); v_row "G3-H2 one-digit and nine-digit fractions and an offset parse" \
+  '{"tokens":[{"slug":"bbbb2222-fixture","name":"web-probes-read-2026-09-24","created_at":"2026-09-24T13:00:00.4Z"},{"slug":"cccc3333-fixture","name":"x","created_at":"2026-09-24T13:00:00.123456789+02:00"}]}' ROTATED 0
 cases=$((cases + 1)); v_row "G3-P1 --retired-slug is honoured" \
   '{"tokens":[{"slug":"feedf00d-fixture","name":"web-probes-read-2026-09-24","created_at":"2026-09-24T13:00:00Z"}]}' STALE 1 --retired-slug feedf00d
 cases=$((cases + 1)); v_row "G3-P2 --name-prefix and --not-before are honoured" \
@@ -1066,7 +1068,7 @@ if [[ $((pass + fail)) -ne "$cases" ]]; then
 fi
 
 # Anti-vacuity floor. The threshold sits on the line directly above its `if`.
-MIN_ASSERTIONS=118
+MIN_ASSERTIONS=119
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1
