@@ -1018,13 +1018,18 @@ AFFECTED_PLUGINS_SOLEUR_TEST_GO_ROUTING_TABLE_PARITY_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
-# plugins/soleur/test/ticket-triage-mirror-parity.test.sh — mirror parity between
-# the Claude agent and the OpenHands skill. skills/triage/SKILL.md is deliberately
-# NOT an edge — the suite's own header states it says nothing about that file.
-AFFECTED_PLUGINS_SOLEUR_TEST_TICKET_TRIAGE_MIRROR_PARITY_TEST_SH_PATHS=(
-  ".openhands/skills/ticket-triage/SKILL.md"
+# plugins/soleur/test/ticket-triage-clauses.test.sh — clause presence in the intake
+# pre-check. Succeeds ticket-triage-mirror-parity.test.sh, which asserted BYTE parity
+# between the Claude agent and the OpenHands mirror and was deleted with that mirror
+# (2026-09-23, ADR-245). Identity lost its second operand; clause presence did not
+# depend on one, so that half survives here.
+#
+# Unlike its predecessor, skills/triage/SKILL.md IS an edge: the successor asserts the
+# two clauses the attended WRITE path owns, so an edit there can break it.
+AFFECTED_PLUGINS_SOLEUR_TEST_TICKET_TRIAGE_CLAUSES_TEST_SH_PATHS=(
   "plugins/soleur/agents/support/ticket-triage.md"
-  "plugins/soleur/test/ticket-triage-mirror-parity.test.sh"
+  "plugins/soleur/skills/triage/SKILL.md"
+  "plugins/soleur/test/ticket-triage-clauses.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

@@ -48,8 +48,8 @@
 #     the redirect and non-vacuity cases at the end, plus the entry-point belts in
 #     `scripts/test-all.sh` and `.github/scripts/test/run-all.sh`.
 #     It also over-counts occasionally, in the harmless direction: a fixture path that happens to
-#     share a basename with a hop-1 member (`.openhands/hooks/guardrails.sh`, a `touch`ed stub)
-#     reads as a spawn. Those sit in the outside set and hold its ceiling slightly high.
+#     share a basename with a hop-1 member (a `touch`ed stub under `tests/hooks/`, not the real
+#     emitter) reads as a spawn. Those sit in the outside set and hold its ceiling slightly high.
 #
 # (c) THE FIVE CHOKEPOINTS, EACH VERIFIED INDIVIDUALLY. The export that makes a whole runtime safe
 #     at once. One verdict per file plus a count, so removing the export from any one of them reds
@@ -291,21 +291,21 @@ printf '\n'
 # Measured 2026-09-07 at 4. One is a true positive -- `scan-workflow.test.sh` spawns
 # `new-scheduled-cron-prefer-inngest.sh`, which emits, with no chokepoint anywhere in its path.
 # The other three are the harmless over-count described in the header: a `touch`ed fixture stub, a
-# static parity reader that never spawns its subject, and a same-basename script under
-# `.openhands/`. They are LEFT IN rather than special-cased, because every carve-out is a place a
-# real member can hide, and because a ratcheted ceiling reds on the next member either way.
+# static parity reader that never spawns its subject, and a same-basename script under the
+# hand-ported `.openhands/` mirror (that mirror was retired 2026-09-23, ADR-245, so that member
+# no longer exists — the authoritative list of the CURRENT members is the enumeration below, not
+# this paragraph, which describes the original measurement). They are LEFT IN rather than
+# special-cased, because every carve-out is a place a real member can hide, and because a
+# ratcheted ceiling reds on the next member either way.
 # Ratcheted 4 -> 3 when the one TRUE POSITIVE this guard found was fixed:
 # apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh piped fixture content through
 # .claude/hooks/new-scheduled-cron-prefer-inngest.sh with no chokepoint on its path -- invoked
 # directly by infra-validation.yml, no bun preload, no vitest globalSetup, no test-helpers.sh. It
 # now sources the sandbox helper.
 #
-# The three remaining members are all OVER-COUNTS, verified individually rather than assumed:
+# The remaining members are all OVER-COUNTS, verified individually rather than assumed:
 #   scripts/test-jaccard-duplicates.sh        - a static parity reader, spawns nothing
 #   tests/hooks/test_drop_sentinel_parity.sh  - a touched fixture stub, not the real emitter
-#   tests/hooks/test_openhands_guardrails.sh  - drives .openhands/hooks/guardrails.sh, which
-#                                               contains ZERO emit_incident references; it matched
-#                                               only on a basename shared with the .claude/ hook
 #   plugins/soleur/test/hook-input-classification-mutation.test.sh - arrived from main 2026-09-08,
 #                                               not in this PR's diff. Isolated BY LIB-COPY, the
 #                                               same mechanism as tests/hooks/test_incidents.sh:
@@ -332,7 +332,14 @@ printf '\n'
 # emitter-reaching basenames as declaration literals, the same over-count class as the fixture
 # stub and the parity reader).
 # Raising it on a MEASURED zero-leak member is the intended use — silently carving one out is not.
-OUTSIDE_CEILING=5
+#
+# 5 -> 4 on 2026-09-24 (ADR-245 / #8306): the hand-ported `.openhands/` mirror was retired, and
+# with it the same-basename over-count member described above. This value was MEASURED on the
+# merged tree, not derived by subtracting one from main's 5 — the walk prints 4 and names them:
+# hook-input-classification-mutation.test.sh, scripts/lib/test-affected-paths.sh (main's 4 -> 5
+# entry), test-jaccard-duplicates.sh, test_drop_sentinel_parity.sh. Lowering is the ratchet's
+# normal direction; the member is gone, not carved out.
+OUTSIDE_CEILING=4
 rc=1; [ "$n_out" -le "$OUTSIDE_CEILING" ] && rc=0
 verdict "$rc" "the outside set has not grown ($n_out, ceiling $OUTSIDE_CEILING)"
 
