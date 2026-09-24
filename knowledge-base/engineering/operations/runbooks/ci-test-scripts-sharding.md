@@ -76,7 +76,8 @@ legs within 5% of optimal, so each refresh moves only what balance
 requires. Regenerate when:
 
 - `scripts-shard-manifest.test.sh` reds (n drift, phantom rows, malformed),
-- the follow-through probe reports a leg >900s while others sit near-idle,
+- the `suite-timings-*` artifacts show one `test-scripts*` leg drifting well
+  past its peers (the probe that auto-reported this retired with issue 8006),
 - a suite was renamed (its old row becomes a phantom; the lint names it).
 
 **Merge conflict on the TSV → regenerate, never hand-merge.** Re-run the
