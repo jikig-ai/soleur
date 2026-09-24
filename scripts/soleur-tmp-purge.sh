@@ -140,13 +140,9 @@ do_restore() {
 
 # --- enumeration + classification -------------------------------------------------
 
-declare -A CLASS_COUNT CLASS_BYTES
+declare -A CLASS_COUNT CLASS_BYTES _CLASS_OF=()
 REPORT_ROWS=()
 OPERATOR_LIST=()
-
-entry_bytes() { # du -sk, portable-ish; empty on failure
-  du -sk -- "$1" 2>/dev/null | cut -f1 || echo 0
-}
 
 bump() { # class bytes
   CLASS_COUNT["$1"]=$(( ${CLASS_COUNT["$1"]:-0} + 1 ))
@@ -208,16 +204,36 @@ decide_apply() {
 }
 
 run_scan() {
-  local base entry cls bytes
+  local base entry cls
+  local -a entries=() sized_paths=()
   for base in $BASES; do
     [[ -d "$base" ]] || { echo "SOLEUR_TMP_PURGE: base $base missing — skipping"; continue; }
-    while IFS= read -r entry; do
-      [[ "$entry" == "$base/soleur-quarantine."* ]] && continue
-      cls="$(tc_classify_entry "$entry")"
-      bytes="$(entry_bytes "$entry")"
-      bump "$cls" "$bytes"
+    mapfile -t entries < <(find "$base" -mindepth 1 -maxdepth 1 \
+      ! -name 'soleur-quarantine.*' 2>/dev/null | LC_ALL=C sort)
+    echo "SOLEUR_TMP_PURGE scanning $base (${#entries[@]} entries)…" >&2
+    # Bulk liveness for apply mode: one /proc walk feeds every conjunct.
+    if [[ "$MODE" == "apply" ]]; then tc_build_inuse_map "$base" || true; fi
+    for entry in "${entries[@]}"; do
+      tc_classify_entry "$entry" >/dev/null; cls="$TC_CLASS"   # no per-entry fork
+      bump "$cls" 0
+      # Sizes only for classes a report consumer can act on — `du` walks each
+      # tree, and on a measured 18k-entry base that is minutes of syscall time
+      # for rows the operator cannot move anyway.
+      case "$cls" in
+        marker:*|schema:*|empty|prefix:*|file:*|worktree:*)
+          sized_paths+=("$entry"); _CLASS_OF["$entry"]="$cls" ;;
+      esac
       if [[ "$MODE" == "apply" ]]; then decide_apply "$entry" "$cls"; fi
-    done < <(find "$base" -mindepth 1 -maxdepth 1 2>/dev/null | LC_ALL=C sort)
+    done
+    # One du over just the actionable subset.
+    if ((${#sized_paths[@]})); then
+      local sz p
+      while IFS=$'\t' read -r sz p; do
+        [[ -n "$p" && -n "${_CLASS_OF[$p]:-}" ]] \
+          && CLASS_BYTES["${_CLASS_OF[$p]}"]=$(( ${CLASS_BYTES["${_CLASS_OF[$p]}"]:-0} + sz ))
+      done < <(printf '%s\0' "${sized_paths[@]}" | xargs -0 du -sk 2>/dev/null)
+    fi
+    sized_paths=()
   done
 }
 

@@ -85,7 +85,9 @@ tc_is_protected() {
 
 # --- Marker / schema parsing ---------------------------------------------------
 
-# tc_marker_owner_pid <dir> → prints owner pid; rc 1 when marker absent/invalid.
+# tc_marker_owner_pid <dir> → prints owner pid AND sets TC_PID; rc 1 when
+# marker absent/invalid. Hot-path callers may call it directly (no $() fork)
+# and read TC_PID on rc 0.
 # Marker contract: regular file, not a symlink, owned by TC_UID, carrying
 # `pid=<top-level-harness-pid>` OR `owner_root=<soleur-run.* dir>`, plus
 # `schema=` and `ns=pid:[<inode>]`.
@@ -101,18 +103,21 @@ tc_marker_owner_pid() {
   if [[ -z "$pid" ]]; then
     oroot="$(sed -n 's/^owner_root=\([^[:space:]]*\)$/\1/p' "$m" 2>/dev/null | head -1)"
     [[ -n "$oroot" ]] || return 1
-    pid="$(tc_schema_owner_pid "$(basename -- "$oroot")" 2>/dev/null || true)"
-    [[ -n "$pid" ]] || pid="$(tc_marker_owner_pid "$oroot" 2>/dev/null || true)"
+    if tc_schema_owner_pid "${oroot##*/}" >/dev/null 2>&1; then pid="$TC_PID"; fi
+    if [[ -z "$pid" ]] && tc_marker_owner_pid "$oroot" >/dev/null 2>&1; then pid="$TC_PID"; fi
     [[ -n "$pid" ]] || return 1
   fi
+  TC_PID="$pid"
   printf '%s' "$pid"
 }
 
-# tc_schema_owner_pid <basename> → prints pid from soleur-run.<pid>.XXXXXXXX.
+# tc_schema_owner_pid <basename> → prints pid AND sets TC_PID from
+# soleur-run.<pid>.XXXXXXXX.
 tc_schema_owner_pid() {
   local n="$1"
   [[ "$n" =~ ^soleur-run\.([0-9]+)\.[A-Za-z0-9_-]{8,}$ ]] || return 1
-  printf '%s' "${BASH_REMATCH[1]}"
+  TC_PID="${BASH_REMATCH[1]}"
+  printf '%s' "$TC_PID"
 }
 
 # tc_my_pid_ns → `pid:[<inode>]` of the caller's own pid namespace.
@@ -237,9 +242,18 @@ tc_tree_age_min() {
 # BSD-portable mountpoint check).
 tc_is_reapable_empty() {
   local dir="$1" name
-  name="$(basename -- "$dir")"
+  name="${dir##*/}"
   [[ "$name" =~ ^[A-Za-z0-9_.-]{15,}$ ]] || return 1
-  [[ -d "$dir" && -z "$(ls -A -- "$dir" 2>/dev/null)" ]] || return 1
+  [[ -d "$dir" ]] || return 1
+  # Emptiness: a caller sweeping a whole base may precompute TC_NONEMPTY
+  # (one `find -mindepth 2` pass marking every dir that has children) — the
+  # per-candidate `ls` spawn is the same cost class as the basename spawn this
+  # function just dropped. Falls back to the per-dir check when unset.
+  if [[ -n "${TC_NONEMPTY_BUILT:-}" ]]; then
+    [[ -n "${TC_NONEMPTY[$dir]:-}" ]] && return 1
+  else
+    [[ -z "$(ls -A -- "$dir" 2>/dev/null)" ]] || return 1
+  fi
   local dev_self dev_parent
   dev_self="$(stat -c %d -- "$dir" 2>/dev/null || stat -f %d -- "$dir" 2>/dev/null || echo x)"
   dev_parent="$(stat -c %d -- "$dir/.." 2>/dev/null || stat -f %d -- "$dir/.." 2>/dev/null || echo y)"
@@ -254,24 +268,27 @@ tc_is_reapable_empty() {
 #   unverifiable      (gitfile/gitdir/porcelain could not be resolved — RETAIN)
 #   unregistered      (owning repo's registry read OK, path absent — quarantine)
 #   registered        (registry read OK, path present — further gates apply)
+# Prints the verdict AND sets TC_GITCLASS — hot-path callers invoke it directly
+# (`tc_classify_git_dir "$d" >/dev/null; v="$TC_GITCLASS"`) to skip the fork.
 tc_classify_git_dir() {
   local dir="$1" gf="$1/.git" gitdir main_gitdir
-  if [[ -d "$gf" && ! -L "$gf" ]]; then echo "standalone-clone"; return 0; fi
-  [[ -f "$gf" && ! -L "$gf" ]] || { echo "not-git"; return 0; }
+  _gc() { TC_GITCLASS="$1"; printf '%s\n' "$1"; }
+  if [[ -d "$gf" && ! -L "$gf" ]]; then _gc "standalone-clone"; return 0; fi
+  [[ -f "$gf" && ! -L "$gf" ]] || { _gc "not-git"; return 0; }
   gitdir="$(sed -n 's/^gitdir:[[:space:]]*//p' "$gf" 2>/dev/null | head -1)"
-  [[ -n "$gitdir" ]] || { echo "unverifiable"; return 0; }
+  [[ -n "$gitdir" ]] || { _gc "unverifiable"; return 0; }
   [[ "$gitdir" != /* ]] && gitdir="$dir/$gitdir"
   gitdir="$(realpath -m -- "$gitdir" 2>/dev/null || printf '%s' "$gitdir")"
-  [[ -d "$gitdir" ]] || { echo "unverifiable"; return 0; }
+  [[ -d "$gitdir" ]] || { _gc "unverifiable"; return 0; }
   # gitdir shape is <main>/.git/worktrees/<name> — main repo gitdir is two up.
-  main_gitdir="$(dirname "$(dirname "$gitdir")")"
-  [[ -d "$main_gitdir/objects" || -f "$main_gitdir/HEAD" ]] || { echo "unverifiable"; return 0; }
+  main_gitdir="${gitdir%/*}"; main_gitdir="${main_gitdir%/*}"
+  [[ -d "$main_gitdir/objects" || -f "$main_gitdir/HEAD" ]] || { _gc "unverifiable"; return 0; }
   local real_dir listing
   real_dir="$(realpath -m -- "$dir" 2>/dev/null || printf '%s' "$dir")"
   if ! listing="$(git --git-dir="$main_gitdir" worktree list --porcelain 2>/dev/null)"; then
-    echo "unverifiable"; return 0
+    _gc "unverifiable"; return 0
   fi
-  [[ -n "$listing" ]] || { echo "unverifiable"; return 0; }
+  [[ -n "$listing" ]] || { _gc "unverifiable"; return 0; }
   local wt found=0
   while IFS= read -r wt; do
     [[ -n "$wt" ]] || continue
@@ -279,7 +296,7 @@ tc_classify_git_dir() {
       found=1; break
     fi
   done <<< "$(printf '%s\n' "$listing" | sed -n 's/^worktree //p')"
-  if (( found == 1 )); then echo "registered"; else echo "unregistered"; fi
+  if (( found == 1 )); then _gc "registered"; else _gc "unregistered"; fi
 }
 
 # tc_git_main_dir <dir> → prints the owning repo's gitdir (rc 1 if unverifiable).
@@ -368,32 +385,34 @@ TC_FILE_ALLOWLIST=(
   "pr-*-body.md|pr body scratch files"
 )
 
-# tc_prefix_class <dir> → prints `prefix:<prefix>` when the basename matches an
-# allowlist prefix AND the required subpath exists. rc 1 otherwise.
+# tc_prefix_class <dir> → prints `prefix:<prefix>` AND sets TC_PREFIX_CLASS
+# when the basename matches an allowlist prefix AND the required subpath
+# exists. rc 1 otherwise.
 tc_prefix_class() {
   local dir="$1" name row prefix sig
-  name="$(basename -- "$dir")"
+  name="${dir##*/}"
   for row in "${TC_DIR_ALLOWLIST[@]}"; do
-    prefix="${row%%|*}"; sig="$(printf '%s' "$row" | cut -d'|' -f2)"
+    prefix="${row%%|*}"; sig="${row#*|}"; sig="${sig%%|*}"
     # shellcheck disable=SC2254  # prefix is a deliberate glob from the frozen list
     case "$name" in $prefix)
-      compgen -G "$dir/$sig" >/dev/null 2>&1 && { printf 'prefix:%s' "$prefix"; return 0; }
+      compgen -G "$dir/$sig" >/dev/null 2>&1 && { TC_PREFIX_CLASS="prefix:$prefix"; printf '%s\n' "$TC_PREFIX_CLASS"; return 0; }
       ;;
     esac
   done
   return 1
 }
 
-# tc_file_class <file> → prints `file:<shape>` for allowlisted regular files.
+# tc_file_class <file> → prints `file:<shape>` AND sets TC_FILE_CLASS for
+# allowlisted regular files.
 tc_file_class() {
   local f="$1" name row prefix
   [[ -f "$f" && ! -L "$f" ]] || return 1
   [[ "$(stat -c %u -- "$f" 2>/dev/null)" == "$TC_UID" ]] || return 1
-  name="$(basename -- "$f")"
+  name="${f##*/}"
   for row in "${TC_FILE_ALLOWLIST[@]}"; do
     prefix="${row%%|*}"
     # shellcheck disable=SC2254
-    case "$name" in $prefix) printf 'file:%s' "$prefix"; return 0 ;; esac
+    case "$name" in $prefix) TC_FILE_CLASS="file:$prefix"; printf 'file:%s\n' "$prefix"; return 0 ;; esac
   done
   return 1
 }
@@ -401,9 +420,15 @@ tc_file_class() {
 # --- Top-level classification -----------------------------------------------------
 
 # tc_classify_entry <path> → prints the class; never mutates.
+# ALSO sets the TC_CLASS global — a whole-base caller can invoke it as
+# `tc_classify_entry "$p" >/dev/null; cls="$TC_CLASS"` and skip the
+# command-substitution fork (81k entries × ~0.5ms is the difference between a
+# ~20s scan and a ~60s one).
+TC_CLASS=""
 tc_classify_entry() {
   local p="$1" name pid gc
-  name="$(basename -- "$p")"
+  name="${p##*/}"
+  _class() { TC_CLASS="$1"; printf '%s\n' "$1"; }
   # Git-pointer rung precedes the protected check: a `.git` FILE resolves the
   # entry through the OWNING repo's worktree registry — verified attribution,
   # not the name heuristic the protect list exists to block. Without this the
@@ -412,30 +437,30 @@ tc_classify_entry() {
   # (standalone clones) keep protected-first ordering — report-only either way.
   if [[ -d "$p" && -f "$p/.git" && ! -L "$p/.git" ]]; then
     if ! tc_prefix_class "$p" >/dev/null 2>&1; then
-      gc="$(tc_classify_git_dir "$p")"
+      tc_classify_git_dir "$p" >/dev/null; gc="$TC_GITCLASS"
       case "$gc" in
-        registered|unregistered|unverifiable) echo "worktree:$gc"; return 0 ;;
+        registered|unregistered|unverifiable) _class "worktree:$gc"; return 0 ;;
       esac
     fi
   fi
-  tc_is_protected "$p" && { echo "protected"; return 0; }
+  tc_is_protected "$p" && { _class "protected"; return 0; }
   if [[ -f "$p" && ! -d "$p" ]]; then
-    tc_file_class "$p" || echo "unattributable"
+    if tc_file_class "$p" >/dev/null 2>&1; then _class "$TC_FILE_CLASS"; else _class "unattributable"; fi
     return 0
   fi
-  [[ -d "$p" ]] || { echo "unattributable"; return 0; }
-  # marker rung
-  if pid="$(tc_marker_owner_pid "$p")"; then echo "marker:$pid"; return 0; fi
+  [[ -d "$p" ]] || { _class "unattributable"; return 0; }
+  # marker rung — direct call, no fork
+  if tc_marker_owner_pid "$p" >/dev/null 2>&1; then _class "marker:$TC_PID"; return 0; fi
   # schema rung
-  if pid="$(tc_schema_owner_pid "$name")"; then echo "schema:$pid"; return 0; fi
+  if tc_schema_owner_pid "$name" >/dev/null 2>&1; then _class "schema:$TC_PID"; return 0; fi
   # standalone-clone rung (.git dir; report-only)
-  gc="$(tc_classify_git_dir "$p")"
-  [[ "$gc" == "standalone-clone" ]] && { echo "standalone-clone"; return 0; }
+  tc_classify_git_dir "$p" >/dev/null; gc="$TC_GITCLASS"
+  [[ "$gc" == "standalone-clone" ]] && { _class "standalone-clone"; return 0; }
   # empty rung
-  tc_is_reapable_empty "$p" && { echo "empty"; return 0; }
+  tc_is_reapable_empty "$p" && { _class "empty"; return 0; }
   # prefix rung
-  tc_prefix_class "$p" && return 0
-  echo "unattributable"
+  if tc_prefix_class "$p" >/dev/null 2>&1; then _class "$TC_PREFIX_CLASS"; return 0; fi
+  _class "unattributable"
 }
 
 # --- Retain-since stamps ----------------------------------------------------------
@@ -475,7 +500,7 @@ tc_quarantine_move() {
   mkdir -p -- "$qdir" 2>/dev/null || return 1
   chmod 0700 "$qroot" 2>/dev/null || true
   local dest name i=0
-  name="$(basename -- "$src")"
+  name="${src##*/}"
   dest="$qdir/$name"
   while [[ -e "$dest" ]]; do
     i=$((i + 1)); dest="$qdir/$name.$i"

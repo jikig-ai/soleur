@@ -30,9 +30,36 @@ observations unless marked synthetic.
 - Session-start sweep on real `/var/tmp` (67k entries): ~5s wall, `wt_scanned=5`,
   `retained=5`, zero false reaps; `ms=` field emitted.
 
+## First real dry-run (2026-09-24, pre-merge)
+
+`bash scripts/soleur-tmp-purge.sh` on the live host — 5m27s for 88k entries
+(dominated by per-entry classification + `du` on the actionable subset; the
+per-entry subprocess cost was the first bug found and fixed — bulk `du`,
+fork-free classify via `TC_*` globals, `tc_build_inuse_map` single `/proc`
+pass).
+
+| class | n | bytes (KB) |
+|---|---|---|
+| prefix:rung2-archive.* | 14,089 | 748,280 |
+| prefix:gdboot.* | 7,837 | 26,016 |
+| prefix:infra-suites.* | 3,216 | 81,912 |
+| prefix:kbcov-* | 1,544 | 18,528 |
+| prefix:gdpr-gate-incidents-* | 383 | 3,064 |
+| prefix:soleur-inc-* | 452 | 16 |
+| prefix:cron-filing-fixture-* | 117 | 936 |
+| prefix:harness-discovery-* | 493 | 5,224 |
+| file:inngest-arm-* | 4,748 | 18,304 |
+| file:inngest-ci-*.sh | 2,374 | 61,616 |
+| file:pr-*-body.md | 11 | 76 |
+| empty | 2,556 | 0 |
+| worktree:registered | 3 | 900,652 |
+| worktree:unverifiable | 1 | 2,052,408 |
+| protected | 26,036 | (not sized) |
+| standalone-clone | 5,354 | (not sized) |
+| unattributable | 19,000 | (not sized) |
+
 ## Post-merge (to fill after controlled backlog purge)
 
-- [ ] `SOLEUR_TMP_PURGE` dry-run totals on the real host (per-class counts, GB)
 - [ ] Entries actually quarantined by `--apply`, per class
 - [ ] `--drain` recovered bytes after TTL
 - [ ] Session-start `SOLEUR_TMP_SWEEP` lines over the first week (ms, reaped)
