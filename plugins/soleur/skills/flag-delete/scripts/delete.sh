@@ -13,10 +13,16 @@
 #
 # Usage: bash delete.sh <kebab-name> [--dry-run]
 #
+# Run the write in your OWN terminal: the ack below needs a person to type yes.
+# An agent runs only `--dry-run` and prints this command for the operator.
+#
 # Exit codes (same map as create.sh):
-#   0 — success / dry-run / operator aborted at the typed-yes prompt
-#   1 — name validation failure
+#   0 — success / dry-run
+#   1 — name validation failure, or the operator did not type yes at the ack
+#       (stdout: SOLEUR_BOOTSTRAP_ABORTED stage=ack; nothing mutated)
 #   2 — prerequisite missing
+#  64 — no TTY on stdin for a write run (stdout: SOLEUR_BOOTSTRAP_INPUT_REQUIRED);
+#       refused before any credential fetch or network call (#8486)
 #   3 — Flagsmith API error
 #   4 — file edit / audit append failed
 #   5 — Doppler delete failed
@@ -67,6 +73,23 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
 
+# Human-presence gate (#8486, ADR-249). Every production write below waits on the
+# operator-script library's class-2 ack, which has NO skip variable and no flag:
+# it needs a person typing `yes` at a terminal, so an agent's tool subprocess
+# (no TTY) is refused with exit 64 before any credential fetch. Clear anything an
+# inherited environment could use to pre-empt the library's double-source guard
+# or to stand in for its ack before sourcing it. (BASH_ENV runs before this
+# script and cannot be cleared from inside it — recorded in ADR-249 as a
+# hijack-class residual.)
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
+
 readonly FLAGSMITH_PROJECT_ID=39082
 readonly FLAGSMITH_API="https://api.flagsmith.com/api/v1"
 readonly SERVER_TS="apps/web-platform/lib/feature-flags/server.ts"
@@ -91,6 +114,9 @@ done
 [[ ! "$NAME" =~ ^[a-z][a-z0-9-]*[a-z0-9]$ ]] && { echo "name must be lowercase kebab-case (got: $NAME)" >&2; exit 1; }
 
 ENV_VAR="FLAG_$(echo "$NAME" | tr 'a-z-' 'A-Z_')"
+
+# --- no TTY, no write: refuse before any credential fetch or network call ---
+if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
 
 # --- prerequisites ----------------------------------------------------------
 command -v curl >/dev/null    || { echo "missing: curl" >&2; exit 2; }
@@ -143,8 +169,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-read -r -p "Proceed? Type 'yes': " ACK
-[[ "$ACK" == "yes" ]] || { echo "aborted" >&2; exit 0; }
+soleur_op_ack_or_die "Delete flag '${NAME}' from Flagsmith, the code and Doppler (dev + prd) now? Type yes: "
 
 # --- audit append (WORM) BEFORE any mutation --------------------------------
 # Records intent: action=archive (migration 071's sanctioned flag-removed
