@@ -353,11 +353,16 @@ cases=$((cases + 1)); row "N16 unreadable input exits 2, not 1" 2 "ERROR: lint-d
 d=$(fx n17); assert_fixture_dir "$d"; { dp doppler_project a "$(lit "$(x 255)")"; dp doppler_project b "$(lit ok)"; } > "$d/a.tf"; dp doppler_project c "$(lit ok)" > "$d/b.tf"
 cases=$((cases + 1)); row "N17 summary: max and file count" 0 "3 doppler_* resource(s) in 2 file(s); 3 description(s) measured, max 255/255 bytes" "$d/a.tf" "$d/b.tf"
 
+# N18 — an unbalanced closing brace makes the whole file unscannable, not silently
+# mis-attributed (every later block would otherwise be read at the wrong depth).
+d=$(nfx n18 "$(printf '}\nresource "doppler_project" "b" {\n  description = %s\n}\n' "$(lit "$(x 256)")")")
+cases=$((cases + 1)); row "N18 unbalanced closing brace fails closed" 1 "bad.tf:1: unbalanced '}'; cannot scan this file" "$d/ok.tf" "$d/bad.tf"
+
 if [[ $((PASS + FAIL)) -ne "$cases" ]]; then
   printf 'FATAL: conservation — PASS+FAIL=%d but %d rows ran\n' "$((PASS + FAIL))" "$cases" >&2
   exit 1
 fi
-MIN_CASES=60
+MIN_CASES=61
 if (( cases < MIN_CASES )); then
   printf '[FATAL] assertion floor: only %d assertions ran (floor %d)\n' "$cases" "$MIN_CASES" >&2
   exit 1
