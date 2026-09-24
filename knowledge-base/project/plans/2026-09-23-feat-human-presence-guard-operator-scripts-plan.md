@@ -80,7 +80,7 @@ Concretely:
    `--dry-run` elsewhere in a chain cannot escape it.
 6. The WORM row records `approval_method = 'tty-ack'` (migration 140 adds a nullable, enum-checked
    column; the RPC gains `p_approval_method DEFAULT NULL`).
-7. ADR-245 (provisional ordinal) records the layered decision D1–D7, the per-harness coverage table
+7. ADR-249 (provisional ordinal) records the layered decision D1–D7, the per-harness coverage table
    (measured vs. unmeasured), the step-2 broker design, and the residual risks. ADR-236 is amended
    (its K1 rationale cites `--confirmed`, which this plan deletes). C4 gains the unmodeled Flagsmith
    system and the founder's terminal-gated write edge.
@@ -537,7 +537,7 @@ See `## Architecture Decision (ADR/C4)`.
   `knowledge-base/legal/article-30-register.md`: resolved at deepen time — the LIA's
   data-minimisation list carries a per-field bullet ("**Actor field:** operator email only …"), so add
   one sibling bullet "**Approval-method field:** `tty-ack` or NULL; non-personal; records how the write
-  was approved (ADR-245)". The Article 30 register has no `flag_flip_audit` entry; no change there.
+  was approved (ADR-249)". The Article 30 register has no `flag_flip_audit` entry; no change there.
 
 ## Files to Create
 
@@ -546,7 +546,7 @@ See `## Architecture Decision (ADR/C4)`.
 - `apps/web-platform/supabase/migrations/140_flag_flip_audit_approval_method.sql`
 - `apps/web-platform/supabase/migrations/140_flag_flip_audit_approval_method.down.sql`
 - `apps/web-platform/test/migration-140-flag-flip-audit-approval-method.test.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-245-operator-prod-writes-need-a-tty-ack-layered-with-credential-custody.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-249-operator-prod-writes-need-a-tty-ack-layered-with-credential-custody.md`
 
 ## Files to Edit
 
@@ -757,7 +757,7 @@ satisfy by set identity against the grep-derived population.
 
 ### ADR
 
-**Create ADR-245 (provisional ordinal; `origin/main` max is ADR-244 as of 2026-09-23 — re-verify at
+**Create ADR-249 (renumbered 2026-09-24 from the plan-time 245: ADR-245 landed on `origin/main`, 246–248 are claimed on sibling branches; plan-time note: `origin/main` max was ADR-244 as of 2026-09-23 — re-verify at
 ship)** via `soleur:architecture`: "Production-writing operator scripts require a TTY acknowledgement;
 hijacked-agent resistance needs credential custody." Status `accepted` for step 1, with a
 `### Step 2 (adopting, #8652)` section. Contents:
@@ -796,8 +796,8 @@ hijacked-agent resistance needs credential custody." Status `accepted` for step 
   abort exit code 0 → 1.
 
 **Amend ADR-236:** the `flag-set-role` K1 row and the `flag-create` rationale drop `--confirmed`;
-§Decision 4's "tracked in #8486" becomes "closed for the accidental agent by ADR-245; hijacked agent
-→ #8652". Add ADR-245 to its related links.
+§Decision 4's "tracked in #8486" becomes "closed for the accidental agent by ADR-249; hijacked agent
+→ #8652". Add ADR-249 to its related links.
 
 ### C4 views
 
@@ -814,7 +814,7 @@ Read in full at plan time: `model.c4` (840 lines), `views.c4` (106), `spec.c4` (
 
 Tasks: add `flagsmith = system "Flagsmith" { #external … }` to `model.c4`; edges `founder -> flagsmith
 "Production flag and segment writes via the flag-* operator scripts, gated on a TTY ack in the
-founder's own terminal (ADR-245)"` and `webapp -> flagsmith "Evaluates runtime flags"` (the existing
+founder's own terminal (ADR-249)"` and `webapp -> flagsmith "Evaluates runtime flags"` (the existing
 read path, unmodeled today); include `flagsmith` in the `context` view in `views.c4`. Run
 `apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts` and
 `plugins/soleur/test/c4-count-parity.test.sh`.
@@ -941,7 +941,7 @@ review (TR5).
 - [ ] AC8 — `git grep -nF -- '--confirmed' -- 'plugins/soleur/skills/*' '.claude/*' 'plugins/soleur/commands/*'`
       returns nothing.
 - [ ] AC9 — Migration 140 test green; `071` test unchanged and green.
-- [ ] AC10 — `ADR-245-*.md` exists (or its renumbered successor, with every plan/tasks/AC mention
+- [ ] AC10 — `ADR-249-*.md` exists (or its renumbered successor, with every plan/tasks/AC mention
       swept), contains the per-harness table with a measured/UNMEASURED cell per row, the named
       residual risks, and #8661 and #8662; ADR-236 amended.
 - [ ] AC11 — `model.c4` has `flagsmith` with both edges and it renders in `context`; C4 syntax,
@@ -1033,7 +1033,7 @@ library's `umask 077` (2.6).
 - `soleur_op_input_required` prints to stdout; tests that capture stderr only will miss the marker.
 - `script -qec` in the tests is the same PTY route the ADR names as a residual — deliberate: the
   tests drive the write path the way a person does.
-- ADR-245 and migration 140 are provisional ordinals; a renumber must sweep this plan, `tasks.md`
+- ADR-249 and migration 140 are provisional ordinals; a renumber must sweep this plan, `tasks.md`
   and the ACs.
 - The defer rule's read-only escape and each script's own `--dry-run` parser can disagree
   (`set-role.sh` only honours position 3). The disagreement is fail-safe: the hook allows, the script

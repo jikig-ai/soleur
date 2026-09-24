@@ -71,7 +71,7 @@ lane: cross-domain
 - [ ] 2.6 Per-harness `[[ -t 0 ]]` and `/dev/tty` reachability measurement (Claude Code measured:
   `stdin=notty`, `devtty=unreachable`; codex/grok/devin ≤ 6 model calls; `!` prefix and unrunnable
   harnesses → UNMEASURED).
-- [ ] 2.7 ADR-245 (per-harness table, residual risks, step-2 design, `tty-ack` meaning, census and
+- [ ] 2.7 ADR-249 (per-harness table, residual risks, step-2 design, `tty-ack` meaning, census and
   tracking issue); amend ADR-236.
 - [ ] 2.8 C4: add `flagsmith` element and edges in `model.c4`; include in the `context` view.
 - [ ] 2.9 SKILL.md bodies (four skills): `--dry-run`, then print the write command for the
