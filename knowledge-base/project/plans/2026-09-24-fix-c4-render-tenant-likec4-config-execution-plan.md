@@ -781,7 +781,7 @@ finding; no `compliance-posture.md` write.
 - [x] Model PUT carries the rendered commit's model sha; a 409 with an unchanged source set retries once, a 409 with a changed source set is superseded without a Sentry event (both tested).
 - [x] `c4-concierge-tools.ts` and `cc-dispatcher.ts` no longer promise a refresh when `rerenderDiagnostic` is present, and name the GitHub repository as where unsupported files are changed.
 - [x] ADR-050 amended; ADR-235 residual bullet updated; `api -> github` edge clause added; `model.likec4.json` regenerated; `c4-code-syntax`, `c4-render`, `c4-count-parity`, `c4-model-freshness` green.
-- [ ] Exposure assessment record and breach-register row exist with every limb run or marked INCONCLUSIVE with its reason, and contain no tenant identifiers.
+- [x] Exposure assessment record and breach-register row exist with every limb run or marked INCONCLUSIVE with its reason, and contain no tenant identifiers.
 - [x] Phase 0 recorded: the sandbox cannot write `C4_RENDER_STAGING_ROOT` (a test over `buildAgentSandboxConfig` output, plus `denyRead` coverage if the root is readable); staging and the `-o` output live under that root, not `os.tmpdir()`.
 - [x] `githubApiGet` accepts an optional `{ signal }`; an aborted stage issues no further retries and leaves no `<dir>` behind (stalled-GET row); at most 8 blob GETs in flight.
 - [x] `apps/web-platform/test/c4-concierge-copy.test.ts` pins the tool description and `c4PromptAddendum`: relay the diagnostic as quoted data, no refresh promise when a diagnostic is present, no removing/shrinking content or retrying without confirmation, the no-diagnostic "will refresh" branch kept.

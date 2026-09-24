@@ -36,7 +36,7 @@ Plan: `knowledge-base/project/plans/2026-09-24-fix-c4-render-tenant-likec4-confi
 
 - [x] 4.1 ADR-050 amendment (2026-09-24, #8623: invariant, GitHub trusted only for modes/bytes at a fixed sha, staging root, residual → #8696); ADR-235 2026-09-23 residual bullet → closed
 - [x] 4.2 Append the re-render clause to the `api -> github` edge in `model.c4`; `bash scripts/regenerate-c4-model.sh`; run `c4-code-syntax`, `c4-render`, `c4-count-parity`, `c4-model-freshness`
-- [ ] 4.3 Exposure assessment `knowledge-base/legal/audits/2026-09-24-8623-c4-render-exposure-assessment.md` + `knowledge-base/legal/breach-register.md` row (L1 Flagsmith, L2 GitHub App scan; INCONCLUSIVE with reason if not runnable; no tenant identifiers)
+- [x] 4.3 Exposure assessment `knowledge-base/legal/audits/2026-09-24-8623-c4-render-exposure-assessment.md` + `knowledge-base/legal/breach-register.md` row (L1 Flagsmith, L2 GitHub App scan; INCONCLUSIVE with reason if not runnable; no tenant identifiers)
 
 ## Phase 5: Verify
 
