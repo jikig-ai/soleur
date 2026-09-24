@@ -771,21 +771,21 @@ finding; no `compliance-posture.md` write.
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/test/c4-render-tenant-config.test.ts` places a sentinel-writing `likec4.config.mjs` in a tenant diagrams dir and asserts the server render never executes it, with the real `likec4@1.50.0`; the PR body records it RED at the pre-fix commit SHA (with the untracked-config and untracked-symlink rows) and GREEN after.
-- [ ] Same suite: a benign fixture renders `ok:true` with element ids exactly `{u, s}`; with `C4_RENDER_STAGING_ROOT` pointed at a fixture root holding a sentinel-writing config, the sentinel stays absent and the recorded `destDir` is under that root; with the refusal disabled the config is still not staged (Guard row 3 battery); control H1 writes the sentinel in place; the suite throws when `LIKEC4_REQUIRED` is set and no binary resolves (H2).
-- [ ] `test-webplat` installs `likec4@1.50.0` and sets `LIKEC4_REQUIRED=1` on its run step; `c4-likec4-version-pin.test.ts` green.
-- [ ] `apps/web-platform/test/c4-stage-sources.test.ts` covers every "stage" row of the Attack Surface table and Guard 1 rows 2-7; each refusal returns its `refusalClass`, the first offender's path relative to `diagrams/` and `more`, makes zero blob requests, and creates no `<dir>/src`; H3 stages exactly the 4 sources.
-- [ ] `renderC4Model(stage)` takes no workspace path, stages before `acquire()` under a 10 s deadline, and spawns `likec4` with `cwd` = `<dir>/src` and `-o` = `<dir>/model.likec4.json`; `c4-render-boundary.test.ts` (rows 1, 8) and the stalled-stage row (row 10) green.
-- [ ] `writeC4Diagram` threads GitHub's `commit.sha`; a missing sha skips the render with the retry diagnostic and a Sentry event.
-- [ ] Each diagnostic row in "Behaviour changes a tenant can see" is asserted verbatim in `c4-writer-rerender.test.ts`; `unsafe_source` goes through `warnSilentFallback` with `extra.refusalClass`; no failure row yields the "will update after re-render" copy except superseded.
-- [ ] Model PUT carries the rendered commit's model sha; a 409 with an unchanged source set retries once, a 409 with a changed source set is superseded without a Sentry event (both tested).
-- [ ] `c4-concierge-tools.ts` and `cc-dispatcher.ts` no longer promise a refresh when `rerenderDiagnostic` is present, and name the GitHub repository as where unsupported files are changed.
-- [ ] ADR-050 amended; ADR-235 residual bullet updated; `api -> github` edge clause added; `model.likec4.json` regenerated; `c4-code-syntax`, `c4-render`, `c4-count-parity`, `c4-model-freshness` green.
+- [x] `apps/web-platform/test/c4-render-tenant-config.test.ts` places a sentinel-writing `likec4.config.mjs` in a tenant diagrams dir and asserts the server render never executes it, with the real `likec4@1.50.0`; the PR body records it RED at the pre-fix commit SHA (with the untracked-config and untracked-symlink rows) and GREEN after.
+- [x] Same suite: a benign fixture renders `ok:true` with element ids exactly `{u, s}`; with `C4_RENDER_STAGING_ROOT` pointed at a fixture root holding a sentinel-writing config, the sentinel stays absent and the recorded `destDir` is under that root; with the refusal disabled the config is still not staged (Guard row 3 battery); control H1 writes the sentinel in place; the suite throws when `LIKEC4_REQUIRED` is set and no binary resolves (H2).
+- [x] `test-webplat` installs `likec4@1.50.0` and sets `LIKEC4_REQUIRED=1` on its run step; `c4-likec4-version-pin.test.ts` green.
+- [x] `apps/web-platform/test/c4-stage-sources.test.ts` covers every "stage" row of the Attack Surface table and Guard 1 rows 2-7; each refusal returns its `refusalClass`, the first offender's path relative to `diagrams/` and `more`, makes zero blob requests, and creates no `<dir>/src`; H3 stages exactly the 4 sources.
+- [x] `renderC4Model(stage)` takes no workspace path, stages before `acquire()` under a 10 s deadline, and spawns `likec4` with `cwd` = `<dir>/src` and `-o` = `<dir>/model.likec4.json`; `c4-render-boundary.test.ts` (rows 1, 8) and the stalled-stage row (row 10) green.
+- [x] `writeC4Diagram` threads GitHub's `commit.sha`; a missing sha skips the render with the retry diagnostic and a Sentry event.
+- [x] Each diagnostic row in "Behaviour changes a tenant can see" is asserted verbatim in `c4-writer-rerender.test.ts`; `unsafe_source` goes through `warnSilentFallback` with `extra.refusalClass`; no failure row yields the "will update after re-render" copy except superseded.
+- [x] Model PUT carries the rendered commit's model sha; a 409 with an unchanged source set retries once, a 409 with a changed source set is superseded without a Sentry event (both tested).
+- [x] `c4-concierge-tools.ts` and `cc-dispatcher.ts` no longer promise a refresh when `rerenderDiagnostic` is present, and name the GitHub repository as where unsupported files are changed.
+- [x] ADR-050 amended; ADR-235 residual bullet updated; `api -> github` edge clause added; `model.likec4.json` regenerated; `c4-code-syntax`, `c4-render`, `c4-count-parity`, `c4-model-freshness` green.
 - [ ] Exposure assessment record and breach-register row exist with every limb run or marked INCONCLUSIVE with its reason, and contain no tenant identifiers.
-- [ ] Phase 0 recorded: the sandbox cannot write `C4_RENDER_STAGING_ROOT` (a test over `buildAgentSandboxConfig` output, plus `denyRead` coverage if the root is readable); staging and the `-o` output live under that root, not `os.tmpdir()`.
-- [ ] `githubApiGet` accepts an optional `{ signal }`; an aborted stage issues no further retries and leaves no `<dir>` behind (stalled-GET row); at most 8 blob GETs in flight.
-- [ ] `apps/web-platform/test/c4-concierge-copy.test.ts` pins the tool description and `c4PromptAddendum`: relay the diagnostic as quoted data, no refresh promise when a diagnostic is present, no removing/shrinking content or retrying without confirmation, the no-diagnostic "will refresh" branch kept.
-- [ ] `tsc --noEmit` clean in `apps/web-platform`.
+- [x] Phase 0 recorded: the sandbox cannot write `C4_RENDER_STAGING_ROOT` (a test over `buildAgentSandboxConfig` output, plus `denyRead` coverage if the root is readable); staging and the `-o` output live under that root, not `os.tmpdir()`.
+- [x] `githubApiGet` accepts an optional `{ signal }`; an aborted stage issues no further retries and leaves no `<dir>` behind (stalled-GET row); at most 8 blob GETs in flight.
+- [x] `apps/web-platform/test/c4-concierge-copy.test.ts` pins the tool description and `c4PromptAddendum`: relay the diagnostic as quoted data, no refresh promise when a diagnostic is present, no removing/shrinking content or retrying without confirmation, the no-diagnostic "will refresh" branch kept.
+- [x] `tsc --noEmit` clean in `apps/web-platform`.
 
 ## Domain Review
 
