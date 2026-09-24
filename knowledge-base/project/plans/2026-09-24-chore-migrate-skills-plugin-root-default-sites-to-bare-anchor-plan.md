@@ -1380,7 +1380,7 @@ by reading four literals under `safe-bash.ts`'s CODEOWNERS.
 
   Commit both captures verbatim. If the CLI is unavailable, record
   `[~] NOT MET — <reason>`; never paraphrase a pass.
-- [ ] **AC13** The PR body:
+- [x] **AC13** The PR body:
   - uses `Closes #7453` and cites ADR-179 (not ADR-177);
   - lists #6222, #8729 and #8730;
   - names the do-not-touch `:-` needles, with one line each;
