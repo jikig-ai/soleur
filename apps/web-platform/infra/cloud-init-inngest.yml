@@ -1576,7 +1576,7 @@ runcmd:
     # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
     # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
     # and every consumer below follows IREF.
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.38@sha256:ead55fb161d1efd35a2d1c6cbc17f076cb25d6afa0d799ec6461fde35475ebd3
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.39@sha256:ab0d157c91c00329d33e615ab40530ed23802ca0df970eeef900d1feb71cd8ab
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
     # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
@@ -1625,7 +1625,7 @@ runcmd:
     . /etc/default/soleur-zot-read 2>/dev/null || true
     ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
     if [ -n "$ZOT_EP" ]; then
-      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.38@sha256:ead55fb161d1efd35a2d1c6cbc17f076cb25d6afa0d799ec6461fde35475ebd3"
+      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.39@sha256:ab0d157c91c00329d33e615ab40530ed23802ca0df970eeef900d1feb71cd8ab"
       /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
       set +e
       install -m 600 /dev/null /var/log/inngest-zot-pull.log
