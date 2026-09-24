@@ -125,6 +125,43 @@ Architecture review (architecture-strategist). Findings applied:
     stable. Its comment block and the runbook triage must say it now also pages a terminal inngest
     boot (`inngest_pull_fatal`), which is not a fallback.
 
+Realism census (test compatibility + verify-the-negative). Findings applied:
+
+17. **Tests missing from "Consumers that fail loudly":**
+    - `inngest-host.test.sh`: pins `NO SIGNATURE VERIFICATION ON THIS PATH`, `CF-2`, `DIGEST PIN`
+      and the `IREF=ghcr.io/…@sha256:<64hex>` line. The prose re-homed from the deleted GHCR-bake block
+      must keep those tokens.
+    - `cron-egress-enforce-probe.test.sh`: anchors on `^\s*"\$\(cat /run/soleur-image-ref`. Keep the
+      prefix and refresh its stale comment.
+    - `inngest.test.sh` (A4): the `INNGEST_BOOTSTRAP_IMAGE` printf. Kept.
+    - `cloud-init-user-data-size.test.ts`: #6462 AC1/AC1b/AC1c pin `app_ghcr_served`. Restate them
+      as residual-zero rows.
+    - `cloud-init-web-zot-seed.test.sh`: its Guard-4 row pins the **trail's** query string
+      `stage:[app_zot,app_ghcr_served,app_ghcr_fallback]`. Keep that row, because the trail script is
+      unchanged.
+    - `web-fresh-boot-zot-8651.test.sh`: add a row for R4 (a new-format success detail without
+      `ghcr_login=` still PASSes).
+18. **F27 correction.** `t_value_swap_is_drift` mutates a frozen live capture, not
+    `alert-reference.json`, so the rule's condition set cannot turn it into a NOOP. Research row (4)
+    and the Alternatives row overstated this. P2 alone is enough reason not to delete the inngest emit.
+    Phase 4.3 is a comment refresh only.
+19. **Guard 1 corrections.** Allowed pull sources include `"$IMAGE_REF"` after `IMAGE_REF="$REF"` (the
+    `docker create --name soleur-hostscript-seed`). The census runs on **source** bytes, with comments
+    stripped. In rendered bytes, `IMAGE_REF='${image_name}'` becomes a `ghcr.io/…` literal. That
+    assignment is a named exemption, like the `IREF=` carrier. Add a count assertion: each inngest
+    template holds exactly 2 matches of `jikig-ai/soleur-inngest-bootstrap:v[0-9]` (the
+    `bump-inngest-bootstrap-pin.sh` contract, "expected exactly 2"). No re-homed comment, echo or
+    phone-home detail may quote a full ref.
+20. **More stale comments (P6):** `server.tf`'s seed-item notes under `zot_pull_token` ("login-gated
+    GHCR leg", "~190 s login" worst case); `ci-deploy.sh` "rides the 1d follow-up alongside root's
+    config". FR10's grep widens to `strict no-op until zot is` and `(1.8) + backfill`.
+    `zot-entry-gate.sh`'s same phrasing stays out of scope and is recorded in the follow-up.
+21. Confirmed claims: a (release rebuild delivers to web-1 and web-2), b (inngest outside per-merge
+    apply), c (only the two templates reference `${ghcr_read_*}`; templatefile tolerates unused keys),
+    d (both emitters accept `fatal`), e (the jq path is valid), g (the bump bot needs exactly 2
+    matches), h (the trail and 8651 probe query Sentry, not the template).
+    `tests/web-hosts-eu-pin.tftest.hcl` keeps its dummy `ghcr_read_*` values until 5.4.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Brief / spec claim | Codebase reality (measured 2026-09-24) | Plan response |
