@@ -2438,7 +2438,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // probe (`scripts/betterstack-query.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
   // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the leader-loop SOLEUR_CLAUDE_COST markers
   // exist only in the Better Stack Logs warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 26;
+  // #8630 (2026-09-24): +1 (26 -> 27, after #8717 took 25 -> 26) for `2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/sentry-alert-live-fidelity.sh`) reads the org's alert workflows with the
+  // Doppler prd SENTRY_IAC_AUTH_TOKEN. NO SUBSTITUTE: the property is the LIVE content of the
+  // cron-monitor-failure workflow (its detectorIds binding and email action), which no
+  // unauthenticated Sentry endpoint exposes. Genuine declaration.
+  const BASELINE_DECLARED_PROBES = 27;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

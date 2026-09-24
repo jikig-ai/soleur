@@ -88,6 +88,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/inngest/cron-weekly-release-digest.test.ts",
   "test/server/inngest/leader-prompts/tool-surface.test.ts",
   "test/server/inngest/rule-body-gate-recursion-invariant.test.ts",
+  "test/server/inngest/sentry-cron-monitor-routing-parity.test.ts",
   "test/server/inngest/sentry-monitor-iac-parity.test.ts",
   "test/server/watchdog-workflow-idempotence.test.ts",
   "test/service-tools.test.ts",

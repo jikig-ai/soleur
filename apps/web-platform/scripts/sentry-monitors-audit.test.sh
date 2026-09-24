@@ -79,10 +79,10 @@ fi
 # -workflowIds-> workflow). The old fixture bound `monitor.slug` inside rule
 # filters, a shape that matches 0 rows in the live org and always did.
 #
-# Class A is reported as a COUNT, not a per-slug list, so identity is pinned
-# by the count being 1-of-2 rather than by grepping a slug: a predicate that
-# ignored `workflowIds` would report 2, and one that inverted it would also
-# report 1 — which is why T15 fixtures the OTHER direction (both routed -> 0).
+# This row pins the COUNT (1-of-2): a predicate that ignored `workflowIds`
+# would report 2, and one that inverted it would also report 1 — which is why
+# T15 fixtures the OTHER direction (both routed -> 0). Slug IDENTITY — which of
+# the two is listed — is pinned by T19 since #8630 made Class A per-slug.
 # ------------------------------------------------------------------------
 echo "T3: Class A — cron detector with no routing workflow"
 TMP3=$(mktemp -d)
@@ -598,8 +598,9 @@ echo "T15: Class A far direction — all detectors routed yields zero"
 TMP15=$(mktemp -d)
 cat > "$TMP15/monitors.json" <<'EOF'
 [
-  {"slug": "monitor-a", "name": "A", "type": "cron_job", "config": {"schedule": "0 * * * *"}},
-  {"slug": "monitor-b", "name": "B", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
+  {"slug": "monitor-a", "name": "A", "type": "cron_job", "status": "active", "isMuted": false, "config": {"schedule": "0 * * * *"}},
+  {"slug": "monitor-b", "name": "B", "type": "cron_job", "status": "active", "config": {"schedule": "0 0 * * *"},
+   "environments": [{"name": "production", "isMuted": false}]}
 ]
 EOF
 printf '[]' > "$TMP15/workflows.json"
@@ -614,13 +615,29 @@ SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
   SENTRY_FIXTURE_MONITORS="$TMP15/monitors.json" \
   SENTRY_FIXTURE_RULES="$TMP15/workflows.json" \
   SENTRY_FIXTURE_DETECTORS="$TMP15/detectors.json" \
-  AUDIT_OUT_DIR="$TMP15" bash "$SCRIPT" >/dev/null 2>&1
+  AUDIT_OUT_DIR="$TMP15" bash "$SCRIPT" >/dev/null 2>"$TMP15/stderr.txt"
 report=$(ls "$TMP15"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-if grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report"; then
-  pass "all-routed fixture yields Class A count 0 of 2"
+if grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report" \
+   && ! grep -qE '^- `monitor-[ab]` — ' "$report"; then
+  pass "all-routed fixture yields Class A count 0 of 2, no slug listed"
 else
   fail "Class A far direction"
   sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -12 >&2 || true
+fi
+
+# T15b — the healthy state is SILENT on stderr. Nothing unrouted, nothing
+# disabled, and nothing muted — CHECKED, not assumed: monitor-a carries a
+# top-level `isMuted: false`, monitor-b an environment-level one. A payload
+# with no `isMuted` anywhere is "unknown", not 0 (T19e).
+echo "T15b: all routed, nothing muted — no routing ::warning::"
+if [[ -f "$report" ]] \
+   && grep -qE 'Muted monitors: \*\*0\*\*' "$report" \
+   && grep -qE 'Disabled monitors: \*\*0\*\*' "$report" \
+   && ! grep -q '::warning::Sentry cron routing' "$TMP15/stderr.txt"; then
+  pass "healthy state: muted and disabled counts 0 reported, no routing warning on stderr"
+else
+  fail "routing ::warning:: fired (or muted count missing) in the all-routed case"
+  cat "$TMP15/stderr.txt" >&2 || true
 fi
 rm -rf "$TMP15"
 
@@ -926,36 +943,474 @@ fi
 rm -rf "$TMP18"
 
 # ------------------------------------------------------------------------
-# T19 — the Class A invariant, asserted where something reads it.
-# `class_a_count == cron_detector_count` distinguishes ordinary growth from a
-# real routing attachment from an extraction failure; a literal baseline of 55
-# would go stale the moment monitor 56 lands and can distinguish none of them.
+# T19 — Class A lists the UNROUTED slugs, and says so on stderr. Every cron
+# detector is meant to be bound to a workflow, so the healthy state is ZERO
+# unrouted and an unrouted detector is the exception that must be named.
+#
+# T3's 1-of-2 shape: m1 unrouted, m2 routed. The workflow EXISTS and has an
+# action, so neither Class C nor Class E adds noise to the report or stderr.
+# stderr is captured to ITS OWN file: the `::warning::` is a job-log signal and
+# must not leak into the report, which is the Article 30 evidence artifact.
 # ------------------------------------------------------------------------
-echo "T19: Class A invariant is machine-checked"
+# One shared workflows fixture, written once to a mktemp-rooted path (T19-T19d
+# never mutate it), so the helper below writes no fixture file of its own.
+T19_WORKFLOWS=$(mktemp)
+printf '%s' '[{"id": "9001", "name": "cron-monitor-failure", "triggers": {"actions": [{"id": "NotifyEmailAction"}]}, "actionFilters": []}]' > "$T19_WORKFLOWS"
+# $1 = fixture dir holding monitors.json + detectors.json. Writes the report
+# into $1 and stderr to $1/stderr.txt; the SUT's stdout is discarded.
+t19_run() {
+  local d="$1"
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+    SENTRY_API_HOST=de.sentry.io \
+    SENTRY_FIXTURE_MONITORS="$d/monitors.json" \
+    SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" \
+    SENTRY_FIXTURE_DETECTORS="$d/detectors.json" \
+    AUDIT_OUT_DIR="$d" bash "$SCRIPT" >/dev/null 2>"$d/stderr.txt"
+}
+# The ONE routing warning line, isolated from the SUT's other `::warning::`s.
+t19_warning() { grep -E '^::warning::Sentry cron routing:' "$1/stderr.txt" 2>/dev/null || true; }
+
+echo "T19: Class A lists the unrouted slug, not the routed one"
 TMP19=$(mktemp -d)
-cat > "$TMP19/monitors.json" <<'EOF'
-[{"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
-EOF
-printf '[]' > "$TMP19/workflows.json"
-cat > "$TMP19/detectors.json" <<'EOF'
-[{"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []}]
-EOF
-SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
-  SENTRY_API_HOST=de.sentry.io \
-  SENTRY_FIXTURE_MONITORS="$TMP19/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP19/workflows.json" \
-  SENTRY_FIXTURE_DETECTORS="$TMP19/detectors.json" \
-  AUDIT_OUT_DIR="$TMP19" bash "$SCRIPT" >/dev/null 2>&1
+cat > "$TMP19/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19"
 report=$(ls "$TMP19"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-if grep -qE '\*\*1\*\* of \*\*1\*\* cron detectors' "$report" \
-   && grep -qE 'Invariant `class_a_count == cron_detector_count` HOLDS' "$report" \
-   && ! grep -qE '^- `m1` — ' "$report"; then
-  pass "invariant reported when it holds; no per-slug list emitted"
+if grep -qE '\*\*1\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -qE '^- `m1` — ' "$report" \
+   && ! grep -qE '^- `m2` — ' "$report" \
+   && grep -qE 'Healthy state: \*\*0\*\* unrouted' "$report" \
+   && grep -q 'cron_monitor_alert_unrouted' "$report" \
+   && grep -q 'bound to no workflow' "$report" \
+   && ! grep -q 'bound to the cron-monitor-failure' "$report" \
+   && ! grep -qE 'Invariant .* HOLDS' "$report"; then
+  pass "unrouted m1 listed as a bullet, routed m2 not; healthy state stated as 0"
 else
-  fail "invariant not machine-checked"
-  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -12 >&2 || true
+  fail "Class A did not list exactly the unrouted slug"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+
+echo "T19b: the unrouted slug is named in a stderr ::warning::, never in the report"
+w19=$(t19_warning "$TMP19")
+if [[ -n "$w19" ]] \
+   && grep -qE '^::warning::Sentry cron routing: pre-apply state' <<<"$w19" \
+   && grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19" \
+   && ! grep -q 'cron-monitor-failure' <<<"$w19" \
+   && grep -qw 'm1' <<<"$w19" \
+   && ! grep -qw 'm2' <<<"$w19" \
+   && ! grep -q '::warning::' "$report"; then
+  pass "stderr ::warning:: names m1 (not m2) and is absent from the report"
+else
+  fail "routing ::warning:: missing, wrong, or leaked into the report: [${w19}]"
+  cat "$TMP19/stderr.txt" >&2 || true
 fi
 rm -rf "$TMP19"
+
+# ------------------------------------------------------------------------
+# T19c — the unrouted slug comes from the STRUCTURED binding, not `.name`.
+# Every other Class A fixture binds via the `.name` fallback, where slug and
+# name are identical, so a listing built from `.name` alone would pass them
+# all. Here the detector was renamed in the UI: `.name` no longer slugifies to
+# the monitor, `dataSources[].queryObj.slug` still does.
+# ------------------------------------------------------------------------
+echo "T19c: unrouted listing is slug-first (structured binding), not .name"
+TMP19C=$(mktemp -d)
+cat > "$TMP19C/monitors.json" <<'JSON'
+[{"slug": "real-unrouted", "name": "Real", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19C/detectors.json" <<'JSON'
+[
+  {
+    "id": "1901",
+    "name": "renamed-in-the-ui",
+    "type": "monitor_check_in_failure",
+    "workflowIds": [],
+    "dataSources": [{"queryObj": {"slug": "real-unrouted"}}]
+  }
+]
+JSON
+t19_run "$TMP19C"
+report=$(ls "$TMP19C"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19c=$(t19_warning "$TMP19C")
+if grep -qE '^- `real-unrouted` — ' "$report" \
+   && ! grep -q 'renamed-in-the-ui' "$report" \
+   && grep -q 'real-unrouted' <<<"$w19c" \
+   && ! grep -q 'renamed-in-the-ui' <<<"$w19c"; then
+  pass "structured slug listed in report and warning; UI display name used in neither"
+else
+  fail "unrouted listing did not prefer the structured slug: [${w19c}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19C"
+
+# ------------------------------------------------------------------------
+# T19d — a MUTED environment. Sentry mutes a monitor per environment, and a
+# muted monitor sends nothing even when it is routed, so routing alone is not
+# the whole answer. Every detector here IS routed, so the warning can only
+# have come from the muted count — that isolates the muted arm from Class A.
+# m2 carries an environment with `isMuted: false`, which must not count.
+# ------------------------------------------------------------------------
+echo "T19d: a muted monitor environment is counted, listed and warned"
+TMP19D=$(mktemp -d)
+cat > "$TMP19D/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"},
+   "environments": [{"name": "production", "isMuted": true, "lastCheckIn": "2026-09-24T00:00:00Z"}]},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "config": {"schedule": "0 0 * * *"},
+   "environments": [{"name": "production", "isMuted": false, "lastCheckIn": "2026-09-24T00:00:00Z"}]}
+]
+JSON
+cat > "$TMP19D/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19D"
+report=$(ls "$TMP19D"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19d=$(t19_warning "$TMP19D")
+if grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: production' "$report" \
+   && ! grep -qE '^- `m2` — ' "$report" \
+   && grep -qE 'muted[^;]*: m1([ .;]|$)' <<<"$w19d" \
+   && ! grep -q 'bound to no workflow' <<<"$w19d" \
+   && ! grep -qw 'm2' <<<"$w19d" \
+   && ! grep -q '::warning::' "$report"; then
+  pass "muted m1 counted and listed in the report; stderr warning names m1 only"
+else
+  fail "muted environment not surfaced: [${w19d}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19D"
+
+# ------------------------------------------------------------------------
+# T19e — `isMuted` ABSENT from the whole payload is "unknown", never 0.
+# A zero here would be indistinguishable from "checked, none muted" (T15b),
+# which is the fail-open this row exists to kill. Both detectors are routed,
+# so the warning can only come from the unknown muted state.
+# ------------------------------------------------------------------------
+echo "T19e: no monitor carries isMuted — muted count is unknown, not 0"
+TMP19E=$(mktemp -d)
+cat > "$TMP19E/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "status": "active", "config": {"schedule": "0 * * * *"},
+   "environments": [{"name": "production", "lastCheckIn": "2026-09-24T00:00:00Z"}]},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "status": "active", "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19E/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19E"
+report=$(ls "$TMP19E"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19e=$(t19_warning "$TMP19E")
+if grep -qF 'Muted monitors: **unknown** (no monitor in the payload carries isMuted)' "$report" \
+   && ! grep -qE 'Muted monitors: \*\*0\*\*' "$report" \
+   && grep -qF 'no monitor in the payload carries isMuted' <<<"$w19e" \
+   && ! grep -q 'bound to no workflow' <<<"$w19e"; then
+  pass "absent isMuted reported as unknown in the report and the warning"
+else
+  fail "absent isMuted read as a healthy zero: [${w19e}]"
+  sed -n '/^_Silent monitors/,/^$/p' "$report" 2>/dev/null >&2 || true
+fi
+rm -rf "$TMP19E"
+
+# ------------------------------------------------------------------------
+# T19f — a STRING element in environments[] must not blank the muted list.
+# Unguarded, `.isMuted` on a string is a jq error; read through a process
+# substitution that error is invisible and the list comes back empty, i.e.
+# "Muted monitors: 0" while m1 is muted in production.
+# ------------------------------------------------------------------------
+echo "T19f: a non-object environments[] element does not hide a muted monitor"
+TMP19F=$(mktemp -d)
+cat > "$TMP19F/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"},
+   "environments": ["garbage", {"name": "production", "isMuted": true}]},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19F/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+set +e; t19_run "$TMP19F"; rc19f=$?; set -e
+report=$(ls "$TMP19F"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if [[ "$rc19f" -eq 0 ]] \
+   && grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: production$' "$report" \
+   && grep -qE 'muted[^;]*: m1([ .;]|$)' <<<"$(t19_warning "$TMP19F")"; then
+  pass "string environments[] element skipped; m1 still counted as muted"
+else
+  fail "string environments[] element hid the muted monitor (rc=$rc19f)"
+  cat "$TMP19F/stderr.txt" >&2 || true
+fi
+rm -rf "$TMP19F"
+
+# ------------------------------------------------------------------------
+# T19g — a DISABLED monitor sends nothing while routed, like a muted one.
+# ------------------------------------------------------------------------
+echo "T19g: a disabled monitor is counted, labelled disabled, and warned"
+TMP19G=$(mktemp -d)
+cat > "$TMP19G/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "status": "disabled", "isMuted": false, "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "status": "active", "isMuted": false, "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19G/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19G"
+report=$(ls "$TMP19G"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19g=$(t19_warning "$TMP19G")
+if grep -qE 'Disabled monitors: \*\*1\*\*' "$report" \
+   && grep -qE 'Muted monitors: \*\*0\*\*' "$report" \
+   && grep -qE '^- `m1` — disabled$' "$report" \
+   && ! grep -qE '^- `m2` — ' "$report" \
+   && grep -qE 'disabled[^;]*: m1([ .;]|$)' <<<"$w19g" \
+   && ! grep -qw 'm2' <<<"$w19g"; then
+  pass "disabled m1 counted and labelled; warning names m1 only"
+else
+  fail "disabled monitor not surfaced: [${w19g}]"
+  sed -n '/^_Silent monitors/,/^$/p' "$report" 2>/dev/null >&2 || true
+fi
+rm -rf "$TMP19G"
+
+# ------------------------------------------------------------------------
+# T19h — an unrouted detector with NO resolvable binding (no structured slug,
+# no name) is still counted AND listed, and still fires the warning. Gating on
+# the resolved-slug list would count it (1 of 2) yet stay silent.
+# ------------------------------------------------------------------------
+echo "T19h: an unresolvable unrouted detector is listed and warned, not dropped"
+TMP19H=$(mktemp -d)
+cat > "$TMP19H/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19H/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "77", "name": null, "type": "monitor_check_in_failure", "workflowIds": []}
+]
+JSON
+t19_run "$TMP19H"
+report=$(ls "$TMP19H"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19h=$(t19_warning "$TMP19H")
+if grep -qE '\*\*1\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -qF -- '- `<unresolved detector id=77>` — ' "$report" \
+   && grep -qF '1 cron detector(s) bound to no workflow' <<<"$w19h" \
+   && grep -qF '<unresolved detector id=77>' <<<"$w19h"; then
+  pass "unresolvable detector counted, listed and warned as <unresolved detector id=77>"
+else
+  fail "unresolvable unrouted detector dropped from the list/warning: [${w19h}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19H"
+
+# ------------------------------------------------------------------------
+# T19i — workflow-command injection. `.name` is free text; a CR in it must
+# not reach the job log as a line of its own. Only slug-shaped values are
+# listed; anything else is a placeholder naming the detector id.
+# ------------------------------------------------------------------------
+echo "T19i: a hostile detector .name cannot inject a workflow command"
+TMP19I=$(mktemp -d)
+cat > "$TMP19I/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19I/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "88", "name": "bad\r::error title=x::y", "type": "monitor_check_in_failure", "workflowIds": []}
+]
+JSON
+t19_run "$TMP19I"
+report=$(ls "$TMP19I"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19i=$(t19_warning "$TMP19I")
+if [[ -n "$w19i" ]] \
+   && grep -qF '<non-slug detector id=88>' <<<"$w19i" \
+   && ! grep -q $'\r' <<<"$w19i" \
+   && ! grep -qF '::error' <<<"$w19i" \
+   && ! grep -q $'\r' "$TMP19I/stderr.txt" \
+   && ! grep -qE '^::error' "$TMP19I/stderr.txt" \
+   && grep -qF -- '- `<non-slug detector id=88>` — ' "$report"; then
+  pass "hostile name replaced by <non-slug detector id=88>; no CR, no ::error in the warning"
+else
+  fail "detector .name reached the job log unsanitised: [$(printf '%q' "$w19i")]"
+  cat -A "$TMP19I/stderr.txt" >&2 || true
+fi
+rm -rf "$TMP19I"
+
+# ------------------------------------------------------------------------
+# T19j — TWO unrouted + one routed: both named, count 2, the routed one not.
+# ------------------------------------------------------------------------
+echo "T19j: two unrouted detectors are both listed and the warning counts 2"
+TMP19J=$(mktemp -d)
+cat > "$TMP19J/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 1 * * *"}},
+  {"slug": "m3", "name": "M3", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 2 * * *"}}
+]
+JSON
+cat > "$TMP19J/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "3", "name": "m3", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19J"
+report=$(ls "$TMP19J"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19j=$(t19_warning "$TMP19J")
+if grep -qE '\*\*2\*\* of \*\*3\*\* cron detectors' "$report" \
+   && grep -qE '^- `m1` — ' "$report" && grep -qE '^- `m2` — ' "$report" \
+   && ! grep -qE '^- `m3` — ' "$report" \
+   && grep -qF '2 cron detector(s) bound to no workflow' <<<"$w19j" \
+   && grep -qw 'm1' <<<"$w19j" && grep -qw 'm2' <<<"$w19j" \
+   && ! grep -qw 'm3' <<<"$w19j"; then
+  pass "m1 and m2 listed and warned with count 2; routed m3 in neither"
+else
+  fail "two unrouted detectors not both surfaced: [${w19j}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19J"
+
+# ------------------------------------------------------------------------
+# T19k — muted in the SECOND environment only. A check of environments[0]
+# alone reads staging (not muted) and misses production.
+# ------------------------------------------------------------------------
+echo "T19k: a monitor muted in its second environment is counted, env named"
+TMP19K=$(mktemp -d)
+cat > "$TMP19K/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"},
+  "environments": [{"name": "staging", "isMuted": false}, {"name": "production", "isMuted": true}]}]
+JSON
+cat > "$TMP19K/detectors.json" <<'JSON'
+[{"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}]
+JSON
+t19_run "$TMP19K"
+report=$(ls "$TMP19K"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: production$' "$report"; then
+  pass "muted-in-second-environment counted; muted in: production (not staging)"
+else
+  fail "second-environment mute missed"
+  sed -n '/^_Silent monitors/,/^$/p' "$report" 2>/dev/null >&2 || true
+fi
+rm -rf "$TMP19K"
+
+# ------------------------------------------------------------------------
+# T19l — a MONITOR-level mute with no environments at all.
+# ------------------------------------------------------------------------
+echo "T19l: a monitor-level isMuted with no environments reads all environments"
+TMP19L=$(mktemp -d)
+cat > "$TMP19L/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": true, "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19L/detectors.json" <<'JSON'
+[{"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}]
+JSON
+t19_run "$TMP19L"
+report=$(ls "$TMP19L"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: all environments$' "$report" \
+   && grep -qE 'muted[^;]*: m1([ .;]|$)' <<<"$(t19_warning "$TMP19L")"; then
+  pass "monitor-level mute counted as muted in: all environments"
+else
+  fail "monitor-level mute missed"
+  sed -n '/^_Silent monitors/,/^$/p' "$report" 2>/dev/null >&2 || true
+fi
+rm -rf "$TMP19L"
+
+# ------------------------------------------------------------------------
+# T19m — one unrouted AND one muted: ONE warning line carrying both parts.
+# ------------------------------------------------------------------------
+echo "T19m: unrouted + muted produce a single warning line with both parts"
+TMP19M=$(mktemp -d)
+cat > "$TMP19M/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "isMuted": true, "config": {"schedule": "0 1 * * *"}}
+]
+JSON
+cat > "$TMP19M/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19M"
+n19m=$(grep -cE '^::warning::Sentry cron routing:' "$TMP19M/stderr.txt" || true)
+w19m=$(t19_warning "$TMP19M")
+if [[ "$n19m" -eq 1 ]] \
+   && grep -qE 'bound to no workflow[^;]*: m1([ .;]|$)' <<<"$w19m" \
+   && grep -qE '; [^;]*muted[^;]*: m2([ .;]|$)' <<<"$w19m"; then
+  pass "one routing warning line names unrouted m1 and muted m2"
+else
+  fail "unrouted + muted not joined into one line (lines=$n19m): [${w19m}]"
+fi
+rm -rf "$TMP19M"
+
+# ------------------------------------------------------------------------
+# T19n — the routing warning survives a Class D exit. The tf root declares
+# only `other`; state is known and empty; m1 is live, undeclared, not in
+# state (Class D -> exit 1) AND unrouted. The warning must still be emitted.
+# ------------------------------------------------------------------------
+echo "T19n: the routing warning is emitted even when the Class D gate exits 1"
+TMP19N=$(mktemp -d)
+mkdir -p "$TMP19N/tf"
+cat > "$TMP19N/tf/monitors.tf" <<'TF'
+resource "sentry_cron_monitor" "other" {
+  name = "other"
+}
+TF
+: > "$TMP19N/state-slugs.txt"
+cat > "$TMP19N/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19N/detectors.json" <<'JSON'
+[{"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []}]
+JSON
+set +e
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP19N/monitors.json" \
+  SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" \
+  SENTRY_FIXTURE_DETECTORS="$TMP19N/detectors.json" \
+  SENTRY_TF_DIR="$TMP19N/tf" SENTRY_STATE_SLUGS_FILE="$TMP19N/state-slugs.txt" \
+  AUDIT_OUT_DIR="$TMP19N" bash "$SCRIPT" >/dev/null 2>"$TMP19N/stderr.txt"
+rc19n=$?
+set -e
+w19n=$(t19_warning "$TMP19N")
+if [[ "$rc19n" -eq 1 ]] \
+   && grep -q 'unreclaimable (Class D)' "$TMP19N/stderr.txt" \
+   && grep -qE 'bound to no workflow[^;]*: m1([ .;]|$)' <<<"$w19n"; then
+  pass "Class D exit 1 and the routing warning naming m1 both present"
+else
+  fail "Class D exit hid the routing warning (rc=$rc19n): [${w19n}]"
+  cat "$TMP19N/stderr.txt" >&2 || true
+fi
+rm -rf "$TMP19N"
+rm -f "$T19_WORKFLOWS"
 
 # ------------------------------------------------------------------------
 # T20d — a Link with rel="next" and NO `results` field. This is the arm the
@@ -1899,8 +2354,8 @@ if [[ "$PASS" -ne $((_h_p + 1)) || "$FAIL" -ne $((_h_f + 1)) ]]; then
   exit 1
 fi
 PASS=$_h_p; FAIL=$_h_f
-if [[ $((PASS + FAIL)) -lt 47 ]]; then
-  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 47.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 65 ]]; then
+  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 65.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 
