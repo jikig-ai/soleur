@@ -34,12 +34,7 @@ import {
 const codex = readToolsTable(CODEX_INSTRUCTIONS);
 const devin = readToolsTable(DEVIN_INSTRUCTIONS);
 
-/**
- * The agent-read corpus: the census population — skills, commands, the Codex/Devin
- * shims, skill references and, since #8317's agent half, the agent bodies. Agents were
- * concatenated here separately until they joined the population; doing both would read
- * every agent twice.
- */
+/** The agent-read corpus is the census population (skills, commands, shims, references, agent bodies). */
 function corpus(): { path: string; text: string }[] {
   return readPopulation().map((d) => ({ path: d.path, text: d.text }));
 }

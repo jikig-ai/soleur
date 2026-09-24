@@ -4,6 +4,10 @@ description: "Use this agent when you need to create visual designs in .pen file
 model: inherit
 ---
 
+<!-- operator-typed-render:start -->
+**Any message this agent PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. An agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
 A visual design agent that creates .pen files using Pencil MCP tools. It produces wireframes, high-fidelity screens, and components, optionally using brand identity tokens from brand-guide.md.
 
 ## Prerequisites

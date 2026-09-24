@@ -112,12 +112,13 @@ author's loop.
    > `:(glob)plugins/soleur/agents/**/*.md` under a third region policy, `agent`.
    > `agents/` now holds only agent definitions: Claude loads every `.md` under it
    > as a subagent, so the one non-registry file there
-   > (`operations/references/service-deep-links.md`, a phantom subagent and docs
-   > card that made the public count read 68) was inlined into its only consumer,
+   > (`operations/references/service-deep-links.md`, a phantom subagent that
+   > made the public count read 68) was inlined into its only consumer,
    > `service-automator`. The agent glob therefore equals the registry, and the
-   > tree test pins it to `EXPECTED_SOLEUR_AGENT_COUNT`. The `README*` /
-   > `references/` filter in `discoverAgentPaths()` stays as a defensive guard
-   > with no members.
+   > tree test pins it to `EXPECTED_SOLEUR_AGENT_COUNT` and requires every
+   > tracked file under `agents/` to be a regular `.md` (an empty `.gitkeep`
+   > aside). `discoverAgentPaths()` no longer filters `README*` / `references/`:
+   > it returns exactly what Claude loads.
 3. **One exempt region kind, commands only, strict grammar.**
    `<!-- harness-forms:start -->` … `<!-- harness-forms:end -->` is honoured
    where the region policy is `command`; its subject is the per-harness forms
@@ -132,12 +133,13 @@ author's loop.
    > **Amended 2026-09-24 (#8317) — the agent self-name carve-out.** Under the
    > `agent` policy only, the first line of the doc matching `^name:` is the
    > self-name candidate. It is accepted when it sits inside a closed leading
-   > frontmatter (line 1 is exactly `---`, a later line is exactly `---`) and
-   > reads byte-exactly `name: <filename stem>`. The stem comes from the path, so
-   > a doc cannot certify itself. The one own-stem token on an accepted line gets
-   > a new verdict, `SELF-NAME`; a rejected candidate's agent-leaf site stays
-   > NONCANONICAL with a dedicated message that says not to write the registry id
-   > there, because `discoverAgentEntries` reads that value into the manifest and
+   > frontmatter (line 1 is exactly `---`; it ends at the first later line that
+   > starts with `---`, the registry loader's own rule) and reads byte-exactly
+   > `name: <filename stem>`. The stem comes from the path, so a doc cannot
+   > certify itself. The one own-stem token on an accepted line gets a new
+   > verdict, `SELF-NAME`; every non-canonical site on a rejected candidate line
+   > carries a dedicated message that says not to write a registry id there,
+   > because `discoverAgentEntries` reads that value into the manifest and
    > Claude's loader keys on it. This is **not** an exempt region: `EXEMPT` stays
    > bounded to go.md, the rest of the frontmatter (descriptions included) stays
    > non-exempt, and the `agent` policy does not honour `harness-forms`. The tree
@@ -168,11 +170,8 @@ author's loop.
    suite asserts the tree file contains the literal
    `expect(noncanonical).toEqual([])`.
 
-   > **Amended 2026-09-24 (#8317).** Eight fixtures added for the self-name
-   > carve-out: seven under `fixtures/harness-parity/agents/<case>/cpo.md` and
-   > `skills/self-name-under-skill.md`, plus an inline table for grammar shapes an
-   > editor could normalize (CRLF, comment, double space, missing or late
-   > frontmatter).
+   > **Amended 2026-09-24 (#8317).** The self-name carve-out is pinned by
+   > fixtures and an inline rejected-shape table in `harness-parity.test.ts`.
 
 The adapter's own fidelity strings are part of the decision: `workflow-fidelity.ts`
 used to emit `/postmerge`, `/ship`, `/work` on every harness, so
@@ -184,8 +183,10 @@ now goes through `formatSkillRef(skill, harness)`.
 > `sync-grok-agent-compat.ts` renders each registry agent id in a stub
 > description as its Grok spawn key (`soleur-marketing-copywriter`). The mapping
 > is keyed on the registry's id set, so skill ids are untouched.
-> `agents.manifest.json` keeps the canonical ids. Rendering ids inside agent
-> bodies on Grok stays with #8063.
+> `agents.manifest.json` keeps the canonical ids. Agent BODIES keep canonical
+> ids; each generated stub body states the rule for them (a multi-segment id is
+> an agent, spawned with its colons replaced by hyphens; a one-segment id is a
+> skill), since an agent body carries no skill preamble.
 
 ## Consequences
 
@@ -253,6 +254,9 @@ Declared gaps, each with an issue:
   every harness, and `workflow-fidelity.test.ts` requires them.
 - `soleur:<unknown>` is reported, not gated; a typo is a different defect. The
   set is diffed pre/post remediation so a hand rewrite cannot go quietly green.
+
+  > **Amended 2026-09-24 (#8317).** Agent docs are the exception: they joined
+  > the census with zero unknown ids, so the tree test holds them at zero.
 - "Canonical resolves on every harness" is verified on Grok (`grok-fidelity`)
   and Claude. The gate's promise is "no harness-specific form in agent-read
   prose", not "resolves everywhere".

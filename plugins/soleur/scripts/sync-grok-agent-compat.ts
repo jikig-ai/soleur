@@ -20,6 +20,7 @@ import {
   agentIdToCompatFilename,
   agentIdToGrokSubagentType,
   buildCompatStubBody,
+  renderAgentIdsForGrok,
   PLUGIN_ROOT,
 } from "../lib/agent-registry";
 
@@ -48,24 +49,20 @@ function grokStubModelLine(model: string): string | null {
   return `model: ${model}`;
 }
 
-/** YAML-safe quoted scalar for frontmatter fields that may contain `:`, `§`, etc. */
-function yamlQuote(value: string): string {
-  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `"${escaped}"`;
-}
-
 /**
- * Render registry agent ids in a stub description as Grok spawn keys (ADR-226 amendment
- * 2026-09-24, #8317). Agent descriptions name siblings by canonical registry id, and a stub is
- * adapter output, so the harness form is the adapter's to render: Grok spawns by filename stem.
- * Keyed on the registry's own id set, never on the text's shape, so a skill id (`soleur:plan`,
- * which Grok resolves through the skill preamble) is never rendered as a nonexistent agent stem.
- * `agents.manifest.json` keeps the canonical ids.
+ * YAML-safe double-quoted scalar for frontmatter fields that may contain `:`, `§`, etc. Line
+ * breaks and control characters are escaped too: a raw newline could close the stub's
+ * frontmatter early under a `^---` regex parser.
  */
-function renderAgentIdsForGrok(text: string, agentIds: ReadonlySet<string>): string {
-  return text.replace(/soleur:[a-z0-9-]+(?::[a-z0-9-]+)+/g, (id) =>
-    agentIds.has(id) ? agentIdToGrokSubagentType(id) : id,
-  );
+function yamlQuote(value: string): string {
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return `"${escaped}"`;
 }
 
 function compatStubMarkdown(

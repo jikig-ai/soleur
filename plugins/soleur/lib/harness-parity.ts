@@ -520,20 +520,24 @@ const BRACE_TAIL = " — or, if this is not a component reference, brace/rename 
  * frontmatter `name:` is its bare leaf by necessity: `discoverAgentEntries` reads it into the
  * committed manifest and Claude's loader keys on it, so it cannot become the registry id.
  *
- * The candidate is the FIRST line of the doc matching `^name:` — first, not first-exact, because
- * a YAML reader keeps the first key and a later exact line must not certify a doc whose real
- * `name:` is quoted. It is accepted only when it sits inside a closed leading frontmatter (line 1
- * is exactly `---`, a later line is exactly `---`) and reads byte-exactly `name: <stem>`, where
- * the stem comes from the PATH, so a doc cannot certify itself. Accepted: the one own-stem token
- * on it is SELF-NAME. Rejected: its agent-leaf sites stay NONCANONICAL but carry a message that
- * says how to fix the line, because the default `write <registry id>` hint would break the
- * manifest. Every other token, in frontmatter or body, keeps its ordinary verdict.
+ * The candidate is the FIRST line of the doc matching `^name:` — first, not first-exact, so a later
+ * exact line cannot certify a doc whose real `name:` is quoted (the registry's YAML reader rejects
+ * duplicate keys outright). It is accepted only when it sits inside a closed leading frontmatter
+ * (line 1 is exactly `---`; it ends at the first later line starting with `---`) and reads
+ * byte-exactly `name: <stem>`,
+ * where the stem comes from the PATH, so a doc cannot certify itself. Accepted: the one own-stem
+ * token on it is SELF-NAME. Rejected: every non-canonical site on it carries a message that says
+ * how to fix the line, because any `write <id>` hint there would rewrite the manifest's key. Every
+ * other token, in frontmatter or body, keeps its ordinary verdict.
  */
 function findSelfNameLine(lines: readonly string[], path: string): { line: number; accepted: boolean; stem: string } | undefined {
   const candidate = lines.findIndex((l) => l.startsWith("name:"));
   if (candidate === -1) return undefined;
   const stem = basename(path, ".md");
-  const close = lines[0] === "---" ? lines.indexOf("---", 1) : -1;
+  // The frontmatter ends where the registry's own loader ends it: at the first later line that
+  // STARTS with `---` (agent-registry.ts parseFrontmatter). A stricter close would certify a
+  // name: line every loader reads as body text.
+  const close = lines[0] === "---" ? lines.findIndex((l, i) => i > 0 && l.startsWith("---")) : -1;
   const inFrontmatter = close !== -1 && candidate > 0 && candidate < close;
   return { line: candidate + 1, accepted: inFrontmatter && lines[candidate] === `name: ${stem}`, stem };
 }
@@ -592,11 +596,10 @@ export function classifyDoc(text: string, index: Index, regionPolicy: RegionPoli
       const atb = before === "\n" || BOUNDARY.has(before);
       const site = atb ? raw : `${before}${raw}`;
       const tail = attribution === "unrecognised" || attribution === "bare-leaf" ? BRACE_TAIL : "";
-      const rejectedSelfName =
-        onSelfNameLine && !selfName.accepted && (shape === "bare-agent-leaf" || shape === "sigil-agent-leaf");
+      const rejectedSelfName = onSelfNameLine && !selfName.accepted;
       const message = rejectedSelfName
         ? `${path}:${lineNo}: ${site} — agent self-name must be exactly "name: ${selfName.stem}" ` +
-          `(unquoted, equal to the filename, inside the frontmatter that opens on line 1); do not write the registry id here`
+          `(unquoted, equal to the filename, inside the frontmatter: line 1 exactly ---, ending at the next line that starts with ---); do not write a registry id here`
         : `${path}:${lineNo}: ${site} — ${ATTRIBUTION_LABEL[attribution]}; write ${c.fix}${tail}`;
       sites.push({ path, line: lineNo, col: s + 1, raw, token, before, verdict, shape, attribution, fix: c.fix, message });
     }

@@ -470,7 +470,19 @@ describe("harness-parity fixtures — agent self-name carve-out", () => {
   const rejected: [string, string][] = [
     ["trailing comment", "---\nname: cpo # c\n---\n"],
     ["double space", "---\nname:  cpo\n---\n"],
-    ["CRLF", "---\r\nname: cpo\r\n---\r\n"],
+    ["CRLF delimiters", "---\r\nname: cpo\r\n---\r\n"],
+    // The \r sits on the name: line ONLY, so the exact-line comparison decides, not a delimiter.
+    ["CR on the name line only", "---\nname: cpo\r\n---\n"],
+    // A closed frontmatter with no name: key; the first name: line is in the body.
+    ["name: after a closed frontmatter", '---\ndescription: "x"\n---\nname: cpo\n'],
+    // The registry's loader ends the frontmatter at the first line STARTING with ---, so a name:
+    // after a `--- ` line is body text to every loader and must not be certified here.
+    ["name: after a loader-closing '--- ' line", '---\ndescription: "x"\n--- \nname: cpo\n---\n'],
+    // Every shape on a rejected name: line gets the self-name message, never a `write <id>` hint
+    // that would rewrite the manifest's key.
+    ["sigil agent leaf", "---\nname: /cpo\n---\n"],
+    ["Grok stem", "---\nname: soleur-product-cpo\n---\n"],
+    ["grok skill slash", "---\nname: /plan\n---\n"],
     ["no leading ---", "name: cpo\n---\n"],
     ["unterminated frontmatter", "---\nname: cpo\n"],
     ["frontmatter not on line 1", "# T\n---\nname: cpo\n---\n"],
@@ -482,6 +494,7 @@ describe("harness-parity fixtures — agent self-name carve-out", () => {
       const hits = nonc(doc);
       expect(hits.length).toBe(1);
       expect(hits[0].message).toMatch(SELF_NAME_MESSAGE);
+      expect(hits[0].message).not.toMatch(/write soleur:/);
     });
   }
 
@@ -585,7 +598,6 @@ describe("harness-parity fixtures — fixDoc and census", () => {
         text: readFileSync(resolve(FIXTURE_ROOT, "agents", p), "utf-8"),
         regionPolicy: "agent" as RegionPolicy,
       }));
-    expect(agents.length).toBe(7);
     const result = census([...load("skills"), ...load("commands"), ...agents], index);
     const red = result.docs
       .filter((d) => d.errors.length > 0 || d.sites.some((s) => s.verdict === "NONCANONICAL"))

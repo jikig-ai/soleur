@@ -1,10 +1,10 @@
 /**
- * The docs-site agents page renders exactly the registry (#8317).
+ * The docs-site agents page renders exactly the registry, each agent under its own domain and
+ * subcategory, with per-domain counts that match (#8317).
  *
- * `docs/_data/agents.js` groups agents by subdirectory through a hand-kept `subOrder` list, and an
- * agent in a subdirectory missing from that list is dropped silently — from the page AND from the
- * domain count. `engineering/discovery/` was missing, so the page showed 65 agents while the
- * registry, the manifest and both READMEs said 67.
+ * `docs/_data/agents.js` groups agents by directory. It used to iterate a hand-kept subcategory
+ * list, so `engineering/discovery/` was silently dropped from the page and the domain count (65
+ * shown, 67 in the registry).
  */
 
 import { describe, test, expect } from "bun:test";
@@ -12,18 +12,40 @@ import { EXPECTED_SOLEUR_AGENT_COUNT, discoverAgentEntries } from "../lib/agent-
 import agentsData from "../docs/_data/agents.js";
 
 type Card = { name: string };
-type Domain = { count: number; agents: Card[]; subcategories: { agents: Card[] }[] };
+type Domain = { key: string; count: number; agents: Card[]; subcategories: { key: string; agents: Card[] }[] };
 
 describe("docs agents page", () => {
   const { domains } = agentsData() as { domains: Domain[] };
-  const rendered = domains.flatMap((d) => [...d.agents, ...d.subcategories.flatMap((s) => s.agents)]).map((a) => a.name);
-
-  test("renders every registry agent exactly once", () => {
-    expect(rendered.slice().sort()).toEqual(discoverAgentEntries().map((e) => e.name).sort());
-    expect(rendered.length).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
+  const placed = domains.flatMap((d) => [
+    ...d.agents.map((a) => ({ name: a.name, domain: d.key, sub: null as string | null })),
+    ...d.subcategories.flatMap((s) => s.agents.map((a) => ({ name: a.name, domain: d.key, sub: s.key as string | null }))),
+  ]);
+  // Expected placement comes from the registry path, not from the page's own walk.
+  const expected = discoverAgentEntries().map((e) => {
+    const parts = e.path.replace(/^agents\//, "").split("/");
+    return { name: e.name, domain: parts[0], sub: parts.length > 2 ? parts[1] : null };
   });
 
-  test("the domain counts sum to the registry count", () => {
-    expect(domains.reduce((n, d) => n + d.count, 0)).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
+  test("renders every registry agent exactly once, under its own domain and subcategory", () => {
+    const key = (p: { name: string; domain: string; sub: string | null }) => `${p.domain}/${p.sub ?? "-"}/${p.name}`;
+    expect(placed.map(key).sort()).toEqual(expected.map(key).sort());
+    expect(placed.length).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
+  });
+
+  // Cards are human-read (ADR-226 §4): a summary must be real prose, never an agent-read marker
+  // block or a raw registry id.
+  test("every card summary is non-empty prose with no marker block or registry id", () => {
+    type Full = { name: string; description: string };
+    const cards = domains.flatMap((d) => [...d.agents, ...d.subcategories.flatMap((s) => s.agents)]) as Full[];
+    const bad = cards
+      .filter((c) => !c.description || c.description.startsWith("<!--") || /soleur:|operator-typed/i.test(c.description))
+      .map((c) => `${c.name}: ${JSON.stringify(c.description)}`);
+    expect(bad).toEqual([]);
+  });
+
+  test("each domain's count equals the registry agents under that domain", () => {
+    for (const d of domains) {
+      expect(`${d.key}: ${d.count}`).toBe(`${d.key}: ${expected.filter((e) => e.domain === d.key).length}`);
+    }
   });
 });
