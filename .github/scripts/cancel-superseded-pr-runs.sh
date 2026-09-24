@@ -38,9 +38,13 @@
 # runner (measured on the first live reap: 2 of 3 cancelled runs still queued after 60 s,
 # each 0 in_progress / 1 queued / 2 completed). After CSPR_FORCE_DELAY seconds, each target
 # of THIS run's graceful cancels is re-read, and force-cancelled ONLY when the run is still
-# `queued` AND none of its jobs is `in_progress` (nothing is executing, so no mutex is held
-# and no always() step is mid-flight). A run with any in_progress job, or whose jobs cannot
-# be read, is never force-cancelled.
+# `queued` AND none of its jobs is `in_progress` AT READ TIME (nothing executing, so no mutex
+# is held and no always() step is mid-flight). A run with any in_progress job, or whose
+# status or jobs cannot be read, is never force-cancelled. Residuals: a runner can pick up
+# the queued job between the jobs read and the POST (force then stops it). That is safe
+# today because every job-level always() job in a ledgered workflow is a read-only
+# `*-required` aggregator; a queued always() TEARDOWN job would lose its teardown. And a
+# newer push cancels this reaper (per-PR concurrency) mid-delay, which drops this pass.
 # A pull_request_target run (secrets, outside writes) is re-read immediately before its
 # POST and cancelled only if it has not started.
 #
@@ -308,7 +312,10 @@ do_run() {
     sleep "$force_delay"
     for fid in "${cancelled_ids[@]}"; do
       st=""
-      if gh api "repos/$REPO/actions/runs/$fid" --jq .status > "$out" 2> "$errf" < /dev/null; then st="$(<"$out")"; fi
+      if ! gh api "repos/$REPO/actions/runs/$fid" --jq .status > "$out" 2> "$errf" < /dev/null; then
+        reasons[force-skipped-unreadable]=$(( ${reasons[force-skipped-unreadable]:-0} + 1 )); continue
+      fi
+      st="$(<"$out")"
       [[ "$st" == "queued" ]] || continue
       if ! gh api --paginate "repos/$REPO/actions/runs/$fid/jobs?per_page=100" --jq '.jobs[].status' > "$out" 2> "$errf" < /dev/null; then
         reasons[force-skipped-unreadable]=$(( ${reasons[force-skipped-unreadable]:-0} + 1 )); continue

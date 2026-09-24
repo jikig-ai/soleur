@@ -347,7 +347,11 @@ if [[ "$#" -eq 3 && "${2:-}" == "--jq" ]]; then
     repos/acme/widgets/actions/runs/[0-9]*"|.status")
       id="${1##*/}"
       if [[ -f "$M/status_fail" ]]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
-      if grep -qxF -- "api -i -X POST repos/acme/widgets/actions/runs/$id/cancel" "$M/log"; then
+      # The post-cancel status is served only once a SLEEP (the force delay) follows this
+      # run's graceful cancel in the log, so a pass that re-reads before its delay sees the
+      # pre-cancel `queued` default and trips the O26 rows.
+      if awk -v c="api -i -X POST repos/acme/widgets/actions/runs/$id/cancel" '$0 == c { seen = 1 } seen && /^SLEEP / { found = 1 } END { exit !found }' "$M/log"; then
+        if [[ -f "$M/status_after_fail/$id" ]]; then echo "gh: Server Error (HTTP 502)" >&2; exit 1; fi
         if [[ -f "$M/status_after/$id" ]]; then cat "$M/status_after/$id"; else echo completed; fi
       elif [[ -f "$M/status/$id" ]]; then cat "$M/status/$id"; else echo queued; fi; exit 0 ;;
     "repos/acme/widgets/pulls/12|.head.sha")
@@ -375,7 +379,7 @@ CASE=0
 new_case() {
   CASE=$((CASE + 1))
   MOCK="$TMP/case$CASE"
-  mkdir -p "$MOCK/runs" "$MOCK/cancel" "$MOCK/status" "$MOCK/status_after" "$MOCK/jobs" "$MOCK/force"
+  mkdir -p "$MOCK/runs" "$MOCK/cancel" "$MOCK/status" "$MOCK/status_after" "$MOCK/status_after_fail" "$MOCK/jobs" "$MOCK/force"
   : > "$MOCK/log"
   echo "2026-09-24T09:00:00Z" > "$MOCK/pr_created"
   echo "$SELF_AT" > "$MOCK/self_created"
@@ -680,6 +684,11 @@ echo queued > "$MOCK/status_after/311"; printf 'queued\n' > "$MOCK/jobs/311"; : 
 orch
 ! grep -q 'force-cancel' "$MOCK/log" && grep -q 'force-skipped-unreadable:1' <<< "$OUT" && pass "O26 a failed jobs read never forces" || fail "O26 a failed jobs read never forces" "$OUT"
 new_case
+runs_on "$ENC_HEAD" "$(r '{id:315}')"
+: > "$MOCK/status_after_fail/315"; printf 'queued\n' > "$MOCK/jobs/315"
+orch
+! grep -q 'force-cancel\|runs/315/jobs' "$MOCK/log" && [[ "$RC" == 0 ]] && grep -q 'force-skipped-unreadable:1' <<< "$OUT" && pass "O26 a failed post-delay status read never forces, and is counted" || fail "O26 a failed post-delay status read never forces, and is counted" "rc=$RC $OUT"
+new_case
 runs_on "$ENC_HEAD" "$(r '{id:321}')" "$(r '{id:322}')"
 echo "409|gone" > "$MOCK/cancel/322"; echo queued > "$MOCK/status_after/322"; printf 'queued\n' > "$MOCK/jobs/322"
 orch
@@ -701,7 +710,7 @@ orch CSPR_FORCE_DELAY=
 # Every case above ran against a stub that refuses unknown requests: none may have been refused.
 if grep -l '^UNEXPECTED' "$TMP"/case*/log >/dev/null 2>&1; then fail "O* no case made an unexpected request" "$(grep -h '^UNEXPECTED' "$TMP"/case*/log)"
 else pass "O* no case made an unexpected request"; fi
-[[ "$CASE" -ge 38 ]] && pass "O* case count ($CASE)" || fail "O* case count" "$CASE"
+[[ "$CASE" -ge 39 ]] && pass "O* case count ($CASE)" || fail "O* case count" "$CASE"
 
 # ---------------------------------------------------------------------------
 # Workflow wiring — the whole shape, not the presence of lines
@@ -790,7 +799,7 @@ TOTAL=$((PASS + FAIL))
 echo ""
 echo "$PASS passed, $FAIL failed ($TOTAL assertions)"
 # Anti-vacuity floor (= the green count, 2026-09-24): raise when adding rows, never lower it silently.
-MIN_ASSERTIONS=177
+MIN_ASSERTIONS=178
 if (( TOTAL < MIN_ASSERTIONS )); then
   printf 'FAIL: only %s assertions ran, expected >= %s (a block was deleted or short-circuited)\n' "$TOTAL" "$MIN_ASSERTIONS"
   exit 1
