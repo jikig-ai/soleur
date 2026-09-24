@@ -622,7 +622,8 @@ fixture shape: G9 ↔ G2, G9b ↔ G1, G14/G15/G16/G18 ↔ G2.
 - **G11** Birth job `failure` at the plan step, apply `skipped` → `verdict=no_apply`, notice only.
 - **G12** Replace job `failure`, apply `failure` → `::warning::.*verdict=pin_maybe_published`,
   `apply=failure`, `pin_published=false`; no `was published`. (G4's and G8's assertions move here;
-  G4 and G8 are deleted.)
+  G4 and G8 are deleted.) **Amended in review (2026-09-24):** `pin_published=true` — a pin that may
+  have been published takes the same ops email (four review seats); the unsent-email case fails the run.
 - **G14** Replace job `success`, no step named exactly the apply constant → exit 1,
   `verdict=unidentified`.
 - **G15** Replace job `success`, two steps with the apply name → exit 1, `verdict=unidentified`.
@@ -636,6 +637,13 @@ fixture shape: G9 ↔ G2, G9b ↔ G1, G14/G15/G16/G18 ↔ G2.
 - **G21** Replace job `failure`, `steps: []` (an `environment` refusal) → quiet
   `verdict=not_run`, no `::warning::`.
 - **G5 / G6 / G7** unchanged (gh failure, non-numeric id, non-`{jobs:[…]}` document).
+- **Review additions (2026-09-24):** G10b (birth published, birth recovery text), G15b (red job,
+  two apply-named steps → `matched_2`), G23 (`SOURCE_RUN_ATTEMPT` pins the read), G24 (gh's `""`
+  in-progress conclusion → `null`), G25 (two JSON documents → fail closed), G26 (both jobs red,
+  one published). Parity PT4 (no other job of any workflow targets a pin address) and PT5 (cited
+  verdict tokens and the runbook step prefix are the gate's). QA replay of the revised gate,
+  read-only: 35979044625 → `no_apply`, 35979304442 → `pin_published`, 34822248580 → `no_apply`,
+  34836141887 → `pin_published`.
 
 Parity (bun): **PT1** apply-step name ⇄ gate constant for both jobs; **PT2** one command-position
 `terraform apply` step per job; **PT3** the `pin_published` email step and both recovery sentences
