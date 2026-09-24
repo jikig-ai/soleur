@@ -2022,6 +2022,8 @@ Replace `BRANCH_NAME` with the actual branch name.
    gh pr ready PR_NUMBER
    ```
 
+   If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](./references/settle-then-admin-merge.md). **Why:** #8611.
+
 7. Present the PR URL to the user.
 
 **If no open PR exists:**

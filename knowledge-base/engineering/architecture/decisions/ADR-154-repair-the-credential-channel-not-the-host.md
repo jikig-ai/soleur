@@ -206,6 +206,14 @@ Also tracked: the absence of a `deploy-web-image.yml` that can redeploy an **exi
 absence is why an already-built, already-signed image sat unreachable for three days — the only way
 to deploy is to mint a new version.
 
+> **Re-examined 2026-09-24 (#8632) — the trigger fired (a host-level remediation proposal); the
+> exception STANDS.** #8632 delivers a rotated `prd_workspaces_luks` token to web-1 in place
+> (`terraform_data.luks_monitor_token_install`, ADR-119 2026-09-24 addendum). Probed
+> `/v1/datacenters` `.server_types.available` at 2026-09-24T08:39Z: `cx33` (id 115) is available in
+> **none** of the 6 datacenters, including web-1's `hel1-dc2` (it is `supported` in nbg1-dc3,
+> hel1-dc2 and fsn1-dc14). Web-1 still cannot be redeployed, so the in-place edit is taken under
+> this exception.
+
 ## Rejected alternatives
 
 **Convert the Access tokens from Terraform `output`s to `doppler_secret` resources.** This was the

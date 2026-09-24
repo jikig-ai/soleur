@@ -52,7 +52,7 @@
     "inngest": "3.54.2",
     "ipaddr.js": "^2.4.0",
     "lucide-react": "^1.8.0",
-    "next": "^16.3.1",
+    "next": "^16.3.6",
     "pdfjs-dist": "^5.4.296",
     "pino": "^10.3.1",
     "react": "^19.1.0",
@@ -63,7 +63,7 @@
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
     "resend": "^6.12.3",
-    "sharp": "^0.35.0",
+    "sharp": "^0.35.4",
     "stripe": "^17.7.0",
     "svix": "1.92.2",
     "swr": "^2.4.1",
@@ -106,13 +106,13 @@
     "tailwindcss": "^4.1.0",
     "tsx": "^4.22.4",
     "typescript": "^5.7.0",
-    "vitest": "^4.1.0",
+    "vitest": "^4.1.11",
     "yaml": "^2.9.0"
   },
   "overrides": {
     "vite": "^7.3.2",
     "ws": "^8.21.0",
-    "qs": "^6.15.2",
+    "qs": "^6.16.0",
     "@babel/core": "^7.29.6",
     "protobufjs": "^7.6.5"
   }

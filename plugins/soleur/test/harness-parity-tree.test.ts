@@ -44,6 +44,8 @@ const OWN_CODEX_SKILLS = ":(glob)plugins/soleur/codex/skills/*/SKILL.md";
 const OWN_DEVIN_SKILLS = ":(glob)plugins/soleur/devin/skills/*/SKILL.md";
 /** The references half of NG-P (#8317), added 2026-09-23. */
 const OWN_SKILL_REFERENCES = ":(glob)plugins/soleur/skills/*/references/**/*.md";
+/** The agent-body half of NG-P (#8317). */
+const OWN_AGENTS = ":(glob)plugins/soleur/agents/**/*.md";
 
 function lsFiles(pathspec: string): string[] {
   return execFileSync("git", ["ls-files", "--full-name", "--", pathspec], { cwd: REPO_ROOT, encoding: "utf-8" })
@@ -74,6 +76,9 @@ describe("harness-parity index invariant (N10)", () => {
     expect(index.grokStems.size).toBe(index.agentIds.length);
     const collisions = [...index.agentLeaves.keys()].filter((leaf) => index.skillNames.has(leaf));
     expect(collisions).toEqual([]);
+    // A leaf spelled like another agent's Grok spawn key would earn a self-name while naming a
+    // different agent on Grok (#8317 review).
+    expect([...index.agentLeaves.keys()].filter((leaf) => index.grokStems.has(leaf))).toEqual([]);
   });
 
   test("|CANONICAL_IDS| equals the independently counted distinct total", () => {
@@ -106,7 +111,8 @@ describe("harness-parity tree census (Guard 3)", () => {
       lsFiles(OWN_COMMAND_FILES).length +
       lsFiles(OWN_CODEX_SKILLS).length +
       lsFiles(OWN_DEVIN_SKILLS).length +
-      referenceDocs.length -
+      referenceDocs.length +
+      lsFiles(OWN_AGENTS).length -
       EXCLUDED_BY_PATH.size;
     expect(expected).toBeGreaterThan(100);
     // Per-source floors, not one union figure: a single total is dispatch-blind — it
@@ -115,6 +121,10 @@ describe("harness-parity tree census (Guard 3)", () => {
     expect(lsFiles(OWN_SKILL_DIRS).length).toBeGreaterThanOrEqual(MIN_TRACKED_SKILLS);
     expect(lsFiles(OWN_COMMAND_FILES).length).toBeGreaterThanOrEqual(MIN_TRACKED_COMMANDS);
     expect(referenceDocs.length).toBeGreaterThanOrEqual(MIN_TRACKED_REFERENCES);
+    expect(
+      lsFiles(OWN_AGENTS).length,
+      "every .md under plugins/soleur/agents/ loads as a Claude subagent; agent-owned reference text belongs in the agent body",
+    ).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
     expect(docs.length).toBe(expected);
     // Every excluded path must be one the globs would otherwise have admitted — an exclusion
     // naming a path outside the population is dead weight that reads as a deliberate carve-out.
@@ -124,6 +134,7 @@ describe("harness-parity tree census (Guard 3)", () => {
       ...lsFiles(OWN_CODEX_SKILLS),
       ...lsFiles(OWN_DEVIN_SKILLS),
       ...referenceDocs,
+      ...lsFiles(OWN_AGENTS),
     ]);
     expect([...EXCLUDED_BY_PATH.keys()].filter((p) => !admitted.has(p))).toEqual([]);
   });
@@ -183,6 +194,45 @@ describe("harness-parity tree census (Guard 3)", () => {
     expect(regionPolicyForPath("plugins/soleur/codex/skills/go/SKILL.md")).toBe("skill");
     expect(regionPolicyForPath("plugins/soleur/devin/skills/go/SKILL.md")).toBe("skill");
     expect(regionPolicyForPath("plugins/soleur/skills/plan/references/SKILL.md")).toBeUndefined();
+  });
+
+  // One assertion covers: a non-agent .md dropped under agents/ (0 self-names), an agent whose
+  // `name:` was rewritten, quoted or removed (0), a carve-out that matched more than its one line
+  // (> 1), and a policy regression (0 on every doc). The denominator is pinned so a filter typo
+  // that matches nothing cannot pass vacuously.
+  // The population glob sees `*.md` only, so every other tracked file shape under agents/ (a .txt
+  // an agent is told to read, a symlink, an uppercase .MD) would be agent-read and unexamined.
+  test("every tracked file under plugins/soleur/agents/ is a regular lowercase .md file", () => {
+    const entries = execFileSync("git", ["ls-files", "-s", "--", "plugins/soleur/agents"], { cwd: REPO_ROOT, encoding: "utf-8" })
+      .split("\n")
+      .filter((l) => l.length > 0)
+      // An EMPTY `.gitkeep` (the empty-blob hash) holds a domain directory open and carries no text.
+      .filter((l) => !/^100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 0\t.*\/\.gitkeep$/.test(l));
+    expect(entries.length).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
+    expect(entries.filter((l) => !/^100644 [0-9a-f]+ 0\t.*\.md$/.test(l))).toEqual([]);
+  });
+
+  test("each agent doc carries exactly one self-name", () => {
+    const agentDocs = result.docs.filter((d) => d.path.startsWith("plugins/soleur/agents/"));
+    expect(agentDocs.length).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
+    const offenders = agentDocs
+      .filter((d) => d.counts["SELF-NAME"] !== 1)
+      .map(
+        (d) =>
+          `${d.path}: ${d.counts["SELF-NAME"]} self-name — frontmatter must open on line 1 with --- ` +
+          `and its first name: line must read exactly "name: <filename stem>"`,
+      );
+    expect(offenders).toEqual([]);
+  });
+
+  // Unknown `soleur:` ids are reported, not gated, repo-wide (ADR-226). The agent population had
+  // none when it joined the census, so a typo such as `soleur:engineering:security-sentinel`
+  // (missing `review:`) is held to zero here rather than joining that backlog.
+  test("no agent doc names an unknown soleur: id", () => {
+    const unknown = result.unknownNs
+      .filter((s) => s.path.startsWith("plugins/soleur/agents/"))
+      .map((s) => `${s.path}:${s.line}: ${s.raw}`);
+    expect(unknown).toEqual([]);
   });
 
   test("no doc carries a malformed or unbalanced harness-forms marker", () => {

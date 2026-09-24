@@ -58,6 +58,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-agents-enforcement-tags-live"
   "scripts/lint-agents-rule-budget-live"
   "scripts/lint-anthropic-content-position-live"
+  "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-guard-contract-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
