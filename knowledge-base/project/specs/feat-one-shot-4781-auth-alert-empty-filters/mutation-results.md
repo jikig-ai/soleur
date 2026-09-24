@@ -24,3 +24,19 @@ H2: F1, F13 and G4-6 stayed green on the unmutated tree (M0) and in the full run
 No surviving mutants. Axes NOT exercised: bidi/zero-width characters in names (deferred), a refusal before the verdict (accepted trade, see plan Sharp Edges).
 
 H1b (plan-predicted "guard keeps matching without LC_ALL=C") is FALSE: bash translates the `line N:` prefix (measured at review under LANGUAGE=de/fr), so `LC_ALL=C` is load-bearing.
+
+## Round 2 — guards added during review (trimmed harness, 13 rows + both self-tests)
+
+| # | red rows |
+|---|---|
+| C0 (unmutated control) | none, rc=0 |
+| bidi ranges removed from `SAFE_JQ` | F41 |
+| FROZEN ID MISMATCH arm disabled | F42 |
+| LEFT printed via printf (not counted as a finding) | F37 |
+| backticks un-escaped | F10, F22, F36, F38, F41 (all but F10 through the central bash-error guard) |
+| `$k \| safe` dropped in DRIFT detail | F43 (after widening its check to indented lines; first run SURVIVED) |
+| display-altered flag disabled | F38, F41 |
+| live id dropped from UNMANAGED | F10, F38, F41 |
+| frozen-derivation parity check disabled | F40 |
+| central guard disabled + backticks un-escaped | F10 only (the guard is what reds the other four) |
+| `BASH_ERR_RE` typo | suite FATAL rc=2 (guard self-test) |
