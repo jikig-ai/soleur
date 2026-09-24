@@ -13,6 +13,9 @@
 #       (sentry_alert.zot_mirror_fallback_rate) watches — see FAIL_QUERIES below;
 #   (a') ZERO web fresh-boot pull fatals (`stage:"pull" level:fatal`) — a separate arm OUTSIDE
 #       FAIL_QUERIES, see WEB_FATAL below for why it is not a member;
+#   (a'') ZERO events under the three stage names #8036 1d RETIRED (app_ghcr_fallback,
+#       app_ghcr_served, inngest_ghcr_fallback) — a pre-1d-template boot inside the window still
+#       emits them; see RETIRED_QUERIES below;
 #   (b) a MIN_SAMPLE of zot-served pulls PER image (registry:"zot" image:"web" /
 #       image:"inngest") — so a vacuous "zero events because nothing deployed" cannot
 #       close the tracker. Proof the zot path was actually exercised.
@@ -46,8 +49,14 @@
 #   stage:"inngest_ghcr_fallback"  #8036 1d — RENAMED to inngest_pull_fatal and raised to fatal:
 #                                  the GHCR pull after a zot miss is gone, so the old name
 #                                  described a fallback that no longer exists. The new name
-#                                  deliberately shares no prefix with inngest_zot (Better Stack
-#                                  greps are substring matches).
+#                                  deliberately does not BEGIN WITH inngest_zot: an operator's
+#                                  `betterstack-query.sh --grep 'stage=inngest_zot'` is a
+#                                  substring LIKE match, so an `inngest_zot…` failure stage would
+#                                  read as a zot-served boot there. (Sentry `stage:` matching and
+#                                  inngest-zot-boot-7462.sh's `grep -cxF` count are exact.)
+#                                  These three are still COUNTED — by the RETIRED_QUERIES arm,
+#                                  outside FAIL_QUERIES — because a host born from a pre-1d
+#                                  template inside the window still emits them.
 #
 # The DENOMINATOR (#6462), queried separately below rather than as a FAIL entry — it is the
 # one signal here that is GOOD news, so it cannot live in a set whose sum means "bad":
@@ -96,6 +105,9 @@
 #                   purpose: web_terminal_boot_fatal (stage=pull), not zot_mirror_fallback_rate,
 #                   pages it, so adding it to the FAIL set without the rule breaks the alarm⇔soak
 #                   parity contract, and adding it to both double-pages.
+#     - RETIRED     a host booted from a PRE-1d template inside the window, emitting a retired
+#                   name (app_ghcr_fallback / app_ghcr_served / inngest_ghcr_fallback) that no
+#                   current-name query can see. OUTSIDE FAIL_QUERIES for the same parity reason.
 #   NOT COVERED 1/2 — Sentry-dark. ci-deploy.sh returns early when doppler, DOPPLER_TOKEN, or
 #     ZOT_REGISTRY_URL is absent, BEFORE every zot_gate_degraded_event call site: the fleet
 #     emits NOTHING to Sentry (journald only). Caught ONLY by the insufficient-sample arm
@@ -241,6 +253,10 @@ if [[ -z "${ZOT_SOAK_START:-}" ]]; then
     exit 1
   fi
 fi
+# An OVERRIDDEN START skipped the anchor above, so every verdict line says so: a verdict read off a
+# manual run must never look like the sweeper's anchored one. Empty on the default (sweeper) path.
+START_NOTE=""
+[[ -n "${ZOT_SOAK_START:-}" ]] && START_NOTE=" [START overridden (anchor check skipped)]"
 
 # sentry_count <query> → echoes the event count for the window, or "TRANSIENT" on error.
 sentry_count() {
@@ -313,8 +329,9 @@ done
 # FAIL_QUERIES member because the alarm⇔soak parity contract (the op-contract test) pins the
 # FAIL set to the values zot_mirror_fallback_rate watches, and stage=pull is paged by
 # web_terminal_boot_fatal instead: adding it here without the rule breaks parity, and adding it
-# to both double-pages. #8651 closes 2026-09-25, before this soak's `earliest`, so this arm is
-# the only web boot-path check the gate runs by query.
+# to both double-pages. It is the only web boot-path check the gate runs BY QUERY; the #8651
+# blocker arm below is a human verdict. If #8651 closes (as completed) before this soak's
+# `earliest`, as planned, this arm is the web boot path's only remaining check.
 # `level:fatal` because stage=pull is also the STAGE of the whole seed span — only the on_err
 # emit carries it at fatal. Bare like [freshboot]: `_emit` writes no feature/op.
 # ⚠ Guard the string BEFORE any arithmetic (the TRANSIENT sentinel — see the APP_ZOT note below).
@@ -323,6 +340,42 @@ if [[ ! "$WEB_FATAL" =~ ^[0-9]+$ ]]; then
   echo "TRANSIENT: Sentry query 'web-pull-fatal' failed (window $START..$END) — retry next sweep." >&2
   exit 2
 fi
+
+# --- (a'') The RETIRED-NAMES arm (#8036 1d). OUTSIDE FAIL_QUERIES, deliberately.
+#
+# FAIL_QUERIES counts the CURRENT names only. A host born from a PRE-1d template inside the window
+# (START precedes this change's apply) still emits the OLD names: inngest_ghcr_fallback on a
+# dedicated-inngest zot miss, app_ghcr_fallback / app_ghcr_served on the web seed block's GHCR arm.
+# runcmd is once-per-instance and user_data is ignore_changes-pinned, so such a host keeps that
+# template until it is replaced. Without this arm its events are invisible to every query here —
+# the window would read clean across exactly the boots the rename was meant to watch.
+# Not a FAIL_QUERIES member, for the WEB_FATAL reason: zot_mirror_fallback_rate no longer watches
+# these values, so adding them there breaks the alarm⇔soak parity pin. These three names appear on
+# a CODE line of this file ONLY inside this array — the residual-zero pins (zot-soak-6122.test.sh
+# and the op-contract test) exempt exactly this block. Bare stage: queries: both old emitters
+# (`_emit`, `soleur-boot-emit`) wrote no feature/op.
+declare -A RETIRED_QUERIES=(
+  [app_ghcr_fallback]='stage:"app_ghcr_fallback"'
+  [app_ghcr_served]='stage:"app_ghcr_served"'
+  [inngest_ghcr_fallback]='stage:"inngest_ghcr_fallback"'
+)
+# Same runtime floor as FAIL_QUERIES, for the same reason: an emptied array sums to a clean zero.
+if (( ${#RETIRED_QUERIES[@]} != 3 )); then
+  echo "TRANSIENT: RETIRED_QUERIES has ${#RETIRED_QUERIES[@]} entries, expected 3 — refusing to report a verdict on a partial retired-name set." >&2
+  exit 2
+fi
+RETIRED_TOTAL=0
+RETIRED_BREAKDOWN=""
+for k in $(printf '%s\n' "${!RETIRED_QUERIES[@]}" | sort); do
+  n=$(sentry_count "${RETIRED_QUERIES[$k]}")
+  # ⚠ Guard the string BEFORE the arithmetic (the TRANSIENT sentinel — see the APP_ZOT note).
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    echo "TRANSIENT: Sentry query 'retired:$k' failed (window $START..$END) — retry next sweep." >&2
+    exit 2
+  fi
+  RETIRED_TOTAL=$(( RETIRED_TOTAL + n ))
+  RETIRED_BREAKDOWN="${RETIRED_BREAKDOWN}${RETIRED_BREAKDOWN:+ }$k=$n"
+done
 
 # --- (b) zot-served sample per image. >= MIN_SAMPLE required (proof of exercise). ---
 ZOT_WEB=$(sentry_count 'feature:supply-chain op:image-pull registry:"zot" image:"web"')
@@ -345,11 +398,15 @@ if [[ "$FALLBACKS" -gt 0 ]]; then
   #   (scripts/betterstack-query.sh --grep inngest_pull_fatal) before re-replacing: runcmd is
   #   once-per-instance, so an unchanged re-replace repeats.
   # web-pull-fatal is printed alongside for the whole picture; its own FAIL is the next arm.
-  echo "FAIL: $FALLBACKS watched event(s) since $START (gate-degraded=${COUNTS[gate]} inngest-pull-fatal=${COUNTS[freshboot]} web-pull-fatal=$WEB_FATAL) — zot did not serve. Investigate before 5.6 / #6129 (see the per-signal notes in zot-soak-6122.sh)."
+  echo "FAIL: $FALLBACKS watched event(s) since $START (gate-degraded=${COUNTS[gate]} inngest-pull-fatal=${COUNTS[freshboot]} web-pull-fatal=$WEB_FATAL) — zot did not serve. Investigate before 5.6 / #6129 (see the per-signal notes in zot-soak-6122.sh).${START_NOTE}"
   exit 1
 fi
 if (( WEB_FATAL > 0 )); then
-  echo "FAIL(web-pull-fatal): $WEB_FATAL web fresh-boot fatal(s) at stage=pull since $START (gate-degraded=${COUNTS[gate]} inngest-pull-fatal=${COUNTS[freshboot]} web-pull-fatal=$WEB_FATAL) — a web host's seed-block zot login/pull failed and its boot ended. Read the Sentry event's detail (nic=… zot=[login,n,cause] pull_err: …), map cause= to the pull row of runbooks/fresh-host-bootstrap-recovery.md, fix forward, then re-run web-host-replace — runcmd is once-per-instance, so an unchanged re-replace repeats."
+  echo "FAIL(web-pull-fatal): $WEB_FATAL web fresh-boot fatal(s) at stage=pull since $START (gate-degraded=${COUNTS[gate]} inngest-pull-fatal=${COUNTS[freshboot]} web-pull-fatal=$WEB_FATAL) — a web host's seed-block zot login/pull failed and its boot ended. Read the Sentry event's detail (nic=… zot=[login,n,cause] pull_err: …), map cause= to the pull row of runbooks/fresh-host-bootstrap-recovery.md, fix forward, then re-run web-host-replace — runcmd is once-per-instance, so an unchanged re-replace repeats.${START_NOTE}"
+  exit 1
+fi
+if (( RETIRED_TOTAL > 0 )); then
+  echo "FAIL(retired-names): $RETIRED_TOTAL event(s) under a stage name #8036 1d retired, since $START ($RETIRED_BREAKDOWN) — a host booted from a PRE-1d template inside the window, where FAIL_QUERIES (current names only) cannot see it. Identify the host from the event's host_name/host_id tags: a *_ghcr_fallback name means its zot pull missed, the *_ghcr_served name that it was GHCR-served. Replace it from the current template (apply-web-platform-infra.yml web-host-replace / inngest-host-replace; runcmd is once-per-instance, so nothing short of a replace changes its template). The event stays in the window, so this arm keeps FAILing until a human decides on #6122 whether to re-arm the soak — do not move START to clear it.${START_NOTE}"
   exit 1
 fi
 
@@ -386,7 +443,7 @@ fi
 #   operator reads a verdict before acting on it — so a knob here would be a bypass surface on
 #   the gate. A hardcoded floor has no such surface.
 if (( APP_ZOT == 0 )); then
-  echo "FAIL(no-freshboot-evidence): 0 fallbacks, but NO zot-served fresh boot since $START. The fleet is UNOBSERVED, not clean — 'no bad events' here cannot be distinguished from 'nothing was reported'. Most likely cause: this cloud-init predates START (it is ignore_changes-pinned on running hosts, so only a fresh rebuild carries the beacon) — merge, then recreate a web host inside the window."
+  echo "FAIL(no-freshboot-evidence): 0 watched events, but NO zot-served fresh boot since $START. The fleet is UNOBSERVED, not clean — 'no bad events' here cannot be distinguished from 'nothing was reported'. Most likely cause: this cloud-init predates START (it is ignore_changes-pinned on running hosts, so only a fresh rebuild carries the beacon) — merge, then recreate a web host inside the window.${START_NOTE}"
   exit 1
 fi
 
@@ -404,7 +461,7 @@ if [[ ! "$INNGEST_ZOT" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 if (( INNGEST_ZOT == 0 )); then
-  echo "FAIL(no-inngest-freshboot-evidence): 0 fallbacks, but NO zot-served fresh boot of the dedicated soleur-inngest host since $START. That host is UNOBSERVED, not clean. If NO replace has run in the window: dispatch apply-web-platform-infra.yml with apply_target=inngest-host-replace (the host must be BUILT from the #6500 template), in an ADR-100 maintenance window. If a replace DID run, do not replace again yet — read the host's Better Stack channel first: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since '<window start>' --grep 'stage=inngest_zot' --grep sentry-emit-FAILED --grep SOLEUR_INNGEST_BOOT_TRACE_LOST. inngest_zot present plus sentry-emit-FAILED (or TRACE_LOST) is a DELIVERY fault (DSN or egress), not a missing boot."
+  echo "FAIL(no-inngest-freshboot-evidence): 0 watched events, but NO zot-served fresh boot of the dedicated soleur-inngest host since $START. That host is UNOBSERVED, not clean. If NO replace has run in the window: dispatch apply-web-platform-infra.yml with apply_target=inngest-host-replace (the host must be BUILT from the #6500 template), in an ADR-100 maintenance window. If a replace DID run, do not replace again yet — read the host's Better Stack channel first: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since '<window start>' --grep 'stage=inngest_zot' --grep sentry-emit-FAILED --grep SOLEUR_INNGEST_BOOT_TRACE_LOST. inngest_zot present plus sentry-emit-FAILED (or TRACE_LOST) is a DELIVERY fault (DSN or egress), not a missing boot.${START_NOTE}"
   exit 1
 fi
 
@@ -417,7 +474,7 @@ fi
 # The sample arm is a floor on GOOD evidence, not a ceiling on BAD — except here, where it is
 # the only ceiling.
 if [[ "$ZOT_WEB" -lt "$MIN_SAMPLE" || "$ZOT_INNGEST" -lt "$MIN_SAMPLE" ]]; then
-  echo "FAIL(insufficient-sample): zot-served pulls web=$ZOT_WEB inngest=$ZOT_INNGEST (need >=$MIN_SAMPLE each) — zero fallbacks so far, but keep soaking until each image has been served by zot enough times to be conclusive."
+  echo "FAIL(insufficient-sample): zot-served pulls web=$ZOT_WEB inngest=$ZOT_INNGEST (need >=$MIN_SAMPLE each) — zero watched events so far, but keep soaking until each image has been served by zot enough times to be conclusive.${START_NOTE}"
   exit 1
 fi
 
@@ -470,7 +527,7 @@ if [[ "$st" != "OPEN" && "$st" != "CLOSED" ]]; then
   exit 2
 fi
 if [[ "$st" == "OPEN" ]]; then
-  echo "FAIL(blocked): soak criteria hold (0 fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST, $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s)), but #$BLOCKER is OPEN — the operator has not yet authorized that the dedicated inngest host pulls zot-primary and reports on the Sentry stage: schema (RESULT: PASS on #$BLOCKER, then close it as completed). NOT authorized to proceed to 5.6 / #6129."
+  echo "FAIL(blocked): soak criteria hold (0 watched events, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST, $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s)), but #$BLOCKER is OPEN — the operator has not yet authorized that the dedicated inngest host pulls zot-primary and reports on the Sentry stage: schema (RESULT: PASS on #$BLOCKER, then close it as completed). NOT authorized to proceed to 5.6 / #6129.${START_NOTE}"
   exit 1
 fi
 
@@ -495,7 +552,7 @@ fi
 # drain-labeled-backlog operate autonomously over this backlog, so an automated tidy-up is a
 # realistic path to authorizing an irreversible PAT revoke. Require an affirmative COMPLETED.
 if [[ "$st" == "CLOSED" && "$st_reason" != "COMPLETED" ]]; then
-  echo "FAIL(blocker-closed-not-completed): #$BLOCKER is CLOSED with stateReason='${st_reason:-<empty>}', not COMPLETED — a not-planned/duplicate/triage close is not evidence the dedicated inngest host was fixed. Re-open it, or close it as completed only once the host pulls zot-primary AND reports on the Sentry stage: schema."
+  echo "FAIL(blocker-closed-not-completed): #$BLOCKER is CLOSED with stateReason='${st_reason:-<empty>}', not COMPLETED — a not-planned/duplicate/triage close is not evidence the dedicated inngest host was fixed. Re-open it, or close it as completed only once the host pulls zot-primary AND reports on the Sentry stage: schema.${START_NOTE}"
   exit 1
 fi
 
@@ -546,7 +603,7 @@ _zot_reports_sentry_stage() {
     && grep -qE '^  - path: /usr/local/bin/soleur-boot-emit$' "$1"
 }
 if ! _zot_path_in_code "$INNGEST_CI" || ! _zot_reports_offbox "$INNGEST_CI" || ! _zot_reports_sentry_stage "$INNGEST_CI"; then
-  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path, no off-box reporting of it, or no Sentry 'stage:' emit (both outcome arms calling soleur-boot-emit, and the write_files entry that delivers it) — the dedicated host's zot path is not in the CODE. Closing the issue does not fix the host. Re-open #$BLOCKER or fix the host before 5.6."
+  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path, no off-box reporting of it, or no Sentry 'stage:' emit (both outcome arms calling soleur-boot-emit, and the write_files entry that delivers it) — the dedicated host's zot path is not in the CODE. Closing the issue does not fix the host. Re-open #$BLOCKER or fix the host before 5.6.${START_NOTE}"
   exit 1
 fi
 # The channel reaches this query set once the host is built from the #6500 template: it emits
@@ -572,9 +629,10 @@ fi
 # A dark host DIES at stage=pull, before reaching anything that emits the stage a counter would
 # read. A counter of a stage the corpse cannot emit is vacuous by construction. This is the same
 # blindness #6500 recorded for the inngest host ("the host emits its boot trace only if it gets
-# far enough to run the emitter") and is exactly why the existing `app_ghcr_served` query does
-# NOT cover this case: #6462 added it for a probe-miss whose pull then SUCCEEDS ("the ref stays
-# the GHCR ref, the pull succeeds first try"). A pull that FAILS is silent.
+# far enough to run the emitter") and is exactly why the then-existing `app_ghcr_served` query
+# (a FAIL_QUERIES member until #8036 1d retired it) did NOT cover this case: #6462 added it for a
+# probe-miss whose pull then SUCCEEDS ("the ref stays the GHCR ref, the pull succeeds first
+# try"). A pull that FAILS was silent to it.
 # APP_ZOT does not rescue it either — it is a floor on SUCCESSES (>=1 zot-served fresh boot), so
 # a single historical success satisfies it while the CURRENT fresh-boot path is broken. "At
 # least one boot worked once" and "a boot works now" are different claims; only the first is
@@ -602,15 +660,15 @@ if [[ "$web_st" != "OPEN" && "$web_st" != "CLOSED" ]]; then
   exit 2
 fi
 if [[ "$web_st" == "OPEN" ]]; then
-  echo "FAIL(blocked-web): soak criteria hold and #$BLOCKER is settled, but #$WEB_BLOCKER is OPEN — a fresh web-host boot was measured DARK (zot probe lost, GHCR ref retained, 401 on the revoked PAT). web-1 is the sole live web host and a replace of it strands the web tier. NOT authorized to proceed to 5.6 / #6129."
+  echo "FAIL(blocked-web): soak criteria hold and #$BLOCKER is settled, but #$WEB_BLOCKER is OPEN. On 2026-09-23 a fresh web-host boot was measured DARK on the pre-#8660 seed path (its zot probe lost, the GHCR ref was retained, and the pull 401'd on the revoked PAT). That path is fixed — #8660 bakes the zot endpoint, #8036 1d deleted the GHCR arm — but #$WEB_BLOCKER stays the human verdict until a web-host replace is OBSERVED booting zot-served; close it as completed then. web-1 is the sole live web host and a dark replace strands the web tier. NOT authorized to proceed to 5.6 / #6129.${START_NOTE}"
   exit 1
 fi
 # CLOSED is not consent — same reasoning as the #6500 arm: GitHub returns CLOSED for every
 # closure reason, and autonomous triage operates over this backlog.
 if [[ "$web_st" == "CLOSED" && "$web_st_reason" != "COMPLETED" ]]; then
-  echo "FAIL(web-blocker-closed-not-completed): #$WEB_BLOCKER is CLOSED with stateReason='${web_st_reason:-<empty>}', not COMPLETED — a not-planned/duplicate/triage close is not evidence a fresh web boot reaches zot. Re-open it, or close it as completed only once a web-host replace has been OBSERVED booting zot-served."
+  echo "FAIL(web-blocker-closed-not-completed): #$WEB_BLOCKER is CLOSED with stateReason='${web_st_reason:-<empty>}', not COMPLETED — a not-planned/duplicate/triage close is not evidence a fresh web boot reaches zot. Re-open it, or close it as completed only once a web-host replace has been OBSERVED booting zot-served.${START_NOTE}"
   exit 1
 fi
 
-echo "PASS: 0 watched events (gate-degraded=${COUNTS[gate]} inngest-pull-fatal=${COUNTS[freshboot]} web-pull-fatal=$WEB_FATAL), zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s), and #$BLOCKER + #$WEB_BLOCKER are both CLOSED as COMPLETED — since $START. The zot-only soak holds on Sentry evidence, which is forgeable with the public DSN: before acting on it, corroborate the dedicated host's inngest_zot on Better Stack (scripts/betterstack-query.sh --grep 'stage=inngest_zot'). Then this authorizes ADR-096 5.6 (adopting -> accepted) once 5.3b-iii and 5.4 are also done, and #6129 (WARN -> ENFORCE). It does NOT gate CI's GHCR push/read (DECISION: B3)."
+echo "PASS: 0 watched events (gate-degraded=${COUNTS[gate]} inngest-pull-fatal=${COUNTS[freshboot]} web-pull-fatal=$WEB_FATAL), zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s), and #$BLOCKER + #$WEB_BLOCKER are both CLOSED as COMPLETED — since $START. The zot-only soak holds on Sentry evidence, which is forgeable with the public DSN: before acting on it, corroborate the dedicated host's inngest_zot on Better Stack (scripts/betterstack-query.sh --grep 'stage=inngest_zot'). Then this authorizes ADR-096 5.6 (adopting -> accepted) once 5.3b-iii and 5.4 are also done, and #6129 (WARN -> ENFORCE). It does NOT gate CI's GHCR push/read (DECISION: B3).${START_NOTE}"
 exit 0

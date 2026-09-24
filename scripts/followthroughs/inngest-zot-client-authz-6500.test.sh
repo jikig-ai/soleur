@@ -18,6 +18,16 @@ fails=0
 checks=0
 pass() { printf '  PASS: %s\n' "$1"; checks=$((checks + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); checks=$((checks + 1)); }
+# Instrument self-test (ported from zot-soak-6122.test.sh): drive fail() and pass() once each and
+# require that fail() moved the counter the verdict reads (fails) and that both moved checks,
+# then unwind. A fail() that only bumped checks would read every real failure as green. Reported
+# with printf + exit, never through the helpers under test.
+fail "self-test (expected)" 2>/dev/null; pass "self-test (expected)" >/dev/null
+if [[ "$fails" -ne 1 || "$checks" -ne 2 ]]; then
+  printf 'FATAL: the verdict helpers do not count (fails=%s checks=%s)\n' "$fails" "$checks" >&2
+  exit 1
+fi
+fails=0; checks=0
 
 [[ -f "$PROBE" ]] || { echo "FATAL: probe not found at $PROBE" >&2; exit 1; }
 

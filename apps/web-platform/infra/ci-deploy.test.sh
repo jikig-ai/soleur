@@ -7527,8 +7527,10 @@ assert_ghcr_cfg_row inline      "$(_gcfg_expect_split yes present none none none
 assert_ghcr_cfg_row credsstore  "$(_gcfg_expect no present none set none)"
 # credhelper also PINS THE DEPLOY-ONLY SCOPE: deploy loses the indirection while home and
 # root keep `*_ghcr_helper=set`. Those two are unreachable from webhook.service
-# (ProtectHome=read-only, /home absent from ReadWritePaths). #8036 1d stopped fresh boots from
-# writing either; on a host created earlier they stay as-is (revoked value) until it is replaced.
+# (ProtectHome=read-only, /home absent from ReadWritePaths). Fresh-boot GHCR logins ran as ROOT
+# (runcmd, HOME=/root) and so wrote only /root/.docker; #8036 1d deleted them. The home (deploy
+# user) entry was written by no live code path — a pre-#6565 fossil. On a host created before 1d
+# both stay as-is (revoked value) until it is replaced.
 assert_ghcr_cfg_row credhelper  "$(_gcfg_expect_split yes present none none none present none none set)"
 assert_ghcr_cfg_row noghcr      "$(_gcfg_expect no present none none none)"
 # As root, DAC override makes the parent searchable, so the file genuinely reads `present`.

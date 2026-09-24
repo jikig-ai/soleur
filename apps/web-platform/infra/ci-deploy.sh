@@ -2157,8 +2157,10 @@ pull_image_with_fallback() {
     # alarm's `registry = "ghcr-fallback"` condition was removed while its other four stayed
     # (apps/web-platform/infra/sentry/issue-alerts.tf), together with the matching
     # `FAIL_QUERIES[rolling]` entry and its cardinality floor in
-    # scripts/followthroughs/zot-soak-6122.sh. That tripwire was itself stale when executed — it
-    # said the soak's FAIL set was "FOUR entries, not two"; it was five, and is now four.
+    # scripts/followthroughs/zot-soak-6122.sh. #8036 1d then retired two more fresh-boot conditions
+    # and renamed a third, so the rule and the soak's FAIL set now hold TWO. That tripwire was itself
+    # stale when executed — it said the soak's FAIL set was "FOUR entries, not two"; it was five,
+    # became four at 1c, and is two since 1d.
     #
     # `registry_pull_event` is therefore never invoked with a ghcr-fallback argument anywhere in
     # this script. Written without the literal call form on purpose: the residual-zero guard and

@@ -13,6 +13,16 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
+# Instrument self-test (ported from zot-soak-6122.test.sh): drive no() and ok() once each and
+# require that EACH moved its own counter, then unwind. A no() that fed $pass would turn every
+# real failure into a pass and this suite's verdict green. Reported with printf + exit, never
+# through the helpers under test.
+no "self-test (expected)" 2>/dev/null; ok "self-test (expected)" >/dev/null
+if [ "$fail" -ne 1 ] || [ "$pass" -ne 1 ]; then
+  printf 'FATAL: the verdict helpers do not count (fail=%s pass=%s)\n' "$fail" "$pass" >&2
+  exit 1
+fi
+pass=0; fail=0
 
 BIN="$WORK/bin"; mkdir -p "$BIN" "$WORK/fx"
 cat > "$BIN/gh" <<'STUB'

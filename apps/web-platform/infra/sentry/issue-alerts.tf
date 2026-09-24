@@ -1684,8 +1684,9 @@ resource "sentry_alert" "stale_bot_pr" {
 # inngest host (#8539, 150 s bound), and, since #8651, two cloud-init.yml runcmd emitters on
 # every fresh web boot: the early `networkctl reload` (private_nic_probe_fault, detail `gate=reload`) and
 # the pre-pull seed wait (150 s bound, detail `gate=seed`). A web event's detail says which one. That is deliberate and it is the earliest automated warning
-# either host produces — there is no alert keyed on oci-pull-ALL-LEGS-FAILED, so on inngest this
-# is the ONLY page before the scheduler goes dark.
+# either host produces. On inngest it is no longer the only page: since #8036 1d a zot pull miss
+# ends the boot with `inngest_pull_fatal` at fatal, which zot_mirror_fallback_rate (below) pages —
+# but a non-converged NIC is paged HERE first, before the pull it will cause to fail.
 #
 # The severity note this block used to carry ("neither an emergency, since cloudflared dials its
 # origin per connection and self-heals when the attach lands") was true of web-1 ONLY and is
@@ -1749,8 +1750,9 @@ resource "sentry_alert" "web_private_nic_boot_gate" {
 # Widening this rule to the runcmd stages is the obvious fix and is deliberately NOT bundled
 # into a deletion PR — it changes live paging behaviour and wants its own change. Do not read
 # the paragraph above as "boot failures page"; only these five stages do.
-# (`pull` joined with #8651. Since #8036 1d there is no GHCR arm behind the zot pull, so a
-# `pull` fatal is a web fresh boot that zot could not serve — the web twin of
+# (`pull` was added by #7071, 2026-07-30, when GHCR became unreadable and a zot-probe miss started
+# killing the host at stage=pull. Since #8036 1d there is no GHCR arm behind the zot pull at all,
+# so a `pull` fatal is a web fresh boot that zot could not serve — the web twin of
 # zot_mirror_fallback_rate's `inngest_pull_fatal`, paged HERE rather than there.)
 #
 # Pages on the FIRST occurrence (a serving-host boot failure is high-severity), NOT a rate. All
@@ -1760,7 +1762,7 @@ resource "sentry_alert" "web_private_nic_boot_gate" {
 # fatal `_emit`. So the stage filter alone selects fatal boot failures (no level filter needed),
 # and a healthy boot matches nothing.
 #
-# GROUPING NOTE (mirrors the GROUPING paragraph of zot_mirror_fallback_rate above) — and why the
+# GROUPING NOTE (mirrors the GROUPING paragraph of zot_mirror_fallback_rate below) — and why the
 # trigger is `value = 0` (#8036 1d). `event_frequency` counts the whole ISSUE-GROUP's events and
 # compares with a STRICT `>`. The four terminal-block stages use the SHARED `soleur-boot-emit`
 # message ("soleur-cloud-init boot stage"; stage is a tag), a group that is effectively always
@@ -1936,11 +1938,14 @@ resource "sentry_alert" "workspaces_luks_drift" {
 #                                      exception, and the "split it into its own resource" lever,
 #                                      retired with it.
 #   stage = "inngest_ghcr_fallback"    #8036 1d — RENAMED inngest_pull_fatal and raised to fatal
-#                                      (the GHCR pull after a zot miss is gone). The new name shares
-#                                      no prefix with inngest_zot, because Better Stack greps match
-#                                      substrings.
+#                                      (the GHCR pull after a zot miss is gone). The new name does
+#                                      not BEGIN WITH inngest_zot: an operator's Better Stack search
+#                                      (`betterstack-query.sh --grep 'stage=inngest_zot'`) is a
+#                                      substring LIKE match, so an `inngest_zot…` failure stage
+#                                      would read as a zot-served boot there. (Sentry `stage:` and
+#                                      inngest-zot-boot-7462.sh's `grep -cxF` count are exact.)
 # A web fresh boot whose zot pull fails is NOT watched here: it sends stage=pull at fatal, and
-# web_terminal_boot_fatal (below) pages that. zot-soak-6122.sh counts it in a separate WEB_FATAL
+# web_terminal_boot_fatal (above) pages that. zot-soak-6122.sh counts it in a separate WEB_FATAL
 # arm outside its FAIL set, so this rule's conditions and the soak's FAIL set stay equal.
 #
 # ═══ WHY value = 0, AND WHY IT MUST STAY 0 (#6285) ═══
@@ -1963,7 +1968,7 @@ resource "sentry_alert" "workspaces_luks_drift" {
 # (Not literally unfireable — re-deploying the SAME tag within the hour reuses the group
 # — but a first-miss on a fresh tag, the case that matters, could never page.)
 #
-# web_terminal_boot_fatal (below) and git_data_boot_fatal use value = 0 for the same reason. Do
+# web_terminal_boot_fatal (above) and git_data_boot_fatal use value = 0 for the same reason. Do
 # not raise any of them: a strict `>` over a threshold of 1 cannot page a single event in a group
 # of its own, which is exactly what a first-ever terminal boot is.
 #
@@ -1995,8 +2000,8 @@ resource "sentry_alert" "workspaces_luks_drift" {
 #
 # Distinct `frequency_minutes = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+logic_type+frequency+actions-shape, NOT
-# conditions). Events carry only registry/stage/image/host_id/host_name/zot_gate_reason tags and
-# a `detail` rc — no user content.
+# conditions). Events carry only registry/stage/image/host_id/region/host_name/zot_gate_reason tags
+# and a `detail` rc — no user content.
 resource "sentry_alert" "zot_mirror_fallback_rate" {
   organization      = var.sentry_org
   name              = "zot-mirror-fallback-rate"

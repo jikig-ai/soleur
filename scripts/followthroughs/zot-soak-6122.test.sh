@@ -208,13 +208,17 @@ Q_WEBFATAL='stage%3A%22pull%22'
 # `soleur-inngest` is FIRST (#6500): the stub matches keys as substrings in order, first match
 # wins, and only the host-pinned INNGEST_ZOT query carries that string. Without it every case that
 # passes the APP_ZOT arm would 500 on the new query and read TRANSIENT instead of its verdict.
-HEALTHY="host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5"
+# The RETIRED_QUERIES arm (#8036 1d): the three retired names, each a bare stage: query whose
+# name occurs in no other query, so a plain name key is unambiguous. Appended to every spec that
+# reaches that arm — without them the stub 500s and the row reads TRANSIENT instead of its verdict.
+RETIRED0="app_ghcr_fallback=0;app_ghcr_served=0;inngest_ghcr_fallback=0"
+HEALTHY="host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5;$RETIRED0"
 
 echo "== AC7: the arms return the right exit codes =="
 
 # 1. Dark beacon: zero fallbacks, sample fine, but NO zot-served fresh boot.
 #    MUST be exit 1 (FAIL) — never 0, never 2. This is the whole denominator.
-r="$(run_soak "zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=0;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=0;$Q_ZOTWEB=5;$Q_ZOTING=5;$RETIRED0" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"no-freshboot-evidence"* ]]; then
   pass "dark beacon (app_zot=0, no fallbacks) -> exit 1 FAIL(no-freshboot-evidence)"
@@ -294,14 +298,14 @@ fi
 # 4. A real FAIL_QUERIES event still FAILs, and the per-signal breakdown still prints (the arm the
 #    denominator must not have displaced — an operator hitting a real event needs it). One row per
 #    member (#8036 1d), so a breakdown that drops either name reds its own row.
-r="$(run_soak "inngest_pull_fatal=2;zot-gate-degraded=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "inngest_pull_fatal=2;zot-gate-degraded=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5;$RETIRED0" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == FAIL:* && "$out" == *"inngest-pull-fatal=2"* && "$out" == *"gate-degraded=0"* ]]; then
   pass "inngest_pull_fatal>0 -> exit 1 FAIL with per-signal breakdown incl. inngest-pull-fatal"
 else
   fail "inngest-pull-fatal must exit 1 and print the breakdown; got rc=$rc out=$out"
 fi
-r="$(run_soak "zot-gate-degraded=1;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "zot-gate-degraded=1;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5;$RETIRED0" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == FAIL:* && "$out" == *"gate-degraded=1"* && "$out" == *"inngest-pull-fatal=0"* ]]; then
   pass "zot-gate-degraded>0 -> exit 1 FAIL with per-signal breakdown incl. gate-degraded"
@@ -312,7 +316,7 @@ fi
 # 4b. The insufficient-sample arm. It carries 8 lines of "MUST keep exit 1 — do NOT 'fix' it to
 #     TRANSIENT" and had NO test: it is the ONLY detector for the #6437 Sentry-dark mode, so a
 #     well-meaning refactor to exit 2 would silently disarm it. One run_soak proves it.
-r="$(run_soak "host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5;$RETIRED0" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"FAIL(insufficient-sample)"* ]]; then
   pass "thin zot sample -> exit 1 FAIL(insufficient-sample) (the only #6437 detector)"
@@ -697,6 +701,71 @@ else
 fi
 rm -f "$ma5"
 
+echo "== #8036 1d: the RETIRED-NAMES arm (outside FAIL_QUERIES) =="
+
+# RN1a-c. Each retired name, alone, FAILs a window that is otherwise fully healthy — one flat row
+#         per name (a loop over a table hides a missing entry). The breakdown must name it.
+g6 "RN1a: app_ghcr_fallback=1, all else healthy -> exit 1 FAIL(retired-names)" \
+  1 "FAIL(retired-names)" "${HEALTHY/app_ghcr_fallback=0/app_ghcr_fallback=1}" CLOSED 200 "" yes COMPLETED
+[[ "$G6_LAST" == *"app_ghcr_fallback=1"* ]] && pass "RN1a': the breakdown names app_ghcr_fallback=1" || fail "RN1a': breakdown missing app_ghcr_fallback=1; got $G6_LAST"
+g6 "RN1b: app_ghcr_served=2, all else healthy -> exit 1 FAIL(retired-names)" \
+  1 "FAIL(retired-names)" "${HEALTHY/app_ghcr_served=0/app_ghcr_served=2}" CLOSED 200 "" yes COMPLETED
+[[ "$G6_LAST" == *"app_ghcr_served=2"* ]] && pass "RN1b': the breakdown names app_ghcr_served=2" || fail "RN1b': breakdown missing app_ghcr_served=2; got $G6_LAST"
+g6 "RN1c: inngest_ghcr_fallback=1, all else healthy -> exit 1 FAIL(retired-names)" \
+  1 "FAIL(retired-names)" "${HEALTHY/inngest_ghcr_fallback=0/inngest_ghcr_fallback=1}" CLOSED 200 "" yes COMPLETED
+[[ "$G6_LAST" == *"inngest_ghcr_fallback=1"* ]] && pass "RN1c': the breakdown names inngest_ghcr_fallback=1" || fail "RN1c': breakdown missing inngest_ghcr_fallback=1; got $G6_LAST"
+# RN2. The string guard before the arithmetic: a 500 on one retired query is TRANSIENT, never a
+#      counted zero (a false PASS over the very boots this arm exists to see).
+g6 "RN2: a retired-name query 500s -> exit 2 TRANSIENT at its own guard" \
+  2 "'retired:inngest_ghcr_fallback' failed" "$HEALTHY" CLOSED 200 "inngest_ghcr_fallback" yes COMPLETED
+# RN3. Each query is EXACTLY the bare clause (the stub matches by substring; a prefixed query —
+#      which would match zero events forever — still answers there).
+g6_row 0 "PASS" "$HEALTHY" CLOSED 200 "" yes COMPLETED >/dev/null
+if exact_query 'app_ghcr_fallback' 'stage:"app_ghcr_fallback"' \
+   && exact_query 'app_ghcr_served' 'stage:"app_ghcr_served"' \
+   && exact_query 'inngest_ghcr_fallback' 'stage:"inngest_ghcr_fallback"'; then
+  pass "RN3: the three retired-name queries are exactly the bare stage:\"<name>\" clauses"
+else
+  fail "RN3: a retired-name query is not its exact bare clause"
+fi
+# RN4. The block itself: exactly the three whole query strings, and a runtime floor of 3 (the
+#      same emptied-array-sums-to-zero hazard the FAIL_QUERIES floor guards).
+RETIRED_BODY="$(awk '/^declare -A RETIRED_QUERIES=\(/{f=1;next} f&&/^\)/{exit} f' "$SOAK")"
+if [[ "$RETIRED_BODY" == "  [app_ghcr_fallback]='stage:\"app_ghcr_fallback\"'
+  [app_ghcr_served]='stage:\"app_ghcr_served\"'
+  [inngest_ghcr_fallback]='stage:\"inngest_ghcr_fallback\"'" ]] \
+   && grep -qxF 'if (( ${#RETIRED_QUERIES[@]} != 3 )); then' "$SOAK"; then
+  pass "RN4: RETIRED_QUERIES is exactly the three bare retired-name queries, with a runtime floor of 3"
+else
+  fail "RN4: RETIRED_QUERIES block / floor not as pinned: ${RETIRED_BODY:-<empty>}"
+fi
+# RN5. Mutation: delete the whole arm (queries, loop and FAIL branch). RN1c's fixture must then
+#      stop FAILing on retired-names.
+g6_mutant "RN5: delete the RETIRED-NAMES arm" \
+  '/^declare -A RETIRED_QUERIES=(/,/^done$/d; /^if (( RETIRED_TOTAL > 0 )); then$/,/^fi$/d' \
+  1 "FAIL(retired-names)" "${HEALTHY/inngest_ghcr_fallback=0/inngest_ghcr_fallback=1}" CLOSED 200 "" yes COMPLETED
+
+echo "== #8036 1d: an overridden START is disclosed on the verdict line =="
+
+# OV1. An explicit ZOT_SOAK_START skips the #8660 anchor, so the verdict must say so — on PASS...
+g6 "OV1: ZOT_SOAK_START override -> the PASS line carries 'START overridden (anchor check skipped)'" \
+  0 "START overridden (anchor check skipped)" "$HEALTHY" CLOSED 200 "" yes COMPLETED
+[[ "$G6_LAST" == *"out=PASS"* ]] && pass "OV1': the override note is appended; the line still leads with PASS" || fail "OV1': override PASS line must still start with PASS; got $G6_LAST"
+# OV2. ...and on a FAIL line.
+g6 "OV2: ZOT_SOAK_START override -> a FAIL line carries the override note too" \
+  1 "START overridden (anchor check skipped)" "${HEALTHY/app_zot=3/app_zot=0}" CLOSED 200 "" yes COMPLETED
+# OV3. The DEFAULT (sweeper) path must NOT carry it — the anchor ran.
+if SOAK_START_OVERRIDE=__UNSET__ g6_row 0 "PASS" "$HEALTHY" CLOSED 200 "" yes COMPLETED \
+   && [[ "$G6_LAST" != *"START overridden"* ]]; then
+  pass "OV3: default START (anchor checked) -> no override note on the verdict"
+else
+  fail "OV3: the default-START verdict must not claim an override; got $G6_LAST"
+fi
+# OV4. Mutation: drop the note's assignment. OV1's row must then go RED.
+g6_mutant "OV4: delete the START_NOTE override assignment" \
+  '/^\[\[ -n "\${ZOT_SOAK_START:-}" \]\] && START_NOTE=/d' \
+  0 "START overridden (anchor check skipped)" "$HEALTHY" CLOSED 200 "" yes COMPLETED
+
 echo "== #8036 1c/1d: FAIL_QUERIES cardinality, floor parity, retired operands =="
 
 # The FAIL set's CARDINALITY, asserted against BOTH declarations that carry it — the array and the
@@ -722,8 +791,10 @@ else
 fi
 
 # The retired operands must be gone from the EXECUTABLE soak, not merely from the array. The header
-# names them on purpose (the retired list), so scan code lines only — comment lines stripped.
-SOAK_CODE="$(grep -vE '^[[:space:]]*#' "$SOAK")"
+# names them on purpose (the retired list), so scan code lines only — comment lines stripped — and
+# exempt EXACTLY the RETIRED_QUERIES block, the one place a code line may still name them (it
+# COUNTS them; it is pinned to exactly three whole query strings by the RN rows below).
+SOAK_CODE="$(awk '/^declare -A RETIRED_QUERIES=\(/{f=1;next} f&&/^\)/{f=0;next} !f' "$SOAK" | grep -vE '^[[:space:]]*#')"
 retired_hits=""
 for tok in 'ghcr-fallback' 'app_ghcr_fallback' 'app_ghcr_served' 'inngest_ghcr_fallback'; do
   [[ "$SOAK_CODE" == *"$tok"* ]] && retired_hits="$retired_hits $tok"
@@ -742,7 +813,10 @@ fi
 # 4-signal cardinality row, the ghcr-fallback-only residual row), +22 new (row 4 split per member,
 # the retired-name G6 row, WF1-WF5 + WF1b, G3 + its three in-suite mutants, MA1-MA5 + MA1b + MA2b,
 # the 2-signal cardinality, whole-query and code-line residual rows).
-SOAK_MIN_PASSES=55
+# Raised 55 -> 70 in the SAME edit that added the RETIRED-NAMES arm and the START-override note:
+# +15 = RN1a-c and their breakdown rows (6), RN2-RN5 (4, RN5 an in-suite mutant), OV1, OV1',
+# OV2, OV3 and the OV4 in-suite mutant (5).
+SOAK_MIN_PASSES=70
 if [[ "$passes" -lt $SOAK_MIN_PASSES ]]; then
   printf 'FATAL: only %s passing assertions ran, expected at least %s — a row was deleted\n' "$passes" "$SOAK_MIN_PASSES" >&2
   exit 1

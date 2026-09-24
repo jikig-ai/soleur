@@ -160,6 +160,22 @@ function emittedStages(text: string): string[] {
 
 const RETIRED = ["app_ghcr_fallback", "app_ghcr_served", "inngest_ghcr_fallback"] as const;
 
+// The soak's `declare -A RETIRED_QUERIES=( ... )` block (the retired-names arm, outside
+// FAIL_QUERIES). Same fail-loud anchoring as soakFailQueries: a missing or unclosed block throws.
+function soakRetiredBlock(): { start: number; end: number; body: string } {
+  const start = soak.indexOf("declare -A RETIRED_QUERIES=(");
+  if (start === -1) throw new Error("RETIRED_QUERIES array block not found in zot-soak-6122.sh");
+  const rest = soak.slice(start);
+  const close = rest.search(/\n[ \t]*\)/);
+  if (close === -1) throw new Error("RETIRED_QUERIES array block is not closed");
+  const end = start + close + rest.slice(close).indexOf(")") + 1;
+  return { start, end, body: soak.slice(start, end) };
+}
+const soakWithoutRetiredBlock = (): string => {
+  const { start, end } = soakRetiredBlock();
+  return soak.slice(0, start) + soak.slice(end);
+};
+
 const observability = readFileSync(join(here, "../server/observability.ts"), "utf8");
 
 // Scope a `resource "sentry_alert" "<name>"` BODY out of issue-alerts.tf —
@@ -237,14 +253,17 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   // ZOT_INNGEST sample queries, so a broken prefix drives the sample to 0 and FAILs the soak.
   // The stage: queries have no such self-validation, so the key is pinned here instead.
   it("both boot emitters tag with the literal key `stage` (the soak's bare stage: queries depend on it)", () => {
-    // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail,...}; emits app_ghcr_fallback.
+    // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail,...}; since #8036 1d it carries
+    // the web fresh boot's app_zot beacon and the seed block's on_err stage=pull fatal (the soak's
+    // APP_ZOT and WEB_FATAL arms), and no watched FAIL_QUERIES signal.
     // Open prefix, not closed with `}`: #8651 APPENDED host_name after detail (ADR-147: add tags,
     // never rename) so the boot trail can attribute a fresh-boot event to its host. The prefix
     // still fails on a `stage` rename, a reorder, or a dropped tag — it tolerates only appends.
     expect(cloudInit).toContain('"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"');
     expect(cloudInit).toContain('"detail":"%s","host_name":"${host_name}"}}');
-    // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region,...}; emits
-    // inngest_ghcr_fallback. A separate emitter that happens to share the no-feature/op gap.
+    // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region,...}; carries
+    // inngest_zot / inngest_pull_fatal (the colocated block; the dedicated host's host-local copy
+    // uses the same schema). A separate emitter that happens to share the no-feature/op gap.
     //
     // Deliberately NOT terminated with `}`: #6969/ADR-147 APPENDS host_name and detail tags to
     // this emitter, and ADR-147's design rule is "add tags, never rename". Pinning the closing
@@ -257,17 +276,32 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   });
 
   // #8036 1d: BOTH inngest boot templates emit the terminal stage, at fatal, from a CODE line.
-  // Two emitters for one value: the dedicated host's host-local `soleur-boot-emit` in
-  // cloud-init-inngest.yml, and cloud-init.yml's gated colocated block (dead while
-  // web_colocate_inngest=false, but a toggle flip must not resurrect an unwatched name). One
-  // leg per file, so a rename that lands in one template only reds its own leg (Guard 2 row 2).
-  // Pinned on the CALL FORM with the level, on comment-stripped text: the templates' rationale
-  // prose names the stage, and prose must not satisfy an emit-site pin.
-  it("cloud-init-inngest.yml emits inngest_pull_fatal at fatal (the dedicated host's miss arm)", () => {
-    expect(codeLines(cloudInitInngest)).toContain("soleur-boot-emit inngest_pull_fatal fatal");
+  // THREE emit SITES for one value: the dedicated host's host-local `soleur-boot-emit` in
+  // cloud-init-inngest.yml fires from two arms (the zot miss, and the no-endpoint arm), and
+  // cloud-init.yml's gated colocated block fires from one (dead while web_colocate_inngest=false,
+  // but a toggle flip must not resurrect an unwatched name). One leg per SITE, not per file: a
+  // per-file toContain() is satisfied by either inngest arm alone, so deleting the other left it
+  // green while that arm ended the boot with no page (Guard 2 row 2).
+  // Pinned on the CALL FORM with the level AND the arm's own detail literal, on comment-stripped
+  // text: the templates' rationale prose names the stage, and prose must not satisfy a pin.
+  it("cloud-init-inngest.yml's zot-MISS arm emits inngest_pull_fatal at fatal", () => {
+    expect(codeLines(cloudInitInngest)).toContain('soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc"');
   });
-  it("cloud-init.yml's colocated inngest block emits inngest_pull_fatal at fatal", () => {
-    expect(codeLines(cloudInit)).toContain("soleur-boot-emit inngest_pull_fatal fatal");
+  it("cloud-init-inngest.yml's NO-ENDPOINT arm emits inngest_pull_fatal at fatal", () => {
+    expect(codeLines(cloudInitInngest)).toContain('soleur-boot-emit inngest_pull_fatal fatal "rc=noendpoint"');
+  });
+  it("cloud-init-inngest.yml has exactly the two inngest_pull_fatal Sentry emit sites (no third, unpinned one)", () => {
+    const sites = codeLines(cloudInitInngest).match(/soleur-boot-emit\s+inngest_pull_fatal\b/g) ?? [];
+    expect(sites.length).toBe(2);
+  });
+  it("cloud-init.yml's colocated inngest block emits inngest_pull_fatal at fatal on its pull's else-arm", () => {
+    // Anchored on the SAME line's success arm, so this is the colocated block's pull and not some
+    // other emit of the name; the pull command itself is left open (a timeout wrapper is fine).
+    expect(codeLines(cloudInit)).toMatch(
+      /then IREF="\$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_pull_fatal fatal; exit 1; fi/,
+    );
+    const sites = codeLines(cloudInit).match(/soleur-boot-emit\s+inngest_pull_fatal\b/g) ?? [];
+    expect(sites.length).toBe(1);
   });
 
   // #6462: the fresh-boot DENOMINATOR. Since #8036 1d app_zot is the ONLY success arm of a web
@@ -398,12 +432,18 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   });
 
   // #8036 1d, the OTHER direction: the three retired values cannot come back on ANY side — the
-  // rule's conditions, the soak (array AND every code line), or either boot template's code.
+  // rule's conditions, the soak (FAIL array AND every code line), or either boot template's code.
   // Residual-zero on the rule is read from the EXTRACTED condition set, not the file: the
   // rule's comment block names the retired values on purpose.
+  //
+  // ONE exemption, and it is pinned: the soak's `RETIRED_QUERIES` array still COUNTS the three
+  // names, because a host born from a pre-1d template inside the soak window emits them and no
+  // current-name query can see it. That block is cut out of the soak scan here — and only that
+  // block: the leg below pins it to exactly the three bare queries, so the exemption cannot
+  // widen into a hiding place.
   it("the three retired values are gone from the rule, the soak and both templates (residual-zero)", () => {
     const alarm = alarmFilterSet();
-    const soakCode = codeLines(soak);
+    const soakCode = codeLines(soakWithoutRetiredBlock());
     // Non-vacuity floor for the scans below: each scanned text must be substantial CODE, so
     // pointing a scan at an empty/misread file reds instead of trivially "containing nothing".
     for (const [label, text] of [
@@ -422,10 +462,21 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     }
   });
 
+  it("the soak's RETIRED_QUERIES block is exactly the three retired names as bare stage: queries", () => {
+    const entries = [...soakRetiredBlock().body.matchAll(/^\s*\[([a-z_]+)\]='([^']+)'/gm)].map(
+      (m) => `${m[1]}=${m[2]}`,
+    );
+    expect(entries.sort()).toEqual(RETIRED.map((v) => `${v}=stage:"${v}"`).sort());
+    // And it is not a FAIL_QUERIES member: parity with the rule (which no longer watches them) holds.
+    for (const v of RETIRED) expect(soakFailQueries().has(v)).toBe(false);
+  });
+
   // Guard 2 residual (#8036 1d): a failure stage must not EXTEND the success stage's name.
-  // Better Stack is searched by SUBSTRING (`--grep 'stage=inngest_zot'`, and the 7462/7674
-  // probes' `count_stage inngest_zot`), so an `inngest_zot_miss` would be counted as a
-  // zot-served boot there. Every emitted stage beginning with `inngest_zot` must BE inngest_zot.
+  // The operator's Better Stack search is a SUBSTRING match (`scripts/betterstack-query.sh
+  // --grep 'stage=inngest_zot'` compiles to `raw LIKE '%stage=inngest_zot%'`), so an
+  // `inngest_zot_miss` would read as a zot-served boot there. (Sentry `stage:` matching and
+  // inngest-zot-boot-7462.sh's `count_stage` — `grep -cxF`, a whole-line exact match — are NOT
+  // fooled by it.) Every emitted stage beginning with `inngest_zot` must BE inngest_zot.
   it("no emitted stage in either template begins with inngest_zot other than inngest_zot itself", () => {
     for (const [label, text] of [
       ["cloud-init.yml", cloudInit],

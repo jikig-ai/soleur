@@ -289,7 +289,7 @@ jobs:
       # because nothing compared them.
       #
       # It matters because cloud-init.yml's WEB-HOST arm substitutes the zot ref INTO $IREF
-      # (`if docker pull "$ZIREF"; then IREF="$ZIREF"`) and then execs that payload AS ROOT.
+      # (`if timeout 180 docker pull "$ZIREF"; then IREF="$ZIREF"`) and then execs that payload AS ROOT.
       # An unpinnable zot copy therefore left the root-executed path on a mutable tag, and
       # pinning only the GHCR literal would not have closed it.
       #
