@@ -742,6 +742,8 @@ describe("boot self-probe", () => {
       return "";
     });
     REALPATHS.set("/proc/self/fd/7", "/secret/tenant/file");
+    // fd 5 resolves to a file too: only its close-on-exec flag may exclude it.
+    REALPATHS.set("/proc/self/fd/5", "/some/cloexec/file");
     await mod.verifyC4RenderSandboxOnce();
     expect(obs.warnSilentFallback).toHaveBeenCalledTimes(1);
     const [err, opts] = obs.warnSilentFallback.mock.calls[0];

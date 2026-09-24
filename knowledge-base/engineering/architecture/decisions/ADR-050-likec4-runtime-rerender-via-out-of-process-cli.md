@@ -144,3 +144,118 @@ with a relative `icon` path bakes the random staging path into the model (it alr
 workspace path). A `file://` icon URI under the stage is rewritten to a stable `/c4-sources` root so the committed
 model does not change on every save. The editor's staleness banner copy is tracked as #8695. `syncWorkspace`'s
 `git pull` in the tenant workspace is a separate surface, measured separately.
+
+> **Superseded 2026-09-24 (#8696, #8695):** the first two sentences of the Residuals paragraph above
+> (the child runs as the app's uid; bwrap tracked as #8696) and the banner-copy sentence (#8695) are
+> resolved by the amendment below. The icon and `syncWorkspace` sentences still stand.
+
+## Amendment — 2026-09-24 (#8696, #8695): render child sandboxed; wasm layout pinned
+
+**Decision.** The likec4 child runs as
+`/usr/bin/choom -n 1000 -- /usr/bin/bwrap <argv> -- /usr/bin/prlimit --nproc=64 -- node likec4 export json --no-use-dot -o /c4-out/model.likec4.json .`
+(`server/c4-render.ts`, `buildLikeC4SandboxArgv` + `renderCommand`; one `spawn(` site). The argv:
+
+- `--die-with-parent --new-session`; `--unshare-user/pid/net/ipc/uts` (user/pid/net are the set the
+  deploy canary proves for the Agent SDK argv, ADR-079; ipc/uts are admitted by the same seccomp
+  `CLONE_NEWUSER` rule and proved by the boot self-probe).
+- An **allowlisted root**: `--ro-bind /usr /usr`, merged-usr symlinks for `/bin /lib /lib64 /sbin`,
+  and `--ro-bind` of `/etc/ld.so.cache`, `/etc/passwd`, `/etc/group` (likec4 calls `os.userInfo()`
+  at import and crashes without passwd). An allowlist rather than `--ro-bind / /` plus masks: the
+  next mount added to the container is excluded by construction.
+- **No `/proc`.** `--proc /proc` is EPERM in this Docker setup, and binding the parent's `/proc`
+  (as the SDK argv does) would expose `/proc/<server-pid>/environ` — the exposure this removes.
+- `--dev /dev`; `--size 64MiB --tmpfs` for `/dev/shm`, `/tmp` and `/c4-home`; the staged sources
+  `--ro-bind`ed at `/c4-sources` (the cwd); `<stage>/out` `--bind`ed at `/c4-out` (the only
+  writable bind from the host); then `--remount-ro /dev` and `--remount-ro /` after every mount.
+- `--clearenv` plus exactly `PATH`, `HOME=/c4-home`, `TMPDIR=/tmp`, `LANG=C.UTF-8`
+  (bwrap adds `PWD`). bwrap's own environment is the existing allow-list, so it never sees a secret.
+- `--json-status-fd 3`: bwrap writes `{"exit-code": N}` only after the child it set up has run.
+  A non-zero exit with no such record is `sandbox_error` (setup failed); with one it is
+  `non_zero_exit`. The child cannot reach fd 3 (measured), so it cannot forge the distinction.
+- Outside the sandbox, `choom -n 1000` makes the render the OOM killer's first choice over the
+  server; inside, `prlimit --nproc=64` caps its process count (likec4 peaks at 13 tasks; the limit
+  is per user namespace, so a concurrent server spawn still succeeds — measured).
+- Outside production only, the install prefixes of node and likec4 are added as `--ro-bind p p`
+  (after the tmpfs mounts) so CI's `/opt/hostedtoolcache` node runs. **Production pin:** with
+  `NODE_ENV=production`, bwrap, node and the likec4 entry must all resolve under `/usr` and no extra
+  bind may exist, else the render returns `sandbox_error` without spawning.
+
+**Fail closed.** Every sandbox failure (launcher missing, setup failure, binaries unresolvable or
+outside `/usr`, a sandbox that does not exit) is `sandbox_error` → the internal diagnostic; the
+`.c4` is still committed. `C4_RENDER_SANDBOX=off` selects a direct spawn (still `--no-use-dot`) only
+when `NODE_ENV !== "production"`; there is no other unsandboxed path.
+
+**The host does not trust the child's output (Guard 5).** This extends the spirit of AP-020 from
+the hook stdin envelope (the register's scope) to child-written files: the model is read through
+one fd opened `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`, `fstat`-checked as a regular file of at most 20 MiB,
+and read from that fd — a planted symlink, FIFO or oversize file is `io_error`, never followed or
+waited on (measured with real bwrap: the child can plant the symlink; the host refuses it). After a
+timeout the host waits up to 5 s for the child's `close` (every sandbox process gone) before
+settling, and if it never comes the stage is left for the stale sweep rather than removed while a
+sandbox process can still write into it.
+
+**Wasm layout pinned; zero-view models refused.** likec4 1.50.0 defaults `--use-dot` to true when
+it detects a container (`/.dockerenv`). The runner image has no graphviz, so every production
+render since #4964 laid out with a missing binary: exit 0, all elements, **zero views**, which the
+elements-only gate committed. `--no-use-dot` pins wasm layout (the same engine the plugin's
+regenerator uses outside containers), and a views gate returns `layout_failed` (internal diagnostic,
+previous model kept) for any export without a non-empty `views` object. A successful layout always
+emits at least `index`, so this never blames the user's source.
+
+**Render pool.** This module is bundled twice into one process (the custom server via the
+Concierge tool, the Next route), so the concurrency counter lives on
+`globalThis[Symbol.for("soleur.c4RenderPool")]`: one `POOL_SIZE` (default 2) per process. A render
+waits at most 10 s for a slot, then returns `timeout` / `render slot wait` (Sentry warning: load,
+not a defect). Worst case before the model commit: stage 10 s + slot 10 s + spawn 25 s + kill
+grace 5 s + `rm` ≈ 50 s.
+
+**Observability.** Failures reach Sentry via `reportSilentFallback(null, …)` (a real `Error` loses
+its tags to the pino mirror, #8629) with message `c4 re-render failed: <reason>` and tags
+`reason`, `phase`, `detail_class` (`bwrap-setup`, `bwrap-enoent`, `outside-usr`, `not-resolvable`,
+`sandbox-no-exit`, `output-rejected`, `zero-views`, `slot-wait`, `likec4-exit`, `other`), so each
+failure class opens its own issue and fires the default first-seen alert. **Boot self-probe:**
+`verifyC4RenderSandboxOnce()` runs inside the server's `listen` callback in production, never
+awaited, and renders a 2-element fixture through the same spawn site and argv — in the real
+container, under the real seccomp and AppArmor profiles, on every start including the canary
+container. Success emits a Sentry info event `event_type:c4-sandbox-probe` (info pino lines never
+reach Better Stack); failure emits `op=sandbox-selfprobe`. It is report-only: it never gates a
+deploy (learning 2026-06-04: dark-launch a new probe report-only first). It also reports, by count
+only, any file/dir fd ≥ 3 the server holds without close-on-exec.
+
+**Banner (#8695).** The save's `rerenderDiagnostic` now reaches the staleness banner, whose second
+line states it; with no reason (only a supersede by a newer source change) it says so and promises
+no refresh. A resync failure after a committed model now carries the retry diagnostic.
+
+**Measurements** (replica of the runner stage: `node:22-slim@sha256:4f77a690…` + `likec4@1.50.0` +
+apt `bubblewrap` **0.8.0**, `--security-opt seccomp=infra/seccomp-bwrap.json`, `--cpus 2 --memory
+2g`, this repo's 82-view model; AppArmor not loaded on the measuring host — the boot probe closes
+that gap in the real container). CI runs a newer bwrap from `ubuntu-latest`; every option used
+exists in 0.8.0.
+
+| Measurement | Result |
+|---|---|
+| final argv, repo model | rc 0, 82 views, 4.5 s; **byte-identical** to the unsandboxed render |
+| peak tmpfs use (`du -sb`) | `/tmp` 60 B, `/c4-home` 160 B, `/dev/shm` 40 B → 64 MiB cap |
+| unsandboxed, no flag (today's prod) | rc 0, **0 views**, ~20k stderr lines (`dot` not found) |
+| two concurrent renders | 12.5 s wall, cgroup `memory.peak` 366 MiB |
+| `--json-status-fd` | `child-pid` is written even when setup fails; `exit-code` only after the child ran; a payload printing `bwrap: forged` and exiting 7 records `exit-code: 7`; fd not inheritable |
+| `prlimit --nproc=64` inside | a fork loop capped at 61; a concurrent host spawn succeeded; likec4 renders down to `--nproc=12` |
+| `choom -n 1000` outside | sandboxed process `oom_score_adj=1000` |
+| `setpriv -d` inside | `no_new_privs: 1` |
+| writes | `/`, `/dev`, `/c4-sources` read-only; `/tmp`, `/c4-home`, `/dev/shm` writable; `/workspaces`, `/app`, `/proc` absent |
+| `--disable-userns` | fails: `/proc/sys/user/max_user_namespaces: Read-only file system` → not used |
+
+**Alternatives rejected.** Deny-list root (`--ro-bind / /` + masks); `--proc /proc` (EPERM); the
+parent `/proc` (exposes environ); `--disable-userns` (fails here); `RLIMIT_AS` (V8/wasm reserve large
+virtual ranges); a container `--pids-limit` (host-wide change for one render); stdout output instead
+of `/c4-out` (`/dev/stdout` needs `/proc`); a deploy-canary row as a gate (couples rollback to an
+unproven probe; promote once the boot probe has a clean record); a dedicated IaC Sentry alert (the
+first-seen route plus `detail_class` covers it and would move `c4-count-parity`'s rule counts);
+falling back to an unsandboxed spawn (a silent downgrade); installing graphviz instead of
+`--no-use-dot` (a second layout engine diverging from the plugin regenerator's).
+
+**Residuals.** The disk-backed `/c4-out` is unsized: a compromised child can fill disk for at most
+25 s. Memory is bounded by the container `--memory` cap, not per render. The child can create
+nested user namespaces (seccomp allows `CLONE_NEWUSER`; `--disable-userns` fails), so kernel
+privilege-escalation bugs stay in scope — equally true of the agent sandbox. A Concierge
+`edit_c4_diagram` completing while the editor is open does not reload it (tracked separately).

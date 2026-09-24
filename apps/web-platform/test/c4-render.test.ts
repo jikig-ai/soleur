@@ -41,6 +41,7 @@ vi.mock("@/server/observability", () => ({ reportSilentFallback: vi.fn(), warnSi
 
 import { constants } from "node:fs";
 import {
+  RAW_MODEL_READ_CAP,
   renderC4Model,
   renderCommand,
   STAGE_DEADLINE_MS,
@@ -193,6 +194,20 @@ describe("renderC4Model", () => {
     expect(flags & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
     expect(flags & constants.O_NONBLOCK).toBe(constants.O_NONBLOCK);
     expect(fsMock.readFile.mock.calls.some((c) => typeof c[0] === "string" && String(c[0]).includes("model.likec4.json"))).toBe(false);
+  });
+
+  it("Guard 5: an output over RAW_MODEL_READ_CAP is rejected from fstat alone — never read", async () => {
+    const child = makeChild();
+    const handleRead = vi.fn(async () => VALID_MODEL);
+    fsMock.open.mockImplementation(async () => ({
+      stat: async () => ({ isFile: () => true, size: RAW_MODEL_READ_CAP + 1 }),
+      readFile: handleRead,
+      close: async () => {},
+    }));
+    spawnThenEmit(child, () => child.emit("close", 0, null));
+    const res = await renderC4Model(STAGE);
+    expect(res).toMatchObject({ ok: false, reason: "io_error", detail: "model output rejected: too large", detailClass: "output-rejected" });
+    expect(handleRead).not.toHaveBeenCalled();
   });
 
   it("Guard 2: elements without views is layout_failed (never committed); views must be a non-empty plain object", async () => {
