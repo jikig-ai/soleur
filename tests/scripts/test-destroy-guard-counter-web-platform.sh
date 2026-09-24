@@ -983,6 +983,20 @@ t_deploy_pipeline_fix_carries_ntd_halt() {
   else
     _report "T56h the non_terraform_data_deletes HALT exits non-zero" fail "no exit 1 within the HALT block"
   fi
+  if grep -qF "rb_updates=\$(echo \"\$counts\" | jq -r '.reboot_updates') || rb_rc=\$?" <<<"$code" \
+     && grep -qF '[[ "$rb_rc" -ne 0 || ! "$rb_updates" =~ ^[0-9]+$ ]]' <<<"$code"; then
+    _report "T56i deploy-pipeline-fix parses and validates .reboot_updates (fail-CLOSED)" ok
+  else
+    _report "T56i deploy-pipeline-fix parses and validates .reboot_updates" fail "no guarded, validated capture"
+  fi
+  local rb_ln
+  rb_ln=$({ grep -nF '[[ "$rb_updates" -gt 0 ]]' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  window="$(awk -v s="${rb_ln:-0}" 'NR >= s && NR < s + 5' <<<"$code")"
+  if [[ -n "$rb_ln" && -n "$apply_ln" && "$rb_ln" -lt "$apply_ln" ]] && grep -qE '^[[:space:]]*exit 1$' <<<"$window"; then
+    _report "T56j deploy-pipeline-fix HALTs on reboot_updates > 0 before its apply" ok
+  else
+    _report "T56j deploy-pipeline-fix HALTs on reboot_updates > 0 before its apply" fail "reboot line='${rb_ln}' apply line='${apply_ln}'"
+  fi
 }
 
 # ── T55 — the host_creates arm is hcloud_server-scoped (#6919). ──────────────
@@ -1596,16 +1610,16 @@ _ran=$((pass + fail))
 # Measured on the as-written suite after the origin/main merge: 49 shared with the merge base,
 # + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
 # + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
-# delete arms (#8705, T63a-f, T56e-h) = 87. Exact, not a ceiling: deleting a
-# single arm invocation reports "only 86 assertions ran, floor is 87".
+# delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 88 assertions ran, floor is 89".
 # current count rather than leaving slack — the review panel showed 3 assertions
 # of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
 # is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 87 ]]; then
+if [[ "$_ran" -lt 89 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 87. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 89. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 87)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 89)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="
