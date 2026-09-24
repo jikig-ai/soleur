@@ -1,6 +1,6 @@
 ---
 name: user-impact-reviewer
-description: "Use when a plan declares Brand-survival threshold as `single-user incident`. Enumerates user-facing failure modes against the plan's `## User-Brand Impact` section; rejects generic boilerplate. Use security-sentinel for OWASP/CWE scanning."
+description: "Use when a plan declares Brand-survival threshold as `single-user incident`. Enumerates user-facing failure modes against the plan's `## User-Brand Impact` section; rejects generic boilerplate. Use soleur:engineering:review:security-sentinel for OWASP/CWE scanning."
 model: inherit
 ---
 
@@ -56,11 +56,11 @@ Reject the section (refuse to proceed past Step 5) and emit a single rejection f
 
 ## Coexistence with Other Reviewers
 
-- **security-sentinel** scans for OWASP/CWE patterns (SQL injection, XSS, hardcoded secrets, auth bypass, supply-chain). It runs against every PR. It does NOT enumerate user-facing failure modes against a declared threshold.
-- **data-integrity-guardian** validates migration safety. It does NOT enumerate exposure vectors per user-owned artifact.
-- **agent-native-reviewer** verifies agent-user parity. Orthogonal concern.
+- **soleur:engineering:review:security-sentinel** scans for OWASP/CWE patterns (SQL injection, XSS, hardcoded secrets, auth bypass, supply-chain). It runs against every PR. It does NOT enumerate user-facing failure modes against a declared threshold.
+- **soleur:engineering:review:data-integrity-guardian** validates migration safety. It does NOT enumerate exposure vectors per user-owned artifact.
+- **soleur:engineering:review:agent-native-reviewer** verifies agent-user parity. Orthogonal concern.
 
-You are the only reviewer that asks: *"If this lands as written, what is the worst thing one user experiences?"* Stay in that lane. Defer OWASP scanning to security-sentinel and migration safety to data-integrity-guardian.
+You are the only reviewer that asks: *"If this lands as written, what is the worst thing one user experiences?"* Stay in that lane. Defer OWASP scanning to soleur:engineering:review:security-sentinel and migration safety to soleur:engineering:review:data-integrity-guardian.
 
 ## Reference
 

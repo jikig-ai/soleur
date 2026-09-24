@@ -122,7 +122,8 @@ resource "random_password" "inngest_redis_password_dedicated" {
 # `prd`), TF then managing only the secrets + token inside it.
 resource "doppler_project" "inngest" {
   name = "soleur-inngest"
-  # Doppler caps description at 255 chars — keep concise; full rationale is in the comments above.
+  # Doppler's API caps `description` at 255, unchecked by the provider and by plan;
+  # scripts/lint-doppler-description-length.py enforces it at PR time.
   description = "Isolated boot-credential project for the dedicated Inngest singleton (#6178, ADR-100). Its prd root config holds ONLY the inngest secret set (signing/event keys, Redis password, out-of-band Postgres URI); cross-project isolation from soleur/prd."
 }
 

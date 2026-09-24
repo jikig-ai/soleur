@@ -73,7 +73,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 68 |
+| Agents | 67 |
 | Commands | 3 |
 | Skills | 102 |
 | MCP Servers | 5 |
@@ -180,7 +180,7 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `pr-comment-resolver` | Address PR comments and implement fixes |
 
-### Operations (6)
+### Operations (5)
 
 | Agent | Description |
 |-------|-------------|

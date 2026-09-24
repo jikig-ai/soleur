@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { execFileSync } from "child_process";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { PLUGIN_ROOT, discoverAgentPaths } from "../lib/agent-registry";
+import { discoverAgentPaths } from "../lib/agent-registry";
 import { REPO_ROOT, readPopulation } from "../lib/harness-parity";
 import {
   CLAUDE_CODE_TOOLS,
@@ -34,19 +34,9 @@ import {
 const codex = readToolsTable(CODEX_INSTRUCTIONS);
 const devin = readToolsTable(DEVIN_INSTRUCTIONS);
 
-/**
- * The agent-read corpus: the census population (skills, commands, the Codex/Devin
- * shims and, since #8317, skill references) plus the agent bodies, using the same
- * exclusions `discoverAgentPaths()` applies.
- */
+/** The agent-read corpus is the census population (skills, commands, shims, references, agent bodies). */
 function corpus(): { path: string; text: string }[] {
-  const docs = readPopulation().map((d) => ({ path: d.path, text: d.text }));
-  // `discoverAgentPaths()` returns paths relative to PLUGIN_ROOT, not absolute.
-  const agents = discoverAgentPaths().map((p) => ({
-    path: `plugins/soleur/${p}`,
-    text: readFileSync(resolve(PLUGIN_ROOT, p), "utf8"),
-  }));
-  return [...docs, ...agents];
+  return readPopulation().map((d) => ({ path: d.path, text: d.text }));
 }
 
 function lsFiles(pathspec: string): number {

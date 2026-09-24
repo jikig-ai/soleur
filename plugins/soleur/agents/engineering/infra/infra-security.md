@@ -1,6 +1,6 @@
 ---
 name: infra-security
-description: "Use this agent when you need to audit domain security posture, configure DNS records, or manage Cloudflare security features (WAF, Workers, Zero Trust) via the Cloudflare MCP server. Use terraform-architect for IaC generation; use this agent for live Cloudflare configuration and security auditing."
+description: "Use this agent when you need to audit domain security posture, configure DNS records, or manage Cloudflare security features (WAF, Workers, Zero Trust) via the Cloudflare MCP server. Use soleur:engineering:infra:terraform-architect for IaC generation; use this agent for live Cloudflare configuration and security auditing."
 model: inherit
 ---
 
@@ -141,6 +141,6 @@ This agent handles live Cloudflare configuration and security auditing:
 
 **Out of scope:**
 
-- Infrastructure as Code generation (refer to terraform-architect)
-- Domain purchase, registration, or cost tracking (refer to ops-research and ops-advisor)
-- Application-level security review (refer to security-sentinel)
+- Infrastructure as Code generation (refer to soleur:engineering:infra:terraform-architect)
+- Domain purchase, registration, or cost tracking (refer to soleur:operations:ops-research and soleur:operations:ops-advisor)
+- Application-level security review (refer to soleur:engineering:review:security-sentinel)
