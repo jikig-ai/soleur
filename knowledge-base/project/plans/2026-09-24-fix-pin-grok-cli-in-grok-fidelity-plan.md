@@ -473,39 +473,39 @@ cardinalities change, and `plugins/soleur/test/c4-count-parity.test.sh` must sta
 
 ## Acceptance Criteria
 
-- [ ] `ci.yml` job `grok-fidelity` declares `GROK_PIN`, `GROK_SHA256` and `GROK_DISABLE_AUTOUPDATER`
+- [x] `ci.yml` job `grok-fidelity` declares `GROK_PIN`, `GROK_SHA256` and `GROK_DISABLE_AUTOUPDATER`
       exactly once each at job `env`: `grep -c 'GROK_PIN: "'`, `grep -c 'GROK_SHA256: "'` and
       `grep -c 'GROK_DISABLE_AUTOUPDATER: "'` over `.github/workflows/ci.yml` each = 1, and
       `grep -c 'x.ai/cli/install.sh' .github/workflows/ci.yml` = 0.
-- [ ] The install step downloads `https://x.ai/cli/grok-${GROK_PIN}-linux-x86_64`,
+- [x] The install step downloads `https://x.ai/cli/grok-${GROK_PIN}-linux-x86_64`,
       verifies sha256 **before** installing or executing, installs to `~/.grok/bin/grok`, and asserts
       the parsed `grok --version` equals `GROK_PIN`. On drift it exits **3** with
       `::error::grok-fidelity[grok] version-mismatch:<got>!=<pin>`, and with
       `binary-digest-mismatch` / `download-failed` for the other two failure classes.
-- [ ] The step validates `GROK_PIN` against `^[0-9]+\.[0-9]+\.[0-9]+$` before curl, and curl carries
+- [x] The step validates `GROK_PIN` against `^[0-9]+\.[0-9]+\.[0-9]+$` before curl, and curl carries
       `--proto '=https' --proto-redir '=https'`. The job's checkout sets `persist-credentials: false`.
       A post-gate step re-runs `sha256sum -c` on `~/.grok/bin/grok` and exits 3 with
       `binary-changed-during-gate` on mismatch.
-- [ ] Guard 1 mutation rows 1-5 and 7 are each observed RED locally (rc 3 plus the reason token). The
+- [x] Guard 1 mutation rows 1-5 and 7 are each observed RED locally (rc 3 plus the reason token). The
       must-PASS row is observed GREEN. Harness row (a) (body replaced by `true`) and row 6 (comparison
       deleted, so rows 3 and 4 are reported FAIL) are both observed. Every run is `bash -e`, with the
       body and env loaded from `ci.yml` by PyYAML.
 - [ ] The first CI run on the PR shows `grok-fidelity` green, with the log line
       `grok-fidelity[grok] pinned 1.0.41 (sha256 ok)` and the live
       `grok inspect contract OK: … project agents, … plugin skills` line (proves the live arm ran).
-- [ ] `plugins/soleur/test/README.md` §Vendor-CLI pins has a Grok row. The "does NOT conform"
+- [x] `plugins/soleur/test/README.md` §Vendor-CLI pins has a Grok row. The "does NOT conform"
       paragraph is replaced, and the #8574 freshness sentence includes `curl -fsSL https://x.ai/cli/stable`.
-- [ ] ADR-245 decision 3 carries a dated #8615 amendment. "Pin staleness" covers the Grok pin.
-- [ ] `model.c4` edge `github -> platform.grokBuild` no longer says "install.sh". `model.likec4.json`
+- [x] ADR-245 decision 3 carries a dated #8615 amendment. "Pin staleness" covers the Grok pin.
+- [x] `model.c4` edge `github -> platform.grokBuild` no longer says "install.sh". `model.likec4.json`
       is regenerated and committed. `bash plugins/soleur/test/c4-model-freshness.test.sh` and
       `bash plugins/soleur/test/c4-count-parity.test.sh` pass, and
       `apps/web-platform` vitest `test/c4-code-syntax.test.ts test/c4-render.test.ts` passes.
-- [ ] The #8574 body has the appended `## Pin-freshness criterion` section listing Codex, Devin and
+- [x] The #8574 body has the appended `## Pin-freshness criterion` section listing Codex, Devin and
       Grok probes and the ownership-gap note. The prior body is preserved (diff the before and after
       bodies).
-- [ ] `actionlint .github/workflows/ci.yml` is clean. `bun test plugins/soleur/test/workflow-file-size.test.ts` passes.
+- [x] `actionlint .github/workflows/ci.yml` is clean. `bun test plugins/soleur/test/workflow-file-size.test.ts` passes.
       `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base HEAD origin/main)"` exits 0.
-- [ ] `infra/github/ruleset-ci-required.tf` is unchanged (`git diff --quiet origin/main -- infra/github/ruleset-ci-required.tf`).
+- [x] `infra/github/ruleset-ci-required.tf` is unchanged (`git diff --quiet origin/main -- infra/github/ruleset-ci-required.tf`).
 - [ ] The PR body uses `Closes #8615` and references #8574 (without closing it).
 
 ## Test Scenarios
