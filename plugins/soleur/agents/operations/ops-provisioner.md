@@ -40,7 +40,8 @@ After the user confirms payment is complete:
    filter that file through `"${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"`
    and shred it — an MCP tool result cannot be piped through the script — and capture neither
    snapshot nor screenshot of a page displaying a freshly-minted credential — a readonly
-   `type=text` credential panel renders in clear in both (#7947).
+   `type=text` credential panel renders in clear in both (#7947). If the redactor does not run
+   (`No such file`, a non-zero exit), shred the file unread and stop; never read it unredacted.
 2. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
 3. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
 
