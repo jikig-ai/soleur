@@ -891,6 +891,7 @@ else
   aff_label_n=$(wc -l < "$WORK/aff_labels" | tr -d ' ')
   if (( aff_enum_rc != 0 )) || (( aff_label_n < 1 )); then
     echo "ERROR: 'bash scripts/test-all.sh --enumerate-commands' exited ${aff_enum_rc} and emitted ${aff_label_n} registrations -- the census cannot derive the live floor, so every check below would certify a subset." >&2
+    grep -E '^(ERROR|FATAL):' "$WORK/aff_enum" | sed 's/^/    child: /' >&2
     fails=$((fails + 1))
   fi
 
@@ -1067,6 +1068,7 @@ else
     bash "$RUNNER" --affected --print-affected-set > "$WORK/aff_set" 2>/dev/null || aff_set_rc=$?
   if (( aff_set_rc != 0 )); then
     echo "ERROR: 'bash scripts/test-all.sh --affected --print-affected-set' exited ${aff_set_rc} -- the census derives classification from that flag's receipts; without them every check below is vacuous. Restore the flag rather than re-deriving here." >&2
+    grep -E '^(ERROR|FATAL):' "$WORK/aff_set" | sed 's/^/    child: /' >&2
     fails=$((fails + 1))
   else
     awk -F'\t' '$1=="AFFECTED_CLASS"{print $2"\t"$3}' "$WORK/aff_set" \

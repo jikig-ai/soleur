@@ -108,7 +108,7 @@ PASS=$_self_pass; FAIL=$_self_fail; cases=0
 # (every edge suite selects -> rows f/q red), SOLEUR_SUBAGENT/SOLEUR_ALLOW_FULL_GATE
 # move the refusal arms, FORCE_ALL preempts the asserted fallback reason, and
 # TEST_TIMING_LOG would write synthetic skip rows into the operator's real log.
-ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S"
+ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S -u SECONDS"
 
 # ---------------------------------------------------------------------------
 # Sandbox builder. $1 = sandbox runner path; $2 = "with-lib" | "no-lib".
@@ -803,14 +803,17 @@ fi
 # The fixture is a REAL git worktree of a TESTROOT-local repo (the incident
 # shape); the sandbox runner lives OUTSIDE the worktree so deleting it does
 # not remove the script under test. assert_fixture_dir guards every rm -rf.
-_wt_fixture() { # $1 = fixture root; prints "<wt-path> <runner-path>"
+# Sets _WT/_SB globals — printing two paths space-separated would break under a
+# whitespace TMPDIR and could truncate the path an arm then rm -rf's.
+_wt_fixture() { # $1 = fixture root
   local d="$1"
+  _WT=""; _SB=""
   git init -q "$d/repo" || return 1
   git -C "$d/repo" -c user.email=suite@example.com -c user.name=suite \
     commit -qm init --allow-empty || return 1
   git -C "$d/repo" worktree add -q --detach "$d/wt" HEAD || return 1
   build_sandbox "$d/sb/test-all.sh" with-lib >/dev/null || return 1
-  printf '%s %s\n' "$d/wt" "$d/sb/test-all.sh"
+  _WT="$d/wt"; _SB="$d/sb/test-all.sh"
 }
 
 # Bounded wait for a backgrounded runner. `wait` blocks until the child exits
@@ -830,6 +833,7 @@ _wait_bound() { # $1 = pid, $2 = seconds, $3 = markerfile
   kill "$_k" 2>/dev/null
   wait "$_k" 2>/dev/null
   [[ -f "$_m" ]] && WAIT_RC=124
+  return 0
 }
 
 # y1: mid-walk deletion. A `sleep` spliced after the ordinal tick widens the
@@ -838,7 +842,7 @@ _wait_bound() { # $1 = pid, $2 = seconds, $3 = markerfile
 cases=$((cases + 1))
 _wtd="$TESTROOT/wtdel-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "y1: fixture build"
 else
@@ -866,10 +870,10 @@ PY
   _wait_bound "$_wpid" 45 "$TESTROOT/bound-$cases"; rc=$WAIT_RC
   if [[ "$rc" == "124" ]]; then
     fail "y1: deleted-cwd run outlived the 45s bound (the incident shape)"
-  elif [[ "$rc" != "0" ]] && grep -qF 'working tree missing' "$TESTROOT/out-$cases"; then
-    pass "y1: mid-walk deletion exits rc=$rc with the named error"
+  elif [[ "$rc" == "4" ]] && grep -qF 'working tree missing' "$TESTROOT/out-$cases"; then
+    pass "y1: mid-walk deletion exits rc=4 with the named error"
   else
-    fail "y1: rc=$rc — want non-zero + 'working tree missing' ($(tail -3 "$TESTROOT/out-$cases"))"
+    fail "y1: rc=$rc — want 4 + 'working tree missing' ($(tail -3 "$TESTROOT/out-$cases"))"
   fi
 fi
 
@@ -877,7 +881,7 @@ fi
 cases=$((cases + 1))
 _wtd="$TESTROOT/wtpre-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "y2: fixture build"
 else
@@ -899,7 +903,7 @@ fi
 cases=$((cases + 1))
 _wtd="$TESTROOT/wtpre-enum-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "y3: fixture build"
 else
@@ -920,7 +924,7 @@ fi
 cases=$((cases + 1))
 _wtd="$TESTROOT/wtspin-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "z1: fixture build"
 else
@@ -956,7 +960,7 @@ fi
 cases=$((cases + 1))
 _wtd="$TESTROOT/wtbadnum-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "z2: fixture build"
 else
@@ -976,7 +980,7 @@ fi
 cases=$((cases + 1))
 _wtd="$TESTROOT/wthealth-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "z3: fixture build"
 else
@@ -1004,7 +1008,7 @@ fi
 cases=$((cases + 1))
 _wtd="$TESTROOT/wtsymlink-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "z4: fixture build"
 else
@@ -1028,19 +1032,23 @@ fi
 cases=$((cases + 1))
 _wtd="$TESTROOT/wtpipe-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "z5: fixture build"
 else
-  rc=0; _t0=$SECONDS
-  _pipe_out=$(cd "$_wt" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
-      bash "$_sb" --print-affected-set 2>/dev/null) || rc=$?
-  _elapsed=$(( SECONDS - _t0 ))
-  if [[ "$rc" == "0" ]] && (( _elapsed < 120 )) \
-    && grep -q $'AFFECTED_CLASS\t' <<<"$_pipe_out"; then
-    pass "z5: $( ) consumer EOFs at run exit (${_elapsed}s, not watchdog-lifetime)"
+  ( _cap=$(cd "$_wt" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+        bash "$_sb" --print-affected-set 2>/dev/null)
+    printf 'rc=%s\n' "$?" > "$TESTROOT/caprc-$cases"
+    printf '%s' "$_cap" > "$TESTROOT/cap-$cases" ) &
+  _wpid=$!
+  _wait_bound "$_wpid" 120 "$TESTROOT/bound-$cases"; rc=$WAIT_RC
+  if [[ "$rc" == "124" ]]; then
+    fail "z5: $( ) consumer blocked past 120s — leaked watchdog child held the pipe"
+  elif grep -qF 'rc=0' "$TESTROOT/caprc-$cases" \
+    && grep -q $'AFFECTED_CLASS\t' "$TESTROOT/cap-$cases"; then
+    pass "z5: $( ) consumer EOFs at run exit (not watchdog-lifetime)"
   else
-    fail "z5: rc=$rc elapsed=${_elapsed}s — leaked watchdog child held the pipe?"
+    fail "z5: caprc=$(cat "$TESTROOT/caprc-$cases" 2>/dev/null || echo missing)"
   fi
 fi
 
@@ -1052,7 +1060,7 @@ fi
 cases=$((cases + 1))
 _wtd="$TESTROOT/wtpipedel-$cases"
 _wt=""; _sb=""
-read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
 if [[ -z "$_wt" || -z "$_sb" ]]; then
   fail "z6: fixture build"
 else
@@ -1062,15 +1070,24 @@ p = sys.argv[1]
 s = open(p).read()
 old = '  _shard_ordinal=$(( _shard_ordinal + 1 ))'
 assert s.count(old) == 1, f"ordinal tick anchor count={s.count(old)}"
-s = s.replace(old, old + '\n  sleep 0.4', 1)
+s = s.replace(old, old + '\n  sleep 1', 1)
 open(p, 'w').write(s)
 PY
+  # tee keeps the $( ) EOF semantics identical (its read-end still waits on
+  # every upstream writer, leaked sleep included) while making the first
+  # receipt observable — the deletion is polled, never a fixed offset that can
+  # land before the watchdog arms or after the walk ends.
   ( _cap=$(cd "$_wt" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
-        bash "$_sb" --print-affected-set 2>/dev/null)
+        bash "$_sb" --print-affected-set 2>/dev/null \
+        | tee "$TESTROOT/live-$cases")
     printf 'rc=%s\n' "$?" > "$TESTROOT/caprc-$cases"
     printf '%s' "$_cap" > "$TESTROOT/cap-$cases" ) &
   _wpid=$!
-  sleep 2   # past preamble, inside the widened walk
+  _seen=0
+  for _i in $(seq 1 100); do
+    if grep -q $'AFFECTED_CLASS\t' "$TESTROOT/live-$cases" 2>/dev/null; then _seen=1; break; fi
+    sleep 0.1
+  done
   assert_fixture_dir "$_wt"
   rm -rf "$_wt"
   _wait_bound "$_wpid" 60 "$TESTROOT/bound-$cases"; rc=$WAIT_RC
@@ -1085,13 +1102,94 @@ PY
   fi
 fi
 
+# y4: EXECUTING mode mid-walk deletion — the probe is mode-agnostic, but past
+# the first registration a battery abort is exit 3 (coverage unresolved), not
+# the enumerate refusal's 4. First RAN record proves the walk began; the
+# summary marker must NOT appear (a truncated run never reaches it).
+cases=$((cases + 1))
+_wtd="$TESTROOT/wtexec-$cases"
+_wt=""; _sb=""
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
+if [[ -z "$_wt" || -z "$_sb" ]]; then
+  fail "y4: fixture build"
+else
+  python3 - "$_sb" <<'PY' || { fail "y4: splice"; }
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '  _shard_ordinal=$(( _shard_ordinal + 1 ))'
+assert s.count(old) == 1, f"ordinal tick anchor count={s.count(old)}"
+s = s.replace(old, old + '\n  sleep 1', 1)
+open(p, 'w').write(s)
+PY
+  ( cd "$_wt" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+      SANDBOX_RECORD="$TESTROOT/ran-$cases" \
+      bash "$_sb" > "$TESTROOT/out-$cases" 2>&1 ) &
+  _wpid=$!
+  for _i in $(seq 1 100); do
+    grep -q '^RAN' "$TESTROOT/ran-$cases" 2>/dev/null && break
+    sleep 0.1
+  done
+  assert_fixture_dir "$_wt"
+  rm -rf "$_wt"
+  _wait_bound "$_wpid" 60 "$TESTROOT/bound-$cases"; rc=$WAIT_RC
+  if [[ "$rc" == "3" ]] \
+    && grep -qF 'working tree missing' "$TESTROOT/out-$cases" \
+    && ! grep -qF 'suites passed ===' "$TESTROOT/out-$cases"; then
+    pass "y4: executing-mode mid-walk deletion exits 3, no summary marker"
+  else
+    fail "y4: rc=$rc (want 3, unresolved) out=$(tail -2 "$TESTROOT/out-$cases" 2>/dev/null | tr '\n' ' ')"
+  fi
+fi
+
+# z7: the GRACEFUL per-registration deadline, isolated from the watchdog —
+# the two share one bound, so a watchdog would race it; the splice no-ops the
+# arm (`_ENUM_TOP_PID=$$` -> true leaves the subshell's kill -0 liveness loop
+# empty → it exits immediately, unarmed). The 1s per-registration sleep walks
+# the 6-label corpus past a 3s deadline at a registration boundary, where the
+# graceful check exits 4 with the named error the signal-death path can't
+# produce.
+cases=$((cases + 1))
+_wtd="$TESTROOT/wtgrace-$cases"
+_wt=""; _sb=""
+_wt_fixture "$_wtd" && { _wt="$_WT"; _sb="$_SB"; }
+if [[ -z "$_wt" || -z "$_sb" ]]; then
+  fail "z7: fixture build"
+else
+  python3 - "$_sb" <<'PY' || { fail "z7: splice"; }
+import sys
+p = sys.argv[1]
+s = open(p).read()
+tick = '  _shard_ordinal=$(( _shard_ordinal + 1 ))'
+assert s.count(tick) == 1, f"tick count={s.count(tick)}"
+s = s.replace(tick, tick + '\n  sleep 1', 1)
+arm = '  _ENUM_TOP_PID=$$'
+assert s.count(arm) == 1, f"arm count={s.count(arm)}"
+s = s.replace(arm, '  true  # SANDBOX: watchdog unarmed — this arm tests the graceful layer', 1)
+open(p, 'w').write(s)
+PY
+  _t0=$SECONDS
+  rc=0
+  _out=$(cd "$_wt" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+      SOLEUR_ENUM_DEADLINE_S=3 \
+      bash "$_sb" --print-affected-set 2>&1) || rc=$?
+  _elapsed=$(( SECONDS - _t0 ))
+  if [[ "$rc" == "4" ]] && (( _elapsed < 30 )) \
+    && grep -qF 'enumerate deadline exceeded' <<<"$_out" \
+    && grep -qF 'registrations walked' <<<"$_out"; then
+    pass "z7: graceful deadline exits 4 with named error (elapsed ${_elapsed}s)"
+  else
+    fail "z7: rc=$rc elapsed=${_elapsed}s out=$(tail -2 <<<"$_out" | tr '\n' ' ')"
+  fi
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=40
+MIN_CASES=42
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2

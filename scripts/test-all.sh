@@ -55,8 +55,8 @@ set -euo pipefail
 #      The last two are #8761's enumerate/deleted-checkout protections:
 #        (e) working tree missing — a deleted cwd detected up-front, or
 #            mid-walk while still in enumerate mode or before the first
-#            dispatch (the deleted-checkout probe is mode-agnostic, but in an
-#            EXECUTING battery past dispatch it exits 3 instead — a mid-run
+#            registration (the deleted-checkout probe is mode-agnostic, but
+#            once an EXECUTING battery's walk has begun it exits 3 instead — a mid-run
 #            abort leaves real coverage unresolved, which is 3's shape);
 #        (f) enumerate deadline — the graceful per-registration bound for the
 #            enumerate family. Its hard-bound sibling is the watchdog's
@@ -596,8 +596,8 @@ _wt_missing_die() {
   echo "ERROR: working tree missing (deleted worktree?)" >&2
   echo "ERROR: working tree missing (deleted worktree?)"
   # 4 when nothing could have run — enumerate mode executes nothing by
-  # definition, and before the first dispatch in any mode; 3 once an
-  # executing battery has real results, because a mid-run cwd loss leaves
+  # definition, and before the first registration in any mode; 3 once the
+  # walk has begun in an executing battery, because a mid-run cwd loss leaves
   # coverage unresolved — the contract's 3-shape, not a refusal.
   if (( _ENUMERATE == 1 || ${_shard_ordinal:-0} == 0 )); then exit 4; else exit 3; fi
 }
@@ -607,13 +607,71 @@ _wt_missing_die() {
 if [[ ! -d "$PWD" ]]; then
   _wt_missing_die
 fi
-# `10#` and `> 0` mirror the TC_RUNTIME_CEILING_S parse (~line 2784): a bare
+# `10#` and `> 0` mirror the TC_RUNTIME_CEILING_S parse (same file): a bare
 # `=~ ^[0-9]+$` accepts `08` (octal literal → `(( ))` errors on it per
 # registration, silently killing the graceful layer) and `0` (fires the
 # watchdog instantly on every enumerate run). Non-numeric or zero falls back
 # to the default — the deadline is the fix, it cannot be disabled.
-if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0-9]+$ ]] && (( 10#$SOLEUR_ENUM_DEADLINE_S > 0 )); then
+if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0-9]{1,9}$ ]] && (( 10#$SOLEUR_ENUM_DEADLINE_S > 0 )); then
   _ENUM_DEADLINE_S=$(( 10#$SOLEUR_ENUM_DEADLINE_S ))
+fi
+
+# --- Enumerate watchdog (#8761) ----------------------------------------------
+# The enumerate/print path answers to record-consumers and previously had NO
+# wall-clock bound: a run holding a deleted cwd spun ~97% CPU for ~5h on two
+# cores. The per-registration deadline in _shard_selects is the graceful first
+# line; this subshell is the HARD bound — it ends the run even when control
+# flow never advances (a pure-compute spin inside one loop iteration, the
+# un-located incident-site class). Pure bash (sleep + kill): timeout(1) is
+# absent on stock macOS; the bounded-wait precedent is lib/test-contention.sh's
+# _tc_wait_heartbeat's tracked-sleep pattern. Armed HERE — before the preamble
+# and the walk, so a wedge anywhere in the enumerate run is bounded; exits
+# before the EXIT trap installs rely on the kill -0 poll (~1s) for disarm.
+# Disarmed at the single enumerate terminator ([shard] enumerate complete)
+# and from the EXIT trap (_enum_wd_disarm) — a terminator-only disarm would
+# leak the subshell past _wt_missing_die's exit, this fix's primary path.
+#
+# DISARM MUST KILL THE WATCHDOG'S CHILD TOO: the sleep inherits the runner's
+# stdout, so when a consumer reads the run through $( ) or a pipe, a killed
+# subshell whose sleep survives orphaned keeps the write end open and the
+# reader blocks for the rest of the deadline — the same "process gone, consumer
+# still waits" shape this issue is about. The subshell's TERM trap kills the
+# tracked sleep before exiting. The 1s granularity doubles as a parent-liveness
+# poll: `kill -0` each iteration exits the watchdog within ~1s of an
+# untrappable parent death (SIGKILL/OOM runs no EXIT trap, no disarm), and the
+# lstart identity comparison at fire time closes pid-reuse on the kill target.
+if (( _ENUMERATE == 1 )); then
+  _ENUM_TOP_PID=$$
+  _ENUM_TOP_LSTART="$(ps -o lstart= -p $$ 2>/dev/null)"
+  _ENUM_T0=$SECONDS
+  (
+    _wd_sleep=""
+    trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
+    _wd_end=$(( SECONDS + _ENUM_DEADLINE_S ))
+    while kill -0 "$_ENUM_TOP_PID" 2>/dev/null && (( SECONDS < _wd_end )); do
+      sleep 1 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null
+    done
+    # The kill -0 loop exits EITHER on deadline or on parent death — an
+    # untrappable parent death (SIGKILL/OOM runs no EXIT trap, no disarm)
+    # releases the consumer's pipe here instead of holding it to the
+    # deadline. Only the deadline arm fires, and only at a pid still
+    # bearing the start-time captured at arm — a recycled pid can never
+    # take the kill.
+    if (( SECONDS >= _wd_end )) \
+      && [[ -z "$_ENUM_TOP_LSTART" \
+        || "$(ps -o lstart= -p "$_ENUM_TOP_PID" 2>/dev/null)" == "$_ENUM_TOP_LSTART" ]]; then
+      # Kill BEFORE printing: a dead or undrained consumer pipe would SIGPIPE/
+      # stall the printf, and the deadline must not depend on the output path.
+      kill -TERM "$_ENUM_TOP_PID" 2>/dev/null || true
+      printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S" >&2
+      printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S"
+      sleep 5 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null
+      kill -KILL "$_ENUM_TOP_PID" 2>/dev/null || true
+    fi
+  ) &
+  _ENUM_WD_PID=$!
 fi
 
 # --- Contention instrumentation (#6789) ---
@@ -1250,9 +1308,9 @@ _shard_selects() {
   # Enumerate-scoped graceful deadline: a walk past the bound declines further
   # registrations by dying — the watchdog subshell remains the hard bound for a
   # spin that never reaches this check.
-  if (( _ENUMERATE == 1 && SECONDS > _ENUM_DEADLINE_S )); then
-    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s) at registration ${_shard_ordinal}" >&2
-    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s) at registration ${_shard_ordinal}"
+  if (( _ENUMERATE == 1 && SECONDS - ${_ENUM_T0:-0} > _ENUM_DEADLINE_S )); then
+    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s, SOLEUR_ENUM_DEADLINE_S) after ${_shard_ordinal} registrations walked" >&2
+    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s, SOLEUR_ENUM_DEADLINE_S) after ${_shard_ordinal} registrations walked"
     exit 4
   fi
   local label="$1"
@@ -2911,40 +2969,6 @@ trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _
 # assertion runs — which is why the prose above describes them instead of reproducing them.
 if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
 
-# --- Enumerate watchdog (#8761) ----------------------------------------------
-# The enumerate/print path answers to record-consumers and previously had NO
-# wall-clock bound: a run holding a deleted cwd spun ~97% CPU for ~5h on two
-# cores. The per-registration deadline in _shard_selects is the graceful first
-# line; this subshell is the HARD bound — it ends the run even when control
-# flow never advances (a pure-compute spin inside one loop iteration, the
-# un-located incident-site class). Pure bash (sleep + kill): timeout(1) is
-# absent on stock macOS; the bounded-wait precedent is lib/test-contention.sh's
-# _tc_queue_wait. Disarmed at the single enumerate terminator ([shard]
-# enumerate complete) before `trap - EXIT`.
-#
-# DISARM MUST KILL THE WATCHDOG'S CHILD TOO: the sleep inherits the runner's
-# stdout, so when a consumer reads the run through $( ) or a pipe, a killed
-# subshell whose sleep survives orphaned keeps the write end open and the
-# reader blocks for the rest of the deadline — the same "process gone, consumer
-# still waits" shape this issue is about. The subshell's TERM trap kills the
-# tracked sleep before exiting; `wait` gates the fire phase on a NATURAL sleep
-# exit, so a disarm TERM can never advance it to the kill.
-if (( _ENUMERATE == 1 )); then
-  _ENUM_TOP_PID=$$
-  (
-    _wd_sleep=""
-    trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
-    sleep "$_ENUM_DEADLINE_S" & _wd_sleep=$!
-    if wait "$_wd_sleep" 2>/dev/null; then
-      printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk\n' "$_ENUM_DEADLINE_S" >&2
-      printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk\n' "$_ENUM_DEADLINE_S"
-      kill -TERM "$_ENUM_TOP_PID" 2>/dev/null || true
-      sleep 5
-      kill -KILL "$_ENUM_TOP_PID" 2>/dev/null || true
-    fi
-  ) &
-  _ENUM_WD_PID=$!
-fi
 tc_acquire "test-all"
 
 # --- ARM THE REF-STORE STATE PREDICATE (#7917, AP-025) --------------------------------------
@@ -4573,12 +4597,14 @@ fi
 if (( _ENUMERATE == 1 )); then
   echo "[shard] enumerate complete: ${_shard_assigned} registration(s) assigned of ${_shard_ordinal} walked (k/N=${_SHARD_K}/${_SHARD_N})" >&2
   # Disarm the #8761 watchdog: the walk finished inside the deadline. Guarded —
-  # an exit through a guard above skips arming; a killed sleeper is reaped by
-  # wait so it cannot linger as a zombie past this point.
-  if [[ -n "${_ENUM_WD_PID:-}" ]]; then
-    kill "$_ENUM_WD_PID" 2>/dev/null || true
-    wait "$_ENUM_WD_PID" 2>/dev/null || true
-  fi
+  # an exit through a guard above skips arming; wait reaps the watchdog
+  # subshell (its own TERM trap already killed the tracked sleep grandchild).
+  _enum_wd_disarm
+  # The wholesale `trap - EXIT` also bypasses the two cleanups the chain
+  # carries — run them explicitly so an enumerate pass does not leak a
+  # soleur-inc-*/soleur-refguard.* tmpdir per invocation.
+  _soleur_refguard_cleanup
+  _soleur_inc_cleanup
   trap - EXIT
   exit 0
 fi
