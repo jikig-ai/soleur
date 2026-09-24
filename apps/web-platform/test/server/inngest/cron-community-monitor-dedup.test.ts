@@ -91,7 +91,7 @@ vi.mock("@/server/inngest/functions/_cron-safe-commit", () => ({
 }));
 
 // Partial mock — keep digestIssueExistsForDate, finalizeOutputAwareHeartbeat,
-// postSentryHeartbeat, DeployInProgressError REAL; stub only the spawn-adjacent
+// postSentryHeartbeat and the #8726 deploy-deferral helpers REAL; stub only the spawn-adjacent
 // deps so the dedup read + skip-path heartbeat are exercised end-to-end.
 vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
   const actual =
