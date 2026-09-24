@@ -139,7 +139,7 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
 });
 
 import { digestIssueExistsForDate } from "@/server/inngest/functions/_cron-shared";
-import { runLikeInngest } from "../../helpers/inngest-step-harness";
+import { runLikeInngest, type StepMemo } from "../../helpers/inngest-step-harness";
 import { cronRoadmapReviewHandler } from "@/server/inngest/functions/cron-roadmap-review";
 import { cronContentGeneratorHandler } from "@/server/inngest/functions/cron-content-generator";
 import { cronGrowthAuditHandler } from "@/server/inngest/functions/cron-growth-audit";
@@ -897,6 +897,10 @@ describe("#8726 — deploy-lease deferral across the Inngest step boundary", () 
     );
   const heartbeatCalls = () => heartbeatUrls().filter((u) => u.includes("/cron/"));
 
+  it("covers all 8 ROWS crons (cardinality guard; the 9th is in its own suite)", () => {
+    expect(ROWS).toHaveLength(8);
+  });
+
   describe.each(ROWS)("$name", (row) => {
     it("S1 — a lease that outlasts the step retry takes the ADR-078 deferral arm", async () => {
       const { DeployInProgressError } = await import("@/server/inngest/functions/_cron-shared");
@@ -908,6 +912,7 @@ describe("#8726 — deploy-lease deferral across the Inngest step boundary", () 
       // `{ ok: false }` — the setup-failure arm — which is the defect.
       expect(out.outcome).toBe("threw");
       expect(out.error).toBeInstanceOf(DeployInProgressError);
+      expect(out.error).toMatchObject({ cronName: row.cronName, leaseAgeMs: 1234 });
       // Called on both attempts: the step retry that re-checks the lease survived.
       expect(setupWorkspaceSpy).toHaveBeenCalledTimes(2);
       expect(heartbeatCalls()).toEqual([]);
@@ -933,12 +938,31 @@ describe("#8726 — deploy-lease deferral across the Inngest step boundary", () 
       expect(spawnClaudeEvalSpy).toHaveBeenCalled();
     });
 
+    it("S8 — a run that memoized setup-workspace under the pre-#8726 code resumes and completes", async () => {
+      seedSpawnFor(row);
+      seedCommitFor(row);
+      const memo: StepMemo = new Map([
+        ["setup-workspace", { ok: true, data: { ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" } }],
+      ]);
+      const out = await runLikeInngest(
+        ({ step, attempt, maxAttempts }) =>
+          row.handler({ step: step as unknown, logger: logger as unknown, attempt, maxAttempts }),
+        { maxAttempts: 2, memo },
+      );
+      expect(out.outcome).toBe("returned");
+      expect(setupWorkspaceSpy).not.toHaveBeenCalled();
+      expect(spawnClaudeEvalSpy).toHaveBeenCalled();
+      expect(teardownSpy).toHaveBeenCalledWith("/tmp/x", row.cronName);
+    });
+
     it("S3 — a genuine setup failure on the final attempt still takes the setup-failure arm", async () => {
       setupWorkspaceSpy.mockImplementation(async () => {
         throw new Error("git clone failed");
       });
       const out = await runAcrossBoundary(row.handler);
       expect(out).toMatchObject({ outcome: "returned", value: { ok: false } });
+      // The step retry still happens for a genuine setup failure.
+      expect(setupWorkspaceSpy).toHaveBeenCalledTimes(2);
       expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ op: "setup-ephemeral-workspace" }),

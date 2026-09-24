@@ -287,6 +287,7 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
     );
     expect(out.outcome).toBe("threw");
     expect(out.error).toBeInstanceOf(DeployInProgressError);
+    expect(out.error).toMatchObject({ cronName: "cron-community-monitor", leaseAgeMs: 5678 });
     expect(setupWorkspaceSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "setup-ephemeral-workspace")).toBe(false);

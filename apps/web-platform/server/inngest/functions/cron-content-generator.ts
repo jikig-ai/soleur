@@ -27,7 +27,7 @@ import {
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
   deferDeployOnFinalAttempt,
-  throwIfDeployDeferred,
+  unwrapSetupVerdict,
   type WorkspaceSetupVerdict,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
@@ -316,14 +316,8 @@ export async function cronContentGeneratorHandler({
   );
 
   // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
-  let ephemeralRoot: string | null = null;
-  let spawnCwd: string | null = null;
-  let verdict: WorkspaceSetupVerdict<Awaited<ReturnType<typeof setupEphemeralWorkspace>>>;
+  let verdict: WorkspaceSetupVerdict;
   try {
-    // #8726 — the deploy-lease check runs INSIDE the step, where the error is
-    // live: a non-final attempt rethrows (Inngest's step retry re-checks the
-    // lease), the final one returns a `deploy-deferred` verdict. Outside the
-    // step it would arrive as a rebuilt StepError and `instanceof` never matches.
     verdict = await step.run("setup-workspace", async () =>
       deferDeployOnFinalAttempt(
         () => setupEphemeralWorkspace({ installationToken, cronName: "cron-content-generator" }),
@@ -347,12 +341,8 @@ export async function cronContentGeneratorHandler({
     return { ok: false };
   }
 
-  // ADR-078 deploy deferral (#8726): no heartbeat, DeployInProgressError thrown
-  // from the handler body. Deliberately OUTSIDE the catch above (it would swallow
-  // the throw) and BEFORE the try/finally below (there is no workspace to tear down).
-  throwIfDeployDeferred(verdict, "cron-content-generator");
-  ephemeralRoot = verdict.workspace.ephemeralRoot;
-  spawnCwd = verdict.workspace.spawnCwd;
+  // Outside the catch, before the try/finally — see unwrapSetupVerdict (#8726).
+  const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-content-generator");
 
   try {
     // #5728 — flag pattern. The body (claude-eval → verify-output →
@@ -388,7 +378,7 @@ export async function cronContentGeneratorHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
             prompt: injectRunDate(CONTENT_GENERATOR_PROMPT, runStartedAt),
@@ -443,7 +433,7 @@ export async function cronContentGeneratorHandler({
       if (heartbeatOk && !spawnResult.abortedByTimeout) {
         const commitResult = await step.run("safe-commit-pr", async () =>
           safeCommitAndPr({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             cronName: "cron-content-generator",
             commitMessage: COMMIT_MESSAGE,
@@ -552,8 +542,7 @@ export async function cronContentGeneratorHandler({
         });
       }
     } catch (err) {
-      // #5728 — a deploy deferral never reaches this body (throwIfDeployDeferred
-      // exits before it, #8726), so any throw here is a real failure — flag it;
+      // #5728 — any throw here is a real failure — flag it;
       // finalizeOutputAwareHeartbeat decides error-vs-retry below.
       threw = true;
       const e = err as Error;
@@ -612,8 +601,7 @@ export async function cronContentGeneratorHandler({
       // the re-spawned agent burns real Anthropic spend against a path that no
       // longer exists. One honest terminal RED beats a retry that cannot succeed.
       // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
-      // itself) are unaffected and still retry into a fresh workspace. A deploy deferral never gets
-      // here: throwIfDeployDeferred exits before the guarded body (#8726).
+      // itself) are unaffected and still retry into a fresh workspace.
       //
       // This is a PREREQUISITE for consuming safeCommitAndPr's return value, not a
       // peer of it: that consumption lowers heartbeatOk, which on a run that also

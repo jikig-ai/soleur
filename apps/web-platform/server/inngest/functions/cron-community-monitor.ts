@@ -78,7 +78,7 @@ import {
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
   deferDeployOnFinalAttempt,
-  throwIfDeployDeferred,
+  unwrapSetupVerdict,
   type WorkspaceSetupVerdict,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
@@ -519,14 +519,8 @@ export async function cronCommunityMonitorHandler({
     },
   );
 
-  let ephemeralRoot: string | null = null;
-  let spawnCwd: string | null = null;
-  let verdict: WorkspaceSetupVerdict<Awaited<ReturnType<typeof setupEphemeralWorkspace>>>;
+  let verdict: WorkspaceSetupVerdict;
   try {
-    // #8726 — the deploy-lease check runs INSIDE the step, where the error is
-    // live: a non-final attempt rethrows (Inngest's step retry re-checks the
-    // lease), the final one returns a `deploy-deferred` verdict. Outside the
-    // step it would arrive as a rebuilt StepError and `instanceof` never matches.
     verdict = await step.run("setup-workspace", async () =>
       deferDeployOnFinalAttempt(
         () => setupEphemeralWorkspace({ installationToken, cronName: "cron-community-monitor" }),
@@ -550,12 +544,8 @@ export async function cronCommunityMonitorHandler({
     return { ok: false };
   }
 
-  // ADR-078 deploy deferral (#8726): no heartbeat, DeployInProgressError thrown
-  // from the handler body. Deliberately OUTSIDE the catch above (it would swallow
-  // the throw) and BEFORE the try/finally below (there is no workspace to tear down).
-  throwIfDeployDeferred(verdict, "cron-community-monitor");
-  ephemeralRoot = verdict.workspace.ephemeralRoot;
-  spawnCwd = verdict.workspace.spawnCwd;
+  // Outside the catch, before the try/finally — see unwrapSetupVerdict (#8726).
+  const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-community-monitor");
 
   try {
     // #5728 — flag pattern. The body (claude-eval → verify-output →
@@ -609,7 +599,7 @@ export async function cronCommunityMonitorHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
             prompt: injectRunDate(COMMUNITY_MONITOR_PROMPT, runStartedAt),
@@ -620,7 +610,7 @@ export async function cronCommunityMonitorHandler({
             // static secret allowlist shared with the substrate's signature.
             buildSpawnEnv: (token: string) => ({
               ...buildSpawnEnv(token),
-              SOLEUR_COLLECTOR_STATUS_DIR: `${spawnCwd!}/${COLLECTOR_STATUS_DIRNAME}`,
+              SOLEUR_COLLECTOR_STATUS_DIR: `${spawnCwd}/${COLLECTOR_STATUS_DIRNAME}`,
             }),
             logger,
             runId,
@@ -676,7 +666,7 @@ export async function cronCommunityMonitorHandler({
       //     return value — its catch branch falls back to the spawn exit code
       //     (deliberate fail-open, #5139) and would otherwise mask this. ---
       const collectorStatus = await step.run("verify-collector-status", async () =>
-        readCollectorStatus(spawnCwd!),
+        readCollectorStatus(spawnCwd),
       );
 
       const verdict = classifyCollectorStatus(collectorStatus);
@@ -760,7 +750,7 @@ export async function cronCommunityMonitorHandler({
         cron: "cron-community-monitor",
         attempt: attempt ?? 0,
         digest_path: digestPath,
-        present: existsSync(joinPath(spawnCwd!, digestPath)) ? 1 : 0,
+        present: existsSync(joinPath(spawnCwd, digestPath)) ? 1 : 0,
       });
       if (heartbeatOk && !spawnResult.abortedByTimeout) {
         // #6714 R16a, THE PRIMARY DEFECT: this return value was DISCARDED, so a
@@ -768,7 +758,7 @@ export async function cronCommunityMonitorHandler({
         // the monitor stayed GREEN with nothing committed.
         const commitResult = await step.run("safe-commit-pr", async () =>
           safeCommitAndPr({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             cronName: "cron-community-monitor",
             commitMessage: "docs: daily community digest",
@@ -841,8 +831,7 @@ export async function cronCommunityMonitorHandler({
         });
       }
     } catch (err) {
-      // #5728 — a deploy deferral never reaches this body (throwIfDeployDeferred
-      // exits before it, #8726), so any throw here is a real failure — flag it; finalizeOutputAwareHeartbeat decides
+      // #5728 — any throw here is a real failure — flag it; finalizeOutputAwareHeartbeat decides
       // error-vs-retry below. An output-PRESENT run that threw in a TRAILING step
       // (safe-commit-pr) stays GREEN — heartbeatOk is already true and the
       // persistence failure self-reports here.
@@ -911,8 +900,7 @@ export async function cronCommunityMonitorHandler({
       // lets livenessOk be honestly fail-closed without buying that useless
       // replay. Scoped precisely: throws BEFORE the try (token mint,
       // setup-workspace itself) are unaffected and still retry into a fresh
-      // workspace. A deploy deferral never gets
-      // here: throwIfDeployDeferred exits before the guarded body (#8726).
+      // workspace.
       retryEligible: false,
       onBeforeHeartbeat: heartbeatOk
         ? undefined

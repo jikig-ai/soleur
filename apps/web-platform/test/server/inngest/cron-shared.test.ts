@@ -65,7 +65,7 @@ import {
   deferIfTier2Cron,
   DeployInProgressError,
   isFinalAttempt,
-  throwIfDeployDeferred,
+  unwrapSetupVerdict,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   digestIssueExistsForDate,
   ensureDedupIssue,
@@ -2278,7 +2278,7 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
 // #8726 (plan S4) — the deferral helpers. The check runs INSIDE the step, where
 // the DeployInProgressError is still live; the verdict is what crosses the step
 // boundary, because the class does not.
-describe("isFinalAttempt / deferDeployOnFinalAttempt / throwIfDeployDeferred (#8726)", () => {
+describe("isFinalAttempt / deferDeployOnFinalAttempt / unwrapSetupVerdict (#8726)", () => {
   const ws = { ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" };
 
   it("isFinalAttempt matches the SDK's StepFailed choice when maxAttempts is present", () => {
@@ -2289,6 +2289,7 @@ describe("isFinalAttempt / deferDeployOnFinalAttempt / throwIfDeployDeferred (#8
 
   it("isFinalAttempt reads 'final' when maxAttempts is absent (the documented divergence from the SDK)", () => {
     expect(isFinalAttempt({ attempt: 0, maxAttempts: undefined })).toBe(true);
+    expect(isFinalAttempt({ attempt: 1, maxAttempts: undefined })).toBe(true);
     expect(isFinalAttempt({})).toBe(true);
   });
 
@@ -2329,15 +2330,19 @@ describe("isFinalAttempt / deferDeployOnFinalAttempt / throwIfDeployDeferred (#8
     ).resolves.toEqual({ kind: "ready", workspace: ws });
   });
 
-  it("throwIfDeployDeferred re-materializes the deferral with the cron name and lease age", () => {
+  it("unwrapSetupVerdict re-materializes the deferral with the cron name and lease age", () => {
     let thrown: unknown;
     try {
-      throwIfDeployDeferred({ kind: "deploy-deferred", leaseAgeMs: 42 }, "cron-x");
+      unwrapSetupVerdict({ kind: "deploy-deferred", leaseAgeMs: 42 }, "cron-x");
     } catch (e) {
       thrown = e;
     }
     expect(thrown).toBeInstanceOf(DeployInProgressError);
     expect(thrown).toMatchObject({ cronName: "cron-x", leaseAgeMs: 42 });
-    expect(() => throwIfDeployDeferred({ kind: "ready", workspace: ws }, "cron-x")).not.toThrow();
+    expect(unwrapSetupVerdict({ kind: "ready", workspace: ws }, "cron-x")).toEqual(ws);
+  });
+
+  it("unwrapSetupVerdict accepts the pre-#8726 memoized shape (a run resuming across the deploy)", () => {
+    expect(unwrapSetupVerdict(ws, "cron-x")).toEqual(ws);
   });
 });

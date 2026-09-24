@@ -104,14 +104,8 @@ export async function deployLeaseAgeMsIfFresh(
  * distinct class (not a bare Error) so the deferral is queryable in
  * Sentry/Better Stack and is never confused with a real setup failure.
  *
- * The class does NOT survive an Inngest step boundary (#8726): once the
- * `setup-workspace` step's retries are exhausted the handler receives the SDK's
- * rebuilt StepError, so `instanceof DeployInProgressError` outside the step can
- * never match. Deferral-aware callers therefore wrap the step callback in
- * `deferDeployOnFinalAttempt` (the check runs where the error is live) and
- * re-materialize the deferral with `throwIfDeployDeferred` in the handler body.
- * A non-final attempt still throws, so Inngest's per-step retry re-checks the
- * lease (worst case: the cron skips this one fire — fail-safe).
+ * Does not survive an Inngest step boundary (#8726, AP-028): callers go through
+ * `deferDeployOnFinalAttempt` / `unwrapSetupVerdict` instead of `instanceof`.
  */
 export class DeployInProgressError extends Error {
   readonly cronName: string;
@@ -127,28 +121,34 @@ export class DeployInProgressError extends Error {
 }
 
 /**
- * The one final-attempt predicate (#8726). `finalizeOutputAwareHeartbeat` and
- * `deferDeployOnFinalAttempt` both call it so they cannot drift.
+ * Final-attempt predicate for the `_cron-shared` helpers (#8726).
+ * `finalizeOutputAwareHeartbeat` and `deferDeployOnFinalAttempt` share it.
  *
- * With `maxAttempts` present it agrees with the SDK's own choice between a
+ * With `maxAttempts` present it agrees with the SDK's choice between a
  * retriable StepError and a terminal StepFailed (`maxAttempts - 1 === attempt`
- * in inngest's execution/v2). With it ABSENT this reads "final" where the SDK
- * would retry — deliberately: a caller that plumbed nothing degrades to
- * skipping one fire or over-paging, never to masking a real failure.
+ * in inngest's components/execution/v1.js, the executor this app runs). With it
+ * ABSENT this reads "final" where the SDK would retry — deliberately: a caller
+ * that plumbed nothing degrades to skipping one fire or over-paging, never to
+ * masking a real failure.
  */
 export function isFinalAttempt(ctx: { attempt?: number; maxAttempts?: number }): boolean {
   return (ctx.attempt ?? 0) >= ((ctx.maxAttempts ?? 1) - 1);
 }
 
+/** What `setupEphemeralWorkspace` produces. */
+export interface EphemeralWorkspace {
+  ephemeralRoot: string;
+  spawnCwd: string;
+}
+
 /**
  * What the `setup-workspace` step returns across the Inngest step boundary
  * (#8726). A returned verdict survives memoization; a thrown class does not.
- * Generic over the workspace so this module never imports the substrate (which
- * imports this module). Keep every field JSON-plain: HandlerArgs' step type is
- * not Inngest's Jsonify, so tsc will not flag a field that cannot cross.
+ * Keep every field JSON-plain: HandlerArgs' step type is not Inngest's
+ * Jsonify, so tsc will not flag a field that cannot cross.
  */
-export type WorkspaceSetupVerdict<W> =
-  | { kind: "ready"; workspace: W }
+export type WorkspaceSetupVerdict =
+  | { kind: "ready"; workspace: EphemeralWorkspace }
   | { kind: "deploy-deferred"; leaseAgeMs: number };
 
 /**
@@ -163,10 +163,10 @@ export type WorkspaceSetupVerdict<W> =
  * `ctx`'s keys are required (values may be undefined) so a caller that has not
  * plumbed attempt/maxAttempts fails tsc instead of silently losing the retry.
  */
-export async function deferDeployOnFinalAttempt<W>(
-  setup: () => Promise<W>,
+export async function deferDeployOnFinalAttempt(
+  setup: () => Promise<EphemeralWorkspace>,
   ctx: { attempt: number | undefined; maxAttempts: number | undefined },
-): Promise<WorkspaceSetupVerdict<W>> {
+): Promise<WorkspaceSetupVerdict> {
   try {
     return { kind: "ready", workspace: await setup() };
   } catch (err) {
@@ -178,19 +178,28 @@ export async function deferDeployOnFinalAttempt<W>(
 }
 
 /**
- * The ADR-078 deferral, re-materialized in the handler body from the returned
- * verdict. Call it AFTER the setup try/catch (inside, the setup-failure arm
- * would swallow it) and BEFORE the body's try/finally (a deferred run has no
- * workspace to tear down). Thrown from the handler body rather than a step, the
- * DeployInProgressError keeps its class name in Sentry and posts no heartbeat.
+ * Read the memoized `setup-workspace` result in the handler body: returns the
+ * workspace, or throws DeployInProgressError for a deferral (ADR-078: no
+ * heartbeat; thrown from the handler body, so the class name reaches Sentry).
+ *
+ * Call it AFTER the setup try/catch (inside, the setup-failure arm would
+ * swallow the throw) and BEFORE the body's try/finally (a deferred run has no
+ * workspace to tear down).
+ *
+ * Also accepts the pre-#8726 memoized shape (a bare EphemeralWorkspace): a run
+ * that memoized `setup-workspace` under the old code and resumes on this code
+ * after a deploy would otherwise crash outside every catch, skip teardown and
+ * lose that day's output.
  */
-export function throwIfDeployDeferred<W>(
-  verdict: WorkspaceSetupVerdict<W>,
+export function unwrapSetupVerdict(
+  stored: WorkspaceSetupVerdict | EphemeralWorkspace,
   cronName: string,
-): asserts verdict is { kind: "ready"; workspace: W } {
-  if (verdict.kind === "deploy-deferred") {
-    throw new DeployInProgressError(cronName, verdict.leaseAgeMs);
+): EphemeralWorkspace {
+  if (!("kind" in stored)) return stored;
+  if (stored.kind === "deploy-deferred") {
+    throw new DeployInProgressError(cronName, stored.leaseAgeMs);
   }
+  return stored.workspace;
 }
 
 // Free MB available to an UNPRIVILEGED caller — `bavail`, not `bfree`, matches
@@ -512,7 +521,7 @@ export async function postSentryHeartbeat(args: {
 //     the heartbeat so the heartbeat stays last and is never double-signalled.
 //
 // A deploy deferral never reaches this helper: the caller exits through
-// `throwIfDeployDeferred` before the guarded body (no heartbeat — the ADR-078
+// `unwrapSetupVerdict` before the guarded body (no heartbeat — the ADR-078
 // fail-safe deploy defer, #8726).
 export async function finalizeOutputAwareHeartbeat(args: {
   step: HandlerArgs["step"];
@@ -555,11 +564,7 @@ export async function finalizeOutputAwareHeartbeat(args: {
     onBeforeHeartbeat,
     retryEligible,
   } = args;
-  // retries:1 → 2 attempts (index 0 and 1); final attempt is index 1. Callers
-  // passing neither read attempt=0/maxAttempts=1 → isFinalAttempt=true (legacy
-  // behavior). maxAttempts is OPTIONAL on Inngest's BaseContext, so a missing
-  // value collapses to always-final → every failed attempt posts error: degrades
-  // to OVER-paging (the original bug), never to masking a failure with false ok.
+  // retries:1 → 2 attempts (index 0 and 1); final attempt is index 1.
   const finalAttempt = isFinalAttempt({ attempt, maxAttempts });
   // `retryEligible !== false` (not a truthiness test) so OMITTING the field is
   // indistinguishable from today's behavior for the 7 callers that do not pass it.
