@@ -2098,7 +2098,7 @@ resource "sentry_alert" "ops_email_delivery_failure" {
 # email-triage summarizer. The emitter uses the MESSAGE path on purpose — see the header
 # of anthropic-credit.ts for why the Error path would reach Sentry with no tags and never
 # match this rule. This rule does not depend on the `scheduled-anthropic-credit-probe`
-# cron monitor, whose detector routes to no workflow.
+# cron monitor, which is routed to cron-monitor-failure (#8630) but muted (#8704).
 #
 # `frequency_minutes = 1440`: while the balance stays empty the canary fires hourly, and an
 # hourly page during a known outage is what got that monitor muted. `event_frequency_count`
