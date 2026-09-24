@@ -627,8 +627,13 @@ jobs:
                 # matched by a named arm, the fail-safe was dead code.
                 _ptr=" Stage '${reason}' is unclassified, so BOTH channels are named and NEITHER is asserted as the cause: SOLEUR_ZOT_LOG PatchBlobUpload rows, and SOLEUR_ZOT_DISK." ;;
             esac
-            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced. Backfill: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity).${_ptr}"
-            echo "⚠️ zot mirror degraded for \`${TAG}\` (reason=\`${reason}\` rc=${rc}) — GHCR unaffected, backfill needed." >> "$GITHUB_STEP_SUMMARY"
+            # #8036 item 1d: the build and the GHCR push are unaffected, but no host reads GHCR
+            # at boot any more (the dedicated inngest host's GHCR fallback pull was deleted), so
+            # a tag zot does not serve fails the NEXT inngest fresh boot at inngest_pull_fatal and
+            # leaves the sole scheduler dark. The message says so: backfill before any
+            # inngest-host-replace pinned to this tag.
+            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build + GHCR push unaffected, but hosts pull ONLY from zot: an inngest fresh boot pinned to this tag will fail (inngest_pull_fatal). Backfill BEFORE any inngest-host-replace: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity).${_ptr}"
+            echo "⚠️ zot mirror degraded for \`${TAG}\` (reason=\`${reason}\` rc=${rc}) — GHCR push unaffected; hosts pull only from zot, so backfill before any inngest-host-replace pinned to this tag." >> "$GITHUB_STEP_SUMMARY"
             # On the BUILD path the mirror is secondary, so exit 0 and let the release stand.
             exit 0
           }
@@ -869,7 +874,7 @@ jobs:
           if [ "${MIRROR_ONLY:-false}" = "true" ]; then
             MESSAGE="❌ inngest-bootstrap mirror_only backfill FAILED ($TAG, reason=$REASON) — zot does not serve the GHCR digest. DO NOT pin cloud-init to this tag."
           else
-            MESSAGE="⚠️ inngest-bootstrap zot mirror degraded ($TAG, reason=$REASON) — GHCR unaffected, zot redundancy reduced; backfill needed."
+            MESSAGE="⚠️ inngest-bootstrap zot mirror degraded ($TAG, reason=$REASON) — GHCR push unaffected, but hosts pull only from zot; backfill before any inngest-host-replace pinned to this tag."
           fi
           # jq --arg keeps the payload injection-inert (TAG/REASON are JSON-escaped).
           PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
