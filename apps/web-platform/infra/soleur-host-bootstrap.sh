@@ -22,6 +22,9 @@
 # Args:  $1 = extracted seed dir (contains the baked host-scripts).
 # Env:   WEBHOOK_DEPLOY_SECRET (injected into the baked hooks.json.tmpl at boot).
 set -e
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 SEED="$1"
 STAGE=install
@@ -795,9 +798,15 @@ logger -t SOLEUR_FRESH_BOOT_READY "$LINE" 2>/dev/null || true
 TOKEN="${BETTERSTACK_LOGS_TOKEN:-}"
 [ -n "$TOKEN" ] || TOKEN=$(doppler secrets get BETTERSTACK_LOGS_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
 INGEST_URL="${BETTERSTACK_INGEST_URL:-}"
-if [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
-  post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+# (#7797) The bearer goes only to the one Better Stack source it belongs to (the same literal as
+# zot-registry.tf local.betterstack_logs_ingest_url). Any other value skips this channel and keeps
+# Sentry, like an unprovisioned host; the marker must never abort.
+readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
+if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
+  post() { curl --disable --noproxy '*' -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
   post || post || echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2
+elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
+  echo "[fresh-boot-ready] refusing to send the Better Stack token to an unpinned destination; Sentry only" >&2
 fi
 # (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field).
 if [ "$READY" = 1 ]; then

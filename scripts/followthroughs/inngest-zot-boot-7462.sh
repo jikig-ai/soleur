@@ -78,6 +78,14 @@
 # .github/workflows/scheduled-followthrough-sweeper.yml, so this needs no workflow edit):
 #   BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD
 set -uo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${INNGEST_ZOT_BOOT_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
