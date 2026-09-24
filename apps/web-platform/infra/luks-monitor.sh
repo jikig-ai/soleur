@@ -13,9 +13,9 @@
 # The passphrase is read ONLY via the pinned form `doppler secrets get WORKSPACES_LUKS_KEY --plain
 # --config prd_workspaces_luks` (R9 / workspaces-luks.tf:112) — NEVER `doppler run`/`download
 # --config prd_workspaces_luks`, which drag the root's ~116 prd secrets into env (the CWE-522 hole
-# the dedicated config exists to close). DOPPLER_TOKEN (the scoped workspaces-luks-boot service
-# token) + SOLEUR_SENTRY_DSN arrive via the unit's EnvironmentFile=/etc/default/luks-monitor,
-# provisioned via the cutover channel (ADR-119 §(e)).
+# the dedicated config exists to close). DOPPLER_TOKEN (the prd_workspaces_luks service token) +
+# SOLEUR_SENTRY_DSN arrive via the unit's EnvironmentFile=/etc/default/luks-monitor; the token line
+# is owned by terraform_data.luks_monitor_token_install after the cutover's first write (ADR-119).
 set -uo pipefail
 
 # LOG_TAG is a REAL assignment (never an inline `logger -t` literal) — the drift-fixture contract

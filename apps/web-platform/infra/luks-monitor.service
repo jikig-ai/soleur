@@ -12,8 +12,9 @@ Type=oneshot
 # else the unit's own stderr is tagged with the ExecStart basename (`bash`/`doppler`) and never
 # reaches Better Stack (the #6536 class this pattern exists to prevent).
 SyslogIdentifier=luks-monitor
-# DOPPLER_TOKEN (scoped workspaces-luks-boot) + SOLEUR_SENTRY_DSN (baked). Written via the cutover
-# channel (ADR-119 §(e)); the DSN half is baked by cloud-init so a Doppler outage still pages.
+# DOPPLER_TOKEN (the prd_workspaces_luks service token) + SOLEUR_SENTRY_DSN (baked). The token line
+# was first written by the cutover and is now owned by terraform_data.luks_monitor_token_install
+# (ADR-119 2026-09-24 addendum); the DSN half is baked by cloud-init so a Doppler outage still pages.
 EnvironmentFile=-/etc/default/luks-monitor
 # HOME must be set for the root doppler CLI (it writes/reads its config dir under $HOME); a root
 # systemd unit has no HOME by default, so `doppler secrets get` dies "$HOME is not defined" and the

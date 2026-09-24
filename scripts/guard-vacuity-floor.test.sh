@@ -382,8 +382,8 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # literal adjacent to the test, so it is mutant-CONSTRUCTIBLE. Measured at promotion: 28/28 with
 # 14 assertions driven RED before the fix, and a fixture non-vacuity control of its own.
 # `apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh` added by #8632 — the gate on
-# the boot-token refresh path (luks-monitor-token-refresh.sh + the dispatch-only refresh-host-token
-# job). PROMOTED as a FILE, not deferred, and not by raising MAX_DEFERRED, for the reason the
+# the boot-token delivery path (luks-monitor-token-refresh.sh +
+# terraform_data.luks_monitor_token_install). PROMOTED as a FILE, not deferred, and not by raising MAX_DEFERRED, for the reason the
 # sibling entries give: the ledger is shrink-only. It qualifies on all three counts: (a) its floor
 # is `-lt` over the `pass` count the suite accumulates, emitted by `printf` + `exit 1` (ADR-193);
 # (b) it drives ok()/no() once each before any assertion and exits 2 unless both counters moved;

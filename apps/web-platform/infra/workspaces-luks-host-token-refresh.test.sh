@@ -343,8 +343,10 @@ if inst:
     check("the key appears in exactly one command line", len(key_lines) == 1, key_lines)
     if dest and key_lines:
         want = "printf '%%s\\\\n' '${doppler_service_token.workspaces_luks.key}' | bash %s" % dest[0]
-        check("that line pipes the key via a builtin printf into the shipped helper",
-              want in key_lines[0], key_lines[0].strip())
+        # EXACT line equality: a containment check let the key also ride as an argument after the
+        # helper path (a mutant that survived the first battery).
+        check("that line pipes the key via a builtin printf into the shipped helper, and nothing else",
+              key_lines[0].strip() == '"%s",' % want, key_lines[0].strip())
     check("nothing in the installer starts or restarts luks-monitor.service",
           re.search(r'systemctl\s+(start|restart)', inst) is None)
     timer_lines = [l for l in inst.splitlines() if "luks-monitor.timer" in l]

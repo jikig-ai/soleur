@@ -1145,10 +1145,10 @@ jobs:
       - name: Run /workspaces LUKS verify WORKFLOW gate (#6808 schedule + alarm classification)
         run: bash apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 
-      # (#8632) The boot-token REFRESH path: luks-monitor-token-refresh.sh (runs on web-1) and the
-      # dispatch-only, environment-gated refresh-host-token job that ships it. Pins the token to stdin,
-      # the unit start as the proof, parity with the cutover's replace code, and that the daily verify
-      # job never gains the environment gate.
+      # (#8632) The boot-token delivery path: luks-monitor-token-refresh.sh (runs on web-1) and
+      # terraform_data.luks_monitor_token_install, which ships it in the apply that rotates the token.
+      # Pins stdin-only token handling, prove-before-write, restore on mismatch, parity with the
+      # cutover's replace code, the token-hash-only trigger, and the per-merge SSH -target.
       - name: Run /workspaces LUKS boot-token refresh gate (#8632)
         run: bash apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh
 
