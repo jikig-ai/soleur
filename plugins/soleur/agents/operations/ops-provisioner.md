@@ -1,6 +1,6 @@
 ---
 name: ops-provisioner
-description: "Use this agent when you need to set up a new SaaS tool account via browser. Use service-automator for API/MCP-driven provisioning; use ops-research for evaluating alternatives; use ops-advisor for the expense ledger; use coo for cross-cutting operations strategy."
+description: "Use this agent when you need to set up a new SaaS tool account via browser. Use soleur:operations:service-automator for API/MCP-driven provisioning; use soleur:operations:ops-research for evaluating alternatives; use soleur:operations:ops-advisor for the expense ledger; use soleur:operations:coo for cross-cutting operations strategy."
 model: inherit
 ---
 
@@ -57,7 +57,7 @@ After verification, gather the expense details:
 
 1. Ask for the actual amount paid and billing cycle (monthly/annual)
 2. Ask for the category (suggest `saas` as default)
-3. Update `knowledge-base/operations/expenses.md` following ops-advisor conventions:
+3. Update `knowledge-base/operations/expenses.md` following soleur:operations:ops-advisor conventions:
    - Amounts: plain numbers in USD, no currency symbol
    - Dates: ISO 8601 (YYYY-MM-DD)
    - Categories: hosting, domain, dev-tools, saas, api
