@@ -941,7 +941,7 @@ def is_winrm(b):
     return bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
 
 ssh_blocks = [(loc, b) for loc, b in blocks if not is_winrm(b)]
-FLOOR_BLOCKS = 19
+FLOOR_BLOCKS = 20  # +1 #8632: terraform_data.luks_monitor_token_install (workspaces-luks.tf)
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
 else:

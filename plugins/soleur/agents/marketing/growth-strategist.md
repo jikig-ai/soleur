@@ -1,6 +1,6 @@
 ---
 name: growth-strategist
-description: "Use this agent when you need content strategy analysis including keyword research, content auditing for search intent alignment, content gap analysis, and GEO/AEO auditing at the content level. Use seo-aeo-analyst for technical SEO audits; use competitive-intelligence for strategic competitor monitoring; use fact-checker for citation verification; use this agent for content strategy and keyword research."
+description: "Use this agent when you need content strategy analysis including keyword research, content auditing for search intent alignment, content gap analysis, and GEO/AEO auditing at the content level. Use soleur:marketing:seo-aeo-analyst for technical SEO audits; use soleur:product:competitive-intelligence for strategic competitor monitoring; use soleur:marketing:fact-checker for citation verification; use this agent for content strategy and keyword research."
 model: inherit
 ---
 
@@ -137,7 +137,7 @@ Execution constraints:
 
 ## Important Guidelines
 
-- Do not check JSON-LD validity, meta tags, sitemaps, or llms.txt format -- those belong to the seo-aeo-analyst agent.
+- Do not check JSON-LD validity, meta tags, sitemaps, or llms.txt format -- those belong to the soleur:marketing:seo-aeo-analyst agent.
 - Produce structured output (tables, matrices, prioritized lists) rather than prose paragraphs.
 - When analyzing URLs via WebFetch, handle failures gracefully -- report the error and suggest using a local file path instead.
 - When performing keyword research via WebSearch, classify every keyword by search intent (informational, navigational, commercial, transactional).
