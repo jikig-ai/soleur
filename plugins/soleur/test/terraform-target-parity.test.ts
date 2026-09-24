@@ -74,7 +74,7 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-const TEST_FLOOR = 216;
+const TEST_FLOOR = 222;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -2251,8 +2251,9 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       // The gate names the two jobs by their exact apply-workflow ids.
       const g = readFileSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"), "utf8");
       const jobs = (parseYaml(wf) as { jobs: Record<string, unknown> }).jobs;
-      for (const j of ["git_data_host_create", "git_data_host_replace"]) {
-        expect(g).toContain(`"${j}"`);
+      for (const [j, v] of [["git_data_host_create", "BIRTH_JOB"], ["git_data_host_replace", "REPLACE_JOB"]]) {
+        // The assignment itself, anchored and unique: a message or comment naming the id cannot supply it.
+        expect([...g.matchAll(new RegExp(`^${v}="([^"\\n]*)"$`, "gm"))].map((m) => m[1])).toEqual([j]);
         expect(jobs[j]).toBeDefined();
         expect((jobs[j] as { name?: string }).name).toBeUndefined(); // gh reports the id as the name
       }
@@ -2268,9 +2269,13 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       ["git_data_host_create", "BIRTH_APPLY"],
       ["git_data_host_replace", "REPLACE_APPLY"],
     ];
-    // Command-position `terraform apply` (optionally behind `if !`, with global flags such as -chdir).
-    const TF_APPLY_CMD = /^\s*(if\s+!?\s*)?terraform(\s+-\S+)*\s+apply\b/m;
-    type Step = { id?: string; name?: string; run?: string; if?: string; uses?: string; with?: Record<string, unknown> };
+    // Command-position `terraform apply`: at line start (optionally behind `if !`), or after a
+    // wrapper's `--` (doppler run ... -- terraform apply), `;` or `&&`; with global flags such as -chdir.
+    const TF_APPLY_CMD = /(^\s*(if\s+!?\s*)?|--\s+|;\s*|&&\s*)terraform(\s+-\S+)*\s+apply\b/m;
+    type Step = {
+      id?: string; name?: string; run?: string; if?: string; uses?: string;
+      with?: Record<string, unknown>; "continue-on-error"?: unknown;
+    };
     type WfDoc = { jobs: Record<string, { steps?: Step[] }> };
 
     /** PT1 + PT2 violations for an apply-workflow doc against the gate's source. */
@@ -2284,6 +2289,8 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
         const defs = [...gateSrc.matchAll(new RegExp(`^${constName}="([^"\\n]*)"$`, "gm"))].map((m) => m[1]);
         if (defs.length !== 1) v.push(`PT1 ${job}: ${constName} assigned ${defs.length} times in the gate`);
         else if (defs[0] !== apply[0].name) v.push(`PT1 ${job}: gate ${constName}=${JSON.stringify(defs[0])} != step name ${JSON.stringify(apply[0].name)}`);
+        // continue-on-error pins a step's `conclusion` to success, which the gate reads as "applied".
+        if (apply[0]["continue-on-error"] !== undefined) v.push(`PT1 ${job}: the id: apply step carries continue-on-error`);
         const appliers = steps.filter((s) => TF_APPLY_CMD.test(String(s.run ?? "")));
         if (appliers.length !== 1 || appliers[0] !== apply[0]) {
           v.push(`PT2 ${job}: terraform apply runs in ${appliers.length} step(s), expected only the id: apply step`);
@@ -2299,7 +2306,11 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       const mails = steps.filter((s) => s.uses === "./.github/actions/notify-ops-email");
       const pub = mails.filter((s) => /\bsteps\.gate\.outputs\.pin_published\s*==\s*'true'/.test(String(s.if ?? "")));
       if (pub.length !== 1) v.push(`PT3: ${pub.length} notify-ops-email steps gated on steps.gate.outputs.pin_published`);
-      else if (!/\balways\(\)/.test(String(pub[0].if))) v.push("PT3: the pin_published email is not always()-gated");
+      else if (String(pub[0].if) !== "${{ always() && steps.gate.outputs.pin_published == 'true' }}") v.push("PT3: the pin_published email if: is not exactly always() && pin_published == 'true'");
+      // An unsent pin email must fail the run (so the failure email retries it).
+      const retry = steps.filter((s) => String(s.if ?? "") === "${{ always() && steps.gate.outputs.pin_published == 'true' && steps.pin_email.outputs.sent != 'true' }}");
+      if (pub.length === 1 && pub[0].id !== "pin_email") v.push("PT3: the pin_published email has no id: pin_email");
+      if (retry.length !== 1 || !/^\s*exit 1\s*$/m.test(String(retry[0].run ?? ""))) v.push("PT3: no step fails the run when the pin email is not sent");
       const fail = mails.filter((s) => String(s.if ?? "").replace(/\s+/g, "") === "${{failure()}}");
       const body = String(fail[0]?.with?.body ?? "");
       if (fail.length !== 1) v.push(`PT3: ${fail.length} failure() email steps`);
@@ -2332,11 +2343,98 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     });
 
     test("PT2 RED: a second step running terraform apply in the replace job is a violation", () => {
-      const doc = freshApply();
-      doc.jobs.git_data_host_replace.steps!.push({ name: "extra", run: "set -euo pipefail\nterraform apply -auto-approve" });
-      expect(applyStepParity(doc, gateSrc)).toEqual([
-        "PT2 git_data_host_replace: terraform apply runs in 2 step(s), expected only the id: apply step",
-      ]);
+      for (const run of [
+        "set -euo pipefail\nterraform apply -auto-approve",
+        "doppler run -p soleur -c prd_terraform -- terraform apply -target=doppler_secret.git_data_ssh_host_key",
+        "cd infra && terraform -chdir=. apply tfplan",
+      ]) {
+        const doc = freshApply();
+        doc.jobs.git_data_host_replace.steps!.push({ name: "extra", run });
+        expect(applyStepParity(doc, gateSrc)).toEqual([
+          "PT2 git_data_host_replace: terraform apply runs in 2 step(s), expected only the id: apply step",
+        ]);
+      }
+    });
+
+    test("PT1 RED: continue-on-error on either apply step is a violation", () => {
+      for (const job of ["git_data_host_create", "git_data_host_replace"]) {
+        const doc = freshApply();
+        applyStep(doc, job)["continue-on-error"] = true;
+        expect(applyStepParity(doc, gateSrc)).toEqual([`PT1 ${job}: the id: apply step carries continue-on-error`]);
+      }
+    });
+
+    // PT4: the gate grades only the two git-data jobs, so no OTHER job of ANY workflow may
+    // -target or -replace a pin address — else a pin rotates while the gate says not_run.
+    const PIN_WRITER_JOBS = new Set(["apply-web-platform-infra.yml:git_data_host_create", "apply-web-platform-infra.yml:git_data_host_replace"]);
+    function pinWriterJobs(docs: Array<[string, WfDoc]>): string[] {
+      const out: string[] = [];
+      for (const [file, doc] of docs) {
+        for (const [job, body] of Object.entries(doc.jobs ?? {})) {
+          const text = (body.steps ?? []).map((st) => String(st.run ?? "")).join("\n");
+          const addrs = [...extractAllTargets(text), ...extractReplaceAddrs(text)];
+          if (addrs.some((a) => GIT_DATA_PIN_ADDRS.includes(a))) out.push(`${file}:${job}`);
+        }
+      }
+      return out.sort();
+    }
+    const allWorkflows = (): Array<[string, WfDoc]> =>
+      readdirSync(resolve(REPO_ROOT, ".github/workflows"))
+        .filter((f) => /\.ya?ml$/.test(f))
+        .map((f) => [f, parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")) as WfDoc]);
+
+    test("PT4: only the two git-data jobs of apply-web-platform-infra.yml target a pin address, in any workflow", () => {
+      const docs = allWorkflows();
+      expect(docs.length).toBeGreaterThan(50); // the corpus really was read
+      expect(pinWriterJobs(docs)).toEqual([...PIN_WRITER_JOBS].sort());
+    });
+
+    test("PT4 RED: a pin -target in another dispatch job, or in another workflow, is a violation", () => {
+      const docs = allWorkflows();
+      const apply = docs.find(([f]) => f === "apply-web-platform-infra.yml")![1];
+      apply.jobs.web_host_replace.steps!.push({ run: "terraform plan -target='doppler_secret.git_data_ssh_host_key' \\\n  -replace='tls_private_key.git_data_host_ssh'" });
+      docs.push(["other.yml", { jobs: { x: { steps: [{ run: "terraform apply -target=doppler_secret.git_data_ssh_host_key" }] } } }]);
+      expect(pinWriterJobs(docs)).toEqual([...PIN_WRITER_JOBS, "apply-web-platform-infra.yml:web_host_replace", "other.yml:x"].sort());
+    });
+
+    // PT5: every `verdict=<token>` the operator is told to look for is one the gate emits, and the
+    // runbook's follower-step lookup names the step that really runs track.sh.
+    const RUNBOOK = resolve(REPO_ROOT, "knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md");
+    const ADR237 = resolve(REPO_ROOT, "knowledge-base/engineering/architecture/decisions/ADR-237-ssh-host-keys-are-pinned.md");
+    const PIN_GATE_LINE = /pin-redeploy|source-run-gate|pin_published|plan_only/;
+    const citedPinTokens = (d: string) => d.split("\n").filter((l) => PIN_GATE_LINE.test(l))
+      .flatMap((l) => [...l.matchAll(/verdict=([a-z_]+)/g)].map((m) => m[1]));
+    function verdictParity(gate: string, docs: string[]): string[] {
+      const emitted = new Set(
+        stripComments(gate).split("\n").filter((l) => /^\s*(echo|_summary)\b/.test(l))
+          .flatMap((l) => [...l.matchAll(/verdict=([a-z_]+)/g)].map((m) => m[1])),
+      );
+      // Only lines about THIS gate: the runbook also cites other gates' verdicts (verdict=ok, ...).
+      const cited = new Set(docs.flatMap((d) => d.split("\n").filter((l) => PIN_GATE_LINE.test(l))
+        .flatMap((l) => [...l.matchAll(/verdict=([a-z_]+)/g)].map((m) => m[1]))));
+      return [...cited].filter((t) => !emitted.has(t)).map((t) => `PT5: verdict=${t} is cited but never emitted by the gate`);
+    }
+
+    test("PT5: every verdict token the runbook, ADR-237 and the follower cite is emitted by the gate", () => {
+      const docs = [readFileSync(RUNBOOK, "utf8"), readFileSync(ADR237, "utf8"), src];
+      // Non-vacuity: each document really cites this gate's tokens, and the G2 check's token is among them.
+      expect(docs.map((d) => citedPinTokens(d).length > 0)).toEqual([true, true, true]);
+      expect(citedPinTokens(docs[0])).toContain("no_apply");
+      expect(verdictParity(gateSrc, docs)).toEqual([]);
+    });
+
+    test("PT5 RED: a misspelt cited token, or a token the gate stops emitting, is a violation", () => {
+      expect(verdictParity(gateSrc, ["the pin-redeploy run printed verdict=no_aply"])).toEqual(["PT5: verdict=no_aply is cited but never emitted by the gate"]);
+      const muted = gateSrc.replace(/verdict=no_apply/g, "verdict=gone");
+      expect(verdictParity(muted, ["the pin-redeploy run printed verdict=no_apply"])).toEqual(["PT5: verdict=no_apply is cited but never emitted by the gate"]);
+    });
+
+    test("PT5: the runbook's follower-step lookup prefix names the step that runs track.sh", () => {
+      const prefix = /startswith\("([^"]+)"\)/.exec(readFileSync(RUNBOOK, "utf8"))?.[1];
+      expect(prefix).toBe("Dispatch web-platform-release");
+      const track = (freshFollower().jobs.redeploy.steps ?? []).filter((st) => String(st.run ?? "").includes("dispatch-web-redeploy/track.sh"));
+      expect(track.length).toBe(1);
+      expect(String(track[0].name).startsWith(prefix!)).toBe(true);
     });
 
     test("PT3: the follower emails ops on pin_published and names both recoveries in the failure email", () => {
@@ -2347,10 +2445,25 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       const isPub = (s: Step) => String(s.if ?? "").includes("pin_published");
       const dropped = freshFollower();
       dropped.jobs.redeploy.steps = dropped.jobs.redeploy.steps!.filter((s) => !isPub(s));
-      expect(pinPublishedEmailParity(dropped).length).toBe(1);
+      expect(pinPublishedEmailParity(dropped)).toEqual([
+        "PT3: 0 notify-ops-email steps gated on steps.gate.outputs.pin_published",
+        "PT3: no step fails the run when the pin email is not sent",
+      ]);
       const unref = freshFollower();
       unref.jobs.redeploy.steps!.find(isPub)!.if = "${{ always() }}";
       expect(pinPublishedEmailParity(unref).length).toBe(1);
+      for (const bad of [
+        "${{ always() && steps.gate.outputs.pin_published == 'true' && false }}",
+        "${{ always() || steps.gate.outputs.pin_published == 'true' }}",
+        "${{ !always() && steps.gate.outputs.pin_published == 'true' }}",
+      ]) {
+        const d = freshFollower();
+        d.jobs.redeploy.steps!.find((s) => s.id === "pin_email")!.if = bad;
+        expect(pinPublishedEmailParity(d)).toEqual(["PT3: the pin_published email if: is not exactly always() && pin_published == 'true'"]);
+      }
+      const noRetry = freshFollower();
+      noRetry.jobs.redeploy.steps = noRetry.jobs.redeploy.steps!.filter((s) => !String(s.if ?? "").includes("pin_email"));
+      expect(pinPublishedEmailParity(noRetry)).toEqual(["PT3: no step fails the run when the pin email is not sent"]);
       const noArm = freshFollower();
       const mail = noArm.jobs.redeploy.steps!.find((s) => String(s.if ?? "").includes("failure()"))!;
       mail.with!.body = String(mail.with!.body).replace(/gh workflow run git-data-pin-redeploy\.yml --ref main(?!\s*-f)/g, "(removed)");

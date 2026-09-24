@@ -39,7 +39,7 @@
 #   G9b  birth success, apply skipped                                       quiet, verdict=no_apply
 #   G10  replace failure, apply success, poll failure                       warning, verdict=pin_published
 #   G11  birth failure at the plan step, apply skipped                      quiet, verdict=no_apply
-#   G12  replace failure, apply failure                                     warning, verdict=pin_maybe_published
+#   G12  replace failure, apply failure                                     warning, verdict=pin_maybe_published, pin_published=true
 #   G14  replace success, apply step renamed                                RED, verdict=unidentified
 #   G15  replace success, two apply-named steps                             RED, verdict=unidentified
 #   G16  replace success, apply cancelled (impossible for a green job)      RED, verdict=unidentified
@@ -48,6 +48,12 @@
 #   G20  both jobs rotated                                                  proceed=true, birth wins
 #   G21  replace failure, `steps: []` (an environment refusal)              quiet, verdict=not_run
 #   G22  the replace job duplicated                                         RED, verdict=unidentified
+#   G10b birth failure, apply success                                       warning, verdict=pin_published, birth recovery
+#   G15b replace failure, apply step skipped AND an apply-named success     warning, apply=matched_2, verdict=pin_maybe_published
+#   G26  birth failure+apply failure, replace failure+apply success         warning, verdict=pin_published, pin_published=true
+#   G23  SOURCE_RUN_ATTEMPT=2 (and a non-numeric attempt)                   jobs read for attempt 2 (latest when invalid)
+#   G24  in-progress run as gh prints it: conclusions ""                    token =null, verdict=pin_maybe_published
+#   G25  two JSON documents (the first a non-array jobs)                     RED, "no readable jobs array" (fail closed)
 #   G5   `gh run view` fails                                                RED (fail closed)
 #   G6   source run id non-numeric (never echoed)                           RED, no gh call
 #   G7   jobs output not a {jobs:[...]} document                            RED (fail closed)
@@ -97,7 +103,9 @@ case "$*" in
     cat "$d/runs.$n.json" 2>/dev/null || echo '[]'
     exit 0 ;;
 esac
-if [[ "$1 $2 $4 $5" == "run view --json jobs" && "$3" =~ ^[0-9]+$ && $# -eq 5 ]]; then
+if [[ "$1 $2" == "run view" && "$3" =~ ^[0-9]+$ ]] \
+   && { { [[ $# -eq 5 && "$4 $5" == "--json jobs" ]]; } \
+        || { [[ $# -eq 7 && "$4" == --attempt && "$5" =~ ^[0-9]+$ && "$6 $7" == "--json jobs" ]]; }; }; then
   [[ -f "$d/view.rc" ]] && exit "$(cat "$d/view.rc")"
   t=$(cat "$d/tick" 2>/dev/null || echo 0)
   if [[ -f "$d/jobs.$3.$t.json" ]]; then cat "$d/jobs.$3.$t.json"
@@ -270,7 +278,8 @@ _mut_row "$TRACK" view-queued '[[ "$status" == queued ]] && continue' ':' QU
 # Fixtures copy the measured shape of `gh run view <id> --json jobs` (runs 35979044625,
 # 35979304442, 34822248580, 34836141887, read 2026-09-24): jobs[] {name, status, conclusion,
 # steps[]}, steps[] {name, conclusion, number, status}; steps carry NO `id`; a skipped job has
-# `steps: []`. The two apply-step names are copied byte-for-byte from the `id: apply` steps of
+# `steps: []`; an in-progress job or step prints its conclusion as "" (run 36050486228), which
+# G24 uses. The "null" -> JSON null mapping below models a raw API null, which gh does not print. The two apply-step names are copied byte-for-byte from the `id: apply` steps of
 # apply-web-platform-infra.yml (the replace name carries U+2014), NOT read from the gate, so a
 # gate-side rename reds these rows too.
 GATE="$REPO_ROOT/.github/actions/dispatch-web-redeploy/source-run-gate.sh"
@@ -309,7 +318,8 @@ _gdoc() {  # _gdoc JOB_JSON... -> $S/jobs.555.json (a preflight job first, as in
 }
 _gexec() {  # _gexec SCRIPT RUN_ID -> rc; stdout+stderr in $S/out, outputs in $S/ghout
   local rc=0; : > "$S/ghout"
-  STUB_DIR="$S" PATH="$WORK/bin:$PATH" SOURCE_RUN_ID="$2" GITHUB_OUTPUT="$S/ghout" GITHUB_STEP_SUMMARY="$S/summary" \
+  STUB_DIR="$S" PATH="$WORK/bin:$PATH" SOURCE_RUN_ID="$2" SOURCE_RUN_ATTEMPT="${ATT:-}" \
+    GITHUB_OUTPUT="$S/ghout" GITHUB_STEP_SUMMARY="$S/summary" \
     bash "$1" >"$S/out" 2>&1 || rc=$?
   return "$rc"
 }
@@ -326,10 +336,10 @@ check_G1() { _scenario G1
     "Poll for the git-data boot-completion signal" success "$BA" success "Set up job" success)" \
     "$(_skip git_data_host_replace)"
   _gexec "$1" 555 && grep -qx 'proceed=true' "$S/ghout" && grep -qx 'source_job=git_data_host_create' "$S/ghout" \
-    && _nopub && grep -q 'verdict=rotated' "$S/out" && _no_unexpected; }
+    && _nopub && grep -q '^::notice::source-run-gate: .*in run 555.*verdict=rotated' "$S/out" && _no_unexpected; }
 check_G2() { _scenario G2; _gdoc "$(_skip git_data_host_create)" "$(_rep success success)"
   _gexec "$1" 555 && grep -qx 'proceed=true' "$S/ghout" && grep -qx 'source_job=git_data_host_replace' "$S/ghout" \
-    && _nopub && grep -q 'verdict=rotated' "$S/out" && _no_unexpected; }
+    && _nopub && grep -q '^::notice::source-run-gate: .*in run 555.*verdict=rotated' "$S/out" && _no_unexpected; }
 check_G3() { _scenario G3; _gdoc "$(_skip git_data_host_create)" "$(_skip git_data_host_replace)"
   _gexec "$1" 555 && _noproceed && _nopub \
     && grep -q '^::notice::source-run-gate: .*in run 555.*git_data_host_create=skipped.*verdict=not_run' "$S/out" \
@@ -358,7 +368,7 @@ check_G11() { _scenario G11; _gdoc "$(_birth failure skipped skipped failure)" "
     && grep -q '^::notice::source-run-gate: .*no apply ran.*in run 555.*git_data_host_create=failure.*verdict=no_apply' "$S/out" \
     && _nowarn && _no_unexpected; }
 check_G12() { _scenario G12; _gdoc "$(_skip git_data_host_create)" "$(_rep failure failure)"
-  _gexec "$1" 555 && _noproceed && _nopub \
+  _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" \
     && grep -q '^::warning::source-run-gate: .*in run 555.*git_data_host_replace=failure.*apply=failure.*verdict=pin_maybe_published' "$S/out" \
     && grep -q 'pin may be published; dispatch git-data-pin-redeploy.yml' "$S/summary" \
     && ! grep -q 'was published' "$S/out" && _no_unexpected; }
@@ -379,7 +389,7 @@ check_G18() { _scenario G18; _gdoc "$(_skip git_data_host_create)" "$(_rep succe
 check_G19() { _scenario G19
   _gdoc "$(_skip git_data_host_create)" \
     "$(_gjob git_data_host_replace failure "Set up job" success "$RA" $'success\n::error::x' "Dispatch summary" success)"
-  _gexec "$1" 555 && _noproceed && _nopub && ! grep -q '^::error::x' "$S/out" \
+  _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" && ! grep -q '^::error::x' "$S/out" \
     && grep -q '^::warning::source-run-gate: .*apply=unrecognized.*verdict=pin_maybe_published' "$S/out" && _no_unexpected; }
 check_G20() { _scenario G20; _gdoc "$(_birth success success)" "$(_rep success success)"
   _gexec "$1" 555 && grep -qx 'proceed=true' "$S/ghout" && grep -qx 'source_job=git_data_host_create' "$S/ghout" \
@@ -392,6 +402,41 @@ check_G21() { _scenario G21; _gdoc "$(_skip git_data_host_create)" "$(_gjob git_
 # G22: a duplicated git-data job is a shape the gate cannot interpret — fail closed.
 check_G22() { _scenario G22; _gdoc "$(_skip git_data_host_create)" "$(_rep success skipped)" "$(_rep success success)"
   _unidentified "$1"; }
+# G10b: a birth whose apply published the pin before the job went red — the birth recovery text.
+check_G10b() { _scenario G10b; _gdoc "$(_birth failure success failure)" "$(_skip git_data_host_replace)"
+  _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" \
+    && grep -q '^::warning::source-run-gate: .*git_data_host_create=failure.*verdict=pin_published.*A birth cannot be repeated' "$S/out" \
+    && _no_unexpected; }
+# G15b: a red job with two apply-named steps is not graded by its first match.
+check_G15b() { _scenario G15b
+  _gdoc "$(_skip git_data_host_create)" \
+    "$(_gjob git_data_host_replace failure "Set up job" success "$RA" skipped "$RA" success "Dispatch summary" success)"
+  _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" \
+    && grep -q '^::warning::source-run-gate: .*git_data_host_replace.apply=matched_2.*verdict=pin_maybe_published' "$S/out" \
+    && _no_unexpected; }
+# G26: both jobs red, only the replace apply published — the published verdict wins.
+check_G26() { _scenario G26; _gdoc "$(_birth failure failure)" "$(_rep failure success failure)"
+  _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" \
+    && grep -q '^::warning::source-run-gate: .*git_data_host_create=failure.*git_data_host_replace=failure.*verdict=pin_published\.' "$S/out" \
+    && _no_unexpected; }
+# G23: the jobs are read for the attempt that fired the run; a non-numeric attempt is ignored.
+check_G23() { _scenario G23; _gdoc "$(_skip git_data_host_create)" "$(_rep success skipped)"
+  ATT=2 _gexec "$1" 555 && grep -qx 'run view 555 --attempt 2 --json jobs' "$S/calls.log" \
+    && grep -q 'verdict=no_apply' "$S/out" && _no_unexpected \
+    && : > "$S/calls.log" && ATT='2;x' _gexec "$1" 555 && grep -qx 'run view 555 --json jobs' "$S/calls.log" \
+    && _no_unexpected; }
+# G24: an in-progress replace read mid-run, as gh prints it (conclusion "" on job and step).
+check_G24() { _scenario G24
+  _gdoc "$(_skip git_data_host_create)" "$(_gjob git_data_host_replace "" "Set up job" success "$RA" "")"
+  _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" \
+    && grep -q '^::warning::source-run-gate: .*git_data_host_replace=null git_data_host_replace.apply=null.*verdict=pin_maybe_published' "$S/out" \
+    && _no_unexpected; }
+# G25: two concatenated documents are not one {jobs:[...]} document (the first would otherwise
+# make every per-job read print two values).
+check_G25() { _scenario G25; _gdoc "$(_skip git_data_host_create)" "$(_rep success success)"
+  { printf '{"jobs":{"x":1}}\n'; cat "$S/jobs.555.json"; } > "$S/jobs.555.tmp" && mv "$S/jobs.555.tmp" "$S/jobs.555.json"
+  ! _gexec "$1" 555 && [[ ! -s "$S/ghout" ]] && grep -q '^::error::source-run-gate: run 555 returned no readable jobs array (fail closed)' "$S/out" \
+    && _no_unexpected; }
 check_G5() { _scenario G5; _gdoc "$(_birth success success)"; echo 1 > "$S/view.rc"
   ! _gexec "$1" 555 && ! grep -q 'proceed=true' "$S/ghout" && grep -q 'fail closed' "$S/out" && _no_unexpected; }
 check_G6() { _scenario G6
@@ -400,14 +445,14 @@ check_G6() { _scenario G6
 check_G7() { _scenario G7; printf '{"message":"Not Found"}' > "$S/jobs.555.json"
   ! _gexec "$1" 555 && ! grep -q 'proceed=true' "$S/ghout" && grep -q 'fail closed' "$S/out" && _no_unexpected; }
 [[ -r "$GATE" ]] || { _report "source-run-gate.sh readable" bad; }
-for row in G1 G2 G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G20 G21 G22; do
+for row in G1 G2 G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G20 G21 G22 G23 G24 G25 G10b G15b G26; do
   if "check_$row" "$GATE"; then _report "row $row" ok
   else _report "row $row" bad; sed 's/^/    /' "$S/out" >&2; sed 's/^/    calls: /' "$S/calls.log" >&2; fi
 done
 GSTUB="$WORK/gate-stubbed.sh"
 sed '0,/^set -euo pipefail$/s//set -euo pipefail\nexit 0/' "$GATE" > "$GSTUB"
 grep -qx 'exit 0' "$GSTUB" || _report "GH precondition (stub inserted)" bad
-for row in G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G21 G22; do
+for row in G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G21 G22 G23 G24 G25 G10b G15b G26; do
   if "check_$row" "$GSTUB"; then _report "GH row $row catches a stubbed exit 0" bad "(assertion held against an always-green gate)"
   else _report "GH row $row catches a stubbed exit 0" ok; fi
 done
@@ -425,7 +470,16 @@ _mut_row "$GATE" zero-apply-is-quiet "$GREEN_CASE" \
   'case "$n:$a" in 1:success) v=rotated ;; 1:skipped|0:*) v=no_apply ;; *) v=unidentified ;; esac' G14
 _mut_row "$GATE" no-job-conjunct '1:success) v=pin_published' '1:success) v=rotated' G10
 _mut_row "$GATE" no-row-3 "$GREEN_CASE" 'case "$n:$a" in 1:success) v=rotated ;; *) v=unidentified ;; esac' G9
-_mut_row "$GATE" pub-every-warning '== pin_published ]] && pub=true' '== pin_* ]] && pub=true' G12
+_mut_row "$GATE" maybe-no-email '"pin_published=${warn}"' '"pin_published=${pub}"' G12
+_mut_row "$GATE" rotated-not-annotated 'echo "::notice::source-run-gate: in run ${rid} ${tokens}: ${src}' \
+  'echo "source-run-gate: in run ${rid} ${tokens}: ${src}' G2
+_mut_row "$GATE" latest-attempt-only 'att=(--attempt "$SOURCE_RUN_ATTEMPT")' 'att=()' G23
+_mut_row "$GATE" empty-is-unrecognized '"") printf '"'"'null'"'"' ;;' '"__never__") printf '"'"'null'"'"' ;;' G24
+_mut_row "$GATE" last-document-only "jq -e -s 'length == 1 and (.[0].jobs | type) == \"array\"'" \
+  "jq -e '(.jobs | type) == \"array\"'" G25
+_mut_row "$GATE" red-first-apply-match \
+  'case "$n:$a" in 1:skipped) v=no_apply ;; 1:success) v=pin_published ;; *) v=pin_maybe_published ;; esac' \
+  'case "$(( n > 0 )):$a" in 1:skipped) v=no_apply ;; 1:success) v=pin_published ;; *) v=pin_maybe_published ;; esac' G15b
 _mut_row "$GATE" raw-conclusion 'a="$(allow "$raw")"' 'a="$raw"' G19
 _mut_row "$GATE" dup-job-quiet 'if (( cnt > 1 )); then v=unidentified' 'if (( cnt > 1 )); then v=not_run' G22
 bash -n "$GATE" && _report "source-run-gate.sh bash -n" ok || _report "source-run-gate.sh bash -n" bad
@@ -440,9 +494,14 @@ fi
 
 bash -n "$TRACK" && _report "track.sh bash -n" ok || _report "track.sh bash -n" bad
 
+# Reporter canary: a reporter rewritten to count every verdict as a pass after the start-up
+# self-test would keep the floor satisfied. One known-bad report must still move `fail`.
+_c="$fail"; _report "reporter canary (expected; unwound)" bad
+(( fail == _c + 1 )) || { printf 'FAIL: the reporter no longer counts a failure\n' >&2; exit 1; }
+fail="$_c"; unset 'FAILURES[-1]'
 # Anti-vacuity floor: the measured assertion count (2026-09-24, #8710). Reported with printf and a
 # direct exit, never through _report, so a neutered reporter cannot silence it.
-FLOOR=85
+FLOOR=102
 if (( pass + fail < FLOOR )); then
   printf 'FAIL: vacuity floor: only %s assertions ran (floor %s)\n' "$((pass + fail))" "$FLOOR" >&2
   exit 1

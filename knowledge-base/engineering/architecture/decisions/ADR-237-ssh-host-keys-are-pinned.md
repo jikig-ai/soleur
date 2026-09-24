@@ -89,7 +89,7 @@ Terraform SSH client negotiates ECDSA-P256.
   targets), gated by `.github/actions/dispatch-web-redeploy/source-run-gate.sh`, which reads the
   apply step's conclusion rather than the job's, so a `plan_only` rehearsal never redeploys; plus `workflow_dispatch` with an optional `source_run_id` for recovery. It runs
   `.github/actions/dispatch-web-redeploy/track.sh` with `actions: write` and no Terraform secrets
-  (only the failure email's Resend key), outside the apply lock. C4 does not model CI-to-CI edges, so
+  (only the two ops emails' Resend key), outside the apply lock. C4 does not model CI-to-CI edges, so
   this ADR is where it is recorded. #8211's same-version redeploy is the intended replacement (DC-2 in
   the feature's `decision-challenges.md`).
 - **Coupled to a display name.** `workflow_run` matches the apply workflow by its `name:` string
@@ -101,7 +101,12 @@ Terraform SSH client negotiates ECDSA-P256.
   `Terraform apply (git-data-host -replace) — both-volumes-preserved assert`). A rename is caught in
   CI by parity test PT1 (`plugins/soleur/test/terraform-target-parity.test.ts`); at runtime a green
   job whose apply step cannot be found exits 1 (`verdict=unidentified`, failure email) and a red one
-  prints `apply=not_found` in its warning — never a silent skip.
+  prints `apply=not_found` in its warning and emails ops — never a silent skip. PT1 binds main's
+  gate to main's workflow only: a dispatch from a branch that renamed the step is caught at runtime
+  as above, not in CI. Parity test PT4 holds every other job of every workflow off the pin
+  addresses, so the two `id: apply` steps are the only CI writers of the pin. The break-glass
+  operator-local apply (`OPERATOR_APPLIED_EXCLUSIONS`, ADR-096) can also re-mint the key and fires
+  no gate; its redeploy is the no-`source_run_id` dispatch of `git-data-pin-redeploy.yml`.
 - **The redeploy dispatches and judges (accepted AP-024 deviation).** The same job dispatches the
   release and decides whether a newer release's deploy succeeded. AP-024 separates the write from the
   verdict; here the write is one release dispatch with no Terraform credentials, and the
@@ -121,7 +126,9 @@ Terraform SSH client negotiates ECDSA-P256.
   source_run_id=<apply run id>`; never another replace. The bound holds when the source job is
   green. A red job with a green apply step (the boot poll failed after the pin was published)
   publishes the pin **without** a redeploy: the gate prints `verdict=pin_published` and emails ops
-  (gate output `pin_published`). Its recovery is the dispatch with no `source_run_id`,
+  (gate output `pin_published`; an unsent email fails the run, so the failure email retries it). A
+  red job whose apply step failed or was cancelled may have written the pin first: it prints
+  `verdict=pin_maybe_published` and takes the same email. Its recovery is the dispatch with no `source_run_id`,
   `gh workflow run git-data-pin-redeploy.yml --ref main`, because the same id re-reads the same red
   job and skips again.
 - **Expected drift until the first replace.** Scheduled drift shows a pending replace of

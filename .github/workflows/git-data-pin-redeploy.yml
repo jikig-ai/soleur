@@ -1,4 +1,4 @@
-# git-data host-key pin redeploy (#7226 / #5914, ADR-237, plan D6 / Guard 7).
+# git-data host-key pin redeploy (#7226 / #5914 / #8710, ADR-237 D2).
 #
 # A git-data birth (git_data_host_create) or replace (git_data_host_replace) in
 # apply-web-platform-infra.yml re-keys the host and re-publishes GIT_DATA_SSH_HOST_KEY to
@@ -25,13 +25,15 @@
 #
 # THE GATE (source-run-gate.sh, #8710) proceeds only when a git-data job AND its `id: apply`
 # step both succeeded: a `plan_only` rehearsal ends `success` with the apply skipped, and must
-# never redeploy production. A red job whose apply succeeded (the pin was published, the boot
-# poll went red) does not redeploy by itself; it sets pin_published=true and emails ops.
+# never redeploy production. A red job whose apply succeeded or may have (the pin was or may
+# have been published, e.g. the boot poll went red) does not redeploy by itself; it sets
+# pin_published=true and emails ops, and this run goes red if that email is not sent.
 #
 # Recovery: re-run this workflow's failed job, or
 #   gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply run id>
-# (no source_run_id = redeploy unconditionally). If the gate exited 1 or printed
-# verdict=pin_published and the source apply really published a pin, dispatch
+# (no source_run_id = redeploy unconditionally). If the gate exited 1 with verdict=unidentified,
+# or printed verdict=pin_published / verdict=pin_maybe_published, and the source apply really
+# published a pin, dispatch
 #   gh workflow run git-data-pin-redeploy.yml --ref main
 # with NO source_run_id: the same id re-reads the same run and refuses again.
 # Never replace git-data again to get a redeploy.
@@ -78,10 +80,14 @@ jobs:
 
       - name: Gate on the source run's git-data birth/replace outcome
         id: gate
+        # One jobs read; a hung gh call must not hold the concurrency group for the job's 80 min.
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.source_run_id }}
+          # The attempt that fired this run (empty on a manual dispatch = the latest attempt).
+          SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch && -z "${SOURCE_RUN_ID}" ]]; then
@@ -118,27 +124,39 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: bash .github/actions/dispatch-web-redeploy/track.sh
 
-      # The one state the gate ends GREEN for while erasures break: the source job is red but its
-      # apply step succeeded, so the new pin is in Doppler prd and the app still holds the old one.
+      # The states the gate ends GREEN for while erasures may break: the source job is red but its
+      # apply step succeeded (verdict=pin_published) or may have written the pin before failing
+      # (verdict=pin_maybe_published), so Doppler prd may hold a new pin the app does not.
       - name: Email ops when a pin was published but not redeployed
+        id: pin_email
         if: ${{ always() && steps.gate.outputs.pin_published == 'true' }}
         uses: ./.github/actions/notify-ops-email
         with:
-          subject: "git-data pin published but the app was not redeployed — erasures fail host_key_mismatch until it is"
+          subject: "git-data pin published (or possibly published) but the app was not redeployed — erasures fail host_key_mismatch until it is"
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
           # Workflow-context scalars only; never a step log, never an input.
           body: |
             <p><strong>git-data pin redeploy</strong> skipped the redeploy for source apply run
-            <code>${{ github.event.workflow_run.id || 'manual dispatch (see the run below)' }}</code>: its git-data job went red AFTER its
-            Terraform apply step succeeded, so the new GIT_DATA_SSH_HOST_KEY pin is published to
-            Doppler prd while the web app still holds the old one. Until a web-platform-release
-            deploys, account erasures fail with <code>host_key_mismatch</code>.</p>
+            <code>${{ github.event.workflow_run.id || 'manual dispatch (see the run below)' }}</code>: its git-data job went red, and its
+            Terraform apply step either succeeded (<code>verdict=pin_published</code>: the new
+            GIT_DATA_SSH_HOST_KEY pin is in Doppler prd) or may have written the pin before failing
+            (<code>verdict=pin_maybe_published</code>), while the web app still holds the old one.
+            Until a web-platform-release deploys, account erasures fail with
+            <code>host_key_mismatch</code>. The verdict is in this run's annotations.</p>
             <p>After a replace, start with a read, never a second replace (runbook
             git-data-luks-cutover-5274.md, "If the fresh host fails a boot check after step 3").
             To load the new pin, dispatch
             <code>gh workflow run git-data-pin-redeploy.yml --ref main</code> with NO
             source_run_id.</p>
             <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
+
+      # The pin email is the only alert for a green run with a stale pin: an unsent one fails the
+      # run, so the failure email below is the second attempt.
+      - name: Fail when the pin-published email was not sent
+        if: ${{ always() && steps.gate.outputs.pin_published == 'true' && steps.pin_email.outputs.sent != 'true' }}
+        run: |
+          echo "::error::the pin-published email was not sent; failing so the failure email retries the alert."
+          exit 1
 
       - name: Email ops when the pin is not confirmed loaded
         if: ${{ failure() }}
@@ -155,8 +173,10 @@ jobs:
             verification, so account erasures fail with <code>host_key_mismatch</code>.</p>
             <p>Recovery: re-run this run, or
             <code>gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=&lt;apply run id&gt;</code>.
-            Read this run's annotations first: if the source-run gate exited 1 or printed
-            <code>verdict=pin_published</code> and the source apply really published a pin, dispatch
+            Read this run's annotations first: if the source-run gate exited 1 with
+            <code>verdict=unidentified</code>, or printed <code>verdict=pin_published</code> or
+            <code>verdict=pin_maybe_published</code> (this run then failed because that email was not
+            sent), and the source apply really published a pin, dispatch
             <code>gh workflow run git-data-pin-redeploy.yml --ref main</code> with NO source_run_id
             (the same id re-reads the same run and refuses again).
             Do NOT replace git-data again.</p>
