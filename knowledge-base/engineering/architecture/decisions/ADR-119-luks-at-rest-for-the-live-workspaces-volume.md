@@ -801,6 +801,32 @@ leaves (0600 root):
 The addendum above still holds for the `DOPPLER_TOKEN=` line. The file itself is created by this
 installer when absent. The missing `SOLEUR_SENTRY_DSN=` line stays cloud-init's, tracked in #8706.
 
+## Addendum (2026-09-24): the same rotation shape, applied to `web_probes` (#8705)
+
+`doppler_service_token.web_probes` (soleur/prd, read) is the second token rotated with this shape.
+Retained web-1 snapshot `411798619` very likely holds its first token, `web-probes-read` (created
+2026-07-18, written to web-1 the same day). It is renamed to `web-probes-read-2026-09-24` with
+`create_before_destroy`, merged with `[ack-destroy]`.
+
+- **A rename, not a same-name `-replace`.** Without `create_before_destroy` a same-name replace
+  deletes first, so a failed create leaves no token. With it, Doppler must accept two tokens with one
+  name, which nobody has probed. The "rename or `-replace`" wording in the #8632 addendum above now
+  reads as "rename" for any token that has a live consumer.
+- **web-1 delivery.** The four probe installers in `server.tf` (`private_nic_guard_install`,
+  `zot_consumer_probe_install`, `inngest_consumer_probe_install`, `git_data_probe_install`) hash the
+  key in `triggers_replace`, so the merge's SSH stage rewrites their `/etc/default/*` files whole.
+  That in-place write rests on ADR-154's standing exception to
+  `hr-prod-host-config-change-immutable-redeploy`, exactly as the luks-monitor line above does.
+- **Fresh hosts.** web-2 got the old key at birth through user_data, which `hcloud_server.web`
+  ignores after create. It is re-seeded by the ADR-148 `web-host-replace` dispatch once the merge
+  apply is green; `runbooks/web-host-replace.md` lists that use.
+- **Pinned.** `apps/web-platform/infra/web-probes-token-rotation.test.sh` fails when a consumer of the
+  key would not re-fire on rotation, or when the token loses `create_before_destroy`.
+  `apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh` proves the rotation from the
+  Doppler token listing (the retired slug is gone and a later replacement exists).
+
+This closes forward read access only. Values the image already holds are tracked in #8734.
+
 ## References
 
 - Issue #6588 — the P1 that mandated CTO routing before terraform.

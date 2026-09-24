@@ -13,6 +13,7 @@ exists:
 |---|---|---|
 | declared in `var.web_hosts` but absent from the provider | `web-host-create` | exactly 1 create, 0 destroys |
 | present, but broken / dark / on a bad image | `web-host-replace` | exactly 1 delete+create of that key |
+| present, but holding a baked create-time credential that has since been rotated (`hcloud_server.web` ignores `user_data` changes, so only a new host picks up the new value; first used for the #8705 `web_probes` token) | `web-host-replace`, dispatched only after the rotation's merge apply is green | exactly 1 delete+create of that key |
 
 Dispatching the wrong one is safe by construction — each gate refuses the other's plan shape,
 and the `confirm` tokens are deliberately different — but it wastes a run.

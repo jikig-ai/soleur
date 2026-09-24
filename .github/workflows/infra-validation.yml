@@ -1439,6 +1439,9 @@ jobs:
       - name: Run web-host git-data consumer-probe tests (#6548 — fail-soft reachability)
         run: bash apps/web-platform/infra/web-git-data-probe.test.sh
 
+      - name: Run web_probes token rotation guards (#8705 — consumer census, create_before_destroy, verifier)
+        run: bash apps/web-platform/infra/web-probes-token-rotation.test.sh
+
       # Registered explicitly because this job runs named steps, not a glob — an unregistered
       # infra suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + PATH
       # stubs: no terraform, cloud-init, docker, network, or root, so this job's existing
