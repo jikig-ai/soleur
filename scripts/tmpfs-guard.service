@@ -18,6 +18,7 @@ ExecStart=%h/soleur/scripts/tmpfs-guard.sh
 # The guard already refuses to run twice (flock); the timeout only bounds a
 # wedged pass, it does not serialize.
 TimeoutSec=300
-# Scratch reaping must never see a redirected TMPDIR — the guard's own lockfile
-# and candidate enumeration depend on the real bases.
+# Pin TMPDIR to a real base for the guard process — the scratch-base list and
+# lockfile are already TMPDIR-independent by design; this is belt over a
+# caller-supplied environment pointing TMPDIR somewhere pathological.
 Environment=TMPDIR=/var/tmp

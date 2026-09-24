@@ -65,3 +65,20 @@ Reaper 2's large-entry reap — the timer/cron remains the only trigger for that
 - All three consumers serialize on
   `~/.local/state/soleur/tmp-guard.lock` — a contended run skips loudly rather
   than queueing.
+
+## Quarantine drain & restore
+
+Every moved entry lands in `<base>/soleur-quarantine.<uid>/<class>/` and is
+recorded in `~/.local/state/soleur/tmp-purge-ledger.log` (action, class,
+origin, quarantine path — Reaper 3, the session sweep, and the operator purge
+all write this one ledger, so `--restore` sees every move).
+
+- **Drain** (delete quarantine entries past their class TTL — scratch 7d,
+  worktrees 30d; dwell counts from quarantine *arrival*, not content age):
+  `bash scripts/soleur-tmp-purge.sh --drain`
+  The installed timer/service drains on every run; without a trigger the
+  session-start sweep prints a "quarantine holds entries" note instead.
+- **Restore** (undo a quarantine move before drain):
+  `bash scripts/soleur-tmp-purge.sh --restore <basename>` or `--restore` (all).
+- **Inspect**: `bash scripts/soleur-tmp-purge.sh --dry-run` reports class
+  counts and bytes; `SOLEUR_PURGE_BASES="…"` scopes the scan.

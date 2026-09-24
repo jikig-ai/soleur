@@ -49,7 +49,7 @@ Issue: #7004 | PR: #8738 | Lane: cross-domain | Threshold: single-user incident
 - [x] 2.4 `scripts/tmpfs-guard.test.sh` extension +
   `tests/test-scratch-session.sh` — mutation-matrix rows per Guard Contract
   (multi-base iteration, unset-seam fail-closed, dead+live split, vacuous
-  harness row, pid-reuse retentive, container-ns skip)
+  harness row, pid-reuse retentive, foreign-pid-ns marker veto)
 - [x] 2.5 Run `soleur:gdpr-gate` at Phase-2 exit (advisory; expected scope-out)
 
 ## Phase 3 — Adoption + triggers + docs

@@ -89,8 +89,19 @@ soleur_scratch_session_begin() {
   for a in "$@"; do
     case "$a" in --with-trap) with_trap=1 ;; *) base="$a" ;; esac
   done
-  base="${base:-${TMPDIR:-/var/tmp}}"
-  base="${base%/}"
+  if [[ -z "$base" ]]; then
+    base="${TMPDIR:-/var/tmp}"
+    base="${base%/}"
+    # A TMPDIR pointing INSIDE a standard scratch base (systemd PrivateTmp and
+    # similar produce /tmp/<sub>) normalizes up to the base itself — a root
+    # allocated beneath a subdir is invisible to the reapers' depth-bounded
+    # enumeration and would leak silently. An explicit base arg is honored as
+    # given: the caller owns its enumeration contract (and nested producers
+    # pass the parent's exported SOLEUR_SCRATCH_BASE — already a real base).
+    while [[ "$base" == /tmp/* || "$base" == /var/tmp/* ]]; do
+      base="${base%/*}"
+    done
+  fi
   if [[ -z "$base" || "$base" != /* ]]; then
     echo "scratch-session: base '$base' is not an absolute path; refusing (fail-closed)" >&2
     return 1
@@ -106,9 +117,13 @@ soleur_scratch_session_begin() {
 
   # Ownership record — pid is the TOP-LEVEL harness pid ($$ here), not a
   # fixture's own $$ which dies at suite exit and would reap the dir mid-run.
-  local ns
-  ns="$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')"
-  printf 'pid=%s\nschema=1\nns=%s\n' "$$" "$ns" > "$root/.soleur-owned"
+  # Written through mark_owned so the marker format is single-sourced (and
+  # atomic) — SOLEUR_SCRATCH_OWNER_PID isn't set yet, so it defaults to $$.
+  soleur_scratch_mark_owned "$root" || {
+    echo "scratch-session: cannot write ownership marker in $root" >&2
+    rm -rf -- "$root" 2>/dev/null || true
+    return 1
+  }
 
   # Holder fd — `declare -g` is load-bearing: a function-local {var} fd closes
   # when the function returns and the liveness conjunct silently dies.
@@ -137,11 +152,19 @@ soleur_scratch_session_begin() {
 _soleur_scratch_cleanup() {
   local root="${SOLEUR_SCRATCH_SESSION_ROOT:-}"
   [[ -n "$root" ]] || return 0
+  # Ownership conjunct: `_SOLEUR_SCRATCH_FD` is `declare -g`, deliberately NOT
+  # exported — only the process that ran begin() holds it. The exported
+  # SOLEUR_SCRATCH_* vars make the session visible to children; this
+  # non-exported holder-fd variable is what makes the DELETE path owner-only,
+  # so a nested suite's EXIT trap can never reap the parent's live root.
+  # ($$-based ownership collapses under command-substitution wrappers that
+  #  bind $$ to the session shell — the variable's absence is kernel-safe.)
+  [[ -n "${_SOLEUR_SCRATCH_FD:-}" ]] || return 0
   case "$root" in
     */soleur-run.*) ;;                      # shape pin — never delete arbitrary TMPDIR
     *) echo "scratch-session: root '$root' fails the soleur-run.* shape; refusing to delete" >&2; return 0 ;;
   esac
-  find "$root" -depth -delete 2>/dev/null || true
+  find "$root" -xdev -depth -delete 2>/dev/null || true
   return 0
 }
 
@@ -152,8 +175,15 @@ _soleur_scratch_cleanup() {
 soleur_scratch_mark_owned() {
   local dir="${1:-}" oroot="${2:-}"
   [[ -n "$dir" && -d "$dir" ]] || { echo "mark-owned: '$dir' not a directory" >&2; return 1; }
-  local ns
+  # Never follow a pre-planted .soleur-owned symlink — `>` would clobber the
+  # link's target, an arbitrary-file write wherever the planter pointed it.
+  [[ ! -L "$dir/.soleur-owned" ]] || { echo "mark-owned: '$dir/.soleur-owned' is a symlink; refusing" >&2; return 1; }
+  local ns tmp
   ns="$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')"
+  # tmp+rename: a reaper reading mid-`>` could see the marker torn after `pid=`
+  # but before `ns=` — a partial marker is a full-trust ambiguity, so the write
+  # must be atomic.
+  tmp="$(mktemp "$dir/.soleur-owned.XXXXXX" 2>/dev/null)" || { echo "mark-owned: cannot create tmp marker in '$dir'" >&2; return 1; }
   {
     if [[ -n "$oroot" ]]; then
       printf 'owner_root=%s\n' "$oroot"
@@ -161,7 +191,11 @@ soleur_scratch_mark_owned() {
       printf 'pid=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}"
     fi
     printf 'schema=1\nns=%s\n' "$ns"
-  } > "$dir/.soleur-owned"
+  } > "$tmp" && mv -f -- "$tmp" "$dir/.soleur-owned" || {
+    rm -f -- "$tmp" 2>/dev/null
+    echo "mark-owned: failed writing marker in '$dir'" >&2
+    return 1
+  }
 }
 
 

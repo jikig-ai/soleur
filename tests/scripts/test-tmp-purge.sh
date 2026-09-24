@@ -27,7 +27,19 @@ pass() { pass_n=$((pass_n + 1)); echo "  [ok] $1"; }
 fail() { fails=$((fails + 1)); echo "  [FAIL] $1" >&2; }
 
 TESTROOT="$(mktemp -d -t soleur-tmp-purge.XXXXXXXX)"
-cleanup() { rm -rf "$TESTROOT"; }
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
+# it); do not reword.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+cleanup() { assert_fixture_dir "$TESTROOT"; rm -rf "$TESTROOT"; }
 trap cleanup EXIT
 
 [[ -f "$PURGE" ]] || { echo "ERROR: $PURGE missing" >&2; exit 1; }
@@ -39,6 +51,15 @@ LEDGER="$TESTROOT/ledger.log"
 LOCKFILE="$TESTROOT/lock"
 RETAIN_DIR="$TESTROOT/retain"
 mkdir -p "$FAKE_A" "$FAKE_B" "$FAKE_PROC" "$RETAIN_DIR"
+
+# The fake procfs carries a self/ns/pid link so marker `ns=` fields verify
+# against it — the marker parser now REQUIRES a matching namespace.
+FAKE_NS='pid:[42424242]'
+mk_fake_proc() {
+  rm -rf "$FAKE_PROC"; mkdir -p "$FAKE_PROC/self/ns"
+  ln -s "$FAKE_NS" "$FAKE_PROC/self/ns/pid"
+}
+mk_fake_proc
 
 purge_env() {
   env -i PATH="$PATH" HOME="$HOME" \
@@ -53,15 +74,19 @@ purge_env() {
     "$@"
 }
 
-mk_marker() { # dir pid — writes a valid marker (no ns= so fake-proc runs pass)
-  mkdir -p "$1"; printf 'pid=%s\nschema=1\n' "$2" > "$1/.soleur-owned"
+# A valid marker now REQUIRES ns= matching the fake proc's self/ns/pid —
+# absent or foreign namespaces veto the marker (unattributable, never moved).
+mk_marker() { # dir pid [ns]
+  mkdir -p "$1"; printf 'pid=%s\nschema=1\nns=%s\n' "$2" "${3:-$FAKE_NS}" > "$1/.soleur-owned"
 }
-mk_dead_proc() { :; }   # absent from $FAKE_PROC is dead by construction
 mk_live_proc() { mkdir -p "$FAKE_PROC/$1"; }   # presence == alive under the seam
+mk_live_fd() { # pid dir — fake a live fd handle into a target dir
+  mkdir -p "$FAKE_PROC/$1/fd"; ln -s "$2" "$FAKE_PROC/$1/fd/3"
+}
 
 reset_fixtures() {
-  rm -rf "$FAKE_A" "$FAKE_B"; mkdir -p "$FAKE_A" "$FAKE_B"
-  rm -rf "$FAKE_PROC"; mkdir -p "$FAKE_PROC"
+  assert_fixture_dir "$FAKE_A"; rm -rf "$FAKE_A" "$FAKE_B"; mkdir -p "$FAKE_A" "$FAKE_B"
+  mk_fake_proc
   : > "$LEDGER" 2>/dev/null || true
 }
 reset_fixtures
@@ -153,6 +178,35 @@ cases=$((cases + 1)); [[ ! -d "$FAKE_A/soleur-run.${DEAD}.deadbeef" ]] \
   && pass "dead-owner schema dir quarantined" || fail "dead schema retained"
 cases=$((cases + 1)); [[ -d "$FAKE_A/soleur-run.${LIVE}.livebeef" ]] \
   && pass "live-owner schema dir retained" || fail "live schema moved"
+
+# --- Arm 4b: marker verification — foreign ns veto, owner_root cycle, live fd --
+reset_fixtures
+DEAD=424242
+# Foreign-namespace marker on a SCHEMA-named dir: the container-producer case.
+# The marker's ns= must VETO the schema name — the pid in the name belongs to
+# the foreign namespace and is meaningless on this host.
+mkdir -p "$FAKE_A/soleur-run.${DEAD}.foreignns"; mk_marker "$FAKE_A/soleur-run.${DEAD}.foreignns" "$DEAD" 'pid:[99999999]'
+# owner_root A↔B cycle: resolution is depth-bounded → unverifiable → retain,
+# never hang.
+mkdir -p "$FAKE_A/cycle-aaaaaaaa" "$FAKE_A/cycle-bbbbbbbb"
+printf 'owner_root=%s\nschema=1\nns=%s\n' "$FAKE_A/cycle-bbbbbbbb" "$FAKE_NS" > "$FAKE_A/cycle-aaaaaaaa/.soleur-owned"
+printf 'owner_root=%s\nschema=1\nns=%s\n' "$FAKE_A/cycle-aaaaaaaa" "$FAKE_NS" > "$FAKE_A/cycle-bbbbbbbb/.soleur-owned"
+# Dead owner + live fd handle held by a surviving descendant → retain.
+mkdir -p "$FAKE_A/marked-handle.cccccccc"; mk_marker "$FAKE_A/marked-handle.cccccccc" "$DEAD"; : > "$FAKE_A/marked-handle.cccccccc/x"
+mk_live_fd 999 "$FAKE_A/marked-handle.cccccccc"
+# Marker dir containing a nested .git tree → registry-relevant → retain.
+mkdir -p "$FAKE_A/marked-nested.dddddddd/wt"; printf 'gitdir: /nonexistent\n' > "$FAKE_A/marked-nested.dddddddd/wt/.git"
+mk_marker "$FAKE_A/marked-nested.dddddddd" "$DEAD"
+out="$(purge_env bash "$PURGE" --apply 2>&1)"
+
+cases=$((cases + 1)); [[ -d "$FAKE_A/soleur-run.${DEAD}.foreignns" ]] \
+  && pass "foreign-ns marker vetoes schema name (container case)" || fail "foreign-ns dir moved: $out"
+cases=$((cases + 1)); [[ -d "$FAKE_A/cycle-aaaaaaaa" && -d "$FAKE_A/cycle-bbbbbbbb" ]] \
+  && pass "owner_root cycle bounded → retained" || fail "cycle dirs moved/hung"
+cases=$((cases + 1)); [[ -d "$FAKE_A/marked-handle.cccccccc" ]] \
+  && pass "dead-owner dir with live fd handle retained" || fail "live-handle marker dir moved"
+cases=$((cases + 1)); [[ -d "$FAKE_A/marked-nested.dddddddd" ]] \
+  && pass "marker dir with nested .git retained" || fail "nested-git dir moved"
 
 # --- Arm 5: live handles retain a prefix-class dir (real /proc arm) --------------
 reset_fixtures
@@ -267,7 +321,44 @@ out="$(env -i PATH="$PATH" HOME="$HOME" \
 cases=$((cases + 1)); [[ ! -d "$FAKE_A/soleur-quarantine.$(id -u)/prefix/rung2-archive.Restore1" ]] \
   && pass "--drain deletes past-TTL quarantine entries" || fail "drain no-op: $out"
 
+# --- Arm 11: drain dwell is quarantine-arrival (ctime), not content age ---------
+reset_fixtures
+mkdir -p "$FAKE_A/rung2-archive.DrainTTLx"; : > "$FAKE_A/rung2-archive.DrainTTLx/git-data-bootstrap.sh"
+# Content made ancient — pre-fix code drained on content mtime, collapsing the
+# recovery window to ~0 for exactly the stale backlog quarantine exists to save.
+touch -d '-20000 minutes' "$FAKE_A/rung2-archive.DrainTTLx/git-data-bootstrap.sh" "$FAKE_A/rung2-archive.DrainTTLx"
+purge_env bash "$PURGE" --apply >/dev/null 2>&1
+cases=$((cases + 1)); [[ -d "$FAKE_A/soleur-quarantine.$(id -u)/prefix/rung2-archive.DrainTTLx" ]] \
+  && pass "fixture quarantined for drain-dwell arm" || fail "drain-dwell fixture missing"
+out="$(purge_env bash "$PURGE" --drain 2>&1)"
+cases=$((cases + 1)); [[ -d "$FAKE_A/soleur-quarantine.$(id -u)/prefix/rung2-archive.DrainTTLx" ]] \
+  && pass "drain retains fresh quarantine dwell despite ancient content" \
+  || fail "drain used content mtime — recovery window collapsed: $out"
+
+# --- Arm 12: bare --restore replays all moves; flag-shaped target not swallowed -
+reset_fixtures
+mkdir -p "$FAKE_A/rung2-archive.RestoreAll"; : > "$FAKE_A/rung2-archive.RestoreAll/git-data-bootstrap.sh"
+purge_env bash "$PURGE" --apply >/dev/null 2>&1
+rc=0; out="$(purge_env bash "$PURGE" --restore 2>&1)" || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" && -d "$FAKE_A/rung2-archive.RestoreAll" ]] \
+  && pass "bare --restore replays all ledger moves" || fail "bare --restore rc=$rc out=$out"
+
+# --- Arm 13: empty SOLEUR_PURGE_BASES refuses loudly, never defaults ------------
+rc=0; out="$(env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_BASES="" bash "$PURGE" --dry-run 2>&1)" || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q 'FATAL' \
+  && pass "empty bases env refuses loudly" || fail "empty bases rc=$rc out=$out"
+
+# --- Arm 14: symlinked quarantine root refuses the drain ------------------------
+reset_fixtures
+mkdir -p "$TESTROOT/victim-tree"; : > "$TESTROOT/victim-tree/keep"
+ln -s "$TESTROOT/victim-tree" "$FAKE_A/soleur-quarantine.$(id -u)"
+out="$(purge_env bash "$PURGE" --drain 2>&1)"
+cases=$((cases + 1)); [[ -f "$TESTROOT/victim-tree/keep" ]] \
+  && pass "symlinked quarantine root — drain refuses, target untouched" \
+  || fail "drain followed symlinked quarantine root"
+
 # --- Conservation -------------------------------------------------------------------
+MIN_ASSERTIONS=44   # anti-vacuity floor — a truncated run can't pass at 0/0
 echo ""
 echo "test-tmp-purge: $pass_n passed, $fails failed ($cases cases)"
-[[ $((pass_n + fails)) -eq $cases && $fails -eq 0 ]]
+[[ $((pass_n + fails)) -ge $MIN_ASSERTIONS && $((pass_n + fails)) -eq $cases && $fails -eq 0 ]]

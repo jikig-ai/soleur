@@ -56,10 +56,9 @@ fi
 # shellcheck source=/dev/null
 source "$_TC_LIB"
 
-BASES="${SOLEUR_PURGE_BASES:-/tmp /var/tmp}"
-[[ -n "${BASES//[[:space:]]/}" ]] || { echo "SOLEUR_TMP_PURGE FATAL: base list empty; refusing (fail-closed)" >&2; exit 1; }
+BASES="${SOLEUR_PURGE_BASES-/tmp /var/tmp}"
+[[ -n "${BASES//[[:space:]]/}" ]] || { echo "SOLEUR_TMP_PURGE FATAL: base list empty; refusing (fail-closed). An empty SOLEUR_PURGE_BASES is honored, not defaulted — unset it to use /tmp /var/tmp." >&2; exit 1; }
 
-LEDGER="${SOLEUR_PURGE_LEDGER:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/soleur/tmp-purge-ledger.log}"
 LOCKFILE="${SOLEUR_PURGE_LOCKFILE:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/soleur/tmp-guard.lock}"
 TTL_SCRATCH="${SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN:-10080}"   # 7d
 TTL_WT="${SOLEUR_PURGE_QUAR_WT_TTL_MIN:-43200}"             # 30d
@@ -70,7 +69,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) MODE="dry-run" ;;
     --apply)   MODE="apply" ;;
-    --restore) MODE="restore"; RESTORE_ARG="${2:-all}"; shift ;;
+    --restore)
+      MODE="restore"
+      # Only a non-flag argument is a restore target — `--restore --apply`
+      # must not swallow the next flag, and bare `--restore` must not shift
+      # past the end (set -e would kill the script silently).
+      if [[ -n "${2:-}" && "$2" != -* ]]; then RESTORE_ARG="$2"; shift; else RESTORE_ARG="all"; fi ;;
     --drain)   MODE="drain" ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "usage: soleur-tmp-purge.sh [--dry-run|--apply|--restore [name|all]|--drain]" >&2; exit 1 ;;
@@ -88,52 +92,52 @@ if ! flock -n 9; then
 fi
 
 # --- ledger ----------------------------------------------------------------------
-ledger_append() { # action class original dest
-  local line
-  line="$(date -u +%Y-%m-%dT%H:%M:%SZ)"$'\t'"$1"$'\t'"$2"$'\t'"$3"$'\t'"$4"
-  if ! printf '%s\n' "$line" >> "$LEDGER" 2>/dev/null; then
-    echo "LEDGER-DROP: cannot append $LEDGER — action NOT recorded: $line" >&2
-    echo "LEDGER-DROP: $line"
-    return 0   # never abort a run on ledger failure; the drop IS the alarm
-  fi
-}
+# tc_ledger_append (from tmp-classify.sh) is THE ledger — every consumer
+# (purge, Reaper 3, session sweep) writes the same file so this restore
+# picture is complete. $LEDGER stays as this script's display name for it.
+LEDGER="$TC_LEDGER"
 
 # --- drain -----------------------------------------------------------------------
+# Shared with tmpfs-guard via tc_drain_quarantine: quarantine dwell is the
+# entry's ctime (rename bumps it), not content mtime — aging on mtime makes
+# the recovery window ~0 for the stale backlog that is quarantine's main
+# population.
 drain_quarantine() {
-  local base qroot cls ttl newest now_min f
+  local base drained=0
   for base in $BASES; do
-    qroot="$base/soleur-quarantine.$TC_UID"
-    [[ -d "$qroot" ]] || continue
-    for cls in "$qroot"/*/; do
-      [[ -d "$cls" ]] || continue
-      case "$(basename -- "$cls")" in worktrees) ttl="$TTL_WT" ;; *) ttl="$TTL_SCRATCH" ;; esac
-      for f in "$cls"/*; do
-        [[ -e "$f" ]] || continue
-        now_min="$(tc_tree_age_min "$f")"
-        if (( now_min >= ttl )); then
-          if [[ "$MODE" == "drain" && "$DRY_RUN" != "1" ]]; then
-            rm -rf -- "$f" && ledger_append "drain" "$(basename -- "$cls")" "$f" "-"
-          else
-            echo "  drain-pending $(basename -- "$cls")/$(basename -- "$f") age=${now_min}m"
-          fi
-        fi
-      done
-    done
+    tc_drain_quarantine "$base" "$DRY_RUN" "$TTL_SCRATCH" "$TTL_WT"
+    drained=$((drained + TC_DRAINED))
   done
+  echo "SOLEUR_TMP_PURGE drain: $drained entr$( (( drained == 1 )) && echo y || echo ies) removed"
 }
 
 # --- restore ---------------------------------------------------------------------
 do_restore() {
-  local target="$1" line orig quar
+  local target="$1" orig quar
   [[ -f "$LEDGER" ]] || { echo "SOLEUR_TMP_PURGE restore: no ledger at $LEDGER"; exit 1; }
-  while IFS=$'\t' read -r ts action cls orig quar; do
-    [[ "$action" == "move" && -n "${quar:-}" && -e "$quar" ]] || continue
+  while IFS=$'\t' read -r _ts action cls orig quar; do
+    [[ "$action" == "move" ]] || continue
+    [[ -n "${quar:-}" ]] || continue
+    case "$quar" in
+      */soleur-quarantine.*/*) ;;    # ledger rows only move quarantined paths
+      *) echo "  restore-skip $quar — path is not beneath a quarantine root"; continue ;;
+    esac
+    if [[ ! -e "$quar" && ! -L "$quar" ]]; then
+      echo "  restore-skip $quar — already gone (drained or moved)"
+      continue
+    fi
     if [[ "$target" == "all" || "$(basename -- "$quar")" == "$target" || "$quar" == "$target" ]]; then
       if [[ -e "$orig" ]]; then
         echo "  restore-skip $(basename -- "$quar") — $orig exists"
         continue
       fi
-      mv -- "$quar" "$orig" && { ledger_append "restore" "$cls" "$quar" "$orig"; echo "  restored $(basename -- "$orig")"; }
+      if mv -- "$quar" "$orig"; then
+        tc_ledger_append "restore" "$cls" "$quar" "$orig"
+        echo "  restored $(basename -- "$orig")"
+      else
+        # The recovery surface must fail LOUD — a silent skip reads as success.
+        echo "  RESTORE-FAIL $quar -> $orig" >&2
+      fi
     fi
   done < "$LEDGER"
 }
@@ -141,7 +145,6 @@ do_restore() {
 # --- enumeration + classification -------------------------------------------------
 
 declare -A CLASS_COUNT CLASS_BYTES _CLASS_OF=()
-REPORT_ROWS=()
 OPERATOR_LIST=()
 
 bump() { # class bytes
@@ -149,42 +152,54 @@ bump() { # class bytes
   CLASS_BYTES["$1"]=$(( ${CLASS_BYTES["$1"]:-0} + $2 ))
 }
 
-# decide <path> <class> — apply-mode disposition. Prints a row for the report.
+# decide_apply <path> <class> — apply-mode disposition. Prints a row per entry.
+# Declared-owner classes route through tc_reap_decide — the same conjunct
+# chain Reaper 3 and the sweep use — so the "safe to move" predicate is
+# single-sourced. Operator-tool disposition is always quarantine (no direct
+# delete), and every mutation lands a ledger row.
 decide_apply() {
-  local p="$1" cls="$2" dest age
+  local p="$1" cls="$2" dest age verdict
   case "$cls" in
     marker:*|schema:*)
-      local pid="${cls##*:}"
-      if tc_entry_is_live "$p" "$pid"; then echo "  retain $p (live)"; return 0; fi
-      age="$(tc_tree_age_min "$p")"; (( age >= TC_AGE_FLOOR_MIN )) || { echo "  retain $p (age ${age}m<${TC_AGE_FLOOR_MIN}m)"; return 0; }
+      verdict="$(tc_reap_decide "$p" "$TC_AGE_FLOOR_MIN")"
+      [[ "$verdict" == "reap" ]] || { echo "  retain $p ($verdict)"; return 0; }
       dest="$(tc_quarantine_move "$p" "$(dirname "$p")" "scratch")" \
-        && { ledger_append "move" "scratch" "$p" "$dest"; echo "  QUARANTINE $p -> $dest"; } \
+        && { tc_ledger_append "move" "scratch" "$p" "$dest"; echo "  QUARANTINE $p -> $dest"; } \
         || echo "  RETAIN $p (move refused)"
       ;;
     empty)
       if tc_entry_is_live "$p" ""; then echo "  retain $p (live)"; return 0; fi
-      rmdir -- "$p" 2>/dev/null && { ledger_append "rmdir" "empty" "$p" "-"; echo "  RMDIR $p"; } || echo "  retain $p (rmdir refused)"
+      age="$(tc_tree_age_min "$p")"; (( age >= TC_AGE_FLOOR_MIN )) || { echo "  retain $p (age ${age}m<${TC_AGE_FLOOR_MIN}m)"; return 0; }
+      rmdir -- "$p" 2>/dev/null && { tc_ledger_append "rmdir" "empty" "$p" "-"; echo "  RMDIR $p"; } || echo "  retain $p (rmdir refused)"
       ;;
     prefix:*|file:*)
       if [[ -d "$p" ]] && tc_entry_is_live "$p" ""; then echo "  retain $p (live)"; return 0; fi
+      if [[ -f "$p" ]] && tc_file_in_use "$p"; then echo "  retain $p (file in use)"; return 0; fi
       age="$(tc_tree_age_min "$p")"; (( age >= TC_AGE_FLOOR_MIN )) || { echo "  retain $p (young)"; return 0; }
+      # A signature-matched dir can still hold a nested .git tree or a live
+      # mount — the signature proves authorship, not internal emptiness.
+      tc_tree_has_gitref "$p" && { echo "  retain $p (nested-git)"; return 0; }
+      tc_tree_has_mount "$p" && { echo "  retain $p (nested-mount)"; return 0; }
+      tc_inuse_map_refresh || true   # bound map staleness before the move lands
       dest="$(tc_quarantine_move "$p" "$(dirname "$p")" "prefix")" \
-        && { ledger_append "move" "prefix" "$p" "$dest"; echo "  QUARANTINE $p -> $dest"; } \
+        && { tc_ledger_append "move" "prefix" "$p" "$dest"; echo "  QUARANTINE $p -> $dest"; } \
         || echo "  RETAIN $p (move refused)"
       ;;
     worktree:unregistered)
       age="$(tc_tree_age_min "$p")"; (( age >= TC_WT_FLOOR_MIN )) || { echo "  retain $p (young)"; return 0; }
       if tc_entry_is_live "$p" ""; then echo "  retain $p (live)"; return 0; fi
+      tc_tree_has_gitref "$p" && { echo "  retain $p (nested-git)"; return 0; }
+      tc_tree_has_mount "$p" && { echo "  retain $p (nested-mount)"; return 0; }
       dest="$(tc_quarantine_move "$p" "$(dirname "$p")" "worktrees")" \
-        && { ledger_append "move" "worktrees" "$p" "$dest"; echo "  QUARANTINE $p -> $dest"; } \
+        && { tc_ledger_append "move" "worktrees" "$p" "$dest"; echo "  QUARANTINE $p -> $dest"; } \
         || echo "  RETAIN $p (move refused)"
       ;;
     worktree:registered)
       age="$(tc_tree_age_min "$p")"; (( age >= TC_WT_FLOOR_MIN )) || { echo "  retain $p (young)"; return 0; }
       if tc_worktree_safe_to_remove "$p"; then
         local main; main="$(tc_git_main_dir "$p")" || { echo "  retain $p (gitdir lost)"; return 0; }
-        git --git-dir="$main" worktree remove "$p" 2>/dev/null \
-          && { ledger_append "worktree-remove" "worktrees" "$p" "-"; echo "  WT-REMOVE $p"; } \
+        _tc_git --git-dir="$main" worktree remove "$p" 2>/dev/null \
+          && { tc_ledger_append "worktree-remove" "worktrees" "$p" "-"; echo "  WT-REMOVE $p"; } \
           || echo "  retain $p (worktree remove failed)"
       else
         echo "  retain $p (not clean/merged/pushed or live)"
@@ -204,16 +219,23 @@ decide_apply() {
 }
 
 run_scan() {
-  local base entry cls
+  local base entry cls skipped_odd=0
   local -a entries=() sized_paths=()
   for base in $BASES; do
-    [[ -d "$base" ]] || { echo "SOLEUR_TMP_PURGE: base $base missing — skipping"; continue; }
-    mapfile -t entries < <(find "$base" -mindepth 1 -maxdepth 1 \
-      ! -name 'soleur-quarantine.*' 2>/dev/null | LC_ALL=C sort)
+    [[ -d "$base" && ! -L "$base" ]] || { echo "SOLEUR_TMP_PURGE: base $base missing or a symlink — skipping"; continue; }
+    # -user "$TC_UID" scopes to our own entries: on a non-sticky operator-set
+    # base the disposition arms could otherwise move another user's dirs.
+    # -print0 + mapfile -d '' keeps newline-named entries whole — a split
+    # fragment would be evaluated as a cwd-relative fake candidate.
+    mapfile -t -d '' entries < <(find "$base" -mindepth 1 -maxdepth 1 \
+      -user "$TC_UID" ! -name 'soleur-quarantine.*' -print0 2>/dev/null | LC_ALL=C sort -z)
     echo "SOLEUR_TMP_PURGE scanning $base (${#entries[@]} entries)…" >&2
     # Bulk liveness for apply mode: one /proc walk feeds every conjunct.
     if [[ "$MODE" == "apply" ]]; then tc_build_inuse_map "$base" || true; fi
     for entry in "${entries[@]}"; do
+      if [[ "$entry" == *$'\n'* || "$entry" == *$'\t'* ]]; then
+        skipped_odd=$((skipped_odd + 1)); continue
+      fi
       tc_classify_entry "$entry" >/dev/null; cls="$TC_CLASS"   # no per-entry fork
       bump "$cls" 0
       # Sizes only for classes a report consumer can act on — `du` walks each
@@ -235,6 +257,11 @@ run_scan() {
     fi
     sized_paths=()
   done
+  # `if`, not `&&` — a plain `(( )) &&` list at function tail returns 1 when
+  # zero were skipped, and set -e would abort before the report prints.
+  if (( skipped_odd > 0 )); then
+    echo "SOLEUR_TMP_PURGE: skipped $skipped_odd entr$( (( skipped_odd == 1 )) && echo y || echo ies) with control characters in the name — never actioned" >&2
+  fi
 }
 
 case "$MODE" in

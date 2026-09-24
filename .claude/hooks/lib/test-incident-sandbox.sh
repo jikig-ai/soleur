@@ -84,7 +84,12 @@ _soleur_test_incident_sandbox_init() {
   find "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/tmp}}" -maxdepth 1 -type d -name 'soleur-inc-*' -mmin +180 \
     -exec rm -rf -- {} + 2>/dev/null || true
 
-  if ! d=$(mktemp -d -t soleur-inc-XXXXXX) || [ -z "$d" ]; then
+  # Allocate at the BASE, not inside a session scratch root: the sandbox is
+  # deliberately durable (~3h post-mortem window — the self-reap above is the
+  # reaper) and the owner-exit root cleanup would destroy it at session end,
+  # collapsing the forensics window to run-length on exactly the failing runs
+  # it exists for.
+  if ! d=$(mktemp -d -p "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/tmp}}" soleur-inc-XXXXXX) || [ -z "$d" ]; then
     printf 'FATAL: test-incident-sandbox could not create a sandbox (mktemp failed or returned empty).\n' >&2
     printf '  Refusing to continue: an unset INCIDENTS_REPO_ROOT points telemetry at the\n' >&2
     printf '  operator real .claude/.rule-incidents.jsonl. Check free space on %s.\n' "${TMPDIR:-/tmp}" >&2

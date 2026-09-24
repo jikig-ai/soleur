@@ -286,7 +286,7 @@ operator-decision list.
 - Worktree arm in `tmp-classify.sh` consumed by both purge and the bounded
   session-start batch — anchors to the owning repo via the candidate's `.git`
   gitdir pointer, never cwd
-- `tests/test-tmp-purge.sh` (fixtures under a sentinel `TMPDIR`, synthetic dirs
+- `tests/scripts/test-tmp-purge.sh` (fixtures under a sentinel `TMPDIR`, synthetic dirs
   only — `cq-test-fixtures-synthesized-only`; includes a foreign-repo worktree
   fixture proving classification resolves through ITS OWN registry, never
   the cwd repo's — dirty→retain, unverifiable→retain, proven-unregistered→
@@ -304,7 +304,7 @@ operator-decision list.
   merge-blocker set (TR1) in `scripts/tmpfs-guard.sh`
 - `.soleur-owned` marker writer helper (`soleur_scratch_mark_owned`) + reaper
   marker arm
-- `scripts/tmpfs-guard.test.sh` extension + `tests/test-scratch-session.sh`
+- `scripts/tmpfs-guard.test.sh` extension + `tests/scripts/test-scratch-session.sh`
 - Success criteria: AC2–AC4 arms all green on both bases; DRY_RUN inert.
 - Effort: ~2 sessions (Reaper 3 + allocator + markers + the full merge-blocker
   set + mutation-matrix rows — heavier than the other slices).
@@ -334,8 +334,8 @@ operator-decision list.
   the purge, Reaper 3, and the session-start sweep
 - `scripts/soleur-tmp-purge.sh` — `--dry-run` report + `--apply` quarantine +
   `--restore`/`--drain` + ledger
-- `tests/test-tmp-purge.sh` — purge fixtures under sentinel `TMPDIR`
-- `tests/test-scratch-session.sh` — allocator + marker + liveness tests
+- `tests/scripts/test-tmp-purge.sh` — purge fixtures under sentinel `TMPDIR`
+- `tests/scripts/test-scratch-session.sh` — allocator + marker + liveness tests
 - `scripts/tmpfs-guard.service` + `scripts/tmpfs-guard.timer` — systemd `--user`
   units (conditional — see User-Challenge UC5)
 - `knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md` —
@@ -685,8 +685,8 @@ already modeled; the guard adds no new consumer).
 - [ ] AC7: ADR-249 (or renumbered ordinal) lands in this PR; #7004 updated with
   acceptance-status note (`Ref #7004` in the PR body — `Closes` reserved until
   the post-merge residue measurement lands).
-- [ ] AC8: `bash tests/test-tmp-purge.sh`, `tests/test-tmpfs-guard.sh`,
-  `tests/test-scratch-session.sh` pass; `test-all.sh` green; a `git grep`
+- [ ] AC8: `bash tests/scripts/test-tmp-purge.sh`, `scripts/tmpfs-guard.test.sh`,
+  `tests/scripts/test-scratch-session.sh` pass; `test-all.sh` green; a `git grep`
   census of test surfaces asserting on `tmpfs-guard`/`worktree-manager`/
   `scratch-root` is enumerated in `tasks.md` (allow-list-extension edge —
   orphan suites do not ride the touched-file set).
@@ -737,7 +737,7 @@ Deterministic verification commands (consumed by `soleur:qa`):
 
 - **Local verify:** `bash scripts/soleur-tmp-purge.sh --dry-run` → prints
   `SOLEUR_TMP_PURGE` + class rows.
-- **Fixture verify:** `bash tests/test-tmp-purge.sh` → `ALL TESTS PASSED`.
+- **Fixture verify:** `bash tests/scripts/test-tmp-purge.sh` → `ALL TESTS PASSED`.
 - **Residue probe:** `find /tmp /var/tmp -maxdepth 1 -newermt '1 hour ago'
   -type d | wc -l` before/after a full runner pass — delta attributable to
   schema/marker dirs only.

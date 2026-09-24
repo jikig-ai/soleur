@@ -45,23 +45,42 @@ selects `/var/tmp` as the base.
 
 `plugins/soleur/scripts/lib/tmp-classify.sh` is the single definition of
 "safe to move", consumed by the operator purge, Reaper 3, and the
-session-start sweep. The attribution ladder: protected names → `.git`-file
-worktree resolution (verified through the OWNING repo's registry — `.git`
-*files* precede protection because registry verification is attribution, not
-name matching) → `.soleur-owned` marker → `soleur-run.*` schema →
-standalone-clone (report-only) → empty dir → frozen prefix+signature
-allowlist (purge only) → unattributable (retained, reported).
+session-start sweep. The attribution ladder: `.git`-file worktree resolution
+FIRST (verified through the OWNING repo's registry — the strongest
+attribution, outranking every name heuristic INCLUDING the prefix allowlist)
+→ protected names → file allowlist → `.soleur-owned` marker (a marker that
+is present but unverifiable — foreign/missing `ns=` — VETOES the schema rung
+rather than falling through) → `soleur-run.*` schema → prefix+signature
+allowlist (purge only; precedes standalone-clone so signature-verified
+fixture classes like `pirgate-*` are reachable) → standalone-clone
+(report-only) → empty dir → unattributable (retained, reported).
 
 ### Reaper 3
 
 `reap_orphan_scratch_roots` in `tmpfs-guard.sh` iterates
 `TMPFS_GUARD_SCRATCH_BASES` (default `/tmp /var/tmp`). A candidate needs a
-dead owner pid, no live fd/cwd/environ handle (single amortized `/proc` pass),
-a stale tree, and a matching pid-namespace. Disposal: **direct delete on
-tmpfs bases** (certain attribution; a same-base `mv` frees no RAM — operator
-decision 2026-09-24) and **quarantine on disk bases**
+dead owner pid, no live fd/cwd/environ/mmap/unix-socket handle (single
+amortized `/proc` pass), a stale tree, and a matching pid-namespace. Disposal:
+**direct delete only for schema-named (`soleur-run.<pid>.*`) roots on
+tmpfs/ramfs bases** — the name is assigned at mktemp creation, creation-certain
+attribution, and a same-base `mv` frees no RAM (operator decision 2026-09-24).
+**Marker-only dirs quarantine on every base** (a `.soleur-owned` file is a
+self-declared statement, weaker evidence), and **quarantine on disk bases**
 (`<base>/soleur-quarantine.<uid>/`, TTL drain: scratch 7d, worktrees 30d).
-Reaper 2 remains `/tmp`-only and protects `soleur-run.*`/`soleur-quarantine.*`.
+Reaper 2 remains `/tmp`-only and protects `soleur-run.*`/`soleur-quarantine.*`
+plus marker-bearing dirs.
+
+### Separate base-list seams
+
+`TMPFS_GUARD_SCRATCH_BASES`, `SOLEUR_SWEEP_BASES`, and `SOLEUR_PURGE_BASES`
+are deliberately independent seams (all defaulting to `/tmp /var/tmp`), not a
+single shared variable: each consumer's base list is its blast-radius scope,
+and an operator may legitimately want the periodic guard scanning a narrower
+or wider set than a manual purge targets. The cost is drift — three lists
+that can diverge silently. That is accepted because the default is uniform
+and each list is independently fail-closed; converging them into one
+`SOLEUR_SCRATCH_BASES` is deferred until a second real divergence need
+appears.
 
 ### Trigger
 

@@ -21,11 +21,15 @@ observations unless marked synthetic.
 
 ## Synthetic verification (branch `feat-tmp-scratch-reclamation`)
 
-- `tests/scripts/test-tmp-purge.sh`: 38/38 — classification ladder, quarantine
-  on both bases, restore, drain, lock contention, retain-floor escalation.
-- `tests/scripts/test-scratch-session.sh`: 30/30 — allocator shape/fd/marker,
-  nested no-op, Reaper 3 dead/live/fail-closed arms, tmpfs delete vs disk
-  quarantine, TTL drain, sweep telemetry/contention/defer.
+- `tests/scripts/test-tmp-purge.sh`: 47/47 — classification ladder, quarantine
+  on both bases, restore (bare + named), drain incl. arrival-time dwell,
+  lock contention, retain-floor escalation, foreign-ns veto, owner_root
+  cycle bound, live-fd retain, nested-.git retain, symlinked-qroot refusal.
+- `tests/scripts/test-scratch-session.sh`: 42/42 — allocator shape/fd/marker,
+  nested no-op, inherited-root survive, marker symlink refusal, Reaper 3
+  dead/live/fail-closed arms, foreign-ns veto, environ/mmap/unix-socket
+  liveness, nested-.git retain, tmpfs delete vs disk quarantine, arrival-time
+  drain dwell, sweep telemetry/contention/defer incl. whole-arm timebox.
 - `scripts/tmpfs-guard.test.sh`: 60/60 — Reaper 2 behavior unchanged.
 - Session-start sweep on real `/var/tmp` (67k entries): ~5s wall, `wt_scanned=5`,
   `retained=5`, zero false reaps; `ms=` field emitted.

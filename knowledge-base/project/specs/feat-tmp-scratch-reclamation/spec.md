@@ -93,11 +93,14 @@ live reclamation surface.
   absence, held-fd + environ liveness, allocation-free enumeration, quarantine
   and TTL drain.
 - FR5: `.soleur-owned` marker — producers write `<dir>/.soleur-owned` (regular
-  file, same-uid) with `pid=` (top-level harness pid) or `owner_root=` +
-  `schema=` + `ns=` (pid-ns/boot-id); Reaper 3 and the purge treat
-  marker-bearing dirs as declared-owned (same liveness gates as
-  `soleur-run.*`); a marker without `pid=`/`owner_root=` is invalid and
-  ignored.
+  file, same-uid, written atomically via `soleur_scratch_mark_owned`) with
+  `pid=` (top-level harness pid) or `owner_root=` + `schema=` + `ns=`
+  (pid-ns). Reaper 3, the purge, and the sweep treat marker-bearing dirs as
+  declared-owned (same liveness gates as `soleur-run.*`). A marker without a
+  verifiable `pid=`/`owner_root=`, or whose `ns=` is absent/foreign/
+  `pid:[unknown]`, is INVALID and VETOES the schema name too — the container
+  case makes name-derived pids meaningless, so a rejected declaration retains
+  rather than falls back.
 - FR6: Session-start sweep (`worktree-manager.sh cleanup-merged`) reaps
   schema-named + marker-bearing orphans on **both** bases, sharing the
   tmpfs-guard flock protocol; it never touches non-attributed classes.
@@ -116,9 +119,13 @@ live reclamation surface.
   sentinel (2X.6), `TMPFS_GUARD_SCRATCH_BASES` seam fail-closed when unset
   (AC14), lockfile pinned to a TMPDIR-independent path (task 2.11), Reaper-2
   protect-list extended with `soleur-run.*|soleur-quarantine.*` (task 2.10).
-- TR2: No `rm -rf`/`find -delete` on any shared-base path anywhere in the new
-  machinery — quarantine `mv` only (same-filesystem rename; 0700 quarantine
-  dirs).
+- TR2: No `rm -rf`/`find -delete` on shared-base paths EXCEPT the ADR-249
+  carve-out: a `soleur-run.<pid>.*`-named root (creation-certain attribution)
+  on a tmpfs/ramfs base may be deleted directly — a same-base `mv` frees zero
+  RAM and the schema name is stronger evidence than a self-declared marker.
+  Marker-only dirs and every disk-base reap go through quarantine `mv`
+  (same-filesystem rename; 0700 quarantine dirs). Terminal deletes inside the
+  quarantine root belong to the TTL drain alone.
 - TR3: Liveness must survive `execve`/fork — held fd + `/proc/<pid>/environ`
   conjunctive checks; enumerate inheriting children (fd inheritance outlives
   the owner — 2026-09-22 learning).
@@ -167,8 +174,9 @@ live reclamation surface.
   registered + dirty/unpushed → untouched and reported.
 - AC4: `.soleur-owned` marker dirs reap under the same gates as `soleur-run.*`;
   marker without `pid=` never reaps.
-- AC5: Session-start sweep output names per-base reaped counts
-  (`SOLEUR_TMP_REAP` lines) and shares the guard's flock (no racing reapers).
+- AC5: Session-start sweep output names reaped/quarantined/retained/deferred
+  counts over its base list (`SOLEUR_TMP_SWEEP` line; Reaper 3 emits
+  `SOLEUR_TMP_REAP`) and shares the guard's flock (no racing reapers).
 - AC6: After adoption, a full `test-all.sh` + `run-registered-suites.sh` run
   leaves **zero** new unattributed top-level entries in either base (residue
   probe measurement recorded in PR body).
