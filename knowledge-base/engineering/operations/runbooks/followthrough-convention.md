@@ -44,6 +44,11 @@ verification passes — no human revisit required.
      references it (a parity arm in another suite, a back-pointer comment in a third file, a
      runbook section) is left dangling, discovered by whoever next reddens that suite. List those
      references in the probe's header under a `RETIREMENT:` line, so the deletion is one grep.
+     Enumerate generated-registry rows (a `suite-shard-legs.tsv` manifest row, an index entry)
+     and mid-document mentions, not just the file's own siblings — the issue-8006 probe's
+     RETIREMENT listed 3 sites and the true footprint was 5. Treat the header as a seed: at
+     retirement time, re-census `git grep <unnumbered-stem>` over live-code dirs and disposition
+     every hit in the plan.
    - The script must be deterministic in its exit semantics: do not exit 0 on partial success.
    - **Never name the retired Sentry credential.** The sweeper's Sentry read is `SENTRY_ACTIONS_RO_TOKEN` (the org-level read-only `actions-read-prd` integration, ADR-031, repo secret only). The canonical vendor env-var name it replaced is banned anywhere under `scripts/followthroughs/` — any file at any depth, executable line or comment (one recursive literal grep; a superstring counts) — because a workstation `doppler run -c prd_terraform` binds a *personal*, human-account-scoped token under it (#7797, #7946). Enforced as **rule 2** of `scripts/lint-followthrough-varq-ban.sh` (the executable form of this census); rotation: `sentry-actions-ro-token-rotation.md`.
    - **Never gate the exit code on `: "${VAR:?msg}"`.** Under a non-interactive shell that word-expansion aborts with status **1** (= FAIL in this contract), so a trailing `|| { echo TRANSIENT; exit 2; }` is dead code and an unprovisioned/empty secret reports FAIL instead of TRANSIENT. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: ..." >&2; exit 2; fi`. **Enforced mechanically by `scripts/lint-followthrough-varq-ban.sh`** (registered in `scripts/test-all.sh`, merge-blocking `test-scripts` shard; #6757) — a banned form on any executable probe line reddens CI. Accept both `200` AND `201` from the Supabase Management query endpoint (`/database/query` returns 201). Verified in `scripts/followthroughs/autovacuum-thrash-6168.sh` (PR #6164) — see `knowledge-base/project/learnings/best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md`.
