@@ -26,6 +26,7 @@ import {
   emitCronPersistSkipped,
   emitCronTier2Deferred,
   emitRunReportSweep,
+  emitWatchdogDispatch,
 } from "@/server/cron-liveness-marker";
 
 afterEach(() => {
@@ -109,6 +110,19 @@ const MARKERS = [
       dryRun: false,
     },
     msg: "run-report sweep changed state",
+  },
+  {
+    name: "SOLEUR_WATCHDOG_DISPATCH",
+    emit: emitWatchdogDispatch,
+    payload: {
+      host_id: "hetzner-123",
+      workflow: "scheduled-inngest-health.yml",
+      slot: "2026-09-24T10:15:00.000Z",
+      outcome: "skipped_slot_has_run" as const,
+      run_id: 777,
+      run_event: "schedule",
+    },
+    msg: "watchdog dispatch tick",
   },
 ] as const;
 
