@@ -31,7 +31,9 @@
 # honest. #8450 returned two GHA-fired monitors
 # (`scheduled_prod_version_drift`, `zot_restart_loop_alarm`) to hourly cadence
 # with larger margins (360/120) sized for GHA schedule-delivery jitter, not
-# Inngest's.
+# Inngest's. Since #8495 `zot_restart_loop_alarm` and `scheduled_inngest_health`
+# are dispatched by the web server's watchdog clock (ADR-246), so their margins
+# are budgeted for a reliable clock instead (zot 120 -> 30; see each resource).
 # Daily/weekly monitors use 30-240 min as their observed jitter dictates.
 # The TR9 substrate-migration sequence completed the move off GHA hourly cron
 # for the Inngest-fired cohort: PR-1 #3985 (daily-triage), PR-2 #4062
@@ -657,16 +659,18 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
 # gap: with failure_issue_threshold=1, a SINGLE ?status=error OR a missed check-in opens
 # a Sentry monitor-failure issue → pages the operator within one cadence (~15-30 min).
 #
-# GHA-fired (NOT Inngest — a self-hosted inngest cron cannot detect inngest being down;
+# NOT Inngest-fired — a self-hosted inngest cron cannot detect inngest being down;
 # that blind spot is the exact #5542 failure this watchdog closes; see the workflow's
-# gate-override header). checkin_margin_minutes = 15 == the `*/15` inter-fire gap BY
-# DESIGN (margin == interval — the design zot_restart_loop_alarm used before #8450
-# widened it to 2× on an hourly cadence): margin == interval MAXIMIZES jitter
-# tolerance (a run up to one interval late still checks in — no false page on GHA
-# `schedule:` jitter), while a genuinely dark alarm (every run skipped) still pages once
-# the window closes at the next expected fire. inngest-down is a brand-survival outage,
-# so the margin is kept tight to the cadence rather than widened. max_runtime_minutes = 8
-# matches the job's `timeout-minutes: 8`. Slug MUST match the `monitor-slug` in the
+# gate-override header. PRIMARY trigger since #8495: the web server's watchdog dispatch
+# clock (apps/web-platform/server/watchdog-dispatch-clock.ts, ADR-246) fires
+# workflow_dispatch every 15-min slot from both web hosts; the workflow's own
+# `schedule:` cron is only the FALLBACK (GHA measured one scheduled run per 2-7 h).
+# checkin_margin_minutes = 15 is budgeted for that reliable clock: jitter (<= 2.5 min)
+# + poll granularity (<= 0.5 min) + job runtime (max_runtime_minutes = 8, the job's
+# `timeout-minutes: 8`; the census job runs in parallel in <= 5) = <= 11 min, leaving
+# ~4 min for runner queue (measured 0 s in 39/40 runs, 157 s worst). A dead trigger
+# (clock dark on both hosts AND no GHA tick) pages within interval + margin = 30 min;
+# inngest-down is a brand-survival outage, so the margin stays at one interval. Slug MUST match the `monitor-slug` in the
 # workflow's sentry-heartbeat step (parity-asserted by
 # apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts). That test no
 # longer asserts membership of an apply-sentry-infra.yml `-target=` allowlist: since
@@ -1050,23 +1054,25 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 # gate-override header: the alarm is a bash pipeline in I7's uncontained class, and the registry is
 # a separate host so an Inngest cron on the watched fleet would be a dark-alarm risk).
 #
-# checkin_margin_minutes = 120 is PINNED (not a cohort default) to absorb GHA `schedule:` jitter: a
-# tight margin on a jittery GHA cron false-paged scheduled-agent-native-audit on 2026-06-15 (the run
-# succeeded and filed #5318 at 09:09 UTC; only its heartbeat was late). This monitor posts a SINGLE
-# end-of-run heartbeat within ~1-2 min of the checker finishing (a small bash probe, not a claude-eval
-# spawn). margin (120) == 2× the hourly inter-fire gap BY DESIGN: measured delivery of the old */30
-# cadence gapped up to 243 min, so margin == interval would false-page on ordinary jitter — and an
-# unusually late check-in (gap > 120 min) can still false-page; that residual is accepted because
-# detection is window-bound (the alarm's own 3h look-back catches loops retroactively) while a
-# genuinely dead alarm still pages within ~2h of a missed expected fire. max_runtime_minutes = 10
-# mirrors the GHA-fired small-cron cohort (scheduled_realtime_probe). Slug MUST match MONITOR_SLUG
-# in the workflow's sentry-heartbeat step (scheduled-zot-restart-loop).
+# PRIMARY trigger since #8495: the web server's watchdog dispatch clock
+# (apps/web-platform/server/watchdog-dispatch-clock.ts, ADR-246) fires workflow_dispatch every
+# hourly slot from both web hosts; the workflow's `schedule:` cron is only the FALLBACK. The old
+# margin of 120 (2× the interval) existed to absorb GHA `schedule:` jitter (measured gaps up to
+# 243 min on the old */30 cadence); a dispatched run starts within seconds, so it is re-derived:
+# checkin_margin_minutes = 30 = jitter (<= 2.5 min) + poll granularity (<= 0.5 min) + runtime
+# (max_runtime_minutes = 10; the job's `timeout-minutes: 8`) = <= 13 min, plus queue headroom.
+# A dead trigger (clock dark on both hosts AND no GHA tick) pages within interval + margin = 90 min
+# (was ~3 h). This monitor posts a SINGLE end-of-run heartbeat within ~1-2 min of the checker
+# finishing (a small bash probe, not a claude-eval spawn); detection of a loop itself stays
+# window-bound (the alarm's own 3h look-back). max_runtime_minutes = 10 mirrors the GHA-fired
+# small-cron cohort (scheduled_realtime_probe). Slug MUST match MONITOR_SLUG in the workflow's
+# sentry-heartbeat step (scheduled-zot-restart-loop).
 resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-zot-restart-loop"
   schedule                = { crontab = "0 * * * *" }
-  checkin_margin_minutes  = 120
+  checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
@@ -1153,7 +1159,9 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 # genuinely disabled workflow or dropped schedule is indistinguishable from the standing
 # noise. That is verbatim the failure this monitor exists to prevent, caused by its own
 # margin. The two sibling monitors cited by the old rationale carry the same defect; it is
-# pre-existing and out of scope here, but their constants are not evidence.
+# pre-existing and out of scope here, but their constants are not evidence. (#8495 later
+# moved those two siblings onto the web-server watchdog dispatch clock, ADR-246; this
+# monitor's workflow is not a watcher of the scheduling substrate, so it stays GHA-fired.)
 #
 # 360 exceeds the measured max gap (243) with headroom, and matches the jitter the checker's
 # own header cites (median 80-134 late, max 339). A truly dark alarm still pages within ~6h.

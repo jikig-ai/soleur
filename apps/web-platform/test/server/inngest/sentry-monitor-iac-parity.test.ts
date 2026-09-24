@@ -17,6 +17,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
+import { WATCHDOG_DISPATCH_TABLE } from "@/server/watchdog-dispatch-table";
 
 const FUNCTIONS_DIR = resolve(__dirname, "../../../server/inngest/functions");
 const MONITORS_TF = resolve(
@@ -567,5 +569,159 @@ describe("GHA schedule cron ↔ monitor crontab parity (#8450)", () => {
       expect(checked).toContain(slug);
     }
     expect(mismatched).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Watchdog dispatch clock parity (#8495, ADR-246 Guard 1).
+// The web server's dispatch clock (server/watchdog-dispatch-clock.ts) is now
+// the PRIMARY trigger for the workflows in WATCHDOG_DISPATCH_TABLE; each
+// workflow's own `schedule:` cron is the fallback. This block pins that the
+// table, each workflow, and each Sentry monitor agree — one diff can edit all
+// three consistently, so the #8495 cadence pin below is the anchor.
+// ---------------------------------------------------------------------------
+
+function workflowDoc(file: string): Record<string, unknown> {
+  return parseYaml(readFileSync(join(WORKFLOWS_DIR, file), "utf-8")) as Record<
+    string,
+    unknown
+  >;
+}
+
+function monitorFieldBySlug(
+  tf: string,
+  slug: string,
+  field: string,
+): number | undefined {
+  const re =
+    /^resource\s+"sentry_cron_monitor"\s+"[a-z0-9_]+"\s*\{([\s\S]*?)^\}/gm;
+  for (const m of tf.matchAll(re)) {
+    const name = m[1].match(/\n\s*name\s*=\s*"([a-z0-9-]+)"/);
+    if (!name || name[1] !== slug) continue;
+    const v = m[1].match(new RegExp(`^\\s*${field}\\s*=\\s*(\\d+)\\s*$`, "m"));
+    return v ? Number(v[1]) : undefined;
+  }
+  return undefined;
+}
+
+function intervalCrontab(minutes: number): string {
+  if (minutes === 60) return "0 * * * *";
+  if (minutes > 0 && minutes < 60 && 60 % minutes === 0) {
+    return `*/${minutes} * * * *`;
+  }
+  throw new Error(`no canonical crontab for a ${minutes}-min interval`);
+}
+
+// Margin floor = jitter (2.5 min) + poll granularity (0.5 min) + the monitor's
+// own max runtime; ceiling = one interval, so a dead trigger pages within
+// 2 × interval.
+function marginWithinBudget(
+  margin: number,
+  intervalMinutes: number,
+  maxRuntimeMinutes: number,
+): boolean {
+  return margin >= Math.ceil(3 + maxRuntimeMinutes) && margin <= intervalMinutes;
+}
+
+describe("Watchdog dispatch clock parity (#8495)", () => {
+  it("marginWithinBudget: boundary + permitted rows pass, over-wide / too-tight rows fail", () => {
+    expect(marginWithinBudget(15, 15, 8)).toBe(true);
+    expect(marginWithinBudget(20, 30, 10)).toBe(true);
+    expect(marginWithinBudget(120, 60, 10)).toBe(false);
+    expect(marginWithinBudget(10, 15, 8)).toBe(false);
+  });
+
+  it("every table entry agrees with its workflow and its Sentry monitor", () => {
+    const tf = readFileSync(MONITORS_TF, "utf-8");
+    const crontabs = monitorCrontabBySlug(tf);
+    const slugFiles = heartbeatSlugFiles();
+    const problems: string[] = [];
+    let checked = 0;
+
+    for (const entry of WATCHDOG_DISPATCH_TABLE) {
+      checked++;
+      const tag = entry.monitorSlug;
+      if (entry.eligibility.trim().length === 0) {
+        problems.push(`${tag}: empty eligibility (ADR-246 requires an anti-circularity argument)`);
+      }
+      const doc = workflowDoc(entry.workflowFile);
+      const on = (doc.on ?? {}) as Record<string, unknown>;
+      const triggers = Object.keys(on).sort();
+      if (JSON.stringify(triggers) !== JSON.stringify(["schedule", "workflow_dispatch"])) {
+        problems.push(
+          `${tag}: triggers must be exactly {schedule, workflow_dispatch} (another trigger's runs would suppress dispatch slots), got ${JSON.stringify(triggers)}`,
+        );
+      }
+      const conc = doc.concurrency as
+        | { group?: unknown; "cancel-in-progress"?: unknown }
+        | undefined;
+      if (
+        !conc ||
+        typeof conc.group !== "string" ||
+        conc.group.length === 0 ||
+        conc["cancel-in-progress"] !== false
+      ) {
+        problems.push(
+          `${tag}: needs a top-level concurrency group with cancel-in-progress: false (duplicate dispatches must queue, not cancel)`,
+        );
+      }
+      const expectedCron = intervalCrontab(entry.intervalMinutes);
+      if (!workflowCrons(entry.workflowFile).includes(expectedCron)) {
+        problems.push(`${tag}: fallback on.schedule must include "${expectedCron}"`);
+      }
+      if (!(slugFiles.get(entry.monitorSlug) ?? []).includes(entry.workflowFile)) {
+        problems.push(`${tag}: ${entry.workflowFile} has no sentry-heartbeat step with this monitor-slug`);
+      }
+      if (crontabs.get(entry.monitorSlug) !== expectedCron) {
+        problems.push(
+          `${tag}: monitor crontab ${JSON.stringify(crontabs.get(entry.monitorSlug))} != "${expectedCron}"`,
+        );
+      }
+      const margin = monitorFieldBySlug(tf, entry.monitorSlug, "checkin_margin_minutes");
+      const maxRuntime = monitorFieldBySlug(tf, entry.monitorSlug, "max_runtime_minutes");
+      if (
+        margin === undefined ||
+        maxRuntime === undefined ||
+        !marginWithinBudget(margin, entry.intervalMinutes, maxRuntime)
+      ) {
+        problems.push(
+          `${tag}: checkin_margin_minutes=${margin} outside [ceil(3 + max_runtime=${maxRuntime}), interval=${entry.intervalMinutes}]`,
+        );
+      }
+    }
+
+    expect(new Set(WATCHDOG_DISPATCH_TABLE.map((e) => e.monitorSlug))).toEqual(
+      new Set(["scheduled-inngest-health", "scheduled-zot-restart-loop"]),
+    );
+    expect(checked).toBe(WATCHDOG_DISPATCH_TABLE.length);
+    expect(problems).toEqual([]);
+  });
+
+  it("#8495 pin: the external Inngest watchdog is dispatched at least every 15 minutes", () => {
+    const entry = WATCHDOG_DISPATCH_TABLE.find(
+      (e) => e.monitorSlug === "scheduled-inngest-health",
+    );
+    expect(entry, "#8495: scheduled-inngest-health must be in WATCHDOG_DISPATCH_TABLE").toBeDefined();
+    expect(
+      entry!.intervalMinutes,
+      "#8495: an Inngest outage must be detected within ~15 min; do not relax the watchdog cadence",
+    ).toBeLessThanOrEqual(15);
+  });
+
+  it("no workflow or e2e config sets SOLEUR_HOST_ID (it would arm the clock in CI)", () => {
+    const offenders: string[] = [];
+    for (const file of readdirSync(WORKFLOWS_DIR)) {
+      if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
+      const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
+      if (/SOLEUR_HOST_ID\s*[:=]/.test(src)) offenders.push(file);
+    }
+    const appRoot = resolve(__dirname, "../../..");
+    for (const file of readdirSync(appRoot)) {
+      if (!/^playwright.*\.config\.[cm]?[jt]s$/.test(file)) continue;
+      if (readFileSync(join(appRoot, file), "utf-8").includes("SOLEUR_HOST_ID")) {
+        offenders.push(file);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
