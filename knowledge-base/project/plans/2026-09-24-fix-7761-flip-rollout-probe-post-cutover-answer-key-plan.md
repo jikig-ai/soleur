@@ -954,7 +954,7 @@ self-checks, the 0.3 ISO assertions and the 0.4/0.5 parity loops.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: The RED commit lands first (`cq-write-failing-tests-before`) and carries:
+- [x] AC1: The RED commit lands first (`cq-write-failing-tests-before`) and carries:
   - the stub-fidelity changes (0.2) and the object-shaped, `_MACHINE_ID`-carrying `row()` (0.1);
   - fixtures F1–F37 and the re-based existing tests (0.6, 0.7), each with anchored positive and
     negative token assertions (0.6b);
@@ -965,47 +965,62 @@ self-checks, the 0.3 ISO assertions and the 0.4/0.5 parity loops.
 
   Its recorded output shows the 7761 suite, the 0.3 assertion and the 0.4 loop red against the
   unmodified probe and `betterstack-query.sh`.
-- [ ] AC2: `bash scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh` exits 0, with
+- [x] AC2: `bash scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh` exits 0, with
   `MIN_ASSERTIONS` raised to the measured count. Every F-id in 0.6 appears as a tag in a `TEST:`
   line.
-- [ ] AC3: The Phase 3.1 mutation battery ran against copies via `FLIP_ROLLOUT_TEST_TARGET`, after
+- [x] AC3: The Phase 3.1 mutation battery ran against copies via `FLIP_ROLLOUT_TEST_TARGET`, after
   a pristine-copy run that exited 0. For **every** row of Guards 1–3 the suite exited 1, and the
   named F-id's own `FAIL:` line appeared. The per-row result is recorded in the PR body.
-- [ ] AC4: The answer key is inline.
+- [x] AC4: The answer key is inline.
   `grep -nE '^[^#]*FLIP_ROLLOUT_(EXPECTED_GUARD|EXPECTED_FLAG|MIN_MARKERS|TERMINAL)' scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`
   returns nothing, and `grep -cE '^[^#]*(TERMINAL_SAFE_FLAGS|EXPECTED_FLAG=|DRIFT_WINDOW=)'`
   returns 0 on the same file.
-- [ ] AC5: `bash tests/scripts/test-betterstack-query-archive.sh` and
+- [x] AC5: `bash tests/scripts/test-betterstack-query-archive.sh` and
   `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` exit 0. The first shows the ISO
   normalisation assertions and the second shows the probe-parity loop, each with its negative
   control.
-- [ ] AC6: `scripts/followthroughs/inngest-cutover-flip-rollout-7761.after` is tracked with git
+- [x] AC6: `scripts/followthroughs/inngest-cutover-flip-rollout-7761.after` is tracked with git
   mode `100644` (`git ls-files -s` shows a regular file, not `120000`). Its content matches
   `^2026-09-23T19:36:32Z$`. The `AFTER_FILE` line carries no `# repo-path: runtime`.
   The comment beside it states the sidecar lifecycle.
-- [ ] AC7: `bash scripts/lint-followthrough-varq-ban.sh` exits 0, and
+- [x] AC7: `bash scripts/lint-followthrough-varq-ban.sh` exits 0, and
   `bash scripts/lint-followthrough-varq-ban.test.sh` exits 0 with a count one above today's 88. Its
   R3-M20 inverse runs against a synthetic fixture: green with the annotation, red without it.
-- [ ] AC8: `bash scripts/followthrough-exec-bit.test.sh` and
+- [x] AC8: `bash scripts/followthrough-exec-bit.test.sh` and
   `bash plugins/soleur/test/fixture-relative-assert.test.sh` exit 0; the baseline changes only if a
   row changed. `shellcheck` is clean on every edited script.
-- [ ] AC9: The Phase 0.0 live precondition is recorded in the PR body: 1 row since the boundary
+- [x] AC9: The Phase 0.0 live precondition is recorded in the PR body: 1 row since the boundary
   (the 19:42:45Z resume, object-shaped, `_MACHINE_ID 3cff04d3…`), and ISO `--since` rc 22 on the
   unmodified reader.
-- [ ] AC10: The Phase 3.3 pre-merge live read runs with every `FLIP_ROLLOUT_*` unset. It prints a
+- [x] AC10: The Phase 3.3 pre-merge live read runs with every `FLIP_ROLLOUT_*` unset. It prints a
   line beginning `PASS: #7761 delivered`, naming `owned since 2026-09-23T19:42:45Z` and ending
   `seams=default`. That line is pasted into the PR body. A non-PASS is
   investigated before merge and leaves this AC unticked.
-- [ ] AC11: The PR body uses `Ref #7761` and no closing keyword. It states that the fix had already
+- [x] AC11: The PR body uses `Ref #7761` and no closing keyword. It states that the fix had already
   been delivered by earlier replaces, with guard-stamped transition rows since at least 09-15, and
   that this PR changes nothing on any host. It also references #8697 and #8698 as the deferred
   follow-ups.
 
-- [ ] AC11b: `.github/workflows/infra-validation.yml` `pull_request.paths` and
+- [x] AC11b: `.github/workflows/infra-validation.yml` `pull_request.paths` and
   `AFFECTED_INFRA_RUNNER_PATHS` in `scripts/lib/test-affected-paths.sh` both list
   `scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`. The `scripts/cutover-inngest.sh`
   note claiming ISO is rejected is gone:
   `grep -c 'rejects the ISO' scripts/cutover-inngest.sh` returns 0.
+
+
+### Amendments (2026-09-24, review round on PR #8690)
+
+- **AC2/AC3:** after the nine-seat review the suite is 307/0 (`MIN_ASSERTIONS=307`, was 223). The mutation battery was re-run on the post-review head: 53/53 rows caught with the named fixture's own `FAIL:` line, 0 survivors, pristine control 307/0.
+- **AC10:** the PASS verdict is now three lines rather than one; the review asked for the long line to be split. Line 1 begins `PASS: #7761 delivered` and names `owned since 2026-09-23T19:42:45Z`. Line 3 is `seams=default`. The live read on the post-review head matches.
+- **AC11b:** the `AFFECTED_INFRA_RUNNER_PATHS` half was dropped in review. `scripts/test-all.sh` runs the infra runner only on `_infra_in_diff`, so that entry never selected anything for a probe-only diff. The `infra-validation.yml` `pull_request.paths` half stands, and the parity block runs in `deploy-script-tests`.
+- **D2/D3 (superseded in part):**
+  - Drift now considers every row the `dt`-bounded query returns. A run that started before the boundary but emitted after it is a finding (F38).
+  - The boundary check queries machine M's own `_MACHINE_ID` over 30 days, where it used to look back 1h (F29b).
+  - More than one `_MACHINE_ID` since the boundary is `multiple_machines_since_boundary` (F25, F39).
+  - Any unstamped post-boundary heartbeat is `stale_image` (F40, F41).
+  - String-shaped flip rows refuse a PASS (F12b, F48, F49).
+  - Liveness counts distinct heartbeats, requires the newest to be recent, and measures its deadline from the resume (F42, F43, F44).
+  - The rationale lives in the probe header and in the review commit `da45d1b89d`.
 
 ### Post-merge (pipeline)
 
