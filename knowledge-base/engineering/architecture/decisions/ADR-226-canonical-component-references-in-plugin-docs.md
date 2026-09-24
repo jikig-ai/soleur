@@ -10,7 +10,7 @@ Accepted.
 
 Soleur ships one component tree — 98 skills, 3 commands, 67 registry agents — to four harnesses
 WITH ADAPTERS IN `harness.ts`, each invoking a component with its own syntax. (The repo carries
-six harness trees — `.agents`, `.codex`, `.devin`, `.gemini`, `.grok`, `.openhands`; this PR's own
+four harness trees — `.agents`, `.codex`, `.devin`, `.grok` (`.gemini` and `.openhands` retired 2026-09-23, ADR-245); this PR's own
 learning file records that "ships to four harnesses" is false as an unqualified claim. Four is the
 number `detectHarness` discriminates and `formatSkillInvocation` renders for, which is the set this
 decision is about. The other two have no adapter branch, so this gate says nothing about them.)
@@ -97,8 +97,11 @@ author's loop.
    braces or renames the identifier — the boundary set is never widened to admit
    a sigil.
 2. **Population and index are derived, never listed.** Population:
-   `:(glob)plugins/soleur/{skills,codex/skills,devin/skills}/*/SKILL.md` and
-   `:(glob)plugins/soleur/commands/*.md`, each glob carrying its region policy.
+   `:(glob)plugins/soleur/{skills,codex/skills,devin/skills}/*/SKILL.md`,
+   `:(glob)plugins/soleur/commands/*.md` and, since 2026-09-23 (ADR-245),
+   `:(glob)plugins/soleur/skills/*/references/**/*.md` — each glob carrying its
+   region policy. Read `POPULATION_GLOBS` for the live set; this sentence is a
+   description of it, never the authority.
    Index: the skill directories, the command basenames, and
    `discoverAgentPaths()` mapped through `pathToAgentId` — the registry Grok's
    compat stubs are generated from, which excludes `README*` and `references/`.
@@ -170,7 +173,17 @@ Declared gaps, each with an issue:
   worded is broader than those three nouns, so treat that as a floor, not a census. No
   canonical word exists to allowlist against; the adapters translate the noun
   themselves.
-- **NG-P** (#8317, P1): other agent-read docs — agent bodies (**289 sites / 68
+- **NG-P** (#8317, P1) — **half discharged 2026-09-23 (ADR-245, #8570); the
+  measurements below stand as taken and are not edited.** The REFERENCES half is
+  now in `POPULATION_GLOBS` and remediated: the three blockers this bullet names
+  for it (no `**` in `globToRegex`, the two `regionPolicyForPath` fixtures pinning
+  nested paths to `undefined`, the tree test's "no nested SKILL.md" assertion)
+  were each fixed, and a nested `SKILL.md` is excluded by a carve-out scoped to
+  that one glob. The AGENT-BODY half stays open on #8317, blocked on exactly the
+  fourth prerequisite below — the `name:` frontmatter carve-out — and nothing
+  else. Size #8317 from the agent-body figure alone now, not from the total.
+
+  The measurement as taken: other agent-read docs — agent bodies (**289 sites / 68
   docs**) and `skills/*/references/**` (**84 / 19**), measured 2026-09-18 by
   running `classifyDoc` over each surface. The plan's `35 / 15` and `44 / 19`
   predate the operator's R6b decision to gate bare agent leaves, which is most
@@ -195,8 +208,21 @@ Declared gaps, each with an issue:
 - `soleur:<unknown>` is reported, not gated; a typo is a different defect. The
   set is diffed pre/post remediation so a hand rewrite cannot go quietly green.
 - "Canonical resolves on every harness" is verified on Grok (`grok-fidelity`)
-  and Claude; Codex and Devin are declared uncovered (#8306). The gate's promise
-  is "no harness-specific form in agent-read prose", not "resolves everywhere".
+  and Claude. The gate's promise is "no harness-specific form in agent-read
+  prose", not "resolves everywhere".
+
+  > **Amended 2026-09-23 (ADR-245, #8390 bundle).** This clause previously read
+  > "Codex and Devin are declared uncovered (#8306)". The citation was WRONG —
+  > #8306 is the `.openhands`/`.gemini` mirror-completeness issue, not a
+  > discovery gap — and the status is now stale. Codex and Devin DISCOVERY is
+  > covered by the `harness-discovery` CI job, which installs the plugin
+  > hermetically and asserts the vendor CLI registered the manifest's declared
+  > skill set. The job is **advisory**: it becomes enforcing when #8574 closes,
+  > so until then a red there blocks no merge — and, because the job carries
+  > `continue-on-error: true`, it also does not red the CI run conclusion that
+  > `web-platform-release.yml` gates production deploys on. What is covered is REGISTRATION
+  > only — not invocability (ADR-236), not which copy was loaded, and not
+  > cross-root uniqueness (ADR-224 decision 5 keeps that).
 
 **`--fix` requires a clean tree.** It rewrites tracked files in place and is the
 remedy the gate's failure message prescribes. A grok slash and a root-relative

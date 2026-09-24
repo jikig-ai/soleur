@@ -15,6 +15,11 @@ tags: [ci, test-sharding, fail-closed, generated-artifact, adr-235]
 Accepted — 2026-09-23. Delivers the duration-aware arm of #8006 that
 ADR-238 deferred; amends ADR-238's rejected-alternative entry for LPT.
 
+**Amended 2026-09-23 (phase 2):** per-group manifests are now ADOPTED —
+`scripts/suite-shard-legs-heavy.tsv` covers `TEST_GROUP=scripts-heavy` under
+the same contract, and the "Per-group manifests" rejected-alternative entry
+below records why the earlier deferral stopped holding.
+
 ## Context
 
 ADR-238's carve-out + K=5 cut the worst `test-scripts*` leg from 31–39 min
@@ -41,24 +46,33 @@ main landing) constrains the shape: minimal, stable diffs only.
 
 ## Decision
 
-1. **Assignment data is generated offline and committed.**
+1. **Assignment data is generated offline and committed — per group.**
    `scripts/regenerate-shard-manifest.py` merges the `suite-timings-scripts-*`
-   artifacts of a chosen green CI run (light legs only — the heavy group's
-   three suites are already optimally spread), drops boundary/skip/failed
+   artifacts of a chosen green CI run, drops boundary/skip/failed
    rows, filters to the runner's own enumerated registered set, and emits
    `scripts/suite-shard-legs.tsv` via **sticky-LPT**: least-loaded leg wins,
    but a label keeps its incumbent leg when that leg is within 5% of the
    minimum — so each regeneration diffs only what rebalancing requires.
+   `--group heavy` repeats the same mechanics over the
+   `suite-timings-scripts-heavy-*` artifacts and the `scripts-heavy`
+   registered set, writing `scripts/suite-shard-legs-heavy.tsv` with the
+   heavy job's own `n` (3). Two files, one parser, one contract — a heavy
+   regen never rewrites the light table's insertion-stable surface, and a
+   wrong-group label can never land in the wrong file (each run filters to
+   its own enumerate).
 
 2. **The runner does a lookup, never a computation.** `_shard_selects`
    gains the registration label and runs two modes: manifest-active (table
    lookup; untabled labels fall back to a deterministic `cksum` hash) and
    positional (the original `ordinal % N`, verbatim). The manifest engages
-   only when `SCRIPTS_SHARD` is set, `TEST_GROUP=scripts`, and the file's
-   declared `n` equals the spec's N; every other shape degrades to
-   positional. Malformed, duplicated, or out-of-range tables exit 2 at
-   parse; absent/stale/n-mismatched tables degrade with a stderr notice —
-   coverage is a property of the registration walk, never of the table.
+   only when `SCRIPTS_SHARD` is set, `TEST_GROUP` is `scripts` or
+   `scripts-heavy`, and THAT group's file declares `n` equal to the spec's
+   N; every other shape degrades to positional. Each group binds its own
+   override (`SOLEUR_SHARD_MANIFEST` / `SOLEUR_SHARD_MANIFEST_HEAVY`) with
+   identical fail-closed semantics. Malformed, duplicated, or out-of-range
+   tables exit 2 at parse; absent/stale/n-mismatched tables degrade with a
+   stderr notice — coverage is a property of the registration walk, never
+   of the table.
 
 3. **Insertions are stable by construction.** A new suite is not in the
    table, so it hash-falls-back to a leg no other suite moved off; the
@@ -85,13 +99,17 @@ main landing) constrains the shape: minimal, stable diffs only.
 
 - Predicted light-leg load: ~449s each vs measured 237–797s positional —
   worst `test-scripts` leg ~9 min including setup (vs 13m50s).
-- `SOLEUR_SHARD_MANIFEST` is a test/debug seam (`off` disables; set-but-
-  empty, non-absolute, or missing paths all exit 2); it is consumed and
-  unset with `SCRIPTS_SHARD` so fixture paths cannot reach nested runners.
+- `SOLEUR_SHARD_MANIFEST` / `SOLEUR_SHARD_MANIFEST_HEAVY` are test/debug
+  seams (`off` disables; set-but-empty, non-absolute, or missing paths all
+  exit 2); each is consumed and unset with `SCRIPTS_SHARD` so fixture paths
+  cannot reach nested runners.
 - Manifest-mode assignment is collation-INDEPENDENT — the LC_COLLATE caveat
   that made positional membership non-portable no longer applies to tabled
   or hashed labels.
-- The `test-scripts-heavy` job is unaffected (n-mismatch → positional).
+- The `test-scripts-heavy` job now runs duration-aware too (phase-2
+  amendment): its own `n=3` table engages only when the manifest's n
+  equals `_SHARD_N`; without the file it degrades to positional exactly
+  like the light group.
 - A K bump on `test-scripts` without a regen degrades quietly at runtime
   but reds the lint's n-pin — fail-safe at runtime, loud in CI.
 
@@ -108,6 +126,13 @@ main landing) constrains the shape: minimal, stable diffs only.
 - **Auto-committed refresh workflow.** Rejected per the scheduled-PR
   learnings: bot diffs go stale and encode drift; detection-and-file is the
   house pattern.
-- **Per-group manifests (heavy included).** Unneeded today: 3 suites / 3
-  legs is already optimal. The single-`n` header leaves room if that
-  changes.
+- ~~**Per-group manifests (heavy included).**~~ **ADOPTED in the 2026-09-23
+  amendment.** The original rejection rested on "3 suites / 3 legs is
+  already optimal", which confused the PARTITION's shape with the
+  ASSIGNMENT's provenance: positional was optimal only by ordinal luck,
+  the heavy leg measured 8m32s against a 6m42s sibling, and the
+  registration-order dependence re-rolls the split on the next heavy
+  suite. Separate files (not an n-keyed section in one file) preserve the
+  light table's insertion stability — a heavy regen diffs zero light rows —
+  and keep one uniform parse contract per file rather than teaching the
+  loader a second grammar.

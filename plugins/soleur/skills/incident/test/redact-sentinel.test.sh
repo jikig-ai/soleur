@@ -886,7 +886,20 @@ elif ! grep -Fq 'skills secret-gate subset (#7450)' "${T20_GUARD}"; then
   echo "FAIL: Test 20: Guard 1 no longer contains the #7450 skills secret-gate describe block — deleting it is exactly what its own in-file floor cannot detect"
   FAIL=$((FAIL + 1))
 else
-  t20_declared=$(sed -n 's/^[[:space:]]*expect(assertions)\.toBe(\([0-9]\+\));[[:space:]]*$/\1/p' "${T20_GUARD}" | tail -1)
+  # SCOPED to the #7450 describe, not `| tail -1` over the whole file.
+  #
+  # The old form took the LAST `expect(assertions).toBe(N)` anywhere in the guard as a proxy
+  # for "Guard 1's floor". That is correct only while #7450 is the final block in the file.
+  # PR #8570 appended a third describe (the #7453 skills-ratchet axis, floor 8) AFTER it, so
+  # `tail -1` silently started reading the new block's floor and this test failed claiming the
+  # #7450 floor had been "lowered" to 8 — naming a cause that had not happened, on a file whose
+  # #7450 block was untouched. A positional proxy for a named thing breaks the moment the
+  # corpus grows, which is the exact class this suite exists to catch elsewhere.
+  #
+  # Range ends at the next line beginning `describe(`; sed searches the end pattern from the
+  # line AFTER the start, so the opening describe cannot close its own range. `head -1` takes
+  # the block's own floor.
+  t20_declared=$(sed -n '/^describe(.*#7450/,/^describe(/{ s/^[[:space:]]*expect(assertions)\.toBe(\([0-9]\+\));[[:space:]]*$/\1/p }' "${T20_GUARD}" | head -1)
   if [[ "${t20_declared}" != "${T20_FLOOR}" ]]; then
     echo "FAIL: Test 20: Guard 1's #7450 assertion floor is '${t20_declared:-<none>}', expected ${T20_FLOOR} — a floor lowered in the same commit that removes assertions is the failure mode this pins"
     FAIL=$((FAIL + 1))

@@ -1120,7 +1120,7 @@ epi_src="$TMP_ROOT/epilogue-chain.sh"
   printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
   printf 'source %q\n' "$LIB"
   printf '%s\n' \
-    'suites=1; failed=0; killed=0; skipped=0; _ceiling_declined=0; _relevance_declined=0' \
+    'suites=1; failed=0; killed=0; skipped=0; _ceiling_declined=0; _relevance_declined=0; _affected_declined=0' \
     '_repo_observations=0; _repo_unmeasured_dims=0; _repo_last_suite=fixture-suite' \
     '_infra_ran=0; _infra_skip_reason=not_in_diff; _infra_in_diff=0; TEST_GROUP=scripts' \
     '_repo_state_before="$(_repo_state)"' \
