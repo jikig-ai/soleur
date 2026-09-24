@@ -967,8 +967,10 @@ t_deploy_pipeline_fix_carries_ntd_halt() {
   else
     _report "T56f deploy-pipeline-fix validates non_terraform_data_deletes" fail "missing the ^[0-9]+\$ / rc guard"
   fi
-  halt_ln=$(grep -nF '[[ "$ntd_deletes" -gt 0 ]]' <<<"$code" | head -1 | cut -d: -f1)
-  apply_ln=$(grep -nF 'terraform apply -auto-approve -input=false tfplan' <<<"$code" | head -1 | cut -d: -f1)
+  # `|| true` inside the capture: under this suite's `set -e` a no-match grep would otherwise
+  # abort the run at the assignment, before the row that reports it.
+  halt_ln=$({ grep -nF '[[ "$ntd_deletes" -gt 0 ]]' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  apply_ln=$({ grep -nF 'terraform apply -auto-approve -input=false tfplan' <<<"$code" || true; } | head -1 | cut -d: -f1)
   if [[ -n "$halt_ln" && -n "$apply_ln" && "$halt_ln" -lt "$apply_ln" ]]; then
     _report "T56g deploy-pipeline-fix HALTs on non_terraform_data_deletes > 0 before its apply" ok
   else
