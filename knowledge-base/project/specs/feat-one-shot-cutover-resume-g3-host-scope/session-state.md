@@ -18,3 +18,11 @@
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; learnings-researcher, functional-discovery, dhh/kieran/simplicity/cto reviewers, security-sentinel, observability-coverage-reviewer, test-design-reviewer, architecture-strategist.
+
+## Work Phase
+- Status: complete
+- RED c63789e8a2 (753/1, predecessor reads '2'); GREEN d99d26e8b3; coverage dc016b29b5 (871/0); docs 43efca634d.
+- Mutation battery: 7/7 killed (either clock dropped, missing-ts default, floor 0 on anchor failure, token on argv, first-match server, unfloored LUKS).
+- Live replay (read-only): anchor 1790276253 (2026-09-24T18:57:33Z); floor=0 `3677 3677 0 0 0`, floor=created `254 3677 3423 0 0`.
+- Affected gate: stopped at 96/181 suites (0 real failures) under load 36/16 cores, ~30-50 min remaining incl. the infra runner. Operator chose to rely on CI (required `test` + infra-validation.yml) for the remainder. Directly-covering suites run locally: cutover-inngest-workflow 871/0, c4-code-syntax + c4-render 32/32, c4-count-parity, c4-model-freshness, lint-diagnosis-claims (1/1 baseline), lint-shell-trace-credential-refusal --changed OK, shellcheck (no new findings).
+- Deviation from plan: one extra helper `_generation_scoped_count` (shared notice/warning emission for both readers) instead of duplicating it per reader.
