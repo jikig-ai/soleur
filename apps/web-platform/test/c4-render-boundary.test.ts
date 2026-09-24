@@ -55,8 +55,24 @@ describe("C4 re-render boundary (#8623)", () => {
     ]);
   });
 
-  it("#8696: c4-render.ts has exactly one spawn( call site", () => {
-    expect([...code("server/c4-render.ts").matchAll(/\bspawn\(/g)]).toHaveLength(1);
+  it("#8696: c4-render.ts has exactly one spawn( call site and imports only `spawn` from child_process", () => {
+    const src = code("server/c4-render.ts");
+    expect([...src.matchAll(/\bspawn\(/g)]).toHaveLength(1);
+    const cp = [...src.matchAll(/import\s*(.*?)\s*from\s*["'](?:node:)?child_process["']/gs)].map((m) => m[1].trim());
+    expect(cp).toEqual(["{ spawn }"]);
+    expect(src).not.toMatch(/require\(\s*["'](?:node:)?child_process["']\s*\)|import\(\s*["'](?:node:)?child_process["']\s*\)/);
+  });
+
+  it("#8696: the ADR-050 amendment names exactly the failure classes the module emits", async () => {
+    const { DETAIL_CLASSES } = await import("@/server/c4-render");
+    const adr = readFileSync(
+      join(APP, "..", "..", "knowledge-base", "engineering", "architecture", "decisions", "ADR-050-likec4-runtime-rerender-via-out-of-process-cli.md"),
+      "utf8",
+    );
+    const line = adr.split("\n").find((l) => l.startsWith("Failure classes:"));
+    expect(line, "ADR-050 needs a `Failure classes:` line").toBeTruthy();
+    const listed = [...line!.matchAll(/`([a-z0-9-]+)`/g)].map((m) => m[1]);
+    expect(listed.sort()).toEqual([...DETAIL_CLASSES].sort());
   });
 
   it("#8696: the sandbox opt-out and its NODE_ENV decision are read only in c4-render.ts", () => {
@@ -74,13 +90,25 @@ describe("C4 re-render boundary (#8623)", () => {
     expect(calls).toHaveLength(2);
     const listen = src.indexOf("server.listen(");
     expect(listen).toBeGreaterThan(-1);
-    const callAt = calls[1];
-    expect(callAt).toBeGreaterThan(listen);
-    // Inside the listen callback: before the callback's closing `});`.
-    expect(callAt).toBeLessThan(src.indexOf("\n  });", listen));
-    const before = src.slice(listen, callAt);
-    expect(before).toMatch(/if \(!dev\)/);
-    expect(src.slice(callAt - 40, callAt)).not.toMatch(/await/);
+    // The `if (!dev) {` block inside the listen callback, found by brace
+    // matching, must contain the call itself (not a function returning it).
+    const guard = src.indexOf("if (!dev) {", listen);
+    expect(guard).toBeGreaterThan(listen);
+    expect(guard).toBeLessThan(src.indexOf("\n  });", listen));
+    let depth = 0;
+    let end = -1;
+    for (let i = src.indexOf("{", guard); i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}" && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    const block = src.slice(guard, end);
+    expect(block).toMatch(/\.then\(verifyC4RenderSandboxOnce\)/);
+    expect(calls[1]).toBeGreaterThan(guard);
+    expect(calls[1]).toBeLessThan(end);
+    expect(block).not.toMatch(/await/);
   });
 
   it("row 1: c4-stage-sources.ts only creates directories and writes files", () => {

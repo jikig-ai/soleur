@@ -15,9 +15,10 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 // that re-introduces an in-place publish — via the old `copyFile`+`rename`
 // shape OR a direct `writeFile(realPath, …)` — would call one of these spies and
 // trip the `.not.toHaveBeenCalled()` assertions below.
-// `open` returns a handle whose `readFile` delegates to `fsMock.readFile`, so a
-// test stages the model with `fsMock.readFile.mockResolvedValue(…)` while the
-// module reads it through the no-follow fd (#8696 Guard 5). `realpath` answers
+// A test stages the model with `fsMock.readFile.mockResolvedValue(…)`: the
+// sandboxed child's fake stdout carries it (spawnThenEmit), and on the direct
+// path `open` returns a handle whose `readFile` delegates to it, read through
+// the no-follow fd (#8696 Guard 5). `realpath` answers
 // by input path with production-shaped binaries.
 const fsMock = vi.hoisted(() => {
   // LIKEC4_BIN is read at module load: pin it before the import below.
@@ -42,6 +43,7 @@ vi.mock("@/server/observability", () => ({ reportSilentFallback: vi.fn(), warnSi
 import { constants } from "node:fs";
 import {
   RAW_MODEL_READ_CAP,
+  __resetC4RenderStateForTests,
   renderC4Model,
   renderCommand,
   STAGE_DEADLINE_MS,
@@ -50,6 +52,7 @@ import {
 import { canonicalizeC4Model } from "@/lib/c4-canonical.mjs";
 
 type FakeChild = EventEmitter & {
+  stdout: EventEmitter;
   stderr: EventEmitter;
   stdio: unknown[];
   kill: ReturnType<typeof vi.fn>;
@@ -59,7 +62,8 @@ function makeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
   child.stderr = new EventEmitter();
   // stdio[3] is bwrap's --json-status-fd pipe.
-  child.stdio = [null, null, child.stderr, new EventEmitter()];
+  child.stdout = new EventEmitter();
+  child.stdio = [null, child.stdout, child.stderr, new EventEmitter()];
   child.kill = vi.fn();
   return child;
 }
@@ -73,6 +77,11 @@ const NODE = "/usr/local/bin/node";
 const LIKEC4_ENTRY = "/usr/local/lib/node_modules/likec4/bin/likec4.mjs";
 const REALPATHS: Record<string, string> = {
   "/usr/bin/bwrap": "/usr/bin/bwrap",
+  "/usr/bin/bash": "/usr/bin/bash",
+  "/usr/bin/choom": "/usr/bin/choom",
+  "/usr/bin/nice": "/usr/bin/nice",
+  "/usr/bin/prlimit": "/usr/bin/prlimit",
+  "/usr/bin/sh": "/usr/bin/dash",
   [process.execPath]: NODE,
   "/usr/local/bin/likec4": LIKEC4_ENTRY,
 };
@@ -88,9 +97,15 @@ function lastSpawn() {
 // runLikeC4 attaches its listeners (the render path awaits mkdtemp before
 // spawning, so a test-level queueMicrotask would fire too early and the event
 // would be lost → timeout).
+// On the sandboxed path the model arrives on the child's stdout: the fake
+// writes whatever `fsMock.readFile` is staged to return (the same fixture the
+// direct path reads from its file) before running `emit`.
 function spawnThenEmit(child: FakeChild, emit: () => void) {
   spawnMock.mockImplementation(() => {
-    queueMicrotask(emit);
+    void Promise.resolve(fsMock.readFile()).then((model) => {
+      child.stdout.emit("data", Buffer.from(String(model)));
+      emit();
+    });
     return child;
   });
 }
@@ -131,6 +146,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
+  __resetC4RenderStateForTests();
 });
 
 // #8623: the render takes an injected stage function, never a workspace path.
@@ -147,7 +164,7 @@ const STAGE = stageMock as unknown as StageFn;
 const EXPECTED_CWD = `${TMP_DIR}/src`;
 
 describe("renderC4Model", () => {
-  it("spawns likec4 inside bwrap (via choom) with the sources bound read-only and -o in /c4-out", async () => {
+  it("spawns likec4 inside bwrap (fds closed, choom, nice) with the sources bound read-only and the model on stdout", async () => {
     const child = makeChild();
     spawnThenEmit(child, () => child.emit("close", 0, null));
     const p = renderC4Model(STAGE);
@@ -155,18 +172,20 @@ describe("renderC4Model", () => {
     expect(res.ok).toBe(true);
 
     const [bin, args, opts] = lastSpawn();
-    expect(bin).toBe("/usr/bin/choom");
-    expect(args.slice(0, 4)).toEqual(["-n", "1000", "--", "/usr/bin/bwrap"]);
-    // The command after `--` is fixed: likec4 export with wasm layout, writing
-    // only into the /c4-out bind (the full argv is pinned in
+    expect(bin).toBe("/usr/bin/bash");
+    const bw = args.indexOf("/usr/bin/bwrap");
+    expect(args.slice(3, bw + 1)).toEqual(["/usr/bin/choom", "-n", "1000", "--", "/usr/bin/nice", "-n", "10", "--", "/usr/bin/bwrap"]);
+    // The command after `--` is fixed (the full argv is pinned in
     // c4-render-sandbox.test.ts).
-    const dd = args.indexOf("--", 4);
+    const dd = args.indexOf("--", bw);
     expect(args.slice(dd + 1)).toEqual(renderCommand(NODE, LIKEC4_ENTRY));
-    expect(args.slice(dd + 1)).toContain("--no-use-dot");
     const bind = args.findIndex((x, i) => x === "--ro-bind" && args[i + 2] === "/c4-sources");
     expect(args[bind + 1]).toBe(EXPECTED_CWD);
-    const out = args.findIndex((x, i) => x === "--bind" && args[i + 2] === "/c4-out");
-    expect(args[out + 1]).toBe(`${TMP_DIR}/out`);
+    // No writable bind of the host: /c4-out is a sandbox tmpfs.
+    expect(args.slice(0, dd)).not.toContain("--bind");
+    expect(opts.stdio).toEqual(["ignore", "pipe", "pipe", "pipe"]);
+    // The host never creates an output directory on the sandboxed path.
+    expect(fsMock.mkdir.mock.calls.some((c) => String(c[0]).endsWith("/out"))).toBe(false);
     expect(opts.cwd).toBe(TMP_DIR);
     expect(stageMock).toHaveBeenCalledTimes(1);
     expect(stageMock.mock.calls[0][0]).toBe(EXPECTED_CWD);
@@ -183,7 +202,8 @@ describe("renderC4Model", () => {
     expect(env).not.toHaveProperty("SUPABASE_SERVICE_ROLE_KEY");
   });
 
-  it("Guard 5: the model is read through one no-follow, non-blocking fd — never by path", async () => {
+  it("Guard 5 (direct path): the model is read through one no-follow, non-blocking fd — never by path", async () => {
+    vi.stubEnv("C4_RENDER_SANDBOX", "off");
     const child = makeChild();
     spawnThenEmit(child, () => child.emit("close", 0, null));
     const res = await renderC4Model(STAGE);
@@ -196,7 +216,8 @@ describe("renderC4Model", () => {
     expect(fsMock.readFile.mock.calls.some((c) => typeof c[0] === "string" && String(c[0]).includes("model.likec4.json"))).toBe(false);
   });
 
-  it("Guard 5: an output over RAW_MODEL_READ_CAP is rejected from fstat alone — never read", async () => {
+  it("Guard 5 (direct path): an output over RAW_MODEL_READ_CAP is rejected from fstat alone — never read", async () => {
+    vi.stubEnv("C4_RENDER_SANDBOX", "off");
     const child = makeChild();
     const handleRead = vi.fn(async () => VALID_MODEL);
     fsMock.open.mockImplementation(async () => ({

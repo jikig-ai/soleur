@@ -14,18 +14,16 @@
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
-  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer, type AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import {
   createFakeGitHub,
@@ -302,50 +300,47 @@ describe.skipIf(!BIN)("#8623 acceptance — inputs outside the working tree", ()
 });
 
 // H4 (#8696 Guard 1): what the REAL sandbox lets a payload see. Every row runs
-// the builder's argv with only `command` swapped, from the test's FULL env, and
-// each negative is preceded by a positive control proving the thing exists and
-// is readable OUTSIDE the sandbox (so "unreadable" cannot pass vacuously).
+// the render's own launch chain (close-fds -> choom -> nice -> bwrap) with only
+// `command` swapped, from the test's FULL env, and each negative is paired with
+// a positive control showing the thing exists and is reachable OUTSIDE the
+// sandbox (so "unreachable" cannot pass vacuously).
 describe.skipIf(!BIN || !BWRAP_OK)("#8696 — the render sandbox, measured with real bwrap", () => {
-  function sandboxArgs(stageDir: string, command: string[]): string[] {
+  function launch(stageDir: string, command: string[]) {
     const nodeBin = realpathSync(process.execPath);
-    const entry = realpathSync(BIN!);
-    const extra: string[] = [];
-    for (const p of [dirname(dirname(nodeBin)), dirname(dirname(entry))]) {
-      if (p === "/usr" || p.startsWith("/usr/") || extra.some((e) => p === e || p.startsWith(`${e}/`))) continue;
-      extra.push(p);
-    }
-    return renderMod.buildLikeC4SandboxArgv({ stageDir, nodeBin, extraRoBinds: extra, command });
+    const extra = renderMod.installPrefixBinds(nodeBin, realpathSync(BIN!));
+    if (!extra) throw new Error("install prefix too shallow to bind");
+    return renderMod.sandboxLaunch({ stageDir, nodeBin, extraRoBinds: extra, command });
   }
   function stage(): string {
     const d = mkdtempSync(join(stagingRoot, "c4-render-"));
     mkdirSync(join(d, "src"));
-    mkdirSync(join(d, "out"), { mode: 0o700 });
     writeFileSync(join(d, "src", "model.c4"), MODEL_C4);
     dirs.push(d);
     return d;
   }
-  function run(stageDir: string, command: string[], env: NodeJS.ProcessEnv) {
-    return spawnSync("/usr/bin/bwrap", sandboxArgs(stageDir, command), {
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe", "pipe"],
-      timeout: 60_000,
-    });
+  function run(stageDir: string, command: string[], env: NodeJS.ProcessEnv = process.env) {
+    const l = launch(stageDir, command);
+    return spawnSync(l.cmd, l.args, { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "pipe"], timeout: 60_000 });
   }
+  const NODE_BIN = () => realpathSync(process.execPath);
 
-  it("H4: files, /proc, env, writes, network and inherited fds are all out of reach", () => {
+  it("H4: files, /proc, env, writes and the network are out of reach; /c4-out is writable", async () => {
     const sentinelDir = tmp("c4-sandbox-sentinel-");
     const sentinel = join(sentinelDir, "SENTINEL");
     writeFileSync(sentinel, "tenant secret");
     const envToken = `sentinel-${process.pid}-${Date.now()}`;
     const thisFile = fileURLToPath(import.meta.url);
-    // Positive controls, outside the sandbox.
-    expect(readFileSync(sentinel, "utf8")).toBe("tenant secret");
-    expect(readFileSync(thisFile, "utf8").length).toBeGreaterThan(0);
-    const env = { ...process.env, C4_SANDBOX_SENTINEL: envToken };
-    const fd = openSync(sentinel, "r");
+    // A loopback listener the payload would reach if it shared the network.
+    const server = createServer((sock) => sock.end("hi"));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
     try {
-      const ino = statSync(sentinel).ino;
+      // Positive controls, outside the sandbox.
+      expect(readFileSync(sentinel, "utf8")).toBe("tenant secret");
+      expect(readFileSync(thisFile, "utf8").length).toBeGreaterThan(0);
+      const outside = spawnSync(NODE_BIN(), ["-e", `require("node:net").connect(${port},"127.0.0.1").on("connect",()=>{console.log("connected");process.exit(0)}).on("error",e=>{console.log(e.code);process.exit(0)})`], { encoding: "utf8" });
+      expect(outside.stdout.trim()).toBe("connected");
+      const env = { ...process.env, C4_SANDBOX_SENTINEL: envToken };
       const payload = `
 const fs = require("node:fs");
 const net = require("node:net");
@@ -361,13 +356,12 @@ out.pwd = process.env.PWD ?? null;
 out.writeSources = can(() => fs.writeFileSync("/c4-sources/x", "x"));
 out.writeRoot = can(() => fs.writeFileSync("/x", "x"));
 out.writeDev = can(() => fs.writeFileSync("/dev/x", "x"));
-out.inos = [];
-for (let n = 3; n < 256; n++) { try { out.inos.push(fs.fstatSync(n).ino); } catch {} }
-const s = net.connect({ host: "1.1.1.1", port: 80 });
+out.writeOut = can(() => fs.writeFileSync("/c4-out/probe", "x"));
+const s = net.connect(${port}, "127.0.0.1");
 s.on("connect", () => { out.net = "connected"; console.log(JSON.stringify(out)); s.destroy(); });
 s.on("error", (e) => { out.net = e.code; console.log(JSON.stringify(out)); });
 `;
-      const r = run(stage(), [realpathSync(process.execPath), "-e", payload], env);
+      const r = run(stage(), [NODE_BIN(), "-e", payload], env);
       expect(r.status, r.stderr).toBe(0);
       const seen = JSON.parse(r.stdout.trim().split("\n").pop()!) as Record<string, unknown>;
       expect(seen).toMatchObject({
@@ -379,35 +373,65 @@ s.on("error", (e) => { out.net = e.code; console.log(JSON.stringify(out)); });
         writeSources: false,
         writeRoot: false,
         writeDev: false,
+        // Positive control inside: the one writable place is writable.
+        writeOut: true,
       });
       // --clearenv + the four --setenv, plus the PWD bwrap itself sets on --chdir.
       expect(seen.envKeys).toEqual(["HOME", "LANG", "PATH", "PWD", "TMPDIR"]);
       expect(seen.pwd).toBe("/c4-sources");
       expect(seen.net).not.toBe("connected");
-      expect(seen.inos as number[]).not.toContain(ino);
     } finally {
-      closeSync(fd);
+      server.close();
     }
   }, 90_000);
 
-  it("H4: the sandboxed child runs with no_new_privs", () => {
-    const r = run(stage(), ["/usr/bin/setpriv", "-d"], process.env);
+  it("H4: a non-CLOEXEC fd held by the spawning parent does not reach the sandbox", () => {
+    const sentinel = join(tmp("c4-sandbox-sentinel-"), "fd-secret");
+    writeFileSync(sentinel, "fd secret");
+    const l = launch(stage(), ["/usr/bin/sh", "-c", "cat <&7 2>/dev/null || echo no-fd7"]);
+    // Positive control: the same bash parent, without the launch chain, CAN read it.
+    const control = spawnSync("/usr/bin/bash", ["-c", 'exec 7<"$1"; exec /usr/bin/sh -c "cat <&7"', "x", sentinel], { encoding: "utf8" });
+    expect(control.stdout).toBe("fd secret");
+    const r = spawnSync("/usr/bin/bash", ["-c", 'exec 7<"$1"; shift; exec "$@"', "x", sentinel, l.cmd, ...l.args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe", "pipe"],
+      timeout: 60_000,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe("no-fd7");
+  }, 60_000);
+
+  it("H4: the exit-code status record still arrives through the close-fds step", () => {
+    const r = run(stage(), ["/usr/bin/sh", "-c", "exit 7"]);
+    expect(r.status).toBe(7);
+    expect(String(r.output[3])).toMatch(/"exit-code":\s*7/);
+  }, 60_000);
+
+  it("H4: /c4-out is capped — a large write stops at the tmpfs size", () => {
+    const r = run(stage(), ["/usr/bin/sh", "-c", "dd if=/dev/zero of=/c4-out/big bs=1M count=200 2>&1; stat -c %s /c4-out/big"]);
+    expect(r.stdout).toMatch(/No space left on device/);
+    const size = Number(r.stdout.trim().split("\n").pop());
+    expect(size).toBeLessThanOrEqual(renderMod.SANDBOX_OUT_BYTES);
+  }, 60_000);
+
+  it("H4: the child runs with no_new_privs", () => {
+    const r = run(stage(), ["/usr/bin/setpriv", "-d"]);
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/no_new_privs:\s*1/i);
   }, 60_000);
 
-  it("H4: a child that plants /c4-out/model.likec4.json as a symlink gets io_error from the host read", async () => {
-    const sentinel = join(tmp("c4-sandbox-sentinel-"), "other-tenant-model.json");
-    writeFileSync(sentinel, JSON.stringify({ elements: { STOLEN: {} }, views: { index: {} } }));
-    const d = stage();
-    const plant = `require("node:fs").symlinkSync(${JSON.stringify(sentinel)}, "/c4-out/model.likec4.json")`;
-    const r = run(d, [realpathSync(process.execPath), "-e", plant], process.env);
-    expect(r.status, r.stderr).toBe(0);
-    // The plant landed on the host side of the bind…
-    expect(existsSync(join(d, "out", "model.likec4.json"))).toBe(true);
-    // …and the host refuses it rather than following it.
-    expect(await renderMod.readRenderOutput(join(d, "out"))).toEqual({ ok: false, why: "symlink" });
-  }, 60_000);
+  it("a source with elements but no `views {}` block still renders at least the index view", async () => {
+    const noViews = `specification {
+  element actor
+}
+model {
+  u = actor 'User'
+}
+`;
+    const res = await render({ [`${D}/model.c4`]: { mode: "100644", content: noViews } });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(Object.keys((JSON.parse(res.json) as { views: object }).views).length).toBeGreaterThanOrEqual(1);
+  }, 90_000);
 });
 
 // H2: a missing binary with LIKEC4_REQUIRED set must FAIL the suite, not skip.

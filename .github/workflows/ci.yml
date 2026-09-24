@@ -963,9 +963,12 @@ jobs:
           likec4 --version
 
       # #8696 — the render child runs inside bubblewrap, so the acceptance test
-      # above also renders THROUGH real bwrap and measures what a sandboxed
+      # (test/c4-render-tenant-config.test.ts) also renders THROUGH real bwrap
+      # and measures what a sandboxed
       # payload can reach (H4). Ephemeral GH-hosted runner only: relaxing the
-      # userns sysctl mirrors scripts/sandbox-canary-regression.test.sh.
+      # userns sysctl mirrors scripts/sandbox-canary-regression.test.sh, and like
+      # it is best-effort: the suite's own bwrap probe plus C4_BWRAP_REQUIRED
+      # decide whether the sandbox works here.
       # ubuntu-latest ships a newer bwrap than prod's 0.8.0; every option the
       # argv uses exists in 0.8.0 (measured, ADR-050 amendment).
       # C4_BWRAP_REQUIRED on the run step makes an unusable bwrap FAIL.
@@ -974,7 +977,7 @@ jobs:
           set -euo pipefail
           sudo -n apt-get update
           sudo -n apt-get install -y --no-install-recommends bubblewrap
-          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --version
 
       - name: Run webplat tests (vitest --shard)

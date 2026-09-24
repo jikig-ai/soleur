@@ -1,5 +1,7 @@
-// Guard 5 (#8696): the host never follows, over-reads, or blocks on what the
-// sandboxed child leaves in its output dir. REAL filesystem, no mocks — the
+// Guard 5 (#8696), direct (non-production) path: the host never follows,
+// over-reads, or blocks on what likec4 leaves in its output dir. (The
+// sandboxed path has no host output dir: the model comes back over a capped
+// stdout — c4-render-sandbox.test.ts.) REAL filesystem, no mocks — the
 // properties under test (O_NOFOLLOW, O_NONBLOCK, fstat type/size) are kernel
 // behaviour a mock cannot exhibit.
 import { describe, it, expect, afterEach } from "vitest";
@@ -18,9 +20,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RAW_MODEL_READ_CAP, readRenderOutput } from "@/server/c4-render";
+import { C4_MODEL_JSON } from "@/lib/c4-constants";
 
 const VALID_MODEL = JSON.stringify({ elements: { a: { id: "a" } }, views: { index: {} } });
-const OUT = "model.likec4.json";
+const OUT = C4_MODEL_JSON;
 
 let dirs: string[] = [];
 let fifos: string[] = [];

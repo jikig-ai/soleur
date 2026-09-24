@@ -37,30 +37,29 @@
 // `mkdtemp` directory under the server-private `c4RenderStagingRoot()` (never
 // os.tmpdir(), which is shared with the agent sandbox's uid) — in production
 // `stageCommittedC4Sources`, which fetches only the regular-file LikeC4 source
-// blobs of the committed diagrams subtree from GitHub. The spawn's cwd is that
-// stage directory; the `-o` target sits beside it, outside the likec4 input.
-// Staging runs BEFORE a render slot is taken and under its own deadline, so a
-// slow GitHub never holds a slot. The argv is fixed and the env is an
-// allow-list, so no secret reaches the child's own environment. stdout stays
-// non-TTY (`stdio: ignore`), which with the in-container check keeps likec4's
-// `check-update` (execa `preferLocal`, searches `node_modules/.bin` upward from
-// cwd) from running — do NOT add `CI=true` to the env: likec4 then switches
+// blobs of the committed diagrams subtree from GitHub. The stage directory is
+// likec4's cwd (bound read-only at STABLE_SOURCE_ROOT in the sandbox), and its
+// output never lands inside that input. Staging runs BEFORE a render slot is
+// taken and under its own deadline, so a slow GitHub never holds a slot. The
+// argv is fixed and the env is an allow-list, so no secret reaches the child's
+// own environment. Do NOT add `CI=true` to the env: likec4 then switches
 // reporter and the writer's `Could not resolve …` diagnostic match breaks.
 //
 // SANDBOX (#8696; ADR-050 amendment "render child sandboxed; wasm layout
 // pinned"): the child runs inside bubblewrap with an allowlisted root (`/usr`
 // plus three `/etc` files), no network, no `/proc` (Docker masks it, and the
 // parent's would expose the server's environ), a cleared environment, a
-// read-only `/` and `/dev`, sized tmpfs for everything writable except the
-// `/c4-out` bind, and `no_new_privs`. Inside bwrap likec4's `isInsideContainer()`
-// is false, so its detached `check-update` may start — it has no network and
-// dies with the pid namespace. A sandbox that cannot start fails the render
-// CLOSED (`sandbox_error`); only a non-production process may opt out
-// (`C4_RENDER_SANDBOX=off`). The host never trusts what the child leaves in
-// `/c4-out`: the model is read through a no-follow, size-capped fd
-// (readRenderOutput), and the stage is removed only after every sandbox
-// process has exited. `--no-use-dot` pins wasm layout: in a container likec4
-// otherwise picks the absent graphviz `dot` and exports ZERO views.
+// read-only `/` and `/dev`, a sized tmpfs for everything writable, and
+// `no_new_privs`. Nothing inside is a writable bind of the host: likec4 writes
+// the model to a sandbox tmpfs and it comes back over the child's stdout,
+// which the host caps. Inherited file descriptors are closed before the
+// launch chain. Inside bwrap likec4's `isInsideContainer()` is false, so its
+// detached `check-update` may start — it has no network and dies with the pid
+// namespace. A sandbox that cannot start fails the render CLOSED
+// (`sandbox_error`); only a non-production process may opt out
+// (`C4_RENDER_SANDBOX=off`, where the model is read from a file through a
+// no-follow, size-capped fd). `--no-use-dot` pins wasm layout: in a container
+// likec4 otherwise picks the absent graphviz `dot` and exports ZERO views.
 //
 // No `import "server-only"` (same reason as c4-writer.ts): this module is
 // bundled into the WS/custom server via the Concierge tool's import chain, and
@@ -112,19 +111,24 @@ export type RenderReason =
   // layout always emits at least `index`), never the user's source.
   | "layout_failed";
 
-/** Low-cardinality Sentry tag: which failure class, so each class opens its
- *  own issue (the message stays fixed per reason for grouping). */
-export type DetailClass =
-  | "bwrap-setup"
-  | "bwrap-enoent"
-  | "outside-usr"
-  | "not-resolvable"
-  | "sandbox-no-exit"
-  | "output-rejected"
-  | "zero-views"
-  | "slot-wait"
-  | "likec4-exit"
-  | "other";
+/** Low-cardinality failure class. It goes into the Sentry MESSAGE (the writer
+ *  and the boot probe): Sentry groups a captureMessage by its text, so a tag
+ *  alone would fold every class into one issue. */
+export const DETAIL_CLASSES = [
+  "bwrap-setup",
+  "launcher-enoent",
+  "outside-usr",
+  "not-resolvable",
+  "sandbox-no-exit",
+  "spawn-timeout",
+  "killed",
+  "output-rejected",
+  "zero-views",
+  "slot-wait",
+  "likec4-exit",
+  "other",
+] as const;
+export type DetailClass = (typeof DETAIL_CLASSES)[number];
 
 /** Writes the render's input into `destDir` (which it creates). */
 export type StageFn = (destDir: string, signal: AbortSignal) => Promise<StageResult>;
@@ -163,72 +167,111 @@ export const STAGE_DEADLINE_DETAIL = "stage: deadline";
 
 // A real wasm layout of an 82-view model takes 3.8-7.2 s at 2 CPUs (measured
 // 2026-09-24; the old "<1s" was the FAILED `dot` path). 25 s leaves headroom for
-// a cold first invocation; see RENDER_BUDGET below for the whole budget.
+// a cold first invocation. The whole budget is stated beside SLOT_WAIT_MS.
 const RENDER_TIMEOUT_MS = 25_000;
 // After SIGKILL, how long to wait for every sandbox process to exit (the
-// `close` event) before giving up and leaving the stage for the stale sweep.
+// `close` event) before giving up and leaving the stage to be removed on that
+// late exit (keptStages).
 const KILL_GRACE_MS = 5_000;
 
 // Preinstalled in the runner image (Dockerfile `npm install -g likec4@1.50.0`).
 // Env override exists for tests / local dev only.
 const LIKEC4_BIN = process.env.LIKEC4_BIN || "likec4";
 
-/** The sandbox binary, by absolute path — never resolved through PATH. */
-export const BWRAP_BIN = "/usr/bin/bwrap";
-// util-linux, present in the runner image's base. `choom` runs OUTSIDE the
-// sandbox (it needs /proc) and makes the render the OOM killer's first choice
-// over the server; `prlimit` runs inside it and caps its process count (the
-// limit is per user namespace, so the server's own spawns are unaffected).
+// The launch chain, every binary by absolute path (never resolved through
+// PATH) and, in production, required to resolve under /usr:
+//   bash (close inherited fds) -> choom -> nice -> bwrap -> prlimit -> sh -> likec4
+// bash runs first so no launcher, and no sandbox process, holds an fd the
+// server opened without close-on-exec (bwrap and libuv close nothing). `choom`
+// needs /proc, so it runs OUTSIDE the sandbox; it makes the render the OOM
+// killer's first choice over the server. `nice` keeps a layout from competing
+// with the server's event loop at equal priority. Inside the sandbox,
+// `prlimit` caps the process count (the sandbox's own user namespace keeps the
+// server's tasks out of that count) and `sh` runs the fixed RENDER_SCRIPT.
+const BASH_BIN = "/usr/bin/bash";
 const CHOOM_BIN = "/usr/bin/choom";
+const NICE_BIN = "/usr/bin/nice";
+export const BWRAP_BIN = "/usr/bin/bwrap";
 const PRLIMIT_BIN = "/usr/bin/prlimit";
-/** Size of every sandbox tmpfs (/tmp, /c4-home, /dev/shm). A full render uses
- *  under 200 bytes of them (measured); the cap bounds a compromised child. */
-export const SANDBOX_TMPFS_BYTES = 64 * 1024 * 1024;
+const SH_BIN = "/usr/bin/sh";
+const LAUNCHERS = [BASH_BIN, CHOOM_BIN, NICE_BIN, BWRAP_BIN, PRLIMIT_BIN, SH_BIN] as const;
+
+/** Closes every fd above STATUS_FD, then execs its arguments. bash, not dash:
+ *  dash redirections reach only fds 0-9. A static string: the launch argv
+ *  reaches it only as "$@". */
+export const CLOSE_FDS_SCRIPT =
+  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; exec "$@"';
+
+/** Size of the scratch tmpfs mounts (/tmp, /c4-home, /dev/shm). A full render
+ *  of the 82-view repo model used 60 B, 160 B and 40 B of them (measured
+ *  2026-09-24); the cap bounds what a compromised child can hold in RAM. */
+export const SANDBOX_TMPFS_BYTES = 16 * 1024 * 1024;
 /** likec4 peaks at 13 tasks (threads count); 64 is ~5x that. */
 export const SANDBOX_NPROC = 64;
-/** bwrap writes JSON status records here; the sandboxed child cannot reach it. */
+/** bwrap writes JSON status records here; bwrap closes it in the child before
+ *  exec, so the sandboxed process cannot write to it. */
 const STATUS_FD = 3;
-const SANDBOX_OUT = "/c4-out/model.likec4.json";
-/** Largest model file the host will read. The writer's 4 MB cap still bounds
- *  what it commits; this bounds what a compromised child can make us read. */
+/** Largest model the host will read. The writer's 4 MB cap still bounds what
+ *  it commits; this bounds what a compromised child can make us buffer. */
 export const RAW_MODEL_READ_CAP = 20 * 1024 * 1024;
-// Stderr the host keeps (the detail string uses the first 512 bytes; the pipe
-// keeps draining after that so the child never blocks on it).
+/** The sandbox's only place likec4 writes the model: a tmpfs just above the
+ *  read cap, so a compromised child cannot fill the host disk or hold more RAM
+ *  than the host would ever accept back. */
+export const SANDBOX_OUT_BYTES = 24 * 1024 * 1024;
+const SANDBOX_OUT_DIR = "/c4-out";
+const SANDBOX_OUT = `${SANDBOX_OUT_DIR}/${C4_MODEL_JSON}`;
+/** Run by `sh` inside the sandbox: export, then stream the model to stdout.
+ *  node and the likec4 entry arrive as $0 and $1 only. `&&` keeps likec4's
+ *  exit status as the sandbox's. likec4's own stdout (progress) is discarded;
+ *  its diagnostics are on stderr. */
+export const RENDER_SCRIPT = `"$0" "$1" export json --no-use-dot -o ${SANDBOX_OUT} . >/dev/null && exec cat ${SANDBOX_OUT}`;
+// Stderr the host keeps (the detail string uses the first STDERR_KEEP bytes;
+// the pipe keeps draining after that so the child never blocks on it).
 const STDERR_KEEP = 512;
 
 // Concurrency gate — caps concurrent wasm-layout subprocesses per replica so
-// peak RAM stays bounded under burst saves. Default 2, env-overridable via
-// C4_RENDER_CONCURRENCY, clamped to [1, 16]. Captured at module load (ops
-// changes require a container restart, the intended path). Mirrors
-// pdf-linearize.ts's POOL_SIZE. The counter lives on `globalThis`: this module
-// is bundled twice into one process (the custom server via the Concierge tool,
-// and the Next route), and a per-bundle counter would allow twice the renders.
+// peak RAM and CPU stay bounded under burst saves. Default 2, env-overridable
+// via C4_RENDER_CONCURRENCY, clamped to [1, 16]. The pool lives on `globalThis`
+// and carries its own size: this module is bundled twice into one process (the
+// custom server via the Concierge tool, and the Next route), and a per-bundle
+// counter would allow twice the renders.
 const POOL_SIZE = (() => {
   const raw = Number(process.env.C4_RENDER_CONCURRENCY);
   if (!Number.isFinite(raw) || raw < 1) return 2;
   return Math.min(Math.floor(raw), 16);
 })();
-/** How long a render waits for a slot before giving up (load, not a defect). */
-export const SLOT_WAIT_MS = 10_000;
+/** How long a render waits for a slot before giving up (load, not a defect).
+ *  Two concurrent layouts take ~12.5 s of wall clock (measured), so a third
+ *  save must be able to wait for one of them. */
+export const SLOT_WAIT_MS = 20_000;
 export const RENDER_SLOT_WAIT_DETAIL = "render slot wait";
-// Budget before the model commit, worst case: stage 10 s + slot wait 10 s +
-// spawn 25 s + kill grace 5 s (timeout path only) + rm (<= 3 x 100 ms) ~ 50.3 s,
-// inside the PUT route's maxDuration=60 (a hint only; the custom server does not
-// enforce it). STAGE_SETTLE_GRACE_MS is spent only after a stage deadline, a
-// path that never spawns.
+// Budget of the render phase, worst case: stage 10 s + slot wait 20 s + spawn
+// 25 s + kill grace 5 s (timeout path only) + rm (retries 100+200+300 ms) ~ 61
+// s. The PUT also spends the source commit + sync before it and the HEAD
+// re-lists, model commit and resync after it. The route's maxDuration=60 is a
+// hint the custom server does not enforce; the hard cutoff is the proxy's
+// 100 s origin timeout. STAGE_SETTLE_GRACE_MS is spent only after a stage
+// deadline, a path that never spawns.
 
-type Pool = { inFlight: number; waiters: Array<() => void> };
+type Pool = { size: number; inFlight: number; waiters: Array<() => void> };
 const POOL_KEY = Symbol.for("soleur.c4RenderPool");
 
 function pool(): Pool {
   const g = globalThis as unknown as Record<symbol, Pool | undefined>;
-  return (g[POOL_KEY] ??= { inFlight: 0, waiters: [] });
+  return (g[POOL_KEY] ??= { size: POOL_SIZE, inFlight: 0, waiters: [] });
+}
+
+/** Test-only: forget the shared pool and the kept-stage registry. */
+export function __resetC4RenderStateForTests(): void {
+  const g = globalThis as unknown as Record<symbol, unknown>;
+  delete g[POOL_KEY];
+  delete g[KEPT_KEY];
 }
 
 /** Resolves true with a slot held, or false after SLOT_WAIT_MS. */
 function acquire(): Promise<boolean> {
   const p = pool();
-  if (p.inFlight < POOL_SIZE) {
+  if (p.inFlight < p.size) {
     p.inFlight++;
     return Promise.resolve(true);
   }
@@ -254,6 +297,24 @@ function release(): void {
   if (next) next();
 }
 
+// Stages whose sandbox did not exit within KILL_GRACE_MS. Each maps to the
+// work deferred until that late exit (the slot release and the stage removal),
+// so neither the pool nor the stale sweep treats a live sandbox as gone.
+type Kept = Map<string, Array<() => void>>;
+const KEPT_KEY = Symbol.for("soleur.c4RenderKeptStages");
+
+function keptStages(): Kept {
+  const g = globalThis as unknown as Record<symbol, Kept | undefined>;
+  return (g[KEPT_KEY] ??= new Map());
+}
+
+/** Run `fn` now, or when the kept stage's sandbox finally exits. */
+function afterExit(dir: string, fn: () => void): void {
+  const pending = keptStages().get(dir);
+  if (pending) pending.push(fn);
+  else fn();
+}
+
 // Private `?`-substitution copy (keeps likec4 stderr readable in the detail
 // string). lib/log-sanitize.ts's doc comment forbids folding this in.
 function sanitizeForLog(s: string): string {
@@ -261,12 +322,13 @@ function sanitizeForLog(s: string): string {
 }
 
 // Internal spawn result — `stderr` is carried even on exit 0 so the caller can
-// fold likec4's `Could not resolve …` diagnostics into an `empty_model` detail.
+// fold likec4's `Could not resolve …` diagnostics into an `empty_model` detail;
+// `stdout` is the model on the sandboxed path.
 type SpawnResult =
-  | { ok: true; durationMs: number; stderr: string }
+  | { ok: true; durationMs: number; stderr: string; stdout: Buffer }
   | {
       ok: false;
-      reason: "spawn_error" | "non_zero_exit" | "timeout" | "sandbox_error";
+      reason: "spawn_error" | "non_zero_exit" | "timeout" | "sandbox_error" | "io_error";
       detail?: string;
       detailClass: DetailClass;
     };
@@ -285,9 +347,22 @@ type Binaries = { nodeBin: string; likec4Entry: string; extraRoBinds: string[] }
 // Memoized on SUCCESS only, so a transient failure is retried on the next render.
 let binaries: Binaries | null = null;
 
+/** The install prefixes of node and the likec4 package, to bind read-only when
+ *  they are not under /usr (a CI runner's node lives under /opt/hostedtoolcache).
+ *  Null when a prefix is too shallow to bind safely (e.g. `/`, which would bind
+ *  the whole host): the render then refuses rather than widening the sandbox. */
+export function installPrefixBinds(nodeBin: string, likec4Entry: string): string[] | null {
+  const extra: string[] = [];
+  for (const p of [dirname(dirname(nodeBin)), dirname(dirname(likec4Entry))]) {
+    if (p.split("/").filter(Boolean).length < 2) return null;
+    if (underUsr(p) || extra.some((e) => p === e || p.startsWith(`${e}/`))) continue;
+    extra.push(p);
+  }
+  return extra;
+}
+
 /** Resolve node and the likec4 entry script to real paths, lazily (never at
- *  import). `extraRoBinds` are their install prefixes when not under /usr
- *  (a CI runner's node lives under /opt/hostedtoolcache). */
+ *  import). */
 async function resolveBinaries(): Promise<Binaries | null> {
   if (binaries) return binaries;
   try {
@@ -307,32 +382,27 @@ async function resolveBinaries(): Promise<Binaries | null> {
       }
     }
     if (!likec4Entry) return null;
-    const extra: string[] = [];
-    for (const p of [dirname(dirname(nodeBin)), dirname(dirname(likec4Entry))]) {
-      if (underUsr(p) || extra.some((e) => p === e || p.startsWith(`${e}/`))) continue;
-      extra.push(p);
-    }
-    binaries = { nodeBin, likec4Entry, extraRoBinds: extra };
+    const extraRoBinds = installPrefixBinds(nodeBin, likec4Entry);
+    if (!extraRoBinds) return null;
+    binaries = { nodeBin, likec4Entry, extraRoBinds };
     return binaries;
   } catch {
     return null;
   }
 }
 
-/** The command the sandbox runs: a fixed likec4 export writing only to /c4-out. */
+/** The command the sandbox runs: `sh -c RENDER_SCRIPT` under a process cap,
+ *  with node and the likec4 entry as the script's $0 and $1. */
 export function renderCommand(nodeBin: string, likec4Entry: string): string[] {
-  return [
-    PRLIMIT_BIN, `--nproc=${SANDBOX_NPROC}`, "--",
-    nodeBin, likec4Entry, "export", "json", "--no-use-dot", "-o", SANDBOX_OUT, ".",
-  ];
+  return [PRLIMIT_BIN, `--nproc=${SANDBOX_NPROC}`, "--", SH_BIN, "-c", RENDER_SCRIPT, nodeBin, likec4Entry];
 }
 
 /**
- * The bwrap argv for one render. Pure. `stageDir` holds `src/` (bound
- * read-only at STABLE_SOURCE_ROOT, the cwd) and `out/` (the only writable bind
- * from the host). Setup ops run in order, so the two `--remount-ro` come after
- * every mount. `command` exists so a test can run a payload through exactly the
- * same sandbox; the render always passes `renderCommand(…)`.
+ * The bwrap argv for one render. Pure. `stageDir/src` is bound read-only at
+ * STABLE_SOURCE_ROOT (the cwd); nothing is bound writable from the host. Setup
+ * ops run in order, so the two `--remount-ro` come after every mount. `command`
+ * exists so a test can run a payload through exactly the same sandbox; the
+ * render always passes `renderCommand(…)`.
  */
 export function buildLikeC4SandboxArgv(o: {
   stageDir: string;
@@ -364,11 +434,11 @@ export function buildLikeC4SandboxArgv(o: {
     "--size", size, "--tmpfs", "/dev/shm",
     "--size", size, "--tmpfs", "/tmp",
     "--size", size, "--tmpfs", "/c4-home",
+    "--size", String(SANDBOX_OUT_BYTES), "--tmpfs", SANDBOX_OUT_DIR,
     // After the tmpfs mounts, so a prefix under /tmp (a dev install) is not
     // hidden by them. Never set in production (the /usr pin).
     ...o.extraRoBinds.flatMap((p) => ["--ro-bind", p, p]),
     "--ro-bind", join(o.stageDir, "src"), STABLE_SOURCE_ROOT,
-    "--bind", join(o.stageDir, "out"), "/c4-out",
     "--remount-ro", "/dev",
     "--remount-ro", "/",
     "--chdir", STABLE_SOURCE_ROOT,
@@ -382,12 +452,31 @@ export function buildLikeC4SandboxArgv(o: {
   ];
 }
 
+/** The full sandboxed launch: bash closes inherited fds, then choom -> nice ->
+ *  bwrap. The render and the real-bwrap tests share it. */
+export function sandboxLaunch(o: {
+  stageDir: string;
+  nodeBin: string;
+  extraRoBinds: readonly string[];
+  command: readonly string[];
+}): { cmd: string; args: string[] } {
+  return {
+    cmd: BASH_BIN,
+    args: [
+      "-c", CLOSE_FDS_SCRIPT, "c4-close-fds",
+      CHOOM_BIN, "-n", "1000", "--",
+      NICE_BIN, "-n", "10", "--",
+      BWRAP_BIN, ...buildLikeC4SandboxArgv(o),
+    ],
+  };
+}
+
 /**
- * Read the child's model output without trusting it: open with O_NOFOLLOW
- * (a planted symlink fails with ELOOP) and O_NONBLOCK (a FIFO cannot hang
- * us), then read only a regular file within RAW_MODEL_READ_CAP, from the same
- * fd. No pre-open lstat (that reopens a check-then-use window). Hard links into
- * /c4-out fail with EXDEV (link(2) across mounts).
+ * Read a model file without trusting it (the direct, non-production path,
+ * where likec4 writes to a host directory): open with O_NOFOLLOW (a planted
+ * symlink fails with ELOOP) and O_NONBLOCK (a FIFO cannot hang us), then read
+ * only a regular file within RAW_MODEL_READ_CAP, from the same fd. No pre-open
+ * lstat (that reopens a check-then-use window).
  */
 export async function readRenderOutput(
   outDir: string,
@@ -408,9 +497,7 @@ export async function readRenderOutput(
     const st = await fh.stat();
     if (!st.isFile()) return { ok: false, why: "not a regular file" };
     if (st.size > RAW_MODEL_READ_CAP) return { ok: false, why: "too large" };
-    const raw = await fh.readFile({ encoding: "utf8" });
-    if (Buffer.byteLength(raw, "utf8") > RAW_MODEL_READ_CAP) return { ok: false, why: "too large" };
-    return { ok: true, raw };
+    return { ok: true, raw: await fh.readFile({ encoding: "utf8" }) };
   } catch (err) {
     return { ok: false, why: `read failed (${(err as NodeJS.ErrnoException)?.code ?? "unknown"})` };
   } finally {
@@ -421,12 +508,12 @@ export async function readRenderOutput(
 /**
  * Regenerate `model.likec4.json` by staging the render input with `stage` into
  * a private directory, then running the preinstalled `likec4` CLI in the
- * sandbox (`likec4 export json --no-use-dot -o /c4-out/model.likec4.json .`,
- * cwd = the staged sources). VALIDATE the produced model has elements AND
- * views, and on success RETURN the validated bytes as `json` — the caller
- * commits them. The tracked working-tree `model.likec4.json` is never written
- * by this path (#4976), and no workspace path is ever read (#8623). An
- * empty/invalid export returns `{ ok:false }` with no `json`.
+ * sandbox (`likec4 export json --no-use-dot`, cwd = the staged sources).
+ * VALIDATE the produced model has elements AND views, and on success RETURN
+ * the validated bytes as `json` — the caller commits them. The tracked
+ * working-tree `model.likec4.json` is never written by this path (#4976), and
+ * no workspace path is ever read (#8623). An empty/invalid export returns
+ * `{ ok:false }` with no `json`.
  */
 export async function renderC4Model(stage: StageFn): Promise<RenderResult> {
   const root = c4RenderStagingRoot();
@@ -439,9 +526,6 @@ export async function renderC4Model(stage: StageFn): Promise<RenderResult> {
     return { ok: false, reason: "io_error", detail: "staging root unavailable", phase: "stage" };
   }
   const srcDir = join(dir, "src");
-  // Set when a sandbox process may still be alive: the stage is then left for
-  // the stale sweep rather than removed under it.
-  const cleanup = { keep: false };
   let stageSettled: Promise<unknown> = Promise.resolve();
   try {
     const run = runStage(stage, srcDir);
@@ -472,10 +556,11 @@ export async function renderC4Model(stage: StageFn): Promise<RenderResult> {
       if (!(await stageMatches(srcDir, staged.paths))) {
         return { ok: false, reason: "io_error", detail: "stage: contents changed before render", phase: "stage" };
       }
-      const res = await renderToValidatedModel(dir, cleanup);
+      const res = await renderToValidatedModel(dir);
       return res.ok ? { ...res, queueWaitMs } : res;
     } finally {
-      release();
+      // A sandbox that did not exit still holds its slot until it does.
+      afterExit(dir, release);
     }
   } finally {
     // After a deadline the stage's in-flight work can still be finishing; give
@@ -483,10 +568,12 @@ export async function renderC4Model(stage: StageFn): Promise<RenderResult> {
     // write (which would leave staged sources behind).
     await Promise.race([stageSettled, new Promise((r) => setTimeout(r, STAGE_SETTLE_GRACE_MS))]);
     // Trailing .catch so cleanup can never reject the resolved result (mirrors
-    // pdf-linearize.ts). Removes the staged input and the temp output alike.
-    if (!cleanup.keep) {
-      await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
-    }
+    // pdf-linearize.ts). Removes the staged input (and, on the direct path,
+    // the output). Deferred while a sandbox process may still be alive.
+    const removeStage = () =>
+      void rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
+    if (keptStages().has(dir)) afterExit(dir, removeStage);
+    else await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
   }
 }
 
@@ -506,6 +593,8 @@ async function sweepStaleStages(root: string): Promise<void> {
     for (const d of await readdir(root, { withFileTypes: true })) {
       if (!d.isDirectory() || !d.name.startsWith("c4-render-")) continue;
       const p = join(root, d.name);
+      // A stage whose sandbox has not exited is removed on that exit instead.
+      if (keptStages().has(p)) continue;
       const st = await lstat(p).catch(() => null);
       if (st && now - st.mtimeMs > STALE_STAGE_MS) {
         await rm(p, { recursive: true, force: true }).catch(() => {});
@@ -576,13 +665,10 @@ function runStage(stage: StageFn, srcDir: string): StageRun {
   return { result, settled: work };
 }
 
-async function renderToValidatedModel(
-  dir: string,
-  cleanup: { keep: boolean },
-): Promise<RenderResult> {
+async function renderToValidatedModel(dir: string): Promise<RenderResult> {
   // The validated bytes are RETURNED, never published onto the tracked path
   // (#4976), so an invalid render never clobbers the previously-good committed
-  // model. The output dir sits OUTSIDE the sources, so it is not likec4 input.
+  // model.
   const srcDir = join(dir, "src");
   const outDir = join(dir, "out");
   try {
@@ -599,15 +685,18 @@ async function renderToValidatedModel(
     }
     if (process.env.NODE_ENV === "production") {
       // A stray LIKEC4_BIN (or an image change) can never widen the sandbox:
-      // in production every binary it runs, and every bind, is under /usr.
-      let bw: string | null = null;
-      try {
-        bw = await realpath(BWRAP_BIN);
-      } catch {
-        return { ok: false, phase: "spawn", reason: "sandbox_error", detail: "bwrap not resolvable", detailClass: "bwrap-enoent" };
+      // in production every binary in the launch chain, and every bind, is
+      // under /usr.
+      const launchers: string[] = [];
+      for (const bin of LAUNCHERS) {
+        try {
+          launchers.push(await realpath(bin));
+        } catch {
+          return { ok: false, phase: "spawn", reason: "sandbox_error", detail: `${bin} not resolvable`, detailClass: "launcher-enoent" };
+        }
       }
       if (
-        !underUsr(bw) ||
+        !launchers.every(underUsr) ||
         !underUsr(bins.nodeBin) ||
         !underUsr(bins.likec4Entry) ||
         bins.extraRoBinds.length > 0
@@ -615,42 +704,46 @@ async function renderToValidatedModel(
         return { ok: false, phase: "spawn", reason: "sandbox_error", detail: "binary outside /usr", detailClass: "outside-usr" };
       }
     }
-    await mkdir(outDir, { mode: 0o700 });
-    const spec = sandbox
-      ? {
-          cmd: CHOOM_BIN,
-          args: [
-            "-n", "1000", "--", BWRAP_BIN,
-            ...buildLikeC4SandboxArgv({
-              stageDir: dir,
-              nodeBin: bins.nodeBin,
-              extraRoBinds: bins.extraRoBinds,
-              command: renderCommand(bins.nodeBin, bins.likec4Entry),
-            }),
-          ],
-          cwd: dir,
-        }
-      : {
-          cmd: bins.nodeBin,
-          args: [bins.likec4Entry, "export", "json", "--no-use-dot", "-o", join(outDir, C4_MODEL_JSON), "."],
-          cwd: srcDir,
-        };
-    const run = await runLikeC4(spec.cmd, spec.args, spec.cwd, dir, sandbox, cleanup);
-    if (!run.ok) return { ...run, phase: "spawn" };
+    let raw: string;
+    let stderr: string;
+    let durationMs: number;
+    if (sandbox) {
+      const launch = sandboxLaunch({
+        stageDir: dir,
+        nodeBin: bins.nodeBin,
+        extraRoBinds: bins.extraRoBinds,
+        command: renderCommand(bins.nodeBin, bins.likec4Entry),
+      });
+      const run = await runLikeC4(launch.cmd, launch.args, dir, dir, true);
+      if (!run.ok) return { ...run, phase: "spawn" };
+      // stdout is the only thing the host takes from the sandbox.
+      if (run.stdout.length === 0) {
+        return { ok: false, phase: "spawn", reason: "io_error", detail: "model output rejected: empty", detailClass: "output-rejected" };
+      }
+      raw = run.stdout.toString("utf8");
+      stderr = run.stderr;
+      durationMs = run.durationMs;
+    } else {
+      await mkdir(outDir, { mode: 0o700 });
+      const run = await runLikeC4(
+        bins.nodeBin,
+        [bins.likec4Entry, "export", "json", "--no-use-dot", "-o", join(outDir, C4_MODEL_JSON), "."],
+        srcDir,
+        dir,
+        false,
+      );
+      if (!run.ok) return { ...run, phase: "spawn" };
+      const out = await readRenderOutput(outDir);
+      if (!out.ok) {
+        return { ok: false, phase: "spawn", reason: "io_error", detail: `model output rejected: ${out.why}`, detailClass: "output-rejected" };
+      }
+      raw = out.raw;
+      stderr = run.stderr;
+      durationMs = run.durationMs;
+    }
 
     // exit 0 — but likec4 exits 0 on unresolved references too, so validate
-    // the raw read first; canonicalization happens only after the gate.
-    const out = await readRenderOutput(outDir);
-    if (!out.ok) {
-      return {
-        ok: false,
-        phase: "spawn",
-        reason: "io_error",
-        detail: `model output rejected: ${out.why}`,
-        detailClass: "output-rejected",
-      };
-    }
-    let raw = out.raw;
+    // the raw bytes first; canonicalization happens only after the gate.
     let model: { elements?: unknown; views?: unknown };
     try {
       model = JSON.parse(raw) as { elements?: unknown; views?: unknown };
@@ -660,9 +753,7 @@ async function renderToValidatedModel(
         phase: "spawn",
         reason: "io_error",
         detail: sanitizeForLog(
-          `model parse failed: ${
-            err instanceof Error ? err.message : String(err)
-          } ${run.stderr}`.slice(0, 512),
+          `model parse failed: ${err instanceof Error ? err.message : String(err)} ${stderr}`.slice(0, STDERR_KEEP),
         ),
         detailClass: "other",
       };
@@ -680,7 +771,7 @@ async function renderToValidatedModel(
         ok: false,
         phase: "spawn",
         reason: "empty_model",
-        detail: run.stderr || "model has no elements",
+        detail: stderr || "model has no elements",
         detailClass: "other",
       };
     }
@@ -692,15 +783,14 @@ async function renderToValidatedModel(
         ok: false,
         phase: "spawn",
         reason: "layout_failed",
-        detail: sanitizeForLog(`model has ${elementCount} elements and no views ${run.stderr}`.slice(0, 512)),
+        detail: sanitizeForLog(`model has ${elementCount} elements and no views ${stderr}`.slice(0, STDERR_KEEP)),
         detailClass: "zero-views",
       };
     }
 
     // Validated — canonicalize (AFTER the gate, never instead of it) and return
     // the bytes; the caller commits them and the resync pull lands them on disk.
-    // The tracked working-tree file is never written. A canonicalize failure is
-    // our own IO-class fault, not the user's source, so it maps to io_error.
+    // A canonicalize failure is our own IO-class fault, not the user's source.
     // A relative `icon` resolves to a file:// URI under the sources root. In the
     // sandbox that root is already STABLE_SOURCE_ROOT; on the direct path it is
     // the random stage dir, so replace it with the stable token and the
@@ -715,12 +805,12 @@ async function renderToValidatedModel(
         phase: "spawn",
         reason: "io_error",
         detail: sanitizeForLog(
-          `canonicalize failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 512),
+          `canonicalize failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, STDERR_KEEP),
         ),
         detailClass: "other",
       };
     }
-    return { ok: true, durationMs: run.durationMs, json };
+    return { ok: true, durationMs, json };
   } catch (err) {
     return {
       ok: false,
@@ -740,14 +830,15 @@ function runLikeC4(
   cmd: string,
   args: string[],
   cwd: string,
-  home: string,
+  stageDir: string,
   sandbox: boolean,
-  cleanup: { keep: boolean },
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
     const start = Date.now();
     let settled = false;
     let timedOut = false;
+    let overflow = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
     const settle = (r: SpawnResult) => {
       if (settled) return;
@@ -756,18 +847,6 @@ function runLikeC4(
       clearTimeout(graceTimer);
       resolve(r);
     };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-      // Settle on `close`, which fires only once every process holding the
-      // stderr pipe (every sandbox process) is gone, so the stage is never
-      // removed while one can still write into it. If it never comes, keep the
-      // stage for the stale sweep.
-      graceTimer = setTimeout(() => {
-        cleanup.keep = true;
-        settle({ ok: false, reason: "sandbox_error", detail: "sandbox did not exit", detailClass: "sandbox-no-exit" });
-      }, KILL_GRACE_MS);
-    }, RENDER_TIMEOUT_MS);
 
     // bwrap's (or, on the direct path, likec4's) OWN environment is the same
     // scoped allow-list as pdf-linearize.ts; no secrets reach it. HOME is the
@@ -779,17 +858,55 @@ function runLikeC4(
           .map((k) => [k, process.env[k]] as const)
           .filter(([, v]) => v !== undefined),
       ),
-      HOME: home,
+      HOME: stageDir,
     } as unknown as NodeJS.ProcessEnv;
 
     // Fixed argv (the only variable parts are the private stage paths and the
-    // resolved binaries). No user input in argv.
-    const child = spawn(cmd, args, {
-      cwd,
-      env,
-      stdio: sandbox ? ["ignore", "ignore", "pipe", "pipe"] : ["ignore", "ignore", "pipe"],
-    });
+    // resolved binaries). No user input in argv. stdio index STATUS_FD (3) is
+    // bwrap's --json-status-fd pipe; stdout carries the model on the sandboxed
+    // path.
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(cmd, args, {
+        cwd,
+        env,
+        stdio: sandbox ? ["ignore", "pipe", "pipe", "pipe"] : ["ignore", "ignore", "pipe"],
+      });
+    } catch (err) {
+      // A synchronous spawn failure (e.g. ENOMEM): nothing was started.
+      settle({ ok: false, reason: sandbox ? "sandbox_error" : "spawn_error", detail: sanitizeForLog(String(err)), detailClass: "launcher-enoent" });
+      return;
+    }
 
+    // Armed only once a child exists, so a timer can never fire on a spawn
+    // that threw.
+    timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+      // Settle on `close`, which fires only once every process holding the
+      // stdio pipes (every sandbox process) is gone. If it never comes, keep
+      // the stage and the slot until it does (keptStages).
+      graceTimer = setTimeout(() => {
+        keptStages().set(stageDir, []);
+        settle({ ok: false, reason: "sandbox_error", detail: "sandbox did not exit", detailClass: "sandbox-no-exit" });
+      }, KILL_GRACE_MS);
+    }, RENDER_TIMEOUT_MS);
+
+    // stdout is untrusted: count bytes as they arrive and kill the sandbox
+    // the moment it exceeds what the host would ever accept.
+    const outChunks: Buffer[] = [];
+    let outBytes = 0;
+    child.stdout?.on("data", (c: Buffer) => {
+      if (overflow) return;
+      outBytes += c.length;
+      if (outBytes > RAW_MODEL_READ_CAP) {
+        overflow = true;
+        outChunks.length = 0;
+        child.kill("SIGKILL");
+        return;
+      }
+      outChunks.push(c);
+    });
     const stderrChunks: Buffer[] = [];
     let stderrBytes = 0;
     child.stderr?.on("data", (c: Buffer) => {
@@ -799,8 +916,7 @@ function runLikeC4(
     });
     // `{ "exit-code": N }` is written by bwrap only after the child it set up
     // has run. Its absence on a non-zero exit means the sandbox itself failed —
-    // a signal the child cannot forge (it has no access to this fd), unlike a
-    // `bwrap:` line on stderr.
+    // a signal the child cannot forge (bwrap closes this fd in the child).
     let status = "";
     (child.stdio?.[STATUS_FD] as Readable | null | undefined)?.on("data", (c: Buffer) => {
       if (status.length < 4096) status += c.toString("utf8");
@@ -812,24 +928,36 @@ function runLikeC4(
               ok: false,
               reason: "sandbox_error",
               detail: sanitizeForLog(err.message),
-              detailClass: err.code === "ENOENT" ? "bwrap-enoent" : "other",
+              detailClass: err.code === "ENOENT" ? "launcher-enoent" : "other",
             }
-          : { ok: false, reason: "spawn_error", detail: err.message, detailClass: "other" },
+          : { ok: false, reason: "spawn_error", detail: sanitizeForLog(err.message), detailClass: "launcher-enoent" },
       ),
     );
     child.on("close", (code: number | null, signal: string | null) => {
+      // A sandbox that outlived its grace period has now exited: run what was
+      // deferred (the slot release, the stage removal).
+      const deferred = keptStages().get(stageDir);
+      if (deferred && settled) {
+        keptStages().delete(stageDir);
+        for (const fn of deferred) fn();
+        return;
+      }
       // Capture stderr on EVERY exit — likec4 prints `Could not resolve …`
       // validation errors to stderr even when it exits 0, and the caller folds
       // them into the `empty_model` diagnostic.
       const stderr = sanitizeForLog(
-        Buffer.concat(stderrChunks).toString("utf8").slice(0, 512),
+        Buffer.concat(stderrChunks).toString("utf8").slice(0, STDERR_KEEP),
       );
       if (timedOut) {
-        settle({ ok: false, reason: "timeout", detail: `exceeded ${RENDER_TIMEOUT_MS}ms`, detailClass: "other" });
+        settle({ ok: false, reason: "timeout", detail: `exceeded ${RENDER_TIMEOUT_MS}ms`, detailClass: "spawn-timeout" });
+        return;
+      }
+      if (overflow) {
+        settle({ ok: false, reason: "io_error", detail: "model output rejected: exceeds cap", detailClass: "output-rejected" });
         return;
       }
       if (code === 0) {
-        settle({ ok: true, durationMs: Date.now() - start, stderr });
+        settle({ ok: true, durationMs: Date.now() - start, stderr, stdout: Buffer.concat(outChunks) });
         return;
       }
       const exitPart = code === null ? `signal=${signal}` : `exit=${code}`;
@@ -841,7 +969,8 @@ function runLikeC4(
         ok: false,
         reason: "non_zero_exit",
         detail: `${exitPart} stderr=${stderr}`,
-        detailClass: "likec4-exit",
+        // Killed by a signal we did not send (e.g. the OOM killer).
+        detailClass: code === null ? "killed" : "likec4-exit",
       });
     });
   });
@@ -901,11 +1030,9 @@ export async function verifyC4RenderSandboxOnce(): Promise<void> {
       reportSilentFallback(null, {
         feature: "c4-rerender",
         op: "sandbox-selfprobe",
-        message: `c4 render sandbox self-probe failed: ${res.reason}`,
-        tags: {
-          reason: res.reason,
-          detail_class: res.reason === "unsafe_source" ? "other" : (res.detailClass ?? "other"),
-        },
+        // Class in the message: Sentry groups captureMessage by its text.
+        message: `c4 render sandbox self-probe failed: ${res.reason}/${probeClass(res)}`,
+        tags: { reason: res.reason, detail_class: probeClass(res) },
         extra: { detail: res.detail },
       });
     }
@@ -920,12 +1047,18 @@ export async function verifyC4RenderSandboxOnce(): Promise<void> {
   await reportInheritableFds();
 }
 
+function probeClass(res: RenderFailure): DetailClass {
+  return res.reason === "unsafe_source" ? "other" : (res.detailClass ?? "other");
+}
+
 const O_CLOEXEC_BIT = 0o2000000;
 
-/** Any file/dir fd >= 3 the server holds WITHOUT close-on-exec would be
- *  inherited by a spawned child. Reports the count only, never paths. */
+/** Any fd >= 3 the server holds WITHOUT close-on-exec would be inherited by a
+ *  spawned child. The render's launch chain closes them before bwrap, but
+ *  other spawners (the Agent SDK's bwrap) do not, so this stays as telemetry.
+ *  Reports counts by kind only, never paths. */
 async function reportInheritableFds(): Promise<void> {
-  let count = 0;
+  const kinds = { path: 0, other: 0 };
   try {
     for (const name of await readdir("/proc/self/fdinfo")) {
       const fd = Number(name);
@@ -944,17 +1077,19 @@ async function reportInheritableFds(): Promise<void> {
       } catch {
         target = null; // pipe/socket/anon inode, or already closed
       }
-      if (target?.startsWith("/")) count++;
+      if (target?.startsWith("/")) kinds.path++;
+      else kinds.other++;
     }
   } catch {
     return; // no /proc (not Linux): nothing to report
   }
+  const count = kinds.path + kinds.other;
   if (count > 0) {
     warnSilentFallback(null, {
       feature: "c4-rerender",
       op: "sandbox-selfprobe-fds",
       message: "c4 render sandbox self-probe: server holds inheritable file descriptors",
-      extra: { count, kinds: ["file-or-dir"] },
+      extra: { count, kinds },
     });
   }
 }
