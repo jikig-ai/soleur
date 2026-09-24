@@ -620,8 +620,10 @@ Write the Guard Contract rows below as failing assertions **before** touching a 
   applied).
 - 6.3 PR body: the first line answers "does merging this alone mutate production?" (one Sentry
   rule updated in place, the normal release deploy to web-1, a comment-only `ci-deploy.sh`
-  re-delivery; no host replaced). Then `Ref #8036`, `Ref #6122`, `Ref #6410` (not `Closes`: #6410
-  closes as not-planned after merge, and a `Closes` would record it as completed).
+  re-delivery; no host replaced). Then `Ref #8036` and `Ref #6122` (both enrolled follow-through
+  trackers). #6410 is named without a keyword: not `Closes`, because it closes as not-planned after
+  merge and a `Closes` would record it as completed; and not `Ref`, because the soak follow-through
+  gate requires every `Ref`'d open issue to be enrolled, and #6410 is not a soak tracker.
 
 #### Phase 7 — Delivery and verification (post-merge; orchestrator; operator-authorized on #6122)
 
