@@ -231,13 +231,17 @@ ran_count() { awk -F'\t' '$1=="RAN"' <<<"$ARM_RECORD" | wc -l | tr -d ' '; }
 # the REAL runner for row d's real-corpus receipt count, the trimmed SANDBOX
 # copy for the arms (whose "everything" is the keep-list stream). Memoized per
 # path: every sandbox build carries the same trim, so the count is stable.
+# $2 (optional) = the arm's SANDBOX_DIFF_NAMES. An `==` assert MUST pass it:
+# without it the enumerate reads the REAL branch diff, so a branch touching
+# apps/web-platform/infra/ counts the infra runner the arm's forced diff skips.
 RUNNABLE_N="" RUNNABLE_N_FOR=""
 runnable_n() {
-  if [[ "$RUNNABLE_N_FOR" != "$1" ]]; then
+  if [[ "$RUNNABLE_N_FOR" != "$1|${2+x}${2-}" ]]; then
     RUNNABLE_N=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
-      SOLEUR_DISABLE_SESSION_STATE=1 bash "$1" --enumerate-commands 2>/dev/null \
+      SOLEUR_DISABLE_SESSION_STATE=1 ${2+"SANDBOX_DIFF_NAMES=$2"} \
+      bash "$1" --enumerate-commands 2>/dev/null \
       | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')
-    RUNNABLE_N_FOR="$1"
+    RUNNABLE_N_FOR="$1|${2+x}${2-}"
   fi
   printf '%s\n' "$RUNNABLE_N"
 }
@@ -622,17 +626,18 @@ s = s.replace(old,
 open(p, 'w').write(s)
 PY
 rc=0
+_t_diff=.github/workflows/apply-sentry-infra.yml
 ( cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
     SANDBOX_RECORD="$TESTROOT/rec-$cases" \
-    'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+    "SANDBOX_DIFF_NAMES=$_t_diff" \
     bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || rc=$?
 ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
 _ran=$(ran_count)
 if grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
-  && (( _ran == $(runnable_n "$_sbn") )); then
+  && (( _ran == $(runnable_n "$_sbn" "$_t_diff") )); then
   pass "t: ordinal divergence drops the selection map; every suite runs (ran=${_ran})"
 else
-  fail "t: divergent map ran=${_ran} runnable=$(runnable_n "$_sbn") divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
+  fail "t: divergent map ran=${_ran} runnable=$(runnable_n "$_sbn" "$_t_diff") divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
 fi
 
 # --- Row u: self-only derivation demotes to unclassified and RUNS -----------------
