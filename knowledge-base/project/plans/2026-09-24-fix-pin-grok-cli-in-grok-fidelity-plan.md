@@ -541,3 +541,38 @@ cardinalities change, and `plugins/soleur/test/c4-count-parity.test.sh` must sta
 - Issue #8615; tracker #8574; ADR-245 decision 3; `harness-discovery` job in `.github/workflows/ci.yml`.
 - Vendor installer: `https://x.ai/cli/install.sh` (header documents `bash -s <version>`); artifacts
   `https://x.ai/cli/grok-<ver>-<os>-<arch>`; stable pointer `https://x.ai/cli/stable`.
+
+## Review Addendum — 2026-09-24 (PR #8756)
+
+Five seats (security-sentinel, a structural-enumeration seat, code-quality, git-history,
+code-simplicity), no P1. Corrections to claims above, which are kept as written:
+
+- **Guard 1 Property was narrower in the code than in the prose.** The install step proved the
+  bytes at `$HOME/.grok/bin/grok`; the gate and its bun tests resolve `grok` BY NAME, and nothing
+  asserted the two were the same file, so the Observability row "PATH shadowing → version-mismatch"
+  held only for shadowing inside the install step. Fixed: the gate step now refuses with
+  `resolved-elsewhere:<path>` unless `command -v grok` is the pinned file, and the post-gate step
+  re-checks resolution, digest and `grok --version` (`version-changed-during-gate`). Residual,
+  stated rather than closed: a bun test that mutates `process.env.PATH` in-process, or an updater
+  that executes a newer binary from another path without touching `bin/grok`, is still outside the
+  guard; no test or code path does either today.
+- **§Anchor overstated the review control.** No ruleset requires code-owner review for `ci.yml`
+  (the only `require_code_owner_review` rule in `infra/github/` is `false`), and pin bumps are
+  usually authored by the sole code owner. Review is advisory; the content pin proves integrity
+  against one first-hand measurement, nothing more.
+- **Single source was an accepted risk the durable record did not carry.** Added the installer's own
+  GCS fallback base inside the digest loop (same etag as x.ai, measured), `--max-time 90` so two
+  sources stay inside the 15-minute budget, and an accepted-risk line in the ADR-245 amendment.
+- **"Conforms" was broader than true.** grok-fidelity meets decision 3's pin bullet only; the
+  ADR amendment and README now say so.
+- **`raw` echoed multi-line into `::error::`.** CR/LF are now stripped before the annotation; a
+  harness row proves a multi-line `--version` cannot start a workflow command, and reds without
+  the strip.
+- **Rejected:** removing the pin-shape check (simplicity). It is what makes the `invalid-pin`
+  annotation and the URL interpolation safe by construction (security seat verified the anchoring),
+  and it costs two lines.
+
+Harness at review: 17/17 rows on the real run (adds rows 9-14: decoy `grok` earlier on the gate
+step's PATH, the same after the gate, post-gate version drift, primary-source 404 served by the
+fallback, and the multi-line annotation); body-replaced-by-`true` fails 7/7; the version test
+replaced by `true` fails rows 3 and 4.

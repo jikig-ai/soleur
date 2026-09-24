@@ -61,7 +61,7 @@ CLIs, pinned exactly and asserted at install time (ADR-245):
 |---|---|---|---|
 | Codex | `0.156.1` | `npm i -g @openai/codex@<pin>` | npm resolves the version to immutable published bytes |
 | Devin | `3000.11.1` | `https://static.devin.ai/cli/<pin>/setup.sh` — the top-level `install.sh` leaves `PINNED_VERSION` empty and installs latest | A version in a URL is a NAME the vendor can re-serve, so the job also pins the fetched script by `sha256sum -c` and refuses to execute a changed one |
-| Grok | `1.0.41` | `https://x.ai/cli/grok-<pin>-linux-x86_64` | xAI publishes no versioned installer and no checksum, so the job content-pins the binary itself by `sha256sum -c` and never runs `install.sh` |
+| Grok | `1.0.41` | `https://x.ai/cli/grok-<pin>-linux-x86_64` | xAI publishes no versioned installer URL and no checksum, so the job content-pins the binary itself by `sha256sum -c` (either source) and never runs `install.sh` |
 
 Every arm then asserts the installed binary reports the pin, exiting 3 on drift.
 
@@ -72,11 +72,9 @@ script's version check into a no-op.
 A pin is stale the day the vendor ships. **#8574 owns the freshness criterion**: a
 monthly comparison against `npm view @openai/codex version`, Devin's current
 release and `curl -fsSL https://x.ai/cli/stable`, before `harness-discovery` is
-promoted to a required check. A Grok bump moves `GROK_PIN` and `GROK_SHA256` together. The drift is not
+promoted to a required check (the Grok comparison outlives that promotion). The drift is not
 hypothetical — this work was planned against Codex 0.155.1 and npm was at 0.156.1
 one day later.
 
-`grok-fidelity`, unlike `harness-discovery`, is a **required** check. It conforms
-since #8615: before that it piped an unversioned installer into `bash` and asserted
-nothing about the resulting version. It also sets `GROK_DISABLE_AUTOUPDATER=1` and
-re-checks the binary's digest after the gate, so a self-update reds the job.
+`grok-fidelity`, unlike `harness-discovery`, is a **required** check; since #8615 it
+conforms to the pinning rule only (ADR-245 decision 3, amendment).

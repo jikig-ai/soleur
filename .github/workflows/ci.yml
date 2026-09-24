@@ -1370,26 +1370,29 @@ jobs:
 
       - name: Install Grok CLI (exact pin + sha256 content pin)
         run: |
-          # Default shell is `bash -e`; `set -uo pipefail` adds -u/pipefail, it does not clear -e.
           set -uo pipefail
           # The pin is interpolated into a URL path: accept only X.Y.Z.
           [[ "$GROK_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-            || { echo "::error::grok-fidelity[grok] invalid-pin:${GROK_PIN}"; exit 3; }
+            || { printf '::error::grok-fidelity[grok] invalid-pin:%q\n' "$GROK_PIN"; exit 3; }
           tmp="$RUNNER_TEMP/grok-${GROK_PIN}"
-          curl -fsSL --proto '=https' --proto-redir '=https' \
-            --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 120 \
-            "https://x.ai/cli/grok-${GROK_PIN}-linux-x86_64" -o "$tmp" \
-            || { echo "::error::grok-fidelity[grok] download-failed pin=${GROK_PIN}"; exit 3; }
-          echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null || {
-            echo "::error::grok-fidelity[grok] binary-digest-mismatch — refusing to execute; got $(sha256sum "$tmp" | cut -d' ' -f1)"
-            exit 3
-          }
+          # x.ai, then the vendor installer's own fallback base. The digest check makes
+          # either source safe; a pruned or unreachable artifact reds this required check.
+          reason=download-failed
+          for base in https://x.ai/cli https://storage.googleapis.com/grok-build-public-artifacts/cli; do
+            curl -fsSL --proto '=https' --proto-redir '=https' \
+              --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 90 \
+              "${base}/grok-${GROK_PIN}-linux-x86_64" -o "$tmp" || continue
+            if echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null; then reason=; break; fi
+            reason="binary-digest-mismatch got=$(sha256sum "$tmp" | cut -d' ' -f1)"
+          done
+          [ -z "$reason" ] || { echo "::error::grok-fidelity[grok] ${reason} pin=${GROK_PIN} (refusing to execute)"; exit 3; }
           install -D -m 0755 "$tmp" "$HOME/.grok/bin/grok"
           echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.grok/bin:$PATH"
           # NOT got="$(grok --version | grep …)": under bash -e that kills the step at the
           # assignment on a semver-less banner (see harness-discovery's Codex step).
           raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          raw="${raw//[$'\r\n']/ }"
           got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
           [ "$got" = "$GROK_PIN" ] || {
             echo "::error::grok-fidelity[grok] version-mismatch:${got:-<unparsed>}!=${GROK_PIN} raw=${raw:0:200}"
@@ -1397,15 +1400,29 @@ jobs:
           }
           echo "grok-fidelity[grok] pinned ${GROK_PIN} (sha256 ok)"
 
+      # The gate and its bun tests resolve `grok` BY NAME, so the checks around it assert
+      # that name is the pinned file, not only that the file is intact.
       - name: Grok fidelity gate (inspect contract + golden-path eval)
-        run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
+        run: |
+          at="$(command -v grok || true)"
+          [ "$at" = "$HOME/.grok/bin/grok" ] \
+            || { echo "::error::grok-fidelity[grok] resolved-elsewhere:${at:-<none>}"; exit 3; }
+          bash plugins/soleur/scripts/grok-fidelity-gate.sh
 
       - name: Pinned Grok binary unchanged by the gate
         run: |
+          set -uo pipefail
+          at="$(command -v grok || true)"
+          [ "$at" = "$HOME/.grok/bin/grok" ] \
+            || { echo "::error::grok-fidelity[grok] resolved-elsewhere-after-gate:${at:-<none>}"; exit 3; }
           echo "${GROK_SHA256}  ${HOME}/.grok/bin/grok" | sha256sum -c - >/dev/null || {
             echo "::error::grok-fidelity[grok] binary-changed-during-gate (auto-update?) got $(sha256sum "$HOME/.grok/bin/grok" | cut -d' ' -f1)"
             exit 3
           }
+          raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          got="$(printf '%s' "${raw//[$'\r\n']/ }" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$GROK_PIN" ] \
+            || { echo "::error::grok-fidelity[grok] version-changed-during-gate:${got:-<unparsed>}!=${GROK_PIN}"; exit 3; }
 
   # Rationale lives in ADR-245, not here (ADR-231: workflow files are byte-budgeted).
   # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
