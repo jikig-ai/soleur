@@ -1682,7 +1682,8 @@ jobs:
       # main-push runs; on the five 2026-09-24 cancels it measured 33-80 s — inside that
       # range, so this step showed no slowdown itself. The bound covers the class, not a
       # demonstrated offender: its docker-run site carries no internal bound, and a stall
-      # there would otherwise cancel the job anonymously. 5 minutes is ~3x the green max.
+      # there would otherwise cancel the job anonymously. 5 minutes is ~3x the green max —
+      # a pathological runner could flake it; that is the intended direction.
       - name: Run git-data ownership tests (authorization map + hook dir, Guard 3)
         timeout-minutes: 5
         run: bash apps/web-platform/infra/git-data-ownership.test.sh
@@ -1713,7 +1714,8 @@ jobs:
       # docker FAILS. The root token's reference census runs on every PR from scripts/test-all.sh
       # (tests/scripts/test-git-data-root-token-census.sh), not here.
       #
-      # #8688: step ceiling per the job's attribution convention. Green range 70-77 s over the
+      # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
+      # cloud-init-plugin-seed at 1). Green range 70-77 s over the
       # last 10 successful main-push runs; 78-206 s on the five 2026-09-24 cancels. The suite's
       # `docker run` carries an internal `timeout -k 10 480` bound, but its host-side legs —
       # `docker info`, `docker rm -f`, the fixture build — sit outside it; on this observed
