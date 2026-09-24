@@ -22,3 +22,20 @@
 - `gh issue view 8761` / `gh issue view 8621`, `gh issue list --label code-review`
 - Skills (manual execution): `soleur:plan`, `soleur:deepen-plan` from the cached plugin
 - Repo tools: `git worktree add/remove` repro harness (15 arms), `bash -x` tracing, markdownlint, `scripts/lint-guard-contract.py`, `git commit` (lefthook green)
+
+## Work Phase (post-compaction)
+- Status: implemented, committed `0a0e53a1aa` (`fix(test-all): deleted-worktree fail-fast + enumerate watchdog (#8761)`).
+- Files: `scripts/test-all.sh`, `scripts/test-all-affected.test.sh`, `tasks.md`.
+
+### Deviations from plan (each verified, not assumed)
+- Up-front guard dropped the `git rev-parse --show-toplevel` clause: `test-all-group-affected` arms B3/B6 run `TEST_GROUP=affected` from a NON-git dir under an established "undeterminable diff fails open" contract — rev-parse there refused a legitimate degraded run. `[[ ! -d "$PWD" ]]` alone is the deleted-cwd discriminator.
+- Default deadline raised 300 -> 900: a healthy `--print-affected-set` on this box measured >300s under load 16 (deadline is a safety ceiling, not a perf assertion; still caps the 4.5h incident class ~20x under).
+- Watchdog subshell restructured to `sleep & wait` + TERM-trap: a bare `( sleep D; kill … ) &` leaks the sleep on disarm, and the orphan inherits the runner's stdout — a `$( )`/pipe consumer then blocks for the rest of the deadline (reproduced live: `--affected` pre-pass child blocked 14min in anon_pipe_read). This is the incident's own shape; arm z5 pins the fix.
+- Test helper `_wait_bound` must run in the main shell: inside `$( )` the jobs-table copy never learns the child's exit, so `wait` blocks until the bound fires — both y1/z1 falsely read 124 until fixed.
+
+### Verification
+- `test-all-affected.test.sh`: 39/39 (7 new arms y1-y3, z1-z5 + all existing).
+- Siblings: enumerate-toolchain 37/37, group-affected 50/50, killed-classification 77/77, capacity-signal 80/80, runtime-ceiling 23/23, infra-coverage-notice 131/131, webplat-gate 16/16.
+- `lint-orphan-test-suites.sh`: rc=0, 543 covered / 0 orphaned; its `aff_set_rc` arm already surfaces print failures (AC6).
+- Standalone repros: deleted cwd -> rc=4 in 13ms; `SOLEUR_ENUM_DEADLINE_S=3` -> SIGTERM at 3.3s with deadline error; disarm leaves no orphan holding the consumer pipe.
+- y1 RED-side observed the incident shape on pre-fix code (run outlived 45s bound after mid-walk deletion).
