@@ -1,6 +1,6 @@
 ---
 title: "Art. 5(2) destruction record — web-1 root-disk snapshot images (inngest-cutover-pre-*)"
-status: pending
+status: partial
 date: 2026-09-23
 related: [8532, 6178, 8617, 8620]
 related_adrs: [ADR-100, ADR-140]
@@ -96,9 +96,9 @@ snapshots, all from server 123931471. `type=backup` returned 0. Cite that addend
 
 | Image id | Authorised by (operator, per command) | Command (verbatim, as authorised) | Executed at (UTC) | API verification of absence |
 |---|---|---|---|---|
-| `398857857` | | | | |
-| `406654994` | | | | |
-| `407991378` | | | | |
+| `398857857` | Operator message in the #8532 session, 2026-09-24, verbatim: "go 1 2 3" (per-command go-ahead for the three commands shown to them; determination: ADR-100 2026-09-23 addendum, read at commit `348810a96c`) | `doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN -- hc-image-delete.sh 398857857` (the script re-reads the image's identity, then sends `DELETE /v1/images/398857857` with `Authorization: Bearer $HCLOUD_TOKEN`) | 2026-09-24T07:23:49Z (HTTP 204) | `GET /v1/images/398857857` after the delete: HTTP 404, `not_found` |
+| `406654994` | Operator message in the #8532 session, 2026-09-24, verbatim: "go 1 2 3" (per-command go-ahead for the three commands shown to them; determination: ADR-100 2026-09-23 addendum, read at commit `348810a96c`) | `doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN -- hc-image-delete.sh 406654994` (the script re-reads the image's identity, then sends `DELETE /v1/images/406654994` with `Authorization: Bearer $HCLOUD_TOKEN`) | 2026-09-24T07:23:55Z (HTTP 204) | `GET /v1/images/406654994` after the delete: HTTP 404, `not_found` |
+| `407991378` | Operator message in the #8532 session, 2026-09-24, verbatim: "go 1 2 3" (per-command go-ahead for the three commands shown to them; determination: ADR-100 2026-09-23 addendum, read at commit `348810a96c`) | `doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN -- hc-image-delete.sh 407991378` (the script re-reads the image's identity, then sends `DELETE /v1/images/407991378` with `Authorization: Bearer $HCLOUD_TOKEN`) | 2026-09-24T07:24:01Z (HTTP 204) | `GET /v1/images/407991378` after the delete: HTTP 404, `not_found` |
 | `411798619` | | | | |
 
 Rules for filling a row:
@@ -151,9 +151,9 @@ and why the three older images are not held as its substitutes.
 
 ## Completion checklist
 
-- [ ] Each executed row has all four blank fields filled with measured values, not estimates.
-- [ ] Each executed row's absence was verified by a read-only API call after the delete.
-- [ ] `status:` in the frontmatter reads `partial` or `complete` according to the status rule above.
+- [x] Each executed row has all four blank fields filled with measured values, not estimates.
+- [x] Each executed row's absence was verified by a read-only API call after the delete.
+- [x] `status:` in the frontmatter reads `partial` or `complete` according to the status rule above.
 - [ ] Register PA-8 (f) receives a dated marker recording each deletion, and the ledger row
       `hetzner.web1_inngest_cutover_snapshots` is amended or retired in the same PR once no image remains.
 - [ ] If 2026-10-06 passes with any image still present and no amendment dated before it, that is
