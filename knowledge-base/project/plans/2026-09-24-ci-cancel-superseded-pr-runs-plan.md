@@ -668,34 +668,34 @@ checks (AC11), never by admin override.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `.github/workflows/cancel-superseded-pr-runs.yml` exists with exactly the triggers
+- [x] AC1: `.github/workflows/cancel-superseded-pr-runs.yml` exists with exactly the triggers
   `pull_request: types: [synchronize, reopened]`, and top-level `permissions:` of exactly
   `{actions: write, contents: read, pull-requests: read}`. Checked with
   `python3 -c 'import yaml,sys; d=yaml.safe_load(open(".github/workflows/cancel-superseded-pr-runs.yml")); print(d[True], d["permissions"])'`
   (PyYAML parses the `on:` key as `True`).
-- [ ] AC2: the job `if:` contains all four clauses: same-repo head, `github.actor != 'dependabot[bot]'`,
+- [x] AC2: the job `if:` contains all four clauses: same-repo head, `github.actor != 'dependabot[bot]'`,
   `github.triggering_actor != 'dependabot[bot]'`, and `head.ref != repository.default_branch`.
   The checkout step carries `ref: ${{ github.event.repository.default_branch }}` and
   `sparse-checkout: .github/scripts`. The run step has **no** fallback to a PR-relative script
   path: `grep -c 'github.head_ref\|pull_request.head.sha' .github/workflows/cancel-superseded-pr-runs.yml`
   counts only the `env:` line for `EVENT_HEAD_SHA`. Every `uses:` is SHA-pinned (`grep -nE 'uses: [^@]+@[0-9a-f]{40}' …` matches every `uses:`
   line).
-- [ ] AC3: no `${{ github.event.pull_request.head.ref }}` (or any `github.event.*` expression)
+- [x] AC3: no `${{ github.event.pull_request.head.ref }}` (or any `github.event.*` expression)
   appears inside a `run:` body. They appear only under `env:`.
-- [ ] AC4: `bash .github/scripts/test/test-cancel-superseded-pr-runs.sh` exits 0, with its
+- [x] AC4: `bash .github/scripts/test/test-cancel-superseded-pr-runs.sh` exits 0, with its
   assertion floor met, and `bash .github/scripts/test/run-all.sh` exits 0 with `MIN_SUITES=13`.
-- [ ] AC5: `bash plugins/soleur/test/pr-fanout-ledger.test.sh` exits 0. A1 / A3 / A4 / A4b /
+- [x] AC5: `bash plugins/soleur/test/pr-fanout-ledger.test.sh` exits 0. A1 / A3 / A4 / A4b /
   A4c / A5 pass for the new row (`cancel=yes`), and for the edited `infra-validation.yml` /
   `apply-sentry-infra.yml` rows.
-- [ ] AC6: the workflow lints are clean: `bash scripts/lint-workflows.sh`,
+- [x] AC6: the workflow lints are clean: `bash scripts/lint-workflows.sh`,
   `python3 scripts/lint-workflow-step-env-refs.py`, `python3 scripts/lint-workflow-errexit-capture.py`,
   `python3 scripts/lint-trap-tempfile-ownership.py`, and `bash scripts/lint-orphan-test-suites.sh`.
   Use the invocation forms `ci.yml` uses, verified at work time.
-- [ ] AC7: `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 (this backs "no C4 impact").
-- [ ] AC8: the ADR-216 addendum exists
+- [x] AC7: `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 (this backs "no C4 impact").
+- [x] AC8: the ADR-216 addendum exists
   (`grep -n '^### Addendum 2026-09-24' knowledge-base/engineering/architecture/decisions/ADR-216-*.md`
   returns 1 line).
-- [ ] AC9: `git diff origin/main...HEAD --name-only -- .github/workflows/` lists exactly
+- [x] AC9: `git diff origin/main...HEAD --name-only -- .github/workflows/` lists exactly
   `cancel-superseded-pr-runs.yml` and `main-health-monitor.yml`, and the latter's diff is the
   single `12 fixture suites` → `13 fixture suites` token. `git diff origin/main...HEAD --quiet -- .github/workflows/tenant-integration.yml .github/workflows/vendor-pin-verify.yml`
   exits 0 (byte-identical).
