@@ -1203,6 +1203,20 @@ jobs:
           sudo apt-get install -y -qq cryptsetup-bin
           sudo bash apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
 
+      # (#5274 Phase 3, ADR-239 amendment 2026-09-24) The git-data plaintext count reads the
+      # retained volume through a dm snapshot over a kernel-read-only origin, so a dirty ext4
+      # journal replays into a RAM COW instead of onto the volume. The suite's MECHANISM tier
+      # measures the kernel facts that design rests on (a --setro origin refuses a direct ro mount;
+      # a snapshot stacks on it and replays into the COW; the origin's sha256 is unchanged).
+      # Root-only for the same reason as the two loopback suites above (#7076). `dmsetup` is
+      # installed rather than assumed — the unit's cloud-init lists it explicitly too. Bounded: a
+      # wedged loop device or a dm table that never tears down must fail the job, not hang it.
+      - name: Run git-data plaintext snapshot loopback evidence (#5274 dirty-journal forward fix)
+        timeout-minutes: 10
+        run: |
+          sudo apt-get install -y -qq dmsetup e2fsprogs
+          sudo bash apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh
+
       # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
       # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
       # #6357 fail-fast mitigation on the registry origin was inert for weeks while every apply

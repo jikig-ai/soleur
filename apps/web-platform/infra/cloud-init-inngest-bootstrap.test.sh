@@ -78,6 +78,20 @@ PASS=0; FAIL=0; TOTAL=0
 # to forget.
 COND_ASSERTIONS=0
 
+# Refuses an empty, relative, `..`-bearing, synthetic-fs or root directory before an `rm -rf` is
+# pointed at it (Guard 4's per-scenario fixture reset). Copied byte-identically from
+# canary-bundle-claim-check.test.sh, the canonical body the fixture-dir scanners compare against.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 echo "=== cloud-init Inngest bootstrap (#4118 Tier 1) tests ==="
 echo ""
 
@@ -89,12 +103,14 @@ assert "cloud-init.yml exists" "[[ -f '$CLOUD_INIT' ]]"
 echo ""
 echo "--- AC1: pinned OCI image tag ---"
 # Shape-match only (vX.Y.Z) — the exact value is owned by the AC6 drift-guard.
-# #6122: the pin now lives in the IREF assignment (zot-primary + GHCR fallback); the
-# three consumers (pull/create/inspect) reference "$IREF".
+# #6122: the pin lives in the IREF assignment. #8036 1d: IREF is the pin CARRIER only (the bump
+# bot and AC6 read it) and is never pulled — the one pull is the zot ref "$ZIREF", and on a hit
+# IREF is re-pointed at it, so the create/inspect consumers still reference "$IREF". A code line
+# pulling "$IREF" would be the retired GHCR leg (comment lines are stripped before that check).
 assert "IREF pin for soleur-inngest-bootstrap:vX.Y.Z exists" \
   "grep -qE '^[[:space:]]+IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' '$CLOUD_INIT'"
-assert "inngest image pulled via resolved IREF" \
-  "grep -qF 'docker pull \"\$IREF\"' '$CLOUD_INIT'"
+assert "inngest image pulled from zot via \"\$ZIREF\", and no code line pulls the \$IREF pin carrier" \
+  "grep -qF 'docker pull \"\$ZIREF\"' '$CLOUD_INIT' && (( \$(grep -vE '^[[:space:]]*#' '$CLOUD_INIT' | grep -cF 'docker pull \"\$IREF\"' || true) == 0 ))"
 
 # --- AC1: Config.Env sourcing ---
 echo ""
@@ -380,7 +396,7 @@ if command -v terraform >/dev/null 2>&1; then
   # whose assertions fail with a misleading "OMITS" pass (#6425).
   render_ci() {
     local colocate="$1" out="$2" connector="${3:-true}"
-    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform", private_ip="10.0.1.10", web_probes_token="t", expected_ip="10.0.1.10", web_host_key="hk", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zp", zot_pull_token="zt" })\n' \
+    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform", private_ip="10.0.1.10", web_probes_token="t", expected_ip="10.0.1.10", web_host_key="hk", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zp", zot_pull_token="zt" })\n' \
       "$CLOUD_INIT" "$colocate" "$connector" | terraform -chdir="$RENDER_SCRATCH" console > "$out"
     # A truncated/empty render makes every `! grep` assertion pass vacuously.
     [[ -s "$out" ]] || { echo "  FATAL: render produced no output (colocate=$colocate connector=$connector)"; return 1; }
@@ -651,22 +667,27 @@ assert "the cosign correction states registry's role is RETAINING the sha256-* t
 # =========================================================================================
 # GUARD 1 (#7462) — zot-primary bootstrap pull arm on the DEDICATED inngest host
 # =========================================================================================
-# PROPERTY. The dedicated inngest host resolves its bootstrap image from zot whenever zot is
-# configured and serving that digest; every registry outcome is reported off-box; and no
-# registry outcome yields a boot worse than today's GHCR-only path.
+# PROPERTY. The dedicated inngest host resolves its bootstrap image from zot and from zot ONLY
+# (#8036 item 1d / ADR-096 5.3b-i: the GHCR read leg is gone, because the read PAT it presented
+# is revoked and no GHCR arm could succeed); every registry outcome is reported off-box; and a
+# zot miss ENDS the boot and pages as `inngest_pull_fatal` rather than falling through to a
+# second registry that does not exist.
 #
-# ASSEMBLY. The chokepoint is the single ref-resolution region that computes the effective
-# ref before `pre-oci-pull`. Every consumer of the image ref DOWNSTREAM of that point must
-# read the resolved value rather than re-derive it. The plan named three consumers (pull,
-# extract container, /etc/default record); the file carries a FOURTH — `docker inspect
-# "$IREF"`, which sources INNGEST_CLI_VERSION/SHA256 from the image env. The guard quantifies
-# over all FOUR, because a second consumer re-deriving the GHCR literal is precisely how a
-# "zot-primary" change ships while still pulling from GHCR. Enumerating the CLASS (every site
-# that consumes the ref) rather than the plan's example list is the point.
+# ASSEMBLY. The chokepoint is the single ref-resolution region: `IREF=` (the digest-pin
+# CARRIER, never pulled — the bump bot and the AC6 drift guard read it), `ZIREF=`, the one
+# `docker pull "$ZIREF"`, and `IREF="$ZIREF"` on a hit. Every consumer of the image ref
+# DOWNSTREAM of that point must read the resolved value rather than re-derive it: the extract
+# container, the /etc/default record and `docker inspect "$IREF"` (which sources
+# INNGEST_CLI_VERSION/SHA256 from the image env). A second consumer re-deriving the GHCR literal
+# is precisely how a "zot-only" change ships while still reading from GHCR.
 #
 # WHY THE COUNT AND THE SET ARE BOTH ASSERTED. `GHCR_LITERAL_COUNT == 1` is blind to a rename
-# (a consumer switched from "$IREF" to "$SOMETHING_ELSE" keeps the count at 1), so the four
+# (a consumer switched from "$IREF" to "$SOMETHING_ELSE" keeps the count at 1), so the
 # per-consumer greps assert the SET. Neither alone is sufficient.
+#
+# WHAT IS NOT HERE. Order and LIFETIME of the miss arm (fatal emit, then a non-zero exit that
+# ends the whole runcmd, with no later pull/create) are asserted by EXECUTING the rendered item
+# under stubs — Guard 4 below. A grep cannot see that an `exit` sits inside a subshell.
 #
 # ALL GREPS RUN OVER A COMMENT-STRIPPED COPY. This file's prose names `ghcr.io/jikig-ai/
 # soleur-inngest-bootstrap`, `insecure-registries` and every stage literal below, so a
@@ -722,8 +743,8 @@ L_IREF_SEED=$(zg_line '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootst
 L_ZLOGIN=$(zg_line 'docker login "\$ZOT_EP"')
 L_ZPULL=$(zg_line 'docker pull "\$ZIREF"')
 L_ZIREF=$(zg_line '^[[:space:]]*ZIREF=')
-L_PRE=$(zg_line 'inngest-boot-phone-home\.sh pre-oci-pull')
-L_IPULL=$(zg_line 'docker pull "\$IREF"')
+L_PREZOT=$(zg_line 'inngest-boot-phone-home\.sh pre-zot-pull')
+L_RECORD=$(zg_line "INNGEST_BOOTSTRAP_IMAGE=%s")
 L_DAEMON=$(zg_line 'insecure-registries')
 # Anchored on the RESTART ITSELF, not on the runcmd-item form it happened to have. The restart
 # was a bare `- systemctl restart docker` item until it was wrapped to report its own failure
@@ -734,71 +755,85 @@ L_DAEMON=$(zg_line 'insecure-registries')
 # still cannot be satisfied by a comment.
 L_DOCKER_RESTART=$(zg_line '^[[:space:]]*(- )?(if )?systemctl restart docker')
 
-assert "Row1 offsets: the GHCR seed assignment was found" "[[ -n '$L_IREF_SEED' ]]"
+assert "Row1 offsets: the IREF pin-carrier assignment was found" "[[ -n '$L_IREF_SEED' ]]"
 assert "Row1 offsets: the zot ref assignment (ZIREF=) was found" "[[ -n '$L_ZIREF' ]]"
 assert "Row1 offsets: the zot leg's docker pull was found" "[[ -n '$L_ZPULL' ]]"
-assert "Row1 offsets: the pre-oci-pull emit was found" "[[ -n '$L_PRE' ]]"
-assert "Row1 offsets: the effective docker pull \"\\\$IREF\" was found" "[[ -n '$L_IPULL' ]]"
+assert "Row1 offsets: the pre-zot-pull emit was found" "[[ -n '$L_PREZOT' ]]"
+assert "Row1 offsets: the INNGEST_BOOTSTRAP_IMAGE record was found" "[[ -n '$L_RECORD' ]]"
 
-# --- Row 1: zot is PRIMARY — the GHCR ref must not be attempted first ----------------------
-# The seed assignment must precede the zot leg (so the fallback is a single atomic
-# reassignment, never a re-derivation), the zot pull must precede `pre-oci-pull` (the plan's
-# "resolve the effective ref ONCE, before pre-oci-pull"), and the effective pull must follow
-# the resolution. Swapping the two legs inverts all three.
+# --- Row 1: zot is the ONLY pull, bracketed by pre-zot-pull and an outcome emit -------------
+# The pin carrier is assigned before the zot leg (so the hit is a single atomic reassignment,
+# never a re-derivation), `pre-zot-pull` precedes the pull it brackets (a pre-zot-pull with no
+# outcome marker = hung), and the pull precedes the record every consumer reads.
 # EVERY arithmetic comparison is guarded on BOTH operands being non-empty. bash arithmetic
 # coerces an empty string to 0, so a bare `(( L_ZPULL < L_PRE ))` with an unmatched L_ZPULL
 # evaluates `0 < 583` and reports PASS — a guard that certifies an ordering between a line
 # that exists and one that does not. Measured on this very suite's first RED run: two
 # ordering rows passed while the code they order had not been written yet.
-assert "Row1: the GHCR ref is SEEDED before the zot leg runs (atomic fallback, not a re-derivation)" \
+assert "Row1: the IREF pin carrier is assigned before the zot leg runs (atomic reassignment, not a re-derivation)" \
   "[[ -n '$L_IREF_SEED' && -n '$L_ZPULL' ]] && (( L_IREF_SEED < L_ZPULL ))"
-assert "Row1: the zot leg is attempted BEFORE pre-oci-pull (zot-primary, not GHCR-first)" \
-  "[[ -n '$L_ZPULL' && -n '$L_PRE' ]] && (( L_ZPULL < L_PRE ))"
-assert "Row1: the effective pull runs AFTER the resolution region" \
-  "[[ -n '$L_PRE' && -n '$L_IPULL' ]] && (( L_PRE < L_IPULL ))"
+assert "Row1: pre-zot-pull is emitted BEFORE the zot pull it brackets" \
+  "[[ -n '$L_PREZOT' && -n '$L_ZPULL' ]] && (( L_PREZOT < L_ZPULL ))"
+assert "Row1: the zot pull runs BEFORE the INNGEST_BOOTSTRAP_IMAGE record" \
+  "[[ -n '$L_ZPULL' && -n '$L_RECORD' ]] && (( L_ZPULL < L_RECORD ))"
 assert "Row1: the zot ref is ASSIGNED before it is pulled" \
   "[[ -n '$L_ZIREF' && -n '$L_ZPULL' ]] && (( L_ZIREF < L_ZPULL ))"
+# Exactly ONE image pull in the whole file, and it is the zot ref. The retired shape pulled a
+# second time on "$IREF" to reach the GHCR-seeded ref; any second pull is that leg coming back.
+# EVERY SPELLING OF A PULL: `docker image pull`, `docker --config D pull` and the `container`
+# form reach a registry exactly as `docker pull` does, and a counter anchored on the canonical
+# spelling alone reads a second registry reached through any of them as zero pulls.
+ZG_PULL_PFX='(^|[[:space:];|&(])docker[[:space:]]+(--config[[:space:]]+[^[:space:]]+[[:space:]]+)?(image[[:space:]]+|container[[:space:]]+)?pull[[:space:]]'
+ZG_PULL_LINES=$(grep -cE "$ZG_PULL_PFX" "$DED_CODE_FILE" || true)
+ZG_ZPULL_LINES=$(grep -cE "$ZG_PULL_PFX"'[[:space:]]*"\$ZIREF"' "$DED_CODE_FILE" || true)
+assert "Row1: exactly ONE docker pull code line, and it pulls \"\$ZIREF\" (pulls $ZG_PULL_LINES, zot $ZG_ZPULL_LINES)" \
+  "(( ZG_PULL_LINES == 1 && ZG_ZPULL_LINES == 1 ))"
 
-# --- Row 2: the digest pin governs BOTH legs ----------------------------------------------
-# `crane copy` is digest-preserving, so the SAME @sha256 resolves on both registries. A
+# --- Row 2: the digest pin governs the carrier AND the zot ref -----------------------------
+# `crane copy` is digest-preserving, so the SAME @sha256 the build signed resolves on zot. A
 # mutable-tag zot ref would hand a root-executed shell script's identity back to whoever can
-# re-point the tag — the exact control the GHCR leg's pin exists to provide.
+# re-point the tag, over plain HTTP — the pin is the only integrity control on that payload.
 ZG_GHCR_REF=$(grep -oE 'ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' "$DED_CODE_FILE" | head -1 || true)
 ZG_GHCR_DIGEST="${ZG_GHCR_REF##*@}"
 ZG_ZOT_LINE=$(grep -E '^[[:space:]]*ZIREF=' "$DED_CODE_FILE" | head -1 || true)
 ZG_ZOT_DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' <<<"$ZG_ZOT_LINE" | head -1 || true)
-assert "Row2: the GHCR leg carries a full sha256 digest pin" \
+assert "Row2: the IREF pin carrier carries a full sha256 digest pin" \
   "[[ '$ZG_GHCR_DIGEST' =~ ^sha256:[0-9a-f]{64}$ ]]"
 assert "Row2: the zot leg carries a full sha256 digest pin (no mutable-tag form)" \
   "[[ '$ZG_ZOT_DIGEST' =~ ^sha256:[0-9a-f]{64}$ ]]"
-assert "Row2: both legs pin the SAME digest (crane copy is digest-preserving)" \
+assert "Row2: the pin carrier and the zot ref pin the SAME digest (crane copy is digest-preserving)" \
   "[[ -n '$ZG_ZOT_DIGEST' && '$ZG_ZOT_DIGEST' == '$ZG_GHCR_DIGEST' ]]"
 
 # --- Row 3: every registry outcome is reported off-box ------------------------------------
 # The Better Stack half. inngest-boot-phone-home.sh's signature is `<stage> [detail]` with NO
-# severity argument, so the STAGE NAME carries the whole signal. Since #6500 the same two
-# outcomes ALSO reach Sentry through a host-local soleur-boot-emit; that half is Guard 1b below,
-# which pins the call sites per ARM rather than per file.
-assert "Row3: a zot HIT emits inngest_zot" \
-  "grep -qF 'inngest-boot-phone-home.sh inngest_zot' '$DED_CODE_FILE'"
-assert "Row3: the zot->GHCR flip emits inngest_ghcr_fallback (the fallback-rate signal)" \
-  "grep -qF 'inngest-boot-phone-home.sh inngest_ghcr_fallback' '$DED_CODE_FILE'"
+# severity argument, so the STAGE NAME carries the whole signal. The same outcomes ALSO reach
+# Sentry through a host-local soleur-boot-emit (#6500); that half is Guard 1b below, which pins
+# the call sites per ARM rather than per file. No emitted stage begins with `inngest_zot` other
+# than `inngest_zot` itself (`inngest_pull_fatal` does share the `inngest_` prefix): Better Stack
+# greps are substring matches, so an `inngest_zot…` failure stage would count a dark boot as a
+# zot-served one.
 L_ZOTHIT=$(zg_line 'inngest-boot-phone-home\.sh inngest_zot')
-L_FALLBACK=$(zg_line 'inngest-boot-phone-home\.sh inngest_ghcr_fallback')
-assert "Row3: both registry-outcome emits sit INSIDE the resolution region (after the zot pull, before pre-oci-pull)" \
-  "[[ -n '$L_ZOTHIT' && -n '$L_FALLBACK' && -n '$L_ZPULL' && -n '$L_PRE' ]] && (( L_ZPULL < L_ZOTHIT && L_ZOTHIT < L_PRE && L_ZPULL < L_FALLBACK && L_FALLBACK < L_PRE ))"
-assert "Row3: the hit and the flip are DIFFERENT emit sites (one line cannot report both outcomes)" \
-  "[[ '$L_ZOTHIT' != '$L_FALLBACK' ]]"
+L_MISS=$(zg_line 'inngest-boot-phone-home\.sh inngest_pull_fatal "zot miss')
+assert "Row3: a zot HIT phone-homes inngest_zot" "[[ -n '$L_ZOTHIT' ]]"
+assert "Row3: a zot MISS phone-homes inngest_pull_fatal (the terminal-boot signal)" "[[ -n '$L_MISS' ]]"
+assert "Row3: both outcome emits sit AFTER the zot pull and BEFORE the INNGEST_BOOTSTRAP_IMAGE record" \
+  "[[ -n '$L_ZOTHIT' && -n '$L_MISS' && -n '$L_ZPULL' && -n '$L_RECORD' ]] && (( L_ZPULL < L_ZOTHIT && L_ZOTHIT < L_RECORD && L_ZPULL < L_MISS && L_MISS < L_RECORD ))"
+assert "Row3: the hit and the miss are DIFFERENT emit sites (one line cannot report both outcomes)" \
+  "[[ -n '$L_ZOTHIT' && '$L_ZOTHIT' != '$L_MISS' ]]"
+ZG_BAD_STAGE=$(grep -oE '(inngest-boot-phone-home\.sh|soleur-boot-emit)[[:space:]]+inngest_zot[A-Za-z0-9_]+' "$DED_CODE_FILE" | wc -l || true)
+assert "Row3: no emitted stage EXTENDS inngest_zot (a substring-matched Better Stack grep would count it as served; found $ZG_BAD_STAGE)" \
+  "(( ZG_BAD_STAGE == 0 ))"
 
 # --- Row 4: one resolution, every consumer follows it -------------------------------------
 # OCCURRENCES, not lines. `grep -c` counts matching LINES, so a second literal appended to the
 # same line kept this at 1 and the whole "one resolution, every consumer follows it" property
 # was evadable by a one-line edit. Measured: two literals on one line -> grep -c returns 1.
 ZG_GHCR_LITERALS=$(grep -oE 'ghcr\.io/jikig-ai/soleur-inngest-bootstrap' "$DED_CODE_FILE" | wc -l || true)
-assert "Row4: exactly ONE GHCR literal survives comment-stripping (the IREF seed); found $ZG_GHCR_LITERALS" \
+assert "Row4: exactly ONE GHCR literal survives comment-stripping (the IREF pin carrier); found $ZG_GHCR_LITERALS" \
   "(( ZG_GHCR_LITERALS == 1 ))"
-assert "Row4: consumer 1/4 — the pull reads \$IREF" \
-  "grep -qF 'docker pull \"\$IREF\"' '$DED_CODE_FILE'"
+L_REPOINT=$(zg_line '^[[:space:]]*IREF="\$ZIREF"$')
+assert "Row4: consumer 1/4 — IREF is re-pointed at the zot ref (IREF=\"\$ZIREF\") after the pull and before the record" \
+  "[[ -n '$L_REPOINT' && -n '$L_ZPULL' && -n '$L_RECORD' ]] && (( L_ZPULL < L_REPOINT && L_REPOINT < L_RECORD ))"
 assert "Row4: consumer 2/4 — the extract container reads \$IREF" \
   "grep -qF 'docker create --name soleur-inngest-bootstrap-extract \"\$IREF\"' '$DED_CODE_FILE'"
 assert "Row4: consumer 3/4 — /etc/default/soleur-inngest-image records \$IREF" \
@@ -806,15 +841,18 @@ assert "Row4: consumer 3/4 — /etc/default/soleur-inngest-image records \$IREF"
 assert "Row4: consumer 4/4 — the Config.Env inspect reads \$IREF" \
   "grep -qF 'docker inspect \"\$IREF\"' '$DED_CODE_FILE'"
 
-# --- Row 5: a total pull failure names which legs were tried and why each failed -----------
-# #7462's whole diagnosis rode on `oci-pull-rc-1`'s incidental tail. Make that explicit.
-assert "Row5: a distinct all-legs-failed stage exists" \
-  "grep -qF 'inngest-boot-phone-home.sh oci-pull-ALL-LEGS-FAILED' '$DED_CODE_FILE'"
-ZG_ALLLEGS_LINE=$(grep -F 'inngest-boot-phone-home.sh oci-pull-ALL-LEGS-FAILED' "$DED_CODE_FILE" | head -1 || true)
-assert "Row5: the all-legs-failed detail names the zot leg" \
-  "grep -qF 'zot=' <<<\"\$ZG_ALLLEGS_LINE\""
-assert "Row5: the all-legs-failed detail names the ghcr leg" \
-  "grep -qF 'ghcr=' <<<\"\$ZG_ALLLEGS_LINE\""
+# --- Row 5 (#8036 1d): the retired GHCR leg is gone, as CODE -------------------------------
+# Residual-zero over the comment-stripped file. Each token is the retired leg's own marker: the
+# baked read credential and its file, the `docker login ghcr.io` item, the second pull's
+# bracket, and the fallback stage. Comments may still NAME them (history); code may not.
+for _rz in 'ghcr_read_' 'GHCR_READ_' 'soleur-ghcr-read' 'inngest_ghcr_fallback' 'pre-oci-pull' 'oci-pull-rc' 'oci-pull-ALL-LEGS-FAILED' 'ghcr-login-' 'ghcr-creds-EMPTY'; do
+  _n=$(grep -cF -- "$_rz" "$DED_CODE_FILE" || true)
+  assert "Row5 residual-zero: no code line carries '$_rz' (found $_n)" "(( _n == 0 ))"
+done
+# Any flag order: `docker login -u x --password-stdin ghcr.io` is the same credential presentation.
+ZG_GHCR_LOGIN=$(grep -cE 'docker([[:space:]]+[^|;&]*)?[[:space:]]login([[:space:]][^|;&]*)?[[:space:]]"?ghcr\.io' "$DED_CODE_FILE" || true)
+assert "Row5 residual-zero: no code line logs in to ghcr.io, in any flag order (found $ZG_GHCR_LOGIN)" \
+  "(( ZG_GHCR_LOGIN == 0 ))"
 
 # --- Phase 4: docker must be willing to talk to a plain-HTTP private-net registry ----------
 # Without the allowlist the zot leg cannot succeed even with correct credentials, so a
@@ -833,11 +871,13 @@ assert "Phase5: the host logs in to zot from the baked creds" "[[ -n '$L_ZLOGIN'
 assert "Phase5: the zot login precedes the zot pull" \
   "[[ -n '$L_ZLOGIN' ]] && (( L_ZLOGIN < L_ZPULL ))"
 for _zs in zot-login-ok zot-login-FAILED zot-creds-EMPTY; do
-  assert "Phase5: phone-home stage '$_zs' is emitted (mirrors the GHCR trio)" \
+  assert "Phase5: phone-home stage '$_zs' is emitted (each login outcome reports its own stage)" \
     "grep -qF 'inngest-boot-phone-home.sh $_zs' '$DED_CODE_FILE'"
 done
 
-# --- Dark-safety: an unconfigured endpoint must degrade to TODAY's path, never to a worse one
+# --- The resolution gate: a CONFIGURED endpoint runs the zot leg --------------------------
+# (#8036 1d: an UNCONFIGURED endpoint is no longer "today's path" — there is no second registry,
+# so the gate's else arm is fatal `inngest_pull_fatal`; Guard 4 executes that arm.)
 # ANCHORED TO THE GATE THAT GUARDS THE ARM, not to any occurrence of the token. `[ -n "$ZOT_EP" ]`
 # appears three times (docker daemon config, zot login, ref resolution), so the previous
 # whole-file grep was satisfied by any of them — and inverting the ONE that gates the resolution
@@ -854,7 +894,7 @@ assert "Dark-safe: that gate is a NON-EMPTY test (an inverted gate runs the arm 
   "grep -qE '\\[ -n \"\\\$ZOT_EP\" \\]' <<<\"\$ZG_ARM_GATE\""
 
 # --- The baked pull credential must be redactable ------------------------------------------
-# The pull log tail is SHIPPED off-box by `oci-pull-rc-N`. inngest-redact.sh redacts by KNOWN
+# The zot pull log tail is SHIPPED off-box by `inngest_pull_fatal`. inngest-redact.sh redacts by KNOWN
 # VALUE, so a credential absent from its value list is a credential that ships in clear on an
 # auth failure — which is exactly the failure mode that produces a log tail worth shipping.
 # SCOPED to the script body, not the file. `ZOT_PULL_TOKEN` occurs 4x in the yml (the bake
@@ -863,8 +903,10 @@ assert "Dark-safe: that gate is a NON-EMPTY test (an inverted gate runs the arm 
 ZG_REDACT_BODY="$(awk '/^  - path: \/usr\/local\/bin\/inngest-redact\.sh$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI_YML")"
 assert "the zot pull token is in inngest-redact.sh's known-value list" \
   "grep -qF 'ZOT_PULL_TOKEN' <<<\"\$ZG_REDACT_BODY\""
-assert "the zot token reaches that list via the same sourced-file shape as GHCR_READ_TOKEN" \
-  "grep -qF 'ZOT_PULL_TOKEN' <<<\"\$ZG_REDACT_BODY\" && grep -qF 'GHCR_READ_TOKEN' <<<\"\$ZG_REDACT_BODY\""
+# #8036 1d: the GHCR read file is no longer baked, so the redactor must not source it — a code
+# line naming it is the retired leg's credential path surviving in a root-run script.
+assert "the zot token reaches that list from the baked soleur-zot-read file, and no redactor CODE line still sources soleur-ghcr-read / GHCR_READ_TOKEN" \
+  "grep -qE '^[^#]*\\. /etc/default/soleur-zot-read.*ZOT_PULL_TOKEN' <<<\"\$ZG_REDACT_BODY\" && ! grep -qE '^[^#]*(soleur-ghcr-read|GHCR_READ_TOKEN)' <<<\"\$ZG_REDACT_BODY\""
 
 # --- Pin consistency on the DEDICATED file (AC6b's sibling) --------------------------------
 # AC6b asserts count==2 && distinct==1 for cloud-init.yml (web host: IREF + ZIREF). The
@@ -1004,13 +1046,17 @@ assert "GuardB anti-vacuity: the section ran its full inventory (expected 9, ran
 # ("the arm is pinned") resting on nothing. Measured. EXACT rather than `>=`: a `>=` floor with
 # slack is attack budget, and one derived from what it guards descends with it. When you add an
 # assertion here, bump this number in the same edit — that is the point, not friction.
+# 50 -> 59 (#8036 1d): Row1 +1 (the one-pull row), Row3 +1 (no stage extends inngest_zot), Row5
+# +7 (the all-legs rows became ten residual-zero rows for the retired GHCR leg).
 ZG_SECTION_ASSERTIONS=$(( TOTAL - ZG_TOTAL_BEFORE ))
-assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 50, ran $ZG_SECTION_ASSERTIONS)" \
-  "(( ZG_SECTION_ASSERTIONS == 50 ))"
+assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 59, ran $ZG_SECTION_ASSERTIONS)" \
+  "(( ZG_SECTION_ASSERTIONS == 59 ))"
 
 # --- Guard 1b (#6500): each pull-outcome ARM reports on the Sentry `stage:` schema ----------
-# zot-soak-6122.sh counts `stage:"inngest_zot"`/`"inngest_ghcr_fallback"` in Sentry and anchors
-# its #6500 corroboration on `^\s*soleur-boot-emit inngest_zot ` / `... inngest_ghcr_fallback `.
+# zot-soak-6122.sh counts `stage:"inngest_zot"`/`"inngest_pull_fatal"` in Sentry and anchors
+# its #6500 corroboration on `^\s*soleur-boot-emit inngest_zot ` / `... inngest_pull_fatal `.
+# (#8036 1d renamed the miss arm's stage from inngest_ghcr_fallback and raised it to FATAL: the
+# miss is terminal now, not a fallback.)
 # A file-level grep would accept both calls in ONE arm, so the zot `if` is split at its own
 # `if [ "$zot_rc" -eq 0 ]` / `else` / `fi` and each ARM is asserted separately. The arms are
 # comment-stripped: DED_BLOCK_FILE is extracted from the raw file, and a commented-out call must
@@ -1049,15 +1095,15 @@ G1B_FB_LINES=$(grep -c . "$ARM_FB" || true)
 # would then pass over nothing.
 assert "G1b dispatch: the served (zot) arm was extracted (>=3 code lines, found $G1B_ZOT_LINES)" \
   "(( G1B_ZOT_LINES >= 3 ))"
-assert "G1b dispatch: the missed (fallback) arm was extracted (>=3 code lines, found $G1B_FB_LINES)" \
+assert "G1b dispatch: the missed (fatal) arm was extracted (>=3 code lines, found $G1B_FB_LINES)" \
   "(( G1B_FB_LINES >= 3 ))"
 G1B_ZOT_OK=$(grep -cE '^[[:space:]]*soleur-boot-emit inngest_zot info "ep=\$ZOT_EP" \|\| true$' "$ARM_ZOT" || true)
-G1B_FB_OK=$(grep -cE '^[[:space:]]*soleur-boot-emit inngest_ghcr_fallback warning "rc=\$zot_rc" \|\| true$' "$ARM_FB" || true)
+G1B_FB_OK=$(grep -cE '^[[:space:]]*soleur-boot-emit inngest_pull_fatal fatal "rc=\$zot_rc" \|\| true$' "$ARM_FB" || true)
 G1B_ZOT_ANY=$(grep -c 'soleur-boot-emit' "$ARM_ZOT" || true)
 G1B_FB_ANY=$(grep -c 'soleur-boot-emit' "$ARM_FB" || true)
 assert "G1b: the served arm emits inngest_zot exactly once, bare name, foreground, || true (found $G1B_ZOT_OK)" \
   "(( G1B_ZOT_OK == 1 ))"
-assert "G1b: the missed arm emits inngest_ghcr_fallback exactly once, bare name, foreground, || true (found $G1B_FB_OK)" \
+assert "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once, bare name, foreground, || true (found $G1B_FB_OK)" \
   "(( G1B_FB_OK == 1 ))"
 assert "G1b: each arm carries exactly ONE soleur-boot-emit call (served $G1B_ZOT_ANY, missed $G1B_FB_ANY)" \
   "(( G1B_ZOT_ANY == 1 && G1B_FB_ANY == 1 ))"
@@ -1664,6 +1710,243 @@ else
 fi
 COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 
+# =======================================================================================
+# GUARD 4 (#8036 item 1d) — a zot miss is TERMINAL and LOUD on the dedicated inngest host
+# =======================================================================================
+# PROPERTY. A failed zot attempt is retried up to 3 attempts 5s apart, except a timeout (rc 124),
+# which is final after one; a success on any attempt is a hit, never a fatal. On any terminal
+# bootstrap-pull failure (retries exhausted, a timeout, or no endpoint baked)
+# the host emits `inngest_pull_fatal` to Better Stack (phone-home) AND to Sentry at level FATAL
+# (soleur-boot-emit) BEFORE it exits non-zero; the exit ends the WHOLE runcmd (cloud-init
+# shellify()s every item into ONE /bin/sh, so an `exit` in a subshell would let the next line
+# run); and no further pull/create/run, in any docker spelling, is attempted — there is no
+# second registry, and every attempt is of the zot ref.
+# A phone-home that fails must not cost the Sentry emit (both calls are `|| true` under set -e).
+#
+# WHY EXECUTED, NOT GREPPED. The property is about ORDER and LIFETIME. A grep sees that an emit
+# line and an `exit` line exist; it cannot see the emit placed after the exit, an exit inside a
+# subshell whose status is swallowed, or a fall-through into `docker create`. So the pull item is
+# taken from the TERRAFORM-RENDERED + STRIPPED user_data (inngest-userdata-budget.sh — the bytes
+# that reach the host), sliced from the item's first line through `docker create --name
+# soleur-inngest-bootstrap-extract`, path-rewritten into a scratch root, followed by a sentinel
+# line standing for "any later runcmd byte", and run under /bin/sh with stubbed docker/timeout/
+# soleur-boot-emit/phone-home/redact that write one call log. The pull item is the LAST runcmd
+# item, so the sentinel is the honest stand-in for the rest of the runcmd shell.
+#
+# The colocated web-host block (cloud-init.yml, gated off by web_colocate_inngest=false) is the
+# web template's own suite's concern; this section covers the dedicated host.
+_COND_BEFORE=$TOTAL
+if command -v terraform >/dev/null 2>&1; then
+  echo ""
+  echo "--- Guard 4 (#8036 1d): a zot miss is terminal and loud (executed rendered pull item) ---"
+  G4_DIR="$(mktemp -d -t g4pull-XXXXXX)"
+  G4_RENDER="$G4_DIR/rendered.yml"
+  G4_FX="$G4_DIR/fx"
+  assert_fixture_dir "$G4_DIR"
+  bash "$SCRIPT_DIR/inngest-userdata-budget.sh" "$G4_RENDER" > "$G4_DIR/budget.log" 2>&1 || true
+  # Slice + rewrite. Prints G4_ITEMS=<n> G4_SLICE_LINES=<n>; writes item.sh only on a clean slice.
+  G4_FACTS="$(python3 - "$G4_RENDER" "$G4_DIR" "$G4_FX" 2>"$G4_DIR/slice.err" <<'PY' || true
+import re, sys, yaml
+try:
+    d = yaml.safe_load(open(sys.argv[1])) or {}
+except Exception:
+    d = {}
+rc = (d.get("runcmd") or []) if isinstance(d, dict) else []
+items = [x for x in rc if isinstance(x, str)
+         and "soleur-inngest-bootstrap-extract" in x and re.search(r"^\s*IREF=", x, re.M)]
+print("G4_ITEMS=%d" % len(items))
+if len(items) != 1:
+    print("G4_SLICE_LINES=0"); sys.exit(0)
+lines = items[0].split("\n")
+end = next((i for i, l in enumerate(lines)
+            if re.match(r'^\s*docker create --name soleur-inngest-bootstrap-extract ', l)), -1)
+if end < 0:
+    print("G4_SLICE_LINES=0"); sys.exit(0)
+fx = sys.argv[3]
+body = "\n".join(lines[:end + 1]) + "\n"
+for a, b in (("/usr/local/bin/", fx + "/bin/"), ("/etc/default/", fx + "/etc/"),
+             ("/var/log/", fx + "/log/"), ("/run/", fx + "/run/")):
+    body = body.replace(a, b)
+# tee, not an append redirect: the fixture-relative scanner cannot see a heredoc inside $(...)
+# and would read a redirect in this Python string as a shell write.
+body += 'echo RUNCMD_CONTINUED | tee -a "$G4_LOG" >/dev/null\n'
+open(sys.argv[2] + "/item.sh", "w").write(body)
+print("G4_SLICE_LINES=%d" % (end + 1))
+PY
+)"
+  G4_ITEMS="$(sed -n 's/^G4_ITEMS=//p' <<<"$G4_FACTS")"; G4_ITEMS="${G4_ITEMS:-0}"
+  G4_SLICE_LINES="$(sed -n 's/^G4_SLICE_LINES=//p' <<<"$G4_FACTS")"; G4_SLICE_LINES="${G4_SLICE_LINES:-0}"
+  # The shell cloud-init uses. `dash` where present (Ubuntu's /bin/sh), else sh.
+  G4_SH="$(command -v dash || command -v sh)"
+  mkdir -p "$G4_FX/bin"
+  # G4_PULL_RC is a LIST of per-attempt exit codes ("1 0" = fail, then succeed); the Nth pull
+  # takes the Nth entry and the last entry repeats. The stub normalizes the spellings docker
+  # accepts for a pull (`--config DIR`, `image pull`), so a pull the item hides behind one of them
+  # consumes an attempt and is logged like any other — it cannot slip past the counters below.
+  cat > "$G4_FX/bin/docker" <<'STUB'
+#!/bin/sh
+printf 'docker %s\n' "$*" >> "$G4_LOG"
+[ "$1" = --config ] && shift 2
+case "$1" in image|container) shift ;; esac
+case "$1" in
+  pull)
+    n=$(cat "$G4_LOG.pulls" 2>/dev/null || echo 0); n=$((n + 1))
+    echo "$n" > "$G4_LOG.pulls"
+    i=0; r=0
+    for r in ${G4_PULL_RC:-0}; do i=$((i + 1)); [ "$i" -ge "$n" ] && break; done
+    exit "$r" ;;
+esac
+exit 0
+STUB
+  # The retry's back-off, logged instead of slept: the call log is the evidence of the spacing.
+  cat > "$G4_FX/bin/sleep" <<'STUB'
+#!/bin/sh
+printf 'sleep %s\n' "$*" >> "$G4_LOG"
+exit 0
+STUB
+  cat > "$G4_FX/bin/timeout" <<'STUB'
+#!/bin/sh
+shift
+exec "$@"
+STUB
+  cat > "$G4_FX/bin/soleur-boot-emit" <<'STUB'
+#!/bin/sh
+printf 'emit %s\n' "$*" >> "$G4_LOG"
+exit 0
+STUB
+  cat > "$G4_FX/bin/inngest-boot-phone-home.sh" <<'STUB'
+#!/bin/sh
+printf 'phone %s\n' "$*" >> "$G4_LOG"
+[ -n "${G4_PH_FAIL:-}" ] && [ "$1" = "$G4_PH_FAIL" ] && exit 3
+exit 0
+STUB
+  printf '#!/bin/sh\ncat\n' > "$G4_FX/bin/inngest-redact.sh"
+  chmod +x "$G4_FX/bin/"*
+  # g4_run <scenario> <endpoint> <pull rc list> <phone-home stage that fails, or ''>; echoes the
+  # rc. env -i: the item sources files and reads variables; nothing from this shell may leak in.
+  g4_run() {
+    local n="$1"
+    assert_fixture_dir "$G4_FX"
+    rm -rf "${G4_FX:?}/run" "${G4_FX:?}/etc" "${G4_FX:?}/log" "${G4_FX:?}/tmp"
+    mkdir -p "$G4_FX/run" "$G4_FX/etc" "$G4_FX/log" "$G4_FX/tmp"
+    : > "$G4_FX/run/soleur-inngest-doppler.ok"
+    printf 'ZOT_REGISTRY_ENDPOINT=%s\nZOT_PULL_USER=zu\nZOT_PULL_TOKEN=zt\n' "$2" > "$G4_FX/etc/soleur-zot-read"
+    : > "$G4_DIR/$n.log"
+    rm -f "$G4_DIR/$n.log.pulls"
+    ( cd "$G4_DIR" && env -i PATH="$G4_FX/bin:$PATH" HOME="$G4_DIR" TMPDIR="$G4_FX/tmp" \
+        G4_LOG="$G4_DIR/$n.log" G4_PULL_RC="$3" G4_PH_FAIL="$4" "$G4_SH" "$G4_DIR/item.sh" ) \
+      > "$G4_DIR/$n.out" 2>&1
+    echo $?
+  }
+  g4_has() { grep -qE "$2" "$G4_DIR/$1.log"; }
+  g4_count() { grep -cE "$2" "$G4_DIR/$1.log" || true; }
+  # line number of the first / last match in a scenario's call log (empty when absent)
+  g4_at() { grep -nE "$2" "$G4_DIR/$1.log" | head -1 | cut -d: -f1 || true; }
+  g4_last() { grep -nE "$2" "$G4_DIR/$1.log" | tail -1 | cut -d: -f1 || true; }
+  # EVERY SPELLING OF AN IMAGE OPERATION, not just the canonical one. `docker image pull`,
+  # `docker --config DIR pull` and `docker container create` fetch or consume an image exactly as
+  # `docker pull`/`docker create` do; a counter anchored on `^docker pull ` reads a second
+  # registry reached through any of them as zero pulls.
+  ZEP=10.0.1.30:5000
+  ZEP_RE="${ZEP//./\\.}"
+  G4_OP_RE='^docker[[:space:]]+(--config[[:space:]]+[^[:space:]]+[[:space:]]+)?(image[[:space:]]+|container[[:space:]]+)?'
+  G4_PULL_RE="${G4_OP_RE}pull[[:space:]]"
+  G4_IMGOP_RE="${G4_OP_RE}(pull|create|run)([[:space:]]|\$)"
+  G4_ZPULL_RE="${G4_OP_RE}pull[[:space:]]+$ZEP_RE/jikig-ai/soleur-inngest-bootstrap:v[0-9.]+@sha256:[0-9a-f]{64}\$"
+  # image operations (any spelling) logged AFTER the first inngest_pull_fatal line
+  g4_after_fatal() {
+    local f; f="$(g4_at "$1" 'inngest_pull_fatal')"
+    [[ -n "$f" ]] || { echo 0; return; }
+    { grep -nE "$G4_IMGOP_RE" "$G4_DIR/$1.log" || true; } | cut -d: -f1 | awk -v f="$f" '$1 > f { n++ } END { print n + 0 }'
+  }
+
+  assert "G4 dispatch: exactly ONE rendered runcmd item carries the bootstrap pull (found $G4_ITEMS)" \
+    "(( G4_ITEMS == 1 ))"
+  assert "G4 dispatch: the item was sliced through its docker create (>= 20 lines, found $G4_SLICE_LINES)" \
+    "(( G4_SLICE_LINES >= 20 )) && [[ -s '$G4_DIR/item.sh' ]]"
+
+  # --- hit (the must-PASS arm): served by zot on the first attempt, no fatal, extraction proceeds -
+  G4_HIT_RC="$(g4_run hit "$ZEP" 0 '')"
+  G4_H_PULLS="$(g4_count hit "$G4_PULL_RE")"; G4_H_ZPULLS="$(g4_count hit "$G4_ZPULL_RE")"
+  G4_H_SLEEPS="$(g4_count hit '^sleep 5$')"
+  # HARNESS LIVENESS, deliberately independent of the pull count: the docker AND phone-home stubs
+  # both logged calls. The mutation battery requires this row (and "G4 hit: exits 0") to PASS
+  # before it scores any G4 row KILLED, so it must not be a property a mutation targets.
+  assert "G4 harness: the stubs are live — the hit scenario logged docker and phone-home calls (docker $(g4_count hit '^docker '), phone $(g4_count hit '^phone '))" \
+    "(( \$(g4_count hit '^docker ') >= 1 && \$(g4_count hit '^phone ') >= 1 ))"
+  assert "G4 hit: exits 0 and the runcmd continues past the item (rc=$G4_HIT_RC)" \
+    "[[ '$G4_HIT_RC' == 0 ]] && g4_has hit '^RUNCMD_CONTINUED$'"
+  assert "G4 hit: exactly ONE image pull in ANY spelling (docker [--config D] [image] pull), it is the zot ref, and no back-off (pulls $G4_H_PULLS, zot $G4_H_ZPULLS, sleeps $G4_H_SLEEPS)" \
+    "(( G4_H_PULLS == 1 && G4_H_ZPULLS == 1 && G4_H_SLEEPS == 0 ))"
+  assert "G4 hit: emits inngest_zot info on both channels and NO inngest_pull_fatal" \
+    "g4_has hit '^phone inngest_zot ' && g4_has hit '^emit inngest_zot info ' && ! g4_has hit 'inngest_pull_fatal'"
+  assert "G4 hit: extraction proceeds on the ZOT ref (docker create + the INNGEST_BOOTSTRAP_IMAGE record both name $ZEP/...)" \
+    "g4_has hit '^docker create --name soleur-inngest-bootstrap-extract $ZEP_RE/jikig-ai/soleur-inngest-bootstrap:v[0-9.]+@sha256:[0-9a-f]{64}$' && grep -qE '^INNGEST_BOOTSTRAP_IMAGE=$ZEP_RE/' '$G4_FX/etc/soleur-inngest-image'"
+
+  # --- miss: rc=1 on every attempt -> 3 attempts 5s apart, then fatal ----------------------------
+  G4_MISS_RC="$(g4_run miss "$ZEP" 1 '')"
+  G4_M_PULLS="$(g4_count miss "$G4_PULL_RE")"; G4_M_ZPULLS="$(g4_count miss "$G4_ZPULL_RE")"
+  G4_M_SLEEPS="$(g4_count miss '^sleep 5$')"
+  G4_M_LASTPULL="$(g4_last miss "$G4_PULL_RE")"
+  G4_M_PH="$(g4_at miss '^phone inngest_pull_fatal ')"
+  G4_M_EMIT="$(g4_at miss '^emit inngest_pull_fatal fatal rc=1$')"
+  G4_M_AFTER="$(g4_after_fatal miss)"
+  assert "G4 miss: phone-home inngest_pull_fatal is sent (the Better Stack channel)" \
+    "[[ -n '$G4_M_PH' ]]"
+  assert "G4 miss: soleur-boot-emit inngest_pull_fatal fatal rc=1 is sent (the Sentry channel, level FATAL)" \
+    "[[ -n '$G4_M_EMIT' ]]"
+  assert "G4 miss: order — the LAST failed attempt, then the phone-home, then the Sentry emit (pull $G4_M_LASTPULL, phone $G4_M_PH, emit $G4_M_EMIT)" \
+    "[[ -n '$G4_M_LASTPULL' && -n '$G4_M_PH' && -n '$G4_M_EMIT' ]] && (( G4_M_LASTPULL < G4_M_PH && G4_M_PH < G4_M_EMIT ))"
+  assert "G4 miss: the item exits NON-ZERO (rc=$G4_MISS_RC)" \
+    "[[ '$G4_MISS_RC' =~ ^[0-9]+$ ]] && (( G4_MISS_RC != 0 ))"
+  assert "G4 miss: exactly 3 attempts, every one of the zot ref, with a 5s back-off between each (pulls $G4_M_PULLS, zot $G4_M_ZPULLS, sleeps $G4_M_SLEEPS)" \
+    "(( G4_M_PULLS == 3 && G4_M_ZPULLS == 3 && G4_M_SLEEPS == 2 ))"
+  assert "G4 miss: no docker pull/create/run in any spelling after the fatal (no second registry; found $G4_M_AFTER)" \
+    "(( G4_M_AFTER == 0 ))"
+  assert "G4 miss: the miss arm ends the WHOLE runcmd (nothing after the item runs, no image record written)" \
+    "! g4_has miss '^RUNCMD_CONTINUED$' && [[ ! -e '$G4_FX/etc/soleur-inngest-image' ]]"
+
+  # --- timeout: rc=124 is NOT retried (zot unreachable, not flaky) and takes the same fatal path --
+  G4_TO_RC="$(g4_run timeout "$ZEP" 124 '')"
+  G4_T_PULLS="$(g4_count timeout "$G4_PULL_RE")"; G4_T_SLEEPS="$(g4_count timeout '^sleep 5$')"
+  assert "G4 timeout: rc=124 emits inngest_pull_fatal fatal rc=124, exits non-zero and ends the runcmd (rc=$G4_TO_RC)" \
+    "g4_has timeout '^emit inngest_pull_fatal fatal rc=124$' && (( G4_TO_RC != 0 )) && ! g4_has timeout '^RUNCMD_CONTINUED$'"
+  assert "G4 timeout: rc=124 stops the retry — exactly ONE attempt and no back-off, so the stall stays one 180s window (pulls $G4_T_PULLS, sleeps $G4_T_SLEEPS)" \
+    "(( G4_T_PULLS == 1 && G4_T_SLEEPS == 0 ))"
+
+  # --- transient: attempt 1 fails, attempt 2 is served -> a HIT, never a fatal --------------------
+  G4_TR_RC="$(g4_run transient "$ZEP" '1 0' '')"
+  G4_TR_PULLS="$(g4_count transient "$G4_PULL_RE")"; G4_TR_ZPULLS="$(g4_count transient "$G4_ZPULL_RE")"
+  G4_TR_SLEEPS="$(g4_count transient '^sleep 5$')"
+  assert "G4 transient: a failed first attempt then a served second is a HIT — 2 zot attempts 5s apart, exit 0, runcmd continues (pulls $G4_TR_PULLS, zot $G4_TR_ZPULLS, sleeps $G4_TR_SLEEPS, rc=$G4_TR_RC)" \
+    "(( G4_TR_PULLS == 2 && G4_TR_ZPULLS == 2 && G4_TR_SLEEPS == 1 )) && [[ '$G4_TR_RC' == 0 ]] && g4_has transient '^RUNCMD_CONTINUED$'"
+  assert "G4 transient: emits inngest_zot on both channels, NO inngest_pull_fatal, and extracts from the zot ref" \
+    "g4_has transient '^phone inngest_zot ' && g4_has transient '^emit inngest_zot info ' && ! g4_has transient 'inngest_pull_fatal' && g4_has transient '^docker create --name soleur-inngest-bootstrap-extract $ZEP_RE/'"
+
+  # --- phone-home fails: the Sentry emit must still happen ---------------------------------------
+  G4_PH_RC="$(g4_run phfail "$ZEP" 1 inngest_pull_fatal)"
+  assert "G4 phone-home-fails: the Sentry emit inngest_pull_fatal fatal still runs when the phone-home exits non-zero" \
+    "g4_has phfail '^phone inngest_pull_fatal ' && g4_has phfail '^emit inngest_pull_fatal fatal rc=1$'"
+  assert "G4 phone-home-fails: the item still exits non-zero and the runcmd ends (rc=$G4_PH_RC)" \
+    "(( G4_PH_RC != 0 )) && ! g4_has phfail '^RUNCMD_CONTINUED$'"
+
+  # --- no endpoint baked: fatal, never a pull ----------------------------------------------------
+  G4_NE_RC="$(g4_run noep '' 0 '')"
+  G4_NE_OPS="$(g4_count noep "$G4_IMGOP_RE")"
+  assert "G4 noendpoint: phone-home + soleur-boot-emit inngest_pull_fatal fatal rc=noendpoint" \
+    "g4_has noep '^phone inngest_pull_fatal ' && g4_has noep '^emit inngest_pull_fatal fatal rc=noendpoint$'"
+  assert "G4 noendpoint: exits non-zero with NO docker pull/create/run in any spelling and the runcmd ends (rc=$G4_NE_RC, image ops $G4_NE_OPS)" \
+    "(( G4_NE_RC != 0 && G4_NE_OPS == 0 )) && ! g4_has noep '^RUNCMD_CONTINUED$'"
+
+  G4_ASSERTIONS=$(( TOTAL - _COND_BEFORE ))
+  assert "G4 anti-vacuity: the section ran its full inventory (expected 22, ran $G4_ASSERTIONS)" \
+    "(( G4_ASSERTIONS == 22 ))"
+  rm -rf "$G4_DIR"
+else
+  echo "  SKIP: terraform not installed (Guard 4 executed rows skipped — CI deploy-script-tests provides it via setup-terraform)"
+fi
+COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
+
 # ASSERTION-COUNT FLOOR (#7695). The five SECTION floors live INSIDE their sections, so deleting
 # a whole section deletes its own floor: a vacuity audit removed the entire Guard A block and this
 # suite reported `149/149 passed`, exit 0 -- and removed Guard A AND Guard D for `137/137 passed`.
@@ -1682,8 +1965,10 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # #8539: re-measured from a green run after NIC-G1 landed (134 unconditional before it, + its 4
 # raw-source asserts = 138; the rendered NIC-G1 rows are terraform-gated and counted in
 # COND_ASSERTIONS). The prior 123 had drifted 11 below the measured count.
+# #8036 1d: 144 -> 153, re-measured from a green run (Guard 1 grew 50 -> 59; the executed Guard 4
+# rows are terraform-gated and counted in COND_ASSERTIONS, like the rendered NIC-G1 rows).
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=144
+BOOTSTRAP_MIN_ASSERTIONS=153
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
@@ -1693,7 +1978,7 @@ fi
 if command -v terraform >/dev/null 2>&1; then
   BOOTSTRAP_GATED=ran
 elif [[ -n "${CI:-}" ]]; then
-  printf 'FAIL: terraform is absent under CI, so the rendered NIC-G1 inventory did not run. This job pins the toolchain (setup-terraform); its absence is a broken runner, not a skip — and "OK" here would certify 16 assertions that never executed.\n' >&2
+  printf 'FAIL: terraform is absent under CI, so the rendered NIC-G1 and executed Guard 4 inventories did not run. This job pins the toolchain (setup-terraform); its absence is a broken runner, not a skip — and "OK" here would certify 38 assertions that never executed.\n' >&2
   exit 1
 else
   BOOTSTRAP_GATED=SKIPPED-no-terraform

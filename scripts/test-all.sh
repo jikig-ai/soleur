@@ -3541,7 +3541,7 @@ if want_scripts; then
   # and a clean PASS window reports as `channel_dark`, i.e. "the host never booted".
   run_suite "scripts/inngest-zot-boot-7462" bash scripts/followthroughs/inngest-zot-boot-7462.test.sh
   # Operator authorization for enrolling soleur-inngest as a zot client (#6500). This probe closes
-  # the issue that GATES retiring GHCR push/egress, so the suite pins the two properties the #7437
+  # the issue that GATES ADR-096 5.3b-i / 5.6 (#6500, CLOSED 2026-09-24), so the suite pins the two properties the #7437
   # sibling shipped wrong: the verdict is anchored at line start (an unanchored grep authorizes on
   # a comment ASKING about the criterion), and FAIL is evaluated before PASS (checking PASS first
   # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
@@ -3683,6 +3683,10 @@ if want_scripts; then
   # unregistered — and therefore silent AND green — suite would leave that decision unproven
   # on every PR.
   run_suite "tests/scripts/git-data-rung2-evidence-capture" bash tests/scripts/test-git-data-rung2-evidence-capture.sh
+  # (#5274, Guard 3) The rung-2 plan-shape chokepoint: the payload phase and replace arm may
+  # replace only the host, never the dirtied plaintext volume or the LUKS volume. Registered
+  # here for the reason above: nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/git-data-rung2-plan-shape" bash tests/scripts/test-git-data-rung2-plan-shape.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and Guard 7 (the

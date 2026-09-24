@@ -112,8 +112,8 @@ fi
 # boot was. fence_on_mapper, erasure_probe and plaintext_empty are therefore projected: each
 # is MEASURED by the bootstrap (the fence's findmnt SOURCE, a real erasure run as `git`, the
 # read-only plaintext count), so unlike its literal siblings a `no` here is real news.
-# The informational plaintext_volume (present|absent) and served_repos (<n>) are deliberately
-# NOT projected: neither is a yes/no assertion, a non-zero served_repos is already a bootstrap
+# The informational plaintext_volume (present|absent), served_repos (<n>) and (#5274)
+# plaintext_journal (dirty|clean|absent) are deliberately NOT projected: neither is a yes/no assertion, a non-zero served_repos is already a bootstrap
 # FATAL (luks_residue), and pulling them into a whole-row word match would only add ways for
 # this arm to fire on a value that is not a refusal.
 if printf '%s' "$out" | grep -qE '\bno\b'; then
