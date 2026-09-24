@@ -21,7 +21,34 @@ that references it"), delete the probe and every live-code reference to it.
 
 Precedent: commit `6957cf654d` (PR 8273) — identical retirement shape for the
 issue-8159 postmerge-evidence probe: probe file + test file deleted, `run_suite`
-registration replaced by a two-line retired note.
+registration replaced by a two-line retired note. Verified on `origin/main` via
+`git merge-base --is-ancestor 6957cf654d origin/main`.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24
+**Sections enhanced:** Research Insights (premise validation, census, overlap),
+Files to Edit (5th site added), Acceptance Criteria (gate-own-invocation +
+positive-pair assertions), Observability (schema block added at deepen time).
+
+### Key Improvements
+
+1. Census found the touch-point the delegation brief missed:
+   `scripts/suite-shard-legs.tsv:264` — required by the phantom-label arm of
+   `scripts-shard-manifest.test.sh`; a surviving row is a guaranteed RED leg.
+2. Absence-only ACs paired with positive assertions (adjacent registrations,
+   enumerate count, sortedness + ≥100-row density floor on the manifest).
+3. Residual-zero grep widened to the unnumbered stem `ci-leg-durations` per
+   `2026-05-09-retirement-cleanup-grep-must-scan-full-class-not-named-id.md`.
+
+### New Considerations Discovered
+
+- The probe's `RETIREMENT:` header lists only 3 sites; the shard manifest and the
+  runbook bullet postdate or escaped it — future probes should enumerate every
+  reference including generated-registry rows.
+- Deepen ran inline (no Task subagent fan-out available in this harness): the
+  halt gates 4.6/4.7/4.8/4.9/4.10/4.11, the 4.45 realism passes, and the Quality
+  Checks were applied by direct grep/read against the tree.
 
 ## User-Brand Impact
 
@@ -30,7 +57,7 @@ registration replaced by a two-line retired note.
   label reddens `scripts-shard-manifest.test.sh`), visible only to maintainers.
 - **If this leaks, the user's [data / workflow / money] is exposed via:** no
   exposure vector — the change deletes a measurement script and a manifest row;
-  it touches no credential, data store, or user-data path.
+  it touches no credential, storage, or user-data path.
 - **Brand-survival threshold:** `none`
 
 ## Research Insights
@@ -170,9 +197,56 @@ or other UI-surface path — Product/UX gate does not fire.
 
 ## Observability
 
-Skipped per plan Phase 2.9 — this is a deletes-only plan (no new code or infra
-surface). The change *removes* an observability probe whose soak completed; CI's
-own shard-manifest suite is the guard that catches a botched removal.
+For a deletes-only chore the observable surface is the CI check set that detects
+a botched removal — there is no runtime service to instrument.
+
+```yaml
+liveness_signal:
+  what: "PR check status of the test-scripts* legs (scripts-shard-manifest.test.sh + scripts-shard-totality.test.sh ride that group)"
+  cadence: "per-PR / per-push to main"
+  alert_target: "required PR contexts; a botched removal reds the leg"
+  configured_in: "scripts/test-all.sh run_suite registrations + .github/workflows/ci.yml test-scripts* matrix"
+
+error_reporting:
+  destination: "GitHub Actions job log on the failing test-scripts leg"
+  fail_loud: "RED leg; e.g. 'phantom label(s) not in the registered set: scripts/ci-leg-durations-8006'"
+
+failure_modes:
+  - mode: "manifest row survives the run_suite removal (phantom label)"
+    detection: "scripts-shard-manifest.test.sh 'labels ⊆ registered set' arm"
+    alert_route: "PR check goes red — merge blocked"
+  - mode: "comment-block edit clips an adjacent registration"
+    detection: "scripts-shard-totality.test.sh union-exactness + the --enumerate residual AC"
+    alert_route: "PR check goes red — merge blocked"
+  - mode: "a live-code reference survives outside the named sites"
+    detection: "the unnumbered-stem census AC (git grep ci-leg-durations)"
+    alert_route: "AC fails at soleur:work verification"
+
+logs:
+  where: "GitHub Actions logs for the PR's test-scripts* legs"
+  retention: "GitHub default retention (90 days)"
+
+discoverability_test:
+  command: rg -c "ci-leg-durations" scripts/ .github/ plugins/ || printf 'clean\n'
+  expected_output: clean
+```
+
+## Gate Dispositions
+
+- **Guard contract (plan Phase 2.12 / deepen-plan 4.11):** not applicable — the
+  deliverable contains no guard, gate, lint, or drift-check. This plan *deletes*
+  a suite; the shard-manifest and totality suites named throughout are
+  pre-existing verifiers of the change, not deliverables of it. (A bare
+  `## Guard Contract` heading is itself a `lint-guard-contract.py` reject —
+  recorded here instead.)
+- **Encryption posture (2.11/4.10):** no persistent store, no new connection —
+  skipped.
+- **IaC routing (2.8):** no new infrastructure — skipped.
+- **GDPR (2.7):** no regulated-data surface; none of the (a)–(d) expansion
+  triggers fire — skipped.
+- **ADR/C4 (2.10):** no architectural decision — the shard topology stays; only
+  a completed measurement probe retires. A reader of ADR-238/ADR-240 is not
+  misled after this ships.
 
 ## Test Scenarios
 
@@ -196,7 +270,11 @@ own shard-manifest suite is the guard that catches a botched removal.
   topology, manifests, and heavy-leg jobs all stay.
 - The probe is a one-shot measurement: its verdict already landed (the issue
   close). Nothing consumes its output going forward; the sweeper dispatches
-  probes from tracker directives, and a closed tracker carries none.
+  probes from tracker directives, and a closed tracker carries none. The PASS
+  evidence itself is preserved in the issue-8006 comment record — deleting the
+  probe deletes the *instrument*, not the measurement it already produced
+  (contrast `2026-08-06-i-deleted-the-measurement-that-was-my-own-evidence.md`,
+  where the deleted artifact was the only copy).
 
 ## References
 
