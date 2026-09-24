@@ -853,11 +853,18 @@ or a write to the retained volume destroying the only plaintext copy.
       `ro,errors=remount-ro,nosuid,nodev,noexec` and its source is `/dev/mapper/$_pt_snap`; the dm
       table is exactly `0 $_pt_sz snapshot $_pt_dev $_pt_loop N 8`; no `blockdev --setrw` appears
       anywhere in the bootstrap.
-- [ ] AC4 The loopback suite runs in `infra-validation.yml` as `sudo bash …` and passes all seven
+- [x] AC4 The loopback suite runs in `infra-validation.yml` as `sudo bash …` and passes all seven
       arms on the CI runner, including E (corrupt dir block -> `reason=journal`) and F (torn last
       transaction matches the independent-replay oracle); arm C's precondition (`debugfs -c` does not list `ws-1.git`) held and the unit
       still reported `plaintext_residue count=1`; the origin sha256 is unchanged in every arm; no dm
       device, COW loop or `/dev/shm` directory survives any arm.
+      **Measured:** infra-validation run 36001426045 (head fcd7e888f5), deploy-script-tests step
+      "Run git-data plaintext snapshot loopback evidence": `91 passed, 0 failed`, 11 SUT arms (the
+      review grew the seven to eleven: G1-9, E2, W, L). C's debugfs precondition held and it read
+      `plaintext_residue count=1`; E read the during-count errors sentence; F counted 0 like the torn
+      oracle (intact 1). Every arm reported the backing-file sha and sector counters unchanged and no
+      leftover device. The job was then cancelled at its 27-min ceiling in a later, unrelated step
+      (#8688; main cancels at the same step).
 - [x] AC4b **G3-state parity (data-integrity review).** The production predecessor ran commit
       `f2aa5b1bee95fc7b07c4eaf625ff4cb70399bf35` (run 35979304442, `gh run view … --json headSha`),
       which is this branch's base. `git diff f2aa5b1bee95fc7b07c4eaf625ff4cb70399bf35..HEAD` over

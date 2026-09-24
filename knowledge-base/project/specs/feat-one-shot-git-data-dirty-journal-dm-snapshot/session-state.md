@@ -39,3 +39,31 @@ soleur:plan, soleur:gdpr-gate, soleur:plan-review (dhh, kieran, code-simplicity,
 - The seed pins its rendered ingest URL to git-data's own source literal and its host label by anchored ERE (credential-refusal lint); Doppler prd_terraform has no BETTERSTACK_INGEST_URL override, so the default renders.
 - run-registered-suites KNOWN_UNDERIVED gains the loopback suite (same #7076 shape as its two siblings).
 - GDPR gate at work exit: cumulative diff matches no canonical-regex path; skipped per the skill.
+
+## Review Phase
+- Panel (report-only, against 92c47ac819): git-history, simplicity, architecture, security, pattern,
+  user-impact, performance, structural-enumeration, data-integrity, code-quality, test-design, plus
+  the CLO for Art. 30 PA-36 (g). Fixes applied in one batch (b376e18129), rebased onto main,
+  canonical-helper follow-up fcd7e888f5.
+- Superseded work-phase deviation: "the teardown job carries no `environment:`". `infra-privileged`
+  has no reviewers (`infra-privileged-environment.tf`, "NO `reviewers` block"), and without it the
+  teardown loses its credentials at operator step O10. Teardown now binds it.
+- Voided work-phase assumption: arm C's CI failure was not a page-cache artefact. The fsync commits
+  the transaction and `umount` writes the directory block home, so the parked `reattach()` patch was
+  dropped; journal-only state is now built from a `cp --sparse=always` copy taken before `umount`.
+- Mechanism changes from review: sector-counter write gate (the kernel log is diagnostic only),
+  device-number pinning, errors_count compared to the historical count (liveness), a symlinked
+  `repositories` refused, leftover snapshot named, equal LUKS/plaintext ids refused in cloud-init.
+- Measured after the batch, on the rebased tree: store-verify 412/412; rehearsal 129/129 (114/15
+  against the pre-fix tree); plan-shape 36/36 (7 mutants); capture 174/174; birth gate 252/252;
+  census 82/82; device census 85/85; emit 73/73; poll 185/185; guard-vacuity-floor 23/23;
+  fixture-relative 62/62; fixture-dir-operand 71/71; run-registered-suites 74/74; userdata stored
+  24,956 B of 32,768 B.
+- Not measured locally (no root): the loopback suite (EXPECTED_ARMS=11, MIN_ASSERTIONS=91 are
+  counted from source). AC4 is CI's measurement on the pushed head.
+- Superseded plan-phase decision (append-only): "blockdev --setro stays on for the host's lifetime"
+  is false — `BLKROSET` is in-memory and per boot (lost on reboot and on detach/reattach). ADR-239's
+  amendment and the Art. 30 marker say so; the proof of no write is the sector-counter gate.
+- Archival of this spec dir and the plan is DEFERRED past G4: AC14–AC16 (post-merge, operator-gated
+  G1–G4) live in the plan, `soleur:ship` reads `decision-challenges.md` here, and
+  `preflight-discoverability-test.test.ts` counts this plan as live (#5274 row, 24 -> 25).
