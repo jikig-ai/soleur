@@ -1343,7 +1343,7 @@ t_unmanaged_name_is_scrubbed_and_whole() {
   # A CR is a line break to the runner, so split on it too before anchoring. A
   # herestring, not `tr | grep -q`: under pipefail an early grep exit can SIGPIPE
   # the producer and the negation would then read as clean.
-  ! grep -q '^::error::spoofed' <<<"${_out//$'\r'/$'\n'}" || detail+=" [a line starts with ::error::spoofed]"
+  ! grep -q '^[[:space:]]*::error::spoofed' <<<"${_out//$'\r'/$'\n'}" || detail+=" [a line starts with ::error::spoofed]"
   ! grep -qF -- "FROZEN RULE LEFT SCOPE: 'auth-per-user-loop'" <<<"$_out" || detail+=" [a fragment impersonated the frozen rule]"
   um=$(grep -c "^  UNMANAGED: '" <<<"$_out" || true)
   [[ "$um" -eq 1 ]] || detail+=" [UNMANAGED lines=$um want 1]"
@@ -1444,7 +1444,7 @@ t_leaf_key_is_scrubbed() {
   [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]] && { _report "F43 leaf key" fail "the mutation did not land ($f)"; return; }
   _run "$f"
   if [[ "$_rc" -eq 1 ]] && grep -qF -- "DRIFT: 'auth-signout-burst'.actionFilters" <<<"$_out" \
-     && ! grep -q '^::error::leafkey' <<<"${_out//$'\r'/$'\n'}"; then
+     && ! grep -q '^[[:space:]]*::error::leafkey' <<<"${_out//$'\r'/$'\n'}"; then
     _report "F43 a live object key carrying LF/CR and a :: command is scrubbed in the DRIFT detail lines" ok
   else
     _report "F43 leaf key" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
