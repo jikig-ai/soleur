@@ -4,6 +4,16 @@
 # and open (or reuse) the pin-bump PR. Invoked by the bump-cloud-init-pin job of
 # build-inngest-bootstrap-image.yml after a successful publish (#8359, ADR-232).
 #
+# WHY THE TARGET MUST BE ON MAIN (#8747, ADR-232 §7). A tag cut on an open
+# PR's commit built an image of unreviewed bytes and this script pinned it: the
+# bump PR merged 93 minutes before its source PR did. The `ancestry` stage
+# refuses a target whose commit main cannot reach, BEFORE the registry is
+# consulted, and binds the pin to the commit the build actually built
+# (--signed-commit). This is the authoritative check: the bump job runs main's
+# copy of this script, while the build job's own refusal runs whatever copy of
+# the workflow the tagged commit carries. Ancestry is an accident control, not a
+# secret boundary.
+#
 # WHY THE TARGET IS THE SEMVER-MAX TAG, NEVER THE TRIGGERED TAG. The drift
 # guard (AC6 in cloud-init-inngest-bootstrap.test.sh) compares the pin against
 # `git tag --list 'vinngest-v*' | sort -V | tail -1` — the pipeline below is
@@ -21,6 +31,9 @@
 # INPUTS
 #   --signed-tag <vX.Y.Z>       tag signed in this run (build job's tag output)
 #   --signed-digest <sha256:..> digest the sign step resolved (build digest output)
+#   --signed-commit <40-hex>    commit the build job checked out (build commit
+#                               output) — REQUIRED, so a workflow copy that
+#                               predates the binding fails closed at args
 #   --mirror-status <ok|degraded|''>  zot mirror outcome (build mirror_status output)
 #   --run-url <url>             publishing run URL, recorded in the PR body
 #
@@ -34,7 +47,7 @@
 # RESULT CONTRACT — exactly one terminal `result=` line, also written to
 # $GITHUB_OUTPUT (the output-file write exists for the fixture suite; no job
 # consumes it): opened | existing | noop | skipped | error.
-# Stage-named fatals (::error::<stage>:) — args|resolve|rewrite|push|pr.
+# Stage-named fatals (::error::<stage>:) — args|resolve|ancestry|rewrite|push|pr.
 # (merge-arm failures are ::warning by design — a withheld or failed auto-merge
 # arm never fails the publish job. mint is likewise NOT a stage: the App-JWT
 # mint happens in the workflow step and its failure is a job failure, never a
@@ -114,10 +127,10 @@ die() { # die <stage> <msg...>
 }
 
 # --- args -------------------------------------------------------------------
-SIGNED_TAG="" SIGNED_DIGEST="" MIRROR_STATUS="" RUN_URL=""
+SIGNED_TAG="" SIGNED_DIGEST="" SIGNED_COMMIT="" MIRROR_STATUS="" RUN_URL=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --signed-tag|--signed-digest|--mirror-status|--run-url)
+    --signed-tag|--signed-digest|--signed-commit|--mirror-status|--run-url)
       # A valueless trailing flag must die, not spin: `shift 2` at $#=1 fails
       # without consuming, and the while loop would re-match $1 forever
       # (no `set -e` here) — burning the job's whole timeout budget.
@@ -128,6 +141,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --signed-tag)    SIGNED_TAG="$2";    shift 2 ;;
     --signed-digest) SIGNED_DIGEST="$2"; shift 2 ;;
+    --signed-commit) SIGNED_COMMIT="$2"; shift 2 ;;
     --mirror-status) MIRROR_STATUS="$2"; shift 2 ;;
     --run-url)       RUN_URL="$2";       shift 2 ;;
   esac
@@ -136,6 +150,8 @@ done
   || die args "--signed-tag must be vX.Y.Z (got '${SIGNED_TAG:-<empty>}')"
 [[ "$SIGNED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || die args "--signed-digest must be sha256:<64 hex> (got '${SIGNED_DIGEST:-<empty>}')"
+[[ "$SIGNED_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+  || die args "--signed-commit must be a 40-hex commit (got '${SIGNED_COMMIT:-<empty>}') — a workflow copy that predates #8747 does not pass it; re-publish from a tag cut on main"
 case "$MIRROR_STATUS" in
   ok|degraded|"") : ;;
   *) die args "--mirror-status must be ok|degraded|'' (got '$MIRROR_STATUS')" ;;
@@ -170,6 +186,46 @@ TARGET=$(git -C "$REPO_DIR" tag --list 'vinngest-v*' 2>/dev/null \
   | sort -V | tail -1 || true)
 [[ -n "$TARGET" ]] \
   || die resolve "no vinngest-v* git tags reachable — checkout needs fetch-depth: 0 + fetch-tags: true"
+
+# --- ancestry: the target's commit must be reachable from main (#8747) --------
+# Runs BEFORE crane on purpose: an off-main semver-max tag whose publish was
+# refused has no image, and the unresolved-digest arm below would call that
+# "publish still in flight" and exit `skipped` — the wrong diagnosis, green.
+# HEAD is the `ref: main` checkout the bump PR is based on.
+target_on_main() {
+  local tag="vinngest-${TARGET}" shallow tag_c rc=0 who
+  # Refused unless the answer is exactly `false`: a cut-off history can report a
+  # real ancestor as rc 1, and a git that errors quietly prints nothing.
+  shallow=$(git -C "$REPO_DIR" rev-parse --is-shallow-repository 2>/dev/null || true)
+  [[ "$shallow" == "false" ]] \
+    || die ancestry "cannot decide whether ${tag} is on main: the checkout is shallow (is-shallow-repository='${shallow:-<empty>}') — a cut-off history can report a real ancestor as off-main; the bump job needs fetch-depth: 0"
+  # refs/tags/ explicitly, never the bare name: git resolves refs/<name> before
+  # refs/tags/<name>, so a bare lookup can be answered by a different ref.
+  tag_c=$(git -C "$REPO_DIR" rev-parse -q --verify "refs/tags/${tag}^{commit}" 2>/dev/null) \
+    || die ancestry "tag not found: refs/tags/${tag} does not resolve to a commit in this checkout"
+  git -C "$REPO_DIR" merge-base --is-ancestor "$tag_c" HEAD 2>/dev/null || rc=$?
+  case "$rc" in
+    0) : ;;
+    1)
+      if [[ "$SIGNED_TAG" == "$TARGET" ]]; then
+        who="${tag}, the tag this run published,"
+      else
+        who="the semver-max tag ${tag} (not vinngest-${SIGNED_TAG}, the tag this run published)"
+      fi
+      die ancestry "${who} is on commit ${tag_c}, which is not an ancestor of main — it was cut on an unmerged branch, and pinning it would ship unreviewed bytes (#8747). Delete it: git push origin :refs/tags/${tag} — then tag the squash-merge commit on main (git tag -a ${tag} <main-sha> -m '...' && git push origin ${tag}) and re-run this job."
+      ;;
+    *)
+      die ancestry "could not decide whether ${tag} (commit ${tag_c}) is on main: git merge-base exited ${rc} — refusing rather than guessing"
+      ;;
+  esac
+  # Bind to the commit the build BUILT. The digest cross-check cannot see a tag
+  # re-pointed while its first run was in flight: both digests are that run's.
+  if [[ "$SIGNED_TAG" == "$TARGET" && "$tag_c" != "$SIGNED_COMMIT" ]]; then
+    die ancestry "${tag} now names commit ${tag_c}, but this run's build signed commit ${SIGNED_COMMIT} — the tag was re-pointed after the build; refusing to pin a digest built from a different commit. Re-publish ${tag}."
+  fi
+  echo "ancestry: ${tag} (commit ${tag_c}) is on main"
+}
+target_on_main
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
