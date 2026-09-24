@@ -51,15 +51,74 @@ This is **v2**, revised after plan review (see `## Plan Review Revisions`). v1 c
 debounce, a refresh-count line, a 410 classifier, a token-confinement census, a C4 edit and a 23-row
 suite. Each was cut on measured evidence.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24 (v3; after v2's plan review)
+
+**Review agents used:**
+
+- soleur:engineering:review:security-sentinel
+- soleur:engineering:review:architecture-strategist
+- soleur:engineering:review:observability-coverage-reviewer
+- soleur:engineering:review:test-design-reviewer, which returned no report text, so its coverage is
+  absent
+- a verify-the-negative, self-audit and citation sweep
+
+The deepen gates were run on the plan: 4.6 (User-Brand Impact), 4.7 (Observability), 4.8 (the PAT
+regex; a false hit in the Alternatives prose was reworded), 4.10 (Encryption Posture, now
+ledger-backed) and 4.11 (`lint-guard-contract.py` green).
+
+### Key Improvements
+
+1. **The Sentry arm no longer hands the provider the Doppler token or `TF_LOG`.** It now runs
+   `env -u DOPPLER_TOKEN -u DOPPLER_PROJECT -u DOPPLER_CONFIG -u TF_LOG -u TF_LOG_PROVIDER`, and
+   scrubs the token from `PLAN_OUTPUT` before it can reach a public issue. This restores true parity
+   with the apply's credential surface (security #1, #2; new row B8).
+2. **The drift-issue remediation is written with a quoted heredoc.** The v2 text with backticks inside
+   `echo "…"` would have *executed* `gh workflow run` and blanked the words. I1 and I2 are now
+   behavioural against a `gh` stub (observability #4).
+3. **Observability routes are now honest.**
+   - Every failure mode cites layer 6.
+   - The Sentry check-in is no longer presented as a paging route (#8630).
+   - The email is marked soft-fail.
+   - An init-before-plan failure mode was added, with a `STACK_NAME || matrix.directory` fallback so
+     the `[ERROR]` email names the leg.
+   - The discoverability probe is anchored to the matrix line. Before, it also passed on comments and
+     env text (observability #1, #2, #3, #5, #6).
+4. **The ADR-031 amendment gained a blind-spots line, a routing exit criterion and a tiering note.**
+   - Blind spots: the leg sees managed objects only, not `ignore_changes`.
+   - Routing: the leg shares the monitor and the `[ERROR]` email with other traffic, and has an exit
+     criterion if vendor noise exceeds 3 errors in 30 days.
+   - Tiering: the token is a repository secret, so the environment gates the job, not the secret.
+     ADR-241 does not cover it, and an issue is filed in task 4.6 (architecture #1, #2, #3, #8).
+5. **The C4 edge clause is reinstated.** v2's rationale mis-read the edge: the drift workflow appears
+   there only as a check-in emitter (architecture #5).
+6. **Corrections.**
+   - S1 now requires all three matrix entries, which mutation 9 needed.
+   - AC13 now diffs against the merge-base.
+   - The header comment was added to the comment sweep.
+   - The matrix comment must not spell the `secrets.` expression.
+   - The token-drift consumer count is corrected from "nine" to eight gates plus one derived gate
+     (sweep).
+
+### New Considerations Discovered
+
+- Plan text in a public drift issue can republish the live before-values of a web-UI hand edit. The
+  same text is already in public apply logs, so this is accepted and documented in User-Brand Impact.
+- A persistent auth failure on this leg is email-only, and Resend fails soft. The backstop is the next
+  `infra/sentry/**` merge: `plan_pr` reds, then the apply-failure issue files.
+- The test-design reviewer produced no findings text on two attempts. Test-design coverage for this
+  deepen pass is therefore **absent**, not clean.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec / brief claim | Reality (measured 2026-09-24) | Plan response |
 |---|---|---|
-| "mirror [`apply-sentry-infra.yml`'s] `doppler secrets get SENTRY_IAC_AUTH_TOKEN --plain` plumbing" (task brief; issue body §Scope 1) | `apply-sentry-infra.yml` binds `SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}` in step env at every plan/apply site (`Full-root plan + destroy gate`, `Terraform plan (full root)`). Its header says "SENTRY_IAC_AUTH_TOKEN comes from a GitHub repo secret (NOT Doppler) per ADR-031 secret-store-divergence". ADR-031 §Authentication says "Sentry secrets stay in **GitHub repository secrets**, not Doppler", and the Doppler `soleur/prd` copy exists only for operator-local runs (§Local-token source). `gh secret list` (names only) shows the repo secret `SENTRY_IAC_AUTH_TOKEN`. | Mirror the **actual** plumbing: the repo secret bound as raw `SENTRY_AUTH_TOKEN`, with no `doppler run`. This meets both goals the brief states (mirror the apply; avoid `--name-transformer tf-var`). The literal wording is recorded as a User-Challenge in `specs/feat-one-shot-6612-sentry-terraform-drift/decision-challenges.md` (DC-1). |
+| "mirror [`apply-sentry-infra.yml`'s] `doppler secrets get SENTRY_IAC_AUTH_TOKEN --plain` plumbing" (task brief; issue body §Scope 1) | `apply-sentry-infra.yml` binds `SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}` in step env at every plan/apply site (`Full-root plan + destroy gate`, `Terraform plan (full root)`). Its header says "SENTRY_IAC_AUTH_TOKEN comes from a GitHub repo secret (NOT Doppler) per ADR-031 secret-store-divergence". ADR-031 §Authentication says "Sentry secrets stay in **GitHub repository secrets**, not Doppler", and the Doppler `soleur/prd` copy exists only for operator-local runs (§Local-token source). `gh secret list` (names only) shows the repo secret `SENTRY_IAC_AUTH_TOKEN`. | Mirror the **actual** plumbing: the repo secret bound as raw `SENTRY_AUTH_TOKEN`, with no `doppler run`. This meets both goals the brief states (mirror the apply; avoid `--name-transformer tf-var`). The literal wording is recorded as a User-Challenge in `knowledge-base/project/specs/feat-one-shot-6612-sentry-terraform-drift/decision-challenges.md` (DC-1). |
 | Implicit: the tf-var-transformed Doppler path only mangles the token | Doppler `prd_terraform` also carries `SENTRY_ORG`, `SENTRY_PROJECT` and a **personal** `SENTRY_AUTH_TOKEN`. Key names were read via `doppler secrets --only-names`. The personal token is named in ADR-031's 2026-09-11 amendment, and its revocation is #8090. `--name-transformer tf-var` would inject `TF_VAR_sentry_org` / `TF_VAR_sentry_project`, which the apply never sees. A transformer-less `doppler run` would bind the personal token (#7797 class). | The Sentry leg runs **no** `doppler run` of any form. Its variable surface is therefore identical to the apply job's: both load `.github/actions/infra-credentials`, and otherwise the variables fall back to their `default`s. |
 | Issue: "Confirm the drift plan runs full-root (no `-target=`)" | The drift step's `terraform plan` carries no `-target=` for any leg today. | Pin it (S3; Guard 1 row 3). |
 | The `scheduled-sentry-alert-drift.yml` header ("WHY NOT ADD apps/web-platform/infra/sentry TO scheduled-terraform-drift.yml's MATRIX INSTEAD") and the Sentry README ("DELIBERATELY not the fix") argue against this leg: vendor read failures would red it for non-drift reasons, and a probe that reds that way gets muted. | Both documents make that argument *for the alert rules*, and both record that since #8451 **no resource reads the removed endpoint**. Main's full-root plans have converged since: runs 35789724629, 35883604194 and 35906267802 print `No changes. Your infrastructure matches the configuration.`, and runs 35903124451 and 35908698925 show a real pending change converging. The property #6612 needs (state ≡ config for **every** resource type, cron and uptime monitors included) is not covered by the alert-rule probe. The README itself says "the remaining gap (cron and uptime monitors) is unchanged". | Keep both detectors, which are complementary, and replace the "why not" paragraphs with a short complementarity note. Vendor read failures land on the job's existing **drift/error split**: exit 1 goes to the `[ERROR]` email and never to an `infra-drift` issue. |
-| Brief: "the drift workflow also carries a Cloudflare token-drift scan gated `matrix.directory == 'apps/web-platform/infra'`" | Confirmed. The gate is exact equality, so the new leg does not match it even though its path begins with that root's path. All nine `steps.token_drift.*` consumers test positively (`== 'dead'`, `contains(…,'gate-absent')`, `outcome == 'failure'`, …). A skipped step's outputs are `''` and its outcome is `skipped`, so none of them fire on the new leg (repo-research audit). **However**, the existing suite guard T3 that pins this gate is a substring match that the new entry satisfies (Kieran P1). | Logic unchanged. Update the leg-set comments, pin the guard's exactness (S4), and **anchor T3** (Phase 2.6). |
+| Brief: "the drift workflow also carries a Cloudflare token-drift scan gated `matrix.directory == 'apps/web-platform/infra'`" | Confirmed. The gate is exact equality, so the new leg does not match it even though its path begins with that root's path. All eight `steps.token_drift.*`-gated steps, plus the coverage-channel email gated on those steps' outputs, test positively (`== 'dead'`, `contains(…,'gate-absent')`, `outcome == 'failure'`, …). A skipped step's outputs are `''` and its outcome is `skipped`, so none of them fire on the new leg (repo-research audit). **However**, the existing suite guard T3 that pins this gate is a substring match that the new entry satisfies (Kieran P1). | Logic unchanged. Update the leg-set comments, pin the guard's exactness (S4), and **anchor T3** (Phase 2.6). |
 | Implicit: the remediation command in the drift issue can be `gh workflow run apply-sentry-infra.yml --ref main` | `apply-sentry-infra.yml`'s `workflow_dispatch` declares `inputs.reason` with `required: true` (~L111–116), so that command fails with "missing required input". | Remediation text uses `gh workflow run apply-sentry-infra.yml --ref main -f reason="reconcile drift (#<issue>)"` everywhere (DHH P1). |
 | Implicit: the error email shows the error | `Prepare email content` sends `head -c 4000` of the plan output. The Sentry root prints ~96 `Refreshing state...` lines before any `Error:`, so an `[ERROR]` email would show only refresh noise. The email is this leg's reliable error channel (#8630). | Strip refresh lines from the email snippet (all legs; Phase 2.5; E1) (DHH P2). |
 
@@ -97,7 +156,11 @@ suite. Each was cut on measured evidence.
 
 - P1: a divergence between the Sentry root's live state and its declared config is detected within
   one cron period (≤ 12 h), whatever caused it: a skipped or failed apply, a hand edit through Sentry's
-  web UI, or a concurrent unlocked writer.
+  web UI, or a concurrent unlocked writer. This covers **managed objects only**. Objects created in
+  Sentry outside Terraform are invisible to `plan`. So are attributes under `ignore_changes`:
+  `[environment]` on the `sentry_alert` blocks, and `all` on the two frozen rules. Those blind spots
+  belong to the alert-fidelity probe's UNMANAGED arm and to the slug-parity suites (deepen,
+  architecture #3).
 - P2: the detection reaches the operator through the existing channels: the `infra-drift` issue and
   the ops email.
 - P3: a run that **cannot** plan the root (auth failure, vendor 5xx/410) is reported as an error, never
@@ -231,8 +294,11 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
   synthesized (cq-test-fixtures-synthesized-only).
 - **PATH stubs.**
   - `terraform` appends its argv to `$TMP/tf.argv`. It records `SENTRY_AUTH_TOKEN=SET|UNSET`, an
-    equality flag against `$EXPECT_SENTRY_TOKEN`, and `TF_VAR_sentry_auth_token=SET|UNSET`, never a
-    value. It then prints a fake plan body and exits `$STUB_TF_RC`.
+    equality flag against `$EXPECT_SENTRY_TOKEN`, and `TF_VAR_sentry_auth_token=SET|UNSET`,
+    `DOPPLER_TOKEN=SET|UNSET` and `TF_LOG=SET|UNSET`. It never records a value. It then prints a fake
+    plan body, echoes `$SENTRY_AUTH_TOKEN` to stderr when `$STUB_TF_ECHO_TOKEN=1` (for the leak row B8),
+    and exits `$STUB_TF_RC`.
+  - `gh` records `--title` and copies `--body-file` to `$TMP/issue-body.md`, for I1/I2.
   - `doppler` exits 97 when `MATRIX_DIR` is the Sentry root. Otherwise it records its argv and `exec`s
     everything after `--`.
 - **Anti-vacuity.** Print `N passed / M failed`. Exit 1 if `PASS+FAIL` is below the floor, where the
@@ -250,13 +316,17 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
      apply never sees);
    - that the plan is full-root.
 
-   Keep the list-of-strings shape.
+   Keep the list-of-strings shape. **The comment must name the secret as `SENTRY_IAC_AUTH_TOKEN`,
+   never with the `secrets.` prefix.** S2 counts `secrets.SENTRY_IAC_AUTH_TOKEN` across the whole
+   file and expects exactly 1 (architecture 7d).
 2. **Plan step `env:`.** Add
    `SENTRY_IAC_AUTH_TOKEN: ${{ matrix.directory == 'apps/web-platform/infra/sentry' && secrets.SENTRY_IAC_AUTH_TOKEN || '' }}`.
-   The secret materializes only in the Sentry leg's plan step. On the other legs the expression yields
-   `''` (Kieran verified the `&& ||` semantics).
-3. **Plan step `run:`.** Leave the existing `VAR_ARGS` + `doppler run` block **byte-identical** inside an
-   `else` arm. Add a first arm, placed inside the existing `set +e` … `set -e` bracket:
+   The secret is bound into the process environment only on the Sentry leg's plan step. On the other
+   legs the expression yields `''`; Kieran verified the `&& ||` semantics. The runner still receives
+   and masks the value on every leg, because step `env:` expressions are evaluated runner-side
+   (security #5).
+3. **Plan step `run:`.** Leave the existing `VAR_ARGS` + `doppler run` block **unchanged except for
+   re-indentation** inside an `else` arm. B5 proves the behaviour is unchanged. Add a first arm, placed inside the existing `set +e` … `set -e` bracket:
 
    ```bash
    if [[ "$MATRIX_DIR" == "apps/web-platform/infra/sentry" ]]; then
@@ -267,15 +337,23 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
        PLAN_OUTPUT="SENTRY_IAC_AUTH_TOKEN is not configured (empty) — the sentry leg cannot authenticate."
        EXIT_CODE=1
      else
-       PLAN_OUTPUT=$(SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" \
+       # env -u: the step env carries DOPPLER_TOKEN/PROJECT/CONFIG for the other legs. The apply job never
+       # hands them to the jianyuan/sentry provider, so neither does this leg (security #1: P4 parity +
+       # least privilege). TF_LOG/TF_LOG_PROVIDER are dropped so provider debug output (HTTP headers)
+       # cannot reach PLAN_OUTPUT, which is posted to a PUBLIC issue (security #2).
+       PLAN_OUTPUT=$(env -u DOPPLER_TOKEN -u DOPPLER_PROJECT -u DOPPLER_CONFIG -u TF_LOG -u TF_LOG_PROVIDER \
+         SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" \
          terraform plan -detailed-exitcode -no-color -input=false 2>&1)
        EXIT_CODE=$?
+       # Defense in depth: masking only covers the Actions log, not an issue body posted via the API.
+       PLAN_OUTPUT=${PLAN_OUTPUT//"$SENTRY_IAC_AUTH_TOKEN"/***}
      fi
    else
-     # ... existing VAR_ARGS + doppler run --preserve-env --name-transformer tf-var ... (byte-identical)
+     # ... existing VAR_ARGS + doppler run --preserve-env --name-transformer tf-var ... (unchanged except indentation)
    fi
    ```
 
+   (The non-empty guard above makes the `//` substitution safe; an empty pattern is never reached.)
    Everything after this stays shared and unchanged: the output writes, the redaction `sed`,
    `STACK_NAME` (which yields `web-platform/sentry` for this leg) and the 0/2/else annotations. There is
    one attempt and no retry, per #8451.
@@ -291,11 +369,20 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
    > never a local apply (the backend has `use_lockfile = false`, ADR-031). If the drift is a hand edit
    > made in Sentry's web UI, revert it there or codify it in a PR.
 
-   Other stacks keep their current text byte-identical.
+   Other stacks keep their current text byte-identical. **Write the Sentry text with a quoted heredoc
+   (`cat <<'EOF'`), not `echo "…"`.** Its backticks would otherwise be command substitution: the words
+   would be silently blanked, and `gh workflow run` would be *executed* (observability #4). Substitute
+   the issue number afterwards with a plain parameter expansion, not inside the heredoc.
 5. **Error email shows the error (all legs).** In `Prepare email content`, change the snippet source to
    `PLAN_SNIPPET=$(grep -v ': Refreshing state\.\.\.' "${RUNNER_TEMP}/plan-output.txt" | head -c 4000 | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')`.
    Without pipefail, only the last stage's status matters, so an all-filtered file yields an empty
-   snippet rather than a step failure (E1, E2).
+   snippet rather than a step failure (E1, E2). In the same step's `env`, set
+   `STACK_NAME: ${{ steps.plan.outputs.stack_name || matrix.directory }}`. A leg whose
+   `terraform init` fails (a registry fetch for `jianyuan/sentry`, a lockfile mismatch, R2 creds) skips
+   the plan step, and its `[ERROR]` email would otherwise name no stack (observability #3). The issue
+   body keeps the full text, refresh lines included. The `expected_luks_volume_id` hint in
+   `apply-web-platform-infra.yml` points at that full plan text, so the hint is unaffected
+   (architecture 7a).
 6. **Anchor T3 in `plugins/soleur/test/terraform-drift-step-order.test.sh`.** Replace
    `grep -qF -- "- $guard_dir" <<<"$BLOCK"` with an exact-line match
    `grep -qxE "[[:space:]]+- ${guard_dir//./\\.}[[:space:]]*" <<<"$BLOCK"`, and state the reason in a
@@ -313,6 +400,10 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
    - ~1769–1774: "matrix is `apps/web-platform/infra` + `infra/github`" → "the matrix does not include
      the rehearsal root".
    - ~150–157: "running it twice" → "once per leg".
+   - Lines 1–4, the file header: "DOPPLER_TOKEN … provides Terraform credentials via
+     `doppler run --name-transformer tf-var`". Add: "except the `apps/web-platform/infra/sentry` leg,
+     which binds the SENTRY_IAC_AUTH_TOKEN repository secret as the raw `SENTRY_AUTH_TOKEN` and runs no
+     `doppler run`" (architecture 7b).
 
    Then `grep -nE '2-leg|two-leg' .github/workflows/scheduled-terraform-drift.yml` must print nothing.
 
@@ -323,9 +414,9 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
    `**Amendment (2026-09-24, #6612) — the root gains a scheduled drift check; "declared ≡ applied"
    now has a monitor.**`
 
-   Keep it to about 12 lines, covering:
+   Keep it to about 20 lines, covering:
    - **What changed.** A Sentry leg of `scheduled-terraform-drift.yml` runs a full-root
-     `plan -detailed-exitcode` twice daily (Inngest, ADR-033).
+     `plan -detailed-exitcode` twice daily, dispatched by Inngest.
    - **What it closes.** Path 3 of the #6589 amendment's three divergence paths. Paths 1
      (`[skip-sentry-apply]`) and 2 (a failed or unretried apply, destroy-gated ones included) are now
      **detected within ≤ 12 h**, not prevented.
@@ -335,8 +426,21 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
      The store rule is unchanged. The tf-var transformer is refused, and so is a plain
      `doppler run -c prd_terraform`, which binds the personal token (#7797, #8090).
    - **Routing.** Vendor read failures are exit 1: they go to the `[ERROR]` email, never to an issue,
-     and are never retried. The two frozen `sentry_alert` rules carry `ignore_changes = all`, so the
-     leg sees their existence only; field fidelity stays with `scheduled-sentry-alert-drift.yml`.
+     and are never retried. This couples Sentry's vendor noise onto two shared channels: the single
+     `scheduled-terraform-drift` monitor, and the `[ERROR]` email class that ADR-241 R1 relies on as a
+     detective control. **Exit criterion:** if vendor-caused `[ERROR]`s on this leg exceed 3 in any
+     30 days, give it its own monitor slug or split it into its own job (architecture #1).
+   - **Blind spots.** The leg sees managed objects only. Unmanaged Sentry objects fall to the
+     fidelity probe's UNMANAGED arm and to the slug-parity suites. `ignore_changes` attributes are
+     invisible: `[environment]` on the `sentry_alert` blocks, and `all` on the two frozen rules, whose
+     field fidelity stays with `scheduled-sentry-alert-drift.yml`.
+   - **Tiering note.** The token stays a *repository* secret: Tier A by reach, Tier B by scope
+     (`project:admin`, `alerts:write`). ADR-241 does not cover it. The `infra-privileged` environment
+     gates the job, not the secret. Moving it to an environment secret would break `plan_pr`, which
+     has no environment (architecture #2). Tracked by the issue filed in task 4.6.
+   - **Citation.** Cite ADR-033 by its full filename,
+     `ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md` §Option C scope note
+     (2026-06-02). The ordinal is shared by three files (architecture #8).
 
    Prior text stays byte-identical (AC13).
 2. **`apps/web-platform/infra/sentry/README.md`** (not a dated artifact, so it is edited in place).
@@ -350,9 +454,17 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
    "WHY NOT ADD … INSTEAD" paragraph with a note of about 4 lines. The #6612 drift leg now plans the
    full root (state ≡ config for every type, twice daily). This workflow remains the field-level
    fidelity check for every `sentry_alert`, including rules under `ignore_changes`. The two are
-   complementary, and the drift leg's vendor failures go to the `[ERROR]` email, not to an issue. PR
-   #8654's hunks in this file sit at ~156/~196, so they do not overlap.
-4. **Post-mortem tracker row.** In
+   complementary. The drift leg's vendor failures go to the `[ERROR]` email, not to an issue. The note
+   must NOT claim the muting concern is resolved: that noise now lands on the shared monitor and email,
+   under the ADR's exit criterion (architecture #1). PR #8654's hunks in this file sit at ~156 and
+   ~196, so the edits do not overlap.
+4. **C4 edge clause (reinstated at deepen; architecture #5).** In
+   `knowledge-base/engineering/architecture/diagrams/model.c4`, on the `github -> sentry` edge (~762),
+   after the sentence "apply-sentry-infra.yml also auto-applies the sentry root…", add: "…and
+   `scheduled-terraform-drift.yml`'s sentry leg plans the same root READ-ONLY twice daily with the same
+   `SENTRY_IAC_AUTH_TOKEN` binding (#6612)". The clause adds no numeral. Then run
+   `bash scripts/regenerate-c4-model.sh`, `c4-model-freshness.test.sh` and `c4-count-parity.test.sh`.
+5. **Post-mortem tracker row.** In
    `knowledge-base/engineering/operations/post-mortems/sentry-iac-delete-path-silent-noop-postmortem.md`,
    change the #6612 row's status cell from `open` to `closed by PR #<N>`. That cell only.
 
@@ -369,6 +481,11 @@ which has no matrix entry and no Sentry arm. The rows are listed in Test Scenari
 - `bash scripts/lint-orphan-test-suites.sh`
 - `actionlint` on both edited workflows, if installed. Otherwise CI's workflow lint covers them.
 - `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-24-chore-sentry-root-scheduled-terraform-drift-leg-plan.md`
+- File a tracking issue (label `domain/engineering`, `type/security`) for the ADR-241 tiering gap:
+  `SENTRY_IAC_AUTH_TOKEN` is a Tier-A-reach repository secret with Tier-B scope (`project:admin`,
+  `alerts:write`), and the `plan_pr` constraint blocks moving it to an environment secret. Cite the
+  issue number in the ADR amendment's tiering note (wg-when-an-audit-identifies-pre-existing;
+  architecture #2). This does not absorb #8609 (soleur-ai key) or #7389 (build provenance).
 - Before **every** push:
   - `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
   - `bash scripts/lint-diagnosis-claims.sh`
@@ -384,7 +501,8 @@ from the job log. No production write: the drift job only plans, and a plan pers
   - the matrix entry
   - the plan step's `env` + Sentry arm (with the empty-secret guard)
   - the Sentry remediation line and `MATRIX_DIR` env in the drift-issue step
-  - the refresh-stripped email snippet
+  - the refresh-stripped email snippet, plus the `STACK_NAME` fallback in that step's env
+  - the header comment (lines 1–4)
   - the leg-set comments
 - `plugins/soleur/test/terraform-drift-step-order.test.sh`: anchor T3's matrix-membership grep, and make
   `WF` overridable if it is not already.
@@ -393,6 +511,8 @@ from the job log. No production write: the drift job only plans, and a plan pers
   - the §Drift detection paragraph (~259–266)
   - the backend-creds sentence (~64–66)
 - `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md`: appended amendment only.
+- `knowledge-base/engineering/architecture/diagrams/model.c4`: the `github -> sentry` edge clause.
+- `knowledge-base/engineering/architecture/diagrams/model.likec4.json`: regenerated.
 - `knowledge-base/engineering/operations/post-mortems/sentry-iac-delete-path-silent-noop-postmortem.md`:
   the #6612 row status cell.
 
@@ -406,7 +526,6 @@ Not touched:
 - `apply-sentry-infra.yml`
 - the Inngest function
 - `cron-monitors.tf`
-- the C4 model (see `### C4 views`)
 - `plugins/soleur/skills/work/SKILL.md`
 
 ## Open Code-Review Overlap
@@ -425,15 +544,18 @@ step-order suite, or the post-mortem.
 
 ### Pre-merge (CI + local; no credentials)
 
-- [ ] AC1. `strategy.matrix.directory` of `drift-check` contains `apps/web-platform/infra/sentry`
-  exactly once, and the two existing entries remain (S1).
+- [ ] AC1. `strategy.matrix.directory` of `drift-check` contains each of `apps/web-platform/infra`,
+  `infra/github` and `apps/web-platform/infra/sentry` exactly once (S1).
 - [ ] AC2. On the Sentry arm, the run satisfies all of the following (B1–B3, S3):
   - `terraform plan` is invoked exactly once, with `-detailed-exitcode`, `-no-color` and
     `-input=false`;
   - no argument begins with `-target`;
   - `doppler` is never invoked (the stub exits 97, so any call reds the run).
 - [ ] AC3. Terraform sees `SENTRY_AUTH_TOKEN` equal to the synthesized `SENTRY_IAC_AUTH_TOKEN`, even
-  when a different ambient `SENTRY_AUTH_TOKEN` is preset. `TF_VAR_sentry_auth_token` is unset (B1, B7).
+  when a different ambient `SENTRY_AUTH_TOKEN` is preset. `TF_VAR_sentry_auth_token`, `DOPPLER_TOKEN`
+  and `TF_LOG` are unset in terraform's environment on the Sentry arm, even when the step env sets them
+  (B1, B7). A stub that echoes the token to stderr leaves no copy of the synthesized value in
+  `plan-output.txt` (B8).
 - [ ] AC4. Terraform stub exit codes 2, 0 and 1 map to `exit_code=2`, `0` and `1` respectively. In each
   case `stack_name=web-platform/sentry`, and the step exits 0 under `bash -e` (B1–B3).
 - [ ] AC5. With `SENTRY_IAC_AUTH_TOKEN` empty, the step writes `exit_code=1`, prints
@@ -453,7 +575,9 @@ step-order suite, or the post-mortem.
 - [ ] AC9. The email snippet built from a plan output of 120 `x.y: Refreshing state... [id=1]` lines
   followed by `Error: boom` contains `Error: boom` and no `Refreshing state` (E1). An all-refresh output
   yields an empty snippet with step rc 0 (E2).
-- [ ] AC10. For the Sentry stack, the drift-issue body contains `-f reason=` and does not contain
+- [ ] AC10. The drift-issue step is run behaviourally with the `gh` stub, and the rendered body is
+  checked (I1/I2). For the Sentry stack, the drift-issue body contains the literal
+  `gh workflow run apply-sentry-infra.yml --ref main -f reason=` and does not contain
   the generic step-2 line (the one beginning `If the drift is intentional,`). The other stacks' bodies are byte-identical to `origin/main`'s
   (I1, I2).
 - [ ] AC11. **Real terraform** (run locally; `terraform_data` + `backend "local"` fixture). The
@@ -469,7 +593,7 @@ step-order suite, or the post-mortem.
 - [ ] AC12. Every Phase 4 suite passes, and `grep -nE '2-leg|two-leg' .github/workflows/scheduled-terraform-drift.yml`
   prints nothing.
 - [ ] AC13. The ADR-031 diff is append-only:
-  `git diff --numstat origin/main -- knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md | awk '{print $2}'`
+  `git diff --numstat "$(git merge-base origin/main HEAD)" -- knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md | awk '{print $2}'`
   prints `0`. The appended block contains `#6612` and the phrase `within one cron period`.
 - [ ] AC-B. **Pre-merge baseline.** This PR's `apply-sentry-infra.yml` `plan_pr` job (triggered by the
   README path) prints `No changes. Your infrastructure matches the configuration.` in its log. Check
@@ -528,21 +652,22 @@ the network.
 
 | Row | Arm | Input | Expected |
 |---|---|---|---|
-| S1 | structural | matrix list | contains `apps/web-platform/infra/sentry` exactly once; every entry is an existing dir with a `backend "s3"` block; every entry, driven through the extracted plan step with stub rc 2, yields `exit_code=2` |
+| S1 | structural | matrix list | contains each of `apps/web-platform/infra`, `infra/github`, `apps/web-platform/infra/sentry` exactly once; every entry is an existing dir with a `backend "s3"` block; every entry, driven through the extracted plan step with stub rc 2, yields `exit_code=2` |
 | S2 | structural | whole workflow file | `secrets.SENTRY_IAC_AUTH_TOKEN` count = 1 (literal, commented); that line contains `matrix.directory == 'apps/web-platform/infra/sentry'`; the YAML key path is `jobs.drift-check.steps[id=plan].env.SENTRY_IAC_AUTH_TOKEN` |
 | S3 | structural | plan-step `run`, non-comment lines | no `-target`; the Sentry arm contains `-detailed-exitcode` and no `doppler` |
 | S4 | structural | `Cloudflare token drift` step `if:` | exact `matrix.directory == 'apps/web-platform/infra'` (no `contains`/`startsWith`) |
 | S5 | structural | `hashicorp/setup-terraform` step in `drift-check` | `terraform_wrapper: false` |
-| B1 | behavioural | Sentry leg, stub rc 2 | `exit_code=2`, `stack_name=web-platform/sentry`, doppler never called, exactly one terraform call, argv has `-detailed-exitcode`, no `-target`, `SENTRY_AUTH_TOKEN=SET`, `TF_VAR_sentry_auth_token=UNSET`, step rc 0 under `bash -e` |
+| B1 | behavioural | Sentry leg, stub rc 2 | `exit_code=2`, `stack_name=web-platform/sentry`, doppler never called, exactly one terraform call, argv has `-detailed-exitcode`, no `-target`, `SENTRY_AUTH_TOKEN=SET`, `TF_VAR_sentry_auth_token=UNSET`, `DOPPLER_TOKEN=UNSET` and `TF_LOG=UNSET` (step env sets both), step rc 0 under `bash -e` |
 | B2 | behavioural | Sentry leg, stub rc 0 | `exit_code=0` |
 | B3 | behavioural | Sentry leg, stub rc 1 | `exit_code=1` |
 | B4 | behavioural | Sentry leg, `SENTRY_IAC_AUTH_TOKEN=''` | `exit_code=1`, `::error::sentry_iac_token_absent`, terraform never called |
 | B5 | behavioural regression | `apps/web-platform/infra` rc 2; `infra/github` rc 0 | doppler argv has `run --preserve-env --name-transformer tf-var --`; `exit_code` 2 / 0; `stack_name` `web-platform` / `infra/github` |
 | B7 | behavioural | Sentry leg, ambient `SENTRY_AUTH_TOKEN=decoy-x`, `SENTRY_IAC_AUTH_TOKEN=iac-y` | terraform's equality flag says it saw `iac-y`; no value printed |
+| B8 | leak scrub | Sentry leg, `STUB_TF_ECHO_TOKEN=1`, `SENTRY_IAC_AUTH_TOKEN=synthetic-iac-<<rand>>` | `plan-output.txt` does not contain the synthetic value; contains `***` |
 | E1 | email step | `plan-output.txt` = 120 refresh lines + `Error: boom` | snippet contains `Error: boom`, no `Refreshing state` |
 | E2 | email step | `plan-output.txt` = 120 refresh lines only | step rc 0 under `bash -e`; snippet empty |
-| I1 | issue step (text) | the `Create or update drift issue` step `run` | contains the Sentry branch keyed on `MATRIX_DIR` with `-f reason=` |
-| I2 | issue step (text) | same | the non-Sentry "Next Steps" lines are byte-identical to `origin/main`'s (a literal copy pinned in the suite) |
+| I1 | issue step (behavioural) | run the extracted `Create or update drift issue` step with `MATRIX_DIR=apps/web-platform/infra/sentry` and the `gh` stub (list returns empty) | rendered body contains the literal `gh workflow run apply-sentry-infra.yml --ref main -f reason=`; the `gh` stub never receives `workflow run` (backticks not executed) |
+| I2 | issue step (behavioural) | same, `MATRIX_DIR=apps/web-platform/infra` | rendered body contains `If the drift is intentional,` and no `apply-sentry-infra` |
 | R1 | real terraform (skip if absent) | converged `terraform_data` fixture | `exit_code=0` |
 | R2 | real terraform | fixture `input` changed | `exit_code=2`, `Plan:` line |
 | R3 | real terraform | new block, not in state (declared-not-applied) | `exit_code=2`, `1 to add` |
@@ -590,6 +715,8 @@ Coverage of each link:
 | 7 | Second member after a compliant first: a 4th matrix entry whose path skips the shared `exit_code` write | S1's per-entry drive RED |
 | 8 | Bind `SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}` unconditionally on a second step (e.g. `Terraform init`) | S2 RED (count 2, missing gate) |
 | 9 | Delete the `- apps/web-platform/infra` entry (the Sentry entry still present) | step-order T3 RED (anchored), S1 RED |
+| 10 | Drop the `env -u DOPPLER_TOKEN … -u TF_LOG …` wrapper from the Sentry invocation | B1 RED (`DOPPLER_TOKEN=SET`, `TF_LOG=SET`) |
+| 11 | Drop the `PLAN_OUTPUT=${PLAN_OUTPUT//"$SENTRY_IAC_AUTH_TOKEN"/***}` scrub | B8 RED (synthetic token present in `plan-output.txt`) |
 
 **Harness rows.** H1: a stub that ignores `STUB_TF_RC` must red B1, so a vacuous harness is visible.
 The must-PASS non-canonical row is S1's per-entry drive of `infra/github`. That input differs from the
@@ -610,12 +737,21 @@ the suite proves consistency, and AC-PM1/AC15's live evidence proves integrity.
   user-facing outage could page nobody for longer. AC15's executed-verdict grep and AC-PM1's live
   dispatch rule that out.
 - **If this leaks, the user's data is exposed via:** no user data is involved. The credential at stake
-  is the Sentry IaC integration token (`project:admin`, `alerts:write`), which this PR binds into one
-  more step: the Sentry leg's plan step, under the main-only `infra-privileged` environment. Actions
-  masking applies, and S2 confines the binding to that one step. Plan text in a drift issue shows
-  attribute diffs of Sentry config. Those values are already public: they are declared in the
-  repository's `.tf`, and the same full-root plan is already tee'd into public `apply-sentry-infra.yml`
-  logs on every apply.
+  is the Sentry IaC integration token (`project:admin`, `alerts:write`). It is a **repository** secret.
+  The `infra-privileged` environment gates this job, not the secret, and `plan_pr` already exposes the
+  token on branch pushes (accepted in the #6589 amendment). This PR binds it into one more step, the
+  Sentry leg's plan step:
+  - Actions masking applies.
+  - S2 confines the binding to that one step.
+  - `env -u` keeps Doppler credentials and `TF_LOG` away from the provider.
+  - The token is scrubbed from `PLAN_OUTPUT` before it can reach the public issue (B8).
+
+  Plan text in a drift issue shows attribute diffs. The config side is already public in the
+  repository's `.tf`. The live "before" side of a web-UI hand edit (an alert target, a monitor
+  setting) is NOT otherwise in the repo, but the same full-root plan is already tee'd into public
+  `apply-sentry-infra.yml` logs on every apply. The drift issue republishes it more discoverably. This
+  is accepted: `uptime-monitors.tf` declares no headers or bodies, and the root has no `output` blocks
+  and no DSN/key resources (security #6).
 - **Brand-survival threshold:** `none`
 - `threshold: none, reason: the only touched path under apps/*/infra/ is the Sentry root's README (documentation); the functional change is a read-only CI plan of operator alerting configuration that carries no user data and changes no user-facing surface.`
 
@@ -631,26 +767,29 @@ error_reporting:
   destination: "ops email `[ERROR] Terraform plan failed for web-platform/sentry` (Resend) whose snippet now carries the error text rather than refresh lines; run annotations; Sentry check-in status=error"
   fail_loud: "`::error::Terraform plan failed in web-platform/sentry (exit N)` or `::error::sentry_iac_token_absent`, plus the [ERROR] email"
 failure_modes:
-  - mode: "root diverged (skip-sentry-apply, failed/unretried apply, hand edit via Sentry's web UI, concurrent unlocked writer)"
-    detection: "full-root terraform plan -detailed-exitcode returns 2 on the sentry leg"
-    alert_route: "`infra: drift detected in web-platform/sentry` issue (label infra-drift) + [DRIFT] email"
+  - mode: "root diverged (skip-sentry-apply, failed/unretried apply, hand edit via Sentry's web UI, concurrent unlocked writer) — managed objects only"
+    detection: "full-root terraform plan -detailed-exitcode returns 2 → `::warning::Drift detected in web-platform/sentry` in the workflow run log (layer 6)"
+    alert_route: "`infra: drift detected in web-platform/sentry` issue (label infra-drift) + [DRIFT] email; the email is independent of the issue filer, so a failed filer (continue-on-error) still reaches the operator"
   - mode: "plan lands between a merge to main and its apply (transient)"
-    detection: "exit 2 whose plan shows the just-merged blocks as `to add`; the issue body's remediation says to check for a queued/in-progress apply first"
+    detection: "exit 2 whose plan shows the just-merged blocks as `to add` → `::warning::Drift detected…` (layer 6); the issue's remediation says to check for a queued/in-progress apply first"
     alert_route: "the same infra-drift issue; closed once the apply converges (accepted residual, R1)"
   - mode: "sentry leg cannot authenticate (secret empty, revoked, or under-scoped)"
-    detection: "named `sentry_iac_token_absent` exit 1, or the provider's `failed to perform health check` → exit 1"
-    alert_route: "[ERROR] email + Sentry check-in status=error (the monitor pages no alert workflow today, #8630, so the email is the reliable route)"
+    detection: "`::error::sentry_iac_token_absent` or `::error::Terraform plan failed in web-platform/sentry` in the workflow run log (layer 6)"
+    alert_route: "[ERROR] email only — it soft-fails on a Resend non-2xx (::warning::, job stays green). The Sentry check-in is NOT a route: non-paging until #8630, and a sibling leg's ok can resolve it within the same run. Backstop: the next merge touching infra/sentry/** reds plan_pr, and a failed apply files apply-sentry-infra's own tracking issue"
   - mode: "vendor read failure during refresh (5xx/429/410)"
-    detection: "exit 1 on the single attempt (never retried, per #8451)"
-    alert_route: "[ERROR] email, never an infra-drift issue (drift/error split)"
+    detection: "exit 1 on the single attempt (never retried, per #8451) → `::error::Terraform plan failed in web-platform/sentry` in the workflow run log (layer 6)"
+    alert_route: "[ERROR] email, never an infra-drift issue (drift/error split); ADR exit criterion if >3 vendor-caused errors in 30 days"
+  - mode: "sentry leg init/backend fails before plan (provider registry fetch, lockfile mismatch, R2 creds)"
+    detection: "red `Terraform init` step in the workflow run log (layer 6); steps.plan.outputs.exit_code is empty"
+    alert_route: "[ERROR] email naming the stack via the `steps.plan.outputs.stack_name || matrix.directory` fallback"
   - mode: "dispatcher stops firing"
-    detection: "missed check-in on sentry_cron_monitor.scheduled_terraform_drift (checkin_margin 60 min) + cron-inngest-cron-watchdog"
-    alert_route: "Sentry monitor issue + watchdog"
+    detection: "missed check-in on sentry_cron_monitor.scheduled_terraform_drift (Sentry monitor, checkin_margin 60 min) + cron-inngest-cron-watchdog"
+    alert_route: "Sentry monitor issue + watchdog heartbeat — both non-paging until #8630"
 logs:
   where: "GitHub Actions run logs for scheduled-terraform-drift.yml (job `drift-check (apps/web-platform/infra/sentry)`); plan text copied into the infra-drift issue body/comments on exit 2"
   retention: "GitHub Actions log retention (90 days default); issue comments indefinitely"
 discoverability_test:
-  command: "grep -o -m1 -F 'apps/web-platform/infra/sentry' .github/workflows/scheduled-terraform-drift.yml"
+  command: "grep -m1 -xE '[[:space:]]+- apps/web-platform/infra/sentry[[:space:]]*' .github/workflows/scheduled-terraform-drift.yml"
   expected_output: "apps/web-platform/infra/sentry"
 ```
 
@@ -668,7 +807,8 @@ No new ADR is needed: nothing is reversed and no new substrate is introduced.
 
 ### C4 views
 
-**No C4 impact.** All three model files were read against the change:
+**One Context-view prose clause is added (Phase 3.4). No element, relationship, view or count
+changes.** All three model files were read against the change:
 
 - `spec.c4`: element kinds and the `external` tag.
 - `views.c4`: `sentry` is already included in both views that list external systems (lines 28 and 54).
@@ -678,17 +818,18 @@ What the enumeration found:
 
 - **External human actors.** None new. The operator (`founder`) is reached via `sentry -> founder` and
   by email.
-- **External systems.** `github`, `sentry` and `cloudflare` (the R2 state backend, narrated on the
-  `github -> cloudflare` edge at ~622) are all already modeled. There is no new vendor.
+- **External systems.** `github`, `sentry`, and `cloudflare` (the R2 state backend, narrated on
+  `github -> cloudflare` at ~622) are all modeled. There is no new vendor.
 - **Containers and data stores.** None new. `web-platform/sentry/terraform.tfstate` is read, never
   written.
-- **Access relationships.** Unchanged. The `github -> sentry` edge (~762) already names
-  `scheduled-terraform-drift` as an emitter on it, and it already carries the technology
-  "Terraform provider, SENTRY_AUTH_TOKEN". The drift leg is the same actor→system pair, with the same
-  credential class and the same protocol.
+- **Access relationships.** No new actor→system pair. The `github -> sentry` edge names
+  `scheduled-terraform-drift` only as a *check-in* emitter, which authenticates with the DSN key. Its
+  Terraform-provider clause names only `apply-sentry-infra.yml`. That sentence is not falsified, but it
+  would omit one of the two workflows that now drive the provider with the IaC token, so the clause is
+  added (architecture #5; v2's R10 cut is reversed).
 
-No embedded cardinality moves: there is no new check-in emitter or monitor. This is backed by a green
-`plugins/soleur/test/c4-count-parity.test.sh` run (Phase 4), not by reasoning alone.
+No embedded cardinality moves. Backed by green `c4-count-parity.test.sh` and `c4-model-freshness.test.sh`
+runs after regeneration.
 
 ### Sequencing
 
@@ -740,13 +881,33 @@ recognizable instead: the issue's remediation says to check for a queued or in-p
 
 ## Encryption Posture
 
-Skipped: no new persistent store and no new cross-component connection. The leg reuses two existing,
-already-modeled connections:
+No new store and no new connection *class*. The drift leg adds one more reader over two
+already-ledgered surfaces, and its posture is inherited as shown below. Values for the store row come
+from `scripts/encryption-posture-ledger.json` → `stores[r2.terraform_state_backend]`.
 
-- `github -> sentry`: the same HTTPS provider API the apply uses.
-- `github -> cloudflare` R2: the same state backend, read-only.
-
-No file in the Files lists matches the detection set (`.tf`, migrations, cloud-init, docker-compose).
+```yaml
+at_rest:
+  - store: r2.terraform_state_backend   # soleur-terraform-state, key web-platform/sentry/terraform.tfstate (apps/web-platform/infra/sentry/main.tf backend "s3"); READ-only use here, plan persists nothing
+    mechanism: provider-managed:Cloudflare-R2-SOC2-Type-II
+    evidence: "Cloudflare R2 encrypts objects at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); SOC 2 Type II attestation https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/ retrieved_on 2026-07-24 — ledger row r2.terraform_state_backend"
+    defends_against: "physical-media compromise of the Terraform state store"
+    does_not_defend: "a leaked R2 key pair (the Tier-A read pair or Tier-B TF_STATE_AWS_* pair); state carries Sentry resource metadata readable by any holder of either"
+    disclosed_as: not-publicly-claimed
+    live_verification: "unavailable:provider-managed at-rest; NDA-gated SOC 2 report — same as the ledger row"
+in_transit:
+  - connection: "GitHub Actions runner (drift-check sentry leg) -> Sentry org API https://jikigai-eu.sentry.io/api/ (jianyuan/sentry provider)"
+    enforced_at: "apps/web-platform/infra/sentry/main.tf provider \"sentry\" base_url = \"https://${var.sentry_org}.sentry.io/api/\""
+    tls: "HTTPS, TLS 1.2+ (Go net/http client default minimum)"
+    cert_verification: on
+    does_not_defend: "a leaked SENTRY_IAC_AUTH_TOKEN (project:admin, alerts:write); a compromised runner reading the step env"
+    disclosed_as: not-publicly-claimed
+  - connection: "GitHub Actions runner (drift-check sentry leg) -> R2 S3 endpoint https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com (state read)"
+    enforced_at: "apps/web-platform/infra/sentry/main.tf backend \"s3\" endpoints = { s3 = \"https://…r2.cloudflarestorage.com\" } (skip_credentials_validation/skip_* flags do not disable TLS verification)"
+    tls: "HTTPS, TLS 1.2+"
+    cert_verification: on
+    does_not_defend: "a leaked R2 key pair; state readable by any holder"
+    disclosed_as: not-publicly-claimed
+```
 
 ## Infrastructure (IaC)
 
@@ -768,7 +929,7 @@ and the test-suite bulk. Per plan-review, **delete was preferred over fix**.
   - Cutting it also dissolves B8–B11, Guard 1 rows 7–8 and a Sharp Edge.
   - Replacement: the Sentry remediation text names the in-flight-apply case.
   - This overrides a CTO required change. It is recorded as DC-2 in
-    `specs/feat-one-shot-6612-sentry-terraform-drift/decision-challenges.md`, where `ship` surfaces it.
+    `knowledge-base/project/specs/feat-one-shot-6612-sentry-terraform-drift/decision-challenges.md`, where `ship` surfaces it.
 - **R2 (Mechanical): the 410 classifier is cut.** A single attempt means a 410 is never retried, and
   the apply already classifies 410s per address.
 - **R3 (Mechanical): the `Refreshed N` line and the AC15 refresh floor are cut.** With a full root and
@@ -791,9 +952,9 @@ and the test-suite bulk. Per plan-review, **delete was preferred over fix**.
   - AC13 now uses `--numstat` (Kieran).
   - AC-PM1 now polls, avoids the ±30 min cron windows, and accepts manual or scheduled runs (Kieran).
   - `discoverability_test.expected_output` was corrected (Kieran).
-- **R10 (Mechanical): the C4 edit and the `likec4.json` regeneration are cut.** The edge already names
-  the emitter and the credential. "No C4 impact" is backed by the enumeration plus a green
-  `c4-count-parity`.
+- **R10 (Mechanical, reversed at deepen): the C4 edit.** v2 cut the edit, but the deepen
+  architecture review showed the v2 rationale was wrong: the edge names the drift workflow only as a
+  check-in emitter. The one-clause edit and the regeneration are back in scope (Phase 3.4).
 - **R11 (Mechanical): documentation trimmed.** The ADR amendment is about 12 lines, and the sibling
   header gets a short complementarity note instead of a full rewrite.
 - **Kept against the simplification panel:**
@@ -813,7 +974,7 @@ and the test-suite bulk. Per plan-review, **delete was preferred over fix**.
 |---|---|
 | `doppler secrets get SENTRY_IAC_AUTH_TOKEN --plain` into env (the brief's wording) | This is not what the apply does, and it contradicts ADR-031 §Authentication. It would add a Doppler read and a second copy of the token whose staleness would red this leg alone (DC-1). |
 | `doppler run --preserve-env --name-transformer tf-var` plus a step-env `SENTRY_AUTH_TOKEN` | The transformer injects `TF_VAR_sentry_org`/`TF_VAR_sentry_project` from `prd_terraform`. The apply never sees that variable surface, so this risks phantom drift. |
-| Token as a Terraform variable, `provider "sentry" { token = var.sentry_auth_token }`, fed through `doppler run` like the other legs (advisor) | Disqualified. `--name-transformer tf-var` maps Doppler `prd_terraform`'s **personal** `SENTRY_AUTH_TOKEN` to exactly `TF_VAR_sentry_auth_token` (#7797, #8090). It would also edit the root and its apply and move the token into Doppler, against ADR-031. |
+| Token as a declared Terraform input variable wired into the provider's `token` argument, fed through `doppler run` like the other legs (advisor) | Disqualified. `--name-transformer tf-var` maps Doppler `prd_terraform`'s **personal** `SENTRY_AUTH_TOKEN` to exactly `TF_VAR_sentry_auth_token` (#7797, #8090). It would also edit the root and its apply and move the token into Doppler, against ADR-031. |
 | Matrix `include:` objects with a per-leg `plan_wrapper` (advisor) | Breaks the list-of-strings shape the step-order T3 greps, and runs the command through an unquoted `$PLAN_WRAPPER` word-split. The branch is confined anyway: the `else` arm is byte-identical and pinned by B5. |
 | A 60 s re-plan debounce on non-zero (v1; CTO) | Measured not to cover the 1–8 min merge→apply window. Transient vendor errors already go to email, never to an issue (R1). |
 | Re-plan on exit 1 only (advisor) | Exit 1 never files an issue, so this buys nothing. |

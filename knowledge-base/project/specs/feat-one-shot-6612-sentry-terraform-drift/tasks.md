@@ -11,9 +11,12 @@ Plan: `knowledge-base/project/plans/2026-09-24-chore-sentry-root-scheduled-terra
     floor;
   - run under `bash --noprofile --norc -e` (no pipefail, the way Actions runs it);
   - PATH stubs:
-    - `terraform` records argv plus SET/UNSET flags, never values;
-    - `doppler` exits 97 on the Sentry leg.
-- [ ] 1.2 Rows S1–S5, B1–B5, B7, E1–E2, I1–I2, H1, and the conditional R1–R4 real-terraform arm
+    - `terraform` records argv plus SET/UNSET flags (`SENTRY_AUTH_TOKEN`, `TF_VAR_sentry_auth_token`,
+      `DOPPLER_TOKEN`, `TF_LOG`), never values, and optionally echoes the token to stderr (for B8);
+    - `doppler` exits 97 on the Sentry leg;
+    - `gh` copies `--body-file` for the behavioural I1/I2 rows.
+- [ ] 1.2 Rows S1–S5 (S1 requires all three matrix entries), B1–B5, B7, B8 (token scrub), E1–E2,
+  behavioural I1–I2, H1, and the conditional R1–R4 real-terraform arm
   (`terraform_data` with a local backend).
 - [ ] 1.3 Anti-vacuity floor set to the literal assertion count, with a comment.
 - [ ] 1.4 Confirm the suite is RED on the unmodified workflow.
@@ -26,31 +29,44 @@ Plan: `knowledge-base/project/plans/2026-09-24-chore-sentry-root-scheduled-terra
   `SENTRY_IAC_AUTH_TOKEN: ${{ matrix.directory == 'apps/web-platform/infra/sentry' && secrets.SENTRY_IAC_AUTH_TOKEN || '' }}`.
 - [ ] 2.3 Plan step `run`: add a Sentry arm that is
   - an empty-secret `::error::sentry_iac_token_absent` guard, then
-  - `SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" terraform plan -detailed-exitcode -no-color -input=false`.
+  - `env -u DOPPLER_TOKEN -u DOPPLER_PROJECT -u DOPPLER_CONFIG -u TF_LOG -u TF_LOG_PROVIDER
+    SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" terraform plan -detailed-exitcode -no-color -input=false`,
+    then `PLAN_OUTPUT=${PLAN_OUTPUT//"$SENTRY_IAC_AUTH_TOKEN"/***}`.
 
-  The existing Doppler path moves unchanged into `else`. Everything stays inside the `set +e` bracket.
+  The existing Doppler path moves into `else`, unchanged except for indentation. The matrix comment
+  must not spell `secrets.SENTRY_IAC_AUTH_TOKEN`, because S2 expects exactly 1. Everything stays inside the `set +e` bracket.
   No retry.
 - [ ] 2.4 Drift-issue step:
   - add `MATRIX_DIR` to the step env;
   - when the directory is the Sentry root, replace remediation step 2 with the check-in-flight-apply
-    text and `gh workflow run apply-sentry-infra.yml --ref main -f reason="..."`;
+    text and `gh workflow run apply-sentry-infra.yml --ref main -f reason="..."`. Write it with a
+    QUOTED heredoc (`cat <<'EOF'`), never `echo "…"`, because the backticks would execute;
   - leave other stacks byte-identical.
 - [ ] 2.5 Email snippet: `grep -v ': Refreshing state\.\.\.' … | head -c 4000 | sed …` (all legs).
+  Also add `STACK_NAME: ${{ steps.plan.outputs.stack_name || matrix.directory }}` to that step's env.
 - [ ] 2.6 Anchor T3 in `plugins/soleur/test/terraform-drift-step-order.test.sh` with an exact-line match
   and make `WF` overridable. Mutation-verify it on a sandbox copy with the main-root entry deleted.
-- [ ] 2.7 Update the leg-set comments at ~150–157, ~566–577, ~965–970 and ~1769–1774. Afterwards
+- [ ] 2.7 Update the leg-set comments at lines 1–4 (the file header), ~150–157, ~566–577, ~965–970
+  and ~1769–1774. Afterwards
   `grep -nE '2-leg|two-leg'` must print nothing.
 
 ## Phase 3: Docs and ADR
 
-- [ ] 3.1 ADR-031: append an amendment (2026-09-24, #6612) of about 12 lines before `## Consequences`.
-  Append-only: `git diff --numstat` must show 0 deleted lines.
+- [ ] 3.1 ADR-031: append an amendment (2026-09-24, #6612) of about 20 lines before `## Consequences`.
+  It covers what changed, the divergence paths, the `use_lockfile` consequence, auth, routing (with
+  the >3-errors-in-30-days exit criterion), blind spots, the tiering note (cite the issue from 4.6)
+  and the full ADR-033 filename. Append-only: `git diff --numstat "$(git merge-base origin/main HEAD)"`
+  must show 0 deleted lines.
 - [ ] 3.2 Sentry README:
   - replace the §Drift detection "Everything else…" paragraph with the third detector, using the
     `-f reason=` remediation;
   - add the note on the backend-creds sentence.
 - [ ] 3.3 `scheduled-sentry-alert-drift.yml` header: replace the "WHY NOT ADD … INSTEAD" paragraph
-  with a short note that the two workflows complement each other. Comment only.
+  with a short note that the two workflows complement each other. Do not claim the muting concern
+  is resolved. Comment only.
+- [ ] 3.4a C4: add the clause "…and `scheduled-terraform-drift.yml`'s sentry leg plans the same root
+  READ-ONLY twice daily…" to the `github -> sentry` edge in `model.c4`. Then run
+  `bash scripts/regenerate-c4-model.sh`, `c4-model-freshness.test.sh` and `c4-count-parity.test.sh`.
 - [ ] 3.4 Post-mortem `sentry-iac-delete-path-silent-noop-postmortem.md`: set the #6612 row status to
   `closed by PR #<N>`.
 
@@ -60,6 +76,8 @@ Plan: `knowledge-base/project/plans/2026-09-24-chore-sentry-root-scheduled-terra
 - [ ] 4.2 Run the step-order, token-drift-workflow-causes, terraform-target-parity and c4-count-parity
   suites, plus `tests/scripts/test-sentry-alert-drift-workflow.sh`, lint-orphan-test-suites,
   actionlint, and lint-guard-contract on the plan.
+- [ ] 4.6 File the ADR-241 tiering-gap issue (labels `domain/engineering`, `type/security`) and cite
+  it in the ADR amendment.
 - [ ] 4.3 Before EVERY push, run
   `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` and
   `bash scripts/lint-diagnosis-claims.sh`.
