@@ -488,7 +488,16 @@ rpf = res.get("env", {}).get("RELEASE_PATH_FILTER", "")
 co = [s for s in rt if str(s.get("uses", "")).startswith("actions/checkout@")]
 depth = "missing" if len(co) != 1 else str((co[0].get("with") or {}).get("fetch-depth", "unset"))
 trans, bad = [], []
-for p in on["push"]["paths"]:
+paths = on["push"]["paths"]
+# ORDER MATTERS in GitHub path filters: a later pattern overrides an earlier one, so a
+# negation must come AFTER the positive entry it narrows (a set compare cannot see that).
+for i, p in enumerate(paths):
+    if p.startswith("!"):
+        core = p[1:]
+        narrowed = [j for j, q in enumerate(paths) if not q.startswith("!") and q.endswith("/**") and core.startswith(q[:-2])]
+        if not narrowed or min(narrowed) > i:
+            bad.append("negation before its positive: " + p)
+for p in paths:
     neg = p.startswith("!")
     core = p[1:] if neg else p
     if core.endswith("/**") and "*" not in core[:-3]:
@@ -514,6 +523,46 @@ case "$_p2" in
 esac
 if [ "$_p3" = "ok" ]; then pass; else
   fail "P3 on.push.paths and path_filter disagree ($_p3) — the clean skip now depends on path_filter meaning exactly what on.push.paths means. Globs other than 'X/**' and '!X/**' are a translation FAIL, not a skip"
+fi
+
+# ═══ WIRING OF THE RESOLVE STEP (2026-09-24 review) ════════════════════════════
+_wr=$(python3 - "$REL" <<'PYWR'
+import re, sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+rt = d["jobs"]["resolve-target"]
+res = next(s for s in rt["steps"] if s.get("id") == "resolve")
+code = "\n".join(re.sub(r"^\s*#.*$", "", l) for l in res["run"].split("\n"))
+emitted = set(re.findall(r"^\s*emit\s+([a-z_]+)\s", code, re.M)) | set(re.findall(r";\s*emit\s+([a-z_]+)\s", code))
+declared = {k for k, v in (rt.get("outputs") or {}).items() if re.search(r"steps\.resolve\.outputs\." + re.escape(k) + r"\b", str(v))}
+print("W1=" + (" ".join(sorted(emitted - declared)) or "ok"))
+nrr = len(re.findall(r'^\s*clean_skip\b[^\n]*"no_release_run"\s*$', code, re.M))
+print("W2=%d" % nrr)
+gate = [k for k in ("continue-on-error", "if") if k in res]
+print("W3=" + (" ".join(gate) or "ok"))
+ng = d["jobs"]["notify-gated"]
+ngrun = "\n".join(str(s.get("run", "")) for s in ng["steps"])
+blocks = re.findall(r'case "\$\{SKIP_REASON:-\}" in(.*?)\n\s*esac', ngrun, re.S)
+arms = [set(m for a in re.findall(r"^\s*([a-z_|]+)\)", b, re.M) for m in a.split("|")) for b in blocks]
+cond = set(re.findall(r"skip_reason\s*==\s*'([a-z_]+)'", str(ng.get("if", ""))))
+print("W4=" + ("ok" if len(arms) == 2 and cond <= arms[0] else "cause-missing:" + " ".join(sorted(cond - (arms[0] if arms else set())))))
+print("W5=" + ("ok" if len(arms) == 2 and {"release_run_missing", "github_api_unavailable"} <= arms[1] else "next-missing"))
+PYWR
+)
+_w() { printf '%s\n' "$_wr" | sed -n "s/^$1=//p"; }
+if [ "$(_w W1)" = "ok" ]; then pass; else
+  fail "W1 step resolve emits output(s) the job never declares: $(_w W1) — a consumer reading needs.resolve-target.outputs.<key> gets an empty string"
+fi
+if [ "$(_w W2)" = "1" ]; then pass; else
+  fail "W2 expected exactly ONE clean_skip … \"no_release_run\" producer in step resolve, found $(_w W2) — a second producer outside the lookup+diff gate is a green no-deploy the empty-lookup rows cannot see"
+fi
+if [ "$(_w W3)" = "ok" ]; then pass; else
+  fail "W3 step resolve carries '$(_w W3)' — continue-on-error turns every fail_closed into a green job; an if: can skip the verdict entirely"
+fi
+if [ "$(_w W4)" = "ok" ]; then pass; else
+  fail "W4 notify-gated's CAUSE case (the FIRST case on SKIP_REASON) lacks an arm for reason(s) its if: fires on: $(_w W4) — the page falls through to 'CI concluded success'. G9's union of all arms cannot see this once a second case exists"
+fi
+if [ "$(_w W5)" = "ok" ]; then pass; else
+  fail "W5 notify-gated's NEXT case (the SECOND case on SKIP_REASON) must route release_run_missing and github_api_unavailable to 're-run failed jobs', not 're-run the release'"
 fi
 
 # ═══ GUARD 5 — every ceiling on the new path is DERIVED, never restated ══════
@@ -949,7 +998,10 @@ while IFS= read -r hit; do
   _lo=$(( _ln > 3 ? _ln - 3 : 1 )); _hi=$(( _ln + 12 ))
   _win=$(sed -n "${_lo},${_hi}p" "$REPO_ROOT/$_f" 2>/dev/null)
   case "$hit" in
-    *'web-platform-release.yml/runs?per_page=100'*) _g8_fallback_win="$_win" ;;
+    # COMMENT-STRIPPED for the fallback rows below: a comment in the window that
+    # merely NAMES the arm token would otherwise satisfy them while the jq select
+    # itself names no arm.
+    *'web-platform-release.yml/runs?per_page=100'*) _g8_fallback_win=$(printf '%s\n' "$_win" | sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#[[:space:]].*$//') ;;
   esac
   g8_names_arm "$_win" || _undis="${_undis}${hit}
 "
@@ -1151,10 +1203,12 @@ TOTAL=$((passes + fails))
 #   exactly-one binding) = 70
 # + 3 pathspec coupling / checkout depth (P1, P2, P3)
 # + 2 G8 fallback-read rows (must-PASS, must-RED) = 75
+# + 5 resolve-step wiring (W1 outputs declared, W2 one no_release_run producer,
+#   W3 no continue-on-error/if, W4 CAUSE arms, W5 NEXT arms) = 80
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=75
+MIN_ROWS=80
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

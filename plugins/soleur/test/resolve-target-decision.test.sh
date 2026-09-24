@@ -101,10 +101,15 @@ case "$url" in
   */runs\?*head_sha=*)
     # A SEQUENCE when runs.json.<n> exists: the n-th filtered read gets runs.json.<n>,
     # and any read past the sequence gets runs.json. One counter file per FIXDIR.
+    # A one-shot TRANSIENT failure: the first filtered read fails, the retry succeeds.
+    if [ -f "$FIX/.fail_once" ]; then rm -f "$FIX/.fail_once"; printf 'HTTP 502: transient\n' >&2; exit 22; fi
     n=0; [ -f "$FIX/.n_filtered" ] && n=$(cat "$FIX/.n_filtered")
     n=$((n + 1)); printf '%s\n' "$n" > "$FIX/.n_filtered"
     if [ -f "$FIX/runs.json.$n" ]; then f="$FIX/runs.json.$n"; else f="$FIX/runs.json"; fi ;;
-  */runs\?*)        f="$FIX/runs_all.json" ;;
+  # EXACTLY the unfiltered query. Any other `runs?…` — `&branch=`, `&status=`, a page
+  # parameter — is a SEARCH read again (the incident's mechanism) and must not be
+  # served as the unfiltered list.
+  */web-platform-release.yml/runs\?per_page=100) f="$FIX/runs_all.json" ;;
   */runs)           f="$FIX/runs.json" ;;
   */actions/runs/*) f="$FIX/run.json" ;;
   *) printf 'gh-stub: unhandled url %s\n' "$url" >&2; exit 22 ;;
@@ -150,14 +155,19 @@ SHA_ROOT=$(commit_file apps/web-platform/moved.ts root)
 SHA_DOCS=$(commit_file knowledge-base/x.md docs)
 SHA_APP=$(commit_file apps/web-platform/x.ts app)
 SHA_PDOCS=$(commit_file plugins/soleur/docs/x.md pdocs)
-# Sits between pdocs and mvout so that mvout~1 is an ordinary commit; the test/
-# exclusion has the same shape as docs/, which L5 covers.
-SHA_PTEST=$(commit_file plugins/soleur/test/x.sh ptest)
 mkdir -p "$SRC/other"
 git -C "$SRC" mv apps/web-platform/moved.ts other/moved.ts
 git -C "$SRC" commit -q -m mvout
 SHA_MVOUT=$(git -C "$SRC" rev-parse HEAD)
-: "$SHA_PTEST"
+# A `%` in a filename reaches the ::error:: annotation, where the runner decodes %XX.
+SHA_PCT=$(commit_file 'apps/web-platform/100%.ts' pct)
+# A commit large enough that a pipe of its file list outgrows the pipe buffer
+# (~64 KiB): the size at which an early-exit reader SIGPIPEs its writer.
+mkdir -p "$SRC/apps/web-platform/big"
+for i in $(seq 1 2000); do printf 'x\n' > "$SRC/apps/web-platform/big/generated-module-with-a-long-name-$i.ts"; done
+git -C "$SRC" add -- apps/web-platform/big
+git -C "$SRC" commit -q -m big
+SHA_BIG=$(git -C "$SRC" rev-parse HEAD)
 
 # Called as `CLONE=$(mkshallow …)`, i.e. in a subshell, so the directory name is
 # minted by mktemp rather than by a counter the subshell could not advance.
@@ -184,7 +194,7 @@ mkfix() {  # $1=dir  $2=run_id|""  $3=release conclusion  $4=artifact json|"NONE
   assert_fixture_dir "$d"
   mkdir -p "$d"
   if [ -z "$runid" ]; then printf '{"workflow_runs":[]}\n' > "$d/runs.json"
-  else printf '{"workflow_runs":[{"id":%s,"status":"completed","conclusion":"success"}]}\n' "$runid" > "$d/runs.json"; fi
+  else printf '{"workflow_runs":[{"id":%s,"status":"completed","conclusion":"success","head_branch":"main"}]}\n' "$runid" > "$d/runs.json"; fi
   # The UNFILTERED list, in the real list shape. Empty unless a row overrides it.
   printf '{"total_count":0,"workflow_runs":[]}\n' > "$d/runs_all.json"
   printf '{"status":"completed"}\n' > "$d/run.json"
@@ -287,8 +297,13 @@ expect() {
 FIXDIR="$W/f-norun"; mkfix "$FIXDIR" "" success NONE
 CLONE=$(mkshallow "$SHA_DOCS") WR_HEAD_SHA=$SHA_DOCS run_resolve
 expect "S1 no release run, docs-only diff -> CLEAN SKIP, green" false no_release_run 0
-if [ "$(nsleep)" -eq 3 ]; then pass; else
-  fail "S1b an empty lookup must be retried: expected 3 backoff sleeps between 4 lookups, got $(nsleep). One empty answer from GitHub's run search is not evidence that no run exists"
+if [ "$(tr '\n' ' ' <"$W/sleep.log")" = "20 20 20 " ]; then pass; else
+  fail "S1b an empty lookup must be retried: expected 3 backoff sleeps of 20 s between 4 lookups, got '$(tr '\n' ' ' <"$W/sleep.log")'. One empty answer from GitHub's run search is not evidence that no run exists"
+fi
+
+# S1c — the reason code rides in the annotation (job outputs are not API-readable).
+if has_out '^::notice::deploy skipped \[skip_reason=no_release_run\]'; then pass; else
+  fail "S1c the clean-skip notice does not carry [skip_reason=no_release_run]. stdout: $(show_out)"
 fi
 
 # GREEN STATE 2 — the release ran and published nothing (check_changed declined).
@@ -348,6 +363,9 @@ FIXDIR="$W/f-happy"
 WR_HEAD_SHA=not-a-sha run_resolve
 expect "F7 malformed head_sha -> FAIL CLOSED" false bad_sha 1
 
+WR_HEAD_SHA=deadbeef$(printf 'z%.0s' $(seq 1 32)) run_resolve
+expect "F7b 40 chars with only a hex PREFIX -> FAIL CLOSED (the whole value must be hex; it reaches git)" false bad_sha 1
+
 # ── The DISPATCH arm ─────────────────────────────────────────────────────────
 FIXDIR="$W/f-happy"
 EVENT_NAME=workflow_dispatch run_resolve
@@ -371,17 +389,11 @@ expect "D4 dispatch, incoherent release -> FAIL CLOSED (arm parity)" false relea
 # WHAT THIS ROW DOES *NOT* COVER, stated so nobody assumes otherwise. The
 # errexit-capture idiom in gh_api() is guarded STATICALLY, by
 # scripts/lint-workflow-errexit-capture.py (ADR-170), not here — and that is
-# correct rather than a gap. A bare `_out=$(gh api ...)` followed by `_rc=$?` is
-# fragile in principle, but MEASURED, it is not fatal in this call shape: every
-# gh_api call site is inside `$( )`, and bash does not propagate errexit into a
-# command substitution there, so the read is reached and the behaviour is
-# identical. Writing a row that "kills" that mutation would mean asserting a
-# difference that does not exist — a fake kill, which is the defect class this
-# whole suite family exists to remove.
-#
-# The two instruments split the work honestly: the linter sees a fragile idiom
-# that would break the moment gh_api is called outside a substitution; A1 sees
-# the behaviour — retry, then fail closed with a reason.
+# correct rather than a gap. Since the step enables `shopt -s inherit_errexit`
+# (2026-09-24), a bare `_out=$(gh api ...)` followed by `_rc=$?` IS fatal inside
+# gh_api too: it kills the read at the first failure, with no retry and no
+# skip_reason — red, but unlabelled. A1 sees the behaviour (retry, then fail closed
+# with a reason); the linter sees the idiom.
 FIXDIR="$W/f-apifail"; mkfix "$FIXDIR" 777 success "$GOOD_ART"
 mv "$FIXDIR/runs.json" "$FIXDIR/runs.json.disabled"   # the stub exits 23 on a missing fixture
 run_resolve
@@ -393,7 +405,7 @@ fi
 # A1c — the ::error:: annotation must REACH THE LOG. gh_api is called inside
 # `x=$( … )`, so an annotation echoed to plain stdout is captured into x and lost:
 # the run goes red with no line saying why. fail_closed writes through fd 3.
-if has_out '^::error::deploy blocked'; then pass; else
+if has_out '^::error::deploy blocked \[skip_reason=github_api_unavailable\]'; then pass; else
   fail "A1c the fail-closed ::error:: annotation never reached the job log — it was captured by the \$( ) around gh_api. stdout: $(show_out)"
 fi
 
@@ -413,7 +425,9 @@ python3 - "$FIXDIR/runs.json" <<'PYR'
 import json, sys
 p = sys.argv[1]
 d = json.load(open(p))
-d["workflow_runs"].append({"id": 999, "status": "completed", "conclusion": "success"})
+# On main like the real run, so only the OWN-RUN exclusion can drop it — not the
+# head_branch filter.
+d["workflow_runs"].append({"id": 999, "status": "completed", "conclusion": "success", "head_branch": "main"})
 json.dump(d, open(p, "w"))
 PYR
 run_resolve
@@ -455,7 +469,7 @@ fi
 if [ "$(get lookup_path)" = "retry_3" ]; then pass; else
   fail "L2c lookup_path is '$(get lookup_path)', expected retry_3 — a run found only on a retry must be visible as such"
 fi
-if has_out '^::warning::release run 777 found via retry-3'; then pass; else
+if has_out '^::warning::release run 777 found with lookup_path=retry_3'; then pass; else
   fail "L2d no ::warning:: that the run was found only on retry 3 — a persistently lagging search would be masked. stdout: $(show_out)"
 fi
 
@@ -471,7 +485,7 @@ fi
 if [ "$(get lookup_path)" = "fallback" ]; then pass; else
   fail "L3c lookup_path is '$(get lookup_path)', expected fallback"
 fi
-if has_out '^::warning::release run 777 found via unfiltered-fallback'; then pass; else
+if has_out '^::warning::release run 777 found with lookup_path=fallback'; then pass; else
   fail "L3d no ::warning:: that the run was found only via the unfiltered fallback. stdout: $(show_out)"
 fi
 
@@ -537,6 +551,74 @@ if has_out '^release run: 777$'; then pass; else
   fail "X2b the fallback did not select run 777 (the push run on main for this SHA). stdout: $(show_out)"
 fi
 
+# ═══ REVIEW ROWS (2026-09-24) ═════════════════════════════════════════════════
+
+# LBIG — a deployable diff large enough to outgrow the pipe buffer. An early-exit
+# reader in the filename pipeline SIGPIPEs its writer, the assignment returns 141,
+# and the step dies before fail_closed writes a skip_reason (no Slack page).
+FIXDIR="$W/f-LBIG"; mkfix "$FIXDIR" "" success NONE
+CLONE=$(mkshallow "$SHA_BIG") WR_HEAD_SHA=$SHA_BIG run_resolve
+expect "LBIG 2000-file deployable diff + empty lookups -> FAIL CLOSED release_run_missing (not a dead step)" false release_run_missing 1
+if has_out 'deployable paths \(apps/web-platform/big/'; then pass; else
+  fail "LBIGb the large-diff annotation did not name the changed files. stdout: $(show_out)"
+fi
+
+# LPCT — a `%` in a filename is escaped before it reaches the annotation.
+FIXDIR="$W/f-LPCT"; mkfix "$FIXDIR" "" success NONE
+CLONE=$(mkshallow "$SHA_PCT") WR_HEAD_SHA=$SHA_PCT run_resolve
+expect "LPCT a %-bearing deployable filename + empty lookups -> FAIL CLOSED release_run_missing" false release_run_missing 1
+if has_out 'deployable paths \([^)]*100%25\.ts'; then pass; else
+  fail "LPCTb the '%' in the filename was not escaped to %25 before the annotation. stdout: $(show_out)"
+fi
+
+# LFETCH — the lazy deepen FAILS (origin does not have the SHA). A swallowed or
+# fatal fetch must not decide the verdict: the diff reports it, fail closed, labelled.
+FIXDIR="$W/f-LFETCH"; mkfix "$FIXDIR" "" success NONE
+CLONE=$(mkshallow "$SHA_APP") WR_HEAD_SHA=$SHA_OK run_resolve
+expect "LFETCH the deepen fetch fails + empty lookups -> FAIL CLOSED release_run_missing" false release_run_missing 1
+if has_out 'its diff could not be computed'; then pass; else
+  fail "LFETCHb a failed deepen did not reach the uncomputable-diff branch. stdout: $(show_out)"
+fi
+
+# T1 — a TRANSIENT failure recovers: the first filtered read fails, the retry succeeds.
+FIXDIR="$W/f-T1"; mkfix "$FIXDIR" 777 success "$GOOD_ART"
+: > "$FIXDIR/.fail_once"
+run_resolve
+expect "T1 one transient 502 on the filtered read, then success -> DEPLOY" true "" 0
+if [ "$(get lookup_path)" = "primary" ] && [ "$(nsr)" -eq 1 ]; then pass; else
+  fail "T1b after one recovered transient the run must resolve on the primary read with one verdict (lookup_path='$(get lookup_path)', skip_reason lines=$(nsr))"
+fi
+
+# X3 — two QUALIFYING runs on the fallback list: the newest wins.
+FIXDIR="$W/f-X3"; mkfix "$FIXDIR" "" success "$GOOD_ART"
+printf '{"total_count":2,"workflow_runs":[{"id":777,"event":"push","head_branch":"main","head_sha":"%s"},{"id":700,"event":"push","head_branch":"main","head_sha":"%s"}]}\n' "$SHA_OK" "$SHA_OK" > "$FIXDIR/runs_all.json"
+run_resolve
+if [ "$(get should_deploy)" = "true" ] && has_out '^release run: 777$'; then pass; else
+  fail "X3 with two qualifying push runs on the unfiltered list the fallback did not pick the newest (777). stdout: $(show_out)"
+fi
+
+# X4 — two QUALIFYING runs on the filtered read: the newest wins.
+FIXDIR="$W/f-X4"; mkfix "$FIXDIR" 777 success "$GOOD_ART"
+printf '{"workflow_runs":[{"id":700,"status":"completed","conclusion":"success","head_branch":"main"},{"id":777,"status":"completed","conclusion":"success","head_branch":"main"}]}\n' > "$FIXDIR/runs.json"
+run_resolve
+if [ "$(get should_deploy)" = "true" ] && has_out '^release run: 777$'; then pass; else
+  fail "X4 with two qualifying push runs on the filtered read the primary did not pick the newest (777). stdout: $(show_out)"
+fi
+
+# X5 — the filtered read offers a push run at this SHA on a NON-main branch. It is
+# not this merge's release; the artifact would pass identity (it carries no branch),
+# so only the branch filter keeps it out. Docs-only diff -> the clean skip.
+FIXDIR="$W/f-X5"; mkfix "$FIXDIR" 777 success "$(art_for "$SHA_DOCS")"
+printf '{"workflow_runs":[{"id":777,"status":"completed","conclusion":"success","head_branch":"feature"}]}\n' > "$FIXDIR/runs.json"
+CLONE=$(mkshallow "$SHA_DOCS") WR_HEAD_SHA=$SHA_DOCS run_resolve
+expect "X5 a non-main push run on the filtered read is never selected" false no_release_run 0
+
+# MD — a non-numeric run id never reaches a URL.
+FIXDIR="$W/f-MD"; mkfix "$FIXDIR" 777 success "$GOOD_ART"
+printf '{"workflow_runs":[{"id":"77x","status":"completed","conclusion":"success","head_branch":"main"}]}\n' > "$FIXDIR/runs.json"
+run_resolve
+expect "MD a non-numeric run id -> FAIL CLOSED before it reaches an API path" false github_api_unavailable 1
+
 # ── Verdict ──────────────────────────────────────────────────────────────────
 # DERIVED: 1 instrument + 1 extractor + 1 control + 5 green states
 # + 7 fault states + 5 dispatch (D1, D1b, D2, D3, D4)
@@ -545,6 +627,8 @@ fi
 # + 26 empty-lookup (2026-09-24): RELEASE_PATH_FILTER extractor, shallow-fixture
 #   check, S1b, A1c, L1+L1b, L2+L2b+L2c+L2d, L3+L3b+L3c+L3d, L5, L6+L6b, L7+L7b,
 #   L8+L8b, L9, A2+A2b, X2+X2b = 50
+# + 14 review rows: S1c, F7b, LBIG+LBIGb, LPCT+LPCTb, LFETCH+LFETCHb, T1+T1b, X3, X4,
+#   X5, MD = 64
 #
 # THE BINDINGS SIT DIRECTLY ABOVE THE CONDITIONAL, WITH NO COMMENT BETWEEN THEM.
 # scripts/guard-vacuity-floor.test.sh builds a mutant by walking BACK from the
@@ -554,7 +638,7 @@ fi
 # as UNCONSTRUCTIBLE — i.e. this suite's floor would be unguarded, which is the
 # exact vacuity this file family exists to prevent. Keep them adjacent.
 TOTAL=$((passes + fails))
-MIN_ROWS=50
+MIN_ROWS=64
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. A row was dropped or a fixture stopped running.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

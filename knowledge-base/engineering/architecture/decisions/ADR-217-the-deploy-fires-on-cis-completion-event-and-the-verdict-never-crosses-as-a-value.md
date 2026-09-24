@@ -213,7 +213,7 @@ loop live again with no other warning. There is deliberately **no**
 >   `release_run_missing`: **fail closed, loud** (Slack and the non-delivery email).
 > - **The diff never produces `should_deploy=true`.** It only chooses red or green for
 >   a SHA that has no run; with no run there is no artifact, version or image to deploy.
-> - **Three copies of one definition now decide a verdict.** `on.push.paths` ↔
+> - **Four copies of one definition now decide a verdict.** `on.push.paths` ↔
 >   `path_filter` ↔ the step's `RELEASE_PATH_FILTER`, plus B8's `PATHSPEC` in
 >   `scripts/prod-version-drift-check.sh`. Invariant rows P1 (step copy = `path_filter`)
 >   and P3 (`on.push.paths` translated = `path_filter`) pin them; P2 pins the checkout
@@ -227,6 +227,17 @@ loop live again with no other warning. There is deliberately **no**
 >   whose earlier commit is deployable, *and* search lag over ~60 s, *and* the push run
 >   off page 1 of the unfiltered list. Its backstop is `scheduled-prod-version-drift.yml`
 >   (hourly, 225-minute threshold).
+> - **Residual, fails closed:** `release_run_missing` also fires when GitHub's path filter
+>   genuinely declined a push whose head diff is deployable (its documented 3,000-file diff
+>   limit; a multi-commit push whose net diff is empty). Re-running cannot recover that, so
+>   the Slack text and ship's admin-merge reference name the check (`gh run list … --event push
+>   -c <sha>`) and the dispatch fallback.
+> - **The reason code rides in the annotation** (`[skip_reason=<reason>]`), because job
+>   outputs are not readable through the REST API and check-run annotations are; postmerge
+>   reads it to decide whether a re-run is the recovery.
+> - **Scope of this note:** §3's heading ("Five states") and its "sixth state" paragraph
+>   predate this addendum and are left as written; the table above now has six rows, plus the
+>   `ci_not_green` state.
 
 ### 4. The creep detector is relocated, not deleted
 
