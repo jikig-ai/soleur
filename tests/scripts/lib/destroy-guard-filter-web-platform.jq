@@ -67,7 +67,8 @@
 #
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
-#          host_creates: int, luks_passphrase_rotations: int}.
+#          host_creates: int, non_terraform_data_deletes: int,
+#          luks_passphrase_rotations: int, …}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
 # so the manual-rerun consumer that reads only them keeps working. host_creates
 # has TWO workflow readers: the `apply` job (#6416) and apply-deploy-pipeline-fix.yml
@@ -312,6 +313,21 @@ def destroyed_at($addr):
     [ .resource_changes[]?
       | select(.type == "hcloud_server")
       | select(.change.actions? | index("create")) ]
+    | length
+  ),
+
+  # (#8705) apply-deploy-pipeline-fix.yml's only reader. That workflow's -targets reach
+  # hcloud_server.web["web-1"], and through its user_data every credential the server's
+  # templatefile reads (e.g. doppler_service_token.web_probes), so a pending rename of
+  # such a credential plans as a replace INSIDE that workflow — which has no [ack-destroy]
+  # path and does not re-fire the credential's SSH installers. Replacing its own
+  # terraform_data resources is routine there; deleting or forgetting anything else is
+  # never its job. Counted separately from resource_deletes for that reason.
+  non_terraform_data_deletes: (
+    [ .resource_changes[]?
+      | select((.mode // "managed") == "managed")
+      | select(.type != "terraform_data")
+      | select((.change.actions // []) | any(. == "delete" or . == "forget")) ]
     | length
   ),
 

@@ -1,6 +1,6 @@
 # Runbook — replacing a web host
 
-**Status:** current as of 2026-07-26 (#6969, ADR-148).
+**Status:** current as of 2026-09-24 (#6969, ADR-148; rotated-credential re-seed #8705).
 **Applies to:** any `hcloud_server.web[<key>]` that is **already in state** — except `web-1`,
 which this path refuses (see below).
 
@@ -13,6 +13,14 @@ exists:
 |---|---|---|
 | declared in `var.web_hosts` but absent from the provider | `web-host-create` | exactly 1 create, 0 destroys |
 | present, but broken / dark / on a bad image | `web-host-replace` | exactly 1 delete+create of that key |
+| present, but holding a baked create-time credential that has since been rotated (`hcloud_server.web` ignores `user_data` changes, so only a new host picks up the new value) | `web-host-replace` | exactly 1 delete+create of that key |
+
+**Re-seeding a rotated credential — ordering.** Dispatch the replace only after the rotation's merge
+apply is green (the #8705 `web_probes` rotation is the first such use). While the rotation is still
+pending, the gate refuses the dispatch (the credential's replace is out of its scope), so a refusal
+there is expected. A dispatch made *before* the rotation merges is NOT refused and bakes the old
+credential into the new host. web-1 is excluded from this path; its copy is re-delivered by the
+SSH-stage installers of the rotation's own apply.
 
 Dispatching the wrong one is safe by construction — each gate refuses the other's plan shape,
 and the `confirm` tokens are deliberately different — but it wastes a run.
