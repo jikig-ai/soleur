@@ -182,6 +182,7 @@ export async function renderC4Model(stage: StageFn): Promise<RenderResult> {
   const root = c4RenderStagingRoot();
   const dir = await mkdir(root, { recursive: true, mode: 0o700 })
     .then(() => verifyPrivateRoot(root))
+    .then(() => sweepStaleStages(root))
     .then(() => mkdtemp(join(root, "c4-render-")))
     .catch(() => null);
   if (!dir) {
@@ -226,6 +227,28 @@ export async function renderC4Model(stage: StageFn): Promise<RenderResult> {
 const STAGE_SETTLE_GRACE_MS = 2_000;
 /** Stand-in for the per-render stage path inside rendered file:// URIs. */
 export const STABLE_SOURCE_ROOT = "/c4-sources";
+
+// A render holds its stage for at most the stage deadline + a render-slot wait
+// + the spawn timeout; a stage older than this was left by a crashed process.
+const STALE_STAGE_MS = 10 * 60_000;
+
+/** Best-effort: remove stage dirs a crashed render left behind (they hold
+ *  another tenant's committed sources). Never fails the render. */
+async function sweepStaleStages(root: string): Promise<void> {
+  try {
+    const now = Date.now();
+    for (const d of await readdir(root, { withFileTypes: true })) {
+      if (!d.isDirectory() || !d.name.startsWith("c4-render-")) continue;
+      const p = join(root, d.name);
+      const st = await lstat(p).catch(() => null);
+      if (st && now - st.mtimeMs > STALE_STAGE_MS) {
+        await rm(p, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  } catch {
+    // Sweep is hygiene only.
+  }
+}
 
 /** The staging root must be a real directory we own — not a symlink planted
  *  in its place, and not someone else's directory. */

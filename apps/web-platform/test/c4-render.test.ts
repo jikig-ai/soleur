@@ -438,4 +438,23 @@ describe("renderC4Model", () => {
     }
   });
 
+  it("sweeps stage dirs a crashed render left behind (older than 10 min), leaving fresh ones", async () => {
+    const child = makeChild();
+    spawnThenEmit(child, () => child.emit("close", 0, null));
+    const dirEntry = (name: string) => ({ name, isDirectory: () => true, isFile: () => false });
+    fsMock.readdir.mockImplementation(async (p: string) =>
+      String(p).endsWith("/src") ? [FILE_ENTRY("model.c4")] : [dirEntry("c4-render-old"), dirEntry("c4-render-new"), dirEntry("other")],
+    );
+    fsMock.lstat.mockImplementation(async (p: string) =>
+      String(p).endsWith("c4-render-old")
+        ? { ...PRIVATE_DIR_STAT, mtimeMs: Date.now() - 11 * 60_000 }
+        : { ...PRIVATE_DIR_STAT, mtimeMs: Date.now() },
+    );
+    const res = await renderC4Model(STAGE);
+    expect(res.ok).toBe(true);
+    const removed = fsMock.rm.mock.calls.map((c) => String(c[0]));
+    expect(removed.some((p) => p.endsWith("/c4-render-old"))).toBe(true);
+    expect(removed.some((p) => p.endsWith("/c4-render-new"))).toBe(false);
+    expect(removed.some((p) => p.endsWith("/other"))).toBe(false);
+  });
 });
