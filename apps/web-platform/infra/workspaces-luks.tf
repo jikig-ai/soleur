@@ -125,11 +125,80 @@ resource "doppler_secret" "workspaces_luks_key" {
 #   `doppler run --config prd_workspaces_luks -- …`      → injects all ~116 + the key
 #   `doppler secrets download --config prd_workspaces_luks` → same, into a file
 # Neither this .tf nor its guard can see host-side code, so nothing here pins it.
+#
+# ROTATION (#8632) is a change to `name`. Every user-set attribute of this resource is ForceNew
+# in the pinned provider (DopplerHQ/doppler v1.21.2, resource_service_token.go), so a rename
+# plans as one replace, and the merge must carry `[ack-destroy]`. In that one merge:
+#   1. the main apply mints the new token, rewrites WORKSPACES_LUKS_BOOT_TOKEN below, then
+#      deletes the old token (create_before_destroy);
+#   2. its SSH step re-fires terraform_data.luks_monitor_token_install below (its only trigger is
+#      this key's hash), which proves the new token can read WORKSPACES_LUKS_KEY and then rewrites
+#      the DOPPLER_TOKEN= line in web-1's /etc/default/luks-monitor.
+# No dispatch is involved. Never `-replace random_password.workspaces_luks`: that rotates the
+# PASSPHRASE, not this token.
+#
+# create_before_destroy is for failure atomicity: without it a failed create lands AFTER the
+# delete, leaving no live token anywhere. It creates the new token while the old one still exists,
+# which is safe here because the names differ. A future same-name `-replace` needs a probe that
+# Doppler accepts two service tokens with one name first (the tunnel.tf 2026-07-29 probe shape).
+#
+# Rotated 2026-09-24 from `workspaces-luks-boot` (created 2026-07-18) because retained web-1
+# snapshot 411798619 very likely holds that token.
 resource "doppler_service_token" "workspaces_luks" {
   project = "soleur"
   config  = "prd_workspaces_luks"
-  name    = "workspaces-luks-boot"
+  name    = "workspaces-luks-boot-2026-09-24"
   access  = "read"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# #8632 — deliver the current boot token to web-1's luks-monitor EnvironmentFile, in the same
+# apply that rotates it. ADR-119's 2026-09-24 addendum: after the cutover's first write, THIS
+# resource owns the DOPPLER_TOKEN= line; the SOLEUR_SENTRY_DSN line stays cloud-init's, and the
+# helper keeps every other line byte for byte. Same shape as server.tf's private_nic_guard_install,
+# which delivers the web_probes token the same way (pinned host_key, token-hash trigger).
+#
+# The ONLY trigger is the token hash. No file() hash: a comment edit to the helper must not
+# re-provision web-1 (the file provisioner uploads the current helper on every fire anyway).
+#
+# The helper proves the token READS the key; it never starts luks-monitor.service, so mount,
+# escrow or readyz faults that have nothing to do with the token cannot redden a rotation merge.
+# The second remote-exec only prints the timer's state into the apply log (no secret in it, so
+# Terraform does not suppress its output; #8632 review found the host timer quiet).
+resource "terraform_data" "luks_monitor_token_install" {
+  triggers_replace = nonsensitive(sha256(doppler_service_token.workspaces_luks.key))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/luks-monitor-token-refresh.sh"
+    destination = "/usr/local/bin/luks-monitor-token-refresh.sh"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      # printf is a shell builtin, so the key is never an argument to any process; the helper
+      # reads exactly one line from stdin.
+      "printf '%s\\n' '${doppler_service_token.workspaces_luks.key}' | bash /usr/local/bin/luks-monitor-token-refresh.sh",
+    ]
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "systemctl list-timers luks-monitor.timer --no-pager || true",
+      "systemctl show -p UnitFileState,ActiveState,LastTriggerUSec luks-monitor.timer --no-pager || true",
+      "systemctl show -p Result,ExecMainStatus,ExecMainExitTimestamp luks-monitor.service --no-pager || true",
+    ]
+  }
 }
 
 # #6649 — publish the boot token to a repo-level GitHub Actions secret so the cutover/verify
