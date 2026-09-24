@@ -27,8 +27,7 @@ whose copy says "CTO has been notified" must page.
 works"), so a low background rate would email once a day per class. It stays paged because the
 issue names it.
 
-**Cost to flip:** one `pagesOperator` value in
-`apps/web-platform/components/dashboard/failure-reason-copy.ts` plus the rule's `reason` `in` value in
+**Cost to flip:** one `PAGES_OPERATOR` value in `apps/web-platform/lib/failure-reason.ts` plus the rule's `reason` `in` value in
 `apps/web-platform/infra/sentry/issue-alerts.tf`. For `leader_refused` or `leader_class_disabled`,
 the founder copy must change in the same diff, or the contract test fails.
 

@@ -4,27 +4,36 @@ Plan: `knowledge-base/project/plans/2026-09-25-feat-agent-on-spawn-dead-letter-s
 
 ## Phase 1: Emitter (RED first)
 
-- [ ] 1.1 Write `apps/web-platform/test/server/spawn-dead-letter.test.ts` (Guard 3, real logger and
-  observability, `@sentry/nextjs` mocked; must-pass inputs: Error, string, StepError-shaped object,
-  PostgREST-shaped object; `pg_code` for a direct `{ code }` input)
-- [ ] 1.2 Write `apps/web-platform/test/sentry-spawn-dead-letter-alert-op-contract.test.ts` (Guard 1
-  rule contract with root-wide unique `frequency_minutes` and a paste-ready failure message; Guard 2
-  `/notif/i` → `pagesOperator: true`, at least four matching rows)
+- [ ] 1.1 Write `apps/web-platform/test/server/spawn-dead-letter.test.ts` (Guard 3): real logger
+  and observability, `@sentry/nextjs` mocked; `vi.stubEnv` `SENTRY_BREADCRUMB_LEVEL=warn` and
+  `LOG_LEVEL=info` + `vi.resetModules()` before importing; breadcrumb positive control; must-pass
+  inputs (Error, string, `null`, `undefined`, `Object.create(null)`, StepError-shaped,
+  PostgREST-shaped); `pg_code` for a direct `{ code: "42501" }`; `userIdHash` present and the
+  synthetic founder uuid absent; `safeToolName` cases; throwing-reporter case via `vi.doMock`
+- [ ] 1.2 Write `apps/web-platform/test/sentry-spawn-dead-letter-alert-op-contract.test.ts`: Guard 1
+  (tags, set equality, literal six-reason pin, `logic_type`, `enabled`, `match`, `monitor_ids`,
+  `ActiveMembers`, root-wide unique `frequency_minutes`, paste-ready failure message) and Guard 2
+  (rows matching `/notif/i` are exactly the promised four, each `true` in `PAGES_OPERATOR`)
 - [ ] 1.3 Leader-loop suite: move `deadletterCall()` to module scope; add `not.toBeInstanceOf(Error)`
-  and `tags` assertions (400, 404/413/422, AC10 truncated, AC10 tool-invalid with `extra.tool`,
-  stop-reason `it.each`); add the forced-throw case; fix the stale comment
-- [ ] 1.4 `failure-reason-copy.test.ts`: `pagesOperator` is a boolean on every row
-- [ ] 1.5 Run the four suites; confirm they fail for the expected reason
-- [ ] 1.6 Add required `pagesOperator` to `FailureReasonRow` and all 19 rows (six `true`, per the
-  plan table); update the file header checklist; no `copy` text changes
-- [ ] 1.7 Create `apps/web-platform/server/spawn-dead-letter.ts` (literals, derived paged set,
-  `reportSpawnDeadLetter` with an outer try/catch, `toMessagePathError` returning
-  `{ name, message, stack, code }`, "MESSAGE PATH ON PURPOSE" header citing #8629)
-- [ ] 1.8 `agent-on-spawn-requested.ts`: import `FailureReason` type from the copy module and delete
+  and `tags` assertions (400, 404/413/422, AC10 truncated, AC10 tool-invalid with
+  `extra.tool/turn/model`, the stop-reason `it.each`); add the message-conditioned forced-throw
+  case (`mock.results` throw entry, dead-letter result returned, `persist-failure` memoized); fix
+  the stale comment
+- [ ] 1.4 Run the suites; confirm they fail for the expected reason
+- [ ] 1.5 Create `apps/web-platform/lib/failure-reason.ts` (move the union, add `PAGES_OPERATOR` with
+  six `true` rows and per-row rationale); `failure-reason-copy.ts` imports and re-exports the type
+  and updates its header checklist; no copy text changes
+- [ ] 1.6 Create `apps/web-platform/server/spawn-dead-letter.ts` (literals, derived paged set,
+  `reportSpawnDeadLetter` with outer try/catch whose catch logs `{ err }` and sends a tagged
+  `report failed` message in nested tries, `toMessagePathError` built field by field,
+  `toReportExtra` renaming `founderId` → `userId`, `safeToolName`, header citing #8629 and naming
+  `anthropic-credit.ts`)
+- [ ] 1.7 `agent-on-spawn-requested.ts`: import `FailureReason` from `@/lib/failure-reason` and delete
   the private union; `persistFailure` → `reportSpawnDeadLetter`; drop the `reportSilentFallback`
-  import; `leader_tool_invalid` passes `extra: { turn, model, tool }`; fix the stale comment
-- [ ] 1.9 `./node_modules/.bin/tsc --noEmit` and the four vitest suites green (rule half of the
-  contract test stays red until 2.1)
+  import; `leader_tool_invalid` passes `extra: { turn, model, tool: safeToolName(tu.name) }`; fix
+  the stale comment
+- [ ] 1.8 `./node_modules/.bin/tsc --noEmit`, the four vitest suites, and the dependency-cruiser gate
+  green (rule half of the contract test stays red until 2.1)
 
 ## Phase 2: Rule
 
@@ -47,5 +56,9 @@ Plan: `knowledge-base/project/plans/2026-09-25-feat-agent-on-spawn-dead-letter-s
 
 - [ ] 4.1 PR body first line: merging applies the rule (`apply-sentry-infra.yml`) and deploys the
   emitter (`web-platform-release.yml`); `Closes #8719`; render `decision-challenges.md` DC-1/DC-2
-- [ ] 4.2 Post-merge: `apply-sentry-infra.yml` run for the merge commit concludes `success`
+- [ ] 4.2 Comment on #8629 that `server/spawn-dead-letter.ts` joins `server/anthropic-credit.ts` as a
+  message-path workaround to revert when the fleet-wide fix lands
+- [ ] 4.3 File a tracking issue: the handler's other log lines (e.g. the `persist-failure` warn) still
+  log `founderId` raw; pseudonymize them
+- [ ] 4.4 Post-merge: `apply-sentry-infra.yml` run for the merge commit concludes `success`
   (including live fidelity)
