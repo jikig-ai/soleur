@@ -4,82 +4,82 @@ Plan (deepened 2026-09-24): `knowledge-base/project/plans/2026-09-24-fix-externa
 
 ## Phase 0: RED (tests first)
 
-- [ ] 0.1 Create `apps/web-platform/test/server/watchdog-dispatch-clock.test.ts`.
-  - [ ] 0.1.1 Harness. Inject `deps.table`, `now`, `random`, `mint`, `octokitFor`, `report`,
+- [x] 0.1 Create `apps/web-platform/test/server/watchdog-dispatch-clock.test.ts`.
+  - [x] 0.1.1 Harness. Inject `deps.table`, `now`, `random`, `mint`, `octokitFor`, `report`,
     `emit` and the timers. Save `realSetImmediate` before `vi.useFakeTimers()`, and advance with
     `advanceTimersByTimeAsync`. Add the `unhandledRejection` listener in `beforeEach` and remove it
     in `afterEach`. Count POSTs per workflow path.
-  - [ ] 0.1.2 Write scenarios C1–C16, including the C7 redaction fixture, where the token appears
+  - [x] 0.1.2 Write scenarios C1–C16, including the C7 redaction fixture, where the token appears
     in the message, `request.headers.authorization` and `response.data`.
-  - [ ] 0.1.3 Run against a stub module and confirm every case fails.
-- [ ] 0.2 Add a `describe("Watchdog dispatch clock parity (#8495)")` block to
+  - [x] 0.1.3 Run against a stub module and confirm every case fails.
+- [x] 0.2 Add a `describe("Watchdog dispatch clock parity (#8495)")` block to
   `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts`.
-  - [ ] 0.2.1 Add helpers: `workflowOn(file)`, which parses the `on` keys and the top-level
+  - [x] 0.2.1 Add helpers: `workflowOn(file)`, which parses the `on` keys and the top-level
     `concurrency` with the `yaml` dep, and `monitorFieldBySlug(tf, slug, field)`.
-  - [ ] 0.2.2 Assert per entry:
+  - [x] 0.2.2 Assert per entry:
     - `eligibility` is non-empty;
     - the trigger set is exactly `{schedule, workflow_dispatch}`;
     - `cancel-in-progress: false`;
     - the crontab appears in the workflow's crons;
     - `monitor-slug` matches;
     - the margin is within `[ceil(3 + max_runtime), interval]`.
-  - [ ] 0.2.3 Assert the slug set equals the expected set, and `checked === table.length`.
-  - [ ] 0.2.4 Pin inngest `intervalMinutes <= 15`, with the assertion citing #8495.
-  - [ ] 0.2.5 Assert no `.github/workflows/*.yml` or `apps/web-platform/playwright*.config.ts`
+  - [x] 0.2.3 Assert the slug set equals the expected set, and `checked === table.length`.
+  - [x] 0.2.4 Pin inngest `intervalMinutes <= 15`, with the assertion citing #8495.
+  - [x] 0.2.5 Assert no `.github/workflows/*.yml` or `apps/web-platform/playwright*.config.ts`
     sets `SOLEUR_HOST_ID`.
-  - [ ] 0.2.6 Add a pure `marginWithinBudget` with rows H2 (must-PASS and must-RED).
+  - [x] 0.2.6 Add a pure `marginWithinBudget` with rows H2 (must-PASS and must-RED).
 
 ## Phase 1: Clock module + boot wiring
 
-- [ ] 1.1 Create `apps/web-platform/server/watchdog-dispatch-table.ts`. It has no imports.
-  - [ ] 1.1.1 The table holds two entries: inngest-health (15) and zot (60).
-  - [ ] 1.1.2 Each entry has an `eligibility` string.
-- [ ] 1.2 Create `apps/web-platform/server/watchdog-dispatch-clock.ts`.
-  - [ ] 1.2.1 Add `slotStartAt`, `slotAlreadyHasRun` (`created_at >= S − 60 s`), and
+- [x] 1.1 Create `apps/web-platform/server/watchdog-dispatch-table.ts`. It has no imports.
+  - [x] 1.1.1 The table holds two entries: inngest-health (15) and zot (60).
+  - [x] 1.1.2 Each entry has an `eligibility` string.
+- [x] 1.2 Create `apps/web-platform/server/watchdog-dispatch-clock.ts`.
+  - [x] 1.2.1 Add `slotStartAt`, `slotAlreadyHasRun` (`created_at >= S − 60 s`), and
     `shouldArmWatchdogClock` (production plus a trimmed `SOLEUR_HOST_ID`).
-  - [ ] 1.2.2 Add the poll:
+  - [x] 1.2.2 Add the poll:
     - `setInterval(poll, 30 s).unref()`;
     - one jitter draw per `(entry, slot)` in `[30 s, 150 s]`;
     - late cutoff at `S + interval − 2 min`;
     - `handledSlot` and `inFlight` flags.
-  - [ ] 1.2.3 Add `runTickSafely` with three fences: the inner try/catch/finally, the outer
+  - [x] 1.2.3 Add `runTickSafely` with three fences: the inner try/catch/finally, the outer
     `.catch` → `tick_escaped`, and a try/catch around `report`. Wrap it in
     `withTimeout(90 s)` on the injected timers, with `clearTimeout` in `finally`.
-  - [ ] 1.2.4 Mint in-module:
+  - [x] 1.2.4 Mint in-module:
     `createProbeOctokit` → `GET /repos/jikig-ai/soleur/installation` →
     `generateInstallationToken(id, { minRemainingMs: 5 min, permissions: { actions: "write" }, repositories: ["soleur"] })`.
     Do not import from `server/inngest/`.
-  - [ ] 1.2.5 Add a `per_page=1` read that fails open.
-  - [ ] 1.2.6 Inline the dispatch `POST {ref: "main"}`, passing an Octokit `request.signal`.
-  - [ ] 1.2.7 Report failures by building a new `Error(redactToken(msg, token))`, with `op` and
+  - [x] 1.2.5 Add a `per_page=1` read that fails open.
+  - [x] 1.2.6 Inline the dispatch `POST {ref: "main"}`, passing an Octokit `request.signal`.
+  - [x] 1.2.7 Report failures by building a new `Error(redactToken(msg, token))`, with `op` and
     `extra.{workflow, reason, status}`. Never forward the raw Octokit error.
-  - [ ] 1.2.8 On each tick, emit the marker with `{host_id, workflow, slot, outcome, op?, reason?, status?, run_id?, run_event?}`.
+  - [x] 1.2.8 On each tick, emit the marker with `{host_id, workflow, slot, outcome, op?, reason?, status?, run_id?, run_event?}`.
     Emit a boot `armed`/`disarmed` marker, plus a report with `op=arm` when disarmed in
     production.
-- [ ] 1.3 In `apps/web-platform/server/cron-liveness-marker.ts`, add `emitWatchdogDispatch`:
+- [x] 1.3 In `apps/web-platform/server/cron-liveness-marker.ts`, add `emitWatchdogDispatch`:
   a WARN marker, `SOLEUR_WATCHDOG_DISPATCH: true`, fail-open.
-- [ ] 1.4 In `apps/web-platform/.dependency-cruiser.cjs`, add the forbidden rule
+- [x] 1.4 In `apps/web-platform/.dependency-cruiser.cjs`, add the forbidden rule (DEVIATION: enforced by a transitive-import walker in watchdog-dispatch-clock.test.ts instead; .dependency-cruiser.cjs is generated + non-blocking — see session-state.md)
   `watchdog-clock-not-via-inngest` (`^server/watchdog-dispatch-` must not reach `^server/inngest/`).
-- [ ] 1.5 In `apps/web-platform/server/index.ts`, add
+- [x] 1.5 In `apps/web-platform/server/index.ts`, add
   `const watchdogClock = startWatchdogDispatchClock()` right after `startCcIdleReaper()`. In
   SIGTERM, call `watchdogClock.stop()` synchronously beside `clearInterval(ccIdleReaperTimer)`.
-- [ ] 1.6 Get the clock tests GREEN and the dep-cruiser gate passing. Leave
+- [x] 1.6 Get the clock tests GREEN and the dep-cruiser gate passing. Leave
   `cron-main-health-monitor.ts` untouched.
 
 ## Phase 2: Sentry monitors + workflow headers
 
-- [ ] 2.1 In `cron-monitors.tf`, set zot `checkin_margin_minutes` from 120 to 30. Rewrite both
+- [x] 2.1 In `cron-monitors.tf`, set zot `checkin_margin_minutes` from 120 to 30. Rewrite both
   rationale comments: the clock is primary, the GH schedule is the fallback, and include the
   margin-budget arithmetic. Leave the crontabs unchanged.
-- [ ] 2.2 Edit only the header comments of both workflows. Line 1 (the gate-override) must stay
+- [x] 2.2 Edit only the header comments of both workflows. Line 1 (the gate-override) must stay
   byte-identical.
-- [ ] 2.3 Get the parity block GREEN.
-  - [ ] 2.3.1 Apply Guard 1 rows 1, 3, 7 and 8, and Guard 2 row 6. Record each RED.
-  - [ ] 2.3.2 Run `terraform fmt -check` and `terraform validate` on `apps/web-platform/infra/sentry`.
+- [x] 2.3 Get the parity block GREEN.
+  - [x] 2.3.1 Apply Guard 1 rows 1, 3, 7 and 8, and Guard 2 row 6. Record each RED.
+  - [x] 2.3.2 Run `terraform fmt -check` and `terraform validate` on `apps/web-platform/infra/sentry`.
 
 ## Phase 3: ADR + C4 + runbooks
 
-- [ ] 3.1 Write ADR-248 (provisional ordinal). It must cover:
+- [x] 3.1 Write ADR-248 (provisional ordinal). It must cover:
   - the decision and the failure-domain table;
   - the eligibility rule, citing ADR-033;
   - the ADR-068 Bucket-B fleet rule and the ADR-078 non-participation rationale;
@@ -88,33 +88,33 @@ Plan (deepened 2026-09-24): `knowledge-base/project/plans/2026-09-24-fix-externa
   - a "Relates to" line: ADR-033, ADR-068, ADR-143 D2, ADR-241.
 
   Add a one-line cross-reference to ADR-033.
-- [ ] 3.2 Edit `model.c4`, locating each change by its anchor text.
-  - [ ] 3.2.1 Add a new `api -> github` watchdog edge.
-  - [ ] 3.2.2 In the `github -> sentry` edge, add the "fourth substrate" parenthetical. Keep its
+- [x] 3.2 Edit `model.c4`, locating each change by its anchor text.
+  - [x] 3.2.1 Add a new `api -> github` watchdog edge.
+  - [x] 3.2.2 In the `github -> sentry` edge, add the "fourth substrate" parenthetical. Keep its
     numbers and anchor phrases verbatim.
-  - [ ] 3.2.3 Update the tunnel census wording.
-  - [ ] 3.2.4 Fix the zot `*/30` comment.
-  - [ ] 3.2.5 Annotate web-2's "scheduler-less standby" text in the tunnel element and in the
+  - [x] 3.2.3 Update the tunnel census wording.
+  - [x] 3.2.4 Fix the zot `*/30` comment.
+  - [x] 3.2.5 Annotate web-2's "scheduler-less standby" text in the tunnel element and in the
     `hetzner -> tunnel` edge.
-- [ ] 3.3 Add an `inngest-server.md` subsection. It answers four questions, each with a command:
+- [x] 3.3 Add an `inngest-server.md` subsection. It answers four questions, each with a command:
   - Is it running? (the marker query, plus the gh one-liner)
   - How do I stop it? (`gh workflow disable`, or a revert)
   - How do I change the table? (a checklist)
   - Which host sent a run? (the marker `host_name`/`run_id`; the canary is not shipped)
 
   It also carries the canary note.
-- [ ] 3.4 In `betterstack-log-query.md`, fix the stale zot "every 30 min" and add the
+- [x] 3.4 In `betterstack-log-query.md`, fix the stale zot "every 30 min" and add the
   `SOLEUR_WATCHDOG_DISPATCH` marker.
-- [ ] 3.5 Run the C4 checks: `c4-count-parity.test.sh`, `c4-code-syntax.test.ts` and
+- [x] 3.5 Run the C4 checks: `c4-count-parity.test.sh`, `c4-code-syntax.test.ts` and
   `c4-render.test.ts`.
 
 ## Phase 4: Verification + ship prep
 
-- [ ] 4.1 Run the targeted vitest suites: clock, iac-parity, function-registry-count,
+- [x] 4.1 Run the targeted vitest suites: clock, iac-parity, function-registry-count,
   cron-main-health-monitor and c4. Also run the dep-cruiser gate.
-- [ ] 4.2 Run `bash .claude/hooks/new-scheduled-cron-prefer-inngest.test.sh`.
-- [ ] 4.3 Run the AC5 comment-only diff check on both workflows.
-- [ ] 4.4 File the issues:
+- [x] 4.2 Run `bash .claude/hooks/new-scheduled-cron-prefer-inngest.test.sh`.
+- [x] 4.3 Run the AC5 comment-only diff check on both workflows.
+- [x] 4.4 File the issues: (DONE differently — code-simplicity CONCUR gate DISSENTED on the Worker `deferred-scope-out` issue, so the re-evaluation hook went on #7230 as a comment (issuecomment-5810551088); the C4 overclaim was fixed inline; #8595 commented (issuecomment-5810547232))
   - the Cloudflare-Worker upgrade path (`deferred-scope-out`, re-evaluate at #7230);
   - the C4 `api -> supabase` "every GitHub App-token use" overclaim;
   - a comment on #8595.
