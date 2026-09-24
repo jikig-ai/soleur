@@ -418,7 +418,11 @@ if [[ -d "$_cli_dir" ]]; then
     # `claude-opus` (measured). That is this PR's own prefix-shadowing class in
     # the PRESENCE direction — a tier whose id the pin genuinely lacks reports
     # green whenever any longer id sharing its prefix is in the blob.
-    if grep -raqE "${_m}${ID_BOUNDARY}" "$_cli_dir" 2>/dev/null; then
+    # Left-anchored too (#8603), matching the CI twin
+    # apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts:
+    # an id present only inside a longer token (the Bedrock provider form
+    # `us.anthropic.<id>`) is not an entry the model table resolves.
+    if grep -raqE "(^|[^0-9A-Za-z.-])${_m}${ID_BOUNDARY}" "$_cli_dir" 2>/dev/null; then
       echo "    ok      $_m present in the pinned CLI bundle"
     else
       echo "    DRIFT   $_m ABSENT from ${_cli_pkg##*/} @ ${_cli_installed:-unknown} — bump @anthropic-ai/claude-code"
@@ -436,7 +440,9 @@ echo "  - tier-map: re-check cron model literals + ADR-053 / plugins/soleur/AGEN
 echo "    (workflow-model-pins.test.ts PIN_ALLOWLIST is a don't-mutate invariant, not a pricing surface.)"
 echo "  - dormant: gh issue list --state open -L 200 --search 'deferred model OR pricing'"
 echo "  - grok tier-map (item 6, agent-run): compare 'grok models' + docs.x.ai against TIER_MAPS.grok."
-echo "  - thinking-API shape: the REQUEST side sets no thinking params and needs no action."
+echo "  - thinking-API shape: the REQUEST side sets no thinking params, but the CLI applies each"
+echo "    model row's default_effort: re-decide AUDIT_EFFORT (apps/web-platform/server/inngest/"
+echo "    model-tiers.ts) and update REVIEWED_DEFAULT_EFFORT in claude-cli-pin-knows-models.test.ts (#8603)."
 echo "    The RESPONSE side is NOT inert: a thinking-by-default model puts a thinking block"
 echo "    FIRST, so any reader indexing a fixed content position silently returns empty"
 echo "    and the model's answer is billed and discarded (#8392)."
