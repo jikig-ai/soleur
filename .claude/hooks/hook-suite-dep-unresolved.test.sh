@@ -243,6 +243,7 @@ write_fx R-c "which jq >/dev/null || { echo \"$SK\"; $E0; }" "$E0"
 write_fx R-d "$GOOD" "echo \"$SK: x\"; exit"
 write_fx P-a 'if ! command -v jq  >/dev/null 2>&1; then' '  echo "UNRESOLVED: jq missing — x"' '    exit 3' 'fi' "$E0"
 write_fx P-b "$GOOD" "echo \"$SK: could not read peak RSS\"" 'true'
+# shellcheck disable=SC2016  # the fixture must carry the literal variable reference
 write_fx P-c "$GOOD" '_skipnote=x' 'echo "$_skipnote"' "$E0"
 
 # name  expected-pair  expected-sweep
@@ -307,7 +308,9 @@ if [[ ! -s "$SUITES" ]]; then
 fi
 
 PAIRS="$ROOT/pairs"
-derive_pairs $(cat "$SUITES") > "$PAIRS"
+SUITE_LIST=()
+while IFS= read -r s; do SUITE_LIST+=("$s"); done < "$SUITES"
+derive_pairs "${SUITE_LIST[@]}" > "$PAIRS"
 
 cut -f2 "$PAIRS" | LC_ALL=C sort -u > "$ROOT/tools"
 while IFS= read -r tool; do
@@ -327,7 +330,7 @@ while IFS= read -r tool; do
 done < "$ROOT/tools"
 
 # STATIC SWEEP over the same population.
-scan_skip_exit0 $(cat "$SUITES") > "$ROOT/sweep"
+scan_skip_exit0 "${SUITE_LIST[@]}" > "$ROOT/sweep"
 if [[ -s "$ROOT/sweep" ]]; then
   while IFS= read -r hit; do
     fail "static sweep: ${hit#"$REPO_ROOT"/} — a skip that exits 0 reports green having asserted nothing"
