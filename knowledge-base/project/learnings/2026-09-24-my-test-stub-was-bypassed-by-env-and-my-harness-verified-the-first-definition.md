@@ -89,6 +89,11 @@ runbook had it labelled "event time"; corrected.
 14. **The stubs answered any request** (test-design review). Recovery: contract-replaying stubs
     plus a miss ledger with a positive control. **Prevention:** existing work-skill rule on
     PATH-shimmed fakes; applied.
+15. **Route-to-definition hit the work skill's byte ceiling** (`lint-skill-body-budget`: 737 over),
+    and the first revert used `git checkout --`, which restores from the INDEX where the edit was
+    already staged — the next commit failed again. Recovery: `git restore --source=HEAD --staged
+    --worktree`. **Prevention:** already documented in work §REGENERATE (name the restore source);
+    the routing was skipped because the suite's one-definition pin enforces the lesson mechanically.
 
 ## Tags
 category: test-failures
