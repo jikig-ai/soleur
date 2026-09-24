@@ -270,7 +270,7 @@ jobs:
       # `release` job, and that warning was not applied to the jobs rehomed onto this
       # arm. Unpinned, every ceiling this job parses would come from whatever main
       # HEAD is at deploy time rather than from the SHA being deployed.
-      # DEPTH 1, DELIBERATELY — do not add `fetch-depth`. plugins/soleur/scripts/deploy-arm.sh
+      # DEPTH 1, DELIBERATELY — never deepen this checkout. plugins/soleur/scripts/deploy-arm.sh
       # (used by ship and postmerge) identifies the deploy arm by this checkout's
       # `--depth=1 origin <sha>` log line. The one path that needs the parent commit (the
       # empty-lookup diff check in step `resolve`) deepens lazily by SHA instead.
