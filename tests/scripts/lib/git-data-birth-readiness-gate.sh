@@ -1544,7 +1544,13 @@ HOLD
   # recorded is not a verdict — while the OPTIONAL ack key needs at-most-once semantics and
   # gets its own loop below. The two counts are genuinely independent: this pattern ends in
   # `[[:space:]]*=`, which `RUNG2_SENTRY_CROSSCHECK_ACK=` does not match.
-  for _k in RUNG2_BOOT_REHEARSAL RUNG2_EVIDENCE_URL RUNG2_TEMPLATE_SHA256 RUNG2_VAR_DIVERGENCE RUNG2_SENTRY_CROSSCHECK; do
+  #
+  # (#5274) THE TWO REPLACE-ARM KEYS JOIN IT TOO. The rehearsal workflow runs the replace arm (boot
+  # #2 adopting a LUKS volume a predecessor formatted, against the plaintext volume boot #1 read)
+  # unconditionally after the reboot arm, and uploads the evidence ONLY when that arm passed — so
+  # every file the route can produce carries both, exactly once. A file without them is capture
+  # #1 alone: a PASS for a birth that never proved the replace path production will take.
+  for _k in RUNG2_BOOT_REHEARSAL RUNG2_EVIDENCE_URL RUNG2_TEMPLATE_SHA256 RUNG2_VAR_DIVERGENCE RUNG2_SENTRY_CROSSCHECK RUNG2_REPLACE_BOOT RUNG2_REPLACE_SENTRY_CROSSCHECK; do
     # `(export[[:space:]]+)?` is load-bearing. Measured: an evidence file carrying
     #   RUNG2_BOOT_REHEARSAL=PASS
     #   export RUNG2_BOOT_REHEARSAL=FAIL
@@ -1561,6 +1567,12 @@ HOLD
 
   if ! grep -qE '^[[:space:]]*RUNG2_BOOT_REHEARSAL[[:space:]]*=[[:space:]]*PASS[[:space:]]*$' <<<"$body"; then
     echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} does not assert RUNG2_BOOT_REHEARSAL=PASS in non-comment text. Fail-closed: an evidence file that does not claim a pass is not a pass."
+    return 1
+  fi
+  # (#5274) …AND THE REPLACE BOOT PASSED. Same exact-line discipline as the check above; the
+  # cardinality loop has already refused a file carrying this key twice (PASS beside FAIL).
+  if ! grep -qE '^[[:space:]]*RUNG2_REPLACE_BOOT[[:space:]]*=[[:space:]]*PASS[[:space:]]*$' <<<"$body"; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} does not assert RUNG2_REPLACE_BOOT=PASS in non-comment text. The rehearsal must prove boot #2 too — the replace that ADOPTS a LUKS volume a predecessor formatted, reading the plaintext volume boot #1 only ever read — and this file does not say it did. Fail-closed: re-run the whole rehearsal; its replace arm appends this key to capture #1's file."
     return 1
   fi
 
@@ -1741,7 +1753,36 @@ HOLD
     return 1
   fi
 
-  case "$_sentry" in
+  # (#5274) THE REPLACE BOOT'S CROSS-CHECK, over the same closed set and with the same refusals.
+  # It is recorded by the replace arm over ITS window (stamped before the replace), so it is a
+  # second, independent verdict — not a restatement of the one above. FATAL is measured and
+  # un-ackable, NOT_RUN and anything unknown are could-not-measure and un-ackable, and UNAVAILABLE
+  # is routed through the ONE acknowledgement arm below: an ack is keyed to the RUN, and both reads
+  # belong to one run, so one well-formed RUNG2_SENTRY_CROSSCHECK_ACK covers either or both.
+  local _rsentry _sentry_case="$_sentry" _unavail_keys=""
+  _rsentry="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_REPLACE_SENTRY_CROSSCHECK[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
+  # `if`, not `&&`: a false test would return 1 under a caller's errexit (see the `_rel_dir` guard).
+  if [[ "$_sentry" == "UNAVAILABLE" ]]; then _unavail_keys="RUNG2_SENTRY_CROSSCHECK"; fi
+  case "$_rsentry" in
+    CLEAN) : ;;
+    UNAVAILABLE)
+      _unavail_keys="${_unavail_keys:+${_unavail_keys} and }RUNG2_REPLACE_SENTRY_CROSSCHECK"
+      if [[ "$_sentry" == "CLEAN" ]]; then _sentry_case="UNAVAILABLE"; fi
+      ;;
+    FATAL)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_FATAL] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK=FATAL: the second channel MEASURED a fatal for this host during the replace boot (boot #2). That is a measured failure of the boot, not a gap in the instrument, so no acknowledgement can release it. Read the run's Sentry events for the host named in the evidence header after the replace, fix the cause, and re-run the rehearsal.${_seam_note}"
+      return 1 ;;
+    NOT_RUN)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN: the replace boot's cross-check never ran at all (no jq, no SENTRY_ISSUE_RO_TOKEN, or no reader on the rehearsal runner). There is nothing to acknowledge, so no RUNG2_SENTRY_CROSSCHECK_ACK can release this — re-run the rehearsal on a runner where the second channel is reachable.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN (the cross-check never ran)"
+      return 1 ;;
+    *)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_rsentry" 60)', which is outside the closed set the capture can write {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}. An unknown verdict is not a pass and no acknowledgement can rescue it — re-run the rehearsal, and if this value keeps appearing the capture script and this gate have drifted apart.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_REPLACE_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_rsentry" 60)'"
+      return 1 ;;
+  esac
+
+  case "$_sentry_case" in
     CLEAN)
       # An ack beside CLEAN is IGNORED, not refused: it satisfies no property here, and a
       # refusal would be ceremony.
@@ -1751,7 +1792,7 @@ HOLD
       return 1 ;;
     UNAVAILABLE)
       if [[ -z "$_ack" ]]; then
-        echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_UNAVAILABLE_UNACKED] — ${evidence} records RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE: the Sentry cross-check ran and could not be trusted, so the PASS rests on Better Stack alone. Before #8010 this released silently. To proceed, append RUNG2_SENTRY_CROSSCHECK_ACK=${_run_id}:<why the second channel may be skipped for THIS run> in the evidence file's own commit (the reason may not contain '#', which this gate's trailing-comment strip would truncate). The rehearsal workflow prints the exact line to append. See knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md.${_seam_note}"
+        echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_UNAVAILABLE_UNACKED] — ${evidence} records ${_unavail_keys}=UNAVAILABLE: the Sentry cross-check ran and could not be trusted, so the PASS rests on Better Stack alone. Before #8010 this released silently. To proceed, append RUNG2_SENTRY_CROSSCHECK_ACK=${_run_id}:<why the second channel may be skipped for THIS run> in the evidence file's own commit (the reason may not contain '#', which this gate's trailing-comment strip would truncate). The rehearsal workflow prints the exact line to append. See knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md.${_seam_note}"
         return 1
       fi
       # READ THE RAW LINE, not `body`. The comment strip has already removed everything from
@@ -1850,7 +1891,7 @@ HOLD
     return 1
   }
 
-  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} ($(_git_data_rung2_safe "$url" 160)); declared render-var divergence: ${divergence}; provenance: ${_prov_out#*: }. RUN: ${_run_id} concluded success at head_sha ${_head_sha}, whose tree re-hashes to the same digest; it uploaded ${_art_out#*|}; Sentry cross-check ${_sentry}${_ack:+ (acknowledged)}.${_seam_note} NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
+  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} ($(_git_data_rung2_safe "$url" 160)); declared render-var divergence: ${divergence}; provenance: ${_prov_out#*: }. RUN: ${_run_id} concluded success at head_sha ${_head_sha}, whose tree re-hashes to the same digest; it uploaded ${_art_out#*|}; Sentry cross-check ${_sentry}; replace boot PASS, its Sentry cross-check ${_rsentry}${_ack:+ (acknowledged)}.${_seam_note} NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
   return 0
 }
 

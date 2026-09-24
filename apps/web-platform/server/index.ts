@@ -40,6 +40,7 @@ import {
   verifyWorkspacesMountOnce,
 } from "./readiness";
 import { isLoopbackHost } from "./loopback";
+import { startWatchdogDispatchClock } from "./watchdog-dispatch-clock";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
 // the server at startup in environments without Inngest configured (e2e CI,
@@ -176,6 +177,14 @@ app.prepare().then(() => {
   // .unref() already prevents shutdown blocking (see startCcIdleReaper).
   const ccIdleReaperTimer = startCcIdleReaper();
 
+  // #8495 / ADR-248 — the watchdog dispatch clock: fires workflow_dispatch for
+  // the external Inngest watchdog (every 15 min) and the zot restart-loop alarm
+  // (hourly), because GitHub Actions `schedule:` drops most of their ticks. Not
+  // an Inngest function on purpose (it watches Inngest). Arms only on a deployed
+  // host (NODE_ENV=production + SOLEUR_HOST_ID); the interval is unref'd, and
+  // every tick is fenced so it can never take this process down.
+  const watchdogClock = startWatchdogDispatchClock();
+
   // Self-arm the one-time #4650 monitor-close oneshot (#4654). boot == deploy
   // (web-platform-release.yml restarts the container on every apps/web-platform/**
   // merge), so this re-fires each deploy; the stable event `id` dedups within
@@ -292,6 +301,9 @@ app.prepare().then(() => {
     clearInterval(stuckActiveReaperTimer);
     // #5371 — stop the cc idle reaper before draining for the same reason.
     clearInterval(ccIdleReaperTimer);
+    // #8495 — stop the watchdog dispatch clock (synchronous; an in-flight tick is
+    // bounded at 90 s and the other web host covers its slot).
+    watchdogClock.stop();
 
     // Abort all active agent sessions first — stops API credit consumption
     // and triggers the catch block which updates conversation status to "failed".
