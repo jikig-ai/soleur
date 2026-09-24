@@ -536,3 +536,14 @@ lost is normative and stated above: **do not repoint the 12 `connection { host }
   > `:199` ("bridges over SSH to the *existing* web host"), but that sentence is about the apply
   > path, not tunnel membership. Caught at review; the misattribution is recorded rather than
   > silently deleted because the *conclusion* (no amendment needed) never depended on it.
+
+## Cross-reference 2026-09-23 (#8651, #6438)
+
+The first-boot NIC gate in item 2 (`soleur-wait-nic` before `cloudflared service install`) is no
+longer the first private-network wait on a fresh web host. The seed image pull now logs in to
+and pulls from zot over the private network. A networkd fallback file and one early
+`networkctl reload` (the inngest #8539 primitive, scoped in ADR-123's amendment of this date) and
+an inline, bounded, fail-open wait (75 × 2 s) therefore run before it on **every** freshly booted
+web host, not only the connector. On a fresh connector host the wait can emit before
+`soleur-wait-nic`'s own event. The design is in ADR-096's 2026-09-23 amendment; this
+item's registration-timing reasoning is unchanged.
