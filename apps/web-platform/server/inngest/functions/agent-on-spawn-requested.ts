@@ -213,6 +213,9 @@ type FailureReason =
   | "byok_lease_unavailable"
   | "anthropic_timeout"
   | "anthropic_rate_limited"
+  // A request the API rejects deterministically (400/404/413/422…); retrying
+  // fails the same way. See TurnRejection.
+  | "anthropic_request_rejected"
   | "leader_max_turns_exceeded"
   | "leader_response_truncated"
   | "leader_tool_invalid"
@@ -254,6 +257,16 @@ interface MessageContentText {
 }
 
 type AnthropicContentBlock = ToolUseBlock | MessageContentText | { type: string };
+
+// The `turn-${n}-claude` step's second terminal outcome (ADR-042 §I1): a
+// deterministic failure it returns instead of throwing. Plain JSON, so Inngest
+// memoizes it and never retries the step.
+interface TurnRejection {
+  rejected: FailureReason;
+  status: number | null;
+  message: string;
+  stack: string;
+}
 
 interface AnthropicTurnResult {
   id: string;
@@ -642,42 +655,62 @@ export async function agentOnSpawnRequestedHandler({
 
     // Step: turn-n-claude — opens the BYOK lease inside the step so ALS
     // cannot escape and idempotency under replay is preserved (ADR-042).
-    let turnResult: AnthropicTurnResult;
+    let stepResult: AnthropicTurnResult | TurnRejection;
     try {
-      turnResult = (await step.run(`turn-${n}-claude`, async () => {
+      stepResult = await step.run(`turn-${n}-claude`, async () => {
         return runWithByokLease(
           {
             workspaceContextUserId: founderId,
             keyOwnerUserId: founderId,
           },
-          async (lease) => {
-            // Raw-REST consumer (`new Anthropic({apiKey})`) — MUST use the
-            // api_key row; an oauth_token cannot authenticate the REST API.
-            const apiKey = await lease.getRestApiKey();
-            const client = new Anthropic({ apiKey });
-            const sdkResult = (await client.messages.create({
-              model: leaderModule.model,
-              max_tokens: LEADER_MAX_TOKENS,
-              // Automatic caching: the API places this breakpoint on the last
-              // cacheable block and advances it every turn, so calls 2..N read
-              // the conversation so far from cache. It uses 1 of the request's
-              // 4 breakpoint slots. 5-minute default TTL on purpose;
-              // MODEL_PRICING's cache-write rate assumes it.
-              cache_control: { type: "ephemeral" },
-              system: [
-                {
-                  type: "text",
-                  text: leaderModule.systemPrompt,
-                  // The single explicit marker. Tools render before system, so
-                  // this covers the tool definitions too. Do NOT add per-tool
-                  // markers: security.cve_alert has 5 tools, and 5 + 1 + 1
-                  // exceeds the 4-breakpoint cap (the request 400s).
-                  cache_control: { type: "ephemeral" },
-                },
-              ],
-              tools: leaderModule.tools as never,
-              messages: messages as never,
-            })) as unknown as AnthropicTurnResult;
+          async (lease): Promise<AnthropicTurnResult | TurnRejection> => {
+            // Pre-billing only: nothing after `create` resolves may be read as
+            // a rejection, because by then the founder's key has been billed.
+            let sdkResult: AnthropicTurnResult;
+            try {
+              // Raw-REST consumer (`new Anthropic({apiKey})`) — MUST use the
+              // api_key row; an oauth_token cannot authenticate the REST API.
+              const apiKey = await lease.getRestApiKey();
+              const client = new Anthropic({ apiKey });
+              sdkResult = (await client.messages.create({
+                model: leaderModule.model,
+                max_tokens: LEADER_MAX_TOKENS,
+                // Automatic caching: the API places this breakpoint on the last
+                // cacheable block and advances it every turn, so calls 2..N read
+                // the conversation so far from cache. It uses 1 of the request's
+                // 4 breakpoint slots. 5-minute default TTL on purpose;
+                // MODEL_PRICING's cache-write rate assumes it.
+                cache_control: { type: "ephemeral" },
+                system: [
+                  {
+                    type: "text",
+                    text: leaderModule.systemPrompt,
+                    // The single explicit marker. Tools render before system, so
+                    // this covers the tool definitions too. Do NOT add per-tool
+                    // markers: security.cve_alert has 5 tools, and 5 + 1 + 1
+                    // exceeds the 4-breakpoint cap (the request 400s).
+                    cache_control: { type: "ephemeral" },
+                  },
+                ],
+                tools: leaderModule.tools as never,
+                messages: messages as never,
+              })) as unknown as AnthropicTurnResult;
+            } catch (err) {
+              // A deterministic failure is RETURNED, not thrown: Inngest
+              // memoizes a returned value and never retries it, while a thrown
+              // error is retried 3 times and reaches the handler as a StepError
+              // with `status` and custom `name` stripped (ADR-042 §I1).
+              if (isDeterministicRejection(err)) {
+                const status = (err as { status?: unknown }).status;
+                return {
+                  rejected: classifyAnthropicOrLeaseError(err),
+                  status: typeof status === "number" ? status : null,
+                  message: String((err as Error).message),
+                  stack: (err as Error).stack ?? "",
+                };
+              }
+              throw err;
+            }
 
             const usage = sdkResult.usage;
             const pricing = MODEL_PRICING[leaderModule.model] ?? {
@@ -718,7 +751,7 @@ export async function agentOnSpawnRequestedHandler({
             return sdkResult;
           },
         );
-      })) as AnthropicTurnResult;
+      });
     } catch (err) {
       const reason = classifyAnthropicOrLeaseError(err);
       return persistFailure(step, {
@@ -732,6 +765,23 @@ export async function agentOnSpawnRequestedHandler({
         logger,
       });
     }
+    if ("rejected" in stepResult) {
+      return persistFailure(step, {
+        actionSendId,
+        reason: stepResult.rejected,
+        // Rebuilt so Sentry gets the SDK's own message and stack.
+        err: Object.assign(new Error(stepResult.message), {
+          stack: stepResult.stack,
+        }),
+        founderId,
+        messageId,
+        actionClass,
+        sourceRef,
+        logger,
+        extra: { status: stepResult.status, turn: n, model: leaderModule.model },
+      });
+    }
+    const turnResult: AnthropicTurnResult = stepResult;
 
     // Handle stop_reason: max_tokens / end_turn / tool_use.
     if (turnResult.stop_reason === "max_tokens") {
@@ -1102,6 +1152,26 @@ function tryParseSourceRef(sourceRef: string): ParsedSourceRef | null {
   return { owner: m[1], repo: m[2], number: parseInt(m[3], 10) };
 }
 
+function isClientErrorStatus(status: unknown): status is number {
+  return typeof status === "number" && status >= 400 && status < 500;
+}
+
+// Must be read on the LIVE error, inside the step: `status` and a custom `name`
+// do not survive Inngest's StepError serialization. Never `instanceof
+// Anthropic.APIError` — the leader-loop suite mocks the SDK without it.
+function isDeterministicRejection(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  if (
+    isClientErrorStatus(status) &&
+    status !== 408 &&
+    status !== 409 &&
+    status !== 429
+  ) {
+    return true;
+  }
+  return (err as { name?: unknown } | null)?.name === "MissingByokKeyError";
+}
+
 function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
   const name = (err as { name?: string } | null)?.name ?? "";
   const cause = (err as { cause?: string } | null)?.cause ?? "";
@@ -1113,6 +1183,15 @@ function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
     return "byok_lease_unavailable";
   }
   if (status === 429) return "anthropic_rate_limited";
+  // The founder's account: invalid key, billing failure, missing permission.
+  if (status === 401 || status === 402 || status === 403) {
+    return "byok_lease_unavailable";
+  }
+  // A request built wrong (400/404/413/422…). 408/409 are transient; the SDK
+  // retries them itself.
+  if (isClientErrorStatus(status) && status !== 408 && status !== 409) {
+    return "anthropic_request_rejected";
+  }
   if (
     name === "APIConnectionTimeoutError" ||
     name === "APIConnectionError" ||
@@ -1144,6 +1223,8 @@ async function persistFailure(
       cumulativeCents: number | null;
       ceilingCents: number | null;
     };
+    /** Extra discriminators for the dead-letter line (e.g. status, turn, model). */
+    extra?: Record<string, unknown>;
   },
 ): Promise<{ acknowledged: false; failureReason: string }> {
   const { actionSendId, reason, err } = args;
@@ -1152,6 +1233,7 @@ async function persistFailure(
     op: "agent-on-spawn-requested",
     message: `agent-on-spawn deadlettered: ${reason}`,
     extra: {
+      ...args.extra,
       founderId: args.founderId,
       messageId: args.messageId,
       actionClass: args.actionClass,

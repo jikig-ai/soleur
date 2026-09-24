@@ -223,13 +223,16 @@ vi.mock("@/server/byok-cap-rpc", () => ({
 // BYOK lease — call fn directly (no real ALS scope; the handler uses lease
 // only to obtain the API key, and we mock the Anthropic client below).
 let leaseOpenThrows: Error | null = null;
+// A spy (reset in beforeEach) so Guard 2 can make key retrieval throw and count
+// how many times the step re-ran it.
+const getRestApiKeySpy = vi.fn(async (): Promise<string> => "test-api-key");
 const runWithByokLeaseSpy = vi.fn(async (_args: unknown, fn: unknown) => {
   if (leaseOpenThrows) throw leaseOpenThrows;
   const lease = {
     workspaceContextUserId: "founder-123",
     keyOwnerUserId: "founder-123",
     // Raw-REST consumer (`new Anthropic({apiKey})`) → getRestApiKey.
-    getRestApiKey: () => "test-api-key",
+    getRestApiKey: getRestApiKeySpy,
   };
   return (fn as (l: unknown) => Promise<unknown>)(lease);
 });
@@ -296,6 +299,54 @@ function makeStep(opts?: { seedMemo?: Map<string, unknown> }): MockStep {
       return result;
     },
   };
+}
+
+// Like makeStep, but re-invokes a throwing callback up to `retries` more times,
+// the way Inngest's `retries: 3` does (makeStep memoizes only on success, so a
+// re-invocation re-runs the callback). With `serializeThrow`, the error that
+// finally escapes is rebuilt the way it survives Inngest's StepError round-trip:
+// `message`, `stack` and `cause` are kept; `status` and a custom `name` are not.
+function makeRetryingStep(opts: {
+  retries: number;
+  serializeThrow?: boolean;
+}): MockStep {
+  const calls: { name: string }[] = [];
+  const memoized = new Map<string, unknown>();
+  return {
+    calls,
+    memoized,
+    async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
+      calls.push({ name });
+      if (memoized.has(name)) return memoized.get(name) as T;
+      let lastErr: unknown;
+      for (let attempt = 0; attempt <= opts.retries; attempt++) {
+        try {
+          const result = await cb();
+          memoized.set(name, result);
+          return result;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      if (opts.serializeThrow) {
+        const e = lastErr as Error & { cause?: unknown };
+        throw Object.assign(new Error(e.message), {
+          cause: e.cause,
+          stack: e.stack,
+        });
+      }
+      throw lastErr;
+    },
+  };
+}
+
+// The SDK is vi.mock'ed, so its error classes are unavailable: synthesize the
+// fields production reads (`status`, message prefix).
+function apiError(status: number): Error & { status: number } {
+  return Object.assign(
+    new Error(`${status} {"type":"error","error":{"type":"x","message":"synthetic"}}`),
+    { status },
+  );
 }
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
@@ -407,6 +458,9 @@ beforeEach(() => {
   capRpcThrows = null;
   leaseOpenThrows = null;
   anthropicCreateSpy.mockReset();
+  // vitest 4: mockReset restores the original implementation, so a per-case
+  // mockRejectedValue cannot leak into the next test.
+  getRestApiKeySpy.mockReset();
 });
 
 // --- Tests ------------------------------------------------------------------
@@ -1254,5 +1308,156 @@ describe("Guard 1 — leader-loop cache breakpoints (ADR-042 §I5)", () => {
     );
     expect(blockTypes).toContain("tool_use");
     expect(blockTypes).toContain("tool_result");
+  });
+});
+
+// --- Guard 2: deterministic API rejections are returned, not retried --------
+
+describe("Guard 2 — deterministic rejections are returned from the step (ADR-042 §I1)", () => {
+  async function runWith(step: MockStep) {
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    return agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step,
+      logger,
+    });
+  }
+
+  function deadletterCall() {
+    return reportSilentFallbackSpy.mock.calls.find((c) =>
+      String((c[1] as { message?: string } | undefined)?.message).includes(
+        "deadlettered",
+      ),
+    );
+  }
+
+  it("400 → anthropic_request_rejected after exactly one create call; Sentry gets the SDK message", async () => {
+    anthropicCreateSpy.mockRejectedValue(apiError(400));
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "anthropic_request_rejected",
+    });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    const call = deadletterCall();
+    expect(call).toBeDefined();
+    expect((call![0] as Error).message.startsWith("400 ")).toBe(true);
+    expect((call![1] as { extra: Record<string, unknown> }).extra).toMatchObject({
+      status: 400,
+      turn: 1,
+      model: LEADER_PROMPTS["engineering.pr_review_pending"].model,
+    });
+  });
+
+  it.each([401, 402, 403])(
+    "%i → byok_lease_unavailable after exactly one create call",
+    async (status) => {
+      anthropicCreateSpy.mockRejectedValue(apiError(status));
+      const result = await runWith(makeRetryingStep({ retries: 3 }));
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "byok_lease_unavailable",
+      });
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("MissingByokKeyError → byok_lease_unavailable after one key read, no create call", async () => {
+    getRestApiKeySpy.mockRejectedValue(
+      Object.assign(new Error("no key configured"), {
+        name: "MissingByokKeyError",
+      }),
+    );
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "byok_lease_unavailable",
+    });
+    expect(getRestApiKeySpy).toHaveBeenCalledTimes(1);
+    expect(anthropicCreateSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [429, "anthropic_rate_limited"],
+    [500, "anthropic_timeout"],
+    [408, "anthropic_timeout"],
+  ])("%i is transient: thrown, retried 3 times, then %s", async (status, reason) => {
+    anthropicCreateSpy.mockRejectedValue(apiError(status));
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({ acknowledged: false, failureReason: reason });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it("a lease ByokLeaseError(fetch_failed) is still thrown and retried", async () => {
+    getRestApiKeySpy.mockRejectedValue(
+      Object.assign(new Error("fetch failed"), {
+        name: "ByokLeaseError",
+        cause: "fetch_failed",
+      }),
+    );
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "byok_lease_unavailable",
+    });
+    expect(getRestApiKeySpy).toHaveBeenCalledTimes(4);
+  });
+
+  describe("after the StepError round-trip (status and custom name dropped)", () => {
+    it("429 that survives every retry reads anthropic_timeout (documented residual)", async () => {
+      anthropicCreateSpy.mockRejectedValue(apiError(429));
+      const result = await runWith(
+        makeRetryingStep({ retries: 3, serializeThrow: true }),
+      );
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "anthropic_timeout",
+      });
+    });
+
+    it("ByokLeaseError(fetch_failed) still classifies via the surviving cause", async () => {
+      getRestApiKeySpy.mockRejectedValue(
+        Object.assign(new Error("fetch failed"), {
+          name: "ByokLeaseError",
+          cause: "fetch_failed",
+        }),
+      );
+      const result = await runWith(
+        makeRetryingStep({ retries: 3, serializeThrow: true }),
+      );
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "byok_lease_unavailable",
+      });
+      expect(getRestApiKeySpy).toHaveBeenCalledTimes(4);
+    });
+
+    it("400 is unaffected: the verdict never crosses the boundary as an error", async () => {
+      anthropicCreateSpy.mockRejectedValue(apiError(400));
+      const result = await runWith(
+        makeRetryingStep({ retries: 3, serializeThrow: true }),
+      );
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "anthropic_request_rejected",
+      });
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("the returned rejection is plain JSON (Inngest memoizes it as-is)", async () => {
+    anthropicCreateSpy.mockRejectedValue(apiError(400));
+    const step = makeRetryingStep({ retries: 3 });
+    await runWith(step);
+    const memo = step.memoized.get("turn-1-claude") as Record<string, unknown>;
+    expect(JSON.parse(JSON.stringify(memo))).toEqual(memo);
+    expect(memo).toMatchObject({
+      rejected: "anthropic_request_rejected",
+      status: 400,
+    });
+    expect(String(memo.message).startsWith("400 ")).toBe(true);
+    expect(typeof memo.stack).toBe("string");
   });
 });
