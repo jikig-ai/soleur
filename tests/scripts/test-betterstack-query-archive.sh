@@ -396,6 +396,27 @@ case "$sql_q" in
   *) bad "--until single quotes are SQL-escaped" "got: ${sql_q:0:200}" ;;
 esac
 
+# --- 10b. ISO-8601 `…T…Z` is normalised to ClickHouse's `YYYY-MM-DD HH:MM:SS` (#7761) --------
+# The usage header advertises ISO, but ClickHouse's DateTime cast rejects the `T…Z` form: a
+# measured `--since 2026-09-23T19:36:32Z` exited rc 22 (HTTP 400) on 2026-09-24. The session
+# timezone is UTC (measured), so dropping the `Z` keeps UTC semantics.
+sql_iso="$(capture_sql --since 2026-09-23T19:36:32Z --no-archive)"
+case "$sql_iso" in
+  *"dt >= '2026-09-23 19:36:32'"*) ok "--since ISO-Z is normalised to 'YYYY-MM-DD HH:MM:SS'" ;;
+  *) bad "--since ISO-Z is normalised to 'YYYY-MM-DD HH:MM:SS'" "got: ${sql_iso:0:200}" ;;
+esac
+sql_iso="$(capture_sql --since 1h --until 2026-09-23T20:00:00Z --no-archive)"
+case "$sql_iso" in
+  *"dt <= '2026-09-23 20:00:00'"*) ok "--until ISO-Z is normalised to 'YYYY-MM-DD HH:MM:SS'" ;;
+  *) bad "--until ISO-Z is normalised to 'YYYY-MM-DD HH:MM:SS'" "got: ${sql_iso:0:200}" ;;
+esac
+# NEGATIVE: a value that is not exactly ISO-Z passes through untouched (and is still escaped).
+sql_iso="$(capture_sql --since '2026-09-23T19:36:32+02:00' --no-archive)"
+case "$sql_iso" in
+  *"dt >= '2026-09-23T19:36:32+02:00'"*) ok "a non-ISO-Z --since passes through unchanged" ;;
+  *) bad "a non-ISO-Z --since passes through unchanged" "got: ${sql_iso:0:200}" ;;
+esac
+
 # --- 11. Guard 5: a --table flag is never silently discarded in MODE 1 (#8043 FR13) --------
 #
 # THE DEFECT: mode 1 (raw SQL) ran `run_sql` and `exit $?` BEFORE the mode-2 flag loop, so
