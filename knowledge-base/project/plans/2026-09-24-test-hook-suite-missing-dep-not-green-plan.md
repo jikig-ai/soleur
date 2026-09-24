@@ -737,33 +737,58 @@ codes, plus one regression suite.
 
 ## Acceptance Criteria
 
-- [ ] **AC1:** The header of `.claude/hooks/hook-suite-dep-unresolved.test.sh` is the single home of
+- [x] **AC1:** The header of `.claude/hooks/hook-suite-dep-unresolved.test.sh` is the single home of
   the taxonomy. A missing tool exits 3 with `UNRESOLVED: … install <tool>`. A missing file under test
   exits 1 with `FAIL:`. A partial arm exits non-zero with a per-arm `UNRESOLVED:` line. The header cites
   the measured `run_suite` classification (rc 3 is printed as `[FAIL]` and counted not-green; the top
   level exits 1) and states that upstream, exit 3 names the verdict without changing it.
-- [ ] **AC2:** `grep -nE '^[[:space:]]*[^#].*SKIP[^"]*"[^}]*exit 0' .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh`
+- [x] **AC2:** `grep -nE '^[[:space:]]*[^#].*SKIP[^"]*"[^}]*exit 0' .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh`
   returns nothing, with no carve-out for the new suite, whose fixtures are built from pieces. The
   regression suite's static sweep also reports clean, including the multi-line forms this grep cannot
   see.
-- [ ] **AC3:** `bash .claude/hooks/hook-suite-dep-unresolved.test.sh` exits 0 on a normal host and
+- [x] **AC3:** `bash .claude/hooks/hook-suite-dep-unresolved.test.sh` exits 0 on a normal host and
   prints `40 pairs (floor 40)`. Every pair exits non-zero with `UNRESOLVED: <tool> missing` under its
   tool toggle.
-- [ ] **AC4:** Each of the 25 edited suites exits 0 when run individually on a normal PATH.
-- [ ] **AC5:** Mutation rows M1–M13 were each run once and each turned the new suite RED.
+- [x] **AC4:** Each of the 25 edited suites exits 0 when run individually on a normal PATH.
+- [x] **AC5:** Mutation rows M1–M13 were each run once and each turned the new suite RED.
   - Every row ran against a **scratch copy** of the repo, never against tracked files in place.
   - A control run on the pristine copy exited 0.
   - Only rc 1 counts as a caught mutation. An rc of 2 or 127 means the instrument broke, and that is
     not evidence (test-design P2-5). Harness rows
   H1 and H1b were RED (self-test exit 2), and H2 and H3 passed. The output line from each row is quoted
   in the PR body.
-- [ ] **AC6:** `scripts/test-all.sh` and `.github/workflows/ci.yml` are unchanged:
+- [x] **AC6:** `scripts/test-all.sh` and `.github/workflows/ci.yml` are unchanged:
   `git diff --quiet origin/main -- scripts/test-all.sh .github/workflows/ci.yml`.
-- [ ] **AC7:** Each of these passes locally, run with the gate's own invocation rather than a
+- [x] **AC7:** Each of these passes locally, run with the gate's own invocation rather than a
   reconstruction of its inputs: `lint-trap-tempfile-ownership.py` (and `--check-highwater`),
   `lint-orphan-test-suites.sh`, `lint-skill-body-budget.py --base <merge-base>`,
   `scripts/guard-vacuity-floor.test.sh`, and `shellcheck` on the new suite.
-- [ ] **AC8:** The rationale block in `hook-input-contract.test.sh` records the reversal under #8616
+- [x] **AC8:** The rationale block in `hook-input-contract.test.sh` records the reversal under #8616
   and answers reasons (a) to (d).
 - [ ] **AC9:** #8773 (the same pattern outside `.claude/hooks/`) exists and is linked in the PR body.
   The PR body uses `Closes #8616`.
+
+## Implementation Notes (2026-09-25, soleur:work)
+
+Deviations from the plan, each measured:
+
+- **PATH farm links only executable regular files.** A non-executable `~/.local/bin/env` (a sourced
+  uv shell snippet) shadowed `/usr/bin/env` in a farm built from `ln -s "$d"/*`. The parity suite then
+  failed seven cases at rc 126 on the full farm, so its python3 pair was non-zero for a reason
+  unrelated to its guard, and row M4 survived. With the filter, M4 is caught and the python3-less
+  parity run reads `10/10 passed, 0 failed, 2 skipped`, matching the plan's measurement.
+- **Guard class rule.** A `||` guard is always whole-suite, and an `if !` guard is an arm only when it
+  reaches `else`/`elif` without an `exit`. Under the plan's "block contains an exit" rule, M12 (drop
+  the `exit 3`) would have reclassified the guard as an arm and relaxed its rc check.
+- **Static sweep.** An exit on the literal's own line is the terminating statement, and a line that
+  closes its own block (`}`, `;;`) is not followed to the next line. Without this rule, fixture R-b and
+  parity's one-line `skip()` produced false positives.
+- **Registration.** The new suite sources `lib/test-incident-sandbox.sh`, as
+  `incident-sandbox-coverage.test.sh` requires of every hook suite. It also gets a declared affected
+  edge (`.claude/hooks/`, `scripts/test-all.sh`, the index itself) in
+  `scripts/lib/test-affected-paths.sh`, because `lint-orphan-test-suites.sh` flagged it UNCLASSIFIED.
+  `scripts/test-all.sh` and `ci.yml` are still untouched.
+- **M5/M6 are caught by the self-test (exit 2), not by the floor/pair lines.** Both rows mutate the
+  checker itself. The fixture self-test runs first and refuses the broken instrument, which is the
+  intended detection for an instrument row. The final battery is 17/17 caught (control rc 0).
+
