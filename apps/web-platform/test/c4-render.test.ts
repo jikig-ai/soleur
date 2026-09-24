@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import { tmpdir } from "node:os";
 
 // Mock child_process.spawn so we drive the CLI lifecycle deterministically.
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 // shape OR a direct `writeFile(realPath, …)` — would call one of these spies and
 // trip the `.not.toHaveBeenCalled()` assertions below.
 const fsMock = vi.hoisted(() => ({
+  mkdir: vi.fn(),
   mkdtemp: vi.fn(),
   readFile: vi.fn(),
   copyFile: vi.fn(),
@@ -24,7 +26,7 @@ const fsMock = vi.hoisted(() => ({
 }));
 vi.mock("node:fs/promises", () => fsMock);
 
-import { renderC4Model } from "@/server/c4-render";
+import { renderC4Model, STAGE_DEADLINE_MS, type StageFn } from "@/server/c4-render";
 import { canonicalizeC4Model } from "@/lib/c4-canonical.mjs";
 
 type FakeChild = EventEmitter & {
@@ -68,7 +70,9 @@ const EMPTY_MODEL = JSON.stringify({ elements: {}, views: {} });
 
 beforeEach(() => {
   spawnMock.mockReset();
+  fsMock.mkdir.mockReset().mockResolvedValue(undefined);
   fsMock.mkdtemp.mockReset().mockResolvedValue(TMP_DIR);
+  stageMock.mockReset().mockResolvedValue(STAGED_OK);
   fsMock.readFile.mockReset().mockResolvedValue(VALID_MODEL);
   fsMock.copyFile.mockReset().mockResolvedValue(undefined);
   fsMock.rename.mockReset().mockResolvedValue(undefined);
@@ -81,14 +85,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const WS = "/workspaces/ws-1";
-const EXPECTED_CWD = "/workspaces/ws-1/knowledge-base/engineering/architecture/diagrams";
+// #8623: the render takes an injected stage function, never a workspace path.
+// The fake stage writes nothing (fs is mocked); it reports what it staged.
+const STAGED_OK = { ok: true as const, files: 1, bytes: 10, sourceKey: "model.c4\0abc" };
+const stageMock = vi.fn<StageFn>();
+const STAGE = stageMock as unknown as StageFn;
+const EXPECTED_CWD = `${TMP_DIR}/src`;
 
 describe("renderC4Model", () => {
-  it("spawns the likec4 CLI into a temp -o path in the scope-guarded diagrams dir", async () => {
+  it("spawns the likec4 CLI in the private stage dir with -o beside it", async () => {
     const child = makeChild();
     spawnThenEmit(child, () => child.emit("close", 0, null));
-    const p = renderC4Model(WS);
+    const p = renderC4Model(STAGE);
     const res = await p;
     expect(res.ok).toBe(true);
 
@@ -102,10 +110,19 @@ describe("renderC4Model", () => {
     expect(args[1]).toBe("json");
     expect(args[2]).toBe("-o");
     expect(args[3]).toBe(`${TMP_DIR}/model.likec4.json`);
-    expect(args[3].startsWith(EXPECTED_CWD)).toBe(false);
+    // The output sits BESIDE the stage dir, never inside likec4's input.
+    expect(args[3].startsWith(`${EXPECTED_CWD}/`)).toBe(false);
     expect(args[4]).toBe(".");
-    // cwd is the constant-derived diagrams dir, never a user filename.
+    // cwd is the private stage dir the stage function was handed — never a
+    // workspace path (#8623).
     expect(opts.cwd).toBe(EXPECTED_CWD);
+    expect(stageMock).toHaveBeenCalledTimes(1);
+    expect(stageMock.mock.calls[0][0]).toBe(EXPECTED_CWD);
+    expect(stageMock.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+    // The mkdtemp parent is the server-private staging root, not os.tmpdir().
+    const root = String(fsMock.mkdtemp.mock.calls[0][0]);
+    expect(root.endsWith("/c4-render-")).toBe(true);
+    expect(root.startsWith(tmpdir())).toBe(false);
     // scoped env: the allow-list keys are present (HOME is load-bearing for
     // npm-global bin resolution) and no secret leaks through.
     const env = opts.env as Record<string, string>;
@@ -122,7 +139,7 @@ describe("renderC4Model", () => {
     const child = makeChild();
     fsMock.readFile.mockResolvedValue(VALID_MODEL);
     spawnThenEmit(child, () => child.emit("close", 0, null));
-    const p = renderC4Model(WS);
+    const p = renderC4Model(STAGE);
     const res = await p;
     expect(res.ok).toBe(true);
     // The validated bytes are RETURNED in the canonical on-disk format (one
@@ -154,7 +171,7 @@ describe("renderC4Model", () => {
     // A non-empty STRING would make a bare Object.keys(elements) non-zero.
     fsMock.readFile.mockResolvedValue(JSON.stringify({ elements: "oops" }));
     spawnThenEmit(child, () => child.emit("close", 0, null));
-    const res = await renderC4Model(WS);
+    const res = await renderC4Model(STAGE);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe("empty_model");
     // No `json` on a failed render → the writer can never commit a bad model.
@@ -170,7 +187,7 @@ describe("renderC4Model", () => {
     const deep = "[".repeat(20000) + "]".repeat(20000);
     fsMock.readFile.mockResolvedValue(`{"elements":{"a":{"id":"a","x":${deep}}},"views":{}}`);
     spawnThenEmit(child, () => child.emit("close", 0, null));
-    const res = await renderC4Model(WS);
+    const res = await renderC4Model(STAGE);
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.reason).toBe("io_error");
@@ -192,7 +209,7 @@ describe("renderC4Model", () => {
       );
       child.emit("close", 0, null);
     });
-    const p = renderC4Model(WS);
+    const p = renderC4Model(STAGE);
     const res = await p;
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -216,7 +233,7 @@ describe("renderC4Model", () => {
     const child = makeChild();
     fsMock.readFile.mockResolvedValue("{not json");
     spawnThenEmit(child, () => child.emit("close", 0, null));
-    const p = renderC4Model(WS);
+    const p = renderC4Model(STAGE);
     const res = await p;
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -232,7 +249,7 @@ describe("renderC4Model", () => {
     fsMock.mkdtemp.mockRejectedValue(new Error("ENOSPC"));
     const child = makeChild();
     spawnMock.mockImplementation(() => child);
-    const res = await renderC4Model(WS);
+    const res = await renderC4Model(STAGE);
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.reason).toBe("io_error");
@@ -248,7 +265,7 @@ describe("renderC4Model", () => {
       child.stderr.emit("data", Buffer.from("parse error\x1b[2J\n"));
       child.emit("close", 1, null);
     });
-    const p = renderC4Model(WS);
+    const p = renderC4Model(STAGE);
     const res = await p;
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -266,7 +283,7 @@ describe("renderC4Model", () => {
     spawnThenEmit(child, () =>
       child.emit("error", Object.assign(new Error("spawn likec4 ENOENT"), { code: "ENOENT" })),
     );
-    const p = renderC4Model(WS);
+    const p = renderC4Model(STAGE);
     const res = await p;
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe("spawn_error");
@@ -277,7 +294,7 @@ describe("renderC4Model", () => {
     vi.useFakeTimers();
     const child = makeChild();
     spawnMock.mockImplementation(() => child);
-    const p = renderC4Model(WS);
+    const p = renderC4Model(STAGE);
     // Just under the budget: the timer must NOT have fired — a healthy cold
     // render that finishes at 24.9s must not be killed.
     await vi.advanceTimersByTimeAsync(24_999);
@@ -294,5 +311,71 @@ describe("renderC4Model", () => {
       expect.objectContaining({ recursive: true, force: true }),
     );
     expect(fsMock.copyFile).not.toHaveBeenCalled();
+  });
+  it("maps an unsafe_source stage refusal through, never spawning", async () => {
+    stageMock.mockResolvedValue({
+      ok: false,
+      reason: "unsafe_source",
+      refusalClass: "likec4-config",
+      path: "likec4.config.mjs",
+      more: 0,
+    });
+    const res = await renderC4Model(STAGE);
+    expect(res).toEqual({
+      ok: false,
+      reason: "unsafe_source",
+      refusalClass: "likec4-config",
+      path: "likec4.config.mjs",
+      more: 0,
+      phase: "stage",
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(fsMock.rm).toHaveBeenCalledWith(TMP_DIR, expect.objectContaining({ recursive: true }));
+  });
+
+  it("maps a stage io_error / a throwing stage to io_error phase=stage, never spawning", async () => {
+    stageMock.mockResolvedValue({ ok: false, reason: "io_error", detail: "fetch: rate-limited" });
+    expect(await renderC4Model(STAGE)).toEqual({
+      ok: false,
+      reason: "io_error",
+      detail: "fetch: rate-limited",
+      phase: "stage",
+    });
+    stageMock.mockRejectedValue(new Error("boom"));
+    const res = await renderC4Model(STAGE);
+    expect(res).toMatchObject({ ok: false, reason: "io_error", phase: "stage" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts a stalled stage at the deadline: timeout 'stage: deadline', signal aborted, no spawn", async () => {
+    vi.useFakeTimers();
+    let seen: AbortSignal | undefined;
+    stageMock.mockImplementation((_d, signal) => {
+      seen = signal;
+      return new Promise(() => {});
+    });
+    const p = renderC4Model(STAGE);
+    await vi.advanceTimersByTimeAsync(STAGE_DEADLINE_MS + 1);
+    expect(await p).toEqual({ ok: false, reason: "timeout", detail: "stage: deadline", phase: "stage" });
+    expect(seen?.aborted).toBe(true);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(fsMock.rm).toHaveBeenCalledWith(TMP_DIR, expect.objectContaining({ recursive: true }));
+  });
+
+  it("row 10: stages that stall do not hold render slots (stall POOL_SIZE=2, a third still spawns)", async () => {
+    const release: Array<(r: Awaited<ReturnType<StageFn>>) => void> = [];
+    stageMock.mockImplementation(
+      () => new Promise((resolve) => release.push(resolve)),
+    );
+    const stalled = [renderC4Model(STAGE), renderC4Model(STAGE)];
+    await vi.waitFor(() => expect(release.length).toBe(2));
+    stageMock.mockResolvedValue(STAGED_OK);
+    const child = makeChild();
+    spawnThenEmit(child, () => child.emit("close", 0, null));
+    const third = await renderC4Model(STAGE);
+    expect(third.ok).toBe(true);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    for (const r of release) r({ ok: false, reason: "io_error", detail: "released" });
+    await Promise.all(stalled);
   });
 });

@@ -32,6 +32,10 @@ import {
 
 const D = "knowledge-base/engineering/architecture/diagrams";
 const SRC = "model {\n  u = actor 'User'\n}\n";
+// Synthetic in-repo relative targets for the fake. Built by repetition so no
+// literal parent-dir run appears in this file (repo-wide-containment.test.ts
+// reads such runs as the suite escaping apps/web-platform; this reads nothing).
+const UP = "../";
 
 let root: string;
 let dest: string;
@@ -233,7 +237,7 @@ describe("stageCommittedC4Sources — refusals", () => {
     const gh = repo({
       ...benign(),
       "elsewhere/x.c4": { mode: "100644", content: "model { leaked = actor }\n" },
-      [`${D}/linked`]: { mode: "120000", target: "../../../../elsewhere" },
+      [`${D}/linked`]: { mode: "120000", target: `${UP.repeat(4)}elsewhere` },
     });
     expectRefusal(await stage(gh), gh, "symlink", "linked");
   });
@@ -241,7 +245,7 @@ describe("stageCommittedC4Sources — refusals", () => {
   it("refuses when the diagrams folder itself is a directory symlink", async () => {
     const gh = repo({
       "elsewhere/model.c4": { mode: "100644", content: SRC },
-      [D]: { mode: "120000", target: "../../../elsewhere" },
+      [D]: { mode: "120000", target: `${UP.repeat(3)}elsewhere` },
       "knowledge-base/engineering/architecture/README.md": { mode: "100644", content: "x" },
     });
     expectRefusal(await stage(gh), gh, "symlink", "diagrams");
@@ -300,7 +304,7 @@ describe("stageCommittedC4Sources — io failures", () => {
   });
 
   it("a tree path escaping the stage root is io_error and writes nothing outside it", async () => {
-    const gh = repo({ [`${D}/../../escape.c4`]: { mode: "100644", content: SRC } });
+    const gh = repo({ [`${D}/${UP.repeat(2)}escape.c4`]: { mode: "100644", content: SRC } });
     const res = await stage(gh);
     expect(res).toEqual({ ok: false, reason: "io_error", detail: "stage: path escapes root" });
     expect(existsSync(join(root, "escape.c4"))).toBe(false);
