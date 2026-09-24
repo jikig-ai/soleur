@@ -210,7 +210,7 @@ jobs:
           # the jq filter (anti-bypass: the gate logic lives in both, so a PR
           # editing either must run the gate against itself — the same
           # self-trigger posture ci.yml uses).
-          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/infra/sentry/|tests/scripts/lib/destroy-guard-filter-sentry\.jq$|scripts/sentry-alert-reference-gate\.sh$|tests/scripts/lib/sentry-alert-projection\.jq$|\.github/workflows/apply-sentry-infra\.yml$)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/infra/sentry/|tests/scripts/lib/destroy-guard-filter-sentry\.jq$|scripts/sentry-alert-reference-gate\.sh$|scripts/sentry-monitor-binding-gate\.sh$|tests/scripts/lib/sentry-alert-projection\.jq$|\.github/workflows/apply-sentry-infra\.yml$)'; then
             printf 'sentry=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'sentry=false\n' >> "$GITHUB_OUTPUT"
@@ -552,9 +552,12 @@ jobs:
       - name: Sweep the expected reference for secret bytes, then publish it (#8050)
         id: sweep
         # `failure()`: the file exists only when the reference gate above went
-        # red. It is a projection of the plan — rule names, tag keys/values,
-        # thresholds, a detector id, all already public in issue-alerts.tf — but
-        # it is derived from `terraform show -json`, which renders sensitive
+        # red. It is a projection of the plan — rule names, tag keys/values and
+        # thresholds (public in the .tf) plus detector ids: the issue-stream id,
+        # and, since #8630, the cron detector ids `cron-monitor-failure` binds,
+        # which appear in NO .tf (they resolve from `sentry_cron_monitor.*.id`).
+        # Detector ids are opaque integers, not credentials — but the document
+        # is derived from `terraform show -json`, which renders sensitive
         # values in PLAINTEXT, so it is swept with the SAME sentinel the state
         # forensics upload uses before it can leave the runner by EITHER channel
         # (the step summary is written HERE, after the sweep — a later step
@@ -872,15 +875,32 @@ jobs:
           # apply did not do what it reported — true by construction, not by a
           # committed file being fresh. (The committed copy exists for the daily
           # job, which has no Terraform access; `plan_pr` holds it equal.)
-          # `|| { …; exit 1; }`, NOT a post-command `rc=$?` branch: `set -e` is
-          # re-armed above this point, so an `rc=$?` after a failing jq would be
-          # dead code (the #7304 class this step already documents). A failure
-          # here reds the step BEFORE the apply — nothing is written — and the
-          # `if: failure()` filer names the Plan/Apply/Probe outcomes.
-          jq -S --arg side tf -f "${GITHUB_WORKSPACE}/tests/scripts/lib/sentry-alert-projection.jq" /tmp/sentry-apply-plan.json > "${RUNNER_TEMP}/sentry-alert-reference.json" || {
-            echo "::error::sentry alert projection of the apply plan failed BEFORE apply — nothing written; see jq's message above. A projected attribute unknown at plan time or a rule shape the module does not map is fixed in a follow-up PR (set the attribute explicitly, or extend tests/scripts/lib/sentry-alert-projection.jq on both sides); a re-run of this job cannot fix it."
+          # `|| proj_rc=$?`, NOT a post-command `rc=$?` branch: `set -e` is
+          # re-armed above this point, so a bare `rc=$?` after a failing jq would
+          # be dead code (the #7304 class this step already documents); the `||`
+          # form both survives `set -e` and keeps the status. jq's message goes
+          # to a file so the remedy can be chosen by the CAUSE jq reported, then
+          # is printed verbatim. A failure here reds the step BEFORE the apply —
+          # nothing is written — and the `if: failure()` filer names the
+          # Plan/Apply/Probe outcomes (and reads the marker written below).
+          proj_err="${RUNNER_TEMP}/sentry-alert-projection.err"
+          proj_rc=0
+          jq -S --arg side tf -f "${GITHUB_WORKSPACE}/tests/scripts/lib/sentry-alert-projection.jq" /tmp/sentry-apply-plan.json > "${RUNNER_TEMP}/sentry-alert-reference.json" 2>"$proj_err" || proj_rc=$?
+          if [[ "$proj_rc" -ne 0 ]]; then
+            cat "$proj_err" >&2
+            # The unknown-detector floor (#8630) FIRST: its remedy is the
+            # unrouted map + a follow-up PR, never "set the attribute" — the id
+            # cannot be set until this apply creates the monitor. The marker
+            # file tells the failure filer which remedy to print; it cannot
+            # read this step's log.
+            if grep -qF 'detector id(s) that do not exist yet' "$proj_err"; then
+              : > "${RUNNER_TEMP}/sentry-projection-unknown-detector"
+              echo "::error::sentry alert projection of the apply plan failed BEFORE apply (jq rc=${proj_rc}) — nothing written. A sentry_cron_monitor created or recreated in this plan has no detector id until the apply creates it, so no alert can bind it yet. Fix in a follow-up PR: move its label out of sentry_alert.cron_monitor_failure.monitor_ids into local.cron_monitor_alert_unrouted in apps/web-platform/infra/sentry/cron-monitor-alerts.tf with a (#N) reason, let that PR's apply create the monitor, then route it in the next PR (the two-PR rule in apps/web-platform/infra/sentry/README.md). A re-run of this job cannot fix it."
+            else
+              echo "::error::sentry alert projection of the apply plan failed BEFORE apply (jq rc=${proj_rc}) — nothing written; see jq's message above. A projected attribute unknown at plan time or a rule shape the module does not map is fixed in a follow-up PR (set the attribute explicitly, or extend tests/scripts/lib/sentry-alert-projection.jq on both sides); a re-run of this job cannot fix it."
+            fi
             exit 1
-          }
+          fi
 
           # ── EVERYTHING BELOW RUNS BEFORE THE ACK IS CONSULTED ────────────
           # This job RE-PLANS. Whatever `plan_pr` saw on the PR is not what gets
@@ -1408,7 +1428,16 @@ jobs:
             printf -- '- Plan step: `%s` · Apply: `%s` · Post-apply probe: `%s`\n\n' "${PLAN_OUTCOME:-unknown}" "${APPLY_OUTCOME:-unknown}" "${FIDELITY_OUTCOME:-unknown}"
             printf '### First, establish whether the apply was partial\n\n'
             printf 'Read the outcomes line above, then the run log.\n\n'
-            printf -- '- Plan step `failure` with the apply `skipped`: a guard, the projection, or the plan itself refused BEFORE apply. Nothing was written and live Sentry is untouched. The plan step'"'"'s `::error::` line names which: a `last-applied lookup:` API failure, or a 410 that clears, is fixed by re-running the job; a guard or projection refusal is not, and the remedy is a follow-up PR. For a projection refusal the plan step'"'"'s `::error::` line names it (set the attribute explicitly in the block, or map the new kind in `tests/scripts/lib/sentry-alert-projection.jq` on both sides).\n'
+            printf -- '- Plan step `failure` with the apply `skipped`: a guard, the projection, or the plan itself refused BEFORE apply. Nothing was written and live Sentry is untouched. The plan step'"'"'s `::error::` line names which: a `last-applied lookup:` API failure, or a 410 that clears, is fixed by re-running the job; a guard or projection refusal is not, and the remedy is a follow-up PR.'
+            # The plan step leaves this marker only when the projection refused
+            # a detector id that does not exist yet (#8630): that remedy is the
+            # unrouted map, and "set the attribute" would send the operator at an
+            # id no one can set until this apply creates the monitor.
+            if [[ -f "${RUNNER_TEMP}/sentry-projection-unknown-detector" ]]; then
+              printf -- ' **This run'"'"'s projection refused a detector id that does not exist yet**: a `sentry_cron_monitor` created or recreated in this plan is bound by `sentry_alert.cron_monitor_failure`. In a follow-up PR, move its label into `local.cron_monitor_alert_unrouted` in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf` with a `(#N)` reason, let that apply create the monitor, then route it in the next PR (the two-PR rule in `apps/web-platform/infra/sentry/README.md`).\n'
+            else
+              printf -- ' For a projection refusal the plan step'"'"'s `::error::` line names it (set the attribute explicitly in the block, or map the new kind in `tests/scripts/lib/sentry-alert-projection.jq` on both sides).\n'
+            fi
             printf -- '- Failed BEFORE `Terraform apply` for any other reason: nothing was written. Live Sentry is untouched and the gates did their job. Fix the cause and re-run.\n'
             printf -- '- Apply `failure`: assume a partial write. Terraform state and live Sentry may now disagree per-resource.\n'
             printf -- '- Apply `success`, post-apply probe `failure`: the apply is COMPLETE (AC17 says whether state matches the .tf). The probe compared live Sentry against the reference projected from THIS plan, so its findings are live state Terraform does not own (DISABLED, MONITOR UNBIND, LOGICTYPE FLIP, UNMANAGED, and the excluded-type classes FROZEN */UNMANAGED-FROZEN/MANAGED RULE GAINED EXCLUDED TRIGGER/UNRECONCILED HAND-OFF) or evidence the apply did not do what it reported — not a stale reference file.\n\n'

@@ -71,6 +71,10 @@
 # in two-step shape (e.g. scheduled-cf-token-expiry-check per the gap at
 # lines 71-77), update this prose AND verify the field becomes load-
 # bearing for the new resource.
+#
+# ALERT ROUTING (#8630). Every monitor here must be routed in cron-monitor-alerts.tf
+# or listed in its unrouted map (Guard 1); adding or removing one follows the
+# two-PR rule in this root's README. Keep this file pure sentry_cron_monitor.
 
 # scheduled-terraform-drift is now Inngest-DISPATCHED, not GHA-`schedule:`-fired.
 # An Inngest cron (apps/web-platform/server/inngest/functions/cron-terraform-drift.ts,
@@ -154,7 +158,8 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
 # #5674: Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-anthropic-credit-probe.ts`.
 # NEW hourly 1-token canary on the operator ANTHROPIC_API_KEY — pages when the
-# claude-eval fleet's credit is exhausted or the key is revoked (the 2026-06-29
+# claude-eval fleet's credit is exhausted or the key is revoked (the page itself is
+# sentry_alert.anthropic_credit_exhausted; this monitor is muted, #8704) (the 2026-06-29
 # silent-fleet-down incident). It is a SMALL / pure-TS Inngest cron (no claude-eval
 # spawn, no 50-min budget), so it takes the 30-min margin of the hourly small-cron
 # cohort (scheduled_oauth_probe / scheduled_github_app_drift_guard / cron_kb_template
