@@ -154,8 +154,9 @@ assert_grep "cloud-init fail-closed poweroff on non-enforcing host" 'poweroff -f
 assert_grep "probe invocation is fail-closed (if ! probe; then … poweroff)" \
   'if ! /usr/local/bin/cron-egress-enforce-probe\.sh; then' "$CLOUD_INIT"
 # ORDERING: the probe must run AFTER the app container starts (the terminal `docker run`'s
-# final image arg). #6122 replaced the bare `${image_name}` arg with the resolved
-# zot-or-GHCR ref `"$(cat /run/soleur-image-ref … || echo '${image_name}')"`; the run arg
+# final image arg). #6122 replaced the bare `${image_name}` arg with the ref the seed block
+# resolved, `"$(cat /run/soleur-image-ref)"` (#8036 1d dropped its `|| echo` GHCR fallback: the
+# seed block's `exit 1` guarantees the sentinel exists before any reader). The run arg
 # is the only line that STARTS with the quoted `cat` (the pull/create sites prefix it with
 # `docker pull`/`docker create`). Probe line number MUST be greater.
 CONTAINER_LINE="$(grep -nE '^\s*"\$\(cat /run/soleur-image-ref' "$CLOUD_INIT" | tail -1 | cut -d: -f1)"

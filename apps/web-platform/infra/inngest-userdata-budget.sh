@@ -36,8 +36,6 @@
 #     it bounds the "true" recut branch too.
 #   * `doppler_arch` / `inngest_cli_arch` — "amd64" and "arm64" are both 5 B, so this render is
 #     ARCH-NEUTRAL in length and the measurement holds for either `var.inngest_server_type`.
-#   * `ghcr_read_user` — 39 B, GitHub's maximum login length. True by construction.
-#   * `ghcr_read_token` — 128 B, comfortably over a `github_pat_` fine-grained PAT (~93 B).
 #   * `doppler_token` — a `dp.st.<config>.<body>` service token on project `soleur-inngest`,
 #     config `prd`; stubbed with a 48 B body, over the ~43 B Doppler emits.
 #   * `betterstack_logs_token` — 64 B. The real Better Stack token length is NOT derivable from
@@ -178,8 +176,6 @@ locals {
     vector_sha256          = "8a3cc62d18ec88bb8433159d1d3455d3c77fefff73ce46d4f8cc464e100f65f1"
     doppler_arch           = "amd64"
     doppler_sha256         = "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
-    ghcr_read_user         = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTU"
-    ghcr_read_token        = join("_", ["github", "pat", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
     zot_registry_endpoint  = "10.0.1.30:5000"
     zot_pull_user          = "zot-pull"
     zot_pull_token         = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"

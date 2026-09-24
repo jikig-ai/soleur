@@ -1508,7 +1508,7 @@
       {
         "comparison": {
           "interval": "1h",
-          "value": 1
+          "value": 0
         },
         "type": "event_frequency_count"
       }
@@ -1634,23 +1634,7 @@
             "comparison": {
               "key": "stage",
               "match": "eq",
-              "value": "app_ghcr_fallback"
-            },
-            "type": "tagged_event"
-          },
-          {
-            "comparison": {
-              "key": "stage",
-              "match": "eq",
-              "value": "app_ghcr_served"
-            },
-            "type": "tagged_event"
-          },
-          {
-            "comparison": {
-              "key": "stage",
-              "match": "eq",
-              "value": "inngest_ghcr_fallback"
+              "value": "inngest_pull_fatal"
             },
             "type": "tagged_event"
           }

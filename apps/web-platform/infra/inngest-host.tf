@@ -362,20 +362,20 @@ locals {
     # Doppler CLI download arch + checksum, both derived from local.inngest_arch.
     doppler_arch   = local.inngest_arch
     doppler_sha256 = local.inngest_doppler_sha256
-    # Bake the scoped GHCR read-creds (#6179/#6161) so the cold-boot soleur-inngest-bootstrap
-    # OCI pull + cosign-verify authenticates even when Doppler answers empty at the boot
-    # instant (else 401 → 226/NAMESPACE abort).
-    ghcr_read_user  = var.ghcr_read_user
-    ghcr_read_token = var.ghcr_read_token
-    # #7462 (ADR-096) — the zot-primary arm for the SAME cold-boot pull, baked for the SAME
-    # reason as the GHCR creds directly above: cold boot must not depend on Doppler answering
-    # at the boot instant. The mechanism DIVERGES from cloud-init.yml's web-host arm, which
-    # reads ZOT_REGISTRY_URL / ZOT_PULL_* from Doppler at boot. That path is structurally
-    # unavailable here — this host's Doppler token is scoped to project `soleur-inngest`, so
-    # those keys are unreadable, and adding them to `soleur-inngest/prd` would break the
-    # fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no boot at all).
-    # Amended into ADR-096; a future reader comparing the two hosts would otherwise read the
-    # divergence as an oversight. Precision, because #6500's title is easy to misread: what
+    # (#8036 item 1d / ADR-096 5.3b-i: the `ghcr_read_user`/`ghcr_read_token` keys that baked a
+    # GHCR read credential into this user_data are gone. The PAT they carried is revoked, the
+    # template no longer logs in to ghcr.io or pulls from it, and zot is the only boot-time read
+    # path. `var.ghcr_read_*` survives only for `doppler_secret.ghcr_read_*` until task 5.4.)
+    # #7462 (ADR-096) — the zot arm for the cold-boot bootstrap pull, baked so that cold boot
+    # does not depend on Doppler answering at the boot instant. When this landed it DIVERGED
+    # from cloud-init.yml's web-host arm, which then read ZOT_REGISTRY_URL / ZOT_PULL_* from
+    # Doppler at boot; since #8660 the web arm bakes registry_endpoint + zot_pull_* through its
+    # own templatefile the same way, and neither host reads zot values from Doppler at boot. The
+    # Doppler path was never an option here — this host's Doppler token is scoped to project
+    # `soleur-inngest`, so those keys are unreadable, and adding them to `soleur-inngest/prd`
+    # would break the fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no
+    # boot at all). Amended into ADR-096; a reader wondering why this host never took the
+    # Doppler route would otherwise read it as an oversight. Precision, because #6500's title is easy to misread: what
     # three new keys trip is the IDENTITY assertion `n_total -ne n_inngest`, NOT the `-lt 5`
     # floor (`n_inngest` stays 5). The file's own note — "The floor stays 5 ON PURPOSE" — warns
     # against exactly that confusion.
@@ -405,12 +405,12 @@ locals {
     # `-target` prunes DEPENDENTS, not dependencies, so both resources stay in the graph for the
     # `inngest-host-replace` dispatch; neither carries a pending diff there, so this is a no-op.
     #
-    # Trust boundary vs the ghcr_read_* bake above: the metadata-API exposure is identical, but
-    # this is NOT confidentiality-equivalent. The insecure-registry allowlist means docker sends
-    # this credential as cleartext HTTP Basic on 10.0.1.0/24, where the GHCR credential travels
-    # under TLS. That is ADR-096's Phase-0 accepted posture for the private net, newly extended
-    # to this host — stated rather than implied, because the digest pin protects the PAYLOAD and
-    # not the CREDENTIAL.
+    # Trust boundary: the credential is retrievable via the Hetzner metadata API like every
+    # user_data value, and it is NOT protected in transit. The insecure-registry allowlist means
+    # docker sends it as cleartext HTTP Basic on 10.0.1.0/24 (a TLS registry credential would
+    # not be). That is ADR-096's Phase-0 accepted posture for the private net, extended to this
+    # host — stated rather than implied, because the digest pin protects the PAYLOAD and not the
+    # CREDENTIAL.
     #
     # The endpoint is the EXISTING local, not a new derivation — zot-registry.tf already
     # computes `local.registry_endpoint = "${local.registry_private_ip}:5000"` in this same
