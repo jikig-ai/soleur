@@ -25,15 +25,28 @@ No task below authorises a production dispatch — G1-G4 each stop for the opera
 - 1.1 Stub harness `git-data-bootstrap-store-verify.test.sh`:
   - 1.1.1 New stubs: blockdev, dmsetup, losetup, cryptsetup, udevadm, and per-device dumpe2fs.
   - 1.1.2 Rewrite S6/R1 to the pinned mount options and snapshot source. Change R4 into R4a/R4b/R4c.
-  - 1.1.3 New rows: `source` (isLuks), `snapshot` (setro, getro, geometry, losetup, create, Invalid),
-    and `umount` (the teardown steps).
+  - 1.1.3 New rows:
+    - `source`: the link does not resolve to a block device, isLuks, or holders present;
+    - `snapshot`: setro, a behavioural getro stub, geometry, mktemp, losetup, create, `Invalid`,
+      or the kernel ro-write warning;
+    - `journal`: post-replay needs_recovery, `with errors`, or `errors_count`;
+    - `umount`: the teardown steps.
+  - 1.1.3b A `calls.log` allowlist row over every call naming the origin node (Guard 1 mutation 7).
   - 1.1.4 An order row (isLuks < setro < create < mount), and a teardown-order row that also runs
     on partial failure.
   - 1.1.5 Guard 1 mutation self-tests, then re-derive `MIN_ASSERTIONS`.
 - 1.2 Complete the loopback suite:
-  - 1.2.1 Arms A, C (with the `debugfs -c` precondition) and D.
-  - 1.2.2 Every arm runs in a child bash. Each checks the sha256, `--getro`=1, and that nothing
-    leaks.
+  - 1.2.1 Arms A, C (checkpointed `.anchor`, single-process fsync+shutdown, debugfs exit-0 with a
+    positive listing, at most 3 rebuilds), D (accept `snapshot` or `mount`), E (corrupt directory
+    block) and F (NOLOGFLUSH, independent-replay oracle). The combined `noload` + no-post-check
+    mutant runs against arm C.
+  - 1.2.2 Every arm runs in a child bash and checks:
+    - the sha256;
+    - `--getro`=1;
+    - the FATAL word;
+    - leaks, compared against a per-arm baseline of `losetup -a`, `dmsetup ls` and `/dev/shm`.
+
+    Floor: 7 arms.
   - 1.2.3 Add the inner `plaintext-count` sentinels, spanning `_repo_count`.
   - 1.2.4 Satisfy the orphan-suite and census lints.
 - 1.3 Write `tests/scripts/test-git-data-rung2-plan-shape.sh` (Guard 3 matrix, `additive`/`host-only`).
@@ -52,11 +65,26 @@ No task below authorises a production dispatch — G1-G4 each stop for the opera
   - `_pt_sz`, then `dmsetup create`;
   - a mount with no noload, using `errors=remount-ro`;
   - the SOURCE equality check, the post-replay check, the count, and the `Invalid` check.
-- 2.2 Make `_pt_release` idempotent and collect-then-exit: `trap - EXIT` first, flags cleared on
-  success, and `udevadm settle || true`.
+- 2.1b Additional checks:
+  - resolve the by-id link once (`realpath -e` + `[ -b ]`);
+  - the holders check before `--setro`;
+  - a pinned table literal;
+  - COW sizing on `max(bs, 4096)`;
+  - `errors_count` + `with errors` checks;
+  - a post-teardown kernel-log ro-write check;
+  - a classifier word plus `dmsetup status` numbers in FATAL detail (never raw kernel lines);
+  - `find` stderr sent to `/dev/null`.
+- 2.2 Make `_pt_release` idempotent and collect-then-exit:
+  - `trap - EXIT` first;
+  - flags cleared on success;
+  - `udevadm settle || true`;
+  - never `rm -rf`, and no directory removal while mounted.
 - 2.3 Add `plaintext_journal` to `boot_complete`. Update the §7b and header comments.
-- 2.4 Add `dmsetup` to `packages:` in `apps/web-platform/infra/cloud-init-git-data.yml`. Confirm no
-  new env seam is needed; if one is, update the `env -u` list and census C2.
+- 2.4 Add `dmsetup` to `packages:` in `apps/web-platform/infra/cloud-init-git-data.yml`. Move the
+  `GIT_DATA_PLAINTEXT_VOLUME_ID` assignment after the `env -u` strip, as the last token before
+  `bash`, and add a census C2 row for it. No new env seam.
+- 2.6 AC4b parity check: `git diff f2aa5b1bee95fc7b07c4eaf625ff4cb70399bf35..HEAD` over the LUKS
+  stage, the bootstrap outside the sentinels, and the module shows only this PR's declared hunks.
 - 2.5 Re-measure with `git-data-userdata-budget.sh` and record the byte figure.
 
 ## 3. Rung-2 rehearsal
@@ -64,7 +92,11 @@ No task below authorises a production dispatch — G1-G4 each stop for the opera
 - 3.1 Add `rehearsal_phase` to `rung2-rehearsal/variables.tf` (no default). Make `user_data` in
   `rehearsal.tf` conditional.
 - 3.2 Write `rung2-rehearsal/seed-dirty-journal.sh`: rw mount, writes, `sync -f`, then `sysrq o`.
-  Emit `stage=seed_*` rows, and escape it for `templatefile`.
+  - Emit `stage=seed_*` rows.
+  - Escape it for `templatefile`.
+  - Take its input from `hcloud_volume.rehearsal.id`.
+  - No `set -x` or `curl -v`/`-k`, and the token is never echoed.
+  - Add root-purity rows.
 - 3.3 Write `scripts/git-data-rung2-plan-shape.sh` and replace the inline jq guard.
 - 3.4 Rework the workflow `git-data-rung2-rehearsal.yml`:
   - 3.4.1 Sequence: seed apply, off-poll, payload apply, capture #1, then the reboot arm.
@@ -75,7 +107,7 @@ No task below authorises a production dispatch — G1-G4 each stop for the opera
   - 3.4.5 Recompute the time budget in the header. Put teardown in a separate `if: always()` job.
 - 3.5 Evidence capture: select `plaintext_volume`/`plaintext_journal`, make PASS require
   `present`+`dirty`, and add the replace-arm invocation.
-- 3.6 Add `plaintext_journal` to the informational list in `git-data-birth-emitter-6982.sh`.
+- 3.6 `git-data-birth-emitter-6982.sh`: comment-only (name `plaintext_journal` as deliberately unprojected; no SELECT change).
 - 3.7 `git-data-rung2-rehearsal.test.sh`: new user_data/seed rows and a budget check summed over
   every step bound.
 

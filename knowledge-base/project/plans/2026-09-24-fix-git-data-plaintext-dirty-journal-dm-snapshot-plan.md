@@ -12,6 +12,72 @@ draft_pr: 8711
 related: [5274, 5914, 8211, 8710, 8209, 8571]
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24 (headless; the fan-out was kept small at the lead's request, after a
+6-agent review panel, a CTO assessment and an advisor consult).
+
+**Halt gates run:**
+- 4.6 User-Brand Impact: pass.
+- 4.7 Observability: pass (`credentials_required` declared).
+- 4.8 PAT: none.
+- 4.10 Encryption Posture: two `n/a` fields rewritten, and the seed-to-Better Stack connection is now
+  declared.
+- 4.11 Guard Contract: lint green, 3 entries. The Guard 1 assembly is now a structural `calls.log`
+  allowlist rather than a symbol count.
+- 4.55 Downtime & Cutover: section added.
+
+**Agents:**
+- a verify-the-negative sweep (all nine repo-state claims confirmed);
+- security-sentinel;
+- data-integrity-guardian;
+- test-design-reviewer.
+
+The kernel semantics were checked against Linux v6.8 source.
+
+### Key improvements
+
+1. **Kernel facts cited from source** (`ext4_load_journal` `-EROFS` on a ro bdev, and `snapshot_ctr`
+   opening the origin `BLK_OPEN_READ`). The ADR claim is narrowed: the ro flag blocks replay but is
+   not a universal write block, so the sha256 anchor is the proof.
+2. **Security hardening:**
+   - the by-id link is resolved once;
+   - a `holders` check runs before `--setro`;
+   - teardown never walks a still-mounted tree with `rm -rf` (which would leak workspace ids into
+     Sentry and a public log);
+   - `find` stderr is silenced;
+   - a pre-existing Doppler-override hole on `GIT_DATA_PLAINTEXT_VOLUME_ID` is closed;
+   - seed hygiene rows are added.
+3. **Deterministic arm C:**
+   - a checkpointed `.anchor` plus a debugfs exit-0 and positive-listing check;
+   - a single-process fsync+shutdown;
+   - at most 3 rebuilds.
+
+   Also added: a combined `noload` + no-post-check mutant actually run in the loopback suite, a
+   behavioural `--getro` stub, baseline-relative leak checks, and a five-arm floor.
+4. **Guard 3:** script-level mutants (unanchored match, missing-replace check, delete/create order,
+   update/delete of a volume).
+5. **Correction:** `git-data-birth-emitter-6982.sh` deliberately does not project informational
+   fields, so the change there is comment-only (plan and tasks corrected).
+6. **Short-count paths closed (data-integrity):**
+   - ext4 readdir silently skips a checksum-failed directory block, and a truncated replay can
+     mount clean. Both now trip `reason=journal` via `errors_count` and `with errors`;
+   - the dm table string is pinned (no `discard_passdown_origin`);
+   - the COW is sized on `max(bs, 4096)`;
+   - a post-teardown kernel-log check for ro-device writes is added;
+   - FATALs carry a classifier word instead of raw kernel lines;
+   - loopback arms E (corrupt directory block) and F (torn transaction, checked against an
+     independent-replay oracle) are added.
+7. **G3-state parity is now a checked fact** (AC4b). The failed replace ran commit `f2aa5b1bee`, this
+   branch's base, so the rehearsal formats LUKS with the predecessor's exact code.
+
+### New considerations discovered
+
+- The `source-run-gate` already refuses a *failed* replace (it prints the manual
+  `git-data-pin-redeploy.yml` hint), so 35980551109 skipping is expected. #8710 is only about a
+  `plan_only` success.
+- The workflow byte gate (ADR-231, 490,000 B) leaves ample headroom (rehearsal workflow 62,327 B).
+
 ## Overview
 
 The git-data host's store-verify step refuses to count the retained plaintext volume when its ext4
@@ -75,7 +141,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
   miss an entry that exists only in the journal).
 - **P4** Every failure is a named `FATAL: plaintext_unverified reason=<word>` or
   `FATAL: plaintext_residue count=<n>` at `stage=bootstrap`, and no marker is written.
-- **P5** No transient device (snapshot, loop, tmpfs) survives the unit on any exit path; a teardown
+- **P5** No transient device (snapshot, loop, `/dev/shm` COW directory) survives the unit on any exit path; a teardown
   failure is a named FATAL, never a silent leak.
 - **P6** Rung-2 evidence proves the dirty-journal case was actually booted, so a rehearsal whose
   seed failed to dirty the journal cannot produce releasing evidence.
@@ -129,6 +195,17 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 | `apps/web-platform/infra/git-data-userdata-budget.sh` | 22,284 B stored / 32,768 B cap (10,484 B headroom, measured by research) |
 
 ### Kernel/ext4 facts the design rests on (to be re-proven by the loopback suite, not trusted)
+
+Source-verified 2026-09-24 against Linux v6.8 (`gh api -H 'Accept: application/vnd.github.raw'
+'repos/torvalds/linux/contents/<path>?ref=v6.8'`), still to be measured by Phase 0:
+
+- `fs/ext4/super.c` `ext4_load_journal`: `really_read_only = bdev_read_only(sb->s_bdev) | …` (l.6002).
+  On a `needs_recovery` filesystem mounted `sb_rdonly`, a read-only bdev logs `write access
+  unavailable, cannot proceed (try mounting with noload)` and returns `-EROFS` (l.6016-6025).
+  Otherwise it logs `write access will be enabled during recovery` and replays.
+- `drivers/md/dm-snap.c` `snapshot_ctr`: `blk_mode_t origin_mode = BLK_OPEN_READ;` (l.1245),
+  upgraded to `BLK_OPEN_WRITE` only for the merge target (l.1255), and used for the
+  `dm_get_device` of the origin (l.1276).
 
 - ext4 replays a dirty journal on a **read-only** mount whenever the block device is writable, and
   refuses (`write access unavailable, cannot proceed`) when the device is read-only; `noload` skips
@@ -276,7 +353,7 @@ against the assumption. The production-image kernel is proven only by G1 (payloa
 on the image): stop, do not loop PR -> G1. Return to ADR-239's alternatives with the CTO and CLO.
 The fallback candidate is the same snapshot **without** `--setro` (dm-snapshot still opens the origin
 read-only; the loopback sha256 anchor still proves nothing was written) — it weakens the
-"kernel-enforced" wording of the ADR amendment, not P2. Deadline for that decision: well before the
+"kernel ro-flag backstop" wording of the ADR amendment, not P2. Deadline for that decision: well before the
 Art. 12(3) date in `## Operator-gated dispatches`.
 
 ### Phase 1 — Tests first (RED)
@@ -289,7 +366,10 @@ Art. 12(3) date in `## Operator-gated dispatches`.
   records the SOURCE argument and copies `ptsrc/` into the target for the snapshot mount. `dumpe2fs`
   answers per device: origin (`dumpe2fs_dirty` toggles needs_recovery) and snapshot
   (`snap_still_dirty` toggles it), and prints `Total journal blocks:` / `Block size:`. The COW
-  directory needs no seam: `mktemp -d -p /dev/shm` works unprivileged. **No new environment seam is
+  directory needs no seam: the stub harness shadows `mktemp` on its PATH and rewrites `-p /dev/shm`
+  to a fixture directory (the harness already runs the unit under `set -euo pipefail` with a
+  stubbed PATH), so a run never touches the real `/dev/shm` and stays portable to hosts without
+  one. **No new environment seam is
   added** — every env var the bootstrap honours must also be stripped by cloud-init's `env -u` list
   under `doppler run` and enumerated in `git-data-store-device-census.test.sh` row C2 (architecture
   review); if implementation finds a seam unavoidable, both lists are edited in the same commit.
@@ -305,7 +385,11 @@ Art. 12(3) date in `## Operator-gated dispatches`.
     cannot be parsed, when `losetup` fails, when `dmsetup create` fails (this covers a name already
     taken — the teardown must not remove a device this run did not create), and when `dmsetup
     status` reads `Invalid`;
-  - `reason=umount` when the snapshot unmount, `dmsetup remove`, or `losetup -d` fails.
+  - `reason=umount` when the snapshot unmount, `dmsetup remove`, or `losetup -d` fails;
+  - `reason=journal` when the (seamed-by-PATH `cat` of the sysfs) `errors_count` is non-zero or
+    rises across the count, and when the snapshot's `Filesystem state` reads `with errors`;
+  - `reason=snapshot` when the post-teardown kernel-log read shows the read-only-write warning
+    for the origin node.
 - **Order row (REORDER, P2):** in `calls.log`, `cryptsetup isLuks` precedes `blockdev|--setro`, which
   precedes the first `dmsetup|create` and the first `mount`.
 - **Teardown row (P5):** on every FATAL arm after acquisition, `calls.log` shows `umount` (if
@@ -336,23 +420,45 @@ unit `exit`s and sets `trap … EXIT`); the parent performs the leak and hash ch
   ioctl number against the runner's `linux/ext4.h`/`xfs_fs.h` before relying on it, else fall back to
   `xfs_io -x -c 'shutdown -f'`), then umount. Expect PASS, count 0, `plaintext_journal=dirty`. Its
   first assertions: the snapshot superblock is clear of needs_recovery while the origin still has it.
-- **Arm C, dirty with residue (the discriminating arm, P3):** as B, but `repositories/ws-1.git` is
-  created immediately before the shutdown. **Assert the precondition, don't assume it:**
-  `debugfs -c -R 'ls /repositories'` on the image (catastrophic mode ignores the journal) does NOT
-  list `ws-1.git`. The unit must still report `plaintext_residue count=1`. If the precondition fails,
-  the arm aborts as an instrument failure (exit 2), never green.
+- **Arm C, dirty with residue (the discriminating arm, P3).** Build it deterministically (test-design
+  review):
+  1. Create `repositories/.anchor`, then umount and remount, so the anchor is checkpointed to its
+     home location.
+  2. Create `repositories/ws-1.git`, `fsync` the directory, and issue the shutdown ioctl from the
+     same python3 process, with no `sync` in between.
+  3. **Assert the precondition, don't assume it.** `debugfs -c -R 'ls -l /repositories'` must exit 0,
+     MUST list `.anchor` (proving it read the right directory), and must NOT list `ws-1.git` (the
+     entry lives only in the journal). If the precondition fails, rebuild the image, at most 3 times,
+     then exit 2 (instrument), never green.
+  4. The unit must still report `plaintext_residue count=1`.
 - **Arm D, COW overflow:** arm C with the COW-size constant rebound tiny **in the extracted copy**
   (the loopback precedent's rebinding, with a landed-check that the substitution happened — not an
-  env seam). Expect a named FATAL (pin the word the kernel actually produces, `snapshot` or
-  `mount`) and no marker.
+  env seam). Expect a named FATAL with `reason` in {`snapshot`, `mount`} — either is accepted rather
+  than pinning whichever was seen once — and assert it is neither a residue verdict nor a PASS, and
+  that no marker was written.
+- **Arm E, corrupt directory block:** as A plus one `repositories/` entry, then corrupt that
+  directory's data block with `debugfs -w` on the image before the run. Expect `reason=journal`
+  from the `errors_count` / `with errors` check, and never a PASS on a short count. This is the
+  silent-skip readdir path.
+- **Arm F, torn last transaction:** as C, but the shutdown uses `EXT4_GOING_FLAGS_NOLOGFLUSH` (2),
+  the hot-unplug shape production likely had. The oracle is independent of the unit: copy the image,
+  mount the copy normally rw on a separate loop (a real replay), and count. The unit's verdict
+  (PASS vs `plaintext_residue count=<n>`) must equal that oracle count.
+- **Mkfs parity:** the arms use the runner's `mkfs.ext4` defaults. The Hetzner-formatted feature
+  set is exercised only by the rung-2 volume. G1 records the plaintext volume's `Filesystem
+  features` line (non-FATAL log line), and the loopback `mkfs -O` set is aligned to it in a
+  follow-up commit if they differ.
 - **Every arm asserts:**
   - the origin image `sha256sum` is byte-identical before and after (P2);
   - `blockdev --getro` on the origin loop reads `1` after the unit;
-  - no `git-data-pt-snap` device remains, `losetup -a` holds no COW loop, and nothing remains under
-    the COW parent (P5);
+  - no `git-data-pt-snap` device remains, and `losetup -a`, `dmsetup ls` and the `/dev/shm` listing
+    each equal a snapshot taken before that arm (P5). Compare against the baseline, not against
+    empty: runners carry snap loop devices;
+  - the child's FATAL line matches the expected word, not only its exit code;
   - for B and C, dumpe2fs on the origin still shows needs_recovery.
 - The arms run back-to-back in one process, so a leak from one arm reds the next (the second-member
-  row).
+  row). Floor: exactly seven arms ran (negative control, A, B, C, D, E, F) plus a minimum
+  assertion count, checked like the stub harness's `MIN_ASSERTIONS`.
 - Register it as `sudo bash apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh`
   inside a multi-line `run: |` block in `.github/workflows/infra-validation.yml`, next to the inngest
   loopback step, and add its exemption entry to `.github/scripts/test/test-infra-suite-registration.sh`
@@ -386,16 +492,22 @@ _plaintext_journal=absent
 if [ -n "$_pt_id" ]; then
   _plaintext_volume=present
   [[ "$_pt_id" =~ ^[0-9]+$ ]] || { log "FATAL: plaintext_unverified reason=source — …"; exit 1; }
-  _pt_dev="${GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id}"
+  _pt_link="${GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id}"
+  # resolve the by-id link ONCE; every later call uses the node, so a detach/reattach between
+  # calls cannot re-point the name (security review)
+  _pt_dev="$(realpath -e "$_pt_link" 2>/dev/null)" && [ -b "$_pt_dev" ] || { log "FATAL: plaintext_unverified reason=source — $_pt_link does not resolve to a block device"; exit 1; }
   _pt_snap=git-data-pt-snap                        # fixed; never "git-data" (the LUKS mapper)
   ! cryptsetup isLuks "$_pt_dev" 2>/dev/null || { log "FATAL: plaintext_unverified reason=source — $_pt_dev is a LUKS device"; exit 1; }
+  # a device with holders (e.g. the live LUKS mapper) is never ours to set read-only, even if isLuks erred
+  [ -z "$(ls -A "/sys/class/block/${_pt_dev##*/}/holders" 2>/dev/null)" ] || { log "FATAL: plaintext_unverified reason=source — $_pt_dev has holders"; exit 1; }
   # (P2) READ-ONLY FIRST, before anything opens the device; read back; never restored.
   blockdev --setro "$_pt_dev" && [ "$(blockdev --getro "$_pt_dev" 2>/dev/null)" = 1 ] \
     || { log "FATAL: plaintext_unverified reason=snapshot — $_pt_dev could not be made read-only"; exit 1; }
   _pt_sb="$(dumpe2fs -h "$_pt_dev" 2>/dev/null)" || { log "FATAL: plaintext_unverified reason=journal — …"; exit 1; }
   # origin journal state -> _plaintext_journal=dirty|clean (informational; a dirty journal is no longer FATAL)
-  # COW bytes = Total journal blocks * Block size + 64 MiB; unparseable -> reason=snapshot
-  _pt_dir="$(mktemp -d -p /dev/shm)"               # 0700, RAM-only; the COW file size bounds writes
+  # COW bytes = Total journal blocks * max(Block size, 4096) + 64 MiB; unparseable -> reason=snapshot
+  #   (a block size under 4 KiB would otherwise undercount against the 4 KiB COW chunk)
+  _pt_dir="$(mktemp -d -p /dev/shm)" || …reason=snapshot   # 0700, RAM-only (no swap on this host); the COW file size bounds writes
   _pt_mnt="$_pt_dir/mnt"; mkdir "$_pt_mnt"
   trap _pt_release EXIT                            # state flags: _pt_loop _pt_snap_up _pt_mounted
   truncate -s "$_pt_cow_bytes" "$_pt_dir/cow" && _pt_loop="$(losetup --find --show "$_pt_dir/cow")" || …reason=snapshot
@@ -404,9 +516,15 @@ if [ -n "$_pt_id" ]; then
   _pt_snap_up=1                                    # set ONLY after a successful create
   mount -o ro,errors=remount-ro,nosuid,nodev,noexec "/dev/mapper/$_pt_snap" "$_pt_mnt" || …reason=mount   # NO noload: replay into COW
   # SOURCE equality against /dev/mapper/$_pt_snap (realpath both sides) -> reason=source
-  # post-replay: dumpe2fs -h /dev/mapper/$_pt_snap must NOT show needs_recovery -> reason=journal
+  # post-replay: dumpe2fs -h /dev/mapper/$_pt_snap must NOT show needs_recovery, and its
+  #   "Filesystem state" must not read "with errors" -> reason=journal
+  # /sys/fs/ext4/<dm-N>/errors_count read right after the mount and again after the count; any
+  #   non-zero or increase -> reason=journal (ext4 readdir SKIPS a checksum-failed dir block with
+  #   only a log line, so find exits 0 on a short count; a truncated replay can mount clean)
   _pt_n="$(_repo_count "$_pt_mnt")" || …reason=mount   # the unit runs under pipefail (asserted)
   # dmsetup status "$_pt_snap" must not read Invalid -> reason=snapshot
+  # after teardown: the kernel log must hold no "Trying to write to read-only block-device" naming
+  #   the origin's node (bio_check_ro only warns) -> reason=snapshot
   _pt_release; trap - EXIT
   [ "$_pt_n" -eq 0 ] || { log "FATAL: plaintext_residue count=$_pt_n — the plaintext volume still holds repositories/ entries"; exit 1; }
 fi
@@ -420,7 +538,12 @@ _plaintext_empty=yes
   3. `dmsetup remove --retry "$_pt_snap"`, with a bounded retry, because udev's blkid probe can hold
      the new device briefly;
   4. `losetup -d "$_pt_loop"`;
-  5. `rm -rf` of the `/dev/shm` directory.
+  5. `rm -f cow; rmdir mnt dir` — **never `rm -rf`, and skipped entirely while `_pt_mounted=1`**. An
+     `rm -rf` after a failed umount would walk the mounted plaintext tree and print one EROFS line per
+     entry, naming workspace ids, to stderr. That stderr goes to the runcmd detail file, which
+     `on_err` ships to Sentry and the rung-2 capture puts in a public Actions log (security review).
+     For the same reason `_repo_count`'s `find` sends its stderr to `/dev/null` and still fails
+     under pipefail.
 
   The first three failures are `reason=umount`. It starts with `trap - EXIT` (the success path calls
   it while the trap is armed, and a teardown `exit 1` would otherwise run it twice), clears each
@@ -430,6 +553,15 @@ _plaintext_empty=yes
   and under `set -e` that would skip the later steps and leak the dm and loop devices (CTO R4). It
   never calls `blockdev --setrw`. A teardown FATAL leaves no marker, because the marker writer comes
   later in the unit.
+- The dm table string is pinned exactly as `0 <sectors> snapshot <dev> <loop> N 8`: no optional
+  feature arguments. With `discard_passdown_origin`, discards (FITRIM has no ro check) would reach the
+  origin (data-integrity review). AC3 asserts the literal.
+- **Diagnosis without SSH:** a `reason=mount`/`journal`/`snapshot` FATAL appends a
+  **classifier word**, not raw kernel lines. Kernel `EXT4-fs`/`JBD2` messages can name directory
+  entries, which are workspace ids. The word is derived from the kernel log since the unit started:
+  `overflow` (dm snapshot invalidated), `jbd2` (a journal replay error), `ext4-error`, or `none`.
+  Alongside it go the `dmsetup status` used/total sector numbers. A repeated journal-class FATAL on
+  G3 routes to the #8571 wipe decision and the CLO, never to another replace (runbook).
 - Reason vocabulary after this change: `source | snapshot | mount | journal | umount`. `snapshot`
   is the one new word; the text after the em-dash names the failed step. `plaintext_residue
   count=<n>` is byte-unchanged.
@@ -450,6 +582,14 @@ _plaintext_empty=yes
   with `git-data-userdata-budget.sh`.
 - `apps/web-platform/infra/cloud-init-git-data.yml` `packages:` gains `dmsetup`. It is listed
   explicitly rather than relying on `cryptsetup`'s Depends.
+- **Pre-existing hole closed in the same edit (security review):** the bootstrap stage exports
+  `GIT_DATA_PLAINTEXT_VOLUME_ID` *before* `doppler run`. By default `doppler run` lets secrets
+  override existing variables, so a `prd_git_data` key of that name set to empty would switch the
+  whole count off and report `plaintext_volume=absent` on a green boot.
+  - Move the assignment after the strip, as the last token before `bash`:
+    `… /usr/bin/env -u … GIT_DATA_PLAINTEXT_VOLUME_ID='${git_data_volume_id}' bash …`.
+  - Add a `git-data-store-device-census.test.sh` C2 row asserting that position (verify the
+    Doppler precedence at implementation time; the move is correct either way).
 
 ### Phase 3 — Rung-2 rehearsal reproduces a dirty journal, then the adopted-LUKS replace
 
@@ -487,7 +627,15 @@ _plaintext_empty=yes
     rows pinning three things:
     - the payload arm is the unmodified module render;
     - the seed file references only the plaintext volume id, never the LUKS volume;
-    - the seed does `sysrq o` and never `umount`.
+    - the seed does `sysrq o` and never `umount`;
+    - the seed's volume input is `hcloud_volume.rehearsal.id`, never a variable (the rehearsal runs
+      in the production Hetzner project);
+    - the seed has no `set -x` and no `curl -v`/`-k`, and never echoes the token;
+    - `seed-dirty-journal.sh` is referenced from nowhere in `modules/git-data-userdata/` or
+      `git-data.tf` (extends the root-purity rows). The ingest token variable is already
+      `sensitive = true` (`rung2-rehearsal/variables.tf`), and the payload's user_data already
+      carries the same token (`cloud-init-git-data.yml` `/etc/default/git-data-betterstack`), so the
+      seed adds no new exposure class.
 - New `scripts/git-data-rung2-plan-shape.sh <plan.json> <additive|host-only>` replaces the inline
   "creates ONLY rehearsal addresses and destroys nothing" jq in the workflow, with the same
   deny-list-the-inert-verbs semantics.
@@ -564,18 +712,22 @@ _plaintext_empty=yes
     PR, as ADR-239 already requires;
   - a second invocation (the replace arm) appends `RUNG2_REPLACE_BOOT=PASS|FAIL`, as the reboot arm
     appends `RUNG2_REBOOT_REOPEN`. No `RUNG2_PLAINTEXT_JOURNAL` key: PASS already means `dirty`.
-- `scripts/followthroughs/git-data-birth-emitter-6982.sh`: add `plaintext_journal` to its
-  informational list.
+- `scripts/followthroughs/git-data-birth-emitter-6982.sh`: **no projection change.** Its SELECT
+  deliberately projects only the yes/no booleans. A non-boolean field in the whole-row `\bno\b`
+  match adds only false fires, so `plaintext_journal` stays unprojected, like `plaintext_volume`.
+  Extend the comment at its "informational … deliberately NOT projected" paragraph to name it.
 
 ### Phase 4 — ADR-239 amendment, runbooks, C4 check
 
 - `ADR-239`: add `## Amendment 2026-09-24 — the dirty-journal gap is closed (#5274, #5914)`:
   Decision 2 now reads the plaintext volume through a non-persistent dm snapshot: the by-id device is
-  set read-only by the kernel before anything opens it and stays read-only for the host's
+  set read-only by the kernel before any mount, dm table or write-capable open and stays read-only for the host's
   lifetime; ext4 replays the journal into a COW file on `/dev/shm` (RAM); the counted tree is the
-  post-replay tree. **D2 "never writable" still holds and is now enforced by the kernel's ro flag, not only by
-  mount options** — with the origin kernel-ro, even a mistaken direct `ro` mount of it cannot replay
-  the journal (ext4 refuses: write access unavailable). Record that the COW is in RAM on purpose: it
+  post-replay tree. **D2 "never writable" still holds, and the kernel's ro flag adds a precise, stated
+  backstop.** With the origin kernel-ro, ext4 refuses to replay a journal on it (`write access
+  unavailable`, source-verified). The flag does **not** reject every write: in v6.8 `bio_check_ro`
+  only warns, and it cannot stop a writer that opened the device before `--setro`. The proof that
+  nothing was written is the loopback suite's sha256 anchor, not the flag (security review). Record that the COW is in RAM on purpose: it
   holds replayed plaintext metadata (repository and file names) and must leave nothing on disk.
   Strike-through (not delete) the "dirty-journal `noload` gap is real and
   accepted" consequence with a pointer to the amendment; record the 2026-09-24 FATAL as the
@@ -608,7 +760,9 @@ _plaintext_empty=yes
   `test-git-data-rung2-plan-shape.sh`, `test-infra-suite-registration.sh`,
   `git-data-render-strip-parity.test.sh`, `git-data-userdata-budget.sh`,
   `plugins/soleur/test/c4-count-parity.test.sh`, `scripts/guard-vacuity-floor.test.sh`,
-  `scripts/lint-guard-contract.py` over this plan, and `scripts/test-all.sh` (affected). The
+  `scripts/lint-guard-contract.py` over this plan, `plugins/soleur/test/workflow-file-size.test.ts`
+  (ADR-231 cap 490,000 B; measured today: rehearsal workflow 62,327 B, infra-validation 156,704 B),
+  and `scripts/test-all.sh` (affected). The
   loopback suite runs only in CI (no local passwordless sudo) — its first CI run is its RED/GREEN
   evidence; record that in session-state.
 - Re-derive floors (`MIN_ASSERTIONS`), vacuity baselines and byte budgets after every merge from
@@ -631,7 +785,7 @@ _plaintext_empty=yes
 - `scripts/followthroughs/git-data-birth-emitter-6982.sh`
 - `tests/scripts/test-git-data-rung2-evidence-capture.sh`
 - `tests/scripts/test-git-data-boot-signal-poll.sh`
-- `apps/web-platform/infra/git-data-store-device-census.test.sh` — only if a new env seam proves unavoidable (then also the `env -u` list in `cloud-init-git-data.yml`); none is planned
+- `apps/web-platform/infra/git-data-store-device-census.test.sh` — C2 row for the post-strip `GIT_DATA_PLAINTEXT_VOLUME_ID` assignment (and the `env -u` list if a new seam proves unavoidable; none is planned)
 - `plugins/soleur/test/preflight-discoverability-test.test.ts` — bump `BASELINE_DECLARED_PROBES` (24 today) with its PLACEMENT/TRUTH/NO-SUBSTITUTE entry, because this plan's `discoverability_test` declares `credentials_required`
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — `gitDataStore` description
 - `knowledge-base/engineering/architecture/decisions/ADR-149-git-data-host-birth-route-and-readiness-interlock.md` — one dated pointer line
@@ -672,7 +826,7 @@ provisioning stays blocked. The worst case is a wrong count that lets a host ser
 plaintext volume still holds a repository, or a write that damages the only plaintext copy.
 
 **If this leaks, the user's data is exposed via:** the replayed plaintext metadata (directory
-entries, which name workspaces) sitting in a tmpfs COW on the git-data host during the count; a
+entries, which name workspaces) sitting in a `/dev/shm` COW file on the git-data host during the count; a
 leaked or lingering `/dev/mapper/git-data-pt-snap` exposing the plaintext volume read-only to root;
 or a write to the retained volume destroying the only plaintext copy.
 
@@ -696,12 +850,22 @@ or a write to the retained volume destroying the only plaintext copy.
       and the first `mount` by line, and the stub run's `calls.log` shows the same order.
 - [ ] AC3 In the comment-stripped unit body (`UNIT_BODY`, since the rewritten comments will mention
       noload) no `noload` token remains; the only mount's options are exactly
-      `ro,errors=remount-ro,nosuid,nodev,noexec` and its source is `/dev/mapper/$_pt_snap`; no
-      `blockdev --setrw` appears anywhere in the bootstrap.
-- [ ] AC4 The loopback suite runs in `infra-validation.yml` as `sudo bash …` and passes all arms on
-      the CI runner; arm C's precondition (`debugfs -c` does not list `ws-1.git`) held and the unit
+      `ro,errors=remount-ro,nosuid,nodev,noexec` and its source is `/dev/mapper/$_pt_snap`; the dm
+      table is exactly `0 $_pt_sz snapshot $_pt_dev $_pt_loop N 8`; no `blockdev --setrw` appears
+      anywhere in the bootstrap.
+- [ ] AC4 The loopback suite runs in `infra-validation.yml` as `sudo bash …` and passes all seven
+      arms on the CI runner, including E (corrupt dir block -> `reason=journal`) and F (torn last
+      transaction matches the independent-replay oracle); arm C's precondition (`debugfs -c` does not list `ws-1.git`) held and the unit
       still reported `plaintext_residue count=1`; the origin sha256 is unchanged in every arm; no dm
       device, COW loop or `/dev/shm` directory survives any arm.
+- [ ] AC4b **G3-state parity (data-integrity review).** The production predecessor ran commit
+      `f2aa5b1bee95fc7b07c4eaf625ff4cb70399bf35` (run 35979304442, `gh run view … --json headSha`),
+      which is this branch's base. `git diff f2aa5b1bee95fc7b07c4eaf625ff4cb70399bf35..HEAD` over
+      `cloud-init-git-data.yml`'s LUKS stage, `git-data-bootstrap.sh` outside the `plaintext-count`
+      sentinels, and `modules/git-data-userdata/` shows only this PR's declared hunks (the
+      `dmsetup` package, the `GIT_DATA_PLAINTEXT_VOLUME_ID` position, the `plaintext_journal` emit
+      field). So the rehearsal's boot #1 formats LUKS with the same code the predecessor used, and
+      leaves a superset of its on-volume state (plus a probe lock dotfile the counts exclude).
 - [ ] AC5 Every FATAL in the unit matches `plaintext_unverified reason=(source|snapshot|mount|journal|umount)`
       or is the unchanged `plaintext_residue count=$_pt_n` line (grep the unit; count equals the
       stub harness's enumerated FATAL rows).
@@ -774,6 +938,8 @@ or a write to the retained volume destroying the only plaintext copy.
 | T13 | replace boot #2 reports `plaintext_journal=clean` | capture #2 | `RUNG2_REPLACE_BOOT=FAIL` (boot #1 wrote to the volume) |
 | T14 | replace phase plan recreates the LUKS volume | plan-shape `host-only` | refused |
 | T15 | the rehearsal job hits its timeout | teardown job | runs anyway (`if: always()`), no host survives |
+| T16 | a directory block fails its checksum (readdir silently skips it) | unit runs | `reason=journal` via `errors_count`, never a short-count PASS |
+| T17 | last transaction torn (NOLOGFLUSH / hot-unplug) | unit runs | verdict equals an independent rw-replay count of a copy |
 
 ## Domain Review
 
@@ -859,7 +1025,7 @@ through a throwaway snapshot, which is what gets mounted) and "Until that replac
 still serves the PLAINTEXT…" (stale since the 2026-09-24 replace destroyed that host). Both clauses
 are rewritten (architecture review). Checked against all three files: no new external actor
 (the seed host is rehearsal-only and outside the production model), no new external system (Hetzner
-and Better Stack edges exist), no new container or store beyond a transient in-host tmpfs, no
+and Better Stack edges exist), no new container or store beyond a transient in-host `/dev/shm` COW file, no
 access-relationship change, no edge cardinality moves. `views.c4` and `spec.c4` carry no
 plaintext-volume element. Backed by a green `plugins/soleur/test/c4-count-parity.test.sh` run plus
 the c4 syntax/render tests (AC12).
@@ -869,13 +1035,43 @@ the c4 syntax/render tests (AC12).
 The amendment describes the target state at merge; "gap closed" is proven in production only at
 AC16, which is also ADR-239's existing accept rule.
 
+## Downtime & Cutover
+
+**Offline-inducing operation:** G3 (`git_data_host_replace`) destroys and recreates
+`hcloud_server.git_data`, a `must be replaced` on a host.
+
+**Surface affected — and why no user sees downtime:**
+- The git-data host serves nothing today. It has been FATAL since 2026-09-24 09:09:30Z with no store
+  marker.
+- `GIT_DATA_STORE_ENABLED` has never been true, so no push, provision or clone path reaches it.
+- The only live consumer is the Art. 17 erasure, which already refuses and degrades gracefully:
+  `account-delete.ts` completes the deletion and records `gitDataErasurePending`.
+
+The replace therefore moves the host from "down" to "up" and takes no serving surface offline. The
+rung-2 rehearsal hosts are throwaway and outside production.
+
+**Zero-downtime paths evaluated:**
+- **Blue-green** (a second git-data host, cut over, retire the old one). Not applicable: ADR-068/ADR-239
+  define a single git-data host bound to one LUKS volume, and the volume can attach to only one
+  server at a time. It would also buy nothing, because the old host serves nothing.
+- **In-place repair of the FATAL host.** Barred by `hr-prod-host-config-change-immutable-redeploy`
+  (and there is no SSH path).
+
+So the replace is the recovery itself, not a regression.
+
+**Bounds:**
+- One G3 attempt.
+- The boot-signal poll bounds the window at ~610 s.
+- Rollback is a read first, never a second replace (`## Operator-gated dispatches`).
+- Operator sign-off is the per-command G3 go-ahead.
+
 ## Encryption Posture
 
 ```yaml
 at_rest:
   - store: hcloud_volume.git_data (retained plaintext ext4, production)
     mechanism: plaintext-exception (existing, ledgered by ADR-239 / encryption-posture-ledger.json)
-    evidence: unchanged by this PR; now additionally set kernel read-only (blockdev --setro) at first boot and never made writable
+    evidence: unchanged by this PR; now additionally set kernel read-only (blockdev --setro) at first boot and never made writable. The flag makes ext4 refuse journal replay on it; it is not a universal write block (bio_check_ro only warns). The loopback suite's sha256 anchor is the proof of no-write
     defends_against: accidental or journal-replay writes to the retained volume from the git-data host
     does_not_defend: disclosure of its (empty) contents to a holder of the Hetzner project or root on the host; the ro flag resets on reattach/reboot (nothing re-mounts it after boot)
     disclosed_as: ADR-239 amendment 2026-09-24
@@ -884,22 +1080,22 @@ at_rest:
     mechanism: plaintext-exception (volatile memory, lifetime = the count, destroyed at teardown)
     evidence: loopback suite asserts no /dev/shm directory, loop or dm device survives any arm
     defends_against: persistence of replayed plaintext metadata on the root disk
-    does_not_defend: root on the host reading it during the count window; memory is not encrypted; a teardown FATAL leaves it in RAM until reboot (named FATAL, no marker)
+    does_not_defend: root on the host reading it during the count window; memory is not encrypted; a teardown FATAL leaves it in RAM until reboot (named FATAL, no marker); swap, if one were ever enabled (the host has none, per ADR-068 D-SIZE's no-swap sizing), could page it to disk
     disclosed_as: ADR-239 amendment 2026-09-24
-    live_verification: a lingering device is a named FATAL reason=teardown at stage=bootstrap
+    live_verification: a lingering device is a named FATAL reason=umount at stage=bootstrap
   - store: hcloud_volume.rehearsal (rung-2 plaintext, throwaway)
     mechanism: plaintext-exception (synthetic data only; destroyed at teardown)
     evidence: seed writes a marker and a probe entry, no user data
-    defends_against: n/a beyond synthetic content — rehearsal-only
-    does_not_defend: nothing user-derived is ever on it
+    defends_against: nothing beyond keeping rehearsal data synthetic — the volume exists for one run and holds only the seed's marker file and probe entry
+    does_not_defend: disclosure of its synthetic contents to any holder of the Hetzner project token; it is never encrypted
     disclosed_as: git-data-rung2-rehearsal.md
     live_verification: the workflow's "Assert no rehearsal host survives" step
 in_transit:
-  - connection: none new (the snapshot is host-local; the seed host emits nothing)
-    tls: n/a
-    cert_verification: on
-    does_not_defend: n/a — no new connection
-    disclosed_as: this section
+  - connection: rung-2 seed host -> Better Stack ingest (one curl per seed step; the snapshot itself is host-local and opens no connection)
+    tls: HTTPS to the same ingest URL the payload already uses
+    cert_verification: on (curl default; no -k / --insecure, asserted by a rehearsal-test row)
+    does_not_defend: a holder of the ingest token or of Better Stack reading the seed's step names (synthetic, no user data); the token sits in the seed's user_data exactly as it already does in the payload's
+    disclosed_as: git-data-rung2-rehearsal.md
 exception:
   justification: the plaintext volume is the pre-cutover store the cutover retires; the COW is volatile memory (/dev/shm) needed to read it without writing it
   tracking_issue: "#8571"
@@ -917,8 +1113,9 @@ of it; and the tree it counts is the post-journal-replay tree.
 
 **Assembly.** The single `_pt_id` block of the store-verify unit (the only site that opens the
 plaintext device), its `_pt_release` trap, and the inner `plaintext-count` sentinels that both the
-stub harness and the loopback suite extract; no other bootstrap line references
-`GIT_DATA_PLAINTEXT_*` (a static row asserts that count, so a second opener reds).
+stub harness and the loopback suite extract. The chokepoint is the resolved origin node `$_pt_dev`.
+The `calls.log` allowlist row (mutation 7) quantifies over every call that names it, so a second
+opener anywhere in the unit reds whatever variable it is spelled through.
 
 **Mutation matrix.**
 
@@ -927,15 +1124,21 @@ stub harness and the loopback suite extract; no other bootstrap line references
 | 1 | delete `blockdev --setro` | stub (order/presence row), loopback (`--getro` = 0 after unit) |
 | 2 | REORDER: move `--setro` after `dmsetup create` | stub `calls.log` order row, static line-order row |
 | 3 | mount `$_pt_dev` instead of the snapshot | stub mount-source row; loopback arm B/C (`reason=mount`) |
-| 4 | re-add `noload` to the snapshot mount | loopback arm C (count 0 instead of residue) |
+| 4 | re-add `noload` to the snapshot mount **and** drop the post-replay needs_recovery check (a single `noload` re-add only trips `reason=journal` via row 5) | loopback arm C, run on a landed-checked mutant of the extracted copy: count 0 instead of residue |
 | 5 | drop the post-replay needs_recovery check | stub R4c |
 | 6 | drop `dmsetup remove` from `_pt_release` | loopback leak row; stub teardown-order row |
-| 7 | add a second plaintext opener after a compliant first (e.g. `dumpe2fs`-then-`mount` of `$_pt_dev` later) | static "only one opener" count row |
+| 7 | add a second plaintext opener after a compliant first (e.g. a later `mount "$_pt_dev" …`) | stub `calls.log` allowlist row: every call naming the origin node is one of `isLuks`, `setro`, `getro`, `dumpe2fs -h`, `getsz`, or the `dmsetup create` table, and every one except `isLuks` comes after `setro` |
 | 8 | harness dispatch: extraction yields zero lines | X-row floor / LOOPBACK_UNAVAILABLE non-zero exit |
+| 9 | drop the `errors_count` / `with errors` check (precondition: the mount succeeds and find exits 0; property: the count is short) | loopback arm E (a PASS on a short count) |
+| 10 | add a feature argument to the dm table (e.g. `1 discard_passdown_origin`) | AC3 table-literal row |
 
-**Harness rows.** RED: a harness edit that skips the shutdown ioctl (image clean) must abort arm C
-on its precondition, not pass. Must-PASS (non-canonical, permitted): arm A (clean journal) passes;
-a snapshot name supplied through the seam passes.
+**Harness rows.**
+- **RED:** a harness edit that skips the shutdown ioctl is a real known-positive. In that variant
+  `debugfs -c` must list `ws-1.git`, so the arm-C precondition aborts rather than passes.
+- The `--getro` stub returns 1 only after `--setro` was actually called, so mutation 1 reds on
+  behaviour, not on a missing line.
+- **Must-PASS (non-canonical, permitted):** arm A (clean journal); and a plaintext volume with no
+  `repositories/` directory at all (count 0, PASS).
 
 **Anchor.** The loopback suite recomputes the origin sha256 itself; nothing stored in the repo is
 compared, so no single diff can edit both the value and the thing.
@@ -956,7 +1159,7 @@ and the HOSTROWS SQL select list — the only producer of the evidence file.
 | 2 | match with a substring (`*dirty*`) | test row `present+notdirty` / `Dirty` -> not PASS |
 | 3 | drop `plaintext_journal` from the SQL select | test row: field absent -> not PASS |
 | 3b | accept `plaintext_volume=absent` as a pass | test row: `absent` -> not PASS |
-| 4 | a second boot_complete row (reboot arm) with `clean` after a compliant first | test row: the PASS decision reads the phase-B boot row, not an arbitrary row |
+| 4 | a second boot_complete row with `clean` after a compliant first | rule: at least one `boot_complete` row, and **every** row in the window is `present`+`dirty`; test row with a dirty row followed by a clean one -> not PASS |
 
 **Harness rows.** RED: a fixture row generator that never emits the field must fail the suite's own
 floor. Must-PASS (non-canonical, permitted): `present+dirty` with the fields in a different JSON
@@ -973,7 +1176,8 @@ but a replace of `hcloud_server.rehearsal`, its two volume attachments and (repl
 volume, and the host replace must be present; in `additive` mode (seed phase) it is additive-only.
 
 **Assembly.** `scripts/git-data-rung2-plan-shape.sh` is the single chokepoint; the workflow calls it
-for both phases (a static row asserts two call sites and no leftover inline jq guard).
+at all three plan steps — seed, payload, replace (a static row asserts three call sites, each with its
+expected mode, and no leftover inline jq guard).
 
 **Mutation matrix.**
 
@@ -984,6 +1188,10 @@ for both phases (a static row asserts two call sites and no leftover inline jq g
 | 2 | `host-only` plan `forget`s an address | test: refused (deny-list the inert verbs) |
 | 3 | `additive` mode admits a replace | test: refused |
 | 4 | a second, unlisted replace after the admitted set | test: refused |
+| 6 | script mutant: unanchored address match (`hcloud_volume.*rehearsal` admitted) | test: volume-replace fixture refused by the pristine script, admitted by the mutant |
+| 7 | script mutant: the "replace must be present" check removed | test: empty-changes fixture refused by pristine, admitted by mutant |
+| 8 | script mutant: only `["delete","create"]` recognised as a replace | must-PASS fixture with `["create","delete"]` reds the mutant |
+| 9 | an `update` or plain `delete` of a volume (not a replace) | test: refused |
 | 5 | unparseable plan JSON | test: refused (fail closed) |
 
 **Harness rows.** RED: a fixture plan with zero resource_changes must not read as clean in the
@@ -1114,5 +1322,7 @@ so the operator sees it.
   be read (the seed emits nothing, but the window is the guard).
 - The loopback suite cannot run locally without passwordless sudo; do not "skip" it — its first CI
   run is the evidence.
-- `modprobe dm-snapshot` depends on the pinned image shipping the module (`linux-modules`, not
-  `-extra`); the rung-2 payload boot is what proves it on the real image.
+- The unit calls no `modprobe`: dm core loads `dm-snapshot` itself (`request_module`) when
+  `dmsetup create` asks for the target. That still depends on the pinned image shipping the module
+  (`linux-modules`, not `-extra`), and the rung-2 payload boot is what proves it on the real image.
+  A missing module surfaces as `dmsetup create` failing -> `reason=snapshot`.
