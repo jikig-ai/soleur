@@ -26,11 +26,14 @@ Single file edited: `.github/workflows/infra-validation.yml`.
 - [x] 2.3 Add `timeout-minutes: 10` to `Rehearse the git-data runcmd chain (abort
       ordering + rc guard)` (sibling key of `name:`/`run:`), preceded by a short comment
       in the file's attribution idiom: the convention (ci-deploy at 3, plugin-seed at 1),
-      measured green range 184–267 s, cancelled-in-flight 285–455 s ×4, the stated
+      measured green range 184–267 s, cancelled-in-flight 285–533 s ×5, the stated
       flake-over-anonymity trade-off.
-- [x] 2.4 Add `timeout-minutes: 8` to `Run git-data cutover access-path tests (ADR-220)`
-      with its comment (sized above the suite's own `timeout -k 10 480` container bound
-      plus the apt fixture, so the inner bound fires first).
+- [x] 2.4 Add `timeout-minutes: 10` to `Run git-data cutover access-path tests (ADR-220)`
+      with its comment (covers the host-side legs outside the suite's own `timeout -k 10
+      480` container bound — `docker info`, `docker rm -f`, fixture build — while leaving
+      the inner bound room to fire first on a container stall; corrected from 8 at review,
+      which inverted the inner-first ordering and mis-located the apt fixture outside the
+      bound).
 - [x] 2.5 Add `timeout-minutes: 5` to `Run git-data ownership tests (authorization map +
       hook dir, Guard 3)` with its comment.
 - [x] 2.6 Verify the diff touches only `timeout-minutes` keys and comment lines: no

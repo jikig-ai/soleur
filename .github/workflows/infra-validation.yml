@@ -632,13 +632,13 @@ jobs:
     # cancelled while this change was in flight). Cancelled runs are excluded from the basis —
     # cancelled is not a duration, per the successful-only rule used above.
     #
-    # The cancel landed in `Rehearse the git-data runcmd chain` every time (285-455 s in-flight
+    # The cancel landed in `Rehearse the git-data runcmd chain` every time (285-533 s in-flight
     # vs a 184-267 s green range, n=10) — a whole-runner docker-slowdown signature, not proof of
-    # a hang, but indistinguishable from one while the step had no bound. ~16 steps trail the
-    # rehearsal, so even a completed slow run projects ~1700-1850 s and would still have died
+    # a hang, but indistinguishable from one while the step had no bound. 16 named steps trail
+    # the rehearsal, so even a completed slow run projects ~1700-1850 s and would still have died
     # at 27. At 35 the margin is 2100/1462 = 1.44x. This PR also adds step-level
     # `timeout-minutes` to the three docker-runtime git-data steps below (rehearsal 10,
-    # cutover-access 8, ownership 5) — the file's ATTRIBUTION convention — so the next stall
+    # cutover-access 10, ownership 5) — the file's ATTRIBUTION convention — so the next stall
     # names its step instead of cancelling anonymously. Re-derive against that composition.
     timeout-minutes: 35
     steps:
@@ -1679,10 +1679,10 @@ jobs:
       #
       # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
       # cloud-init-plugin-seed at 1). Green range 25-100 s over the last 10 successful
-      # main-push runs; 80 s on the 2026-09-24 cancelled runs — the same whole-runner docker
-      # slowdown class as the rehearsal below. Its docker-run site carries no internal bound;
-      # 5 minutes is ~3x the green max, so a stall fails naming THIS step instead of the job
-      # ceiling cancelling at whatever the clock reached.
+      # main-push runs; on the five 2026-09-24 cancels it measured 33-80 s — inside that
+      # range, so this step showed no slowdown itself. The bound covers the class, not a
+      # demonstrated offender: its docker-run site carries no internal bound, and a stall
+      # there would otherwise cancel the job anonymously. 5 minutes is ~3x the green max.
       - name: Run git-data ownership tests (authorization map + hook dir, Guard 3)
         timeout-minutes: 5
         run: bash apps/web-platform/infra/git-data-ownership.test.sh
@@ -1714,12 +1714,15 @@ jobs:
       # (tests/scripts/test-git-data-root-token-census.sh), not here.
       #
       # #8688: step ceiling per the job's attribution convention. Green range 70-77 s over the
-      # last 10 successful main-push runs; 184-206 s on the 2026-09-24 cancelled runs. The
-      # suite's containers carry an internal `timeout -k 10 480` bound but its apt fixture sits
-      # outside it; 8 minutes keeps the inner bound firing first while capping the whole step,
-      # fixture included.
+      # last 10 successful main-push runs; 78-206 s on the five 2026-09-24 cancels. The suite's
+      # `docker run` carries an internal `timeout -k 10 480` bound, but its host-side legs —
+      # `docker info`, `docker rm -f`, the fixture build — sit outside it; on this observed
+      # failure class (whole-runner docker degradation) a wedged-daemon hang there would
+      # otherwise cancel the job anonymously. 10 minutes leaves the inner 480 s bound room to
+      # fire first on a container stall (the richer rc=124 diagnostic) while capping the
+      # unbounded host-side legs.
       - name: Run git-data cutover access-path tests (ADR-220)
-        timeout-minutes: 8
+        timeout-minutes: 10
         run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
 
       # (#8189) The flag read fails closed, refuses a `true` flag, and is the only step
@@ -1741,7 +1744,7 @@ jobs:
       #
       # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
       # cloud-init-plugin-seed at 1). Green range 184-267 s over the last 10 successful
-      # main-push runs; it was in flight at 285-455 s on all four 2026-09-24 cancels — a
+      # main-push runs; it was in flight at 285-533 s on all five 2026-09-24 cancels — a
       # whole-runner docker slowdown, not proven a hang, but indistinguishable from one while
       # the step had no bound (its docker-run sites have no internal `timeout` wrapper).
       # 10 minutes is ~2.2x the green max: a stall now fails naming THIS step instead of
