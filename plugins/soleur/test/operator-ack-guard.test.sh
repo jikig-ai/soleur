@@ -113,6 +113,21 @@ trap 'rm -rf "$SB"' EXIT
 
 md5_of() { md5sum "$1" | cut -d' ' -f1; }
 
+# The canonical fixture-dir guard (byte-for-byte the helper the fixture ratchets
+# recognise, e.g. .claude/hooks/cla-signed-author-gate.test.sh): every write
+# under a sandbox root is preceded by it, so an unbound or relative root aborts
+# instead of writing into the caller's working directory.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # =============================================================================
 # Guard 1 — typed-yes census
 # =============================================================================
@@ -260,6 +275,7 @@ assert_green g1_check "g1 fixture baseline (clean + live delete.sh + live flip.s
 
 # M1 — a raw typed-yes re-added to delete.sh
 d="$(g1_fixture m1)"; g1_copy "$d" "$DELETE_REL"
+assert_fixture_dir "$d"
 printf '\nread -r -p "Proceed? Type %s: " ACK\n[[ "$ACK" == "yes" ]] || exit 0\n' "'yes'" >> "$d/$DELETE_REL"
 if [[ "$(md5_of "$d/$DELETE_REL")" != "$(md5_of "$REPO_ROOT/$DELETE_REL")" ]]; then
   assert_red g1_check "g1-M1 raw typed-yes re-added to delete.sh" "$d" "$EMPTY_EXEMPT"
@@ -279,12 +295,14 @@ assert_red g1_check "g1-M3 census over an empty tree" "$SB/g1/m3-empty" "$EMPTY_
 
 # M4 — a second member after a compliant first
 d="$(g1_fixture m4)"
+assert_fixture_dir "$d"
 printf '#!/usr/bin/env bash\nread -r -p "Delete everything? Type %s: " a\n[[ "$a" == yes ]] || exit 1\n' "'yes'" > "$d/apps/web-platform/scripts/new-writer.sh"
 assert_red g1_check "g1-M4 new raw typed-yes script beside a clean one" "$d" "$EMPTY_EXEMPT"
 if grep -qF 'new-writer.sh' <<<"$G_LAST_OUT"; then pass "g1-M4 names the new file"; else fail "g1-M4 RED did not name new-writer.sh: $G_LAST_OUT"; fi
 
 # M5 — prompt text on a printf, not on the read line
 d="$(g1_fixture m5)"
+assert_fixture_dir "$d"
 printf '#!/usr/bin/env bash\nprintf "Type yes: "\nIFS= read -r ans\nif [[ "$ans" == "yes" ]]; then echo go; fi\n' > "$d/apps/web-platform/scripts/sneaky.sh"
 assert_red g1_check "g1-M5 comparison-only typed-yes (printf prompt, IFS= read)" "$d" "$EMPTY_EXEMPT"
 reason "g1-M5" "typed-yes-compare\\(ans\\)"
@@ -302,6 +320,7 @@ assert_red g1_token_check "g1-M7 --confirmed in flag-set-role/SKILL.md" "$d"
 
 # H1 — the comment stripper is load-bearing
 d="$(g1_fixture h1)"
+assert_fixture_dir "$d"
 printf '#!/usr/bin/env bash\n# retired: echo go; read -r -p "Type %s: " ACK\n# [[ "$ACK" == "yes" ]]\necho fine\n' "'yes'" > "$d/apps/web-platform/scripts/commented.sh"
 assert_green g1_check "g1-H1 baseline: a commented-out prompt is not a gate" "$d" "$EMPTY_EXEMPT"
 G1_STRIPPER=cat
@@ -310,11 +329,13 @@ G1_STRIPPER=g1_strip
 
 # H2 — must-PASS: a yes comparison on a variable no read ever filled
 d="$(g1_fixture h2)"
+assert_fixture_dir "$d"
 printf '#!/usr/bin/env bash\nwith=yes\nx="$(printf %%s "$with")"\nif [[ "$x" == "yes" ]]; then echo rolled; fi\n' > "$d/apps/web-platform/scripts/apex-rollback.sh"
 assert_green g1_check "g1-H2 yes comparison on a non-read variable" "$d" "$EMPTY_EXEMPT"
 
 # H3 — must-PASS: -y inside argv, not a case label
 d="$(g1_fixture h3)"
+assert_fixture_dir "$d"
 printf '#!/usr/bin/env bash\napt-get install -y jq\ncurl -y 30 https://example.invalid/\n' > "$d/apps/web-platform/scripts/argv-y.sh"
 assert_green g1_check "g1-H3 -y as a tool option" "$d" "$EMPTY_EXEMPT"
 
@@ -355,6 +376,7 @@ g2_arm_rows() { grep -vE '^[[:space:]]*(#|$)' "$1"; }
 make_stubs() { # <dir> <logging:1|0>
   local d="$1" logging="$2"
   mkdir -p "$d"
+  assert_fixture_dir "$d"
   cat > "$d/doppler" <<'STUB'
 #!/usr/bin/env bash
 [[ "${STUB_LOGGING:-1}" == 1 ]] && printf 'doppler %s\n' "$(printf '%q ' "$@")" >> "$STUB_LOG"
@@ -367,6 +389,7 @@ if [[ "${1:-}" == secrets && "${2:-}" == get ]]; then
 fi
 exit 0
 STUB
+  assert_fixture_dir "$d"
   cat > "$d/curl" <<'STUB'
 #!/usr/bin/env bash
 [[ "${STUB_LOGGING:-1}" == 1 ]] && printf 'curl %s\n' "$(printf '%q ' "$@")" >> "$STUB_LOG"
@@ -418,6 +441,7 @@ if [[ -n "$wfmt" ]]; then w="${wfmt//%\{http_code\}/$code}"; printf '%b' "$w"; f
 exit 0
 STUB
   chmod +x "$d/doppler" "$d/curl"
+  assert_fixture_dir "$d"
   printf '%s\n' "$logging" > "$d/.logging"
 }
 
@@ -468,6 +492,7 @@ g2_seed() {
   for f in apps/web-platform/lib/feature-flags/server.ts apps/web-platform/.env.example \
            plugins/soleur/skills/flag-set-role/scripts/flip.sh; do
     mkdir -p "$s/$(dirname "$f")"
+    assert_fixture_dir "$s"
     cp -p "$root/$f" "$s/$f" 2>/dev/null || cp -p "$REPO_ROOT/$f" "$s/$f"
   done
 }

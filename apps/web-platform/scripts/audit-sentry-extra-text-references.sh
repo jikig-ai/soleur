@@ -169,7 +169,7 @@ api_host=""
 probe_resp=""
 for candidate in sentry.io de.sentry.io; do
   resp_file=$(mktemp)
-  http=$(curl -s --max-time 10 \
+  http=$(curl --disable --noproxy '*' -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -o "$resp_file" -w '%{http_code}' \
     "https://${candidate}/api/0/organizations/${SENTRY_ORG}/")
@@ -225,12 +225,12 @@ auth_get() {
   local resp_file
   resp_file=$(mktemp)
   trap 'rm -f "$resp_file"' RETURN
-  http=$(curl -s --max-time 10 \
+  http=$(curl --disable --noproxy '*' -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -o "$resp_file" -w '%{http_code}' "$url")
   if [[ "$http" == "429" ]]; then
     sleep 5
-    http=$(curl -s --max-time 10 \
+    http=$(curl --disable --noproxy '*' -s --max-time 10 \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       -o "$resp_file" -w '%{http_code}' "$url")
   fi
@@ -260,7 +260,7 @@ auth_put() {
   local resp_file
   resp_file=$(mktemp)
   trap 'rm -f "$resp_file"' RETURN
-  http=$(curl -s --max-time 10 -X PUT \
+  http=$(curl --disable --noproxy '*' -s --max-time 10 -X PUT \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -H "Content-Type: application/json" \
     -o "$resp_file" -w '%{http_code}' \

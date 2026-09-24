@@ -437,6 +437,8 @@ echo "--- Tier I: operator-ack script rule (#8486) ---"
 REPO_ROOT_G3="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ARMS_G3="$REPO_ROOT_G3/plugins/soleur/test/fixtures/operator-ack-arms.tsv"
 G3_SB="$(mktemp -d)"
+# Composed with the incident sandbox's own EXIT cleanup (lib/test-incident-sandbox.sh), never over it.
+trap 'rm -rf "$G3_SB"; _soleur_inc_sb_cleanup' EXIT
 
 # g3_decide <hook> <cmd> [extra-env...] -> defer | allow | deny | ERR:<raw>
 g3_decide() {
