@@ -92,28 +92,37 @@ if (( _b_age <= 0 || _b_age >= 3600 )); then
   exit 2
 fi
 
-# row <flag> <reason> <start_ts> [guard] [host] [host_name] [mid] [tag]
+# Every row carries the warehouse `dt` (ClickHouse shape, no T/Z), which is what the real reader's
+# --since/--until bound — and so does the stub below. By default dt IS start_ts; a 9th argument
+# overrides it (a run that STARTED before the boundary but emitted after it), and a non-date
+# start_ts gets DT_DEFAULT (post-boundary).
+DT_DEFAULT_OFF=-200
+_row_jq='
+  def ck: sub("T"; " ") | sub("Z$"; "");
+  (if $dto != "" then $dto
+   elif ($t | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) then $t
+   else $dflt end) as $dt
+  | ({exit_code:0, dbsize:"", reason:$r, flag:$f, start_ts:$t} + (if $g == "" then {} else {guard:$g} end)) as $m
+  | ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$tag} + (if $mid == "NONE" then {} else {_MACHINE_ID:$mid} end)) as $base
+  | {dt: ($dt | ck), raw: ($base + {message: (if $shape == "str" then ($m | tojson) else $m end)} | tojson)}'
+# row <flag> <reason> <start_ts> [guard] [host] [host_name] [mid|NONE] [tag] [dt-iso]
 # The LIVE warehouse shape: `raw` is a JSON string whose object carries `message` as an OBJECT.
 row() {
-  local g="${4-$GUARD}"
-  jq -nc --arg f "$1" --arg r "$2" --arg t "$3" --arg g "$g" --arg h "${5:-$HOST}" \
-         --arg hn "${6:-$HOST_NAME}" --arg mid "${7:-$MID_A}" --arg tag "${8:-$TAG}" '
-    ({exit_code:0, dbsize:"", reason:$r, flag:$f, start_ts:$t} + (if $g == "" then {} else {guard:$g} end)) as $m
-    | {raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$tag, _MACHINE_ID:$mid, message:$m} | tojson)}'
+  jq -nc --arg f "$1" --arg r "$2" --arg t "$3" --arg g "${4-$GUARD}" --arg h "${5:-$HOST}" \
+         --arg hn "${6:-$HOST_NAME}" --arg mid "${7:-$MID_A}" --arg tag "${8:-$TAG}" --arg dto "${9:-}" \
+         --arg dflt "$(_at "$DT_DEFAULT_OFF")" --arg shape obj "$_row_jq"
 }
-# row_str: the LEGACY shape — `message` is a JSON STRING. Still carries _MACHINE_ID (the decoder
-# must attach it to string-decoded rows too).
+# row_str: the LEGACY shape — `message` is a JSON STRING. Still carries _MACHINE_ID.
 row_str() {
-  local g="${4-$GUARD}"
-  jq -nc --arg f "$1" --arg r "$2" --arg t "$3" --arg g "$g" --arg h "${5:-$HOST}" \
-         --arg hn "${6:-$HOST_NAME}" --arg mid "${7:-$MID_A}" --arg tag "${8:-$TAG}" '
-    ({exit_code:0, dbsize:"", reason:$r, flag:$f, start_ts:$t} + (if $g == "" then {} else {guard:$g} end)) as $m
-    | {raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$tag, _MACHINE_ID:$mid, message:($m | tojson)} | tojson)}'
+  jq -nc --arg f "$1" --arg r "$2" --arg t "$3" --arg g "${4-$GUARD}" --arg h "${5:-$HOST}" \
+         --arg hn "${6:-$HOST_NAME}" --arg mid "${7:-$MID_A}" --arg tag "${8:-$TAG}" --arg dto "${9:-}" \
+         --arg dflt "$(_at "$DT_DEFAULT_OFF")" --arg shape str "$_row_jq"
 }
 # msg_row <text> [host] [host_name] [tag] — a raw (non-JSON) message line under the tag.
 msg_row() {
   jq -nc --arg m "$1" --arg h "${2:-$HOST}" --arg hn "${3:-$HOST_NAME}" --arg tag "${4:-$TAG}" --arg mid "$MID_A" \
-    '{raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$tag, _MACHINE_ID:$mid, message:$m} | tojson)}'
+         --arg dt "$(_at "$DT_DEFAULT_OFF" | sed 's/T/ /; s/Z$//')" \
+    '{dt: $dt, raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$tag, _MACHINE_ID:$mid, message:$m} | tojson)}'
 }
 refusal_row() { msg_row "SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED count=1 detail=collision"; }
 # bulk <n> <first_offset_s> <step_s> <flag> <reason> [mid] [host] [host_name] — ONE jq pass,
@@ -122,8 +131,10 @@ bulk() {
   jq -nc --argjson n "$1" --argjson s "$(( NOW + $2 ))" --argjson st "$3" --arg f "$4" --arg r "$5" \
          --arg mid "${6:-$MID_A}" --arg h "${7:-$HOST}" --arg hn "${8:-$HOST_NAME}" --arg g "$GUARD" --arg tag "$TAG" '
     range(0; $n) as $i
-    | {raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$tag, _MACHINE_ID:$mid,
-              message:{exit_code:0, dbsize:"", reason:$r, flag:$f, start_ts:(($s + $st * $i) | todate), guard:$g}} | tojson)}'
+    | (($s + $st * $i) | todate) as $ts
+    | {dt: ($ts | sub("T"; " ") | sub("Z$"; "")),
+       raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$tag, _MACHINE_ID:$mid,
+              message:{exit_code:0, dbsize:"", reason:$r, flag:$f, start_ts:$ts, guard:$g}} | tojson)}'
 }
 # The canonical healthy host: the op=resume row, then two stamped noop-done heartbeats.
 base_ok() {
@@ -133,8 +144,10 @@ base_ok() {
 }
 
 # A query stub modelling betterstack-query.sh: OR over every --grep against the decoded raw text
-# (a line that does not decode is matched on its literal text), newest --limit lines kept in
-# chronological order, --since/--until shape-gated (anything the real reader cannot parse -> 22).
+# (a line that does not decode is matched on its literal text), rows bounded by their `dt` against
+# --since (relative or absolute) and --until like the real `dt >= / dt <=` (a line with no dt is
+# kept), newest --limit lines kept in chronological order, --since/--until shape-gated (anything
+# the real reader cannot parse -> 22).
 make_stub() {
   local rows_file="$1" stub
   stub="$(mktemp "$WORK/query-XXXXXXXX.sh")"
@@ -160,14 +173,29 @@ _shape_ok() {
 }
 _shape_ok "$since" || { echo "STUB: --since '$since' would be a ClickHouse 400" >&2; exit 22; }
 [[ -z "$until" ]] || _shape_ok "$until" || { echo "STUB: --until '$until' would be a ClickHouse 400" >&2; exit 22; }
+_epoch() {
+  if [[ "$1" =~ ^([0-9]+)([hmd])$ ]]; then
+    local mult; case "${BASH_REMATCH[2]}" in h) mult=3600 ;; m) mult=60 ;; d) mult=86400 ;; esac
+    echo $(( $(date -u +%s) - BASH_REMATCH[1] * mult ))
+  else
+    date -u -d "$(printf '%s' "$1" | sed 's/T/ /; s/Z$//') UTC" +%s
+  fi
+}
+since_e="$(_epoch "$since")"; until_e=""
+[[ -z "$until" ]] || until_e="$(_epoch "$until")"
 if [[ -n "${STUB_GREP_LOG:-}" ]]; then printf '%s\n' "${terms[@]}" >> "$STUB_GREP_LOG"; fi
 if [[ -n "${STUB_FAIL_ON_TERM:-}" ]]; then
   for t in "${terms[@]}"; do [[ "$t" == "$STUB_FAIL_ON_TERM" ]] && exit 7; done
 fi
-jq -R -r '. as $l
-  | ((try (fromjson | .raw) catch null) | if type == "string" then . else null end) as $r
+jq -R -r --argjson se "$since_e" --arg ue "$until_e" '. as $l
+  | (try fromjson catch null) as $o
+  | (($o | objects | .raw) // null | if type == "string" then . else null end) as $r
   | ($r // $l) as $t
   | select(any($ARGS.positional[]; . as $g | $t | contains($g)))
+  | (($o | objects | .dt) // null) as $dt
+  | select($dt == null
+           or (($dt | strptime("%Y-%m-%d %H:%M:%S") | mktime) as $de
+               | $de >= $se and ($ue == "" or $de <= ($ue | tonumber))))
   | $l' --args "${terms[@]}" < "__ROWS__" | tail -n "$limit"
 STUBEOF
   sed -i "s|__ROWS__|$rows_file|" "$stub"
@@ -211,7 +239,7 @@ run_probe() {
 probe_out() { cat "$WORK/probe-out" 2>/dev/null || true; }
 # ANCHORED token checks: `reason=<tok>` followed by a non-token character, so `done_not_resumed`
 # is never satisfied by `done_not_resumed_past_deadline`.
-has_reason() { grep -qE -- "reason=$1([^a-z_]|\$)" "$WORK/probe-out"; }
+has_reason() { grep -qE -- "reason=$1([^a-z0-9_-]|\$)" "$WORK/probe-out"; }
 is_pass() { grep -qE '^PASS: #7761 delivered' "$WORK/probe-out"; }
 
 # expect <id> <rc> <token|PASS> [competing-token...] — exit code, the anchored positive token, and
@@ -255,6 +283,11 @@ bash "$s" --since "$BOUNDARY" --limit 1 --grep x >/dev/null 2>&1; src=$?
 bash "$s" --since "last tuesday" --limit 1 --grep x >/dev/null 2>&1; src=$?
 [[ "$src" == "22" ]] && pass "stub refuses an unparseable --since with rc 22" || fail "stub accepted garbage --since (rc $src)"
 
+echo "TEST: [stub] --since / --until bound rows by their dt, like the real reader"
+got="$(bash "$(make_stub "$WORK/rows-selfcheck5")" --since "$(_at -45)" --until "$(_at -25)" --limit 10 --grep "$TAG" \
+      | jq -r '.raw | fromjson | .message.reason' | tr '\n' ' ')"
+[[ "$got" == "r3 r4 " ]] && pass "stub time window: --since -45s --until -25s returns r3 r4 only" || fail "stub time window: got '$got'"
+
 echo "TEST: [stub] a quoted term matches an OBJECT message and not a STRING message"
 f="$WORK/rows-selfcheck-q"
 { row "done" quoted-probe "$POST_A"; row_str "done" quoted-probe "$POST_B"; } > "$f"
@@ -281,26 +314,26 @@ expect "boundary-absent" 2 probe_channel_dark
 
 echo "TEST: an unparseable boundary is TRANSIENT, not silently widened"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="last tuesday")"
-expect "boundary-unparseable" 2 boundary_unparseable
+expect "boundary-unparseable" 3 boundary_unparseable
 
 echo "TEST: [F32] a SYMLINKED sidecar is refused and its target is never echoed"
 printf 'LEAKME\n' > "$WORK/leak-target"
 ln -s "$WORK/leak-target" "$WORK/link.after"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_AFTER_FILE="$WORK/link.after")"
-expect "F32" 2 sidecar_is_symlink
+expect "F32" 3 sidecar_is_symlink
 grep -qF LEAKME "$WORK/probe-out" && fail "F32 the symlink target's content was printed" || pass "F32 the symlink target's content is not printed"
 
 echo "TEST: [F33] an unparseable sidecar prints its LENGTH, never its value"
 printf 'LEAKME-not-a-date\n' > "$WORK/bad.after"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_AFTER_FILE="$WORK/bad.after")"
-expect "F33" 2 boundary_unparseable
+expect "F33" 3 boundary_unparseable
 grep -qF LEAKME "$WORK/probe-out" && fail "F33 the sidecar value was printed" || pass "F33 the sidecar value is not printed"
 grep -qE 'length=17([^0-9]|$)' "$WORK/probe-out" && pass "F33 prints the value's length" || fail "F33 length not printed: $(probe_out | head -2)"
 
 echo "TEST: [F33b] an oversize sidecar is refused"
 printf '%0100d\n' 0 > "$WORK/big.after"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_AFTER_FILE="$WORK/big.after")"
-expect "F33b" 2 sidecar_oversize
+expect "F33b" 3 sidecar_oversize
 
 # =============================================================================================
 # THE HAPPY PATH AND THE ANSWER KEY
@@ -310,7 +343,7 @@ f="$WORK/rows-good"; base_ok > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F1" 0 PASS
 grep -qF "owned since ${R_TS}" "$WORK/probe-out" && pass "F1 names the owning resume time" || fail "F1 'owned since ${R_TS}' missing: $(probe_out)"
-grep -qE '^PASS: .*seams=overridden:[A-Z_,]*FLIP_ROLLOUT_AFTER' "$WORK/probe-out" \
+grep -qE '^ *seams=overridden:[A-Z_,]*FLIP_ROLLOUT_AFTER' "$WORK/probe-out" \
   && pass "F1 the PASS line discloses the overridden seams" || fail "F1 seams disclosure missing: $(probe_out)"
 
 echo "TEST: the probe greps the syslog TAG for LIVE, and the drift query greps the resume reason"
@@ -342,11 +375,18 @@ echo "TEST: [F2b] an un-resumed done past the deadline FAILs"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$OLD_BOUNDARY")"
 expect "F2b" 1 done_not_resumed_past_deadline
 
-echo "TEST: [F3] REORDER — a PRE-boundary resume does not own post-boundary done"
+echo "TEST: [F3] REORDER — a resume whose run STARTED before the boundary does not own post-boundary done"
 f="$WORK/rows-preresume"
+{ row "done" flushed-resume-no-reflush "$(_at -310)" "$GUARD" "$HOST" "$HOST_NAME" "$MID_A" "$TAG" "$(_at -295)"
+  row "done" noop-done "$POST_A"; row "done" noop-done "$POST_B"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F3" 2 done_not_resumed boundary_inside_owning_machine_lifetime drift_after_replace
+
+echo "TEST: [F3b] a resume entirely BEFORE the boundary on the same machine puts the boundary inside its lifetime"
+f="$WORK/rows-preresume-b"
 { row "done" flushed-resume-no-reflush "$PRE_A"; row "done" noop-done "$POST_A"; row "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
-expect "F3" 2 done_not_resumed boundary_inside_owning_machine_lifetime
+expect "F3b" 3 boundary_inside_owning_machine_lifetime done_not_resumed
 
 echo "TEST: [F4] REORDER — heartbeats BEFORE the resume do not count as liveness after it"
 f="$WORK/rows-noopsfirst"
@@ -360,7 +400,9 @@ f="$WORK/rows-one"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "one-marker" 2 insufficient_post_replace_markers
 
-echo "TEST: too-few markers past the deadline FAILs"
+echo "TEST: too-few markers long after the RESUME FAILs"
+f="$WORK/rows-one-old"
+{ row "done" flushed-resume-no-reflush "$(_at -4000)"; row "done" noop-done "$(_at -3990)"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$OLD_BOUNDARY")"
 expect "one-marker-deadline" 1 insufficient_post_replace_markers_past_deadline
 
@@ -388,13 +430,13 @@ f="$WORK/rows-unstamped-r"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F16" 2 done_not_resumed stale_image drift_after_replace
 
-echo "TEST: [F25] machine binding — a resume on another MACHINE does not own this one's done"
+echo "TEST: [F25] machine binding — a resume on another MACHINE is a second emitter, never an owner"
 f="$WORK/rows-othermachine"
 { row "done" flushed-resume-no-reflush "$R_TS"
   row "done" noop-done "$POST_A" "$GUARD" "$HOST" "$HOST_NAME" "$MID_B"
   row "done" noop-done "$POST_B" "$GUARD" "$HOST" "$HOST_NAME" "$MID_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
-expect "F25" 2 done_not_resumed
+expect "F25" 3 multiple_machines_since_boundary done_not_resumed
 
 echo "TEST: [F26] a second resume on the same machine is harmless"
 f="$WORK/rows-tworesumes"
@@ -413,7 +455,13 @@ echo "TEST: [F29] a boundary INSIDE the owning machine's lifetime is refused (th
 f="$WORK/rows-moved"
 { row "done" noop-done "$(_at -330)"; base_ok; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
-expect "F29" 2 boundary_inside_owning_machine_lifetime
+expect "F29" 3 boundary_inside_owning_machine_lifetime
+
+echo "TEST: [F29b] the boundary check does not depend on the machine emitting in the hour before it"
+f="$WORK/rows-moved-silent"
+{ row "done" noop-done "$(_at -7500)"; base_ok; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F29b" 3 boundary_inside_owning_machine_lifetime
 
 # =============================================================================================
 # DRIFT — any non-exempt FSM row since the boundary
@@ -438,6 +486,7 @@ f="$WORK/rows-flipping"
 { base_ok; row flipping noop-flipping "$POST_C"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F7" 1 flush_path_transition_after_replace drift_after_replace
+grep -qF 'noop-flipping' "$WORK/probe-out" && fail "F7 a non-enum reason was printed verbatim" || pass "F7 a non-enum reason is not printed verbatim"
 
 echo "TEST: a flag=flushed row is a flush-path FAIL (latch guarantee)"
 f="$WORK/rows-flush"
@@ -517,7 +566,7 @@ expect "F28" 0 PASS
 
 echo "TEST: [F14] must-PASS, non-canonical: pre-boundary flip-complete, Doppler stderr rows, a web-1 resume"
 f="$WORK/rows-f14"
-{ row "done" flip-complete "$PRE_A"
+{ row "done" flip-complete "$PRE_A" "$GUARD" "$HOST" "$HOST_NAME" "$MID_B"   # the REPLACED machine
   msg_row "Doppler Error: unable to fetch secrets (retrying)"
   row "done" flushed-resume-no-reflush "$R_TS" "$GUARD" web-1 web-1-prd "$MID_B"
   base_ok
@@ -551,7 +600,7 @@ expect "F23" 2 drift_query_truncated done_not_resumed
 echo "TEST: a malformed DRIFT_LIMIT (leading zero) is refused, not silently used"
 f="$WORK/rows-good"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DRIFT_LIMIT=08)"
-expect "drift-limit-shape" 2 drift_limit_invalid
+expect "drift-limit-shape" 3 drift_limit_invalid
 
 echo "TEST: [F36] a LIVE page full of FOREIGN rows is channel_dark (sentinel stripped first)"
 f="$WORK/rows-f36"
@@ -575,19 +624,19 @@ f="$WORK/rows-malformed"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "malformed-line" 0 PASS
 
-echo "TEST: [F12b] string-shaped JSON heartbeats decode and carry _mid"
+echo "TEST: [F12b] string-shaped JSON heartbeats are refused: the drift query cannot see that shape"
 f="$WORK/rows-f12b"
 { row "done" flushed-resume-no-reflush "$R_TS"; row_str "done" noop-done "$POST_A"; row_str "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
-expect "F12b" 0 PASS
+expect "F12b" 3 message_shape_unsupported
 
 # =============================================================================================
 # HOST ISOLATION, SILENCE, SEAM REFUSALS
 # =============================================================================================
-echo "TEST: rows from another host do not satisfy the probe (both identity fields required)"
+echo "TEST: a row matching host but NOT host_name is rejected (both identity fields required)"
 f="$WORK/rows-otherhost"
-{ row "done" flushed-resume-no-reflush "$R_TS" "$GUARD" web-1 web-1-prd
-  row "done" noop-done "$POST_A" "$GUARD" web-1 web-1-prd; row "done" noop-done "$POST_B" "$GUARD" web-1 web-1-prd; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS" "$GUARD" "$HOST" web-1-prd
+  row "done" noop-done "$POST_A" "$GUARD" "$HOST" web-1-prd; row "done" noop-done "$POST_B" "$GUARD" "$HOST" web-1-prd; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "other-host" 2 channel_dark
 
@@ -617,6 +666,7 @@ f="$WORK/rows-armed"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "armed" 1 cutover_armed
 grep -qF 'cutover is QUEUED' "$WORK/probe-out" && pass "armed names the queued cutover" || fail "queued cutover not named"
+[[ "$(tail -n 1 "$WORK/probe-out")" == "FAIL: reason=cutover_armed" ]] && pass "armed repeats the FAIL line last" || fail "armed last line is '$(tail -n 1 "$WORK/probe-out")'"
 
 # =============================================================================================
 # THE DOPPLER ARM
@@ -631,10 +681,17 @@ echo "TEST: [F13a] a Doppler flag other than 'done' blocks a PASS"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DOPPLER_BIN="$(doppler_stub aborted)")"
 expect "F13a" 1 doppler_flag_not_done
 
-echo "TEST: a Doppler flag of 'armed' FAILs fast and names it"
-rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DOPPLER_BIN="$(doppler_stub armed)")"
-expect "doppler-armed" 1 doppler_flag_not_done
-grep -qF "'armed'" "$WORK/probe-out" && pass "doppler-armed names the disagreeing value" || fail "value not named"
+grep -qF "'aborted'" "$WORK/probe-out" && pass "F13a names the disagreeing enum value" || fail "F13a value not named"
+
+echo "TEST: a NON-ENUM Doppler value FAILs and is never printed"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DOPPLER_BIN="$(doppler_stub s3cr3t-value)")"
+expect "doppler-nonenum" 1 doppler_flag_not_done
+grep -qF 's3cr3t-value' "$WORK/probe-out" && fail "doppler-nonenum printed the raw value" || pass "doppler-nonenum does not print the raw value"
+
+echo "TEST: a FAILING doppler read is no read (its stdout is never taken as the flag)"
+dfail="$(mktemp "$WORK/doppler-fail-XXXXXXXX.sh")"; printf '#!/usr/bin/env bash\necho armed\nexit 1\n' > "$dfail"; chmod +x "$dfail"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DOPPLER_BIN="$dfail")"
+expect "doppler-failing" 0 PASS
 
 # =============================================================================================
 # #7695 — the DERIVED boundary arm (the fallback if the committed sidecar is ever removed)
@@ -655,8 +712,8 @@ echo "TEST: #7695 the boundary derives from a ZOT-prefixed image_ref (digest-onl
 f="$WORK/rows-derive-ok"
 { probe_row "$(_ck -4200)" "10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:v9.9.9@${PIN_DIGEST}"
   row "done" flushed-resume-no-reflush "$(_at -2700)"
-  row "done" noop-done "$(_at -2400)"
-  row "done" noop-done "$(_at -1800)"; } > "$f"
+  row "done" noop-done "$(_at -240)"
+  row "done" noop-done "$(_at -180)"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
 expect "derive-ok" 0 PASS
 grep -qF 'boundary DERIVED from telemetry' "$WORK/probe-out" && pass "announces the derived provenance" || fail "provenance not announced: $(probe_out)"
@@ -711,6 +768,120 @@ expect "derive-T1" 2 boundary_underivable probe_channel_dark
 grep -qF 'observed=sha256:bbbb' "$WORK/probe-out" && pass "reports the OBSERVED digest alongside the pinned one" || fail "observed digest not reported"
 
 # =============================================================================================
+# REVIEW-ROUND FIXTURES (PR #8690): every positive-evidence path is bounded by what the absence
+# queries can see — shape, scope, time, and machine.
+# =============================================================================================
+echo "TEST: [F38] a flush-path run that STARTED before the boundary but emitted after it is a finding"
+f="$WORK/rows-straddle"
+{ base_ok; row "done" flip-complete "$(_at -310)" "$GUARD" "$HOST" "$HOST_NAME" "$MID_A" "$TAG" "$(_at -295)"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F38" 1 flush_path_transition_after_replace
+
+echo "TEST: [F39] an unstamped resume from ANOTHER machine is a second emitter, never exempt noise"
+f="$WORK/rows-otherresume"
+{ base_ok; row "done" flushed-resume-no-reflush "$POST_C" "" "$HOST" "$HOST_NAME" "$MID_B"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F39" 3 multiple_machines_since_boundary
+
+echo "TEST: [F40] a newer UNSTAMPED machine beside a stamped one is a stale image"
+f="$WORK/rows-newer-unstamped"
+{ base_ok; row "done" noop-done "$POST_C" "" "$HOST" "$HOST_NAME" "$MID_B"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F40" 1 stale_image
+
+echo "TEST: [F41] one unstamped heartbeat on the owning machine is a stale image"
+f="$WORK/rows-mixed-stamp"
+{ base_ok; row "done" noop-done "$POST_C" ""; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F41" 1 stale_image
+
+echo "TEST: [F42] one heartbeat delivered twice is ONE heartbeat"
+f="$WORK/rows-dup"
+{ row "done" flushed-resume-no-reflush "$R_TS"; row "done" noop-done "$POST_A"; row "done" noop-done "$POST_A"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F42" 2 insufficient_post_replace_markers
+
+echo "TEST: [F43] heartbeats that stopped long ago are not a cycling timer"
+f="$WORK/rows-stopped"
+{ row "done" flushed-resume-no-reflush "$(_at -3000)"; row "done" noop-done "$(_at -2900)"; row "done" noop-done "$(_at -2800)"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$(_at -3100)")"
+expect "F43" 2 heartbeat_stale
+
+echo "TEST: [F44] a resume that JUST happened is 'not yet', however old the boundary"
+f="$WORK/rows-fresh-resume"
+{ row "done" noop-done "$(_at -40)"; row "done" flushed-resume-no-reflush "$(_at -20)"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$(_at -7200)")"
+expect "F44" 2 insufficient_post_replace_markers insufficient_post_replace_markers_past_deadline
+
+echo "TEST: [F45] a refusal pushed off a FULL refusal page is not an all-clear"
+f="$WORK/rows-refusal-flood"
+{ base_ok; refusal_row
+  for _ in 1 2 3; do msg_row "SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED count=1 detail=other" "$HOST" soleur-inngest-dev; done; } > "$f"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DRIFT_LIMIT=3)"
+expect "F45" 2 refusals_query_truncated seam_refused
+
+echo "TEST: [F46] a refusal marker under ANOTHER tag on the same host is not a seam refusal"
+f="$WORK/rows-refusal-othertag"
+{ base_ok; msg_row "SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED count=1 detail=x" "$HOST" "$HOST_NAME" some-other-unit; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F46" 0 PASS
+
+echo "TEST: [F47] a row merely QUOTING the refusal marker is not a seam refusal"
+f="$WORK/rows-refusal-quoted"
+{ base_ok; msg_row "note: grep for SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED in the runbook"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F47" 0 PASS
+
+echo "TEST: [F48] a STRING-shaped drift row is refused, not certified as 'no drift'"
+f="$WORK/rows-str-drift"
+{ base_ok; row_str aborted flushall-failed "$POST_C"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F48" 3 message_shape_unsupported
+
+echo "TEST: [F49] a truncated (unparseable) emit_state line is refused"
+f="$WORK/rows-truncated"
+{ base_ok; msg_row '{"dbsize":"","exit_code":0,"flag":"xxxxxxxx'; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+expect "F49" 3 message_shape_unsupported
+
+echo "TEST: [F50] stamped heartbeats with no _MACHINE_ID cannot be bound to a machine"
+f="$WORK/rows-nomid"
+{ row "done" flushed-resume-no-reflush "$R_TS" "$GUARD" "$HOST" "$HOST_NAME" NONE
+  row "done" noop-done "$POST_A" "$GUARD" "$HOST" "$HOST_NAME" NONE; row "done" noop-done "$POST_B" "$GUARD" "$HOST" "$HOST_NAME" NONE; } > "$f"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$(_at -7200)")"
+expect "F50" 3 machine_id_absent insufficient_post_replace_markers_past_deadline
+
+echo "TEST: [F52] every flush-path member is classed flush-path"
+for fr in dbsize-nonzero flushall-failed "unexpected-exit(from=flushed)"; do
+  f="$WORK/rows-fp-$(printf '%s' "$fr" | tr -c 'a-z-' '_')"
+  { base_ok; row aborted "$fr" "$POST_C"; } > "$f"
+  rc="$(run_probe "$(make_stub "$f")")"
+  expect "F52[$fr]" 1 flush_path_transition_after_replace drift_after_replace
+done
+
+echo "TEST: [F53] a failed boundary-check read is TRANSIENT, never a PASS"
+f="$WORK/rows-good"
+rc="$(run_probe "$(make_stub "$f")" STUB_FAIL_ON_TERM="\"_MACHINE_ID\":\"$MID_A\"")"
+expect "F53" 2 boundary_check_query_failed
+
+echo "TEST: [F54] a failed drift read is TRANSIENT, never a PASS"
+rc="$(run_probe "$(make_stub "$f")" STUB_FAIL_ON_TERM='"reason":"flip-complete')"
+expect "F54" 2 drift_query_failed
+
+echo "TEST: [F55] a boundary with the ISO shape but no real instant is refused"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="2026-02-30T00:00:00Z")"
+expect "F55" 3 boundary_unparseable
+
+echo "TEST: [F56] a non-integer STALE_AFTER_S seam is refused (it reaches arithmetic)"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_STALE_AFTER_S='a[0]')"
+expect "F56" 3 limit_invalid
+
+echo "TEST: [F57] credentials unprovisioned is TRANSIENT"
+rc=0; env -i PATH="$PATH" FLIP_ROLLOUT_AFTER="$BOUNDARY" FLIP_ROLLOUT_QUERY_BIN="$(make_stub "$f")" \
+  FLIP_ROLLOUT_DOPPLER_BIN="$WORK/no-such-doppler" bash "$TARGET" > "$WORK/probe-out" 2>&1 || rc=$?
+expect "F57" 2 credentials_unprovisioned
+
+# =============================================================================================
 # STATIC PINS
 # =============================================================================================
 echo "TEST: #7695 no jq filter uses the jq-1.8-only \`? as \$var\` form"
@@ -724,6 +895,10 @@ _ak="$(grep -nE '^[^#]*FLIP_ROLLOUT_(EXPECTED_GUARD|EXPECTED_FLAG|MIN_MARKERS|TE
 _dead="$(grep -cE '^[^#]*(TERMINAL_SAFE_FLAGS|EXPECTED_FLAG=|DRIFT_WINDOW=)' "$TARGET" || true)"
 [[ "$_dead" == "0" ]] && pass "the pre-cutover key (TERMINAL_SAFE_FLAGS / EXPECTED_FLAG / DRIFT_WINDOW) is gone" \
   || fail "pre-cutover answer key still present ($_dead lines)"
+_ak_members="$(grep -cE '^(POST_CUTOVER_FLAG|DONE_ENTRY_REASON|EXPECTED_GUARD|MIN_MARKERS|FLUSH_PATH_REASONS|FLUSH_PATH_FLAGS|HEARTBEAT_MAX_AGE_S)=' "$TARGET" || true)"
+_ak_dollar="$(grep -E '^(POST_CUTOVER_FLAG|DONE_ENTRY_REASON|EXPECTED_GUARD|MIN_MARKERS|FLUSH_PATH_REASONS|FLUSH_PATH_FLAGS|HEARTBEAT_MAX_AGE_S)=' "$TARGET" | grep -F '$' || true)"
+[[ "$_ak_members" == "7" && -z "$_ak_dollar" ]] && pass "all 7 answer-key assignments are literals (no \$ on their right-hand side)" \
+  || fail "answer key not inline: members=$_ak_members expanding=[$_ak_dollar]"
 
 # VERDICT-TABLE PARITY. Every reason token the probe can print must appear in the header's verdict
 # table. Tokens come from CODE lines only (the first word of verdict_fail/non_verdict's reason, and
@@ -731,9 +906,11 @@ _dead="$(grep -cE '^[^#]*(TERMINAL_SAFE_FLAGS|EXPECTED_FLAG=|DRIFT_WINDOW=)' "$T
 # table cannot satisfy itself and a code comment cannot satisfy the table.
 verdict_parity_missing() { # <probe-file> -> prints missing tokens
   local file="$1" header codes tok
-  header="$(awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$file")"
+  # ONLY the table: from the `# VERDICT TABLE` line to the first non-comment line.
+  header="$(awk '/^# VERDICT TABLE/ { f = 1 } f && !/^#/ { exit } f' "$file")"
   codes="$( { grep -vE '^[[:space:]]*#' "$file" | grep -oE '(verdict_fail|non_verdict) "[a-z_]+' | awk '{ print substr($2, 2) }'
-              grep -vE '^[[:space:]]*#' "$file" | grep -E 'echo "(TRANSIENT|FAIL)' | grep -oE 'reason=[a-z_]+' | cut -d= -f2; } | sort -u)"
+              grep -vE '^[[:space:]]*#' "$file" | grep -oE '_read_or_stop "\$[A-Za-z_]+" [a-z_]+' | awk '{ print $3 }'
+              grep -vE '^[[:space:]]*#' "$file" | grep -oE 'reason=[a-z_]+' | cut -d= -f2; } | sort -u)"
   [[ -n "$codes" ]] || { echo "__NO_CODE_TOKENS__"; return; }
   while IFS= read -r tok; do
     [[ -z "$tok" ]] && continue
@@ -755,8 +932,8 @@ _vneg="$(verdict_parity_missing "$WORK/probe-notable.sh")"
 
 # --- floor ------------------------------------------------------------------------------------
 # Every assertion above gates only on FAIL, so deleting a whole block would drop PASS and still
-# exit 0. Derived from a green run, never guessed: 223 measured on 2026-09-24 (#7761 rewrite).
-MIN_ASSERTIONS=223
+# exit 0. Derived from a green run, never guessed: 307 measured on 2026-09-24 (#7761 review round).
+MIN_ASSERTIONS=307
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

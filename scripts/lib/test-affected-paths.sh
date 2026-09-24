@@ -245,9 +245,6 @@ AFFECTED_INFRA_RUNNER_PATHS=(
   "apps/web-platform/infra/"
   ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"   # THIS FILE — see the self-inclusion note above
-  # (#7761) Not one of _infra_in_diff's predicates: cutover-inngest-workflow.test.sh's probe-parity
-  # loop reads this probe's DRIFT_GREPS block, so a probe-only diff must still select the runner.
-  "scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh"
 )
 
 # DECLARED EDGES for suites whose real dependencies derivation cannot reach:
