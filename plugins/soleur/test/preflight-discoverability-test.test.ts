@@ -2414,7 +2414,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // probe (`fresh-host-boot-trail.sh --image-origin`) reads SENTRY_ACTIONS_RO_TOKEN. NO SUBSTITUTE:
   // a fresh boot's image origin is recorded only in Sentry events, which have no unauthenticated
   // read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 23;
+  // #4781 (2026-09-24): +1 (23 -> 24, after #8651 took 22 -> 23) for `2026-09-23-fix-sentry-auth-alert-empty-filter-recurrence-guard-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/sentry-alert-live-fidelity.sh`) reads the org's alert workflows with the
+  // Doppler prd SENTRY_IAC_AUTH_TOKEN. NO SUBSTITUTE: the property is the LIVE content of those
+  // workflows, which no unauthenticated Sentry endpoint exposes. Genuine declaration.
+  const BASELINE_DECLARED_PROBES = 24;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
