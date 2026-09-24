@@ -92,6 +92,11 @@ The hatch above is *agent-initiated*, which is why it is scoped to zero-conflict
    `--green-sha` certifies `$SHA` only if it is a verified 2-parent GitHub merge whose first parent is `G` and whose second parent is an ancestor-or-equal of `origin/<base>` — then grades `G`'s required contexts. A `gh pr update-branch` merge always has this shape; a locally-created merge is **unsigned** and is refused (`carryover-unverified`), as is any head that isn't a merge, has a different first parent, or merged anything that isn't on the base (`carryover-not-merge` / `carryover-first-parent` / `carryover-not-base`). Refusal is not an error — it means wait for the new head's own suite like the normal path.
 3. Steps 3–5 of the hatch apply verbatim: sync local, merge block with `--match-head-commit "$SHA"`, decide from the exit code.
 
+Two traps, both measured on #8639 (`G`=`d1474536cd`):
+
+- **Never force-push the branch back to `G`** to get a fresh signed `gh pr update-branch` merge. The push fires a new `pull_request` `synchronize` on `G`, the update-branch push then cancels those runs, and `admin-merge-ready.sh` grades the LATEST run per context — so `G` now reads red (`failed=[…cancelled…]`). The certificate is destroyed by your own action.
+- **Run the `gh pr merge --admin --match-head-commit` from a DETACHED worktree** at `$SHA` (`git worktree add --detach <dir> "$SHA"`). On a branch checkout `.claude/hooks/pre-merge-rebase.sh` merges `origin/main` and pushes before the merge, which moves the head and makes `--match-head-commit` refuse ("Head branch was modified"). The hook skips auto-sync on a detached HEAD; its review-evidence gate still runs.
+
 Two boundaries survive operator authorization, by construction: **UNTRUSTED-CI** (a PR editing `.github/workflows/` or `.github/actions/` has no agent admin-merge path — the operator merges it by hand, because the PR's own runs can mint any required context) and **DIRTY** (`--admin` cannot execute on an unmergeable PR at all).
 
 If `G`'s checks went red between certification and now (a re-run on the old sha), the gate sees it — the runs are re-read fresh, and a `FAILED` there is a real refusal, not a stale artifact.
