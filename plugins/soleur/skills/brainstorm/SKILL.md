@@ -242,6 +242,8 @@ If the feature description references named external systems, prior issues, prio
 
 **A gate's first live contact producing a mislabel is a question about the filer's exits, not the exit's price.** Before scoping "is exit N too cheap", enumerate the mandated-by-construction filers *inside each covered class* (a persistence handshake, a liveness contract, a prompt that says REQUIRED) and check each has an honest exit — a filer with none takes the free one at any price, so pricing changes the artefact, not the behaviour. **Why:** #8076 — ADR-216's "there isn't one" was refutable in one grep against `TASK_INVENTORY`. See `knowledge-base/project/learnings/2026-09-11-a-filer-with-no-honest-exit-takes-the-free-one-at-any-price.md`.
 
+**A scheduled mechanism is two claims — the code and the trigger that runs it.** When a feature's fix assumes "X runs every N minutes" (a cron reaper, a systemd timer, a scheduled workflow), verify the trigger exists on the target host before treating the mechanism as live: `crontab -l`, `systemctl --user list-timers`, or the mechanism's own heartbeat/state file — its absence IS the measurement. **Why:** 2026-09-24 — `tmpfs-guard.sh` shipped a complete reaper but `crontab` was absent on the operator host; the guard had never run. See `knowledge-base/project/learnings/2026-09-24-a-reaper-whose-trigger-isnt-installed-is-a-no-op.md`.
+
 #### 1.1 Research (Context Gathering)
 
 **Pre-research: check existing KB artifacts first.** Before spawning any agents, run one local check for prior brainstorms and specs matching the feature's topic keywords:
