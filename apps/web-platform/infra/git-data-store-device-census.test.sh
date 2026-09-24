@@ -253,6 +253,15 @@ for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_REMOVE_BIN GIT_D
 done
 if grep -qE 'doppler run .*-- /usr/bin/env -u ' <<< "$_boot_exec"; then pass "C2: the bootstrap's env -u strip runs AFTER doppler run"
 else fail "C2: env -u does not sit between doppler run and the bootstrap" "$_boot_exec"; fi
+# (#5274) The plaintext volume id is assigned by env AFTER the strip, immediately before `bash`.
+# Exported before `doppler run`, a prd_git_data key of that name would override it (doppler lets
+# secrets override the parent environment), and an EMPTY one switches the plaintext count off.
+if grep -qE -- "-u GIT_DATA_PLAINTEXT_DEV GIT_DATA_PLAINTEXT_VOLUME_ID='\\\$\\{git_data_volume_id\\}' bash /usr/local/bin/git-data-bootstrap\\.sh" <<< "$_boot_exec"; then
+  pass "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is env's last assignment, after the strip and before bash"
+else fail "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is not assigned after the strip" "$_boot_exec"; fi
+n=$(grep -cE '^[[:space:]]*export GIT_DATA_PLAINTEXT_VOLUME_ID=' "$TEMPLATE" || true)
+if [ "$n" = 0 ]; then pass "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is not exported before doppler run"
+else fail "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is still exported before doppler run ($n)"; fi
 
 # ── ARM D — the sshd environment path is closed ────────────────────────────────────────────
 # Comment-stripped, because the runcmd stage's own rationale quotes "AcceptEnv LANG LC_*" and a
@@ -561,7 +570,8 @@ fi
 # own strip — presence 1, four seams 4, ordering 1. Raised in the same edit that adds the
 # rows: slack in a floor is how many assertions can be deleted before the one guard that
 # detects truncation notices. Measured total: 83.
-FLOOR=83
+# +2 (#5274): C2's post-strip GIT_DATA_PLAINTEXT_VOLUME_ID position and its no-export row.
+FLOOR=85
 _ran=$((passes + fails))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
