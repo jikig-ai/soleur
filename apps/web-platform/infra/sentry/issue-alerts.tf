@@ -513,49 +513,11 @@ resource "sentry_alert" "auth_callback_no_code_burst" {
   }
 }
 
-# Issue alerts for the auth observability stack — operator-keyed names that
-# match apps/web-platform/scripts/configure-sentry-alerts.sh byte-for-byte
-# per knowledge-base/project/learnings/2026-05-13-helper-migration-must-
-# preserve-operator-dashboard-message-strings.md.
-#
-# IMPORT-ONLY: these resources mirror existing Sentry rules created by the
-# legacy script. Operator runs `terraform import sentry_issue_alert.<name>
-# <org>/<project>/<rule-id>` BEFORE the first apply (see README.md). Match
-# by id, never by name (Sentry API allows duplicate names — see
-# 2026-04-29-supabase-auth-probe-and-sentry-rule-api-quirks.md).
-#
-# Lifecycle ignore_changes covers the v2 attribute set + environment +
-# frequency, all of which can recompute on import for the legacy rules per
-# the v0.15 release notes (Kieran P1, plan §5).
-#
-# ── DEPRECATION WARNING IS ACCEPTED UNTIL PROVIDER GA (#4610) ──────────────
-# `terraform validate`/`plan` emits "This resource is deprecated. Please
-# migrate to `sentry_alert`" for each block below. That warning is EXPECTED
-# and intentionally accepted: the stable line has now shipped (pinned v0.15.4,
-# #6636) but the migration blocker persists (see below), so the deferral stands.
-# Do NOT migrate these to `sentry_alert` under the pinned v0.15.4:
-#   - stable `sentry_alert` (re-confirmed at v0.15.4) is MONITOR-bound: `monitor_ids` (set) and
-#     `trigger_conditions` (first_seen|regression|reappeared|issue_resolved)
-#     are BOTH required, and it has no `project` attribute.
-#   - these 4 rules are PROJECT-WIDE frequency alerts (EventFrequencyCondition
-#     + TaggedEventFilter) bound to no monitor — they cannot populate the
-#     required fields without changing which event class fires.
-#   - `terraform state mv sentry_issue_alert.X sentry_alert.X` is impossible:
-#     the two schemas share only name/organization/id, so any migration would
-#     DROP + READD the live paging rules (the exact failure the "match by id,
-#     never recreate" rule above guards against).
-# The provider's deprecation pointer is forward-looking to the GA schema, not
-# a claim that beta2 supports the migration. The warning is NOT suppressible
-# while the resource type is `sentry_issue_alert` (Terraform core cannot
-# allow-list validate/plan warnings; the provider exposes no opt-out attr).
-# Re-attempt when a future `sentry_alert` release lets a project-wide
-# frequency alert bind + fire faithfully — i.e. when the `sentry_project_error_monitor`
-# / `sentry_project_issue_stream_monitor` default-monitor data sources are
-# confirmed to satisfy the `monitor_ids` requirement (stable v0.15.x, incl. the
-# pinned v0.15.4, still requires it — #6636). Schema evidence + alternatives:
-#   - ADR-031-sentry-as-iac.md (## Decision → "Defer migration" bullet)
-#   - knowledge-base/project/plans/2026-05-29-refactor-sentry-issue-alert-to-sentry-alert-migration-plan.md
-# ──────────────────────────────────────────────────────────────────────────
+# The three auth burst rules (callback-no-code above, exchange-code and signout
+# below) are Terraform-owned sentry_alert blocks with ignore_changes = [environment]
+# only (#7650); live drift is caught by scripts/sentry-alert-live-fidelity.sh.
+# auth_per_user_loop is Terraform-frozen (see its banner). Match by id, never by name.
+# Names are operator-keyed (email filters, runbook `startswith("auth-")` reads): do not rename.
 resource "sentry_alert" "auth_exchange_code_burst" {
   organization      = var.sentry_org
   name              = "auth-exchange-code-burst"
