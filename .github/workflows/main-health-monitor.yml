@@ -154,8 +154,9 @@ jobs:
     # Against the `main` shape the tests ceiling is 2.08x; against the branch
     # shape 1.62x. Both clear the stated 1.5x, which is why 40 rather than 35 —
     # the earlier 35 met the policy only on the `main` shape.
-    # Sanity: deploy-script-tests budgets 12 min for this same suite set, so an
-    # infra ceiling below that would trip before the workflow that OWNS the suites.
+    # Sanity: deploy-script-tests budgets 35 min for its full suite set (re-derived
+    # 2026-09-24; this monitor runs a narrower, self-derived subset at max 459 s), so an
+    # infra ceiling far below that trips first here — the intended direction.
     #
     # The job ceiling must dominate the SUM of the step ceilings, not the max: with
     # two timed steps, `max + 10` lets the job token trip midway through the second
