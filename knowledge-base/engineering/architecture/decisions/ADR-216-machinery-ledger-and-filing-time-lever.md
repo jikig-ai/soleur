@@ -418,7 +418,7 @@ migration with `psql --single-transaction`; the residual is per-run test rows,
 the same state a `timeout-minutes` kill already produces. The three ledger rows
 carry the corrected reasons.
 
-**What still runs on a reaped run.** Graceful `/cancel` only, so `if: always()`
+**What still runs on a reaped run.** Graceful `/cancel` first, so `if: always()`
 jobs and steps still execute and conclude on the OLD SHA: the
 `tenant-integration-required` / `vendor-pin-required` / `sentry-destroy-required`
 aggregators (the tenant verdict now names the reaper as the likely cause), the
@@ -428,6 +428,16 @@ Non-head SHAs never gate the PR, so no synthetic statuses are posted.
 `fix-constraints-stage-b.yml` acts only on a stage-a `success`. A was-green
 certificate `G` loses any run still in flight on it once the branch moves past
 `G` (see `plugins/soleur/skills/ship/references/settle-then-admin-merge.md`).
+
+**Force-cancel second pass (#8669 follow-up).** Measured after merge: a graceful
+`/cancel` returns 202 yet can leave a run `queued` indefinitely. The operator's manual
+reap had 10 of 31 still queued, and the first live reap (#8687, run 35989289752) had
+2 of 3 still queued at 60 s. Each of those had 0 in_progress jobs, 1 queued job and
+2 done. So after `CSPR_FORCE_DELAY` (45 s), the reaper re-reads each run it cancelled
+itself and calls `/force-cancel` only when the run is still `queued` **and** its job
+list is readable, non-empty and contains no `in_progress` job. A run with a job
+executing is never force-cancelled, because force skips `always()` steps. A force
+failure is a `::warning::`, never red.
 
 **Rejected.** Flipping `cancel-in-progress` on tenant-integration /
 vendor-pin-verify (cancels same-SHA runs); adding `concurrency:` blocks to
