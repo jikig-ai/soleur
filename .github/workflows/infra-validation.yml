@@ -130,6 +130,10 @@ on:
       - "scripts/cutover-inngest.sh"
       - "tests/scripts/lib/inngest-host-dark-gate.sh"
       - "scripts/lib/betterstack-read-classify.sh"
+      # (#7761) The same suite's probe-parity loop reads the follow-through probe's DRIFT_GREPS
+      # block. Without this path a PR that edits ONLY the probe (dropping a drift term, say)
+      # skips the one guard that pins the probe's drift set to the emitter's reason vocabulary.
+      - "scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh"
       # (#7674) inngest-dedicated-host-classify.test.sh asserts the dedicated-host arm OF
       # scheduled-inngest-health.yml -- the no-restart contract, the host isolation, and the
       # decode-before-match. Same reason as the entry above: without this path a PR editing only

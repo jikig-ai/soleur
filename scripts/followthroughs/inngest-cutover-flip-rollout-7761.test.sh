@@ -71,7 +71,6 @@ R_TS="$(_at -270)"         # the op=resume row (flushed-resume-no-reflush)
 POST_A="$(_at -240)"       # first post-resume noop-done
 POST_B="$(_at -210)"       # second — two are what proves the 30s timer is cycling
 POST_C="$(_at -180)"       # a third row (a transition / an armed flag)
-POST_D="$(_at -150)"
 PRE_A="$(_at -4800)"       # pre-boundary, and OUTSIDE [AFTER-1h, AFTER]: the replaced host's evidence
 PRE_B="$(_at -2100)"
 OLD_BOUNDARY="2020-01-01T00:00:00Z"
@@ -123,9 +122,9 @@ bulk() {
 }
 # The canonical healthy host: the op=resume row, then two stamped noop-done heartbeats.
 base_ok() {
-  row done flushed-resume-no-reflush "$R_TS"
-  row done noop-done "$POST_A"
-  row done noop-done "$POST_B"
+  row "done" flushed-resume-no-reflush "$R_TS"
+  row "done" noop-done "$POST_A"
+  row "done" noop-done "$POST_B"
 }
 
 # A query stub modelling betterstack-query.sh: OR over every --grep against the decoded raw text
@@ -234,14 +233,14 @@ echo "=== inngest-cutover-flip-rollout-7761.sh probe test suite ==="
 # =============================================================================================
 echo "TEST: [stub] OR-combines repeated --grep terms"
 f="$WORK/rows-selfcheck"
-{ row done reason-x "$POST_A"; row done reason-y "$POST_B"; row done reason-z "$POST_C"; } > "$f"
+{ row "done" reason-x "$POST_A"; row "done" reason-y "$POST_B"; row "done" reason-z "$POST_C"; } > "$f"
 s="$(make_stub "$f")"
 n="$(bash "$s" --since 1h --limit 10 --grep '"reason":"reason-x' --grep '"reason":"reason-y' | grep -c . || true)"
 [[ "$n" == "2" ]] && pass "stub OR: two terms return rows matching either" || fail "stub OR: expected 2 rows, got $n"
 
 echo "TEST: [stub] --limit keeps the NEWEST N, in chronological order"
 f="$WORK/rows-selfcheck5"
-{ row done r1 "$(_at -60)"; row done r2 "$(_at -50)"; row done r3 "$(_at -40)"; row done r4 "$(_at -30)"; row done r5 "$(_at -20)"; } > "$f"
+{ row "done" r1 "$(_at -60)"; row "done" r2 "$(_at -50)"; row "done" r3 "$(_at -40)"; row "done" r4 "$(_at -30)"; row "done" r5 "$(_at -20)"; } > "$f"
 got="$(bash "$(make_stub "$f")" --since 1h --limit 2 --grep "$TAG" | jq -r '.raw | fromjson | .message.reason' | tr '\n' ' ')"
 [[ "$got" == "r4 r5 " ]] && pass "stub newest-N: --limit 2 over 5 rows returns r4 then r5" || fail "stub newest-N: got '$got'"
 
@@ -253,12 +252,12 @@ bash "$s" --since "last tuesday" --limit 1 --grep x >/dev/null 2>&1; src=$?
 
 echo "TEST: [stub] a quoted term matches an OBJECT message and not a STRING message"
 f="$WORK/rows-selfcheck-q"
-{ row done quoted-probe "$POST_A"; row_str done quoted-probe "$POST_B"; } > "$f"
+{ row "done" quoted-probe "$POST_A"; row_str "done" quoted-probe "$POST_B"; } > "$f"
 got="$(bash "$(make_stub "$f")" --since 1h --limit 10 --grep '"reason":"quoted-probe"' | grep -c . || true)"
 [[ "$got" == "1" ]] && pass "stub quoted term: object row matches, escaped string row does not" || fail "stub quoted term: expected 1 row, got $got"
 
 echo "TEST: [stub] the 600-row fixture has distinct, in-window, increasing start_ts"
-bulk 600 "$BIG_NOOP_OFF" 4 done noop-done > "$WORK/bulk-check"
+bulk 600 "$BIG_NOOP_OFF" 4 "done" noop-done > "$WORK/bulk-check"
 read -r bn bu bmin bmax < <(jq -rs --arg a "$BIG_AFTER" '[.[] | .raw | fromjson | .message.start_ts] as $t
   | "\($t | length) \($t | unique | length) \($t | min) \($t | max)"' "$WORK/bulk-check")
 if [[ "$bn" == "600" && "$bu" == "600" && "$bmin" > "$BIG_AFTER" && ! "$bmax" > "$(_at 0)" ]]; then
@@ -321,13 +320,13 @@ grep -qxF '"reason":"noop-done' "$GREP_SEEN" && fail "noop-done is grepped by th
 
 echo "TEST: [F1L] live shape — the resume row is off the 500-row LIVE page, only the drift query finds it"
 f="$WORK/rows-big"
-{ row done flushed-resume-no-reflush "$(_at "$BIG_R_OFF")"; bulk 600 "$BIG_NOOP_OFF" 4 done noop-done; } > "$f"
+{ row "done" flushed-resume-no-reflush "$(_at "$BIG_R_OFF")"; bulk 600 "$BIG_NOOP_OFF" 4 "done" noop-done; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$BIG_AFTER")"
 expect "F1L" 0 PASS
 
 echo "TEST: [F2] noop-done with no op=resume on this machine is not a PASS (inherited done)"
 f="$WORK/rows-noresume"
-{ row done noop-done "$POST_A"; row done noop-done "$POST_B"; } > "$f"
+{ row "done" noop-done "$POST_A"; row "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F2" 2 done_not_resumed stale_image drift_after_replace
 grep -qF "$BOUNDARY" "$WORK/probe-out" && pass "F2 prints the boundary it used" || fail "F2 boundary not printed"
@@ -340,19 +339,19 @@ expect "F2b" 1 done_not_resumed_past_deadline
 
 echo "TEST: [F3] REORDER — a PRE-boundary resume does not own post-boundary done"
 f="$WORK/rows-preresume"
-{ row done flushed-resume-no-reflush "$PRE_A"; row done noop-done "$POST_A"; row done noop-done "$POST_B"; } > "$f"
+{ row "done" flushed-resume-no-reflush "$PRE_A"; row "done" noop-done "$POST_A"; row "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F3" 2 done_not_resumed boundary_inside_owning_machine_lifetime
 
 echo "TEST: [F4] REORDER — heartbeats BEFORE the resume do not count as liveness after it"
 f="$WORK/rows-noopsfirst"
-{ row done noop-done "$POST_A"; row done noop-done "$POST_B"; row done flushed-resume-no-reflush "$POST_C"; } > "$f"
+{ row "done" noop-done "$POST_A"; row "done" noop-done "$POST_B"; row "done" flushed-resume-no-reflush "$POST_C"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F4" 2 insufficient_post_replace_markers done_not_resumed
 
 echo "TEST: a single post-resume marker is TRANSIENT (booted once != timer cycling)"
 f="$WORK/rows-one"
-{ row done flushed-resume-no-reflush "$R_TS"; row done noop-done "$POST_A"; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS"; row "done" noop-done "$POST_A"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "one-marker" 2 insufficient_post_replace_markers
 
@@ -362,52 +361,52 @@ expect "one-marker-deadline" 1 insufficient_post_replace_markers_past_deadline
 
 echo "TEST: pre-boundary markers do NOT satisfy the probe (the replaced host's evidence)"
 f="$WORK/rows-old"
-{ row done noop-done "$PRE_A"; row done noop-done "$PRE_B"; } > "$f"
+{ row "done" noop-done "$PRE_A"; row "done" noop-done "$PRE_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "pre-boundary" 2 insufficient_post_replace_markers
 
 echo "TEST: a non-date start_ts is excluded from liveness, not sorted above the boundary"
 f="$WORK/rows-unknown"
-{ row done noop-done "unknown"; row done noop-done "unknown"; } > "$f"
+{ row "done" noop-done "unknown"; row "done" noop-done "unknown"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "unknown-ts" 2 insufficient_post_replace_markers
 
 echo "TEST: [F5] post-boundary rows WITHOUT the guard stamp are a stale image, not a pass"
 f="$WORK/rows-oldrev"
-{ row done flushed-resume-no-reflush "$R_TS" ""; row done noop-done "$POST_A" ""; row done noop-done "$POST_B" ""; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS" ""; row "done" noop-done "$POST_A" ""; row "done" noop-done "$POST_B" ""; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F5" 1 stale_image done_not_resumed drift_after_replace
 
 echo "TEST: [F16] an UNSTAMPED resume with stamped heartbeats does not own done"
 f="$WORK/rows-unstamped-r"
-{ row done flushed-resume-no-reflush "$R_TS" ""; row done noop-done "$POST_A"; row done noop-done "$POST_B"; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS" ""; row "done" noop-done "$POST_A"; row "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F16" 2 done_not_resumed stale_image drift_after_replace
 
 echo "TEST: [F25] machine binding — a resume on another MACHINE does not own this one's done"
 f="$WORK/rows-othermachine"
-{ row done flushed-resume-no-reflush "$R_TS"
-  row done noop-done "$POST_A" "$GUARD" "$HOST" "$HOST_NAME" "$MID_B"
-  row done noop-done "$POST_B" "$GUARD" "$HOST" "$HOST_NAME" "$MID_B"; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS"
+  row "done" noop-done "$POST_A" "$GUARD" "$HOST" "$HOST_NAME" "$MID_B"
+  row "done" noop-done "$POST_B" "$GUARD" "$HOST" "$HOST_NAME" "$MID_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F25" 2 done_not_resumed
 
 echo "TEST: [F26] a second resume on the same machine is harmless"
 f="$WORK/rows-tworesumes"
-{ row done flushed-resume-no-reflush "$R_TS"; row done noop-done "$POST_A"
-  row done flushed-resume-no-reflush "$(_at -225)"; row done noop-done "$POST_B"; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS"; row "done" noop-done "$POST_A"
+  row "done" flushed-resume-no-reflush "$(_at -225)"; row "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F26" 0 PASS
 
 echo "TEST: [F30] a resume whose start_ts is not a date cannot own done"
 f="$WORK/rows-unknown-r"
-{ row done flushed-resume-no-reflush "unknown"; row done noop-done "$POST_A"; row done noop-done "$POST_B"; } > "$f"
+{ row "done" flushed-resume-no-reflush "unknown"; row "done" noop-done "$POST_A"; row "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F30" 2 done_not_resumed drift_after_replace
 
 echo "TEST: [F29] a boundary INSIDE the owning machine's lifetime is refused (the sidecar was moved)"
 f="$WORK/rows-moved"
-{ row done noop-done "$(_at -330)"; base_ok; } > "$f"
+{ row "done" noop-done "$(_at -330)"; base_ok; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F29" 2 boundary_inside_owning_machine_lifetime
 
@@ -444,7 +443,7 @@ grep -qF 'latch guarantee is broken' "$WORK/probe-out" && pass "flushed-flag nam
 
 echo "TEST: [F8] a post-boundary flip-complete is a flush-path FAIL naming it"
 f="$WORK/rows-flipcomplete"
-{ base_ok; row done flip-complete "$POST_C"; } > "$f"
+{ base_ok; row "done" flip-complete "$POST_C"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F8" 1 flush_path_transition_after_replace
 grep -qE 'reason=flip-complete' "$WORK/probe-out" && pass "F8 prints the flip-complete row" || fail "F8 row not printed: $(probe_out)"
@@ -462,22 +461,22 @@ expect "F9b" 1 drift_after_replace
 
 echo "TEST: [F10] horizon — an early flip-complete 600 heartbeats back is still found"
 f="$WORK/rows-f10"
-{ row done flip-complete "$(_at -2680)"; row done flushed-resume-no-reflush "$(_at "$BIG_R_OFF")"
-  bulk 600 "$BIG_NOOP_OFF" 4 done noop-done; } > "$f"
+{ row "done" flip-complete "$(_at -2680)"; row "done" flushed-resume-no-reflush "$(_at "$BIG_R_OFF")"
+  bulk 600 "$BIG_NOOP_OFF" 4 "done" noop-done; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$BIG_AFTER")"
 expect "F10" 1 flush_path_transition_after_replace
 
 echo "TEST: [F11] direct-write drift — early noop-aborted rows 600 heartbeats back are found"
 f="$WORK/rows-f11"
-{ row done flushed-resume-no-reflush "$(_at "$BIG_R_OFF")"; bulk 3 -2630 5 aborted noop-aborted
-  bulk 600 "$BIG_NOOP_OFF" 4 done noop-done; } > "$f"
+{ row "done" flushed-resume-no-reflush "$(_at "$BIG_R_OFF")"; bulk 3 -2630 5 aborted noop-aborted
+  bulk 600 "$BIG_NOOP_OFF" 4 "done" noop-done; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$BIG_AFTER")"
 expect "F11" 1 drift_after_replace
 
 echo "TEST: [F21] a flush-path row outranks stale_image"
 f="$WORK/rows-f21"
-{ row done flushed-resume-no-reflush "$R_TS" ""; row done noop-done "$POST_A" ""; row done noop-done "$POST_B" ""
-  row done flip-complete "$POST_C" ""; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS" ""; row "done" noop-done "$POST_A" ""; row "done" noop-done "$POST_B" ""
+  row "done" flip-complete "$POST_C" ""; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F21" 1 flush_path_transition_after_replace stale_image
 
@@ -513,9 +512,9 @@ expect "F28" 0 PASS
 
 echo "TEST: [F14] must-PASS, non-canonical: pre-boundary flip-complete, Doppler stderr rows, a web-1 resume"
 f="$WORK/rows-f14"
-{ row done flip-complete "$PRE_A"
+{ row "done" flip-complete "$PRE_A"
   msg_row "Doppler Error: unable to fetch secrets (retrying)"
-  row done flushed-resume-no-reflush "$R_TS" "$GUARD" web-1 web-1-prd "$MID_B"
+  row "done" flushed-resume-no-reflush "$R_TS" "$GUARD" web-1 web-1-prd "$MID_B"
   base_ok
   msg_row "Doppler Error: request timed out"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
@@ -526,8 +525,8 @@ expect "F14" 0 PASS
 # =============================================================================================
 echo "TEST: [F18] a FULL drift page with no finding is TRANSIENT, never an absence conclusion"
 f="$WORK/rows-f18"
-{ row done flushed-resume-no-reflush "$R_TS"; row done flushed-resume-no-reflush "$(_at -255)"
-  row done noop-done "$POST_A"; row done noop-done "$POST_B"; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS"; row "done" flushed-resume-no-reflush "$(_at -255)"
+  row "done" noop-done "$POST_A"; row "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DRIFT_LIMIT=1)"
 expect "F18" 2 drift_query_truncated done_not_resumed stale_image
 
@@ -551,7 +550,7 @@ expect "drift-limit-shape" 2 drift_limit_invalid
 
 echo "TEST: [F36] a LIVE page full of FOREIGN rows is channel_dark (sentinel stripped first)"
 f="$WORK/rows-f36"
-bulk 500 -1000 1 done noop-done "$MID_B" web-1 web-1-prd > "$f"
+bulk 500 -1000 1 "done" noop-done "$MID_B" web-1 web-1-prd > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F36" 2 channel_dark insufficient_post_replace_markers
 
@@ -573,7 +572,7 @@ expect "malformed-line" 0 PASS
 
 echo "TEST: [F12b] string-shaped JSON heartbeats decode and carry _mid"
 f="$WORK/rows-f12b"
-{ row done flushed-resume-no-reflush "$R_TS"; row_str done noop-done "$POST_A"; row_str done noop-done "$POST_B"; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS"; row_str "done" noop-done "$POST_A"; row_str "done" noop-done "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "F12b" 0 PASS
 
@@ -582,15 +581,15 @@ expect "F12b" 0 PASS
 # =============================================================================================
 echo "TEST: rows from another host do not satisfy the probe (both identity fields required)"
 f="$WORK/rows-otherhost"
-{ row done flushed-resume-no-reflush "$R_TS" "$GUARD" web-1 web-1-prd
-  row done noop-done "$POST_A" "$GUARD" web-1 web-1-prd; row done noop-done "$POST_B" "$GUARD" web-1 web-1-prd; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS" "$GUARD" web-1 web-1-prd
+  row "done" noop-done "$POST_A" "$GUARD" web-1 web-1-prd; row "done" noop-done "$POST_B" "$GUARD" web-1 web-1-prd; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "other-host" 2 channel_dark
 
 echo "TEST: a row matching host_name but NOT host is rejected (#6616 — host_name can lie)"
 f="$WORK/rows-spoof"
-{ row done flushed-resume-no-reflush "$R_TS" "$GUARD" web-1 "$HOST_NAME"
-  row done noop-done "$POST_A" "$GUARD" web-1 "$HOST_NAME"; row done noop-done "$POST_B" "$GUARD" web-1 "$HOST_NAME"; } > "$f"
+{ row "done" flushed-resume-no-reflush "$R_TS" "$GUARD" web-1 "$HOST_NAME"
+  row "done" noop-done "$POST_A" "$GUARD" web-1 "$HOST_NAME"; row "done" noop-done "$POST_B" "$GUARD" web-1 "$HOST_NAME"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 expect "spoofed-host" 2 channel_dark
 
@@ -619,7 +618,7 @@ grep -qF 'cutover is QUEUED' "$WORK/probe-out" && pass "armed names the queued c
 # =============================================================================================
 echo "TEST: [F13] a Doppler flag of 'done' is reported as corroboration"
 f="$WORK/rows-good"
-rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DOPPLER_BIN="$(doppler_stub done)")"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DOPPLER_BIN="$(doppler_stub "done")")"
 expect "F13" 0 PASS
 grep -qF 'doppler corroborates: done' "$WORK/probe-out" && pass "F13 says the read happened" || fail "F13 corroboration not named"
 
@@ -653,9 +652,9 @@ _ck() { date -u -d "@$(( NOW + $1 ))" '+%Y-%m-%d %H:%M:%S'; }   # the ClickHouse
 echo "TEST: #7695 the boundary derives from a ZOT-prefixed image_ref (digest-only matching)"
 f="$WORK/rows-derive-ok"
 { probe_row "$(_ck -4200)" "10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:v9.9.9@${PIN_DIGEST}"
-  row done flushed-resume-no-reflush "$(_at -2700)"
-  row done noop-done "$(_at -2400)"
-  row done noop-done "$(_at -1800)"; } > "$f"
+  row "done" flushed-resume-no-reflush "$(_at -2700)"
+  row "done" noop-done "$(_at -2400)"
+  row "done" noop-done "$(_at -1800)"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
 expect "derive-ok" 0 PASS
 grep -qF 'boundary DERIVED from telemetry' "$WORK/probe-out" && pass "announces the derived provenance" || fail "provenance not announced: $(probe_out)"
@@ -664,7 +663,7 @@ has_reason boundary_unparseable && fail "the ClickHouse dt tripped the validator
 echo "TEST: #7695 a foreign host's probe row does not supply the boundary (both identity fields)"
 f="$WORK/rows-derive-foreign"
 { probe_row "$(_ck -4200)" "ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.9@${PIN_DIGEST}" "web-1" "soleur-web-prd"
-  row done noop-done "$(_at -2400)"; } > "$f"
+  row "done" noop-done "$(_at -2400)"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
 expect "derive-foreign" 2 probe_channel_dark
 
@@ -672,9 +671,9 @@ expect "derive-foreign" 2 probe_channel_dark
 # scenario is a host alive and polling but emitting NO guard stamp.
 _mk_stale() {
   { probe_row "$(_ck -4200)" "ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.9@${PIN_DIGEST}"
-    row done flushed-resume-no-reflush "$(_at -2700)" ""
-    row done noop-done "$(_at -2400)" ""
-    row done noop-done "$(_at -1800)" ""; } > "$1"
+    row "done" flushed-resume-no-reflush "$(_at -2700)" ""
+    row "done" noop-done "$(_at -2400)" ""
+    row "done" noop-done "$(_at -1800)" ""; } > "$1"
 }
 echo "TEST: #7695 a DERIVED boundary is capped at TRANSIENT where it would have said stale_image"
 f="$WORK/rows-cap"; _mk_stale "$f"
@@ -695,7 +694,7 @@ grep -qF 'boundary DERIVED from telemetry' "$WORK/probe-out" && fail "derived de
 echo "TEST: #7695 an 'armed' row FAILs even under a DERIVED boundary (uncapped)"
 f="$WORK/rows-armed-derived"
 { probe_row "$(_ck -4200)" "ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.9@${PIN_DIGEST}"
-  row done noop-done "$(_at -2400)"
+  row "done" noop-done "$(_at -2400)"
   row armed armed "$(_at -1200)"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
 expect "derive-armed" 1 cutover_armed
@@ -704,7 +703,7 @@ grep -qF 'FLUSHALL' "$WORK/probe-out" && pass "names the FLUSHALL consequence" |
 echo "TEST: #7695 T1 — rows exist for this host but carry a DIFFERENT digest"
 f="$WORK/rows-wrong-digest"
 { probe_row "$(_ck -4200)" "10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:$(printf 'b%.0s' {1..64})"
-  row done noop-done "$(_at -2400)"; } > "$f"
+  row "done" noop-done "$(_at -2400)"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
 expect "derive-T1" 2 boundary_underivable probe_channel_dark
 grep -qF 'observed=sha256:bbbb' "$WORK/probe-out" && pass "reports the OBSERVED digest alongside the pinned one" || fail "observed digest not reported"
@@ -754,8 +753,8 @@ _vneg="$(verdict_parity_missing "$WORK/probe-notable.sh")"
 
 # --- floor ------------------------------------------------------------------------------------
 # Every assertion above gates only on FAIL, so deleting a whole block would drop PASS and still
-# exit 0. Derived from a green run, never guessed.
-MIN_ASSERTIONS=54
+# exit 0. Derived from a green run, never guessed: 223 measured on 2026-09-24 (#7761 rewrite).
+MIN_ASSERTIONS=223
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
