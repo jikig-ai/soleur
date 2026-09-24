@@ -882,3 +882,19 @@ None. Checked 2026-09-24: the open `code-review` issues (up to 200) were searche
   (`^HTTP/[0-9.]+ ([0-9]{3})`), and fall back to stderr's `(HTTP NNN)` only when the status line
   is absent. Take the **message** (`Resource not accessible by integration`, `rate limit`) from
   stderr or the JSON body. Suite O7-O11 pin this.- Never `gh pr merge --admin` on this PR (UNTRUSTED-CI: `.github/workflows` changed).
+
+## Review Deltas (2026-09-24)
+
+The 8-seat review changed the shipped design in ways this plan does not show above; the
+script header and the ADR-216 addendum are the current source.
+
+- `pull_request` / `pull_request_target` runs are reaped only when their workflow is a row
+  of `scripts/pr-fanout-ledger.txt` (rule 8c), so non-`synchronize` workflows such as
+  `board-status-sync.yml` are never cancelled. The ledger is sparse-checked-out from the
+  default branch with the script; an unreadable ledger exits 2.
+- Rule 8b: the run's `pull_requests[]` must name this PR (reused branch names, forks).
+- A `pull_request_target` run is re-read immediately before its POST and spared once it has
+  started (rule 9b alone read the listing snapshot).
+- Rule 1 also refuses a non-integer id and a non-40-hex `head_sha`; the 1000-row warning and
+  the dead `202)` arm were removed; the sanitiser strips all control bytes and loops on `::`.
+- Output rows carry six fields (`sha7` added). Suite: 164 assertions; round-2 battery 57/57.
