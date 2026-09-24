@@ -782,6 +782,24 @@ redeployed: `cx33` remains unorderable, re-sampled 2026-09-24 in ADR-154). It is
 Rebuilding web-1 to rotate a token would mean a reboot, and whether web-1 re-opens the LUKS volume at
 boot is still unproven (the in-guest unlock path is deferred to #6931).
 
+## Addendum (2026-09-24, after #8703's apply): the token line's owner also creates the file (#8632)
+
+The first rotation apply (run 35991817062) found web-1 with **no** `/etc/default/luks-monitor`.
+The helper reported `SOLEUR_LUKS_HOST_TOKEN_REFRESH result=fail reason=envfile_absent`. By then the
+main apply had already revoked the old token, so the refusal left the host with no working token,
+not with the old one. The file's earlier writers do not cover it: cloud-init bakes the DSN line only
+at a host's birth, and the cutover's write did not survive.
+
+The helper therefore creates an absent file, the same way `workspaces-cutover.sh` does:
+
+- it creates the file only AFTER the new token is proven, 0600 root, holding the token line only;
+- it records `created_envfile=1` in its `result=ok` line;
+- on any post-write mismatch it removes the file, restoring the ABSENT state;
+- it refuses a symlink at the path.
+
+The addendum above still holds for the `DOPPLER_TOKEN=` line. The file itself is created by this
+installer when absent. The missing `SOLEUR_SENTRY_DSN=` line stays cloud-init's, tracked in #8706.
+
 ## References
 
 - Issue #6588 — the P1 that mandated CTO routing before terraform.

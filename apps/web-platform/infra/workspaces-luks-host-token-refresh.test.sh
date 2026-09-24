@@ -191,11 +191,30 @@ else
   grep -q 'STUB-MISS' "$SCRATCH/h1.out" && no "H1 no stub was asked a question it does not model" || ok "H1 no stub was asked a question it does not model"
   ls "$SCRATCH"/h1.env.* 2>/dev/null | grep -vqE '/h1\.env$' && no "H1 no sibling file (backup or tmp) holding a token is left beside the env file" || ok "H1 no sibling file (backup or tmp) holding a token is left beside the env file"
 
-  # H2 — no EnvironmentFile: refuse, create nothing, and say why off-box.
+  # H2 — no EnvironmentFile (the live web-1 state on 2026-09-24, #8632's first apply): create it
+  # the way workspaces-cutover.sh does (0600 root, token line only), AFTER the token is proven.
   run_helper h2 "$NEW_TOKEN"$'\n' "__ABSENT__"
-  [[ "$(rc_of h2)" != 0 ]] && ok "H2 an absent EnvironmentFile is refused" || no "H2 an absent EnvironmentFile is refused"
-  logged_reason h2 envfile_absent && ok "H2 envfile_absent reaches journald" || no "H2 envfile_absent reaches journald"
-  [[ -e "$SCRATCH/h2.env" ]] && no "H2 no file is created" || ok "H2 no file is created"
+  [[ "$(rc_of h2)" == 0 ]] && ok "H2 an absent EnvironmentFile is created, not refused" || no "H2 an absent EnvironmentFile is created, not refused (rc=$(rc_of h2): $(tail -2 "$SCRATCH/h2.out" | tr '\n' ' '))"
+  [[ -f "$SCRATCH/h2.env" && "$(cat "$SCRATCH/h2.env")" == "DOPPLER_TOKEN=$NEW_TOKEN" ]] && ok "H2 the created file holds exactly the new token line" || no "H2 the created file holds exactly the new token line"
+  [[ -f "$SCRATCH/h2.env" && "$(stat -c %a "$SCRATCH/h2.env")" == 600 ]] && ok "H2 the created file is mode 600" || no "H2 the created file is mode 600"
+  grep -qxF "logger -t luks-monitor -- SOLEUR_LUKS_HOST_TOKEN_REFRESH result=ok created_envfile=1" "$SCRATCH/h2.calls" && ok "H2 the creation is recorded off-box (created_envfile=1)" || no "H2 the creation is recorded off-box (created_envfile=1)"
+  [[ "$(leaks h2 "$NEW_TOKEN")" == 0 ]] && ok "H2 the token is in no output and no argv while creating the file" || no "H2 the token leaked while creating the file"
+  first_doppler="$(grep -n '^doppler secrets' "$SCRATCH/h2.calls" | head -1 | cut -d: -f1)" || true
+  first_write="$(grep -nE '^(mv|chmod) ' "$SCRATCH/h2.calls" | head -1 | cut -d: -f1)" || true
+  [[ -n "$first_doppler" && -n "$first_write" && "$first_doppler" -lt "$first_write" ]] && ok "H2 the token is proven BEFORE the file is created" || no "H2 the token is proven BEFORE the file is created (doppler@${first_doppler:-none} write@${first_write:-none})"
+  # H2b — a token that cannot read the key creates nothing.
+  DRC=1 run_helper h2b "$NEW_TOKEN"$'\n' "__ABSENT__"
+  [[ "$(rc_of h2b)" != 0 ]] && logged_reason h2b token_read_failed && ok "H2b a rejected token on an absent file is refused (token_read_failed)" || no "H2b a rejected token on an absent file is refused"
+  [[ -e "$SCRATCH/h2b.env" ]] && no "H2b a rejected token creates no file" || ok "H2b a rejected token creates no file"
+  # H2c — a corrupted write into a file this run created is rolled back to ABSENT, not to empty.
+  MVC=1 run_helper h2c "$NEW_TOKEN"$'\n' "__ABSENT__"
+  [[ "$(rc_of h2c)" != 0 ]] && logged_reason h2c envfile_other_lines_changed && ok "H2c a corrupted write into a created file is detected" || no "H2c a corrupted write into a created file is detected (rc=$(rc_of h2c))"
+  [[ -e "$SCRATCH/h2c.env" ]] && no "H2c the created file is removed on rollback" || ok "H2c the created file is removed on rollback"
+  # H2d — a symlink at the path (dangling or not) is refused, never written through as root.
+  ln -sf "$SCRATCH/h2d.victim" "$SCRATCH/h2d.env"
+  run_helper h2d "$NEW_TOKEN"$'\n' "__ABSENT__"
+  [[ "$(rc_of h2d)" != 0 ]] && logged_reason h2d envfile_symlink && ok "H2d a symlinked EnvironmentFile is refused (envfile_symlink)" || no "H2d a symlinked EnvironmentFile is refused (rc=$(rc_of h2d))"
+  [[ -e "$SCRATCH/h2d.victim" ]] && no "H2d nothing is written through the symlink" || ok "H2d nothing is written through the symlink"
 
   # H3/H4 — shapes that never reach the file.
   run_helper h3 "" "$SEED"
@@ -374,7 +393,7 @@ done < "$SCRATCH/tf.tsv"
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # Anti-vacuity floor. The threshold sits on the line directly above its `if`.
-MIN_ASSERTIONS=65
+MIN_ASSERTIONS=74
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1
