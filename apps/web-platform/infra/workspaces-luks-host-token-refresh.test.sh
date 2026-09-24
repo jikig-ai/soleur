@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
 #
-# Gate for the #8632 boot-token REFRESH path:
+# Gate for the #8632 boot-token delivery path:
 #   - apps/web-platform/infra/luks-monitor-token-refresh.sh (runs ON web-1 as root), and
-#   - the `refresh-host-token` job in .github/workflows/workspaces-luks-verify.yml that ships it.
+#   - terraform_data.luks_monitor_token_install in workspaces-luks.tf, which ships and runs it in the
+#     same apply that rotates doppler_service_token.workspaces_luks (ADR-119 2026-09-24 addendum).
 #
 # What must hold, and why each one matters:
-#   (1) The host file keeps every non-token line (the baked SOLEUR_SENTRY_DSN is what lets a Doppler
+#   (1) A token that cannot read WORKSPACES_LUKS_KEY never replaces one that can: the helper proves
+#       the new token with luks-monitor.sh's pinned doppler form BEFORE it writes anything.
+#   (2) The host file keeps every non-token line (the baked SOLEUR_SENTRY_DSN is what lets a Doppler
 #       outage still page) and ends with exactly ONE DOPPLER_TOKEN line, mode 600.
-#   (2) The token travels on STDIN only. It never appears in ssh argv, stdout, stderr or the logger
-#       call that reaches Better Stack.
-#   (3) A refresh is only green when `systemctl start luks-monitor.service` exits 0 AND the unit's
-#       Result is `success` — i.e. the daily probe demonstrably reads WORKSPACES_LUKS_KEY with the
-#       new token. Writing the file is not the proof.
-#   (4) The replace code is the SAME code workspaces-cutover.sh used to install the token, so the
-#       two writers cannot drift (the rotation runbook on #8632 requires this).
-#   (5) The job is dispatch-only and environment-gated, and the daily `verify` job is untouched:
-#       no `needs`, no `environment`. A reviewer gate on the verify job would park every 04:41
-#       cron run waiting for approval, which is the silence the Sentry Crons monitor pages on.
-#
-# The workflow half parses the YAML and EXECUTES the extracted `run:` body under GitHub's shell
-# (`bash --noprofile --norc -eo pipefail`) against a stub ssh that records argv and stdin.
+#   (3) The token travels on STDIN only. It is never an argument to ANY program the helper runs
+#       (every external command below is a recorder that logs its argv), never printed, and never
+#       in the logger line that reaches Better Stack. Root sources this file, so the value is
+#       restricted to the service-token alphabet.
+#   (4) Every refusal reaches journald under the vector-shipped luks-monitor tag, so a failed
+#       rotation is readable off-box without SSH.
+#   (5) The replace code is the SAME code workspaces-cutover.sh used for the first write.
+#   (6) The Terraform wiring: the only trigger is the token hash (a helper comment edit must not
+#       re-provision web-1), the connection pins web-1's host key, the key reaches the helper through
+#       a builtin printf on stdin, the token has create_before_destroy, the per-merge SSH apply
+#       targets the resource, and nothing on this path starts luks-monitor.service.
 set -euo pipefail
 
-WF=".github/workflows/workspaces-luks-verify.yml"
 HELPER="apps/web-platform/infra/luks-monitor-token-refresh.sh"
 CUTOVER="apps/web-platform/infra/workspaces-cutover.sh"
-[[ -f "$WF" ]] || { echo "FAIL - $WF not found (run from the repo root)"; exit 1; }
+TF="apps/web-platform/infra/workspaces-luks.tf"
+APPLY_WF=".github/workflows/apply-web-platform-infra.yml"
+[[ -f "$TF" ]] || { echo "FAIL - $TF not found (run from the repo root)"; exit 1; }
 
 pass=0
 fail=0
@@ -71,66 +73,80 @@ TOKEN_PREFIX="dp."'st.'
 NEW_TOKEN="${TOKEN_PREFIX}prd_workspaces_luks.FIXTURExNEWxTOKENxxxxxxxxxxxxxxxxxxxxxxxx"
 OLD_TOKEN="${TOKEN_PREFIX}prd_workspaces_luks.FIXTURExOLDxTOKENxxxxxxxxxxxxxxxxxxxxxxxx"
 DSN_LINE="SOLEUR_SENTRY_DSN=https://fixture@o0.ingest.example/1"
-EXPECTED_SHA16="$(printf '%s' "$NEW_TOKEN" | sha256sum | cut -c1-16)"
+FIXTURE_KEY="fixture-luks-passphrase"
 
-# --- host helper ----------------------------------------------------------------------------------
-# systemctl / journalctl / logger are PATH stubs. Each records its argv; systemctl answers by verb so
-# a helper that queried the wrong thing (a different unit, a missing `start`) does not read a fixture.
-cat > "$SCRATCH/bin/systemctl" <<'EOS'
-#!/usr/bin/env bash
-printf 'systemctl %s\n' "$*" >> "${STUB_CALLS:?}"
-case "$*" in
-  "cat luks-monitor.service") exit "${FIXTURE_UNIT_CAT_RC:-0}" ;;
-  "start luks-monitor.service") exit "${FIXTURE_START_RC:-0}" ;;
-  "show -p Result --value luks-monitor.service") printf '%s\n' "${FIXTURE_RESULT:-success}"; exit 0 ;;
-esac
-printf 'STUB-MISS systemctl %s\n' "$*" >&2
-exit 64
-EOS
-cat > "$SCRATCH/bin/journalctl" <<'EOS'
-#!/usr/bin/env bash
-printf 'journalctl %s\n' "$*" >> "${STUB_CALLS:?}"
-printf '%s\n' '[luks-monitor] FAIL (doppler_unreachable) fixture'
-exit 0
-EOS
+# --- recorders ------------------------------------------------------------------------------------
+# Every external command the helper can run is shadowed by a recorder that logs its argv and then
+# execs the REAL binary (resolved to an absolute path BEFORE PATH is changed, so a recorder cannot
+# re-enter itself). Property (3) is then a grep over one file of every argv the helper produced.
+for cmd in grep sed cp mv chmod rm mktemp cat; do
+  real="$(command -v "$cmd")"
+  case "$real" in /*) : ;; *) printf 'FATAL: %s is not an external binary here (%s)\n' "$cmd" "$real"; exit 2 ;; esac
+  printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" %q "$*" >> "${STUB_CALLS:?}"\nexec %q "$@"\n' "$cmd" "$real" > "$SCRATCH/bin/$cmd"
+  chmod +x "$SCRATCH/bin/$cmd"
+done
 cat > "$SCRATCH/bin/logger" <<'EOS'
 #!/usr/bin/env bash
 printf 'logger %s\n' "$*" >> "${STUB_CALLS:?}"
 exit 0
 EOS
-chmod +x "$SCRATCH/bin/systemctl" "$SCRATCH/bin/journalctl" "$SCRATCH/bin/logger"
+# doppler: records argv, and records WHETHER the token it received (in its environment, where the
+# helper must put it) is the expected one — never the token itself.
+cat > "$SCRATCH/bin/doppler" <<'EOS'
+#!/usr/bin/env bash
+printf 'doppler %s\n' "$*" >> "${STUB_CALLS:?}"
+if [[ "${DOPPLER_TOKEN:-}" == "${EXPECT_TOKEN:-}" ]]; then
+  printf 'doppler-env-token=expected\n' >> "$STUB_CALLS"
+else
+  printf 'doppler-env-token=other\n' >> "$STUB_CALLS"
+fi
+[[ "${HOME:-}" == /root ]] && printf 'doppler-env-home=root\n' >> "$STUB_CALLS"
+[[ -z "${DOPPLER_CONFIG_DIR:-}" ]] && printf 'doppler-env-no-config-dir\n' >> "$STUB_CALLS"
+if [[ "$*" != "secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks" ]]; then
+  printf 'STUB-MISS doppler %s\n' "$*" >&2
+  exit 64
+fi
+[[ "${FIXTURE_DOPPLER_RC:-0}" == 0 ]] || exit "$FIXTURE_DOPPLER_RC"
+printf '%s' "${FIXTURE_DOPPLER_OUT-fixture-luks-passphrase}"
+EOS
+chmod +x "$SCRATCH/bin/logger" "$SCRATCH/bin/doppler"
 
-# run_helper <case> <stdin-token> [envfile-seed|__ABSENT__]; leaves $SCRATCH/<case>.{out,rc,calls,env}
+# run_helper <case> <stdin> [envfile-seed|__ABSENT__] [extra bash flags]
+# The helper's target is a literal (it runs as root). Point a scratch COPY at the fixture file, and
+# refuse to run if the rewrite did not land — an unrewritten copy would target the real path.
 run_helper() {
-  local c="$1" tok="$2" seed="${3:-}"
+  local c="$1" input="$2" seed="${3:-}" flags="${4:-}"
   local envf="$SCRATCH/$c.env" rc=0
   : > "$SCRATCH/$c.calls"
   if [[ "$seed" != "__ABSENT__" ]]; then
     printf '%s' "$seed" > "$envf"
     chmod 644 "$envf"
   fi
-  # The helper's target is a literal (it runs as root). Point a scratch COPY at the fixture file, and
-  # refuse to run if the rewrite did not land — an unrewritten copy would target the real path.
   sed "s|^ENVF=\"/etc/default/luks-monitor\"\$|ENVF=\"$envf\"|" "$HELPER" > "$SCRATCH/$c.helper.sh"
-  if ! grep -qxF "ENVF=\"$envf\"" "$SCRATCH/$c.helper.sh"; then
-    printf 'FATAL: the ENVF rewrite did not land in the scratch copy of %s\n' "$HELPER" >&2
+  if ! grep -qxF "ENVF=\"$envf\"" "$SCRATCH/$c.helper.sh" || [[ "$(grep -c '^ENVF=' "$SCRATCH/$c.helper.sh")" != 1 ]]; then
+    printf 'FATAL: the ENVF rewrite did not land (exactly once) in the scratch copy of %s\n' "$HELPER" >&2
     exit 2
   fi
-  printf '%s\n' "$tok" | PATH="$SCRATCH/bin:$PATH" STUB_CALLS="$SCRATCH/$c.calls" \
-    FIXTURE_START_RC="${START_RC:-0}" FIXTURE_RESULT="${RESULT:-success}" \
-    FIXTURE_UNIT_CAT_RC="${CAT_RC:-0}" \
-    bash "$SCRATCH/$c.helper.sh" > "$SCRATCH/$c.out" 2>&1 || rc=$?
+  # shellcheck disable=SC2086
+  printf '%s' "$input" | PATH="$SCRATCH/bin:$PATH" STUB_CALLS="$SCRATCH/$c.calls" \
+    EXPECT_TOKEN="$NEW_TOKEN" DOPPLER_CONFIG_DIR=/tmp/should-be-unset \
+    FIXTURE_DOPPLER_RC="${DRC:-0}" ${DOUT+FIXTURE_DOPPLER_OUT="$DOUT"} \
+    bash $flags "$SCRATCH/$c.helper.sh" > "$SCRATCH/$c.out" 2>&1 || rc=$?
   printf '%s\n' "$rc" > "$SCRATCH/$c.rc"
 }
 rc_of() { cat "$SCRATCH/$1.rc"; }
 token_lines() { grep -c '^DOPPLER_TOKEN=' "$SCRATCH/$1.env" || true; }
-leaks() { # leaks <case> <token> -> count of artifacts carrying the token
+leaks() { # leaks <case> <token> -> number of artifacts carrying the token (output, every argv)
   local n=0 f
   for f in "$SCRATCH/$1.out" "$SCRATCH/$1.calls"; do
     [[ -f "$f" ]] && grep -qF -- "$2" "$f" && n=$((n + 1))
   done
   printf '%s\n' "$n"
 }
+logged_reason() { grep -qE "^logger -t luks-monitor -- SOLEUR_LUKS_HOST_TOKEN_REFRESH result=fail reason=$2\$" "$SCRATCH/$1.calls"; }
+unchanged() { grep -qxF "DOPPLER_TOKEN=$OLD_TOKEN" "$SCRATCH/$1.env" && [[ "$(token_lines "$1")" == 1 ]]; }
+
+SEED="$(printf '%s\nDOPPLER_TOKEN=%s\n' "$DSN_LINE" "$OLD_TOKEN")"
 
 if [[ ! -f "$HELPER" ]]; then
   no "the host helper $HELPER exists"
@@ -139,65 +155,96 @@ else
   bash -n "$HELPER" && ok "helper passes bash -n" || no "helper passes bash -n"
 
   # H1 — the positive control.
-  run_helper h1 "$NEW_TOKEN" "$(printf '%s\nDOPPLER_TOKEN=%s\n' "$DSN_LINE" "$OLD_TOKEN")"
-  [[ "$(rc_of h1)" == 0 ]] && ok "H1 healthy refresh exits 0" || no "H1 healthy refresh exits 0 (rc=$(rc_of h1): $(tail -3 "$SCRATCH/h1.out" | tr '\n' ' '))"
+  run_helper h1 "$NEW_TOKEN"$'\n' "$SEED"
+  [[ "$(rc_of h1)" == 0 ]] && ok "H1 healthy rotation exits 0" || no "H1 healthy rotation exits 0 (rc=$(rc_of h1): $(tail -3 "$SCRATCH/h1.out" | tr '\n' ' '))"
   [[ "$(token_lines h1)" == 1 ]] && ok "H1 exactly one DOPPLER_TOKEN line remains" || no "H1 exactly one DOPPLER_TOKEN line remains (got $(token_lines h1))"
   grep -qxF "DOPPLER_TOKEN=$NEW_TOKEN" "$SCRATCH/h1.env" && ok "H1 the token line carries the NEW token" || no "H1 the token line carries the NEW token"
   grep -qF "$OLD_TOKEN" "$SCRATCH/h1.env" && no "H1 the OLD token is gone from the file" || ok "H1 the OLD token is gone from the file"
-  grep -qxF "$DSN_LINE" "$SCRATCH/h1.env" && ok "H1 the baked SOLEUR_SENTRY_DSN line is preserved" || no "H1 the baked SOLEUR_SENTRY_DSN line is preserved"
+  grep -qxF "$DSN_LINE" "$SCRATCH/h1.env" && ok "H1 the SOLEUR_SENTRY_DSN line is preserved" || no "H1 the SOLEUR_SENTRY_DSN line is preserved"
   [[ "$(stat -c %a "$SCRATCH/h1.env")" == 600 ]] && ok "H1 the file ends mode 600" || no "H1 the file ends mode 600 (got $(stat -c %a "$SCRATCH/h1.env"))"
-  grep -qxF "systemctl start luks-monitor.service" "$SCRATCH/h1.calls" && ok "H1 the daily unit is started (the proof, not the write)" || no "H1 the daily unit is started"
-  grep -qxF "systemctl show -p Result --value luks-monitor.service" "$SCRATCH/h1.calls" && ok "H1 the unit's Result is read back" || no "H1 the unit's Result is read back"
-  grep -qxF "[luks-token-refresh] result=ok token_sha256_16=$EXPECTED_SHA16" "$SCRATCH/h1.out" && ok "H1 prints the ok verdict with the token's sha256 prefix" || no "H1 prints the ok verdict with the token's sha256 prefix"
-  grep -qE '^logger .*SOLEUR_LUKS_HOST_TOKEN_REFRESH result=ok' "$SCRATCH/h1.calls" && ok "H1 the outcome reaches journald under the luks-monitor tag" || no "H1 the outcome reaches journald"
-  grep -qE '^logger -t luks-monitor ' "$SCRATCH/h1.calls" && ok "H1 logger uses the vector-allowlisted luks-monitor tag" || no "H1 logger uses the luks-monitor tag"
-  [[ "$(leaks h1 "$NEW_TOKEN")" == 0 ]] && ok "H1 the token appears in no output and no stub argv" || no "H1 the token leaked into output/argv"
+  grep -qxF "doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks" "$SCRATCH/h1.calls" && ok "H1 the token is proven with luks-monitor.sh's pinned doppler form" || no "H1 the token is proven with the pinned doppler form"
+  grep -qxF "doppler-env-token=expected" "$SCRATCH/h1.calls" && ok "H1 doppler receives the NEW token through its environment" || no "H1 doppler receives the NEW token through its environment"
+  grep -qxF "doppler-env-home=root" "$SCRATCH/h1.calls" && ok "H1 doppler runs with HOME=/root" || no "H1 doppler runs with HOME=/root"
+  grep -qxF "doppler-env-no-config-dir" "$SCRATCH/h1.calls" && ok "H1 an inherited DOPPLER_CONFIG_DIR is cleared (#6536)" || no "H1 an inherited DOPPLER_CONFIG_DIR is cleared"
+  # Ordering: the proof precedes the first write to the file.
+  first_doppler="$(grep -n '^doppler secrets' "$SCRATCH/h1.calls" | head -1 | cut -d: -f1)"
+  first_mv="$(grep -n '^mv ' "$SCRATCH/h1.calls" | head -1 | cut -d: -f1)"
+  [[ -n "$first_doppler" && -n "$first_mv" && "$first_doppler" -lt "$first_mv" ]] && ok "H1 the token is proven BEFORE the file is replaced" || no "H1 the token is proven BEFORE the file is replaced (doppler@${first_doppler:-none} mv@${first_mv:-none})"
+  grep -qxF "[luks-token-refresh] result=ok" "$SCRATCH/h1.out" && ok "H1 prints the ok verdict" || no "H1 prints the ok verdict"
+  grep -qxF "logger -t luks-monitor -- SOLEUR_LUKS_HOST_TOKEN_REFRESH result=ok" "$SCRATCH/h1.calls" && ok "H1 the outcome reaches journald under the luks-monitor tag" || no "H1 the outcome reaches journald under the luks-monitor tag"
+  [[ "$(leaks h1 "$NEW_TOKEN")" == 0 ]] && ok "H1 the NEW token is in no output and no argv of any program" || no "H1 the NEW token leaked into output or an argv"
+  [[ "$(leaks h1 "$OLD_TOKEN")" == 0 ]] && ok "H1 the OLD token is in no output and no argv of any program" || no "H1 the OLD token leaked into output or an argv"
+  grep -qF "$FIXTURE_KEY" "$SCRATCH/h1.out" && no "H1 the passphrase read back is never printed" || ok "H1 the passphrase read back is never printed"
   grep -q 'STUB-MISS' "$SCRATCH/h1.out" && no "H1 no stub was asked a question it does not model" || ok "H1 no stub was asked a question it does not model"
+  ls "$SCRATCH"/h1.env.bak.* >/dev/null 2>&1 && no "H1 the backup copy (holding the old token) is removed" || ok "H1 the backup copy (holding the old token) is removed"
 
-  # H2 — no EnvironmentFile: refuse, and do not create one.
-  run_helper h2 "$NEW_TOKEN" "__ABSENT__"
-  [[ "$(rc_of h2)" != 0 ]] && ok "H2 absent EnvironmentFile is refused" || no "H2 absent EnvironmentFile is refused"
-  grep -q 'result=fail reason=envfile_absent' "$SCRATCH/h2.out" && ok "H2 names envfile_absent" || no "H2 names envfile_absent"
+  # H2 — no EnvironmentFile: refuse, create nothing, and say why off-box.
+  run_helper h2 "$NEW_TOKEN"$'\n' "__ABSENT__"
+  [[ "$(rc_of h2)" != 0 ]] && ok "H2 an absent EnvironmentFile is refused" || no "H2 an absent EnvironmentFile is refused"
+  logged_reason h2 envfile_absent && ok "H2 envfile_absent reaches journald" || no "H2 envfile_absent reaches journald"
   [[ -e "$SCRATCH/h2.env" ]] && no "H2 no file is created" || ok "H2 no file is created"
 
-  # H3 / H4 — an empty or wrong-shape token never reaches the file.
-  seed="$(printf '%s\nDOPPLER_TOKEN=%s\n' "$DSN_LINE" "$OLD_TOKEN")"
-  run_helper h3 "" "$seed"
-  [[ "$(rc_of h3)" != 0 ]] && ok "H3 empty token is refused" || no "H3 empty token is refused"
-  grep -q 'reason=token_empty' "$SCRATCH/h3.out" && ok "H3 names token_empty" || no "H3 names token_empty"
-  grep -qxF "DOPPLER_TOKEN=$OLD_TOKEN" "$SCRATCH/h3.env" && ok "H3 the file is untouched" || no "H3 the file is untouched"
-  run_helper h4 "dp.pt.personal-token-shape" "$seed"
-  [[ "$(rc_of h4)" != 0 ]] && ok "H4 a non-service-token shape is refused" || no "H4 a non-service-token shape is refused"
-  grep -q 'reason=token_shape_invalid' "$SCRATCH/h4.out" && ok "H4 names token_shape_invalid" || no "H4 names token_shape_invalid"
-  grep -qxF "DOPPLER_TOKEN=$OLD_TOKEN" "$SCRATCH/h4.env" && ok "H4 the file is untouched" || no "H4 the file is untouched"
-  run_helper h4b "dp.st.has space" "$seed"
-  [[ "$(rc_of h4b)" != 0 ]] && ok "H4b a token with whitespace is refused" || no "H4b a token with whitespace is refused"
+  # H3/H4 — shapes that never reach the file.
+  run_helper h3 "" "$SEED"
+  [[ "$(rc_of h3)" != 0 ]] && unchanged h3 && ok "H3 an empty token is refused and the file is untouched" || no "H3 an empty token is refused and the file is untouched"
+  logged_reason h3 token_empty && ok "H3 token_empty reaches journald" || no "H3 token_empty reaches journald"
+  run_helper h4 "dp.pt.personal-token-shape"$'\n' "$SEED"
+  [[ "$(rc_of h4)" != 0 ]] && unchanged h4 && ok "H4 a personal-token shape is refused and the file is untouched" || no "H4 a personal-token shape is refused"
+  logged_reason h4 token_shape_invalid && ok "H4 token_shape_invalid reaches journald" || no "H4 token_shape_invalid reaches journald"
+  run_helper h4b "${TOKEN_PREFIX}"$'\n' "$SEED"
+  [[ "$(rc_of h4b)" != 0 ]] && unchanged h4b && ok "H4b a bare dp.st. prefix is refused" || no "H4b a bare dp.st. prefix is refused"
+  run_helper h4c "${TOKEN_PREFIX}"'$(touch${IFS}'"$SCRATCH"'/pwned)'$'\n' "$SEED"
+  [[ "$(rc_of h4c)" != 0 ]] && unchanged h4c && ok "H4c a token carrying \$(...) is refused (root sources this file)" || no "H4c a token carrying \$(...) is refused"
+  [[ -e "$SCRATCH/pwned" ]] && no "H4c nothing in the token was executed" || ok "H4c nothing in the token was executed"
+  grep -q 'doppler secrets' "$SCRATCH/h4c.calls" && no "H4c a refused shape never reaches doppler" || ok "H4c a refused shape never reaches doppler"
+  run_helper h4d "${TOKEN_PREFIX}has space"$'\n' "$SEED"
+  [[ "$(rc_of h4d)" != 0 ]] && unchanged h4d && ok "H4d a token with whitespace is refused" || no "H4d a token with whitespace is refused"
+  run_helper h4e "$NEW_TOKEN"$'\n'"$DSN_LINE"$'\n' "$SEED"
+  [[ "$(rc_of h4e)" != 0 ]] && unchanged h4e && ok "H4e multi-line input is refused, not joined into one token" || no "H4e multi-line input is refused"
+  logged_reason h4e token_multiline && ok "H4e token_multiline reaches journald" || no "H4e token_multiline reaches journald"
+  run_helper h4f "$NEW_TOKEN"$'\r\n' "$SEED"
+  [[ "$(rc_of h4f)" == 0 ]] && grep -qxF "DOPPLER_TOKEN=$NEW_TOKEN" "$SCRATCH/h4f.env" && ok "H4f a CRLF-terminated line is accepted with the CR stripped" || no "H4f a CRLF-terminated line is accepted with the CR stripped"
 
-  # H5 — the unit fails with the new token: red, with the probe's own FAIL line surfaced.
-  START_RC=1 run_helper h5 "$NEW_TOKEN" "$seed"
-  [[ "$(rc_of h5)" != 0 ]] && ok "H5 a failing unit start reds the refresh" || no "H5 a failing unit start reds the refresh"
-  grep -q 'reason=unit_start_failed' "$SCRATCH/h5.out" && ok "H5 names unit_start_failed" || no "H5 names unit_start_failed"
-  grep -qF '[luks-monitor] FAIL (doppler_unreachable)' "$SCRATCH/h5.out" && ok "H5 surfaces the probe's own FAIL line from the journal" || no "H5 surfaces the probe's FAIL line"
+  # H5/H6 — a token that cannot read the key never replaces the working one.
+  DRC=1 run_helper h5 "$NEW_TOKEN"$'\n' "$SEED"
+  [[ "$(rc_of h5)" != 0 ]] && unchanged h5 && ok "H5 a token doppler rejects is refused and the old token is kept" || no "H5 a token doppler rejects is refused and the old token is kept"
+  logged_reason h5 token_read_failed && ok "H5 token_read_failed reaches journald" || no "H5 token_read_failed reaches journald"
+  DOUT="" run_helper h6 "$NEW_TOKEN"$'\n' "$SEED"
+  [[ "$(rc_of h6)" != 0 ]] && unchanged h6 && ok "H6 an EMPTY key read (rc 0) is refused and the old token is kept" || no "H6 an empty key read is refused"
 
-  # H6 — start exits 0 but the unit's Result is not success: still red.
-  RESULT=exit-code run_helper h6 "$NEW_TOKEN" "$seed"
-  [[ "$(rc_of h6)" != 0 ]] && ok "H6 Result!=success reds the refresh even when start exited 0" || no "H6 Result!=success reds the refresh"
-  grep -q 'reason=unit_result_not_success' "$SCRATCH/h6.out" && ok "H6 names unit_result_not_success" || no "H6 names unit_result_not_success"
+  # H7 — xtrace would print the token: refuse before reading it.
+  run_helper h7 "$NEW_TOKEN"$'\n' "$SEED" "-x"
+  [[ "$(rc_of h7)" == 78 ]] && ok "H7 the helper refuses to run under xtrace (exit 78)" || no "H7 the helper refuses to run under xtrace (rc=$(rc_of h7))"
+  [[ "$(leaks h7 "$NEW_TOKEN")" == 0 ]] && unchanged h7 && ok "H7 no token leaked and the file is untouched under xtrace" || no "H7 no token leaked under xtrace"
 
-  # H7 — no unit installed: refuse before writing.
-  CAT_RC=1 run_helper h7 "$NEW_TOKEN" "$seed"
-  [[ "$(rc_of h7)" != 0 ]] && ok "H7 an absent unit is refused" || no "H7 an absent unit is refused"
-  grep -q 'reason=unit_absent' "$SCRATCH/h7.out" && ok "H7 names unit_absent" || no "H7 names unit_absent"
-  grep -qxF "DOPPLER_TOKEN=$OLD_TOKEN" "$SCRATCH/h7.env" && ok "H7 the file is untouched" || no "H7 the file is untouched"
+  # H8 — a file that never had a token line (DSN only) gains exactly one.
+  run_helper h8 "$NEW_TOKEN"$'\n' "$(printf '%s\n' "$DSN_LINE")"
+  [[ "$(rc_of h8)" == 0 && "$(token_lines h8)" == 1 ]] && grep -qxF "$DSN_LINE" "$SCRATCH/h8.env" && ok "H8 a DSN-only file gains exactly one token line" || no "H8 a DSN-only file gains exactly one token line"
 
-  # H8 — a file that never had a token line (DSN only) gets exactly one appended.
-  run_helper h8 "$NEW_TOKEN" "$(printf '%s\n' "$DSN_LINE")"
-  [[ "$(rc_of h8)" == 0 && "$(token_lines h8)" == 1 ]] && ok "H8 a DSN-only file gains exactly one token line" || no "H8 a DSN-only file gains exactly one token line"
+  # H9 — a stale .tmp symlink is not written through.
+  printf 'untouched\n' > "$SCRATCH/h9.victim"
+  ln -sf "$SCRATCH/h9.victim" "$SCRATCH/h9.env.tmp"
+  run_helper h9 "$NEW_TOKEN"$'\n' "$SEED"
+  [[ "$(rc_of h9)" == 0 && "$(cat "$SCRATCH/h9.victim")" == untouched ]] && ok "H9 a symlink planted at \${ENVF}.tmp is removed, not followed" || no "H9 a symlink planted at \${ENVF}.tmp is removed, not followed"
+
+  # H10 — duplicate token lines collapse to one.
+  run_helper h10 "$NEW_TOKEN"$'\n' "$(printf '%s\nDOPPLER_TOKEN=%s\nDOPPLER_TOKEN=%s\n' "$DSN_LINE" "$OLD_TOKEN" "$OLD_TOKEN")"
+  [[ "$(rc_of h10)" == 0 && "$(token_lines h10)" == 1 ]] && ok "H10 duplicate DOPPLER_TOKEN lines collapse to one" || no "H10 duplicate DOPPLER_TOKEN lines collapse to one"
+
+  # The helper never starts the unit (comment-stripped, so a sentence about it cannot satisfy this).
+  if grep -vE '^[[:space:]]*#' "$HELPER" | grep -qE 'systemctl[[:space:]]+(start|restart)'; then
+    no "the helper never starts or restarts a unit"
+  else
+    ok "the helper never starts or restarts a unit"
+  fi
+  if grep -vE '^[[:space:]]*#' "$HELPER" | grep -qE 'doppler[[:space:]]+(run|secrets[[:space:]]+download)'; then
+    no "the helper uses only the pinned doppler form (no run, no download)"
+  else
+    ok "the helper uses only the pinned doppler form (no run, no download)"
+  fi
 fi
 
-# --- (4) the replace code is the cutover's code -----------------------------------------------------
-# Anchored on the two statements that do the work, whitespace-normalised. A paraphrase in either file
-# (a different umask, a dropped grep -v, a chmod after mv) reds here.
+# --- (5) the replace code is the cutover's code -----------------------------------------------------
 python3 - "$CUTOVER" "$HELPER" > "$SCRATCH/parity.tsv" <<'PY'
 import sys, re
 def core(path):
@@ -223,160 +270,90 @@ while IFS=$'\t' read -r v name; do
   if [[ "$v" == ok ]]; then ok "$name"; else no "$name"; fi
 done < "$SCRATCH/parity.tsv"
 
-# --- (5) the workflow job --------------------------------------------------------------------------
-python3 - "$WF" "$SCRATCH" > "$SCRATCH/wf.tsv" <<'PY'
-import sys, yaml, re
-wf = yaml.safe_load(open(sys.argv[1])); scratch = sys.argv[2]
+# --- (6) the Terraform wiring (comment-stripped HCL) -------------------------------------------------
+python3 - "$TF" "$APPLY_WF" > "$SCRATCH/tf.tsv" <<'PY'
+import sys, re, yaml
+tf_path, wf_path = sys.argv[1:3]
 out = []
 def check(name, cond, detail=""):
-    out.append(("ok" if cond else "no", name, str(detail)[:200]))
-on = wf.get(True) or wf.get("on") or {}
-inp = ((on.get("workflow_dispatch") or {}).get("inputs") or {}).get("refresh_host_token") or {}
-check("refresh_host_token input exists", bool(inp))
-check("refresh_host_token is a boolean", inp.get("type") == "boolean", inp.get("type"))
-check("refresh_host_token is NOT required (a schedule supplies no inputs)", inp.get("required") is False, inp.get("required"))
-check("refresh_host_token defaults to false", inp.get("default") is False, repr(inp.get("default")))
-jobs = wf.get("jobs") or {}
-job = jobs.get("refresh-host-token") or {}
-check("a refresh-host-token job exists", bool(job), sorted(jobs))
-check("the refresh job is gated by the workspaces-luks-cutover environment",
-      job.get("environment") == "workspaces-luks-cutover", job.get("environment"))
-verify = jobs.get("verify") or {}
-check("the daily verify job carries NO environment (a reviewer gate would park every cron run)",
-      "environment" not in verify, verify.get("environment"))
-check("the daily verify job carries NO needs (the cron path must not wait on the refresh job)",
-      "needs" not in verify, verify.get("needs"))
-check("the daily verify job carries NO job-level if", "if" not in verify, verify.get("if"))
+    out.append(("ok" if cond else "no", name, " ".join(str(detail).split())[:200]))
 
-# Evaluate the job `if:` over the event x input grid instead of grepping it. GitHub hands a
-# schedule event no inputs, so the input is null there.
-cond = str(job.get("if", ""))
-expr = cond.strip()
-m = re.fullmatch(r"\$\{\{(.*)\}\}", expr, re.S)
-if m: expr = m.group(1)
-py = expr.replace("&&", " and ").replace("||", " or ").replace("!=", " __NE__ ").replace("!", " not ").replace(" __NE__ ", " != ")
-py = py.replace("github.event_name", "EV").replace("inputs.refresh_host_token", "INP")
-def ev(e, i):
-    return bool(eval(py, {"__builtins__": {}}, {"EV": e, "INP": i}))
-try:
-    grid = {(e, i): ev(e, i) for e in ("schedule", "workflow_dispatch", "push")
-            for i in (None, False, True, "")}
-    want = {k: (k[0] == "workflow_dispatch" and k[1] is True) for k in grid}
-    check("the refresh job runs ONLY on a dispatch with refresh_host_token=true (evaluated over the grid)",
-          grid == want, sorted(repr(k) for k in grid if grid[k] != want[k]))
-except Exception as exc:
-    check("the refresh job's if: is evaluable", False, repr(exc))
+def strip(src):
+    # Remove # and // comments outside double-quoted strings, line by line.
+    res = []
+    for line in src.splitlines():
+        buf, q, i = [], False, 0
+        while i < len(line):
+            ch = line[i]
+            if ch == '"' and (i == 0 or line[i - 1] != "\\"):
+                q = not q
+            if not q and (ch == "#" or line.startswith("//", i)):
+                break
+            buf.append(ch); i += 1
+        res.append("".join(buf))
+    return "\n".join(res)
 
-steps = job.get("steps") or []
-names = [str(s.get("name", "")) for s in steps]
-bridge = [s for s in steps if str(s.get("uses", "")).endswith("cf-tunnel-ssh-bridge")]
-check("the refresh job opens the CF Tunnel SSH bridge", len(bridge) == 1, names)
-if bridge:
-    check("the bridge targets web-1's private address (single-sourced env)",
-          str((bridge[0].get("with") or {}).get("server-ip")) == "${{ env.WEB_HOST_PRIVATE_IP }}",
-          (bridge[0].get("with") or {}).get("server-ip"))
-doppler_i = [i for i, s in enumerate(steps) if "DopplerHQ/cli-action" in str(s.get("uses", ""))]
-bridge_i = [i for i, s in enumerate(steps) if str(s.get("uses", "")).endswith("cf-tunnel-ssh-bridge")]
-check("the Doppler CLI is installed before the bridge (the bridge reads its key through it)",
-      bool(doppler_i and bridge_i and doppler_i[0] < bridge_i[0]), (doppler_i, bridge_i))
-refresh = [s for s in steps if s.get("id") == "refresh"]
-check("exactly one step carries id: refresh", len(refresh) == 1, names)
-if refresh:
-    env = refresh[0].get("env") or {}
-    check("the refresh step reads the boot token from the repo secret",
-          env.get("WORKSPACES_LUKS_BOOT_TOKEN") == "${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}",
-          env.get("WORKSPACES_LUKS_BOOT_TOKEN"))
-    body = str(refresh[0].get("run", ""))
-    check("the token is never interpolated into the run: body", "secrets." not in body)
-    open(f"{scratch}/refresh.sh", "w").write(body)
-teardown = [s for s in steps if "tear down" in str(s.get("name", "")).lower()]
-check("a bridge teardown step exists", len(teardown) == 1, names)
-if teardown:
-    check("the teardown runs always()", str(teardown[0].get("if", "")).strip() == "always()", teardown[0].get("if"))
-    open(f"{scratch}/teardown.sh", "w").write(str(teardown[0].get("run", "")))
+def block(src, kind, name):
+    m = re.search(r'resource\s+"%s"\s+"%s"\s*\{' % (kind, name), src)
+    if not m:
+        return None
+    depth, i = 1, m.end()
+    while i < len(src) and depth:
+        depth += {"{": 1, "}": -1}.get(src[i], 0); i += 1
+    return src[m.end():i - 1]
+
+src = strip(open(tf_path).read())
+tok = block(src, "doppler_service_token", "workspaces_luks")
+check("doppler_service_token.workspaces_luks exists", tok is not None)
+if tok:
+    check("the token carries lifecycle { create_before_destroy = true }",
+          re.search(r'lifecycle\s*\{[^}]*create_before_destroy\s*=\s*true', tok) is not None)
+inst = block(src, "terraform_data", "luks_monitor_token_install")
+check("terraform_data.luks_monitor_token_install exists", inst is not None)
+if inst:
+    trig = re.findall(r'(?m)^\s*triggers_replace\s*=\s*(.+?)\s*$', inst)
+    check("the ONLY trigger is the token hash (no file() hash, no other operand)",
+          trig == ["nonsensitive(sha256(doppler_service_token.workspaces_luks.key))"], trig)
+    conn = re.search(r'connection\s*\{([^}]*)\}', inst)
+    cbody = conn.group(1) if conn else ""
+    check("the connection dials web-1", re.search(r'(?m)^\s*host\s*=\s*hcloud_server\.web\["web-1"\]\.ipv4_address\s*$', cbody) is not None, cbody)
+    check("the connection pins web-1's host key", re.search(r'(?m)^\s*host_key\s*=\s*local\.web_1_ssh_host_key\s*$', cbody) is not None)
+    dest = re.findall(r'provisioner\s+"file"\s*\{[^}]*source\s*=\s*"\$\{path\.module\}/luks-monitor-token-refresh\.sh"[^}]*destination\s*=\s*"([^"]+)"', inst)
+    check("a file provisioner ships the helper from the repo", len(dest) == 1, dest)
+    key_lines = [l for l in inst.splitlines() if "doppler_service_token.workspaces_luks.key" in l and "triggers_replace" not in l]
+    check("the key appears in exactly one command line", len(key_lines) == 1, key_lines)
+    if dest and key_lines:
+        want = "printf '%%s\\\\n' '${doppler_service_token.workspaces_luks.key}' | bash %s" % dest[0]
+        check("that line pipes the key via a builtin printf into the shipped helper",
+              want in key_lines[0], key_lines[0].strip())
+    check("nothing in the installer starts or restarts luks-monitor.service",
+          re.search(r'systemctl\s+(start|restart)', inst) is None)
+    timer_lines = [l for l in inst.splitlines() if "luks-monitor.timer" in l]
+    check("the installer reports the timer's state into the apply log", len(timer_lines) >= 1, len(timer_lines))
+    check("no line that reports the timer carries the key (so its output is not suppressed)",
+          all("doppler_service_token" not in l for l in timer_lines))
+
+wf = yaml.safe_load(open(wf_path))
+targets = set()
+for job in (wf.get("jobs") or {}).values():
+    for step in job.get("steps") or []:
+        run = str(step.get("run", ""))
+        if "terraform_data.web_1_host_key_probe" in run:
+            targets |= set(re.findall(r"-target=(terraform_data\.[a-z0-9_]+)", run))
+check("the per-merge SSH apply targets terraform_data.luks_monitor_token_install",
+      "terraform_data.luks_monitor_token_install" in targets, sorted(targets)[:5])
 for v in out:
     print("\t".join(v))
 PY
 while IFS=$'\t' read -r v name detail; do
   [[ -n "${v:-}" ]] || continue
   if [[ "$v" == ok ]]; then ok "$name"; else no "$name${detail:+ ($detail)}"; fi
-done < "$SCRATCH/wf.tsv"
-
-# --- behavioural: the extracted refresh body against a stub ssh -------------------------------------
-if [[ ! -f "$SCRATCH/refresh.sh" ]]; then
-  no "could not extract the refresh body — its behaviour is unverified"
-else
-  bash -n "$SCRATCH/refresh.sh" && ok "the refresh body passes bash -n" || no "the refresh body passes bash -n"
-  [[ -f "$SCRATCH/teardown.sh" ]] && { bash -n "$SCRATCH/teardown.sh" && ok "the teardown body passes bash -n" || no "the teardown body passes bash -n"; }
-  mkdir -p "$SCRATCH/infra"
-  cp "$HELPER" "$SCRATCH/infra/" 2>/dev/null || true
-  cat > "$SCRATCH/bin/sshstub" <<'EOS'
-#!/usr/bin/env bash
-# Records argv AND stdin separately, so the test can prove the token rode stdin and never argv.
-printf '%s\n' "$*" >> "${SSH_CALLS:?}"
-case "$*" in
-  *mktemp*) printf '%s\n' "/var/lib/workspaces-luks/wl-token.XXXX"; exit 0 ;;
-  *"tar xzf"*) cat > /dev/null; exit 0 ;;
-  *luks-monitor-token-refresh.sh*)
-    cat >> "${SSH_STDIN:?}"
-    [[ -n "${FIXTURE_HOST_OUT:-}" ]] && printf '%s\n' "$FIXTURE_HOST_OUT"
-    exit "${FIXTURE_HOST_RC:-0}" ;;
-esac
-printf 'STUB-MISS ssh %s\n' "$*" >&2
-exit 64
-EOS
-  cat > "$SCRATCH/bin/tar" <<'EOS'
-#!/usr/bin/env bash
-printf 'tar %s\n' "$*" >> "${SSH_CALLS:?}"
-exit 0
-EOS
-  chmod +x "$SCRATCH/bin/sshstub" "$SCRATCH/bin/tar"
-
-  drive_refresh() { # drive_refresh <case>; env FIXTURE_HOST_OUT / FIXTURE_HOST_RC / TOKEN_IN
-    local c="$1" rc=0
-    : > "$SCRATCH/$c.argv"; : > "$SCRATCH/$c.stdin"
-    PATH="$SCRATCH/bin:$PATH" SSH_CALLS="$SCRATCH/$c.argv" SSH_STDIN="$SCRATCH/$c.stdin" \
-      WEB_HOST_SSH="$SCRATCH/bin/sshstub" WEB_HOST="10.0.1.10" INFRA_DIR="$SCRATCH/infra" \
-      WORKSPACES_LUKS_BOOT_TOKEN="${TOKEN_IN-$NEW_TOKEN}" \
-      FIXTURE_HOST_OUT="${FIXTURE_HOST_OUT:-}" FIXTURE_HOST_RC="${FIXTURE_HOST_RC:-0}" \
-      bash --noprofile --norc -eo pipefail "$SCRATCH/refresh.sh" > "$SCRATCH/$c.wout" 2>&1 || rc=$?
-    printf '%s\n' "$rc" > "$SCRATCH/$c.wrc"
-  }
-  OK_LINE="[luks-token-refresh] result=ok token_sha256_16=$EXPECTED_SHA16"
-
-  FIXTURE_HOST_OUT="$OK_LINE" drive_refresh w1
-  [[ "$(cat "$SCRATCH/w1.wrc")" == 0 ]] && ok "W1 POSITIVE CONTROL: a host ok verdict with the matching hash is green" || no "W1 positive control is green (rc=$(cat "$SCRATCH/w1.wrc"): $(tail -3 "$SCRATCH/w1.wout" | tr '\n' ' '))"
-  grep -qxF "$NEW_TOKEN" "$SCRATCH/w1.stdin" && ok "W1 the token reached the host on STDIN" || no "W1 the token reached the host on STDIN"
-  grep -qF "$NEW_TOKEN" "$SCRATCH/w1.argv" && no "W1 the token never appears in ssh argv" || ok "W1 the token never appears in ssh argv"
-  grep -qF "$NEW_TOKEN" "$SCRATCH/w1.wout" && no "W1 the token never appears in the job log" || ok "W1 the token never appears in the job log"
-  grep -qE '^tar .*luks-monitor-token-refresh\.sh' "$SCRATCH/w1.argv" && ok "W1 ships the helper from the repo (no inline reimplementation)" || no "W1 ships the helper from the repo"
-  grep -qE 'ConnectTimeout=15' "$SCRATCH/w1.argv" && ok "W1 every ssh is bounded (ConnectTimeout)" || no "W1 every ssh is bounded"
-  grep -q 'STUB-MISS' "$SCRATCH/w1.wout" && no "W1 no ssh call fell outside the modelled set" || ok "W1 no ssh call fell outside the modelled set"
-
-  FIXTURE_HOST_OUT="[luks-token-refresh] result=ok token_sha256_16=0000000000000000" drive_refresh w2
-  [[ "$(cat "$SCRATCH/w2.wrc")" != 0 ]] && ok "W2 an ok verdict for a DIFFERENT token is red (the host holds the wrong value)" || no "W2 a hash mismatch is red"
-
-  FIXTURE_HOST_OUT="[luks-token-refresh] result=fail reason=unit_start_failed" FIXTURE_HOST_RC=1 drive_refresh w3
-  [[ "$(cat "$SCRATCH/w3.wrc")" != 0 ]] && ok "W3 a host failure is red" || no "W3 a host failure is red"
-  grep -q 'unit_start_failed' "$SCRATCH/w3.wout" && ok "W3 the host's reason reaches the job log" || no "W3 the host's reason reaches the job log"
-
-  FIXTURE_HOST_OUT="" FIXTURE_HOST_RC=0 drive_refresh w4
-  [[ "$(cat "$SCRATCH/w4.wrc")" != 0 ]] && ok "W4 rc 0 with NO verdict line is red (never read silence as success)" || no "W4 a silent rc 0 is red"
-
-  # W6 — a matching ok line but a non-zero exit (e.g. the transport dropped after the helper printed).
-  # Unconfirmed is red; a re-dispatch is idempotent, a false green is not recoverable by anyone.
-  FIXTURE_HOST_OUT="$OK_LINE" FIXTURE_HOST_RC=255 drive_refresh w6
-  [[ "$(cat "$SCRATCH/w6.wrc")" != 0 ]] && ok "W6 an ok line under a non-zero exit is red (unconfirmed, re-dispatch)" || no "W6 an ok line under a non-zero exit is red"
-
-  TOKEN_IN="" FIXTURE_HOST_OUT="$OK_LINE" drive_refresh w5
-  [[ "$(cat "$SCRATCH/w5.wrc")" != 0 ]] && ok "W5 an unpublished boot-token secret is refused before any ssh" || no "W5 an empty secret is refused"
-  [[ ! -s "$SCRATCH/w5.argv" ]] && ok "W5 no ssh was attempted without a token" || no "W5 no ssh was attempted without a token"
-fi
+done < "$SCRATCH/tf.tsv"
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
-# Anti-vacuity floor. Green is 72 assertions; the threshold sits on the line above its `if`.
-MIN_ASSERTIONS=72
+# Anti-vacuity floor. The threshold sits on the line directly above its `if`.
+MIN_ASSERTIONS=62
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1
