@@ -1,7 +1,7 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=6
-# generated-from-run=35911999612
-# generated-at=2026-09-23T22:25:51Z
+# generated-from-run=35945250103
+# generated-at=2026-09-24T07:29:26Z
 # generator=regenerate-shard-manifest.py v2
 # regen: python3 scripts/regenerate-shard-manifest.py --run <id> --write
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -23,7 +23,7 @@
 .claude/hooks/hook-input-contract.test.sh	5
 .claude/hooks/hook-tool-kind.test.sh	6
 .claude/hooks/hookeventname-coverage.test.sh	6
-.claude/hooks/iac-plan-write-guard.test.sh	5
+.claude/hooks/iac-plan-write-guard.test.sh	3
 .claude/hooks/incident-sandbox-coverage.test.sh	1
 .claude/hooks/incidents.test.sh	6
 .claude/hooks/kb-domain-allowlist-guard.test.sh	5
@@ -48,7 +48,7 @@
 .claude/hooks/session-rules-loader-headless.test.sh	6
 .claude/hooks/session-rules-loader.test.sh	3
 .claude/hooks/settings-hook-exec-bit.test.sh	1
-.claude/hooks/ship-net-issue-flow-gate.test.sh	1
+.claude/hooks/ship-net-issue-flow-gate.test.sh	2
 .claude/hooks/ship-operator-step-gate.test.sh	2
 .claude/hooks/ship-runbook-ssh-gate.test.sh	5
 .claude/hooks/ship-soak-followthrough-gate.test.sh	2
@@ -122,7 +122,7 @@ plugins/soleur/skills/review/test/emit-review-trailer.test.sh	3
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2
 plugins/soleur/test/_base-notice-frontmatter.test.sh	6
-plugins/soleur/test/admin-merge-ready-wiring.test.sh	5
+plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	5
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	5
@@ -166,7 +166,7 @@ plugins/soleur/test/harvest-debt.test.sh	2
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	1
 plugins/soleur/test/hook-git-env-coverage.test.sh	6
 plugins/soleur/test/hook-git-env-receipt.test.sh	6
-plugins/soleur/test/hook-input-classification-mutation.test.sh	6
+plugins/soleur/test/hook-input-classification-mutation.test.sh	1
 plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh	1
 plugins/soleur/test/infra-validation-detect.test.sh	1
 plugins/soleur/test/issue-flow-measure.test.sh	5
@@ -183,25 +183,26 @@ plugins/soleur/test/lint-squash-ci-directives.test.sh	3
 plugins/soleur/test/machinery-drain-floor.test.sh	1
 plugins/soleur/test/main-health-monitor-workflow.test.sh	4
 plugins/soleur/test/monitor-pr-checks.test.sh	6
-plugins/soleur/test/net-issue-flow.test.sh	4
+plugins/soleur/test/net-issue-flow.test.sh	6
 plugins/soleur/test/notice-frontmatter.test.sh	6
 plugins/soleur/test/operator-digest-provision.test.sh	4
 plugins/soleur/test/operator-digest-skill.test.sh	6
 plugins/soleur/test/operator-digest-workflow.test.sh	1
-plugins/soleur/test/operator-script.test.sh	5
+plugins/soleur/test/operator-script.test.sh	1
 plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	5
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	6
-plugins/soleur/test/pr-fanout-ledger.test.sh	3
+plugins/soleur/test/pr-fanout-ledger.test.sh	1
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	5
 plugins/soleur/test/proc.test.sh	2
 plugins/soleur/test/ralph-loop.test.sh	2
 plugins/soleur/test/redact-class-parity.test.sh	6
 plugins/soleur/test/regenerate-shard-manifest.test.sh	4
 plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh	2
+plugins/soleur/test/render-c4-model.test.sh	1
 plugins/soleur/test/required-checks-canonical-parity.test.sh	4
 plugins/soleur/test/resolve-debt.test.sh	6
 plugins/soleur/test/resolve-git-root.test.sh	4
-plugins/soleur/test/resolve-target-decision.test.sh	3
+plugins/soleur/test/resolve-target-decision.test.sh	1
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	2
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	6
 plugins/soleur/test/reusable-release-idempotency.test.sh	1
@@ -232,7 +233,7 @@ plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh	4
 plugins/soleur/test/worktree-manager-bare-sync.test.sh	1
 plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh	2
 plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh	4
-plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh	5
+plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh	1
 plugins/soleur/test/worktree-manager-hook-deps.test.sh	2
 plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	4
 plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	3
@@ -243,6 +244,7 @@ scripts/actions-queue-health	6
 scripts/actions-queue-tail-8450	5
 scripts/alarm-issue-filing-guard	4
 scripts/anthropic-admin-key-6297	4
+scripts/anthropic-double-bill-8611	6
 scripts/assert-dependabot-drain-live	3
 scripts/assert-dependabot-drain-unit	2
 scripts/battery-ref-guard	4
@@ -253,7 +255,7 @@ scripts/board/set-board-status	1
 scripts/bwrap-probe-selfreport-8016	6
 scripts/capture-web-1-host-key	1
 scripts/cf-tunnel-liveness-gate-mutations	4
-scripts/check-cloudflare-token-drift	2
+scripts/check-cloudflare-token-drift	6
 scripts/check-pa-22-live	1
 scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	5
@@ -293,6 +295,7 @@ scripts/guard-vacuity-floor	4
 scripts/hostname-mislabel-web1-6616	6
 scripts/infra-config-activation-7220	2
 scripts/infra-config-red-alert	6
+scripts/infra-credentials-loader	6
 scripts/inngest-cutover-flip-rollout-7761	1
 scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
@@ -338,7 +341,7 @@ scripts/lint-legal-scope-block-placement-live	3
 scripts/lint-legal-scope-block-placement-unit	1
 scripts/lint-migrated-rule-ids-live	5
 scripts/lint-migrated-rule-ids-unit	4
-scripts/lint-orphan-test-suites	4
+scripts/lint-orphan-test-suites	1
 scripts/lint-orphan-test-suites-mutations	5
 scripts/lint-rule-bodies-live	5
 scripts/lint-rule-ids-live	6
@@ -367,12 +370,12 @@ scripts/marketplace-manifest-validate	1
 scripts/md-to-mrkdwn	3
 scripts/measure-plan-sharp-edges-turns	3
 scripts/no-dangling-committed-symlinks	5
-scripts/orphan-process-reaper	5
+scripts/orphan-process-reaper	1
 scripts/orphan-process-reaper-mutations	4
 scripts/plugin-delivery-canary	1
 scripts/plugin-legacy-resolver-probe	3
 scripts/probe-legal-corpus-truth-live	1
-scripts/prod-version-drift-check	4
+scripts/prod-version-drift-check	6
 scripts/raise-tmp-tmpfs-ceiling	6
 scripts/registry-luks-live-8386	5
 scripts/rename-guard	6
@@ -396,9 +399,10 @@ scripts/tenant-dpa-register-guard-unit	1
 scripts/test-all-affected	3
 scripts/test-all-capacity-signal	5
 scripts/test-all-enumerate-toolchain	4
-scripts/test-all-infra-coverage-notice	3
+scripts/test-all-group-affected	6
+scripts/test-all-infra-coverage-notice	2
 scripts/test-all-killed-classification	1
-scripts/test-all-runtime-ceiling	1
+scripts/test-all-runtime-ceiling	6
 scripts/test-all-webplat-gate	4
 scripts/test-contention	6
 scripts/tmpfs-guard	2
@@ -409,12 +413,13 @@ scripts/watch-live-verify-pass	5
 scripts/zot-fill-rate-7341	6
 scripts/zot-last-err-redact-7500	5
 scripts/zot-mirror-diagnosis	2
-scripts/zot-restart-loop-alarm	5
+scripts/zot-restart-loop-alarm	2
 scripts/zot-restart-loop-alarm-scrub	6
 scripts/zot-soak-6122-arms	1
 tests/commands/sync-domain-model	3
 tests/commands/sync-producer-reachability	5
 tests/commands/sync-rule-prune	4
+tests/hooks/drop-sentinel-parity	6
 tests/hooks/emissions	1
 tests/hooks/incidents	1
 tests/scripts/audit-bot-codeql-coverage	4
@@ -429,18 +434,19 @@ tests/scripts/destroy-guard-counter-sentry	5
 tests/scripts/destroy-guard-counter-web-platform	5
 tests/scripts/destroy-guard-regex-parity	2
 tests/scripts/destroy-guard-sentry-scope-guard	2
-tests/scripts/dev-suite-mutex	5
+tests/scripts/dev-suite-mutex	2
 tests/scripts/dev-suite-mutex-wiring	2
 tests/scripts/dispatch-web-redeploy	3
 tests/scripts/eu-location-allowset-parity	1
-tests/scripts/git-data-birth-readiness-gate	3
+tests/scripts/git-data-birth-readiness-gate	6
 tests/scripts/git-data-boot-signal-poll	6
-tests/scripts/git-data-host-birth-gate	5
+tests/scripts/git-data-host-birth-gate	3
 tests/scripts/git-data-host-replace-gate	4
-tests/scripts/git-data-root-key-arm	5
-tests/scripts/git-data-root-token-census	3
+tests/scripts/git-data-root-key-arm	2
+tests/scripts/git-data-root-token-census	6
 tests/scripts/git-data-rung2-evidence-capture	6
 tests/scripts/host-image-coherence-preflight	5
+tests/scripts/infra-privileged-tier-census	2
 tests/scripts/inngest-host-dark-gate	3
 tests/scripts/inngest-host-replace-gate	2
 tests/scripts/inngest-host-shape-gate	3
@@ -449,7 +455,7 @@ tests/scripts/kb-drift-walker	4
 tests/scripts/lint-rule-bodies	6
 tests/scripts/lint-rule-ids	1
 tests/scripts/no-tofu-ssh	2
-tests/scripts/no-tofu-ssh-mutation	5
+tests/scripts/no-tofu-ssh-mutation	4
 tests/scripts/plan-gate-preamble	4
 tests/scripts/preapply-entrypoint-gate	1
 tests/scripts/registry-d10-workflow-wiring	4
@@ -467,7 +473,7 @@ tests/scripts/rule-metrics-aggregate	6
 tests/scripts/sentry-ac17-derived-counts	1
 tests/scripts/sentry-alert-adoption-guards	2
 tests/scripts/sentry-alert-drift-workflow	3
-tests/scripts/sentry-alert-live-fidelity	5
+tests/scripts/sentry-alert-live-fidelity	2
 tests/scripts/sentry-alert-reference-gate	4
 tests/scripts/sentry-create-gate	1
 tests/scripts/sentry-destroy-counts	2
