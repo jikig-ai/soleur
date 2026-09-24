@@ -8,12 +8,20 @@
 
 ## Status
 
-**Adopting.** The IaC foundations (Phase 1), dual-push (Phase 2), and the dark-launch pull-site
-flip (Phase 3) are merged. The flip is inert until the operator provisions (1.8) + backfills
-(1.9) zot and the entry gate (`zot-entry-gate.sh`) passes. This ADR flips to **accepted** after
-the Phase-5 soak (`zot-soak-6122.sh`: ≥7 days, zero fallback events across all four watched
-signals, sufficient zot sample — necessary but not sufficient; see the alarm-parity note below)
-and GHCR-push retirement (5.3–5.5).
+**Adopting — cut over, not yet accepted** (as of 2026-09-24). zot has served production pulls since
+**2026-07-17T19:51:49Z** and has been the **sole** pull path since about 2026-07-29, when the GHCR
+read PAT was revoked outside any repo change (amendments 2026-07-30 and 2026-09-22; cutover record
+in `runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). That holds for **rolling
+deploys**. A **fresh web boot currently fails**: the web-2 replace on 2026-09-23 booted dark at
+`stage=pull` (#8651; fix in flight as PR #8660), so `stage:"app_zot"` still has 0 events. Do not
+replace a web host until #8651 closes. Retirement is partial. **5.3a** (the `ci-deploy.sh` GHCR
+read path) was delivered on 2026-09-23 by #8036 item 1c; see "Amendment 2026-09-23 (#8036 item 1c)"
+under §Cold-boot-dependency statement. **5.3b, 5.4 and 5.6** wait on the #6122 soak, which cannot pass until
+#8651 closes (its `WEB_BLOCKER` arm) and needs a re-armed window (the backfilled verdict is a
+recorded FAIL; #6500 is open). 5.3b's "stop GHCR push" also collides with ADR-169, whose restore
+gate reads GHCR (see #6122). **5.5**'s revoke half is partly spent: the PAT in `GHCR_READ_TOKEN`
+returns 401 (amendment 2026-07-30), but whether that is the PAT spec TR5 calls exposed is
+unverified. This ADR flips to **accepted** (task 5.6) once 5.3b, 5.4 and 5.5 are complete.
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
@@ -264,6 +272,10 @@ host. Read the amendment before relying on any bullet below:
   `templatefile`, so `ZOT_HEARTBEAT_URL` still has zero consumers by design; that secret is reserved
   for the off-host probe.
 
+  > **Superseded 2026-09-24:** `registry_prd` is armed. Better Stack reads `status=up paused=false`
+  > (re-measured 2026-09-24); `zot-registry.tf`'s comment dates the arming to 2026-07-16. The paragraph
+  > below is the pre-arming record and stays as written.
+
   **NOT YET ARMED as of this edit.** The feeder reaches the host only on a fresh boot (cloud-init is
   per-instance), so `registry_prd` stays **paused** until #6537's post-merge phase reprovisions the
   host, measures a real beat, and *then* unpauses via a one-time API PATCH — never before (#6210).
@@ -390,6 +402,10 @@ host. Read the amendment before relying on any bullet below:
     soak — label + directive + a pinned `START` — is a precondition of Phase 5 that 5.3 must not
     proceed without.** Until then the gate's verdict is not merely insufficient; it is absent.
 
+    > **Superseded 2026-09-23 (#8036 item 1c):** 5.3 split. 5.3a went ahead with the soak NOT
+    > enrolled, on the narrower "no reachable success arm" ground in "Amendment 2026-09-23 (#8036 item
+    > 1c)" below. The precondition above now applies to 5.3b only.
+
     ⚠ **The `ci-deploy.sh:NNN` citations in the paragraph below have ROTTED (marked 2026-07-30,
     #7071) — do not follow them.** Spot-checked: `:790/799/807`, `:857` and `:707,776-777` now
     land on unrelated text. The real emit sites are name-anchored, which is what this ADR itself
@@ -429,7 +445,8 @@ host. Read the amendment before relying on any bullet below:
     **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
     clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR
     fallback, then hard-fail signature verify. During soak `ZOT_ACTIVE=0`, so both are latent and the
-    pre-flip zot-entry-gate/soak-gate catch them; the mirror step's cosign-failure path emits a
+    pre-flip zot-entry-gate/soak-gate catch them (**superseded:** the cutover set `ZOT_ACTIVE=1` on
+    2026-07-17, so both shapes are live, not latent); the mirror step's cosign-failure path emits a
     re-sign-specific remediation (a bare `crane copy` backfill does not re-sign).
 
     > **Amendment 2026-09-23 (#8036 item 1c): 5.3 SPLITS INTO 5.3a AND 5.3b, AND 5.3a IS DONE.**
@@ -543,7 +560,9 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
 
 The registry host's boot credential is scoped to a **dedicated Doppler project `soleur-registry`**
 whose own `prd` root config holds ONLY `ZOT_PULL_TOKEN` + `ZOT_PUSH_TOKEN` — **not** a `prd` branch
-config. The original design placed the host token in a `prd_registry` **branch config under the
+config. (**Superseded:** #6244 and #6895 later admitted `BETTERSTACK_LOGS_TOKEN` and
+`REGISTRY_LUKS_KEY` by name. Re-measured 2026-09-24, the config holds exactly those 4, matching the
+boot self-check in `cloud-init-registry.yml`.) The original design placed the host token in a `prd_registry` **branch config under the
 `prd` environment** and claimed it isolated the host. That claim was **structurally impossible**:
 in Doppler, every config within an environment resolves that environment's ROOT config as its base,
 so a token scoped to a `prd` branch config reads the full `prd` secret set — empirically verified to
