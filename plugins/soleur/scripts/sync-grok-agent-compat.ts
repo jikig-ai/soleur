@@ -54,8 +54,25 @@ function yamlQuote(value: string): string {
   return `"${escaped}"`;
 }
 
-function compatStubMarkdown(entry: ReturnType<typeof discoverAgentEntries>[number]): string {
-  const description = entry.description || entry.name;
+/**
+ * Render registry agent ids in a stub description as Grok spawn keys (ADR-226 amendment
+ * 2026-09-24, #8317). Agent descriptions name siblings by canonical registry id, and a stub is
+ * adapter output, so the harness form is the adapter's to render: Grok spawns by filename stem.
+ * Keyed on the registry's own id set, never on the text's shape, so a skill id (`soleur:plan`,
+ * which Grok resolves through the skill preamble) is never rendered as a nonexistent agent stem.
+ * `agents.manifest.json` keeps the canonical ids.
+ */
+function renderAgentIdsForGrok(text: string, agentIds: ReadonlySet<string>): string {
+  return text.replace(/soleur:[a-z0-9-]+(?::[a-z0-9-]+)+/g, (id) =>
+    agentIds.has(id) ? agentIdToGrokSubagentType(id) : id,
+  );
+}
+
+function compatStubMarkdown(
+  entry: ReturnType<typeof discoverAgentEntries>[number],
+  agentIds: ReadonlySet<string>,
+): string {
+  const description = renderAgentIdsForGrok(entry.description || entry.name, agentIds);
   // Frontmatter name MUST match the Grok spawn key (filename stem = colons→hyphens).
   // Using colon-form here lists `soleur:product:cpo` in available types while
   // spawn only accepts `soleur-product-cpo` (Grok ≤0.2.102 filename-stem match).
@@ -73,8 +90,10 @@ function compatStubMarkdown(entry: ReturnType<typeof discoverAgentEntries>[numbe
 
 function expectedCompatFiles(): Map<string, string> {
   const files = new Map<string, string>();
-  for (const entry of discoverAgentEntries()) {
-    files.set(agentIdToCompatFilename(entry.id), compatStubMarkdown(entry));
+  const entries = discoverAgentEntries();
+  const agentIds = new Set(entries.map((e) => e.id));
+  for (const entry of entries) {
+    files.set(agentIdToCompatFilename(entry.id), compatStubMarkdown(entry, agentIds));
   }
   return files;
 }

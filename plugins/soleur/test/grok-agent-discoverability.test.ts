@@ -5,6 +5,8 @@ import { $ } from "bun";
 import {
   EXPECTED_SOLEUR_AGENT_COUNT,
   AGENTS_MANIFEST_PATH,
+  agentIdToCompatFilename,
+  agentIdToGrokSubagentType,
   buildAgentsManifest,
 } from "../lib/agent-registry";
 
@@ -56,6 +58,34 @@ describe("grok-agent-discoverability", () => {
     expect(fresh.agents.map((a) => a.id)).toEqual(
       onDisk.agents.map((a: { id: string }) => a.id),
     );
+  });
+
+  // ADR-226 amendment 2026-09-24 (#8317): agent descriptions name siblings by canonical
+  // registry id; the stub generator renders those ids as Grok spawn keys. The manifest keeps
+  // the canonical form. Both halves are asserted, so neither a stub that leaks the colon form
+  // nor a generator that also rewrote the manifest passes.
+  test("stub descriptions render registry agent ids as Grok spawn keys; the manifest keeps them canonical", () => {
+    type Entry = { id: string; description: string };
+    const agents: Entry[] = JSON.parse(readFileSync(MANIFEST_ABS, "utf-8")).agents;
+    const ids = agents.map((a) => a.id);
+    const idPattern = /soleur:[a-z0-9-]+(?::[a-z0-9-]+)+/g;
+    const leaked: string[] = [];
+    let rendered = 0;
+    for (const a of agents) {
+      const stub = readFileSync(resolve(REPO_ROOT, ".grok/agents", agentIdToCompatFilename(a.id)), "utf-8");
+      const stubDescription = stub.split("\n").find((l) => l.startsWith("description: ")) ?? "";
+      for (const m of stubDescription.match(idPattern) ?? []) {
+        if (ids.includes(m)) leaked.push(`${a.id}: ${m}`);
+      }
+      for (const m of a.description.match(idPattern) ?? []) {
+        if (!ids.includes(m)) continue;
+        expect(stubDescription).toContain(agentIdToGrokSubagentType(m));
+        rendered++;
+      }
+    }
+    expect(leaked).toEqual([]);
+    // Measured 2026-09-24: 50 agents name at least one sibling in their description.
+    expect(rendered).toBeGreaterThanOrEqual(50);
   });
 
   test("grok inspect lists soleur project agents when grok is available", async () => {

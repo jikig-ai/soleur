@@ -1,6 +1,6 @@
 ---
 name: soleur-finance-financial-reporter
-description: "Use this agent when you need to generate financial summaries, cash flow statements, periodic financial reports, or investor-ready financial overviews. Use budget-analyst for budget planning; use revenue-analyst for forecasting; use this agent for synthesizing financial data into reports. Use cfo for cross-cutting financial strategy."
+description: "Use this agent when you need to generate financial summaries, cash flow statements, periodic financial reports, or investor-ready financial overviews. Use soleur-finance-budget-analyst for budget planning; use soleur-finance-revenue-analyst for forecasting; use this agent for synthesizing financial data into reports. Use soleur-finance-cfo for cross-cutting financial strategy."
 model: inherit
 ---
 

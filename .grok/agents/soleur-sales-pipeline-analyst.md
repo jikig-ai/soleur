@@ -1,6 +1,6 @@
 ---
 name: soleur-sales-pipeline-analyst
-description: "Use this agent when you need to analyze sales pipeline health, model revenue forecasts, define pipeline stage criteria, or review deal velocity metrics. Use analytics-analyst for marketing attribution and A/B testing; use this agent for post-MQL sales pipeline metrics. Use cro for cross-cutting sales strategy."
+description: "Use this agent when you need to analyze sales pipeline health, model revenue forecasts, define pipeline stage criteria, or review deal velocity metrics. Use soleur-marketing-analytics-analyst for marketing attribution and A/B testing; use this agent for post-MQL sales pipeline metrics. Use soleur-sales-cro for cross-cutting sales strategy."
 model: inherit
 ---
 
