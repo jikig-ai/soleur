@@ -46,8 +46,9 @@ until R1 closes.** Assessed at
 ## Consumer inventory
 
 Derived from the workflow files themselves, job by job, not from prose. **Classification rule**
-(plan Phase 1 item 2): a job that runs `terraform plan|apply|import` against a root whose variables
-include a Tier-B variable is **Tier B**; a job that only reads Hetzner is **Tier A** and uses
+(plan Phase 1 item 2): a job that runs `terraform plan|apply|import|destroy` against a root whose
+variables include a Tier-B variable is **Tier B** (the census classifies `destroy` with `apply`: both
+write the state object and need the same credentials); a job that only reads Hetzner is **Tier A** and uses
 `HCLOUD_TOKEN_READONLY`; a job that mints a GitHub App token for writes is **Tier B**.
 
 Scope of the sweep: every job in `.github/workflows/` referencing `secrets.DOPPLER_TOKEN`,
@@ -87,6 +88,7 @@ reads Doppler" is the wrong discriminator and the inventory has to show that it 
 | `apply-github-infra.yml::apply` | push, workflow_dispatch | (none) | `DOPPLER_TOKEN` tf-var, R2 state `AWS_*`, inline App-key mint (`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`) | **write** | **B** — apply plus an App key |
 | `apply-git-data-root-key.yml::apply` | workflow_dispatch | **`web-platform-infra-apply`** | `DOPPLER_TOKEN`, tf-var, `HCLOUD_TOKEN`, `api.hetzner.cloud`, R2 state `AWS_*` | **write** | **B** — apply of the root-key root |
 | `git-data-rung2-rehearsal.yml::rehearse` | workflow_dispatch | **`web-platform-infra-apply`** | `DOPPLER_TOKEN` tf-var, `HCLOUD_TOKEN`, `api.hetzner.cloud`, R2 state `AWS_*` | **write** | **B** — applies the rehearsal root |
+| `git-data-rung2-rehearsal.yml::teardown` | workflow_dispatch (`needs: rehearse`, `if: always()`) | **`infra-privileged`** | `DOPPLER_TOKEN` tf-var, `HCLOUD_TOKEN`, `api.hetzner.cloud`, R2 state `AWS_*` | **write** — `terraform destroy` of the rehearsal root | **B** — destroys against the privileged state bucket; no reviewer, so teardown never waits on a second approval |
 | `apply-sentry-infra.yml::plan_pr` | **pull_request** | (none) | `DOPPLER_TOKEN` → `prd_terraform`, R2 state `AWS_*` | **read** — plan only | **A work on Tier-B credentials.** PR-reachable, so it must not hold a Tier-B secret: it takes the same split as `infra-validation::plan` — `-refresh=false`, placeholders, `github.token` |
 | `apply-sentry-infra.yml::apply` | push, merge_group, workflow_dispatch | (none) | `DOPPLER_TOKEN` → `prd_terraform`, R2 state `AWS_*` | **write** | **B** — production apply |
 

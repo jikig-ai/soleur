@@ -105,7 +105,7 @@ Live standing alarms over this source:
     `anthropic-key-invalid`). The marker path is broken (the emitter, Vector, or the field moved
     again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
     credit probe's Sentry monitor.
-- **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
+- **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
   reporter goes dark. Checker: `scripts/zot-restart-loop-alarm.sh` (shared parse helper
@@ -515,6 +515,24 @@ The manual trigger is agent-invocable on every harness: Claude Code `Skill
 tool soleur:trigger-cron`, Grok `/trigger-cron`, Devin `/soleur:trigger-cron`,
 Codex `$soleur:trigger-cron`; the event is derived from `EXPECTED_CRON_FUNCTIONS`
 in `cron-manifest.ts`, not a second list.
+
+### `SOLEUR_WATCHDOG_DISPATCH` — the watchdog dispatch clock (#8495, ADR-248)
+
+Emitted by `server/watchdog-dispatch-clock.ts` through `emitWatchdogDispatch`
+(`server/cron-liveness-marker.ts`, `component: "cron-liveness"`) at pino **WARN**, once at
+boot (`outcome` `armed`/`disarmed`) and once per tick (`dispatched`, `skipped_slot_has_run`,
+`failed`, `tick_escaped`). Fields: `host_id`, `workflow`, `slot` (ISO slot start), `outcome`,
+and on a failure `op` (`mint`/`dedup-read`/`dispatch`), `reason` (`timeout`/`http`/`throw`),
+`status`; a skip carries `run_id` + `run_event` of the run that already covered the slot.
+Expect about five tick rows an hour per web host (`host_name` is Vector's, outside the marker).
+`tick_escaped` must never appear. The
+canary container's rows are not shipped (Vector matches the prod container name exactly).
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH \
+  | jq -R -r 'fromjson? | .raw | fromjson? | .host_name as $h | .message | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true) | [$h, .host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
+```
 
 ### `SOLEUR_RUN_REPORT_SWEEP` — the 12:00Z run-report arm changed state
 

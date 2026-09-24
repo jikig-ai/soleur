@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Mutation battery for Guard 1 (#7462) — the zot-primary bootstrap pull arm.
+# Mutation battery for Guard 1 (#7462) — the zot-only bootstrap pull arm — and Guard 4 (#8036
+# item 1d) — a zot miss is terminal and loud (executed against the rendered item by the guard).
 #
 # WHY THIS FILE EXISTS. `cloud-init-inngest-bootstrap.test.sh` asserts that the arm is shaped
 # correctly. It cannot tell you whether those assertions can FAIL. Reading a guard is not
@@ -209,28 +210,44 @@ case_mutate() {
     grep -E '^  FAIL' "$log" | head -5 | sed 's/^/               /'
     return
   fi
+  # A G4 row is scored against an EXECUTED harness, so "the named G4 assertion failed" is also
+  # what an unrelated crash looks like: a mutant that stops the rendered item parsing, or kills a
+  # stub, fails every G4 row at once — including the one this row names — without the guard having
+  # detected anything about the property. So a G4 verdict additionally requires that the guard
+  # finished normally (rc 1 = assertion failures, not a crash or parse error) AND that the
+  # harness-liveness rows still PASSED in the mutant run. Otherwise the row is UNRESOLVED, which
+  # fails it: an unexplained RED is not evidence the guard pins the property.
+  if [[ "$expect" == "G4 "* ]]; then
+    local _live _dead=""
+    [[ "$rc" == "1" ]] || _dead="guard rc=$rc (expected 1: assertion failures, not a crash)"
+    for _live in "G4 harness: the stubs are live" "G4 hit: exits 0"; do
+      grep -qF "  PASS: $_live" "$log" || _dead="${_dead:+$_dead; }liveness row did not PASS: $_live"
+    done
+    if [[ -n "$_dead" ]]; then
+      FAIL=$((FAIL + 1))
+      echo "  UNRESOLVED: $id — RED, but the harness was not live, so the RED proves nothing."
+      echo "             $_dead"
+      return
+    fi
+  fi
   PASS=$((PASS + 1))
   echo "  KILLED:   $id — RED on \"$expect\""
 }
 
 # ---------------------------------------------------------------------------------------
-# Matrix row 1 — reorder so the GHCR ref is attempted first.
-# Relocates the pre-oci-pull emit ABOVE the resolution region, so the effective (GHCR-seeded)
-# pull no longer follows a completed resolution.
+# Matrix row 1 — the pre-zot-pull bracket moves AFTER the pull it brackets.
+# `pre-zot-pull` with no outcome marker is how a HUNG pull self-reports; emitted after the pull,
+# a hang reports nothing at all. (#8036 1d: re-anchored from the retired pre-oci-pull bracket.)
 # ---------------------------------------------------------------------------------------
-case_mutate row1-ghcr-attempted-first \
-  "Row1: the zot leg is attempted BEFORE pre-oci-pull" \
+case_mutate row1-pre-zot-pull-after-pull \
+  "Row1: pre-zot-pull is emitted BEFORE the zot pull it brackets" \
   "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-import re as _re
-m=_re.search(r"^    /usr/local/bin/inngest-boot-phone-home\.sh pre-oci-pull .*\n", s, _re.M)
-assert m, "pre-oci-pull emit not found"
-emit=m.group(0)
-anchor="    ZOT_LEG=unconfigured\n"
-assert anchor in s, "ZOT_LEG anchor not found"
-s=s[:m.start()]+s[m.end():]
-s=s.replace(anchor,emit+anchor,1)
+emit="      /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull \"$ZIREF\"\n"
+pull="        timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1\n"
+assert s.count(emit)==1 and s.count(pull)==1, "pre-zot-pull / pull anchors not found exactly once"
+s=s.replace(emit,"",1).replace(pull,pull+emit,1)
 open(p,"w").write(s)
 '
 
@@ -249,18 +266,18 @@ open(p,"w").write(s)
 '
 
 # ---------------------------------------------------------------------------------------
-# Matrix row 3 — silence the inngest_ghcr_fallback emit on the flip.
-# This is the mutation that matters most operationally: it leaves a WORKING boot (GHCR still
-# serves) whose zot miss is invisible, which is the "silently degraded to break-glass" state
-# ADR-096 Phase 5 must not retire GHCR on top of.
+# Matrix row 3 — silence the Better Stack half of the terminal-miss signal.
+# The phone-home is the independently-credentialed second channel: when Sentry delivery itself
+# fails (DSN, egress), it is the only place a dark sole-scheduler boot says why.
 # ---------------------------------------------------------------------------------------
-case_mutate row3-fallback-emit-silenced \
-  "Row3: the zot->GHCR flip emits inngest_ghcr_fallback" \
+case_mutate row3-miss-phone-home-silenced \
+  "Row3: a zot MISS phone-homes inngest_pull_fatal" \
   "$SRC" '
-import re,sys
+import sys
 p=sys.argv[1]; s=open(p).read()
-out=[l for l in s.split("\n") if "inngest-boot-phone-home.sh inngest_ghcr_fallback" not in l]
-assert len(out)<len(s.split("\n")), "fallback emit line not found"
+lines=s.split("\n")
+out=[l for l in lines if "inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss" not in l]
+assert len(out)==len(lines)-1, "miss-arm phone-home line not found exactly once"
 open(p,"w").write("\n".join(out))
 '
 
@@ -282,17 +299,31 @@ open(p,"w").write(s.replace(old,new,1))
 '
 
 # ---------------------------------------------------------------------------------------
-# Matrix row 5 — remove the both-legs-failed marker.
+# Matrix row 5 (#8036 1d Guard 1 row 4) — the GHCR fallback comes back as a pull of the PIN
+# CARRIER inside the miss arm, BEFORE `IREF="$ZIREF"` could ever run. The carrier is data for the
+# bump bot and the AC6 drift guard; pulling it is the retired leg.
 # ---------------------------------------------------------------------------------------
-case_mutate row5-all-legs-marker-removed \
-  "Row5: a distinct all-legs-failed stage exists" \
+case_mutate row5-pin-carrier-pulled-on-miss \
+  "Row1: exactly ONE docker pull code line" \
   "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-lines=s.split("\n")
-out=[l for l in lines if "inngest-boot-phone-home.sh oci-pull-ALL-LEGS-FAILED" not in l]
-assert len(out)<len(lines), "all-legs-failed emit line not found"
-open(p,"w").write("\n".join(out))
+a="        /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss"
+assert s.count(a)==1, "miss-arm phone-home anchor not found exactly once"
+s=s.replace(a,"        docker pull \"$IREF\" || true\n"+a,1)
+open(p,"w").write(s)
+'
+
+# Matrix row 5b (#8036 1d Guard 1 row 1) — a `docker login ghcr.io` item is restored.
+case_mutate row5b-ghcr-login-restored \
+  "Row5 residual-zero: no code line logs in to ghcr.io" \
+  "$SRC" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+a="  - /usr/local/bin/soleur-inngest-nic-wait ${inngest_private_ip} || true\n"
+assert s.count(a)==1, "NIC-wait call anchor not found exactly once"
+s=s.replace(a,"  - printf %s \"$T\" | docker login ghcr.io -u \"$U\" --password-stdin || true\n"+a,1)
+open(p,"w").write(s)
 '
 
 # ---------------------------------------------------------------------------------------
@@ -372,7 +403,7 @@ open(p,"w").write(s.replace(old,"",1))
 # MISROUTED, not killed.
 # =======================================================================================
 G1_ZOT='        soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true\n'
-G1_FB='        soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true\n'
+G1_FB='        soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true\n'
 g1_replace() { # g1_replace <id> <expect> <old> <new> [target]
   case_mutate "$1" "$2" "${5:-$SRC}" "
 import sys
@@ -384,19 +415,19 @@ open(p,'w').write(s.replace(old,new,1))
 }
 g1_replace g1-row1-served-emit-deleted "G1b: the served arm emits inngest_zot exactly once" \
   "'''$G1_ZOT'''" "''"
-g1_replace g1-row2-missed-emit-deleted "G1b: the missed arm emits inngest_ghcr_fallback exactly once" \
+g1_replace g1-row2-missed-emit-deleted "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once" \
   "'''$G1_FB'''" "''"
 g1_replace g1-row3a-served-not-guarded "G1b: the served arm emits inngest_zot exactly once" \
   "'''$G1_ZOT'''" "'''        soleur-boot-emit inngest_zot info \"ep=\$ZOT_EP\"\n'''"
-g1_replace g1-row3b-missed-not-guarded "G1b: the missed arm emits inngest_ghcr_fallback exactly once" \
-  "'''$G1_FB'''" "'''        soleur-boot-emit inngest_ghcr_fallback warning \"rc=\$zot_rc\"\n'''"
+g1_replace g1-row3b-missed-not-guarded "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once" \
+  "'''$G1_FB'''" "'''        soleur-boot-emit inngest_pull_fatal fatal \"rc=\$zot_rc\"\n'''"
 # Row 4: relocate the served call into the missed arm — both calls then sit in one arm, which a
 # file-level count cannot see.
 case_mutate g1-row4-served-call-in-missed-arm "G1b: the served arm emits inngest_zot exactly once" "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
 zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
-fb="        soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n"
+fb="        soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
 assert s.count(zot)==1 and s.count(fb)==1, "call sites not found"
 s=s.replace(zot,"",1).replace(fb,fb+zot,1)
 open(p,"w").write(s)
@@ -417,18 +448,18 @@ g1_replace g1-row11-dsn-file-world-readable "G1b: write_files delivers /etc/defa
 g1_replace g1-row12-arm-anchor-drifted "G1b dispatch: the served (zot) arm was extracted" \
   "'''      if [ \"\$zot_rc\" -eq 0 ]; then\n'''" "'''      if [ \"\$zot_rc\" = 0 ]; then\n'''"
 g1_replace g1-extra-backgrounded-emit "G1b: no soleur-boot-emit call is backgrounded" \
-  "'''$G1_FB'''" "'''        soleur-boot-emit inngest_ghcr_fallback warning \"rc=\$zot_rc\" || true &\n'''"
+  "'''$G1_FB'''" "'''        soleur-boot-emit inngest_pull_fatal fatal \"rc=\$zot_rc\" || true &\n'''"
 # Review P1-2: a nested if/else inside the SERVED arm must not be read as the arm split. Delete
 # the real fallback emit and plant one behind a nested `else` in the served arm.
-case_mutate g1-row14-nested-else-hijack "G1b: the missed arm emits inngest_ghcr_fallback exactly once" "$SRC" '
+case_mutate g1-row14-nested-else-hijack "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once" "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
 zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
-fb="        soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n"
+fb="        soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
 assert s.count(zot)==1 and s.count(fb)==1, "call sites not found"
 plant=("        if [ -n \"$IREF\" ]; then :\n        else\n"
-       "          ZOT_LEG=\"$ZOT_LEG\"\n          ZOT_LEG=\"$ZOT_LEG\"\n"
-       "          soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n        fi\n")
+       "          zot_rc=\"$zot_rc\"\n          zot_rc=\"$zot_rc\"\n"
+       "          soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n        fi\n")
 s=s.replace(fb,"",1).replace(zot,zot+plant,1)
 open(p,"w").write(s)
 '
@@ -442,10 +473,10 @@ assert s.count(zot)==1, "call site not found"
 s=s.replace(zot,"        if false; then\n  "+zot+"        fi\n",1)
 open(p,"w").write(s)
 '
-case_mutate g1-row16-dead-heredoc "G1b: the missed arm emits inngest_ghcr_fallback exactly once" "$SRC" '
+case_mutate g1-row16-dead-heredoc "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once" "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-fb="        soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n"
+fb="        soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
 assert s.count(fb)==1, "call site not found"
 s=s.replace(fb,"        : <<'"'"'OFF'"'"'\n"+fb+"        OFF\n",1)
 open(p,"w").write(s)
@@ -621,13 +652,13 @@ case_mutate ng1-escape-networkd-shadow-in-run "NIC-G1 row7b:" "$SRC" "$NG1_PY"'
 w="  - path: /run/systemd/network/00-hijack.network\n    content: |\n      [Match]\n      Driver=virtio_net\n\n      [Network]\n      DHCP=no\n    owner: root:root\n    permissions: \x27\x27\x270644\x27\x27\x27\n"
 save(rep(CALL, CALL).replace("write_files:\n", "write_files:\n"+w, 1))
 '
-# must-PASS: the GHCR login with its flags reordered. This form was a FALSE RED before review --
-# docker_target returned the -u flag VALUE, so a public login scored as a private-net use and an
-# unrelated edit would have reddened rows 1 and 8.
-case_must_pass ng1-mustpass-ghcr-login-flags-first "$SRC" "$NG1_PY"'
-a="docker login ghcr.io -u \"$GHCR_READ_USER\" --password-stdin"
-b="docker login -u \"$GHCR_READ_USER\" --password-stdin ghcr.io"
-save(rep(a, b))
+# must-PASS: a PUBLIC-registry login with its flags first. This form was a FALSE RED before review
+# -- docker_target returned the -u flag VALUE, so a public login scored as a private-net use and an
+# unrelated edit would have reddened rows 1 and 8. (#8036 1d deleted the GHCR login item this row
+# used to reorder, so the row now inserts its own public login; docker.io, not ghcr.io, because a
+# ghcr.io login is itself a Guard 1 residual-zero RED.)
+case_must_pass ng1-mustpass-public-login-flags-first "$SRC" "$NG1_PY"'
+save(rep(CALL, "  - printf x | docker login -u \"$DH_USER\" --password-stdin docker.io || true\n"+CALL))
 '
 
 # (ii) A config WRITE that names the endpoint, ahead of the call. The canonical file already
@@ -671,12 +702,122 @@ else
   echo "  KILLED:   ng1-harness-row1-self-compare — neutering the order comparison flips row 1 off KILLED ($(printf '%s' "$NG1_HARN_OUT" | grep -oE 'SURVIVED|MISROUTED' | head -1))"
 fi
 
+# =======================================================================================
+# #8036 1d Guard 4 rows: a zot miss is TERMINAL and LOUD. The guard EXECUTES the rendered pull
+# item under stubs (cloud-init-inngest-bootstrap.test.sh "Guard 4"), so every row below reaches
+# it through terraform's templatefile + strip, the path the bytes take to the host. Each names
+# the G4 assertion it must red; a row that reds on something else is MISROUTED, not killed.
+# =======================================================================================
+G4_PY='
+import sys
+p=sys.argv[1]; s=open(p).read()
+EMIT="        soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
+EXIT="        exit \"$zot_rc\"\n"
+PH="        /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss ep=$ZOT_EP rc=$zot_rc tries=$zot_try tail=$zot_tail\" || true\n"
+# The whole retry loop, as ONE string (adjacent literals concatenate); FOR is its first line.
+LOOP=("      for zot_try in 1 2 3; do\n"
+      "        timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1\n"
+      "        zot_rc=$?\n"
+      "        [ \"$zot_rc\" -eq 0 ] && break\n"
+      "        [ \"$zot_rc\" -eq 124 ] && break\n"
+      "        [ \"$zot_try\" -lt 3 ] && sleep 5\n"
+      "      done\n")
+TO_BREAK="        [ \"$zot_rc\" -eq 124 ] && break\n"
+FOR="      for zot_try in 1 2 3; do\n"
+def rep(a, b):
+    assert s.count(a)==1, "anchor not found exactly once: %r" % a
+    return s.replace(a, b, 1)
+def save(t): open(p,"w").write(t)
+'
+# Row 1: the Sentry emit moved AFTER the exit (unreachable).
+case_mutate g4-row1-emit-after-exit "G4 miss: soleur-boot-emit inngest_pull_fatal fatal rc=1 is sent" "$SRC" "$G4_PY"'
+t=rep(EMIT, ""); assert t.count(EXIT)==1
+save(t.replace(EXIT, EXIT+EMIT, 1))
+'
+# Row 2: the level drops to warning (a terminal boot reported as a degrade).
+case_mutate g4-row2-level-warning "G4 miss: soleur-boot-emit inngest_pull_fatal fatal rc=1 is sent" "$SRC" "$G4_PY"'
+save(rep(EMIT, EMIT.replace(" fatal ", " warning ")))
+'
+# Row 3: the exit becomes a fall-through, so the item continues to the record and docker create.
+case_mutate g4-row3-exit-falls-through "G4 miss: no docker pull/create/run in any spelling after the fatal" "$SRC" "$G4_PY"'
+save(rep(EXIT, "        :\n"))
+'
+# Row 7: the exit ends only a subshell whose status is swallowed — the rest of the ONE runcmd
+# shell keeps running. (The BARE `( exit "$zot_rc" )` is an EQUIVALENT mutant: `set -e` is live in
+# this item, so the non-zero subshell status aborts the parent anyway — the must-PASS row below
+# pins that, so the equivalence is recorded rather than assumed.)
+case_mutate g4-row7-exit-in-swallowed-subshell "G4 miss: the miss arm ends the WHOLE runcmd" "$SRC" "$G4_PY"'
+save(rep(EXIT, "        ( exit \"$zot_rc\" ) || true\n"))
+'
+case_must_pass g4-row7a-bare-subshell-is-equivalent-under-set-e "$SRC" "$G4_PY"'
+save(rep(EXIT, "        ( exit \"$zot_rc\" )\n"))
+'
+# Phone-home-fails row: without `|| true`, a failing phone-home aborts the item under set -e
+# BEFORE the Sentry emit — the boot still dies, but silently on the channel that pages.
+case_mutate g4-phfail-phone-home-unguarded "G4 phone-home-fails: the Sentry emit inngest_pull_fatal fatal still runs" "$SRC" "$G4_PY"'
+save(rep(PH, PH.replace(" || true\n", "\n")))
+'
+# The no-endpoint arm falls through to the pin carrier (the retired "GHCR-only path").
+case_mutate g4-noep-falls-through "G4 noendpoint: exits non-zero with NO docker pull/create/run in any spelling" "$SRC" "$G4_PY"'
+a="      exit 1\n    fi\n    # #6617a"
+save(rep(a, "      :\n    fi\n    # #6617a"))
+'
+# Row 5 (harness, must-RED): the guard'"'"'s own stub makes the failing pull SUCCEED. The miss
+# scenario then exercises the hit arm twice, and the miss assertions must notice.
+case_mutate g4-row5-harness-stub-pull-always-succeeds "G4 miss: phone-home inngest_pull_fatal is sent" "$GUARD" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+a="G4_LOG=\"$G4_DIR/$n.log\" G4_PULL_RC=\"$3\""
+assert s.count(a)==1, "stub pull-rc anchor not found exactly once"
+open(p,"w").write(s.replace(a,"G4_LOG=\"$G4_DIR/$n.log\" G4_PULL_RC=0",1))
+'
+
+# Retry rows (#8036 1d review, perf P2). Deleting the retry restores the single-shot pull: one
+# transient reset then darkens the sole scheduler. The transient row is the one that must see it.
+case_mutate g4-retry-deleted "G4 transient: a failed first attempt then a served second is a HIT" "$SRC" "$G4_PY"'
+save(rep(LOOP, "      timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1\n      zot_rc=$?\n"))
+'
+# A timeout retried triples the stall on the sole scheduler (3 x 180s) for a zot that is
+# unreachable, not flaky.
+case_mutate g4-timeout-retried "G4 timeout: rc=124 stops the retry" "$SRC" "$G4_PY"'
+save(rep(TO_BREAK, ""))
+'
+# Spelling rows (#8036 1d review, test-design P1). A second registry reached through a
+# NON-canonical pull spelling. Both counters were anchored on `docker pull` and read this as zero
+# extra pulls; each counter gets its own row so neither can regress behind the other.
+G4_IMAGE_PULL_MUT="$G4_PY"'
+save(rep(FOR, "      docker image pull \"$IREF\" > /dev/null 2>&1 || true\n" + FOR))
+'
+case_mutate row1-image-pull-spelling "Row1: exactly ONE docker pull code line" "$SRC" "$G4_IMAGE_PULL_MUT"
+case_mutate g4-image-pull-spelling "G4 hit: exactly ONE image pull in ANY spelling" "$SRC" "$G4_IMAGE_PULL_MUT"
+
+# Harness row (#8036 1d review, test-design P3): a mutant that stops the rendered item PARSING
+# fails every G4 miss row, including the one named here — the pre-review scorer called that
+# KILLED. It must come back UNRESOLVED: the harness-liveness rows fail with it, so the RED is a
+# crash, not a detection. Run in a subshell so its FAIL is observed rather than counted.
+G4_SYNTAX_OUT="$( case_mutate g4-harness-syntax-error-not-killed "G4 miss: phone-home inngest_pull_fatal is sent" "$SRC" "$G4_PY"'
+save(rep(TO_BREAK, TO_BREAK.replace("break\n", "break )\n")))
+' )" || die "g4 syntax-error harness row aborted"
+TOTAL=$((TOTAL + 1))
+if [[ "$G4_SYNTAX_OUT" == *"UNRESOLVED:"* && "$G4_SYNTAX_OUT" != *"KILLED:"* ]]; then
+  PASS=$((PASS + 1))
+  echo "  KILLED:   g4-harness-syntax-error-not-killed — a parse-breaking mutant is scored UNRESOLVED, not KILLED"
+else
+  FAIL=$((FAIL + 1))
+  echo "  SURVIVED: g4-harness-syntax-error-not-killed — a parse-breaking mutant was not scored UNRESOLVED:"
+  printf '%s\n' "$G4_SYNTAX_OUT" | head -3 | sed 's/^/               /'
+fi
+
 # --- Anti-vacuity floor over the whole battery ----------------------------------------------
 # Deleting a row (or its dispatch line) otherwise leaves `N/N mutants killed` and exit 0, with the
 # property that row pinned now unexercised. The bound is the MEASURED row count of a green run,
 # EXACT-as-floor (no slack). Reported with printf + exit, never through the verdict counters it
 # backstops (ADR-193). Bump it in the same edit that adds a row.
-BATTERY_MIN_ROWS=46
+# 46 -> 55 (#8036 1d): +1 GHCR-login-restored row (5b), +7 Guard 4 must-RED rows, +1 Guard 4
+# must-PASS row (the bare-subshell equivalence under set -e).
+# 55 -> 60 (#8036 1d review): +2 retry rows (deleted, timeout retried), +2 pull-spelling rows
+# (Row1, G4 hit), +1 harness row (a parse-breaking mutant is UNRESOLVED, not KILLED).
+BATTERY_MIN_ROWS=60
 if (( TOTAL < BATTERY_MIN_ROWS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d. A row was deleted or its dispatch line removed.\n' "$TOTAL" "$BATTERY_MIN_ROWS" >&2
   exit 1

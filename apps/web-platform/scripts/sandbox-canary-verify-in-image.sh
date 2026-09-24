@@ -55,11 +55,24 @@ fi
 BUN_VERSION="$(tr -d '[:space:]' < .bun-version)"
 export BUN_VERSION # `docker run -e NAME` reads the client ENVIRONMENT, not shell variables
 
+# SANDBOX_CANARY_MODE=capture (#8623; ADR-079 amendment) re-captures the
+# committed fixture INSIDE the same image instead of verifying it, and copies it
+# out through a writable /out mount. Default stays `verify` (the CI gate).
+MODE="${SANDBOX_CANARY_MODE:-verify}"
+case "$MODE" in
+  verify) OUT_MOUNT=() ;;
+  capture) OUT_MOUNT=(-v "$PWD/$APP_DIR/infra:/out") ;;
+  *) printf 'sandbox-canary-verify-in-image: unknown SANDBOX_CANARY_MODE %s\n' "$MODE" >&2; exit 2 ;;
+esac
+export SANDBOX_CANARY_MODE="$MODE"
+
 docker run --rm \
   -e ANTHROPIC_API_KEY \
   -e BUN_VERSION \
+  -e SANDBOX_CANARY_MODE \
   -e SANDBOX_CANARY_CAPTURE=1 \
   -v "$PWD/$APP_DIR:/src:ro" \
+  "${OUT_MOUNT[@]}" \
   "$IMG" bash -c '
     set -e
     apt-get update -qq >/dev/null
@@ -69,5 +82,10 @@ docker run --rm \
     npm ci --no-audit --no-fund >/dev/null
     curl -fsSL https://bun.sh/install 2>/dev/null | bash -s "bun-v${BUN_VERSION}" >/dev/null
     export PATH="/root/.bun/bin:$PATH"
-    bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json
+    if [ "$SANDBOX_CANARY_MODE" = capture ]; then
+      bun scripts/sandbox-canary.mjs --capture infra/sandbox-canary-argv.json
+      cp infra/sandbox-canary-argv.json /out/sandbox-canary-argv.json
+    else
+      bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json
+    fi
   '

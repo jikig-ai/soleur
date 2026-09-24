@@ -415,7 +415,6 @@
 23	tests/scripts/test-audit-ruleset-bypass.sh
 1	tests/scripts/test-betterstack-absence-classifier.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
-1	tests/scripts/test-git-data-rung2-evidence-capture.sh
 1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh
 1	tests/scripts/test-plan-gate-preamble.sh

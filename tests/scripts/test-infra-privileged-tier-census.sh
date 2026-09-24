@@ -353,6 +353,19 @@ def apply_steps(j):
         if APPLY.search(str(s.get("run") or "")):
             yield s
 
+# A STATE WRITE is `apply` OR `destroy`. The Tier-B classifier and G1h used `apply_steps` alone, so
+# a job whose only Terraform verb was `terraform destroy` against a `soleur-terraform-state` root
+# was Tier A: git-data-rung2-rehearsal.yml::teardown shipped with no `environment:` and the legacy
+# loader only, and once O10 evicts HCLOUD_TOKEN/DOPPLER_TOKEN_TF from prd_terraform its destroy
+# would run credential-less and strand a paid host. A destroy needs the same credentials as the
+# apply and writes the same state object. G4b and G5 keep `apply_steps`: they reason about -target
+# lists and plan_only guards, which a teardown carries neither of.
+STATE_WRITE = re.compile(r"(?<![-\w])terraform\s+(apply|destroy)(?![-\w])")
+def state_write_steps(j):
+    for s in j.steps:
+        if STATE_WRITE.search(str(s.get("run") or "")):
+            yield s
+
 # ── 3. Terraform model ─────────────────────────────────────────────────────────────
 def tf_files(root):
     res = []
@@ -439,7 +452,7 @@ state_roots = {r for r, b in root_bucket.items() if b == PRIV_STATE_BUCKET}
 # ── 4. Tier-B classification ───────────────────────────────────────────────────────
 for j in jobs:
     j.names_env_secret = bool(SEC_REF.search(j.dump))
-    j.applies_state_root = any(step_wd(j, s) in state_roots for s in apply_steps(j))
+    j.applies_state_root = any(step_wd(j, s) in state_roots for s in state_write_steps(j))
     j.tier_b = j.names_env_secret or j.applies_state_root
 tierb = [j for j in jobs if j.tier_b]
 print("IPT_TIERB=%s" % " ".join(sorted(j.id for j in tierb)), file=sys.stderr)
@@ -534,11 +547,11 @@ check("G1g: no workflow step reads a tier_b_names entry with `-c prd_terraform` 
 # AC7b limb 2 — every writer of the shared state bucket is Tier B
 writers = []
 for j in jobs:
-    for s in apply_steps(j):
+    for s in state_write_steps(j):
         wd = step_wd(j, s)
         if wd in state_roots and not (j.arms and all(a in TIER_B_ENVIRONMENTS for a in j.arms) and j.has_env_key):
             writers.append("%s [%s]" % (j.id, wd or "<repo root>"))
-check("G1h: every job applying against a `%s`-backed root declares a Tier-B environment [AC7b; "
+check("G1h: every job applying OR destroying against a `%s`-backed root declares a Tier-B environment [AC7b; "
       "%d such roots]" % (PRIV_STATE_BUCKET, len(state_roots)), not writers, sorted(set(writers))[:8])
 
 # AC7b limb 1 — the backend-credential steps read TF_STATE_AWS_* first
@@ -1458,6 +1471,16 @@ if mutate g1-9-environment-outside-set "$MUTDIR/tree/.github/workflows/tierb-app
   fixcensus "$MUTDIR" "$T/mut/g1-9.tsv" ""
   mutant_red g1-9-environment-outside-set wf_row "$T/mut/g1-9.tsv" "G1c:"
 fi
+# Row 10 (review W1) — a DESTROY-ONLY job against the privileged-state root, no `environment:`,
+# legacy loader only. This is git-data-rung2-rehearsal.yml::teardown as it shipped: it names no
+# environment secret and runs no `terraform apply`, so the classifier scored it Tier A and G1h —
+# "every state writer is Tier B" — never saw it. A destroy writes the same state object.
+MUTDIR="$(fixcopy g1-10)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\nenv:\n  INFRA_DIR: apps/web-platform/infra\njobs:\n  teardown:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}\n      - name: Teardown\n        working-directory: ${{ env.INFRA_DIR }}\n        env:\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}\n        run: |\n          set -euo pipefail\n          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \\\n            terraform destroy -auto-approve -input=false\n' > "$MUTDIR/tree/.github/workflows/zz-destroy.yml"
+if fixture_written g1-10-destroy-only-no-environment "$MUTDIR/tree/.github/workflows/zz-destroy.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1-10.tsv" ""
+  mutant_red g1-10-destroy-only-no-environment wf_row "$T/mut/g1-10.tsv" "G1h:"
+fi
 
 # ── G1g: the read-only-first allowance must not be launderable by a comment ──────────
 # The allowance is 1-of-1 on the live tree (`workspaces-luks-cutover::cutover`), so anything
@@ -1631,14 +1654,16 @@ fi
 }
 
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
-MUTANT_FLOOR=26
+# 26 -> 27 (review W1): M-g1-10-destroy-only-no-environment.
+MUTANT_FLOOR=27
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
 # Assertion FLOOR: live census 16 + harness 7 + mutants 17 x 2 = 57 (exact).
 _ran=$((passes + fails))
-FLOOR=80
+# 80 -> 82 (review W1): M-g1-10's fixture-written row and its RED row. Measured: 82 ran.
+FLOOR=82
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
