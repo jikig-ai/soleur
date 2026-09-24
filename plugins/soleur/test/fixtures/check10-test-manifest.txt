@@ -1,4 +1,5 @@
 ${id} parses to the space-joined line, not the literal indicator
+${surface} restates the cap, and states the runtime's number
 04-dns-fail.md contains the typo'd hostname (regression-snapshot invariant)
 8-state decision matrix exists with exactly one PASS terminal
 A1 every allowlisted verb is accepted
@@ -35,6 +36,7 @@ E2 sandbox available => the executor IS reached (E1 is not vacuous)
 EVERY project-agnostic prescription carries the conditional on its own line
 F1 AC1 — Step 10.4 delegates to the extracted gate, not to inline bash
 F1c the runtime normalizes $CMD ONCE, before the gate, the reject and the exec
+F1d the runtime dequotes a YAML-quoted inline scalar inside the normalize window (#8149)
 F2 AC2 — the sandbox carries the load-bearing binds
 F2b AC2 — the sandbox mount set is CLOSED, not merely populated
 F3 AC2 — mount order is load-bearing: --tmpfs /home precedes the repo bind
@@ -48,6 +50,7 @@ F7 AC13 — SKIP-DECLARED is visible headless and in the Phase 2 aggregate
 F8 the retired denylist is documented as retired, not silently deleted
 Fast-path SKIP table includes Check 10 row
 Form A prose names all three scalar shapes
+Form A — a YAML-quoted inline scalar is the string INSIDE the quotes (#8149)
 Form A — block scalar via `|`
 Form A — strict YAML expected_output key
 Form A — strict YAML inline value
@@ -69,6 +72,7 @@ P2 known divergence — CRLF (TS splits on /\\r?\\n/, awk leaves the \\r)
 P2 known divergence — inline quote stripping (TS strips, awk does not)
 P3 every parity fixture is Form-A-only (has `command:`, no fenced block)
 Phase 2 aggregate table includes Discoverability Test Execution row
+Phase 4 prescribes at least one invocation that actually RUNS the battery
 Phase 4 states WHY it stays unsharded
 Phase 4's prescription is imperative, not conditional
 R1 block scalar carrying a second command line is rejected (newline is shell-active)
@@ -94,11 +98,14 @@ awk interpreter is a known implementation (mawk or gawk)
 classifier returns FAIL with DNS reason when stub executor returns (rc=6, stdout='')
 each rung of the detection ladder ends in an action
 empty Form A block scalar (`command: |` with no continuation) returns empty
+every battery-running invocation in Phase 4 carries an explicit mode flag (#8322)
 every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling
 list match (comma-joined)
 list match (or-joined)
+modeFlagsOn sees the mode flags, not the query flags
 normalizes trailing newline before comparing
 parser extracts the typo'd hostname from Form B fence (catches comment-strip bug)
+preflight/SKILL.md declares the cap as a `timeout Ns` exec (the runtime of record)
 rejects command-substitution as FAIL
 rejects empty stdout against non-empty expected
 rejects parameter-expansion ($VAR, ${VAR}) as FAIL
@@ -107,6 +114,7 @@ rejects ssh commands as FAIL
 returns empty string when block absent
 returns empty string when command field absent
 returns the block when present
+shardTokensOn sees a *_SHARD= selector, not only TEST_GROUP and positional (#7936)
 short-token guard: expected '0' does NOT match 500/404/200/302
 single value substring match
 stops at the next ## heading
@@ -122,5 +130,5 @@ the parity table is non-vacuous — it contains both accepts and rejects
 the skip predicate is pinned — widening it cannot silently shrink coverage
 triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)
 work/SKILL.md defines the fallback once, with the conditional stated
-§9 prescribes NO unsharded battery run
-§9 prescribes at least one sharded invocation
+§9 prescribes NO unsharded battery run — every invocation carries a mode flag or is a query
+§9 prescribes the affected gate

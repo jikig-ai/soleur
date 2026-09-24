@@ -47,6 +47,13 @@ vi.mock("@/server/cron-filing-deny-marker", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/cron-filing-deny-marker")>()),
   emitCronFilingDenyMarker: filingDenyMock,
 }));
+// #8603 — observe the --effort fallback mirror. Partial mock: keep
+// reportSilentFallback (used elsewhere by the substrate) real.
+const { warnFallbackMock } = vi.hoisted(() => ({ warnFallbackMock: vi.fn() }));
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  warnSilentFallback: warnFallbackMock,
+}));
 import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
 import { decide } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 import {
@@ -64,6 +71,7 @@ import {
   spawnSimple,
   STDOUT_TAIL_CAP_BYTES,
 } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import { classifyEvalFatal } from "@/server/inngest/functions/_cron-shared";
 
 // #4684/#4689 — crons mkdtemp'd under os.tmpdir() (the 256 MB /tmp tmpfs in
@@ -847,6 +855,46 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
       logger: noopLogger,
     });
   }
+
+  // #8603 — the pinned CLI treats an unknown `--effort` VALUE as a warning, not
+  // an error: it writes `Unknown --effort value '<v>' — ignoring it and using
+  // the default effort` to STDERR and runs anyway. The substrate mirrors that
+  // line to Sentry once per run (cq-silent-fallback-must-mirror-to-sentry).
+  const effortWarning = (v: string) =>
+    `Warning: ${CLI_EFFORT_FALLBACK_NEEDLE} '${v}' — ignoring it and using the default effort. Valid values: low, medium, high, xhigh, max.`;
+  const stderrLines = (lines: string[]) =>
+    lines.map((l) => `process.stderr.write(${JSON.stringify(l)} + "\\n");`).join("\n");
+
+  it("#8603: mirrors the --effort fallback warning to Sentry exactly once per run", async () => {
+    warnFallbackMock.mockReset();
+    await runFakeEval(installFakeClaudeBin(stderrLines([effortWarning("hgih"), effortWarning("hgih")])));
+    expect(warnFallbackMock).toHaveBeenCalledTimes(1);
+    expect(warnFallbackMock.mock.calls[0][1]).toMatchObject({
+      feature: "cron-claude-eval",
+      op: "claude-eval-effort-fallback",
+      extra: { fn: "cron-bug-fixer" },
+    });
+    // A second run must mirror again: the once-flag is per spawn, not per process.
+    await runFakeEval(installFakeClaudeBin(stderrLines([effortWarning("hgih")])));
+    expect(warnFallbackMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("#8603: the mirrored line goes through the shared Sentry tail scrub", async () => {
+    warnFallbackMock.mockReset();
+    const secret = "sk-ant-api03-" + "A".repeat(40);
+    await runFakeEval(installFakeClaudeBin(stderrLines([`${effortWarning("hgih")} ${secret} ${TOKEN}`])));
+    expect(warnFallbackMock).toHaveBeenCalledTimes(1);
+    const line = String(warnFallbackMock.mock.calls[0][1].extra.line);
+    expect(line).toContain(CLI_EFFORT_FALLBACK_NEEDLE);
+    expect(line).not.toContain(secret);
+    expect(line).not.toContain(TOKEN);
+  });
+
+  it("#8603: a benign stderr line does not fire the effort mirror", async () => {
+    warnFallbackMock.mockReset();
+    await runFakeEval(installFakeClaudeBin(stderrLines(["some unrelated diagnostic"])));
+    expect(warnFallbackMock).not.toHaveBeenCalled();
+  });
 
   it("#8076: emits SOLEUR_CRON_FILING_DENY once with count=2 when the result event carries two filing denials", async () => {
     filingDenyMock.mockReset();
