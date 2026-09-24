@@ -20,3 +20,10 @@ None. Deviations: plan skill's push step skipped (brief forbade push); deepen-pl
 ### Components Invoked
 
 soleur:plan, soleur:plan-review, soleur:deepen-plan; learnings-researcher, functional-discovery, Plan advisor, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, cto, test-design-reviewer, security-sentinel.
+
+## Work and Review Phase
+
+- RED observed before implementation: the suite exited 1 with the lint absent (`... missing (RED expected before implementation)`).
+- First implementation: line-based lint, 36 rows; 21-row mutation battery 21/21 killed after three fixture gaps were closed.
+- Review (11 seats, report-only): the line-based design was defeated by 5 fmt-clean layouts; replaced by a bracket-depth tokenizer (61 rows; a 30-row battery kills all but two equivalent mutants).
+- Sibling PR #8668 shipped the string fix first (operator decision); push apply 35963237090 created the Tier-B Doppler project and its prd environment.

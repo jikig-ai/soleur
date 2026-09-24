@@ -280,7 +280,8 @@ def tracked_files():
     out = subprocess.run(
         ["git", "ls-files", "-z", "--", "*.tf", "*.tf.json"], check=True, capture_output=True, cwd=top
     ).stdout
-    rel = [p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p]
+    # dict.fromkeys dedupes: mid-merge, `ls-files` lists a conflicted path once per stage.
+    rel = list(dict.fromkeys(p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p))
     return [(f"{top}/{p}", p) for p in rel]
 
 

@@ -742,3 +742,21 @@ scope the brief asked for.
 | Deepen: security-sentinel P3 | Tracked paths with newlines could inject `::` workflow commands | Applied (control characters stripped from printed paths and names) |
 | Deepen: test-design-reviewer | Row 11's verdict was wrong; one-line blocks and column-0 `description` were silent skips; rows 10/12 could pass through the wrong fail path; `%{`, mid-string `${`, end-anchor, `//`, scan-set and stop-at-first mutants survived; H4 pinned exact numbers | Applied (rows 7, 9–16 and H4 rewritten; two new fail-closed arms, both measured at zero hits on the real tree) |
 | CTO P3 | Settle Doppler's counting rule with a throwaway 255-multibyte project | **Not taken.** It is a Doppler workplace write outside this fix; the byte rule makes the answer unnecessary |
+
+## Addendum — 2026-09-24 (review and sibling PR)
+
+- **The string fix shipped in a sibling PR.** #8668 (another session) merged the same one-line fix
+  (231 characters) at 04:13Z. Its own push apply was cancelled by concurrency, and push apply
+  35963237090 (on `ca83c8edf0`) created `doppler_project.infra_privileged` and
+  `doppler_environment.infra_privileged_prd`: plan `3 to add, 1 to change, 0 to destroy`, SSH apply
+  `0 added, 0 changed, 0 destroyed`, every step `success`. §Post-merge verification's reads 1-4
+  are therefore discharged by that run, not by this PR's merge. This PR's own merge apply is an
+  in-place `~ update` of the description (230-byte "CI reads it via" wording), never a replace.
+- **Four failed push applies, not two:** 35912754656, 35921899265, 35927849285, 35951193547.
+- **The lint was rewritten during review.** A panel showed five `terraform fmt`-clean layouts
+  (and three fmt-fixable ones) defeating the line-based design this plan specifies. The lint is
+  now a bracket-depth tokenizer; §Proposed Solution Phase 2's "line-based, no tokenizer" and its
+  column-0 fail-closed arms are superseded. Measurement is max(raw bytes, UTF-8 bytes of the
+  NFC-normalised decoded value), the lint's own failures exit 2, and `*.tf.json` fails closed.
+  The suite has 61 rows; the live check lives only in the `-live` registration (H4 left the unit
+  suite).
