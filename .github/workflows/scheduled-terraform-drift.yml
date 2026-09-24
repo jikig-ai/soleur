@@ -1,5 +1,7 @@
 # Security: DOPPLER_TOKEN from repository secrets provides Terraform credentials
-# via `doppler run --name-transformer tf-var`. R2 backend credentials are extracted
+# via `doppler run --name-transformer tf-var` — except on the apps/web-platform/infra/sentry
+# leg, which binds the SENTRY_IAC_AUTH_TOKEN repository secret as the raw
+# `SENTRY_AUTH_TOKEN` and runs no `doppler run` (#6612). R2 backend credentials are extracted
 # separately via `doppler secrets get --plain` (not through --name-transformer,
 # which would convert them to TF_VAR_* format and break S3 auth).
 # Plan output is sanitized before posting to GitHub issues.
@@ -49,6 +51,15 @@ jobs:
           # ssh_key_path variable, so the CI-SSH-key VAR_ARGS guard below skips
           # it automatically.
           - infra/github
+          # apps/web-platform/infra/sentry (#6612, ADR-031): the Sentry root's
+          # "declared == applied" monitor. It authenticates exactly as
+          # apply-sentry-infra.yml does: the SENTRY_IAC_AUTH_TOKEN repository secret,
+          # bound as the RAW `SENTRY_AUTH_TOKEN` the jianyuan/sentry provider reads, with
+          # no `doppler run` of any form. The tf-var transformer is refused: it cannot
+          # deliver the raw token (the provider then fails its health check), and it
+          # would inject TF_VAR_sentry_* values the apply never sees. The plan is
+          # full-root (no -target=), so every resource type in the root is compared.
+          - apps/web-platform/infra/sentry
       fail-fast: false
 
     steps:
@@ -100,16 +111,40 @@ jobs:
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
           MATRIX_DIR: ${{ matrix.directory }}
+          # Bound into the process env on the sentry leg only; every other leg gets ''.
+          SENTRY_IAC_AUTH_TOKEN: ${{ matrix.directory == 'apps/web-platform/infra/sentry' && secrets.SENTRY_IAC_AUTH_TOKEN || '' }}
         run: |
           set +e
-          VAR_ARGS=()
-          if grep -q 'variable "ssh_key_path"' variables.tf 2>/dev/null; then
-            VAR_ARGS+=(-var="ssh_key_path=${CI_SSH_PUB}")
+          if [[ "$MATRIX_DIR" == "apps/web-platform/infra/sentry" ]]; then
+            # (#6612) The raw-token path of apply-sentry-infra.yml: NO doppler run of any form.
+            # The inline assignment overrides any ambient SENTRY_AUTH_TOKEN a $GITHUB_ENV export
+            # could carry. One attempt, no retry (#8451).
+            if [[ -z "${SENTRY_IAC_AUTH_TOKEN:-}" ]]; then
+              echo "::error::sentry_iac_token_absent — SENTRY_IAC_AUTH_TOKEN is empty; the sentry leg cannot authenticate (ADR-031)."
+              PLAN_OUTPUT="SENTRY_IAC_AUTH_TOKEN is not configured (empty) — the sentry leg cannot authenticate."
+              EXIT_CODE=1
+            else
+              # env -u: this step's env carries DOPPLER_TOKEN/PROJECT/CONFIG for the other legs, and
+              # the apply never hands them to the jianyuan/sentry provider, so neither does this leg.
+              # TF_LOG/TF_LOG_PROVIDER are dropped so provider debug output (HTTP headers) cannot
+              # reach PLAN_OUTPUT, which is posted to a PUBLIC issue.
+              PLAN_OUTPUT=$(env -u DOPPLER_TOKEN -u DOPPLER_PROJECT -u DOPPLER_CONFIG -u TF_LOG -u TF_LOG_PROVIDER \
+                SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" \
+                terraform plan -detailed-exitcode -no-color -input=false 2>&1)
+              EXIT_CODE=$?
+              # Masking only covers the Actions log, not an issue body posted through the API.
+              PLAN_OUTPUT=${PLAN_OUTPUT//"$SENTRY_IAC_AUTH_TOKEN"/***}
+            fi
+          else
+            VAR_ARGS=()
+            if grep -q 'variable "ssh_key_path"' variables.tf 2>/dev/null; then
+              VAR_ARGS+=(-var="ssh_key_path=${CI_SSH_PUB}")
+            fi
+            PLAN_OUTPUT=$(doppler run --preserve-env --name-transformer tf-var -- \
+              terraform plan -detailed-exitcode -no-color -input=false \
+              "${VAR_ARGS[@]}" 2>&1)
+            EXIT_CODE=$?
           fi
-          PLAN_OUTPUT=$(doppler run --preserve-env --name-transformer tf-var -- \
-            terraform plan -detailed-exitcode -no-color -input=false \
-            "${VAR_ARGS[@]}" 2>&1)
-          EXIT_CODE=$?
           set -e
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
@@ -151,7 +186,7 @@ jobs:
       #
       # Runs ONCE, not once per matrix leg: the scan is fleet-wide over Doppler and has
       # nothing to do with which terraform directory this leg is planning, so running it
-      # twice would double the Cloudflare probes and file duplicate findings.
+      # once per leg would multiply the Cloudflare probes and file duplicate findings.
       #
       # continue-on-error + an explicit enforce step below, rather than a bare failure:
       # the job must still reach its notification and Sentry check-in steps, which is the
@@ -564,8 +599,9 @@ jobs:
       # means nothing — which would poison the DEAD arm's red signal too (#7133 in
       # reverse).
       # POSITIVE POLARITY, and this is load-bearing rather than stylistic. `drift-check`
-      # is a 2-leg matrix and `token_drift` is gated `matrix.directory ==
-      # 'apps/web-platform/infra'`, so on the `infra/github` leg it is SKIPPED and every
+      # is a multi-leg matrix and `token_drift` is gated `matrix.directory ==
+      # 'apps/web-platform/infra'`, so on every other leg (today `infra/github` and
+      # `apps/web-platform/infra/sentry`) it is SKIPPED and every
       # `steps.token_drift.outputs.*` is the empty string. The first version of this
       # tested `!= 'multi-config'`, and `'' != 'multi-config'` is TRUE — so the filer
       # fired from the leg that never ran the scan, filing an issue whose body read
@@ -963,8 +999,8 @@ jobs:
       # `token_drift_coverage_close_failed` (both in the close arm). Each sets
       # `channel_failed=true` on its own step, and this gates on either step's flag.
       #
-      # POSITIVE POLARITY, like every sibling arm: both steps are skipped on the
-      # `infra/github` matrix leg and on the healthy path, and a skipped step's outputs
+      # POSITIVE POLARITY, like every sibling arm: both steps are skipped on every matrix
+      # leg but `apps/web-platform/infra` and on the healthy path, and a skipped step's outputs
       # are the empty string, which `== 'true'` correctly does not match.
       #
       # This mirrors the DEAD filer's "reached the email channel only" fallback, in the
@@ -1140,6 +1176,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           STACK_NAME: ${{ steps.plan.outputs.stack_name }}
+          MATRIX_DIR: ${{ matrix.directory }}
           RUN_NUMBER: ${{ github.run_number }}
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
@@ -1189,7 +1226,15 @@ jobs:
               echo "## Next Steps"
               echo ""
               echo "1. Review the plan output above"
-              echo "2. If the drift is intentional, run \`terraform apply\` locally to update state"
+              if [[ "$MATRIX_DIR" == "apps/web-platform/infra/sentry" ]]; then
+                # Quoted heredoc: the backticks below are markdown, and inside `echo "…"` they
+                # would be command substitution — the words blanked and `gh workflow run` EXECUTED.
+                cat <<'SENTRY_STEP'
+          2. First check whether an `apply-sentry-infra.yml` run on `main` is queued or in progress: a plan that lands between a merge and its apply shows that merge's blocks as `to add`, so close this issue once it converges. Otherwise re-run the CI apply from `main` — `gh workflow run apply-sentry-infra.yml --ref main -f reason="reconcile drift"` — and never apply locally (the backend has `use_lockfile = false`, ADR-031). If the drift is a hand edit made in Sentry's web UI, revert it there or codify it in a PR.
+          SENTRY_STEP
+              else
+                echo "2. If the drift is intentional, run \`terraform apply\` locally to update state"
+              fi
               echo "3. If the drift is unintentional, revert the manual change"
               echo "4. Close this issue when resolved"
               echo ""
@@ -1208,7 +1253,9 @@ jobs:
         if: always() && steps.plan.outputs.exit_code != '0'
         env:
           EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
-          STACK_NAME: ${{ steps.plan.outputs.stack_name }}
+          # A leg whose `terraform init` fails skips the plan step, so stack_name is unset;
+          # fall back to the directory so the [ERROR] email still names its stack.
+          STACK_NAME: ${{ steps.plan.outputs.stack_name || matrix.directory }}
         run: |
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
@@ -1223,7 +1270,9 @@ jobs:
 
           PLAN_SNIPPET=""
           if [[ -f "${RUNNER_TEMP}/plan-output.txt" ]]; then
-            PLAN_SNIPPET=$(head -c 4000 "${RUNNER_TEMP}/plan-output.txt" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+            # Refresh lines first: a root with ~100 resources otherwise spends the whole 4000-byte
+            # budget on them and the email never shows the error. The issue keeps the full text.
+            PLAN_SNIPPET=$(grep -v ': Refreshing state\.\.\.' "${RUNNER_TEMP}/plan-output.txt" | head -c 4000 | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
           fi
 
           { echo "<h2>${ALERT_TYPE}: ${STACK_NAME}</h2>"
@@ -1768,8 +1817,8 @@ jobs:
   #
   # WHY THIS IS A SEPARATE JOB AND NOT A CLAIM ABOUT THE DRIFT CHECK ABOVE. An earlier draft
   # of the #7025 plan asserted that "the existing scheduled-terraform-drift run would also
-  # surface an unmanaged host". It would not, twice over: this workflow's matrix is
-  # `apps/web-platform/infra` + `infra/github` and does not include the rehearsal root, and
+  # surface an unmanaged host". It would not, twice over: this workflow's matrix does not
+  # include the rehearsal root, and
   # more fundamentally `terraform plan` reports on resources IN STATE — a host the rehearsal
   # root's state has forgotten (a destroy that failed after the state write, an aborted run,
   # a hand-deleted state object) is invisible to every plan in this repository, forever.

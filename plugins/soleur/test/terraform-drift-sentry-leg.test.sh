@@ -204,7 +204,7 @@ check_sentry_arm() {
   [[ "$RUN_RC" -eq 0 ]] || { echo "    step rc=$RUN_RC under bash -e"; bad=1; }
   [[ "$(out_val exit_code)" == "$want" ]] || { echo "    exit_code=$(out_val exit_code), want $want"; bad=1; }
   [[ "$(out_val stack_name)" == "web-platform/sentry" ]] || { echo "    stack_name=$(out_val stack_name)"; bad=1; }
-  ! grep -q 'DOPPLER' "$RUN_LOG" || { echo "    doppler was invoked"; bad=1; }
+  ! grep -qE '^DOPPLER_(ARGV|CALLED)' "$RUN_LOG" || { echo "    doppler was invoked"; bad=1; }
   [[ "$(tf_calls)" -eq 1 ]] || { echo "    terraform calls=$(tf_calls), want 1"; bad=1; }
   [[ " $argv " == *" plan "* ]] || { echo "    argv lacks plan: $argv"; bad=1; }
   for a in -detailed-exitcode -no-color -input=false; do
