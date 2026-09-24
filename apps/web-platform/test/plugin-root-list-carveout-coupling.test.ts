@@ -1,7 +1,8 @@
 import { describe, test, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { EXACT_LITERAL_SAFE_COMMANDS } from "../server/safe-bash";
+import { EXACT_LITERAL_SAFE_COMMANDS, TRAILING_SAFE_REDIRECT } from "../server/safe-bash";
+import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../server/plugin-path";
 
 /**
  * AC5↔AC6 coupling guard (Slice C, #6121 / ADR-093).
@@ -28,20 +29,20 @@ import { EXACT_LITERAL_SAFE_COMMANDS } from "../server/safe-bash";
  * guarantees the trusted DEPLOYED script runs; the carve-out governs only the
  * approval prompt, so drift is UX friction, never untrusted-code execution.
  *
- * Scope (deliberate, YAGNI): the guard covers the `${CLAUDE_PLUGIN_ROOT:-…}`
- * default-expansion form of `worktree-manager.sh list|ls` only. A script
- * *rename* or a var-expansion form without the `:-` default yields zero matches
- * for that site (the site becomes unguarded) — both are larger changes that
- * warrant their own review; extend the regex when a second read-only verb or
- * script actually appears in a migrated skill.
+ * Scope (deliberate, YAGNI; re-scoped by #7453 / ADR-179 A19): the guard covers every
+ * `${CLAUDE_PLUGIN_ROOT…}` rendering of `worktree-manager.sh list|ls` — the modifier
+ * group is `[^}]*`, so the bare token and any default-arm form are both EXTRACTED and
+ * then decided by membership. Each emission is checked twice: as written, and as the
+ * SDK loader substitutes it with the deployed root. A script *rename* still yields
+ * zero matches for that site; the exact count below turns that into a red rather than
+ * a silently unguarded site.
  *
  * Drift-guard hygiene (learnings #4): this is a DIRECTORY WALK over the live
  * SKILL.md tree, never a hardcoded file list — a new skill that emits a
- * `list`/`ls` is covered automatically. The `>= 1` vacuity floor catches a
- * broken walk/regex (which would otherwise pass the membership assertion
- * vacuously). It is deliberately NOT pinned to today's exact count (4 — the
- * git-worktree `list` sites at SKILL.md:72,124,217,299) so that legitimately
- * removing a `list` site does not false-fail the guard.
+ * `list`/`ls` is covered automatically. The count is pinned EXACTLY at 4 (the four
+ * git-worktree `list` sites), so a broken walk/regex, a lost site, or a site that
+ * drifted out of the regex's reach all go red. Removing a `list` site legitimately
+ * means editing that number — a reviewed diff.
  */
 
 const REPO_ROOT = resolve(__dirname, "../../..");
@@ -64,8 +65,18 @@ const SKILLS_ROOT = resolve(REPO_ROOT, "plugins/soleur/skills");
 //    the tail makes the drifted string a non-member → RED.
 // The match is `.trim()`-ed before the membership check to mirror safe-bash's
 // `candidate.trim()`, so a benign trailing space is not a false failure.
+//  - `"?` on both sides of the root and after the script — quote-tolerant, so a
+//    misquoted emission (`"${…}"/skills/…`) is EXTRACTED and fails membership.
+//  - `\s+` before the verb — whitespace-tolerant for the same reason.
 const LIST_EMISSION =
-  /(?:bash )?\$\{CLAUDE_PLUGIN_ROOT:-[^}]+\}\/skills\/git-worktree\/scripts\/worktree-manager\.sh (?:list|ls)\b[^\n`|;&)>]*/g;
+  /(?:bash\s+)?"?\$\{CLAUDE_PLUGIN_ROOT[^}]*\}"?\/skills\/git-worktree\/scripts\/worktree-manager\.sh"?\s+(?:list|ls)\b[^\n`|;&)>]*/g;
+
+const TOKEN = "${CLAUDE_PLUGIN_ROOT}";
+
+/** Mirror safe-bash stage 0: strip one trailing safe stderr redirect, then trim. */
+function normalise(emission: string): string {
+  return emission.replace(TRAILING_SAFE_REDIRECT, "").trim();
+}
 
 function walkMarkdown(dir: string): string[] {
   const out: string[] = [];
@@ -94,19 +105,39 @@ function collectListEmissions(): string[] {
 describe("plugin-root list/ls carve-out coupling (AC5↔AC6, #6121)", () => {
   const emissions = collectListEmissions();
 
-  test("every migrated list/ls emission is a member of EXACT_LITERAL_SAFE_COMMANDS", () => {
+  test("every list/ls emission, raw AND as the loader renders it, is a member of EXACT_LITERAL_SAFE_COMMANDS", () => {
     for (const cmd of emissions) {
+      const raw = normalise(cmd);
+      const rendered = raw.replaceAll(TOKEN, SOLEUR_PLUGIN_PATH_DEFAULT);
       expect(
-        EXACT_LITERAL_SAFE_COMMANDS.has(cmd),
-        `Emitted read-only command is NOT carved out (degrades from a no-prompt auto-approve to the review-gate prompt on the CLI / pre-consent server): ${cmd}`,
+        EXACT_LITERAL_SAFE_COMMANDS.has(raw) && EXACT_LITERAL_SAFE_COMMANDS.has(rendered),
+        `Emitted read-only command is NOT carved out (raw member: ${EXACT_LITERAL_SAFE_COMMANDS.has(raw)}, rendered member: ${EXACT_LITERAL_SAFE_COMMANDS.has(rendered)}) — it degrades to the review-gate prompt: ${cmd}`,
       ).toBe(true);
     }
   });
 
-  test("vacuity guard: the walk found at least one list/ls emission", () => {
-    // Current inventory = 4 (git-worktree/SKILL.md:72,124,217,299). A broken
-    // walk or regex yields 0 here, which would make the membership assertion
-    // above pass vacuously.
-    expect(emissions.length).toBeGreaterThanOrEqual(1);
+  test("exact count: the walk found the four git-worktree list sites", () => {
+    // Pinned, not a floor: a broken walk/regex (0), a lost site, or one that drifted
+    // out of reach all change this number.
+    expect(emissions.length).toBe(4);
+  });
+
+  test("normalisation: a trailing safe redirect is stripped before membership (must-pass)", () => {
+    const cmd = `bash "${TOKEN}/skills/git-worktree/scripts/worktree-manager.sh" list 2>/dev/null`;
+    expect(EXACT_LITERAL_SAFE_COMMANDS.has(normalise(cmd))).toBe(true);
+  });
+
+  test("drift control: a misquoted or default-armed emission is EXTRACTED and is a non-member", () => {
+    const DEF = ":-"; // assembled so this file never spells the rejected form as a literal
+    const drifted = [
+      `bash "${TOKEN}"/skills/git-worktree/scripts/worktree-manager.sh list`,
+      `bash \${CLAUDE_PLUGIN_ROOT${DEF}./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list`,
+      `bash "${TOKEN}/skills/git-worktree/scripts/worktree-manager.sh" list --json`,
+    ];
+    for (const d of drifted) {
+      const got = [...d.matchAll(LIST_EMISSION)].map((m) => normalise(m[0]));
+      expect(got).toHaveLength(1);
+      expect(EXACT_LITERAL_SAFE_COMMANDS.has(got[0])).toBe(false);
+    }
   });
 });

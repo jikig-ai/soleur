@@ -51,6 +51,8 @@
 // full C0 range (`\x00-\x1f`) plus DEL (`\x7f`) is rejected to seal
 // log-injection / null-byte truncation surfaces — `\n` (`\x0a`) and
 // `\r` (`\x0d`) fall inside that range and are therefore double-covered.
+import { SOLEUR_PLUGIN_PATH_DEFAULT } from "./plugin-path";
+
 const SHELL_METACHAR_DENYLIST = /[;&|`<>$\\\x00-\x1f\x7f\u2028\u2029]/;
 // Path-traversal denylist (#3252). Matches `..` only as a parent-dir segment
 // — preceded by start-of-string, slash, or whitespace AND followed by
@@ -145,30 +147,41 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // auto-approve is NO LONGER a bare `(?:\./)?plugins/soleur/…` regex here. On the
   // Concierge SERVER surface, a CWD-relative `./plugins/soleur/…` resolves to the
   // connected repo's UNTRUSTED committed copy, so auto-approving it ran untrusted
-  // code. It now lives in EXACT_LITERAL_SAFE_COMMANDS below as the deployed
-  // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` form (server → /app deployed copy;
-  // CLI → local checkout), matched by exact string equality (no `$`-denylist
-  // relaxation). See isSafeSingleSegment stage 0.
+  // code. It now lives in EXACT_LITERAL_SAFE_COMMANDS below as the loader-anchored
+  // `"${CLAUDE_PLUGIN_ROOT}/…"` form, raw and as the SDK substitutes it (ADR-179
+  // A19, #7453), matched by exact string equality (no `$`-denylist relaxation).
+  // See isSafeSingleSegment stage 0.
 ];
 
-// Exact-literal safe-command carve-out (Slice B, #6121). A CLOSED set of KNOWN
-// fixed command literals that legitimately contain `${CLAUDE_PLUGIN_ROOT:-./plugins/
-// soleur}` — a bash DEFAULT-VALUE expansion (`:-`), NOT command substitution
-// (`$(…)`) — and would otherwise be rejected by SHELL_METACHAR_DENYLIST at stage 1.
-// Matched by EXACT string equality on the trimmed (redirect-stripped) segment, so
-// there is ZERO arg-variation / injection surface: only these precise strings pass,
-// and their runtime expansion is trusted on BOTH surfaces (server → the platform-
-// deployed `/app/shared/plugins/soleur`; CLI → the local `./plugins/soleur`
-// checkout). This does NOT loosen the general `$`/`{`/`}` denylist for any other
-// command — `${FOO}` / `$(…)` / a `..`-traversal / a different script path all
-// still fall through to the denylist (verified in safe-bash.test.ts). Only
-// read-only verbs (`list`/`ls`) are included; write verbs (create/cleanup-merged/
-// draft-pr) stay gated (they run via the autonomous/sandbox path, never here).
+// Exact-literal safe-command carve-out (Slice B, #6121; re-anchored by #7453, ADR-179
+// A19). A CLOSED set of the fixed `worktree-manager.sh list|ls` literals the
+// git-worktree skill emits. They would otherwise be rejected by SHELL_METACHAR_DENYLIST
+// at stage 1. Matched by EXACT string equality on the trimmed (redirect-stripped)
+// segment, so there is ZERO arg-variation / injection surface: only these precise
+// strings pass. This does NOT loosen the general `$`/`{`/`}` denylist for any other
+// command — `${FOO}` / `$(…)` / a `..`-traversal / a different script path all still
+// fall through to the denylist (verified in safe-bash.test.ts). Only read-only verbs
+// (`list`/`ls`) are included; write verbs (create/cleanup-merged/draft-pr) stay gated.
+//
+// Two renderings, each reachable under one branch (the hosted substitution is settled
+// by SDK code inspection — `plugins:[{path}]` becomes `--plugin-dir` — not measured
+// on the server):
+//   - BARE: the skill text as written. Reached if the token arrives unsubstituted; the
+//     sandbox injects CLAUDE_PLUGIN_ROOT (agent-env.ts), and unset it expands to a
+//     root-anchored `/skills/…` path that fails closed.
+//   - SUBSTITUTED: the text as the loader delivers it on the hosted surface, rooted at
+//     the deployed `/app` copy.
+// A `SOLEUR_PLUGIN_PATH` repoint makes the substituted literal miss; that falls back to
+// an approval prompt, which is fail-safe. The root is the CONSTANT, not getPluginPath(),
+// so the admitted set cannot depend on the environment at import time.
 const WORKTREE_MANAGER_DEPLOYED_FORM =
-  "bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh";
+  'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh"';
+const WORKTREE_MANAGER_SUBSTITUTED_FORM = `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh"`;
 export const EXACT_LITERAL_SAFE_COMMANDS: ReadonlySet<string> = new Set([
   `${WORKTREE_MANAGER_DEPLOYED_FORM} list`,
   `${WORKTREE_MANAGER_DEPLOYED_FORM} ls`,
+  `${WORKTREE_MANAGER_SUBSTITUTED_FORM} list`,
+  `${WORKTREE_MANAGER_SUBSTITUTED_FORM} ls`,
 ]);
 
 // Single source of truth for the safe-bash verb list. Used by the
@@ -219,7 +232,7 @@ export const SAFE_BASH_NEAR_MISS_PREFIX = new RegExp(
 // the denylist runs so the suffix's own `>`/`&` don't trip SHELL_METACHAR_
 // DENYLIST. File-path redirects (`>`, `>>`, `<`, `>&`) are NOT recognized and
 // remain denied because they survive the strip and hit the denylist.
-const TRAILING_SAFE_REDIRECT = /\s+(?:2>\/dev\/null|2>&1)\s*$/;
+export const TRAILING_SAFE_REDIRECT = /\s+(?:2>\/dev\/null|2>&1)\s*$/;
 
 // git/gh write-to-file flag denylist (review PR #4868). `git diff|log|show
 // --output=<file>` writes diff content to an arbitrary path — an
@@ -243,8 +256,8 @@ function isSafeSingleSegment(segment: string): boolean {
   // containing `>`/`<`/`&` survives to the denylist below.
   const candidate = segment.replace(TRAILING_SAFE_REDIRECT, "");
   // Stage 0: exact-literal carve-out (Slice B, #6121). A CLOSED set of known
-  // fixed command literals that legitimately carry `${CLAUDE_PLUGIN_ROOT:-…}` (a
-  // default-value expansion, not `$(…)`). Matched by EXACT equality on the
+  // fixed command literals that legitimately carry `${CLAUDE_PLUGIN_ROOT}` (a
+  // parameter expansion, not `$(…)`). Matched by EXACT equality on the
   // trimmed segment BEFORE the `$`/`{`/`}` denylist, so these — and ONLY these
   // precise strings — are admitted; any arg variation, injection tail, or
   // different var/path falls through to the intact denylist below. `&&`-chains
