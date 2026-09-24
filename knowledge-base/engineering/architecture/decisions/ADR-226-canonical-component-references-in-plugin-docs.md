@@ -107,6 +107,17 @@ author's loop.
    compat stubs are generated from, which excludes `README*` and `references/`.
    The two glob sets are separate constants so an empty population throws
    `0 docs examined` rather than failing the index invariant.
+
+   > **Amended 2026-09-24 (#8317, agent half).** The population also carries
+   > `:(glob)plugins/soleur/agents/**/*.md` under a third region policy, `agent`.
+   > `agents/` now holds only agent definitions: Claude loads every `.md` under it
+   > as a subagent, so the one non-registry file there
+   > (`operations/references/service-deep-links.md`, a phantom subagent and docs
+   > card that made the public count read 68) was inlined into its only consumer,
+   > `service-automator`. The agent glob therefore equals the registry, and the
+   > tree test pins it to `EXPECTED_SOLEUR_AGENT_COUNT`. The `README*` /
+   > `references/` filter in `discoverAgentPaths()` stays as a defensive guard
+   > with no members.
 3. **One exempt region kind, commands only, strict grammar.**
    `<!-- harness-forms:start -->` … `<!-- harness-forms:end -->` is honoured
    where the region policy is `command`; its subject is the per-harness forms
@@ -117,6 +128,21 @@ author's loop.
    `commands/help.md` is excluded by path with the reason stated: its subject is
    the typed forms, and wrapping 117 of its 155 lines would be a whole-file
    exemption wearing markers.
+
+   > **Amended 2026-09-24 (#8317) — the agent self-name carve-out.** Under the
+   > `agent` policy only, the first line of the doc matching `^name:` is the
+   > self-name candidate. It is accepted when it sits inside a closed leading
+   > frontmatter (line 1 is exactly `---`, a later line is exactly `---`) and
+   > reads byte-exactly `name: <filename stem>`. The stem comes from the path, so
+   > a doc cannot certify itself. The one own-stem token on an accepted line gets
+   > a new verdict, `SELF-NAME`; a rejected candidate's agent-leaf site stays
+   > NONCANONICAL with a dedicated message that says not to write the registry id
+   > there, because `discoverAgentEntries` reads that value into the manifest and
+   > Claude's loader keys on it. This is **not** an exempt region: `EXEMPT` stays
+   > bounded to go.md, the rest of the frontmatter (descriptions included) stays
+   > non-exempt, and the `agent` policy does not honour `harness-forms`. The tree
+   > test asserts exactly one `SELF-NAME` per agent doc, which also reds a
+   > non-agent `.md` dropped under `agents/`.
 4. **Agent-read prose is canonical; human-typed entry points are enumerated per
    harness by design.** `README.md`, `docs/**`, `llms.txt`, `help.md` and the
    harness INSTRUCTIONS files are read by a person who types the form, so the
@@ -142,10 +168,24 @@ author's loop.
    suite asserts the tree file contains the literal
    `expect(noncanonical).toEqual([])`.
 
+   > **Amended 2026-09-24 (#8317).** Eight fixtures added for the self-name
+   > carve-out: seven under `fixtures/harness-parity/agents/<case>/cpo.md` and
+   > `skills/self-name-under-skill.md`, plus an inline table for grammar shapes an
+   > editor could normalize (CRLF, comment, double space, missing or late
+   > frontmatter).
+
 The adapter's own fidelity strings are part of the decision: `workflow-fidelity.ts`
 used to emit `/postmerge`, `/ship`, `/work` on every harness, so
 `invokeSkill("ship")` on Codex said "invoke /postmerge". Every fidelity string
 now goes through `formatSkillRef(skill, harness)`.
+
+> **Amended 2026-09-24 (#8317).** Agent descriptions now name siblings by
+> registry id, and the `.grok/agents/*.md` stubs are adapter output, so
+> `sync-grok-agent-compat.ts` renders each registry agent id in a stub
+> description as its Grok spawn key (`soleur-marketing-copywriter`). The mapping
+> is keyed on the registry's id set, so skill ids are untouched.
+> `agents.manifest.json` keeps the canonical ids. Rendering ids inside agent
+> bodies on Grok stays with #8063.
 
 ## Consequences
 
@@ -201,6 +241,12 @@ Declared gaps, each with an issue:
   into the committed manifest, so it cannot be rewritten to the registry id.
   NG-P needs a frontmatter-value carve-out whose absence is, today, an asserted
   property.
+
+  > **Discharged 2026-09-24 (#8317).** The agent-body half is in the population
+  > with the self-name carve-out (§3 amendment), and all 287 registry-agent sites
+  > were remediated: 67 are self-names, 35 went through `--fix`, 183 bare leaves
+  > became registry ids, and 2 non-references were reworded. The measurements
+  > above stand as taken.
 - The dual-voice `**Grok:** Read plugins/soleur/skills/<x>/SKILL.md in this
   process` lines (19 in 7 docs, `git grep -c '**Grok:** Read'` over the population) are PATH by
   design — a file path resolves on
@@ -240,6 +286,10 @@ ids. A doc naming that leaf is invisible to the classifier. This is the right
 boundary rather than a hole: the same exclusion governs `.grok/agents/` stub
 generation, so that agent has no Grok spawn key and naming it in any form is
 dead on Grok regardless of what this gate says.
+
+> **Superseded 2026-09-24 (#8317).** That file was inlined into
+> `service-automator` and deleted, so `agents/` holds exactly the 67 registry
+> agents and no live agent is outside the index.
 
 Honest limit: moving go.md's region markers to enclose a dispatch line is
 visible only in diff review — one file, one region kind, markers in the diff.
