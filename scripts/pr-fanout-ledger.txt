@@ -34,6 +34,8 @@
 # current head): pull_request rows while queued or in progress, pull_request_target rows only
 # before they start, workflow_run rows never. It reaps ONLY workflows listed here, because a
 # row means the workflow re-runs on the new head (ADR-216 addendum 2026-09-24).
+# A reaped run still `queued` after the delay, with no job in_progress, is force-cancelled.
+# Force skips always(), so a row must not put teardown in a job-level `if: always()` job.
 # consequence = what breaks if this does not run on every PR push; a cancel=no row
 # MUST also say why, as `no cancel: <reason>` (A5). A row with no consequence is a
 # row that should not exist. Columns are TAB-separated (unlike required-checks.txt,

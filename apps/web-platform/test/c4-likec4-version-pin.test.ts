@@ -65,7 +65,7 @@ describe("likec4 CLI / client-renderer version parity", () => {
 
     const ci = readRepo(".github/workflows/ci.yml");
     // matchAll, not match: `test-scripts-heavy` installs likec4 too, so ci.yml
-    // carries TWO `npm install -g likec4@` lines — a first-match read would
+    // carries THREE `npm install -g likec4@` lines (test-webplat, test-scripts, test-scripts-heavy) — a first-match read would
     // never see the second copy drift.
     const ciMatches = [
       ...ci.matchAll(/npm install -g likec4@([0-9][^\s"'`]*)/g),

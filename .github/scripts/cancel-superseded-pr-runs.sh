@@ -13,7 +13,8 @@
 #   run      (default) context reads -> list -> head check -> select -> cancel.
 #            Env: REPO PR_NUMBER EVENT_HEAD_SHA HEAD_REF HEAD_REPO DEFAULT_BRANCH
 #            SELF_RUN_ID (GH_TOKEN for gh). Optional: CSPR_DRY_RUN=1 (print would-cancel
-#            rows, POST nothing), CSPR_HEAD_RETRY_SLEEP (seconds between head reads, 5).
+#            rows, POST nothing), CSPR_HEAD_RETRY_SLEEP (seconds between head reads, 5),
+#            CSPR_FORCE_DELAY (seconds before the force-cancel pass, 45).
 #
 # ONLY WORKFLOWS THAT RE-RUN ON A PUSH ARE REAPED. A pull_request / pull_request_target
 # run is cancellable only when its workflow file is a row of scripts/pr-fanout-ledger.txt,
@@ -31,9 +32,19 @@
 # lands between the head read and a POST is not seen; the reaper for that push replaces
 # this one (per-PR concurrency) within seconds.
 #
-# CANCEL IS GRACEFUL ONLY: POST .../cancel, never .../force-cancel, so `if: always()`
-# steps keep the chance to run (GitHub documents that they do; whether tenant-integration's
-# mutex release runs on a reaped run is an open measurement in the ADR addendum).
+# CANCEL IS GRACEFUL FIRST: POST .../cancel, so `if: always()` steps keep the chance to run.
+# SECOND PASS (force-cancel, #8669 follow-up): a graceful cancel returns 202 but leaves a run
+# `queued` when its only unfinished job is an `if: always()` aggregator still waiting for a
+# runner (measured on the first live reap: 2 of 3 cancelled runs still queued after 60 s,
+# each 0 in_progress / 1 queued / 2 completed). After CSPR_FORCE_DELAY seconds, each target
+# of THIS run's graceful cancels is re-read, and force-cancelled ONLY when the run is still
+# `queued` AND none of its jobs is `in_progress` AT READ TIME (nothing executing, so no mutex
+# is held and no always() step is mid-flight). A run with any in_progress job, or whose
+# status or jobs cannot be read, is never force-cancelled. Residuals: a runner can pick up
+# the queued job between the jobs read and the POST (force then stops it). That is safe
+# today because every job-level always() job in a ledgered workflow is a read-only
+# `*-required` aggregator; a queued always() TEARDOWN job would lose its teardown. And a
+# newer push cancels this reaper (per-PR concurrency) mid-delay, which drops this pass.
 # A pull_request_target run (secrets, outside writes) is re-read immediately before its
 # POST and cancelled only if it has not started.
 #
@@ -188,6 +199,8 @@ do_run() {
   local sleep_s="${CSPR_HEAD_RETRY_SLEEP:-5}"
   [[ "$sleep_s" =~ $NUM_RE ]] || { err "CSPR_HEAD_RETRY_SLEEP is not numeric"; exit 2; }
   local dry="${CSPR_DRY_RUN:-0}"
+  local force_delay="${CSPR_FORCE_DELAY:-45}"
+  [[ "$force_delay" =~ $NUM_RE ]] || { err "CSPR_FORCE_DELAY is not numeric"; exit 2; }
   load_reapable > /dev/null || exit 2
 
   TMPD="$(mktemp -d)"
@@ -252,7 +265,7 @@ do_run() {
   # --- 5. cancel (graceful only) -------------------------------------------------------
   local cancelled=0 skipped=0 failed=0 would=0 decision id reason event name sha7 text st
   local -A reasons=()
-  local -a cancelled_lines=()
+  local -a cancelled_lines=() cancelled_ids=()
   skip_as() { skipped=$((skipped + 1)); reasons[$1]=$(( ${reasons[$1]:-0} + 1 )); }
   while IFS=$'\t' read -r decision id reason event name sha7; do
     if [[ "$decision" != "cancel" ]]; then skip_as "$reason"; continue; fi
@@ -271,7 +284,7 @@ do_run() {
       would=$((would + 1)); continue
     fi
     if gh api -i -X POST "repos/$REPO/actions/runs/$id/cancel" > "$out" 2> "$errf" < /dev/null; then
-      cancelled=$((cancelled + 1))
+      cancelled=$((cancelled + 1)); cancelled_ids+=("$id")
       cancelled_lines+=("$id	$(sanitize "$name")	$(sanitize "$event")	$(sanitize "$sha7")")
       continue
     fi
@@ -292,6 +305,40 @@ do_run() {
     esac
   done < "$rows"
 
+  # --- 5b. force-cancel pass: only this run's graceful-cancel targets that are still
+  #         `queued` with ZERO in_progress jobs -------------------------------------------
+  local forced=0 fid inprog
+  if (( ${#cancelled_ids[@]} > 0 )); then
+    sleep "$force_delay"
+    for fid in "${cancelled_ids[@]}"; do
+      st=""
+      if ! gh api "repos/$REPO/actions/runs/$fid" --jq .status > "$out" 2> "$errf" < /dev/null; then
+        reasons[force-skipped-unreadable]=$(( ${reasons[force-skipped-unreadable]:-0} + 1 )); continue
+      fi
+      st="$(<"$out")"
+      [[ "$st" == "queued" ]] || continue
+      if ! gh api --paginate "repos/$REPO/actions/runs/$fid/jobs?per_page=100" --jq '.jobs[].status' > "$out" 2> "$errf" < /dev/null; then
+        reasons[force-skipped-unreadable]=$(( ${reasons[force-skipped-unreadable]:-0} + 1 )); continue
+      fi
+      # A run with no readable jobs is not provably idle: never force it.
+      if [[ ! -s "$out" ]]; then reasons[force-skipped-unreadable]=$(( ${reasons[force-skipped-unreadable]:-0} + 1 )); continue; fi
+      inprog="$(grep -cxF in_progress "$out" || true)"
+      if [[ "$inprog" != "0" ]]; then
+        reasons[force-skipped-in-progress]=$(( ${reasons[force-skipped-in-progress]:-0} + 1 )); continue
+      fi
+      if gh api -i -X POST "repos/$REPO/actions/runs/$fid/force-cancel" > "$out" 2> "$errf" < /dev/null; then
+        forced=$((forced + 1))
+        continue
+      fi
+      code="$(http_code "$out" "$errf")"
+      case "$code" in
+        409|404) reasons[force-gone]=$(( ${reasons[force-gone]:-0} + 1 )) ;;
+        *) warn "force-cancel of run $fid failed (HTTP ${code:-?}): $(sanitize "$(<"$errf")")"
+           reasons[force-failed]=$(( ${reasons[force-failed]:-0} + 1 )) ;;
+      esac
+    done
+  fi
+
   # --- 6. summary ----------------------------------------------------------------------
   local rl="?" reason_list=""
   if gh api rate_limit --jq .resources.core.remaining > "$out" 2> /dev/null; then rl="$(<"$out")"; fi
@@ -299,7 +346,7 @@ do_run() {
   if (( ${#reasons[@]} > 0 )); then
     reason_list="$(for k in "${!reasons[@]}"; do printf '%s:%s\n' "$k" "${reasons[$k]}"; done | LC_ALL=C sort | paste -sd, -)"
   fi
-  local line="$PFX pr=#$PR_NUMBER head=${live:0:7} listed=$listed cancelled=$cancelled skipped=$skipped failed=$failed"
+  local line="$PFX pr=#$PR_NUMBER head=${live:0:7} listed=$listed cancelled=$cancelled force_cancelled=$forced skipped=$skipped failed=$failed"
   [[ "$dry" == "1" ]] && line+=" would_cancel=$would"
   line+=" reasons=${reason_list:--} ratelimit_remaining=$rl"
   printf '%s\n' "$line"

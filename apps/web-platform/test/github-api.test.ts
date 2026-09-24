@@ -275,4 +275,46 @@ describe("github-api fetch wrapper", () => {
       expect(GitHubApiError).toBe(GitHubApiErrorFromApp);
     });
   });
+
+  // #8623: the C4 staging deadline must stop GitHub work, not just stop waiting.
+  describe("githubApiGet caller signal", () => {
+    test("the caller's signal is combined into the fetch signal", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      const ac = new AbortController();
+      mockFetch.mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        ac.abort(new Error("stage: deadline"));
+        // The per-attempt signal must reflect the caller's abort.
+        expect(init.signal?.aborted).toBe(true);
+        return { ok: true, status: 200, json: async () => ({}) };
+      });
+      await githubApiGet(installationId, "/repos/o/r/contents/x", { signal: ac.signal });
+    });
+
+    test("an abort during a 5xx retry stops after ONE attempt and rejects with the abort reason", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      const ac = new AbortController();
+      mockFetch.mockImplementationOnce(async () => {
+        ac.abort(new Error("stage: deadline"));
+        return { ok: false, status: 502, text: async () => "", json: async () => ({}) };
+      });
+      await expect(
+        githubApiGet(installationId, "/repos/o/r/contents/x", { signal: ac.signal }),
+      ).rejects.toThrow("stage: deadline");
+      // 1 token call + 1 API attempt; no retry after the caller gave up.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    }, 10_000);
+
+    test("an already-aborted signal makes no API request", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      const ac = new AbortController();
+      ac.abort(new Error("gone"));
+      await expect(
+        githubApiGet(installationId, "/repos/o/r/contents/x", { signal: ac.signal }),
+      ).rejects.toThrow("gone");
+      expect(mockFetch).toHaveBeenCalledTimes(1); // token only
+    });
+  });
 });
