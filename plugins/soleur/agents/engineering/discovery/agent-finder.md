@@ -1,12 +1,12 @@
 ---
 name: agent-finder
-description: "Use this agent when running /plan and the project uses a stack not covered by built-in agents. Queries external registries for community agents matching the detected stack gap. Use functional-discovery to check if a planned feature already exists; use this agent to find agents for a missing tech stack."
+description: "Use this agent when running soleur:plan and the project uses a stack not covered by built-in agents. Queries external registries for community agents matching the detected stack gap. Use soleur:engineering:discovery:functional-discovery to check if a planned feature already exists; use this agent to find agents for a missing tech stack."
 model: inherit
 ---
 
 # Community Agent/Skill Discovery
 
-Find and install community agents and skills for project stacks not covered by built-in agents. This agent is spawned by `/plan` when a stack gap is detected.
+Find and install community agents and skills for project stacks not covered by built-in agents. This agent is spawned by `soleur:plan` when a stack gap is detected.
 
 ## Input
 

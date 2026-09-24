@@ -769,7 +769,7 @@ s = s.replace(old, "cat >/etc/systemd/system/disk-monitor.timer <<" + q + "TIMER
 # silently shrinks the parsed path set. The four entries chosen are the only write_files paths
 # that are NOT also SSH destinations, so the floor fires alone.
 expect_red "M32 (§0 floor: write_files key order hides paths from the extraction)" cloud-init.yml \
-  "0: cloud-init write_files parsed to only 9 paths" '
+  "0: cloud-init write_files parsed to only 10 paths" '
 for tgt in ["/etc/ssh/sshd_config.d/01-hardening.conf",
             "/etc/sudoers.d/deploy-chown",
             "/etc/systemd/system/webhook.service",
@@ -1076,8 +1076,8 @@ s = s[:j] + "\n      \"sudo useradd -l -d /usr/local/bin/phantom-useradd.sh svcu
 
 # ── GUARD 2 (#7226, ADR-237): every Terraform connection block pins host_key ─────────────
 # Rows 1-6 of the plan's Guard 2 matrix, each attributed to its own [FAIL] text. Row 3's floor is
-# reached by renaming server.tf's blocks away (ci-ssh-key.tf's one block remains, so the walk
-# reports 1). Row 4 edits a DIFFERENT .tf, which only Guard 2's directory walk can see.
+# reached by renaming server.tf's blocks away (ci-ssh-key.tf's and workspaces-luks.tf's blocks
+# remain, so the walk reports 2 -- #8632 added the second). Row 4 edits a DIFFERENT .tf, which only Guard 2's directory walk can see.
 expect_red "G2-1 (host_key deleted from the FIRST block)" server.tf "(host_key x0)" '
 old = "    host_key    = local.web_1_ssh_host_key\n"
 assert old in s
@@ -1091,7 +1091,7 @@ s = s[:i] + s[i + len(old):]
 '
 
 expect_red "G2-3 (floor: the walk stops finding server.tf blocks)" server.tf \
-  "G2: swept only 1 SSH connection blocks" '
+  "G2: swept only 2 SSH connection blocks" '
 assert s.count("  connection {\n") >= 18
 s = s.replace("  connection {\n", "  connexion {\n")
 '

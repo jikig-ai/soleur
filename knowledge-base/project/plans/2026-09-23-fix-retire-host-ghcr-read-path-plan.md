@@ -632,7 +632,7 @@ close grade is therefore a **conjunction**, per host, over the window since the 
    > and its value is the drift signal. `home_ghcr_auth` is **not graded** — see the scope correction
    > above.
 2. zero `stage=relogin_failed` rows — the operator's stated criterion; **and**
-3. a latest `IMAGE_VERIFY*` verdict that is not `result=verify_failed`.
+3. a latest `IMAGE_VERIFY*` verdict in the leg-3 allowlist (see LEG3_ALLOW_RE).
 
 Leg 3 exists because devex review measured that **no Sentry rule matches `result=verify_failed`** —
 `grep -n 'cosign\|verify_failed' apps/web-platform/infra/sentry/issue-alerts.tf` returns **zero hits**.
@@ -792,7 +792,7 @@ error_reporting:
 
 failure_modes:
   - mode:        "The sweep deletes or corrupts the zot auths entry that shares the deploy docker config"
-    detection:   "IMAGE_VERIFY_FAIL: result=<class> in journald, graded per host as leg 3 of scripts/followthroughs/ghcr-read-retired-8036.sh (latest-verdict-per-_MACHINE_ID, closed allowlist ok|reused_local_reload)"
+    detection:   "IMAGE_VERIFY_FAIL: result=<class> in journald, graded per host as leg 3 of scripts/followthroughs/ghcr-read-retired-8036.sh (latest-verdict-per-_MACHINE_ID, closed allowlist `ok` (see LEG3_ALLOW_RE))"
     alert_route: "the follow-through sweeper comments on #8036 (exit 5 = ACTION REQUIRED). NOT #8037: that tracker is CLOSED, so its sweeper only evaluates inside a closed-set lookback and cannot carry this leg. There is no Sentry rule for cosign verdicts (grep issue-alerts.tf: zero hits), which is why the leg is carried by the probe."
   - mode:        "zot is unreachable or unconfigured, and there is no longer a second registry"
     detection:   "registry=zot-gate-degraded Sentry event (zot_gate_degraded_event) and, on a total miss, op:image-pull pull_result:* via pull_failure_event"
@@ -941,7 +941,12 @@ than passing with `FALLBACKS=0`.
 **Property.** #8036 closes only when **every host that emitted any `ci-deploy` record since
 `earliest`** has positively demonstrated it is running the post-1c script (latest
 `SOLEUR_DEPLOY_GHCR_CONFIG` carries `swept=` and reads `deploy_ghcr_auth=none`), emitted zero
-`stage=relogin_failed`, and has a latest `IMAGE_VERIFY*` verdict that is not `verify_failed`.
+`stage=relogin_failed` NEWER THAN its latest marker, and has a latest `IMAGE_VERIFY*` verdict in
+the closed allowlist `LEG3_ALLOW_RE` (`ok`). AMENDED 2026-09-23 (#8636 review): this Property
+stated the pre-#8600 DENYLIST ("not `verify_failed`"), which is the rule whose removal the test
+row records as INVERTED because it closed #8036 over the very condition the retirement exists
+to end. The legs are single-sourced in the probe as `LEG1_CLAIM` / `LEG2_CLAIM` / `LEG3_CLAIM`;
+read `--explain` for the live contract rather than this paragraph.
 
 > **Scoped to "every host that spoke", not "every deploying host".** A probe that groups by
 > `_MACHINE_ID` over its own result set structurally cannot see a host that emitted nothing — such a

@@ -1,6 +1,6 @@
 # Validation Workshop (if selected)
 
-<!-- Follows brand-architect workshop pattern: worktree, issue, hand off, STOP. See constitution for the workshop archetype. -->
+<!-- Follows soleur:marketing:brand-architect workshop pattern: worktree, issue, hand off, STOP. See constitution for the workshop archetype. -->
 
 1. **Create worktree:**
    - Derive feature name: use the first 2-3 descriptive words from the feature description in kebab-case (e.g., "validate my SaaS idea" -> `validate-saas`). If the description is fewer than 3 words, default to `business-validation`.
@@ -26,13 +26,13 @@
 
    If this fails (no network), print a warning but continue.
 
-4. **Hand off to business-validator:**
+4. **Hand off to soleur:product:business-validator:**
 
-   The business-validator is an interactive workshop agent with sequential gates. Since Task subagents cannot prompt the user directly, relay each gate manually:
+   The soleur:product:business-validator is an interactive workshop agent with sequential gates. Since Task subagents cannot prompt the user directly, relay each gate manually:
 
-   1. Invoke `Task business-validator(feature_description)` -- agent returns the first gate question
+   1. Invoke `Task soleur:product:business-validator(feature_description)` -- agent returns the first gate question
    2. Relay the question to the user via **AskUserQuestion**
-   3. Invoke `Task business-validator(prior_gate_results + user_answer)` -- agent returns next gate question
+   3. Invoke `Task soleur:product:business-validator(prior_gate_results + user_answer)` -- agent returns next gate question
    4. Repeat until all 6 gates complete and the vision alignment check runs
    5. Final invocation writes the validation report to `knowledge-base/product/business-validation.md` inside the worktree
 
@@ -57,7 +57,7 @@
    Branch: feat-<name> (if worktree created)
    Working directory: .worktrees/feat-<name>/ (if worktree created)
 
-   Next: Review the validation report. If verdict is GO, run /soleur:plan to start building.
+   Next: Review the validation report. If verdict is GO, run soleur:plan to start building.
    ```
 
    End brainstorm execution after displaying this message.

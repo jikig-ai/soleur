@@ -171,14 +171,14 @@ export function createCodexAppServerLifecycleSource(
       const turn = await active.session.start(input.text);
       active.thread = turn.thread;
       active.turnId = turn.turnId;
-      return active.connection.events.stream();
+      return active.connection.events.streamTurn(turn.turnId);
     },
     continue: async (_context: EngineRunContext, session: NativeSessionReference, input: EngineInput, lease: CodexCredentialLease) => {
       const active = await ensureRuntime(lease);
       const turn = await active.session.resume(session.resumeHandle, input.text);
       active.thread = turn.thread;
       active.turnId = turn.turnId;
-      return active.connection.events.stream();
+      return active.connection.events.streamTurn(turn.turnId);
     },
     cancel: async (_context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<"requested" | "confirmed"> => {
       const active = await ensureRuntime(lease);

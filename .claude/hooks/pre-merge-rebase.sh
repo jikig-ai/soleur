@@ -263,7 +263,7 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]] && [[ -z "$REVIEW_ISSUE
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: "BLOCKED: No review evidence for commits in origin/main..HEAD. If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>. Signals checked: todos/ tagged code-review introduced by this branch, a review: commit or Reviewed-By-Soleur: trailer, a code-review-labelled issue citing this PR. Note the scope is this branch only — evidence already on main does not count."
+      permissionDecisionReason: "BLOCKED: No review evidence for commits in origin/main..HEAD. If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>. Signals checked: todos/ tagged code-review introduced by this branch, a review: commit or Reviewed-By-Soleur: trailer, a code-review-labelled issue citing this PR. Note the scope is this branch only — evidence already on main does not count. Run the trailer script as its own command, then git push, then re-issue gh pr merge: a chained `emit-review-trailer.sh && gh pr merge` is denied because this hook evaluates the whole command before any of it runs."
     }
   }'
   exit 0
@@ -366,13 +366,16 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
     headless_or_stderr info "regenerable conflict resolved — merge committed, continuing"
   else
     [[ -n "$REGEN_ERR" ]] && headless_or_stderr info "regen-on-conflict declined: $REGEN_ERR"
+    # The resolver's refusal is the diagnosis; carry its last [regen-on-conflict] line into the
+    # deny reason, which is the only text an agent sees (stderr of a PreToolUse hook is not).
+    REGEN_WHY="$(printf '%s\n' "$REGEN_ERR" | grep '^\[regen-on-conflict\]' | grep -v '\] regenerating ' | tail -1 | LC_ALL=C tr -d '\000-\037\177' | cut -c1-400)" || REGEN_WHY=""
     emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
       "When a command exits non-zero or prints a warning" "$CMD"
-    jq -n --arg files "${CONFLICT_FILES:-unknown}" '{
+    jq -n --arg files "${CONFLICT_FILES:-unknown}" --arg why "$REGEN_WHY" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: ("BLOCKED: Merge of origin/main failed. Conflicting files: " + $files + ". Resolve conflicts manually before merging.")
+        permissionDecisionReason: ("BLOCKED: Merge of origin/main failed. Conflicting files: " + $files + ". " + (if $why != "" then $why + " " else "" end) + "Resolve conflicts manually before merging; regenerate a generated artifact rather than hand-merging it (merge-pr SKILL.md 3.2b).")
       }
     }'
     exit 0

@@ -20,6 +20,7 @@ import {
   agentIdToCompatFilename,
   agentIdToGrokSubagentType,
   buildCompatStubBody,
+  renderAgentIdsForGrok,
   PLUGIN_ROOT,
 } from "../lib/agent-registry";
 
@@ -39,14 +40,36 @@ function manifestJson(manifest: ReturnType<typeof buildAgentsManifest>): string 
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
-/** YAML-safe quoted scalar for frontmatter fields that may contain `:`, `§`, etc. */
+/** Claude Code aliases. Grok's catalog does not resolve them (ADR-110 decision 4). */
+const CLAUDE_MODEL_ALIASES = new Set(["haiku", "sonnet", "opus", "fable"]);
+
+/** Omit the line for a Claude alias so the Grok stub inherits the session model. */
+function grokStubModelLine(model: string): string | null {
+  if (CLAUDE_MODEL_ALIASES.has(model)) return null;
+  return `model: ${model}`;
+}
+
+/**
+ * YAML-safe double-quoted scalar for frontmatter fields that may contain `:`, `§`, etc. Line
+ * breaks and control characters are escaped too: a raw newline could close the stub's
+ * frontmatter early under a `^---` regex parser.
+ */
 function yamlQuote(value: string): string {
-  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
   return `"${escaped}"`;
 }
 
-function compatStubMarkdown(entry: ReturnType<typeof discoverAgentEntries>[number]): string {
-  const description = entry.description || entry.name;
+function compatStubMarkdown(
+  entry: ReturnType<typeof discoverAgentEntries>[number],
+  agentIds: ReadonlySet<string>,
+): string {
+  const description = renderAgentIdsForGrok(entry.description || entry.name, agentIds);
   // Frontmatter name MUST match the Grok spawn key (filename stem = colons→hyphens).
   // Using colon-form here lists `soleur:product:cpo` in available types while
   // spawn only accepts `soleur-product-cpo` (Grok ≤0.2.102 filename-stem match).
@@ -55,19 +78,19 @@ function compatStubMarkdown(entry: ReturnType<typeof discoverAgentEntries>[numbe
     "---",
     `name: ${grokName}`,
     `description: ${yamlQuote(description)}`,
-    `model: ${entry.model}`,
-    "---",
-    "",
-    buildCompatStubBody(entry.path),
-    "",
   ];
+  const modelLine = grokStubModelLine(entry.model);
+  if (modelLine !== null) lines.push(modelLine);
+  lines.push("---", "", buildCompatStubBody(entry.path), "");
   return lines.join("\n");
 }
 
 function expectedCompatFiles(): Map<string, string> {
   const files = new Map<string, string>();
-  for (const entry of discoverAgentEntries()) {
-    files.set(agentIdToCompatFilename(entry.id), compatStubMarkdown(entry));
+  const entries = discoverAgentEntries();
+  const agentIds = new Set(entries.map((e) => e.id));
+  for (const entry of entries) {
+    files.set(agentIdToCompatFilename(entry.id), compatStubMarkdown(entry, agentIds));
   }
   return files;
 }

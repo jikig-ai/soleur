@@ -706,6 +706,18 @@ $trimmed_out
         log "issue #$issue_num: closed and verification passes — no action, no comment"
         return 0
         ;;
+      5)
+        # ACTION REQUIRED on a CLOSED issue: COMMENT, do not reopen. The open path
+        # learned exit 5; this one did not, so a 5 fell into the TRANSIENT catch-all
+        # below and posted nothing (#8657). That silently discarded the one verdict
+        # class whose whole purpose is to need a human: ghcr-read-retired-8036.sh
+        # uses exit 5 for cosign verdicts that NO Sentry rule matches, so the sweeper
+        # comment is its only notification — and that probe's own header argues leg 3
+        # must live on an OPEN tracker precisely because a closed one cannot carry it.
+        # Comment rather than reopen: 5 is "a human should look", not "the thing that
+        # closed this regressed" (that is 1, above).
+        action="comment"; verdict="ACTION REQUIRED"
+        ;;
       *)
         # TRANSIENT on a closed issue: no action AND no comment. A flaky probe
         # must not accrete daily noise on an issue that is already closed.
