@@ -57,4 +57,4 @@ Plan: `knowledge-base/project/plans/2026-09-23-fix-dev-ledger-closed-unmerged-re
 
 - [x] 6.1 Raise `EXPECTED_CASES` to the exact count; update the `guard-vacuity-floor.test.sh` comment number.
 - [x] 6.2 Repo ratchets (AC9) and `c4-count-parity` (AC13).
-- [ ] 6.3 Pre-merge live read (AC12): `gh workflow run scheduled-dev-migration-drift.yml --ref feat-one-shot-8605-8606-dev-reconcile`.
+- [x] 6.3 Pre-merge live read (AC12): `gh workflow run scheduled-dev-migration-drift.yml --ref feat-one-shot-8605-8606-dev-reconcile`.
