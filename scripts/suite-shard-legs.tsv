@@ -261,7 +261,6 @@ scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	5
 scripts/check-tom4-rls-posture-live	1
 scripts/ci-deploy-sentry-post-fail-6475	6
-scripts/ci-leg-durations-8006	6
 scripts/classify-workflow-transitions	2
 scripts/compound-promote	6
 scripts/compound-promote-outcome-8281	3
