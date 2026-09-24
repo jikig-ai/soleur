@@ -82,3 +82,56 @@ function remains the template.
 them in the canonical format from `lib/c4-canonical.mjs`: one value per line, with view hashes
 blanked. It does this so the app and the repo/plugin writers emit identical files (ADR-235
 amendment of the same date). A canonicalize failure maps to `io_error`, and nothing is committed.
+
+## Amendment — 2026-09-24 (#8623): the render input is the committed source set, fetched from GitHub; never the tenant workspace
+
+**Invariant.** Tenant workspace content — the worktree **and** its `.git` — is untrusted input to
+any server-side tool. A sandboxed agent can write it (`allowWrite: [workspacePath]`; the Agent SDK's
+built-in deny list covers `.git/hooks` and `.git/config` but not `.git/objects`, refs or `HEAD`).
+GitHub is trusted only for the **modes and bytes at a fixed commit sha**, never for the content
+itself: the tenant can push anything.
+
+**Correction.** The Decision's SECURITY framing ("no command-injection or scope-escape surface
+here") held for the argv and was false for the input directory. likec4 1.50.0 executes a
+`likec4.config.{js,cjs,mjs,ts,cts,mts}` anywhere under its cwd, honours `.likec4rc` /
+`likec4.config.json` `include.paths`, and follows symlinks. Measured with the pinned binary and the
+server's argv/env: a tracked config in the diagrams folder or a subfolder ran (sentinel written);
+a symlinked directory's and an `include.paths` directory's elements reached the exported model.
+The acceptance suite was RED on `renderC4Model(workspacePath)` at `393cd84112`.
+
+**Decision.** `renderC4Model(stage)` takes no workspace path. It creates a `mkdtemp` directory
+under a server-private staging root (`server/c4-staging-root.ts`, default
+`~/.cache/soleur-c4-render`, never `os.tmpdir()`), lets `stage` fill `<dir>/src` **before** taking
+a render slot and under a 10 s deadline that aborts in-flight requests, then spawns likec4 with
+`cwd = <dir>/src` and `-o <dir>/model.likec4.json`. In production `stage` is
+`stageCommittedC4Sources` (`server/c4-stage-sources.ts`): it lists the diagrams subtree of the
+commit GitHub returned for the `.c4` write (Contents API for the folder's type and tree sha, then
+the recursive Trees API for true modes), refuses likec4 configs (all nine names), symlinks,
+submodules, a truncated listing, more than 50 sources or more than 4 MiB of sources as
+`unsafe_source` **before any blob is fetched**, then fetches only regular-file
+`.c4`/`.likec4`/`.like-c4` blobs (at most 8 in flight) and writes them `wx`/`0600`. The extension
+allowlist is the security control; the refusals exist so the user is told (a warning-level Sentry
+event and a class-specific `rerenderDiagnostic`) instead of getting a model that differs from what
+the repo declares. The staging root is created and added to the agent sandbox's `denyRead`, so an
+agent can neither write a config into a stage between staging and spawn nor read another tenant's
+staged sources.
+
+The model commit is conditioned on the rendered commit: the PUT carries the model blob sha from
+that commit's listing. A 409/422 re-lists HEAD: an unchanged source set (path + blob sha pairs)
+retries once; a changed one means a newer save's render supersedes this one (`logger.warn
+event=c4_rerender_superseded`, no Sentry, no diagnostic). Pinning the render to its own commit
+without this would let an older render overwrite a newer model.
+
+**Alternatives rejected.** Rendering inside the bwrap agent sandbox (contains execution instead of
+removing the config from the input; sandbox orchestration on a synchronous save path). Reading the
+local object store with per-object hash verification (the agent can write `.git/objects`, refs,
+`HEAD` and `objects/info/alternates`; correctness would need Merkle verification, git env
+hardening and alternates/gitfile/promisor handling, against ~3 API calls). Staging from the
+worktree with `lstat`/`O_NOFOLLOW` (includes untracked agent-written files; TOCTOU against a
+writing agent). Silently skipping configs (commits a model different from the repo's).
+
+**Residuals.** The likec4 child still runs as the app's uid; with no config it only parses DSL,
+bounded by the spawn timeout. Wrapping it in bwrap is defence in depth, tracked as #8696. A `.c4`
+with a relative `icon` path bakes the random staging path into the model (it already baked the
+workspace path). The editor's staleness banner copy is tracked as #8695. `syncWorkspace`'s
+`git pull` in the tenant workspace is a separate surface, measured separately.
