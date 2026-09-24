@@ -19,3 +19,12 @@
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst, learnings-researcher, functional-discovery, cto, spec-flow-analyzer, dhh/kieran/code-simplicity reviewers, test-design-reviewer, security-sentinel, observability-coverage-reviewer, architecture-strategist, git-history-analyzer.
+
+## Work / Review / QA / Compound Phases
+- Work: RED 7d8d2e1d50, GREEN 1244626655 (+ ef9a321979). Live PASS pre-review.
+- Review: 9 seats report-only; 7 reproduced false-PASS paths rolled up to one gap; all fixed inline in da45d1b89d; 0 scope-outs; sibling-probe evidence commented on #8698. Trailer 83449394f4 (full 9/9).
+- Battery (post-review head): 53/53 caught, 0 survivors, pristine control 307/0.
+- QA: 12/12 ACs re-run by literal command; AC10/AC11b amended (91afb7ccab).
+- Compound: learning 2026-09-24-my-probe-accepted-more-evidence-than-its-absence-queries-could-see.md; routed to followthrough-convention.md and plan-sharp-edges.md.
+- Archival of this spec dir is deferred until after ship Phase 6 (it reads decision-challenges.md).
+- Remaining: soleur:ship -> merge -> post-merge live run + comment on #7761.

@@ -2419,7 +2419,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // probe (`scripts/sentry-alert-live-fidelity.sh`) reads the org's alert workflows with the
   // Doppler prd SENTRY_IAC_AUTH_TOKEN. NO SUBSTITUTE: the property is the LIVE content of those
   // workflows, which no unauthenticated Sentry endpoint exposes. Genuine declaration.
-  const BASELINE_DECLARED_PROBES = 24;
+  // #7761 (2026-09-24): +1 (main's 24 -> 25) for `2026-09-24-fix-7761-flip-rollout-probe-post-cutover-answer-key-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. NO SUBSTITUTE: the evidence is the dedicated host's
+  // journald rows in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 25;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
