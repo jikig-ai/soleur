@@ -15,7 +15,7 @@ supersedes-plan: knowledge-base/project/plans/2026-07-27-feat-tmpfs-ownership-ke
 
 Soleur sessions leave tens of thousands of orphaned temp dirs and files across
 `/tmp` and `/var/tmp`. Measured on the operator host (2026-09-24): `/tmp` 5.5 GB
-(~14k entries), `/var/tmp` **27 GB (~45k+ entries in ~7 days, ~4 GB/day)** —
+(~14k entries), `/var/tmp` **27 GB (~67k top-level entries; +27k produced during the brainstorm session itself)** —
 including **1,484 orphaned git worktrees** and named fixture classes produced by
 our own scripts/tests (`rung2-archive` 12.8k, `gdboot` 7.8k, `inngest-ci/arm` ~6k,
 `pirgate`/`kbcov`/`mutbat`/`gdpr-gate-incidents`/`pmr-*` etc.).
@@ -72,23 +72,32 @@ live reclamation surface.
   (class → count → est. bytes); `--apply` quarantines only classes in a
   committed allowlist past an age floor; everything moves via `mv` to
   `<base>/soleur-quarantine.<uid>/`; prints a forensic list of moved basenames.
-- FR2: Orphaned worktree classification inside the purge: `.git`-bearing dirs
-  are checked against `git worktree list --porcelain`; registered → removed via
-  `git worktree remove` **only** when clean + merged + no unpushed commits +
-  past age floor; unregistered or unverifiable → quarantine + report, never
-  delete.
+- FR2: Orphaned worktree classification inside the purge: `.git`-file-bearing
+  dirs (worktree pointers; `.git` *directories* are report-only) are resolved
+  against the OWNING repo's `git --git-dir=<main> worktree list --porcelain`;
+  registered → removed via `git worktree remove` **only** when clean
+  (no-modified/untracked/ignored) + merged + no unpushed commits + no live
+  process inside + past age floor; proven-unregistered → quarantine + report;
+  unverifiable → **retain** + `retain-since` stamp → operator-decision list,
+  never delete.
 - FR3: `soleur_scratch_session_begin [base]` in `scripts/lib/scratch-root.sh`
   per the #7004 plan tasks 1.1–1.9 (subshell guard, sourced-file guard,
-  `mktemp -d "$base/soleur-run.$$.XXXXXXXX"`, holder fd, `TMPDIR` export, single
-  quarantine trap).
+  `mktemp -d "$base/soleur-run.$$.XXXXXXXX"`, holder fd `declare -g`, `TMPDIR`
+  export). Trap contract: `begin` installs NO trap by default — callers splice
+  `_soleur_scratch_cleanup` into their EXISTING trap (ADR-129; opt-in trap
+  mode only for callers with no later EXIT trap). Nested `begin` no-ops when
+  `SOLEUR_SCRATCH_SESSION_ROOT` is already exported; base = base of the
+  effective TMPDIR.
 - FR4: `reap_orphan_scratch_roots()` (Reaper 3) in `scripts/tmpfs-guard.sh`
   covering `TMPFS_GUARD_SCRATCH_BASES` — schema-anchored parse, `/proc/<pid>`
   absence, held-fd + environ liveness, allocation-free enumeration, quarantine
-  + TTL drain.
-- FR5: `.soleur-owned` marker — producers write `<dir>/.soleur-owned` with
-  `pid=` + `schema=`; Reaper 3 and the purge treat marker-bearing dirs as
-  declared-owned (same liveness gates as `soleur-run.*`); a marker without
-  `pid=` is invalid and ignored.
+  and TTL drain.
+- FR5: `.soleur-owned` marker — producers write `<dir>/.soleur-owned` (regular
+  file, same-uid) with `pid=` (top-level harness pid) or `owner_root=` +
+  `schema=` + `ns=` (pid-ns/boot-id); Reaper 3 and the purge treat
+  marker-bearing dirs as declared-owned (same liveness gates as
+  `soleur-run.*`); a marker without `pid=`/`owner_root=` is invalid and
+  ignored.
 - FR6: Session-start sweep (`worktree-manager.sh cleanup-merged`) reaps
   schema-named + marker-bearing orphans on **both** bases, sharing the
   tmpfs-guard flock protocol; it never touches non-attributed classes.
