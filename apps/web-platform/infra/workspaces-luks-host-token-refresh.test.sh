@@ -79,12 +79,25 @@ FIXTURE_KEY="fixture-luks-passphrase"
 # Every external command the helper can run is shadowed by a recorder that logs its argv and then
 # execs the REAL binary (resolved to an absolute path BEFORE PATH is changed, so a recorder cannot
 # re-enter itself). Property (3) is then a grep over one file of every argv the helper produced.
-for cmd in grep sed cp mv chmod rm mktemp cat; do
+for cmd in grep sed cp chmod rm mktemp cat; do
   real="$(command -v "$cmd")"
   case "$real" in /*) : ;; *) printf 'FATAL: %s is not an external binary here (%s)\n' "$cmd" "$real"; exit 2 ;; esac
   printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" %q "$*" >> "${STUB_CALLS:?}"\nexec %q "$@"\n' "$cmd" "$real" > "$SCRATCH/bin/$cmd"
   chmod +x "$SCRATCH/bin/$cmd"
 done
+# mv additionally supports fault injection: FIXTURE_MV_CORRUPT=1 appends a stray line to the target
+# after the FIRST real move, so the helper's post-write checks and its restore path are driven.
+real_mv="$(command -v mv)"
+cat > "$SCRATCH/bin/mv" <<EOS
+#!/usr/bin/env bash
+printf 'mv %s\n' "\$*" >> "\${STUB_CALLS:?}"
+$real_mv "\$@" || exit \$?
+if [[ "\${FIXTURE_MV_CORRUPT:-0}" == 1 && ! -e "\${STUB_CALLS}.corrupted" ]]; then
+  : > "\${STUB_CALLS}.corrupted"
+  printf 'STRAY=injected\n' >> "\${@: -1}"
+fi
+EOS
+chmod +x "$SCRATCH/bin/mv"
 cat > "$SCRATCH/bin/logger" <<'EOS'
 #!/usr/bin/env bash
 printf 'logger %s\n' "$*" >> "${STUB_CALLS:?}"
@@ -130,7 +143,7 @@ run_helper() {
   # shellcheck disable=SC2086
   printf '%s' "$input" | PATH="$SCRATCH/bin:$PATH" STUB_CALLS="$SCRATCH/$c.calls" \
     EXPECT_TOKEN="$NEW_TOKEN" DOPPLER_CONFIG_DIR=/tmp/should-be-unset \
-    FIXTURE_DOPPLER_RC="${DRC:-0}" ${DOUT+FIXTURE_DOPPLER_OUT="$DOUT"} \
+    FIXTURE_DOPPLER_RC="${DRC:-0}" FIXTURE_DOPPLER_OUT="${DOUT-fixture-luks-passphrase}" FIXTURE_MV_CORRUPT="${MVC:-0}" \
     bash $flags "$SCRATCH/$c.helper.sh" > "$SCRATCH/$c.out" 2>&1 || rc=$?
   printf '%s\n' "$rc" > "$SCRATCH/$c.rc"
 }
@@ -176,7 +189,7 @@ else
   [[ "$(leaks h1 "$OLD_TOKEN")" == 0 ]] && ok "H1 the OLD token is in no output and no argv of any program" || no "H1 the OLD token leaked into output or an argv"
   grep -qF "$FIXTURE_KEY" "$SCRATCH/h1.out" && no "H1 the passphrase read back is never printed" || ok "H1 the passphrase read back is never printed"
   grep -q 'STUB-MISS' "$SCRATCH/h1.out" && no "H1 no stub was asked a question it does not model" || ok "H1 no stub was asked a question it does not model"
-  ls "$SCRATCH"/h1.env.bak.* >/dev/null 2>&1 && no "H1 the backup copy (holding the old token) is removed" || ok "H1 the backup copy (holding the old token) is removed"
+  ls "$SCRATCH"/h1.env.* 2>/dev/null | grep -vqE '/h1\.env$' && no "H1 no sibling file (backup or tmp) holding a token is left beside the env file" || ok "H1 no sibling file (backup or tmp) holding a token is left beside the env file"
 
   # H2 — no EnvironmentFile: refuse, create nothing, and say why off-box.
   run_helper h2 "$NEW_TOKEN"$'\n' "__ABSENT__"
@@ -210,7 +223,7 @@ else
   [[ "$(rc_of h5)" != 0 ]] && unchanged h5 && ok "H5 a token doppler rejects is refused and the old token is kept" || no "H5 a token doppler rejects is refused and the old token is kept"
   logged_reason h5 token_read_failed && ok "H5 token_read_failed reaches journald" || no "H5 token_read_failed reaches journald"
   DOUT="" run_helper h6 "$NEW_TOKEN"$'\n' "$SEED"
-  [[ "$(rc_of h6)" != 0 ]] && unchanged h6 && ok "H6 an EMPTY key read (rc 0) is refused and the old token is kept" || no "H6 an empty key read is refused"
+  [[ "$(rc_of h6)" != 0 ]] && unchanged h6 && logged_reason h6 token_read_failed && ok "H6 an EMPTY key read (rc 0) is refused and the old token is kept" || no "H6 an empty key read is refused (rc=$(rc_of h6))"
 
   # H7 — xtrace would print the token: refuse before reading it.
   run_helper h7 "$NEW_TOKEN"$'\n' "$SEED" "-x"
@@ -230,6 +243,12 @@ else
   # H10 — duplicate token lines collapse to one.
   run_helper h10 "$NEW_TOKEN"$'\n' "$(printf '%s\nDOPPLER_TOKEN=%s\nDOPPLER_TOKEN=%s\n' "$DSN_LINE" "$OLD_TOKEN" "$OLD_TOKEN")"
   [[ "$(rc_of h10)" == 0 && "$(token_lines h10)" == 1 ]] && ok "H10 duplicate DOPPLER_TOKEN lines collapse to one" || no "H10 duplicate DOPPLER_TOKEN lines collapse to one"
+
+  # H11 — a write that corrupts another line is detected and the ORIGINAL file is restored.
+  MVC=1 run_helper h11 "$NEW_TOKEN"$'\n' "$SEED"
+  [[ "$(rc_of h11)" != 0 ]] && logged_reason h11 envfile_other_lines_changed && ok "H11 a corrupted rewrite is detected (envfile_other_lines_changed)" || no "H11 a corrupted rewrite is detected (rc=$(rc_of h11))"
+  [[ "$(cat "$SCRATCH/h11.env")" == "$SEED" ]] && ok "H11 the original file is restored byte for byte" || no "H11 the original file is restored byte for byte"
+  [[ "$(stat -c %a "$SCRATCH/h11.env")" == 600 ]] && ok "H11 the restored file is mode 600" || no "H11 the restored file is mode 600"
 
   # The helper never starts the unit (comment-stripped, so a sentence about it cannot satisfy this).
   if grep -vE '^[[:space:]]*#' "$HELPER" | grep -qE 'systemctl[[:space:]]+(start|restart)'; then
@@ -353,7 +372,7 @@ done < "$SCRATCH/tf.tsv"
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # Anti-vacuity floor. The threshold sits on the line directly above its `if`.
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=65
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1

@@ -79,9 +79,10 @@ fi
 key=""
 
 # --- 3. Rewrite the token line --------------------------------------------------------------
-bak="$(mktemp "${ENVF}.bak.XXXXXX")" || fail backup_failed
-trap 'rm -f "$bak"' EXIT
-cp -p "$ENVF" "$bak" || fail backup_failed
+# The previous content is kept in memory, not in a backup file, so no second on-disk copy of the
+# old token ever exists. The trailing `x` preserves a final newline through $(...).
+orig="$(cat "$ENVF"; printf x)" || fail envfile_unreadable
+orig="${orig%x}"
 # A stale .tmp (or a symlink planted there) must not be written through.
 rm -f "${ENVF}.tmp"
 
@@ -94,7 +95,8 @@ if [ "$wrc" -ne 0 ]; then
 fi
 
 restore() {
-  cp -p "$bak" "$ENVF" 2>/dev/null
+  rm -f "${ENVF}.tmp"
+  ( umask 077; printf '%s' "$orig" > "${ENVF}.tmp" ) && mv "${ENVF}.tmp" "$ENVF" && chmod 600 "$ENVF"
   fail "$1"
 }
 after="$(grep -v '^DOPPLER_TOKEN=' "$ENVF")"
