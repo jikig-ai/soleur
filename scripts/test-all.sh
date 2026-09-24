@@ -41,17 +41,27 @@ set -euo pipefail
 #      runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
-#   4  REFUSED before anything ran. FOUR producers. The first two are
+#   4  REFUSED before anything ran. SIX producers. The first two are
 #      overridden by SOLEUR_ALLOW_FULL_GATE=1:
 #        (a) SOLEUR_SUBAGENT=1 is set — a DECLARED spawned agent;
 #        (b) a sibling full-gate run is already in flight — a MEASURED condition (#7553).
 #        (b) is the reachable one: nothing in this repo sets SOLEUR_SUBAGENT, so (a)'s
 #        antecedent only holds when someone exports it deliberately.
-#      The other two are affected-mode SELECTION refusals (#8322) — no hatch:
+#      The next two are affected-mode SELECTION refusals (#8322) — no hatch:
 #        (c) AFFECTED_UNRESOLVED reason=zero-selected — the diff selects zero
 #            runnable registrations, which is no gate;
 #        (d) AFFECTED_UNRESOLVED reason=below-floor — the always-on set fell
 #            below _MIN_ALWAYS_ON_DECLARED, meaning the index was gutted.
+#      The last two are #8761's enumerate/deleted-checkout protections:
+#        (e) working tree missing — a deleted cwd detected up-front, or
+#            mid-walk while still in enumerate mode or before the first
+#            dispatch (the deleted-checkout probe is mode-agnostic, but in an
+#            EXECUTING battery past dispatch it exits 3 instead — a mid-run
+#            abort leaves real coverage unresolved, which is 3's shape);
+#        (f) enumerate deadline — the graceful per-registration bound for the
+#            enumerate family. Its hard-bound sibling is the watchdog's
+#            SIGTERM/SIGKILL (143/137), which is not a runner code at all: a
+#            walk that stopped advancing is killed, not refused.
 #      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
 #      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
 #      would make a refused run read as a killed suite.
@@ -575,15 +585,21 @@ fi
 # set (two `test-all.sh` processes spun ~97% CPU for ~5h on a deleted worktree).
 # The probe is PATH-based on purpose: `[[ -e . ]]`/`[[ -d . ]]`/`stat .` stay
 # TRUE on a deleted-but-open cwd (fd-relative stat resolves the retained inode);
-# `[[ -d "$PWD" ]]` and `git rev-parse --show-toplevel` both fail. Emitted to
+# `[[ -d "$PWD" ]]` resolves the path and fails. Emitted to
 # stderr AND stdout: an operator-protection signal must reach the harness's
 # captured stdout, and the receipt stream is prefix-keyed so a non-record line
 # is contract-tolerated. `exit` not `return`: the `_shard_selects` call sites
-# are `|| return 0`, so a return is swallowed as non-selection.
+# are `|| return 0`, so a return is swallowed as non-selection. Residual edge:
+# a deleted-then-RECREATED same-path directory keeps `[[ -d "$PWD" ]]` true —
+# accepted; the incident shape is a removal that stays removed.
 _wt_missing_die() {
   echo "ERROR: working tree missing (deleted worktree?)" >&2
   echo "ERROR: working tree missing (deleted worktree?)"
-  exit 4
+  # 4 when nothing could have run — enumerate mode executes nothing by
+  # definition, and before the first dispatch in any mode; 3 once an
+  # executing battery has real results, because a mid-run cwd loss leaves
+  # coverage unresolved — the contract's 3-shape, not a refusal.
+  if (( _ENUMERATE == 1 || ${_shard_ordinal:-0} == 0 )); then exit 4; else exit 3; fi
 }
 # NOT gated on `git rev-parse --show-toplevel`: a LIVE non-git cwd is a
 # legitimate degraded run (test-all-group-affected's undeterminable-diff arms
@@ -591,8 +607,13 @@ _wt_missing_die() {
 if [[ ! -d "$PWD" ]]; then
   _wt_missing_die
 fi
-if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0-9]+$ ]]; then
-  _ENUM_DEADLINE_S="$SOLEUR_ENUM_DEADLINE_S"
+# `10#` and `> 0` mirror the TC_RUNTIME_CEILING_S parse (~line 2784): a bare
+# `=~ ^[0-9]+$` accepts `08` (octal literal → `(( ))` errors on it per
+# registration, silently killing the graceful layer) and `0` (fires the
+# watchdog instantly on every enumerate run). Non-numeric or zero falls back
+# to the default — the deadline is the fix, it cannot be disabled.
+if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0-9]+$ ]] && (( 10#$SOLEUR_ENUM_DEADLINE_S > 0 )); then
+  _ENUM_DEADLINE_S=$(( 10#$SOLEUR_ENUM_DEADLINE_S ))
 fi
 
 # --- Contention instrumentation (#6789) ---
@@ -2847,7 +2868,21 @@ _soleur_inc_cleanup() {
   # test-all-runtime-ceiling and test-all-killed-classification.
   return 0
 }
-trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' EXIT
+
+# Watchdog disarm must live in the EXIT trap, not only at the enumerate
+# terminator: every abnormal exit after arming — `_wt_missing_die` (the #8761
+# primary path), the graceful deadline's exit 4, any mid-walk `exit`/`set -e`
+# abort — would otherwise leak the watchdog subshell's `sleep` holding an
+# inherited stdout pipe open until the deadline, blocking a `$( )`/pipe
+# consumer for up to _ENUM_DEADLINE_S after the runner is gone. Guarded by
+# `${_ENUM_WD_PID:-}` — exits before the arm site are no-ops.
+_enum_wd_disarm() {
+  if [[ -n "${_ENUM_WD_PID:-}" ]]; then
+    kill "$_ENUM_WD_PID" 2>/dev/null || true
+    wait "$_ENUM_WD_PID" 2>/dev/null || true
+  fi
+}
+trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _enum_wd_disarm' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass

@@ -108,7 +108,7 @@ PASS=$_self_pass; FAIL=$_self_fail; cases=0
 # (every edge suite selects -> rows f/q red), SOLEUR_SUBAGENT/SOLEUR_ALLOW_FULL_GATE
 # move the refusal arms, FORCE_ALL preempts the asserted fallback reason, and
 # TEST_TIMING_LOG would write synthetic skip rows into the operator's real log.
-ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S"
+ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S"
 
 # ---------------------------------------------------------------------------
 # Sandbox builder. $1 = sandbox runner path; $2 = "with-lib" | "no-lib".
@@ -1044,13 +1044,54 @@ else
   fi
 fi
 
+# z6: pipe-EOF on the ABNORMAL path — the mid-walk deletion exits the runner 4,
+# but the watchdog subshell is still armed; if its sleep outlives the exit it
+# holds this consumer's read pipe until the (default 900s) deadline. The EXIT
+# trap's disarm is what makes the refusal actually fast end-to-end. Splices the
+# same per-registration sleep as y1 so the deletion lands mid-walk.
+cases=$((cases + 1))
+_wtd="$TESTROOT/wtpipedel-$cases"
+_wt=""; _sb=""
+read -r _wt _sb <<<"$(_wt_fixture "$_wtd")"
+if [[ -z "$_wt" || -z "$_sb" ]]; then
+  fail "z6: fixture build"
+else
+  python3 - "$_sb" <<'PY' || { fail "z6: splice"; }
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '  _shard_ordinal=$(( _shard_ordinal + 1 ))'
+assert s.count(old) == 1, f"ordinal tick anchor count={s.count(old)}"
+s = s.replace(old, old + '\n  sleep 0.4', 1)
+open(p, 'w').write(s)
+PY
+  ( _cap=$(cd "$_wt" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+        bash "$_sb" --print-affected-set 2>/dev/null)
+    printf 'rc=%s\n' "$?" > "$TESTROOT/caprc-$cases"
+    printf '%s' "$_cap" > "$TESTROOT/cap-$cases" ) &
+  _wpid=$!
+  sleep 2   # past preamble, inside the widened walk
+  assert_fixture_dir "$_wt"
+  rm -rf "$_wt"
+  _wait_bound "$_wpid" 60 "$TESTROOT/bound-$cases"; rc=$WAIT_RC
+  if [[ "$rc" == "124" ]]; then
+    fail "z6: $( ) consumer blocked past 60s on the exit-4 path — watchdog leaked"
+  elif [[ -f "$TESTROOT/caprc-$cases" ]] \
+    && grep -qF 'rc=4' "$TESTROOT/caprc-$cases" \
+    && grep -qF 'working tree missing' "$TESTROOT/cap-$cases"; then
+    pass "z6: deleted-cwd refusal EOFs a $( ) consumer promptly (rc=4)"
+  else
+    fail "z6: rc=$rc caprc=$(cat "$TESTROOT/caprc-$cases" 2>/dev/null || echo missing)"
+  fi
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=39
+MIN_CASES=40
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
