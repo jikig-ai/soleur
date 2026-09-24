@@ -265,7 +265,7 @@ export function buildAgentQueryOptions(
       // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
       // shell-outs (Slice B). The assertTrustedPluginPath-validated value (an
       // absolute /app/ platform path) is threaded so the deployed skills'
-      // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` runs the platform copy, never
+      // bare `"${CLAUDE_PLUGIN_ROOT}/…"` anchors (ADR-179 A18) run the platform copy, never
       // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
       // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
       pluginPath: trustedPluginPath,

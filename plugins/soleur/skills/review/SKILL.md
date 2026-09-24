@@ -1236,12 +1236,15 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    [emit-review-trailer.sh](./scripts/emit-review-trailer.sh).
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/review/scripts/emit-review-trailer.sh" \
+   bash "${CLAUDE_PLUGIN_ROOT}/skills/review/scripts/emit-review-trailer.sh" \
      --findings <n> \
      --agents-ran <how many returned substantive output> \
      --agents-expected <how many the classification gate called for> \
      --agents-missing <comma-separated names, omit if none>
    ```
+
+   **A non-zero exit means the review is NOT attested** — including `No such file or directory` on an unresolved
+   plugin root. Report that the trailer was not emitted; never report success (ADR-179 A18).
 
    **The coverage flags are not optional decoration.** Without them the trailer records
    `Reviewed-Coverage: unknown`, which is honest but leaves nothing downstream able to
@@ -1297,7 +1300,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### 7. End-to-End Testing (Optional)
 
-**Read `plugins/soleur/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing. If that path is not absolute, or begins with `/skills/`, the root was not substituted: stop, and never Read a repository copy instead.
 
 ### Defect Classes This Review Reliably Catches
 
