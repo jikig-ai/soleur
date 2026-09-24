@@ -80,38 +80,70 @@ vi.mock("@/components/ui/markdown-renderer", () => ({
   MarkdownRenderer: () => <div data-testid="markdown" />,
 }));
 
-vi.mock("@/components/kb/c4-shared", () => ({
-  Spinner: () => <div>loading</div>,
-  useC4Project: () => ({
-    data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
-    error: null,
-    loading: false,
-    reload: vi.fn(),
-  }),
-  C4Canvas: () => <div data-testid="c4-canvas" />,
-  // Expose the `stale` prop so the staleness-wiring test can assert C4Workspace
-  // flips it to true after a save (the lifted-state honesty signal).
-  C4Diagnostics: ({ stale }: { stale?: boolean }) => (
-    <div data-testid="c4-diagnostics" data-stale={stale ? "true" : "false"} />
-  ),
-  // Surface onSaved as two affordances so the test can drive a save whose
-  // server re-render succeeded (rerendered:true) or failed (false), without the
-  // real PUT/CodeMirror plumbing.
-  C4CodePanel: ({
-    onSaved,
-  }: {
-    onSaved: (rerendered: boolean) => void | Promise<void>;
-  }) => (
-    <>
-      <button data-testid="c4-save-ok" onClick={() => void onSaved(true)}>
-        save-ok
-      </button>
-      <button data-testid="c4-save-fail" onClick={() => void onSaved(false)}>
-        save-fail
-      </button>
-    </>
-  ),
-}));
+const reloadState = vi.hoisted(() => ({ gate: null as Promise<void> | null }));
+
+vi.mock("@/components/kb/c4-shared", async () => {
+  // #8695: the REAL banner (from its own light module, so CodeMirror/Mantine/
+  // @likec4/diagram stay out of this test) wrapped in a div that exposes the
+  // lifted props, so the wiring assertions read attributes and the copy
+  // assertions read the text the user actually sees.
+  const { C4Diagnostics: RealC4Diagnostics } = await import(
+    "@/components/kb/c4-diagnostics"
+  );
+  return {
+    Spinner: () => <div>loading</div>,
+    useC4Project: () => ({
+      data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
+      error: null,
+      loading: false,
+      // A test can hold the reload open (reloadGate) to model a save that is
+      // still in flight when the user navigates.
+      reload: () => reloadState.gate ?? Promise.resolve(),
+    }),
+    C4Canvas: () => <div data-testid="c4-canvas" />,
+    // Expose the `stale` prop so the staleness-wiring test can assert C4Workspace
+    // flips it to true after a save (the lifted-state honesty signal).
+    C4Diagnostics: (props: React.ComponentProps<typeof RealC4Diagnostics>) => (
+      <div
+        data-testid="c4-diagnostics"
+        data-stale={props.stale ? "true" : "false"}
+        data-stale-diagnostic={props.staleDiagnostic ?? ""}
+      >
+        <RealC4Diagnostics {...props} />
+      </div>
+    ),
+    // Surface onSaved as affordances so the test can drive a save whose server
+    // re-render succeeded (rerendered:true), failed with no reason (false), or
+    // failed WITH a reason (false + diagnostic), without the real PUT/CodeMirror
+    // plumbing.
+    C4CodePanel: ({
+      onSaved,
+      allowResave,
+    }: {
+      onSaved: (
+        rerendered: boolean,
+        diagnostic?: string,
+      ) => void | Promise<void>;
+      allowResave?: boolean;
+    }) => (
+      <>
+        <span data-testid="c4-allow-resave" data-value={allowResave ? "true" : "false"} />
+        <button data-testid="c4-save-ok" onClick={() => void onSaved(true)}>
+          save-ok
+        </button>
+        <button data-testid="c4-save-fail" onClick={() => void onSaved(false)}>
+          save-fail
+        </button>
+        <button
+          data-testid="c4-save-fail-diag"
+          onClick={() => void onSaved(false, "diagram not updated: x")}
+        >
+          save-fail-diag
+        </button>
+      </>
+    ),
+  };
+});
 
 const CONTEXT_PATH = "knowledge-base/diagrams/c4-model.md";
 
@@ -148,22 +180,33 @@ function ProviderHarness({
   return <KbChatContext.Provider value={value}>{children}</KbChatContext.Provider>;
 }
 
-async function renderC4WithHeader(suppressSidebar = true, c4Edit = true) {
+async function c4Tree(
+  suppressSidebar = true,
+  c4Edit = true,
+  dirPath = "knowledge-base/diagrams",
+) {
   const { default: C4Workspace } = await import("@/components/kb/c4-workspace");
-  return render(
+  return (
     <FeatureFlagProvider flags={flagSnapshot(c4Edit)}>
       <ProviderHarness suppressSidebar={suppressSidebar}>
         {/* The shared top-bar trigger (as KbContentHeader renders it on C4). */}
         <KbChatTrigger fallbackHref="/dashboard/chat/new" />
         <C4Workspace
           viewId="index"
-          dirPath="knowledge-base/diagrams"
+          dirPath={dirPath}
           contextPath={CONTEXT_PATH}
         />
       </ProviderHarness>
-    </FeatureFlagProvider>,
+    </FeatureFlagProvider>
   );
 }
+
+async function renderC4WithHeader(suppressSidebar = true, c4Edit = true) {
+  return render(await c4Tree(suppressSidebar, c4Edit));
+}
+
+// The copy itself is pinned literally in c4-shared.test.tsx.
+const { SUPERSEDED_LINE: SUPERSEDED } = await import("@/components/kb/c4-diagnostics");
 
 /**
  * #7222 — C4Workspace picks its topology from a live matchMedia read (it is
@@ -257,6 +300,119 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
         screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
       ).toBe("true"),
     );
+  });
+
+  it("C4-C7 (#8695): the banner states the save's reason; every save replaces or clears it", async () => {
+    await renderC4WithHeader();
+    const banner = () => screen.getByTestId("c4-diagnostics");
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+
+    // Failed WITH a reason → the reason is lifted and rendered (capitalised).
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale-diagnostic")).toBe(
+        "diagram not updated: x",
+      ),
+    );
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
+    expect(screen.queryByText(SUPERSEDED)).toBeNull();
+
+    // A following successful save CLEARS it (no leftover reason).
+    fireEvent.click(screen.getByTestId("c4-save-ok"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("false"),
+    );
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
+    expect(screen.queryByText("Diagram not updated: x")).toBeNull();
+
+    // Reason again, then a no-reason failure REPLACES it with the supersede line.
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(screen.getByText("Diagram not updated: x")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByTestId("c4-save-fail"));
+    await waitFor(() => expect(screen.getByText(SUPERSEDED)).toBeTruthy());
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
+    expect(screen.queryByText("Diagram not updated: x")).toBeNull();
+  });
+
+  it("C4-C8 (#8695): a folder change resets the banner; returning does not resurrect it", async () => {
+    const DIR_A = "knowledge-base/diagrams";
+    const DIR_B = "knowledge-base/other-diagrams";
+    const { rerender } = render(await c4Tree(true, true, DIR_A));
+    const banner = () => screen.getByTestId("c4-diagnostics");
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(screen.getByText("Diagram not updated: x")).toBeTruthy(),
+    );
+
+    // Client navigation to another diagrams folder (same C4Workspace instance —
+    // the KB page renders it without a `key`).
+    rerender(await c4Tree(true, true, DIR_B));
+    expect(banner().getAttribute("data-stale")).toBe("false");
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
+    expect(screen.queryByText(/out of date/i)).toBeNull();
+    expect(screen.queryByText("Diagram not updated: x")).toBeNull();
+
+    // Staleness belongs to folder A's model, which is still stale: returning
+    // shows A's own reason again, never another folder's.
+    rerender(await c4Tree(true, true, DIR_A));
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
+  });
+
+  it("C4-C10 (#8695): Save is re-enabled while stale, and a late success for another folder does not clear this folder's banner", async () => {
+    const DIR_A = "knowledge-base/diagrams";
+    const DIR_B = "knowledge-base/other-diagrams";
+    const allow = () => screen.getByTestId("c4-allow-resave").getAttribute("data-value");
+    const { rerender } = render(await c4Tree(true, true, DIR_B));
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    expect(allow()).toBe("false");
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() => expect(screen.getByText("Diagram not updated: x")).toBeTruthy());
+    expect(allow()).toBe("true");
+    // A save made in folder A that succeeds late must leave B's banner alone.
+    rerender(await c4Tree(true, true, DIR_A));
+    let release!: () => void;
+    reloadState.gate = new Promise<void>((r) => (release = r));
+    try {
+      fireEvent.click(screen.getByTestId("c4-save-ok"));
+      rerender(await c4Tree(true, true, DIR_B));
+      release();
+      await reloadState.gate;
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
+    } finally {
+      reloadState.gate = null;
+    }
+  });
+
+  it("C4-C9 (#8695): a save still in flight when the user changes folder does not mark the new folder", async () => {
+    const DIR_A = "knowledge-base/diagrams";
+    const DIR_B = "knowledge-base/other-diagrams";
+    let release!: () => void;
+    reloadState.gate = new Promise<void>((r) => (release = r));
+    try {
+      const { rerender } = render(await c4Tree(true, true, DIR_A));
+      fireEvent.click(screen.getByRole("button", { name: "Code" }));
+      fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+      rerender(await c4Tree(true, true, DIR_B));
+      release();
+      await reloadState.gate;
+      await new Promise((r) => setTimeout(r, 0));
+      const banner = screen.getByTestId("c4-diagnostics");
+      expect(banner.getAttribute("data-stale")).toBe("false");
+      expect(banner.getAttribute("data-stale-diagnostic")).toBe("");
+      expect(screen.queryByText("Diagram not updated: x")).toBeNull();
+      // The late result is attributed to the folder it was saved in.
+      rerender(await c4Tree(true, true, DIR_A));
+      expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
+    } finally {
+      reloadState.gate = null;
+    }
   });
 
   it("C4-C5: markdown viewer (no suppressSidebar) — trigger opens the SIDE panel, not the embedded reveal", async () => {
