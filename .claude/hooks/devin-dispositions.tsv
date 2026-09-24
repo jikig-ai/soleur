@@ -86,6 +86,8 @@ claude-settings	.claude/hooks/worktree-write-guard.sh	PreToolUse	^write$	covered
 # --- .claude/settings.json — PreToolUse other tools ---------------------------
 claude-settings	.claude/hooks/durable-reminder-prefer-inngest.sh	PreToolUse	CronCreate	n/a	no-analog	EC§7: no CronCreate under Devin; DEVIN-SKIP marker in body
 claude-settings	.claude/hooks/monitor-supersede-guard.sh	PreToolUse	Monitor	n/a	no-analog	EC§7: no Monitor under Devin; DEVIN-SKIP marker in body
+claude-settings	.claude/hooks/prod-write-defer-gate.sh	PreToolUse	Monitor	n/a	no-analog	EC§7: no Monitor under Devin (#8486: a Monitor script is a shell command, so the defer rule covers it in Claude Code)
+claude-settings	.claude/hooks/guardrails.sh	PreToolUse	Monitor	n/a	no-analog	EC§7: no Monitor under Devin (#8486: the designated responder must fire on every tool a migrated hook fires on — hook-input-contract A9)
 claude-settings	.claude/hooks/pencil-open-guard.sh	PreToolUse	mcp__pencil__open_document	already-fires	mcp wire-name identical if pencil MCP configured under Devin	name-shape identical; MCP presence under Devin unverified → no bind needed
 claude-settings	.claude/hooks/skill-invocation-logger.sh	PreToolUse	Skill	bind	devin-tool=skill; .devin ^skill$ entry	EC§7 skill envelope {skill:name}
 #

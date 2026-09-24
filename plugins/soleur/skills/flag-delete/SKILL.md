@@ -48,7 +48,7 @@ Required positional: `<kebab-flag-name>`.
 Optional: `--dry-run` (enumerate the 5 mutations and exit before any change).
 
 There is intentionally **no** `--yes`/`--force` bypass — the typed-`yes` prompt
-always gates a real delete.
+always gates a real delete, and it needs a person at a terminal (#8486).
 
 ## Prerequisites
 
@@ -58,9 +58,40 @@ always gates a real delete.
 
 ## Procedure
 
+The agent runs only the preview:
+
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-delete/scripts/delete.sh" <flag-name> [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-delete/scripts/delete.sh" <flag-name> --dry-run
 ```
+
+## Writes run in the operator's own terminal (#8486, ADR-249)
+
+The write path asks for a typed `yes` through the operator-script library's TTY
+acknowledgement. It has no skip variable and no flag. An agent's shell has no TTY,
+so a write run there stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` on
+stdout, before any credential is fetched. Exit `64` is a refusal, never a success.
+The agent therefore:
+
+1. Runs the script with `--dry-run` and shows the preview. That mode needs no TTY
+   and makes no writes.
+2. Prints the exact write command below, in a fenced block, for the operator to run
+   in their own terminal (Warp). It replaces `<WORKTREE>` with the absolute path of
+   the worktree that holds this change (`git rev-parse --show-toplevel`) and
+   `<ARGS>` with `<flag-name>`, without `--dry-run`. It never prints a
+   `${CLAUDE_PLUGIN_ROOT}` or repo-relative form. The script also edits repo files in the directory it runs from, so an operator running it from the main checkout or another worktree would land the code wiring in the wrong tree while Flagsmith and Doppler change.
+3. Does not run the command, and does not run it through Claude Code's `!` prefix
+   either (whether that gives the command a TTY is unmeasured, ADR-249). The
+   printed command is an undone operator step under
+   `wg-block-pr-ready-on-undeferred-operator-steps`: record it where the pipeline
+   tracks operator steps, and do not mark a PR ready until the operator says it ran.
+
+<!-- operator-write-command -->
+```bash
+cd <WORKTREE> && bash <WORKTREE>/plugins/soleur/skills/flag-delete/scripts/delete.sh <ARGS>
+```
+
+The operator types `yes` at the prompt. Any other answer stops the script with exit
+`1` and `SOLEUR_BOOTSTRAP_ABORTED stage=ack`, before anything is written.
 
 The script (full in [scripts/delete.sh](./scripts/delete.sh)) deletes from **5
 sites** (the issue's 4-site framing misses the `flip.sh` map):
@@ -86,12 +117,15 @@ verify deletion.
 
 ## Exit codes
 
-- `0` — success / dry-run / operator aborted at the prompt.
-- `1` — name validation failure (or flag not in `RUNTIME_FLAGS`).
+- `0` — success / dry-run.
+- `1` — name validation failure (or flag not in `RUNTIME_FLAGS`), or the operator
+  did not type `yes` (`SOLEUR_BOOTSTRAP_ABORTED stage=ack`; nothing mutated).
 - `2` — prerequisite missing.
 - `3` — Flagsmith API error (non-204 DELETE).
 - `4` — file edit or audit append failed.
 - `5` — Doppler delete failed.
+- `64` — a write run with no TTY (`SOLEUR_BOOTSTRAP_INPUT_REQUIRED`): nothing was
+  fetched or changed; hand the command to the operator (above).
 
 ## Recovery from a partial delete
 
