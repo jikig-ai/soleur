@@ -655,6 +655,69 @@ g2_mutate() {
   G2_MIRROR="$m"
 }
 
+# --- AC14/AC15: the command each skill tells the agent to PRINT works in a real
+# terminal. Extracted from the SKILL.md (never retyped here), run on a pty with
+# `no` typed: it must reach its own ack prompt and stop with exit 1 before any
+# mutating call. -----------------------------------------------------------------
+echo "== Guard 2 — the printed operator command reaches its ack =="
+
+g2_run_cmd() { # <root-for-hostile-env-rel> <rel> <answer> <cmd> -> G2_OUT, G2_RC, G2_LOG
+  local root="$1" rel="$2" answer="$3" cmd="$4" scratch line rc
+  scratch="$(mktemp -d "$SB/cmd.XXXXXXXX")" || { G2_RC=250; G2_OUT="mktemp failed"; return 0; }
+  G2_LOG="$scratch/stub.log"; : > "$G2_LOG"
+  local -a envv=(
+    HOME="$scratch" TERM=dumb SHELL="$BASH_BIN" LC_ALL=C
+    PATH="${STUBS_OK}:${TOOLDIR}"
+    STUB_LOG="$G2_LOG" STUB_LOGGING=1 STUB_ABSENT_FLAG=probe-new-flag
+    STUB_MEMBER_ORG=70a70ab0-0000-4000-8000-000000000001
+    SOLEUR_BOOTSTRAP_LEDGER="$scratch/ledger.jsonl"
+    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=stub-org SENTRY_PROJECT=stub-project
+    EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=1
+  )
+  while IFS= read -r line; do envv+=("$line"); done < <(g2_hostile_env "$root/$rel" "$root/plugins/soleur/scripts/lib/operator-script.sh")
+  G2_OUT="$( cd "$scratch" && printf '%s' "$answer" \
+    | env -i "${envv[@]}" "$TIMEOUT_BIN" 20 "$SCRIPT_BIN" -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
+    exit "${PIPESTATUS[1]}" )"
+  rc=$?
+  G2_RC="$rc"
+}
+
+for skill in flag-create flag-delete flag-set-role user-set-role; do
+  md="$REPO_ROOT/plugins/soleur/skills/$skill/SKILL.md"
+  tmpl="$(awk '/<!-- operator-write-command -->/{f=1; next} f && /^```bash/{g=1; next} g && /^```/{exit} g{print}' "$md")"
+  if [[ "$tmpl" != "cd <WORKTREE> && bash <WORKTREE>/"* ]]; then
+    fail "AC14 ${skill}: the marked operator command is missing or does not start with 'cd <WORKTREE> && bash <WORKTREE>/': ${tmpl:0:120}"
+    continue
+  fi
+  pass "AC14 ${skill}: the printed command is worktree-pinned (cd <absolute path> && …)"
+  rel="${tmpl#cd <WORKTREE> && bash <WORKTREE>/}"; rel="${rel%% *}"
+  argv="$(awk -F'\t' -v s="$rel" '$1==s && $2=="write" {print $3; exit}' "$ARMS")"
+  prefix="$(grep -vE '^[[:space:]]*#' "$REPO_ROOT/$rel" | grep -E 'soleur_op_ack_or_die[[:space:]]+"' | head -1 \
+            | sed -E 's/^[^"]*soleur_op_ack_or_die[[:space:]]+"//; s/[$"].*$//')"
+  cmd="${tmpl//<WORKTREE>/$MIRROR_PRISTINE}"; cmd="${cmd//<ARGS>/$argv}"
+  g2_run_cmd "$MIRROR_PRISTINE" "$rel" $'no\n' "$cmd"
+  muts="$(g2_is_mutating_log "$G2_LOG")"
+  if [[ "$G2_RC" == 1 && "$muts" -eq 0 ]] && grep -qF -- "$prefix" <<<"$G2_OUT"; then
+    pass "AC14 ${skill}: run on a pty answered 'no', it reached '${prefix}' and exited 1 with 0 mutating calls"
+  else
+    fail "AC14 ${skill}: rc ${G2_RC}, ${muts} mutating call(s), prompt '${prefix}' seen: $(grep -cF -- "$prefix" <<<"$G2_OUT") — $(tail -3 <<<"$G2_OUT" | tr '\n' ' ')"
+  fi
+  if grep -qF 'wg-block-pr-ready-on-undeferred-operator-steps' "$md"; then
+    pass "AC15 ${skill}: names the handoff as a blocking operator step"
+  else
+    fail "AC15 ${skill}: does not name wg-block-pr-ready-on-undeferred-operator-steps"
+  fi
+done
+
+fsr="$REPO_ROOT/plugins/soleur/skills/flag-set-role/SKILL.md"
+if awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -q 'own terminal' \
+   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -qE "not through Claude Code's .!. prefix|Not through Claude Code's .!." \
+   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -q 'Flagsmith dashboard'; then
+  pass "AC15 flag-set-role: incident-rollback block (own terminal, not the ! prefix, dashboard break-glass on exit 4)"
+else
+  fail "AC15 flag-set-role: the incident-rollback block is missing or incomplete"
+fi
+
 CREATE_REL="plugins/soleur/skills/flag-create/scripts/create.sh"
 SETROLE_REL="plugins/soleur/skills/user-set-role/scripts/set-role.sh"
 
@@ -721,7 +784,7 @@ G2_NOTTY_VIA_PTY=0
 # --- Anti-vacuity floor ------------------------------------------------------
 # REPORTS DIRECTLY (printf + exit 1), never through pass()/fail() (ADR-193).
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=49
+FLOOR=62
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"
