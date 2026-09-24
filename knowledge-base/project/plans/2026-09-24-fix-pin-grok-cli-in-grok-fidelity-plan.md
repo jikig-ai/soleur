@@ -14,6 +14,34 @@ lane: cross-domain
 
 # ci: pin the Grok CLI in the required `grok-fidelity` check
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. The fan-out was proportionate to a single-workflow pin, per the lead's
+instruction. Agents: `soleur:engineering:review:security-sentinel` and
+`soleur:engineering:research:learnings-researcher`. The halt gates 4.6, 4.7, 4.8 and 4.11 were run
+mechanically, and the step body was executed locally.
+
+### Key Improvements
+
+1. **The step body is measured, not reasoned.** Extracted verbatim from this plan, it was run under
+   `bash -e` with a scratch HOME against the live vendor URL: the must-PASS row and mutation rows
+   1-6 all give the expected verdicts (§Deepen Measurements).
+2. **Mutation row 6 is corrected.** Deleting the comparison line makes the step always exit 3; the
+   meaningful mutation replaces the test with `true`, which measured rc 0 on the row-4 input.
+3. **Supply-chain hardening** (security-sentinel P1/P2): a `GROK_PIN` shape check before URL
+   interpolation, `--proto`/`--proto-redir '=https'`, `persist-credentials: false`, and a
+   post-gate `sha256sum -c` that verifies the auto-update knob instead of trusting it. The Anchor is
+   reworded honestly as integrity against one trusted measurement plus CODEOWNERS review.
+
+### New Considerations Discovered
+
+- `grok inspect` gives an identical result (rc 0, 131 lines, binary sha unchanged) inside
+  `unshare -rn`, i.e. with **no network at all**. The live contract needs no network, which bounds
+  what an updater could do mid-gate.
+- The learnings pass confirmed that the curl flags avoid `--retry-max-time` (the #6500 class), and
+  that the required-check blast radius (`ci_not_green` holds deploys) is already stated in
+  §Observability.
+
 ## Overview
 
 `.github/workflows/ci.yml` job `grok-fidelity` is a **required** check (named in
@@ -140,9 +168,11 @@ content-pins a script and not the binary.
 - *A static bun/shell test asserting the ci.yml step shape* → P2 → cut. `harness-discovery` has none,
   the job's own first CI run is the end-to-end proof, and the mutation matrix is exercised locally by
   running the step body against a scratch HOME (§Test Scenarios).
-- *A post-gate "version still equals pin" re-assert step* → P1 (a self-update mid-gate) → cut in
-  favour of `GROK_DISABLE_AUTOUPDATER=1`, the vendor's own process-level knob, set at job `env`. It
-  can be revisited if a self-update is ever observed.
+- *A post-gate "version still equals pin" re-assert step* → P1 (a self-update mid-gate). This was cut
+  at plan time and **reinstated at deepen** as a post-gate `sha256sum -c` (security-sentinel P1). The
+  `GROK_DISABLE_AUTOUPDATER` knob is known only from docs text embedded in the binary. The offline
+  `grok inspect` measurement below shows that inspect needs no network, but it cannot show that the
+  knob stops an online updater. A three-line re-hash turns that assumption into a check.
 - *`.gz`/`.zst` artifact + decompress* → cut. The raw binary is simpler and needs no decompressor, and
   the ~166 MB download is well inside the 15-minute budget.
 
@@ -162,8 +192,12 @@ content-pins a script and not the binary.
      ```bash
      # Runs under GitHub's default `bash -e {0}`; `set -uo pipefail` ADDS -u/pipefail, it does not clear -e.
      set -uo pipefail
+     # The pin is interpolated into a URL path: accept only X.Y.Z (no `../`, no query).
+     [[ "$GROK_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+       || { echo "::error::grok-fidelity[grok] invalid-pin:${GROK_PIN}"; exit 3; }
      tmp="$RUNNER_TEMP/grok-${GROK_PIN}"
-     curl -fsSL --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 120 \
+     curl -fsSL --proto '=https' --proto-redir '=https' \
+       --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 120 \
        "https://x.ai/cli/grok-${GROK_PIN}-linux-x86_64" -o "$tmp" \
        || { echo "::error::grok-fidelity[grok] download-failed pin=${GROK_PIN}"; exit 3; }
      echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null || {
@@ -182,6 +216,20 @@ content-pins a script and not the binary.
        exit 3
      }
      echo "grok-fidelity[grok] pinned ${GROK_PIN} (sha256 ok)"
+     ```
+
+   - Set `persist-credentials: false` on the job's `actions/checkout` step. The job never pushes, and
+     the vendor binary it runs should not find the job token in `.git/config` (deepen: security-sentinel P2).
+   - Add a step AFTER `Grok fidelity gate`, named `Pinned Grok binary unchanged by the gate`. It
+     re-checks the digest of what the gate actually ran, so an auto-update that the
+     `GROK_DISABLE_AUTOUPDATER` knob failed to stop reds the job instead of passing silently. An
+     updater relinks `~/.grok/bin/grok`, and `sha256sum` follows the link:
+
+     ```bash
+     echo "${GROK_SHA256}  ${HOME}/.grok/bin/grok" | sha256sum -c - >/dev/null || {
+       echo "::error::grok-fidelity[grok] binary-changed-during-gate (auto-update?) got $(sha256sum "$HOME/.grok/bin/grok" | cut -d' ' -f1)"
+       exit 3
+     }
      ```
 
    - Update the job's header comment to one line: pinned per ADR-245 decision 3 (#8615), with
@@ -279,7 +327,9 @@ at job `env`, and no step re-declares them. The gate's own
 | 3 | The digest-verified binary is fine, but a `grok` shim printing `grok 1.0.40` sits at `~/.grok/bin/grok` in place of the verified bytes (the install path reordered or skipped, so a different `grok` answers) | RED: `version-mismatch:1.0.40!=1.0.41`, exit 3 |
 | 4 | `grok --version` prints a banner with no semver (a vendor output-format change) | RED: `version-mismatch:<unparsed>!=1.0.41` **with the diagnostic printed** (checks the `bash -e` trap is avoided) |
 | 5 | `GROK_PIN=0.0.0` (a nonexistent artifact; 404, measured) | RED: `download-failed pin=0.0.0`, exit 3 |
-| 6 | The guard's own dispatch: the `[ "$got" = "$GROK_PIN" ]` comparison deleted or made `|| true` | Rows 3/4 go GREEN, so the harness must report them as FAIL (see harness rows) |
+| 6 | The guard's own dispatch: the test `[ "$got" = "$GROK_PIN" ]` replaced by `true` (so the `\|\| { … }` arm never fires). *Deleting* the line is the wrong mutation: it leaves `echo …; exit 3` unconditional, so every row reds (measured) | Rows 3/4 go GREEN (measured rc 0 on the row-4 input), so the harness must report them as FAIL |
+| 7 | `GROK_PIN` carries a path (`1.0.41/../../x`) | RED: `invalid-pin:…`, exit 3, before any network call |
+| 8 | A binary that differs from the pinned bytes sits at `~/.grok/bin/grok` after the gate (a self-update) | RED: the post-gate step prints `binary-changed-during-gate`, exit 3 |
 
 **Harness rows.** The local simulation loads `ci.yml` once with PyYAML (`yq` is not installed) and
 takes BOTH the step's `run` body AND `jobs["grok-fidelity"].env` from it. Pins are never retyped, and
@@ -290,14 +340,16 @@ every RED row. Row 3 replaces the `install -D` line with a shim write, and that 
 harness if it matched nothing. (a) A harness mutation that replaces the extracted body with `true`
 must fail rows 1-5, which proves the harness reads the real step. (b) The must-PASS row is the
 unmodified body with the ci.yml env: rc 0 and `grok-fidelity[grok] pinned 1.0.41` printed. (c) Row 6
-is exercised: with the comparison line deleted from the body, the harness must report rows 3 and 4
-as FAIL.
+is exercised: with the test replaced by `true`, the harness must report rows 3 and 4 as FAIL.
 
-**Anchor.** `GROK_SHA256` and `GROK_PIN` live in the same diff as the step, so the guard proves
-**consistency** of the checked-in pin, not upstream integrity. The external anchor is the vendor
-artifact itself: a PR that changes `GROK_SHA256` must also produce bytes that hash to it at the
-fixed version URL, which a PR author cannot forge. Reviewers treat any `GROK_SHA256` change without a
-`GROK_PIN` change as suspicious (the same posture as `DEVIN_SETUP_SHA256`).
+**Anchor.** `GROK_SHA256`, `GROK_PIN` and the URL all live in the same diff, so one PR can move all
+three at once. The guard therefore proves **integrity against a single trusted measurement**, not
+publisher authenticity: xAI publishes no signature or checksum. The control outside the commit is
+review. `.github/CODEOWNERS` routes `/.github/workflows/ci.yml` to `@deruelle`, who must re-download
+and re-hash any pin change independently before approving. `--proto-redir '=https'` together with
+the `GROK_PIN` shape check stops a pin value from pointing curl at another scheme or path. A
+`GROK_SHA256` change without a `GROK_PIN` change is a red flag (the same posture as
+`DEVIN_SETUP_SHA256`).
 
 ## Observability
 
@@ -317,6 +369,9 @@ failure_modes:
   - mode: "installed/resolved grok is not the pinned version (PATH shadowing, half-bump)"
     detection: "parsed grok --version != GROK_PIN -> version-mismatch:<got>!=<pin>, exit 3"
     alert_route: "required check red on the PR"
+  - mode: "binary replaced during the gate (vendor auto-update not suppressed)"
+    detection: "post-gate sha256sum -c on ~/.grok/bin/grok fails -> binary-changed-during-gate, exit 3"
+    alert_route: "required check red on the PR"
   - mode: "pinned artifact unreachable or deleted"
     detection: "curl --retry 2 fails on the versioned x.ai URL -> download-failed, exit 3"
     alert_route: "required check red on the PR"
@@ -330,6 +385,27 @@ discoverability_test:
   command: "grep -c 'GROK_PIN: \"' .github/workflows/ci.yml"
   expected_output: "1"
 ```
+
+## Deepen Measurements
+
+These were run on 2026-09-24 against the step body extracted from this plan (awk over the
+` ```bash ` block), as `env -i … bash -e body.sh` with a scratch HOME, `RUNNER_TEMP` and
+`GITHUB_PATH`, before the deepen hardening edits. Those edits add a pin shape check and `--proto`
+flags; the work phase re-runs every row against the final `ci.yml`.
+
+| Row | Input | Measured |
+|---|---|---|
+| must-PASS | real pins | rc 0, `grok-fidelity[grok] pinned 1.0.41 (sha256 ok)`, 7.3 s wall |
+| 1 | digest first char flipped | rc 3, `binary-digest-mismatch`, `~/.grok/bin/grok` absent |
+| 2 | `GROK_PIN=1.0.40` with the 1.0.41 digest | rc 3, `binary-digest-mismatch` (1.0.40 sha `92c997df…`) |
+| 3 | shim printing `grok 1.0.40 (deadbeef)` | rc 3, `version-mismatch:1.0.40!=1.0.41` |
+| 4 | shim printing `Grok Build` | rc 3, `version-mismatch:<unparsed>!=1.0.41`, diagnostic printed |
+| 5 | `GROK_PIN=0.0.0` | rc 3, `curl: (22) … 404`, then `download-failed pin=0.0.0` |
+| 6 | test replaced by `true`, row-4 input | **rc 0**, so the harness must report FAIL (proves the harness can see a neutered guard) |
+| offline | `unshare -rn … grok inspect` with the knob set | rc 0, 131 lines, binary sha unchanged |
+| must-PASS (hardened) | body re-extracted after the deepen edits | rc 0, `pinned 1.0.41 (sha256 ok)` (the `--proto` flags do not break the x.ai fetch) |
+| 7 | `GROK_PIN=1.0.41/../../x` | rc 3, `invalid-pin:1.0.41/../../x`, no network call |
+| 8 | the post-gate step with a replaced `~/.grok/bin/grok` | rc 3, `binary-changed-during-gate` |
 
 ## Domain Review
 
@@ -406,7 +482,11 @@ cardinalities change, and `plugins/soleur/test/c4-count-parity.test.sh` must sta
       the parsed `grok --version` equals `GROK_PIN`. On drift it exits **3** with
       `::error::grok-fidelity[grok] version-mismatch:<got>!=<pin>`, and with
       `binary-digest-mismatch` / `download-failed` for the other two failure classes.
-- [ ] Guard 1 mutation rows 1-5 are each observed RED locally (rc 3 plus the reason token). The
+- [ ] The step validates `GROK_PIN` against `^[0-9]+\.[0-9]+\.[0-9]+$` before curl, and curl carries
+      `--proto '=https' --proto-redir '=https'`. The job's checkout sets `persist-credentials: false`.
+      A post-gate step re-runs `sha256sum -c` on `~/.grok/bin/grok` and exits 3 with
+      `binary-changed-during-gate` on mismatch.
+- [ ] Guard 1 mutation rows 1-5 and 7 are each observed RED locally (rc 3 plus the reason token). The
       must-PASS row is observed GREEN. Harness row (a) (body replaced by `true`) and row 6 (comparison
       deleted, so rows 3 and 4 are reported FAIL) are both observed. Every run is `bash -e`, with the
       body and env loaded from `ci.yml` by PyYAML.

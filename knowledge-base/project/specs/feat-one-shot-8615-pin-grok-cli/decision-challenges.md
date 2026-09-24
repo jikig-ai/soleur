@@ -23,3 +23,12 @@ and the plan was left unchanged on these points.
 - **Why the plan kept the full harness:** Phase 2.12 (Guard Contract) needs at least three rows, one
   of which targets the guard's own dispatch, plus harness rows. The harness is local, scratch-only and
   is not committed.
+
+## T3 — CR/LF strip on `raw` before `::error::` (deepen, security-sentinel P2 taste)
+
+- **Plan:** no strip. `raw` is echoed only after the digest has pinned the bytes, so its content is
+  the pinned binary's fixed output.
+- **Reviewer:** add `raw=${raw//[$'\r\n']/ }` anyway. It costs nothing and does not depend on that
+  ordering argument.
+- **Disposition:** left to the operator. The plan-review simplicity pass argued the opposite, and the
+  Codex/Devin arms do not strip either.
