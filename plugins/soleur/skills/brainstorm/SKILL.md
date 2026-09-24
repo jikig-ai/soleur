@@ -194,11 +194,11 @@ echo 'SOLEUR_RULE_APPLIED rule=hr-new-skills-agents-or-user-facing note=New skil
 
 #### Brand Workshop (if explicitly requested)
 
-**Read `plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md` now** for the full Brand Workshop procedure (worktree creation, issue handling, soleur:marketing:brand-architect handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/brainstorm/references/brainstorm-brand-workshop.md` now** for the full Brand Workshop procedure (worktree creation, issue handling, soleur:marketing:brand-architect handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
 
 #### Validation Workshop (if explicitly requested)
 
-**Read `plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md` now** for the full Validation Workshop procedure (worktree creation, issue handling, soleur:product:business-validator handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/brainstorm/references/brainstorm-validation-workshop.md` now** for the full Validation Workshop procedure (worktree creation, issue handling, soleur:product:business-validator handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
 
 ### Phase 1: Understand the Idea
 

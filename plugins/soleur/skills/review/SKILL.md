@@ -1300,7 +1300,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### 7. End-to-End Testing (Optional)
 
-**Read `plugins/soleur/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.
 
 ### Defect Classes This Review Reliably Catches
 

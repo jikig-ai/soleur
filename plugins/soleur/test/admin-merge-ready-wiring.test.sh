@@ -148,7 +148,7 @@ REF_MERGE='if err=$(gh pr merge <N> --squash --admin --match-head-commit "$SHA" 
 # The gate line as it appears in the reference; the placeholder brackets are built from
 # variables so no line of this file carries a redirect-shaped literal.
 LT='<'; GT='>'
-REF_GATE="     bash \"\${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh\" ${LT}N${GT} \"\$SHA\"; rc=\$?"$'\n'
+REF_GATE="     bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh\" ${LT}N${GT} \"\$SHA\"; rc=\$?"$'\n'
 W1() { edit "$1/$REF_REL" "$REF_MERGE" 'if err=$(gh pr merge <N> --squash --admin 2>&1)'; }
 W2() { plant "$1" plugins/soleur/skills/zz-new/SKILL.md '# x\n\nRun `gh pr merge 1 --squash --admin`.\n'; }
 W3() { assert_fixture_dir "$1"; printf '\n```bash\nRUNS=$(gh api --paginate "repos/{owner}/{repo}/commits/$SHA/check-runs")\n```\n' >> "$1/$REF_REL"; }
@@ -165,7 +165,7 @@ PY
 W6() { edit "$1/$REF_REL" "$REF_GATE" ''; }
 W7() { plant "$1" plugins/soleur/skills/zz-split/SKILL.md '```bash\nbash scripts/admin-merge-ready.sh 1 "$S"\ngh pr merge 1 --squash \\\n  --admin\n```\n'; }
 W8() { assert_fixture_dir "$1"; printf '\nThe CLI respects the repo'"'"'s required checks.\n' >> "$1/plugins/soleur/skills/drain-prs/SKILL.md"; }
-W9() { edit "$1/plugins/soleur/skills/one-shot/SKILL.md" 'which runs `plugins/soleur/scripts/admin-merge-ready.sh`' 'which runs a readiness check'; }
+W9() { edit "$1/plugins/soleur/skills/one-shot/SKILL.md" 'which runs `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`' 'which runs a readiness check'; }
 W10() { plant "$1" plugins/soleur/scripts/zz-merge.sh '#!/usr/bin/env bash\ngh pr merge "$1" --squash --admin --match-head-commit "$2"\n'; }
 W11() { edit "$1/$REF_REL" "$REF_GATE" ''
   edit "$1/$REF_REL" '     sleep 18' "$REF_GATE"'     sleep 18'; }
@@ -239,10 +239,16 @@ n=$(( $(cat "$G3_DIR/readies" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$G3_DI
 rc=$(sed -n "${n}p" "$G3_DIR/ready_rcs"); exit "${rc:-0}"
 RDY
 chmod +x "$G3/bin/gh" "$G3/bin/sleep" "$G3/root/scripts/admin-merge-ready.sh"
+mkdir -p "$G3/root/.claude-plugin" && printf '{"name":"soleur"}\n' > "$G3/root/.claude-plugin/plugin.json"
 
 BLOCK_SRC="$G3/block.sh"
 if ! extract "$REPO_ROOT/$REF_REL" > "$BLOCK_SRC"; then echo "[FATAL] Guard 3: no merge block extracted from $REF_REL" >&2; exit 1; fi
 grep -q '^SHA=<the 40-hex head SHA' "$BLOCK_SRC" || { echo "[FATAL] Guard 3: the block's SHA= placeholder line moved; update g3()" >&2; exit 1; }
+# #7453 (ADR-179 A20): the reference is Read, not loader-delivered, so its block opens with an
+# absolute cannot-exist sentinel the agent replaces with the installed root. The harness does
+# the same replacement g3() below; M13 runs the block WITHOUT it.
+SENTINEL_LINE='export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"'
+[[ "$(head -1 "$BLOCK_SRC")" == "$SENTINEL_LINE" ]] || { echo "[FATAL] Guard 3: the block no longer opens with the Read-surface sentinel" >&2; exit 1; }
 
 # g3 <id> <sha-line-value> <ready_rcs> <merge_modes> <states> [view_fail] ; runs the block
 g3() {
@@ -250,7 +256,10 @@ g3() {
   printf '%b' "$3" > "$G3_DIR/ready_rcs"; printf '%b' "$4" > "$G3_DIR/merge_modes"; printf '%b' "$5" > "$G3_DIR/states"
   printf '%b' "${6-}" > "$G3_DIR/view_fail"
   : > "$G3_DIR/gh.log"; : > "$G3_DIR/sleeps"; : > "$G3_DIR/ready.log"
-  sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$2|" "$BLOCK_SRC" > "$G3_DIR/block.sh"
+  sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$2|" \
+      -e "s|^export CLAUDE_PLUGIN_ROOT=\"/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__\"\$|export CLAUDE_PLUGIN_ROOT=\"$G3/root\"|" \
+      "$BLOCK_SRC" > "$G3_DIR/block.sh"
+  grep -qxF "export CLAUDE_PLUGIN_ROOT=\"$G3/root\"" "$G3_DIR/block.sh" || { echo "[FATAL] the sentinel replacement did not land" >&2; exit 1; }
   if grep -qE '<[A-Za-z]' "$G3_DIR/block.sh"; then echo "[FATAL] unsubstituted placeholder in the block" >&2; exit 1; fi
   export G3_DIR
   G3_SHA="$TSHA" CLAUDE_PLUGIN_ROOT="$G3/root" PATH="$G3/bin:$PATH" \
@@ -292,16 +301,57 @@ g3 M10 "$TSHA" '' 'ok\n' "OPEN $TSHA\nMERGED 11111111111111111111111111111111111
 g3_case M10-other-sha "[[ $RC == 1 ]] && grep -qx 'ADMIN-MERGE NOT LANDED' \$G3_DIR/out"
 g3 M11 "$TSHA" '' 'race\nok\n' "OPEN $TSHA\nOPEN $TSHA\nMERGED $TSHA\n"
 g3_case M11-race-then-land "[[ $RC == 0 && \$(merges) == 2 && \$(wc -l < \$G3_DIR/sleeps) == 1 && \$(readies) == 2 ]]"
+# M12: the positive row, stated explicitly — with the sentinel replaced (as the agent does),
+# the stubbed gate RAN and the fake gh actually merged (proves the fake gh is on PATH).
+g3 M12 "$TSHA" '' 'ok\n' "OPEN $TSHA\nMERGED $TSHA\n"
+g3_case M12-sentinel-replaced-runs-gate "[[ $RC == 0 && -s \$G3_DIR/ready.log && \$(merges) == 1 ]]"
+# M13: the block AS SHIPPED — sentinel unreplaced, root unset. It must abort with exit 5 before
+# any gh call. Ledgers are pre-created empty FILES and read directly, never through $(...).
+CASES_RUN=$((CASES_RUN + 1))
+M13="$G3/run-M13"; assert_fixture_dir "$M13"; rm -rf "$M13"; mkdir -p "$M13"
+: > "$M13/gh.log"; : > "$M13/ready.log"
+sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$TSHA|" "$BLOCK_SRC" > "$M13/block.sh"
+G3_DIR="$M13" G3_SHA="$TSHA" PATH="$G3/bin:$PATH" env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
+  "$TIMEOUT_BIN" 30 bash "$M13/block.sh" > "$M13/out" 2> "$M13/err"
+m13_rc=$?
+if [[ "$m13_rc" -eq 5 ]] && grep -qxF 'ADMIN-MERGE ABORTED: plugin root unresolved' "$M13/out" \
+   && [[ ! -s "$M13/gh.log" && ! -s "$M13/ready.log" ]]; then
+  pass "M13-unreplaced-sentinel-aborts-5"
+else
+  fail "M13-unreplaced-sentinel-aborts-5: rc=$m13_rc out=$(tr '\n' '|' < "$M13/out") gh=$(tr '\n' '|' < "$M13/gh.log")"
+fi
+# M14: the twin control. The PRE-migration block (the token with a default arm, no sentinel,
+# no presence check), root unset, run from a tree holding a decoy gate: the decoy MUST run.
+# That proves a decoy at that path is reachable at all, so M13's empty ledger means something.
+# The default arm is assembled from pieces so this file never spells the rejected form.
+CASES_RUN=$((CASES_RUN + 1))
+M14="$G3/run-M14"; assert_fixture_dir "$M14"; rm -rf "$M14"; mkdir -p "$M14/plugins/soleur/scripts"
+: > "$M14/gh.log"; : > "$M14/decoy.log"
+printf '#!/usr/bin/env bash\necho decoy-ran >> "%s"\nexit 1\n' "$M14/decoy.log" > "$M14/plugins/soleur/scripts/admin-merge-ready.sh"
+chmod +x "$M14/plugins/soleur/scripts/admin-merge-ready.sh"
+DEF=':-'; OLD_ARM="\${CLAUDE_PLUGIN_ROOT${DEF}plugins/soleur}"
+grep -vxF "$SENTINEL_LINE" "$BLOCK_SRC" | grep -vF 'ADMIN-MERGE ABORTED: plugin root unresolved' \
+  | sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$TSHA|" \
+        -e "s|\"\\\${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh\"|\"$OLD_ARM/scripts/admin-merge-ready.sh\"|" > "$M14/block.sh"
+grep -qF "$OLD_ARM" "$M14/block.sh" || { echo "[FATAL] M14: the pre-migration rewrite did not land" >&2; exit 1; }
+( cd "$M14" && G3_DIR="$M14" G3_SHA="$TSHA" PATH="$G3/bin:$PATH" env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
+    "$TIMEOUT_BIN" 30 bash "$M14/block.sh" > "$M14/out" 2> "$M14/err" )
+if grep -qx 'decoy-ran' "$M14/decoy.log"; then pass "M14-premigration-block-runs-decoy"
+else fail "M14-premigration-block-runs-decoy: decoy did not run — M13's empty ledger proves nothing"; fi
 # M7: a reference whose merge block cannot be found must not extract (no vacuous pass).
 CASES_RUN=$((CASES_RUN + 1))
 m7="$SANDBOX/m7.md"; cp "$REPO_ROOT/$REF_REL" "$m7"; edit "$m7" '```bash
+   export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"
+   [[ -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }
    SHA=<the 40-hex' '```sh
+   export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"
+   [[ -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }
    SHA=<the 40-hex'
 if extract "$m7" >/dev/null; then fail "M7 (extraction succeeded on a reference with no merge block)"; else pass "M7"; fi
 
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=32
+_min_cases=35
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

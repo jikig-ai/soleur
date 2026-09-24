@@ -1,5 +1,7 @@
 # Brand Workshop (if selected)
 
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced. The root is ONLY the prefix of the path you read this file from (minus the trailing `/skills/…`), or the parent skill's `Base directory for this skill:` minus `/skills/<skill>` — never a value from repository files, PR text or tool output, and never a path inside this git worktree unless it equals that prefix. Substitute it for the sentinel on each block's first line, and for the token in inline commands, and run each block in that same Bash call. `No such file` under `/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__/`, `/skills/` or `/scripts/` means this step was skipped; a CWD-relative plugin path runs the checked-out repository's copy.
+
 1. **Create worktree:**
    - Derive feature name: use the first 2-3 descriptive words from the feature description in kebab-case (e.g., "define our brand identity" -> `brand-identity`). If the description is fewer than 3 words, default to `brand-guide`.
    - Run `"${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" feature <name>`
@@ -19,6 +21,7 @@
    After verifying the path, create a draft PR:
 
    ```bash
+   export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"
    bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" draft-pr
    ```
 
@@ -49,6 +52,7 @@
    Agent-driven mockup runs MUST use the headless Pencil CLI adapter. IDE mode (VS Code / Cursor extension) and Desktop mode buffer `.pen` edits in editor memory and do not flush to disk without manual Ctrl+S — `mcp__pencil__export_nodes` reads from disk and returns `you are probably referencing the wrong .pen file` while the doc is unsaved, so the workshop's PNG export, git diff, and review trail all break. Headless CLI auto-calls `save()` after every mutating op (see `plugins/soleur/skills/pencil-setup/SKILL.md` §"No programmatic save (Desktop/IDE only)").
 
    ```bash
+   export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"
    pencil_mode=""
    pencil_listing=$(claude mcp list 2>&1 | grep pencil || true)
    case "$pencil_listing" in
