@@ -885,6 +885,38 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(deadletterTags()).toEqual({ reason: "leader_response_truncated" });
   });
 
+  it("#8719: a failed persist-failure write logs actionSendId, never the raw founder id", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: "max_tokens",
+    });
+    const base = makeStep();
+    const step: MockStep = {
+      ...base,
+      run<T>(name: string, cb: () => Promise<T>): Promise<T> {
+        if (name === "persist-failure") {
+          return Promise.reject(new Error("synthetic action_sends update failure"));
+        }
+        return base.run(name, cb);
+      },
+    };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7", founderId: "founder-raw-id-8719" }),
+      step,
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "leader_response_truncated" });
+    const warn = logger.warn.mock.calls.find((c) =>
+      String(c[1]).includes("persist-failure UPDATE failed"),
+    );
+    expect(warn).toBeDefined();
+    expect(warn![0]).toMatchObject({ actionSendId: expect.any(String) });
+    expect(JSON.stringify(warn![0])).not.toContain("founder-raw-id-8719");
+  });
+
   it("AC10 leader_tool_invalid: out-of-allowlist tool call → persist failure", async () => {
     // pr_review_pending allowlist = [createPullRequestReviewComment, createComment].
     // Model tries `addLabels`, which is NOT in its allowlist.

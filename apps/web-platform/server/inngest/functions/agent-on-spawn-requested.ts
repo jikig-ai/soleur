@@ -1285,9 +1285,10 @@ async function persistFailure(
       }
     });
   } catch (persistErr) {
+    // No founderId: this is the Inngest ctx logger, not pino, so the userId →
+    // userIdHash rename never runs here (#8719). actionSendId identifies the row.
     args.logger.warn(
       {
-        founderId: args.founderId,
         actionSendId,
         reason,
         persistErr,
