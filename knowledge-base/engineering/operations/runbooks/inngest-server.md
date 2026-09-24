@@ -162,8 +162,17 @@ gateway. Record it on #8539 with the boot's full detail string.
 condition**, and every host bakes the same `var.sentry_dsn` — so these two stages from the
 inngest host match a rule whose name still says `web-host-…`. Judge severity by the event's
 `host_name` tag, not by the rule name: on web-1 the condition self-heals, on inngest it means
-the zot pull is about to fail and the sole scheduler will not come up. Nothing is keyed on
-`oci-pull-ALL-LEGS-FAILED`, so this is the earliest automated warning you get. `private_nic_ok`
+the zot pull is about to fail and the sole scheduler will not come up. It is the earliest
+automated warning you get. The pull failure itself pages next: since #8036 item 1d a zot miss
+has no GHCR fallback behind it, so it ends the boot and emits `inngest_pull_fatal` at level
+`fatal`. `sentry_alert.zot_mirror_fallback_rate` (`zot-mirror-fallback-rate`) pages on that
+stage, even though the rule name still says "fallback". The same stage goes to Better Stack
+through the phone-home, with the redacted pull tail. Query it with
+`scripts/betterstack-query.sh --grep inngest_pull_fatal`. The detail is `rc=<n>` (`rc=124` is
+the 180 s pull timeout), or `rc=noendpoint` when no zot endpoint was baked. If zot does not
+serve the pinned digest, the fix is a `build-inngest-bootstrap-image.yml -f mirror_only=true`
+backfill and then a new replace, not a revert. The old `oci-pull-ALL-LEGS-FAILED`,
+`pre-oci-pull` and `oci-pull-rc-*` markers no longer exist. `private_nic_ok`
 matches no filter and is query-only by design — a healthy replace must not page. A `private_nic_probe_fault` means no measurement was possible (`reason=`
 is `noarg`, `noip`, `nogrep` or `iprc`); the pull outcome markers that follow still say whether
 the boot worked.
@@ -584,6 +593,77 @@ jq -r '.services.inngest_journal_tail' /tmp/ds.json | tr '|' '\n' | grep -iE 'co
 
 The tail is `|`-folded in the payload, hence the `tr`. A host-level restart is the WRONG lever
 here (it worsens `EMAXCONNSESSION`); this step is log inspection only, not remediation.
+
+## How the external watchdogs are triggered (#8495, ADR-248)
+
+`scheduled-inngest-health.yml` (every 15 min) and `scheduled-zot-restart-loop.yml` (hourly)
+are started by `workflow_dispatch` from the **watchdog dispatch clock** inside the web-platform
+server (`apps/web-platform/server/watchdog-dispatch-clock.ts`), on every deployed web host. Their
+`schedule:` crons are only the fallback: GitHub delivered them once every 2–7 h. The clock is
+not an Inngest function because it watches Inngest. The run is created within seconds of the
+dispatch, but its job then waits in the org runner queue (median ~30 s, p90 ~20 min), so the
+Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-loop` margin 60)
+are sized for that queue. A real outage still pages as soon as a run executes.
+
+1. **Is it running?** Each web host logs one `armed` row at boot and about five tick rows an
+   hour. Vector adds the host name (`soleur-web-platform` = web-1, `soleur-web-2`) outside the
+   marker; the marker itself carries the Hetzner `host_id`:
+
+   ```bash
+   doppler run -p soleur -c prd_terraform -- \
+     bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH \
+     | jq -R -r 'fromjson? | .raw | fromjson? | .host_name as $h | .message
+         | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true)
+         | [$h, .host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
+   ```
+
+   Expect rows from both host names. The run cadence itself is public (`-a` also lists a
+   disabled workflow):
+
+   ```bash
+   gh run list -a --workflow scheduled-inngest-health.yml --limit 20 --json createdAt,event \
+     | jq -r '.[] | "\(.createdAt) \(.event)"'
+   ```
+
+   Healthy is one `workflow_dispatch` run per 15-min slot, occasionally two (a host collision
+   or a late `schedule` fallback run). A `disarmed` row, or a Sentry event with
+   `feature=watchdog-dispatch-clock op=arm`, means `SOLEUR_HOST_ID` was empty at boot.
+2. **How do I run it now?** `gh workflow run scheduled-inngest-health.yml` (or the zot file);
+   neither takes inputs. A manual run created inside the current slot makes the clock skip
+   that slot (its skip row shows `run_event=workflow_dispatch`, like a run from the other
+   host). To tell who started a run:
+   `gh api repos/jikig-ai/soleur/actions/runs/<run_id> --jq .triggering_actor.login` (the
+   clock's runs show the GitHub App's bot login).
+3. **How do I stop it?** `gh workflow disable scheduled-inngest-health.yml` (or the zot file)
+   stops both the clock's dispatches and the fallback cron. There is no way to pause only the
+   clock while keeping the fallback (a kill-switch flag was considered and declined in the
+   #8495 plan); reverting the PR removes the clock. While a workflow is disabled, expect one
+   Sentry event per host per slot (`feature=watchdog-dispatch-clock op=dispatch`, tags
+   `workflow`, `status=422`; about 8 an hour for inngest-health), grouped into one issue. If
+   you revert the PR, also restore the pre-#8495 monitor margins (inngest 15, zot 120), or both
+   page as missed on GitHub's slower cadence.
+4. **How do I add or remove a table row?** Edit `WATCHDOG_DISPATCH_TABLE`
+   (`apps/web-platform/server/watchdog-dispatch-table.ts`) with a non-empty `eligibility`
+   argument (ADR-248: the job must watch the scheduling substrate or what it depends on;
+   anything else belongs on the Inngest dispatch pattern). The workflow needs
+   `workflow_dispatch:` + its fallback `schedule:` and no other trigger, a `concurrency`
+   group with `cancel-in-progress: false`, and must tolerate a repeat run in one slot. Budget
+   the monitor margin in `apps/web-platform/infra/sentry/cron-monitors.tf` as clock delay
+   (the worst-case retry path: jitter + each attempt's poll and tick deadline + the backoffs
+   between attempts, `CLOCK_DELAY_MINUTES`) + queue allowance
+   (`QUEUE_ALLOWANCE_MINUTES`) + max runtime, at most `MAX_MARGIN_MINUTES` — the constants and
+   the check live in `sentry-monitor-iac-parity.test.ts`. Update the expected slug set there
+   and the `api -> github` watchdog edge and the `github -> sentry` workflow list in
+   `model.c4`. After the deploy, each host logs a new `armed` row and a tick row for the new
+   workflow within one interval.
+5. **Which host sent a run?** Match the run's `created_at` to a `dispatched` row's `slot` and
+   `host_name` (query in step 1); a skipped tick names the run that already covered the slot
+   (`run_id`, `run_event`). A dispatched run with no matching marker came from the canary
+   container, whose logs are not shipped.
+
+`ci-deploy.sh`'s note that "the canary fires no crons" is no longer strictly true: the canary
+carries a clock for its few minutes of life, and the slot-scoped read keeps it from
+double-dispatching.
 
 ## External watchdog: functions-query degraded + restart `lock_contention` — #6407
 

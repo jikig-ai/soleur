@@ -6654,9 +6654,10 @@ rm -f "$T21_LIB"
 # credential to ask WITH. Empty-when-a-token-was-present is reported as the read failure it is.
 #
 # Scope note (R25): this section is OBSERVABILITY ONLY. `zot_gate_and_login` is documented
-# "Fail-open: never aborts the deploy" and cloud-init bakes /etc/default/soleur-ghcr-read
-# SPECIFICALLY so a cold-boot deploy proceeds when Doppler answers empty. T-7095-6 pins that
-# contract: same control flow, but it now says why.
+# "Fail-open: never aborts the deploy", so a cold-boot deploy proceeds when Doppler answers
+# empty. (cloud-init no longer bakes /etc/default/soleur-ghcr-read: #8036 1c retired its reader
+# here and #8036 1d stopped fresh hosts writing it.) T-7095-6 pins that contract: same control
+# flow, but it now says why.
 echo ""
 echo "--- #7095: a failed Doppler read is self-reporting (not 'pre-provisioning') ---"
 
@@ -7526,7 +7527,10 @@ assert_ghcr_cfg_row inline      "$(_gcfg_expect_split yes present none none none
 assert_ghcr_cfg_row credsstore  "$(_gcfg_expect no present none set none)"
 # credhelper also PINS THE DEPLOY-ONLY SCOPE: deploy loses the indirection while home and
 # root keep `*_ghcr_helper=set`. Those two are unreachable from webhook.service
-# (ProtectHome=read-only, /home absent from ReadWritePaths) and are 1d scope.
+# (ProtectHome=read-only, /home absent from ReadWritePaths). Fresh-boot GHCR logins ran as ROOT
+# (runcmd, HOME=/root) and so wrote only /root/.docker; #8036 1d deleted them. The home (deploy
+# user) entry was written by no live code path — a pre-#6565 fossil. On a host created before 1d
+# both stay as-is (revoked value) until it is replaced.
 assert_ghcr_cfg_row credhelper  "$(_gcfg_expect_split yes present none none none present none none set)"
 assert_ghcr_cfg_row noghcr      "$(_gcfg_expect no present none none none)"
 # As root, DAC override makes the parent searchable, so the file genuinely reads `present`.
@@ -7747,7 +7751,7 @@ echo ""
 # Operator ruling 2026-09-22 (#8036): remove the prelude `docker login ghcr.io`,
 # `refetch_ghcr_and_relogin` and the GHCR leg of `_ghcr_pull_or_recover`; sweep the stale
 # `ghcr.io` entry out of the deploy docker config. CI's GHCR write/read is untouched (dual-push +
-# the ADR-169 restore path), and cloud-init's fresh-boot root login is 1d scope.
+# the ADR-169 restore path). cloud-init's fresh-boot root login was removed later by #8036 1d.
 #
 # SCOPE, stated once here because three rows depend on it: the sweep covers the DEPLOY config
 # ($GHCR_DOCKER_CONFIG, on /mnt/data — a real ReadWritePath) and NOT ${HOME}/.docker/config.json.

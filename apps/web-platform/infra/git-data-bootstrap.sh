@@ -360,55 +360,228 @@ log "bootstrap substrate ready: LUKS store served at $GIT_DATA_ROOT, git+flock p
 _plaintext_volume=absent _plaintext_empty=no _served_repos=unknown _fence_on_mapper=no _erasure_probe=no
 # A re-run must not inherit a marker a previous run wrote: the marker means "THIS run passed".
 rm -f "$STORE_VERIFIED"
+# ---- BEGIN plaintext-count unit ----
 # Every entry under <root>/repositories — not only *.git (a partial `x/` is still user data) —
 # except the provision/remove lock dotfiles and lost+found. Fails (pipefail) if find cannot read.
+# find's stderr is discarded: an unreadable entry's NAME is a workspace id, and stderr here lands
+# in the runcmd detail file that on_err ships to Sentry (the rc still fails the count).
+# `repositories` is CLASSIFIED before it is counted and is never followed: `[ -d ]` follows a
+# symlink and find -P does not descend a symlinked start point, so a link (dangling or not) or a
+# plain file read as "0 entries". Absent -> 0; a directory -> counted; anything else -> rc 2.
 _repo_count() {
-  [ -d "$1/repositories" ] || { echo 0; return 0; }
-  find "$1/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf x | wc -c
+  local _t
+  _t="$(find "$1" -mindepth 1 -maxdepth 1 -name repositories -printf '%y' 2>/dev/null)" || return 1
+  case "$_t" in
+    "") echo 0 ;;
+    d) find "$1/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf x 2>/dev/null | wc -c ;;
+    *) return 2 ;;
+  esac
 }
 # 2. THE PLAINTEXT VOLUME HOLDS NO REPOSITORY. Only when a plaintext volume id was rendered.
-#    Mounted read-only and briefly: `noload` because plain `ro` on ext4 can still replay the
-#    journal; under a private `mktemp -d` parent (0700) so the volume's own root mode never
-#    exposes it; nosuid/nodev/noexec because nothing on it may run. The SOURCE is verified, not
-#    only the count: a failed or no-op mount leaves an empty directory that counts as 0.
-#    A dirty journal means the on-disk tree is not the whole truth, so nothing is counted.
-#    The data is safe on every FATAL: the volume is retained and was never written.
+#    (ADR-239 amendment 2026-09-24.) The volume is NEVER mounted and NEVER made writable. Its
+#    ext4 journal can be dirty (a predecessor destroyed while it was mounted rw), a plain `ro`
+#    mount would REPLAY that journal onto it, and a `noload` read shows the stale tree, which can
+#    miss an entry that exists only in the journal. So:
+#      - the device NUMBER is pinned at resolution and re-checked, through both the by-id link and
+#        the node, before --setro, before dumpe2fs and before `dmsetup create`; after the create
+#        the snapshot's deps must name it. A path is not an identity: sdX names are reused, so a
+#        detach and reattach between calls can put another disk behind the same node;
+#      - a LUKS device, a leftover git-data-pt-snap from an earlier run, or a device with holders
+#        (the live mapper) is refused before anything else. A leftover is never removed here;
+#      - `blockdev --setro` sets it kernel read-only before any mount, dm table or write-capable
+#        open, and is read back. The flag is in-memory: a reboot or a detach/reattach drops it.
+#        It refuses a rw mount and a write(2) open for this boot; it is NOT a bio-level barrier
+#        (the block layer only warns, once per device, when a write bio reaches a ro disk). The
+#        proof that nothing wrote the origin is its sysfs sector counters below;
+#      - a non-persistent dm `snapshot` is stacked on it (the target opens its origin read-only),
+#        its COW a sparse file on /dev/shm (RAM: it holds replayed directory names, which are
+#        workspace ids, so nothing may land on the root disk). The COW size bounds the replay:
+#        journal blocks x max(block size, 4096) + 64 MiB. Overflow invalidates the snapshot;
+#      - the SNAPSHOT is mounted ro WITHOUT noload, so the journal replays into the COW and the
+#        counted tree is the post-replay tree. errors=remount-ro overrides a superblock `panic`;
+#      - after the mount: the SOURCE is the snapshot (by equality), the snapshot superblock no
+#        longer needs recovery and is not `with errors`, the snapshot is not Invalid, and ext4's
+#        errors_count equals the volume's historical count after the replay and is unchanged by
+#        the count (readdir SKIPS a checksum-failed directory block with only a log line, so find
+#        exits 0 on a short count);
+#      - teardown is collect-then-exit and never `rm -rf` (see _pt_release), and afterwards the
+#        origin's sectors-written and sectors-discarded counters (sysfs stat fields 7 and 14) must
+#        equal the reading taken before --setro. Flush and write-I/O counts are NOT compared: the
+#        snapshot target sends empty flushes to its origin.
+#    Every failure is a named FATAL; nothing is written to the volume on any path. FATAL detail
+#    carries a classifier word from the kernel log, never raw kernel lines (they can name entries);
+#    the kernel log is a diagnostic only, never a gate (its ring wraps and the ro warning is once).
 _pt_id="${GIT_DATA_PLAINTEXT_VOLUME_ID:-}"
+_plaintext_journal=absent
 if [ -n "$_pt_id" ]; then
   _plaintext_volume=present
   [[ "$_pt_id" =~ ^[0-9]+$ ]] || { log "FATAL: plaintext_unverified reason=source — volume id '$_pt_id' is not numeric"; exit 1; }
-  _pt_dev="${GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id}"
-  _pt_dir="$(mktemp -d)"
-  _pt_mnt="$_pt_dir/mnt"
-  _pt_mounted=0
-  mkdir "$_pt_mnt"
-  _pt_release() {
-    if [ "$_pt_mounted" = 1 ]; then
-      _pt_mounted=0
-      umount "$_pt_mnt" || { log "FATAL: plaintext_unverified reason=umount — $_pt_dev is still mounted read-only at $_pt_mnt"; exit 1; }
+  _pt_link="${GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id}"
+  _pt_dev="$(realpath -e "$_pt_link" 2>/dev/null || true)"
+  if [ -z "$_pt_dev" ] || [ "$(stat -L -c %F "$_pt_dev" 2>/dev/null || true)" != "block special file" ]; then
+    log "FATAL: plaintext_unverified reason=source — $_pt_link does not resolve to a block device"
+    exit 1
+  fi
+  _pt_mm="$(stat -L -c '%t:%T' "$_pt_dev" 2>/dev/null || true)"
+  [[ "$_pt_mm" =~ ^[0-9a-f]+:[0-9a-f]+$ ]] || { log "FATAL: plaintext_unverified reason=source — the device number of $_pt_dev is unreadable"; exit 1; }
+  _pt_devno="$((16#${_pt_mm%:*})):$((16#${_pt_mm#*:}))"
+  # Keyed by device number, not by name: right for a whole disk, a partition and a dm node alike.
+  _pt_sys="/sys/dev/block/$_pt_devno"
+  _pt_same() {
+    if [ "$(stat -L -c '%t:%T' "$_pt_link" 2>/dev/null || true)" != "$_pt_mm" ] \
+       || [ "$(stat -L -c '%t:%T' "$_pt_dev" 2>/dev/null || true)" != "$_pt_mm" ]; then
+      log "FATAL: plaintext_unverified reason=source — $_pt_link no longer names device $_pt_devno ($1)"
+      exit 1
     fi
-    rmdir "$_pt_mnt" "$_pt_dir" 2>/dev/null || true
   }
+  _pt_snap=git-data-pt-snap
+  if cryptsetup isLuks "$_pt_dev" >/dev/null 2>&1; then
+    log "FATAL: plaintext_unverified reason=source — $_pt_dev is a LUKS device, not the plaintext volume"
+    exit 1
+  fi
+  if dmsetup info "$_pt_snap" >/dev/null 2>&1; then
+    log "FATAL: plaintext_unverified reason=snapshot — a previous run's $_pt_snap is still present; it is never removed here"
+    exit 1
+  fi
+  if [ ! -d "$_pt_sys/holders" ] || [ -n "$(ls -A "$_pt_sys/holders" 2>/dev/null || true)" ]; then
+    log "FATAL: plaintext_unverified reason=source — $_pt_dev has holders (or no sysfs entry); it is not ours to set read-only"
+    exit 1
+  fi
+  # "<sectors written> <sectors discarded>". Fewer than 14 fields (no discard counters) is unreadable.
+  _pt_wstat() {
+    local _f
+    read -r -a _f 2>/dev/null < "$_pt_sys/stat" || return 1
+    [ "${#_f[@]}" -ge 14 ] || return 1
+    [[ "${_f[6]}" =~ ^[0-9]+$ && "${_f[13]}" =~ ^[0-9]+$ ]] || return 1
+    printf '%s %s' "${_f[6]}" "${_f[13]}"
+  }
+  _pt_same "before --setro"
+  _pt_w0="$(_pt_wstat)" || { log "FATAL: plaintext_unverified reason=snapshot — the sysfs write counters of $_pt_dev are unreadable"; exit 1; }
+  if ! blockdev --setro "$_pt_dev" || [ "$(blockdev --getro "$_pt_dev" 2>/dev/null || true)" != 1 ]; then
+    log "FATAL: plaintext_unverified reason=snapshot — $_pt_dev could not be made kernel read-only"
+    exit 1
+  fi
+  _pt_has_nr() { printf '%s\n' "$1" | awk '/^Filesystem features:/ && / needs_recovery( |$)/{f=1} END{exit !f}'; }
+  _pt_same "before dumpe2fs"
+  _pt_sb="$(dumpe2fs -h "$_pt_dev" 2>/dev/null)" || { log "FATAL: plaintext_unverified reason=journal — dumpe2fs could not read the $_pt_dev superblock"; exit 1; }
+  if _pt_has_nr "$_pt_sb"; then _plaintext_journal=dirty; else _plaintext_journal=clean; fi
+  _pt_jb="$(printf '%s\n' "$_pt_sb" | sed -n 's/^Total journal blocks:[[:space:]]*\([0-9][0-9]*\)$/\1/p')"
+  _pt_bs="$(printf '%s\n' "$_pt_sb" | sed -n 's/^Block size:[[:space:]]*\([0-9][0-9]*\)$/\1/p')"
+  if ! [[ "$_pt_jb" =~ ^[1-9][0-9]*$ && "$_pt_bs" =~ ^[1-9][0-9]*$ ]]; then
+    log "FATAL: plaintext_unverified reason=snapshot — the journal geometry of $_pt_dev is unreadable, so the COW cannot be sized"
+    exit 1
+  fi
+  [ "$_pt_bs" -ge 4096 ] || _pt_bs=4096
+  _pt_cow_bytes=$((_pt_jb * _pt_bs + 67108864))
+  # s_error_count accumulates over the volume's life (dumpe2fs omits the line at 0). The replay
+  # preserves it, so the bar is "no NEW error", not "never an error".
+  _pt_eh="$(printf '%s\n' "$_pt_sb" | sed -n 's/^FS Error count:[[:space:]]*//p')"
+  _pt_eh="${_pt_eh:-0}"
+  [[ "$_pt_eh" =~ ^[0-9]+$ ]] || { log "FATAL: plaintext_unverified reason=journal — the $_pt_dev superblock's error count is unreadable"; exit 1; }
+  _pt_k0="$(dmesg 2>/dev/null | wc -l || true)"
+  _pt_klass() {
+    local _k
+    _k="$(dmesg 2>/dev/null | tail -n +"$((_pt_k0 + 1))" || true)"
+    case "$_k" in
+      *"Invalidating snapshot"*|*"snapshot is full"*) echo overflow ;;
+      *JBD2*) echo jbd2 ;;
+      *"EXT4-fs error"*) echo ext4-error ;;
+      *) echo none ;;
+    esac
+  }
+  _pt_diag() { printf 'kernel=%s cow=%s' "$(_pt_klass)" "$(dmsetup status "$_pt_snap" 2>/dev/null | awk '{print $4}' || true)"; }
+  _pt_dir="" _pt_mnt="" _pt_loop="" _pt_snap_up=0 _pt_mounted=0
+  _pt_valid() {
+    case "$(dmsetup status "$_pt_snap" 2>/dev/null || echo unreadable)" in
+      *Invalid*|unreadable) log "FATAL: plaintext_unverified reason=snapshot — the snapshot was invalidated (COW overflow) or its status is unreadable ($(_pt_diag))"; exit 1 ;;
+    esac
+  }
+  # Every step is attempted, each guarded so `set -e` cannot end this handler early; the first
+  # failure is reported once, at the end.
+  _pt_release() {
+    trap - EXIT
+    local _first=""
+    if [ "$_pt_mounted" = 1 ]; then
+      if umount "$_pt_mnt"; then _pt_mounted=0; else _first="umount of the snapshot at $_pt_mnt"; fi
+    fi
+    udevadm settle --timeout=30 >/dev/null 2>&1 || true
+    if [ "$_pt_snap_up" = 1 ]; then
+      if timeout 60 dmsetup remove --retry "$_pt_snap" >/dev/null 2>&1; then _pt_snap_up=0; else _first="${_first:-dmsetup remove $_pt_snap}"; fi
+    fi
+    if [ -n "$_pt_loop" ]; then
+      if losetup -d "$_pt_loop"; then _pt_loop=""; else _first="${_first:-losetup -d of the COW}"; fi
+    fi
+    if [ "$_pt_mounted" != 1 ] && [ -n "$_pt_dir" ]; then
+      if rm -f "$_pt_dir/cow"; then
+        rmdir "$_pt_mnt" "$_pt_dir" 2>/dev/null || true
+        _pt_dir=""
+      else
+        _first="${_first:-rm of the COW file}"
+      fi
+    fi
+    [ -z "$_first" ] || { log "FATAL: plaintext_unverified reason=umount — $_first failed; the snapshot apparatus may still be live"; exit 1; }
+  }
+  _pt_dir="$(mktemp -d -p /dev/shm)" || { log "FATAL: plaintext_unverified reason=snapshot — mktemp -d -p /dev/shm failed"; exit 1; }
+  _pt_mnt="$_pt_dir/mnt"
   trap _pt_release EXIT
-  mount -o ro,noload,nosuid,nodev,noexec "$_pt_dev" "$_pt_mnt" || { log "FATAL: plaintext_unverified reason=mount — could not mount $_pt_dev read-only"; exit 1; }
+  mkdir "$_pt_mnt" || { log "FATAL: plaintext_unverified reason=snapshot — the private mount directory could not be created"; exit 1; }
+  truncate -s "$_pt_cow_bytes" "$_pt_dir/cow" || { log "FATAL: plaintext_unverified reason=snapshot — the COW file could not be created"; exit 1; }
+  _pt_loop="$(losetup --find --show "$_pt_dir/cow")" || { _pt_loop=""; log "FATAL: plaintext_unverified reason=snapshot — losetup of the COW failed"; exit 1; }
+  _pt_sz="$(blockdev --getsz "$_pt_dev" 2>/dev/null || true)"
+  [[ "$_pt_sz" =~ ^[1-9][0-9]*$ ]] || { log "FATAL: plaintext_unverified reason=snapshot — blockdev --getsz $_pt_dev returned '$_pt_sz'"; exit 1; }
+  _pt_same "before dmsetup create"
+  if ! timeout 60 dmsetup create "$_pt_snap" --table "0 $_pt_sz snapshot $_pt_dev $_pt_loop N 8"; then
+    # The name was absent before this call (checked above), so a device under it now is ours.
+    if dmsetup info "$_pt_snap" >/dev/null 2>&1; then _pt_snap_up=1; fi
+    log "FATAL: plaintext_unverified reason=snapshot — dmsetup create $_pt_snap failed"
+    exit 1
+  fi
+  _pt_snap_up=1
+  _pt_deps="$(dmsetup deps "$_pt_snap" 2>/dev/null || true)"
+  if [[ "$_pt_deps" != *" (${_pt_devno%:*}, ${_pt_devno#*:})"* ]]; then
+    log "FATAL: plaintext_unverified reason=source — the snapshot's origin is not device $_pt_devno"
+    exit 1
+  fi
+  mount -o ro,errors=remount-ro,nosuid,nodev,noexec "/dev/mapper/$_pt_snap" "$_pt_mnt" || { log "FATAL: plaintext_unverified reason=mount — the snapshot of $_pt_dev did not mount read-only ($(_pt_diag))"; exit 1; }
   _pt_mounted=1
+  _pt_valid
   _pt_src="$(findmnt -n -o SOURCE --mountpoint "$_pt_mnt" 2>/dev/null || true)"
   _pt_got="$(realpath -e "$_pt_src" 2>/dev/null || true)"
-  _pt_want="$(realpath -e "$_pt_dev" 2>/dev/null || true)"
+  _pt_want="$(realpath -e "/dev/mapper/$_pt_snap" 2>/dev/null || true)"
   if [ -z "$_pt_got" ] || [ "$_pt_got" != "$_pt_want" ]; then
-    log "FATAL: plaintext_unverified reason=source — $_pt_mnt is served by '${_pt_src:-nothing}', not $_pt_dev"
+    log "FATAL: plaintext_unverified reason=source — $_pt_mnt is served by '${_pt_src:-nothing}', not the snapshot /dev/mapper/$_pt_snap"
     exit 1
   fi
-  _pt_sb="$(dumpe2fs -h "$_pt_dev" 2>/dev/null)" || { log "FATAL: plaintext_unverified reason=journal — dumpe2fs could not read the $_pt_dev superblock"; exit 1; }
-  if printf '%s\n' "$_pt_sb" | awk '/^Filesystem features:/ && / needs_recovery( |$)/{f=1} END{exit !f}'; then
-    log "FATAL: plaintext_unverified reason=journal — $_pt_dev has needs_recovery set; its tree was not counted"
+  _pt_ssb="$(dumpe2fs -h "/dev/mapper/$_pt_snap" 2>/dev/null)" || { log "FATAL: plaintext_unverified reason=journal — dumpe2fs could not read the snapshot superblock ($(_pt_diag))"; exit 1; }
+  if _pt_has_nr "$_pt_ssb"; then
+    log "FATAL: plaintext_unverified reason=journal — the journal did not replay into the snapshot; its tree was not counted ($(_pt_diag))"
     exit 1
   fi
-  _pt_n="$(_repo_count "$_pt_mnt")" || { log "FATAL: plaintext_unverified reason=mount — $_pt_dev repositories/ is unreadable"; exit 1; }
+  # Fail-closed by intent: a volume recording unrepaired errors cannot be proven empty by a count.
+  if printf '%s\n' "$_pt_ssb" | awk '/^Filesystem state:/ && /with errors/{f=1} END{exit !f}'; then
+    log "FATAL: plaintext_unverified reason=journal — the replayed snapshot reads 'with errors'; its tree was not counted ($(_pt_diag))"
+    exit 1
+  fi
+  _pt_dm="$(dmsetup info -c --noheadings -o blkdevname "$_pt_snap" 2>/dev/null || true)"
+  _pt_errs() { local _v; _v="$(cat "/sys/fs/ext4/$_pt_dm/errors_count" 2>/dev/null || true)"; [[ "$_v" =~ ^[0-9]+$ ]] && printf '%s' "$_v"; }
+  _pt_e0="$(_pt_errs || true)"
+  [ "$_pt_e0" = "$_pt_eh" ] || { log "FATAL: plaintext_unverified reason=journal — ext4 errors_count reads '${_pt_e0:-unreadable}' after replay, $_pt_eh before ($(_pt_diag))"; exit 1; }
+  _pt_rc=0
+  _pt_n="$(_repo_count "$_pt_mnt")" || _pt_rc=$?
+  case "$_pt_rc" in
+    0) : ;;
+    2) log "FATAL: plaintext_unverified reason=source — the snapshot's repositories is not a directory; a link is never followed"; exit 1 ;;
+    *) log "FATAL: plaintext_unverified reason=mount — the snapshot's repositories/ is unreadable ($(_pt_diag))"; exit 1 ;;
+  esac
+  _pt_e1="$(_pt_errs || true)"
+  [ "$_pt_e1" = "$_pt_e0" ] || { log "FATAL: plaintext_unverified reason=journal — ext4 logged an error during the count (errors_count $_pt_e0 -> ${_pt_e1:-unreadable}) ($(_pt_diag))"; exit 1; }
+  _pt_valid
   _pt_release
-  trap - EXIT
+  _pt_w1="$(_pt_wstat)" || { log "FATAL: plaintext_unverified reason=snapshot — the sysfs write counters of $_pt_dev are unreadable after teardown"; exit 1; }
+  [ "$_pt_w1" = "$_pt_w0" ] || { log "FATAL: plaintext_unverified reason=snapshot — $_pt_dev was written or discarded (sectors $_pt_w0 -> $_pt_w1)"; exit 1; }
   [ "$_pt_n" -eq 0 ] || { log "FATAL: plaintext_residue count=$_pt_n — the plaintext volume still holds repositories/ entries"; exit 1; }
 fi
+# ---- END plaintext-count unit ----
 _plaintext_empty=yes
 # 3. THE SERVED STORE HOLDS NOTHING UNKNOWN (luks_residue). Counted with the same exclusions,
 #    BEFORE the probe writes its lock dotfile. Unknown content on an adopted volume blocks the
@@ -529,6 +702,6 @@ if [[ -x "$GIT_DATA_EMIT" ]]; then
     "nft_metadata_drop=${_nft_drop}" "luks_reopen_unit=${_reopen_unit}" \
     "fence_on_mapper=${_fence_on_mapper}" "erasure_probe=${_erasure_probe}" \
     "plaintext_empty=${_plaintext_empty}" "plaintext_volume=${_plaintext_volume}" \
-    "served_repos=${_served_repos}" \
+    "served_repos=${_served_repos}" "plaintext_journal=${_plaintext_journal}" \
     "disk_pct=${_disk_pct:-unknown}" "inode_pct=${_inode_pct:-unknown}" || true
 fi

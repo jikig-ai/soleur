@@ -450,6 +450,56 @@ it is retained and was only ever mounted read-only, so nothing has been lost. St
 CLO, bump **#8571** (copy mode), and block the wipe until that decision is taken. Do not wipe either
 volume — the contents are the evidence.
 
+### 2026-09-24: the step-3 replace FATALed on a dirty journal (#5274)
+
+Recorded, not edited into the steps above. Run 35979304442 applied cleanly and published the new pin
+(`SHA256:WRk5AW6j9IHNpE9KJ3FpVZbDp4I9HerMD84LGP0uB48`); the fresh host FATALed at 09:09:30Z with
+`reason=journal … has needs_recovery set` — ADR-239's accepted dirty-journal gap, because the
+predecessor was destroyed while the plaintext volume was mounted read-write. Nothing was written.
+The Art. 17 sweep over 09:07Z-09:32Z found no `erasure_outcome` issue. The forward fix reads the
+volume through a dm snapshot and makes the rung-2 rehearsal reproduce a dirty journal (ADR-239
+amendment 2026-09-24).
+
+**The sequence, each dispatch stopping for the operator's explicit per-command go-ahead**
+(`hr-menu-option-ack-not-prod-write-auth` — a menu acknowledgement is not write authority):
+
+| # | Dispatch | Precondition | Clean means |
+|---|---|---|---|
+| G1 | `git-data-rung2-rehearsal.yml` `dry_run=false` (paid) | the fix PR merged | the run concludes `success`, and its evidence lands through an evidence-only PR |
+| G2 | `apply-web-platform-infra.yml` `apply_target=git-data-host-replace plan_only=true` | the evidence PR merged **and** `gh issue view 8710 --json state,closedByPullRequestsReferences` shows #8710 closed by a merged PR (otherwise this rehearsal fires a production redeploy again) | the job's destroy-guard (`git_data_host_replace_gate`, `tests/scripts/lib/git-data-host-replace-gate.sh` — the single source for which addresses a replace may touch; neither volume is among them) admits the plan and the run concludes `success`, and `gh run list --workflow=git-data-pin-redeploy.yml --created ">=<G2 start>"` shows no run it triggered. For reference, run 35979304442 planned `6 to add, 1 to change, 4 to destroy` because `tls_private_key.git_data_host_ssh` and `doppler_secret.git_data_ssh_host_key` were not yet in state; with both in state the counts differ, so compare against the gate, never against that line |
+| G3 | the same, real (one attempt) | G2 read clean | GO, below |
+| G4 | `git-data-cutover.yml` strict dry run | G3's `boot_complete` | `role=git-data-auth verdict=ok` |
+
+Between G1 and the evidence PR, hold every merge that touches a file the evidence hash binds: each
+voids the hash and costs another paid G1 (cap: 2 per payload hash). The set is derived, not listed
+— `git_data_rung2_bound_files` in `tests/scripts/lib/git-data-birth-readiness-gate.sh` prints it
+(17 files on 2026-09-24: `cloud-init-git-data.yml`, the three `modules/git-data-userdata/*.tf`, and
+the 13 `file()`-bound payloads, among them `git-data-bootstrap.sh`, the `git-data-gc*`,
+`git-data-luks-reopen*` units and scripts, and `git-data-{provision,remove,transport-wrapper,pre-receive-placeholder}.sh`).
+
+**Downtime.** G3 destroys the serving host: git-data serves nothing from the destroy until the new
+host's `boot_complete`, and the pin redeploy that follows redeploys the web platform to load the new
+fingerprint. Dispatch G3 in a low-traffic window.
+
+**GO for G3 means all three:** Better Stack shows `git_data_pin=present fp=<G3's fingerprint>` from
+a pin redeploy caused by **that** replace run (not 35979135707, which the `plan_only` rehearsal
+triggered — #8710 — and not 35980551109); zero Sentry `erasure_outcome` events in the window; and G4
+reads `role=git-data-auth verdict=ok`. The replace boot must also emit `boot_complete` with
+`plaintext_journal=dirty plaintext_empty=yes fence_on_mapper=yes erasure_probe=yes`. A production
+`plaintext_journal=clean` is **NO-GO and an incident**: the volume was measured dirty on 2026-09-24,
+so a clean journal means something replayed it — a write to the retained volume.
+
+**G3 is capped at one attempt.** A failed G3 leaves the Doppler pin naming a host that serves nothing
+(harmless: nothing can use git-data until a boot writes the marker, and the next replace re-pins).
+Recovery is a read first, never a second replace.
+
+**Art. 12(3).** Sweep the refused erasures from Sentry over the window **from the start of run
+35979304442** (refusals began when the predecessor was destroyed, not at the 09:09:30Z FATAL) to the
+G3 marker, querying `op:git-data-bare-repo-erasure` (pre-FATAL refusals may have surfaced through the
+`removeGitDataRepo threw` path rather than `erasure_outcome`), and re-drive each id by
+**2026-10-24**. Record the count and ids on #5914. If G3 has not reached GO well before then,
+escalate to the CLO rather than rushing G3.
+
 ## Verdict map
 
 | Where you are | What the run reads | What to do |
@@ -489,7 +539,7 @@ volume — the contents are the evidence.
 | The pre-receive fence is not intact | `verdict=fence_not_intact reason=<word>` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
 | The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_<name>` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
 | A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do; the real modes are PR2 of #8211. |
-| The fresh host could not verify the retained plaintext volume | Better Stack / Sentry `stage:bootstrap` `FATAL: plaintext_unverified reason=<mount\|source\|journal\|umount>` | The volume was mounted read-only or not at all, so nothing was written and nothing was lost. No store marker exists, so every erasure refuses. `reason=journal` is the known dirty-journal gap the rehearsal cannot reproduce (ADR-239). Follow "If the fresh host fails a boot check after step 3". |
+| The fresh host could not verify the retained plaintext volume | Better Stack / Sentry `stage:bootstrap` `FATAL: plaintext_unverified reason=<mount\|source\|journal\|umount\|snapshot>` | Since 2026-09-24 (#5274) the volume is set kernel read-only and read through a throwaway dm snapshot, never mounted itself. `source` = the device is not the plaintext volume (not a block device, LUKS, has holders or no sysfs entry, its device number changed, the snapshot's origin is another device) or the mount is not the snapshot, or `repositories` on the snapshot is not a real directory; `snapshot` = the read-only flag or the snapshot apparatus failed (journal geometry, loop, `dmsetup create`, an invalidated COW, a previous run's snapshot still present, unreadable sector counters); `mount` = the snapshot did not mount or its tree is unreadable; `journal` = the journal did not replay cleanly into the snapshot (still needs recovery, `with errors`, `errors_count` after replay differs from the volume's historical error count, or it moved during the count); `umount` = a transient device could not be torn down. **One `snapshot` FATAL is an incident, not a refusal:** `… was written or discarded (sectors a b -> c d)` means the retained volume's written- or discarded-sector counters moved during the read — open an incident (Breach-triage trigger) and route to the CLO; every other FATAL here wrote nothing. The FATAL detail carries `kernel=<overflow\|jbd2\|ext4-error\|none> cow=<used/total>`. No store marker exists, so every erasure refuses. A repeated journal-class FATAL on the production volume routes to the #8571 wipe decision and the CLO, never to another replace. Follow "If the fresh host fails a boot check after step 3". |
 | The retained plaintext volume holds repository entries | `FATAL: plaintext_residue count=<n>` | **Stop.** The data is read-only on a retained volume. Escalate to the CLO, bump #8571 (copy mode) and block the wipe. Do not wipe or replace. See the residue paragraph in "If the fresh host fails a boot check after step 3". |
 | The LUKS volume itself holds repository entries | `FATAL: luks_residue count=<n>` | An adopted volume carries content this register has not recorded. No marker is written and the host serves nothing. Treat it as "Store not empty": open an incident and route it to the CLO before any erasure or wipe. |
 | The pre-receive fence did not land on the mapper | `FATAL: fence_on_mapper=no`, and `boot_complete` `fence_on_mapper=no` | The hooks landed under the mountpoint instead of on the serving device, so a push would run an unfenced hook. No marker is written. Forward fix; follow "If the fresh host fails a boot check after step 3". |

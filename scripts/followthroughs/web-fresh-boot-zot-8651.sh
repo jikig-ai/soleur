@@ -77,7 +77,7 @@ for id in $ids; do
   fi
   if grep -qF "fresh-host boot reached fresh_boot_ready" <<<"$trail" \
      && grep -qF "stage=app_zot" <<<"$origin" && grep -qF "zot_login=ok" <<<"$origin"; then
-    echo "PASS: ${HOST_KEY} booted zot-served and reported fresh_boot_ready on $url — ${origin}. GHCR's outcome is recorded in that detail (ghcr_login=…); it is not asserted, so a restored GHCR credential cannot fail a correct zot boot."
+    echo "PASS: ${HOST_KEY} booted zot-served and reported fresh_boot_ready on $url — ${origin}. The detail carries zot_login=… (the GHCR leg was retired by #8036 1d); a pre-1d detail may still carry ghcr_login=…, which is not asserted."
     exit 0
   fi
   echo "NOT YET: the newest ${HOST_KEY} run ($url) is inconclusive (no fresh_boot_ready + app_zot/zot_login=ok pair) — re-run \`fresh-host-boot-trail.sh --image-origin ${HOST_NAME}\` or re-dispatch."

@@ -1,0 +1,45 @@
+# Tasks: mattpocock/skills audit bundle B4/B10/B12b
+
+Plan: `knowledge-base/project/plans/2026-09-23-feat-mattpocock-audit-b4-b10-b12b-bundle-plan.md`
+
+## 1. Setup
+
+- [x] 1.1 Confirm the four targets have not drifted on `origin/main`:
+  `git diff HEAD origin/main -- plugins/soleur/skills/brainstorm plugins/soleur/skills/brainstorm-techniques plugins/soleur/skills/compound plugins/soleur/commands`.
+- [x] 1.2 Run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <file>` for
+  each target. All four must print `"gated":false`.
+
+## 2. Core Implementation
+
+- [x] 2.1 B4: in `plugins/soleur/skills/brainstorm/SKILL.md` §1.2, replace the exit line with the
+  `**Dialogue discipline:**` block and the new exit condition (plan Implementation §1). The block
+  covers the branch list, out-of-scope parking, dependency order, lookups (collected before exit)
+  and the `**Headless:**` line. Say "user", never "founder".
+- [x] 2.2 B4: in `plugins/soleur/skills/brainstorm-techniques/SKILL.md`, replace the
+  `**Exit Condition:**` line (plan Implementation §1).
+- [x] 2.3 B10: in `plugins/soleur/skills/compound/SKILL.md` Phase 1.5, insert step 3.6. The
+  paragraph lead is followed by a blank line and flat bullets. Scope it to recurring code or
+  config defects, and use the **covered** / **unwired** / **none** labels.
+- [x] 2.4 B10: edit step 7 and `### Empty Case` (step 5's template is referenced from step 3.6; steps 4 and 5 unchanged after review). Add the one clause in
+  `### Error-to-Workflow Feedback` and the two clauses in `### Constitution Promotion` (headless
+  never auto-accepts; the interactive gate includes step-3.6 findings). Do not touch step 8.
+- [x] 2.5 B12b: add the byte-identical `HOW THE SKILLS FIT TOGETHER:` block to the Claude Code,
+  Devin CLI and Grok Build blocks in `plugins/soleur/commands/help.md`. Place it between WORKFLOW
+  SKILLS and AGENTS, with a blank line before and after, no internal blank line, no `operator-*`
+  token and no new `### ` heading.
+- [x] 2.6 B12b: append `Render the HOW THE SKILLS FIT TOGETHER map verbatim.` to the Codex bullet
+  in `## Step 2.5` of `plugins/soleur/commands/help.md`.
+
+## 3. Testing and Verification
+
+- [x] 3.1 Run the checks for AC1 to AC6 from the plan: anchors, line order, the Empty Case,
+  Constitution Promotion and Error-to-Workflow clauses, markdownlint on compound, map parity, the
+  Codex note, scope and eval-gate.
+- [x] 3.2 Check that AC7 passes: the bun suites (components, invocation-axis, harness-parity,
+  workflow-fidelity), `bash scripts/lint-agents-compound-sync.sh`, and
+  `bash scripts/markdown-lint.sh` on all four files.
+- [x] 3.3 Run the discoverability probe
+  `grep -c -e 'Null-guardrail check' plugins/soleur/skills/compound/SKILL.md`. It must print `1`.
+- [ ] 3.4 Write the PR body per AC8: say it is the B4/B10/B12b bundle, cite `#8284` with `Ref`,
+  and note that `#8648` owns the `competitive-intelligence.md` update. Fold in
+  `decision-challenges.md`.

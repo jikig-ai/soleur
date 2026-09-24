@@ -12,6 +12,7 @@ chooses otherwise.
   bundles, shipped in four days (2026-09-19 to 2026-09-22). That shows the value of a peer audit.
 - **Plan default:** KT4 keeps its original insight, puts the evidence in the past tense, and cites the
   closing issues.
+- **Founder decision 2026-09-23:** plan default kept (past-tense KT4). No change.
 
 ## T2 — Name `#8505` as the next Phase 4 security item in the PR body (CPO, taste)
 
@@ -19,6 +20,7 @@ chooses otherwise.
   already ran out once, and `#8497` is blocked on it. It should not read as one deferral among five.
 - **Plan default:** All five verdicts are shown with equal weight. The blocked-by edge is the only
   thing that marks `#8505` as a priority.
+- **Founder decision 2026-09-23:** moot. `#8505` shipped in PR `#8618` and was closed 2026-09-23.
 
 ## T3 — Status text for B4 / B10, with a revisit trigger (CPO, taste)
 
@@ -26,12 +28,16 @@ chooses otherwise.
   drift, or if a brainstorm or compound failure points to it."
 - **Plan default:** "not bundled — remains advisory", with no revisit trigger. The plan no longer
   calls these "explicit declines": that contradiction was corrected as a mechanical fix.
+- **Founder decision 2026-09-23:** both options superseded. B4, B10 and B12's second half were
+  bundled and shipped in PR `#8647` (merged 2026-09-24, `e5a725a5e1`).
 
 ## T4 — Wording of the §2 `setup-pre-commit` reject verdict (CMO, taste)
 
 - **Proposal:** "**Reject — already covered by the hooks listed above.**" This removes the remaining
   comparison.
 - **Plan default:** "**Reject — Soleur's hooks fleet already covers this in more depth.**"
+- **Founder decision 2026-09-23:** proposal adopted ("Reject — already covered by the hooks
+  listed above.").
 
 ## T5 — Star-count wording without "unusually high for the repo's age" (CMO, taste)
 

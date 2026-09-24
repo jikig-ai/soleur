@@ -308,6 +308,13 @@ shift
 if [[ "${1:-}" == "rate_limit" && "${2:-}" == "--jq" && "${3:-}" == ".resources.core.remaining" ]]; then
   echo 4321; exit 0
 fi
+if [[ "${1:-}" == "--paginate" && "${2:-}" =~ ^repos/acme/widgets/actions/runs/([0-9]+)/jobs\?per_page=100$ ]]; then
+  id="${BASH_REMATCH[1]}"
+  [[ "${3:-}" == "--jq" && "${4:-}" == ".jobs[].status" && $# -eq 4 ]] || refuse "$@"
+  if [[ -f "$M/jobs_fail" ]]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+  if [[ -f "$M/jobs/$id" ]]; then cat "$M/jobs/$id"; else printf 'completed\ncompleted\n'; fi
+  exit 0
+fi
 if [[ "${1:-}" == "--paginate" ]]; then
   url="${2:-}"
   [[ "${3:-}" == "--jq" && "${4:-}" == ".workflow_runs[]" && $# -eq 4 ]] || refuse "$@"
@@ -320,9 +327,13 @@ if [[ "${1:-}" == "--paginate" ]]; then
   exit 0
 fi
 if [[ "${1:-}" == "-i" && "${2:-}" == "-X" && "${3:-}" == "POST" && $# -eq 4 ]]; then
-  [[ "$4" =~ ^repos/acme/widgets/actions/runs/([0-9]+)/cancel$ ]] || refuse "$@"
-  id="${BASH_REMATCH[1]}"
-  spec="202|"; [[ -f "$M/cancel/$id" ]] && spec="$(<"$M/cancel/$id")"
+  if [[ "$4" =~ ^repos/acme/widgets/actions/runs/([0-9]+)/force-cancel$ ]]; then
+    id="${BASH_REMATCH[1]}"; spec="202|"; [[ -f "$M/force/$id" ]] && spec="$(<"$M/force/$id")"
+  elif [[ "$4" =~ ^repos/acme/widgets/actions/runs/([0-9]+)/cancel$ ]]; then
+    id="${BASH_REMATCH[1]}"; spec="202|"; [[ -f "$M/cancel/$id" ]] && spec="$(<"$M/cancel/$id")"
+  else
+    refuse "$@"
+  fi
   code="${spec%%|*}"; msg="${spec#*|}"
   if [[ "$code" == "202" ]]; then printf 'HTTP/2.0 202 Accepted\r\ncontent-type: application/json\r\n\r\n{}\n'; exit 0; fi
   printf 'HTTP/2.0 %s Err\r\ncontent-type: application/json\r\n\r\n{"message":"%s","status":"%s"}\n' "$code" "$msg" "$code"
@@ -336,7 +347,13 @@ if [[ "$#" -eq 3 && "${2:-}" == "--jq" ]]; then
     repos/acme/widgets/actions/runs/[0-9]*"|.status")
       id="${1##*/}"
       if [[ -f "$M/status_fail" ]]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
-      if [[ -f "$M/status/$id" ]]; then cat "$M/status/$id"; else echo queued; fi; exit 0 ;;
+      # The post-cancel status is served only once a SLEEP (the force delay) follows this
+      # run's graceful cancel in the log, so a pass that re-reads before its delay sees the
+      # pre-cancel `queued` default and trips the O26 rows.
+      if awk -v c="api -i -X POST repos/acme/widgets/actions/runs/$id/cancel" '$0 == c { seen = 1 } seen && /^SLEEP / { found = 1 } END { exit !found }' "$M/log"; then
+        if [[ -f "$M/status_after_fail/$id" ]]; then echo "gh: Server Error (HTTP 502)" >&2; exit 1; fi
+        if [[ -f "$M/status_after/$id" ]]; then cat "$M/status_after/$id"; else echo completed; fi
+      elif [[ -f "$M/status/$id" ]]; then cat "$M/status/$id"; else echo queued; fi; exit 0 ;;
     "repos/acme/widgets/pulls/12|.head.sha")
       n=$(( $(cat "$M/head_n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$M/head_n"
       read -ra hs < "$M/heads"
@@ -362,7 +379,7 @@ CASE=0
 new_case() {
   CASE=$((CASE + 1))
   MOCK="$TMP/case$CASE"
-  mkdir -p "$MOCK/runs" "$MOCK/cancel" "$MOCK/status"
+  mkdir -p "$MOCK/runs" "$MOCK/cancel" "$MOCK/status" "$MOCK/status_after" "$MOCK/status_after_fail" "$MOCK/jobs" "$MOCK/force"
   : > "$MOCK/log"
   echo "2026-09-24T09:00:00Z" > "$MOCK/pr_created"
   echo "$SELF_AT" > "$MOCK/self_created"
@@ -374,7 +391,7 @@ runs_on() { local b="$1"; shift; printf '%s\n' "$@" >> "$MOCK/runs/$b"; }
 # orch [VAR=value ...] — run the script in run mode; sets OUT (stdout+stderr) and RC.
 orch() {
   OUT=$(env PATH="$BIN:$PATH" REPO=acme/widgets PR_NUMBER=12 EVENT_HEAD_SHA="$CUR" HEAD_REF=feat-x \
-        HEAD_REPO=acme/widgets DEFAULT_BRANCH=main SELF_RUN_ID=9000 CSPR_HEAD_RETRY_SLEEP=0 \
+        HEAD_REPO=acme/widgets DEFAULT_BRANCH=main SELF_RUN_ID=9000 CSPR_HEAD_RETRY_SLEEP=0 CSPR_FORCE_DELAY=7 \
         GITHUB_STEP_SUMMARY= "$@" bash "$SCRIPT" 2>&1)
   RC=$?
 }
@@ -405,7 +422,7 @@ runs_on "$ENC_PULL" "$(r '{id:104, event:"dynamic", head_branch:"refs/pull/12/he
 orch
 [[ "$RC" == 0 ]] && pass "O happy rc=0" || fail "O happy rc=0" "rc=$RC out=$OUT"
 [[ "$(cancelled_ids)" == "101 104 " ]] && pass "O happy cancels exactly the superseded runs" || fail "O happy cancels exactly the superseded runs" "$(cancelled_ids)"
-grep -q 'cancel-superseded-pr-runs: pr=#12 head=aaaaaaa listed=5 cancelled=2 skipped=3 failed=0 reasons=current-head:1,event:1,self:1 ratelimit_remaining=4321' <<< "$OUT" \
+grep -q 'cancel-superseded-pr-runs: pr=#12 head=aaaaaaa listed=5 cancelled=2 force_cancelled=0 skipped=3 failed=0 reasons=current-head:1,event:1,self:1 ratelimit_remaining=4321' <<< "$OUT" \
   && pass "O14l summary line" || fail "O14l summary line" "$OUT"
 no_unexpected "O happy"
 # O5 — exactly two list URLs, no status=, created>= bound from the PR's created_at date.
@@ -417,7 +434,7 @@ grep -q 'status=' "$MOCK/log" && fail "O5 no status= filter" "$(grep status= "$M
 lastlist=$(last_line_of '--paginate'); headread=$(line_of '.head.sha'); firstcancel=$(line_of '/cancel')
 if (( lastlist > 0 && headread > lastlist && firstcancel > headread )); then pass "O2 order list -> head -> cancel"
 else fail "O2 order list -> head -> cancel" "lastlist=$lastlist head=$headread cancel=$firstcancel"; fi
-grep -q 'force-cancel' "$MOCK/log" && fail "O13 never force-cancel" "$(cat "$MOCK/log")" || pass "O13 never force-cancel"
+grep -q 'force-cancel' "$MOCK/log" && fail "O13 no force-cancel when the graceful cancel completed the run" "$(cat "$MOCK/log")" || pass "O13 no force-cancel when the graceful cancel completed the run"
 [[ "$(cancels)" -gt 0 && "$(grep -c '/cancel$' "$MOCK/log" | tr -d ' ')" == "$(cancels)" ]] && pass "O13 every cancel URL ends in /cancel" || fail "O13 every cancel URL ends in /cancel" "$(cat "$MOCK/log")"
 [[ "$(grep -c '\.head\.sha' "$MOCK/log" | tr -d ' ')" == "1" ]] && pass "O happy one head read when it matches" || fail "O happy one head read when it matches" "$(cat "$MOCK/log")"
 
@@ -471,7 +488,7 @@ no_unexpected "O5u urlencoded"
 # O5e — empty listing.
 new_case
 orch
-[[ "$RC" == 0 && "$(cancels)" == 0 ]] && grep -q 'listed=0 cancelled=0 skipped=0 failed=0 reasons=-' <<< "$OUT" \
+[[ "$RC" == 0 && "$(cancels)" == 0 ]] && grep -q 'listed=0 cancelled=0 force_cancelled=0 skipped=0 failed=0 reasons=-' <<< "$OUT" \
   && pass "O5e empty listing" || fail "O5e empty listing" "rc=$RC $OUT"
 
 # O6 — the same run from both branch keys is cancelled once.
@@ -487,7 +504,7 @@ runs_on "$ENC_HEAD" "$(r '{id:141}')" "$(r '{id:142}')" "$(r '{id:143}')"
 echo "409|Cannot cancel a workflow run that is completed." > "$MOCK/cancel/142"
 echo "404|Not Found" > "$MOCK/cancel/143"
 orch
-[[ "$RC" == 0 ]] && grep -q 'cancelled=1 skipped=2 failed=0 reasons=gone:2' <<< "$OUT" && pass "O7 202/409/404" || fail "O7 202/409/404" "rc=$RC $OUT"
+[[ "$RC" == 0 ]] && grep -q 'cancelled=1 force_cancelled=0 skipped=2 failed=0 reasons=gone:2' <<< "$OUT" && pass "O7 202/409/404" || fail "O7 202/409/404" "rc=$RC $OUT"
 
 # O8 — 403 refused on a dynamic run: warning, not red.
 new_case
@@ -517,7 +534,7 @@ new_case
 runs_on "$ENC_HEAD" "$(r '{id:181}')" "$(r '{id:182}')"
 echo "500|Server Error" > "$MOCK/cancel/181"
 orch
-[[ "$RC" == 1 ]] && grep -q 'cancelled=1 skipped=0 failed=1 reasons=failed:http-500:1' <<< "$OUT" && pass "O11 500 fails, others still cancelled" || fail "O11 500 fails, others still cancelled" "rc=$RC $OUT"
+[[ "$RC" == 1 ]] && grep -q 'cancelled=1 force_cancelled=0 skipped=0 failed=1 reasons=failed:http-500:1' <<< "$OUT" && pass "O11 500 fails, others still cancelled" || fail "O11 500 fails, others still cancelled" "rc=$RC $OUT"
 
 # O12 — a list failure: red, zero cancels, zero head reads.
 new_case
@@ -557,7 +574,7 @@ new_case
 runs_on "$ENC_HEAD" "$(r '{id:221}')" "$(r '{id:222}')"
 orch CSPR_DRY_RUN=1
 [[ "$RC" == 0 && "$(cancels)" == 0 ]] && [[ "$(grep -c '^would-cancel ' <<< "$OUT" | tr -d ' ')" == 2 ]] \
-  && grep -q 'cancelled=0 skipped=0 failed=0 would_cancel=2' <<< "$OUT" && pass "O16 dry run" || fail "O16 dry run" "rc=$RC $OUT"
+  && grep -q 'cancelled=0 force_cancelled=0 skipped=0 failed=0 would_cancel=2' <<< "$OUT" && pass "O16 dry run" || fail "O16 dry run" "rc=$RC $OUT"
 
 # O17 — a crafted run name cannot forge a workflow command or a line in the output.
 new_case
@@ -617,7 +634,7 @@ orch
   && pass "O23 privileged run re-read before cancel" || fail "O23 privileged run re-read before cancel" "rc=$RC ids=$(cancelled_ids) $OUT"
 recheck=$(line_of 'actions/runs/282 --jq .status'); post=$(line_of 'runs/282/cancel')
 (( recheck > 0 && post > recheck )) && pass "O23 re-read precedes the POST" || fail "O23 re-read precedes the POST" "$(cat "$MOCK/log")"
-[[ "$(grep -c 'actions/runs/[0-9]* --jq .status' "$MOCK/log" | tr -d ' ')" == 3 ]] && pass "O23 only privileged rows are re-read" || fail "O23 only privileged rows are re-read" "$(cat "$MOCK/log")"
+[[ "$(sed '/^SLEEP 7$/,$d' "$MOCK/log" | grep -c 'actions/runs/[0-9]* --jq .status' | tr -d ' ')" == 3 ]] && pass "O23 only privileged rows are re-read" || fail "O23 only privileged rows are re-read" "$(cat "$MOCK/log")"
 new_case
 runs_on "$ENC_HEAD" "$(r '{id:284, event:"pull_request_target", path:".github/workflows/cla.yml"}')"
 : > "$MOCK/status_fail"
@@ -641,10 +658,59 @@ if [[ -n "$sline" && "$sline" != *'x`y'* && "$sline" != *$'\xe2\x80\xa8'* && "$s
   pass "O25 summary name neutralised"
 else fail "O25 summary name neutralised" "$sline"; fi
 
+# O26 — force-cancel second pass (#8669 follow-up). Only this run's graceful-cancel targets,
+# only when still `queued` after the delay, only with ZERO in_progress jobs.
+new_case
+runs_on "$ENC_HEAD" "$(r '{id:301}')" "$(r '{id:302}')" "$(r '{id:303}')" "$(r '{id:304}')" "$(r '{id:305}')" "$(r '{id:306}')"
+echo queued > "$MOCK/status_after/301"; printf 'completed\ncompleted\nqueued\n' > "$MOCK/jobs/301"
+echo queued > "$MOCK/status_after/302"; printf 'completed\nin_progress\nqueued\n' > "$MOCK/jobs/302"
+echo in_progress > "$MOCK/status_after/303"; printf 'completed\nqueued\n' > "$MOCK/jobs/303"
+echo queued > "$MOCK/status_after/304"; : > "$MOCK/jobs/304"
+echo queued > "$MOCK/status_after/305"; printf 'queued\n' > "$MOCK/jobs/305"; echo "409|Cannot cancel a workflow run that is completed." > "$MOCK/force/305"
+echo queued > "$MOCK/status_after/306"; printf 'queued\n' > "$MOCK/jobs/306"; echo "500|boom" > "$MOCK/force/306"
+orch
+forced_ids=$(sed -nE 's#.*actions/runs/([0-9]+)/force-cancel.*#\1#p' "$MOCK/log" | sort | tr '\n' ' ')
+[[ "$forced_ids" == "301 305 306 " ]] && pass "O26 force-cancel only idle still-queued targets" || fail "O26 force-cancel only idle still-queued targets" "$forced_ids"
+grep -q 'force-cancel' <<< "$(grep 'runs/302/\|runs/303/\|runs/304/' "$MOCK/log")" && fail "O26 never force a run with an in_progress job, a started run, or unreadable jobs" "$(cat "$MOCK/log")" || pass "O26 never force a run with an in_progress job, a started run, or unreadable jobs"
+[[ "$RC" == 0 ]] && grep -q 'cancelled=6 force_cancelled=1 skipped=0 failed=0' <<< "$OUT" && pass "O26 summary counts one forced run" || fail "O26 summary counts one forced run" "rc=$RC $OUT"
+grep -q 'force-failed:1,force-gone:1,force-skipped-in-progress:1,force-skipped-unreadable:1' <<< "$OUT" && pass "O26 force-pass reasons reported" || fail "O26 force-pass reasons reported" "$OUT"
+grep -q '::warning::.*force-cancel of run 306 failed (HTTP 500)' <<< "$OUT" && pass "O26 a failed force-cancel is a warning, not red" || fail "O26 a failed force-cancel is a warning, not red" "$OUT"
+lastcancel=$(last_line_of '/cancel$'); delay=$(line_of '^SLEEP 7$'); firstforce=$(line_of 'force-cancel')
+(( lastcancel > 0 && delay > lastcancel && firstforce > delay )) && pass "O26 order: graceful cancels -> delay -> force" || fail "O26 order: graceful cancels -> delay -> force" "cancel=$lastcancel delay=$delay force=$firstforce"
+[[ "$(grep -c '^SLEEP 7$' "$MOCK/log" | tr -d ' ')" == 1 ]] && pass "O26 one delay for the whole pass" || fail "O26 one delay for the whole pass" "$(grep -c '^SLEEP 7$' "$MOCK/log")"
+new_case
+runs_on "$ENC_HEAD" "$(r '{id:311}')"
+echo queued > "$MOCK/status_after/311"; printf 'queued\n' > "$MOCK/jobs/311"; : > "$MOCK/jobs_fail"
+orch
+! grep -q 'force-cancel' "$MOCK/log" && grep -q 'force-skipped-unreadable:1' <<< "$OUT" && pass "O26 a failed jobs read never forces" || fail "O26 a failed jobs read never forces" "$OUT"
+new_case
+runs_on "$ENC_HEAD" "$(r '{id:315}')"
+: > "$MOCK/status_after_fail/315"; printf 'queued\n' > "$MOCK/jobs/315"
+orch
+! grep -q 'force-cancel\|runs/315/jobs' "$MOCK/log" && [[ "$RC" == 0 ]] && grep -q 'force-skipped-unreadable:1' <<< "$OUT" && pass "O26 a failed post-delay status read never forces, and is counted" || fail "O26 a failed post-delay status read never forces, and is counted" "rc=$RC $OUT"
+new_case
+runs_on "$ENC_HEAD" "$(r '{id:321}')" "$(r '{id:322}')"
+echo "409|gone" > "$MOCK/cancel/322"; echo queued > "$MOCK/status_after/322"; printf 'queued\n' > "$MOCK/jobs/322"
+orch
+! grep -q 'runs/322/force-cancel\|runs/322 --jq .status' "$MOCK/log" && pass "O26 only this run's graceful-cancel targets enter the pass" || fail "O26 only this run's graceful-cancel targets enter the pass" "$(cat "$MOCK/log")"
+new_case
+runs_on "$ENC_HEAD" "$(r '{id:331}')"
+echo queued > "$MOCK/status_after/331"; printf 'queued\n' > "$MOCK/jobs/331"
+orch CSPR_DRY_RUN=1
+! grep -q 'force-cancel\|^SLEEP 7$' "$MOCK/log" && pass "O26 dry run has no force pass" || fail "O26 dry run has no force pass" "$(cat "$MOCK/log")"
+new_case
+orch CSPR_FORCE_DELAY=soon
+[[ "$RC" == 2 && ! -s "$MOCK/log" ]] && pass "O26 non-numeric CSPR_FORCE_DELAY exits 2" || fail "O26 non-numeric CSPR_FORCE_DELAY exits 2" "rc=$RC"
+new_case
+runs_on "$ENC_HEAD" "$(r '{id:341}')"
+echo queued > "$MOCK/status_after/341"; printf 'queued\n' > "$MOCK/jobs/341"
+orch CSPR_FORCE_DELAY=
+[[ "$(grep -c '^SLEEP 45$' "$MOCK/log" | tr -d ' ')" == 1 ]] && pass "O26 default force delay is 45 s" || fail "O26 default force delay is 45 s" "$(cat "$MOCK/log")"
+
 # Every case above ran against a stub that refuses unknown requests: none may have been refused.
 if grep -l '^UNEXPECTED' "$TMP"/case*/log >/dev/null 2>&1; then fail "O* no case made an unexpected request" "$(grep -h '^UNEXPECTED' "$TMP"/case*/log)"
 else pass "O* no case made an unexpected request"; fi
-[[ "$CASE" -ge 32 ]] && pass "O* case count ($CASE)" || fail "O* case count" "$CASE"
+[[ "$CASE" -ge 39 ]] && pass "O* case count ($CASE)" || fail "O* case count" "$CASE"
 
 # ---------------------------------------------------------------------------
 # Workflow wiring — the whole shape, not the presence of lines
@@ -718,15 +784,22 @@ same_text "W3 run body exact" "$(block_after '^        run: [|]$')" \
 same_text "W3 concurrency per PR" "$(block_after '^concurrency:$')" \
 "  group: cancel-superseded-pr-runs-\${{ github.event.pull_request.number }}
   cancel-in-progress: true"
-grep -hv '^[[:space:]]*#' "$SCRIPT" "$WORKFLOW" | grep -q 'force-cancel' \
-  && fail "W4 force-cancel appears only in comments" "found in code" || pass "W4 force-cancel appears only in comments"
+fc_code=$(grep -nv '^[[:space:]]*#' "$SCRIPT" | grep '/force-cancel"' || true)
+fc_pass=$(grep -n '^  # --- 5b\. force-cancel pass' "$SCRIPT" | cut -d: -f1)
+fc_sum=$(grep -n '^  # --- 6\. summary' "$SCRIPT" | cut -d: -f1)
+fc_line=${fc_code%%:*}
+if [[ "$(grep -c . <<< "$fc_code")" == 1 && -n "$fc_pass" && -n "$fc_sum" && "$fc_line" -gt "$fc_pass" && "$fc_line" -lt "$fc_sum" ]]; then
+  pass "W4 force-cancel is issued from exactly one code line, inside the 5b pass"
+else fail "W4 force-cancel is issued from exactly one code line, inside the 5b pass" "code=[$fc_code] pass=$fc_pass summary=$fc_sum"; fi
+grep -qv '^[[:space:]]*#' "$WORKFLOW" && ! grep -v '^[[:space:]]*#' "$WORKFLOW" | grep -q 'force-cancel' \
+  && pass "W4 the workflow itself never force-cancels" || fail "W4 the workflow itself never force-cancels" "found"
 
 # ---------------------------------------------------------------------------
 TOTAL=$((PASS + FAIL))
 echo ""
 echo "$PASS passed, $FAIL failed ($TOTAL assertions)"
 # Anti-vacuity floor (= the green count, 2026-09-24): raise when adding rows, never lower it silently.
-MIN_ASSERTIONS=164
+MIN_ASSERTIONS=178
 if (( TOTAL < MIN_ASSERTIONS )); then
   printf 'FAIL: only %s assertions ran, expected >= %s (a block was deleted or short-circuited)\n' "$TOTAL" "$MIN_ASSERTIONS"
   exit 1
