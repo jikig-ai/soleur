@@ -368,13 +368,19 @@ _flush_latch_count() {
 #     after `created` unless its clock ran ahead;
 #   - Better Stack's ingest `dt` (the AP-027 anchor clock) — a destroyed host cannot be ingested
 #     after its destruction.
-# Two wrong clocks are needed before a predecessor row counts.
+# Two wrong clocks are needed before a predecessor row counts. `dt` IS the ingest clock for this
+# Vector-shipped source, measured 2026-09-24 on live flip rows: `dt` equals the `ingest_time`
+# column byte-for-byte, sits ~0.8-1.6 s AFTER the row's own journald `timestamp`, and rows with
+# different event times share one `dt` (one HTTP batch). (runbooks/betterstack-log-query.md calls
+# `dt` "event time"; that is not what this source stores.)
 #
 # THREE INVARIANTS the floor rests on, each pinned in cutover-inngest-workflow.test.sh:
 #   1. hcloud_server.inngest has no create_before_destroy, and Hetzner names are unique per project,
 #      so a replace destroys the old server before it creates the new one with the same name;
 #   2. vector.toml never sets current_boot_only = false, so a new server cannot ship an old journal;
 #   3. nothing rebuilds the inngest server in place (a rebuild keeps `created` while reinstalling).
+#      Terraform cannot: terraform-provider-hcloud's server update handler has no `image` arm, so an
+#      image change replaces the server (new `created`); the pin covers the API and CLI spellings.
 # A reboot or an in-place server_type change keeps `created`, which is correct: the question is
 # whether the server that exists can act on the write.
 #
@@ -382,10 +388,14 @@ _flush_latch_count() {
 # NOT floored, deliberately: _flush_latch_count (the latch lives on /mnt/data, which survives the
 # replace, so a predecessor's flip-complete row is valid PRESENCE evidence — flooring it would be a
 # fail-open), the confirm readers (anchored on this dispatch's own write instant), and the execute
-# 2.0 / registry-probe gates (already boot-joined via tests/scripts/lib/inngest-host-dark-gate.sh).
+# 2.0 / registry-probe gates. Those two gate NO write: their `dark` verdict joins a probe row and a
+# heartbeat on one boot (tests/scripts/lib/inngest-host-dark-gate.sh) bounded by --hb-max-age 900,
+# so for up to ~15 min after a replace it can rest on the destroyed server's rows — acceptable only
+# because nothing is written on it. Making either verdict gate a write requires flooring it first.
 # H is floored although L is not: L asks whether a flush was EVER recorded, H exists because L=0 is
-# an absence and a silent host manufactures absences (#7674) — only the current generation could
-# have flushed unseen.
+# an absence and a silent host manufactures absences (#7674). A predecessor that went dark before
+# it was destroyed could also have flushed unseen; neither form of H sees that, only the on-host
+# latch does. Flooring H can only ADD refusals.
 
 # _hcloud_created_epoch <json> <name> — PURE. The epoch of `created` for the ONE server whose name
 # equals <name>, or __ABSENT__ (no match) / __UNREADABLE__ (several, non-JSON, wrong shape,
@@ -420,31 +430,42 @@ _hcloud_created_epoch() {
 # _inngest_server_created_epoch — I/O. Prints exactly one token (<epoch> | __ABSENT__ |
 # __UNREADABLE__) and ALWAYS returns 0; every non-epoch outcome is preceded by one ::warning:: on
 # stderr naming its cause. Public-log hygiene, each rule pinned by the suite:
-#   - Tier A first (ADR-241 D4, #8209): HCLOUD_TOKEN_READONLY, falling back to HCLOUD_TOKEN only
-#     while the read-only name is unprovisioned (ADR-241 O10);
+#   - Tier A first (ADR-241 D4, #8209): HCLOUD_TOKEN_READONLY, falling back to the read/write
+#     HCLOUD_TOKEN when that read returns nothing. Measured 2026-09-24: prd_terraform holds only
+#     HCLOUD_TOKEN, so the fallback is the live path until the read-only token is minted
+#     (infra-credential-tiers-8209.md step O5). A ::notice:: names which variable was used;
 #   - the token is ::add-mask::ed on STDERR (stdout is the caller's $(…) token) and travels on
 #     curl's stdin (-H @-), never argv;
 #   - no -f (the HTTP class must be readable), no -S (curl's error text is not a sanctioned egress
-#     path), no --retry (#6500); curl's and jq's stderr are discarded;
+#     path), no --retry (#6500); curl's and jq's stderr are discarded; the TLS/keylog env vars curl
+#     honours are unset in the call's subshell (a subshell, not `env -u`, so a caller-stubbed
+#     `curl` still runs);
 #   - no response byte is ever printed — warnings are built from the rc, the HTTP code and
 #     $INNGEST_HOST only.
 _inngest_server_created_epoch() {
-  local tok resp rc=0 code body epoch now
+  local tok tokvar resp rc=0 code body epoch now
+  tokvar=HCLOUD_TOKEN_READONLY
   tok="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain 2>/dev/null || true)"
   if [[ -z "$tok" ]]; then
+    tokvar=HCLOUD_TOKEN
     tok="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null || true)"
   fi
   if [[ -z "$tok" ]]; then
-    echo "::warning::G3 generation anchor: neither HCLOUD_TOKEN_READONLY nor HCLOUD_TOKEN resolved from prd_terraform, so the current $INNGEST_HOST server could not be identified. Check the DOPPLER_TOKEN repo secret's config. Nothing was written; re-dispatch is safe." >&2
+    echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written; re-dispatch once the token read works." >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
   printf '::add-mask::%s\n' "$tok" >&2
+  if [[ "$tokvar" == HCLOUD_TOKEN ]]; then
+    echo "::notice::G3 generation anchor: using the read/write HCLOUD_TOKEN (HCLOUD_TOKEN_READONLY returned nothing; ADR-241 D4 fallback until it is minted)" >&2
+  else
+    echo "::notice::G3 generation anchor: using HCLOUD_TOKEN_READONLY" >&2
+  fi
   resp="$(printf 'Authorization: Bearer %s\n' "$tok" \
-    | curl --disable --noproxy '*' -s --proto =https --max-time 20 \
-           --get --data-urlencode "name=$INNGEST_HOST" -H @- \
-           -w '\n%{http_code}' https://api.hetzner.cloud/v1/servers 2>/dev/null)" || rc=$?
-  tok=""
+    | ( unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME
+        curl --disable --noproxy '*' -s --proto =https --max-time 20 \
+             --get --data-urlencode "name=$INNGEST_HOST" -H @- \
+             -w '\n%{http_code}' https://api.hetzner.cloud/v1/servers 2>/dev/null ))" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     case "$rc" in
       6|7)   echo "::warning::G3 generation anchor: the Hetzner API was unreachable from the runner (transport rc=$rc: DNS / connect). Nothing was written; re-dispatch is safe." >&2 ;;
@@ -464,7 +485,7 @@ _inngest_server_created_epoch() {
   fi
   case "$code" in
     200) : ;;
-    401|403) echo "::warning::G3 generation anchor: the Hetzner API REJECTED the token (HTTP $code) — verify HCLOUD_TOKEN_READONLY / HCLOUD_TOKEN in prd_terraform. Nothing was written." >&2
+    401|403) echo "::warning::G3 generation anchor: the Hetzner API REJECTED the token (HTTP $code) — the one sent was $tokvar; verify it in prd_terraform. Nothing was written, and a re-dispatch will refuse the same way until the token is fixed." >&2
              printf '%s' '__UNREADABLE__'; return 0 ;;
     429)     echo "::warning::G3 generation anchor: the Hetzner API rate-limited this read (HTTP 429). Nothing was written; re-dispatch later is safe." >&2
              printf '%s' '__UNREADABLE__'; return 0 ;;
@@ -474,7 +495,6 @@ _inngest_server_created_epoch() {
              printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
   epoch="$(_hcloud_created_epoch "$body" "$INNGEST_HOST")"
-  body=""
   case "$epoch" in
     __ABSENT__)
       echo "::warning::G3 generation anchor: no server named $INNGEST_HOST in the Hetzner project this token is scoped to — a replace in flight, or a token for another project. Nothing was written; re-dispatch once the server exists." >&2
@@ -484,9 +504,13 @@ _inngest_server_created_epoch() {
       printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
   now="$(date -u +%s)"
+  case "$now" in
+    ''|*[!0-9]*) echo "::warning::G3 generation anchor: the runner clock could not be read. Nothing was written; re-dispatch is safe." >&2
+                 printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
   # A floor near 0 would re-admit the predecessor, which silently reverts this gate.
   if [[ "$epoch" -lt 1735689600 || "$epoch" -gt $((now + 300)) ]]; then
-    echo "::warning::G3 generation anchor: the $INNGEST_HOST server's created time is out of bounds (before 2025-01-01 or more than 300 s in the future). Nothing was written; file an issue with this run URL." >&2
+    echo "::warning::G3 generation anchor: the $INNGEST_HOST server's created time is out of bounds (before 2025-01-01 or more than 300 s in the future). Nothing was written, and a re-dispatch will refuse the same way; file an issue with this run URL." >&2
     printf '%s' '__UNREADABLE__'; return 0
   fi
   printf '%s' "$epoch"
@@ -494,12 +518,16 @@ _inngest_server_created_epoch() {
 }
 
 # _current_instance_row_counts <floor_epoch_s> — PURE. Raw Better Stack rows on stdin; prints ONE
-# line of five integers: <counted> <host_pair> <pre_floor> <malformed> <skew_suspect>.
+# line of six integers: <rows> <counted> <host_pair> <pre_floor> <malformed> <skew_suspect> — or
+# __UNREADABLE__ for a non-decimal floor, or nothing if jq itself fails (the caller warns on both).
+#   rows          decoded row objects returned, from ANY host (the read is capped at --limit 50,
+#                 newest first, so 50 means the window was truncated)
 #   host_pair     rows whose decoded .raw carries host == $INNGEST_HOST and host_name == $INNGEST_HOST_NAME
 #   counted       host-pair rows whose event time >= floor AND whose ingest dt >= floor
 #   malformed     host-pair rows with a missing/non-decimal __REALTIME_TIMESTAMP or an unparseable dt
 #                 — excluded, never defaulted (a default is the widening direction)
-#   pre_floor     well-formed host-pair rows that fail either clock
+#   pre_floor     well-formed host-pair rows that fail either clock (INCLUDES skew_suspect, so
+#                 pre_floor - skew_suspect are the predecessor's rows)
 #   skew_suspect  pre-floor rows ingested after the floor but stamped before it: a destroyed
 #                 predecessor cannot produce one, so it points at the CURRENT server's clock
 # Counts only; never echoes a row.
@@ -509,44 +537,60 @@ _current_instance_row_counts() {
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
   jq -R -s -r --argjson f "$floor" --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" '
-    [ split("\n")[] | fromjson? | select(type == "object")
+    [ split("\n")[] | fromjson? | select(type == "object") ] as $all
+    | [ $all[]
       | { dt: .dt, r: (.raw | if type == "string" then (fromjson? // null) else null end) }
       | select((.r | type) == "object" and .r.host == $h and .r.host_name == $hn)
       | { ts: (.r["__REALTIME_TIMESTAMP"]
-                 | if type == "string" and test("^[0-9]+$") then tonumber else null end),
+                 | if type == "string" and test("\\A[0-9]+\\z") then (try tonumber catch null) else null end),
           dt: (.dt | if type == "string"
                        then (try (sub("\\.[0-9]+$"; "") | strptime("%Y-%m-%d %H:%M:%S") | mktime) catch null)
                        else null end) } ] as $rows
     | ($rows | map(select(.ts != null and .dt != null))) as $ok
     | ($ok | map(select(.ts >= ($f * 1000000) and .dt >= $f)) | length) as $cnt
     | ($ok | map(select(.dt >= $f and .ts < ($f * 1000000))) | length) as $skew
-    | "\($cnt) \($rows | length) \(($ok | length) - $cnt) \(($rows | length) - ($ok | length)) \($skew)"
+    | "\($all | length) \($cnt) \($rows | length) \(($ok | length) - $cnt) \(($rows | length) - ($ok | length)) \($skew)"
   ' 2>/dev/null || true
 }
 
 # _generation_scoped_count <floor_epoch_s> <label> — raw rows on stdin; prints the COUNTED token
-# (or __UNREADABLE__) on stdout. On stderr: one ::notice:: carrying the five counters, and — when
-# nothing counted and the server is under 10 minutes old — a warning not to replace it (a replace
-# resets `created` and the wait starts over). Built only from validated integers and $INNGEST_HOST;
+# (or __UNREADABLE__) on stdout. On stderr: one ::notice:: carrying the six counters, and — when
+# nothing counted — at most one warning saying which counter explains it: skew_suspect > 0 (the
+# current server IS shipping, its clock is behind), malformed > 0 (rows lost their timestamps), or
+# a server under 600 s old (it has not shipped yet). Each says not to replace the server: a replace
+# resets `created` and the wait starts over. A filter failure warns too, so an `unreadable` refusal
+# never lacks the ::warning:: it points at. Built only from validated integers and $INNGEST_HOST;
 # no string from any response reaches an annotation.
 _generation_scoped_count() {
-  local floor="${1:-}" label="${2:-liveness}" line c p pf m k v age iso
+  local floor="${1:-}" label="${2:-liveness}" line r c p pf m k extra v now age iso
   case "$floor" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
   line="$(_current_instance_row_counts "$floor")"
-  read -r c p pf m k _ <<<"$line" || true
-  for v in "$c" "$p" "$pf" "$m" "$k"; do
+  read -r r c p pf m k extra <<<"$line" || true
+  for v in "$r" "$c" "$p" "$pf" "$m" "$k"; do
     case "$v" in
-      ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
+      ''|*[!0-9]*) extra=bad ;;
     esac
   done
-  age=$(( $(date -u +%s) - floor ))
+  if [[ -n "$extra" ]]; then
+    echo "::warning::$label: the row-count filter did not yield six integers over a successful Better Stack read — a local jq fault, not a host or credential state. Nothing was written; file an issue with this run URL." >&2
+    printf '%s' '__UNREADABLE__'; return 0
+  fi
+  now="$(date -u +%s)"
+  case "$now" in ''|*[!0-9]*) now="$floor" ;; esac
+  age=$(( now - floor ))
   [[ "$age" -lt 0 ]] && age=0
   iso="$(date -u -d "@$floor" '+%Y-%m-%dT%H:%M:%SZ')"
-  echo "::notice::$label scoped to server $INNGEST_HOST created $iso (${age}s ago): counted=$c host_pair=$p pre_floor=$pf malformed=$m skew_suspect=$k" >&2
-  if [[ "$c" -eq 0 && "$age" -lt 600 ]]; then
-    echo "::warning::server $INNGEST_HOST was created ${age}s ago and has not shipped a row yet — WAIT and re-dispatch; do NOT replace it (a replace resets this clock)" >&2
+  echo "::notice::$label scoped to server $INNGEST_HOST created $iso (${age}s ago): rows=$r counted=$c host_pair=$p pre_floor=$pf malformed=$m skew_suspect=$k" >&2
+  if [[ "$c" -eq 0 ]]; then
+    if [[ "$k" -gt 0 ]]; then
+      echo "::warning::server $INNGEST_HOST IS shipping ($k row(s) ingested after it was created) but its clock is behind its created time, so none counted — check the host's NTP sync and re-dispatch; do NOT replace it (a replace resets this clock)" >&2
+    elif [[ "$m" -gt 0 ]]; then
+      echo "::warning::$m $INNGEST_HOST row(s) carried no parseable __REALTIME_TIMESTAMP or dt, so none counted — a Vector or warehouse schema change, which a replace will not fix; file an issue with this run URL" >&2
+    elif [[ "$age" -lt 600 ]]; then
+      echo "::warning::server $INNGEST_HOST was created ${age}s ago and no row from it has counted yet (counted=0) — WAIT and re-dispatch; do NOT replace it (a replace resets this clock)" >&2
+    fi
   fi
   printf '%s' "$c"
   return 0
@@ -850,8 +894,9 @@ diag_boot_decide() {
 # because the forward actions differ: `unreadable` points at BETTERSTACK_QUERY_* credentials in
 # prd_terraform; `silent` points at the dedicated host having gone dark. Collapsing them prints
 # the wrong remediation at the worst possible moment. That is also exactly why a non-decimal H
-# routes to `unreadable` and NOT to `silent`: __UNREADABLE__ is emitted only on a query rc != 0,
-# so routing it to `silent` would print the host-dark remediation for a credential fault —
+# routes to `unreadable` and NOT to `silent`: __UNREADABLE__ is emitted only when a READ failed
+# (the Better Stack query, the Hetzner generation anchor, or the local row filter — each with its
+# own ::warning::), so routing it to `silent` would print the host-dark remediation for a read fault —
 # committing the very mis-remediation the outcome split exists to prevent.
 #
 # L dominates H: a recorded flush is decisive regardless of whether the host is currently audible.
@@ -2323,13 +2368,13 @@ case "$OP" in
     FL_OUTCOME="$(flush_latch_decide "$FLUSH_LATCH_N" "$FLIP_LIVENESS_N")"
     case "$FL_OUTCOME" in
       clear)
-        echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from $INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
+        echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
       latched)
         echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared ONLY by recutting the host's /mnt/data volume, never by SSH. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). CORRECTED #6894: `apply_target=inngest-volume-recut` DOES exist (it shipped in #7695) and is the dispatch that clears this latch — but it is refused while the store is populated, and this store measures 442 keys, so it is not available here. The route for a populated store is the ADDITIVE cutover (op=luks-cutover), which PRESERVES /mnt/data and therefore preserves this latch too: it does not clear it either. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
       silent)
-        echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME, stamped and ingested after its Hetzner created time; an earlier server with the same name does not count) within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME, so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) — check that before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME, stamped and ingested after its Hetzner created time; an earlier server with the same name does not count; the generation ::notice:: above gives the server's age, and any ::warning:: under it says whether it is young, clock-skewed or shipping malformed rows) within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME, so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) — check that before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
       unreadable)
-        echo "::error::op=arm: G3.7 — could not read the flip-FSM markers, or could not identify the current $INNGEST_HOST server (the ::warning:: above names which read failed: Better Stack or the Hetzner generation anchor). Refusing FAIL-CLOSED: an unanswered 'has this host already been flushed?' must not be read as 'no', and G6 below confirms the flip over the SAME read path, so an arm dispatched now could not be confirmed either. Fix the read the ::warning:: names (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform, or the Hetzner token) and re-dispatch. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 — could not read the flip-FSM markers, or could not identify the current $INNGEST_HOST server (the ::warning:: above names which read failed: Better Stack, the Hetzner generation anchor — including no server named $INNGEST_HOST, a replace in flight — or the local row filter). Refusing FAIL-CLOSED: an unanswered 'has this host already been flushed?' must not be read as 'no', and G6 below confirms the flip over the SAME read path, so an arm dispatched now could not be confirmed either. Fix the read the ::warning:: names (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform, or the Hetzner token) and re-dispatch. Do NOT SSH the host." ;;
       *)
         echo "::error::op=arm: G3.7 — flush_latch_decide returned an unrecognised outcome. Refusing FAIL-CLOSED." ;;
     esac
@@ -3143,11 +3188,11 @@ case "$OP" in
     RS_LIVE_N="$(_flip_liveness_count)"
     case "$(resume_liveness_decide "$RS_LIVE_N")" in
       audible)
-        echo "::notice::op=resume: G3 — host is audible ($RS_LIVE_N inngest-cutover-flip row(s) from $INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
+        echo "::notice::op=resume: G3 — host is audible ($RS_LIVE_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
       silent)
-        echo "::error::op=resume: G3 REFUSING — ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME, stamped and ingested after its Hetzner created time) within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED. Rows from an earlier server with the same name do not count (the generation ::notice:: above gives counted/pre_floor and the server's age). 'flushed' is acted on ONLY by the on-host 30s timer, so writing it now recovers nothing AND parks the flag in a state op=resume's own G1 rejects as IN-FLIGHT — stranding the only dispatchable re-entry this system has (op=arm is separately refused by G3.7). Refusing BEFORE the write; nothing was changed. Check inngest-cutover-flip.timer and Vector via the SOLEUR_INNGEST_SERVER_PROBE row (it carries server_active and cutover_flag in one line). Only if that ::notice:: shows the server is more than 600s old AND counted=0 is an inngest-host-replace the path forward, then re-dispatch op=resume; a younger server has simply not shipped yet, so wait and re-dispatch rather than replace it (a replace resets its created time). Do NOT SSH the host."; exit 1 ;;
+        echo "::error::op=resume: G3 REFUSING — ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME, stamped and ingested after its Hetzner created time) within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED. Rows from an earlier server with the same name do not count (the generation ::notice:: above gives counted/pre_floor and the server's age). 'flushed' is acted on ONLY by the on-host 30s timer, so writing it now recovers nothing AND parks the flag in a state op=resume's own G1 rejects as IN-FLIGHT — stranding the only dispatchable re-entry this system has (op=arm is separately refused by G3.7). Refusing BEFORE the write; nothing was changed. Check inngest-cutover-flip.timer and Vector via the SOLEUR_INNGEST_SERVER_PROBE row (it carries server_active and cutover_flag in one line). Only if that ::notice:: shows the server is more than 600s old with counted=0, skew_suspect=0 AND malformed=0 is an inngest-host-replace the path forward, then re-dispatch op=resume; a younger server has simply not shipped yet, skew_suspect > 0 means it IS shipping with a clock behind, and malformed > 0 is a schema change — in each of those, follow the ::warning:: above rather than replace it (a replace resets its created time). Do NOT SSH the host."; exit 1 ;;
       unreadable)
-        echo "::error::op=resume: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names which read failed: the Better Stack query (verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform) or the Hetzner generation anchor (follow that warning). Fix it, then re-dispatch. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+        echo "::error::op=resume: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names which read failed: the Better Stack query (verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform), the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named $INNGEST_HOST, i.e. a replace in flight), or the local row filter. Fix it, then re-dispatch. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
       *)
         echo "::error::op=resume: G3 — resume_liveness_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
     esac
@@ -3237,11 +3282,11 @@ case "$OP" in
     LK_LIVE_N="$(_luks_liveness_count)"
     case "$(resume_liveness_decide "$LK_LIVE_N")" in
       audible)
-        echo "::notice::op=$OP: G3 — host is audible ($LK_LIVE_N inngest-luks-cutover row(s) from $INNGEST_HOST_NAME within $LUKS_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
+        echo "::notice::op=$OP: G3 — host is audible ($LK_LIVE_N inngest-luks-cutover row(s) from the current $INNGEST_HOST server within $LUKS_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
       silent)
         echo "::error::op=$OP: G3 REFUSING — ZERO inngest-luks-cutover rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME, stamped and ingested after its Hetzner created time) within $LUKS_LIVENESS_SINCE, while the read path itself SUCCEEDED. Rows from an earlier server with the same name do not count, and a server under 600s old may simply not have shipped yet (the generation ::notice:: above gives its age). Either the host is dark, or the cutover trio never installed — inngest-bootstrap.sh emits reason=install_missing on that path, and the unit polls every 30s once it is installed, so silence here is a real finding. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
       unreadable)
-        echo "::error::op=$OP: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names which read failed: the Better Stack query (verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform) or the Hetzner generation anchor (follow that warning). Fix it, then re-dispatch. Nothing was changed."; exit 1 ;;
+        echo "::error::op=$OP: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names which read failed: the Better Stack query (verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform), the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named $INNGEST_HOST, i.e. a replace in flight), or the local row filter. Fix it, then re-dispatch. Nothing was changed."; exit 1 ;;
       *)
         echo "::error::op=$OP: G3 — resume_liveness_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
     esac
