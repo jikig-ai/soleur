@@ -535,7 +535,8 @@ code = "\n".join(re.sub(r"^\s*#.*$", "", l) for l in res["run"].split("\n"))
 emitted = set(re.findall(r"^\s*emit\s+([a-z_]+)\s", code, re.M)) | set(re.findall(r";\s*emit\s+([a-z_]+)\s", code))
 declared = {k for k, v in (rt.get("outputs") or {}).items() if re.search(r"steps\.resolve\.outputs\." + re.escape(k) + r"\b", str(v))}
 print("W1=" + (" ".join(sorted(emitted - declared)) or "ok"))
-nrr = len(re.findall(r'^\s*clean_skip\b[^\n]*"no_release_run"\s*$', code, re.M))
+# ANY call on ANY line: a `cond && clean_skip … "no_release_run"` is a producer too.
+nrr = sum(1 for l in code.split("\n") if re.search(r'\bclean_skip\s+[^\n]*"no_release_run"', l))
 print("W2=%d" % nrr)
 gate = [k for k in ("continue-on-error", "if") if k in res]
 print("W3=" + (" ".join(gate) or "ok"))
