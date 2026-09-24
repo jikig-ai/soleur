@@ -105,6 +105,10 @@ ruleset-required `test` context did not yet exist. That is recorded in
 `knowledge-base/engineering/operations/post-mortems/admin-merge-required-check-absent-postmortem.md`
 and tracked by open issue #8500; it is referenced here, not re-fixed.
 
+## Recurrence: PR #8611, 2026-09-23
+
+Same livelock under the same runner backlog, two days later: ready at 13:44Z, merged by the operator by hand at 22:21Z (the diff edits `.github/workflows/`, so `admin-merge-ready.sh` returns `UNTRUSTED-CI`). Tracked as #8683: `sync-pr-behind.sh` should defer while the head's CI is in flight. See `2026-09-24-8611-merge-tail-six-frictions-and-a-stale-reaper.md`.
+
 ## Session Errors
 
 1. **`Edit` rejected — "File has not been read yet"** (dns.tf viewed via shell `sed`, not the
