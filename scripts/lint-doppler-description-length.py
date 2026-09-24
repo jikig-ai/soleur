@@ -113,7 +113,8 @@ def scan_string(text, i, line):
 
 
 def tokenize(text):
-    """(kind, value, line, has_template) tokens; comments dropped, heredocs collapsed to one token carrying the body."""
+    """(kind, value, line, has_template) tokens; comments dropped, heredocs collapsed to one token
+    carrying the body. has_template is always False for HEREDOC: consumers branch on the kind."""
     toks, i, n, line = [], 0, len(text), 1
     while i < n:
         c = text[i]

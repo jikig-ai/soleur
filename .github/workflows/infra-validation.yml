@@ -130,6 +130,9 @@ on:
       - "scripts/cutover-inngest.sh"
       - "tests/scripts/lib/inngest-host-dark-gate.sh"
       - "scripts/lib/betterstack-read-classify.sh"
+      # (#8705) web-probes-token-rotation.test.sh loads tokenize() from this lint (HEREDOC bodies,
+      # `ID . ID` sequences). A PR editing only the lint must run the guard that depends on it.
+      - "scripts/lint-doppler-description-length.py"
       # (#7674) inngest-dedicated-host-classify.test.sh asserts the dedicated-host arm OF
       # scheduled-inngest-health.yml -- the no-restart contract, the host isolation, and the
       # decode-before-match. Same reason as the entry above: without this path a PR editing only

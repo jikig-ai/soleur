@@ -806,12 +806,14 @@ installer when absent. The missing `SOLEUR_SENTRY_DSN=` line stays cloud-init's,
 `doppler_service_token.web_probes` (soleur/prd, read) is the second token rotated with this shape.
 Retained web-1 snapshot `411798619` very likely holds its first token, `web-probes-read` (created
 2026-07-18, written to web-1 the same day). It is renamed to `web-probes-read-2026-09-24` with
-`create_before_destroy`, merged with `[ack-destroy]`.
+`create_before_destroy`; the merge that lands the rename must carry `[ack-destroy]`.
 
 - **A rename, not a same-name `-replace`.** Without `create_before_destroy` a same-name replace
   deletes first, so a failed create leaves no token. With it, Doppler must accept two tokens with one
-  name, which nobody has probed. The "rename or `-replace`" wording in the #8632 addendum above now
-  reads as "rename" for any token that has a live consumer.
+  name, which nobody has probed. For `workspaces_luks` and `web_probes`, the "rename or `-replace`"
+  wording in the #8632 addendum above reads as "rename". The other Doppler service tokens in
+  `apps/web-platform/infra/` still document a same-name `-replace` in their own comments; each is
+  re-decided when it is next rotated.
 - **web-1 delivery.** The four probe installers in `server.tf` (`private_nic_guard_install`,
   `zot_consumer_probe_install`, `inngest_consumer_probe_install`, `git_data_probe_install`) hash the
   key in `triggers_replace`, so the merge's SSH stage rewrites their `/etc/default/*` files whole.
@@ -824,6 +826,12 @@ Retained web-1 snapshot `411798619` very likely holds its first token, `web-prob
   key would not re-fire on rotation, or when the token loses `create_before_destroy`.
   `apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh` proves the rotation from the
   Doppler token listing (the retired slug is gone and a later replacement exists).
+- **Only one workflow may perform it.** `apply-deploy-pipeline-fix.yml` reaches the token
+  transitively (its `-target`s reach `hcloud_server.web["web-1"]`, whose user_data reads the key)
+  and has no `[ack-destroy]` path, so it now refuses any plan that deletes or forgets a
+  non-`terraform_data` resource, or forces a reboot. The rotation happens only in
+  `apply-web-platform-infra.yml`, behind its destroy guard.
+- **No C4 impact.** Checked `diagrams/{model,views,spec}.c4`: no element or edge names this token.
 
 This closes forward read access only. Values the image already holds are tracked in #8734.
 

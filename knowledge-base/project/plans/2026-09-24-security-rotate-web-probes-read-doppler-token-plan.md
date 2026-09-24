@@ -298,7 +298,12 @@ rewrites four files on web-1. The merge click is the per-command authorization f
    - `Rotated 2026-09-24 from web-probes-read (created 2026-07-18; retained web-1 snapshot 411798619 holds it, #8705).`
 4. Leave `access`, `config` and `project` unchanged. The existing assertions in
    `web-zot-consumer-probe.test.sh` (`access = "read"`, `config = "prd"`) must stay green.
-5. **Required:** reword the four `server.tf` installer comments that say "a `-replace` rotation"
+5. **Dropped at review (CTO ruling, 2026-09-24):** do NOT edit `server.tf`. It is in
+   `apply-deploy-pipeline-fix.yml`'s push paths, and that workflow reaches the token transitively
+   (through `hcloud_server.web`) with no `[ack-destroy]` path; a merge touching `server.tf` could let
+   it perform the rotation without re-firing the installers. That workflow now also refuses any
+   non-`terraform_data` delete or reboot-forcing update. Original step, kept for the record:
+   reword the four `server.tf` installer comments that say "a `-replace` rotation"
    (the ones beside each `nonsensitive(sha256(doppler_service_token.web_probes.key))` trigger). They
    become "a rotation (rename, create_before_destroy)". This is comment-only and changes no
    `triggers_replace` input: those hash `file()` sources and literals, not `server.tf`'s own text.
@@ -360,8 +365,10 @@ The next rotation, of this token or a sibling, then needs new arguments, not a n
     calls, and never echoes the command on error.
   - **No paging.** The endpoint returns no paging field (measured 2026-09-24: the top-level keys are
     `success` and `tokens`). If a `page` key ever appears, that is `UNAVAILABLE`.
-  - **Fixture mode.** When `WEB_PROBES_TOKEN_LIST_JSON` is set, no credential is fetched, and the
-    verdict line gets a trailing `(fixture)` marker, so a stray variable is visible in a live run.
+  - **No fixture seam (review change).** An environment-selectable fixture file let a stray variable
+    produce `ROTATED` exit 0; the suite now drives the verifier only through a stubbed `curl` on PATH.
+  - **Verdict line (review change):** `<WORD>: soleur/<config> (src=<credential source>): <detail>`;
+    usage errors exit 64; a token still NAMED like the retired one (`--retired-name`) is also STALE.
 - **Verdicts.** Each exit goes through one verdict function:
 
   | Verdict | Exit | Condition |
@@ -388,6 +395,10 @@ push, and a `manual-rerun` dispatch has no head commit, so a dispatch can never 
 itself is the fragile step:
 
 1. **Before merging:**
+   - **Pin everything below to the current `origin/main` SHA.** The run read must be the push run for
+     that SHA, its destroy-guard step must have concluded `success` (not HALT, not skipped), and the
+     merge is made with `gh pr merge --match-head-commit <PR head>` right after, re-checking that
+     `origin/main` has not moved.
    - **Check that the concurrency group is idle.** `gh run list --workflow apply-web-platform-infra.yml`
      and `--workflow apply-deploy-pipeline-fix.yml` must show nothing `queued`, `in_progress` or
      `waiting`, because a newer queued run cancels a pending one.
@@ -425,8 +436,9 @@ itself is the fragile step:
    running the command below with `-f plan_only=true` added. It runs the job's gate with no apply,
    `-replace` or host contact. This is the first web-host-replace with a create-before-destroy token
    among the server's dependencies, so the rehearsal checks that no deposed object makes the gate
-   refuse. In its plan log, confirm that `hcloud_firewall_attachment.web` is an in-place update whose
-   `server_ids` still contain web-1's id (`123931471`). Then run the real dispatch:
+   refuse. Read its plan log (a manual read — the gate does not check this) and confirm that
+   `hcloud_firewall_attachment.web` is an in-place update whose `server_ids` still contain web-1's id
+   (`123931471`). Then run the real dispatch:
 
    ```bash
    gh workflow run apply-web-platform-infra.yml \
@@ -542,8 +554,9 @@ stay green.
   to happen, the user-facing risk stays open: a live full-prd read token in a retained image.
 - **If this leaks, the user's data is exposed via:** the old token reads the entire `soleur/prd`
   Doppler config, including `SUPABASE_SERVICE_ROLE_KEY` (which bypasses RLS on every user's rows) and
-  the BYOK encryption material. Anyone holding image `411798619` holds a token that can read the
-  *current* values until this merges.
+  the BYOK encryption material, `GITHUB_APP_PRIVATE_KEY` (mints installation tokens that read and
+  write every installed user's repositories) and `STRIPE_SECRET_KEY`. Anyone holding image
+  `411798619` holds a token that can read the *current* values until this merges.
 - **Residual (not closed by this PR):**
   - **Copied values.** The image very likely holds the service-role key *value* and the other prd
     values (Docker container env, Doppler fallback files). Worse, the old token could read **any prd
@@ -604,6 +617,9 @@ failure_modes:
   - mode: "rotation silently skipped (e.g. merged with [skip-web-platform-apply])"
     detection: "web-probes-token-rotation-verify.sh prints STALE (exit 1)"
     alert_route: "ship/postmerge verification step (blocks closing #8705)"
+  - mode: "rotation half-done: the old token is gone and no replacement exists (a failed create)"
+    detection: "web-probes-token-rotation-verify.sh prints MISSING (exit 1)"
+    alert_route: "postmerge step: read the main apply step log for the failed create; recover with a merge commit carrying [ack-destroy] or a manual-rerun; web-1 probes page within period+grace"
   - mode: "verifier cannot read the listing (credential moved by #8209 O10, Doppler outage)"
     detection: "web-probes-token-rotation-verify.sh prints UNAVAILABLE (exit 2) — inconclusive, never a verdict"
     alert_route: "postmerge step retries once, then escalates in the #8705 checklist comment; #8705 stays open"
@@ -836,9 +852,12 @@ Checked 77 open `code-review` issues against every planned path.
 - [ ] `web-probe-read-token.tf` declares `name = "web-probes-read-2026-09-24"` and
   `lifecycle { create_before_destroy = true }`. `access = "read"`, `config = "prd"` and
   `project = "soleur"` are unchanged.
-- [ ] Neither `apps/web-platform/infra/web-probe-read-token.tf` nor `apps/web-platform/infra/server.tf`
-  still carries the stale guidance: `! grep -n -e 'apply -replace=doppler_service_token' -e '-replace. rotation' <both files>`
-  returns nothing. The new token-file comment names the four installers, the web-2 re-seed, and what
+- [ ] `apps/web-platform/infra/web-probe-read-token.tf` no longer carries the stale guidance:
+  `! grep -n -e 'apply -replace=doppler_service_token' apps/web-platform/infra/web-probe-read-token.tf`
+  returns nothing. (`server.tf` is deliberately untouched — Phase 1 step 5, dropped at review.)
+- [ ] `apply-deploy-pipeline-fix.yml` HALTs on `non_terraform_data_deletes > 0` and on
+  `reboot_updates > 0` before its apply (`tests/scripts/test-destroy-guard-counter-web-platform.sh`
+  T63a-f, T56e-j). The new token-file comment names the four installers, the web-2 re-seed, and what
   CBD does *not* cover.
 - [ ] `bash apps/web-platform/infra/web-probes-token-rotation.test.sh` exits 0. Its default run grades
   every Guard 1–3 mutation RED (each one confirmed applied) and every must-PASS row green. It prints
@@ -884,8 +903,8 @@ Checked 77 open `code-review` issues against every planned path.
   `git_data_probe_install`.
 - [ ] `bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh` prints `ROTATED` and
   exits 0: slug `01941a89` is gone, and a `web-probes-read-*` token created after the image exists.
-- [ ] **web-1 beats, before the web-2 dispatch:** Better Stack `GET /api/v2/heartbeats` (read-only
-  token) is read twice, at least 8 minutes apart, both reads after the SSH stage finished. Both reads
+- [ ] **web-1 beats, before the web-2 dispatch:** Better Stack `GET /api/v2/heartbeats`, read with
+  `BETTERSTACK_API_TOKEN_READONLY` from Doppler `soleur/prd_terraform` (never the write token), is read twice, at least 8 minutes apart, both reads after the SSH stage finished. Both reads
   show `status=up` for:
   - `soleur-web-nic-guard-web-1`
   - `soleur-web-zot-consumer-web-1`
