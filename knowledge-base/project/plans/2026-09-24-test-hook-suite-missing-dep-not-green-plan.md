@@ -12,6 +12,49 @@ brand_survival_threshold: none
 
 # test: hook suites that cannot run report UNRESOLVED (exit 3), not green
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. The lead asked for a small fan-out, so it was kept to two agents.
+
+- **Agents used:**
+  - a read-only realism pass: verify-the-negative, plus a post-edit self-audit (sonnet);
+  - `soleur:engineering:review:test-design-reviewer`.
+- **Skipped on purpose:** the full-roster skill and agent sweep. The plan-review panel (DHH, Kieran,
+  code-simplicity, CTO) plus the Step 4.5 advisor had already reviewed this plan, and the lead asked
+  for small deepen fan-out.
+- **Gates:**
+  - 4.6 User-Brand Impact: pass (threshold `none`, no sensitive path).
+  - 4.7 Observability: the section is **added** in this pass. The Files to Edit are `.sh`, so the plan
+    is not pure-docs. `discoverability_test.command` passes `probe-verb-gate.sh` with rc 0.
+  - 4.8 PAT: no match.
+  - 4.9 UI: not applicable.
+  - 4.10 Encryption: not applicable.
+  - 4.11 Guard Contract: `lint-guard-contract.py` is green and the assembly is structural (derived
+    roots and population).
+  - 4.5 / 4.55: no trigger.
+
+### Key improvements
+
+1. **The realism pass confirmed every negative and absolute claim against the tree.** That includes
+   the 40 pairs, 22 jq skip-exit-0 suites and 11 git suites; `counters_of`'s two spellings; and
+   `--print-suite-globs` being free of side effects. It found no stale v1 references outside the
+   Cut List and Alternatives.
+2. **Pairs now run with `CI`/`GITHUB_ACTIONS` unset** (row M11). A guard that branches on CI would
+   otherwise pass in the one place the suite runs.
+3. **Whole-suite guards must exit exactly 3, read from the source; arm-level guards must exit
+   non-zero** (rows M12/M13). This closes "print the line, drop the exit".
+4. **Tighter fixtures and farm:**
+   - fixtures R-c (one-line `which`) and R-d (bare `exit`);
+   - every fixture must derive exactly one pair through the real toggle;
+   - the sweep now also matches a bare `exit`;
+   - the farm links only absolute, existing PATH directories;
+   - mutation rows run against a scratch copy, after a pristine control run.
+
+### New considerations
+
+- No other suite or script parses hook-suite output for `SKIP: jq missing` or for parity's `skipped`
+  count (realism pass). The message change is therefore safe.
+
 ## Overview
 
 The hook test suites under `.claude/hooks/` open with a dependency guard that prints a skip line and
@@ -153,7 +196,11 @@ asks the runner for its globs.
    otherwise the population regex or root derivation broke."* A green run prints `N pairs (floor 40)`,
    so a stale floor is visible in review.
 4. **One PATH farm, toggled per tool.**
-   - Build it as `for d in <PATH entries, in order>; do ln -s "$d"/* "$farm"/ 2>/dev/null || true; done`.
+   - Build it as `for d in <PATH entries, in order>; do ln -s "$d"/* "$farm"/ 2>/dev/null || true; done`,
+     linking **only absolute, existing directories**. A missing entry would otherwise leave a literal `*`
+     link, and a relative entry such as `.` produces dangling links that can shadow a later directory's
+     real tool (test-design P2-6). Moving a tool's link aside is a no-op when the host lacks that tool,
+     e.g. `realpath` on macOS before 13.
      Without `-f`, `ln` keeps the first link for a given name, which is the shell's own resolution order,
      and it uses one process per directory instead of about 3,400 forks. This matters on macOS (Kieran
      P2-11).
@@ -164,9 +211,20 @@ asks the runner for its globs.
      its guard runs to completion, which is finite and bounded by the CI job's `timeout-minutes`. Cutting
      the wrapper also removes the `timeout`/`gtimeout` portability problem. Each run gets `</dev/null`,
      so a stray stdin read cannot block.
-5. **Behavioral check per pair.** Run `PATH=$farm "$BASH" <suite> </dev/null >"$ROOT/out.$n" 2>&1`
-   (output goes to a file, not `$(...)`, so no descendant can hold a pipe open). Require **both**:
-   - `rc != 0`: the property the issue names, not-green.
+5. **Behavioral check per pair.** Run
+   `env -u CI -u GITHUB_ACTIONS PATH=$farm "$BASH" <suite> </dev/null >"$ROOT/out.$n" 2>&1`.
+   Output goes to a file, not `$(...)`, so no descendant can hold a pipe open. `CI` and
+   `GITHUB_ACTIONS` are unset because a guard that branches on `CI` would otherwise pass in CI, where
+   this suite runs. That would bring back the ADR-188 local-skip shape that Alternatives rejects
+   (test-design P1-1, row M11). Require **both**:
+   - `rc != 0`: the property the issue names, not-green. The rc is stricter for a **whole-suite**
+     guard, meaning one whose guard block (the `{ … }` on the guard line, or the `if ! … fi`) contains
+     an `exit`. Those must return exactly **rc == 3**. Guards without an `exit` (the
+     `hookeventname-coverage` `if … elif` branch and the parity `if ! command -v python3` arm) keep
+     `rc != 0`. The
+     class is read from the source, not from a list. Without the stricter rule, "print the line but
+     drop the `exit 3`" (rc 1 from the failing assertions that follow) and "`exit 3` → `exit 1`" would
+     both stay green (test-design P1-2, rows M12/M13).
    - A line matching `^[[:space:]]*UNRESOLVED: <tool> missing`. This proves the verdict came from the
      guard. A suite that uses the tool before its guard dies with rc 127 or 1 and never prints the line,
      so this check also enforces guard-before-first-use, which the advisor raised. Measured today: every
@@ -175,8 +233,9 @@ asks the runner for its globs.
    A RED pair prints the rc, the suite's last output line, and the canonical one-liner with the tool
    filled in, so the fix can be copied (CTO review).
 6. **Static sweep (layer B).** Report any non-comment line whose **string literal** contains the
-   case-sensitive token `SKIP` when that line, or the next non-blank line before `fi`/`}`/`else`, is
-   `exit 0`.
+   case-sensitive token `SKIP` when that line, or the next non-blank line before `fi`/`}`/`else`, exits
+   with status 0. The match is `exit([[:space:]]+0)?[[:space:]]*(;|}|$)`, so a bare `exit` also counts
+   (test-design P2-4).
    - It covers the two file-under-test arms, which the behavioral check cannot reach without deleting
      tracked files.
    - It deliberately misses `memory-backstop.test.sh`'s `echo "$_skipnote"` + `exit 0`, because the
@@ -189,6 +248,9 @@ asks the runner for its globs.
    `derive_pairs` / `check_pair` / `scan_skip_exit0` functions:
    - **R-a** (must be RED, caught **only** by the rc check): prints `UNRESOLVED: jq missing`, then `exit 0`.
    - **R-b** (must be RED, caught **only** by the line check): prints `SKIP: jq missing`, then `exit 3`.
+   - **R-c** (must be RED under both the pair check and the sweep): the one-liner
+     `which jq >/dev/null || { echo "SKIP"; exit 0; }`.
+   - **R-d** (must be RED under the sweep): `echo "SKIP: x"; exit` (a bare `exit`).
    - **P-a** (must PASS through derivation and check): a multi-line
      `if ! command -v jq  >/dev/null 2>&1; then` / `echo "UNRESOLVED: jq missing — x"` / `exit 3` / `fi`
      with irregular spacing.
@@ -196,8 +258,10 @@ asks the runner for its globs.
      with no exit.
    - **P-c** (the sweep must PASS): the `memory-backstop` shape `echo "$_skipnote"` followed by `exit 0`.
 
-   If the must-RED and must-PASS verdicts do not both appear, or if pass()/fail() did not each move,
-   the suite exits 2 before any real pair runs.
+   Each fixture carries a real guard line and runs through the **same** farm toggle. It must derive
+   exactly 1 pair before its verdict counts, which also proves the toggle really removes the tool
+   (test-design P2-3). If the must-RED and must-PASS verdicts do not both appear, or if pass() and
+   fail() did not each move, the suite exits 2 before any real pair runs.
 8. **Hygiene.**
    - Bash 3.2 compatible: no `mapfile`, `declare -A` or `${var,,}`.
    - Self path via `cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P`, never `realpath`, which is one
@@ -207,7 +271,7 @@ asks the runner for its globs.
    - Nothing is written outside `$ROOT`, and the per-pair runs do not write to the repo. Measured:
      `git status --porcelain` was unchanged after running all 52 suites on jq-less and git-less PATHs.
    - No `| grep -q` inside pipelines (`grep-q-pipe-guard.test.sh`).
-   - The header says: "editing this checker? run the Guard Contract rows M1–M10, H1, H1b, H2 and H3 in the plan"
+   - The header says: "editing this checker? run the Guard Contract rows M1–M13, H1, H1b, H2 and H3 in the plan"
      (CTO review).
 
 Measured cost: every guarded suite exits at its guard in under 1 s on a PATH that lacks the tool. The
@@ -346,6 +410,47 @@ Meta-guard ledger:
     one test. It touches no production, auth, data or infra path, and none of it matches the preflight
     sensitive-path regex.
 
+## Observability
+
+The change touches only test harnesses (`.claude/hooks/*.test.sh`, `scripts/guard-vacuity-floor.test.sh`). No
+production process emits anything new. The observable surface is therefore CI and the suites' own
+output. Sentry is not involved, because nothing here runs outside a test runner.
+
+```yaml
+liveness_signal:
+  what: "test-scripts CI shard result (bash scripts/test-all.sh scripts), which runs the new suite and all 25 converted suites; the new suite prints 'N pairs (floor 40)' on every green run"
+  cadence: "every push / pull_request (ci.yml) and every 6 hours on main (main-health-monitor.yml, dispatched by the Inngest cron cron-main-health-monitor)"
+  alert_target: "the required aggregate CI check on the PR; on main, main-health-monitor.yml files a P1 tracking issue when the suite fails"
+  configured_in: ".github/workflows/ci.yml (test-scripts shard), .github/workflows/main-health-monitor.yml, scripts/test-all.sh SUITE_GLOBS"
+error_reporting:
+  destination: "GitHub Actions job log for the test-scripts shard, plus the red required check; no Sentry (test harness, not a runtime)"
+  fail_loud: "'[FAIL] .claude/hooks/hook-suite-dep-unresolved.test.sh' from run_suite, preceded by the pair's rc, last line and canonical one-liner, or by '[FATAL] anti-vacuity floor: found N pairs < MIN_PAIRS=40'"
+failure_modes:
+  - mode: "a hook suite's dependency guard regresses to exit 0 (the #8616 defect)"
+    detection: "the new suite's per-pair check (rc != 0 plus an anchored UNRESOLVED line) goes RED in CI"
+    alert_route: "red required CI check on the PR; P1 issue from main-health-monitor if it reaches main"
+  - mode: "the population derivation silently shrinks (regex or root drift)"
+    detection: "MIN_PAIRS=40 floor emits [FATAL] and exits 1"
+    alert_route: "same as above"
+  - mode: "the checker itself is neutered (always-pass)"
+    detection: "fixture self-test (R-a/R-b must be RED, P-a..P-c must PASS) exits 2 before any real pair"
+    alert_route: "same as above"
+  - mode: "a developer machine lacks a guarded tool"
+    detection: "the suite prints 'UNRESOLVED: <tool> missing ... install <tool>' directly above run_suite's [FAIL]"
+    alert_route: "local test-all / lefthook pre-push output (intended not-green)"
+logs:
+  where: "GitHub Actions run logs for ci.yml and main-health-monitor.yml; local runs print to the terminal"
+  retention: "GitHub Actions log retention for the repository (default 90 days)"
+discoverability_test:
+  command: "git grep -h -m1 -e 'UNRESOLVED: jq missing' -- .claude/hooks"
+  expected_output: "UNRESOLVED: jq missing"
+```
+
+The probe reads the canonical guard line out of the tracked hook suites. It needs no credentials, uses no
+suite-shaped path, and has no shell-active characters. Before this change it prints nothing (measured:
+`git grep -h -m1 -e 'SKIP: jq missing' -- .claude/hooks` currently prints the old form). After this
+change it prints the converted guard lines.
+
 ## Risks
 
 - **A developer machine without jq now sees about 25 `[FAIL]` lines from `test-all.sh scripts`.**
@@ -388,8 +493,9 @@ Meta-guard ledger:
 ### Guard 1 — hook-suite dependency guards never report green
 
 **Property.** No suite under the `.claude/hooks/` roots of `SUITE_GLOBS` that guards a tool exits 0
-when that tool is absent from PATH. Each such (suite, tool) pair exits non-zero and prints a line
-matching `^\s*UNRESOLVED: <tool> missing`. No hook suite pairs a literal `SKIP` message with `exit 0`.
+when that tool is absent from PATH, with or without `CI` set. Each such (suite, tool) pair exits
+non-zero and prints a line matching `^\s*UNRESOLVED: <tool> missing`. When the guard block itself
+contains an `exit`, the pair exits exactly 3. No hook suite pairs a literal `SKIP` message with `exit 0`.
 
 **Assembly.** There are two chokepoints, and the guard covers both:
 
@@ -420,6 +526,9 @@ row once and records the RED line in the PR body.
 | M8 | add `.claude/hooks/zz-probe.test.sh` containing `which jq >/dev/null \|\| { echo "SKIP"; exit 0; }`, sorting after the compliant existing members | pair (zz-probe, jq) RED **and** static sweep RED |
 | M9 | a guard's message reworded to `SKIP: jq missing`, keeping `exit 3` | pair: `rc=3 but no UNRESOLVED: jq line` |
 | M10 | add a scratch root under `.claude/hooks/` to `SUITE_GLOBS` in a throwaway copy, containing one non-compliant suite | the suite scans it and reports that pair RED. A hardcoded pair of globs would miss it (Kieran P1-5). |
+| M11 | `guardrails.test.sh`: make the jq guard exit 3 only when `CI` is set, else `exit 0` | pair (guardrails, jq): `rc=0`, because the pair run unsets `CI` |
+| M12 | `guardrails.test.sh`: keep the `UNRESOLVED:` echo, drop the `exit 3` | pair: `whole-suite guard rc=1, expected 3` |
+| M13 | `guardrails.test.sh`: `exit 3` → `exit 1` | pair: `whole-suite guard rc=1, expected 3` |
 
 **Harness rows.** These are edits to the new suite itself, or checker inputs that are not the
 canonical form.
@@ -443,8 +552,9 @@ a stored copy, so a weakened guard that stays in the population cannot pass.
   clean static sweep.
 - **Each converted suite on a normal host.** Behavior is unchanged. Running each of the 25 edited
   suites individually is green, which proves the edits did not touch the tool-present path.
-- **Each tool toggled off.** Every jq-, git-, perl-, realpath- and python3-guarded suite exits non-zero
-  and prints `UNRESOLVED: <tool> missing`.
+- **Each tool toggled off, with `CI` unset.** Every jq-, git-, perl-, realpath- and python3-guarded
+  suite prints `UNRESOLVED: <tool> missing`. The whole-suite guards exit 3, and the two arm-level
+  pairs (`hookeventname-coverage`/jq and `pre-merge-rebase-parity`/python3) exit 1.
 - **Suites that do not use jq** (e.g. `lib/freeze-lock.test.sh`) still exit 0 on the jq-less PATH. They
   are not in the population, so this is observed during work, not asserted.
 
@@ -608,8 +718,8 @@ codes, plus one regression suite.
 5. **GREEN and mutation.**
    - Run the new suite: 0 failures, 40 pairs.
    - Run the 25 edited suites individually on a normal PATH: all green.
-   - Run mutation rows M1–M10 and harness rows H1, H1b, H2 and H3 once each, and quote each output
-     line in the PR body.
+   - Run mutation rows M1–M13 and harness rows H1, H1b, H2 and H3 once each, each against a scratch
+     copy of the repo with a pristine control run first. Quote each output line in the PR body.
 6. **CI-form lints, run locally.** Two of these went red on the #8727 plugin-root migration.
    - Gates:
      - `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base HEAD origin/main)"` (no skill
@@ -640,7 +750,11 @@ codes, plus one regression suite.
   prints `40 pairs (floor 40)`. Every pair exits non-zero with `UNRESOLVED: <tool> missing` under its
   tool toggle.
 - [ ] **AC4:** Each of the 25 edited suites exits 0 when run individually on a normal PATH.
-- [ ] **AC5:** Mutation rows M1–M10 were each run once and each turned the new suite RED. Harness rows
+- [ ] **AC5:** Mutation rows M1–M13 were each run once and each turned the new suite RED.
+  - Every row ran against a **scratch copy** of the repo, never against tracked files in place.
+  - A control run on the pristine copy exited 0.
+  - Only rc 1 counts as a caught mutation. An rc of 2 or 127 means the instrument broke, and that is
+    not evidence (test-design P2-5). Harness rows
   H1 and H1b were RED (self-test exit 2), and H2 and H3 passed. The output line from each row is quoted
   in the PR body.
 - [ ] **AC6:** `scripts/test-all.sh` and `.github/workflows/ci.yml` are unchanged:

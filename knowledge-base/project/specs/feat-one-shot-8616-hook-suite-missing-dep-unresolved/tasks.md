@@ -27,21 +27,26 @@ lane: procedural
     - on failure, `printf '[FATAL] …' >&2; exit 1` with the remediation text;
     - on success, print `N pairs (floor 40)`.
   - 1.1.4 PATH farm:
-    - build it once, with one `ln -s "$d"/* "$farm"/ 2>/dev/null || true` per PATH entry, in order;
+    - build it once, with one `ln -s "$d"/* "$farm"/ 2>/dev/null || true` per PATH entry, in order,
+      and only for absolute, existing directories;
     - for each tool, move that tool's link aside, run the checks, then put it back;
-    - run suites under `"$BASH"`, with no timeout wrapper, stdin from `</dev/null`, and output written
+    - run suites under `env -u CI -u GITHUB_ACTIONS` and `"$BASH"`, with no timeout wrapper, stdin from `</dev/null`, and output written
       to a file under `$ROOT`.
   - 1.1.5 `check_pair`: require `rc != 0` AND a line matching `^\s*UNRESOLVED: <tool> missing`. When
+    the guard block contains an `exit` (a whole-suite guard), require exactly `rc == 3`. When
     RED, print the rc, the suite's last line, and the canonical one-liner.
   - 1.1.6 `scan_skip_exit0`: flag a string literal containing case-sensitive `SKIP` followed by
-    `exit 0`, on the same line or the next non-blank line.
+    `exit 0` or a bare `exit`, on the same line or the next non-blank line.
   - 1.1.7 Fixture self-test. Build fixture text from pieces so the suite never contains the pattern
     literally.
     - R-a: `UNRESOLVED` + `exit 0`. Must go RED.
     - R-b: `SKIP` + `exit 3`. Must go RED.
+    - R-c: one-line `which` guard with `exit 0`. Must go RED.
+    - R-d: `SKIP` + bare `exit`. Must go RED.
     - P-a: multi-line, irregular spacing. Must PASS.
     - P-b: peak-RSS SKIP with no exit. Must PASS.
     - P-c: `echo "$_skipnote"` + `exit 0`. Must PASS.
+    - Each fixture must derive exactly 1 pair through the real farm toggle.
     - Exit 2 if any verdict is wrong or pass()/fail() did not move.
   - 1.1.8 Bash 3.2 compatible. One owning EXIT trap, before any `source`. No `| grep -q` in pipelines.
 - 1.2 Add the suite to `PROMOTED_FILES` in `scripts/guard-vacuity-floor.test.sh`, with a comment entry
@@ -83,7 +88,9 @@ lane: procedural
 - 3.1 The new suite exits 0 and prints `40 pairs (floor 40)`. The sweep is clean and the self-test
   passes.
 - 3.2 Each of the 25 edited suites exits 0 when run individually on a normal PATH.
-- 3.3 Run M1–M10, H1, H1b, H2 and H3 once each, and quote each output line in the PR body.
+- 3.3 Run M1–M13, H1, H1b, H2 and H3 once each, against a scratch copy of the repo, after a
+  pristine control run that exits 0. Only rc 1 counts as a caught mutation. Quote each output line in
+  the PR body.
 - 3.4 CI-form lints:
   - `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base HEAD origin/main)"`
   - `python3 scripts/lint-trap-tempfile-ownership.py`, plus `--check-highwater`
