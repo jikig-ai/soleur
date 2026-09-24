@@ -788,8 +788,9 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 #
 # Both Check 10 operands resolve through the loader token (ADR-179, #7453): the loader
 # substitutes it with the INSTALLED plugin root at delivery. Never the git root — after a
-# `gh pr checkout` that is the REVIEWED PARTY's tree (ADR-179's rejected option (d)). An
-# unset token expands to a root-anchored `/skills/...` path, which the `test -r` below fails.
+# `gh pr checkout` that is the REVIEWED PARTY's tree (ADR-179's rejected option (d)). Under
+# this check's `set -u` an unset token aborts at the assignment ("unbound variable"); an empty one
+# expands to a root-anchored `/skills/...` path that the `test -r` below refuses.
 #
 # Hard-fail on a load error. `awk -f <missing>` exits 2 with EMPTY stdout, and
 # `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a

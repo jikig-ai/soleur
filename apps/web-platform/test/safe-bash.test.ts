@@ -88,63 +88,55 @@ describe("Slice B AC6 — bare ./plugins worktree-manager auto-approve REMOVED (
   }
 });
 
-// F1 exact-literal carve-out (AC6; #7453 / ADR-179 A19): the ONLY `$`/`{`/`}`-bearing
-// commands the allowlist admits, matched by EXACT string equality on the trimmed segment —
-// no arg variation, so zero injection surface. Does NOT weaken SHELL_METACHAR_DENYLIST
-// (still rejects `$(…)`/`${…}` everywhere else). Two members per verb: the skill text as
-// written (BARE) and as the SDK loader substitutes it with the deployed `/app` root.
-const BARE = 'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh"';
+// F1 exact-literal carve-out (AC6; #7453 / ADR-179 A19): the ONLY quote-bearing
+// worktree-manager commands the allowlist admits, matched by EXACT string equality on the
+// trimmed segment — no arg variation, so zero injection surface. Does NOT weaken
+// SHELL_METACHAR_DENYLIST (still rejects `$(…)`/`${…}` everywhere else). The members are the
+// skill text as the SDK loader delivers it, rooted at the deployed `/app` copy.
 const SUBSTITUTED = `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh"`;
+const BARE = 'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh"';
 describe("Slice B AC6 — plugin-root exact-literal carve-out (read-only verbs only)", () => {
-  for (const member of [BARE, SUBSTITUTED]) {
-    for (const verb of ["list", "ls", "list 2>/dev/null"]) {
-      test(`${member} ${verb} → true`, () => {
-        expect(isBashCommandSafe(`${member} ${verb}`)).toBe(true);
-      });
-    }
+  for (const verb of ["list", "ls", "list 2>/dev/null"]) {
+    test(`${SUBSTITUTED} ${verb} → true`, () => {
+      expect(isBashCommandSafe(`${SUBSTITUTED} ${verb}`)).toBe(true);
+    });
   }
 
-  test("identity pin: the carve-out is exactly {bare, substituted} × {list, ls}", () => {
-    expect([...EXACT_LITERAL_SAFE_COMMANDS].sort()).toEqual(
-      [`${BARE} list`, `${BARE} ls`, `${SUBSTITUTED} list`, `${SUBSTITUTED} ls`].sort(),
-    );
+  test("identity pin: the carve-out is exactly the substituted {list, ls}", () => {
+    expect([...EXACT_LITERAL_SAFE_COMMANDS].sort()).toEqual([`${SUBSTITUTED} list`, `${SUBSTITUTED} ls`].sort());
   });
 
   // Positive control for the `export … &&` negative below: a SAFE first segment chained
-  // to a member IS approved, so the negative is denied by its `export` segment, not by
-  // some unrelated failure of the && path.
-  test(`pwd && ${BARE} list → true (control)`, () => {
-    expect(isBashCommandSafe(`pwd && ${BARE} list`)).toBe(true);
+  // to a member IS approved, so the negative is denied by its `export` segment.
+  test(`pwd && ${SUBSTITUTED} list → true (control)`, () => {
+    expect(isBashCommandSafe(`pwd && ${SUBSTITUTED} list`)).toBe(true);
   });
 
   const DEF = ":-"; // assembled so no literal here spells the rejected form
   const negatives = [
-    'bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh list', // unquoted operand
+    `${BARE} list`, // unsubstituted token — falls back to a prompt (fail-safe)
+    'bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh list', // unquoted
     `bash \${CLAUDE_PLUGIN_ROOT${DEF}./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list`, // removed default-arm member
     `bash "\${CLAUDE_PLUGIN_ROOT${DEF}./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh" list`, // quoted default arm
-    'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh-pwn" list', // name extension
+    `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh-pwn" list`, // name extension
     'bash "/tmp/x/skills/git-worktree/scripts/worktree-manager.sh" list', // attacker root
-    'bash "${CLAUDE_PLUGIN_ROOT}/../evil.sh" list', // traversal out of the root
-    'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/other.sh" list', // different script
+    `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/../evil.sh" list`, // traversal out of the root
+    `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/other.sh" list`, // different script
     'bash "${OTHER_VAR}/skills/git-worktree/scripts/worktree-manager.sh" list', // different var
     "bash $(echo ./plugins/soleur)/skills/git-worktree/scripts/worktree-manager.sh list", // command substitution
-    `export CLAUDE_PLUGIN_ROOT=/tmp && ${BARE} list`, // root redirected by segment 1
-    `${BARE} list\nid`, // embedded newline
+    `export CLAUDE_PLUGIN_ROOT=/tmp && ${SUBSTITUTED} list`, // segment 1 unsafe
+    `${SUBSTITUTED} list\nid`, // embedded newline
+    `${SUBSTITUTED} cleanup-merged`, // write verb — not in the exact set
+    `${SUBSTITUTED} create feat-x`, // write verb
+    `${SUBSTITUTED} draft-pr`, // write verb
+    `${SUBSTITUTED} list --json`, // arg variation defeats exact match
+    `${SUBSTITUTED} list; rm -rf /`, // trailing injection — not the exact literal
+    `${SUBSTITUTED} list && rm -rf /`, // segment 2 unsafe (&&-decomposed)
     "bash ./some/other/script.sh list",
     "bash -c 'rm -rf /'",
     "bash",
     `${WT}`, // bare, no subcommand
   ];
-  for (const member of [BARE, SUBSTITUTED]) {
-    negatives.push(
-      `${member} cleanup-merged`, // write verb — not in the exact set
-      `${member} create feat-x`, // write verb
-      `${member} draft-pr`, // write verb
-      `${member} list --json`, // arg variation defeats exact match
-      `${member} list; rm -rf /`, // trailing injection — not the exact literal
-      `${member} list && rm -rf /`, // segment 2 unsafe (&&-decomposed)
-    );
-  }
   for (const cmd of negatives) {
     test(`isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
       expect(isBashCommandSafe(cmd)).toBe(false);

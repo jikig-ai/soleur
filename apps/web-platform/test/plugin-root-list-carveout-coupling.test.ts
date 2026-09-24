@@ -32,8 +32,8 @@ import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../server/plugin-path";
  * Scope (deliberate, YAGNI; re-scoped by #7453 / ADR-179 A19): the guard covers every
  * `${CLAUDE_PLUGIN_ROOT…}` rendering of `worktree-manager.sh list|ls` — the modifier
  * group is `[^}]*`, so the bare token and any default-arm form are both EXTRACTED and
- * then decided by membership. Each emission is checked twice: as written, and as the
- * SDK loader substitutes it with the deployed root. A script *rename* still yields
+ * then decided by membership of the emission as the SDK loader substitutes it with the
+ * deployed root (ADR-179 A19). A script *rename* still yields
  * zero matches for that site; the exact count below turns that into a red rather than
  * a silently unguarded site.
  *
@@ -105,13 +105,12 @@ function collectListEmissions(): string[] {
 describe("plugin-root list/ls carve-out coupling (AC5↔AC6, #6121)", () => {
   const emissions = collectListEmissions();
 
-  test("every list/ls emission, raw AND as the loader renders it, is a member of EXACT_LITERAL_SAFE_COMMANDS", () => {
+  test("every list/ls emission, as the loader renders it, is a member of EXACT_LITERAL_SAFE_COMMANDS", () => {
     for (const cmd of emissions) {
-      const raw = normalise(cmd);
-      const rendered = raw.replaceAll(TOKEN, SOLEUR_PLUGIN_PATH_DEFAULT);
+      const rendered = normalise(cmd).replaceAll(TOKEN, SOLEUR_PLUGIN_PATH_DEFAULT);
       expect(
-        EXACT_LITERAL_SAFE_COMMANDS.has(raw) && EXACT_LITERAL_SAFE_COMMANDS.has(rendered),
-        `Emitted read-only command is NOT carved out (raw member: ${EXACT_LITERAL_SAFE_COMMANDS.has(raw)}, rendered member: ${EXACT_LITERAL_SAFE_COMMANDS.has(rendered)}) — it degrades to the review-gate prompt: ${cmd}`,
+        EXACT_LITERAL_SAFE_COMMANDS.has(rendered),
+        `Emitted read-only command is NOT carved out once rendered — it degrades to the review-gate prompt: ${cmd}`,
       ).toBe(true);
     }
   });
@@ -124,7 +123,7 @@ describe("plugin-root list/ls carve-out coupling (AC5↔AC6, #6121)", () => {
 
   test("normalisation: a trailing safe redirect is stripped before membership (must-pass)", () => {
     const cmd = `bash "${TOKEN}/skills/git-worktree/scripts/worktree-manager.sh" list 2>/dev/null`;
-    expect(EXACT_LITERAL_SAFE_COMMANDS.has(normalise(cmd))).toBe(true);
+    expect(EXACT_LITERAL_SAFE_COMMANDS.has(normalise(cmd).replaceAll(TOKEN, SOLEUR_PLUGIN_PATH_DEFAULT))).toBe(true);
   });
 
   test("drift control: a misquoted or default-armed emission is EXTRACTED and is a non-member", () => {
@@ -135,7 +134,7 @@ describe("plugin-root list/ls carve-out coupling (AC5↔AC6, #6121)", () => {
       `bash "${TOKEN}/skills/git-worktree/scripts/worktree-manager.sh" list --json`,
     ];
     for (const d of drifted) {
-      const got = [...d.matchAll(LIST_EMISSION)].map((m) => normalise(m[0]));
+      const got = [...d.matchAll(LIST_EMISSION)].map((m) => normalise(m[0]).replaceAll(TOKEN, SOLEUR_PLUGIN_PATH_DEFAULT));
       expect(got).toHaveLength(1);
       expect(EXACT_LITERAL_SAFE_COMMANDS.has(got[0])).toBe(false);
     }

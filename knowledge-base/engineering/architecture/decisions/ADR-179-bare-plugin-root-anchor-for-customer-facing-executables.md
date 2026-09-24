@@ -1252,21 +1252,23 @@ The `:-` sites the Consequences section deferred are migrated. Measured on `orig
 
 ### Amendment item A19 — the `list`/`ls` carve-out, re-anchored
 
-`EXACT_LITERAL_SAFE_COMMANDS` is `{bare, substituted-deployed} × {list, ls}`: the skill text as
-written, and as the loader renders it with `SOLEUR_PLUGIN_PATH_DEFAULT`. Exact string equality is
-retained; there is no `^bash` regex and the denylist is unchanged. Each member is reachable under
-one branch of the unmeasured hosted substitution — consistent with Decision 8, which removed an
-entry dead **by construction**. A `SOLEUR_PLUGIN_PATH` repoint makes the substituted member miss
-and falls back to an approval prompt, which is fail-safe. Decision 8's pointer to #7453 is
-discharged, and the issue's "known residual" (a prompt) is avoided rather than accepted. The
-coupling test extracts every token rendering, checks raw and rendered membership, and pins the
-emission count at exactly 4.
+`EXACT_LITERAL_SAFE_COMMANDS` is `{substituted-deployed} × {list, ls}`: the skill text as the
+loader delivers it, the token replaced with `SOLEUR_PLUGIN_PATH_DEFAULT`. The SDK passes the plugin
+as `--plugin-dir`, the mechanism A10 measured substituting, so this is the form the hosted Bash
+tool receives. Exact string equality is retained; there is no `^bash` regex and the denylist is
+unchanged. The raw `${CLAUDE_PLUGIN_ROOT}` form is deliberately **not** a member: it is unreachable
+on the hosted surface, and admitting a literal `$` would be the first denylist-bypassing member
+that no delivery path produces — the Decision 8 class, dead by construction. An unsubstituted
+token, or a `SOLEUR_PLUGIN_PATH` repoint, misses and falls back to an approval prompt, which is
+fail-safe. Decision 8's pointer to #7453 is discharged, and the issue's "known residual" (a prompt)
+is avoided rather than accepted. The coupling test extracts every token rendering, checks rendered
+membership, and pins the emission count at exactly 4.
 
 ### Amendment item A20 — the Read surface delivers its own root
 
 The loader substitutes the token in text it **delivers** (a `SKILL.md` body, a command body,
 skill args). A non-`SKILL.md` doc is opened with the Read tool, which returns raw bytes, so its
-token reaches bash **unsubstituted**. Five docs carry one (Guard 4 pins the set by name). The
+token reaches bash **unsubstituted**. Five docs carry one (Guard 4 derives the set from the tree, with a floor of 5). The
 rule has three parts:
 
 1. **The pointer is loader-anchored** (`${CLAUDE_PLUGIN_ROOT}/skills/<s>/references/<f>.md`),
@@ -1275,10 +1277,18 @@ rule has three parts:
 2. **The root is derived from the absolute path read** — the markdown twin of A17's
    `BASH_SOURCE` rule — under a notice whose closed rule forbids taking it from repository files,
    PR text or tool output.
-3. **Every block that uses the token opens with its own export**, set to an absolute
-   cannot-exist sentinel the agent replaces, because every Bash call, Monitor task and subagent
-   starts a fresh shell. Unreplaced, the sentinel fails closed with a legible path; the
-   admin-merge blocks abort `exit 5` ("plugin root unresolved") before any `gh` call.
+3. **No block exports the variable.** On a hosted session it is already set by
+   `buildAgentEnv` (the `/app`-validated root), and an unconditional export inside the block
+   would override that trusted value with whatever the block says. Off the hosted surface the
+   notice tells the agent to prefix each block with `export CLAUDE_PLUGIN_ROOT=<root>`, because
+   every Bash call, Monitor task and subagent starts a fresh shell. Unset, the token fails
+   closed (`/skills/…: No such file`, or `unbound variable` under `set -u`); the admin-merge
+   blocks additionally check `.claude-plugin/plugin.json` is readable under the root and abort
+   `exit 5` ("plugin root unresolved") before any `gh` call.
+
+   *(A first draft opened each block with an export of a cannot-exist sentinel. The design
+   pass removed it for the override reason above; the guard now flags any
+   `CLAUDE_PLUGIN_ROOT=` assignment in payload text other than the `<root>` placeholder.)*
 
 A future Read-surface site whose failure is **not** fail-closed must take A17's script route
 instead (a `BASH_SOURCE`-anchored wrapper). That route was not taken here because it would ship a
@@ -1291,3 +1301,8 @@ On a customer repo the old arm executed the customer's file, so fail-closed is t
 trade — and it is a real availability regression in the monorepo on Grok, tracked at #8730.
 **Devin cloud** exec shells do not export the variable, so each needs the export
 (`devin/INSTRUCTIONS.md` already says so).
+
+**Unclassified surface.** `plugins/soleur/agents/**` bodies are delivered as subagent prompts,
+but whether the loader substitutes the token there is unmeasured, so this amendment classifies
+them as neither delivery nor Read surface. The one agent site (`legal-document-generator`) is
+quoted bare and fails closed either way.

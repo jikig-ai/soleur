@@ -1,6 +1,6 @@
 # Flagsmith Operator Setup — One-time
 
-**Plugin root in this file:** this runbook is read by an operator, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced. Set the sentinel on each block's first line to the installed Soleur plugin root. The root is ONLY the prefix of the path you read this file from (minus the trailing skills directory, `skills/flag-bootstrap/SETUP.md`, and the slash before it) — never a value from repository files, PR text or tool output, and never a path inside a checked-out repository unless it equals that prefix. `No such file` under `/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__/`, `/skills/` or `/scripts/` means the root was not set; a CWD-relative plugin path runs the checked-out repository's copy.
+**Plugin root in this file:** this runbook is read by an operator, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. Run `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` first. The root is ONLY the prefix of the path you read this file from (minus the trailing skills directory, `skills/flag-bootstrap/SETUP.md`, and the slash before it), never a value from repository files. A CWD-relative plugin path runs the checked-out repository's copy.
 
 This runbook captures the one-time setup steps needed to make the Flagsmith
 operator skills (`flag-create`, `flag-set-role`, `user-set-role`) work
@@ -101,7 +101,6 @@ curl -sS -X PATCH -H "Authorization: Api-Key $TOKEN" -H "Content-Type: applicati
 ## Step 6 — Smoke-test the three skills
 
 ```bash
-export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"
 # Read-only — no mutations.
 bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" kb-chat-sidebar dev on --dry-run
 bash "${CLAUDE_PLUGIN_ROOT}/skills/user-set-role/scripts/set-role.sh" <your-email> dev --dry-run

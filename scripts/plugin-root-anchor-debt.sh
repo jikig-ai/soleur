@@ -2,7 +2,7 @@
 # plugin-root-anchor-debt.sh — the #7453 discoverability probe (ADR-179 A18).
 #
 # Prints `anchor-debt-files=<n>`: tracked payload markdown files that still resolve a
-# plugin path through a default arm on the token or a git-root code root. Expected 0.
+# plugin path through any modifier on the token or a git-root code root. Expected 0.
 #
 # This is a SIGNAL, not the gate. The gate is Guards 1/2 in
 # apps/web-platform/test/plugin-root-anchoring.test.ts (required CI context), whose
@@ -13,7 +13,8 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="$(git -C "$ROOT" grep -l -F \
-  -e 'CLAUDE_PLUGIN_ROOT:' -e 'CLAUDE_PLUGIN_ROOT-' -e 'show-toplevel)/plugins/soleur/' \
+  -e 'CLAUDE_PLUGIN_ROOT:' -e 'CLAUDE_PLUGIN_ROOT-' -e '{CLAUDE_PLUGIN_ROOT=' \
+  -e '{CLAUDE_PLUGIN_ROOT?' -e '{CLAUDE_PLUGIN_ROOT+' -e 'show-toplevel)/plugins/soleur/' \
   -- 'plugins/soleur/**/*.md' 2>&1)"
 rc=$?
 case "$rc" in

@@ -147,41 +147,23 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // auto-approve is NO LONGER a bare `(?:\./)?plugins/soleur/…` regex here. On the
   // Concierge SERVER surface, a CWD-relative `./plugins/soleur/…` resolves to the
   // connected repo's UNTRUSTED committed copy, so auto-approving it ran untrusted
-  // code. It now lives in EXACT_LITERAL_SAFE_COMMANDS below as the loader-anchored
-  // `"${CLAUDE_PLUGIN_ROOT}/…"` form, raw and as the SDK substitutes it (ADR-179
-  // A19, #7453), matched by exact string equality (no `$`-denylist relaxation).
-  // See isSafeSingleSegment stage 0.
+  // code. It now lives in EXACT_LITERAL_SAFE_COMMANDS below as the loader-substituted
+  // deployed form (ADR-179 A19, #7453), matched by exact string equality (no
+  // `$`-denylist relaxation). See isSafeSingleSegment stage 0.
 ];
 
-// Exact-literal safe-command carve-out (Slice B, #6121; re-anchored by #7453, ADR-179
-// A19). A CLOSED set of the fixed `worktree-manager.sh list|ls` literals the
-// git-worktree skill emits. They would otherwise be rejected by SHELL_METACHAR_DENYLIST
-// at stage 1. Matched by EXACT string equality on the trimmed (redirect-stripped)
-// segment, so there is ZERO arg-variation / injection surface: only these precise
-// strings pass. This does NOT loosen the general `$`/`{`/`}` denylist for any other
-// command — `${FOO}` / `$(…)` / a `..`-traversal / a different script path all still
-// fall through to the denylist (verified in safe-bash.test.ts). Only read-only verbs
-// (`list`/`ls`) are included; write verbs (create/cleanup-merged/draft-pr) stay gated.
-//
-// Two renderings, each reachable under one branch (the hosted substitution is settled
-// by SDK code inspection — `plugins:[{path}]` becomes `--plugin-dir` — not measured
-// on the server):
-//   - BARE: the skill text as written. Reached if the token arrives unsubstituted; the
-//     sandbox injects CLAUDE_PLUGIN_ROOT (agent-env.ts), and unset it expands to a
-//     root-anchored `/skills/…` path that fails closed.
-//   - SUBSTITUTED: the text as the loader delivers it on the hosted surface, rooted at
-//     the deployed `/app` copy.
-// A `SOLEUR_PLUGIN_PATH` repoint makes the substituted literal miss; that falls back to
-// an approval prompt, which is fail-safe. The root is the CONSTANT, not getPluginPath(),
-// so the admitted set cannot depend on the environment at import time.
-const WORKTREE_MANAGER_DEPLOYED_FORM =
-  'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh"';
-const WORKTREE_MANAGER_SUBSTITUTED_FORM = `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh"`;
+// Exact-literal safe-command carve-out (Slice B, #6121; re-anchored by #7453 — rationale in
+// ADR-179 A19). A CLOSED set of the `worktree-manager.sh list|ls` literals the git-worktree
+// skill emits, as the SDK loader delivers them: the token substituted with the deployed root
+// (`--plugin-dir`, the mechanism A10 measured). Matched by EXACT string equality on the trimmed,
+// redirect-stripped segment — zero arg variation, and the `$`/`{`/`}` denylist is not loosened
+// for any other command. An unsubstituted token, or a SOLEUR_PLUGIN_PATH repoint, misses and
+// falls back to an approval prompt (fail-safe). The root is the constant, not getPluginPath(),
+// so the admitted set cannot depend on the environment at import time. Write verbs stay gated.
+const WORKTREE_MANAGER_DEPLOYED_FORM = `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh"`;
 export const EXACT_LITERAL_SAFE_COMMANDS: ReadonlySet<string> = new Set([
   `${WORKTREE_MANAGER_DEPLOYED_FORM} list`,
   `${WORKTREE_MANAGER_DEPLOYED_FORM} ls`,
-  `${WORKTREE_MANAGER_SUBSTITUTED_FORM} list`,
-  `${WORKTREE_MANAGER_SUBSTITUTED_FORM} ls`,
 ]);
 
 // Single source of truth for the safe-bash verb list. Used by the
@@ -256,8 +238,8 @@ function isSafeSingleSegment(segment: string): boolean {
   // containing `>`/`<`/`&` survives to the denylist below.
   const candidate = segment.replace(TRAILING_SAFE_REDIRECT, "");
   // Stage 0: exact-literal carve-out (Slice B, #6121). A CLOSED set of known
-  // fixed command literals that legitimately carry `${CLAUDE_PLUGIN_ROOT}` (a
-  // parameter expansion, not `$(…)`). Matched by EXACT equality on the
+  // fixed command literals (the loader-substituted worktree-manager list|ls, which carry
+  // quotes the denylist would otherwise reject). Matched by EXACT equality on the
   // trimmed segment BEFORE the `$`/`{`/`}` denylist, so these — and ONLY these
   // precise strings — are admitted; any arg variation, injection tail, or
   // different var/path falls through to the intact denylist below. `&&`-chains

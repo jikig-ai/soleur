@@ -244,11 +244,12 @@ mkdir -p "$G3/root/.claude-plugin" && printf '{"name":"soleur"}\n' > "$G3/root/.
 BLOCK_SRC="$G3/block.sh"
 if ! extract "$REPO_ROOT/$REF_REL" > "$BLOCK_SRC"; then echo "[FATAL] Guard 3: no merge block extracted from $REF_REL" >&2; exit 1; fi
 grep -q '^SHA=<the 40-hex head SHA' "$BLOCK_SRC" || { echo "[FATAL] Guard 3: the block's SHA= placeholder line moved; update g3()" >&2; exit 1; }
-# #7453 (ADR-179 A20): the reference is Read, not loader-delivered, so its block opens with an
-# absolute cannot-exist sentinel the agent replaces with the installed root. The harness does
-# the same replacement g3() below; M13 runs the block WITHOUT it.
-SENTINEL_LINE='export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"'
-[[ "$(head -1 "$BLOCK_SRC")" == "$SENTINEL_LINE" ]] || { echo "[FATAL] Guard 3: the block no longer opens with the Read-surface sentinel" >&2; exit 1; }
+# #7453 (ADR-179 A20): the reference is Read, not loader-delivered, so the token reaches bash
+# unreplaced; the block's first line refuses an unresolved root (exit 5) before any gh call.
+# g3() exports the fixture root, as a hosted session or the agent's own export would; M13 runs
+# the block with the root unset.
+PRESENCE_LINE='[[ -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }'
+[[ "$(head -1 "$BLOCK_SRC")" == "$PRESENCE_LINE" ]] || { echo "[FATAL] Guard 3: the block no longer opens with the plugin-root presence check" >&2; exit 1; }
 
 # g3 <id> <sha-line-value> <ready_rcs> <merge_modes> <states> [view_fail] ; runs the block
 g3() {
@@ -256,10 +257,7 @@ g3() {
   printf '%b' "$3" > "$G3_DIR/ready_rcs"; printf '%b' "$4" > "$G3_DIR/merge_modes"; printf '%b' "$5" > "$G3_DIR/states"
   printf '%b' "${6-}" > "$G3_DIR/view_fail"
   : > "$G3_DIR/gh.log"; : > "$G3_DIR/sleeps"; : > "$G3_DIR/ready.log"
-  sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$2|" \
-      -e "s|^export CLAUDE_PLUGIN_ROOT=\"/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__\"\$|export CLAUDE_PLUGIN_ROOT=\"$G3/root\"|" \
-      "$BLOCK_SRC" > "$G3_DIR/block.sh"
-  grep -qxF "export CLAUDE_PLUGIN_ROOT=\"$G3/root\"" "$G3_DIR/block.sh" || { echo "[FATAL] the sentinel replacement did not land" >&2; exit 1; }
+  sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$2|" "$BLOCK_SRC" > "$G3_DIR/block.sh"
   if grep -qE '<[A-Za-z]' "$G3_DIR/block.sh"; then echo "[FATAL] unsubstituted placeholder in the block" >&2; exit 1; fi
   export G3_DIR
   G3_SHA="$TSHA" CLAUDE_PLUGIN_ROOT="$G3/root" PATH="$G3/bin:$PATH" \
@@ -301,12 +299,11 @@ g3 M10 "$TSHA" '' 'ok\n' "OPEN $TSHA\nMERGED 11111111111111111111111111111111111
 g3_case M10-other-sha "[[ $RC == 1 ]] && grep -qx 'ADMIN-MERGE NOT LANDED' \$G3_DIR/out"
 g3 M11 "$TSHA" '' 'race\nok\n' "OPEN $TSHA\nOPEN $TSHA\nMERGED $TSHA\n"
 g3_case M11-race-then-land "[[ $RC == 0 && \$(merges) == 2 && \$(wc -l < \$G3_DIR/sleeps) == 1 && \$(readies) == 2 ]]"
-# M12: the positive row, stated explicitly — with the sentinel replaced (as the agent does),
-# the stubbed gate RAN and the fake gh actually merged (proves the fake gh is on PATH).
+# M12: the positive row, stated explicitly — with the root exported, the stubbed gate RAN and
+# the fake gh actually merged (proves the fake gh is on PATH).
 g3 M12 "$TSHA" '' 'ok\n' "OPEN $TSHA\nMERGED $TSHA\n"
-g3_case M12-sentinel-replaced-runs-gate "[[ $RC == 0 && -s \$G3_DIR/ready.log && \$(merges) == 1 ]]"
-# M13: the block AS SHIPPED — sentinel unreplaced, root unset. It must abort with exit 5 before
-# any gh call. Ledgers are pre-created empty FILES and read directly, never through $(...).
+g3_case M12-root-exported-runs-gate "[[ $RC == 0 && -s \$G3_DIR/ready.log && \$(merges) == 1 ]]"
+# M13: the block AS SHIPPED with the root unset. It must abort with exit 5 before any gh call. Ledgers are pre-created empty FILES and read directly, never through $(...).
 CASES_RUN=$((CASES_RUN + 1))
 M13="$G3/run-M13"; assert_fixture_dir "$M13"; rm -rf "$M13"; mkdir -p "$M13"
 : > "$M13/gh.log"; : > "$M13/ready.log"
@@ -316,12 +313,12 @@ G3_DIR="$M13" G3_SHA="$TSHA" PATH="$G3/bin:$PATH" env -u CLAUDE_PLUGIN_ROOT -u G
 m13_rc=$?
 if [[ "$m13_rc" -eq 5 ]] && grep -qxF 'ADMIN-MERGE ABORTED: plugin root unresolved' "$M13/out" \
    && [[ ! -s "$M13/gh.log" && ! -s "$M13/ready.log" ]]; then
-  pass "M13-unreplaced-sentinel-aborts-5"
+  pass "M13-unset-root-aborts-5"
 else
-  fail "M13-unreplaced-sentinel-aborts-5: rc=$m13_rc out=$(tr '\n' '|' < "$M13/out") gh=$(tr '\n' '|' < "$M13/gh.log")"
+  fail "M13-unset-root-aborts-5: rc=$m13_rc out=$(tr '\n' '|' < "$M13/out") gh=$(tr '\n' '|' < "$M13/gh.log")"
 fi
-# M14: the twin control. The PRE-migration block (the token with a default arm, no sentinel,
-# no presence check), root unset, run from a tree holding a decoy gate: the decoy MUST run.
+# M14: the twin control. The PRE-migration block (the token with a default arm, no presence
+# check), root unset, run from a tree holding a decoy gate: the decoy MUST run.
 # That proves a decoy at that path is reachable at all, so M13's empty ledger means something.
 # The default arm is assembled from pieces so this file never spells the rejected form.
 CASES_RUN=$((CASES_RUN + 1))
@@ -330,7 +327,7 @@ M14="$G3/run-M14"; assert_fixture_dir "$M14"; rm -rf "$M14"; mkdir -p "$M14/plug
 printf '#!/usr/bin/env bash\necho decoy-ran >> "%s"\nexit 1\n' "$M14/decoy.log" > "$M14/plugins/soleur/scripts/admin-merge-ready.sh"
 chmod +x "$M14/plugins/soleur/scripts/admin-merge-ready.sh"
 DEF=':-'; OLD_ARM="\${CLAUDE_PLUGIN_ROOT${DEF}plugins/soleur}"
-grep -vxF "$SENTINEL_LINE" "$BLOCK_SRC" | grep -vF 'ADMIN-MERGE ABORTED: plugin root unresolved' \
+grep -vF 'ADMIN-MERGE ABORTED: plugin root unresolved' "$BLOCK_SRC" \
   | sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$TSHA|" \
         -e "s|\"\\\${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh\"|\"$OLD_ARM/scripts/admin-merge-ready.sh\"|" > "$M14/block.sh"
 grep -qF "$OLD_ARM" "$M14/block.sh" || { echo "[FATAL] M14: the pre-migration rewrite did not land" >&2; exit 1; }
@@ -341,10 +338,8 @@ else fail "M14-premigration-block-runs-decoy: decoy did not run — M13's empty 
 # M7: a reference whose merge block cannot be found must not extract (no vacuous pass).
 CASES_RUN=$((CASES_RUN + 1))
 m7="$SANDBOX/m7.md"; cp "$REPO_ROOT/$REF_REL" "$m7"; edit "$m7" '```bash
-   export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"
    [[ -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }
    SHA=<the 40-hex' '```sh
-   export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"
    [[ -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }
    SHA=<the 40-hex'
 if extract "$m7" >/dev/null; then fail "M7 (extraction succeeded on a reference with no merge block)"; else pass "M7"; fi
