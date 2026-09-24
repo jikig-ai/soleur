@@ -37,7 +37,7 @@ BINDING="$REPO_ROOT/scripts/sentry-monitor-binding-gate.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=63
+EXPECTED_TESTS=70
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -749,7 +749,10 @@ t_g3_p1_real_shape_passes() {
     _report "G3-P1 real shape passes" fail "fixture did not land as 34 alerts with 59 shuffled cron ids"; return
   fi
   rc=0; out=$(bash "$BINDING" "$f" 2>&1) || rc=$?
-  if [[ "$rc" -eq 0 ]] && grep -qF -- "PASS (34 sentry_alert resource(s)" <<<"$out"; then
+  # The FULL count clause, not the prefix: "1 cron-bound" is the jq-side count
+  # of cron-bound rows that complied, so a regression that stops counting (or
+  # counts a non-cron row as cron) moves this literal.
+  if [[ "$rc" -eq 0 ]] && grep -qF -- "PASS (34 sentry_alert resource(s): 33 bind detector 1213799, 1 cron-bound" <<<"$out"; then
     _report "G3-P1 33 issue-stream rules + cron_monitor_failure with 59 shuffled cron ids PASS" ok
   else
     _report "G3-P1 real shape passes" fail "rc=$rc out=$(head -c 500 <<<"$out")"
@@ -764,6 +767,77 @@ t_g3_p2_no_cron_row_passes() {
   else
     _report "G3-P2 no cron row passes" fail "rc=$rc out=$(head -c 500 <<<"$out")"
   fi
+}
+# G3-6 — a monitor id carrying a NEWLINE must not split a verdict row. The gate
+# used to emit `addr<TAB>ids<TAB>why` with `jq -r` and re-split it in bash with
+# `read`, so an id of "999\n" put an empty `why` on the first half-line (PASS)
+# and a bare fragment on the second (PASS), and any passing non-1213799 row
+# was counted as cron-bound WITHOUT checking its address.
+t_g3_6a_newline_id_on_issue_rule_red() {
+  local f msg
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" '$i + [{addr: "sentry_alert.a", ids: ["999\n"]}]')" | _write g3-6a)
+  _g3_red "G3-6a an issue rule binding [\"999\\n\"] REDs (a newline in an id cannot split the row into two PASSes)" \
+    "$f" "sentry_alert.a" "expected '1213799'"
+  # The id is rendered ESCAPED on the offending line, never as a raw line break.
+  msg=$(_err bash "$BINDING" "$f")
+  if grep -F -- "sentry_alert.a " <<<"$msg" | grep -qF -- "'999\\n'"; then
+    _report "G3-6b the newline-bearing id is rendered escaped ('999\\n') on the address's own line" ok
+  else
+    _report "G3-6b newline-bearing id rendered escaped" fail "stderr: $(head -c 400 <<<"$msg")"
+  fi
+}
+t_g3_6c_newline_id_on_cron_rule_red() {
+  local f
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" '$i + [{addr: $a, ids: ["400000\nx", "1213799"]}]')" | _write g3-6c)
+  _g3_red "G3-6c cron_monitor_failure binding [\"400000\\nx\",\"1213799\"] REDs (contains the issue-stream detector)" \
+    "$f" "$CRON_ADDR" "contains the issue-stream detector '1213799'"
+}
+# G3-7 — a REPLACE (["delete","create"] / ["create","delete"]) carries the new
+# binding in `.change.after`; only a PURE delete has nothing to check.
+_g3_actions() { # $1=address $2=actions-json — jq-edit a plan on stdin
+  jq -c --arg a "$1" --argjson act "$2" '(.resource_changes[] | select(.address == $a) | .change.actions) = $act'
+}
+t_g3_7a_replaced_cron_rule_red() {
+  local f
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" '$i + [{addr: $a, ids: ["1213799", "999"]}]')" \
+      | _g3_actions "$CRON_ADDR" '["delete","create"]' | _write g3-7a)
+  if ! jq -e --arg a "$CRON_ADDR" '.resource_changes[] | select(.address == $a) | .change.actions == ["delete","create"]' "$f" >/dev/null; then
+    _report "G3-7a replaced cron rule REDs" fail "fixture did not land (actions not [delete,create])"; return
+  fi
+  _g3_red "G3-7a a REPLACED cron_monitor_failure bound to [1213799,999] REDs (a replace is not skipped as a delete)" \
+    "$f" "$CRON_ADDR" "contains the issue-stream detector '1213799'"
+}
+t_g3_7b_replaced_issue_rule_red() {
+  local f alerts
+  alerts=$(jq -nc --argjson i "$(_issue_alerts 3)" --argjson k "$(_cron_ok)" '$i + $k | (.[1].ids = ["400007"])')
+  f=$(_g3_plan "$CRON_IDS" "$alerts" | _g3_actions "sentry_alert.issue_1" '["create","delete"]' | _write g3-7b)
+  if ! jq -e '.resource_changes[] | select(.address == "sentry_alert.issue_1") | .change.actions == ["create","delete"]' "$f" >/dev/null; then
+    _report "G3-7b replaced issue rule REDs" fail "fixture did not land (actions not [create,delete])"; return
+  fi
+  _g3_red "G3-7b a REPLACED issue rule bound to a cron id REDs (create_before_destroy ordering)" \
+    "$f" "sentry_alert.issue_1" "expected '1213799'"
+}
+# G3-8 — only a MANAGED sentry_cron_monitor's id is a routable detector. A
+# `data` source of the same type is not a monitor this root declares.
+t_g3_8_data_mode_cron_monitor_not_accepted() {
+  local f
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" --argjson c "$CRON_IDS" '$i + [{addr: $a, ids: ($c + ["777000"])}]')" \
+      | jq -c '.planned_values.root_module.resources += [{address: "data.sentry_cron_monitor.ext", mode: "data",
+                 type: "sentry_cron_monitor", name: "ext", values: {id: "777000", name: "ext"}}]' | _write g3-8)
+  if ! jq -e '[.planned_values.root_module.resources[] | select(.type == "sentry_cron_monitor" and .mode == "data" and .values.id == "777000")] | length == 1' "$f" >/dev/null; then
+    _report "G3-8 data-mode cron monitor" fail "fixture did not land"; return
+  fi
+  _g3_red "G3-8 cron_monitor_failure binding a DATA-mode sentry_cron_monitor's id REDs (managed monitors only)" \
+    "$f" "$CRON_ADDR" "binds id(s) 777000 that are not the .values.id of any sentry_cron_monitor"
+}
+# G3-9 — an issue rule binding the issue-stream detector PLUS a cron id is not
+# compliant: the issue-stream check is set EQUALITY, not "contains 1213799".
+t_g3_9_issue_rule_expected_plus_cron_red() {
+  local f alerts
+  alerts=$(jq -nc --argjson i "$(_issue_alerts 3)" --argjson k "$(_cron_ok)" '$i + $k | (.[1].ids = ["1213799", "400000"])')
+  f=$(_g3_plan "$CRON_IDS" "$alerts" | _write g3-9)
+  _g3_red "G3-9 an issue rule binding [1213799,400000] REDs (equality, not containment)" \
+    "$f" "sentry_alert.issue_1" "expected '1213799'"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1244,6 +1318,12 @@ t_g3_5a_cron_empty_set_red
 t_g3_5b_cron_null_element_red
 t_g3_p1_real_shape_passes
 t_g3_p2_no_cron_row_passes
+t_g3_6a_newline_id_on_issue_rule_red
+t_g3_6c_newline_id_on_cron_rule_red
+t_g3_7a_replaced_cron_rule_red
+t_g3_7b_replaced_issue_rule_red
+t_g3_8_data_mode_cron_monitor_not_accepted
+t_g3_9_issue_rule_expected_plus_cron_red
 
 echo "=== $pass passed, $fail failed ==="
 
@@ -1251,6 +1331,22 @@ echo "=== $pass passed, $fail failed ==="
 # Delete an assertion body and keep the `pass` accounting and this floor is what
 # notices. It counts EXECUTED tests, so a commented-out dispatch line reds here
 # even though every remaining test is green.
+#
+# Harness row (b): the floor below reads counters that ONLY `_report` moves, so
+# it backstops the very helper it depends on. Drive both of `_report`'s paths
+# once with the counters snapshotted, check each moved by exactly one, then
+# unwind. Emitted with printf + exit DIRECTLY — routing this through `_report`
+# would dispatch the detector through the thing it detects (the pattern in
+# apps/web-platform/scripts/sentry-monitors-audit.test.sh and the defect class
+# scripts/guard-vacuity-floor.test.sh exists for).
+_h_p=$pass; _h_f=$fail
+{ _report "harness self-test (unwound)" ok; _report "harness self-test (unwound)" fail; } >/dev/null 2>&1
+if [[ "$pass" -ne $((_h_p + 1)) || "$fail" -ne $((_h_f + 1)) ]]; then
+  printf 'FATAL: _report cannot conclude — pass %s->%s (want +1), fail %s->%s (want +1).\n' \
+    "$_h_p" "$pass" "$_h_f" "$fail" >&2
+  exit 1
+fi
+pass=$_h_p; fail=$_h_f
 ran=$((pass + fail))
 if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
   echo "[FAIL] harness: ran $ran test(s), expected $EXPECTED_TESTS — a suite that silently stops running its assertions reports green" >&2

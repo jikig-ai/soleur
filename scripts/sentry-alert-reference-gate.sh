@@ -62,7 +62,9 @@ fi
 
 # ── Floor 1: the plan projects. Any jq `error` (not a plan/state document, a
 # child module, an unknown leaf, an excluded trigger, an unmapped action kind,
-# a duplicate name, a sensitive leaf) reaches here as exit 5 with jq's message.
+# a duplicate name, a sensitive leaf, a `monitor_ids` element unknown at plan
+# time — a detector id that does not exist yet) reaches here as exit 5 with
+# jq's message.
 # rc captured on its OWN LINE; `$(...) || …` would test the substitution, and
 # a `| head` would report head's status.
 # Per-invocation `mktemp`: a fixed name in a shared TMPDIR loses the message when
@@ -161,10 +163,20 @@ if [[ "$rc" -ne 0 || -z "$diff_report" ]]; then
 fi
 sed 's/^/  /' <<<"$diff_report" >&2
 
-# A detectorIds-only divergence is the issue-stream detector id moving, not an
-# authoring error — the monitor-binding gate owns that invariant.
+# A detectorIds-only divergence is not an authoring error, and WHICH rule moved
+# decides what it means. On `cron-monitor-failure` it is the cron ROUTING SET
+# changing — a monitor routed or unrouted under the README two-PR rule, or
+# recreated with a new detector id. On any other rule it is the issue-stream
+# detector id moving — the monitor-binding gate owns that invariant. Branch on
+# the rule NAME (the `tojson`-rendered prefix of each leaf line); a diff that
+# touches both prints both hints.
 if ! grep -vE '\.detectorIds(\.[0-9]+)?: ' <<<"$diff_report" | grep -q .; then
-  echo "::error::Hint: the ONLY differing leaf is detectorIds — the issue-stream detector id moved (see scripts/sentry-monitor-binding-gate.sh); this is not an authoring error, but the reference still needs regenerating." >&2
+  if grep -qE '^"cron-monitor-failure"\.detectorIds' <<<"$diff_report"; then
+    echo "::error::Hint: the ONLY differing leaf is detectorIds of \"cron-monitor-failure\" — the cron routing set changed (a sentry_cron_monitor was routed or unrouted, or recreated with a new detector id; see the two-PR rule in apps/web-platform/infra/sentry/README.md). This is not an authoring error: regenerate alert-reference.json from this run's sentry-alert-reference-expected-<run-id> CI artifact and commit it in this PR." >&2
+  fi
+  if grep -vE '^"cron-monitor-failure"\.' <<<"$diff_report" | grep -q .; then
+    echo "::error::Hint: the ONLY differing leaf is detectorIds — the issue-stream detector id moved (see scripts/sentry-monitor-binding-gate.sh); this is not an authoring error, but the reference still needs regenerating." >&2
+  fi
 fi
 
 echo "::error::Regenerate (needs the Doppler prd_terraform triplet): ${REGEN_CMD}   (the plan.json is \`terraform show -json <tfplan>\` of the FULL Sentry root; recipe in apps/web-platform/infra/sentry/README.md §Drift detection). Commit the result in this PR." >&2

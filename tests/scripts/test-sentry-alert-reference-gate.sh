@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$REPO_ROOT/scripts/sentry-alert-reference-gate.sh"
 PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 pass=0; fail=0
-EXPECTED_TESTS=42
+EXPECTED_TESTS=45
 
 # A sandbox harness inherits the bare 4 GiB /tmp tmpfs on a direct invocation;
 # every other runner in this repo defaults TMPDIR to /var/tmp. Match them.
@@ -329,6 +329,38 @@ t_detector_hint() {
   _red "D1 a detectorIds-only divergence carries the monitor-binding hint" \
     "$PLAN" "$(_mut_ref d1 'with_entries(.value.detectorIds = ["9999"])')" \
     "issue-stream detector id moved"
+  # The cron branch's text must not ride along on an issue-stream-only diff.
+  if grep -qF 'the cron routing set changed' <<<"$_out"; then
+    _report "D1b the cron-routing hint is absent on a non-cron detectorIds diff" fail "cron hint printed for two-trigger/single-trigger"
+  else
+    _report "D1b the cron-routing hint is absent on a non-cron detectorIds diff" ok
+  fi
+}
+# D2 — a detectorIds-only divergence on `cron-monitor-failure` is the cron
+# ROUTING SET moving (a monitor routed/unrouted per the README two-PR rule, or
+# recreated with a new id), not the issue-stream detector. Its hint names the
+# cron remedy, and the issue-stream hint must not be printed for it.
+RULE_C=$(_rule cron_monitor_failure "cron-monitor-failure" "$TC_B" "$AF_B" \
+  | jq -c '.values.monitor_ids = ["400001", "400002"] | .sensitive_values.monitor_ids = [false, false]')
+PLAN_C="$TMPD/plan-cron.json"
+_plan_doc "$(jq -n --argjson a "$RULE_A" --argjson b "$RULE_B" --argjson c "$RULE_C" '[$a,$b,$c]')" > "$PLAN_C"
+REF_C="$TMPD/reference-cron.json"
+jq -S --arg side tf -f "$PROJ" "$PLAN_C" > "$REF_C" 2>"$TMPD/refc.err" \
+  || { echo "ERROR: the tf projection of the cron plan failed: $(cat "$TMPD/refc.err")" >&2; exit 1; }
+t_detector_hint_cron() {
+  local ref
+  ref=$(_mut "$REF_C" d2 '.["cron-monitor-failure"].detectorIds = ["400001"]')
+  if [[ "$ref" != "JQFAIL" && "$ref" != "NOOP" ]] \
+     && ! jq -e 'has("cron-monitor-failure") and (.["cron-monitor-failure"].detectorIds == ["400001","400002"])' "$REF_C" >/dev/null; then
+    _report "D2 cron-routing hint" fail "fixture did not land: $(jq -c '.["cron-monitor-failure"] // "absent"' "$REF_C" | head -c 300)"; return
+  fi
+  _red "D2 a detectorIds-only divergence on cron-monitor-failure names the cron routing set and the CI-artifact regeneration" \
+    "$PLAN_C" "$ref" "the cron routing set changed"
+  if grep -qF 'issue-stream detector id moved' <<<"$_out"; then
+    _report "D2b the issue-stream hint is absent on a cron-only detectorIds diff" fail "issue-stream hint printed. Output: $(head -c 400 <<<"$_out")"
+  else
+    _report "D2b the issue-stream hint is absent on a cron-only detectorIds diff" ok
+  fi
 }
 t_remedy_and_expected_file() {
   local f; f=$(_mut_ref r1 '.["two-trigger"].frequency = 1')
@@ -604,6 +636,7 @@ t_show_state_passes
 t_whitespace_passes
 t_swap_values_reds
 t_detector_hint
+t_detector_hint_cron
 t_remedy_and_expected_file
 t_h2_empty_plan
 t_l1_legacy_excluded_drops
@@ -620,6 +653,20 @@ t_g2_p1_all_known_reverse_order
 t_g2_p2_live_side_equal
 
 echo "=== $pass passed, $fail failed ==="
+# Harness self-test: the floor below reads counters that ONLY `_report` moves,
+# so it backstops the helper it depends on. Drive both of `_report`'s paths once
+# with the counters snapshotted, check each moved by exactly one, then unwind.
+# printf + exit DIRECTLY — never through `_report` (the pattern in
+# apps/web-platform/scripts/sentry-monitors-audit.test.sh; the defect class
+# scripts/guard-vacuity-floor.test.sh exists for).
+_h_p=$pass; _h_f=$fail
+{ _report "harness self-test (unwound)" ok; _report "harness self-test (unwound)" fail; } >/dev/null 2>&1
+if [[ "$pass" -ne $((_h_p + 1)) || "$fail" -ne $((_h_f + 1)) ]]; then
+  printf 'FATAL: _report cannot conclude — pass %s->%s (want +1), fail %s->%s (want +1).\n' \
+    "$_h_p" "$pass" "$_h_f" "$fail" >&2
+  exit 1
+fi
+pass=$_h_p; fail=$_h_f
 ran=$((pass + fail))
 if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
   echo "[FAIL] harness: ran $ran test(s), expected $EXPECTED_TESTS — a suite that silently stops running its assertions reports green" >&2
