@@ -14,6 +14,27 @@ lane: cross-domain
 
 # docs(ci): record the 2026-09-23 founder decisions in the mattpocock/skills audit record
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24 (proportionate pass for a docs-only plan).
+
+- Every edit anchor was checked against `competitive-intelligence.md` with `grep -c -F`: each one
+  matches exactly once. The exception is `| B5 |`, which matches twice, so the B5 instruction now
+  names the reconciliation-table row explicitly.
+- AC4 was rewritten. The old "rows starting `| B4 |`" form would also have matched the dated §4
+  table's `| B4 |`/`| B10 |` rows, and those never gain "Bundled", so AC4 would have failed on a
+  correct edit.
+- Negative claims were checked:
+  - `git show --stat e5a725a5e1` touches no `go.md`.
+  - `archive-kb.sh` contains no `git commit`.
+  - No test or script reads the reconciliation section.
+  - `e5a725a5e1` is an ancestor of `origin/main`.
+- Halt gates:
+  - User-Brand Impact passes: threshold `none`, no sensitive path.
+  - Observability, Encryption, Guard, UI-wireframe and Downtime gates skip, since this is pure docs.
+  - The PAT sweep finds nothing.
+  - The only rule ID cited, `cq-cite-content-anchor-not-line-number`, is active in `AGENTS.md`.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -129,7 +150,7 @@ Tier 1 Key Takeaway 4 (anchor `The most valuable thing a Tier-1 peer can hand us
 
 ### 3. T2: issue states
 
-B5 row: its last cell `` open: `#8497` `` becomes `` closed 2026-09-23, not planned: `#8497` ``, and
+B5 row of the reconciliation table (the row starting `| B5 | Not applied.`; the §4 table has a second, dated `| B5 |` row that stays untouched): its last cell `` open: `#8497` `` becomes `` closed 2026-09-23, not planned: `#8497` ``, and
 its status cell gains this sentence at the end:
 
 ```text
@@ -314,8 +335,11 @@ Run from the worktree root. Let `CI=knowledge-base/product/competitive-intellige
 - [ ] AC3 (T3/T4 residue): each of these prints `0`:
   `grep -c 'Not bundled — remains advisory' "$CI"`, `grep -c 'B4 and B10 never filed' "$CI"`,
   `grep -c 'already covers this in more depth' "$CI"`, `grep -c 'flow map did not' "$CI"`.
-- [ ] AC4 (T3): each of the rows starting `| B4 |`, `| B10 |` and `| B12 (second half) |` contains
-  `Bundled (founder decision 2026-09-23)`, `#8647` and `e5a725a5e1`.
+- [ ] AC4 (T3): for each prefix `| B4 | Bundled (founder decision 2026-09-23)`,
+  `| B10 | Bundled (founder decision 2026-09-23)` and
+  `| B12 (second half) | Bundled (founder decision 2026-09-23)`, `grep -F "<prefix>" "$CI"` prints
+  exactly one line, and that line contains `#8647` and `e5a725a5e1`. (Scoped by prefix because the
+  dated §4 table also has `| B4 |`, `| B5 |` and `| B10 |` rows, which stay untouched.)
 - [ ] AC5 (T3): the Scope note line (`grep -F 'The audit itself filed nothing'`) and the §5 banner
   line (`grep -F 'they were filed as five bundles'`) each contain `#8647`.
 - [ ] AC6 (T4): `grep -c 'Reject — already covered by the hooks listed above.' "$CI"` prints `1`.

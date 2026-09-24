@@ -15,7 +15,8 @@ Draft PR #8648 already exists. Do not open another PR.
 - [ ] 2.1 Dating: `last_updated`, the reconciliation-intro sentence, the status column header
   (plan §1). Keep the `#### Reconciliation status (2026-09-23)` heading.
 - [ ] 2.2 T1: no change to Key Takeaway 4 (plan §2).
-- [ ] 2.3 T2: B5 row, open-issues line, `**Closed since:**` line (plan §3).
+- [ ] 2.3 T2: the reconciliation-table B5 row (starts `| B5 | Not applied.`; leave the dated §4
+  `| B5 |` row alone), open-issues line, `**Closed since:**` line (plan §3).
 - [ ] 2.4 T3: first-half narrowing of the `G1, G5, B9, B12` row; replace the B4 and B10 rows; add the
   B12 (second half) row (plan §4).
 - [ ] 2.5 T3 sibling sites: Tier 1 row span, Scope note clause, §5 banner (plan §4).
