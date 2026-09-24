@@ -607,6 +607,38 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("[2b] presence probe is left-anchored — a Bedrock-form token does not vouch for the id", () => {
+    // #8603: the CI twin (claude-cli-pin-knows-models.test.ts) rejects an id
+    // that appears only inside `us.anthropic.<id>`; the hand-run probe must
+    // agree, or the two report opposite answers for the same bundle.
+    const root = mkdtempSync(join(tmpdir(), "mlr-2b-left-"));
+    const wp = join(root, "apps/web-platform");
+    mkdirSync(join(wp, "server/inngest/leader-prompts"), { recursive: true });
+    writeFileSync(
+      join(wp, "package.json"),
+      JSON.stringify({ dependencies: { "@anthropic-ai/claude-code": "9.9.9" } }),
+    );
+    writeFileSync(
+      join(wp, "server/inngest/model-tiers.ts"),
+      `export const AUDIT_MODEL = "claude-opus-5" as const;\n`,
+    );
+    writeFileSync(
+      join(wp, "server/inngest/leader-prompts/constants.ts"),
+      `export const X = "claude-haiku-4-5-20251001" as const;\n`,
+    );
+    const pkg = join(wp, "node_modules/@anthropic-ai/claude-code-linux-x64");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ version: "9.9.9" }));
+    writeFileSync(
+      join(pkg, "cli.blob"),
+      `"us.anthropic.claude-opus-5"\0"claude-haiku-4-5-20251001"\n`,
+    );
+    const out = run([], root).stdout;
+    expect(out).toContain("DRIFT   claude-opus-5");
+    expect(out).toContain("ok      claude-haiku-4-5-20251001");
+    rmSync(root, { recursive: true, force: true });
+  });
+
   test("a BINARY file carrying a stale id is never selected or rewritten", () => {
     // Selection used `grep -rEl` with no -I, so a compiled artifact under $ROOT
     // was a legitimate hit: measured, a blob holding `claude-opus-4-7` between

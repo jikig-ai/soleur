@@ -165,7 +165,11 @@ fi
 # manifest writes to arbitrary writable locations. See review on PR #3496.
 REPO_ROOT=""
 if [[ -n "$CWD" && -d "$CWD" ]]; then
-  REPO_ROOT="$CWD"
+  # The envelope cwd may be a subdirectory (#8611); resolve its worktree root.
+  # --show-toplevel only returns a worktree root, so the refusal below still holds;
+  # the $CWD fallback keeps bare-root / non-repo cwds on their existing paths.
+  REPO_ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)"
+  REPO_ROOT="${REPO_ROOT:-$CWD}"
 elif command -v git >/dev/null 2>&1; then
   # `git-common-dir` resolves to `<bare>/.git` or `<bare>/.git/worktrees/<name>`.
   # `--show-toplevel` is the working-tree we want; only use common-dir as a
