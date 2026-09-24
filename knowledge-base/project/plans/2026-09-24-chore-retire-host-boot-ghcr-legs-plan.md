@@ -92,6 +92,39 @@ Security review of the plan (security-sentinel). Findings applied to this plan; 
 9. **P3:** `discoverability_test.expected_output` lists both values: `zot-gate-degraded` and
    `inngest_pull_fatal`.
 
+Architecture review (architecture-strategist). Findings applied:
+
+10. **P1: a zot miss darkens inngest under either template, and a revert does not fix it.** Before the
+    7.2 dispatch, prove zot serves `soleur-inngest-bootstrap:v1.1.37@sha256:<pin>`. The evidence is
+    the 2026-09-23 #8539 replace, which logged `inngest_zot` on this same pin, plus no
+    `registry-luks-recut` or restore run since (`gh run list` on those workflows). Split the rollback
+    into two cases. A script bug means revert and re-replace. A zot miss means a
+    `build-inngest-bootstrap-image.yml -f mirror_only=true` backfill and a re-replace, with no revert.
+11. **P2: rollback granularity.** A web-side failure after the inngest replace gets a forward fix. A
+    partial revert of `cloud-init.yml` must also restore the `server.tf` `templatefile()` args. Never
+    revert the whole PR once inngest runs the new template.
+12. **P2: the soak must see web boot misses.** This is the same fix as item 2: a `stage:"pull" level:fatal`
+    arm outside `FAIL_QUERIES`. #8651 closes 2026-09-25, before the soak's earliest date, so this arm
+    becomes the only web boot-path check in the gate.
+13. **P3: strict post-merge order.** The release deploy to web-1 must conclude first, then the inngest
+    replace plus `op=resume`, then web-2. Stamp each "since" anchor before its dispatch. If the release
+    deploy fails, web-1 keeps the old image and the coherence preflight refuses web-2. Fix the release
+    before replacing web-2, and never override the image pin.
+14. **P3:** In 7.7, also count the old names (`inngest_ghcr_fallback`, `app_ghcr_fallback`,
+    `app_ghcr_served`) since START once, and record that the count is 0. The renamed FAIL set cannot
+    see pre-merge events.
+15. **P3: more operator-facing text that becomes false** (P6), added to Files to Edit:
+    - `runbooks/inngest-server.md`: "Nothing is keyed on `oci-pull-ALL-LEGS-FAILED`".
+    - `ci-deploy.sh`: the `root_ghcr_auth=inline … 1d scope` block and the R25 "cloud-init bakes
+      /etc/default/soleur-ghcr-read" sentence (comments only).
+    - `ci-deploy.test.sh`: the same sentence.
+    - `inngest-bootstrap-mirror-only.test.sh`: its header.
+    - `.github/workflows/build-inngest-bootstrap-image.yml`: "build UNAFFECTED (GHCR
+      primary/break-glass)". A zot mirror gap now fails the next inngest fresh boot.
+16. **P3 (AP-021):** `zot-mirror-fallback-rate` keeps its name to keep `alert-reference.json` keys
+    stable. Its comment block and the runbook triage must say it now also pages a terminal inngest
+    boot (`inngest_pull_fatal`), which is not a fallback.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Brief / spec claim | Codebase reality (measured 2026-09-24) | Plan response |
