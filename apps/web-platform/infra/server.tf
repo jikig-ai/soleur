@@ -774,7 +774,7 @@ resource "terraform_data" "private_nic_guard_install" {
     file("${path.module}/web-private-nic-guard.timer"),
     var.web_hosts["web-1"].private_ip,
     local.betterstack_logs_ingest_url,
-    # Hash the read-scoped probe token so a rotation (rename, create_before_destroy) re-fires delivery of the new key
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery of the new key
     # into /etc/default/web-private-nic-guard. nonsensitive() on a one-way digest of the token
     # reveals nothing while keeping triggers_replace readable in plan output (#6438/#6548).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
@@ -833,7 +833,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
     file("${path.module}/web-zot-consumer-probe.timer"),
     local.registry_endpoint,
     local.zot_probe_repo,
-    # Hash the read-scoped probe token so a rotation (rename, create_before_destroy) re-fires delivery (see nic-guard).
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
   ]))
 
@@ -905,7 +905,7 @@ resource "terraform_data" "inngest_consumer_probe_install" {
     # re-deliver both halves together or the two could assert different things.
     file("${path.module}/inngest-registry-probe.sh"),
     local.inngest_private_ip,
-    # Hash the read-scoped probe token so a rotation (rename, create_before_destroy) re-fires delivery (see nic-guard).
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
   ]))
 
@@ -970,7 +970,7 @@ resource "terraform_data" "git_data_probe_install" {
     file("${path.module}/web-git-data-probe.sh"),
     file("${path.module}/web-git-data-probe.service"),
     file("${path.module}/web-git-data-probe.timer"),
-    # Hash the read-scoped probe token so a rotation (rename, create_before_destroy) re-fires delivery (see nic-guard).
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
   ]))
 
