@@ -22,6 +22,9 @@
 # Args:  $1 = extracted seed dir (contains the baked host-scripts).
 # Env:   WEBHOOK_DEPLOY_SECRET (injected into the baked hooks.json.tmpl at boot).
 set -e
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 SEED="$1"
 STAGE=install
@@ -201,86 +204,6 @@ systemd-tmpfiles --create --prefix /var/log/journal
 systemctl restart systemd-journald
 journalctl --flush
 
-# #6005: authenticate the host docker daemon to the now-PRIVATE GHCR packages so the
-# fresh-boot inngest-bootstrap `docker pull` (later in cloud-init runcmd) succeeds. Lives
-# HERE (baked → zero user_data cost; user_data is within ~1 KB of the 32,768-byte cap).
-# Best-effort: a missing/rotated credential must NOT poweroff the host — the subshell +
-# `|| true` keeps it clear of `set -e` + the emit_fail trap; the inngest pull is the hard
-# gate. Token fetched at boot via the ambient DOPPLER_TOKEN — NEVER templatefile-
-# interpolated (that would leak it into Hetzner metadata + cloud-init-output.log).
-STAGE=ghcr_login
-( set +e
-  . /etc/default/webhook-deploy 2>/dev/null || true
-  # Non-fatal, no-SSH CAUSE signal for a fresh-boot login failure (observability-
-  # coverage-reviewer P1). The block is deliberately OUTSIDE the emit_fail EXIT trap
-  # (a rotated credential must not poweroff the host), so a failure would otherwise
-  # only reach the SSH-only cloud-init-output.log — and Vector (Layer 3) is not yet
-  # installed at this boot stage, so journald cannot ship it either. Emit a WARNING
-  # Sentry event (tag stage=ghcr_login) directly, mirroring emit_fail's DSN parse,
-  # SCRUBBED to a classification (never the raw docker stderr / auth header).
-  ghcr_login_warn() {
-    # Routes through the shared _sentry_emit boundary (#6090) — same baked-DSN
-    # preference + fail-open subshell as emit_fail; only the body differs.
-    _sentry_emit "$(printf '{"message":"fresh-boot GHCR docker login failed","level":"warning","logger":"soleur-host-bootstrap","tags":{"feature":"supply-chain","op":"image-pull","stage":"ghcr_login","pull_result":"%s","host_id":"%s"}}' "$1" "$HOST_ID")"
-  }
-  # (#6090) Prefer the BAKED creds (cloud-init writes /etc/default/soleur-ghcr-read early in
-  # runcmd, deploy:deploy 0600) so the inngest-bootstrap + app image pulls authenticate on a
-  # cold host even when Doppler answers EMPTY at the boot instant — the same failure class the
-  # cloud-init ghcr_login (#6090) and the ci-deploy prelude (#6161) already bake against. An
-  # empty fetch here skipped docker login → anonymous inngest pull → /var/lib/inngest never
-  # created. (The old downstream "→ webhook.service 226/NAMESPACE → :9000 never binds → peer
-  # fan-out degrades" chain is SEVERED as of #6090: webhook.service now marks /var/lib/inngest
-  # `-`-optional, so an absent dir no longer wedges the unit. This baked-creds path still matters
-  # when web_colocate_inngest is ON — the inngest pull itself needs auth.) Hardened Doppler
-  # fallback (timeout 45 + 3-try retry).
-  GHCR_USER=""; GHCR_TOKEN=""
-  if [ -r /etc/default/soleur-ghcr-read ]; then
-    # shellcheck disable=SC1091
-    . /etc/default/soleur-ghcr-read 2>/dev/null || true
-    GHCR_USER="${GHCR_READ_USER:-}"; GHCR_TOKEN="${GHCR_READ_TOKEN:-}"
-    unset GHCR_READ_TOKEN   # keep the token out of this process env + its children
-  fi
-  [ -n "$GHCR_USER" ] || { n=0; until GHCR_USER=$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_USER" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
-  [ -n "$GHCR_TOKEN" ] || { n=0; until GHCR_TOKEN=$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_TOKEN" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
-  if [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ]; then
-    if printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null 2>&1; then
-      echo "soleur-host-bootstrap: docker login ghcr.io ok"
-    else
-      echo "soleur-host-bootstrap: docker login ghcr.io FAILED (private pull may fail-closed)"
-      ghcr_login_warn auth_denied
-    fi
-  else
-    echo "soleur-host-bootstrap: GHCR_READ_{USER,TOKEN} not both present — skipping docker login"
-    ghcr_login_warn credential_absent
-  fi
-  # #6122/ADR-096: ALSO authenticate to the self-hosted zot registry so the downstream
-  # cloud-init inngest-bootstrap + app pulls can prefer zot. Strict dark-launch: only when
-  # ZOT_REGISTRY_URL is present in Doppler prd (absent until the operator provisions (1.8) +
-  # backfills (1.9) → a true no-op, and an unset URL emits NO beacon so a pre-provisioning
-  # boot never pages). Same fail-open shape; the login writes a zot auths entry into the
-  # host docker config that the later pulls reuse.
-  zot_login_warn() {
-    _sentry_emit "$(printf '{"message":"fresh-boot zot docker login failed","level":"warning","logger":"soleur-host-bootstrap","tags":{"feature":"supply-chain","op":"image-pull","stage":"zot_login","pull_result":"%s","host_id":"%s"}}' "$1" "$HOST_ID")"
-  }
-  ZOT_URL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
-  if [ -n "$ZOT_URL" ]; then
-    ZOT_USER=$(timeout 15 doppler secrets get ZOT_PULL_USER --plain --project soleur --config prd 2>/dev/null || true)
-    ZOT_TOKEN=$(timeout 15 doppler secrets get ZOT_PULL_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
-    if [ -n "$ZOT_USER" ] && [ -n "$ZOT_TOKEN" ]; then
-      if printf '%s' "$ZOT_TOKEN" | docker login "$ZOT_URL" -u "$ZOT_USER" --password-stdin >/dev/null 2>&1; then
-        echo "soleur-host-bootstrap: docker login $ZOT_URL ok (zot-primary)"
-      else
-        echo "soleur-host-bootstrap: docker login $ZOT_URL FAILED (will fall back to GHCR)"
-        zot_login_warn auth_denied
-      fi
-    else
-      echo "soleur-host-bootstrap: ZOT_PULL_{USER,TOKEN} not both present — skipping zot login"
-      zot_login_warn credential_absent
-    fi
-  else
-    echo "soleur-host-bootstrap: ZOT_REGISTRY_URL unset — skipping zot login (dark)"
-  fi ) || true
-
 # Author the shared post-bootstrap Sentry emitter + readiness poller (#6090) for the
 # DOWNSTREAM cloud-init region (cloudflared → webhook → app-run), which today carries NO
 # Sentry trap at all — the deeper blind spot beyond the bootstrap block. Baked HERE (0
@@ -315,8 +238,8 @@ cat > /usr/local/bin/soleur-boot-emit <<'EMITEOF'
   #
   # There is deliberately NO fallback to the legacy single-buffer /run/soleur-stage-detail.
   # An earlier revision of this PR added one "for compatibility", which silently made all nine
-  # soleur-boot-emit stages read a SHARED buffer holding another stage's content (the ghcr
-  # login/pull errors written by cloud-init). None of those stages has a legacy producer, so the
+  # soleur-boot-emit stages read a SHARED buffer holding another stage's content (the seed
+  # pull errors written by cloud-init). None of those stages has a legacy producer, so the
   # fallback bought nothing and cost cross-stage contamination — and a plausible WRONG cause is
   # worse than an empty one. The legacy buffer and its five producers are untouched; the inline
   # `_emit` in cloud-init.yml still reads it exactly as before.
@@ -875,9 +798,15 @@ logger -t SOLEUR_FRESH_BOOT_READY "$LINE" 2>/dev/null || true
 TOKEN="${BETTERSTACK_LOGS_TOKEN:-}"
 [ -n "$TOKEN" ] || TOKEN=$(doppler secrets get BETTERSTACK_LOGS_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
 INGEST_URL="${BETTERSTACK_INGEST_URL:-}"
-if [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
-  post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+# (#7797) The bearer goes only to the one Better Stack source it belongs to (the same literal as
+# zot-registry.tf local.betterstack_logs_ingest_url). Any other value skips this channel and keeps
+# Sentry, like an unprovisioned host; the marker must never abort.
+readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
+if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
+  post() { curl --disable --noproxy '*' -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
   post || post || echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2
+elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
+  echo "[fresh-boot-ready] refusing to send the Better Stack token to an unpinned destination; Sentry only" >&2
 fi
 # (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field).
 if [ "$READY" = 1 ]; then

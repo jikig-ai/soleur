@@ -37,6 +37,16 @@ last_reviewed: 2026-09-24
 > change** (restoring a host-side pull path) *and* a credential, in that order. Minting a
 > PAT and running the steps below would take production from "zot degraded" to "no pull
 > path at all", with the deploy failing terminally at `image_pull_failed`.
+>
+> **Amendment 2026-09-24 (#8036 1d, PR #8708) — THE FRESH-BOOT PATH HAS NO GHCR LEG EITHER.**
+> 1d deleted the fresh-boot GHCR login and GHCR pull from `cloud-init.yml`,
+> `soleur-host-bootstrap.sh` and `cloud-init-inngest.yml`, and stopped passing the GHCR
+> credential into any host's `user_data`. No pull path on any host (rolling deploy or fresh
+> boot) can read GHCR. There is also **no toggle** left: fresh boots bake the zot endpoint and
+> credential at create time (#8660) and never read `ZOT_REGISTRY_URL` from Doppler. A revert to
+> GHCR now needs **code on every pull site plus a credential**, not a Doppler flag. This holds for
+> the templates at merge, and for each host once it is replaced from them (web-1 keeps its
+> first-boot `user_data` for its lifetime, but it never re-runs cloud-init).
 
 The Phase-3 pull-site migration is **dark-launch gated**: every pull site (ci-deploy.sh
 rolling deploy, soleur-host-bootstrap.sh + cloud-init.yml fresh boot) prefers the
@@ -49,6 +59,11 @@ private-GHCR path — which, per the banner above, is now a path that fails.
 > same-version local-cache rescue applies). The GHCR fallback above survives only on the fresh-boot
 > paths, where it presents a revoked credential; a fresh web boot currently fails (#8651, fix in
 > PR #8660).
+>
+> **Superseded 2026-09-24 (#8036 item 1d, PR #8708):** the fresh-boot GHCR fallback is deleted too.
+> A fresh boot pulls from zot only; a zot miss ends the boot and pages (`stage=pull` fatal on web,
+> `stage=inngest_pull_fatal` fatal on the dedicated inngest host). #8651 is fixed (PR #8660): the
+> web-2 replace in run 35951886838 booted zot-served (`stage=app_zot`, `fresh_boot_ready`).
 
 **Historical note (what this paragraph used to say).** It described revert as a safe
 Doppler flag flip because "GHCR remains dual-pushed + break-glass through the entire soak
@@ -94,6 +109,12 @@ fresh boot has never been observed, only zot-served rolling deploys (392 pulls i
 > **Addendum 2026-09-24:** the record above runs to 2026-09-22. On 2026-09-23 a web-2 replace did
 > boot fresh, and it booted dark at `stage=pull` (#8651, fix in PR #8660). So a *zot-served* web fresh
 > boot is still unobserved, and a fresh web boot is currently known to fail.
+>
+> **Addendum 2026-09-24 (#8036 1d):** superseded the same day. After PR #8660 merged
+> (2026-09-24T03:22:41Z), the web-2 replace in run 35951886838 booted zot-served
+> (`stage=app_zot`, `ghcr_login=fail`, `fresh_boot_ready`): the first observed zot-served web fresh
+> boot. The operator then re-armed the soak at `START=2026-09-24T03:22:41Z` (#6122). The table above
+> is the pre-re-arm window's record and is not part of the new window.
 
 ## What to do instead when zot is unreachable
 
@@ -228,12 +249,46 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
 > rolling path are now `registry:"zot-gate-degraded"`, `registry:"local-cache"` and
 > `image_pull_failed`. The three fresh-boot `stage:` signals are UNCHANGED — cloud-init still has
 > its GHCR fallback (that is 5.3b / #8036 1d).
+>
+> ⚠ **Superseded 2026-09-24 (#8036 1d, PR #8708): the fresh-boot signals changed too.** There is no
+> fresh-boot fallback any more, so:
+>
+> - `stage:"app_ghcr_fallback"` and `stage:"app_ghcr_served"` are **retired**: no code emits them.
+>   Zero rows is expected, not a new silence.
+> - `stage:"inngest_ghcr_fallback"` is **renamed `stage:"inngest_pull_fatal"`** and raised to
+>   **fatal**. It means the dedicated inngest host's zot pull failed and the boot **ended**: the
+>   sole scheduler is dark until zot is fixed and the host is replaced again. It is not a
+>   fallback. The gated colocated block in `cloud-init.yml` emits the same stage.
+> - A **web** fresh-boot zot miss emits `soleur-hostscript-seed failed` at `stage=pull`, fatal,
+>   paged by `web_terminal_boot_fatal`. The fatal detail reads
+>   `nic=… zot=[login=,n=,cause=] pull_err: …` (no `ghcr=[…]` field any more).
+>
+> The triage bullets below that name the three old stages are the pre-1d record; read them
+> through this note.
+
+- **Since #8036 1d (2026-09-24), a fresh-boot page is a failed boot, not a slower one.** Triage:
+  - `stage:"inngest_pull_fatal"` (paged by `zot-mirror-fallback-rate`): read the redacted pull
+    tail on the independent channel first:
+    `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep inngest_pull_fatal`.
+    Its detail is `zot miss ep=… rc=… tail=…` (or `no zot endpoint baked`). Then rule out the
+    private NIC (below), then repair zot (`apply_target=registry-host-replace`) or backfill the
+    missing tag (`build-inngest-bootstrap-image.yml -f mirror_only=true`), then run
+    `inngest-host-replace` again.
+    If the event's `host_name` is a WEB host (the colocated block, `web_colocate_inngest=true`),
+    the web app is down too: the colocated item runs in the same runcmd shell and ends it.
+  - web `stage=pull` fatal (paged by `web_terminal_boot_fatal`): the host is web-2 or a new host
+    (web-1 never re-runs cloud-init). Read `zot=[login=,n=,cause=]` in the detail:
+    `cause=auth|unreach|manifest|timeout|unpinned|other`. `unpinned` means the dispatch passed a
+    tag-only ref; fix the pin, never the registry. Every other cause is a zot or NIC fault, handled
+    as below. The replace job's `fresh-host-boot-trail.sh` summary prints the same verdict.
 
 - The **fallback-rate alarm** fires (see below). Since #6285 it pages on the **first**
   matching event, not a spike: a `stage:"inngest_ghcr_fallback"` / `stage:"app_ghcr_fallback"`
   event means a host *tried* zot and failed — that BOOT took the slower fallback path and zot is
   degraded. (The rolling-deploy member of this list, `registry:"ghcr-fallback"`, was retired with
-  the fallback itself; see the banner above.)
+  the fallback itself; see the banner above.) (**Superseded 2026-09-24, #8036 1d:** neither stage
+  is emitted any more; the inngest one is now `stage:"inngest_pull_fatal"`, a terminal boot. See
+  the bullet above.)
   > ⚠ **`stage:"app_ghcr_served"` (#6462) does NOT belong in that list — it means the opposite.**
   > Its dominant route is a `/v2/` **probe-miss**, where zot was **never attempted** and the GHCR
   > pull succeeded first try. Triaging it as "tried zot and failed" sends you down the pull path
@@ -263,6 +318,8 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
   > made #6400 look like "zot mysteriously down".
 
 - Any remaining Phase-5 retirement step (5.3b fresh-boot fallback removal) is discovered premature.
+  (**Superseded 2026-09-24:** 5.3b-i, the fresh-boot fallback removal, is done by #8036 1d. What
+  remains is 5.3b-iii (the GHCR egress allow) and 5.4 (the GHCR credential plumbing).)
   5.3a (the `ci-deploy.sh` GHCR read path) is already done and cannot be reverted by this runbook.
 
 Note: a *single* transient fresh-boot `*_ghcr_fallback` is self-healing — that host fell back to
@@ -270,6 +327,10 @@ GHCR and booted correctly, so a one-blip page is **not** by itself a reason to r
 #6285 the alarm pages on that blip **by design** (a per-group threshold above 0 is silently
 unreachable on these signals' grouping — see the resource comment), so **do not dismiss the page
 as noise**: triage it. Revert is for a *sustained* zot degradation.
+
+> **Superseded 2026-09-24 (#8036 1d): this self-healing note no longer applies to fresh boots
+> either.** A fresh-boot zot miss now ends the boot (`inngest_pull_fatal` or web `stage=pull`,
+> both fatal). There is no GHCR to heal onto.
 
 > **This self-healing note no longer extends to the rolling deploy.** Since #8036 1c there is no
 > fallback on that path, so the rolling-deploy equivalent of a "one-blip fallback" is a FAILED
@@ -282,7 +343,9 @@ the only no-SSH page gating the irreversible 5.5 PAT revoke" — was retired wit
 #8036 1c, and it had already been spent: the PAT it was gating the revoke of has been revoked
 since 2026-07-29. What the mute would now take with it is the three fresh-boot signals, which is
 reason enough to keep muting the ISSUE rather than the rule. The real fix for `probe_unreachable`
-is the zot host, not the alarm.
+is the zot host, not the alarm. (**Superseded 2026-09-24, #8036 1d:** the rule now carries one
+other signal, not three: `stage:"inngest_pull_fatal"`, a terminal inngest boot. Muting the rule
+would silence the page for a dark sole scheduler.)
 
 ## Immediate revert (≈30 s, no deploy) — unset the gate
 
@@ -323,6 +386,10 @@ Effect, with no further action:
   1d scope — so this bullet is still accurate, and it is now the ONLY one that is. The boot
   path's GHCR login uses the same PAT that has been revoked since 2026-07-29, so it fails too;
   it simply fails on a different code path.
+  (**Superseded 2026-09-24, #8036 1d:** false now. Fresh boots bake the zot endpoint and
+  credential at create time (#8660) and do not read `ZOT_REGISTRY_URL` from Doppler, and 1d
+  deleted their GHCR login and GHCR pull. Unsetting the secret does not touch a fresh boot at
+  all.)
 - **Already-running containers** are untouched (the flip only affects *pulls*, and revert
   changes nothing about a container already running).
 
@@ -355,7 +422,13 @@ condition. The fallback-rate alarm is a **real-time page** so a live zot degrada
 caught in minutes, not at the next daily sweep. It is **already live** — apply-created and
 armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at cutover:
 
-- **Signal:** five warning tags. ⚠ They are NOT all `feature:supply-chain op:image-pull` — the
+- **Signal (since #8036 1d, 2026-09-24): two tags.** `registry:"zot-gate-degraded"` (warning,
+  rolling deploy) and `stage:"inngest_pull_fatal"` (fatal, dedicated-inngest fresh boot and the
+  gated colocated block). The rule keeps the name `zot-mirror-fallback-rate` so the
+  `alert-reference.json` keys stay stable, but its second member is **not a fallback**: it is a
+  terminal boot. The list below is the pre-1d record, kept so a reader finding zero rows for a
+  retired stage finds why.
+- **Signal (pre-1d record):** five warning tags. ⚠ They are NOT all `feature:supply-chain op:image-pull` — the
   prefix split is deliberate and the earlier "all `feature:supply-chain op:image-pull`" framing
   was wrong: only the `registry:` pair carries that prefix (ci-deploy.sh's jq payload writes
   `feature`/`op`), while every `stage:` query is **bare** because neither boot-path emitter
@@ -372,14 +445,17 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
     rescue applies (ci-deploy.sh `zot_gate_degraded_event`). This catches the
     host-up-heartbeat-green-but-pull-cred-broken case the others miss.
   - `stage:"inngest_ghcr_fallback"` — a fresh-boot inngest pull attempted zot and fell back
-    (cloud-init `soleur-boot-emit`). **Bare**, no prefix.
+    (cloud-init `soleur-boot-emit`). **Bare**, no prefix. **Renamed by #8036 1d (2026-09-24)** to
+    `stage:"inngest_pull_fatal"`, level fatal: there is no fallback, and the boot ends.
   - `stage:"app_ghcr_fallback"` — same, on the fresh-boot web/app path (cloud-init `_emit`).
-    **Bare**.
+    **Bare**. **RETIRED by #8036 1d (2026-09-24):** no emit site. A web fresh-boot zot miss is now
+    the `stage=pull` fatal paged by `web_terminal_boot_fatal`.
   - `stage:"app_ghcr_served"` (#6462) — a fresh boot was served by GHCR *at all*. **Bare**, and
     the only one of the five that fires when zot was NEVER ATTEMPTED (the `/v2/` probe missed
     and the GHCR pull succeeded first try — the dominant path, previously invisible). Triage it
     by its sibling: **with** `app_ghcr_fallback` = zot tried and failed → chase the pull;
-    **without** = the probe missed → chase the probe (#6416 / #6288).
+    **without** = the probe missed → chase the probe (#6416 / #6288). **RETIRED by #8036 1d
+    (2026-09-24):** no emit site (the `/v2/` probe went in #8660, the GHCR arm in 1d).
 - **The soak gate can now FAIL for four reasons, not one** (#6462, #6500). If you are here because
   `zot-soak-6122.sh` failed, read its message before assuming a fallback occurred:
 
@@ -393,12 +469,35 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   Only the first row is a zot problem. The other two are the gate refusing to authorize an
   irreversible PAT revoke on evidence it does not have — that is the gate working.
 
+  > **Amended 2026-09-24 (#8036 1d):** the soak was re-armed at `START=2026-09-24T03:22:41Z` (the
+  > #8660 merge; operator decision on #6122) and enrolled on #6122 (earliest grade
+  > 2026-10-01T03:22:41Z). Its FAIL set is now two queries, `gate-degraded` and
+  > `inngest-pull-fatal`, so a `FAIL: N … event(s)` line means a rolling-deploy gate degrade or a
+  > terminal inngest boot, not "a host was GHCR-served". A separate arm FAILs on any web
+  > `stage:"pull" level:fatal` in the window. The soak now gates 5.6 and #6129; the PAT revoke
+  > (5.5) is already done.
+  >
+  > Verdicts added by the re-arm (read the first row of the table above as `FAIL: N watched
+  > event(s)` from now on):
+  >
+  > | Soak line | What it means | Where to go |
+  > |---|---|---|
+  > | `FAIL: N watched event(s)` | a rolling-deploy gate degrade (`gate-degraded=`) or a terminal inngest boot (`inngest-pull-fatal=`) | triage by signal, above |
+  > | `FAIL(web-pull-fatal)` | a web fresh boot failed its zot pull (`stage:"pull"` fatal) | the `stage=pull` bullet above; the event's `cause=` field |
+  > | `FAIL(retired-names)` | a pre-1d template emitted `inngest_ghcr_fallback` / `app_ghcr_*` after START — a host booted from the OLD template inside the window | find the host from the event; replace it so it boots the 1d template |
+  > | `FAIL(start-after-anchor)` | the script's default START is later than #8660's merge — the window was moved past its anchor | a code defect in the soak; restore START, never move it later to pass |
+  >
+  > A line ending `[START overridden (anchor check skipped)]` came from a manual run with
+  > `ZOT_SOAK_START` set; it is not the sweeper's verdict and is not evidence for 5.6.
+
 - **Alert rule** — `sentry_issue_alert.zot_mirror_fallback_rate`, APPLY-CREATED and live now
   (it is **not** armed at cutover; `zot-gate-degraded` emits pre-flip today). It pages on the
   **first** event matching any of the FOUR signals (five before #8036 1c):
   `registry:{"zot-gate-degraded"}` / `stage:{"inngest_ghcr_fallback", "app_ghcr_fallback",
   "app_ghcr_served"}`
-  (`event_frequency count > 0 / 1h`, `filter_match = "any"`). Fire-on-first is required, not a
+  (`event_frequency count > 0 / 1h`, `filter_match = "any"`). (**Superseded 2026-09-24, #8036 1d:**
+  TWO conditions now, `registry:{"zot-gate-degraded"}` / `stage:{"inngest_pull_fatal"}`; the
+  three `stage:` values above have no emit site.) Fire-on-first is required, not a
   preference: the count is per Sentry issue-group, and the retired `ghcr-fallback` was the member
   that minted a fresh group per deploy, so any threshold above 0 was unreachable on it (#6285).
   The threshold stays at 0 for the survivors as well — a value above 0 is fleet-shape-dependent

@@ -357,7 +357,7 @@
 "external"
 ],
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "title": "GitHub Container Registry",
 "kind": "system",
@@ -2225,7 +2225,7 @@
 "id": "1649hu1"
 },
 "kkt3st": {
-"title": "Pulls app image + baked bootstrap scripts/hooks + the cosign .sig at boot/deploy — at fresh boot from the baked endpoint + baked pull credential, zot-first for digest-pinned refs after a bounded private-NIC wait, no Doppler read and no /v2/ probe on the app-image path (#8651; the earlier Doppler-gated form was tokenless and never selected zot, #6985); the SAME @sha256 digest dual-pushed from CI; verify is offline against the unchanged pinned root, no live sigstore call (ADR-096, #6122). NO LONGER 'zot-primary' ON THE DEPLOY PATH — SOLE, since #8036 1c (2026-09-23): the deploy path's private-package `hetzner -> ghcr` fallback is deleted, so when this edge does not serve a deploy there is no second registry to attempt (the fresh-boot seed pull keeps a login-gated GHCR leg, #8036 1d, which cannot authenticate while the PAT is revoked). A deploy whose zot pull fails now has exactly one tier left (the #6512 local-cache reload, which rescues ONLY a same-version reload of the RUNNING image) and then ends image_pull_failed with the old container live. Read the earlier 'zot-primary' framing as retired, not as a synonym: it implied a secondary that has not been able to authenticate since 2026-07-29 and no longer exists in code. The bounded transient retry (#6525) moved onto THIS edge in the same change — it used to live inside the deleted GHCR leg",
+"title": "Pulls app image + baked bootstrap scripts/hooks + the cosign .sig (verified on the deploy path only) — at fresh boot from the baked endpoint + baked pull credential, zot-only for digest-pinned (integrity) refs after a bounded private-NIC wait (a tag-only ref is never sent to zot and fails the boot as cause=unpinned), no Doppler read and no /v2/ probe on the app-image path (#8651; the earlier Doppler-gated form was tokenless and never selected zot, #6985); the SAME @sha256 digest dual-pushed from CI; verify is offline against the unchanged pinned root, no live sigstore call (ADR-096, #6122). NO LONGER 'zot-primary' ON THE DEPLOY PATH — SOLE, since #8036 1c (2026-09-23): the deploy path's private-package `hetzner -> ghcr` fallback is deleted, so when this edge does not serve a deploy there is no second registry to attempt. SOLE AT FRESH BOOT TOO since #8036 1d (2026-09-24): the seed pull's login-gated GHCR leg is deleted, so a zot miss ends the boot with the stage=pull fatal (paged by web_terminal_boot_fatal). A deploy whose zot pull fails now has exactly one tier left (the #6512 local-cache reload, which rescues ONLY a same-version reload of the RUNNING image) and then ends image_pull_failed with the old container live. Read the earlier 'zot-primary' framing as retired, not as a synonym: it implied a secondary that has not been able to authenticate since 2026-07-29 and no longer exists in code. The bounded transient retry (#6525) moved onto THIS edge in the same change — it used to live inside the deleted GHCR leg",
 "technology": "Docker/zot (private-net, plain-HTTP + insecure-registries)",
 "source": {
 "model": "platform.infra.hetzner"
@@ -2236,7 +2236,7 @@
 "id": "kkt3st"
 },
 "u8apnj": {
-"title": "LIVE by design, CODE-DECLARED until a post-apply deploy logs IMAGE_VERIFY: ok (#8036; the #8037 follow-through probe grades it per host): anonymous public pull of the @sha256-pinned cosign VERIFIER IMAGE (ghcr.io/sigstore/cosign) on every deploy — pruned before each verify. It needs no credential and is a per-deploy dependency on ghcr.io availability and anonymous rate limits (ADR-087 amendment 2026-09-21). The only hetzner -> ghcr pull that can succeed since #8036 1c deleted the deploy path's private-package edge. The fresh-boot seed pull still has a login-gated private-package GHCR leg (#8036 1d, noted on the zot edge rather than drawn here); it cannot authenticate while the PAT is revoked; the 'distinct from the DEAD edge above' clause it used to carry is retired with that edge. Its anonymity is load-bearing rather than incidental: GHCR refuses an AUTHENTICATED request bearing a revoked token where it would serve the same public bytes to nobody at all, which is why this pull read `denied` (result=cosign_absent, 89 of 89 deploys) until #8036 1a isolated it, and why #8036 1c then swept the revoked entry out of the shared deploy config so nothing can re-present it",
+"title": "LIVE by design, CODE-DECLARED until a post-apply deploy logs IMAGE_VERIFY: ok (#8036; the #8037 follow-through probe grades it per host): anonymous public pull of the @sha256-pinned cosign VERIFIER IMAGE (ghcr.io/sigstore/cosign) on every deploy — pruned before each verify. It needs no credential and is a per-deploy dependency on ghcr.io availability and anonymous rate limits (ADR-087 amendment 2026-09-21). The only hetzner -> ghcr pull left: #8036 1c deleted the deploy path's private-package edge, and #8036 1d (2026-09-24) deleted the fresh-boot seed pull's login-gated private-package GHCR leg, so this edge is now the anonymous cosign-verifier pull ONLY; the 'distinct from the DEAD edge above' clause it used to carry is retired with those edges. Its anonymity is load-bearing rather than incidental: GHCR refuses an AUTHENTICATED request bearing a revoked token where it would serve the same public bytes to nobody at all, which is why this pull read `denied` (result=cosign_absent, 89 of 89 deploys) until #8036 1a isolated it, and why #8036 1c then swept the revoked entry out of the shared deploy config so nothing can re-present it",
 "technology": "Docker/HTTPS (anonymous, digest-pinned)",
 "source": {
 "model": "platform.infra.hetzner"
@@ -2477,7 +2477,7 @@
 "id": "p2r228"
 },
 "z8snp0": {
-"title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot / inngest_ghcr_fallback, host_name soleur-inngest) and the private-NIC boot outcome (stage family private_nic_*, #8539) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
+"title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot at info / inngest_pull_fatal at fatal — a zot miss that ENDS the boot, renamed from inngest_ghcr_fallback by #8036 1d because no GHCR fallback exists — host_name soleur-inngest) and the private-NIC boot outcome (stage family private_nic_*, #8539) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
 "technology": "HTTPS (Sentry store API, X-Sentry-Auth sentry_version=7)",
 "source": {
 "model": "platform.infra.inngest"
@@ -2587,7 +2587,7 @@
 "id": "1je5rna"
 },
 "1nxthmo": {
-"title": "Writes GHCR_READ_TOKEN (1h scoped, prd_ghcr) (ADR-088). NOTE THE CONSUMER GAP since #8036 1c (2026-09-23): ci-deploy.sh no longer reads GHCR_READ_USER/GHCR_READ_TOKEN at all, so the DEPLOY-path consumer of this write is gone. The remaining consumer is cloud-init's fresh-boot root `ghcr_login`, which is 1d scope. This minter is ALSO disabled in production (GHCR_MINTER_DISABLED=true), so the edge is declared-but-inert on both ends — recorded here rather than deleted because the resource still exists and the two facts have different remedies",
+"title": "Writes GHCR_READ_TOKEN (1h scoped, prd_ghcr) (ADR-088). NOTE THE CONSUMER GAP since #8036 1c (2026-09-23): ci-deploy.sh no longer reads GHCR_READ_USER/GHCR_READ_TOKEN at all, so the DEPLOY-path consumer of this write is gone. Since #8036 1d (2026-09-24) NO HOST CONSUMER remains either: the fresh-boot root `ghcr_login` sites are deleted and no templatefile() passes the credential to a host. The write stays declared-but-inert until ADR-096 5.4 retires the minter, the doppler_secret pair and the variables. This minter is ALSO disabled in production (GHCR_MINTER_DISABLED=true), so the edge is declared-but-inert on both ends — recorded here rather than deleted because the resource still exists and the two facts have different remedies",
 "technology": "HTTPS (Doppler REST API)",
 "source": {
 "model": "platform.infra.inngest"
@@ -4040,7 +4040,7 @@
 "size": "md"
 },
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "tags": [
 "external"
@@ -8646,7 +8646,7 @@
 "size": "md"
 },
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "tags": [
 "external"
@@ -14121,7 +14121,7 @@
 "size": "md"
 },
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "tags": [
 "external"
@@ -15301,19 +15301,19 @@
 1542
 ],
 [
-6297,
+6295,
 1622
 ],
 [
-6414,
+6411,
 1648
 ],
 [
-6884,
+6880,
 1683
 ],
 [
-7000,
+6996,
 1691
 ],
 [
@@ -20509,7 +20509,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) and the \nprivate-NIC boot outcome (stage family \nprivate_nic_*, #8539) POSTed to the ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss that ENDS the \nboot, renamed from inngest_ghcr_fallback \nby #8036 1d because no GHCR fallback ",
 "points": [
 [
 2092,
@@ -20540,23 +20540,23 @@
 1572
 ],
 [
-6738,
+6736,
 1598
 ],
 [
-6782,
+6780,
 1657
 ],
 [
-6995,
+6991,
 1683
 ],
 [
-7897,
-1794
+7893,
+1795
 ],
 [
-10177,
+10176,
 1669
 ],
 [
@@ -20577,9 +20577,9 @@
 ]
 ],
 "labelBBox": {
-"x": 6996,
+"x": 6992,
 "y": 1572,
-"width": 261,
+"width": 265,
 "height": 106
 },
 "parent": null,
@@ -27918,7 +27918,7 @@
 "size": "md"
 },
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "tags": [
 "external"
@@ -31476,7 +31476,7 @@
 "size": "md"
 },
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "tags": [
 "external"
@@ -37188,12 +37188,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__github",
-"x": 1072,
+"x": 1071,
 "y": 871,
 "width": 353,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 27,
 "width": 317,
 "height": 120
@@ -37229,12 +37229,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__doppler",
-"x": 3765,
+"x": 3764,
 "y": 1723,
 "width": 345,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 54,
 "width": 309,
 "height": 65
@@ -37270,12 +37270,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 5005,
+"x": 5004,
 "y": 1723,
 "width": 388,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
 "width": 352,
 "height": 119
@@ -37311,12 +37311,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_webapp",
-"x": 414,
+"x": 413,
 "y": 0,
 "width": 320,
 "height": 180,
 "labelBBox": {
-"x": 31,
+"x": 32,
 "y": 54,
 "width": 257,
 "height": 66
@@ -37353,12 +37353,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_engine",
-"x": 642,
+"x": 641,
 "y": 871,
 "width": 320,
 "height": 180,
 "labelBBox": {
-"x": 25,
+"x": 26,
 "y": 54,
 "width": 269,
 "height": 66
@@ -37434,7 +37434,7 @@
 "notation": "System",
 "kind": "system",
 "depth": 1,
-"x": 1466,
+"x": 1465,
 "y": 358,
 "width": 2259,
 "height": 1595,
@@ -37475,12 +37475,12 @@
 "technology": "cloudflared (ONE tunnel; ONE connector live in prod: web-1 — the fsn1 web-2 was retired 2026-07-17 (#6538/#6463); the cattle web-2 born 2026-07-27 (#6969) runs no connector. The web_tunnel_connector gate is construction-time only)",
 "kind": "container",
 "navigateTo": "__platform_infra_tunnel",
-"x": 2861,
+"x": 2860,
 "y": 451,
 "width": 372,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 17,
 "width": 337,
 "height": 139
@@ -37512,12 +37512,12 @@
 "technology": "Supabase (inbox_item, mig 122)",
 "kind": "database",
 "navigateTo": "__platform_infra_operationalInbox",
-"x": 1506,
+"x": 1505,
 "y": 441,
 "width": 336,
 "height": 200,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
 "width": 301,
 "height": 139
@@ -37549,12 +37549,12 @@
 "technology": "Supabase (beta_contacts, interview_notes, beta_contact_stage_transitions, beta_contact_access_log; mig 126 + 127)",
 "kind": "database",
 "navigateTo": "__platform_infra_crmStore",
-"x": 1953,
+"x": 1952,
 "y": 441,
 "width": 330,
 "height": 200,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
 "width": 295,
 "height": 139
@@ -37586,12 +37586,12 @@
 "technology": "Self-hosted Redis — TLS, EU (Phase 4a)",
 "kind": "database",
 "navigateTo": "__platform_infra_sessionStore",
-"x": 2394,
+"x": 2393,
 "y": 441,
 "width": 356,
 "height": 200,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
 "width": 321,
 "height": 139
@@ -37622,12 +37622,12 @@
 "technology": "Nomad (Phase 4a)",
 "kind": "container",
 "navigateTo": "__platform_infra_scheduler",
-"x": 3343,
+"x": 3342,
 "y": 451,
 "width": 341,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 35,
 "width": 305,
 "height": 103
@@ -37661,7 +37661,7 @@
 "technology": "Node — co-located sticky reverse-proxy",
 "kind": "container",
 "navigateTo": "__platform_infra_coordinator",
-"x": 2382,
+"x": 2381,
 "y": 871,
 "width": 356,
 "height": 180,
@@ -37711,12 +37711,12 @@
 "technology": "Hetzner Cloud",
 "kind": "container",
 "navigateTo": "__platform_infra_hetzner",
-"x": 2875,
+"x": 2874,
 "y": 871,
 "width": 346,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 18,
 "width": 311,
 "height": 139
@@ -37747,12 +37747,12 @@
 "technology": "Hetzner Cloud block volume — guest-side LUKS2, mounted /mnt/data via /dev/mapper/workspaces, bind-mounted into the app container as /workspaces",
 "kind": "database",
 "navigateTo": "__platform_infra_workspacesVolume",
-"x": 2866,
+"x": 2865,
 "y": 1282,
 "width": 363,
 "height": 200,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 27,
 "width": 327,
 "height": 139
@@ -37795,12 +37795,12 @@
 "technology": "Dedicated Hetzner host, private-net 10.0.1.40:8288/:8289",
 "kind": "container",
 "navigateTo": "__platform_infra_inngest",
-"x": 1966,
+"x": 1965,
 "y": 1292,
 "width": 346,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 17,
 "width": 311,
 "height": 139
@@ -37837,12 +37837,12 @@
 "technology": "Bare git repos over private net",
 "kind": "database",
 "navigateTo": "__platform_infra_gitDataStore",
-"x": 2422,
+"x": 2421,
 "y": 1282,
 "width": 333,
 "height": 200,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 27,
 "width": 297,
 "height": 139
@@ -37874,7 +37874,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cloudflare",
-"x": 5933,
+"x": 5932,
 "y": 1292,
 "width": 331,
 "height": 180,
@@ -37912,12 +37912,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__zotRegistry",
-"x": 6375,
+"x": 6374,
 "y": 1292,
 "width": 354,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
 "width": 318,
 "height": 119
@@ -37951,12 +37951,12 @@
 "technology": "PostgreSQL",
 "kind": "database",
 "navigateTo": "__platform_infra_supabase",
-"x": 1506,
+"x": 1505,
 "y": 1723,
 "width": 356,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 44,
 "width": 321,
 "height": 85
@@ -37987,12 +37987,12 @@
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
 "navigateTo": "__platform_infra_inngestPostgres",
-"x": 1972,
+"x": 1971,
 "y": 1713,
 "width": 335,
 "height": 200,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 27,
 "width": 299,
 "height": 139
@@ -38023,12 +38023,12 @@
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "kind": "container",
 "navigateTo": "__platform_infra_inngestRedis",
-"x": 2418,
+"x": 2417,
 "y": 1723,
 "width": 366,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 17,
 "width": 331,
 "height": 139
@@ -38053,7 +38053,7 @@
 "size": "md"
 },
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "tags": [
 "external"
@@ -38061,12 +38061,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__ghcr",
-"x": 4432,
+"x": 4431,
 "y": 1723,
 "width": 356,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
 "width": 321,
 "height": 119
@@ -38100,12 +38100,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sentry",
-"x": 880,
+"x": 875,
 "y": 1723,
 "width": 325,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 27,
 "width": 289,
 "height": 119
@@ -38124,7 +38124,7 @@
 877
 ],
 [
-1430,
+1429,
 875
 ],
 [
@@ -38132,7 +38132,7 @@
 873
 ],
 [
-1439,
+1438,
 871
 ],
 [
@@ -38140,11 +38140,11 @@
 837
 ],
 [
-1567,
+1566,
 864
 ],
 [
-1648,
+1647,
 811
 ],
 [
@@ -38160,7 +38160,7 @@
 701
 ],
 [
-1952,
+1951,
 595
 ],
 [
@@ -38168,7 +38168,7 @@
 693
 ],
 [
-2805,
+2804,
 641
 ],
 [
@@ -38180,7 +38180,7 @@
 633
 ],
 [
-2851,
+2850,
 628
 ]
 ],
@@ -38218,11 +38218,11 @@
 1050
 ],
 [
-1439,
+1438,
 1051
 ],
 [
-1732,
+1731,
 1156
 ],
 [
@@ -38242,7 +38242,7 @@
 1245
 ],
 [
-2367,
+2366,
 1282
 ],
 [
@@ -38250,11 +38250,11 @@
 1287
 ],
 [
-2397,
+2396,
 1293
 ],
 [
-2412,
+2411,
 1298
 ]
 ],
@@ -38284,7 +38284,7 @@
 1767
 ],
 [
-4191,
+4190,
 1748
 ],
 [
@@ -38292,11 +38292,11 @@
 1727
 ],
 [
-4377,
+4376,
 1712
 ],
 [
-4936,
+4935,
 1623
 ],
 [
@@ -38304,15 +38304,15 @@
 1734
 ],
 [
-5011,
+5010,
 1542
 ],
 [
-4919,
+4918,
 1441
 ],
 [
-4531,
+4530,
 1514
 ],
 [
@@ -38362,11 +38362,11 @@
 1719
 ],
 [
-3762,
+3761,
 1715
 ],
 [
-3752,
+3751,
 1712
 ],
 [
@@ -38390,7 +38390,7 @@
 1576
 ],
 [
-2623,
+2622,
 1542
 ],
 [
@@ -38402,7 +38402,7 @@
 1519
 ],
 [
-2367,
+2366,
 1482
 ],
 [
@@ -38448,11 +38448,11 @@
 1607
 ],
 [
-5296,
+5295,
 1404
 ],
 [
-5191,
+5190,
 1282
 ],
 [
@@ -38490,7 +38490,7 @@
 "label": "Auth and data",
 "points": [
 [
-414,
+413,
 163
 ],
 [
@@ -38498,11 +38498,11 @@
 208
 ],
 [
-239,
+238,
 273
 ],
 [
-183,
+182,
 358
 ],
 [
@@ -38511,7 +38511,7 @@
 ],
 [
 -58,
-761
+760
 ],
 [
 57,
@@ -38519,39 +38519,39 @@
 ],
 [
 154,
-1296
+1295
 ],
 [
-249,
+247,
 1330
 ],
 [
-464,
+461,
 1482
 ],
 [
-765,
+761,
 1695
 ],
 [
-898,
+895,
 1644
 ],
 [
-1261,
+1256,
 1712
 ],
 [
-1337,
+1335,
 1727
 ],
 [
-1421,
+1420,
 1746
 ],
 [
 1494,
-1763
+1764
 ]
 ],
 "labelBBox": {
@@ -38628,7 +38628,7 @@
 158
 ],
 [
-1897,
+1896,
 358
 ],
 [
@@ -38670,15 +38670,15 @@
 180
 ],
 [
-496,
+495,
 361
 ],
 [
-410,
+409,
 777
 ],
 [
-587,
+586,
 1051
 ],
 [
@@ -38690,7 +38690,7 @@
 1179
 ],
 [
-813,
+812,
 1222
 ],
 [
@@ -38702,7 +38702,7 @@
 1218
 ],
 [
-1938,
+1937,
 1282
 ],
 [
@@ -38710,7 +38710,7 @@
 1284
 ],
 [
-1953,
+1952,
 1286
 ],
 [
@@ -38752,7 +38752,7 @@
 154
 ],
 [
-2145,
+2144,
 240
 ],
 [
@@ -38790,39 +38790,39 @@
 "label": "Sessions and encrypted keys",
 "points": [
 [
-793,
+792,
 1051
 ],
 [
-783,
-1201
+781,
+1200
 ],
 [
-789,
-1501
+784,
+1500
 ],
 [
-963,
+957,
 1652
 ],
 [
-1064,
-1741
+1059,
+1742
 ],
 [
-1129,
+1124,
 1684
 ],
 [
-1261,
+1256,
 1712
 ],
 [
-1337,
+1334,
 1729
 ],
 [
-1421,
+1420,
 1749
 ],
 [
@@ -38831,7 +38831,7 @@
 ]
 ],
 "labelBBox": {
-"x": 847,
+"x": 844,
 "y": 1360,
 "width": 186,
 "height": 39
@@ -38907,7 +38907,7 @@
 872
 ],
 [
-936,
+935,
 852
 ],
 [
@@ -38915,15 +38915,15 @@
 832
 ],
 [
-979,
+978,
 811
 ],
 [
-1024,
+1023,
 766
 ],
 [
-1014,
+1013,
 730
 ],
 [
@@ -38939,7 +38939,7 @@
 686
 ],
 [
-1897,
+1896,
 641
 ],
 [
@@ -38947,11 +38947,11 @@
 637
 ],
 [
-1927,
+1926,
 633
 ],
 [
-1942,
+1941,
 627
 ]
 ],
@@ -39001,7 +39001,7 @@
 1245
 ],
 [
-2367,
+2366,
 1282
 ],
 [
@@ -39051,7 +39051,7 @@
 877
 ],
 [
-1017,
+1016,
 871
 ],
 [
@@ -39063,11 +39063,11 @@
 888
 ],
 [
-1352,
+1351,
 811
 ],
 [
-1407,
+1406,
 779
 ],
 [
@@ -39087,7 +39087,7 @@
 687
 ],
 [
-2338,
+2337,
 641
 ],
 [
@@ -39175,7 +39175,7 @@
 "label": "Reads worktree lease",
 "points": [
 [
-2382,
+2381,
 1045
 ],
 [
@@ -39187,7 +39187,7 @@
 1168
 ],
 [
-1958,
+1957,
 1222
 ],
 [
@@ -39203,7 +39203,7 @@
 1282
 ],
 [
-1742,
+1741,
 1314
 ],
 [
@@ -39283,11 +39283,11 @@
 627
 ],
 [
-2823,
+2822,
 634
 ],
 [
-2805,
+2804,
 641
 ],
 [
@@ -39399,24 +39399,24 @@
 "label": "Stores every user's checked-out \nrepository. Mounted at /mnt/data and \nbind-mounted into the app container as \n/workspaces (cloud-init.yml). The app \ncontainer is the SOLE writer, which is ",
 "points": [
 [
-3048,
+3047,
 1051
 ],
 [
-3048,
+3047,
 1115
 ],
 [
-3048,
+3047,
 1202
 ],
 [
-3048,
+3047,
 1271
 ]
 ],
 "labelBBox": {
-"x": 3049,
+"x": 3048,
 "y": 1111,
 "width": 247,
 "height": 106
@@ -39449,7 +39449,7 @@
 1043
 ],
 [
-2793,
+2792,
 1051
 ],
 [
@@ -39461,7 +39461,7 @@
 1076
 ],
 [
-2606,
+2605,
 1111
 ],
 [
@@ -39473,12 +39473,12 @@
 1230
 ],
 [
-2284,
+2283,
 1286
 ]
 ],
 "labelBBox": {
-"x": 2607,
+"x": 2606,
 "y": 1154,
 "width": 25,
 "height": 18
@@ -39503,7 +39503,7 @@
 1024
 ],
 [
-2828,
+2827,
 1047
 ],
 [
@@ -39557,11 +39557,11 @@
 688
 ],
 [
-3404,
+3403,
 761
 ],
 [
-3349,
+3348,
 811
 ],
 [
@@ -39631,7 +39631,7 @@
 1668
 ],
 [
-2120,
+2119,
 1685
 ],
 [
@@ -39661,7 +39661,7 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-2259,
+2258,
 1472
 ],
 [
@@ -39673,7 +39673,7 @@
 1518
 ],
 [
-2339,
+2338,
 1542
 ],
 [
@@ -39681,7 +39681,7 @@
 1587
 ],
 [
-2387,
+2386,
 1606
 ],
 [
@@ -39731,11 +39731,11 @@
 630
 ],
 [
-3270,
+3269,
 636
 ],
 [
-3288,
+3287,
 641
 ],
 [
@@ -39747,11 +39747,11 @@
 622
 ],
 [
-6492,
+6491,
 1111
 ],
 [
-6538,
+6537,
 1154
 ],
 [
@@ -39759,7 +39759,7 @@
 1224
 ],
 [
-6556,
+6555,
 1282
 ]
 ],
@@ -39797,7 +39797,7 @@
 992
 ],
 [
-5879,
+5878,
 1111
 ],
 [
@@ -39847,7 +39847,7 @@
 1019
 ],
 [
-4696,
+4695,
 1282
 ],
 [
@@ -39871,7 +39871,7 @@
 1459
 ],
 [
-5121,
+5120,
 1542
 ],
 [
@@ -39879,11 +39879,11 @@
 1581
 ],
 [
-5150,
+5149,
 1613
 ],
 [
-5121,
+5120,
 1652
 ],
 [
@@ -39933,7 +39933,7 @@
 979
 ],
 [
-6309,
+6308,
 1111
 ],
 [
@@ -39971,7 +39971,7 @@
 "label": "[...]",
 "points": [
 [
-3221,
+3220,
 971
 ],
 [
@@ -39983,7 +39983,7 @@
 1097
 ],
 [
-5558,
+5557,
 1282
 ],
 [
@@ -39995,7 +39995,7 @@
 1608
 ],
 [
-5341,
+5340,
 1716
 ]
 ],
@@ -40033,7 +40033,7 @@
 1046
 ],
 [
-2793,
+2792,
 1051
 ],
 [
@@ -40045,7 +40045,7 @@
 1015
 ],
 [
-1606,
+1605,
 1111
 ],
 [
@@ -40057,7 +40057,7 @@
 1193
 ],
 [
-1475,
+1474,
 1222
 ],
 [
@@ -40065,28 +40065,28 @@
 1261
 ],
 [
-605,
+603,
 1205
 ],
 [
-533,
+531,
 1282
 ],
 [
-381,
+380,
 1443
 ],
 [
-670,
+666,
 1629
 ],
 [
-871,
+867,
 1732
 ]
 ],
 "labelBBox": {
-"x": 534,
+"x": 532,
 "y": 1326,
 "width": 237,
 "height": 107
@@ -40131,11 +40131,11 @@
 800
 ],
 [
-1017,
+1016,
 871
 ],
 [
-1002,
+1001,
 875
 ],
 [
@@ -40181,7 +40181,7 @@
 1289
 ],
 [
-1877,
+1876,
 1282
 ],
 [
@@ -40197,11 +40197,11 @@
 1222
 ],
 [
-1279,
+1278,
 1183
 ],
 [
-1260,
+1259,
 1117
 ],
 [
@@ -40243,7 +40243,7 @@
 1477
 ],
 [
-2367,
+2366,
 1482
 ],
 [
@@ -40255,7 +40255,7 @@
 1413
 ],
 [
-2985,
+2984,
 1542
 ],
 [
@@ -40271,7 +40271,7 @@
 1652
 ],
 [
-3344,
+3343,
 1792
 ],
 [
@@ -40279,7 +40279,7 @@
 1627
 ],
 [
-3752,
+3751,
 1712
 ],
 [
@@ -40287,7 +40287,7 @@
 1714
 ],
 [
-3765,
+3764,
 1717
 ],
 [
@@ -40329,7 +40329,7 @@
 1478
 ],
 [
-2367,
+2366,
 1482
 ],
 [
@@ -40341,7 +40341,7 @@
 1434
 ],
 [
-3426,
+3425,
 1542
 ],
 [
@@ -40353,11 +40353,11 @@
 1623
 ],
 [
-3514,
+3513,
 1652
 ],
 [
-3642,
+3641,
 1721
 ],
 [
@@ -40365,7 +40365,7 @@
 1690
 ],
 [
-4166,
+4165,
 1712
 ],
 [
@@ -40373,7 +40373,7 @@
 1726
 ],
 [
-4343,
+4342,
 1745
 ],
 [
@@ -40382,7 +40382,7 @@
 ]
 ],
 "labelBBox": {
-"x": 3515,
+"x": 3514,
 "y": 1542,
 "width": 281,
 "height": 106
@@ -40415,7 +40415,7 @@
 1478
 ],
 [
-2367,
+2366,
 1482
 ],
 [
@@ -40427,7 +40427,7 @@
 1454
 ],
 [
-4242,
+4241,
 1542
 ],
 [
@@ -40439,7 +40439,7 @@
 1622
 ],
 [
-4340,
+4339,
 1652
 ],
 [
@@ -40451,7 +40451,7 @@
 1669
 ],
 [
-4843,
+4842,
 1712
 ],
 [
@@ -40468,7 +40468,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4341,
+"x": 4340,
 "y": 1542,
 "width": 278,
 "height": 106
@@ -40486,7 +40486,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) and the \nprivate-NIC boot outcome (stage family \nprivate_nic_*, #8539) POSTed to the ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss that ENDS the \nboot, renamed from inngest_ghcr_fallback \nby #8036 1d because no GHCR fallback ",
 "points": [
 [
 1965,
@@ -40501,38 +40501,38 @@
 1476
 ],
 [
-1877,
+1876,
 1482
 ],
 [
 1783,
-1502
+1503
 ],
 [
-1086,
+1081,
 1472
 ],
 [
-1021,
+1016,
 1542
 ],
 [
-979,
+974,
 1587
 ],
 [
-985,
+981,
 1656
 ],
 [
-1002,
+997,
 1713
 ]
 ],
 "labelBBox": {
-"x": 1022,
+"x": 1017,
 "y": 1542,
-"width": 261,
+"width": 265,
 "height": 106
 },
 "parent": null,
@@ -40563,7 +40563,7 @@
 1285
 ],
 [
-1938,
+1937,
 1282
 ],
 [
@@ -40571,15 +40571,15 @@
 1208
 ],
 [
-875,
+874,
 1341
 ],
 [
-603,
+602,
 1222
 ],
 [
-332,
+331,
 1103
 ],
 [
@@ -40599,7 +40599,7 @@
 301
 ],
 [
-488,
+487,
 188
 ]
 ],
@@ -40625,11 +40625,11 @@
 "label": "Places/routes sessions (lease-keyed)",
 "points": [
 [
-2458,
+2457,
 872
 ],
 [
-2406,
+2405,
 832
 ],
 [
@@ -40649,11 +40649,11 @@
 803
 ],
 [
-1017,
+1016,
 871
 ],
 [
-1002,
+1001,
 875
 ],
 [
@@ -40666,7 +40666,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2035,
+"x": 2034,
 "y": 734,
 "width": 236,
 "height": 39
@@ -40695,11 +40695,11 @@
 1472
 ],
 [
-2793,
+2792,
 1478
 ],
 [
-2811,
+2810,
 1482
 ],
 [
@@ -40711,7 +40711,7 @@
 1477
 ],
 [
-3824,
+3823,
 1542
 ],
 [
@@ -40719,7 +40719,7 @@
 1581
 ],
 [
-3908,
+3907,
 1653
 ],
 [
@@ -40757,11 +40757,11 @@
 1472
 ],
 [
-2793,
+2792,
 1478
 ],
 [
-2811,
+2810,
 1482
 ],
 [
@@ -40773,7 +40773,7 @@
 1444
 ],
 [
-4647,
+4646,
 1542
 ],
 [
@@ -40819,11 +40819,11 @@
 1472
 ],
 [
-2385,
+2384,
 1478
 ],
 [
-2367,
+2366,
 1482
 ],
 [
@@ -40835,7 +40835,7 @@
 1420
 ],
 [
-1483,
+1482,
 1542
 ],
 [
@@ -40847,7 +40847,7 @@
 1604
 ],
 [
-1307,
+1306,
 1652
 ],
 [
@@ -40855,16 +40855,16 @@
 1674
 ],
 [
-1235,
+1234,
 1696
 ],
 [
-1200,
+1199,
 1717
 ]
 ],
 "labelBBox": {
-"x": 1484,
+"x": 1483,
 "y": 1542,
 "width": 274,
 "height": 106
@@ -51730,7 +51730,7 @@
 "size": "md"
 },
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "tags": [
 "external"
@@ -53057,7 +53057,7 @@
 "size": "md"
 },
 "description": {
-"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead (the FRESH-BOOT seed pull keeps a GHCR leg, attempted only after its baked login succeeds, which it cannot while the PAT is revoked; its retirement is #8036 1d — #8651): ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+"txt": "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now WRITE-ONLY: still dual-pushed by CI, but DEAD AS A FALLBACK since the Phase-5 retirement — the read PAT is revoked (GET api.github.com/user -> 401) and the minter is disabled (GHCR_MINTER_DISABLED=true; pull-token mint -> 403 DENIED), verified 2026-07-30 (#7071). It receives every image and can serve none of its PRIVATE packages TO HOSTS (the host pull of the PUBLIC cosign verifier image is a separate, live edge — #8036). Scope that precisely: since #7277 it demonstrably serves CI, which reads it under packages: read to re-materialise the zot store (ADR-169). The dead edge is host->GHCR, not GHCR itself. SINCE #8036 1c (2026-09-23) THE DEPLOY-PATH HOST-SIDE CODE IS DELETED, not merely dead, AND SINCE #8036 1d (2026-09-24, ADR-096 5.3b-i) THE FRESH-BOOT CODE TOO: no host presents a GHCR credential at boot — the web and inngest templates and the baked bootstrap script carry no GHCR login and no GHCR pull, and no templatefile() passes the GHCR credential into user_data (true of the templates at merge; of each host once it is replaced from them). The inngest templates keep the ghcr.io/…soleur-inngest-bootstrap tag@sha256 literal only as the bump bot's pin carrier; it is never pulled. ci-deploy.sh has no `docker login ghcr.io`, no auth-recovery re-fetch and no fallback branch, and it sweeps the revoked inline credential out of the deploy docker config on every deploy. So “dead edge” is now a statement about code that no longer exists rather than about a credential that cannot authenticate. This is STRUCTURAL, not a lapsed chore: App installation tokens authenticate docker login but are DENIED docker pull on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential can exist FOR A HOST — only a personal one. This is scoped to App installation tokens on hosts and must not be read as absolute: a CI job's GITHUB_TOKEN in this repo's context is a different credential class, and it is what ADR-169's restore path uses. Consequence: zot is the SOLE pull path and the CI zot mirror is now release-blocking (ADR-096 amendment 2026-07-30). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
 },
 "tags": [
 "external"
@@ -53333,23 +53333,23 @@
 831
 ],
 [
-397,
+396,
 761
 ],
 [
-539,
+538,
 671
 ],
 [
-603,
+602,
 650
 ],
 [
-913,
+912,
 550
 ],
 [
-1883,
+1882,
 515
 ],
 [
@@ -53358,7 +53358,7 @@
 ]
 ],
 "labelBBox": {
-"x": 604,
+"x": 603,
 "y": 684,
 "width": 142,
 "height": 39
@@ -53422,18 +53422,18 @@
 ],
 [
 1953,
-517
+516
 ],
 [
-1184,
+1183,
 551
 ],
 [
-942,
+941,
 650
 ],
 [
-848,
+847,
 689
 ],
 [
@@ -53441,12 +53441,12 @@
 763
 ],
 [
-697,
+696,
 824
 ]
 ],
 "labelBBox": {
-"x": 943,
+"x": 942,
 "y": 675,
 "width": 241,
 "height": 56
@@ -53518,35 +53518,35 @@
 "points": [
 [
 2301,
-512
+511
 ],
 [
 2030,
-530
+529
 ],
 [
-1521,
-573
+1520,
+572
 ],
 [
-1358,
+1357,
 650
 ],
 [
-1275,
+1274,
 690
 ],
 [
-1200,
+1199,
 763
 ],
 [
-1148,
+1147,
 823
 ]
 ],
 "labelBBox": {
-"x": 1359,
+"x": 1358,
 "y": 650,
 "width": 281,
 "height": 106
@@ -53568,35 +53568,35 @@
 "points": [
 [
 2301,
-510
+509
 ],
 [
-2156,
-523
+2155,
+522
 ],
 [
-1950,
-558
+1947,
+557
 ],
 [
-1793,
+1790,
 650
 ],
 [
-1722,
-693
+1719,
+692
 ],
 [
-1660,
+1659,
 764
 ],
 [
-1618,
+1617,
 822
 ]
 ],
 "labelBBox": {
-"x": 1794,
+"x": 1791,
 "y": 650,
 "width": 278,
 "height": 106
@@ -53614,41 +53614,41 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) and the \nprivate-NIC boot outcome (stage family \nprivate_nic_*, #8539) POSTed to the ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss that ENDS the \nboot, renamed from inngest_ghcr_fallback \nby #8036 1d because no GHCR fallback ",
 "points": [
 [
 2301,
-571
+568
 ],
 [
-2260,
-592
+2258,
+590
 ],
 [
-2218,
-619
+2214,
+617
 ],
 [
-2184,
+2180,
 650
 ],
 [
-2133,
+2129,
 698
 ],
 [
-2093,
+2090,
 766
 ],
 [
-2065,
+2063,
 822
 ]
 ],
 "labelBBox": {
-"x": 2185,
+"x": 2181,
 "y": 650,
-"width": 261,
+"width": 265,
 "height": 106
 },
 "parent": null,
@@ -53671,32 +53671,32 @@
 506
 ],
 [
-1768,
+1767,
 520
 ],
 [
-181,
-571
+180,
+570
 ],
 [
-106,
+105,
 650
 ],
 [
-63,
+62,
 696
 ],
 [
-78,
+77,
 765
 ],
 [
-103,
+102,
 822
 ]
 ],
 "labelBBox": {
-"x": 107,
+"x": 106,
 "y": 667,
 "width": 265,
 "height": 72
