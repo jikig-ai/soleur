@@ -37,7 +37,10 @@ is the prod-write ack; the token that can write the flag is injected only for th
    Expect `noop-unset` rows roughly every 30s. **Zero rows is a finding, not a quiet host** — either
    the host is dark or the cutover trio never installed (`inngest-bootstrap.sh` emits
    `reason=install_missing` on that path). The dispatch refuses on this condition anyway (G3), before
-   writing anything.
+   writing anything. G3 counts only rows from the **current** `soleur-inngest` server (stamped and
+   ingested after its Hetzner `created` time), so it also refuses while the Hetzner API or the HCLOUD
+   token is unavailable — see `inngest-server.md` §op=resume "G3 is a live precondition" for the
+   notice fields and the warning classes.
 
    Read the liveness from these ROWS, never from `systemctl is-active inngest-luks-cutover.service`:
    a oneshot's healthy steady state is `inactive`, so that reading answers a different question.

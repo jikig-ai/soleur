@@ -81,9 +81,54 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 ```
 
 **G3 is a live precondition, not a formality.** It requires the host to be audible on Better
-Stack, and a *freshly replaced* host is not audible until Vector is up and shipping. If `op=resume`
-refuses on G3, that is the expected ordering — wait for the host to start shipping (read it with
-`scripts/inngest-host-state.sh`) and re-dispatch.
+Stack **from the current server**: only rows stamped AND ingested after that server's Hetzner
+`created` time count, so a destroyed predecessor with the same name never satisfies it (the
+2026-09-24 replace: the old server's rows made G3 pass before the new one shipped anything —
+ADR-225 §4 amendment). A *freshly replaced* host is therefore not audible until its own Vector is up
+and shipping. If `op=resume` refuses on G3, read the run log's generation notice before acting:
+
+```
+::notice::inngest-cutover-flip liveness scoped to server soleur-inngest created <iso> (<age>s ago): rows=<R> counted=<C> host_pair=<N> pre_floor=<P> malformed=<M> skew_suspect=<K>
+```
+
+(The LUKS gate prints the same line labelled `inngest-luks-cutover liveness`.)
+
+- `rows` — decoded rows the query returned, from any host. The read keeps the newest 50 in the
+  15-minute window, so `rows=50` means the window was truncated and the older counters are lower
+  bounds.
+- `counted` — rows from the current server. G3 passes when this is above 0.
+- `host_pair` — rows matching both `host` and `host_name`, from any server generation.
+- `pre_floor` — well-formed host-pair rows that fail either clock. It **includes** `skew_suspect`,
+  so `pre_floor − skew_suspect` are the predecessor's rows.
+- `skew_suspect` above 0 — rows ingested after `created` but stamped before it: the current
+  server IS shipping and its clock is behind. It self-heals once the clock passes `created`;
+  re-dispatch then.
+- `malformed` above 0 — host-pair rows without a parseable event time or `dt`: a Vector or
+  warehouse schema change. File an issue with the run URL.
+
+When `counted=0`, the log carries at most one `::warning::` saying why, and each says **do NOT
+replace it**: `skew_suspect > 0` (check the host's NTP sync), `malformed > 0` (schema change), or a
+server under 600s old (`WAIT and re-dispatch`). **Believe it**: a replace resets `created` and the
+wait starts over. Wait for the host to start shipping (read it with `scripts/inngest-host-state.sh`)
+and re-dispatch. Only a server more than 600s old with `counted=0`, `skew_suspect=0` and
+`malformed=0` is a candidate for an `inngest-host-replace`.
+
+When G3 refuses `unreadable`, the `::warning::` above it names the read that failed: Better Stack
+(`BETTERSTACK_QUERY_*` in `prd_terraform`), the **Hetzner generation anchor**, or the local row
+filter (a jq fault — file an issue). The anchor's classes:
+
+- **re-dispatch later is enough:** rate-limited (429), Hetzner outage (5xx), transport fault, or no
+  server named `soleur-inngest` in the token's project (a replace in flight — re-dispatch once it
+  exists);
+- **re-dispatching does nothing until the cause is fixed:** the Doppler token read returned nothing,
+  the token was rejected (HTTP 401/403 — the warning names which variable was sent), or `created` is
+  out of bounds.
+
+Nothing was written in any of these cases. The anchor also prints which token it used: today that is
+the read/write `HCLOUD_TOKEN`, because `HCLOUD_TOKEN_READONLY` is not yet minted
+(`infra-credential-tiers-8209.md` step O5). The same generation scope applies to op=arm G3.7's
+liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops now also refuse
+while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback.
 
 **Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
 it. For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
@@ -1572,7 +1617,9 @@ ADR-100, amendment 2026-09-14.
      `INNGEST_CUTOVER_FLIP` at `armed`, a value **inside** the flip guard's prod-start allowlist, so a
      reboot in that ~30-60s window would start a SECOND prod scheduler. Fails closed if Better Stack
      cannot be read (G6 confirms over the same path, so an unconfirmable arm is refused rather than
-     dispatched). It is a **pre-filter, not the authority** — the on-host latch is what actually
+     dispatched), and — since the 2026-09-24 generation scope — if the Hetzner API cannot name the
+     current `soleur-inngest` server, because its liveness signal counts only that server's rows
+     (the latch count stays unscoped: a predecessor's `flip-complete` is still valid evidence). It is a **pre-filter, not the authority** — the on-host latch is what actually
      prevents a second `FLUSHALL`, and this gate can only ever ADD a refusal.
      **Remediation:** there is none while the latch stands, and `op=resume` is not it (its G1 accepts
      `done` only). The latch clears only when the store is measured empty AND the host's `/mnt/data`
