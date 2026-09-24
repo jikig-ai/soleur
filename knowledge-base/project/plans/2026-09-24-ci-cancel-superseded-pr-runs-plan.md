@@ -15,6 +15,53 @@ lane: cross-domain
 
 # ci: cancel superseded GitHub Actions runs when a PR gets new commits
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. **Sections enhanced:** Proposed Solution (script run-mode order,
+listing, classifier, dry-run), Technical Considerations, Architecture Decision, Guard Contract,
+Acceptance Criteria, Test Scenarios, Sharp Edges, and Dependencies & Risks.
+**Review inputs:**
+- deepen-plan review panel: security-sentinel, architecture-strategist, code-simplicity-reviewer.
+- Plan phase: scoped advisor consult, plus the CTO and spec-flow findings relayed by the pipeline
+  lead.
+- Live probes (gh 2.101.0, the GitHub REST API, and the ledger test dry-run).
+
+### Key Improvements
+
+1. **Security, P0.** The executed script is checked out from the **default branch**, never the PR.
+   `actions: write` on `pull_request` would otherwise run PR-controlled code (changing
+   `.github/scripts/` needs no `workflows` permission). Consequences:
+   - Pre-merge live verification becomes a local **dry-run** (`CSPR_DRY_RUN=1`, AC10).
+   - The first in-Actions reap moves post-merge (AC13/AC14).
+2. **Run-mode order is list → head check → select → cancel.** Guard A (live head must equal the
+   event head, with 3 reads 5 s apart for API lag) now doubles as the pre-cancel re-read. Guard B
+   (`created_at < self`) covers lag in the other direction.
+3. **Listing** is 2 unfiltered paginated calls, with status filtered in jq (so a silent-zero enum
+   typo is not possible) and a `created>=PR` bound. A PR opened *from* `main` is skipped at the
+   job `if:`.
+4. **Cancel handling:**
+   - Graceful `/cancel` only, so `always()` mutex-release steps run.
+   - In-progress `pull_request_target` runs are never cancelled (rule 9b).
+   - Responses are classified by status line; a 403 is `refused` only for dynamic runs.
+5. **Fail-closed input handling:**
+   - Null fields → `skip malformed`.
+   - A `"null"` self timestamp → `bad-context`.
+   - `--argjson` for the self id.
+   - `@tsv` output, and one `sanitize()` for every API string.
+6. **Ledger edits were dry-run green.** The draft workflow passes the fan-out ledger test
+   (`cancel=yes`) and actionlint. The `apply-sentry-infra.yml` row gets its own accurate reason.
+
+### New Considerations Discovered
+
+- **The tenant-integration release-step comment conflicts with GitHub's docs.** The comment says
+  the release step "cannot run" on cancel. GitHub docs say `always()` runs on a cancelled run
+  (verified live). AC14 observes which is true.
+- **Dynamic runs include `dynamic/dependabot/dependabot-updates`.** 7 of the last 100 dynamic runs
+  had that path. They are excluded by the path allowlist.
+- **The by-filename workflow endpoint resolves for branch-only workflows**, so the
+  discoverability probe passes before merge.
+- **`main-health-monitor.yml`'s "12 fixture suites" prose needs bumping to 13.**
+
 ## Overview
 
 The spec lacks a valid `lane:`, so it defaulted to cross-domain (TR2 fail-closed).
@@ -58,7 +105,7 @@ PR #8566 (merged 2026-09-22) added per-PR concurrency blocks to five other workf
 
 | Claim (brief / ledger / research) | Reality (verified) | Plan response |
 |---|---|---|
-| tenant-integration competes for "the one shared dev-Supabase concurrency group" | The job-level group is per ref: `group: dev-supabase-${{ github.ref }}` (`tenant-integration.yml`, the `concurrency:` block above `cancel-in-progress: false`). What serializes runs across refs is the DB advisory lock in `scripts/dev-suite-mutex.sh`, held by a background `psql`. Release has two paths. (1) On a **graceful** `POST …/cancel`, GitHub still runs `if: always()` steps ([docs: status check functions — `always()` runs even when cancelled](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#always)), so the job's `Release dev-suite mutex` step (`if: always()`) runs and releases it. (2) If the step does not run (force-cancel, a runner kill, or the step itself failing), `dev-suite-mutex.sh`'s header documents the socket-death path: the holder's next chunked `pg_sleep(10)` result write fails and the xact lock releases within about 10-20 s. The tenant-integration comment above the release step says the step "cannot run" on cancellation, which contradicts (1). That is unverified either way until AC10 observes it. | Use `/cancel`, never `/force-cancel` (so path 1 is available). Cancelling a superseded in-progress run frees the cross-ref DB mutex (immediately via path 1, or within about 10-20 s via path 2) and the per-ref group slot the new head's run waits on. This is the largest win. AC10 records which path fired. |
+| tenant-integration competes for "the one shared dev-Supabase concurrency group" | The job-level group is per ref: `group: dev-supabase-${{ github.ref }}` (`tenant-integration.yml`, the `concurrency:` block above `cancel-in-progress: false`). What serializes runs across refs is the DB advisory lock in `scripts/dev-suite-mutex.sh`, held by a background `psql`. Release has two paths. (1) On a **graceful** `POST …/cancel`, GitHub still runs `if: always()` steps ([docs: status check functions — `always()` runs even when cancelled](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#always)), so the job's `Release dev-suite mutex` step (`if: always()`) runs and releases it. (2) If the step does not run (force-cancel, a runner kill, or the step itself failing), `dev-suite-mutex.sh`'s header documents the socket-death path: the holder's next chunked `pg_sleep(10)` result write fails and the xact lock releases within about 10-20 s. The tenant-integration comment above the release step says the step "cannot run" on cancellation, which contradicts (1). That is unverified either way until AC14 observes it. | Use `/cancel`, never `/force-cancel` (so path 1 is available). Cancelling a superseded in-progress run frees the cross-ref DB mutex (immediately via path 1, or within about 10-20 s via path 2) and the per-ref group slot the new head's run waits on. This is the largest win. AC14 records which path fired. |
 | Ledger row `infra-validation.yml`: "no cancel: plan holds a backend state lock" (same wording for `apply-sentry-infra.yml`) | Every R2 backend sets `use_lockfile = false` (`apps/web-platform/infra/main.tf`, `apps/web-platform/infra/sentry/main.tf`, `infra/github/main.tf`, `apps/cla-evidence/infra/main.tf`, …: "R2 has no S3 conditional writes"). The PR-arm plan also runs `-refresh=false`. So no state lock exists for a cancel to strand. | Correct both ledger reasons to the true one: these workflows carry no qualifying self-cancel block. The `cancel` column stays `no`. The external reaper cancels them safely. |
 | Ledger row `tenant-integration.yml`: "a mid-run cancel leaves fixture residue" | `apps/web-platform/scripts/run-migrations.sh` applies each migration with `psql --single-transaction --set ON_ERROR_STOP=1`, so a kill in the middle of an apply rolls back. Suite rows are scoped per run (fresh `randomUUID` grantees and delegations, per the tenant-integration comment). The same interruption already happens on every `timeout-minutes: 15` kill, and it happened 17 times during the manual cancel on 2026-09-23. | Record it as a named residual in the ADR-216 addendum: an interrupted suite may leave per-run test rows. Nothing to build. The per-ref drift probe already attributes drift. |
 | Learnings research: "ADR-061 amendment documents mid-run-cancel residue" | False. `grep -i cancel` on ADR-061 finds no cancel text. Its only "residue" line is about re-applying an edited migration. | Disregarded. |
@@ -171,14 +218,25 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
      cancel-superseded:
        # Fork PRs and Dependabot-triggered runs get a read-only GITHUB_TOKEN: skip the job
        # (concludes `skipped`, never red). Dependabot opens same-repo PRs here (#8033, #8032).
+       # A PR opened FROM the default branch is skipped too: listing branch=main would page
+       # through every main run (API budget), and rule 4 would skip all of them anyway.
        if: >-
          github.event.pull_request.head.repo.full_name == github.repository &&
-         github.actor != 'dependabot[bot]'
+         github.actor != 'dependabot[bot]' &&
+         github.triggering_actor != 'dependabot[bot]' &&
+         github.event.pull_request.head.ref != github.event.repository.default_branch
        runs-on: ubuntu-latest
        timeout-minutes: 5
        steps:
+         # SECURITY (deepen-plan security review, P0): the script runs with actions: write, so it
+         # is checked out from the DEFAULT BRANCH, never from the PR. Changing .github/scripts/
+         # needs only contents: write, not the `workflows` permission. A PR-controlled copy would
+         # hand actions: write (cancel any run, including a main apply mid-flight; dispatch
+         # workflows; delete logs) to anyone who can push a branch. There is no fallback to the
+         # PR's copy.
          - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
            with:
+             ref: ${{ github.event.repository.default_branch }}
              sparse-checkout: .github/scripts
              persist-credentials: false
          - name: Cancel this PR's runs on superseded head SHAs
@@ -191,7 +249,14 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
              HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
              DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
              SELF_RUN_ID: ${{ github.run_id }}
-           run: bash .github/scripts/cancel-superseded-pr-runs.sh
+           # Bootstrap: before this PR merges, the default branch has no script. Print a
+           # ::notice:: and exit 0 rather than fall back to the PR's copy.
+           run: |
+             if [[ ! -f .github/scripts/cancel-superseded-pr-runs.sh ]]; then
+               echo "::notice::cancel-superseded-pr-runs: script not on the default branch yet (bootstrap) — nothing reaped"
+               exit 0
+             fi
+             bash .github/scripts/cancel-superseded-pr-runs.sh
    ```
 
    `head.ref` is controlled by the PR author. It reaches the script **only** through `env:` and is
@@ -224,6 +289,7 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
      | 7 | `.event` ∈ {pull_request, pull_request_target} and `.head_branch != HEAD_REF` | `skip branch` |
      | 8 | `.event` ∈ {pull_request, pull_request_target} and `(.head_repository.full_name // "") != HEAD_REPO` | `skip repo` |
      | 9 | `.status` ∉ {queued, in_progress, waiting, pending, requested} | `skip status` |
+     | 9b | `.event == "pull_request_target"` and `.status == "in_progress"` | `skip privileged-in-progress` (the run holds secrets and may be mid-write to an outside store; cancelled only before it starts) |
      | 10 | `.head_sha == HEAD_SHA` | `skip current-head` |
      | 11 | `.created_at >= SELF_CREATED_AT` (ISO-8601 Z strings compare lexicographically, and rule 0 guarantees the shape) | `skip too-new` |
      | 12 | otherwise | `cancel superseded` |
@@ -235,45 +301,61 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
      (`"n" > "2"`) and be skipped `too-new` (safe), but a null `head_sha` would pass rule 10's
      `!=`. Rule 1 makes every null fail closed in one place.
 
-   - **default (run) mode**:
+   - **default (run) mode**. The order is load-bearing: list first, then read the head, then
+     select, then cancel.
      1. Validate that the required env is non-empty. If not: `::error::` and exit 2.
-     2. **Race guard A (newest-push check):** read
-        `live=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)` up to **3 times, 5 s
-        apart**, stopping as soon as `live == EVENT_HEAD_SHA`. The retry absorbs API lag: the
-        `synchronize` event can fire before the pulls endpoint reflects the new head. If it still
-        differs after 3 reads, print
-        `cancel-superseded-pr-runs: pr=#N event-head=<7> live-head=<7> — superseded by a newer push; the newer run reaps`
-        and exit 0. Validate `live` against `^[0-9a-f]{40}$`; on mismatch, `::error::` and exit 2.
-        Then set `HEAD_SHA=$live`.
-     3. **Race guard B input:** `SELF_CREATED_AT=$(gh api "repos/$REPO/actions/runs/$SELF_RUN_ID" --jq .created_at)`.
+     2. **Context reads:** `PR_CREATED_AT=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .created_at)` (ISO-validated, used only for the `created>=` bound in step 3; the head from this read is **not** used). **Guard B input:** `SELF_CREATED_AT=$(gh api "repos/$REPO/actions/runs/$SELF_RUN_ID" --jq .created_at)`.
         Validate it against the rule-0 ISO-8601 regex. On mismatch (including the literal string
-        `null`), `::error::` and exit 2 before any listing. Rule 0 is the second line of defence
-        for the same property.
-     4. **List: 2 calls, one per branch key, no `status=` query filter.** Filtering status in jq
+        `null`), `::error::` and exit 2 before any listing. Rule 0 in `select` is the offline-tested
+        second line of defence for the same property (Guard 1, mutation 6).
+     3. **List: 2 calls, one per branch key, no `status=` query filter.** Filtering status in jq
         removes the silent-zero hazard of a mistyped `status=` enum, which the API accepts
         without a 422 (verified above). For `branch` in (`$HEAD_REF`, `refs/pull/$PR_NUMBER/head`),
         run
         `gh api --paginate "repos/$REPO/actions/runs?branch=<urlencoded>&per_page=100" --jq '.workflow_runs[]'`
-        and append the NDJSON to a temp file. URL-encode with `jq -rn --arg b "$branch" '$b|@uri'`.
-        Then `jq -s 'unique_by(.id)'`. Rule 9 in `select` does the status filtering. Cost: one page
-        per 100 runs the branch has ever had. That is bounded by the PR's lifetime pushes × about
-        25 workflows, typically 1-5 pages, and far below `GITHUB_TOKEN`'s 1,000 requests/hour. No
-        page cap: the oldest queued runs are exactly the zombies this workflow exists for.
+        and append the NDJSON to a temp file. URL-encode with `jq -rn --arg b "$branch" '$b|@uri'`,
+        verified: `refs/pull/8669/head` → `refs%2Fpull%2F8669%2Fhead`, and `feat/x y` →
+        `feat%2Fx%20y`. The encoded form was verified live to return the same 18 runs as the
+        unencoded one. Then `jq -s 'unique_by(.id)'`. Rule 9 filters status.
 
-        After listing, print `X-RateLimit-Remaining` once: read it from a final
-        `gh api -i rate_limit` header, or `gh api rate_limit --jq .resources.core.remaining`. It is
-        a diagnostic line in the log and the summary.
+        Cost, measured 2026-09-24: `feat-one-shot-zot-migration-completion` has 119 lifetime runs
+        (2 pages), and `refs/pull/8597/head` has 18 (1 page). No page cap: the oldest queued runs
+        are exactly the zombies this workflow exists for.
+
+        Bound each call with `created=%3E%3D<PR created_at, YYYY-MM-DD>` (from the pulls read's
+        `created_at`; the PR's runs cannot predate the PR). This keeps a long-lived, reused branch
+        name from paging through history. The runs API returns at most 1,000 results for a
+        filtered query, so if one branch key yields ≥ 1,000 rows, emit
+        `::warning::listing may be truncated`. It is visible, and never silent.
 
         A failed list call: `::error::` naming the branch, then exit 1, with no cancels. A partial
-        listing is not a clean result. Classify the failure with the cancel classifier below, so a
-        rate limit reads `failed:rate-limited`.
+        listing is not a clean result. Classify the failure with the cancel classifier (step 6),
+        so a rate limit reads `failed:rate-limited`.
+     4. **Head check (guard A), immediately before select + cancel.** Read
+        `live=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)` up to **3 times, 5 s apart**
+        (`CSPR_HEAD_RETRY_SLEEP`, default `5`, set to `0` in the suite). Stop as soon as
+        `live == EVENT_HEAD_SHA`, then set `HEAD_SHA=$live`. If `live` is not 40-hex:
+        `::error::`, exit 2. If it still differs after 3 reads, print
+        `cancel-superseded-pr-runs: pr=#N event-head=<7> live-head=<7> — head is not this run's; the run for the newer head reaps`
+        and exit 0 **without cancelling anything**.
+
+        Why equality with the *event* head, and not "whatever the live head is": the pulls
+        endpoint can **lag**. A lagging read can return an OLDER SHA, and using it as `HEAD_SHA`
+        would make rule 10 protect the old SHA and reap the new head's runs, which violates P2.
+        Only the event SHA is known-current for this run. The retry absorbs the lag. Anything else
+        is either lag that never cleared or a newer push, and in both cases doing nothing is
+        correct, because the newer push has its own reaper.
+
+        Why this check sits after the listing: a push that lands during the listing is caught here
+        (A→B→A included). This single read is the pre-cancel re-read. Only `select` (pure, ms)
+        separates it from the loop.
+
+        Why guard B is still needed with this ordering: API lag also works the other way. A
+        newer push C can create runs that are **listed** while the pulls endpoint still reports B.
+        Rule 11 (`created_at < SELF_CREATED_AT`) skips them, because they were created after
+        this run.
      5. Pipe the array to `select`.
-     6. **Re-check the head immediately before the cancel loop.** Read the live head once more
-        (single read, no retry). If it no longer equals `HEAD_SHA`, print
-        `… head moved during listing (<7> -> <7>) — cancelling nothing; the newer run reaps` and
-        exit 0 **without cancelling anything**. This covers A→B→A: a stale selection computed
-        against B must not reap A's fresh runs.
-     7. **Cancel, graceful only:** `POST …/actions/runs/{id}/cancel` and **never**
+     6. **Cancel, graceful only:** `POST …/actions/runs/{id}/cancel` and **never**
         `…/force-cancel`. A graceful cancel still runs `if: always()` steps; force-cancel skips
         them. That is load-bearing for tenant-integration's `Release dev-suite mutex` and
         `Re-probe dev-vs-main migration drift` steps. Invocation:
@@ -288,17 +370,21 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
         | `202` | `cancelled` |
         | `409` / `404` | skipped `gone` (the run finished, was cancelled concurrently, or was deleted) |
         | `429`, or `403` whose body/stderr mentions `rate limit` | `failed:rate-limited` + `::error::` |
-        | `403` whose stderr contains `Resource not accessible by integration` **and** `event == dynamic` | skipped `refused` + `::warning::` (AC10 measures whether this happens) |
+        | `403` whose stderr contains `Resource not accessible by integration` **and** `event == dynamic` | skipped `refused` + `::warning::` (AC14 measures whether this happens) |
         | `403` with `Resource not accessible by integration` on a `pull_request` / `pull_request_target` run | `failed:refused` + `::error::` (the token lost `actions: write`; this must be red, not a green check full of warnings) |
         | any other `403`, or anything else | `failed` + `::error::` |
 
-        Before interpolating API-derived strings (workflow `name`, `display_title`) into
-        `::warning::` / `::error::`, strip CR/LF with `${v//[$'\n\r']/}`. `display_title` is a PR
-        title, so a crafted `\n::notice::` could otherwise spoof an annotation.
-     8. **Summary (P6):** one line to stdout **and** to `$GITHUB_STEP_SUMMARY` (when set):
+        Every API-derived string passes through `sanitize()` (see Attack surface) before any
+        stdout line, annotation or summary line. `@tsv` rows are read with `IFS=$'\t' read -r`.
+
+        **Dry run:** with `CSPR_DRY_RUN=1`, step 6 prints
+        `would-cancel <id> <event> <name> <sha7>` per `cancel` row and issues **no** POST. The
+        summary reports `cancelled=0 would_cancel=<W>`. This is what AC10 runs locally before
+        merge.
+     7. **Summary (P6):** one line to stdout **and** to `$GITHUB_STEP_SUMMARY` (when set):
         `cancel-superseded-pr-runs: pr=#<N> head=<sha7> listed=<L> cancelled=<C> skipped=<S> failed=<F> reasons=<reason:count,...> ratelimit_remaining=<R>`,
         followed by one line per cancelled run (`id`, workflow name, event, `head_sha[0:7]`).
-     9. Exit 1 if `failed > 0`, else 0.
+     8. Exit 1 if `failed > 0`, else 0. An empty listing gives `listed=0 cancelled=0` and exit 0.
 
    - Temp files: create them with `mktemp` and remove them with a `trap … EXIT` that the script
      owns. `scripts/lint-trap-tempfile-ownership.py` runs in `ci.yml`, so run it locally.
@@ -325,8 +411,13 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
    - Correct the stale reasons on the `infra-validation.yml` and `apply-sentry-infra.yml` rows. Both say "plan holds a backend state lock", which is false
      (`use_lockfile = false` on every R2 backend). Replace with the true reason, keeping the
      literal `no cancel:` phrase that A5 requires. For example:
-     `no cancel: the plan job's per-PR group carries no cancel-in-progress (R2 backends run use_lockfile=false, so no state lock is held); superseded PR runs are reaped by cancel-superseded-pr-runs.yml`.
-     `apply-sentry-infra.yml` must keep its "sentry-destroy-required … ADR-032 ABI" lead text.
+     - `infra-validation.yml`: `no cancel: the plan job's per-PR group carries no cancel-in-progress (R2 backends run use_lockfile=false, so no state lock is held); superseded PR runs are reaped by cancel-superseded-pr-runs.yml`.
+     - `apply-sentry-infra.yml` (keep its "required context sentry-destroy-required … ADR-032 ABI" lead text): `no cancel: workflow-level per-ref group, cancel-in-progress:false protects sentry-destroy-required on the head SHA (#5585 R3); R2 use_lockfile=false, no state lock; superseded runs reaped by cancel-superseded-pr-runs.yml`.
+
+     Both edits were dry-run on 2026-09-24 against a scratch copy of the ledger plus the draft
+     workflow: `PR_FANOUT_WORKFLOWS_DIR=… PR_FANOUT_LEDGER=… PR_FANOUT_PARTS=A bash plugins/soleur/test/pr-fanout-ledger.test.sh`.
+     The result was A2/A3/A4/A4b(`cancel=yes` for the new row)/A4c/A5/A6 PASS for all three rows.
+     The draft workflow also passes `actionlint` (rc=0).
    - Header comment: add one paragraph after the `cancel =` definition. It says the column scores
      only a workflow's **own** concurrency. Superseded runs of every row (except fork PRs) are
      additionally reaped by `cancel-superseded-pr-runs.yml` by `head_sha`, which never touches a
@@ -336,6 +427,9 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
 3. `knowledge-base/engineering/architecture/decisions/ADR-216-machinery-ledger-and-filing-time-lever.md`:
    add `### Addendum 2026-09-24 — superseded runs are reaped by head SHA, across workflows`
    (see Architecture Decision below).
+4. `.github/workflows/main-health-monitor.yml`: in the issue-body prose, "the 12 fixture suites
+   behind `.github/scripts/test/run-all.sh`" → "the 13 fixture suites …". This is a one-token prose
+   edit. The count goes stale at 13 otherwise (architecture review).
 
 ## Technical Considerations
 
@@ -345,27 +439,31 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
   infra-validation.** The two "unsafe to cancel" ledger claims do not hold up. There is no state
   lock (`use_lockfile = false`), migrations apply `--single-transaction`, and the DB mutex
   is released by the job's own `if: always()` release step on a graceful cancel, or within about
-  10-20 s by socket death otherwise (see the reconciliation table; AC10 observes which). The cancel
+  10-20 s by socket death otherwise (see the reconciliation table; AC14 observes which). The cancel
   is always the graceful `/cancel`, never `/force-cancel`. The in-progress tenant-integration run is the one holding the
   resource that delays other PRs, so excluding it would drop P1's main target. Residual: per-run
   test rows from an interrupted suite. This is the same state a timeout kill already produces, and
   the ADR addendum names it.
-- **Race guards A + B together, and not either one alone.** Guard A (the live head equals the event
-  head) stops a stale reaper from acting at all. Guard B (`created_at < self.created_at`) closes
-  the TOCTOU window between guard A and the listing: a run for a push that lands *after* guard A
-  was created after this run started, so it is skipped. The workflow-level
+- **Race guards A + B together, and not either one alone** (deepen-plan revision: A now runs
+  *after* the listing). Guard A requires the live head to equal the event head, so a stale or
+  lagging reaper does nothing. Guard B (`created_at < self.created_at`) skips runs of a newer push
+  that were listed while the pulls endpoint still lagged at the old head. The workflow-level
   `concurrency: cancel-in-progress: true` per PR also kills older reapers that are still queued.
-  functional-discovery suggested dropping the created-before-self check. That is rejected, because
-  it is exactly the guard for P4.
+
+  functional-discovery and the simplicity review both suggested dropping guard B, and the
+  simplicity review also suggested re-keying on "whatever the live head is". Both are rejected,
+  because the pulls endpoint can lag in **both** directions:
+  - A lagging read of an *older* SHA used as `HEAD_SHA` would reap the new head's runs (P2).
+  - Runs of a *newer* push can be listed before the head read reflects them (P4).
 - **List by branch only (2 calls), filter status in jq.** This came out of plan review. A
   `status=` query parameter is an enum the API does not validate (a typo returns 0 runs with no
   422), and 4 statuses × 2 branches is 8 calls against 2. Rule 9 carries the status set, and a test
   pins it. It includes `requested`.
 - **Graceful `/cancel` only, never `/force-cancel`.** `always()` steps (the mutex release, the
   post-section drift probe) must keep their chance to run.
-- **Head re-read immediately before cancelling.** Guard A plus guard B leave one window: a push
-  after the listing, where the selection was computed against a head that has since moved (A→B→A).
-  Re-reading once more before the loop, and cancelling nothing if it moved, closes it.
+- **The head check is the pre-cancel re-read.** Ordering list → head check → select → cancel means
+  the head is read after every listed run is known, and only the pure `select` separates it from
+  the loop. A push during the listing (A→B→A included) is therefore caught, with no second read.
 - **`dynamic` is restricted to the two CodeQL path prefixes.** It is an allowlist, so an unknown
   future dynamic producer on `refs/pull/N/head` (for example a Copilot agent session) is
   `skip dynamic-path`, not cancelled.
@@ -373,16 +471,37 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
   `workflow_dispatch` and also `merge_group` and `issue_comment` all fall through to `skip event`.
 - **Branch matching also compares `head_repository.full_name`**. A fork branch with the same name
   as ours cannot match.
-- **`pull_request`, not `pull_request_target`**. Fork PRs are skipped at the job `if:` (it concludes
-  `skipped`). Same-repo PR authors already have push access, so running the PR's own copy of the
-  script with `actions: write` grants nothing new.
+- **`pull_request`, not `pull_request_target`, with the script taken from the default branch.** Fork
+  PRs and Dependabot are skipped at the job `if:` (the job concludes `skipped`). An earlier draft
+  said "same-repo PR authors already have push access, so running the PR's own copy grants
+  nothing new". The deepen-plan security review showed that is **false**. Editing
+  `.github/scripts/` needs only `contents: write`, while `actions: write` also cancels other PRs'
+  and `main`'s runs (an `apply-*-infra` run mid-apply, with `use_lockfile=false`), dispatches
+  workflows, and deletes logs. So the checkout pins `ref: default_branch`. The workflow YAML
+  itself still comes from the PR, but changing it needs the `workflows` permission and CODEOWNERS
+  review. Consequence: the reaper cannot act on #8669 before merge, so the pre-merge live check
+  (AC10) runs the script **locally in dry-run** against #8669, and the in-Actions check moves
+  post-merge (AC13).
+- **`pull_request_target` runs are cancelled only before they start** (queued / waiting /
+  pending / requested; rule 9b). They run with secrets and may write to outside stores
+  (`cla-evidence`), and the ledger keeps their run shape untouched. Cancelling one in progress has
+  not been shown to be safe, and the queued ones are the bulk of the 2026-09-23 incident anyway.
 - **No `paths:` filter**. The reaper must run on every PR push, because what it cancels is decided
   by other workflows' runs, not by this diff.
 
 ### Attack surface
 
 - Token: the job's `GITHUB_TOKEN` scoped to `actions: write, contents: read, pull-requests: read`.
-  No secrets, no Doppler.
+  No secrets, no Doppler. This is the **first** `pull_request` workflow in the repo holding
+  `actions: write` (verified by grepping every workflow). That is why the executed script is
+  pinned to the default branch (see Decisions). The residual is that the workflow YAML is
+  PR-controlled, which the `workflows` push permission and CODEOWNERS
+  (`/.github/workflows/ @deruelle`) gate.
+- Output sanitising: every API-derived string (workflow `name`, event, and `display_title` if it
+  is ever printed) passes through one `sanitize()` before any stdout line, annotation or
+  `$GITHUB_STEP_SUMMARY` line. It strips `\r`, `\n`, U+2028 and U+2029, and neutralises a
+  leading `::`. Names go inside code spans in the summary. `@tsv` rows are read with
+  `IFS=$'\t' read -r`.
 - Untrusted input: `head.ref` (PR-author-chosen) goes only through `env:`, and the script passes
   it to `jq --arg` and URL-encodes it with `@uri`. It never reaches `eval` or an unquoted
   expansion.
@@ -390,7 +509,7 @@ self-deprecated in favour of `concurrency:`. This plan borrows its created-befor
 
 ### Performance
 
-Per push: 2 PR/run reads + 8 list calls (+ pagination) + N cancels. That is well inside
+Per push: 1 self-run read + 2 list calls (+ pagination: 1-2 pages for a typical PR, measured) + 1-3 head reads + 1 `rate_limit` read (free) + N cancels. That is well inside
 `GITHUB_TOKEN`'s 1,000 requests/hour/repo. One `ubuntu-latest` job, about 20-40 s.
 
 **Residual:** the reaper queues for a hosted runner like everything else. In a deep queue it starts
@@ -409,6 +528,25 @@ R3 still holds. Record the rejected alternatives (per-workflow `cancel-in-progre
 third-party action, `pull_request_target`, synthetic statuses) and the named residual
 (per-run test rows from an interrupted tenant-integration suite). An addendum rather than a new
 ADR: the ledger header already cites ADR-216 as its home.
+
+The addendum must also state the following (architecture + security review):
+
+- **Corrections.** In one sentence, correct the 2026-09-14 addendum's claims that a cancel
+  strands a state lock (infra-validation, apply-sentry-infra: every R2 backend runs
+  `use_lockfile = false`) and leaves fixture residue (tenant-integration: `--single-transaction`
+  applies, per-run rows).
+- **Pointer.** Point to ADR-032's #5585 amendment, where "never cancel a same-SHA run" is
+  defined.
+- **Trust boundary.** The executed script is pinned to the default branch, because `actions: write`
+  on `pull_request` must not run PR-controlled code. The workflow YAML ↔ script **env contract only
+  grows**: new variables are optional, and the script ignores unknown ones.
+- **`if: always()` jobs on a reaped run.** They still run: `tenant-integration-required`,
+  `vendor-pin-required`, `sentry-destroy-required`, the mutex release, and the drift re-probe.
+  They fail closed on the *old* SHA and briefly hold a runner. That is accepted, since those SHAs
+  never gate. A later reaper that re-lists the still-`in_progress` run re-POSTs an idempotent
+  cancel (202/409, counted `gone` on 409).
+- **Safe for `fix-constraints-stage-a`.** Stage-b acts only when stage-a concluded `success`.
+- **Measurements.** Record the AC14 results: CodeQL dynamic 202/403, and mutex path 1/2.
 
 ### C4 views
 
@@ -446,12 +584,12 @@ The ADR addendum ships in this PR.
 liveness_signal:
   what: "one `Cancel superseded PR runs` check run per same-repo PR synchronize/reopened, visible on the PR's checks list and via the Actions workflow page"
   cadence: "per PR push"
-  alert_target: "the PR author (red non-required check on the PR) — the operator reads PR checks as part of ship"
+  alert_target: "the PR author: a red NON-required check on the PR (only the fixture suite, via guard-script-fixture-tests, is required); the operator reads PR checks as part of ship"
   configured_in: ".github/workflows/cancel-superseded-pr-runs.yml"
 
 error_reporting:
   destination: "GitHub Actions check run + $GITHUB_STEP_SUMMARY on the PR"
-  fail_loud: "`::error::` annotation and a red check when a list call fails or any cancel returns a status other than 202/409/403; the summary line `cancel-superseded-pr-runs: … failed=<F>` states the count"
+  fail_loud: "`::error::` annotation and a red check when a list call fails or any cancel returns a status other than 202/409/404, or a 403 on a non-dynamic run (only a dynamic-run 403 is a `::warning::`); the summary line `cancel-superseded-pr-runs: … failed=<F>` states the count"
 
 failure_modes:
   - mode: "listing fails (GitHub API 5xx / auth)"
@@ -473,8 +611,13 @@ logs:
 
 discoverability_test:
   command: "curl -s https://api.github.com/repos/jikig-ai/soleur/actions/workflows/cancel-superseded-pr-runs.yml"
-  expected_output: "\"state\": \"active\""
+  expected_output: "active"
 ```
+
+The by-filename workflow endpoint resolves before merge, once the workflow has run on a branch.
+Verified 2026-09-24: `release-outcome-condition-harness.yml`, which is absent from `origin/main`,
+returns `"state": "active"`. So preflight Check 10 passes at ship time, provided the workflow
+has fired on #8669 (it fires, with the bootstrap `::notice::`, on the /work pushes). The command is a single `curl` with no shell-active bytes.
 
 ## Guard Contract
 
@@ -486,11 +629,12 @@ guard with a design-derived mutation matrix. The fixture suite is the instrument
 **Property.** Every cancel POST the script issues targets a run whose event is in
 {pull_request, pull_request_target, dynamic CodeQL}, whose branch key and head repository are this
 PR's, whose `head_sha` differs from the PR head read **immediately before the cancel loop**, and
-whose `created_at` is earlier than the reaper's own run.
+whose `created_at` is earlier than the reaper's own run, and whose event is not an in-progress
+`pull_request_target`.
 
 **Assembly.** There is exactly one chokepoint: every cancel is issued by the run-mode loop, which
 iterates only over `select` output rows whose first field is `cancel`, and that loop is gated by
-the pre-cancel head re-read. `select` is the only producer of `cancel` rows (one jq program). Its
+the head check (guard A), which runs after the listing. `select` is the only producer of `cancel` rows (one jq program). Its
 inputs are the 2 list calls, deduped, plus the env context validated in run-mode steps 1-3.
 Nothing else in the script, and nothing in the workflow, calls `…/cancel`. Suite O13 asserts that
 every logged cancel URL comes from a `select` row id, and that no `force-cancel` appears.
@@ -502,16 +646,17 @@ every logged cancel URL comes from a `select` row id, and that no `force-cancel`
 | 1 | Rule 10 compares `!=` instead of `==` (the current head becomes cancellable) | RED (S10) |
 | 2 | **Dispatch:** `select` replaced by `cat >/dev/null`, so the loop sees 0 rows, cancels nothing and exits 0 | RED (assertion floor + S1..S12 expect rows) |
 | 3 | **Second member:** the jq program ends in `first(...)` or `limit(1; …)`, so only the first row is decided | RED (S12 expects 4 rows in order) |
-| 4 | **Order/window (reorder, not delete):** the pre-cancel head re-read is moved *before* the listing, which is the same code, but the window it guards is now uncovered | RED (O4: head moves between list and cancel) |
+| 4 | **Order/window:** select computed against the event SHA without any live head check (guard A deleted) | RED (O1, O4) |
 | 5 | Rule 4 moved after rule 7 (the default-branch skip becomes unreachable) | RED (S4) |
 | 6 | Rule 0's regex loosened to `.+`, so `"null"` passes and guard B fails open | RED (S0a) |
 | 7 | `--argjson self_id` → `--arg self_id` (rule 2 never matches) | RED (S2) |
 | 8 | The cancel URL changed to `/force-cancel` | RED (O13) |
+| 9 | Rule 9b deleted (an in-progress `pull_request_target` run becomes cancellable) | RED (S9b) |
+| 10 | Guard A moved back *before* the listing (reorder, not delete: same code, the listing window uncovered) | RED (O2 call-order assertion: head reads must follow both list calls) |
 
 **Harness rows.** Suite edits that must drive it RED: (a) the `gh` stub stops logging calls, so
 O5/O13 must fail on an empty log rather than pass vacuously; (b) the PASS/FAIL counter is never
-incremented, so the floor fires. Must-PASS non-canonical input: H7 (extra fields, reordered keys,
-2-page pagination). It must stay GREEN, proving the suite does not reject everything.
+incremented, so the floor fires. Must-PASS non-canonical input: H7 (extra fields, reordered keys). It must stay GREEN, proving the suite does not reject everything.
 
 **Anchor.** The suite, the script and the workflow change in one diff, so a weakening that edits
 both a rule and its fixture passes the suite. The outside anchor is the required
@@ -528,8 +673,12 @@ checks (AC11), never by admin override.
   `{actions: write, contents: read, pull-requests: read}`. Checked with
   `python3 -c 'import yaml,sys; d=yaml.safe_load(open(".github/workflows/cancel-superseded-pr-runs.yml")); print(d[True], d["permissions"])'`
   (PyYAML parses the `on:` key as `True`).
-- [ ] AC2: the job `if:` is `github.event.pull_request.head.repo.full_name == github.repository &&
-  github.actor != 'dependabot[bot]'`, and every `uses:` is SHA-pinned (`grep -nE 'uses: [^@]+@[0-9a-f]{40}' …` matches every `uses:`
+- [ ] AC2: the job `if:` contains all four clauses: same-repo head, `github.actor != 'dependabot[bot]'`,
+  `github.triggering_actor != 'dependabot[bot]'`, and `head.ref != repository.default_branch`.
+  The checkout step carries `ref: ${{ github.event.repository.default_branch }}` and
+  `sparse-checkout: .github/scripts`. The run step has **no** fallback to a PR-relative script
+  path: `grep -c 'github.head_ref\|pull_request.head.sha' .github/workflows/cancel-superseded-pr-runs.yml`
+  counts only the `env:` line for `EVENT_HEAD_SHA`. Every `uses:` is SHA-pinned (`grep -nE 'uses: [^@]+@[0-9a-f]{40}' …` matches every `uses:`
   line).
 - [ ] AC3: no `${{ github.event.pull_request.head.ref }}` (or any `github.event.*` expression)
   appears inside a `run:` body. They appear only under `env:`.
@@ -546,22 +695,19 @@ checks (AC11), never by admin override.
 - [ ] AC8: the ADR-216 addendum exists
   (`grep -n '^### Addendum 2026-09-24' knowledge-base/engineering/architecture/decisions/ADR-216-*.md`
   returns 1 line).
-- [ ] AC9: `git diff origin/main...HEAD --stat -- .github/workflows/` lists **only**
-  `cancel-superseded-pr-runs.yml`. No other workflow file changes, so the `cancel-in-progress` of
-  tenant-integration / vendor-pin-verify is byte-identical.
-- [ ] AC10 (live, on this PR): push a second commit to #8669 while the first commit's runs are
-  still queued or in progress. The new workflow runs from the PR's own file. Its log shows
-  `cancelled=<C>` with C ≥ 1. Then
-  `gh api "repos/jikig-ai/soleur/actions/runs?branch=feat-one-shot-cancel-superseded-pr-runs&status=cancelled&per_page=50" --jq '.workflow_runs[].head_sha' | sort -u`
-  shows only superseded SHAs, never the new head. No run on the new head concludes `cancelled`.
-  Record whether CodeQL `dynamic` cancels returned 202 or 403 (`reasons=`), and paste the summary
-  line into the PR body. The first commit's diff touches no isolation surface, so tenant-integration's
-  heavy job is skipped and the mutex path is not exercised by AC10. The mutex-release path (1 vs 2
-  in the reconciliation table) is recorded opportunistically: the first time the reaper cancels an
-  in-progress `Tenant integration` run, read that run's `Release dev-suite mutex` step conclusion
-  with `gh run view <id> --json jobs --jq '.jobs[].steps[] | select(.name=="Release dev-suite mutex") | .conclusion'`
-  and note it on the ADR-216 addendum. Also: `grep -c force-cancel .github/scripts/cancel-superseded-pr-runs.sh`
-  prints `0`.
+- [ ] AC9: `git diff origin/main...HEAD --name-only -- .github/workflows/` lists exactly
+  `cancel-superseded-pr-runs.yml` and `main-health-monitor.yml`, and the latter's diff is the
+  single `12 fixture suites` → `13 fixture suites` token. `git diff origin/main...HEAD --quiet -- .github/workflows/tenant-integration.yml .github/workflows/vendor-pin-verify.yml`
+  exits 0 (byte-identical).
+- [ ] AC10 (live, **dry-run**, before merge): the script is pinned to the default branch, so it
+  cannot run in Actions on #8669 before merge (see Decisions). Instead, in /work, push a second
+  commit to #8669 while the first commit's runs are still queued or in progress. Then run
+  locally, with the operator's `gh` auth:
+  `CSPR_DRY_RUN=1 REPO=jikig-ai/soleur PR_NUMBER=8669 EVENT_HEAD_SHA=<new head> HEAD_REF=feat-one-shot-cancel-superseded-pr-runs HEAD_REPO=jikig-ai/soleur DEFAULT_BRANCH=main SELF_RUN_ID=<id of this workflow's bootstrap run on the new head> bash .github/scripts/cancel-superseded-pr-runs.sh`.
+  The output lists `would-cancel` rows only for the first commit's SHA, never for `<new head>`,
+  and `listed=` is ≥ 1. Paste the summary line into the PR body. The in-Actions workflow run on
+  #8669 concludes `success` with the bootstrap `::notice::`, because the default branch has no
+  script yet.
 - [ ] AC11: the PR merges through the normal required-checks path. `.github/workflows` changes make
   it UNTRUSTED-CI for admin merge, so **never `gh pr merge --admin`**.
 
@@ -572,6 +718,16 @@ checks (AC11), never by admin override.
 - [ ] AC13: on the next same-repo PR synchronize after merge,
   `gh run list --workflow cancel-superseded-pr-runs.yml --limit 3 --json conclusion,event` shows a
   `success` conclusion with `event: pull_request`.
+- [ ] AC14 (first real reap after merge): on the first post-merge run whose summary shows
+  `cancelled>=1`:
+  - Record from `reasons=` whether CodeQL `dynamic` cancels returned 202 or 403.
+  - Confirm with `gh api "repos/jikig-ai/soleur/actions/runs?branch=<that PR's branch>&status=cancelled&per_page=50" --jq '.workflow_runs[].head_sha' | sort -u`
+    that no cancelled run carries that PR's head SHA.
+  - The first time an in-progress `Tenant integration` run is reaped, record the conclusion of
+    its `Release dev-suite mutex` step (path 1 vs 2 in the reconciliation table):
+    `gh run view <id> --json jobs --jq '.jobs[].steps[] | select(.name=="Release dev-suite mutex") | .conclusion'`.
+  - Append both results to the ADR-216 addendum. This is automatable through `gh`; the next
+    session running `soleur:postmerge` does it.
 
 ## Test Scenarios
 
@@ -586,17 +742,19 @@ and must pass through to the next rule (a "one-sided" rule is untested on its ot
 | S0c | 0 | `HEAD_SHA` 39 hex chars, or uppercase → `skip bad-context` | 40 lowercase hex → normal |
 | S1 | 1 | one row each for `id`, `head_sha`, `created_at`, `event`, `status` null or absent → `skip malformed` (never `cancel`) | all present → continues |
 | S1p | 1 / 5 | `dynamic` with `path` absent → `skip dynamic-path` via `(.path // "")`, not a jq error | `pull_request` with `path` absent → still decided by rules 7-12 |
-| S2 | 2 | `.id == self_id` with a numeric id from `--argjson` → `skip self` | an id differing by 1 → continues (H5 proves that `--arg` would break it) |
+| S2 | 2 | `.id == self_id` with a numeric id from `--argjson` → `skip self` | an id differing by 1 → continues (Guard 1 mutation 7 proves that `--arg` would break it) |
 | S3 | 3 | `push`, `schedule`, `workflow_run`, `workflow_dispatch`, `merge_group`, `issue_comment` (one row each; same branch, superseded SHA) → `skip event` | `pull_request`, `pull_request_target`, `dynamic` → continue |
 | S4 | 4 | **Reachable form:** `HEAD_REF=main` (a same-repo PR opened *from* `main`), a `pull_request` run with `head_branch=main`, superseded SHA → `skip default-branch` | same fixture with `DEFAULT_BRANCH=trunk` → `cancel superseded` |
-| S4r | 4 | `head_branch=refs/heads/main` → `skip default-branch` | — |
+| S4j | job `if:` | AC2 asserts `head.ref != default_branch` in the job `if:`. Rule 4 stays in `select` as defence in depth for the brief's "never cancel runs on main" | — |
 | S5 | 5 | `dynamic` + `dynamic/dependabot/dependabot-updates` → `skip dynamic-path`; `dynamic/copilot-swe-agent/x` → `skip dynamic-path` | `dynamic/github-code-scanning/codeql` and `dynamic/github-code-quality/codeql` → continue to `cancel superseded` |
 | S5b | 5 | prefix trap: `dynamic/github-code-scanning-evil/x` → `skip dynamic-path` (the prefix includes the trailing `/`) | — |
 | S6 | 6 | `dynamic` on `refs/pull/<OTHER>/head` → `skip branch` | `refs/pull/<N>/head` → continue |
 | S6b | 6 | `dynamic` on `refs/pull/<N>0/head` (N=12 vs 120; exact match, not prefix) → `skip branch` | — |
 | S7 | 7 | `pull_request` with a different `head_branch` → `skip branch` | same branch → continue |
+| S7b | 7 | a second PR sharing this head branch (stacked into another base, `pull_requests=[M]`), superseded SHA → `cancel superseded`. This is deliberate: both PRs share the branch head, so a superseded SHA is superseded for both. There is no `pull_requests[]` filter, which is empty for dynamic runs anyway | — |
 | S8 | 8 | same `head_branch`, fork `head_repository.full_name` → `skip repo`; `head_repository` absent → `skip repo` | same repo → continue |
 | S8t | 8 | `pull_request_target` from a fork with a same-named branch → `skip repo` | same-repo `pull_request_target` (the CLA shape, `pull_requests=[N]`) → `cancel superseded` |
+| S9b | 9b | `pull_request_target` + `in_progress`, superseded SHA → `skip privileged-in-progress` | `pull_request_target` + `queued` → `cancel superseded`; `pull_request` + `in_progress` → `cancel superseded` |
 | S9 | 9 | `completed`, `action_required` → `skip status` | `queued`, `in_progress`, `waiting`, `pending`, `requested` → `cancel superseded` (one row each) |
 | S10 | 10 | the current head SHA in each of the five statuses → `skip current-head` (**P2**) | SHA differing in the last char → `cancel` |
 | S11 | 11 | `created_at == SELF_CREATED_AT` → `skip too-new`; `created_at` 1 s later → `skip too-new` (**P4**) | 1 s earlier → `cancel superseded` |
@@ -607,11 +765,13 @@ and must pass through to the next rule (a "one-sided" rule is untested on its ot
 
 | # | Scenario | Expected |
 |---|---|---|
-| O1 | the pulls endpoint returns the old head 3 times | exit 0, a "superseded by a newer push" line, **3** pulls reads in the log, **zero** list and cancel calls |
-| O2 | the pulls endpoint returns old, old, then the event head (API lag) | proceeds; 3 pulls reads before the list |
-| O3 | **A→B→A:** event head A; guard-A reads return A; the list returns runs for B (older) and for a first A push; the pre-cancel re-read returns A | only the B runs are cancelled; the first-A runs are `skip current-head` |
-| O4 | **head moves during listing:** guard-A reads A; the pre-cancel re-read returns C | exit 0, "head moved during listing", **zero** cancel calls |
-| O5 | the list call set | exactly 2 list URLs: `branch=<HEAD_REF urlencoded>` and `branch=refs%2Fpull%2F<N>%2Fhead`, **neither** carrying `status=` (sorted-set compare against the log) |
+| O1 | the head check reads a different head 3 times | exit 0, a "head is not this run's" line, **3** head reads after the 2 list calls, **zero** cancel calls |
+| O2 | the head check reads old, old, then the event head (API lag) | proceeds to cancel; 3 head reads, all **after** the list calls (the call log proves the order) |
+| O3 | **A→B→A:** event head A (the second push of A); the list returns runs for B (older) and for the first A push; the head check reads A | only the B runs are cancelled; the first-A runs are `skip current-head` |
+| O4 | **head moves during listing:** event head A; the head check reads C (3 times) | exit 0, **zero** cancel calls. A variant where C's runs are listed and the head check still reads A (API lag) gives C's runs `skip too-new` via rule 11 |
+| O5 | the list call set | exactly 2 list URLs: `branch=<HEAD_REF urlencoded>` and `branch=refs%2Fpull%2F<N>%2Fhead`, **neither** carrying `status=`, both carrying `created=%3E%3D<date>` (sorted-set compare against the log). Run once with `HEAD_REF=feat/x y`, which must appear as `feat%2Fx%20y` |
+| O5e | empty listing (both calls return `[]`) | `listed=0 cancelled=0`, exit 0, zero cancel calls |
+| O16 | `CSPR_DRY_RUN=1` with 2 cancellable rows | 2 `would-cancel` lines, `would_cancel=2`, **zero** POST calls, exit 0 |
 | O6 | the same run returned by both branch queries | cancelled once (dedupe) |
 | O7 | cancel responses 202 / 409 / 404 | `cancelled` / `gone` / `gone`, exit 0 |
 | O8 | 403 + `Resource not accessible by integration` on a `dynamic` run | skipped `refused`, `::warning::`, exit 0 |
@@ -623,17 +783,10 @@ and must pass through to the next rule (a "one-sided" rule is untested on its ot
 | O14 | `GITHUB_STEP_SUMMARY` set / unset | the summary line (with `ratelimit_remaining=`) is written / stdout only, no error |
 | O15 | missing env (`PR_NUMBER=`); self `created_at` returns `null`; live head `null` | exit 2 with `::error::`, zero list calls |
 
-**Harness rows** (the suite must not be satisfiable by a vacuous `select` or a vacuous stub).
-Run each once at work time and record the result in the PR body:
-
-- H1: swap `select` for `cat >/dev/null`. The suite goes RED on the assertion floor.
-- H2: flip rule 10 to `!=`. RED on S10.
-- H3: delete rule 11. RED on S11. Delete rule 0. RED on S0a.
-- H4: move rule 4 after rule 7. RED on S4.
-- H5: change `--argjson self_id` to `--arg self_id`. RED on S2.
-- H6: remove the pre-cancel head re-read. RED on O4.
-- H7: must-PASS non-canonical input. Run objects with extra unknown fields, a different key
-  order, and `per_page` paging split across 2 pages still produce identical decisions.
+**Harness rows.** The design-derived mutations live in one place: the Guard Contract mutation
+matrix (rows 1-9). Run each once at work time and record the RED result in the PR body. The only
+harness-specific addition is H7, a must-PASS non-canonical input: run objects with extra unknown
+fields and reordered keys produce identical decisions.
 
 ## Success Metrics
 
@@ -644,9 +797,9 @@ Run each once at work time and record the result in the PR body:
 
 ## Dependencies & Risks
 
-- **CodeQL `dynamic` cancellation may be refused (403) for `GITHUB_TOKEN`.** Unknown until AC10.
+- **CodeQL `dynamic` cancellation may be refused (403) for `GITHUB_TOKEN`.** Unknown until AC14.
   It is handled as `skip refused` + `::warning::`, never red. If it is always refused, a follow-up
-  can drop the `dynamic` arm of rule 3, but only after a measured AC10 result.
+  can drop the `dynamic` arm of rule 3, but only after a measured AC14 result.
 - **Hosted-runner queueing delays the reaper itself.** Accepted; it still reaps late.
 - **Per-run test-row residue from an interrupted tenant-integration suite.** Accepted and named in
   the ADR addendum (the same state a `timeout-minutes` kill produces).
@@ -660,7 +813,7 @@ Run each once at work time and record the result in the PR body:
   run on `main`). This fails safe by design.
 - **The tenant-integration comment says the release step "cannot run" on cancellation.** GitHub
   docs say `always()` steps run when a run is cancelled. Whichever is true, the socket-death path
-  still releases the lock within about 10-20 s. The discrepancy is recorded for AC10, not fixed
+  still releases the lock within about 10-20 s. The discrepancy is recorded for AC14, not fixed
   here (that file stays untouched, per AC9).
 
 ## Alternative Approaches Considered
@@ -720,9 +873,12 @@ None. Checked 2026-09-24: the open `code-review` issues (up to 200) were searche
   - **stderr** carries `gh: Cannot cancel a workflow run that is completed. (HTTP 409)` (and
     `gh: Not Found (HTTP 404)` for the 404).
 
-  Parse the status from stderr's `\(HTTP ([0-9]{3})\)`, falling back to the body's `.status`.
-  Treat 404 like 409 (`gone`). The stub in the orchestration test must emit exactly this split:
+  Treat 404 like 409 (`gone`). See the next bullet for the parse order. The stub in the orchestration test must emit exactly this split:
   body on stdout, `gh: … (HTTP NNN)` on stderr, and exit 1.
-- The workflow runs from the PR's own copy on `pull_request`, so AC10 exercises the real file
-  before merge.
-- Never `gh pr merge --admin` on this PR (UNTRUSTED-CI: `.github/workflows` changed).
+- The workflow YAML comes from the PR, but the **script** comes from the default branch
+  (security). So before merge the Actions run is a bootstrap no-op, and the live pre-merge check is
+  the local dry-run (AC10). Do not "fix" the bootstrap by falling back to the PR's copy.
+- Classification order is fixed: take the HTTP **code** from the `gh api -i` status line
+  (`^HTTP/[0-9.]+ ([0-9]{3})`), and fall back to stderr's `(HTTP NNN)` only when the status line
+  is absent. Take the **message** (`Resource not accessible by integration`, `rate limit`) from
+  stderr or the JSON body. Suite O7-O11 pin this.- Never `gh pr merge --admin` on this PR (UNTRUSTED-CI: `.github/workflows` changed).
