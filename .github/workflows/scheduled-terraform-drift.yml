@@ -1331,7 +1331,7 @@ jobs:
       # not run" with "this job ran and found something", which is the distinction the
       # drift/error split above already exists to preserve.
       - name: Sentry check-in (final)
-        if: always()
+        if: always() && matrix.directory != 'apps/web-platform/infra/sentry'
         continue-on-error: true
         uses: ./.github/actions/sentry-heartbeat
         with:

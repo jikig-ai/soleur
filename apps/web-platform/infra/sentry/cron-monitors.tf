@@ -68,6 +68,15 @@
 # in two-step shape (e.g. scheduled-cf-token-expiry-check per the gap at
 # lines 71-77), update this prose AND verify the field becomes load-
 # bearing for the new resource.
+#
+# ALERT ROUTING (#8630). A monitor here only opens a Sentry issue; the email comes
+# from `sentry_alert.cron_monitor_failure` in cron-monitor-alerts.tf, and Guard 1
+# (sentry-cron-monitor-routing-parity.test.ts) fails CI for any monitor that is
+# neither routed there nor listed as unrouted. A NEW monitor follows the two-PR
+# rule: PR 1 declares it here and adds it to `cron_monitor_alert_unrouted` with a
+# "<reason> (#N)" value (its detector id does not exist until the first apply);
+# PR 2 moves it into the alert's id list. Keep this file pure sentry_cron_monitor:
+# the alert and the unrouted map live in cron-monitor-alerts.tf.
 
 # scheduled-terraform-drift is now Inngest-DISPATCHED, not GHA-`schedule:`-fired.
 # An Inngest cron (apps/web-platform/server/inngest/functions/cron-terraform-drift.ts,
