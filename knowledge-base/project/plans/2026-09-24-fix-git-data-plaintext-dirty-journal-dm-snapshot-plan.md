@@ -842,13 +842,13 @@ or a write to the retained volume destroying the only plaintext copy.
 
 ### Pre-merge (this PR)
 
-- [ ] AC1 `git-data-bootstrap-store-verify.test.sh` passes with the new rows; each Guard 1 mutation
+- [x] AC1 `git-data-bootstrap-store-verify.test.sh` passes with the new rows; each Guard 1 mutation
       self-test reports the mutant landed and the verdict flipped; `MIN_ASSERTIONS` re-derived.
-- [ ] AC0 (Phase 0) The first pushed commit's `infra-validation.yml` run shows the loopback negative
+- [x] AC0 (Phase 0) The first pushed commit's `infra-validation.yml` run shows the loopback negative
       control and arm B green on the runner kernel, before the bootstrap change is committed.
-- [ ] AC2 In the comment-stripped unit body, `blockdev --setro` precedes the first `dmsetup create`
+- [x] AC2 In the comment-stripped unit body, `blockdev --setro` precedes the first `dmsetup create`
       and the first `mount` by line, and the stub run's `calls.log` shows the same order.
-- [ ] AC3 In the comment-stripped unit body (`UNIT_BODY`, since the rewritten comments will mention
+- [x] AC3 In the comment-stripped unit body (`UNIT_BODY`, since the rewritten comments will mention
       noload) no `noload` token remains; the only mount's options are exactly
       `ro,errors=remount-ro,nosuid,nodev,noexec` and its source is `/dev/mapper/$_pt_snap`; the dm
       table is exactly `0 $_pt_sz snapshot $_pt_dev $_pt_loop N 8`; no `blockdev --setrw` appears
@@ -858,7 +858,7 @@ or a write to the retained volume destroying the only plaintext copy.
       transaction matches the independent-replay oracle); arm C's precondition (`debugfs -c` does not list `ws-1.git`) held and the unit
       still reported `plaintext_residue count=1`; the origin sha256 is unchanged in every arm; no dm
       device, COW loop or `/dev/shm` directory survives any arm.
-- [ ] AC4b **G3-state parity (data-integrity review).** The production predecessor ran commit
+- [x] AC4b **G3-state parity (data-integrity review).** The production predecessor ran commit
       `f2aa5b1bee95fc7b07c4eaf625ff4cb70399bf35` (run 35979304442, `gh run view … --json headSha`),
       which is this branch's base. `git diff f2aa5b1bee95fc7b07c4eaf625ff4cb70399bf35..HEAD` over
       `cloud-init-git-data.yml`'s LUKS stage, `git-data-bootstrap.sh` outside the `plaintext-count`
@@ -866,31 +866,31 @@ or a write to the retained volume destroying the only plaintext copy.
       `dmsetup` package, the `GIT_DATA_PLAINTEXT_VOLUME_ID` position, the `plaintext_journal` emit
       field). So the rehearsal's boot #1 formats LUKS with the same code the predecessor used, and
       leaves a superset of its on-volume state (plus a probe lock dotfile the counts exclude).
-- [ ] AC5 Every FATAL in the unit matches `plaintext_unverified reason=(source|snapshot|mount|journal|umount)`
+- [x] AC5 Every FATAL in the unit matches `plaintext_unverified reason=(source|snapshot|mount|journal|umount)`
       or is the unchanged `plaintext_residue count=$_pt_n` line (grep the unit; count equals the
       stub harness's enumerated FATAL rows).
-- [ ] AC6 `boot_complete` carries `plaintext_journal`; every enumeration listed in Phase 1.5 names it
+- [x] AC6 `boot_complete` carries `plaintext_journal`; every enumeration listed in Phase 1.5 names it
       as informational; the boot-signal poll test proves it never gates.
-- [ ] AC7 `cloud-init-git-data.yml` lists `dmsetup`; `git-data-userdata-budget.sh` passes and the new
+- [x] AC7 `cloud-init-git-data.yml` lists `dmsetup`; `git-data-userdata-budget.sh` passes and the new
       stored-byte figure is recorded in the PR body.
-- [ ] AC8 `test-git-data-rung2-plan-shape.sh` passes, including the rows that red on any change to
+- [x] AC8 `test-git-data-rung2-plan-shape.sh` passes, including the rows that red on any change to
       either volume in `host-only` mode; the workflow calls the script at all three plan steps and
       no inline shape jq remains.
-- [ ] AC9 `test-git-data-rung2-evidence-capture.sh` shows PASS refused for `plaintext_volume=absent`
+- [x] AC9 `test-git-data-rung2-evidence-capture.sh` shows PASS refused for `plaintext_volume=absent`
       and for `present` with `plaintext_journal` in {`clean`, empty, `Dirty`}, and allowed only for
       `present`+`dirty`; the replace-arm invocation appends `RUNG2_REPLACE_BOOT` and reads its own
       `RUNG2_REPLACE_SINCE` without altering `RUNG2_SENTRY_SINCE`.
-- [ ] AC9b The workflow's evidence upload sits after capture #2 and its `if:` requires
+- [x] AC9b The workflow's evidence upload sits after capture #2 and its `if:` requires
       `replace_rc == '0'`; teardown runs in a separate `if: always()` job; the workflow header states
       the recomputed worst-case budget and the rehearsal test's budget check sums every step bound.
-- [ ] AC10 `git-data-rung2-rehearsal.test.sh` passes with rows pinning the phase variable (no
+- [x] AC10 `git-data-rung2-rehearsal.test.sh` passes with rows pinning the phase variable (no
       default), the payload arm as the unmodified module render, and the seed's `sysrq o` / no
       `umount` / plaintext-only shape.
-- [ ] AC11 ADR-239 carries the dated amendment and the new alternatives rows; ADR-149 carries its
+- [x] AC11 ADR-239 carries the dated amendment and the new alternatives rows; ADR-149 carries its
       pointer; the runbook verdict row lists `<mount|source|journal|umount|snapshot>`;
       `git-data-rung2-rehearsal.md` documents the seed -> payload -> replace run, the G1 failure
       table and the 2-run cap.
-- [ ] AC12 `model.c4`'s `gitDataStore` description no longer says the plaintext volume is "mounted
+- [x] AC12 `model.c4`'s `gitDataStore` description no longer says the plaintext volume is "mounted
       read-only" or that the live host "still serves PLAINTEXT"; `c4-count-parity.test.sh`,
       `c4-code-syntax.test.ts`, `c4-render.test.ts`, `lint-guard-contract.py` (this plan),
       `guard-vacuity-floor.test.sh` and `preflight-discoverability-test.test.ts` pass.
