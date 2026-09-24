@@ -20,3 +20,11 @@
 
 ### Components Invoked
 - soleur:plan, soleur:plan-review, soleur:deepen-plan; research, review and advisor agents (see plan).
+
+## Work Phase
+- Status: complete (commits 0533c9fe76, 3a5d27a926, 5e319472c3, 3fbf70e84a)
+- RED runs: S1 (all 9 crons) `expected 'returned' to be 'threw'`; S5/S5b `out.leakDetected` expected false to be true — none a HarnessError.
+- Mutation checks: harness rows 1/2/3/5/6 killed; Guard 2 census kills name-compare and stack-sniff, passes a comment mention; drift-guard fold/scan deletions each red their scenario.
+- Sentry binding (read-only API, 2026-09-24): all 10 monitors -> workflow 1297055 `cron-monitor-failure` (enabled), email to issue owners, fallthrough ActiveMembers.
+- Local affected gate: skipped at operator direction (box contended; queued behind sibling runs) — CI's required `test` context runs the full battery. Targeted suites + tsc green locally.
+- S3's "no memoized output contains the installation token" assertion dropped: with a plain Error("git clone failed") it is vacuous, and the mint-token step's output IS the token.
