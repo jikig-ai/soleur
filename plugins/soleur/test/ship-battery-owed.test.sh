@@ -735,7 +735,53 @@ else
   assert_eq "MISSING" "ok" "T13 ci.yml's aggregator no longer gates on == success — the gate's premise may be false"
 fi
 
+# =============================================================================
+# T16 — the CONSUMER contract in ship/SKILL.md Phase 4 (#8322).
+#
+# battery-owed.sh returns a verdict; the SKILL decides which battery runs on
+# it. Since #8322 the OWED arm runs `--affected`, not the full battery, and the
+# only spelling that buys `--full` is the operator's `/ship --full` — which
+# must outrank even a SKIPPABLE verdict. These rows pin the dispatch block
+# itself, not the script (the script is mode-agnostic by design).
+# =============================================================================
+SKILL_MD="$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md"
+
+# The fenced dispatch block: the FULL_BATTERY branch through the closing `fi`.
+DISPATCH="$(awk '/FULL_BATTERY:-}.*==.*true/{f=1} f{print} f&&/^fi$/{exit}' "$SKILL_MD")"
+if [[ -n "$DISPATCH" ]]; then
+  assert_eq "ok" "ok" "T16a ship/SKILL.md carries a FULL_BATTERY-gated dispatch block"
+else
+  assert_eq "MISSING" "ok" "T16a no FULL_BATTERY dispatch block found — extraction broken or dispatch deleted"
+fi
+
+# /ship --full runs the FULL battery unconditionally — before battery-owed.sh
+# is even consulted, so a SKIPPABLE verdict cannot demote an explicit ask.
+if printf '%s\n' "$DISPATCH" | grep -q 'test-all\.sh --full' \
+   && ! printf '%s\n' "$DISPATCH" | grep -q 'battery-owed\.sh.*--full'; then
+  assert_eq "ok" "ok" "T16b the FULL_BATTERY arm runs test-all.sh --full unconditionally"
+else
+  assert_eq "MISSING" "ok" "T16b the FULL_BATTERY arm does not run --full — operator opt-in demoted"
+fi
+
+# The OWED arm runs the AFFECTED gate. Extract the else-branch: the lines
+# between the battery-owed verdict check and the closing fi.
+OWED_ARM="$(printf '%s\n' "$DISPATCH" | awk '/battery-owed\.sh/{f=1} f{print}')"
+if printf '%s\n' "$OWED_ARM" | grep -q 'test-all\.sh --affected' \
+   && ! printf '%s\n' "$OWED_ARM" | grep -q 'test-all\.sh --full'; then
+  assert_eq "ok" "ok" "T16c the OWED arm runs --affected, never --full"
+else
+  assert_eq "MISSING" "ok" "T16c the OWED arm does not run --affected — default gate demoted"
+fi
+
+# 42 is still the ONLY skip. The dispatch must keep `rc -eq 42` as the skip
+# branch and run on every other status.
+if printf '%s\n' "$DISPATCH" | grep -q 'rc" -eq 42\|rc -eq 42'; then
+  assert_eq "ok" "ok" "T16d rc=42 remains the only skip branch — not-42 still runs"
+else
+  assert_eq "MISSING" "ok" "T16d the 42-only-skip branch vanished — every failure would now run OR skip wrongly"
+fi
+
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 51
+print_results 55

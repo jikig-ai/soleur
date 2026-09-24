@@ -81,19 +81,24 @@ export const INDEX_GLOBS = {
   commands: ":(glob)plugins/soleur/commands/*.md",
 } as const;
 
+/** The references glob, named so the `SKILL.md` carve-out below can be scoped to it. */
+const REFERENCES_PATHSPEC = ":(glob)plugins/soleur/skills/*/references/**/*.md";
+
 /**
  * The docs examined. `regionPolicy` is derived from WHICH glob matched, so one constant carries
  * both membership and policy.
  *
- * Widening to the NG-P surface (#8317 — agent bodies, `skills/*\/references/**`) is NOT one line,
- * despite an earlier revision of this comment and of ADR-226 saying so. It needs four things:
- * `**` support in `globToRegex` (which maps `*` to `[^/]+` and never crosses `/`, so a nested
- * path resolves to no policy while `git ls-files` would still enumerate it); the two
- * `regionPolicyForPath` fixtures that currently PIN those paths to `undefined`; the tree test's
- * "no nested SKILL.md" assertion; and — the real blocker — a frontmatter carve-out, because
- * every agent body opens with its own leaf as a `name:` value (69 lines across the 67 registry
- * agents), which R6b classifies NONCANONICAL and which `discoverAgentEntries` reads into the
- * committed manifest, so it cannot be rewritten to the registry id.
+ * NG-P widening (#8317) is HALF DONE as of 2026-09-23. The four prerequisites this comment
+ * named were: `**` support in `globToRegex`; the two `regionPolicyForPath` fixtures pinning
+ * nested paths to `undefined`; the tree test's "no nested SKILL.md" assertion; and a
+ * frontmatter carve-out. The first three were only ever needed by the REFERENCES half, and
+ * all three are now done — `skills/*\/references/**\/*.md` is in the population below.
+ *
+ * The AGENT-BODY half stays on #8317 and the fourth prerequisite is why: every agent body
+ * opens with its own leaf as a `name:` value (69 lines across the 67 registry agents), which
+ * R6b classifies NONCANONICAL and which `discoverAgentEntries` reads into the committed
+ * manifest, so it cannot be rewritten to the registry id. That carve-out is the remaining
+ * work; nothing else blocks it.
  */
 export const POPULATION_GLOBS: readonly PopulationGlob[] = [
   { pathspec: ":(glob)plugins/soleur/skills/*/SKILL.md", regionPolicy: "skill" },
@@ -101,6 +106,12 @@ export const POPULATION_GLOBS: readonly PopulationGlob[] = [
   // The Codex and Devin front doors: the same routing prose one harness over (arch F6).
   { pathspec: ":(glob)plugins/soleur/codex/skills/*/SKILL.md", regionPolicy: "skill" },
   { pathspec: ":(glob)plugins/soleur/devin/skills/*/SKILL.md", regionPolicy: "skill" },
+  // The references half of NG-P (#8317). These are agent-read on every harness —
+  // `plan-sharp-edges.md` alone is loaded by plan Phase 6.5 — so their component
+  // references carry the same obligation as the entry files', and they were outside
+  // the census entirely until now. A nested `SKILL.md` here is excluded in
+  // `regionPolicyForPath`, scoped to THIS glob.
+  { pathspec: REFERENCES_PATHSPEC, regionPolicy: "skill" },
 ];
 
 /** Docs excluded by path, each with the reason it is not wrapped in a region instead. */
@@ -341,7 +352,25 @@ export function readIndex(): Index {
 /** Turn a `:(glob)` pathspec into a regex over the full repo-relative path. */
 function globToRegex(pathspec: string): RegExp {
   const body = pathspec.replace(/^:\(glob\)/, "");
-  const escaped = body.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]+");
+  // `**/` is recognised BEFORE the single-`*` pass (#8317) — taken in the other order the
+  // two stars are rewritten independently and `**/` degrades to `[^/]+[^/]+/`, which
+  // cannot cross a `/`, so a nested references path resolves to no policy while
+  // `git ls-files` still enumerates it and `readPopulation`'s `?? g.regionPolicy`
+  // fallback hides the difference in production.
+  //
+  // It is recognised via a SENTINEL rather than substituted in place, because its
+  // replacement `(?:[^/]+/)*` itself ends in a `*`: substituting directly leaves that
+  // star in the string for the single-`*` pass to rewrite into `(?:[^/]+/)[^/]+`, which
+  // matches EXACTLY ONE intermediate directory. Measured: 102 of 115 references docs
+  // resolved to no policy under the in-place form — the 13 survivors being the ones at
+  // the one depth it happened to admit, which is precisely the partial loss that reads
+  // as a working regex.
+  const DOUBLESTAR = "\u0000";
+  const escaped = body
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, DOUBLESTAR)
+    .replace(/\*/g, "[^/]+")
+    .replace(new RegExp(DOUBLESTAR, "g"), "(?:[^/]+/)*");
   return new RegExp(`^${escaped}$`);
 }
 
@@ -350,7 +379,18 @@ export function regionPolicyForPath(
   path: string,
   globs: readonly PopulationGlob[] = POPULATION_GLOBS,
 ): RegionPolicy | undefined {
-  for (const g of globs) if (globToRegex(g.pathspec).test(path)) return g.regionPolicy;
+  for (const g of globs) {
+    if (!globToRegex(g.pathspec).test(path)) continue;
+    // A `SKILL.md` NESTED under references/ is not a member — `skills/*/SKILL.md` is the
+    // entry file, and a reference doc that happens to be named SKILL.md is a sample, not
+    // a second entry point. The carve-out is scoped to the REFERENCES glob deliberately:
+    // applied globally it would return `undefined` for all 99 real skill entry files plus
+    // the 6 Codex/Devin shims, and production would NOT notice, because `readPopulation`
+    // falls back to `?? g.regionPolicy` and would restore the right answer. Only the
+    // fixtures would red — which invites "fix the fixture" as the obvious repair.
+    if (g.pathspec === REFERENCES_PATHSPEC && path.endsWith("/SKILL.md")) return undefined;
+    return g.regionPolicy;
+  }
   return undefined;
 }
 

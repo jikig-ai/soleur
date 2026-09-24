@@ -1008,7 +1008,9 @@ FIXEOF
 
   # QUERY message literals stay byte-identical: renaming one darks the gate AND mints a new
   # Sentry issue group where value=1 means '>1', so a single fatal would stop paging entirely.
-  if grep -qF 'QUERY='"'"'message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'"'" "$TRAIL"; then
+  # #8651 APPENDED `message:"app image served"` (the image-origin prefix, pinned against the
+  # emitter by the observability suite's AC8); the four legacy literals are unchanged.
+  if grep -qF 'QUERY='"'"'message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage" OR message:"app image served"'"'" "$TRAIL"; then
     ok "AC-J2: the workflow QUERY message literals are byte-identical (lockstep held)"
   else
     no "AC-J2: the workflow QUERY message literals changed — this darks the gate and breaks paging"
