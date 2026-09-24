@@ -586,6 +586,11 @@ _r2_evidence_write() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence "none"
   # asked: it is at-most-once, so an unconditional empty line would refuse every fixture.
   printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=%s\nRUNG2_SENTRY_CROSSCHECK=%s\n' \
     "$2" "$3" "$4" "${5:-none}" "${6-CLEAN}" > "$1"
+  # (#5274) The replace arm's two keys are REQUIRED too, so every fixture carries the releasing
+  # pair by default and the P-rows below override it. `__OMIT__` drops a line entirely (absence
+  # is a different refusal from an empty or wrong value).
+  [[ "${R2_REPLACE_BOOT-PASS}" == "__OMIT__" ]] || printf 'RUNG2_REPLACE_BOOT=%s\n' "${R2_REPLACE_BOOT-PASS}" >> "$1"
+  [[ "${R2_REPLACE_SENTRY-CLEAN}" == "__OMIT__" ]] || printf 'RUNG2_REPLACE_SENTRY_CROSSCHECK=%s\n' "${R2_REPLACE_SENTRY-CLEAN}" >> "$1"
   [[ -n "${7:-}" ]] && printf 'RUNG2_SENTRY_CROSSCHECK_ACK=%s\n' "$7" >> "$1"
   return 0
 }
@@ -747,12 +752,14 @@ r2check "explicit RUNG2_VAR_DIVERGENCE=none => RELEASED" 0 "RELEASED" "$R2/ci.ym
 # asserting a declaration of "none" that nobody made. Whitespace-only is the same silence
 # with extra bytes, and `--divergence` upstream validates with `-z` only, so $'\n' reaches here.
 { printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
-  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=\nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"; } > "$R2/emptydiv.env"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=\nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"
+  printf 'RUNG2_REPLACE_BOOT=PASS\nRUNG2_REPLACE_SENTRY_CROSSCHECK=CLEAN\n'; } > "$R2/emptydiv.env"
 r2check "an EMPTY RUNG2_VAR_DIVERGENCE is refused (silence cannot release)" 1 "EMPTY value" \
   "$R2/ci.yml" "$R2/emptydiv.env"
 
 { printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
-  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=   \nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"; } > "$R2/wsdiv.env"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=   \nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"
+  printf 'RUNG2_REPLACE_BOOT=PASS\nRUNG2_REPLACE_SENTRY_CROSSCHECK=CLEAN\n'; } > "$R2/wsdiv.env"
 r2check "a WHITESPACE-ONLY RUNG2_VAR_DIVERGENCE is refused" 1 "EMPTY value" \
   "$R2/ci.yml" "$R2/wsdiv.env"
 
@@ -2175,6 +2182,52 @@ _row S "S14: the verdict key is REQUIRED — absence is a cardinality HOLD" 1 "R
 
 _expect_rows S 14
 
+printf '\n(#5274) P — the replace boot (boot #2) must have passed too\n'
+
+# Each row is the canonical releasing fixture with ONE replace-arm key changed. The writer's
+# defaults are overridden per call via R2_REPLACE_BOOT / R2_REPLACE_SENTRY (prefix assignments,
+# so nothing leaks into the next row).
+_p_ev() {  # <name> <replace-boot|__OMIT__> <replace-sentry|__OMIT__> [ack] [main-sentry]
+  R2_REPLACE_BOOT="$2" R2_REPLACE_SENTRY="$3" \
+    _r2_evidence_write "$R2/$1" PASS "$_S_URL" "$R2_SHA" none "${5:-CLEAN}" "${4:-}"
+  _r2_commit_alone "$R2/$1"
+}
+_p_ev p1.env PASS CLEAN
+_row P "P1: capture #1 PASS + replace PASS/CLEAN => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/p1.env"
+_p_ev p2.env __OMIT__ CLEAN
+_row P "P2: no RUNG2_REPLACE_BOOT line (capture #1 alone) => HOLD" 1 "0 'RUNG2_REPLACE_BOOT' line(s)" "$R2/ci.yml" "$R2/p2.env"
+_p_ev p3.env FAIL CLEAN
+_row P "P3: RUNG2_REPLACE_BOOT=FAIL => HOLD (does not assert the replace pass)" 1 "does not assert RUNG2_REPLACE_BOOT=PASS" "$R2/ci.yml" "$R2/p3.env"
+_p_ev p4.env PASS CLEAN
+printf 'RUNG2_REPLACE_BOOT=FAIL\n' >> "$R2/p4.env"; _r2_commit_alone "$R2/p4.env"
+_row P "P4: replace PASS beside a second FAIL line => HOLD (exactly once)" 1 "2 'RUNG2_REPLACE_BOOT' line(s)" "$R2/ci.yml" "$R2/p4.env"
+_p_ev p5.env '  PASS  # boot #2 adopted' CLEAN
+_row P "P5: a trailing comment and padding on the replace line => still RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/p5.env"
+_p_ev p6.env PASS __OMIT__
+_row P "P6: no RUNG2_REPLACE_SENTRY_CROSSCHECK line => HOLD (the verdict is required)" 1 "0 'RUNG2_REPLACE_SENTRY_CROSSCHECK' line(s)" "$R2/ci.yml" "$R2/p6.env"
+_p_ev p7.env PASS FATAL
+_row P "P7: replace cross-check FATAL => HOLD, measured, never ack-able" 1 "[SENTRY_VERDICT_FATAL] — ${R2}/p7.env records RUNG2_REPLACE_SENTRY_CROSSCHECK=FATAL" "$R2/ci.yml" "$R2/p7.env"
+_p_ev p8.env PASS NOT_RUN "17250000001:an ack cannot rescue a read that never ran"
+_row P "P8: replace cross-check NOT_RUN => could-not-measure HOLD, even with an ack" 1 "[SENTRY_VERDICT_UNREADABLE] — ${R2}/p8.env records RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN" "$R2/ci.yml" "$R2/p8.env"
+_p_ev p9.env PASS BANANA
+_row P "P9: an unknown replace verdict => could-not-measure HOLD" 1 "RUNG2_REPLACE_SENTRY_CROSSCHECK='BANANA'" "$R2/ci.yml" "$R2/p9.env"
+_p_ev p10.env PASS UNAVAILABLE
+_row P "P10: replace UNAVAILABLE with no ack => HOLD, naming the replace key" 1 "records RUNG2_REPLACE_SENTRY_CROSSCHECK=UNAVAILABLE" "$R2/ci.yml" "$R2/p10.env"
+_p_ev p11.env PASS UNAVAILABLE "17250000001:the replace window was ninety seconds and Sentry was quiet"
+_row P "P11: replace UNAVAILABLE + a well-formed run-keyed ack => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/p11.env"
+_p_ev p12.env PASS UNAVAILABLE "99999999:copied forward from another run"
+_row P "P12: replace UNAVAILABLE + an ack for a DIFFERENT run => HOLD" 1 "[SENTRY_ACK_MISMATCH]" "$R2/ci.yml" "$R2/p12.env"
+_p_ev p13.env PASS UNAVAILABLE "" UNAVAILABLE
+_row P "P13: BOTH cross-checks UNAVAILABLE, no ack => HOLD naming both keys" 1 "records RUNG2_SENTRY_CROSSCHECK and RUNG2_REPLACE_SENTRY_CROSSCHECK=UNAVAILABLE" "$R2/ci.yml" "$R2/p13.env"
+_p_ev p14.env PASS CLEAN "" FATAL
+_row P "P14: a clean replace does not rescue a FATAL capture #1 cross-check" 1 "records RUNG2_SENTRY_CROSSCHECK=FATAL" "$R2/ci.yml" "$R2/p14.env"
+_expect_rows P 14
+# Neutered, an evidence file whose replace boot FAILED releases the route: the P3 fixture carries
+# exactly one RUNG2_REPLACE_BOOT line, so only the value check stands between it and RELEASED.
+mutate_r2 "P15: neutering the RUNG2_REPLACE_BOOT=PASS assertion releases a FAILED replace boot" \
+  's/^  if ! grep -qE .\^\[\[:space:\]\]\*RUNG2_REPLACE_BOOT.*$/  if false; then/' \
+  0 "$R2/ci.yml" "$R2/p3.env" "RELEASED"
+
 printf '\n(#8010) R — resolving the run behind RUNG2_EVIDENCE_URL\n'
 
 # Each row re-seeds ONE stub key and points a fresh evidence file at its own run id, so a row
@@ -2993,7 +3046,15 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #                       BEFORE Guard 4. Dropping only sha256sum discriminates the two.
 #   ----
 #    19
-_FLOOR=236
+# RAISED 236 -> 252 (#5274 review, C6), ITEMISED — the replace boot joins the rung-2 contract:
+#    14  P1-P14   RUNG2_REPLACE_BOOT (absent, FAIL, duplicated, padded+commented) and
+#                 RUNG2_REPLACE_SENTRY_CROSSCHECK (absent, FATAL, NOT_RUN even with an ack, unknown,
+#                 UNAVAILABLE unacked / acked / mis-acked, both UNAVAILABLE, clean-beside-FATAL)
+#     1  P row-count pin
+#     1  P15      mutation: neutering the replace PASS assertion releases a FAILED replace boot
+#   ----
+#    16
+_FLOOR=252
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
