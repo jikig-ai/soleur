@@ -314,7 +314,10 @@ while IFS= read -r name; do
     if [[ "$local_ref" != "$local_live" ]]; then
       case "$field" in
         detectorIds)
-          _finding "MONITOR UNBIND: '$name'.detectorIds declared=$local_ref live=$local_live — the rule is bound to a different detector (or none), so it watches nothing while still appearing healthy." ;;
+          # A set difference, not two full arrays: cron-monitor-failure binds ~59 ids (#8630).
+          only_ref=$(jq -nc --argjson a "$local_ref" --argjson b "$local_live" '($a // []) - ($b // [])')
+          only_live=$(jq -nc --argjson a "$local_ref" --argjson b "$local_live" '($b // []) - ($a // [])')
+          _finding "MONITOR UNBIND: '$name'.detectorIds only-declared=$only_ref only-live=$only_live — the rule is bound to a different detector set (or none), so those detectors page nobody while it still appears healthy." ;;
         triggerLogicType)
           _finding "LOGICTYPE FLIP: '$name'.triggers.logicType declared=$local_ref live=$local_live — the rule now requires all/any of its triggers where it required the other. Live state an apply will NOT touch: the provider always writes any-short, so a rule reading 'all' was edited in Sentry." ;;
         triggerConditions|actionFilters)
