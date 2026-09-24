@@ -45,17 +45,17 @@ import { resolve } from "node:path";
  * targets — `[redact-sentinel.sh](../incident/scripts/redact-sentinel.sh)`, of
  * which there are several — from being read as execution paths.
  *
+ *   3. The WHOLE payload's markdown (#7453, ADR-179 A18/A20) — the fourth describe at
+ *      the bottom of this file: no default arm, git-root code root, root assignment or
+ *      `..` escape anywhere in tracked `plugins/soleur/ ** /*.md`, and the Read-surface
+ *      docs deliver their own root. Zero-tolerance, no allowlist. It has its own index.
+ *
  * DELIBERATELY OUT OF SCOPE — stated rather than implied:
- *   - The NON-gate `plugins/soleur/skills/ ** ` sites are RATCHETED (no growth) by the
- *     third axis at the bottom of this file, added 2026-09-23. The MIGRATION of the
- *     existing ones stays deferred to #7453; measured then: 238 tracked docs, 186
- *     code-context occurrences, 101 distinct (path, text) rows. Only the gate subset
- *     is zero-tolerance.
- *   - `preflight/SKILL.md` carries two UNCONDITIONAL `$(git rev-parse --show-toplevel)`
- *     anchors (`parse-form-a.awk`, `probe-verb-gate.sh`). Same threat shape,
- *     arguably worse, but not secret-emission gates — routed to #7453 with a
- *     severity flag (#7450 DC-1). Their falsified rationale comment was corrected.
- *   - Shipped `.sh`/`.ts` under `plugins/soleur/ ** /scripts/` are not scanned.
+ *   - The CWD-relative runner operands (ratchet forms b/c/d/e) are RATCHETED (no growth)
+ *     by the third axis; their migration is #6222. CWD-relative `Read plugins/soleur/…`
+ *     instructions are #8729.
+ *   - Shipped `.sh`/`.ts` under `plugins/soleur/ ** /scripts/` are not scanned: the
+ *     variable is a real runtime variable there, and A17's BASH_SOURCE rule governs them.
  *   - `redact-sentinel.test.sh` pins the corpus-wide negative instead; it is a
  *     `.test.sh`, so it is outside this file's SKILL.md axis by construction.
  *   - Remaining follow-ups: #7452.
@@ -1371,14 +1371,16 @@ describe("plugin-root anchoring — skills secret-gate subset (#7450)", () => {
 });
 
 /* ========================================================================== *
- * THIRD AXIS — the #7453 ratchet over ALL skill docs (PR-1 slice).
+ * THIRD AXIS — the ratchet over ALL skill docs (#8570; re-scoped by #7453).
  *
  * The two axes above are ZERO-TOLERANCE and scoped: the customer-facing command
  * surface, and the skills SECRET-GATE subset. Both stay exactly as they are. This
  * axis is a RATCHET over the rest: every CWD-controllable executed anchor in
  * `plugins/soleur/skills/ ** /*.md` is pinned by (path, normalized text) with a
- * multiplicity count, so the existing debt cannot GROW while the migration itself
- * stays deferred to #7453.
+ * multiplicity count, so the existing debt cannot GROW. Form (a) — a default arm on
+ * the token — left this ratchet in #7453: it was migrated to zero and is now a flat
+ * zero in the fourth axis, where admitting one means editing reviewed code rather than
+ * regenerating a baseline row. What remains here (forms b-e) is #6222's migration.
  *
  * WHY ITS OWN ENUMERATOR. `skillFiles()` is a readdir/realpath walk that collects
  * only files named SKILL.md. Widening it would do two wrong things at once: it
@@ -1406,15 +1408,16 @@ const RATCHET_BASELINE = resolve(__dirname, "fixtures/plugin-root-skills-ratchet
  * theoretically, narrower than the property it names.
  *
  * The floors sit below the measured values with a narrowing budget, not a safety
- * margin.
+ * margin. #7453 lowered RATCHET_MIN_ROWS 120 -> 85 when form (a) left the axis: its
+ * 38 rows (99 occurrences) were migrated, leaving 93 rows (measured 2026-09-24).
  *
  * They exist for the authoring case specifically: a broken extractor at authoring time
  * yields an EMPTY baseline, a green suite, and an R3 dispatch row that can never fire —
  * so the floors are what stop this axis from shipping vacuous. Lower them only when a
- * migration genuinely DELETES sites (that is #7453's job), never to admit new ones.
+ * migration genuinely DELETES sites (#6222's job now), never to admit new ones.
  */
 const RATCHET_MIN_FILES = 220;
-const RATCHET_MIN_ROWS = 120;
+const RATCHET_MIN_ROWS = 85;
 
 /** Every tracked markdown doc under the skills tree — the INDEX, never the disk. */
 function skillDocFiles(): string[] {
@@ -1433,7 +1436,7 @@ interface RatchetSite {
   file: string;
   /** the matched anchor, whitespace-collapsed — NEVER a line number (#7453 keys on content) */
   text: string;
-  form: "a" | "b" | "c" | "d" | "e";
+  form: "b" | "c" | "d" | "e";
 }
 
 // Aligned with this file's own command-axis `RUNNERS` (see the top of the file).
@@ -1453,15 +1456,14 @@ const GAP = String.raw`(?:\s+-[A-Za-z-]+)*\s+['"]?`;
  * form (d) shares no code path with form (a).
  *
  * DELIBERATELY OUT OF SCOPE: a bare `Read plugins/soleur/…` instruction is also
- * CWD-relative for the agent that follows it, and occurs ~105 times. It is a
- * READ, not an execution, so it cannot run a planted script — the property this
- * axis ratchets. Widening to it is #7453's migration, not this gate's job.
+ * CWD-relative for the agent that follows it (~128 occurrences, measured 2026-09-24).
+ * It is a READ, not an execution, so it cannot run a planted script — the property
+ * this axis ratchets. That class is #8729.
  */
 const RATCHET_FORMS: readonly { form: RatchetSite["form"]; re: RegExp }[] = [
-  // (a) a default-valued expansion: the default is what runs when the variable is
-  //     unset. `:?` on the colon — `${VAR-default}` and `${VAR:=default}` are the
-  //     same hazard, and this file's COMMAND axis already rejects both by name.
-  { form: "a", re: /\$\{CLAUDE_PLUGIN_ROOT:?[-?=][^}]*\}/g },
+  // (a) — a default arm on the token — LEFT this ratchet in #7453. It is a flat zero
+  //     in the whole-payload axis (Guard 1) instead: a baseline row can be regenerated,
+  //     a predicate can only be edited in reviewed code.
   // (b) an unanchored repo-relative path in RUNNER position.
   { form: "b", re: new RegExp(String.raw`\b${RUNNER}${GAP}plugins/soleur/[A-Za-z0-9._/-]+`, "g") },
   // (c) the same with a leading `./`.
@@ -1542,7 +1544,7 @@ function serializeBaseline(counts: Map<string, number>): string {
 }
 
 const RATCHET_HEADER = [
-  "# plugin-root-skills-ratchet.tsv — the #7453 debt, pinned so it cannot GROW.",
+  "# plugin-root-skills-ratchet.tsv — CWD-relative runner debt, pinned so it cannot GROW.",
   "#",
   "# count<TAB>repo-relative-path<TAB>normalized-matched-text",
   "#",
@@ -1550,7 +1552,7 @@ const RATCHET_HEADER = [
   "# invalidate the row. DO NOT add rows to make a red run pass: a new row is a new",
   "# CWD-controllable anchor, which is the thing this file exists to stop. Fix the",
   "# anchor instead — `${CLAUDE_PLUGIN_ROOT}/…`, no default. The migration of the",
-  "# rows already here is tracked in #7453.",
+  "# rows already here is tracked in #6222 (Read-instruction class: #8729).",
   "#",
   "# Regenerate (only after DELETING sites, never to admit new ones):",
   "#   SOLEUR_WRITE_RATCHET_BASELINE=plugin-root-skills-ratchet npx vitest run test/plugin-root-anchoring.test.ts",
@@ -1558,7 +1560,7 @@ const RATCHET_HEADER = [
   "# cannot silently install an empty baseline that every later run then satisfies.",
 ].join("\n");
 
-describe("plugin-root anchoring — skills ratchet (#7453 PR-1 slice)", () => {
+describe("plugin-root anchoring — skills ratchet (#8570, forms b-e; #6222)", () => {
   const files = skillDocFiles();
   const sites = files.flatMap((f) => ratchetSitesIn(f, readFileSync(resolve(REPO_ROOT, f), "utf8")));
   const live = tallySites(sites);
@@ -1629,7 +1631,7 @@ describe("plugin-root anchoring — skills ratchet (#7453 PR-1 slice)", () => {
         grown.push(
           `${file}: NEW CWD-controllable anchor \`${text}\` — rewrite it as ` +
             `"\${CLAUDE_PLUGIN_ROOT}/…" (no default). Do NOT add a baseline row; the ` +
-            `migration of the existing rows is tracked in #7453.`,
+            `migration of the existing rows is tracked in #6222.`,
         );
       } else if (n > was) {
         const [file, text] = key.split("\t");
@@ -1669,7 +1671,7 @@ describe("plugin-root anchoring — skills ratchet (#7453 PR-1 slice)", () => {
     //
     // Form (c) — `bash ./plugins/soleur/…` — is ANTICIPATED, not measured: it has ZERO
     // live occurrences (measured 2026-09-23 post-widening: a 98, b 23, c 0, d 87,
-    // e 23). It stays in the matcher because it is the same hazard one `./` over, and
+    // e 23; form (a) then left this axis in #7453 — see RATCHET_FORMS). It stays in the matcher because it is the same hazard one `./` over, and
     // requiring it to be REPRESENTED would red the gate on a tree that simply does not
     // contain it. What guards it is R2: a first (c) site is a row absent from the
     // baseline, which is a RED with the paste-ready rewrite in the message.
@@ -1677,7 +1679,7 @@ describe("plugin-root anchoring — skills ratchet (#7453 PR-1 slice)", () => {
     // unguarded" are different claims, and only the second is a defect.
     const byForm = new Map<string, number>();
     for (const s of sites) byForm.set(s.form, (byForm.get(s.form) ?? 0) + 1);
-    check([...(["a", "b", "d", "e"] as const)].filter((f) => (byForm.get(f) ?? 0) === 0)).toEqual([]);
+    check([...(["b", "d", "e"] as const)].filter((f) => (byForm.get(f) ?? 0) === 0)).toEqual([]);
   });
 
   it("R6: the suite ran every assertion (anti-vacuity floor)", () => {

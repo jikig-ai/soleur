@@ -757,7 +757,7 @@ fi
 #
 # Every other scenario in this file invokes worktree-manager.sh by absolute path
 # inside a fixture. A marketplace user never does that — their agent executes the
-# `${CLAUDE_PLUGIN_ROOT:-…}` form written in SKILL.md. That hop is the link the
+# `"${CLAUDE_PLUGIN_ROOT}/…"` form written in SKILL.md (bare since #7453). That hop is the link the
 # whole fix has to traverse, and nothing tested it: the suite could be fully
 # green while delivering nothing to the population #7409 is about.
 # ---------------------------------------------------------------------------
@@ -770,16 +770,16 @@ else
   fail "scenario 10 fixture: cwd contains ./plugins/soleur — the anchor's default arm would \
 resolve and the hop under test is bypassed"
 fi
-# `export` on its own line, NOT a `CLAUDE_PLUGIN_ROOT=… bash "${CLAUDE_PLUGIN_ROOT:-…}"`
+# `export` on its own line, NOT a `CLAUDE_PLUGIN_ROOT=… bash "${CLAUDE_PLUGIN_ROOT}/…"`
 # prefix assignment: a command-prefix assignment populates the COMMAND's
 # environment, but every expansion on that same command line is performed first,
-# against the current shell — so the anchor would take its DEFAULT arm and this
-# scenario would silently test `./plugins/soleur` from a directory that has none.
+# against the current shell — so the anchor would expand EMPTY and this scenario
+# would silently test a root-anchored `/skills/…` path instead of the hop.
 # Measured: written that way, the run failed with `bash: ./plugins/…: No such
 # file or directory`, and the negative assertion below still reported `pass`.
 if ( cd "$NONSOLEUR" \
      && export CLAUDE_PLUGIN_ROOT="$CACHE_ROOT" \
-     && bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh" \
+     && bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" \
         list >"$TMP/anchor10.log" 2>&1 ); then
   :
 fi
@@ -804,6 +804,39 @@ if grep -q 'SOLEUR_WORKTREE_LEASE_LIB_MISSING' "$TMP/anchor10.log"; then
   fail "scenario 10: the MISSING marker was emitted through the anchor hop"
 else
   pass "scenario 10: no MISSING marker through the anchor hop"
+fi
+
+# ---------------------------------------------------------------------------
+# SCENARIO 10b (#7453, ADR-179 A18): the same hop with the root UNSET, from a tree
+# that plants its own `./plugins/soleur/…/worktree-manager.sh` decoy. The bare anchor
+# must fail closed on a root-anchored `/skills/…` path and never run the decoy. The
+# twin runs the PRE-migration default-arm hop from the same directory and MUST run
+# the decoy — proving the decoy is reachable, so the empty ledger above means something.
+# The default arm is assembled from pieces so this file never spells the rejected form.
+# ---------------------------------------------------------------------------
+DECOYTREE="$TMP/decoy-tree"; mkdir -p "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts"
+DECOY_LEDGER="$(mktemp -p "$TMP" decoy-ledger.XXXXXX)"
+printf '#!/usr/bin/env bash\necho decoy-ran >> "%s"\n' "$DECOY_LEDGER" \
+  > "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+chmod +x "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+( cd "$DECOYTREE" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
+    bash -c 'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" list' \
+    >"$TMP/anchor10b.log" 2>&1 )
+rc10b=$?
+if [[ "$rc10b" -ne 0 ]] && grep -q '/skills/git-worktree/scripts/worktree-manager.sh: No such file' "$TMP/anchor10b.log" \
+   && [[ ! -s "$DECOY_LEDGER" ]]; then
+  pass "scenario 10b: root unset — the bare anchor fails closed and the planted decoy never runs"
+else
+  fail "scenario 10b: root unset — rc=$rc10b ledger=$(cat "$DECOY_LEDGER") out=$(cat "$TMP/anchor10b.log")"
+fi
+DEF=':-'
+( cd "$DECOYTREE" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
+    bash -c "bash \"\${CLAUDE_PLUGIN_ROOT${DEF}./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh\" list" \
+    >/dev/null 2>&1 )
+if grep -qx 'decoy-ran' "$DECOY_LEDGER"; then
+  pass "scenario 10b twin: the pre-migration default-arm hop DOES run the decoy"
+else
+  fail "scenario 10b twin: the decoy did not run — scenario 10b's empty ledger proves nothing"
 fi
 
 # ---------------------------------------------------------------------------
@@ -982,7 +1015,7 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=40  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc. 8-12)
+MIN_ASSERTIONS=42  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc. 8-12) -> 42 (#7453 sc. 10b)
 # Calibrated to the MEASURED count, not to a round number below it. At 32 against a
 # 34-dispatch suite the floor carried exactly two assertions of slack — and scenario 9
 # + 9b is exactly two dispatches, so deleting the reaper-refusal arm (the one guarding
