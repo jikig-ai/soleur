@@ -23,18 +23,24 @@ describe.each([
 
   it("never promises a refresh by itself when a diagnostic is present", () => {
     expect(copy).toContain("do NOT tell them the diagram will refresh by itself");
-    // The only "will update" promise is scoped to the no-diagnostic case
-    // (superseded by a newer save), which is the only case the writer leaves
-    // without a diagnostic.
+    // #8695: nothing on the page refreshes by itself, in ANY case — including
+    // the no-diagnostic supersede, whose newer change may never render (a push
+    // from outside Soleur). Same copy as the banner's SUPERSEDED_LINE.
+    // The only "will update" left is inside the negation pinned below.
+    expect(copy).not.toMatch(/shortly/);
     expect([...copy.matchAll(/will update/g)]).toHaveLength(1);
+    expect(copy).toContain("do NOT say it will update by itself");
     expect(copy).toContain(
-      "When `rerendered` is false and there is NO `rerenderDiagnostic`, a newer save is rendering the diagram — say it will update shortly.",
+      "When `rerendered` is false and there is NO `rerenderDiagnostic`, a newer change to the diagram source was saved before this one was rendered, so this save did not update the diagram: say so, do NOT say it will update by itself, and offer to save again to render the latest version.",
     );
   });
 
   it("names what the agent CAN fix (source errors, retries) and what it cannot", () => {
     expect(copy).toContain("is a source error you can fix with this tool, after confirming the change with the user");
-    expect(copy).toContain('"Save again to retry" means you may offer to save the same content again');
+    expect(copy).toContain(
+      '"Save again" (to retry, in a moment, or in a few minutes) means you may offer to save the same content again after that wait',
+    );
+    expect(copy).toContain("if a retry returns the same diagnostic, stop offering retries and pass on any advice to contact support");
     expect(copy).toContain("must be changed by the user in their GitHub repository — you cannot fix those with this tool");
     // Every refusal noun the writer emits is one the guidance recognises.
     for (const noun of Object.values(REFUSAL_NOUN)) expect(copy).toContain(noun);

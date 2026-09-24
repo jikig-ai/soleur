@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gitCleanEnv } from "./lib/git-clean-env";
 import {
   classifyDiscoverabilityResult,
   extractObservabilityBlock,
@@ -597,6 +598,7 @@ function expectBoth(block: string, expected: string): void {
 function runAwk(block: string): string {
   const proc = Bun.spawnSync({
     cmd: ["awk", "-f", AWK_PATH],
+    env: gitCleanEnv(),
     stdin: new TextEncoder().encode(block),
     stdout: "pipe",
     stderr: "pipe",
@@ -1089,7 +1091,7 @@ describe("#6772 P1-P3 — awk/TS parity harness", () => {
   // A CI image swapping mawk for gawk (or busybox awk) surfaces as a NAMED
   // failure here rather than a mystery diff in P1.
   test("awk interpreter is a known implementation (mawk or gawk)", () => {
-    const proc = Bun.spawnSync({ cmd: ["awk", "--version"], stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawnSync({ cmd: ["awk", "--version"], env: gitCleanEnv(), stdout: "pipe", stderr: "pipe" });
     const banner =
       new TextDecoder().decode(proc.stdout) +
       new TextDecoder().decode(proc.stderr);
@@ -1146,11 +1148,17 @@ describe("#6772 SKILL.md wiring invariants", () => {
   const gateWindow = makeGateWindow(skill.split("\n"));
   const shellGate = () => gateWindow(/shell-active|\$'\\n'/);
 
-  test("Step 10.4 calls the extracted awk via git rev-parse, not CLAUDE_PLUGIN_ROOT", () => {
-    expect(skill).toMatch(
-      /FORM_A_AWK="\$\(git rev-parse --show-toplevel\)\/plugins\/soleur\/skills\/preflight\/scripts\/parse-form-a\.awk"/,
-    );
+  // INVERTED by #7453 (ADR-179 A18). This test used to pin the git-root form ("via git
+  // rev-parse, not CLAUDE_PLUGIN_ROOT"); after `gh pr checkout` the git root is the REVIEWED
+  // PARTY's tree, so both Check 10 operands now resolve through the loader token.
+  test("Step 10.4 resolves both Check 10 operands through the loader token, never the git root", () => {
+    expect(skill).toMatch(/^FORM_A_AWK="\$\{CLAUDE_PLUGIN_ROOT\}\/skills\/preflight\/scripts\/parse-form-a\.awk"$/m);
+    expect(skill).toMatch(/^PROBE_GATE="\$\{CLAUDE_PLUGIN_ROOT\}\/skills\/preflight\/scripts\/probe-verb-gate\.sh"$/m);
     expect(skill).toMatch(/test -r "\$FORM_A_AWK"/);
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    expect(check10).not.toBeNull();
+    // No git-root CODE root: a `show-toplevel)` followed by `/plugins/soleur`.
+    expect(check10![0]).not.toMatch(/show-toplevel\)"?\/plugins\/soleur/);
   });
 
   test("Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B", () => {
@@ -1209,7 +1217,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
   // the gate. It asserts identical VERDICT and identical REASON, so a message
   // reworded on one side alone also reddens.
   const runGate = (cmd: string): { rejected: boolean; reason: string } => {
-    const p = Bun.spawnSync({ cmd: ["bash", GATE_PATH, cmd], stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawnSync({ cmd: ["bash", GATE_PATH, cmd], env: gitCleanEnv(), stdout: "pipe", stderr: "pipe" });
     const out = new TextDecoder().decode(p.stdout).trim();
     expect(p.exitCode, `gate must exit 0 or 1 for: ${cmd}`).not.toBe(2);
     return { rejected: p.exitCode === 1, reason: out };
@@ -2425,12 +2433,23 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // credentials from Doppler soleur/prd_terraform. NO SUBSTITUTE: `plaintext_journal` rides the
   // git-data host's boot_complete, which lands only in Better Stack Logs and Sentry; the host is
   // on the private network and no unauthenticated endpoint exposes its boot state. Genuine.
-  // #7761 (2026-09-24): +1 (25 -> 26, after #5274 took 24 -> 25) for `2026-09-24-fix-7761-flip-rollout-probe-post-cutover-answer-key-plan.md`.
+  // #8717 (2026-09-24): +1 (25 -> 26, after #5274 took 24 -> 25) for `2026-09-24-fix-leader-loop-prompt-caching-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/betterstack-query.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the leader-loop SOLEUR_CLAUDE_COST markers
+  // exist only in the Better Stack Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #8630 (2026-09-24): +1 (26 -> 27, after #8717 took 25 -> 26) for `2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/sentry-alert-live-fidelity.sh`) reads the org's alert workflows with the
+  // Doppler prd SENTRY_IAC_AUTH_TOKEN. NO SUBSTITUTE: the property is the LIVE content of the
+  // cron-monitor-failure workflow (its detectorIds binding and email action), which no
+  // unauthenticated Sentry endpoint exposes. Genuine declaration.
+  // #7761 (2026-09-24): +1 (27 -> 28, after #8630 took 26 -> 27) for `2026-09-24-fix-7761-flip-rollout-probe-post-cutover-answer-key-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
   // probe (`scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`) reads
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. NO SUBSTITUTE: the evidence is the dedicated host's
   // journald rows in the Logs warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 26;
+  const BASELINE_DECLARED_PROBES = 28;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
@@ -2456,5 +2475,79 @@ describe("#7393 G — credentials_required corpus baseline", () => {
       declaring.length,
       `plans declaring credentials_required: ${JSON.stringify(declaring)}. FIRST confirm each declaration is intentional — a leftover template comment or a stray line outside the discoverability_test sub-block must be DELETED, not baselined. Only if every declaration is genuine does raising this baseline become the reviewable diff line the waiver's drift control depends on.`,
     ).toBe(BASELINE_DECLARED_PROBES);
+  });
+});
+
+// #7453 — behavioural row for the Pattern-C migration (ADR-179 A18). Runs the SHIPPED Form A
+// block with the plugin root UNSET, from a scratch repo whose own
+// `plugins/soleur/skills/preflight/scripts/parse-form-a.awk` is a decoy that writes a ledger.
+// The shipped block must fail closed and never execute the decoy. The twin runs the
+// PRE-migration git-root form of the same block and MUST execute the decoy — that proves the
+// decoy can run, so an empty ledger above means something.
+describe("Check 10 Form A block — unset plugin root never executes the checked-out copy (#7453)", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync } = require("node:fs") as typeof import("node:fs");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { gitFixtureEnv } = require("./lib/git-fixture-env") as typeof import("./lib/git-fixture-env");
+
+  const skillText = readFileSync(SKILL_PATH, { encoding: "utf8" });
+  const lines = skillText.split("\n");
+  const from = lines.findIndex((l) => l.startsWith("FORM_A_AWK="));
+  const to = lines.findIndex((l, i) => i > from && l.startsWith("AWK_RC=$?"));
+  const block = lines.slice(from, to + 1).join("\n");
+  const PRE_MIGRATION =
+    'FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"';
+
+  function runBlock(src: string): { rc: number; out: string; ledger: string } {
+    const dir = mkdtempSync(join(tmpdir(), "form-a-decoy-"));
+    const env = gitFixtureEnv(dir);
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.GROK_PLUGIN_ROOT;
+    Bun.spawnSync(["git", "init", "-q", dir], { env, stdout: "pipe", stderr: "pipe" });
+    const ledger = join(dir, "decoy-ledger");
+    writeFileSync(ledger, "");
+    const decoyDir = join(dir, "plugins", "soleur", "skills", "preflight", "scripts");
+    mkdirSync(decoyDir, { recursive: true });
+    writeFileSync(join(decoyDir, "parse-form-a.awk"), `BEGIN { print "decoy-ran" > "${ledger}"; exit 0 }\n`);
+    writeFileSync(join(dir, "preflight-observability.txt"), "");
+    const script = `set -uo pipefail\nPREFLIGHT_TMP="${dir}"\n${src}\necho "BLOCK_DONE"\n`;
+    const p = Bun.spawnSync({ cmd: ["bash", "-c", script], cwd: dir, env, stdout: "pipe", stderr: "pipe" });
+    return {
+      rc: p.exitCode ?? -1,
+      out: p.stdout.toString() + p.stderr.toString(),
+      ledger: existsSync(ledger) ? readFileSync(ledger, "utf8") : "<missing>",
+    };
+  }
+
+  test("the extracted block is the real one (non-empty, carries the fail-closed test)", () => {
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    expect(block).toContain('test -r "$FORM_A_AWK"');
+    expect(block).toContain('CMD=$(awk -f "$FORM_A_AWK"');
+  });
+
+  // Measured: Check 10 runs under `set -uo pipefail`, so an unset token aborts the block at
+  // its FIRST line (`CLAUDE_PLUGIN_ROOT: unbound variable`, rc 127) — before the `test -r`
+  // guard is reached. Both are fail-closed; the row pins the one that actually happens.
+  test("shipped block, root unset: aborts before any parser runs, decoy ledger stays empty", () => {
+    const r = runBlock(block);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("CLAUDE_PLUGIN_ROOT: unbound variable");
+    expect(r.out).not.toContain("BLOCK_DONE");
+    expect(r.ledger).toBe("");
+  });
+
+  test("shipped block, root set but empty: the test -r guard fails closed at /skills/", () => {
+    const r = runBlock(`CLAUDE_PLUGIN_ROOT=""\n${block}`);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("FAIL: Check 10 parser missing at /skills/");
+    expect(r.out).toContain("plugin root unresolved?");
+    expect(r.ledger).toBe("");
+  });
+
+  test("twin control: the pre-migration git-root block DOES execute the decoy", () => {
+    const pre = block.replace(lines[from], PRE_MIGRATION);
+    expect(pre).not.toBe(block);
+    const r = runBlock(pre);
+    expect(r.ledger).toContain("decoy-ran");
   });
 });

@@ -61,12 +61,15 @@ S1_STUB="$(mktemp -d)"; trap 'rm -rf "$S1_STUB"' EXIT
 make_doppler_stub "$S1_STUB"
 make_create_curl_stub "$S1_STUB"
 
+# Writes are driven through a real pty with `yes` typed at the ack (#8486): the
+# script refuses a write with no TTY (exit 64) and no flag skips the prompt.
 run_create() { # runs create.sh in an EMPTY dir (no server.ts/.env.example).
-  local rundir; rundir="$(mktemp -d)"
+  local rundir cmd; rundir="$(mktemp -d)"
+  printf -v cmd '%q ' bash "$CREATE" "$@"
   ( cd "$rundir" \
-    && echo yes | PATH="$S1_STUB:$PATH" \
-         CURL_LOG="$CURL_LOG" DOPPLER_SET_LOG="$DOPPLER_SET_LOG" \
-         bash "$CREATE" "$@" )
+    && printf 'yes\n' | PATH="$S1_STUB:$PATH" \
+         CURL_LOG="$CURL_LOG" DOPPLER_SET_LOG="$DOPPLER_SET_LOG" SHELL="$(type -P bash)" \
+         timeout 60 script -qec "$cmd" /dev/null )
 }
 
 # 1a. NEGATIVE CONTROL: without --flagsmith-only, an empty dir (no server.ts)
@@ -149,16 +152,17 @@ STUB
 S2_STUB="$(mktemp -d)"
 make_doppler_stub "$S2_STUB"
 make_flip_curl_stub "$S2_STUB"
-OLD_TRAP_DIR="$S1_STUB"
 trap 'rm -rf "$S1_STUB" "$S2_STUB"' EXIT
 
 run_flip() { # env knobs come from caller; runs from repo root (FLAG_ENV_VARS resolution)
   # EVAL_POLL_SLEEP=0 / fewer tries keeps the no-match (silent-leak) paths fast.
+  local cmd
+  printf -v cmd '%q ' bash "$FLIP" "$@"
   ( cd "$REPO_ROOT" \
-    && PATH="$S2_STUB:$PATH" CURL_LOG="$CURL_LOG" DOPPLER_SET_LOG="$DOPPLER_SET_LOG" \
+    && printf 'yes\n' | PATH="$S2_STUB:$PATH" CURL_LOG="$CURL_LOG" DOPPLER_SET_LOG="$DOPPLER_SET_LOG" \
        TARGET_ORG_FULL="$TARGET_ORG_FULL" CONTROL_ORG_FULL="$CONTROL_ORG_FULL" FLAG_NAME="$FLAG_NAME" \
-       EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=2 \
-       bash "$FLIP" "$@" )
+       EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=2 SHELL="$(type -P bash)" \
+       timeout 60 script -qec "$cmd" /dev/null )
 }
 
 # 2a. Source-level: org branch must target the per-feature <flag>-orgs segment
@@ -181,7 +185,7 @@ fi
 #     and the eval (/identities/) + segment POST (provision) actually happened.
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"
 if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
-     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   grep -q 'POST https://edge.api.flagsmith.com/api/v1/identities/' "$CURL_LOG" \
     || { echo "pr2: FAIL — eval-verify did not POST the edge identities endpoint" >&2; fail=1; }
@@ -195,7 +199,7 @@ fi
 #     control org, the script MUST fail loud (the FR8 control-negative assertion).
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"
 if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=true \
-     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   echo "pr2: FAIL — control-org leak (eval true for control) must fail loud, not exit 0" >&2; fail=1
 fi
@@ -204,7 +208,7 @@ fi
 #     flag evaluating OFF for the target -> exit 0 (eval=false is the expected state).
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"
 if ! EVAL_TARGET_ENABLED=false EVAL_CONTROL_ENABLED=false \
-       run_flip "$FLAG_NAME" prd off --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+       run_flip "$FLAG_NAME" prd off --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
        >/dev/null 2>&1; then
   echo "pr2: FAIL — off --org with eval=false target should exit 0" >&2; fail=1
 fi
@@ -214,7 +218,7 @@ fi
 #     Membership-set equality alone would pass here; eval-verify must catch it.
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"
 if EVAL_TARGET_ENABLED=false EVAL_CONTROL_ENABLED=false \
-     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   echo "pr2: FAIL — on --org with target NOT enabled must fail loud (silent-leak guard)" >&2; fail=1
 fi
@@ -225,7 +229,7 @@ fi
 #     "false", silently passing the control-negative + off assertions.
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"
 if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false EVAL_HTTP_CODE=500 \
-     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   echo "pr2: FAIL — edge eval HTTP 500 must fail loud (no fail-open), not exit 0" >&2; fail=1
 fi

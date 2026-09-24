@@ -176,8 +176,8 @@ most tempting.
 Every producer below is anchored to `${CLAUDE_PLUGIN_ROOT}` — **bare, never
 `:-` or `:?`** — the operand is **quoted** (an install path may contain spaces),
 and its path is **payload-relative** (the root already *is* `plugins/soleur`, so
-it is `"${CLAUDE_PLUGIN_ROOT}/scripts/foo.ts"`, never
-`"${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.ts"`).
+it is `"${CLAUDE_PLUGIN_ROOT}/scripts/foo.ts"`, never the token followed by a second
+`plugins/soleur/` segment).
 
 Why this gate checks plugin IDENTITY and not directory shape: `CLAUDE_PLUGIN_ROOT`
 is an ordinary environment variable, and the Bash tool inherits the user's

@@ -22,33 +22,58 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
 
 // Mock the shared building blocks so we test C4Diagram's WIRING (lifted `stale`
 // state + tab switch on save), not the real canvas/CodeMirror plumbing.
-vi.mock("@/components/kb/c4-shared", () => ({
-  Spinner: () => <div>loading</div>,
-  useC4Project: () => ({
-    data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
-    error: null,
-    loading: false,
-    reload: vi.fn(),
-  }),
-  C4Canvas: () => <div data-testid="c4-canvas" />,
-  C4Diagnostics: ({ stale }: { stale?: boolean }) => (
-    <div data-testid="c4-diagnostics" data-stale={stale ? "true" : "false"} />
-  ),
-  C4CodePanel: ({
-    onSaved,
-  }: {
-    onSaved: (rerendered: boolean) => void | Promise<void>;
-  }) => (
-    <>
-      <button data-testid="c4-save-ok" onClick={() => void onSaved(true)}>
-        save-ok
-      </button>
-      <button data-testid="c4-save-fail" onClick={() => void onSaved(false)}>
-        save-fail
-      </button>
-    </>
-  ),
-}));
+vi.mock("@/components/kb/c4-shared", async () => {
+  // #8695: the REAL banner (light module, no canvas/CodeMirror) wrapped in a div
+  // that exposes the lifted props — attributes for wiring, real text for copy.
+  const { C4Diagnostics: RealC4Diagnostics } = await import(
+    "@/components/kb/c4-diagnostics"
+  );
+  return {
+    Spinner: () => <div>loading</div>,
+    useC4Project: () => ({
+      data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
+      error: null,
+      loading: false,
+      reload: vi.fn(),
+    }),
+    C4Canvas: () => <div data-testid="c4-canvas" />,
+    C4Diagnostics: (props: React.ComponentProps<typeof RealC4Diagnostics>) => (
+      <div
+        data-testid="c4-diagnostics"
+        data-stale={props.stale ? "true" : "false"}
+        data-stale-diagnostic={props.staleDiagnostic ?? ""}
+      >
+        <RealC4Diagnostics {...props} />
+      </div>
+    ),
+    C4CodePanel: ({
+      onSaved,
+    }: {
+      onSaved: (
+        rerendered: boolean,
+        diagnostic?: string,
+      ) => void | Promise<void>;
+    }) => (
+      <>
+        <button data-testid="c4-save-ok" onClick={() => void onSaved(true)}>
+          save-ok
+        </button>
+        <button data-testid="c4-save-fail" onClick={() => void onSaved(false)}>
+          save-fail
+        </button>
+        <button
+          data-testid="c4-save-fail-diag"
+          onClick={() => void onSaved(false, "diagram not updated: x")}
+        >
+          save-fail-diag
+        </button>
+      </>
+    ),
+  };
+});
+
+// The copy itself is pinned literally in c4-shared.test.tsx.
+const { SUPERSEDED_LINE: SUPERSEDED } = await import("@/components/kb/c4-diagnostics");
 
 async function renderEmbed(c4Edit = true, readOnly = false) {
   const { default: C4Diagram } = await import("@/components/kb/c4-diagram");
@@ -93,6 +118,49 @@ describe("C4Diagram (inline embed) — staleness wiring (Layer 2)", () => {
         screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
       ).toBe("true"),
     );
+  });
+});
+
+describe("C4Diagram (inline embed) — stale reason survives the tab switch (#8695)", () => {
+  it("after a failed save WITH a reason, the Diagram tab's banner shows it; later saves clear/replace it", async () => {
+    await renderEmbed();
+    const banner = () => screen.getByTestId("c4-diagnostics");
+
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    // onSaved switches to the Diagram tab, unmounting C4CodePanel and its
+    // `Saved — <diagnostic>` message: the banner is the only surface left.
+    await waitFor(() => expect(screen.getByTestId("c4-canvas")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText("Diagram not updated: x")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("c4-save-ok")).toBeNull();
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe(
+      "diagram not updated: x",
+    );
+
+    // A following successful save clears it.
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-ok"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("false"),
+    );
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
+    expect(screen.queryByText("Diagram not updated: x")).toBeNull();
+
+    // Reason again, then a no-reason failure replaces it with the supersede line.
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(screen.getByText("Diagram not updated: x")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail"));
+    await waitFor(() => expect(screen.getByText(SUPERSEDED)).toBeTruthy());
+    expect(screen.getByTestId("c4-canvas")).toBeTruthy();
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
+    expect(screen.queryByText("Diagram not updated: x")).toBeNull();
   });
 });
 
