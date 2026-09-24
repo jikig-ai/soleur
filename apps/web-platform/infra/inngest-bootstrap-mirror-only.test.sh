@@ -633,7 +633,7 @@ echo "passed: $pass  failed: $fail"
 # most load-bearing structural checks landed exactly on a floor of 30 and still certified the
 # run. A floor catches total neutering; only a tight one catches attrition. Re-derive it when
 # adding assertions — that is the intended maintenance cost.
-MIN_ASSERTIONS=55
+MIN_ASSERTIONS=62
 if (( pass + fail < MIN_ASSERTIONS )); then
   echo "FAIL - only $((pass + fail)) assertions ran (floor $MIN_ASSERTIONS) — a green run here would be vacuous"
   exit 1

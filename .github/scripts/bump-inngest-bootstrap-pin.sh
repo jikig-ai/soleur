@@ -8,11 +8,16 @@
 # PR's commit built an image of unreviewed bytes and this script pinned it: the
 # bump PR merged 93 minutes before its source PR did. The `ancestry` stage
 # refuses a target whose commit main cannot reach, BEFORE the registry is
-# consulted, and binds the pin to the commit the build actually built
-# (--signed-commit). This is the authoritative check: the bump job runs main's
-# copy of this script, while the build job's own refusal runs whatever copy of
-# the workflow the tagged commit carries. Ancestry is an accident control, not a
-# secret boundary.
+# consulted, binds the pin to the commit the build job checked out
+# (--signed-commit), and requires the resolved image's
+# org.opencontainers.image.revision label to name the target's commit — so a
+# registry image left behind by an off-main build cannot be pinned under a tag
+# that was re-pointed onto main (a mirror_only backfill builds nothing, so only
+# the label ties the digest to a commit). An unlabelled (pre-#8747) image is
+# pinned only with auto-merge WITHHELD. This is the authoritative check: the
+# bump job runs main's copy of this script, while the build job's own refusal
+# runs whichever copy of the workflow the triggering ref carries. Ancestry is an
+# accident control, not a secret boundary.
 #
 # WHY THE TARGET IS THE SEMVER-MAX TAG, NEVER THE TRIGGERED TAG. The drift
 # guard (AC6 in cloud-init-inngest-bootstrap.test.sh) compares the pin against
@@ -151,7 +156,7 @@ done
 [[ "$SIGNED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || die args "--signed-digest must be sha256:<64 hex> (got '${SIGNED_DIGEST:-<empty>}')"
 [[ "$SIGNED_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
-  || die args "--signed-commit must be a 40-hex commit (got '${SIGNED_COMMIT:-<empty>}') — a workflow copy that predates #8747 does not pass it; re-publish from a tag cut on main"
+  || die args "--signed-commit must be a 40-hex commit (got '${SIGNED_COMMIT:-<empty>}'). A workflow copy that predates #8747 does not pass it, which means vinngest-${SIGNED_TAG} was cut on a branch forked before the fix and may be off main. Unless main pins it today, delete it (git push origin :refs/tags/vinngest-${SIGNED_TAG}; git tag -d vinngest-${SIGNED_TAG}), then tag a NEW version on main's squash-merge commit; that tag push runs its own publish and bump."
 case "$MIRROR_STATUS" in
   ok|degraded|"") : ;;
   *) die args "--mirror-status must be ok|degraded|'' (got '$MIRROR_STATUS')" ;;
@@ -186,6 +191,10 @@ TARGET=$(git -C "$REPO_DIR" tag --list 'vinngest-v*' 2>/dev/null \
   | sort -V | tail -1 || true)
 [[ -n "$TARGET" ]] \
   || die resolve "no vinngest-v* git tags reachable — checkout needs fetch-depth: 0 + fetch-tags: true"
+# The tag main pins today (first ref in the web-host file). Read here, before
+# the ancestry stage, because the refusal's remediation depends on it: the
+# pinned tag must never be deleted or re-cut (#8747).
+PIN_TAG=$(grep -hoE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$F_WEB" 2>/dev/null | head -1 | sed 's/.*bootstrap://' || true)
 
 # --- ancestry: the target's commit must be reachable from main (#8747) --------
 # Runs BEFORE crane on purpose: an off-main semver-max tag whose publish was
@@ -193,7 +202,7 @@ TARGET=$(git -C "$REPO_DIR" tag --list 'vinngest-v*' 2>/dev/null \
 # "publish still in flight" and exit `skipped` — the wrong diagnosis, green.
 # HEAD is the `ref: main` checkout the bump PR is based on.
 target_on_main() {
-  local tag="vinngest-${TARGET}" shallow tag_c rc=0 who
+  local tag="vinngest-${TARGET}" shallow tag_c rc=0 who mb_err
   # Refused unless the answer is exactly `false`: a cut-off history can report a
   # real ancestor as rc 1, and a git that errors quietly prints nothing.
   shallow=$(git -C "$REPO_DIR" rev-parse --is-shallow-repository 2>/dev/null || true)
@@ -203,7 +212,7 @@ target_on_main() {
   # refs/tags/<name>, so a bare lookup can be answered by a different ref.
   tag_c=$(git -C "$REPO_DIR" rev-parse -q --verify "refs/tags/${tag}^{commit}" 2>/dev/null) \
     || die ancestry "tag not found: refs/tags/${tag} does not resolve to a commit in this checkout"
-  git -C "$REPO_DIR" merge-base --is-ancestor "$tag_c" HEAD 2>/dev/null || rc=$?
+  mb_err=$(git -C "$REPO_DIR" merge-base --is-ancestor "$tag_c" HEAD 2>&1) || rc=$?
   case "$rc" in
     0) : ;;
     1)
@@ -212,10 +221,16 @@ target_on_main() {
       else
         who="the semver-max tag ${tag} (not vinngest-${SIGNED_TAG}, the tag this run published)"
       fi
-      die ancestry "${who} is on commit ${tag_c}, which is not an ancestor of main — it was cut on an unmerged branch, and pinning it would ship unreviewed bytes (#8747). Delete it: git push origin :refs/tags/${tag} — then tag the squash-merge commit on main (git tag -a ${tag} <main-sha> -m '...' && git push origin ${tag}) and re-run this job."
+      if [[ "$TARGET" == "$PIN_TAG" ]]; then
+        # The legacy state right after #8747 merged: main pins an off-main tag.
+        # Deleting or re-cutting it would break the live pin (AC6, GuardA, zot
+        # backfill) and, repeated, walk the target down to an older tag.
+        die ancestry "${who} is on commit ${tag_c}, which is not an ancestor of main, and it is the tag main pins today (a legacy off-main pin, #8747). Do NOT delete or re-cut it. Re-anchor instead: tag a NEW, higher version on main's latest commit (git tag -a vinngest-vX.Y.Z <main-sha> -m '...' && git push origin vinngest-vX.Y.Z); that tag push runs its own publish and bump. Do not re-run this job."
+      fi
+      die ancestry "${who} is on commit ${tag_c}, which is not an ancestor of main: it was cut on an unmerged branch, and pinning it would ship unreviewed bytes (#8747). Delete it (git push origin :refs/tags/${tag}; git tag -d ${tag}), wait for the source PR to merge, then tag its squash-merge commit on main as a NEW version, never a re-used name (git tag -a vinngest-vX.Y.Z <main-sha> -m '...' && git push origin vinngest-vX.Y.Z). That tag push runs its own publish and bump; do not re-run this job."
       ;;
     *)
-      die ancestry "could not decide whether ${tag} (commit ${tag_c}) is on main: git merge-base exited ${rc} — refusing rather than guessing"
+      die ancestry "could not decide whether ${tag} (commit ${tag_c}) is on main: git merge-base exited ${rc} ($(tr '\n' ' ' <<<"${mb_err:-no stderr}" | cut -c1-200)) — refusing rather than guessing"
       ;;
   esac
   # Bind to the commit the build BUILT. The digest cross-check cannot see a tag
@@ -223,9 +238,18 @@ target_on_main() {
   if [[ "$SIGNED_TAG" == "$TARGET" && "$tag_c" != "$SIGNED_COMMIT" ]]; then
     die ancestry "${tag} now names commit ${tag_c}, but this run's build signed commit ${SIGNED_COMMIT} — the tag was re-pointed after the build; refusing to pin a digest built from a different commit. Re-publish ${tag}."
   fi
+  TARGET_COMMIT="$tag_c"
   echo "ancestry: ${tag} (commit ${tag_c}) is on main"
 }
+TARGET_COMMIT=""
 target_on_main
+
+# A pin above every remaining tag means a pinned tag was deleted. The semver-max
+# target would then be a DOWNGRADE, which this script promises never to author
+# (header); refuse it rather than walk production back to an older image.
+if [[ -n "$PIN_TAG" && "$(printf '%s\n%s\n' "$PIN_TAG" "$TARGET" | sort -V | tail -1)" != "$TARGET" ]]; then
+  die resolve "main pins ${PIN_TAG}, which is above every remaining vinngest-v* tag (semver-max ${TARGET}) — the pinned tag was deleted. Refusing to author a downgrade. Restore vinngest-${PIN_TAG} or tag a NEW, higher version on main."
+fi
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -266,6 +290,31 @@ else
   echo "::notice::signed tag ${SIGNED_TAG} is not the semver-max target ${TARGET} (dispatch/mirror_only backfill) — skipping the signed-vs-resolved digest cross-check"
 fi
 echo "target=${TARGET} resolved=${RESOLVED}"
+
+# --- provenance: the image must say it was built from the target's commit ----
+# The digest cross-check above cannot see an image built from an OFF-main commit
+# under a tag that was later re-pointed onto main: a mirror_only run builds
+# nothing, so its signed digest IS that stale image. The build job stamps
+# org.opencontainers.image.revision=<built commit> into the image config (so the
+# digest covers it); require it to equal the target's commit. Unlabelled images
+# predate #8747 (the legacy range) and are pinned with auto-merge withheld.
+PROVENANCE=unlabeled
+rc=0
+timeout 60 crane config --platform linux/amd64 "$IMAGE@$RESOLVED" > "$WORK/config" 2> "$WORK/config.err" || rc=$?
+[[ "$rc" -eq 0 ]] \
+  || die ancestry "could not read the image config of ${IMAGE}@${RESOLVED} (crane rc=${rc}) — refusing to pin an image whose build commit cannot be checked"
+rc=0
+REVISION=$(jq -r '.config.Labels["org.opencontainers.image.revision"] // ""' "$WORK/config" 2>/dev/null) || rc=$?
+[[ "$rc" -eq 0 ]] || die ancestry "the image config of ${IMAGE}@${RESOLVED} is not JSON — refusing to pin it"
+if [[ -n "$REVISION" ]]; then
+  # Never echo the raw label: registry content is free text.
+  [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]] \
+    || die ancestry "${IMAGE}@${RESOLVED} carries a malformed org.opencontainers.image.revision label — refusing to pin it"
+  [[ "$REVISION" == "$TARGET_COMMIT" ]] \
+    || die ancestry "${IMAGE}@${RESOLVED} (the image tagged ${TARGET}) was built from commit ${REVISION}, but vinngest-${TARGET} names commit ${TARGET_COMMIT}: the registry still holds an image from before the tag was re-pointed. Refusing to pin it. Re-publish vinngest-${TARGET} with a full (not mirror_only) build, or tag a NEW version on main."
+  PROVENANCE=bound
+fi
+echo "provenance=${PROVENANCE}"
 
 # --- rewrite: all four sites atomically --------------------------------------
 for f in "$F_WEB" "$F_DED"; do
@@ -384,6 +433,10 @@ else
     body+=$(printf '\n%s\n' "" \
       "Auto-merge is **not** armed: this publish's mirror status does not attest the target (signed=${SIGNED_TAG}, mirror_status=${MIRROR_STATUS:-unset}). Verify zot serves \`${RESOLVED}\` before merging — the dedicated inngest host cannot pull from GHCR (AP-016).")
   fi
+  if [[ "$PROVENANCE" != "bound" ]]; then
+    body+=$(printf '\n%s\n' "" \
+      "Auto-merge is **not** armed: \`${RESOLVED}\` carries no \`org.opencontainers.image.revision\` label, so nothing ties it to commit \`${TARGET_COMMIT}\` (#8747). Confirm it was built from that commit before merging.")
+  fi
   if ! PR_URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
     --title "chore(infra): bump inngest-bootstrap pin to ${TARGET}" \
     --body "$body"); then
@@ -444,7 +497,7 @@ done < <(jq -r --arg b "$BRANCH" \
 # mirror_status attests the tag THIS run published (SIGNED_TAG). When the run
 # published a non-max tag, `ok` says nothing about the max target's zot copy —
 # arm only when the signed tag IS the target AND its mirror is healthy.
-if [[ "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS" == "ok" ]]; then
+if [[ "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS" == "ok" && "$PROVENANCE" == "bound" ]]; then
   if [[ -n "$PR_NUM" ]]; then
     gh pr merge "$PR_NUM" --repo "$REPO" --auto --squash \
       || echo "::warning::auto-merge arm failed for ${PR_URL} — PR left open; the next publish's supersede sweep re-reports it"
@@ -455,7 +508,9 @@ elif [[ -n "$PR_NUM" && "$RESULT_KIND" == "opened" ]]; then
   # Hold comment on a NEWLY opened PR only — on the `existing` path the re-run
   # comment already explains the refresh, and a mirror_only backfill series
   # would otherwise repost the identical hold text on every run.
-  if [[ "$SIGNED_TAG" != "$TARGET" ]]; then
+  if [[ "$PROVENANCE" != "bound" ]]; then
+    hold_reason="\`${RESOLVED}\` carries no \`org.opencontainers.image.revision\` label, so nothing ties it to commit \`${TARGET_COMMIT}\` (#8747); confirm its provenance"
+  elif [[ "$SIGNED_TAG" != "$TARGET" ]]; then
     hold_reason="this publish signed non-max tag \`${SIGNED_TAG}\`; the max tag's zot state is attested by its own publish"
   else
     hold_reason="the zot mirror reported \`mirror_status=${MIRROR_STATUS:-unset}\` for this publish"
@@ -474,8 +529,8 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     echo "- pin: \`${NEWREF}\`"
     echo "- branch: \`${BRANCH}\`"
     echo "- PR: ${PR_URL}"
-    if [[ "$SIGNED_TAG" != "$TARGET" || "$MIRROR_STATUS" != "ok" ]]; then
-      echo "- auto-merge: **withheld** (signed=${SIGNED_TAG} target=${TARGET} mirror_status=${MIRROR_STATUS:-unset})"
+    if [[ "$SIGNED_TAG" != "$TARGET" || "$MIRROR_STATUS" != "ok" || "$PROVENANCE" != "bound" ]]; then
+      echo "- auto-merge: **withheld** (signed=${SIGNED_TAG} target=${TARGET} mirror_status=${MIRROR_STATUS:-unset} provenance=${PROVENANCE})"
     fi
   } >> "$GITHUB_STEP_SUMMARY"
 fi
