@@ -14,6 +14,11 @@ claude --plugin-dir ./plugins/soleur
 
 This loads the plugin directly without installation, so you can test changes immediately.
 
+Skills resolve their scripts through the loader's plugin root (`${CLAUDE_PLUGIN_ROOT}`), not the working
+directory, so a session only runs a worktree's edited scripts when it was started with
+`claude --plugin-dir "$PWD/plugins/soleur"` from that worktree. The absolute root in any emitted command shows
+which copy ran.
+
 ### Codex
 
 From the repository or feature worktree root:
