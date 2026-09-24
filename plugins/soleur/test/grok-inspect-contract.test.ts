@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "fs";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
 import { $ } from "bun";
@@ -67,6 +67,20 @@ describe("grok-inspect-contract static artifacts", () => {
   test("Grok entry-command shims are exactly go, help, and sync", () => {
     expect([...GROK_ENTRY_COMMANDS]).toEqual(["go", "help", "sync"]);
     expect(validateGrokEntryCommandShims()).toEqual([]);
+  });
+
+  test("research stubs omit a model line and inherit stubs keep model: inherit", () => {
+    const agentsDir = resolve(REPO_ROOT, ".grok/agents");
+    const research = readdirSync(agentsDir).filter((name) =>
+      name.startsWith("soleur-engineering-research-") && name.endsWith(".md"),
+    );
+    expect(research.length).toBe(5);
+    for (const name of research) {
+      const frontmatter = readFileSync(join(agentsDir, name), "utf-8").split("---")[1] ?? "";
+      expect(frontmatter).not.toMatch(/^model:/m);
+    }
+    const cpo = readFileSync(join(agentsDir, "soleur-product-cpo.md"), "utf-8");
+    expect(cpo).toMatch(/^model: inherit$/m);
   });
 
   test("sync-grok-agent-compat --check passes", async () => {
