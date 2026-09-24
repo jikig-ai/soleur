@@ -12,8 +12,6 @@
 #   SOLEUR_WRITE_RATCHET_BASELINE=plugin-root-skills-ratchet npx vitest run test/plugin-root-anchoring.test.ts
 # The writer refuses to write below the corpus floors, so a broken extractor
 # cannot silently install an empty baseline that every later run then satisfies.
-1	plugins/soleur/skills/architecture/SKILL.md	bash scripts/regenerate-c4-model.sh
-1	plugins/soleur/skills/architecture/references/likec4-reference.md	bash scripts/regenerate-c4-model.sh
 1	plugins/soleur/skills/brainstorm/SKILL.md	${CLAUDE_PLUGIN_ROOT:-../../plugins/soleur}
 4	plugins/soleur/skills/brainstorm/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 2	plugins/soleur/skills/brainstorm/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
@@ -38,7 +36,6 @@
 1	plugins/soleur/skills/drain-labeled-backlog/SKILL.md	bash plugins/soleur/test/drain-labeled-backlog.test.sh
 1	plugins/soleur/skills/drain-prs/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 1	plugins/soleur/skills/drain-prs/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
-1	plugins/soleur/skills/drain-prs/SKILL.md	bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh
 1	plugins/soleur/skills/drain-prs/SKILL.md	bash plugins/soleur/test/drain-prs.test.sh
 1	plugins/soleur/skills/eval-harness/README.md	bash scripts/gen-models.sh
 3	plugins/soleur/skills/eval-harness/README.md	node scripts/eval-gate.cjs
@@ -68,7 +65,6 @@
 1	plugins/soleur/skills/legal-generate/SKILL.md	bash scripts/lint-legal-mirror-drift-baseline.sh
 1	plugins/soleur/skills/legal-generate/SKILL.md	bash scripts/lint-legal-scope-block-placement.sh
 2	plugins/soleur/skills/merge-pr/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
-1	plugins/soleur/skills/merge-pr/SKILL.md	bash scripts/regenerate-c4-model.sh
 2	plugins/soleur/skills/model-launch-review/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 3	plugins/soleur/skills/one-shot/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 1	plugins/soleur/skills/one-shot/SKILL.md	bash plugins/soleur/scripts/grok-pre-push-gate.sh
@@ -107,16 +103,15 @@
 1	plugins/soleur/skills/ship/SKILL.md	/hooks/infra-config-status
 1	plugins/soleur/skills/ship/SKILL.md	bash plugins/soleur/scripts/deploy-arm.sh
 1	plugins/soleur/skills/ship/SKILL.md	bash plugins/soleur/scripts/grok-pre-push-gate.sh
-1	plugins/soleur/skills/ship/SKILL.md	bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh
 1	plugins/soleur/skills/ship/SKILL.md	bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh
 2	plugins/soleur/skills/ship/SKILL.md	bash scripts/check-adr-ordinals.sh
 1	plugins/soleur/skills/ship/SKILL.md	bash scripts/lib/tweet-eligibility.sh
 3	plugins/soleur/skills/ship/SKILL.md	bash scripts/sync-readme-counts.sh
-5	plugins/soleur/skills/ship/SKILL.md	bash scripts/test-all.sh
+6	plugins/soleur/skills/ship/SKILL.md	bash scripts/test-all.sh
 2	plugins/soleur/skills/ship/references/ci-workflow-authoring.md	node scripts/md-to-mrkdwn.mjs
+1	plugins/soleur/skills/ship/references/detached-battery-verdict.md	bash scripts/test-all.sh
 1	plugins/soleur/skills/ship/references/feature-tweet-draft.md	bash scripts/lib/tweet-eligibility.sh
 3	plugins/soleur/skills/ship/references/settle-then-admin-merge.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
-1	plugins/soleur/skills/ship/references/settle-then-admin-merge.md	bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh
 4	plugins/soleur/skills/skill-creator/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 1	plugins/soleur/skills/skill-creator/SKILL.md	bun plugins/soleur/scripts/harness-parity-census.ts
 1	plugins/soleur/skills/skill-creator/references/be-clear-and-direct.md	python scripts/validate.py
@@ -147,5 +142,4 @@
 2	plugins/soleur/skills/triage/SKILL.md	bash scripts/lint-rejected-register.sh
 5	plugins/soleur/skills/work/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 1	plugins/soleur/skills/work/SKILL.md	./scripts/dev.sh
-1	plugins/soleur/skills/work/SKILL.md	bash scripts/regenerate-c4-model.sh
-7	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh
+6	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh
