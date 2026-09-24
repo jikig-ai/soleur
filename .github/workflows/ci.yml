@@ -1396,15 +1396,17 @@ jobs:
           tmp="$RUNNER_TEMP/grok-${GROK_PIN}"
           # x.ai, then the vendor installer's own fallback base. The digest check makes
           # either source safe; a pruned or unreachable artifact reds this required check.
-          reason=download-failed
+          ok=; reason=
           for base in https://x.ai/cli https://storage.googleapis.com/grok-build-public-artifacts/cli; do
-            curl -fsSL --proto '=https' --proto-redir '=https' \
+            if ! curl -fsSL --proto '=https' --proto-redir '=https' \
               --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 90 \
-              "${base}/grok-${GROK_PIN}-linux-x86_64" -o "$tmp" || continue
-            if echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null; then reason=; break; fi
-            reason="binary-digest-mismatch got=$(sha256sum "$tmp" | cut -d' ' -f1)"
+              "${base}/grok-${GROK_PIN}-linux-x86_64" -o "$tmp"; then
+              reason="${reason}${base#https://}: download-failed; "; continue
+            fi
+            if echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null; then ok=1; break; fi
+            reason="${reason}${base#https://}: binary-digest-mismatch got=$(sha256sum "$tmp" | cut -d' ' -f1); "
           done
-          [ -z "$reason" ] || { echo "::error::grok-fidelity[grok] ${reason} pin=${GROK_PIN} (refusing to execute)"; exit 3; }
+          [ -n "$ok" ] || { echo "::error::grok-fidelity[grok] ${reason}pin=${GROK_PIN} (refusing to execute)"; exit 3; }
           install -D -m 0755 "$tmp" "$HOME/.grok/bin/grok"
           echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.grok/bin:$PATH"
