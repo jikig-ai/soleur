@@ -51,7 +51,10 @@ The web-platform Node server runs a **watchdog dispatch clock**
   a dispatched restart is queued, running or under 12 min old.
 - A tick is bounded at 90 s and fenced three times (inner catch, an outer catch that emits
   `tick_escaped`, fail-open reporting), because `crash-handlers.ts` exits the process on an
-  unhandled rejection. Every tick emits a WARN `SOLEUR_WATCHDOG_DISPATCH` marker.
+  unhandled rejection. Every tick emits a WARN `SOLEUR_WATCHDOG_DISPATCH` marker. A failed tick
+  is retried inside the same slot (up to 3 attempts, 2 min apart): a GitHub API blip hits both
+  hosts at once, so "the other host covers it" does not hold for that failure. Each retry
+  re-reads the runs first, so a timed-out POST that actually landed is not dispatched twice.
 - The clock must never import `server/inngest/`. `watchdog-dispatch-clock.test.ts` walks its
   transitive value imports and fails if any module under that tree is reachable.
 

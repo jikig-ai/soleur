@@ -44,7 +44,9 @@ vi.mock("@/server/github/probe-octokit", () => ({
 import {
   JITTER_MAX_MS,
   JITTER_MIN_MS,
+  MAX_ATTEMPTS_PER_SLOT,
   POLL_MS,
+  RETRY_BACKOFF_MS,
   TICK_DEADLINE_MS,
   slotAlreadyHasRun,
   slotStartAt,
@@ -653,8 +655,9 @@ describe("C12 token scope and request shape (default mint)", () => {
     generateInstallationTokenMock.mockRejectedValueOnce(new Error("revoked"));
     await advanceTo(S0 + 30 * MIN + 40_000);
     await advanceTo(S0 + 45 * MIN + 40_000);
+    // The failed slot-3 mint dropped the cache; its in-slot retry re-looked-up and dispatched.
     expect(lookupMock).toHaveBeenCalledTimes(2);
-    expect(gh.posts(INNGEST.workflowFile)).toBe(3);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(4);
   });
 });
 
@@ -850,6 +853,49 @@ describe("C18 the outer fence and the poll guard", () => {
     expect(report.mock.calls.map((c) => (c[1] as { op?: string }).op)).toContain("poll");
     await advanceTo(S0 + 70_000);
     expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+  });
+});
+
+describe("C20 bounded retry inside the slot after a failed tick", () => {
+  it("a transient dispatch failure is retried after the backoff, and the slot is covered", async () => {
+    const gh = fakeGitHub();
+    gh.hooks.dispatch = async () => {
+      gh.hooks.dispatch = undefined; // fail once, then the real (fake) endpoint
+      throw Object.assign(new Error("bad gateway"), { status: 502 });
+    };
+    start(gh);
+    await advanceTo(S0 + 40_000);
+    expect(outcomes(INNGEST.workflowFile)).toEqual(["failed"]);
+    // No retry before the backoff elapses.
+    await advanceTo(S0 + 30_000 + RETRY_BACKOFF_MS - 1);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+    await advanceTo(S0 + 40_000 + RETRY_BACKOFF_MS + POLL_MS);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(2);
+    expect(outcomes(INNGEST.workflowFile)).toEqual(["failed", "dispatched"]);
+  });
+
+  it("a retry re-reads first: a timed-out POST that actually landed is not dispatched twice", async () => {
+    const gh = fakeGitHub();
+    gh.hooks.dispatch = async (p) => {
+      gh.hooks.dispatch = undefined;
+      await gh.client.request(DISPATCH_ROUTE, p); // the run IS created...
+      return new Promise(() => undefined); // ...but the response never arrives
+    };
+    start(gh);
+    await advanceTo(S0 + 30_000 + TICK_DEADLINE_MS + RETRY_BACKOFF_MS + 2 * POLL_MS);
+    expect(outcomes(INNGEST.workflowFile)).toEqual(["failed", "skipped_slot_has_run"]);
+  });
+
+  it(`gives up after MAX_ATTEMPTS_PER_SLOT failures in one slot`, async () => {
+    const gh = fakeGitHub();
+    gh.hooks.dispatch = async () => {
+      throw Object.assign(new Error("down"), { status: 503 });
+    };
+    start(gh);
+    await advanceTo(S0 + 14 * MIN);
+    expect(outcomes(INNGEST.workflowFile)).toEqual(
+      Array(MAX_ATTEMPTS_PER_SLOT).fill("failed"),
+    );
   });
 });
 

@@ -139,6 +139,28 @@ describe("tracker lookups list by label, never search (#8495)", () => {
     },
   );
 
+  it("each tracker is CREATED with the label its lookup lists by (else the lookup could never find it)", () => {
+    for (const file of WORKFLOWS) {
+      for (const st of steps(file)) {
+        if (!st.run || !st.run.includes("gh issue create")) continue;
+        const lines = st.run.split("\n");
+        lines.forEach((line, i) => {
+          const m = line.match(/^\s*(?:ISSUE_TITLE|TITLE)="(\[([^\]]+)\][^"$]*)"\s*$/);
+          if (!m) return;
+          const label = m[2];
+          // The first `gh issue create` after this assignment must carry the label.
+          const rest = lines.slice(i + 1);
+          const createAt = rest.findIndex((l) => /gh issue create /.test(l));
+          expect(createAt, `${file}: no create after ${m[1]}`).toBeGreaterThanOrEqual(0);
+          const createCmd = rest.slice(createAt, createAt + 4).join(" ");
+          expect(createCmd, `${file}: ${m[1]}`).toMatch(
+            new RegExp(`--label "?${label.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}"?(\\s|$)`),
+          );
+        });
+      }
+    }
+  });
+
   it("an empty list yields no tracker (so the run files one)", () => {
     const l = lookups[0];
     const { out } = runBash(

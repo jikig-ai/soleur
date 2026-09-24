@@ -54,6 +54,12 @@ export const POLL_MS = 30_000;
 export const JITTER_MIN_MS = 30_000;
 export const JITTER_MAX_MS = 120_000;
 export const TICK_DEADLINE_MS = 90_000;
+// A failed tick (mint/dispatch error or timeout) is retried inside the same
+// slot: a GitHub API blip hits both hosts at once, so "the other host covers
+// it" does not hold for that failure. Each retry re-reads the runs first, so a
+// timed-out POST that actually landed is not dispatched twice.
+export const MAX_ATTEMPTS_PER_SLOT = 3;
+export const RETRY_BACKOFF_MS = 120_000;
 const TOKEN_MIN_LIFETIME_MS = 5 * 60_000;
 // Runs read per dedup check. The list is newest-first; we take the newest run
 // that could have covered the slot, skipping ineligible ones (other branches,
@@ -231,6 +237,9 @@ interface EntryState {
   inFlight: boolean;
   jitterSlot: number | null;
   jitterMs: number;
+  attemptSlot: number | null;
+  attempts: number;
+  retryAt: number;
 }
 
 export function startWatchdogDispatchClock(
@@ -307,6 +316,9 @@ export function startWatchdogDispatchClock(
       inFlight: false,
       jitterSlot: null,
       jitterMs: JITTER_MIN_MS,
+      attemptSlot: null,
+      attempts: 0,
+      retryAt: 0,
     });
   }
   let stopped = false;
@@ -338,6 +350,7 @@ export function startWatchdogDispatchClock(
     const wf = { owner: REPO_OWNER, repo: REPO_NAME, workflow_id: entry.workflowFile };
     let token = "";
     let op: Op = "mint";
+    let failed = false;
     try {
       await withTimeout(async (signal) => {
         token = await deps.mint();
@@ -385,6 +398,7 @@ export function startWatchdogDispatchClock(
         safeEmit({ ...base, outcome: "dispatched" });
       });
     } catch (err) {
+      failed = true;
       const c = classify(err);
       safeReport(rebuild(err, token, op), {
         feature: FEATURE,
@@ -395,10 +409,15 @@ export function startWatchdogDispatchClock(
       });
       safeEmit({ ...base, outcome: "failed", op, ...c });
     } finally {
-      // A failed slot is NOT retried by this host: the other host's clock and
-      // the next slot cover it.
+      // A failed tick is retried after RETRY_BACKOFF_MS, up to
+      // MAX_ATTEMPTS_PER_SLOT per slot; anything else closes the slot.
       st.inFlight = false;
-      st.handledSlot = slot;
+      st.attempts += 1;
+      if (failed && st.attempts < MAX_ATTEMPTS_PER_SLOT) {
+        st.retryAt = Date.now() + RETRY_BACKOFF_MS;
+      } else {
+        st.handledSlot = slot;
+      }
     }
   }
 
@@ -417,6 +436,12 @@ export function startWatchdogDispatchClock(
           st.jitterMs = JITTER_MIN_MS + Math.round(r * (JITTER_MAX_MS - JITTER_MIN_MS));
         }
         if (now < slot + st.jitterMs) continue;
+        if (st.attemptSlot !== slot) {
+          st.attemptSlot = slot;
+          st.attempts = 0;
+          st.retryAt = 0;
+        }
+        if (now < st.retryAt) continue;
         st.inFlight = true;
         void runTickSafely(entry, slot, st).catch((escaped: unknown) => {
           // Outer fence: reached only if the inner catch itself throws. The
