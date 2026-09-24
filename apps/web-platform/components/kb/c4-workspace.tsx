@@ -63,11 +63,18 @@ export default function C4Workspace({
   // Non-throwing read so provider-less render surfaces treat "no flag" as off.
   const c4EditEnabled = useOptionalFeatureFlag(C4_EDIT_FLAG);
   const [rightTab, setRightTab] = useState<"concierge" | "code">("concierge");
-  // True only when the server FAILED to re-render after a save (#4964). On a
-  // successful save the server regenerates model.likec4.json out-of-process and
-  // the reloaded dump is fresh, so stale stays false; if the re-render failed it
-  // flips true and the C4Diagnostics banner honestly says the diagram is stale.
-  const [stale, setStale] = useState(false);
+  // The last save whose server re-render failed or was skipped (#4964), keyed
+  // by the folder it was saved in: one folder = one model, and the KB page
+  // renders this component with no `key`, so the instance survives navigation.
+  // Keying (rather than resetting on navigation) also attributes a save that
+  // finishes after the user moved to the folder it was made in (#8695).
+  // `diagnostic` is the server's reason (banner line 2); null = none given.
+  const [staleSave, setStaleSave] = useState<{
+    dirPath: string;
+    diagnostic: string | null;
+  } | null>(null);
+  const stale = staleSave?.dirPath === dirPath;
+  const staleDiagnostic = stale ? staleSave.diagnostic : null;
   // Reveal/collapse is LIFTED to KbChatContext so the SHARED top-bar trigger
   // ("Ask about this document", in KbContentHeader) drives it — consistent with
   // the markdown viewer. The C4 page keeps setSuppressSidebar(true) so the
@@ -194,11 +201,19 @@ export default function C4Workspace({
               <C4CodePanel
                 data={data}
                 dirPath={dirPath}
-                onSaved={async (rerendered) => {
+                allowResave={stale}
+                onSaved={async (rerendered, diagnostic) => {
                   await reload();
-                  // Stale only when the server could NOT re-render; on a
-                  // successful re-render the reloaded dump is fresh.
-                  setStale(!rerendered);
+                  // `dirPath` is the folder this save was made in (the render
+                  // that created this handler). Stale only when the server
+                  // could NOT re-render; a success clears only its own folder.
+                  setStaleSave((cur) =>
+                    rerendered
+                      ? cur?.dirPath === dirPath
+                        ? null
+                        : cur
+                      : { dirPath, diagnostic: diagnostic ?? null },
+                  );
                 }}
               />
             ) : (
@@ -229,6 +244,7 @@ export default function C4Workspace({
                   diagnostics={data.diagnostics}
                   hasModel={!!data.dump}
                   stale={stale}
+                  staleDiagnostic={staleDiagnostic}
                 />
                 <div className="relative min-h-0 flex-1">
                   <C4Canvas dump={data.dump} initialViewId={viewId} />

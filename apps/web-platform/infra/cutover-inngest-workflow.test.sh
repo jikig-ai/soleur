@@ -548,8 +548,8 @@ assert "confirm distinguishes a query-path failure from FSM-not-terminal (::warn
 EMITTER="$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh"
 assert "emitter stamps flag 'done' (the confirm's success key) + an aborted path" "grep -qF 'flag_set \"done\"' '$EMITTER' && grep -qF 'aborted' '$EMITTER'"
 
-# op=arm calls the shared confirm with a SPACE-form timestamp betterstack-query.sh accepts (NOT the ISO
-# T/Z form its ClickHouse cast rejects — the P2 that would false-negative every confirm).
+# op=arm calls the shared confirm with a SPACE-form timestamp (the reader has normalised ISO T/Z to this
+# form since #7761, but the space form stays the arm's contract — the P2 that once false-negatived it).
 assert "arm) calls confirm_flip_state (AC9)" "grep -qF 'confirm_flip_state \"\$ARM_ISO\"' '$ARM_FILE'"
 assert "arm) time-bounds via a SPACE-form timestamp, no ISO T/Z (the --since format P2)" "grep -qF \"+'%Y-%m-%d %H:%M:%S'\" '$ARM_FILE' && ! grep -qE 'ARM_ISO=.*T%H.*Z' '$ARM_FILE'"
 assert "arm) branches on the confirm result (done vs aborted/rolled-back vs timeout, fail-loud)" "grep -qF 'G6_STATE' '$ARM_FILE'"
@@ -1886,6 +1886,57 @@ assert "#6178 the ERR-trap terminal transition (unexpected-exit) is anchored as 
 # must not be found in the grep set by accident, proving the loop compares real strings.
 assert "#6178 parity loop is discriminating (a non-existent reason is NOT anchored)" \
   "! grep -qF '\"reason\":\"this-reason-does-not-exist' '$DF_HARNESS_SRC'"
+# --- (#7761) THE SAME EXTRACTION PINS THE FOLLOW-THROUGH PROBE'S DRIFT GREP SET. -------------
+# scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh defines drift as ANY flip-FSM row
+# since the boundary other than the op=resume shape, found by one sparse OR-query over a FIXED
+# inline term set (DRIFT_GREPS). A reason the emitter gains and the probe does not grep is
+# invisible to that query over the whole interval — the runtime cannot fail safe on it, so THIS
+# loop is the guard. Read ONLY the `DRIFT_GREPS=( … )` block (a flag-based awk), never the whole
+# file: the probe's header table and comments name every reason, and would satisfy a whole-file
+# grep with the term itself deleted.
+# The probe's set is WIDER than the deriver's: it also greps the off-state heartbeats (every
+# `noop-*` except the steady `noop-done`), because a host RESTING off `done` after the cutover is
+# drift. So its expected set is extracted separately, keeping those. Each term must be a whole,
+# UNCOMMENTED line of the block — a commented-out term, or one that is only a prefix of another,
+# satisfies nothing. The probe's absence FAILS: the PR that retires it deletes this block too.
+PROBE_7761="$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh"
+PROBE_REASONS_FILE="$(mktemp)"; SCRATCH+=("$PROBE_REASONS_FILE")
+grep -oE 'emit_state [^ ]+ [^ ]+ "[^"]*"' "$EMITTER_SH" \
+  | grep -oE '"[^"]*"$' | tr -d '"' | sed 's/(from=.*//' \
+  | grep -vxF 'noop-done' | grep -vE '^$' | sort -u > "$PROBE_REASONS_FILE"
+PROBE_REASON_N=$(wc -l < "$PROBE_REASONS_FILE" | tr -d '[:space:]')
+assert "#7761 probe-reason extraction keeps the off-state heartbeats (>= EMIT+3, found $PROBE_REASON_N vs $EMIT_REASON_N)" \
+  "[[ '$PROBE_REASON_N' -ge $(( EMIT_REASON_N + 3 )) ]] && grep -qxF 'noop-aborted' '$PROBE_REASONS_FILE'"
+_probe_drift_missing() { # <probe-file> -> missing reasons (space-separated), or __NO_BLOCK__
+  local block r miss=""
+  block="$(awk '/^DRIFT_GREPS=\($/ { f = 1; next } f && /^\)$/ { exit } f' "$1" | grep -vE '^[[:space:]]*#' || true)"
+  [[ -n "$block" ]] || { printf '__NO_BLOCK__'; return; }
+  while IFS= read -r r; do
+    [[ -z "$r" ]] && continue
+    grep -qxF -- "  '\"reason\":\"$r'" <<<"$block" || miss="$miss $r"
+  done < "$PROBE_REASONS_FILE"
+  printf '%s' "$miss"
+}
+assert "#7761 the follow-through probe exists (retiring it must delete this block in the same PR)" "[[ -f '$PROBE_7761' ]]"
+PROBE_MISSING="$(_probe_drift_missing "$PROBE_7761")"
+assert "#7761 PROBE PARITY: every emit_state reason except noop-done is a DRIFT_GREPS term (missing:${PROBE_MISSING:- none})" \
+  "[[ -z '$PROBE_MISSING' ]]"
+# NEGATIVE controls: deleting a term, or COMMENTING one out, must each red.
+_probe_neg="$(mktemp)"; SCRATCH+=("$_probe_neg")
+sed "/^  '\"reason\":\"flip-complete'\$/d" "$PROBE_7761" > "$_probe_neg"
+PROBE_NEG_MISSING="$(_probe_drift_missing "$_probe_neg")"
+assert "#7761 probe parity is discriminating (deleting flip-complete from the block is caught)" \
+  "[[ '$PROBE_NEG_MISSING' == *flip-complete* && '$PROBE_NEG_MISSING' != __NO_BLOCK__ ]]"
+sed "s/^  '\"reason\":\"noop-aborted'\$/  # '\"reason\":\"noop-aborted'/" "$PROBE_7761" > "$_probe_neg"
+PROBE_NEG_MISSING="$(_probe_drift_missing "$_probe_neg")"
+assert "#7761 probe parity sees a COMMENTED-OUT off-state term (noop-aborted) as missing" \
+  "[[ '$PROBE_NEG_MISSING' == *noop-aborted* ]]"
+# The guard revision the emitter stamps and the one the probe demands are one value. Bumping the
+# emitter's GUARD_REV while #7761 is open would otherwise post a false `stale_image` FAIL.
+EMIT_GUARD=$(sed -nE 's/^readonly GUARD_REV="([0-9]+)"$/\1/p' "$EMITTER_SH")
+PROBE_GUARD=$(sed -nE 's/^EXPECTED_GUARD="([0-9]+)"$/\1/p' "$PROBE_7761")
+assert "#7761 the probe's EXPECTED_GUARD equals the emitter's GUARD_REV (emitter=$EMIT_GUARD probe=$PROBE_GUARD)" \
+  "[[ -n '$EMIT_GUARD' && '$EMIT_GUARD' == '$PROBE_GUARD' ]]"
 # --- _flip_transition_dt EXECUTED against a stubbed row source. A static grep for "limit"
 # survived a mutation that DELETED the truncation guard outright, which is the whole reason
 # this runs the function instead of reading it. `doppler` is stubbed on PATH, so the real
@@ -3718,13 +3769,16 @@ _DISPATCHED=$((PASS + FAIL))
 #   control, the heartbeat read-failure render, eight per-token refusal renders, the H2
 #   aborted must-PASS, the dark-warning truth row, and eleven mutation rows (M1.1, M1.2, the
 #   same-line second call, M2.6, M2.7, M2.8, S1, M2.9, the nested $(gh …), S3, S6).
-# 753 -> 754 (+1) G3 generation scope, RED commit: the `predecessor` row (the 2026-09-24 pass).
-# 754 -> 871 (+117) G3 generation scope, measured: 4 extraction rows, the jq self-check, H1, 14 lv_case
+# 753 -> 759 (+6) at #7761, measured: the #7761 probe-parity block — probe-reason extraction
+#   non-vacuity, probe-exists, the parity row, the delete and comment-out negative controls, and the
+#   EXPECTED_GUARD == GUARD_REV row.
+# 759 -> 877 (+118) G3 generation scope (the 2026-09-24 host-replace fix), measured on the tree merged
+#   with main at 759: the `predecessor` RED row, 4 extraction rows, the jq self-check, H1, 14 lv_case
 #   rows + 2 notice-counter rows, 5 notice/warning/token-shape rows, 14 anchor modes x 4 rows + the
 #   mode counter, the absent/HTTP-class/no-token rows, 6 token-hygiene/transport rows, the set -e row,
 #   12 decode rows + their counter, 4 LUKS rows, the unfloored-latch row, 3 invariant pins, the
 #   workflow-knob row and 2 refusal-wording pins.
-_EXACT_FLOOR=871
+_EXACT_FLOOR=877
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
