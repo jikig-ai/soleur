@@ -352,6 +352,206 @@ _flush_latch_count() {
   printf '%s' "$n"
 }
 
+# ── GENERATION SCOPE for every write-gating liveness count (2026-09-24 host replace) ──────────────
+# "Audible" means audible from the server that exists NOW. The host filter below keys on
+# host + host_name, and BOTH are identical across a replace: `host` is Vector's OS hostname =
+# the Hetzner server name (inngest-host.tf `name = "soleur-inngest"`) and `host_name` is a
+# sed-rendered literal. AP-027 (ADR-149): a host_name filter scopes to the HOST, not its
+# GENERATION. Measured 2026-09-24: the old server shipped its last flip row at 14:25:05, op=resume
+# ran at 14:29 (run 36013051602), counted 45 of THAT server's rows as audible and wrote `flushed`;
+# the current server was created 18:57:33 and shipped its first row 18:59:58 (+145 s).
+#
+# THE ANCHOR is the Hetzner API's `created` for the one server named $INNGEST_HOST — the only
+# authority independent of the telemetry being judged (every boot/instance id the rows carry is
+# emitted by the host itself). A row counts only when BOTH clocks put it after `created`:
+#   - its own event time (journald __REALTIME_TIMESTAMP, µs) — a predecessor cannot stamp a row
+#     after `created` unless its clock ran ahead;
+#   - Better Stack's ingest `dt` (the AP-027 anchor clock) — a destroyed host cannot be ingested
+#     after its destruction.
+# Two wrong clocks are needed before a predecessor row counts.
+#
+# THREE INVARIANTS the floor rests on, each pinned in cutover-inngest-workflow.test.sh:
+#   1. hcloud_server.inngest has no create_before_destroy, and Hetzner names are unique per project,
+#      so a replace destroys the old server before it creates the new one with the same name;
+#   2. vector.toml never sets current_boot_only = false, so a new server cannot ship an old journal;
+#   3. nothing rebuilds the inngest server in place (a rebuild keeps `created` while reinstalling).
+# A reboot or an in-place server_type change keeps `created`, which is correct: the question is
+# whether the server that exists can act on the write.
+#
+# SCOPE. Floored: _flip_liveness_count (resume G3, arm G3.7 H) and _luks_liveness_count (LUKS G3).
+# NOT floored, deliberately: _flush_latch_count (the latch lives on /mnt/data, which survives the
+# replace, so a predecessor's flip-complete row is valid PRESENCE evidence — flooring it would be a
+# fail-open), the confirm readers (anchored on this dispatch's own write instant), and the execute
+# 2.0 / registry-probe gates (already boot-joined via tests/scripts/lib/inngest-host-dark-gate.sh).
+# H is floored although L is not: L asks whether a flush was EVER recorded, H exists because L=0 is
+# an absence and a silent host manufactures absences (#7674) — only the current generation could
+# have flushed unseen.
+
+# _hcloud_created_epoch <json> <name> — PURE. The epoch of `created` for the ONE server whose name
+# equals <name>, or __ABSENT__ (no match) / __UNREADABLE__ (several, non-JSON, wrong shape,
+# unparseable). Hetzner documents `created` as +00:00 and returns Z today (measured); both are
+# accepted, and the WHOLE string is anchored (\A…\z) before strptime, because strptime alone
+# accepts trailing bytes — a `created` carrying "\n::error::…" would otherwise parse. Every jq here
+# discards stderr: jq's error text quotes the input it choked on, and this runs on a public run log.
+_hcloud_created_epoch() {
+  local json="${1:-}" name="${2:-}" n epoch
+  n="$(jq -r --arg n "$name" \
+        'if type == "object" and (.servers | type) == "array"
+           then [.servers[] | select(type == "object" and .name == $n)] | length
+           else "bad" end' <<<"$json" 2>/dev/null || true)"
+  case "$n" in
+    0) printf '%s' '__ABSENT__'; return 0 ;;
+    1) : ;;
+    *) printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
+  epoch="$(jq -r --arg n "$name" \
+        '[.servers[] | select(type == "object" and .name == $n)][0].created
+           | if type == "string"
+               and test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|\\+00:00)\\z")
+             then (sub("\\+00:00\\z"; "Z") | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime)
+             else empty end' \
+        <<<"$json" 2>/dev/null || true)"
+  case "$epoch" in
+    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
+  printf '%s' "$epoch"
+}
+
+# _inngest_server_created_epoch — I/O. Prints exactly one token (<epoch> | __ABSENT__ |
+# __UNREADABLE__) and ALWAYS returns 0; every non-epoch outcome is preceded by one ::warning:: on
+# stderr naming its cause. Public-log hygiene, each rule pinned by the suite:
+#   - Tier A first (ADR-241 D4, #8209): HCLOUD_TOKEN_READONLY, falling back to HCLOUD_TOKEN only
+#     while the read-only name is unprovisioned (ADR-241 O10);
+#   - the token is ::add-mask::ed on STDERR (stdout is the caller's $(…) token) and travels on
+#     curl's stdin (-H @-), never argv;
+#   - no -f (the HTTP class must be readable), no -S (curl's error text is not a sanctioned egress
+#     path), no --retry (#6500); curl's and jq's stderr are discarded;
+#   - no response byte is ever printed — warnings are built from the rc, the HTTP code and
+#     $INNGEST_HOST only.
+_inngest_server_created_epoch() {
+  local tok resp rc=0 code body epoch now
+  tok="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain 2>/dev/null || true)"
+  if [[ -z "$tok" ]]; then
+    tok="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null || true)"
+  fi
+  if [[ -z "$tok" ]]; then
+    echo "::warning::G3 generation anchor: neither HCLOUD_TOKEN_READONLY nor HCLOUD_TOKEN resolved from prd_terraform, so the current $INNGEST_HOST server could not be identified. Check the DOPPLER_TOKEN repo secret's config. Nothing was written; re-dispatch is safe." >&2
+    printf '%s' '__UNREADABLE__'
+    return 0
+  fi
+  printf '::add-mask::%s\n' "$tok" >&2
+  resp="$(printf 'Authorization: Bearer %s\n' "$tok" \
+    | curl --disable --noproxy '*' -s --proto =https --max-time 20 \
+           --get --data-urlencode "name=$INNGEST_HOST" -H @- \
+           -w '\n%{http_code}' https://api.hetzner.cloud/v1/servers 2>/dev/null)" || rc=$?
+  tok=""
+  if [[ "$rc" -ne 0 ]]; then
+    case "$rc" in
+      6|7)   echo "::warning::G3 generation anchor: the Hetzner API was unreachable from the runner (transport rc=$rc: DNS / connect). Nothing was written; re-dispatch is safe." >&2 ;;
+      28)    echo "::warning::G3 generation anchor: the Hetzner API read timed out (transport rc=28). Nothing was written; re-dispatch is safe." >&2 ;;
+      35|60) echo "::warning::G3 generation anchor: the TLS handshake with the Hetzner API failed (transport rc=$rc). Nothing was written; re-dispatch is safe." >&2 ;;
+      *)     echo "::warning::G3 generation anchor: the Hetzner API read failed (transport rc=$rc). Nothing was written; re-dispatch is safe." >&2 ;;
+    esac
+    printf '%s' '__UNREADABLE__'
+    return 0
+  fi
+  code="${resp##*$'\n'}"
+  body="${resp%$'\n'*}"
+  if ! [[ "$code" =~ ^[0-9]{3}$ ]]; then
+    echo "::warning::G3 generation anchor: the Hetzner API reply carried no HTTP status. Nothing was written; re-dispatch is safe." >&2
+    printf '%s' '__UNREADABLE__'
+    return 0
+  fi
+  case "$code" in
+    200) : ;;
+    401|403) echo "::warning::G3 generation anchor: the Hetzner API REJECTED the token (HTTP $code) — verify HCLOUD_TOKEN_READONLY / HCLOUD_TOKEN in prd_terraform. Nothing was written." >&2
+             printf '%s' '__UNREADABLE__'; return 0 ;;
+    429)     echo "::warning::G3 generation anchor: the Hetzner API rate-limited this read (HTTP 429). Nothing was written; re-dispatch later is safe." >&2
+             printf '%s' '__UNREADABLE__'; return 0 ;;
+    5??)     echo "::warning::G3 generation anchor: the Hetzner API returned a server error (HTTP $code) — a Hetzner-side outage, not a host state. Nothing was written; re-dispatch later is safe." >&2
+             printf '%s' '__UNREADABLE__'; return 0 ;;
+    *)       echo "::warning::G3 generation anchor: the Hetzner API returned an unexpected HTTP $code. Nothing was written; re-dispatch is safe." >&2
+             printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
+  epoch="$(_hcloud_created_epoch "$body" "$INNGEST_HOST")"
+  body=""
+  case "$epoch" in
+    __ABSENT__)
+      echo "::warning::G3 generation anchor: no server named $INNGEST_HOST in the Hetzner project this token is scoped to — a replace in flight, or a token for another project. Nothing was written; re-dispatch once the server exists." >&2
+      printf '%s' '__ABSENT__'; return 0 ;;
+    ''|*[!0-9]*)
+      echo "::warning::G3 generation anchor: the Hetzner API reply did not decode to exactly one server named $INNGEST_HOST with a parseable created time. Nothing was written; re-dispatch is safe, and if it repeats file an issue with this run URL." >&2
+      printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
+  now="$(date -u +%s)"
+  # A floor near 0 would re-admit the predecessor, which silently reverts this gate.
+  if [[ "$epoch" -lt 1735689600 || "$epoch" -gt $((now + 300)) ]]; then
+    echo "::warning::G3 generation anchor: the $INNGEST_HOST server's created time is out of bounds (before 2025-01-01 or more than 300 s in the future). Nothing was written; file an issue with this run URL." >&2
+    printf '%s' '__UNREADABLE__'; return 0
+  fi
+  printf '%s' "$epoch"
+  return 0
+}
+
+# _current_instance_row_counts <floor_epoch_s> — PURE. Raw Better Stack rows on stdin; prints ONE
+# line of five integers: <counted> <host_pair> <pre_floor> <malformed> <skew_suspect>.
+#   host_pair     rows whose decoded .raw carries host == $INNGEST_HOST and host_name == $INNGEST_HOST_NAME
+#   counted       host-pair rows whose event time >= floor AND whose ingest dt >= floor
+#   malformed     host-pair rows with a missing/non-decimal __REALTIME_TIMESTAMP or an unparseable dt
+#                 — excluded, never defaulted (a default is the widening direction)
+#   pre_floor     well-formed host-pair rows that fail either clock
+#   skew_suspect  pre-floor rows ingested after the floor but stamped before it: a destroyed
+#                 predecessor cannot produce one, so it points at the CURRENT server's clock
+# Counts only; never echoes a row.
+_current_instance_row_counts() {
+  local floor="${1:-}"
+  case "$floor" in
+    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
+  jq -R -s -r --argjson f "$floor" --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" '
+    [ split("\n")[] | fromjson? | select(type == "object")
+      | { dt: .dt, r: (.raw | if type == "string" then (fromjson? // null) else null end) }
+      | select((.r | type) == "object" and .r.host == $h and .r.host_name == $hn)
+      | { ts: (.r["__REALTIME_TIMESTAMP"]
+                 | if type == "string" and test("^[0-9]+$") then tonumber else null end),
+          dt: (.dt | if type == "string"
+                       then (try (sub("\\.[0-9]+$"; "") | strptime("%Y-%m-%d %H:%M:%S") | mktime) catch null)
+                       else null end) } ] as $rows
+    | ($rows | map(select(.ts != null and .dt != null))) as $ok
+    | ($ok | map(select(.ts >= ($f * 1000000) and .dt >= $f)) | length) as $cnt
+    | ($ok | map(select(.dt >= $f and .ts < ($f * 1000000))) | length) as $skew
+    | "\($cnt) \($rows | length) \(($ok | length) - $cnt) \(($rows | length) - ($ok | length)) \($skew)"
+  ' 2>/dev/null || true
+}
+
+# _generation_scoped_count <floor_epoch_s> <label> — raw rows on stdin; prints the COUNTED token
+# (or __UNREADABLE__) on stdout. On stderr: one ::notice:: carrying the five counters, and — when
+# nothing counted and the server is under 10 minutes old — a warning not to replace it (a replace
+# resets `created` and the wait starts over). Built only from validated integers and $INNGEST_HOST;
+# no string from any response reaches an annotation.
+_generation_scoped_count() {
+  local floor="${1:-}" label="${2:-liveness}" line c p pf m k v age iso
+  case "$floor" in
+    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
+  line="$(_current_instance_row_counts "$floor")"
+  read -r c p pf m k _ <<<"$line" || true
+  for v in "$c" "$p" "$pf" "$m" "$k"; do
+    case "$v" in
+      ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
+    esac
+  done
+  age=$(( $(date -u +%s) - floor ))
+  [[ "$age" -lt 0 ]] && age=0
+  iso="$(date -u -d "@$floor" '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "::notice::$label scoped to server $INNGEST_HOST created $iso (${age}s ago): counted=$c host_pair=$p pre_floor=$pf malformed=$m skew_suspect=$k" >&2
+  if [[ "$c" -eq 0 && "$age" -lt 600 ]]; then
+    echo "::warning::server $INNGEST_HOST was created ${age}s ago and has not shipped a row yet — WAIT and re-dispatch; do NOT replace it (a replace resets this clock)" >&2
+  fi
+  printf '%s' "$c"
+  return 0
+}
+
 # G3.7's SECOND signal (#7674): H, the dedicated host's own liveness witness.
 #
 # WHY THIS EXISTS. L (the latch count above) alone cannot tell "no flush has happened" from
@@ -394,19 +594,23 @@ _flush_latch_count() {
 # is to weaken the gate is not a knob worth shipping.
 FLIP_LIVENESS_SINCE="15m"
 _flip_liveness_count() {
-  local rows rc=0 n
+  local rows rc=0 n floor
+  # Generation anchor FIRST (see the GENERATION SCOPE block above): without it no row can be
+  # attributed to the server that exists now, so the Better Stack read is skipped.
+  floor="$(_inngest_server_created_epoch)"
+  case "$floor" in
+    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
   rows=$(_bs_query_rows "$FLIP_LIVENESS_SINCE" inngest-cutover-flip 50) || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     echo "::warning::G3.7 liveness read: betterstack-query.sh returned $rc (the READ PATH failed, NOT the host) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
-  # Decode `.raw` first (it is double-encoded), then match the host field literal. Counts only;
-  # never echoes a row, the standing purity contract of every Better Stack reader here.
-  n=$(printf '%s\n' "$rows" \
-    | jq -R -r --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" \
-        'fromjson? | .raw? | fromjson? | select(.host == $h and .host_name == $hn) | 1' 2>/dev/null \
-    | grep -c '^1$' || true)
+  # Decode `.raw` first (it is double-encoded), then match the host field literal AND the current
+  # generation's two clocks. Counts only; never echoes a row, the standing purity contract of every
+  # Better Stack reader here.
+  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-cutover-flip liveness")"
   case "$n" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
@@ -421,17 +625,18 @@ _flip_liveness_count() {
 # in inngest-bootstrap.sh), i.e. exactly the silently-dead-delivery case this estate has paid for.
 LUKS_LIVENESS_SINCE="15m"
 _luks_liveness_count() {
-  local rows rc=0 n
+  local rows rc=0 n floor
+  floor="$(_inngest_server_created_epoch)"
+  case "$floor" in
+    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
   rows=$(_bs_query_rows "$LUKS_LIVENESS_SINCE" inngest-luks-cutover 50) || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     echo "::warning::LUKS liveness read: betterstack-query.sh returned $rc (the READ PATH failed, NOT the host) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
-  n=$(printf '%s\n' "$rows" \
-    | jq -R -r --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" \
-        'fromjson? | .raw? | fromjson? | select(.host == $h and .host_name == $hn) | 1' 2>/dev/null \
-    | grep -c '^1$' || true)
+  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-luks-cutover liveness")"
   case "$n" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
