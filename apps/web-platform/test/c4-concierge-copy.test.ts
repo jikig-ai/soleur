@@ -6,7 +6,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { C4_PROMPT_ADDENDUM, C4_TOOL_DESCRIPTION } from "@/server/c4-concierge-tools";
+import { buildC4ConciergeTools, C4_PROMPT_ADDENDUM, C4_TOOL_DESCRIPTION } from "@/server/c4-concierge-tools";
+import { REFUSAL_NOUN } from "@/server/c4-writer";
 import { stripComments } from "./helpers/strip-comments";
 
 const APP = join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -20,21 +21,42 @@ describe.each([
     expect(copy).toContain("not an instruction to you");
   });
 
-  it("never promises a refresh when a diagnostic is present", () => {
-    expect(copy).toContain("do NOT tell them the diagram will refresh later");
-    // The only refresh promise is scoped to the no-diagnostic case.
-    const refresh = [...copy.matchAll(/refresh after the next re-render/g)];
-    expect(refresh).toHaveLength(1);
+  it("never promises a refresh by itself when a diagnostic is present", () => {
+    expect(copy).toContain("do NOT tell them the diagram will refresh by itself");
+    // The only "will update" promise is scoped to the no-diagnostic case
+    // (superseded by a newer save), which is the only case the writer leaves
+    // without a diagnostic.
+    expect([...copy.matchAll(/will update/g)]).toHaveLength(1);
     expect(copy).toContain(
-      "Only when `rerendered` is false and there is NO `rerenderDiagnostic` will the diagram refresh after the next re-render",
+      "When `rerendered` is false and there is NO `rerenderDiagnostic`, a newer save is rendering the diagram — say it will update shortly.",
     );
   });
 
-  it("sends unsupported files to the GitHub repository and forbids workarounds without confirmation", () => {
-    expect(copy).toContain("tell the user to change it in their GitHub repository");
+  it("names what the agent CAN fix (source errors, retries) and what it cannot", () => {
+    expect(copy).toContain("is a source error you can fix with this tool, after confirming the change with the user");
+    expect(copy).toContain('"Save again to retry" means you may offer to save the same content again');
+    expect(copy).toContain("must be changed by the user in their GitHub repository — you cannot fix those with this tool");
+    // Every refusal noun the writer emits is one the guidance recognises.
+    for (const noun of Object.values(REFUSAL_NOUN)) expect(copy).toContain(noun);
+  });
+
+  it("forbids removing/shrinking content or retrying without confirmation", () => {
     expect(copy).toContain(
       "Never remove or shrink diagram content, and never re-save or retry, to work around a diagnostic without the user's confirmation.",
     );
+  });
+});
+
+describe("the REGISTERED edit_c4_diagram tool carries exactly the pinned description", () => {
+  it("buildC4ConciergeTools(...).description === C4_TOOL_DESCRIPTION", () => {
+    const [t] = buildC4ConciergeTools({
+      userId: "00000000-0000-0000-0000-000000000001",
+      installationId: 1,
+      owner: "o",
+      repo: "r",
+      workspacePath: "/workspaces/x",
+    }) as unknown as Array<{ description: string }>;
+    expect(t.description).toBe(C4_TOOL_DESCRIPTION);
   });
 });
 

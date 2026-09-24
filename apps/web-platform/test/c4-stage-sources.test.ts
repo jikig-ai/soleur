@@ -23,6 +23,10 @@ vi.mock("@/server/github-api", () => ({
 
 import {
   stageCommittedC4Sources,
+  __clearBlobCacheForTests,
+  gitBlobSha,
+  FORBIDDEN_DETAIL,
+  RATE_LIMITED_DETAIL,
   LIKEC4_CONFIG_NAMES,
   MAX_STAGED_SOURCES,
   MAX_STAGED_SOURCE_BYTES,
@@ -40,6 +44,7 @@ const UP = "../";
 let root: string;
 let dest: string;
 beforeEach(() => {
+  __clearBlobCacheForTests();
   root = mkdtempSync(join(tmpdir(), "c4-stage-test-"));
   dest = join(root, "src");
 });
@@ -96,7 +101,8 @@ describe("stageCommittedC4Sources — benign trees (must PASS)", () => {
   it("H3: stages exactly the regular-file LikeC4 sources, byte-identical, and nothing else", async () => {
     const gh = repo(benign());
     const res = await stage(gh);
-    expect(res).toMatchObject({ ok: true, files: 4 });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect([...res.paths].sort()).toEqual(["exec.c4", "model.c4", "nested/extra.like-c4", "spec.likec4"]);
     expect(stagedFiles()).toEqual(["exec.c4", "model.c4", "nested/extra.like-c4", "spec.likec4"]);
     expect(readFileSync(join(dest, "model.c4"), "utf8")).toBe(SRC);
     // Non-source bytes (a 5 MiB model, a PNG) are never fetched and never count.
@@ -248,7 +254,7 @@ describe("stageCommittedC4Sources — refusals", () => {
       [D]: { mode: "120000", target: `${UP.repeat(3)}elsewhere` },
       "knowledge-base/engineering/architecture/README.md": { mode: "100644", content: "x" },
     });
-    expectRefusal(await stage(gh), gh, "symlink", "diagrams");
+    expectRefusal(await stage(gh), gh, "diagrams-folder");
   });
 
   it("refuses when the diagrams folder is a submodule", async () => {
@@ -256,7 +262,18 @@ describe("stageCommittedC4Sources — refusals", () => {
       [D]: { mode: "160000" },
       "knowledge-base/engineering/architecture/README.md": { mode: "100644", content: "x" },
     });
-    expectRefusal(await stage(gh), gh, "gitlink", "diagrams");
+    expectRefusal(await stage(gh), gh, "diagrams-folder");
+  });
+
+  it("refuses when the architecture folder ABOVE diagrams is itself a symlink (object, not a listing)", async () => {
+    const gh = repo({
+      "elsewhere/diagrams/model.c4": { mode: "100644", content: SRC },
+      "knowledge-base/engineering/architecture": { mode: "120000", target: `${UP.repeat(2)}elsewhere` },
+      "knowledge-base/engineering/README.md": { mode: "100644", content: "x" },
+    });
+    const res = await stage(gh);
+    expectRefusal(res, gh, "diagrams-folder");
+    if (!res.ok && res.reason === "unsafe_source") expect(res.path).toBeUndefined();
   });
 
   it("refuses a nested submodule", async () => {
@@ -306,17 +323,73 @@ describe("stageCommittedC4Sources — io failures", () => {
   it("a tree path escaping the stage root is io_error and writes nothing outside it", async () => {
     const gh = repo({ [`${D}/${UP.repeat(2)}escape.c4`]: { mode: "100644", content: SRC } });
     const res = await stage(gh);
-    expect(res).toEqual({ ok: false, reason: "io_error", detail: "stage: path escapes root" });
+    // Rejected from the LISTING, before any fetch or write.
+    expect(res).toEqual({ ok: false, reason: "io_error", detail: "listing: malformed source entry" });
+    expect(gh.blobCalls()).toBe(0);
     expect(existsSync(join(root, "escape.c4"))).toBe(false);
     expect(existsSync(join(root, "..", "escape.c4"))).toBe(false);
   });
 
-  it("rate limiting (403/429) is io_error 'fetch: rate-limited'", async () => {
-    for (const status of [403, 429]) {
+  it("429, and a 403 naming a rate limit, are 'fetch: rate-limited'; any other 403 is 'fetch: forbidden'", async () => {
+    const cases: Array<[number, string | undefined, string]> = [
+      [429, undefined, RATE_LIMITED_DETAIL],
+      [403, "You have exceeded a secondary rate limit", RATE_LIMITED_DETAIL],
+      [403, "Resource not accessible by integration", FORBIDDEN_DETAIL],
+    ];
+    for (const [status, message, detail] of cases) {
       rmSync(dest, { recursive: true, force: true });
-      const res = await stage(repo(benign(), { blobStatus: status }));
-      expect(res).toEqual({ ok: false, reason: "io_error", detail: "fetch: rate-limited" });
+      __clearBlobCacheForTests();
+      const res = await stage(repo(benign(), { blobStatus: status, blobMessage: message }));
+      expect(res).toEqual({ ok: false, reason: "io_error", detail });
     }
+  });
+
+  it("a blob whose bytes do not hash to its listed sha is io_error", async () => {
+    const gh = repo({ [`${D}/model.c4`]: { mode: "100644", content: SRC } });
+    gh.corrupt(gitBlobSha(Buffer.from(SRC)));
+    expect(await stage(gh)).toEqual({ ok: false, reason: "io_error", detail: "fetch: blob sha mismatch" });
+  });
+
+  it("a directory at the model path is io_error, before any blob is fetched", async () => {
+    const gh = repo({ [`${D}/model.c4`]: { mode: "100644", content: SRC }, [`${D}/model.likec4.json/x.md`]: { mode: "100644", content: "x" } });
+    const res = await stage(gh);
+    expect(res).toEqual({ ok: false, reason: "io_error", detail: "listing: model path is not a regular file" });
+    expect(gh.blobCalls()).toBe(0);
+  });
+
+  it("a malformed commit sha stages nothing and reads nothing (never falls back to HEAD)", async () => {
+    const gh = repo(benign());
+    const res = await stage(gh, { commitSha: "" });
+    expect(res).toEqual({ ok: false, reason: "io_error", detail: "stage: no commit sha" });
+    expect(gh.calls).toEqual([]);
+  });
+
+  it("bytes the caller already holds are staged without a blob GET, and fetched blobs are cached", async () => {
+    const gh = repo({ [`${D}/model.c4`]: { mode: "100644", content: SRC }, [`${D}/spec.c4`]: { mode: "100644", content: "specification { }\n" } });
+    const first = await stage(gh, { known: [Buffer.from(SRC)] });
+    expect(first.ok).toBe(true);
+    expect(gh.blobCalls()).toBe(1); // spec.c4 only
+    rmSync(dest, { recursive: true, force: true });
+    const second = await stage(gh);
+    expect(second.ok).toBe(true);
+    expect(gh.blobCalls()).toBe(1); // both served from the cache / known set
+  });
+
+  it("offenders under directories likec4 ignores (node_modules, .git) are not refused", async () => {
+    const gh = repo({
+      ...benign(),
+      [`${D}/node_modules/p/likec4.config.mjs`]: { mode: "100644", content: "x" },
+      [`${D}/node_modules/.bin/tool`]: { mode: "120000", target: "../p/tool.js" },
+      [`${D}/.git/HEAD`]: { mode: "100644", content: "ref" },
+    });
+    const res = await stage(gh);
+    expect(res.ok).toBe(true);
+  });
+
+  it("a request for another repo or installation is refused by the fake (and the SUT never makes one)", async () => {
+    const gh = repo(benign());
+    const res = await stage(gh, { installationId: 2 });
+    expect(res.ok).toBe(false);
   });
 
   it("an aborted signal stops staging: timeout, no further writes, no stage dir left behind", async () => {
@@ -331,5 +404,17 @@ describe("stageCommittedC4Sources — io failures", () => {
     rmSync(root, { recursive: true, force: true });
     await new Promise((r) => setTimeout(r, 20));
     expect(existsSync(dest)).toBe(false);
+  });
+
+  it("a blob response that lands AFTER the abort cannot recreate the removed stage dir (nested path)", async () => {
+    const gh = repo({ [`${D}/deep/nested/model.c4`]: { mode: "100644", content: SRC } }, { lateBlobsMs: 60 });
+    const ac = new AbortController();
+    const p = stage(gh, { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 20)); // listing done, blob in flight
+    ac.abort(new Error("stage: deadline"));
+    rmSync(root, { recursive: true, force: true }); // the caller's cleanup
+    expect(await p).toEqual({ ok: false, reason: "timeout", detail: "stage: deadline" });
+    await new Promise((r) => setTimeout(r, 120)); // the late blob arrives
+    expect(existsSync(root)).toBe(false);
   });
 });

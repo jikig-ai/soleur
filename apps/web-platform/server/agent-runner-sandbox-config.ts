@@ -3,7 +3,7 @@ import { c4RenderStagingRoot } from "./c4-staging-root";
 import { basename, join } from "path";
 
 import { createChildLogger } from "./logger";
-import { reportSilentFallback } from "./observability";
+import { reportSilentFallback, warnSilentFallback } from "./observability";
 
 // Match the agent-runner logging convention (`createChildLogger` — see
 // agent-runner.ts / agent-runner-query-options.ts) so the shared test mocks
@@ -190,11 +190,18 @@ export function buildAgentSandboxConfig(
   // first (0700, best-effort) — otherwise the first render after boot would
   // create an undenied root under a sandbox that started earlier.
   const c4StagingRoot = c4RenderStagingRoot();
+  let c4StagingRootReady = true;
   try {
     mkdirSync(c4StagingRoot, { recursive: true, mode: 0o700 });
-  } catch {
-    // Unwritable HOME: the render's own mkdir fails the same way, so nothing
-    // is ever staged there; the deny entry is then a harmless no-op.
+  } catch (err) {
+    // The SDK skips a missing deny path, so a root created LATER (by a render)
+    // would be readable from this session. Surface it rather than swallow it.
+    c4StagingRootReady = false;
+    warnSilentFallback(err, {
+      feature: "agent-sandbox",
+      op: "c4-staging-root",
+      message: "agent-sandbox: C4 staging root could not be created; its read-deny may not apply",
+    });
   }
   const denyRead = Array.from(
     new Set([...siblingDeny, c4StagingRoot, ...(opts?.denyReadExtra ?? [])]),
@@ -214,6 +221,7 @@ export function buildAgentSandboxConfig(
       workspace: basename(workspacePath),
       deniedCount: denyRead.length,
       degraded,
+      c4StagingRootReady,
     },
     "agent-sandbox: computed per-sibling denyRead",
   );

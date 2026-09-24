@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
@@ -99,9 +100,9 @@ function sentinelPath(): string {
 }
 
 type Render = typeof import("@/server/c4-render").renderC4Model;
-type Stage = typeof import("@/server/c4-stage-sources").stageCommittedC4Sources;
+type StageMod = typeof import("@/server/c4-stage-sources");
 let renderC4Model: Render;
-let stageCommittedC4Sources: Stage;
+let stageMod: StageMod;
 let stagingRoot: string;
 
 beforeAll(async () => {
@@ -112,7 +113,7 @@ beforeAll(async () => {
   vi.resetModules();
   // LIKEC4_BIN is read at module load — import AFTER stubbing it.
   renderC4Model = (await import("@/server/c4-render")).renderC4Model;
-  stageCommittedC4Sources = (await import("@/server/c4-stage-sources")).stageCommittedC4Sources;
+  stageMod = await import("@/server/c4-stage-sources");
 });
 
 afterEach(() => {
@@ -133,7 +134,10 @@ function render(tree: FakeTree, opts: { skipConfigRefusal?: boolean; seen?: stri
   const commitSha = h.fake.firstCommit;
   return renderC4Model((destDir, signal) => {
     opts.seen?.push(destDir);
-    return stageCommittedC4Sources({
+    const stage = opts.skipConfigRefusal
+      ? stageMod.__stageSkippingConfigRefusalForTests
+      : stageMod.stageCommittedC4Sources;
+    return stage({
       installationId: 1,
       owner: "o",
       repo: "r",
@@ -141,7 +145,6 @@ function render(tree: FakeTree, opts: { skipConfigRefusal?: boolean; seen?: stri
       destDir,
       signal,
       retryDelayMs: 1,
-      testOnlySkipConfigRefusal: opts.skipConfigRefusal,
     });
   });
 }
@@ -223,6 +226,42 @@ describe.skipIf(!BIN)("#8623 acceptance — a tenant likec4 config never execute
       expect(seen[0].startsWith(`${stagingRoot}/`)).toBe(true);
     } finally {
       rmSync(join(stagingRoot, "likec4.config.mjs"), { force: true });
+    }
+  }, 90_000);
+});
+
+describe.skipIf(!BIN)("#8623 acceptance — inputs outside the working tree", () => {
+  it("the config-name list matches the installed likec4 dist (a bump that adds a name reds here)", () => {
+    // Walk up from the resolved binary to the likec4 package root.
+    let dir = dirname(realpathSync(BIN!));
+    for (let i = 0; i < 6 && !existsSync(join(dir, "dist", "_chunks", "src.mjs")); i++) dir = dirname(dir);
+    const src = readFileSync(join(dir, "dist", "_chunks", "src.mjs"), "utf8");
+    const declared = new Set(
+      // The dist quotes these as template literals (backticks); accept either.
+      [...src.matchAll(/[`"]((?:\.likec4rc)|(?:\.?likec4\.config\.(?:json|js|cjs|mjs|ts|cts|mts)))[`"]/g)].map((m) => m[1]),
+    );
+    expect(declared.size).toBeGreaterThanOrEqual(9);
+    expect([...declared].sort()).toEqual([...stageMod.LIKEC4_CONFIG_NAMES].sort());
+  });
+
+  it("a module planted in the SERVER's $HOME/.node_modules is not executed by the render", async () => {
+    const fakeHome = tmp("c4-fake-home-");
+    const s = sentinelPath();
+    for (const pkg of ["bufferutil", "fsevents"]) {
+      mkdirSync(join(fakeHome, ".node_modules", pkg), { recursive: true });
+      writeFileSync(
+        join(fakeHome, ".node_modules", pkg, "index.js"),
+        `require("node:fs").writeFileSync(${JSON.stringify(s)}, "executed");`,
+      );
+    }
+    const prevHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    try {
+      const res = await render(fixture());
+      expect(res.ok).toBe(true);
+      expect(existsSync(s)).toBe(false);
+    } finally {
+      process.env.HOME = prevHome;
     }
   }, 90_000);
 });

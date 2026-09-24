@@ -34,7 +34,10 @@ import { renderC4Model, type RenderFailure } from "@/server/c4-render";
 import {
   stageCommittedC4Sources,
   listCommittedDiagrams,
+  statusOf,
   DIAGRAMS_UNREADABLE_DETAIL,
+  RATE_LIMITED_DETAIL,
+  FORBIDDEN_DETAIL,
   type RefusalClass,
   type StageResult,
 } from "@/server/c4-stage-sources";
@@ -167,6 +170,7 @@ export async function writeC4Diagram(
         // #8623: the render input is THIS commit's diagrams subtree, fetched
         // from GitHub — never the (tenant-writable) workspace.
         commitSha: result?.commit?.sha,
+        content,
       });
       rerendered = r.rerendered;
       rerenderDiagnostic = r.diagnostic;
@@ -208,28 +212,41 @@ type RerenderInput = {
   relativePath: string;
   /** The commit GitHub returned for the `.c4` write. */
   commitSha: string | undefined;
+  /** The bytes just committed — staged without re-downloading them. */
+  content: string;
 };
 
 type RerenderOutcome = {
   rerendered: boolean;
   /** A concise, user-facing reason on failure (the UI shows
-   *  `Saved — ${diagnostic}`). Absent when the diagram will update anyway
-   *  (superseded by a newer save) and for internal failures that carry no
-   *  honest user action (oversized model, resync). */
+   *  `Saved — ${diagnostic}`). Absent only when a newer save supersedes this
+   *  render (see rerenderAndCommit) and for the resync-after-commit failure,
+   *  where the new model IS committed. */
   diagnostic?: string;
 };
 
 // User-facing copy (CPO-approved, plan 2026-09-24 "Behaviour changes a tenant
-// can see"). Plain text — the UI renders it after "Saved — ", so quotes, not
-// backticks.
+// can see", adjusted at review). Plain text — the UI renders it after
+// "Saved — ", so quotes, not backticks.
 export const RETRY_DIAGNOSTIC = "diagram not updated for this save. Save again to retry.";
+export const RATE_LIMITED_DIAGNOSTIC =
+  "diagram not updated: GitHub's rate limit for this repository was reached. Save again in a few minutes.";
+export const FORBIDDEN_DIAGNOSTIC =
+  "diagram not updated: GitHub denied access to the diagrams folder. Check that the Soleur GitHub app still has access to this repository.";
 export const UNREADABLE_DIAGNOSTIC =
   "diagram not updated: the diagrams folder could not be read from GitHub. " +
   "If a parent folder is a symbolic link, replace it with a real folder in your GitHub repository.";
+export const FOLDER_DIAGNOSTIC =
+  "diagram not updated: the diagrams folder, or a folder above it, is a symbolic link or a submodule. " +
+  "Replace it with a real folder in your GitHub repository to turn automatic updates back on.";
 export const TOO_LARGE_DIAGNOSTIC =
-  "diagram not updated: the diagrams folder has too many or too large diagram files to update " +
-  "automatically. Split or remove some diagram files to turn automatic updates back on.";
-const REFUSAL_NOUN: Record<Exclude<RefusalClass, "too-large">, string> = {
+  "diagram not updated: the diagrams folder has more than 50 diagram files or more than 4 MB of diagram source, " +
+  "which is too much to update automatically. Combine or remove some diagram files to turn automatic updates back on.";
+export const MODEL_TOO_LARGE_DIAGNOSTIC =
+  "diagram not updated: the rendered diagram is larger than 4 MB, which is too large to save. Simplify the diagram to turn automatic updates back on.";
+export const INTERNAL_DIAGNOSTIC =
+  "diagram not updated: the diagram could not be rendered this time. Save again to retry; if it keeps happening, contact support.";
+export const REFUSAL_NOUN: Record<"likec4-config" | "symlink" | "gitlink", string> = {
   "likec4-config": "a likec4 config file",
   symlink: "a symbolic link",
   gitlink: "a submodule",
@@ -240,10 +257,11 @@ const MAX_DIAGNOSTIC_PATH = 60;
  * The offender path is chosen by whoever pushed to the tenant repo, and it
  * reaches the Concierge's context through `rerenderDiagnostic`. Reduce it to
  * `[A-Za-z0-9._/-]` (which also removes C0/DEL/U+2028/U+2029/bidi controls and
- * quotes) and cap it, so a file name cannot carry instructions.
+ * quotes) and cap it, keeping the END (the file name identifies the file).
  */
 export function sanitizeDiagnosticPath(p: string): string {
-  return p.replace(/[^A-Za-z0-9._/-]/g, "_").slice(0, MAX_DIAGNOSTIC_PATH);
+  const clean = p.replace(/[^A-Za-z0-9._/-]/g, "_");
+  return clean.length <= MAX_DIAGNOSTIC_PATH ? clean : `...${clean.slice(-(MAX_DIAGNOSTIC_PATH - 3))}`;
 }
 
 /** The user-facing reason a refused tree was not rendered. */
@@ -252,6 +270,7 @@ export function unsafeSourceDiagnostic(
   path: string | undefined,
   more: number,
 ): string {
+  if (refusalClass === "diagrams-folder") return FOLDER_DIAGNOSTIC;
   if (refusalClass === "too-large" || !path) return TOO_LARGE_DIAGNOSTIC;
   const text =
     `diagram not updated: "${sanitizeDiagnosticPath(path)}" (${REFUSAL_NOUN[refusalClass]}) ` +
@@ -261,21 +280,23 @@ export function unsafeSourceDiagnostic(
 }
 
 /**
- * Turn a render failure into the user-facing diagnostic, or none. The likec4
- * `Could not resolve …` line is surfaced only for `empty_model` (the user's
- * source is broken); staging refusals get their class-specific copy; a failed
- * or timed-out FETCH asks the user to save again (a transient on our side).
- * Spawn-side internal failures (io_error / timeout / non_zero_exit /
- * spawn_error while running likec4) stay silent — don't blame the source.
+ * Turn a render failure into the user-facing diagnostic. Every failure gets
+ * one (a failed render never implies a later automatic refresh): the likec4
+ * `Could not resolve …` line for `empty_model` (the user's source is broken),
+ * class-specific copy for staging refusals and fetch failures, and a neutral
+ * retry line for our own internal failures.
  */
-function buildRerenderDiagnostic(render: RenderFailure): string | undefined {
+function buildRerenderDiagnostic(render: RenderFailure): string {
   if (render.reason === "unsafe_source") {
     return unsafeSourceDiagnostic(render.refusalClass, render.path, render.more);
   }
   if (render.phase === "stage") {
-    return render.detail === DIAGRAMS_UNREADABLE_DETAIL ? UNREADABLE_DIAGNOSTIC : RETRY_DIAGNOSTIC;
+    if (render.detail === DIAGRAMS_UNREADABLE_DETAIL) return UNREADABLE_DIAGNOSTIC;
+    if (render.detail === RATE_LIMITED_DETAIL) return RATE_LIMITED_DIAGNOSTIC;
+    if (render.detail === FORBIDDEN_DETAIL) return FORBIDDEN_DIAGNOSTIC;
+    return RETRY_DIAGNOSTIC;
   }
-  if (render.reason !== "empty_model") return undefined;
+  if (render.reason !== "empty_model") return INTERNAL_DIAGNOSTIC;
   const raw = render.detail ?? "";
   const match = raw.match(/Could not resolve reference to \w+ named '[^']+'/);
   if (match) {
@@ -290,9 +311,7 @@ function buildRerenderDiagnostic(render: RenderFailure): string | undefined {
   );
 }
 
-function statusOf(err: unknown): number | undefined {
-  return err instanceof GitHubApiError ? err.statusCode : undefined;
-}
+const HEAD_RELIST_TIMEOUT_MS = 5_000;
 
 /**
  * Regenerate `model.likec4.json` from the committed diagrams sources of
@@ -300,20 +319,25 @@ function statusOf(err: unknown): number | undefined {
  * through the same GitHub Contents API path, and re-sync the clone so the GET
  * /project route reads the fresh `dump`. Returns `{ rerendered:true }` only on
  * full success; any failure is reported and returns `{ rerendered:false }`
- * (with a user-facing `diagnostic` when the user can act on it) — the caller
- * has already committed the `.c4` source, so a re-render failure never fails
- * the save, and an empty/invalid render NEVER commits over the good model.
+ * with a user-facing `diagnostic` — the caller has already committed the
+ * `.c4` source, so a re-render failure never fails the save, and an
+ * empty/invalid render NEVER commits over the good model.
  *
- * Concurrent saves: the model PUT carries the model blob sha from the RENDERED
- * commit's listing, so a newer model already on HEAD makes the PUT fail
- * (409/422) instead of being overwritten. The HEAD re-list then decides: same
- * source set → retry once with HEAD's model sha; different → this render is
- * superseded by the newer save's own render (no diagnostic, no Sentry).
+ * Concurrent saves: before the model PUT, HEAD's diagrams listing is re-read
+ * and its SOURCE SET (path + blob sha pairs) must equal the one rendered —
+ * otherwise a newer source change is on HEAD and this render is superseded
+ * (no commit; a newer save through the editor or Concierge renders its own).
+ * The PUT then carries HEAD's model sha from that same listing, so a model
+ * committed in between fails the PUT (409/422) and the check runs once more.
+ * Comparing sources rather than model bytes is what stops an older render
+ * landing after an undo: the undo restores the old MODEL bytes, never the old
+ * source set. A source change pushed from outside Soleur in the milliseconds
+ * between the re-read and the PUT is not caught; the next save re-renders.
  */
 async function rerenderAndCommit(
   input: RerenderInput,
 ): Promise<RerenderOutcome> {
-  const { installationId, owner, repo, workspacePath, userId, relativePath, commitSha } =
+  const { installationId, owner, repo, workspacePath, userId, relativePath, commitSha, content } =
     input;
   const jsonRelPath = `${C4_DIAGRAMS_DIR}/${C4_MODEL_JSON}`;
   const jsonFilePath = `knowledge-base/${jsonRelPath}`;
@@ -337,6 +361,7 @@ async function rerenderAndCommit(
         commitSha,
         destDir,
         signal,
+        known: [Buffer.from(content, "utf8")],
       });
       return staged;
     });
@@ -360,17 +385,29 @@ async function rerenderAndCommit(
           // the userIdHash + feature/op tags already locate the tenant, and the
           // absolute workspacePath is internal-topology noise in telemetry.
           extra: { userId, relativePath, reason: render.reason },
-          tags: { reason: render.reason, phase: render.phase ?? "spawn" },
+          tags: { reason: render.reason, phase: render.phase },
           message: "c4 re-render failed — source committed, diagram stale",
         });
       }
-      const diagnostic = buildRerenderDiagnostic(render);
-      return { rerendered: false, ...(diagnostic ? { diagnostic } : {}) };
+      return { rerendered: false, diagnostic: buildRerenderDiagnostic(render) };
     }
+    if (!staged?.ok) {
+      // Cannot happen (a successful render implies a successful stage); if a
+      // refactor ever breaks that, never commit without a verified source set.
+      reportSilentFallback(new Error("render ok without a staged source set"), {
+        feature: "c4-rerender",
+        op: "commit-json",
+        extra: { userId, relativePath },
+        tags: { phase: "commit" },
+        message: "c4 re-render: no staged source set — model not committed",
+      });
+      return { rerendered: false, diagnostic: INTERNAL_DIAGNOSTIC };
+    }
+    const renderedSourceKey = staged.sourceKey;
 
     // renderC4Model returned the validated bytes in-process (#4976) — commit
-    // them directly via the same Contents API path. No on-disk re-read. Cap on
-    // the exact bytes we are about to commit.
+    // them directly via the same Contents API path. Cap on the exact bytes we
+    // are about to commit.
     const json = render.json;
     const size = Buffer.byteLength(json, "utf8");
     if (size > MAX_C4_MODEL_BYTES) {
@@ -381,45 +418,49 @@ async function rerenderAndCommit(
         tags: { phase: "commit" },
         message: "c4 re-render: regenerated model too large to commit",
       });
-      return { rerendered: false };
+      return { rerendered: false, diagnostic: MODEL_TOO_LARGE_DIAGNOSTIC };
     }
 
-    // The model sha from the RENDERED commit's listing — never a fresh HEAD
-    // read, or the concurrency guarantee above silently disappears.
-    const renderedModelSha = staged?.ok ? staged.modelSha : undefined;
-    const renderedSourceKey = staged?.ok ? staged.sourceKey : undefined;
-    const putModel = (sha: string | undefined) =>
-      githubApiPost(
-        installationId,
-        `/repos/${owner}/${repo}/contents/${jsonFilePath}`,
-        {
-          message: `Re-render ${C4_MODEL_JSON} via Soleur diagram editor`,
-          content: Buffer.from(json, "utf8").toString("base64"),
-          ...(sha ? { sha } : {}),
-        },
-        "PUT",
+    const superseded = (why: string) => {
+      logger.warn(
+        { event: "c4_rerender_superseded", path: jsonFilePath, why },
+        "kb/c4: re-render superseded by a newer save",
       );
-
-    try {
-      await putModel(renderedModelSha);
-    } catch (err) {
-      const status = statusOf(err);
-      if (status !== 409 && status !== 422) throw err;
-      const head = await listCommittedDiagrams({ installationId, owner, repo });
+      return { rerendered: false };
+    };
+    let committed = false;
+    for (let attempt = 0; attempt < 2 && !committed; attempt++) {
+      const head = await listCommittedDiagrams({
+        installationId,
+        owner,
+        repo,
+        signal: AbortSignal.timeout(HEAD_RELIST_TIMEOUT_MS),
+      });
       if (!head.ok) {
-        throw new Error(`model PUT ${status}; HEAD re-list failed: ${head.reason}`);
+        // HEAD now carries something the render refuses: a newer source change
+        // (not this render's) — superseded, not an incident.
+        if (head.reason === "unsafe_source") return superseded("head-refused");
+        throw new Error(`HEAD re-list failed: ${head.reason}`);
       }
-      if (renderedSourceKey === undefined || head.sourceKey !== renderedSourceKey) {
-        // A newer save changed the sources; its own render updates the model.
-        logger.warn(
-          { event: "c4_rerender_superseded", path: jsonFilePath, status },
-          "kb/c4: re-render superseded by a newer save",
+      if (head.sourceKey !== renderedSourceKey) return superseded("sources-changed");
+      try {
+        await githubApiPost(
+          installationId,
+          `/repos/${owner}/${repo}/contents/${jsonFilePath}`,
+          {
+            message: `Re-render ${C4_MODEL_JSON} via Soleur diagram editor`,
+            content: Buffer.from(json, "utf8").toString("base64"),
+            ...(head.modelSha ? { sha: head.modelSha } : {}),
+          },
+          "PUT",
         );
-        return { rerendered: false };
+        committed = true;
+      } catch (err) {
+        const status = statusOf(err);
+        // The model moved between the re-read and the PUT: re-check once. A
+        // second conflict throws to the catch below — never loops.
+        if ((status !== 409 && status !== 422) || attempt === 1) throw err;
       }
-      // Same sources on HEAD (e.g. only a README changed): retry ONCE. A second
-      // 409/422 throws to the catch below — never loops.
-      await putModel(head.modelSha);
     }
 
     const resync = await syncWorkspace(installationId, workspacePath, logger, {
@@ -449,6 +490,6 @@ async function rerenderAndCommit(
       tags: { phase: "commit" },
       message: "c4 re-render: regenerate/commit failed — source committed, diagram stale",
     });
-    return { rerendered: false };
+    return { rerendered: false, diagnostic: RETRY_DIAGNOSTIC };
   }
 }

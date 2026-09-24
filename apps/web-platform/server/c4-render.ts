@@ -53,7 +53,7 @@
 // esbuild cannot resolve the `server-only` guard package. Server-only by
 // construction (spawns a CLI), only imported by server code.
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { canonicalizeC4Model } from "@/lib/c4-canonical.mjs";
 import { C4_MODEL_JSON } from "@/lib/c4-constants";
@@ -94,7 +94,7 @@ export type RenderFailure =
       reason: Exclude<RenderReason, "unsafe_source">;
       detail?: string;
       /** Where it failed: fetching the input, or running likec4. */
-      phase?: "stage" | "spawn";
+      phase: "stage" | "spawn";
     };
 
 export type RenderResult =
@@ -108,6 +108,7 @@ export type RenderResult =
 // Staging fetches over the network; it gets its own budget, separate from the
 // spawn's, and runs before a render slot is taken (#8623).
 export const STAGE_DEADLINE_MS = 10_000;
+export const STAGE_DEADLINE_DETAIL = "stage: deadline";
 
 // Real prod model exports in <1s (verified 2026-06-05); 25s is a ceiling that
 // leaves headroom for a cold first invocation while staying under the PUT
@@ -179,20 +180,19 @@ type SpawnResult =
  */
 export async function renderC4Model(stage: StageFn): Promise<RenderResult> {
   const root = c4RenderStagingRoot();
-  const rootOk = await mkdir(root, { recursive: true, mode: 0o700 }).then(
-    () => true,
-    () => false,
-  );
-  if (!rootOk) {
+  const dir = await mkdir(root, { recursive: true, mode: 0o700 })
+    .then(() => verifyPrivateRoot(root))
+    .then(() => mkdtemp(join(root, "c4-render-")))
+    .catch(() => null);
+  if (!dir) {
     return { ok: false, reason: "io_error", detail: "staging root unavailable", phase: "stage" };
   }
-  const dir = await mkdtemp(join(root, "c4-render-")).catch(() => null);
-  if (!dir) {
-    return { ok: false, reason: "io_error", detail: "mkdtemp failed", phase: "stage" };
-  }
   const srcDir = join(dir, "src");
+  let stageSettled: Promise<unknown> = Promise.resolve();
   try {
-    const staged = await runStage(stage, srcDir);
+    const run = runStage(stage, srcDir);
+    stageSettled = run.settled;
+    const staged = await run.result;
     if (!staged.ok) {
       return staged.reason === "unsafe_source"
         ? { ...staged, phase: "stage" }
@@ -201,25 +201,77 @@ export async function renderC4Model(stage: StageFn): Promise<RenderResult> {
     // The render slot is held only around the spawn.
     await acquire();
     try {
-      return await renderToValidatedModel(srcDir, join(dir, C4_MODEL_JSON));
+      // Re-verify the stage just before the spawn: exactly the files the stage
+      // reported, regular files and directories only. The staging root is
+      // unreachable from the agent sandbox; this makes the input guarantee
+      // local instead of resting on that alone.
+      if (!(await stageMatches(srcDir, staged.paths))) {
+        return { ok: false, reason: "io_error", detail: "stage: contents changed before render", phase: "stage" };
+      }
+      return await renderToValidatedModel(srcDir, dir, join(dir, C4_MODEL_JSON));
     } finally {
       release();
     }
   } finally {
+    // After a deadline the stage's in-flight work can still be finishing; give
+    // it a bounded moment to settle so the removal below does not race a late
+    // write (which would leave staged sources behind).
+    await Promise.race([stageSettled, new Promise((r) => setTimeout(r, STAGE_SETTLE_GRACE_MS))]);
     // Trailing .catch so cleanup can never reject the resolved result (mirrors
     // pdf-linearize.ts). Removes the staged input and the temp output alike.
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
   }
 }
 
+const STAGE_SETTLE_GRACE_MS = 2_000;
+/** Stand-in for the per-render stage path inside rendered file:// URIs. */
+export const STABLE_SOURCE_ROOT = "/c4-sources";
+
+/** The staging root must be a real directory we own — not a symlink planted
+ *  in its place, and not someone else's directory. */
+async function verifyPrivateRoot(root: string): Promise<void> {
+  const st = await lstat(root);
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (!st.isDirectory() || st.isSymbolicLink() || (uid !== undefined && st.uid !== uid)) {
+    throw new Error("staging root is not a private directory");
+  }
+}
+
+/** True when `srcDir` holds exactly `expected` (relative paths) as regular
+ *  files, with nothing but directories besides. */
+async function stageMatches(srcDir: string, expected: string[]): Promise<boolean> {
+  const want = new Set(expected);
+  const seen = new Set<string>();
+  const walk = async (dir: string, rel: string): Promise<boolean> => {
+    for (const d of await readdir(dir, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${d.name}` : d.name;
+      if (d.isDirectory()) {
+        if (!(await walk(join(dir, d.name), r))) return false;
+      } else if (d.isFile() && want.has(r)) {
+        seen.add(r);
+      } else {
+        return false;
+      }
+    }
+    return true;
+  };
+  try {
+    return (await walk(srcDir, "")) && seen.size === want.size;
+  } catch {
+    return false;
+  }
+}
+
+type StageRun = { result: Promise<StageResult>; settled: Promise<unknown> };
+
 /** Run `stage` under STAGE_DEADLINE_MS; on deadline, abort its in-flight work. */
-async function runStage(stage: StageFn, srcDir: string): Promise<StageResult> {
+function runStage(stage: StageFn, srcDir: string): StageRun {
   const ac = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<StageResult>((resolve) => {
     timer = setTimeout(() => {
-      ac.abort(new Error("stage: deadline"));
-      resolve({ ok: false, reason: "timeout", detail: "stage: deadline" });
+      ac.abort(new Error(STAGE_DEADLINE_DETAIL));
+      resolve({ ok: false, reason: "timeout", detail: STAGE_DEADLINE_DETAIL });
     }, STAGE_DEADLINE_MS);
   });
   const work = Promise.resolve()
@@ -231,22 +283,20 @@ async function runStage(stage: StageFn, srcDir: string): Promise<StageResult> {
         detail: sanitizeForLog(`stage: ${err instanceof Error ? err.message : String(err)}`).slice(0, 200),
       }),
     );
-  try {
-    return await Promise.race([work, deadline]);
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+  return { result, settled: work };
 }
 
 async function renderToValidatedModel(
   srcDir: string,
+  home: string,
   tmpOut: string,
 ): Promise<RenderResult> {
   // The validated bytes are RETURNED, never published onto the tracked path
   // (#4976), so an invalid render never clobbers the previously-good committed
   // model. `tmpOut` sits OUTSIDE `srcDir`, so it is not part of likec4's input.
   try {
-    const run = await runLikeC4(srcDir, tmpOut);
+    const run = await runLikeC4(srcDir, home, tmpOut);
     if (!run.ok) return { ...run, phase: "spawn" };
 
     // exit 0 — but likec4 exits 0 on unresolved references too, so validate
@@ -259,6 +309,7 @@ async function renderToValidatedModel(
     } catch (err) {
       return {
         ok: false,
+        phase: "spawn",
         reason: "io_error",
         detail: sanitizeForLog(
           `model parse failed: ${
@@ -282,6 +333,7 @@ async function renderToValidatedModel(
       // across likec4 patch versions).
       return {
         ok: false,
+        phase: "spawn",
         reason: "empty_model",
         detail: run.stderr || "model has no elements",
       };
@@ -291,12 +343,18 @@ async function renderToValidatedModel(
     // the bytes; the caller commits them and the resync pull lands them on disk.
     // The tracked working-tree file is never written. A canonicalize failure is
     // our own IO-class fault, not the user's source, so it maps to io_error.
+    // A relative `icon` resolves to a file:// URI under the stage dir, whose
+    // name is random per render; replace that prefix with a stable token so
+    // the committed model does not change on every save or disclose the
+    // server's staging layout.
+    raw = raw.split(srcDir).join(STABLE_SOURCE_ROOT);
     let json: string;
     try {
       json = canonicalizeC4Model(raw);
     } catch (err) {
       return {
         ok: false,
+        phase: "spawn",
         reason: "io_error",
         detail: sanitizeForLog(
           `canonicalize failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 512),
@@ -307,6 +365,7 @@ async function renderToValidatedModel(
   } catch (err) {
     return {
       ok: false,
+      phase: "spawn",
       reason: "io_error",
       detail: sanitizeForLog(err instanceof Error ? err.message : String(err)),
     };
@@ -315,6 +374,7 @@ async function renderToValidatedModel(
 
 function runLikeC4(
   srcDir: string,
+  home: string,
   outPath: string,
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
@@ -335,13 +395,19 @@ function runLikeC4(
       });
     }, RENDER_TIMEOUT_MS);
 
-    // HOME is in the allow-list (npm-global bin resolution); otherwise the same
-    // scoped allow-list as pdf-linearize.ts. No secrets reach the child.
-    const env = Object.fromEntries(
-      (["PATH", "LANG", "LC_ALL", "HOME", "TMPDIR"] as const)
-        .map((k) => [k, process.env[k]] as const)
-        .filter(([, v]) => v !== undefined),
-    ) as NodeJS.ProcessEnv;
+    // The same scoped allow-list as pdf-linearize.ts; no secrets reach the
+    // child. HOME is the private per-render dir, not the server's: node's
+    // module fallback executes `$HOME/.node_modules/<optional dep>` and likec4
+    // keeps a config store under `$HOME/.config`, so a real HOME would be one
+    // more input outside the stage (#8623 structural review).
+    const env = {
+      ...Object.fromEntries(
+        (["PATH", "LANG", "LC_ALL", "TMPDIR"] as const)
+          .map((k) => [k, process.env[k]] as const)
+          .filter(([, v]) => v !== undefined),
+      ),
+      HOME: home,
+    } as unknown as NodeJS.ProcessEnv;
 
     // Fixed argv except the `-o` target, which is a private temp path (from
     // mkdtemp) — never a user-controlled filename. cwd is the private stage

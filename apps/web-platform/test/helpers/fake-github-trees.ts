@@ -64,8 +64,15 @@ export type FakeGitHubOptions = {
   notFoundTimes?: Record<string, number>;
   /** Blob GETs never resolve (until the caller's signal aborts). */
   stallBlobs?: boolean;
-  /** Blob GETs fail with this HTTP status. */
+  /** Blob GETs fail with this HTTP status (and optional GitHub message). */
   blobStatus?: number;
+  blobMessage?: string;
+  /** Blob GETs IGNORE the abort signal and resolve after this many ms — models
+   *  a response already on the wire when the caller gives up. */
+  lateBlobsMs?: number;
+  /** Requests must target exactly this repo + installation, else 404 (the fake
+   *  can reject a cross-repo read). Defaults to o/r @ 1. */
+  expect?: { owner: string; repo: string; installationId: number };
 };
 
 export function createFakeGitHub(initial: FakeTree, opts: FakeGitHubOptions = {}) {
@@ -210,7 +217,9 @@ export function createFakeGitHub(initial: FakeTree, opts: FakeGitHubOptions = {}
     try {
       // Yield so concurrent callers actually overlap.
       await new Promise((r) => setTimeout(r, 2));
-      if (opts.stallBlobs) {
+      if (opts.lateBlobsMs !== undefined) {
+        await new Promise((r) => setTimeout(r, opts.lateBlobsMs));
+      } else if (opts.stallBlobs) {
         await new Promise((_, reject) => {
           const onAbort = () => reject(signal?.reason ?? new Error("aborted"));
           if (signal?.aborted) onAbort();
@@ -218,7 +227,10 @@ export function createFakeGitHub(initial: FakeTree, opts: FakeGitHubOptions = {}
         });
       }
       if (opts.blobStatus) {
-        throw new FakeGitHubApiError(`GitHub API ${opts.blobStatus}`, opts.blobStatus);
+        throw new FakeGitHubApiError(
+          `GitHub API ${opts.blobStatus}${opts.blobMessage ? `: "${opts.blobMessage}"` : ""}`,
+          opts.blobStatus,
+        );
       }
       const b = blobs.get(sha);
       if (!b) throw new FakeGitHubApiError(`no blob ${sha}`, 404);
@@ -228,8 +240,16 @@ export function createFakeGitHub(initial: FakeTree, opts: FakeGitHubOptions = {}
     }
   }
 
-  async function get(_installationId: number, path: string, o?: { signal?: AbortSignal }) {
+  const want = opts.expect ?? { owner: "o", repo: "r", installationId: 1 };
+  function checkTarget(installationId: number, path: string) {
+    if (installationId !== want.installationId || !path.startsWith(`/repos/${want.owner}/${want.repo}/`)) {
+      throw new FakeGitHubApiError(`fake: wrong repo/installation ${installationId} ${path}`, 404);
+    }
+  }
+
+  async function get(installationId: number, path: string, o?: { signal?: AbortSignal }) {
     calls.push(`GET ${path}`);
+    checkTarget(installationId, path);
     if (o?.signal?.aborted) throw o.signal.reason ?? new Error("aborted");
     const url = new URL(`https://api.github.test${path}`);
     const m = url.pathname.match(/^\/repos\/[^/]+\/[^/]+\/(contents|git\/trees|git\/blobs)\/(.*)$/);
@@ -244,12 +264,13 @@ export function createFakeGitHub(initial: FakeTree, opts: FakeGitHubOptions = {}
   }
 
   async function post(
-    _installationId: number,
+    installationId: number,
     path: string,
     body: { content: string; sha?: string },
     method = "POST",
   ) {
     calls.push(`${method} ${path}`);
+    checkTarget(installationId, path);
     const m = path.match(/^\/repos\/[^/]+\/[^/]+\/contents\/(.*)$/);
     if (method !== "PUT" || !m) throw new FakeGitHubApiError(`unhandled ${path}`, 404);
     const filePath = decodeURIComponent(m[1]);
@@ -277,6 +298,14 @@ export function createFakeGitHub(initial: FakeTree, opts: FakeGitHubOptions = {}
     fileAt: (commit: string, p: string) => {
       const e = commits.get(commit)?.tree[p];
       return e ? bytesOf(e).toString("utf8") : undefined;
+    },
+    /** Flip one byte of the stored blob (same length): its bytes no longer hash to its sha. */
+    corrupt: (sha: string) => {
+      const b = blobs.get(sha);
+      if (!b) throw new Error(`fake: no blob ${sha}`);
+      const c = Buffer.from(b);
+      c[0] ^= 1;
+      blobs.set(sha, c);
     },
     calls,
     blobCalls: () => calls.filter((c) => c.includes("/git/blobs/")).length,

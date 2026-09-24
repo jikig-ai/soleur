@@ -18,12 +18,19 @@
 // listing BEFORE any blob is fetched or any file is written.
 //
 // Mirrors the ADR-235 local resolver's STAGE block
-// (plugins/soleur/scripts/resolve-regenerable-conflicts.sh), with one
-// deliberate difference: that resolver reads the operator's own object store;
-// this reads GitHub, because here the object store is the tenant's.
+// (plugins/soleur/scripts/resolve-regenerable-conflicts.sh). Differences:
+//   - bytes come from GitHub, not the local object store (here the object store
+//     is the tenant's; the resolver's is the operator's own);
+//   - config names are the exact likec4@1.50.0 list (the resolver refuses the
+//     glob `likec4.config.*`; the parity test pins every name here to it);
+//   - sources under directories likec4 ignores (node_modules, .git, ...) are
+//     skipped, as likec4 itself skips them;
+//   - count/byte caps with a `too-large` refusal (the resolver has none);
+//   - an unsafe tree path is an io_error rather than its own refusal class.
 // Decision record: ADR-050 amendment 2026-09-24.
 //
 // No `import "server-only"` (same reason as c4-writer.ts / c4-render.ts).
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { githubApiGet } from "@/server/github-api";
@@ -31,8 +38,9 @@ import { C4_DIAGRAMS_DIR, C4_MODEL_JSON } from "@/lib/c4-constants";
 
 // Copied from the installed likec4@1.50.0 dist (`_chunks/src.mjs`); the version
 // is pinned across Dockerfile / ci.yml / render-c4-model.sh by
-// test/c4-likec4-version-pin.test.ts.
-export const LIKEC4_CONFIG_NAMES: readonly string[] = [
+// test/c4-likec4-version-pin.test.ts, and the acceptance suite re-reads this
+// list from the installed dist when the binary is present.
+export const LIKEC4_CONFIG_NAMES: readonly string[] = Object.freeze([
   ".likec4rc",
   ".likec4.config.json",
   "likec4.config.json",
@@ -42,21 +50,38 @@ export const LIKEC4_CONFIG_NAMES: readonly string[] = [
   "likec4.config.ts",
   "likec4.config.cts",
   "likec4.config.mts",
-];
+]);
 // likec4@1.50.0 `_chunks/binary.mjs`.
-export const LIKEC4_SOURCE_EXTENSIONS: readonly string[] = [".c4", ".likec4", ".like-c4"];
+export const LIKEC4_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([".c4", ".likec4", ".like-c4"]);
+// Directories likec4's project crawl excludes (`_chunks/binary.mjs`, `ed`).
+const LIKEC4_IGNORED_DIRS: readonly string[] = Object.freeze(["node_modules", ".git", ".svn", ".yarn", ".pnpm"]);
 
+// Caps and concurrency: plan 2026-09-24 "Technical Considerations" (worst case
+// ~53 API calls per save against the installation's shared 5,000/h budget and
+// GitHub's 100-concurrent secondary limit).
 export const MAX_STAGED_SOURCES = 50;
 export const MAX_STAGED_SOURCE_BYTES = 4 * 1024 * 1024;
 export const BLOB_CONCURRENCY = 8;
 const NOT_FOUND_RETRIES = 2;
+const GIT_SHA_RE = /^[0-9a-f]{40}$/;
 
 /** The diagrams folder cannot be read at the commit — persistently. A path
  *  THROUGH a symlinked parent 404s on the Contents API (measured). */
 export const DIAGRAMS_UNREADABLE_DETAIL = "fetch: diagrams folder unreadable";
+/** 429, or a 403 whose GitHub message names a (secondary) rate limit. */
 export const RATE_LIMITED_DETAIL = "fetch: rate-limited";
+/** Any other 403: the installation cannot read the repo. Retrying won't help. */
+export const FORBIDDEN_DETAIL = "fetch: forbidden";
 
-export type RefusalClass = "likec4-config" | "symlink" | "gitlink" | "too-large";
+export type RefusalClass =
+  | "likec4-config"
+  | "symlink"
+  | "gitlink"
+  | "too-large"
+  // The diagrams folder itself, or a folder above it, is not a real directory
+  // (a symbolic link or a submodule). `path` is absent: it is not a file IN the
+  // diagrams folder the user could remove.
+  | "diagrams-folder";
 
 export type StageFailure =
   | {
@@ -84,7 +109,13 @@ export type ListResult =
   | StageFailure;
 
 export type StageResult =
-  | { ok: true; files: number; bytes: number; modelSha?: string; sourceKey: string }
+  | {
+      ok: true;
+      /** Relative paths written under destDir (the render re-verifies the set). */
+      paths: string[];
+      modelSha?: string;
+      sourceKey: string;
+    }
   | StageFailure;
 
 type RepoRef = {
@@ -99,9 +130,15 @@ type RepoRef = {
 type ContentsEntry = { name?: string; type?: string; sha?: string; download_url?: string | null };
 type TreeEntry = { path: string; mode: string; type: string; sha: string; size?: number };
 
-function statusOf(err: unknown): number | undefined {
+/** HTTP status off a GitHubApiError (duck-typed so a mocked module still works). */
+export function statusOf(err: unknown): number | undefined {
   const s = (err as { statusCode?: unknown } | null)?.statusCode;
   return typeof s === "number" ? s : undefined;
+}
+
+/** git's blob id: sha1 of `blob <len>\0<bytes>`. */
+export function gitBlobSha(bytes: Buffer): string {
+  return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 }
 
 class StageAbort extends Error {
@@ -114,6 +151,16 @@ function abortedFailure(signal?: AbortSignal): StageFailure {
   const r = signal?.reason;
   const detail = r instanceof Error && r.message ? r.message : "stage: aborted";
   return { ok: false, reason: "timeout", detail };
+}
+
+/** Fixed-vocabulary detail for an unexpected error: never an fs message, which
+ *  embeds the absolute staging path and the tenant-chosen file name. */
+function errorDetail(prefix: string, err: unknown): string {
+  const status = statusOf(err);
+  if (status !== undefined) return `${prefix}: http ${status}`;
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  if (typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code)) return `${prefix}: ${code}`;
+  return `${prefix}: unexpected error`;
 }
 
 async function getWithRetry<T>(ref: RepoRef, path: string): Promise<T> {
@@ -131,20 +178,31 @@ async function getWithRetry<T>(ref: RepoRef, path: string): Promise<T> {
         await new Promise((r) => setTimeout(r, (ref.retryDelayMs ?? 300) * attempt));
         continue;
       }
-      if (status === 403 || status === 429) {
+      if (status === 429 || (status === 403 && /rate limit/i.test(err instanceof Error ? err.message : ""))) {
         throw new StageAbort({ ok: false, reason: "io_error", detail: RATE_LIMITED_DETAIL });
+      }
+      if (status === 403) {
+        throw new StageAbort({ ok: false, reason: "io_error", detail: FORBIDDEN_DETAIL });
       }
       throw err;
     }
   }
 }
 
-function isUnderNodeModules(rel: string): boolean {
-  return rel.split("/").includes("node_modules");
+function isSourceName(rel: string): boolean {
+  const base = rel.slice(rel.lastIndexOf("/") + 1);
+  // likec4 ignores a file named exactly like an extension (".c4").
+  return LIKEC4_SOURCE_EXTENSIONS.some((ext) => base.endsWith(ext) && base !== ext);
 }
 
-function isSourceName(rel: string): boolean {
-  return LIKEC4_SOURCE_EXTENSIONS.some((ext) => rel.endsWith(ext));
+function underIgnoredDir(rel: string): boolean {
+  return rel.split("/").slice(0, -1).some((seg) => LIKEC4_IGNORED_DIRS.includes(seg));
+}
+
+/** A tree path we are willing to materialize: relative, no empty/./.. segments. */
+function isSafeTreePath(rel: string): boolean {
+  if (!rel || rel.startsWith("/") || rel.includes("\\") || rel.includes("\0")) return false;
+  return rel.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
 }
 
 function sourceKeyOf(sources: Source[]): string {
@@ -152,6 +210,39 @@ function sourceKeyOf(sources: Source[]): string {
     .map((s) => `${s.path}\0${s.sha}`)
     .sort()
     .join("\n");
+}
+
+// Blob cache: blobs are immutable by sha, and each fetched blob is verified
+// against its sha before use, so a cached entry is as trustworthy as a fresh
+// fetch. Keyed per installation+repo anyway; bounded by total bytes (LRU).
+const BLOB_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const blobCache = new Map<string, Buffer>();
+let blobCacheBytes = 0;
+
+function cacheGet(key: string): Buffer | undefined {
+  const b = blobCache.get(key);
+  if (b) {
+    blobCache.delete(key);
+    blobCache.set(key, b);
+  }
+  return b;
+}
+
+function cachePut(key: string, b: Buffer): void {
+  if (b.length > BLOB_CACHE_MAX_BYTES || blobCache.has(key)) return;
+  blobCache.set(key, b);
+  blobCacheBytes += b.length;
+  for (const [k, v] of blobCache) {
+    if (blobCacheBytes <= BLOB_CACHE_MAX_BYTES) break;
+    blobCache.delete(k);
+    blobCacheBytes -= v.length;
+  }
+}
+
+/** Test-only: forget cached blobs. */
+export function __clearBlobCacheForTests(): void {
+  blobCache.clear();
+  blobCacheBytes = 0;
 }
 
 /**
@@ -170,11 +261,7 @@ async function listWith(
     return await listInner(input, configNames);
   } catch (err) {
     if (err instanceof StageAbort) return err.failure;
-    return {
-      ok: false,
-      reason: "io_error",
-      detail: `fetch: ${statusOf(err) ?? (err instanceof Error ? err.message : String(err))}`.slice(0, 200),
-    };
+    return { ok: false, reason: "io_error", detail: errorDetail("fetch", err) };
   }
 }
 
@@ -200,23 +287,17 @@ async function listInner(
     }
     throw err;
   }
+  // The parent is not a directory listing (it is a symlink or a file): GitHub
+  // answers a single object.
   if (!Array.isArray(parent)) {
-    // The parent path is itself a symlink (GitHub answers with an object).
-    return { ok: false, reason: "unsafe_source", refusalClass: "symlink", path: parentPath, more: 0 };
+    return { ok: false, reason: "unsafe_source", refusalClass: "diagrams-folder", more: 0 };
   }
   const entry = (parent as ContentsEntry[]).find((e) => e?.name === dirName);
   if (!entry) return { ok: false, reason: "io_error", detail: DIAGRAMS_UNREADABLE_DETAIL };
   if (entry.type !== "dir") {
-    const gitlink = entry.type === "submodule" || (entry.type === "file" && entry.download_url == null);
-    return {
-      ok: false,
-      reason: "unsafe_source",
-      refusalClass: gitlink ? "gitlink" : "symlink",
-      path: dirName,
-      more: 0,
-    };
+    return { ok: false, reason: "unsafe_source", refusalClass: "diagrams-folder", more: 0 };
   }
-  if (typeof entry.sha !== "string" || !/^[0-9a-f]{40}$/.test(entry.sha)) {
+  if (typeof entry.sha !== "string" || !GIT_SHA_RE.test(entry.sha)) {
     return { ok: false, reason: "io_error", detail: "fetch: diagrams tree sha missing" };
   }
 
@@ -235,6 +316,9 @@ async function listInner(
   let modelSha: string | undefined;
   for (const e of entries) {
     if (!e || typeof e.path !== "string") continue;
+    // likec4 never reads under these directories, so neither do we — not even
+    // to refuse what is in them.
+    if (underIgnoredDir(e.path) || LIKEC4_IGNORED_DIRS.includes(e.path)) continue;
     const base = e.path.slice(e.path.lastIndexOf("/") + 1);
     if (e.mode === "120000") {
       offenders.push({ path: e.path, cls: "symlink" });
@@ -261,9 +345,11 @@ async function listInner(
       continue;
     }
     if (e.mode !== "100644" && e.mode !== "100755") continue;
-    // likec4 ignores **/node_modules/** (measured O/Q): skipped and not counted.
-    if (!isSourceName(e.path) || isUnderNodeModules(e.path)) continue;
-    sources.push({ path: e.path, sha: e.sha, size: typeof e.size === "number" ? e.size : -1 });
+    if (!isSourceName(e.path)) continue;
+    if (!isSafeTreePath(e.path) || typeof e.sha !== "string" || !GIT_SHA_RE.test(e.sha) || typeof e.size !== "number" || e.size < 0) {
+      return { ok: false, reason: "io_error", detail: "listing: malformed source entry" };
+    }
+    sources.push({ path: e.path, sha: e.sha, size: e.size });
   }
 
   if (offenders.length > 0) {
@@ -275,15 +361,21 @@ async function listInner(
       more: offenders.length - 1,
     };
   }
-  const total = sources.reduce((n, s) => n + Math.max(s.size, 0), 0);
+  const total = sources.reduce((n, s) => n + s.size, 0);
   if (sources.length > MAX_STAGED_SOURCES || total > MAX_STAGED_SOURCE_BYTES) {
     return { ok: false, reason: "unsafe_source", refusalClass: "too-large", more: 0 };
   }
-  if (sources.some((s) => s.size < 0 || !/^[0-9a-f]{40}$/.test(s.sha))) {
-    return { ok: false, reason: "io_error", detail: "listing: malformed source entry" };
-  }
   return { ok: true, sources, modelSha, sourceKey: sourceKeyOf(sources) };
 }
+
+type StageInput = RepoRef & {
+  commitSha: string;
+  destDir: string;
+  signal: AbortSignal;
+  /** Bytes the caller already holds (the file it just committed): used instead
+   *  of a blob GET when their git blob sha matches the listing. */
+  known?: Buffer[];
+};
 
 /**
  * Stage the committed LikeC4 sources of `commitSha`'s diagrams subtree into
@@ -292,16 +384,20 @@ async function listInner(
  * in-flight GET and every further write, and a late write cannot recreate a
  * removed directory.
  */
-export async function stageCommittedC4Sources(
-  input: RepoRef & {
-    commitSha: string;
-    destDir: string;
-    signal: AbortSignal;
-    /** TEST-ONLY: list configs as skipped instead of refusing them, to prove
-     *  the extension allowlist alone keeps them out (Guard 1 row 3). */
-    testOnlySkipConfigRefusal?: boolean;
-  },
-): Promise<StageResult> {
+export async function stageCommittedC4Sources(input: StageInput): Promise<StageResult> {
+  return stageWith(input, LIKEC4_CONFIG_NAMES);
+}
+
+/**
+ * TEST-ONLY (Guard 1 row 3): stage with config offenders dropped instead of
+ * refused, to prove the extension allowlist alone keeps configs out of the
+ * stage. Not reachable from production code.
+ */
+export function __stageSkippingConfigRefusalForTests(input: StageInput): Promise<StageResult> {
+  return stageWith(input, []);
+}
+
+async function stageWith(input: StageInput, configNames: readonly string[]): Promise<StageResult> {
   // First failure aborts the siblings; the caller's deadline aborts all.
   const inner = new AbortController();
   const onOuter = () => inner.abort(input.signal.reason);
@@ -310,40 +406,46 @@ export async function stageCommittedC4Sources(
   const ref: RepoRef = { ...input, signal: inner.signal };
 
   try {
-    if (!/^[0-9a-f]{40}$/.test(input.commitSha)) {
-      return { ok: false, reason: "io_error", detail: "no commit sha" };
+    if (!GIT_SHA_RE.test(input.commitSha)) {
+      return { ok: false, reason: "io_error", detail: "stage: no commit sha" };
     }
-    let listed = await listCommittedDiagrams({ ...ref, ref: input.commitSha });
-    if (
-      !listed.ok &&
-      input.testOnlySkipConfigRefusal &&
-      listed.reason === "unsafe_source" &&
-      listed.refusalClass === "likec4-config"
-    ) {
-      // Same listing with config offenders dropped instead of refused; the
-      // extension allowlist below must still keep them out of the stage.
-      listed = await listWith({ ...ref, ref: input.commitSha }, []);
-    }
+    const listed = await listWith({ ...ref, ref: input.commitSha }, configNames);
     if (!listed.ok) return listed;
 
     const root = resolve(input.destDir);
     if (inner.signal.aborted) return abortedFailure(inner.signal);
     await mkdir(root, { mode: 0o700 });
 
-    let bytes = 0;
+    const known = new Map<string, Buffer>();
+    for (const b of input.known ?? []) known.set(gitBlobSha(b), b);
+    const cacheKey = (sha: string) => `${input.installationId}:${input.owner}/${input.repo}:${sha}`;
+
     const queue = [...listed.sources];
+    let firstError: unknown;
     const worker = async () => {
       for (let s = queue.shift(); s; s = queue.shift()) {
-        const blob = await getWithRetry<{ encoding?: string; content?: string }>(
-          ref,
-          `/repos/${input.owner}/${input.repo}/git/blobs/${s.sha}`,
-        );
-        if (blob.encoding !== "base64" || typeof blob.content !== "string") {
-          throw new StageAbort({ ok: false, reason: "io_error", detail: "fetch: unexpected blob encoding" });
+        let buf = cacheGet(cacheKey(s.sha));
+        const k = buf ? undefined : known.get(s.sha);
+        if (k) {
+          buf = k;
+          cachePut(cacheKey(s.sha), k);
         }
-        const buf = Buffer.from(blob.content, "base64");
-        if (buf.length !== s.size) {
-          throw new StageAbort({ ok: false, reason: "io_error", detail: "fetch: blob size mismatch" });
+        if (!buf) {
+          const blob = await getWithRetry<{ encoding?: string; content?: string }>(
+            ref,
+            `/repos/${input.owner}/${input.repo}/git/blobs/${s.sha}`,
+          );
+          if (blob.encoding !== "base64" || typeof blob.content !== "string") {
+            throw new StageAbort({ ok: false, reason: "io_error", detail: "fetch: unexpected blob encoding" });
+          }
+          buf = Buffer.from(blob.content, "base64");
+          if (buf.length !== s.size) {
+            throw new StageAbort({ ok: false, reason: "io_error", detail: "fetch: blob size mismatch" });
+          }
+          if (gitBlobSha(buf) !== s.sha) {
+            throw new StageAbort({ ok: false, reason: "io_error", detail: "fetch: blob sha mismatch" });
+          }
+          cachePut(cacheKey(s.sha), buf);
         }
         const target = resolve(root, s.path);
         if (!target.startsWith(root + sep)) {
@@ -363,36 +465,31 @@ export async function stageCommittedC4Sources(
         }
         if (inner.signal.aborted) throw new StageAbort(abortedFailure(inner.signal));
         await writeFile(target, buf, { flag: "wx", mode: 0o600 });
-        bytes += buf.length;
       }
     };
-    const workers = Array.from({ length: Math.min(BLOB_CONCURRENCY, queue.length) }, () =>
-      worker().catch((err) => {
-        inner.abort(err);
-        throw err;
-      }),
+    await Promise.all(
+      Array.from({ length: Math.min(BLOB_CONCURRENCY, queue.length) }, () =>
+        worker().catch((err) => {
+          // The FIRST failure in time is the one reported; siblings then abort.
+          if (firstError === undefined) firstError = err;
+          inner.abort(err);
+        }),
+      ),
     );
-    const settled = await Promise.allSettled(workers);
-    const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
-    if (failed) {
+    if (firstError !== undefined) {
       if (input.signal.aborted) return abortedFailure(input.signal);
-      throw failed.reason;
+      throw firstError;
     }
     return {
       ok: true,
-      files: listed.sources.length,
-      bytes,
+      paths: listed.sources.map((s) => s.path),
       modelSha: listed.modelSha,
       sourceKey: listed.sourceKey,
     };
   } catch (err) {
     if (input.signal.aborted) return abortedFailure(input.signal);
     if (err instanceof StageAbort) return err.failure;
-    return {
-      ok: false,
-      reason: "io_error",
-      detail: `stage: ${statusOf(err) ?? (err instanceof Error ? err.message : String(err))}`.slice(0, 200),
-    };
+    return { ok: false, reason: "io_error", detail: errorDetail("stage", err) };
   } finally {
     input.signal.removeEventListener("abort", onOuter);
   }

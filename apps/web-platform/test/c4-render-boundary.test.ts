@@ -47,8 +47,8 @@ describe("C4 re-render boundary (#8623)", () => {
     expect(renderC4Model.length).toBe(1);
   });
 
-  it("row 1: c4-render.ts touches the filesystem only through mkdtemp/mkdir/readFile/rm", () => {
-    expect(fsImports(code("server/c4-render.ts"))).toEqual(["mkdir", "mkdtemp", "readFile", "rm"]);
+  it("row 1: c4-render.ts touches the filesystem only through lstat/mkdir/mkdtemp/readdir/readFile/rm", () => {
+    expect(fsImports(code("server/c4-render.ts"))).toEqual(["lstat", "mkdir", "mkdtemp", "readFile", "readdir", "rm"]);
   });
 
   it("row 1: c4-stage-sources.ts only creates directories and writes files", () => {
@@ -69,5 +69,17 @@ describe("C4 re-render boundary (#8623)", () => {
       .filter((p) => /\bLIKEC4_BIN\b/.test(stripComments(readFileSync(p, "utf8"), p)))
       .map((p) => relative(APP, p));
     expect(hits).toEqual(["server/c4-render.ts"]);
+  });
+  it("the render's only production caller is c4-writer.ts, and it stages with stageCommittedC4Sources", () => {
+    const importers = [...walk(join(APP, "server")), ...walk(join(APP, "lib")), ...walk(join(APP, "app"))]
+      .filter((p) => /\brenderC4Model\b/.test(stripComments(readFileSync(p, "utf8"), p)))
+      .map((p) => relative(APP, p))
+      .sort();
+    expect(importers).toEqual(["server/c4-render.ts", "server/c4-writer.ts"]);
+    const writer = code("server/c4-writer.ts");
+    const call = writer.slice(writer.indexOf("renderC4Model("));
+    const body = call.slice(0, call.indexOf("});") + 3);
+    expect(body).toMatch(/stageCommittedC4Sources\(\{/);
+    expect(body).not.toMatch(/workspacePath/);
   });
 });

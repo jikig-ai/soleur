@@ -1,7 +1,8 @@
 // #8623: pinning the render to its own commit means an older render can finish
-// last. The model PUT carries the rendered commit's model sha, so the newer
-// model on HEAD makes it fail (409) and the HEAD re-list decides retry vs
-// superseded. Driven against a STATEFUL fake that enforces the Contents PUT
+// last. Before the model PUT the writer re-reads HEAD's diagrams listing and
+// requires its SOURCE SET to equal the rendered one (else superseded); the PUT
+// then carries HEAD's model sha from that listing, so a model committed in
+// between fails it (409/422) and the check runs once more. Driven against a STATEFUL fake that enforces the Contents PUT
 // `sha` precondition (test/helpers/fake-github-trees.ts); the real
 // stageCommittedC4Sources runs, only the likec4 spawn is replaced.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -21,13 +22,20 @@ const h = vi.hoisted(() => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
   loggerWarn: vi.fn(),
-  postOverride: null as null | ((path: string) => void),
+  postOverride: null as null | ((path: string) => void | Promise<void>),
+  headOverride: null as null | (() => void),
 }));
 
 vi.mock("@/server/github-api", () => ({
-  githubApiGet: (...a: [number, string, { signal?: AbortSignal }?]) => h.fake!.get(...a),
-  githubApiPost: (i: number, path: string, body: { content: string; sha?: string }, m?: string) => {
-    h.postOverride?.(path);
+  githubApiGet: (...a: [number, string, { signal?: AbortSignal }?]) => {
+    // A ref-less listing of the diagrams' parent is the writer's HEAD re-list.
+    if (a[1].endsWith("/contents/knowledge-base/engineering/architecture")) h.headOverride?.();
+    return h.fake!.get(...a);
+  },
+  // async like the real client: an override REJECTS rather than throwing
+  // synchronously, so a `.catch`-chained caller is exercised faithfully.
+  githubApiPost: async (i: number, path: string, body: { content: string; sha?: string }, m?: string) => {
+    await h.postOverride?.(path);
     return h.fake!.post(i, path, body, m);
   },
   GitHubApiError: FakeGitHubApiError,
@@ -90,6 +98,7 @@ beforeEach(() => {
   h.gates = [];
   h.rendered = [];
   h.postOverride = null;
+  h.headOverride = null;
   for (const f of [h.reportSilentFallback, h.warnSilentFallback, h.loggerWarn]) f.mockReset();
 });
 afterEach(() => {
@@ -121,7 +130,7 @@ describe("writeC4Diagram — concurrent saves (#8623)", () => {
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
   });
 
-  it("a 409 whose HEAD holds the SAME sources (model changed elsewhere, README too) retries once and lands", async () => {
+  it("HEAD holding the SAME sources but a different model (another writer; README too) → PUT against HEAD's model sha lands", async () => {
     const a = save("vA");
     await vi.waitFor(() => expect(h.gates.length).toBe(1));
     // Another writer touches the model and a README; the sources are unchanged.
@@ -134,14 +143,14 @@ describe("writeC4Diagram — concurrent saves (#8623)", () => {
     expect(ra).toMatchObject({ ok: true, rerendered: true });
     expect(h.fake!.fileAt(h.fake!.head(), MODEL)).toBe("rendered:vA");
     const modelPuts = h.fake!.calls.filter((c) => c === `PUT /repos/o/r/contents/${MODEL}`);
-    expect(modelPuts).toHaveLength(2);
+    expect(modelPuts).toHaveLength(1);
   });
 
   it("a second 409 after the retry is reported once as commit-json and never loops", async () => {
     h.postOverride = (path) => {
       if (path.endsWith("model.likec4.json")) {
         h.fake!.calls.push(`PUT ${path}`);
-        throw new FakeGitHubApiError("sha mismatch", 409);
+        return Promise.reject(new FakeGitHubApiError("sha mismatch", 409));
       }
     };
     const a = save("vA");
@@ -155,7 +164,7 @@ describe("writeC4Diagram — concurrent saves (#8623)", () => {
     expect(h.reportSilentFallback.mock.calls[0][1]).toMatchObject({ op: "commit-json" });
   });
 
-  it("the model PUT carries the RENDERED commit's model sha, not a fresh HEAD read", async () => {
+  it("the model commit never reads the model file itself (sha comes from the verified HEAD listing)", async () => {
     const a = save("vA");
     await vi.waitFor(() => expect(h.gates.length).toBe(1));
     h.gates[0]();
@@ -172,5 +181,72 @@ describe("writeC4Diagram — concurrent saves (#8623)", () => {
     if (res.ok) expect(res.rerenderDiagnostic).toContain('"likec4.config.mjs" (a likec4 config file)');
     expect(h.fake!.calls.filter((c) => c.includes("/git/blobs/"))).toHaveLength(0);
     expect(h.fake!.fileAt(h.fake!.head(), MODEL)).toBe("rendered:v0");
+  });
+  it("an UNDO while the first render is running (sources restored, model bytes restored) — the older render does NOT land", async () => {
+    const a = save("vA");
+    await vi.waitFor(() => expect(h.gates.length).toBe(1));
+    const b = save("v0"); // undo: sources back to v0
+    await vi.waitFor(() => expect(h.gates.length).toBe(2));
+    h.gates[1]();
+    const rb = await b; // renders rendered:v0 — identical to the model already on HEAD
+    h.gates[0]();
+    const ra = await a;
+    expect(rb).toMatchObject({ ok: true, rerendered: true });
+    expect(ra).toMatchObject({ ok: true, rerendered: false });
+    expect(h.fake!.fileAt(h.fake!.head(), `${D}/model.c4`)).toBe("v0");
+    expect(h.fake!.fileAt(h.fake!.head(), MODEL)).toBe("rendered:v0");
+  });
+
+  it("a newer save that FAILED to render still supersedes the older render (no older model over newer sources)", async () => {
+    const a = save("vA");
+    await vi.waitFor(() => expect(h.gates.length).toBe(1));
+    // A newer source commit lands whose own render never commits a model.
+    h.fake!.commit({ [`${D}/model.c4`]: { mode: "100644", content: "vB" } });
+    h.gates[0]();
+    const ra = await a;
+    expect(ra).toMatchObject({ ok: true, rerendered: false });
+    expect(h.fake!.fileAt(h.fake!.head(), MODEL)).toBe("rendered:v0");
+  });
+
+  it("no model at the rendered commit and another writer creates it first (422 on create) → re-checks and lands", async () => {
+    h.fake = createFakeGitHub({ [`${D}/model.c4`]: { mode: "100644", content: "v0" } });
+    let raced = false;
+    h.postOverride = (path) => {
+      if (path.endsWith("model.likec4.json") && !raced) {
+        raced = true;
+        h.fake!.commit({ [MODEL]: { mode: "100644", content: "someone-else" } });
+      }
+    };
+    const a = save("vA");
+    await vi.waitFor(() => expect(h.gates.length).toBe(1));
+    h.gates[0]();
+    const ra = await a;
+    expect(ra).toMatchObject({ ok: true, rerendered: true });
+    expect(h.fake!.fileAt(h.fake!.head(), MODEL)).toBe("rendered:vA");
+  });
+
+  it("a HEAD re-list that fails is reported once as commit-json; one that REFUSES is superseded, not an incident", async () => {
+    h.headOverride = () => {
+      throw new FakeGitHubApiError("boom", 500);
+    };
+    const a = save("vA");
+    await vi.waitFor(() => expect(h.gates.length).toBe(1));
+    h.gates[0]();
+    expect(await a).toMatchObject({ ok: true, rerendered: false });
+    expect(h.reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(h.reportSilentFallback.mock.calls[0][1]).toMatchObject({ op: "commit-json" });
+
+    h.headOverride = null;
+    h.reportSilentFallback.mockReset();
+    const b = save("vB");
+    await vi.waitFor(() => expect(h.gates.length).toBe(2));
+    h.fake!.commit({ [`${D}/likec4.config.mjs`]: { mode: "100644", content: "x" } });
+    h.gates[1]();
+    expect(await b).toMatchObject({ ok: true, rerendered: false });
+    expect(h.reportSilentFallback).not.toHaveBeenCalled();
+    expect(h.loggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "c4_rerender_superseded", why: "head-refused" }),
+      expect.any(String),
+    );
   });
 });

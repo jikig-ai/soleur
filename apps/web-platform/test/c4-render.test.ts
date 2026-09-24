@@ -16,6 +16,8 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 // shape OR a direct `writeFile(realPath, …)` — would call one of these spies and
 // trip the `.not.toHaveBeenCalled()` assertions below.
 const fsMock = vi.hoisted(() => ({
+  lstat: vi.fn(),
+  readdir: vi.fn(),
   mkdir: vi.fn(),
   mkdtemp: vi.fn(),
   readFile: vi.fn(),
@@ -71,6 +73,8 @@ const EMPTY_MODEL = JSON.stringify({ elements: {}, views: {} });
 beforeEach(() => {
   spawnMock.mockReset();
   fsMock.mkdir.mockReset().mockResolvedValue(undefined);
+  fsMock.lstat.mockReset().mockResolvedValue(PRIVATE_DIR_STAT);
+  fsMock.readdir.mockReset().mockResolvedValue([FILE_ENTRY("model.c4")]);
   fsMock.mkdtemp.mockReset().mockResolvedValue(TMP_DIR);
   stageMock.mockReset().mockResolvedValue(STAGED_OK);
   fsMock.readFile.mockReset().mockResolvedValue(VALID_MODEL);
@@ -87,7 +91,13 @@ afterEach(() => {
 
 // #8623: the render takes an injected stage function, never a workspace path.
 // The fake stage writes nothing (fs is mocked); it reports what it staged.
-const STAGED_OK = { ok: true as const, files: 1, bytes: 10, sourceKey: "model.c4\0abc" };
+const STAGED_OK = { ok: true as const, paths: ["model.c4"], sourceKey: "model.c4\0abc" };
+const PRIVATE_DIR_STAT = {
+  isDirectory: () => true,
+  isSymbolicLink: () => false,
+  uid: typeof process.getuid === "function" ? process.getuid() : 0,
+};
+const FILE_ENTRY = (name: string) => ({ name, isDirectory: () => false, isFile: () => true });
 const stageMock = vi.fn<StageFn>();
 const STAGE = stageMock as unknown as StageFn;
 const EXPECTED_CWD = `${TMP_DIR}/src`;
@@ -129,6 +139,9 @@ describe("renderC4Model", () => {
     expect(Object.keys(env)).toEqual(
       expect.arrayContaining(["PATH", "HOME"]),
     );
+    // HOME is the private per-render dir, never the server's (node executes
+    // $HOME/.node_modules fallbacks; likec4 keeps a store under $HOME/.config).
+    expect(env.HOME).toBe(TMP_DIR);
     // Only allow-list keys — nothing outside PATH/LANG/LC_ALL/HOME/TMPDIR.
     const ALLOWED = new Set(["PATH", "LANG", "LC_ALL", "HOME", "TMPDIR"]);
     expect(Object.keys(env).every((k) => ALLOWED.has(k))).toBe(true);
@@ -253,7 +266,7 @@ describe("renderC4Model", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.reason).toBe("io_error");
-      expect(res.detail).toBe("mkdtemp failed");
+      expect(res.detail).toBe("staging root unavailable");
     }
     // Never even spawned.
     expect(spawnMock).not.toHaveBeenCalled();
@@ -356,13 +369,15 @@ describe("renderC4Model", () => {
     });
     const p = renderC4Model(STAGE);
     await vi.advanceTimersByTimeAsync(STAGE_DEADLINE_MS + 1);
+    // The stalled stage never settles, so cleanup waits out its bounded grace.
+    await vi.advanceTimersByTimeAsync(2_001);
     expect(await p).toEqual({ ok: false, reason: "timeout", detail: "stage: deadline", phase: "stage" });
     expect(seen?.aborted).toBe(true);
     expect(spawnMock).not.toHaveBeenCalled();
     expect(fsMock.rm).toHaveBeenCalledWith(TMP_DIR, expect.objectContaining({ recursive: true }));
   });
 
-  it("row 10: stages that stall do not hold render slots (stall POOL_SIZE=2, a third still spawns)", async () => {
+  it("row 10: stages that stall do not hold render slots (stall POOL_SIZE=2, a third still spawns promptly)", async () => {
     const release: Array<(r: Awaited<ReturnType<StageFn>>) => void> = [];
     stageMock.mockImplementation(
       () => new Promise((resolve) => release.push(resolve)),
@@ -372,10 +387,55 @@ describe("renderC4Model", () => {
     stageMock.mockResolvedValue(STAGED_OK);
     const child = makeChild();
     spawnThenEmit(child, () => child.emit("close", 0, null));
-    const third = await renderC4Model(STAGE);
-    expect(third.ok).toBe(true);
+    // Bounded well below the 10 s stage deadline: if staging held a slot, the
+    // third render could only spawn after the deadline freed one.
+    const third = await Promise.race([
+      renderC4Model(STAGE),
+      new Promise<"blocked">((r) => setTimeout(() => r("blocked"), 1_000)),
+    ]);
+    expect(third).not.toBe("blocked");
     expect(spawnMock).toHaveBeenCalledTimes(1);
     for (const r of release) r({ ok: false, reason: "io_error", detail: "released" });
     await Promise.all(stalled);
   });
+
+  it("refuses to render when the stage changed between staging and spawn (extra file / symlink)", async () => {
+    for (const entries of [
+      [FILE_ENTRY("model.c4"), FILE_ENTRY("likec4.config.mjs")],
+      [{ name: "model.c4", isDirectory: () => false, isFile: () => false }],
+      [],
+    ]) {
+      fsMock.readdir.mockResolvedValue(entries);
+      const res = await renderC4Model(STAGE);
+      expect(res).toEqual({ ok: false, reason: "io_error", detail: "stage: contents changed before render", phase: "stage" });
+    }
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a staging root that is a symlink or owned by someone else", async () => {
+    for (const st of [
+      { ...PRIVATE_DIR_STAT, isSymbolicLink: () => true, isDirectory: () => false },
+      { ...PRIVATE_DIR_STAT, uid: PRIVATE_DIR_STAT.uid + 1 },
+    ]) {
+      fsMock.lstat.mockResolvedValue(st);
+      const res = await renderC4Model(STAGE);
+      expect(res).toEqual({ ok: false, reason: "io_error", detail: "staging root unavailable", phase: "stage" });
+    }
+    expect(stageMock).not.toHaveBeenCalled();
+  });
+
+  it("replaces the random stage path inside rendered file:// URIs with a stable root", async () => {
+    const child = makeChild();
+    fsMock.readFile.mockResolvedValue(
+      JSON.stringify({ elements: { a: { id: "a", icon: `file://${TMP_DIR}/src/icons/a.svg` } }, views: {} }),
+    );
+    spawnThenEmit(child, () => child.emit("close", 0, null));
+    const res = await renderC4Model(STAGE);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.json).toContain("file:///c4-sources/icons/a.svg");
+      expect(res.json).not.toContain(TMP_DIR);
+    }
+  });
+
 });
