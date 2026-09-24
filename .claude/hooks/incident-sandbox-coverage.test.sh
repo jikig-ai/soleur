@@ -293,7 +293,7 @@ printf '\n'
 # The other three are the harmless over-count described in the header: a `touch`ed fixture stub, a
 # static parity reader that never spawns its subject, and a same-basename script under
 # `.openhands/`. They are LEFT IN rather than special-cased, because every carve-out is a place a
-# real member can hide, and because a ceiling of 4 reds on the fifth member either way.
+# real member can hide, and because a ratcheted ceiling reds on the next member either way.
 # Ratcheted 4 -> 3 when the one TRUE POSITIVE this guard found was fixed:
 # apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh piped fixture content through
 # .claude/hooks/new-scheduled-cron-prefer-inngest.sh with no chokepoint on its path -- invoked
@@ -314,12 +314,25 @@ printf '\n'
 #                                               _incidents_repo_root()'s BASH_SOURCE fallback
 #                                               resolves under $WORK. Measured against the
 #                                               operator ledger: rc=0, delta 0 rows.
+#   scripts/lib/test-affected-paths.sh        - arrived with #8322. Not a suite at all: a pure
+#                                               declarations file, SOURCED by test-all.sh and
+#                                               executing nothing itself. It matched hop 2 twice
+#                                               over — its `test-*` basename fits the candidate
+#                                               shape, and its AFFECTED_*_PATHS arrays quote the
+#                                               basenames of seven hop-1 members
+#                                               (grep-rewrite.sh, guardrails.sh, et al.) as DATA,
+#                                               the quoted-path-literal shape the derivation keys
+#                                               on. Nothing here can spawn: grep the file for a
+#                                               command position and there is none.
 # They are deliberately NOT carved out. Every carve-out is a place a real member can hide, and a
 # ceiling reds on the next one either way.
 #
 # 3 -> 4 on 2026-09-09 for the entry above. The ceiling counts members; it does not certify them.
+# 4 -> 5 for test-affected-paths.sh: a measured zero-leak member (a sourced data file that names
+# emitter-reaching basenames as declaration literals, the same over-count class as the fixture
+# stub and the parity reader).
 # Raising it on a MEASURED zero-leak member is the intended use — silently carving one out is not.
-OUTSIDE_CEILING=4
+OUTSIDE_CEILING=5
 rc=1; [ "$n_out" -le "$OUTSIDE_CEILING" ] && rc=0
 verdict "$rc" "the outside set has not grown ($n_out, ceiling $OUTSIDE_CEILING)"
 

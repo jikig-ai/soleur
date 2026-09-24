@@ -872,9 +872,10 @@ jobs:
   # The single `test` job was split into parallel leg jobs
   # (test-webplat / test-bun / test-scripts / test-scripts-heavy) so install +
   # typecheck + vitest + bun-test workloads run concurrently. test-scripts
-  # and test-scripts-heavy are positional shard matrices over the same
-  # runner; the other two are single legs (test-webplat is itself a 2-way
-  # vitest --shard matrix). The synthetic `test`
+  # and test-scripts-heavy are shard matrices over the same runner (leg
+  # assignment is manifest-driven, positional when the table is absent or
+  # stale — see scripts/test-all.sh); the other two are single legs
+  # (test-webplat is itself a 2-way vitest --shard matrix). The synthetic `test`
   # aggregator (below) is the required status check on branch-protection
   # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
   # every merge. Each leg invokes scripts/test-all.sh with the
@@ -995,10 +996,11 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
-    # MATRIX SHARDED (#7902), K=5 after the heavy carve-out (#8006). The three
-    # cost-heaviest registrations moved to `test-scripts-heavy` below; what is
-    # left is ~39 min of light suite work, so five positional round-robin legs
-    # measure ~7.8 min each plus setup.
+    # MATRIX SHARDED (#7902), K=6 after the heavy carve-out (#8006 phase 2).
+    # The three cost-heaviest registrations moved to `test-scripts-heavy` below;
+    # what is left is ~39 min of light suite work, so six legs measure ~6.5-7.7
+    # min each plus setup (worst measured light leg at K=5 was ~9 min; the
+    # duration-aware manifest keeps assignment balanced as suites drift).
     #
     # Positional sharding means leg membership is an ORDINAL ACCIDENT — adding
     # or renaming one suite re-rolls every leg, so no K table in this file can
@@ -1010,7 +1012,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/5", "2/5", "3/5", "4/5", "5/5"]
+        shard: ["1/6", "2/6", "3/6", "4/6", "5/6", "6/6"]
     # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
     #
     # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
@@ -1031,7 +1033,7 @@ jobs:
     # this leg, because a silent kill below a duration the repo itself
     # calls legitimate is indistinguishable from a hang:
     #
-    #   light leg ~8 min nominal after the #8006 carve-out. No light suite carries a
+    #   light leg ~7 min nominal at K=6 after the #8006 carve-out + phase-2 split. No light suite carries a
     #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
     #     moved to test-scripts-heavy, whose own derivation sits on that job.
     #   -> 60 stays as the hang cap; it is ~6x the nominal leg, not a leg estimate.
@@ -1096,7 +1098,7 @@ jobs:
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
       # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
       # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # all three legs would run the whole group (392 suites at this commit) and all report green. Guard 1 reads ci.yml's
+      # every leg would run the whole group (~489 suites at this commit) and all report green. Guard 1 reads ci.yml's
       # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
@@ -1171,7 +1173,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
-          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/3` and
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/6` and
           # `/` is not permitted in an artifact name, so it is not used at all —
           # an earlier revision of this comment described a `/`->`-` rewrite the
           # code never performed. job-index is also matrix-resize-safe, matching
@@ -1194,7 +1196,7 @@ jobs:
   # (~6 min) from sharing a leg — on the measured order they DID share one,
   # which is where the 31-39 min long pole came from. A dedicated 3-leg
   # matrix over `want_scripts_heavy` gives each its own leg; the light group
-  # fans out to five legs above.
+  # fans out to six legs above.
   #
   # TOOLCHAIN PARITY IS ASSERTED, NOT ASSUMED. scripts-shard-runtime-coverage.test.sh
   # extracts BOTH job blocks and requires every runtime a scripts-group suite
@@ -1295,7 +1297,23 @@ jobs:
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # TWO-LEG ROW SPLIT (#8006 phase 2). The battery declares 24 numbered row
+    # sites and takes `--rows A-B`; each leg runs its half plus the unconditional
+    # control and instrument self-test. The battery's own DECLARED_TOTAL pin is
+    # what keeps the halves honest — a row added without bumping it reds BOTH
+    # legs, so the matrix cannot silently drift out of coverage. Ranges must be
+    # re-split whenever DECLARED_TOTAL changes (the battery fails closed on an
+    # out-of-bounds range, which is the alarm).
+    strategy:
+      fail-fast: false
+      matrix:
+        rows: ["1-12", "13-24"]
+    # Sized above the measured need, not at it: the serial 24-row battery
+    # measured ~9.5 min as a single job; halving the row space plus the
+    # parallelized enumerate children inside the guard puts each leg near
+    # ~5 min. A timeout kill must never fire below a duration the repo calls
+    # legitimate.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -1311,8 +1329,8 @@ jobs:
       # mutation and aborts the battery outright if it is not green, so this job still exercises
       # both guards against the real tree — which is what AC14 asks for: a cross-leg union
       # asserted from a job that is not itself a leg.
-      - name: Guard 1 — shard-totality mutation battery (control + every row must drive it RED)
-        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
+      - name: Guard 1 — shard-totality mutation battery (rows ${{ matrix.rows }}; every mutated row must drive the guard RED)
+        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.

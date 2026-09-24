@@ -259,6 +259,48 @@ t3_merge_conflict() {
   rm -rf "$tmp"
 }
 
+# --- T3b: the resolver's refusal reaches the agent in the deny reason --------
+# The hook's stderr is not shown to the agent; the deny reason is. When the regen resolver
+# declines, its [regen-on-conflict] line must be in permissionDecisionReason, or the agent is
+# told only to "resolve manually" — which for a generated artifact is the wrong remedy.
+t3b_regen_diagnosis_in_deny() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
+  assert_fixture_dir "$work"
+  mkdir -p "$work/plugins/soleur/scripts" "$incidents"
+  git init -q --bare -b main "$origin"
+  init_git_repo "$work"
+  cp "$SCRIPT_DIR/../../plugins/soleur/scripts/resolve-regenerable-conflicts.sh" "$work/plugins/soleur/scripts/"
+  echo "base" > "$work/file.txt"
+  git -C "$work" add -A
+  git -C "$work" commit -q -m "init"
+  git -C "$work" remote add origin "$origin"
+  git -C "$work" push -q origin main
+  git -C "$work" checkout -q -b feat-conflict-regen
+  echo "feature side" > "$work/file.txt"
+  git -C "$work" commit -aq -m "feature change"
+  seed_review_evidence "$work"
+  local other="$tmp/other"
+  git clone -q "$origin" "$other"
+  git -C "$other" config user.email test@test.local
+  git -C "$other" config user.name "Test User"
+  echo "main side" > "$other/file.txt"
+  git -C "$other" commit -aq -m "main change"
+  git -C "$other" push -q origin main
+
+  local payload out exit_code=0 reason
+  payload=$(make_payload "$work" "gh pr merge 126 --squash")
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" XDG_CACHE_HOME="$tmp/xdg" "$HOOK" 2>/dev/null) || exit_code=$?
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$reason" == *"[regen-on-conflict] not applicable: conflicted path is not regenerable: file.txt"* ]]; then
+    echo "PASS: T3b the resolver's refusal is in the deny reason"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: T3b the deny reason lacks the resolver's diagnosis: $reason"; FAIL=$((FAIL + 1))
+  fi
+}
+
 # --- T4: push failure ----------------------------------------------------
 t4_push_failure() {
   local tmp; tmp=$(mktemp -d)
@@ -790,6 +832,7 @@ t_v2_zero_finding_trailer_allows
 t_v3_real_script_satisfies_gate
 t2_uncommitted_changes
 t3_merge_conflict
+t3b_regen_diagnosis_in_deny
 t4_push_failure
 t_fp1_commit_body_newline
 t_fp2_commit_body_chain_op

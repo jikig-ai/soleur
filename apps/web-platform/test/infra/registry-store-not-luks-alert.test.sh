@@ -243,9 +243,10 @@ assert s.count(old) == 1
 s = s.replace(old, ")")'
   mutate red "M2 paused = true" tf \
     'i = s.index("resource \"logtail_exploration_alert\" \"registry_store_not_luks\"")
-head, tail = s[:i], s[i:]
-assert tail.count("  paused = false\n") == 1
-s = head + tail.replace("  paused = false\n", "  paused = true\n")'
+j = s.index("\n}\n", i)
+head, block, tail = s[:i], s[i:j], s[j:]
+assert block.count("  paused = false\n") == 1
+s = head + block.replace("  paused = false\n", "  paused = true\n") + tail'
   mutate red "M3 drop the exploration_alert -target= line" wf \
     'old = "              -target=logtail_exploration_alert.registry_store_not_luks \\\n"
 assert s.count(old) == 1
