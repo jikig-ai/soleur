@@ -14,7 +14,7 @@ art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — no Art. 33 duty arose on the facts established to date, so nothing fell due 72h from the awareness anchor. Re-opens with a FRESH 72h from awareness of any evidence of use surfaced by a limb below."
 open_limbs: "two limbs INCONCLUSIVE and not run: (L3) workspace-resident, untracked content in the tenant worktree at the moment of each render; (L4) runtime telemetry of the renders (Sentry `feature: c4-rerender`, Better Stack `c4_write` lines). Five sub-limbs of the RUN limbs are INCONCLUSIVE with named reasons: L1(e)(i) Flagsmith audit history, L1(e)(ii) edge identity-override history, L1(e)(iii) Doppler env-mirror history, L1(e)(iv) `users.role` history, L2(f) two repositories not readable."
-exposure_window: "Opens 2026-06-05T11:41:52Z (Web Platform Release of #4965 complete; the in-place render first reached production). Closes on the first production deploy carrying PR #8687, which has NOT merged at the date of this record. Sub-window A, 2026-06-05T11:41:52Z to 2026-06-16T13:54:22Z: the PUT route checked no flag."
+exposure_window: "Opens 2026-06-05T11:40:39Z (deploy dispatch of the #4965 Web Platform Release; the in-place render first reached production; corrected in-cell 2026-09-24 from 11:41:52Z, the run's completion, per §Addendum A3, moving no render). Closes on the first production deploy carrying PR #8687, which has NOT merged at the date of this record. Sub-window A, 2026-06-05T11:40:39Z to 2026-06-16T13:54:22Z: the PUT route checked no flag."
 tier_classification: "Tier 1 — an internal assessment record. No public document is edited, no right is narrowed, no processing is added. The mirror/SHA/heading gates are NOT engaged."
 semver: "No TC_VERSION bump."
 addendum_2026_09_24: "Review reconciliation (§Addendum — 2026-09-24). Renders of tenant content evidenced: exactly 3 on reachable history, not \"at least 2 and at most 3\" (the §L2(e) path-filtered listing omitted three no-change commits). Window opening corrected to 2026-06-05T11:40:39Z (deploy dispatch), moving no render. Window closes on the production deploy that follows the merge of PR #8687, not on the merge. Determination unchanged: REACHABILITY-ONLY, PROVISIONAL."
@@ -53,6 +53,9 @@ Two points on which it departs from the #8209 record are recorded rather than le
    is an **act by the tenant or by an agent in the tenant's workspace**: placing a config file
    where the render will read it. The repository limb looks for exactly that act and did not
    find it in any readable repository.
+
+> **Superseded 2026-09-24 (#8623, PR #8687):** in point 1, "**at least 2 and at most 3 times**"
+> now reads **exactly 3** on reachable history. See §Addendum — 2026-09-24, A1-A2.
 
 **A correction to the premise this assessment was commissioned on.** The brief said the path was
 reachable "only where a user had `c4-visualizer` enabled with a connected repo, or the `c4-edit`
@@ -107,6 +110,11 @@ done by the **likelihood** prong, which is now partly **measured** rather than i
 - **Sub-window A**, 2026-06-05T11:41:52Z to 2026-06-16T13:54:22Z: the PUT route checked no flag.
 - **Sub-window B**, 2026-06-16T13:54:22Z to the close: the PUT route is gated on `c4-edit`, and the
   Concierge path on `c4-visualizer`.
+
+> **Superseded 2026-09-24 (#8623, PR #8687):** the window and sub-window A open at
+> **2026-06-05T11:40:39Z** (deploy dispatch), not 11:41:52Z (run completion). No render moves.
+> The close is unchanged in substance, and the instrument that reads it is pinned in §Addendum A5.
+> See §Addendum A3.
 
 ## The reachable class, stated precisely
 
@@ -258,6 +266,10 @@ visible to any installation, not only the connected ones.
 
   It also counts mode-`120000` and mode-`160000` entries, and flags a truncated listing.
 
+> **Superseded 2026-09-24 (#8623, PR #8687):** "5 are empty (no commits)" is wrong. Only 1 of
+> the 5 has no branch, and the other 4 hold 1 commit each. They were read on 2026-09-24 and
+> found clean. See §Addendum A4.
+
 ```bash
 # Shapes of the calls, per installation token (contents:read + metadata:read):
 GET /installation/repositories
@@ -296,6 +308,11 @@ For `jikig-ai/soleur`, the scan used the local clone across **all 7,411 refs**:
 - **0** symlink or gitlink entries were ever added or modified under it.
 - The directory and its ancestors were never a link.
 
+> **Superseded 2026-09-24 (#8623, PR #8687):** the population is **30** non-empty repositories
+> other than `jikig-ai/soleur`, not 26. This section's path-filtered listing also omitted
+> commits that change no file. The 3 such in-window commits were walked directly and found
+> clean. See §Addendum A2 and A4.
+
 ### L2(d) — every branch tip
 
 A workspace clones the default branch, but an agent session can leave the worktree on another
@@ -305,6 +322,10 @@ is covered at all refs by L2(c)), and 112 across 20 third-party repositories.
 
 - The `diagrams` directory is present at 2 tips.
 - **0** config files, **0** symlinks and **0** gitlinks.
+
+> **Superseded 2026-09-24 (#8623, PR #8687):** "112 across 20 third-party repositories" now
+> reads 112 across **19 non-empty** third-party repositories (20 read, 1 with no branch). See
+> §Addendum A4.
 
 ### L2(e) — render-invocation census (from the same scan)
 
@@ -330,6 +351,10 @@ and at most 3**, in one third-party repository, all inside sub-window A. The com
 tree of that repository was clean at **every** commit that touched it (L2(c)). Neither entry
 point has produced an App-attributed save on any readable repository since the `c4-edit` gate
 deployed.
+
+> **Superseded 2026-09-24 (#8623, PR #8687):** the third-party row is 5 saves and 3 re-renders,
+> with 6 in the window (3 saves, 3 re-renders), and "18 read" is 19. The **Reading**'s "at least
+> 2 and at most 3" now reads **exactly 3**. See §Addendum A1, A2 and A4.
 
 ### L2(f) — repositories that could not be read (INCONCLUSIVE)
 
@@ -367,6 +392,9 @@ the 2-3 renders of sub-window A. **Not run; INCONCLUSIVE; not expected to be rec
 What bounds it is L2(e): the question is confined to the 2-3 renders in one workspace in
 sub-window A.
 
+> **Superseded 2026-09-24 (#8623, PR #8687):** both "2-3" in this section now read **3**. L3
+> stays NOT RUN and INCONCLUSIVE. See §Addendum A6.
+
 ## L4 — runtime telemetry of the renders (NOT RUN, INCONCLUSIVE)
 
 `rerenderAndCommit` mirrors a failed render to Sentry (`feature: c4-rerender`). `writeC4Diagram`
@@ -388,6 +416,10 @@ established**, and this record does not assert that it has or has not expired.
 | L2(f) | INCONCLUSIVE | 1 connected repository with no installation; 1 listed repository returning 404 | not read. The first sits outside the reachable class on current role data. |
 | L3 worktree content | NOT RUN, INCONCLUSIVE | none | not expected to be recoverable; bounded by L2(e) |
 | L4 telemetry | NOT RUN, INCONCLUSIVE | none | retention not established |
+
+> **Superseded 2026-09-24 (#8623, PR #8687):** in the L2(b)-(d) row, "27 of them non-empty"
+> now reads **31**. In the L2(e) row, "2 to 3 renders" now reads **exactly 3**. See §Addendum
+> A6.
 
 **Evidence of use: none found.** No Art. 33 clock starts, and no rotation is triggered by this
 record.
@@ -426,6 +458,9 @@ On a flip:
 - **DECIDED, NOT REQUIRED — precautionary rotation of the server's secrets.** No limb shows use.
   The path ran 2-3 times on content whose committed tree held no config. Rotation is required
   only on a flip. The operator may elect it.
+
+  > **Superseded 2026-09-24 (#8623, PR #8687):** "2-3 times" now reads **3 times**. The
+  > decision is unchanged. See §Addendum A6.
 - **PROCESS — no advisory to users.** Art. 34 is not engaged. The fix is server-side, and users
   have nothing to patch. The public issue and PR #8687 carry no working exploit (a harmless
   sentinel only), and the PR body should say "not known to have been exploited; assessment
@@ -528,6 +563,9 @@ For the #4965 merge commit, the Web Platform Release run's job and step times ar
 - "Verify deploy script completion" ended 11:41:49Z, and "Verify deploy health and version"
   ended **11:41:49Z**;
 - the run completed 11:41:52Z (the instant this record's frontmatter and §The exposure window use).
+
+> **Superseded 2026-09-24 (#8623, PR #8687):** the frontmatter `exposure_window` has since been
+> corrected in-cell to 11:40:39Z. §The exposure window keeps 11:41:52Z under a supersede marker.
 
 So the new container began serving at some moment between 11:40:39Z and 11:41:49Z. The stated
 opening is late by up to 73 seconds. **Corrected opening, taken at the conservative end:

@@ -327,6 +327,10 @@ const HEAD_RELIST_TIMEOUT_MS = 5_000;
  * and its SOURCE SET (path + blob sha pairs) must equal the one rendered —
  * otherwise a newer source change is on HEAD and this render is superseded
  * (no commit; a newer save through the editor or Concierge renders its own).
+ * When HEAD's tree is itself refused, no later save can render it, so that
+ * case returns the refusal diagnostic instead of a silent supersede. A newer
+ * source change pushed from outside Soleur is still a silent supersede: the
+ * diagram catches up on the next save.
  * The PUT then carries HEAD's model sha from that same listing, so a model
  * committed in between fails the PUT (409/422) and the check runs once more.
  * Comparing sources rather than model bytes is what stops an older render
@@ -438,8 +442,17 @@ async function rerenderAndCommit(
       });
       if (!head.ok) {
         // HEAD now carries something the render refuses: a newer source change
-        // (not this render's) — superseded, not an incident.
-        if (head.reason === "unsafe_source") return superseded("head-refused");
+        // (not this render's) — superseded, not an incident. Unlike a plain
+        // supersede, no later save will render it either (every save stages
+        // HEAD's tree), so name the refused file rather than leave the
+        // Concierge to promise the diagram "will update shortly".
+        if (head.reason === "unsafe_source") {
+          superseded("head-refused");
+          return {
+            rerendered: false,
+            diagnostic: unsafeSourceDiagnostic(head.refusalClass, head.path, head.more),
+          };
+        }
         throw new Error(`HEAD re-list failed: ${head.reason}`);
       }
       if (head.sourceKey !== renderedSourceKey) return superseded("sources-changed");

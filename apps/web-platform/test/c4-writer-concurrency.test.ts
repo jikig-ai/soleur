@@ -242,7 +242,12 @@ describe("writeC4Diagram — concurrent saves (#8623)", () => {
     await vi.waitFor(() => expect(h.gates.length).toBe(2));
     h.fake!.commit({ [`${D}/likec4.config.mjs`]: { mode: "100644", content: "x" } });
     h.gates[1]();
-    expect(await b).toMatchObject({ ok: true, rerendered: false });
+    const rb = await b;
+    expect(rb).toMatchObject({ ok: true, rerendered: false });
+    // A refused HEAD will not re-render on any later save either, so the
+    // Concierge must NOT be left to promise "it will update shortly" (the
+    // no-diagnostic superseded case): name the refused file instead.
+    if (rb.ok) expect(rb.rerenderDiagnostic).toContain('"likec4.config.mjs" (a likec4 config file)');
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
     expect(h.loggerWarn).toHaveBeenCalledWith(
       expect.objectContaining({ event: "c4_rerender_superseded", why: "head-refused" }),

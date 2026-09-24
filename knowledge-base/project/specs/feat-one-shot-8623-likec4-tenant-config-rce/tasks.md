@@ -42,5 +42,5 @@ Plan: `knowledge-base/project/plans/2026-09-24-fix-c4-render-tenant-likec4-confi
 
 - [x] 5.1 `./node_modules/.bin/vitest run test/c4-stage-sources.test.ts test/c4-render.test.ts test/c4-writer-rerender.test.ts test/c4-render-tenant-config.test.ts test/c4-render-boundary.test.ts test/c4-concierge-copy.test.ts test/c4-likec4-version-pin.test.ts` (with `LIKEC4_BIN` → likec4@1.50.0)
 - [x] 5.2 `tsc --noEmit` clean
-- [ ] 5.3 Record the likec4 install time per `test-webplat` shard in the PR body
+- [x] 5.3 Record the likec4 install time per `test-webplat` shard in the PR body (run 35976476106: 10 s on 1/2, 9 s on 2/2)
 - [x] 5.4 Non-gating: measure whether a sandboxed agent can write `.git/hooks/*` / `.git/config`; writable → private GitHub Security Advisory; denied → evidence in the PR body
