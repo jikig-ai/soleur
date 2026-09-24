@@ -42,6 +42,14 @@
 #   SDK_GATE_ACK_TEXT       commit-message text to scan for ack (default: `git log $BASE_REF..HEAD --format=%B`)
 
 set -euo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${ACK_TOKEN:+x}${ANTHROPIC_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 PKG_LOCK="${SDK_GATE_PKG_LOCK:-apps/web-platform/package-lock.json}"
 BASE_REF="${SDK_GATE_BASE_REF:-origin/main}"
