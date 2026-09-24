@@ -224,7 +224,7 @@ else
   # `sentry_dsn` (#6500) is short, alphanumeric and non-hex on purpose: it must pass the emitter's
   # DSN shape check, and the redaction pattern backstop must NOT be able to catch its key, so the
   # Guard 4 cases prove the explicit enumeration rather than the backstop.
-  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42" })' "$CLOUD_INIT")"
+  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42" })' "$CLOUD_INIT")"
   printf '%s\n' "$RENDER_EXPR" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
 
   # KEY-SET PARITY WITH THE REAL CALL SITE (#7695). The map above is hand-kept, and the comment
@@ -261,19 +261,19 @@ else
   MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | head -1 \
     | grep -oE '[a-z0-9_]+=' | tr -d '=' | sort -u)"
   # Non-vacuity: an extraction that found nothing must not report parity. The floor is the ACTUAL
-  # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`; 18 -> 19: #8539 threads `inngest_private_ip`) — a `-ge 10` passed at 13 while three keys were
+  # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`; 18 -> 19: #8539 threads `inngest_private_ip`; 19 -> 17: #8036 1d drops `ghcr_read_user`/`ghcr_read_token`, the retired GHCR bake) — a `-ge 10` passed at 13 while three keys were
   # missing from both sides, which is precisely the state it was supposed to make visible.
   assert "AC5 key-set parity: the .tf call site's keys were extracted" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 19 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 17 ]]"
   # ...and an OVER-extraction bound, the direction the floor above is blind to. A range whose end
   # anchor stops matching runs to EOF and harvests unrelated assignments; that is not a missing
   # key and should not be reported as one. 17 is the call site's actual key count, so this is
-  # exact in both directions when paired with the floor. 19 is the count as of #8539.
+  # exact in both directions when paired with the floor. 17 is the count as of #8036 1d.
 # (16 -> 17: #6894 added
   # `inngest_luks_volume_id`, the additive volume's id the two-device resolver needs, and this
   # suite's map was not updated in the same commit — so the over-read guard fired on a real key.)
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 19 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 17 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \
@@ -451,11 +451,13 @@ EPH
       "$EC_DIR/body" >/dev/null 2>&1 || return 1
   }
   # G2 row 6: the level and detail arguments are carried, not hardcoded — and the STAGE too: a
-  # SUT that hardcodes the stage would report every fallback as inngest_zot.
+  # SUT that hardcodes the stage would report every terminal zot miss as inngest_zot. The fixture
+  # is the pull item's real miss-arm call (#8036 1d: `inngest_pull_fatal fatal`, which replaced
+  # the retired `inngest_ghcr_fallback warning`), so the FATAL level is what is carried.
   case_warning() {
-    run_emit "$1" "$(dsn_file "$DSN_OK")" 0 inngest_ghcr_fallback warning "rc=7"
+    run_emit "$1" "$(dsn_file "$DSN_OK")" 0 inngest_pull_fatal fatal "rc=7"
     [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 1 ]] || return 1
-    jq -e '.level == "warning" and .tags.stage == "inngest_ghcr_fallback" and .tags.detail == "rc=7"' \
+    jq -e '.level == "fatal" and .tags.stage == "inngest_pull_fatal" and .tags.detail == "rc=7"' \
       "$EC_DIR/body" >/dev/null 2>&1
   }
   # Review P2-5 + security F4: every argument is interpolated into the body, so every one is
@@ -499,9 +501,9 @@ EPH
   }
   # G3 rows 1 + 5: curl fails -> exit 0 anyway, and the failure reaches the phone-home seam, numeric.
   case_curlfail() {
-    run_emit "$1" "$(dsn_file "$DSN_OK")" 7 inngest_ghcr_fallback warning "rc=1"
+    run_emit "$1" "$(dsn_file "$DSN_OK")" 7 inngest_pull_fatal fatal "rc=1"
     [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 1 ]] || return 1
-    [[ "$(cat "$EC_DIR/ph")" == "sentry-emit-FAILED stage=inngest_ghcr_fallback rc=7" ]]
+    [[ "$(cat "$EC_DIR/ph")" == "sentry-emit-FAILED stage=inngest_pull_fatal rc=7" ]]
   }
   # Review P1-3: an HTTP-level rejection (quota 429, revoked key 403) is a non-delivery too, and
   # only -f turns it into a non-zero rc the emitter can report.
@@ -623,7 +625,7 @@ EPH
   fi
 
   # --- Guard 4: inngest-redact.sh enumerates the DSN and its key by VALUE ---------------------------
-  # env -i: the redactor also reads DOPPLER_TOKEN / GHCR_READ_TOKEN from sourced files and would
+  # env -i: the redactor also reads DOPPLER_TOKEN / ZOT_PULL_TOKEN from sourced files and would
   # enumerate an operator's live values from their shell; the case must see only the fixture.
   run_redact() { # $1 redactor, $2 dsn file, stdin = tail
     env -i PATH="$PATH" HOME="$WORK" SOLEUR_INNGEST_SENTRY_DSN_FILE="$2" bash "$1"

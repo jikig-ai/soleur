@@ -106,7 +106,66 @@ confirmed to redden.
 10. *(forwarded from session-state.md)* A plan citation pointed at a wrong learning path; fixed
     before commit.
 
+### The delivery phase produced five more, and they are the SAME shape
+
+The findings above are about a guard checking a subset of the sentence beside it. Shipping and
+delivering the fix produced five more defects that are the same error one level out: **the
+identifier matched, and the thing it identified was different.** None were caught by a gate; each
+was caught by asking "what exactly did that name resolve to?"
+
+11. **The squash-merge commit closed the tracker the PR deliberately did not close.** The PR used
+    `Ref #8539`, and `gh pr view --json closingIssuesReferences` returned `[]` right up to the
+    merge. GitHub's squash message appends the BRANCH COMMIT MESSAGES, and one of them argued
+    *against* the keyword using the literal string inside backticks — the commit parser does not
+    honour markdown. **Prevention:** scan the squash message, not the PR body:
+    `git log origin/main..HEAD --format=%B | grep -niE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+'`.
+    `closingIssuesReferences` is computed from the PR body alone and is silent about this.
+12. **Nearly read a neighbouring merge's deploy arm as this PR's.** A `workflow_run` run's
+    `head_sha` is the default-branch tip at trigger time, so the arm triggered by the PREVIOUS
+    merge's CI carried OUR sha while its `resolve-target` checked out a different commit. Reading
+    it as ours would have reported the PR deployed while production served another build.
+    **Prevention:** identify a deploy arm by what it CHECKS OUT
+    (`resolve-target` log, `depth=1 origin <sha>`), never by the `head_sha` stamp.
+13. **Claimed the resume workflow "verified serving" when its own log said it handed off.** The
+    run wrote `INNGEST_CUTOVER_FLIP=flushed` and delegated `start -> verify it SERVES -> record`
+    to a 30 s ON-HOST timer. A green run meant *the flag was written*. **Prevention:** for any
+    workflow that ends by writing a flag, the serving proof is on the host, not in the run.
+14. **Nearly read the steady state as the failure state.** The on-host FSM polls, and after a
+    SUCCESSFUL resume it writes `flag=done` back itself — so `noop-done` every 30 s is what
+    success looks like. The one decisive line, `reason=flushed-resume-no-reflush`, sat 11 rows
+    above what `tail -14` showed. **Prevention:** when a poller's steady state and its
+    never-started state print the same token, search the window for the TRANSITION, and never
+    conclude from a tail.
+15. **A wrapper reported failure while both things it measured were green.** `for s in …; do …;
+    [ "$rc" -ne 0 ] && printf …; done` exits 1 when the final test is false, so the loop's status
+    said "failed" while every ratchet returned 0. Same family as errors 3 and 4.
+    **Prevention:** end such a loop with `true`, or branch with `if`.
+
+The generalisation worth keeping: **an identifier that is merely CORRELATED with the thing you want
+will agree with it almost always, and disagree exactly when it matters.** `head_sha` correlates with
+the deployed commit; `closingIssuesReferences` correlates with what closes; a green run correlates
+with a serving process. Each is a different fact from the one being claimed, and the gap opens under
+concurrency — a busy `main`, a neighbouring merge, a poller mid-transition.
+
 ## Also worth knowing
+
+**`battery-owed.sh` never skips on inconvenience.** Its exit contract is 42=SKIPPABLE and
+*everything else* = OWED, and its four conditions are evidence-based: clean tree, `origin/main` an
+ancestor of HEAD, no infra paths while `infra-validate-required` is absent from the LIVE ruleset,
+and every required context present-and-green on this exact sha. For an infra diff the third
+condition is decisive — `deploy-script-tests` runs the registered infra suites but is NOT required,
+so its green cannot block a merge and cannot substitute for the local battery. Contention is not an
+input, deliberately.
+
+**A PR that edits `.github/workflows/**` has no agent admin-merge path.** `admin-merge-ready.sh`
+returns `verdict=not-ready reason=untrusted-ci`, because the PR's own check runs could mint a run
+under any required name. The operator merges it by hand. Worth knowing BEFORE planning a merge
+strategy around the `--green-sha` carryover.
+
+**The sync treadmill is real and measurable.** With `strict: true` a branch cannot merge while
+behind, and each re-sync restarts CI. Measured here: ~35 min of CI against ~3 commits/hour on
+`main`, three successive auto-syncs, the last discarding a shard 32 minutes in. Before waiting it
+out, compare the CI cycle against `git log origin/main --since='1 hour ago' --oneline | wc -l`.
 
 **A DIRTY merge ref suppresses every `pull_request` workflow.** A conflicting PR presents as "CI
 never ran" with a small, all-green CodeQL check set — `deploy-script-tests`, `test-scripts` and

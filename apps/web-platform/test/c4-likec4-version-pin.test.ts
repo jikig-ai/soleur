@@ -43,28 +43,29 @@ describe("likec4 CLI / client-renderer version parity", () => {
   });
 
   // The C4 auto-regen tooling adds two EXECUTABLE surfaces that render the model
-  // with the pinned CLI: scripts/regenerate-c4-model.sh (pre-commit hook + ad-hoc)
+  // with the pinned CLI: plugins/soleur/scripts/render-c4-model.sh (pre-commit hook via the
+  // scripts/regenerate-c4-model.sh wrapper, the merge resolver, ad-hoc)
   // and the .github/workflows/ci.yml freshness-test install. If either drifts from
   // the Dockerfile/package.json pin, the committed model.likec4.json is rendered by
   // a skewed CLI and the runtime client renderer mismatches. tsc can't catch a bash
   // literal or a YAML step — only this source-read parity assertion can.
-  it("scripts/regenerate-c4-model.sh and ci.yml pin the same likec4 version as the Dockerfile", () => {
+  it("render-c4-model.sh and ci.yml pin the same likec4 version as the Dockerfile", () => {
     const dockerfile = read("Dockerfile");
     const cliVersion = dockerfile.match(
       /npm install -g likec4@([0-9][^\s"'`]*)/,
     )![1];
 
-    const script = readRepo("scripts/regenerate-c4-model.sh");
+    const script = readRepo("plugins/soleur/scripts/render-c4-model.sh");
     const scriptMatch = script.match(/LIKEC4_VERSION="([0-9][^\s"'`]*)"/);
     expect(
       scriptMatch,
-      "regenerate-c4-model.sh must pin LIKEC4_VERSION=\"<version>\"",
+      "render-c4-model.sh must pin LIKEC4_VERSION=\"<version>\"",
     ).toBeTruthy();
     expect(scriptMatch![1]).toBe(cliVersion);
 
     const ci = readRepo(".github/workflows/ci.yml");
     // matchAll, not match: `test-scripts-heavy` installs likec4 too, so ci.yml
-    // carries TWO `npm install -g likec4@` lines — a first-match read would
+    // carries THREE `npm install -g likec4@` lines (test-webplat, test-scripts, test-scripts-heavy) — a first-match read would
     // never see the second copy drift.
     const ciMatches = [
       ...ci.matchAll(/npm install -g likec4@([0-9][^\s"'`]*)/g),

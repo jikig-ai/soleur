@@ -7,6 +7,10 @@ description: "This skill should be used to fire an allowlisted cron manual-trigg
 **Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # trigger-cron
 
 Fires a `cron/<name>.manual-trigger` event on demand by POSTing to the internal
@@ -113,6 +117,14 @@ With the preflight passed, `$TRIGGER` is the verified producer:
 - **Allowlist is the blast-radius bound.** A non-allowlisted event returns 400.
   The allowlist auto-tracks `cron-*.ts` via `EXPECTED_CRON_FUNCTIONS` — there is
   no second hand-maintained list.
+- **The 18 Claude-spawning functions are throttled and capped (#8611).** Each carries
+  `throttle {limit 2, period 1h}` (`apps/web-platform/server/inngest/cron-budgets.ts`). A third
+  fire within the hour is **queued, not rejected** — the route still returns `202` — and runs
+  (and bills) later, so check `routine_runs_list` for up to an hour before re-firing. Every fire is
+  a new run with its own `--max-budget-usd` cap (`CLAUDE_BUDGET_USD` in the same file). A run that
+  hits its cap shows as a FAILED run with reason `budget-capped`, and as
+  `subtype=error_max_budget_usd` on its `SOLEUR_CLAUDE_COST` marker (query recipe in
+  `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`).
 - **Mutating crons spend budget / open PRs / post publicly.** `cron/bug-fixer.manual-trigger`
   opens a PR; content/competitive/growth crons spend API budget;
   `cron/weekly-release-digest.manual-trigger` POSTS a digest to the public

@@ -524,8 +524,9 @@ jobs:
     #
     # One caveat stated rather than buried: plugin-seed's local measurement was against
     # an ALREADY-WARM docker cache. It is the one added step that builds an image, which
-    # is why it carries its own `timeout-minutes: 3` for attribution — a cold-pull stall
-    # names that step instead of cancelling the job at an unrelated one.
+    # is why it carries its own `timeout-minutes: 1` for attribution — a cold-pull stall
+    # names that step instead of cancelling the job at an unrelated one. (The key has been
+    # 1 since the step's own comment block re-derived it; this caveat lagged the value.)
     #
     # Re-derive this if steps are added to the job — the numbers above are a property
     # of its current composition, not of the suite alone. If a future run exceeds
@@ -617,7 +618,30 @@ jobs:
     #   1120 x 1.4 = 1568 s = 26.1 min -> 27
     # 20 -> 27 minutes. At 20 the margin would be 1200/1120 = 1.07x, i.e. one slow runner away
     # from a cancel that lands on whatever step the clock runs out in.
-    timeout-minutes: 27
+    #
+    # RE-DERIVED 2026-09-24 (#8688), as the block above instructs — the ~1120 s basis above went
+    # stale while suites kept landing without the re-derivation the block requires. Measured from
+    # the API over the last 19 successful `Infra Validation` main-push runs, deploy-script-tests
+    # job seconds:
+    #   1066 1085 1170 1184 1217 1232 1255 1257 1272 1304
+    #   1332 1369 1384 1387 1420 1426 1454 1459 1462
+    #   observed deploy-script-tests max (19 runs, successful only) : 1462 s
+    #   1462 x 1.4 = 2047 s = 34.1 min -> 35
+    # 27 -> 35 minutes. At 27 the margin was 1620/1462 = 1.11x — under the ~1.4x this block
+    # sizes for, and it produced four consecutive main-push cancels at the cap on 2026-09-24
+    # (runs 35963237265, 35976102327, 35991817044, 36001457260; a fifth, 36005279479,
+    # cancelled while this change was in flight). Cancelled runs are excluded from the basis —
+    # cancelled is not a duration, per the successful-only rule used above.
+    #
+    # The cancel landed in `Rehearse the git-data runcmd chain` every time (285-533 s in-flight
+    # vs a 184-267 s green range, n=10) — a whole-runner docker-slowdown signature, not proof of
+    # a hang, but indistinguishable from one while the step had no bound. 16 named steps trail
+    # the rehearsal, so even a completed slow run projects ~1700-1850 s and would still have died
+    # at 27. At 35 the margin is 2100/1462 = 1.44x. This PR also adds step-level
+    # `timeout-minutes` to the three docker-runtime git-data steps below (rehearsal 10,
+    # cutover-access 10, ownership 5) — the file's ATTRIBUTION convention — so the next stall
+    # names its step instead of cancelling anonymously. Re-derive against that composition.
+    timeout-minutes: 35
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -867,6 +891,12 @@ jobs:
       - name: Run registry store-not-LUKS alert drift guard (#8408)
         run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
 
+      # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
+      # queries the emitter's real shape and field path, aggregates only, every -target line, and
+      # its mutation rows.
+      - name: Run Anthropic-spend alerts drift guard (#8611)
+        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
+
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
       # guard above sweeps: orphan-reaper.test.sh backs terraform_data.orphan_reaper_install (its
@@ -1048,6 +1078,16 @@ jobs:
       - name: Run first-boot NIC-wait gate guard (#6441 ADR-114 I1 defer-not-abort + 3 arms)
         run: bash apps/web-platform/infra/nic-wait-gate.test.sh
 
+      # LOAD-BEARING registration (explicit, no glob). #8651: renders cloud-init.yml through
+      # terraform templatefile, EXECUTES the web seed pull under stubs (zot-first by bake, no
+      # doppler, bounded fail-open pre-pull NIC wait, both legs named in the fatal) plus a
+      # mutation battery, and exercises the boot trail's --image-origin read. Needs this job's
+      # terraform (render leg — FAILS, never skips, under CI) and fetch-depth: 0 (the census's
+      # pinned-commit baseline, git show 3aaaede525). Advisory job: soleur:ship reads it.
+      - name: Run web fresh-boot zot-seed guard (#8651 bake + NIC wait + Doppler census)
+        timeout-minutes: 5
+        run: bash apps/web-platform/infra/cloud-init-web-zot-seed.test.sh
+
       # LOAD-BEARING registration (explicit, no glob). Behavioural, not grep-only: it renders
       # cloud-init-inngest.yml through terraform templatefile + local.inngest_rationale_strip
       # (inngest-userdata-budget.sh; this job sets up terraform), extracts soleur-inngest-nic-wait
@@ -1129,6 +1169,13 @@ jobs:
       - name: Run /workspaces LUKS verify WORKFLOW gate (#6808 schedule + alarm classification)
         run: bash apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 
+      # (#8632) The boot-token delivery path: luks-monitor-token-refresh.sh (runs on web-1) and
+      # terraform_data.luks_monitor_token_install, which ships it in the apply that rotates the token.
+      # Pins stdin-only token handling, prove-before-write, restore on mismatch, parity with the
+      # cutover's replace code, the token-hash-only trigger, and the per-merge SSH -target.
+      - name: Run /workspaces LUKS boot-token refresh gate (#8632)
+        run: bash apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh
+
       # REGISTRATION IS NOT ENVIRONMENT. The loopback suite below is the only workspaces-luks test
       # that touches a REAL block device (losetup + real cryptsetup luksFormat/luksOpen + real
       # mkfs.ext4 + real mount), so it must land in a job that can actually do that:
@@ -1175,6 +1222,20 @@ jobs:
         run: |
           sudo apt-get install -y -qq cryptsetup-bin
           sudo bash apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
+
+      # (#5274 Phase 3, ADR-239 amendment 2026-09-24) The git-data plaintext count reads the
+      # retained volume through a dm snapshot over a kernel-read-only origin, so a dirty ext4
+      # journal replays into a RAM COW instead of onto the volume. The suite's MECHANISM tier
+      # measures the kernel facts that design rests on (a --setro origin refuses a direct ro mount;
+      # a snapshot stacks on it and replays into the COW; the origin's sha256 is unchanged).
+      # Root-only for the same reason as the two loopback suites above (#7076). `dmsetup` is
+      # installed rather than assumed — the unit's cloud-init lists it explicitly too. Bounded: a
+      # wedged loop device or a dm table that never tears down must fail the job, not hang it.
+      - name: Run git-data plaintext snapshot loopback evidence (#5274 dirty-journal forward fix)
+        timeout-minutes: 10
+        run: |
+          sudo apt-get install -y -qq dmsetup e2fsprogs
+          sudo bash apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh
 
       # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
       # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
@@ -1630,7 +1691,16 @@ jobs:
       # hook it is fenced by. Static arm over the bootstrap's last-writer literals; runtime arm
       # applies them in the pinned image and proves sshd accepts the map (with a negative
       # control). Under CI=true the runtime arm is a FAILURE if docker is unavailable.
+      #
+      # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
+      # cloud-init-plugin-seed at 1). Green range 25-100 s over the last 10 successful
+      # main-push runs; on the five 2026-09-24 cancels it measured 33-80 s — inside that
+      # range, so this step showed no slowdown itself. The bound covers the class, not a
+      # demonstrated offender: its docker-run site carries no internal bound, and a stall
+      # there would otherwise cancel the job anonymously. 5 minutes is ~3x the green max —
+      # a pathological runner could flake it; that is the intended direction.
       - name: Run git-data ownership tests (authorization map + hook dir, Guard 3)
+        timeout-minutes: 5
         run: bash apps/web-platform/infra/git-data-ownership.test.sh
 
       - name: Run git-data LUKS-at-rest cutover drift-guards
@@ -1658,7 +1728,18 @@ jobs:
       # drives the real script against real OpenSSH in the pinned image; under CI=true a missing
       # docker FAILS. The root token's reference census runs on every PR from scripts/test-all.sh
       # (tests/scripts/test-git-data-root-token-census.sh), not here.
+      #
+      # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
+      # cloud-init-plugin-seed at 1). Green range 70-77 s over the
+      # last 10 successful main-push runs; 78-206 s on the five 2026-09-24 cancels. The suite's
+      # `docker run` carries an internal `timeout -k 10 480` bound, but its host-side legs —
+      # `docker info`, `docker rm -f`, the fixture build — sit outside it; on this observed
+      # failure class (whole-runner docker degradation) a wedged-daemon hang there would
+      # otherwise cancel the job anonymously. 10 minutes leaves the inner 480 s bound room to
+      # fire first on a container stall (the richer rc=124 diagnostic) while capping the
+      # unbounded host-side legs.
       - name: Run git-data cutover access-path tests (ADR-220)
+        timeout-minutes: 10
         run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
 
       # (#8189) The flag read fails closed, refuses a `true` flag, and is the only step
@@ -1677,7 +1758,17 @@ jobs:
       # 24.04 image. Every other git-data gate is static, and the failure class they defend
       # against is only observable when the code RUNS — the Phase-0 W0 probe passed every
       # static check and would still have booted dark. Skips cleanly without docker.
+      #
+      # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
+      # cloud-init-plugin-seed at 1). Green range 184-267 s over the last 10 successful
+      # main-push runs; it was in flight at 285-533 s on all five 2026-09-24 cancels — a
+      # whole-runner docker slowdown, not proven a hang, but indistinguishable from one while
+      # the step had no bound (its docker-run sites have no internal `timeout` wrapper).
+      # 10 minutes is ~2.2x the green max: a stall now fails naming THIS step instead of
+      # cancelling the job anonymously — a step that names itself beats a job that cancels
+      # anonymously. A pathological runner could flake it; that is the intended direction.
       - name: Rehearse the git-data runcmd chain (abort ordering + rc guard)
+        timeout-minutes: 10
         run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
 
       # (#6982, ADR-152) The render-strip contract. git-data.tf strips whole-line comments

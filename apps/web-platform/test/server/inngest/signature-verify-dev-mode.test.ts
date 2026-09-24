@@ -49,6 +49,10 @@ describe("app/api/inngest/route.ts — signature verification (dev mode positive
   it("POST without signature is NOT 401 in dev mode (mode-flip positive control)", async () => {
     const { POST } = await importRoute();
     const res = await POST(makePostRequest(), undefined);
-    expect(res.status).not.toBe(401);
+    // #8611: the route streams, so every POST answers HTTP 201 in BOTH modes — the verdict is the
+    // envelope's status. Reading res.status here could never fail.
+    expect(res.status).toBe(201);
+    const envelope = JSON.parse((await res.text()).trim()) as { status: number };
+    expect(envelope.status).not.toBe(401);
   });
 });

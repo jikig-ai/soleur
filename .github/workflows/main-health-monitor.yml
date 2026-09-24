@@ -92,7 +92,7 @@ permissions:
 #                        plugins/soleur/test/required-checks-canonical-parity.test.sh
 #                        (this file added to its list by #7307).
 #   LIKEC4_VERSION    -> 6 sites: Dockerfile, package.json (x2),
-#                        scripts/regenerate-c4-model.sh,
+#                        plugins/soleur/scripts/render-c4-model.sh,
 #                        ci.yml (test-scripts + test-scripts-heavy), and here.
 #                        Guarded by apps/web-platform/test/c4-likec4-version-pin.test.ts
 #                        (this file added by #7307). NB the install below writes
@@ -154,8 +154,9 @@ jobs:
     # Against the `main` shape the tests ceiling is 2.08x; against the branch
     # shape 1.62x. Both clear the stated 1.5x, which is why 40 rather than 35 —
     # the earlier 35 met the policy only on the `main` shape.
-    # Sanity: deploy-script-tests budgets 12 min for this same suite set, so an
-    # infra ceiling below that would trip before the workflow that OWNS the suites.
+    # Sanity: deploy-script-tests budgets 35 min for its full suite set (re-derived
+    # 2026-09-24; this monitor runs a narrower, self-derived subset at max 459 s), so an
+    # infra ceiling far below that trips first here — the intended direction.
     #
     # The job ceiling must dominate the SUM of the step ceilings, not the max: with
     # two timed steps, `max + 10` lets the job token trip midway through the second
@@ -587,7 +588,7 @@ jobs:
             ACTIONS=(
               "1. Re-run this check: \`gh workflow run main-health-monitor.yml\`"
               "2. If the same suite is reported terminated again, file a tracking issue for it and link it here"
-              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill. Since #7429 the set of suites that can surface one is no longer just the six this runner starts via \`bun\`/\`node\` directly: the two nested shell runners now propagate the signal shape instead of flattening it, which adds the 98 infra suites behind \`run-registered-suites.sh\` and the 12 fixture suites behind \`.github/scripts/test/run-all.sh\`. For an INFRA suite the terminated member is named on the \`RED  <path>\` line, which this job greps separately. For a FIXTURE suite under \`.github/scripts/test/\` the member name does NOT reach this issue: that runner's own \`[KILLED]\` line is deliberately shaped so the RUNNER cannot forge the top-level marker, and it goes to stderr. Note the limit of that shaping: it constrains the runner, not an arbitrary suite -- a fixture suite's stdout is not captured, so a suite could in principle print the top-level anchor itself. Treat a \`[KILLED]\` line naming a fixture suite as unverified until you have read the shard log. In that case open the run log for the shard and read the runner's output directly. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
+              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill. Since #7429 the set of suites that can surface one is no longer just the six this runner starts via \`bun\`/\`node\` directly: the two nested shell runners now propagate the signal shape instead of flattening it, which adds the 98 infra suites behind \`run-registered-suites.sh\` and the 13 fixture suites behind \`.github/scripts/test/run-all.sh\`. For an INFRA suite the terminated member is named on the \`RED  <path>\` line, which this job greps separately. For a FIXTURE suite under \`.github/scripts/test/\` the member name does NOT reach this issue: that runner's own \`[KILLED]\` line is deliberately shaped so the RUNNER cannot forge the top-level marker, and it goes to stderr. Note the limit of that shaping: it constrains the runner, not an arbitrary suite -- a fixture suite's stdout is not captured, so a suite could in principle print the top-level anchor itself. Treat a \`[KILLED]\` line naming a fixture suite as unverified until you have read the shard log. In that case open the run log for the shard and read the runner's output directly. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
             )
           else
             # No marker of any kind in the capture. What this run MEASURED is the step

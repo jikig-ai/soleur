@@ -71,6 +71,12 @@ derive_github_slugs() {
 
 derive_webapp_slugs() { echo $(( $(derive_cron_monitors) - $(derive_github_slugs) )); }
 
+# Every tracked .md under agents/ loads as a Claude subagent, and the harness-parity tree test
+# pins that set to the registry, so this count is the registry size (#8317).
+derive_registry_agents() {
+  { git -C "$REPO_ROOT" ls-files -- ':(glob)plugins/soleur/agents/**/*.md' || true; } | wc -l | tr -d ' '
+}
+
 derive_resend_emitters() {
   { grep -rlE 'api\.resend\.com|notify-ops-email' "$WF_DIR" "$ACT_DIR" || true; } | wc -l | tr -d ' '
 }
@@ -128,6 +134,7 @@ REGISTRY=(
   "C5|github -> sentry|[0-9]+ check in from here|num|derive_github_slugs|distinct monitor-slug: values across .github/workflows/"
   "C6|github -> sentry|and [0-9]+ from webapp|num|derive_webapp_slugs|C4 - C5 (monitors not checking in from GitHub)"
   "C7|github -> resend|one of [a-z]+ Resend emitters under [.]github/|word|derive_resend_emitters|grep -rlE 'api[.]resend[.]com|notify-ops-email' .github/workflows/ .github/actions/ | wc -l"
+  "C8|plugin.agents|[0-9]+ domain agents across|num|derive_registry_agents|git ls-files ':(glob)plugins/soleur/agents/**/*.md' | wc -l"
 )
 
 for row in "${REGISTRY[@]}"; do
@@ -178,6 +185,17 @@ for row in "${REGISTRY[@]}"; do
     FAIL=$((FAIL + 1))
   fi
 done
+
+# C8's clause is matched file-wide by the loop above; it must also sit in the AGENTS container,
+# or moving it to a sibling element would keep the count green while describing the wrong thing.
+c8_in_agents="$({ awk '/^[[:space:]]*agents = container /{f=1} f && /domain agents across/{print; exit} f && /^[[:space:]]*}[[:space:]]*$/{f=0}' "$MODEL_C4" || true; } | wc -l | tr -d ' ')"
+if [[ "$c8_in_agents" == "1" ]]; then
+  echo "  PASS: C8 clause sits in the agents container"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: C8 clause is not inside \`agents = container\` in $MODEL_C4" >&2
+  FAIL=$((FAIL + 1))
+fi
 
 # C1 and C5 must stay DIFFERENT derivations. If a future refactor makes them share one command
 # this silently becomes an assertion that 7 == 8, so pin the invariant rather than the values.

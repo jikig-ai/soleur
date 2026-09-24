@@ -356,26 +356,6 @@ resource "hcloud_server" "web" {
     # broken stage). Semi-public DSN (already in the client bundle). See on_err in cloud-init.yml.
     sentry_dsn     = var.sentry_dsn
     resend_api_key = var.resend_api_key
-    # (#6090) Baked so the cold-boot ghcr_login does not depend on doppler answering at the
-    # first-boot instant (an empty answer skipped docker login → anonymous private pull → 401
-    # → abort at stage=pull). Scoped read:packages PAT; user_data already carries the strictly
-    # stronger doppler_token, so this adds no new trust boundary. See cloud-init.yml ghcr_login.
-    #
-    # #8036 1c (2026-09-23) — WHY THIS BAKE SURVIVES A RETIREMENT. 1c deleted the host-side GHCR
-    # READ path from ci-deploy.sh: the prelude `docker login ghcr.io`, the Doppler
-    # re-fetch/relogin helper, and the GHCR leg of the pull. The rolling-deploy consumer this
-    # bake was originally built for is therefore GONE — a deploy reads no GHCR credential at all.
-    # What still consumes it is cloud-init.yml's OWN fresh-boot `ghcr_login`, which runs as root
-    # before any deploy and is 1d scope, not 1c. So the variable is deliberately still wired.
-    # (The rationale lives here rather than beside the consumer because cloud-init.yml is
-    # byte-budgeted — its rendered user_data is gzip-capped by the Hetzner limit and is NOT
-    # comment-stripped at render time, unlike the git-data and registry templates.)
-    #
-    # NOTE the credential itself has been revoked since 2026-07-29 and cannot be re-minted
-    # (`GHCR_MINTER_DISABLED=true`), so the boot login fails too — it simply fails on a path 1c
-    # did not touch. Retiring it is 1d; see variables.tf `ghcr_read_token` for the consumer list.
-    ghcr_read_user  = var.ghcr_read_user
-    ghcr_read_token = var.ghcr_read_token
 
     # #7095 — fresh-host parity for the re-deliverable credential. The SAME rendered string the
     # webhook channel delivers (local.webhook_doppler_token_env), injected rather than
@@ -411,6 +391,47 @@ resource "hcloud_server" "web" {
     # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
     # host classes instead of drifting from a hardcoded copy.
     registry_endpoint = local.registry_endpoint
+    # #8651 (ADR-096 amendment 2026-09-23) — the fresh-boot seed pull is zot-first by BAKE, the
+    # inngest-host.tf precedent (#7462). Before this, cloud-init.yml chose zot only if
+    # `doppler secrets get ZOT_REGISTRY_URL` answered, and every such read ran with no DOPPLER_TOKEN
+    # in its environment — the file was never sourced in that shell, or sourced with a bare `.` in
+    # a subshell, which assigns without exporting (#6985). Every read answered empty and the ref
+    # stayed on GHCR, whose read PAT is revoked (AP-016): every fresh web boot was dark. Sentry,
+    # 90 days: 0 app_zot, 3 app_ghcr_served.
+    #
+    # Read from the in-root resources, NOT a new root variable: a no-default root var resolves
+    # before -target pruning and breaks every apply that does not set it (the "WHOLE-APPLY
+    # HAZARD" inngest-host.tf documents). `random_password.zot_pull` already exists in state and
+    # is read-only in zot (cloud-init-registry.yml accessControl actions ["read"]).
+    #
+    # Behaviour and bounds of the seed item (kept here, not in the byte-budgeted template):
+    #   - Only a `ghcr.io/…@sha256:` ref is rewritten to zot — the digest is the integrity guarantee
+    #     on a plain-HTTP link (ledger row "web hosts -> zot registry", exception #6897). Any other
+    #     ref is never sent to zot and is pulled from nowhere: the item fails loud at stage=pull with
+    #     cause=unpinned in the detail.
+    #   - #8036 1d (ADR-096 5.3b-i): zot is the ONLY boot-time read path. The login-gated GHCR leg,
+    #     its baked ghcr_read_* credential (revoked since 2026-07-29, AP-016) and the app_ghcr_*
+    #     beacons are deleted — a zot miss ends the item (exit 1) and pages through
+    #     web_terminal_boot_fatal's stage=pull condition. The ghcr.io literal left in the `case`
+    #     pattern is only the rewrite's input match, never a pull source.
+    #   - zot login: up to 3 x `timeout 60`, 5 s apart; the zot pull runs ONLY after a successful
+    #     login (zot has no anonymous access), up to 3 x `timeout 180`, and a timed-out attempt
+    #     stops the retries.
+    #   - Private NIC (#6438/#8539, CTO ruling, ADR-123 amendment): write_files ships the inngest
+    #     `99-soleur-private-fallback.network` byte-for-byte and runcmd reloads networkd early, so
+    #     a late-hot-attached NIC is CONFIGURED, not just waited for; then a counter-bounded
+    #     75 x 2 s wait (soleur-inngest-nic-wait's bound) reports timeout/probe_fault, never aborts.
+    #     The baked soleur-wait-nic cannot run first — it ships inside the image this pull fetches.
+    #   - Worst case before the seed fatal: ~150 s NIC wait + ~190 s zot login (3 x 60 s + 2 x 5 s),
+    #     or ~150 s + a fast login + 180 s pull when zot authenticates but hangs (a timed-out
+    #     attempt stops the retries). soleur-host-bootstrap.sh's
+    #     SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 derivation predates this; it is a host-script
+    #     (editing it breaks the replace job's coherence preflight against web-1), so it is not
+    #     re-derived in this change. fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
+    #   - The value is create-time: `-replace=random_password.zot_pull` strands fresh boots of
+    #     hosts created before the rotation (ignore_changes = [user_data]) — same as inngest.
+    zot_pull_user  = local.zot_pull_user
+    zot_pull_token = random_password.zot_pull.result
     # (#6459 Phase 2.2 PART 2) Per-host inputs for web-probe-envwrite.sh, which writes the 3
     # /etc/default/web-<probe> EnvironmentFiles on a fresh cattle host (the SSH remote-exec path
     # only reaches web-1). Values single-sourced from the SAME expressions the SSH provisioners use:

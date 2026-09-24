@@ -798,6 +798,12 @@ jobs:
               -target=logtail_exploration_alert.inngest_luks_wrong_volume \
               -target=logtail_exploration.registry_store_not_luks \
               -target=logtail_exploration_alert.registry_store_not_luks \
+              -target=logtail_exploration.inngest_step_524 \
+              -target=logtail_exploration_alert.inngest_step_524 \
+              -target=logtail_exploration.claude_cost_daily_burn \
+              -target=logtail_exploration_alert.claude_cost_daily_burn \
+              -target=logtail_exploration.claude_cost_capture_dark \
+              -target=logtail_exploration_alert.claude_cost_capture_dark \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key
           rc=$?
@@ -1279,7 +1285,8 @@ jobs:
               -target=terraform_data.git_data_probe_install \
               -target=terraform_data.inngest_consumer_probe_install \
               -target=terraform_data.send_failed_alert_probe \
-              -target=terraform_data.web_1_host_key_probe
+              -target=terraform_data.web_1_host_key_probe \
+              -target=terraform_data.luks_monitor_token_install
 
       # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
       # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the

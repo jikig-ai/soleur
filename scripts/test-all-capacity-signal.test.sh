@@ -1164,7 +1164,10 @@ fi
 # --capacity must consume tc_preamble's promoted rows, never walk again. The
 # behavioural arm cannot see this (two walks over a hermetic fixture agree), so
 # it is asserted where it is decidable: the branch's own source.
-CAP_BLOCK="$(awk '/^if \[\[ "\$\{1:-\}" == "--capacity" \]\]; then$/,/^fi$/' "$RUNNER")"
+# The dispatch moved to a position-independent query-flag scan (#8322): argv is
+# swept into _query_capacity up front and the branch keys on that flag, so the
+# anchor is the `(( _query_capacity == 1 ))` block, not a $1 match.
+CAP_BLOCK="$(awk '/^if \(\( _query_capacity == 1 \)\); then$/,/^fi$/' "$RUNNER")"
 
 cases=$((cases + 1))
 if [[ -n "$CAP_BLOCK" ]]; then

@@ -111,7 +111,8 @@ const HETZNER_CAP = 32_768;
 // pattern applied). What CANNOT be baked is the invocation: it splices the per-host read-scoped
 // web_probes token + EXPECTED_IP + endpoints (SOLEUR_WEB_PROBES_TOKEN='${web_probes_token}' …),
 // all templatefile values evaluated at RENDER time — a baked helper cannot carry a per-host TF
-// secret. Same irreducibly-inline class as the ghcr_login baked-cred + webhook-deploy printf above.
+// secret. Same irreducibly-inline class as the webhook-deploy printf above (and, until #8036 1d
+// deleted it, the ghcr_login baked-cred).
 // Measured render ~23,168; 23,700 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob → ~24.7 KB
 // still trips it) and stays ~9.1 KB below HETZNER_CAP. When this climbs further, prefer a
 // base64gzip-is-already-applied render audit before raising again (headroom to the hard cap is ample;
@@ -123,7 +124,8 @@ const HETZNER_CAP = 32_768;
 // pointing at a credential file that does not exist, and the value spliced here
 // ('${soleur_doppler_token_env_b64}') is a templatefile value evaluated at RENDER time from
 // local.webhook_doppler_token_env — a baked helper cannot carry a per-host TF secret. Same
-// irreducibly-inline class as the ghcr_login baked-cred and the webhook-deploy printf above.
+// irreducibly-inline class as the webhook-deploy printf above (and the ghcr_login baked-cred was,
+// until #8036 1d deleted it).
 //
 // TRIMMED FIRST, and this is most of the story: the first draft cost +5,116 B because
 // soleur-doppler-token.tmpl carried a ~3.8 KB prose header, and that file is injected VERBATIM
@@ -151,9 +153,18 @@ const HETZNER_CAP = 32_768;
 // output is not byte-identical across zlib builds — and the local figure is the LOWER of the two,
 // so a budget derived from it reds in CI on the very next run. Re-derive from a CI failure line,
 // never from a local run, whenever this is raised again.
-// Measured render 24,556 (CI); 24,740 keeps ~184 B of headroom, the same margin the 24,500 raise
-// used, and stays ~8.0 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 24_740;
+// Measured render 24,556 (CI); 24,740 kept ~184 B of headroom, the same margin the 24,500 raise
+// used, and stayed ~8.0 KB below HETZNER_CAP.
+//
+// #8036 1d LOWER (PR #8708): deleting every host-side GHCR leg (the GHCR read-cred bake, the
+// seed-block ghcr_login + GHCR pull arm, the app_ghcr_* emits, the colocated /v2/ probe and
+// inngest_ghcr_fallback arm, the three `|| echo '${image_name}'` fallbacks) shrank the render
+// 24,204 → 23,360 B (local, merge-base f2aa5b1bee vs this branch), and a budget left at 24,740 would
+// let a ~1.3 KB re-inlined blob back in unnoticed — the exact class this tripwire exists for. Measured 23,360 locally (after the colocated pull gained
+// its `timeout 180`); the CI figure is taken as local + 32 B (the zlib delta recorded above, local
+// is the LOWER one), so ~23,392. 23,580 restores the same ~184 B headroom over that and stays
+// ~9.2 KB below HETZNER_CAP. If CI reds on the first run, re-derive from its failure line.
+const WEB_GZIP_BUDGET = 23_580;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -1318,8 +1329,17 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
     expect(cloudInit).toContain(END);
   });
   test("the extraction docker pull has NO `|| true` (AC4d)", () => {
-    expect(block).toMatch(/until docker pull/);
+    // #8651: the pull is bounded `timeout 180 docker pull "$REF"` attempts instead of an
+    // `until docker pull` loop. #8036 1d deleted the login-gated GHCR leg, so the zot pull is the
+    // ONLY pull. The property is unchanged — a pull that never succeeded must abort the item — so
+    // pin BOTH the pull form and the fail-closed exit that consumes its outcome.
+    expect(block).toMatch(/timeout 180 docker pull "\$REF"/);
+    expect(block.match(/timeout 180 docker pull "\$REF"/g)).toHaveLength(1);
     expect(block).not.toMatch(/docker pull[^\n]*\|\|\s*true/);
+    // …and the arm exits ONLY after writing the zot-leg fatal detail (a bare `exit 0`/`trap - EXIT`
+    // substitution would stop runcmd silently: no fatal, no app). No GHCR leg field (#8036 1d).
+    expect(block).toMatch(/if \[ \$OK = 0 \]; then\n[^\n]*\n\s*printf 'nic=%s:%s %s pull_err: %s' "\$NIC" "\$W" "\$Z" "\$T" > \/run\/soleur-stage-detail\n\s*exit 1\n/);
+    expect(block).not.toMatch(/ghcr=\[|ghcr_login=/);
   });
   test("combined content-hash is verified before the baked installer runs (AC5)", () => {
     // Anchor on the actual hash-COMPARE line and the actual RUN line (both mention the
@@ -1342,11 +1362,13 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
   });
   // #6462 AC1 — the fresh-boot registry beacon must sit BEFORE `IMAGE_REF="$REF"`.
   //
-  // WHY THE ORDER IS THE WHOLE FEATURE: after the pull loop, `REF == IMAGE_REF` iff GHCR
-  // served the image and `REF != IMAGE_REF` iff zot did — that comparison IS the
-  // discriminator. `IMAGE_REF="$REF"` reassigns IMAGE_REF to the served ref, making the
-  // comparison tautologically true from that line on. One line later and the beacon
-  // reports "GHCR served" on every boot, forever.
+  // RESTATED BY #8036 1d. Until 1d the beacon was a two-branch discriminator (`REF == IMAGE_REF`
+  // iff GHCR served → app_ghcr_served; else app_zot), and its position before the reassign was
+  // the whole feature. 1d deleted the GHCR arm: a boot that reaches the beacon was served by zot,
+  // so the beacon is the unconditional `app_zot` info emit and `app_ghcr_served` is RESIDUAL-ZERO
+  // (AC1b/AC1c below). The position still matters: `_emit` reads $IMAGE_REF for its image_ref tag
+  // and `: > /run/soleur-stage-detail` clears the detail the beacon ships, both before the
+  // reassign; and the success detail (`zot_login=ok …`) is what web-fresh-boot-zot-8651.sh grades.
   //
   // THE -1 GUARDS ARE LOAD-BEARING, NOT CEREMONY. indexOf returns -1 on a miss and -1 is
   // less than every real offset, so `servedIdx < refIdx` ALONE passes on a tree with no
@@ -1381,11 +1403,11 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
   // correctly ordered. Same defect class as the left operand, mirrored. Anchor on
   // `^\s*…$` via .search(): a comment line begins with `#`, so it can never satisfy it.
   test("the fresh-boot registry beacon precedes the IMAGE_REF reassignment (#6462 AC1)", () => {
-    const servedIdx = block.indexOf('"app_ghcr_served" warning');
+    const zotIdx = block.search(/^\s*_emit "app image served by zot" "app_zot" info$/m);
     const refIdx = block.search(/^\s*IMAGE_REF="\$REF"$/m);
-    expect(servedIdx).toBeGreaterThan(-1);
+    expect(zotIdx).toBeGreaterThan(-1);
     expect(refIdx).toBeGreaterThan(-1);
-    expect(servedIdx).toBeLessThan(refIdx);
+    expect(zotIdx).toBeLessThan(refIdx);
   });
   // #6462 AC1b — AC1's anchor is defeated the moment a comment quotes the emit call
   // verbatim (indexOf would silently return the comment's offset). Make that self-enforcing
@@ -1405,13 +1427,20 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
   //   REF != IMAGE_REF  ⟺  zot served it (the zot branch prefixed "$ZURL/") → app_zot, `info`,
   //                        the DENOMINATOR
   // Pin the literal so `=`↔`!=` and a branch swap both go red.
+  //
+  // RESTATED BY #8036 1d as residual-zero: there is no GHCR branch left to map. The direction
+  // property survives as "the only beacon names zot and is unconditional" — no `if`, no
+  // `app_ghcr_served`, no `app_ghcr_fallback`, on any code line of the whole template (the
+  // colocated block included), so a restored GHCR arm cannot report itself under either name.
   test("the beacon maps each branch to the RIGHT registry (#6462 AC1c — direction, not position)", () => {
-    expect(block).toContain(
-      'if [ "$REF" = "$IMAGE_REF" ]; then _emit "app image served by GHCR" "app_ghcr_served" warning; else _emit "app image served by zot" "app_zot" info; fi',
-    );
+    const codeLines = cloudInit.split("\n").filter((l) => !/^\s*#/.test(l));
+    expect(codeLines.filter((l) => /app_ghcr_(served|fallback)/.test(l))).toEqual([]);
+    expect(codeLines.filter((l) => /_emit "app image served by zot" "app_zot" info/.test(l))).toEqual([
+      '    _emit "app image served by zot" "app_zot" info',
+    ]);
   });
   test("each beacon call form appears exactly once, so AC1's anchor stays unambiguous (#6462 AC1b)", () => {
-    expect(block.match(/"app_ghcr_served" warning/g)).toHaveLength(1);
+    expect(block.match(/"app_ghcr_served" warning/g)).toBeNull();
     expect(block.match(/"app_zot" info/g)).toHaveLength(1);
     // The right operand too: exactly one line-anchored reassignment, so AC1's .search()
     // cannot silently pick a different one if the boot path ever grows a second.

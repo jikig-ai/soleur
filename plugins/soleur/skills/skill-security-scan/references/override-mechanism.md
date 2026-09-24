@@ -125,7 +125,7 @@ The override mechanism is the LAST gate. Earlier gates:
 
 1. **PreToolUse hook on Write** (`.claude/hooks/skill-security-scan-write.sh`)
    — load-bearing tool-layer block on `HIGH-RISK without override artifact`.
-2. **Cooperative-fast-path in agent-finder §4b.5** — surfaces findings to
+2. **Cooperative-fast-path in soleur:engineering:discovery:agent-finder §4b.5** — surfaces findings to
    operator before the Write attempt.
 3. **Cooperative-fast-path in skill-creator Step 5** — same as above for
    scaffold workflows.
@@ -143,10 +143,10 @@ The override mechanism is the LAST gate. Earlier gates:
 
 ## Future extensions (NOT implemented in v1)
 
-The original brainstorm and CTO Decision 12 contemplated a `/plan`-aware
+The original brainstorm and CTO Decision 12 contemplated a `soleur:plan`-aware
 skip-and-warn mode for the scanner. Phase 6 of the plan removed this for v1
-because `/soleur:plan` does not scaffold or fetch skills — those code paths
-live in `skill-creator` and `agent-finder` only. If a future plan-time
+because `soleur:plan` does not scaffold or fetch skills — those code paths
+live in `skill-creator` and `soleur:engineering:discovery:agent-finder` only. If a future plan-time
 scaffolding workflow emerges, re-evaluate this design with a tracking issue.
 The `SKILL_SECURITY_SCAN_PLAN_MODE` env-flag idea is preserved here as
 documented future-extension guidance only; it is not implemented in this v1

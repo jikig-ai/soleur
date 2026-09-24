@@ -37,9 +37,22 @@ writeFileSync(UNJUSTIFIED_BODY, "Found a discrepancy while auditing.\n");
 // #8076 — observe the filing-deny marker without a real pino sink. Partial
 // mock: keep countFilingDenials real, spy only on the emitter.
 const { filingDenyMock } = vi.hoisted(() => ({ filingDenyMock: vi.fn() }));
+// #8611 — spy on the cost marker so the new is_error/subtype/num_turns pass-through is observable.
+const { costMarkerMock } = vi.hoisted(() => ({ costMarkerMock: vi.fn() }));
+vi.mock("@/server/claude-cost-marker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/claude-cost-marker")>()),
+  emitClaudeCostMarker: costMarkerMock,
+}));
 vi.mock("@/server/cron-filing-deny-marker", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/cron-filing-deny-marker")>()),
   emitCronFilingDenyMarker: filingDenyMock,
+}));
+// #8603 — observe the --effort fallback mirror. Partial mock: keep
+// reportSilentFallback (used elsewhere by the substrate) real.
+const { warnFallbackMock } = vi.hoisted(() => ({ warnFallbackMock: vi.fn() }));
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  warnSilentFallback: warnFallbackMock,
 }));
 import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
 import { decide } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
@@ -58,6 +71,7 @@ import {
   spawnSimple,
   STDOUT_TAIL_CAP_BYTES,
 } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import { classifyEvalFatal } from "@/server/inngest/functions/_cron-shared";
 
 // #4684/#4689 — crons mkdtemp'd under os.tmpdir() (the 256 MB /tmp tmpfs in
@@ -836,11 +850,51 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
       flags: ["--print"],
       prompt: "ignored by the fake bin",
       maxTurnDurationMs: 10_000,
-      cronName: "cron-test-fake",
+      cronName: "cron-bug-fixer",
       buildSpawnEnv: () => process.env,
       logger: noopLogger,
     });
   }
+
+  // #8603 — the pinned CLI treats an unknown `--effort` VALUE as a warning, not
+  // an error: it writes `Unknown --effort value '<v>' — ignoring it and using
+  // the default effort` to STDERR and runs anyway. The substrate mirrors that
+  // line to Sentry once per run (cq-silent-fallback-must-mirror-to-sentry).
+  const effortWarning = (v: string) =>
+    `Warning: ${CLI_EFFORT_FALLBACK_NEEDLE} '${v}' — ignoring it and using the default effort. Valid values: low, medium, high, xhigh, max.`;
+  const stderrLines = (lines: string[]) =>
+    lines.map((l) => `process.stderr.write(${JSON.stringify(l)} + "\\n");`).join("\n");
+
+  it("#8603: mirrors the --effort fallback warning to Sentry exactly once per run", async () => {
+    warnFallbackMock.mockReset();
+    await runFakeEval(installFakeClaudeBin(stderrLines([effortWarning("hgih"), effortWarning("hgih")])));
+    expect(warnFallbackMock).toHaveBeenCalledTimes(1);
+    expect(warnFallbackMock.mock.calls[0][1]).toMatchObject({
+      feature: "cron-claude-eval",
+      op: "claude-eval-effort-fallback",
+      extra: { fn: "cron-bug-fixer" },
+    });
+    // A second run must mirror again: the once-flag is per spawn, not per process.
+    await runFakeEval(installFakeClaudeBin(stderrLines([effortWarning("hgih")])));
+    expect(warnFallbackMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("#8603: the mirrored line goes through the shared Sentry tail scrub", async () => {
+    warnFallbackMock.mockReset();
+    const secret = "sk-ant-api03-" + "A".repeat(40);
+    await runFakeEval(installFakeClaudeBin(stderrLines([`${effortWarning("hgih")} ${secret} ${TOKEN}`])));
+    expect(warnFallbackMock).toHaveBeenCalledTimes(1);
+    const line = String(warnFallbackMock.mock.calls[0][1].extra.line);
+    expect(line).toContain(CLI_EFFORT_FALLBACK_NEEDLE);
+    expect(line).not.toContain(secret);
+    expect(line).not.toContain(TOKEN);
+  });
+
+  it("#8603: a benign stderr line does not fire the effort mirror", async () => {
+    warnFallbackMock.mockReset();
+    await runFakeEval(installFakeClaudeBin(stderrLines(["some unrelated diagnostic"])));
+    expect(warnFallbackMock).not.toHaveBeenCalled();
+  });
 
   it("#8076: emits SOLEUR_CRON_FILING_DENY once with count=2 when the result event carries two filing denials", async () => {
     filingDenyMock.mockReset();
@@ -857,11 +911,25 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     await runFakeEval(spawnCwd);
     expect(filingDenyMock).toHaveBeenCalledTimes(1);
     expect(filingDenyMock.mock.calls[0][0]).toMatchObject({
-      fn: "cron-test-fake",
+      fn: "cron-bug-fixer",
       count: 2,
       commands: ["gh issue create", "gh issue create"],
     });
     expect(typeof filingDenyMock.mock.calls[0][0].spawn_started_at).toBe("string");
+  });
+
+  it("#8611: the cost marker carries is_error, subtype and num_turns from the result event", async () => {
+    costMarkerMock.mockReset();
+    const resultLine = JSON.stringify({
+      type: "result", subtype: "error_max_budget_usd", is_error: true, num_turns: 7,
+      result: "stopped", total_cost_usd: 2.5, modelUsage: { "claude-sonnet-5": {} }, permission_denials: [],
+    });
+    const spawnCwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
+    await runFakeEval(spawnCwd);
+    expect(costMarkerMock).toHaveBeenCalledTimes(1);
+    expect(costMarkerMock.mock.calls[0][0]).toMatchObject({
+      cost_usd: 2.5, is_error: true, subtype: "error_max_budget_usd", num_turns: 7, capture_status: "ok",
+    });
   });
 
   it("#8076: emits nothing when the result event carries an EMPTY permission_denials array", async () => {
@@ -878,7 +946,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     const spawnCwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
     await runFakeEval(spawnCwd);
     expect(filingDenyMock).toHaveBeenCalledTimes(1);
-    expect(filingDenyMock.mock.calls[0][0]).toMatchObject({ fn: "cron-test-fake", count: 0, capture_status: "field-absent" });
+    expect(filingDenyMock.mock.calls[0][0]).toMatchObject({ fn: "cron-bug-fixer", count: 0, capture_status: "field-absent" });
   });
 
   it("captures a stdout tail and redacts the installation token", async () => {
@@ -993,6 +1061,47 @@ describe("parseClaudeResultLine (AC4 — result-event cost capture)", () => {
     expect(
       parseClaudeResultLine(JSON.stringify({ type: "assistant", message: {} })),
     ).toBeNull();
+  });
+
+  // #8611 Fix 4 — a run that failed (budget cap, credit, max turns) must be visible as a failure.
+  // Synthesized; the subtype string is the one the pinned claude-code 2.1.219 binary emits.
+  const budgetStopLine = JSON.stringify({
+    type: "result",
+    subtype: "error_max_budget_usd",
+    is_error: true,
+    num_turns: 12,
+    result: "stopped: budget",
+    total_cost_usd: 4.02,
+    usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 40 },
+    modelUsage: { "claude-opus-5-5": { costUSD: 4.02 } },
+  });
+
+  it("#8611: parses is_error, subtype and num_turns from the result event", () => {
+    const parsed = parseClaudeResultLine(budgetStopLine)!;
+    expect(parsed.cost.isError).toBe(true);
+    expect(parsed.cost.subtype).toBe("error_max_budget_usd");
+    expect(parsed.cost.numTurns).toBe(12);
+    expect(parseClaudeResultLine(okResultLine)!.cost.isError).toBe(false);
+  });
+
+  it("#8611: a malformed subtype/num_turns/is_error is dropped to null, never passed through", () => {
+    const parsed = parseClaudeResultLine(
+      JSON.stringify({ type: "result", subtype: "bad value\nINJECT", is_error: "yes", num_turns: "12" }),
+    )!;
+    expect(parsed.cost.subtype).toBeNull();
+    expect(parsed.cost.isError).toBeNull();
+    expect(parsed.cost.numTurns).toBeNull();
+    // Anchored on BOTH ends and bounded: free text that merely ENDS in a token, an over-long token,
+    // and a negative turn count are all dropped too.
+    const tail = parseClaudeResultLine(
+      JSON.stringify({ type: "result", subtype: "leaked text\nerror_x", num_turns: -1 }),
+    )!;
+    expect(tail.cost.subtype).toBeNull();
+    expect(tail.cost.numTurns).toBeNull();
+    const long = parseClaudeResultLine(JSON.stringify({ type: "result", subtype: "a".repeat(65) }))!;
+    expect(long.cost.subtype).toBeNull();
+    const max = parseClaudeResultLine(JSON.stringify({ type: "result", subtype: "a".repeat(64) }))!;
+    expect(max.cost.subtype).toBe("a".repeat(64));
   });
 
   it("AC4b — I8 survives: a credit-exhaustion result event folds the error text into the tail so classifyEvalFatal still returns fatal", () => {

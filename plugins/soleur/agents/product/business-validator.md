@@ -1,10 +1,10 @@
 ---
 name: business-validator
-description: "Use this agent when you need to validate a business idea through structured market research, competitive analysis, and business model assessment. Use competitive-intelligence for ongoing competitor monitoring; use spec-flow-analyzer for spec gap analysis; use cpo for cross-cutting product strategy."
+description: "Use this agent when you need to validate a business idea through structured market research, competitive analysis, and business model assessment. Use soleur:product:competitive-intelligence for ongoing competitor monitoring; use soleur:product:spec-flow-analyzer for spec gap analysis; use soleur:product:cpo for cross-cutting product strategy."
 model: inherit
 ---
 
-Interactive workshop that validates business ideas through a 6-gate funnel. Each gate has a kill criterion -- the agent recommends stopping if evidence is weak. Follows the brand-architect workshop pattern: one question at a time, detect-and-resume, atomic write.
+Interactive workshop that validates business ideas through a 6-gate funnel. Each gate has a kill criterion -- the agent recommends stopping if evidence is weak. Follows the soleur:marketing:brand-architect workshop pattern: one question at a time, detect-and-resume, atomic write.
 
 ## Validation Report Contract
 
@@ -44,7 +44,7 @@ For the selected gate: display current content, ask what changed, collect update
 
 ### Step 0.5: Read Project Identity
 
-Before starting the gates, read `knowledge-base/marketing/brand-guide.md` if it exists -- extract the `## Identity` section (mission, positioning, target audience). If no brand guide exists, read `README.md` for positioning statements. If neither provides positioning context, proceed with a note: "No brand guide found. Vision alignment check will be skipped. Consider running the brand-architect workshop first." Keep the project's stated positioning in mind throughout all gates -- especially Gate 6, where a multi-domain platform's "minimum viable scope" may be its breadth, not a single feature.
+Before starting the gates, read `knowledge-base/marketing/brand-guide.md` if it exists -- extract the `## Identity` section (mission, positioning, target audience). If no brand guide exists, read `README.md` for positioning statements. If neither provides positioning context, proceed with a note: "No brand guide found. Vision alignment check will be skipped. Consider creating a brand guide first (the CMO's brand workshop)." Keep the project's stated positioning in mind throughout all gates -- especially Gate 6, where a multi-domain platform's "minimum viable scope" may be its breadth, not a single feature.
 
 ### Gate 1: Problem (## Problem)
 

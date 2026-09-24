@@ -53,7 +53,59 @@ Live standing alarms over this source:
   `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row.
-- **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
+- **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
+  `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
+  so the email names the condition, never a row:
+  - **`logtail_exploration_alert.inngest_step_524`** (every 300 s over 900 s) —
+    `soleur-inngest-step-524-prd`. Pages on any inngest-server journald row whose `message.error`
+    contains one of three texts, all meaning "the server lost a step's response":
+    `invalid status code: 524` (a step outlived Cloudflare's ~100 s origin timeout — should not
+    recur under streaming), `error parsing stream: error reading response body` and
+    `Your server reset the connection while we were reading the reply` (a STREAMED step response
+    dropped mid-flight; both measured in the #8611 spike). **A web deploy that kills a running step
+    also matches**, so check the deploy log for the page's window first. These rows are PRIORITY 6
+    and ship only because `vector.toml`'s `inngest_journald` unit match admits them despite its
+    PRIORITY 0..4 list (observed; #6551).
+    Readback, no SSH, no pipe:
+    1. `doppler run -p soleur -c prd_terraform -- bash scripts/probe-inngest-524-count.sh` prints
+       `count=<n>` for the last 24 h and `unit_rows=<m>` on stderr. `unit_rows=0` exits 3: the
+       inngest-server path is dark, so a quiet count means nothing.
+    2. Was a second paid session started? The per-run cost marker's run id is the field **`id`**
+       (not `run_id`, which is the filing-deny marker's). Over the page's window:
+
+       ```sql
+       SELECT JSONExtractString(raw, 'message', 'id') AS run, count() AS markers
+       FROM (SELECT dt, raw FROM remote($BS_TABLE)
+             UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+       WHERE dt > now() - INTERVAL 1 DAY
+         AND raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+         AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
+       GROUP BY run HAVING count() > 1 FORMAT JSONEachRow
+       ```
+
+       Any row is a duplicate spawn. Then search Sentry for `inngest.run_id:<run>`.
+    3. The Sentry ops that say what the single-flight guard did (feature `cron-claude-eval`):
+       `claude-eval-singleflight-join` — a retry reached the live child (or its settled result),
+       one marker, **the guard worked**; `claude-eval-singleflight-no-runid` — a spawn had no
+       well-formed run id, **the guard was bypassed**, investigate. Feature `inngest-serve`, op
+       `inngest-stream-consumer-cancel` — a step stream's consumer disconnected (one event per drop;
+       its tags name the function, step and whether the request was signed).
+  - **`logtail_exploration_alert.claude_cost_daily_burn`** (hourly, trailing 24 h) —
+    `soleur-claude-cost-daily-burn-prd`. Pages when the cron `SOLEUR_CLAUDE_COST` markers' summed
+    `cost_usd` exceeds **$25** (`local.claude_cost_daily_burn_usd`; recalibration on #8613). The sum
+    is a FLOOR: a marker with a null `cost_usd` (a timeout, a no-result or parse-error exit, the
+    HTTP-transport crons compound-promote / weekly-release-digest / the credit probe) sums as $0,
+    and a run killed mid-flight emits no marker. Rank the spend with the per-source SQL under
+    [Querying Anthropic cost markers](#querying-anthropic-cost-markers-soleur_claude_cost--_daily).
+    A single source far above its `--max-budget-usd` cap (`server/inngest/cron-budgets.ts`), or two
+    markers per run `id` (the query under the 524 alert above), is the lead.
+  - **`logtail_exploration_alert.claude_cost_capture_dark`** (hourly, trailing 24 h) —
+    `soleur-claude-cost-capture-dark-prd`. Pages when 24 h holds no cron cost marker with a
+    non-null `cost_usd` AND no credit-probe RED row (`op=anthropic-credit-exhausted` /
+    `anthropic-key-invalid`). The marker path is broken (the emitter, Vector, or the field moved
+    again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
+    credit probe's Sentry monitor.
+- **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
   reporter goes dark. Checker: `scripts/zot-restart-loop-alarm.sh` (shared parse helper
@@ -464,6 +516,24 @@ tool soleur:trigger-cron`, Grok `/trigger-cron`, Devin `/soleur:trigger-cron`,
 Codex `$soleur:trigger-cron`; the event is derived from `EXPECTED_CRON_FUNCTIONS`
 in `cron-manifest.ts`, not a second list.
 
+### `SOLEUR_WATCHDOG_DISPATCH` — the watchdog dispatch clock (#8495, ADR-248)
+
+Emitted by `server/watchdog-dispatch-clock.ts` through `emitWatchdogDispatch`
+(`server/cron-liveness-marker.ts`, `component: "cron-liveness"`) at pino **WARN**, once at
+boot (`outcome` `armed`/`disarmed`) and once per tick (`dispatched`, `skipped_slot_has_run`,
+`failed`, `tick_escaped`). Fields: `host_id`, `workflow`, `slot` (ISO slot start), `outcome`,
+and on a failure `op` (`mint`/`dedup-read`/`dispatch`), `reason` (`timeout`/`http`/`throw`),
+`status`; a skip carries `run_id` + `run_event` of the run that already covered the slot.
+Expect about five tick rows an hour per web host (`host_name` is Vector's, outside the marker).
+`tick_escaped` must never appear. The
+canary container's rows are not shipped (Vector matches the prod container name exactly).
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH \
+  | jq -R -r 'fromjson? | .raw | fromjson? | .host_name as $h | .message | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true) | [$h, .host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
+```
+
 ### `SOLEUR_RUN_REPORT_SWEEP` — the 12:00Z run-report arm changed state
 
 Emitted by `cron-stale-deferred-scope-outs.ts` `sweepRunReports` through
@@ -489,32 +559,56 @@ Rows before 2026-09-19 (PR #8344) decode to a STRING `.message`; the
 `type == "object"` guard skips them — same cause as the compound-promote
 decode above (measured dark on the 2026-09-14/15 fires).
 
-Ranked SQL (run against `remote(t520508_..._logs)`):
+Ranked SQL. Since #8344 (2026-09-19) pino fields nest under `raw.message`, so every marker field
+is read as `JSONExtract*(raw, 'message', '<field>')`. The top-level form `JSONExtract*(raw, '<field>')`
+returns 0/empty on every row and reads as "no spend" (#8611, measured: $0 top-level vs $159.81
+nested over the same 356 cron markers). `remote(...)` alone is the hot table, which covers only
+recent hours; for any longer window, union it with the S3 archive as below.
 
 ```sql
--- Per-cron spend/token totals over the window (per-run marker)
-SELECT JSONExtractString(raw, 'source') AS source,
+-- Per-source spend over a window (per-run marker; cron sources only)
+SELECT JSONExtractString(raw, 'message', 'source') AS source,
        count() AS runs,
-       sum(JSONExtractFloat(raw, 'cost_usd')) AS cost_usd
-FROM remote(t520508_..._logs)
-WHERE raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+       round(sum(JSONExtractFloat(raw, 'message', 'cost_usd')), 2) AS cost_usd,
+       countIf(JSONExtractBool(raw, 'message', 'is_error')) AS failed_runs,
+       countIf(JSONExtractString(raw, 'message', 'subtype') = 'error_max_budget_usd') AS cap_hits
+FROM (SELECT dt, raw FROM remote($BS_TABLE)
+      UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+WHERE dt > now() - INTERVAL 30 DAY
+  AND raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+  AND JSONExtractString(raw, 'message', 'component') = 'claude-cost'
+  AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
 GROUP BY source ORDER BY cost_usd DESC FORMAT JSONEachRow
 
--- Per-model spend attribution (per-run marker)
-SELECT JSONExtractString(raw, 'model') AS model,
+-- Per-model spend attribution (per-run marker; operator-key cron sources only)
+SELECT JSONExtractString(raw, 'message', 'model') AS model,
        count() AS turns,
-       sum(JSONExtractFloat(raw, 'cost_usd')) AS cost_usd
-FROM remote(t520508_..._logs)
-WHERE raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+       round(sum(JSONExtractFloat(raw, 'message', 'cost_usd')), 2) AS cost_usd
+FROM (SELECT dt, raw FROM remote($BS_TABLE)
+      UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+WHERE dt > now() - INTERVAL 30 DAY AND raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+  AND JSONExtractString(raw, 'message', 'component') = 'claude-cost'
+  AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
 GROUP BY model ORDER BY cost_usd DESC FORMAT JSONEachRow
 
 -- Daily authoritative org total (Admin report)
-SELECT dt, JSONExtractString(raw, 'date') AS day,
-       JSONExtractFloat(raw, 'cost_usd') AS org_cost_usd
-FROM remote(t520508_..._logs)
+SELECT dt, JSONExtractString(raw, 'message', 'date') AS day,
+       JSONExtractFloat(raw, 'message', 'cost_usd') AS org_cost_usd
+FROM (SELECT dt, raw FROM remote($BS_TABLE)
+      UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
 WHERE raw LIKE '%"SOLEUR_CLAUDE_COST_DAILY":true%'
 ORDER BY dt DESC LIMIT 30 FORMAT JSONEachRow
 ```
+
+The `"SOLEUR_CLAUDE_COST":true` key match (with `:true`) keeps the `SOLEUR_CLAUDE_COST_DAILY`
+org-total rows out of a per-run sum. Rows before #8344 carry `message` as a string and read 0 here.
+Since #8611 the per-run marker also carries `is_error`, `subtype` (e.g. `error_max_budget_usd`)
+and `num_turns` for cron claude-eval runs. **Is a cron's cap too tight?** A source whose `cap_hits`
+is a large share of its `runs` in the per-source query is being cut off before finishing (wasted
+partial sessions); compare its `cost_usd / runs` against its `CLAUDE_BUDGET_USD` entry in
+`server/inngest/cron-budgets.ts` and recalibrate on #8613. Without the `component` + `cron:` guards
+these queries also sum founder BYOK session spend (`agent-runner`, `cc-soleur-go`, `leader-loop`),
+which is not the operator key's.
 
 The markers carry `conversationId`/`runId`, token counts, cost, model, and
 `source` — no PII, and the daily marker is field-allowlisted so `api_key_id`/

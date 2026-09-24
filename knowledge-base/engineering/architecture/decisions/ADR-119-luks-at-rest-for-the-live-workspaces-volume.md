@@ -737,6 +737,70 @@ dispatch} — all already modeled; no new element or edge.
 the recut, the freeze, and the verify are the operator's downstream gated dispatches; the
 `adopting → accepted` flip stays downstream (soak-gated, blocked on the unwired heartbeat #6808).
 
+## Addendum (2026-09-24): the luks-monitor token line has a steady-state owner (#8632)
+
+**Why.** Retained web-1 snapshot `411798619` (2026-07-23) very likely holds the
+`prd_workspaces_luks` service token `workspaces-luks-boot`. Rotating it is a rename of
+`doppler_service_token.workspaces_luks` (every user-set attribute is ForceNew in DopplerHQ/doppler
+v1.21.2). The rename rotates the token in Doppler and in the repo secret, but nothing delivered it to
+the one consumer on web-1: `/etc/default/luks-monitor`, read by `luks-monitor.service`. Only
+`workspaces-cutover.sh` had written that file, and it refuses to run again (`already_cutover`).
+
+**§(e) is not a standing write channel, and this addendum does not extend it.** §(e) grants the
+cutover job's SSH channel for delivering the fail-closed mount gate. An earlier draft of #8632 cited
+§(e) for a dispatch-only "refresh" job in `workspaces-luks-verify.yml`; that citation overstated what
+§(e) grants, and the job would also have shared the read-only verifier's concurrency group (a pending
+approval parks the daily verify) and put a host write into a workflow whose runs are cited as legal
+evidence. It was replaced before merge.
+
+**Line ownership of `/etc/default/luks-monitor`:**
+
+| Line | Owner |
+|---|---|
+| `SOLEUR_SENTRY_DSN=` | cloud-init (fresh hosts only; `ignore_changes = [user_data]` means web-1's file may lack it) |
+| `DOPPLER_TOKEN=` | first write: `workspaces-cutover.sh`. After that: `terraform_data.luks_monitor_token_install` (`workspaces-luks.tf`), triggered only by the token's hash |
+
+The installer ships `luks-monitor-token-refresh.sh`, which proves the new token can read
+`WORKSPACES_LUKS_KEY` (the pinned `doppler secrets get … --plain --config prd_workspaces_luks` form)
+BEFORE it rewrites only the token line, keeping every other line byte for byte and restoring the
+original on any mismatch. The token reaches it on stdin through a builtin `printf`.
+
+**Rotation** is a rename or `-replace` of the token, with `create_before_destroy`, delivered in the
+one apply that carries `[ack-destroy]`: the main apply mints the new token and updates the secret
+before deleting the old one; its SSH step re-fires the installer. No dispatch, no second approval.
+
+**Proof boundary.** The installer proves the token reads the key. It never starts
+`luks-monitor.service`, so a mount, escrow or readyz fault cannot redden a rotation merge. The daily
+probe's health is proven by `workspaces-luks-verify.yml`, not by this installer and not by the host
+timer (which #8632 review found silent; tracked separately). The installer prints the timer's state
+into the apply log as evidence.
+
+**Deviation from `hr-prod-host-config-change-immutable-redeploy`.** This is an in-place edit of one
+line over SSH through Terraform, allowed under ADR-154's standing exception (web-1 cannot be
+redeployed: `cx33` remains unorderable, re-sampled 2026-09-24 in ADR-154). It is the same class as
+`terraform_data.private_nic_guard_install`, which delivers the `web_probes` token the same way.
+Rebuilding web-1 to rotate a token would mean a reboot, and whether web-1 re-opens the LUKS volume at
+boot is still unproven (the in-guest unlock path is deferred to #6931).
+
+## Addendum (2026-09-24, after #8703's apply): the token line's owner also creates the file (#8632)
+
+The first rotation apply (run 35991817062) found web-1 with **no** `/etc/default/luks-monitor`.
+The helper reported `SOLEUR_LUKS_HOST_TOKEN_REFRESH result=fail reason=envfile_absent`. By then the
+main apply had already revoked the old token, so the refusal left the host with no working token,
+not with the old one. The file's earlier writers do not cover it: cloud-init bakes the DSN line only
+at a host's birth, and the cutover's write did not survive.
+
+The helper therefore creates an absent file, ending in the same state `workspaces-cutover.sh`
+leaves (0600 root):
+
+- it creates the file only AFTER the new token is proven (with `O_EXCL`), holding the token line only;
+- it records `created_envfile=1` in its `result=ok` line;
+- on a failed write or any post-write mismatch it removes the file, restoring the ABSENT state;
+- it refuses a symlink at the path.
+
+The addendum above still holds for the `DOPPLER_TOKEN=` line. The file itself is created by this
+installer when absent. The missing `SOLEUR_SENTRY_DSN=` line stays cloud-init's, tracked in #8706.
+
 ## References
 
 - Issue #6588 — the P1 that mandated CTO routing before terraform.

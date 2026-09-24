@@ -29,6 +29,7 @@
 export const REPO_WIDE_SUITES: readonly string[] = [
   "test/agent-runner-system-prompt.test.ts",
   "test/c4-canonical-mirror.test.ts",
+  "test/c4-config-name-parity.test.ts",
   "test/c4-diagram-path-scope.test.ts",
   "test/c4-likec4-version-pin.test.ts",
   "test/c4-project-route.test.ts",
@@ -87,6 +88,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/inngest/leader-prompts/tool-surface.test.ts",
   "test/server/inngest/rule-body-gate-recursion-invariant.test.ts",
   "test/server/inngest/sentry-monitor-iac-parity.test.ts",
+  "test/server/watchdog-workflow-idempotence.test.ts",
   "test/service-tools.test.ts",
   "test/supabase-migrations/117-reconcile-ownership-rpc-comments-multi-owner.test.ts",
   "test/workspace-cleanup.test.ts",

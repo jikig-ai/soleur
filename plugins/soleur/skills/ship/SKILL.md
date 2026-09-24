@@ -40,6 +40,8 @@ See `workflow-fidelity.ts` (`SHIP_MERGE_DEPLOY_SENTINEL`, `POST_MERGE_VERIFICATI
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args.
 
+If `$ARGUMENTS` contains `--full`, set `FULL_BATTERY=true`. Strip `--full` from `$ARGUMENTS` before processing remaining args. This is the ONLY spelling that buys the full local battery (#8322): Phase 4 then runs `test-all.sh --full` unconditionally — it outranks even a SKIPPABLE battery-owed verdict, because an operator who typed `--full` asked for the battery itself, not for a deduplication decision.
+
 When `HEADLESS_MODE=true`:
 
 - Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag, no user prompt) when the Phase 2 probe prints `BRANCH_LEARNING=absent`
@@ -352,13 +354,18 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
-Then run the project's full test suite. An unsharded (`TEST_GROUP=all`) run now INVOKES
-`apps/web-platform/infra/run-registered-suites.sh` as a nested suite whenever the diff touches
-that directory, so the summary accounts for it. Calling `test-all.sh` alone "matches CI" is what
-produced #6969: a green summary read as evidence for infra it never executed, at the last gate
-before merge.
+Then run the project's test gate. Since #8322 the local default is
+`test-all.sh --affected` — the suites this diff can move plus every always-on
+repo-global ratchet — while CI keeps the full battery. `TEST_GROUP=all` still
+INVOKES `apps/web-platform/infra/run-registered-suites.sh` as a nested suite
+whenever the diff touches that directory (the affected selector carries the
+same edge), so the summary accounts for it. Calling `test-all.sh` alone
+"matches CI" is what produced #6969: a green summary read as evidence for
+infra it never executed, at the last gate before merge. An operator who passed
+`soleur:ship --full` gets `test-all.sh --full` instead — the whole battery.
 
-**Probe capacity first (#7545).** This is the pipeline's longest local run, so spend ~3 s
+**Probe capacity first (#7545).** An affected run can still DEGRADE to the
+full battery (undecidable diff, runner/index touched, FORCE_ALL), so spend ~3 s
 (measured p50) learning what it is about to run into:
 
 ```bash
@@ -397,13 +404,20 @@ get the saving on a re-run, sync with `main` first.
 Branch on the exit code, never on the prose:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/battery-owed.sh"
-rc=$?
-if [[ "$rc" -eq 42 ]]; then
-  echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
+if [[ "${FULL_BATTERY:-}" == "true" ]]; then
+  # `soleur:ship --full` — the operator asked for the whole battery. Outranks
+  # SKIPPABLE: they asked for the run itself, not a dedup verdict.
+  echo "battery FORCED (--full) — running the full battery"
+  bash scripts/test-all.sh --full
 else
-  echo "battery OWED (rc=$rc) — running it"
-  TEST_GROUP=all bash scripts/test-all.sh
+  bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/battery-owed.sh"
+  rc=$?
+  if [[ "$rc" -eq 42 ]]; then
+    echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
+  else
+    echo "battery OWED (rc=$rc) — running the affected gate"
+    bash scripts/test-all.sh --affected
+  fi
 fi
 ```
 
@@ -457,20 +471,20 @@ until 0, launch detached with the rc to a file, and if that file reads `4` go ba
 #8135 — two probe-then-launch attempts lost the race by seconds; two fixed-iteration Monitors timed out still
 contended after three hours; the one-script loop launched cleanly on its first `measured_runs=0`.
 
-**`measured_runs=0` is unbounded on a busy host — after ~30 min of contention with NEW siblings still arriving, queue inside the lock instead.** The wait loop only wins when the existing runs drain; when a fresh worktree starts a run every 20–40 min it never reaches zero. Launch `SOLEUR_ALLOW_FULL_GATE=1 TC_LOCK_TIMEOUT=14400 TC_RUNTIME_CEILING_S=39600 TEST_GROUP=all bash scripts/test-all.sh` (same rc-file wrapper): the FIFO ticket queue serializes you behind earlier waiters and `LOCK_WAIT_HEARTBEAT`/`position=N` lines prove you are queued, not hung. The ceiling must cover `TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT` (the ticket wait defaults to the lock budget) plus execution — 39600 = 14400+14400+10800. **Why:** PR #8354 — the zero-wait loop sat 110 min while four different worktrees started runs; the lock-queued form acquired after 87 min.
+**`measured_runs=0` is unbounded on a busy host — after ~30 min of contention with NEW siblings still arriving, queue inside the lock instead.** The wait loop only wins when the existing runs drain; when a fresh worktree starts a run every 20–40 min it never reaches zero. Launch `SOLEUR_ALLOW_FULL_GATE=1 TC_LOCK_TIMEOUT=14400 TC_RUNTIME_CEILING_S=39600 bash scripts/test-all.sh --full` (same rc-file wrapper): the FIFO ticket queue serializes you behind earlier waiters and `LOCK_WAIT_HEARTBEAT`/`position=N` lines prove you are queued, not hung. The ceiling must cover `TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT` (the ticket wait defaults to the lock budget) plus execution — 39600 = 14400+14400+10800. **Why:** PR #8354 — the zero-wait loop sat 110 min while four different worktrees started runs; the lock-queued form acquired after 87 min. (The `--full` flag is required post-#8322 — a bare `TEST_GROUP=all` invocation now selects the *affected* set within the group, which is exempt from the refusal this paragraph exists to queue behind.)
 
-**Identify the runner by its rc file, never by a pid and never by shape.** `tc_acquire` forks its heartbeat as a background subshell, so during a lock wait there are two `bash scripts/test-all.sh` processes with the same argv, cwd and fds; the heartbeat's fingerprint is a lone `sleep <n>` child and a silent self-exit at exactly the lock budget. If the wrapper's rc file reads 143 while such a process is still writing heartbeats, the runner is dead and the rc file is its verdict — a live runner whose budget expired would have printed `LOCK_CONTENDED_PROCEEDING` and run the battery unserialized beside the holder (the false-RED shape; expiry never aborts). Launch with `setsid nohup … &` (the new session is what keeps a group-kill off the runner), have the script write its rc as its LAST act, and wait on that FILE: `setsid nohup bash -c 'TEST_GROUP=all bash scripts/test-all.sh > "$LOG" 2>&1; echo $? > "$RCF"' >/dev/null 2>&1 &` then `until [ -s "$RCF" ]; do sleep 30; done`. **Do NOT watch `$!` — it does not track the runner.** `setsid` forks when it is not already a process-group leader, so `$!` is a short-lived parent that exits in under a second while the battery runs on, and a `kill -0 $!` loop falls through immediately: every line after it then reports a verdict for a run that has not finished. Measured 2026-09-17 with both controls — under `setsid` the pid was gone after 1 s with the runner still working, and the same launch WITHOUT `setsid` kept `$!` alive and tracking correctly, which is what makes the cause the fork rather than the timing. Observed live: `BATTERY COMPLETE rc=1` printed for a battery that had died in under a second on a mise shim fault and never ran a single suite — rc=1 with no `[FAIL]` lines reads exactly like "the battery ran and one suite failed". This is the #8137 trap below one level up: there the watched process was the runner’s own heartbeat subshell, here it is `setsid`’s forked parent, and in both the pid you can see is not the runner. The rc file is already this skill’s stated source of truth ("Read the rc file, never the background-task completion notification"), so polling it is what makes the wait agree with the verdict. **And rc is only a test verdict once the toolchain started:** grep the log for `mise ERROR|command not found` first — a shim with no resolved version exits 1 emitting no `[FAIL]` lines at all, and `rc=4` is REFUSED (nothing ran), not a reap. If you do queue inside the lock (`SOLEUR_ALLOW_FULL_GATE=1`) and raise `TC_LOCK_TIMEOUT`, raise `TC_RUNTIME_CEILING_S` with it (`$((TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT + 10800))` — since #8579 the ticket-queue wait defaults to the lock budget, so the charged wait is BOTH): the wait is charged against the ceiling, so a ceiling below the combined wait plus execution budget exits 3 having run nothing. **Why:** #8137 merge tail — the runner was SIGTERM'd an hour into a queue; its orphaned heartbeat (same argv, `sleep 60` child, same log) was watched as the runner for another hour and exited at 3600 s with no banner. See `knowledge-base/project/learnings/workflow-issues/2026-09-14-the-runner-i-watched-was-its-own-heartbeat-subshell-and-ci-tested-a-tree-i-had-never-built.md`.
+**Identify the runner by its rc file, never by a pid and never by shape.** `tc_acquire` forks its heartbeat as a background subshell, so during a lock wait there are two `bash scripts/test-all.sh` processes with the same argv, cwd and fds; the heartbeat's fingerprint is a lone `sleep <n>` child and a silent self-exit at exactly the lock budget. If the wrapper's rc file reads 143 while such a process is still writing heartbeats, the runner is dead and the rc file is its verdict — a live runner whose budget expired would have printed `LOCK_CONTENDED_PROCEEDING` and run the battery unserialized beside the holder (the false-RED shape; expiry never aborts). Launch with `setsid nohup … &` (the new session is what keeps a group-kill off the runner), have the script write its rc as its LAST act, and wait on that FILE: `setsid nohup bash -c 'bash scripts/test-all.sh --affected > "$LOG" 2>&1; echo $? > "$RCF"' >/dev/null 2>&1 &` (or `--full` under `FULL_BATTERY`) then `until [ -s "$RCF" ]; do sleep 30; done`. **Do NOT watch `$!` — it does not track the runner.** `setsid` forks when it is not already a process-group leader, so `$!` is a short-lived parent that exits in under a second while the battery runs on, and a `kill -0 $!` loop falls through immediately: every line after it then reports a verdict for a run that has not finished. (When the rc lands or the wait misbehaves, load [detached-battery-verdict.md](./references/detached-battery-verdict.md).) Measured 2026-09-17 with both controls — under `setsid` the pid was gone after 1 s with the runner still working, and the same launch WITHOUT `setsid` kept `$!` alive and tracking correctly, which is what makes the cause the fork rather than the timing. Observed live: `BATTERY COMPLETE rc=1` printed for a battery that had died in under a second on a mise shim fault and never ran a single suite — rc=1 with no `[FAIL]` lines reads exactly like "the battery ran and one suite failed". This is the #8137 trap below one level up: there the watched process was the runner’s own heartbeat subshell, here it is `setsid`’s forked parent, and in both the pid you can see is not the runner. The rc file is already this skill’s stated source of truth ("Read the rc file, never the background-task completion notification"), so polling it is what makes the wait agree with the verdict. **And rc is only a test verdict once the toolchain started:** grep the log for `mise ERROR|command not found` first — a shim with no resolved version exits 1 emitting no `[FAIL]` lines at all, and `rc=4` is REFUSED (nothing ran), not a reap. If you do queue inside the lock (`SOLEUR_ALLOW_FULL_GATE=1`) and raise `TC_LOCK_TIMEOUT`, raise `TC_RUNTIME_CEILING_S` with it (`$((TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT + 10800))` — since #8579 the ticket-queue wait defaults to the lock budget, so the charged wait is BOTH): the wait is charged against the ceiling, so a ceiling below the combined wait plus execution budget exits 3 having run nothing. **Why:** #8137 merge tail — the runner was SIGTERM'd an hour into a queue; its orphaned heartbeat (same argv, `sleep 60` child, same log) was watched as the runner for another hour and exited at 3600 s with no banner. See `knowledge-base/project/learnings/workflow-issues/2026-09-14-the-runner-i-watched-was-its-own-heartbeat-subshell-and-ci-tested-a-tree-i-had-never-built.md`.
 
-**What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `soleur:work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
+**What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `soleur:work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. Since #8322 the run is `test-all.sh --affected` — the diff-selected suites plus the always-on ratchets — unless the operator passed `soleur:ship --full`. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) `--affected` again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
 
-- **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.
+- **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge — and CI still runs the FULL battery. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.
 - **This is the LAST LOCAL fail-fast checkpoint.** It is not the post-all-code-changes position either: Phase 5.5 contains code-mutating gates that run after it.
-- **It is the sole BLOCKING gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so nothing here stops `gh pr merge --auto`. It is NOT the only place those suites run: `infra-validation.yml`'s `deploy-script-tests` job executes the same registered set on every PR touching `apps/*/infra/**` (it carries no `needs:`/`if:`), and `main-health-monitor` re-runs `TEST_GROUP=infra` on `main` every six hours. Both are visible and neither blocks. So the accurate statement is that an infra regression can reach `main` past a red-but-non-required check — not that it reaches production unobserved. Promoting `infra-validate-required` into the required set is the real fix; tracked as #6480.
-- **`TEST_GROUP=all` is not, by itself, a full battery on a local run.** `_diff_touches` in [scripts/test-all.sh](../../../../scripts/test-all.sh) short-circuits to "relevant" only under `CI` or `SOLEUR_TEST_FORCE_ALL=1`, neither of which holds here — so a local `TEST_GROUP=all` still DECLINES the two heavy mutation batteries and the nested infra runner when the diff does not touch their paths (ADR-181). A healthy local run therefore reads `N-k/N`, not `N/N`. If you need the declined suites to actually execute, set `SOLEUR_TEST_FORCE_ALL=1`; and note `SOLEUR_INCIDENT_SKIP=1` drops the infra set entirely while leaving this pin satisfied.
+- **It is the sole BLOCKING gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so nothing here stops `gh pr merge --auto`. Under `--affected` the infra runner is selected by its declared consumed edge whenever the diff touches `apps/web-platform/infra/`, so this claim survives the mode change. It is NOT the only place those suites run: `infra-validation.yml`'s `deploy-script-tests` job executes the same registered set on every PR touching `apps/*/infra/**` (it carries no `needs:`/`if:`), and `main-health-monitor` re-runs `TEST_GROUP=infra` on `main` every six hours. Both are visible and neither blocks. So the accurate statement is that an infra regression can reach `main` past a red-but-non-required check — not that it reaches production unobserved. Promoting `infra-validate-required` into the required set is the real fix; tracked as #6480.
+- **A local `--affected` run is not, and is not meant to be, the full battery.** Suites the diff does not reach decline as counted `not-affected` skips — a healthy affected run reads `N-k/N` with a `not-affected` breakdown field, not `N/N`. Affected+ratchets does not exercise suite×suite interaction; the backstop for that class is CI's sharded full battery on the PR head, so a green affected run is not a full-coverage claim. Selection fails toward coverage: an undecidable diff, a missing declarations index, or a diff touching the runner or index itself degrades the run to the full battery and prints `AFFECTED_FALLBACK reason=…`. If the declined suites must execute, that is `--full` (or legacy `SOLEUR_TEST_FORCE_ALL=1`); and note `SOLEUR_INCIDENT_SKIP=1` drops the infra set entirely while leaving this pin satisfied.
 
-**`TEST_GROUP=all` is pinned, and that pin is load-bearing.** Sharding this run for speed would delete the only *blocking* gate the registered infra suites have. It is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding* the command rather than deleting it. `TEST_GROUP=affected` exists for LOCAL ITERATION (work Phase 2 §9) — it is the runner's scoped mode (declines counted, `[skip] (affected)` lines, epilogue scope note), and it is NOT a substitute for this checkpoint: substituting it would read a scoped run as the ship gate, which is the exact misreading its own epilogue warns against. Read the pin honestly, though: `TEST_GROUP` selects the shard, and `_infra_in_diff` decides whether the infra runner executes at all — so the group pin is necessary and not sufficient, and the epilogue NOTE is what tells you which happened.
+**The mode flag is pinned, and that pin is load-bearing.** This dispatch must run `--affected` (or `--full` under `FULL_BATTERY`) — never a bare `test-all.sh` whose mode would silently be the operator's default, and never a `TEST_GROUP=` shard, which would delete the only *blocking* gate the registered infra suites have. It is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding or de-flagging* the command rather than deleting it. `TEST_GROUP=affected` (#8591) exists for LOCAL ITERATION (work Phase 2 §9) — it is the runner's heuristic scoped mode (declines counted, `[skip] (affected)` lines, epilogue scope note), and it is NOT a substitute for this checkpoint: substituting it would read a scoped run as the ship gate, which is the exact misreading its own epilogue warns against. Read the pin honestly, though: the mode selects the battery's breadth, and `_infra_in_diff`/the infra consumed edge decides whether the infra runner executes at all — so the pin is necessary and not sufficient, and the epilogue is what tells you which happened.
 
-**A reaped run is UNRESOLVED — never ship on it, and rc=4 is not a reap.** The outcome space is four-way, not three: `rc=1` with `[FAIL]` lines is a red diff; `rc=3` with `[KILLED]` lines and a terminal marker means a suite's coverage was never obtained (re-run that suite in isolation); **`rc=4` is REFUSED — nothing ran at all**, for either of two reasons and both overridden by `SOLEUR_ALLOW_FULL_GATE=1`: `SOLEUR_SUBAGENT=1` was set, or a sibling full-gate run was already in flight (#7553); and no marker with no rc file is a harness reap. The rc=4 case exits in under a second with no `[FAIL]` lines, which makes it the easiest to misread as a reap. Note that ship reached from a spawned agent (a drain fan-out delegating to one-shot) does **not** inherit `SOLEUR_SUBAGENT` — the harness does not set it, so that path trips rc=4 only via the sibling condition, or not at all. Check for the rc file before concluding anything. With only one full run left in the pipeline there is no second chance downstream, and "unresolved" under ship-time pressure resolves to "ship anyway" far more often than to a re-run. Read the **rc file**, never the background-task completion notification.
+**A reaped run is UNRESOLVED — never ship on it, and rc=4 is not a reap.** The outcome space is four-way, not three: `rc=1` with `[FAIL]` lines is a red diff; `rc=3` with `[KILLED]` lines and a terminal marker means a suite's coverage was never obtained (re-run that suite in isolation); **`rc=4` is REFUSED — nothing ran at all**; and no marker with no rc file is a harness reap. Since #8322 an `--affected` run is exempt from both contention refusals (that is the point of the mode), so rc=4 on an affected dispatch means one of: the run DEGRADED to full (`AFFECTED_FALLBACK reason=…` in the log) and then hit `SOLEUR_SUBAGENT=1` or a sibling full-gate run (#7553) — both overridden by `SOLEUR_ALLOW_FULL_GATE=1`; or selection found literally nothing to run or a gutted declarations index (a `below-floor`/`zero-selected` refusal — investigate the index, do not force). An explicit `--full` dispatch keeps the original two refusal arms. The rc=4 case exits in under a second with no `[FAIL]` lines, which makes it the easiest to misread as a reap. Note that ship reached from a spawned agent (a drain fan-out delegating to one-shot) does **not** inherit `SOLEUR_SUBAGENT` — the harness does not set it, so that path trips rc=4 only via the sibling condition, or not at all. Check for the rc file before concluding anything. With only one run left in the pipeline there is no second chance downstream, and "unresolved" under ship-time pressure resolves to "ship anyway" far more often than to a re-run. Read the **rc file**, never the background-task completion notification.
 
 **Reading this run is documented once, in [work/SKILL.md](../work/SKILL.md) §9 "Reading a `test-all.sh` run"** — dirty-tree invalidation, the sibling-worktree false RED, harness reaping vs. the three-way split, the Doppler `TEST_GROUP=webplat` caveat, and both coverage-NOTE polarities. Those passages apply verbatim at this position; they are linked rather than restated so the two positions cannot drift.
 
@@ -507,7 +521,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Artifacts committed (brainstorm/spec/plan)
 - [x/skip] Learnings captured (soleur:compound — `skip` only on the Phase 2 probe's interactive no-artifacts path)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
-- [x/skip] Full suite green (Phase 4, `TEST_GROUP=all`), re-run after any post-Phase-4 change
+- [x/skip] Test gate green (Phase 4, `--affected` default / `--full` when operator opted in), re-run after any post-Phase-4 change
 - [ ] No removable probe in the tree (Phase 5.4 gate, ADR-230)
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
@@ -1671,9 +1685,10 @@ bash scripts/check-adr-ordinals.sh
    unrelated ADR now holds that ordinal. Check the CLAUSE LABEL too: a provisional ADR
    drafted with `D1/D2/D3` sections that ships restructured leaves `ADR-<n> D3` dangling on
    both halves, and a pure ordinal bump does not fix it. **Why:** #7195 — nine `ADR-158 D3`
-   citations shipped in `.openhands/hooks/`, five inside the agent-facing deny string; the
-   plan's prescribed sweep globbed a per-feature `plans/` directory that does not exist
-   (it holds flat files) and never covered `.openhands/` at all.
+   citations shipped in a hand-ported hook mirror, five inside the agent-facing deny string;
+   the plan's prescribed sweep globbed a per-feature `plans/` directory that does not exist
+   (it holds flat files) and never covered that mirror at all. (The mirror itself was retired
+   2026-09-23 — ADR-245 — but the lesson is about the sweep's reach, not that directory.)
 3. Re-run `check-adr-ordinals.sh` → must exit 0. Commit + push.
 
 **The collision window extends through Phase 7** (mirrors the migration-number-collision re-check in work Phase 2): a sibling's ADR can land on `main` and be pulled into the branch by a **BEHIND auto-sync AFTER this gate ran**. After any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`, re-run `check-adr-ordinals.sh` and renumber-during-ship before the next merge attempt (see Phase 7 "ADR-ordinal collision after a sync").
@@ -2007,6 +2022,8 @@ Replace `BRANCH_NAME` with the actual branch name.
    gh pr ready PR_NUMBER
    ```
 
+   If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](./references/settle-then-admin-merge.md). **Why:** #8611.
+
 7. Present the PR URL to the user.
 
 **If no open PR exists:**
@@ -2147,7 +2164,7 @@ retired both the driver and AC17.)
 
    ```bash
    git merge --abort
-   bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh origin/main && git push
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main && git push
    ```
 
 2. Identify conflicted files:
