@@ -462,8 +462,8 @@ cardinalities change, and `plugins/soleur/test/c4-count-parity.test.sh` must sta
   `binary-digest-mismatch`.
 - **No GCS fallback (cut at plan review).** The installer falls back to
   `storage.googleapis.com/grok-build-public-artifacts/cli` (the same bytes, measured). A single URL
-  matches the `harness-discovery` Devin precedent. If x.ai outages ever red this required check, add
-  the fallback with the digest check inside the loop.
+  matches the `harness-discovery` Devin precedent. (Superseded at review: the fallback was added,
+  with the digest check inside the loop — see the Review Addendum.)
 - **Annotation text.** `raw` is echoed into `::error::` without a CR/LF strip, the same as the
   Codex/Devin arms. The version assert only runs after the digest has pinned the bytes, so the text
   is the pinned binary's fixed output and cannot forge annotation lines.
