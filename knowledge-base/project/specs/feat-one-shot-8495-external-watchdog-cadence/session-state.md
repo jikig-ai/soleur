@@ -47,3 +47,13 @@ Classification: code, design-risk yes. Design pass (code-simplicity + architectu
 
 ### Mutation battery 2 (review fixes, committed db425b5084, pristine restore)
 26/26 RED: S1 signal, S2 raw dedup-read error, S3 outer fence, S4 poll guard, S5 SIGTERM stop, S6/S6b late settle, S7 job-level cancel, S8 quoted host id, F1–F9 (branch, event, conclusion filters; monotonic slot; interval validation; installation cache + drop; op in error name; tags), W1–W5 (lookup back to --search; title filter dropped; restart gate removed; dedup fn event filter; fail-open), M1 margin 15, G1–G2 walker (require; unresolved). Retry: 3/3 RED (no retry; unbounded retry; no backoff). Create-label cross-check: RED when a create label diverges.
+
+### Ship phase (2026-09-24)
+
+- Pre-ship advisor consult (advisory) found two real gaps, both fixed inline: (1) the margin budget
+  omitted the in-slot retry path (clock worst case 12 min, not 4) → inngest margin 45 → 50, parity
+  test derives and pins `CLOCK_DELAY_MINUTES`; (2) the restart dedup left `RESTART_OK=true` comments
+  claiming "Restart re-dispatched" → restart step emits `restart_dispatch`, claims guarded. AC11
+  threshold loosened 17 → 26 min. Declined: a 60-min cap on non-completed restart runs (the 45-min
+  give-up window already bounds the restart path); the zot-margin-without-clock concern (the App
+  installation already grants `actions: write` — `cron-expenses-verify-by.ts` dispatches with it).

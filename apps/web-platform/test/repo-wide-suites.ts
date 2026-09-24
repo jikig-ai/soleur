@@ -87,6 +87,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/inngest/leader-prompts/tool-surface.test.ts",
   "test/server/inngest/rule-body-gate-recursion-invariant.test.ts",
   "test/server/inngest/sentry-monitor-iac-parity.test.ts",
+  "test/server/watchdog-workflow-idempotence.test.ts",
   "test/service-tools.test.ts",
   "test/supabase-migrations/117-reconcile-ownership-rpc-comments-multi-owner.test.ts",
   "test/workspace-cleanup.test.ts",

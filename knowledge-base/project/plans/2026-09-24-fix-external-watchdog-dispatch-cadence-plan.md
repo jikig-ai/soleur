@@ -85,7 +85,7 @@ Superseded by the work phase and the 13-seat review (record: `knowledge-base/pro
 - **Import boundary:** the `.dependency-cruiser.cjs` rule `watchdog-clock-not-via-inngest` was NOT added (that file is generated and its gate is non-blocking). It is enforced by a TypeScript-AST transitive-import walker in `watchdog-dispatch-clock.test.ts` that fails closed and has positive controls per import form. Every "dependency-cruiser" citation below (Guard 2 assembly + row 6, S1, AC7) means that walker.
 - **Slot math:** the 60-s slot tolerance and the late cutoff were removed (design pass); jitter is 30–120 s; a failed tick is retried in-slot (3 attempts, 2 min apart, re-read first).
 - **Dedup read:** `branch=main`, covering events only (`schedule`, `workflow_dispatch`), runs that never executed ignored.
-- **Sentry margins (measured, not assumed):** the job queue on these workflows is median ~30 s, p90 ~20 min, max ~40 min, so the margins are **inngest 45 (was 15), zot 60 (was 120)**, budget = clock delay + 30-min queue allowance + runtime, ceiling 60. AC3/AC10 below read against these values. Dead-trigger detection is interval + margin = 60 / 120 min; a real outage still pages when a run executes.
+- **Sentry margins (measured, not assumed):** the job queue on these workflows is median ~30 s, p90 ~20 min, max ~40 min, so the margins are **inngest 50 (was 15), zot 60 (was 120)**, budget = the clock's worst-case delay (the in-slot retry path, 12 min — ship-phase advisor consult; 45 was a one-tick budget) + 30-min queue allowance + runtime, ceiling 60. AC3/AC10 below read against these values. Dead-trigger detection is interval + margin = 65 / 120 min; a real outage still pages when a run executes.
 - **Workflows are no longer comment-only (AC5 superseded):** tracker create-or-comment lookups list by label instead of the lagging issue search, and the auto-restart step skips a restart that is queued/running/<12 min old (`scripts/inngest-restart-age-gate.sh`). Both are pinned by `watchdog-workflow-idempotence.test.ts`, which executes the workflows' own lines.
 
 ## Overview
@@ -723,7 +723,7 @@ The option table under Proposed Solution is the decision record, and ADR-248 car
 
 ```yaml
 liveness_signal:
-  what: "Sentry cron monitors scheduled-inngest-health (*/15, margin 45) and scheduled-zot-restart-loop (0 * * * *, margin 60), fed by each workflow's final sentry-heartbeat step; after this change they measure clock + dispatch + runner queue + run end to end (margins sized to the MEASURED job queue, #8495 review). Per-tick in-surface marker SOLEUR_WATCHDOG_DISPATCH (WARN) from each web host"
+  what: "Sentry cron monitors scheduled-inngest-health (*/15, margin 50) and scheduled-zot-restart-loop (0 * * * *, margin 60), fed by each workflow's final sentry-heartbeat step; after this change they measure clock + dispatch + runner queue + run end to end (margins sized to the MEASURED job queue, #8495 review). Per-tick in-surface marker SOLEUR_WATCHDOG_DISPATCH (WARN) from each web host"
   cadence: "15 min (inngest-health) / 60 min (zot); a dead trigger pages within interval + margin = 60 min / 120 min; a real outage pages when a run executes (error check-in), independent of the margin"
   alert_target: "Sentry monitor-failure issue -> operator page (failure_issue_threshold = 1)"
   configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf (sentry_cron_monitor.scheduled_inngest_health, sentry_cron_monitor.zot_restart_loop_alarm); apps/web-platform/server/watchdog-dispatch-table.ts; apps/web-platform/server/cron-liveness-marker.ts (emitWatchdogDispatch)"
@@ -1258,7 +1258,7 @@ and the unhandled rejection. The polling redesign then made its chain-specific P
   `./node_modules/.bin/vitest run test/server/inngest/sentry-monitor-iac-parity.test.ts test/server/inngest/function-registry-count.test.ts test/server/inngest/cron-main-health-monitor.test.ts`.
   Guard 1 rows 1, 3, 7 and 8 and Guard 2 row 6 were each applied once locally and observed RED.
   The work log records those five RED outputs.
-- [x] **AC3** In `apps/web-platform/infra/sentry/cron-monitors.tf` (> **Superseded 2026-09-24 (review, measured queue):** margins are inngest 45 / zot 60 — see the Addendum):
+- [x] **AC3** In `apps/web-platform/infra/sentry/cron-monitors.tf` (> **Superseded 2026-09-24 (review, measured queue):** margins are inngest 50 / zot 60 — see the Addendum):
   - `zot_restart_loop_alarm` has `checkin_margin_minutes = 30`;
   - `scheduled_inngest_health` stays at `15`;
   - both crontabs are byte-identical to `origin/main`;
@@ -1311,7 +1311,7 @@ and the unhandled rejection. The polling redesign then made its chain-specific P
   `"tick_escaped"`. The canary is not shipped by design.
 - [ ] **AC10** At least 50 min after the deploy, the Sentry API reports both monitors,
   `scheduled-inngest-health` and `scheduled-zot-restart-loop`, as `ok`. The live
-  `zot_restart_loop_alarm` margin reads 60 and `scheduled_inngest_health` reads 45 (Addendum). Also confirm no Sentry event with
+  `zot_restart_loop_alarm` margin reads 60 and `scheduled_inngest_health` reads 50 (Addendum). Also confirm no Sentry event with
   `feature=watchdog-dispatch-clock` `op=mint`, which proves the narrowed `actions` mint works.
 - [ ] **AC11** At least 50 min after the deploy, run:
 
@@ -1322,7 +1322,7 @@ and the unhandled rejection. The polling redesign then made its chain-specific P
            max_gap_min: ([range(1;length) as $i | ((.[$i].createdAt|fromdate) - (.[$i-1].createdAt|fromdate))/60] | max // 0)}'
   ```
 
-  The output must show `dispatched >= 3` and `max_gap_min <= 17`. No more than one 15-min slot
+  The output must show `dispatched >= 3` and `max_gap_min <= 26` (one 15-min interval plus the clock's worst-case in-slot retry delay of ~11 min over its earliest dispatch; 17 would fail on a routine retry — ship-phase advisor consult). No more than one 15-min slot
   may hold two `workflow_dispatch` runs.
 
   If AC9, AC10 or AC11 fails, postmerge reopens #8495 with the output attached.

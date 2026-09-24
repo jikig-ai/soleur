@@ -58,7 +58,7 @@ case "$1 $2" in
   "run list")
     [[ "\${STUB_RUNS_FAIL:-0}" == "1" ]] && exit 1
     printf '%s' "$STUB_RUNS" ;;
-  "workflow run") : ;;
+  "workflow run") [[ "\${STUB_DISPATCH_FAIL:-0}" == "1" ]] && exit 1; : ;;
   *) echo "stub: unexpected gh $*" >&2; exit 64 ;;
 esac
 `,
@@ -184,19 +184,55 @@ describe("the auto-restart step never stacks a second restart (#8495)", () => {
   });
 
   it.each([
-    ["a restart is queued", JSON.stringify([{ event: "workflow_dispatch", status: "queued", createdAt: iso(2) }]), "0", false],
-    ["a restart finished 5 min ago", JSON.stringify([{ event: "workflow_dispatch", status: "completed", createdAt: iso(5) }]), "0", false],
-    ["the last restart was 30 min ago", JSON.stringify([{ event: "workflow_dispatch", status: "completed", createdAt: iso(30) }]), "0", true],
-    ["no restart ever ran", "[]", "0", true],
-    ["the run list read failed (fail-open)", "", "1", true],
-  ])("%s → dispatch=%s", (_label, runs, fail, dispatch) => {
+    ["a restart is queued", JSON.stringify([{ event: "workflow_dispatch", status: "queued", createdAt: iso(2) }]), "0", "0", false, "skipped_recent"],
+    ["a restart finished 5 min ago", JSON.stringify([{ event: "workflow_dispatch", status: "completed", createdAt: iso(5) }]), "0", "0", false, "skipped_recent"],
+    ["the last restart was 30 min ago", JSON.stringify([{ event: "workflow_dispatch", status: "completed", createdAt: iso(30) }]), "0", "0", true, "dispatched"],
+    ["no restart ever ran", "[]", "0", "0", true, "dispatched"],
+    ["the run list read failed (fail-open)", "", "1", "0", true, "dispatched"],
+    ["the dispatch itself failed", "[]", "0", "1", true, "failed"],
+  ])("%s → dispatch=%s", (_label, runs, fail, dispatchFail, dispatch, outcome) => {
+    const ghOut = join(scratch, `gh-output-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(ghOut, "");
     const { out, log } = runBash(step!.run!, {
       STUB_RUNS: runs as string,
       STUB_RUNS_FAIL: fail as string,
+      STUB_DISPATCH_FAIL: dispatchFail as string,
       GITHUB_WORKSPACE: REPO_ROOT,
+      GITHUB_OUTPUT: ghOut,
     });
     const dispatched = log.split("\n").some((l) => l.startsWith("workflow run restart-inngest-server.yml"));
     expect(dispatched).toBe(dispatch);
     if (!dispatch) expect(out).toContain("not dispatching a second restart");
+    // The step records WHAT happened, so the tracking comment can tell the truth.
+    expect(readFileSync(ghOut, "utf-8")).toBe(`restart_dispatch=${outcome}\n`);
+  });
+
+  // #6374 Defect 3 (truthful comments), extended by the pre-ship advisor consult: a
+  // run whose restart was deduped (or whose dispatch failed) must not comment
+  // "Restart re-dispatched" — the age gate's restart_ok=true no longer implies a dispatch.
+  it("the tracking comment claims a re-dispatch only when this run dispatched one", () => {
+    const doc = parseYaml(readFileSync(join(REPO_ROOT, WORKFLOWS[0]), "utf-8")) as {
+      jobs: Record<string, { steps?: Array<Step & { id?: string; env?: Record<string, string> }> }>;
+    };
+    const all = Object.values(doc.jobs).flatMap((j) => j.steps ?? []);
+    const restart = all.find((s) => s.name === "Auto-dispatch inngest restart (failure)")!;
+    expect(restart.id).toBe("restart");
+    const tracking = all.find((s) => s.name === "File or comment tracking issue (failure)")!;
+    expect(tracking.env?.RESTART_DISPATCH).toBe("${{ steps.restart.outputs.restart_dispatch }}");
+    const run = tracking.run!;
+    const claim = run.indexOf("Restart re-dispatched");
+    expect(claim).toBeGreaterThan(-1);
+    // Every line that asserts a dispatch sits under a RESTART_DISPATCH == dispatched test.
+    for (const phrase of ["Restart re-dispatched", "This run dispatched `restart-inngest-server.yml`"]) {
+      const at = run.indexOf(phrase);
+      expect(at, phrase).toBeGreaterThan(-1);
+      const guard = run.lastIndexOf('"$RESTART_DISPATCH" == "dispatched"', at);
+      expect(guard, `${phrase}: no RESTART_DISPATCH == dispatched guard before it`).toBeGreaterThan(-1);
+      // …and no other branch keyword intervenes between the guard and the claim.
+      expect(run.slice(guard, at), phrase).not.toMatch(/\n\s*(else|elif|fi)\b/);
+    }
+    // The deduped and failed cases each say so.
+    expect(run).toContain("skipped_recent");
+    expect(run).toMatch(/restart dispatch FAILED/);
   });
 });

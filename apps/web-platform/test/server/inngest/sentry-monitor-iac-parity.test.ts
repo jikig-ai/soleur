@@ -22,7 +22,9 @@ import { parse as parseYaml } from "yaml";
 import { WATCHDOG_DISPATCH_TABLE } from "@/server/watchdog-dispatch-table";
 import {
   JITTER_MAX_MS,
+  MAX_ATTEMPTS_PER_SLOT,
   POLL_MS,
+  RETRY_BACKOFF_MS,
   TICK_DEADLINE_MS,
 } from "@/server/watchdog-dispatch-clock";
 
@@ -618,15 +620,24 @@ function intervalCrontab(minutes: number): string {
   throw new Error(`no canonical crontab for a ${minutes}-min interval`);
 }
 
-// Margin budget for a clock-dispatched monitor. Floor = the clock's own delay
-// (poll + JITTER_MAX_MS + TICK_DEADLINE_MS) + runner QUEUE + the monitor's max
-// runtime. The queue allowance is MEASURED, not assumed: job started_at −
+// Margin budget for a clock-dispatched monitor. Floor = the clock's own
+// WORST-CASE delay + runner QUEUE + the monitor's max runtime. The clock's worst
+// case is the in-slot retry path, not one tick: JITTER_MAX_MS, then
+// MAX_ATTEMPTS_PER_SLOT ticks each reached on the next poll (POLL_MS) and each
+// spending up to TICK_DEADLINE_MS, separated by (MAX_ATTEMPTS_PER_SLOT - 1)
+// RETRY_BACKOFF_MS waits = 12 min today. A budget that counts one tick (4 min)
+// under-sizes the margin exactly when the GitHub API is failing (pre-ship advisor
+// consult, #8495). The queue allowance is MEASURED, not assumed: job started_at −
 // created_at on the last 40 runs of each watchdog (2026-09-24, #8495 review):
 //   scheduled-inngest-health: median 32 s, p75 635 s, p90 1274 s, max 2272 s
 //   scheduled-zot-restart-loop: median 17 s, p75 680 s, p90 1169 s, max 2438 s
 // Re-measure with the command in cron-monitors.tf before changing it. Ceiling:
 // a dead trigger must page within interval + MAX_MARGIN_MINUTES.
-const CLOCK_DELAY_MINUTES = (POLL_MS + JITTER_MAX_MS + TICK_DEADLINE_MS) / 60_000;
+const CLOCK_DELAY_MINUTES =
+  (JITTER_MAX_MS +
+    MAX_ATTEMPTS_PER_SLOT * (POLL_MS + TICK_DEADLINE_MS) +
+    (MAX_ATTEMPTS_PER_SLOT - 1) * RETRY_BACKOFF_MS) /
+  60_000;
 const QUEUE_ALLOWANCE_MINUTES = 30;
 const MAX_MARGIN_MINUTES = 60;
 function marginWithinBudget(
@@ -689,10 +700,12 @@ const HOST_ID_SET_RE =
 
 describe("Watchdog dispatch clock parity (#8495)", () => {
   it("marginWithinBudget: boundary + permitted rows pass, over-wide / too-tight rows fail", () => {
-    // floor = ceil(4 + 30 + runtime); ceiling = MAX_MARGIN_MINUTES.
-    expect(marginWithinBudget(42, 8)).toBe(true); // inclusive floor
+    // floor = ceil(12 + 30 + runtime); ceiling = MAX_MARGIN_MINUTES.
+    expect(CLOCK_DELAY_MINUTES).toBe(12); // retry path, not one tick
+    expect(marginWithinBudget(50, 8)).toBe(true); // inclusive floor
     expect(marginWithinBudget(60, 10)).toBe(true); // inclusive ceiling
-    expect(marginWithinBudget(41, 8)).toBe(false); // one under the floor
+    expect(marginWithinBudget(49, 8)).toBe(false); // one under the floor
+    expect(marginWithinBudget(45, 8)).toBe(false); // the one-tick budget (retry-blind)
     expect(marginWithinBudget(15, 8)).toBe(false); // the pre-review margin (queue-blind)
     expect(marginWithinBudget(120, 10)).toBe(false); // the #8450 jitter margin
   });

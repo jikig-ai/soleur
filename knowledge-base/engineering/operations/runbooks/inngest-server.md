@@ -593,7 +593,7 @@ server (`apps/web-platform/server/watchdog-dispatch-clock.ts`), on every deploye
 `schedule:` crons are only the fallback: GitHub delivered them once every 2–7 h. The clock is
 not an Inngest function because it watches Inngest. The run is created within seconds of the
 dispatch, but its job then waits in the org runner queue (median ~30 s, p90 ~20 min), so the
-Sentry monitors (`scheduled-inngest-health` margin 45, `scheduled-zot-restart-loop` margin 60)
+Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-loop` margin 60)
 are sized for that queue. A real outage still pages as soon as a run executes.
 
 1. **Is it running?** Each web host logs one `armed` row at boot and about five tick rows an
@@ -640,7 +640,8 @@ are sized for that queue. A real outage still pages as soon as a run executes.
    `workflow_dispatch:` + its fallback `schedule:` and no other trigger, a `concurrency`
    group with `cancel-in-progress: false`, and must tolerate a repeat run in one slot. Budget
    the monitor margin in `apps/web-platform/infra/sentry/cron-monitors.tf` as clock delay
-   (poll + jitter + tick deadline, `CLOCK_DELAY_MINUTES`) + queue allowance
+   (the worst-case retry path: jitter + each attempt's poll and tick deadline + the backoffs
+   between attempts, `CLOCK_DELAY_MINUTES`) + queue allowance
    (`QUEUE_ALLOWANCE_MINUTES`) + max runtime, at most `MAX_MARGIN_MINUTES` — the constants and
    the check live in `sentry-monitor-iac-parity.test.ts`. Update the expected slug set there
    and the `api -> github` watchdog edge and the `github -> sentry` workflow list in

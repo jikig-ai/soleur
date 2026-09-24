@@ -39,9 +39,10 @@ The web-platform Node server runs a **watchdog dispatch clock**
 - It arms only when `NODE_ENV=production` and `SOLEUR_HOST_ID` is set. Only `ci-deploy.sh`
   sets that variable, so the clock runs on each deployed web host and never in CI, e2e or dev.
 - Each workflow keeps its `schedule:` cron as a **fallback**. The Sentry monitor margins are
-  budgeted for the clock PLUS the measured runner queue: inngest-health margin 45 (was 15),
-  zot 60 (was 120). The margin bounds only dead-trigger detection (clock dark on both hosts
-  and no GitHub tick): interval + margin = 60 / 120 min. A real outage pages as soon as a run
+  budgeted for the clock's worst case (its in-slot retry path, 12 min) PLUS the measured
+  runner queue: inngest-health margin 50 (was 15), zot 60 (was 120). The margin bounds only
+  dead-trigger detection (clock dark on both hosts and no GitHub tick): interval + margin =
+  65 / 120 min. A real outage pages as soon as a run
   executes and posts `?status=error` — slot + ~4 min + queue + runtime, typically ~10 min and
   ~30 min at p90 — independent of the margin. `sentry-monitor-iac-parity.test.ts` enforces
   the budget.

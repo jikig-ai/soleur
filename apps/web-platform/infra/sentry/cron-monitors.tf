@@ -33,7 +33,7 @@
 # with larger margins (360/120) sized for GHA schedule-delivery jitter, not
 # Inngest's. Since #8495 `zot_restart_loop_alarm` and `scheduled_inngest_health`
 # are dispatched by the web server's watchdog clock (ADR-248), so their margins
-# are budgeted for the clock plus the MEASURED runner queue instead (inngest 15 -> 45, zot
+# are budgeted for the clock plus the MEASURED runner queue instead (inngest 15 -> 50, zot
 # 120 -> 60; see each resource).
 # Daily/weekly monitors use 30-240 min as their observed jitter dictates.
 # The TR9 substrate-migration sequence completed the move off GHA hourly cron
@@ -666,10 +666,12 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
 # clock (apps/web-platform/server/watchdog-dispatch-clock.ts, ADR-248) fires
 # workflow_dispatch every 15-min slot from both web hosts; the workflow's own
 # `schedule:` cron is only the FALLBACK (GHA measured one scheduled run per 2-7 h).
-# checkin_margin_minutes = 45 is budgeted for that clock (#8495 review): poll (<= 0.5 min)
-# + jitter (<= 2 min, JITTER_MAX_MS) + the tick itself (<= 1.5 min deadline) + RUNNER QUEUE
-# (30 min allowance) + job runtime (max_runtime_minutes = 8, the probe job's
-# `timeout-minutes: 8`; the single final heartbeat is in that job) = <= 42 min. The queue is
+# checkin_margin_minutes = 50 is budgeted for that clock (#8495 review): the clock's
+# WORST case is its in-slot retry path — jitter (<= 2 min, JITTER_MAX_MS) + 3 attempts
+# (MAX_ATTEMPTS_PER_SLOT), each reached on the next poll (<= 0.5 min) and bounded by the
+# tick deadline (<= 1.5 min), separated by 2 backoffs (RETRY_BACKOFF_MS, 2 min) = 12 min —
+# + RUNNER QUEUE (30 min allowance) + job runtime (max_runtime_minutes = 8, the probe job's
+# `timeout-minutes: 8`; the single final heartbeat is in that job) = <= 50 min. The queue is
 # the dominant term and is MEASURED on this workflow's own jobs (job started_at - created_at,
 # last 40 runs, 2026-09-24): median 32 s, p75 635 s, p90 1274 s, max 2272 s — the org runner
 # budget (#8450) delays dispatched and scheduled runs alike, so a 15-min margin would miss
@@ -677,7 +679,7 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
 #   for id in $(gh run list --workflow scheduled-inngest-health.yml --limit 40 --json databaseId --jq '.[].databaseId'); do
 #     gh api repos/jikig-ai/soleur/actions/runs/$id/jobs --jq '[.jobs[] | select(.started_at != null) | ((.started_at|fromdate) - (.created_at|fromdate))] | max'; done | sort -n
 # The margin bounds only DEAD-TRIGGER detection (clock dark on both hosts AND no GHA tick):
-# interval + margin = 60 min. A real inngest outage pages as soon as a run executes — the run
+# interval + margin = 65 min. A real inngest outage pages as soon as a run executes — the run
 # posts ?status=error — i.e. slot + ~4 min + queue + runtime (median ~10 min, p90 ~30 min),
 # independent of this margin. sentry-monitor-iac-parity.test.ts enforces the budget. Slug MUST match the `monitor-slug` in the
 # workflow's sentry-heartbeat step (parity-asserted by
@@ -691,7 +693,7 @@ resource "sentry_cron_monitor" "scheduled_inngest_health" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-inngest-health"
   schedule                = { crontab = "*/15 * * * *" }
-  checkin_margin_minutes  = 45
+  checkin_margin_minutes  = 50
   max_runtime_minutes     = 8
   failure_issue_threshold = 1
   recovery_threshold      = 1
@@ -1068,10 +1070,10 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 # hourly slot from both web hosts; the workflow's `schedule:` cron is only the FALLBACK. The old
 # margin of 120 (2× the interval) existed to absorb GHA `schedule:` jitter (measured gaps up to
 # 243 min on the old */30 cadence); a dispatched run is created within seconds, so it is
-# re-derived: checkin_margin_minutes = 60 >= poll (<= 0.5 min) + jitter (<= 2 min) + tick
-# (<= 1.5 min) + RUNNER QUEUE (30 min allowance; measured on this workflow's jobs 2026-09-24:
+# re-derived: checkin_margin_minutes = 60 >= the clock's worst case (12 min: jitter + 3
+# retried ticks + 2 backoffs, see scheduled_inngest_health) + RUNNER QUEUE (30 min allowance; measured on this workflow's jobs 2026-09-24:
 # median 17 s, p90 1169 s, max 2438 s — see scheduled_inngest_health for the command) +
-# runtime (max_runtime_minutes = 10; the job's `timeout-minutes: 8`) = <= 44 min.
+# runtime (max_runtime_minutes = 10; the job's `timeout-minutes: 8`) = <= 52 min.
 # A dead trigger (clock dark on both hosts AND no GHA tick) pages within interval + margin =
 # 120 min (was ~3 h). This monitor posts a SINGLE end-of-run heartbeat within ~1-2 min of the checker
 # finishing (a small bash probe, not a claude-eval spawn); detection of a loop itself stays

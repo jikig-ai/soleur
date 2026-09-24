@@ -27,8 +27,8 @@ have missed ~40% of slots — recreating the exact noisy-alarm defect the PR exi
 
 - `workflow_dispatch` fixes RUN creation (seconds, every time) — it does nothing for the JOB's
   wait in the org runner queue (#8450's concurrency budget). Budget the monitor margin as
-  clock delay (poll + jitter + tick deadline) + a MEASURED queue allowance + runtime: inngest 45,
-  zot 60. `sentry-monitor-iac-parity.test.ts` pins the budget and names the re-measure command.
+  the clock's WORST-CASE delay (its in-slot retry path: jitter + 3 × (poll + tick deadline) +
+  2 backoffs = 12 min) + a MEASURED queue allowance + runtime: inngest 50, zot 60. `sentry-monitor-iac-parity.test.ts` pins the budget and names the re-measure command.
 - The margin bounds only dead-trigger detection; a real outage pages as soon as a run executes
   and posts `?status=error`, independent of the margin — say which one a number governs.
 - "The other host covers a failed slot" is false for correlated failures: a GitHub API blip hits
@@ -49,7 +49,7 @@ failures: for every "the other replica covers it", name a failure both replicas 
 ## Session Errors
 
 1. **Plan margin budget used a queue sample from other workflows** (review P1). Recovery:
-   re-measured on the watchdogs' own jobs via `gh api …/runs/<id>/jobs`, re-derived margins 45/60,
+   re-measured on the watchdogs' own jobs via `gh api …/runs/<id>/jobs`, re-derived margins (45 then 50 — see error 14)/60,
    pinned the budget in the parity test. **Prevention:** plan-sharp-edges bullet (routed in this
    PR): measure latency on the exact population the budget governs; cite the command.
 2. **Unmeasured claims in first-draft prose** ("start within seconds, every time", "rare
@@ -100,3 +100,19 @@ failures: for every "the other replica covers it", name a failure both replicas 
 
 category: integration-issues
 module: watchdog-dispatch-clock
+14. **The in-slot retry was added after the margin budget was derived, and the budget kept
+    counting one tick** (4 min of clock delay instead of 12), so inngest's 45-min margin
+    under-sized exactly the case the retry exists for — a GitHub API blip. Caught by the
+    ship-phase advisor consult, not by review or the parity test (the test pinned the stale
+    formula). Recovery: the parity budget now derives `CLOCK_DELAY_MINUTES` from
+    `MAX_ATTEMPTS_PER_SLOT`/`RETRY_BACKOFF_MS` and pins it at 12; inngest margin 50.
+    **Prevention:** when a change adds a delay term to a code path (a retry, a backoff, a
+    second attempt), re-derive every budget that path feeds in the same commit, and pin the
+    derived value in the test so the next added term turns it RED.
+15. **The restart dedup made an existing truthful-comment invariant false** (#6374 Defect 3):
+    `restart_ok=true` stopped implying "a restart was dispatched", so a deduped run commented
+    "Restart re-dispatched". Caught by the same consult. Recovery: the restart step now emits
+    `restart_dispatch` (dispatched / skipped_recent / failed) and every dispatch claim is
+    guarded on it. **Prevention:** when a gate is inserted in front of an action, grep for
+    every downstream consumer that inferred the action from the gate's INPUT (here
+    `RESTART_OK`) and move it to the action's own output.
