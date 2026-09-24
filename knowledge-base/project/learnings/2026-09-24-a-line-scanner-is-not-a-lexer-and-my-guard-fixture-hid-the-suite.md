@@ -83,7 +83,7 @@ Two measurement facts turned up along the way:
    covered. Recovery: build the opener at run time (`hd='<''<'`) and confirm with the guard's own
    `floor_lines_of`. **Prevention:** after adding any `*.test.sh`, check that the guard's covered
    count rises by exactly one against the same base. The guard's fail-open on an unterminated
-   heredoc is filed separately.
+   heredoc is filed as #8689.
 6. **I compared guard-vacuity counts across two different bases** (the branch's old base against a
    newer main) and got a misleading "one lower". Recovery: merge main, then compare. **Prevention:**
    a count delta is valid only between two runs on the same base.
