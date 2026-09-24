@@ -208,6 +208,36 @@ export function getToolTier(toolName: string): ToolTier {
 }
 
 /**
+ * Outbound-email tool inputs carry a third party's address and a message body,
+ * and the published privacy notice scopes where those may be stored (#8532).
+ * For those tools, returns a summary naming only which fields were supplied;
+ * for any other tool, returns null so the caller summarises as usual.
+ */
+export function summarizeOutboundEmailInput(toolName: string, input: unknown): string | null {
+  if (!/(^|__)email_(send|reply|suppress)$/.test(toolName)) return null;
+  const keys = input !== null && typeof input === "object" ? Object.keys(input).sort() : [];
+  return `[outbound email: ${keys.join(", ") || "no fields"} — values withheld]`;
+}
+
+/**
+ * The gate question for the OFFLINE path (push + Resend email via
+ * notifyOfflineUser). The in-app gate must show the outbound recipient and body
+ * (see buildGateMessage), but a push payload and a vendor-retained email are
+ * stores the privacy notice does not list (#8532), so outbound-email gates are
+ * content-free here and the operator reviews the details in the app.
+ */
+export function buildOfflineGateMessage(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string {
+  const shortName = toolName.replace("mcp__soleur_platform__", "");
+  if (shortName === "email_send" || shortName === "email_reply" || shortName === "email_suppress") {
+    return "An agent is waiting for your approval on an outbound email action. Open the conversation to review it.";
+  }
+  return buildGateMessage(toolName, toolInput);
+}
+
+/**
  * Build a human-readable review gate message for a gated tool invocation.
  * The message should clearly describe what the agent wants to do so the
  * founder can make an informed approval decision.

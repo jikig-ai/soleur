@@ -10,7 +10,8 @@
 // DISCONNECTED BOXES reported as a successful result. `assessRender` reports that
 // state as `degraded`: the docs are the defect, not the run.
 //
-// VALIDATION MIRRORS scripts/regenerate-c4-model.sh:85-97, NOT c4-render.ts.
+// VALIDATION MIRRORS plugins/soleur/scripts/render-c4-model.sh (its DIAG_RE and
+// element-count gates), NOT c4-render.ts.
 // The two in-repo precedents deliberately disagree. `c4-render.ts` gates on
 // element count only, reasoning that likec4's stderr wording drifts across patch
 // versions — correct for a RUNTIME save path that cannot pin the CLI. This
@@ -28,7 +29,7 @@ import { join } from "node:path";
 
 /**
  * Pinned likec4 CLI version. MUST stay equal to `LIKEC4_VERSION` in
- * scripts/regenerate-c4-model.sh and the `likec4@…` pin in
+ * plugins/soleur/scripts/render-c4-model.sh and the `likec4@…` pin in
  * apps/web-platform/server/c4-render.ts — a drift guard asserts all three.
  */
 export const LIKEC4_VERSION = "1.50.0";
@@ -39,7 +40,7 @@ export const GENERATED_HEADER =
 
 /**
  * Source-fault detector, behaviourally equivalent to `DIAG_RE` in
- * scripts/regenerate-c4-model.sh:94. likec4@1.50.0 exits 0 on a syntax error —
+ * plugins/soleur/scripts/render-c4-model.sh. likec4@1.50.0 exits 0 on a syntax error —
  * it drops the bad fragment, prints `Invalid <file>` / `Line N:`, and still emits
  * a non-empty but INCOMPLETE model, which element-count alone cannot see.
  *
@@ -47,7 +48,22 @@ export const GENERATED_HEADER =
  * unanchored `Invalid` would false-fail for a checkout directory whose name
  * happens to contain the marker word.
  */
-export const DIAG_RE = /^Invalid |Could not resolve|^\s+Line [0-9]+:/m;
+export const DIAG_RE =
+  /^([0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)? +[A-Z]+ +[^ ]+ +)?Invalid |Could not resolve|^\s+Line [0-9]+:/m;
+
+/**
+ * The environment likec4 runs under. Under CI it switches to a timestamped, ANSI-coloured
+ * reporter; CI and FORCE_COLOR are dropped and NO_COLOR set so the diagnostics reach
+ * `DIAG_RE` plain. `assessRender` also strips ANSI, so either defence alone holds.
+ */
+export function likec4ChildEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, NO_COLOR: "1" };
+  delete env.CI;
+  delete env.FORCE_COLOR;
+  return env;
+}
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 /** Marker sentinel for the C4 producer. */
 export const C4_MARKER = "SOLEUR_KB_SYNC_C4";
@@ -473,8 +489,9 @@ export function assessRender(input: {
    */
   generatedRelationships: number;
 }): RenderVerdict {
-  if (DIAG_RE.test(input.diagnostics)) {
-    const line = input.diagnostics.split("\n").find((l) => DIAG_RE.test(l)) ?? "";
+  const diagnostics = input.diagnostics.replace(ANSI_RE, "");
+  if (DIAG_RE.test(diagnostics)) {
+    const line = diagnostics.split("\n").find((l) => DIAG_RE.test(l)) ?? "";
     return { status: "failed", reason: "source-fault", detail: line.trim() };
   }
   if (input.elementCount === 0) {

@@ -8,39 +8,95 @@ triggers: []
 
 # Runbook: test-scripts sharding
 
-**TL;DR:** `test-scripts*` legs are partitioned positionally by
-`SCRIPTS_SHARD` over `scripts/test-all.sh --enumerate` output, so leg
-membership is an ordinal accident — adding or renaming one suite re-rolls
-every leg. The three heaviest suites live in the dedicated
-`test-scripts-heavy` matrix (#8006); the light group runs K=5. Before
-touching any K, re-derive per-suite durations from the run's own
-`suite-timings-*` artifacts and re-simulate the actual round-robin —
-no K table outlives a registration change.
+**TL;DR:** `test-scripts` leg membership comes from the committed manifest
+`scripts/suite-shard-legs.tsv` — a sticky-LPT assignment regenerated from CI
+timing artifacts (ADR-240). The runner only looks labels up; labels the
+table does not know hash onto a leg deterministically, and an absent/stale/
+n-mismatched table degrades to the old positional round-robin — coverage
+never depends on the table. The three heaviest suites live in the dedicated
+`test-scripts-heavy` matrix (#8006) with their own manifest
+`scripts/suite-shard-legs-heavy.tsv` under the identical contract; the
+light group runs K=6. Regenerate the manifests when legs skew or when
+`scripts-shard-manifest.test.sh` reds:
+`python3 scripts/regenerate-shard-manifest.py --run <green-ci-run> --write`
+(`--group heavy` for the heavy table).
 
-## Current topology (post-#8006)
+## Current topology (post-#8006 phase 2, duration-aware)
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=5 | light `scripts` group, positional round-robin | ~8 min + setup |
-| `test-scripts-heavy` | K=3 | one suite per leg via `SCRIPTS_SHARD` | battery floor ≈ 9 min + setup |
+| `test-scripts` | K=6 | light `scripts` group, manifest lookup + hash fallback | ~6.5-7.7 min suite time + setup |
+| `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
+| `shard-totality-mutations` | 2 | battery rows split `--rows 1-12` / `13-24` | ~5 min each + setup |
 
-Heavy legs: `1/3` → `tests/scripts/registry-gate-mutation-battery`,
+Heavy legs (manifest-assigned, sticky-LPT over measured durations):
+`1/3` → `tests/scripts/registry-gate-mutation-battery`,
 `2/3` → `scripts/battery-tag-authorship-mutations`,
-`3/3` → `.github/scripts/test/run-all.sh`. The assignments are ordinal —
-if the `want_scripts_heavy` block gains a fourth registration, leg `4/3`
-does not exist and the runner's zero-assignment refusal fires; widen the
-matrix deliberately, and let `scripts-shard-totality.test.sh` prove the
-union still covers the reference set.
+`3/3` → `.github/scripts/test/run-all.sh`. If `want_scripts_heavy` gains a
+registration the untabled label hash-falls onto a leg — total but
+unbalanced until a regen; widen the matrix deliberately, and let
+`scripts-shard-totality.test.sh` prove the union still covers the
+reference set.
 
-## Why positional sharding needs re-simulation, not a table
+## The manifests: `suite-shard-legs{,-heavy}.tsv`
+
+Generated data (ADR-235 product artifact — committed). Header carries `n`
+(the leg count of the matrix it was generated for) plus provenance
+(`generated-from-run`, `generated-at`, `generator`); rows are
+`label<TAB>leg`, sorted by label so refreshes diff minimally. Two files,
+one format, one parser: `suite-shard-legs.tsv` serves `TEST_GROUP=scripts`,
+`suite-shard-legs-heavy.tsv` serves `TEST_GROUP=scripts-heavy`. Separate
+files keep a heavy regen from rewriting the light table's
+insertion-stable surface (ADR-240 amendment).
+
+**Runtime engagement is narrow.** The runner uses the group's table only
+when all of: `SCRIPTS_SHARD` set, `TEST_GROUP` is `scripts` or
+`scripts-heavy`, that group's `n` == the spec's N. Anything else — absent
+file, an unrelated group, a K bump pending regen — takes the positional
+path with a stderr notice. Malformed rows, duplicate labels, or
+out-of-range legs exit 2 at parse. `SOLEUR_SHARD_MANIFEST` /
+`SOLEUR_SHARD_MANIFEST_HEAVY` override the paths for tests (`off`
+disables; set-but-empty, relative, or missing paths all exit 2). The
+lookup is parallel indexed arrays scanned with literal `==` — a packed
+`"|label=leg|"` string searched by glob was measured at 6+ CPU-minutes
+per enumerate (glob backtracking); if the structure is ever revisited,
+benchmark the lookup, not the parse.
+
+**Regeneration.**
+
+```bash
+python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write
+python3 scripts/regenerate-shard-manifest.py --group heavy --run <green-ci-run-id> --write
+```
+
+Without `--write` it prints predicted per-leg totals and the incumbent diff.
+`--run` defaults to the latest green `ci.yml` run on `main`; `--timings-dir`
+reads local `suite-timings.tsv` files instead. Sticky-LPT keeps incumbent
+legs within 5% of optimal, so each refresh moves only what balance
+requires. Regenerate when:
+
+- `scripts-shard-manifest.test.sh` reds (n drift, phantom rows, malformed),
+- the follow-through probe reports a leg >900s while others sit near-idle,
+- a suite was renamed (its old row becomes a phantom; the lint names it).
+
+**Merge conflict on the TSV → regenerate, never hand-merge.** Re-run the
+command against a current green run and commit the output. The TSVs are
+deliberately NOT in `resolve-regenerable-conflicts.sh`'s RESOLVABLE-SET:
+regeneration needs `gh` plus a chosen green run id, which the pure-local
+resolver cannot supply — this path stays manual.
+
+## Why the OLD positional method is retained
 
 `SCRIPTS_SHARD=k/K` keeps suites whose registration ordinal ≡ k−1 (mod K)
-under C collation. Any change to the registered set — a new suite, a
-rename, a re-grouped block — shifts every later ordinal and silently
-re-composes every leg. During the #7931 review, adding two suites and
-removing one swung K=3's worst leg between 15.09 and 20.73 minutes purely
-from ordinal position. A K table is a fact about a commit, not about the
-repo.
+under C collation — it remains the degrade path for both groups. Any
+change to the registered set shifts every later ordinal and
+silently re-composes every leg: during the #7931 review, adding two suites
+and removing one swung K=3's worst leg between 15.09 and 20.73 minutes
+purely from ordinal position, and on the post-carve-out light group the
+positional tail measured 797s vs 237s on the best leg (run 35840517639) —
+the asymmetry the manifest exists to remove. A positional K table is a
+fact about a commit, not about the repo; the manifest is the same shape
+made honest — derived, provenance-stamped, and degradable.
 
 ## Re-deriving leg composition (reproducible method)
 
@@ -128,11 +184,14 @@ two pages and inflate the population. The raw `jobs.tsv` is committed at
 - `plugins/soleur/test/scripts-shard-totality.test.sh` — both partitions
   union exactly to their statically extracted reference sets; no drop, no
   duplicate, no valid-but-empty assignment.
+- `plugins/soleur/test/scripts-shard-manifest.test.sh` — manifest hygiene:
+  n == ci.yml leg count, labels ⊆ registered, no dups, every leg pinned,
+  provenance present.
 - `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` — toolchain
   parity asserted on both jobs (bun, likec4, gitleaks).
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — the
-  synthetic `test` check has five legs; a failed or skipped heavy matrix
-  fails it.
+  synthetic `test` check has six light legs; a failed or skipped heavy
+  matrix fails it.
 - `scripts/followthroughs/ci-leg-durations-8006.sh` — post-merge soak
   probe; auto-closes #8006 when ≥3 qualifying main runs show every
   `test-scripts*` leg under 900 s.

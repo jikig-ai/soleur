@@ -11,9 +11,10 @@
 # quantity (the aggregator serializes behind all legs); leg-level is what
 # the #8006 tail is made of.
 #
-# A run is QUALIFYING only when all 8 expected legs are present, each with
+# A run is QUALIFYING only when all 9 expected legs are present, each with
 # conclusion=success and non-null started/completed timestamps:
-#   test-scripts (1/5..5/5) + test-scripts-heavy (1/3..3/3)
+#   test-scripts (1/6..6/6) + test-scripts-heavy (1/3..3/3)
+# (light K went 5 -> 6 in phase 2; the qualifying shape moved with it.)
 # A pre-carve-out run (no heavy legs), a run with a skipped leg (job exists
 # but never started — under fail-closed the aggregator would already be red,
 # but a skipped leg is unmeasurable either way), or a run with a failed leg
@@ -143,11 +144,11 @@ for id in $IDS; do
   nheavy="$(jq '[.[] | select(.name | startswith("test-scripts-heavy ("))] | length' <<<"$TABLE")"
   nok="$(jq '[.[] | select(.ok)] | length' <<<"$TABLE")"
 
-  # All 8 legs present AND all green-and-measured. Anything else is
+  # All 9 legs present AND all green-and-measured. Anything else is
   # non-qualifying, not a sample point (pre-carve-out shape, skipped leg,
   # failed leg — each explained in the header).
-  if [[ "$nlight" -ne 5 || "$nheavy" -ne 3 || "$nok" -ne 8 ]]; then
-    echo "run $id: non-qualifying (light=$nlight/5 heavy=$nheavy/3 green=$nok/8) — skipped"
+  if [[ "$nlight" -ne 6 || "$nheavy" -ne 3 || "$nok" -ne 9 ]]; then
+    echo "run $id: non-qualifying (light=$nlight/6 heavy=$nheavy/3 green=$nok/9) — skipped"
     continue
   fi
 
