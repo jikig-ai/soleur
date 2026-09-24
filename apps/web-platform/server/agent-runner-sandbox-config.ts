@@ -1,4 +1,5 @@
-import { readdirSync, realpathSync } from "fs";
+import { mkdirSync, readdirSync, realpathSync } from "fs";
+import { c4RenderStagingRoot } from "./c4-staging-root";
 import { basename, join } from "path";
 
 import { createChildLogger } from "./logger";
@@ -181,7 +182,23 @@ export function buildAgentSandboxConfig(
   // is denied here at the tool/root level — NOT by prompt. Deduped with the
   // sibling deny set. NOTE: this is defense-in-depth; the LIVE `support-live` flag
   // stays OFF until a deployed-env QA confirms no internal-KB content leaks.
-  const denyRead = Array.from(new Set([...siblingDeny, ...(opts?.denyReadExtra ?? [])]));
+  //
+  // #8623: the C4 re-render stages OTHER tenants' committed `.c4` sources
+  // under this server-private root for the length of a render. Deny it so no
+  // agent can read a concurrent render's stage. The SDK SKIPS a deny path that
+  // does not exist yet ("Skipping non-existent read deny path"), so create it
+  // first (0700, best-effort) — otherwise the first render after boot would
+  // create an undenied root under a sandbox that started earlier.
+  const c4StagingRoot = c4RenderStagingRoot();
+  try {
+    mkdirSync(c4StagingRoot, { recursive: true, mode: 0o700 });
+  } catch {
+    // Unwritable HOME: the render's own mkdir fails the same way, so nothing
+    // is ever staged there; the deny entry is then a harmless no-op.
+  }
+  const denyRead = Array.from(
+    new Set([...siblingDeny, c4StagingRoot, ...(opts?.denyReadExtra ?? [])]),
+  );
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
   // agent sandbox). `degraded: true` is the fail-closed broad-deny path a
