@@ -97,16 +97,25 @@ at 18:59:58.
    judged: every boot or instance id the rows carry is emitted by the host itself.
 2. **A row counts** only when both its own event time (journald `__REALTIME_TIMESTAMP`) and Better
    Stack's ingest `dt` are at or after `created`. Two wrong clocks are needed before a predecessor row
-   passes. The floor rests on three invariants, each pinned in
+   passes. `dt` is the warehouse's receive clock for this Vector-shipped source (measured 2026-09-24:
+   it equals the `ingest_time` column byte-for-byte, sits ~1 s after the row's own journald
+   `timestamp`, and one batch shares one `dt`), so the two clocks are independent. The floor rests
+   on three invariants, each pinned in
    `apps/web-platform/infra/cutover-inngest-workflow.test.sh`: no `create_before_destroy` on
    `hcloud_server.inngest` (Hetzner names are unique, so a replace destroys before it creates), no
-   `current_boot_only = false` in `vector.toml`, and no in-place `rebuild` of the server.
+   `current_boot_only = false` in `vector.toml`, and no in-place `rebuild` of the server (Terraform
+   cannot rebuild it: the hcloud provider's update handler has no `image` arm, so an image change
+   replaces the server).
 3. **An anchor read that fails is `unreadable`** and refuses fail-closed, exactly like a Better Stack
-   read failure, with a `::warning::` naming the class (token unresolved, HTTP 401/403, 429, 5xx,
-   transport, no server by that name, out-of-bounds `created`).
-4. **The read uses the Tier-A token** (`HCLOUD_TOKEN_READONLY`, ADR-241 D4), falling back to
-   `HCLOUD_TOKEN` only while the read-only name is unprovisioned (ADR-241 O10). The token is masked,
-   sent on stdin, and no response byte is printed: the run log is public.
+   read failure, with a `::warning::` naming the class: token unresolved, HTTP 401/403, 429, 5xx,
+   any other HTTP status or none, transport fault, no server by that name, several servers or an
+   undecodable reply, out-of-bounds `created`, and a local row-filter fault.
+4. **The read prefers the Tier-A token** (`HCLOUD_TOKEN_READONLY`, ADR-241 D4) and falls back to the
+   read/write `HCLOUD_TOKEN` whenever that read returns nothing. Today that fallback is the live path:
+   `prd_terraform` holds only `HCLOUD_TOKEN` (measured 2026-09-24), so this change ADDS three
+   operations using the credential ADR-241 is retiring, until the read-only token is minted
+   (`infra-credential-tiers-8209.md` step O5). The run log names which variable was used. The token
+   is masked, sent on stdin, and no response byte is printed: the run log is public.
 
 The floor applies to every liveness count that gates a write: op=resume G3, op=arm G3.7's H signal
 and op=luks-cutover / op=luks-rollback G3. It deliberately does NOT apply to G3.7's L signal (the
@@ -114,6 +123,18 @@ flush latch lives on `/mnt/data`, which survives the replace, so a predecessor's
 is valid presence evidence) nor to the rule-5 confirm readers (already anchored at this dispatch's own
 write). ADR-199's G3 wall-clock paragraph is unchanged. Implemented in `scripts/cutover-inngest.sh`
 (the `GENERATION SCOPE` block).
+
+The op=execute 2.0 and registry-probe host-state gates are also left unfloored, and for a different
+reason: they gate NO write. Their `dark` verdict joins a probe row and a heartbeat on one boot
+(`tests/scripts/lib/inngest-host-dark-gate.sh`), bounded by `--hb-max-age 900`, so for up to ~15
+minutes after a replace it can rest on the destroyed server's rows. That is acceptable only because
+nothing is written on it; making either verdict gate a write requires flooring it first.
+
+**Consequence: a new dependency.** op=resume, op=arm, op=luks-cutover and op=luks-rollback now refuse
+whenever `api.hetzner.cloud` or the HCLOUD token in `prd_terraform` is unavailable. op=luks-rollback
+is a recovery path, so a Hetzner-side outage now delays a LUKS rollback until the API answers. This is
+the cost the default carries, recorded in DC-1 of the change's decision challenges: a refusal a
+re-dispatch clears, against a write that could otherwise land on a server nobody has heard from.
 
 ### 5. The effect is confirmed from the host's telemetry, within a window anchored at the write
 

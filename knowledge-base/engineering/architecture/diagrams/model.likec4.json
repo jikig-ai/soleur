@@ -2152,7 +2152,7 @@
 "id": "1wmo87z"
 },
 "1sydkys": {
-"title": "CI calls the Hetzner Cloud API (api.hetzner.cloud). READ-ONLY GETs: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both on HCLOUD_TOKEN_READONLY (Tier A, ADR-241 D4), falling back to HCLOUD_TOKEN until O10. One WRITE: cutover-inngest.yml op=backup create_image (its token handling is tracked in #8767).",
+"title": "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY first and fall back to HCLOUD_TOKEN (ADR-241 D4) until it is minted. Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), drift and apply workflows, and every Terraform apply through the hcloud provider.",
 "technology": "HTTPS (Hetzner Cloud API)",
 "source": {
 "model": "github"
@@ -18025,7 +18025,7 @@
 "id": "1k162hk",
 "source": "github",
 "target": "platform.infra.hetzner",
-"label": "CI calls the Hetzner Cloud API \n(api.hetzner.cloud). READ-ONLY GETs: \ncutover-inngest.yml resolves the created \ntime of the ONE server named \nsoleur-inngest, the generation anchor ",
+"label": "Hetzner Cloud control-plane API \n(api.hetzner.cloud), never the hosts \nthemselves. Named here: \ncutover-inngest.yml resolves the created \ntime of the ONE server named ",
 "points": [
 [
 12401,
@@ -38842,7 +38842,7 @@
 "id": "1k162hk",
 "source": "github",
 "target": "platform.infra.hetzner",
-"label": "CI calls the Hetzner Cloud API \n(api.hetzner.cloud). READ-ONLY GETs: \ncutover-inngest.yml resolves the created \ntime of the ONE server named \nsoleur-inngest, the generation anchor ",
+"label": "Hetzner Cloud control-plane API \n(api.hetzner.cloud), never the hosts \nthemselves. Named here: \ncutover-inngest.yml resolves the created \ntime of the ONE server named ",
 "points": [
 [
 1870,
@@ -52819,7 +52819,7 @@
 "id": "1k162hk",
 "source": "github",
 "target": "platform.infra.hetzner",
-"label": "CI calls the Hetzner Cloud API \n(api.hetzner.cloud). READ-ONLY GETs: \ncutover-inngest.yml resolves the created \ntime of the ONE server named \nsoleur-inngest, the generation anchor ",
+"label": "Hetzner Cloud control-plane API \n(api.hetzner.cloud), never the hosts \nthemselves. Named here: \ncutover-inngest.yml resolves the created \ntime of the ONE server named ",
 "points": [
 [
 2117,
