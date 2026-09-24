@@ -1120,8 +1120,9 @@ now has a monitor.**
   Hop 2 was also confirmed on a live event (the #8630 measurement comment).
 - **Design.** One `sentry_alert.cron_monitor_failure`, in its own file `cron-monitor-alerts.tf`,
   binds every declared cron monitor inline. It fires on `first_seen_event`, `reappeared_event`
-  and `regression_event`, with `frequency_minutes = 1440` (the throttle is per workflow, action
-  and issue group, so at most one email per monitor environment per day), and emails
+  and `regression_event`, with `frequency_minutes = 1441` (the throttle is per workflow, action
+  and issue group, so at most one email per monitor environment per ~day; 1441 rather than 1440
+  because Sentry dedups an identical rule at POST and `anthropic_credit_exhausted` holds 1440), and emails
   `issue_owners` with fallthrough `ActiveMembers`. There is deliberately no
   `event_frequency_count` re-page, so a persistent failure emails once, at its start. The
   4 uptime detectors stay bound to no workflow; this amendment claims no route for them.

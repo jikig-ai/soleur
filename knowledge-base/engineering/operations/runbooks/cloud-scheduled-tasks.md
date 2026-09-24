@@ -490,7 +490,8 @@ its own `scheduled-*` monitor with `failure_issue_threshold`, so a cron that
 stops checking in pages on its own (that is how the original #4650 regression —
 `scheduled-community-monitor` / `scheduled-gh-pages-cert-state` missed check-ins
 — was caught). Since #8630 every declared monitor is bound to the one
-`sentry_alert.cron_monitor_failure` workflow, which emails the operator on a
+`sentry_alert.cron_monitor_failure` workflow, which emails the org's active members
+(cron issues have no owners, so `issue_owners` falls through to `ActiveMembers`) on a
 monitor's first failure, on each failure after a recovery, and when an archived
 cron issue escalates, at most once per monitor per 24 h. A **persistent** failure
 emails once, at its start; the next reminder is Sentry's own broken-monitor email
@@ -500,7 +501,7 @@ even though it is routed. Read any monitor's state via the Sentry Crons API (no 
 ```bash
 curl -s -H "Authorization: Bearer $SENTRY_API_TOKEN" \
   "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/?per_page=100" \
-  | jq '.[] | {slug, envs: [.environments[]? | {name, status, lastCheckIn}]}'
+  | jq '.[] | {slug, status, isMuted, envs: [.environments[]? | {name, status, isMuted, lastCheckIn}]}'
 ```
 
 **The `cron-inngest-cron-watchdog` function is RETIRED to a liveness-only beacon
@@ -598,8 +599,13 @@ doppler run -p soleur -c prd_terraform -- bash -c \
     | jq "{status, isMuted}"'
 ```
 
+Mute is per monitor ENVIRONMENT (`environments[].isMuted`), not only the
+top-level flag, so read both: `jq "{status, isMuted, envs: [.environments[] | {name, isMuted}]}"`.
 If `status` is `disabled` or `isMuted` is `true`, re-enable with a `PUT` to the
-same monitor URL (`{"status":"active","isMuted":false}`) using the same token;
+same monitor URL (`{"status":"active","isMuted":false}`) using the same token; for
+a muted environment, `PUT` `…/monitors/<slug>/environments/<env>/` with
+`{"isMuted":false}` (unverified form — confirm with the read above that every
+`environments[].isMuted` is `false` afterwards);
 fall back to the Sentry dashboard ONLY on a confirmed API-write failure (record a
 `playwright-attempt:` evidence line). (The GET above is live-verified; the
 PUT/un-mute form is unverified as of writing — it should succeed under

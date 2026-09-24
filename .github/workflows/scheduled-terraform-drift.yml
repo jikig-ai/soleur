@@ -1330,6 +1330,9 @@ jobs:
       # its own email, and reporting it as a monitor `error` would conflate "this job could
       # not run" with "this job ran and found something", which is the distinction the
       # drift/error split above already exists to preserve.
+      # The sentry leg does NOT check in: its failure would page on the shared slug and then
+      # auto-resolve on a sibling leg's ok. Its failures reach the per-leg email above
+      # (ADR-031, #8630 amendment — the #6612 exit criterion (b)).
       - name: Sentry check-in (final)
         if: always() && matrix.directory != 'apps/web-platform/infra/sentry'
         continue-on-error: true

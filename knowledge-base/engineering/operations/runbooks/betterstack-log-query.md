@@ -104,7 +104,8 @@ Live standing alarms over this source:
     non-null `cost_usd` AND no credit-probe RED row (`op=anthropic-credit-exhausted` /
     `anthropic-key-invalid`). The marker path is broken (the emitter, Vector, or the field moved
     again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
-    credit probe's Sentry monitor.
+    `anthropic-credit-exhausted` Sentry issue alert (the credit probe's own cron monitor is
+    routed since #8630 but muted, #8704).
 - **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the

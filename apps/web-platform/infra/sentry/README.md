@@ -194,9 +194,12 @@ red after a complete apply). So routing a new monitor takes two PRs:
    `alert-reference.json` from the `sentry-alert-reference-expected-<run>` CI
    artifact (the `detectorIds` change).
 
-- **Removing a monitor** deletes its `monitor_ids` element in the same PR, and
-  that PR regenerates `alert-reference.json`. One apply is safe: the alert
-  depends on the monitor, so its update is ordered before the destroy.
+- **Removing a monitor** also takes two PRs, the add rule in reverse: PR A moves
+  its label from `monitor_ids` to `cron_monitor_alert_unrouted` (and regenerates
+  `alert-reference.json`); PR B deletes the `sentry_cron_monitor` and its unrouted
+  entry. Do not do both in one apply: Terraform orders an update that depends on a
+  destroyed resource AFTER the destroy, so the monitor would be deleted while the
+  workflow still binds it — and whether Sentry accepts that is unmeasured.
 - **A monitor deleted outside Terraform** is recreated by the next plan with an
   id that does not exist yet, and the projection floor then refuses every Sentry
   plan. Recover by moving its label to `cron_monitor_alert_unrouted`, letting the
@@ -205,7 +208,22 @@ red after a complete apply). So routing a new monitor takes two PRs:
 The routing-parity guard
 (`apps/web-platform/test/server/inngest/sentry-cron-monitor-routing-parity.test.ts`)
 fails any PR that leaves a declared monitor in neither list. Until PR 2 lands,
-the audit's Class A lists the pending monitor and annotates every apply run.
+the audit's Class A lists the pending monitor with a `::warning::` on each
+`apply-sentry-infra.yml` run (and each release's audit). That audit runs BEFORE
+the apply, so on the run that merges a routing change it still reports the
+pre-apply state.
+
+Read the live route (read-only; confirms the binding and when it last fired):
+
+```bash
+doppler run --project soleur --config prd --command '
+  curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
+    "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/" \
+  | jq ".[] | select(.name==\"cron-monitor-failure\") | {id, enabled, lastTriggered, detectors: (.detectorIds | length)}"'
+```
+
+`lastTriggered` is the only evidence the route fires; nothing reads it on a
+schedule (decision DC-5 in the #8630 spec).
 
 ## Audit
 

@@ -664,7 +664,7 @@ describe the measured state at authoring time.
 
 ```yaml
 liveness_signal:
-  what: "sentry_alert.cron_monitor_failure (Sentry workflow 'cron-monitor-failure') bound to every routed cron detector; its lastTriggered advances on each fire, and the audit's Class A count reads 0"
+  what: "CONFIGURATION liveness only: sentry-alert-live-fidelity.sh compares the live cron-monitor-failure workflow (detectorIds, enabled, triggers, action) with alert-reference.json after each apply and daily, and the audit's Class A count reads 0. FIRING liveness is NOT read by any code: the workflow's lastTriggered is readable (README recipe) but unmonitored (DC-5)"
   cadence: "per failed/missed check-in (per-group action throttle 1440 min); the audit runs on every apply-sentry-infra.yml plan"
   alert_target: "operator email via Sentry (issue_owners -> ActiveMembers fallthrough)"
   configured_in: "apps/web-platform/infra/sentry/cron-monitor-alerts.tf"
@@ -674,7 +674,7 @@ error_reporting:
 failure_modes:
   - mode: "the workflow is deleted, disabled or edited through Sentry's web app (a detector detached, the email action removed)"
     detection: "Layer: Sentry cron monitor scheduled-sentry-alert-drift + workflow run log ::error::. scripts/sentry-alert-live-fidelity.sh runs post-apply and daily against alert-reference.json and emits DELETED / DISABLED / DRIFT / MONITOR UNBIND findings; the scheduled-terraform-drift.yml sentry leg (12h full-root plan, exit 2) files an infra-drift issue"
-    alert_route: "infra-drift GitHub issue + the fidelity probe's failure email"
+    alert_route: "ci/sentry-alert-drift p1 GitHub issue (fidelity probe) + the [DRIFT] email from scheduled-terraform-drift.yml's sentry leg (full-root plan exit 2). The fidelity probe's own heartbeat is routed through cron-monitor-failure itself, so it is circular if both break at once"
   - mode: "a new sentry_cron_monitor is declared without a route, or an unrouted key goes stale"
     detection: "Layer: workflow run log (PR check). Guard 1 (sentry-cron-monitor-routing-parity.test.ts) red at PR time"
     alert_route: "PR check failure"
@@ -689,7 +689,7 @@ failure_modes:
     alert_route: "apply job annotation + audit report"
   - mode: "a detector loses its workflow binding without the workflow changing"
     detection: "Layer: Sentry cron monitor scheduled-sentry-alert-drift (daily fidelity detectorIds comparison); secondarily the audit's Class A ::warning:: on apply runs"
-    alert_route: "fidelity probe failure email; apply job annotation"
+    alert_route: "ci/sentry-alert-drift p1 GitHub issue (fidelity probe); apply job annotation (pre-apply state)"
   - mode: "ACCEPTED RESIDUAL: the route is configured correctly but Sentry stops firing it (a vendor-side change)"
     detection: "Layer: none continuous. AC16 proves one live fire after merge; while #8495 is open its two watchdogs re-fire daily and any operator can read the workflow's group history. Not re-checked on a schedule (DC-5)"
     alert_route: "none automated; recorded in decision-challenges.md DC-5"
@@ -893,7 +893,9 @@ existing provenance note.
   = 0. Anchored, so that the comment mentioning `def excluded` near line 258 cannot trip it.
 - [ ] AC3a. Guard 3: `bash tests/scripts/test-sentry-alert-adoption-guards.sh` passes with the new
   rows, and `scripts/sentry-monitor-binding-gate.sh` still defaults `EXPECTED` to `1213799`.
-- [ ] AC4. `issue-alerts.tf` is byte-identical to `origin/main` (`git diff --quiet origin/main -- apps/web-platform/infra/sentry/issue-alerts.tf`).
+- [ ] AC4. `issue-alerts.tf` has no resource change (amended at review: one COMMENT line was corrected,
+  the "credit-probe detector routes to no workflow" claim this PR makes false;
+  `git diff origin/main -- apps/web-platform/infra/sentry/issue-alerts.tf | grep '^[-+][^-+#]' | grep -v '^[-+]\s*#'` is empty).
 - [ ] AC5. The `plan_pr` job of `apply-sentry-infra.yml` is green: the plan shows exactly one create
   (`sentry_alert.cron_monitor_failure`) and no update, replace or destroy. The create gate, the
   tripwire and the reference gate pass.
@@ -929,8 +931,10 @@ existing provenance note.
 
 - [ ] AC14. The `apply-sentry-infra.yml` push run on `main` is green through `Terraform apply`, AC17
   and the `sentry_alert live fidelity` probe (the reference includes `cron-monitor-failure`).
-- [ ] AC15. `sentry-monitors-audit.sh` on that run reports `class_a_count` equal to the size of
-  `cron_monitor_alert_unrouted`, which is 0.
+- [ ] AC15. The first audit run AFTER the merge's apply (the audit step runs before the apply, so the
+  merge's own apply run still shows the pre-apply 59) reports `class_a_count` equal to the size of
+  `cron_monitor_alert_unrouted`, which is 0: the next release's `reusable-release.yml` audit or a
+  no-change `apply-sentry-infra.yml` dispatch.
 - [ ] AC16. Within 24 h of the apply, the discoverability command prints `PASS (all`, and the
   workflow shows a fire for a **named** monitor: the group history
   (`GET organizations/{org}/workflows/{id}/group-history/`, or `lastTriggered` if that endpoint is

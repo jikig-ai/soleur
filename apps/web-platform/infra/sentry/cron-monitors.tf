@@ -69,14 +69,9 @@
 # lines 71-77), update this prose AND verify the field becomes load-
 # bearing for the new resource.
 #
-# ALERT ROUTING (#8630). A monitor here only opens a Sentry issue; the email comes
-# from `sentry_alert.cron_monitor_failure` in cron-monitor-alerts.tf, and Guard 1
-# (sentry-cron-monitor-routing-parity.test.ts) fails CI for any monitor that is
-# neither routed there nor listed as unrouted. A NEW monitor follows the two-PR
-# rule: PR 1 declares it here and adds it to `cron_monitor_alert_unrouted` with a
-# "<reason> (#N)" value (its detector id does not exist until the first apply);
-# PR 2 moves it into the alert's id list. Keep this file pure sentry_cron_monitor:
-# the alert and the unrouted map live in cron-monitor-alerts.tf.
+# ALERT ROUTING (#8630). Every monitor here must be routed in cron-monitor-alerts.tf
+# or listed in its unrouted map (Guard 1); adding or removing one follows the
+# two-PR rule in this root's README. Keep this file pure sentry_cron_monitor.
 
 # scheduled-terraform-drift is now Inngest-DISPATCHED, not GHA-`schedule:`-fired.
 # An Inngest cron (apps/web-platform/server/inngest/functions/cron-terraform-drift.ts,
@@ -160,7 +155,8 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
 # #5674: Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-anthropic-credit-probe.ts`.
 # NEW hourly 1-token canary on the operator ANTHROPIC_API_KEY — pages when the
-# claude-eval fleet's credit is exhausted or the key is revoked (the 2026-06-29
+# claude-eval fleet's credit is exhausted or the key is revoked (the page itself is
+# sentry_alert.anthropic_credit_exhausted; this monitor is muted, #8704) (the 2026-06-29
 # silent-fleet-down incident). It is a SMALL / pure-TS Inngest cron (no claude-eval
 # spawn, no 50-min budget), so it takes the 30-min margin of the hourly small-cron
 # cohort (scheduled_oauth_probe / scheduled_github_app_drift_guard / cron_kb_template
