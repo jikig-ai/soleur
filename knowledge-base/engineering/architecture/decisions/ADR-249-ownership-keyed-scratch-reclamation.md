@@ -112,3 +112,21 @@ classes → `--restore`/`--drain` for recovery, all ledger-backed at
   cleanup of schema roots.
 - Session roots on tmpfs are deleted directly at owner exit — the only
   prompt-RAM-reclaim path.
+- **Residual windows, accepted and named.** (a) The classify→act race is
+  narrowed but not closed by the action-time liveness re-walk; on tmpfs,
+  schema-named roots take the *only non-recoverable* disposal (direct
+  delete) — accepted because a same-tmpfs quarantine `mv` frees no RAM and
+  the schema name is creation-certain attribution, while marker dirs and
+  disk entries get the recoverable path. (b) The liveness conjunct is not
+  exhaustive — inotify/fanotify watches, transient fd holders, and
+  `/proc/<pid>/root` are not in the map; the 24h age floor (well past any
+  legitimate suite runtime) is the backstop, and a producer that leaves its
+  tree fully stale between writes can read as dead-by-age — conservative
+  attribution means those get *retained*, not deleted, whenever any conjunct
+  is uncertain. (c) The marker carries `pid=`+`ns=` but no start-time/
+  boot-id — a dead→reused→dead-again window is not detectable from pid
+  alone; same-uid + handle checks bound it. (d) Pre-marker legacy entries
+  drain only via the frozen prefix+signature allowlist — the ~19k
+  unattributable residue is *intended* to persist (it is reported, not
+  deleted), and the dry-run report's per-class counts are the observability
+  surface for that tail.
