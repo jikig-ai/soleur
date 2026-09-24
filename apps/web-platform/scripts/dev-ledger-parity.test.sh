@@ -11,7 +11,7 @@
 #   Guard 2  `classify-missing` main-side ownership of missing-on-main ledger rows
 #                                (in-flight / stale / orphan) + the drift-probe action.
 #
-# #8605 adds (plan 2026-09-23-fix-dev-ledger-closed-unmerged-reconcile-and-migration-gate-cwd-plan.md,
+# #8605 adds (plan archive/20260924-041252-2026-09-23-fix-dev-ledger-closed-unmerged-reconcile-and-migration-gate-cwd-plan.md,
 # §Guard Contract Guards 2-4; G2-*/G3-*/G4-* case ids are that table's row ids):
 #
 #   Guard 2b PR-state-aware classify-missing (closed-grace / closed, commit-bound,
