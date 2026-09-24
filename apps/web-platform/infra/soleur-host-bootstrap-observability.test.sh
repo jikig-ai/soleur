@@ -928,7 +928,9 @@ fi
 # reading its inputs through tokenless Doppler calls (a bare `.` of webhook-deploy exports nothing,
 # #6985). The seed block's login (root, before this script) writes the auths entry every later
 # root pull reuses. Code lines only, so this history cannot satisfy or falsify the rows.
-BOOT_CODE=$(grep -vE '^[[:space:]]*#' "$BOOT")
+BOOT_CODE=$(grep -vE '^[[:space:]]*#' "$BOOT" || true)
+# An empty extraction would pass the "no docker login" row vacuously, so it is fatal here.
+[ -n "$BOOT_CODE" ] || { printf '[FATAL] no code lines extracted from %s\n' "$BOOT" >&2; exit 2; }
 if ! _qgrep -E 'docker[[:space:]]+login' <<<"$BOOT_CODE"; then
   ok "AC21: soleur-host-bootstrap runs no docker login at all (GHCR and duplicate zot login deleted, #8036 1d)"
 else

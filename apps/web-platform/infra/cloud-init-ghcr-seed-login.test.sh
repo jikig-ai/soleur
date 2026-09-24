@@ -418,7 +418,7 @@ viols() { grep '^VIOL ' || true; }
 dispatch_ok() {
   local c="$1" der exp sc nd hd hs lg pl wr mp
   der=$(sed -n 's/^DERIVED //p' <<<"$c" | sort)
-  exp=$( { printf '%s\n' "$der" "$EXTRA_BOOT"; sed -n 's/^DERIVED_MAP //p' <<<"$c"; } | grep -v '^$' | sort)
+  exp=$( { printf '%s\n' "$der" "$EXTRA_BOOT"; sed -n 's/^DERIVED_MAP //p' <<<"$c"; } | { grep -v '^$' || true; } | sort)
   sc=$(sed -n 's/^SCANNED //p' <<<"$c" | sort)
   nd=$(grep -c . <<<"$der" || true)
   hd=$(sed -n 's/^HDERIVED //p' <<<"$c"); hs=$(grep -c '^HSCANNED ' <<<"$c" || true)
