@@ -107,7 +107,7 @@ and tracked by #8500 (closed 2026-09-22); it is referenced here, not re-fixed.
 
 ## Recurrence: PR #8611, 2026-09-23
 
-Same livelock, two days later: marked ready at 19:47Z, merged by the operator by hand at 22:21Z (the diff edits `.github/workflows/`, so `admin-merge-ready.sh` returns `UNTRUSTED-CI`). Tracked as #8683: `sync-pr-behind.sh` should defer while the head's CI is in flight. See `2026-09-24-8611-merge-tail-six-frictions-and-a-stale-reaper.md`.
+Same livelock, two days later; operator-merged by hand because the diff edits `.github/workflows/` (`UNTRUSTED-CI`). Tracked as #8683: `sync-pr-behind.sh` should defer while the head's CI is in flight. See `2026-09-24-8611-merge-tail-six-frictions-and-a-stale-reaper.md`.
 
 ## Session Errors
 
