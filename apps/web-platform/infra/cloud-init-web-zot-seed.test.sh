@@ -15,7 +15,8 @@
 # timeout/doppler/curl. Assertions read what the stubs RECORDED (argv, Sentry POST bodies, sleeps).
 #
 # Guards (plan 2026-09-23-fix-web-host-fresh-boot-zot-primary-plan.md §Guard Contract):
-#   G1 zot-first without Doppler; a zot failure names itself; the token never leaks
+#   G1 zot-only without Doppler (no GHCR arm since #8036 1d); a zot failure names itself and
+#      ends the boot; the token never leaks
 #   G2 bounded, fail-open pre-pull private-NIC wait; every non-ready outcome is routed
 #   G3 no Doppler invocation (and no xtrace) above the terminal block's exporting source
 #   G4 the boot trail can say which registry served a fresh boot (--image-origin + job line)
@@ -25,6 +26,17 @@
 # Exit: 0 all green, 1 an assertion failed, 2 a HARNESS failure (render/extract/mutation did
 # not land). Under CI a missing terraform is a FAIL, never a skip.
 set -uo pipefail
+
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 # A pipe into `grep -q` SIGPIPEs its producer on an early match and pipefail reads it as
 # FALSE (#7024); _qgrep reads all of its input instead.
 _qgrep() { grep "$@" >/dev/null; }
@@ -64,38 +76,40 @@ def move_zot_login_before_wait(s):
 M = {
   # G3 — on the SOURCE template
   "g3_emit_dsn": lambda s: s.replace("DSN='${sentry_dsn}'\n        if", "DSN='${sentry_dsn}'\n        [ -n \"$DSN\" ] || DSN=$(doppler secrets get SENTRY_DSN --plain)\n        if", 1),
-  "g3_seed_read": lambda s: s.replace("    STAGE=ghcr_login\n", "    STAGE=ghcr_login\n    X=$(doppler secrets get X --plain)\n", 1),
+  "g3_seed_read": lambda s: s.replace("    ZEP='${registry_endpoint}'\n", "    ZEP='${registry_endpoint}'\n    X=$(doppler secrets get X --plain)\n", 1),
   "g3_no_anchor": lambda s: s.replace("    set -a; . /etc/default/webhook-deploy; set +a\n", "    . /etc/default/webhook-deploy\n", 1),
   "g3_colo_read": lambda s: s.replace("ZURL='${registry_endpoint}'", "ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain)", 1),
   "g3_dup_anchor": lambda s: s.replace("    STAGE=runcmd_early\n", "    STAGE=runcmd_early\n    set -a; . /etc/default/webhook-deploy; set +a\n", 1),
-  "g3_dl_above": lambda s: s.replace("    STAGE=ghcr_login\n", "    STAGE=ghcr_login\n    soleur-doppler-download /tmp/x\n", 1),
-  "g3_xtrace": lambda s: s.replace("    STAGE=ghcr_login\n", "    STAGE=ghcr_login\n    set -x\n", 1),
-  "g3_doppler_flag": lambda s: s.replace("    STAGE=ghcr_login\n", "    STAGE=ghcr_login\n    ZX=$(doppler --silent secrets get X || true)\n", 1),
-  "g3_setex": lambda s: s.replace("    STAGE=ghcr_login\n", "    STAGE=ghcr_login\n    set -e -x\n", 1),
-  "g3_bashx": lambda s: s.replace("    STAGE=ghcr_login\n", "    STAGE=ghcr_login\n    bash -x /tmp/y\n", 1),
-  "g3_xtrace_long": lambda s: s.replace("    STAGE=ghcr_login\n", "    STAGE=ghcr_login\n    set -o errexit -o xtrace\n", 1),
+  "g3_dl_above": lambda s: s.replace("    ZEP='${registry_endpoint}'\n", "    ZEP='${registry_endpoint}'\n    soleur-doppler-download /tmp/x\n", 1),
+  "g3_xtrace": lambda s: s.replace("    ZEP='${registry_endpoint}'\n", "    ZEP='${registry_endpoint}'\n    set -x\n", 1),
+  "g3_doppler_flag": lambda s: s.replace("    ZEP='${registry_endpoint}'\n", "    ZEP='${registry_endpoint}'\n    ZX=$(doppler --silent secrets get X || true)\n", 1),
+  "g3_setex": lambda s: s.replace("    ZEP='${registry_endpoint}'\n", "    ZEP='${registry_endpoint}'\n    set -e -x\n", 1),
+  "g3_bashx": lambda s: s.replace("    ZEP='${registry_endpoint}'\n", "    ZEP='${registry_endpoint}'\n    bash -x /tmp/y\n", 1),
+  "g3_xtrace_long": lambda s: s.replace("    ZEP='${registry_endpoint}'\n", "    ZEP='${registry_endpoint}'\n    set -o errexit -o xtrace\n", 1),
   # G1 — on the RENDERED, extracted script
   "g1_doppler_ep": lambda s: s.replace("ZEP='10.0.1.30:5000'", "ZEP=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain 2>/dev/null || true)", 1),
   "g1_v2_gate": lambda s: s.replace(" ;; esac\n", ' ;; esac\n    curl -s -o /dev/null --max-time 3 "http://$ZEP/v2/" || REF="$IMAGE_REF"\n', 1),
-  "g1_reassign": lambda s: s.replace('\nif [ "$REF" != "$IMAGE_REF" ]; then', '\nREF="$IMAGE_REF"\nif [ "$REF" != "$IMAGE_REF" ]; then', 1),
-  "g1_flip_ungated": lambda s: s.replace('"$GL" = ok', "ok = ok"),
+  "g1_reassign": lambda s: s.replace('\n[ -n "$REF" ] && [ $ZL = ok ] && while', '\nREF="$IMAGE_REF"\n[ -n "$REF" ] && [ $ZL = ok ] && while', 1),
+  # #8036 1d: the GHCR arm is gone; these two put one back (a GHCR pull after the zot miss, and a
+  # GHCR login in the seed item). Each must be caught by the predicate that owns the property.
+  "g1_ghcr_pull_back": lambda s: s.replace('\nZ="zot=[', '\n[ $OK = 1 ] || { timeout 180 docker pull "$IMAGE_REF" >/dev/null 2>&1 && OK=1; }\nZ="zot=[', 1),
+  "g1_ghcr_login_back": lambda s: s.replace("\nSTAGE=pull\nC=none", "\nprintf '%s' 'ght' | timeout 60 docker login ghcr.io -u 'ghu' --password-stdin >/dev/null 2>&1 || true\nSTAGE=pull\nC=none", 1),
   "g1_tag_to_zot": lambda s: s.replace("*@sha256:*)", "*)", 1),
-  "g1_no_zot_leg": lambda s: s.replace("'nic=%s:%s %s ghcr=[login=%s,pull=%s] pull_err: %s' \"$NIC\" \"$W\" \"$Z\"", "'nic=%s:%s ghcr=[login=%s,pull=%s] pull_err: %s' \"$NIC\" \"$W\"", 1),
+  "g1_err_level": lambda s: s.replace('"$STAGE" fatal', '"$STAGE" error', 1),
+  "g1_no_zot_leg": lambda s: s.replace("'nic=%s:%s %s pull_err: %s' \"$NIC\" \"$W\" \"$Z\"", "'nic=%s:%s pull_err: %s' \"$NIC\" \"$W\"", 1),
   "g1_login_after_pull": move_zot_login_after_pull,
   "g1_no_redact": lambda s: s.replace("sed -E 's#[A-Za-z0-9_+/-]{40,}#REDACTED#g'", "cat", 1),
-  "g1_tail_first": lambda s: s.replace("printf 'nic=%s:%s %s ghcr=[login=%s,pull=%s] pull_err: %s' \"$NIC\" \"$W\" \"$Z\" \"$GL\" \"$GP\" \"$T\"",
-                                       "printf 'pull_err: %s nic=%s:%s %s ghcr=[login=%s,pull=%s]' \"$T\" \"$NIC\" \"$W\" \"$Z\" \"$GL\" \"$GP\"", 1),
+  "g1_tail_first": lambda s: s.replace("printf 'nic=%s:%s %s pull_err: %s' \"$NIC\" \"$W\" \"$Z\" \"$T\"",
+                                       "printf 'pull_err: %s nic=%s:%s %s' \"$T\" \"$NIC\" \"$W\" \"$Z\"", 1),
   "g1_tail_before_redact": lambda s: s.replace("| sed -E 's#[A-Za-z0-9_+/-]{40,}#REDACTED#g' | tail -c 100", "| tail -c 100 | sed -E 's#[A-Za-z0-9_+/-]{40,}#REDACTED#g'", 1),
   "g1_login_no_user": lambda s: s.replace(" -u 'zot-pull' --password-stdin", " --password-stdin", 1),
   "g1_login_unbounded": lambda s: s.replace("| timeout 60 docker login \"$ZEP\"", "| docker login \"$ZEP\"", 1),
   "g1_pull_ungated": lambda s: s.replace("[ $ZL = ok ] && while [ $ZN -lt 3 ]", "while [ $ZN -lt 3 ]", 1),
   "g1_login_once": lambda s: s.replace("while [ $n -lt 3 ]", "while [ $n -lt 1 ]", 1),
-  "g1_no_fallback_emit": lambda s: s.replace('_emit "app image served via GHCR fallback (zot miss)" "app_ghcr_fallback" warning; }', ":; }", 1),
   "g1_drop_unreach": lambda s: s.replace("C=unreach ;;", ";;", 1),
   "g1_timeout_retries": lambda s: s.replace("[ $R = 124 ] && break; :;", ":;", 1),
   "g1_no_install": lambda s: s.replace(next(l for l in s.splitlines(True) if l.startswith("for f in soleur-stage-detail")), "", 1),
   "g2_no_break": lambda s: s.replace("{ NIC=ready; break; }", "{ NIC=ready; }", 1),
-  "v_ghcr_empty": lambda s: s.replace("GHCR_USER='ghu'", "GHCR_USER=''", 1),
   "v_zep_empty": lambda s: s.replace("ZEP='10.0.1.30:5000'", "ZEP=''", 1),
   "v_nonghcr": lambda s: s.replace("IMAGE_REF='ghcr.io/jikig-ai/", "IMAGE_REF='docker.io/jikig-ai/"),
   "g1_answering_doppler": lambda s: s.replace("ZEP='10.0.1.30:5000'", "ZEP=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain)", 1),
@@ -212,9 +226,11 @@ if [ "$tokn" = 1 ] && [ "$tokform" = 1 ]; then ok "G1: \${zot_pull_token} appear
 else no "G1: \${zot_pull_token} must appear exactly once, in the printf | docker login --password-stdin form (n=$tokn form=$tokform)"; fi
 grep -qE "docker login[^|]*( -p[[:space:]]| --password[[:space:]=])" "$SRC" && no "G1: a docker login passes a password on argv (-p/--password)" \
   || ok "G1: no docker login passes a password on argv (-p/--password)"
-# The GHCR token is unset right after its login (it lived only in a subshell before #8651).
-awk '/docker login ghcr\.io -u "\$GHCR_USER"/ {f=1; next} f && NF {print; exit}' "$SRC" | _qgrep -E '^[[:space:]]*unset GHCR_TOKEN$' \
-  && ok "G1: GHCR_TOKEN is unset on the line after its login" || no "G1: GHCR_TOKEN must be unset right after the GHCR login"
+# #8036 1d (was: "GHCR_TOKEN is unset right after its login"): the seed item holds no GHCR
+# credential at all — no GHCR_USER/GHCR_TOKEN variable, no ${ghcr_read_*} splice, no GHCR login.
+if grep -vE '^[[:space:]]*#' "$SRC" | _qgrep -E 'GHCR_(USER|TOKEN)|\$\{ghcr_read_(user|token)\}|docker login ghcr\.io'; then
+  no "G1: a GHCR credential or login is back in cloud-init.yml (#8036 1d: zot is the only boot read path)"
+else ok "G1: cloud-init.yml carries no GHCR credential, variable or login (#8036 1d)"; fi
 # Exactly three later runcmd readers take the seed's resolved ref (pull, plugin seed, docker run).
 [ "$(grep -cF '$(cat /run/soleur-image-ref' "$SRC")" = 3 ] \
   && ok "G1: exactly 3 later readers use /run/soleur-image-ref" || no "G1: /run/soleur-image-ref readers = $(grep -cF '$(cat /run/soleur-image-ref' "$SRC"), want 3"
@@ -291,7 +307,7 @@ DIGEST="sha256:$(printf 'ab%.0s' $(seq 1 32))"
 PINNED="ghcr.io/jikig-ai/soleur-web-platform:v9.9.9@$DIGEST"
 DSN="https://pubkey123@o1.ingest.de.sentry.io/4242"
 render() {  # <out> <image_name> <registry_endpoint> <private_ip> <colocate>
-  printf 'templatefile("%s", { image_name="%s", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="tt", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="%s", resend_api_key="r", ghcr_read_user="ghu", ghcr_read_token="ght", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="%s", web_colocate_inngest=%s, web_tunnel_connector=false, host_name="soleur-web-2", private_ip="%s", web_probes_token="t", expected_ip="%s", web_host_key="web-2", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zot-pull", zot_pull_token="%s" })\n' \
+  printf 'templatefile("%s", { image_name="%s", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="tt", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="%s", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="%s", web_colocate_inngest=%s, web_tunnel_connector=false, host_name="soleur-web-2", private_ip="%s", web_probes_token="t", expected_ip="%s", web_host_key="web-2", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zot-pull", zot_pull_token="%s" })\n' \
     "$SRC" "$2" "$DSN" "$3" "$5" "$4" "$4" "$ZTOK" | terraform -chdir="$WORK/tf" console > "$1.raw" 2> "$1.err" \
     || harness "terraform render failed: $(head -c 400 "$1.err")"
   python3 - "$1.raw" "$1" <<'PY' || harness "render is not valid YAML"
@@ -496,10 +512,10 @@ ZREF="10.0.1.30:5000/jikig-ai/soleur-web-platform:v9.9.9@$DIGEST"
   || no "G3: colocated-inngest render census=$(census "$WORK/colo/r.yml")"
 
 # ── G1 predicates (return 0 = property holds) ─────────────────────────────────────────────────
-# happy: digest pin, NIC present, zot ok, GHCR login failing (AP-016) → zot served, no doppler.
+# happy: digest pin, NIC present, zot ok → zot served, no doppler, no GHCR login or pull.
 g1_happy() {
   make_ip present 10.0.1.11
-  ZOT_LOGIN=ok GHCR_LOGIN=fail ZOT_PULL=ok run_seed "$1"
+  ZOT_LOGIN=ok ZOT_PULL=ok run_seed "$1"
   local why=""
   [ "$RC" = 0 ] || why="$why rc=$RC"
   grep -q __CUT_REACHED__ "$L_OUT" || why="$why cut-not-reached"
@@ -508,11 +524,13 @@ g1_happy() {
   [ "$(cat "$L_SB/run/soleur-image-ref" 2>/dev/null)" = "$ZREF" ] || why="$why image-ref-file"
   [ "$(post_count app_zot)" = 1 ] || why="$why app_zot-count=$(post_count app_zot)"
   local d; d=$(post_field app_zot detail)
-  case "$d" in "zot_login=ok ghcr_login=fail nic=ready:0 zot=[login=ok,n=1,cause=none]") ;; *) why="$why detail=[$d]" ;; esac
+  case "$d" in "zot_login=ok nic=ready:0 zot=[login=ok,n=1,cause=none]") ;; *) why="$why detail=[$d]" ;; esac
   [ "$(post_field app_zot host_name)" = soleur-web-2 ] || why="$why host_name"
   timeouts_ok || why="$why unbounded-docker-call"
-  local f; for f in soleur-stage-detail soleur-pull.log soleur-zot-login.log soleur-ghcr-login.log; do
+  local f; for f in soleur-stage-detail soleur-pull.log soleur-zot-login.log; do
     [ "$(stat -c %a "$L_SB/run/$f" 2>/dev/null)" = 600 ] || why="$why mode-$f"; done
+  grep -q '^login ghcr\.io' "$L_ORDER" && why="$why ghcr-login"
+  [ "$(post_count app_ghcr_served)$(post_count app_ghcr_fallback)" = 00 ] || why="$why app_ghcr-emitted"
   grep -q 'insecure-registries' "$L_SB/etc/docker/daemon.json" 2>/dev/null || why="$why no-daemon.json"
   # order: zot login precedes the first pull (independent of the stateful stub — H4)
   local li pi; li=$(grep -n "^login 10.0.1.30:5000" "$L_ORDER" | head -1 | cut -d: -f1)
@@ -522,20 +540,23 @@ g1_happy() {
   token_leak "$L_POST" "$L_SB/run/soleur-stage-detail" "$L_OUT" && why="$why token-leak"
   G1WHY="$why"; [ -z "$why" ]
 }
-# fail-both: zot pull fails (160-char error), GHCR login fails → fatal names both legs, no GHCR pull.
+# zot miss: the zot pull fails (160-char error) → fatal stage=pull naming the zot leg, no GHCR leg.
 LONGERR="manifest unknown: $(printf 'e%.0s' $(seq 1 142))"
 g1_failboth() {
   make_ip present 10.0.1.11
-  ZOT_LOGIN=ok GHCR_LOGIN=fail ZOT_PULL=fail ZOT_PULL_ERR="$LONGERR" run_seed "$1"
+  ZOT_LOGIN=ok ZOT_PULL=fail ZOT_PULL_ERR="$LONGERR" run_seed "$1"
   local why="" d
   [ "$RC" != 0 ] || why="$why rc=0"
   grep -q "^pull ghcr.io/" "$L_ORDER" && why="$why ghcr-pulled"
   d=$(post_field pull detail)
   [ "$(post_field pull message)" = "soleur-hostscript-seed failed" ] || why="$why no-fatal"
+  # The seed-block fatal pages at level=fatal (the web_terminal_boot_fatal rule keys on it); an
+  # on_err downgraded to error/warning would still POST, so the level is pinned, not the POST.
+  [ "$(post_field pull level)" = fatal ] || why="$why level=[$(post_field pull level)]"
   [ "$(post_field pull host_name)" = soleur-web-2 ] || why="$why host_name"
   [ "${#d}" -le 200 ] || why="$why detail>200"
   timeouts_ok || why="$why unbounded-docker-call"
-  case "$d" in "nic=ready:0 zot=[login=ok,n=3,cause=manifest] ghcr=[login=fail,pull=not-attempted] pull_err: "*) ;;
+  case "$d" in "nic=ready:0 zot=[login=ok,n=3,cause=manifest] pull_err: "*) ;;
     *) why="$why detail=[$d]" ;; esac
   G1WHY="$why"; [ -z "$why" ]
 }
@@ -545,28 +566,32 @@ g1_failboth() {
 LOGIN_SFX=" $(printf '. %.0s' $(seq 1 39))"   # 79 chars: the 100-byte tail cuts INTO the token
 g1_leak() {
   make_ip present 10.0.1.11
-  ZOT_LOGIN=fail GHCR_LOGIN=fail LOGIN_SFX="$LOGIN_SFX" run_seed "$1"
+  ZOT_LOGIN=fail LOGIN_SFX="$LOGIN_SFX" run_seed "$1"
   local why=""
   [ "$RC" != 0 ] || why="$why rc=0"
   token_leak "$L_POST" "$L_SB/run/soleur-stage-detail" "$L_OUT" && why="$why token-leak"
   [ "$(grep -c '^login 10.0.1.30:5000$' "$L_ORDER")" = 3 ] || why="$why zot-logins=$(grep -c '^login 10.0.1.30:5000$' "$L_ORDER")"
   grep -q '^pull 10\.0\.1\.30:5000/' "$L_ORDER" && why="$why pulled-after-failed-login"
   [ "$(grep -cx 5 "$L_SLEEP")" = 2 ] || why="$why sleep5=$(grep -cx 5 "$L_SLEEP")"
-  case "$(post_field pull detail)" in "nic=ready:0 zot=[login=fail,n=0,cause=auth] ghcr=[login=fail,pull=not-attempted] pull_err: "*) ;;
+  case "$(post_field pull detail)" in "nic=ready:0 zot=[login=fail,n=0,cause=auth] pull_err: "*) ;;
     *) why="$why detail=[$(post_field pull detail)]" ;; esac
   G1WHY="$why"; [ -z "$why" ]
 }
-# ghcr flip: zot fails, GHCR login ok → GHCR pull attempted, app_ghcr_fallback exactly once.
+# no fallback (INVERTED by #8036 1d; was the GHCR flip): a zot miss is terminal even when the
+# stub would ACCEPT a GHCR login and serve the GHCR pull — no GHCR login, no GHCR pull, no
+# app_ghcr_* beacon, no app_zot beacon, and a fatal stage=pull that ends the item.
 g1_flip() {
   make_ip present 10.0.1.11
   ZOT_LOGIN=ok GHCR_LOGIN=ok ZOT_PULL=fail GHCR_PULL=ok run_seed "$1"
   local why=""
-  [ "$RC" = 0 ] || why="$why rc=$RC"
-  grep -q "^pull ghcr.io/" "$L_ORDER" || why="$why no-ghcr-pull"
-  [ "$(post_count app_ghcr_fallback)" = 1 ] || why="$why fallback=$(post_count app_ghcr_fallback)"
-  [ "$(post_count app_ghcr_served)" = 1 ] || why="$why served=$(post_count app_ghcr_served)"
-  [ "$(post_field app_ghcr_fallback detail)" = "nic=ready:0 zot=[login=ok,n=3,cause=manifest]" ] || why="$why fallback-detail=[$(post_field app_ghcr_fallback detail)]"
-  case "$(post_field app_ghcr_served detail)" in *"zot=[login=ok,n=3,cause=manifest]") ;; *) why="$why served-detail" ;; esac
+  [ "$RC" != 0 ] || why="$why rc=0"
+  grep -q __CUT_REACHED__ "$L_OUT" && why="$why reached-extract"
+  grep -q '^login ghcr\.io' "$L_ORDER" && why="$why ghcr-login"
+  grep -q "^pull ghcr.io/" "$L_ORDER" && why="$why ghcr-pull"
+  [ "$(post_count app_ghcr_fallback)$(post_count app_ghcr_served)$(post_count app_zot)" = 000 ] \
+    || why="$why beacons=$(post_count app_ghcr_fallback)/$(post_count app_ghcr_served)/$(post_count app_zot)"
+  [ "$(post_field pull message)" = "soleur-hostscript-seed failed" ] || why="$why no-fatal"
+  [ -e "$L_SB/run/soleur-image-ref" ] && why="$why image-ref-written"
   G1WHY="$why"; [ -z "$why" ]
 }
 # causes: every zot failure text classifies to its cause (and a timeout stops the retries)
@@ -577,45 +602,47 @@ g1_causes() {
               "manifest:manifest unknown: manifest unknown:1" "unreach:dial tcp 10.0.1.30:5000: connect: no route to host:1" \
               "other:something new:1" "timeout:x:124"; do
     want="${pair%%:*}"; rest="${pair#*:}"; err="${rest%:*}"; prc="${rest##*:}"
-    ZOT_LOGIN=ok GHCR_LOGIN=fail ZOT_PULL=fail ZOT_PULL_ERR="$err" ZOT_PULL_RC="$prc" run_seed "$1"
+    ZOT_LOGIN=ok ZOT_PULL=fail ZOT_PULL_ERR="$err" ZOT_PULL_RC="$prc" run_seed "$1"
     d=$(post_field pull detail)
     case "$want:$d" in timeout:*"n=1,cause=timeout]"*) ;; timeout:*) why="$why [$err]->$d" ;;
       *:*"n=3,cause=$want]"*) ;; *) why="$why [$err]->$d" ;; esac
   done
   G1WHY="$why"; [ -z "$why" ]
 }
-# tag-only ref never reaches plain-HTTP zot; with GHCR dead it fails loud with cause=unpinned.
+# tag-only ref never reaches plain-HTTP zot, and (#8036 1d) is pulled from nowhere else either:
+# it fails loud with cause=unpinned and no pull at all.
 g1_tag() {
   make_ip present 10.0.1.11
-  ZOT_LOGIN=ok GHCR_LOGIN=fail run_seed "$1"
+  ZOT_LOGIN=ok run_seed "$1"
   local why="" d
   grep -q '^pull 10\.0\.1\.30:5000/' "$L_ORDER" && why="$why tag-pulled-from-zot"
+  grep -q '^pull ' "$L_ORDER" && why="$why pulled=$(grep -m1 '^pull ' "$L_ORDER")"
   [ "$RC" != 0 ] || why="$why rc=0"
   d=$(post_field pull detail)
-  case "$d" in *cause=unpinned*"ghcr=[login=fail,pull=not-attempted]"*) ;; *) why="$why detail=[$d]" ;; esac
+  case "$d" in "nic=ready:0 zot=[login=ok,n=0,cause=unpinned] pull_err: "*) ;; *) why="$why detail=[$d]" ;; esac
   G1WHY="$why"; [ -z "$why" ]
 }
 
-g1_happy "$DEF" && ok "AC1/G1: digest pin → first pull is the baked zot ref, no doppler, image-ref file = zot ref, app_zot detail zot_login=ok ghcr_login=fail nic=ready:0, host_name tagged, login precedes pull, token never recorded" \
+g1_happy "$DEF" && ok "AC1/G1: digest pin → first pull is the baked zot ref, no doppler, no GHCR login, image-ref file = zot ref, app_zot detail zot_login=ok nic=ready:0 zot=[…], host_name tagged, login precedes pull, token never recorded" \
   || no "AC1/G1 happy path:$G1WHY"
 grep -q __CUT_REACHED__ "$L_OUT" && ! grep -q __SENTINEL_AFTER_CUT__ "$L_OUT" \
   && ok "AC1: execution stops at the STAGE=extract cut (sentinel after it never prints)" || no "AC1: cut sentinel"
-g1_failboth "$DEF" && ok "AC2/G1: zot fail + GHCR login fail → fatal stage=pull, ≤200-char detail, fixed fields first, no GHCR pull" \
+g1_failboth "$DEF" && ok "AC2/G1: zot miss → fatal stage=pull at level=fatal, ≤200-char detail, fixed fields first (zot leg only), no GHCR pull" \
   || no "AC2/G1 fail-both:$G1WHY"
 g1_leak "$DEF" && ok "AC2/G1: a failing login that echoes the token leaks no slice of it into Sentry or the detail file" \
   || no "AC2/G1 leak:$G1WHY"
-g1_flip "$DEF" && ok "AC2/G1: GHCR login ok + zot miss → GHCR pull attempted, app_ghcr_fallback exactly once" \
+g1_flip "$DEF" && ok "AC2/G1: zot miss with a GHCR that WOULD answer → still terminal: no GHCR login/pull, no beacon, fatal stage=pull (#8036 1d)" \
   || no "AC2/G1 flip:$G1WHY"
-g1_tag "$WORK/tag/sb/seed.sh" && ok "G1/6b: a tag-only ref never pulls from plain-HTTP zot; fatal names cause=unpinned" \
+g1_tag "$WORK/tag/sb/seed.sh" && ok "G1/6b: a tag-only ref is never pulled (not from plain-HTTP zot, not from GHCR); fatal names cause=unpinned" \
   || no "G1 tag-only:$G1WHY"
 g1_causes "$DEF" && ok "AC2: auth/denied/manifest/unreach/other/timeout each classify; a timeout (rc 124) stops the zot retries at n=1" \
   || no "AC2 causes:$G1WHY"
-# Variants (edits of the rendered item, not mutations): empty GHCR creds, empty endpoint, a
-# digest-pinned ref that is not on ghcr.io.
-variant() { local m="$WORK/def/sb/var.sh"; cp "$DEF" "$m"; python3 "$WORK/muts.py" "$m" "$1" || harness "variant did not land: $1"; make_ip present 10.0.1.11; ZOT_LOGIN=ok GHCR_LOGIN=fail run_seed "$m"; rm -f "$m"; }
-variant v_ghcr_empty
-case "$(post_field app_zot detail)" in "zot_login=ok ghcr_login=empty "*) ok "G1: empty baked GHCR creds are named login=empty (not a failed login)" ;;
-  *) no "G1: empty GHCR creds should read ghcr_login=empty, got [$(post_field app_zot detail)]" ;; esac
+# Variants (edits of the rendered item, not mutations): empty endpoint, a digest-pinned ref that is
+# not on ghcr.io. (The empty-GHCR-creds variant retired with the GHCR leg, #8036 1d; its slot is
+# the rendered-item residual row below.)
+variant() { local m="$WORK/def/sb/var.sh"; cp "$DEF" "$m"; python3 "$WORK/muts.py" "$m" "$1" || harness "variant did not land: $1"; make_ip present 10.0.1.11; ZOT_LOGIN=ok run_seed "$m"; rm -f "$m"; }
+if _qgrep -E 'ghcr_login|GHCR_|soleur-ghcr|"\$GL"|GP=' "$DEF"; then no "G1: the RENDERED seed item still carries a GHCR login leg (ghcr_login/GHCR_*/GL/GP)"
+else ok "G1: the rendered seed item carries no GHCR login leg (no ghcr_login stage, GHCR_* var, GL/GP field, soleur-ghcr-* log)"; fi
 variant v_zep_empty
 { ! grep -qx 'login ' "$L_ORDER" && ! grep -q '^pull ' "$L_ORDER" && case "$(post_field pull detail)" in *"zot=[login=fail,n=0,"*) true ;; *) false ;; esac; } \
   && ok "G1: an empty endpoint never reaches docker login (no default-index login with the zot token)" \
@@ -638,15 +665,16 @@ mkdir -p "$WORK/g1o"
   || ok "G1: daemon.json after the seed item (docker unaware of the plain-HTTP registry) is refused by order"
 # H2 (non-canonical endpoint): keys on the baked endpoint, not the literal.
 make_ip present 10.0.1.77
-ZOT_LOGIN=ok GHCR_LOGIN=fail run_seed "$WORK/ep99/sb/seed.sh"
+ZOT_LOGIN=ok run_seed "$WORK/ep99/sb/seed.sh"
 [ "$(first_pull)" = "10.0.1.99:5000/jikig-ai/soleur-web-platform:v9.9.9@$DIGEST" ] && [ "$RC" = 0 ] \
   && ok "G1 H2: a non-canonical baked endpoint (10.0.1.99:5000) is the one pulled" \
   || no "G1 H2: endpoint 10.0.1.99 render pulled [$(first_pull)] rc=$RC"
-# H3 (must-PASS): every leg failing → non-zero AND the detail names both legs.
-ZOT_LOGIN=fail GHCR_LOGIN=fail ZOT_PULL=fail run_seed "$DEF"
+# H3 (must-PASS): the (only) leg failing → non-zero AND the detail names the zot leg and no other.
+ZOT_LOGIN=fail ZOT_PULL=fail run_seed "$DEF"
 d=$(post_field pull detail)
-case "$d" in *"zot=[login=fail"*"ghcr=[login=fail"*) [ "$RC" != 0 ] && ok "G1 H3: all legs failing exits non-zero and the detail names both legs" || no "G1 H3: rc=0" ;;
-  *) no "G1 H3: detail must name both legs, got [$d]" ;; esac
+case "$d" in *ghcr*) no "G1 H3: the fatal detail still names a GHCR leg: [$d]" ;;
+  *"zot=[login=fail"*) [ "$RC" != 0 ] && ok "G1 H3: a failing zot leg exits non-zero and the detail names the zot leg (no GHCR leg)" || no "G1 H3: rc=0" ;;
+  *) no "G1 H3: detail must name the zot leg, got [$d]" ;; esac
 
 # ── G2 predicates ─────────────────────────────────────────────────────────────────────────────
 g2_ready0() { make_ip present 10.0.1.11; run_seed "$1"
@@ -714,7 +742,7 @@ mrow() {  # <label> <predicate> <key> [sandbox, default def]
 mrow "G1.1 endpoint read from doppler (tokenless)" g1_happy g1_doppler_ep
 mrow "G1.2 a 3 s /v2/ gate in front of the zot ref" g1_happy g1_v2_gate
 mrow "G1.4 a later REF=IMAGE_REF reassignment before the pull" g1_happy g1_reassign
-mrow "G1.5 GHCR flip regardless of the GHCR login outcome" g1_failboth g1_flip_ungated
+mrow "G1.5 a GHCR pull re-added after the zot miss (the retired fallback)" g1_flip g1_ghcr_pull_back
 mrow "G1.6 tag-only refs rewritten to zot" g1_tag g1_tag_to_zot tag
 mrow "G1.7 fatal detail without the zot leg" g1_failboth g1_no_zot_leg
 mrow "G1.8 zot login moved after the pull (reorder)" g1_happy g1_login_after_pull
@@ -725,10 +753,11 @@ mrow "G1.13 zot login drops -u" g1_happy g1_login_no_user
 mrow "G1.14 timeout wrapper dropped from the zot login" g1_happy g1_login_unbounded
 mrow "G1.15 zot pulls run after a failed login" g1_leak g1_pull_ungated
 mrow "G1.16 zot login retries cut to 1" g1_leak g1_login_once
-mrow "G1.17 fallback emit dropped" g1_flip g1_no_fallback_emit
+mrow "G1.17 a GHCR login re-added to the seed item" g1_happy g1_ghcr_login_back
 mrow "G1.18 unreach cause arm dropped" g1_causes g1_drop_unreach
 mrow "G1.19 a timeout does not stop the zot retries" g1_causes g1_timeout_retries
 mrow "G1.20 /run pre-create (0600) dropped" g1_happy g1_no_install
+mrow "G1.21 on_err's fatal emit downgraded to level=error" g1_failboth g1_err_level
 # G1.3 guard's own dispatch: an extractor that matches no seed item must be a HARNESS failure.
 python3 - "$WORK/def/r.yml" "$WORK/g13.yml" <<'PY'
 import sys
@@ -799,7 +828,7 @@ org_rows() {  # <n> <stage> : n Discover rows, newest first
 import json, sys
 n, st = int(sys.argv[1]), sys.argv[2]
 rows = [{"timestamp": "2026-09-24T10:%02d:00+00:00" % (59 - i), "stage": st, "host_name": "soleur-web-2",
-         "detail": "zot_login=ok ghcr_login=fail nic=ready:0"} for i in range(n)]
+         "detail": "zot_login=ok nic=ready:0"} for i in range(n)]
 print(json.dumps({"data": rows}))
 PY
 }
@@ -857,15 +886,127 @@ if [ "$jrc" = 0 ] && grep -q 'image-origin (`soleur-web-2`.*stage=app_zot' <<<"$
   ok "G4/AC8: app_zot outside the 8-event slice still surfaces on the image-origin line; verdict unchanged (fresh_boot_ready)"
 else no "G4/AC8 job mode: rc=$jrc $(grep -E 'image-origin|fresh_boot|app_zot' <<<"$jout" | head -5 | tr '\n' ' ')"; fi
 
-# ── Cross-template parity: the web fatal and the inngest ALL-LEGS marker share per-leg wording ──
+# ── Guard 4, colocated site (#8036 1d): a zot miss in the gated colocated-inngest item is terminal ──
+# The item is dead code while web_colocate_inngest=false, and is exercised here so that turning the
+# toggle on cannot resurrect an unwatched GHCR arm. EXECUTED from the web_colocate_inngest=true
+# render (never grepped: the property is order and lifetime), followed by a marker standing in for
+# the next runcmd item — runcmd is ONE /bin/sh, so an `exit` in the item must end it.
+C4="$WORK/c4"; mkdir -p "$C4/bin"
+python3 - "$WORK/colo/r.yml" "$C4/item.sh" <<'PY' || harness "G4c: could not extract the colocated-inngest item from the colocate=true render"
+import sys, yaml
+items = [i for i in yaml.safe_load(open(sys.argv[1]))["runcmd"] if isinstance(i, str)]
+hits = [i for i in items if "soleur-inngest-bootstrap-extract" in i]
+if len(hits) != 1:
+    sys.exit("G4c: %d colocated items" % len(hits))
+open(sys.argv[2], "w").write(hits[0] + "\necho RUNCMD_CONTINUED\n")
+PY
+cat > "$C4/bin/docker" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$C4_LOG"
+case "$1" in
+  pull) exit "${C4_PULL_RC:-0}" ;;
+  cp) case "$3" in */inngest-bootstrap.sh) : > "$3" ;; esac ;;
+esac
+exit 0
+STUB
+assert_fixture_dir "$C4"
+cat > "$C4/bin/soleur-boot-emit" <<'STUB'
+#!/bin/sh
+printf "emit %s\n" "$*" >> "$C4_LOG"
+exit 0
+STUB
+cat > "$C4/bin/curl" <<'STUB'
+#!/bin/sh
+printf "curl %s\n" "$*" >> "$C4_LOG"
+exit 7
+STUB
+# Records the bound, then runs the wrapped command (the docker stub) — so the log shows WHICH
+# call was bounded. The colocated pull lost its 3 s /v2/ pre-check with 1d; the timeout is its
+# only ceiling (the dedicated inngest template and the seed pull use the same 180 s).
+cat > "$C4/bin/timeout" <<'STUB'
+#!/bin/sh
+printf "timeout %s " "$1" >> "$C4_LOG"
+shift
+exec "$@"
+STUB
+chmod +x "$C4/bin"/*
+C4_ZIREF="10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:"
+c4_run() {  # <script> <pull rc> : sets C4RC, C4OUT; the call log is $C4/log
+  : > "$C4/log"; C4RC=0
+  C4OUT=$(C4_LOG="$C4/log" C4_PULL_RC="$2" PATH="$C4/bin:/usr/bin:/bin" TMPDIR="$C4" \
+    /usr/bin/timeout 20 "$SHELL_BIN" "$1" 2>&1) || C4RC=$?
+}
+c4_miss() {  # the property: fatal emit (the only emit), non-zero, no later pull/create, runcmd ended
+  c4_run "$1" "${C4_FORCE_RC:-1}"
+  local why=""
+  [ "$C4RC" != 0 ] || why="$why rc=0"
+  grep -q RUNCMD_CONTINUED <<<"$C4OUT" && why="$why runcmd-continued"
+  [ "$(grep '^emit ' "$C4/log" | tr '\n' '|')" = "emit inngest_pull_fatal fatal|" ] || why="$why emits=[$(grep '^emit ' "$C4/log" | tr '\n' '|')]"
+  [ "$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")" = 1 ] || why="$why pulls=$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")"
+  grep -q "^pull $C4_ZIREF" "$C4/log" || grep -q "^timeout 180 pull $C4_ZIREF" "$C4/log" || why="$why first-pull-not-zot"
+  grep -q '^create ' "$C4/log" && why="$why create-after-miss"
+  grep -q '^curl ' "$C4/log" && why="$why probe-on-resolution-path"
+  G4WHY="$why"; [ -z "$why" ]
+}
+c4_hit() {  # zot hit: inngest_zot info, one pull, and every later consumer follows the zot ref
+  c4_run "$1" 0
+  local why=""
+  [ "$C4RC" = 0 ] || why="$why rc=$C4RC"
+  grep -q RUNCMD_CONTINUED <<<"$C4OUT" || why="$why runcmd-ended"
+  [ "$(grep '^emit ' "$C4/log" | tr '\n' '|')" = "emit inngest_zot info|" ] || why="$why emits=[$(grep '^emit ' "$C4/log" | tr '\n' '|')]"
+  [ "$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")" = 1 ] || why="$why pulls=$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")"
+  grep -q "^timeout 180 pull $C4_ZIREF" "$C4/log" || why="$why pull-unbounded"
+  grep -q "^create --name soleur-inngest-bootstrap-extract $C4_ZIREF" "$C4/log" || why="$why create-not-zot"
+  grep -q "^inspect $C4_ZIREF" "$C4/log" || why="$why inspect-not-zot"
+  grep -q 'ghcr\.io' "$C4/log" && why="$why ghcr-ref-used"
+  G4WHY="$why"; [ -z "$why" ]
+}
+c4_miss "$C4/item.sh" && ok "G4c: colocated zot miss → soleur-boot-emit inngest_pull_fatal fatal (only emit), exit non-zero, no later pull/create, runcmd ends" \
+  || no "G4c miss:$G4WHY"
+c4_hit "$C4/item.sh" && ok "G4c: colocated zot hit → inngest_zot info, one pull bounded by timeout 180, create/inspect follow the zot ref, runcmd continues" \
+  || no "G4c hit:$G4WHY"
+c4_mut() {  # <label> <predicate> <python replace old> <new>
+  cp "$C4/item.sh" "$C4/mut.sh"
+  python3 - "$C4/mut.sh" "$3" "$4" <<'PY' || harness "G4c mutation did not land: $1"
+import sys
+p, a, b = sys.argv[1:4]
+s = open(p).read()
+if s.count(a) != 1:
+    sys.exit(3)
+open(p, "w").write(s.replace(a, b))
+PY
+  G4WHY=""
+  if "$2" "$C4/mut.sh"; then no "G4c mutation SURVIVED: $1"; else ok "G4c mutation RED: $1 —$G4WHY"; fi
+}
+c4_mut "emit moved after the exit (unreachable)" c4_miss "soleur-boot-emit inngest_pull_fatal fatal; exit 1;" "exit 1; soleur-boot-emit inngest_pull_fatal fatal;"
+c4_mut "emit level swapped to warning" c4_miss "inngest_pull_fatal fatal;" "inngest_pull_fatal warning;"
+c4_mut "exit dropped (falls through to docker create)" c4_miss "inngest_pull_fatal fatal; exit 1;" "inngest_pull_fatal fatal; :;"
+c4_mut "the GHCR fallback restored (pull of the IREF pin carrier after the miss)" c4_miss "inngest_pull_fatal fatal; exit 1;" 'inngest_ghcr_fallback warning; docker pull "$IREF";'
+c4_mut "the /v2/ probe restored on the resolution path" c4_miss 'if timeout 180 docker pull "$ZIREF"; then' 'if curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/" && timeout 180 docker pull "$ZIREF"; then'
+c4_mut "timeout 180 dropped from the colocated zot pull (unbounded)" c4_hit 'if timeout 180 docker pull "$ZIREF"; then' 'if docker pull "$ZIREF"; then'
+# Harness must-RED: a stub whose "failing" pull returns 0 never reaches the miss arm — the miss
+# predicate must not pass by testing the hit arm twice.
+if C4_FORCE_RC=0 c4_miss "$C4/item.sh"; then no "G4c harness: the miss predicate passed with the pull stubbed to succeed"
+else ok "G4c harness RED: with the pull stubbed to succeed the miss predicate fails —$G4WHY"; fi
+
+# ── Cross-template per-leg wording (NARROWED by #8036 1d) ────────────────────────────────────
+# Before 1d the web fatal and the inngest oci-pull-ALL-LEGS-FAILED marker shared 'zot=[' 'ghcr=['
+# 'not-attempted'. The GHCR leg is gone from both templates and the inngest ALL-LEGS bracket goes
+# with it, so only 'zot=[' survives — in the web fatal detail. The two GHCR tokens are now
+# residual-zero on BOTH sides (a re-added GHCR leg in either template reds here).
 webcode=$(grep -vE '^[[:space:]]*#' "$SRC"); ingcode=$(grep -vE '^[[:space:]]*#' "$INNGEST_CI")
-for tok in 'zot=[' 'ghcr=[' 'not-attempted'; do
-  if grep -qF -- "$tok" <<<"$webcode" && grep -qF -- "$tok" <<<"$ingcode"; then ok "parity: '$tok' in both the web fatal detail and inngest oci-pull-ALL-LEGS-FAILED"
-  else no "parity: '$tok' must appear in the code of both cloud-init.yml and cloud-init-inngest.yml"; fi
+if grep -qF -- 'zot=[' <<<"$webcode"; then ok "parity: 'zot=[' names the zot leg in the web fatal detail"
+else no "parity: 'zot=[' must appear in the code of cloud-init.yml (the per-leg fatal detail)"; fi
+for tok in 'ghcr=[' 'not-attempted'; do
+  if grep -qF -- "$tok" <<<"$webcode" || grep -qF -- "$tok" <<<"$ingcode"; then no "parity: GHCR per-leg token '$tok' is back in the code of cloud-init.yml or cloud-init-inngest.yml (#8036 1d)"
+  else ok "parity: GHCR per-leg token '$tok' is in neither template's code (#8036 1d)"; fi
 done
 
 # Floor: the number of assertions must not silently shrink (a deleted block reads as green).
-MIN_ASSERTIONS=91
+# #8036 1d: 91 → 99. Every retired GHCR row was replaced 1:1 by its residual-zero inverse, and the
+# 8 G4c colocated-inngest rows were added BEFORE this restatement. 99 → 101 (PR #8708 review): the
+# G1.21 on_err level=fatal mutation row and the G4c unbounded-colocated-pull mutation row.
+MIN_ASSERTIONS=101
 total=$((pass + fail + skipped))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   printf 'assertion floor: %d < %d — a block stopped asserting\n' "$total" "$MIN_ASSERTIONS"; exit 1
