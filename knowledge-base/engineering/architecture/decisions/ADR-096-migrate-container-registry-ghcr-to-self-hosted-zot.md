@@ -12,16 +12,27 @@
 **2026-07-17T19:51:49Z** and has been the **sole** pull path since about 2026-07-29, when the GHCR
 read PAT was revoked outside any repo change (amendments 2026-07-30 and 2026-09-22; cutover record
 in `runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). That holds for **rolling
-deploys**. A **fresh web boot currently fails**: the web-2 replace on 2026-09-23 booted dark at
-`stage=pull` (#8651; fix in flight as PR #8660), so `stage:"app_zot"` still has 0 events. Do not
-replace a web host until #8651 closes. Retirement is partial. **5.3a** (the `ci-deploy.sh` GHCR
-read path) was delivered on 2026-09-23 by #8036 item 1c; see "Amendment 2026-09-23 (#8036 item 1c)"
-under §Cold-boot-dependency statement. **5.3b, 5.4 and 5.6** wait on the #6122 soak, which cannot pass until
-#8651 closes (its `WEB_BLOCKER` arm) and needs a re-armed window (the backfilled verdict is a
-recorded FAIL; #6500 is open). 5.3b's "stop GHCR push" also collides with ADR-169, whose restore
-gate reads GHCR (see #6122). **5.5**'s revoke half is partly spent: the PAT in `GHCR_READ_TOKEN`
-returns 401 (amendment 2026-07-30), but whether that is the PAT spec TR5 calls exposed is
-unverified. This ADR flips to **accepted** (task 5.6) once 5.3b, 5.4 and 5.5 are complete.
+deploys**. A **fresh web boot failed** on 2026-09-23 (web-2 booted dark at `stage=pull`, #8651).
+The fix, PR #8660, merged on 2026-09-24; as of 2026-09-24 it is armed in source but not yet
+observed on a host, and `stage:"app_zot"` has 0 events. Do not treat a web-host replace as safe
+until #8651 closes. Retirement is partial:
+
+- **5.3a** (the `ci-deploy.sh` GHCR read path) is done (2026-09-23, #8036 item 1c; see "Amendment
+  2026-09-23 (#8036 item 1c)" under §Cold-boot-dependency statement).
+- **5.3b** is narrowed by the operator's `DECISION: B3` (2026-09-24): CI keeps pushing to GHCR as
+  ADR-169's restore source, so "stop GHCR push" is no longer a retirement step. Two parts remain:
+  5.3b-i (remove the fresh-boot GHCR branches) and 5.3b-iii (re-scope, then remove, the GHCR egress
+  allow). See "Amendment 2026-09-24 (#6122)".
+- **5.3b and 5.4 wait on the #6122 soak.** It cannot pass until #8651 closes (its `WEB_BLOCKER`
+  arm), and its backfilled verdict is a recorded FAIL, so it needs a re-armed window. Re-arming,
+  and authorizing #6500 and #6122, are the operator's acts on #6122.
+- **5.5 is done** (2026-09-24). The PAT's owner, `GHCR_READ_USER`, is the operator's own
+  org-admin account (measured: it equals the operator's GitHub login), not a machine account as
+  `variables.tf` and the 2026-07-30 correction describe it. On 2026-09-24 that account listed no
+  classic and no fine-grained personal access token, and the Doppler value returns 401. It is not
+  rotated, by design: no host is meant to read GHCR after 5.3b-i.
+
+This ADR flips to **accepted** (task 5.6) when 5.3b-i, 5.3b-iii and 5.4 are all complete.
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
@@ -63,7 +74,9 @@ account". That is wrong on the repo's own facts, and the error mattered because 
 inflated the claim: `variables.tf` describes `GHCR_READ_TOKEN` as a *fine-grained*
 read:packages PAT **on a machine account**, and this PR's own ADR-088 edit calls it the
 "machine-account PAT". So the revoked credential was already non-personal in the
-machine-vs-human sense. What is actually structural is narrower: no GHCR pull credential
+machine-vs-human sense. (**Superseded 2026-09-24:** measured, `GHCR_READ_USER` is the operator's own
+org-admin account, so the credential WAS personal; the `variables.tf` "machine account" wording was
+never checked. See "Amendment 2026-09-24 (#6122)".) What is actually structural is narrower: no GHCR pull credential
 can be minted **without a browser** — a fine-grained PAT has no creation API, and the App
 installation token is DENIED the pull (ADR-088 arm-b). Read (d)(1) below against that
 narrower claim: "a non-personal credential works" was already satisfied, so the open bar
@@ -477,6 +490,8 @@ host. Read the amendment before relying on any bullet below:
     > registry. Deleting a branch that cannot succeed removes no capability, which is why this is
     > a PARTIAL 5.3 rather than a waiver of the gate. 5.3b, which WOULD remove capability
     > (stopping the GHCR push breaks ADR-169's restore), remains blocked by the soak.
+    > (**Superseded 2026-09-24:** `DECISION: B3` dropped "stop GHCR push" from 5.3b, so ADR-169's
+    > restore is kept; see "Amendment 2026-09-24 (#6122)".)
     >
     > **The soak is not enrolled in the sweeper** (see the 2026-09-22 amendment): with the current
     > `START` its verdict is fixed at FAIL, so a daily run adds no information. The
@@ -528,8 +543,11 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   not TLS); local-fs (single-datacenter) durability until an R2/snapshot revisit (NG3).
 - **Retirement (post-soak):** remove the pull-site GHCR fallback branch (5.3a — **done
   2026-09-23, #8036 1c**, on the narrower no-reachable-success-arm ground recorded in the task
-  5.3 amendment; not a soak pass), stop GHCR push + egress allow (5.3b, still gated), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
-  `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5).
+  5.3 amendment; not a soak pass); remove the fresh-boot GHCR branches and the re-scoped GHCR egress
+  allow (5.3b, still gated); retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
+  `GHCR_MINTER_DISABLED` gate (5.4); then rotate + revoke the exposed PAT (5.5). **Amended
+  2026-09-24:** "stop GHCR push" was part of 5.3b until the operator's `DECISION: B3` dropped it;
+  see the amendment of that date.
 - **Host sizing + region (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live nbg1, provisioned
   during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**→`cx23`(4 GB, #6497/#6463, 2026-07-16, after telemetry showed the 8 GB was never needed)→**`cpx22`(2 vCPU / 4 GB, #7309, 2026-08-06 — stock volatility; see the amendment at the end of this ADR)**. The 4 GB cx23
   restart-looped zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent —
@@ -1397,3 +1415,65 @@ dead, a fresh-boot zot miss now emits only the `stage=pull` fatal, not `app_ghcr
 `zot-soak-6122.sh`'s `FAIL_QUERIES` does not count that fatal (DC-3 in
 `knowledge-base/project/specs/archive/20260924-005225-feat-one-shot-8651-web-host-zot-primary-boot/decision-challenges.md`;
 tracked on #6122).
+
+## Amendment 2026-09-24 (#6122) — 5.3b narrowed by operator `DECISION: B3`; 5.5 revoke observed
+
+**Decision (operator, recorded on #6122).** GHCR stays as a **CI-only restore source**. CI keeps
+pushing every release to GHCR and reads it back with its own `GITHUB_TOKEN`, not a PAT. ADR-169 is
+unchanged: its restore gate (predicates A1/A2, `scripts/registry-restore-from-ghcr.sh`) keeps
+reading GHCR, which still meets its independence criterion because GHCR is not prod zot.
+
+**Why this and not the alternatives.** The migration existed because hosts could not pull GHCR
+with a credential Soleur can mint (ADR-088's App-token dead end). B3 keeps that outcome: once 5.3b's
+remaining parts and #8036 item 1d land, no host holds a GHCR credential or reads a private GHCR
+package. Stopping the push would have deleted ADR-169's only restore source (the deadlock posted
+to #6122), and every alternative that removes it needs new infrastructure first:
+
+- **A** (a second registry, #6126): several PRs and a second host.
+- **B1** (an OCI export in R2): a bucket, a CI step and a re-sourced restore engine, plus the
+  no-default-variable credential trap.
+- **B2** (a volume snapshot): a snapshot job and a redesigned restore engine, and it weakens
+  ADR-169's independence criterion.
+
+A, B1 and B2 also each need the release build re-plumbed, because buildx pushes to GHCR and `crane
+copy` fills zot from there.
+
+**What changes in the retirement plan.**
+
+- **5.3b** drops "stop GHCR push". What remains:
+  - 5.3b-i: remove the fresh-boot GHCR branches. Waits on the #6122 soak and is sequenced after
+    #8651 closes. It overlaps #8036 item 1d, which also owns the dedicated inngest host's GHCR
+    login and fallback pull in `cloud-init-inngest.yml` (recorded on #8036). The 5.3a "no reachable
+    success arm" ground may also apply to this arm; whether it releases 5.3b-i from the soak is the
+    operator's call.
+  - 5.3b-iii: remove the GHCR egress allow. Needs re-scoping first: the cosign verifier and zot's
+    own image still pull anonymously from ghcr.io, and a cut would fail verification open
+    (`IMAGE_VERIFY_MODE` defaults to `warn`).
+- **5.5 is done.** The PAT's owner is the account in `GHCR_READ_USER`. Measured on 2026-09-24,
+  that is the operator's own org-admin GitHub account. This **corrects the 2026-07-30
+  correction** above, which called the credential a PAT "on a machine account" by quoting the
+  `variables.tf` description; that description was never measured. On 2026-09-24 the operator's
+  account listed no classic and no fine-grained personal access token, so no PAT minted on it is
+  live, and the value in `GHCR_READ_TOKEN` returns 401 (amendment 2026-07-30). The PAT is **not
+  rotated**, deliberately: a new PAT written to Doppler would be picked up again by the fresh-boot
+  sites that still read `GHCR_READ_TOKEN` until 5.3b-i and #8036 item 1d remove them, and B3
+  intends no host to read GHCR. The stale `variables.tf` description goes with those variables in
+  5.4.
+- **5.4** and **5.6** are unchanged.
+
+**What this does NOT decide.** Option A (#6126) stays open as a separate availability question.
+Clause (g), "production has one registry and no fallback", is still true, and a second registry is
+the only option that addresses it. It is not a 5.3b unblocker any more.
+
+**Residual risk accepted with B3.** ADR-169's A1 depends on GHCR never pruning a pinned version,
+and on GitHub continuing to let the Actions token read private repo-linked packages. A1 depended on
+both before this decision; B3 makes that dependency permanent rather than transitional. GHCR also
+remains a supply-chain publish surface, so "off GHCR" means off GHCR for pulls, not for publishing.
+
+That surface is also a **write path into production** through the restore. Several workflows hold
+`packages: write` on GHCR, and `scripts/registry-restore-from-ghcr.sh` copies each image and checks
+that its signature exists, but does not run `cosign verify`. Hosts verify at pull in
+`IMAGE_VERIFY_MODE=warn` by default (`ci-deploy.sh`), so an image altered on GHCR and then restored
+would deploy with a warning. B3 keeps GHCR as a restore input for good, which makes the
+WARN→ENFORCE flip for cosign verification (#6129) the mitigation this decision depends on. #6129
+stays gated behind the soak, as before.
