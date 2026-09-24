@@ -168,7 +168,7 @@ code that exists; one derived from the design tests the property.
 
 ## Test Scenarios
 
-Derive from acceptance criteria. Use Given/When/Then format for logic tests, and deterministic verification commands for integration tests (consumed by `/soleur:qa`):
+Derive from acceptance criteria. Use Given/When/Then format for logic tests, and deterministic verification commands for integration tests (consumed by `soleur:qa`):
 
 - Given [precondition], when [action], then [expected result]
 - Given [edge case], when [action], then [expected handling]
@@ -245,7 +245,7 @@ closes: [N]
 - Architecture impacts
 - Performance implications
 - Security considerations
-- NFR impacts (read `knowledge-base/engineering/architecture/nfr-register.md` and assess which non-functional requirements this feature affects — run `/soleur:architecture assess` for a structured assessment)
+- NFR impacts (read `knowledge-base/engineering/architecture/nfr-register.md` and assess which non-functional requirements this feature affects — run `soleur:architecture assess` for a structured assessment)
 
 ### Attack Surface Enumeration (for security fixes)
 
@@ -372,7 +372,7 @@ Translate each acceptance criterion into a testable scenario:
 
 Include regression scenarios for any bugs this work addresses.
 
-If the feature touches external services, include deterministic verification commands (consumed by `/soleur:qa`):
+If the feature touches external services, include deterministic verification commands (consumed by `soleur:qa`):
 
 - **Browser:** [Navigate to URL, fill form, submit, verify UI state]
 - **API verify:** `doppler run -c dev -- curl -s [API endpoint] | jq '[query]'` expects `[value]`
@@ -473,7 +473,7 @@ closes: [N]
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
-If the threshold is `single-user incident` or `aggregate pattern`, list each user-facing artifact + exposure vector pair on its own bullet so `user-impact-reviewer` can cross-check them against the diff.
+If the threshold is `single-user incident` or `aggregate pattern`, list each user-facing artifact + exposure vector pair on its own bullet so `soleur:engineering:review:user-impact-reviewer` can cross-check them against the diff.
 
 ## Observability
 
@@ -579,7 +579,7 @@ code that exists; one derived from the design tests the property.
 - [ ] Performance targets
 - [ ] Security requirements
 - [ ] Accessibility standards
-- [ ] NFR register assessment (run `/soleur:architecture assess` against `knowledge-base/engineering/architecture/nfr-register.md`)
+- [ ] NFR register assessment (run `soleur:architecture assess` against `knowledge-base/engineering/architecture/nfr-register.md`)
 
 ### Quality Gates
 
@@ -605,7 +605,7 @@ For each bug fix included, write a scenario proving the fix:
 
 - Given [boundary condition], when [action], then [expected handling]
 
-### Integration Verification (for `/soleur:qa`)
+### Integration Verification (for `soleur:qa`)
 
 If the feature touches external services, include deterministic verification commands:
 

@@ -1,16 +1,24 @@
 ---
 title: "Platform Portability Comparison"
 last_updated: 2026-06-08
-platforms:
+status: historical
+# The platforms this document MEASURED, not a supported set. Gemini CLI and
+# OpenHands were retired 2026-09-23 (ADR-245) and their hand-ported trees
+# deleted; deepagents was never ported. Supported harnesses live in the
+# `Harness` union in plugins/soleur/lib/harness.ts, which is the authority.
+platforms_measured:
   - codex-cli
   - gemini-cli
   - openhands
   - deepagents
+retired: 2026-09-23
 ---
 
 # Platform Portability Comparison
 
 Unified comparison of Soleur portability across all analyzed agent platforms. Updated when new inventories are produced or platform capabilities change.
+
+> **Retired 2026-09-23 (ADR-245, #8306): the Gemini CLI and OpenHands columns are a historical record, not a shipped state.** The hand-ported `.gemini/` and `.openhands/` trees were deleted from the repository on that date because nobody maintained them. The supported harnesses are Claude Code, Grok Build, Codex and Devin. The measurements below stand as taken and are left intact — this banner scopes them; it does not amend them. Re-entry for either platform requires a `Harness` union member in `plugins/soleur/lib/harness.ts` plus a generator, never another hand port.
 
 ## Summary
 

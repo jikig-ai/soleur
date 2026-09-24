@@ -21,7 +21,7 @@ bootcmd:
       KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
       SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
       PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
-      BODY=$(printf '{"message":"soleur-cloud-init boot stage","level":"info","tags":{"stage":"bootcmd_start","host_id":"%s"}}' "$HOST_ID")
+      BODY=$(printf '{"message":"soleur-cloud-init boot stage","level":"info","tags":{"stage":"bootcmd_start","host_id":"%s","host_name":"${host_name}"}}' "$HOST_ID")
       # --connect-timeout 5 + --retry 1 caps the black-hole stall (no-egress is the exact case this
       # beacon targets, and bootcmd runs every boot) to a few seconds instead of ~30s.
       curl --connect-timeout 5 -m 8 --retry 1 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
@@ -293,6 +293,30 @@ write_files:
     content: ${fail2ban_sshd_local_b64}
     owner: root:root
     permissions: '0644'
+  - path: /etc/systemd/network/99-soleur-private-fallback.network
+    content: |
+      [Match]
+      Driver=virtio_net
+      Name=!eth0
+
+      [Link]
+      RequiredForOnline=no
+
+      [Network]
+      DHCP=ipv4
+      LinkLocalAddressing=no
+      IPv6AcceptRA=no
+
+      [DHCPv4]
+      UseMTU=yes
+      UseDNS=no
+      UseDomains=no
+      UseHostname=no
+      UseNTP=no
+      SendHostname=no
+      RouteMetric=1024
+    owner: root:root
+    permissions: '0644'
 
   # (#5921) The journald persistent drop-in was moved out of inline write_files: (its 2.4 KB
   # base64 blob was the biggest remaining user_data expansion). It is now baked and installed
@@ -317,21 +341,17 @@ runcmd:
     IMAGE_REF='${image_name}'
     STAGE=runcmd_early
     # (#6981) runcmd runs as root with no `User=`, so systemd sets no HOME and every doppler
-    # call dies (it resolves HOME before DOPPLER_CONFIG_DIR). SCOPE: sites above the exporting
-    # `set -a; . webhook-deploy` use a bare `.` and stay tokenless/inert — not fixed here
-    # (#6985). Do NOT put HOME in webhook-deploy (User=deploy units). Guarded by AC-HOME1..6.
+    # call dies (it resolves HOME before DOPPLER_CONFIG_DIR). A bare `.` exports nothing, so NO
+    # doppler call may sit above the terminal `set -a; . webhook-deploy` (#6985/#8651; census in
+    # cloud-init-web-zot-seed.test.sh). Do NOT put HOME in webhook-deploy (User=deploy units).
     export HOME=/root
     HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
     # (#6090) ONE transport, reused by on_err (fatal) + the runcmd_start breadcrumb (info):
-    #   _emit <message> <stage> <level>. Prefers the BAKED DSN so it fires even when doppler is
-    # the broken stage (and before doppler/docker install). Fully fail-open — never blocks boot.
+    #   _emit <message> <stage> <level>. BAKED DSN only (#8651). Fully fail-open.
     _emit() {
-      _m="$1"; _s="$2"; _l="$3"   # capture args before the subshell sources the env file
+      _m="$1"; _s="$2"; _l="$3"
       ( set +e
-        . /etc/default/webhook-deploy 2>/dev/null || true
         DSN='${sentry_dsn}'
-        [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
-               || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
         if [ -n "$DSN" ]; then
           KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
           SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
@@ -340,7 +360,7 @@ runcmd:
           # captured to /run/soleur-stage-detail). Keep only printable, drop quotes/backslash, cap
           # 200 → JSON-safe. Off-host all creds/image checks pass, so the real error only exists here.
           DETAIL=$(tr -cd '[:print:]' < /run/soleur-stage-detail 2>/dev/null | tr -d '"\\' | head -c 200)
-          BODY=$(printf '{"message":"%s","level":"%s","tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"}}' "$_m" "$_l" "$_s" "$IMAGE_REF" "$HOST_ID" "$DETAIL")
+          BODY=$(printf '{"message":"%s","level":"%s","tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s","host_name":"${host_name}"}}' "$_m" "$_l" "$_s" "$IMAGE_REF" "$HOST_ID" "$DETAIL")
           curl --connect-timeout 5 -m 8 --retry 1 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
             -H 'Content-Type: application/json' \
             -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
@@ -358,6 +378,8 @@ runcmd:
     # landed bootcmd_start (below) with NO runcmd_start brackets the death to the packages:/config
     # phase; neither landing points at no-egress / a pre-network death → needs host console.
     _emit "soleur-cloud-init boot stage" runcmd_start info
+  # #8651/#6438: converge a late-attached private NIC via the #8539 fallback .network above (ADR-123 amendment 2026-09-23).
+  - networkctl reload || { printf 'gate=reload' > /run/soleur-stage-detail; _emit "soleur-cloud-init boot stage" private_nic_probe_fault warning; }
 
   # Apply SSH hardening immediately (drop-in written by write_files above).
   # Runs BEFORE the package audit so the operator always has hardened SSH
@@ -450,9 +472,8 @@ runcmd:
   # Configure Docker log rotation + the self-hosted zot registry as an insecure (plain-HTTP,
   # private-net) registry (#6122/ADR-096). zot serves HTTP on ${registry_endpoint} (derived from
   # zot-registry.tf local.registry_endpoint, #6448) behind a deny-all-public firewall; docker refuses a non-TLS registry
-  # unless it is allowlisted here. Harmless before the Phase-3 flip activates — nothing pulls from
-  # zot until the dark-launch gate confirms it live. cosign digest-pinning is the integrity guard,
-  # not TLS (Phase-0 spike). This is the ONLY daemon.json write for FRESH hosts; running hosts get
+  # unless it is allowlisted here; the seed pull below is zot-first (#8651). Digest pinning is the
+  # integrity guard, not TLS (Phase-0 spike). This is the ONLY daemon.json write for FRESH hosts; running hosts get
   # the same allowlist via terraform_data.registry_insecure_config (server.tf).
   - |
     cat > /etc/docker/daemon.json << 'DOCKEREOF'
@@ -485,81 +506,52 @@ runcmd:
     STAGE=pull
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
-    # ROOT FIX (#6005): the seed image is now a PRIVATE GHCR package, so this early seed-pull
-    # must authenticate FIRST (bootstrap's ghcr_login runs post-extract, too late) — anonymous
-    # pull 401s + aborts the boot. Non-fatal: a creds miss still lets the pull emit stage=pull.
-    STAGE=ghcr_login
-    # (#6090) Capture the login OUTCOME to /run/soleur-stage-detail so a downstream stage=pull fatal
-    # reports WHY (off-host the creds+image are valid, so the failure is host-side and uncaptured).
-    ( set +e
-      . /etc/default/webhook-deploy 2>/dev/null || true
-      # (#6090) Prefer the BAKED creds (mirrors the baked sentry_dsn above): Doppler answers
-      # EMPTY at the cold-boot instant, so the un-baked fetch skipped docker login → anonymous
-      # private pull → 401 → abort at stage=pull. Fall back to Doppler (hardened: timeout 45 +
-      # 3-try retry, mirroring the apt-block idiom) only when the bake is empty.
-      GHCR_USER='${ghcr_read_user}'
-      [ -n "$GHCR_USER" ] || { n=0; until GHCR_USER=$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_USER" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
-      GHCR_TOKEN='${ghcr_read_token}'
-      [ -n "$GHCR_TOKEN" ] || { n=0; until GHCR_TOKEN=$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_TOKEN" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
-      if [ -z "$GHCR_USER" ] || [ -z "$GHCR_TOKEN" ]; then
-        printf 'ghcr_creds_missing user=%s token=%s' "$([ -n "$GHCR_USER" ] && echo y || echo n)" "$([ -n "$GHCR_TOKEN" ] && echo y || echo n)" > /run/soleur-stage-detail
-      elif printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin > /run/soleur-ghcr-login.log 2>&1; then
-        printf 'ghcr_login_ok' > /run/soleur-stage-detail
-      else
-        # §1A (#6090): stale baked token fails login → re-fetch Doppler + retry once. #8036 1c
-        # retired the ci-deploy side; boot is the only one left (1d). set +e subshell = fail-open.
-        RU=""; RT=""
-        n=0; until RU=$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null); [ -n "$RU" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done
-        n=0; until RT=$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null); [ -n "$RT" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done
-        if [ -n "$RU" ] && [ -n "$RT" ] && printf '%s' "$RT" | docker login ghcr.io -u "$RU" --password-stdin > /run/soleur-ghcr-login.log 2>&1; then
-          GHCR_USER="$RU"
-          printf 'ghcr_login_ok_refetch' > /run/soleur-stage-detail
-        else
-          printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
-        fi
-      fi
-      # #6122/ADR-096: also log in to zot (dark — only when ZOT_* present) so the seed pull can
-      # prefer it; login persists for the app + inngest pulls (bootstrap's zot_login is too late).
-      ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
-      if [ -n "$ZURL" ]; then
-        ZUSER=$(timeout 15 doppler secrets get ZOT_PULL_USER --plain --project soleur --config prd 2>/dev/null || true)
-        ZTOK=$(timeout 15 doppler secrets get ZOT_PULL_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
-        [ -n "$ZUSER" ] && [ -n "$ZTOK" ] && printf '%s' "$ZTOK" | docker login "$ZURL" -u "$ZUSER" --password-stdin >/dev/null 2>&1 || true
-      fi
-    ) || true
-    # #6122/ADR-096: resolve the effective image ref ONCE (zot-primary when configured +
-    # /v2/-reachable, else the unchanged GHCR ref) → /run/soleur-image-ref so app pull/create/
-    # run follow the SAME registry. Dark-safe: unset/unreachable zot ⇒ REF = GHCR ref.
-    STAGE=pull
-    ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
-    REF="$IMAGE_REF"
-    if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
-      REF="$ZURL/$(printf '%s' "$IMAGE_REF" | sed 's#^ghcr.io/##')"
-    fi
-    # #6090: log each pull to /run/soleur-pull.log; on final failure append stderr to
-    # /run/soleur-stage-detail (on_err detail tag); clear on success. #6122: zot ref first,
-    # fall back to GHCR after the zot attempt.
-    N=0
-    until docker pull "$REF" > /run/soleur-pull.log 2>&1; do
-      N=$((N+1))
-      # #6278: on the zot→GHCR flip (REF still the zot ref ⇒ zot WAS primary), emit a
-      # warning breadcrumb (stage=app_ghcr_fallback) so the fallback-rate alarm pages on a
-      # fresh-boot zot miss that still SUCCEEDS via GHCR (else invisible). Baked _emit is
-      # the only emitter live pre-bootstrap; the inngest path uses soleur-boot-emit (same
-      # `stage` tag) as it runs after host-bootstrap. Fires once. Fail-open.
-      if [ "$N" -ge 2 ] && [ "$REF" != "$IMAGE_REF" ]; then
-        REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
-        # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
-        _emit "app image served via GHCR fallback (zot miss)" "app_ghcr_fallback" warning
-      fi
-      [ "$N" -ge 5 ] && { printf ' | pull_err: %s' "$(tail -c 160 /run/soleur-pull.log 2>/dev/null)" >> /run/soleur-stage-detail; exit 1; }
-      sleep 5
+    # #8651: zot-first by BAKE, never doppler (#6985). Rationale + bounds: server.tf zot_pull_token.
+    for f in soleur-stage-detail soleur-pull.log soleur-zot-login.log soleur-ghcr-login.log; do install -m 600 /dev/null /run/$f; done
+    ZEP='${registry_endpoint}'
+    NIC=probe_fault; E='${private_ip}'; i=0; P=0
+    command -v ip >/dev/null && [ -n "$E" ] && while [ $i -lt 75 ]; do
+      O=$(ip -4 -o addr show 2>/dev/null) && { P=1; printf '%s\n' "$O" | grep -qwF -- "$E" && { NIC=ready; break; }; }
+      i=$((i+1)); sleep 2
     done
-    : > /run/soleur-stage-detail
+    [ $NIC = ready ] || [ $P = 0 ] || NIC=timeout
+    W=$((i*2))
+    [ $NIC = ready ] || { printf 'nic=%s:%s gate=seed' $NIC $W > /run/soleur-stage-detail; _emit "soleur-cloud-init boot stage" private_nic_$NIC warning; }
+    ZL=fail; n=0; R=0
+    [ -n "$ZEP" ] && while [ $n -lt 3 ]; do [ $n = 0 ] || sleep 5; n=$((n+1)); printf '%s' '${zot_pull_token}' | timeout 60 docker login "$ZEP" -u '${zot_pull_user}' --password-stdin > /run/soleur-zot-login.log 2>&1 && { ZL=ok; break; } || R=$?; done
+    STAGE=ghcr_login
+    GHCR_USER='${ghcr_read_user}'
+    GHCR_TOKEN='${ghcr_read_token}'
+    GL=empty
+    [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ] && GL=fail && printf '%s' "$GHCR_TOKEN" | timeout 60 docker login ghcr.io -u "$GHCR_USER" --password-stdin > /run/soleur-ghcr-login.log 2>&1 && GL=ok
+    unset GHCR_TOKEN
+    STAGE=pull
+    C=none; ZN=0; GP=not-attempted; OK=0
+    case "$IMAGE_REF" in ghcr.io/*@sha256:*) REF="$ZEP/$${IMAGE_REF#ghcr.io/}" ;; *) REF="$IMAGE_REF"; C=unpinned ;; esac
+    if [ "$REF" != "$IMAGE_REF" ]; then
+      [ $ZL = ok ] && while [ $ZN -lt 3 ]; do [ $ZN = 0 ] || sleep 5; ZN=$((ZN+1)); timeout 180 docker pull "$REF" > /run/soleur-pull.log 2>&1 && { OK=1; break; } || R=$?; [ $R = 124 ] && break; :; done
+    fi
+    [ $OK = 1 ] || [ $C = unpinned ] || { [ $R = 124 ] && C=timeout || case "$(cat /run/soleur-zot-login.log /run/soleur-pull.log)" in *'no route'*|*nreachable*|*refused*|*'i/o timeout'*) C=unreach ;; *nauthorized*|*denied*) C=auth ;; *'manifest unknown'*|*'not found'*) C=manifest ;; *) C=other ;; esac; }
+    Z="zot=[login=$ZL,n=$ZN,cause=$C]"
+    if [ $OK = 0 ] && [ "$GL" = ok ]; then
+      [ "$REF" = "$IMAGE_REF" ] || { printf 'nic=%s:%s %s' "$NIC" "$W" "$Z" > /run/soleur-stage-detail
+        # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
+        _emit "app image served via GHCR fallback (zot miss)" "app_ghcr_fallback" warning; }
+      REF="$IMAGE_REF"; GP=fail; N=0
+      while [ $N -lt 3 ]; do [ $N = 0 ] || sleep 5; N=$((N+1)); timeout 180 docker pull "$REF" > /run/soleur-pull.log 2>&1 && { OK=1; GP=ok; break; }; :; done
+    fi
+    # Fixed fields FIRST (_emit caps detail at 200); redact BEFORE the tail cut.
+    if [ $OK = 0 ]; then
+      T=$( { [ $ZL = ok ] || cat /run/soleur-zot-login.log; cat /run/soleur-pull.log; } | sed -E 's#[A-Za-z0-9_+/-]{40,}#REDACTED#g' | tail -c 100)
+      printf 'nic=%s:%s %s ghcr=[login=%s,pull=%s] pull_err: %s' "$NIC" "$W" "$Z" "$GL" "$GP" "$T" > /run/soleur-stage-detail
+      exit 1
+    fi
+    printf 'zot_login=%s ghcr_login=%s nic=%s:%s %s' "$ZL" "$GL" "$NIC" "$W" "$Z" > /run/soleur-stage-detail
     printf '%s' "$REF" > /run/soleur-image-ref
     # #6462 denominator: REF==IMAGE_REF iff GHCR served. MUST precede the reassign below (it
     # makes the test always-true). Rationale + the image_ref wart: cloud-init-user-data-size.test.ts
     if [ "$REF" = "$IMAGE_REF" ]; then _emit "app image served by GHCR" "app_ghcr_served" warning; else _emit "app image served by zot" "app_zot" info; fi
+    : > /run/soleur-stage-detail
     IMAGE_REF="$REF"
     STAGE=extract
     docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null
@@ -736,9 +728,9 @@ runcmd:
   - |
     set -e
     IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.37@sha256:e773fe5c74e9d49149217554f3d2730c597bf1e3d856933cccfa81199ae490bc
-    # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
+    # #6122/ADR-096: prefer zot (baked endpoint; the seed item's zot login is reused);
     # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
-    ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+    ZURL='${registry_endpoint}'  # baked (#8651/#6985)
     # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
       ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.37@sha256:e773fe5c74e9d49149217554f3d2730c597bf1e3d856933cccfa81199ae490bc"

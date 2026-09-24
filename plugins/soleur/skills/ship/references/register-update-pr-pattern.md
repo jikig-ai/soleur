@@ -2,7 +2,7 @@
 
 When the PR diff is bounded to `knowledge-base/legal/**` or `docs/legal/**` and
 the body documents controls introduced by an ALREADY-MERGED upstream PR
-(typical for follow-through register updates per `/soleur:ship` Phase 7
+(typical for follow-through register updates per `soleur:ship` Phase 7
 Step 3.5 — see PR #3882), the PR-body authoring rules differ from a normal
 code-change PR.
 
@@ -44,7 +44,7 @@ the wrong one if only the first is known:
 **Art. 33(5) determinations do not go in the Art. 30 register.** Art. 30(1)'s limbs are a closed
 list and breach documentation is not among them; see
 [ADR-200](../../../../../knowledge-base/engineering/architecture/decisions/ADR-200-art-33-5-documentation-is-a-distinct-register-discharged-by-an-index.md),
-which also fixes the breach register's inclusion predicate and its column set. The `clo` agent is
+which also fixes the breach register's inclusion predicate and its column set. The `soleur:legal:clo` agent is
 the custodian and adds the row in the **same PR** that lands the determination;
 `scripts/lint-legal-registers.sh` asserts that nothing determination-shaped under
 `knowledge-base/legal/audits/` is dropped without a committed, issue-citing reason.

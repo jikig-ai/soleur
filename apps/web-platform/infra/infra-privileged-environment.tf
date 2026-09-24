@@ -68,14 +68,17 @@ resource "github_repository_environment_deployment_policy" "infra_privileged_mai
 # four credentials became branch-reachable in the first place.
 #
 # CI reads this project through DOPPLER_TOKEN_INFRA_PRIVILEGED, a GitHub ENVIRONMENT
-# secret on the four main-only Tier-B environments. That is the intended read path, not
-# yet the only one: until the runbook's O10/O13 steps evict and rotate it, the
-# workplace-scoped DOPPLER_TOKEN_TF Terraform authenticates with — reachable from any
-# branch — can read this project too (the O2 -> O13 window).
+# secret on the four main-only Tier-B environments. It is not the only reader:
+# DOPPLER_TOKEN_TF, the workplace personal token Terraform authenticates with, can read
+# and write this project and mint service tokens in it. Until the runbook's O10 evicts
+# it from the branch-reachable prd_terraform and O13 rotates it, a copy any branch can
+# reach holds that power (the O2 -> O13 window). After O13 every reader is main-only --
+# nominally, until R1 (#8609) closes: a holder of the prd soleur-ai runtime key can
+# rewrite a Tier-B environment's branch policy.
 resource "doppler_project" "infra_privileged" {
   name = "soleur-infra-privileged"
-  # Doppler's API caps `description` at 255 (unchecked by the provider and by plan); enforced at PR
-  # time by scripts/lint-doppler-description-length.py. Full rationale: the header comment above.
+  # Doppler's API caps `description` at 255, unchecked by the provider and by plan;
+  # scripts/lint-doppler-description-length.py enforces it at PR time.
   description = "Tier B (#8209, ADR-241): credentials that write infra, read another tier's secrets, or reach third-party installations. CI reads it via DOPPLER_TOKEN_INFRA_PRIVILEGED on main-only environments. Operator-supplied; never in tfstate."
 
   lifecycle {

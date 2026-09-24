@@ -39,6 +39,15 @@ function manifestJson(manifest: ReturnType<typeof buildAgentsManifest>): string 
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
+/** Claude Code aliases. Grok's catalog does not resolve them (ADR-110 decision 4). */
+const CLAUDE_MODEL_ALIASES = new Set(["haiku", "sonnet", "opus", "fable"]);
+
+/** Omit the line for a Claude alias so the Grok stub inherits the session model. */
+function grokStubModelLine(model: string): string | null {
+  if (CLAUDE_MODEL_ALIASES.has(model)) return null;
+  return `model: ${model}`;
+}
+
 /** YAML-safe quoted scalar for frontmatter fields that may contain `:`, `§`, etc. */
 function yamlQuote(value: string): string {
   const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -55,12 +64,10 @@ function compatStubMarkdown(entry: ReturnType<typeof discoverAgentEntries>[numbe
     "---",
     `name: ${grokName}`,
     `description: ${yamlQuote(description)}`,
-    `model: ${entry.model}`,
-    "---",
-    "",
-    buildCompatStubBody(entry.path),
-    "",
   ];
+  const modelLine = grokStubModelLine(entry.model);
+  if (modelLine !== null) lines.push(modelLine);
+  lines.push("---", "", buildCompatStubBody(entry.path), "");
   return lines.join("\n");
 }
 
