@@ -379,6 +379,81 @@ without naming what it costs.
   dated member snapshot that counts it, with no parity test to catch the
   stale. The ledger row makes the off-tree disablement visible instead.
 
+### Addendum 2026-09-24 — superseded runs are reaped by head SHA, across workflows
+
+The 2026-09-14 reductions left superseded runs orphaned wherever a workflow could
+not carry a self-cancelling block. On 2026-09-23 the operator cancelled 17 such
+runs by hand: `tenant-integration.yml`, `vendor-pin-verify.yml`,
+`infra-validation.yml`, `constraint-gates.yml`, `cla-evidence.yml`, `cla.yml`
+and CodeQL default-setup `dynamic` runs (which have no YAML file at all).
+
+**Decision.** The ledger's `cancel` column keeps scoring a workflow's OWN
+concurrency. Cross-workflow supersession is handled by one repo-wide reaper,
+`.github/workflows/cancel-superseded-pr-runs.yml`, which on every same-repo PR
+`synchronize` / `reopened` cancels this PR's queued / in-progress
+`pull_request`, `pull_request_target` and CodeQL `dynamic` runs whose
+`head_sha` is no longer the PR head. The selection logic is
+`.github/scripts/cancel-superseded-pr-runs.sh` (`select` mode, pinned by
+`.github/scripts/test/test-cancel-superseded-pr-runs.sh`). The invariant every
+PR workflow now lives under: **a run on a non-head SHA of a same-repo PR may be
+cancelled at any point; a run on the head SHA never is.** That is why
+`cancel-in-progress: false` on `tenant-integration.yml` and
+`vendor-pin-verify.yml` stays as it is: it guards a SAME-SHA cancellation (the
+"#5585 R3" comment above `tenant-integration.yml`'s `dev-supabase-` group; the
+aggregator pattern itself is ADR-032's "Amendment — 2026-06-29 (#5585)"), and
+the reaper cannot produce one by construction.
+
+Rules the script enforces, each with a fixture row: events are an allowlist
+(`push`, `schedule`, `workflow_run`, `workflow_dispatch`, `merge_group` are
+never touched); runs on the default branch are skipped; `dynamic` runs only on
+the two CodeQL path prefixes; in-progress `pull_request_target` runs are left
+alone (they hold secrets and may be mid-write to an outside store); runs created
+after the reaper's own run are skipped; the live PR head is re-read after the
+listing and must equal the event head, or nothing is cancelled. Cancellation is
+the graceful `/cancel` only, so `if: always()` steps still run.
+
+**Trust boundary.** The workflow is `pull_request` and holds `actions: write` —
+the first in this repo — so the executed script is checked out from the default
+branch, never from the PR (editing `.github/scripts/` needs no `workflows`
+permission). The workflow YAML ↔ script env contract only grows: new variables
+are optional and the script ignores unknown ones.
+
+**Corrections to the 2026-09-14 addendum above** (that text is left as
+recorded). Two of its exclusion reasons do not hold. `infra-validation.yml` and
+`apply-sentry-infra.yml` cannot "leave a state lock": every R2 backend runs
+`use_lockfile = false` (R2 has no S3 conditional writes), so no lock exists to
+strand. `tenant-integration.yml`'s "fixture residue" is narrower than stated:
+`run-migrations.sh` applies each migration with `psql --single-transaction`, so
+an interrupted apply rolls back; the residual is per-run test rows (fresh
+grantees / delegations), the same state a `timeout-minutes` kill already
+produces. The ledger rows carry the corrected reasons.
+
+**What still runs on a reaped run.** `if: always()` jobs and steps —
+`tenant-integration-required`, `vendor-pin-required`,
+`sentry-destroy-required`, the `Release dev-suite mutex` step, the drift
+re-probe — still execute and conclude on the OLD SHA, briefly holding a runner.
+Accepted: non-head SHAs never gate the PR, so no synthetic statuses are posted.
+A later reaper that re-lists a still-`in_progress` run re-POSTs an idempotent
+cancel (202, or 409 counted `gone`). `fix-constraints-stage-b.yml` acts only on
+a stage-a `success`, so a reaped stage-a triggers nothing.
+
+**Rejected.** Flipping `cancel-in-progress` on tenant-integration /
+vendor-pin-verify (cancels same-SHA re-triggers, reddening the head-SHA gate);
+adding `concurrency:` blocks to `cla*.yml` / `constraint-gates.yml` (privileged
+run shape kept on purpose; template parity) — and CodeQL `dynamic` has no file
+to put one in; `styfle/cancel-workflow-action` (no event filter, no
+`refs/pull/N/head` coverage, a third-party action holding `actions: write`); a
+`pull_request_target` trigger to reach forks (privileged trigger for a marginal
+gain); synthetic statuses for cancelled contexts (non-head SHAs never gate).
+
+**Open measurements** (appended after the first post-merge reap): whether a
+CodeQL `dynamic` cancel returns 202 or 403 for `GITHUB_TOKEN` (a 403 is a
+`::warning::`, never red), and whether a reaped tenant-integration run released
+the dev-suite mutex through its `if: always()` release step or through the
+holder's socket death. The tenant-integration comment says the release step
+"cannot run" on cancellation; GitHub documents `always()` as running on a
+cancelled run.
+
 ## Consequences
 
 - `--milestone` alone no longer allows a `gh issue create`. It is necessary but

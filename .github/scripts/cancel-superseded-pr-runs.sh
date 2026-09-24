@@ -36,6 +36,9 @@
 # EXIT: 0 done (including "head moved, nothing to do"); 1 a list call or a cancel failed;
 #       2 bad context / usage.
 set -euo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 SHA_RE='^[0-9a-f]{40}$'
@@ -265,6 +268,7 @@ do_run() {
       printf '%s\n\n' "$line"
       for c in "${cancelled_lines[@]}"; do
         IFS=$'\t' read -r id name event sha7 <<< "$c"
+        # shellcheck disable=SC2016  # literal backticks: markdown code spans
         printf -- '- cancelled run %s `%s` (%s) on `%s`\n' "$id" "$name" "$event" "$sha7"
       done
     } >> "$GITHUB_STEP_SUMMARY"

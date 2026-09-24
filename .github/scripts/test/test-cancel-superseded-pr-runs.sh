@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015,SC2016  # `c && pass || fail` is safe (pass returns 0); literal `${{` / backticks are intended
 # Fixture tests for .github/scripts/cancel-superseded-pr-runs.sh — the reaper that
 # cancel-superseded-pr-runs.yml runs on every same-repo PR push. It cancels runs, so its
 # safety envelope is pinned here (plan §Guard Contract, Guard 1): it never cancels a
