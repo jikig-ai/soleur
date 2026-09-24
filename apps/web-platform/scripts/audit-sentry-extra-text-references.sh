@@ -23,8 +23,16 @@
 #   anything — run this script.
 #
 # Modes:
-#   (default)               dry-run: GET-only inventory, prints matches
-#   --apply                 rewrite: replace `extra.text` -> `extra.shape`
+#   (default)               dry-run: GET-only inventory, prints matches.
+#                           Agent-runnable (no TTY needed, zero writes).
+#   --apply                 rewrite: replace `extra.text` -> `extra.shape`.
+#                           PRODUCTION WRITE: run it in your OWN terminal. After
+#                           the inventory and before the first PUT it asks for a
+#                           typed yes (operator-script class-2 ack, no skip
+#                           variable, no flag); with no TTY it exits 64 with
+#                           SOLEUR_BOOTSTRAP_INPUT_REQUIRED before any network
+#                           call (#8486, ADR-249). The token is already in the
+#                           caller's environment by then (doppler run -- …).
 #   --apply --add-or-clause rewrite: wrap in `(extra.text:* OR extra.shape:*)`
 #                             — query strings only; fields[] always replaces.
 #   --help                  usage
@@ -59,6 +67,21 @@ case "$-" in
 esac
 set -euo pipefail
 
+# Human-presence gate (#8486, ADR-249). The first apps/ -> plugin-internals
+# dependency: this script sources the operator-script library for its class-2
+# ack. Sourcing it also sets umask 077 (this script writes only mktemp files).
+# Clear anything an inherited environment could use to pre-empt the library's
+# double-source guard or to stand in for its ack first.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../plugins/soleur/scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../plugins/soleur/scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
+
 # --- Argument parsing ----------------------------------------------------
 APPLY=0
 ADD_OR_CLAUSE=0
@@ -87,6 +110,9 @@ Environment:
 Exit codes:
   0  zero matches (or all rewrites verified)
   1  env / dependency / API / verification failure
+      (also: --apply answered with anything but yes at the prompt)
+  64 --apply with no TTY on stdin (SOLEUR_BOOTSTRAP_INPUT_REQUIRED); run it
+      in your own terminal
 USAGE
 }
 
@@ -104,6 +130,9 @@ if (( ADD_OR_CLAUSE && ! APPLY )); then
   echo "ERROR: --add-or-clause requires --apply (mutation only)." >&2
   exit 1
 fi
+
+# --- no TTY, no write: refuse before any network call ---------------------
+if (( APPLY )); then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
 
 # --- Required env --------------------------------------------------------
 # Token resolution: prefer SENTRY_API_TOKEN (typically a `sntryu_` user-auth
@@ -625,6 +654,7 @@ inventory_all
 
 if (( APPLY && total_matches > 0 )); then
   echo
+  soleur_op_ack_or_die "Rewrite ${total_matches} Sentry references in production now? Type yes: "
   echo "[info] Applying rewrites..."
   rewrite_alert_rules
   rewrite_saved_searches

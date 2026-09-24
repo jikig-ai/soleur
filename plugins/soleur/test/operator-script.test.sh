@@ -1184,19 +1184,51 @@ then assert_red gdecline_check "gdecline-r3 decline invisible in the ledger" "$S
 # =============================================================================
 #
 # Property. In every DISCOVERED consumer, each `hcloud server create`,
-# `gh secret set`, `gh variable set`, Doppler secret write, `terraform apply`
-# and each `soleur_op_gh_*_set` call has `soleur_op_ack_or_die` within the 15
-# comment-stripped lines above it. Quoted output (`echo "… hcloud server create
-# …"`) is not a call. Zero destructive sites across the population is RED: the
-# proving consumer has one, so a census that sees none is broken.
+# `gh secret set`, `gh variable set`, Doppler secret write or delete, `terraform
+# apply`, `soleur_op_gh_*_set` call, flag-audit append and curl mutating request
+# either has `soleur_op_ack_or_die` within the 15 comment-stripped lines above it,
+# or belongs to a consumer whose write arms are proven BEHAVIOURALLY: it has at
+# least one `write` row in operator-ack-arms.tsv, which
+# plugins/soleur/test/operator-ack-guard.test.sh (Guard 2 of #8486) must satisfy
+# by set identity against the grep-derived ack callers. Quoted output (`echo "…
+# hcloud server create …"`) is not a call, but a pipe OUT of echo/printf into a
+# writer (`printf '%s' "$v" | <writer>`) is — the old filter dropped every
+# echo/printf LINE and with it both Doppler writes of the flag scripts.
+# Zero destructive sites across the population is RED: the proving consumer has
+# one, so a census that sees none is broken.
+#
+# The curl-method widening (#8486) is the only check that sees a library
+# consumer writing with curl and never calling the ack at all: Guard 2's
+# population is ack CALLERS, so such a consumer cannot appear there.
 
-DESTRUCTIVE_RE='(^|[^A-Za-z0-9_"'"'"'])(hcloud server create|gh secret set|gh variable set|doppler secrets (set|upload)|terraform apply|soleur_op_gh_(secret|variable)_set)([[:space:]]|$)'
+DESTRUCTIVE_RE='(^|[^A-Za-z0-9_"'"'"'])(hcloud server create|gh secret set|gh variable set|doppler secrets (set|upload|delete)|terraform apply|soleur_op_gh_(secret|variable)_set|audit_flag_flip_rpc|-X[[:space:]]*(POST|PUT|PATCH|DELETE)|--request[[:space:]]+(POST|PUT|PATCH|DELETE))([[:space:]]|$)'
+GACK_RE="$DESTRUCTIVE_RE"
+ACK_ARMS="${SUITE_DIR}/fixtures/operator-ack-arms.tsv"
+
+# Quoted text on an echo/printf line is output, not a call: blank it, keep the
+# rest of the line (a pipe into a writer after it still counts).
+gack_prep() {
+  strip_comments "$1" | sed -E "/^[[:space:]]*(echo|printf)[[:space:]]/ s/\"([^\"\\\\]|\\\\.)*\"|'[^']*'//g"
+}
+
+# gack_registered <consumer> <arm-table> — a write row whose script path is a
+# suffix of the consumer's path.
+gack_registered() {
+  local consumer="$1" arms="$2" script mode rest
+  [[ -r "$arms" ]] || return 1
+  while IFS=$'\t' read -r script mode rest; do
+    [[ -n "$script" && "$script" != \#* ]] || continue
+    [[ "$mode" == write && "$consumer" == */"$script" ]] && return 0
+  done < "$arms"
+  return 1
+}
 
 gack_check() {
-  local root="$1" v=0 consumer stripped rl ln from window sites=0
+  local root="$1" arms="${2:-$ACK_ARMS}" v=0 consumer stripped rl ln from window sites=0 outside first
   while IFS= read -r consumer; do
     [[ -n "$consumer" ]] || continue
-    stripped="$(strip_comments "$consumer" | grep -vE '^[[:space:]]*(echo|printf)[[:space:]]')"
+    stripped="$(gack_prep "$consumer")"
+    outside=0; first=""
     while IFS= read -r rl; do
       [[ -n "$rl" ]] || continue
       sites=$((sites + 1))
@@ -1204,10 +1236,17 @@ gack_check() {
       from=$(( ln > 15 ? ln - 15 : 1 ))
       window="$(sed -n "${from},$((ln - 1))p" <<<"$stripped")"
       if ! grep -qE '^[[:space:]]*soleur_op_ack_or_die([[:space:]]|$)' <<<"$window"; then
-        echo "gack: ${consumer}: destructive write '${rl#*:}' has no soleur_op_ack_or_die in the 15 comment-stripped lines above it"
-        v=1
+        outside=$((outside + 1)); [[ -n "$first" ]] || first="${rl#*:}"
       fi
-    done < <(grep -nE "$DESTRUCTIVE_RE" <<<"$stripped")
+    done < <(grep -nE "$GACK_RE" <<<"$stripped")
+    if [[ "$outside" -eq 0 ]]; then
+      echo "gack-path: ${consumer}: window"
+    elif gack_registered "$consumer" "$arms"; then
+      echo "gack-path: ${consumer}: arm-table (${outside} site(s) outside the ack window, proven by Guard 2)"
+    else
+      echo "gack: ${consumer}: writes outside the ack window and no behavioral arm registered (${outside} site(s); first: '${first}')"
+      v=1
+    fi
   done < <(g3_sourcing_scripts "$root")
   if [[ "$sites" -eq 0 ]]; then
     echo "gack: the census found ZERO destructive-write sites across the sourcing scripts — nothing was checked"
@@ -1219,7 +1258,47 @@ gack_check() {
 echo "== Guard 9 — destructive writes sit under an ack =="
 
 assert_green gack_check "live consumers" "$PLUGIN_ROOT"
+gack_live_out="$(gack_check "$PLUGIN_ROOT" 2>&1)"
+# H2 — provision-hetzner is accepted by the WINDOW path, never the arm table.
+if grep -qE '^gack-path: .*/provision-hetzner\.sh: window$' <<<"$gack_live_out"; then
+  pass "gack-H2 provision-hetzner passes via the 15-line window, not the arm-table fallback"
+else
+  fail "gack-H2 provision-hetzner was not accepted via the window path: $(grep 'provision-hetzner' <<<"$gack_live_out")"
+fi
 assert_red gack_check "gack own-dispatch: zero consumers" "$SB/empty"
+
+# M1 — create.sh's rows removed from the arm table: its Doppler writes sit ~100
+# lines below the ack, so without the behavioural proof it must go RED.
+grep -v 'flag-create/scripts/create\.sh' "$ACK_ARMS" > "$SB/arms-no-create.tsv"
+assert_red gack_check "gack-M1 create.sh unregistered" "$PLUGIN_ROOT" "$SB/arms-no-create.tsv"
+# M5 — a readonly row alone does not register a consumer.
+grep -vE 'flag-create/scripts/create\.sh.write' "$ACK_ARMS" > "$SB/arms-create-ro.tsv"
+assert_red gack_check "gack-M5 create.sh with only a readonly row" "$PLUGIN_ROOT" "$SB/arms-create-ro.tsv"
+# H1 — an empty arm table: the live tree must go RED on create.sh AND flip.sh,
+# proving the fallback, not the window, is what accepts them.
+printf '# empty\n' > "$SB/arms-empty.tsv"
+gack_h1_rc=0
+gack_h1_out="$(gack_check "$PLUGIN_ROOT" "$SB/arms-empty.tsv" 2>&1)" || gack_h1_rc=$?
+if [[ "$gack_h1_rc" -ne 0 ]] && grep -q 'flag-create/scripts/create.sh: writes outside' <<<"$gack_h1_out" \
+   && grep -q 'flag-set-role/scripts/flip.sh: writes outside' <<<"$gack_h1_out"; then
+  pass "gack-H1 empty arm table reddens create.sh and flip.sh (the fallback is load-bearing)"
+else
+  fail "gack-H1 empty arm table did not redden both create.sh and flip.sh (rc ${gack_h1_rc})"
+fi
+# M2 — a consumer whose only unacked write is a curl DELETE. GREEN under the
+# pre-#8486 pattern (its terraform apply sits under the ack), RED once widened:
+# the widening is load-bearing.
+mkdir -p "$SB/gack-m2/skills/rogue/scripts"
+{
+  printf '#!/usr/bin/env bash\nsource "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"\n'
+  printf 'soleur_op_ack_or_die "Apply? Type yes: "\nterraform apply\n'
+  for _i in $(seq 1 20); do printf 'echo step %s\n' "$_i"; done
+  printf 'fs_api -X DELETE "https://api.example.invalid/x/"\n'
+} > "$SB/gack-m2/skills/rogue/scripts/rogue.sh"
+GACK_RE='(^|[^A-Za-z0-9_"'"'"'])(hcloud server create|gh secret set|gh variable set|doppler secrets (set|upload)|terraform apply|soleur_op_gh_(secret|variable)_set)([[:space:]]|$)'
+assert_green gack_check "gack-M2 control: the pre-#8486 pattern does not see the curl DELETE" "$SB/gack-m2" "$ACK_ARMS"
+GACK_RE="$DESTRUCTIVE_RE"
+assert_red gack_check "gack-M2 widened pattern sees an unacked curl DELETE" "$SB/gack-m2" "$ACK_ARMS"
 
 if [[ -r "$HETZNER_SRC" ]]; then
   mkdir -p "$SB/run/ack-mut"
@@ -1913,7 +1992,7 @@ fi
 # an attacker of the guard would neuter next. scripts/guard-vacuity-floor.test.sh
 # measures this shape across the repo and reddens on the fail()-routed form.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=136
+FLOOR=142
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"

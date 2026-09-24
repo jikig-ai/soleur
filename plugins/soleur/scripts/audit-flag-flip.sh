@@ -39,7 +39,7 @@ audit_flag_flip_rpc() {
   local body resp code id
 
   if [[ "${SOLEUR_OP_ACKED:-}" != "tty-ack" ]]; then
-    echo "FATAL: audit append before the ack — soleur_op_ack_or_die has not returned in this process (#8486)" >&2
+    echo "FATAL: audit append before the ack — the class-2 yes prompt has not returned in this process (#8486)" >&2
     return 4
   fi
   command -v jq >/dev/null   || { echo "FATAL: jq not found (audit append)" >&2; return 4; }
