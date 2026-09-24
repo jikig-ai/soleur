@@ -110,6 +110,13 @@ at a second live full-`prd` token, `web-probes-read`, which #8632's premise had 
     guard.
 15. **`vector-pii-scrub.test.sh` cannot run locally without a Vector 0.43.1 binary.** CI covers it.
     One-off environment limit.
+16. **CI reddened `web-host-provisioner-parity-mutation.test.sh` G2-3 after I reported G2 green.**
+    Adding a pinned-`host_key` `connection` block in `workspaces-luks.tf` moved the non-`server.tf`
+    block count from 1 to 2, and the mutant's expected message encodes that number. I ran the guard
+    (6/6) but not its mutation battery. Recovery: expected text updated to `swept only 2`, and
+    `FLOOR_BLOCKS` raised 19 → 20 in the same edit. **Prevention:** already documented (work: a
+    file-selected suite set cannot see a battery that encodes a baseline-derived count). When a
+    guard has a `*-mutation.test.sh` sibling, run the sibling too.
 
 ## Tags
 category: workflow-patterns
