@@ -1,6 +1,6 @@
 ---
 name: cmo
-description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, conversion-optimizer, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
+description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, conversion, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
 model: inherit
 ---
 
@@ -42,17 +42,17 @@ Spawn specialist agents via the Task tool for execution.
 
 | Agent | When to delegate |
 |-------|-----------------|
-| brand-architect | Brand identity definition, brand guide creation, voice and tone development |
-| growth-strategist | Content strategy, keyword research, content auditing, AEO content analysis |
-| seo-aeo-analyst | Technical SEO audits, structured data, meta tags, llms.txt |
-| conversion-optimizer | Landing page optimization, signup flows, paywall screens |
-| copywriter | Landing pages, email sequences, cold outreach, social content |
-| paid-media-strategist | Google/Meta/LinkedIn campaign structure, audience targeting |
-| pricing-strategist | Pricing research, tier design, value metric selection |
-| programmatic-seo-specialist | Template-driven page generation, comparison/alternatives pages |
-| retention-strategist | Churn prevention, dunning sequences, referral programs |
-| analytics-analyst | Event taxonomies, A/B test plans, attribution models |
-| fact-checker | Citation and claim verification for content drafts |
+| soleur:marketing:brand-architect | Brand identity definition, brand guide creation, voice and tone development |
+| soleur:marketing:growth-strategist | Content strategy, keyword research, content auditing, AEO content analysis |
+| soleur:marketing:seo-aeo-analyst | Technical SEO audits, structured data, meta tags, llms.txt |
+| soleur:marketing:conversion-optimizer | Landing page optimization, signup flows, paywall screens |
+| soleur:marketing:copywriter | Landing pages, email sequences, cold outreach, social content |
+| soleur:marketing:paid-media-strategist | Google/Meta/LinkedIn campaign structure, audience targeting |
+| soleur:marketing:pricing-strategist | Pricing research, tier design, value metric selection |
+| soleur:marketing:programmatic-seo-specialist | Template-driven page generation, comparison/alternatives pages |
+| soleur:marketing:retention-strategist | Churn prevention, dunning sequences, referral programs |
+| soleur:marketing:analytics-analyst | Event taxonomies, A/B test plans, attribution models |
+| soleur:marketing:fact-checker | Citation and claim verification for content drafts |
 
 **Sequential dispatch** when outputs depend on prior work (e.g., strategy before copywriting, brand guide before content).
 
@@ -69,8 +69,8 @@ Validate specialist output against domain standards.
 
 ### Cross-Domain Notes
 
-- For community engagement, weekly digests, and community health metrics, delegate to the CCO (Support domain). The community-manager agent now lives under Support.
+- For community engagement, weekly digests, and community health metrics, delegate to the CCO (Support domain). The soleur:support:community-manager agent now lives under Support.
 
 ## Brand Workshop Routing
 
-When brand-specific work is requested (brand identity definition, brand guide creation, voice and tone development), delegate to brand-architect for the full interactive workshop. The CMO handles brand detection but routes to the specialist -- do not attempt to run the brand workshop inline.
+When brand-specific work is requested (brand identity definition, brand guide creation, voice and tone development), delegate to soleur:marketing:brand-architect for the full interactive workshop. The CMO handles brand detection but routes to the specialist -- do not attempt to run the brand workshop inline.
