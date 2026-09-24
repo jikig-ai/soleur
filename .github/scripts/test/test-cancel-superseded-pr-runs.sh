@@ -649,7 +649,6 @@ else pass "O* no case made an unexpected request"; fi
 # ---------------------------------------------------------------------------
 # Workflow wiring — the whole shape, not the presence of lines
 # ---------------------------------------------------------------------------
-wf=$(<"$WORKFLOW")
 # block_after <ERE> — the lines nested under the first line matching ERE (deeper indent),
 # stopping at the first line at or above that line's indent. Comment lines are dropped.
 block_after() {
