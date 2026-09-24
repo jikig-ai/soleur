@@ -829,8 +829,8 @@ TOTAL=$((TOTAL+1))
 T33=$(mktemp -d); LATE_TMPDIRS+=("$T33"); setup_repo "$T33" docs
 mkdir -p "$T33/apps/web"
 ctx33=$(invoke_hook "$T33/apps/web" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-m33=$(printf '%s' "$ctx33" | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
-n33=$(grep -c '^- \[id: ' "$T33/AGENTS.md")
+m33=$(printf '%s' "$ctx33" | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1) || true
+n33=$(grep -c '^- \[id: ' "$T33/AGENTS.md") || true
 if printf '%s' "$ctx33" | grep -qE "loaded: ${n33} of ${n33} rules" \
    && [[ -n "$m33" && "$m33" == "$T33/.claude/.session-manifests/"* && -f "$m33" ]] \
    && [[ ! -e "$T33/apps/web/.claude" ]]; then
