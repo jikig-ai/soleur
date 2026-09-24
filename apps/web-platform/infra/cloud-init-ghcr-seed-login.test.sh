@@ -21,12 +21,17 @@ _qgrep() { grep "$@" >/dev/null; }
 #   3. server.tf passes sentry_dsn into the cloud-init templatefile AND variables.tf declares it.
 #   4. (INVERTED by #8036 1d) the seed pull is ONE bounded zot pull, gated on the zot login; the
 #      login-gated GHCR pull arm is gone.
-#   G1. Guard 1 census over the three host boot files + the two .tf templatefile maps that render
-#      them: no GHCR credential presented, no pull from anything but a zot-derived ref ($REF with
-#      every REF= zot-derived, $ZIREF, the /run/soleur-image-ref sentinel, $IMAGE_REF only after
-#      IMAGE_REF="$REF"; $IREF only as a `docker create` after IREF="$ZIREF", never pulled). Runs on
-#      SOURCE bytes with comment lines stripped (in rendered bytes, IMAGE_REF='${image_name}'
-#      becomes a ghcr.io literal, so it is a named exemption, like the IREF= pin carrier).
+#   G1. Guard 1 census over a DERIVED file set — every cloud-init*.yml a templatefile() call renders
+#      (+ soleur-host-bootstrap.sh) and each rendering map: no GHCR credential presented, no
+#      pull/create/run (any global flags, `image`/`container` verbs) of anything but a zot-derived
+#      ref ($REF with every REF= zot-derived, $ZIREF, the /run/soleur-image-ref sentinel — written
+#      only from "$REF" — $IMAGE_REF only after IMAGE_REF="$REF"; $IREF only as a `docker create`
+#      after IREF="$ZIREF", never pulled), and no endpoint/registry map value naming ghcr.io. Runs
+#      on SOURCE bytes with comment lines stripped (in rendered bytes, IMAGE_REF='${image_name}'
+#      becomes a ghcr.io literal, so it is a named exemption, like the IREF= pin carrier; the
+#      registry host's run of the upstream '${zot_image}' is the one other, value-bound exemption).
+#      A narrower literal rule covers every local.host_script_files member + inngest-bootstrap.sh:
+#      no `docker login ghcr.io`, no pull/create/run of a ghcr.io/jikig-ai/ literal.
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CI="$DIR/cloud-init.yml"
@@ -35,6 +40,10 @@ VARS="$DIR/variables.tf"
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
+# Instrument self-test: both helpers must move their counters, or every verdict below is void.
+ok "instrument self-test (pass arm)" >/dev/null; no "instrument self-test (fail arm)" 2>/dev/null
+[ "$pass" -eq 1 ] && [ "$fail" -eq 1 ] || { printf 'instrument self-test broken\n'; exit 2; }
+pass=0; fail=0
 code() { grep -vE '^[[:space:]]*#' "$1"; }
 
 # 1. zot login before the seed pull; no GHCR login at all.
@@ -89,6 +98,7 @@ else
   no "the seed pull must be exactly one 'timeout 180 docker pull \"\$REF\"', gated on [ -n \"\$REF\" ] && [ \$ZL = ok ], with no \"\$GL\" GHCR arm (pulls=$npull)"
 fi
 
+
 # ── G1: host-side GHCR boot residual-zero census (Guard 1) ─────────────────────────────────────
 assert_fixture_dir() {
   case "${1-}" in
@@ -105,80 +115,198 @@ WORK="$(mktemp -d "${TMPDIR:-/var/tmp}/ghcr-census.XXXXXX")"
 assert_fixture_dir "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 cat > "$WORK/census.py" <<'CENSUS_PY'
-"""Guard 1 census. argv: <root> <boot files, comma-sep> <tf:template pairs, comma-sep>.
+"""Guard 1 census. argv: <root> <extra boot files, comma-sep> <extra host-literal files, comma-sep>.
 
+The file set is DERIVED, never listed (templatefile-bare-dollar-guard.test.sh's move):
+  DERIVED <tpl>             every cloud-init*.yml a templatefile() call in any .tf under <root>
+                            renders (path resolved against the calling .tf's directory)
+  DERIVED_MAP <tf>:<tpl>    each of those call sites
+  HDERIVED <n>              server.tf local.host_script_files entries + the extra host-literal files
 Prints one line per finding:
-  SCANNED <file>                 a file that exists, is non-empty, and was read
-  LOGINS <n> / PULLS <n>         docker login / docker pull|create sites seen across boot files
-  MAPS <n>                       templatefile() maps swept across every .tf under <root>
-  VIOL <file> <rule> <detail>    a violation (content-keyed, never line-numbered, so a
-                                 mutation's NEW violation is a multiset difference)
-Comment lines (first non-blank char '#') are stripped before any rule reads a line.
+  SCANNED <file> | SCANNED <tf>:<tpl> | HSCANNED <file>   a file / map that was actually read
+  LOGINS <n> / PULLS <n> / WRITERS <n> / MAPS <n>        call sites seen (non-vacuity)
+  VIOL <file> <rule> <detail>   a violation (content-keyed, never line-numbered, so a mutation's
+                                NEW violation is a multiset difference)
+Comment lines (first non-blank char '#') are stripped before any rule reads a line; backslash-
+continued lines are joined before the docker rules read them (a `docker run -d \\` spans lines).
 """
 import os, re, sys
 
 root = sys.argv[1]
-boot = [f for f in sys.argv[2].split(",") if f]
-tfpairs = [p.split(":", 1) for p in sys.argv[3].split(",") if p]
+extras = [f for f in sys.argv[2].split(",") if f]
+hextras = [f for f in sys.argv[3].split(",") if f]
 out = []
 
+def strip_hcl_comments(t):
+    # Drop # and // line comments and /* */ blocks outside double-quoted strings (the
+    # templatefile-bare-dollar-guard.test.sh stripper), so prose is neither a call site nor a key.
+    res, i, n, q = [], 0, len(t), False
+    while i < n:
+        c = t[i]
+        if q:
+            res.append(c)
+            if c == "\\" and i + 1 < n:
+                res.append(t[i + 1]); i += 2; continue
+            if c == '"':
+                q = False
+            i += 1; continue
+        if c == '"':
+            q = True; res.append(c); i += 1; continue
+        if c == "#" or t.startswith("//", i):
+            j = t.find("\n", i); i = n if j < 0 else j; continue
+        if t.startswith("/*", i):
+            j = t.find("*/", i + 2); i = n if j < 0 else j + 2; continue
+        res.append(c); i += 1
+    return "".join(res)
+
+def readable(p):
+    return os.path.isfile(p) and os.path.getsize(p) > 0
+
 def code_lines(path):
-    return [l.rstrip("\n") for l in open(path) if not l.lstrip().startswith("#")]
+    return [l.rstrip("\n") for l in open(path, encoding="utf-8", errors="replace")
+            if not l.lstrip().startswith("#")]
+
+def logical(lines):
+    res, buf = [], ""
+    for l in lines:
+        r = l.rstrip()
+        if r.endswith("\\"):
+            buf += r[:-1] + " "
+        else:
+            res.append(buf + l); buf = ""
+    if buf:
+        res.append(buf)
+    return res
+
+# ── docker call-site parsing ──────────────────────────────────────────────────────────────────
+# Global flags may precede the subcommand (`docker --config /tmp/c pull`), and the management
+# verbs (`docker image pull`, `docker container create|run`) are the same call.
+GLOBAL = r"(?:--?[a-z-]+(?:[= ]\S+)?\s+)*"
+LOGIN_RE = re.compile(r"(?<![\w-])docker\s+" + GLOBAL + r"login(?![\w-])")
+PULL_RE = re.compile(r"(?<![\w-])docker\s+" + GLOBAL + r"(?:image\s+|container\s+)?(pull|create|run)(?![\w-])")
+TOK = re.compile(r"""[ \t]*("[^"]*"|'[^']*'|[^\s;|&)<>]+)""")
+BOOL = {"-d", "--detach", "--rm", "-i", "--interactive", "-t", "--tty", "--init", "--read-only",
+        "--privileged", "-P", "--publish-all", "-q", "--quiet", "-a", "--all-tags",
+        "--disable-content-trust", "--no-healthcheck", "--oom-kill-disable", "--password-stdin"}
+LOGIN_VALUE_OPTS = {"-u", "--username", "-p", "--password"}
+
+def operand(line, pos, kind):
+    """The first non-option operand after <pos> (the image, or the login registry); None if the
+    command has none. An unknown option is assumed to take a value, so a mis-guess can only move
+    the pick onto a LATER token — which then must itself pass the zot rules (fail-closed)."""
+    toks = []
+    while True:
+        m = TOK.match(line, pos)
+        if not m:
+            break
+        toks.append(m.group(1)); pos = m.end()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t.startswith("-") and len(t) > 1:
+            if "=" in t or t in BOOL or re.fullmatch(r"-[dirtPqa]{2,}", t):
+                i += 1
+            elif kind == "login":
+                i += 2 if t in LOGIN_VALUE_OPTS else 1
+            else:
+                i += 2
+            continue
+        return t
+    return None
+
+# ── templatefile() maps, derived from every .tf under root ───────────────────────────────────
+TF_CALL = re.compile(r'templatefile\(\s*"\$\{path\.module\}/([^"]+)"\s*,\s*\{')
+def maps(tfsrc):
+    """Yield (template path as written, body) for every templatefile("${path.module}/…", { … })."""
+    src = strip_hcl_comments(tfsrc)
+    for m in TF_CALL.finditer(src):
+        i, depth = m.end(), 1
+        while i < len(src) and depth:
+            depth += {"{": 1, "}": -1}.get(src[i], 0); i += 1
+        yield m.group(1), src[m.end():i - 1]
+
+tfs = []
+for d, dirs, files in os.walk(root):
+    dirs[:] = sorted(x for x in dirs if x != ".terraform")
+    for fn in sorted(files):
+        if fn.endswith(".tf"):
+            tfs.append(os.path.relpath(os.path.join(d, fn), root))
+
+_defs = {}
+def dir_defs(reldir):
+    """name -> [rhs, …] for every single-line `name = rhs` in the .tf files of one module dir."""
+    if reldir not in _defs:
+        acc = {}
+        for tf in tfs:
+            if os.path.dirname(tf) == reldir:
+                for m in re.finditer(r"^\s*(\w+)\s*=\s*(.+?)\s*$", strip_hcl_comments(open(os.path.join(root, tf)).read()), re.M):
+                    acc.setdefault(m.group(1), []).append(m.group(2))
+        _defs[reldir] = acc
+    return _defs[reldir]
+
+def resolve(text, defs, seen, depth=0):
+    """<text> plus every local.X it reaches (over-approximated: all same-named assignments)."""
+    acc = text
+    if depth > 5:
+        return acc
+    for name in re.findall(r"\blocal\.(\w+)", text):
+        if name in seen:
+            continue
+        seen.add(name)
+        for rhs in defs.get(name, []):
+            acc += " " + resolve(rhs, defs, seen, depth + 1)
+    return acc
+
+KEY_RE = re.compile(r"^\s*(ghcr_read_\w+)\s*=", re.M)
+ENTRY_RE = re.compile(r"^\s*(\w+)\s*=\s*(.+?)\s*$", re.M)
+derived, dmaps, nmaps = [], [], 0
+zot_image_ok = {}
+for tf in tfs:
+    for rel, body in maps(open(os.path.join(root, tf)).read()):
+        nmaps += 1
+        tpl = os.path.normpath(os.path.join(os.path.dirname(tf), rel))
+        for k in KEY_RE.findall(body):
+            out.append("VIOL %s sweep-key[%s->%s]" % (tf, k, tpl))
+        if not re.fullmatch(r"cloud-init[^/]*\.yml", tpl):
+            continue
+        if tpl not in derived:
+            derived.append(tpl)
+        dmaps.append((tf, tpl))
+        out.append("SCANNED %s:%s" % (tf, tpl))  # an empty map ({}, grok-dogfood) has no keys to check
+        defs = dir_defs(os.path.dirname(tf))
+        for key, val in ENTRY_RE.findall(body):
+            # (M1) a registry / endpoint value never names GHCR (literal, or through a local)
+            if re.search(r"endpoint|registry", key) and "ghcr.io" in resolve(val, defs, set()):
+                out.append("VIOL %s tf-endpoint[%s->%s] %s" % (tf, key, tpl, val))
+            if key == "zot_image":
+                r = resolve(val, defs, set())
+                zot_image_ok[tpl] = "jikig-ai" not in r and "ghcr.io/" in r
+out += ["DERIVED " + t for t in derived] + ["DERIVED_MAP %s:%s" % p for p in dmaps]
 
 FORBIDDEN = ["ghcr_read_", "soleur-ghcr-read", "app_ghcr_", "inngest_ghcr_fallback", "echo '${image_name}'"]
-LOGIN_RE = re.compile(r"docker\s+login\s+(\"[^\"]*\"|'[^']*'|[^\s;|&)]+)")
-ARG = r"(\"[^\"]*\"|'[^']*'|[^\s;|&)]+)"
-PULL_RE = re.compile(r"docker\s+(pull|create)\s+(?:(?:-q|--quiet|--name\s+\S+|--platform\s+\S+)\s+)*" + ARG)
 ASSIGN_RE = re.compile(r"(?<![A-Za-z0-9_$])(IREF|IMAGE_REF|ZIREF|REF)=(\"[^\"]*\"|'[^']*'|[^\s;]*)")
 PIN_RE = re.compile(r"^\s*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}\s*(#.*)?$")
 IMAGE_NAME_OK = re.compile(r"^\s*IMAGE_REF='\$\{image_name\}'\s*$")
 GHCR_OK_TOKENS = ("in ghcr.io/*@sha256:*)", "IMAGE_REF#ghcr.io/}")
 ZOT_REF_VALUES = re.compile(r'^("\$ZEP/.*|)$')
 ZOT_ZIREF_VALUES = re.compile(r'^"\$(ZURL|ZOT_EP)/.*')
+WRITER_RE = re.compile(r"(?:>>?|\btee\s+(?:-a\s+)?)\s*/run/soleur-image-ref(?![\w.-])")
+WRITER_OK = re.compile(r"""^\s*printf '%s' "\$REF" > /run/soleur-image-ref\s*$""")
 
-logins = pulls = 0
-for f in boot:
+logins = pulls = writers = 0
+for f in derived + extras:
     p = os.path.join(root, f)
-    if not (os.path.isfile(p) and os.path.getsize(p) > 0):
+    if not readable(p):
         continue
     out.append("SCANNED " + f)
-    last = {}  # last assignment value seen for IREF / IMAGE_REF, in file order
-    pins = 0
+    last = {}  # last assignment value seen for IREF / IMAGE_REF / REF / ZIREF, in file order
+    pins = fwriters = 0
     for line in code_lines(p):
         s = line.strip()
         # (1) forbidden tokens
         for tok in FORBIDDEN:
             if tok in line:
                 out.append("VIOL %s forbidden[%s] %s" % (f, tok, s))
-        # (2) every docker login presents a zot credential, never a GHCR one
-        for m in LOGIN_RE.finditer(line):
-            logins += 1
-            if m.group(1) not in ('"$ZEP"', '"$ZOT_EP"'):
-                out.append("VIOL %s login-arg[%s] %s" % (f, m.group(1), s))
-        # (3) pull/create sources + assignments, in column order within the line
-        events = [(m.start(), "assign", m) for m in ASSIGN_RE.finditer(line)]
-        events += [(m.start(), "pull", m) for m in PULL_RE.finditer(line)]
-        for _, kind, m in sorted(events, key=lambda e: e[0]):
-            if kind == "assign":
-                var, val = m.group(1), m.group(2)
-                last[var] = val
-                if var == "REF" and not ZOT_REF_VALUES.match(val):
-                    out.append("VIOL %s ref-assign[%s] %s" % (f, val, s))
-                if var == "ZIREF" and not ZOT_ZIREF_VALUES.match(val):
-                    out.append("VIOL %s ziref-assign[%s] %s" % (f, val, s))
-                continue
-            pulls += 1
-            a = m.group(2)
-            if a in ('"$REF"', '"$ZIREF"', '"$(cat /run/soleur-image-ref)"'):
-                continue
-            # $IREF is consumed (create) only after IREF="$ZIREF"; it is never PULLED — the only
-            # bootstrap pull is of $ZIREF, and a pull of $IREF is how a GHCR-seeded ref (the pin
-            # carrier, or a branch that skipped the reassign) reaches the registry.
-            if a == '"$IREF"' and m.group(1) == "create" and last.get("IREF") == '"$ZIREF"':
-                continue
-            if a == '"$IMAGE_REF"' and last.get("IMAGE_REF") == '"$REF"':
-                continue
-            out.append("VIOL %s pull-src[%s:%s] %s" % (f, m.group(1), a, s))
         # (4) ${image_name} only as the IMAGE_REF='${image_name}' seed input
         if "${image_name}" in line and not IMAGE_NAME_OK.match(line):
             out.append("VIOL %s image_name %s" % (f, s))
@@ -191,6 +319,49 @@ for f in boot:
                 rest = rest.replace(t, "")
             if "ghcr.io" in rest:
                 out.append("VIOL %s ghcr.io %s" % (f, s))
+        # (7) the sentinel is written from the zot-rewritten $REF, and nothing else
+        for _ in WRITER_RE.finditer(line):
+            writers += 1; fwriters += 1
+            if not WRITER_OK.match(line):
+                out.append("VIOL %s image-ref-writer %s" % (f, s))
+    for line in logical(code_lines(p)):
+        s = " ".join(line.split())
+        # (2) every docker login presents a zot credential, never a GHCR one
+        for m in LOGIN_RE.finditer(line):
+            logins += 1
+            a = operand(line, m.end(), "login")
+            if a not in ('"$ZEP"', '"$ZOT_EP"'):
+                out.append("VIOL %s login-arg[%s] %s" % (f, a, s))
+        # (3) pull/create/run sources + assignments, in column order within the line
+        events = [(m.start(), "assign", m) for m in ASSIGN_RE.finditer(line)]
+        events += [(m.start(), "pull", m) for m in PULL_RE.finditer(line)]
+        for _, kind, m in sorted(events, key=lambda e: e[0]):
+            if kind == "assign":
+                var, val = m.group(1), m.group(2)
+                last[var] = val
+                if var == "REF" and not ZOT_REF_VALUES.match(val):
+                    out.append("VIOL %s ref-assign[%s] %s" % (f, val, s))
+                if var == "ZIREF" and not ZOT_ZIREF_VALUES.match(val):
+                    out.append("VIOL %s ziref-assign[%s] %s" % (f, val, s))
+                continue
+            pulls += 1
+            verb = m.group(1)
+            a = operand(line, m.end(), verb)
+            if a in ('"$REF"', '"$ZIREF"', '"$(cat /run/soleur-image-ref)"'):
+                continue
+            # $IREF is consumed (create) only after IREF="$ZIREF"; it is never PULLED — the only
+            # bootstrap pull is of $ZIREF, and a pull of $IREF is how a GHCR-seeded ref (the pin
+            # carrier, or a branch that skipped the reassign) reaches the registry.
+            if a == '"$IREF"' and verb == "create" and last.get("IREF") == '"$ZIREF"':
+                continue
+            if a == '"$IMAGE_REF"' and last.get("IMAGE_REF") == '"$REF"':
+                continue
+            # NAMED EXEMPTION: the registry host cannot pull zot from zot. Its `docker run` of the
+            # upstream zot image is allowed only while that map value resolves to a digest-pinned
+            # third-party GHCR ref and never to a jikig-ai one.
+            if a == "'${zot_image}'" and verb == "run" and zot_image_ok.get(f):
+                continue
+            out.append("VIOL %s pull-src[%s:%s] %s" % (f, verb, a, s))
     # (6) the bump bot's contract: an inngest-bearing template carries exactly 2 refs (whole file,
     # comments included — a comment quoting a full ref would make the bot refuse) and 1 carrier
     text = open(p).read()
@@ -200,68 +371,78 @@ for f in boot:
             out.append("VIOL %s bootstrap-ref-count[%d!=2]" % (f, n))
         if pins != 1:
             out.append("VIOL %s pin-carrier-count[%d!=1]" % (f, pins))
+    # (7b) a file that reads the sentinel writes it exactly once
+    if re.search(r"^(?!\s*#).*cat /run/soleur-image-ref", text, re.M) and fwriters != 1:
+        out.append("VIOL %s image-ref-writer-count[%d!=1]" % (f, fwriters))
 
-def maps(tfsrc):
-    """Yield (template, body) for every templatefile("${path.module}/…", { … }) in code lines."""
-    src = "\n".join(l for l in tfsrc.splitlines() if not l.lstrip().startswith(("#", "//")))
-    for m in re.finditer(r'templatefile\(\s*"\$\{path\.module\}/(?:\.\./)*([^"]+)"\s*,\s*\{', src):
-        i, depth = m.end(), 1
-        while i < len(src) and depth:
-            depth += {"{": 1, "}": -1}.get(src[i], 0); i += 1
-        yield m.group(1), src[m.end():i - 1]
+# ── host-literal rule: every baked host script (server.tf local.host_script_files) + extras ──
+hs = []
+srv = os.path.join(root, "server.tf")
+if readable(srv):
+    m = re.search(r"\bhost_script_files\s*=\s*\[(.*?)\]", strip_hcl_comments(open(srv).read()), re.S)
+    if m:
+        hs = re.findall(r'"([^"]+)"', m.group(1))
+out.append("HDERIVED %d" % (len(hs) + len(hextras)))
+for f in hs + hextras:
+    p = os.path.join(root, f)
+    if not readable(p):
+        continue
+    out.append("HSCANNED " + f)
+    for line in logical(code_lines(p)):
+        s = " ".join(line.split())
+        for m in LOGIN_RE.finditer(line):
+            a = (operand(line, m.end(), "login") or "").strip("\"'")
+            if a.startswith("ghcr.io"):
+                out.append("VIOL %s host-login-ghcr %s" % (f, s))
+        for m in PULL_RE.finditer(line):
+            a = operand(line, m.end(), m.group(1)) or ""
+            seg = re.split(r"[;|&]", line[m.end():], maxsplit=1)[0]
+            if "ghcr.io/jikig-ai/" in a or "ghcr.io/jikig-ai/" in seg:
+                out.append("VIOL %s host-pull-ghcr[%s] %s" % (f, m.group(1), s))
 
-KEY_RE = re.compile(r"^\s*(ghcr_read_\w+)\s*=", re.M)
-for tf, tpl in tfpairs:
-    p = os.path.join(root, tf)
-    if not (os.path.isfile(p) and os.path.getsize(p) > 0):
-        continue
-    bodies = [b for t, b in maps(open(p).read()) if t == tpl]
-    if len(bodies) != 1 or not bodies[0].strip():
-        out.append("VIOL %s map-not-found[%s n=%d]" % (tf, tpl, len(bodies)))
-        continue
-    out.append("SCANNED %s:%s" % (tf, tpl))
-    for k in KEY_RE.findall(bodies[0]):
-        out.append("VIOL %s tf-key[%s->%s]" % (tf, k, tpl))
-# Every OTHER templatefile map in the root (git-data module, registry, grok, hooks, …) too.
-nmaps = 0
-for d, dirs, files in os.walk(root):
-    dirs[:] = [x for x in dirs if x != ".terraform"]
-    for fn in files:
-        if not fn.endswith(".tf"):
-            continue
-        rel = os.path.relpath(os.path.join(d, fn), root)
-        for tpl, body in maps(open(os.path.join(d, fn)).read()):
-            nmaps += 1
-            for k in KEY_RE.findall(body):
-                out.append("VIOL %s sweep-key[%s->%s]" % (rel, k, tpl))
-out += ["LOGINS %d" % logins, "PULLS %d" % pulls, "MAPS %d" % nmaps]
+out += ["LOGINS %d" % logins, "PULLS %d" % pulls, "WRITERS %d" % writers, "MAPS %d" % nmaps]
 print("\n".join(out))
 CENSUS_PY
 
-BOOT_FILES="cloud-init.yml,soleur-host-bootstrap.sh,cloud-init-inngest.yml"
-TF_PAIRS="server.tf:cloud-init.yml,inngest-host.tf:cloud-init-inngest.yml"
-EXPECTED_SCANNED=$'SCANNED cloud-init.yml\nSCANNED soleur-host-bootstrap.sh\nSCANNED cloud-init-inngest.yml\nSCANNED server.tf:cloud-init.yml\nSCANNED inngest-host.tf:cloud-init-inngest.yml'
-census() { python3 "$WORK/census.py" "$1" "${2-$BOOT_FILES}" "${3-$TF_PAIRS}"; }
+EXTRA_BOOT="soleur-host-bootstrap.sh"   # baked, run by the seed block; not a templatefile render
+EXTRA_HOST="inngest-bootstrap.sh"       # extracted from the inngest image and run as root at boot
+MIN_DERIVED=5                           # cloud-init{,-inngest,-registry,-git-data,-grok-dogfood}.yml
+MIN_HOST=45                             # local.host_script_files has 49 entries (+1 extra) today
+census() { python3 "$WORK/census.py" "$1" "${2-$EXTRA_BOOT}" "${3-$EXTRA_HOST}"; }
 viols() { grep '^VIOL ' || true; }
 
-# dispatch_ok <census output>: scanned EXACTLY the expected files and found real call sites —
-# never "0 scanned, 0 found" (a misspelled path or an empty list must go RED, not green).
+# dispatch_ok <census output>: scanned EXACTLY the derived set (every cloud-init*.yml a
+# templatefile() renders + the baked bootstrap + each rendering map) and every derived host script,
+# and found real call sites — never "0 scanned, 0 found" (a misspelled path, a vanished file or an
+# empty list must go RED, not green).
 dispatch_ok() {
-  local c="$1" sc lg pl mp
-  sc=$(grep '^SCANNED ' <<<"$c" || true)
-  lg=$(sed -n 's/^LOGINS //p' <<<"$c"); pl=$(sed -n 's/^PULLS //p' <<<"$c"); mp=$(sed -n 's/^MAPS //p' <<<"$c")
-  DWHY="scanned=[$(tr '\n' ' ' <<<"$sc")] logins=${lg:-?} pulls=${pl:-?} maps=${mp:-?}"
-  [ "$sc" = "$EXPECTED_SCANNED" ] && [ "${lg:-0}" -ge 1 ] && [ "${pl:-0}" -ge 1 ] && [ "${mp:-0}" -ge 4 ]
+  local c="$1" der exp sc nd hd hs lg pl wr mp
+  der=$(sed -n 's/^DERIVED //p' <<<"$c" | sort)
+  exp=$( { printf '%s\n' "$der" "$EXTRA_BOOT"; sed -n 's/^DERIVED_MAP //p' <<<"$c"; } | grep -v '^$' | sort)
+  sc=$(sed -n 's/^SCANNED //p' <<<"$c" | sort)
+  nd=$(grep -c . <<<"$der" || true)
+  hd=$(sed -n 's/^HDERIVED //p' <<<"$c"); hs=$(grep -c '^HSCANNED ' <<<"$c" || true)
+  lg=$(sed -n 's/^LOGINS //p' <<<"$c"); pl=$(sed -n 's/^PULLS //p' <<<"$c")
+  wr=$(sed -n 's/^WRITERS //p' <<<"$c"); mp=$(sed -n 's/^MAPS //p' <<<"$c")
+  DWHY="derived=$nd scanned=$(grep -c . <<<"$sc" || true)/expected=$(grep -c . <<<"$exp" || true) host=${hs}/${hd:-?} logins=${lg:-?} pulls=${pl:-?} writers=${wr:-?} maps=${mp:-?}"
+  [ -n "$sc" ] && [ "$sc" = "$exp" ] && [ "$nd" -ge "$MIN_DERIVED" ] \
+    && grep -qx cloud-init.yml <<<"$der" && grep -qx cloud-init-inngest.yml <<<"$der" \
+    && [ "${hd:-0}" -ge "$MIN_HOST" ] && [ "$hs" = "${hd:-x}" ] \
+    && [ "${lg:-0}" -ge 1 ] && [ "${pl:-0}" -ge 1 ] && [ "${wr:-0}" -ge 1 ] && [ "${mp:-0}" -ge 4 ]
 }
 
 C=$(census "$DIR")
-if dispatch_ok "$C"; then ok "G1 dispatch: census scanned exactly the 3 boot files + 2 templatefile maps ($DWHY)"
-else no "G1 dispatch: census must scan exactly the 3 boot files + the 2 .tf maps and find >=1 docker login, >=1 pull, >=4 maps ($DWHY)"; fi
-for f in cloud-init.yml soleur-host-bootstrap.sh cloud-init-inngest.yml server.tf inngest-host.tf; do
+if dispatch_ok "$C"; then ok "G1 dispatch: census scanned exactly the derived boot set + maps + host scripts ($DWHY)"
+else no "G1 dispatch: census must scan exactly the derived cloud-init*.yml renders + $EXTRA_BOOT + their maps, every host script, and find >=1 login/pull/writer, >=4 maps ($DWHY)"; fi
+# One row per scanned boot file and per rendering .tf (derived, so a new template gets its own row).
+for f in $(sed -n 's/^DERIVED //p' <<<"$C") "$EXTRA_BOOT" $(sed -n 's/^DERIVED_MAP \([^:]*\):.*/\1/p' <<<"$C" | sort -u); do
   v=$(viols <<<"$C" | grep -F "VIOL $f " || true)
-  if [ -z "$v" ]; then ok "G1: $f — 0 host-side GHCR boot residuals (login args zot-only, pull sources zot-derived)"
+  if [ -z "$v" ]; then ok "G1: $f — 0 host-side GHCR boot residuals (login args zot-only, pull/create/run sources zot-derived, endpoints GHCR-free)"
   else no "G1: $f carries host-side GHCR boot residuals:"; printf '        %s\n' "$v" >&2; fi
 done
+v=$(viols <<<"$C" | grep -E '^VIOL \S+ host-(login|pull)-ghcr' || true)
+if [ -z "$v" ]; then ok "G1: no baked host script (local.host_script_files + $EXTRA_HOST) logs in to ghcr.io or pulls/creates/runs a ghcr.io/jikig-ai/ literal"
+else no "G1: a baked host script reaches GHCR:"; printf '        %s\n' "$v" >&2; fi
 v=$(viols <<<"$C" | grep -F ' sweep-key[' || true)
 if [ -z "$v" ]; then ok "G1: no templatefile() map anywhere in the infra root passes a ghcr_read_* key"
 else no "G1: a templatefile() map passes a GHCR credential:"; printf '        %s\n' "$v" >&2; fi
@@ -271,12 +452,12 @@ else no "G1: a templatefile() map passes a GHCR credential:"; printf '        %s
 # even while another file's baseline is red. Row 6 is the must-PASS harness row.
 SB="$WORK/sb"
 assert_fixture_dir "$SB"
-# The sandbox holds exactly what the census reads: the 3 boot files + every .tf under the root.
+# The sandbox holds everything the census reads: every top-level non-test file + every .tf.
 sandbox() {
   assert_fixture_dir "$SB"
   assert_fixture_dir "$DIR"
   rm -rf "$SB"; mkdir -p "$SB"
-  cp "$DIR/cloud-init.yml" "$DIR/soleur-host-bootstrap.sh" "$DIR/cloud-init-inngest.yml" "$SB/"
+  find "$DIR" -maxdepth 1 -type f ! -name '*.test.*' -exec cp -t "$SB/" {} +
   (cd "$DIR" && find . -name '*.tf' -not -path '*/.terraform/*' -print0 | xargs -0 -I{} cp --parents {} "$SB/")
 }
 sandbox
@@ -287,8 +468,11 @@ new_viols() { comm -13 <(printf '%s\n' "$BASE") <(census "$SB" | viols | sort) |
 landed() { if cmp -s "$DIR/$1" "$SB/$1"; then echo "[HARNESS] mutation did not land in $1" >&2; exit 2; fi; }
 mrow() {  # <label> <file>
   landed "$2"
-  local n; n=$(new_viols)
-  if [ -n "$n" ]; then ok "G1 mutation RED: $1 — $(head -1 <<<"$n" | cut -c1-110)"
+  local n s; n=$(new_viols)
+  # Show the mutated file's own new violation first when it has one (a local.* over-approximation
+  # can also flag a sibling .tf that reads the same name).
+  s=$(grep -F "VIOL $2 " <<<"$n" | head -1 || true); [ -n "$s" ] || s=$(head -1 <<<"$n")
+  if [ -n "$n" ]; then ok "G1 mutation RED: $1 — $(cut -c1-110 <<<"$s")"
   else no "G1 mutation SURVIVED: $1"; fi
   sandbox
 }
@@ -299,6 +483,16 @@ p, expr = sys.argv[1], sys.argv[2]
 s = open(p).read()
 o = eval(expr, {"s": s, "chr": chr})
 open(p, "w").write(o)
+PY
+}
+py_sub() {  # <file> <old> <new> : literal, first occurrence; a missing anchor is a HARNESS fault
+  python3 - "$SB/$1" "$2" "$3" <<'PY' || { echo "[HARNESS] mutation anchor not found in $1" >&2; exit 2; }
+import sys
+p, a, b = sys.argv[1:4]
+s = open(p).read()
+if a not in s:
+    sys.exit(3)
+open(p, "w").write(s.replace(a, b, 1))
 PY
 }
 assert_fixture_dir "$SB"
@@ -317,12 +511,23 @@ mrow "4 pull of the IREF pin carrier before IREF=\"\$ZIREF\" (web colocated bloc
 # 4b: same, second site: the dedicated inngest template
 py_edit cloud-init-inngest.yml "(lambda i: s[:s.index(chr(10), i) + 1] + '    if ! docker pull \"\$ZIREF\"; then docker pull \"\$IREF\"; fi' + chr(10) + s[s.index(chr(10), i) + 1:])(s.index('    IREF=ghcr.io/'))"
 mrow "4b pull of the IREF pin carrier before IREF=\"\$ZIREF\" (dedicated inngest template)" cloud-init-inngest.yml
-# 5: dispatch rows — a misspelled path, and an empty list, must never read as "0 found, green"
+# 5: dispatch rows — a misspelled path, a vanished input, and an empty root must never read as
+# "0 found, green"
 sandbox
-if dispatch_ok "$(census "$SB" "cloud-init.yml,soleur-host-bootstrap.sh,cloud-init-ingest.yml")"; then no "G1 mutation SURVIVED: 5 misspelled boot-file path"
-else ok "G1 mutation RED: 5 misspelled boot-file path ($DWHY)"; fi
-if dispatch_ok "$(census "$SB" "" "")"; then no "G1 mutation SURVIVED: 5b empty file list"
-else ok "G1 mutation RED: 5b empty file list ($DWHY)"; fi
+if dispatch_ok "$(census "$SB" "soleur-host-bootstrp.sh")"; then no "G1 mutation SURVIVED: 5 misspelled extra boot-file path"
+else ok "G1 mutation RED: 5 misspelled extra boot-file path ($DWHY)"; fi
+mkdir -p "$WORK/empty"; assert_fixture_dir "$WORK/empty"
+if dispatch_ok "$(census "$WORK/empty" "" "")"; then no "G1 mutation SURVIVED: 5b empty root and empty file lists"
+else ok "G1 mutation RED: 5b empty root and empty file lists ($DWHY)"; fi
+py_sub zot-registry.tf 'templatefile("${path.module}/cloud-init-registry.yml"' 'templatefile("${path.module}/cloud-init-regsitry.yml"'
+landed zot-registry.tf
+if dispatch_ok "$(census "$SB")"; then no "G1 mutation SURVIVED: 5c a templatefile() call naming a template that does not exist"
+else ok "G1 mutation RED: 5c a templatefile() call naming a template that does not exist ($DWHY)"; fi
+sandbox
+rm -f "$SB/ci-deploy.sh"
+if dispatch_ok "$(census "$SB")"; then no "G1 mutation SURVIVED: 5d a host_script_files entry that is not on disk"
+else ok "G1 mutation RED: 5d a host_script_files entry that is not on disk ($DWHY)"; fi
+sandbox
 # 6 (must-PASS harness row): a comment naming the retired call form is not a call
 printf '    # docker login ghcr.io was removed by #8036 1d\n' >> "$SB/cloud-init.yml"
 landed cloud-init.yml
@@ -336,6 +541,51 @@ mrow "7 a stray ghcr.io code line in soleur-host-bootstrap.sh" soleur-host-boots
 # 8: a third soleur-inngest-bootstrap ref (a re-homed comment quoting the full ref) breaks the bump bot
 printf '  # was ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.37\n' >> "$SB/cloud-init.yml"
 mrow "8 a comment quoting a 3rd full soleur-inngest-bootstrap ref (bump bot expects exactly 2)" cloud-init.yml
+# 9-11: the GHCR-seeded $IMAGE_REF (IMAGE_REF='${image_name}' is the ghcr.io ref once rendered)
+# pulled through a call form the pre-review census did not parse: a management verb, `run`, and
+# a global flag before the subcommand. None carries a ghcr.io literal, so only the pull rule sees it.
+IMG_ANCHOR="    IMAGE_REF='\${image_name}'
+"
+py_sub cloud-init.yml "$IMG_ANCHOR" "$IMG_ANCHOR    docker image pull \"\$IMAGE_REF\"
+"
+mrow "9 docker image pull \"\$IMAGE_REF\" after IMAGE_REF='\${image_name}'" cloud-init.yml
+py_sub cloud-init.yml "$IMG_ANCHOR" "$IMG_ANCHOR    docker run --rm \"\$IMAGE_REF\" true
+"
+mrow "10 docker run --rm \"\$IMAGE_REF\" true after IMAGE_REF='\${image_name}'" cloud-init.yml
+py_sub cloud-init.yml "$IMG_ANCHOR" "$IMG_ANCHOR    docker --config /tmp/c pull \"\$IMAGE_REF\"
+"
+mrow "11 docker --config /tmp/c pull \"\$IMAGE_REF\" (global flag before the verb)" cloud-init.yml
+# 12: the sentinel writer records the un-rewritten GHCR ref instead of the zot $REF
+py_sub cloud-init.yml "printf '%s' \"\$REF\" > /run/soleur-image-ref" "printf '%s' \"\$IMAGE_REF\" > /run/soleur-image-ref"
+mrow "12 the /run/soleur-image-ref writer records \"\$IMAGE_REF\" instead of \"\$REF\"" cloud-init.yml
+# 13: a registry endpoint value in a rendering map set to GHCR (literal)
+py_sub server.tf "    registry_endpoint = local.registry_endpoint
+" "    registry_endpoint = \"ghcr.io\"
+"
+mrow "13 server.tf's templatefile map sets registry_endpoint = \"ghcr.io\"" server.tf
+# 13b: the same through the local it reads (zot_registry_endpoint = local.registry_endpoint)
+py_sub zot-registry.tf '  registry_endpoint = "${local.registry_private_ip}:5000"' '  registry_endpoint = "ghcr.io"'
+mrow "13b local.registry_endpoint (read by inngest-host.tf's zot_registry_endpoint) set to \"ghcr.io\"" zot-registry.tf
+# 14: a GHCR login in a DERIVED-only template (cloud-init-registry.yml was never in the old list)
+printf "    printf '%%s' \"\$T\" | docker login ghcr.io -u \"\$U\" --password-stdin\n" >> "$SB/cloud-init-registry.yml"
+mrow "14 docker login ghcr.io added to cloud-init-registry.yml (a derived, previously unlisted template)" cloud-init-registry.yml
+# 15: a GHCR login in a baked host script (the narrower host-literal rule; not a boot file)
+printf 'printf %%s "$T" | docker login ghcr.io -u "$U" --password-stdin\n' >> "$SB/ci-deploy.sh"
+mrow "15 docker login ghcr.io added to ci-deploy.sh (a local.host_script_files member)" ci-deploy.sh
+# 15b: a pull of a ghcr.io/jikig-ai/ literal in a host script, behind a global flag
+printf 'docker --config /tmp/c pull ghcr.io/jikig-ai/soleur-web-platform:latest\n' >> "$SB/disk-monitor.sh"
+mrow "15b docker --config … pull ghcr.io/jikig-ai/… added to disk-monitor.sh" disk-monitor.sh
+# 16: the registry host's zot-image exemption is value-bound, not name-bound
+py_sub zot-registry.tf '    zot_image     = local.zot_image' '    zot_image     = "ghcr.io/jikig-ai/soleur-web-platform:latest"'
+mrow "16 the registry map's zot_image repointed at a ghcr.io/jikig-ai/ ref (exemption revoked)" zot-registry.tf
 
+# Floor at the MEASURED count (45, PR #8708 review; the suite had 26 rows and no floor before): rows are derived from the file set, so a
+# derivation that silently matched less would also shrink the row count. Reported with printf +
+# exit DIRECTLY, never through ok()/no() -- the floor polices those.
+MIN_ASSERTIONS=45
+if (( pass + fail < MIN_ASSERTIONS )); then
+  printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 echo "=== cloud-init-ghcr-seed-login: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

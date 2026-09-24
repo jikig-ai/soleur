@@ -58,6 +58,10 @@ JOB="$(awk '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ /^  web_host_create:/) } /^  #/ {
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
+# Instrument self-test: both helpers must move their counters, or every verdict below is void.
+ok "instrument self-test (pass arm)" >/dev/null; no "instrument self-test (fail arm)" 2>/dev/null
+[ "$pass" -eq 1 ] && [ "$fail" -eq 1 ] || { printf 'instrument self-test broken\n'; exit 2; }
+pass=0; fail=0
 
 # Deliberately-nonzero grep inside a command substitution must not trip `set -e`
 # (accumulate-then-exit foot-gun): the trailing `|| true` keeps a no-match empty.

@@ -706,7 +706,7 @@ runcmd:
     # source (the seed item's zot login is reused); a miss is fatal, no second registry.
     ZURL='${registry_endpoint}'  # baked (#8651/#6985)
     ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.37@sha256:e773fe5c74e9d49149217554f3d2730c597bf1e3d856933cccfa81199ae490bc"
-    if docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_pull_fatal fatal; exit 1; fi
+    if timeout 180 docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_pull_fatal fatal; exit 1; fi
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     # #6090: composite trap (cleanup + named fatal).

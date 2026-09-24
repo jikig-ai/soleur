@@ -111,7 +111,8 @@ const HETZNER_CAP = 32_768;
 // pattern applied). What CANNOT be baked is the invocation: it splices the per-host read-scoped
 // web_probes token + EXPECTED_IP + endpoints (SOLEUR_WEB_PROBES_TOKEN='${web_probes_token}' …),
 // all templatefile values evaluated at RENDER time — a baked helper cannot carry a per-host TF
-// secret. Same irreducibly-inline class as the ghcr_login baked-cred + webhook-deploy printf above.
+// secret. Same irreducibly-inline class as the webhook-deploy printf above (and, until #8036 1d
+// deleted it, the ghcr_login baked-cred).
 // Measured render ~23,168; 23,700 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob → ~24.7 KB
 // still trips it) and stays ~9.1 KB below HETZNER_CAP. When this climbs further, prefer a
 // base64gzip-is-already-applied render audit before raising again (headroom to the hard cap is ample;
@@ -123,7 +124,8 @@ const HETZNER_CAP = 32_768;
 // pointing at a credential file that does not exist, and the value spliced here
 // ('${soleur_doppler_token_env_b64}') is a templatefile value evaluated at RENDER time from
 // local.webhook_doppler_token_env — a baked helper cannot carry a per-host TF secret. Same
-// irreducibly-inline class as the ghcr_login baked-cred and the webhook-deploy printf above.
+// irreducibly-inline class as the webhook-deploy printf above (and the ghcr_login baked-cred was,
+// until #8036 1d deleted it).
 //
 // TRIMMED FIRST, and this is most of the story: the first draft cost +5,116 B because
 // soleur-doppler-token.tmpl carried a ~3.8 KB prose header, and that file is injected VERBATIM
@@ -151,9 +153,18 @@ const HETZNER_CAP = 32_768;
 // output is not byte-identical across zlib builds — and the local figure is the LOWER of the two,
 // so a budget derived from it reds in CI on the very next run. Re-derive from a CI failure line,
 // never from a local run, whenever this is raised again.
-// Measured render 24,556 (CI); 24,740 keeps ~184 B of headroom, the same margin the 24,500 raise
-// used, and stays ~8.0 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 24_740;
+// Measured render 24,556 (CI); 24,740 kept ~184 B of headroom, the same margin the 24,500 raise
+// used, and stayed ~8.0 KB below HETZNER_CAP.
+//
+// #8036 1d LOWER (PR #8708): deleting every host-side GHCR leg (the GHCR read-cred bake, the
+// seed-block ghcr_login + GHCR pull arm, the app_ghcr_* emits, the colocated /v2/ probe and
+// inngest_ghcr_fallback arm, the three `|| echo '${image_name}'` fallbacks) shrank the render
+// 24,204 → 23,360 B (local, merge-base f2aa5b1bee vs this branch), and a budget left at 24,740 would
+// let a ~1.3 KB re-inlined blob back in unnoticed — the exact class this tripwire exists for. Measured 23,360 locally (after the colocated pull gained
+// its `timeout 180`); the CI figure is taken as local + 32 B (the zlib delta recorded above, local
+// is the LOWER one), so ~23,392. 23,580 restores the same ~184 B headroom over that and stays
+// ~9.2 KB below HETZNER_CAP. If CI reds on the first run, re-derive from its failure line.
+const WEB_GZIP_BUDGET = 23_580;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/

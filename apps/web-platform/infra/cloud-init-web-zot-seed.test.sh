@@ -95,6 +95,7 @@ M = {
   "g1_ghcr_pull_back": lambda s: s.replace('\nZ="zot=[', '\n[ $OK = 1 ] || { timeout 180 docker pull "$IMAGE_REF" >/dev/null 2>&1 && OK=1; }\nZ="zot=[', 1),
   "g1_ghcr_login_back": lambda s: s.replace("\nSTAGE=pull\nC=none", "\nprintf '%s' 'ght' | timeout 60 docker login ghcr.io -u 'ghu' --password-stdin >/dev/null 2>&1 || true\nSTAGE=pull\nC=none", 1),
   "g1_tag_to_zot": lambda s: s.replace("*@sha256:*)", "*)", 1),
+  "g1_err_level": lambda s: s.replace('"$STAGE" fatal', '"$STAGE" error', 1),
   "g1_no_zot_leg": lambda s: s.replace("'nic=%s:%s %s pull_err: %s' \"$NIC\" \"$W\" \"$Z\"", "'nic=%s:%s pull_err: %s' \"$NIC\" \"$W\"", 1),
   "g1_login_after_pull": move_zot_login_after_pull,
   "g1_no_redact": lambda s: s.replace("sed -E 's#[A-Za-z0-9_+/-]{40,}#REDACTED#g'", "cat", 1),
@@ -549,6 +550,9 @@ g1_failboth() {
   grep -q "^pull ghcr.io/" "$L_ORDER" && why="$why ghcr-pulled"
   d=$(post_field pull detail)
   [ "$(post_field pull message)" = "soleur-hostscript-seed failed" ] || why="$why no-fatal"
+  # The seed-block fatal pages at level=fatal (the web_terminal_boot_fatal rule keys on it); an
+  # on_err downgraded to error/warning would still POST, so the level is pinned, not the POST.
+  [ "$(post_field pull level)" = fatal ] || why="$why level=[$(post_field pull level)]"
   [ "$(post_field pull host_name)" = soleur-web-2 ] || why="$why host_name"
   [ "${#d}" -le 200 ] || why="$why detail>200"
   timeouts_ok || why="$why unbounded-docker-call"
@@ -623,7 +627,7 @@ g1_happy "$DEF" && ok "AC1/G1: digest pin → first pull is the baked zot ref, n
   || no "AC1/G1 happy path:$G1WHY"
 grep -q __CUT_REACHED__ "$L_OUT" && ! grep -q __SENTINEL_AFTER_CUT__ "$L_OUT" \
   && ok "AC1: execution stops at the STAGE=extract cut (sentinel after it never prints)" || no "AC1: cut sentinel"
-g1_failboth "$DEF" && ok "AC2/G1: zot miss → fatal stage=pull, ≤200-char detail, fixed fields first (zot leg only), no GHCR pull" \
+g1_failboth "$DEF" && ok "AC2/G1: zot miss → fatal stage=pull at level=fatal, ≤200-char detail, fixed fields first (zot leg only), no GHCR pull" \
   || no "AC2/G1 fail-both:$G1WHY"
 g1_leak "$DEF" && ok "AC2/G1: a failing login that echoes the token leaks no slice of it into Sentry or the detail file" \
   || no "AC2/G1 leak:$G1WHY"
@@ -753,6 +757,7 @@ mrow "G1.17 a GHCR login re-added to the seed item" g1_happy g1_ghcr_login_back
 mrow "G1.18 unreach cause arm dropped" g1_causes g1_drop_unreach
 mrow "G1.19 a timeout does not stop the zot retries" g1_causes g1_timeout_retries
 mrow "G1.20 /run pre-create (0600) dropped" g1_happy g1_no_install
+mrow "G1.21 on_err's fatal emit downgraded to level=error" g1_failboth g1_err_level
 # G1.3 guard's own dispatch: an extractor that matches no seed item must be a HARNESS failure.
 python3 - "$WORK/def/r.yml" "$WORK/g13.yml" <<'PY'
 import sys
@@ -915,6 +920,15 @@ cat > "$C4/bin/curl" <<'STUB'
 printf "curl %s\n" "$*" >> "$C4_LOG"
 exit 7
 STUB
+# Records the bound, then runs the wrapped command (the docker stub) — so the log shows WHICH
+# call was bounded. The colocated pull lost its 3 s /v2/ pre-check with 1d; the timeout is its
+# only ceiling (the dedicated inngest template and the seed pull use the same 180 s).
+cat > "$C4/bin/timeout" <<'STUB'
+#!/bin/sh
+printf "timeout %s " "$1" >> "$C4_LOG"
+shift
+exec "$@"
+STUB
 chmod +x "$C4/bin"/*
 C4_ZIREF="10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:"
 c4_run() {  # <script> <pull rc> : sets C4RC, C4OUT; the call log is $C4/log
@@ -928,8 +942,8 @@ c4_miss() {  # the property: fatal emit (the only emit), non-zero, no later pull
   [ "$C4RC" != 0 ] || why="$why rc=0"
   grep -q RUNCMD_CONTINUED <<<"$C4OUT" && why="$why runcmd-continued"
   [ "$(grep '^emit ' "$C4/log" | tr '\n' '|')" = "emit inngest_pull_fatal fatal|" ] || why="$why emits=[$(grep '^emit ' "$C4/log" | tr '\n' '|')]"
-  [ "$(grep -c '^pull ' "$C4/log")" = 1 ] || why="$why pulls=$(grep -c '^pull ' "$C4/log")"
-  grep -q "^pull $C4_ZIREF" "$C4/log" || why="$why first-pull-not-zot"
+  [ "$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")" = 1 ] || why="$why pulls=$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")"
+  grep -q "^pull $C4_ZIREF" "$C4/log" || grep -q "^timeout 180 pull $C4_ZIREF" "$C4/log" || why="$why first-pull-not-zot"
   grep -q '^create ' "$C4/log" && why="$why create-after-miss"
   grep -q '^curl ' "$C4/log" && why="$why probe-on-resolution-path"
   G4WHY="$why"; [ -z "$why" ]
@@ -940,7 +954,8 @@ c4_hit() {  # zot hit: inngest_zot info, one pull, and every later consumer foll
   [ "$C4RC" = 0 ] || why="$why rc=$C4RC"
   grep -q RUNCMD_CONTINUED <<<"$C4OUT" || why="$why runcmd-ended"
   [ "$(grep '^emit ' "$C4/log" | tr '\n' '|')" = "emit inngest_zot info|" ] || why="$why emits=[$(grep '^emit ' "$C4/log" | tr '\n' '|')]"
-  [ "$(grep -c '^pull ' "$C4/log")" = 1 ] || why="$why pulls=$(grep -c '^pull ' "$C4/log")"
+  [ "$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")" = 1 ] || why="$why pulls=$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")"
+  grep -q "^timeout 180 pull $C4_ZIREF" "$C4/log" || why="$why pull-unbounded"
   grep -q "^create --name soleur-inngest-bootstrap-extract $C4_ZIREF" "$C4/log" || why="$why create-not-zot"
   grep -q "^inspect $C4_ZIREF" "$C4/log" || why="$why inspect-not-zot"
   grep -q 'ghcr\.io' "$C4/log" && why="$why ghcr-ref-used"
@@ -948,7 +963,7 @@ c4_hit() {  # zot hit: inngest_zot info, one pull, and every later consumer foll
 }
 c4_miss "$C4/item.sh" && ok "G4c: colocated zot miss → soleur-boot-emit inngest_pull_fatal fatal (only emit), exit non-zero, no later pull/create, runcmd ends" \
   || no "G4c miss:$G4WHY"
-c4_hit "$C4/item.sh" && ok "G4c: colocated zot hit → inngest_zot info, one pull, create/inspect follow the zot ref, runcmd continues" \
+c4_hit "$C4/item.sh" && ok "G4c: colocated zot hit → inngest_zot info, one pull bounded by timeout 180, create/inspect follow the zot ref, runcmd continues" \
   || no "G4c hit:$G4WHY"
 c4_mut() {  # <label> <predicate> <python replace old> <new>
   cp "$C4/item.sh" "$C4/mut.sh"
@@ -967,7 +982,8 @@ c4_mut "emit moved after the exit (unreachable)" c4_miss "soleur-boot-emit innge
 c4_mut "emit level swapped to warning" c4_miss "inngest_pull_fatal fatal;" "inngest_pull_fatal warning;"
 c4_mut "exit dropped (falls through to docker create)" c4_miss "inngest_pull_fatal fatal; exit 1;" "inngest_pull_fatal fatal; :;"
 c4_mut "the GHCR fallback restored (pull of the IREF pin carrier after the miss)" c4_miss "inngest_pull_fatal fatal; exit 1;" 'inngest_ghcr_fallback warning; docker pull "$IREF";'
-c4_mut "the /v2/ probe restored on the resolution path" c4_miss 'if docker pull "$ZIREF"; then' 'if curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/" && docker pull "$ZIREF"; then'
+c4_mut "the /v2/ probe restored on the resolution path" c4_miss 'if timeout 180 docker pull "$ZIREF"; then' 'if curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/" && timeout 180 docker pull "$ZIREF"; then'
+c4_mut "timeout 180 dropped from the colocated zot pull (unbounded)" c4_hit 'if timeout 180 docker pull "$ZIREF"; then' 'if docker pull "$ZIREF"; then'
 # Harness must-RED: a stub whose "failing" pull returns 0 never reaches the miss arm — the miss
 # predicate must not pass by testing the hit arm twice.
 if C4_FORCE_RC=0 c4_miss "$C4/item.sh"; then no "G4c harness: the miss predicate passed with the pull stubbed to succeed"
@@ -988,8 +1004,9 @@ done
 
 # Floor: the number of assertions must not silently shrink (a deleted block reads as green).
 # #8036 1d: 91 → 99. Every retired GHCR row was replaced 1:1 by its residual-zero inverse, and the
-# 8 G4c colocated-inngest rows were added BEFORE this restatement.
-MIN_ASSERTIONS=99
+# 8 G4c colocated-inngest rows were added BEFORE this restatement. 99 → 101 (PR #8708 review): the
+# G1.21 on_err level=fatal mutation row and the G4c unbounded-colocated-pull mutation row.
+MIN_ASSERTIONS=101
 total=$((pass + fail + skipped))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   printf 'assertion floor: %d < %d — a block stopped asserting\n' "$total" "$MIN_ASSERTIONS"; exit 1
