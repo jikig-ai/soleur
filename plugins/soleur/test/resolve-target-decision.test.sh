@@ -164,6 +164,7 @@ SHA_MVOUT=$(git -C "$SRC" rev-parse HEAD)
 mkshallow() {  # $1=sha — prints the path of a fresh depth-1 clone holding only that commit
   local d
   d=$(mktemp -d "$W/clone.XXXXXX")
+  assert_fixture_dir "$d"
   git init -q "$d"
   git -C "$d" remote add origin "file://$SRC"
   git -C "$d" fetch -q --depth=1 origin "$1"
@@ -180,6 +181,7 @@ fi
 SHA_OK=1111111111111111111111111111111111111111
 mkfix() {  # $1=dir  $2=run_id|""  $3=release conclusion  $4=artifact json|"NONE"|"EXPIRED"
   local d="$1" runid="$2" conc="$3" art="$4"
+  assert_fixture_dir "$d"
   mkdir -p "$d"
   if [ -z "$runid" ]; then printf '{"workflow_runs":[]}\n' > "$d/runs.json"
   else printf '{"workflow_runs":[{"id":%s,"status":"completed","conclusion":"success"}]}\n' "$runid" > "$d/runs.json"; fi
