@@ -790,11 +790,12 @@ main apply had already revoked the old token, so the refusal left the host with 
 not with the old one. The file's earlier writers do not cover it: cloud-init bakes the DSN line only
 at a host's birth, and the cutover's write did not survive.
 
-The helper therefore creates an absent file, the same way `workspaces-cutover.sh` does:
+The helper therefore creates an absent file, ending in the same state `workspaces-cutover.sh`
+leaves (0600 root):
 
-- it creates the file only AFTER the new token is proven, 0600 root, holding the token line only;
+- it creates the file only AFTER the new token is proven (with `O_EXCL`), holding the token line only;
 - it records `created_envfile=1` in its `result=ok` line;
-- on any post-write mismatch it removes the file, restoring the ABSENT state;
+- on a failed write or any post-write mismatch it removes the file, restoring the ABSENT state;
 - it refuses a symlink at the path.
 
 The addendum above still holds for the `DOPPLER_TOKEN=` line. The file itself is created by this

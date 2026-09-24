@@ -38,6 +38,8 @@ say() {
   printf '[luks-token-refresh] %s\n' "$*"
 }
 fail() { say "result=fail reason=$1"; exit "${2:-1}"; }
+# After step 3 creates the file, a failure must leave it ABSENT again, not empty.
+fail_after_create() { [ "${created:-0}" = 1 ] && rm -f "$ENVF"; fail "$1"; }
 
 # --- 0. Exactly one line of input -----------------------------------------------------------
 DOPPLER_TOKEN=""
@@ -59,8 +61,8 @@ esac
 # --- 1. Preconditions -----------------------------------------------------------------------
 # Root writes here, so a symlink (dangling or not) is refused rather than written through.
 [ -L "$ENVF" ] && fail envfile_symlink
-# An ABSENT file is created in step 3, after the proof, the way workspaces-cutover.sh does
-# (`touch` + `chmod 600`). #8632's first apply found web-1 without one: cloud-init bakes the DSN
+# An ABSENT file is created in step 3, after the proof, with the end state workspaces-cutover.sh
+# leaves (0600 root). #8632's first apply found web-1 without one: cloud-init bakes the DSN
 # line only at a host's birth, and the cutover's write had not survived. Refusing left the host with
 # no token at all while the old one was being revoked (#8706 tracks the missing DSN line).
 created=0
@@ -90,12 +92,14 @@ key=""
 # --- 3. Rewrite the token line --------------------------------------------------------------
 if [ ! -e "$ENVF" ]; then
   # Empty until the rewrite below replaces it with a tmp born 0600 (and chmod 600 after the mv).
-  ( umask 077; : > "$ENVF" ) || fail envfile_create_failed
+  # `set -C` opens with O_EXCL, closing the instant between the -e test and the redirect. A file that
+  # appeared DURING the proof fails that test, is not treated as ours, and trips the `before` check.
+  ( set -C; umask 077; : > "$ENVF" ) || fail envfile_create_failed
   created=1
 fi
 # The previous content is kept in memory, not in a backup file, so no second on-disk copy of the
 # old token ever exists. The trailing `x` preserves a final newline through $(...).
-orig="$(cat "$ENVF"; printf x)" || fail envfile_unreadable
+orig="$(cat "$ENVF"; printf x)" || fail_after_create envfile_unreadable
 orig="${orig%x}"
 # A stale .tmp (or a symlink planted there) must not be written through.
 rm -f "${ENVF}.tmp"
@@ -105,7 +109,7 @@ wrc=0
   && mv "${ENVF}.tmp" "$ENVF" && chmod 600 "$ENVF" || wrc=$?
 if [ "$wrc" -ne 0 ]; then
   rm -f "${ENVF}.tmp"
-  fail envfile_write_failed
+  fail_after_create envfile_write_failed
 fi
 
 restore() {

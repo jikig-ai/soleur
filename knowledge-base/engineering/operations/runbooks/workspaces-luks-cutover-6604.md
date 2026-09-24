@@ -288,8 +288,8 @@ has no working token until the installer succeeds. The host timer then fails wit
 `doppler_unreachable` (one `workspaces-luks-drift` Sentry email; not at-rest drift). The installer is
 left tainted, so the next per-merge apply re-fires it; re-running the failed job does the same, but
 with the helper at that commit. If the file is absent, the helper creates it (0600 root, token line
-only) after proving the token. #8703's first apply found web-1 without the file (`envfile_absent`),
-and the fix merged afterwards re-delivered the token. Nothing on this path can lock the volume: the only consumers of this token are
+only) after proving the token. #8703's first apply found web-1 without the file (`envfile_absent`);
+merging #8724 re-fires the tainted installer with that fix. Nothing on this path can lock the volume: the only consumers of this token are
 `luks-monitor.sh` and the cutover, and the in-guest unlock path is deferred to #6931.
 
 Do not reboot web-1 as part of a rotation.
