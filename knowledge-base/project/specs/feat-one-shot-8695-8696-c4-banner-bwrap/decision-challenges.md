@@ -26,3 +26,13 @@ Recorded headless during `soleur:plan` (one-shot pipeline, 2026-09-24). Plan:
 - **Decision taken:** the plan folds in a production bug measured while sizing #8696: likec4 defaults `--use-dot` inside containers, the image has no `dot`, so server re-renders commit zero-view models. Fix: `--no-use-dot`, a views gate (`layout_failed`), a render-slot wait bound (real layouts take 3-7 s, not the documented 0.8 s), and a read-only census of affected tenant repos.
 - **Why fold in:** same spawn, same argv, same tests; the bwrap change alone would fix it only incidentally (no `/.dockerenv` inside the sandbox).
 - **If you disagree:** split the `--no-use-dot`/views-gate/slot-wait work into its own issue and PR.
+
+## 5. No-reason banner line changed from the CPO-suggested copy (taste)
+
+- **Decision taken (deepen-plan):** line 2 with no diagnostic reads "A newer change to the diagram source was saved before this one was rendered. Reopen the diagram to see the latest version." instead of the CPO's optional "It will refresh once the new version finishes rendering." After the resync-failure path gains `RETRY_DIAGNOSTIC`, the only no-diagnostic case is a supersede, and nothing on the page reloads the diagram after one (no client polling; the newer change may come from the Concierge, another tab or a direct push). The Code panel's "Saved — diagram will update after re-render." changes the same way.
+- **If you disagree:** pick different wording; do not restore a refresh promise without adding a client reload.
+
+## 6. Concierge edit while the banner is up is deferred (scope)
+
+- **Decision taken (deepen-plan):** not fixed in this PR. `C4Workspace` never reloads the diagram after a Concierge `edit_c4_diagram`, banner or not; fixing it needs chat-to-workspace event wiring. A follow-up issue is filed during work (plan Phase 3 item 5).
+- **If you disagree:** pull the wiring into this PR as a new Phase 1 item with its own test row.
