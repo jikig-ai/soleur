@@ -283,10 +283,13 @@ therefore one code change and one merge, with no dispatch. Line ownership is rec
    - No new Sentry `workspaces-luks-drift` event with reason `doppler_unreachable` (the query in
      `scripts/followthroughs/workspaces-luks-soak-6604.sh`).
 
-If the SSH step fails after the main apply succeeded, the host still holds the old, now-revoked
-token until the step is re-run: the host timer then fails with `doppler_unreachable` (one
-`workspaces-luks-drift` Sentry email; not at-rest drift). Re-running the failed job re-fires the
-installer. Nothing on this path can lock the volume: the only consumers of this token are
+If the SSH step fails after the main apply succeeded, the old token is already revoked, so the host
+has no working token until the installer succeeds. The host timer then fails with
+`doppler_unreachable` (one `workspaces-luks-drift` Sentry email; not at-rest drift). The installer is
+left tainted, so the next per-merge apply re-fires it; re-running the failed job does the same, but
+with the helper at that commit. If the file is absent, the helper creates it (0600 root, token line
+only) after proving the token. #8703's first apply found web-1 without the file (`envfile_absent`);
+merging #8724 re-fires the tainted installer with that fix. Nothing on this path can lock the volume: the only consumers of this token are
 `luks-monitor.sh` and the cutover, and the in-guest unlock path is deferred to #6931.
 
 Do not reboot web-1 as part of a rotation.
