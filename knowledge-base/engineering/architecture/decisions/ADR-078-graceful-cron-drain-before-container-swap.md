@@ -175,3 +175,36 @@ that diagram change is deferred with this ADR.
 - A crashed/SIGKILLed deploy can leave a stale lease; the substrate's TTL
   fail-open (`DEPLOY_LEASE_MAX_AGE_MS`, default 90 min > drain + overhead) ignores
   it, so a crashed deploy never darks crons indefinitely.
+
+## Amendment 2026-09-24 (#8726) — how the deferral crosses the Inngest step boundary
+
+The lease, its trigger and its outcome are unchanged. What changed is how the deferral reaches the
+handler. `setupEphemeralWorkspace` still throws `DeployInProgressError`, but that class does not
+survive an Inngest step boundary: once `step.run("setup-workspace")` exhausts its retries, the
+handler receives the SDK's rebuilt `StepError` (`name "Error"`, no custom fields), so the
+`instanceof DeployInProgressError` check the nine deferral-aware claude-eval crons carried never
+matched in production. A deploy that outlasted the retry read as a setup failure with a red
+heartbeat.
+
+- **Mechanism.** The step callback is wrapped in `deferDeployOnFinalAttempt` (`_cron-shared.ts`),
+  where the error is still live. A non-final attempt rethrows, so Inngest's retry re-checks the
+  lease; the final attempt returns a `deploy-deferred` verdict. The handler re-materializes it with
+  `throwIfDeployDeferred`, after the setup `catch` and before the body's `try/finally`, so the
+  deferral still posts no heartbeat and the thrown error keeps its class name in Sentry.
+- **Correction.** "`retries: 1` re-dispatches the run; the retry normally lands after the bounded
+  deploy completes" (Decision, item 1, via the `DeployInProgressError` doc comment) described a
+  handler retry. It is a **step** retry on Inngest's default backoff, and that backoff has not been
+  measured against the lease lifetime (decision-challenge DC-2 on #8726).
+- **What a deferral that outlasts the retry visibly produces.** Two `DeployInProgressError` Sentry
+  events (one per handler-level attempt, from `middleware/sentry-correlation.ts`), a `failed`
+  `routine_runs` row, and a *missed* check-in about 60 minutes later (`checkin_margin_minutes = 60`).
+  "Benign" means no false setup-failure report, not silence (decision-challenge DC-1 on #8726).
+- **Accepted cost.** The handler-level retry after the verdict replays the memoized verdict and
+  cannot re-check the lease — the "a replay cannot recover" shape of ADR-126 decision 6, acceptable
+  here because no workspace exists yet.
+- **Precedent.** The ADR-042 amendment of 2026-09-24 (the leader loop's returned `turn_rejection`).
+  Principle: `AP-028` in the principles register.
+- **Rejected.** A message marker matched in the handler (string routing across the boundary; a
+  wording change re-breaks it silently). Returning the verdict on every attempt (a returned step is
+  memoized, so the lease is never re-checked). `NonRetriableError` for the handler throw (renames the
+  Sentry event and loses the queryable class name).

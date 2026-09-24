@@ -245,8 +245,8 @@ exists to close. This is asserted negatively in the test suite.
    `finally` tears down `ephemeralRoot` unconditionally, so the replay reads back an already-deleted
    path, hits `safeCommitAndPr`'s `workspace-lost` guard, and comments a misleading *"PR withheld"* +
    runbook pointer onto the operator's own issue. Scoped precisely: throws **before** the try (token
-   mint, `setup-workspace` itself) still retry into a fresh workspace, and `DeployInProgressError`
-   still rethrows bare.
+   mint, `setup-workspace` itself) still retry into a fresh workspace, and a deploy deferral exits
+   before the guarded body (see the ADR-078 amendment of 2026-09-24).
 3. **Every liveness-RED run now attempts a GitHub issue write.** All seven use
    `onBeforeHeartbeat: heartbeatOk ? undefined : …ensureScheduledAuditIssue(…)`, evaluated *after*
    `if (!livenessOk) heartbeatOk = false;`. It is bounded only by title dedup, so if that dedup ever
@@ -305,9 +305,13 @@ future observation shows a `no-changes` run for a Class A producer, that demotes
 
 Written down with numbers rather than papered over:
 
-1. **`DeployInProgressError` mid-spawn** is rethrown bare with no heartbeat, so Inngest retries — and
-   that retry fires the exact hazard `retryEligible` exists to close, because the workspace is already
-   gone. Outside this amendment's reach.
+1. **A deploy's drain timeout mid-spawn.** When `CRON_DRAIN_TIMEOUT` expires, the deploy kills an
+   in-flight `claude` (`op=cron-drain-timeout`, ADR-078), and Inngest then retries the step against
+   a workspace the handler's `finally` already deleted — the exact hazard `retryEligible` exists to
+   close. Outside this amendment's reach. *(Reworded 2026-09-24, #8726: this residual originally
+   named "`DeployInProgressError` mid-spawn", an error with no producer inside the guarded body —
+   the substrate's setup is its only producer — and one that could not have matched `instanceof`
+   across a step boundary anyway.)*
 2. **A throw inside the `sentry-heartbeat` step itself** is outside `retryEligible`'s reach.
 3. **The detector posts no check-in of its own**, so if it stops running its silence reads as healthy
    — the reporter-is-the-subject problem displaced one level up. Tracked in **#7047**.
