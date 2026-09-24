@@ -1053,16 +1053,28 @@ run_case() {
     "$UBUNTU_BASE" bash -c '
       set -e
       cp /work/git-data-emit-src /work/git-data-emit
-      # TWO STATEMENTS, NOT `a && b`. `set -e` does not fire on a failing NON-FINAL member of an
-      # AND-OR list (measured), so with `&&` a failed apt-get UPDATE fell through into drive.sh
-      # with no python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:`
-      # hard FAIL asserting a deterministic fixture defect that had not occurred. Split, either
-      # failure aborts the container with its own rc and the verdict classifies it honestly.
-      # The >/dev/null 2>&1 is load-bearing for CONFIDENTIALITY, not only noise: behind an
-      # authenticated apt proxy apt error text embeds user:pass@host, and the skip reason tails
-      # this capture on a GREEN run.
-      apt-get update -qq >/dev/null 2>&1
-      apt-get install -y -qq curl python3 >/dev/null 2>&1
+      # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
+      # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
+      # statement level let a failed apt-get UPDATE fall through into drive.sh with no
+      # python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:` hard
+      # FAIL asserting a deterministic fixture defect that had not occurred. Inside `if` the
+      # `&&` is a tested context; the 3-attempt loop with Acquire::Retries=5 and 10s/30s backoff
+      # absorbs transient mirror failure (#8744), and exhaustion exits 100 — which the env-rc
+      # allowlists classify honestly, now with a cause attached.
+      # apt output goes to a LOG FILE, not /dev/null and not the capture — the CONFIDENTIALITY
+      # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
+      # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. A GREEN
+      # run still leaks nothing into the stream the verdicts tail. Tail and marker share stderr:
+      # docker demuxes stdout/stderr, so a cross-stream order is not preserved (measured — a
+      # stdout marker can land BEFORE a stderr tail).
+      _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
+      _apt_ok=0
+      for _apt_try in 1 2 3; do
+        if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
+           && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
+        case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
+      done
+      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1
   local rc=$?
@@ -1346,16 +1358,28 @@ else
     "$UBUNTU_BASE" bash -c '
       set -e
       cp /work/git-data-emit-src /work/git-data-emit
-      # TWO STATEMENTS, NOT `a && b`. `set -e` does not fire on a failing NON-FINAL member of an
-      # AND-OR list (measured), so with `&&` a failed apt-get UPDATE fell through into drive.sh
-      # with no python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:`
-      # hard FAIL asserting a deterministic fixture defect that had not occurred. Split, either
-      # failure aborts the container with its own rc and the verdict classifies it honestly.
-      # The >/dev/null 2>&1 is load-bearing for CONFIDENTIALITY, not only noise: behind an
-      # authenticated apt proxy apt error text embeds user:pass@host, and the skip reason tails
-      # this capture on a GREEN run.
-      apt-get update -qq >/dev/null 2>&1
-      apt-get install -y -qq curl python3 >/dev/null 2>&1
+      # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
+      # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
+      # statement level let a failed apt-get UPDATE fall through into drive.sh with no
+      # python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:` hard
+      # FAIL asserting a deterministic fixture defect that had not occurred. Inside `if` the
+      # `&&` is a tested context; the 3-attempt loop with Acquire::Retries=5 and 10s/30s backoff
+      # absorbs transient mirror failure (#8744), and exhaustion exits 100 — which the env-rc
+      # allowlists classify honestly, now with a cause attached.
+      # apt output goes to a LOG FILE, not /dev/null and not the capture — the CONFIDENTIALITY
+      # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
+      # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. A GREEN
+      # run still leaks nothing into the stream the verdicts tail. Tail and marker share stderr:
+      # docker demuxes stdout/stderr, so a cross-stream order is not preserved (measured — a
+      # stdout marker can land BEFORE a stderr tail).
+      _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
+      _apt_ok=0
+      for _apt_try in 1 2 3; do
+        if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
+           && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
+        case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
+      done
+      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1; _t5m_rc=$?
   # rc is CAPTURED AND USED. The trailing `|| true` this replaces discarded the one datum that
@@ -1456,7 +1480,7 @@ else
   case "$_t5m_state" in
     did-not-run)
       # 2: the premise and the result, neither of which the taken branch got to make.
-      arm_skip "T5 MUTATION did not run: the driver never reached the download block, so this arm demonstrated neither that the wrong digest was rejected nor that CHMOD_RAN is reachable. ${_t5m_rc_note}; T5 primary reached the driver: ${_t5_primary_reached}; tail: ${_t5m_tail:-<empty: the container suppresses apt output, so a pre-driver failure leaves no capture — see the deferred /out/setup.log item>}" 2
+      arm_skip "T5 MUTATION did not run: the driver never reached the download block, so this arm demonstrated neither that the wrong digest was rejected nor that CHMOD_RAN is reachable. ${_t5m_rc_note}; T5 primary reached the driver: ${_t5_primary_reached}; tail: ${_t5m_tail:-<empty: an apt failure now prints a scrubbed tail plus FIXTURE_APT_FAILED into this capture, so empty means the run died before the driver script even started — see the deferred /out/setup.log item>}" 2
       ;;
     harness-defect)
       fail "T5 MUTATION: docker exited 0 but the driver's execution marker never printed — harness defect, not an environment skip; the checksum-rejection premise is undemonstrated" \
@@ -1563,16 +1587,28 @@ docker run --rm \
   "$UBUNTU_BASE" bash -c '
     set -e
     cp /work/git-data-emit-src /work/git-data-emit
-    # TWO STATEMENTS, NOT `a && b`. `set -e` does not fire on a failing NON-FINAL member of an
-    # AND-OR list (measured), so with `&&` a failed apt-get UPDATE fell through into drive.sh
-    # with no python3/curl, the capture server never bound, and THIS arm read the resulting
-    # EMPTY capture as its own vacuity finding -- an environment failure announced as a
-    # mutation-battery defect. Split, either failure aborts the container with its own rc,
-    # which the host now captures instead of discarding it through a trailing || true.
-    # The >/dev/null 2>&1 is load-bearing for CONFIDENTIALITY, not only noise: behind an
-    # authenticated apt proxy apt error text embeds user:pass@host.
-    apt-get update -qq >/dev/null 2>&1
-    apt-get install -y -qq curl python3 >/dev/null 2>&1
+    # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
+    # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
+    # statement level let a failed apt-get UPDATE fall through into drive.sh with no
+    # python3/curl, the capture server never bound, and THIS arm read the resulting EMPTY
+    # capture as its own vacuity finding -- an environment failure announced as a
+    # mutation-battery defect. Inside `if` the `&&` is a tested context; the 3-attempt loop
+    # with Acquire::Retries=5 and 10s/30s backoff absorbs transient mirror failure (#8744),
+    # and exhaustion exits 100, which the host captures instead of discarding it through a
+    # trailing || true.
+    # apt output goes to a LOG FILE, not /dev/null and not the capture -- the CONFIDENTIALITY
+    # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
+    # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. Tail and
+    # marker share stderr: docker demuxes stdout/stderr, so a cross-stream order is not
+    # preserved (measured -- a stdout marker can land BEFORE a stderr tail).
+    _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
+    _apt_ok=0
+    for _apt_try in 1 2 3; do
+      if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
+         && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
+      case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
+    done
+    [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
     echo T17M_APT_OK
     bash /work/drive.sh
   ' >"$TMP/out/t17m.stdout" 2>&1; _t17m_rc=$?
