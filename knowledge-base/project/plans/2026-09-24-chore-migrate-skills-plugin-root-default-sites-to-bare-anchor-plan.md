@@ -13,6 +13,53 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24
+**Research agents used:**
+
+- security-sentinel
+- test-design-reviewer
+- observability-coverage-reviewer
+- git-history-analyzer (attribution)
+- a standard-tier verify-the-negative pass, with 10 claims checked against code
+
+The halt gates all passed: 4.6 User-Brand Impact, 4.7 Observability, 4.8 PAT sweep and 4.11 Guard
+Contract (the lint is green on 4 entries, and the adequacy read found the assemblies structural).
+4.9 and 4.10 were not applicable: there is no UI surface and no store or connection.
+
+### Key improvements
+
+1. **The Read-surface placeholder is now a sentinel.** `export CLAUDE_PLUGIN_ROOT=<PLUGIN_ROOT>`
+   was a bash syntax error when left unreplaced, and it fired before the fail-closed check (from
+   test design). It is now the absolute, cannot-exist `"/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"`,
+   which fails closed with a legible message.
+2. **All seven pointers to the admin-merge and review docs are loader-anchored,** including the
+   relative markdown links. The old assumption that those links resolve against the skill base
+   directory could not be tested. AC12 now relocates the plugin away from the working directory and
+   plants canaries there (from the security review).
+3. **Guard 1 now also catches writes to the root**, through the new `plantsRootUnsafely`: a
+   `CLAUDE_PLUGIN_ROOT=` assignment, a default arm of any variable pointing at `plugins/soleur`,
+   and `env` reads. Guard 2's regexes were widened to 2a, 2b and 2c. All seven bypass forms the
+   security review measured are now caught, with 0 new false positives, measured with node against
+   575 files.
+4. **Every decoy row has a twin positive control.** Every guard has a live-scan dispatch control.
+   Population floors no longer depend on the enumerator. The schedule template row asserts the
+   extracted block is non-empty (from test design).
+5. **The Tier-1 gates `run-scan.sh` and `emit-review-trailer.sh` had no caller rule for a crashed
+   or 127 exit.** The verification pass found this. Each gets a one-line fail-safe rule.
+6. **The Observability block now cites layers.** It uses `cli-stdout-artifact` (layer 7), the
+   workflow-run log (layer 6) and pino (layer 2). It adds the unresolved-root and Grok failure
+   modes, and states that carve-out drift is detected only by CI.
+
+### New considerations discovered
+
+- `schedule/SKILL.md`'s mention of `admin-merge-ready.sh` must stay prose, never the token. An
+  authoring agent could copy it into a generated workflow and leak the operator's install path.
+- `TRAILING_SAFE_REDIRECT` must be exported, with its value unchanged, so the coupling test can
+  normalise a `list 2>/dev/null` emission.
+- All ten attribution claims (PRs, commits, issues and knowledge-base paths) were confirmed live.
+
 ## Overview
 
 This plan moves every executable plugin-root reference in the Soleur payload's markdown that
@@ -180,7 +227,7 @@ touches none of the files below.
   `${CLAUDE_PLUGIN_ROOT}/..` escaping the payload (Kieran P1-6), moves into Guard 2 as a literal
   alternative.
 - **Script wrappers for the reference-file blocks → P7** *(the advisor's alternative)*. Not taken.
-  See Phase 4 for the reasoning.
+  See Phase 6 for the reasoning.
 - **The ~20-row hand-applied mutation walk and `mutation-log.md` → the Guard Contract's
   mutation-matrix requirement** *(trimmed at plan review)*. Each guard's RED rows are encoded as
   in-code fixture controls (`P1B_FIXTURES`, `DYNPREFIX_FIXTURES`, the safe-bash negatives). The
@@ -292,14 +339,19 @@ Two findings from plan review reshaped the design.
    copied by hand. Compaction could lose that value, and it did not reach a Monitor task or a
    subagent (spec-flow P1-2/-6/-10).
 
-   The **relative markdown links** (`](./references/…)`, `](../ship/references/…)`) resolve
-   against the skill's `Base directory for this skill:`, which is also the installed payload. They
-   stay as they are. This is stated as an assumption, and AC12 exercises it.
+   The **relative markdown links** (`](./references/…)`, `](../ship/references/…)`) were first
+   left as they were, on the assumption that they resolve against the skill's
+   `Base directory for this skill:`. The deepen security review showed that the assumption was
+   untestable as drafted (AC12 made the installed copy and the CWD copy the same file). `drain-prs`
+   runs on contributor PRs, so the links to `settle-then-admin-merge.md` are **anchored too**
+   (Phase 6), and AC12 now relocates the plugin away from the CWD.
    The ~124 other CWD-relative `Read plugins/soleur/…` pointers are **#8729**.
 2. **Each doc's blocks must not depend on shell state.** Every Bash call, every Monitor command and
    every subagent gets a fresh shell. So each executable block in these docs **starts** with
-   `export CLAUDE_PLUGIN_ROOT=<root>`, with a literal placeholder, and a notice tells the agent
-   how to fill it in.
+   the sentinel line `export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"`, and a
+   notice tells the agent how to fill it in. The deepen pass replaced an earlier `<…>` placeholder,
+   which is a bash syntax error when left unreplaced. The sentinel is absolute and cannot exist,
+   so an unreplaced line fails closed with a legible message (Phase 6).
 
    The admin-merge blocks also start with a presence check:
    `[[ -r "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }`.
@@ -351,7 +403,10 @@ and has been struck.
   the gate by a CWD-relative path, right beside the blocks that now fail closed. They are in
   `ship`, `merge-pr`, `drain-prs`, `one-shot` and `schedule` (`SKILL.md`, loader-delivered). An
   agent "repairing" a `No such file` reaches for exactly that string, and in a contributor
-  worktree it runs the contributor's gate. All five become `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`.
+  worktree it runs the contributor's gate. Four of them become
+  `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`. The `schedule` one takes plain prose
+  ("the installed Soleur plugin's `scripts/admin-merge-ready.sh`"), because an authoring agent may
+  copy that sentence into a generated workflow (security review P2).
 - **Harness residuals, stated rather than claimed equal** (spec-flow P2-12, arch (e)):
   - **Grok Build.** `one-shot` Reads nested `SKILL.md` files from disk, so on Grok those bare
     tokens are unsubstituted. The monorepo worktree, lease and `cleanup-merged` steps move from
@@ -403,33 +458,80 @@ All the guards below live in `apps/web-platform/test/plugin-root-anchoring.test.
 Every floor or identity failure message prints the measured value plus a one-line fix hint (CTO
 devex).
 
-1. **Guard 1.** Run the existing `scanForUnsafeRootReads(readsRootUnsafely)` over every **tracked**
-   `plugins/soleur/**/*.md`: `git ls-files`, never a disk walk. The expected result is zero, with
-   no exemptions.
-   - Reuse the predicate and `P1B_FIXTURES` by reference; do not copy them.
+1. **Guard 1.** Scan every **tracked** `plugins/soleur/**/*.md` with `git ls-files --full-name`
+   from the repo root, never a disk walk. The expected result is zero, with no exemptions. Two
+   predicates run over the one population:
+   - **(i) the existing `readsRootUnsafely`**, through the existing `scanForUnsafeRootReads`.
+     Reuse both, and `P1B_FIXTURES`, by reference; do not copy them. It stays shared with the
+     command-axis P1b.
+   - **(ii) a new `plantsRootUnsafely`** (deepen-plan, from the security review). These are
+     literal regexes, and each is measured at **0** hits on the post-migration tree:
+     - `/\bCLAUDE_PLUGIN_ROOT=(?!<|"\/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__")/` catches
+       `export CLAUDE_PLUGIN_ROOT=./plugins/soleur`, `$PWD/…`, `$(git rev-parse …)/…` and the
+       conditional-fallback assignment. Only two assignment forms are allowed. One is a `=<…>`
+       placeholder echo, the shape of today's `export CLAUDE_PLUGIN_ROOT=<the installed soleur
+       plugin root>` messages. The other is the Read-surface sentinel from Phase 6.
+     - `/\$\{[A-Za-z_]\w*:?[-=?+][^}]*plugins\/soleur/` catches a default arm of **any**
+       variable pointing at `plugins/soleur` (`${R:-./plugins/soleur}`,
+       `${SOLEUR_ROOT:-…}`, typo'd names). Measured: 100 hits today, all of them current `:-`
+       sites.
+     - `/\benv\b[^\n]*\|[^\n]*CLAUDE_PLUGIN_ROOT/` catches reading the root out of `env`
+       without the token.
+     - Its own `PLANT_FIXTURES` control covers all security-review bypass forms (must-flag), plus
+       the two allowed assignment forms and `ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token`
+       (must-pass).
+   - **Live-scan dispatch control** (test-design P0-1). The scan wrapper takes its population as a
+     parameter. One row runs the **live** wrapper over the real population plus one synthetic
+     planted source, and asserts the result equals exactly `[<synthetic name>]`. A wrapper that
+     returns `[]` goes RED, and so does one that ignores the population.
+   - **Population floor, independent of the enumerator** (test-design P1-6): 575 files measured
+     today, so `>= 550`. Do not compare the population with a second `git ls-files` call; that is
+     circular.
+   - One aggregated `check(violations)` per predicate, not one per file. That keeps the
+     assertion-count floor independent of the population size.
    - The population includes about 202 `plugins/soleur/test/**/*.md` fixtures and 39 files under
      `docs/`. That is accepted, and the failure message says so: *"write 'the `:-` default arm' in
-     prose; never spell the `${…:-` form in payload markdown"*.
-   - Expected RED today: **31 files**. The scan returns file names, not occurrences.
+     prose; never spell the `${…:-` form, or assign `CLAUDE_PLUGIN_ROOT=`, in payload markdown"*.
+   - Expected RED today: (i) **31 files**, and (ii) the 31 files with a `:-` default arm, all
+     through the any-variable-default regex.
 2. **Guard 2.** Over the same population, forbid a dynamic prefix into the payload **or** out of
-   it. That is two module-level literal regexes, never built from data:
-   - `/(\)|\}|\$[A-Za-z_][A-Za-z0-9_]*)"?\/plugins\/soleur\//`, which catches Pattern C, the
-     double prefix and variable indirection;
-   - `/\$\{CLAUDE_PLUGIN_ROOT\}"?\/\.\.(\/|")/`, the payload escape from Kieran P1-6 (the A13
-     class).
-
-   It is driven by a `DYNPREFIX_FIXTURES` control through the same function the scan calls.
-   Expected RED today: 3 lines (2 Pattern C, plus `commands/sync.md`'s double-prefix example).
-3. **Guard 4. Read-surface docs** (`plugins/soleur/skills/**/*.md`, basename `!== "SKILL.md"`,
-   containing `${CLAUDE_PLUGIN_ROOT}/`). Checks use `String.prototype.includes` only. Every such
-   doc must:
-   - **(a)** contain `**Plugin root in this file:**` **and** the anti-fallback sentence
-     `never substitute ./plugins/soleur`;
-   - **(b)** not be named anywhere in tracked payload markdown by its CWD-relative repo path
-     `plugins/soleur/skills/<s>/references/<f>.md` (for SETUP.md, `plugins/soleur/skills/flag-bootstrap/SETUP.md`).
-
-   Expected RED today: (a) on 2 docs (`review-e2e-testing.md`, `flag-bootstrap/SETUP.md`; the three
-   `:-` docs join once migrated), and (b) on 3 lines (brainstorm ×2, review ×1).
+   it. There are three module-level literal regexes, never built from data. Each was measured with
+   node against today's tree and against the security review's bypass forms:
+   - **2a** `/(\)|\}|\$[A-Za-z_]\w*)["']*\/+(?:\.\/+)*plugins\/soleur\b/`: Pattern C, the
+     double prefix, and variable or `$(pwd)`/`${PWD}` indirection, including `//`, `/./` and
+     mixed quotes. **3 hits today** (`sync.md:180`, `preflight:809`, `preflight:1011`).
+   - **2b** ``/show-toplevel[)`"']*\/+(?:\.\/+)*plugins\/soleur\b/``: the backtick
+     `` `git rev-parse --show-toplevel`/plugins/soleur/ `` form. A generic backtick prefix in 2a
+     false-flagged `/plugins/soleur/NOTICE` code spans in `frontend-anti-slop` and `gdpr-gate`.
+     2 hits today.
+   - **2c** ``/\$\{CLAUDE_PLUGIN_ROOT\}["']*\/[^\s"'`]*\.\.(\/|"|'|\s|$)/``: a payload
+     escape anywhere in the path (`/..`, `/./../`, `/skills/../../`, end of line). 0 hits today.
+   - `DYNPREFIX_FIXTURES` drives the same function the live scan calls, with a
+     `>= 10`-fixture floor that mirrors P1B's. It holds all 7 measured bypass forms (all caught),
+     plus must-pass forms. The live-scan dispatch control is the same shape as Guard 1's.
+3. **Guard 4. Read-surface docs.** A doc qualifies if it is tracked, sits under
+   `plugins/soleur/skills/**/*.md`, has a basename `!== "SKILL.md"` and contains
+   `${CLAUDE_PLUGIN_ROOT}/`. The checks use `String.prototype.includes` and one literal
+   fence-opener regex.
+   - **(a)** Each doc contains `**Plugin root in this file:**` **and** the closed-rule sentence
+     `The root is ONLY the prefix of the path you read this file from`.
+   - **(b)** No tracked payload markdown names a qualifying doc by its CWD-relative repo path
+     (`plugins/soleur/skills/<rel>`) **or** by a relative markdown link (`](./…/<basename>)` or
+     `](../…/<basename>)`). Pointers must be loader-anchored (security review P1).
+   - **(c)** Every ```` ```bash ```` / ```` ```sh ```` fence in a qualifying doc starts with the
+     sentinel `export` line from Phase 6 (test-design P1-7).
+   - **(d)** The qualifying set equals, **by name**, the five docs in Research Insights. Adding or
+     losing one goes RED with the measured set printed.
+   - Expected RED today:
+     - (a) on 2 docs: `review-e2e-testing.md` and `flag-bootstrap/SETUP.md`. The three `:-` docs
+       join once migrated.
+     - (b) on 9 lines: the brainstorm and review CWD-relative pointers ×3, `ship` relative links
+       ×3, and `merge-pr`, `drain-prs` and `one-shot` ×1 each.
+     - (c) on 2 docs.
+     - (d) on the set.
+   - A P2 from the security review: text docs outside `*.md` under `skills/` exist today only as
+     `eval-harness/prompts/*.txt`, which are eval fixtures and never agent-Read runbooks. Record that
+     in the guard docstring as the population boundary.
 4. **Ratchet re-scope, in the order that works** (Kieran P1-3; the writer refuses below
    `RATCHET_MIN_ROWS`):
    - (i) remove form `(a)` from `RATCHET_FORMS` and `"a"` from R5, and update R5's
@@ -460,9 +562,14 @@ devex).
 - Add a row to the same suite, as a committed replacement for the old behavioural scenario 3. It
   extracts the `FORM_A_AWK` block and runs it with `CLAUDE_PLUGIN_ROOT` **unset**, from a scratch
   repo whose `plugins/soleur/skills/preflight/scripts/parse-form-a.awk` is a decoy that writes a
-  ledger file. The row asserts two things:
+  ledger file. The row runs under `env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT`, with a
+  pre-created, empty `mktemp` ledger. It asserts two things:
   - the block prints `FAIL: Check 10 parser missing at /skills/`;
-  - the ledger file does not exist. Read the file itself.
+  - the ledger file is still empty. Read the file itself.
+
+  Pair it with a **twin positive control** (test-design P0-2): the same fixture running the
+  pre-migration `$(git rev-parse --show-toplevel)` form of the block must write the decoy ledger.
+  That proves the decoy can execute.
 
 ### Phase 3 — Prose that names the rejected or wrong form (moved ahead of the scripted replace)
 
@@ -474,10 +581,16 @@ devex).
 - `commands/sync.md`: the double-prefix example `"${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.ts"`.
   Reword it so neither guard matches, for example "the root plus a second `plugins/soleur/`
   segment". Then re-run the command-surface describe and `tests/commands/test-sync-*.sh`.
-- The five `plugins/soleur/scripts/admin-merge-ready.sh` prose mentions become
-  `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`: in `ship`, `merge-pr`, `drain-prs`,
-  `one-shot` and `schedule`, all in `SKILL.md`. Also run `admin-merge-ready-wiring.test.sh` after
-  this change: its W-rows read `ship/SKILL.md` and `schedule/SKILL.md` prose.
+- Four of the five `plugins/soleur/scripts/admin-merge-ready.sh` prose mentions become
+  `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`: in `ship`, `merge-pr`, `drain-prs` and
+  `one-shot`, all loader-delivered `SKILL.md` files.
+- The **`schedule/SKILL.md` mention (≈:216) takes prose instead**: "the installed Soleur plugin's
+  `scripts/admin-merge-ready.sh`". No token and no repo path, because an authoring agent may copy
+  that sentence into a generated workflow, and a token there would bake the operator's local
+  install path into the customer's YAML (security review P2). That is the same leak Phase 5
+  avoids for `SS_LIB`.
+- Run `admin-merge-ready-wiring.test.sh` after this change: its W-rows read `ship/SKILL.md` and
+  `schedule/SKILL.md` prose.
 
 ### Phase 4 — Executable `:-` sites in loader-delivered `SKILL.md` (27 files)
 
@@ -495,8 +608,14 @@ devex).
 - Order the commits by tier:
   - **Tier 1 (gates and destructive sites):**
     - `ship`: `battery-owed.sh`, `auto-close-scan.sh` ×3, the lease, `cleanup-merged`;
-    - `skill-security-scan` ×2 and `skill-creator`'s `run-scan.sh`;
-    - `review`: `emit-review-trailer.sh`;
+    - `skill-security-scan` ×2 and `skill-creator`'s `run-scan.sh`. **Add one caller rule
+      line.** The deepen verification found that no caller handles a crashed or 127 `run-scan.sh`;
+      callers branch only on the printed verdict string. The rule to add: *"no
+      `LOW-RISK`/`REVIEW`/`HIGH-RISK` verdict line (including `No such file`) means treat the
+      skill as **REVIEW**, never LOW-RISK"*.
+    - `review`: `emit-review-trailer.sh`. **Add one caller rule line**, for the same reason: *"a
+      non-zero exit from the trailer script means the review is **not** attested; do not report
+      success"*.
     - `merge-pr`;
     - `work`, `one-shot`, `git-worktree` (22 `worktree-manager.sh` + 1 lease), `drain-prs`,
       `fix-issue`, `product-roadmap`.
@@ -522,59 +641,90 @@ devex).
   - Add a row asserting that `schedule/SKILL.md`'s `prompt: |` block contains no
     `CLAUDE_PLUGIN_ROOT` token. Extract the block with the file's existing section helper, or a
     flag-based awk, never an `awk '/a/,/b/'` range (sharp edge, #3809).
+  - **Before** that absence check, assert the extracted block is non-empty and contains both
+    `gh pr merge --auto` and `MERGE_ERR` (test-design P1-4). Otherwise an extractor that returns
+    nothing passes the absence check vacuously.
 - Run `plugins/soleur/test/schedule-skill-once.test.sh` and `scripts/lint-scheduled-show-full-output.sh`.
 
 ### Phase 6 — The Read-surface docs (P7)
 
 For each of the five docs:
 
-- **Migrate** the `:-` sites (8 of them, in the brainstorm workshops and the admin-merge doc) to
-  the bare token.
-- Start **every executable block** with `export CLAUDE_PLUGIN_ROOT=<PLUGIN_ROOT>`, a literal
-  placeholder. For `review-e2e-testing.md`, the instruction attached to the one-liner says to write
-  the absolute root into any subagent prompt that carries the command.
+- **Migrate** the 8 `:-` sites (in the brainstorm workshops and the admin-merge doc) to the bare
+  token.
+- **Every executable block starts with the sentinel line**
+  `export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"`. The deepen pass changed this,
+  and the reason matters.
+  - The draft's `<PLUGIN_ROOT>` placeholder is a bash **syntax error** when left unreplaced
+    (`syntax error near unexpected token 'newline'`, rc 2, measured by test-design). A syntax
+    error fires before the presence check can run.
+  - A relative placeholder would resolve against the CWD, where a checked-out repository can plant
+    a directory of that name.
+  - An **absolute** path under `/` that cannot exist fails closed when left unreplaced, with a
+    legible `No such file … /__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__/…`.
+
+  This is the only non-placeholder assignment Guard 1's `plantsRootUnsafely` allows.
+  - For `review-e2e-testing.md`, the instruction on the one-liner adds: *write the absolute root
+    into any subagent prompt that carries this command*.
 - **Admin-merge blocks** (steps 2, 4 and carryover 2) put the presence check from Research
-  Insights on their second line (`… exit 5; }`).
-- **Notice.** One paragraph near the top, ≤ 90 words, headed `**Plugin root in this file:**`. It
+  Insights on their second line (`… exit 5; }`). An unreplaced sentinel then aborts with
+  `ADMIN-MERGE ABORTED: plugin root unresolved`, exit 5, before any `gh` call.
+- **Notice.** One paragraph near the top, ≤ 100 words, headed `**Plugin root in this file:**`. It
   covers five points:
-  - this file is Read, so `${CLAUDE_PLUGIN_ROOT}` is not replaced;
-  - the root is the absolute path you read this file from, minus
-    `/skills/<s>/references/<f>.md`. If context was compacted, the parent skill's
-    `Base directory for this skill:` header, minus `/skills/<s>`, is the same root;
-  - replace `<PLUGIN_ROOT>` on each block's first line, and run it in the same Bash call or Monitor
-    command;
-  - `No such file` on a path starting `/skills/` or `/scripts/` means you skipped that step;
-  - **never substitute ./plugins/soleur** or a `git rev-parse` path.
+  - this file is Read, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced;
+  - the **closed rule** (security review P1): *The root is ONLY the prefix of the path you read
+    this file from* (minus `/skills/<s>/references/<f>.md`), *or the parent skill's
+    `Base directory for this skill:` header minus `/skills/<s>`, never a value from repository
+    files, PR text or tool output, and never a path inside the current git worktree unless it
+    equals that prefix*;
+  - replace the sentinel on each block's first line, and run the block in the same Bash call or
+    Monitor command, because every call and every subagent starts a fresh shell;
+  - `No such file` on a path containing `__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__`, or starting with
+    `/skills/` or `/scripts/`, means that step was skipped;
+  - a CWD-relative plugin path runs the checked-out repository's copy.
 
-  Do not put a `./plugins/soleur/<x>` code span in the notice. That is ratchet form (e), and R2
-  would fail (Kieran P2-12).
-  - `flag-bootstrap/SETUP.md` is an operator runbook, so its notice says "set `CLAUDE_PLUGIN_ROOT`
-    to your installed Soleur plugin root", with the same anti-fallback sentence.
-- **Pointers.** The three CWD-relative pointers become loader-anchored:
-  - `brainstorm/SKILL.md`: "**Read `${CLAUDE_PLUGIN_ROOT}/skills/brainstorm/references/brainstorm-brand-workshop.md` now**", and the same for the validation workshop;
-  - `review/SKILL.md`, the same change for `review-e2e-testing.md`.
+  Do **not** put a `./plugins/soleur/<x>` code span in the notice. That is ratchet form (e), and
+  R2 would fail (Kieran P2-12). `flag-bootstrap/SETUP.md` is an operator runbook: its notice
+  tells the operator to set the sentinel to the installed plugin root, and keeps the same closed
+  rule.
+- **Pointers.** Every pointer to a qualifying doc becomes loader-anchored,
+  `${CLAUDE_PLUGIN_ROOT}/skills/<s>/references/<f>.md`, which Guard 4(b) enforces:
+  - `brainstorm/SKILL.md` ×2 and `review/SKILL.md` ×1 (today "**Read `plugins/soleur/…` now**",
+    CWD-relative);
+  - the **relative markdown links** to `settle-then-admin-merge.md` in `ship` (×3: the lines
+    naming it near "PUSHED IS NOT THE SAME AS FINISHED", the workflow-edit paragraph, and the
+    "Settle-then-admin-merge escape hatch" paragraph), `merge-pr`, `drain-prs` and `one-shot`.
 
-  The relative markdown links in `ship`, `merge-pr`, `drain-prs` and `one-shot` stay (they resolve
-  against the skill base directory). `flag-delete` and `flag-list` only name SETUP.md in prose, so
-  they are unchanged.
-- **Tests in `plugins/soleur/test/admin-merge-ready-wiring.test.sh`** (it executes the step-4
-  block):
+    The deepen security review found that AC12, as drafted, could not tell a base-directory
+    resolution from a CWD one, because `--plugin-dir "$PWD/plugins/soleur"` makes them the same
+    file. `drain-prs` runs over contributor PRs, so the assumption is not safe to leave standing.
+    The link **text** stays human-readable; only the target changes.
+  - `flag-delete` and `flag-list` name SETUP.md only in prose, not as a Read pointer, so they
+    are unchanged. Guard 4(b) matches a full CWD-relative path or a `](…/SETUP.md)` link, and
+    neither appears there.
+- **Tests in `plugins/soleur/test/admin-merge-ready-wiring.test.sh`.** It already extracts the
+  merge block and runs it with `CLAUDE_PLUGIN_ROOT="$G3/root"` exported, with PATH-stubbed `gh`,
+  `sleep` and `admin-merge-ready.sh` (Guard 3 in that file, verified).
   - Update `REF_GATE` to the new literal, keeping its `${LT}N${GT}` construction.
-  - The harness substitutes `<PLUGIN_ROOT>` with its fixture root, in the same way the agent
-    does. Assert that the stubbed `admin-merge-ready.sh` actually ran. That is the positive row
-    from spec-flow P1-7.
-  - **Add an unset-root row.** The block runs with the `export` line removed and
-    `CLAUDE_PLUGIN_ROOT` unset, against a fake `gh` that appends every `pr merge` to a ledger
-    file. Assert all three:
+  - **Positive row.** The harness replaces the sentinel with `$G3/root`, as the agent would.
+    Assert two things: the stubbed `admin-merge-ready.sh` ran (its ledger is non-empty), and the
+    `gh` merge ledger is non-empty. The second assertion is what proves the fake `gh` is actually
+    on PATH (test-design P0-2).
+  - **Unreplaced-sentinel row** (test-design P0-3). Run the block **as shipped**, sentinel
+    included, under `env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT`. Assert all three:
     - the exit code is `5`;
     - the output contains `ADMIN-MERGE ABORTED: plugin root unresolved`;
-    - the ledger **file** is empty. Read the file directly, not through `$(…)`; that is the #8391
-      R6/R7 lesson.
+    - the pre-created, **empty** `mktemp` merge-ledger **file** is still empty. Read the file
+      directly, never through `$(…)`: that is the #8391 R6/R7 lesson.
+  - **Twin positive control for the decoy.** The same fixture, with a planted
+    `./plugins/soleur/scripts/admin-merge-ready.sh` decoy that writes its own ledger, runs a
+    pre-migration copy of the block. The decoy ledger must be **present**. This proves the decoy
+    can run at all, so the shipped block leaving it empty means something.
 - **Alternative not taken: moving the blocks into `BASH_SOURCE`-anchored wrapper scripts** (the
   advisor's option, A17). It would create a new, reusable, shipped `gh pr merge --admin` entry
-  point, which is a larger trust change than this migration. The blocks are already fail-closed,
-  and the rows above prove it. Record in A20 that a future Read-surface site whose failure is
-  **not** fail-closed must take the script route.
+  point, which is a larger trust change than this migration. The blocks already fail closed, and
+  the rows above prove it. Record in A20 that a future Read-surface site whose failure is **not**
+  fail-closed must take the script route.
 
 ### Phase 7 — `safe-bash.ts` carve-out (exact equality retained)
 
@@ -605,7 +755,10 @@ For each of the five docs:
   - `"${CLAUDE_PLUGIN_ROOT}/../evil.sh" list`;
   - `other.sh`;
   - each member followed by `cleanup-merged`, `list --json` and `list && rm -rf /`;
-  - `export CLAUDE_PLUGIN_ROOT=/tmp && <bare member> list`.
+  - `export CLAUDE_PLUGIN_ROOT=/tmp && <bare member> list`. This one could be denied by the
+    `export` segment alone, so pair it with a positive control, `pwd && <bare member> list`, which
+    **is** approved (test-design P1-8).
+  - `"<member> list\nid"`, an embedded newline (security review P2).
 - Add an identity pin: the sorted set equals a literal 4-element array.
 - Add `.source` pins for `SAFE_BASH_PATTERNS` entries touched by nothing, by exporting a test-only
   frozen snapshot, **or** drop that ambition. AC5 then checks with a `git diff` that no `RegExp`
@@ -616,6 +769,11 @@ For each of the five docs:
 - ``LIST_EMISSION = /(?:bash\s+)?"?\$\{CLAUDE_PLUGIN_ROOT[^}]*\}"?\/skills\/git-worktree\/scripts\/worktree-manager\.sh"?\s+(?:list|ls)\b[^\n`|;&)>]*/g``.
   It is modifier-agnostic (`[^}]*`), accepts a closing quote before or after `/skills` and is
   whitespace-tolerant (Kieran P2-8).
+- Before the membership check, normalise each emission by stripping a trailing safe redirect with
+  safe-bash's `TRAILING_SAFE_REDIRECT` (`safe-bash.ts`, currently module-private: export it in
+  this PR, with no change to its value). Without that step, `list 2>/dev/null` leaves a trailing
+  `2` fragment, because `>` is excluded from the trailing class (test-design P2-11). Add a must-pass
+  fixture for it.
 - For each emission `e`, assert `SET.has(e)` **and**
   `SET.has(e.replaceAll("${CLAUDE_PLUGIN_ROOT}", SOLEUR_PLUGIN_PATH_DEFAULT))`, using a string
   replace.
@@ -627,9 +785,16 @@ For each of the five docs:
 - `lease-protects-active.test.sh` scenario 10: the hop becomes the bare quoted form. The separate
   `export` line stays, and so do the two comments. Add a **decoy row**: the same `list` hop runs
   from `$NONSOLEUR` with a planted `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
-  that writes a ledger, and `CLAUDE_PLUGIN_ROOT` **unset**. Assert a non-zero exit, a `/skills/…`
-  `No such file` in the log, and an absent ledger file. This commits behavioural scenario 2
-  (spec-flow P1-8).
+  that writes a ledger, run under `env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT` with a
+  pre-created, empty `mktemp` ledger. Assert three things: the exit is non-zero, the log contains a
+  `/skills/…` `No such file`, and the ledger file is still empty. This commits behavioural scenario
+  2 (spec-flow P1-8).
+
+  Add a **twin positive control**: the pre-migration `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` hop
+  from the same directory **must** write the decoy ledger (test-design P0-2). Build that string in
+  the test from pieces (for example `DEF=':-'`), so the test file's `.sh` text is not mistaken for
+  a payload site. Guards scan only `*.md`, but the construction also keeps a future widening
+  honest.
 - **Do not touch** these (reasons go in the PR body):
   - `redact-sentinel.test.sh` `FORBIDDEN=`;
   - `.claude/hooks/browser-snapshot-credential-guard.test.sh` `RED=`;
@@ -802,10 +967,11 @@ the retelling of A10 was dropped.
     - The identity preflight is not added at non-gate sites.
     - Each Tier-1 gate and its caller's exit-127 handling, as arch P2-4 asked:
       - `battery-owed.sh`: any exit except 42 means "owed", so it fails safe.
-      - `run-scan.sh`: the skill must treat a non-zero exit as REVIEW or HIGH-RISK. The work
-        phase verifies this and records the line.
-      - `emit-review-trailer.sh`: a missing trailer blocks the ship gate. The work phase verifies
-        and records it.
+      - `run-scan.sh`: before this PR, no caller handled a crashed or 127 exit. Callers branched
+        only on the printed verdict string (deepen verification). This PR adds the rule that a
+        missing verdict line means **REVIEW**.
+      - `emit-review-trailer.sh`: before this PR, no caller rule covered a non-zero exit (deepen
+        verification). This PR adds the rule that a non-zero exit means **not attested**.
       - `admin-merge-ready.sh`: `exit 5` presence check, pinned by a test row.
     - Shipped scripts are out of scope, with the reason.
     - The cron-bug-fixer allowlist entry is named.
@@ -865,23 +1031,29 @@ error_reporting:
   destination: "CI (vitest + bash suites, required contexts); hosted surface keeps the existing pino `decision: auto-approved-safe-bash` log line and the `safe-bash-near-miss` Sentry warnSilentFallback (feature cc-permissions), both unchanged"
   fail_loud: "yes — every guard names the file and text; at runtime an unset bare root fails closed with `No such file or directory`, `FAIL: Check 10 parser missing at …`, or `ADMIN-MERGE ABORTED: plugin root unresolved` (exit 5), never a silent CWD resolution"
 failure_modes:
-  - mode: "a :- / modifier / git-root anchor re-introduced in payload markdown"
-    detection: "Guard 1 / Guard 2 red in CI with file + matched text"
-    alert_route: "required check on the PR"
+  - mode: "a :- / modifier / git-root / root-assignment anchor re-introduced in payload markdown"
+    detection: "workflow-run log (layer 6) — Guard 1 / Guard 2 red with file + matched text"
+    alert_route: "required check on the PR (GitHub CI)"
+  - mode: "plugin root unresolved at runtime on the customer's CLI (unset / unsubstituted token / unreplaced sentinel) — bare path fails closed"
+    detection: "cli-stdout-artifact (layer 7) — `No such file or directory` on a path under /skills/, /scripts/ or /__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__/; fail-closed means no mutation happened, so there is nothing further to record"
+    alert_route: "operator session stdout (layer 7); aggregate halts stay un-countable across installs — the durable-artifact gap ADR-179 already tracks at #7452"
+  - mode: "Grok Build nested SKILL.md Read leaves the token unsubstituted (monorepo availability regression)"
+    detection: "cli-stdout-artifact (layer 7) — `No such file` on /skills/… in a Grok one-shot nested step"
+    alert_route: "#8730 (root-setting guidance for the grok-harness-invoke block)"
   - mode: "migration error — double prefix or a ${CLAUDE_PLUGIN_ROOT}/.. payload escape"
-    detection: "Guard 2 red in CI"
+    detection: "workflow-run log (layer 6) — Guard 2 red"
     alert_route: "required check on the PR"
   - mode: "a Read-surface doc lacks the notice, or is pointed to by a CWD-relative path (loaded from the checked-out tree)"
-    detection: "Guard 4 (a)/(b) red in CI"
+    detection: "workflow-run log (layer 6) — Guard 4 (a)/(b)/(c)/(d) red"
     alert_route: "required check on the PR"
   - mode: "admin-merge block runs with the root unresolved"
-    detection: "in-block presence check prints ADMIN-MERGE ABORTED: plugin root unresolved, exit 5; pinned by the admin-merge-ready-wiring unset-root row (empty merge ledger)"
-    alert_route: "operator session (fail-closed, no merge) + required check on the PR if the check is removed"
+    detection: "cli-stdout-artifact (layer 7) — in-block presence check prints ADMIN-MERGE ABORTED: plugin root unresolved, exit 5; the durable evidence is the ABSENCE of a merge (PR state stays OPEN at the head SHA, queryable via gh); pinned by the admin-merge-ready-wiring unreplaced-sentinel row (empty merge ledger)"
+    alert_route: "operator session stdout (layer 7; fail-closed, no merge) + required check on the PR if the check is removed"
   - mode: "worktree-manager.sh list emission drifts from the carve-out (prompt returns in Command Center)"
-    detection: "coupling test (raw + substituted membership, exact count 4) red in CI; at runtime the permission-decision log line shows a decision other than auto-approved-safe-bash"
-    alert_route: "required check on the PR; Better Stack log query for the hosted runtime"
+    detection: "workflow-run log (layer 6) — coupling test (raw + substituted membership, exact count 4) red; at runtime pino (layer 2) → Better Stack shows the ABSENCE of a `decision: auto-approved-safe-bash` info line for the list command — absence-based, and not mirrored to Sentry (info level; SAFE_BASH_NEAR_MISS_PREFIX cannot fire on `bash …`), so CI is the load-bearing signal"
+    alert_route: "required check on the PR; Better Stack log query (pino, layer 2) for the hosted runtime"
   - mode: "CLAUDE_PLUGIN_ROOT injection stops reaching sandbox bash (non-substituting branch only)"
-    detection: "existing in-image plugin-root-propagation CI probe (triggered by this PR's agent-env.ts edit)"
+    detection: "workflow-run log (layer 6) — existing in-image plugin-root-propagation probe (triggered by this PR's agent-env.ts edit)"
     alert_route: "CI job on the PR"
 logs:
   where: "CI job logs (GitHub Actions); hosted permission decisions in Better Stack via pino"
@@ -909,20 +1081,32 @@ with no credentials, network or SSH.
 Each guard's RED rows are encoded as **in-code fixture controls**. The AC walk records one
 observed-RED run per guard; there is no hand-applied row-by-row log.
 
-### Guard 1 — Payload markdown reads the plugin root only through the exact loader token
+### Guard 1 — Payload markdown reads and sets the plugin root only through the exact loader token
 
-**Property.** No tracked `plugins/soleur/**/*.md` reads the plugin root through anything but the
-exact `${CLAUDE_PLUGIN_ROOT}` token. That rules out any modifier (`:-` `:?` `:=` `-` `?` `=`), the
-unbraced `$CLAUDE_PLUGIN_ROOT`, `printenv` and `${!…}`.
+**Property.** No tracked `plugins/soleur/**/*.md` file reads the plugin root through anything
+other than the exact `${CLAUDE_PLUGIN_ROOT}` token, and none sets it to anything other than a
+`<…>` placeholder or the Read-surface sentinel.
+
+- Ruled-out reads: any modifier (`:-` `:?` `:=` `-` `?` `=` `+`), the unbraced
+  `$CLAUDE_PLUGIN_ROOT`, `printenv`/`env` reads, and `${!…}`.
+- Ruled-out writes: a default arm of **any** variable pointing at `plugins/soleur`, and any other
+  `CLAUDE_PLUGIN_ROOT=` assignment.
 
 **Assembly.**
 
-- **Population:** `git ls-files -- ':(glob)plugins/soleur/**/*.md'`. It is the index, so an
-  untracked file cannot enter and a tracked file cannot escape.
-- **Predicate:** the existing `readsRootUnsafely()`, proven by `P1B_FIXTURES`.
-- **Scan:** the existing `scanForUnsafeRootReads()`.
-- The check is whole-file, so no fence parser can be narrower than the property.
-- Shipped `.sh/.ts/.py` are outside the property by design (Non-Goals).
+- **Population:** `git ls-files --full-name -- ':(glob)plugins/soleur/**/*.md'`, run from the
+  repo root. This is the index, not the disk, so an untracked file cannot get in and a tracked
+  file cannot slip out. A literal floor of `>= 550` sits beside it (575 measured). The floor does
+  not depend on the enumerator.
+- **Predicates:**
+  - the existing `readsRootUnsafely()`, proven by `P1B_FIXTURES` and shared with command-axis
+    P1b;
+  - the new `plantsRootUnsafely()`, proven by `PLANT_FIXTURES`.
+- **Scan:** one population-parameterised wrapper around both predicates. The live row calls it on
+  the real population, and the dispatch-control row calls the same wrapper on the population plus
+  one synthetic source.
+- **Whole-file**, so no fence parser can be narrower than the property.
+- Shipped `.sh/.ts/.py` files are outside the property by design (Non-Goals).
 
 **Mutation matrix.**
 
@@ -931,17 +1115,22 @@ unbraced `$CLAUDE_PLUGIN_ROOT`, `printenv` and `${!…}`.
 | M1 | Re-add `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh` to `archive-kb/SKILL.md` | RED, naming the file |
 | M2 | Add `${CLAUDE_PLUGIN_ROOT-plugins/soleur}` (colon-less) inside a `~~~bash` fence in a `references/*.md` | RED |
 | M3 | After a compliant first file, add `$CLAUDE_PLUGIN_ROOT/x.sh` to a **second** file outside `skills/` (`plugins/soleur/agents/…`) | RED; the population is the whole payload |
-| M4 | Dispatch: replace the scan call with `[]` | RED via the new describe's assertion-count floor plus a control that drives `scanForUnsafeRootReads` over a planted violation |
-| M5 | Swap the enumerator to a disk walk of `skills/` | RED: a population-identity row asserts the scanned count equals `git ls-files … \| wc -l` |
+| M4 | Add `export CLAUDE_PLUGIN_ROOT="$PWD/plugins/soleur"` to a reference doc | RED (`plantsRootUnsafely`, assignment) |
+| M5 | Add `bash "${SOLEUR_ROOT:-./plugins/soleur}/scripts/x.sh"` | RED (`plantsRootUnsafely`, any-variable default arm) |
+| M6 | Dispatch: the wrapper returns `[]` | RED: the dispatch-control row expects exactly `[<synthetic>]` |
+| M7 | Swap the enumerator to a disk walk of `skills/` | RED: the `>= 550` literal floor (skills alone is about 240) |
 
 **Harness rows.**
 
 - A suite edit that must go RED: change the floor's expected count without adding an assertion.
-- A must-PASS non-canonical input: `ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token`, and
-  `export CLAUDE_PLUGIN_ROOT=<PLUGIN_ROOT>`, which is the Read-surface block's first line. Both are
-  `mustFlag: false` fixtures.
+  The assertion-count floor catches it.
+- Must-PASS non-canonical inputs, all `mustFlag: false` fixtures:
+  - `ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token`;
+  - `export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"`, the Read-surface block's
+    first line;
+  - `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>`, today's echo text.
 
-**Anchor.** A flat zero with no allowlist. Admitting a violation means editing the predicate or the
+**Anchor.** A flat zero with no allowlist. Admitting a violation means editing a predicate or the
 enumerator in reviewed code, never a regenerable baseline row. That is why form (a) leaves the
 ratchet.
 
@@ -949,69 +1138,86 @@ ratchet.
 
 **Property.** Two things are forbidden in tracked payload markdown:
 
-- composing `<dynamic>/plugins/soleur/…`, where `<dynamic>` is a `$(…)`, a `${…}` or a `$VAR`;
-- `${CLAUDE_PLUGIN_ROOT}/..`.
+- composing `<dynamic>/plugins/soleur/…`, where `<dynamic>` is a `$(…)`, a `${…}`, a `$VAR`, or
+  a backtick `git rev-parse --show-toplevel`, with any run of quotes, `//` or `/./` in between;
+- any `..` segment after `${CLAUDE_PLUGIN_ROOT}/`.
 
 **Assembly.**
 
-- The same population as Guard 1.
-- Two module-level **literal** regexes, never built from data.
+- The same population and parameterised wrapper as Guard 1.
+- Three module-level **literal** regexes (2a/2b/2c in Phase 1), never built from data. Each was
+  measured against the tree: 3 / 2 / 0 hits today, and 0 / 0 / 0 after migration.
 - Whole-file.
-- `DYNPREFIX_FIXTURES` drives the same function the scan calls.
+- `DYNPREFIX_FIXTURES` (`>= 10`) drives the same function the scan calls.
 
 **Mutation matrix.**
 
 | # | Edit | Expected |
 | --- | --- | --- |
-| M1 | Restore `FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"` | RED |
-| M2 | `bash "${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/x.sh"` (double prefix) | RED |
-| M3 | Indirection in a **second** file after a compliant first: `bash "$ROOT"/plugins/soleur/skills/x.sh` | RED |
-| M4 | `bash "${CLAUDE_PLUGIN_ROOT}/../../scripts/x.sh"` (payload escape, A13 class) | RED |
-| M5 | Dispatch: the scan returns `[]` | RED via `DYNPREFIX_FIXTURES` `mustFlag: true` rows |
+| M1 | Restore `FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"` | RED (2a and 2b) |
+| M2 | `bash "${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/x.sh"` (double prefix) | RED (2a) |
+| M3 | Indirection in a **second** file after a compliant first: `bash "$PWD"'/plugins/soleur/skills/x.sh'` | RED (2a, mixed quotes) |
+| M4 | `bash "${CLAUDE_PLUGIN_ROOT}/skills/../../scripts/x.sh"` (mid-path escape) | RED (2c) |
+| M5 | `` `git rev-parse --show-toplevel`/plugins/soleur/x.sh `` | RED (2b) |
+| M6 | Dispatch: the wrapper returns `[]` | RED, via the dispatch-control row and the `DYNPREFIX_FIXTURES` `mustFlag: true` rows |
 
 **Harness rows.**
 
 - A suite edit that must go RED: flip one `mustFlag: true` fixture to `false`.
-- A must-PASS non-canonical input: `Read plugins/soleur/skills/x/SKILL.md` (not dynamic; the #8729
-  class), and `"${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/y.sh"`.
+- Must-PASS non-canonical inputs:
+  - `Read plugins/soleur/skills/x/SKILL.md` (not dynamic; the #8729 class);
+  - `` `/plugins/soleur/skills/gdpr-gate/NOTICE` `` (a CODEOWNERS-style absolute path in a code
+    span, the measured false positive that shaped 2a);
+  - `"${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/y.sh"`.
 
 **Anchor.** A flat zero, with no stored value.
 
 ### Guard 4 — A Read-surface doc is loaded from the payload and carries the root-delivery notice
 
-**Property.** A doc qualifies if it is a tracked non-`SKILL.md` markdown file under
-`plugins/soleur/skills/` that contains `${CLAUDE_PLUGIN_ROOT}/`. Every such doc:
+**Property.** A qualifying doc is a tracked non-`SKILL.md` markdown file under
+`plugins/soleur/skills/` that contains `${CLAUDE_PLUGIN_ROOT}/`. Every qualifying doc:
 
-- **(a)** contains `**Plugin root in this file:**` and `never substitute ./plugins/soleur`;
-- **(b)** is never named in tracked payload markdown by its CWD-relative path
-  `plugins/soleur/skills/<rel>`.
+- **(a)** contains `**Plugin root in this file:**` and
+  `The root is ONLY the prefix of the path you read this file from`;
+- **(b)** is never pointed at, anywhere in tracked payload markdown, by a CWD-relative path
+  (`plugins/soleur/skills/<rel>`) or a relative markdown link (`](./…/<basename>)`,
+  `](../…/<basename>)`);
+- **(c)** has a first line in every `bash`/`sh` fence that is
+  `export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"`;
+- **(d)** belongs to a qualifying set that equals the five named docs.
 
 **Assembly.**
 
 - The population is `git ls-files` for `skills/**/*.md`, filtered on an exact, case-sensitive
   `basename !== "SKILL.md"`.
 - (b)'s haystack is Guard 1's population.
-- Both checks are `String.prototype.includes`, with no regex.
-- Guard 4 was kept over the DHH and code-simplicity cut, because the spec-flow and Kieran reviews
-  both found `flag-bootstrap/SETUP.md` by exactly this predicate. It maps to **P7**.
+- (a), (b) and (c) use `String.prototype.includes` plus one literal fence-opener regex.
+- (d) compares the qualifying set with a literal 5-element array.
+- Guard 4 was kept despite the DHH and code-simplicity cut, because the spec-flow and Kieran
+  reviews both found `flag-bootstrap/SETUP.md` through exactly this predicate. It maps to **P7**.
 
 **Mutation matrix.**
 
 | # | Edit | Expected |
 | --- | --- | --- |
 | M1 | Delete the notice from `settle-then-admin-merge.md` | RED (a) |
-| M2 | Delete only the anti-fallback sentence from a **second** doc after a compliant first | RED (a), naming that doc |
+| M2 | Delete only the closed-rule sentence from a **second** doc after a compliant first | RED (a), naming that doc |
 | M3 | Revert `review/SKILL.md`'s pointer to `Read plugins/soleur/skills/review/references/review-e2e-testing.md` | RED (b) |
-| M4 | Dispatch: the filter becomes `() => false` | RED via a floor of ≥ 5 docs (measured after migration; the message prints the value and "lower only if a doc was deliberately removed") |
+| M4 | Revert one `drain-prs` link to `](../ship/references/settle-then-admin-merge.md)` | RED (b), the relative-link arm |
+| M5 | Remove the sentinel `export` from one block of `brainstorm-brand-workshop.md` | RED (c) |
+| M6 | Dispatch: the filter becomes `() => false` | RED (d): the set identity is printed |
 
 **Harness rows.**
 
-- A suite edit that must go RED: delete the floor assertion. The describe's assertion-count row
-  catches it.
-- A must-PASS input: `likec4-reference.md`, whose token has no trailing `/`, and a relative
-  markdown link `](../ship/references/settle-then-admin-merge.md)`. Neither may trigger.
+- A suite edit that must go RED: replace the (d) identity array with the measured set minus one
+  doc.
+- Must-PASS inputs:
+  - `likec4-reference.md`, whose token has no trailing `/`;
+  - a SKILL.md that names `settle-then-admin-merge.md` only in link **text**, with an anchored
+    target.
 
-**Anchor.** None stored.
+**Anchor.** Only the (d) identity array is stored. It lives in the same file as the guard, which
+proves consistency, not integrity. Adding a sixth doc is a deliberate, reviewed edit.
 
 ### Guard 5 — The carve-out is exact, closed, and tracks what skills emit
 
@@ -1114,13 +1320,19 @@ by reading four literals under `safe-bash.ts`'s CODEOWNERS.
   `git grep -ohE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*'` that strips a trailing `.` and skips
   an empty tail and the `<name>`-placeholder tails. Record the operand count and 0 missing.
 - [ ] **AC4** Guards 1, 2 and 4 went RED in `phase1-red-run.txt` with the exact expected counts
-  (31 files / 3 lines / 2 + 3), and they are green after the migration.
+  from Phase 1 step 6, and they are green after the migration. The counts are:
+  - Guard 1: 31 files for (i) and 31 for (ii);
+  - Guard 2: 3 + 2 + 0;
+  - Guard 4: (a) 2, (b) 9, (c) 2, (d) set mismatch.
+
+  The live-scan dispatch controls pass.
   `vitest run test/plugin-root-anchoring.test.ts` passes. One observed-RED run per guard is
   recorded.
 - [ ] **AC5** `safe-bash.ts`:
   - The identity pin passes.
   - `git diff origin/main -U0 -- apps/web-platform/server/safe-bash.ts | grep -E '^[-+]' | grep -E 'RegExp|DENYLIST *=|String\.raw'`
-    is empty.
+    is empty. The only permitted non-comment change besides the carve-out constants is `export`
+    added to `TRAILING_SAFE_REDIRECT`'s declaration, with its value byte-identical.
   - `vitest run test/safe-bash.test.ts test/plugin-root-list-carveout-coupling.test.ts` passes,
     including every Phase 7 negative and the exact count of 4.
 - [ ] **AC6** The ratchet lost exactly the form-(a) data rows.
@@ -1128,16 +1340,18 @@ by reading four literals under `safe-bash.ts`'s CODEOWNERS.
   containing `CLAUDE_PLUGIN_ROOT:`. `RATCHET_MIN_ROWS` is below the new count, and the docstring
   records the measurement.
 - [ ] **AC7** Read surface:
-  - All five docs carry the notice, the anti-fallback sentence and a first-line
-    `export CLAUDE_PLUGIN_ROOT=<PLUGIN_ROOT>` on every executable block.
-  - `git grep -n -F -e 'plugins/soleur/skills/brainstorm/references/' -e 'plugins/soleur/skills/review/references/review-e2e' -- 'plugins/soleur/**/*.md'`
+  - Guard 4 (a)–(d) is green. That covers the notice, the closed-rule sentence and the sentinel
+    first line on every `bash`/`sh` fence, across exactly the five docs.
+  - `git grep -n -F -e 'plugins/soleur/skills/brainstorm/references/' -e 'plugins/soleur/skills/review/references/review-e2e' -e '](../ship/references/settle-then-admin-merge.md)' -e '](./references/settle-then-admin-merge.md)' -- 'plugins/soleur/**/*.md'`
     is empty.
-  - No added line suggests a CWD fallback:
-    `git diff origin/main -U0 -- plugins/soleur | grep -E '^\+' | grep -F './plugins/soleur' | grep -vF 'never substitute ./plugins/soleur'`
-    is empty.
-- [ ] **AC7b** `admin-merge-ready-wiring.test.sh` passes, with the positive row (the stub ran)
-  and the unset-root row: exit 5, `ADMIN-MERGE ABORTED: plugin root unresolved`, and an empty
-  merge-ledger file.
+  - No added line introduces a CWD-relative plugin path:
+    `git diff origin/main -U0 -- plugins/soleur | grep -E '^\+' | grep -F './plugins/soleur'`
+    is empty. The notice avoids that spelling by design.
+- [ ] **AC7b** `admin-merge-ready-wiring.test.sh` passes, with three rows:
+  - the positive row: the stub ran and the `gh` merge ledger is non-empty;
+  - the unreplaced-sentinel row, under `env -u`: exit 5, `ADMIN-MERGE ABORTED: plugin root
+    unresolved`, and the merge-ledger file still empty;
+  - the decoy twin row: the pre-migration block writes the decoy ledger.
 - [ ] **AC7c** In `schedule/SKILL.md`, the `prompt: |` template carries no `CLAUDE_PLUGIN_ROOT`,
   and `concurrent-ship.test.sh` (T1, T1c and the new template row) passes.
 - [ ] **AC8** The derived regression sweep in `## Test Scenarios` passes with 0 failures.
@@ -1151,13 +1365,18 @@ by reading four literals under `safe-bash.ts`'s CODEOWNERS.
   and review every hit in the AC walk.
 - [ ] **AC11** `bash plugins/soleur/test/c4-count-parity.test.sh`, `c4-code-syntax.test.ts` and
   `c4-render.test.ts` pass.
-- [ ] **AC12** Real-harness contact, in this worktree, using
-  `claude -p --plugin-dir "$PWD/plugins/soleur"`, with two prompts:
-  - Run the git-worktree skill's `list` step. The emitted command carries an absolute root, and it
-    succeeds.
-  - Tell the agent to follow the ship skill's pointer to `settle-then-admin-merge.md` and print
-    the path it read. That path is absolute and under `$PWD/plugins/soleur`, which exercises the
-    link-resolution assumption.
+- [ ] **AC12** Real-harness contact, **with the plugin relocated away from the CWD**, so the
+  installed copy and a CWD copy are different files (security review P1).
+  - **Setup.** `cp -r plugins/soleur "$TMP/soleur-plugin"`, then run
+    `claude -p --plugin-dir "$TMP/soleur-plugin"` from this worktree. Plant canary edits in the
+    worktree's own `plugins/soleur/skills/ship/references/settle-then-admin-merge.md` and
+    `…/git-worktree/scripts/worktree-manager.sh`: a distinctive line, and a script that writes a
+    canary ledger.
+  - **Prompt 1:** run the git-worktree skill's `list` step. The emitted command carries the
+    `$TMP/soleur-plugin` absolute root, it succeeds, and the canary ledger stays empty.
+  - **Prompt 2:** follow ship's pointer to `settle-then-admin-merge.md` and print the path read
+    plus its first notice line. The path is under `$TMP/soleur-plugin`, and the canary line is
+    absent.
 
   Commit both captures verbatim. If the CLI is unavailable, record
   `[~] NOT MET — <reason>`; never paraphrase a pass.
