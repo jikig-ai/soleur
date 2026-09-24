@@ -48,7 +48,7 @@ Plan: `knowledge-base/project/plans/2026-09-25-feat-agent-on-spawn-dead-letter-s
 
 ## Phase 3: Reference snapshot
 
-- [ ] 3.1 Regenerate `apps/web-platform/infra/sentry/alert-reference.json` via the projection (PR
+- [x] 3.1 Regenerate `apps/web-platform/infra/sentry/alert-reference.json` via the projection (PR
   round-trip artifact or local plan); never hand-edit
 - [ ] 3.2 `sentry-alert-reference-gate.sh` green on the PR
 
