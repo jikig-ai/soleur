@@ -102,7 +102,7 @@ You are the last line of defense. Be thorough, be paranoid, and leave no stone u
 
 ## Multi-org / Workspace Boundary Checklist (R1–R6)
 
-Folded in on 2026-05-22 after the post-#4288 falsifiability audit (issue #4322) showed every workspace-boundary finding was first-surfaced by security-sentinel, data-integrity-guardian, pattern-recognition-specialist, or git-history-analyzer. The rules below preserve the original Day-1 checklist verbatim; security-sentinel now owns this lens because it already fires on every code PR. The audit verdict and reasoning live in the 2026-05-22 learning under `knowledge-base/project/learnings/` (search for issue #4322).
+Folded in on 2026-05-22 after the post-#4288 falsifiability audit (issue #4322) showed every workspace-boundary finding was first-surfaced by soleur:engineering:review:security-sentinel, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:pattern-recognition-specialist, or soleur:engineering:research:git-history-analyzer. The rules below preserve the original Day-1 checklist verbatim; soleur:engineering:review:security-sentinel now owns this lens because it already fires on every code PR. The audit verdict and reasoning live in the 2026-05-22 learning under `knowledge-base/project/learnings/` (search for issue #4322).
 
 **Dispatch (when this checklist applies).** Apply when the diff matches the post-#4229 team-workspace surface — organizations, workspaces, workspace_members, the `is_workspace_member()` SECURITY DEFINER predicate, `runtime_cost_state.workspace_id`, the `current_organization_id` JWT claim, or the `workspace_member_attestations` invariant chain. Concretely:
 
@@ -163,4 +163,4 @@ Until each closes, surface an `info`-severity finding naming the deferral issue 
 
 ### Dispatch-glob staleness note
 
-The `/review` dispatch glob in `plugins/soleur/skills/review/SKILL.md` enumerates specific `app/api/` subpaths. If the PR adds a new API route under a directory not in the glob (e.g., `app/api/billing/`, `app/api/invitations/`) AND the route reads `workspace_members` or filters by `workspace_id`, flag a `critical` finding instructing the PR author to extend the dispatch glob in the same PR. The content-pattern OR-branch (`is_workspace_member`, `current_organization_id`, etc.) is a safety net but only fires if the new code uses the canonical symbol names.
+The `soleur:review` dispatch glob in `plugins/soleur/skills/review/SKILL.md` enumerates specific `app/api/` subpaths. If the PR adds a new API route under a directory not in the glob (e.g., `app/api/billing/`, `app/api/invitations/`) AND the route reads `workspace_members` or filters by `workspace_id`, flag a `critical` finding instructing the PR author to extend the dispatch glob in the same PR. The content-pattern OR-branch (`is_workspace_member`, `current_organization_id`, etc.) is a safety net but only fires if the new code uses the canonical symbol names.

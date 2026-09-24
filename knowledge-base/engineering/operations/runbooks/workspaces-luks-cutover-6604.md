@@ -243,6 +243,54 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    This dispatch re-verifies the durable run-keyed `canary_ok` header UUID against the live mapper
    immediately before `blkdiscard` (DP-7).
 
+## Rotating the boot token (#8632)
+
+The host reads `WORKSPACES_LUKS_KEY` with the `prd_workspaces_luks` service token in
+`/etc/default/luks-monitor`. Terraform owns that token (`doppler_service_token.workspaces_luks` in
+`apps/web-platform/infra/workspaces-luks.tf`) AND its delivery to web-1
+(`terraform_data.luks_monitor_token_install`, triggered only by the token's hash). A rotation is
+therefore one code change and one merge, with no dispatch. Line ownership is recorded in ADR-119's
+2026-09-24 addendum.
+
+1. **Change the token's `name`** (or `-replace` it). The plan must show exactly: one replace of
+   `doppler_service_token.workspaces_luks` (create before destroy), one in-place update of
+   `github_actions_secret.workspaces_luks_boot_token`, and one replace of
+   `terraform_data.luks_monitor_token_install`. Nothing else. Never
+   `-replace random_password.workspaces_luks`, which rotates the PASSPHRASE.
+2. **Merge with `[ack-destroy]` on its own line.** In that merge's `apply-web-platform-infra.yml`
+   run, the main apply mints the new token, updates the repo secret, then deletes the old token. The
+   SSH-provisioned apply step then runs `luks-monitor-token-refresh.sh` on web-1, which proves the new
+   token can read the key BEFORE it rewrites only the `DOPPLER_TOKEN=` line (every other line is kept
+   byte for byte, and the original is restored on any mismatch). It never starts
+   `luks-monitor.service`. Avoid merging between 04:30 and 05:00 UTC, so a scheduled
+   `workspaces-luks-verify` run does not start with the old secret and finish after it is revoked.
+3. **Evidence, each readable without SSH:**
+   - The apply run's SSH step is green (workflow run log, layer 6):
+     `gh run list --workflow apply-web-platform-infra.yml --branch main -L1 --json databaseId,conclusion`.
+   - Better Stack carries the helper's verdict under the `luks-monitor` tag (Vector journald,
+     layer 3):
+     `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_LUKS_HOST_TOKEN_REFRESH`.
+     `result=ok` is success; `result=fail reason=<reason>` names the refusal, and on any refusal the
+     host keeps the old file.
+   - The old token is gone and the new one exists. The config also holds the drift scanner's
+     separate `token-drift-ci-tf-prd_workspaces_luks` token, which is expected and stays:
+     `doppler configs tokens -p soleur -c prd_workspaces_luks --json | jq -r '.[] | [.name, .created_at] | @tsv'`.
+   - The repo secret was rewritten:
+     `gh secret list --json name,updatedAt -q '.[] | select(.name=="WORKSPACES_LUKS_BOOT_TOKEN")'`.
+   - A plain `workspaces-luks-verify.yml` dispatch goes green (`re-assert PASSED`,
+     `outcome_class=pass`). It sends the token from the repo secret, so it proves the token, not the
+     host file; the helper's `result=ok` is what proves the host file.
+   - No new Sentry `workspaces-luks-drift` event with reason `doppler_unreachable` (the query in
+     `scripts/followthroughs/workspaces-luks-soak-6604.sh`).
+
+If the SSH step fails after the main apply succeeded, the host still holds the old, now-revoked
+token until the step is re-run: the host timer then fails with `doppler_unreachable` (one
+`workspaces-luks-drift` Sentry email; not at-rest drift). Re-running the failed job re-fires the
+installer. Nothing on this path can lock the volume: the only consumers of this token are
+`luks-monitor.sh` and the cutover, and the in-guest unlock path is deferred to #6931.
+
+Do not reboot web-1 as part of a rotation.
+
 ## Rollback
 
 `gh workflow run workspaces-luks-cutover.yml -f confirm=CUTOVER-WORKSPACES-LUKS -f dry_run=false -f rollback=true`

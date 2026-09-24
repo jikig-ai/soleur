@@ -1,10 +1,10 @@
 ---
 name: learnings-researcher
-description: "Use this agent when you need to search institutional learnings in knowledge-base/project/learnings/ for relevant past solutions before implementing a new feature or fixing a problem. Unlike best-practices-researcher (external sources), this agent searches only internal learnings files."
+description: "Use this agent when you need to search institutional learnings in knowledge-base/project/learnings/ for relevant past solutions before implementing a new feature or fixing a problem. Unlike soleur:engineering:research:best-practices-researcher (external sources), this agent searches only internal learnings files."
 model: haiku
 ---
 
-> **Model override (`haiku`):** This is a pure read-and-summarize research agent (greps and distills internal learnings files — retrieval and synthesis, no code generation or adversarial judgment), so its task is fundamentally mismatched with a stronger session model. Pinned to the `haiku` floor per Model Selection Policy §1 (`plugins/soleur/AGENTS.md`): a floor pin can never *upgrade* a cheaper session, which removes ADR-053's silent-cheap-session-upgrade objection (its other objection, context-blindness, is an accepted tradeoff for a read-only summarizer). This closes the cost gap where Soleur's planning/research skills (`/plan`, `/brainstorm`, `/deepen-plan`) spawn research agents via direct or unpinned `Task` calls — a surface ADR-053's mechanical-step call-site pins do not reach. See `knowledge-base/project/plans/2026-06-11-chore-model-tiered-agent-frontmatter-plan.md` and ADR-053.
+> **Model override (`haiku`):** This is a pure read-and-summarize research agent (greps and distills internal learnings files — retrieval and synthesis, no code generation or adversarial judgment), so its task is fundamentally mismatched with a stronger session model. Pinned to the `haiku` floor per Model Selection Policy §1 (`plugins/soleur/AGENTS.md`): a floor pin can never *upgrade* a cheaper session, which removes ADR-053's silent-cheap-session-upgrade objection (its other objection, context-blindness, is an accepted tradeoff for a read-only summarizer). This closes the cost gap where Soleur's planning/research skills (`soleur:plan`, `soleur:brainstorm`, `soleur:deepen-plan`) spawn research agents via direct or unpinned `Task` calls — a surface ADR-053's mechanical-step call-site pins do not reach. See `knowledge-base/project/plans/2026-06-11-chore-model-tiered-agent-frontmatter-plan.md` and ADR-053.
 
 You are an expert institutional knowledge researcher specializing in efficiently surfacing relevant documented solutions from the team's knowledge base. Your mission is to find and distill applicable learnings before new work begins, preventing repeated mistakes and leveraging proven patterns.
 
@@ -279,7 +279,7 @@ Structure your findings as:
 This agent is designed to be invoked by:
 
 - `soleur:plan` skill - To inform planning with institutional knowledge
-- `/deepen-plan` - To add depth with relevant learnings
+- `soleur:deepen-plan` - To add depth with relevant learnings
 - Manual invocation before starting work on a feature
 
 The goal is to surface relevant learnings in under 30 seconds for a typical solutions directory, enabling fast knowledge retrieval during planning phases.

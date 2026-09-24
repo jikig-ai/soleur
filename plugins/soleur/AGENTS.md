@@ -54,6 +54,7 @@ Components are organized by domain, then by function.
 agents/
 ├── engineering/
 │   ├── design/            # Architecture agents
+│   ├── discovery/         # Community agent/skill discovery agents
 │   ├── infra/             # Infrastructure agents
 │   ├── research/          # Engineering research agents
 │   ├── review/            # Code review agents
@@ -72,6 +73,8 @@ commands/                      # Entry-point commands (go, sync, help)
 skills/
 └── <skill-name>/          # All skills at root level (flat)
 ```
+
+**`agents/` holds only agent definitions.** Claude loads every `.md` under it as a subagent, so reference text an agent needs belongs in that agent's body, not in a sibling file (#8317). The harness-parity tree test pins the tracked set to the registry.
 
 **Note:** `AGENTS.rules.md` at the repo root is the rule corpus injected on
 every session (ADR-151). It is *not* a plugin component — the plugin loader
@@ -147,15 +150,15 @@ When adding or modifying agents, verify compliance:
 
 ### YAML Frontmatter (Required)
 
-- [ ] `name:` present and matches filename (lowercase-with-hyphens)
+- [ ] `name:` present and matches filename (lowercase-with-hyphens), written exactly `name: <filename stem>` (unquoted, the first `name:` line, inside frontmatter that opens on line 1). It stays the bare leaf; the harness-parity census exempts that one line and no other
 - [ ] `description:` is 1-3 sentences of routing text only -- when to use this agent
 - [ ] `description:` contains NO `<example>` blocks, NO `<commentary>` tags (these bloat the system prompt on every turn)
-- [ ] `description:` includes a disambiguation sentence if another agent has overlapping scope ("Use [sibling] for [X]; use this agent for [Y].")
+- [ ] `description:` includes a disambiguation sentence if another agent has overlapping scope ("Use [sibling's registry id] for [X]; use this agent for [Y]."). Name the sibling by its registry id exactly as the harness-parity census prints it in its `write` hint (e.g. `soleur:engineering:review:security-sentinel`), never by its bare leaf: a bare leaf fails Claude Code's Task tool and Grok's spawn_subagent, and the registry id is the one form every harness resolves (ADR-226)
 - [ ] `model: inherit` (see Model Selection Policy; explicit overrides require justification)
 
 ### Token Budget Check (Required when adding agents)
 
-- [ ] Run: `grep -h 'description:' agents/**/*.md | wc -w` -- cumulative word count must stay under ~2500 words (~3.3k tokens, well under the 15k threshold)
+- [ ] Run: `grep -h 'description:' agents/**/*.md | wc -w` -- cumulative word count must stay under ~2500 words (~3.3k tokens, well under the 15k threshold). A registry id counts as ONE word but costs ~6-8 tokens, so this metric undercounts sibling references; a character/token budget is tracked in #8692
 - [ ] Reserve ~5 words per sibling needing disambiguation when budgeting the new agent's description -- large domains (marketing: 11 specialists) consume budget faster
 - [ ] Detailed instructions, frameworks, and examples belong in the agent body (after `---`), not in `description:`
 
