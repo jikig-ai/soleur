@@ -40,6 +40,7 @@ import {
   verifyWorkspacesMountOnce,
 } from "./readiness";
 import { isLoopbackHost } from "./loopback";
+import { verifyC4RenderSandboxOnce } from "./c4-render";
 import { startWatchdogDispatchClock } from "./watchdog-dispatch-clock";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
@@ -276,6 +277,23 @@ app.prepare().then(() => {
         `Server startup v${process.env.BUILD_VERSION || "dev"}`,
         { level: "info", tags: { event_type: "server-startup" } },
       );
+    }
+
+    // #8696: prove the C4 render sandbox works in THIS container (real seccomp +
+    // AppArmor) with one real fixture render. After listen and never awaited:
+    // it spawns and takes ~4 s, and a throw must not reject app.prepare().
+    // Report-only; it never gates a deploy (ADR-050 amendment).
+    if (!dev) {
+      void Promise.resolve()
+        .then(verifyC4RenderSandboxOnce)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "c4-rerender",
+            op: "sandbox-selfprobe",
+            message: "c4 render sandbox self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
     }
   });
 

@@ -134,13 +134,14 @@ Before frontmatter mutation, invoke the `skill-security-scan` advisory gate
 against the in-memory SKILL.md / agent content fetched in step 4a:
 
 ```bash
-echo "$content" | bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
+echo "$content" | bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh"
 ```
 
 The scanner emits a verdict (`LOW-RISK | REVIEW | HIGH-RISK`) plus per-category
 findings and a mandatory advisory disclaimer footer. Operator handling:
 
 - **`LOW-RISK`** — proceed silently to step 4c.
+- **No verdict line** (the scanner crashed, or the shell printed `No such file or directory` because the plugin root did not resolve) — treat as **`REVIEW`**, never `LOW-RISK`.
 - **`REVIEW`** — print the findings table to the operator and proceed; the
   PreToolUse hook may surface confirmation when the Write happens.
 - **`HIGH-RISK`** — print findings + override instructions referencing

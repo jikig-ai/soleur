@@ -1373,11 +1373,11 @@ describe("plugin slash-name uniqueness", () => {
       "flag-delete calls before deleting",
     "flag-create":
       "plans prescribe it as an agent acceptance step (wg-plan-prescribed-skills-must-run-inline); " +
-      "#5333 made it agent-invokable; a refusal leaves a RUNTIME_FLAGS entry with no Flagsmith/" +
-      "Doppler flag, and create.sh then blocks the operator's own run",
+      "the agent runs create.sh --dry-run and hands the operator the printed write command, " +
+      "which needs a typed yes at the operator's own terminal (ADR-249, #8486)",
     "flag-set-role":
-      "plans prescribe it as an agent acceptance step; flip.sh --confirmed exists for " +
-      "agent-driven use behind a typed-yes gate (#5333)",
+      "plans prescribe it as an agent acceptance step; the agent runs flip.sh --dry-run and " +
+      "hands off the printed write command, which needs a typed yes at a TTY (ADR-249, #8486)",
     "cron-list":
       "read-only, pulled by the agent itself like flag-list; soleur:schedule runs the same " +
       "steps in place, so a refusal only contradicts it",

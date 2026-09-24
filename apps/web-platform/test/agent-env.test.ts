@@ -247,7 +247,7 @@ describe("buildAgentEnv", () => {
   // (that list copies ambient process.env; this is a per-dispatch value), so
   // an ambient process.env.CLAUDE_PLUGIN_ROOT must NEVER leak into the agent
   // env — only the explicit opts value lands. The deployed skills'
-  // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` shell-outs read this var so
+  // bare `"${CLAUDE_PLUGIN_ROOT}/…"` shell-outs (ADR-179 A18) read this var so
   // they run the platform-deployed script, not the untrusted workspace copy.
   describe("CLAUDE_PLUGIN_ROOT injection", () => {
     test("injects CLAUDE_PLUGIN_ROOT when opts.pluginPath is set", () => {

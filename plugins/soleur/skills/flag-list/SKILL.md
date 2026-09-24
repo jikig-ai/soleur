@@ -36,7 +36,7 @@ active flags before a promotion (`flag-set-role`) or a delete (`flag-delete`).
 
 The flag CRUD set: `soleur:flag-create` (Create), `soleur:flag-set-role`
 (Update — per-role/per-org), **`soleur:flag-list` (Read — this)**,
-`soleur:flag-delete` (Delete). Initial wiring is the `flag-bootstrap/SETUP.md`
+`soleur:flag-delete` (Delete). Initial wiring is the `${CLAUDE_PLUGIN_ROOT}/skills/flag-bootstrap/SETUP.md`
 runbook (operator documentation, not an invocable skill).
 
 ## Arguments

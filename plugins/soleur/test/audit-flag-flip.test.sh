@@ -35,10 +35,25 @@ printf '%s\n%s' "${FAKE_BODY:-}" "${FAKE_CODE:-200}"
 STUB
 chmod +x "$STUB_DIR/curl"
 
-run_helper() { # $1=body $2=code  -> echoes id, returns helper's rc
-  FAKE_BODY="$1" FAKE_CODE="$2" PATH="$STUB_DIR:$PATH" bash -c '
+# The stub also records the request body so 4d/4e can read what was sent.
+cat > "$STUB_DIR/curl" <<'STUB'
+#!/usr/bin/env bash
+prev=""; for a in "$@"; do [[ "$prev" == "-d" ]] && printf '%s' "$a" > "${BODY_LOG:-/dev/null}"; prev="$a"; done
+printf 'called\n' >> "${CALL_LOG:-/dev/null}"
+printf '%s\n%s' "${FAKE_BODY:-}" "${FAKE_CODE:-200}"
+STUB
+chmod +x "$STUB_DIR/curl"
+BODY_LOG="$STUB_DIR/body.json"; CALL_LOG="$STUB_DIR/calls.log"
+
+# $1=body $2=code [$3=ACKED state: "tty-ack" (default) | "" unset]. The helper
+# sends p_approval_method only when the class-2 ack has set SOLEUR_OP_ACKED in
+# this process (#8486, ADR-249); without it, it refuses before any request.
+run_helper() { # -> echoes id, returns helper's rc
+  local acked="${3-tty-ack}"
+  FAKE_BODY="$1" FAKE_CODE="$2" BODY_LOG="$BODY_LOG" CALL_LOG="$CALL_LOG" PATH="$STUB_DIR:$PATH" ACKED="$acked" bash -c '
     set -euo pipefail
     source "'"$HELPER"'"
+    if [[ -n "$ACKED" ]]; then SOLEUR_OP_ACKED="$ACKED"; fi
     audit_flag_flip_rpc "https://x.supabase.co" "srk" "f" "dev" "global" "create" null null "a@b.co"
   '
 }
@@ -62,6 +77,31 @@ if run_helper 'null' 200 >/dev/null 2>&1; then
   echo "audit-flag-flip: FAIL — missing id must return 4" >&2; fail=1
 else
   rc=$?; [[ "$rc" == "4" ]] || { echo "audit-flag-flip: FAIL — missing-id rc=$rc (expected 4)" >&2; fail=1; }
+fi
+
+# 4d. ack state set -> the body carries p_approval_method:"tty-ack"
+: > "$BODY_LOG"
+if run_helper '"11111111-1111-1111-1111-111111111111"' 200 >/dev/null 2>&1; then
+  jq -e '.p_approval_method == "tty-ack"' "$BODY_LOG" >/dev/null 2>&1 \
+    || { echo "audit-flag-flip: FAIL — body lacks p_approval_method:\"tty-ack\" (got: $(cat "$BODY_LOG"))" >&2; fail=1; }
+else
+  echo "audit-flag-flip: FAIL — acked 2xx+uuid should return 0" >&2; fail=1
+fi
+
+# 4e. no ack state -> rc 4 and NO request at all (an append placed before the
+#     ack fails closed before any write). The exported form counts as unset: the
+#     helper must see the ack's in-process state, which the library never exports.
+: > "$CALL_LOG"
+if run_helper '"11111111-1111-1111-1111-111111111111"' 200 "" >/dev/null 2>&1; then
+  echo "audit-flag-flip: FAIL — an append without the ack state must return 4" >&2; fail=1
+else
+  rc=$?; [[ "$rc" == "4" ]] || { echo "audit-flag-flip: FAIL — unacked rc=$rc (expected 4)" >&2; fail=1; }
+fi
+[[ ! -s "$CALL_LOG" ]] || { echo "audit-flag-flip: FAIL — the unacked append still called curl" >&2; fail=1; }
+
+# 4f. a value other than tty-ack is not an ack
+if run_helper '"11111111-1111-1111-1111-111111111111"' 200 "yes" >/dev/null 2>&1; then
+  echo "audit-flag-flip: FAIL — SOLEUR_OP_ACKED=yes must not pass as an ack" >&2; fail=1
 fi
 
 # --- 5. Forbidden-token guard: no psql/DATABASE_URL_POOLER/5432/6543 --------

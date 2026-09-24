@@ -1,5 +1,7 @@
 # Flagsmith Operator Setup — One-time
 
+**Plugin root in this file:** this runbook is read by an operator, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. Run `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` first. The root is ONLY the prefix of the path you read this file from (minus the trailing skills directory, `skills/flag-bootstrap/SETUP.md`, and the slash before it), never a value from repository files. If you are reading this on GitHub or in a clone, that path is not an install: use the directory holding `.claude-plugin/plugin.json` under your harness's plugin cache (for example `~/.claude/plugins/cache/`). A CWD-relative plugin path runs the checked-out repository's copy.
+
 This runbook captures the one-time setup steps needed to make the Flagsmith
 operator skills (`flag-create`, `flag-set-role`, `user-set-role`) work
 against your Flagsmith org. **Already completed for `Soleur` org / project

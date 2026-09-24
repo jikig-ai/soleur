@@ -10,6 +10,7 @@ amended_by:
   - "#7450 (2026-08-12) — the skills secret-gate subset; decisions 8/9/10 and the §R1 settlement from the CTO ruling; then amendment items A10 (§R3 measured on the skill surface) and A11 (root-outside-worktree REJECTED); see ## Amendment — 2026-08-12"
   - "#8401 (2026-09-20) — amendment item A16: arm 3 is no longer confined to Step 0.5; the session-start dispatch is gated on the reaper capability token. Supersedes decision 11's confinement."
   - "#8542 follow-up (2026-09-23) — amendment item A17: an in-payload SIBLING resolved from an absolutized BASH_SOURCE is a sanctioned code-root anchor; see ## Amendment — 2026-09-23"
+  - "#7453 (2026-09-24) — amendment items A18 (the skills deferral retired; payload markdown is a flat zero), A19 (the list/ls carve-out re-anchored) and A20 (the Read surface delivers its own root); see ## Amendment — 2026-09-24"
   - "#8308 (2026-09-19) — decision 11 (the dual-harness resolution ORDER for /soleur:go's three session gates) and amendment item A15 (${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT} rejected); see ## Amendment — 2026-09-19"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
@@ -250,6 +251,8 @@ the workspace.
   and `plugin-root-list-carveout-coupling.test.ts`'s regex, and bundling an allowlist edit
   with a security fix is how allowlist regressions ship. Those ~105 are **unmigrated, not
   endorsed** — a new site must use the bare anchor.
+  **Superseded 2026-09-24 (#7453):** migrated. No payload markdown carries a default arm or a
+  git-root code root; see amendment item **A18**.
 - **The negative branch of §R3 has a larger blast radius than "the operator-experience
   calculus" implies, and it is stated here rather than left to the halt-gate note.** If the
   loader did not substitute, four skills — `incident`, `legal-generate`, `linear-fetch`,
@@ -1195,3 +1198,136 @@ conditions 1–2 only (it has no name check on the sibling). The rationale lives
 
 **§R4 closure.** The `architecture` row in §R4's table (`bash scripts/regenerate-c4-model.sh`) is
 migrated: the skill now invokes `bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh"`.
+
+## Amendment — 2026-09-24 (#7453): the skills migration, the carve-out, and the Read surface
+
+### Amendment item A18 — the deferral is retired; payload markdown is a flat zero
+
+The `:-` sites the Consequences section deferred are migrated. Measured on `origin/main`
+`ed37571a45` before the change and on this branch after it:
+
+| Population | Before | After |
+| --- | --- | --- |
+| `${CLAUDE_PLUGIN_ROOT:-` in tracked `plugins/soleur/**/*.md` | 102 occurrences, 31 files | 0 |
+| Pattern C (`show-toplevel)/plugins/soleur/` code roots, `preflight/SKILL.md`) | 2 | 0 |
+
+- **Guard.** `plugin-root-anchoring.test.ts`'s fourth describe scans every tracked payload
+  markdown file (575 on 2026-09-24) with no allowlist: `readsRootUnsafely` (reads), a new
+  `plantsRootUnsafely` (root assignments, a default arm of any variable pointing into the
+  payload, `env` reads) and three literal dynamic-prefix regexes (a `$(…)`/`${…}`/`$VAR` prefix
+  before `plugins/soleur`, the backtick git-root form, and any `..` after the token). The
+  skills ratchet (#8570) loses form (a): a baseline row can be regenerated, a predicate can
+  only be edited in reviewed code. **A12 is discharged** — the flat zero it declined is this guard.
+- **Closed here:** §R5 C6, the Pattern-C item routed from #7450 (DC-1), and **A13** (the
+  depth-relative `.` default arm is gone from the one prose site that named it).
+- **§R3 closure.** The "missing A/B arm" #7453 named — a bare token inside a `bash` fence — is
+  **A10** (skill surface, decoy-controlled) plus #8391 Arm 5 (commands, both harnesses). The
+  hosted SDK passes the plugin as `--plugin-dir` (`@anthropic-ai/claude-agent-sdk` 0.3.197
+  `sdk.mjs`); that is a code-inspection fact, not a server measurement.
+- **Measured unset behaviour.** Where a block runs under `set -u` (preflight Check 10 does), an
+  unset token aborts at its first expansion with `CLAUDE_PLUGIN_ROOT: unbound variable` (rc 127)
+  before any `test -r` guard runs; elsewhere it expands to a root-anchored `/skills/…` or
+  `/scripts/…` path that fails `No such file or directory`. Both are fail-closed, and both are
+  pinned by decoy rows whose twin controls prove the pre-migration form DID execute the decoy.
+- **Scope decisions.** The decision-2 identity preflight is **not** added at the ~97 non-gate
+  sites: the bare form already fails closed unset, and A11 classifies the identity check as a
+  shape check. Shipped `.sh`/`.ts`/`.py` are out of scope — the variable is a real runtime
+  variable there and A17's `BASH_SOURCE` rule governs them (measured: no live instance).
+- **Tier-1 gates and their callers' exit-127 handling:**
+
+  | Gate | Caller's handling of a crash / unresolved root |
+  | --- | --- |
+  | `battery-owed.sh` | Any exit except 42 means "owed" — fails safe as written. |
+  | `run-scan.sh` | No caller handled it; callers branched only on the verdict string. Added: a missing `LOW-RISK`/`REVIEW`/`HIGH-RISK` line means **REVIEW**. |
+  | `emit-review-trailer.sh` | No caller rule covered a non-zero exit. Added: non-zero means the review is **not attested**. |
+  | `admin-merge-ready.sh` | The Read-surface blocks abort `exit 5` before any `gh` call (A20), pinned by a test row. |
+
+- **Recorded, not changed:** the cron-bug-fixer hook allowlist entry
+  (`bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`, prefix-matched in
+  `cron-bash-allowlist-hook.mjs`). `fix-issue/SKILL.md`'s site was denied before (the hook
+  rejects `${…}`) and is denied after (the substituted path is absolute and quoted, and does not
+  match the relative prefix); the reason changed, the behaviour did not.
+- **Trackers:** CWD-relative runner operands (ratchet forms b–e) → #6222; CWD-relative
+  `Read plugins/soleur/…` instructions → #8729; Grok nested-Read token delivery → #8730.
+
+### Amendment item A19 — the `list`/`ls` carve-out, re-anchored
+
+`EXACT_LITERAL_SAFE_COMMANDS` is `{substituted-deployed} × {list, ls}`: the skill text as the
+loader delivers it, the token replaced with `SOLEUR_PLUGIN_PATH_DEFAULT`. The SDK passes the plugin
+as `--plugin-dir`, the flag whose substitution A10 measured **on the CLI**; the hosted SDK path is
+inferred from that shared flag, not separately measured (the same hedge `agent-env.ts` states), and
+a miss there costs a prompt, not an admission. Exact string equality is retained; there is no
+`^bash` regex, and the check runs **after** every denylist stage with an ASCII-only trim, so the
+carve-out relaxes nothing (a `String.trim()` would have stripped NBSP/BOM that bash passes as argv). The raw `${CLAUDE_PLUGIN_ROOT}` form is deliberately **not** a member: it is unreachable
+on the hosted surface, and admitting a literal `$` would be the first denylist-bypassing member
+that no delivery path produces — the Decision 8 class, dead by construction. An unsubstituted
+token, or a `SOLEUR_PLUGIN_PATH` repoint, misses and falls back to an approval prompt, which is
+fail-safe. Decision 8's pointer to #7453 is discharged, and the issue's "known residual" (a prompt)
+is avoided rather than accepted. The coupling test extracts every token rendering, checks rendered
+membership, and pins the emission count at exactly 4.
+
+### Amendment item A20 — the Read surface delivers its own root
+
+The loader substitutes the token in text it **delivers** (a `SKILL.md` body, a command body,
+skill args). A non-`SKILL.md` doc is opened with the Read tool, which returns raw bytes, so its
+token reaches bash **unsubstituted**. Five docs carry one (Guard 4 derives the set from the tree, with a floor of 5). The
+rule has four parts:
+
+1. **The pointer is loader-anchored** (`${CLAUDE_PLUGIN_ROOT}/skills/<s>/references/<f>.md`),
+   never a CWD-relative path or a relative markdown link — after `gh pr checkout` a CWD-relative
+   Read loads the contributor's copy, so a notice inside it would harden attacker-chosen text.
+2. **The root is derived from the absolute path read** — the markdown twin of A17's
+   `BASH_SOURCE` rule — under a notice whose closed rule forbids taking it from repository files,
+   PR text or tool output.
+3. **No block exports the variable.** On a hosted session it is already set by
+   `buildAgentEnv` (the `/app`-validated root), and an unconditional export inside the block
+   would override that trusted value with whatever the block says. Off the hosted surface the
+   notice tells the agent to prefix each block with `export CLAUDE_PLUGIN_ROOT=<root>`, because
+   every Bash call, Monitor task and subagent starts a fresh shell. Unset, the token fails
+   closed (`/skills/…: No such file`, or `unbound variable` under `set -u`). The notice has the
+   agent print the variable first: the derived root → proceed; empty → export it; **anything
+   else → stop**, since only the loader or `buildAgentEnv` may have set it (a repository's
+   `.claude/settings.json` `env` block could otherwise pre-set a checkout path the notice never
+   sees).
+4. **The admin-merge blocks refuse a root they cannot trust** before any `gh` call, `exit 5`:
+   unset, relative, missing `.claude-plugin/plugin.json`, or resolving **inside the current
+   checkout**. The last clause is the one that matters — the natural "repair" for exit 5 is
+   `export CLAUDE_PLUGIN_ROOT=$PWD/plugins/soleur`, which would make the `--admin` gate the PR's
+   own `admin-merge-ready.sh`. This is still a **shape check, not authentication** (as A11):
+   a `plugin.json` planted outside the checkout passes; what it removes is the one-keystroke
+   bypass.
+
+   *(A first draft opened each block with an export of a cannot-exist sentinel. The design
+   pass removed it for the override reason above; the guard now flags any
+   `CLAUDE_PLUGIN_ROOT=` assignment in payload text other than the `<root>` placeholder.)*
+
+A future Read-surface site whose failure is **not** fail-closed must take A17's script route
+instead (a `BASH_SOURCE`-anchored wrapper). That route was not taken here because it would ship a
+new reusable `gh pr merge --admin` entry point, a larger trust change than this migration.
+
+**Residuals, stated rather than claimed equal.** On **Grok Build**, `one-shot` Reads nested
+`SKILL.md` files from disk, so their tokens are unsubstituted; in the monorepo the worktree,
+lease and `cleanup-merged` steps move from working (through the old default arm) to fail-closed.
+On a customer repo the old arm executed the customer's file, so fail-closed is the correct
+trade — and it is a real availability regression in the monorepo on Grok, tracked at #8730.
+The leak side of the same residual: on Grok the nested `SKILL.md` is itself Read from the
+checkout, so its stop-if-unsubstituted clause is text the checkout controls — the fix belongs in
+`harness.ts` `invokeSkill()` naming the installed root (#8730). The admin-merge refusal above holds
+regardless. A worktree created without its lease (`SOLEUR_SESSION_STATE_UNAVAILABLE …
+UNLEASED-and-reapable`) can be reaped by a sibling session's `cleanup-merged`; the marker is loud,
+the data-loss exposure is real on non-substituting harnesses until #8730. **Devin cloud** exec
+shells do not export the variable, so each needs the export (`devin/INSTRUCTIONS.md` already says
+so).
+
+**Fail-open consumers get an explicit presence check.** A script that exits 0 with empty output
+when it cannot run turns an unset root into "nothing found". `ship`'s auto-close scan is the
+instance (empty = no traps, so the PR would be created with one); it now refuses before scanning.
+
+**Unclassified surface.** `plugins/soleur/agents/**` bodies are delivered as subagent prompts,
+but whether the loader substitutes the token there is unmeasured, so this amendment classifies
+them as neither delivery nor Read surface. Their script invocations nevertheless take the bare
+quoted anchor — it fails closed either way, where the CWD-relative `plugins/soleur/…` form they
+used executed the customer's (or the PR author's) file: `agent-finder`'s `run-scan.sh` (a security
+gate — no verdict line now reads as `REVIEW`), `ops-provisioner`'s credential redactor,
+`community-manager`'s router, `ux-design-lead`'s taste-profile validator, and
+`legal-document-generator`. A guard keeps CWD-relative executions out of `agents/**`.
