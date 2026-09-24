@@ -7,6 +7,7 @@
 #
 # Sourced by:
 #   plugins/soleur/skills/flag-create/scripts/create.sh
+#   plugins/soleur/skills/flag-delete/scripts/delete.sh
 #   plugins/soleur/skills/flag-set-role/scripts/flip.sh
 #   plugins/soleur/skills/user-set-role/scripts/set-role.sh
 #
@@ -20,6 +21,13 @@
 #                     `jq --argjson` so they reach the bool columns as JSON bool/null,
 #                     not strings (a `--arg` string fails PostgREST bool coercion).
 #
+# Approval method (#8486, ADR-249): the body carries p_approval_method:"tty-ack"
+# (migration 140) ONLY when the operator-script library's class-2 ack has set the
+# plain shell variable SOLEUR_OP_ACKED=tty-ack in this process. Without it the
+# helper refuses with rc 4 before any request, so an audit append placed before
+# the ack fails closed and the WORM value means "the ack returned here". The
+# value is self-reported by the script, not proof that a person typed.
+#
 # Behavior: append-before-flip — the caller MUST call this BEFORE any Flagsmith /
 # Supabase mutation, and abort the flip on a non-zero return. Returns:
 #   0  audit row written (echoes the row uuid on stdout)
@@ -30,15 +38,19 @@ audit_flag_flip_rpc() {
   local url="$1" srk="$2" flag="$3" env="$4" target="$5" action="$6" before="$7" after="$8" actor="$9"
   local body resp code id
 
+  if [[ "${SOLEUR_OP_ACKED:-}" != "tty-ack" ]]; then
+    echo "FATAL: audit append before the ack — soleur_op_ack_or_die has not returned in this process (#8486)" >&2
+    return 4
+  fi
   command -v jq >/dev/null   || { echo "FATAL: jq not found (audit append)" >&2; return 4; }
   command -v curl >/dev/null || { echo "FATAL: curl not found (audit append)" >&2; return 4; }
 
   # --argjson for the bool/null args; --arg for the text args.
   body=$(jq -nc \
     --arg  f  "$flag"   --arg e  "$env"    --arg t "$target" \
-    --arg  a  "$action" --arg ac "$actor" \
+    --arg  a  "$action" --arg ac "$actor" --arg am "$SOLEUR_OP_ACKED" \
     --argjson b  "$before" --argjson af "$after" \
-    '{p_flag_name:$f, p_env:$e, p_target:$t, p_action:$a, p_before_bool:$b, p_after_bool:$af, p_actor:$ac}') \
+    '{p_flag_name:$f, p_env:$e, p_target:$t, p_action:$a, p_before_bool:$b, p_after_bool:$af, p_actor:$ac, p_approval_method:$am}') \
     || { echo "FATAL: failed to build audit RPC body (bad before/after token: '$before'/'$after')" >&2; return 4; }
 
   resp=$(curl -sS -w '\n%{http_code}' -X POST \
