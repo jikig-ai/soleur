@@ -472,7 +472,9 @@ if mirror:
 # The Slack degrade step must carry a STATUS FUNCTION. Without one GitHub prepends an
 # implicit success(), so the step is skipped on exactly the mirror_only degrades it exists
 # to report -- the mode that authorises a root-exec digest pin had no push signal at all.
-slack = next((s for s in steps if "slack" in str(s.get("name", "")).lower()), None)
+# Selected by exact NAME: #8747 added a second Slack step (the publish-refused
+# alert), so "first step whose name mentions slack" no longer means this one.
+slack = next((s for s in steps if s.get("name") == "Post to Slack (inngest mirror status)"), None)
 check("the Slack degrade step exists", slack is not None)
 if slack:
     slack_if = str(slack.get("if") or "")
