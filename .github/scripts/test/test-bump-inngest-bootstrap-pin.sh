@@ -1488,6 +1488,7 @@ h_side() { # h_side <from-rev> <marker> — one side commit, prints its sha; HEA
 # pipefail`), HEAD detached at <head_sha> like the tag checkout.
 run_step() {
   local name="$1" dir="$2" tag="$3" head="$4"
+  assert_fixture_dir "$dir"
   STEP_OUT="$TMP/step.$name.out"
   git -C "$dir" checkout -q --detach "$head" 2>/dev/null
   ( cd "$dir" && env TAG="$tag" HEAD_SHA="$head" \
