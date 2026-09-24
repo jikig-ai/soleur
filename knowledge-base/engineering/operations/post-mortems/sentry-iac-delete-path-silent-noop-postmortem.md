@@ -77,7 +77,7 @@ Nothing watched the live↔IaC direction. `sentry-monitors-audit.sh` checked A/B
 | Issue | Item | Status |
 |---|---|---|
 | #6606 | Import the unmanaged live uptime monitor `1422253` (`app.soleur.ai`) into Terraform — it is the only Sentry uptime coverage of the app and was nearly deleted as a "dead orphan" (the same not-in-Terraform ≠ dead confusion this incident is about, in mirror image). | open |
-| #6612 | Add `apps/web-platform/infra/sentry` to `scheduled-terraform-drift` so "declared ≡ applied" has a monitor — closes the detection gap that let this incident run latent. Needs raw-`SENTRY_AUTH_TOKEN` plumbing. | open |
+| #6612 | Add `apps/web-platform/infra/sentry` to `scheduled-terraform-drift` so "declared ≡ applied" has a monitor — closes the detection gap that let this incident run latent. Needs raw-`SENTRY_AUTH_TOKEN` plumbing. | closed by PR #8679 |
 | #6602 | ~$84/mo of COGS on unverified estimates whose verify-by dates passed — the same "estimate that outlives its verify-by date" class that let the Sentry line sit 78% wrong for five weeks. | open |
 
 ## Prevention

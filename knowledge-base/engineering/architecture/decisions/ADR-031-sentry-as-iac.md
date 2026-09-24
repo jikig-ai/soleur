@@ -1056,6 +1056,37 @@ freeze is gone, not when a release ships. Rejected alternatives are recorded in
 `knowledge-base/project/plans/archive/20260921-114348-2026-09-21-fix-sentry-alert-410-removed-api-migration-plan.md`
 §"Alternative Approaches Considered".
 
+**Amendment (2026-09-24, #6612) — the root gains a scheduled drift check; "declared ≡ applied"
+now has a monitor.**
+
+- **What changed.** `scheduled-terraform-drift.yml` gains an `apps/web-platform/infra/sentry`
+  leg. It runs a full-root `terraform plan -detailed-exitcode` (no `-target=`) twice daily,
+  dispatched by Inngest, and an exit code of 2 files the `infra-drift` issue.
+- **What it closes.** Path 3 of the #6589 amendment's three divergence paths. Paths 1
+  (`[skip-sentry-apply]`) and 2 (a failed or unretried apply, destroy-gated runs included) are
+  now **detected within one cron period (≤ 12 h)**, not prevented.
+- **The `use_lockfile = false` consequence.** The aftermath of a concurrent unlocked writer is
+  now detected within one cron period instead of never. The race itself is still not prevented.
+- **Authentication.** The leg binds the `SENTRY_IAC_AUTH_TOKEN` repository secret as the raw
+  `SENTRY_AUTH_TOKEN`, as the apply does, and runs no `doppler run`. The store rule above is
+  unchanged. The tf-var transformer is refused, and so is a plain `doppler run -c prd_terraform`,
+  which would bind the personal token (#7797, #8090).
+- **Routing.** A vendor read failure is exit 1: it goes to the `[ERROR]` email and never to an
+  issue, and it is not retried. That couples Sentry's vendor noise onto two shared channels: the
+  single `scheduled-terraform-drift` monitor, and the `[ERROR]` email class that ADR-241 relies
+  on as a detective control. **Exit criterion:** if vendor-caused `[ERROR]`s on this leg exceed
+  3 in any 30 days, give it its own monitor slug or split it into its own job.
+- **Blind spots.** The leg sees managed objects only; unmanaged Sentry objects stay with the
+  fidelity probe's UNMANAGED arm. Attributes under `ignore_changes` are invisible to it
+  (`[environment]` on the `sentry_alert` blocks, `all` on the two frozen rules), so field
+  fidelity for those stays with `scheduled-sentry-alert-drift.yml`.
+- **Tiering.** The token remains a repository secret: Tier-A reach with Tier-B scope, outside
+  ADR-241. The `infra-privileged` environment gates the apply job, not the secret, and moving it
+  into an environment would break `plan_pr`, which runs without one. Tracked by #8681.
+- **Why Inngest dispatches a workflow here:** ADR-033
+  (`ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md`), the
+  2026-06-02 scope note under Option C.
+
 ## Consequences
 
 ### Positive

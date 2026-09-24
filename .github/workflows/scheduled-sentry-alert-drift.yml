@@ -12,12 +12,13 @@
 # (#8050). It is NOT a live capture: a rule cannot be live-captured before it is
 # applied, which is how the previous reference redded `main` on every addition.
 #
-# WHY NOT ADD apps/web-platform/infra/sentry TO scheduled-terraform-drift.yml's
-# MATRIX INSTEAD. That leg would plan the FULL ROOT, refreshing every resource
-# through the provider, so any vendor-side read failure (a 410 like #8451's, a
-# brownout) would red it for reasons that are not drift, which is how a probe
-# gets muted. This workflow makes ONE read-only GET against the non-deprecated
-# org workflows endpoint.
+# RELATION TO scheduled-terraform-drift.yml's SENTRY LEG (#6612). That leg plans the
+# FULL ROOT twice daily (state against config, every resource type). This workflow
+# stays the field-level fidelity check for every `sentry_alert`, including the rules
+# under `ignore_changes`, which the plan cannot see; it makes ONE read-only GET against
+# the non-deprecated org workflows endpoint. The two are complementary. The leg's
+# vendor read failures go to the shared `[ERROR]` email, not to an issue, under
+# ADR-031's 2026-09-24 exit criterion; the muting risk is not resolved, only bounded.
 #
 # Trigger: Inngest-dispatched `workflow_dispatch` per ADR-033, from
 # apps/web-platform/server/inngest/functions/cron-sentry-alert-drift.ts. Not a

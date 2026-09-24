@@ -64,6 +64,7 @@ secrets**:
 R2 backend credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) come from
 Doppler `prd_terraform` via `doppler secrets get --plain` — same pattern as
 `scheduled-terraform-drift.yml` extracts them. See ADR-031 §secret-store-divergence.
+(The drift leg reads the Sentry token from the same repository secret as the apply.)
 
 ## Local invocation
 
@@ -200,7 +201,8 @@ Class D candidates as *unresolved*, never as clean.
 
 ## Drift detection
 
-Two different things drift here, and they have two different detectors.
+Two different things drift here (alert-rule fields, and the root's state against its
+config), and each has its own detector.
 
 **Alert-rule fidelity** — `scripts/sentry-alert-live-fidelity.sh`: one
 read-only GET against the non-deprecated workflows endpoint, diffed
@@ -256,12 +258,15 @@ Phase 3.4 captures under `knowledge-base/project/specs/fix-7650-sentry-alert-mig
 are history (the adoption record and `sentry-adoption-plan-assert.sh`'s
 self-skipping bijection input), not the probe's reference.
 
-**Everything else in the root** is still not on `scheduled-terraform-drift.yml`'s
-matrix, and adding `apps/web-platform/infra/sentry/` to it is DELIBERATELY not
-the fix for the alert rules. That leg would plan the FULL ROOT, which until
-#8451 refreshed the last two `sentry_issue_alert` resources through the
-deprecated endpoint, so it would have gone red on Sentry's read failures (a
-brownout, then #8451's persistent 410) rather than on drift, and been muted.
-Since #8451 no resource reads that endpoint; the alert rules' drift is covered by
-the live probe above, and the remaining gap (cron and uptime monitors) is
-unchanged from #3814.
+**The whole root, state against config** — the `apps/web-platform/infra/sentry`
+leg of `scheduled-terraform-drift.yml` (#6612, ADR-031's 2026-09-24 amendment).
+Twice daily it runs a full-root `terraform plan -detailed-exitcode` (no
+`-target=`), so every resource type is compared, cron and uptime monitors
+included. It authenticates exactly as the apply does: the `SENTRY_IAC_AUTH_TOKEN`
+repository secret bound as the raw `SENTRY_AUTH_TOKEN`, with no `doppler run`.
+Exit 2 files an `infra-drift` issue; exit 1 (a vendor read failure, a missing
+token) sends the `[ERROR]` email and files no issue. To reconcile, first check
+whether an `apply-sentry-infra.yml` run on `main` is still in flight, then re-run
+the CI apply — `gh workflow run apply-sentry-infra.yml --ref main -f reason="..."`
+— never a local apply (`use_lockfile = false`). It cannot see attributes under
+`ignore_changes`, so field fidelity for those stays with the probe above.
