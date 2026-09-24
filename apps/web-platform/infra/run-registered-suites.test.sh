@@ -108,7 +108,11 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
 # single-line registration and IS derived — the split exists so the arms needing no privilege stay
 # inside the local gate. Growth of this list is a cost, and it was paid deliberately here rather
 # than by excluding the whole suite: #7076 tracks the derive-but-do-not-execute fix that empties it.
+# `git-data-plaintext-snapshot-loopback.test.sh` was added 2026-09-24 (#5274) for the same reason
+# (losetup/dmsetup/blockdev --setro need root); its stub half, git-data-bootstrap-store-verify, is
+# derived.
 KNOWN_UNDERIVED=(
+  apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh
   apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
   apps/web-platform/infra/workspaces-luks-loopback.test.sh
   apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh
