@@ -551,19 +551,19 @@ Sources: `knowledge-base/project/specs/feat-one-shot-8695-8696-c4-banner-bwrap/s
 
 ### Pre-merge (PR)
 
-- [ ] AC1 (#8695): `C4Diagnostics` with `stale` and a `staleDiagnostic` renders the diagnostic (first letter upper-cased) as line 2 and no refresh promise; without a diagnostic renders `SUPERSEDED_LINE`; Phase 1 item 4 `c4-shared.test.tsx` rows (a)-(d) green.
-- [ ] AC2 (#8695): both parents clear/replace the reason on every save; the real `C4Diagnostics` text is asserted after the tab switch in `c4-diagram.test.tsx`; the folder-change row is green.
-- [ ] AC3 (#8696): Guard 1 rows 1-16 and H1-H3 are encoded in `test/c4-render-sandbox.test.ts`, each asserting its reason code, and each was observed RED against its mutation during implementation.
-- [ ] AC4 (#8696): Guard 3 rows green.
-- [ ] AC5: Guard 2 rows green; `c4-writer-rerender.test.ts` maps `sandbox_error`/`layout_failed` to `INTERNAL_DIAGNOSTIC`.
-- [ ] AC6: Guard 4 rows green.
+- [x] AC1 (#8695): `C4Diagnostics` with `stale` and a `staleDiagnostic` renders the diagnostic (first letter upper-cased) as line 2 and no refresh promise; without a diagnostic renders `SUPERSEDED_LINE`; Phase 1 item 4 `c4-shared.test.tsx` rows (a)-(d) green.
+- [x] AC2 (#8695): both parents clear/replace the reason on every save; the real `C4Diagnostics` text is asserted after the tab switch in `c4-diagram.test.tsx`; the folder-change row is green.
+- [x] AC3 (#8696): Guard 1 rows 1-16 and H1-H3 are encoded in `test/c4-render-sandbox.test.ts`, each asserting its reason code, and each was observed RED against its mutation during implementation.
+- [x] AC4 (#8696): Guard 3 rows green.
+- [x] AC5: Guard 2 rows green; `c4-writer-rerender.test.ts` maps `sandbox_error`/`layout_failed` to `INTERNAL_DIAGNOSTIC`.
+- [x] AC6: Guard 4 rows green.
 - [ ] AC7: CI test-webplat installs bubblewrap, relaxes the userns sysctl, sets `C4_BWRAP_REQUIRED=1`, and `test/c4-render-tenant-config.test.ts` (acceptance rows through bwrap + H4 with its positive controls) runs (not skips) and passes on the PR.
-- [ ] AC8: `verifyC4RenderSandboxOnce()` runs a real fixture render and is called inside `server.listen` only when `!dev`, never awaited (boundary row green). Unit rows cover: the success Sentry info event `event_type: "c4-sandbox-probe"` plus exactly one `event: "c4_render_sandbox_probe"` emitter (the discoverability probe prints `1`); the failure event via `reportSilentFallback(null, …)` with reason + `detail_class`; the fd-scan warning; and a throwing resolution not rejecting the caller.
-- [ ] AC9: the Test-harness shared-pool row and slot-wait row are green; `c4_rerender` log carries `queueWaitMs`.
-- [ ] AC10: ADR-050 amendment merged in this PR with the Phase 3 item 3 content; Residuals paragraph points to it; `plugins/soleur/test/c4-count-parity.test.sh` still green.
+- [x] AC8: `verifyC4RenderSandboxOnce()` runs a real fixture render and is called inside `server.listen` only when `!dev`, never awaited (boundary row green). Unit rows cover: the success Sentry info event `event_type: "c4-sandbox-probe"` plus exactly one `event: "c4_render_sandbox_probe"` emitter (the discoverability probe prints `1`); the failure event via `reportSilentFallback(null, …)` with reason + `detail_class`; the fd-scan warning; and a throwing resolution not rejecting the caller.
+- [x] AC9: the Test-harness shared-pool row and slot-wait row are green; `c4_rerender` log carries `queueWaitMs`.
+- [x] AC10: ADR-050 amendment merged in this PR with the Phase 3 item 3 content; Residuals paragraph points to it; `plugins/soleur/test/c4-count-parity.test.sh` still green.
 - [ ] AC11: zero-view census counts (internal vs external) recorded in the PR body; a tracking issue exists if any external repo is affected.
 - [ ] AC12: Dockerfile and `c4-render.ts` comments corrected; the Phase 2 item 0 measurements and adopt/residual verdicts for (a)-(e) are recorded in the ADR amendment; `bash scripts/test-all.sh webplat` and `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` green (tsc is the enumerator for any `RenderReason` consumer the grep missed).
-- [ ] AC13: Guard 5 rows 1-5 green; resync failure returns `RETRY_DIAGNOSTIC`; the supersede-only table row green.
+- [x] AC13: Guard 5 rows 1-5 green; resync failure returns `RETRY_DIAGNOSTIC`; the supersede-only table row green.
 - [ ] AC14: the Phase 3 item 5 follow-up issue exists, is milestoned, and is linked in the PR body.
 
 ### Post-merge (automated in `soleur:postmerge`)

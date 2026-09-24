@@ -36,3 +36,13 @@
 - SIM1 split pool — REJECTED; SIM2 merge Guard 4 — REJECTED; SIM3 cut module-load row — ADOPTED; SIM4 always two-arg `onSaved` — REJECTED; SIM5 census postmerge — REJECTED (CPO condition); SIM6 drop PROBE_STAGE boundary row — ADOPTED; SIM8 de-duplicate — ADOPTED.
 - VN `"non_zero_exit"` literal in c4-writer-rerender.test.ts — ADOPTED (claim corrected).
 - LRN kb-share lstat TOCTOU, single-fd, vitest leaks — ADOPTED.
+
+## Work Phase
+- Status: complete (commits 0dd6e3700e banner, 3c4f9be2d5 sandbox, 4c93eed446 CI/ADR/test hardening)
+- Item 0 measurements: all five optional hardening items adopted. Correction to the plan: under bwrap 0.8.0 `child-pid` is written even when setup fails; the discriminator is the `exit-code` record.
+- Mutation battery: 29/29 killed after two fixture fixes (size cap masked by the post-read length check; fd-scan CLOEXEC fixture skipped for the wrong reason). "memoize failed resolution" not mutated (no single-line form); covered by Guard 1 row 16.
+- Local real-bwrap run (Arch, newer bwrap): tenant-config acceptance + H4 12/12. Found and fixed: extra binds must follow the tmpfs mounts (a prefix under /tmp was hidden).
+- Affected gate: queued 7th behind sibling runs; stopped. All 26 C4 suites 355/355 green locally; CI's full battery is the coverage evidence.
+- Census: 3 installations, 33 repos; internal 1 model / 0 zero-view; external 1 model / 1 zero-view → #8740.
+- Follow-up filed: #8739 (Concierge edit does not reload the editor).
+- Beyond plan: C4Workspace ignores a save that finishes after a folder change (C4-C9).
