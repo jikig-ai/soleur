@@ -169,7 +169,10 @@ scan_skip_exit0() {
 # The PATH farm: every executable on PATH, first entry wins (ln without -f keeps the first
 # link for a name, which is the shell's own resolution order). Only absolute, existing
 # directories are linked — a relative entry would leave dangling links that can shadow a
-# later directory's real tool.
+# later directory's real tool — and only EXECUTABLE REGULAR FILES within them, because PATH
+# lookup skips anything else. Measured: a non-executable `~/.local/bin/env` (a sourced shell
+# snippet) shadowed /usr/bin/env in the farm and failed seven parity cases at rc 126, so a
+# suite reddened from the farm rather than from its guard.
 FARM="$ROOT/farm"
 ASIDE="$ROOT/aside"
 mkdir -p "$FARM" "$ASIDE" || { printf '[FATAL] cannot create the PATH farm\n' >&2; exit 2; }
@@ -177,10 +180,14 @@ build_farm() {
   local d old_ifs="$IFS" path_list="$ROOT/path.list"
   printf '%s\n' "$PATH" | tr ':' '\n' > "$path_list"
   shopt -s nullglob
+  local e
   while IFS= read -r d; do
     case "$d" in /*) ;; *) continue ;; esac
     [[ -d "$d" ]] || continue
-    set -- "$d"/*
+    set --
+    for e in "$d"/*; do
+      [[ -f "$e" && -x "$e" ]] && set -- "$@" "$e"
+    done
     [[ $# -gt 0 ]] || continue
     ln -s "$@" "$FARM"/ 2>/dev/null || true
   done < "$path_list"
