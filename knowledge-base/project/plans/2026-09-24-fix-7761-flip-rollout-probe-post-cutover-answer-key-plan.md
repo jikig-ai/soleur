@@ -16,6 +16,52 @@ lane: cross-domain
 
 > Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. The plan went v1 → v2 (plan-time domain review) → v3 (four-seat plan
+review, cuts) → v4 (this deepen pass).
+
+**Agents:**
+- **Plan-time:** repo-research-analyst, learnings-researcher, functional-discovery, CTO,
+  spec-flow-analyzer, and a scoped advisor consult.
+- **Plan-review:** DHH, Kieran, code-simplicity, and CTO (devex).
+- **Deepen:** test-design-reviewer, security-sentinel, observability-coverage-reviewer,
+  architecture-strategist, git-history-analyzer, and a verify-the-negative sweep.
+
+### Key improvements (v4)
+
+1. **Tag isolation.** The LUKS cutover FSM (`inngest-luks-cutover.sh` `emit_noop`) runs on the
+   **same host** and emits the same `noop-*` reasons. Drift rows are now field-isolated on
+   `SYSLOG_IDENTIFIER == inngest-cutover-flip` (F28). Without this, a LUKS `noop-aborted` would
+   have read as flip drift.
+2. **Public-comment hygiene.** Everything the probe prints lands in a public #7761 comment.
+   - Findings are sanitised: `noop-unset` and `unexpected-exit(from=…)` embed the raw flag value.
+   - `_mid` is truncated.
+   - Output is capped at 20 rows.
+   - The sidecar refuses symlinks and never echoes its value (F31–F33, F37).
+3. **The sidecar cannot erase drift.** The boundary must precede the owning machine's first row
+   (F29), so moving the sidecar past a drift event on the current machine is refused.
+4. **Stuck non-verdicts age out.** Read-path TRANSIENTs exit 3 (CANNOT ESTABLISH) once a supplied
+   boundary is over 7 days old (F34), instead of reading NOT YET forever.
+5. **The harness cannot be vacuous.** Four self-checks: OR, newest-N order, `--since` shape, and
+   quoted-term matching. Every fixture asserts its token anchored, with a negative assertion on the
+   competing token. The mutation battery runs on copies, and a mutation counts only when the named
+   fixture's own `FAIL:` line appears. F12b is repaired: string-shaped JSON rows now carry `_mid`.
+6. **CI coverage.** The probe path is added to `infra-validation.yml` `paths` and to
+   `test-affected-paths.sh`. Without that, a probe-only PR would skip the parity guard (#8079
+   class).
+
+### New considerations discovered
+
+- Measured: ClickHouse session timezone is `UTC`. The off-flag greps return 0 rows since the
+  boundary across all hosts and tags.
+- **Attribution corrections:**
+  - The derived-boundary arm and `TERMINAL_SAFE_FLAGS` shipped in PR #7887 (commit `235693e411`).
+    #7695 is the **issue**, now closed.
+  - The `#6178 EMITTER PARITY` block was introduced by PR #7647. `#6178` is its in-code label.
+- Every call site of `betterstack-query.sh` passes `Nh`/`Nm`/`Nd` or a `%F %T` built with
+  `date -u`. The ISO normalisation breaks no caller.
+
 ## Overview
 
 The follow-through probe for #7761 (`scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`)
@@ -193,12 +239,15 @@ only its resume row(s). Measured live: exactly 1 row since the boundary.
 
 **Filter.** A returned row is considered only if all of these hold:
 - it is from this host (both identity fields);
+- **its `SYSLOG_IDENTIFIER` is `inngest-cutover-flip`** (deepen: the LUKS cutover FSM, `inngest-luks-cutover.sh` `emit_noop`, runs on the **same host** and emits the same `noop-done`/`noop-rolled-back`/`noop-aborted`/`noop-unset` reasons. Without tag isolation, a LUKS `noop-aborted` reads as flip drift. `mine()` field-isolates the tag for every emit_state query. This is the `2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md` class);
 - it decodes;
 - its `start_ts` is ISO-shaped and `> AFTER` (Kieran 9: the stub ignores `--since`, and warehouse
   `dt` and `start_ts` can differ by seconds).
 
 A drift row with a non-ISO `start_ts` is treated as a finding, not dropped. The query already
-placed it after the boundary, and silently dropping a FAIL-direction row is the unsafe choice.
+placed it after the boundary, and silently dropping a FAIL-direction row is the unsafe choice. An
+`R` with a non-ISO `start_ts` is exempt, because it is not a finding, but it can never **own**
+`done`. That is fixture F30.
 
 **Exemption.** One row shape only: `reason == "flushed-resume-no-reflush"` with `flag == "done"`.
 It is **not** conditioned on guard or machine; those are ownership questions (D3). This is Kieran
@@ -213,6 +262,18 @@ P0-1: conditioning the exemption on guard/`_mid` turned an unowned resume into a
 
 Both go through `verdict_fail`, because they are boundary-dependent. The findings arm runs before
 `stale_image`, so a FLUSHALL is never masked by a missing guard stamp (SpecFlow 5).
+
+**What a finding prints (deepen: security).** Everything printed ends up in a PUBLIC #7761 comment,
+and runner masking does not apply there.
+- `.flag` goes through `_flag_for_display`.
+- `.reason` is printed only when it is a known emitter literal. `unexpected-exit(from=<x>)` keeps
+  its prefix, and `<x>` goes through `_flag_for_display`. Anything else prints as
+  `<non-enum reason, N chars>`. The reason is that `noop-unset` and `unexpected-exit(from=…)` embed
+  the raw `INNGEST_CUTOVER_FLIP` value (fixture F31).
+- `_mid` prints as an 8-hex prefix only. machine-id(5) calls the full value confidential.
+- At most 20 rows print, followed by `(+N more)`. The sweeper keeps only the last 4000 bytes, so a
+  longer list would push the `FAIL: reason=` line out of the comment. For the same reason, the
+  `FAIL: reason=` line is printed **last** as well as first.
 
 **Truncation.** Findings are positive observations, so they are valid on a truncated page. Only the
 **absence** conclusions need a complete page: "no drift" and "no owning resume". So:
@@ -267,6 +328,23 @@ Replaces are routine. The last 30 days hold five done-entries on five machines: 
   - the message prints the boundary it used, names `cutover-inngest.yml op=resume`, and says "if
     the host was replaced after `<AFTER>`, the sidecar must move" (CTO 8).
 - No stamped `noop-done` in LIVE at all → the existing insufficient-markers arms.
+- **`stale_image` is computed before ownership, from raw stamping (deepen: test-design 11).**
+  `post_stamped` counts post-boundary flip-tag `noop-done` rows that carry the guard, with no
+  ownership condition. `post_oldrev` counts the same rows without the guard. `stale_image` fires iff
+  `post_oldrev > 0 && post_stamped == 0`. So F16 (unstamped `R`, stamped noops) reaches ownership
+  and reads `done_not_resumed`.
+- **The boundary must precede machine `M`'s first row (deepen: security 3).** Moving the sidecar
+  forward past a drift event would otherwise erase it, a false PASS on a P1 tracker. One bounded
+  query checks this: `--since <AFTER − 1h> --until <AFTER> --grep inngest-cutover-flip`. If any
+  flip-tag row in `[AFTER − 1h, AFTER]` has `_mid == M`, the verdict is
+  `TRANSIENT boundary_inside_owning_machine_lifetime`, and it never PASSes.
+  - A legitimate boundary (a real replace time) always precedes the new machine's first row. On
+    09-23 the replace was at 19:36:32 and the first row at 19:37:57.
+  - Drift on the **current** machine therefore cannot be erased by editing the sidecar. Moving the
+    sidecar re-certifies only a **new** machine, so the v3 advice "re-certify a remediated transition
+    by moving the sidecar" is withdrawn (fixture F29).
+  - A drift remediation on the same machine needs human review, not a sidecar edit. The verdict
+    table says so.
 
 ### D4. Boundary: the committed sidecar
 
@@ -281,6 +359,14 @@ Commit `scripts/followthroughs/inngest-cutover-flip-rollout-7761.after` containi
 The header already names the committed sidecar as the second boundary source, so no new mechanism
 is involved.
 
+**Sidecar read hardening (deepen: security 2).**
+- `[[ -L "$AFTER_FILE" ]]` → `TRANSIENT sidecar_is_symlink`.
+- A read over 64 bytes → `TRANSIENT sidecar_oversize`.
+- `boundary_unparseable` prints only the value's **length**, never its contents. Today it echoes
+  `value='${AFTER}'` into a public comment, so a symlink to `/proc/self/environ` would publish
+  `BETTERSTACK_QUERY_PASSWORD` (fixtures F32, F33).
+- AC6 requires git mode `100644`.
+
 **Lifecycle.** The sidecar belongs to #7761 and retires with the probe; the first PASS closes the
 issue, and the sweeper stops running it. If the host is replaced while #7761 is still open, the
 sidecar must move. The probe comment and the `done_not_resumed` message both say so.
@@ -288,6 +374,21 @@ sidecar must move. The probe comment and the `done_not_resumed` message both say
 The derived-boundary arm stays, unchanged apart from its window default. It is the fallback if the
 sidecar is ever removed. Deleting it (DHH 6) is recorded as a Taste decision that is **not
 applied**; see the disposition section.
+
+### D4b. A non-verdict that persists is not "not yet" (deepen: observability P1)
+
+The read-path non-verdicts (`drift_query_truncated`, `refusals_query_failed`, `query_failed`,
+`row_decode_failed`, `drift_query_failed`) exit 2 today. The sweeper renders exit 2 as
+**NOT YET**, every day, forever. That is the state this plan exists to end.
+
+Once the supplied boundary is older than **7 days**, those non-verdicts exit **3** instead. The
+sweeper renders exit 3 as **CANNOT ESTABLISH**, and the probe names what to fix. A derived boundary
+keeps exit 2: an inferred boundary's age proves nothing.
+
+`credentials_unprovisioned` keeps exit 2, because that one is an environment fact.
+
+This uses the sweeper's existing vocabulary; no sweeper change is needed. The P1 tracker already
+carries `needs-attention`. Fixture F34.
 
 ### D5. Measured query facts (these bind the implementation)
 
@@ -300,9 +401,16 @@ applied**; see the disposition section.
     teaching every probe the workaround.
 - **Archive rows match the quoted greps.** A `--since 30d` query returned object-shaped transition
   rows back to 09-15, past the roughly 3-day hot window.
+- **ClickHouse session timezone is UTC** (measured: `SELECT timezone()` → `UTC`), so dropping
+  the `Z` in the `%F %T` form keeps UTC semantics (deepen: security 6).
+- **The off-flag greps match nothing live since the boundary, across all hosts and tags**
+  (measured: `noop-aborted`/`noop-rolled-back`/`noop-unset`/`flag:flipping`/`flag:flushed` since
+  `2026-09-23 19:36:32` → 0 rows). The page cannot be flooded today.
 - **`DRIFT_LIMIT` default 5000.** The measured healthy page is 1 row. 5000 leaves about 1.7 days of
   headroom even for a flood of 2,880 rows/day, and past that point findings already FAIL (D2).
-  `FLIP_ROLLOUT_DRIFT_LIMIT` is a digits-only test seam. It is not an answer-key member: shrinking
+  `FLIP_ROLLOUT_DRIFT_LIMIT` is a test seam. It must match `^[1-9][0-9]{0,5}$`; a leading zero is
+  refused (deepen: security 7). Bash `-eq` on `08` errors and would silently skip the page-full
+  check. It is not an answer-key member: shrinking
   it can only produce TRANSIENT, and growing it only makes the page more complete.
 
 ## Implementation Phases
@@ -319,6 +427,13 @@ applied**; see the disposition section.
     overridable). `row_str()` produces the legacy string shape.
   - Large fixtures are generated in **one** `jq -n` range (CTO 10). They use strictly increasing,
     distinct `start_ts`, with the boundary moved to about -40 minutes for those fixtures (Kieran 14).
+  - **One anchor epoch** `NOW` is captured once at suite start. Every timestamp derives from it: for
+    the 600-row fixtures, AFTER=NOW−2700, R=NOW−2640, and noop *i* at NOW−2600+4*i*. A self-check
+    asserts every value is distinct and inside (AFTER, NOW].
+  - `run_probe` passes `FLIP_ROLLOUT_STALE_AFTER_S=3600` explicitly, so the fresh and deadline arms
+    do not depend on suite runtime (deepen: test-design 12).
+  - `row()` takes a `tag` argument (default `inngest-cutover-flip`). String-shaped rows (`row_str`)
+    carry `_MACHINE_ID` in `raw` too.
 - 0.2 **Stub fidelity.** It models ClickHouse `raw LIKE '%t%'`:
   - each line's **raw column text** is substring-matched against the OR-combined `--grep` terms;
   - lines that do not decode are matched on their literal text, so test 10's malformed line
@@ -328,20 +443,40 @@ applied**; see the disposition section.
   - a missing `--grep` exits 64;
   - an optional `STUB_FAIL_ON_TERM` makes the query for one term fail, for F27.
 
-  One harness self-check covers the one semantic no fixture exercises: an ISO-Z `--since` is
-  accepted and a garbage one exits 22. OR, quoted-term matching and limit are covered by F1L and F10
-  (code-simplicity).
+  **Stub self-checks.** Each must be able to go red (deepen: test-design 4, 7). v3's claim that F1L
+  and F10 cover these is withdrawn: an oldest-N stub leaves them green.
+  - **OR.** Two terms return rows matching either one.
+  - **Newest-N.** `--limit 2` over 5 rows returns the newest two, **in newest-first order**. The
+    order is part of the contract F9 depends on.
+  - **`--since` shape.** An ISO-Z value is accepted, and garbage exits 22.
+  - **Quoted terms.** A quoted `'"reason":"x"'` matches an object-shaped row's raw text, and does
+    not match a string-shaped row's escaped text (D2 residual).
+- 0.2b **Test `TARGET` seam (deepen: test-design 9).** The suite honours `FLIP_ROLLOUT_TEST_TARGET`,
+  defaulting to the tracked probe. The Phase 3.1 mutation battery then runs against **copies**, never
+  the tracked file.
 - 0.3 **`betterstack-query.sh` ISO normalisation.** In `test-betterstack-query-archive.sh`,
   `--since 2026-09-23T19:36:32Z` must produce `dt >= '2026-09-23 19:36:32'` in the captured SQL.
   Add the same assertion for `--until`, and a negative case: a non-ISO literal passes through
   unchanged.
 - 0.4 **Emitter parity. Extend the existing block; do not duplicate it.** The `#6178 EMITTER
   PARITY` block in `apps/web-platform/infra/cutover-inngest-workflow.test.sh` already extracts the
-  non-noop reason set. Add one loop that asserts each extracted reason also appears in the 7761
-  probe as a `'"reason":"<r>` literal, with its own negative control. After this, one extraction
-  pins both `_flip_transition_dt()` and the probe (CTO 2, code-simplicity).
-- 0.5 **Verdict-reason table parity (CTO 7).** In the 7761 suite, every `reason=<token>` string
-  the probe can print must appear in the header's verdict table. Add a negative control.
+  non-noop reason set. (The block is labelled `#6178` in the code; PR #7647 introduced it.) Add one
+  loop that asserts each extracted reason also appears in the 7761 probe as a `'"reason":"<r>`
+  literal. After this, one extraction pins both `_flip_transition_dt()` and the probe (CTO 2,
+  code-simplicity).
+  - **Anchor on the `DRIFT_GREPS=( … )` block only.** Read it with a flag-based `awk`, not the
+    whole file, because a comment or the verdict table would otherwise satisfy the loop (deepen:
+    test-design 8, `cq-assert-anchor-not-bare-token`).
+  - **Negative control:** a copy of the block with one term deleted must red.
+  - **When the probe file is absent,** the loop prints `probe retired (#7761 closed) — parity loop
+    has no subject` and skips. The PR that retires the probe deletes the loop (deepen:
+    architecture 6).
+- 0.5 **Verdict-reason table parity (CTO 7).** In the 7761 suite, every verdict token the probe
+  can print must appear in the header's verdict table. Add a negative control.
+  - **Extract from code lines only:** the first token of `verdict_fail`'s `$1`, and the
+    `reason=<token>` in `echo "TRANSIENT|FAIL: …"` lines.
+  - **Read the table only from inside the header block**, so the table cannot satisfy itself
+    (deepen: test-design 3).
 - 0.6 **Fixtures.** Unless stated otherwise, rows are post-boundary, carry guard 7761, are
   object-shaped, and come from `MID_A`. `R` is the resume row. Each `TEST:` line is descriptive and
   carries its F-id as a tag (CTO 9).
@@ -355,24 +490,38 @@ applied**; see the disposition section.
 | F3 | **REORDER**: `R` at `PRE_A` (pre-boundary), then 2 post-boundary `noop-done` | exit 2 `done_not_resumed` |
 | F4 | **REORDER**: 2 `noop-done`, then `R`, with no noop after it | exit 2 `insufficient_post_replace_markers` |
 | F5 | `R` + 2 `noop-done`, all unstamped | exit 1 `stale_image` |
-| F7 | `R` + 2 `noop-done` + a `flag:"flipping"` row ("mixed flipping rows") | exit 1 `flush_path_transition_after_replace` |
+| F7 | `R` + 2 `noop-done` + a `flag:"flipping"` row whose reason is `noop-flipping` (outside every reason grep and `FLUSH_PATH_REASONS`, so only the flag grep and flag class can catch it) ("mixed flipping rows") | exit 1 `flush_path_transition_after_replace` |
 | F8 | `R` + 2 `noop-done` + `flip-complete` | exit 1 flush-path, naming `flip-complete` |
-| F9 | second finding after a compliant first: `R` + `noop-done` + `refuse-rearm-after-done` | exit 1 `drift_after_replace` |
+| F9 | second finding after a compliant first: `R` + `noop-done` + `refuse-rearm-after-done`, run **twice**, with the finding newest and then oldest in page order | exit 1 `drift_after_replace` both times |
 | F10 | **horizon**: early `flip-complete`, `R`, then 600 `noop-done` | exit 1 flush-path |
 | F11 | **direct-write drift**: `R`, 3 early `noop-aborted`, then 600 `noop-done` | exit 1 `drift_after_replace` |
-| F12b | 2 stamped `noop-aborted` in **string** shape | exit 1 `drift_after_replace` (string rows decode) |
+| F12b | object `R` + 2 stamped **string-shaped** `noop-done` (with `_MACHINE_ID` in raw) | exit 0 (string rows decode and carry `_mid`) |
 | F13 | F1 + Doppler stub `done` | exit 0 `doppler corroborates: done` |
-| F13a | F1 + Doppler stub `aborted` | exit 1 (a non-`done` Doppler value blocks PASS; Kieran 7) |
+| F13a | Doppler stub `aborted` (no rows needed: the Doppler arm exits first) | exit 1 (a non-`done` Doppler value blocks PASS; Kieran 7) |
 | F14 | **must-PASS, non-canonical**: F1 + a pre-boundary `flip-complete` + 2 non-JSON Doppler-stderr rows under the tag + a `web-1` `R` | exit 0 |
 | F16 | unstamped `R`, then 2 stamped `noop-done` | exit 2 `done_not_resumed` |
-| F18 | `FLIP_ROLLOUT_DRIFT_LIMIT=1`, 2 `R` rows, no findings | exit 2 `drift_query_truncated` |
+| F18 | `FLIP_ROLLOUT_DRIFT_LIMIT=1`, 2 `R` rows, then 2 stamped `noop-done` after both, no findings (dropping the guard would PASS) | exit 2 `drift_query_truncated` |
 | F21 | F5 + an unstamped `flip-complete` | exit 1 flush-path (outranks `stale_image`) |
 | F23 | `DRIFT_LIMIT=3`: 3 newer `web-1` `refuse-rearm-after-done` rows over one `soleur-inngest` `refuse-rearm-after-done` | exit 2 `drift_query_truncated` (raw page count) |
 | F24 | 2 stamped `noop-aborted` (existing D7, **inverted**) | exit 1 `drift_after_replace` |
 | F25 | **machine binding**: `R` on `MID_A`, 2 `noop-done` on `MID_B` | exit 2 `done_not_resumed` |
 | F26 | `R`, `noop-done`, a second `R`, `noop-done` on the same machine | exit 0 |
 | F27 | F1 + the refusal query fails (`STUB_FAIL_ON_TERM`) | exit 2 `refusals_query_failed` (never PASS; Kieran 5) |
+| F28 | F1 + a same-host `inngest-luks-cutover`-tagged `noop-aborted` (a LUKS FSM row) | exit 0 (tag isolation) |
+| F29 | F1 on `MID_A`, plus a flip-tag `MID_A` row inside `[AFTER−1h, AFTER]` (a sidecar moved past the machine's boot) | exit 2 `boundary_inside_owning_machine_lifetime` |
+| F30 | F1 with `R.start_ts:"unknown"` | exit 2 `done_not_resumed` (an unplaceable `R` cannot own) |
+| F31 | a stamped `noop-unset` row whose flag is a non-enum string `s3cr3t-value` | exit 1 `drift_after_replace`, and the probe output does **not** contain `s3cr3t-value` |
+| F32 | sidecar is a symlink (via `FLIP_ROLLOUT_AFTER_FILE` pointing at a symlink to a file containing `LEAKME`) | exit 2 `sidecar_is_symlink`, and the output does not contain `LEAKME` |
+| F33 | sidecar contains `LEAKME-not-a-date` | exit 2 `boundary_unparseable`, printing the length and not `LEAKME` |
+| F34 | F18's page-full shape with `OLD_BOUNDARY` (supplied, older than 7 days) | exit 3 `drift_query_truncated` (CANNOT ESTABLISH) |
+| F35 | a stamped `noop-aborted` with `start_ts:"unknown"` | exit 1 `drift_after_replace` (non-ISO drift row is a finding) |
+| F36 | 500 `web-1` rows only in LIVE (the page is full of foreign rows) | exit 2 `channel_dark` (the sentinel is stripped before the empty check; deepen: test-design 13) |
+| F37 | 25 findings | exit 1; exactly 20 rows plus `(+5 more)` printed; `FAIL: reason=` is the last line |
 
+- 0.6b **Every fixture asserts an anchored `reason=<token>` or verdict token positively, and the
+  competing token negatively.** For example, F18 asserts `drift_query_truncated` and asserts the
+  absence of `done_not_resumed`, `PASS` and `stale_image`. An exit code alone cannot discriminate
+  F7, F18, F21 or F23 from their mutants (deepen: test-design 6).
 - 0.7 **Re-base the existing fixtures to the post-cutover key.**
   - Tests 3, 3b, 10, 12, 13, D1 and D6 PASS on `R` + `noop-done` (or, for 12, carry the refusal on
     that base).
@@ -392,14 +541,25 @@ applied**; see the disposition section.
 - 1.1 **`scripts/betterstack-query.sh`.** Before building the `WHERE` clause, normalise an ISO-Z
   value for `--since` and `--until`:
   `[[ "$SINCE" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2})Z$ ]] && SINCE="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"`.
-  Update the comment accordingly.
-- 1.2 **`mine <since> <limit> <term>...`.**
+  Update the comment at the `--since accepts …` line accordingly, and remove the now-false "its
+  ClickHouse cast rejects the ISO `T…Z` form" note in `scripts/cutover-inngest.sh` (the
+  `confirm_flip_state` comment; deepen: architecture 3). The normalisation must run **before**
+  `sql_quote` and before the `--until` concatenation (deepen: security 5).
+- 1.2 **`mine <since> <limit> <term>...`** (and an optional `--until` pass-through for the F29
+  boundary check).
   - `limit` must be digits, or the call dies loudly (CTO).
-  - It decodes with an explicit `if (.message|type) == "object" then (.message + {_mid: ._MACHINE_ID}) | tojson else .message end`,
-    one compact row per line. Kieran 11: `// empty | tojson` would double-encode strings.
+  - It selects `.host == $h and .host_name == $hn and .SYSLOG_IDENTIFIER == $tag`, where `$tag`
+    is the flip tag, for emit_state queries (D2). The refusal query keeps its current selector,
+    because refusal lines are raw strings under the same tag.
+  - It decodes the message: an object is used as is; a string is tried with `fromjson?`, and if
+    that yields an object it is used, otherwise the raw string passes through. A decoded object is
+    emitted as `(. + {_mid: $row._MACHINE_ID}) | tojson`, one compact row per line. Kieran 11:
+    `// empty | tojson` would double-encode strings. Test-design 1: string-shaped JSON rows must
+    carry `_mid` too.
   - It appends `__PAGE_FULL__` when the raw page line count (`grep -c .`, never `wc -l`, so an empty
     page counts 0) equals `limit`.
-  - Callers strip the sentinel.
+  - Callers strip the sentinel **before** any emptiness check (`channel_dark`; deepen:
+    test-design 13).
   - The existing single-term callers (LIVE, derivation-adjacent) keep their behaviour.
 - 1.3 **Inline answer key.**
   - `POST_CUTOVER_FLAG="done"`, `DONE_ENTRY_REASON="flushed-resume-no-reflush"`
@@ -430,6 +590,19 @@ applied**; see the disposition section.
     collected rows are lost.
   - Use the herestring `grep -q` form, not a pipe, under `pipefail`.
   - Use no jq builtins newer than 1.7.0, and keep the `(expr?) as $v` form (existing D9 guard).
+- 1.5b **Output hygiene (deepen: security 1, 4, 9; observability 8).**
+  - Findings print through `_flag_for_display` and the reason allowlist.
+  - `_mid` prints as an 8-hex prefix.
+  - At most 20 rows print, followed by `(+N more)`.
+  - The `FAIL:` line repeats as the last line.
+  - `boundary_unparseable` prints a length, never the value.
+  - The sidecar read refuses symlinks and oversize content.
+- 1.5c **Seam disclosure (deepen: security 8).** The PASS line ends with `seams=default` when no
+  `FLIP_ROLLOUT_*` variable is set. Otherwise it ends with `seams=overridden:<names>`. Phase 3.3
+  runs under `env -u` for every `FLIP_ROLLOUT_*` and AC10 requires `seams=default`. Under the
+  sweeper's `env -i` it is always `default`.
+- 1.5d **Non-verdict aging (D4b).** The read-path TRANSIENTs go through one helper, `non_verdict`.
+  It exits 3 when the boundary is supplied and more than 604800 s old, and exits 2 otherwise.
 - 1.6 **Doppler arm.** It accepts `done` and prints "corroborates". Any other value, including
   `rolled-back` and `aborted`, FAILs as it does today (Kieran 7). The "braked and serving nothing"
   wording is replaced. The arm stays inert in the sweeper, which has no Doppler token.
@@ -438,7 +611,11 @@ applied**; see the disposition section.
   - `drift_after_replace` / `flush_path_*` → read the printed rows; a remediated transition is
     re-certified by moving the sidecar.
   - `done_not_resumed*` → op=resume, or move the sidecar if the host was replaced.
-  - `drift_query_truncated` / `*_query_failed` → re-run.
+  - `drift_query_truncated` / `*_query_failed` → re-run. Past 7 days these exit 3 (CANNOT
+    ESTABLISH): fix the read path.
+  - `boundary_inside_owning_machine_lifetime` → the sidecar was moved past the current machine's
+    boot. Drift on this machine needs human review, not a sidecar edit.
+  - `sidecar_is_symlink` / `sidecar_oversize` → restore the one-line regular file.
   - Retract the "24h drift window" claim and the claim that `cutover_armed` is "the FLUSHALL alarm
     on the one channel CI has". The FLUSHALL alarm is now `flush_path_transition_after_replace`.
   - Record the object-shape decode fact beside `mine()`.
@@ -458,12 +635,23 @@ applied**; see the disposition section.
   with the annotation and reds without it. The live-tree must-PASS stays. The assertion count rises
   by 1 (Kieran 14) and stays above the floor of 80.
 
+- 2.4 **CI path coverage (deepen: architecture 4, 5).** Add
+  `scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh` to `.github/workflows/infra-validation.yml`
+  `pull_request.paths`, with a comment naming #7761 and the parity loop. Add it to
+  `AFFECTED_INFRA_RUNNER_PATHS` in `scripts/lib/test-affected-paths.sh` too. Without this, a PR
+  that edits only the probe, for example by dropping a `DRIFT_GREPS` term, skips the parity guard.
+  This is the #8079 class the workflow's own comments record.
+
 ### Phase 3 — verification
 
 - 3.1 Run the 7761 suite, then raise `MIN_ASSERTIONS` to the measured count. Then run the **Guard
-  mutation matrices**. Apply each row as a scratch edit, confirm the named fixture reds, and revert.
-  Record the results in the PR body. This is where "each fixture discriminates its own reason" is
-  proven.
+  mutation matrices** against **copies**, via `FLIP_ROLLOUT_TEST_TARGET`.
+  - Do a pristine-copy run first; it must exit 0.
+  - A mutation counts as caught only if two things hold: the suite exits 1, **and** the named
+    F-id's own `FAIL:` line appears. A different fixture going red proves nothing about the named
+    row (deepen: test-design 9).
+  - Record the per-row results in the PR body. This is where "each fixture discriminates its own
+    reason" is proven.
 - 3.2 Run the checks and lints:
   - `tests/scripts/test-betterstack-query-archive.sh` and `apps/web-platform/infra/cutover-inngest-workflow.test.sh`;
   - `scripts/lint-followthrough-varq-ban.sh` and its test;
@@ -490,6 +678,10 @@ applied**; see the disposition section.
 - `apps/web-platform/infra/cutover-inngest-workflow.test.sh`: the `#6178` parity extraction extended
   to the probe.
 - `scripts/lint-followthrough-varq-ban.test.sh`: R3-M20 inverse re-pointed at a synthetic fixture.
+- `scripts/cutover-inngest.sh`: comment only. Remove the now-false "rejects the ISO `T…Z` form"
+  note in the `confirm_flip_state` header.
+- `.github/workflows/infra-validation.yml`: add the probe path to `pull_request.paths`.
+- `scripts/lib/test-affected-paths.sh`: add the probe path to `AFFECTED_INFRA_RUNNER_PATHS`.
 - `plugins/soleur/test/fixture-relative-assert.baseline.txt`: only if 3.2 reports a changed row.
 
 ## Files to Create
@@ -530,9 +722,13 @@ have a post-boundary, stamped `flushed-resume-no-reflush` on `M`, followed by at
 | Take the owning `R` from LIVE instead of the drift query | F1L |
 | Remove `flushed-resume-no-reflush` from `DRIFT_GREPS` | F1L, plus parity |
 | Re-admit `aborted` as a PASS state (drop `noop-aborted` from `DRIFT_GREPS`) | F24, plus F11 |
+| Drop the boundary-precedes-machine check | F29 |
+| Let an `R` with a non-ISO `start_ts` own `done` | F30 |
 
 **Harness rows.**
-- Revert the stub to last-`--grep`-wins: F1L reds, because the resume term is not the last one.
+- Revert the stub to last-`--grep`-wins: the 0.2 OR self-check reds. (v3 relied on F1L here, but
+  that depended on the term's position, so the reliance is withdrawn.)
+- Make the stub oldest-N: the 0.2 newest-N self-check reds.
 - Drop `_MACHINE_ID` from `row()`: F1 reds.
 - Must-PASS, non-canonical: F14, F26.
 
@@ -558,7 +754,7 @@ row order. An absence conclusion is never drawn from a truncated page.
 |---|---|
 | Restore the old newest-500 tag query as the drift source | F10, F11 |
 | Revert the ISO normalisation in `betterstack-query.sh` | 0.3 assertion |
-| Classify only the first returned row | F9 |
+| Classify only the first returned row | F9 (both page orders) |
 | Class = reason only (ignore flag) | F7 |
 | Run `stale_image` before findings | F21 |
 | Condition the exemption on guard/`_mid` | F16 (turns into drift FAIL) |
@@ -566,6 +762,12 @@ row order. An absence conclusion is never drawn from a truncated page.
 | Drop the truncation guard | F18 |
 | Count page-full after the host filter | F23 |
 | Swallow a refusal-query failure | F27 |
+| Drop the `SYSLOG_IDENTIFIER` field isolation | F28 |
+| Drop the non-ISO-drift-row-is-a-finding rule | F35 |
+| Print the raw `.flag`/`.reason` of a finding | F31 |
+| Remove the 7-day non-verdict aging | F34 |
+| Check emptiness before stripping the sentinel | F36 |
+| Drop the 20-row cap / trailing `FAIL:` line | F37 |
 
 **Harness rows.**
 - Make the stub ignore `--limit`: F10, F11 and F18 stop discriminating.
@@ -588,7 +790,8 @@ and is out of scope.
 | Mutation | Must go RED via |
 |---|---|
 | Revert to `.message? // empty` | F1 |
-| Use `tojson` unconditionally | F12b, test 12 |
+| Use `tojson` unconditionally (double-encodes string rows) | F12b (test 12 alone cannot catch it, because a quoted refusal string still contains the marker) |
+| Attach `_mid` to object rows only | F12b |
 | Use `// empty \| tojson` (double-encodes strings) | F12b |
 | Drop the `_mid` augmentation | F1, F25 |
 
@@ -648,7 +851,7 @@ correctness plus simplification. Brand-survival threshold is `none`, so the 3+1 
 **Taste, not applied (persisted to `knowledge-base/project/specs/feat-one-shot-7761-flip-probe-post-cutover-answer-key/decision-challenges.md`):**
 - **DHH 6.** Delete the derived-boundary arm (about 130 lines). The committed sidecar does make it
   dead for this probe's life. But deleting it widens this diff, removes the fallback the header
-  documents, and deletes about 12 tests that pin #7695's work. Recorded for the operator.
+  documents, and deletes about 12 tests that pin the #7695 provenance cap (shipped in PR #7887). Recorded for the operator.
 
 **Deferred with tracking issues:**
 - **CTO 3.** One shared `betterstack-query.sh` fake: #8697.
@@ -661,13 +864,17 @@ correctness plus simplification. Brand-survival threshold is `none`, so the 3+1 
   FAIL/TRANSIENT leaves it open, as today. The scheduler and every user's jobs are untouched either
   way.
 - **If this leaks, the user's data is exposed via:** no new vector. The probe reads Better Stack with
-  the existing `BETTERSTACK_QUERY_*` credential. It prints only FSM enum values, reasons and
-  timestamps (`_flag_for_display` still constrains the Doppler value it echoes into a public issue
-  comment). It adds no secrets and no new query surface.
+  the existing `BETTERSTACK_QUERY_*` credential. Everything it prints lands in a public issue
+  comment, so the output is constrained:
+  - flags go through `_flag_for_display`;
+  - reasons are allowlisted, because `noop-unset` and `unexpected-exit(from=…)` embed the raw flag;
+  - machine-ids print as 8-hex prefixes;
+  - the sidecar value never echoes;
+  - output is capped at 20 rows.
+
+  Fixtures F31–F33 and F37 pin this. It adds no secrets and no new query surface.
 - **Brand-survival threshold:** `none`
-- `threshold: none, reason: the diff touches only a follow-through verification probe, its test, a
-  one-line timestamp sidecar and a lint test; none of it executes on a production host or handles
-  user data.`
+- `threshold: none, reason: the diff is a read-only follow-through probe, its tests, a timestamp sidecar, the operator-side betterstack-query.sh reader, a comment in cutover-inngest.sh, two test files (one under apps/web-platform/infra/ that only greps sources), and a one-line pull_request.paths addition to infra-validation.yml that only widens when an existing validation job runs; none of it executes on a production host or handles user data.`
 
 ## Observability
 
@@ -681,6 +888,8 @@ error_reporting:
   destination: "the probe's stderr verdict line, relayed into the #7761 comment by scripts/sweep-followthroughs.sh"
   fail_loud: "exit 1 with 'FAIL: reason=<token>'; every non-verdict (query/decode/truncation) is exit 2 'TRANSIENT: reason=<token>', never a silent pass"
 failure_modes:
+  # Every detection runs on layer 3 (vector host_scripts_journald, allowlist apps/web-platform/infra/vector.toml -> Better Stack, tag inngest-cutover-flip)
+  # Every alert_route is layer 6 (scheduled-followthrough-sweeper.yml run log -> #7761 comment)
   - mode: "a FLUSHALL or flush attempt on the host after the replace"
     detection: "since-boundary transition query matches flip-complete / flushall-failed / dbsize-nonzero"
     alert_route: "FAIL reason=flush_path_transition_after_replace on #7761"
@@ -690,9 +899,21 @@ failure_modes:
   - mode: "host rests in rolled-back/aborted, or any other FSM transition, after the cutover"
     detection: "since-boundary drift query returns a non-exempt row (noop-aborted/noop-rolled-back/transition reason)"
     alert_route: "FAIL reason=drift_after_replace on #7761"
-  - mode: "decoder or read path cannot see rows"
-    detection: "query rc != 0, jq failure, or a full drift page with no finding"
-    alert_route: "TRANSIENT reason=<token> on #7761"
+  - mode: "the replace kept the pre-#7761 image"
+    detection: "post-boundary flip-tag noop-done rows carry no guard=7761 stamp (layer 3)"
+    alert_route: "FAIL reason=stale_image on #7761 (layer 6)"
+  - mode: "a Doppler secret name collided with a fixture seam on the live host (#7761 itself)"
+    detection: "SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED rows since the boundary (layer 3)"
+    alert_route: "FAIL reason=seam_refused on #7761 (layer 6)"
+  - mode: "the flip timer stopped emitting"
+    detection: "zero flip-tag rows from this host in the 2h LIVE window (layer 3)"
+    alert_route: "TRANSIENT channel_dark, FAIL channel_dark_past_deadline on #7761 (layer 6)"
+  - mode: "the sidecar was moved past the owning machine's boot, or is not a regular one-line file"
+    detection: "flip-tag row with _mid == M inside [AFTER-1h, AFTER]; symlink/oversize sidecar"
+    alert_route: "TRANSIENT boundary_inside_owning_machine_lifetime / sidecar_is_symlink / sidecar_oversize on #7761 (layer 6)"
+  - mode: "decoder or read path cannot see rows (drift_query_truncated, drift_query_failed, refusals_query_failed, query_failed, row_decode_failed)"
+    detection: "query rc != 0, jq failure, or a full drift page with no finding (layer 3 read path)"
+    alert_route: "TRANSIENT (exit 2) on #7761; exit 3 CANNOT ESTABLISH once a supplied boundary is over 7 days old, so a stuck non-verdict never reads NOT YET forever (layer 6)"
 logs:
   where: "Better Stack source soleur-inngest-vector-prd (journald tag inngest-cutover-flip, host=soleur-inngest) read through scripts/betterstack-query.sh"
   retention: "Better Stack hot window plus s3 archive arm (union-queried by betterstack-query.sh mode 2)"
@@ -720,9 +941,14 @@ complexity is medium, mostly the fixture harness.
 
 ## Test Scenarios
 
-The fixture table in Phase 0.4 is the scenario list. Each RED row must be run against the
-unmodified probe and observed red for its own reason, and each must-hold row observed green, before
-any probe edit.
+The fixture table in Phase 0.6 (F1–F37) is the scenario list, together with the 0.2 stub
+self-checks, the 0.3 ISO assertions and the 0.4/0.5 parity loops.
+
+- **RED commit (0.8):** the suite is red overall against the unmodified code. Most fixtures are red
+  because of the decoder defect, not their own reason.
+- **After GREEN (3.1):** each fixture's discriminating power is proven by the Guard mutation
+  battery, run against copies. A mutation counts only when the named fixture's own `FAIL:` line
+  appears.
 
 ## Acceptance Criteria
 
@@ -730,7 +956,9 @@ any probe edit.
 
 - [ ] AC1: The RED commit lands first (`cq-write-failing-tests-before`) and carries:
   - the stub-fidelity changes (0.2) and the object-shaped, `_MACHINE_ID`-carrying `row()` (0.1);
-  - fixtures F1–F27 and the re-based existing tests (0.6, 0.7);
+  - fixtures F1–F37 and the re-based existing tests (0.6, 0.7), each with anchored positive and
+    negative token assertions (0.6b);
+  - the stub self-checks and the `FLIP_ROLLOUT_TEST_TARGET` seam (0.2, 0.2b);
   - the ISO assertion in `test-betterstack-query-archive.sh` (0.3);
   - the probe-parity loop in `cutover-inngest-workflow.test.sh` (0.4);
   - the verdict-table parity check (0.5).
@@ -740,8 +968,9 @@ any probe edit.
 - [ ] AC2: `bash scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh` exits 0, with
   `MIN_ASSERTIONS` raised to the measured count. Every F-id in 0.6 appears as a tag in a `TEST:`
   line.
-- [ ] AC3: The Phase 3.1 mutation run went red on the named fixture for **every** row of Guards
-  1–3, and the per-row result is recorded in the PR body.
+- [ ] AC3: The Phase 3.1 mutation battery ran against copies via `FLIP_ROLLOUT_TEST_TARGET`, after
+  a pristine-copy run that exited 0. For **every** row of Guards 1–3 the suite exited 1, and the
+  named F-id's own `FAIL:` line appeared. The per-row result is recorded in the PR body.
 - [ ] AC4: The answer key is inline.
   `grep -nE '^[^#]*FLIP_ROLLOUT_(EXPECTED_GUARD|EXPECTED_FLAG|MIN_MARKERS|TERMINAL)' scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`
   returns nothing, and `grep -cE '^[^#]*(TERMINAL_SAFE_FLAGS|EXPECTED_FLAG=|DRIFT_WINDOW=)'`
@@ -750,8 +979,9 @@ any probe edit.
   `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` exit 0. The first shows the ISO
   normalisation assertions and the second shows the probe-parity loop, each with its negative
   control.
-- [ ] AC6: `scripts/followthroughs/inngest-cutover-flip-rollout-7761.after` is tracked, and its
-  content matches `^2026-09-23T19:36:32Z$`. The `AFTER_FILE` line carries no `# repo-path: runtime`.
+- [ ] AC6: `scripts/followthroughs/inngest-cutover-flip-rollout-7761.after` is tracked with git
+  mode `100644` (`git ls-files -s` shows a regular file, not `120000`). Its content matches
+  `^2026-09-23T19:36:32Z$`. The `AFTER_FILE` line carries no `# repo-path: runtime`.
   The comment beside it states the sidecar lifecycle.
 - [ ] AC7: `bash scripts/lint-followthrough-varq-ban.sh` exits 0, and
   `bash scripts/lint-followthrough-varq-ban.test.sh` exits 0 with a count one above today's 88. Its
@@ -762,13 +992,20 @@ any probe edit.
 - [ ] AC9: The Phase 0.0 live precondition is recorded in the PR body: 1 row since the boundary
   (the 19:42:45Z resume, object-shaped, `_MACHINE_ID 3cff04d3…`), and ISO `--since` rc 22 on the
   unmodified reader.
-- [ ] AC10: The Phase 3.3 pre-merge live read prints a line beginning `PASS: #7761 delivered` and
-  naming `owned since 2026-09-23T19:42:45Z`. That line is pasted into the PR body. A non-PASS is
+- [ ] AC10: The Phase 3.3 pre-merge live read runs with every `FLIP_ROLLOUT_*` unset. It prints a
+  line beginning `PASS: #7761 delivered`, naming `owned since 2026-09-23T19:42:45Z` and ending
+  `seams=default`. That line is pasted into the PR body. A non-PASS is
   investigated before merge and leaves this AC unticked.
 - [ ] AC11: The PR body uses `Ref #7761` and no closing keyword. It states that the fix had already
   been delivered by earlier replaces, with guard-stamped transition rows since at least 09-15, and
   that this PR changes nothing on any host. It also references #8697 and #8698 as the deferred
   follow-ups.
+
+- [ ] AC11b: `.github/workflows/infra-validation.yml` `pull_request.paths` and
+  `AFFECTED_INFRA_RUNNER_PATHS` in `scripts/lib/test-affected-paths.sh` both list
+  `scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`. The `scripts/cutover-inngest.sh`
+  note claiming ISO is rejected is gone:
+  `grep -c 'rejects the ISO' scripts/cutover-inngest.sh` returns 0.
 
 ### Post-merge (pipeline)
 

@@ -27,7 +27,7 @@ The plan keeps the arm unchanged, apart from giving `DERIVE_WINDOW` its own `24h
 
 - Deleting the arm widens a diff whose job is to re-key the answer key.
 - The arm is the documented fallback if the sidecar is ever removed.
-- Its tests pin #7695's provenance-cap work: a derived boundary must never FAIL.
+- Its tests pin the provenance cap tracked under issue #7695 and shipped in PR #7887: a derived boundary must never FAIL.
 
 Neither choice is unsafe. Keeping the arm costs code nobody will execute. Deleting it costs a
 fallback that is unlikely to be needed before #7761 closes.
