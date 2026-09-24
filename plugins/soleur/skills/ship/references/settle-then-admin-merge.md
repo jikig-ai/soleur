@@ -94,6 +94,8 @@ The hatch above is *agent-initiated*, which is why it is scoped to zero-conflict
 
 Two boundaries survive operator authorization, by construction: **UNTRUSTED-CI** (a PR editing `.github/workflows/` or `.github/actions/` has no agent admin-merge path — the operator merges it by hand, because the PR's own runs can mint any required context) and **DIRTY** (`--admin` cannot execute on an unmergeable PR at all).
 
+**UNTRUSTED-CI is announced at mark-ready (ship Phase 6 step 6), not here.** Such a PR still merges through the normal queued auto-merge; only the agent `--admin` fallback is missing. The check uses `--no-renames` so a moved workflow counts, matching `admin-merge-ready.sh`'s `previous_filename` test. **Why:** #8611, #8683.
+
 If `G`'s checks went red between certification and now (a re-run on the old sha), the gate sees it — the runs are re-read fresh, and a `FAILED` there is a real refusal, not a stale artifact.
 
 **Expected side effect (RETIRED by #5806 / ADR-217): an admin-merge now DEPLOYS.** This paragraph used to say the post-merge `web-platform-release` run goes RED with `deploy: skipped`, because `await-ci` polled for CI's `test` green on the squash SHA, timed out on an admin-merge, and skipped the prod `deploy`. **`await-ci` no longer exists.** `web-platform-release.yml` is now split across two triggers: the `push` arm builds and publishes (`release` job only), and a `workflow_run` arm fires **on `CI` completion** and carries the whole deploy chain (`resolve-target` → `migrate` → `verify-migrations` → `verify-doppler-secrets` → `deploy` → `live-verify`).
