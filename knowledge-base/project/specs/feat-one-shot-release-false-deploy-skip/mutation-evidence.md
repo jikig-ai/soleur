@@ -25,3 +25,28 @@ Run once at work time (2026-09-24) against commit 4e0e6ccbba in a detached scrat
 | H5 | H5 | region lines changed: 0; suite: 0+/1- | pass | decision rc=1 [L1b L5 L8b L9 S1 ] | invariants rc=0 [] |
 
 **Readings.** Every Guard 1 (M1–M8) and Guard 2 (M1–M7) mutation is killed by the row the plan named (L1, L6, L1, L7, P1+L1, S1, L8, P2; L2, L3, A2, X2 ×3, A2b), with CONTROL passing in every row. H1: hardcoding the pathspec in the harness makes G1-M5 invisible to the decision suite (rc 0); only P1 still sees it, which is why the harness reads the YAML. H5: dropping the `cd` into the fixture clone flips S1/L5/L9 without any workflow mutation. **H3 deviated from the plan:** reverting `get()` to `head -1` and dropping the one-verdict count did NOT revive G2-M3, because A2's exact `rc -eq 1` assertion kills it independently (the mutant ends rc 0). The count assertion is therefore a second, not a sole, kill for that mutant.
+
+## Review-fix battery (after the 10-seat review panel)
+
+Same method, against the review-fix commits, one mutation per row, restored from HEAD between rows, CONTROL green in every row.
+
+| mutation | killed by |
+|---|---|
+| `_files` back to `printf … \| head -n 3 … \| head -c 300` (the SIGPIPE shape) | LBIG, LBIGb |
+| `RELEASE_LOOKUP_BACKOFF_S=0` | S1b (asserts the sleep values, not the count) |
+| fallback `sort_by(.) \| last` → `first` | X3 |
+| primary `sort_by(.id) \| last` → `first` | X4 |
+| drop `\|\| true` from the lazy fetch | LFETCH, LFETCHb |
+| `_rc` initialised once, never reset per attempt | T1, T1b |
+| primary read without `.head_branch == "main"` | X5 |
+| no `%` escaping of filenames | LPCTb |
+| head_sha check back to an 8-char hex prefix | F7b |
+| notice without `[skip_reason=…]` | S1c |
+| unfiltered read gains `&branch=main` (a search read again) | 28 rows (the stub serves only the exact query) |
+| numeric run-id check disabled | MD |
+| `lookup_path` job output deleted | W1 |
+| CAUSE arm for `release_run_missing` renamed | W4 |
+| NEXT arm for `release_run_missing` renamed | W5 |
+| `continue-on-error: true` on step `resolve` | W3 |
+| a second `cond && clean_skip … "no_release_run"` | W2 (first run SURVIVED: W2 counted line-leading producers only; widened in 185dd9ac7d, then killed) |
+| fallback select without `.event == "push"` | X2, X2b, G8 |
