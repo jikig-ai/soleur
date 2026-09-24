@@ -18,6 +18,45 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24.
+**Agents:** architecture-strategist, test-design-reviewer, observability-coverage-reviewer,
+git-history-analyzer (citations) and a verify-the-negative sweep. Before that: plan review (DHH,
+Kieran, code-simplicity, CTO devex), a CTO domain assessment and a scoped advisor consult.
+
+### Key improvements
+
+1. **P0 blocker found and fixed (architecture review).** The existing
+   `scripts/sentry-monitor-binding-gate.sh` requires every `sentry_alert` to bind exactly the
+   issue-stream detector `1213799`. It runs in `plan_pr` (`apply-sentry-infra.yml:374`) and before
+   the apply (`:899`), and it has no acknowledgement path. The new rule would have turned both red.
+   New Phase 2.3 and Guard 3 make the gate check each rule by its address.
+2. **A monitor recreated outside Terraform would wedge the root.** A monitor deleted in the UI is
+   recreated by the next plan with an unknown id. Guard 2 then blocks every Sentry apply until the
+   monitor is moved to `unrouted`. This is now documented as a failure mode, in the README
+   procedure, and in Guard 2's error text ("created or recreated").
+3. **Guard 2's error text would have produced the wrong fix instruction.** The phrase "unknown at
+   plan time" is matched by `sentry-alert-reference-gate.sh:80`, which prints "Set the attribute
+   explicitly". The floor is reworded, and a row asserts that the wrong line is absent.
+4. **The test designs were tightened.** Guard 2 row 1 now fails for the right reason. T19 uses a
+   1-of-2 fixture, with a slug that differs from the name. The warning goes to a captured stderr
+   file. Guard 1 gained a stale-unrouted-key row and handles a single-line `monitor_ids`. The Phase
+   4.4 row checks for the exact expression.
+5. **Observability.** Every failure mode names its layer. Muted monitors now show up in the repo
+   (the audit counts muted environments), reversing a Cut List entry. The accepted residuals are
+   recorded: continuous fire verification, email that is delivered but never read, and monitors
+   disabled for billing.
+
+### New considerations discovered
+
+- **M12:** the action throttle is keyed per `(workflow, action, group)`, confirmed in the Sentry
+  source.
+- **Removal is safe in a single apply.** The alert update that drops a detector id is ordered
+  before that monitor is destroyed, because the alert depends on it.
+- **Citations:** all 9 checked claims (a-i) and all 9 negative claims were confirmed against
+  `origin/main`. That includes the count of "19 monitor-block commits in 90 days".
+
 ## Overview
 
 Sentry has 59 cron-monitor detectors for the web-platform project. None of them is connected to an
@@ -65,6 +104,7 @@ Measured 2026-09-24 from the schema and source at the exact pin. No changelog wa
 | M9 | Empty `action_filters[].conditions` | This is schema-optional. `Fill` (`:950`, `:1340`) reads an empty list back as an empty list, not null, so `conditions = []` causes no perpetual diff. The Sentry-default workflow 566201 in the committed capture `phase34-live-workflows-capture-2026-09-09.json` carries `actionFilters[0].conditions: []`, so live Sentry accepts it. |
 | M10 | Can the IaC token connect a **cron** detector? getsentry `workflow_engine/endpoints/validators/utils.py` (HEAD `2775d16350`) | Connecting a system-created detector (the issue stream) needs `{"org:write"}`. Connecting a user-created detector (a cron monitor) needs any of `{"org:write", "alerts:write"}` on its project. The IaC token already connects the system-created issue-stream detector on every `sentry_alert` write, most recently the #8505 create on 2026-09-23. So it holds `org:write`, which also satisfies the cron case. A `terraform plan` cannot show a 403, and this is the reason the plan does not need a separate write probe. |
 | M11 | Does a cron failure reach **detector-bound** workflows at all? getsentry `monitors/logic/incident_occurrence.py:147-150` + `workflow_engine/processors/detector.py` `_get_detector_for_event` (HEAD `2775d16350`) | The occurrence is built with `evidence_data["detector_id"] = detector.id` whenever `get_detector_for_monitor(monitor)` returns one. The workflow engine resolves the event's detector from exactly that field (`issue_occurrence.evidence_data.get("detector_id")`) and evaluates that detector's workflows, as well as the issue-stream detector's. Every monitor here was created through the detectors API (M4), so each has a detector. **So hop 2 (occurrence to this workflow) is wired at the source.** Phase 0.3 confirms it on one live cron event. |
+| M12 | Is `frequency_minutes` per issue or per workflow? getsentry `workflow_engine/processors/action.py` (HEAD, 2026-09-24) | The throttle reads `workflow.config.get("frequency", 0) * timedelta(minutes=1)` (`:85`). It records `WorkflowActionGroupStatus` rows keyed `(workflow_id, action_id, group_id)` (`:136-156`, `ON CONFLICT (workflow_id, action_id, group_id)`). **So it is per group, meaning per monitor environment.** Throttling one monitor never silences another. |
 
 **Mute is NOT expressible.** There is no attribute in M3, and none in `api.yaml@v0.15.7` (`grep -ci mute` = 0).
 Sentry mutes per **monitor environment** (`MonitorEnvironment.is_muted`). It is written by
@@ -102,7 +142,7 @@ the routing graph `monitor <-(slug)- cron detector -(workflowIds)-> workflow`.
 
 **Property List (Phase 0.6b).**
 
-- P1. A failed or missed check-in on any routed, unmuted cron monitor reaches the operator's inbox.
+- P1. A failed or missed check-in on any routed, unmuted, active cron monitor reaches the operator's inbox.
 - P2. A flapping monitor cannot flood the inbox (at most one email per monitor per 24 h).
 - P3. A cron monitor added later cannot be silently left unrouted.
 - P4. A cron monitor created in the same PR as its route fails loudly at PR time, not as a red `main` after apply.
@@ -122,10 +162,11 @@ the routing graph `monitor <-(slug)- cron detector -(workflowIds)-> workflow`.
   59 as unrouted, which is false and would need a new predicate. The projection allowlist
   (`condition_kinds: ["tagged_event"]`) would need a new kind on both sides. Recorded as the rejected
   alternative in the ADR amendment.
-- A repo-side "muted monitor" audit class: P5 is met by the per-monitor decision table. Sentry
-  itself emails members when it auto-mutes ("N of your Cron Monitors have been muted",
-  `detect_broken_monitor_envs.py`). Cut. If the table later shows mutes recurring unseen, that is
-  the re-evaluation trigger.
+- ~~A repo-side "muted monitor" audit class~~. **Reinstated at deepen-plan** as a count plus one
+  `::warning::` inside the Phase 3.4 Class A edit (the observability review). Sentry's own
+  "N of your Cron Monitors have been muted" email arrives in the same inbox as the alert itself,
+  so a routed-but-muted monitor had no signal outside that one channel. The `monitors/` payload
+  the audit already fetches carries `environments[].isMuted`, so the cost is one jq expression.
 - Destroy-and-recreate to clear a mute: `cron-monitors.tf` records (#3958 residual, above
   `workspaces_luks_verify`) that a removed monitor is **deactivated, not deleted**. Re-adding the name
   adopts the existing object, mute included. It also needs `[ack-destroy]`. Cut.
@@ -156,8 +197,12 @@ monitor is added.
   to an added block, which passes), the tripwire (refuses only `sentry_issue_alert` creates and
   legacy-trigger `sentry_alert` writes, which pass), the reference gate (the committed
   `alert-reference.json` must equal the plan projection, so it needs regeneration), the AC17
-  declared/observed set (globs `./*.tf`, so the new file is counted; there is no `for_each`/`count`,
-  which AC17 forbids), and the post-apply fidelity probe (its reference is projected from the apply
+  declared/observed set (globs `./*.tf` with a `^resource` anchor, so the new file is counted; a
+  `for_each`/`count` address would not match that anchor and would surface as a named AC17
+  divergence, `apply-sentry-infra.yml:1224-1229`), the **monitor-binding gate**
+  (`scripts/sentry-monitor-binding-gate.sh`, `plan_pr` `:374` and pre-apply `:899`: every non-delete
+  `sentry_alert` must bind exactly `1213799`, so it must change, see Phase 2.3), and the post-apply
+  fidelity probe (its reference is projected from the apply
   plan, `:866-881`).
 - `apps/web-platform/scripts/sentry-monitors-audit.test.sh` T25 derives `n_salert` across
   `infra/sentry/*.tf`, and the README must carry the bold phrase "34 `sentry_alert` rules".
@@ -222,7 +267,7 @@ in this PR.
   **Stop**: the detector-bound design cannot fire, and the issue-stream plus `issue_category`
   alternative (§Cut List) becomes the design. That change goes back through plan review; it is not
   improvised in the work phase.
-- 0.4 Post the measurement (0.1-0.3) plus the provider verdict (M1-M11) as a comment on #8630
+- 0.4 Post the measurement (0.1-0.3) plus the provider verdict (M1-M12) as a comment on #8630
   **before** the PR is marked ready.
 
 (The earlier 0.4 probe of the Sentry-default workflow's `lastTriggered` was cut at plan review: it
@@ -308,9 +353,10 @@ resource "sentry_alert" "cron_monitor_failure" {
   check-ins are real (GitHub is not starting the runs), they recover and fail again several times a
   day, and the throttle caps them at one email per day each. They are also the first live proof that
   the route works (AC16). #8495 is not absorbed. The accepted cost (CTO devex review) is about two
-  known-noise emails a day until #8495 lands. The recorded exit: if #8495 is still open 14 days
-  after the first observed fire, move the pair to `cron_monitor_alert_unrouted` citing #8495 in a
-  follow-up PR, so this noise does not become the operator's reason to filter the alert.
+  known-noise emails a day until #8495 lands. The observability review pointed out that the pair
+  are also the only **continuous** proof that the route fires. So there is no automatic exit: they
+  stay routed until #8495 fixes their cadence. The noise-versus-canary trade-off is recorded as
+  DC-1 in `decision-challenges.md`.
   The email goes to every active org member: cron issues have no owners, so `issue_owners` always
   falls through to `ActiveMembers`. With one operator that is the right audience. With more members
   it is everyone.
@@ -338,13 +384,31 @@ resource "sentry_alert" "cron_monitor_failure" {
 - 2.2 **Guard 2: the unknown-detector floor** in `tests/scripts/lib/sentry-alert-projection.jq`
   `tf_rule`, placed right after the existing `monitor_ids` array floor:
   `if ($v.monitor_ids | any(. == null)) then error("\($a): monitor_ids carries \([...] | length) element(s) unknown at plan time — a monitor created in this plan cannot be routed in the same apply (its detector id does not exist yet); list it in local.cron_monitor_alert_unrouted in cron-monitor-alerts.tf with a (#N) reason and route it in a follow-up PR after the first apply") else . end`.
+  The actual message must **not** contain the phrase `unknown at plan time`. That substring is
+  matched by `scripts/sentry-alert-reference-gate.sh:80` (`*"unknown at plan time"*`), which then
+  prints "Set the attribute explicitly in the block", the wrong remedy. Use: `monitor_ids carries N
+  detector id(s) that do not exist yet (a monitor created or recreated in this plan)`. Also add a
+  dedicated `case` arm in `sentry-alert-reference-gate.sh` that echoes the floor's own remedy.
   Fixture rows go in `tests/scripts/test-sentry-alert-reference-gate.sh`, which already builds plan
   documents with `monitor_ids` (its fixture builder, ~lines 54-57). Give `sensitive_values.monitor_ids`
   the same length as `monitor_ids`. Through the gate script the floor surfaces as **rc 1**
   (`sentry-alert-reference-gate.sh` exits 1 on a jq error), so matrix rows use the suite's `_red`
   helper plus the exact error text. One extra row calls `jq -f` directly and expects **rc 5**. Raise
   the suite's `EXPECTED_TESTS` by the number of rows added. Write the rows before the floor.
-- 2.3 Why Guard 2 is needed and not merely tidy: without it, a future "add monitor 60 and route it"
+- 2.3 **Guard 3: the monitor-binding gate becomes address-aware (P0, deepen-plan).**
+  `scripts/sentry-monitor-binding-gate.sh` today requires every non-delete `sentry_alert` to bind
+  exactly `1213799` (`EXPECTED="${2:-1213799}"`). Change it so that:
+  - every `sentry_alert` **other than** `sentry_alert.cron_monitor_failure` still binds exactly
+    `$EXPECTED`. The correlated-rebind protection for the 33 issue-stream rules is unchanged.
+  - `sentry_alert.cron_monitor_failure` binds a **non-empty** set in which every element is the
+    `.values.id` of a `sentry_cron_monitor` in the same plan's `planned_values`, and which never
+    contains `$EXPECTED`. A `null` element fails too, matching Guard 2.
+  - a second address that binds cron detectors is refused until the gate names it. The cron-bound
+    address set is a literal in the gate, for the same reason `$EXPECTED` is.
+
+  Tests go first, in `tests/scripts/test-sentry-alert-adoption-guards.sh`, which already drives this
+  gate. Whether each element count matches the declared monitors is Guard 1's job, not this gate's.
+- 2.4 Why Guard 2 is needed and not merely tidy: without it, a future "add monitor 60 and route it"
   PR projects `detectorIds: [..., null]`. The PR-time reference gate then goes green once the author
   commits that projection. The post-apply probe compares live (the real id) with a reference
   projected from the apply plan (`null`), and `main` goes red after a **complete** apply. That is
@@ -366,7 +430,12 @@ resource "sentry_alert" "cron_monitor_failure" {
   - **PR 2**, after PR 1's apply, moves the label into `monitor_ids`. It regenerates
     `alert-reference.json` from the CI artifact, because `detectorIds` changes.
   - **Removing a monitor** deletes its `monitor_ids` element in the same PR, and that PR also
-    regenerates `alert-reference.json`.
+    regenerates `alert-reference.json`. This is safe within one apply: the alert depends on the
+    monitor, so its update is ordered before the monitor is destroyed.
+  - **A monitor deleted outside Terraform** is recreated by the next plan with an id that does not
+    exist yet, and Guard 2 then refuses every Sentry plan. To recover: move the label to
+    `cron_monitor_alert_unrouted`, let the apply recreate the monitor, then route it again in the
+    next PR (architecture review).
   - The rule is called **"the two-PR rule"** everywhere, and the channel is called "email" (CTO devex
     naming).
 - 3.3 `apps/web-platform/infra/sentry/cron-monitors.tf` header: one paragraph pointing new monitors at
@@ -380,10 +449,20 @@ resource "sentry_alert" "cron_monitor_failure" {
   - **One `::warning::` annotation** naming the slugs, written to stderr **outside** the report
     redirect like the script's other warnings. This makes a pending route under the two-PR rule
     visible on every apply run.
-  - **Tests first** in `apps/web-platform/scripts/sentry-monitors-audit.test.sh`. T19 today asserts
-    that no slug is listed (a negated `grep -qE` for the `m1` bullet); it must be **inverted** to assert that
-    the unrouted slug is listed, not merely reworded. Adjust T3/T15 if their strings move, and add a
-    row asserting the `::warning::` goes to stderr and not into the report file.
+  - **A muted-environment count** from the `monitors/` payload the script already fetches
+    (`environments[].isMuted == true`). It is listed in the report and named in the same stderr
+    `::warning::`. A routed monitor that is muted sends nothing, so this is the in-repo signal for
+    that state (the observability review).
+  - **Tests first** in `apps/web-platform/scripts/sentry-monitors-audit.test.sh`, following the
+    test-design review:
+    - T19 today asserts that no slug is listed (a negated `grep -qE` for the `m1` bullet). **Invert**
+      it, using T3's 1-of-2 fixture shape: `m1` is listed and the routed slug is not.
+    - Add a case whose slug differs from its detector `.name`, so the slug-first path is exercised,
+      not only the name fallback.
+    - Capture stderr to its own file. Assert the warning names the unrouted slug, is absent from
+      the report file, and is absent in T15's all-routed case.
+    - Add a muted-environment fixture row.
+    - Adjust T3/T15 if their strings move.
 
   The Class A **predicate** (`workflowIds` empty) does not change.
 
@@ -399,7 +478,10 @@ resource "sentry_alert" "cron_monitor_failure" {
   the per-leg `[ERROR] Terraform plan failed for …` email (`if: always() && steps.plan.outputs.exit_code != '0'`),
   and that path is unchanged. The job's liveness still comes from the other two legs' check-ins.
   This is a **coverage reduction** for the sentry leg on the monitor channel, and the amendment says
-  so: the `[ERROR]` email is its safety net, not the monitor.
+  so: the `[ERROR]` email is its safety net, not the monitor. That email step only logs a
+  `::warning::` if the Resend send fails. The second channel for a Sentry API read failure is
+  `scheduled-sentry-alert-drift.yml`: it uses the same token, has its own monitor slug and files an
+  `unavailable` issue. The amendment names it (observability review).
 - 4.2a The other two legs (`apps/web-platform/infra`, `infra/github`) keep posting to the shared
   slug, so one leg's `error` can still be followed by another leg's `ok`. That is **accepted and
   recorded**. Criterion (b) was written about the sentry leg's vendor-caused plan failures. A
@@ -412,8 +494,10 @@ resource "sentry_alert" "cron_monitor_failure" {
   same day).
 - 4.4 Test: add a row to `sentry-monitor-iac-parity.test.ts`'s existing heartbeat block. Select the
   step by job `drift-check` **and** step name `Sentry check-in (final)`, because the file has a
-  second heartbeat step, in `heartbeat-live-reconcile` (Kieran). Assert that its `if:` excludes the
-  sentry leg. The must-PASS row is the existing #7834 shape guard.
+  second heartbeat step, in `heartbeat-live-reconcile` (Kieran). Assert that its `if:` **equals**
+  the AC8 expression exactly, since "contains" would accept `always() || …`. Also assert that the
+  quoted path is one of the job's `matrix.directory` entries, so a typo cannot exclude nothing
+  (test-design review). The must-PASS row is the existing #7834 shape guard.
 
 ### Phase 5 — Paging-claim corrections (fix only what becomes false)
 
@@ -452,10 +536,11 @@ they are.
 - 6.1 Append `**Amendment (2026-09-24, #8630) — cron detectors route to one email workflow**` to
   `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md`. It is append-only:
   no earlier sentence is edited. Plan review trimmed it to the decisions, with a link to this plan
-  for the evidence (M1-M11 and the rejected alternatives):
+  for the evidence (M1-M12 and the rejected alternatives):
   - the verdict (expressible at 0.15.7) and the one-workflow design
   - the two-PR rule, and why it exists (Guard 2 and the #8050 contract)
   - that mute cannot be expressed in the provider, and that Sentry auto-mutes
+  - that the monitor-binding gate (an ADR-031 control) becomes address-aware (Guard 3)
   - the disposition of exit criterion (b), including the sentry leg's coverage reduction and the
     accepted shared-slug behaviour of the other two legs
   - the revisit option from the CTO review: a live-to-live `detectorIds` check that would retire
@@ -500,8 +585,11 @@ main (paths: apps/web-platform/infra/sentry/**), creating the cron-monitor-failu
 - `apps/web-platform/infra/sentry/cron-monitors.tf` (header comment only)
 - `tests/scripts/lib/sentry-alert-projection.jq` (`tf_rule` floor only; `def excluded` untouched)
 - `tests/scripts/test-sentry-alert-reference-gate.sh`
+- `scripts/sentry-alert-reference-gate.sh` (one `case` arm for the Guard 2 floor's message)
+- `scripts/sentry-monitor-binding-gate.sh` (Guard 3: an address-aware expected binding)
+- `tests/scripts/test-sentry-alert-adoption-guards.sh` (Guard 3 rows)
 - `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` (Phase 4.4 row only)
-- `apps/web-platform/scripts/sentry-monitors-audit.sh` (Class A: unrouted-slug listing and one `::warning::`)
+- `apps/web-platform/scripts/sentry-monitors-audit.sh` (Class A: an unrouted-slug listing, a muted-environment count, and one stderr `::warning::`)
 - `apps/web-platform/scripts/sentry-monitors-audit.test.sh`
 - `.github/workflows/scheduled-terraform-drift.yml` (one `if:`)
 - `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md` (append-only amendment)
@@ -584,21 +672,33 @@ error_reporting:
   destination: "Sentry web-platform project (the cron issue itself, MonitorIncidentType 4001)"
   fail_loud: "apply-sentry-infra.yml red on apply/plan/gate failure; sentry-alert-live-fidelity.sh FAIL line naming cron-monitor-failure on any live divergence (detectorIds, actions, triggers)"
 failure_modes:
-  - mode: "the workflow is deleted or edited through Sentry's web app (a detector detached, the email action removed)"
-    detection: "post-apply and daily scripts/sentry-alert-live-fidelity.sh (scheduled-sentry-alert-drift.yml) field-for-field against alert-reference.json; the scheduled-terraform-drift.yml sentry leg (12h full-root plan, exit 2 files an infra-drift issue)"
+  - mode: "the workflow is deleted, disabled or edited through Sentry's web app (a detector detached, the email action removed)"
+    detection: "Layer: Sentry cron monitor scheduled-sentry-alert-drift + workflow run log ::error::. scripts/sentry-alert-live-fidelity.sh runs post-apply and daily against alert-reference.json and emits DELETED / DISABLED / DRIFT / MONITOR UNBIND findings; the scheduled-terraform-drift.yml sentry leg (12h full-root plan, exit 2) files an infra-drift issue"
     alert_route: "infra-drift GitHub issue + the fidelity probe's failure email"
-  - mode: "a new sentry_cron_monitor is declared without a route"
-    detection: "Guard 1 (sentry-monitor-iac-parity.test.ts) red at PR time"
+  - mode: "a new sentry_cron_monitor is declared without a route, or an unrouted key goes stale"
+    detection: "Layer: workflow run log (PR check). Guard 1 (sentry-cron-monitor-routing-parity.test.ts) red at PR time"
     alert_route: "PR check failure"
-  - mode: "a monitor is routed in the same PR that creates it (detector id unknown at plan)"
-    detection: "Guard 2 (sentry-alert-projection.jq tf_rule floor) errors in the plan_pr reference gate"
-    alert_route: "PR check failure naming the address and the unrouted-map remedy"
-  - mode: "a routed monitor environment is auto-muted by Sentry (about 28 days of continuous failure)"
-    detection: "Sentry's own muted-monitors email to members (detect_broken_monitor_envs.py); the 14-day broken-monitor email before it"
-    alert_route: "operator email from Sentry (vendor mechanism)"
+  - mode: "a monitor is routed in the plan that creates or recreates it (detector id does not exist yet)"
+    detection: "Layer: workflow run log (PR check / pre-apply step). Guard 2 (sentry-alert-projection.jq tf_rule floor) errors in the plan_pr reference gate and in the apply job's pre-apply projection"
+    alert_route: "PR check failure, or a red apply job naming the address and the unrouted-map remedy"
+  - mode: "the cron rule binds the issue-stream detector, or an issue-stream rule is rebound to cron detectors"
+    detection: "Layer: workflow run log (PR check + pre-apply). Guard 3 (scripts/sentry-monitor-binding-gate.sh, address-aware)"
+    alert_route: "PR check failure / red apply job"
+  - mode: "a routed monitor environment is muted (Sentry auto-mutes after about 28 days of continuous failure)"
+    detection: "Layer: workflow run log ::warning:: from sentry-monitors-audit.sh (muted-environment count, Phase 3.4) on every apply-sentry-infra.yml run; plus Sentry's own muted-monitors email (vendor, same inbox)"
+    alert_route: "apply job annotation + audit report"
   - mode: "a detector loses its workflow binding without the workflow changing"
-    detection: "sentry-monitors-audit.sh Class A > 0 lists the unrouted slugs (Phase 3.4) on every apply-sentry-infra.yml run"
-    alert_route: "the audit report (sentry-audit-gate / apply job summary)"
+    detection: "Layer: Sentry cron monitor scheduled-sentry-alert-drift (daily fidelity detectorIds comparison); secondarily the audit's Class A ::warning:: on apply runs"
+    alert_route: "fidelity probe failure email; apply job annotation"
+  - mode: "ACCEPTED RESIDUAL: the route is configured correctly but Sentry stops firing it (a vendor-side change)"
+    detection: "Layer: none continuous. AC16 proves one live fire after merge; while #8495 is open its two watchdogs re-fire daily and any operator can read the workflow's group history. Not re-checked on a schedule (DC-5)"
+    alert_route: "none automated; recorded in decision-challenges.md DC-5"
+  - mode: "ACCEPTED RESIDUAL: the email is delivered but not read (bounce, spam folder, an operator filter)"
+    detection: "Layer: none. This gap is shared by all 33 existing rules and is not new here"
+    alert_route: "none"
+  - mode: "ACCEPTED RESIDUAL: a monitor is disabled by Sentry for seat billing (#3958) and keeps its binding"
+    detection: "Layer: none in this PR. The route looks healthy but can never fire. Property P1 is scoped to routed, unmuted, ACTIVE monitors"
+    alert_route: "none; recorded here"
 logs:
   where: "Sentry issue stream (cron issues) and the workflow's lastTriggered; the apply-sentry-infra.yml run logs and step summary"
   retention: "Sentry plan retention (the project default); GitHub Actions logs 90 days"
@@ -677,12 +777,17 @@ guarded a map that no longer exists, or a dangling reference `terraform validate
 | 6 | Put a label in both `monitor_ids` and `unrouted` | RED |
 | 7 | An unrouted entry whose reason has no `#\d+` | RED |
 | 10 | A `monitor_ids` element that is not a `sentry_cron_monitor.<label>.id` reference (for example a string literal) | RED |
+| 11 | An `unrouted` key whose label has no declared monitor (the monitor was deleted and its entry left behind; `terraform validate` cannot see it, because no resource reads the map) | RED |
 
-**Harness rows.** Each fixture row asserts the **specific** offending label in the checker's
-result, not merely a non-empty result, so a checker that returns early fails. Must-PASS
+**Harness rows.** The checker is a pure function over file contents
+(`checkRouting(files: Record<string, string>)`), so fixture rows pass strings and never read the
+real tree. One row runs it over the real tree. Each fixture row asserts the **specific** offending
+label in the checker's result, not merely a non-empty result, so a checker that returns early fails. Must-PASS
 non-canonical inputs:
 
-- (P1) `monitor_ids` in a different order, with different whitespace and a trailing comment
+- (P1) `monitor_ids` in a different order, with different whitespace and a trailing comment, and a
+  single-line `monitor_ids = [sentry_cron_monitor.x.id]` form (the parser handles `[` and `]` on
+  one line, rather than reading on to the next `]`)
 - (P2) a fixture with one monitor in `unrouted` under a valid `(#1234)` reason and absent from
   `monitor_ids`
 
@@ -709,7 +814,8 @@ one-line floor):
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Remove the floor, with a plan fixture whose `monitor_ids` is `["1", null]` | RED: `_red` rc 1 plus the named-address error through the gate script |
+| 1 | Remove the floor. Plan fixture with `monitor_ids: ["1", null]`, and a reference **projected from that same null-carrying plan without the floor** (the #8050 case, where the author commits the null projection) | RED: `_red` rc 1 **and** the floor's text. Without the floor the gate would exit 0, so the row cannot pass for the wrong reason |
+| 5 | The floor's message contains `unknown at plan time` | RED: the row asserts that `sentry-alert-reference-gate.sh`'s "Set the attribute explicitly" line is **absent** |
 | 2 | Same fixture with ≥ 2 rules, where the unknown one is **not** first by name, and a floor that only checks the first rule or the first element | RED |
 | 3 | The error message drops the remedy pointer (`cron_monitor_alert_unrouted`) | RED (the row asserts that substring) |
 | 4 | Direct `jq -f sentry-alert-projection.jq --arg side tf` on the row 1 fixture | rc 5 |
@@ -725,6 +831,43 @@ dropped row turns the suite red. Must-PASS:
 `apply-sentry-infra.yml`'s path filter (`tests/scripts/lib/sentry-alert-projection.jq`), so an edit
 that weakens it runs the reference gate and the post-apply probe on the same push. Nothing here is
 a stored value checking itself: the floor is exercised against every real plan.
+
+### Guard 3 — address-aware monitor binding
+
+**Property.** Every non-delete `sentry_alert` other than the cron-bound address set binds exactly
+the issue-stream detector (`$EXPECTED`). Every address in the cron-bound set
+(`sentry_alert.cron_monitor_failure`) binds a non-empty set of ids. Each id is the `.values.id` of
+a `sentry_cron_monitor` in the same plan, and the set never contains `$EXPECTED` or `null`.
+
+**Assembly.** The single chokepoint is the `bindings` jq read in
+`scripts/sentry-monitor-binding-gate.sh` over `.resource_changes[] | select(.type ==
+"sentry_alert")`. The cron-monitor id set comes from the same plan document's `planned_values`,
+so there is one input file. Two call sites run it: `apply-sentry-infra.yml:374` (`plan_pr`) and
+`:899` (pre-apply). Both call it the same way, so neither changes.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | An issue-stream rule rebound to a cron detector id | RED |
+| 2 | `cron_monitor_failure` binding `1213799` alone, or `1213799` plus cron ids | RED |
+| 3 | `cron_monitor_failure` binding an id that is not a `sentry_cron_monitor` in the plan | RED |
+| 4 | A **second** alert address binding cron ids, after a compliant first | RED (it is not in the cron-bound set) |
+| 5 | `cron_monitor_failure` with an empty set, or with a `null` element | RED |
+| 6 | The gate parses 0 rows (its own dispatch) | RED (the existing anti-vacuity floor; its row stays) |
+
+**Harness rows.** Must-PASS:
+
+- (P1) the real shape: 33 issue-stream rules plus `cron_monitor_failure` with 59 cron ids, in
+  shuffled order
+- (P2) a plan with no `cron_monitor_failure` row at all, the pre-merge shape, which must still
+  pass
+
+Each RED row asserts the offending address in stderr.
+
+**Anchor.** The cron-bound address set is a literal in the gate script. A PR that adds a second
+cron-bound rule must edit the gate, and that diff is reviewed. The `1213799` literal keeps its
+existing provenance note.
 
 ## Acceptance Criteria
 
@@ -748,6 +891,8 @@ a stored value checking itself: the floor is exercised against every real plan.
   passes with the raised `EXPECTED_TESTS`. The `def excluded` line is byte-identical to `origin/main`:
   `git diff origin/main -- tests/scripts/lib/sentry-alert-projection.jq | grep -cE '^[-+]def excluded'`
   = 0. Anchored, so that the comment mentioning `def excluded` near line 258 cannot trip it.
+- [ ] AC3a. Guard 3: `bash tests/scripts/test-sentry-alert-adoption-guards.sh` passes with the new
+  rows, and `scripts/sentry-monitor-binding-gate.sh` still defaults `EXPECTED` to `1213799`.
 - [ ] AC4. `issue-alerts.tf` is byte-identical to `origin/main` (`git diff --quiet origin/main -- apps/web-platform/infra/sentry/issue-alerts.tf`).
 - [ ] AC5. The `plan_pr` job of `apply-sentry-infra.yml` is green: the plan shows exactly one create
   (`sentry_alert.cron_monitor_failure`) and no update, replace or destroy. The create gate, the
@@ -774,7 +919,7 @@ a stored value checking itself: the floor is exercised against every real plan.
   `git diff --numstat origin/main -- knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md | awk '{print $2}'`
   prints `0`. The earlier `grep '^-[^-]'` form missed deleted bullet lines and blank lines. The C4 `sentry -> founder` edge is
   corrected, and the c4-count-parity, c4-code-syntax and c4-render tests are green.
-- [ ] AC12. The #8630 comment (Phase 0.4) is posted with M1-M11 and the Phase 0 measurements. Any
+- [ ] AC12. The #8630 comment (Phase 0.4) is posted with M1-M12 and the Phase 0 measurements. Any
   "unmute" decision has one tracking issue referenced `Tracks #N` in the PR body.
 - [ ] AC13. Before every push: `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
   and `bash scripts/lint-diagnosis-claims.sh` pass. `python3 scripts/lint-guard-contract.py` passes
@@ -834,7 +979,7 @@ explicitly. Applied (4.2).
 The panel was DHH, Kieran, code-simplicity and the CTO (devex lens). Every finding was applied except
 the four judgment calls recorded in
 `knowledge-base/project/specs/feat-one-shot-8630-cron-monitor-alert-workflow/decision-challenges.md`
-(DC-1 to DC-4).
+(DC-1 to DC-4; DC-5 was added at deepen-plan).
 
 - **Mechanical fixes applied:**
   - AC1, AC3, AC6 and AC11 verification commands corrected
@@ -855,9 +1000,10 @@ the four judgment calls recorded in
 
 ## Test Scenarios
 
-- Guard 1: matrix rows 1-4, 6, 7 and 10, and must-PASS rows P1-P2 (vitest,
+- Guard 1: matrix rows 1-4, 6, 7, 10 and 11, and must-PASS rows P1-P2 (vitest,
   `sentry-cron-monitor-routing-parity.test.ts`).
-- Guard 2: matrix rows 1-4 and must-PASS rows P1-P2 (`tests/scripts/test-sentry-alert-reference-gate.sh`).
+- Guard 2: matrix rows 1-5 and must-PASS rows P1-P2 (`tests/scripts/test-sentry-alert-reference-gate.sh`).
+- Guard 3: matrix rows 1-6 and must-PASS rows P1-P2 (`tests/scripts/test-sentry-alert-adoption-guards.sh`).
 - Class A (tests first):
   - all routed gives "0 of N"
   - 1 of 2 unrouted lists that slug (T19, inverted)
@@ -869,11 +1015,11 @@ the four judgment calls recorded in
 
 | Approach | Why not |
 |---|---|
-| One `sentry_alert` per monitor | 59 workflows. A new address per monitor in the AC17 bijection and the census. It needs `for_each`, which AC17 forbids in this root. |
+| One `sentry_alert` per monitor | 59 workflows, with a new address per monitor in the AC17 bijection and the census. A `for_each` form breaks AC17's `^resource` address anchor. |
 | Issue-stream detector plus an `issue_category = cron` filter | No per-monitor map, and no same-PR unknown id. But it relies on an automator-modifiable Sentry option this repo cannot pin. Class A would falsely report all cron detectors unrouted. It needs a new projection kind on both sides. Recorded in the ADR amendment. |
 | Adding `event_frequency_count {1h, 0}` to re-page persistent failures daily (the #8505 shape) | Chosen against by the scoped advisor consult. It sends a day-one email for every chronically-red monitor and then one per day each, which trains the operator to filter the alert. The backlog is triaged once in Phase 0.2 instead, and Sentry's 14-day broken-monitor email covers long outages. |
 | Keep a same-PR route for new monitors by re-projecting the post-apply probe's reference from post-apply state, or by projecting unknown ids as `pending` (scoped advisor consult) | Either one changes the #8050 contract, under which the reference is true by construction the moment the `.tf` changes. The committed `alert-reference.json` would carry a placeholder that the daily probe (which reads the committed copy) cannot resolve until a later commit rewrites it, and no PR-time path can write that commit. The two-PR rule costs one small route PR per new monitor, and Class A lists every pending route on each apply. |
-| Collapse the 59 monitors into one `for_each` resource so `monitor_ids` derives itself | This needs 59 `moved` blocks against live state. AC17 in `apply-sentry-infra.yml` forbids `for_each`/`count` in this root, because its declared/observed bijection reads resource addresses from the `.tf` text. Out of scope. |
+| Collapse the 59 monitors into one `for_each` resource so `monitor_ids` derives itself | This needs 59 `moved` blocks against live state, and AC17's declared/observed bijection reads resource addresses from the `.tf` text with a `^resource` anchor that a `for_each` address does not match (`apply-sentry-infra.yml:1224-1229`). Out of scope. |
 | Unmute via the monitor-environment REST `PUT` in this PR | This is a write to prod alerting config outside Terraform. The brief forbids it, and it needs a per-command go-ahead. It is tracked instead. |
 | Destroy and recreate a monitor to clear its mute | A re-added name adopts the deactivated object (#3958 residual in `cron-monitors.tf`), and it needs `[ack-destroy]`. |
 | A new `scheduled-terraform-drift-sentry` monitor (ADR option for (b)) | A 60th seat-billed monitor and a matrix-expression slug. The sentry leg's failures already reach the `[ERROR]` email. |
@@ -908,5 +1054,11 @@ the four judgment calls recorded in
 - **The first apply does not email about the existing backlog.** Monitors already red stay silent
   until their next regression. Phase 0.1's list is the only place that backlog is surfaced, so it
   must be complete.
+- **A monitor deleted outside Terraform wedges the Sentry root under Guard 2** until the recovery
+  in the README procedure is done. That is the price of keeping `main` from going red after a
+  complete apply.
+- **The monitor-binding gate is the third gate this rule must pass**, and it was missing from the
+  first draft of this plan. Before adding any `sentry_alert` whose `monitor_ids` is not the issue
+  stream, grep `scripts/` for every consumer of `monitor_ids`.
 - **Muted means silent, even when routed.** Every runbook sentence that says a monitor pages must be
   checked against the Phase 0 mute list, not against routing alone.

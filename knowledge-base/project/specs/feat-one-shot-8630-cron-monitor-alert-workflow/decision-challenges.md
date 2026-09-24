@@ -6,23 +6,23 @@ and files them as an `action-required` issue.
 
 ---
 
-## DC-1: The two #8495 watchdogs are routed, with a 14-day exit
+## DC-1: The two #8495 watchdogs are routed, and stay routed until #8495 lands
 
-**Date:** 2026-09-24
+**Date:** 2026-09-24 (revised at deepen-plan)
 **Classification:** Taste
 
-**Context.** `scheduled-inngest-health` and `scheduled-zot-restart-loop` miss most check-ins
-because GitHub cron does not start them (#8495). Routing them costs about two known-noise emails a
-day. The CTO devex review flagged that this can teach the operator to filter the new alert.
+**Context.** `scheduled-inngest-health` and `scheduled-zot-restart-loop` miss most check-ins,
+because GitHub cron does not start them (#8495). Routing them sends about two known-noise emails a
+day. Two reviews pulled in opposite directions:
 
-**Decision.** Route them anyway.
+- **CTO devex:** the noise could teach the operator to filter the new alert. It proposed moving the
+  pair to `unrouted` after 14 days.
+- **Observability:** the pair are the only continuous proof that the route fires. It argued against
+  un-routing them.
 
-- Their failures are real, and they give the first live proof that the route works (AC16).
-- If #8495 is still open 14 days after the first observed fire, a follow-up PR moves both into
-  `cron_monitor_alert_unrouted`, citing #8495.
-
-**Alternative.** Exclude them from day one. That hides a real degradation of the Inngest-down
-watchdog.
+**Decision.** Route them, with no automatic exit. They stop firing once #8495 fixes their cadence.
+The operator can move them to `cron_monitor_alert_unrouted` (citing #8495) if the noise proves
+worse than the canary value.
 
 ## DC-2: New cron monitors need two PRs (create, then route)
 
@@ -70,3 +70,23 @@ These cuts were proposed in review and not applied:
   kept it, because it ties every pending route to a tracking issue.
 - **Simplicity: drop AC17, the post-merge dispatch of the drift workflow.** Kept.
   `wg-after-merging-a-pr-that-adds-or-modifies` requires a post-merge run of a modified workflow.
+
+## DC-5: No scheduled check that the route actually fires
+
+**Date:** 2026-09-24
+**Classification:** Taste
+
+**Context.** The observability review noted that every automated probe checks configuration. None
+checks firing. If Sentry changed the detector-to-workflow dispatch on its side, every gate would
+stay green while no email is sent. That is the failure shape of the 2026-09-23 learning.
+
+**Decision.** The mitigations are:
+
+- AC16 proves one live fire after merge.
+- While #8495 is open, its watchdogs fire daily. That is visible in the workflow's group history.
+
+A daily check is **not** added in this PR. The proposed check would require every regressed cron
+issue to have a matching group-history entry in `scheduled-sentry-alert-drift.yml`. It is recorded
+here, and as an accepted residual in the plan's `failure_modes`.
+
+**Revisit** if a real cron failure is ever found to have sent no email.
