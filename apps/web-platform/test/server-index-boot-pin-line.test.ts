@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
   logPin: vi.fn(),
   bootStarted: vi.fn(),
   listen: vi.fn(),
+  startClock: vi.fn(),
+  stopClock: vi.fn(),
 }));
 
 vi.mock("../sentry.server.config", () => ({}));
@@ -77,6 +79,13 @@ vi.mock("../server/readiness", () => ({
 vi.mock("../server/loopback", () => ({ isLoopbackHost: vi.fn() }));
 vi.mock("@/server/inngest/send-with-retry", () => ({ sendInngestWithRetry: vi.fn() }));
 vi.mock("@/server/observability", () => ({ reportSilentFallback: vi.fn() }));
+// #8495: the watchdog dispatch clock is armed at boot and stopped on SIGTERM.
+vi.mock("../server/watchdog-dispatch-clock", () => ({
+  startWatchdogDispatchClock: (...a: unknown[]) => {
+    h.startClock(...a);
+    return { stop: h.stopClock };
+  },
+}));
 
 describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () => {
   let processOn: ReturnType<typeof vi.spyOn>;
@@ -99,5 +108,23 @@ describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () 
     await vi.waitFor(() => expect(h.listen).toHaveBeenCalledTimes(1));
     expect(h.bootStarted).toHaveBeenCalledTimes(1);
     expect(h.logPin).toHaveBeenCalledTimes(1);
+
+    // #8495 — the watchdog dispatch clock is armed exactly once, with defaults.
+    expect(h.startClock).toHaveBeenCalledTimes(1);
+    expect(h.startClock.mock.calls[0]).toEqual([]);
+    // ...and SIGTERM stops it, synchronously (before the handler's first await).
+    const sigterm = processOn.mock.calls.find((c: unknown[]) => c[0] === "SIGTERM")?.[1] as
+      | (() => Promise<void>)
+      | undefined;
+    expect(sigterm).toBeTypeOf("function");
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    try {
+      expect(h.stopClock).not.toHaveBeenCalled();
+      void sigterm!();
+      expect(h.stopClock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+    } finally {
+      exit.mockRestore();
+    }
   });
 });
