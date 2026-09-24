@@ -52,6 +52,46 @@ operator authorized both replaces on #6122 (comment 5811202876, 2026-09-24).
 restore source), the anonymous `ghcr.io` pulls of the cosign verifier and zot's own image
 (5.3b-iii), and the GHCR egress allow (5.3b-iii).
 
+## Enhancement Summary (deepen-plan, 2026-09-24)
+
+Security review of the plan (security-sentinel). Findings applied to this plan; `soleur:work` executes them:
+
+1. **P1: the web zot-miss page did not fire (measured).** `web_terminal_boot_fatal` uses
+   `event_frequency_count value = 1`. The comparison is a strict `>`, and the check runs per issue
+   group. The seed fatal `_emit "soleur-hostscript-seed failed" "$STAGE" fatal` has its own group. The
+   only such event in 30 days (#8651's dark boot, 2026-09-23T20:10:21Z, `WEB-PLATFORM-4T`, stage=pull,
+   fatal) is one event, so it could not page. **Fix in this PR:** set the rule's trigger to `value = 0`,
+   as `git_data_boot_warning` already has. This is safe because all five stage conditions
+   (`terminal_preamble`, `hostscripts_incomplete`, `doppler_download`, `docker_run`, `pull`) are emitted
+   only on failure paths: grep shows only `on_err`'s fatal `_emit` and
+   `soleur-boot-emit hostscripts_incomplete fatal`. Rewrite the comment that says `value = 1` works
+   "because the shared group is hot". Regenerate `alert-reference.json`. Without this, P2 is false for
+   web.
+2. **P2: the soak must see web fresh-boot fatals.** Add a separate FAIL arm outside `FAIL_QUERIES`,
+   `WEB_FATAL=$(sentry_count 'stage:"pull" level:fatal')`, and FAIL on > 0. It is not an alarm
+   operand, so the rule⇔soak parity contract holds and nothing double-pages. Give it its own
+   test rows: a fixture where web-pull-fatal > 0 must FAIL.
+3. **P2: wording.** The ADR amendment title becomes "no host *presents* a GHCR credential at boot".
+   Name the residual that 5.4 closes: `GHCR_READ_TOKEN` stays in Doppler `soleur/prd`, and
+   `ci-deploy.sh` downloads that config into the app container env. The value is revoked; re-enabling
+   the minter before 5.4 would put a live PAT back there.
+4. **P2: Encryption Posture.** Do not claim LUKS for web-1's `/etc/default/soleur-ghcr-read`
+   (the root fs is not LUKS). Add the other web-1 residuals: `/var/lib/cloud/instance/user-data.txt`,
+   the Hetzner metadata userdata endpoint, and `/root/.docker/config.json`. All carry the revoked value.
+5. **P2: Guard 3 anchor.** Do not call the #6122 comment "uneditable". Add a runtime check in the
+   soak: read #8660 `mergedAt` via `gh` (GH_TOKEN is already declared) and exit TRANSIENT if the
+   default START is later than it. Reword "chosen before measuring": the re-arm was chosen *because*
+   the backfilled window could not pass, and its START is the merge of the last fix. List the six
+   excluded fallbacks, each with the PR that fixed it, in the soak header.
+6. **P2: forgeable PASS.** Keep the PASS echo's "Sentry evidence is forgeable with the public DSN
+   — corroborate on Better Stack" clause. The 5.6/#6129 trackers' re-evaluate lines require that
+   corroboration, because the sweeper cannot check it itself.
+7. **P3:** Add `|| true` to the inngest fatal arm's phone-home call, plus a Guard 4 row: phone-home
+   stub rc≠0, and the Sentry emit must still happen.
+8. **P3:** ADR/C4 say "digest-pinned (integrity)", never "verified", for fresh-boot images.
+9. **P3:** `discoverability_test.expected_output` lists both values: `zot-gate-degraded` and
+   `inngest_pull_fatal`.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Brief / spec claim | Codebase reality (measured 2026-09-24) | Plan response |
@@ -658,7 +698,7 @@ logs:
 
 discoverability_test:
   command:       "jq -r '.\"zot-mirror-fallback-rate\".actionFilters[0].conditions[].comparison.value' apps/web-platform/infra/sentry/alert-reference.json"
-  expected_output: "inngest_pull_fatal"
+  expected_output: "zot-gate-degraded or inngest_pull_fatal"
 ```
 
 The command reads the committed projection of the live rule (the reference gate keeps it equal
