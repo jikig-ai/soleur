@@ -40,7 +40,7 @@ ongoing — the code fix is in PR #8617 and takes effect at its deploy. Pre-fix 
 their disclosed bounds (Better Stack 90 days, journald 1G cap, Resend 30 days), with two
 exceptions. Sentry is purged after the merge. The four Hetzner snapshot images of web-1's root
 disk (2026-06-18 to 2026-07-23) copy the journal as of their dates and persist until deleted;
-their disposition and hard expiry (2026-10-06) are recorded under #8532.
+their disposition and hard expiry (2026-10-06) are recorded under #8532. **[Superseded 2026-09-24 (#8532), as to "Better Stack 90 days" and "Sentry is purged after the merge": measured 2026-09-24 (counts only), no Sentry issue or event and no Better Stack row matches either pre-fix refusal message, so the Sentry purge was discharged without a deletion. Better Stack's retained span began 2026-08-13 15:14Z, not 90 days back, so earlier pre-fix copies had already expired there. journald was not measured. The mechanism described above (the error message becomes the Sentry issue title) still stands; the measurement found no such title retained. PA-28 §(c) records this by the 2026-09-24 amendment that lands with the merge of PR #8626.]**
 
 ## Symptom
 
@@ -163,5 +163,5 @@ Every action item and follow-up so this incident cannot recur (save logs, add te
 
 | Issue | Action | Status |
 |---|---|---|
-| #8532 | Purge the refusal-path Sentry issues after the merge (CLO ruling); update Article 30 PA-28 §(c) when done; verify in production that a refused send's record carries no address (AC-0c-i). | open |
+| #8532 | Purge the refusal-path Sentry issues after the merge (CLO ruling); update Article 30 PA-28 §(c) when done; verify in production that a refused send's record carries no address (AC-0c-i). **[2026-09-24 (#8532): Sentry purge discharged without a deletion (0 matching issues or events); PA-28 §(c) is updated by PR #8626 on its merge; the AC-0c-i production check is recorded separately.]** | open |
 | #3418 | Disclose and bound the agent-conversation session transcripts, the one store the scoped sentence names as holding the recipient and body. | open |

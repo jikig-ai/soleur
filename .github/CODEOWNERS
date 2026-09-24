@@ -218,3 +218,17 @@
 /tests/scripts/lib/git-data-host-replace-gate.sh        @deruelle
 /tests/scripts/lib/git-data-host-birth-gate.sh          @deruelle
 /tests/scripts/test-no-tofu-ssh.sh                      @deruelle
+
+# Encryption-posture ledger and its record surfaces (#8532, ADR-140, ADR-246, ADR-247). The ledger's
+# record_surfaces list decides which files the Guard 3 anchor check reads. Dropping an entry
+# is caught by the forward check for every row that still records that file; a surface that is
+# REPLACED, or dropped together with every record pointing at it, is caught only by the test
+# suite's canonical-path pin. The register and model.c4 carry the clauses themselves. Explicit rows per
+# load-bearing-files-get-explicit-rows; CODEOWNERS review is an anchor only once branch
+# protection requires it (see the header).
+/scripts/encryption-posture-ledger.json                 @deruelle
+/scripts/encryption-posture-ledger.schema.json          @deruelle
+/scripts/lint-encryption-posture.py                     @deruelle
+/scripts/lint-encryption-posture.test.sh                @deruelle
+/knowledge-base/legal/article-30-register.md            @deruelle
+/knowledge-base/engineering/architecture/diagrams/model.c4 @deruelle

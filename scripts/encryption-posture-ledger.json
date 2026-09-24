@@ -1,6 +1,10 @@
 {
   "schema_version": 1,
   "live_coverage_floor": 2,
+  "record_surfaces": [
+    "knowledge-base/legal/article-30-register.md",
+    "knowledge-base/engineering/architecture/diagrams/model.c4"
+  ],
   "store_classes": {
     "hcloud_volume": {
       "kind": "guest-luks-volume",
@@ -20,6 +24,12 @@
       "kind": "provider-bucket",
       "mechanisms": [
         "provider-managed",
+        "plaintext-exception"
+      ]
+    },
+    "hcloud_server": {
+      "kind": "host-root-disk",
+      "mechanisms": [
         "plaintext-exception"
       ]
     }
@@ -62,7 +72,6 @@
     "hcloud_network",
     "hcloud_network_subnet",
     "hcloud_placement_group",
-    "hcloud_server",
     "hcloud_server_network",
     "hcloud_ssh_key",
     "hcloud_volume_attachment",
@@ -83,7 +92,9 @@
     "doppler.secrets",
     "betterstack.logs",
     "r2.terraform_state_backend",
-    "redis.session_store"
+    "redis.session_store",
+    "git_data.baked_credentials_on_host",
+    "hetzner.web1_inngest_cutover_snapshots"
   ],
   "stores": [
     {
@@ -145,6 +156,13 @@
     {
       "store": "hcloud_volume.git_data",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 36",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.git_data",
         "attachment": "hcloud_volume_attachment.git_data",
@@ -152,7 +170,7 @@
       },
       "at_rest": {
         "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/git-data.tf:264 (format = \"ext4\", no LUKS apparatus)",
+        "evidence": "apps/web-platform/infra/git-data.tf:264 (format = \"ext4\", no LUKS apparatus) CORRECTED 2026-09-23 (#8532): the citation above is a line number; the content anchor is apps/web-platform/infra/git-data.tf, resource \"hcloud_volume\" \"git_data\".",
         "defends_against": "nothing at the volume layer; the pre-cutover rollback backstop pending the DL-2 wipe",
         "does_not_defend": "a seized/snapshot disk exposes any git data still resident on this volume",
         "disclosed_as": "not-publicly-claimed",
@@ -168,6 +186,12 @@
     {
       "store": "hcloud_volume.git_data_luks",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 36",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.git_data_luks",
         "attachment": "hcloud_volume_attachment.git_data_luks",
@@ -175,9 +199,9 @@
       },
       "at_rest": {
         "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls, and the `/dev/mapper/git-data /mnt/git-data-luks ext4` fstab line. Key: random_password.git_data_luks + doppler_secret.git_data_luks_key (git-data-luks.tf)",
+        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls, and the `/dev/mapper/git-data /mnt/git-data-luks ext4` fstab line. Key: random_password.git_data_luks + doppler_secret.git_data_luks_key (git-data-luks.tf). ADDENDUM 2026-09-23 (#8532, merge with #8211): the `/mnt/git-data-luks` fstab line above predates PR #8564; the render now appends `/dev/mapper/git-data /mnt/git-data ext4 defaults,nofail 0 2` (the `grep -q '/dev/mapper/git-data' /etc/fstab || echo` line), so the mapper serves `/mnt/git-data` from boot on a host rendered after that merge.",
         "defends_against": "a seized/RMA'd or snapshot-imaged git-data block volume: unreadable without the Doppler-held passphrase",
-        "does_not_defend": "a leaked credential, an app-layer read on the unlocked host, or exfiltration via a compromised git-data process",
+        "does_not_defend": "a leaked credential, an app-layer read on the unlocked host, or exfiltration via a compromised git-data process ADDENDUM 2026-09-23 (#8532 PR-2): the passphrase (GIT_DATA_LUKS_KEY) is fetched by doppler run at each open and never persisted, though _devalue_luks in cloud-init-git-data.yml writes it transiently into a mktemp sed script under /tmp (the root disk) while redacting an error, then unlinks it; and the DOPPLER_TOKEN that fetches it sits on the git-data ROOT DISK in /etc/default/git-data-doppler (0600) and in the host's user_data. A seized or snapshot-imaged root disk therefore yields a credential that unlocks this volume until that token is revoked. See hcloud_server.git_data.",
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:no per-volume host posture probe on the git-data host yet (born 2026-09-14 by run 34836141887, re-birthed by run 34861860722; boot_complete carried luks_mounted=yes as a point-in-time device claim); tracked #6897"
       }
@@ -185,6 +209,15 @@
     {
       "store": "hcloud_volume.inngest_redis",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 13",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 21",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 22",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 27",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 31",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.inngest_redis",
         "attachment": "hcloud_volume_attachment.inngest_redis",
@@ -210,6 +243,15 @@
     {
       "store": "hcloud_volume.inngest_redis_luks",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 13",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 21",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 22",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 27",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 31",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.inngest_redis_luks",
         "attachment": "hcloud_volume_attachment.inngest_redis_luks",
@@ -219,7 +261,7 @@
         "mechanism": "luks",
         "evidence": "apps/web-platform/infra/inngest-redis-luks.tf, resource \"hcloud_volume\" \"inngest_redis_luks\"; apparatus: cloud-init-inngest.yml's `cryptsetup luksFormat` plus `cryptsetup luksOpen --key-file - \"$DEV\" inngest-redis` (the boot-time reopen resolves the same mapper, inngest-redis, which device_binding.mapper names); key: resource \"random_password\" \"inngest_redis_luks\" + resource \"doppler_secret\" \"inngest_redis_luks_key\", co-located in inngest-redis-luks.tf. OBSERVED 2026-09-20 (#8296): the terminal SOLEUR_INNGEST_LUKS_CUTOVER row at 15:29:10Z (reason=cutover-complete, flag=done, phase=swapped, exit_code=0, k_freeze=1366, e_freeze=1355) and the post-cutover SOLEUR_INNGEST_SERVER_PROBE row at 15:36:40Z from host_role=dedicated (data_mount_src=/dev/mapper/inngest-redis, data_mount_devid=scsi-0HC_Volume_106903269, redis_active, 1437 keys). The detector for a return to the plaintext volume, logtail_exploration_alert.inngest_luks_wrong_volume, armed on the push apply of b53173a04 (run 35605929787) and read back paused=false at 2026-09-21T14:18:56Z; this row flipped only after that read-back, so the claim never outran its detector. Content anchors only, never line numbers (cq-cite-content-anchor-not-line-number).",
         "defends_against": "a seized, RMA'd or snapshot-imaged Hetzner block volume: the Inngest queue and run-state AOF (in-flight job payloads, i.e. user prompts and agent output) are unreadable without the Doppler-held LUKS passphrase",
-        "does_not_defend": "a leaked credential; an app-layer read on the unlocked dedicated host; exfiltration through a compromised redis or inngest process; and a dead probe pipeline, which the wrong-volume alert reads as healthy under on_missing_data = treat_as_zero (D1, #8516). ALSO, and this is the one a reader must not miss: until #8285 destroys it, the retained plaintext backstop hcloud_volume.inngest_redis holds a full second copy of this same AOF, so this row does NOT mean the AOF exists only in encrypted form",
+        "does_not_defend": "a leaked credential; an app-layer read on the unlocked dedicated host; exfiltration through a compromised redis or inngest process; and a dead probe pipeline, which the wrong-volume alert reads as healthy under on_missing_data = treat_as_zero (D1, #8516). ALSO, and this is the one a reader must not miss: until #8285 destroys it, the retained plaintext backstop hcloud_volume.inngest_redis holds a full second copy of this same AOF, so this row does NOT mean the AOF exists only in encrypted form ADDENDUM 2026-09-23 (#8532 PR-2): the passphrase ITSELF is on the inngest ROOT DISK: cloud-init-inngest.yml caches INNGEST_REDIS_LUKS_KEY in /etc/default/inngest-luks (0600 root:root) because inngest-luks-open.service runs before the network and cannot fetch it. Against a seized or snapshot-imaged inngest host, this LUKS defends nothing. See hcloud_server.inngest and #8620.",
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:the hourly SOLEUR_INNGEST_SERVER_PROBE row proves WHICH device backs /mnt/data (data_mount_devid), not that it is crypto_LUKS; the cipher half is the statically-resolved apparatus check_luks_row verifies. Flip to available in the commit that records a probe row carrying an explicit LUKS-type field, the way hcloud_volume.registry's store_luks field earned it (#8423). Until then scripts/followthroughs/inngest-luks-property-8296.sh cross-reads this row's claim against the device daily once it is enrolled on #8285 (a post-merge step of #8296 PR-2); the paging detector is the wrong-volume alert."
       }
@@ -227,6 +269,9 @@
     {
       "store": "hcloud_volume.registry",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.registry",
         "attachment": "hcloud_volume_attachment.registry",
@@ -234,9 +279,9 @@
       },
       "at_rest": {
         "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/cloud-init-registry.yml — content anchors: `cryptsetup luksFormat --batch-mode --type luks2 --key-file - \"$DEV\"`, `cryptsetup luksOpen --key-file - \"$DEV\" registry`, fstab `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2`, and the registry-luks-open.sh write_files block (the boot-time reopen); key: random_password.registry_luks + doppler_secret.registry_luks_key (zot-registry.tf). CORRECTED 2026-09-19 (#8386): the previous citation addressed this file by line number, which the dispatcher-era edits had already moved; anchors are content, never coordinates. HONESTY NOTE, carried forward from the live_verification prose this row's 2026-09-20 flip replaced: disclosed_as is ASSERTED rather than linted for a luks row — check_at_rest hands mechanism=luks to check_luks_row, which returns before check_disclosed_as_not_encrypted ever runs, so the `not-publicly-claimed` value below is verified by no gate. And the apparatus behind live_verification carried a broken discriminator until #8417: store_probe_rc emitted a PID rather than an exit code (fixed; store_probe_rc=cs0.bk0 on boot 5639cc07). Neither affects this row's at-rest evidence. THE OBSERVATION ITSELF, recorded here because live_verification's grammar has no room for it and the rehearsal_luks row sets the precedent: boot b3ec6c3b-e25d-4786-8c2e-66621e2de8aa, delivered by registry-host-replace run 35489418603 (2026-09-20T04:33Z, zot store volume preserved) carrying the emitter merged at e193d7b8b; measured across 120 SOLEUR_ZOT_DISK rows as of 2026-09-20T14:31Z, every one reading store_luks=yes with store_mount_src=/dev/mapper/registry and store_mount_devid == store_expected_devid == scsi-0HC_Volume_106585109; graded by scripts/followthroughs/registry-luks-live-8386.sh. WHAT THAT PROBE DOES NOT ESTABLISH, stated so the word `available` is not read as stronger than it is: it omits luks-monitor.sh's passphrase re-test and header-UUID read, deliberately, because a per-tick `doppler secrets get` on a */5 cron is a different risk posture (cloud-init-registry.yml, anchor 'store_luks=yes means'). So store_luks=yes means the store SITS ON a LUKS container, never that we can still unlock it; the unlock half is now re-tested daily by the escrow re-test (#8408). hcloud_volume.workspaces_luks, the other `available` row, is backed by the five-step daily probe; the two share the word and not the strength.",
+        "evidence": "apps/web-platform/infra/cloud-init-registry.yml — content anchors: `cryptsetup luksFormat --batch-mode --type luks2 --key-file - \"$DEV\"`, `cryptsetup luksOpen --key-file - \"$DEV\" registry`, fstab `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2`, and the registry-luks-open.sh write_files block (the boot-time reopen); key: random_password.registry_luks + doppler_secret.registry_luks_key (zot-registry.tf). CORRECTED 2026-09-19 (#8386): the previous citation addressed this file by line number, which the dispatcher-era edits had already moved; anchors are content, never coordinates. HONESTY NOTE, carried forward from the live_verification prose this row's 2026-09-20 flip replaced: disclosed_as is ASSERTED rather than linted for a luks row — check_at_rest hands mechanism=luks to check_luks_row, which returns before check_disclosed_as_not_encrypted ever runs, so the `not-publicly-claimed` value below is verified by no gate. And the apparatus behind live_verification carried a broken discriminator until #8417: store_probe_rc emitted a PID rather than an exit code (fixed; store_probe_rc=cs0.bk0 on boot 5639cc07). Neither affects this row's at-rest evidence. THE OBSERVATION ITSELF, recorded here because live_verification's grammar has no room for it and the rehearsal_luks row sets the precedent: boot b3ec6c3b-e25d-4786-8c2e-66621e2de8aa, delivered by registry-host-replace run 35489418603 (2026-09-20T04:33Z, zot store volume preserved) carrying the emitter merged at e193d7b8b; measured across 120 SOLEUR_ZOT_DISK rows as of 2026-09-20T14:31Z, every one reading store_luks=yes with store_mount_src=/dev/mapper/registry and store_mount_devid == store_expected_devid == scsi-0HC_Volume_106585109; graded by scripts/followthroughs/registry-luks-live-8386.sh. WHAT THAT PROBE DOES NOT ESTABLISH, stated so the word `available` is not read as stronger than it is: it omits luks-monitor.sh's passphrase re-test and header-UUID read, deliberately, because a per-tick `doppler secrets get` on a */5 cron is a different risk posture (cloud-init-registry.yml, anchor 'store_luks=yes means'). So store_luks=yes means the store SITS ON a LUKS container, never that we can still unlock it; the unlock half is now re-tested daily by the escrow re-test (#8408). hcloud_volume.workspaces_luks, the other `available` row, is backed by the five-step daily probe; the two share the word and not the strength. ADDENDUM 2026-09-23 (#8532): check_luks_disclosure now lints a luks row's disclosed_as when it names a document anchor. This row's value is not-publicly-claimed, which that check skips, so the HONESTY NOTE's first sentence still holds: the value is verified by no gate.",
         "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: OCI blobs + cosign signatures are unreadable without the Doppler-held LUKS passphrase",
-        "does_not_defend": "a leaked credential, an app-layer read on the unlocked live registry host, or exfiltration via a compromised zot process. The reboot window in which zot could serve a root-fs directory is closed by the #8408 launch gate (zot's start requires the LUKS filesystem's sentinel, on every container start), delivered on boot 5639cc07 by registry-host-replace run 35672138112 (2026-09-22T00:30:15Z). The window stays MEASURABLE via the store_luks field #8386 delivered (first observed on boot b3ec6c3b, 2026-09-20; 342 of 342 rows on that boot read yes, none absent) and GRADED by the registry_store_not_luks alert, which pages on any trusted head lacking store_luks=yes. A passphrase that no longer opens the header is likewise graded by the daily escrow re-test (store_escrow= on the same heartbeat; first read ok on boot 5639cc07, observed 2026-09-22T00:50:02Z).",
+        "does_not_defend": "a leaked credential, an app-layer read on the unlocked live registry host, or exfiltration via a compromised zot process. The reboot window in which zot could serve a root-fs directory is closed by the #8408 launch gate (zot's start requires the LUKS filesystem's sentinel, on every container start), delivered on boot 5639cc07 by registry-host-replace run 35672138112 (2026-09-22T00:30:15Z). The window stays MEASURABLE via the store_luks field #8386 delivered (first observed on boot b3ec6c3b, 2026-09-20; 342 of 342 rows on that boot read yes, none absent) and GRADED by the registry_store_not_luks alert, which pages on any trusted head lacking store_luks=yes. A passphrase that no longer opens the header is likewise graded by the daily escrow re-test (store_escrow= on the same heartbeat; first read ok on boot 5639cc07, observed 2026-09-22T00:50:02Z). ADDENDUM 2026-09-23 (#8532 PR-2): REGISTRY_LUKS_KEY is delivered by doppler run at each open (registry-luks-open.sh) and never written to disk, but the DOPPLER_TOKEN that fetches it sits on the registry ROOT DISK in /etc/default/registry-doppler (0600). A seized or snapshot-imaged root disk therefore yields a credential that unlocks this volume until that token is revoked. See hcloud_server.registry.",
         "disclosed_as": "not-publicly-claimed",
         "retrieved_on": "2026-09-22",
         "live_verification": "available"
@@ -277,7 +322,7 @@
         "mechanism": "luks",
         "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the SAME `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls the production host runs, because the rehearsal renders from modules/git-data-userdata and boots the identical template. Key: random_password.rehearsal_luks + doppler_secret.rehearsal_luks_key (rung2-rehearsal/rehearsal.tf), written into a SCRATCH Doppler config, never prd_git_data. Observed twice: rung-2 rehearsal run 34768256297 (2026-09-13, evidence PR #8126) and the production host (born run 34836141887, re-birthed by git-data-host-replace run 34861860722 after the first host died in cloud-init; `boot_complete` 2026-09-14T15:27:24Z from the replaced host, `luks_mounted=yes`, Better Stack table t520508_soleur_git_data_prd_logs, host_name soleur-git-data) — the same rendered template's luksOpen stage on real hardware. scripts/followthroughs/git-data-rung2-evidence-capture.sh refuses to write evidence if any boot_complete boolean reads `no`; the presence-of-`yes` check lives in the birth workflow's poll step.",
         "defends_against": "a seized/RMA'd or snapshot-imaged rehearsal block volume between creation and teardown: unreadable without the throwaway Doppler-held passphrase",
-        "does_not_defend": "anything readable while the rehearsal host is up and the mapper is open; and the passphrase in the rehearsal root's terraform.tfstate (distinct R2 key, so it is not prod material)",
+        "does_not_defend": "anything readable while the rehearsal host is up and the mapper is open; and the passphrase in the rehearsal root's terraform.tfstate (distinct R2 key, so it is not prod material) ADDENDUM 2026-09-23 (#8532 PR-2): the passphrase is in the rehearsal's own scratch Doppler config, fetched through the git-data user_data module's token file on the rehearsal host's ROOT DISK. That disk is destroyed with the host by the if: always() teardown in git-data-rung2-rehearsal.yml. See hcloud_server.rehearsal.",
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:observed point-in-time only — the rung-2 rehearsal (run 34768256297, 2026-09-13) and the production host carrying the SIBLING store hcloud_volume.git_data_luks (born by run 34836141887, re-birthed by git-data-host-replace run 34861860722 after the first host died in cloud-init; 2026-09-14) each emitted stage:boot_complete with luks_mounted=yes (a findmnt device-binding claim since #7204); no STANDING probe exists for this volume, which the rehearsal workflow tears down every run, so Layer B has nothing to reconcile. The earlier reason (no rehearsal has ever been dispatched) was falsified 2026-09-13. tracked #6897"
       }
@@ -285,6 +330,18 @@
     {
       "store": "hcloud_volume.workspaces",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
+      "multiplicity": {
+        "instances": [
+          "web-1",
+          "web-2"
+        ]
+      },
       "device_binding": {
         "volume": "hcloud_volume.workspaces",
         "attachment": "hcloud_volume_attachment.workspaces",
@@ -294,7 +351,7 @@
         "mechanism": "plaintext-exception",
         "evidence": "apps/web-platform/infra/server.tf:1569 (format = \"ext4\", no LUKS apparatus)",
         "defends_against": "nothing at the volume layer; superseded on web-1 by hcloud_volume.workspaces_luks (cutover certified 2026-07-23, verify run 30040444418)",
-        "does_not_defend": "a seized/snapshot disk exposes any workspace data still resident on this volume",
+        "does_not_defend": "a seized/snapshot disk exposes any workspace data still resident on this volume ADDENDUM 2026-09-23 (#8532 PR-2): this block is for_each = var.web_hosts, so the row covers TWO devices (multiplicity). web-1's copy is the superseded rollback backstop described above. web-2's copy is web-2's LIVE /mnt/data (cloud-init.yml fstab line for scsi-0HC_Volume_${workspaces_volume_id}), has no LUKS sibling (workspaces_luks is a singleton), and gets encrypted only on the web-2 fresh-boot LUKS path, #6931. The evidence citation above is a line number; the content anchor is apps/web-platform/infra/server.tf, resource \"hcloud_volume\" \"workspaces\".",
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:host attachment state not pulled in the code-sourced audit; tracked #6897",
         "exception": {
@@ -308,6 +365,12 @@
     {
       "store": "hcloud_volume.workspaces_luks",
       "kind": "guest-luks-volume",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "device_binding": {
         "volume": "hcloud_volume.workspaces_luks",
         "attachment": "hcloud_volume_attachment.workspaces_luks",
@@ -317,7 +380,7 @@
         "mechanism": "luks",
         "evidence": "apps/web-platform/infra/workspaces-cutover.sh:2030,2041 (cryptsetup luksFormat/luksOpen, MAPPER_NAME=${WORKSPACES_MAPPER_NAME:-workspaces}); key: random_password.workspaces_luks + doppler_secret.workspaces_luks_key (workspaces-luks.tf); mount gate: soleur-host-bootstrap.sh:759-760",
         "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: contents are unreadable without the Doppler-held LUKS passphrase",
-        "does_not_defend": "a leaked service-role credential, an RLS bypass, an SSRF reaching the store, or any read on the live host where the mapper is already unlocked",
+        "does_not_defend": "a leaked service-role credential, an RLS bypass, an SSRF reaching the store, or any read on the live host where the mapper is already unlocked ADDENDUM 2026-09-23 (#8532 PR-2): the passphrase lives in Doppler config prd_workspaces_luks, and web-1's ROOT DISK holds a token that can fetch it: workspaces-cutover.sh appends the prd_workspaces_luks-scoped DOPPLER_TOKEN to /etc/default/luks-monitor (0600 root:root) for the daily probe. A seized or snapshot-imaged web-1 root disk therefore yields a credential that unlocks this volume until that token is revoked. See hcloud_server.web.",
         "disclosed_as": "docs/legal/privacy-policy.md:Encrypted workspace storage",
         "live_verification": "available"
       }
@@ -325,6 +388,9 @@
     {
       "store": "r2.terraform_state_backend",
       "kind": "provider-bucket",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 12"
+      ],
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
         "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) — in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation, now substantiated",
@@ -353,6 +419,9 @@
     {
       "store": "redis.session_store",
       "kind": "provider-db",
+      "records": [
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "at_rest": {
         "mechanism": "plaintext-exception",
         "evidence": "model.c4:218 models sessionStore as 'TLS, requirepass, EU (Phase 4a)'; at-rest posture unstated in code",
@@ -371,6 +440,9 @@
     {
       "store": "supabase.inngest",
       "kind": "provider-db",
+      "records": [
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "at_rest": {
         "mechanism": "provider-managed:supabase-postgres-aes256",
         "evidence": "Supabase Postgres AES-256 at-rest encryption (Supabase security documentation); the Inngest metadata Postgres project",
@@ -385,6 +457,12 @@
     {
       "store": "supabase.prd",
       "kind": "provider-db",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
       "at_rest": {
         "mechanism": "provider-managed:supabase-postgres-aes256",
         "evidence": "Supabase encrypts Postgres data at rest with AES-256 (Supabase security documentation)",
@@ -419,14 +497,178 @@
         "attestation_url": "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/decisions/ADR-198-baking-the-better-stack-ingest-token-into-git-data-user-data.md",
         "retrieved_on": "2026-09-03",
         "defends_against": "a file-read-only primitive held by the non-root `git` account (a path traversal in the transport wrapper, say), for the two 0600 files. Also closes the /proc/<pid>/cmdline channel for both credentials: every POST passes its header via `curl -K -` on stdin, and both redactors read their sed script from a 0600 file rather than an -e operand, so no external process carries a secret in argv (cmdline is mode 444; environ is 400). ALSO, since #7772: CODE EXECUTION as a NON-ROOT account can no longer read user_data from the Hetzner metadata endpoint. A host-local nftables rule (write_files /usr/local/bin/git-data-nftables.sh + git-data-nftables.service, armed by a runcmd `systemctl enable --now`) drops 169.254.169.254 for `meta skuid != 0`. Measured on this host's image (Ubuntu 24.04 / nftables v1.0.9): root still reaches the endpoint, non-root is dropped, and an un-ruled control address still reaches. Root is exempt so cloud-init's own datasource is unaffected.",
-        "does_not_defend": "CODE EXECUTION AS ROOT, which reads user_data from the metadata endpoint exactly as before — the #7772 nftables drop is scoped to non-root UIDs by design (ADR-198's own wording), so it narrows this from 'any account' to 'root only'. Also does not defend the 0755 sentry_dsn copy, which the `git` account can read today, nor a FILE-READ primitive against /etc/default/git-data-doppler by anything that can read root-owned 0600 files. Rotation of the baked ingest token still requires a host replace (user_data is ForceNew, ADR-149/ADR-152). Tracked: #7772",
+        "does_not_defend": "CODE EXECUTION AS ROOT, which reads user_data from the metadata endpoint exactly as before — the #7772 nftables drop is scoped to non-root UIDs by design (ADR-198's own wording), so it narrows this from 'any account' to 'root only'. Also does not defend the 0755 sentry_dsn copy, which the `git` account can read today, nor a FILE-READ primitive against /etc/default/git-data-doppler by anything that can read root-owned 0600 files. Rotation of the baked ingest token still requires a host replace (user_data is ForceNew, ADR-149/ADR-152). Tracked: #7772 ADDENDUM 2026-09-23 (#8532 PR-2): the root-disk copies of these files (/etc/default/git-data-doppler, /etc/default/git-data-betterstack, the DSN in /usr/local/bin/git-data-emit) are now also recorded under hcloud_server.git_data. This row keeps the threat that row does not cover: user_data read back from the metadata endpoint by root. The Sentry DSN is baked into git-data-emit (DSN='${sentry_dsn}') and used by every emit; two units, git-data-gc-failure.service and git-data-luks-reopen-failure.service, additionally fall back to running the emit without doppler run when Doppler is the broken thing. The id is kept, not renamed: it is cited by five earlier plans.",
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:the git-data host was born 2026-09-14 (run 34836141887, re-birthed by run 34861860722); no posture probe runs on it yet — tracked #6897",
         "exception": {
           "justification": "credentials baked into user_data are plaintext by construction - user_data is retrievable from the Hetzner metadata endpoint BY ROOT, so no on-host file mode can make them encrypted-at-rest. The two 0600 files bound a file-read-only primitive; the 0755 sentry_dsn copy predates #7460 and is bounded by nothing. Accepted on the ADR-198 capability test: every credential here has a write-only ingest ceiling. GIT_DATA_LUKS_KEY fails that test and is deliberately NOT baked. #7772 closed legs (2) and (3) of that test for the ingest token specifically - per-source isolation and the non-root metadata drop - so what remains accepted here is narrower than when this row was written.",
-          "tracking_issue": "#7772",
-          "reevaluate_when": "BEFORE the git-data host is born - user_data is ForceNew (ADR-149/ADR-152). The per-source ingest token and the metadata-endpoint egress rule LANDED in #7772 while that window was open. What remains for the next window: the baked doppler_token derivation path to GIT_DATA_LUKS_KEY, which is the residual leg (2) failure and is NOT addressed by the nftables rule.",
+          "tracking_issue": "#8620",
+          "reevaluate_when": "BEFORE the git-data host is born - user_data is ForceNew (ADR-149/ADR-152). The per-source ingest token and the metadata-endpoint egress rule LANDED in #7772 while that window was open. What remains for the next window: the baked doppler_token derivation path to GIT_DATA_LUKS_KEY, which is the residual leg (2) failure and is NOT addressed by the nftables rule. ADDENDUM 2026-09-23 (#8532): the window above closed with the host's birth on 2026-09-14 and #7772 is closed; this row is now tracked on #8620 and reopens at the next git-data host replace.",
           "expires_on": "2026-10-22"
+        }
+      }
+    },
+    {
+      "store": "hcloud_server.inngest",
+      "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 13",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 21",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 22",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 27",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 31",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/inngest-host.tf, resource \"hcloud_server\" \"inngest\". Root-disk contents, from cloud-init-inngest.yml unless noted: /etc/default/inngest-luks (0600 root:root, the cached INNGEST_REDIS_LUKS_KEY); ONE Doppler service token (doppler_service_token.inngest) held in two files, /etc/default/inngest-doppler (0600) and /etc/default/inngest-server (0640 root:deploy, written by cloud-init and preserved by inngest-bootstrap.sh); /etc/default/soleur-sentry-dsn (0600); /etc/default/soleur-zot-read (0600, a plaintext ZOT_PULL_TOKEN); /etc/default/soleur-ghcr-read (0600, GHCR_READ_TOKEN); /etc/default/inngest-probe (0600, INNGEST_REDIS_PASSWORD); the rendered user_data, which cloud-init keeps under /var/lib/cloud/instances/, carrying the templated credentials; a persistent journal (inngest-bootstrap.sh creates /var/log/journal for Vector, so journald keeps it at the systemd default cap); and Inngest's SQLite directory /var/lib/inngest (inngest-bootstrap.sh --sqlite-dir), vestigial in the durable Postgres+Redis mode.",
+        "defends_against": "nothing at the device layer: Hetzner root disks carry no encryption, and one can be added only when the host is rebuilt",
+        "does_not_defend": "a seized or snapshot-imaged root disk exposes the passphrase of hcloud_volume.inngest_redis_luks (so that volume's LUKS defends nothing against a full-host seizure), the Doppler service token for project soleur-inngest, the zot pull token, the GHCR read token, the Redis password, the persistent journal, and whatever residual state /var/lib/inngest holds (payloads there would be user-derived, #5150, #5450)",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:a CI runner cannot see guest-side disk state (ADR-141), and no host emitter reports root-disk posture today",
+        "exception": {
+          "justification": "The root disk cannot be encrypted in place; it is encryptable only when the host is replaced. The passphrase cache exists because the LUKS open unit runs before the network (cloud-init-inngest.yml explains the ordering). Accepted until the next replace; this host is the most urgent of the six (#8620).",
+          "tracking_issue": "#8620",
+          "reevaluate_when": "the next inngest host replace (apply_target=inngest-host-replace; any user_data edit force-replaces this host). Destroying the plaintext backstop hcloud_volume.inngest_redis under #8285 edits user_data (inngest_volume_id) and so forces that replace: it is this row's decision point, at which the root disk is encrypted or the passphrase cache, the tokens in user_data and /var/lib/inngest move off it",
+          "expires_on": "2026-11-13"
+        }
+      }
+    },
+    {
+      "store": "hcloud_server.web",
+      "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 1",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 2",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 8",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
+      "multiplicity": {
+        "instances": [
+          "web-1",
+          "web-2"
+        ]
+      },
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/server.tf, resource \"hcloud_server\" \"web\" (for_each = var.web_hosts). Root-disk contents: cloud-init.yml writes /etc/default/soleur-doppler-token (0640 root:deploy, the app's prd Doppler service token), /etc/default/disk-monitor, /etc/default/resource-monitor, /etc/default/container-restart-monitor (0600) and /etc/default/luks-monitor (0600, the baked Sentry DSN), and journald-soleur.conf sets Storage=persistent (SystemMaxUse=1G) under the app container's --log-driver journald. On web-1 only, workspaces-cutover.sh appends a prd_workspaces_luks-scoped DOPPLER_TOKEN to /etc/default/luks-monitor. Also on the root disk: /etc/default/webhook-deploy (0600 deploy:deploy, the deploy Doppler token), /etc/default/soleur-ghcr-read (0600, GHCR_READ_TOKEN), the Cloudflare tunnel token that cloudflared service install writes into its systemd unit, RESEND_API_KEY inside the three monitor env files, and the rendered user_data that cloud-init keeps under /var/lib/cloud/instances/.",
+        "defends_against": "nothing at the device layer: Hetzner root disks carry no encryption, and one can be added only when the host is rebuilt",
+        "does_not_defend": "a seized or snapshot-imaged root disk exposes the app's prd Doppler service token, which fetches SUPABASE_SERVICE_ROLE_KEY (every tenant's rows) and BYOK_ENCRYPTION_KEY (every user's stored API keys) until it is rotated; the deploy Doppler token, the GHCR read token, the tunnel token and the Resend key; the persistent journal (the app container's stdout and stderr, the class #8617 found carrying outbound recipient addresses); and, on web-1, a token that fetches WORKSPACES_LUKS_KEY, which unlocks hcloud_volume.workspaces_luks. The four web-1 snapshot images (hetzner.web1_inngest_cutover_snapshots) carry this material as of their dates, with one difference measured 2026-09-23: the prd Doppler token they hold is web-1's first-boot token, revoked 2026-07-30 (server.tf, the soleur-doppler-token rationale), and the current prd token was minted after the last image. The prd_workspaces_luks token workspaces-luks-boot (created 2026-07-18, still live) was installed into /etc/default/luks-monitor by cutover runs on 2026-07-20 and at 09:33Z on 2026-07-23, before image 411798619 (15:34Z that day), so that retained image very likely holds a live credential that fetches WORKSPACES_LUKS_KEY",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:a CI runner cannot see guest-side disk state (ADR-141), and no host emitter reports root-disk posture today",
+        "exception": {
+          "justification": "The root disk cannot be encrypted in place. web-2 can be replaced by dispatch; web-1 cannot be replaced until the web-2 fresh-boot LUKS path lands (#6931), so web-1's root disk stays plaintext at least that long.",
+          "tracking_issue": "#8620",
+          "reevaluate_when": "web-2: its next replace (apply_target=web-host-replace). web-1: when #6931 lets the replace gate admit it. Either replace is the window to encrypt that host's root disk or move the Doppler tokens and the persistent journal off it",
+          "expires_on": "2026-11-27"
+        }
+      }
+    },
+    {
+      "store": "hcloud_server.git_data",
+      "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 36",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)",
+        "knowledge-base/engineering/architecture/diagrams/model.c4"
+      ],
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/git-data.tf, resource \"hcloud_server\" \"git_data\". Root-disk contents: cloud-init-git-data.yml write_files /etc/default/git-data-doppler (0600 root:root; a DOPPLER_TOKEN that can fetch GIT_DATA_LUKS_KEY, never the key itself) and /etc/default/git-data-betterstack (0600), plus the Sentry DSN baked into /usr/local/bin/git-data-emit (0755). The bare repositories live on the attached volumes, not the root disk. cloud-init also keeps the rendered user_data, which carries the same templated token, under /var/lib/cloud/instances/.",
+        "defends_against": "nothing at the device layer: Hetzner root disks carry no encryption, and one can be added only when the host is rebuilt",
+        "does_not_defend": "a seized or snapshot-imaged root disk exposes a token that fetches the passphrase of hcloud_volume.git_data_luks, the Better Stack ingest token and the Sentry DSN; with the token, that volume's LUKS defends nothing until the token is revoked",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:a CI runner cannot see guest-side disk state (ADR-141), and no host emitter reports root-disk posture today",
+        "exception": {
+          "justification": "The root disk cannot be encrypted in place. The user_data-baked copies of the same credentials are recorded separately (git_data.baked_credentials_on_host) because their threat is the metadata endpoint, not the disk.",
+          "tracking_issue": "#8620",
+          "reevaluate_when": "the next git-data host replace (apply_target=git-data-host-replace; git-data is excluded from the per-PR -target list, ADR-103). Destroying the plaintext hcloud_volume.git_data (#6897) edits user_data (git_data_volume_id) and so forces that replace. At it the root disk is encrypted, or the token leaves BOTH the token file and user_data",
+          "expires_on": "2026-12-04"
+        }
+      }
+    },
+    {
+      "store": "hcloud_server.registry",
+      "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 8",
+        "knowledge-base/legal/article-30-register.md#Cross-Cutting Technical & Organisational Measures (Art. 32)"
+      ],
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/zot-registry.tf, resource \"hcloud_server\" \"registry\". Root-disk contents: cloud-init-registry.yml writes /etc/default/registry-doppler (0600, a DOPPLER_TOKEN that can fetch REGISTRY_LUKS_KEY) and /etc/zot/htpasswd (0600, bcrypt hashes of the zot pull and push tokens), and sets journald Storage=persistent for the zot container's logs. Image blobs live on the LUKS-mapped hcloud_volume.registry at /var/lib/zot. cloud-init also keeps the rendered user_data, which carries the templated tokens, under /var/lib/cloud/instances/.",
+        "defends_against": "nothing at the device layer: Hetzner root disks carry no encryption, and one can be added only when the host is rebuilt",
+        "does_not_defend": "a seized or snapshot-imaged root disk exposes a token that fetches the passphrase of hcloud_volume.registry, and offline-crackable hashes of the registry's pull and push tokens",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:a CI runner cannot see guest-side disk state (ADR-141), and no host emitter reports root-disk posture today",
+        "exception": {
+          "justification": "The root disk cannot be encrypted in place. The registry holds container images, not user data, so the exposure is credentials only.",
+          "tracking_issue": "#8620",
+          "reevaluate_when": "the next registry host replace (registry-host-replace-dispatch.yml), at which the root disk is encrypted, or the token leaves BOTH the token file and user_data",
+          "expires_on": "2026-12-11"
+        }
+      }
+    },
+    {
+      "store": "hcloud_server.rehearsal",
+      "kind": "host-root-disk",
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/rung2-rehearsal/rehearsal.tf, resource \"hcloud_server\" \"rehearsal\" (a separate Terraform root). Its user_data comes from module git_data_userdata (../modules/git-data-userdata), so its root disk carries the same credential files as git-data, populated from the rehearsal's own scratch Doppler config. The host is destroyed by the if: always() teardown in .github/workflows/git-data-rung2-rehearsal.yml.",
+        "defends_against": "nothing at the device layer: Hetzner root disks carry no encryption, and one can be added only when the host is rebuilt",
+        "does_not_defend": "a seized or snapshot-imaged root disk during the one boot the host exists for exposes rehearsal-scoped credentials only; no user data ever reaches this host",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:a CI runner cannot see guest-side disk state (ADR-141), and no host emitter reports root-disk posture today",
+        "exception": {
+          "justification": "The rehearsal boots what production boots, so its root disk mirrors git-data's. Encrypting it alone would rehearse a boot that does not exist.",
+          "tracking_issue": "#8620",
+          "reevaluate_when": "the host is born again on every rehearsal run, so every birth is a rebuild window. Re-evaluate when hcloud_server.git_data's root disk is encrypted, which the rehearsal must then mirror",
+          "expires_on": "2026-12-18"
+        }
+      }
+    },
+    {
+      "store": "hcloud_server.grok_dogfood",
+      "kind": "host-root-disk",
+      "multiplicity": {
+        "instances": []
+      },
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/grok-dogfood.tf, resource \"hcloud_server\" \"grok_dogfood\" (count = local.grok_dogfood_enabled ? 1 : 0; local.grok_dogfood_enabled = var.enable_grok_dogfood, default false). cloud-init-grok-dogfood.yml bakes no secret: /etc/grok-dogfood.env (0644) is a placeholder, and XAI_API_KEY arrives after boot outside Terraform.",
+        "defends_against": "nothing at the device layer: Hetzner root disks carry no encryption, and one can be added only when the host is rebuilt",
+        "does_not_defend": "once born, a seized or snapshot-imaged root disk would expose whatever the operator places on it after boot, including the XAI_API_KEY secrets file",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:a CI runner cannot see guest-side disk state (ADR-141), and no host emitter reports root-disk posture today",
+        "exception": {
+          "justification": "The host does not exist while var.enable_grok_dogfood is false. The row exists so the host cannot be born unledgered.",
+          "tracking_issue": "#8620",
+          "reevaluate_when": "when local.grok_dogfood_enabled first turns on (var.enable_grok_dogfood = true): the birth is the rebuild window, so decide the root-disk posture before the first apply",
+          "expires_on": "2026-12-22"
+        }
+      }
+    },
+    {
+      "store": "hetzner.web1_inngest_cutover_snapshots",
+      "kind": "provider-image",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 8",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 13"
+      ],
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "Hetzner snapshot images of server 123931471 (web-1), not declared in Terraform. Read-only GET /v1/images?type=snapshot on 2026-09-23 (HCLOUD_TOKEN from prd_terraform): 398857857 inngest-cutover-pre-20260618T093102Z (2026-06-18, 23.0 GB), 406654994 inngest-cutover-pre-20260709T180819Z (2026-07-09, 26.9 GB), 407991378 inngest-cutover-pre-20260713T095907Z (2026-07-13, 8.9 GB), 411798619 inngest-cutover-pre-20260723T153403Z (2026-07-23, 23.8 GB). All carry labels purpose=inngest-cutover-pre, and none is delete-protected. Release order: ADR-100, the addendum naming the four inngest-cutover-pre-* images. The same ids are pinned in scripts/followthroughs/inngest-soak-6178.sh (SNAPSHOTS). ADDENDUM 2026-09-24 (#8532 PR-4b): 398857857, 406654994 and 407991378 were deleted at 07:23:49Z, 07:23:55Z and 07:24:01Z under per-command operator authorization; each DELETE returned 204 and a read-only GET afterwards returned 404 not_found (Art. 5(2) record, status partial). Only 411798619 remains.",
+        "defends_against": "nothing: each image is a full copy of web-1's unencrypted root disk as it stood before an Inngest cutover",
+        "does_not_defend": "anyone with read access to the Hetzner project, or to Hetzner's snapshot storage, reads the root disk as it was: the persistent journal (the app container's stdout and stderr, the class #8617 found carrying outbound recipient addresses), the Inngest SQLite and Redis state co-located on web-1 before the cutover, and the root-disk credentials of the time. Art. 17: no erasure path reaches these images. The same holds for the rest of the class: the live persistent journals on web-1, web-2 and the registry host (capped by size, never by time), and Better Stack and Sentry (90 days each).",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no probe reads the images on a schedule; existence was measured once, 2026-09-23, by the read-only API call cited in evidence",
+        "exception": {
+          "justification": "411798619 is the #6178 rollback substrate, the latest pre-cutover state. ADR-100 releases all four only after a clean day-7 soak reading, and the day-7 reading (#6178, 2026-09-22T20:38Z) was SOAK NOT CLEAN with 2 UNEXPLAINED groups. The older three are superseded by 411798619 and are proposed delete-now. Deleting any image is a production mutation that runs only on the operator's per-command authorization (#8532 PR-4b), recorded in the Art. 5(2) template committed before the act. ADDENDUM 2026-09-24 (#8532 PR-4b): 398857857, 406654994 and 407991378 were deleted at 07:23:49Z, 07:23:55Z and 07:24:01Z under per-command operator authorization; each DELETE returned 204 and a read-only GET afterwards returned 404 not_found (Art. 5(2) record, status partial). Only 411798619 remains.",
+          "tracking_issue": "#6178",
+          "reevaluate_when": "the #6178 UNEXPLAINED groups are attributed and a SOAK CLEAN reading lands, or 2026-10-06 (the soak probe's horizon), whichever comes first. At that point each image is deleted under per-command authorization, or its retention is re-justified here An extension past 2026-10-06 changes expires_on here AND needs a dated Article 30 PA-8 §(f) amendment in the same PR; the lint checks only the first.",
+          "expires_on": "2026-10-06"
         }
       }
     }

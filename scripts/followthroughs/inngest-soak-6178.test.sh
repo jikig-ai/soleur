@@ -280,8 +280,11 @@ expect "C1 ...the reading block is present with the full run count" 2 "slices=5/
 default_fixtures; NOW=$SOAK_END_EPOCH run C2
 expect "C2 clean reading at SOAK_END → ACTION REQUIRED (rc 5)" 5 "SOAK CLEAN"
 _last="$(last_line)"
-for tok in "adopting" "398857857" "406654994" "407991378" "411798619" "close #6178" "re-read"; do
+for tok in "adopting" "411798619" "close #6178" "re-read"; do
   grep -qF -- "$tok" <<<"$_last" && pass "C2 the VERDICT line carries '$tok'" || fail "C2 verdict line lacks '$tok': $_last"
+done
+for tok in "398857857" "406654994" "407991378"; do
+  grep -qF -- "$tok" <<<"$_last" && fail "C2 verdict line still names deleted image $tok: $_last" || pass "C2 the VERDICT line no longer names deleted image $tok"
 done
 expect "C2 ...provenance names the QUALIFIED 09-15 pass" 5 "itself a QUALIFIED verdict"
 expect "C2 ...the scope caveat is printed" 5 "NOT a web-host double-fire detector"

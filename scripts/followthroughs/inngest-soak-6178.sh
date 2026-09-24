@@ -5,8 +5,8 @@
 # #6178 — the ADR-100 Phase-4 exactly-once soak, read by a machine on the day it becomes readable.
 #
 # TRACKER: **#6178**. NOTIFY-ONLY. This probe never closes the tracker and never reopens it: the
-# close authorises the ADR-100 `adopting → accepted` flip and the release of four rollback
-# snapshots, which are operator verbs. The sweeper renders this probe's exit codes as words in
+# close authorises the ADR-100 `adopting → accepted` flip and the release of the remaining rollback
+# snapshot, which are operator verbs. The sweeper renders this probe's exit codes as words in
 # the comment heading (scripts/sweep-followthroughs.sh, `run_one`'s rc→word map) and closes on
 # NONE of them.
 #
@@ -163,7 +163,9 @@ EXPLAINED='[
    "ids":["01M2QPSG3C1H3HG443K6JG9Q0V","01M2QPSGKXBTKVDD358S1GRQ76"]}
 ]'
 EXPLAINED_WHY='2026-09-17T12:40–13:00Z catch-up after the 76-minute no-scheduler window (PR #8252, op=resume run 35223389582): cron-ghcr-token-minter (`*/20`) ×4 and cron-anthropic-credit-probe (`47 * * * *`) ×2 = exactly the ticks each missed, each fired once on resume — one scheduler draining its backlog, not two schedulers; run ids joined to routine_runs on #6178 comment 5738682595'
-SNAPSHOTS='398857857, 406654994, 407991378, 411798619'
+# The older three (398857857, 406654994, 407991378) were deleted 2026-09-24 under #8532 PR-4b
+# (ADR-100 2026-09-23 addendum: not rollback substrate); only the rollback substrate remains.
+SNAPSHOTS='411798619'
 HOOK_BASE=https://deploy.soleur.ai/hooks
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$'
@@ -453,10 +455,10 @@ if [[ "$unexplained_n" -eq 0 ]]; then
   printf 'operator verbs, in this order — the irreversible one goes after a fresh reading, not before:\n'
   printf '  (1) dispatch the ADR-100 `adopting → accepted` flip PR (knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md) — reversible;\n'
   printf '  (2) wait for the NEXT sweep'"'"'s comment to read SOAK CLEAN again — a fresh reading between the reversible and the irreversible verb is what protects the snapshots, not the order of the last two;\n'
-  printf '  (3) release the four inngest-cutover-pre-* hcloud images (%s) — DELETE /v1/images/<id>, destructive, operator-acked;\n' "$SNAPSHOTS"
+  printf '  (3) release the remaining inngest-cutover-pre-* hcloud image (%s) — DELETE /v1/images/<id>, destructive, operator-acked;\n' "$SNAPSHOTS"
   printf '  (4) close #6178 LAST — a notify-only probe never exits 1, so a group found after the close is dropped by the sweeper'"'"'s closed-set path; closing last keeps this probe reporting until the verbs are done. It then repeats this comment daily until the close.\n'
   printf '%s\n' "$SCOPE_LINE"
-  printf 'ACTION REQUIRED: SOAK CLEAN outside the explained bucket%s — %s distinct runs, %s explained group(s), 0 UNEXPLAINED; dispatch the ADR-100 `adopting → accepted` flip PR, re-read, release the four `inngest-cutover-pre-*` hcloud images (%s), close #6178\n' "$QUAL" "$runs_n" "$explained_n" "$SNAPSHOTS"
+  printf 'ACTION REQUIRED: SOAK CLEAN outside the explained bucket%s — %s distinct runs, %s explained group(s), 0 UNEXPLAINED; dispatch the ADR-100 `adopting → accepted` flip PR, re-read, release the remaining `inngest-cutover-pre-*` hcloud image (%s), close #6178\n' "$QUAL" "$runs_n" "$explained_n" "$SNAPSHOTS"
   exit 5
 fi
 printf 'operator verbs: attribute each UNEXPLAINED group above against routine_runs (read-only GET /rest/v1/routine_runs?select=routine_id,run_id,trigger_source,started_at on prd, started_at inside the bucket window; routine_runs under-records the host index by ~2%%, so a member with no row is attributed by its neighbours) before any flip; a group whose members are one scheduled tick fired twice by two schedulers means the soak FAILED and the rollback path in the runbook applies, not the flip; a manual trigger (trigger_source=manual) beside a scheduled tick is a false group — record it here and re-read.\n'
