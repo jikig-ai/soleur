@@ -50,6 +50,7 @@ import {
 } from "@/server/github/probe-octokit";
 import { withGithubRetry } from "@/server/github-retry";
 import {
+  isFinalAttempt,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -149,6 +150,34 @@ export function redactedError(e: unknown): Error {
     return redacted;
   }
   return orig;
+}
+
+/**
+ * Does a thrown error carry a PEM/JWT shape anywhere Inngest would persist it
+ * (message, stack, or the `cause` chain it serializes to depth 5)? A leak that
+ * arrives as a THROWN error must take the leak path, not be redacted into a
+ * routine `github_api_network` failure (#8726).
+ */
+function errorCarriesLeak(e: unknown, depth = 0): boolean {
+  if (depth > 5 || e === null || e === undefined) return false;
+  if (typeof e === "string") return LEAK_TRIPWIRE_RE.test(e);
+  if (typeof e !== "object") return false;
+  const { message, stack, cause } = e as { message?: unknown; stack?: unknown; cause?: unknown };
+  return (
+    LEAK_TRIPWIRE_RE.test(String(message ?? "")) ||
+    LEAK_TRIPWIRE_RE.test(String(stack ?? "")) ||
+    errorCarriesLeak(cause, depth + 1)
+  );
+}
+
+/**
+ * Pre-#8726 runs memoized `drift-check` as a bare DriftResult; a run resuming
+ * across the deploy must still read it.
+ */
+function readDriftCheck(
+  stored: { result: DriftResult; leakDetected: boolean } | DriftResult,
+): { result: DriftResult; leakDetected: boolean } {
+  return "result" in stored ? stored : { result: stored, leakDetected: false };
 }
 
 // =============================================================================
@@ -761,35 +790,37 @@ async function notifyOpsEmail(args: {
  * Every leak arm reports here, INSIDE its step so a replay does not repeat it
  * (#8726). Carries no matched text: that is the thing the tripwire withholds.
  */
-function reportLeakTripwire(stepId: string): void {
+function reportLeakTripwire(stepId: string, coFailureMode = ""): void {
   reportSilentFallback(null, {
     feature: "cron-github-app-drift-guard",
     op: "leak-tripwire",
     message: "Leak tripwire fired — routing to [security/leak-suspected]",
-    extra: { fn: "cron-github-app-drift-guard", step: stepId },
+    // coFailureMode: the drift verdict the leak displaced (an enum, never text).
+    extra: { fn: "cron-github-app-drift-guard", step: stepId, coFailureMode },
   });
 }
 
 export async function cronGithubAppDriftGuardHandler({
   step,
   logger,
+  attempt,
+  maxAttempts,
 }: HandlerArgs): Promise<{
   failureMode: string;
   failureLabel: FailureLabel | "security/leak-suspected";
   leakDetected: boolean;
 }> {
-  let leakDetected = false;
-
   // Step 1: drift-check (env guards + /app + manifest-diff + install-diff).
   // App-level JWT Octokit — the only auth that hits GET /app + GET /app/installations.
-  let result: DriftResult = EMPTY_RESULT;
-  try {
-    // #8726 — the verdict crosses the step boundary as a RETURNED value. A
-    // LeakDetectedError thrown out of this step would reach the catch below as
-    // the SDK's rebuilt StepError, where `instanceof` never matches.
-    const drift = await step.run(
+  // #8726 — every verdict leaves this step as a RETURNED value, decided while
+  // the error is live: a LeakDetectedError (or any leak-carrying error) thrown
+  // out would reach the handler as the SDK's rebuilt StepError, with its class,
+  // name and fields gone. A non-final attempt still throws so Inngest retries.
+  const drift = readDriftCheck(
+    await step.run(
       "drift-check",
       async (): Promise<{ result: DriftResult; leakDetected: boolean }> => {
+        let probedMode = "";
         try {
           const { octokit } = await createAppJwtOctokit();
           let probed = await probeDriftGuard({
@@ -808,38 +839,41 @@ export async function cronGithubAppDriftGuardHandler({
               logger,
             });
           }
+          probedMode = probed.failureMode;
           // A step's return value is persisted in Inngest run state, and the
           // network branch echoes raw upstream error text into failureDetail.
           // Scan it before it leaves the step.
           assertNoLeak("drift-result", JSON.stringify(probed));
           return { result: probed, leakDetected: false };
         } catch (err) {
-          if (err instanceof LeakDetectedError) {
-            reportLeakTripwire("drift-check");
+          if (err instanceof LeakDetectedError || errorCarriesLeak(err)) {
+            reportLeakTripwire("drift-check", probedMode);
             return { result: EMPTY_RESULT, leakDetected: true };
           }
-          // Inngest persists a failed step's error too: redact before it leaves.
-          throw redactedError(err);
+          if (!isFinalAttempt({ attempt, maxAttempts })) throw err;
+          // Final attempt: report once, here, with the live error's name (the
+          // rebuilt StepError outside the step would say "Error").
+          const e = redactedError(err);
+          reportSilentFallback(e, {
+            feature: "cron-github-app-drift-guard",
+            op: "probeDriftGuard",
+            message: "Drift probe threw — converting to github_api_network",
+            extra: { fn: "cron-github-app-drift-guard" },
+          });
+          return {
+            result: makeFailure(
+              "github_api_network",
+              `probeDriftGuard threw: ${e.name}: ${e.message}`,
+              "ci/guard-broken",
+            ),
+            leakDetected: false,
+          };
         }
       },
-    );
-    result = drift.result;
-    leakDetected = drift.leakDetected;
-  } catch (err) {
-    // Only a non-leak failure reaches here, already redacted inside the step.
-    const e = redactedError(err);
-    reportSilentFallback(e, {
-      feature: "cron-github-app-drift-guard",
-      op: "probeDriftGuard",
-      message: "Drift probe threw — converting to github_api_network",
-      extra: { fn: "cron-github-app-drift-guard" },
-    });
-    result = makeFailure(
-      "github_api_network",
-      `probeDriftGuard threw: ${e.name}: ${e.message}`,
-      "ci/guard-broken",
-    );
-  }
+    ),
+  );
+  const result = drift.result;
+  let leakDetected = drift.leakDetected;
 
   const detectedAtIso = new Date().toISOString();
   // P2.3: previously a dead GHA actions URL. The drift-guard now lives in
@@ -919,7 +953,7 @@ export async function cronGithubAppDriftGuardHandler({
     // write (e.g. a 403, reported and swallowed above) still returns true.
     return { leakDetected: leak };
   });
-  leakDetected = leakDetected || issueHandling.leakDetected;
+  leakDetected = leakDetected || issueHandling?.leakDetected === true;
 
   // Step 3: notify-ops-email — fires on either failure OR leak.
   if (result.failureMode !== "" || leakDetected) {
@@ -946,7 +980,7 @@ export async function cronGithubAppDriftGuardHandler({
       }
       return { leakDetected: leak };
     });
-    leakDetected = leakDetected || notify.leakDetected;
+    leakDetected = leakDetected || notify?.leakDetected === true;
   }
 
   // Step 4: sentry-heartbeat — single end-of-job POST.
