@@ -274,6 +274,8 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
     private NIC (below), then repair zot (`apply_target=registry-host-replace`) or backfill the
     missing tag (`build-inngest-bootstrap-image.yml -f mirror_only=true`), then run
     `inngest-host-replace` again.
+    If the event's `host_name` is a WEB host (the colocated block, `web_colocate_inngest=true`),
+    the web app is down too: the colocated item runs in the same runcmd shell and ends it.
   - web `stage=pull` fatal (paged by `web_terminal_boot_fatal`): the host is web-2 or a new host
     (web-1 never re-runs cloud-init). Read `zot=[login=,n=,cause=]` in the detail:
     `cause=auth|unreach|manifest|timeout|unpinned|other`. `unpinned` means the dispatch passed a
@@ -474,6 +476,19 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   > terminal inngest boot, not "a host was GHCR-served". A separate arm FAILs on any web
   > `stage:"pull" level:fatal` in the window. The soak now gates 5.6 and #6129; the PAT revoke
   > (5.5) is already done.
+  >
+  > Verdicts added by the re-arm (read the first row of the table above as `FAIL: N watched
+  > event(s)` from now on):
+  >
+  > | Soak line | What it means | Where to go |
+  > |---|---|---|
+  > | `FAIL: N watched event(s)` | a rolling-deploy gate degrade (`gate-degraded=`) or a terminal inngest boot (`inngest-pull-fatal=`) | triage by signal, above |
+  > | `FAIL(web-pull-fatal)` | a web fresh boot failed its zot pull (`stage:"pull"` fatal) | the `stage=pull` bullet above; the event's `cause=` field |
+  > | `FAIL(retired-names)` | a pre-1d template emitted `inngest_ghcr_fallback` / `app_ghcr_*` after START — a host booted from the OLD template inside the window | find the host from the event; replace it so it boots the 1d template |
+  > | `FAIL(start-after-anchor)` | the script's default START is later than #8660's merge — the window was moved past its anchor | a code defect in the soak; restore START, never move it later to pass |
+  >
+  > A line ending `[START overridden (anchor check skipped)]` came from a manual run with
+  > `ZOT_SOAK_START` set; it is not the sweeper's verdict and is not evidence for 5.6.
 
 - **Alert rule** — `sentry_issue_alert.zot_mirror_fallback_rate`, APPLY-CREATED and live now
   (it is **not** armed at cutover; `zot-gate-degraded` emits pre-flip today). It pages on the
