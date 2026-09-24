@@ -934,7 +934,7 @@ service-role key, which the agent can read (D2).
   live flag/Sentry-rule incident, which is what the incident-rollback block exists for), not an
   oversight — recorded here so a future reader does not conclude the omission was missed.
 
-**Brand-survival threshold:** single-user incident.
+- **Brand-survival threshold:** single-user incident.
 
 CPO sign-off: required at plan time (`requires_cpo_signoff: true`). The Product assessment in the
 brainstorm (§Domain Assessments → Product) framed the blast radius and accepted the TTY friction
