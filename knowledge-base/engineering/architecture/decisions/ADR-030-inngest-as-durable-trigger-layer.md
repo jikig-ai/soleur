@@ -197,3 +197,15 @@ The hourly cadence on the prd workflow (CPO decision 2026-07-01, changelog below
 - **2026-06-17 (#5450) — no-SSH cutover orchestration (execution mechanism, no new decision).** The Phase-2 cutover's host-side steps (enumerate still-armed reminders; the opt-in wiped-volume durability verify) run through **HMAC-gated webhook hooks** on the existing `deploy.soleur.ai` ingress + a `workflow_dispatch` driver (`.github/workflows/cutover-inngest.yml`), mirroring the `infra-config` / `restart-inngest-server` pattern — NOT operator SSH (`hr-no-ssh-fallback-in-runbooks`) and NOT the `ci-deploy.sh` 4-field command parser. New host scripts (`inngest-enumerate-reminders.sh`, `inngest-rearm-reminders.sh`, `inngest-wiped-volume-verify.sh`, `cat-inngest-verify-state.sh`) reach `/usr/local/bin` via the no-SSH `infra-config` push (FILE_MAP↔DEST_SPEC lockstep); the stop/start sudoers grant (B3) is root-managed. No new sub-processor and **no new secret** (reuses `WEBHOOK_DEPLOY_SECRET` + CF-Access). This is the execution surface for the durable-backend decision above, not a new architectural decision. C4: no model change (the `deploy.soleur.ai`→host webhook edge already exists; no `.c4` enumerates individual hooks).
 
 <!-- lint-infra-ignore end -->
+
+## Amendment — 2026-09-23 (#8611, ADR-243): I4 under streaming
+
+`serve()` now streams step responses. The signature gate still runs before any function dispatches,
+but its 401 travels inside the streamed JSON envelope: the HTTP status line of every POST is **201**,
+including an unsigned one (spike: 201 + `x-inngest-sdk` headers, envelope `status: 401`, no function
+ran). `signature-verify.test.ts` asserts the envelope. Anything that reads the HTTP status of
+`/api/inngest` POSTs as the signature verdict must read the envelope instead.
+
+The SDK is now pinned **exactly** at `inngest` `3.54.2` (ADR-243 §1: its `createStream` heartbeat
+leak is worked around by `server/inngest/stream-detach.ts` and content-hash-pinned in that module's
+test), superseding the Context's `inngest@^3` range. The v4 upgrade is #8628.

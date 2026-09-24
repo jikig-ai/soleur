@@ -74,6 +74,14 @@ docs.x.ai model catalog, per MTok (input / cached input / output, under 200k tok
 - **(a)** Decision item 6 is met by an agent-run checklist row (row 6, Grok tier-map freshness) in `model-launch-review`, not by a script — the check needs a local `grok` CLI.
 - **(b)** Recorded consequence, not a decision change: on Grok, `cheap` and `standard` now differ only on cached input ($0.30 vs $0.50), so Decision item 1's cost split saves almost nothing on this harness.
 
+## Addendum — 2026-09-23 (Grok research stubs, #8604)
+
+Measured on Grok Build 1.0.41 with `grok --agent <stub> -p`. `model: haiku` on a research stub warns `agent profile model not in catalog, keeping session default` and the call bills the session default. `model: cheap` warns the same way. `model: grok-4.5` is recognized (`agent profile model override applied`) and this headless client then sends `SetSessionModel` for the configured default, so the call still bills that default. `model: inherit` and a missing `model` key produce no catalog warning.
+
+`subagent_model_inheritance` was unset (the documented default, off). The session's spawn tool exposed neither a `model` argument nor an agent type, so the flag never rejected a named model.
+
+Decision 4 is unchanged: the Claude research agents stay `model: haiku` until a harness accepts semantic tiers in agent spawn. The Grok generator omits the `model` line when the source value is `haiku`, `sonnet`, `opus`, or `fable`. It does not write `cheap` or `grok-4.5`. Writing a catalog slug onto these files would pin the session profile, not a research child.
+
 ## Alternatives considered
 
 | Alternative | Rejected because |

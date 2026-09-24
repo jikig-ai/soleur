@@ -70,7 +70,7 @@ resource "doppler_project" "infra_privileged" {
   name = "soleur-infra-privileged"
   # Doppler caps description at 255 chars (see doppler_project.inngest) — the full
   # rationale is in the header comment above, not here.
-  description = "Tier B (#8209, ADR-241): credentials that write infra, read another tier's secrets, or reach third-party installations. Read only via DOPPLER_TOKEN_INFRA_PRIVILEGED, an environment secret on main-only environments. Values are operator-supplied; none passes through tfstate."
+  description = "Tier B (#8209, ADR-241): infra-write, cross-tier and third-party credentials. Read only via DOPPLER_TOKEN_INFRA_PRIVILEGED, an environment secret on main-only environments. Values are operator-supplied; none passes through tfstate."
 
   lifecycle {
     # The project holds every privileged credential after the operator sequence runs.

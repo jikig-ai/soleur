@@ -357,17 +357,21 @@ pre-commit:
       # is the merge gate). A clean merge never reached this hook anyway: only pre-commit and
       # pre-push are installed. lefthook keys `merge` on MERGE_HEAD, so a squash-merge commit, an
       # amended merge commit and a cherry-pick/revert `--continue` still run the battery
-      # (measured, lefthook 2.1.6). `run:` is unchanged and still carries the ADR-196 hatch.
+      # (measured, lefthook 2.1.6). `run:` selects the affected gate (#8322) —
+      # see the comment below for why it carries no ALLOW_FULL_GATE hatch.
       # Pinned by plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh.
       skip:
         - merge
-      # SOLEUR_ALLOW_FULL_GATE=1 is deliberate, not a workaround (#7553). test-all.sh refuses a
-      # full-gate run when it MEASURES a sibling full-gate run in flight. A pre-commit hook is a
-      # SANCTIONED invocation — the commit is the thing being gated, and refusing it would mean a
-      # developer (or a spawned agent, for which committing a .ts file is routine) cannot commit
-      # at all while any sibling worktree happens to be running the battery. The refusal exists to
-      # stop an OPPORTUNISTIC second battery, not to block the gate that must run.
-      run: SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh
+      # `--affected` (#8322) replaces the SOLEUR_ALLOW_FULL_GATE=1 hatch this run
+      # previously carried. The hatch existed because test-all.sh refused a
+      # full-gate run when it measured a sibling in flight, and a pre-commit
+      # hook is a SANCTIONED invocation — refusing it would mean a commit could
+      # not land while any sibling worktree ran the battery (#7553). Affected
+      # mode is exempt from both refusal arms BY CONSTRUCTION (it is the
+      # narrow gate, not an opportunistic second battery), so the sanctioned
+      # invocation needs no override — and no longer pays the full-battery
+      # cost on every matching commit.
+      run: bash scripts/test-all.sh --affected
     plugin-component-test:
       priority: 7
       glob: "plugins/soleur/**/*.md"

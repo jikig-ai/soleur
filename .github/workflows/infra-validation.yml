@@ -867,6 +867,12 @@ jobs:
       - name: Run registry store-not-LUKS alert drift guard (#8408)
         run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
 
+      # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
+      # queries the emitter's real shape and field path, aggregates only, every -target line, and
+      # its mutation rows.
+      - name: Run Anthropic-spend alerts drift guard (#8611)
+        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
+
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
       # guard above sweeps: orphan-reaper.test.sh backs terraform_data.orphan_reaper_install (its
@@ -1047,6 +1053,16 @@ jobs:
       # probe-fault-is-not-absence arm (#6415) are actually asserted rather than string-matched.
       - name: Run first-boot NIC-wait gate guard (#6441 ADR-114 I1 defer-not-abort + 3 arms)
         run: bash apps/web-platform/infra/nic-wait-gate.test.sh
+
+      # LOAD-BEARING registration (explicit, no glob). #8651: renders cloud-init.yml through
+      # terraform templatefile, EXECUTES the web seed pull under stubs (zot-first by bake, no
+      # doppler, bounded fail-open pre-pull NIC wait, both legs named in the fatal) plus a
+      # mutation battery, and exercises the boot trail's --image-origin read. Needs this job's
+      # terraform (render leg — FAILS, never skips, under CI) and fetch-depth: 0 (the census's
+      # pinned-commit baseline, git show 3aaaede525). Advisory job: soleur:ship reads it.
+      - name: Run web fresh-boot zot-seed guard (#8651 bake + NIC wait + Doppler census)
+        timeout-minutes: 5
+        run: bash apps/web-platform/infra/cloud-init-web-zot-seed.test.sh
 
       # LOAD-BEARING registration (explicit, no glob). Behavioural, not grep-only: it renders
       # cloud-init-inngest.yml through terraform templatefile + local.inngest_rationale_strip

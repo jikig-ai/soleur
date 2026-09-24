@@ -96,7 +96,7 @@ if arm == "infra":
     # retyped, so the harness cannot re-implement the conditional under test — a
     # hand-written copy would pass against a broken runner.
     m2 = re.search(
-        r'\n([ \t]*_infra_declined_before="\$_ceiling_declined"\n.*?\n[ \t]*fi\n)',
+        r'\n([ \t]*_infra_declined_before=[^\n]*_ceiling_declined[^\n]*\n.*?\n[ \t]*fi\n)',
         s, re.S)
     assert m2, "MUTATION-DID-NOT-LAND: infra dispatch block not found in source"
     infra_block = m2.group(1)
@@ -152,8 +152,10 @@ elif mutation == "no_marker":
     # M5: the run is curtailed silently.
     s = sub_once(s, 'SOLEUR_TEST_ALL_RUNTIME_CEILING', 'QUIET_CEILING', 'ceiling marker')
 elif mutation == "unconditional_infra_ran":
-    # M8: revert the coverage claim to its unconditional form.
-    s = sub_once(s, 'if (( _ceiling_declined == _infra_declined_before )); then\n      _infra_ran=1\n    fi',
+    # M8: revert the coverage claim to its unconditional form. The guard
+    # samples BOTH decline counters (ceiling AND affected-mode not-affected,
+    # #8322) — either returns 0 from run_suite without executing.
+    s = sub_once(s, 'if (( _ceiling_declined + _affected_declined == _infra_declined_before )); then\n      _infra_ran=1\n    fi',
                  '_infra_ran=1', 'infra coverage guard')
 elif mutation == "trip_once":
     # M7: only the first post-ceiling suite is declined.
