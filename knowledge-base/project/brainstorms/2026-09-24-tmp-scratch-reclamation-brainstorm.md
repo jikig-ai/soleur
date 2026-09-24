@@ -17,7 +17,7 @@ orphaned-worktree sweep.
 - `/tmp` (16G tmpfs): 5.5 GB used, ~14k stale top-level entries (`kbcov` 2115,
   `pirgate` 2040, `inngest` 2033, `tmp.*` 1984, `plan` 1880, `gdpr` 1872, `rung` 1384,
   `deploygap` 1233, `soleur-inc` 202, `playwright` 60, …)
-- `/var/tmp` (disk): **27 GB, ~45k+ entries accumulated in ~7 days (~4 GB/day)**.
+- `/var/tmp` (disk): **27 GB, ~67k top-level entries; +27k produced during the brainstorm session itself (rate far above the 7-day ~4 GB/day average)**.
   `tmp.*` 16,438 (**1,484 contain `.git` — orphaned worktrees; only 3 registered**),
   `rung2-archive.*` 12,819 (writer: `tests/scripts/lib/git-data-birth-readiness-gate.sh`),
   `gdboot*` 7,837 (`scripts/lib/git-data-boot-signal-poll.sh`), `inngest-ci`/`inngest-arm-*`
