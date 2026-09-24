@@ -28,7 +28,7 @@
 #     informational (the live config is authoritative).
 #
 # Evidence cites envelope-capture.md sections (EC§N) or test names.
-# registry values: claude-settings | soleur-plugin | devin-config | codex-config | openhands | claude-permissions | devin-permissions
+# registry values: claude-settings | soleur-plugin | devin-config | codex-config | claude-permissions | devin-permissions
 #
 # --- .claude/settings.json — PreToolUse Bash registrations -----------------
 # Under Devin these matchers are dead (EC§1); each hook binds via .devin ^exec$
@@ -125,12 +125,11 @@ devin-config	.claude/hooks/session-rules-loader.sh	SessionStart	""	bind	matcher 
 devin-config	.claude/hooks/guardrails.sh	PreToolUse	^exec$	bind	devin-tool=exec; pre-existing live binding	EC§1
 devin-config	.claude/hooks/guardrails.sh	PreToolUse	^(edit|multi_edit|notebook_edit)$	bind	devin-tool=edit; write narrowed out — ^write$ twin already covers it (double-fire fix)	EC§1,EC§2
 #
-# --- other-harness registries — explicitly out of scope --------------------
-# UNAUDITED: these rows are summary coverage, not per-registration rows — T1's
+# --- other-harness registry — explicitly out of scope ----------------------
+# UNAUDITED: this row is summary coverage, not per-registration rows — T1's
 # enumeration reads only claude-settings/soleur-plugin/devin-config, so edits
-# to .codex/.openhands registries do not trip the parity test.
+# to the .codex registry do not trip the parity test.
 codex-config	.codex/config.toml hooks	PreToolUse	^Bash$	n/a	this-pr-devin-scope	codex registry unchanged; summary row, unaudited
-openhands	.openhands/hooks.json hooks	various	various	n/a	this-pr-devin-scope	openhands registry unchanged; summary row, unaudited
 #
 # --- permissions -------------------------------------------------------------
 # .claude permissions are NOT imported by Devin (EC§6). Devin analogs live in
