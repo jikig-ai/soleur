@@ -17,6 +17,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 const FUNCTIONS_DIR = resolve(__dirname, "../../../server/inngest/functions");
 const MONITORS_TF = resolve(
@@ -494,6 +495,43 @@ describe("Sentry heartbeat step shape (#7834)", () => {
     expect(expr).not.toMatch(/steps\.\w+\.outputs\.\w+\s*!=/);
     // It must be able to reach BOTH arms.
     expect(expr).toMatch(/&&\s*'ok'\s*\|\|\s*'error'/);
+  });
+
+  it("scheduled-terraform-drift: the sentry matrix leg does not check in to the shared slug (#8630, ADR-031 #6612 (b))", () => {
+    // Selected by job AND step name: the file carries a second heartbeat step of the
+    // same name in `heartbeat-live-reconcile`, which must not satisfy this row.
+    // Parsed as YAML (not the indentation walk) so the matrix is read however it is
+    // declared — inline list or `include:` rows.
+    const SENTRY_LEG = "apps/web-platform/infra/sentry";
+    const wf = parseYaml(
+      readFileSync(join(WORKFLOWS_DIR, "scheduled-terraform-drift.yml"), "utf-8"),
+    ) as {
+      jobs: Record<
+        string,
+        {
+          strategy?: { matrix?: { directory?: unknown; include?: { directory?: unknown }[] } };
+          steps?: { name?: string; if?: unknown }[];
+        }
+      >;
+    };
+    const job = wf.jobs["drift-check"];
+    expect(job).toBeDefined();
+    const finals = (job.steps ?? []).filter((st) => st.name === "Sentry check-in (final)");
+    expect(finals.length).toBe(1);
+    // EQUALS, not contains: `always() || matrix.directory != …` contains the same text
+    // and excludes nothing.
+    expect(finals[0].if).toBe(`always() && matrix.directory != '${SENTRY_LEG}'`);
+
+    // The quoted path must name a real leg, or a typo excludes nothing while the
+    // equality above still passes against the typo'd literal.
+    const matrix = job.strategy?.matrix ?? {};
+    const dirs = [
+      ...(Array.isArray(matrix.directory) ? matrix.directory : []),
+      ...(matrix.include ?? []).map((r) => r.directory),
+    ];
+    expect(dirs).toContain(SENTRY_LEG);
+    const quoted = String(finals[0].if).match(/matrix\.directory != '([^']+)'/)?.[1];
+    expect(dirs).toContain(quoted);
   });
 });
 

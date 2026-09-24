@@ -14,7 +14,8 @@
 # never as a red apply). The post-apply probe in the `apply` job does NOT read
 # the committed copy: it projects its own reference from the plan it applies, so
 # a STALE copy can only affect the daily job. The projection's floors (sensitive
-# leaf, unmapped kind, unknown-at-plan attribute, duplicate name) red every
+# leaf, unmapped kind, unknown-at-plan attribute, a detector id that does not
+# exist yet, duplicate name) red every
 # Sentry-root PR, like the sibling gates in the same step.
 #
 # ONE CALL SITE, deliberately: `plan_pr`. An earlier draft also ran it in the
@@ -76,7 +77,11 @@ if [[ "$rc" -ne 0 ]]; then
   # The remedy line is gated on the CAUSE jq measured; the other floors
   # (child_modules, duplicate name, sensitive leaf, not a plan document) name
   # their own remedy in the message above.
+  # The unknown-detector arm comes FIRST: its remedy is a follow-up PR, not
+  # "set the attribute" — setting it is impossible until the apply creates it.
   case "$jq_msg" in
+    *"detector id(s) that do not exist yet"*)
+      echo "::error::A monitor created or recreated in this plan has no detector id until this apply creates it, so no alert can bind it yet. List its label in local.cron_monitor_alert_unrouted (apps/web-platform/infra/sentry/cron-monitor-alerts.tf) with a (#N) reason, and route it in a follow-up PR after the first apply. Nothing is compared until the plan projects." >&2 ;;
     *"unknown at plan time"*|*"is not mapped by the projection"*)
       echo "::error::Set the attribute explicitly in the block, or map the new kind in tests/scripts/lib/sentry-alert-projection.jq on BOTH sides (with a shape-parity row in the probe's suite). Nothing is compared until the plan projects." >&2 ;;
   esac

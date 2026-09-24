@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$REPO_ROOT/scripts/sentry-alert-reference-gate.sh"
 PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 pass=0; fail=0
-EXPECTED_TESTS=34
+EXPECTED_TESTS=42
 
 # A sandbox harness inherits the bare 4 GiB /tmp tmpfs on a direct invocation;
 # every other runner in this repo defaults TMPDIR to /var/tmp. Match them.
@@ -444,6 +444,141 @@ t_l5_legacy_null_nomask() {
     "$(_plan30 l5 "$x")" "$REF30" "PASS (30 rules, plan == alert-reference.json)"
 }
 
+# ── Guard 2 (#8630) — the unknown-detector projection floor. A `sentry_alert`
+# whose `monitor_ids` carries an element unknown at plan time (a
+# `sentry_cron_monitor` created or recreated in the same plan — its id does not
+# exist until the apply) must NEVER project. Without the floor the PR-time gate
+# goes green once the author commits the null-carrying projection, and the
+# post-apply probe then compares live (the real id) with a reference projected
+# from the apply plan (`null`) — `main` red after a COMPLETE apply, the #8050
+# class. Each row asserts the exact rc and the floor's own text.
+G2_FLOOR_TEXT="detector id(s) that do not exist yet (a monitor created or recreated in this plan)"
+# _g2_null_plan <label> <tf-name> <monitor-ids-json> — the base plan with one
+# rule's monitor_ids replaced and `sensitive_values.monitor_ids` given the SAME
+# length (a real `terraform show -json` mask is element-wise).
+_g2_null_plan() {
+  _mut_plan "$1" '(.planned_values.root_module.resources[] | select(.name == $n))
+      |= (.values.monitor_ids = $ids | .sensitive_values.monitor_ids = ($ids | map(false)))' \
+    --arg n "$2" --argjson ids "$3"
+}
+# The reference the #8050 author would commit: the SAME null-carrying plan
+# projected by a module WITHOUT the floor. The tf side emits `detectorIds:
+# $v.monitor_ids` verbatim and the reference side re-normalises (sort), so this
+# is that projection exactly. Against it, a floorless gate compares equal and
+# exits 0 — the row cannot pass for the wrong reason.
+G2_PLAN=$(_g2_null_plan g2p single_trigger '["1", null]')
+G2_REF=$(_mut_ref g2r '.["single-trigger"].detectorIds = (["1", null] | sort)')
+t_g2_1_null_detector_floor() {
+  _red "G2-1 monitor_ids [\"1\", null] with the reference a floorless projection would commit → floor refuses (rc 1)" \
+    "$G2_PLAN" "$G2_REF" "sentry_alert.single_trigger: monitor_ids carries 1 ${G2_FLOOR_TEXT}"
+}
+t_g2_2_unknown_not_first() {
+  # Three rules; the unknown one is LAST by resource order AND by name, and its
+  # null is not the first element — a floor that checks only the first rule or
+  # the first element passes this row.
+  local third plan ref
+  third=$(_rule third "third-rule" "$TC_B" "$AF_B")
+  plan="$TMPD/mut-g2-2.json"
+  jq --arg n two_trigger --argjson ids '["1213799", "7", null]' --argjson t "$third" '
+      (.planned_values.root_module.resources[] | select(.name == $n))
+        |= (.values.monitor_ids = $ids | .sensitive_values.monitor_ids = ($ids | map(false)))
+      | .planned_values.root_module.resources = (
+          [.planned_values.root_module.resources[] | select(.name == "single_trigger")] + [$t]
+          + [.planned_values.root_module.resources[] | select(.name == "two_trigger")])' "$PLAN" > "$plan"
+  ref="$TMPD/ref-g2-2.json"
+  jq -S --argjson t "$third" '.planned_values.root_module.resources += [$t]' "$PLAN" \
+    | jq -S --arg side tf -f "$PROJ" \
+    | jq -S '.["two-trigger"].detectorIds = (["1213799", "7", null] | sort)' > "$ref"
+  if ! jq -e '[.planned_values.root_module.resources[].values.name] == ["single-trigger","third-rule","two-trigger"]
+              and (.planned_values.root_module.resources[2].values.monitor_ids[2] == null)' "$plan" >/dev/null; then
+    _report "G2-2 unknown detector in the last rule, not the first element" fail "fixture did not land: $(jq -c '[.planned_values.root_module.resources[] | {n: .name, m: .values.monitor_ids}]' "$plan")"
+    return
+  fi
+  _red "G2-2 three rules, the unknown detector in the LAST rule (by order and by name) at a non-first element → floor names that rule" \
+    "$plan" "$ref" "sentry_alert.two_trigger: monitor_ids carries 1 ${G2_FLOOR_TEXT}"
+}
+t_g2_3_remedy_pointer() {
+  _gate "$G2_PLAN" "$G2_REF"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "list it in local.cron_monitor_alert_unrouted in cron-monitor-alerts.tf with a (#N) reason and route it in a follow-up PR after the first apply" <<<"$_out"; then
+    _report "G2-3 the floor names its remedy (local.cron_monitor_alert_unrouted, a follow-up PR)" ok
+  else
+    _report "G2-3 the floor names its remedy" fail "rc=$_rc. Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+t_g2_4_direct_jq_rc5() {
+  local rc=0 out
+  out=$(jq --arg side tf -f "$PROJ" "$G2_PLAN" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -eq 5 ]] && grep -qF -- "monitor_ids carries 1 ${G2_FLOOR_TEXT}" <<<"$out"; then
+    _report "G2-4 jq -f projection.jq --arg side tf on the null-carrying plan → rc 5 with the floor text" ok
+  else
+    _report "G2-4 direct jq refuses the null-carrying plan" fail "rc=$rc (want 5). Output: $(head -c 400 <<<"$out")"
+  fi
+}
+t_g2_5_no_wrong_remedy() {
+  # The generic arm matches `*"unknown at plan time"*` and says "Set the
+  # attribute explicitly in the block" — the WRONG remedy for a detector id that
+  # does not exist yet. The floor's text must not trip it.
+  _gate "$G2_PLAN" "$G2_REF"
+  if [[ "$_rc" -eq 1 ]] && ! grep -qF -- "Set the attribute explicitly" <<<"$_out" \
+     && ! grep -qF -- "unknown at plan time" <<<"$_out"; then
+    _report "G2-5 the generic 'Set the attribute explicitly' remedy is ABSENT on the unknown-detector floor" ok
+  else
+    _report "G2-5 the wrong remedy is absent" fail "rc=$_rc. Output: $(head -c 600 <<<"$_out")"
+  fi
+}
+t_g2_5b_dedicated_arm() {
+  _gate "$G2_PLAN" "$G2_REF"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "::error::A monitor created or recreated in this plan has no detector id until this apply creates it" <<<"$_out"; then
+    _report "G2-5b the gate's dedicated case arm echoes the floor's own remedy" ok
+  else
+    _report "G2-5b dedicated remedy arm" fail "rc=$_rc. Output: $(head -c 600 <<<"$_out")"
+  fi
+}
+# Must-PASS twins: the floor refuses only a null element.
+G2_KNOWN_A='["1213799", "42", "7"]'
+G2_KNOWN_B='["1213799", "9"]'
+G2_KNOWN_PLAN="$TMPD/g2-known.json"
+jq --argjson a "$G2_KNOWN_A" --argjson b "$G2_KNOWN_B" '
+    (.planned_values.root_module.resources[] | select(.name == "two_trigger"))
+      |= (.values.monitor_ids = $a | .sensitive_values.monitor_ids = ($a | map(false)))
+    | (.planned_values.root_module.resources[] | select(.name == "single_trigger"))
+      |= (.values.monitor_ids = $b | .sensitive_values.monitor_ids = ($b | map(false)))' "$PLAN" > "$G2_KNOWN_PLAN"
+t_g2_p1_all_known_reverse_order() {
+  local rev="$TMPD/g2-p1-rev.json" ref="$TMPD/g2-p1-ref.json"
+  jq -S --arg side tf -f "$PROJ" "$G2_KNOWN_PLAN" > "$ref"
+  # Rules reversed AND every monitor_ids array reversed.
+  jq '.planned_values.root_module.resources |= (reverse | map(.values.monitor_ids |= reverse))' "$G2_KNOWN_PLAN" > "$rev"
+  if jq -e '.planned_values.root_module.resources[0].name == "single_trigger"
+            and .planned_values.root_module.resources[1].values.monitor_ids == ["7","42","1213799"]' "$rev" >/dev/null; then
+    _green "G2-P1 two rules with every detector id known, rules and ids in reverse order, PASS" "$rev" "$ref" "PASS (2 rules"
+  else
+    _report "G2-P1 all-known reverse order" fail "fixture did not land: $(jq -c '[.planned_values.root_module.resources[] | {n: .name, m: .values.monitor_ids}]' "$rev")"
+  fi
+}
+t_g2_p2_live_side_equal() {
+  # The live side (what the post-apply probe reads) carrying the SAME known ids
+  # in a different order projects byte-equal to the tf side.
+  local live="$TMPD/g2-p2-live.json" rc_t=0 rc_l=0 t l
+  t=$(jq -S -c --arg side tf -f "$PROJ" "$G2_KNOWN_PLAN" 2>&1) || rc_t=$?
+  jq --argjson a "$G2_KNOWN_A" --argjson b "$G2_KNOWN_B" '[ to_entries[] | .value | {
+      name, enabled,
+      detectorIds: (if .name == "two-trigger" then ($a | reverse) else ($b | reverse) end),
+      config: {frequency: .frequency},
+      triggers: {logicType: (if .triggerLogicType == "single" then "all" else .triggerLogicType end),
+                 conditions: [.triggerConditions[] | {type, comparison}]},
+      actionFilters: [.actionFilters[] | {logicType,
+        conditions: [.conditions[] | {type, comparison}],
+        actions: [.actions[] | {type, config: {targetType, targetIdentifier}, data: {fallthroughType}}]}] } ]' \
+    <<<"$t" > "$live"
+  l=$(jq -S -c --arg side live -f "$PROJ" "$live" 2>&1) || rc_l=$?
+  if [[ "$rc_t" -eq 0 && "$rc_l" -eq 0 && -n "$t" && "$t" == "$l" ]] \
+     && jq -e '.["two-trigger"].detectorIds == ["1213799","42","7"]' <<<"$l" >/dev/null; then
+    _report "G2-P2 the live-shape side with the same known ids (reordered) compares equal to the tf side" ok
+  else
+    _report "G2-P2 live side equal" fail "rc_t=$rc_t rc_l=$rc_l tf=$(head -c 300 <<<"$t") live=$(head -c 300 <<<"$l")"
+  fi
+}
+
 t_g0
 t_m1
 t_m2
@@ -475,6 +610,14 @@ t_l1_legacy_excluded_drops
 t_l3_native_excluded_drops
 t_l4_unmapped_legacy_errors
 t_l5_legacy_null_nomask
+t_g2_1_null_detector_floor
+t_g2_2_unknown_not_first
+t_g2_3_remedy_pointer
+t_g2_4_direct_jq_rc5
+t_g2_5_no_wrong_remedy
+t_g2_5b_dedicated_arm
+t_g2_p1_all_known_reverse_order
+t_g2_p2_live_side_equal
 
 echo "=== $pass passed, $fail failed ==="
 ran=$((pass + fail))
