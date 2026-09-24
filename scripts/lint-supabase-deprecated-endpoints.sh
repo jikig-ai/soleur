@@ -149,6 +149,8 @@ ALLOWLIST=(
   'apps/web-platform/scripts/verify-required-secrets.sh|2026-09-13|presence check only: SUPABASE_ACCESS_TOKEN is a member of the REQUIRED[] list this script asserts is exported (#8028); the value is never sent anywhere — no curl, no Management API call'
   'apps/web-platform/test/scripts/run-migrations-unmerged-gate.test.ts|2026-09-14|test env override: sets SUPABASE_ACCESS_TOKEN to the empty string so the real runner takes the reload hook'"'"'s absence-soak and issues no network call from a unit test (#8028 review); no HTTP client in the file'
   '.github/workflows/tenant-integration.yml|2026-09-14|absence assertion only: `doppler secrets --only-names` + jq has("SUPABASE_ACCESS_TOKEN") reds the pull_request job if the token ever lands in dev_scheduled (#8028 DC-1); names only, no value read, no Management API call'
+  '.github/workflows/dev-ledger-reconcile.yml|2026-09-24|absence assertion only (copied from tenant-integration.yml): `doppler secrets --only-names` + jq has("SUPABASE_ACCESS_TOKEN") refuses to run PR-authored down SQL if the token ever lands in dev_scheduled (#8028 DC-1, #8605); names only, no value read, no Management API call'
+  'apps/web-platform/scripts/dev-ledger-parity.test.sh|2026-09-24|fixtures for the dev-ledger-reconcile.yml absence assertion: JSON name lists containing SUPABASE_ACCESS_TOKEN fed to the extracted step; makes no HTTP call'
   'apps/web-platform/test/server/inngest/cron-supabase-advisor-scan.test.ts|2026-08-26|the guard-of-the-guard: asserts the ABSENCE of SUPABASE_ACCESS_TOKEN and advisors/security in-process'
   'plugins/soleur/test/terraform-target-parity.test.ts|2026-08-26|comment naming the SUPABASE_ACCESS_TOKEN GitHub-secret terraform resource; makes no HTTP call'
 )

@@ -456,6 +456,17 @@ t5_bare_merge_fires() {
   exit_code=${exit_code:-0}
   assert_deny "T5 bare merge fires" "$incidents" "$out" "$exit_code" \
     "rf-never-skip-qa-review-before-merging"
+  # The deny reason is the only text an agent sees. It must name the split-command
+  # remedy, because a chained `emit-review-trailer.sh && gh pr merge` is evaluated
+  # (and denied) before the trailer commit exists (#8611).
+  local reason
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$reason" == *"as its own command, then git push, then re-issue gh pr merge"* ]]; then
+    echo "PASS: T5b deny reason names the split trailer/push/merge remedy"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: T5b deny reason lacks the split-command remedy: $reason"; FAIL=$((FAIL + 1))
+  fi
   rm -rf "$tmp"
 }
 
