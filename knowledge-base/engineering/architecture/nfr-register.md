@@ -30,7 +30,7 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 | Skill Loader | Runtime (lifecycle shared with Agent Runtime) | `skillloader` | Plugin discovery for skills and agents |
 | Hook Engine | Runtime | `hooks` | PreToolUse syntactic guards |
 | Skills | Passive | `skills` | 98 workflow skills (Markdown SKILL.md) |
-| Agents | Passive | `agents` | 65 domain agents (Markdown definitions) |
+| Agents | Passive | `agents` | 67 domain agents (Markdown definitions) |
 | Knowledge Base | Passive | `kb` | Conventions, learnings, ADRs, specs (Markdown + YAML) |
 | Supabase PostgreSQL | Infrastructure | `supabase` | Users, BYOK-encrypted API keys, sessions |
 | Cloudflare Tunnel | Infrastructure | `tunnel` | Zero-trust inbound access (cloudflared) |

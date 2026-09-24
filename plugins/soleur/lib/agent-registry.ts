@@ -33,7 +33,12 @@ export interface AgentsManifest {
   agents: AgentEntry[];
 }
 
-/** Discover agent markdown paths (excludes README* and references/). */
+/**
+ * Discover agent markdown paths. The README and references/ filter is a
+ * defensive guard with no members: Claude loads every `.md` under `agents/` as
+ * a subagent, so `agents/` holds only agent definitions (#8317). The
+ * harness-parity tree test pins the tracked set to EXPECTED_SOLEUR_AGENT_COUNT.
+ */
 export function discoverAgentPaths(): string[] {
   return Array.from(new Glob("agents/**/*.md").scanSync(PLUGIN_ROOT)).filter(
     (f) => !basename(f).startsWith("README") && !f.includes("/references/"),
