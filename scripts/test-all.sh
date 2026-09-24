@@ -3667,8 +3667,8 @@ if want_scripts; then
   # `test-<name>.sh` convention used under tests/scripts/ does not match (#7402 widened that
   # walk from scripts/*.test.sh to the whole repo, but the SUFFIX convention is the producer's
   # scope and tests/scripts/ is deliberately outside it), and
-  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list from
-  # infra-validation.yml's `run: bash apps/web-platform/infra/<name>.test.sh` steps, so a
+  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list by globbing
+  # `apps/web-platform/infra/**/*.test.sh` (presence is registration), so a
   # tests/scripts/ suite is structurally invisible to both. These three run_suite lines
   # are the ONLY registration — an unregistered gate suite is silent AND green, which is
   # the exact shape that let a fail-open rung ship in #3366.
@@ -3876,8 +3876,8 @@ if want_scripts; then
   # its #7278 siblings above: nothing auto-discovers tests/scripts/.
   #
   # ONLY this fixture suite belongs in this file. The shipper's own suite is an INFRA suite and its
-  # registration point is `.github/workflows/infra-validation.yml`, from which
-  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list — adding it here instead
+  # registration point is its path under `apps/web-platform/infra/`, which
+  # apps/web-platform/infra/run-registered-suites.sh derives by glob — adding it here instead
   # would run it in ZERO runners (#3366), silent and green.
   #
   # The probe is INERT UNTIL DISPATCHED (the registry host is cloud-init-only, so merging applies
@@ -4301,11 +4301,12 @@ fi
 # #6969). Each registration counts as ONE suite at the aggregate level; the nested runner
 # reports its own per-suite counts inside that line.
 #
-# The infra RUNNER is registered, never its 98 suites individually (re-derived 2026-08-13 via
-# `bash apps/web-platform/infra/run-registered-suites.sh --list`; the previous figure of 87 had
-# drifted). run-registered-suites.sh DERIVES its list from
-# .github/workflows/infra-validation.yml and reports unregistered orphans; enumerating the
-# suites here would fork that list and recreate the very drift the derivation prevents.
+# The infra RUNNER is registered, never its suites individually (re-derive via
+# `bash apps/web-platform/infra/run-registered-suites.sh --list`; the count moves
+# with the directory). run-registered-suites.sh derives its list by globbing
+# `apps/web-platform/infra/**/*.test.sh` (presence is registration) and reports
+# untracked stragglers; enumerating the suites here would fork that list and
+# recreate the very drift the derivation prevents.
 #
 # Do not hand-edit that count: `--list` prints it, and scripts/lint-orphan-test-suites.sh reads
 # the same command for its infra registration surface, so the number above is checkable in one
