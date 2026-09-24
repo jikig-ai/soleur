@@ -1285,7 +1285,8 @@ jobs:
               -target=terraform_data.git_data_probe_install \
               -target=terraform_data.inngest_consumer_probe_install \
               -target=terraform_data.send_failed_alert_probe \
-              -target=terraform_data.web_1_host_key_probe
+              -target=terraform_data.web_1_host_key_probe \
+              -target=terraform_data.luks_monitor_token_install
 
       # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
       # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the
