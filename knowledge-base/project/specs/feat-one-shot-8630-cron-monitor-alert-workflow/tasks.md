@@ -94,7 +94,7 @@ Plan: `knowledge-base/project/plans/2026-09-24-feat-route-cron-monitor-failures-
   - `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
   - `bash scripts/lint-diagnosis-claims.sh`
 - [ ] 4.2 AC1-AC13 pre-merge checks. `plan_pr` must show exactly one create and no other change.
-- [ ] 4.3 PR body: its first line is the production-mutation statement, it lists the edited runbook
+- [x] 4.3 PR body: its first line is the production-mutation statement, it lists the edited runbook
   lines, and it references `Closes #8630`.
 - [ ] 4.4 Post-merge checks:
   - AC14: the apply and the fidelity probe are green

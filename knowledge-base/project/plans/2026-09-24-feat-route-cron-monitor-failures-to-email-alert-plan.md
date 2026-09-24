@@ -921,7 +921,7 @@ existing provenance note.
   `git diff --numstat origin/main -- knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md | awk '{print $2}'`
   prints `0`. The earlier `grep '^-[^-]'` form missed deleted bullet lines and blank lines. The C4 `sentry -> founder` edge is
   corrected, and the c4-count-parity, c4-code-syntax and c4-render tests are green.
-- [ ] AC12. The #8630 comment (Phase 0.4) is posted with M1-M12 and the Phase 0 measurements. Any
+- [x] AC12. The #8630 comment (Phase 0.4) is posted with M1-M12 and the Phase 0 measurements. Any
   "unmute" decision has one tracking issue referenced `Tracks #N` in the PR body.
 - [x] AC13. Before every push: `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
   and `bash scripts/lint-diagnosis-claims.sh` pass. `python3 scripts/lint-guard-contract.py` passes
