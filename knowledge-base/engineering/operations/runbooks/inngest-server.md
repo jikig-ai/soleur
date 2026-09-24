@@ -162,8 +162,17 @@ gateway. Record it on #8539 with the boot's full detail string.
 condition**, and every host bakes the same `var.sentry_dsn` — so these two stages from the
 inngest host match a rule whose name still says `web-host-…`. Judge severity by the event's
 `host_name` tag, not by the rule name: on web-1 the condition self-heals, on inngest it means
-the zot pull is about to fail and the sole scheduler will not come up. Nothing is keyed on
-`oci-pull-ALL-LEGS-FAILED`, so this is the earliest automated warning you get. `private_nic_ok`
+the zot pull is about to fail and the sole scheduler will not come up. It is the earliest
+automated warning you get. The pull failure itself pages next: since #8036 item 1d a zot miss
+has no GHCR fallback behind it, so it ends the boot and emits `inngest_pull_fatal` at level
+`fatal`. `sentry_alert.zot_mirror_fallback_rate` (`zot-mirror-fallback-rate`) pages on that
+stage, even though the rule name still says "fallback". The same stage goes to Better Stack
+through the phone-home, with the redacted pull tail. Query it with
+`scripts/betterstack-query.sh --grep inngest_pull_fatal`. The detail is `rc=<n>` (`rc=124` is
+the 180 s pull timeout), or `rc=noendpoint` when no zot endpoint was baked. If zot does not
+serve the pinned digest, the fix is a `build-inngest-bootstrap-image.yml -f mirror_only=true`
+backfill and then a new replace, not a revert. The old `oci-pull-ALL-LEGS-FAILED`,
+`pre-oci-pull` and `oci-pull-rc-*` markers no longer exist. `private_nic_ok`
 matches no filter and is query-only by design — a healthy replace must not page. A `private_nic_probe_fault` means no measurement was possible (`reason=`
 is `noarg`, `noip`, `nogrep` or `iprc`); the pull outcome markers that follow still say whether
 the boot worked.

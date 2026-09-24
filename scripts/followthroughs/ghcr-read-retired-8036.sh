@@ -32,7 +32,9 @@
 # ProtectHome=read-only and /home absent from its ReadWritePaths, so the deploy user cannot write
 # ${HOME}/.docker/config.json and the sweep deliberately does not try. Grading on
 # `home_ghcr_auth=none` would read `inline` forever and #8036 could never close. The home entry is
-# a pre-#6565 fossil; clearing it rides the 1d follow-up with root's config.
+# a pre-#6565 fossil, written by no live code path: fresh-boot GHCR logins ran as ROOT (runcmd,
+# HOME=/root) and wrote /root/.docker, never the deploy user's home, and #8036 1d deleted them. On
+# a host created before 1d the entry stays (revoked value) until that host is replaced.
 #
 # LEG 3 EXISTS BECAUSE NOTHING ELSE PAGES ON IT. `grep -n 'cosign\|verify_failed'
 # apps/web-platform/infra/sentry/issue-alerts.tf` returns ZERO hits: `verify_image_signature`

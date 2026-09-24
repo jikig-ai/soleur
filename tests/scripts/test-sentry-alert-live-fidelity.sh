@@ -730,10 +730,14 @@ t_single_trigger_logictype_is_not_a_flip() {
 # chosen, with its own comment describing operands that were no longer there. A
 # positional pin carries no claim about WHICH members it compares.
 #
-# Keyed selection also keeps the row meaningful across the pre-apply/post-apply
-# window: the committed capture is still the five-condition live rule until the
-# merge fires `apply-sentry-infra.yml`, so an index-free lookup is the only form
-# that addresses the same two members before and after.
+# WHAT IT MUTATES: the FROZEN live capture ($CAPTURE, 2026-09-09), never the
+# committed rule or alert-reference.json. That capture still holds the
+# five-condition rule of its date; the committed rule is two conditions since
+# #8036 1d (`registry = zot-gate-degraded`, `stage = inngest_pull_fatal`). So a
+# narrowing of the rule cannot turn this row into a NOOP: it needs one `registry`
+# and one `stage` condition IN THE CAPTURE, and the capture does not move with a
+# .tf edit. Keyed selection keeps the row addressing the same two kinds of member
+# on any capture that is ever re-taken, of either shape.
 #
 # The mutation ABORTS rather than silently no-opping if either key is absent:
 # `_drift_case` reports a NOOP as "the mutation did not land — this row compared
