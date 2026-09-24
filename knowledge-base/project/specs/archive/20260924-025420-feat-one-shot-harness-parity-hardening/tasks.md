@@ -1,6 +1,6 @@
 # Tasks: harness-parity hardening (Grok/Codex/Devin) + retire OpenHands/Gemini
 
-Plan: `knowledge-base/project/plans/2026-09-22-feat-harness-parity-hardening-grok-codex-devin-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260924-025420-2026-09-22-feat-harness-parity-hardening-grok-codex-devin-plan.md`
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
