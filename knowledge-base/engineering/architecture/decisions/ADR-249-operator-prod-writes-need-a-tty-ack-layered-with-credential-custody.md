@@ -147,6 +147,25 @@ the audit row. That widens the `approval_method` CHECK beyond `'tty-ack'`. Named
 - **Rollback order for migration 140.** Revert the helper (the `p_approval_method` body key) and let
   the revert reach the operator's installed plugin BEFORE running the down migration. Otherwise
   every flag write exits `4` before any mutation. The `.down.sql` header states this.
+- **Forward ordering for migration 140** (review #8650; recorded here rather than in the migration
+  file itself, because migration 140 was already applied to the shared dev Supabase project by CI
+  during this PR's review, and an applied migration's body is immutable — #8583). This plugin's
+  `audit-flag-flip.sh` (post-#8486) always sends `p_approval_method`. Against a database that has not
+  yet applied migration 140, PostgREST cannot match any function accepting that key and returns a
+  non-2xx response; `audit_flag_flip_rpc`'s HTTP-code check then fails closed (rc 4, caller aborts
+  before any Flagsmith/Supabase mutation — append-before-flip is preserved). The practical
+  consequence is availability, not corruption: every flag flip against that database is blocked until
+  migration 140 lands. The standard release pipeline (`.github/workflows/web-platform-release.yml`
+  `deploy` job) already sequences `migrate` + `verify-migrations` strictly before `deploy`, so no such
+  window exists on that path; the residual is the plugin marketplace's independent `main`-tracking
+  distribution channel reaching an operator ahead of migration 140 reaching a given target database.
+- **Migration 140's SHAPE comment says it "mirrors 137_byok_cap_breach_audit_row.sql"** — true of the
+  function-alteration shape (one transaction: DROP of the old signature, a plain `CREATE FUNCTION` for
+  the new signature since `CREATE OR REPLACE` cannot change a signature, then REVOKE/GRANT re-issued
+  on the new signature because `DROP FUNCTION` discards the grants with the function), not of 137's
+  first step, which was a `CHECK`-constraint widening rather than an `ADD COLUMN` (review #8650,
+  pattern-recognition-specialist). Recorded here rather than corrected in the migration file itself,
+  for the same immutability reason as the bullet above.
 
 **Residual risks (named, not closed by step 1):**
 
