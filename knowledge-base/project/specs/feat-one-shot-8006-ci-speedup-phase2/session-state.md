@@ -66,6 +66,12 @@ None blocking. Subagent had no Skill/Task tool — `plan` and `deepen-plan` were
 - Timing signal from the cancelled run (pre-lint-fix bytes, still representative): light 1/6 7m12s, 6/6 7m53s; heavy 7m46s/5m34s/6m52s; mutations halves ~1m35s each. Consistent with the ~8–8.5m target pending the clean run 35934029494.
 - Compound learning written: `learnings/workflow-issues/2026-09-24-the-expected-verdict-was-written-against-the-wrong-layer.md` (8 session errors incl. this lint trip).
 
+### CI measurement — run 35934159242 (HEAD e27d8c2f89, ALL GREEN incl. aggregator)
+- Mutations halves: **1m32s / 1m30s** (was 9m35s single job — the A×C win is real).
+- Heavy legs: 7m42s / 7m04s / 5m37s (was 6m42s–8m32s).
+- Light legs: 7m11s / 7m27s / 12m03s / 11m09s / **18m40s** / 6m19s → wall ~18m47s.
+- **Ambient degradation, not the diff:** today's main run 35930568854 (K=5) has legs at 7.5m–22m and the SAME three suites blown up — `lint-orphan-test-suites-mutations` 747s (baseline 8s), `test-all-affected` 319s (baseline 1s), `lint-orphan-test-suites` 79s (baseline 0.2s). These suites spawn test-all.sh/git repeatedly; something in the hosted-runner fleet degraded them ~80-400× today. My PR's leg-5 697s matches main's 747s almost exactly.
+- Soak-probe note: the <900s-per-leg qualifying contract will report NOT-YET (or breach) on degraded days — that's by design (it soaks 3 qualifying runs).
+
 ### Remaining
-- CI run 35934029494 (push 5b879c2888): green + leg timing measurement vs ~8.5m target
-- Merge when green; post-merge soak probe keeps #8006 open until 3 qualifying runs pass
+- Merge when the final push's checks are green; post-merge soak probe keeps #8006 open until 3 qualifying runs pass
