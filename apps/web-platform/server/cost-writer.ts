@@ -311,6 +311,9 @@ export interface ByokDelegationContext {
 export interface TurnCostMarker {
   source: ClaudeCostSource;
   model: string | null;
+  // #8611: leader-loop turn index + Inngest step attempt (see ClaudeCostMarker.turn/attempt).
+  turn?: number;
+  attempt?: number;
 }
 
 export function persistTurnCost(
@@ -677,6 +680,8 @@ export async function persistTurnCostAwaitable(
     cost_usd: costDelta,
     id: conversationId,
     capture_status: "ok",
+    ...(marker.turn !== undefined ? { turn: marker.turn } : {}),
+    ...(marker.attempt !== undefined ? { attempt: marker.attempt } : {}),
   });
 
   const incrementResult = supabase().rpc("increment_conversation_cost", {

@@ -194,9 +194,76 @@ run_case "leg 3: latest verdict result=verify_failed -> ACTION REQUIRED (5), not
 # #8037 is CLOSED (so its sweeper only evaluates inside a closed-set lookback, as this probe's own
 # header records), and `cosign_absent` is the literal this work's evidence records firing 89/89 —
 # so the deferral closed #8036 over the very condition the retirement exists to end. Leg 3 is now
-# a closed ALLOWLIST (`ok` | `reused_local_reload`), so every other class is ACTION REQUIRED.
+# a closed ALLOWLIST (see LEG3_ALLOW_RE); every other class is ACTION REQUIRED.
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail cosign_absent)"; } > "$(fx leg3b)"
 run_case "leg 3: result=cosign_absent is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3b)"
+# ── LEG 3, THE LAUNDERING CASE (#8636 security review). `reused_local_reload` is emitted by
+#    `_try_local_cache_reload` on the arm where the registry did NOT serve and cosign was SKIPPED.
+#    It was in the allowlist, so a host whose real verdict was `cosign_absent` -- the class this
+#    work records firing 89/89 -- graded PASS as soon as a later reload breadcrumb arrived.
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail cosign_absent)"; row "$HA" "$T3" "$(verify_fail reused_local_reload)"; } > "$(fx launder)"
+run_case "leg 3: a reused_local_reload AFTER cosign_absent does not launder it into a PASS" 5 "ACTION REQUIRED:" "$(fx launder)"
+run_case "leg 3: the reload sentence names the last REAL verdict, so it cannot hide it" 5 "last real verdict=cosign_absent" "$(fx launder)"
+
+#    And the weaker form: a host whose ONLY verdict is the reload breadcrumb ran no cosign at all,
+#    which the leg's own contract says is ACTION REQUIRED ("markers but NO verdict"). Admitting the
+#    breadcrumb made "no verification" indistinguishable from "verification passed".
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail reused_local_reload)"; } > "$(fx reload_only)"
+run_case "leg 3: a host whose only verdict is reused_local_reload (cosign never ran) -> ACTION REQUIRED" 5 "ACTION REQUIRED:" "$(fx reload_only)"
+
+# Classes adjacent to the laundering one, so a use-site widening to either is caught too (the
+# coverage previously existed only for the class review happened to name).
+# ── THE REFUSALS, DRIVEN. All three exit-3 arms were unpinned and unexercised: deleting them
+#    left the suite green, and the `verify` kind was missing from the attribution list entirely,
+#    so an unattributable `unsigned` was dropped and the host graded PASS.
+for _k in marker relogin verify; do
+  case "$_k" in
+    marker)  _m="$(marker yes none)" ;;
+    relogin) _m="$RELOGIN_MSG" ;;
+    verify)  _m="$(verify_fail unsigned)" ;;
+  esac
+  { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"
+    jq -cn --arg ts "$T3" --arg msg "$_m" \
+      '{dt:"2026-09-02 10:00:00.000000", raw:({SYSLOG_IDENTIFIER:"ci-deploy", __REALTIME_TIMESTAMP:$ts, message:$msg}|tojson)}'
+  } > "$(fx "nomid_$_k")"
+  run_case "a ${_k} row with no _MACHINE_ID is REFUSED, never dropped" 3 "CANNOT ESTABLISH:" "$(fx "nomid_$_k")"
+done
+unset _k _m
+
+# A row with no usable clock, on a graded kind, is refused; an UNGRADED ci-deploy row without one
+# must NOT latch the tracker (that scoping bug refused on lines nothing grades).
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"
+  jq -cn --arg mid "$HA" --arg msg "$RELOGIN_MSG" \
+    '{dt:"", raw:({SYSLOG_IDENTIFIER:"ci-deploy", _MACHINE_ID:$mid, message:$msg}|tojson)}'
+} > "$(fx noclock)"
+run_case "a graded row with no usable timestamp is REFUSED, never dropped" 3 "CANNOT ESTABLISH:" "$(fx noclock)"
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"
+  jq -cn --arg mid "$HA" \
+    '{dt:"", raw:({SYSLOG_IDENTIFIER:"ci-deploy", _MACHINE_ID:$mid, message:"IMAGE_VERIFY_MODE=warn selected for this deploy"}|tojson)}'
+} > "$(fx noclock_ungraded)"
+run_case "an UNGRADED ci-deploy row with no timestamp does not latch the tracker -> PASS" 0 "PASS:" "$(fx noclock_ungraded)"
+
+# An ordering that is UNKNOWN must be refused, not guessed. Both rows fall back to `dt` (second
+# granularity) at the same second, so the relogin could be before or after the marker: passing it
+# re-opens the fail-open hole, failing it latched a clean host shut (measured - a relogin 0.8s
+# EARLIER than the marker was graded FAIL under `>=`).
+{ jq -cn --arg mid "$HA" --arg msg "$(marker yes none)" \
+    '{dt:"2026-09-02 10:00:00.100000", raw:({SYSLOG_IDENTIFIER:"ci-deploy",_MACHINE_ID:$mid,message:$msg}|tojson)}'
+  jq -cn --arg mid "$HA" --arg msg "$RELOGIN_MSG" \
+    '{dt:"2026-09-02 10:00:00.900000", raw:({SYSLOG_IDENTIFIER:"ci-deploy",_MACHINE_ID:$mid,message:$msg}|tojson)}'
+  row "$HA" "$T3" "$VERIFY_OK"; } > "$(fx ambig)"
+run_case "a relogin tying the latest marker at dt second-granularity is REFUSED, not guessed" 3 "CANNOT ESTABLISH:" "$(fx ambig)"
+
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail rekor_unreachable)"; } > "$(fx leg3g)"
+run_case "leg 3: result=rekor_unreachable is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3g)"
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail inspect_failed)"; } > "$(fx leg3h)"
+run_case "leg 3: result=inspect_failed is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3h)"
+# A reload verdict must be ACTION REQUIRED with its OWN sentence, never "verification is broken".
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"; row "$HA" "$T3" "$(verify_fail reused_local_reload)"; } > "$(fx leg3i)"
+run_case "leg 3: a same-version reload after an ok is ACTION REQUIRED naming the reload, not a broken verifier" 5 "no cosign ran on the latest deploy" "$(fx leg3i)"
+
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail unsigned)"; } > "$(fx leg3f)"
+run_case "leg 3: result=unsigned is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3f)"
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail wrong_identity)"; } > "$(fx leg3d)"
 run_case "leg 3: result=wrong_identity is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3d)"
 # A host that ran the new script but emitted NO verify verdict is ACTION REQUIRED with its own
@@ -297,11 +364,147 @@ run_case "rows exist but no ci-deploy marker -> TRANSIENT (2), never PASS" 2 "TR
 # guard-vacuity-floor builds its mutant from the `if` plus the CONTIGUOUS simple assignments over
 # it, and a constant declared further up would be unbound in that slice and die under `set -u`,
 # scoring as a construction failure instead of as the floor firing.
-printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
 # Sits EXACTLY on the suite's count, raised in the same edit that settled it — the sibling
 # CI_DEPLOY_ASSERT_FLOOR pays the same price. A floor one below the count is not headroom, it is
 # how many assertions can be deleted before the one guard that detects truncation notices.
-MIN_CHECKS=28
+# CODE SIDE. The pins above fix the PROSE; these assert the grader still does what it says.
+# Trailing comments are stripped too: `if [[ "$dauth" == "none" ]]; then ... # was: && "$dhelper"`
+# restored the dropped token to a full-line-only strip and left the reverse-direction row green.
+GRADER_SRC="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/ {next} !/^[[:space:]]*#/ { sub(/[[:space:]]+#.*$/, ""); print }' "$SUT")"
+
+# ── CONTRACT PIN (#8600 -> #8636; the fifth and, deliberately, the smallest).
+#    The contract used to exist in FIVE prose copies and drifted from the grader FOUR times. Four
+#    guards tried to DETECT that and each leaked -- a tautology; bare-token matching; phrase
+#    anchors with hand-enumerated negation lists and unbounded awk slices; and a line-count pin
+#    defeated by an embedded newline inside an existing `echo`. Every guard needed a guard, which
+#    is the signal that detection was the wrong mechanism.
+#
+#    So the copies were DELETED. The three legs are stated once as LEG1_CLAIM / LEG2_CLAIM /
+#    LEG3_CLAIM and rendered by `--explain` and by every verdict summary; the file header points at
+#    `--explain` instead of restating them. Drift is now unrepresentable rather than detected, so
+#    all that is left to pin is the three assignments and the fact that the summaries really do
+#    render them.
+_pin_n=0; _pin_fail=0
+_pin_one() {  # <exact line> <what it says>
+  _pin_n=$((_pin_n + 1))
+  local n; n="$(grep -cxF -- "$1" <<<"$GRADER_SRC" || true)"
+  if [[ "$n" != 1 ]]; then fail "contract constant not found exactly once (${n}x) -- $2"; _pin_fail=1; fi
+}
+# The refusals must be pinned as CODE, not only exercised: they are the only thing standing
+# between an absence leg and a silently-dropped row, and deleting all three left the suite at
+# 42/34/0. One predicate covers every graded kind, so pin that rather than a list of kinds.
+if grep -qF '$3 == "-" { n++ }' <<<"$GRADER_SRC"; then
+  pass "the attribution refusal covers every graded kind via one predicate, not a list"
+else
+  fail "the attribution refusal is gone or was narrowed to a list of kinds - an unlisted kind is dropped silently"
+fi
+_pin_one "readonly LEG3_ALLOW_RE='ok'" "leg 3 allowlist membership"
+_pin_one "readonly LEG1_CLAIM=\"a 'swept=' token AND both carriers clean: deploy_ghcr_auth=none AND deploy_ghcr_helper=none\"" "LEG1_CLAIM"
+_pin_one "readonly LEG2_CLAIM=\"zero '\${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker (not zero rows in the window)\"" "LEG2_CLAIM"
+_pin_one "readonly LEG3_CLAIM=\"a latest \${VERIFY_LITERAL} verdict in \${LEG3_ALLOW_HUMAN}\"" "LEG3_CLAIM"
+# The tie rule is a claim like the others: rendered into --explain, and reverting it to the
+# superseded ">= counts against the pass" wording left the suite green because only the BEHAVIOUR
+# was driven, never the sentence describing it.
+_pin_one "readonly LEG2_TIE_CLAIM=\"a tie is an UNKNOWN ordering and is REFUSED (exit 3), neither passed nor failed\"" "LEG2_TIE_CLAIM"
+[[ "$_pin_fail" == 0 ]] && pass "all $_pin_n contract constants are pinned whole and exactly once"
+unset _pin_fail _pin_n
+
+# THE RENDERED OUTPUT, not the source. A source-line count is defeated by an embedded newline --
+# measured: moving a "CORRECTION: leg 1 in fact grades the auths token only" line INSIDE an
+# existing `echo` string left every line pin and the count green while the public close
+# authorisation contradicted itself. Pinning what the probe actually PRINTS closes that, and
+# subsumes the count.
+_pass_out="$(env BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+      SOLEUR_FT_EARLIEST="$EARLIEST_ISO" GHCR_RETIRED_8036_BQ="$WORK/stub-query" \
+      STUB_ROWS="$(fx pass1)" STUB_WANT_SINCE="$EARLIEST_SQL" bash "$SUT" 2>&1)"
+_pass_hdr="$(sed -n '/^PASS:/,/^  host /p' <<<"$_pass_out" | sed '$d')"
+_pass_lines="$(grep -c . <<<"$_pass_hdr" || true)"
+if [[ "$_pass_lines" != 6 ]]; then
+  fail "the PASS verdict block renders $_pass_lines line(s), pinned 6 - a line was added or removed; re-read it against the grader, then re-pin"
+elif ! grep -qF -- "$(bash -c 'set -a; source <(grep -E "^readonly LEG1_CLAIM=" "'"$SUT"'"); echo "$LEG1_CLAIM"' 2>/dev/null)" <<<"$_pass_hdr"; then
+  fail "the PASS verdict block does not render LEG1_CLAIM - it can state a contract the grader does not implement"
+else
+  pass "the PASS verdict block renders exactly 6 lines and carries LEG1_CLAIM verbatim"
+fi
+unset _pass_out _pass_hdr _pass_lines
+
+# FAIL AND ACTION REQUIRED ARE RENDERED SURFACES TOO. Only PASS was pinned, so the FAIL block's
+# remediation prose could be INVERTED ("swept=na_absent IS a failure") with the suite green -- the
+# exact opposite of `na_absent) [[ "$dcfg" == "absent" ]] && leg1=pass`.
+{ row "$HA" "$T1" "$(marker_pre1c inline)"; row "$HA" "$T2" "$VERIFY_OK"; } > "$(fx failblk)"
+_render() {  # <fixture> -> stdout+stderr of a full run
+  env BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+      SOLEUR_FT_EARLIEST="$EARLIEST_ISO" GHCR_RETIRED_8036_BQ="$WORK/stub-query" \
+      STUB_ROWS="$1" STUB_WANT_SINCE="$EARLIEST_SQL" bash "$SUT" 2>&1 || true
+}
+# `(readonly )?` -- VERIFY_LITERAL and friends are PLAIN assignments, so a `^readonly` filter
+# silently dropped them and the claim resolved with an empty gap that matched nothing.
+_claim_of() { bash -c 'set -a; source <(grep -E "^(readonly )?(RELOGIN_LITERAL|VERIFY_LITERAL|MARKER_LITERAL|LEG3_ALLOW_RE|LEG3_ALLOW_HUMAN|'"$1"')=" "'"$SUT"'" 2>/dev/null); echo "${'"$1"'}"' 2>/dev/null; }
+for _pair in "failblk:LEG1_CLAIM:FAIL" "leg3:LEG3_CLAIM:ACTION REQUIRED"; do
+  _fxn="${_pair%%:*}"; _rest="${_pair#*:}"; _cv="${_rest%%:*}"; _lbl="${_rest#*:}"
+  _out="$(_render "$(fx "$_fxn")")"; _cl="$(_claim_of "$_cv")"
+  if [[ -z "$_cl" ]]; then
+    fail "$_lbl block: could not resolve $_cv - re-point this row"
+  elif ! grep -qF -- "$_lbl" <<<"$_out"; then
+    fail "$_lbl block did not render at all for its fixture - re-point this row"
+  elif ! grep -qF -- "$_cl" <<<"$_out"; then
+    fail "the $_lbl verdict block does not render $_cv - it can state a contract the grader does not implement"
+  else
+    pass "the $_lbl verdict block renders $_cv verbatim"
+  fi
+done
+unset _pair _fxn _rest _cv _lbl _out _cl
+
+# Prove the exclusion FIRED, and that the sentinel is inside the excluded range -- not merely
+# absent from GRADER_SRC, which is also true when the sentinel has been moved out of the heredoc.
+_hd="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/' "$SUT")"
+if [[ "$(grep -cF 'PROBE-READY' <<<"$_hd")" != 1 ]]; then
+  fail "the PROBE-READY sentinel is not inside the --explain heredoc - the exclusion proof has no anchor"
+elif grep -qF 'PROBE-READY' <<<"$GRADER_SRC"; then
+  fail "GRADER_SRC still contains the --explain heredoc - the awk range did not fire (tautology)"
+elif ! grep -qF 'case "$swept" in' <<<"$GRADER_SRC"; then
+  fail "GRADER_SRC lost the grader body - the awk range over-excluded"
+else
+  pass "GRADER_SRC provably excludes the --explain heredoc and retains the grader"
+fi
+unset _hd
+if [[ "$(grep -cxF "readonly LEG3_ALLOW_RE='ok'" <<<"$GRADER_SRC")" == 1 ]]; then
+  pass "leg 3's allowlist is exactly {ok}, pinned on the live assignment"
+else
+  fail "leg 3's allowlist membership changed - widening it silently weakens signature verification"
+fi
+if grep -E '"\$dauth" == "none"' <<<"$GRADER_SRC" | grep -q '"\$dhelper" == "none"'; then
+  pass "the grader still conjoins both leg-1 carriers"
+else
+  fail "the grader no longer conjoins deploy_ghcr_auth and deploy_ghcr_helper, which every prose copy claims"
+fi
+if grep -qF '> (mts[m] + 0)) n++' <<<"$GRADER_SRC"; then
+  pass "the fold still scopes leg 2 to rows at-or-after the host's latest marker"
+else
+  fail "the fold no longer compares against the latest marker - leg 2 is back to a bare window count"
+fi
+if grep -qF '"$lver" =~ ^($LEG3_ALLOW_RE)$' <<<"$GRADER_SRC"; then
+  pass "leg 3 grades via the single-sourced allowlist"
+else
+  fail "leg 3 no longer reads LEG3_ALLOW_RE - its prose can drift from the grader again"
+fi
+# --explain must INTERPOLATE the allowlist, not restate it. The two render identically, so only
+# perturbation can tell them apart.
+_probe='ok|zzprobe'
+if sed "s/^readonly LEG3_ALLOW_RE=.*/readonly LEG3_ALLOW_RE='$_probe'/" "$SUT" > "$WORK/sut-probe.sh" \
+   && grep -qF "readonly LEG3_ALLOW_RE='$_probe'" "$WORK/sut-probe.sh" \
+   && bash "$WORK/sut-probe.sh" --explain 2>/dev/null | grep -qF 'zzprobe'; then
+  pass "--explain INTERPOLATES the leg-3 allowlist (single-sourced, not a matching literal)"
+else
+  fail "--explain hardcodes the leg-3 allowlist, or the probe rewrite did not land"
+fi
+unset _probe
+unset _ex _hdr GRADER_SRC _claim_helper _claim_helper_hdr _claim_postmarker
+
+
+
+printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
+MIN_CHECKS=52
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1

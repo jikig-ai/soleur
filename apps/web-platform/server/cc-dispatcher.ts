@@ -29,6 +29,7 @@ import { query as sdkQuery, createSdkMcpServer } from "@anthropic-ai/claude-agen
 import {
   buildC4ConciergeTools,
   C4_TOOL_FQN,
+  C4_PROMPT_ADDENDUM,
 } from "@/server/c4-concierge-tools";
 import {
   isDebugModeAvailable,
@@ -2332,17 +2333,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           workspacePath,
         });
         c4ToolName = C4_TOOL_FQN;
-        c4PromptAddendum =
-          "## C4 diagram editing\n" +
-          "To edit a C4 architecture diagram, call the `edit_c4_diagram` tool " +
-          "with `relativePath` (a `.c4` source or the `.md` view-embed page " +
-          "directly under `engineering/architecture/diagrams/`) and `content` " +
-          "(the FULL new file contents). It commits the source directly to the " +
-          "repo and then re-renders the diagram. The tool response includes " +
-          "`rerendered`: when true, the rendered diagram updated — tell the user " +
-          "it updated; when false, the source was saved but the re-render failed, " +
-          "so tell the user the diagram will refresh after the next re-render. Do " +
-          "NOT paste DSL into chat for the user to apply.";
+        c4PromptAddendum = C4_PROMPT_ADDENDUM;
       }
     }
 

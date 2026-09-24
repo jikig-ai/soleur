@@ -207,8 +207,12 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   // ZOT_INNGEST sample queries, so a broken prefix drives the sample to 0 and FAILs the soak.
   // The stage: queries have no such self-validation, so the key is pinned here instead.
   it("both boot emitters tag with the literal key `stage` (the soak's bare stage: queries depend on it)", () => {
-    // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail}; emits app_ghcr_fallback.
-    expect(cloudInit).toContain('"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"}');
+    // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail,...}; emits app_ghcr_fallback.
+    // Open prefix, not closed with `}`: #8651 APPENDED host_name after detail (ADR-147: add tags,
+    // never rename) so the boot trail can attribute a fresh-boot event to its host. The prefix
+    // still fails on a `stage` rename, a reorder, or a dropped tag — it tolerates only appends.
+    expect(cloudInit).toContain('"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"');
+    expect(cloudInit).toContain('"detail":"%s","host_name":"${host_name}"}}');
     // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region,...}; emits
     // inngest_ghcr_fallback. A separate emitter that happens to share the no-feature/op gap.
     //

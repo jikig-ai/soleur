@@ -47,6 +47,16 @@ vi.mock("@/server/inngest/functions/_predicate-validator", () => ({
 }));
 
 const reportSilentFallbackSpy = vi.fn();
+// #8611 — the claude-eval step now runs through spawnClaudeEval, which records the run in
+// routine_run_progress when given a runId. No database here: stub the two writers.
+vi.mock("@/server/inngest/routine-run-progress", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/inngest/routine-run-progress")>()),
+  upsertRoutineRunProgress: vi.fn(async () => {}),
+  heartbeatRoutineRunProgress: vi.fn(async () => {}),
+}));
+// A well-formed Inngest run id, so the single-flight guard engages (a missing one is reported).
+const RUN_ID = "01M37EZCXEGGSDCC428M9N8MYX";
+
 vi.mock("@/server/observability", () => ({
   mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
@@ -128,7 +138,10 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   else process.env[key] = ORIGINAL_ENV[key];
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // #8611 — the single-flight map keeps settled results for SETTLED_TTL_MS; start every test empty.
+  // Dynamic: a static import would load the substrate before the child_process mock is ready.
+  (await import("@/server/inngest/functions/_cron-claude-eval-substrate")).__resetClaudeEvalSingleFlightForTests();
   vi.resetModules();
   spawnSpy.mockReset();
   execFileSyncSpy.mockReset();
@@ -193,7 +206,7 @@ describe("cron-follow-through-monitor — T1 happy path", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // 3 ensure-labels gh calls + 1 claude call = 4 total spawn invocations.
     // (validate-predicates uses execFileSync, not spawn)
@@ -260,7 +273,7 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // (a) the mint step ran, and ran FIRST.
     expect(generateInstallationTokenSpy).toHaveBeenCalledTimes(1);
@@ -305,7 +318,7 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // (a) the server-side `gh issue list` (execFileSync) env pins the repo.
     const execCall = execFileSyncSpy.mock.calls[0] as unknown as unknown[];
@@ -354,7 +367,7 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
 
       const handler = await importHandler();
       const step = makeStep();
-      await handler({ step, logger });
+      await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
       // the 60-min lifetime floor propagates to generateInstallationToken
       // (installation id 12345 from the createProbeOctokit mock), AND the
@@ -397,7 +410,7 @@ describe("cron-follow-through-monitor — T2 spawn error (ENOENT)", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(result.exitCode).toBe(-1);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -433,7 +446,7 @@ describe("cron-follow-through-monitor — T3 AbortSignal SIGTERM→SIGKILL escal
 
       const handler = await importHandler();
       const step = makeStep();
-      const promise = handler({ step, logger });
+      const promise = handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
       // Advance past AbortSignal ceiling → SIGTERM should fire.
       await vi.advanceTimersByTimeAsync(MAX_TURN_DURATION_MS + 10);
@@ -474,7 +487,7 @@ describe("cron-follow-through-monitor — T4 Sentry env vars missing", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(result.exitCode).toBe(0);
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
@@ -520,7 +533,7 @@ describe("cron-follow-through-monitor — T6 SSRF hardening (#4068)", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // validate-predicates MUST come before claude-eval in step order
     const stepNames = step.calls.map((c) => c.name);
@@ -549,7 +562,7 @@ describe("cron-follow-through-monitor — T6 SSRF hardening (#4068)", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // Find the claude spawn call (not gh)
     const claudeCalls = spawnSpy.mock.calls.filter((c) => c[0] !== "gh");

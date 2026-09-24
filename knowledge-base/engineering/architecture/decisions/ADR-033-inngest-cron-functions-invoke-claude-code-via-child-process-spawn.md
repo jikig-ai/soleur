@@ -227,3 +227,16 @@ Rel(spawn, github, "label / comment writes", "HTTPS")
 Rel(cron_fn, step_heartbeat, "step 3 (always)")
 Rel(step_heartbeat, sentry, "POST status=ok|error", "HTTPS")
 ```
+
+## Amendment — 2026-09-23 (#8611, ADR-243): one step, one request, is not one child
+
+I1 and I5 assume the child lives inside **one** `step.run` request and that memoization is what stops a
+re-spawn. That held only for steps shorter than the transport. The self-hosted server calls steps at the
+Cloudflare-proxied serve URL, whose ~100 s origin timeout 524'd every long claude-eval step; the retry
+re-invoked the step **before** anything was memoized, so a second child spawned beside the first (51%
+of 30-day cron spend). Memoization protects a finished step, never a running one.
+
+Now: every Claude spawn goes through `spawnClaudeEval`, which is single-flight per
+`(cronName, runId)` — a re-invocation joins the live child, or within 15 minutes gets its settled
+result — and each spawn carries a per-run `--max-budget-usd` and a 2/hour function throttle. Step
+responses stream (`serve({ streaming: "force" })`) so the proxy no longer times out. See ADR-243.

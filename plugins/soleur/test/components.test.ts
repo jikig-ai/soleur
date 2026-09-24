@@ -597,7 +597,6 @@ const EXEC_SURFACE_GLOBS = [
   "apps/**/scripts/*.sh",
   "tools/**/*.sh",
   ".claude/hooks/**/*.sh",
-  ".openhands/hooks/**/*.sh",
   // Shipped plugin shell surfaces (#7409). Opportunistic, NOT a regression this
   // change creates: this lint targets the `gh pr|issue list --search` class, and
   // the file that moved into plugins/soleur/scripts/lib/ contains zero such
@@ -627,7 +626,7 @@ function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
   for (const glob of EXEC_SURFACE_GLOBS) {
     // `dot: true` is load-bearing — Bun's Glob defaults to dot:false, which
     // silently skips EVERY dot-directory, so `.github/workflows`, `.github/
-    // actions`, `.claude/hooks`, and `.openhands/hooks` (the highest-value CI +
+    // actions` and `.claude/hooks` (the highest-value CI +
     // hook surface this lint claims to cover) would match ZERO files and the
     // offender assertions would pass vacuously against an absent surface class.
     for (const rel of new Glob(glob).scanSync({ cwd: REPO_ROOT, dot: true })) {
@@ -1058,7 +1057,7 @@ describe("collision-gate probes carry an explicit --state", () => {
 
   // Each declared surface CLASS must be non-empty in the live corpus, so a
   // silent per-surface drop (the Bun `dot:false` default that skipped the entire
-  // .github/.claude/.openhands surface, or a future glob regression) red-lines
+  // .github/.claude surface, or a future glob regression) red-lines
   // here instead of letting the offender assertions pass vacuously against an
   // absent class. The dot-directory anchor pins the CI + hook surface directly.
   test("every executable-surface class is represented in the corpus", () => {
@@ -1320,10 +1319,19 @@ describe("plugin slash-name uniqueness", () => {
   //
   // What this still guards, and why it is not merely belt-and-braces: the other
   // three harnesses DO resolve these paths. `devin skills list` reports
-  // /soleur:go from both `skills/go` and `devin/skills/go`; `.codex-plugin`
-  // declares `./skills`; `.grok/config.toml` loads this tree. Deleting them is a
-  // real change on three harnesses even though Claude Code absorbs it. Retired
-  // with #8236, which owns that deletion.
+  // /soleur:go; `.codex-plugin` declares `./skills` AND `./codex/skills`;
+  // `.grok/config.toml` loads this tree. Deleting them is a real change on three
+  // harnesses even though Claude Code absorbs it. Retired with #8236, which owns
+  // that deletion.
+  //
+  // CORRECTED 2026-09-23 by measurement (#8390 bundle). An earlier version of
+  // this comment said Devin "reports /soleur:go from BOTH roots". Measured on
+  // Devin CLI 3000.11.1, `devin skills list` reports each of the 102 names
+  // exactly ONCE — the double-listing was an earlier version's behaviour. Codex
+  // 0.156.1 IS the harness that lists both roots (`go`/`help`/`sync` twice),
+  // which is what this ack set exists for. The `harness-discovery` gate
+  // (ADR-245) now measures the multiplicity of both on every CI run, so this
+  // claim stops being a comment anybody has to trust.
   //
   // Derived from ACKED_CROSS_ROOT_DUPES rather than restated: two parallel
   // hardcoded lists drift under a partial #8236 retirement, and an empty literal

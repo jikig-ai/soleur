@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { stripComments } from "../helpers/strip-comments";
 
 const FUNCTIONS_DIR = join(
   __dirname,
@@ -36,11 +37,6 @@ function getCronFiles(): string[] {
     .sort();
 }
 
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\/.*$/gm, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "");
-}
 
 describe("cron-substrate-imports guard", () => {
   const cronFiles = getCronFiles();

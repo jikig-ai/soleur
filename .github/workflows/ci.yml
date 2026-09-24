@@ -654,7 +654,7 @@ jobs:
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -709,7 +709,7 @@ jobs:
           # so a query-options `pluginPath`-threading regression is invisible to it
           # (covered by agent-runner-query-options.test.ts instead) — including it
           # would burn a paid Haiku turn on a probe that cannot detect the change.
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -872,9 +872,10 @@ jobs:
   # The single `test` job was split into parallel leg jobs
   # (test-webplat / test-bun / test-scripts / test-scripts-heavy) so install +
   # typecheck + vitest + bun-test workloads run concurrently. test-scripts
-  # and test-scripts-heavy are positional shard matrices over the same
-  # runner; the other two are single legs (test-webplat is itself a 2-way
-  # vitest --shard matrix). The synthetic `test`
+  # and test-scripts-heavy are shard matrices over the same runner (leg
+  # assignment is manifest-driven, positional when the table is absent or
+  # stale — see scripts/test-all.sh); the other two are single legs
+  # (test-webplat is itself a 2-way vitest --shard matrix). The synthetic `test`
   # aggregator (below) is the required status check on branch-protection
   # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
   # every merge. Each leg invokes scripts/test-all.sh with the
@@ -951,10 +952,21 @@ jobs:
         run: ./node_modules/.bin/tsc --noEmit
         working-directory: apps/web-platform
 
+      # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
+      # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
+      # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
+      # step makes a missing binary FAIL that suite instead of skipping it.
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0
+          likec4 --version
+
       - name: Run webplat tests (vitest --shard)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITEST_SHARD: ${{ matrix.shard }}
+          LIKEC4_REQUIRED: "1"
         run: bash scripts/test-all.sh webplat
 
   test-bun:
@@ -995,10 +1007,11 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
-    # MATRIX SHARDED (#7902), K=5 after the heavy carve-out (#8006). The three
-    # cost-heaviest registrations moved to `test-scripts-heavy` below; what is
-    # left is ~39 min of light suite work, so five positional round-robin legs
-    # measure ~7.8 min each plus setup.
+    # MATRIX SHARDED (#7902), K=6 after the heavy carve-out (#8006 phase 2).
+    # The three cost-heaviest registrations moved to `test-scripts-heavy` below;
+    # what is left is ~39 min of light suite work, so six legs measure ~6.5-7.7
+    # min each plus setup (worst measured light leg at K=5 was ~9 min; the
+    # duration-aware manifest keeps assignment balanced as suites drift).
     #
     # Positional sharding means leg membership is an ORDINAL ACCIDENT — adding
     # or renaming one suite re-rolls every leg, so no K table in this file can
@@ -1010,7 +1023,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/5", "2/5", "3/5", "4/5", "5/5"]
+        shard: ["1/6", "2/6", "3/6", "4/6", "5/6", "6/6"]
     # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
     #
     # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
@@ -1031,7 +1044,7 @@ jobs:
     # this leg, because a silent kill below a duration the repo itself
     # calls legitimate is indistinguishable from a hang:
     #
-    #   light leg ~8 min nominal after the #8006 carve-out. No light suite carries a
+    #   light leg ~7 min nominal at K=6 after the #8006 carve-out + phase-2 split. No light suite carries a
     #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
     #     moved to test-scripts-heavy, whose own derivation sits on that job.
     #   -> 60 stays as the hang cap; it is ~6x the nominal leg, not a leg estimate.
@@ -1096,7 +1109,7 @@ jobs:
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
       # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
       # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # all three legs would run the whole group (392 suites at this commit) and all report green. Guard 1 reads ci.yml's
+      # every leg would run the whole group (~489 suites at this commit) and all report green. Guard 1 reads ci.yml's
       # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
@@ -1171,7 +1184,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
-          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/3` and
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/6` and
           # `/` is not permitted in an artifact name, so it is not used at all —
           # an earlier revision of this comment described a `/`->`-` rewrite the
           # code never performed. job-index is also matrix-resize-safe, matching
@@ -1194,7 +1207,7 @@ jobs:
   # (~6 min) from sharing a leg — on the measured order they DID share one,
   # which is where the 31-39 min long pole came from. A dedicated 3-leg
   # matrix over `want_scripts_heavy` gives each its own leg; the light group
-  # fans out to five legs above.
+  # fans out to six legs above.
   #
   # TOOLCHAIN PARITY IS ASSERTED, NOT ASSUMED. scripts-shard-runtime-coverage.test.sh
   # extracts BOTH job blocks and requires every runtime a scripts-group suite
@@ -1295,7 +1308,23 @@ jobs:
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # TWO-LEG ROW SPLIT (#8006 phase 2). The battery declares 24 numbered row
+    # sites and takes `--rows A-B`; each leg runs its half plus the unconditional
+    # control and instrument self-test. The battery's own DECLARED_TOTAL pin is
+    # what keeps the halves honest — a row added without bumping it reds BOTH
+    # legs, so the matrix cannot silently drift out of coverage. Ranges must be
+    # re-split whenever DECLARED_TOTAL changes (the battery fails closed on an
+    # out-of-bounds range, which is the alarm).
+    strategy:
+      fail-fast: false
+      matrix:
+        rows: ["1-12", "13-24"]
+    # Sized above the measured need, not at it: the serial 24-row battery
+    # measured ~9.5 min as a single job; halving the row space plus the
+    # parallelized enumerate children inside the guard puts each leg near
+    # ~5 min. A timeout kill must never fire below a duration the repo calls
+    # legitimate.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -1311,8 +1340,8 @@ jobs:
       # mutation and aborts the battery outright if it is not green, so this job still exercises
       # both guards against the real tree — which is what AC14 asks for: a cross-leg union
       # asserted from a job that is not itself a leg.
-      - name: Guard 1 — shard-totality mutation battery (control + every row must drive it RED)
-        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
+      - name: Guard 1 — shard-totality mutation battery (rows ${{ matrix.rows }}; every mutated row must drive the guard RED)
+        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
@@ -1338,6 +1367,111 @@ jobs:
 
       - name: Grok fidelity gate (inspect contract + golden-path eval)
         run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
+
+  # Rationale lives in ADR-245, not here (ADR-231: workflow files are byte-budgeted).
+  # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
+  # promoting it to a required check after a soak, and the pin-freshness criterion.
+  harness-discovery:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    # continue-on-error is LOAD-BEARING, not decoration (#8570 review, P0).
+    #
+    # "non-required" governs the MERGE gate: this job is absent from the `test`
+    # aggregator's `needs:`, so a red here cannot block a PR. It does NOT govern
+    # `workflow_run.conclusion` — and `web-platform-release.yml` is triggered by
+    # `workflows: ["CI"]` and refuses to deploy when that conclusion is not
+    # `success` (`ci_not_green`). So without this, an npm hiccup or a 404 on
+    # static.devin.ai would red the CI run for a main push and SKIP that SHA's
+    # production deploy: a third-party network flake gating our own releases.
+    #
+    # With it, the step still reds on the PR check list (visible, triageable)
+    # while the run conclusion stays `success`. #8574 owns promotion to a
+    # required check, and MUST remove this line as part of that promotion —
+    # a required check that cannot fail the run is worse than no check.
+    continue-on-error: true
+    env:
+      # One declaration per pin. Previously each appeared twice in this job plus
+      # once in the test README, with nothing asserting they agreed — and a
+      # `--pin` lagging its install step silently turns the script's own version
+      # check into a no-op (#8574 bumps these monthly).
+      CODEX_PIN: "0.156.1"
+      DEVIN_PIN: "3000.11.1"
+      # sha256 of the pinned Devin setup script, measured 2026-09-23. A version
+      # in a URL is a NAME, not a content pin; this is the content pin.
+      DEVIN_SETUP_SHA256: "bff4e02d0297ba5494d2cd1a8314b9c48ebd237f37f22438e83d60e09f3b72c7"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install Codex CLI (exact pin)
+        run: |
+          set -uo pipefail
+          npm i -g "@openai/codex@${CODEX_PIN}"
+          # NOT `got="$(codex --version | grep …)"`. A `run:` block with no
+          # `shell:` key runs under `bash -e`, so on a banner carrying no semver
+          # `grep` exits 1, pipefail propagates it, and `-e` kills the step AT
+          # the assignment — the `||` diagnostic below never prints and the step
+          # ends rc=1 with zero output. Measured. That is the exact drift this
+          # pin exists to catch, presenting as an unexplained red.
+          raw="$(codex --version 2>&1 || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$CODEX_PIN" ] || {
+            echo "::error::harness-discovery[codex] version-mismatch:${got:-<unparsed>}!=${CODEX_PIN} raw=${raw:0:200}"
+            exit 3
+          }
+
+      - name: Codex discovers every declared skill
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness codex --pin "$CODEX_PIN"
+
+      - name: Install Devin CLI (versioned setup script)
+        # `!cancelled()` so a Codex-side refusal does not silently skip the Devin
+        # half. The two harnesses are independent subjects: one vendor's npm
+        # outage should not cost us the other vendor's discovery signal, and the
+        # check row gives no hint that half the job never ran.
+        if: '!cancelled()'
+        run: |
+          set -uo pipefail
+          # The top-level install.sh leaves PINNED_VERSION empty (latest). The
+          # VERSIONED setup script is the pinned path — measured 2026-09-23.
+          curl -fsSL --max-time 60 "https://static.devin.ai/cli/${DEVIN_PIN}/setup.sh" -o /tmp/devin-setup.sh
+          echo "${DEVIN_SETUP_SHA256}  /tmp/devin-setup.sh" | sha256sum -c - || {
+            echo "::error::harness-discovery[devin] setup-script-digest-mismatch — refusing to execute; got $(sha256sum /tmp/devin-setup.sh | cut -d' ' -f1)"
+            exit 3
+          }
+          # The setup script INSTALLS and then starts an interactive login, which cannot
+          # succeed headless: it prints "Welcome to Devin CLI! / Error: Login canceled" and
+          # exits 1 AFTER reporting a successful install. Measured 2026-09-23 on this job's
+          # first live run.
+          #
+          # Under `bash -e` — GitHub's default shell, as the Codex step above already warns —
+          # that killed this step at this line, which ALSO skipped the PATH export and the
+          # version assertion below. Those are the only parts that gate anything, so the pin
+          # was silently not checked, and the discovery step that follows passed only because
+          # `~/.local/bin` happens to be on ubuntu-latest's default PATH. Luck, not design.
+          #
+          # So: tolerate the script's exit code and let the VERSION ASSERTION be this step's
+          # verdict. That costs no coverage — a genuinely failed install shows up below as an
+          # unparseable version and still exits 3. `</dev/null` makes the login give up at
+          # once instead of waiting on a TTY that will never arrive.
+          setup_rc=0
+          bash /tmp/devin-setup.sh </dev/null || setup_rc=$?
+          echo "harness-discovery[devin] setup-script rc=${setup_rc} (non-zero EXPECTED: post-install interactive login)"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          raw="$(devin --version 2>&1 || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$DEVIN_PIN" ] || {
+            echo "::error::harness-discovery[devin] version-mismatch:${got:-<unparsed>}!=${DEVIN_PIN} setup_rc=${setup_rc} raw=${raw:0:200}"
+            exit 3
+          }
+
+      - name: Devin discovers every declared skill
+        if: '!cancelled()'
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness devin --pin "$DEVIN_PIN"
 
   # Synthetic aggregator.
   #

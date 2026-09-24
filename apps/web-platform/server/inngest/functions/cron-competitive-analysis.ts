@@ -87,7 +87,8 @@ import {
 } from "@/server/cron-liveness-marker";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
-import { AUDIT_MODEL } from "@/server/inngest/model-tiers";
+import { AUDIT_CLI_ARGS } from "@/server/inngest/model-tiers";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
 // Constants
@@ -117,8 +118,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task
 const CLAUDE_CODE_FLAGS = [
   "--print",
-  "--model",
-  AUDIT_MODEL,
+  ...AUDIT_CLI_ARGS,
   "--max-turns",
   "45",
   "--allowedTools",
@@ -159,9 +159,9 @@ Creating the analysis issue above is REQUIRED: the platform only persists your c
 // Persistence allowlist (#5111): the full cascade write-set, NOT just the
 // report file — the Cascade Delegation Table in
 // plugins/soleur/agents/product/competitive-intelligence.md routes findings
-// to content-strategist (content-strategy.md), product-pricing-strategist
-// (pricing-strategy.md), sales-battlecards (battlecards/), and seo-refresher
-// (seo-refresh-queue.md). This is a deliberate widening: the old prompt
+// to growth-strategist (content-strategy.md), pricing-strategist
+// (pricing-strategy.md), deal-architect (battlecards/), and
+// programmatic-seo-specialist (seo-refresh-queue.md). This is a deliberate widening: the old prompt
 // committed ONLY competitive-intelligence.md and silently discarded the
 // cascade outputs. The agent file's CASCADE LIMIT-4 comment caps the
 // specialist fan-out at 4 — widening the cascade there requires widening
@@ -700,6 +700,7 @@ export const cronCompetitiveAnalysis = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 9 1 * *" },

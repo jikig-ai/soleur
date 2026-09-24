@@ -3,6 +3,10 @@ name: social-distribute
 description: "This skill should be used when distributing a blog article across social platforms (Discord, X/Twitter, IndieHackers, Reddit, Hacker News, LinkedIn). Writes a persistent content file for automated publishing."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Social Distribute
 
 Generate platform-specific content variants from a blog article and write them to a persistent content file for the automated publishing pipeline. Discord can optionally be posted immediately via webhook after approval. The content file feeds into the directory-driven cron pipeline (`content-publisher.sh`) for scheduled publishing.
