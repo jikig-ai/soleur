@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Exit-code harness for inngest-zot-client-authz-6500.sh (#6500).
 #
-# This probe closes the issue that AUTHORIZES retiring GHCR push/egress (ADR-096 Phase 5.3-5.5),
+# This probe closes the issue that AUTHORIZES ADR-096 5.3b-i / 5.6 for the dedicated inngest host
+# (#6500, CLOSED as COMPLETED 2026-09-24; zot-soak-6122.sh's blocker arm still reads it),
 # so every case below is a way a close could be granted that no operator granted. Two of them are
 # the failure modes the sibling operator-confirmed probe actually shipped with (#7437): an
 # unanchored verdict match, and PASS evaluated before FAIL so a retraction loses to the string it

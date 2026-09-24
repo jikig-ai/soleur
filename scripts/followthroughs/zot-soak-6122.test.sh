@@ -10,9 +10,10 @@
 # stubbing those on PATH drives every arm through the REAL script, including its real jq
 # parse path.
 #
-# WHAT THIS GUARDS: the soak authorizes ADR-096 5.3-5.5, which rotates AND REVOKES the GHCR
-# PAT — irreversible, no rollback. Every assertion here is about which exit code an arm
-# returns, because the exit code IS the authorization artifact. The cardinal sin is exit 0.
+# WHAT THIS GUARDS: the soak's PASS authorizes ADR-096 5.6 (adopting -> accepted, once 5.3b-iii and
+# 5.4 are also done) and #6129 (WARN -> ENFORCE), and it CLOSES the #6122 epic it is enrolled on.
+# Every assertion here is about which exit code an arm returns, because the exit code IS the
+# authorization artifact. The cardinal sin is exit 0.
 
 set -uo pipefail
 
@@ -93,6 +94,13 @@ STUB
 # resolution, so it cannot observe a GH_REPO hijack directly — argv is the witness that the
 # soak does not depend on that resolution at all.
 printf '%s\n' "$*" >> "$STUB_GH_ARGV"
+# The START anchor (#8036 1d, Guard 3): `gh pr view 8660 --repo … --json mergedAt`. Answered
+# before the issue branch so an issue-state answer can never be parsed as a mergedAt.
+case " $* " in
+  *" pr view "*)
+    [[ "${STUB_GH_MERGED_AT:-}" == "__UNREADABLE__" ]] && exit 1
+    printf '{"mergedAt":"%s"}\n' "${STUB_GH_MERGED_AT-2026-09-24T03:22:41Z}"; exit 0 ;;
+esac
 # PER-ISSUE ANSWERS (#8651). The soak now consults TWO blockers, and a stub that answers the
 # same state for both cannot drive one arm while holding the other settled. Default the web
 # blocker to the inngest one so every pre-existing row keeps its exact meaning.
@@ -134,15 +142,15 @@ run_soak() {
     mkdir -p "$d/repo/scripts/followthroughs" "$d/repo/apps/web-platform/infra"
     cp "$src" "$d/repo/scripts/followthroughs/$(basename "$SOAK")"
     cat > "$d/repo/apps/web-platform/infra/cloud-init-inngest.yml" <<'FIXED'
-# Synthetic fixture: the dedicated inngest host AFTER #6500 is fixed — zot-primary with a
-# GHCR fallback, reporting on the Sentry stage: schema from BOTH outcome arms, in the exact
+# Synthetic fixture: the dedicated inngest host AFTER #6500 is fixed — zot-only since #8036 1d (a
+# miss is terminal), reporting on the Sentry stage: schema from BOTH outcome arms, in the exact
 # call-site form cloud-init-inngest.yml uses. Synthesized, never captured.
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
       IREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.19"
     fi
   - path: /usr/local/bin/soleur-boot-emit
     soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
-    soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true
+    soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true
 FIXED
     soak="$d/repo/scripts/followthroughs/$(basename "$SOAK")"
   elif [[ "$inngest_fixed" == "old" ]]; then
@@ -174,11 +182,16 @@ OLD
   resolved="$(PATH="$d:$PATH" command -v gh)"
   [[ "$resolved" == "$d/gh" ]] || { echo "FATAL: stub gh did not shadow the real one (got $resolved)" >&2; exit 1; }
   : > "$GH_ARGV_SINK"; : > "$URL_SINK"; : > "$UNMATCHED_SINK"
-  out="$(PATH="$d:$PATH" SENTRY_ACTIONS_RO_TOKEN=stub GH_TOKEN=stub \
+  # SOAK_START_OVERRIDE=__UNSET__ runs the soak on its OWN default START (no ZOT_SOAK_START in its
+  # env at all) — the only way to reach the #8660 mergedAt anchor, which guards the default only.
+  local start_env=(ZOT_SOAK_START="${SOAK_START_OVERRIDE:-2026-07-01T00:00:00}")
+  [[ "${SOAK_START_OVERRIDE:-}" == "__UNSET__" ]] && start_env=()
+  out="$(env -u ZOT_SOAK_START PATH="$d:$PATH" SENTRY_ACTIONS_RO_TOKEN=stub GH_TOKEN=stub \
         STUB_GH_STATE="$gh_state" STUB_GH_REASON="$gh_reason" STUB_GH_ARGV="$GH_ARGV_SINK" \
         STUB_GH_STATE_WEB="$web_state" STUB_GH_REASON_WEB="$web_reason" \
+        STUB_GH_MERGED_AT="${STUB_GH_MERGED_AT-2026-09-24T03:22:41Z}" \
         STUB_URL_LOG="$URL_SINK" STUB_UNMATCHED="$UNMATCHED_SINK" \
-        ZOT_SOAK_START="${SOAK_START_OVERRIDE:-2026-07-01T00:00:00}" bash "$soak" 2>&1)"; rc=$?
+        "${start_env[@]}" bash "$soak" 2>&1)"; rc=$?
   rm -rf "$d"
   printf '%s|%s' "$rc" "$out"
 }
@@ -187,18 +200,21 @@ OLD
 # so match on the stage NAME which survives encoding).
 Q_ZOTWEB='image%3A%22web%22'
 Q_ZOTING='image%3A%22inngest%22'
+# The web fresh-boot fatal arm (#8036 1d): `stage:"pull" level:fatal`, OUTSIDE FAIL_QUERIES.
+# `%22pull%22` occurs in no other query (op:image-pull is unquoted), so this key is unambiguous.
+Q_WEBFATAL='stage%3A%22pull%22'
 
 # A "healthy fleet" baseline: no fallbacks, sample satisfied, denominator satisfied.
 # `soleur-inngest` is FIRST (#6500): the stub matches keys as substrings in order, first match
 # wins, and only the host-pinned INNGEST_ZOT query carries that string. Without it every case that
 # passes the APP_ZOT arm would 500 on the new query and read TRANSIENT instead of its verdict.
-HEALTHY="host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5"
+HEALTHY="host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5"
 
 echo "== AC7: the arms return the right exit codes =="
 
 # 1. Dark beacon: zero fallbacks, sample fine, but NO zot-served fresh boot.
 #    MUST be exit 1 (FAIL) — never 0, never 2. This is the whole denominator.
-r="$(run_soak "zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=0;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=0;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"no-freshboot-evidence"* ]]; then
   pass "dark beacon (app_zot=0, no fallbacks) -> exit 1 FAIL(no-freshboot-evidence)"
@@ -275,20 +291,28 @@ else
   fail "#8651 3d: both-closed must exit 0 PASS; got rc=$rc out=$out"
 fi
 
-# 4. A real fallback still FAILs, and the per-signal breakdown still prints (the arm the
-#    denominator must not have displaced — an operator hitting a real fallback needs it).
-r="$(run_soak "app_ghcr_served=2;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
+# 4. A real FAIL_QUERIES event still FAILs, and the per-signal breakdown still prints (the arm the
+#    denominator must not have displaced — an operator hitting a real event needs it). One row per
+#    member (#8036 1d), so a breakdown that drops either name reds its own row.
+r="$(run_soak "inngest_pull_fatal=2;zot-gate-degraded=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
-if [[ "$rc" == "1" && "$out" == *"app-served=2"* ]]; then
-  pass "app_ghcr_served>0 -> exit 1 FAIL with per-signal breakdown incl. app-served"
+if [[ "$rc" == "1" && "$out" == FAIL:* && "$out" == *"inngest-pull-fatal=2"* && "$out" == *"gate-degraded=0"* ]]; then
+  pass "inngest_pull_fatal>0 -> exit 1 FAIL with per-signal breakdown incl. inngest-pull-fatal"
 else
-  fail "app-served fallback must exit 1 and print the breakdown; got rc=$rc out=$out"
+  fail "inngest-pull-fatal must exit 1 and print the breakdown; got rc=$rc out=$out"
+fi
+r="$(run_soak "zot-gate-degraded=1;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
+rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" == "1" && "$out" == FAIL:* && "$out" == *"gate-degraded=1"* && "$out" == *"inngest-pull-fatal=0"* ]]; then
+  pass "zot-gate-degraded>0 -> exit 1 FAIL with per-signal breakdown incl. gate-degraded"
+else
+  fail "gate-degraded must exit 1 and print the breakdown; got rc=$rc out=$out"
 fi
 
 # 4b. The insufficient-sample arm. It carries 8 lines of "MUST keep exit 1 — do NOT 'fix' it to
 #     TRANSIENT" and had NO test: it is the ONLY detector for the #6437 Sentry-dark mode, so a
 #     well-meaning refactor to exit 2 would silently disarm it. One run_soak proves it.
-r="$(run_soak "host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"FAIL(insufficient-sample)"* ]]; then
   pass "thin zot sample -> exit 1 FAIL(insufficient-sample) (the only #6437 detector)"
@@ -318,7 +342,7 @@ fi
 
 # 5b. The same sentinel on a FAIL_QUERIES member (the pre-existing #6435-era guard). Distinct
 #     from 5: a different guard, a different arm, and the one a global 500 was really testing.
-r="$(run_soak "$HEALTHY" CLOSED 200 'app_ghcr_served')"
+r="$(run_soak "$HEALTHY" CLOSED 200 'inngest_pull_fatal')"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "2" && "$out" == *"TRANSIENT"* ]]; then
   pass "a FAIL_QUERIES member 500s -> exit 2, never a counted zero"
@@ -408,15 +432,15 @@ F_ZOT_ONLY="$F_BS_ONLY"'
         soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true'
 F_COMMENTS="$F_BS_ONLY"'
         # soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
-        # soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true'
+        # soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true'
 F_BOTH="$F_BS_ONLY"'
   - path: /usr/local/bin/soleur-boot-emit
         soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
-        soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true'
+        soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true'
 # The call sites without the write_files entry that delivers the emitter (security F3).
 F_NO_EMITTER="$F_BS_ONLY"'
         soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
-        soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true'
+        soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true'
 
 # g6 <label> <expected rc> <expected substring> <run_soak args...>: one row, one verdict. Returns 0
 # when the verdict matched, so the mutation rows below can reuse the same row as their oracle.
@@ -434,7 +458,7 @@ g6() {
 # Row 1: today's pre-#6500 shape (Better Stack only) — CLOSED/COMPLETED must still not PASS.
 g6 "row 1: only the Better Stack inngest_zot call -> blocker-closed-but-condition-unmet" \
   1 "blocker-closed-but-condition-unmet" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_BS_ONLY"
-g6 "row 2: soleur-boot-emit inngest_zot without inngest_ghcr_fallback -> condition unmet" \
+g6 "row 2: soleur-boot-emit inngest_zot without inngest_pull_fatal -> condition unmet" \
   1 "blocker-closed-but-condition-unmet" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_ZOT_ONLY"
 g6 "row 3: both calls present only as comments -> condition unmet" \
   1 "blocker-closed-but-condition-unmet" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_COMMENTS"
@@ -536,46 +560,189 @@ else
   fail "G6 harness: an unlanded mutation was not reported as HARNESS ABORT; got: ${G6_PROBE:0:200}"
 fi
 
-# #6122: the pinned default START must stay a timestamp no later than the first observed
-# zot-served web pull (2026-07-17T19:51:49Z). A later default is the false-PASS route the soak
-# header warns about: it drops flip-day fallbacks from the window. Read from the code line, not
-# a comment, and compared as a string (ISO-8601 at one precision orders lexically).
-PINNED_START="$(sed -nE 's/^START="\$\{ZOT_SOAK_START:-([^}]*)\}"$/\1/p' "$SOAK")"
-if [[ "$PINNED_START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] \
-   && [[ ! "$PINNED_START" > "2026-07-17T19:51:49" ]]; then
-  pass "#6122: default START is pinned ($PINNED_START) and not after the first zot-served pull"
+# F_BOTH's shape under the RETIRED name: a template still emitting inngest_ghcr_fallback must not
+# satisfy the #6500 corroboration (#8036 1d renamed the stage; the predicate reads the new one).
+F_OLD_NAME="$F_BS_ONLY"'
+  - path: /usr/local/bin/soleur-boot-emit
+        soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
+        soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true'
+g6 "#8036 1d: the miss arm still on the retired inngest_ghcr_fallback name -> condition unmet" \
+  1 "blocker-closed-but-condition-unmet" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_OLD_NAME"
+
+echo "== #8036 1d: the web fresh-boot fatal arm (outside FAIL_QUERIES) =="
+
+# WF1. A web fresh boot that died at stage=pull FAILs the soak, with every other signal healthy.
+#      Named label + the count, so the operator can tell it from a FAIL_QUERIES event.
+g6 "WF1: stage:\"pull\" level:fatal = 1, all else healthy -> exit 1 FAIL(web-pull-fatal)" \
+  1 "FAIL(web-pull-fatal)" "${HEALTHY/$Q_WEBFATAL=0/$Q_WEBFATAL=1}" CLOSED 200 "" yes COMPLETED
+if [[ "$G6_LAST" == *"web-pull-fatal=1"* ]]; then
+  pass "WF1b: the web-fatal FAIL line carries the web-pull-fatal=<n> count"
 else
-  fail "#6122: default START must be a timestamp <= 2026-07-17T19:51:49; got '${PINNED_START:-<unparsed>}'"
+  fail "WF1b: the web-fatal FAIL line must carry web-pull-fatal=1; got $G6_LAST"
+fi
+# WF2. The string guard before the arithmetic: a 500 on this query alone is TRANSIENT, never a
+#      counted zero (which would be a false PASS) and never an arithmetic error.
+g6 "WF2: the web-fatal query 500s -> exit 2 TRANSIENT at its own guard" \
+  2 "'web-pull-fatal' failed" "$HEALTHY" CLOSED 200 "$Q_WEBFATAL" yes COMPLETED
+# WF3. The query is EXACTLY the pinned clause (the stub matches by substring, so a widened or
+#      prefixed query would still answer; only the decoded query distinguishes them).
+exact_query() { # exact_query <needle> <want>: every logged query containing needle == want, >=1
+  python3 - "$URL_SINK" "$1" "$2" <<'PYQ'
+import sys, urllib.parse
+qs = [urllib.parse.parse_qs(urllib.parse.urlsplit(l.strip()).query).get("query", [""])[0]
+      for l in open(sys.argv[1]) if l.strip()]
+hits = [q for q in qs if sys.argv[2] in q]
+sys.exit(0 if hits == [sys.argv[3]] else 1)
+PYQ
+}
+g6_row 0 "PASS" "$HEALTHY" CLOSED 200 "" yes COMPLETED >/dev/null
+if exact_query '"pull"' 'stage:"pull" level:fatal'; then
+  pass "WF3: the web-fatal query is exactly stage:\"pull\" level:fatal (bare — _emit writes no feature/op)"
+else
+  fail "WF3: the web-fatal query is not the exact pinned clause"
+fi
+# WF4. Mutation: delete the arm. WF1's fixture must then stop FAILing on web-pull-fatal.
+g6_mutant "WF4: delete the WEB_FATAL arm" \
+  '/^WEB_FATAL=\$(sentry_count/,/^fi$/d; /^if (( WEB_FATAL > 0 )); then$/,/^fi$/d' \
+  1 "FAIL(web-pull-fatal)" "${HEALTHY/$Q_WEBFATAL=0/$Q_WEBFATAL=1}" CLOSED 200 "" yes COMPLETED
+# WF5. NOT a FAIL_QUERIES member: the rule⇔soak parity contract (op-contract test) would break,
+#      because web_terminal_boot_fatal — not zot_mirror_fallback_rate — pages this stage.
+SOAK_ARRAY_BODY="$(awk '/^declare -A FAIL_QUERIES=\(/{f=1;next} f&&/^\)/{exit} f' "$SOAK")"
+if [[ -n "$SOAK_ARRAY_BODY" && "$SOAK_ARRAY_BODY" != *'"pull"'* ]] \
+   && grep -qE "^WEB_FATAL=\\\$\\(sentry_count 'stage:\"pull\" level:fatal'\\)$" "$SOAK"; then
+  pass "WF5: stage:\"pull\" is counted by WEB_FATAL and is NOT a FAIL_QUERIES member (parity holds)"
+else
+  fail "WF5: the web-fatal query must live outside FAIL_QUERIES, as WEB_FATAL=\$(sentry_count 'stage:\"pull\" level:fatal')"
 fi
 
-# #8036 1c: the FAIL set's CARDINALITY, asserted against BOTH declarations that carry it — the
-# array and the runtime floor literal — and against each other. The defect this catches is the one
-# the floor exists for and cannot catch alone: dropping an operand without moving the floor makes
-# every sweep a permanent `exit 2` TRANSIENT, which the sweeper only discovers at runtime, a day
-# later, as a comment on the tracker. Read both numbers from the SOURCE, never restated here.
+echo "== #8036 1d Guard 3: the default START is the operator's re-arm, anchored on #8660 =="
+
+# The literal the operator recorded on #6122 (comment 5811202876, 2026-09-24T09:07:09Z) as the
+# soak re-arm, which is also PR #8660's mergedAt (2026-09-24T03:22:41Z). Both records sit outside
+# this commit, so a diff that moves the literal contradicts a record it cannot edit.
+REARM_START="2026-09-24T03:22:41"
+start_pin_ok() { # start_pin_ok <soak-file>: exactly ONE START= assignment, and its default == REARM_START
+  local f="$1" n v
+  n="$(grep -cE '^[[:space:]]*START=' "$f")"
+  v="$(sed -nE 's/^START="\$\{ZOT_SOAK_START:-([^}]*)\}"$/\1/p' "$f")"
+  START_PIN_LAST="assignments=$n default='${v:-<unparsed>}'"
+  [[ "$n" == "1" && "$v" == "$REARM_START" ]]
+}
+if start_pin_ok "$SOAK"; then
+  pass "G3: exactly one START= assignment, default == $REARM_START (#6122 c5811202876 / #8660 mergedAt)"
+else
+  fail "G3: default START must be exactly $REARM_START in a single assignment; got $START_PIN_LAST"
+fi
+# Guard 3 mutation rows 1-3, in-suite: each mutant of the soak must fail start_pin_ok.
+g3_mutant() { # g3_mutant <label> <sed-script>
+  local m; m="$(mktemp)"
+  sed -e "$2" "$SOAK" > "$m"
+  if cmp -s "$SOAK" "$m"; then fail "G3 $1 — HARNESS ABORT: the mutation did not land"
+  elif start_pin_ok "$m"; then fail "G3 $1 — mutant SURVIVED ($START_PIN_LAST)"
+  else pass "G3 $1 — mutant killed ($START_PIN_LAST)"; fi
+  rm -f "$m"
+}
+g3_mutant "row 1: default one second later" 's/ZOT_SOAK_START:-2026-09-24T03:22:41}/ZOT_SOAK_START:-2026-09-24T03:22:42}/'
+g3_mutant "row 2: the old 2026-07-17T19:45:00 default restored" 's/ZOT_SOAK_START:-2026-09-24T03:22:41}/ZOT_SOAK_START:-2026-07-17T19:45:00}/'
+g3_mutant "row 3: a second START= assignment later in the body" '/^END=\$(date/a START=2026-09-30T00:00:00'
+
+# The runtime anchor (the default only; ZOT_SOAK_START is the documented test/manual seam).
+# MA1: default START, #8660 mergedAt == START -> the anchor is satisfied and the soak reaches PASS.
+if SOAK_START_OVERRIDE=__UNSET__ g6_row 0 "PASS" "$HEALTHY" CLOSED 200 "" yes COMPLETED; then
+  pass "MA1: default START == #8660 mergedAt -> the anchor holds (exit 0 PASS)"
+else
+  fail "MA1: default START equal to #8660 mergedAt must not block the PASS; got $G6_LAST"
+fi
+gh_argv="$(cat "$GH_ARGV_SINK" 2>/dev/null || true)"
+if [[ "$gh_argv" == *"pr view 8660 --repo github.com/jikig-ai/soleur --json mergedAt"* ]]; then
+  pass "MA1b: the anchor reads #8660 mergedAt with the host+repo pin"
+else
+  fail "MA1b: expected gh pr view 8660 --repo github.com/jikig-ai/soleur --json mergedAt; argv was: ${gh_argv:-<none>}"
+fi
+# MA2: #8660 unreadable -> TRANSIENT (could not measure), never a verdict.
+if SOAK_START_OVERRIDE=__UNSET__ STUB_GH_MERGED_AT=__UNREADABLE__ g6_row 2 "cannot read #8660 mergedAt" "$HEALTHY" CLOSED 200 "" yes COMPLETED; then
+  pass "MA2: #8660 mergedAt unreadable -> exit 2 TRANSIENT"
+else
+  fail "MA2: an unreadable #8660 mergedAt must exit 2; got $G6_LAST"
+fi
+# MA2b: readable but not a timestamp (an unmerged PR answers null) -> TRANSIENT too.
+if SOAK_START_OVERRIDE=__UNSET__ STUB_GH_MERGED_AT="" g6_row 2 "cannot read #8660 mergedAt" "$HEALTHY" CLOSED 200 "" yes COMPLETED; then
+  pass "MA2b: #8660 mergedAt empty/null -> exit 2 TRANSIENT"
+else
+  fail "MA2b: an empty #8660 mergedAt must exit 2; got $G6_LAST"
+fi
+# MA3: the default START is LATER than the record it cites -> FAIL (the false-PASS route: a late
+#      START drops bad events from the window). Simulated by moving the anchor one second earlier.
+if SOAK_START_OVERRIDE=__UNSET__ STUB_GH_MERGED_AT="2026-09-24T03:22:40Z" g6_row 1 "FAIL(start-after-anchor)" "$HEALTHY" CLOSED 200 "" yes COMPLETED; then
+  pass "MA3: default START later than #8660 mergedAt -> exit 1 FAIL(start-after-anchor)"
+else
+  fail "MA3: a default START after #8660 mergedAt must exit 1; got $G6_LAST"
+fi
+# MA4 (Guard 3 row 4, harness, must-PASS): an explicit ZOT_SOAK_START later than the anchor is the
+#      documented override seam and is NOT checked against #8660 — the pin is on the default.
+if SOAK_START_OVERRIDE="2026-09-25T00:00:00" STUB_GH_MERGED_AT="2026-09-24T03:22:40Z" g6_row 0 "PASS" "$HEALTHY" CLOSED 200 "" yes COMPLETED; then
+  pass "MA4: ZOT_SOAK_START=2026-09-25T00:00:00 override -> anchor not applied, exit 0 PASS"
+else
+  fail "MA4: an explicit ZOT_SOAK_START must bypass the default-only anchor; got $G6_LAST"
+fi
+# MA5: mutation — delete the anchor's FAIL branch; MA3's fixture must then no longer FAIL on it.
+ma5="$(mktemp)"
+sed -e '/^  if \[\[ "\${START%Z}" > "\${anchor%Z}" \]\]; then$/,/^  fi$/d' "$SOAK" > "$ma5"
+if cmp -s "$SOAK" "$ma5"; then
+  fail "MA5 — HARNESS ABORT: the mutation did not land"
+elif SOAK_UNDER_TEST="$ma5" SOAK_START_OVERRIDE=__UNSET__ STUB_GH_MERGED_AT="2026-09-24T03:22:40Z" g6_row 1 "FAIL(start-after-anchor)" "$HEALTHY" CLOSED 200 "" yes COMPLETED; then
+  fail "MA5: deleting the anchor's FAIL branch — mutant SURVIVED"
+else
+  pass "MA5: deleting the anchor's FAIL branch — mutant killed"
+fi
+rm -f "$ma5"
+
+echo "== #8036 1c/1d: FAIL_QUERIES cardinality, floor parity, retired operands =="
+
+# The FAIL set's CARDINALITY, asserted against BOTH declarations that carry it — the array and the
+# runtime floor literal — and against each other. The defect this catches is the one the floor
+# exists for and cannot catch alone: dropping an operand without moving the floor makes every
+# sweep a permanent `exit 2` TRANSIENT, which the sweeper only discovers at runtime, a day later,
+# as a comment on the tracker. Read both numbers from the SOURCE, never restated here.
+# 5 -> 4 (#8036 1c, ghcr-fallback) -> 2 (#8036 1d, app_ghcr_* retired, freshboot renamed).
 SOAK_N_QUERIES="$(awk '/^declare -A FAIL_QUERIES=\(/{f=1;next} f&&/^\)/{exit} f&&/^[[:space:]]*\[[a-z]+\]=/{n++} END{print n+0}' "$SOAK")"
 SOAK_FLOOR_LIT="$(sed -nE 's/^if \(\( \$\{#FAIL_QUERIES\[@\]\} != ([0-9]+) \)\); then$/\1/p' "$SOAK" | head -1)"
-if [[ "$SOAK_N_QUERIES" == "4" && "$SOAK_FLOOR_LIT" == "4" ]]; then
-  pass "#8036 1c: FAIL_QUERIES declares 4 signals and the runtime floor agrees (array=$SOAK_N_QUERIES floor=$SOAK_FLOOR_LIT)"
+if [[ "$SOAK_N_QUERIES" == "2" && "$SOAK_FLOOR_LIT" == "2" ]]; then
+  pass "#8036 1d: FAIL_QUERIES declares 2 signals and the runtime floor agrees (array=$SOAK_N_QUERIES floor=$SOAK_FLOOR_LIT)"
 else
-  fail "#8036 1c: FAIL_QUERIES cardinality/floor parity broken (array=${SOAK_N_QUERIES:-<unparsed>} floor=${SOAK_FLOOR_LIT:-<unparsed>}, both must be 4)"
+  fail "#8036 1d: FAIL_QUERIES cardinality/floor parity broken (array=${SOAK_N_QUERIES:-<unparsed>} floor=${SOAK_FLOOR_LIT:-<unparsed>}, both must be 2)"
 fi
 
-# And the retired operand must be gone from the EXECUTABLE array, not merely from the prose. An
-# `ls`-style presence check over the whole file would pass on a header paragraph that names it,
-# which is deliberately still there — so scope the scan to the array body.
-SOAK_ARRAY_BODY="$(awk '/^declare -A FAIL_QUERIES=\(/{f=1;next} f&&/^\)/{exit} f' "$SOAK")"
-if [[ "$SOAK_ARRAY_BODY" != *"ghcr-fallback"* && "$SOAK_ARRAY_BODY" == *"zot-gate-degraded"* ]]; then
-  pass "#8036 1c: the retired registry:\"ghcr-fallback\" operand is gone from FAIL_QUERIES, and zot-gate-degraded survives"
+# The two members, as WHOLE query strings (the prefix trap: bare stage: queries only).
+if grep -qxF "  [gate]='feature:supply-chain op:image-pull registry:\"zot-gate-degraded\"'" "$SOAK" \
+   && grep -qxF "  [freshboot]='stage:\"inngest_pull_fatal\"'" "$SOAK"; then
+  pass "#8036 1d: FAIL_QUERIES is exactly [gate]=registry:\"zot-gate-degraded\" (prefixed) + [freshboot]=stage:\"inngest_pull_fatal\" (bare)"
 else
-  fail "#8036 1c: FAIL_QUERIES body still names ghcr-fallback, or lost zot-gate-degraded: $SOAK_ARRAY_BODY"
+  fail "#8036 1d: FAIL_QUERIES members are not the two pinned whole query strings: $SOAK_ARRAY_BODY"
+fi
+
+# The retired operands must be gone from the EXECUTABLE soak, not merely from the array. The header
+# names them on purpose (the retired list), so scan code lines only — comment lines stripped.
+SOAK_CODE="$(grep -vE '^[[:space:]]*#' "$SOAK")"
+retired_hits=""
+for tok in 'ghcr-fallback' 'app_ghcr_fallback' 'app_ghcr_served' 'inngest_ghcr_fallback'; do
+  [[ "$SOAK_CODE" == *"$tok"* ]] && retired_hits="$retired_hits $tok"
+done
+if [[ -z "$retired_hits" && "$SOAK_ARRAY_BODY" == *"zot-gate-degraded"* && "$SOAK_ARRAY_BODY" == *"inngest_pull_fatal"* && $(printf '%s\n' "$SOAK_CODE" | wc -l) -gt 100 ]]; then
+  pass "#8036 1c/1d: no retired operand (ghcr-fallback, app_ghcr_*, inngest_ghcr_fallback) on any soak code line; both survivors present"
+else
+  fail "#8036 1c/1d: retired operand(s) on a soak code line:${retired_hits:- <none>} (or a survivor missing / code scan vacuous)"
 fi
 
 # Assertion floor: a deleted row must red. Literal adjacent to its `if` (guard-vacuity-floor).
 # Raised 30 -> 32 in the SAME edit that added the two rows above (a floor left below the count it
 # measures is slack, and slack in a floor is how many rows can be deleted before it notices).
 # Raised 32 -> 36 in the SAME edit that added the four #8651 web-blocker rows (3a-3d).
-SOAK_MIN_PASSES=36
+# Raised 36 -> 55 in the SAME edit as #8036 1d: -3 restated rows (the <= cutover START row, the
+# 4-signal cardinality row, the ghcr-fallback-only residual row), +22 new (row 4 split per member,
+# the retired-name G6 row, WF1-WF5 + WF1b, G3 + its three in-suite mutants, MA1-MA5 + MA1b + MA2b,
+# the 2-signal cardinality, whole-query and code-line residual rows).
+SOAK_MIN_PASSES=55
 if [[ "$passes" -lt $SOAK_MIN_PASSES ]]; then
   printf 'FATAL: only %s passing assertions ran, expected at least %s — a row was deleted\n' "$passes" "$SOAK_MIN_PASSES" >&2
   exit 1

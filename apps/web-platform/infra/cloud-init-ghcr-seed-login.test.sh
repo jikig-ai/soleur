@@ -90,7 +90,19 @@ else
 fi
 
 # ── G1: host-side GHCR boot residual-zero census (Guard 1) ─────────────────────────────────────
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 WORK="$(mktemp -d "${TMPDIR:-/var/tmp}/ghcr-census.XXXXXX")"
+assert_fixture_dir "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 cat > "$WORK/census.py" <<'CENSUS_PY'
 """Guard 1 census. argv: <root> <boot files, comma-sep> <tf:template pairs, comma-sep>.
@@ -258,8 +270,11 @@ else no "G1: a templatefile() map passes a GHCR credential:"; printf '        %s
 # NEW violation (multiset difference against the unmutated census) — so a row stays meaningful
 # even while another file's baseline is red. Row 6 is the must-PASS harness row.
 SB="$WORK/sb"
+assert_fixture_dir "$SB"
 # The sandbox holds exactly what the census reads: the 3 boot files + every .tf under the root.
 sandbox() {
+  assert_fixture_dir "$SB"
+  assert_fixture_dir "$DIR"
   rm -rf "$SB"; mkdir -p "$SB"
   cp "$DIR/cloud-init.yml" "$DIR/soleur-host-bootstrap.sh" "$DIR/cloud-init-inngest.yml" "$SB/"
   (cd "$DIR" && find . -name '*.tf' -not -path '*/.terraform/*' -print0 | xargs -0 -I{} cp --parents {} "$SB/")
@@ -286,6 +301,7 @@ o = eval(expr, {"s": s, "chr": chr})
 open(p, "w").write(o)
 PY
 }
+assert_fixture_dir "$SB"
 # 1: a GHCR login restored in the inngest template (after a compliant web file)
 printf "    printf '%%s' \"\$T\" | docker login ghcr.io -u \"\$U\" --password-stdin\n" >> "$SB/cloud-init-inngest.yml"
 mrow "1 docker login ghcr.io restored in cloud-init-inngest.yml" cloud-init-inngest.yml

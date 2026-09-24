@@ -393,9 +393,10 @@ import {
 #
 # The corrected frequency-rule sweep (#6429's generalizable ask): this file has TWO
 # `event_frequency` rules — zot_mirror_fallback_rate (value = 0, the #6285 fix) and
-# web_terminal_boot_fatal (value = 1, reachable only because its shared `soleur-boot-emit`
-# group is always already hot) — plus THIS ONE `event_unique_user_frequency`. The issue's
-# "three event_frequency rules" was wrong on both the count and every line it cited.
+# web_terminal_boot_fatal (value = 1 then; value = 0 since #8036 1d, because its `pull` stage
+# rides its OWN group, where a strict `>` 1 cannot page a single event) — plus THIS ONE
+# `event_unique_user_frequency`. The issue's "three event_frequency rules" was wrong on both the
+# count and every line it cited. (A census as of #6429; later rules are not recounted here.)
 #
 # EDITS TO THIS BLOCK ARE INERT until #7985 (ignore_changes = all). Terraform owns this rule's
 # EXISTENCE only. Change its content in a #7985 conversion, never by editing these values.
@@ -1017,13 +1018,15 @@ resource "sentry_alert" "gh_pages_cert_reissue_failed" {
 # human SSH path (git-shell + three command=/no-pty forced commands), no console, and no log
 # shipper — so an unrouted Sentry event is the ONLY trace of a failed boot, read by nobody.
 #
-# `value = 0`, NOT the `value = 1` used by web_terminal_boot_fatal above. That comparison is a
-# STRICT `>`, so `value = 1` means ">1 event in the interval" and works there ONLY because the
-# shared `soleur-boot-emit` group is always already hot. git-data emits into a FRESH group: the
-# host has never existed, so its first-ever boot fatal is BY DEFINITION the first event in that
-# group and `value = 1` would NOT page for it. Copying the sibling's number would have made this
-# rule silently inert on precisely the event it exists to catch — the same class the
-# ci_deploy_ghcr_fallback comment above warns about.
+# `value = 0`. That comparison is a STRICT `>`, so `value = 1` means ">1 event in the interval".
+# git-data emits into a FRESH group: the host has never existed, so its first-ever boot fatal is
+# BY DEFINITION the first event in that group and `value = 1` would NOT page for it — the
+# failure class the ci_deploy_ghcr_fallback comment above warns about. When this rule was written,
+# web_terminal_boot_fatal (below) used `value = 1` on the argument that its shared
+# `soleur-boot-emit` group is always already hot. That argument did not cover its `pull` stage,
+# which rides its own group, and the one seed fatal in 30 days could not page (#8036 1d); it has
+# used `value = 0` since, following THIS rule's precedent. Do not copy a `value = 1` onto a rule
+# whose first event can land in a group of its own.
 #
 # `logic_type = "any"`: these stages are alternatives, not conjuncts — one boot dies at one
 # stage. The set is the STAGE progression git-data's runcmd arms, plus the two child-shell
@@ -1723,7 +1726,8 @@ resource "sentry_alert" "web_private_nic_boot_gate" {
 
 # web-host terminal serving-block boot FATAL (#6396). The cloud-init terminal `docker run` block
 # emits `soleur-boot-emit <stage> fatal` (tags.stage ∈ {terminal_preamble, hostscripts_incomplete,
-# doppler_download, docker_run}) on a no-SSH boot abort.
+# doppler_download, docker_run}) on a no-SSH boot abort, and the seed block's on_err sends
+# `soleur-hostscript-seed failed` with stage=pull at fatal when the zot login/pull fails (#8651).
 #
 # HOST-GENERIC — DO NOT DELETE AS "web-2 surface" (#6575). This alert filters on `stage` and NEVER
 # on host, so it was never web-2-specific; the original comment here said it was "the SOLE PAGE for
@@ -1736,27 +1740,36 @@ resource "sentry_alert" "web_private_nic_boot_gate" {
 #
 # SCOPE — READ BEFORE RELYING ON THIS (corrected at review, #6575). This alert does NOT detect
 # the ADR-128 cross-commit skew mode (#6712). That failure aborts cloud-init at `stage=verify`,
-# and `verify` is NOT among the four stages in `action_filters[].conditions` below (`terminal_preamble`,
-# `hostscripts_incomplete`, `doppler_download`, `docker_run`). The whole `runcmd` stage set —
-# verify/extract/pull/ghcr_login/runcmd_early/apt_install/doppler_dl/docker_apt/docker_restart —
+# and `verify` is NOT among the five stages in `action_filters[].conditions` below (`terminal_preamble`,
+# `hostscripts_incomplete`, `doppler_download`, `docker_run`, `pull`). The rest of the `runcmd`
+# stage set — verify/extract/runcmd_early/apt_install/doppler_dl/docker_apt/docker_restart —
 # emits `fatal` to Sentry via the baked DSN and matches NO alert rule, so those events are
 # write-only today. Detection for the skew mode is therefore ABSENT; the mitigation is
 # PREVENTION (the coherence preflight, run per runbooks/web-host-birth.md step 2).
 # Widening this rule to the runcmd stages is the obvious fix and is deliberately NOT bundled
 # into a deletion PR — it changes live paging behaviour and wants its own change. Do not read
-# the paragraph above as "boot failures page"; only these four stages do.
+# the paragraph above as "boot failures page"; only these five stages do.
+# (`pull` joined with #8651. Since #8036 1d there is no GHCR arm behind the zot pull, so a
+# `pull` fatal is a web fresh boot that zot could not serve — the web twin of
+# zot_mirror_fallback_rate's `inngest_pull_fatal`, paged HERE rather than there.)
 #
-# Pages on the FIRST occurrence (a serving-host boot
-# failure is high-severity), NOT a rate. The four stage tags are emitted ONLY at fatal level by the
-# terminal-block EXIT trap + the explicit hostscripts_incomplete emit, so the stage filter alone
-# selects fatal terminal-block failures (no separate level filter needed).
+# Pages on the FIRST occurrence (a serving-host boot failure is high-severity), NOT a rate. All
+# five stage conditions are FAILURE-ONLY emits: the four terminal-block tags are sent only by the
+# terminal-block EXIT trap's `[ "$rc" = 0 ] || soleur-boot-emit "$stage" fatal` and the explicit
+# `soleur-boot-emit hostscripts_incomplete fatal`, and `pull` only by the seed block's on_err
+# fatal `_emit`. So the stage filter alone selects fatal boot failures (no level filter needed),
+# and a healthy boot matches nothing.
 #
-# GROUPING NOTE (mirrors the GROUPING paragraph of zot_mirror_fallback_rate above): these
-# events use the SHARED
-# `soleur-boot-emit` message ("soleur-cloud-init boot stage"; stage is a tag, not the message), so
-# they share ONE issue-group with routine boot stages — that group is effectively always active, so
-# event_frequency value=1 pages on the first event that MATCHES the fatal-stage filter. Over-loud in
-# the SAFE direction (never a miss); a fatal terminal-block boot is always worth paging.
+# GROUPING NOTE (mirrors the GROUPING paragraph of zot_mirror_fallback_rate above) — and why the
+# trigger is `value = 0` (#8036 1d). `event_frequency` counts the whole ISSUE-GROUP's events and
+# compares with a STRICT `>`. The four terminal-block stages use the SHARED `soleur-boot-emit`
+# message ("soleur-cloud-init boot stage"; stage is a tag), a group that is effectively always
+# active — which is what the old `value = 1` relied on. The `pull` fatal does NOT: its message is
+# "soleur-hostscript-seed failed", its own group. Measured: the only such event in 30 days (the
+# #8651 dark boot, WEB-PLATFORM-4T, 2026-09-23T20:10:21Z, stage=pull, fatal) was one event in its
+# own group, so `> 1` could never page it. `value = 0` fires on the first event of ANY group,
+# which is safe here only because every condition above is failure-only — the same precedent
+# git_data_boot_warning (and git_data_boot_fatal) already follow. Do not raise it back to 1.
 #
 # Distinct `frequency_minutes = 24` avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-23,30,60-62).
 # Events carry stage/host_id/region tags. FROM THE FIRST HOST BORN on an image containing #6969
@@ -1777,7 +1790,7 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
   trigger_conditions = [
-    { event_frequency_count = { interval = "1h", value = 1 } },
+    { event_frequency_count = { interval = "1h", value = 0 } },
   ]
 
   action_filters = [
@@ -1893,24 +1906,42 @@ resource "sentry_alert" "workspaces_luks_drift" {
 }
 
 # ── zot mirror-staleness fallback-rate alarm (#6278 / ADR-096 "Loud, no-SSH signal") ──
-# APPLY-CREATED. Pages on the FIRST runtime zot→GHCR fallback / gate-degrade event
-# (event_frequency count > 0 in 1h). The LIVE-RUNTIME complement to the create-time CI
-# degraded signal (mirror_status=degraded → Slack ⚠️ + ::warning::) that merged in
-# #6274 / PR #6276.
+# APPLY-CREATED. Pages on the FIRST zot degrade or terminal inngest-boot pull event (event_frequency
+# count > 0 in 1h). The LIVE-RUNTIME complement to the create-time CI degraded signal
+# (mirror_status=degraded → Slack ⚠️ + ::warning::) that merged in #6274 / PR #6276.
 #
-# logic_type="any" over the runtime signal tag-VALUES (NOT feature+op "all"): the
-# ci-deploy.sh signal carries feature/op, but the inngest/app fresh-boot
-# soleur-boot-emit events (cloud-init.yml) carry only `stage` — an all-match on
-# feature+op would silently exclude the boot paths. Signals, FOUR since #8036 1c:
-#   registry ∈ {zot-gate-degraded}                        (ci-deploy.sh rolling-deploy)
-#   stage    ∈ {inngest_ghcr_fallback, app_ghcr_fallback,
-#               app_ghcr_served}                          (cloud-init.yml fresh boot)
+# ⚠ THE NAME IS HISTORICAL — READ IT AS "zot did not serve" (#8036 1d, AP-021). Since #8036 1c
+# (rolling deploy) and 1d (fresh boot) no host-side code reads GHCR, so there is no fallback left
+# for this rule to count. It now pages two things, and ONE OF THEM IS NOT A FALLBACK AT ALL:
+#   registry ∈ {zot-gate-degraded}   (ci-deploy.sh rolling deploy) — the zot gate degraded; with
+#                                     no GHCR leg the deploy then ends in image_pull_failed.
+#   stage    ∈ {inngest_pull_fatal}  (cloud-init-inngest.yml + cloud-init.yml's gated colocated
+#                                     block) — a TERMINAL inngest fresh boot: the zot pull failed,
+#                                     there is no second registry, and the boot ended. A page on
+#                                     this value is a dark scheduler host, not a degraded one.
+# The `name` is kept (`zot-mirror-fallback-rate`) so the alert-reference.json key and the live
+# rule stay stable across the change; renaming it is an in-place Sentry update that would drift
+# from the committed reference until an apply runs.
 #
-# #8036 1c removed a FIFTH, `registry = "ghcr-fallback"`. It was already structurally dark
-# (#7071 / ADR-169 Named residual 3, tracked as #7295): the credential it depended on has
-# been revoked since 2026-07-29, so the fallback it reported could not succeed. 1c deleted
-# the emitter, which is what turned "dark" into "cannot exist". The remaining four all still
-# have live call sites — `zot-gate-degraded` in ci-deploy.sh, the other three in cloud-init.
+# logic_type="any" over the tag-VALUES (NOT feature+op "all"): the ci-deploy.sh signal carries
+# feature/op, but the inngest boot `soleur-boot-emit` events carry only `stage` — an all-match on
+# feature+op would silently exclude the boot path.
+#
+# RETIRED conditions (each has no emit site left; do not re-add):
+#   registry = "ghcr-fallback"         #8036 1c — ci-deploy.sh's GHCR leg deleted. Structurally dark
+#                                      since #7071 (ADR-169 Named residual 3, #7295): the credential
+#                                      it depended on has been revoked since 2026-07-29.
+#   stage = "app_ghcr_fallback"        #8036 1d — the web seed block's GHCR login + pull arm deleted.
+#   stage = "app_ghcr_served"          #8036 1d — same deletion. Its "never mute this group"
+#                                      exception, and the "split it into its own resource" lever,
+#                                      retired with it.
+#   stage = "inngest_ghcr_fallback"    #8036 1d — RENAMED inngest_pull_fatal and raised to fatal
+#                                      (the GHCR pull after a zot miss is gone). The new name shares
+#                                      no prefix with inngest_zot, because Better Stack greps match
+#                                      substrings.
+# A web fresh boot whose zot pull fails is NOT watched here: it sends stage=pull at fatal, and
+# web_terminal_boot_fatal (below) pages that. zot-soak-6122.sh counts it in a separate WEB_FATAL
+# arm outside its FAIL set, so this rule's conditions and the soak's FAIL set stay equal.
 #
 # ═══ WHY value = 0, AND WHY IT MUST STAY 0 (#6285) ═══
 #
@@ -1932,74 +1963,40 @@ resource "sentry_alert" "workspaces_luks_drift" {
 # (Not literally unfireable — re-deploying the SAME tag within the hour reuses the group
 # — but a first-miss on a fresh tag, the case that matters, could never page.)
 #
-# DO NOT normalize to the `value = 1` used by web_terminal_boot_fatal below. That works
-# there ONLY because its shared `soleur-boot-emit` group is never new (always already
-# >1). On a fresh per-deploy group, value = 1 means ">1" and a single event does NOT
-# page.
+# web_terminal_boot_fatal (below) and git_data_boot_fatal use value = 0 for the same reason. Do
+# not raise any of them: a strict `>` over a threshold of 1 cannot page a single event in a group
+# of its own, which is exactly what a first-ever terminal boot is.
 #
 # CHANGE-TRIGGER. Do not raise above 0 without re-deriving against the surviving emitters'
-# message construction. Parity: zot-soak-6122.sh FAILs the Phase-5 gate on >=1 fallback
+# message construction. Parity: zot-soak-6122.sh FAILs the Phase-5 gate on >=1 watched event
 # — a threshold above 0 is strictly less sensitive than the gate it exists to pre-warn.
 #
-# GROUPING is per-signal asymmetric (`zot-gate-degraded` per reason — 3 fixed literals;
-# `app_ghcr_fallback` and `app_ghcr_served` each a dedicated static message;
-# `inngest_ghcr_fallback` the shared always-hot `soleur-boot-emit` group). The retired
-# `ghcr-fallback` was the one that minted a FRESH group per deploy — noted because the
-# mute-safety argument below used to lean on that property and no longer can.
-# It no longer affects WHETHER a group pages at value = 0 — every group fires on its first
-# event — but it is load-bearing for HOW to quiet noise safely (below). Relevant to the
-# threshold again only if value is ever raised.
+# GROUPING is per-signal asymmetric: `zot-gate-degraded` groups per reason (3 fixed literals);
+# `inngest_pull_fatal` rides the shared always-hot `soleur-boot-emit` group ("soleur-cloud-init
+# boot stage"; stage is a tag, not the message). It does not affect WHETHER a group pages at
+# value = 0 — every group fires on its first event — but it is load-bearing for HOW to quiet
+# noise safely (below), and relevant to the threshold again only if value is ever raised.
 #
-# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. All four signals share one rule
-# (logic_type = "any"), so muting the RULE to escape `zot-gate-degraded` noise also kills
-# the three fresh-boot signals.
+# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. Both signals share one rule
+# (logic_type = "any"), so muting the RULE to escape `zot-gate-degraded` noise also kills the
+# terminal inngest-boot page. Muting the `zot-gate-degraded` ISSUE is safe by construction: it
+# groups on a stable reason literal, so a mute pins to that group only. Pre-cutover its dominant
+# noise was `probe_unreachable` — zot's probe genuinely failing (the real fix is the zot host,
+# #6416 / #6288, not the alarm). ⚠ Do NOT mute the shared `soleur-boot-emit` group to quiet
+# anything: it carries the boot stages of every host built with that emitter, so that mute would
+# silence inngest_pull_fatal (and web_terminal_boot_fatal's terminal-block stages, which ride the
+# same group) permanently.
 #
-# The claim that used to stand here — that `ghcr-fallback` was "the only no-SSH page gating
-# the IRREVERSIBLE ADR-096 5.5 PAT rotate+revoke" — was retired with the signal in #8036 1c,
-# and it is worth stating why rather than just deleting it: the page it described was gating
-# a rotate+revoke of a PAT that has been REVOKED since 2026-07-29, so by the time 1c ran it
-# was guarding a step already taken. `zot-gate-degraded` is now the rolling-deploy half of
-# this rule on its own.
-#
-# Muting the noisy Sentry ISSUE is safe by construction for `zot-gate-degraded`: it groups on
-# a stable reason literal, so a mute pins to that group only. Pre-cutover the dominant noise
-# is `probe_unreachable` — that is zot's probe genuinely failing (the real fix is the zot
-# host, not the alarm).
-#
-# ⚠ `app_ghcr_served` (#6462) IS THE EXCEPTION — the mute-is-safe argument above does NOT
-# extend to it, and this is the one signal where a reflexive mute is destructive. It is the
-# first signal that is BOTH:
-#   (a) stable-grouped — a static message ⇒ ONE Sentry issue group forever, so a mute is
-#       permanent (unlike `ghcr-fallback`, whose per-deploy regrouping self-expires a mute);
-#   (b) expected-noisy pre-cutover — ADR-096 tells the operator these pages are expected
-#       until the flip and not to investigate them separately.
-# Together those invite exactly one click that permanently blinds the page for the DOMINANT
-# GHCR-served path (a /v2/ probe-miss, where the GHCR pull succeeds first try) — the hole
-# #6462 exists to close. Muting does NOT create a false soak PASS (Discover counts muted
-# issues), so the loss is paging only — but paging is the entire point of this signal
-# pre-cutover.
-#
-# The honest levers, in order (an earlier draft of this comment offered "pin the soak's START
-# past the cutover" — that is a CATEGORY ERROR and was removed: START is ZOT_SOAK_START, read
-# only in zot-soak-6122.sh's sentry_count URL; THIS rule has no window and is completely
-# unaffected by it. Do not reach for it):
-#   1. Fix the probe (#6416 / #6288). This is the root cause and it also removes the noise
-#      from `zot-gate-degraded`, which already pages on the SAME probe_unreachable condition
-#      on ~34-of-38 rolling deploys — i.e. the operator is ALREADY being paged near-daily by
-#      that signal, and app_ghcr_served is an increment on existing noise, not a new class.
-#   2. If it must be quieted before then, mute `zot-gate-degraded`'s group (safe: it groups on
-#      a stable reason literal) — NOT this one, and never the RULE.
-#   3. If THIS group must be quieted, split it into its own sentry_alert resource so it
-#      can be tuned without touching ghcr-fallback. That is a real fix, not a mute. Since
-#      #6589 the split costs only the resource block — the apply plans the full root, so
-#      there is no `-target=` entry to add — plus the op-contract's alarm⇔soak parity (which
-#      pins alarm.size == soakFailQueries().size == 4 since #8036 1c). Deferred, not dismissed:
-#      see #6462's PR.
+# (The pre-1c claim that `ghcr-fallback` was "the only no-SSH page gating the IRREVERSIBLE ADR-096
+# 5.5 PAT rotate+revoke" retired with that signal: the PAT it guarded had been REVOKED since
+# 2026-07-29, so by 1c it was guarding a step already taken. An earlier draft of this comment also
+# offered "pin the soak's START past the cutover" as a noise lever — a CATEGORY ERROR: START is
+# read only in zot-soak-6122.sh's sentry_count URL, and THIS rule has no window at all.)
 #
 # Distinct `frequency_minutes = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+logic_type+frequency+actions-shape, NOT
-# conditions). Events carry only registry/stage/image/host_id/zot_gate_reason tags —
-# no user content.
+# conditions). Events carry only registry/stage/image/host_id/host_name/zot_gate_reason tags and
+# a `detail` rc — no user content.
 resource "sentry_alert" "zot_mirror_fallback_rate" {
   organization      = var.sentry_org
   name              = "zot-mirror-fallback-rate"
@@ -2015,15 +2012,12 @@ resource "sentry_alert" "zot_mirror_fallback_rate" {
     {
       logic_type = "any-short"
       conditions = [
-        # #8036 1c: `registry = "ghcr-fallback"` was REMOVED here, not retired with the rule.
-        # `ci-deploy.sh` no longer has a GHCR leg, so `registry_pull_event ghcr-fallback` has no
-        # call site and the value can never be emitted again. The in-code tripwire this deletion
-        # executed (`RETIREMENT TRIPWIRE (#6285)`) said exactly this: NARROW the filters to the
-        # signals that still emit, because retiring the rule blinds the survivors.
+        # #8036 1c removed `registry = "ghcr-fallback"`; #8036 1d removed `app_ghcr_fallback` /
+        # `app_ghcr_served` and renamed `inngest_ghcr_fallback` → `inngest_pull_fatal`. Each was
+        # NARROWED here rather than retiring the rule, because retiring the rule blinds the
+        # survivors (the `RETIREMENT TRIPWIRE (#6285)` rule 1c executed).
         { tagged_event = { key = "registry", match = "eq", value = "zot-gate-degraded" } },
-        { tagged_event = { key = "stage", match = "eq", value = "inngest_ghcr_fallback" } },
-        { tagged_event = { key = "stage", match = "eq", value = "app_ghcr_fallback" } },
-        { tagged_event = { key = "stage", match = "eq", value = "app_ghcr_served" } },
+        { tagged_event = { key = "stage", match = "eq", value = "inngest_pull_fatal" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },

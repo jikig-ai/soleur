@@ -24,6 +24,9 @@ const STAGES = [
   "hostscripts_incomplete",
   "doppler_download",
   "docker_run",
+  // #8651: the seed block's on_err fatal (`soleur-hostscript-seed failed`, stage=pull). Since
+  // #8036 1d there is no GHCR arm behind the zot pull, so this is a web boot zot could not serve.
+  "pull",
 ] as const;
 
 describe("web-host-terminal-boot-fatal alert op contract", () => {
@@ -44,7 +47,7 @@ describe("web-host-terminal-boot-fatal alert op contract", () => {
     expect(cloudInit).toContain("stage=docker_run");
   });
 
-  it("issue-alerts.tf pins all four terminal stage tag-values (any-match OR)", () => {
+  it("issue-alerts.tf pins all five terminal stage tag-values (any-match OR)", () => {
     for (const stage of STAGES) {
       expect(tf).toContain(`value = "${stage}"`);
     }
@@ -66,7 +69,11 @@ describe("web-host-terminal-boot-fatal alert op contract", () => {
     const nextResource = rest.indexOf("\nresource ");
     const scoped =
       nextResource === -1 ? tf.slice(start) : tf.slice(start, start + 1 + nextResource);
-    // Page on the FIRST fatal (value=1 over 1h) — a dead serving host is high-severity, not a rate.
+    // Page on the FIRST fatal — a dead serving host is high-severity, not a rate. value MUST be 0
+    // (#8036 1d): the comparison is a strict `>` per issue group, and the `pull` stage's fatal
+    // ("soleur-hostscript-seed failed") lands in a group of its own, so `value = 1` could not
+    // page a single event there (measured: WEB-PLATFORM-4T, the only one in 30 days, never paged).
+    // Safe at 0 only because every stage condition is a failure-only emit.
     // `any-short` is the provider's spelling for OR on
     // `action_filters[].logic_type` (short-circuiting). Semantics are
     // identical to the old `filter_match = "any"`; only the spelling moved.
@@ -76,7 +83,10 @@ describe("web-host-terminal-boot-fatal alert op contract", () => {
     // the attribute NAME: `{ event_frequency_count = { interval, value } }`.
     // Same semantics, and still unsatisfiable by prose.
     expect(scoped).toMatch(/event_frequency_count\s*=/);
-    expect(scoped).toMatch(/value\s*=\s*1/);
+    const trigger = scoped.match(/event_frequency_count\s*=\s*\{[^}]*\}/);
+    expect(trigger, "no event_frequency_count trigger on web_terminal_boot_fatal").not.toBeNull();
+    expect(trigger![0]).toMatch(/value\s*=\s*0\b/);
+    expect(trigger![0]).not.toMatch(/value\s*=\s*[1-9]/);
     expect(scoped).toMatch(/interval\s*=\s*"1h"/);
     // Every filter selects on key = "stage" (the shared soleur-boot-emit events tag the region).
     // Whitespace-tolerant so a `terraform fmt` re-alignment doesn't break a behavior-unchanged test.

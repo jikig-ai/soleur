@@ -26,6 +26,17 @@
 # Exit: 0 all green, 1 an assertion failed, 2 a HARNESS failure (render/extract/mutation did
 # not land). Under CI a missing terraform is a FAIL, never a skip.
 set -uo pipefail
+
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 # A pipe into `grep -q` SIGPIPEs its producer on an early match and pipefail reads it as
 # FALSE (#7024); _qgrep reads all of its input instead.
 _qgrep() { grep "$@" >/dev/null; }
@@ -893,8 +904,17 @@ case "$1" in
 esac
 exit 0
 STUB
-printf '#!/bin/sh\nprintf "emit %%s\\n" "$*" >> "$C4_LOG"\nexit 0\n' > "$C4/bin/soleur-boot-emit"
-printf '#!/bin/sh\nprintf "curl %%s\\n" "$*" >> "$C4_LOG"\nexit 7\n' > "$C4/bin/curl"
+assert_fixture_dir "$C4"
+cat > "$C4/bin/soleur-boot-emit" <<'STUB'
+#!/bin/sh
+printf "emit %s\n" "$*" >> "$C4_LOG"
+exit 0
+STUB
+cat > "$C4/bin/curl" <<'STUB'
+#!/bin/sh
+printf "curl %s\n" "$*" >> "$C4_LOG"
+exit 7
+STUB
 chmod +x "$C4/bin"/*
 C4_ZIREF="10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:"
 c4_run() {  # <script> <pull rc> : sets C4RC, C4OUT; the call log is $C4/log

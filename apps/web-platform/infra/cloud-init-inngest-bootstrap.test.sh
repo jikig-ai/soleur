@@ -1744,7 +1744,9 @@ body = "\n".join(lines[:end + 1]) + "\n"
 for a, b in (("/usr/local/bin/", fx + "/bin/"), ("/etc/default/", fx + "/etc/"),
              ("/var/log/", fx + "/log/"), ("/run/", fx + "/run/")):
     body = body.replace(a, b)
-body += 'echo RUNCMD_CONTINUED >> "$G4_LOG"\n'
+# tee, not an append redirect: the fixture-relative scanner cannot see a heredoc inside $(...)
+# and would read a redirect in this Python string as a shell write.
+body += 'echo RUNCMD_CONTINUED | tee -a "$G4_LOG" >/dev/null\n'
 open(sys.argv[2] + "/item.sh", "w").write(body)
 print("G4_SLICE_LINES=%d" % (end + 1))
 PY

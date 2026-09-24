@@ -6,20 +6,21 @@ import { beforeAll, describe, it, expect } from "vitest";
 // Cross-artifact contract test for the zot mirror-staleness fallback-rate alarm
 // (#6278 / ADR-096 "Loud, no-SSH signal").
 //
-// The `zot-mirror-fallback-rate` Sentry issue-alert pages on the FIRST runtime
-// zot→GHCR fallback / gate-degrade event (event_frequency count > 0 / 1h, #6285),
-// matching the OR of FOUR runtime signals (filter_match="any"):
-//   - registry == "zot-gate-degraded"  (ci-deploy.sh dark-gate degrade beacon)
-//   - stage    == "inngest_ghcr_fallback" (cloud-init.yml inngest fresh-boot pull)
-//   - stage    == "app_ghcr_fallback"     (cloud-init.yml app-image fresh-boot pull, #6278 Phase 1b)
-//   - stage    == "app_ghcr_served"       (cloud-init.yml app-image fresh-boot GHCR-served, #6462)
+// The `zot-mirror-fallback-rate` Sentry issue-alert pages on the FIRST zot degrade or
+// terminal inngest-boot pull event (event_frequency count > 0 / 1h, #6285), matching the OR
+// of TWO signals (logic_type "any-short"):
+//   - registry == "zot-gate-degraded"  (ci-deploy.sh rolling-deploy degrade beacon)
+//   - stage    == "inngest_pull_fatal" (cloud-init-inngest.yml + cloud-init.yml's colocated
+//                                       block: a TERMINAL inngest fresh boot — NOT a fallback)
+// The rule keeps its historical name; see its comment block in issue-alerts.tf (AP-021).
 //
-// #8036 1c removed a FIFTH, `registry == "ghcr-fallback"`. `ci-deploy.sh` no longer has a GHCR
-// leg, so `registry_pull_event ghcr-fallback` has no call site and the value cannot be emitted.
-// The alarm's condition and the soak's FAIL_QUERIES entry were both dropped in that PR, together
-// with the soak's runtime cardinality floor — which is what the parity legs below now pin at 4.
+// RETIRED, pinned residual-zero below: #8036 1c removed `registry == "ghcr-fallback"` (no GHCR
+// leg in ci-deploy.sh); #8036 1d removed `app_ghcr_fallback` / `app_ghcr_served` (the web seed
+// block's GHCR arm is gone) and RENAMED `inngest_ghcr_fallback` → `inngest_pull_fatal` (fatal).
+// The alarm's conditions, the soak's FAIL_QUERIES and the soak's runtime cardinality floor moved
+// together in each PR — which is what the parity legs below now pin at 2.
 //
-// The inngest/app boot events carry only `stage` (no feature/op), so the filter is
+// The inngest boot events carry only `stage` (no feature/op), so the filter is
 // `any` over the tag-VALUES, not `all` over feature+op. Each tag string is pinned
 // in BOTH its emit site AND issue-alerts.tf so a rename in either — which would
 // silently DARK the alert (the operator-only-finds-out-post-cutover failure mode
@@ -29,6 +30,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 const ciDeploy = readFileSync(join(here, "../infra/ci-deploy.sh"), "utf8");
 const cloudInit = readFileSync(join(here, "../infra/cloud-init.yml"), "utf8");
+const cloudInitInngest = readFileSync(join(here, "../infra/cloud-init-inngest.yml"), "utf8");
 // Repo root is three levels up from apps/web-platform/test.
 const soak = readFileSync(
   join(here, "../../../scripts/followthroughs/zot-soak-6122.sh"),
@@ -130,6 +132,34 @@ function soakFailSet(): Set<string> {
 
 const soakQueryFor = (signal: string) => soakFailQueries().get(signal);
 
+// Comment lines stripped (a line whose first non-blank character is `#`). Every emit-site and
+// residual-zero leg below reads CODE only: the templates and the soak discuss the retired values
+// in prose on purpose, and a bare-token assertion would red on the comment that explains the
+// deletion — failing for the opposite of the right reason.
+const codeLines = (text: string): string =>
+  text
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+
+// Every stage a boot template EMITS, from its call sites on code lines: the host-local and
+// bootstrap-defined `soleur-boot-emit <stage>`, the inngest Better Stack phone-home
+// `inngest-boot-phone-home.sh <stage>`, and cloud-init.yml's `_emit "<msg>" <stage>`. A stage
+// passed as a variable (`"$1"`, `"$STAGE"`) is skipped — it names no literal.
+function emittedStages(text: string): string[] {
+  const code = codeLines(text);
+  const out: string[] = [];
+  const res = [
+    /soleur-boot-emit\s+"?([A-Za-z][A-Za-z0-9_-]*)/g,
+    /inngest-boot-phone-home\.sh\s+"?([A-Za-z][A-Za-z0-9_-]*)/g,
+    /_emit\s+"[^"]*"\s+"?([A-Za-z][A-Za-z0-9_-]*)/g,
+  ];
+  for (const re of res) for (const m of code.matchAll(re)) out.push(m[1]);
+  return out;
+}
+
+const RETIRED = ["app_ghcr_fallback", "app_ghcr_served", "inngest_ghcr_fallback"] as const;
+
 const observability = readFileSync(join(here, "../server/observability.ts"), "utf8");
 
 // Scope a `resource "sentry_alert" "<name>"` BODY out of issue-alerts.tf —
@@ -226,43 +256,42 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     expect(bootstrap).toContain('"tags":{"stage":"%s","host_id":"%s","region":"cloud-init"');
   });
 
-  it("cloud-init.yml emits both fresh-boot fallback stages (inngest + app-image)", () => {
-    // Pin the exact emit CALL forms — `app_ghcr_fallback` also appears in this PR's
-    // Phase-1b explanatory comment, so pinning the bare stage would be vacuous.
-    expect(cloudInit).toContain("soleur-boot-emit inngest_ghcr_fallback warning");
-    expect(cloudInit).toContain(`"app_ghcr_fallback" warning`);
+  // #8036 1d: BOTH inngest boot templates emit the terminal stage, at fatal, from a CODE line.
+  // Two emitters for one value: the dedicated host's host-local `soleur-boot-emit` in
+  // cloud-init-inngest.yml, and cloud-init.yml's gated colocated block (dead while
+  // web_colocate_inngest=false, but a toggle flip must not resurrect an unwatched name). One
+  // leg per file, so a rename that lands in one template only reds its own leg (Guard 2 row 2).
+  // Pinned on the CALL FORM with the level, on comment-stripped text: the templates' rationale
+  // prose names the stage, and prose must not satisfy an emit-site pin.
+  it("cloud-init-inngest.yml emits inngest_pull_fatal at fatal (the dedicated host's miss arm)", () => {
+    expect(codeLines(cloudInitInngest)).toContain("soleur-boot-emit inngest_pull_fatal fatal");
+  });
+  it("cloud-init.yml's colocated inngest block emits inngest_pull_fatal at fatal", () => {
+    expect(codeLines(cloudInit)).toContain("soleur-boot-emit inngest_pull_fatal fatal");
   });
 
-  // #6462: the fresh-boot DENOMINATOR. app_ghcr_fallback (above) only fires when a zot
-  // pull FAILED >=2 times; the DOMINANT path is a /v2/ probe-miss, where the GHCR pull
-  // succeeds first try and nothing is emitted at all. These two beacons make the boot's
-  // chosen registry observable: exactly one fires per successful boot.
+  // #6462: the fresh-boot DENOMINATOR. Since #8036 1d app_zot is the ONLY success arm of a web
+  // fresh boot (app_ghcr_served retired with the GHCR arm), so it is the soak's proof the web
+  // boot path was observed at all.
   //
   // EXISTENCE, pinned here, is deliberately SEPARATE from ORDERING (pinned in
   // cloud-init-user-data-size.test.ts). An indexOf-based ordering assert returns -1 on a
   // miss and -1 < everything, so ordering-alone PASSES on a tree with no beacon at all —
   // it cannot carry existence. Two ACs, two files, neither vacuously carrying the other.
   //
-  // Pin the CALL FORM, not the bare stage token: the rationale comment above the emit
-  // names both stages, so a bare toContain() would be satisfied by prose (the same trap
-  // :192-193 documents for app_ghcr_fallback).
-  it("cloud-init.yml emits both fresh-boot registry beacons (#6462 denominator)", () => {
-    expect(cloudInit).toContain(`"app_ghcr_served" warning`);
+  // Pin the CALL FORM, not the bare stage token: rationale prose names the stage, so a bare
+  // toContain() would be satisfied by a comment.
+  it("cloud-init.yml emits the app_zot fresh-boot beacon (#6462 denominator)", () => {
     expect(cloudInit).toContain(`"app_zot" info`);
   });
 
-  it("issue-alerts.tf pins all four signal tag-values (any-match OR)", () => {
-    expect(tf).toContain(`value = "zot-gate-degraded"`);
-    expect(tf).toContain(`value = "inngest_ghcr_fallback"`);
-    expect(tf).toContain(`value = "app_ghcr_fallback"`);
-    // Anchored on the HCL assignment rather than a bare toContain: this PR adds an
-    // enumerating comment naming app_ghcr_served, and prose cannot produce `^\s*value =`.
-    // See :227-231 — mutation-testing proved a bare toContain lets the whole block go.
-    // Anchored on the `tagged_event` CONSTRUCT. The migrated shape puts the
-    // value INLINE (`{ tagged_event = { key = ..., value = "app_ghcr_served" } }`),
-    // so a line-anchored `^\\s*value =` matches nothing — the same rebind the
-    // nic-wait-gate suite needed. Prose still cannot satisfy this anchor.
-    expect(tf).toMatch(/tagged_event\s*=\s*\{[^}]*value\s*=\s*"app_ghcr_served"/);
+  it("issue-alerts.tf pins both signal tag-values (any-match OR)", () => {
+    // Anchored on the `tagged_event` CONSTRUCT, not a bare toContain: the rule's comment block
+    // enumerates both values (and the retired ones) in prose, and prose cannot produce
+    // `tagged_event = { … value = "…" }`. The migrated shape puts the value INLINE, so a
+    // line-anchored `^\\s*value =` would match nothing.
+    expect(tf).toMatch(/tagged_event\s*=\s*\{[^}]*key\s*=\s*"registry"[^}]*value\s*=\s*"zot-gate-degraded"/);
+    expect(tf).toMatch(/tagged_event\s*=\s*\{[^}]*key\s*=\s*"stage"[^}]*value\s*=\s*"inngest_pull_fatal"/);
   });
 
   // apply-sentry-infra.yml plans the sentry root FULL (no `-target=` allowlist), so
@@ -277,7 +306,7 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // Fire-on-first intent: event_frequency count > 0 within 1h (#6285). value MUST stay 0 —
     // any value > 0 is fleet-shape-dependent and silently unreachable whenever the per-group
     // event count cannot exceed it. See the resource comment in issue-alerts.tf for the
-    // mechanism; do NOT "normalize" this to the value = 1 used by web_terminal_boot_fatal.
+    // mechanism. (web_terminal_boot_fatal is also value = 0 since #8036 1d.)
     const block = tf.slice(
       tf.indexOf('resource "sentry_alert" "zot_mirror_fallback_rate"'),
     );
@@ -325,15 +354,20 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   // consumer, and the one gating an irreversible action — drift-proof.
   it("the soak gate's FAIL set equals the alarm's watched signal set (derived, both sides)", () => {
     const alarm = alarmFilterSet();
-    // Guard against a vacuous pass if either extraction silently yields nothing.
-    // 4 -> 5 with #6462's app_ghcr_served, then 5 -> 4 with #8036 1c's retirement of
-    // `ghcr-fallback`. The soak's RUNTIME cardinality floor (zot-soak-6122.sh
-    // `${#FAIL_QUERIES[@]} != 4`) must move in lockstep: CI parses the source, the sweeper
-    // executes it, and both must agree — a floor left at 5 over a 4-entry array makes every
-    // sweep a permanent `exit 2` TRANSIENT, which nothing but this pin catches before the
-    // sweeper does, a day later, as a comment on the tracker.
-    expect(alarm.size).toBe(4);
-    expect(soakFailQueries().size).toBe(4);
+    // Guard against a vacuous pass if either extraction silently yields nothing (the
+    // non-vacuity floor: an extractor that returns ∅ must red here, never compare ∅ = ∅).
+    // 4 -> 5 with #6462's app_ghcr_served, 5 -> 4 with #8036 1c's retirement of
+    // `ghcr-fallback`, 4 -> 2 with #8036 1d. The soak's RUNTIME cardinality floor
+    // (zot-soak-6122.sh `${#FAIL_QUERIES[@]} != 2`) must move in lockstep: CI parses the
+    // source, the sweeper executes it, and both must agree — a floor left at 4 over a 2-entry
+    // array makes every sweep a permanent `exit 2` TRANSIENT, which nothing but these pins
+    // catch before the sweeper does, a day later, as a comment on the tracker.
+    expect(alarm.size).toBeGreaterThan(0);
+    expect(alarm.size).toBe(2);
+    expect(soakFailQueries().size).toBe(2);
+    const floor = soak.match(/^if \(\( \$\{#FAIL_QUERIES\[@\]\} != (\d+) \)\); then$/m);
+    expect(floor, "the soak's runtime FAIL_QUERIES floor literal was not found").not.toBeNull();
+    expect(Number(floor![1])).toBe(soakFailQueries().size);
     // Derived equality on BOTH sides — deliberately no canonical list here. A
     // WATCHED constant would be a third source of truth, not a parity test; this
     // shape gives "a 5th signal added to the alarm breaks CI" for free.
@@ -354,23 +388,55 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   //   stage: query makes it match zero events FOREVER, silently restoring the very
   //   blindness this PR removes. Proven live: stage:"bootstrap_complete" => 9 events,
   //   feature:supply-chain op:image-pull stage:"bootstrap_complete" => 0.
-  it("pins the WHOLE query string for all four signals (the prefix trap)", () => {
+  it("pins the WHOLE query string for both signals (the prefix trap)", () => {
     expect(soakQueryFor("zot-gate-degraded")).toBe(
       'feature:supply-chain op:image-pull registry:"zot-gate-degraded"',
     );
-    // BARE — no feature/op. See the asymmetry note above.
-    expect(soakQueryFor("inngest_ghcr_fallback")).toBe(
-      'stage:"inngest_ghcr_fallback"',
-    );
-    expect(soakQueryFor("app_ghcr_fallback")).toBe(
-      'stage:"app_ghcr_fallback"',
-    );
-    // BARE — #6462. This is the 5th signal and it rides the SAME _emit tag schema as
-    // app_ghcr_fallback ({stage,image_ref,host_id,detail} — no feature/op), so a prefix
-    // here matches zero events forever.
-    expect(soakQueryFor("app_ghcr_served")).toBe(
-      'stage:"app_ghcr_served"',
-    );
+    // BARE — no feature/op. `soleur-boot-emit` writes {stage,host_id,region,host_name,detail}
+    // only, so a prefix here matches zero events forever. See the asymmetry note above.
+    expect(soakQueryFor("inngest_pull_fatal")).toBe('stage:"inngest_pull_fatal"');
+  });
+
+  // #8036 1d, the OTHER direction: the three retired values cannot come back on ANY side — the
+  // rule's conditions, the soak (array AND every code line), or either boot template's code.
+  // Residual-zero on the rule is read from the EXTRACTED condition set, not the file: the
+  // rule's comment block names the retired values on purpose.
+  it("the three retired values are gone from the rule, the soak and both templates (residual-zero)", () => {
+    const alarm = alarmFilterSet();
+    const soakCode = codeLines(soak);
+    // Non-vacuity floor for the scans below: each scanned text must be substantial CODE, so
+    // pointing a scan at an empty/misread file reds instead of trivially "containing nothing".
+    for (const [label, text] of [
+      ["soak", soakCode],
+      ["cloud-init.yml", codeLines(cloudInit)],
+      ["cloud-init-inngest.yml", codeLines(cloudInitInngest)],
+    ] as const) {
+      expect(text.split("\n").length, `${label} code scan is vacuous`).toBeGreaterThan(100);
+    }
+    for (const v of RETIRED) {
+      expect(alarm.has(`stage:${v}`), `rule still watches ${v}`).toBe(false);
+      expect(soakFailQueries().has(v), `soak FAIL_QUERIES still counts ${v}`).toBe(false);
+      expect(soakCode, `a soak code line still names ${v}`).not.toContain(v);
+      expect(codeLines(cloudInit), `cloud-init.yml code still names ${v}`).not.toContain(v);
+      expect(codeLines(cloudInitInngest), `cloud-init-inngest.yml code still names ${v}`).not.toContain(v);
+    }
+  });
+
+  // Guard 2 residual (#8036 1d): a failure stage must not EXTEND the success stage's name.
+  // Better Stack is searched by SUBSTRING (`--grep 'stage=inngest_zot'`, and the 7462/7674
+  // probes' `count_stage inngest_zot`), so an `inngest_zot_miss` would be counted as a
+  // zot-served boot there. Every emitted stage beginning with `inngest_zot` must BE inngest_zot.
+  it("no emitted stage in either template begins with inngest_zot other than inngest_zot itself", () => {
+    for (const [label, text] of [
+      ["cloud-init.yml", cloudInit],
+      ["cloud-init-inngest.yml", cloudInitInngest],
+    ] as const) {
+      const stages = emittedStages(text);
+      const zotPrefixed = stages.filter((st) => st.startsWith("inngest_zot"));
+      // Non-vacuity: the success stage itself must be found, or the extractor saw nothing.
+      expect(zotPrefixed, `${label}: no inngest_zot emit found — extractor is blind`).toContain("inngest_zot");
+      expect(zotPrefixed.filter((st) => st !== "inngest_zot"), `${label}: a stage extends inngest_zot`).toEqual([]);
+    }
   });
 });
 
