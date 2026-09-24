@@ -74,7 +74,7 @@ It did so after every `.c4` save through `writeC4Diagram` (`apps/web-platform/se
 following the save's Contents API commit and the workspace sync.
 
 The plan measured the pinned binary with the server's argv and env shape
-(`knowledge-base/project/plans/2026-09-24-fix-c4-render-tenant-likec4-config-execution-plan.md`,
+(`knowledge-base/project/plans/archive/20260924-121816-2026-09-24-fix-c4-render-tenant-likec4-config-execution-plan.md`,
 §Measurement). What likec4 does with the directory it is given:
 
 - A `likec4.config.{js,cjs,mjs,ts,cts,mts}` in the directory or a subdirectory **executes**.

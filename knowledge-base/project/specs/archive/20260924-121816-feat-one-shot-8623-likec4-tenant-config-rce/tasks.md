@@ -1,6 +1,6 @@
 # Tasks: C4 re-render must never load a tenant's likec4 config (#8623)
 
-Plan: `knowledge-base/project/plans/2026-09-24-fix-c4-render-tenant-likec4-config-execution-plan.md` (deepened 2026-09-24)
+Plan: `knowledge-base/project/plans/archive/20260924-121816-2026-09-24-fix-c4-render-tenant-likec4-config-execution-plan.md` (deepened 2026-09-24)
 
 ## Phase 0: Staging-root precondition (gating)
 

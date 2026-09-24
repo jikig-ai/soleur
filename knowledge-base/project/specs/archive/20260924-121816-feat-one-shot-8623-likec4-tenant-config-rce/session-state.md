@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8623-likec4-tenant-config-rce/knowledge-base/project/plans/2026-09-24-fix-c4-render-tenant-likec4-config-execution-plan.md
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8623-likec4-tenant-config-rce/knowledge-base/project/plans/archive/20260924-121816-2026-09-24-fix-c4-render-tenant-likec4-config-execution-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 - Post-plan collision re-probe (#8623, #8695, #8696): clean
