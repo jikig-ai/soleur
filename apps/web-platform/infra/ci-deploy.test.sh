@@ -6654,9 +6654,10 @@ rm -f "$T21_LIB"
 # credential to ask WITH. Empty-when-a-token-was-present is reported as the read failure it is.
 #
 # Scope note (R25): this section is OBSERVABILITY ONLY. `zot_gate_and_login` is documented
-# "Fail-open: never aborts the deploy" and cloud-init bakes /etc/default/soleur-ghcr-read
-# SPECIFICALLY so a cold-boot deploy proceeds when Doppler answers empty. T-7095-6 pins that
-# contract: same control flow, but it now says why.
+# "Fail-open: never aborts the deploy", so a cold-boot deploy proceeds when Doppler answers
+# empty. (cloud-init no longer bakes /etc/default/soleur-ghcr-read: #8036 1c retired its reader
+# here and #8036 1d stopped fresh hosts writing it.) T-7095-6 pins that contract: same control
+# flow, but it now says why.
 echo ""
 echo "--- #7095: a failed Doppler read is self-reporting (not 'pre-provisioning') ---"
 

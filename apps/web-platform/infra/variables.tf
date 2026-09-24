@@ -714,13 +714,13 @@ variable "github_infra_app_private_key" {
 # file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
 # runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-087).
 variable "ghcr_read_user" {
-  description = "GitHub machine-account login that owns the scoped read:packages PAT (the docker login -u value). Published to Doppler soleur/prd as GHCR_READ_USER."
+  description = "GitHub login that owns the scoped read:packages PAT (the docker login -u value). Measured 2026-09-24: the operator\u0027s own org-admin account, not a machine account (ADR-096 amendment 2026-09-24). Published to Doppler soleur/prd as GHCR_READ_USER. No host consumer since #8036 item 1d (2026-09-24): no fresh-boot template receives it. Remaining consumer: doppler_secret.ghcr_read_user, retired with this variable by ADR-096 task 5.4. NO default."
   type        = string
   sensitive   = true
 }
 
 variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN. CONSUMERS \u2014 THREE fresh-boot login sites, not one: apps/web-platform/infra/cloud-init.yml (web host, root, writes root\u0027s docker config), apps/web-platform/infra/soleur-host-bootstrap.sh (web host, root, writes the SAME root config \u2014 so retiring only the cloud-init site would leave root_ghcr_auth=inline and make a 1d close criterion ungreenable), and apps/web-platform/infra/cloud-init-inngest.yml (inngest host, templated from inngest-host.tf). An earlier revision of this description said \u0027cloud-init fresh-boot login ONLY\u0027, which would have sent the 1d grep to one of the three. The ci-deploy.sh consumer (host pull + cosign .sig fetch auth) was RETIRED in #8036 item 1c on 2026-09-23 \u2014 the deploy path no longer reads this secret at all, and it sweeps any inline ghcr.io entry out of the deploy docker config on every deploy. The boot path still reads it and is tracked as 1d. The divergence is named here on purpose: the next engineer to grep GHCR_READ_TOKEN lands on why two host postures disagree instead of re-deriving it. NO default."
+  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages. Published to Doppler soleur/prd as GHCR_READ_TOKEN. The value is revoked (401, ADR-096 amendment 2026-07-30; 5.5 observed 2026-09-24). NO HOST CONSUMER since #8036 item 1d (2026-09-24): the three fresh-boot login sites (cloud-init.yml, soleur-host-bootstrap.sh, cloud-init-inngest.yml) are deleted and no templatefile() passes this variable into any host user_data. The ci-deploy.sh consumer was retired earlier, in #8036 item 1c (2026-09-23). Remaining consumer: doppler_secret.ghcr_read_token (ghcr-read-credential.tf), retired with this variable by ADR-096 task 5.4. Until then the revoked value stays in Doppler soleur/prd, which ci-deploy.sh downloads into the app container env; do not re-enable the minter before 5.4. NO default."
   type        = string
   sensitive   = true
 }

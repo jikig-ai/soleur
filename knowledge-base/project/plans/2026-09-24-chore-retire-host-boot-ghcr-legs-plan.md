@@ -782,15 +782,29 @@ This plan introduces **no** persistent store and **no** new connection. It **rem
 from every future host's `user_data`. The section is emitted because the diff touches `*.tf` and
 `cloud-init*.yml`.
 
+The at-rest rows below are **residuals this plan does not remove**, not stores it creates. Each
+holds only the revoked `GHCR_READ_TOKEN` value (`GET api.github.com/user` → 401, measured
+2026-09-20 and 2026-09-24). **web-1's root filesystem is not LUKS** (guest LUKS in this fleet
+covers the dedicated data volumes, not a host's root disk), so no at-rest encryption is claimed
+for the web-1 copies. (Corrected 2026-09-24 in `soleur:work`: an earlier draft of this block
+claimed `luks` for `/etc/default/soleur-ghcr-read`, which was false.)
+
 ```yaml
 at_rest:
-  - store:            "/etc/default/soleur-ghcr-read on web-1 (written at its first boot; never re-written, ignore_changes=[user_data])"
-    mechanism:        "luks"
-    evidence:         "implied by device_binding — /etc is on the host root filesystem; this plan stops creating the file on every future host and does not touch web-1's copy"
-    defends_against:  "a seized or RMA'd disk"
-    does_not_defend:  "a running host: root, or the deploy user who owns the 0600 file, can read it. The value is a revoked PAT (GET api.github.com/user → 401, measured 2026-09-20 and 2026-09-24), so the residual exposure is a dead string."
+  - store:            "web-1 first-boot copies of GHCR_READ_TOKEN: /etc/default/soleur-ghcr-read (0600), /var/lib/cloud/instance/user-data.txt, the Hetzner metadata userdata endpoint (169.254.169.254, readable from the host), and /root/.docker/config.json (the root ghcr.io auths entry; ci-deploy.sh reports it as root_ghcr_auth=inline)"
+    mechanism:        "plaintext-exception"
+    evidence:         "web-1 was created before this change with the pre-1d template; hcloud_server.web ignores user_data, so the copies stay for web-1's lifetime. This plan stops creating them on every future host and does not touch web-1's. The root filesystem is not LUKS"
+    defends_against:  "nothing at rest; the only mitigation is that the value is revoked"
+    does_not_defend:  "a seized or RMA'd disk, and a running host: root (and, for the soleur-ghcr-read file, the deploy user that owns it) can read every copy, and any process on web-1 can read the metadata endpoint. The residual exposure is a dead string"
     disclosed_as:     "not-publicly-claimed"
-    live_verification: "unavailable: no running-host channel reads /etc/default on web-1 without SSH, and the value is revoked, so no probe is warranted"
+    live_verification: "unavailable: no running-host channel reads these paths on web-1 without SSH, and the value is revoked, so no probe is warranted. They go when web-1 is next replaced"
+  - store:            "Doppler soleur/prd GHCR_READ_TOKEN (and GHCR_READ_USER), downloaded by ci-deploy.sh (doppler secrets download --config prd) into the app container env on every deploy"
+    mechanism:        "provider-managed:doppler-aes256-gcm"
+    evidence:         "unchanged by this plan; doppler_secret.ghcr_read_* (ghcr-read-credential.tf) stays until ADR-096 5.4"
+    defends_against:  "Doppler's own at-rest encryption of the secret store"
+    does_not_defend:  "the app container's env on each web host, which holds the downloaded value in memory. The value is revoked; re-enabling the minter before 5.4 would put a live PAT back there"
+    disclosed_as:     "not-publicly-claimed"
+    live_verification: "unavailable: not re-measured by this plan; 5.4 removes the secret"
 in_transit:
   - connection:        "fresh web host and dedicated inngest host -> zot registry (10.0.1.30:5000), the ONLY boot-time image read path after this change"
     enforced_at:       "apps/web-platform/infra/cloud-init.yml seed item (`docker login \"$ZEP\"` + `docker pull \"$REF\"`); apps/web-platform/infra/cloud-init-inngest.yml pull item (`ZIREF=\"$ZOT_EP/`)"
@@ -805,7 +819,7 @@ in_transit:
     does_not_defend:   "not applicable — the posture change is the removal of a revoked bearer credential from every future host's user_data and from each boot's outbound requests"
     disclosed_as:      "not-publicly-claimed"
 exception:
-  justification:      "The host->zot leg is plain HTTP by an existing, ledgered decision (scripts/encryption-posture-ledger.json row 'web hosts -> zot registry (10.0.1.30:5000)'): integrity via digest pinning, private network only. This plan does not introduce that posture; it removes the (non-functional) second read path at boot."
+  justification:      "(1) web-1's first-boot copies of the revoked GHCR token are plaintext on a non-LUKS root disk; no running-host channel can remove them, and they hold a revoked value, so they are disclosed and left until web-1's next replace. (2) The host->zot leg is plain HTTP by an existing, ledgered decision (scripts/encryption-posture-ledger.json row 'web hosts -> zot registry (10.0.1.30:5000)'): integrity via digest pinning, private network only. This plan does not introduce that posture; it removes the (non-functional) second read path at boot."
   tracking_issue:     "#6897"
   reevaluate_when:    "the registry is exposed beyond the private network, TLS is added to the link, or a second registry is built (#6126)"
   expires_on:         "2026-10-22"
@@ -1178,8 +1192,9 @@ approvals are the environment gate and `op=resume`).
   the #6122 comment of Phase 7.6.
 - [ ] FR10. ADR-096 carries the 1d amendment and updated `## Status`; tasks.md 5.3b-i is ticked;
   `model.c4` has the five description edits; the stale comments of addendum item 6 and the
-  wording of item 7 are gone (a grep for `(1.8) + backfills (1.9)` across `ci-deploy.sh`,
-  `soleur-host-bootstrap.sh` and `zot-soak-6122.sh` returns 0).
+  wording of item 7 are gone (a grep for `(1.8) + backfills (1.9)`, `(1.8) + backfill` and
+  `strict no-op until zot is` across `ci-deploy.sh`, `soleur-host-bootstrap.sh` and
+  `zot-soak-6122.sh` returns 0; Enhancement item 20).
 - [ ] FR11. The PR's own `terraform plan` output (the apply workflow's plan job on the PR) shows
   no action on `hcloud_server.web` and none on `hcloud_server.inngest`.
 
