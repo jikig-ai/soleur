@@ -19,7 +19,7 @@
 // shape, ignoring divergent per-call overrides (mcpServers,
 // allowedTools, maxTurns, maxBudgetUsd).
 
-import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -58,11 +58,15 @@ describe("buildAgentSandboxConfig drift guard", () => {
     mkdirSync(sibA);
     mkdirSync(sibB);
     vi.stubEnv("WORKSPACES_ROOT", root);
+    vi.stubEnv("C4_RENDER_STAGING_ROOT", `${root}-c4-staging`);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
+    // The C4 staging root sits BESIDE the workspaces root, never inside it
+    // (inside, the sibling enumeration would list it as a tenant).
+    rmSync(`${root}-c4-staging`, { recursive: true, force: true });
   });
 
   it("matches the canonical non-filesystem shape verbatim (T17)", () => {
@@ -81,13 +85,27 @@ describe("buildAgentSandboxConfig drift guard", () => {
     expect(result.filesystem.allowWrite).toEqual([own]);
     expect(result.filesystem).not.toHaveProperty("allowRead");
     // EXACT set (order-independent): denyRead must be precisely the two
-    // siblings + /proc. `arrayContaining` would let a stray/extra entry or a
-    // silently-widened deny set slip through the guard — and denyRead is now
-    // the sole bwrap-level cross-tenant guard, so an unexpected member is
-    // exactly what this must fail on.
+    // siblings + /proc + the C4 re-render staging root (#8623). `arrayContaining`
+    // would let a stray/extra entry or a silently-widened deny set slip through
+    // the guard — and denyRead is now the sole bwrap-level cross-tenant guard,
+    // so an unexpected member is exactly what this must fail on.
     expect([...result.filesystem.denyRead].sort()).toEqual(
-      [sibA, sibB, "/proc"].sort(),
+      [sibA, sibB, "/proc", `${root}-c4-staging`].sort(),
     );
+  });
+
+  // #8623 Phase 0: the C4 re-render's staging root must be outside the agent's
+  // write set AND denied for read, and it must EXIST before the sandbox starts
+  // (the SDK silently skips a non-existent deny path).
+  it("denies the C4 staging root, creates it, and never grants write to it or to os.tmpdir()", () => {
+    const staging = `${root}-c4-staging`;
+    const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.denyRead).toContain(staging);
+    expect(existsSync(staging)).toBe(true);
+    for (const w of result.filesystem.allowWrite) {
+      expect(staging === w || staging.startsWith(`${w}/`)).toBe(false);
+      expect(tmpdir() === w || tmpdir().startsWith(`${w}/`)).toBe(false);
+    }
   });
 
   it("threads the workspacePath into filesystem.allowWrite (per-user write isolation)", () => {
@@ -147,11 +165,15 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     mkdirSync(own);
     mkdirSync(sibA);
     vi.stubEnv("WORKSPACES_ROOT", root);
+    vi.stubEnv("C4_RENDER_STAGING_ROOT", `${root}-c4-staging`);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
+    // The C4 staging root sits BESIDE the workspaces root, never inside it
+    // (inside, the sibling enumeration would list it as a tenant).
+    rmSync(`${root}-c4-staging`, { recursive: true, force: true });
   });
 
   it("allowGithubEgress: true → exact-host GitHub allowlist; egress widens NOTHING else", () => {
@@ -165,7 +187,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     expect(result.filesystem).not.toHaveProperty("allowRead");
     // EXACT set (order-independent) — see the T17 guard rationale above.
     expect([...result.filesystem.denyRead].sort()).toEqual(
-      [sibA, "/proc"].sort(),
+      [sibA, "/proc", `${root}-c4-staging`].sort(),
     );
   });
 
