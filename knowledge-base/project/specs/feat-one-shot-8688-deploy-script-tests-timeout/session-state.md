@@ -19,4 +19,4 @@
 ### Components Invoked
 - `soleur:plan` (inline), `soleur:deepen-plan` (inline), plan-review standing check
 - `gh` CLI measurements, `actionlint`, `markdownlint-cli2`
-- Commits: e1a39fb926 (plan + tasks + decision-challenges), 87d4df29d9 (deepen pass)
+- Commits: 9f32dadb60 (plan + tasks + decision-challenges), 24692fac3d (deepen pass) — post-rebase SHAs; pre-rebase e1a39fb926/87d4df29d9 superseded

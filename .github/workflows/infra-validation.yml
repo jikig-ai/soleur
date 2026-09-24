@@ -524,8 +524,9 @@ jobs:
     #
     # One caveat stated rather than buried: plugin-seed's local measurement was against
     # an ALREADY-WARM docker cache. It is the one added step that builds an image, which
-    # is why it carries its own `timeout-minutes: 3` for attribution — a cold-pull stall
-    # names that step instead of cancelling the job at an unrelated one.
+    # is why it carries its own `timeout-minutes: 1` for attribution — a cold-pull stall
+    # names that step instead of cancelling the job at an unrelated one. (The key has been
+    # 1 since the step's own comment block re-derived it; this caveat lagged the value.)
     #
     # Re-derive this if steps are added to the job — the numbers above are a property
     # of its current composition, not of the suite alone. If a future run exceeds
