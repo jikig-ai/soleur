@@ -11,8 +11,9 @@
 #
 # Every assertion below defends that biconditional from the *false-green* side, because a
 # run that reports success while mirroring nothing is what causes a pin to a digest zot
-# cannot serve — which sends every fresh boot down the GHCR-fallback branch and fires
-# `inngest_ghcr_fallback` permanently. Precedent for the failure class:
+# cannot serve — and since #8036 item 1d there is no GHCR fallback behind the zot pull, so
+# every fresh inngest boot then ends at `inngest_pull_fatal` and the sole scheduler stays dark
+# until a mirror_only backfill lands. Precedent for the failure class:
 # knowledge-base/engineering/operations/post-mortems/2026-07-29-v0244-1-published-green-with-an-unpullable-image-postmortem.md
 #
 # WHY THE MIRROR IS NOT GATED ON THE BRIDGE. An earlier revision of this file gated the

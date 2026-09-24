@@ -58,6 +58,10 @@ JOB="$(awk '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ /^  web_host_create:/) } /^  #/ {
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
+# Instrument self-test: both helpers must move their counters, or every verdict below is void.
+ok "instrument self-test (pass arm)" >/dev/null; no "instrument self-test (fail arm)" 2>/dev/null
+[ "$pass" -eq 1 ] && [ "$fail" -eq 1 ] || { printf 'instrument self-test broken\n'; exit 2; }
+pass=0; fail=0
 
 # Deliberately-nonzero grep inside a command substitution must not trip `set -e`
 # (accumulate-then-exit foot-gun): the trailing `|| true` keeps a no-match empty.
@@ -108,8 +112,9 @@ else
 fi
 
 # ── AC3: bootstrap emit path prefers the baked DSN before any doppler fetch ──
-# One shared _sentry_emit resolves DSN preferring SOLEUR_SENTRY_DSN; emit_fail and
-# ghcr_login_warn both route through it.
+# One shared _sentry_emit resolves DSN preferring SOLEUR_SENTRY_DSN; emit_fail and the
+# bootstrap_complete breadcrumb both route through it (ghcr_login_warn, its third caller, was
+# deleted with the GHCR login by #8036 1d).
 if grep -qE '\$\{SOLEUR_SENTRY_DSN:-' "$BOOT"; then
   ok "AC3: bootstrap resolves DSN preferring \${SOLEUR_SENTRY_DSN:-<doppler>}"
 else
@@ -128,7 +133,7 @@ if grep -qE '_sentry_emit' "$BOOT"; then
     no "AC3: DSN preference assignment should appear once (found $n_pref) — factor into _sentry_emit"
   fi
 else
-  no "AC3: expected a shared _sentry_emit helper used by emit_fail + ghcr_login_warn"
+  no "AC3: expected a shared _sentry_emit helper used by emit_fail + the bootstrap_complete breadcrumb"
 fi
 
 # ── AC4: bootstrap_complete breadcrumb precedes the sentinel ──
@@ -736,13 +741,15 @@ if grep -qF '"detail":"%s"' "$CI" && grep -qF '/run/soleur-stage-detail' "$CI"; 
 else
   no "AC18: _emit must include a detail tag from /run/soleur-stage-detail"
 fi
-# #8651: the per-login outcome moved from free text (ghcr_login_ok/_fail/_creds_missing) into
-# the per-leg fields of the one detail string — `ghcr=[login=…` on a fatal, `ghcr_login=` on
-# the app_zot success beacon — so a dark boot names BOTH legs in one event (fixed fields first).
-if grep -qF 'ghcr=[login=%s,pull=%s]' "$CI" && grep -qF 'ghcr_login=%s' "$CI"; then
-  ok "AC18: the GHCR login outcome is recorded in the detail (fatal ghcr=[login=…], success ghcr_login=)"
+# #8651 moved the per-login outcome into per-leg detail fields (`zot=[…]` + `ghcr=[…]` on a fatal,
+# `zot_login=`/`ghcr_login=` on the app_zot beacon). INVERTED by #8036 1d: the GHCR leg is deleted,
+# so its fields are residual-zero and the zot leg is the whole detail. `zot_login=` must survive
+# byte-for-byte: web-fresh-boot-zot-8651.sh greps `zot_login=ok` off the success beacon.
+if ! grep -vE '^[[:space:]]*#' "$CI" | _qgrep -E 'ghcr=\[|ghcr_login=' \
+   && grep -qF "printf 'zot_login=%s nic=%s:%s %s'" "$CI" && grep -qF 'Z="zot=[login=$ZL,n=$ZN,cause=$C]"' "$CI"; then
+  ok "AC18: the detail records the zot leg only (zot_login= / zot=[login,n,cause]); no ghcr=[ / ghcr_login= field (#8036 1d)"
 else
-  no "AC18: the GHCR login outcome must be recorded in the detail string (ghcr=[login=%s,pull=%s] / ghcr_login=%s)"
+  no "AC18: the detail must carry zot_login=%s + zot=[login=\$ZL,n=\$ZN,cause=\$C] and no ghcr=[ / ghcr_login= field"
 fi
 if grep -qF 'pull_err:' "$CI"; then
   ok "AC18: the pull loop appends the docker pull stderr on final failure (names the pull error)"
@@ -750,19 +757,17 @@ else
   no "AC18: the pull loop must capture the docker pull error into /run/soleur-stage-detail"
 fi
 
-# ── AC19 (#6090): ghcr_login prefers BAKED creds + hardens the doppler fallback ──
-# recreate 28826611336 reached stage=pull with detail=ghcr_creds_missing user=n token=n: doppler
-# answered EMPTY at the cold-boot instant, so docker login was skipped → anonymous private pull →
-# 401 → boot aborts before :9000. Fix: bake ${ghcr_read_*} (like ${sentry_dsn}) preferred, with a
-# HARDENED doppler fallback (timeout 45 + 3-try retry loop). server.tf must pass both vars in.
+# ── AC19 (#6090), INVERTED by #8036 1d: the seed block presents NO GHCR credential ──
+# History: recreate 28826611336 reached stage=pull with detail=ghcr_creds_missing (doppler answered
+# EMPTY at the cold-boot instant), so #6090 baked ${ghcr_read_*} into the seed ghcr_login. That
+# PAT is revoked (AP-016) and #8036 1d deleted the login it fed: the bake is now residual-zero, and
+# the credential the seed block DOES bake is the zot pull token (cloud-init-web-zot-seed.test.sh).
 TF="$DIR/server.tf"
-# (1) baked creds preferred (the assignment mirrors the ${sentry_dsn} bake; literal, not expanded)
-bake_u=$'GHCR_USER=\'${ghcr_read_user}\''
-bake_t=$'GHCR_TOKEN=\'${ghcr_read_token}\''
-if grep -qF "$bake_u" "$CI" && grep -qF "$bake_t" "$CI"; then
-  ok "AC19: ghcr_login prefers baked \${ghcr_read_user}/\${ghcr_read_token} (survives a cold-boot empty doppler)"
+# (1) no baked GHCR creds and no seed ghcr_login stage (code lines only)
+if ! grep -vE '^[[:space:]]*#' "$CI" | _qgrep -E '\$\{ghcr_read_(user|token)\}|STAGE=ghcr_login|GHCR_(USER|TOKEN)='; then
+  ok "AC19: cloud-init bakes no \${ghcr_read_user}/\${ghcr_read_token} and has no STAGE=ghcr_login (#8036 1d)"
 else
-  no "AC19: ghcr_login must prefer baked \${ghcr_read_user}/\${ghcr_read_token} before falling back to doppler"
+  no "AC19: cloud-init must not bake \${ghcr_read_*} or carry a STAGE=ghcr_login seed login since #8036 1d"
 fi
 # (2) RETIRED by #8651, asserted ABSENT: the empty-bake doppler fallback loops ran above the
 # terminal `set -a` source with a bare `.` (DOPPLER_TOKEN assigned, never exported — #6985), so
@@ -777,19 +782,31 @@ if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$CI"; then
 else
   ok "AC19: no stale 'timeout 15 doppler secrets get GHCR_READ_*' fetch remains"
 fi
-# (3) server.tf passes both baked vars into the web-host cloud-init templatefile map
-if grep -qE '^\s*ghcr_read_user\s*=\s*var\.ghcr_read_user' "$TF" \
-   && grep -qE '^\s*ghcr_read_token\s*=\s*var\.ghcr_read_token' "$TF"; then
-  ok "AC19: server.tf passes ghcr_read_user + ghcr_read_token into the web-host templatefile"
+# (3) INVERTED by #8036 1d: server.tf passes neither GHCR var into the web-host templatefile map
+# (P5: no templatefile() carries a GHCR credential into user_data). Scoped to the map's code lines.
+TF_WEB_MAP=$(python3 - "$TF" <<'PYMAP'
+import re, sys
+s = "\n".join(l for l in open(sys.argv[1]).read().splitlines() if not l.lstrip().startswith("#"))
+m = re.search(r'templatefile\("\$\{path\.module\}/cloud-init\.yml",\s*\{', s)
+if not m:
+    sys.exit(0)
+i, d = m.end(), 1
+while i < len(s) and d:
+    d += {"{": 1, "}": -1}.get(s[i], 0); i += 1
+print(s[m.end():i - 1])
+PYMAP
+)
+if [ -n "$TF_WEB_MAP" ] && grep -qE '^\s*sentry_dsn\s*=' <<<"$TF_WEB_MAP" && ! grep -qE '^\s*ghcr_read_(user|token)\s*=' <<<"$TF_WEB_MAP"; then
+  ok "AC19: server.tf's web-host templatefile map passes no ghcr_read_user/ghcr_read_token (#8036 1d)"
 else
-  no "AC19: server.tf web-host templatefile map must pass ghcr_read_user + ghcr_read_token (coupled to the cloud-init bake)"
+  no "AC19: server.tf's web-host templatefile map must be found and must pass no ghcr_read_* key (map_found=$([ -n "$TF_WEB_MAP" ] && echo y || echo n))"
 fi
 
 # ── AC20 (#6090), NARROWED BY #8036 1c (2026-09-23) ──
 #
-# CLAUSES (1) AND (2) — the cloud-init BAKE and its 0600 mode — STAY, and stay asserted exactly
-# as before: cloud-init's own fresh-boot `ghcr_login` still reads that file, and retiring THAT is
-# 1d, out of scope here.
+# CLAUSES (1) AND (2) — the cloud-init BAKE and its 0600 mode — stayed through 1c (cloud-init's
+# own fresh-boot `ghcr_login` still read that file). #8036 1d deleted that login and the bake, so
+# (1), (2) and the cloud-init half of (5) are INVERTED to residual-zero below.
 #
 # CLAUSES (3), (4) AND THE ci-deploy HALF OF (5) ARE DELETED. They asserted that
 # `ci-deploy.sh`'s GHCR prelude sources the baked file, hardens its Doppler fallback for
@@ -812,19 +829,19 @@ fi
 # pull → cosign .sig 401 → verify_failed → app never binds :9000. Fix: cloud-init bakes
 # /etc/default/soleur-ghcr-read; ghcr_prelude_and_login prefers it, hardened doppler fallback.
 CD="$DIR/ci-deploy.sh"
-# (1) cloud-init bakes the deploy-readable GHCR cred file with the interpolated vars
-if grep -qF 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s' "$CI" \
-   && grep -qF '/etc/default/soleur-ghcr-read' "$CI" \
-   && grep -qE "'\\\$\{ghcr_read_user\}'[[:space:]]+'\\\$\{ghcr_read_token\}'" "$CI"; then
-  ok "AC20: cloud-init bakes /etc/default/soleur-ghcr-read from \${ghcr_read_user}/\${ghcr_read_token}"
+# (1) INVERTED by #8036 1d: cloud-init no longer writes the GHCR cred file (code lines only).
+if ! grep -vE '^[[:space:]]*#' "$CI" | _qgrep -E 'GHCR_READ_USER=%s|/etc/default/soleur-ghcr-read'; then
+  ok "AC20: cloud-init writes no /etc/default/soleur-ghcr-read (the GHCR cred bake is retired, #8036 1d)"
 else
-  no "AC20: cloud-init must bake /etc/default/soleur-ghcr-read with the interpolated GHCR read-creds"
+  no "AC20: cloud-init must not bake /etc/default/soleur-ghcr-read since #8036 1d (no host presents a GHCR credential at boot)"
 fi
-# (2) the baked file is protected like webhook-deploy (deploy:deploy 0600)
-if grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CD" 2>/dev/null || _qgrep -E 'chmod 600 /etc/default/soleur-ghcr-read' "$CI"; then
-  ok "AC20: baked GHCR cred file is chmod 600 (deploy-only)"
+# (2) INVERTED by #8036 1d: with no bake there is no file to chmod — and no boot file may create
+# or read the GHCR cred file (web-1's first-boot copy is a disclosed residual; no running-host
+# channel removes it, and the value is revoked).
+if ! grep -vhE '^[[:space:]]*#' "$CI" "$BOOT" "$DIR/cloud-init-inngest.yml" | _qgrep -F 'soleur-ghcr-read'; then
+  ok "AC20: no boot file (cloud-init.yml, soleur-host-bootstrap.sh, cloud-init-inngest.yml) touches soleur-ghcr-read"
 else
-  no "AC20: /etc/default/soleur-ghcr-read must be chmod 600"
+  no "AC20: a boot file still creates or reads /etc/default/soleur-ghcr-read (#8036 1d residual)"
 fi
 # (3) DELETED by #8036 1c — and replaced by its INVERSE, which is the assertion that would catch
 # the retirement being undone. ci-deploy.sh must NOT read the baked GHCR cred file at all.
@@ -895,42 +912,46 @@ fi
 # the replacement for the deleted half is stronger than it was: the token must not appear in
 # ci-deploy.sh's runtime at all, which an `unset` after a read never guaranteed.
 AC20_CD_TOKEN=$(grep -vE '^[[:space:]]*#' "$CD" | grep -cE 'GHCR_READ_TOKEN' || true)
-if grep -qE 'chown deploy:deploy /etc/default/soleur-ghcr-read' "$CI" && [[ "$AC20_CD_TOKEN" -eq 0 ]]; then
-  ok "AC20: baked file is chown deploy:deploy, and GHCR_READ_TOKEN appears in no executable line of ci-deploy (#8036 1c)"
+# #8036 1d: the cloud-init ownership half inverts with the bake — no GHCR_READ_TOKEN on any
+# executable line of cloud-init.yml either.
+AC20_CI_TOKEN=$(grep -vE '^[[:space:]]*#' "$CI" | grep -cE 'GHCR_READ_TOKEN|ghcr_read_token' || true)
+if [[ "$AC20_CI_TOKEN" -eq 0 && "$AC20_CD_TOKEN" -eq 0 ]]; then
+  ok "AC20: GHCR_READ_TOKEN appears on no executable line of cloud-init.yml (#8036 1d) or ci-deploy.sh (#8036 1c)"
 else
-  no "AC20: /etc/default/soleur-ghcr-read must be chown deploy:deploy AND ci-deploy must carry no executable GHCR_READ_TOKEN reference (found $AC20_CD_TOKEN)"
+  no "AC20: no executable GHCR_READ_TOKEN reference may remain (cloud-init=$AC20_CI_TOKEN ci-deploy=$AC20_CD_TOKEN)"
 fi
 
-# ── AC21 (#6090): soleur-host-bootstrap's ghcr_login is baked too (3rd/final GHCR site) ──
-# The seed pull (AC19) + app pull (AC20) bakes weren't enough: soleur-host-bootstrap.sh had a
-# THIRD unhardened `timeout 15 doppler secrets get GHCR_READ_*` login for the inngest-bootstrap
-# image pull. On a cold host it skipped docker login → anonymous inngest pull → /var/lib/inngest
-# never created. (The "→ webhook.service 226/NAMESPACE → :9000 unbound → peer fan-out degraded"
-# downstream is SEVERED as of #6090 — webhook.service now marks /var/lib/inngest `-`-optional; an
-# absent dir no longer wedges the unit. This bake still matters when web_colocate_inngest is ON.)
-# Fix: bootstrap prefers the baked /etc/default/soleur-ghcr-read, hardened doppler fallback.
-if grep -qF '/etc/default/soleur-ghcr-read' "$BOOT"; then
-  ok "AC21: soleur-host-bootstrap ghcr_login prefers the baked /etc/default/soleur-ghcr-read"
+# ── AC21 (#6090), INVERTED by #8036 1d: soleur-host-bootstrap.sh presents no registry login ──
+# #6090 baked a third GHCR login here (for the colocated inngest-bootstrap pull) plus a zot login
+# read from Doppler. #8036 1d deleted the WHOLE `STAGE=ghcr_login` subshell: the GHCR half could
+# only present the revoked PAT, and the zot half duplicated the seed block's baked zot login while
+# reading its inputs through tokenless Doppler calls (a bare `.` of webhook-deploy exports nothing,
+# #6985). The seed block's login (root, before this script) writes the auths entry every later
+# root pull reuses. Code lines only, so this history cannot satisfy or falsify the rows.
+BOOT_CODE=$(grep -vE '^[[:space:]]*#' "$BOOT" || true)
+# An empty extraction would pass the "no docker login" row vacuously, so it is fatal here.
+[ -n "$BOOT_CODE" ] || { printf '[FATAL] no code lines extracted from %s\n' "$BOOT" >&2; exit 2; }
+if ! _qgrep -E 'docker[[:space:]]+login' <<<"$BOOT_CODE"; then
+  ok "AC21: soleur-host-bootstrap runs no docker login at all (GHCR and duplicate zot login deleted, #8036 1d)"
 else
-  no "AC21: soleur-host-bootstrap ghcr_login must prefer the baked /etc/default/soleur-ghcr-read"
+  no "AC21: soleur-host-bootstrap must run no docker login since #8036 1d (the seed block's baked zot login is the only one)"
 fi
-if grep -qE 'until GHCR_USER=\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$BOOT" \
-   && grep -qE 'until GHCR_TOKEN=\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$BOOT"; then
-  ok "AC21: soleur-host-bootstrap doppler fallback hardened — timeout 45 + until-retry for both GHCR creds"
+if ! _qgrep -E 'STAGE=(ghcr|zot)_login|ghcr_login_warn|zot_login_warn|"stage":"(ghcr|zot)_login"' <<<"$BOOT_CODE"; then
+  ok "AC21: no ghcr_login/zot_login stage, warn helper or Sentry tag remains in soleur-host-bootstrap"
 else
-  no "AC21: soleur-host-bootstrap must harden the doppler fallback (timeout 45 + until-retry) for both GHCR creds"
+  no "AC21: the retired ghcr_login/zot_login stage, its warn helpers or their Sentry tags are back in soleur-host-bootstrap"
 fi
-if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$BOOT"; then
-  no "AC21: stale un-hardened 'timeout 15 doppler secrets get GHCR_READ_*' still present in soleur-host-bootstrap"
+if ! _qgrep -E 'doppler secrets get (GHCR_READ_|ZOT_REGISTRY_URL|ZOT_PULL_)' <<<"$BOOT_CODE"; then
+  ok "AC21: soleur-host-bootstrap reads no GHCR_READ_* / ZOT_* secret from Doppler (tokenless by construction, #6985)"
 else
-  ok "AC21: no stale 'timeout 15 doppler secrets get GHCR_READ_*' in soleur-host-bootstrap"
+  no "AC21: soleur-host-bootstrap must not read GHCR_READ_* / ZOT_REGISTRY_URL / ZOT_PULL_* from Doppler"
 fi
-# Pin the Sentry warning emits to the same AC (so a future fetch/emit reorder keeps them):
-# both failure branches (credential_absent after retries, auth_denied on login reject) stay loud.
-if grep -qF 'ghcr_login_warn credential_absent' "$BOOT" && grep -qF 'ghcr_login_warn auth_denied' "$BOOT"; then
-  ok "AC21: bootstrap ghcr_login still emits ghcr_login_warn on both failure branches (no-SSH Sentry warning)"
+# The stage after journald is boot_emit: emit_fail's attribution is unchanged by the deletion.
+AC21_NEXT=$(grep -oE '^STAGE=[a-z_]+' "$BOOT" | grep -A1 -x 'STAGE=journald' | tail -n +2 || true)
+if [ "$AC21_NEXT" = "STAGE=boot_emit" ]; then
+  ok "AC21: STAGE=journald is followed directly by STAGE=boot_emit (no stage between them)"
 else
-  no "AC21: bootstrap ghcr_login must emit ghcr_login_warn credential_absent + auth_denied on failure"
+  no "AC21: the stage after STAGE=journald must be STAGE=boot_emit (got: ${AC21_NEXT:-<none>})"
 fi
 
 # ── AC22 (#6396): ungated web-host Vector install (decoupled from web_colocate_inngest) ──
