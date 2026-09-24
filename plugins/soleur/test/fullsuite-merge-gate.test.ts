@@ -3,27 +3,32 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 
 /**
- * Guards the ordering established by #7352 / ADR-183: the full `test-all.sh`
- * battery runs at `/ship` Phase 4, and the `/work` Phase 2 exit runs only the
- * `TEST_GROUP` shards the diff touches.
+ * Guards the ordering established by #7352 / ADR-183 and re-specified by
+ * #8322: `/ship` Phase 4 runs `test-all.sh --affected` by default (and
+ * `--full` only on the operator's explicit `/ship --full`), and the `/work`
+ * Phase 2 exit runs the same affected gate — never a bare, mode-less
+ * `test-all.sh` invocation.
  *
  * Three properties, none of them a bare-token grep — a search for "test-all.sh"
  * in either SKILL.md hits a dozen Sharp Edges and can never fail.
  *
- *   1. CEILING — ship Phase 4 stays unsharded, AND its prescription is not
- *      demoted to conditional. Review of the first draft found the original
- *      regex recognised exactly one invocation spelling: `env …`, `TMPDIR=… `,
- *      an indented line, and `TEST_GROUP=$(…)` all evaded it while a retained
- *      `TEST_GROUP=all` line kept the assertion satisfied. Two of those are this
- *      repo's own documented idioms (`work/SKILL.md` prescribes
+ *   1. CEILING — ship Phase 4 stays unsharded, every battery invocation carries
+ *      an explicit mode flag (`--affected` or `--full`), AND its prescription
+ *      is not demoted to conditional. Review of the first draft found the
+ *      original regex recognised exactly one invocation spelling: `env …`,
+ *      `TMPDIR=… `, an indented line, and `TEST_GROUP=$(…)` all evaded it while
+ *      a retained `TEST_GROUP=all` line kept the assertion satisfied. Two of
+ *      those are this repo's own documented idioms (`work/SKILL.md` prescribes
  *      `setsid nohup env TMPDIR=/var/tmp bash -c …`), so a future author
  *      sharding for speed would have evaded it BY DEFAULT. It is now a denylist
- *      over every fenced invocation line, not an allowlist over one parse.
+ *      over every fenced invocation line, not an allowlist over one parse —
+ *      and since #8322 the flag itself is the pin: a bare `test-all.sh` whose
+ *      mode silently defaults is as much a demotion as a shard.
  *
- *   2. FLOOR — `/work` §9 actually prescribes shards. The first draft asserted
- *      the ceiling and the fallback prose and nothing about the change's own
- *      thesis: reverting §9 to an unconditional `TEST_GROUP=all` left the suite
- *      fully green.
+ *   2. FLOOR — `/work` §9 actually prescribes the affected gate. The first
+ *      draft asserted the ceiling and the fallback prose and nothing about the
+ *      change's own thesis: reverting §9 to an unconditional `TEST_GROUP=all`
+ *      left the suite fully green.
  *
  *   3. OD1 FAIL-SAFE — the project-agnostic prescriptions ship to self-hosted
  *      users whose repos have neither ruleset 14145388 nor `scripts/test-all.sh`.
@@ -52,7 +57,7 @@ const SHARDS = ["webplat", "bun", "scripts", "scripts-heavy", "infra"] as const;
 const FALLBACK_ANCHOR = "Full-suite fallback (projects with no CI-enforced full-suite gate)";
 const POINTER = "**Full-suite fallback**";
 const INFRA_REASON = "no required status check runs that shard";
-const SHIP_PRESCRIPTION = "Then run the project's full test suite.";
+const SHIP_PRESCRIPTION = "Then run the project's test gate.";
 const CONDITIONAL_CLAUSE =
   "when the project has no CI-enforced full-suite gate on the merge branch, the full battery stays at implementation exit";
 const FAILSAFE_CLAUSE =
@@ -127,8 +132,9 @@ function invocationLines(region: string): string[] {
 // invocation of `bash scripts/test-all.sh --enumerate all` satisfy every CEILING assertion AND the
 // "at least one invocation actually RUNS the battery" floor while running nothing: measured 11
 // pass / 0 fail. That is the defect this file memorializes, reintroduced by the PR that added the
-// flag. Any future query-mode flag belongs here the moment it is added.
-const QUERY_FLAGS = ["--capacity", "--print-suite-globs", "--enumerate"] as const;
+// flag. Any future query-mode flag belongs here the moment it is added. `--print-affected-set`
+// (#8322) prints the selection and runs nothing — same shape.
+const QUERY_FLAGS = ["--capacity", "--print-suite-globs", "--enumerate", "--print-affected-set"] as const;
 function isQueryInvocation(line: string): boolean {
   return QUERY_FLAGS.some((f) => line.includes(f));
 }
@@ -166,7 +172,17 @@ function shardTokensOn(line: string): string[] {
   return found;
 }
 
-describe("CEILING — /ship Phase 4 runs the battery unsharded", () => {
+/**
+ * The battery-mode flags `scripts/test-all.sh` accepts (#8322). A bare
+ * `test-all.sh` whose mode is implicit is a demotion — the same failure class
+ * as sharding — so callers pin the mode explicitly.
+ */
+const MODE_FLAGS = ["--affected", "--full"] as const;
+function modeFlagsOn(line: string): string[] {
+  return MODE_FLAGS.filter((f) => new RegExp(`(^|\\s)${f.replace("-", "\\-")}(\\s|$|'|")`).test(line));
+}
+
+describe("CEILING — /ship Phase 4 runs the gate unsharded, with an explicit mode flag", () => {
   const shipPhase4 = () =>
     sliceSection(readFileSync(SHIP_SKILL, "utf8"), "## Phase 4: Run Tests", "\n## Phase 5: Final Checklist");
 
@@ -186,9 +202,33 @@ describe("CEILING — /ship Phase 4 runs the battery unsharded", () => {
     for (const line of lines) {
       expect(
         shardTokensOn(line),
-        `ship Phase 4 must run the FULL battery; sharded invocation: ${line.trim()}`,
+        `ship Phase 4 must not shard the gate; sharded invocation: ${line.trim()}`,
       ).toEqual([]);
     }
+  });
+
+  test("every battery-running invocation in Phase 4 carries an explicit mode flag (#8322)", () => {
+    // A bare `test-all.sh` inherits the operator's ambient default — the same
+    // demotion class as a shard, and the mutation this pins.
+    const battery = invocationLines(shipPhase4()).filter((l) => !isQueryInvocation(l));
+    expect(battery.length, "ship Phase 4 prescribes no battery-running invocation").toBeGreaterThan(0);
+    for (const line of battery) {
+      expect(
+        modeFlagsOn(line),
+        `ship Phase 4 invocation must name its mode (--affected or --full): ${line.trim()}`,
+      ).not.toEqual([]);
+    }
+  });
+
+  test("modeFlagsOn sees the mode flags, not the query flags", () => {
+    // Both directions — a matcher that flagged nothing would pass the pin
+    // above vacuously.
+    expect(modeFlagsOn("bash scripts/test-all.sh --affected")).toEqual(["--affected"]);
+    expect(modeFlagsOn("bash scripts/test-all.sh --full")).toEqual(["--full"]);
+    expect(
+      modeFlagsOn("bash scripts/test-all.sh --capacity"),
+      "a query flag is not a mode flag",
+    ).toEqual([]);
   });
 
   test("shardTokensOn sees a *_SHARD= selector, not only TEST_GROUP and positional (#7936)", () => {
@@ -230,28 +270,39 @@ describe("CEILING — /ship Phase 4 runs the battery unsharded", () => {
   });
 });
 
-describe("FLOOR — /work Phase 2 exits on shards, not the battery", () => {
+describe("FLOOR — /work Phase 2 exits on the affected gate, not the battery", () => {
   const workGate = () =>
     sliceSection(
       readFileSync(WORK_SKILL, "utf8"),
-      "9. **Touched-Shard Exit Gate (single pass, end of Phase 2)**",
+      "9. **Affected-Test Exit Gate (single pass, end of Phase 2)**",
       "\n### Phase 2.5:",
     );
 
-  test("§9 prescribes at least one sharded invocation", () => {
-    const sharded = invocationLines(workGate()).filter((l) => shardTokensOn(l).length > 0);
+  test("§9 prescribes the affected gate", () => {
+    const affected = invocationLines(workGate()).filter((l) => modeFlagsOn(l).includes("--affected"));
     expect(
-      sharded.length,
-      "work §9 no longer prescribes any TEST_GROUP shard — the reordering has been reverted",
+      affected.length,
+      "work §9 no longer prescribes `test-all.sh --affected` — the reordering has been reverted",
     ).toBeGreaterThan(0);
   });
 
-  test("§9 prescribes NO unsharded battery run", () => {
-    const unsharded = invocationLines(workGate()).filter((l) => shardTokensOn(l).length === 0);
-    expect(
-      unsharded,
-      "work §9 prescribes an unsharded test-all.sh run — that is the pre-#7352 state",
-    ).toEqual([]);
+  test("§9 prescribes NO unsharded battery run — every invocation carries a mode flag or is a query", () => {
+    for (const line of invocationLines(workGate())) {
+      expect(
+        shardTokensOn(line),
+        `work §9 prescribes a sharded run as the exit gate: ${line.trim()}`,
+      ).toEqual([]);
+      if (!isQueryInvocation(line)) {
+        expect(
+          modeFlagsOn(line),
+          `work §9 prescribes a bare, mode-less test-all.sh: ${line.trim()}`,
+        ).not.toEqual([]);
+        expect(
+          modeFlagsOn(line),
+          `work §9 prescribes --full at implementation exit — that is the pre-#8322 state: ${line.trim()}`,
+        ).not.toEqual(["--full"]);
+      }
+    }
   });
 });
 
