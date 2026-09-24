@@ -952,10 +952,21 @@ jobs:
         run: ./node_modules/.bin/tsc --noEmit
         working-directory: apps/web-platform
 
+      # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
+      # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
+      # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
+      # step makes a missing binary FAIL that suite instead of skipping it.
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0
+          likec4 --version
+
       - name: Run webplat tests (vitest --shard)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITEST_SHARD: ${{ matrix.shard }}
+          LIKEC4_REQUIRED: "1"
         run: bash scripts/test-all.sh webplat
 
   test-bun:
