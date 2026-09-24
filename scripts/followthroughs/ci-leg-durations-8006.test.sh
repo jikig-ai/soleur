@@ -7,7 +7,7 @@
 #   - SOLEUR_FT_EARLIEST is set, canonical ISO-8601 UTC, and parseable (runs
 #     must postdate it — pre-merge legs predate the carve-out);
 #   - >=3 COMPLETED push-arm main ci.yml runs postdate the cutoff AND are
-#     QUALIFYING: all 8 expected legs present (test-scripts 1/5..5/5 +
+#     QUALIFYING: all 9 expected legs present (test-scripts 1/6..6/6 +
 #     test-scripts-heavy 1/3..3/3), each conclusion=success with non-null
 #     started/completed timestamps;
 #   - no qualifying leg measures >= 900 s.
@@ -65,14 +65,14 @@ mk_run() {
     '{id:$id, event:"push", head_branch:"main", status:"completed", created_at:$ca}'
 }
 
-# write_jobs <id> <leg_seconds> — a full 8-leg green page for run <id>.
+# write_jobs <id> <leg_seconds> — a full 9-leg green page for run <id>.
 write_jobs() {
   local id="$1" dur="$2" name
   {
     printf '{"jobs":['
     local first=1
-    for name in "test-scripts (1/5)" "test-scripts (2/5)" "test-scripts (3/5)" \
-                "test-scripts (4/5)" "test-scripts (5/5)" \
+    for name in "test-scripts (1/6)" "test-scripts (2/6)" "test-scripts (3/6)" \
+                "test-scripts (4/6)" "test-scripts (5/6)" "test-scripts (6/6)" \
                 "test-scripts-heavy (1/3)" "test-scripts-heavy (2/3)" \
                 "test-scripts-heavy (3/3)"; do
       [[ $first -eq 0 ]] && printf ','

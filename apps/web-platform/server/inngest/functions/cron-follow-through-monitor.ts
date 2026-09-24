@@ -78,14 +78,14 @@ import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   mintInstallationToken,
   postSentryHeartbeat,
+  CLAUDE_BUDGET_STOP_SUBTYPE,
   REPO_OWNER,
   REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
-  resolveClaudeBin,
+  spawnClaudeEval,
   type SpawnResult,
-  KILL_ESCALATION_MS,
 } from "./_cron-claude-eval-substrate";
 import {
   validateAndExecutePredicates,
@@ -95,6 +95,7 @@ import {
 // Re-export for test parity (cron-follow-through-monitor.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
 // 73-145, with three idempotency guards (A/B/C) added for Inngest replay
@@ -292,13 +293,8 @@ predicates and SLA status.
 // can assert `--strict-mcp-config` membership + position structurally, rather
 // than via brittle source-text matching.
 export const CLAUDE_CODE_FLAGS = [
-  // #5691 — defensive: this cron passes NO `--plugin-dir`, so it never loads
-  // the plugin-bundled remote MCP servers and makes no MCP dial; the
-  // load-bearing fix here is the telemetry env in buildSpawnEnv. `--strict-mcp-config`
-  // is belt-and-suspenders (guards a future `--plugin-dir` addition / project
-  // `.mcp.json` auto-discovery). Prepended before `--print` (position-safe vs
-  // the trailing `--`). Mirrors spawnClaudeEval; this cron does not route through it.
-  "--strict-mcp-config",
+  // #5691/#8611 — `--strict-mcp-config` is NOT listed here: this cron now routes through
+  // spawnClaudeEval, which prepends it (before `--print`, position-safe vs the trailing `--`).
   "--print",
   "--model", EXECUTION_MODEL,
   "--max-turns", "30",
@@ -357,6 +353,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronFollowThroughMonitorHandler({
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs): Promise<{
   exitCode: number | null;
   durationMs: number;
@@ -547,93 +545,31 @@ export async function cronFollowThroughMonitorHandler({
   // Inject pre-validated predicate results into the prompt so the agent
   // uses server-side results instead of executing network requests.
   const promptWithPredicates = FOLLOW_THROUGH_PROMPT + "\n\n" + predicateResultsMarkdown;
-  const result = await step.run("claude-eval", async (): Promise<SpawnResult> => {
-    const claudeBin = resolveClaudeBin();
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
-    const startedAt = Date.now();
-    let abortedByTimeout = false;
-    let exited = false;
-    let escalationTimer: NodeJS.Timeout | null = null;
-
-    try {
-      return await new Promise<SpawnResult>((resolve) => {
-        const child = spawn(
-          claudeBin,
-          [...CLAUDE_CODE_FLAGS, promptWithPredicates],
-          {
-            detached: true, // own process group so SIGTERM propagates to grandchildren
-            stdio: ["ignore", "inherit", "inherit"],
-            env: buildSpawnEnv(installationToken),
-          },
-        );
-
-        const finish = (r: SpawnResult) => {
-          exited = true;
-          if (escalationTimer) clearTimeout(escalationTimer);
-          resolve(r);
-        };
-
-        // Single merged abort handler — same shape as PR-1.
-        ac.signal.addEventListener(
-          "abort",
-          () => {
-            abortedByTimeout = true;
-            if (!child.pid) return;
-            const pid = child.pid;
-            try {
-              process.kill(-pid, "SIGTERM");
-            } catch {
-              // Process group already gone — fine.
-            }
-            escalationTimer = setTimeout(() => {
-              if (exited) return;
-              try {
-                process.kill(-pid, "SIGKILL");
-              } catch {
-                // Already exited between SIGTERM and the 5 s escalation.
-              }
-            }, KILL_ESCALATION_MS);
-          },
-          { once: true },
-        );
-
-        child.on("exit", (exitCode, signal) => {
-          finish({
-            ok: exitCode === 0,
-            exitCode,
-            signal,
-            abortedByTimeout,
-            durationMs: Date.now() - startedAt,
-          });
-        });
-        child.on("error", (err) => {
-          reportSilentFallback(err, {
-            feature: "cron-claude-eval",
-            op: "child_process.spawn",
-            message: "claude-code spawn failed",
-            extra: { fn: "cron-follow-through-monitor" },
-          });
-          finish({
-            ok: false,
-            exitCode: -1,
-            signal: null,
-            abortedByTimeout,
-            durationMs: Date.now() - startedAt,
-          });
-        });
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  });
+  // #8611 — routed through spawnClaudeEval (was an inline spawn): inherits the single-flight
+  // guard, the cost marker, --strict-mcp-config and the telemetry env from the one chokepoint.
+  // No ephemeral workspace: the child runs in the server process cwd, exactly as the inline spawn did.
+  const result = await step.run("claude-eval", (): Promise<SpawnResult> =>
+    spawnClaudeEval({
+      spawnCwd: process.cwd(),
+      installationToken,
+      flags: CLAUDE_CODE_FLAGS,
+      prompt: promptWithPredicates,
+      maxTurnDurationMs: MAX_TURN_DURATION_MS,
+      cronName: "cron-follow-through-monitor",
+      buildSpawnEnv,
+      logger,
+      runId,
+      attempt,
+    }),
+  );
 
   // Step 4: sentry-heartbeat — single end-of-job POST per
   // 2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md. Sentry slug
   // matches the new monitor resource (Phase 4).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
-      ok: result.ok,
+      // #8611: a run stopped at its --max-budget-usd cap did not finish, even on exit 0.
+      ok: result.ok && result.subtype !== CLAUDE_BUDGET_STOP_SUBTYPE,
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-follow-through-monitor",
       logger,
@@ -660,6 +596,7 @@ export const cronFollowThroughMonitor = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 9 * * 1-5" },

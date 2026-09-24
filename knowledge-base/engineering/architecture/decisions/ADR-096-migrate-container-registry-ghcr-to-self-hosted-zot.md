@@ -8,12 +8,20 @@
 
 ## Status
 
-**Adopting.** The IaC foundations (Phase 1), dual-push (Phase 2), and the dark-launch pull-site
-flip (Phase 3) are merged. The flip is inert until the operator provisions (1.8) + backfills
-(1.9) zot and the entry gate (`zot-entry-gate.sh`) passes. This ADR flips to **accepted** after
-the Phase-5 soak (`zot-soak-6122.sh`: ≥7 days, zero fallback events across all four watched
-signals, sufficient zot sample — necessary but not sufficient; see the alarm-parity note below)
-and GHCR-push retirement (5.3–5.5).
+**Adopting — cut over, not yet accepted** (as of 2026-09-24). zot has served production pulls since
+**2026-07-17T19:51:49Z** and has been the **sole** pull path since about 2026-07-29, when the GHCR
+read PAT was revoked outside any repo change (amendments 2026-07-30 and 2026-09-22; cutover record
+in `runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). That holds for **rolling
+deploys**. A **fresh web boot currently fails**: the web-2 replace on 2026-09-23 booted dark at
+`stage=pull` (#8651; fix in flight as PR #8660), so `stage:"app_zot"` still has 0 events. Do not
+replace a web host until #8651 closes. Retirement is partial. **5.3a** (the `ci-deploy.sh` GHCR
+read path) was delivered on 2026-09-23 by #8036 item 1c; see "Amendment 2026-09-23 (#8036 item 1c)"
+under §Cold-boot-dependency statement. **5.3b, 5.4 and 5.6** wait on the #6122 soak, which cannot pass until
+#8651 closes (its `WEB_BLOCKER` arm) and needs a re-armed window (the backfilled verdict is a
+recorded FAIL; #6500 is open). 5.3b's "stop GHCR push" also collides with ADR-169, whose restore
+gate reads GHCR (see #6122). **5.5**'s revoke half is partly spent: the PAT in `GHCR_READ_TOKEN`
+returns 401 (amendment 2026-07-30), but whether that is the PAT spec TR5 calls exposed is
+unverified. This ADR flips to **accepted** (task 5.6) once 5.3b, 5.4 and 5.5 are complete.
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
@@ -264,6 +272,10 @@ host. Read the amendment before relying on any bullet below:
   `templatefile`, so `ZOT_HEARTBEAT_URL` still has zero consumers by design; that secret is reserved
   for the off-host probe.
 
+  > **Superseded 2026-09-24:** `registry_prd` is armed. Better Stack reads `status=up paused=false`
+  > (re-measured 2026-09-24); `zot-registry.tf`'s comment dates the arming to 2026-07-16. The paragraph
+  > below is the pre-arming record and stays as written.
+
   **NOT YET ARMED as of this edit.** The feeder reaches the host only on a fresh boot (cloud-init is
   per-instance), so `registry_prd` stays **paused** until #6537's post-merge phase reprovisions the
   host, measures a real beat, and *then* unpauses via a one-time API PATCH — never before (#6210).
@@ -390,6 +402,10 @@ host. Read the amendment before relying on any bullet below:
     soak — label + directive + a pinned `START` — is a precondition of Phase 5 that 5.3 must not
     proceed without.** Until then the gate's verdict is not merely insufficient; it is absent.
 
+    > **Superseded 2026-09-23 (#8036 item 1c):** 5.3 split. 5.3a went ahead with the soak NOT
+    > enrolled, on the narrower "no reachable success arm" ground in "Amendment 2026-09-23 (#8036 item
+    > 1c)" below. The precondition above now applies to 5.3b only.
+
     ⚠ **The `ci-deploy.sh:NNN` citations in the paragraph below have ROTTED (marked 2026-07-30,
     #7071) — do not follow them.** Spot-checked: `:790/799/807`, `:857` and `:707,776-777` now
     land on unrelated text. The real emit sites are name-anchored, which is what this ADR itself
@@ -429,7 +445,8 @@ host. Read the amendment before relying on any bullet below:
     **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
     clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR
     fallback, then hard-fail signature verify. During soak `ZOT_ACTIVE=0`, so both are latent and the
-    pre-flip zot-entry-gate/soak-gate catch them; the mirror step's cosign-failure path emits a
+    pre-flip zot-entry-gate/soak-gate catch them (**superseded:** the cutover set `ZOT_ACTIVE=1` on
+    2026-07-17, so both shapes are live, not latent); the mirror step's cosign-failure path emits a
     re-sign-specific remediation (a bare `crane copy` backfill does not re-sign).
 
     > **Amendment 2026-09-23 (#8036 item 1c): 5.3 SPLITS INTO 5.3a AND 5.3b, AND 5.3a IS DONE.**
@@ -543,7 +560,9 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
 
 The registry host's boot credential is scoped to a **dedicated Doppler project `soleur-registry`**
 whose own `prd` root config holds ONLY `ZOT_PULL_TOKEN` + `ZOT_PUSH_TOKEN` — **not** a `prd` branch
-config. The original design placed the host token in a `prd_registry` **branch config under the
+config. (**Superseded:** #6244 and #6895 later admitted `BETTERSTACK_LOGS_TOKEN` and
+`REGISTRY_LUKS_KEY` by name. Re-measured 2026-09-24, the config holds exactly those 4, matching the
+boot self-check in `cloud-init-registry.yml`.) The original design placed the host token in a `prd_registry` **branch config under the
 `prd` environment** and claimed it isolated the host. That claim was **structurally impossible**:
 in Doppler, every config within an environment resolves that environment's ROOT config as its base,
 so a token scoped to a `prd` branch config reads the full `prd` secret set — empirically verified to
@@ -1273,3 +1292,108 @@ future verdict:
 Re-arming the soak with a new window after the causes are fixed is an operator decision
 recorded on #6122. It is not a parameter change. **The soak is not enrolled** in the sweeper:
 with this `START`, its verdict is fixed at FAIL, so a daily run adds no information.
+
+## Amendment 2026-09-23 (#8651) — the web cold-boot pull site is migrated, by BAKE
+
+**State at merge: armed in source, not yet observed on a host (`adopting`).** Merging changes no
+host (`hcloud_server.web` ignores `user_data`). The observed claim is appended when a
+`web-host-replace` of web-2 boots zot-served. `scripts/followthroughs/web-fresh-boot-zot-8651.sh`
+owns the closure of issue 8651 and grades only that replace job's own log, never a Sentry event:
+the web-platform DSN is public, so a Sentry event alone is forgeable.
+
+### What was wrong — and a correction to three earlier statements
+
+The web seed pull in `cloud-init.yml` chose zot only if `doppler secrets get ZOT_REGISTRY_URL`
+returned a value and a 3-second `/v2/` probe then answered. The Doppler read never returned a
+value. Every Doppler call above the terminal block's `set -a; . /etc/default/webhook-deploy; set +a`
+ran with no `DOPPLER_TOKEN` in its environment. Either the token file had not been sourced in that
+shell at all (the read that decided the ref), or it had been sourced with a bare `.` inside a
+subshell, which assigns without exporting (#6985). Every call was tokenless (reproduced:
+`Doppler Error: you must provide a token`), its error was swallowed, and the ref stayed on GHCR
+**before the probe was evaluated at all**. Sentry over 90 days: 0 `app_zot`, 0 `app_ghcr_fallback`,
+3 `app_ghcr_served`. Once the GHCR read PAT was revoked (AP-016), every fresh web boot was dark. The
+replace of web-2 in run 35912244388 failed at `stage=pull` with
+`ghcr_login_fail: … denied | pull_err: … unauthorized`.
+
+This corrects three dated statements above. They are left as written; this entry supersedes them:
+
+- 2026-08-13: "the measured cold-boot fact the web host records — Doppler answers EMPTY at the
+  boot instant". What the web host recorded was its own tokenless call. It says nothing about
+  Doppler's availability. The inngest bake still stands on its other grounds: no Doppler network
+  dependency at cold boot, and the fail-closed isolation check.
+- 2026-08-13: "Everywhere else in the fleet, zot config is read from Doppler at boot". After this
+  change no `cloud-init.yml` runcmd site reads zot config from Doppler. `soleur-host-bootstrap.sh`
+  still carries a tokenless `ZOT_REGISTRY_URL` read that the bake supersedes. It is dead code, left
+  in place because any host-script edit breaks the replace job's coherence preflight against
+  web-1's running image. Only the **deploy path** (`ci-deploy.sh`, under the webhook unit's
+  exported environment) reads zot config from Doppler with a token.
+- 2026-09-22: "`stage:"app_zot"` has 0 events, because no web host has been freshly booted since
+  2026-07-27". The zero had a second cause: no fresh web boot *could* reach zot. The replace on
+  2026-09-23 is that case.
+
+The issue body and the soak blocker commit attribute the dark boot to "the 3-second probe
+losing". The code and the telemetry say otherwise. The soak's `WEB_BLOCKER` arm is not edited:
+its gate (issue 8651 CLOSED as COMPLETED) is correct whatever the mechanism.
+
+### Decision
+
+- **Bake, like inngest.** The endpoint is the compile-time `local.registry_endpoint`, which was
+  already in `user_data` as the `insecure-registries` entry. The pull credential is
+  `local.zot_pull_user` plus `random_password.zot_pull.result`, read from the in-root resource
+  rather than a new root variable (see the whole-apply hazard in `inngest-host.tf`). There is no
+  Doppler read on the resolution path and no probe. The bounded, retried, timeout-wrapped pull
+  is the probe. The zot pull runs only after a successful zot login, since zot allows no
+  anonymous access, and a timed-out attempt stops the retries.
+- **Zot-first only for digest-pinned GHCR refs.** Only a `ghcr.io/…@sha256:` ref is rewritten
+  to zot. A digest pin is the integrity guarantee on a plain-HTTP link (ledger row "web hosts
+  -> zot registry", exception #6897). Any other ref, including a tag, is **never sent to zot**
+  and records `cause=unpinned`. It then takes the login-gated GHCR leg (TLS). While AP-016 holds,
+  that leg fails at login and the boot fails loud. With a restored GHCR credential it would be
+  served by GHCR over TLS, and the `unpinned` cause is still recorded in the success detail.
+  Every dispatch path pins `@sha256` (`host-image-coherence-preflight.sh`).
+- **The GHCR leg fails closed at login.** A GHCR pull is attempted only after the baked GHCR
+  login succeeds. A dead credential therefore surfaces as `ghcr=[login=fail,pull=not-attempted]`
+  (or `login=empty` when the bake is blank) in the fatal detail, not as a 401 at pull. This closes
+  the fail-open-login / fail-closed-pull asymmetry #6500 documented. The leg itself stays: its
+  retirement remains #8036 1d and 5.3 here, and the #6285 tripwire comment is kept. **Web fresh
+  boot now depends entirely on zot reachability** while AP-016 holds. That is the consequence the
+  inngest amendment states, now true of every fresh-boot site in the fleet.
+- **The private NIC is converged, then waited for** (#6438, the web half of the #8539 race; CTO
+  ruling). Web hosts attach the private network through a separate `hcloud_server_network.web`,
+  exactly like inngest, and ADR-115 records that waiting alone does not configure a hot-attached
+  NIC that networkd left `unmanaged`. `write_files` ships the inngest
+  `99-soleur-private-fallback.network` byte-for-byte, and runcmd runs `networkctl reload` early.
+  If the reload fails it emits `private_nic_probe_fault` (detail `gate=reload`), a stage the existing alert already routes.
+  Then a counter-bounded, fail-open 75 × 2 s wait reports `private_nic_timeout` /
+  `private_nic_probe_fault` (routed by `web_private_nic_boot_gate`; detail `gate=seed`) and
+  nothing on ready. Its outcome rides the detail as `nic=<outcome>:<s>`. The baked `soleur-wait-nic`
+  ships inside the image this pull fetches, so it cannot run first. ADR-123's amendment records
+  why a create-time file on a not-yet-serving host is not the live-origin self-convergence that
+  ADR-123 forbids.
+- **Failures name both legs, fixed fields first.** `_emit` caps `detail` at 200 characters, so
+  the fixed fields come before any free text:
+  `nic=<o>:<s> zot=[login=,n=,cause=auth|unreach|manifest|timeout|unpinned|other] ghcr=[login=,pull=] pull_err: <redacted tail>`.
+  Tails are redacted before the cut. The per-leg wording matches the inngest
+  `oci-pull-ALL-LEGS-FAILED` marker. The same `zot=[…]` fields ride the `app_ghcr_fallback`
+  detail and the success detail (`zot_login=… ghcr_login=… nic=… zot=[…]`), so a GHCR-served boot
+  still says why zot missed. `_emit` and the `bootcmd` beacon gain a `host_name` tag, since run
+  35912244388's events printed `host=?`.
+- **`_emit`'s Doppler DSN fallback is deleted.** It could spawn doppler whenever the baked DSN
+  was empty but could never return a value (tokenless, per the above).
+- **No `doppler` invocation remains in `cloud-init.yml` runcmd above the terminal exporting
+  source.** `cloud-init-web-zot-seed.test.sh` pins this with a census: 11 call sites at the
+  branch point, 0 after.
+
+### What this does NOT do
+
+It does not retire the GHCR leg (#8036 1d / 5.3), change any host-script (that would break the
+replace job's coherence preflight against web-1's running image), deliver the networkd file to
+web-1 through the SSH provisioners (that would be the live-origin change ADR-123 forbids), or
+rotate any credential. `random_password.zot_pull` is create-time in `user_data`, so rotating it
+strands fresh boots of hosts created before the rotation. This is the same as inngest.
+
+It also narrows one soak signal, recorded for the operator rather than changed here. With GHCR
+dead, a fresh-boot zot miss now emits only the `stage=pull` fatal, not `app_ghcr_fallback`.
+`zot-soak-6122.sh`'s `FAIL_QUERIES` does not count that fatal (DC-3 in
+`knowledge-base/project/specs/archive/20260924-005225-feat-one-shot-8651-web-host-zot-primary-boot/decision-challenges.md`;
+tracked on #6122).

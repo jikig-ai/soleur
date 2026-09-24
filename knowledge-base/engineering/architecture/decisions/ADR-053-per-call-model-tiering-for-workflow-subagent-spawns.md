@@ -38,7 +38,7 @@ Phase 0 of the adoption PR captured ground truth with a one-spawn probe workflow
 |---|---|---|
 | Plugin workflow pins | harness enum alias (`'sonnet'`, `'haiku'`) | Zero repo maintenance — but subject to **silent retargeting**: the harness re-aiming an alias to a successor generation changes every pin's cost/behavior contract with no repo diff and no CI signal. The transcript grep (above) is the only way to observe which concrete model an alias resolved to. |
 | CI pins (`claude_args: '--model claude-sonnet-4-6'`) | concrete ID | Hard-fails loudly (404) at retirement; re-pin is a one-line edit + action-pin sync (learning 2026-04-18). |
-| Inngest cron constants (web platform) | concrete IDs, partly dated | Hard-fail loudly; registry consolidation deferred to #5106. |
+| Inngest cron constants (web platform) | concrete IDs, partly dated | Hard-fail loudly; registry consolidation deferred to #5106. `AUDIT_EFFORT` (#8603) is the exception: an effort value the pinned CLI does not accept fails **silently** (fallback to the default effort), so it is gated by the CI probe in `claude-cli-pin-knows-models.test.ts` and mirrored to Sentry at runtime. |
 | SKILL.md prose advisories | harness enum alias in prose | Advisory-only, no mechanical gate; discoverable via `grep -rn 'model: sonnet\|model: haiku' plugins/soleur/skills/*/SKILL.md`; mechanical-step classes only, must cite this ADR. |
 
 #5100 (`model-launch-review` skill) is the re-pin trigger for all three surfaces at each model release.
@@ -88,6 +88,9 @@ funding and different protections, and found a sixth the first draft had no row 
 | 5a. Product runtime — **founder BYOK** | `claude-sonnet-5` leader loop + routers, `claude-haiku-4-5` domain routing | **none** | Spend is capped by ADR-041's 260¢ per-spawn ceiling. Fable's 5× output multiple would exhaust it far faster for the same work. |
 | 5b. Product runtime — **operator-key crons** | `AUDIT_MODEL = claude-opus-5` (`server/inngest/model-tiers.ts`), consumed by 53 `cron-*.ts` functions | **none** | These do **not** run on founder BYOK — `cron-agent-native-audit.ts` states "Operator ANTHROPIC_API_KEY only; never founder BYOK", enforced by `test/server/cron-no-byok-lease-sweep.test.ts`. So the 260¢ ceiling does **not** protect them; they spend Soleur's own uncapped money. Ruled out instead by ADR-053's never-downgrade list (enumeration-scoring is the sonnet→opus upgrade precedent) — Opus is already the deliberate tier, and Fable's 5× output multiple on report-shaped crons lands at 1.6–1.75× Opus with no judgment gain. |
 | 6. CI / GitHub Actions | `claude-code-review.yml` pins `--model claude-sonnet-5` and fires **per PR**; `fix-constraints-stage-a.yml` and `test-pretooluse-hooks.yml` pin the same; 13 `scheduled-*.yml` crons default to `claude-sonnet-5` via `schedule/SKILL.md` | **none** | `claude-code-review.yml`'s own comment cites ADR-053 and calls itself "an unbounded per-PR spend surface" — it is a supplementary advisory commenter, exactly the mechanical/advisory class this ADR pins DOWN. Upgrading it would multiply an already-unbounded surface by the PR rate. |
+
+> **Superseded 2026-09-23 (#8611 review):** row 5b's `AUDIT_MODEL = claude-opus-5` is stale —
+> `AUDIT_MODEL` is `claude-opus-5-5` since #8601 (same tier, cheaper on every price axis).
 
 ### A Task spawn is cache-read-dominated — measured, after a first draft asserted the opposite
 
@@ -211,7 +214,36 @@ recorded; at Opus 5.5 prices the Opus row reads 4 / 20 (2.5× cheaper than Fable
 and its cache-read rate equals Sonnet 5's. The tiering decision itself is unchanged: the swap
 is same-tier and cheaper per token. Opus 5.5's API default effort is `medium` (Opus 5: `high`);
 the CLI sets effort itself, so this is a flag for the model-launch-review Thinking-API item,
-not a config change.
+not a config change. **(Superseded 2026-09-23, #8603 — see Amendment below.)**
+
+## Amendment — 2026-09-23 (#8603)
+
+Surface 5b now pins **effort alongside the model**: `AUDIT_EFFORT = "high"` in
+`server/inngest/model-tiers.ts`, paired with `AUDIT_MODEL` in the single tuple `AUDIT_CLI_ARGS`
+that the six audit crons spread into their `claude` argv (the "53" in the 2026-09-03 surface
+table above is a miscount — measured 6 consumers). The CLI "sets effort itself" from the
+per-model `default_effort` in its bundled table, and claude-opus-5-5's row reads `medium`, so
+leaving effort unset silently lowered audit reasoning depth at the 5 → 5.5 swap with no argv
+change. A tier whose rationale is reasoning depth cannot inherit an unowned default.
+
+- Execution-tier crons stay on the CLI default. Their drift at a future launch is accepted, and it
+  cannot happen silently: the CI test pins both tiers' `default_effort` in the installed bundle
+  (`REVIEWED_DEFAULT_EFFORT` in `claude-cli-pin-knows-models.test.ts`), so a CLI bump that moves
+  either value reds until someone re-decides `AUDIT_EFFORT` and accepts the execution default.
+- Changing `AUDIT_EFFORT` is a same-tier tuning change, not re-tiering.
+- "The pinned CLI knows every tier id and accepts the effort value" is now a CI invariant
+  (`apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts`), not only a
+  hand-run audit item. An unknown `--effort` **value** is a warning plus a silent fallback to the
+  default (exit 0), so the CI probe is the gate, and the cron substrate mirrors the warning to
+  Sentry (`op: claude-effort-fallback`) at runtime.
+- Considered and not taken: an `EXECUTION_CLI_ARGS` tuple for symmetry — it touches nine more
+  crons and one event function, and the execution tier already has its chokepoint (every other
+  `--model` argv names `EXECUTION_MODEL`, pinned by `model-tiers.test.ts`).
+- Known constraint: `model-tiers.ts` now carries CLI argv (`AUDIT_CLI_ARGS`), and
+  `model-tiers.test.ts` forbids naming `AUDIT_MODEL` anywhere in `server/inngest/functions/`. A
+  future audit-tier caller that uses the Messages API instead of the CLI needs its own carve-out
+  and its own effort mapping. Effort is a cron-registry attribute, not part of ADR-110's semantic
+  tier map.
 
 ## Alternatives considered
 
@@ -221,6 +253,7 @@ not a config change.
 | Session-relative tiers ("one below session") | Runtime supports absolute values only; non-deterministic cost contract |
 | `TIER_PINS` per-workflow map (single source for pins + disclosure log) | Contradicted the allowlist-test/grep gates (map reference vs inline literal); deleted at 5-agent plan review — inline literals + adjacent log line + the standing allowlist test cover the same drift risk mechanically |
 | Tee-hook-only telemetry attribution | Empirically impossible for workflow spawns (finding 1 above) |
+| Leave audit-cron effort to the CLI's per-model default (#8603) | The default moved high → medium at the Opus 5 → 5.5 swap with no argv change; a tier whose rationale is reasoning depth cannot inherit an unowned default |
 
 ## Consequences
 

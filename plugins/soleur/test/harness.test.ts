@@ -331,12 +331,19 @@ describe("pollInstructions", () => {
     expect(md).toContain("postmerge");
   });
 
-  test("devin documents get_output merge-deploy polling", () => {
+  test("devin arms merge-deploy waits as a background run_subagent loop", () => {
     const md = pollInstructions("devin");
-    expect(md).toContain("get_output");
+    expect(md).toContain("run_subagent");
+    expect(md).toContain("exit-coded");
     expect(md).toContain("/soleur:postmerge");
     expect(md).toContain("NEVER ask");
     expect(md).toContain("BEHIND");
     expect(md).toContain("/soleur:ship");
+    // The whole point of #8390's item 2: `devin/INSTRUCTIONS.md` measures that
+    // `get_output` only READS a backgrounded shell and cannot wait on an event,
+    // so naming it as the wait primitive tells a Devin session it is waiting
+    // while nothing will ever wake it. Absence is the property; a `toContain`
+    // on the replacement cannot express it.
+    expect(md).not.toContain("get_output");
   });
 });

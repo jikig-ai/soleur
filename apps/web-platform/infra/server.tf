@@ -411,6 +411,41 @@ resource "hcloud_server" "web" {
     # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
     # host classes instead of drifting from a hardcoded copy.
     registry_endpoint = local.registry_endpoint
+    # #8651 (ADR-096 amendment 2026-09-23) — the fresh-boot seed pull is zot-first by BAKE, the
+    # inngest-host.tf precedent (#7462). Before this, cloud-init.yml chose zot only if
+    # `doppler secrets get ZOT_REGISTRY_URL` answered, and every such read ran with no DOPPLER_TOKEN
+    # in its environment — the file was never sourced in that shell, or sourced with a bare `.` in
+    # a subshell, which assigns without exporting (#6985). Every read answered empty and the ref
+    # stayed on GHCR, whose read PAT is revoked (AP-016): every fresh web boot was dark. Sentry,
+    # 90 days: 0 app_zot, 3 app_ghcr_served.
+    #
+    # Read from the in-root resources, NOT a new root variable: a no-default root var resolves
+    # before -target pruning and breaks every apply that does not set it (the "WHOLE-APPLY
+    # HAZARD" inngest-host.tf documents). `random_password.zot_pull` already exists in state and
+    # is read-only in zot (cloud-init-registry.yml accessControl actions ["read"]).
+    #
+    # Behaviour and bounds of the seed item (kept here, not in the byte-budgeted template):
+    #   - Only a `ghcr.io/…@sha256:` ref is rewritten to zot — the digest is the integrity guarantee
+    #     on a plain-HTTP link (ledger row "web hosts -> zot registry", exception #6897). Any other
+    #     ref is never sent to zot (cause=unpinned in the detail) and takes the login-gated GHCR
+    #     leg, which fails at login while AP-016 holds.
+    #   - zot login: up to 3 x `timeout 60`, 5 s apart; the zot pull runs ONLY after a successful
+    #     login (zot has no anonymous access), up to 3 x `timeout 180`, and a timed-out attempt
+    #     stops the retries. The GHCR pull likewise runs only after its baked login succeeds.
+    #   - Private NIC (#6438/#8539, CTO ruling, ADR-123 amendment): write_files ships the inngest
+    #     `99-soleur-private-fallback.network` byte-for-byte and runcmd reloads networkd early, so
+    #     a late-hot-attached NIC is CONFIGURED, not just waited for; then a counter-bounded
+    #     75 x 2 s wait (soleur-inngest-nic-wait's bound) reports timeout/probe_fault, never aborts.
+    #     The baked soleur-wait-nic cannot run first — it ships inside the image this pull fetches.
+    #   - Worst case before the seed fatal, GHCR dead: ~150 s wait + ~190 s login, or + ~190 s
+    #     login + 180 s pull when zot authenticates but hangs. soleur-host-bootstrap.sh's
+    #     SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 derivation predates this; it is a host-script
+    #     (editing it breaks the replace job's coherence preflight against web-1), so it is not
+    #     re-derived in this change. fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
+    #   - The value is create-time: `-replace=random_password.zot_pull` strands fresh boots of
+    #     hosts created before the rotation (ignore_changes = [user_data]) — same as inngest.
+    zot_pull_user  = local.zot_pull_user
+    zot_pull_token = random_password.zot_pull.result
     # (#6459 Phase 2.2 PART 2) Per-host inputs for web-probe-envwrite.sh, which writes the 3
     # /etc/default/web-<probe> EnvironmentFiles on a fresh cattle host (the SSH remote-exec path
     # only reaches web-1). Values single-sourced from the SAME expressions the SSH provisioners use:
