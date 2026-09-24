@@ -1,0 +1,80 @@
+name: Cancel superseded PR runs
+
+# Reaps this PR's still-queued / still-running workflow runs whose head SHA is no
+# longer the PR head, so a superseded run stops holding a hosted runner and, for
+# tenant-integration.yml, the dev-Supabase mutex the new head's required check waits
+# on. On 2026-09-23 an operator cancelled 17 such runs by hand (tenant-integration,
+# vendor-pin-verify, infra-validation, constraint-gates, cla-evidence, CLA Assistant
+# and CodeQL default-setup `dynamic` runs).
+#
+# SAME-SHA IS NEVER CANCELLED. tenant-integration.yml and vendor-pin-verify.yml keep
+# `cancel-in-progress: false` on purpose (#5585 R3): a group-keyed cancel also fires on
+# a SAME-SHA re-trigger (ready_for_review, a label) and fails the required gate on the
+# head SHA. This workflow keys on head_sha instead and never cancels a run whose head
+# SHA is the PR's current head, so those settings are unaffected and stay as they are.
+# Selection rules, race guards and the graceful-cancel-only rule live in the script
+# header; decision record: ADR-216, addendum 2026-09-24.
+#
+# SECURITY. This is a pull_request workflow holding `actions: write`, so the executed
+# script is checked out from the DEFAULT BRANCH, never from the PR: changing
+# .github/scripts/ needs no `workflows` permission, and a PR-controlled copy would hand
+# actions: write (cancel any run, dispatch workflows) to anyone who can push a branch.
+# There is deliberately no fallback to the PR's copy. PR-controlled values (head.ref)
+# reach the script only through env:, never inside run:.
+#
+# CONCURRENCY: per PR, cancel-in-progress, so an older reaper still queued is replaced
+# by the newer one. scripts/pr-fanout-ledger.txt carries this workflow's row with
+# cancel=yes; plugins/soleur/test/pr-fanout-ledger.test.sh reddens if that flag and
+# this block ever disagree. Fixture suite:
+# .github/scripts/test/test-cancel-superseded-pr-runs.sh (guard-script-fixture-tests).
+
+on:
+  pull_request:
+    types: [synchronize, reopened]
+
+permissions:
+  actions: write        # list + cancel runs
+  contents: read        # actions/checkout of .github/scripts
+  pull-requests: read   # live PR head re-check (race guard)
+
+concurrency:
+  group: cancel-superseded-pr-runs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cancel-superseded:
+    # Fork PRs and Dependabot-triggered runs get a read-only GITHUB_TOKEN: skip the job
+    # (it concludes `skipped`, never red). A PR opened FROM the default branch is skipped
+    # too: listing branch=main pages through every main run, and the script's
+    # default-branch rule would skip all of them anyway.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      github.triggering_actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.ref != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Cancel this PR's runs on superseded head SHAs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SELF_RUN_ID: ${{ github.run_id }}
+        # Bootstrap: until the script is on the default branch, print a notice and exit 0
+        # rather than fall back to the PR's copy (see SECURITY above).
+        run: |
+          if [[ ! -f .github/scripts/cancel-superseded-pr-runs.sh ]]; then
+            echo "::notice::cancel-superseded-pr-runs: script not on the default branch yet (bootstrap) — nothing reaped"
+            exit 0
+          fi
+          bash .github/scripts/cancel-superseded-pr-runs.sh
