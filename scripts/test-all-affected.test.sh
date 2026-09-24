@@ -229,15 +229,27 @@ ran_count() { awk -F'\t' '$1=="RAN"' <<<"$ARM_RECORD" | wc -l | tr -d ' '; }
 
 # Runnable-registration count for "everything ran" asserts. $1 = runner path —
 # the REAL runner for row d's real-corpus receipt count, the trimmed SANDBOX
-# copy for the arms (whose "everything" is the keep-list stream). Memoized per
-# path: every sandbox build carries the same trim, so the count is stable.
+# copy for the arms (whose "everything" is the keep-list stream). $2 (optional) =
+# the SANDBOX_DIFF_NAMES the arm ran under. It is NOT optional in spirit for a
+# sandbox arm: the enumerate reads the diff too (the infra runner registers only
+# when the diff touches apps/web-platform/infra/), so without it the count comes
+# from the HOST branch's real diff — 5 on any infra-touching PR, 4 on main — and
+# row t failed deterministically on #8668 while passing on main. Memoized per
+# (path, diff).
 RUNNABLE_N="" RUNNABLE_N_FOR=""
 runnable_n() {
-  if [[ "$RUNNABLE_N_FOR" != "$1" ]]; then
-    RUNNABLE_N=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
-      SOLEUR_DISABLE_SESSION_STATE=1 bash "$1" --enumerate-commands 2>/dev/null \
-      | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')
-    RUNNABLE_N_FOR="$1"
+  local key="$1|${2-<host>}"
+  if [[ "$RUNNABLE_N_FOR" != "$key" ]]; then
+    if [[ -n "${2+x}" ]]; then
+      RUNNABLE_N=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
+        SOLEUR_DISABLE_SESSION_STATE=1 "SANDBOX_DIFF_NAMES=$2" bash "$1" --enumerate-commands 2>/dev/null \
+        | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')
+    else
+      RUNNABLE_N=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
+        SOLEUR_DISABLE_SESSION_STATE=1 bash "$1" --enumerate-commands 2>/dev/null \
+        | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')
+    fi
+    RUNNABLE_N_FOR="$key"
   fi
   printf '%s\n' "$RUNNABLE_N"
 }
@@ -629,10 +641,10 @@ rc=0
 ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
 _ran=$(ran_count)
 if grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
-  && (( _ran == $(runnable_n "$_sbn") )); then
+  && (( _ran == $(runnable_n "$_sbn" .github/workflows/apply-sentry-infra.yml) )); then
   pass "t: ordinal divergence drops the selection map; every suite runs (ran=${_ran})"
 else
-  fail "t: divergent map ran=${_ran} runnable=$(runnable_n "$_sbn") divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
+  fail "t: divergent map ran=${_ran} runnable=$(runnable_n "$_sbn" .github/workflows/apply-sentry-infra.yml) divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
 fi
 
 # --- Row u: self-only derivation demotes to unclassified and RUNS -----------------
