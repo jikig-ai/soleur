@@ -32,14 +32,23 @@ const GITHUB_FETCH_TIMEOUT_MS = 15_000;
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
+  callerSignal?: AbortSignal,
 ): Promise<Response> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // A caller that has given up (a staging deadline, #8623) gets no further
+    // attempts — without this a deadline would leave the retry loop running on.
+    if (callerSignal?.aborted) {
+      throw callerSignal.reason instanceof Error
+        ? callerSignal.reason
+        : new Error("GitHub API request aborted by caller");
+    }
     try {
       // Each attempt gets a fresh AbortSignal — a timed-out signal cannot be reused
+      const timeout = AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS);
       const response = await fetch(url, {
         ...init,
-        signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
+        signal: callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout,
       });
       // Retry on 5xx (GitHub transient errors)
       if (response.status >= 500 && attempt < MAX_RETRIES) {
@@ -56,7 +65,7 @@ async function fetchWithRetry(
       return response;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      if (attempt < MAX_RETRIES && isRetryable(err)) {
+      if (attempt < MAX_RETRIES && isRetryable(err) && !callerSignal?.aborted) {
         log.warn(
           { attempt: attempt + 1, err: lastError.message, url },
           "GitHub API fetch failed — retrying",
@@ -74,20 +83,26 @@ async function fetchWithRetry(
 /**
  * Make an authenticated GET request to the GitHub API.
  * Handles 403 (permission upgrade needed) with a descriptive message.
+ * `opts.signal` lets a caller abandon the request AND its retries (#8623).
  */
 export async function githubApiGet<T = unknown>(
   installationId: number,
   path: string,
+  opts?: { signal?: AbortSignal },
 ): Promise<T> {
   const token = await generateInstallationToken(installationId);
 
-  const response = await fetchWithRetry(`${GITHUB_API}${path}`, {
-    headers: {
-      Authorization: `token ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
+  const response = await fetchWithRetry(
+    `${GITHUB_API}${path}`,
+    {
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
     },
-  });
+    opts?.signal,
+  );
 
   if (!response.ok) {
     await handleErrorResponse(response, path);
