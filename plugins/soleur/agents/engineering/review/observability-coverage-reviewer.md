@@ -130,7 +130,7 @@ Preflight Check 10 **executes** this command inside a sandbox behind a deny-by-d
 
 Two further shapes are **P1** on a block this PR authors or amends (#8412; a non-placeholder `credentials_required` short-circuits both, since Check 10 row 4 `SKIP-DECLARED` precedes rows 9 and 11). First, a `command` that cannot finish inside Check 10's **15-second cap** — a whole test suite or full build is killed at `rc=124` and reported as a FAILED probe, indistinguishable from the endpoint being down; wrapping it in a repo-relative script satisfies the verb allowlist and not the cap. Second, an `expected_output` that is PROSE (or absent) rather than the literal string(s) the command prints: Check 10 asks whether any token of `expected_output` is a substring of stdout, so a sentence cannot be relied on to match and the probe FAILs on a healthy system. Canonical statement: `plugins/soleur/skills/plan/SKILL.md` Phase 2.9 **Reject conditions**.
 
-Treat `credentials_required` as a **verification waiver**, and review it as one. It is the cheapest path to a non-FAIL for any probe, for any reason, and in `/soleur:one-shot` the same agent authors the declaration and runs the gate. Accept it only where the property genuinely has no unauthenticated substitute; where an unauthenticated probe would verify the same property, a declaration that swaps live verification for prose is a **P1 finding**. Canonical gate: `plugins/soleur/skills/preflight/SKILL.md` §Check 10 Step 10.4 (ADR-175).
+Treat `credentials_required` as a **verification waiver**, and review it as one. It is the cheapest path to a non-FAIL for any probe, for any reason, and in `soleur:one-shot` the same agent authors the declaration and runs the gate. Accept it only where the property genuinely has no unauthenticated substitute; where an unauthenticated probe would verify the same property, a declaration that swaps live verification for prose is a **P1 finding**. Canonical gate: `plugins/soleur/skills/preflight/SKILL.md` §Check 10 Step 10.4 (ADR-175).
 
 ### Step 7: Report
 
@@ -143,5 +143,5 @@ Only report findings you are >70% confident in. Drop signals where the rule clea
 ## What you DO NOT do
 
 - You don't review code style, simplicity, or architecture — those belong to other reviewer agents.
-- You don't review security findings — `security-sentinel` covers those.
+- You don't review security findings — `soleur:engineering:review:security-sentinel` covers those.
 - You don't audit existing observability surfaces beyond the diff — only new/modified content is in scope.

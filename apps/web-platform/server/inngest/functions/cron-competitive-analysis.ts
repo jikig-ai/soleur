@@ -159,9 +159,9 @@ Creating the analysis issue above is REQUIRED: the platform only persists your c
 // Persistence allowlist (#5111): the full cascade write-set, NOT just the
 // report file — the Cascade Delegation Table in
 // plugins/soleur/agents/product/competitive-intelligence.md routes findings
-// to content-strategist (content-strategy.md), product-pricing-strategist
-// (pricing-strategy.md), sales-battlecards (battlecards/), and seo-refresher
-// (seo-refresh-queue.md). This is a deliberate widening: the old prompt
+// to growth-strategist (content-strategy.md), pricing-strategist
+// (pricing-strategy.md), deal-architect (battlecards/), and
+// programmatic-seo-specialist (seo-refresh-queue.md). This is a deliberate widening: the old prompt
 // committed ONLY competitive-intelligence.md and silently discarded the
 // cascade outputs. The agent file's CASCADE LIMIT-4 comment caps the
 // specialist fan-out at 4 — widening the cascade there requires widening
