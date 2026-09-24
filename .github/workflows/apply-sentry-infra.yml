@@ -36,9 +36,10 @@
 #      byte-identical to #6074, only louder in a place nobody watches.
 #
 # Authorization model: the PR merge IS the human authorization. The 4 AUTH
-# issue-alert resources carry `ignore_changes` on their v2 attributes (they are
-# import-only; a fresh apply would 412), so they plan as no-op under full-root
-# rather than needing to be excluded by omission.
+# alert rules are `sentry_alert` blocks: the three Terraform owns outright
+# (`ignore_changes = [environment]`) plan as no-op unless live state drifted
+# (the apply then restores them); the frozen one (`ignore_changes = all`) always
+# plans no-op, so its drift is visible only to the fidelity probe's frozen pin.
 #
 # Kill switch: include `[skip-sentry-apply]` in the merge commit message to
 # skip auto-apply for that merge.

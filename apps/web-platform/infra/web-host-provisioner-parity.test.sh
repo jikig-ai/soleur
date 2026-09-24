@@ -68,7 +68,7 @@
 # delivered artifact is a Phase-5-class change that should cost a deliberate edit here. The §0
 # PARSE floors keep slack on purpose -- cloud-init.yml and the bake list legitimately shrink as
 # artifacts move onto the image. That slack is real and worth naming: baked 49 vs floor 40,
-# write_files 13 vs floor 10, bootstrap installs 46 vs floor 30. Inside each window an extraction
+# write_files 14 vs floor 11 (13 vs 10 until #8651 added the networkd fallback file), bootstrap installs 46 vs floor 30. Inside each window an extraction
 # can go partially blind without tripping the floor (review demonstrated three write_files paths
 # hidden at 13->10), so the §0 floors detect a COLLAPSED parse, not a degraded one. The
 # per-destination checks in §2/§3 are what cover the degraded case.
@@ -174,10 +174,10 @@ else:
 
 # cloud-init write_files paths (structural, anchored to the list-item shape)
 wf_paths = set(re.findall(r'^\s*-\s*path:\s*(\S+)\s*$', ci, re.M))
-if len(wf_paths) >= 10:
+if len(wf_paths) >= 11:
     ok(f"0: parsed cloud-init write_files ({len(wf_paths)} paths)")
 else:
-    no(f"0: cloud-init write_files parsed to only {len(wf_paths)} paths (floor 10) -- extraction broken")
+    no(f"0: cloud-init write_files parsed to only {len(wf_paths)} paths (floor 11) -- extraction broken")
 
 # soleur-host-bootstrap.sh installs. Two shapes:
 #   (a) `for f in A B C; do ... install ... "$SEED/$f" "<DIR>/$f"; done`  -> DIR/A, DIR/B, ...

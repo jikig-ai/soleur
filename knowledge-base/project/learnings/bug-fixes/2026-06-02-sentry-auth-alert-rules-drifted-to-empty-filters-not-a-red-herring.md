@@ -111,3 +111,19 @@ now report non-empty conditions+filters. Recurrence guard tracked in **#4781**.
   populate it is skipped or fails, the resource silently keeps its empty
   placeholder. Any "import-only + ignore_changes" design needs a positive audit
   assertion (non-empty filters) or it can drift to a catch-all without any signal.
+
+## Closing note — Corrected 2026-09-23 (#4781)
+
+> - **Guard.** The three burst rules are Terraform-owned `sentry_alert` blocks
+>   (#7650); `auth-per-user-loop` is a Terraform-frozen `sentry_alert` (#8451,
+>   adopted by PR #8453). `scripts/sentry-alert-live-fidelity.sh` compares all
+>   four against live Sentry daily and after every apply: emptied triggers print
+>   `DRIFT` on a burst rule and `FROZEN DRIFT` + `FROZEN RULE LEFT SCOPE` on the
+>   frozen one; emptied tag filters alone print `DRIFT` / `FROZEN DRIFT`. Pinned
+>   by suite rows F35 and F37. #4781 is closed by PR #8654.
+> - **Limits.** For `auth-per-user-loop` the guard detects only: repair is a PUT
+>   from the committed capture, and a native, apply-repaired rule waits on #7985.
+> - **How to check today.** The `workflows/` read in the 2026-08-19 note above, or
+>   the probe itself, read-only, with Doppler `prd` `SENTRY_IAC_AUTH_TOKEN`
+>   exported as `SENTRY_AUTH_TOKEN` plus `SENTRY_ORG=jikigai-eu` and
+>   `SENTRY_API_HOST=jikigai-eu.sentry.io`.

@@ -26,8 +26,8 @@
 # Known bypasses: merging from `main` (the branch guard exits first), the GitHub
 # web UI, an admin merge, a CI-queued `--auto` merge that GitHub completes later
 # (title, body and labels can all change in that window — and `--auto` is the
-# workflow's MANDATED merge form, so this is the common case, not an edge), the
-# OpenHands harness, and the `OWNER/REPO#N` / full-issue-URL reference forms the
+# workflow's MANDATED merge form, so this is the common case, not an edge), and
+# the `OWNER/REPO#N` / full-issue-URL reference forms the
 # canonical scanner does not recognise. `main` does carry server-side rulesets
 # with required status checks, so a durable backstop CAN be added there; none
 # covers this class today.
