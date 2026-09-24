@@ -229,29 +229,16 @@ ran_count() { awk -F'\t' '$1=="RAN"' <<<"$ARM_RECORD" | wc -l | tr -d ' '; }
 
 # Runnable-registration count for "everything ran" asserts. $1 = runner path —
 # the REAL runner for row d's real-corpus receipt count, the trimmed SANDBOX
-# copy for the arms (whose "everything" is the keep-list stream). $2 (optional) =
-# the SANDBOX_DIFF_NAMES the arm ran under. It is NOT optional in spirit for a
-# sandbox arm: the enumerate reads the diff too (the infra runner registers only
-# when the diff touches apps/web-platform/infra/), so without it the count comes
-# from the HOST branch's real diff — 5 on any infra-touching PR, 4 on main — and
-# row t failed deterministically on #8668 while passing on main. Memoized per
-# (path, diff).
-RUNNABLE_N="" RUNNABLE_N_FOR=""
+# copy for the arms (whose "everything" is the keep-list stream). Not memoized:
+# every call site is a `$(…)` subshell, so a memo variable would never survive.
+# $2 (optional) = the arm's SANDBOX_DIFF_NAMES. An arm that forces a diff MUST
+# pass it: without it the enumerate reads the REAL branch diff, so a branch
+# touching apps/web-platform/infra/ counts the infra runner the arm skips.
 runnable_n() {
-  local key="$1|${2-<host>}"
-  if [[ "$RUNNABLE_N_FOR" != "$key" ]]; then
-    if [[ -n "${2+x}" ]]; then
-      RUNNABLE_N=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
-        SOLEUR_DISABLE_SESSION_STATE=1 "SANDBOX_DIFF_NAMES=$2" bash "$1" --enumerate-commands 2>/dev/null \
-        | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')
-    else
-      RUNNABLE_N=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
-        SOLEUR_DISABLE_SESSION_STATE=1 bash "$1" --enumerate-commands 2>/dev/null \
-        | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')
-    fi
-    RUNNABLE_N_FOR="$key"
-  fi
-  printf '%s\n' "$RUNNABLE_N"
+  (cd "$REPO_ROOT" && env $ENV_SCRUB \
+    SOLEUR_DISABLE_SESSION_STATE=1 ${2+"SANDBOX_DIFF_NAMES=$2"} \
+    bash "$1" --enumerate-commands 2>/dev/null) \
+    | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' '
 }
 
 echo "== test-all-affected: mutation matrix =="
@@ -508,16 +495,17 @@ fi
 
 # --- Row p: FORCE_ALL + affected degrades to full -----------------------------------
 cases=$((cases + 1))
+_p_diff=.github/workflows/apply-sentry-infra.yml
 SANDBOX_LIB=with-lib run_arm \
-  'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+  "SANDBOX_DIFF_NAMES=$_p_diff" \
   'SOLEUR_TEST_FORCE_ALL=1' \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
-if [[ "$_rc" == "0" ]] && (( _ran >= $(runnable_n "$ARM_SB") )) \
+if [[ "$_rc" == "0" ]] && (( _ran >= $(runnable_n "$ARM_SB" "$_p_diff") )) \
   && grep -qF 'reason=force-all' <<<"$ARM_OUT"; then
   pass "p: FORCE_ALL under affected degrades to full, announced"
 else
-  fail "p: FORCE_ALL+affected rc=$_rc ran=${_ran} runnable=$(runnable_n "$ARM_SB")"
+  fail "p: FORCE_ALL+affected rc=$_rc ran=${_ran} runnable=$(runnable_n "$ARM_SB" "$_p_diff")"
 fi
 
 # --- Row q: epilogue carries not-affected accounting + the --full lever ------------
@@ -617,9 +605,11 @@ else
 fi
 
 # --- Row t: enumerate/dispatch ordinal divergence drops the map, runs all -------
-# Splice a one-position ordinal shift into the sandbox's label map: the runtime
+# Splice a one-position shift into the sandbox's LABEL map only: the runtime
 # label guard must notice the mismatch, drop _aff_sel, and run EVERYTHING —
-# never apply another suite's selection bit.
+# never apply another suite's selection bit. The selection bits stay aligned
+# on purpose: under this diff most of them are 0, so a guard that printed
+# AFFECTED_DIVERGENT but kept the map would decline suites and fail `==`.
 cases=$((cases + 1))
 _sbn="$TESTROOT/sb-divergent/test-all.sh"
 build_sandbox "$_sbn" with-lib >/dev/null || { fail "t: sandbox build"; }
@@ -629,22 +619,22 @@ p = sys.argv[1] + "/test-all.sh"
 s = open(p).read()
 old = '_aff_label[$_aff_ordinal]="${_aff_fields[1]}"'
 assert s.count(old) == 1, s.count(old)
-s = s.replace(old,
-  '_aff_ordinal=$(( _aff_ordinal + 1 )); _aff_label[$_aff_ordinal]="${_aff_fields[1]}"')
+s = s.replace(old, '_aff_label[$(( _aff_ordinal + 1 ))]="${_aff_fields[1]}"')
 open(p, 'w').write(s)
 PY
 rc=0
+_t_diff=.github/workflows/apply-sentry-infra.yml
 ( cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
     SANDBOX_RECORD="$TESTROOT/rec-$cases" \
-    'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+    "SANDBOX_DIFF_NAMES=$_t_diff" \
     bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || rc=$?
 ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
 _ran=$(ran_count)
 if grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
-  && (( _ran == $(runnable_n "$_sbn" .github/workflows/apply-sentry-infra.yml) )); then
+  && (( _ran == $(runnable_n "$_sbn" "$_t_diff") )); then
   pass "t: ordinal divergence drops the selection map; every suite runs (ran=${_ran})"
 else
-  fail "t: divergent map ran=${_ran} runnable=$(runnable_n "$_sbn" .github/workflows/apply-sentry-infra.yml) divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
+  fail "t: divergent map ran=${_ran} runnable=$(runnable_n "$_sbn" "$_t_diff") divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
 fi
 
 # --- Row u: self-only derivation demotes to unclassified and RUNS -----------------
