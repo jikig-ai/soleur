@@ -275,6 +275,9 @@ host. Read the amendment before relying on any bullet below:
   independent.
 - **Loud, no-SSH signal:** every fallback emits a Sentry `registry:"ghcr-fallback"` /
   `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages on the first one).
+  **Superseded 2026-09-24 (#8036 1c + 1d):** there is no GHCR fallback left to signal. 1c removed
+  `registry:"ghcr-fallback"`; 1d renamed the inngest arm to `stage:"inngest_pull_fatal"` (fatal, a
+  terminal boot, not a fallback). See Amendment 2026-09-24 (#8036 item 1d).
   **Correction (#6285):** zot liveness was assigned here to a `betteruptime_heartbeat.registry_prd`
   push beat "that pages if zot stops beating — before it can gate a boot (TR3)". **That layer did
   not exist:** `ZOT_HEARTBEAT_URL` (`zot-registry.tf`, the `doppler_secret.zot_heartbeat_url_prd`
@@ -1233,6 +1236,8 @@ docker daemon config; authenticates before the pull; and reports `inngest_zot` /
   (the web emitter's event shape, `host_name:"soleur-inngest"`) and calls it from both zot-leg
   outcome arms (`inngest_zot` info, `inngest_ghcr_fallback` warning), in the foreground with
   `|| true`. The Better Stack phone-home is kept as a second, independently-credentialed channel.
+  **Superseded 2026-09-24 (#8036 item 1d):** the miss arm now emits `inngest_pull_fatal` at
+  fatal and ends the boot; there is no GHCR fallback pull behind it.
 - **By bake, not Doppler** — the same reason as the 2026-08-13 amendment. The DSN is the existing
   `var.sentry_dsn` root variable (already baked into web-1 and git-data), written to
   `/etc/default/soleur-sentry-dsn` (0600) and read with `sed`, never sourced. Adding a name to
@@ -1419,6 +1424,9 @@ its gate (issue 8651 CLOSED as COMPLETED) is correct whatever the mechanism.
   detail and the success detail (`zot_login=… ghcr_login=… nic=… zot=[…]`), so a GHCR-served boot
   still says why zot missed. `_emit` and the `bootcmd` beacon gain a `host_name` tag, since run
   35912244388's events printed `host=?`.
+  **Superseded 2026-09-24 (#8036 item 1d):** `ghcr=[…]`, `ghcr_login=`, `app_ghcr_fallback` and
+  `oci-pull-ALL-LEGS-FAILED` no longer exist. The fatal detail is `nic=… zot=[login,n,cause] pull_err: …`
+  and the success detail `zot_login=… nic=… zot=[…]`.
 - **`_emit`'s Doppler DSN fallback is deleted.** It could spawn doppler whenever the baked DSN
   was empty but could never return a value (tokenless, per the above).
 - **No `doppler` invocation remains in `cloud-init.yml` runcmd above the terminal exporting
@@ -1533,7 +1541,9 @@ its first-boot `user_data` for its lifetime, but it never re-runs cloud-init.
   - `cloud-init-inngest.yml`: the GHCR credential bake, the `docker login ghcr.io` item, and the
     GHCR fallback pull after a zot miss.
   - `server.tf`, `inngest-host.tf`: the `ghcr_read_user`/`ghcr_read_token` `templatefile()`
-    arguments. No host's `user_data` carries the GHCR credential.
+    arguments. No fresh-boot template passes the GHCR credential. (Hosts born earlier keep the
+    revoked value until replaced: web-1 for its lifetime, web-2 and the inngest host until the
+    Phase 7 replaces.)
 - **Ground: no reachable success arm.** This is the ground that authorized 5.3a ("Amendment
   2026-09-23 (#8036 item 1c)"). The GHCR read PAT has been revoked since 2026-07-29, and the minter
   is disabled. The post-#8660 web-2 replace (run 35951886838) recorded `ghcr_login=fail` on a boot
