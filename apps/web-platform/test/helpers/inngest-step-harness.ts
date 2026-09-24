@@ -1,4 +1,4 @@
-import { StepError, serializeError } from "inngest";
+import { NonRetriableError, StepError, serializeError } from "inngest";
 
 /**
  * Drive an Inngest handler the way async-mode Inngest does at a STEP BOUNDARY
@@ -24,6 +24,8 @@ import { StepError, serializeError } from "inngest";
  *     failure). Inngest documents a per-step retry counter, which supports it,
  *     but the value the server sends is not in the SDK. No scenario in this repo
  *     asserts on it.
+ *   - A NonRetriableError thrown inside a step is final on its first failure,
+ *     as in the SDK (no step retry).
  *   - Handler-level retries are NOT modelled: a handler throw ends the run with
  *     outcome `threw`, a handler return ends it with outcome `returned`.
  */
@@ -59,7 +61,7 @@ export interface RunOutcome<R> {
 }
 
 /** The error a handler sees after a step exhausts its retries, built by the SDK's own code. */
-export function rebuildAsStepError(stepId: string, err: unknown): StepError {
+function rebuildAsStepError(stepId: string, err: unknown): StepError {
   return new StepError(stepId, JSON.parse(JSON.stringify(serializeError(err))));
 }
 
@@ -107,7 +109,7 @@ export async function runLikeInngest<R>(
         try {
           value = await cb();
         } catch (err) {
-          if (currentAttempt < opts.maxAttempts - 1) {
+          if (currentAttempt < opts.maxAttempts - 1 && !(err instanceof NonRetriableError)) {
             // Non-final: the SDK sends a retriable StepError op and ends the
             // request. Handler code after this await never runs in it.
             stop({ nextAttempt: currentAttempt + 1 });

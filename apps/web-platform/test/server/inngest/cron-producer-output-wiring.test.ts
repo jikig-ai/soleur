@@ -269,28 +269,72 @@ describe("headless skill resolution parity (#4993)", () => {
 
 // #8726 — step-boundary census. A DeployInProgressError thrown inside
 // `step.run("setup-workspace")` reaches the handler as the SDK's rebuilt
-// StepError after the step's retries, so ANY handler-side reference to the class
-// — `instanceof`, a `.name ===` compare, sniffing the rebuilt message or stack —
-// is a check that can never match in production. After #8726 the only code
-// that may name it is its producer (the substrate) and the helpers that check it
-// while it is still live inside the step (_cron-shared). A token census over the
-// whole directory, not a list of the 9 crons, so #8762's callers are covered too.
-describe("DeployInProgressError never crosses a step boundary (#8726)", () => {
-  const ALLOWED = new Set(["_cron-shared.ts", "_cron-claude-eval-substrate.ts"]);
-  const files = readdirSync(FN_DIR).filter((f) => f.endsWith(".ts"));
+// StepError after the step's retries: `instanceof` and `.name` can never match
+// it, and sniffing its message or stack (which still start with the class name)
+// is the string routing ADR-078 rejects — a wording change silently re-breaks
+// it. So the only code that may name the class is its producer (the substrate)
+// and the helpers that check it while it is still live inside the step
+// (_cron-shared). The walk is recursive over server/inngest/, so a helper in a
+// sibling directory cannot launder the check.
+const INNGEST_DIR = resolve(__dirname, "../../../server/inngest");
 
-  it("walks the real directory (floor: the 9 deferral-aware crons and _cron-shared.ts are all seen)", () => {
+function walkTs(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory()
+      ? walkTs(resolve(dir, e.name))
+      : e.name.endsWith(".ts")
+        ? [resolve(dir, e.name)]
+        : [],
+  );
+}
+
+describe("DeployInProgressError never crosses a step boundary (#8726)", () => {
+  const ALLOWED = new Set([
+    resolve(FN_DIR, "_cron-shared.ts"),
+    resolve(FN_DIR, "_cron-claude-eval-substrate.ts"),
+  ]);
+  const files = walkTs(INNGEST_DIR);
+  const rel = (f: string) => f.slice(INNGEST_DIR.length + 1);
+
+  it("walks the real tree (floor: the 9 deferral-aware crons, _cron-shared.ts and a middleware file are all seen)", () => {
     for (const name of [...WIRED_PRODUCERS, "cron-architecture-diagram-sync.ts", "_cron-shared.ts"]) {
-      expect(files).toContain(name);
+      expect(files).toContain(resolve(FN_DIR, name));
     }
+    expect(files.some((f) => rel(f).startsWith("middleware/"))).toBe(true);
   });
 
   it("no file outside the producer and _cron-shared names the class in code", () => {
-    const offenders = files.filter(
-      (f) =>
-        !ALLOWED.has(f) &&
-        stripComments(readFileSync(resolve(FN_DIR, f), "utf-8"), f).includes("DeployInProgressError"),
-    );
+    const offenders = files
+      .filter((f) => !ALLOWED.has(f))
+      .filter((f) => stripComments(readFileSync(f, "utf-8"), f).includes("DeployInProgressError"))
+      .map(rel);
     expect(offenders).toEqual([]);
+  });
+
+  // Every caller of the substrate's setupEphemeralWorkspace must route a
+  // deferral through deferDeployOnFinalAttempt — except the callers #8762
+  // tracks, which have no deferral arm yet. This list must SHRINK as #8762
+  // lands; a new unwrapped caller fails here instead of joining it silently.
+  const UNWRAPPED_TRACKED_BY_8762 = [
+    "functions/cron-agent-native-audit.ts",
+    "functions/cron-bug-fixer.ts",
+    "functions/cron-legal-audit.ts",
+    "functions/cron-skill-freshness.ts",
+    "functions/cron-ux-audit.ts",
+    "functions/event-ship-merge.ts",
+    "functions/oneshot-f2-defer-gate-review.ts",
+    "functions/oneshot-recheck-4217-calibration.ts",
+  ];
+
+  it("every substrate setupEphemeralWorkspace caller wraps it, except the #8762 list (exactly)", () => {
+    const IMPORT_RE =
+      /import\s*\{[^}]*\bsetupEphemeralWorkspace\b[^}]*\}\s*from\s*"\.\/_cron-claude-eval-substrate"/;
+    const callers = files.filter((f) => IMPORT_RE.test(stripComments(readFileSync(f, "utf-8"), f)));
+    expect(callers.length).toBeGreaterThanOrEqual(17);
+    const unwrapped = callers
+      .filter((f) => !stripComments(readFileSync(f, "utf-8"), f).includes("deferDeployOnFinalAttempt("))
+      .map(rel)
+      .sort();
+    expect(unwrapped).toEqual(UNWRAPPED_TRACKED_BY_8762);
   });
 });

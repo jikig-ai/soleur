@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { StepError } from "inngest";
+import { NonRetriableError, StepError } from "inngest";
 import {
   HarnessError,
   runLikeInngest,
@@ -36,6 +36,9 @@ describe("runLikeInngest — step-boundary facts", () => {
       { maxAttempts: 2 },
     );
     expect(out.outcome).toBe("returned");
+    // Two invocations for the two attempts, then a re-entry that reads the
+    // memoized failure — the handler never sees it in the invocation that failed.
+    expect(out.invocations).toBe(3);
     const caught = out.value!.caught as Error & { leaseAgeMs?: number };
     expect(caught).toBeInstanceOf(StepError);
     expect(caught).not.toBeInstanceOf(ProbeCustomError);
@@ -64,6 +67,26 @@ describe("runLikeInngest — step-boundary facts", () => {
     expect(callbackRuns).toBe(2);
     expect(caughtErrors).toHaveLength(1);
     expect(caughtErrors[0]).toBeInstanceOf(StepError);
+  });
+
+  it("row 2b: a NonRetriableError is final on its first failure (no step retry)", async () => {
+    let callbackRuns = 0;
+    const out = await runLikeInngest(
+      async ({ step }: HarnessCtx) => {
+        try {
+          await step.run("fatal", async () => {
+            callbackRuns++;
+            throw new NonRetriableError("no point retrying");
+          });
+        } catch (err) {
+          return err;
+        }
+        return null;
+      },
+      { maxAttempts: 2 },
+    );
+    expect(callbackRuns).toBe(1);
+    expect(out.value).toBeInstanceOf(StepError);
   });
 
   it("row 3: a variable assigned inside a step callback does not survive to the next step", async () => {
