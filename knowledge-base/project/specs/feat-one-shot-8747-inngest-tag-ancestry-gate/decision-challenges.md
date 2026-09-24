@@ -5,7 +5,7 @@ Recorded headless during `soleur:plan` (one-shot). Each item is taste or user-ch
 ## 1. User-Challenge — strict commit ancestry vs. the de-facto tagging practice
 
 - **Operator direction:** refuse any `vinngest-v*` tag whose commit is not reachable from `origin/main` (#8747).
-- **Finding:** 16 of the last 16 tags (`v1.1.26`–`v1.1.39`) were cut on PR-branch commits. Squash-merge makes those commits unreachable forever. GuardA (#7695) drove this practice, because tagging the PR commit was the only way to get a carrier-changing PR green before merge.
+- **Finding:** All of the last 14 tags (`v1.1.26`–`v1.1.39`) were cut on PR-branch commits (16 of 44 overall, adding `v1.1.14` and `v1.1.24`). Squash-merge makes those commits unreachable forever. GuardA (issue #7695, landed in PR #7887 on 2026-09-08, whose own branch carried `v1.1.26`) drove this practice, because tagging the PR commit was the only way to get a carrier-changing PR green before merge.
 - **Plan default (the operator's direction):** implement strict ancestry. The new flow is merge first, then tag the squash-merge commit on main, then publish, then auto-bump.
 - **Cost:** main's GuardA is red from the merge until someone tags main (`main-health-monitor` may file `ci/main-broken`). Pre-merge candidate images are gone (#8781). A tag cut out of habit on a PR branch turns AC6 red repo-wide until it is deleted (#8782 fixes this).
 - **Alternative the operator may prefer:** a content-coherence invariant instead of commit ancestry. It would accept a tag whose baked carriers are byte-identical to main's at bump time. That keeps in-PR tagging possible, but it cannot stop a publish of unmerged code.

@@ -13,6 +13,46 @@ requires_cpo_signoff: false
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. **Sections enhanced:** 9.
+
+**Agents used:**
+
+- soleur:engineering:review:security-sentinel
+- soleur:engineering:review:test-design-reviewer
+- soleur:engineering:review:architecture-strategist
+- a verify-the-negative and post-edit audit pass
+- an attribution check (finished inline after the nested agent was interrupted)
+
+### Key improvements
+
+1. **The bump binds to the built commit through `--signed-commit`.** This closes a race in which a tag
+   is re-pointed from an off-main build to a main commit while that build is still in flight. Without
+   the binding, the bump would pass ancestry and still pin the off-main digest.
+2. **The dispatch checkout uses a qualified `refs/tags/` ref**, so a same-named branch can no longer be
+   built in place of the tag.
+3. **Workflow-injection hardening.** The refusal step reads only the validated tag output, passed
+   through `env:`, with no `${{ }}` in its body. The shallow check fails closed on empty output, and a
+   missing `origin/main` gets its own refusal.
+4. **Tests are behaviour-checked, not only shape-checked.** An inline-step harness executes the shipped
+   step body against real git fixtures, which catches argument reversal, a dropped `exit 1`, and rc
+   collapse. Every refusal row asserts its stop point. B7, B8 and B9 are rebuilt to constructions
+   verified to exercise the right branch.
+5. **ADR-241 / #8209 conflict surfaced.** A main-only environment on the bump job would refuse every
+   tag-push run. ADR-232 §7 forbids the tag-pattern-policy repair, and #4326 is steered to
+   dispatch-from-main.
+
+### New considerations discovered
+
+- The `model.c4` bump-flow edge is incomplete in a way that misleads, so its clause is restored.
+- ADR-232's Context, §2 and Consequences passages need rewriting, not only an added §7.
+- Census corrected:
+  - the unbroken off-main run is the last **14** tags (16 of 44 overall);
+  - GuardA landed in PR #7887 (issue #7695), on whose own branch `v1.1.26` was cut;
+  - ADR-232's code merged 2026-09-20 (#8360).
+- An existing workflow comment falsely claims the workflow file is always read from the default branch.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -40,9 +80,12 @@ the pin-bump script.
   But main still pins a commit that is **not** an ancestor of main — `22f0167d27` is a PR-branch commit
   and squash-merge means it never will be.
 - **STALE-PREMISE FINDING (load-bearing).** "Refuse a tag whose commit is not reachable from origin/main"
-  is not a rare-accident filter — it would have refused **16 of the last 16** tags. Census over all 44
-  `vinngest-v*` tags: 28 on-main (through `v1.1.25`), 16 off-main (`v1.1.26`–`v1.1.39`, on `pr/8019`,
-  `pr/8248`, `#8741`'s branch). Since GuardA (#7695) landed, cutting the tag on the PR branch has been
+  is not a rare-accident filter — it would have refused **every one of the last 14** tags
+  (`v1.1.26`–`v1.1.39`). Census over all 44 `vinngest-v*` tags (re-verified at deepen): 28 on-main, the
+  last being `v1.1.25`; 16 off-main — `v1.1.14`, `v1.1.24`, and the unbroken run `v1.1.26`–`v1.1.39` (on
+  `pr/7887`, `pr/7978`, `pr/7996`, `pr/8001`, `pr/8005`, `pr/8019`, `pr/8248`, `#8741`'s branch). GuardA
+  (tracked as issue #7695) landed in PR #7887 on 2026-09-08, and `v1.1.26` was cut on #7887's own branch
+  — since then, cutting the tag on the PR branch has been
   the de-facto practice: GuardA reds any PR whose carriers differ from the pinned tag, and the only way
   to green it before merge was to tag the PR commit. Under squash-merge that commit is permanently
   unreachable from main. The runbook (`inngest-server.md` §Bootstrap-image release step 1) already
@@ -165,7 +208,7 @@ the pin-bump script.
 
 | Issue claim | Reality | Plan response |
 |---|---|---|
-| "Refuse a tag whose commit is not reachable from origin/main" reads as a filter for a rare accident | 16 of the last 16 tags (`v1.1.26`–`v1.1.39`) are PR-branch commits, unreachable from main under squash-merge; in-PR tagging is the de-facto practice GuardA forces | Implement the gate as stated (the operator's direction), and change the documented flow: tag the squash-merge commit on main after merge (§Carrier-changing PR flow). Disclosed as the main cost in §Risks |
+| "Refuse a tag whose commit is not reachable from origin/main" reads as a filter for a rare accident | All of the last 14 tags (`v1.1.26`–`v1.1.39`) are PR-branch commits, unreachable from main under squash-merge; in-PR tagging is the de-facto practice GuardA forces | Implement the gate as stated (the operator's direction), and change the documented flow: tag the squash-merge commit on main after merge (§Carrier-changing PR flow). Disclosed as the main cost in §Risks |
 | "The symptom has cleared" | Content cleared (13/13 carriers identical); main still pins off-main commit `22f0167d27` | Post-merge: cut `vinngest-v1.1.40` on main (identical content) — re-anchors the pin on an on-main commit AND is the live proof of the gate's happy path |
 | Fix (b): make GuardA required on the bump PR | `deploy-script-tests` required-ness is #6766 (open); infra-validation has no `merge_group` arm | Not in this PR; the authoring-time ancestry gate buys the stronger property. Comment on #6766 |
 | "Both the publish workflow and the auto-bump must refuse" | The publish gate runs the workflow YAML at the tagged commit, so a branch forked before this fix carries no gate; the bump job runs **main's** script | Both gates ship; the bump-script gate is the authoritative chokepoint, the publish gate stops the image from being built at all for branches that carry it |
@@ -225,27 +268,72 @@ defence-in-depth that keeps unreviewed code out of the registries.
 ```yaml
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ inputs.ref }}
+          # CHANGED on dispatch: a fully qualified tag ref, so a same-named branch can never be
+          # checked out instead of the tag (GuardA residual (3)). On push: '' -> the pushed commit.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.ref) || '' }}
           fetch-depth: 0          # NEW: history + origin/main, so ancestry is decidable
 
-      - name: Refuse a commit that is not on main (#8747)       # NEW, inline (tag tree has no helper)
+      - name: Resolve image tag   # unchanged; validates the tag against ^v[0-9]+\.[0-9]+\.[0-9]+$
+        id: tag
+
+      - name: Record the built commit (#8747)            # NEW; runs on EVERY path, mirror_only included
+        id: commit
+        # c=$(git rev-parse --verify HEAD^{commit}); require ^[0-9a-f]{40}$; commit=$c >> $GITHUB_OUTPUT
+
+      - name: Refuse a commit that is not on main (#8747) # NEW, inline (tag tree has no helper)
         if: ${{ !inputs.mirror_only }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}        # already validated; the ONLY tag source
+          HEAD_SHA: ${{ steps.commit.outputs.commit }}
         run: |
-          # set -uo pipefail (NOT -e); refuse if git rev-parse --is-shallow-repository == true
-          # head=$(git rev-parse HEAD); rc=0
-          # git merge-base --is-ancestor "$head" refs/remotes/origin/main || rc=$?
-          # rc 0 -> echo "verdict=on-main commit=$head"
-          # rc 1 -> ::error:: naming the tag (from the event, as `Resolve image tag` does), $head,
-          #         and the delete + re-cut commands; exit 1
+          # set -uo pipefail (NOT -e). No ${{ }} anywhere in this body.
+          # [ "$(git rev-parse --is-shallow-repository)" = false ] || refuse "shallow/undecidable"
+          # git rev-parse --verify -q refs/remotes/origin/main >/dev/null || refuse "no origin/main"
+          # tag_c=$(git rev-parse --verify -q "refs/tags/vinngest-$TAG^{commit}") || refuse "tag not found"
+          # [ "$tag_c" = "$HEAD_SHA" ] || refuse "checkout is not the tag's commit (re-pointed tag?)"
+          # rc=0; git merge-base --is-ancestor "$HEAD_SHA" refs/remotes/origin/main || rc=$?
+          # rc 0 -> echo "verdict=on-main commit=$HEAD_SHA"
+          # rc 1 -> ::error:: naming vinngest-$TAG, $HEAD_SHA, the delete + re-cut commands; exit 1
           # else -> ::error:: "could not decide (rc=$rc)"; exit 1
 ```
 
-- It stays inline because the dispatch path checks out an existing tag's tree, which predates any new
-  helper (#4700).
-- The step needs no `git fetch`. `fetch-depth: 0` already fetches `+refs/heads/*:refs/remotes/origin/*`.
-- On the push path, actions/checkout checks out the pushed commit. On dispatch it checks out
-  `inputs.ref`. In both cases the step judges `HEAD`, so a same-named branch or a re-pointed tag is
-  judged on the bytes actually built.
+- **Inline.** The step stays inline because the dispatch path checks out an existing tag's tree, which
+  predates any new helper (#4700).
+- **No fetch.** `fetch-depth: 0` already fetches `+refs/heads/*:refs/remotes/origin/*` from this
+  repository only. Fork pushes cannot trigger runs here, and `main` is protected and only grows, so a
+  stale view can only cause a false refusal.
+- **Injection-safe.** The step sits after `Resolve image tag` and reads the tag only through its
+  validated output, passed via `env:`. Nothing in the body is interpolated with `${{ }}`, and it never
+  echoes raw `$GITHUB_REF`. Every value it prints is a validated `vX.Y.Z` or 40-hex, so no CR/LF can
+  reach an annotation. Free-text sources (tag messages, `git log %s`, `describe`) are forbidden in
+  `::error::`.
+- **Every check fails closed.** The shallow check refuses unless the output is exactly `false`, so a git
+  error that prints nothing is refused too. `HEAD` is resolved with `--verify … ^{commit}`.
+- **`Record the built commit` also runs under `mirror_only`.** Its output feeds the bump binding below.
+- **Existing comment corrected.** The `Resolve image tag` comment says the workflow file is "always read
+  from the default branch". That is false for tag pushes: a push runs the tagged commit's YAML. Correct
+  it in the workflow and in `.github/scripts/test/test-inngest-bootstrap-tag-guard.sh`, so no reader
+  mistakes the publish check for the authoritative one.
+
+### Bump binding to the built commit (`--signed-commit`)
+
+Security review, P1: the ancestry check alone judges the tag's commit **at bump time**, while `RESOLVED`
+is whatever GHCR holds for that tag. A tag built off-main by a pre-fix branch's YAML, then deleted and
+re-cut on main while the first run is still in flight, would pass the check and pin the off-main
+image's digest: the signed digest and the resolved digest agree, because both are the off-main
+build's.
+
+The fix is to bind the check to the built commit:
+
+- The bump job passes `--signed-commit "${{ needs.build.outputs.commit }}"` (a new `build` output from
+  `steps.commit`).
+- The script requires the flag and validates it against `^[0-9a-f]{40}$`. A missing flag dies at `args`,
+  so a pre-fix branch's YAML (which lacks the flag) fails closed at the bump.
+- When `SIGNED_TAG == TARGET`, `target_on_main` also requires
+  `refs/tags/vinngest-${TARGET}^{commit} == SIGNED_COMMIT`, alongside the existing digest cross-check.
+- When `SIGNED_TAG != TARGET` (a backfill of an older tag), the binding does not apply, exactly as the
+  digest cross-check does not. The ancestry check on `TARGET` still runs.
+- Existing fixture rows gain the flag through `run_bump`.
 
 ### Carrier-changing PR flow (the operator-visible change)
 
@@ -274,13 +362,13 @@ After:
 
 - **Why the bump gate is authoritative.** Push-triggered runs execute the workflow YAML at the tagged
   commit, so a branch forked before this merges has no publish check. Every branch since ADR-232
-  (2026-09-19) *does* have the bump job, and that job checks out `main` and runs main's script.
+  (#8360, merged 2026-09-20) *does* have the bump job, and that job checks out `main` and runs main's script.
   **Caveat (ADR-232 §7):** the bump job's own definition also comes from the tagged commit's YAML, so
   this holds only for branches whose copy of that job is unmodified. The threat model is accident, not a
   hostile branch. A branch forked before ADR-232 has no bump job and moves no pin; it can still build an
   off-main image, which is inert because no pin names it.
 - **`mirror_only` is not refused.** It builds nothing and cannot move a digest (it crane-copies an
-  existing GHCR manifest). Refusing it would permanently stop the 14 legacy off-main versions
+  existing GHCR manifest). Refusing it would permanently stop the 16 legacy off-main versions
   (`v1.1.26`–`v1.1.39`, including today's pin) from being backfilled into zot after an eviction. That
   would lose a rollback path. The pin stays protected because the bump gate judges the target however
   the run started.
@@ -300,62 +388,103 @@ After:
   `v1.1.40`'s carriers are byte-identical to `v1.1.39`'s.
 - **Cost.** The build job's clone becomes full-history, the same as the bump job's. Publishes happen a
   few times a week.
-- **Concurrent work.** #8209 (ADR-241) will edit the bump job's YAML block. #8759 edits
-  `inngest-server.md`. Both can only cause rebase conflicts.
+- **ADR-241 / #8209 conflict (architecture review, high).** ADR-241's plan
+  (`2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`, item 4) gives
+  `bump-cloud-init-pin` `environment: infra-privileged`. That environment's only deployment policy is
+  `branch_pattern = "main"` (`apps/web-platform/infra/infra-privileged-environment.tf`). A tag-push run's
+  ref is `refs/tags/vinngest-v…`, so GitHub will refuse the bump job on every tag push once #8209 lands.
+  - The obvious repair, a `vinngest-v*` tag policy, would reopen #8747 in a worse form: YAML written on a
+    branch would run with Tier-B secrets, and those secrets load before any ancestry step runs.
+  - ADR-232 §7 forbids that repair.
+  - The PR comments on #8209 with the conflict.
+  - The comment on #4326 recommends the compatible shape: mint the tag, then **dispatch** the build from
+    `main` (`inputs.ref` = the new tag). That passes a main-only policy, and because a
+    `GITHUB_TOKEN`-minted tag fires no `push` event anyway, it also removes §7's tagged-commit-YAML
+    caveat.
+- **Concurrent work.** #8759 edits `inngest-server.md`. It can only cause rebase conflicts.
 
 ## Implementation Phases
 
 ### Phase 1: RED (tests first, `cq-write-failing-tests-before`)
 
-1. Extend `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh`:
-   - Add `MOCK_CRANE_LOG` to the crane stub, to `reset_state` and to `run_bump`.
-   - Add rows B1–B9 (§Test Scenarios).
-   Every fixture builds the incident shape for real: an annotated tag on a side-branch commit, then a
-   squash-merge. Raise `MIN_ASSERTIONS` by the number of assertions added. Run it: it fails.
-2. Add the publish-step shape asserts (§Test Scenarios, S1–S6) to the same suite's Guard 2 section,
-   comment-stripped and sliced by job key. Add the `build`-block equivalents to
-   `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh`, which already parses the workflow
-   YAML and holds the exact-string `!inputs.mirror_only` convention. Run both: they fail.
+1. Extend the fixtures in `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh`:
+   - add `seed_tag_at`;
+   - add `MOCK_CRANE_LOG` to the crane stub, to `reset_state` and to `run_bump`;
+   - make `run_bump` pass `--signed-commit`.
+2. Add rows B1–B11 and B7a. Each one asserts its own precondition and its stop point (§Test Scenarios).
+3. Add the inline-step harness I1–I9. It slices the `run:` body out of the YAML by step name.
+4. Add shape asserts S1–S8 to the Guard 2 section, sliced by job key and comment-stripped. Raise
+   `MIN_ASSERTIONS` by the number of assertions added.
+5. In `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh`, add the exact-string
+   `if: ${{ !inputs.mirror_only }}` assert for the refusal step, and the no-`if:` assert for
+   `Record the built commit`. The two-job set assert does not change.
+6. Run both suites. Confirm they fail for the expected reasons.
 
 ### Phase 2: GREEN
 
-3. Add `target_on_main` and the `ancestry` stage to `bump-inngest-bootstrap-pin.sh`, and update the
-   header contract.
-4. Add `fetch-depth: 0` and the inline step to `build`, and add a header comment explaining the check
-   and why the bump check is the authoritative one.
-5. Run both suites, plus `bash .github/scripts/test/run-all.sh`,
-   `bash .github/scripts/test/test-inngest-bootstrap-tag-guard.sh` and
-   `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`. AC6 and GuardA do not change and
-   must stay green.
+7. In `bump-inngest-bootstrap-pin.sh`:
+   - add `target_on_main`, the required `--signed-commit`, and the `ancestry` stage;
+   - update the header INPUTS and stage list.
+8. In `build-inngest-bootstrap-image.yml`:
+   - qualify the dispatch checkout ref, and set `fetch-depth: 0`;
+   - add `Record the built commit` and the `build.outputs.commit` it feeds;
+   - add the inline refusal step, after `Resolve image tag`;
+   - pass `--signed-commit` to the bump;
+   - correct the "always read from the default branch" comment, in both the workflow and
+     `test-inngest-bootstrap-tag-guard.sh`.
+9. Run both suites, plus these three, and confirm AC6 and GuardA are unchanged and green:
+   - `bash .github/scripts/test/run-all.sh`
+   - `bash .github/scripts/test/test-inngest-bootstrap-tag-guard.sh`
+   - `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`
 
 ### Phase 3: Record the decision
 
-6. Amend ADR-232. Add **§7**: publish and bump both refuse an off-main tag; the bump check is the
-   authoritative one, with the caveat about an unmodified bump job; `mirror_only` is not refused. Add
-   `ancestry` to §6's stage list. Add an `## Amendment 2026-09-24 (#8747)` note, a sequencing line naming
-   #8782, and two rows in `## Alternatives Considered` (the bump waits for the source PR; a `--merged`
-   target now).
-7. `inngest-server.md` §Bootstrap-image release:
-   - Step 1: the tag goes on the squash-merge commit on `main` after merge; a PR-branch tag is refused;
-     include the delete command.
-   - Step 2: the bump is authored automatically (ADR-232); keep the four-site detail as the manual
-     fallback.
-   - Add the carrier-changing PR flow and the rollback-by-re-cut note.
+10. Amend ADR-232. It is Provisional and its decision stands, and the `## Amendment` pattern is the
+    precedent in ADR-204 and ADR-218.
+    - Add **§7**:
+      - Publish and bump both refuse an off-main tag.
+      - The bump check is the authoritative one, with the caveat about an unmodified bump job.
+      - The bump binds to the built commit through `--signed-commit`.
+      - `mirror_only` is not refused.
+      - Ancestry is an **accident control, not a secret boundary**: never admit the bump job to an
+        environment through a tag-pattern deployment policy (see §Technical Considerations, ADR-241).
+      - Residual: an old main commit, for example one whose code was later reverted, passes both checks.
+    - Add `ancestry` to §6's stage list.
+    - Rewrite three passages the change falsifies:
+      - Context: "the writer and the checker cannot disagree on what latest means" (they now disagree
+        whenever an off-main tag is semver-max, until #8782).
+      - §2: the target rule gains the ancestry refusal.
+      - Consequences: "drift window shrinks to one CI run" (false for carrier-changing PRs, where the
+        window now runs from merge to the manual tag).
+    - Add an `## Amendment 2026-09-24 (#8747)` note recording the stuck-main state until #8782.
+    - Add a sequencing line naming #8782.
+    - Add two rows to Alternatives: the bump waits for the source PR; a `--merged` target now.
+11. `inngest-server.md` §Bootstrap-image release:
+    - Step 1: the tag goes on the squash-merge commit on `main` after merge; a PR-branch tag is refused;
+      include the delete command.
+    - Step 2: the bump is authored automatically (ADR-232); keep the four-site detail as the manual
+      fallback.
+    - Add the carrier-changing PR flow and the rollback-by-re-cut note.
 
 ### Phase 4: Follow-through
 
-8. Comment on #6766. The #8747 incident is a concrete case for making GuardA blocking, **and** making it
+12. Comment on #6766. The #8747 incident is a concrete case for making GuardA blocking, **and** making it
    required before #4326 (or a PR-diff exemption) lands would deadlock every carrier-changing PR: it
    cannot go green until a tag exists on main, and that tag cannot exist until it merges.
-9. Comment on #4326: tags are now required on main, so it is the next PR that completes the flow.
-10. Link #8780, #8781 and #8782 from the PR body.
+13. Comment on #4326: tags are now required on main, so it is the next PR that completes the flow.
+14. Link #8780, #8781 and #8782 from the PR body.
 
 ### Post-merge (pipeline-executed, immediately)
 
-11. Cut `vinngest-v1.1.40` on this PR's squash-merge commit (content identical to `v1.1.39`).
-12. Watch the run with `gh run watch`. The inline step must print `verdict=on-main`, and the bump job
+15. Cut `vinngest-v1.1.40` on this PR's squash-merge commit (content identical to `v1.1.39`).
+16. Watch the run with `gh run watch`. The inline step must print `verdict=on-main`, and the bump job
     must report `result=opened` with auto-merge armed.
-13. After the bump merges, check that AC6 and GuardA are green on main.
+17. After the bump merges, check that AC6 and GuardA are green on main.
+18. **Condition.** If #8209 has already put `environment: infra-privileged` on the bump job, a tag push
+    cannot run it. In that case, re-anchor by dispatching the build from `main` with
+    `inputs.ref=vinngest-v1.1.40`, after pushing the tag.
+19. Pick up #8782 in the next session, right after AC-P2 passes, rather than leaving it in the backlog.
+    Until it lands, an off-main tag leaves main stuck: AC6 demands that pin, and the bump refuses it.
 
 ## Alternative Approaches Considered
 
@@ -365,7 +494,7 @@ After:
 | Make `deploy-script-tests` (GuardA) a required check | #6766's scope; ruleset + pipeline change; checks content, not provenance; deadlocks carrier PRs before #4326 |
 | Target = semver-max over `git tag --merged HEAD` **in this PR** | Measured: resolves to `v1.1.25` on main today → downgrade PR + AC6 red. Correct after the re-anchor → #8782 |
 | Separate `verify-tag-on-main` job + bind step + shared helper (plan v1) | Verifies in one job and builds in another, which needed a bind step and `--expect-commit` to reconnect them; checking `HEAD` inside `build` holds by construction |
-| Refuse `mirror_only` too | Permanently strands the 14 legacy off-main versions from zot backfill; builds nothing |
+| Refuse `mirror_only` too | Permanently strands the 16 legacy off-main versions from zot backfill; builds nothing |
 | GitHub compare API instead of git | Network + token dependency; git ancestry is hermetic and fixture-testable |
 | Bump refuses when the target's carriers differ from main's | Duplicates GuardA's carrier derivation; a stale-but-on-main pin is reviewed code |
 | Tag-protection ruleset | Rulesets cannot express "tag must point at a main-reachable commit" |
@@ -388,18 +517,29 @@ None.
 
 ## Files to Edit
 
-- `.github/scripts/bump-inngest-bootstrap-pin.sh`: `target_on_main` and the `ancestry` stage, placed
-  after `TARGET` and before `crane`; the header stage list.
-- `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh`: rows B1–B9; Guard 2 shape asserts S1–S6;
-  `MIN_ASSERTIONS` raised.
-- `.github/workflows/build-inngest-bootstrap-image.yml`: `build` checkout `fetch-depth: 0`; the inline
-  refusal step; a header comment.
+- `.github/scripts/bump-inngest-bootstrap-pin.sh`:
+  - `target_on_main` and the `ancestry` stage, placed after `TARGET` and before `crane`;
+  - the required `--signed-commit` argument, bound to the tag's commit when `SIGNED_TAG == TARGET`;
+  - the header stage list and INPUTS.
+- `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh`: add `seed_tag_at`, `MOCK_CRANE_LOG` and
+  `--signed-commit` in `run_bump`; rows B1–B11 and B7a; the inline-step harness I1–I9; shape asserts
+  S1–S8; raise `MIN_ASSERTIONS`.
+- `.github/workflows/build-inngest-bootstrap-image.yml`:
+  - `build` checkout: `fetch-depth: 0`, plus the qualified `refs/tags/` ref on dispatch;
+  - the `Record the built commit` step and a `commit` output on `build`;
+  - the inline refusal step;
+  - `--signed-commit` passed to the bump;
+  - the corrected "default branch" comment and a header comment.
 - `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh`: exact-string asserts on the new
   step's `if: ${{ !inputs.mirror_only }}` (operand inversion is the risk) and on its position before
   `Build + verify + push`. The two-job set assert does not change.
 - `knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md`:
   §7, §6 stage list, amendment note, two Alternatives rows.
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md`: §Bootstrap-image release.
+- `knowledge-base/engineering/architecture/diagrams/model.c4`: the `github -> soleurMarketplace` edge
+  clause.
+- `.github/scripts/test/test-inngest-bootstrap-tag-guard.sh`: correct the "always read from the default
+  branch" header claim.
 
 ## Open Code-Review Overlap
 
@@ -463,23 +603,35 @@ literal. It needs no pipe and no network, and it assumes tags are fetched locall
 ### ADR
 
 **Amend ADR-232.** This extends the ADR; it does not reverse it. Add §7 (§Implementation Phases
-step 6). No new ADR ordinal is claimed.
+step 10). No new ADR ordinal is claimed.
 
 ### C4 views
 
-No C4 change. All three model files were read: `model.c4`, `views.c4` and `spec.c4`. Here is what was
-enumerated:
+All three model files were read: `model.c4`, `views.c4` and `spec.c4`.
 
-- **Actor.** The actor who pushes tags is `founder` ("Founder / Operator"), already modeled.
-- **Systems.** `github` (Actions), GHCR and zot are all modeled. The GHCR element's prose already names
-  `soleur-inngest-bootstrap`.
-- **Containers, data stores, relationships.** No new container, data store or external system, and no
-  access relationship changes.
-- **The `github -> soleurMarketplace` edge prose.** It narrates the bump flow step by step. It stays
-  **true** after this change: it describes what the bump does on success and says nothing false about
-  refusal, so the change makes nothing in the model false.
-- **Counts.** No count embedded in edge prose moves: no workflow, job-level monitor or heartbeat is
-  added. The work phase confirms this with a green `plugins/soleur/test/c4-count-parity.test.sh`.
+**One `.c4` edit, a correctness update.** ADR-232 §Verification names the `github -> soleurMarketplace`
+edge as the place where the bump's controls are documented. That edge narrates the bump flow step by
+step. Without the new refusal, a reader would conclude that an off-main semver-max tag gets pinned.
+So the edge is incomplete rather than false, and the gap misleads. Append:
+
+> refuses (stage `ancestry`, before crane) a semver-max tag whose commit is not an ancestor of main, and
+> binds to the built commit; the build refuses an off-main HEAD (ADR-232 §7, #8747)
+
+Keep the stage list identical to ADR-232 §6 in the same commit.
+
+**Enumeration:**
+
+- **Actor.** `founder` ("Founder / Operator") is modeled. There is **no** `founder -> github` tag-push
+  edge. Tag pushing is part of the operator's generic repository interaction, which the model does not
+  break out per git verb. This change adds no new relationship, so none is added. The absence is
+  recorded here rather than implied away.
+- **Systems.** `github` (Actions), GHCR and zot are modeled.
+- **Containers, stores, relationships.** No new container, data store, external system or access
+  relationship.
+- **Counts.** No count embedded in edge prose moves.
+
+Validate with `plugins/soleur/test/c4-count-parity.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts`,
+`apps/web-platform/test/c4-render.test.ts` and `plugins/soleur/test/c4-model-freshness.test.sh`.
 
 ### Sequencing
 
@@ -506,12 +658,14 @@ it judges.
 | 2 | Move the call after the `crane digest` loop (REORDER) | RED: B1 asserts the crane stub log is EMPTY; after the reorder crane is called, and for an off-main tag with no image the run ends `skipped` exit 0 |
 | 3 | Judge `SIGNED_TAG` instead of `TARGET` | RED: B3 (signed tag on-main, semver-max off-main) must end `result=error` at `ancestry` |
 | 4 | Collapse rc handling (`if merge-base …; then ok; else refuse`) or treat rc 128 as pass | RED: B7 (unresolvable base) must end `result=error` with the "could not decide" wording, not the off-main wording |
-| 5 | Resolve the bare `vinngest-${TARGET}` instead of `refs/tags/…` | RED: B8 (same-named branch at a main commit, tag off-main) must end `result=error` |
-| 6 | Drop the shallow-repo refusal | RED: B9 (depth-1 clone fixture) must end `result=error` |
-| 7 | Squash-merge shape: content identical on main, tagged commit unreachable | RED unless B2 ends `result=error`: content equality must not satisfy the gate |
+| 5 | Resolve the bare `vinngest-${TARGET}` instead of `refs/tags/…` | RED: B8 (`refs/vinngest-vX.Y.Z` shadows the bare name) must end in refusal |
+| 6 | Drop the shallow-repo refusal | RED: B9's empty-crane-log assertion (the tag is on main, so without the refusal crane is called) |
+| 7 | Skip the `SIGNED_COMMIT` equality when `SIGNED_TAG == TARGET` | RED: B10 |
 
 **Harness rows.** Must-RED on the suite: B1's fixture first asserts `git merge-base --is-ancestor` rc 1
 on its own tag, so a fixture that accidentally tags `main` reds the row instead of passing it vacuously.
+B2 (the squash shape) is a fixture row rather than a code mutation: content equality must not satisfy
+the gate.
 Must-PASS non-canonical: B4, an OLDER off-main tag below an on-main semver-max → `result=opened`; B5, a
 true merge commit (not a squash) bringing the side branch into main → `result=opened`; B6, an annotated
 tag on an older main commit with main advanced → `result=opened`. Every pre-existing row (all tags on
@@ -520,62 +674,115 @@ tag on an older main commit with main advanced → `result=opened`. Every pre-ex
 **Anchor.** Verdicts come from git's own ancestry walk over real fixture repositories, not from a stored
 value. No single diff can weaken the check and its expected answer together.
 
-### Guard 2: publish-step wiring (`test-bump-inngest-bootstrap-pin.sh` Guard 2 section + `inngest-bootstrap-mirror-only.test.sh`)
+### Guard 2: publish step (inline-step harness I1–I6 + shape asserts S1–S4 + mirror-only suite)
 
 **Property.** Every non-`mirror_only` run of `build` refuses, before `Build + verify + push`, a `HEAD`
 that is not an ancestor of `refs/remotes/origin/main`, and `HEAD` is the commit the build uses.
 
-**Assembly.** The `build` job's single checkout (`fetch-depth: 0`) and the one inline step: its `if:`,
-its position relative to `Build + verify + push` and `Mirror inngest image GHCR→zot`, and its
-`merge-base --is-ancestor` over `HEAD` and `refs/remotes/origin/main`. No other job builds.
+**Assembly.** The single checkout in the `build` job (`fetch-depth: 0`), and the one inline step: its
+`if:`, its position relative to `Build + verify + push` and `Mirror inngest image GHCR→zot`, and its
+`run:` body. The harness executes the shipped body, sliced from the YAML. No other job builds.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the step, or hollow it (`run: true`) | RED: S2/S3 literal asserts on `merge-base --is-ancestor` and `refs/remotes/origin/main` inside the comment-stripped step body |
-| 2 | Move the step after `Build + verify + push` (REORDER) | RED: S4 line-order assert within the build block |
-| 3 | Invert the condition (`if: ${{ inputs.mirror_only }}`) or drop it | RED: mirror-only suite exact-string assert on `${{ !inputs.mirror_only }}` |
-| 4 | Revert the checkout to the default depth | RED: S1 `fetch-depth: 0` assert inside the build block |
-| 5 | Judge `github.sha` or the tag name instead of `HEAD` | RED: S5 assert on the `git rev-parse HEAD` binding |
-| 6 | Add `continue-on-error: true` to the step | RED: S6 absence assert (a soft-failed refusal is no refusal) |
+| 1 | Hollow the step (`run: true`) or delete it | RED: I2 (off-main must exit 1); S2 if deleted |
+| 2 | Reverse the arguments (`--is-ancestor origin/main HEAD`) | RED: I4 (side commit off main's tip must exit 1) |
+| 3 | Print the rc-1 `::error::` but drop `exit 1` | RED: I2/I3 assert rc 1 |
+| 4 | Collapse rc 1 and 128 into one branch | RED: I6 asserts the "could not decide" wording |
+| 5 | Drop the shallow refusal | RED: I5 |
+| 6 | Move the step after `Build + verify + push` (REORDER) | RED: S3 line order |
+| 7 | Invert or drop the `if:` | RED: mirror-only suite exact-string assert on `${{ !inputs.mirror_only }}` |
+| 8 | Revert the checkout to the default depth | RED: S1 |
+| 9 | Interpolate `${{ github.ref_name }}` into the body instead of the validated env | RED: S5 |
+| 10 | Refuse the shallow case only when the output `== true` (fail-open on empty) | RED: I8 |
+| 11 | Revert the dispatch checkout to the bare `inputs.ref` | RED: S7 |
 
-**Harness rows.** Must-RED on the suite: a comment line mentioning `merge-base --is-ancestor` with the
-step body hollowed. The comment-stripping (the mirror-only suite's `code_of()`, and the same stripping in
-the bump suite's block slice) reds it. Must-PASS non-canonical: extra comment lines and reordered `with:`
-keys in the checkout pass.
+**Harness rows.** Must-RED on the suite: rename the step. The harness slices by name, so it fails to
+find a body, and S2 reds instead of the harness passing on an empty body. Must-PASS non-canonical:
+extra comment lines and reordered `with:` keys in the checkout still pass.
 
-**Anchor.** These are structural asserts over committed YAML. They prove wiring, not live behaviour; the
-live proof is AC-P1.
+**Anchor.** The harness executes the committed step body against real git fixtures, so a weakened body
+fails its rows. Live proof is AC-P1.
 
 ## Test Scenarios
 
-Bump-suite behaviour rows (real git; each fixture is built the way the incident was: an annotated tag on
-a side-branch commit):
+Fixture helper: add `seed_tag_at <tag> <rev> [--annotate]`. The existing `seed_tag` only makes
+lightweight tags on HEAD, and these rows need annotated tags on side-branch commits. Every fixture ends
+checked out on `main`, because the script runs `checkout -qB` from HEAD.
 
-- **B1** semver-max tag on an unmerged side-branch commit → `result=error`, stderr `::error::ancestry:`
-  naming the tag and commit; crane stub log empty; gh log empty; the bare origin has no
-  `soleur/inngest-pin-*` branch.
-- **B2** the same side branch squash-merged into `main` (identical content) → still `result=error`.
-- **B3** `--signed-tag` on-main, semver-max off-main → `result=error`, and the message names the
-  semver-max tag as the offender.
-- **B4** older off-main tag below an on-main semver-max → `result=opened`.
-- **B5** a true merge commit brings the side branch into `main` → `result=opened`.
-- **B6** tag on an older `main` commit, main advanced 3 commits, and a lightweight-tag variant →
-  `result=opened` for both.
-- **B7** `HEAD`'s ancestry cannot be computed (e.g. the tag object is present, but its commit is missing
-  from a `--reference`-less fixture) → `result=error` with the "could not decide" wording.
-- **B8** a branch named `vinngest-vX.Y.Z` at a `main` commit while the tag is off-main → `result=error`.
-- **B9** a depth-1 fixture clone → `result=error` (shallow refusal).
+Every **refusal** row asserts the stop point, not just `result=error`:
+
+- stderr contains `::error::ancestry:`
+- the crane stub log (`MOCK_CRANE_LOG`) is empty
+- the gh log is empty
+- the bare origin has no `soleur/inngest-pin-*` branch
+
+Each fixture first asserts its own precondition (for example, `git merge-base --is-ancestor` returns 1
+on its tag) so that a mis-built fixture reds instead of passing vacuously.
+
+Bump-suite behaviour rows (real git):
+
+- **B1** The semver-max tag is annotated and sits on an unmerged side-branch commit, and a crane digest
+  is seeded for it. Expected: refusal. Because the digest is seeded, deleting the check yields `opened`,
+  not a quiet `skipped`.
+- **B2** The same side branch is squash-merged into `main` with identical content. Expected: still
+  refusal.
+- **B3** `--signed-tag` is on-main while the semver-max tag is off-main. Expected: refusal, and the
+  message names the semver-max tag as the offender.
+- **B4** An older off-main tag sits below an on-main semver-max. Expected: `result=opened`.
+- **B5** A true merge commit brings the side branch into `main`. Expected: `result=opened`.
+- **B6** The tag is on an older `main` commit and main has advanced 3 commits; a lightweight-tag variant
+  is included. Expected: `result=opened` for both.
+- **B7** The ancestry walk cannot complete. Construction, verified at deepen:
+  1. Build main `c1←c2←c3` and a side branch off `c1` carrying the tag.
+  2. Delete `c2`'s loose object.
+  3. Assert that `rev-parse` of the tag still succeeds, that `git cat-file -e c2` fails, and that
+     `merge-base` returns 128.
+
+  Expected: refusal with the "could not decide" wording.
+- **B7a** The tag's commit object is absent, so `rev-parse …^{commit}` fails. Expected: refusal with the
+  "tag not found" wording.
+- **B8** `git update-ref refs/vinngest-vX.Y.Z <main-sha>` shadows the tag's bare name; a same-named
+  *branch* does NOT shadow it, because git prefers the tag (measured). Expected: refusal, because only
+  the explicit `refs/tags/…` resolution judges the real tag.
+- **B9** A `file://` depth-1 clone with the semver-max tag on the HEAD of `main`, with `F_REPO` pointed at
+  the clone. Expected: refusal (shallow). With the shallow refusal removed, `merge-base` returns 0 and
+  crane is called, so the empty-crane-log assertion is what reds.
+
+- **B10** The signed commit differs from the tag's current commit while `SIGNED_TAG == TARGET`, which is
+  the re-pointed-tag race. Expected: refusal at `ancestry`.
+- **B11** `--signed-commit` is missing or malformed. Expected: `result=error` at `args`.
+
+Inline-step behaviour harness. It follows the `test-inngest-bootstrap-tag-guard.sh` precedent but
+**slices** the step's `run:` body out of the YAML by step name instead of keeping a copy, so the tested
+body is the shipped body. Each row runs it with `bash` inside a fixture clone that has
+`refs/remotes/origin/main`:
+
+- **I1** HEAD on main → rc 0, prints `verdict=on-main`.
+- **I2** HEAD on an unmerged side commit → rc 1, `::error::` naming the commit.
+- **I3** Squash-merged side commit → rc 1.
+- **I4** HEAD is a side commit branched from main's tip. Expected: rc 1. This row catches the
+  argument-reversal mutant (`--is-ancestor origin/main HEAD`).
+- **I5** Shallow clone → rc ≠ 0 with the shallow message.
+- **I6** Corrupt history (the B7 construction) → rc ≠ 0 with the "could not decide" message, not the
+  off-main message.
+- **I7** `HEAD_SHA` differs from the tag's commit → rc ≠ 0 with the "re-pointed" message.
+- **I8** A `git` stub makes `--is-shallow-repository` print nothing. Expected: refusal (fail-closed).
+- **I9** `refs/remotes/origin/main` is absent. Expected: refusal with its own message.
 
 Shape asserts (bump suite Guard 2 section, sliced by job key and comment-stripped):
 
 - **S1** the build checkout has `fetch-depth: 0`.
-- **S2** the step body contains `merge-base --is-ancestor`.
-- **S3** the step body contains `refs/remotes/origin/main`.
-- **S4** the step precedes `Build + verify + push` and `Mirror inngest image GHCR→zot`.
-- **S5** the step judges `git rev-parse HEAD`.
-- **S6** the step carries no `continue-on-error`.
+- **S2** the step is named exactly as the harness slices it, and its `run:` body is non-empty.
+- **S3** the step precedes `Build + verify + push` and `Mirror inngest image GHCR→zot`.
+- **S4** neither the step nor the `build` job carries `continue-on-error`.
+- **S5** the step body (comment-stripped) contains no `${{`, and its `env:` binds
+  `TAG: ${{ steps.tag.outputs.tag }}`.
+- **S6** the step follows `Resolve image tag`, and `Record the built commit` carries no `if:`.
+- **S7** on dispatch the checkout `ref:` expression contains `format('refs/tags/{0}', inputs.ref)`.
+- **S8** the bump invocation passes `--signed-commit`, bound to `needs.build.outputs.commit`.
 
 The mirror-only suite adds the exact-string `if: ${{ !inputs.mirror_only }}` assert on the step.
 
@@ -583,26 +790,28 @@ The mirror-only suite adds the exact-string `if: ${{ !inputs.mirror_only }}` ass
 
 ### Pre-merge
 
-- [ ] **AC1** `bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh` passes, with B1–B9 and S1–S6
-      present and `MIN_ASSERTIONS` raised by the number of assertions added.
+- [ ] **AC1** `bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh` passes. B1–B11 (plus B7a),
+      I1–I9 and S1–S8 are all present, and `MIN_ASSERTIONS` is raised by the number of assertions added.
 - [ ] **AC2** `bash apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh` passes, and still
       asserts exactly the jobs `build` + `bump-cloud-init-pin`.
-- [ ] **AC3** Guard 1 rows 2 (REORDER) and 7 (squash shape), and Guard 2 rows 2 (REORDER) and 3
-      (inversion), were each applied once locally and drove their suite RED. The failing assertion for
-      each is recorded in the PR body.
+- [ ] **AC3** Each of these mutations was applied once locally and drove its suite RED, with the failing
+      assertion for each recorded in the PR body: Guard 1 row 2 (REORDER), Guard 2 row 2 (argument
+      reversal), Guard 2 row 6 (REORDER) and Guard 2 row 7 (inversion).
 - [ ] **AC4** `bash .github/scripts/test/run-all.sh`,
       `bash .github/scripts/test/test-inngest-bootstrap-tag-guard.sh` and
       `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` pass. AC6 and GuardA are green,
-      and the last file is unmodified.
-- [ ] **AC5** ADR-232 carries §7, `ancestry` in §6, the amendment note and two Alternatives rows. The
-      bump script header's stage list includes `ancestry`.
+      `cloud-init-inngest-bootstrap.test.sh` is unmodified, and `test-inngest-bootstrap-tag-guard.sh`
+      differs only in its corrected header comment.
+- [ ] **AC5** ADR-232 carries §7, `ancestry` in §6, the rewritten Context/§2/Consequences passages, the
+      amendment note and two Alternatives rows. The bump script header's stage list includes `ancestry`.
 - [ ] **AC6** `inngest-server.md` §Bootstrap-image release says the tag goes on the squash-merge commit
       on `main` after merge, that a PR-branch tag is refused (with the delete command), and describes the
       carrier-changing PR flow.
-- [ ] **AC7** `plugins/soleur/test/c4-count-parity.test.sh` is green, backing the "no C4 change"
-      conclusion.
-- [ ] **AC8** Comments are posted on #6766 (including the deadlock warning) and on #4326. #8780, #8781
-      and #8782 are linked from the PR body.
+- [ ] **AC7** The `model.c4` edge clause is added, and these are green: `c4-count-parity.test.sh`,
+      `c4-model-freshness.test.sh`, `c4-code-syntax.test.ts` and `c4-render.test.ts`.
+- [ ] **AC8** Comments are posted on #6766 (including the deadlock warning), on #4326 (with the
+      dispatch-from-main shape) and on #8209 (with the environment conflict). #8780, #8781 and #8782 are
+      linked from the PR body.
 
 ### Post-merge (pipeline-executed, immediately after merge)
 
@@ -653,7 +862,7 @@ advisor passes:
 
 Folded in:
 
-- `mirror_only` is not refused. Refusing it would permanently strand the 14 legacy off-main versions
+- `mirror_only` is not refused. Refusing it would permanently strand the 16 legacy off-main versions
   from zot backfill.
 - ADR-232 §7 states that the bump check's "main's script" authority holds only while the bump-job YAML
   is unmodified.
@@ -687,7 +896,7 @@ No Product/UX gate applies: no file in Files to Edit is a UI surface (tier NONE)
 
 ## Dependencies & Risks
 
-- **Operator workflow change (the largest cost).** Tagging a PR branch, which is how the last 16 of 16
+- **Operator workflow change (the largest cost).** Tagging a PR branch, which is how the last 14 of 14
   tags were cut, is now refused. Mitigations: the refusal names the exact delete and re-cut commands, the
   runbook documents the new flow, and #4326 automates it.
 - **Longer red window on main after a carrier merge** (merge → manual tag → bump). `main-health-monitor`
@@ -726,9 +935,11 @@ No Product/UX gate applies: no file in Files to Edit is a UI surface (tier NONE)
 - **Test registration.** `run-all.sh` runs `for t in "$DIR"/test-*.sh`, which feeds the required
   `guard-script-fixture-tests`. The edited bump suite is already in that glob, and
   `infra-validation.yml` path-filters on the workflow file, so the mirror-only suite runs on this PR.
-- **Check 10 sandbox and git.** The `discoverability_test` runs `git` inside preflight's sandbox. In a
-  linked worktree the gitdir sits outside the worktree, so `deepen-plan` confirms the sandbox's bind set
-  reaches it.
+- **Check 10 sandbox and git (resolved at deepen).** The `discoverability_test` runs `git` inside
+  preflight's sandbox. `preflight/SKILL.md` Check 10 read-only binds
+  `git rev-parse --path-format=absolute --git-common-dir` whenever it lies outside `$REPO_ROOT`, which
+  is the linked-worktree case, so `git tag --merged` resolves there. `probe-verb-gate.sh` accepts the
+  command (rc 0, measured).
 - **The crane stub records no calls today** (`test-bump-inngest-bootstrap-pin.sh`, the `crane` heredoc
   stub). B1 and Guard 1 row 2 depend on a call log, so add `MOCK_CRANE_LOG`:
   - the stub appends `$*` to it;
@@ -738,3 +949,14 @@ No Product/UX gate applies: no file in Files to Edit is a UI surface (tier NONE)
   `fixture_commit`, so each one passes the ancestry check unchanged (verified in review).
 - **A shallow fixture needs `file://`.** `git clone --depth 1 <local path>` ignores the depth for a plain
   path, so B9 must clone `file://<path>`.
+- **Fixture constructions that look right but test the wrong branch (verified at deepen).** Each of these
+  was measured in a scratch repository:
+  - A missing tagged commit fails at `rev-parse` (the "tag not found" arm, B7a), not at `merge-base`.
+    To reach the rc-128 arm, delete an intermediate main commit's loose object instead (B7).
+  - A same-named branch does NOT shadow a tag: git prefers the tag and warns about the ambiguity. Only
+    `refs/vinngest-vX.Y.Z` shadows the bare name (B8).
+  - A depth-1 clone fetches only the tags on HEAD, and a shallow repo cannot push. So B9 must put the
+    semver-max tag on main's HEAD and rely on the empty-crane-log assert to catch the mutation.
+- **Old main commit residual.** A tag cut on an old main commit, for example one whose code was later
+  reverted, passes both checks and auto-merges if it is semver-max. Ancestry proves "was reviewed", not
+  "is current". GuardA on main still reds the content drift. This is recorded in ADR-232 §7.
