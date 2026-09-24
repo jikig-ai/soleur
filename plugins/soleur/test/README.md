@@ -54,28 +54,29 @@ no check.
 
 ## Vendor-CLI pins
 
-`harness-discovery` drives two third-party CLIs, pinned exactly and asserted at
-install time (ADR-245):
+`harness-discovery` (Codex, Devin) and `grok-fidelity` (Grok) drive third-party
+CLIs, pinned exactly and asserted at install time (ADR-245):
 
 | CLI | Pin | Install path | Depth of the pin |
 |---|---|---|---|
 | Codex | `0.156.1` | `npm i -g @openai/codex@<pin>` | npm resolves the version to immutable published bytes |
 | Devin | `3000.11.1` | `https://static.devin.ai/cli/<pin>/setup.sh` — the top-level `install.sh` leaves `PINNED_VERSION` empty and installs latest | A version in a URL is a NAME the vendor can re-serve, so the job also pins the fetched script by `sha256sum -c` and refuses to execute a changed one |
+| Grok | `1.0.41` | `https://x.ai/cli/grok-<pin>-linux-x86_64` | xAI publishes no versioned installer and no checksum, so the job content-pins the binary itself by `sha256sum -c` and never runs `install.sh` |
 
-Both arms then assert the installed binary reports the pin, exiting 3 on drift.
+Every arm then asserts the installed binary reports the pin, exiting 3 on drift.
 
 The pins are declared ONCE each, as job-level `env` (`CODEX_PIN`, `DEVIN_PIN`,
-`DEVIN_SETUP_SHA256`) — a `--pin` lagging its own install step silently turns the
+`DEVIN_SETUP_SHA256`, `GROK_PIN`, `GROK_SHA256`) — a `--pin` lagging its own install step silently turns the
 script's version check into a no-op.
 
 A pin is stale the day the vendor ships. **#8574 owns the freshness criterion**: a
-monthly comparison against `npm view @openai/codex version` and Devin's current
-release, before the job is promoted to a required check. The drift is not
+monthly comparison against `npm view @openai/codex version`, Devin's current
+release and `curl -fsSL https://x.ai/cli/stable`, before `harness-discovery` is
+promoted to a required check. A Grok bump moves `GROK_PIN` and `GROK_SHA256` together. The drift is not
 hypothetical — this work was planned against Codex 0.155.1 and npm was at 0.156.1
 one day later.
 
-`grok-fidelity` is the repo's third vendor-CLI gate and does NOT conform to this
-policy: it pipes an unversioned installer into `bash`, asserts nothing about the
-resulting version, and is a **required** check. #8615 tracks the retrofit. Named
-here rather than elided, so this section is not read as a claim about the whole
-repository.
+`grok-fidelity`, unlike `harness-discovery`, is a **required** check. It conforms
+since #8615: before that it piped an unversioned installer into `bash` and asserted
+nothing about the resulting version. It also sets `GROK_DISABLE_AUTOUPDATER=1` and
+re-checks the binary's digest after the gate, so a self-update reds the job.

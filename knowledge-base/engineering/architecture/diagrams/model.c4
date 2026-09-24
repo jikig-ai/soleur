@@ -700,7 +700,7 @@ model {
   // since it was written and the edge was simply never recorded.
   github -> codex "CI installs a pinned CLI (npm @openai/codex) and asserts it registers the manifest's declared skill set (harness-discovery, ADR-245)" { technology "HTTPS (npm) + CLI" }
   github -> devin "CI installs a pinned CLI (versioned static.devin.ai setup script) and asserts it registers the manifest's declared skill set (harness-discovery, ADR-245)" { technology "HTTPS (curl) + CLI" }
-  github -> platform.grokBuild "CI installs the Grok CLI (x.ai install.sh) and runs the inspect-contract + golden-path eval (grok-fidelity)" { technology "HTTPS (curl) + CLI" }
+  github -> platform.grokBuild "CI installs a pinned Grok CLI (versioned x.ai binary, sha256 content pin) and runs the inspect-contract + golden-path eval (grok-fidelity, ADR-245)" { technology "HTTPS (curl) + CLI" }
   // ADR-136 / #6780 — the config-refresh channel for the dedicated Inngest host. CI ALSO
   // keyless-signs a SECOND artifact (the config bundle's manifest blob), dual-pushes it to
   // GHCR + zot, and the inngest host pulls+verifies+applies it in-place. Distinct from the

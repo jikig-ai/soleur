@@ -1345,28 +1345,67 @@ jobs:
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
+  # Vendor CLI pinned per ADR-245 decision 3 (#8615); pin freshness is #8574's criterion.
   grok-fidelity:
     # 15m — measured max 0.5m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 15
     runs-on: ubuntu-latest
+    env:
+      GROK_PIN: "1.0.41"
+      # sha256 of grok-${GROK_PIN}-linux-x86_64, measured 2026-09-24. xAI publishes no
+      # checksum, so this IS the content pin. Bump it together with GROK_PIN.
+      GROK_SHA256: "9ce03ed23e16ea01072b4496263d6213a27899e1e3e107f008d36edf82e70407"
+      # A self-update mid-gate would void the pin; the post-gate step verifies it held.
+      GROK_DISABLE_AUTOUPDATER: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
           bun-version-file: ".bun-version"
 
-      - name: Install Grok CLI
+      - name: Install Grok CLI (exact pin + sha256 content pin)
         run: |
-          set -euo pipefail
-          curl -fsSL https://x.ai/cli/install.sh | bash
+          # Default shell is `bash -e`; `set -uo pipefail` adds -u/pipefail, it does not clear -e.
+          set -uo pipefail
+          # The pin is interpolated into a URL path: accept only X.Y.Z.
+          [[ "$GROK_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "::error::grok-fidelity[grok] invalid-pin:${GROK_PIN}"; exit 3; }
+          tmp="$RUNNER_TEMP/grok-${GROK_PIN}"
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 120 \
+            "https://x.ai/cli/grok-${GROK_PIN}-linux-x86_64" -o "$tmp" \
+            || { echo "::error::grok-fidelity[grok] download-failed pin=${GROK_PIN}"; exit 3; }
+          echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null || {
+            echo "::error::grok-fidelity[grok] binary-digest-mismatch — refusing to execute; got $(sha256sum "$tmp" | cut -d' ' -f1)"
+            exit 3
+          }
+          install -D -m 0755 "$tmp" "$HOME/.grok/bin/grok"
           echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
-          grok --version
+          export PATH="$HOME/.grok/bin:$PATH"
+          # NOT got="$(grok --version | grep …)": under bash -e that kills the step at the
+          # assignment on a semver-less banner (see harness-discovery's Codex step).
+          raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$GROK_PIN" ] || {
+            echo "::error::grok-fidelity[grok] version-mismatch:${got:-<unparsed>}!=${GROK_PIN} raw=${raw:0:200}"
+            exit 3
+          }
+          echo "grok-fidelity[grok] pinned ${GROK_PIN} (sha256 ok)"
 
       - name: Grok fidelity gate (inspect contract + golden-path eval)
         run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
+
+      - name: Pinned Grok binary unchanged by the gate
+        run: |
+          echo "${GROK_SHA256}  ${HOME}/.grok/bin/grok" | sha256sum -c - >/dev/null || {
+            echo "::error::grok-fidelity[grok] binary-changed-during-gate (auto-update?) got $(sha256sum "$HOME/.grok/bin/grok" | cut -d' ' -f1)"
+            exit 3
+          }
 
   # Rationale lives in ADR-245, not here (ADR-231: workflow files are byte-budgeted).
   # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
