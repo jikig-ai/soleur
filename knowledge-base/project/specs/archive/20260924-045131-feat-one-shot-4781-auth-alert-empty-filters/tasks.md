@@ -54,8 +54,8 @@ Plan: `knowledge-base/project/plans/2026-09-23-fix-sentry-auth-alert-empty-filte
 ## Phase 5: Ship
 
 - [x] 5.1 Run the pre-push lints: skill-body-budget, diagnosis-claims, infra-no-human-steps `--changed --base origin/main`, and markdownlint
-- [ ] 5.2 Open one tracking issue for three follow-ups: guide/probe class parity, bidi ranges in the sanitizers, and anchoring the verdict grep (W7)
-- [ ] 5.3 Write the PR #8654 body:
+- [x] 5.2 Open one tracking issue for three follow-ups: guide/probe class parity, bidi ranges in the sanitizers, and anchoring the verdict grep (W7) — filed #8671; bidi ranges and the anchored verdict grep were fixed inline after the CONCUR review, so #8671 carries the parity check and the legacy `##[` runner syntax
+- [x] 5.3 Write the PR #8654 body:
   - first line: the no-prod-mutation statement
   - then `Closes #4781`, the measurements, the census and the limits
 - [ ] 5.4 After merge, confirm the apply run is green and its post-apply probe passes, then comment on #4781 with that run and the limits
