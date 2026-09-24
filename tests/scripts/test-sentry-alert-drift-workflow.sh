@@ -35,7 +35,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # that has never been driven red is a reading, not a test.
 WF="${SENTRY_DRIFT_WF:-$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml}"
 pass=0; fail=0
-EXPECTED_TESTS=20
+EXPECTED_TESTS=21
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -126,6 +126,20 @@ t_unavailable() {
   else _report "W3 unavailable" fail "rc=$_rc out='$_out'"; fi
 }
 
+# The drift marker is anchored to the probe's own ERROR line: a finding line that
+# merely QUOTES the phrase (a live name is vendor-controlled text) must not turn a
+# failed run into verdict=drift.
+STUB_SPOOF='#!/usr/bin/env bash
+echo "  UNMANAGED: '"'"'x ERROR: sentry_alert live fidelity FAILED'"'"' (live id 1) is live"
+echo "ERROR: Sentry workflows response is not a JSON array." >&2
+exit 1'
+t_marker_is_anchored() {
+  _drive "$STUB_SPOOF"
+  if [[ "$_rc" == "1" ]] && grep -q '^verdict=unavailable$' <<<"$_out"; then
+    _report "W3b a finding line that quotes the drift marker mid-line does not read as verdict=drift" ok
+  else _report "W3b marker anchored" fail "rc=$_rc out='$_out'"; fi
+}
+
 t_unavailable_on_other_exit_codes() {
   local stub rc bad=""
   for rc in 78 2 5 127; do
@@ -201,7 +215,7 @@ t_probe_marker_matches_what_the_step_greps() {
   local out
   out=$(SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture SENTRY_FIXTURE_RULES="$mut" \
         bash "$probe" 2>&1) || true
-  if grep -qF "$marker" <<<"$out"; then
+  if grep -q "$marker" <<<"$out"; then
     _report "W7 the real probe emits the exact marker the real step greps ('$marker')" ok
   else
     _report "W7 the real probe emits the marker the step greps" fail \
@@ -481,6 +495,7 @@ t_w8_closer_disjoint_from_filer
 t_w9_title_is_one_string
 t_w9b_unavailable_title_is_one_string
 t_unavailable_on_other_exit_codes
+t_marker_is_anchored
 t_w8_mutants
 t_w9_mutant
 

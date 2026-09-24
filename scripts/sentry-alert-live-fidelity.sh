@@ -245,6 +245,12 @@ if [[ "$ref_count" -eq 0 ]]; then
   exit 1
 fi
 
+# The ONE scrubber for API-supplied strings (names, ids, leaf keys), prefixed to
+# every jq program that prints one: C0/DEL, the two Unicode line separators, and
+# the zero-width and bidi-override ranges (a name reordered by U+202E prints like
+# another rule's). See the pin's comment on why live strings are scrubbed at all.
+SAFE_JQ='def safe: tostring | gsub("[\u0000-\u001f\u007f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"; "") | .[0:200];'
+
 findings=0
 _finding() { findings=$((findings + 1)); printf '  %s\n' "$*"; }
 
@@ -339,7 +345,7 @@ while IFS= read -r name; do
           # the walk tests the TYPE, not `paths(scalars)`: `paths(f)` keeps a
           # path only when `f` is truthy on the value, so `scalars` DROPS every
           # `false`/`null` leaf (`targetIdentifier: null` among them).
-          done < <(jq -r --argjson a "$local_ref" --argjson b "$local_live" -n '
+          done < <(jq -r --argjson a "$local_ref" --argjson b "$local_live" -n "${SAFE_JQ}"'
             (if ($a | type) == "array" and ($b | type) == "array" then
                (($a - $b)[] | "only declared: \(tojson)"),
                (($b - $a)[] | "only live:     \(tojson)")
@@ -352,7 +358,7 @@ while IFS= read -r name; do
               | (if ($A | has($k)) then ($A[$k].v | tojson) else "<absent>" end) as $ca
               | (if ($B | has($k)) then ($B[$k].v | tojson) else "<absent>" end) as $li
               | select($ca != $li)
-              | "\($k): declared=\($ca) live=\($li)" )
+              | "\($k | safe): declared=\($ca) live=\($li)" )
           ') ;;
         *)
           _finding "DRIFT: '$name'.$field declared=$local_ref live=$local_live" ;;
@@ -404,9 +410,6 @@ done < <(jq -r 'keys[]' <<<"$ref_proj")
 # evaluated. A reshaped definition fails that extraction and REFUSES below —
 # never an empty set, which would make the census compare nothing silently.
 excluded_def=$(grep -m1 -E '^def excluded: \[.*\];[[:space:]]*$' "$PROJECTION" || true)
-# The ONE scrubber for API-supplied strings, prefixed to both jq programs below
-# (see the pin's comment on why live strings are scrubbed before printing).
-SAFE_JQ='def safe: tostring | gsub("[\u0000-\u001f\u007f\u2028\u2029]"; "") | .[0:200];' 
 set +e
 excluded_json=$(jq -n -c "${excluded_def} excluded" 2>"$jq_err")
 rc=$?
@@ -609,7 +612,12 @@ frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson liv
           "FINDING FROZEN DELETED: \($q)\($n)\($q) is frozen in Terraform (legacy_trigger_conditions, ignore_changes = all) and absent from live Sentry (captured id \($c.id | tojson))."
         elif ($ws | length) > 1 then empty
         else $ws[0] as $w
-          | (if $w.enabled != $c.enabled then
+          # The pin matches by NAME; a same-name workflow under another id (the
+          # captured rule deleted, a copy left) would otherwise compare clean.
+          | (if ($w.id | tostring) != ($c.id | tostring) then
+               "FINDING FROZEN ID MISMATCH: \($q)\($n)\($q) live id \($w.id | safe | tojson), captured id \($c.id | tojson): the live workflow bearing this frozen name is not the captured rule. GET both ids; if the captured id is gone, recreate it from the capture entry per FROZEN DELETED and remove the copy."
+             else empty end),
+            (if $w.enabled != $c.enabled then
                (if $w.enabled != true then "FINDING FROZEN DISABLED: \($q)\($n)\($q) live enabled=\($w.enabled | tojson), captured \($c.enabled | tojson)."
                 else "FINDING FROZEN DRIFT: \($q)\($n)\($q).enabled captured=\($c.enabled | tojson) live=\($w.enabled | tojson)." end)
              else empty end),

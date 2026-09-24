@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=73
+EXPECTED_TESTS=76
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -1415,6 +1415,42 @@ PY
   fi
 }
 
+# A bidi override reorders how a name DISPLAYS without changing its bytes'
+# printability, so `safe` must strip it and the line must say the name was altered.
+t_bidi_name_is_scrubbed() {
+  local f; f=$(_mutant bidiname \
+    '. + [{"name":"auth-per-user-loop\u202e","enabled":true,"detectorIds":["1213799"],"environment":null,"id":"999994","config":{"frequency":5},"triggers":{"logicType":"any-short","conditions":[{"type":"first_seen_event","comparison":true}],"actions":[]},"actionFilters":[]}]')
+  [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]] && { _report "F41 bidi name" fail "the mutation did not land ($f)"; return; }
+  _run "$f"
+  local line; line=$(grep "^  UNMANAGED: 'auth-per-user-loop' (live id 999994)" <<<"$_out" || true)
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "DISPLAY NAME ALTERED" <<<"$line" && [[ "$_out" != *$'\xe2\x80\xae'* ]]; then
+    _report "F41 a bidi-override character in a live name is stripped and the line is flagged DISPLAY NAME ALTERED" ok
+  else
+    _report "F41 bidi name" fail "rc=$_rc (want 1). Line: $(head -c 300 <<<"$line")"
+  fi
+}
+
+t_frozen_id_mismatch() {
+  _drift_case g4idmismatch \
+    'map(if .name=="auth-per-user-loop" then .id="999995" else . end)' \
+    "FROZEN ID MISMATCH: 'auth-per-user-loop' live id \"999995\", captured id \"566671\"" \
+    "F42 a frozen name borne by a different live id than the captured rule is FROZEN ID MISMATCH (the pin no longer matches by name alone)"
+}
+
+# DRIFT detail lines are built from live OBJECT KEYS too, so they go through `safe`.
+t_leaf_key_is_scrubbed() {
+  local f; f=$(_mutant leafkey \
+    'map(if .name=="auth-signout-burst" then .actionFilters[0].conditions[0].comparison += {"k\n::error::leafkey\r":1} else . end)')
+  [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]] && { _report "F43 leaf key" fail "the mutation did not land ($f)"; return; }
+  _run "$f"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "DRIFT: 'auth-signout-burst'.actionFilters" <<<"$_out" \
+     && ! grep -q '^::error::leafkey' <<<"${_out//$'\r'/$'\n'}"; then
+    _report "F43 a live object key carrying LF/CR and a :: command is scrubbed in the DRIFT detail lines" ok
+  else
+    _report "F43 leaf key" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
 # INSTRUMENT SELF-TEST for the bash-error guard: it must match a bash error and
 # pass a clean finding line (a regex grep cannot evaluate exits 2, which
 # `_bash_err` turns into a fatal). Reported by printf/exit, never through the guard.
@@ -1501,6 +1537,9 @@ t_left_scope_alone_fails
 t_scrubbed_name_is_flagged
 t_frozen_duplicate
 t_frozen_derivation_parity_refuses
+t_bidi_name_is_scrubbed
+t_frozen_id_mismatch
+t_leaf_key_is_scrubbed
 
 echo "=== $pass passed, $fail failed ==="
 
