@@ -94,3 +94,13 @@ variable "rehearsal_run_id" {
     error_message = "rehearsal_run_id must be the numeric GitHub Actions run id (it names Hetzner resources and is interpolated into the Better Stack query the capture script runs)."
   }
 }
+
+variable "rehearsal_phase" {
+  description = "(#5274) `seed` boots seed-dirty-journal.sh (dirty the plaintext journal, power off without unmounting); `payload` replaces the host with the real module render. NO DEFAULT on purpose: a run that forgot the seed must fail at plan time, not silently rehearse a clean journal."
+  type        = string
+
+  validation {
+    condition     = contains(["seed", "payload"], var.rehearsal_phase)
+    error_message = "rehearsal_phase must be `seed` or `payload`."
+  }
+}

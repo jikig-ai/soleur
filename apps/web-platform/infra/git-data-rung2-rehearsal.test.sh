@@ -664,6 +664,19 @@ for _jn, _j in (d.get("jobs") or {}).items():
         perms["%s@%s" % (_k, _jn)] = _v
 print("PERMS=%s" % ",".join("%s:%s" % kv for kv in sorted(perms.items())))
 print("JOBS=%s" % ",".join(sorted((d.get("jobs") or {}).keys())))
+# (#5274) THE TEARDOWN JOB, examined here because every other arm reads `rehearse` only.
+import re as _re
+_td = (d.get("jobs") or {}).get("teardown") or {}
+print("TD_ENV=%s" % _td.get("environment"))
+print("TD_NEEDS=%s" % _td.get("needs"))
+print("TD_IF=%s" % " ".join(str(_td.get("if", "")).split()))
+_td_uses = [s.get("uses", "") for s in (_td.get("steps") or []) if s.get("uses")]
+print("TD_USES_UNPINNED=%d" % sum(1 for u in _td_uses if not (u.startswith("./") or _re.search(r"@[0-9a-f]{40}$", u))))
+_td_run = "\n".join(str(s.get("run", "")) for s in (_td.get("steps") or []))
+print("TD_GITWRITE=%d" % len(_re.findall(r"\bgit\s+(commit|push|tag)\b|gh\s+pr\s+create", _td_run)))
+print("TD_DESTROY=%d" % len(_re.findall(r"terraform destroy -auto-approve -input=false", _td_run)))
+print("TD_SURVIVOR=%d" % _td_run.count("startswith($p)"))
+print("R_DESTROY=%d" % "\n".join(str(s.get("run", "")) for s in d["jobs"]["rehearse"]["steps"] if s.get("name") != "Teardown only (recovery arm)").count("terraform destroy"))
 j = d["jobs"]["rehearse"]
 print("ENVIRONMENT=%s" % j.get("environment"))
 # A `./`-prefixed LOCAL composite action has no SHA to pin, by construction: it is resolved
@@ -735,10 +748,29 @@ PY
   # an unpinned checkout, no environment, and `git commit && git push` left this suite green.
   # A new job is a deliberate change; it should have to come here and say so.
   cases=$((cases + 1))
-  [[ "$(_wf JOBS)" == "rehearse" ]] \
-    && pass "the workflow declares exactly one job (rehearse) — no unexamined sibling job" \
-    || fail "the workflow declares jobs '$(_wf JOBS)', expected exactly 'rehearse'" \
+  # (#5274) `teardown` joined deliberately: with three boots the rehearse job's ceiling grew, and
+  # a ceiling reached inside it starved an in-job always() teardown. It is examined below.
+  [[ "$(_wf JOBS)" == "rehearse,teardown" ]] \
+    && pass "the workflow declares exactly two jobs (rehearse, teardown) — no unexamined sibling job" \
+    || fail "the workflow declares jobs '$(_wf JOBS)', expected exactly 'rehearse,teardown'" \
          "every job-scoped assertion in this suite reads the rehearse job only, so a sibling job is unexamined"
+
+  # (#5274) THE TEARDOWN JOB: runs after rehearse on EVERY outcome (T15), carries no
+  # environment (a second required-reviewer approval would leave a paid host running), commits
+  # nothing, pins its actions, destroys the rehearsal root and verifies against Hetzner; and the
+  # rehearse job no longer destroys anything outside its manual recovery arm.
+  cases=$((cases + 1))
+  [[ "$(_wf TD_NEEDS)" == "rehearse" && "$(_wf TD_IF)" == *"always()"* && "$(_wf TD_IF)" == *"inputs.teardown_only || !inputs.dry_run"* ]] \
+    && pass "teardown needs rehearse and runs if: always() on every non-dry dispatch (T15)" \
+    || fail "teardown is not needs: rehearse + if: always() (needs='$(_wf TD_NEEDS)' if='$(_wf TD_IF)')"
+  cases=$((cases + 1))
+  [[ "$(_wf TD_ENV)" == "None" && "$(_wf TD_USES_UNPINNED)" == 0 && "$(_wf TD_GITWRITE)" == 0 ]] \
+    && pass "teardown: no environment (no second approval), every action pinned, no git write" \
+    || fail "teardown: env='$(_wf TD_ENV)' unpinned=$(_wf TD_USES_UNPINNED) gitwrites=$(_wf TD_GITWRITE)"
+  cases=$((cases + 1))
+  [[ "$(_wf TD_DESTROY)" == 1 && "$(_wf TD_SURVIVOR)" == 1 && "$(_wf R_DESTROY)" == 0 ]] \
+    && pass "teardown destroys the rehearsal root and asks Hetzner for survivors; rehearse destroys nothing outside its recovery arm" \
+    || fail "teardown shape: destroy=$(_wf TD_DESTROY) survivor-check=$(_wf TD_SURVIVOR) rehearse-destroys=$(_wf R_DESTROY)"
 
   cases=$((cases + 1))
   [[ "$(_wf ENVIRONMENT)" == "web-platform-infra-apply" ]] \
@@ -2082,6 +2114,106 @@ else
 fi
 rm -f "$_ack_body"
 
+
+# ── (#5274) THE THREE-BOOT REHEARSAL: seed -> payload -> replace ─────────────────────────
+_VARS_TF="$REH/variables.tf"; _SEED="$REH/seed-dirty-journal.sh"
+# AC10 — the phase variable has NO default and validates seed|payload.
+cases=$((cases + 1))
+_pv_block=$(awk '/^variable "rehearsal_phase"/{f=1} f{print} f&&/^}/{exit}' "$_VARS_TF")
+if [[ -n "$_pv_block" ]] && ! grep -qE '^[[:space:]]*default[[:space:]]*=' <<<"$_pv_block" \
+   && grep -qF 'contains(["seed", "payload"], var.rehearsal_phase)' <<<"$_pv_block"; then
+  pass "rehearsal_phase exists, has NO default, and validates seed|payload"
+else
+  fail "rehearsal_phase is missing, has a default, or does not validate seed|payload" "$_pv_block"
+fi
+# The payload arm is the UNMODIFIED module render; the seed arm renders only seed-dirty-journal.sh
+# with the rehearsal plaintext volume's OWN id (never a variable: this root runs in prod's project).
+cases=$((cases + 1))
+_ud=$(sed 's/^[[:space:]]*#.*$//' "$REH/rehearsal.tf" | awk '/user_data = var.rehearsal_phase == "seed"/{f=1} f{print} f&&/: base64gzip\(module.git_data_userdata.rendered\)$/{exit}')
+if grep -qE '\)\) : base64gzip\(module\.git_data_userdata\.rendered\)$' <<<"$_ud" \
+   && grep -qE 'templatefile\("\$\{path\.module\}/seed-dirty-journal\.sh"' <<<"$_ud" \
+   && grep -qE '^[[:space:]]*volume_id[[:space:]]*=[[:space:]]*hcloud_volume\.rehearsal\.id$' <<<"$_ud" \
+   && ! grep -q 'rehearsal_luks' <<<"$_ud"; then
+  pass "user_data: payload = the unmodified module render; seed = seed-dirty-journal.sh fed hcloud_volume.rehearsal.id only"
+else
+  fail "user_data does not have the seed/payload shape" "$_ud"
+fi
+# The seed: plaintext only, sysrq o, never umount, no tracing, no insecure curl, token via -K - only.
+_seed_code=$(grep -vE '^[[:space:]]*#' "$_SEED" 2>/dev/null)
+cases=$((cases + 1))
+if [[ -n "$_seed_code" ]] && grep -qxF 'echo o > /proc/sysrq-trigger' <<<"$_seed_code" \
+   && ! grep -qE '(^|[[:space:];|&])umount([[:space:]]|$)' <<<"$_seed_code" \
+   && grep -qF "DEV='/dev/disk/by-id/scsi-0HC_Volume_\${volume_id}'" <<<"$_seed_code" \
+   && ! grep -qiE 'luks|cryptsetup' <<<"$_seed_code"; then
+  pass "seed: mounts only the plaintext volume, powers off with sysrq o, never unmounts, never names LUKS"
+else
+  fail "seed does not have the dirty-journal shape (sysrq o / no umount / plaintext only)" "$_seed_code"
+fi
+cases=$((cases + 1))
+_tok_uses=$(grep -c 'betterstack_logs_token' <<<"$_seed_code" || true)
+if ! grep -qE 'set -[a-z]*x|set -o xtrace|curl[^|]*[[:space:]](-v|-k|--insecure|--verbose)([[:space:]]|$)' <<<"$_seed_code" \
+   && [[ "$_tok_uses" == 1 ]] && [[ "$(grep 'betterstack_logs_token' <<<"$_seed_code")" == *'Authorization: Bearer %s'* ]] \
+   && grep -qE '^[[:space:]]+-K -[[:space:]]*\\$' <<<"$_seed_code"; then
+  pass "seed: no set -x, no curl -v/-k, and the token is used once, on curl's stdin (-K -), never argv"
+else
+  fail "seed hygiene: tracing, an insecure curl, or the token outside the -K - header ($_tok_uses use(s))" "$_seed_code"
+fi
+# The seed is a templatefile: render it with Terraform's two real escapes and nothing else, then
+# bash -n the RESULT. A `%{` anywhere fails the render outright.
+cases=$((cases + 1))
+_seed_r="$(mktemp -t seedr.XXXXXXXX)"
+if python3 - "$_SEED" "$_seed_r" <<'PY2'
+import re, sys
+s = open(sys.argv[1]).read()
+if "%{" in s.replace("%%{", ""):
+    sys.exit(3)
+vals = {"volume_id": "123456789", "betterstack_ingest_url": "https://x.invalid/", "betterstack_logs_token": "tok", "host_name": "soleur-git-data-rehearsal-1-seed"}
+def sub(m):
+    k = m.group(1)
+    if k not in vals:
+        sys.exit(4)
+    return vals[k]
+s = re.sub(r"(?<!\$)\$\{([a-z_]+)\}", sub, s).replace("$${", "${").replace("%%{", "%{")
+open(sys.argv[2], "w").write(s)
+PY2
+then
+  if bash -n "$_seed_r" 2>/dev/null; then pass "seed: the templatefile render parses as bash"; else fail "seed: the rendered script does not parse" "$(bash -n "$_seed_r" 2>&1)"; fi
+else
+  fail "seed: the templatefile render failed (a bare %{ or an unknown \${var})"
+fi
+rm -f "$_seed_r"
+# Root purity: the seed is rehearsal-only.
+cases=$((cases + 1))
+_seed_refs=$(grep -rlF 'seed-dirty-journal' "$DIR/modules/git-data-userdata" "$DIR/git-data.tf" 2>/dev/null | wc -l)
+if [[ "$_seed_refs" == 0 ]]; then pass "seed-dirty-journal.sh is referenced from nowhere in modules/git-data-userdata/ or git-data.tf"
+else fail "the production module or root references the rehearsal seed ($_seed_refs file(s))"; fi
+# AC8 — ONE chokepoint: plan-shape at all three plans, in order, and no inline shape jq left.
+cases=$((cases + 1))
+_ps_modes=$(grep -oE 'git-data-rung2-plan-shape\.sh" /tmp/plan-[a-z]+\.json [a-z-]+' "$WF" | awk '{print $2":"$3}' | tr '\n' ' ')
+if [[ "$_ps_modes" == "/tmp/plan-seed.json:additive /tmp/plan-payload.json:host-only /tmp/plan-replace.json:host-only " ]] \
+   && ! grep -qF '.resource_changes[]' "$WF"; then
+  pass "plan-shape is called at seed (additive), payload and replace (host-only), and no inline shape jq remains"
+else
+  fail "plan-shape call sites are not seed:additive, payload:host-only, replace:host-only (got '${_ps_modes}'), or inline jq remains"
+fi
+# AC9b — the replace arm: its window is stamped BEFORE its apply into its OWN variable, the probe
+# passes it as --replace-since, RUNG2_SENTRY_SINCE is written exactly once, and the upload gates on it.
+cases=$((cases + 1))
+_ar=$(awk '/id: apply_replace$/{f=1} f{print} f&&/^      - name: Capture the replace boot/{exit}' "$WF")
+_st=$(grep -n 'RUNG2_REPLACE_SINCE=\$(date' <<<"$_ar" | head -1 | cut -d: -f1)
+_ap=$(grep -n 'terraform apply -auto-approve -input=false tfplan-replace' <<<"$_ar" | head -1 | cut -d: -f1)
+_ss_writes=$(grep -c 'RUNG2_SENTRY_SINCE=\$(date' "$WF" || true)
+if [[ -n "$_st" && -n "$_ap" && "$_st" -lt "$_ap" && "$_ss_writes" == 1 ]] \
+   && grep -qF -- '--replace-since "${RUNG2_REPLACE_SINCE}"' "$WF"; then
+  pass "replace arm: RUNG2_REPLACE_SINCE stamped before its apply, passed as --replace-since; RUNG2_SENTRY_SINCE written once"
+else
+  fail "replace arm window wiring (stamp=${_st:-none} apply=${_ap:-none} sentry-since writes=${_ss_writes})"
+fi
+cases=$((cases + 1))
+_up_if=$(awk '/name: Upload the evidence file as an artifact/{f=1} f&&/^        if:/{print; exit}' "$WF")
+if [[ "$_up_if" == *"replace_rc == '0'"* ]]; then pass "the evidence upload also gates on steps.replace_probe.outputs.replace_rc == '0'"
+else fail "the evidence upload does not gate on the replace arm" "got: ${_up_if:-<none>}"; fi
+
 # (g) THE JOB BUDGET is DERIVED from the bounded polls the workflow actually contains, not a
 # literal anyone can drift. A ceiling reached inside a step leaves the always() teardown with
 # only the runner's cancellation grace to destroy a server, two volumes and a Doppler config.
@@ -2098,10 +2230,16 @@ _settle_budget=$(( ${_settle_s:-0} / 60 ))
 # reset loop (`seq 1 N` x `sleep S`). Review found the first revision of this arm summed only the
 # poll deadlines (28) and certified a 45-minute ceiling under a comment whose own worst case was
 # 55 — the apply, the largest term, was an estimate in prose that no arm read.
-_apply_tmo=$(awk '/^        timeout-minutes:/{print $2; exit}' "$WF")
+# (#5274) EVERY step-level timeout in the rehearse job, summed (three applies now), bounded to the
+# rehearse job's region so the teardown job's own ceiling is not counted as a step.
+_apply_tmo=$(awk '/^  rehearse:/{f=1} /^  teardown:/{f=0} f && /^        timeout-minutes:/{t+=$2} END{print t+0}' "$WF")
 _reset_n=$(grep -oE 'for i in \$\(seq 1 [0-9]+\); do' "$WF" | grep -oE '[0-9]+\)' | grep -oE '[0-9]+' | head -1)
 _reset_s=$(awk '/for i in \$\(seq 1 [0-9]+\); do/{f=1} f && /^\s*sleep [0-9]+$/{print $2; exit}' "$WF")
 _reset_budget=$(( ${_reset_n:-0} * ${_reset_s:-0} / 60 ))
+_n_step_tmo=$(awk '/^  rehearse:/{f=1} /^  teardown:/{f=0} f && /^        timeout-minutes:/{n++} END{print n+0}' "$WF")
+if [[ "${_n_step_tmo:-0}" -lt 3 ]]; then
+  fail "only ${_n_step_tmo:-0} step-level timeout(s) in the rehearse job — each of the three applies (seed, payload, replace) must carry one" "the budget would sum a NARROWER set than the job contains"
+fi
 if [[ "${_apply_tmo:-0}" -lt 10 ]]; then
   fail "the apply step carries no step-level timeout-minutes (or under 10) — the largest term in the job budget is unbounded" "got '${_apply_tmo:-none}'"
 fi
@@ -2133,13 +2271,17 @@ fi
 #     1  no evidence file => still exactly one decision, never zero
 #   ----
 #     6   (measured against the as-written file: 94 + 6 = 100 = 100 passed, 0 failed)
-if [[ "$cases" -lt 104 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 104.\n' "$cases" >&2
+# RAISED 104 -> 116 (#5274), ITEMISED: the job-set pin changed in place (0); +3 teardown-job rows;
+# +9 three-boot rows (phase var, user_data shape, seed shape, seed hygiene, seed render, root
+# purity, plan-shape call sites, replace window, replace upload gate). The step-timeout cardinality
+# check lives inside the budget arm and is not its own case. Measured: 116 ran.
+if [[ "$cases" -lt 116 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 116.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 104)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 116)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

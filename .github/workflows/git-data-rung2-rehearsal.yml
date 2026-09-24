@@ -19,6 +19,11 @@
 #
 # THE TWO INTENTIONAL HUMAN GATES: the environment approval on the dispatch, and the review
 # of the evidence PR. Everything between them is automated.
+#
+# (#5274) THREE BOOTS ON ONE ADDRESS: seed (dirty the plaintext journal, power off without
+# unmounting) -> payload boot #1 (capture #1, then the reboot arm) -> replace arm boot #2 (adopts a
+# LUKS volume a predecessor formatted and abandoned mounted; capture #2). Every plan goes through
+# scripts/git-data-rung2-plan-shape.sh. Rationale: runbooks/git-data-rung2-rehearsal.md (ADR-231).
 name: git-data rung-2 boot rehearsal
 
 on:
@@ -85,15 +90,13 @@ jobs:
     # the dry_run default — and recorded in ADR-149 with the alternative (a dedicated
     # environment) and its DP-11 F8 cost, rather than left as an unstated trade.
     environment: web-platform-infra-apply
-    # Budget, summed from the bounds this job actually contains rather than estimated: apply 25
-    # (a STEP-LEVEL timeout-minutes on the apply step, so it is a bound and not a guess) +
-    # capture poll 16 + settle 2 + reset 2 (24 x 5 s) + reboot probe 10 = 55 min of worst case,
-    # plus teardown grace. The reset arm (#8210) is what pushed this past 30. Review caught the
-    # first revision setting 45 under a comment whose own arithmetic reached 55: a job ceiling
-    # reached INSIDE a step means the teardown gets only the runner's cancellation grace to
-    # destroy a server, two volumes and a config. git-data-rung2-rehearsal.test.sh derives the
-    # sum from these bounds and REDs a ceiling below it.
-    timeout-minutes: 60
+    # Budget, summed from the bounds this job actually contains rather than estimated (#5274):
+    # step-level applies 15 (seed) + 25 (payload) + 15 (replace) = 55, poll deadlines 10 (seed
+    # off) + 16 (capture) + 10 (reboot probe) + 16 (replace capture) = 52, settle 2, reset 2
+    # (24 x 5 s) = 111 min of worst case. Teardown is its OWN job (`needs: rehearse`,
+    # `if: always()`), so a ceiling reached here no longer starves it of its budget.
+    # git-data-rung2-rehearsal.test.sh sums EVERY step bound and REDs a ceiling below it.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -187,11 +190,14 @@ jobs:
           # address is already in state. This run's own id satisfies the ^[0-9]+$ validation.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var rehearsal_phase=payload
           echo "teardown-only complete"
 
-      - name: Terraform plan
-        id: plan
+      # (#5274) THE SEED PHASE. `rehearsal_phase` has no default, so a run that forgot the seed
+      # fails at plan time rather than silently rehearsing a clean journal. The dry-run arm plans
+      # this phase only.
+      - name: Terraform plan (seed phase)
+        id: plan_seed
         if: '!inputs.teardown_only'
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
@@ -199,59 +205,22 @@ jobs:
         run: |
           set -euo pipefail
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform plan -no-color -input=false -out=tfplan \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}"
+            terraform plan -no-color -input=false -out=tfplan-seed \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var rehearsal_phase=seed
 
-      # THE DRY-RUN ASSERTION, and it runs on BOTH arms rather than only on dry_run. A check
-      # that guards the apply is worth nothing if the apply path skips it — the dangerous
-      # dispatch is precisely the one with dry_run=false.
-      #
-      # NOTE ON THE PLAN JSON: `terraform show -json` embeds plan-input VARIABLES verbatim,
-      # including ones declared `sensitive` (sensitive masks render-time TEXT output, not JSON
-      # serialization). This step therefore READS the JSON and never uploads it, and no later
-      # step turns it into an artifact.
-      - name: Assert the plan creates ONLY rehearsal addresses and destroys nothing
+      # THE PLAN-SHAPE GUARD RUNS ON BOTH ARMS rather than only on dry_run: the dangerous dispatch
+      # is precisely the one with dry_run=false. scripts/git-data-rung2-plan-shape.sh is the ONE
+      # chokepoint for all three plans (seed additive, payload and replace host-only). The plan
+      # JSON embeds sensitive variables verbatim, so it is read and never uploaded.
+      - name: Assert the seed plan is additive-only (plan-shape additive)
         if: '!inputs.teardown_only'
         working-directory: ${{ env.REHEARSAL_DIR }}
         run: |
           set -euo pipefail
-          terraform show -json tfplan > /tmp/plan.json
-          # Fail closed on an unparseable plan: a jq error must not read as "zero destroys".
-          if ! jq -e 'has("resource_changes") or has("format_version")' /tmp/plan.json >/dev/null; then
-            echo "::error::could not parse the plan JSON — refusing to read an unparseable plan as a clean one."
-            exit 1
-          fi
-          # DENY-LIST THE INERT VERBS, never allow-list the destructive ones. Measured
-          # (#7066 review): `["forget"]` scored 0 destroys and PASSED, so a `removed {}` block
-          # forgetting hcloud_volume.rehearsal_luks sailed through -- and the forgotten
-          # resource is then unreachable by the `if: always()` destroy AND invisible to both
-          # orphan sweeps. Terraform has grown this vocabulary before; anything added next is
-          # now refused by default rather than silently treated as harmless.
-          destroys=$(jq '[.resource_changes[]? | select(.change.actions | map(select(. != "create" and . != "read" and . != "no-op")) | length > 0)] | length' /tmp/plan.json)
-          creates=$(jq -r '[.resource_changes[]? | select(.change.actions | index("create")) | .address] | .[]' /tmp/plan.json)
-          if [[ "$destroys" -ne 0 ]]; then
-            echo "::error::the rehearsal plan contains ${destroys} non-additive change(s) (delete/replace/forget/...). This root is additive-only; anything but create/read/no-op means state drifted or an address was renamed or dropped."
-            jq -r '.resource_changes[]? | select(.change.actions | map(select(. != "create" and . != "read" and . != "no-op")) | length > 0) | "\(.address) \(.change.actions | join(","))"' /tmp/plan.json
-            exit 1
-          fi
-          # Every created address must be rehearsal-scoped. `-target` is transitive, so this
-          # is the assertion that would catch a prod resource entering the closure — the one
-          # failure this whole route is built around.
-          bad=0
-          while IFS= read -r addr; do
-            [[ -z "$addr" ]] && continue
-            case "$addr" in
-              *.rehearsal|*.rehearsal_*) ;;
-              *) echo "::error::plan would create a NON-rehearsal address: ${addr}"; bad=1 ;;
-            esac
-          done <<< "$creates"
-          if [[ "$bad" -ne 0 ]]; then
-            echo "::error::refusing to apply — see the non-rehearsal addresses above."
-            exit 1
-          fi
-          n=$(printf '%s\n' "$creates" | grep -c . || true)
-          echo "plan is clean: ${n} create(s), all rehearsal-scoped; 0 destroys"
-          rm -f /tmp/plan.json
+          terraform show -json tfplan-seed > /tmp/plan-seed.json
+          rc=0; bash "${GITHUB_WORKSPACE}/scripts/git-data-rung2-plan-shape.sh" /tmp/plan-seed.json additive || rc=$?
+          rm -f /tmp/plan-seed.json
+          exit "$rc"
 
       - name: Dry run complete — stopping here
         if: ${{ !inputs.teardown_only && inputs.dry_run }}
@@ -261,6 +230,63 @@ jobs:
           echo "dry_run=false to spend a real host and produce rung-2 evidence."
 
       # ── THE REAL ARM ───────────────────────────────────────────────────────────────
+      - name: Terraform apply (seed phase)
+        id: apply_seed
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 15
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false tfplan-seed
+
+      # The seed powers itself off (sysrq o) once the journal is dirty. Polled through the Hetzner
+      # API by EXACT name. A seed that never powers off FAILs here, bounded, pointing at its own
+      # Better Stack rows — never booting the payload against a volume nobody dirtied.
+      - name: Wait for the seed host to power off (Hetzner API)
+        id: seed_off
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
+          printf '::add-mask::%s\n' "$TOKEN"
+          host="${REHEARSAL_PREFIX}${GITHUB_RUN_ID}"
+          st=unknown
+          deadline=$(( SECONDS + 10 * 60 ))
+          while (( SECONDS < deadline )); do
+            st="$(curl --disable --noproxy '*' -sS -f -H "Authorization: Bearer ${TOKEN}" \
+                    "https://api.hetzner.cloud/v1/servers?name=${host}" \
+                  | jq -r --arg n "$host" '[.servers[]? | select(.name == $n) | .status] | if length == 1 then .[0] else "ambiguous" end' || echo unreadable)"
+            if [[ "$st" == off ]]; then echo "seed host ${host} is off after ${SECONDS}s"; exit 0; fi
+            sleep 15
+          done
+          echo "::error::the seed host ${host} did not power off within 10 min (last status '${st}'). Read its Better Stack rows: stage=seed_* host_name=${host}-seed. The payload was NOT booted."
+          exit 1
+
+      - name: Terraform plan (payload phase)
+        id: plan
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var rehearsal_phase=payload
+
+      - name: Assert the payload plan replaces only the host (plan-shape host-only)
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > /tmp/plan-payload.json
+          rc=0; bash "${GITHUB_WORKSPACE}/scripts/git-data-rung2-plan-shape.sh" /tmp/plan-payload.json host-only || rc=$?
+          rm -f /tmp/plan-payload.json
+          exit "$rc"
+
       - name: Terraform apply (creates the throwaway rehearsal host)
         id: apply
         if: ${{ !inputs.teardown_only && !inputs.dry_run }}
@@ -621,6 +647,90 @@ jobs:
           fi
           exit "$rc"
 
+      # ══ (#5274) THE REPLACE ARM (P8) ═══════════════════════════════════════════════════
+      #
+      # Boot #1 took the fresh-format arm of the LUKS stage and was then hard-reset mid-mount, so
+      # boot #2 ADOPTS a LUKS volume a predecessor formatted and abandoned mounted — the state the
+      # production replace will boot into — against the plaintext volume boot #1 read. Mirrors
+      # production's `-replace` pair (host + host key). If boot #1 wrote nothing, boot #2 must
+      # again read plaintext_journal=dirty: the real-image proof that the snapshot read is
+      # read-only. The window is stamped BEFORE the apply and passed as its own flag: the host name
+      # is reused, and RUNG2_SENTRY_SINCE must keep describing boot #1.
+      - name: Terraform plan (replace arm)
+        id: plan_replace
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan-replace \
+              -replace=hcloud_server.rehearsal -replace=tls_private_key.rehearsal_host_ssh \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var rehearsal_phase=payload
+
+      - name: Assert the replace plan replaces only the host (plan-shape host-only)
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan-replace > /tmp/plan-replace.json
+          rc=0; bash "${GITHUB_WORKSPACE}/scripts/git-data-rung2-plan-shape.sh" /tmp/plan-replace.json host-only || rc=$?
+          rm -f /tmp/plan-replace.json
+          exit "$rc"
+
+      - name: Terraform apply (replace arm)
+        id: apply_replace
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' }}
+        timeout-minutes: 15
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # STAMPED BEFORE THE APPLY, into its OWN variable (never RUNG2_SENTRY_SINCE, whose last
+          # write would win in GITHUB_ENV and narrow boot #1's Sentry cross-check).
+          echo "RUNG2_REPLACE_SINCE=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_ENV"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false tfplan-replace
+          echo "host=${REHEARSAL_PREFIX}${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Capture the replace boot (bounded poll)
+        id: replace_probe
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' && steps.apply_replace.outcome == 'success' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REHEARSAL_HOST: ${{ steps.apply_replace.outputs.host }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RUNG2_REPLACE_SINCE:-}" ]]; then
+            echo "::error::RUNG2_REPLACE_SINCE is missing — the replace window was never stamped, so boot #1's rows could be read as boot #2's. Refusing (AP-027)."
+            echo "replace_rc=64" >> "$GITHUB_OUTPUT"
+            exit 64
+          fi
+          rc=2
+          deadline=$(( SECONDS + 16 * 60 ))
+          while (( SECONDS < deadline )); do
+            rc=0
+            doppler run --preserve-env -p soleur -c prd_terraform -- \
+              bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
+                --host-name "$REHEARSAL_HOST" \
+                --evidence-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                --replace-since "${RUNG2_REPLACE_SINCE}" \
+                --out /tmp/rung2/git-data-rung2-boot-evidence.env || rc=$?
+            [[ "$rc" -ne 2 ]] && break
+            sleep 30
+          done
+          echo "replace_rc=${rc}" >> "$GITHUB_OUTPUT"
+          if [[ "$rc" -eq 0 ]]; then
+            echo "### Rung-2 replace arm: PASS" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`${REHEARSAL_HOST}\` boot #2 adopted the LUKS volume and again read plaintext_journal=dirty (#5274)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Rung-2 replace arm: rc=${rc}" >> "$GITHUB_STEP_SUMMARY"
+            echo "A FAIL or TRANSIENT here RELEASES NOTHING: the evidence upload below is gated on this step. On FAIL, read boot #2's fatal row; the LUKS adopt arm is the suspect." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
+
       # ── THE ACK DECISION, EMITTED ONCE, AFTER THE RESET PROBE (#8010) ──────────────
       #
       # git_data_rung2_rehearsal_gate no longer treats an UNAVAILABLE Sentry cross-check as
@@ -635,7 +745,7 @@ jobs:
       # end up carrying.
       - name: Report whether the Sentry cross-check needs an acknowledgement
         id: sentry_ack
-        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' }}
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' && steps.replace_probe.outputs.replace_rc == '0' }}
         run: |
           set -euo pipefail
           ev=/tmp/rung2/git-data-rung2-boot-evidence.env
@@ -663,8 +773,9 @@ jobs:
       - name: Upload the evidence file as an artifact
         # (#8210) BOTH rcs. Evidence that the birth booted but the mapper never reopened
         # unattended must not be publishable — that is the shape the reboot arm exists to catch,
-        # and gating only on capture_rc would upload it.
-        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' }}
+        # and gating only on capture_rc would upload it. (#5274) The replace arm too: no releasing
+        # evidence may exist unless boot #2 adopted the LUKS volume and read the journal dirty.
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' && steps.replace_probe.outputs.replace_rc == '0' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: git-data-rung2-boot-evidence
@@ -796,13 +907,57 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  # (#5274) TEARDOWN IS ITS OWN JOB. Inside the rehearse job a job-ceiling timeout left the
+  # `if: always()` destroy only the runner's cancellation grace; with three boots the job budget
+  # grew, so teardown moved here, where it keeps its own budget whatever happened above. No
+  # `environment:` on purpose: the environment requires reviewers, and a teardown waiting for a
+  # second approval is a paid host left running. It uses only the repo-level DOPPLER_TOKEN, and it
+  # destroys only what the rehearsal root's own state holds.
+  teardown:
+    needs: rehearse
+    if: ${{ always() && (inputs.teardown_only || !inputs.dry_run) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Extract R2 backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init (rehearsal root — DISTINCT state key)
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
       # ── TEARDOWN ───────────────────────────────────────────────────────────────────
       #
       # `if: always()` so an aborted or failed rehearsal still tears down. A leaked host is a
       # paying box running the git transport wrappers with a LUKS volume attached, and nothing
       # outside this step and the drift sweeper's orphan probe would ever reclaim it.
       - name: Teardown (always)
-        if: ${{ always() && !inputs.dry_run }}
+        if: ${{ !inputs.teardown_only }}
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -810,7 +965,7 @@ jobs:
           set -euo pipefail
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var rehearsal_phase=payload
 
       # DETECTION INDEPENDENT OF THE THING IT CHECKS. `terraform destroy` exiting 0 says the
       # state file believes the host is gone; it does not say Hetzner agrees. This asks
@@ -823,7 +978,7 @@ jobs:
       # default ran the destroy and then SKIPPED the only step that proves it worked, on the
       # exact path an operator reaches for when they already suspect a host is stranded.
       - name: Assert no rehearsal host survives (Hetzner API)
-        if: ${{ always() && (inputs.teardown_only || !inputs.dry_run) }}
+        if: ${{ always() }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |

@@ -214,7 +214,18 @@ resource "hcloud_server" "rehearsal" {
     ipv6_enabled = true
   }
 
-  user_data = base64gzip(module.git_data_userdata.rendered)
+  # (#5274) TWO PHASES ON ONE ADDRESS. `seed` boots seed-dirty-journal.sh, which mounts the
+  # plaintext volume rw, writes, and powers off without unmounting — the 2026-09-24 production
+  # state. `payload` REPLACES this server (user_data is ForceNew, and both attachments follow
+  # their server_id) with the UNMODIFIED module render, which is exactly the production event: a
+  # replace of a host that had the volume mounted rw. The seed's volume input is the rehearsal
+  # plaintext volume's own id, never a variable — this root runs in the production Hetzner project.
+  user_data = var.rehearsal_phase == "seed" ? base64gzip(templatefile("${path.module}/seed-dirty-journal.sh", {
+    volume_id              = hcloud_volume.rehearsal.id
+    betterstack_ingest_url = var.betterstack_ingest_url
+    betterstack_logs_token = var.git_data_betterstack_logs_token
+    host_name              = "${local.rehearsal_host_name}-seed"
+  })) : base64gzip(module.git_data_userdata.rendered)
 
   # NO `lifecycle.ignore_changes` anywhere in this root. The host is cattle by construction —
   # it exists for one boot — so there is no drift to suppress, and suppressing user_data drift
