@@ -377,7 +377,7 @@ else fail "AC25d MUTATION did not land (quote-strip marker absent)"; fi
 emit "git-data bootstrap complete" boot_complete info "" \
   "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
   "fence_on_mapper=yes" "erasure_probe=yes" "plaintext_empty=yes" \
-  "plaintext_volume=present" "served_repos=0" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
+  "plaintext_volume=present" "served_repos=0" "plaintext_journal=dirty" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
 BODY="$(last_body)"
 # KEY **AND VALUE**. The former loop grepped `"$k"` only, so blanking every value on the
 # wire left it 21/21 green — and the value is the entire content of this payload: THREE
@@ -388,7 +388,7 @@ BODY="$(last_body)"
 # producer sends and the roster arm below is what keeps them out of the terminal set.
 for kv in luks_mounted=yes repo_root=yes hooks_path=yes provision=yes \
           fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes \
-          plaintext_volume=present served_repos=0 disk_pct=7 inode_pct=9; do
+          plaintext_volume=present served_repos=0 plaintext_journal=dirty disk_pct=7 inode_pct=9; do
   k="${kv%%=*}"; v="${kv#*=}"
   if grep -qF "\"$k\":\"$v\"" <<<"$BODY"; then pass; else fail "AC30 boot_complete $k != $v" "$BODY"; fi
 done
@@ -428,7 +428,7 @@ _producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
 # plaintext count) and TERMINAL for every consumer. plaintext_volume and served_repos join it
 # too, but as INFORMATIONAL: they carry present|absent and a count, not yes|no, so the roster
 # arm below subtracts them rather than demanding a reader gate on them.
-_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos disk_pct inode_pct | sort -u | tr '\n' ' ')"
+_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos plaintext_journal disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then
   fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
 elif [ "$_producer_keys" = "$_asserted_keys" ]; then
@@ -687,7 +687,10 @@ passes=$_can_p0; fails=$_can_f0
 # would refuse every healthy boot. What they describe is NOT unguarded — a non-zero
 # served_repos is already a bootstrap FATAL (luks_residue), which both readers see on the
 # fatal arm, and plaintext_empty is the terminal boolean that answers the same question.
-NON_TERMINAL="nft_metadata_drop disk_pct inode_pct plaintext_volume served_repos"
+# (#5274) plaintext_journal (dirty|clean|absent) joins them: the origin's journal state before the
+# snapshot read, informational — a dirty journal is no longer a failure, and the terminal
+# plaintext_empty still answers whether the post-replay tree was empty.
+NON_TERMINAL="nft_metadata_drop disk_pct inode_pct plaintext_volume served_repos plaintext_journal"
 # DERIVED FROM THE VARIABLE, not from a second hand-typed copy of the same three names. The
 # first revision spelled them again in the grep, so `declared ONCE, here` was false: NON_TERMINAL
 # was dead (shellcheck SC2034 named it), and adding a fourth non-terminal to it would have
@@ -771,7 +774,8 @@ done
 # (fence_on_mapper, erasure_probe, plaintext_empty, plaintext_volume, served_repos), and the
 # floor moves with them — a floor left at the old number is satisfied by a run that dropped
 # every one of the rows this edit added. Measured: 72 ran, 72 passed.
-MIN_ASSERTIONS=72
+# 72 -> 73 (#5274): the AC30 fixture loop gains plaintext_journal=dirty.
+MIN_ASSERTIONS=73
 total=$((passes + fails))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   echo "FAIL: ran only ${total} assertions (floor ${MIN_ASSERTIONS}) — suite did not execute fully" >&2

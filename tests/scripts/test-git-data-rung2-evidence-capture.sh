@@ -309,7 +309,7 @@ printf '{"dt":"2026-07-29 11:59:00","host":"soleur-web-1"}\n' > "$ANCHOR_LIVE"
 
 # ── ARM 1: the PASS path ──────────────────────────────────────────────────────────
 HOSTROWS="$TMP/rows-pass.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$HOSTROWS"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$HOSTROWS"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
 OUT="$TMP/evidence-pass.env"
 # (#8010) THE PASS PATH RUNS WITH THE SECOND CHANNEL ANSWERING, and answering CLEAN. The
@@ -461,7 +461,7 @@ if [[ "$out" == *"luks_open"* ]]; then pass "the FAIL names the stage that died"
 # find exactly that, so "ended fine" must not overwrite "went wrong".
 HOSTROWS_BOTH="$TMP/rows-both.jsonl"
 { row bootstrap fatal detail="transient"
-  row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes; } > "$HOSTROWS_BOTH"
+  row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty; } > "$HOSTROWS_BOTH"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_BOTH"
 OUT_BOTH="$TMP/evidence-both.env"
 out="$(run_sut --out "$OUT_BOTH")"; rc=$?
@@ -471,7 +471,7 @@ if [[ "$rc" -eq 1 ]]; then pass "a fatal ALONGSIDE a boot_complete => still FAIL
 # The inherited `\bno\b` check is retained as a SECOND FAIL trigger, because it costs nothing
 # and it is the arm that fires if the consumer's assertions are ever weakened to real values.
 HOSTROWS_NO="$TMP/rows-no.jsonl"
-row boot_complete info luks_mounted=no repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$HOSTROWS_NO"
+row boot_complete info luks_mounted=no repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$HOSTROWS_NO"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_NO"
 out="$(run_sut --out "$TMP/evidence-no.env")"; rc=$?
 if [[ "$rc" -eq 1 ]]; then pass "boot_complete with a FALSE assertion => FAIL"; else
@@ -484,7 +484,7 @@ if [[ "$rc" -eq 1 ]]; then pass "boot_complete with a FALSE assertion => FAIL"; 
 # can actually carry — which is precisely why it must FAIL rather than warn: a replace is the
 # only route by which the boot-time reopen reaches the live host.
 HOSTROWS_REOPEN_NO="$TMP/rows-reopen-no.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=no fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes \
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=no fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty \
   > "$HOSTROWS_REOPEN_NO"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_REOPEN_NO"
 out="$(run_sut --out "$TMP/evidence-reopen-no.env")"; rc=$?
@@ -499,7 +499,7 @@ if [[ ! -f "$TMP/evidence-reopen-no.env" ]]; then
 # (only an explicit "no" was rejected) and write gate-releasing evidence. The poll already
 # refused it; now both readers agree.
 HOSTROWS_REOPEN_ABSENT="$TMP/rows-reopen-absent.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes \
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty \
   > "$HOSTROWS_REOPEN_ABSENT"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_REOPEN_ABSENT"
 out="$(run_sut --out "$TMP/evidence-reopen-absent.env")"; rc=$?
@@ -521,7 +521,9 @@ _ALL_YES="luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reope
 _b_row() {  # $1=label $2=expected-verdict-substring $3...=boot_complete k=v args
   local label="$1" want="$2" rows="$TMP/rows-b.$RANDOM.jsonl" ev="$TMP/evidence-b.$RANDOM.env" o r
   shift 2
-  row boot_complete info "$@" > "$rows"
+  # (#5274) The producer always emits the two plaintext fields; defaults FIRST, so a caller's own
+  # value wins (jq keeps the last duplicate key).
+  row boot_complete info plaintext_volume=present plaintext_journal=dirty "$@" > "$rows"
   make_stub "$STUB" "$ANCHOR_LIVE" "$rows"
   o="$(run_sut --out "$ev")"; r=$?
   if [[ "$r" -eq 1 && "$o" == *"$want"* && "$o" != *"PASS"* && ! -f "$ev" ]]; then pass "$label"
@@ -542,12 +544,84 @@ done
 # (the producer's real shape) PASSes on its terminal booleans alone.
 _rows_info="$TMP/rows-info.jsonl"
 # shellcheck disable=SC2086
-row boot_complete info $_ALL_YES plaintext_volume=present served_repos=0 > "$_rows_info"
+row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty served_repos=0 > "$_rows_info"
 make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_info"
 out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-info.env")"; rc=$?
 if [[ "$rc" -eq 0 && "$out" == *"PASS: ${HOST} reported stage:boot_complete"* && -f "$TMP/evidence-info.env" ]]; then
   pass "all eight terminal booleans yes, informational fields present => PASS (0), PASS verdict text, evidence written"; else
   fail "all eight terminal booleans yes, informational fields present => PASS (0), PASS verdict text, evidence written" "$rc" "$out"; fi
+
+# ── ARM 2g (#5274, Guard 2): PASS only when the dirty-journal case was actually booted ──
+# Every boot_complete row must read plaintext_volume=present AND plaintext_journal=dirty, by exact
+# match on the parsed field. Each row is the RED for one Guard 2 mutation.
+_G2_WANT="WITHOUT plaintext_volume=present plaintext_journal=dirty"
+# shellcheck disable=SC2086
+_b_row "G2 row 1: present + clean journal => FAIL (the seed never dirtied it), no evidence" "$_G2_WANT" $_ALL_YES plaintext_journal=clean
+# shellcheck disable=SC2086
+_b_row "G2 row 3: plaintext_journal absent/empty => FAIL, no evidence" "$_G2_WANT" $_ALL_YES plaintext_journal=
+# shellcheck disable=SC2086
+_b_row "G2 row 2: plaintext_journal=Dirty (case) => FAIL — exact match, no evidence" "$_G2_WANT" $_ALL_YES plaintext_journal=Dirty
+# shellcheck disable=SC2086
+_b_row "G2 row 2: plaintext_journal=notdirty => FAIL — never a substring match, no evidence" "$_G2_WANT" $_ALL_YES plaintext_journal=notdirty
+# shellcheck disable=SC2086
+_b_row "G2 row 3b: plaintext_volume=absent => FAIL (a broken render, not a pass), no evidence" "$_G2_WANT" $_ALL_YES plaintext_volume=absent
+_rows_g2two="$TMP/rows-g2two.jsonl"
+# shellcheck disable=SC2086
+{ row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty
+  row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=clean; } > "$_rows_g2two"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_g2two"
+out="$(run_sut --out "$TMP/evidence-g2two.env")"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"$_G2_WANT"* && ! -f "$TMP/evidence-g2two.env" ]]; then
+  pass "G2 row 4: a clean boot_complete AFTER a compliant dirty one => FAIL (every row must comply), no evidence"; else
+  fail "G2 row 4: a clean boot_complete AFTER a compliant dirty one => FAIL (every row must comply), no evidence" "$rc" "$out"; fi
+# G2 row 3 (static): the stub answers regardless of the SQL, so the PROJECTION is pinned here —
+# a HOSTROWS select that drops either column makes every real row read absent and FAIL forever.
+if grep -qF "JSONExtractString(raw,'plaintext_journal') AS plaintext_journal" "$SUT" \
+   && grep -qF "JSONExtractString(raw,'plaintext_volume') AS plaintext_volume" "$SUT"; then
+  pass "G2 row 3: HOSTROWS projects plaintext_volume and plaintext_journal"; else
+  fail "G2 row 3: HOSTROWS projects plaintext_volume and plaintext_journal" "" "missing projection in $SUT"; fi
+# Must-PASS, non-canonical: the fields in another key order, plus unrelated extras.
+_rows_g2ord="$TMP/rows-g2ord.jsonl"
+# shellcheck disable=SC2086
+row boot_complete info plaintext_journal=dirty disk_pct=7 $_ALL_YES served_repos=0 plaintext_volume=present inode_pct=3 > "$_rows_g2ord"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_g2ord"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-g2ord.env")"; rc=$?
+if [[ "$rc" -eq 0 && -f "$TMP/evidence-g2ord.env" ]]; then
+  pass "G2 must-PASS: present+dirty in another key order with extra fields => PASS, evidence written"; else
+  fail "G2 must-PASS: present+dirty in another key order with extra fields => PASS, evidence written" "$rc" "$out"; fi
+
+# ── ARM 2r (#5274): the REPLACE arm appends RUNG2_REPLACE_BOOT to capture #1's file ─────
+_rows_rep="$TMP/rows-rep.jsonl"
+# shellcheck disable=SC2086
+row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty > "$_rows_rep"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_rep"
+_ev_rep="$TMP/evidence-rep.env"
+run_sut_sentry 0 "$_NO_FATAL" --out "$_ev_rep" >/dev/null 2>&1
+cp "$_ev_rep" "$TMP/evidence-rep.before"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$_ev_rep" --replace-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -eq 0 && -s "$TMP/evidence-rep.before" ]] && grep -qxF 'RUNG2_REPLACE_BOOT=PASS' "$_ev_rep" \
+   && cmp -s -n "$(stat -c %s "$TMP/evidence-rep.before")" "$TMP/evidence-rep.before" "$_ev_rep"; then
+  pass "replace arm: a compliant boot #2 APPENDS RUNG2_REPLACE_BOOT=PASS and leaves capture #1's bytes intact"; else
+  fail "replace arm: a compliant boot #2 APPENDS RUNG2_REPLACE_BOOT=PASS and leaves capture #1's bytes intact" "$rc" "$out"; fi
+if [[ "$(grep -c '^RUNG2_BOOT_REHEARSAL=' "$_ev_rep")" -eq 1 ]]; then pass "replace arm: writes no second RUNG2_BOOT_REHEARSAL key"; else
+  fail "replace arm: writes no second RUNG2_BOOT_REHEARSAL key" "" "$(cat "$_ev_rep")"; fi
+# T13: boot #2 reporting a CLEAN journal means boot #1 wrote the volume it may only read.
+_rows_rep_clean="$TMP/rows-rep-clean.jsonl"
+# shellcheck disable=SC2086
+row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=clean > "$_rows_rep_clean"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_rep_clean"
+_ev_rep2="$TMP/evidence-rep2.env"; cp "$_ev_rep" "$_ev_rep2"; sed -i '/^RUNG2_REPLACE/d' "$_ev_rep2"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$_ev_rep2" --replace-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"$_G2_WANT"* ]] && ! grep -q '^RUNG2_REPLACE_BOOT' "$_ev_rep2"; then
+  pass "replace arm (T13): boot #2 with plaintext_journal=clean => FAIL, nothing appended"; else
+  fail "replace arm (T13): boot #2 with plaintext_journal=clean => FAIL, nothing appended" "$rc" "$out"; fi
+out="$(run_sut --out "$TMP/evidence-rep-none.env" --replace-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -eq 64 && ! -f "$TMP/evidence-rep-none.env" ]]; then
+  pass "replace arm: no capture #1 PASS file => refused 64 (wiring fault), nothing written"; else
+  fail "replace arm: no capture #1 PASS file => refused 64 (wiring fault), nothing written" "$rc" "$out"; fi
+out="$(run_sut --out "$_ev_rep" --replace-since 2026-07-29T11:00:00 --reboot-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -eq 64 ]]; then pass "--replace-since and --reboot-since together => refused 64"; else
+  fail "--replace-since and --reboot-since together => refused 64" "$rc" "$out"; fi
 
 # ── ARM 3: TRANSIENT — the host said nothing, but the channel is demonstrably live ──
 HOSTROWS_EMPTY="$TMP/rows-empty.jsonl"
@@ -833,7 +907,7 @@ chmod +x "$_shim_dir/curl"
 # first on PATH). NOT a seam in the script under test — the script has no host-override seam.
 _ADM_HOST="stub.betterstackdata.com"
 _adm_rows="$TMP/rows-adm.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$_adm_rows"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$_adm_rows"
 cat > "$TMP/bs-record.sh" <<RECSTUB
 #!/usr/bin/env bash
 printf '%s' "\$1" > "${_seen}/\$(date +%s%N)-\$\$.sql"
@@ -910,7 +984,7 @@ cp -r "$FIX" "$FIX_BROKEN" || { echo "HARNESS ABORT: could not copy the fixture 
 rm -f "$FIX_BROKEN/git-data-gc.timer" \
   || { echo "HARNESS ABORT: could not remove the A12 payload" >&2; exit 2; }
 HOSTROWS_DERIV="$TMP/rows-deriv.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$HOSTROWS_DERIV"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$HOSTROWS_DERIV"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_DERIV"
 out="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST=stub \
        BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
@@ -1297,7 +1371,7 @@ HOSTROWS_CHATTY="$TMP/rows-chatty.jsonl"
 for _i in $(seq 1 50); do
   row mount info "detail=routine emit ${_i}" >> "$HOSTROWS_CHATTY"
 done
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes >> "$HOSTROWS_CHATTY"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty >> "$HOSTROWS_CHATTY"
 FATALROWS_CHATTY="$TMP/rows-chatty-fatal.jsonl"
 row luks_open fatal "rc=32" "detail=mount(2) ESRCH" > "$FATALROWS_CHATTY"
 
@@ -1588,7 +1662,7 @@ run_reboot() {  # $1=sentry --stage body, rest appended
 HOSTROWS_RB_PROD="$TMP/rows-rb-prod.jsonl"
 {
   rrow 11:30:00 luks_open fatal rc=32
-  rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes
+  rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty
   rrow 12:30:30 luks_reopen_ok info action=reopened target=/mnt/git-data restarts=0
 } > "$HOSTROWS_RB_PROD"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_PROD"
@@ -1621,7 +1695,7 @@ fi
 # WHERE the mapper was mounted. It is TRANSIENT (no verdict, nothing appended), never PASS; the
 # ingest-miss reasoning still keeps it off FAIL.
 HOSTROWS_RB_EMPTY="$TMP/rows-rb-empty.jsonl"
-rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$HOSTROWS_RB_EMPTY"
+rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$HOSTROWS_RB_EMPTY"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_EMPTY"
 OUT_RB2="$TMP/ev-rb-sentry.env"; : > "$OUT_RB2"
 out="$(run_reboot "$_REOPENED_BODY" --out "$OUT_RB2")"; rc=$?
@@ -2003,7 +2077,10 @@ _ran=$((passes + fails))
 #        absent, Sentry-corroborated-wrong and a /mnt/git-data/sub prefix each FAIL (1)
 #   ----
 #    15   (ARM 30 was rewritten, not added: Sentry-only reopen is now TRANSIENT, 2 rows still)
-_FLOOR=145  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file) + ARMS C1-C6 above
+# RAISED 145 -> 158 (#5274): ARM 2g's Guard 2 rows (rows 1, 2 x2, 3, 3 static, 3b, 4, the
+# must-PASS key-order row = 8) and ARM 2r's replace-arm rows (append + intact bytes, no second key, T13,
+# the capture-#1 precondition, the flag exclusion = 5).
+_FLOOR=158  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file) + ARMS C1-C6 above
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).

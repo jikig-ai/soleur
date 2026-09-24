@@ -19,6 +19,15 @@
 #       noload, the journal replays into the COW, the snapshot's superblock is clean while the
 #       origin's still carries needs_recovery, and the origin's bytes are unchanged.
 #
+# The SUT tier then drives the REAL plaintext-count unit (extracted by its inner sentinels from
+# git-data-bootstrap.sh, spanning the real _repo_count) against real loop devices, one child bash
+# per arm: A clean; B dirty + empty; C dirty with a repository recorded ONLY in the journal (the
+# discriminating arm: a noload read would miss it); Guard 1 row 4 (noload + no post-check) run
+# against arm C's shape; D COW overflow; E a directory block that fails its checksum (ext4
+# readdir skips it silently); F a torn last transaction checked against an independent rw
+# replay of a copy. Every arm asserts the origin's sha256 is unchanged, it is still kernel-ro,
+# and no loop, dm device or /dev/shm entry survives (against a per-arm baseline).
+#
 # IT LIVES IN ITS OWN FILE BECAUSE IT NEEDS ROOT. It is invoked as `sudo bash` inside a multi-line
 # `run: |` block in infra-validation.yml and exempted in test-infra-suite-registration.sh — the
 # same shape and reason as inngest-redis-luks-loopback.test.sh (#7076): it exits 2 unprivileged, so
@@ -235,19 +244,217 @@ M1_SHA_AFTER="$(sha256sum < "$M1_LOOP")" || instrument "sha256sum of $M1_LOOP fa
 if [ "$M1_SHA_BEFORE" = "$M1_SHA_AFTER" ]; then ok "M1 the origin's bytes are unchanged (sha256)"; else no "M1 the origin's bytes CHANGED — the snapshot wrote the retained device"; fi
 if [ "$(blockdev --getro "$M1_LOOP")" = 1 ]; then ok "M1 the origin is still kernel read-only after teardown"; else no "M1 the origin is no longer read-only after teardown"; fi
 
+# ═══ SUT TIER — the REAL extracted plaintext-count unit, on real loop devices ═══════
+# The unit is extracted by its inner sentinels (it spans the real _repo_count definition through
+# the end of the plaintext block, so arm C tests the real counter, not a copy). log() is copied out
+# of the script. Each arm runs the unit in a CHILD bash (the unit `exit`s and arms an EXIT trap);
+# the parent measures the origin's bytes, its read-only flag and the transient-device leaks.
+PT_BEGIN='# ---- BEGIN plaintext-count unit ----'
+PT_END='# ---- END plaintext-count unit ----'
+PT_UNIT="$TMPROOT/pt-unit.sh"
+awk -v b="$PT_BEGIN" -v e="$PT_END" '$0==b{f=1;next} $0==e{f=0} f' "$BOOTSTRAP" > "$PT_UNIT" || instrument "extraction failed"
+_n=$(grep -c . "$PT_UNIT" || true)
+[ "$_n" -ge 60 ] || instrument "the plaintext-count unit extracted only $_n lines (sentinels moved or deleted)"
+bash -n "$PT_UNIT" || instrument "the extracted plaintext-count unit is not valid bash on its own"
+PT_PRELUDE="$TMPROOT/pt-prelude.sh"
+{
+  printf 'GIT_DATA_EMIT=/nonexistent/git-data-emit\n'
+  awk '/^log\(\) \{$/{f=1} f{print} f&&/^\}$/{exit}' "$BOOTSTRAP"
+} > "$PT_PRELUDE" || instrument "prelude write failed"
+grep -q '^log() {' "$PT_PRELUDE" || instrument "log() was not copied out of the bootstrap"
+PT_TRAILER="$TMPROOT/pt-trailer.sh"
+printf 'printf "plaintext_journal=%%s\\n" "$_plaintext_journal"\nprintf "plaintext_volume=%%s\\n" "$_plaintext_volume"\n' > "$PT_TRAILER" || instrument "trailer write failed"
+
+ARMS_RAN=0
+leak_state() { { losetup -a 2>/dev/null | sort; echo ---; dmsetup ls 2>/dev/null | sort; echo ---; ls -A /dev/shm 2>/dev/null | sort; } }
+
+# run_sut <arm> <origin-loop> [unit-file] — runs the unit as a child; sets SUT_RC, SUT_OUT, SUT_ERR,
+# and asserts the four invariants every arm owes: bytes unchanged, still kernel-ro, no leak, and
+# no snapshot device left behind.
+run_sut() {
+  local arm="$1" loop="$2" unit="${3:-$PT_UNIT}" sha0 sha1 leak0 leak1
+  ARMS_RAN=$((ARMS_RAN + 1))
+  SUT_OUT="$TMPROOT/$arm.out"; SUT_ERR="$TMPROOT/$arm.err"
+  sync
+  sha0="$(sha256sum < "$loop")" || instrument "sha256sum of $loop failed"
+  leak0="$(leak_state)"
+  SUT_RC=0
+  env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin GIT_DATA_PLAINTEXT_VOLUME_ID=424242424 GIT_DATA_PLAINTEXT_DEV="$loop" \
+    bash -c 'set -euo pipefail; . "$1"; _plaintext_volume=absent; . "$2"; . "$3"' _ "$PT_PRELUDE" "$unit" "$PT_TRAILER" \
+    > "$SUT_OUT" 2> "$SUT_ERR" || SUT_RC=$?
+  sha1="$(sha256sum < "$loop")" || instrument "sha256sum of $loop failed"
+  leak1="$(leak_state)"
+  if [ "$sha0" = "$sha1" ]; then ok "$arm the origin's bytes are unchanged (sha256)"; else no "$arm the origin's bytes CHANGED — the unit wrote the retained device"; fi
+  if [ "$(blockdev --getro "$loop")" = 1 ]; then ok "$arm the origin is kernel read-only after the unit"; else no "$arm the origin is NOT read-only after the unit"; fi
+  if [ "$leak0" = "$leak1" ]; then ok "$arm no loop, dm device or /dev/shm entry survives (baseline-relative)"; else no "$arm transient state leaked: $(diff <(printf '%s\n' "$leak0") <(printf '%s\n' "$leak1") | tr '\n' ' ')"; fi
+  if dmsetup info git-data-pt-snap >/dev/null 2>&1; then
+    no "$arm git-data-pt-snap still exists"; dmsetup remove --retry git-data-pt-snap >/dev/null 2>&1
+  else
+    ok "$arm no git-data-pt-snap device remains"
+  fi
+}
+sut_field() { sed -n "s/^$1=//p" "$SUT_OUT"; }
+sut_pass() { # <arm> <journal>
+  if [ "$SUT_RC" = 0 ]; then ok "$1 the unit PASSES (rc 0)"; else no "$1 the unit failed (rc=$SUT_RC): $(tr '\n' ' ' < "$SUT_ERR")"; fi
+  if [ "$(sut_field plaintext_journal)" = "$2" ]; then ok "$1 plaintext_journal=$2"; else no "$1 plaintext_journal='$(sut_field plaintext_journal)', expected $2"; fi
+}
+sut_fatal() { # <arm> <literal FATAL substring>
+  if [ "$SUT_RC" != 0 ] && grep -qF -- "$2" "$SUT_ERR"; then ok "$1 FATAL: $2"; else no "$1 expected FATAL '$2' (rc=$SUT_RC): $(tr '\n' ' ' < "$SUT_ERR")"; fi
+}
+
+# populate <loop> <cmd…> — mount rw, run a shell snippet in the mount, unmount cleanly.
+populate() {
+  local loop="$1" snippet="$2" mnt="$TMPROOT/pop-mnt"
+  mkdir -p "$mnt" || instrument "mkdir $mnt failed"
+  mount -o rw "$loop" "$mnt" || instrument "rw mount of $loop failed"
+  ( cd "$mnt" && eval "$snippet" ) || { umount "$mnt"; instrument "populate snippet failed: $snippet"; }
+  umount "$mnt" || instrument "umount after populate failed"
+}
+
+# journal_only_residue <loop> <flag> — arm C's deterministic build: a checkpointed anchor, then a
+# repository created, its directory fsync'd and the filesystem shut down FROM THE SAME PROCESS with
+# no sync in between, so the entry exists ONLY in the journal. The anchor is named like a lock
+# dotfile so the unit's count excludes it, while debugfs still lists it (proving it read the right
+# directory). Returns 1 when the precondition does not hold.
+journal_only_residue() {
+  local loop="$1" flag="$2" mnt="$TMPROOT/jor-mnt" ls
+  populate "$loop" 'mkdir -p repositories && : > repositories/.anchor.init.lock'
+  mkdir -p "$mnt" || instrument "mkdir $mnt failed"
+  mount -o rw "$loop" "$mnt" || instrument "rw mount of $loop failed"
+  python3 - "$mnt" "$flag" <<'PY' || { umount "$mnt" 2>/dev/null; instrument "the journal-only build failed"; }
+import fcntl, os, struct, sys
+m, flag = sys.argv[1], int(sys.argv[2])
+os.mkdir(os.path.join(m, "repositories", "ws-1.git"))
+d = os.open(os.path.join(m, "repositories"), os.O_RDONLY)
+os.fsync(d)
+os.close(d)
+fd = os.open(m, os.O_RDONLY)
+fcntl.ioctl(fd, 0x8004587D, struct.pack('I', flag))
+os.close(fd)
+PY
+  umount "$mnt" || instrument "umount after shutdown failed"
+  needs_recovery "$loop" || return 1
+  ls="$(debugfs -c -R 'ls -l /repositories' "$loop" 2>/dev/null)" || return 1
+  [[ "$ls" == *".anchor.init.lock"* ]] || return 1
+  [[ "$ls" != *"ws-1.git"* ]] || return 1
+  return 0
+}
+# build_arm_c <tag> <flag> — up to 3 attempts, then an INSTRUMENT exit (never green).
+build_arm_c() {
+  local tag="$1" flag="$2" try
+  for try in 1 2 3; do
+    new_image "$tag-$try"
+    if journal_only_residue "$LOOP" "$flag"; then ARM_LOOP="$LOOP"; return 0; fi
+  done
+  instrument "arm $tag: after 3 builds the entry was not journal-only (debugfs listed it, or did not list the anchor)"
+}
+
+# ── A: clean journal, empty tree ───────────────────────────────────────────────
+new_image a; A_LOOP="$LOOP"
+populate "$A_LOOP" 'mkdir -p repositories'
+run_sut A "$A_LOOP"
+sut_pass A clean
+
+# ── B: dirty journal, empty post-replay tree (also the positive control) ────────
+new_image b; B_LOOP="$LOOP"
+make_dirty "$B_LOOP"
+run_sut B "$B_LOOP"
+sut_pass B dirty
+if needs_recovery "$B_LOOP"; then ok "B the origin still carries needs_recovery (the replay stayed in the COW)"; else no "B the origin lost needs_recovery"; fi
+
+# ── C: dirty journal whose ONLY record of a repository is in the journal (P3) ────
+build_arm_c c 1; C_LOOP="$ARM_LOOP"
+ok "C precondition: debugfs lists the checkpointed anchor and NOT the journal-only ws-1.git"
+run_sut C "$C_LOOP"
+sut_fatal C 'FATAL: plaintext_residue count=1'
+if needs_recovery "$C_LOOP"; then ok "C the origin still carries needs_recovery"; else no "C the origin lost needs_recovery"; fi
+
+# ── Guard 1 row 4: re-add noload AND drop the post-replay check → the stale tree reads empty ──
+MUT4="$TMPROOT/pt-unit.mut4"
+python3 - "$PT_UNIT" "$MUT4" <<'PY' || instrument "mutation 4 could not be written"
+import sys
+s = open(sys.argv[1]).read()
+a = 'mount -o ro,errors=remount-ro,nosuid,nodev,noexec "/dev/mapper/$_pt_snap"'
+b = '  if _pt_has_nr "$_pt_ssb"; then'
+assert s.count(a) == 1 and s.count(b) == 1
+s = s.replace(a, 'mount -o ro,noload,errors=remount-ro,nosuid,nodev,noexec "/dev/mapper/$_pt_snap"').replace(b, '  if false; then')
+open(sys.argv[2], "w").write(s)
+PY
+if cmp -s "$PT_UNIT" "$MUT4"; then no "G1-4 the mutation did not land"; else ok "G1-4 the mutation landed (noload + no post-check)"; fi
+build_arm_c c4 1; C4_LOOP="$ARM_LOOP"
+run_sut G1-4 "$C4_LOOP" "$MUT4"
+if [ "$SUT_RC" = 0 ]; then ok "G1-4 ROW 4: with noload the journal-only repository is missed and the mutant PASSES — the arm is live"; else no "G1-4 the mutant did not pass (rc=$SUT_RC): $(tr '\n' ' ' < "$SUT_ERR")"; fi
+
+# ── D: COW overflow → a named FATAL, never a residue verdict or a PASS ──────────
+MUTD="$TMPROOT/pt-unit.cowtiny"
+python3 - "$PT_UNIT" "$MUTD" <<'PY' || instrument "the arm-D rebinding could not be written"
+import sys
+s = open(sys.argv[1]).read()
+a = '_pt_cow_bytes=$((_pt_jb * _pt_bs + 67108864))'
+assert s.count(a) == 1
+open(sys.argv[2], "w").write(s.replace(a, '_pt_cow_bytes=65536'))
+PY
+cmp -s "$PT_UNIT" "$MUTD" && instrument "the arm-D COW rebinding did not land"
+build_arm_c d 1; D_LOOP="$ARM_LOOP"
+run_sut D "$D_LOOP" "$MUTD"
+if [ "$SUT_RC" != 0 ] && grep -qE 'FATAL: plaintext_unverified reason=(snapshot|mount) ' "$SUT_ERR"; then
+  ok "D a COW overflow is a named FATAL reason=snapshot|mount"
+else
+  no "D expected reason=snapshot|mount (rc=$SUT_RC): $(tr '\n' ' ' < "$SUT_ERR")"
+fi
+if grep -qF 'plaintext_residue' "$SUT_ERR"; then no "D an overflow produced a residue verdict"; else ok "D no residue verdict on an overflow"; fi
+
+# ── E: a directory block that fails its checksum → reason=journal, never a short-count PASS ──
+new_image e; E_LOOP="$LOOP"
+populate "$E_LOOP" 'mkdir -p repositories/ws-e.git'
+E_BLK="$(debugfs -c -R 'blocks /repositories' "$E_LOOP" 2>/dev/null | awk 'NF{print $1; exit}')"
+[[ "$E_BLK" =~ ^[0-9]+$ ]] || instrument "arm E: could not read the repositories/ directory block"
+E_BS="$(dumpe2fs -h "$E_LOOP" 2>/dev/null | sed -n 's/^Block size:[[:space:]]*//p')"
+[[ "$E_BS" =~ ^[0-9]+$ ]] || instrument "arm E: could not read the block size"
+dd if=/dev/urandom of="$E_LOOP" bs="$E_BS" seek="$E_BLK" count=1 conv=notrunc,fsync status=none || instrument "arm E: corrupting the directory block failed"
+blockdev --flushbufs "$E_LOOP" || instrument "arm E: flushbufs failed"
+run_sut E "$E_LOOP"
+sut_fatal E 'FATAL: plaintext_unverified reason=journal'
+
+# ── F: torn last transaction (NOLOGFLUSH) — the verdict equals an independent replay ──
+build_arm_c f 2 || true; F_LOOP="$ARM_LOOP"
+F_COPY="$TMPROOT/f-oracle.img"
+sha256sum < "$F_LOOP" >/dev/null || instrument "arm F: origin unreadable"
+dd if="$F_LOOP" of="$F_COPY" bs=1M status=none || instrument "arm F: the oracle copy failed"
+F_OLOOP="$(losetup --find --show "$F_COPY")" || instrument "arm F: losetup of the oracle copy failed"
+CLEAN_LOOPS+=("$F_OLOOP")
+F_OMNT="$TMPROOT/f-oracle-mnt"; mkdir -p "$F_OMNT" || instrument "arm F: mkdir failed"
+mount -o rw "$F_OLOOP" "$F_OMNT" || instrument "arm F: the oracle rw mount (a real replay) failed"
+CLEAN_MOUNTS+=("$F_OMNT")
+F_ORACLE="$(find "$F_OMNT/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found 2>/dev/null | wc -l)"
+umount "$F_OMNT" || instrument "arm F: oracle umount failed"
+run_sut F "$F_LOOP"
+if [ "$F_ORACLE" = 0 ]; then
+  if [ "$SUT_RC" = 0 ]; then ok "F the unit PASSES and the independent replay counts 0"; else no "F the independent replay counts 0 but the unit failed: $(tr '\n' ' ' < "$SUT_ERR")"; fi
+else
+  sut_fatal F "FATAL: plaintext_residue count=$F_ORACLE"
+fi
+
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Self-contained: bash builtins and this suite's own counters only, reported by printf + exit and
 # never through ok()/no() (ADR-193) — a floor routed through the helpers it backstops is silenced by
-# the same edit that silences the arms. The bound is a literal on the line directly above its `if`
+# the same edit that silences the arms. Each bound is a literal on the line directly above its `if`
 # so guard-vacuity-floor.test.sh can construct the mutant.
-# Projected, not yet measured (the authoring machine has no passwordless sudo): N0 = 2, M1 = 9.
-# Confirm against the first CI run and account for any difference arm by arm before moving it.
-MIN_ASSERTIONS=11
+# Projected, not yet measured for the SUT tier (the authoring machine has no passwordless sudo):
+# mechanism N0 = 2, M1 = 9; SUT A = 6, B = 7, C = 7, G1-4 = 6, D = 6, E = 5, F = 5 (53 total). The
+# mechanism tier's 11 was the only part that existed at the first CI run. Confirm against CI and
+# account for any difference arm by arm before moving either literal.
+EXPECTED_ARMS=7
+if [ "$ARMS_RAN" -ne "$EXPECTED_ARMS" ]; then
+  printf '[FATAL] anti-vacuity floor: %s SUT arms ran, expected exactly %s (A, B, C, G1-4, D, E, F)\n' "$ARMS_RAN" "$EXPECTED_ARMS" >&2
+  exit 1
+fi
+MIN_ASSERTIONS=53
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — arms were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
-printf 'ok   - anti-vacuity floor: %s assertions ran (floor %s)\n' "$executed" "$MIN_ASSERTIONS"
+printf 'ok   - anti-vacuity floor: %s assertions over %s SUT arms (floors %s / %s)\n' "$executed" "$ARMS_RAN" "$MIN_ASSERTIONS" "$EXPECTED_ARMS"
 
 echo ""
 echo "=== git-data-plaintext-snapshot-loopback.test.sh: ${pass} passed, ${fail} failed ==="

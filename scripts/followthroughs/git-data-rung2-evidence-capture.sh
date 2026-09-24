@@ -129,6 +129,7 @@ WINDOW="30 DAY"
 SENTRY_SINCE=""
 VERIFY_ONLY=0
 REBOOT_SINCE=""
+REPLACE_SINCE=""
 DIVERGENCE=""
 
 while [[ $# -gt 0 ]]; do
@@ -146,6 +147,13 @@ while [[ $# -gt 0 ]]; do
     # source-liveness anchor, its query transport and its Sentry cross-check rather than
     # standing up a second probe. The timestamp bounds BOTH channels SERVER-side.
     --reboot-since) REBOOT_SINCE="${2:-}"; SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
+    # (#5274) REPLACE MODE. The rung-2 replace arm replaces the rehearsal host again (P8: boot #2
+    # ADOPTS a LUKS volume a predecessor formatted and abandoned mounted, against the plaintext
+    # volume boot #1 read). This mode runs the ordinary boot_complete verdict over the window
+    # STAMPED IMMEDIATELY BEFORE THAT REPLACE — the host name is reused across seed, boot #1, the
+    # reboot and boot #2, so the window is the only thing separating them — and APPENDS
+    # RUNG2_REPLACE_BOOT=PASS to the evidence capture #1 wrote, rather than writing a new file.
+    --replace-since) REPLACE_SINCE="${2:-}"; SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
     --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 || shift ;;
     --out)          OUT="${2:-}"; shift 2 || shift ;;
     --window)       WINDOW="${2:-}"; shift 2 || shift ;;
@@ -176,7 +184,18 @@ assert_fixture_dir() {
 [[ -z "$OUT" ]] && OUT="$(dirname "$CLOUD_INIT")/git-data-rung2-boot-evidence.env"
 
 if [[ -z "$HOST_NAME" ]]; then
-  echo "usage: git-data-rung2-evidence-capture.sh --host-name soleur-git-data-rehearsal-<run-id> --evidence-url <url> [--out <path>] [--reboot-since <ISO8601>]" >&2
+  echo "usage: git-data-rung2-evidence-capture.sh --host-name soleur-git-data-rehearsal-<run-id> --evidence-url <url> [--out <path>] [--reboot-since <ISO8601> | --replace-since <ISO8601>]" >&2
+  exit 64
+fi
+# The two append modes answer different questions over different windows; one invocation is one.
+if [[ -n "$REBOOT_SINCE" && -n "$REPLACE_SINCE" ]]; then
+  echo "refusing: --reboot-since and --replace-since are separate invocations (each appends its own key over its own window)." >&2
+  exit 64
+fi
+# The replace arm runs only after capture #1 wrote a PASS; checked BEFORE any query, so a wiring
+# fault is named as one rather than surfacing as whatever verdict the window happens to hold.
+if [[ -n "$REPLACE_SINCE" ]] && ! grep -qxF 'RUNG2_BOOT_REHEARSAL=PASS' "$OUT" 2>/dev/null; then
+  echo "refusing (replace arm): ${OUT} holds no RUNG2_BOOT_REHEARSAL=PASS — the replace arm runs only after capture #1 passed, so this is a wiring fault." >&2
   exit 64
 fi
 
@@ -604,6 +623,8 @@ HOST_SQL="
          JSONExtractString(raw,'fence_on_mapper') AS fence_on_mapper,
          JSONExtractString(raw,'erasure_probe') AS erasure_probe,
          JSONExtractString(raw,'plaintext_empty') AS plaintext_empty,
+         JSONExtractString(raw,'plaintext_volume') AS plaintext_volume,
+         JSONExtractString(raw,'plaintext_journal') AS plaintext_journal,
          JSONExtractString(raw,'action')        AS action,
          JSONExtractString(raw,'target')        AS target,
          JSONExtractString(raw,'restarts')      AS restarts
@@ -1183,6 +1204,33 @@ for _f in $_TERMINAL; do
   fi
 done
 
+# (#5274, Guard 2) THE DIRTY-JOURNAL CASE MUST HAVE BEEN BOOTED. The rehearsal seeds a dirty
+# plaintext journal before the payload boots, and the payload itself measures and emits the
+# origin's journal state. So PASS requires EVERY boot_complete row in the window to read
+# plaintext_volume=present AND plaintext_journal=dirty, by exact match on the parsed field:
+#   - `absent` means the rehearsal root rendered no volume id — a broken render, not a pass
+#     (the future wipe PR's rehearsal amends this rule in its own PR, as ADR-239 requires);
+#   - `clean` means the seed never dirtied the journal, OR (replace arm) boot #1 WROTE the
+#     volume it only ever read — either way the case this rehearsal exists to prove did not run;
+#   - a later `clean` row after a compliant `dirty` one is not outvoted by it.
+# Parsed with jq, never substring-matched (ClickHouse JSON escaping, the #8211 reboot-arm lesson);
+# a row jq cannot parse fails closed.
+_pt_bad=""
+while IFS= read -r _row; do
+  [[ -n "$_row" ]] || continue
+  _pv="$(jq -r '.plaintext_volume // empty' <<<"$_row" 2>/dev/null)" || _pv=""
+  _pj="$(jq -r '.plaintext_journal // empty' <<<"$_row" 2>/dev/null)" || _pj=""
+  [[ "$_pv" == present && "$_pj" == dirty ]] && continue
+  _pt_bad+="plaintext_volume='${_pv}' plaintext_journal='${_pj}'"$'\n'
+done <<<"$_bc_rows"
+if [[ -n "$_pt_bad" ]]; then
+  echo "FAIL: ${HOST_NAME} reported boot_complete WITHOUT plaintext_volume=present plaintext_journal=dirty on every row. The rehearsal exists to boot the payload against a DIRTY plaintext journal; a clean or absent one means that case never ran (or, on the replace arm, that boot #1 wrote the volume it may only read)."
+  printf '%s' "$_pt_bad" | head -5
+  echo
+  echo "NO EVIDENCE FILE WRITTEN."
+  exit 1
+fi
+
 # ── THE PASS PATH CONSULTS SENTRY TOO (#7481 §4.5b) ────────────────────────────────
 #
 # THE GAP THIS CLOSES IS THE WORST ONE IN THE ROUTE, and it is not a TRANSIENT-path gap.
@@ -1256,6 +1304,23 @@ fi
 #
 # So the dispatcher declares it and this script refuses to invent one. `none` is the
 # explicit no-divergence declaration; the gate refuses an absent or duplicated key.
+# (#5274) REPLACE MODE appends to capture #1's file and writes nothing else. Its verdict ran
+# above in full — the fatal arms, the terminal booleans, Guard 2, and the Sentry cross-check over
+# the window stamped before the replace.
+if [[ -n "$REPLACE_SINCE" ]]; then
+  assert_fixture_dir "$OUT"
+  {
+    printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
+    printf '# QUERY: sentry-issue.sh --host-events %s %s\n' "$HOST_NAME" "$(_sentry_window_args | tr '\n' ' ')"
+    printf '# SCOPE: the replace arm (boot #2, adopted LUKS) over the window from %s.\n' "$REPLACE_SINCE"
+    printf 'RUNG2_REPLACE_BOOT=PASS\n'
+    printf 'RUNG2_REPLACE_SENTRY_CROSSCHECK=%s\n' "${_SENTRY_VERDICT:-NOT_RUN}"
+  } >> "$OUT"
+  echo "PASS (replace arm): ${HOST_NAME} boot #2 reached boot_complete after the replace at ${REPLACE_SINCE}, with ${_TERMINAL} all yes, plaintext_volume=present plaintext_journal=dirty, and no fatal (Sentry ${_SENTRY_VERDICT:-NOT_RUN})."
+  echo "Appended RUNG2_REPLACE_BOOT to ${OUT}."
+  exit 0
+fi
+
 if [[ -z "$DIVERGENCE" ]]; then
   echo "refusing: --divergence is required. It records which templatefile ARGUMENTS the rehearsal diverged from production on — the axis the evidence hash does NOT bind. Pass the identity-shaped set the rehearsal root actually diverges on, or 'none'. This script reads Better Stack, not terraform state, so it cannot derive it; echoing the gate's own allowlist back (which it used to do) makes the check allowlist-subset-of-allowlist and refuses nothing." >&2
   exit 64

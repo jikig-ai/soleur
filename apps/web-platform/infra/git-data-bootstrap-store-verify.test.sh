@@ -16,11 +16,20 @@
 #   RUNTIME — bootstrap steps 2-5 are extracted as ONE unit from the sentinel comments the
 #             script carries for this purpose (the `_reopen_unit` precedent in
 #             git-data-luks-reopen.test.sh) and DRIVEN WITHOUT ROOT against a scratch PATH of
-#             stubs: mount (logs argv, asserts the ro,noload,nosuid,nodev,noexec options, and
-#             copies a fixture tree into its target), umount, dumpe2fs, findmnt, install and
-#             runuser. The seams the bootstrap honours (GIT_DATA_STORE_DEVICE,
-#             GIT_DATA_STORE_VERIFIED, GIT_DATA_REMOVE_BIN and the by-id GIT_DATA_PLAINTEXT_DEV)
-#             are what make that possible without EACCES standing in for a refusal.
+#             stubs: mount (logs argv and SOURCE, copies a fixture tree into its target), umount,
+#             dumpe2fs (per device: origin and snapshot), findmnt, stat, cryptsetup, blockdev
+#             (whose --getro answers from behaviour), losetup, dmsetup, udevadm, dmesg, cat (for
+#             ext4's errors_count), install and runuser. The seams the bootstrap honours
+#             (GIT_DATA_STORE_DEVICE, GIT_DATA_STORE_VERIFIED, GIT_DATA_REMOVE_BIN and the by-id
+#             GIT_DATA_PLAINTEXT_DEV) plus four absolute-path rewrites (runuser, /dev/shm,
+#             /dev/mapper/, /sys/) are what make that possible without EACCES standing in for a
+#             refusal.
+#
+# The plaintext volume is read through a dm snapshot over a kernel-read-only origin (ADR-239
+# amendment 2026-09-24, #5274): the snapshot is what gets mounted, without noload, so a dirty
+# journal replays into a RAM COW and the counted tree is the post-replay tree. Guard 1's mutation
+# rows (G1-*) run here except row 4 (noload + no post-check) and the COW overflow, which need a
+# real kernel and live in git-data-plaintext-snapshot-loopback.test.sh.
 #
 # Guard 2's mutation matrix rows 1, 2, 3, 5 and 7 are encoded as SELF-TESTS: each mutates a
 # temp copy of the extracted unit, re-runs the same fixture, and requires the verdict to FLIP.
@@ -120,20 +129,55 @@ ok "$(grep -qF 'GIT_DATA_REMOVE_BIN:-/usr/local/bin/git-data-remove.sh' "$UNIT_B
   "S4 GIT_DATA_REMOVE_BIN seam defaults to /usr/local/bin/git-data-remove.sh"
 ok "$(grep -qF 'GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id' "$UNIT_BODY"; echo $?)" \
   "S5 the plaintext device is the by-id path built from the rendered volume id, behind a seam"
-# The mount is temporary, private and inert. `ro` alone still lets ext4 replay the journal, which
-# is a WRITE to the volume this step exists to leave untouched.
-ok "$(grep -qF 'mount -o ro,noload,nosuid,nodev,noexec' "$UNIT_BODY"; echo $?)" \
-  "S6 the plaintext mount is -o ro,noload,nosuid,nodev,noexec"
-ok "$(grep -qF '_pt_dir="$(mktemp -d)"' "$UNIT_BODY"; echo $?)" "S7 the mount parent is a private mktemp -d"
+# The plaintext volume is read through a dm snapshot over a kernel-read-only origin (ADR-239
+# amendment 2026-09-24): a plain `ro` mount replays a dirty journal ONTO the volume, and `noload`
+# counts a stale tree. So the only mount is of the SNAPSHOT, without noload.
+ok "$(grep -qF 'mount -o ro,errors=remount-ro,nosuid,nodev,noexec "/dev/mapper/$_pt_snap" "$_pt_mnt"' "$UNIT_BODY"; echo $?)" \
+  "S6 the only plaintext mount is the snapshot, -o ro,errors=remount-ro,nosuid,nodev,noexec"
+n=$(grep -c 'noload' "$UNIT_BODY" || true)
+ok "$((n != 0))" "S6b no noload token remains in the comment-stripped unit (got $n)"
+n=$(grep -cE '(^|[[:space:];|&(])mount -o' "$UNIT_BODY" || true)
+ok "$((n != 1))" "S6c exactly one mount call in the unit (got $n)"
+ok "$(grep -qF 'dmsetup create "$_pt_snap" --table "0 $_pt_sz snapshot $_pt_dev $_pt_loop N 8"' "$UNIT_BODY"; echo $?)" \
+  "S6d the dm table is exactly '0 \$_pt_sz snapshot \$_pt_dev \$_pt_loop N 8' (no feature args: discard_passdown_origin would reach the origin)"
+n=$(grep -c -- '--setrw' "$BS_BODY" || true)
+ok "$((n != 0))" "S6e no blockdev --setrw anywhere in the bootstrap (got $n)"
+ok "$(grep -qxF '  _pt_snap=git-data-pt-snap' "$UNIT_BODY"; echo $?)" "S6f the snapshot name is the fixed git-data-pt-snap (never the LUKS mapper name)"
+# AC2 — READ-ONLY FIRST, by line, in the comment-stripped unit.
+L_SETRO=$(grep -n 'blockdev --setro' "$UNIT_BODY" | head -1 | cut -d: -f1)
+L_CREATE=$(grep -n 'dmsetup create' "$UNIT_BODY" | head -1 | cut -d: -f1)
+L_MOUNT=$(grep -nE '(^|[[:space:];|&(])mount -o' "$UNIT_BODY" | head -1 | cut -d: -f1)
+L_ISLUKS=$(grep -n 'cryptsetup isLuks' "$UNIT_BODY" | head -1 | cut -d: -f1)
+ok "$([ -n "$L_SETRO" ] && [ -n "$L_CREATE" ] && [ -n "$L_MOUNT" ] && [ -n "$L_ISLUKS" ] && [ "$L_ISLUKS" -lt "$L_SETRO" ] && [ "$L_SETRO" -lt "$L_CREATE" ] && [ "$L_SETRO" -lt "$L_MOUNT" ]; echo $?)" \
+  "S6g by line: isLuks ($L_ISLUKS) < blockdev --setro ($L_SETRO) < dmsetup create ($L_CREATE) and < mount ($L_MOUNT)"
+ok "$(grep -qF '_pt_dir="$(mktemp -d -p /dev/shm)"' "$UNIT_BODY"; echo $?)" "S7 the COW and mount parent are a private mktemp -d on /dev/shm (RAM)"
 ok "$(grep -qF '_pt_mnt="$_pt_dir/mnt"' "$UNIT_BODY"; echo $?)" \
   "S7b the mount target is <mktemp -d>/mnt, so the 0700 parent outlives the volume's own root mode"
 ok "$(grep -qE '^[[:space:]]*trap _pt_release EXIT$' "$UNIT_BODY"; echo $?)" \
-  "S8 a trap unmounts the plaintext volume on EVERY exit"
-ok "$(grep -qF 'plaintext_unverified reason=umount' "$UNIT_BODY"; echo $?)" "S8b a failed umount is FATAL reason=umount"
-ok "$(grep -qF "! -name '.*.init.lock' ! -name lost+found" "$UNIT_BODY"; echo $?)" \
-  "S9 the count excludes the .<id>.init.lock dotfiles and lost+found, and nothing else"
+  "S8 a trap tears the snapshot apparatus down on EVERY exit"
+ok "$(grep -qF 'plaintext_unverified reason=umount' "$UNIT_BODY"; echo $?)" "S8b a failed teardown is FATAL reason=umount"
+n=$(grep -c 'rm -rf' "$UNIT_BODY" || true)
+ok "$((n != 0))" "S8c no rm -rf in the unit — it would walk a still-mounted plaintext tree into stderr (got $n)"
+ok "$(grep -qF "! -name '.*.init.lock' ! -name lost+found -printf x 2>/dev/null" "$UNIT_BODY"; echo $?)" \
+  "S9 the count excludes the .<id>.init.lock dotfiles and lost+found, and discards find's stderr (entry names are workspace ids)"
 n=$(grep -c "\-name '\*\.git'" "$UNIT_BODY" || true)
 ok "$((n != 0))" "S9b the count is NOT narrowed to *.git — a partial repositories/x is still user data (got $n)"
+# AC5 — every plaintext FATAL names a reason from the closed vocabulary, or is the residue line.
+_bad=0
+while IFS= read -r _l; do
+  case "$_l" in
+    *"FATAL: plaintext_unverified reason=source "*|*"FATAL: plaintext_unverified reason=snapshot "*|*"FATAL: plaintext_unverified reason=mount "*|*"FATAL: plaintext_unverified reason=journal "*|*"FATAL: plaintext_unverified reason=umount "*) : ;;
+    *'FATAL: plaintext_residue count=$_pt_n — the plaintext volume still holds repositories/ entries'*) : ;;
+    *) _bad=1; echo "      off-vocabulary: $_l" >&2 ;;
+  esac
+done < <(grep -F 'FATAL: plaintext_' "$UNIT_BODY")
+ok "$_bad" "S9c every plaintext FATAL is reason=(source|snapshot|mount|journal|umount) or the unchanged residue line"
+N_PT_FATAL=$(grep -c 'FATAL: plaintext_' "$UNIT_BODY" || true)
+# The inner sentinels both the loopback suite and this harness depend on.
+n=$(grep -cxF '# ---- BEGIN plaintext-count unit ----' "$UNIT" || true)
+ok "$((n != 1))" "S9d exactly one BEGIN plaintext-count sentinel, inside the store-verify unit (got $n)"
+n=$(grep -cxF '# ---- END plaintext-count unit ----' "$UNIT" || true)
+ok "$((n != 1))" "S9e exactly one END plaintext-count sentinel, inside the store-verify unit (got $n)"
 # The single marker writer, and it sits after every FATAL that must leave the marker absent.
 n=$(grep -c 'mv -f "\$_marker_tmp" "\$STORE_VERIFIED"' "$UNIT_BODY" || true)
 ok "$((n != 1))" "S10 exactly one marker writer in the unit (got $n)"
@@ -173,7 +217,7 @@ ok "$(grep -qF 'bootstrap fatal' "$BS_BODY"; echo $?)" "S17 log() routes a FATAL
 for _r in plaintext_unverified plaintext_residue luks_residue 'fence_on_mapper=no' 'erasure_probe=no'; do
   ok "$(grep -qF "FATAL: $_r" "$UNIT_BODY"; echo $?)" "S18 the named FATAL reason '$_r' exists in the unit"
 done
-for _b in fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos; do
+for _b in fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos plaintext_journal; do
   ok "$(grep -qF "\"$_b=\${_$_b}\"" "$BS_BODY" || grep -qF "$_b=\${_$_b}" "$BS_BODY"; echo $?)" \
     "S19 boot_complete carries $_b (contract C3)"
 done
@@ -201,7 +245,7 @@ new_fixture() {
   FX="$SCRATCH/fx.$1"
   assert_fixture_dir "$FX"
   rm -rf "$FX"
-  mkdir -p "$FX/bin" "$FX/store/repositories" "$FX/store/hooks" "$FX/ptsrc/repositories" "$FX/dev" "$FX/tmp"
+  mkdir -p "$FX/bin" "$FX/store/repositories" "$FX/store/hooks" "$FX/ptsrc/repositories" "$FX/dev/mapper" "$FX/tmp" "$FX/shm" "$FX/sys/class/block/vol/holders"
   : > "$FX/calls.log"
   : > "$FX/emit.log"
   : > "$FX/store/hooks/pre-receive"
@@ -209,11 +253,12 @@ new_fixture() {
   : > "$FX/dev/vol"
   : > "$FX/dev/other"
   ln -sfn "$FX/dev/vol" "$FX/dev/by-id"
-  # findmnt answers, per query kind. The by-id seam points at a symlink, so the unit's
-  # realpath comparison has something real to resolve on both sides.
-  printf '%s\n' "$FX/dev/vol" > "$FX/pt_source"
+  # findmnt answers, per query kind. The snapshot's mapper node exists only while the dmsetup
+  # stub holds it, so the unit's realpath comparison resolves something real on both sides.
+  printf '%s\n' "$FX/dev/mapper/git-data-pt-snap" > "$FX/pt_source"
   printf '%s\n' "$STORE_DEV_FIXTURE" > "$FX/fence_source"
   printf '%s\n' "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" > "$FX/store_uuid"
+  printf '0\n0\n' > "$FX/errors_seq"
 
   mkstub mount <<'STUB'
 printf 'mount|%s\n' "$*" >> "$FXD/calls.log"
@@ -225,6 +270,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 printf '%s\n' "$_opts" > "$FXD/mount_opts"
+printf '%s\n' "$_src" > "$FXD/mount_source"
 [ ! -e "$FXD/mount_fail" ] || exit 32
 # A no-op mount is the failure this step exists to catch: the target stays an EMPTY DIRECTORY,
 # which a count alone reads as "clean".
@@ -239,14 +285,32 @@ rm -rf -- "${1:?}"/* "${1:?}"/.[!.]* 2>/dev/null || true
 exit 0
 STUB
 
+  # Per device: the ORIGIN (dumpe2fs_dirty toggles needs_recovery; geometry_bad drops the journal
+  # geometry) and the SNAPSHOT (snap_still_dirty: the journal did not replay; snap_with_errors).
   mkstub dumpe2fs <<'STUB'
 printf 'dumpe2fs|%s\n' "$*" >> "$FXD/calls.log"
-[ ! -e "$FXD/dumpe2fs_fail" ] || exit 1
-if [ -e "$FXD/dumpe2fs_dirty" ]; then
-  printf 'Filesystem features:      has_journal ext_attr needs_recovery extent 64bit\n'
-else
-  printf 'Filesystem features:      has_journal ext_attr resize_inode extent 64bit\n'
-fi
+_dev="${*: -1}"
+case "$_dev" in
+  */mapper/git-data-pt-snap)
+    [ ! -e "$FXD/snap_dumpe2fs_fail" ] || exit 1
+    if [ -e "$FXD/snap_still_dirty" ]; then
+      printf 'Filesystem features:      has_journal ext_attr needs_recovery extent 64bit\n'
+    else
+      printf 'Filesystem features:      has_journal ext_attr resize_inode extent 64bit\n'
+    fi
+    if [ -e "$FXD/snap_with_errors" ]; then printf 'Filesystem state:         clean with errors\n'; else printf 'Filesystem state:         clean\n'; fi
+    ;;
+  *)
+    [ ! -e "$FXD/dumpe2fs_fail" ] || exit 1
+    if [ -e "$FXD/dumpe2fs_dirty" ]; then
+      printf 'Filesystem features:      has_journal ext_attr needs_recovery extent 64bit\n'
+    else
+      printf 'Filesystem features:      has_journal ext_attr resize_inode extent 64bit\n'
+    fi
+    printf 'Block size:               4096\n'
+    [ -e "$FXD/geometry_bad" ] || printf 'Total journal blocks:     16384\n'
+    ;;
+esac
 STUB
 
   mkstub findmnt <<'STUB'
@@ -265,6 +329,80 @@ elif [ -n "$_t" ]; then _f="$FXD/fence_source"
 else _f="$FXD/pt_source"; fi
 [ -s "$_f" ] || exit 1
 cat "$_f"
+STUB
+
+  # The origin node is a regular file here; `stat -L -c %F` is the unit's block-device test.
+  mkstub stat <<'STUB'
+if [ "${*: -1}" = "$FXD/dev/vol" ]; then
+  printf 'stat|%s\n' "$*" >> "$FXD/calls.log"
+  if [ -e "$FXD/pt_not_block" ]; then echo 'regular empty file'; else echo 'block special file'; fi
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+STUB
+
+  mkstub cryptsetup <<'STUB'
+printf 'cryptsetup|%s\n' "$*" >> "$FXD/calls.log"
+[ "${1:-}" = isLuks ] || { printf 'cryptsetup-stub: unexpected argv: %s\n' "$*" >&2; exit 64; }
+[ -e "$FXD/pt_is_luks" ]
+STUB
+
+  # --getro answers from BEHAVIOUR: 1 only after --setro was really called (Guard 1 mutation 1
+  # reds on behaviour, not on a missing line).
+  mkstub blockdev <<'STUB'
+printf 'blockdev|%s\n' "$*" >> "$FXD/calls.log"
+case "${1:-}" in
+  --setro) [ ! -e "$FXD/setro_fail" ] || exit 1; : > "$FXD/ro_set" ;;
+  --setrw) rm -f "$FXD/ro_set" ;;
+  --getro) if [ -e "$FXD/ro_set" ] && [ ! -e "$FXD/getro_zero" ]; then echo 1; else echo 0; fi ;;
+  --getsz) [ -e "$FXD/getsz_bad" ] || echo 20971520 ;;
+  *) printf 'blockdev-stub: unexpected argv: %s\n' "$*" >&2; exit 64 ;;
+esac
+STUB
+
+  mkstub losetup <<'STUB'
+printf 'losetup|%s\n' "$*" >> "$FXD/calls.log"
+case "${1:-}" in
+  --find) [ ! -e "$FXD/losetup_fail" ] || exit 1; : > "$FXD/loop_up"; echo /dev/loop77 ;;
+  -d) [ ! -e "$FXD/losetup_d_fail" ] || exit 1; rm -f "$FXD/loop_up" ;;
+  *) printf 'losetup-stub: unexpected argv: %s\n' "$*" >&2; exit 64 ;;
+esac
+STUB
+
+  mkstub dmsetup <<'STUB'
+printf 'dmsetup|%s\n' "$*" >> "$FXD/calls.log"
+case "${1:-}" in
+  create) [ ! -e "$FXD/dm_create_fail" ] || exit 1; : > "$FXD/dev/mapper/$2" ;;
+  remove) [ ! -e "$FXD/dm_remove_fail" ] || exit 1; rm -f "$FXD/dev/mapper/${*: -1}" ;;
+  status) if [ -e "$FXD/dm_invalid" ]; then echo '0 20971520 snapshot Invalid'; else echo '0 20971520 snapshot 16/262144 16'; fi ;;
+  info) echo dm-9 ;;
+  *) printf 'dmsetup-stub: unexpected argv: %s\n' "$*" >&2; exit 64 ;;
+esac
+STUB
+
+  mkstub udevadm <<'STUB'
+printf 'udevadm|%s\n' "$*" >> "$FXD/calls.log"
+STUB
+
+  # The kernel log: a baseline on the first read, then the baseline plus klog_extra.
+  mkstub dmesg <<'STUB'
+_n=$(( $(cat "$FXD/dmesg_calls" 2>/dev/null || echo 0) + 1 ))
+echo "$_n" > "$FXD/dmesg_calls"
+echo '[    0.000000] Linux version fixture'
+[ "$_n" -eq 1 ] || [ ! -e "$FXD/klog_extra" ] || cat "$FXD/klog_extra"
+STUB
+
+  # ext4's errors_count, one line per read (the unit reads it after the mount and after the count).
+  mkstub cat <<'STUB'
+case "${1:-}" in
+  */errors_count)
+    printf 'cat|%s\n' "$*" >> "$FXD/calls.log"
+    _n=$(( $(/usr/bin/cat "$FXD/errors_calls" 2>/dev/null || echo 0) + 1 ))
+    echo "$_n" > "$FXD/errors_calls"
+    sed -n "${_n}p" "$FXD/errors_seq"
+    exit 0 ;;
+esac
+exec /usr/bin/cat "$@"
 STUB
 
   # Delegates to the real install with -o/-g stripped: a non-root run cannot chown to root, and
@@ -329,22 +467,29 @@ printf 'plaintext_empty=%s\n' "$_plaintext_empty"
 printf 'served_repos=%s\n' "$_served_repos"
 printf 'fence_on_mapper=%s\n' "$_fence_on_mapper"
 printf 'erasure_probe=%s\n' "$_erasure_probe"
+printf 'plaintext_journal=%s\n' "$_plaintext_journal"
 TRAIL
 }
 
-# The extracted unit names runuser by absolute path (S15c), which is right on the host and
-# unreachable in a non-root fixture. Rewriting that ONE absolute path into the scratch dir is
-# the reporter-unit precedent from git-data-luks-reopen.test.sh; S15c is what keeps the shipped
-# spelling honest.
+# The extracted unit names four absolute paths a non-root fixture cannot own: runuser (S15c),
+# the /dev/shm COW parent, the /dev/mapper node of the snapshot, and /sys (holders and ext4's
+# errors_count). Each is rewritten into the scratch dir — the reporter-unit precedent from
+# git-data-luks-reopen.test.sh. The static rows above pin the shipped spellings, and the
+# landed-check below refuses a rewrite that did not happen.
 run_unit() {
   local _u="$1"
-  sed "s#/usr/sbin/runuser#$FX/bin/runuser#g" "$_u" > "$FX/unit.run"
+  sed -e "s#/usr/sbin/runuser#$FX/bin/runuser#g" -e "s#/dev/shm#$FX/shm#g" \
+      -e "s#/dev/mapper/#$FX/dev/mapper/#g" -e "s#/sys/#$FX/sys/#g" "$_u" > "$FX/unit.run"
+  if grep -qE '(^|[" ])/(dev/shm|dev/mapper/|sys/)' "$FX/unit.run"; then
+    echo "FATAL: a path rewrite did not land in $FX/unit.run" >&2; exit 2
+  fi
   # Per-RUN artifacts, not per-fixture: the mutation rows drive the pristine unit and then the
   # mutant against the SAME fixture, and a calls.log carried over from the first run makes
   # "the mutant never called the wrapper" true of neither run.
   : > "$FX/calls.log"
   : > "$FX/emit.log"
-  rm -f "$FX/probe.env" "$FX/runuser.env" "$FX/mount_opts" "$FX/etc/git-data/store-verified"
+  rm -f "$FX/probe.env" "$FX/runuser.env" "$FX/mount_opts" "$FX/mount_source" "$FX/etc/git-data/store-verified" \
+    "$FX/ro_set" "$FX/loop_up" "$FX/dmesg_calls" "$FX/errors_calls" "$FX/dev/mapper/git-data-pt-snap"
   RC=0
   env -u GIT_DATA_PLAINTEXT_VOLUME_ID \
     PATH="$FX/bin:$PATH" TMPDIR="$FX/tmp" \
@@ -373,13 +518,39 @@ emit_stage_bootstrap() {
   [ "$n_all" -ge 1 ] && [ "$n_all" -eq "$n_boot" ]
   echo $?
 }
+# first_line <regex> — the calls.log line number of the first match, or 999999 when absent.
+first_line() { local _n; _n=$(grep -nE -- "$1" "$FX/calls.log" | head -1 | cut -d: -f1); echo "${_n:-999999}"; }
+# P2/P5 teardown: umount (if mounted) -> dmsetup remove -> losetup -d, in that order; no --setrw;
+# no transient device left. $1 = 1 when a mount had succeeded.
+teardown_ok() {
+  local _m=$1 _u _r _d
+  _u=$(first_line '^umount\|'); _r=$(first_line '^dmsetup\|remove'); _d=$(first_line '^losetup\|-d')
+  if [ "$_m" = 1 ]; then [ "$_u" -lt "$_r" ] || { echo 1; return; }; fi
+  [ "$_r" -lt "$_d" ] && [ "$_d" -lt 999999 ] || { echo 1; return; }
+  grep -q -- '--setrw' "$FX/calls.log" && { echo 1; return; }
+  echo 0
+}
+# fatal_row <tag> <reason-substring> <mounted:0|1|-> — the shared assertions of a FATAL arm: the
+# named FATAL, no marker, stage=bootstrap, no residue verdict, and (unless '-') a complete teardown.
+fatal_row() {
+  local _t="$1" _why="$2" _m="$3"
+  ok "$((RC == 0))" "$_t is FATAL (rc=$RC)" "$(cat "$FX/err")"
+  ok "$(fatal_is "$_why")" "$_t FATAL: $_why" "$(cat "$FX/err")"
+  ok "$(marker_absent)" "$_t no marker was written"
+  ok "$(emit_stage_bootstrap)" "$_t the FATAL was emitted at stage=bootstrap" "$(cat "$FX/emit.log")"
+  ok "$(absent_in plaintext_residue "$FX/err")" "$_t no residue verdict" "$(cat "$FX/err")"
+  if [ "$_m" != - ]; then
+    ok "$(teardown_ok "$_m")" "$_t teardown ran umount -> dmsetup remove -> losetup -d, never --setrw" "$(cat "$FX/calls.log")"
+  fi
+}
 
-# --- R1: plaintext verified empty -> marker + every boolean yes -----------------------
+# --- R1: plaintext verified empty through the snapshot -> marker + every boolean yes ----------
 new_fixture r1-verified-empty
 run_unit "$UNIT"
 ok "$((RC != 0))" "R1 the all-pass path exits 0 (rc=$RC)" "$(cat "$FX/err")"
 ok "$([ "$(field plaintext_volume)" = present ]; echo $?)" "R1 plaintext_volume=present"
 ok "$([ "$(field plaintext_empty)" = yes ]; echo $?)" "R1 plaintext_empty=yes"
+ok "$([ "$(field plaintext_journal)" = clean ]; echo $?)" "R1 plaintext_journal=clean (the origin carried no needs_recovery)"
 ok "$([ "$(field fence_on_mapper)" = yes ]; echo $?)" "R1 fence_on_mapper=yes"
 ok "$([ "$(field erasure_probe)" = yes ]; echo $?)" "R1 erasure_probe=yes"
 ok "$([ "$(field served_repos)" = 0 ]; echo $?)" "R1 served_repos=0"
@@ -387,9 +558,36 @@ ok "$([ "$(marker)" = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" ]; echo $?)" \
   "R1 the marker holds exactly the mapper filesystem UUID (contract C2)" "$(marker)"
 ok "$([ "$(stat -c %a "$FX/etc/git-data/store-verified" 2>/dev/null)" = 644 ]; echo $?)" "R1 the marker is mode 0644"
 ok "$([ "$(wc -l < "$FX/etc/git-data/store-verified")" -eq 1 ]; echo $?)" "R1 the marker is exactly one line"
-ok "$(grep -qxF 'ro,noload,nosuid,nodev,noexec' "$FX/mount_opts"; echo $?)" \
-  "R1 the plaintext mount carried -o ro,noload,nosuid,nodev,noexec" "$(cat "$FX/mount_opts" 2>/dev/null)"
-ok "$(grep -q '^umount|' "$FX/calls.log"; echo $?)" "R1 the plaintext volume was unmounted"
+ok "$(grep -qxF 'ro,errors=remount-ro,nosuid,nodev,noexec' "$FX/mount_opts"; echo $?)" \
+  "R1 the snapshot mount carried -o ro,errors=remount-ro,nosuid,nodev,noexec (no noload)" "$(cat "$FX/mount_opts" 2>/dev/null)"
+ok "$([ "$(cat "$FX/mount_source" 2>/dev/null)" = "$FX/dev/mapper/git-data-pt-snap" ]; echo $?)" \
+  "R1 the mounted SOURCE is the snapshot, never the origin" "$(cat "$FX/mount_source" 2>/dev/null)"
+ok "$(grep -qxF "dmsetup|create git-data-pt-snap --table 0 20971520 snapshot $FX/dev/vol /dev/loop77 N 8" "$FX/calls.log"; echo $?)" \
+  "R1 the snapshot table stacks the resolved origin node over the COW loop, non-persistent, no feature args" "$(grep dmsetup "$FX/calls.log")"
+ok "$(grep -qE "^losetup\|--find --show $FX/shm/[^/]+/cow\$" "$FX/calls.log"; echo $?)" \
+  "R1 the COW loop is backed by <mktemp -d -p /dev/shm>/cow" "$(grep losetup "$FX/calls.log")"
+ok "$([ -e "$FX/ro_set" ]; echo $?)" "R1 the origin was set kernel read-only"
+ok "$(teardown_ok 1)" "R1 teardown ran umount -> dmsetup remove -> losetup -d, never --setrw" "$(cat "$FX/calls.log")"
+ok "$([ ! -e "$FX/loop_up" ] && [ ! -e "$FX/dev/mapper/git-data-pt-snap" ] && [ -z "$(ls -A "$FX/shm")" ]; echo $?)" \
+  "R1 no COW loop, snapshot node or /dev/shm directory survives" "$(ls -A "$FX/shm")"
+# P2 ORDER (REORDER, not presence): isLuks < setro < the first dmsetup create < the first mount.
+_i=$(first_line '^cryptsetup\|isLuks'); _s=$(first_line '^blockdev\|--setro'); _c=$(first_line '^dmsetup\|create'); _m=$(first_line '^mount\|')
+ok "$([ "$_i" -lt "$_s" ] && [ "$_s" -lt "$_c" ] && [ "$_s" -lt "$_m" ] && [ "$_m" -lt 999999 ]; echo $?)" \
+  "R1 calls.log order: isLuks ($_i) < setro ($_s) < dmsetup create ($_c), mount ($_m)"
+# Guard 1 mutation 7's row: every call that names the origin node is on the allowlist, and every
+# one except the two read-only identity probes comes after --setro.
+_bad=0
+while IFS= read -r _l; do
+  _no="${_l%%:*}"; _c="${_l#*:}"
+  case "$_c" in
+    "stat|-L -c %F $FX/dev/vol"|"cryptsetup|isLuks $FX/dev/vol") [ "$_no" -lt "$_s" ] || _bad=1 ;;
+    "blockdev|--setro $FX/dev/vol"|"blockdev|--getro $FX/dev/vol"|"dumpe2fs|-h $FX/dev/vol"|"blockdev|--getsz $FX/dev/vol") [ "$_no" -ge "$_s" ] || _bad=1 ;;
+    "dmsetup|create git-data-pt-snap --table 0 20971520 snapshot $FX/dev/vol /dev/loop77 N 8") [ "$_no" -gt "$_s" ] || _bad=1 ;;
+    *) _bad=1; echo "      off-allowlist opener: $_c" >&2 ;;
+  esac
+done < <(grep -nF "$FX/dev/vol" "$FX/calls.log")
+ok "$_bad" "R1 every call naming the origin node is allowlisted and ordered after --setro (Guard 1 row 7)" "$(grep -F "$FX/dev/vol" "$FX/calls.log")"
+ok "$(grep -q '^umount|' "$FX/calls.log"; echo $?)" "R1 the snapshot was unmounted"
 ok "$(grep -q '^remove|' "$FX/calls.log"; echo $?)" "R1 the erasure probe ran the remove wrapper for real"
 ok "$([ -z "$(cat "$FX/emit.log")" ]; echo $?)" "R1 no fatal was emitted on the all-pass path" "$(cat "$FX/emit.log")"
 # The probe's lock dotfile exists and is invisible to the count — both halves, so the row
@@ -411,9 +609,17 @@ run_unit "$UNIT"
 PT_ID="100000001"
 ok "$((RC != 0))" "R2 an absent plaintext volume is not a failure (rc=$RC)" "$(cat "$FX/err")"
 ok "$([ "$(field plaintext_volume)" = absent ]; echo $?)" "R2 plaintext_volume=absent"
+ok "$([ "$(field plaintext_journal)" = absent ]; echo $?)" "R2 plaintext_journal=absent"
 ok "$([ "$(field plaintext_empty)" = yes ]; echo $?)" "R2 plaintext_empty=yes"
-ok "$(absent_in '^mount|' "$FX/calls.log")" "R2 nothing was mounted"
+ok "$(absent_in '^mount|\|^blockdev|\|^dmsetup|' "$FX/calls.log")" "R2 nothing was mounted, set read-only or mapped"
 ok "$([ -n "$(marker)" ]; echo $?)" "R2 the marker is still written on the absent path"
+
+# --- R2b: a volume with no repositories/ directory at all (must-PASS, non-canonical) ---
+new_fixture r2b-no-repositories-dir
+rm -rf "$FX/ptsrc/repositories"
+run_unit "$UNIT"
+ok "$((RC != 0))" "R2b a plaintext volume without repositories/ passes (count 0, rc=$RC)" "$(cat "$FX/err")"
+ok "$([ "$(field plaintext_empty)" = yes ]; echo $?)" "R2b plaintext_empty=yes"
 
 # --- R3: a no-op mount, adjudicated by the REAL findmnt --------------------------------
 # The mount "succeeds" and leaves an empty directory. A count alone reads 0 and clears the
@@ -424,44 +630,60 @@ if command -v findmnt >/dev/null 2>&1; then
   rm -f "$FX/bin/findmnt"
   : > "$FX/mount_noop"
   run_unit "$UNIT"
-  ok "$((RC == 0))" "R3 a no-op mount is FATAL (rc=$RC)" "$(cat "$FX/err")"
-  ok "$(fatal_is 'plaintext_unverified reason=source')" "R3 reason=source" "$(cat "$FX/err")"
-  ok "$(marker_absent)" "R3 no marker was written"
-  ok "$(emit_stage_bootstrap)" "R3 the FATAL was emitted at stage=bootstrap" "$(cat "$FX/emit.log")"
+  fatal_row R3 'plaintext_unverified reason=source' 1
 else
-  ok 0 "R3 SKIPPED — findmnt(8) absent, the real-instrument row cannot run"
-  ok 0 "R3 SKIPPED — reason=source"
-  ok 0 "R3 SKIPPED — no marker"
-  ok 0 "R3 SKIPPED — stage=bootstrap"
+  for _k in 1 2 3 4 5 6; do ok 0 "R3 SKIPPED — findmnt(8) absent, the real-instrument row cannot run"; done
 fi
 
-# --- R3b: the mount itself fails -------------------------------------------------------
+# --- R3b: the snapshot mount itself fails ----------------------------------------------
 new_fixture r3b-mount-failed
 : > "$FX/mount_fail"
 run_unit "$UNIT"
-ok "$((RC == 0))" "R3b a failed mount is FATAL (rc=$RC)"
-ok "$(fatal_is 'plaintext_unverified reason=mount')" "R3b reason=mount" "$(cat "$FX/err")"
-ok "$(marker_absent)" "R3b no marker was written"
+fatal_row R3b 'plaintext_unverified reason=mount' 0
 
-# --- R3c: a failed umount --------------------------------------------------------------
+# --- R3c/R3d/R3e: teardown failures are reason=umount, and every later step is still tried --
 new_fixture r3c-umount-failed
 : > "$FX/umount_fail"
 run_unit "$UNIT"
-ok "$((RC == 0))" "R3c a failed umount is FATAL (rc=$RC)"
-ok "$(fatal_is 'plaintext_unverified reason=umount')" "R3c reason=umount" "$(cat "$FX/err")"
-ok "$(marker_absent)" "R3c no marker was written"
+fatal_row R3c 'plaintext_unverified reason=umount' -
+ok "$(grep -q '^dmsetup|remove' "$FX/calls.log" && grep -q '^losetup|-d' "$FX/calls.log"; echo $?)" \
+  "R3c after a failed umount, dmsetup remove and losetup -d were still attempted (collect-then-exit)"
+ok "$(compgen -G "$FX/shm/*/mnt" >/dev/null; echo $?)" \
+  "R3c the still-mounted directory was NOT removed (no rm over a mounted tree)"
+new_fixture r3d-dm-remove-failed
+: > "$FX/dm_remove_fail"
+run_unit "$UNIT"
+fatal_row R3d 'plaintext_unverified reason=umount' -
+ok "$(grep -q '^losetup|-d' "$FX/calls.log"; echo $?)" "R3d losetup -d was still attempted after dmsetup remove failed"
+new_fixture r3e-losetup-d-failed
+: > "$FX/losetup_d_fail"
+run_unit "$UNIT"
+fatal_row R3e 'plaintext_unverified reason=umount' -
 
-# --- R4: a dirty journal ---------------------------------------------------------------
-# The fixture ALSO holds a repository, so "nothing is counted" is discriminating: a journal
-# verdict must win over the residue verdict the same tree would otherwise produce.
-new_fixture r4-needs-recovery
+# --- R4: a dirty journal is no longer FATAL: it replays into the COW -------------------
+new_fixture r4a-dirty-empty
+: > "$FX/dumpe2fs_dirty"
+run_unit "$UNIT"
+ok "$((RC != 0))" "R4a a dirty origin with an empty post-replay tree PASSES (rc=$RC)" "$(cat "$FX/err")"
+ok "$([ "$(field plaintext_journal)" = dirty ]; echo $?)" "R4a plaintext_journal=dirty"
+ok "$([ -n "$(marker)" ]; echo $?)" "R4a the marker is written"
+ok "$(teardown_ok 1)" "R4a teardown complete"
+
+new_fixture r4b-dirty-residue
 : > "$FX/dumpe2fs_dirty"
 mkdir -p "$FX/ptsrc/repositories/ws-1.git"
 run_unit "$UNIT"
-ok "$((RC == 0))" "R4 needs_recovery is FATAL (rc=$RC)"
-ok "$(fatal_is 'plaintext_unverified reason=journal')" "R4 reason=journal" "$(cat "$FX/err")"
-ok "$(absent_in plaintext_residue "$FX/err")" "R4 nothing was counted — no residue verdict" "$(cat "$FX/err")"
-ok "$(marker_absent)" "R4 no marker was written"
+ok "$((RC == 0))" "R4b a dirty origin whose replayed tree holds a repo is FATAL (rc=$RC)"
+ok "$(fatal_is 'plaintext_residue count=1')" "R4b plaintext_residue count=1 (the post-replay tree was counted)" "$(cat "$FX/err")"
+ok "$(marker_absent)" "R4b no marker was written"
+ok "$(teardown_ok 1)" "R4b teardown ran before the residue verdict"
+
+new_fixture r4c-snapshot-still-dirty
+: > "$FX/dumpe2fs_dirty"
+: > "$FX/snap_still_dirty"
+mkdir -p "$FX/ptsrc/repositories/ws-1.git"
+run_unit "$UNIT"
+fatal_row R4c 'plaintext_unverified reason=journal' 1
 
 # --- R5: a non-empty plaintext volume ---------------------------------------------------
 new_fixture r5-residue-bare-repo
@@ -487,6 +709,83 @@ mkdir -p "$FX/ptsrc/repositories/lost+found"
 run_unit "$UNIT"
 ok "$((RC != 0))" "R5c a lock dotfile and lost+found are not residue (rc=$RC)" "$(cat "$FX/err")"
 ok "$([ "$(field plaintext_empty)" = yes ]; echo $?)" "R5c plaintext_empty=yes"
+
+# --- R9: reason=source — the origin is not ours to touch ---------------------------------
+new_fixture r9a-not-block
+: > "$FX/pt_not_block"
+run_unit "$UNIT"
+fatal_row R9a 'plaintext_unverified reason=source' -
+ok "$(absent_in '^blockdev|' "$FX/calls.log")" "R9a nothing was set read-only"
+new_fixture r9b-is-luks
+: > "$FX/pt_is_luks"
+run_unit "$UNIT"
+fatal_row R9b 'plaintext_unverified reason=source' -
+ok "$(absent_in '^blockdev|--setro' "$FX/calls.log")" "R9b a LUKS device is never set read-only (it may sit under the live mapper)"
+new_fixture r9c-holders
+: > "$FX/sys/class/block/vol/holders/dm-0"
+run_unit "$UNIT"
+fatal_row R9c 'plaintext_unverified reason=source' -
+ok "$(absent_in '^blockdev|--setro' "$FX/calls.log")" "R9c a device with holders is never set read-only"
+
+# --- R10: reason=snapshot — the read-only flag or the snapshot apparatus ------------------
+new_fixture r10a-setro-fails
+: > "$FX/setro_fail"
+run_unit "$UNIT"
+fatal_row R10a 'plaintext_unverified reason=snapshot' -
+ok "$(absent_in '^dmsetup|create\|^mount|' "$FX/calls.log")" "R10a no snapshot was created and nothing mounted"
+new_fixture r10b-getro-zero
+: > "$FX/getro_zero"
+run_unit "$UNIT"
+fatal_row R10b 'plaintext_unverified reason=snapshot' -
+ok "$(absent_in '^dmsetup|create\|^mount|' "$FX/calls.log")" "R10b a read-back of 0 stops before any snapshot"
+new_fixture r10c-geometry
+: > "$FX/geometry_bad"
+run_unit "$UNIT"
+fatal_row R10c 'plaintext_unverified reason=snapshot' -
+ok "$(absent_in '^losetup|' "$FX/calls.log")" "R10c an unparseable journal geometry is never replaced by a default COW size"
+new_fixture r10d-losetup-fails
+: > "$FX/losetup_fail"
+run_unit "$UNIT"
+fatal_row R10d 'plaintext_unverified reason=snapshot' -
+ok "$([ -z "$(ls -A "$FX/shm")" ]; echo $?)" "R10d the /dev/shm directory was cleaned up"
+new_fixture r10e-create-fails
+: > "$FX/dm_create_fail"
+run_unit "$UNIT"
+fatal_row R10e 'plaintext_unverified reason=snapshot' -
+ok "$(absent_in '^dmsetup|remove' "$FX/calls.log")" "R10e a create that failed (e.g. a taken name) never removes a device this run did not create"
+ok "$(grep -q '^losetup|-d' "$FX/calls.log"; echo $?)" "R10e the COW loop was still released"
+new_fixture r10f-invalid
+: > "$FX/dm_invalid"
+run_unit "$UNIT"
+fatal_row R10f 'plaintext_unverified reason=snapshot' 1
+new_fixture r10g-kernel-ro-write
+printf '[   12.345678] Trying to write to read-only block-device vol (partno 0)\n' > "$FX/klog_extra"
+run_unit "$UNIT"
+fatal_row R10g 'plaintext_unverified reason=snapshot' 1
+new_fixture r10h-classifier
+: > "$FX/dm_invalid"
+printf '[   12.3] device-mapper: snapshots: Invalidating snapshot: Unable to allocate exception.\n' > "$FX/klog_extra"
+run_unit "$UNIT"
+ok "$(grep -qF 'kernel=overflow cow=Invalid' "$FX/err"; echo $?)" "R10h the FATAL carries a classifier word and the dm status, not raw kernel lines" "$(cat "$FX/err")"
+ok "$(absent_in 'Unable to allocate' "$FX/err")" "R10h no raw kernel line reaches the FATAL detail"
+
+# --- R11: reason=journal — the replay did not produce a trustworthy tree ------------------
+new_fixture r11a-errors-after-mount
+printf '3\n3\n' > "$FX/errors_seq"
+run_unit "$UNIT"
+fatal_row R11a 'plaintext_unverified reason=journal' 1
+new_fixture r11b-errors-rise
+printf '0\n1\n' > "$FX/errors_seq"
+run_unit "$UNIT"
+fatal_row R11b 'plaintext_unverified reason=journal' 1
+new_fixture r11c-with-errors
+: > "$FX/snap_with_errors"
+run_unit "$UNIT"
+fatal_row R11c 'plaintext_unverified reason=journal' 1
+new_fixture r11d-errors-unreadable
+: > "$FX/errors_seq"
+run_unit "$UNIT"
+fatal_row R11d 'plaintext_unverified reason=journal' 1
 
 # --- R6: unknown content on the SERVED store --------------------------------------------
 new_fixture r6-luks-residue
@@ -588,6 +887,116 @@ ok "$(grep -q "$LEAK_KEY" "$FX/probe.env" && grep -q "$LEAK_KEY" "$FX/runuser.en
   "M7 ROW 7: without env -i the passphrase reaches the git-uid process — the arm is live"
 
 # =====================================================================================
+# GUARD 1 MUTATION MATRIX (#5274 Phase 3) — rows 1, 2, 3, 5, 6, 7, 9, 10 here; row 4 (noload +
+# no post-check) and the COW overflow run in git-data-plaintext-snapshot-loopback.test.sh, which
+# needs a real kernel. Each mutant carries a landed-check, and each row first proves the pristine
+# unit gives the opposite verdict against the same fixture.
+# =====================================================================================
+# mutate_py <name> <old> <new> — replace exactly one occurrence of <old>; MUT_RC=1 if it did not land.
+mutate_py() {
+  MUT="$SCRATCH/mut.$1"
+  if python3 - "$UNIT" "$MUT" "$2" "$3" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(dst, "w").write(s.replace(old, new))
+PY
+  then
+    if cmp -s "$UNIT" "$MUT"; then MUT_RC=1; else MUT_RC=0; fi
+  else
+    MUT_RC=1
+  fi
+}
+order_holds() {
+  local _i _s _c _m
+  _i=$(first_line '^cryptsetup\|isLuks'); _s=$(first_line '^blockdev\|--setro'); _c=$(first_line '^dmsetup\|create'); _m=$(first_line '^mount\|')
+  [ "$_i" -lt "$_s" ] && [ "$_s" -lt "$_c" ] && [ "$_s" -lt "$_m" ] && [ "$_m" -lt 999999 ]; echo $?
+}
+
+# G1 row 1 — delete blockdev --setro. The --getro stub answers from behaviour, so the read-back fails.
+new_fixture g1-setro-deleted
+mutate_py g1 '  if ! blockdev --setro "$_pt_dev" || ' '  if false || '
+ok "$MUT_RC" "G1-1 the mutation landed (blockdev --setro removed)"
+run_unit "$MUT"
+ok "$(fatal_is 'plaintext_unverified reason=snapshot')" "G1-1 ROW 1: without --setro the read-back refuses (reason=snapshot) — the arm is live" "$(cat "$FX/err")"
+ok "$(marker_absent)" "G1-1 ROW 1: and no marker is written"
+
+# G1 row 2 — REORDER: --setro moved after dmsetup create (presence is not order).
+new_fixture g1-setro-reordered
+_SETRO_BLOCK='  if ! blockdev --setro "$_pt_dev" || [ "$(blockdev --getro "$_pt_dev" 2>/dev/null || true)" != 1 ]; then
+    log "FATAL: plaintext_unverified reason=snapshot — $_pt_dev could not be made kernel read-only"
+    exit 1
+  fi
+'
+mutate_py g1r "$_SETRO_BLOCK" ''
+if [ "$MUT_RC" = 0 ]; then
+  cp "$MUT" "$SCRATCH/mut.g1r.stage1"
+  UNIT_SAVED="$UNIT"; UNIT="$SCRATCH/mut.g1r.stage1"
+  mutate_py g1r2 '  _pt_snap_up=1
+' "  _pt_snap_up=1
+$_SETRO_BLOCK"
+  UNIT="$UNIT_SAVED"
+fi
+ok "$MUT_RC" "G1-2 the mutation landed (--setro moved after dmsetup create)"
+run_unit "$MUT"
+ok "$(( $(order_holds) == 0 ))" "G1-2 ROW 2: the calls.log order row reds on the reordered unit — the arm is live" "$(cat "$FX/calls.log")"
+
+# G1 row 3 — mount the ORIGIN instead of the snapshot.
+new_fixture g1-mount-origin
+mutate_py g1m 'noexec "/dev/mapper/$_pt_snap" "$_pt_mnt"' 'noexec "$_pt_dev" "$_pt_mnt"'
+ok "$MUT_RC" "G1-3 the mutation landed (the mount source is the origin)"
+run_unit "$MUT"
+ok "$([ "$(cat "$FX/mount_source" 2>/dev/null)" != "$FX/dev/mapper/git-data-pt-snap" ]; echo $?)" \
+  "G1-3 ROW 3: the mount-source row reds when the origin is mounted — the arm is live"
+
+# G1 row 5 — drop the post-replay needs_recovery check: a still-dirty snapshot is then counted.
+new_fixture g1-no-postcheck
+: > "$FX/dumpe2fs_dirty"; : > "$FX/snap_still_dirty"; mkdir -p "$FX/ptsrc/repositories/ws-1.git"
+mutate_py g1p '  if _pt_has_nr "$_pt_ssb"; then' '  if false; then'
+ok "$MUT_RC" "G1-5 the mutation landed (post-replay check removed)"
+run_unit "$MUT"
+ok "$(( $(fatal_is 'plaintext_unverified reason=journal') == 0 ))" "G1-5 ROW 5: without the post-check the stale tree is counted instead of refused — the arm is live" "$(cat "$FX/err")"
+
+# G1 row 6 — drop dmsetup remove from the teardown.
+new_fixture g1-no-remove
+mutate_py g1d 'if dmsetup remove --retry "$_pt_snap" >/dev/null 2>&1; then' 'if true; then'
+ok "$MUT_RC" "G1-6 the mutation landed (dmsetup remove removed)"
+run_unit "$MUT"
+ok "$(( $(teardown_ok 1) == 0 ))" "G1-6 ROW 6: the teardown-order row reds when the snapshot is not removed — the arm is live"
+ok "$([ -e "$FX/dev/mapper/git-data-pt-snap" ]; echo $?)" "G1-6 ROW 6: and the snapshot node survives"
+
+# G1 row 7 — a SECOND opener of the origin after a compliant first.
+new_fixture g1-second-opener
+mutate_py g1o '  _pt_e1="$(_pt_errs || true)"' '  mount -o ro,noload "$_pt_dev" "$_pt_mnt" 2>/dev/null || true
+  _pt_e1="$(_pt_errs || true)"'
+ok "$MUT_RC" "G1-7 the mutation landed (a second mount of the origin)"
+run_unit "$MUT"
+_bad=0
+while IFS= read -r _l; do
+  case "${_l#*:}" in
+    "stat|-L -c %F $FX/dev/vol"|"cryptsetup|isLuks $FX/dev/vol"|"blockdev|--setro $FX/dev/vol"|"blockdev|--getro $FX/dev/vol"|"dumpe2fs|-h $FX/dev/vol"|"blockdev|--getsz $FX/dev/vol"|"dmsetup|create git-data-pt-snap --table 0 20971520 snapshot $FX/dev/vol /dev/loop77 N 8") : ;;
+    *) _bad=1 ;;
+  esac
+done < <(grep -nF "$FX/dev/vol" "$FX/calls.log")
+ok "$((_bad == 0))" "G1-7 ROW 7: the origin allowlist row reds on the second opener — the arm is live"
+
+# G1 row 9 — drop the errors_count check: a checksum-skipped directory block yields a short count.
+new_fixture g1-no-errors-check
+printf '0\n1\n' > "$FX/errors_seq"
+mutate_py g1e '  [ "$_pt_e1" = 0 ] || {' '  true || {'
+ok "$MUT_RC" "G1-9 the mutation landed (the post-count errors_count check removed)"
+run_unit "$MUT"
+ok "$((RC != 0))" "G1-9 ROW 9: without it a count that raised an ext4 error PASSES (rc=$RC) — the arm is live"
+
+# G1 row 10 — a feature argument on the dm table.
+mutate_py g1t 'snapshot $_pt_dev $_pt_loop N 8"' 'snapshot $_pt_dev $_pt_loop N 8 1 discard_passdown_origin"'
+ok "$MUT_RC" "G1-10 the mutation landed (discard_passdown_origin added)"
+ok "$(( MUT_RC != 0 || $(grep -qF 'dmsetup create "$_pt_snap" --table "0 $_pt_sz snapshot $_pt_dev $_pt_loop N 8"' "$MUT"; echo $?) == 0 ))" \
+  "G1-10 ROW 10: the table-literal row (S6d) reds on the mutant — the arm is live"
+
+# =====================================================================================
 # Instrument self-test + floor
 # =====================================================================================
 _can_p0=$passes; _can_f0=$fails
@@ -604,7 +1013,7 @@ passes=$_can_p0; fails=$_can_f0
 # cannot see a call site that never reached a verdict. The two bindings sit DIRECTLY above the
 # `if` with no comment between: guard-vacuity-floor builds its mutant from the floor block plus
 # the contiguous simple assignments above it, and a comment breaks the run.
-MIN_ASSERTIONS=90
+MIN_ASSERTIONS=279
 total=$((passes + fails))
 if [ "$cases" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: ran only %s assertion call sites (floor %s) — suite did not execute fully\n' "$cases" "$MIN_ASSERTIONS" >&2
