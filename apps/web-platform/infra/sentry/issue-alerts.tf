@@ -1671,14 +1671,16 @@ resource "sentry_alert" "stale_bot_pr" {
 # stage, so all boot events land in a single perpetually-active issue group. Emitting into a
 # bucket nobody reads is not observability — it is the silence the gate was built to end.
 #
-# Fires rarely by construction: runcmd is once-per-instance, so at most one event per fresh
-# host boot. Any occurrence means either the NIC never converged within that host's bound
+# Fires rarely by construction: runcmd is once-per-instance, so a fresh host boot emits at most
+# one event per emitter (a fresh web boot has three, below). Any occurrence means either the NIC never converged within that host's bound
 # (private_nic_timeout) or the probe could not measure at all (private_nic_probe_fault).
 #
 # HOST-GENERIC since #8539 — DO NOT re-scope this to web-1. This rule filters on `stage` and
-# NEVER on host, and every host bakes the same var.sentry_dsn, so it matches BOTH emitters:
-# soleur-wait-nic on web-1 (#6441, 60 s bound) and soleur-inngest-nic-wait on the dedicated
-# inngest host (#8539, 150 s bound). That is deliberate and it is the earliest automated warning
+# NEVER on host, and every host bakes the same var.sentry_dsn, so it matches every emitter:
+# soleur-wait-nic on web-1 (#6441, 60 s bound), soleur-inngest-nic-wait on the dedicated
+# inngest host (#8539, 150 s bound), and, since #8651, two cloud-init.yml runcmd emitters on
+# every fresh web boot: the early `networkctl reload` (private_nic_probe_fault, detail `gate=reload`) and
+# the pre-pull seed wait (150 s bound, detail `gate=seed`). A web event's detail says which one. That is deliberate and it is the earliest automated warning
 # either host produces — there is no alert keyed on oci-pull-ALL-LEGS-FAILED, so on inngest this
 # is the ONLY page before the scheduler goes dark.
 #
