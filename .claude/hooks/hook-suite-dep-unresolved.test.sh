@@ -36,8 +36,9 @@
 #   1. POPULATION (derived, never listed). Roots are the `.claude/hooks/` entries of
 #      `scripts/test-all.sh --print-suite-globs`. Every guard-shaped line —
 #      `(if !)? (command -v|which) <tool>` carrying `||` or opening with `if !` — yields one
-#      (suite, tool) pair. A guard whose block contains an `exit` is WHOLE-SUITE; one without
-#      (an `if … elif` arm, a per-case skip) is ARM-LEVEL. The class is read from the source.
+#      (suite, tool) pair. A `||` guard, or an `if !` guard that ends at `fi`, is WHOLE-SUITE;
+#      an `if !` guard that reaches `else`/`elif` with no `exit` (an `if … elif` arm, a
+#      per-case skip) is ARM-LEVEL. The class is read from the source.
 #   2. BEHAVIOUR. Each pair's suite runs on a PATH farm with that one tool removed, with CI
 #      and GITHUB_ACTIONS unset (a guard branching on CI would otherwise pass where this
 #      suite runs). Required: rc != 0 (exactly 3 for a whole-suite guard) AND a line
@@ -63,6 +64,9 @@ ROOT="$(mktemp -d "${TMPDIR}/hook-dep-unresolved.XXXXXXXX")" || {
 trap 'rm -rf "$ROOT"' EXIT
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# Every hook suite redirects incident telemetry (incident-sandbox-coverage.test.sh). This one
+# emits nothing itself; each suite it spawns sources the helper too.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 REPO_ROOT="$(cd -P "$SELF_DIR/../.." && pwd -P)"
 SELF="$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
 
@@ -81,8 +85,10 @@ canonical_line() { # <tool>
 }
 
 # ---------------------------------------------------------------------------------------
-# derive_pairs <file>... -> "file<TAB>tool<TAB>class" per distinct (file, tool); class is
-# `whole` when any guard block for that tool contains an `exit`, else `arm`.
+# derive_pairs <file>... -> "file<TAB>tool<TAB>class" per distinct (file, tool). A `||` guard
+# is always `whole`. An `if !` guard is `arm` only when its block reaches `else`/`elif` without
+# an `exit`; one that ends at `fi` guards the whole suite even if its `exit` was dropped, so a
+# guard that prints the line and falls through is held to rc == 3 rather than reclassified.
 derive_pairs() {
   awk '
     function has_exit(s) { return (s ~ /(^|[^A-Za-z0-9_$])exit([^A-Za-z0-9_]|$)/) }
@@ -98,22 +104,13 @@ derive_pairs() {
           sub(/^[[:space:]]*(if[[:space:]]+![[:space:]]*)?(command[[:space:]]+-v|which)[[:space:]]+/, "", t)
           match(t, /^[A-Za-z0-9_.+-]+/)
           tool = substr(t, RSTART, RLENGTH)
-          whole = 0
+          whole = 1
           if (isif) {
             for (j = i + 1; j <= last[f]; j++) {
               b = line[f, j]
-              if (b ~ /^[[:space:]]*(fi|else|elif)([^A-Za-z0-9_]|$)/) break
-              if (has_exit(b)) { whole = 1; break }
-            }
-          } else {
-            rest = substr(s, index(s, "||") + 2)
-            if (has_exit(rest)) whole = 1
-            else if (index(rest, "{") > 0 && index(rest, "}") == 0) {
-              for (j = i + 1; j <= last[f]; j++) {
-                b = line[f, j]
-                if (has_exit(b)) { whole = 1 }
-                if (index(b, "}") > 0) break
-              }
+              if (has_exit(b)) break
+              if (b ~ /^[[:space:]]*(else|elif)([^A-Za-z0-9_]|$)/) { whole = 0; break }
+              if (b ~ /^[[:space:]]*fi([^A-Za-z0-9_]|$)/) break
             }
           }
           key = f "\t" tool
