@@ -22,9 +22,11 @@
 #     cron failed again after the operator archived it (without it, archiving
 #     would silence the monitor for good).
 # frequency_minutes = 1441 throttles actions per group: a flapping monitor emails
-# at most once per ~24 h. 1441, not 1440: Sentry dedups an identical rule at POST
-# (keyed on action_match + logic_type + frequency + action shape, NOT conditions),
-# and anthropic_credit_exhausted already holds 1440 with the same email action.
+# at most once per ~24 h. 1441, not 1440, follows this root's unique-frequency
+# convention (issue-alerts.tf comments record a POST-time dedup keyed on action
+# shape + frequency); anthropic_credit_exhausted holds 1440 with the same email
+# action. Whether the workflows endpoint dedups at all is unmeasured: two groups of
+# three live rules already share such a key.
 # No event-frequency-count re-page, deliberately (ADR-031 #8630 amendment): a
 # persistent failure emails once, at its start. The provider hard-codes
 # `any-short` for the triggers, so any single one fires.

@@ -873,7 +873,7 @@ existing provenance note.
 
 ### Pre-merge (PR)
 
-- [ ] AC1. `apps/web-platform/infra/sentry/cron-monitor-alerts.tf` declares exactly one
+- [x] AC1. `apps/web-platform/infra/sentry/cron-monitor-alerts.tf` declares exactly one
   `resource "sentry_alert" "cron_monitor_failure"` with an inline `monitor_ids` list of
   `sentry_cron_monitor.<label>.id` references,
   `frequency_minutes = 1440`, `enabled = true`, exactly the three lifecycle triggers (`first_seen_event`,
@@ -881,49 +881,49 @@ existing provenance note.
   `conditions = []`, and email `issue_owners`/`ActiveMembers`. Verify with
   `grep -c '^resource "sentry_alert"' apps/web-platform/infra/sentry/cron-monitor-alerts.tf` = 1
   (anchored: `issue-alerts.tf:68` shows that a comment matches the unanchored form).
-- [ ] AC2. `monitor_ids` has one element per declared `sentry_cron_monitor`, and
+- [x] AC2. `monitor_ids` has one element per declared `sentry_cron_monitor`, and
   `cron_monitor_alert_unrouted` is `{}`. Guard 1
   (`./node_modules/.bin/vitest run test/server/inngest/sentry-cron-monitor-routing-parity.test.ts`
   from `apps/web-platform`) is green on the real tree, and every matrix row and must-PASS row is a
   named test.
-- [ ] AC3. Guard 2's floor is in `tf_rule`. Its matrix rows and must-PASS rows are in
+- [x] AC3. Guard 2's floor is in `tf_rule`. Its matrix rows and must-PASS rows are in
   `tests/scripts/test-sentry-alert-reference-gate.sh`, and `bash tests/scripts/test-sentry-alert-reference-gate.sh`
   passes with the raised `EXPECTED_TESTS`. The `def excluded` line is byte-identical to `origin/main`:
   `git diff origin/main -- tests/scripts/lib/sentry-alert-projection.jq | grep -cE '^[-+]def excluded'`
   = 0. Anchored, so that the comment mentioning `def excluded` near line 258 cannot trip it.
-- [ ] AC3a. Guard 3: `bash tests/scripts/test-sentry-alert-adoption-guards.sh` passes with the new
+- [x] AC3a. Guard 3: `bash tests/scripts/test-sentry-alert-adoption-guards.sh` passes with the new
   rows, and `scripts/sentry-monitor-binding-gate.sh` still defaults `EXPECTED` to `1213799`.
-- [ ] AC4. `issue-alerts.tf` has no resource change (amended at review: one COMMENT line was corrected,
+- [x] AC4. `issue-alerts.tf` has no resource change (amended at review: one COMMENT line was corrected,
   the "credit-probe detector routes to no workflow" claim this PR makes false;
   `git diff origin/main -- apps/web-platform/infra/sentry/issue-alerts.tf | grep '^[-+][^-+#]' | grep -v '^[-+]\s*#'` is empty).
 - [ ] AC5. The `plan_pr` job of `apply-sentry-infra.yml` is green: the plan shows exactly one create
   (`sentry_alert.cron_monitor_failure`) and no update, replace or destroy. The create gate, the
   tripwire and the reference gate pass.
-- [ ] AC6. `alert-reference.json` differs from `origin/main` by exactly one added top-level key,
+- [x] AC6. `alert-reference.json` differs from `origin/main` by exactly one added top-level key,
   `cron-monitor-failure`. Checked two ways:
   - `diff <(jq -S 'del(.["cron-monitor-failure"])' apps/web-platform/infra/sentry/alert-reference.json) <(git show origin/main:apps/web-platform/infra/sentry/alert-reference.json | jq -S .)`
     prints nothing.
   - `jq '.["cron-monitor-failure"].detectorIds | length' apps/web-platform/infra/sentry/alert-reference.json`
     equals `cat apps/web-platform/infra/sentry/*.tf | grep -c '^resource "sentry_cron_monitor"'` (59 at
     authoring).
-- [ ] AC7. The README T25 counts pass: the README carries the bold phrases "34 `sentry_alert` rules"
+- [x] AC7. The README T25 counts pass: the README carries the bold phrases "34 `sentry_alert` rules"
   and "59 cron monitors".
   `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` is green, including the updated
   Class A strings.
-- [ ] AC8. The drift workflow's final sentry-heartbeat `if:` is
+- [x] AC8. The drift workflow's final sentry-heartbeat `if:` is
   `always() && matrix.directory != 'apps/web-platform/infra/sentry'`, and the #7834 heartbeat shape
   guard and the new Phase 4.4 row are green.
-- [ ] AC9. `terraform fmt -check -recursive` and `terraform validate` pass for the sentry root, and
+- [x] AC9. `terraform fmt -check -recursive` and `terraform validate` pass for the sentry root, and
   `infra-validation.yml` is green.
-- [ ] AC10. `git grep -n 'routes to no workflow (#8630)'` returns nothing, and the PR body lists
+- [x] AC10. `git grep -n 'routes to no workflow (#8630)' -- ':!knowledge-base/project/plans'` returns nothing (amended at QA: the plan quotes the phrase itself), and the PR body lists
   every line Phase 5.2 edited.
-- [ ] AC11. The ADR-031 amendment is appended and the ADR diff is additions only:
+- [x] AC11. The ADR-031 amendment is appended and the ADR diff is additions only:
   `git diff --numstat origin/main -- knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md | awk '{print $2}'`
   prints `0`. The earlier `grep '^-[^-]'` form missed deleted bullet lines and blank lines. The C4 `sentry -> founder` edge is
   corrected, and the c4-count-parity, c4-code-syntax and c4-render tests are green.
 - [ ] AC12. The #8630 comment (Phase 0.4) is posted with M1-M12 and the Phase 0 measurements. Any
   "unmute" decision has one tracking issue referenced `Tracks #N` in the PR body.
-- [ ] AC13. Before every push: `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
+- [x] AC13. Before every push: `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
   and `bash scripts/lint-diagnosis-claims.sh` pass. `python3 scripts/lint-guard-contract.py` passes
   on this plan.
 

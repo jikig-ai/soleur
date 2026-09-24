@@ -6,7 +6,9 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   fully Terraform-owned (31 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
-  `organizations/{org}/workflows/` endpoint.
+  `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
+  (this root's convention against a POST-time dedup keyed on action shape +
+  frequency; unmeasured on the workflows endpoint — `grep -h frequency_minutes *.tf`).
 
   **TWO are FROZEN (#8451).** `auth-per-user-loop` and `sandbox-startup-failure`
   trigger on `event_unique_user_frequency_count`, which the pinned provider's
