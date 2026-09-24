@@ -107,7 +107,7 @@ git -C "$FIX" init -q && git -C "$FIX" add -A && git -C "$FIX" commit -q -m "bou
 # fixture root before anything is redirected into it.
 assert_fixture_dir() {
   case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY; refusing\n' >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
     */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
     /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
     /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
