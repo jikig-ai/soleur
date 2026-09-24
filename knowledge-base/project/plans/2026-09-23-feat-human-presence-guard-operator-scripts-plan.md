@@ -923,37 +923,37 @@ review (TR5).
 
 ## Acceptance Criteria
 
-- [ ] AC1 — Guard 1 census passes on the final tree, and each of its mutation rows M1–M7 and harness
+- [x] AC1 — Guard 1 census passes on the final tree, and each of its mutation rows M1–M7 and harness
       rows H1–H3 is exercised in `operator-ack-guard.test.sh` with the expected verdict.
-- [ ] AC2 — For each `write` row in `operator-ack-arms.tsv`: `printf 'yes\n' | bash <script> <argv>`
+- [x] AC2 — For each `write` row in `operator-ack-arms.tsv`: `printf 'yes\n' | bash <script> <argv>`
       (sandbox PATH) exits 64, prints `SOLEUR_BOOTSTRAP_INPUT_REQUIRED`, and the stub log is empty.
-- [ ] AC3 — `flip.sh … --confirmed` exits 2 with a message containing "own terminal", stub log empty.
-- [ ] AC4 — Each `readonly` row exits 0 without a TTY with zero mutating stub calls.
-- [ ] AC5 — Pty `no` → exit 1, zero mutating calls; pty `yes` → ≥ 1 mutating call and the audit body
+- [x] AC3 — `flip.sh … --confirmed` exits 2 with a message containing "own terminal", stub log empty.
+- [x] AC4 — Each `readonly` row exits 0 without a TTY with zero mutating stub calls.
+- [x] AC5 — Pty `no` → exit 1, zero mutating calls; pty `yes` → ≥ 1 mutating call and the audit body
       carries `"p_approval_method":"tty-ack"` (flag scripts). Every ack prompt string is observed.
-- [ ] AC6 — Guard 3: every arm-table row × every invocation shape (including `script -qec "…"`,
+- [x] AC6 — Guard 3: every arm-table row × every invocation shape (including `script -qec "…"`,
       `yes | script -qc …`, bare path, `$S/flip.sh`, `cd …/flag-set-role && bash scripts/flip.sh`,
       `cat <<EOF | bash`, and a dry-run call chained before a write call) gives DEFER (write) /
       ALLOW (readonly); `bash …/delete.sh f; echo --dry-run` and the newline-tail form DEFER;
       `cat …/flip.sh` and `bash …/inngest-cutover-flip.sh` ALLOW; rows M8–M12 and H3–H4 pass.
-- [ ] AC7 — Guard 9 amended; `bash plugins/soleur/test/operator-script.test.sh` green, including
+- [x] AC7 — Guard 9 amended; `bash plugins/soleur/test/operator-script.test.sh` green, including
       Guard 4 rows M1–M5 and H1–H2.
-- [ ] AC8 — `git grep -nF -- '--confirmed' -- 'plugins/soleur/skills/*' '.claude/*' 'plugins/soleur/commands/*'`
+- [x] AC8 — `git grep -nF -- '--confirmed' -- 'plugins/soleur/skills/*' '.claude/*' 'plugins/soleur/commands/*'`
       returns nothing.
-- [ ] AC9 — Migration 140 test green; `071` test unchanged and green.
-- [ ] AC10 — `ADR-249-*.md` exists (or its renumbered successor, with every plan/tasks/AC mention
+- [x] AC9 — Migration 140 test green; `071` test unchanged and green.
+- [x] AC10 — `ADR-249-*.md` exists (or its renumbered successor, with every plan/tasks/AC mention
       swept), contains the per-harness table with a measured/UNMEASURED cell per row, the named
       residual risks, and #8661 and #8662; ADR-236 amended.
-- [ ] AC11 — `model.c4` has `flagsmith` with both edges and it renders in `context`; C4 syntax,
+- [x] AC11 — `model.c4` has `flagsmith` with both edges and it renders in `context`; C4 syntax,
       render and count-parity tests green.
 - [ ] AC12 — `bash scripts/test-all.sh` green for the groups containing the touched suites;
       `invocation-axis.test.ts` and `components.test.ts` green.
-- [ ] AC13 — #8661 and #8662 are linked from the ADR and the PR body.
-- [ ] AC14 — For each of the four SKILL.md files, the fenced write command it tells the agent to
+- [x] AC13 — #8661 and #8662 are linked from the ADR and the PR body.
+- [x] AC14 — For each of the four SKILL.md files, the fenced write command it tells the agent to
       print (extracted by the test, not retyped) starts with `cd <absolute path> &&`, and, run under
       `script -qec` with stub PATH and `no` on the pty, reaches its ack prompt and exits 1 with zero
       mutating calls (proves the printed form works in a real terminal).
-- [ ] AC15 — `flag-set-role/SKILL.md` has the incident-rollback block (write command without
+- [x] AC15 — `flag-set-role/SKILL.md` has the incident-rollback block (write command without
       dry-run, own terminal not `!`, dashboard break-glass on exit 4); each of the four SKILL.md files
       names `wg-block-pr-ready-on-undeferred-operator-steps` for the handoff.
 - [ ] AC16 (pre-merge, after tenant-integration CI applies migration 140 to the shared dev project) —
