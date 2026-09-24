@@ -319,7 +319,7 @@ operator-decision list.
   bases; record the measurement in
   `knowledge-base/project/specs/feat-tmp-scratch-reclamation/measurements.md`
   (durable artifact; `soleur:ship` folds it into the PR body)
-- ADR-249 (provisional): extends the ownership-keyed decision to `/var/tmp`,
+- ADR-250 (provisional): extends the ownership-keyed decision to `/var/tmp`,
   records the `.soleur-owned` marker schema + the purge attribution allowlist,
   amends the never-delete-user-data compliance case to cover `/var/tmp`
 - Success criteria: AC5–AC7 pre-merge; AC10 post-merge (zero new unattributed
@@ -340,7 +340,7 @@ operator-decision list.
   units (conditional — see User-Challenge UC5)
 - `knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md` —
   timer/cron install + session-start fallback doc (incl. `enable-linger`)
-- `knowledge-base/engineering/architecture/decisions/ADR-249-*.md` — provisional ordinal
+- `knowledge-base/engineering/architecture/decisions/ADR-250-*.md` — provisional ordinal
 
 ## Files to Edit
 
@@ -617,7 +617,7 @@ derived paths).
 
 ### ADR
 
-New **ADR-249 (provisional)** via `soleur:architecture` — "ownership-keyed
+New **ADR-250 (provisional)** via `soleur:architecture` — "ownership-keyed
 scratch reclamation extends to `/var/tmp`; `.soleur-owned` marker schema;
 quarantine-mediated backlog purge." Records: the two-base decision, the marker
 schema (`pid=` + `schema=`), the purge's attribution allowlist, the
@@ -682,7 +682,7 @@ already modeled; the guard adds no new consumer).
 - [ ] AC6: All merge blockers verified by test: base-aware `_INUSE_TOP`,
   `__built__` sentinel, `SCRATCH_BASES` fail-closed, lockfile
   TMPDIR-independent, Reaper-2 protect-list covers `soleur-run.*`/`soleur-quarantine.*`.
-- [ ] AC7: ADR-249 (or renumbered ordinal) lands in this PR; #7004 updated with
+- [ ] AC7: ADR-250 (or renumbered ordinal) lands in this PR; #7004 updated with
   acceptance-status note (`Ref #7004` in the PR body — `Closes` reserved until
   the post-merge residue measurement lands).
 - [ ] AC8: `bash tests/scripts/test-tmp-purge.sh`, `scripts/tmpfs-guard.test.sh`,

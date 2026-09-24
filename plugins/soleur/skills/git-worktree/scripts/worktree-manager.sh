@@ -2828,7 +2828,7 @@ sweep_orphan_scratch_dirs() {
       # marker/schema arms — verified registry attribution outranks every
       # other rung. A marker-bearing dir that is also a registered worktree
       # MUST take this path: quarantine-moving a registered tree corrupts
-      # the owning repo's .git/worktrees metadata (ADR-249 Consequences).
+      # the owning repo's .git/worktrees metadata (ADR-250 Consequences).
       if [[ -f "$d/.git" && ! -L "$d/.git" ]]; then
         # Bounded worktree batch: classify only while under the cap/timebox.
         if (( wt_done < wt_cap )) && (( "$(now_s)" < deadline )); then

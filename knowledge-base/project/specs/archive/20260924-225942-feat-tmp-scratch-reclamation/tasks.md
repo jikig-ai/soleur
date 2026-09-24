@@ -76,7 +76,7 @@ Issue: #7004 | PR: #8738 | Lane: cross-domain | Threshold: single-user incident
 - [x] 3.6 `scripts/tmpfs-guard.{service,timer}` + runbook
   `tmpfs-guard-install.md` (enable-linger) — conditional per UC5
 - [x] 3.7 Residue probe + `specs/feat-tmp-scratch-reclamation/measurements.md`
-- [x] 3.8 ADR-249 (provisional) via `soleur:architecture` + ADR-133 amendment
+- [x] 3.8 ADR-250 (provisional) via `soleur:architecture` + ADR-133 amendment
   + #7004 acceptance-status note
 
 ## Testing & Verification

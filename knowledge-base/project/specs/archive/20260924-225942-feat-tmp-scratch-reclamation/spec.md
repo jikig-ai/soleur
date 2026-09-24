@@ -119,7 +119,7 @@ live reclamation surface.
   sentinel (2X.6), `TMPFS_GUARD_SCRATCH_BASES` seam fail-closed when unset
   (AC14), lockfile pinned to a TMPDIR-independent path (task 2.11), Reaper-2
   protect-list extended with `soleur-run.*|soleur-quarantine.*` (task 2.10).
-- TR2: No `rm -rf`/`find -delete` on shared-base paths EXCEPT the ADR-249
+- TR2: No `rm -rf`/`find -delete` on shared-base paths EXCEPT the ADR-250
   carve-out: a `soleur-run.<pid>.*`-named root (creation-certain attribution)
   on a tmpfs/ramfs base may be deleted directly — a same-base `mv` frees zero
   RAM and the schema name is stronger evidence than a self-declared marker.

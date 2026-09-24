@@ -1,4 +1,4 @@
-# ADR-249: Ownership-keyed scratch reclamation across /tmp and /var/tmp
+# ADR-250: Ownership-keyed scratch reclamation across /tmp and /var/tmp
 
 - Status: Accepted
 - Date: 2026-09-24
