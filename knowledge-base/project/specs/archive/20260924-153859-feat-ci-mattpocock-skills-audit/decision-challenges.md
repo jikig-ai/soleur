@@ -20,7 +20,7 @@ chooses otherwise.
   already ran out once, and `#8497` is blocked on it. It should not read as one deferral among five.
 - **Plan default:** All five verdicts are shown with equal weight. The blocked-by edge is the only
   thing that marks `#8505` as a priority.
-- **Founder decision 2026-09-23:** moot. `#8505` shipped and closed 2026-09-23 via PR `#8618`.
+- **Founder decision 2026-09-23:** moot. `#8505` shipped in PR `#8618` and was closed 2026-09-23.
 
 ## T3 — Status text for B4 / B10, with a revisit trigger (CPO, taste)
 

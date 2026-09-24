@@ -84,7 +84,7 @@ Closest substitutes at the distribution channel Soleur itself ships through.
 **Auditor:** `soleur:competitive-analysis peer-plugin-audit`
 **Soleur catalog snapshot:** 99 skills / 68 agents / 3 commands / 98 `AGENTS.rules.md` rule ids (enumerated at invocation)
 **Fork note:** not a fork.
-**Reconciled:** 2026-09-23 against origin/main.
+**Reconciled:** 2026-09-23 against origin/main; updated 2026-09-24.
 
 #### Reconciliation status (2026-09-23)
 
@@ -92,15 +92,15 @@ Every section below this one describes the tree on 2026-09-18 and is kept as dat
 
 | Items | Status (updated 2026-09-24) | Closed / tracked by |
 |---|---|---|
-| G1, G5, B9, B12 (first half) | Shipped: `operator-bootstrap` (`template.sh` + `plugins/soleur/scripts/lib/operator-script.sh`), `operator-rephrase`, and the `ship` `## Merge Danger` block. B9 as `**Undo:**` + `**Blast Radius:**`, with no Door verdict. B12's first half: the context tree shipped in `brainstorm-techniques/references/phase-boundaries.md`. The flow map is the B12 (second half) row. | `#8287` → PR `#8297` |
+| G1, G5, B9, B12 (first half: context tree) | Shipped: `operator-bootstrap` (`template.sh` + `plugins/soleur/scripts/lib/operator-script.sh`), `operator-rephrase`, and the `ship` `## Merge Danger` block. B9 as `**Undo:**` + `**Blast Radius:**`, with no Door verdict. B12's first half: the context tree shipped in `brainstorm-techniques/references/phase-boundaries.md`. The flow map is the B12 (second half) row. | `#8287` → PR `#8297` |
 | B1, B2, B3, B7 | Shipped: 6 of 6 diagnosing-bugs mechanics in `reproduce-bug` (red-capable gate, ranked hypotheses, `[DEBUG-<hex4>]` probes, perf branch, seam-absence routing, repro minimisation), and bite-proof, a boundary README and an agent-instructions pointer in `constraint-scaffold`. | `#8288` → PR `#8352` |
 | G2, G3, G4, B11 | Shipped: the no-list (`knowledge-base/project/rejected/`), the glossary (`knowledge-base/project/glossary.md` + `kb-glossary`), `questionnaire-generate`, and the triage intake pre-checks. | `#8289` → PR `#8405` |
 | B6, invocation axis, §1 skill-creator defects | Shipped: `skill-creator/references/authoring-levers.md` (leading words, the two loads, co-location, criterion demand, and a negation-pairing rule) and ADR-236 (8 human-only skills made user-invoked; `flag-create`, `flag-set-role`, `flag-list`, `cron-*`, `invoice` and `trigger-cron` stay model-invocable); both §1 defects fixed. | `#8290` → PR `#8484` |
-| B5 | Not applied. The A/B test was INCONCLUSIVE (+8.0 points, interval [+0.2, +15.8]); a later review judged the measuring instrument of limited validity and lowered the estimate to about +5.6 points. `AGENTS.rules.md` was not rewritten. The founder closed the revisit on 2026-09-23: the estimate is below the pre-registered 10-point bar, so B5 is neither re-measured nor adopted. | closed 2026-09-23, not planned: `#8497` |
+| B5 | Not applied. The A/B test was INCONCLUSIVE (+8.0 points, interval [+0.2, +15.8]); a later review judged the measuring instrument of limited validity and lowered the estimate to about +5.6 points. `AGENTS.rules.md` was not rewritten. Revisit closed (founder decision 2026-09-23): the estimate is below the pre-registered 10-point bar, so B5 is neither re-measured nor adopted. | closed 2026-09-23, not planned: `#8497` |
 | B8 | Shipped: `### Not Yet Specified` and `### Out of Scope` in `product-roadmap`, plus native blocked-by edges read by `next --frontier`. | `#8292` → PR `#8536` |
-| B4 | Bundled (founder decision 2026-09-23). Shipped in `brainstorm` §1.2 and its `brainstorm-techniques` exit line: the completion criterion (every decision branch walked or explicitly parked, nothing silently assumed), dependency-ordered questions, and non-blocking fact lookups. Not adopted: `grilling`'s batched multi-question frontier (Soleur keeps one question per turn). | PR `#8647` (merged 2026-09-24, `e5a725a5e1`) |
-| B10 | Bundled (founder decision 2026-09-23). Shipped in `compound` Phase 1.5: the null-guardrail finding, applied per recurring failure class after reading the repo's own check commands. Not adopted: `retro`'s tool-economy and information-access categories, and a repo-level null-guardrail finding on every run. | PR `#8647` (merged 2026-09-24, `e5a725a5e1`) |
-| B12 (second half) | Bundled (founder decision 2026-09-23). Shipped: a flow map of main flow, on-ramps and standalone skills in `plugins/soleur/commands/help.md`, naming only Soleur skills. `go.md` routing is unchanged. | PR `#8647` (merged 2026-09-24, `e5a725a5e1`) |
+| B4 | Bundled (founder decision 2026-09-23). Shipped in `brainstorm` §1.2 and its `brainstorm-techniques` exit line: the completion criterion (every decision branch walked or explicitly parked, nothing silently assumed), dependency-ordered questions, and non-blocking fact lookups. | PR `#8647` (merged 2026-09-24, `e5a725a5e1`) |
+| B10 | Bundled (founder decision 2026-09-23). Shipped in `compound` Phase 1.5: the null-guardrail finding, applied per recurring failure class after reading the repo's own check commands. | PR `#8647` (merged 2026-09-24, `e5a725a5e1`) |
+| B12 (second half: flow map) | Bundled (founder decision 2026-09-23). Shipped: a flow map of main flow, on-ramps and standalone skills in `plugins/soleur/commands/help.md`, naming only Soleur skills. `go.md` routing is unchanged. | PR `#8647` (merged 2026-09-24, `e5a725a5e1`) |
 
 What each bundle deliberately did not adopt is recorded per bundle in `plugins/soleur/NOTICE`.
 
@@ -108,23 +108,15 @@ What each bundle deliberately did not adopt is recorded per bundle in `plugins/s
 
 **Closed since:** `#8505` (CI/eval key separated from production; shipped 2026-09-23 in PR `#8618`), `#8497` (B5 revisit; closed 2026-09-23, not planned).
 
-**Inspire-only ideas, declined (founder decision 2026-09-23).** Recorded here rather than as
-`knowledge-base/project/rejected/` entries: that register (ADR-234) holds refused requests, and
-nobody requested these.
+**Inspire-only ideas, declined (founder decision 2026-09-23).** Recorded here rather than as `knowledge-base/project/rejected/` entries: that record (ADR-234) holds refused product concepts, while these are methodology ideas not adopted, one of them already built.
 
-- `writing-beats` / `writing-fragments` / `writing-shape`: declined. Their one transferable idea,
-  leading words, already shipped in `plugins/soleur/skills/skill-creator/references/authoring-levers.md`
-  (§Leading words). Revisit if a re-audit finds the trio has gained another agent-facing mechanic.
+- `writing-beats` / `writing-fragments` / `writing-shape`: declined. Of their one transferable idea (§2), the leading word already shipped in `plugins/soleur/skills/skill-creator/references/authoring-levers.md` (§Leading words); *grounding* was not adopted. Revisit if a re-audit finds the trio has gained another agent-facing mechanic.
 - `teach`: declined, no user demand. Revisit if a founder asks for cross-session learning support.
-- Two-axis Standards-vs-Spec review: declined, no observed failure where one axis masked the other in
-  `review`. Revisit on the first such failure.
-- Docs "It's working if" section: declined. It needs a docs page per skill (about 100);
-  `plugins/soleur/docs/` has no per-skill pages, only the `pages/skills.njk` listing. Revisit if per-skill pages are built.
-- Implementation-vs-review context pressure: declined here. If raised, it belongs in an ADR-151
-  challenge, not in this record.
-- `to-tickets` expand–contract sequencing: declined. Revisit if a wide-refactor plan goes wrong.
-- Self-contained HTML report for `agent-native-audit`: declined as a separate item. Fold it into
-  open `#5994` if wanted.
+- Two-axis Standards-vs-Spec review: declined, no observed failure where one axis masked the other in `review`. Revisit on the first such failure.
+- Docs "It's working if" section: declined. It needs per-skill docs pages, and `plugins/soleur/docs/` has none (only the `pages/skills.njk` listing). Revisit if per-skill pages are built.
+- Implementation-vs-review context pressure: declined here. If raised, it belongs in an ADR-151 challenge, not actioned from this record.
+- `to-tickets` expand–contract sequencing: declined, no observed failure it would have prevented. Revisit if a wide-refactor plan goes wrong (for example, one lands as a single PR and breaks `main`).
+- Self-contained HTML report for `agent-native-audit`: declined as a separate item. Fold it into open `#5994` if wanted.
 
 #### 1. Inventory Summary
 
@@ -236,7 +228,7 @@ Each row names **the exact file to edit** and **the exact mechanic to import**. 
 
 ##### Recommendations (ICP-expansion framing per CMO)
 
-Grouped by narrative, not announced as individual skill-adds. *[Reconciled 2026-09-23 — bullets below describe the tree on 2026-09-18; they were filed as five bundles plus a sixth (`#8647`); see §Reconciliation status.]*
+Grouped by narrative, not announced as individual skill-adds. *[Reconciled 2026-09-23 — bullets below describe the tree on 2026-09-18; they were filed as five bundles plus a sixth (PR `#8647`); see §Reconciliation status.]*
 
 - **"The founder can actually do the thing"** — bundles G1 + B9 + B12, with G5 as a cheap rider. Soleur's operator-step machinery is an *accounting* system: `wg-block-pr-ready-on-undeferred-operator-steps` blocks a PR whose body declares an operator step without a tracked automation-gap issue, and `operator-digest` harvests `action-required` issues weekly. Every part of that answers *"has this step been deferred correctly?"* — none answers *"can the founder perform it?"* The deliverable is still an `AC-PM3` line in a PR body, and `ship` itself already concedes *"a PR body is not an operator-visible surface."* `wizard` supplies the missing delivery half, and Soleur has **already written the rules that demand it** and never built the template. Founder outcome: manual steps become a script the founder runs, a reversibility verdict they can read, and a map that tells them which of 99 skills to reach for. Suggested landing PR: **"feat(ship): wizard-generated operator bootstrap scripts + Merge Danger block"**.
 - **"Prove it, don't assert it"** — bundles B1 + B2 + B3 + B7. Soleur's deepest cultural strength is refusing unmeasured claims (`hr-no-dashboard-eyeball-pull-data-yourself`, `cq-assert-anchor-not-bare-token`'s mutation clause, ADR-151's *"a green gate that cannot fail is worse than no gate"*). That discipline is fully present in Soleur's **test and rule** surfaces and almost entirely **absent from its debugging and scaffolding** surfaces — 0 of 6 diagnosing-bugs mechanics, and a constraint gate proved to bite only in its own hermetic suite, never in the repo it is installed into. This is the bundle with the best fit-to-existing-values ratio in the audit. Founder outcome: "we fixed it" becomes a red-then-green command the founder can re-run themselves. Suggested landing PR: **"feat(reproduce-bug): red-capable loop gate, tagged instrumentation, seam-absence finding"**.

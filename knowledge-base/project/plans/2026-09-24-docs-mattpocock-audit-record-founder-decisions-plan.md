@@ -317,11 +317,11 @@ None. `gh issue list --label code-review --state open` bodies were searched for
 
 - **If this lands broken, the user experiences:** the founder reading the audit record sees a closed
   issue listed as open, or B4/B10 as unfiled, and spends a decision on something already settled.
-- **If this leaks, the user's workflow is exposed via:** nothing new. The file is an internal KB
-  record already in the repo, and the edits add no credentials, personal data or new third-party
+- **If this leaks, the user's workflow is exposed via:** nothing new. The file is a KB record
+  already public in this repo, and the edits add no credentials, personal data or new third-party
   figures.
 - **Brand-survival threshold:** `none`
-- `threshold: none, reason: docs-only edits to an internal knowledge-base record and two archive renames; no code, data or user-facing surface is touched.`
+- `threshold: none, reason: docs-only edits to a public knowledge-base record and two archive renames; no code, data or user-facing surface is touched.`
 
 ## Acceptance Criteria
 
@@ -337,10 +337,10 @@ Run from the worktree root. Let `CI=knowledge-base/product/competitive-intellige
   `grep -c 'already covers this in more depth' "$CI"`, `grep -c 'flow map did not' "$CI"`.
 - [x] AC4 (T3): for each prefix `| B4 | Bundled (founder decision 2026-09-23)`,
   `| B10 | Bundled (founder decision 2026-09-23)` and
-  `| B12 (second half) | Bundled (founder decision 2026-09-23)`, `grep -F "<prefix>" "$CI"` prints
+  `| B12 (second half: flow map) | Bundled (founder decision 2026-09-23)`, `grep -F "<prefix>" "$CI"` prints
   exactly one line, and that line contains `#8647` and `e5a725a5e1`. (Scoped by prefix because the
   dated §4 table also has `| B4 |`, `| B5 |` and `| B10 |` rows, which stay untouched.)
-- [x] AC5 (T3): the Scope note line (`grep -F 'The audit itself filed nothing'`) and the §5 banner
+- [x] AC5 (T3): the Scope note line (`grep -F 'The audit itself filed nothing'`) and the §4 Recommendations banner
   line (`grep -F 'they were filed as five bundles'`) each contain `#8647`.
 - [x] AC6 (T4): `grep -c 'Reject — already covered by the hooks listed above.' "$CI"` prints `1`.
 - [x] AC7 (T1): `diff <(git show origin/main:"$CI" | grep -F 'The most valuable thing a Tier-1 peer') <(grep -F 'The most valuable thing a Tier-1 peer' "$CI")` prints nothing.
