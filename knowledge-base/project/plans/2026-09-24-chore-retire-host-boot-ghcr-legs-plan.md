@@ -767,7 +767,7 @@ logs:
   retention:     "Sentry 90 days (the soak's own reconstruction relied on it); Better Stack Logs per the shared prd source retention; GitHub Actions logs 90 days"
 
 discoverability_test:
-  command:       "jq -r '.\"zot-mirror-fallback-rate\".actionFilters[0].conditions[].comparison.value' apps/web-platform/infra/sentry/alert-reference.json"
+  command:       jq -r '.["zot-mirror-fallback-rate"].actionFilters[0].conditions[].comparison.value' apps/web-platform/infra/sentry/alert-reference.json
   expected_output: "zot-gate-degraded or inngest_pull_fatal"
 ```
 
