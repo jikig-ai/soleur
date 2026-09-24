@@ -909,13 +909,17 @@ included) of a branch that is fresh, unmerged, and holds a file not on main. The
   `ledger-classify:` (rows were missing) or `No dev-vs-main migration drift detected.`, and no
   `UNCLASSIFIED`. The wall time is recorded (architecture review: this is the only pre-merge
   exercise of Phase 4).
-- [ ] **AC11 (post-merge smoke, not a correctness gate)**: the first `push` run on main is read with
+- [x] **AC11 (post-merge smoke, not a correctness gate)**: the first `push` run on main is read with
   `gh run view <id> --log | grep -e 'ledger-parity:' -e 'ledger-classify:' -e 'No dev-vs-main migration drift detected.'`.
   - For each `in-flight … <branch>` line, confirm that
     `git diff --name-only origin/main...origin/<branch> -- apps/web-platform/supabase/migrations/`
     lists that file. This catches wrongly hidden orphans, not just false reds.
   - The run's conclusion depends on dev state that other refs write, so it is not asserted
     (`cq-ac-must-not-depend-on-concurrent-sessions`).
+  - **Verified 2026-09-23:** run 35891815286 (push, `main`, head `d42057b67d`, conclusion success)
+    printed `ledger-parity: clean (unmerged=0 … ledger-rows=166 …)` from the base-ref copy and
+    `No dev-vs-main migration drift detected.` from both probes. It printed no `in-flight` lines, so
+    the per-branch sub-check had nothing to confirm.
 - [x] **AC12**: The PR body carries `Closes #8520` and `Closes #8521`, the 2026-09-22 run evidence,
   the AC8 and AC10b timings, and #8606.
 
