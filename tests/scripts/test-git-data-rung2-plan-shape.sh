@@ -42,7 +42,7 @@ trap 'assert_fixture_dir "$TMP"; rm -rf "$TMP"' EXIT
 # hcloud_server.rehearsal:delete,create
 plan() {
   local out="$1"; shift
-  assert_fixture_dir "$(dirname "$out")"
+  assert_fixture_dir "$out"
   local arr="[]" spec addr acts
   for spec in "$@"; do
     addr="${spec%%:*}"; acts="${spec#*:}"

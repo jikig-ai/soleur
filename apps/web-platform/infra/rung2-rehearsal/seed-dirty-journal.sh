@@ -23,13 +23,23 @@ set -uo pipefail
 
 DEV='/dev/disk/by-id/scsi-0HC_Volume_${volume_id}'
 MNT=/mnt/rung2-seed
+# The two rendered destinations are PINNED before any credentialed call: the token may reach only
+# git-data's own Better Stack source, under a rehearsal seed host label. A render that named
+# anything else ships the token nowhere and fails the seed (the off-poll then FAILs the run).
+BS_URL='${betterstack_ingest_url}'
+SEED_HOST='${host_name}'
+readonly BS_URL_PINNED="https://s2734275.eu-central-1a.betterstackdata.com/"
+if [ "$BS_URL" != "$BS_URL_PINNED" ] || [[ ! "$SEED_HOST" =~ ^soleur-git-data-rehearsal-[0-9]+-seed$ ]]; then
+  echo "rung-2 seed: refusing — the rendered ingest URL or host label is not the pinned one" >&2
+  exit 1
+fi
 
 emit() {
   printf 'header = "Authorization: Bearer %s"\n' '${betterstack_logs_token}' \
-    | curl --connect-timeout 5 -m 10 -sf -X POST '${betterstack_ingest_url}' \
+    | curl --disable --noproxy '*' --connect-timeout 5 -m 10 -sf -X POST "$BS_URL" \
         -K - \
         -H 'Content-Type: application/json' \
-        --data-raw "{\"message\":\"rung-2 seed $1\",\"stage\":\"seed_$1\",\"level\":\"$2\",\"host_name\":\"${host_name}\",\"detail\":\"$3\"}" \
+        --data-raw "{\"message\":\"rung-2 seed $1\",\"stage\":\"seed_$1\",\"level\":\"$2\",\"host_name\":\"$SEED_HOST\",\"detail\":\"$3\"}" \
         >/dev/null 2>&1 || true
 }
 
