@@ -455,8 +455,8 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # WHAT THAT BREAKS. Two consumers fail closed on the `--enumerate` record stream and go red for
 # a cause neither can name: `scripts/battery-tag-authorship.test.sh` › the `--enumerate-commands`
 # root-set guard (rc AND count) and `plugins/soleur/test/scripts-shard-totality.test.sh` ›
-# `enumerate_leg()` (count only — it invokes the function as a bare statement and never reads
-# `$?`; `pipefail` IS set there, so the rc survives the pipe and is discarded at the call site).
+# `enumerate_leg()` (each call runs as a background child whose rc the guard captures via
+# per-pid `wait` — a dead child fails its leg row loudly).
 # `scripts/lint-orphan-test-suites.sh` › the `--print-suite-globs` derivation is the same
 # fail-closed shape on the SIBLING stream and the same prologue window.
 #
@@ -834,18 +834,22 @@ fi
 # still discovering. That is also why a missing/stale manifest degrades instead of
 # failing: coverage never depends on the table being present or current.
 #
-# ENGAGEMENT IS NARROW. All of: sharding is on (_SHARD_N > 0), TEST_GROUP is `scripts`
-# (the manifest tables light-group labels; scripts-heavy's three suites are already
-# spread one-per-leg), the manifest declares `n` equal to _SHARD_N. Every other shape
-# takes the positional path in `_shard_selects` — same behaviour as before the
-# manifest existed.
+# ENGAGEMENT IS NARROW. All of: sharding is on (_SHARD_N > 0), TEST_GROUP is one
+# of {scripts, scripts-heavy} — each bound to its OWN manifest file
+# (suite-shard-legs.tsv for the light group, suite-shard-legs-heavy.tsv for
+# heavy; per-group files keep the light table's insertion-stable surface
+# untouched when the heavy table regenerates — ADR-240 amendment) — and the
+# manifest declares `n` equal to _SHARD_N. Every other shape takes the
+# positional path in `_shard_selects` — same behaviour as before manifests
+# existed.
 #
-# SOLEUR_SHARD_MANIFEST overrides the default path so the mutation battery can score
-# fallback behaviour against fixture manifests without touching the committed file.
-# `off` disables outright. A set-but-empty value, a non-absolute path, or a missing
-# file all fail closed: an explicit override that cannot be honoured is a programming
-# error, not a degrade. The default path being absent IS a degrade — a fresh clone or
-# a mid-rebase checkout must still partition.
+# SOLEUR_SHARD_MANIFEST (light) / SOLEUR_SHARD_MANIFEST_HEAVY (heavy) override the
+# default path so the mutation battery can score fallback behaviour against
+# fixture manifests without touching the committed file. `off` disables
+# outright. A set-but-empty value, a non-absolute path, or a missing file all
+# fail closed: an explicit override that cannot be honoured is a programming
+# error, not a degrade. The default path being absent IS a degrade — a fresh
+# clone or a mid-rebase checkout must still partition.
 _shard_manifest_active=0
 # Parallel indexed arrays, not an assoc map (bash 3.2) and NOT a packed-string
 # pseudo-map either: a "|label=leg|" blob + `case` glob lookup backtracks over
@@ -853,34 +857,52 @@ _shard_manifest_active=0
 # with literal == is ~1.4s for the same 482x482 workload.
 _shard_m_labels=()
 _shard_m_legs=()
-if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" ]]; then
-  _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs.tsv"
-  if [[ -n "${SOLEUR_SHARD_MANIFEST+x}" ]]; then
-    if [[ "$SOLEUR_SHARD_MANIFEST" == "off" ]]; then
+if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" || "$TEST_GROUP" == "scripts-heavy" ]]; then
+  # The group's own file and its own override variable — bound by name so the
+  # validation below can stay a single code path (the variable NAME keeps the
+  # error messages naming the variable the caller actually set). The VALUE is
+  # bound directly per arm, never via `${!_shard_mvar}` indirection: the
+  # shell-trace credential lint reads `${!name}` as a runtime-selected
+  # expansion (a credential class) and would put this runner in scope for the
+  # xtrace refusal it does not need.
+  if [[ "$TEST_GROUP" == "scripts-heavy" ]]; then
+    _shard_mvar="SOLEUR_SHARD_MANIFEST_HEAVY"
+    _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs-heavy.tsv"
+    _shard_mset="${SOLEUR_SHARD_MANIFEST_HEAVY+x}"
+    _shard_mval="${SOLEUR_SHARD_MANIFEST_HEAVY-}"
+  else
+    _shard_mvar="SOLEUR_SHARD_MANIFEST"
+    _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs.tsv"
+    _shard_mset="${SOLEUR_SHARD_MANIFEST+x}"
+    _shard_mval="${SOLEUR_SHARD_MANIFEST-}"
+  fi
+  if [[ -n "$_shard_mset" ]]; then
+    if [[ "$_shard_mval" == "off" ]]; then
       _shard_mfile=""
-    elif [[ -z "$SOLEUR_SHARD_MANIFEST" ]]; then
-      echo "ERROR: SOLEUR_SHARD_MANIFEST is set but empty." >&2
+    elif [[ -z "$_shard_mval" ]]; then
+      echo "ERROR: $_shard_mvar is set but empty." >&2
       echo "       Set it to an absolute manifest path, 'off', or unset it for the" >&2
-      echo "       default scripts/suite-shard-legs.tsv." >&2
+      echo "       default $_shard_mfile." >&2
       exit 2
-    elif [[ "$SOLEUR_SHARD_MANIFEST" != /* ]]; then
-      echo "ERROR: SOLEUR_SHARD_MANIFEST must be an absolute path" >&2
-      echo "       (got: '$SOLEUR_SHARD_MANIFEST') — this runner never normalises cwd." >&2
+    elif [[ "$_shard_mval" != /* ]]; then
+      echo "ERROR: $_shard_mvar must be an absolute path" >&2
+      echo "       (got: '$_shard_mval') — this runner never normalises cwd." >&2
       exit 2
-    elif [[ ! -f "$SOLEUR_SHARD_MANIFEST" ]]; then
-      echo "ERROR: SOLEUR_SHARD_MANIFEST points at a file that does not exist:" >&2
-      echo "       '$SOLEUR_SHARD_MANIFEST'" >&2
+    elif [[ ! -f "$_shard_mval" ]]; then
+      echo "ERROR: $_shard_mvar points at a file that does not exist:" >&2
+      echo "       '$_shard_mval'" >&2
       exit 2
     else
-      _shard_mfile="$SOLEUR_SHARD_MANIFEST"
+      _shard_mfile="$_shard_mval"
     fi
   elif [[ ! -f "$_shard_mfile" ]]; then
-    echo "[shard] no suite-shard-legs.tsv manifest — positional assignment" >&2
+    echo "[shard] no ${_shard_mfile##*/} manifest — positional assignment" >&2
     _shard_mfile=""
   fi
+  unset _shard_mvar _shard_mset _shard_mval
 
   if [[ -n "$_shard_mfile" ]]; then
-    _shard_mn=0
+    _shard_mn=""
     while IFS= read -r _mline; do
       case "$_mline" in
         "# n="*) _shard_mn="${_mline#\# n=}"; break ;;
@@ -923,7 +945,7 @@ if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" ]]; then
       echo "[shard] manifest assignment active: ${_shard_mcount} label(s) from ${_shard_mfile}" >&2
     fi
   fi
-  unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _mrest _mdup _shard_mcount
+  unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _mdup _shard_mcount
 fi
 
 # THE CARRIER IS CONSUMED HERE, AND MUST NOT BE INHERITED (#7902 review, P1).
@@ -951,9 +973,10 @@ fi
 # `${SCRIPTS_SHARD+x}`), never after the parse block — unsetting earlier makes that refusal dead
 # code and reopens the silently-sharded-wrong-group case it exists to catch.
 #
-# `SOLEUR_SHARD_MANIFEST` rides the same rule: the manifest is already loaded above, and a
-# battery fixture path into a deleted $WORK must not be inherited by a nested runner.
-unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST
+# `SOLEUR_SHARD_MANIFEST`/`SOLEUR_SHARD_MANIFEST_HEAVY` ride the same rule: the manifest
+# is already loaded above, and a battery fixture path into a deleted $WORK must not be
+# inherited by a nested runner.
+unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY
 
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
@@ -1117,16 +1140,18 @@ _aff_label=()
 #
 # TWO ASSIGNMENT MODES, selected once at parse time (see the manifest block above):
 #
-#   MANIFEST — when scripts/suite-shard-legs.tsv is present, declares n == _SHARD_N, and
-#   TEST_GROUP is `scripts`: each label's leg is a table lookup produced OFFLINE from
-#   CI-measured durations (sticky-LPT; scripts/regenerate-shard-manifest.py). Labels the
+#   MANIFEST — when the group's own table (scripts/suite-shard-legs.tsv for `scripts`,
+#   suite-shard-legs-heavy.tsv for `scripts-heavy`) is present, declares n == _SHARD_N:
+#   each label's leg is a table lookup produced OFFLINE from CI-measured durations
+#   (sticky-LPT; scripts/regenerate-shard-manifest.py --group light|heavy). Labels the
 #   table does not know fall back to a deterministic cksum hash — coverage and disjointness
 #   never depend on the table being complete or current, and inserting a suite moves no
 #   existing assignment. This mode is collation-INDEPENDENT: neither the table nor the hash
 #   reads registration order.
 #
-#   POSITIONAL — the original mechanism, still the degrade for every shape the manifest does
-#   not cover (absent file, n mismatch, scripts-heavy, `SOLEUR_SHARD_MANIFEST=off`):
+#   POSITIONAL — the original mechanism, still the degrade for every shape the group's
+#   manifest does not cover (absent file, n mismatch, an unrelated group,
+#   `SOLEUR_SHARD_MANIFEST=off` / `SOLEUR_SHARD_MANIFEST_HEAVY=off`):
 #   round-robin over the registration ordinal. It stays ordinal-based rather than hash-based
 #   because ~198 registrations are hand-written imperative statements and ~24 name no bash
 #   path at all (`python3 -m unittest`, `node --test`) — the ordinal is the one thing every
@@ -1214,8 +1239,8 @@ _shard_enumerate_command_emit() {
       # enumeration. (A micro-benchmark of the `case` alone shows 1.364s vs 0.009s per 2000
       # iterations; that ratio does NOT carry to the whole mode, which is why the figure quoted
       # here is the measured one. An earlier draft of this comment quoted the micro-benchmark and
-      # implied ~18s per battery run.) The guard enumerates twice per invocation and the mutation
-      # battery invokes it 21 times.
+      # implied ~18s per battery run.) The guard fans out ~35 enumerate children per invocation
+      # and the mutation battery invokes the guard once per row (24) plus control.
       *$'\t'* | *$'\n'*)
         printf 'ERROR: --enumerate-commands cannot encode an argv element containing a TAB or NEWLINE (label=%s)\n' "$label" >&2
         exit 2
@@ -2490,8 +2515,9 @@ fi
 # NOT under --enumerate. tc_preamble is a full /proc walk (one awk per pid — MEASURED at 5.7s
 # of an 8.2s enumerate pass, i.e. 70% of it) whose entire output is a capacity and contention
 # verdict about running suites. An enumerate pass starts none and takes no lock, so every
-# reading it produces is inapplicable, and the shard-totality guard invokes this path K+1 times
-# per run. Skipping it takes that guard from 83s to ~25s.
+# reading it produces is inapplicable, and the shard-totality guard invokes this path ~35 times
+# per run (its fanned-out leg, altK, heavy, and probe enumerations). Skipping it takes that
+# guard from 83s to ~25s.
 #
 # EXPRESSED AS A FUNCTION REDEFINITION, NOT AN `if` AROUND THE CALL — the call must stay at
 # COLUMN 0. `scripts/test-all-killed-classification.test.sh` and
@@ -3411,7 +3437,7 @@ if want_scripts; then
   # explicitly (orphan-suite class above). Its exit code is the closure of #8006 (0 closes;
   # 1 = a qualifying leg breached the 900 s bound; 2 = NOT YET — under-sampled, unclocked,
   # or every run non-qualifying; 3 = gh failed). Load-bearing arms: a run qualifies ONLY
-  # when all 8 post-carve-out legs are present, green, and measured — a skipped leg is
+  # when all 9 post-carve-out legs are present, green, and measured — a skipped leg is
   # unmeasurable and fail-closed, never a green leg; and a pre-merge run (no
   # test-scripts-heavy legs) is stale data, not a small sample.
   run_suite "scripts/ci-leg-durations-8006" bash scripts/followthroughs/ci-leg-durations-8006.test.sh
@@ -4319,7 +4345,7 @@ fi
 #
 # The three cost-heaviest registrations are gated by want_scripts_heavy, not want_scripts:
 # ci.yml runs them on a dedicated `test-scripts-heavy` matrix so each lands on its own leg,
-# while the lighter scripts group fans out over five legs. TEST_GROUP=all still covers all
+# while the lighter scripts group fans out over six legs. TEST_GROUP=all still covers all
 # three — want_scripts_heavy's `all` arm is what keeps the ship gate, the lefthook battery
 # and main-health-monitor running them.
 #

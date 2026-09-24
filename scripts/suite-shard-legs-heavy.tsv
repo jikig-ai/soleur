@@ -1,0 +1,10 @@
+# suite-shard-legs-heavy.tsv — duration-aware shard assignment (ADR-240)
+# n=3
+# generated-from-run=35911999612
+# generated-at=2026-09-23T22:26:02Z
+# generator=regenerate-shard-manifest.py v2
+# regen: python3 scripts/regenerate-shard-manifest.py --group heavy --run <id> --write
+# runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
+.github/scripts/test/run-all.sh	3
+scripts/battery-tag-authorship-mutations	2
+tests/scripts/registry-gate-mutation-battery	1
