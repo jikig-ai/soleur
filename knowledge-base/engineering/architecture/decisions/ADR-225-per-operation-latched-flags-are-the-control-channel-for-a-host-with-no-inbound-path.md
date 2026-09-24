@@ -82,6 +82,39 @@ fail-closed; it is not a statement about the host.
 This gate is strictly dominant, which is why it is unconditional: writing to a silent host forfeits
 nothing, because the write achieves nothing.
 
+#### Amendment — 2026-09-24: "audible" is scoped to the current server generation
+
+"Audible" means recent rows under the unit's own tag **from the server that exists now**. A destroyed
+predecessor with the same name does not count. The host filter (`host` + `host_name`) cannot express
+this: both fields are identical across a replace, which is AP-027 (ADR-149) — a `host_name` filter
+scopes to the HOST, not its GENERATION. Measured on the 2026-09-24 host replace: the old server shipped
+its last flip row at 14:25:05, op=resume ran at 14:29 (run 36013051602), counted 45 of that server's
+rows as audible and wrote `flushed`; the replacement was created at 18:57:33 and shipped its first row
+at 18:59:58.
+
+1. **The generation anchor** is the Hetzner Cloud API's `created` for the one server named
+   `$INNGEST_HOST`, read at gate time. It is the only authority independent of the telemetry being
+   judged: every boot or instance id the rows carry is emitted by the host itself.
+2. **A row counts** only when both its own event time (journald `__REALTIME_TIMESTAMP`) and Better
+   Stack's ingest `dt` are at or after `created`. Two wrong clocks are needed before a predecessor row
+   passes. The floor rests on three invariants, each pinned in
+   `apps/web-platform/infra/cutover-inngest-workflow.test.sh`: no `create_before_destroy` on
+   `hcloud_server.inngest` (Hetzner names are unique, so a replace destroys before it creates), no
+   `current_boot_only = false` in `vector.toml`, and no in-place `rebuild` of the server.
+3. **An anchor read that fails is `unreadable`** and refuses fail-closed, exactly like a Better Stack
+   read failure, with a `::warning::` naming the class (token unresolved, HTTP 401/403, 429, 5xx,
+   transport, no server by that name, out-of-bounds `created`).
+4. **The read uses the Tier-A token** (`HCLOUD_TOKEN_READONLY`, ADR-241 D4), falling back to
+   `HCLOUD_TOKEN` only while the read-only name is unprovisioned (ADR-241 O10). The token is masked,
+   sent on stdin, and no response byte is printed: the run log is public.
+
+The floor applies to every liveness count that gates a write: op=resume G3, op=arm G3.7's H signal
+and op=luks-cutover / op=luks-rollback G3. It deliberately does NOT apply to G3.7's L signal (the
+flush latch lives on `/mnt/data`, which survives the replace, so a predecessor's `flip-complete` row
+is valid presence evidence) nor to the rule-5 confirm readers (already anchored at this dispatch's own
+write). ADR-199's G3 wall-clock paragraph is unchanged. Implemented in `scripts/cutover-inngest.sh`
+(the `GENERATION SCOPE` block).
+
 ### 5. The effect is confirmed from the host's telemetry, within a window anchored at the write
 
 The dispatch polls Better Stack for a terminal flag row, with the window starting at the moment of
@@ -150,3 +183,6 @@ a row, that is a gap in the emitter — not grounds for opening a shell on a hos
 | Poll a git ref / an artifact instead of Doppler | Same latch semantics, worse secrecy story (the value is sometimes a credential-adjacent id), and a second delivery path to keep alive. |
 | Telemetry-triggered actuation (close the loop) | Waived above, with bounds. |
 | Nonce/epoch token per dispatch | Considered and cut (#6894 Fork D): terminal no-ops already make re-fire safe, and a nonce adds a second piece of state that can disagree with the flag. |
+| Rule 4, identity-only liveness (tighten `host`/`host_name`) — added 2026-09-24 | Both fields are identical across a host replace (AP-027); this is the defect the rule-4 amendment fixes. |
+| Rule 4, pin the newest rows' `_MACHINE_ID`/`_BOOT_ID` — added 2026-09-24 | Circular: in the failure window the newest rows ARE the predecessor's. |
+| Rule 4, a freshness bound on the newest row — added 2026-09-24 | A heuristic with no authority behind it; a predecessor's last rows can be minutes old, exactly as on 2026-09-24. |

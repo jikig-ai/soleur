@@ -81,9 +81,36 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 ```
 
 **G3 is a live precondition, not a formality.** It requires the host to be audible on Better
-Stack, and a *freshly replaced* host is not audible until Vector is up and shipping. If `op=resume`
-refuses on G3, that is the expected ordering — wait for the host to start shipping (read it with
-`scripts/inngest-host-state.sh`) and re-dispatch.
+Stack **from the current server**: only rows stamped AND ingested after that server's Hetzner
+`created` time count, so a destroyed predecessor with the same name never satisfies it (the
+2026-09-24 replace: the old server's rows made G3 pass before the new one shipped anything —
+ADR-225 §4 amendment). A *freshly replaced* host is therefore not audible until its own Vector is up
+and shipping. If `op=resume` refuses on G3, read the run log's generation notice before acting:
+
+```
+::notice::inngest-cutover-flip liveness scoped to server soleur-inngest created <iso> (<age>s ago): counted=<C> host_pair=<N> pre_floor=<P> malformed=<M> skew_suspect=<K>
+```
+
+- `counted` — rows from the current server. G3 passes when this is above 0.
+- `host_pair` — every `soleur-inngest` row in the 15-minute window, from any server generation.
+- `pre_floor` — rows that predate the current server (normally the predecessor's).
+- `skew_suspect` above 0 — rows ingested after `created` but stamped before it: the current
+  server's clock is behind. It self-heals once the clock passes `created`; re-dispatch then.
+- `malformed` above 0 with `counted=0` — rows without a parseable event time or `dt`: a Vector or
+  warehouse schema change. File an issue with the run URL.
+
+When `counted=0` and the server is under 600s old, the log also carries
+`WAIT and re-dispatch; do NOT replace it`. **Believe it**: a replace resets `created` and the wait
+starts over. Wait for the host to start shipping (read it with `scripts/inngest-host-state.sh`) and
+re-dispatch. Only a server more than 600s old with `counted=0` is a candidate for an
+`inngest-host-replace`.
+
+When G3 refuses `unreadable`, the `::warning::` above it names the read that failed: Better Stack
+(`BETTERSTACK_QUERY_*` in `prd_terraform`) or the **Hetzner generation anchor** — token unresolved,
+token rejected (HTTP 401/403), rate-limited (429), Hetzner outage (5xx), transport fault, no server
+named `soleur-inngest` in the token's project (a replace in flight), or an out-of-bounds `created`.
+Nothing was written in any of these cases, and re-dispatch is safe. The same generation scope applies
+to op=arm G3.7's liveness signal and to op=luks-cutover / op=luks-rollback G3.
 
 **Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
 it. For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
