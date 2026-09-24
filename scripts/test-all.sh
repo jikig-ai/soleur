@@ -3451,6 +3451,14 @@ if want_scripts; then
   # unmeasurable and fail-closed, never a green leg; and a pre-merge run (no
   # test-scripts-heavy legs) is stale data, not a small sample.
   run_suite "scripts/ci-leg-durations-8006" bash scripts/followthroughs/ci-leg-durations-8006.test.sh
+  # #8736: exit-code harness for the deploy-script-tests leg-duration soak probe (the
+  # sharded structure's "under 10 min, measured over >=5 consecutive green runs" AC).
+  # Registered explicitly (orphan-suite class above). Its exit code is the closure of
+  # #8736 (0 closes; 1 = a qualifying leg breached the 600 s bound; 2 = NOT YET —
+  # under-sampled, unclocked, or every run non-qualifying; 3 = gh failed). A run
+  # qualifies ONLY when all six jobs (4 legs + fixed + done) are present, green, and
+  # measured — a skipped leg is unmeasurable and fail-closed, never a green leg.
+  run_suite "scripts/deploy-script-tests-legs-8736" bash scripts/followthroughs/deploy-script-tests-legs-8736.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
