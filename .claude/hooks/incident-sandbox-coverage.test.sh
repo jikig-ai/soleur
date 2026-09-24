@@ -291,10 +291,12 @@ printf '\n'
 # Measured 2026-09-07 at 4. One is a true positive -- `scan-workflow.test.sh` spawns
 # `new-scheduled-cron-prefer-inngest.sh`, which emits, with no chokepoint anywhere in its path.
 # The other three are the harmless over-count described in the header: a `touch`ed fixture stub, a
-# static parity reader that never spawns its subject, and a same-basename script in the
-# hand-ported sibling harness tree. They are LEFT IN rather than special-cased, because every
-# carve-out is a place a real member can hide, and because the ceiling reds on the next member
-# either way.
+# static parity reader that never spawns its subject, and a same-basename script under the
+# hand-ported `.openhands/` mirror (that mirror was retired 2026-09-23, ADR-245, so that member
+# no longer exists — the authoritative list of the CURRENT members is the enumeration below, not
+# this paragraph, which describes the original measurement). They are LEFT IN rather than
+# special-cased, because every carve-out is a place a real member can hide, and because a
+# ratcheted ceiling reds on the next member either way.
 # Ratcheted 4 -> 3 when the one TRUE POSITIVE this guard found was fixed:
 # apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh piped fixture content through
 # .claude/hooks/new-scheduled-cron-prefer-inngest.sh with no chokepoint on its path -- invoked
@@ -312,17 +314,32 @@ printf '\n'
 #                                               _incidents_repo_root()'s BASH_SOURCE fallback
 #                                               resolves under $WORK. Measured against the
 #                                               operator ledger: rc=0, delta 0 rows.
+#   scripts/lib/test-affected-paths.sh        - arrived with #8322. Not a suite at all: a pure
+#                                               declarations file, SOURCED by test-all.sh and
+#                                               executing nothing itself. It matched hop 2 twice
+#                                               over — its `test-*` basename fits the candidate
+#                                               shape, and its AFFECTED_*_PATHS arrays quote the
+#                                               basenames of seven hop-1 members
+#                                               (grep-rewrite.sh, guardrails.sh, et al.) as DATA,
+#                                               the quoted-path-literal shape the derivation keys
+#                                               on. Nothing here can spawn: grep the file for a
+#                                               command position and there is none.
 # They are deliberately NOT carved out. Every carve-out is a place a real member can hide, and a
 # ceiling reds on the next one either way.
 #
 # 3 -> 4 on 2026-09-09 for the entry above. The ceiling counts members; it does not certify them.
+# 4 -> 5 for test-affected-paths.sh: a measured zero-leak member (a sourced data file that names
+# emitter-reaching basenames as declaration literals, the same over-count class as the fixture
+# stub and the parity reader).
 # Raising it on a MEASURED zero-leak member is the intended use — silently carving one out is not.
 #
-# 4 -> 3 on 2026-09-23 (ADR-245 / #8306): the hand-ported sibling harness tree was retired, and
-# with it the retired mirror's guardrails suite, the same-basename over-count member above.
-# Measured after the removal, not subtracted: the walk prints 3 members. Lowering the ceiling is
-# the ratchet's normal direction — the member is gone, not carved out.
-OUTSIDE_CEILING=3
+# 5 -> 4 on 2026-09-24 (ADR-245 / #8306): the hand-ported `.openhands/` mirror was retired, and
+# with it the same-basename over-count member described above. This value was MEASURED on the
+# merged tree, not derived by subtracting one from main's 5 — the walk prints 4 and names them:
+# hook-input-classification-mutation.test.sh, scripts/lib/test-affected-paths.sh (main's 4 -> 5
+# entry), test-jaccard-duplicates.sh, test_drop_sentinel_parity.sh. Lowering is the ratchet's
+# normal direction; the member is gone, not carved out.
+OUTSIDE_CEILING=4
 rc=1; [ "$n_out" -le "$OUTSIDE_CEILING" ] && rc=0
 verdict "$rc" "the outside set has not grown ($n_out, ceiling $OUTSIDE_CEILING)"
 
