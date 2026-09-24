@@ -962,11 +962,30 @@ jobs:
           npm install -g likec4@1.50.0
           likec4 --version
 
+      # #8696 — the render child runs inside bubblewrap, so the acceptance test
+      # (test/c4-render-tenant-config.test.ts) also renders THROUGH real bwrap
+      # and measures what a sandboxed
+      # payload can reach (H4). Ephemeral GH-hosted runner only: relaxing the
+      # userns sysctl mirrors scripts/sandbox-canary-regression.test.sh, and like
+      # it is best-effort: the suite's own bwrap probe plus C4_BWRAP_REQUIRED
+      # decide whether the sandbox works here.
+      # ubuntu-latest ships a newer bwrap than prod's 0.8.0; every option the
+      # argv uses exists in 0.8.0 (measured, ADR-050 amendment).
+      # C4_BWRAP_REQUIRED on the run step makes an unusable bwrap FAIL.
+      - name: Install bubblewrap (C4 render sandbox)
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends bubblewrap
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+
       - name: Run webplat tests (vitest --shard)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITEST_SHARD: ${{ matrix.shard }}
           LIKEC4_REQUIRED: "1"
+          C4_BWRAP_REQUIRED: "1"
         run: bash scripts/test-all.sh webplat
 
   test-bun:

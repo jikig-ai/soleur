@@ -639,11 +639,24 @@ doppler run -p soleur -c prd -- bash -c \
    bash apps/web-platform/scripts/audit-sentry-extra-text-references.sh'
 ```
 
+The inventory above is read-only and an agent may run it.
+
 If zero matches: close the tracking issue with the dry-run output.
-If non-zero matches: re-run with `--apply` (replace) or
+If non-zero matches: the operator re-runs it with `--apply` (replace) or
 `--apply --add-or-clause` (additive deploy-window posture, query
-strings only — `fields[]` always replaces). The script self-verifies
-on `--apply` and exits non-zero if any references remain.
+strings only — `fields[]` always replaces) **in their own terminal**. `--apply`
+rewrites production alert rules, saved searches, Discover queries and
+dashboards, so after the inventory it asks for a typed `yes` (ADR-249, #8486).
+With no TTY it stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` before
+any network call, so an agent prints the command below for the operator and does
+not run it:
+
+```bash
+cd <absolute worktree path> && doppler run -p soleur -c prd -- bash apps/web-platform/scripts/audit-sentry-extra-text-references.sh --apply
+```
+
+The script self-verifies on `--apply` and exits non-zero if any references
+remain.
 
 **Sharp edge — tag vs. extra namespace.** The Sentry UI's issue-stream
 search bar searches **tags** (`Sentry.setTag()`), not extra-context
