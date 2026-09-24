@@ -103,15 +103,74 @@ git -C "$FIX" init -q && git -C "$FIX" add -A && git -C "$FIX" commit -q -m "bou
 # and when nothing fell out of the window the two agree on exactly the fatal rows. Passing $4
 # explicitly is what lets an arm model a CHATTY boot — a fatal that the newest-50 window drops
 # while the unlimited query still returns it (#7460 §5.0).
-make_stub() {  # $1=stubpath  $2=anchor-rows-file  $3=host-rows-file  [$4=fatal-rows-file]
-  local _fatal="${4:-}"
+# (#5274) Fixture-operand guard (fixture-relative-assert): a stub path must be absolute and inside a
+# fixture root before anything is redirected into it.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+make_stub() {  # $1=stubpath  $2=anchor-rows-file  $3=host-rows-file  [$4=fatal-rows-file]  [$5=boot_complete-rows-file]
+  local _fatal="${4:-}" _bc="${5:-}"
   if [[ -z "$_fatal" ]]; then
     _fatal="${3}.derived-fatal"
+    assert_fixture_dir "$_fatal"
     grep '"level":"fatal"' "$3" > "$_fatal" 2>/dev/null || : > "$_fatal"
+  fi
+  # (#5274) $5 MODELS THE UNBOUNDED boot_complete QUERY, on the same reasoning as $4: it defaults to
+  # the boot_complete rows PRESENT IN $3 (faithful whenever the newest-50 window is not truncating),
+  # and passing it explicitly is what lets an arm model an OLDER boot_complete that the windowed
+  # host read dropped while the unbounded read still returns it.
+  if [[ -z "$_bc" ]]; then
+    _bc="${3}.derived-bc"
+    assert_fixture_dir "$_bc"
+    jq -c 'select(.stage == "boot_complete")' "$3" > "$_bc" 2>/dev/null || : > "$_bc"
   fi
   cat > "$1" <<STUB
 #!/usr/bin/env bash
 sql="\$1"
+# (#8211) THE PROJECTION IS MODELLED. A row carries only the keys the query selects (plus dt), as
+# FORMAT JSONEachRow would return them, so a boolean or the reboot arm's target that the SELECT
+# drops is absent from every fixture row too, and the arms that need it RED. Without this a fixture
+# hands the SUT a field its own query never asks for.
+# (#8211) THE FAKE MUST ENCODE AS THE WAREHOUSE DOES. ClickHouse's JSONEachRow escapes the
+# solidus, so a live row's bytes are "target":"\/mnt\/git-data"; jq -c leaves it bare. That
+# one-character divergence is why a green suite shipped a reboot arm that rejected every
+# correct host (rehearsal run 35909343686): the SUT substring-matched the unescaped form and
+# only the fixture ever produced it. The trailing sed mirrors the vendor's encoding, so the
+# target rows exercise the bytes the SUT actually meets.
+_project() { jq -c --arg sql "\$sql" 'with_entries(select(.key as \$k | \$k == "dt" or (\$sql | contains("raw,\u0027" + \$k + "\u0027)"))))' | sed 's#/#\\\\/#g'; }
+# (#8210, #5274) SEMANTIC DISPATCH on the server-side time bound, for BOTH append modes. Without it
+# an append mode could drop its \`dt >\` clause entirely and every arm would still pass — the
+# fixture rows would arrive regardless, so a STALE pre-window row (the birth boot's reopen, or
+# boot #1's compliant boot_complete) would read as boot #2's. Two halves, deliberately separate:
+#   - the stub APPLIES whatever \`dt >\` bound the SQL carries, as the real server would, so an
+#     arm run WITHOUT an expectation still measures what the SUT actually asked for;
+#   - when an expectation is set, EVERY host-scoped query must carry the clause with that exact
+#     timestamp, or the stub refuses (rc 4) and nothing can PASS.
+_since="\${REBOOT_SINCE_EXPECT:-\${REPLACE_SINCE_EXPECT:-}}"
+_sql_since="\$(printf '%s\n' "\$sql" | sed -n "s/.*dt > parseDateTimeBestEffort('\\([^']*\\)').*/\\1/p" | head -1)"
+# Called at TOP LEVEL, never inside a pipeline: an exit in a pipeline stage leaves only that
+# subshell, and the stub would then answer rc 0 with an empty set — a harness that cannot fail.
+_require_bound() {  # \$1 = which query, for the refusal
+  [[ -z "\$_since" ]] && return 0
+  if ! printf '%s' "\$sql" | grep -qF "dt > parseDateTimeBestEffort('\${_since}')"; then
+    echo "STUB: an append-mode window was passed but \$1 carries no matching dt> bound (the window is not server-side)" >&2
+    exit 4
+  fi
+}
+_windowed() {  # \$1 = rows file; filtered to dt > the bound the SQL itself carries, if any
+  if [[ -n "\$_sql_since" ]]; then
+    awk -v b="\$(printf '%s' "\$_sql_since" | tr 'T' ' ')" -F'"' '{ for (i=1;i<=NF;i++) if (\$i=="dt") { if (\$(i+2) > b) print; break } }' "\$1"
+  else
+    cat "\$1"
+  fi
+}
 if printf '%s' "\$sql" | grep -q '__ANCHOR__'; then
   cat "$2"
 elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
@@ -123,51 +182,30 @@ elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
   if printf '%s' "\$sql" | grep -q "level') = 'fatal'" \
      && printf '%s' "\$sql" | grep -q "host_name') = '" \
      && printf '%s' "\$sql" | grep -qE 'LIMIT (1000|[0-9]{4,})'; then
-    # (#8210) FATAL_SQL shares HOST_SQL's _BS_SCOPE, so under --reboot-since it too is bounded
+    # (#8210) FATAL_SQL shares HOST_SQL's _BS_SCOPE, so under an append mode it too is bounded
     # server-side. Model that here or the birth boot's own fatal reaches the reboot verdict and
     # every healthy reset reads as a failure — which is a fixture defect, not a SUT one.
-    if [[ -n "\${REBOOT_SINCE_EXPECT:-}" ]]; then
-      if ! printf '%s' "\$sql" | grep -qF "dt > parseDateTimeBestEffort('\${REBOOT_SINCE_EXPECT}')"; then
-        echo "STUB: --reboot-since was passed but FATAL_SQL carries no matching dt> bound" >&2
-        exit 4
-      fi
-      _fb="\$(printf '%s' "\${REBOOT_SINCE_EXPECT}" | tr 'T' ' ')"
-      awk -v b="\$_fb" -F'"' '{ for (i=1;i<=NF;i++) if (\$i=="dt") { if (\$(i+2) > b) print; break } }' "$_fatal"
-    else
-      cat "$_fatal"
-    fi
+    _require_bound FATAL_SQL
+    _windowed "$_fatal"
   else
     echo "STUB: the FATAL query lost a load-bearing clause (level filter / host filter / LIMIT >= 1000)" >&2
     exit 4
   fi
-elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
-  # (#8211) THE PROJECTION IS MODELLED. A row carries only the keys HOST_SQL selects (plus dt),
-  # as FORMAT JSONEachRow would return them, so a boolean or the reboot arm's target that the
-  # SELECT drops is absent from every fixture row too, and the arms that need it RED. Without
-  # this a fixture hands the SUT a field its own query never asks for.
-  # (#8211) THE FAKE MUST ENCODE AS THE WAREHOUSE DOES. ClickHouse's JSONEachRow escapes the
-  # solidus, so a live row's bytes are "target":"\/mnt\/git-data"; jq -c leaves it bare. That
-  # one-character divergence is why a green suite shipped a reboot arm that rejected every
-  # correct host (rehearsal run 35909343686): the SUT substring-matched the unescaped form and
-  # only the fixture ever produced it. The trailing sed mirrors the vendor's encoding, so the
-  # target rows exercise the bytes the SUT actually meets.
-  _project() { jq -c --arg sql "\$sql" 'with_entries(select(.key as \$k | \$k == "dt" or (\$sql | contains("raw,\u0027" + \$k + "\u0027)"))))' | sed 's#/#\\\\/#g'; }
-  # (#8210) SEMANTIC DISPATCH on the server-side time bound, the same reason the FATAL branch
-  # above dispatches on its clauses rather than on a marker. Without it, --reboot-since could
-  # drop its \`dt >\` clause entirely and every reboot arm would still pass — the fixture rows
-  # would arrive regardless, so a STALE pre-reset reopen row would read as a fresh one. When
-  # REBOOT_SINCE_EXPECT is set, the clause must be present AND carry that exact timestamp, and
-  # rows are filtered to those the real server would have returned.
-  if [[ -n "\${REBOOT_SINCE_EXPECT:-}" ]]; then
-    if ! printf '%s' "\$sql" | grep -qF "dt > parseDateTimeBestEffort('\${REBOOT_SINCE_EXPECT}')"; then
-      echo "STUB: --reboot-since was passed but HOST_SQL carries no matching dt> bound (the window is not server-side)" >&2
-      exit 4
-    fi
-    _bound="\$(printf '%s' "\${REBOOT_SINCE_EXPECT}" | tr 'T' ' ')"
-    awk -v b="\$_bound" -F'"' '{ for (i=1;i<=NF;i++) if (\$i=="dt") { if (\$(i+2) > b) print; break } }' "$3" | _project
+elif printf '%s' "\$sql" | grep -q '__BOOTCOMPLETEROWS__'; then
+  # (#5274) SEMANTIC DISPATCH again: the stage filter, the host filter and the >= 1000 bound are
+  # each load-bearing, so a revert of BC_SQL to HOST_SQL's shape cannot answer from this branch.
+  if printf '%s' "\$sql" | grep -q "stage') = 'boot_complete'" \
+     && printf '%s' "\$sql" | grep -q "host_name') = '" \
+     && printf '%s' "\$sql" | grep -qE 'LIMIT (1000|[0-9]{4,})'; then
+    _require_bound BC_SQL
+    _windowed "$_bc" | _project
   else
-    _project < "$3"
+    echo "STUB: the BOOT_COMPLETE query lost a load-bearing clause (stage filter / host filter / LIMIT >= 1000)" >&2
+    exit 4
   fi
+elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
+  _require_bound HOST_SQL
+  _windowed "$3" | _project
 else
   echo "STUB: unrecognised query shape" >&2
   exit 3
@@ -309,7 +347,7 @@ printf '{"dt":"2026-07-29 11:59:00","host":"soleur-web-1"}\n' > "$ANCHOR_LIVE"
 
 # ── ARM 1: the PASS path ──────────────────────────────────────────────────────────
 HOSTROWS="$TMP/rows-pass.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$HOSTROWS"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$HOSTROWS"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
 OUT="$TMP/evidence-pass.env"
 # (#8010) THE PASS PATH RUNS WITH THE SECOND CHANNEL ANSWERING, and answering CLEAN. The
@@ -336,10 +374,17 @@ if [[ -f "$OUT" ]]; then
   # quietly rewrote the evidence could not make the row pass.
   OUT_TRACKED="$FIX/git-data-rung2-boot-evidence.env"
   cp "$OUT" "$OUT_TRACKED"
+  # (#5274) THE REPLACE ARM APPENDS BEFORE THE COMMIT, because the gate now requires its keys: the
+  # released file is capture #1's bytes plus boot #2's append, both written by the SUT — which is
+  # exactly the file the rehearsal workflow uploads. The fixture's boot_complete (dt 12:00:00) sits
+  # after the replace stamp, so it reads as boot #2.
+  REPLACE_SINCE_EXPECT=2026-07-29T11:00:00 run_sut_sentry 0 "$_NO_FATAL" --out "$OUT_TRACKED" \
+    --replace-since 2026-07-29T11:00:00 >/dev/null 2>&1
   git -C "$FIX" add -- git-data-rung2-boot-evidence.env && git -C "$FIX" commit -q -m "evidence alone" \
     || fail "the evidence could be committed alone into the fixture repository" "1" "git commit failed"
-  if cmp -s "$OUT" "$OUT_TRACKED"; then pass "the tracked evidence is byte-identical to what the SUT wrote"; else
-    fail "the tracked evidence is byte-identical to what the SUT wrote" "1" "cmp differs"; fi
+  if cmp -s -n "$(stat -c %s "$OUT")" "$OUT" "$OUT_TRACKED" && grep -qxF 'RUNG2_REPLACE_BOOT=PASS' "$OUT_TRACKED"; then
+    pass "the tracked evidence is capture #1's bytes, intact, plus the SUT's own replace-arm append"; else
+    fail "the tracked evidence is capture #1's bytes, intact, plus the SUT's own replace-arm append" "1" "$(cat "$OUT_TRACKED")"; fi
   # (#8010 task 1.13) THE RUN-RESOLUTION SEAM, AS A PER-COMMAND PREFIX ON THIS ONE CALL.
   # The gate resolves the evidence URL's run against the Actions API; offline, it must be
   # handed a stub. The prefix form is NOT a style choice here: this suite's OTHER arms exist
@@ -461,7 +506,7 @@ if [[ "$out" == *"luks_open"* ]]; then pass "the FAIL names the stage that died"
 # find exactly that, so "ended fine" must not overwrite "went wrong".
 HOSTROWS_BOTH="$TMP/rows-both.jsonl"
 { row bootstrap fatal detail="transient"
-  row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes; } > "$HOSTROWS_BOTH"
+  row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty; } > "$HOSTROWS_BOTH"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_BOTH"
 OUT_BOTH="$TMP/evidence-both.env"
 out="$(run_sut --out "$OUT_BOTH")"; rc=$?
@@ -471,7 +516,7 @@ if [[ "$rc" -eq 1 ]]; then pass "a fatal ALONGSIDE a boot_complete => still FAIL
 # The inherited `\bno\b` check is retained as a SECOND FAIL trigger, because it costs nothing
 # and it is the arm that fires if the consumer's assertions are ever weakened to real values.
 HOSTROWS_NO="$TMP/rows-no.jsonl"
-row boot_complete info luks_mounted=no repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$HOSTROWS_NO"
+row boot_complete info luks_mounted=no repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$HOSTROWS_NO"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_NO"
 out="$(run_sut --out "$TMP/evidence-no.env")"; rc=$?
 if [[ "$rc" -eq 1 ]]; then pass "boot_complete with a FALSE assertion => FAIL"; else
@@ -484,7 +529,7 @@ if [[ "$rc" -eq 1 ]]; then pass "boot_complete with a FALSE assertion => FAIL"; 
 # can actually carry — which is precisely why it must FAIL rather than warn: a replace is the
 # only route by which the boot-time reopen reaches the live host.
 HOSTROWS_REOPEN_NO="$TMP/rows-reopen-no.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=no fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes \
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=no fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty \
   > "$HOSTROWS_REOPEN_NO"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_REOPEN_NO"
 out="$(run_sut --out "$TMP/evidence-reopen-no.env")"; rc=$?
@@ -499,7 +544,7 @@ if [[ ! -f "$TMP/evidence-reopen-no.env" ]]; then
 # (only an explicit "no" was rejected) and write gate-releasing evidence. The poll already
 # refused it; now both readers agree.
 HOSTROWS_REOPEN_ABSENT="$TMP/rows-reopen-absent.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes \
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty \
   > "$HOSTROWS_REOPEN_ABSENT"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_REOPEN_ABSENT"
 out="$(run_sut --out "$TMP/evidence-reopen-absent.env")"; rc=$?
@@ -521,7 +566,9 @@ _ALL_YES="luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reope
 _b_row() {  # $1=label $2=expected-verdict-substring $3...=boot_complete k=v args
   local label="$1" want="$2" rows="$TMP/rows-b.$RANDOM.jsonl" ev="$TMP/evidence-b.$RANDOM.env" o r
   shift 2
-  row boot_complete info "$@" > "$rows"
+  # (#5274) The producer always emits the two plaintext fields; defaults FIRST, so a caller's own
+  # value wins (jq keeps the last duplicate key).
+  row boot_complete info plaintext_volume=present plaintext_journal=dirty "$@" > "$rows"
   make_stub "$STUB" "$ANCHOR_LIVE" "$rows"
   o="$(run_sut --out "$ev")"; r=$?
   if [[ "$r" -eq 1 && "$o" == *"$want"* && "$o" != *"PASS"* && ! -f "$ev" ]]; then pass "$label"
@@ -542,12 +589,212 @@ done
 # (the producer's real shape) PASSes on its terminal booleans alone.
 _rows_info="$TMP/rows-info.jsonl"
 # shellcheck disable=SC2086
-row boot_complete info $_ALL_YES plaintext_volume=present served_repos=0 > "$_rows_info"
+row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty served_repos=0 > "$_rows_info"
 make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_info"
 out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-info.env")"; rc=$?
 if [[ "$rc" -eq 0 && "$out" == *"PASS: ${HOST} reported stage:boot_complete"* && -f "$TMP/evidence-info.env" ]]; then
   pass "all eight terminal booleans yes, informational fields present => PASS (0), PASS verdict text, evidence written"; else
   fail "all eight terminal booleans yes, informational fields present => PASS (0), PASS verdict text, evidence written" "$rc" "$out"; fi
+
+# ── ARM 2g (#5274, Guard 2): PASS only when the dirty-journal case was actually booted ──
+# Every boot_complete row must read plaintext_volume=present AND plaintext_journal=dirty, by exact
+# match on the parsed field. Each row is the RED for one Guard 2 mutation.
+_G2_WANT="WITHOUT plaintext_volume=present plaintext_journal=dirty"
+# shellcheck disable=SC2086
+_b_row "G2 row 1: present + clean journal => FAIL (the seed never dirtied it), no evidence" "$_G2_WANT" $_ALL_YES plaintext_journal=clean
+# shellcheck disable=SC2086
+_b_row "G2 row 3: plaintext_journal absent/empty => FAIL, no evidence" "$_G2_WANT" $_ALL_YES plaintext_journal=
+# shellcheck disable=SC2086
+_b_row "G2 row 2: plaintext_journal=Dirty (case) => FAIL — exact match, no evidence" "$_G2_WANT" $_ALL_YES plaintext_journal=Dirty
+# shellcheck disable=SC2086
+_b_row "G2 row 2: plaintext_journal=notdirty => FAIL — never a substring match, no evidence" "$_G2_WANT" $_ALL_YES plaintext_journal=notdirty
+# shellcheck disable=SC2086
+_b_row "G2 row 3b: plaintext_volume=absent => FAIL (a broken render, not a pass), no evidence" "$_G2_WANT" $_ALL_YES plaintext_volume=absent
+_rows_g2two="$TMP/rows-g2two.jsonl"
+# shellcheck disable=SC2086
+{ row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty
+  row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=clean; } > "$_rows_g2two"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_g2two"
+out="$(run_sut --out "$TMP/evidence-g2two.env")"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"$_G2_WANT"* && ! -f "$TMP/evidence-g2two.env" ]]; then
+  pass "G2 row 4: a clean boot_complete AFTER a compliant dirty one => FAIL (every row must comply), no evidence"; else
+  fail "G2 row 4: a clean boot_complete AFTER a compliant dirty one => FAIL (every row must comply), no evidence" "$rc" "$out"; fi
+# G2 row 3 (static): the PROJECTION is pinned on BOTH queries that carry it — HOST_SQL (the row
+# set printed on every verdict) and BC_SQL (the set Guard 2 decides on). A select that drops either
+# column makes every real row read absent and FAIL forever.
+# (#5274, C5) COMMENT-STRIPPED AND REGION-SCOPED: each query's text is sliced from its own
+# `NAME="` assignment to its closing `FORMAT JSONEachRow"`, after whole-line comments are removed,
+# so neither a comment nor the OTHER query can supply the projection. Exactly one slice per name.
+_sql_slice() {  # $1 = the variable name, e.g. HOST_SQL
+  grep -vE '^[[:space:]]*#' "$SUT" | awk -v n="$1" '$0 ~ "^" n "=\"" {f=1} f {print} f && /FORMAT JSONEachRow"$/ {exit}'
+}
+for _q in HOST_SQL BC_SQL; do
+  _n_q="$(grep -vE '^[[:space:]]*#' "$SUT" | grep -cE "^${_q}=\"" || true)"
+  _slice="$(_sql_slice "$_q")"
+  if [[ "$_n_q" -eq 1 ]] && grep -qF "JSONExtractString(raw,'plaintext_journal') AS plaintext_journal" <<<"$_slice" \
+     && grep -qF "JSONExtractString(raw,'plaintext_volume') AS plaintext_volume" <<<"$_slice"; then
+    pass "G2 row 3: ${_q} projects plaintext_volume and plaintext_journal (comment-stripped, sliced)"; else
+    fail "G2 row 3: ${_q} projects plaintext_volume and plaintext_journal (comment-stripped, sliced)" "" "assignments=${_n_q}; slice: $(head -c 300 <<<"$_slice")"; fi
+done
+# Must-PASS, non-canonical: the fields in another key order, plus unrelated extras.
+_rows_g2ord="$TMP/rows-g2ord.jsonl"
+# shellcheck disable=SC2086
+row boot_complete info plaintext_journal=dirty disk_pct=7 $_ALL_YES served_repos=0 plaintext_volume=present inode_pct=3 > "$_rows_g2ord"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_g2ord"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-g2ord.env")"; rc=$?
+if [[ "$rc" -eq 0 && -f "$TMP/evidence-g2ord.env" ]]; then
+  pass "G2 must-PASS: present+dirty in another key order with extra fields => PASS, evidence written"; else
+  fail "G2 must-PASS: present+dirty in another key order with extra fields => PASS, evidence written" "$rc" "$out"; fi
+
+# ── ARM 2t (#5274, C3): Guard 2 reads EVERY boot_complete, not the newest 50 ──────────────
+# HOST_SQL is `ORDER BY dt DESC LIMIT 50`. The fixture encodes that truncation the way ARM 28 does
+# for fatals: the host file is what the WINDOWED read returns (50 newer rows, the older clean
+# boot_complete already dropped), and $5 is what the unbounded boot_complete read returns. A Guard 2
+# that still read host_out would never see the clean row and would write PASS over it.
+_rows_c3_host="$TMP/rows-c3-host.jsonl"; : > "$_rows_c3_host"
+for _i in $(seq 1 49); do row mount info "detail=routine emit ${_i}" >> "$_rows_c3_host"; done
+# shellcheck disable=SC2086
+row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty >> "$_rows_c3_host"
+_rows_c3_bc="$TMP/rows-c3-bc.jsonl"
+# shellcheck disable=SC2086
+{ row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=clean | sed 's/12:00:00/10:00:00/'
+  row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty; } > "$_rows_c3_bc"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_c3_host" "" "$_rows_c3_bc"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-c3.env")"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"$_G2_WANT"* && ! -f "$TMP/evidence-c3.env" ]]; then
+  pass "#5274-C3: an OLDER clean boot_complete beyond the newest-50 window => FAIL (1), no evidence"; else
+  fail "#5274-C3: an OLDER clean boot_complete beyond the newest-50 window => FAIL (1), no evidence" "$rc" "$out"; fi
+# The bound FAILS CLOSED: a read AT its bound cannot show that every row complied.
+_rows_c3_many="$TMP/rows-c3-many.jsonl"
+# shellcheck disable=SC2086
+_c3_one="$(row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty)"
+for _i in $(seq 1 1000); do printf '%s\n' "$_c3_one"; done > "$_rows_c3_many"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_c3_host" "" "$_rows_c3_many"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-c3-many.env")"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"FAIL (Guard 2 bound)"* && ! -f "$TMP/evidence-c3-many.env" ]]; then
+  pass "#5274-C3: 1000 boot_complete rows (AT the read's bound) => FAIL (1) closed, no evidence"; else
+  fail "#5274-C3: 1000 boot_complete rows (AT the read's bound) => FAIL (1) closed, no evidence" "$rc" "$(head -c 600 <<<"$out")"; fi
+# …and one under the bound is read in full and PASSes: the bound is a bound, not a row-count ban.
+head -n 999 "$_rows_c3_many" > "$_rows_c3_many.999"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_c3_host" "" "$_rows_c3_many.999"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-c3-999.env")"; rc=$?
+if [[ "$rc" -eq 0 && -f "$TMP/evidence-c3-999.env" ]]; then
+  pass "#5274-C3 must-PASS: 999 compliant boot_complete rows (under the bound) => PASS, evidence written"; else
+  fail "#5274-C3 must-PASS: 999 compliant boot_complete rows (under the bound) => PASS, evidence written" "$rc" "$(head -c 600 <<<"$out")"; fi
+
+# ── ARM 2s (#5274, C4): boot_complete rows are selected on the PARSED stage, exactly ──────
+# A text grep for `boot_complete` also selects `stage:boot_complete_retry` (and any row whose
+# projected text merely contains the word), which carries no plaintext fields and FAILs a
+# compliant boot. The row is handed to the SUT's own selection via $5, so the stub's server-side
+# filter cannot be what excludes it.
+_rows_c4="$TMP/rows-c4.jsonl"
+# shellcheck disable=SC2086
+{ row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty
+  row boot_complete_retry info; } > "$_rows_c4"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_c4" "" "$_rows_c4"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-c4.env")"; rc=$?
+if [[ "$rc" -eq 0 && -f "$TMP/evidence-c4.env" ]]; then
+  pass "#5274-C4 must-PASS: a stage:boot_complete_retry row is not a boot_complete row (exact parsed match)"; else
+  fail "#5274-C4 must-PASS: a stage:boot_complete_retry row is not a boot_complete row (exact parsed match)" "$rc" "$out"; fi
+# The plaintext_journal KEY MISSING outright (not an empty string — G2 row 3 above covers that):
+# absence is refused, never defaulted to `dirty`.
+_rows_c4m="$TMP/rows-c4-missing.jsonl"
+# shellcheck disable=SC2086
+row boot_complete info $_ALL_YES plaintext_volume=present > "$_rows_c4m"
+if ! grep -q 'plaintext_journal' "$_rows_c4m"; then
+  make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_c4m"
+  out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/evidence-c4m.env")"; rc=$?
+  if [[ "$rc" -eq 1 && "$out" == *"$_G2_WANT"* && ! -f "$TMP/evidence-c4m.env" ]]; then
+    pass "#5274-C4: plaintext_journal key MISSING => FAIL (1), never defaulted to dirty, no evidence"; else
+    fail "#5274-C4: plaintext_journal key MISSING => FAIL (1), never defaulted to dirty, no evidence" "$rc" "$out"; fi
+else
+  fail "#5274-C4: plaintext_journal key MISSING — fixture setup still carries the key" "" "$(cat "$_rows_c4m")"
+fi
+
+# ── ARM 2r (#5274): the REPLACE arm appends RUNG2_REPLACE_BOOT to capture #1's file ─────
+_rows_rep="$TMP/rows-rep.jsonl"
+# shellcheck disable=SC2086
+row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty > "$_rows_rep"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_rep"
+_ev_rep="$TMP/evidence-rep.env"
+run_sut_sentry 0 "$_NO_FATAL" --out "$_ev_rep" >/dev/null 2>&1
+cp "$_ev_rep" "$TMP/evidence-rep.before"
+# (#5274) REPLACE_SINCE_EXPECT arms the stub's window check: every host-scoped query must carry
+# `dt > <this stamp>`, or the stub refuses and nothing can PASS.
+out="$(REPLACE_SINCE_EXPECT=2026-07-29T11:00:00 run_sut_sentry 0 "$_NO_FATAL" --out "$_ev_rep" --replace-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -eq 0 && -s "$TMP/evidence-rep.before" ]] && grep -qxF 'RUNG2_REPLACE_BOOT=PASS' "$_ev_rep" \
+   && cmp -s -n "$(stat -c %s "$TMP/evidence-rep.before")" "$TMP/evidence-rep.before" "$_ev_rep"; then
+  pass "replace arm: a compliant boot #2 APPENDS RUNG2_REPLACE_BOOT=PASS and leaves capture #1's bytes intact"; else
+  fail "replace arm: a compliant boot #2 APPENDS RUNG2_REPLACE_BOOT=PASS and leaves capture #1's bytes intact" "$rc" "$out"; fi
+if [[ "$(grep -c '^RUNG2_BOOT_REHEARSAL=' "$_ev_rep")" -eq 1 ]]; then pass "replace arm: writes no second RUNG2_BOOT_REHEARSAL key"; else
+  fail "replace arm: writes no second RUNG2_BOOT_REHEARSAL key" "" "$(cat "$_ev_rep")"; fi
+# T13: boot #2 reporting a CLEAN journal means boot #1 wrote the volume it may only read.
+_rows_rep_clean="$TMP/rows-rep-clean.jsonl"
+# shellcheck disable=SC2086
+row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=clean > "$_rows_rep_clean"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_rep_clean"
+_ev_rep2="$TMP/evidence-rep2.env"; cp "$_ev_rep" "$_ev_rep2"; sed -i '/^RUNG2_REPLACE/d' "$_ev_rep2"
+out="$(REPLACE_SINCE_EXPECT=2026-07-29T11:00:00 run_sut_sentry 0 "$_NO_FATAL" --out "$_ev_rep2" --replace-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"$_G2_WANT"* ]] && ! grep -q '^RUNG2_REPLACE_BOOT' "$_ev_rep2"; then
+  pass "replace arm (T13): boot #2 with plaintext_journal=clean => FAIL, nothing appended"; else
+  fail "replace arm (T13): boot #2 with plaintext_journal=clean => FAIL, nothing appended" "$rc" "$out"; fi
+out="$(run_sut --out "$TMP/evidence-rep-none.env" --replace-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -eq 64 && ! -f "$TMP/evidence-rep-none.env" ]]; then
+  pass "replace arm: no capture #1 PASS file => refused 64 (wiring fault), nothing written"; else
+  fail "replace arm: no capture #1 PASS file => refused 64 (wiring fault), nothing written" "$rc" "$out"; fi
+out="$(run_sut --out "$_ev_rep" --replace-since 2026-07-29T11:00:00 --reboot-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -eq 64 ]]; then pass "--replace-since and --reboot-since together => refused 64"; else
+  fail "--replace-since and --reboot-since together => refused 64" "$rc" "$out"; fi
+
+# ── ARM 2w (#5274, C1): THE REPLACE WINDOW IS WHAT SEPARATES BOOT #1 FROM BOOT #2 ─────────
+# The host name is reused across seed, boot #1, the reboot and boot #2, so the ONLY thing keeping
+# boot #1's compliant boot_complete out of boot #2's verdict is the server-side `dt >` bound. The
+# fixture holds boot #1's row BEFORE the stamp and nothing after: boot #2 never reported. Run with
+# NO expectation armed, so the stub applies exactly the bound the SUT's SQL carries — a SUT that
+# drops the window (the measured survivor: `SENTRY_SINCE=` deleted from the --replace-since case)
+# falls back to the 30-day read, receives boot #1's row, and appends RUNG2_REPLACE_BOOT=PASS.
+_rows_rep_stale="$TMP/rows-rep-stale.jsonl"
+# shellcheck disable=SC2086
+row boot_complete info $_ALL_YES plaintext_volume=present plaintext_journal=dirty > "$_rows_rep_stale"
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_rep_stale"
+_ev_rep3="$TMP/evidence-rep3.env"; cp "$TMP/evidence-rep.before" "$_ev_rep3"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$_ev_rep3" --replace-since 2026-07-29T12:30:00)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" != *"PASS (replace arm)"* ]] && cmp -s "$TMP/evidence-rep.before" "$_ev_rep3"; then
+  pass "replace arm (#5274-C1): boot #1's row BEFORE the stamp, nothing after => TRANSIENT (2), nothing appended"; else
+  fail "replace arm (#5274-C1): boot #1's row BEFORE the stamp, nothing after => TRANSIENT (2), nothing appended" "$rc" "$out"; fi
+# HARNESS: with the expectation armed to a stamp the SUT does not use, the stub refuses and the
+# compliant boot #2 fixture cannot PASS — so the expectation the rows above rely on is load-bearing.
+make_stub "$STUB" "$ANCHOR_LIVE" "$_rows_rep"
+_ev_rep4="$TMP/evidence-rep4.env"; cp "$TMP/evidence-rep.before" "$_ev_rep4"
+out="$(REPLACE_SINCE_EXPECT=2099-01-01T00:00:00 run_sut_sentry 0 "$_NO_FATAL" --out "$_ev_rep4" --replace-since 2026-07-29T11:00:00)"; rc=$?
+if [[ "$rc" -ne 0 ]] && cmp -s "$TMP/evidence-rep.before" "$_ev_rep4"; then
+  pass "replace arm (#5274-C1 harness): a query whose dt> bound does not match --replace-since cannot PASS"; else
+  fail "replace arm (#5274-C1 harness): a query whose dt> bound does not match --replace-since cannot PASS" "$rc" "$out"; fi
+
+# ── ARM 2v (#5274, C2): every timestamp flag is shape-checked BY NAME; --since never rides an append ──
+# Each row reads the refusal TEXT, not only rc: before this change a malformed --replace-since was
+# refused only as a side effect of the --since check (the flag also assigned SENTRY_SINCE), so the
+# message named the wrong flag — and one dropped assignment would have left it unvalidated.
+_c2_row() {  # $1=label $2=expected-substring $3...=extra SUT args ; capture #1's file must stay byte-identical
+  local label="$1" want="$2" ev="$TMP/evidence-c2.$RANDOM.env" o r
+  shift 2
+  cp "$TMP/evidence-rep.before" "$ev"
+  o="$(run_sut_sentry 0 "$_NO_FATAL" --out "$ev" "$@")"; r=$?
+  if [[ "$r" -eq 64 && "$o" == *"$want"* ]] && cmp -s "$TMP/evidence-rep.before" "$ev"; then pass "$label"
+  else fail "$label" "$r" "$o"; fi
+}
+_c2_row "#5274-C2: a malformed --replace-since => 64, refused BY NAME, nothing appended" \
+  "--replace-since must be YYYY-MM-DDTHH:MM:SS" --replace-since 'not-a-timestamp'
+_c2_row "#5274-C2: a zone-suffixed --replace-since => 64 (the no-zone format only)" \
+  "--replace-since must be YYYY-MM-DDTHH:MM:SS" --replace-since '2026-07-29T11:00:00Z'
+_c2_row "#5274-C2: a space-separated --reboot-since => 64, refused BY NAME, nothing appended" \
+  "--reboot-since must be YYYY-MM-DDTHH:MM:SS" --reboot-since '2026-07-29 12:30:00'
+_c2_row "#5274-C2: --since beside --replace-since => 64 (the last flag would decide the window)" \
+  "--since cannot be combined" --since 2026-07-29T11:00:00 --replace-since 2026-07-29T11:00:00
+_c2_row "#5274-C2: an EMPTY --since AFTER --replace-since => 64 (it would empty the replace window)" \
+  "--since cannot be combined" --replace-since 2026-07-29T11:00:00 --since ''
+_c2_row "#5274-C2: --since beside --reboot-since => 64" \
+  "--since cannot be combined" --reboot-since 2026-07-29T12:30:00 --since 2026-07-29T11:00:00
 
 # ── ARM 3: TRANSIENT — the host said nothing, but the channel is demonstrably live ──
 HOSTROWS_EMPTY="$TMP/rows-empty.jsonl"
@@ -833,7 +1080,7 @@ chmod +x "$_shim_dir/curl"
 # first on PATH). NOT a seam in the script under test — the script has no host-override seam.
 _ADM_HOST="stub.betterstackdata.com"
 _adm_rows="$TMP/rows-adm.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$_adm_rows"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$_adm_rows"
 cat > "$TMP/bs-record.sh" <<RECSTUB
 #!/usr/bin/env bash
 printf '%s' "\$1" > "${_seen}/\$(date +%s%N)-\$\$.sql"
@@ -910,7 +1157,7 @@ cp -r "$FIX" "$FIX_BROKEN" || { echo "HARNESS ABORT: could not copy the fixture 
 rm -f "$FIX_BROKEN/git-data-gc.timer" \
   || { echo "HARNESS ABORT: could not remove the A12 payload" >&2; exit 2; }
 HOSTROWS_DERIV="$TMP/rows-deriv.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$HOSTROWS_DERIV"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$HOSTROWS_DERIV"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_DERIV"
 out="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST=stub \
        BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
@@ -1297,7 +1544,7 @@ HOSTROWS_CHATTY="$TMP/rows-chatty.jsonl"
 for _i in $(seq 1 50); do
   row mount info "detail=routine emit ${_i}" >> "$HOSTROWS_CHATTY"
 done
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes >> "$HOSTROWS_CHATTY"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty >> "$HOSTROWS_CHATTY"
 FATALROWS_CHATTY="$TMP/rows-chatty-fatal.jsonl"
 row luks_open fatal "rc=32" "detail=mount(2) ESRCH" > "$FATALROWS_CHATTY"
 
@@ -1475,6 +1722,8 @@ elif printf '%s' "\$sql" | grep -q '__ANCHOR__'; then
   cat "$ANCHOR_LIVE"
 elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
   : > /dev/null
+elif printf '%s' "\$sql" | grep -q '__BOOTCOMPLETEROWS__'; then
+  cat "$HOSTROWS"
 elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
   cat "$HOSTROWS"
 else
@@ -1484,7 +1733,8 @@ EXCSTUB
   chmod +x "$STUB"
 }
 
-for _which in __ANCHOR__ __HOSTROWS__ __FATALROWS__; do
+# (#5274) __BOOTCOMPLETEROWS__ is the fourth read; the boot_complete checks are decided on it.
+for _which in __ANCHOR__ __HOSTROWS__ __FATALROWS__ __BOOTCOMPLETEROWS__; do
   make_exc_stub "$_which"
   _exc_out="$TMP/evidence-exc-${_which//_/}.env"
   rm -f "$_exc_out"
@@ -1588,7 +1838,7 @@ run_reboot() {  # $1=sentry --stage body, rest appended
 HOSTROWS_RB_PROD="$TMP/rows-rb-prod.jsonl"
 {
   rrow 11:30:00 luks_open fatal rc=32
-  rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes
+  rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty
   rrow 12:30:30 luks_reopen_ok info action=reopened target=/mnt/git-data restarts=0
 } > "$HOSTROWS_RB_PROD"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_PROD"
@@ -1621,7 +1871,7 @@ fi
 # WHERE the mapper was mounted. It is TRANSIENT (no verdict, nothing appended), never PASS; the
 # ingest-miss reasoning still keeps it off FAIL.
 HOSTROWS_RB_EMPTY="$TMP/rows-rb-empty.jsonl"
-rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes > "$HOSTROWS_RB_EMPTY"
+rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty > "$HOSTROWS_RB_EMPTY"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_EMPTY"
 OUT_RB2="$TMP/ev-rb-sentry.env"; : > "$OUT_RB2"
 out="$(run_reboot "$_REOPENED_BODY" --out "$OUT_RB2")"; rc=$?
@@ -1707,6 +1957,26 @@ if [[ "$rc" -eq 1 ]]; then pass "ARM 39: a Sentry-only post-reset fatal FAILs ev
 out="$(run_sut --reboot-since 'not-a-timestamp' --out "$TMP/ev-rb-bad.env")"; rc=$?
 if [[ "$rc" -eq 64 ]]; then pass "ARM 38: a malformed --reboot-since is refused (64)"; else
   fail "ARM 38: a malformed --reboot-since is refused (64)" "$rc" "$out"; fi
+
+# ARM 38b (#5274-C7, static) — THE REBOOT BRANCH WRITES ONLY RUNG2_REBOOT_REOPEN* KEYS. It appends
+# to the gate-releasing evidence file and exits BEFORE the fatal/boolean/Guard 2 arms, so any other
+# key written there (a RUNG2_BOOT_REHEARSAL, a RUNG2_REPLACE_BOOT) would reach the gate without
+# having passed a single one of them. Comment-stripped and region-scoped: the region is the ONE
+# `if [[ -n "$REBOOT_SINCE" ]]; then` block, to its column-0 `fi`; every `KEY=` inside a printf or
+# echo format there must be RUNG2_REBOOT_REOPEN or RUNG2_REBOOT_REOPEN_<X>, and the known three
+# must all be present (a region that slices to nothing cannot pass).
+# shellcheck disable=SC2016  # the `$REBOOT_SINCE` in these patterns is the SUT's literal source text
+_rb_open_n="$(grep -vE '^[[:space:]]*#' "$SUT" | grep -cE '^if \[\[ -n "\$REBOOT_SINCE" \]\]; then$' || true)"
+_rb_region="$(grep -vE '^[[:space:]]*#' "$SUT" \
+  | awk '/^if \[\[ -n "\$REBOOT_SINCE" \]\]; then$/ {f=1} f {print} f && /^fi$/ {exit}')"
+_rb_keys="$(grep -E '^[[:space:]]*(printf|echo)[[:space:]]' <<<"$_rb_region" \
+  | grep -oE "(printf|echo)[[:space:]]+['\"][A-Z][A-Z0-9_]*=" | grep -oE '[A-Z][A-Z0-9_]*=$' | tr -d '=' | sort -u)"
+_rb_bad="$(grep -vE '^RUNG2_REBOOT_REOPEN(_[A-Z0-9]+)?$' <<<"$_rb_keys" | grep . || true)"
+if [[ "$_rb_open_n" -eq 1 && -z "$_rb_bad" ]] \
+   && [[ "$(tr '\n' ' ' <<<"$_rb_keys")" == "RUNG2_REBOOT_REOPEN RUNG2_REBOOT_REOPEN_CHANNEL RUNG2_REBOOT_REOPEN_RESTARTS " ]]; then
+  pass "ARM 38b (static): the reboot branch writes only RUNG2_REBOOT_REOPEN* keys"; else
+  fail "ARM 38b (static): the reboot branch writes only RUNG2_REBOOT_REOPEN* keys" "" \
+    "openers=${_rb_open_n}; keys: $(tr '\n' ' ' <<<"$_rb_keys"); non-reboot: ${_rb_bad:-none}"; fi
 
 # ARMS T1-T5 (#8211, Guard 2 row 6) — THE REBOOT ARM READS `target`. The reopen mounts whatever
 # fstab names; only a reopen at /mnt/git-data proves the SERVING root came back. Each FAIL row
@@ -2003,7 +2273,21 @@ _ran=$((passes + fails))
 #        absent, Sentry-corroborated-wrong and a /mnt/git-data/sub prefix each FAIL (1)
 #   ----
 #    15   (ARM 30 was rewritten, not added: Sentry-only reopen is now TRANSIENT, 2 rows still)
-_FLOOR=145  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file) + ARMS C1-C6 above
+# RAISED 145 -> 158 (#5274): ARM 2g's Guard 2 rows (rows 1, 2 x2, 3, 3 static, 3b, 4, the
+# must-PASS key-order row = 8) and ARM 2r's replace-arm rows (append + intact bytes, no second key, T13,
+# the capture-#1 precondition, the flag exclusion = 5).
+# RAISED 158 -> 174 (#5274 review), ITEMISED:
+#     1  GUARD1/H4 __BOOTCOMPLETEROWS__: the fourth read's HTTP-200-carrying-an-error is TRANSIENT
+#     1  G2 row 3 now slices HOST_SQL AND BC_SQL separately, comment-stripped (was one raw grep)
+#     2  #5274-C1: boot #1's row before the replace stamp => no PASS; the stub's expectation harness
+#     6  #5274-C2: --replace-since/--reboot-since refused BY NAME (x3), --since beside either (x3)
+#     3  #5274-C3: an older clean boot_complete past the newest 50 => FAIL; 1000 rows => FAIL
+#        closed; 999 rows => PASS
+#     2  #5274-C4: stage:boot_complete_retry is not selected (exact parsed match); key MISSING => FAIL
+#     1  ARM 38b (#5274-C7): the reboot branch writes only RUNG2_REBOOT_REOPEN* keys
+#   ----
+#    16   (the producer/consumer row was rewritten, not added: it now binds the replace append too)
+_FLOOR=174  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file) + ARMS C1-C6 above
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).

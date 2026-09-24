@@ -3683,6 +3683,10 @@ if want_scripts; then
   # unregistered — and therefore silent AND green — suite would leave that decision unproven
   # on every PR.
   run_suite "tests/scripts/git-data-rung2-evidence-capture" bash tests/scripts/test-git-data-rung2-evidence-capture.sh
+  # (#5274, Guard 3) The rung-2 plan-shape chokepoint: the payload phase and replace arm may
+  # replace only the host, never the dirtied plaintext volume or the LUKS volume. Registered
+  # here for the reason above: nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/git-data-rung2-plan-shape" bash tests/scripts/test-git-data-rung2-plan-shape.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and Guard 7 (the
