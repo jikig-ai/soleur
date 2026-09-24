@@ -97,30 +97,38 @@ here") held for the argv and was false for the input directory. likec4 1.50.0 ex
 `likec4.config.json` `include.paths`, and follows symlinks. Measured with the pinned binary and the
 server's argv/env: a tracked config in the diagrams folder or a subfolder ran (sentinel written);
 a symlinked directory's and an `include.paths` directory's elements reached the exported model.
-The acceptance suite was RED on `renderC4Model(workspacePath)` at `393cd84112`.
+The acceptance suite was RED on `renderC4Model(workspacePath)` as it stood at `main` `ca83c8edf0`.
 
 **Decision.** `renderC4Model(stage)` takes no workspace path. It creates a `mkdtemp` directory
 under a server-private staging root (`server/c4-staging-root.ts`, default
-`~/.cache/soleur-c4-render`, never `os.tmpdir()`), lets `stage` fill `<dir>/src` **before** taking
-a render slot and under a 10 s deadline that aborts in-flight requests, then spawns likec4 with
-`cwd = <dir>/src` and `-o <dir>/model.likec4.json`. In production `stage` is
+`~/.cache/soleur-c4-render`, never `os.tmpdir()`; the root must be a real directory owned by the
+server's uid), lets `stage` fill `<dir>/src` **before** taking a render slot and under a 10 s
+deadline that aborts in-flight requests, re-verifies after taking the slot that `<dir>/src` holds
+exactly the staged files, then spawns likec4 with `cwd = <dir>/src`, `-o <dir>/model.likec4.json`
+and `HOME = <dir>` (node's module fallback would otherwise execute `$HOME/.node_modules`
+packages, measured). In production `stage` is
 `stageCommittedC4Sources` (`server/c4-stage-sources.ts`): it lists the diagrams subtree of the
 commit GitHub returned for the `.c4` write (Contents API for the folder's type and tree sha, then
 the recursive Trees API for true modes), refuses likec4 configs (all nine names), symlinks,
 submodules, a truncated listing, more than 50 sources or more than 4 MiB of sources as
 `unsafe_source` **before any blob is fetched**, then fetches only regular-file
-`.c4`/`.likec4`/`.like-c4` blobs (at most 8 in flight) and writes them `wx`/`0600`. The extension
+`.c4`/`.likec4`/`.like-c4` blobs (at most 8 in flight, each verified against its git blob sha and
+cached by sha; the bytes just committed are not re-downloaded) and writes them `wx`/`0600`. The extension
 allowlist is the security control; the refusals exist so the user is told (a warning-level Sentry
 event and a class-specific `rerenderDiagnostic`) instead of getting a model that differs from what
-the repo declares. The staging root is created and added to the agent sandbox's `denyRead`, so an
-agent can neither write a config into a stage between staging and spawn nor read another tenant's
-staged sources.
+the repo declares. The staging root is created and added to the agent sandbox's `denyRead`, so a
+tenant's agent (every session built by `buildAgentSandboxConfig`) can neither write a config into a
+stage between staging and spawn nor read another tenant's staged sources; the sandbox canary
+placeholders it (ADR-079 amendment of the same date).
 
-The model commit is conditioned on the rendered commit: the PUT carries the model blob sha from
-that commit's listing. A 409/422 re-lists HEAD: an unchanged source set (path + blob sha pairs)
-retries once; a changed one means a newer save's render supersedes this one (`logger.warn
-event=c4_rerender_superseded`, no Sentry, no diagnostic). Pinning the render to its own commit
-without this would let an older render overwrite a newer model.
+The model commit is conditioned on the SOURCE SET: before the PUT the writer re-reads HEAD's
+diagrams listing and requires its source set (path + blob sha pairs) to equal the rendered one;
+otherwise a newer source change is on HEAD and this render is superseded (`logger.warn
+event=c4_rerender_superseded`, no Sentry, no diagnostic — a newer save through the editor or
+Concierge renders its own; a change pushed from outside Soleur is picked up by the next save). The
+PUT carries HEAD's model sha from that same listing, so a model committed in between fails it
+(409/422) and the check runs once more. Comparing sources, not model bytes, is what stops an older
+render landing after an undo: an undo restores the old model bytes, never the old source set.
 
 **Alternatives rejected.** Rendering inside the bwrap agent sandbox (contains execution instead of
 removing the config from the input; sandbox orchestration on a synchronous save path). Reading the
@@ -133,5 +141,6 @@ writing agent). Silently skipping configs (commits a model different from the re
 **Residuals.** The likec4 child still runs as the app's uid; with no config it only parses DSL,
 bounded by the spawn timeout. Wrapping it in bwrap is defence in depth, tracked as #8696. A `.c4`
 with a relative `icon` path bakes the random staging path into the model (it already baked the
-workspace path). The editor's staleness banner copy is tracked as #8695. `syncWorkspace`'s
+workspace path). A `file://` icon URI under the stage is rewritten to a stable `/c4-sources` root so the committed
+model does not change on every save. The editor's staleness banner copy is tracked as #8695. `syncWorkspace`'s
 `git pull` in the tenant workspace is a separate surface, measured separately.

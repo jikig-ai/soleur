@@ -654,7 +654,7 @@ jobs:
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -709,7 +709,7 @@ jobs:
           # so a query-options `pluginPath`-threading regression is invisible to it
           # (covered by agent-runner-query-options.test.ts instead) — including it
           # would burn a paid Haiku turn on a probe that cannot detect the change.
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"

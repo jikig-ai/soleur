@@ -2,7 +2,7 @@
 // of child_process or fs — this proves real execution, or its absence).
 //
 // A tenant diagrams tree holding a sentinel-writing `likec4.config.mjs` must
-// never execute it on the server render. Before the fix (commit 393cd84112,
+// never execute it on the server render. Before the fix (main ca83c8edf0,
 // renderC4Model(workspacePath) spawning likec4 with cwd = the workspace
 // diagrams dir) the tracked-config, nested-config and symlinked-directory rows
 // were all RED; the render now takes no workspace path, so those "untracked"

@@ -170,7 +170,7 @@ capture_trigger=0
 # so on a SAME-REPO PR (creds present) force a re-verify, else fail closed to the
 # ack. NOTE: this only runs when the flag is set (same-repo capture job) — a fork's
 # fixture-only edit reaches neither; see the trust-boundary note above.
-if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
   capture_trigger=1
 fi
 
