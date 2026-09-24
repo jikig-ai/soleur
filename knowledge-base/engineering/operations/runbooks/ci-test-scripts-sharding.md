@@ -192,6 +192,3 @@ two pages and inflate the population. The raw `jobs.tsv` is committed at
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — the
   synthetic `test` check has six light legs; a failed or skipped heavy
   matrix fails it.
-- `scripts/followthroughs/ci-leg-durations-8006.sh` — post-merge soak
-  probe; auto-closes #8006 when ≥3 qualifying main runs show every
-  `test-scripts*` leg under 900 s.
