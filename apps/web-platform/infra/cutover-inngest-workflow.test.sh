@@ -821,6 +821,7 @@ call_flush_latch_count() { # $1 = rows | empty | fail
         *)     return 7 ;;
       esac
     }
+    eval "$(cat "$GEN_FN")"
     # The latch is deliberately NOT generation-floored; if it ever reached the Hetzner anchor
     # this stub records it and fails, so no mutant can reach the real api.hetzner.cloud.
     # shellcheck disable=SC2317
@@ -908,7 +909,7 @@ FIX_FLOOR="$(jq -rn --arg c "$FIX_CREATED" '$c | sub("\\+00:00$"; "Z") | fromdat
 fix_row() {
   jq -cn --arg h "$1" --arg hn "$2" --arg ts "$3" \
      --arg dt "$(date -u -d "@$4" '+%Y-%m-%d %H:%M:%S.000000')" \
-     '{dt: $dt, raw: ({host: $h, host_name: $hn, message: "x", _BOOT_ID: "b", _MACHINE_ID: "m",
+     '{dt: $dt, raw: ({host: $h, host_name: $hn, message: "ROWSENTINEL", _BOOT_ID: "b", _MACHINE_ID: "m",
                        __MONOTONIC_TIMESTAMP: "1000"}
                       + (if $ts == "-" then {} else {__REALTIME_TIMESTAMP: $ts} end) | tojson)}'
 }
@@ -935,6 +936,8 @@ FIX_AHEAD_2="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 40))000
 # A row whose event time carries a trailing newline: jq's `$` matches before a final newline, so an
 # unanchored decimal test admits it and `tonumber` then aborts the WHOLE count. Excluded, not fatal.
 FIX_NLTS="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 150))000000"$'\n' $((FIX_FLOOR + 151)))"
+# Ingest clock boundary: stamped after created, ingested ONE second before it -> excluded.
+FIX_DTMINUS="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 30))000000" $((FIX_FLOOR - 1)))"
 FIX_EDGE="$(fix_row soleur-inngest soleur-inngest-prd "${FIX_FLOOR}000000" "$FIX_FLOOR")"
 FIX_EDGE_MINUS="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR * 1000000 - 1))" "$FIX_FLOOR")"
 # Non-canonical but valid: keys reordered, extra journald fields, a bare-seconds dt.
@@ -948,6 +951,9 @@ FLV_CURL_STDIN="$(mktemp)"; SCRATCH+=("$FLV_CURL_STDIN")
 FLV_CURL_CALLS="$(mktemp)"; SCRATCH+=("$FLV_CURL_CALLS")
 FLV_HC_READS="$(mktemp)"; SCRATCH+=("$FLV_HC_READS")
 FLV_ERR="$(mktemp)"; SCRATCH+=("$FLV_ERR")
+# Every request a stub did not expect is recorded here (never truncated per call) and asserted empty
+# at the end of the section: a stub that answers ANY request cannot see a wrong one.
+FLV_STUB_MISS="$(mktemp)"; SCRATCH+=("$FLV_STUB_MISS")
 # The generation-anchor functions the readers call. Extracted here and eval'd inside every reader
 # harness; an empty extraction would leave every mode reading __UNREADABLE__ via "command not
 # found", which the non-vacuity rows below refuse.
@@ -976,6 +982,11 @@ lv_rows() {
     clock-ahead)  printf '%s\n' "$FIX_AHEAD_1" "$FIX_AHEAD_2" ;;
     edge)         printf '%s\n' "$FIX_EDGE" ;;
     nlts+2cur)    printf '%s\n' "$FIX_NLTS" "$FIX_CUR_1" "$FIX_CUR_2" ;;
+    dt-minus)     printf '%s\n' "$FIX_DTMINUS" ;;
+    fresh)        # rows from a server created seconds ago, stamped after it (young AND counted > 0)
+                  local n; n=$(date -u +%s)
+                  fix_row soleur-inngest soleur-inngest-prd "$((n - 20))000000" $((n - 19))
+                  fix_row soleur-inngest soleur-inngest-prd "$((n - 10))000000" $((n - 9)) ;;
     edge-minus)   printf '%s\n' "$FIX_EDGE_MINUS" ;;
     reorder)      printf '%s\n' "$FIX_REORDER" ;;
     *)            : ;;
@@ -992,14 +1003,15 @@ lv_mocks() {
   # shellcheck disable=SC2317  # invoked indirectly, by the eval'd readers
   doppler() {
     case "$*" in
-      "secrets get HCLOUD_TOKEN_READONLY "*)
+      "secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain")
         echo HCLOUD_TOKEN_READONLY >> "$FLV_HC_READS"
         case "$LV_TOK" in both|ro) printf '%s\n' 'RO-TOKEN-SENTINEL' ;; esac
         return 0 ;;
-      "secrets get HCLOUD_TOKEN "*)
+      "secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain")
         echo HCLOUD_TOKEN >> "$FLV_HC_READS"
         case "$LV_TOK" in both|rw) printf '%s\n' 'RW-TOKEN-SENTINEL' ;; esac
         return 0 ;;
+      "secrets get "*) echo "unexpected-doppler: $*" >> "$FLV_STUB_MISS"; return 1 ;;
     esac
     printf '%s\n' "$*" > "$FLV_ARGV"
     case "$LV_MODE" in
@@ -1012,19 +1024,41 @@ lv_mocks() {
     printf '%s\n' "$@" > "$FLV_CURL_ARGV"
     cat > "$FLV_CURL_STDIN"
     echo called >> "$FLV_CURL_CALLS"
+    # Replay the real request contract; anything else is a request the vendor would answer
+    # differently (a POST to /v1/servers CREATES a server; no -w means no status line).
+    local a prev="" want_w=0 want_get=0 want_h=0 want_proto=0 want_mt=0 url=""
+    [[ "${1:-}" == "--disable" ]] || { echo "unexpected-curl: --disable is not first" >> "$FLV_STUB_MISS"; return 2; }
+    for a in "$@"; do
+      case "$prev" in
+        -w) [[ "$a" == '\n%{http_code}' ]] && want_w=1 ;;
+        -H) [[ "$a" == '@-' ]] && want_h=1 ;;
+        --proto) [[ "$a" == '=https' ]] && want_proto=1 ;;
+        --max-time) [[ "$a" =~ ^[0-9]+$ ]] && (( a <= 30 )) && want_mt=1 ;;
+      esac
+      [[ "$a" == --get ]] && want_get=1
+      [[ "$a" == https://* ]] && url="$a"
+      prev="$a"
+    done
+    if (( ! want_w || ! want_get || ! want_h || ! want_proto || ! want_mt )) \
+       || [[ "$url" != 'https://api.hetzner.cloud/v1/servers' ]]; then
+      echo "unexpected-curl: w=$want_w get=$want_get h=$want_h proto=$want_proto mt=$want_mt url=$url" >> "$FLV_STUB_MISS"
+      return 2
+    fi
     local c="$FIX_CREATED"
     case "$LV_ANCHOR" in
       ok)       ;;
       young)    c="$(date -u -d "@$(( $(date -u +%s) - 60 ))" '+%Y-%m-%dT%H:%M:%S+00:00')" ;;
+      age590)   c="$(date -u -d "@$(( $(date -u +%s) - 590 ))" '+%Y-%m-%dT%H:%M:%S+00:00')" ;;
+      age610)   c="$(date -u -d "@$(( $(date -u +%s) - 610 ))" '+%Y-%m-%dT%H:%M:%S+00:00')" ;;
       late)     c="$(date -u -d "@$(( FIX_FLOOR + 3600 ))" '+%Y-%m-%dT%H:%M:%S+00:00')" ;;
       zform)    c="$(date -u -d "@$FIX_FLOOR" '+%Y-%m-%dT%H:%M:%SZ')" ;;
       pre2025)  c='2024-06-01T00:00:00+00:00' ;;
       future)   c="$(date -u -d "@$(( $(date -u +%s) + 3600 ))" '+%Y-%m-%dT%H:%M:%S+00:00')" ;;
-      forged)   printf '%s\n200' "{\"servers\":[{\"name\":\"soleur-inngest\",\"created\":\"$FIX_CREATED\\n::error::FORGED\"}]}"; return 0 ;;
+      forged)   printf '%s\n200' "{\"servers\":[{\"name\":\"soleur-inngest\",\"created\":\"$(date -u -d "@$FIX_FLOOR" '+%Y-%m-%dT%H:%M:%SZ')\\n::error::FORGED\"}]}"; return 0 ;;
       absent)   printf '%s\n200' '{"servers":[],"meta":{"note":"BODYSENTINEL"}}'; return 0 ;;
       two)      printf '%s\n200' "{\"servers\":[{\"name\":\"soleur-inngest\",\"created\":\"$FIX_CREATED\"},{\"name\":\"soleur-inngest\",\"created\":\"$FIX_CREATED\"}]}"; return 0 ;;
       nonjson)  printf '%s\n200' 'BODYSENTINEL'; return 0 ;;
-      xfield)   printf '%s\n200' '{"servers":[],"x":"BODYSENTINEL"}'; return 0 ;;
+      xfield)   printf '%s\n200' "{\"x\":\"BODYSENTINEL\",\"servers\":[{\"name\":\"soleur-inngest\",\"created\":\"$FIX_CREATED\",\"labels\":{\"k\":\"BODYSENTINEL\"}}]}"; return 0 ;;
       strsrv)   printf '%s\n200' '{"servers":"BODYSENTINEL"}'; return 0 ;;
       garbage)  printf '%s\n200' '{"servers":[{"name":"soleur-inngest","created":"BODYSENTINEL"}]}'; return 0 ;;
       http401)  printf '%s\n401' '{"error":{"code":"unauthorized","message":"BODYSENTINEL"}}'; return 0 ;;
@@ -1033,7 +1067,7 @@ lv_mocks() {
       rc28)     return 28 ;;
       rc6)      return 6 ;;
     esac
-    printf '{"servers":[{"id":167310350,"name":"soleur-inngest-old","created":"2020-01-01T00:00:00+00:00"},{"id":167310351,"name":"soleur-inngest","created":"%s","status":"running"}],"meta":{"pagination":{"page":1}}}\n200' "$c"
+    printf '{"servers":[{"id":167310350,"name":"soleur-inngest-old","created":"2020-01-01T00:00:00+00:00"},{"id":167310351,"name":"soleur-inngest","created":"%s","status":"running"}],"meta":{"pagination":{"page":1},"note":"BODYSENTINEL"}}\n200' "$c"
   }
 }
 call_flip_liveness_count() { # $1 = rows mode, $2 = anchor mode (default ok), $3 = token mode (default both)
@@ -1091,8 +1125,8 @@ assert "#7674 liveness reader does NOT enumerate noop-* reasons (would read H=0 
 # term there WIDENS the query instead of narrowing it — a fail-open wearing a filter's clothes.
 assert "#7674 host isolation is NOT attempted via --grep (which is OR-combined, so it would widen)" \
   "! grep -qE '\\-\\-grep[= ]*[\"'\'']?host_name' <<<\"\$FLV_ARGV_SEEN\""
-assert "#7674 the liveness reader decodes .raw before matching the host (raw is double-encoded)" \
-  "grep -qE '\\.raw' '$FLV_FN'"
+assert "#7674 the liveness reader decodes .raw before matching the host (raw is double-encoded; since the generation scope, in the floored filter it calls)" \
+  "grep -vE '^[[:space:]]*#' '$GEN_FN' | grep -qE '\\(\\.raw \\| if type == \"string\" then \\(fromjson'"
 # DELIBERATELY A LITERAL, not env-overridable (#7674 review): it is not mapped into
 # cutover-inngest.yml's step env, so an override would be an unperformable remediation (the
 # #6617 dead-remediation class), and widening this window is the FAIL-OPEN direction.
@@ -1127,12 +1161,14 @@ assert "G3 generation H1: the foreign/spoofed fixtures are post-floor on both cl
 lv_case() { # $1 desc, $2 rows mode, $3 anchor mode, $4 expected token
   call_flip_liveness_count "$2" "$3"
   assert "G3 generation: $1 ($2/$3 -> '$4', got '$FLV_OUT')" "[[ '$FLV_OUT' == '$4' ]]"
+  assert "G3 generation: $1 — no row or response byte on stdout/stderr" \
+    "! grep -qE 'ROWSENTINEL|BODYSENTINEL' '$FLV_ERR' && [[ '$FLV_OUT' != *SENTINEL* ]]"
 }
 lv_case "the current server's rows count"                         current     ok     2
 lv_case "predecessor rows then current rows: only the current count" mixed-pc  ok     2
 lv_case "current rows then predecessor rows: only the current count" mixed-cp  ok     2
 lv_case "a row with no event time is excluded, never defaulted"   no-ts       ok     0
-grep -qE 'malformed=1 ' "$FLV_ERR"; NOTS_M=$?
+grep -qE 'host_pair=1 pre_floor=0 malformed=1 ' "$FLV_ERR"; NOTS_M=$?
 assert "G3 generation: the no-event-time row is reported as malformed=1 in the notice" "[[ '$NOTS_M' -eq 0 ]]"
 lv_case "one malformed row does not abort the count"              no-ts+2cur  ok     2
 lv_case "rows ingested after created but stamped before it do not count" late-ingest ok 0
@@ -1143,24 +1179,35 @@ lv_case "the floor comes from the anchor: the same rows before a LATER created c
 lv_case "a Z-form created parses"                                  current     zform  2
 lv_case "boundary: event time == created and dt == created counts" edge        ok     1
 lv_case "boundary: one microsecond before created does not"        edge-minus  ok     0
+lv_case "boundary: ingested ONE second before created does not, whatever it is stamped" dt-minus ok 0
+lv_case "a top-level extra field and a sentinel-bearing label do not disturb the decode" current xfield 2
 lv_case "non-canonical row (reordered keys, extra fields, bare-seconds dt) counts" reorder ok 1
 call_flip_liveness_count predecessor ok
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 PRE_NOTICE="$(grep -F '::notice::' "$FLV_ERR" || true)"
 assert "G3 generation: the predecessor notice carries all six counters and the age" \
-  "grep -qE 'created [0-9TZ:-]+ \\([0-9]+s ago\\): rows=2 counted=0 host_pair=2 pre_floor=2 malformed=0 skew_suspect=0$' <<<\"\$PRE_NOTICE\""
+  "grep -qE 'created [0-9TZ:-]+ \\([0-9]+s ago\\): rows=2 counted=0 host_pair=2 pre_floor=2 malformed=0 skew_suspect=0$' <<<\"\$PRE_NOTICE\" && grep -qF \"created \$(date -u -d @$FIX_FLOOR '+%Y-%m-%dT%H:%M:%SZ') (\" <<<\"\$PRE_NOTICE\""
 assert "G3 generation: an OLD server with nothing counted gets NO wait-don't-replace warning" \
   "! grep -qF 'do NOT replace it' '$FLV_ERR'"
 call_flip_liveness_count predecessor young
 assert "G3 generation: a YOUNG server with nothing counted reads 0" "[[ '$FLV_OUT' == '0' ]]"
 assert "G3 generation: a YOUNG server with nothing counted gets the WAIT, do NOT replace warning" \
   "grep -qF 'WAIT and re-dispatch; do NOT replace it' '$FLV_ERR'"
+call_flip_liveness_count predecessor age590
+assert "G3 generation: the wait warning still fires at 590 s (the 600 s threshold, pinned from below)" \
+  "grep -qF 'WAIT and re-dispatch' '$FLV_ERR'"
+call_flip_liveness_count predecessor age610
+assert "G3 generation: the wait warning is gone at 610 s (the 600 s threshold, pinned from above)" \
+  "! grep -qF 'WAIT and re-dispatch' '$FLV_ERR'"
+call_flip_liveness_count fresh young
+assert "G3 generation: a young server that HAS shipped counts and gets no wait warning" \
+  "[[ '$FLV_OUT' == '2' ]] && ! grep -qF 'WAIT and re-dispatch' '$FLV_ERR'"
 call_flip_liveness_count current ok
 assert "G3 generation: the stdout token is a bare decimal (the notice stays on stderr)" "[[ '$FLV_OUT' =~ ^[0-9]+\$ ]]"
 
 # Guard 1 row 6 + Guard 2: every anchor failure fails closed AND skips the Better Stack read.
 AF_N=0
-for _am in absent two nonjson xfield strsrv garbage http401 http429 http503 rc28 rc6 forged pre2025 future; do
+for _am in absent two nonjson strsrv garbage http401 http429 http503 rc28 rc6 forged pre2025 future; do
   call_flip_liveness_count current "$_am"
   AF_N=$((AF_N + 1))
   assert "G3 generation anchor $_am: the reader fails closed (__UNREADABLE__, got '$FLV_OUT')" "[[ '$FLV_OUT' == '__UNREADABLE__' ]]"
@@ -1170,7 +1217,7 @@ for _am in absent two nonjson xfield strsrv garbage http401 http429 http503 rc28
   assert "G3 generation anchor $_am: no response byte reaches stdout or stderr" \
     "! grep -qE 'BODYSENTINEL|::error::FORGED' '$FLV_ERR' && [[ '$FLV_OUT' != *BODYSENTINEL* ]]"
 done
-assert "G3 generation: every anchor failure mode ran (14)" "[[ '$AF_N' -eq 14 ]]"
+assert "G3 generation: every anchor failure mode ran (13)" "[[ '$AF_N' -eq 13 ]]"
 call_flip_liveness_count current absent
 assert "G3 generation anchor absent: the warning names the queried server and the token's project" \
   "grep -qF 'no server named soleur-inngest in the Hetzner project this token is scoped to' '$FLV_ERR'"
@@ -1185,6 +1232,10 @@ call_flip_liveness_count current http503
 W503="$(grep -F '::warning::' "$FLV_ERR" || true)"
 assert "G3 generation anchor: 401, 429 and 503 name three DIFFERENT causes, none of them absent" \
   "grep -qF 'REJECTED the token' <<<\"\$W401\" && grep -qF 'rate-limited' <<<\"\$W429\" && grep -qF 'server error (HTTP 503)' <<<\"\$W503\" && ! grep -qF 'no server named' <<<\"\$W401\$W429\$W503\""
+call_flip_liveness_count current rc28
+assert "G3 generation anchor: a timeout names the timeout (not the egress class)" "grep -qF 'read timed out (transport rc=28)' '$FLV_ERR'"
+call_flip_liveness_count current rc6
+assert "G3 generation anchor: a DNS/connect failure names that class" "grep -qF 'unreachable from the runner (transport rc=6' '$FLV_ERR'"
 call_flip_liveness_count current ok none
 assert "G3 generation anchor: no token resolved -> __UNREADABLE__, curl never called" \
   "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' ]] && grep -qF 'doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN' '$FLV_ERR'"
@@ -1199,6 +1250,8 @@ assert "G3 generation: counted=0 with malformed>0 warns of a schema change, whic
 call_flip_liveness_count current ok rw
 assert "G3 generation anchor: the read/write fallback is announced by NAME (never value)" \
   "grep -qF '::notice::G3 generation anchor: using the read/write HCLOUD_TOKEN' '$FLV_ERR'"
+assert "G3 generation anchor: the read/write token is masked too, and reaches stderr only as the mask" \
+  "grep -qxF '::add-mask::RW-TOKEN-SENTINEL' '$FLV_ERR' && [[ \"\$(grep -c 'RW-TOKEN-SENTINEL' '$FLV_ERR')\" -eq 1 ]]"
 call_flip_liveness_count current http401 rw
 assert "G3 generation anchor: a rejected token names the variable that was sent" \
   "grep -qF 'the one sent was HCLOUD_TOKEN;' '$FLV_ERR'"
@@ -1219,6 +1272,14 @@ OLD_HP=$(grep -cF 'select(.host == $h and .host_name == $hn)' "$BODY_SH" || true
 GSC_CALLS=$(awk '/^_(flip|luks)_liveness_count\(\) \{$/,/^\}$/' "$BODY_SH" | grep -cE '\| _generation_scoped_count "\$floor"' || true)
 assert "G3 generation closure: one host-pair predicate (in the floored filter), no unfloored copy, both readers call it (sites=$HP_SITES old=$OLD_HP calls=$GSC_CALLS)" \
   "[[ '$HP_SITES' -eq 1 && '$OLD_HP' -eq 0 && '$GSC_CALLS' -eq 2 ]]"
+# The harness evals the FIRST multi-line definition of each function; bash runs the LAST. A second
+# (e.g. one-line) definition later in the file would silently replace what the suite verified.
+for _gfn in _hcloud_created_epoch _inngest_server_created_epoch _current_instance_row_counts _generation_scoped_count _flip_liveness_count _luks_liveness_count _flush_latch_count; do
+  _defs=$(grep -cE "^[[:space:]]*(function[[:space:]]+)?${_gfn}[[:space:]]*(\(\))?[[:space:]]*\{" "$BODY_SH" || true)
+  assert "G3 generation: $_gfn is defined exactly once, so the harness runs what the script runs (got $_defs)" "[[ '$_defs' -eq 1 ]]"
+done
+LATCH_REFS=$(awk '/^_flush_latch_count\(\) \{$/,/^\}$/' "$BODY_SH" | grep -vE '^[[:space:]]*#' | grep -cE '_inngest_server_created_epoch|_generation_scoped_count|_current_instance_row_counts' || true)
+assert "G3 generation: the flush latch body never reaches the generation anchor or filter (refs=$LATCH_REFS)" "[[ '$LATCH_REFS' -eq 0 ]]"
 
 # Guard 2 — token hygiene and transport, on a successful read.
 call_flip_liveness_count current ok both
@@ -1309,6 +1370,18 @@ assert "G3 generation: resume's silent refusal makes the replace advice conditio
   "grep -qF 'Only if that ::notice:: shows the server is more than 600s old with counted=0, skew_suspect=0 AND malformed=0 is an inngest-host-replace the path forward' '$RESUME_FILE'"
 assert "G3 generation: the unreadable refusals point at the ::warning:: naming the failed read (resume, LUKS, arm)" \
   "grep -qF 'the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named' '$RESUME_FILE' && [[ \"\$(grep -c 'the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named' '$BODY_SH')\" -eq 2 ]] && grep -qF 'Better Stack, the Hetzner generation anchor — including no server named' '$BODY_SH'"
+
+# Every request the section made matched the real contract (checked BEFORE the controls below,
+# which deliberately write to the ledger).
+# shellcheck disable=SC2034  # read inside the eval'd assert conditions below
+STUB_MISSES="$(cat "$FLV_STUB_MISS")"
+assert "G3 generation: no curl/doppler request in this section deviated from the real contract (${STUB_MISSES:-none})" \
+  "[[ ! -s '$FLV_STUB_MISS' ]]"
+# Positive controls: the stubs must be able to REJECT, or the ledger above proves nothing.
+( lv_mocks current ok both; printf 'x' | curl --disable --noproxy '*' -s --proto =https --max-time 20 -H @- -w '\n%{http_code}' https://api.hetzner.cloud/v1/servers >/dev/null ) || true
+( lv_mocks current ok both; doppler secrets get HCLOUD_TOKEN -p soleur -c prd --plain >/dev/null ) || true
+assert "G3 generation: stub control — curl without --get and doppler with the wrong config are both recorded as misses" \
+  "grep -qF 'unexpected-curl: w=1 get=0' '$FLV_STUB_MISS' && grep -qF 'unexpected-doppler: secrets get HCLOUD_TOKEN -p soleur -c prd --plain' '$FLV_STUB_MISS'"
 
 # --- (b3) op=resume's G3 HOST-AUDIBILITY GATE (#7674, CTO ruling) -----------------------------
 # `flushed` is acted on ONLY by the on-host 30s timer. Writing it to a dark host recovers nothing
@@ -3817,7 +3890,11 @@ _DISPATCHED=$((PASS + FAIL))
 # 877 -> 885 (+8) at the #8759 review round, measured: the trailing-newline timestamp row, the
 #   skew and malformed warnings, the fallback-token notice, the rejected-token name, the filter-fault
 #   warning, the seventh-token refusal and the host-pair closure pin.
-_EXACT_FLOOR=885
+# 885 -> 914 (+29) at the #8759 test-design review, measured: one sentinel-absence row per lv_case
+#   (+17), the dt-minus and extra-field decode rows, the 590/610 s and young-but-shipping warning rows,
+#   the rc28/rc6 cause rows, the read/write mask row, 7 one-definition pins, the latch-body pin, the
+#   stub-miss ledger and its positive control; minus one (xfield left the failure loop).
+_EXACT_FLOOR=914
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
