@@ -310,11 +310,8 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
       expect(stdout).toContain(
         `Cross-branch migration filename collision: branch '${COLLISION_FILE}' shares prefix 053`,
       );
-      expect(stdout).toMatch(
-        new RegExp(
-          `^::warning::  coexists-with: ${COLLISION_WITNESS.replace(/\./g, "\\.")}$`,
-          "m",
-        ),
+      expect(stdout.split("\n")).toContain(
+        `::warning::  coexists-with: ${COLLISION_WITNESS}`,
       );
     }, SLOW_SUBPROCESS_TIMEOUT_MS);
   });
