@@ -555,41 +555,41 @@ source runs, whose recorded outputs the PR body carries.
 
 ## Acceptance Criteria
 
-- [ ] AC1 — Mutation 1 (revert to job conclusion) turns G9 and G16 RED; mutation 6 turns G10 RED.
-- [ ] AC2 — Row **G9** (the #8710 regression, shape of run 35979044625: replace job `success`,
+- [x] AC1 — Mutation 1 (revert to job conclusion) turns G9 and G16 RED; mutation 6 turns G10 RED.
+- [x] AC2 — Row **G9** (the #8710 regression, shape of run 35979044625: replace job `success`,
   apply step `skipped`) yields `proceed=false`, exit 0, a `::notice::` containing
   `verdict=no_apply` and the words `no apply ran`, and **no** `::warning::`. G9 fails against the
   pre-fix gate (run it against
   `git show origin/main:.github/actions/dispatch-web-redeploy/source-run-gate.sh` before editing the
   gate — RED first, per `cq-write-failing-tests-before`); the red output is in the PR body.
-- [ ] AC3 — G9b: the same rehearsal shape for the birth job → `proceed=false`, `verdict=no_apply`,
+- [x] AC3 — G9b: the same rehearsal shape for the birth job → `proceed=false`, `verdict=no_apply`,
   so both jobs are covered.
-- [ ] AC4 — Every row in Test Scenarios passes, each asserting its own `verdict=` token (and, for
+- [x] AC4 — Every row in Test Scenarios passes, each asserting its own `verdict=` token (and, for
   G3, the absence of `verdict=no_apply`; for G10, the absence of `may be published`; for G12, the
   absence of `was published`), with the warning assertions anchored to the `::warning::` line.
-- [ ] AC5 — Before merge, the rewritten gate is run **read-only** against the four real source
+- [x] AC5 — Before merge, the rewritten gate is run **read-only** against the four real source
   runs (`SOURCE_RUN_ID=<id> bash .github/actions/dispatch-web-redeploy/source-run-gate.sh`, which
   only calls `gh run view <id> --json jobs`): 35979044625 → `verdict=no_apply`;
   35979304442 → `verdict=pin_published`; 34822248580 → `verdict=no_apply`, no warning;
   34836141887 → `verdict=pin_published`. This is the only check that exercises the em-dash step name
   against the real API; outputs go in the PR body.
-- [ ] AC6 — Mutations 2–10 turn their named rows RED inside
+- [x] AC6 — Mutations 2–10 turn their named rows RED inside
   `tests/scripts/test-dispatch-web-redeploy.sh` (via `_mut_row` with `$GATE` as source); the `GH`
   loop lists G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G21.
-- [ ] AC7 — `terraform-target-parity.test.ts`: `applyStepParity` returns `[]` for the real workflow
+- [x] AC7 — `terraform-target-parity.test.ts`: `applyStepParity` returns `[]` for the real workflow
   and a violation for each of mutations 11–13 (in-test, no scratch copy); the least-privilege test's
   secrets list is updated to the two `secrets.RESEND_API_KEY` occurrences and still admits no other
   secret.
-- [ ] AC8 — ADR-237 carries the three amendments (Files to Edit); the runbook carries the step-3 GO
+- [x] AC8 — ADR-237 carries the three amendments (Files to Edit); the runbook carries the step-3 GO
   caveat, the "Boot order" bullet, the four recovery sites and the runbook row G2 cell;
   `grep -c 'shows no run it triggered'
   knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md` prints `0`; the
   gate header no longer cites `ADR-237 D6`.
-- [ ] AC9 — `bash tests/scripts/test-dispatch-web-redeploy.sh`, `bun test
+- [x] AC9 — `bash tests/scripts/test-dispatch-web-redeploy.sh`, `bun test
   plugins/soleur/test/terraform-target-parity.test.ts` and `bash
   tests/scripts/test-infra-privileged-tier-census.sh` pass; `scripts/test-all.sh --capacity` is run
   before any commit that stages a `.ts` file.
-- [ ] AC10 — Every verification is hermetic or read-only: the suite runs with the `gh` PATH stub
+- [x] AC10 — Every verification is hermetic or read-only: the suite runs with the `gh` PATH stub
   (exit 64 on any unexpected argv), AC5 calls only `gh run view … --json jobs`, and no task in
   `tasks.md` invokes `gh workflow run`, `gh run rerun` or a `dispatches` API.
 - [ ] AC11 — Merge only when every context in

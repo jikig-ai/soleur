@@ -56,8 +56,11 @@ Terraform SSH client negotiates ECDSA-P256.
    replace re-mints the key with the host; the birth job mints it. The public half is published as a
    Terraform-owned Doppler `prd` secret, `GIT_DATA_SSH_HOST_KEY` (`doppler_secret.git_data_ssh_host_key`,
    written only after the server exists). When the apply run completes, `git-data-pin-redeploy.yml`
-   (`workflow_run`, job `redeploy`) forces a `web-platform-release` and waits for a newer run's deploy
-   to succeed, so the app loads the new pin within about one release cycle. The apply run prints the
+   (`workflow_run`, job `redeploy`) forces a `web-platform-release` if a birth or replace job **and
+   its `Terraform apply` step (`id: apply`)** both succeeded, and waits for a newer run's deploy
+   to succeed, so the app loads the new pin within about one release cycle. The job conclusion alone
+   is not evidence of an apply: a `plan_only` rehearsal ends `success` with the apply step skipped,
+   so it never redeploys (#8710, amended 2026-09-24). The apply run prints the
    new fingerprint to its job summary and log; a failed redeploy emails ops. Nothing outside Terraform copies the pin, and no per-PR `-target`
    reaches the key or the secret.
 3. **Hosts that cannot be re-provisioned get a committed, reviewed pin.** web-1's ECDSA-P256 key is
@@ -80,9 +83,11 @@ Terraform SSH client negotiates ECDSA-P256.
 
 ## Consequences
 
-- **A CI-to-CI dispatch edge.** A completed birth or replace run now triggers `web-platform-release`
-  through `git-data-pin-redeploy.yml`: `workflow_run` on the apply workflow's completion (any
-  branch, dispatched runs only; birth and replace are dispatch-only targets), plus `workflow_dispatch` with an optional `source_run_id` for recovery. It runs
+- **A CI-to-CI dispatch edge.** A birth or replace run whose job and apply step both succeeded now
+  triggers `web-platform-release` through `git-data-pin-redeploy.yml`: `workflow_run` on the apply
+  workflow's completion (any branch, dispatched runs only; birth and replace are dispatch-only
+  targets), gated by `.github/actions/dispatch-web-redeploy/source-run-gate.sh`, which reads the
+  apply step's conclusion rather than the job's, so a `plan_only` rehearsal never redeploys; plus `workflow_dispatch` with an optional `source_run_id` for recovery. It runs
   `.github/actions/dispatch-web-redeploy/track.sh` with `actions: write` and no Terraform secrets
   (only the failure email's Resend key), outside the apply lock. C4 does not model CI-to-CI edges, so
   this ADR is where it is recorded. #8211's same-version redeploy is the intended replacement (DC-2 in
@@ -91,6 +96,12 @@ Terraform SSH client negotiates ECDSA-P256.
   (`Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)`), not its
   path. Renaming that workflow silently stops every automatic redeploy: the replace still succeeds and
   the app keeps the old pin. A rename must update both files in the same PR.
+- **Also coupled to the two apply-step display names.** The jobs API carries no step `id`, so the
+  gate matches each job's apply step by its exact `name:` (`Terraform apply (git-data birth)` and
+  `Terraform apply (git-data-host -replace) — both-volumes-preserved assert`). A rename is caught in
+  CI by parity test PT1 (`plugins/soleur/test/terraform-target-parity.test.ts`); at runtime a green
+  job whose apply step cannot be found exits 1 (`verdict=unidentified`, failure email) and a red one
+  prints `apply=not_found` in its warning — never a silent skip.
 - **The redeploy dispatches and judges (accepted AP-024 deviation).** The same job dispatches the
   release and decides whether a newer release's deploy succeeded. AP-024 separates the write from the
   verdict; here the write is one release dispatch with no Terraform credentials, and the
@@ -107,7 +118,12 @@ Terraform SSH client negotiates ECDSA-P256.
   succeeds: erasures in that window page as `erasure_outcome=host_key_mismatch`, and once the store
   flag is on, replication pushes and fetches stall too. Recovery is `gh run rerun <run-id> --failed` on
   the pin-redeploy run, or `gh workflow run git-data-pin-redeploy.yml --ref main -f
-  source_run_id=<apply run id>`; never another replace.
+  source_run_id=<apply run id>`; never another replace. The bound holds when the source job is
+  green. A red job with a green apply step (the boot poll failed after the pin was published)
+  publishes the pin **without** a redeploy: the gate prints `verdict=pin_published` and emails ops
+  (gate output `pin_published`). Its recovery is the dispatch with no `source_run_id`,
+  `gh workflow run git-data-pin-redeploy.yml --ref main`, because the same id re-reads the same red
+  job and skips again.
 - **Expected drift until the first replace.** Scheduled drift shows a pending replace of
   `hcloud_server.git_data` and creates of the key and the secret until post-merge step 3.
 - **Operator-local applies enforce `host_key` too.** A laptop apply now verifies web-1 the same way CI

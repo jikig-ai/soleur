@@ -1,27 +1,62 @@
 #!/usr/bin/env bash
 # dispatch-web-redeploy/source-run-gate.sh — decides whether git-data-pin-redeploy.yml
-# should force a web release for a given apply-web-platform-infra.yml run (#7226, ADR-237 D6).
+# should force a web release for a given apply-web-platform-infra.yml run (#7226, #8710,
+# ADR-237 D2).
 #
-# The pin (GIT_DATA_SSH_HOST_KEY) changes ONLY when the git-data birth job
-# (git_data_host_create) or replace job (git_data_host_replace) applies. So: proceed iff
-# either of those jobs concluded `success` in the source run. Both skipped/absent (an
-# ordinary merge apply or another dispatch target) is a SKIP with a ::notice::; exit 0.
-# A birth/replace that concluded anything else (failure, cancelled, ...) is also a SKIP,
-# but LOUD: the apply may have published the new pin before a later step failed, so it
-# emits a ::warning:: and a summary line naming the manual recovery (a dispatch with NO
-# source_run_id — the same id would re-read the same non-success); exit 0.
+# The pin (GIT_DATA_SSH_HOST_KEY) changes ONLY when the `terraform apply` of the git-data
+# birth job (git_data_host_create) or replace job (git_data_host_replace) runs: that step
+# (YAML `id: apply`) is the only writer of doppler_secret.git_data_ssh_host_key. A job
+# conclusion is NOT evidence of an apply — a `plan_only=true` rehearsal of the replace ends
+# `success` with the apply step `skipped` (#8710). So the gate reads the apply STEP of each job
+# from the one jobs document `gh run view <id> --json jobs` returns. The API carries no step
+# `id`, so the step is matched by its exact `name:` (the two *_APPLY constants below; parity
+# test PT1 in plugins/soleur/test/terraform-target-parity.test.ts binds them to the workflow).
+#
+# Per job: N = the number of steps named exactly that job's apply constant (a missing or
+# non-array `steps` counts N = 0), A = that step's conclusion when N == 1, passed through an
+# allowlist (anything unknown prints as `unrecognized`). Rows in order, first match wins:
+#
+#   order  job              steps / apply step                    result                        token
+#   1      absent, skipped  -                                     quiet notice, job did not run verdict=not_run
+#   1b     not success      steps is an empty array               quiet notice (environment     verdict=not_run
+#                                                                 refusal, cancelled pending)
+#   4      success          N != 1, or A not success/skipped      exit 1, fail closed           verdict=unidentified
+#   2      success          A == success                          proceed: the pin rotated      verdict=rotated
+#   3      any              A == skipped                          quiet notice, no apply ran    verdict=no_apply
+#   5a     not success      A == success                          warning: the pin WAS          verdict=pin_published
+#                                                                 published, no redeploy;
+#                                                                 output pin_published=true
+#   5b     not success      anything else (N != 1, failure, ...)  warning: the pin MAY be       verdict=pin_maybe_published
+#                                                                 published, no redeploy
+#
+# Combination: any job in row 4 (or a duplicated git-data job) exits 1 before emitting outputs.
+# Else any job in row 2 proceeds (birth wins a tie). Else any job in 5a/5b takes the warning
+# arm (pin_published=true if any job is 5a). Else the quiet notice arm. 5a/5b do not redeploy:
+# the job is red, and the runbook's recovery for a red boot poll is a read first; the
+# no-source_run_id dispatch redeploys when wanted. Every line carries `in run <id>`, the per-job
+# `<job>=<conclusion>` tokens and one `verdict=` token.
+#
+# This is a correctness gate, not an authorization gate: a branch dispatch controls job and step
+# names, so NO name taken from the API is ever printed — only the constants, N, the allowlisted
+# conclusions and the validated run id.
 #
 # FAIL CLOSED when the source run cannot be read: a non-numeric run id, `gh run view`
 # failing, or output that is not a {jobs:[...]} document exits 1. "Could not read" must
 # never read as "nothing to do" — a missed redeploy leaves the app on a stale pin.
 #
 # Env: SOURCE_RUN_ID (required), GH_TOKEN / GH_REPO (consumed by gh),
-#      GITHUB_OUTPUT (receives proceed=true|false and source_job=<name>).
-# Tested by tests/scripts/test-dispatch-web-redeploy.sh (rows G*).
+#      GITHUB_OUTPUT (receives proceed=true|false, source_job=<name>, pin_published=true|false).
+# Tested by tests/scripts/test-dispatch-web-redeploy.sh (rows G*, mutations GM).
 set -euo pipefail
 
 BIRTH_JOB="git_data_host_create"
 REPLACE_JOB="git_data_host_replace"
+# The `name:` of the `id: apply` step of each job in apply-web-platform-infra.yml, byte for byte
+# (the replace name carries U+2014). Exact equality only (jq --arg), never a prefix or a regex.
+BIRTH_APPLY="Terraform apply (git-data birth)"
+REPLACE_APPLY="Terraform apply (git-data-host -replace) — both-volumes-preserved assert"
+JOBS=("$BIRTH_JOB" "$REPLACE_JOB")
+REDEPLOY_CMD="\`gh workflow run git-data-pin-redeploy.yml --ref main\`"
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
@@ -59,25 +94,88 @@ if ! jq -e '(.jobs | type) == "array"' >/dev/null 2>&1 <<<"$doc"; then
   echo "::error::source-run-gate: run ${rid} returned no readable jobs array (fail closed)."
   exit 1
 fi
-concl() { jq -r --arg n "$1" '[.jobs[] | select(.name == $n) | .conclusion // ""] | if length == 1 then .[0] else "absent" end' <<<"$doc"; }
-birth="$(concl "$BIRTH_JOB")"; replace="$(concl "$REPLACE_JOB")"
 
-if [[ "$birth" == success || "$replace" == success ]]; then
-  src="$REPLACE_JOB"; [[ "$birth" == success ]] && src="$BIRTH_JOB"
-  echo "source-run-gate: ${src} concluded success in run ${rid}; the pin rotated — redeploying."
-  _emit "proceed=true" "source_job=${src}"
-  exit 0
-fi
-for c in "$birth" "$replace"; do
-  case "$c" in
-    skipped|absent|"") ;;
-    *)
-      echo "::warning::source-run-gate: in run ${rid} ${BIRTH_JOB}=${birth:-none} and ${REPLACE_JOB}=${replace:-none}. The apply may have published the new pin before failing — pin may be published; dispatch git-data-pin-redeploy.yml with NO source_run_id (\`gh workflow run git-data-pin-redeploy.yml --ref main\`) to redeploy unconditionally — passing source_run_id=${rid} would re-read this same non-success and skip again."
-      _summary "- ${BIRTH_JOB}=${birth:-none}, ${REPLACE_JOB}=${replace:-none} in run ${rid}: pin may be published; dispatch git-data-pin-redeploy.yml with NO source_run_id (\`gh workflow run git-data-pin-redeploy.yml --ref main\`) to redeploy unconditionally."
-      _emit "proceed=false" "source_job="
-      exit 0
-      ;;
+# allow VALUE -> VALUE when it is a known conclusion (JSON null reads as `null`), else `unrecognized`.
+allow() {
+  case "$1" in
+    success|failure|cancelled|skipped|timed_out|neutral|action_required|stale|null) printf '%s' "$1" ;;
+    *) printf 'unrecognized' ;;
+  esac
+}
+# _jq JOB APPLY FILTER -> FILTER applied to every job object named exactly JOB.
+_jq() { jq -r --arg j "$1" --arg s "$2" ".jobs[] | objects | select(.name == \$j) | $3" <<<"$doc"; }
+num() { if [[ "$1" =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf '0'; fi; }
+
+declare -A V=() JC=() AL=()  # per job: verdict, allowlisted job conclusion, apply label
+grade() {  # grade JOB APPLY_STEP_NAME -> V/JC/AL[JOB]
+  local j="$1" s="$2" cnt st n raw a v
+  cnt="$(num "$(jq --arg j "$j" '[.jobs[] | objects | select(.name == $j)] | length' <<<"$doc")")"
+  if (( cnt == 0 )); then V[$j]=not_run; JC[$j]=absent; AL[$j]=none; return; fi
+  if (( cnt > 1 )); then v=unidentified; V[$j]=$v; JC[$j]="duplicated_${cnt}"; AL[$j]=none; return; fi
+  JC[$j]="$(allow "$(_jq "$j" "$s" '.conclusion')")"
+  st="$(_jq "$j" "$s" 'if (.steps | type) == "array" then (.steps | length | tostring) else "none" end')"
+  # shellcheck disable=SC2016  # $s is the jq variable bound by _jq's --arg, not a shell expansion
+  n="$(num "$(_jq "$j" "$s" 'if (.steps | type) == "array" then [.steps[] | objects | select(.name == $s)] | length else 0 end')")"
+  # shellcheck disable=SC2016  # as above
+  raw="$(_jq "$j" "$s" '[(.steps | if type == "array" then .[] else empty end) | objects | select(.name == $s)] | .[0].conclusion')"
+  a="$(allow "$raw")"
+  if (( n == 0 )); then AL[$j]=not_found; elif (( n > 1 )); then AL[$j]="matched_${n}"; else AL[$j]="$a"; fi
+  if [[ "${JC[$j]}" == absent || "${JC[$j]}" == skipped ]]; then v=not_run
+  elif [[ "${JC[$j]}" != success && "$st" == 0 ]]; then v=not_run
+  elif [[ "${JC[$j]}" == success ]]; then
+    case "$n:$a" in 1:success) v=rotated ;; 1:skipped) v=no_apply ;; *) v=unidentified ;; esac
+  else
+    case "$n:$a" in 1:skipped) v=no_apply ;; 1:success) v=pin_published ;; *) v=pin_maybe_published ;; esac
+  fi
+  [[ "$v" == not_run ]] && AL[$j]=none
+  V[$j]=$v
+}
+for j in "${JOBS[@]}"; do
+  case "$j" in
+    "$BIRTH_JOB") grade "$j" "$BIRTH_APPLY" ;;
+    "$REPLACE_JOB") grade "$j" "$REPLACE_APPLY" ;;
   esac
 done
-echo "::notice::source-run-gate: no redeploy — in run ${rid} ${BIRTH_JOB}=${birth:-none} and ${REPLACE_JOB}=${replace:-none}; the host-key pin only rotates when one of them concludes success."
-_emit "proceed=false" "source_job="
+# Only the constants and allowlisted values below; never an API-supplied name.
+tokens="${BIRTH_JOB}=${JC[$BIRTH_JOB]:-absent} ${BIRTH_JOB}.apply=${AL[$BIRTH_JOB]:-none} ${REPLACE_JOB}=${JC[$REPLACE_JOB]:-absent} ${REPLACE_JOB}.apply=${AL[$REPLACE_JOB]:-none}"
+
+bad=""; src=""; pub=false; warn=false; skipped_apply=false
+for j in "${JOBS[@]}"; do
+  [[ "${V[$j]}" == unidentified ]] && bad="${bad:+$bad, }$j"
+  [[ "${V[$j]}" == rotated && -z "$src" ]] && src="$j"
+  [[ "${V[$j]}" == pin_published ]] && pub=true
+  [[ "${V[$j]}" == pin_published || "${V[$j]}" == pin_maybe_published ]] && warn=true
+  [[ "${V[$j]}" == no_apply ]] && skipped_apply=true
+done
+
+if [[ -n "$bad" ]]; then
+  echo "::error::source-run-gate: in run ${rid} ${tokens}: ${bad} concluded success but its apply step could not be identified exactly once, or carries a conclusion impossible for a green job, or the job is duplicated; cannot decide whether the pin rotated (fail closed). verdict=unidentified. Fix: make BIRTH_APPLY / REPLACE_APPLY in .github/actions/dispatch-web-redeploy/source-run-gate.sh equal the name: of the id: apply step in apply-web-platform-infra.yml (or restore that step name). If the pin did rotate, dispatch git-data-pin-redeploy.yml with NO source_run_id (${REDEPLOY_CMD}) to redeploy unconditionally."
+  exit 1
+fi
+if [[ -n "$src" ]]; then
+  echo "source-run-gate: in run ${rid} ${tokens}: ${src} and its apply step concluded success; the pin rotated — redeploying. verdict=rotated"
+  _emit "proceed=true" "source_job=${src}" "pin_published=false"
+  exit 0
+fi
+if [[ "$warn" == true ]]; then
+  if [[ "$pub" == true ]]; then
+    if [[ "${V[$REPLACE_JOB]}" == pin_published ]]; then
+      how="Start with a read, never a second replace: runbook git-data-luks-cutover-5274.md section \"If the fresh host fails a boot check after step 3\". To put the app on the new pin, dispatch git-data-pin-redeploy.yml with NO source_run_id (${REDEPLOY_CMD})"
+    else
+      how="A birth cannot be repeated: the only recovery is to dispatch git-data-pin-redeploy.yml with NO source_run_id (${REDEPLOY_CMD})"
+    fi
+    echo "::warning::source-run-gate: in run ${rid} ${tokens}: the apply step succeeded, so the new pin was published, but the job is red — the app was NOT redeployed and erasures fail host_key_mismatch until it is. verdict=pin_published. ${how}; passing source_run_id=${rid} would re-read this same red job and skip again."
+    _summary "- ${tokens} in run ${rid}: verdict=pin_published — the pin was published but the app was not redeployed. ${how}."
+  else
+    echo "::warning::source-run-gate: in run ${rid} ${tokens}: the apply may have published the new pin before failing — pin may be published. verdict=pin_maybe_published. Dispatch git-data-pin-redeploy.yml with NO source_run_id (${REDEPLOY_CMD}) to redeploy unconditionally — passing source_run_id=${rid} would re-read this same non-success and skip again."
+    _summary "- ${tokens} in run ${rid}: verdict=pin_maybe_published — pin may be published; dispatch git-data-pin-redeploy.yml with NO source_run_id (${REDEPLOY_CMD}) to redeploy unconditionally."
+  fi
+  _emit "proceed=false" "source_job=" "pin_published=${pub}"
+  exit 0
+fi
+if [[ "$skipped_apply" == true ]]; then
+  echo "::notice::source-run-gate: no redeploy — no apply ran in run ${rid} (a plan_only rehearsal, or the job stopped before apply), so the host-key pin is unchanged. ${tokens}. verdict=no_apply"
+else
+  echo "::notice::source-run-gate: no redeploy — in run ${rid} neither git-data job ran a step. ${tokens}; the host-key pin only rotates when a job's apply step succeeds. verdict=not_run"
+fi
+_emit "proceed=false" "source_job=" "pin_published=false"
