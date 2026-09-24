@@ -39,8 +39,12 @@ const FIXTURE_ROOT = resolve(import.meta.dir, "fixtures/harness-parity");
 
 const index: Index = readIndex();
 
-/** Read a fixture; `dir` is `skills` or `commands` and picks the policy via the lib's own mapping. */
-function fixture(dir: "skills" | "commands", name: string): DocResult {
+/**
+ * Read a fixture; `dir` picks the policy via the lib's own mapping. An agents fixture is named
+ * `<case>/cpo.md`: every case uses the real registry leaf `cpo` as its filename stem, because the
+ * self-name carve-out keys on the stem.
+ */
+function fixture(dir: "skills" | "commands" | "agents", name: string): DocResult {
   const path = `${dir}/${name}`;
   const text = readFileSync(resolve(FIXTURE_ROOT, path), "utf-8");
   // A synthetic population path in the shape the matching glob would have produced, so the
@@ -48,7 +52,9 @@ function fixture(dir: "skills" | "commands", name: string): DocResult {
   const syntheticPath =
     dir === "commands"
       ? `plugins/soleur/commands/${name}`
-      : `plugins/soleur/skills/${name.replace(/\.md$/, "")}/SKILL.md`;
+      : dir === "agents"
+        ? "plugins/soleur/agents/product/cpo.md"
+        : `plugins/soleur/skills/${name.replace(/\.md$/, "")}/SKILL.md`;
   const policy = regionPolicyForPath(syntheticPath);
   if (policy === undefined) throw new Error(`fixture ${path}: no population glob matched ${syntheticPath}`);
   return classifyDoc(text, index, policy, path);
@@ -97,7 +103,11 @@ describe("harness-parity fixtures — index and policy plumbing", () => {
     expect(regionPolicyForPath("plugins/soleur/devin/skills/go/SKILL.md")).toBe("skill");
     // N12: a nested SKILL.md is NOT a population member under `:(glob)`.
     expect(regionPolicyForPath("plugins/soleur/skills/plan/references/SKILL.md")).toBeUndefined();
-    expect(regionPolicyForPath("plugins/soleur/agents/product/cpo.md")).toBeUndefined();
+    // Agent bodies are members since #8317's agent half. Depth 5 exercises `**`; the prefixed
+    // path below proves the agent glob is anchored like the others.
+    expect(regionPolicyForPath("plugins/soleur/agents/product/cpo.md")).toBe("agent");
+    expect(regionPolicyForPath("plugins/soleur/agents/engineering/review/security-sentinel.md")).toBe("agent");
+    expect(regionPolicyForPath("vendor/plugins/soleur/agents/legal/clo.md")).toBeUndefined();
     // The glob→regex must be ANCHORED at both ends. Without the anchors the two cases above
     // still resolve to undefined for an unrelated reason (`[^/]+` cannot cross `/`), so they
     // do not cover it: a prefix or a suffix is what proves it (measured — dropping both
@@ -147,6 +157,11 @@ describe("harness-parity fixtures — index and policy plumbing", () => {
       expect(here).toContain(name);
     }
     expect(onDisk.length).toBeGreaterThanOrEqual(30); // the plan's Phase 2 table has 28 file rows
+    // Agents fixtures all share the basename `cpo.md`, so the check above would be satisfied by
+    // any one of them. Each case directory must appear as its own `<case>/cpo.md` literal.
+    const agentCases = readdirSync(resolve(FIXTURE_ROOT, "agents"));
+    expect(agentCases.length).toBe(7);
+    for (const c of agentCases) expect(here).toContain(`"${c}/cpo.md"`);
   });
 });
 
@@ -374,6 +389,109 @@ describe("harness-parity fixtures — NONCANONICAL rules and messages", () => {
   });
 });
 
+// The self-name carve-out (#8317 agent half, ADR-226 amendment). Under the `agent` policy the
+// one bare leaf on the first `^name:` line of a closed leading frontmatter is SELF-NAME when the
+// line is byte-exactly `name: <filename stem>`. Everything else keeps its verdict, and a
+// rejected self-name line says how to fix it WITHOUT canonicalizing `name:`.
+const SELF_NAME_MESSAGE = /agent self-name must be exactly "name: cpo"/;
+
+describe("harness-parity fixtures — agent self-name carve-out", () => {
+  test("agents/self-name: the own-stem name: line is SELF-NAME, nothing is NONCANONICAL", () => {
+    const doc = fixture("agents", "self-name/cpo.md");
+    expect(doc.regionPolicy).toBe("agent");
+    expect(nonc(doc)).toEqual([]);
+    expect(verdicts(doc, "SELF-NAME").map((s) => [s.line, s.token])).toEqual([[2, "cpo"]]);
+  });
+
+  test("agents/wrong-leaf: a name: naming another agent gets the dedicated message", () => {
+    const doc = fixture("agents", "wrong-leaf/cpo.md");
+    expect(verdicts(doc, "SELF-NAME")).toEqual([]);
+    const hits = nonc(doc);
+    expect(hits.length).toBe(1);
+    // The message names the PATH stem, never the token on the line.
+    expect(hits[0].message).toMatch(SELF_NAME_MESSAGE);
+    expect(hits[0].message).not.toMatch(/write soleur:/);
+  });
+
+  test("agents/second-name-line: only the first name: line is the self-name", () => {
+    const doc = fixture("agents", "second-name-line/cpo.md");
+    expect(verdicts(doc, "SELF-NAME").map((s) => s.line)).toEqual([2]);
+    const hits = nonc(doc);
+    expect(hits.map((h) => h.line)).toEqual([3]);
+    // The dedicated message is scoped to the first `^name:` line; the second carries the default.
+    expect(hits[0].message).toMatch(/write soleur:product:cpo/);
+    expect(hits[0].message).not.toMatch(SELF_NAME_MESSAGE);
+  });
+
+  test("agents/quoted-then-bare: the FIRST name: line decides, even when a later one is exact", () => {
+    const doc = fixture("agents", "quoted-then-bare/cpo.md");
+    expect(verdicts(doc, "SELF-NAME")).toEqual([]);
+    const hits = nonc(doc);
+    expect(hits.map((h) => h.line)).toEqual([2, 3]);
+    expect(hits[0].message).toMatch(SELF_NAME_MESSAGE);
+    expect(hits[1].message).toMatch(/write soleur:product:cpo/);
+  });
+
+  test("agents/in-body: a name: line outside the frontmatter is an ordinary reference", () => {
+    const doc = fixture("agents", "in-body/cpo.md");
+    expect(verdicts(doc, "SELF-NAME").map((s) => s.line)).toEqual([2]);
+    expect(nonc(doc).map((h) => h.line)).toEqual([9]);
+  });
+
+  test("agents/description: the rest of the frontmatter is not exempt", () => {
+    const doc = fixture("agents", "description/cpo.md");
+    expect(verdicts(doc, "SELF-NAME").map((s) => s.line)).toEqual([2]);
+    const hits = nonc(doc);
+    expect(hits.map((h) => h.line)).toEqual([3]);
+    expect(hits[0].message).toMatch(/write soleur:product:cpo/);
+  });
+
+  test("agents/harness-forms: the agent policy does not honour harness-forms", () => {
+    const doc = fixture("agents", "harness-forms/cpo.md");
+    expect(verdicts(doc, "EXEMPT")).toEqual([]);
+    expect(nonc(doc).map((h) => h.raw)).toEqual(["plan"]);
+    const text = readFileSync(resolve(FIXTURE_ROOT, "agents/harness-forms/cpo.md"), "utf-8");
+    expect(fixDoc(text, index, "agent")).toContain("On Grok, type soleur:plan to start.");
+  });
+
+  test("skills/self-name-under-skill.md: the carve-out is scoped to the agent policy", () => {
+    const doc = fixture("skills", "self-name-under-skill.md");
+    expect(verdicts(doc, "SELF-NAME")).toEqual([]);
+    expect(nonc(doc).map((h) => h.line)).toEqual([2]);
+  });
+
+  test("fixDoc leaves a valid self-name doc byte-identical", () => {
+    const text = readFileSync(resolve(FIXTURE_ROOT, "agents/self-name/cpo.md"), "utf-8");
+    expect(fixDoc(text, index, "agent")).toBe(text);
+  });
+
+  // Grammar shapes that must NOT be a self-name. Inline strings, not fixture files, so an
+  // editor or git cannot normalize the CR away.
+  const rejected: [string, string][] = [
+    ["trailing comment", "---\nname: cpo # c\n---\n"],
+    ["double space", "---\nname:  cpo\n---\n"],
+    ["CRLF", "---\r\nname: cpo\r\n---\r\n"],
+    ["no leading ---", "name: cpo\n---\n"],
+    ["unterminated frontmatter", "---\nname: cpo\n"],
+    ["frontmatter not on line 1", "# T\n---\nname: cpo\n---\n"],
+  ];
+  for (const [label, text] of rejected) {
+    test(`rejected self-name shape: ${label}`, () => {
+      const doc = classifyDoc(text, index, "agent", "agents/x/cpo.md");
+      expect(verdicts(doc, "SELF-NAME")).toEqual([]);
+      const hits = nonc(doc);
+      expect(hits.length).toBe(1);
+      expect(hits[0].message).toMatch(SELF_NAME_MESSAGE);
+    });
+  }
+
+  test("a self-name need not be the first frontmatter key", () => {
+    const doc = classifyDoc('---\nmodel: inherit\ndescription: "x"\nname: cpo\n---\n', index, "agent", "agents/x/cpo.md");
+    expect(verdicts(doc, "SELF-NAME").map((s) => s.line)).toEqual([4]);
+    expect(nonc(doc)).toEqual([]);
+  });
+});
+
 describe("harness-parity fixtures — marker grammar", () => {
   test("commands/region-malformed.md: case, CRLF and inline text are each RED malformed (N8)", () => {
     const doc = fixture("commands", "region-malformed.md");
@@ -457,13 +575,30 @@ describe("harness-parity fixtures — fixDoc and census", () => {
         text: readFileSync(resolve(FIXTURE_ROOT, dir, name), "utf-8"),
         regionPolicy: (dir === "commands" ? "command" : "skill") as RegionPolicy,
       }));
-    const result = census([...load("skills"), ...load("commands")], index);
+    // Agents fixtures live one directory deeper (`agents/<case>/cpo.md`). Files only: a
+    // recursive readdir also yields the case directories, which readFileSync rejects.
+    const agents = readdirSync(resolve(FIXTURE_ROOT, "agents"), { recursive: true })
+      .map(String)
+      .filter((p) => p.endsWith(".md"))
+      .map((p) => ({
+        path: `agents/${p}`,
+        text: readFileSync(resolve(FIXTURE_ROOT, "agents", p), "utf-8"),
+        regionPolicy: "agent" as RegionPolicy,
+      }));
+    expect(agents.length).toBe(7);
+    const result = census([...load("skills"), ...load("commands"), ...agents], index);
     const red = result.docs
       .filter((d) => d.errors.length > 0 || d.sites.some((s) => s.verdict === "NONCANONICAL"))
       .map((d) => d.path)
       .sort();
     expect(red).toEqual(
       [
+        "agents/description/cpo.md",
+        "agents/harness-forms/cpo.md",
+        "agents/in-body/cpo.md",
+        "agents/quoted-then-bare/cpo.md",
+        "agents/second-name-line/cpo.md",
+        "agents/wrong-leaf/cpo.md",
         "commands/region-double-start.md",
         "commands/region-malformed.md",
         "commands/region-stray-end.md",
@@ -484,6 +619,7 @@ describe("harness-parity fixtures — fixDoc and census", () => {
         "skills/metavariable.md",
         "skills/novel-sigil.md",
         "skills/region-forms-in-skill.md",
+        "skills/self-name-under-skill.md",
         "skills/trailing-punctuation.md",
         "skills/two-violations.md",
         "skills/unknown-name.md",
