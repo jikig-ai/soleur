@@ -20,6 +20,10 @@ name: {skill_name}
 description: [TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # {skill_title}
 
 ## Overview
@@ -292,6 +296,21 @@ def main():
     print()
 
     result = init_skill(skill_name, path)
+
+    # The Grok invoke block the template emits names repo-relative paths under
+    # `plugins/soleur/`. That is correct for a skill born inside this plugin —
+    # and the fleet guard (plugins/soleur/test/grok-harness-invoke.test.ts)
+    # requires byte-equality there, so the block must NOT be rewritten per
+    # destination. Outside the plugin tree those paths resolve to nothing, so
+    # say so rather than shipping a first instruction that points at a missing
+    # file (#8570 review, M5).
+    if result and "plugins/soleur/skills" not in str(Path(path).resolve()):
+        print()
+        print("⚠️  Scaffolded OUTSIDE plugins/soleur/skills/.")
+        print("   The Grok invoke block in the new SKILL.md cites paths under")
+        print("   `plugins/soleur/` (harness.ts, skills/<name>/SKILL.md). Repoint")
+        print("   them at this repo's own plugin root, or drop the block if this")
+        print("   skill is not loaded by Grok Build.")
 
     if result:
         sys.exit(0)
