@@ -190,6 +190,7 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/token-drift-workflow-causes.test.sh"
   "plugins/soleur/test/check-deps-adapter-drift.test.sh"
   "plugins/soleur/test/terraform-drift-step-order.test.sh"
+  "plugins/soleur/test/terraform-drift-sentry-leg.test.sh"
   "plugins/soleur/test/c4-count-parity.test.sh"
   "plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
   "plugins/soleur/test/reusable-release-caller-permissions.test.sh"
