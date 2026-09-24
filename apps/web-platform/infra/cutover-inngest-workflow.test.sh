@@ -1588,6 +1588,38 @@ assert "#6178 the ERR-trap terminal transition (unexpected-exit) is anchored as 
 # must not be found in the grep set by accident, proving the loop compares real strings.
 assert "#6178 parity loop is discriminating (a non-existent reason is NOT anchored)" \
   "! grep -qF '\"reason\":\"this-reason-does-not-exist' '$DF_HARNESS_SRC'"
+# --- (#7761) THE SAME EXTRACTION PINS THE FOLLOW-THROUGH PROBE'S DRIFT GREP SET. -------------
+# scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh defines drift as ANY flip-FSM row
+# since the boundary other than the op=resume shape, found by one sparse OR-query over a FIXED
+# inline term set (DRIFT_GREPS). A reason the emitter gains and the probe does not grep is
+# invisible to that query over the whole interval — the runtime cannot fail safe on it, so THIS
+# loop is the guard. Read ONLY the `DRIFT_GREPS=( … )` block (a flag-based awk), never the whole
+# file: the probe's header table and comments name every reason, and would satisfy a whole-file
+# grep with the term itself deleted.
+PROBE_7761="$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh"
+_probe_drift_missing() { # <probe-file> -> missing reasons (space-separated), or __NO_BLOCK__
+  local block r miss=""
+  block="$(awk '/^DRIFT_GREPS=\($/ { f = 1; next } f && /^\)$/ { exit } f' "$1")"
+  [[ -n "$block" ]] || { printf '__NO_BLOCK__'; return; }
+  while IFS= read -r r; do
+    [[ -z "$r" ]] && continue
+    grep -qF -- "'\"reason\":\"$r'" <<<"$block" || miss="$miss $r"
+  done < "$EMIT_REASONS_FILE"
+  printf '%s' "$miss"
+}
+if [[ -f "$PROBE_7761" ]]; then
+  PROBE_MISSING="$(_probe_drift_missing "$PROBE_7761")"
+  assert "#7761 PROBE PARITY: every non-noop emit_state reason is in the probe's DRIFT_GREPS block (missing:${PROBE_MISSING:- none})" \
+    "[[ -z '$PROBE_MISSING' ]]"
+  # NEGATIVE control: a copy of the probe with one term deleted from the block must red.
+  _probe_neg="$(mktemp)"; SCRATCH+=("$_probe_neg")
+  sed "/^  '\"reason\":\"flip-complete'\$/d" "$PROBE_7761" > "$_probe_neg"
+  PROBE_NEG_MISSING="$(_probe_drift_missing "$_probe_neg")"
+  assert "#7761 probe parity is discriminating (deleting flip-complete from the block is caught)" \
+    "[[ '$PROBE_NEG_MISSING' == *flip-complete* && '$PROBE_NEG_MISSING' != __NO_BLOCK__ ]]"
+else
+  echo "  NOTE: probe retired (#7761 closed) — parity loop has no subject; the PR that retired it deletes this loop"
+fi
 # --- _flip_transition_dt EXECUTED against a stubbed row source. A static grep for "limit"
 # survived a mutation that DELETED the truncation guard outright, which is the whole reason
 # this runs the function instead of reading it. `doppler` is stubbed on PATH, so the real
