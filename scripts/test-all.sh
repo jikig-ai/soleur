@@ -2941,10 +2941,14 @@ fi
 if want_scripts; then
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
-  run_suite "tests/hooks/openhands-guardrails" bash tests/hooks/test_openhands_guardrails.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
   # `test_<name>.sh` convention is outside lint-orphan-test-suites.sh's `*.test.sh`
   # producer, so an unregistered suite here gates nothing while reading as coverage.
+  #
+  # `tests/hooks/openhands-guardrails` was registered here until 2026-09-23 (ADR-245):
+  # its suite tested the hand-ported `.openhands/` PreToolUse mirror, and both the mirror
+  # and the suite are deleted. Keeping the registration would abort the runner on a
+  # missing file; dropping it is the deletion, not a narrowing of coverage.
   run_suite "tests/hooks/drop-sentinel-parity" bash tests/hooks/test_drop_sentinel_parity.sh
   run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
   run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.rules.md

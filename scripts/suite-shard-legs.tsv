@@ -218,7 +218,6 @@ plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	2
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	1
 plugins/soleur/test/sync-pr-behind.test.sh	3
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
-plugins/soleur/test/ticket-triage-mirror-parity.test.sh	5
 plugins/soleur/test/token-drift-workflow-causes.test.sh	6
 plugins/soleur/test/unkept-promise-hook.test.sh	1
 plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh	2
@@ -418,7 +417,6 @@ tests/commands/sync-producer-reachability	5
 tests/commands/sync-rule-prune	4
 tests/hooks/emissions	1
 tests/hooks/incidents	1
-tests/hooks/openhands-guardrails	5
 tests/scripts/audit-bot-codeql-coverage	4
 tests/scripts/audit-ruleset-bypass	3
 tests/scripts/betterstack-absence-classifier	6

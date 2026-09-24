@@ -1357,6 +1357,111 @@ jobs:
       - name: Grok fidelity gate (inspect contract + golden-path eval)
         run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
 
+  # Rationale lives in ADR-245, not here (ADR-231: workflow files are byte-budgeted).
+  # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
+  # promoting it to a required check after a soak, and the pin-freshness criterion.
+  harness-discovery:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    # continue-on-error is LOAD-BEARING, not decoration (#8570 review, P0).
+    #
+    # "non-required" governs the MERGE gate: this job is absent from the `test`
+    # aggregator's `needs:`, so a red here cannot block a PR. It does NOT govern
+    # `workflow_run.conclusion` — and `web-platform-release.yml` is triggered by
+    # `workflows: ["CI"]` and refuses to deploy when that conclusion is not
+    # `success` (`ci_not_green`). So without this, an npm hiccup or a 404 on
+    # static.devin.ai would red the CI run for a main push and SKIP that SHA's
+    # production deploy: a third-party network flake gating our own releases.
+    #
+    # With it, the step still reds on the PR check list (visible, triageable)
+    # while the run conclusion stays `success`. #8574 owns promotion to a
+    # required check, and MUST remove this line as part of that promotion —
+    # a required check that cannot fail the run is worse than no check.
+    continue-on-error: true
+    env:
+      # One declaration per pin. Previously each appeared twice in this job plus
+      # once in the test README, with nothing asserting they agreed — and a
+      # `--pin` lagging its install step silently turns the script's own version
+      # check into a no-op (#8574 bumps these monthly).
+      CODEX_PIN: "0.156.1"
+      DEVIN_PIN: "3000.11.1"
+      # sha256 of the pinned Devin setup script, measured 2026-09-23. A version
+      # in a URL is a NAME, not a content pin; this is the content pin.
+      DEVIN_SETUP_SHA256: "bff4e02d0297ba5494d2cd1a8314b9c48ebd237f37f22438e83d60e09f3b72c7"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install Codex CLI (exact pin)
+        run: |
+          set -uo pipefail
+          npm i -g "@openai/codex@${CODEX_PIN}"
+          # NOT `got="$(codex --version | grep …)"`. A `run:` block with no
+          # `shell:` key runs under `bash -e`, so on a banner carrying no semver
+          # `grep` exits 1, pipefail propagates it, and `-e` kills the step AT
+          # the assignment — the `||` diagnostic below never prints and the step
+          # ends rc=1 with zero output. Measured. That is the exact drift this
+          # pin exists to catch, presenting as an unexplained red.
+          raw="$(codex --version 2>&1 || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$CODEX_PIN" ] || {
+            echo "::error::harness-discovery[codex] version-mismatch:${got:-<unparsed>}!=${CODEX_PIN} raw=${raw:0:200}"
+            exit 3
+          }
+
+      - name: Codex discovers every declared skill
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness codex --pin "$CODEX_PIN"
+
+      - name: Install Devin CLI (versioned setup script)
+        # `!cancelled()` so a Codex-side refusal does not silently skip the Devin
+        # half. The two harnesses are independent subjects: one vendor's npm
+        # outage should not cost us the other vendor's discovery signal, and the
+        # check row gives no hint that half the job never ran.
+        if: '!cancelled()'
+        run: |
+          set -uo pipefail
+          # The top-level install.sh leaves PINNED_VERSION empty (latest). The
+          # VERSIONED setup script is the pinned path — measured 2026-09-23.
+          curl -fsSL --max-time 60 "https://static.devin.ai/cli/${DEVIN_PIN}/setup.sh" -o /tmp/devin-setup.sh
+          echo "${DEVIN_SETUP_SHA256}  /tmp/devin-setup.sh" | sha256sum -c - || {
+            echo "::error::harness-discovery[devin] setup-script-digest-mismatch — refusing to execute; got $(sha256sum /tmp/devin-setup.sh | cut -d' ' -f1)"
+            exit 3
+          }
+          # The setup script INSTALLS and then starts an interactive login, which cannot
+          # succeed headless: it prints "Welcome to Devin CLI! / Error: Login canceled" and
+          # exits 1 AFTER reporting a successful install. Measured 2026-09-23 on this job's
+          # first live run.
+          #
+          # Under `bash -e` — GitHub's default shell, as the Codex step above already warns —
+          # that killed this step at this line, which ALSO skipped the PATH export and the
+          # version assertion below. Those are the only parts that gate anything, so the pin
+          # was silently not checked, and the discovery step that follows passed only because
+          # `~/.local/bin` happens to be on ubuntu-latest's default PATH. Luck, not design.
+          #
+          # So: tolerate the script's exit code and let the VERSION ASSERTION be this step's
+          # verdict. That costs no coverage — a genuinely failed install shows up below as an
+          # unparseable version and still exits 3. `</dev/null` makes the login give up at
+          # once instead of waiting on a TTY that will never arrive.
+          setup_rc=0
+          bash /tmp/devin-setup.sh </dev/null || setup_rc=$?
+          echo "harness-discovery[devin] setup-script rc=${setup_rc} (non-zero EXPECTED: post-install interactive login)"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          raw="$(devin --version 2>&1 || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$DEVIN_PIN" ] || {
+            echo "::error::harness-discovery[devin] version-mismatch:${got:-<unparsed>}!=${DEVIN_PIN} setup_rc=${setup_rc} raw=${raw:0:200}"
+            exit 3
+          }
+
+      - name: Devin discovers every declared skill
+        if: '!cancelled()'
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness devin --pin "$DEVIN_PIN"
+
   # Synthetic aggregator.
   #
   # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
