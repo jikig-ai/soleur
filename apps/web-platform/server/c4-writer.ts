@@ -219,9 +219,9 @@ type RerenderInput = {
 type RerenderOutcome = {
   rerendered: boolean;
   /** A concise, user-facing reason on failure (the UI shows
-   *  `Saved — ${diagnostic}`). Absent only when a newer save supersedes this
-   *  render (see rerenderAndCommit) and for the resync-after-commit failure,
-   *  where the new model IS committed. */
+   *  `Saved — ${diagnostic}`). Absent only when a newer source change
+   *  supersedes this render (see rerenderAndCommit): nothing on the page
+   *  refreshes on its own, so the banner names the supersede instead. */
   diagnostic?: string;
 };
 
@@ -382,15 +382,24 @@ async function rerenderAndCommit(
           message: "c4 re-render refused the committed diagrams tree — source committed, diagram stale",
         });
       } else {
-        reportSilentFallback(new Error(render.detail ?? render.reason), {
+        // err = null: a real Error is captured first by the pino mirror and
+        // Sentry drops the tagged capture (#8629). A fixed message per reason
+        // keeps grouping stable; `detail_class` opens one issue per failure
+        // class. A slot wait is load, not a defect: warning level.
+        const report = render.detailClass === "slot-wait" ? warnSilentFallback : reportSilentFallback;
+        report(null, {
           feature: "c4-rerender",
           op: "render",
           // Only `relativePath` (charset-constrained KB path) goes in `extra` —
           // the userIdHash + feature/op tags already locate the tenant, and the
           // absolute workspacePath is internal-topology noise in telemetry.
-          extra: { userId, relativePath, reason: render.reason },
-          tags: { reason: render.reason, phase: render.phase },
-          message: "c4 re-render failed — source committed, diagram stale",
+          extra: { userId, relativePath, reason: render.reason, detail: render.detail },
+          tags: {
+            reason: render.reason,
+            phase: render.phase,
+            detail_class: render.detailClass ?? "other",
+          },
+          message: `c4 re-render failed: ${render.reason}`,
         });
       }
       return { rerendered: false, diagnostic: buildRerenderDiagnostic(render) };
@@ -487,11 +496,18 @@ async function rerenderAndCommit(
         extra: { userId, relativePath },
         message: "c4 re-render: JSON committed but re-sync failed",
       });
-      return { rerendered: false };
+      // The model IS committed on GitHub but not on this clone, so the page
+      // keeps the old diagram until a re-save re-syncs it (#8695).
+      return { rerendered: false, diagnostic: RETRY_DIAGNOSTIC };
     }
 
     logger.info(
-      { event: "c4_rerender", path: jsonFilePath, durationMs: render.durationMs },
+      {
+        event: "c4_rerender",
+        path: jsonFilePath,
+        durationMs: render.durationMs,
+        queueWaitMs: render.queueWaitMs,
+      },
       "kb/c4: diagram re-rendered",
     );
     return { rerendered: true };

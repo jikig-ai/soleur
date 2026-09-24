@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
   loggerWarn: vi.fn(),
+  loggerInfo: vi.fn(),
 }));
 
 vi.mock("@/server/github-api", () => ({
@@ -46,7 +47,7 @@ vi.mock("@/server/observability", async () => {
   };
 });
 vi.mock("@/server/logger", () => ({
-  default: { info: vi.fn(), error: vi.fn(), warn: mocks.loggerWarn },
+  default: { info: mocks.loggerInfo, error: vi.fn(), warn: mocks.loggerWarn },
 }));
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
@@ -235,6 +236,87 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
     if (!res.ok) return;
     expect(res.rerendered).toBe(false);
     expect(mocks.reportSilentFallback).toHaveBeenCalled();
+    // #8695/#8696: the model IS committed on GitHub but not on this clone; a
+    // re-save re-syncs it. Say so instead of implying a refresh is coming.
+    expect(res.rerenderDiagnostic).toBe("diagram not updated for this save. Save again to retry.");
+  });
+
+  it("#8696: a spawn-phase failure reports with err=null, a fixed message per reason, reason/phase/detail_class tags and the detail in extra", async () => {
+    renderReturns({ ok: false, reason: "non_zero_exit", detail: "exit=1 stderr=boom", phase: "spawn", detailClass: "likec4-exit" });
+    await writeC4Diagram(source(C4));
+    expect(mocks.reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, opts] = mocks.reportSilentFallback.mock.calls[0];
+    expect(err).toBeNull();
+    expect(opts).toMatchObject({
+      feature: "c4-rerender",
+      op: "render",
+      message: "c4 re-render failed: non_zero_exit",
+      tags: { reason: "non_zero_exit", phase: "spawn", detail_class: "likec4-exit" },
+      extra: expect.objectContaining({ detail: "exit=1 stderr=boom", relativePath: C4 }),
+    });
+  });
+
+  it.each([
+    [{ ok: false, reason: "sandbox_error", detail: "exit=1 stderr=bwrap: x", phase: "spawn", detailClass: "bwrap-setup" }],
+    [{ ok: false, reason: "layout_failed", detail: "model has 3 elements and no views", phase: "spawn", detailClass: "zero-views" }],
+    [{ ok: false, reason: "sandbox_error", detail: "likec4 not resolvable", phase: "spawn", detailClass: "not-resolvable" }],
+  ])("#8696: %o → the internal diagnostic, never a source-blaming one, and no json commit", async (r) => {
+    renderReturns(r);
+    const res = await writeC4Diagram(source(C4));
+    if (!res.ok) throw new Error("save failed");
+    expect(res.rerenderDiagnostic).toBe(
+      "diagram not updated: the diagram could not be rendered this time. Save again to retry; if it keeps happening, contact support.",
+    );
+    expect(mocks.githubApiPost.mock.calls.some((c) => String(c[1]).endsWith("/model.likec4.json"))).toBe(false);
+    expect(mocks.reportSilentFallback.mock.calls[0][1].tags).toMatchObject({ reason: r.reason, detail_class: r.detailClass });
+  });
+
+  it("#8696: a render-slot wait is load, not a defect — a warning, still the internal diagnostic", async () => {
+    renderReturns({ ok: false, reason: "timeout", detail: "render slot wait", phase: "spawn", detailClass: "slot-wait" });
+    const res = await writeC4Diagram(source(C4));
+    if (!res.ok) throw new Error("save failed");
+    expect(mocks.reportSilentFallback).not.toHaveBeenCalled();
+    expect(mocks.warnSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, opts] = mocks.warnSilentFallback.mock.calls[0];
+    expect(err).toBeNull();
+    expect(opts.tags).toMatchObject({ reason: "timeout", detail_class: "slot-wait" });
+    expect(res.rerenderDiagnostic).toMatch(/could not be rendered this time/);
+  });
+
+  it("#8696: a successful re-render logs its queueWaitMs", async () => {
+    renderReturns({ ok: true, durationMs: 12, json: RENDERED_JSON, queueWaitMs: 34 });
+    await writeC4Diagram(source(C4));
+    expect(mocks.loggerInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "c4_rerender", durationMs: 12, queueWaitMs: 34 }),
+      expect.any(String),
+    );
+  });
+
+  it("#8695: every rerendered:false outcome carries a diagnostic EXCEPT a supersede by a newer source change", async () => {
+    type Case = [string, () => void, boolean];
+    const cases: Case[] = [
+      ["no commit sha", () => mocks.githubApiPost.mockResolvedValueOnce({}), true],
+      ["render failure", () => renderReturns({ ok: false, reason: "non_zero_exit", detail: "x", phase: "spawn" }), true],
+      ["oversized model", () => renderReturns({ ok: true, durationMs: 1, json: "x".repeat(8 * 1024 * 1024) }), true],
+      ["HEAD refused", () => mocks.listCommittedDiagrams.mockResolvedValue({ ok: false, reason: "unsafe_source", refusalClass: "symlink", path: "a", more: 0 }), true],
+      ["resync failure", () => mocks.syncWorkspace.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: new Error("x") }), true],
+      ["model commit throws", () => mocks.githubApiPost.mockResolvedValueOnce({ commit: { sha: "c" } }).mockRejectedValueOnce(new Error("500")), true],
+      ["superseded (sources changed)", () => mocks.listCommittedDiagrams.mockResolvedValue({ ...HEAD_LISTING, sourceKey: "other" }), false],
+    ];
+    for (const [name, arrange, hasDiagnostic] of cases) {
+      Object.values(mocks).forEach((m) => m.mockReset());
+      mocks.githubApiGet.mockResolvedValue({ sha: "blobsha", type: "file" });
+      mocks.githubApiPost.mockResolvedValue({ commit: { sha: "commit123" } });
+      mocks.syncWorkspace.mockResolvedValue({ ok: true });
+      mocks.stageCommittedC4Sources.mockResolvedValue(STAGED);
+      mocks.listCommittedDiagrams.mockResolvedValue(HEAD_LISTING);
+      renderReturns({ ok: true, durationMs: 12, json: RENDERED_JSON });
+      arrange();
+      const res = await writeC4Diagram(source(C4));
+      if (!res.ok) throw new Error(`${name}: save failed`);
+      expect(res.rerendered, name).toBe(false);
+      expect(Boolean(res.rerenderDiagnostic), name).toBe(hasDiagnostic);
+    }
   });
 
   it("AC3: a .md save does NOT spawn the renderer and reports rerendered:true (layout unchanged)", async () => {
@@ -371,7 +453,7 @@ describe("writeC4Diagram — #8623 refusal and staging diagnostics (verbatim)", 
     if (!res.ok) throw new Error("save failed");
     expect(res.rerenderDiagnostic).toBe("diagram not updated for this save. Save again to retry.");
     expect(mocks.reportSilentFallback).toHaveBeenCalledTimes(1);
-    expect(mocks.reportSilentFallback.mock.calls[0][1].tags).toEqual({ reason: r.reason, phase: "stage" });
+    expect(mocks.reportSilentFallback.mock.calls[0][1].tags).toEqual({ reason: r.reason, phase: "stage", detail_class: "other" });
   });
 
   it("an unreadable diagrams folder → its own honest diagnostic (not 'save again')", async () => {

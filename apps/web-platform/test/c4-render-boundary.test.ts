@@ -47,8 +47,40 @@ describe("C4 re-render boundary (#8623)", () => {
     expect(renderC4Model.length).toBe(1);
   });
 
-  it("row 1: c4-render.ts touches the filesystem only through lstat/mkdir/mkdtemp/readdir/readFile/rm", () => {
-    expect(fsImports(code("server/c4-render.ts"))).toEqual(["lstat", "mkdir", "mkdtemp", "readFile", "readdir", "rm"]);
+  it("row 1: c4-render.ts touches the filesystem only through its listed fs imports", () => {
+    // constants/open: the no-follow read of the child's output (#8696 Guard 5);
+    // realpath: binary resolution; writeFile: the boot probe's fixture stage.
+    expect(fsImports(code("server/c4-render.ts"))).toEqual([
+      "constants", "lstat", "mkdir", "mkdtemp", "open", "readFile", "readdir", "realpath", "rm", "writeFile",
+    ]);
+  });
+
+  it("#8696: c4-render.ts has exactly one spawn( call site", () => {
+    expect([...code("server/c4-render.ts").matchAll(/\bspawn\(/g)]).toHaveLength(1);
+  });
+
+  it("#8696: the sandbox opt-out and its NODE_ENV decision are read only in c4-render.ts", () => {
+    const hits = [...walk(join(APP, "server")), ...walk(join(APP, "lib")), ...walk(join(APP, "app"))]
+      .filter((p) => /\bC4_RENDER_SANDBOX\b/.test(stripComments(readFileSync(p, "utf8"), p)))
+      .map((p) => relative(APP, p));
+    expect(hits).toEqual(["server/c4-render.ts"]);
+    expect(code("server/c4-render.ts")).toMatch(/process\.env\.NODE_ENV === "production" \|\| process\.env\.C4_RENDER_SANDBOX !== "off"/);
+  });
+
+  it("#8696: server/index.ts calls the boot probe only inside the listen callback, under !dev, never awaited", () => {
+    const src = code("server/index.ts");
+    const calls = [...src.matchAll(/verifyC4RenderSandboxOnce/g)].map((m) => m.index!);
+    // one import + one call
+    expect(calls).toHaveLength(2);
+    const listen = src.indexOf("server.listen(");
+    expect(listen).toBeGreaterThan(-1);
+    const callAt = calls[1];
+    expect(callAt).toBeGreaterThan(listen);
+    // Inside the listen callback: before the callback's closing `});`.
+    expect(callAt).toBeLessThan(src.indexOf("\n  });", listen));
+    const before = src.slice(listen, callAt);
+    expect(before).toMatch(/if \(!dev\)/);
+    expect(src.slice(callAt - 40, callAt)).not.toMatch(/await/);
   });
 
   it("row 1: c4-stage-sources.ts only creates directories and writes files", () => {
