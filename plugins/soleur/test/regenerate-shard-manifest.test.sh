@@ -221,6 +221,62 @@ else
   check fail "D4: dry-run wrote the manifest — --write must gate all writes"
 fi
 
+# === Fixture H: --group heavy binds the heavy job's N and the heavy registered set ==========
+#
+# The two manifests share one generator but disjoint inputs: heavy N comes from
+# the test-scripts-heavy job block, the registered set from --enumerate
+# scripts-heavy, and light-group labels in a heavy timing stream must be DROPPED
+# (warned) — a light label in the heavy table would red the ⊆ lint while
+# consuming leg weight for nothing.
+CI_N_H="$(awk -v j='^  test-scripts-heavy:' '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML" \
+  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)"
+if [[ "$CI_N_H" =~ ^[0123456789]+$ ]] && (( 10#$CI_N_H >= 1 )); then
+  check pass "ci.yml test-scripts-heavy matrix declares N=$CI_N_H"
+else
+  check fail "could not derive the test-scripts-heavy matrix N — heavy fixtures cannot be sized"
+fi
+
+FH="$WORK/H"; mkdir -p "$FH"
+printf 'heavy-a\nheavy-b\nheavy-c\n' > "$FH/registered.txt"
+{
+  printf 'heavy-a\t800\nheavy-b\t600\nheavy-c\t400\n'
+  printf 'light-suite-1\t100\nlight-suite-2\t100\n'
+} > "$FH/timings.tsv"
+if gen "$FH" "$FH/registered.txt" "$WORK/H-manifest.tsv" --group heavy --write \
+     > "$WORK/H-out.txt" 2> "$WORK/H-err.txt"; then
+  check pass "fixture H: --group heavy generator exits 0 on valid input"
+else
+  check fail "fixture H: --group heavy refused valid input: $(tail -2 "$WORK/H-err.txt")"
+fi
+if grep -q "^# n=$(( 10#${CI_N_H:-0} ))\$" "$WORK/H-manifest.tsv" 2>/dev/null; then
+  check pass "fixture H: heavy manifest header carries the HEAVY job's n, not the light N"
+else
+  check fail "fixture H: heavy manifest n header missing or wrong (want n=${CI_N_H}): $(grep '^# n=' "$WORK/H-manifest.tsv" 2>/dev/null)"
+fi
+if [[ "$(grep -cv '^#' "$WORK/H-manifest.tsv" 2>/dev/null || true)" == "3" ]] \
+   && ! grep -q 'light-suite' "$WORK/H-manifest.tsv" 2>/dev/null; then
+  check pass "fixture H: exactly the 3 heavy labels — light-group timings dropped"
+else
+  check fail "fixture H: wrong-group labels leaked into the heavy manifest"
+fi
+if grep -q 'dropping timed-but-unregistered' "$WORK/H-err.txt"; then
+  check pass "fixture H: wrong-group drop is warned, not silent"
+else
+  check fail "fixture H: light-group labels dropped WITHOUT a WARN"
+fi
+
+# === Fixture I: wrong-group registration set refuses ========================================
+# A registered file containing only LIGHT labels against HEAVY timings drops
+# every row and must exit 2 — an empty-but-valid table is the worst output.
+FI="$WORK/I"; mkdir -p "$FI"
+printf 'light-only-1\nlight-only-2\n' > "$FI/registered.txt"
+printf 'heavy-a\t800\nheavy-b\t600\n' > "$FI/timings.tsv"
+if gen "$FI" "$FI/registered.txt" "$WORK/I-m.tsv" --group heavy > /dev/null 2>&1; then
+  check fail "fixture I: heavy timings against a light-only registration produced a manifest"
+else
+  check pass "fixture I: wrong-group registration refuses (exit 2)"
+fi
+
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
 # Ordered BEFORE the floor — a neutered helper deflates the verdict counters, and this
 # reports "a verdict was discarded" rather than the misleading "rows were deleted".
@@ -234,7 +290,7 @@ fi
 # --- ASSERTION FLOOR (ADR-193) -------------------------------------------------------------
 # printf + exit, NEVER through fail(). MIN_CASES sits on the line directly above its
 # `if` so guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=16
+MIN_CASES=20
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d check(s) ran, expected >= %d. The suite did not run to completion.\n' "$cases" "$MIN_CASES" >&2
   exit 1

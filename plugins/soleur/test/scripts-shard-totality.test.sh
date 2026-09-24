@@ -7,11 +7,12 @@
 # duplicates.
 #
 # WHY THIS IS THE HIGHEST-PRIORITY DELIVERABLE OF ITS PR. Sharding `test-scripts` makes the
-# required `test` check green off three legs. If the partition drops a registration, that check
-# reports green while running a strict subset — a regression reaching production behind a green
-# pipeline. That is strictly WORSE than the blocked deploy #7902 is about, so the partition is
-# made total BY CONSTRUCTION (round-robin at the run_suite/skip_suite chokepoint) and asserted
-# here on top.
+# required `test` check green off six legs (Guard 1b below covers the three-leg
+# `test-scripts-heavy` matrix under the identical contract). If the partition drops a
+# registration, that check reports green while running a strict subset — a regression
+# reaching production behind a green pipeline. That is strictly WORSE than the blocked
+# deploy #7902 is about, so the partition is made total BY CONSTRUCTION (round-robin at
+# the run_suite/skip_suite chokepoint) and asserted here on top.
 #
 # THE REFERENCE SET IS DERIVED INDEPENDENTLY OF THE PARTITION, and that is the whole design.
 # Deriving it by invoking the partition with K=1 would make the union comparison true by
@@ -88,15 +89,9 @@ done
 # the child past the group under test while the positional argument said `scripts`.
 enumerate_leg() {
   local spec="$1" out="$2" group="${3:-scripts}"
-  if [[ "$spec" == "-" ]]; then
-    env -u SCRIPTS_SHARD TEST_GROUP="$group" SOLEUR_DISABLE_SESSION_STATE=1 \
-      bash "$RUNNER" --enumerate "$group" 2>/dev/null \
-      | grep '^SUITE_REGISTRATION' | cut -f2 > "$out"
-  else
-    env SCRIPTS_SHARD="$spec" TEST_GROUP="$group" SOLEUR_DISABLE_SESSION_STATE=1 \
-      bash "$RUNNER" --enumerate "$group" 2>/dev/null \
-      | grep '^SUITE_REGISTRATION' | cut -f2 > "$out"
-  fi
+  env SCRIPTS_SHARD="$spec" TEST_GROUP="$group" SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --enumerate "$group" 2>/dev/null \
+    | grep '^SUITE_REGISTRATION' | cut -f2 > "$out"
 }
 
 # --- The totality comparison, as a FUNCTION so it can be positive-controlled ------------------
@@ -116,6 +111,19 @@ totality_holds() {
 
 # --- The INDEPENDENT reference set ----------------------------------------------------------
 #
+# PARALLEL CHILDREN. The two derivations below are independent, and every enumerate
+# child in this file is independent of every other — each is backgrounded and its
+# per-pid rc is captured by `wait`, then verdicts are evaluated serially in declared
+# order so PASS/FAIL output stays deterministic. Enumerate children take no advisory
+# lock (test-all.sh's _ENUMERATE exemption), so concurrency is safe by design. Fan-out
+# is bounded per batch: no batch exceeds ~10 concurrent children.
+#
+# (b) Glob expansion child — launched FIRST so it overlaps (a). Cleared of TEST_GROUP
+#     and SCRIPTS_SHARD for the reasons lint-orphan-test-suites.sh documents.
+env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null &
+_globs_pid=$!
+
 # (a) Static extraction, scoped to the runner's column-0 `if want_scripts; then` .. `fi`
 #     regions so registrations belonging to the webplat/bun/infra groups are excluded.
 #     Labels containing `$` are skipped: those are the glob loop's `run_suite "$f"`, whose
@@ -131,11 +139,7 @@ awk '
   }
 ' "$RUNNER" | sort -u > "$WORK/ref_static"
 
-# (b) Glob expansion, via the runner's own single declaration of the glob list. Cleared of
-#     TEST_GROUP and SCRIPTS_SHARD for the reasons lint-orphan-test-suites.sh documents.
-globs_rc=0
-env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
-  bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
+globs_rc=0; wait "$_globs_pid" || globs_rc=$?
 : > "$WORK/ref_glob"
 if (( globs_rc == 0 )); then
   while IFS= read -r g; do
@@ -162,9 +166,9 @@ fi
 
 # --- The matrix leg list, read from ci.yml ---------------------------------------------------
 #
-# Read as VALUES, not as a count. Mutation row 5 is a matrix listing ["1/3","2/3"] — two legs
-# whose values still say /3 — where leg 3's suites run nowhere and both surviving legs are
-# green. A count-based read cannot see that; the value list can.
+# Read as VALUES, not as a count. Mutation row 5 is a matrix listing one leg short of
+# ["1/6".."6/6"] — five legs whose values still say /6 — where leg 6's suites run nowhere and
+# all surviving legs are green. A count-based read cannot see that; the value list can.
 awk '
   /^  test-scripts:$/ { inj=1; next }
   inj && /^  [a-z0-9_-]+:$/ { inj=0 }
@@ -225,16 +229,29 @@ if (( LEGS_N >= 1 )); then
   fi
 
   # --- The union ----------------------------------------------------------------------------
+  # Fan out one child per declared leg (this batch is the matrix leg count itself —
+  # bounded by ci.yml, ~10 at most), then collect rc per-pid and evaluate in order.
+  declare -a _leg_pids=()
+  _leg_i=0
+  while IFS= read -r spec; do
+    _leg_i=$(( _leg_i + 1 ))
+    # `< /dev/null`: the child inherits this loop's stdin (the legs file) — pin it so
+    # nothing in the enumerate path can ever consume the remaining leg specs.
+    enumerate_leg "$spec" "$WORK/leg_$_leg_i" < /dev/null &
+    _leg_pids[$(( _leg_i - 1 ))]=$!
+  done < "$WORK/legs"
+
   : > "$WORK/union"
   _leg_i=0
   while IFS= read -r spec; do
     _leg_i=$(( _leg_i + 1 ))
-    enumerate_leg "$spec" "$WORK/leg_$_leg_i"
-    _n=$(wc -l < "$WORK/leg_$_leg_i" | tr -d ' ')
-    if (( _n >= 1 )); then
-      pass "leg $spec enumerated $_n assigned registration(s)"
+    _rc=0; wait "${_leg_pids[$(( _leg_i - 1 ))]}" || _rc=$?
+    if (( _rc != 0 )); then
+      fail "leg $spec enumerate child exited $_rc — a dead child OR a leg the runner refused (zero-assignment) cannot prove its assigned set, so its green would mean nothing"
     else
-      fail "leg $spec enumerated ZERO registrations — a leg assigned nothing is a leg whose green means nothing"
+      # pipefail: rc==0 means grep matched, so the output file is provably non-empty.
+      _n=$(wc -l < "$WORK/leg_$_leg_i" | tr -d ' ')
+      pass "leg $spec enumerated $_n assigned registration(s)"
     fi
     cat "$WORK/leg_$_leg_i" >> "$WORK/union"
   done < "$WORK/legs"
@@ -285,10 +302,23 @@ fi
 # Totality is required for ANY K, not only the configured one. If these fail while the
 # configured K passes, the partition is tuned to one value rather than correct.
 for altK in 2 5; do
-  : > "$WORK/alt_union"
+  # Fan out the altK leg children (<= altK concurrent, <= 5), one output file each.
+  declare -a _alt_pids=()
+  _alt_i=0
   for k in $(seq 1 "$altK"); do
-    enumerate_leg "$k/$altK" "$WORK/alt_leg"
-    cat "$WORK/alt_leg" >> "$WORK/alt_union"
+    enumerate_leg "$k/$altK" "$WORK/alt_leg_${altK}_${k}" &
+    _alt_pids[$_alt_i]=$!
+    _alt_i=$(( _alt_i + 1 ))
+  done
+  : > "$WORK/alt_union"
+  _alt_i=0
+  for k in $(seq 1 "$altK"); do
+    _rc=0; wait "${_alt_pids[$_alt_i]}" || _rc=$?
+    _alt_i=$(( _alt_i + 1 ))
+    if (( _rc != 0 )); then
+      fail "non-canonical K=$altK leg $k enumerate child exited $_rc — the union below is built from a lost leg"
+    fi
+    cat "$WORK/alt_leg_${altK}_${k}" >> "$WORK/alt_union"
   done
   _an=$(wc -l < "$WORK/alt_union" | tr -d ' ')
   sort -u "$WORK/alt_union" > "$WORK/alt_sorted"
@@ -312,13 +342,21 @@ _mal_ok=1
 # arithmetic error that aborts the enclosing if-compound and resumes AFTER it at status 0, so
 # k/N keep their initial 0 and the leg silently runs the FULL group. An all-ASCII fixture list
 # cannot see that class, which is why this row exists.
+# Fan-out bound: 10 children, the largest batch in this file.
+declare -a _mal_specs=() _mal_pids=()
+_mal_n=0
 for bad in "0/3" "4/3" "1/0" "abc" "" "   " "3/" "/3" "1/3/2" "１/３"; do
+  _mal_specs[$_mal_n]="$bad"
   env SCRIPTS_SHARD="$bad" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
-    bash "$RUNNER" --enumerate scripts >/dev/null 2>&1
-  _rc=$?
+    bash "$RUNNER" --enumerate scripts >/dev/null 2>&1 &
+  _mal_pids[$_mal_n]=$!
+  _mal_n=$(( _mal_n + 1 ))
+done
+for (( _mi = 0; _mi < _mal_n; _mi++ )); do
+  _rc=0; wait "${_mal_pids[$_mi]}" || _rc=$?
   if (( _rc != 2 )); then
     _mal_ok=0
-    fail "malformed SCRIPTS_SHARD='$bad' exited $_rc, expected 2 (fail closed)"
+    fail "malformed SCRIPTS_SHARD='${_mal_specs[$_mi]}' exited $_rc, expected 2 (fail closed)"
   fi
 done
 if (( _mal_ok == 1 )); then
@@ -338,9 +376,23 @@ fi
 # and they are not independent: with the validator's length bound reverted, an over-long spec
 # clears the validator and is caught by the zero-assignment refusal instead, at the same rc.
 # Only the message separates them, so only the message can pin each one.
+# Three independent children — the two stderr probes below and the unset-spec
+# enumeration after them — fanned out together, each writing its own $WORK file.
 _over=$(( REF_N + 1 ))
-_over_err=$(env SCRIPTS_SHARD="${_over}/${_over}" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
-  bash "$RUNNER" --enumerate scripts 2>&1 >/dev/null || true)
+env SCRIPTS_SHARD="${_over}/${_over}" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate scripts >/dev/null 2>"$WORK/over_err" &
+_over_pid=$!
+_long="1234567890/1234567890"
+env SCRIPTS_SHARD="$_long" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate scripts >/dev/null 2>"$WORK/long_err" &
+_long_pid=$!
+env -u SCRIPTS_SHARD TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate scripts 2>/dev/null \
+  | grep '^SUITE_REGISTRATION' | cut -f2 | sort -u > "$WORK/unset" &
+_unset_pid=$!
+
+wait "$_over_pid" || true
+_over_err=$(cat "$WORK/over_err")
 if grep -qF 'assigned 0 of' <<<"$_over_err"; then
   pass "a valid-but-empty assignment (${_over}/${_over}, beyond ${REF_N} registrations) is refused by the zero-assignment check"
 else
@@ -352,9 +404,8 @@ fi
 # C.UTF-8, and GitHub runners set LANG=C.UTF-8 — so such a fixture would pass there under BOTH
 # the correct and the reverted implementation, i.e. for the wrong reason, with every fixture on
 # one side of the property. An over-long ASCII run discriminates everywhere.
-_long="1234567890/1234567890"
-_long_err=$(env SCRIPTS_SHARD="$_long" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
-  bash "$RUNNER" --enumerate scripts 2>&1 >/dev/null || true)
+wait "$_long_pid" || true
+_long_err=$(cat "$WORK/long_err")
 if grep -qF 'must be k/N' <<<"$_long_err"; then
   pass "an over-long digit run is refused by the VALIDATOR (its length bound is load-bearing)"
 else
@@ -362,7 +413,7 @@ else
 fi
 
 # --- Unset runs the full group ---------------------------------------------------------------
-enumerate_leg "-" "$WORK/unset"
+wait "$_unset_pid" || fail "unset-SCRIPTS_SHARD enumerate pipeline exited nonzero — its output file cannot be trusted"
 _un=$(sort -u "$WORK/unset" | wc -l | tr -d ' ')
 if (( _un == REF_N )); then
   pass "SCRIPTS_SHARD unset enumerates the full group ($_un) — local runs, lefthook and TEST_GROUP=all are unaffected"
@@ -384,7 +435,11 @@ fi
 #   - the non-vacuity floor is >= 1, not >= 100 — three registrations is the whole point;
 #   - non-canonical K rows use {2,3} only: K>3 legs are syntactically valid but own nothing, so
 #     they hit the zero-assignment refusal by DESIGN — that boundary is pinned as a refusal row
-#     below rather than traversed as a totality case.
+#     below rather than traversed as a totality case;
+#   - the malformed-spec list probes 4 classes (zero numerator, non-numeric, empty, fullwidth)
+#     not the light arm's 10 — the validator is a shared code path, so the heavy list samples
+#     each distinct class rather than re-running the full matrix; the over-long-digit-run
+#     probe is likewise light-only (the digit bound is already proven).
 echo ""
 echo "=== Guard 1b: scripts-heavy group totality ==="
 
@@ -456,16 +511,24 @@ if (( LEGS_H >= 1 )); then
   fi
 
   # --- The heavy union ----------------------------------------------------------------------
+  declare -a _hleg_pids=()
+  _leg_i=0
+  while IFS= read -r spec; do
+    _leg_i=$(( _leg_i + 1 ))
+    enumerate_leg "$spec" "$WORK/hleg_$_leg_i" scripts-heavy < /dev/null &
+    _hleg_pids[$(( _leg_i - 1 ))]=$!
+  done < "$WORK/legs_heavy"
+
   : > "$WORK/union_heavy"
   _leg_i=0
   while IFS= read -r spec; do
     _leg_i=$(( _leg_i + 1 ))
-    enumerate_leg "$spec" "$WORK/hleg_$_leg_i" scripts-heavy
-    _n=$(wc -l < "$WORK/hleg_$_leg_i" | tr -d ' ')
-    if (( _n >= 1 )); then
-      pass "heavy leg $spec enumerated $_n assigned registration(s)"
+    _rc=0; wait "${_hleg_pids[$(( _leg_i - 1 ))]}" || _rc=$?
+    if (( _rc != 0 )); then
+      fail "heavy leg $spec enumerate child exited $_rc — a dead child OR a leg the runner refused (zero-assignment) cannot prove its assigned set, so its green would mean nothing"
     else
-      fail "heavy leg $spec enumerated ZERO registrations — a leg assigned nothing is a leg whose green means nothing"
+      _n=$(wc -l < "$WORK/hleg_$_leg_i" | tr -d ' ')
+      pass "heavy leg $spec enumerated $_n assigned registration(s)"
     fi
     cat "$WORK/hleg_$_leg_i" >> "$WORK/union_heavy"
   done < "$WORK/legs_heavy"
@@ -508,10 +571,22 @@ fi
 # totality case. For the 3-member group, {2,3} exercises 2+1 and 1+1+1 — both still total.
 for altK in 2 3; do
   if (( altK > REF_H )); then continue; fi
-  : > "$WORK/alt_hunion"
+  declare -a _alth_pids=()
+  _alt_i=0
   for k in $(seq 1 "$altK"); do
-    enumerate_leg "$k/$altK" "$WORK/alt_hleg" scripts-heavy
-    cat "$WORK/alt_hleg" >> "$WORK/alt_hunion"
+    enumerate_leg "$k/$altK" "$WORK/alt_hleg_${altK}_${k}" scripts-heavy &
+    _alth_pids[$_alt_i]=$!
+    _alt_i=$(( _alt_i + 1 ))
+  done
+  : > "$WORK/alt_hunion"
+  _alt_i=0
+  for k in $(seq 1 "$altK"); do
+    _rc=0; wait "${_alth_pids[$_alt_i]}" || _rc=$?
+    _alt_i=$(( _alt_i + 1 ))
+    if (( _rc != 0 )); then
+      fail "non-canonical heavy K=$altK leg $k enumerate child exited $_rc — the union below is built from a lost leg"
+    fi
+    cat "$WORK/alt_hleg_${altK}_${k}" >> "$WORK/alt_hunion"
   done
   _an=$(wc -l < "$WORK/alt_hunion" | tr -d ' ')
   sort -u "$WORK/alt_hunion" > "$WORK/alt_hsorted"
@@ -528,9 +603,42 @@ done
 # SCRIPTS_SHARD=4/5 over a 3-registration group passes every syntactic check and matches no
 # ordinal — the leg must hit the zero-assignment refusal (exit 2) rather than report green over
 # zero coverage. Assert the message, not just the rc.
+# The remaining heavy probes are all independent children — fanned out together
+# (1 over-spec + 4 malformed + 1 webplat + 1 unset + 1 TEST_GROUP=all = 8),
+# each writing its own $WORK file, evaluated serially below in declared order.
 _over_h=$(( REF_H + 1 ))
-_over_h_err=$(env SCRIPTS_SHARD="${_over_h}/5" TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
-  bash "$RUNNER" --enumerate scripts-heavy 2>&1 >/dev/null || true)
+# `${_over_h}/${_over_h}` (not a literal denominator): the spec must stay VALID-but-
+# unassignable at any REF_H — a hardcoded N breaks the row the day the group grows past it.
+env SCRIPTS_SHARD="${_over_h}/${_over_h}" TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate scripts-heavy >/dev/null 2>"$WORK/over_h_err" &
+_over_h_pid=$!
+
+declare -a _malh_specs=() _malh_pids=()
+_malh_n=0
+for bad in "0/3" "abc" "" "１/３"; do
+  _malh_specs[$_malh_n]="$bad"
+  env SCRIPTS_SHARD="$bad" TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --enumerate scripts-heavy >/dev/null 2>&1 &
+  _malh_pids[$_malh_n]=$!
+  _malh_n=$(( _malh_n + 1 ))
+done
+
+env SCRIPTS_SHARD="1/3" TEST_GROUP=webplat SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate webplat >/dev/null 2>&1 &
+_webplat_pid=$!
+
+env -u SCRIPTS_SHARD TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate scripts-heavy 2>/dev/null \
+  | grep '^SUITE_REGISTRATION' | cut -f2 | sort -u > "$WORK/unset_heavy" &
+_unset_h_pid=$!
+
+env -u SCRIPTS_SHARD TEST_GROUP=all SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate all 2>/dev/null \
+  | grep '^SUITE_REGISTRATION' | cut -f2 | sort -u > "$WORK/enum_all" &
+_enum_all_pid=$!
+
+wait "$_over_h_pid" || true
+_over_h_err=$(cat "$WORK/over_h_err")
 if grep -qF 'assigned 0 of' <<<"$_over_h_err"; then
   pass "a valid-but-empty heavy assignment (${_over_h}/5, beyond $REF_H registrations) is refused by the zero-assignment check"
 else
@@ -539,13 +647,11 @@ fi
 
 # --- The heavy group obeys the SAME malformed-spec refusal -------------------------------------
 _mal_h_ok=1
-for bad in "0/3" "abc" "" "１/３"; do
-  env SCRIPTS_SHARD="$bad" TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
-    bash "$RUNNER" --enumerate scripts-heavy >/dev/null 2>&1
-  _rc=$?
+for (( _mi = 0; _mi < _malh_n; _mi++ )); do
+  _rc=0; wait "${_malh_pids[$_mi]}" || _rc=$?
   if (( _rc != 2 )); then
     _mal_h_ok=0
-    fail "malformed SCRIPTS_SHARD='$bad' under scripts-heavy exited $_rc, expected 2 (fail closed)"
+    fail "malformed SCRIPTS_SHARD='${_malh_specs[$_mi]}' under scripts-heavy exited $_rc, expected 2 (fail closed)"
   fi
 done
 if (( _mal_h_ok == 1 )); then
@@ -556,9 +662,7 @@ fi
 #
 # The runner's group-scope refusal was widened to {scripts, scripts-heavy}; this row pins the
 # boundary it must NOT have crossed: SCRIPTS_SHARD on an unrelated group still refuses.
-env SCRIPTS_SHARD="1/3" TEST_GROUP=webplat SOLEUR_DISABLE_SESSION_STATE=1 \
-  bash "$RUNNER" --enumerate webplat >/dev/null 2>&1
-_rc=$?
+_rc=0; wait "$_webplat_pid" || _rc=$?
 if (( _rc == 2 )); then
   pass "SCRIPTS_SHARD on an unrelated group (webplat) is still refused — the scope widening stayed scoped"
 else
@@ -566,7 +670,7 @@ else
 fi
 
 # --- Unset runs the full heavy group -----------------------------------------------------------
-enumerate_leg "-" "$WORK/unset_heavy" scripts-heavy
+wait "$_unset_h_pid" || fail "unset-SCRIPTS_SHARD heavy enumerate pipeline exited nonzero — its output file cannot be trusted"
 _un_h=$(sort -u "$WORK/unset_heavy" | wc -l | tr -d ' ')
 if (( _un_h == REF_H )); then
   pass "SCRIPTS_SHARD unset enumerates the full heavy group ($_un_h) — local runs are unaffected"
@@ -580,14 +684,57 @@ fi
 # running the heavy suites. If the want_* helper drops `all`, the three most expensive suites
 # silently leave every full-gate run — and nothing else here notices (this file scopes its
 # other rows to per-group enumeration).
-env -u SCRIPTS_SHARD TEST_GROUP=all SOLEUR_DISABLE_SESSION_STATE=1 \
-  bash "$RUNNER" --enumerate all 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 \
-  | sort -u > "$WORK/enum_all"
+wait "$_enum_all_pid" || fail "TEST_GROUP=all enumerate pipeline exited nonzero — its output file cannot be trusted"
 _missing_all=$(comm -23 "$WORK/ref_heavy" "$WORK/enum_all" | tr '\n' ' ')
 if [[ -z "$_missing_all" ]]; then
   pass "TEST_GROUP=all covers every heavy registration — the full gate cannot silently lose them"
 else
   fail "TEST_GROUP=all is missing heavy registration(s): $_missing_all — want_scripts_heavy dropped the 'all' arm, so the ship gate and monitor silently lost the most expensive suites"
+fi
+
+# --- The mutation battery's CI row ranges must TILE 1..DECLARED_TOTAL --------------------------
+#
+# The battery's own accounting is per-leg: every matrix leg asserts _row_seq reached
+# DECLARED_TOTAL and EXECUTED == its in-range count. What per-leg accounting cannot see is a
+# GAP between the legs' ranges — a new mutation row plus a bumped DECLARED_TOTAL without a
+# matrix re-split executes in NO CI leg while every leg's own checks stay green (shrink
+# fails closed: B > DECLARED_TOTAL exits 2 in the flag validator; growth is silent).
+# Assert the disjoint contiguous tiling here, where the drift shows up.
+_decl_total="$(grep -m1 '^DECLARED_TOTAL=' "$REPO_ROOT/plugins/soleur/test/scripts-shard-totality-mutations.sh" | cut -d= -f2)"
+awk '
+  /^  shard-totality-mutations:$/ { inj=1; next }
+  inj && /^  [a-z0-9_-]+:$/ { inj=0 }
+  inj && /rows:/ {
+    line=$0
+    gsub(/.*rows:[[:space:]]*\[/, "", line); gsub(/\].*/, "", line)
+    n=split(line, a, ",")
+    for (i=1; i<=n; i++) { gsub(/[" \t]/, "", a[i]); if (a[i] != "") print a[i] }
+  }
+' "$CI_YML" > "$WORK/row_ranges"
+if [[ -z "$_decl_total" || ! "$_decl_total" =~ ^[0123456789]+$ ]]; then
+  fail "could not read DECLARED_TOTAL from the mutation battery — the tiling check is ungrounded"
+elif [[ ! -s "$WORK/row_ranges" ]]; then
+  fail "ci.yml's shard-totality-mutations declares no rows: ranges — the battery is not split as declared (an unsplit job must not ship a --rows contract it ignores)"
+else
+  _expect=1; _tile_ok=1; _tile_why=""
+  while IFS= read -r _rr; do
+    if [[ ! "$_rr" =~ ^([0123456789]+)-([0123456789]+)$ ]]; then
+      _tile_ok=0; _tile_why="malformed range '$_rr'"; break
+    fi
+    _ra=$((10#${BASH_REMATCH[1]})); _rb=$((10#${BASH_REMATCH[2]}))
+    if (( _ra != _expect )); then
+      _tile_ok=0; _tile_why="range '$_rr' starts at $_ra, expected $_expect (gap or overlap)"; break
+    fi
+    _expect=$(( _rb + 1 ))
+  done < "$WORK/row_ranges"
+  if (( _tile_ok == 1 && _expect != _decl_total + 1 )); then
+    _tile_ok=0; _tile_why="ranges end at $((_expect - 1)), DECLARED_TOTAL is $_decl_total — rows $((_expect))..$_decl_total execute in no CI leg"
+  fi
+  if (( _tile_ok == 1 )); then
+    pass "ci.yml mutation row ranges tile 1..$_decl_total contiguously ($(tr '\n' ' ' < "$WORK/row_ranges"))"
+  else
+    fail "mutation row ranges do not tile 1..$_decl_total: $_tile_why — rows outside the union execute nowhere while every leg's own accounting stays green"
+  fi
 fi
 
 # --- ASSERTION FLOOR --------------------------------------------------------------------------
