@@ -2516,6 +2516,7 @@ describe("Check 10 Form A block — unset plugin root never executes the checked
     const r = runBlock(`CLAUDE_PLUGIN_ROOT=""\n${block}`);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("FAIL: Check 10 parser missing at /skills/");
+    expect(r.out).toContain("plugin root unresolved?");
     expect(r.ledger).toBe("");
   });
 

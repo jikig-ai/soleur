@@ -126,6 +126,10 @@ describe("Slice B AC6 — plugin-root exact-literal carve-out (read-only verbs o
     "bash $(echo ./plugins/soleur)/skills/git-worktree/scripts/worktree-manager.sh list", // command substitution
     `export CLAUDE_PLUGIN_ROOT=/tmp && ${SUBSTITUTED} list`, // segment 1 unsafe
     `${SUBSTITUTED} list\nid`, // embedded newline
+    `${SUBSTITUTED} list\f`, // form feed: String.trim() strips it, bash passes it as argv
+    `${SUBSTITUTED} list `, // NBSP tail
+    `﻿${SUBSTITUTED} list`, // BOM head
+    `${SUBSTITUTED} list `, // line separator tail
     `${SUBSTITUTED} cleanup-merged`, // write verb — not in the exact set
     `${SUBSTITUTED} create feat-x`, // write verb
     `${SUBSTITUTED} draft-pr`, // write verb

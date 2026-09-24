@@ -1254,9 +1254,11 @@ The `:-` sites the Consequences section deferred are migrated. Measured on `orig
 
 `EXACT_LITERAL_SAFE_COMMANDS` is `{substituted-deployed} × {list, ls}`: the skill text as the
 loader delivers it, the token replaced with `SOLEUR_PLUGIN_PATH_DEFAULT`. The SDK passes the plugin
-as `--plugin-dir`, the mechanism A10 measured substituting, so this is the form the hosted Bash
-tool receives. Exact string equality is retained; there is no `^bash` regex and the denylist is
-unchanged. The raw `${CLAUDE_PLUGIN_ROOT}` form is deliberately **not** a member: it is unreachable
+as `--plugin-dir`, the flag whose substitution A10 measured **on the CLI**; the hosted SDK path is
+inferred from that shared flag, not separately measured (the same hedge `agent-env.ts` states), and
+a miss there costs a prompt, not an admission. Exact string equality is retained; there is no
+`^bash` regex, and the check runs **after** every denylist stage with an ASCII-only trim, so the
+carve-out relaxes nothing (a `String.trim()` would have stripped NBSP/BOM that bash passes as argv). The raw `${CLAUDE_PLUGIN_ROOT}` form is deliberately **not** a member: it is unreachable
 on the hosted surface, and admitting a literal `$` would be the first denylist-bypassing member
 that no delivery path produces — the Decision 8 class, dead by construction. An unsubstituted
 token, or a `SOLEUR_PLUGIN_PATH` repoint, misses and falls back to an approval prompt, which is
@@ -1269,7 +1271,7 @@ membership, and pins the emission count at exactly 4.
 The loader substitutes the token in text it **delivers** (a `SKILL.md` body, a command body,
 skill args). A non-`SKILL.md` doc is opened with the Read tool, which returns raw bytes, so its
 token reaches bash **unsubstituted**. Five docs carry one (Guard 4 derives the set from the tree, with a floor of 5). The
-rule has three parts:
+rule has four parts:
 
 1. **The pointer is loader-anchored** (`${CLAUDE_PLUGIN_ROOT}/skills/<s>/references/<f>.md`),
    never a CWD-relative path or a relative markdown link — after `gh pr checkout` a CWD-relative
@@ -1282,9 +1284,18 @@ rule has three parts:
    would override that trusted value with whatever the block says. Off the hosted surface the
    notice tells the agent to prefix each block with `export CLAUDE_PLUGIN_ROOT=<root>`, because
    every Bash call, Monitor task and subagent starts a fresh shell. Unset, the token fails
-   closed (`/skills/…: No such file`, or `unbound variable` under `set -u`); the admin-merge
-   blocks additionally check `.claude-plugin/plugin.json` is readable under the root and abort
-   `exit 5` ("plugin root unresolved") before any `gh` call.
+   closed (`/skills/…: No such file`, or `unbound variable` under `set -u`). The notice has the
+   agent print the variable first: the derived root → proceed; empty → export it; **anything
+   else → stop**, since only the loader or `buildAgentEnv` may have set it (a repository's
+   `.claude/settings.json` `env` block could otherwise pre-set a checkout path the notice never
+   sees).
+4. **The admin-merge blocks refuse a root they cannot trust** before any `gh` call, `exit 5`:
+   unset, relative, missing `.claude-plugin/plugin.json`, or resolving **inside the current
+   checkout**. The last clause is the one that matters — the natural "repair" for exit 5 is
+   `export CLAUDE_PLUGIN_ROOT=$PWD/plugins/soleur`, which would make the `--admin` gate the PR's
+   own `admin-merge-ready.sh`. This is still a **shape check, not authentication** (as A11):
+   a `plugin.json` planted outside the checkout passes; what it removes is the one-keystroke
+   bypass.
 
    *(A first draft opened each block with an export of a cannot-exist sentinel. The design
    pass removed it for the override reason above; the guard now flags any
@@ -1299,10 +1310,24 @@ new reusable `gh pr merge --admin` entry point, a larger trust change than this 
 lease and `cleanup-merged` steps move from working (through the old default arm) to fail-closed.
 On a customer repo the old arm executed the customer's file, so fail-closed is the correct
 trade — and it is a real availability regression in the monorepo on Grok, tracked at #8730.
-**Devin cloud** exec shells do not export the variable, so each needs the export
-(`devin/INSTRUCTIONS.md` already says so).
+The leak side of the same residual: on Grok the nested `SKILL.md` is itself Read from the
+checkout, so its stop-if-unsubstituted clause is text the checkout controls — the fix belongs in
+`harness.ts` `invokeSkill()` naming the installed root (#8730). The admin-merge refusal above holds
+regardless. A worktree created without its lease (`SOLEUR_SESSION_STATE_UNAVAILABLE …
+UNLEASED-and-reapable`) can be reaped by a sibling session's `cleanup-merged`; the marker is loud,
+the data-loss exposure is real on non-substituting harnesses until #8730. **Devin cloud** exec
+shells do not export the variable, so each needs the export (`devin/INSTRUCTIONS.md` already says
+so).
+
+**Fail-open consumers get an explicit presence check.** A script that exits 0 with empty output
+when it cannot run turns an unset root into "nothing found". `ship`'s auto-close scan is the
+instance (empty = no traps, so the PR would be created with one); it now refuses before scanning.
 
 **Unclassified surface.** `plugins/soleur/agents/**` bodies are delivered as subagent prompts,
 but whether the loader substitutes the token there is unmeasured, so this amendment classifies
-them as neither delivery nor Read surface. The one agent site (`legal-document-generator`) is
-quoted bare and fails closed either way.
+them as neither delivery nor Read surface. Their script invocations nevertheless take the bare
+quoted anchor — it fails closed either way, where the CWD-relative `plugins/soleur/…` form they
+used executed the customer's (or the PR author's) file: `agent-finder`'s `run-scan.sh` (a security
+gate — no verdict line now reads as `REVIEW`), `ops-provisioner`'s credential redactor,
+`community-manager`'s router, `ux-design-lead`'s taste-profile validator, and
+`legal-document-generator`. A guard keeps CWD-relative executions out of `agents/**`.

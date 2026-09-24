@@ -819,8 +819,16 @@ DECOY_LEDGER="$(mktemp -p "$TMP" decoy-ledger.XXXXXX)"
 printf '#!/usr/bin/env bash\necho decoy-ran >> "%s"\n' "$DECOY_LEDGER" \
   > "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
 chmod +x "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+# The hop is the SHIPPED line, read out of SKILL.md — a hardcoded copy would stay green
+# if SKILL.md reverted to the default arm. All four emissions must be byte-identical.
+WT_SKILL="$REPO_ROOT/plugins/soleur/skills/git-worktree/SKILL.md"
+LIST_LINES="$(grep -E '^bash "[$][{]CLAUDE_PLUGIN_ROOT[}]/skills/git-worktree/scripts/worktree-manager[.]sh" list$' "$WT_SKILL")"
+if [[ "$(printf '%s\n' "$LIST_LINES" | grep -c .)" -ne 4 || "$(printf '%s\n' "$LIST_LINES" | sort -u | grep -c .)" -ne 1 ]]; then
+  printf '[FATAL] scenario 10b: expected 4 identical bare-anchor list lines in %s, got:\n%s\n' "$WT_SKILL" "$LIST_LINES" >&2; exit 1
+fi
+SHIPPED_LIST="$(printf '%s\n' "$LIST_LINES" | head -1)"
 ( cd "$DECOYTREE" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
-    bash -c 'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" list' \
+    bash -c "$SHIPPED_LIST" \
     >"$TMP/anchor10b.log" 2>&1 )
 rc10b=$?
 if [[ "$rc10b" -ne 0 ]] && grep -q '/skills/git-worktree/scripts/worktree-manager.sh: No such file' "$TMP/anchor10b.log" \

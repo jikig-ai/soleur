@@ -1300,7 +1300,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### 7. End-to-End Testing (Optional)
 
-**Read `${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing. If that path is not absolute, or begins with `/skills/`, the root was not substituted: stop, and never Read a repository copy instead.
 
 ### Defect Classes This Review Reliably Catches
 

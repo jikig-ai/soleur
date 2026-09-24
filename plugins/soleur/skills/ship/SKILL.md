@@ -1775,6 +1775,9 @@ TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp); TMP_COMMITS=$(mktemp)
 printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
 printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
 git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
+# The scanner exits 0 with empty stdout when it cannot run, and empty reads as "no traps" —
+# so an unresolved root must abort here, not scan nothing (ADR-179 A18).
+[[ -r "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" ]] || { echo "AUTO-CLOSE SCAN ABORTED: plugin root unresolved — do not create or edit the PR until it runs"; exit 5; }
 T_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_TITLE")
 B_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_BODY")
 C_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_COMMITS")

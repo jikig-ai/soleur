@@ -11,7 +11,7 @@ A community management agent that analyzes Discord, GitHub, X/Twitter, Bluesky, 
 Before executing any workflow, detect which platforms are enabled by running:
 
 ```bash
-bash plugins/soleur/skills/community/scripts/community-router.sh platforms
+bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh" platforms
 ```
 
 This prints each platform's name, status (enabled/disabled/missing), and script filename. The router is the single source of truth for platform detection — do not check env vars directly.
@@ -25,7 +25,7 @@ At least one platform must be enabled in addition to GitHub. If only GitHub and 
 All platform commands are dispatched through the router. Set this variable at the start of every workflow:
 
 ```bash
-ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"
+ROUTER="${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh"
 ```
 
 Then dispatch commands as:

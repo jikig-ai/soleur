@@ -245,11 +245,23 @@ BLOCK_SRC="$G3/block.sh"
 if ! extract "$REPO_ROOT/$REF_REL" > "$BLOCK_SRC"; then echo "[FATAL] Guard 3: no merge block extracted from $REF_REL" >&2; exit 1; fi
 grep -q '^SHA=<the 40-hex head SHA' "$BLOCK_SRC" || { echo "[FATAL] Guard 3: the block's SHA= placeholder line moved; update g3()" >&2; exit 1; }
 # #7453 (ADR-179 A20): the reference is Read, not loader-delivered, so the token reaches bash
-# unreplaced; the block's first line refuses an unresolved root (exit 5) before any gh call.
-# g3() exports the fixture root, as a hosted session or the agent's own export would; M13 runs
-# the block with the root unset.
-PRESENCE_LINE='[[ -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }'
+# unreplaced; the block's first line refuses an unset, relative or inside-the-checkout root
+# (exit 5) before any gh call — a root inside the checkout would make the gate the PR's own copy.
+# g3() exports the fixture root, as a hosted session or the agent's own export would; M13, M15
+# and M16 run the block with a refused root.
+PRESENCE_LINE='_top=$(git rev-parse --show-toplevel 2>/dev/null); [[ "${CLAUDE_PLUGIN_ROOT}" == /* && -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" && ( -z "$_top" || "$(realpath "${CLAUDE_PLUGIN_ROOT}")/" != "$_top/"* ) ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved or inside this checkout"; exit 5; }'
+REFUSED_MSG='ADMIN-MERGE ABORTED: plugin root unresolved or inside this checkout'
 [[ "$(head -1 "$BLOCK_SRC")" == "$PRESENCE_LINE" ]] || { echo "[FATAL] Guard 3: the block no longer opens with the plugin-root presence check" >&2; exit 1; }
+# Every bash fence that calls admin-merge-ready.sh (the --wait gate, the merge block, the
+# was-green carryover) must OPEN with the presence line — not just the merge block above.
+fence_heads="$(awk '/^[[:space:]]*```bash[[:space:]]*$/ { inb=1; first=""; body=""; next }
+  /^[[:space:]]*```[[:space:]]*$/ { if (inb && body ~ /admin-merge-ready[.]sh/) print first; inb=0; next }
+  inb { l=$0; sub(/^   /, "", l); if (first == "") first=l; body=body l "\n" }' "$REPO_ROOT/$REF_REL")"
+n_fences="$(printf '%s\n' "$fence_heads" | grep -c .)"
+n_guarded="$(printf '%s\n' "$fence_heads" | grep -cxF "$PRESENCE_LINE")"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$n_fences" -eq 3 && "$n_guarded" -eq 3 ]]; then pass "G3-all-gate-fences-open-with-presence-check"
+else fail "G3-all-gate-fences-open-with-presence-check: fences=$n_fences guarded=$n_guarded"; fi
 
 # g3 <id> <sha-line-value> <ready_rcs> <merge_modes> <states> [view_fail] ; runs the block
 g3() {
@@ -311,7 +323,7 @@ sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$TSHA|" "$BLOCK_SRC"
 G3_DIR="$M13" G3_SHA="$TSHA" PATH="$G3/bin:$PATH" env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
   "$TIMEOUT_BIN" 30 bash "$M13/block.sh" > "$M13/out" 2> "$M13/err"
 m13_rc=$?
-if [[ "$m13_rc" -eq 5 ]] && grep -qxF 'ADMIN-MERGE ABORTED: plugin root unresolved' "$M13/out" \
+if [[ "$m13_rc" -eq 5 ]] && grep -qxF "$REFUSED_MSG" "$M13/out" \
    && [[ ! -s "$M13/gh.log" && ! -s "$M13/ready.log" ]]; then
   pass "M13-unset-root-aborts-5"
 else
@@ -335,18 +347,49 @@ grep -qF "$OLD_ARM" "$M14/block.sh" || { echo "[FATAL] M14: the pre-migration re
     "$TIMEOUT_BIN" 30 bash "$M14/block.sh" > "$M14/out" 2> "$M14/err" )
 if grep -qx 'decoy-ran' "$M14/decoy.log"; then pass "M14-premigration-block-runs-decoy"
 else fail "M14-premigration-block-runs-decoy: decoy did not run — M13's empty ledger proves nothing"; fi
+# M15/M16: a root that EXISTS and carries plugin.json is still refused when it is relative or
+# sits inside the current checkout — the "repair" an agent reaches for after exit 5 (security
+# review of #8727). The gate stub at that root must not run.
+refused_root() { # <id> <cwd> <root-value>
+  CASES_RUN=$((CASES_RUN + 1))
+  local d="$G3/run-$1"; assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"
+  : > "$d/gh.log"; : > "$d/ready.log"
+  sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$TSHA|" "$BLOCK_SRC" > "$d/block.sh"
+  ( cd "$2" && G3_DIR="$d" G3_SHA="$TSHA" CLAUDE_PLUGIN_ROOT="$3" PATH="$G3/bin:$PATH" \
+      "$TIMEOUT_BIN" 30 bash "$d/block.sh" > "$d/out" 2> "$d/err" )
+  local rc=$?
+  if [[ "$rc" -eq 5 ]] && grep -qxF "$REFUSED_MSG" "$d/out" && [[ ! -s "$d/gh.log" && ! -s "$d/ready.log" ]]; then pass "$1"
+  else fail "$1: rc=$rc out=$(tr '\n' '|' < "$d/out") gh=$(tr '\n' '|' < "$d/gh.log") ready=$(tr '\n' '|' < "$d/ready.log")"; fi
+}
+CHK="$G3/checkout"; assert_fixture_dir "$CHK"; rm -rf "$CHK"; mkdir -p "$CHK/plugins"
+env -i PATH="$PATH" HOME="$G3" git init -q "$CHK" || { echo "[FATAL] M15: git init failed" >&2; exit 1; }
+cp -R "$G3/root" "$CHK/plugins/soleur"
+[[ -x "$CHK/plugins/soleur/scripts/admin-merge-ready.sh" && -r "$CHK/plugins/soleur/.claude-plugin/plugin.json" ]] \
+  || { echo "[FATAL] M15: fixture root copy incomplete" >&2; exit 1; }
+refused_root M15-root-inside-checkout-refused "$CHK" "$CHK/plugins/soleur"
+refused_root M16-relative-root-refused "$G3" "root"
+# Twin control for M15: the SAME root copy, run from outside that checkout, is accepted and
+# its gate runs — so M15's refusal is the checkout test, not a broken copy.
+CASES_RUN=$((CASES_RUN + 1))
+M15C="$G3/run-M15c"; assert_fixture_dir "$M15C"; rm -rf "$M15C"; mkdir -p "$M15C"
+: > "$M15C/gh.log"; : > "$M15C/ready.log"; printf 'ok\n' > "$M15C/merge_modes"; printf 'OPEN %s\nMERGED %s\n' "$TSHA" "$TSHA" > "$M15C/states"
+sed -e 's/<N>/4242/g' -e "s|^SHA=<the 40-hex head SHA.*|SHA=$TSHA|" "$BLOCK_SRC" > "$M15C/block.sh"
+( cd "$G3" && G3_DIR="$M15C" G3_SHA="$TSHA" CLAUDE_PLUGIN_ROOT="$CHK/plugins/soleur" PATH="$G3/bin:$PATH" \
+    "$TIMEOUT_BIN" 30 bash "$M15C/block.sh" > "$M15C/out" 2> "$M15C/err" )
+if [[ -s "$M15C/ready.log" ]] && ! grep -qxF "$REFUSED_MSG" "$M15C/out"; then pass "M15c-same-root-outside-checkout-runs-gate"
+else fail "M15c-same-root-outside-checkout-runs-gate: out=$(tr '\n' '|' < "$M15C/out")"; fi
 # M7: a reference whose merge block cannot be found must not extract (no vacuous pass).
 CASES_RUN=$((CASES_RUN + 1))
 m7="$SANDBOX/m7.md"; cp "$REPO_ROOT/$REF_REL" "$m7"; edit "$m7" '```bash
-   [[ -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }
+   _top=$(git rev-parse --show-toplevel 2>/dev/null); [[ "${CLAUDE_PLUGIN_ROOT}" == /* && -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" && ( -z "$_top" || "$(realpath "${CLAUDE_PLUGIN_ROOT}")/" != "$_top/"* ) ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved or inside this checkout"; exit 5; }
    SHA=<the 40-hex' '```sh
-   [[ -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved"; exit 5; }
+   _top=$(git rev-parse --show-toplevel 2>/dev/null); [[ "${CLAUDE_PLUGIN_ROOT}" == /* && -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" && ( -z "$_top" || "$(realpath "${CLAUDE_PLUGIN_ROOT}")/" != "$_top/"* ) ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved or inside this checkout"; exit 5; }
    SHA=<the 40-hex'
 if extract "$m7" >/dev/null; then fail "M7 (extraction succeeded on a reference with no merge block)"; else pass "M7"; fi
 
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=35
+_min_cases=39
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

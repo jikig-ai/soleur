@@ -797,7 +797,7 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # missing parser would leave $CMD empty and Form B would silently parse a DIFFERENT
 # command. Never fall through.
 FORM_A_AWK="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/parse-form-a.awk"
-test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK"; exit 1; }
+test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK (plugin root unresolved? export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>, never a path inside this repository)"; exit 1; }
 CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
 AWK_RC=$?
 if [[ "$AWK_RC" -ne 0 ]]; then

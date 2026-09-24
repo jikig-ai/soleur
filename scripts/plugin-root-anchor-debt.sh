@@ -6,16 +6,18 @@
 #
 # This is a SIGNAL, not the gate. The gate is Guards 1/2 in
 # apps/web-platform/test/plugin-root-anchoring.test.ts (required CI context), whose
-# predicates are strictly wider; the three needles below are literal substrings those
-# guards are anchored on, so a nonzero here always implies a red guard there.
+# predicates are wider; the needles below are literal substrings of the forms those guards
+# reject, so a nonzero here is almost always a red guard there (prose quoting e.g.
+# "CLAUDE_PLUGIN_ROOT: unbound variable" can trip a needle without tripping a guard).
 #
 # Exit: 0 when n is 0; 1 when n > 0; 2 when git grep itself failed (not a result).
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="$(git -C "$ROOT" grep -l -F \
   -e 'CLAUDE_PLUGIN_ROOT:' -e 'CLAUDE_PLUGIN_ROOT-' -e '{CLAUDE_PLUGIN_ROOT=' \
-  -e '{CLAUDE_PLUGIN_ROOT?' -e '{CLAUDE_PLUGIN_ROOT+' -e 'show-toplevel)/plugins/soleur/' \
-  -- 'plugins/soleur/**/*.md' 2>&1)"
+  -e '{CLAUDE_PLUGIN_ROOT?' -e '{CLAUDE_PLUGIN_ROOT+' -e '{CLAUDE_PLUGIN_ROOT%' \
+  -e '{CLAUDE_PLUGIN_ROOT#' -e 'show-toplevel)/plugins/soleur/' \
+  -- ':(glob)plugins/soleur/**/*.md' 2>/dev/null)"
 rc=$?
 case "$rc" in
   0) n=$(printf '%s\n' "$out" | grep -c .) ;;

@@ -17,7 +17,8 @@ This loads the plugin directly without installation, so you can test changes imm
 Skills resolve their scripts through the loader's plugin root (`${CLAUDE_PLUGIN_ROOT}`), not the working
 directory, so a session only runs a worktree's edited scripts when it was started with
 `claude --plugin-dir "$PWD/plugins/soleur"` from that worktree. The absolute root in any emitted command shows
-which copy ran.
+which copy ran. Never start a session with `--plugin-dir` pointing at a checkout of a PR you did not author: every
+gate the skills run, including the `--admin` merge gate, would then be that author's copy.
 
 ### Codex
 

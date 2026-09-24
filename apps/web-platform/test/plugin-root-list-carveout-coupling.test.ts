@@ -17,8 +17,8 @@ import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../server/plugin-path";
  * stay in lockstep.
  *
  * Without this guard the two drift silently: a future edit that emits a
- * `list`/`ls` of THIS script in a shape NOT in the carve-out — a different
- * fallback anchor (`../../plugins/soleur`, bare `plugins/soleur`), a missing
+ * `list`/`ls` of THIS script in a shape NOT in the carve-out — a default arm or a
+ * CWD-relative anchor (bare `plugins/soleur`), a missing
  * `bash ` prefix, or a trailing argument (`list --json`, `list --porcelain`) —
  * does not error; it just degrades from a no-prompt safe-bash auto-approve to
  * the review-gate prompt (on the CLI, and on the autonomous server before
@@ -55,7 +55,7 @@ const SKILLS_ROOT = resolve(REPO_ROOT, "plugins/soleur/skills");
 //
 //  - `(?:bash )?` — the `bash ` prefix is OPTIONAL. The carve-out members carry
 //    it, but a migrated skill can also emit the no-`bash`/env-prefixed direct-exec
-//    form (this diff already uses that shape for the `feature` verb). Matching it
+//    form (brainstorm's workshops use that shape for the `feature` verb). Matching it
 //    too means a future no-`bash` `list` is EXTRACTED and fails membership (→ RED)
 //    instead of silently escaping the guard.
 //  - trailing `[^\n`|;&)>]*` — captures ANY argument tail up to a command
@@ -73,7 +73,7 @@ const LIST_EMISSION =
 
 const TOKEN = "${CLAUDE_PLUGIN_ROOT}";
 
-/** Mirror safe-bash stage 0: strip one trailing safe stderr redirect, then trim. */
+/** Mirror safe-bash stage 1d: strip one trailing safe stderr redirect, then trim. */
 function normalise(emission: string): string {
   return emission.replace(TRAILING_SAFE_REDIRECT, "").trim();
 }

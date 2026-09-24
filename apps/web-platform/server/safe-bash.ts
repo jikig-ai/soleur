@@ -149,15 +149,15 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // connected repo's UNTRUSTED committed copy, so auto-approving it ran untrusted
   // code. It now lives in EXACT_LITERAL_SAFE_COMMANDS below as the loader-substituted
   // deployed form (ADR-179 A19, #7453), matched by exact string equality (no
-  // `$`-denylist relaxation). See isSafeSingleSegment stage 0.
+  // denylist relaxation). See isSafeSingleSegment stage 1d.
 ];
 
 // Exact-literal safe-command carve-out (Slice B, #6121; re-anchored by #7453 — rationale in
 // ADR-179 A19). A CLOSED set of the `worktree-manager.sh list|ls` literals the git-worktree
 // skill emits, as the SDK loader delivers them: the token substituted with the deployed root
-// (`--plugin-dir`, the mechanism A10 measured). Matched by EXACT string equality on the trimmed,
-// redirect-stripped segment — zero arg variation, and the `$`/`{`/`}` denylist is not loosened
-// for any other command. An unsubstituted token, or a SOLEUR_PLUGIN_PATH repoint, misses and
+// (`--plugin-dir`; A10 measured the substitution on the CLI, and the SDK uses the same flag).
+// Matched by EXACT string equality on the redirect-stripped segment after every denylist
+// has run (stage 1d) — zero arg variation, and no denylist is relaxed. An unsubstituted token, or a SOLEUR_PLUGIN_PATH repoint, misses and
 // falls back to an approval prompt (fail-safe). The root is the constant, not getPluginPath(),
 // so the admitted set cannot depend on the environment at import time. Write verbs stay gated.
 const WORKTREE_MANAGER_DEPLOYED_FORM = `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh"`;
@@ -237,15 +237,6 @@ function isSafeSingleSegment(segment: string): boolean {
   // Strip a single recognized trailing stderr redirect (AC10). Anything else
   // containing `>`/`<`/`&` survives to the denylist below.
   const candidate = segment.replace(TRAILING_SAFE_REDIRECT, "");
-  // Stage 0: exact-literal carve-out (Slice B, #6121). A CLOSED set of known
-  // fixed command literals (the loader-substituted worktree-manager list|ls, which carry
-  // quotes the denylist would otherwise reject). Matched by EXACT equality on the
-  // trimmed segment BEFORE the `$`/`{`/`}` denylist, so these — and ONLY these
-  // precise strings — are admitted; any arg variation, injection tail, or
-  // different var/path falls through to the intact denylist below. `&&`-chains
-  // are still decomposed by isBashCommandSafe, so a `<literal> && evil` segment 2
-  // is independently denied. See EXACT_LITERAL_SAFE_COMMANDS.
-  if (EXACT_LITERAL_SAFE_COMMANDS.has(candidate.trim())) return true;
   // Stage 1: raw-string metacharacter denylist. Run BEFORE trim so
   // leading/trailing newlines (for example) are caught.
   if (SHELL_METACHAR_DENYLIST.test(candidate)) return false;
@@ -256,6 +247,13 @@ function isSafeSingleSegment(segment: string): boolean {
   // Stage 1c: reject the `--output=<file>` write flag before the allowlist
   // (review PR #4868) so a read verb cannot write/truncate an arbitrary path.
   if (FILE_WRITE_FLAG_DENYLIST.test(candidate)) return false;
+  // Stage 1d: exact-literal carve-out (Slice B, #6121; ADR-179 A19). A CLOSED set of
+  // fixed literals no SAFE_BASH_PATTERNS entry matches (a quoted absolute script path).
+  // It runs AFTER every denylist, so the carve-out bypasses none of them, and trims only
+  // ASCII space/tab — String.trim() also strips \f, NBSP and U+FEFF, which bash does not
+  // treat as separators, so `<literal>\u00a0` would reach the script as a different argv.
+  // Any arg variation or different path falls through to the allowlist and fails.
+  if (EXACT_LITERAL_SAFE_COMMANDS.has(candidate.replace(/^[ \t]+|[ \t]+$/g, ""))) return true;
   const trimmed = candidate.trim();
   if (trimmed.length === 0) return false;
   // Stage 2: leading-token allowlist match against trimmed segment.
