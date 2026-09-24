@@ -137,3 +137,12 @@ A premise from a sibling plan ("no legitimate unmerged state on push") was adopt
 |---|---|---|
 | #8605 | Handle dev-ledger rows owned by closed-unmerged branches, and add a self-service dev-reconcile path for applied migrations | open |
 | #8606 | Fix the `run-migrations.sh` unmerged-apply gate, which is vacuous when run from `apps/web-platform` (cwd-relative pathspec) | open |
+
+### Status note — 2026-09-24
+
+Both action items are resolved by PR #8642 (ADR-061 amendment for #8605/#8606):
+
+| Issue | Resolution | Status |
+|---|---|---|
+| #8605 | The probe classifies rows held only by a branch whose PR closed unmerged at its tip as `closed-grace`, then `closed-tracked` or `closed`; `dev-ledger-reconcile.yml` discards a PR's dev rows when it closes unmerged or on dispatch from `main` | resolved by PR #8642 |
+| #8606 | `run-migrations.sh` anchors its unmerged-apply pathspecs with `:(top,literal)`, so the gate names the same paths from `apps/web-platform` as from the repo root | resolved by PR #8642 |

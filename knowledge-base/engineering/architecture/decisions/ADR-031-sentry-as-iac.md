@@ -810,6 +810,11 @@ Terraform genuinely owns them. **`auth-per-user-loop` alone** keeps the old post
 definition of a rule whose trigger the provider cannot express. A file-level grep for
 `ignore_changes` cannot tell these two sets apart; resolve it per RESOURCE BLOCK.
 
+> **Superseded 2026-09-23 (#4781):** since #8451 `auth-per-user-loop` is a Terraform-frozen
+> `sentry_alert` pinned by `scripts/sentry-alert-live-fidelity.sh`; `configure-sentry-alerts.sh`
+> is no longer its definition or a repair path (its `rules/` endpoint returns 410). Repair is a
+> PUT from the committed capture.
+
 **The script was the drift source, not the record of it.** Measured 2026-09-04: live Sentry
 and the committed `.tf` both carried `frequency` 60 / 61 / 62 for the three burst rules, while
 `configure-sentry-alerts.sh` wrote 60 for all three. The direction of that drift is the

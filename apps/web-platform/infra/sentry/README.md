@@ -22,8 +22,9 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   existence only, until #7985's native conversion. No resource reads the legacy
   endpoint, and `apply-sentry-infra.yml`'s brownout retry was deleted in #8451.
 
-  `configure-sentry-alerts.sh` is NOT deleted: it remains the
-  only executable definition of `auth-per-user-loop`. Older rules that terraform
+  `configure-sentry-alerts.sh` is NOT deleted, but it is not a repair path: its `rules/`
+  endpoint returns 410 and it owns none of the rules; `auth-per-user-loop` is
+  repaired by a PUT from the committed capture (#4781). Older rules that terraform
   owns from real `conditions_v2`/`filters_v2`/`actions_v2` include the
   BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`, #4364).
   `byok-art-33-breach` uses `action_match = "any"` over three event-lifecycle
