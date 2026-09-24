@@ -26,12 +26,13 @@ until #8651 closes. Retirement is partial:
 - **5.3b and 5.4 wait on the #6122 soak.** It cannot pass until #8651 closes (its `WEB_BLOCKER`
   arm), and its backfilled verdict is a recorded FAIL, so it needs a re-armed window. Re-arming,
   and authorizing #6500 and #6122, are the operator's acts on #6122.
-- **5.5 is open.** The credential is a fine-grained PAT on a machine account (`variables.tf`
-  `ghcr_read_token`). Its current Doppler value returns 401, and the operator's own GitHub account
-  holds no personal access token of either type (2026-09-24). The machine account's token list has
-  not been checked.
+- **5.5 is done** (2026-09-24). The PAT's owner, `GHCR_READ_USER`, is the operator's own
+  org-admin account (measured: it equals the operator's GitHub login), not a machine account as
+  `variables.tf` and the 2026-07-30 correction describe it. On 2026-09-24 that account listed no
+  classic and no fine-grained personal access token, and the Doppler value returns 401. It is not
+  rotated, by design: no host is meant to read GHCR after 5.3b-i.
 
-This ADR flips to **accepted** (task 5.6) when 5.3b-i, 5.3b-iii, 5.4 and 5.5 are all complete.
+This ADR flips to **accepted** (task 5.6) when 5.3b-i, 5.3b-iii and 5.4 are all complete.
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
@@ -73,7 +74,9 @@ account". That is wrong on the repo's own facts, and the error mattered because 
 inflated the claim: `variables.tf` describes `GHCR_READ_TOKEN` as a *fine-grained*
 read:packages PAT **on a machine account**, and this PR's own ADR-088 edit calls it the
 "machine-account PAT". So the revoked credential was already non-personal in the
-machine-vs-human sense. What is actually structural is narrower: no GHCR pull credential
+machine-vs-human sense. (**Superseded 2026-09-24:** measured, `GHCR_READ_USER` is the operator's own
+org-admin account, so the credential WAS personal; the `variables.tf` "machine account" wording was
+never checked. See "Amendment 2026-09-24 (#6122)".) What is actually structural is narrower: no GHCR pull credential
 can be minted **without a browser** — a fine-grained PAT has no creation API, and the App
 installation token is DENIED the pull (ADR-088 arm-b). Read (d)(1) below against that
 narrower claim: "a non-personal credential works" was already satisfied, so the open bar
@@ -1446,14 +1449,16 @@ copy` fills zot from there.
   - 5.3b-iii: remove the GHCR egress allow. Needs re-scoping first: the cosign verifier and zot's
     own image still pull anonymously from ghcr.io, and a cut would fail verification open
     (`IMAGE_VERIFY_MODE` defaults to `warn`).
-- **5.5 stays open.** The leaked credential is a fine-grained read:packages PAT on a **machine
-  account** (`variables.tf` `ghcr_read_user` / `ghcr_read_token`; the 2026-07-30 correction above).
-  Two facts are established: the value now in `GHCR_READ_TOKEN` returns 401 (amendment 2026-07-30),
-  and on 2026-09-24 the operator's own GitHub account listed no classic and no fine-grained personal
-  access token. Neither shows the machine account's tokens: that list must be read (or the machine
-  account removed from the org) before 5.5 closes. Rotation is not moot either: the fresh-boot
-  sites still read `GHCR_READ_TOKEN` until 5.3b-i and #8036 item 1d land, so a new PAT written to
-  Doppler would be picked up again.
+- **5.5 is done.** The PAT's owner is the account in `GHCR_READ_USER`. Measured on 2026-09-24,
+  that is the operator's own org-admin GitHub account. This **corrects the 2026-07-30
+  correction** above, which called the credential a PAT "on a machine account" by quoting the
+  `variables.tf` description; that description was never measured. On 2026-09-24 the operator's
+  account listed no classic and no fine-grained personal access token, so no PAT minted on it is
+  live, and the value in `GHCR_READ_TOKEN` returns 401 (amendment 2026-07-30). The PAT is **not
+  rotated**, deliberately: a new PAT written to Doppler would be picked up again by the fresh-boot
+  sites that still read `GHCR_READ_TOKEN` until 5.3b-i and #8036 item 1d remove them, and B3
+  intends no host to read GHCR. The stale `variables.tf` description goes with those variables in
+  5.4.
 - **5.4** and **5.6** are unchanged.
 
 **What this does NOT decide.** Option A (#6126) stays open as a separate availability question.

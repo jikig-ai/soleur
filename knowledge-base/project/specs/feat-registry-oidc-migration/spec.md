@@ -55,7 +55,7 @@ minter disabled.
 - TR2: Minter keypair/JWKS for zot trust; control-plane signs, zot validates. Security-review the trust model (SECURITY DEFINER of the supply chain).
 - TR3: Observability: minter failures + zot health reachable from Sentry/Better Stack without SSH (`hr-no-ssh-fallback-in-runbooks`, `hr-observability-as-plan-quality-gate`). zot-down must alert before it gates a host boot.
 - TR4: Break-glass: keep interim GHCR PAT documented as fallback until zot HA is proven; do not revoke early (`decision-challenges.md` incident note).
-- TR5: Rotate the exposed classic PAT (overwritten during the 2026-07-05 minter misfire). (**Note 2026-09-24:** ADR-096's 2026-07-30 correction records the credential as a fine-grained PAT on a machine account; task 5.5 tracks it.)
+- TR5: Rotate the exposed classic PAT (overwritten during the 2026-07-05 minter misfire). (**Done 2026-09-24:** the owning account is the operator's own; it holds no PAT and the Doppler value returns 401. See task 5.5 and ADR-096 "Amendment 2026-09-24 (#6122)".)
 - TR6: Retire on completion: `ghcr-read-credential.tf`, `ghcr-minter-doppler-token.tf` (or repurpose to zot), and the GHCR `GHCR_MINTER_DISABLED` gate.
 
 <!-- lint-infra-ignore end -->
