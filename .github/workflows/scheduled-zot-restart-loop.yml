@@ -35,6 +35,15 @@
 # the step never `exit 1`s, so a FIRE/TRANSIENT never self-darks the final Sentry check-in.
 #
 # Closes #6291.
+#
+# TRIGGERS (#8495, ADR-246). PRIMARY: the web server's watchdog dispatch clock
+# (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every
+# hourly slot from both web hosts — GitHub's `schedule:` delivered this cron only once
+# every 2-7 h. FALLBACK: the `schedule:` cron below (kept byte-identical; the Sentry
+# parity test requires it). The zot registry is where the Inngest host pulls its image
+# at boot (#8539), so this watcher is dispatched by the web hosts, not by Inngest. Keep
+# `workflow_dispatch`, the concurrency group (cancel-in-progress: false) and no other
+# trigger: sentry-monitor-iac-parity.test.ts pins all three.
 
 name: "Scheduled: Zot Restart-Loop Recurrence Alarm"
 
@@ -43,9 +52,9 @@ on:
     # Hourly cadence (#8450, relaxed from */30 for the org concurrency budget). Detection is
     # WINDOW-bound, not poll-bound: the checker reads a 3h WINDOW against the reporter's 5-min
     # emit (~36 events/boot >> CLIMB_N=3), so a loop is caught regardless of which tick sees it —
-    # and measured delivery of the old */30 cadence already gapped up to 243 min. The paired
-    # Sentry self-liveness margin moved 30 → 120 in cron-monitors.tf to bound a genuinely dark
-    # alarm at ~2h while absorbing delivered-interval jitter.
+    # and measured delivery of the old */30 cadence already gapped up to 243 min. #8450 widened
+    # the paired Sentry margin 30 → 120 for that jitter; since #8495 this cron is only the
+    # fallback behind the web-server dispatch clock, so the margin is back to 30 (cron-monitors.tf).
     - cron: '0 * * * *'
   workflow_dispatch: {}
 

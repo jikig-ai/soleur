@@ -27,6 +27,15 @@
 # are unchanged (read-only GET of the inventory hook).
 #
 # Tracks #5542.
+#
+# TRIGGERS (#8495, ADR-246). PRIMARY: the web server's watchdog dispatch clock
+# (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every
+# 15-min slot from both web hosts — GitHub's `schedule:` delivered this */15 cron only
+# once every 2-7 h, so a real Inngest outage went unseen for hours. FALLBACK: the
+# `schedule:` cron below (kept byte-identical; the Sentry parity test requires it).
+# The clock is not an Inngest function for the reason in the header above. Keep
+# `workflow_dispatch`, the concurrency group (cancel-in-progress: false) and no other
+# trigger: sentry-monitor-iac-parity.test.ts pins all three.
 
 name: "Scheduled: Inngest Health Watchdog"
 
