@@ -138,13 +138,20 @@ archaeology.
 added 2026-09-24).** `vinngest-v1.1.39` was cut on a commit that existed only on
 an unmerged PR branch. Its publish built an image from unreviewed bytes, and
 its bump PR merged the pin 93 minutes before the source PR did. Every tag from
-`v1.1.26` to `v1.1.39` had been cut the same way.
+`v1.1.26` to `v1.1.39` had been cut the same way (16 of 44 tags are off `main`:
+those 14 plus `v1.1.14` and `v1.1.24`).
 
 - **The bump's `ancestry` stage is the authoritative check.** It runs before
   `crane`, resolves `refs/tags/vinngest-<target>^{commit}` explicitly (never
-  the bare name), and refuses in three cases: a shallow checkout, a target
-  that is not an ancestor of the `main` checkout, or a `merge-base` rc other
-  than 0/1. It is authoritative because the bump job checks out `main` and
+  the bare name), and refuses when: the checkout is shallow (or git cannot
+  say), the tag does not resolve to a commit, the target is not an ancestor
+  of the `main` checkout, `merge-base` exits other than 0/1, or the tag no
+  longer names the commit the build checked out (below). When the off-main
+  target is the tag `main` pins today, the refusal says so and forbids
+  deleting or re-cutting it; otherwise it tells the operator to delete the tag
+  and cut a NEW version on `main`, never a re-used name. A pin above every
+  remaining tag (a deleted pinned tag) is refused at `resolve` as a downgrade.
+  It is authoritative because the bump job checks out `main` and
   runs main's copy of the script. The caveat is that the job's own
   *definition* still comes from the tagged commit's YAML, so this holds only
   for branches whose copy of `bump-cloud-init-pin` is unmodified. The threat
@@ -156,13 +163,23 @@ its bump PR merged the pin 93 minutes before the source PR did. Every tag from
   flight would pin the first build's digest, because the signed and resolved
   digests would agree. A workflow copy that predates this change passes no
   `--signed-commit` and fails closed at `args`.
+- **The pinned digest is bound to its build commit.** The build stamps
+  `org.opencontainers.image.revision=<checked-out commit>` into the image
+  config (so the digest covers it), and the bump reads it back with
+  `crane config` and requires it to equal the target's commit. This is the
+  only link between a digest and a commit on the `mirror_only` path, which
+  builds nothing: without it, an image built from an off-main commit under a
+  tag later re-pointed onto `main` would pass ancestry, the binding and the
+  digest cross-check. An image with no label (every image before this change)
+  is pinned only with auto-merge withheld.
 - **The build job's inline refusal is defence-in-depth.** It judges `HEAD`
   against `refs/remotes/origin/main` (`fetch-depth: 0`) before
   `Build + verify + push`, so an off-main image is never built at all. The
   dispatch checkout is the fully qualified `refs/tags/<ref>`. A tag push runs
-  the tagged commit's YAML, so a branch forked before this change carries no
-  refusal. That branch can still build an image, but the image is inert
-  because the bump refuses to pin it.
+  the tagged commit's YAML (a dispatch runs the copy on the ref it was
+  dispatched from), so a branch forked before this change carries no refusal.
+  That branch can still build an image. It is not auto-pinned, because the
+  bump refuses it, but it is not inert: see Residuals.
 - **`mirror_only` is not refused.** It builds nothing and cannot move a
   digest. Refusing it would permanently strand the legacy off-main versions
   from zot backfill, a rollback path. The bump still judges the target
@@ -174,7 +191,9 @@ its bump PR merged the pin 93 minutes before the source PR did. Every tag from
   compatible shape is to dispatch the build from `main` (#4326).
 - **Residuals.** An old `main` commit whose code was later reverted passes
   both checks. So does a tag re-pointed between two on-main commits. A
-  hand-authored pin PR to an off-main tag is not covered by either check.
+  hand-authored pin PR to an off-main tag is not covered by either check, and
+  neither is `deploy-inngest-image.yml`, which deploys any published
+  `vX.Y.Z` to the live host by tag with no ancestry check (#8780).
 
 **Sequencing.** After this merges, the carrier-changing PR flow is: merge the
 PR first, then tag the squash-merge commit on `main` (runbook
@@ -223,8 +242,12 @@ That switch is safe only after the first on-main re-tag (`v1.1.40`).
 
 Added §7 and the `ancestry` stage (§2, §6). Until #8782 lands, an off-main
 semver-max tag leaves `main` stuck in a loud, deliberate state: AC6 demands
-that tag's pin, and the bump refuses to author it. The refusal names the tag
-and prints the delete command, and deleting the tag clears both.
+that tag's pin, and the bump refuses to author it. When that tag is NOT the
+one `main` pins, the refusal prints the delete command and deleting it clears
+both. When it IS the pinned tag (the state right after this change merged:
+`main` pins off-main `v1.1.39`), deleting it would break the live pin, so the
+refusal forbids that and the way out is cutting a new, higher version on
+`main` (the `v1.1.40` re-anchor).
 
 ## Verification
 
@@ -236,13 +259,16 @@ and prints the delete command, and deleting the tag clears both.
   shapes), existing PR, degraded mirror, merge-arm failure, merge-arm
   withheld on non-max signed tag, stale-PR supersede, human stale-PR
   preservation, malformed args, unresolved digest (fatal on-target,
-  deferred off-target). §7 (#8747) adds rows over real git ancestry:
+  deferred off-target). §7 (#8747) adds rows over real git ancestry
+  (plus the legacy-pin, downgrade and image-provenance cases):
   unmerged-branch tag, squash-merged content, off-main semver-max above an
   on-main signed tag, older off-main tag, true merge commit, tag on an older
   main commit, undecidable walk, missing tag commit, bare-name shadow,
   shallow checkout, re-pointed tag and missing `--signed-commit`. It also
-  adds a harness that runs the build job's shipped refusal step against
-  fixture repos.
+  adds a harness that runs the build job's shipped record and refusal steps
+  against fixture repos shaped like an actions/checkout tag checkout, and
+  `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh` pins the
+  refusal's `mirror_only` gating.
 - `.github/scripts/test/run-all.sh` — suite registered; Bash-only by
   construction for the required merge-group path.
 - `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — AC6/AC6b/

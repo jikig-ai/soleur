@@ -8,7 +8,8 @@
 # which predates the workflow), so a `.github/scripts/*.sh` helper would not
 # exist there and the step would die with exit 127 (the #4700 regression).
 # Which copy of the workflow runs depends on the trigger: a dispatch runs the
-# default branch's copy, but a tag PUSH runs the copy in the tagged commit — so
+# copy on the ref it was dispatched from (the default branch unless --ref names
+# another), and a tag PUSH runs the copy in the tagged commit — so
 # an inline step is only as current as the branch the tag was cut on (#8747:
 # that is why the bump script's `ancestry` stage, not the build job's refusal,
 # is the authoritative off-main check).

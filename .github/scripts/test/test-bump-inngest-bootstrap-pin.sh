@@ -63,7 +63,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=416   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=417   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1856,6 +1856,17 @@ run_record i13 "$H" "$s"
 run_step i13 "$H" v1.2.0 "$REC_COMMIT"
 step_rc  'g2b.I13:chain-side-rc1' 1
 step_has 'g2b.I13:wording' "$OFF_MAIN_MSG"
+
+# I14 — the build step resolves the tag by its FULL name, like the bump (B8):
+# a `refs/vinngest-v1.2.0` ref pointing at main shadows the bare name. Unreachable
+# on a runner (actions/checkout writes only heads/remotes/tags), pinned anyway so
+# the two copies of the check cannot drift apart on this spelling.
+harness_repo i14
+m=$(git -C "$H" rev-parse refs/remotes/origin/main)
+s=$(h_side refs/remotes/origin/main~1 i14); git -C "$H" tag -a vinngest-v1.2.0 -m r "$s"
+git -C "$H" update-ref refs/vinngest-v1.2.0 "$m"
+run_step i14 "$H" v1.2.0 "$m"
+step_rc 'g2b.I14:bare-name-shadow-rc1' 1
 
 # Guard 2 row 5: regex parity — the script's tag-selection pipeline is
 # AC6-identical. Both files must carry each literal stage.

@@ -291,8 +291,18 @@ else
     "[[ '$PIN' == '$LATEST_TAG' ]]"
   if [[ "$PIN" != "$LATEST_TAG" ]]; then
     echo "        DRIFT: cloud-init.yml pins $PIN but the latest published tag is $LATEST_TAG."
-    echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
-    echo "        apps/web-platform/infra/cloud-init.yml to $LATEST_TAG."
+    # #8747: an off-main semver-max tag is refused by the publish and the bump.
+    # The generic "bump to it" advice would route around that gate by hand.
+    # A subshell rather than `git -C`: read-only, and it keeps this diagnostic
+    # out of the fixture-operand census, whose verb list matches `merge-base`.
+    if ! (cd "$SCRIPT_DIR" && git merge-base --is-ancestor "refs/tags/vinngest-$LATEST_TAG^{commit}" HEAD) 2>/dev/null; then
+      echo "        #8747: vinngest-$LATEST_TAG is NOT on main (or its ancestry cannot be read) — do NOT"
+      echo "        bump to it. Delete it (git push origin :refs/tags/vinngest-$LATEST_TAG) unless main"
+      echo "        pins it, and tag a NEW version on main (runbook inngest-server.md, release step 1)."
+    else
+      echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
+      echo "        apps/web-platform/infra/cloud-init.yml to $LATEST_TAG."
+    fi
   fi
 
   # #6536: the DEDICATED host's pin was guarded by NOTHING. This guard read only

@@ -243,7 +243,7 @@ check("the pin-reading step is gated to match the build step it feeds",
 
 # #8747: the publish-side ancestry refusal. EXACT string: an inverted operand would refuse
 # every legacy backfill (mirror_only builds nothing and cannot move a digest, and the 16
-# off-main versions v1.1.26-v1.1.39 must stay backfillable) while waving every rebuild
+# off-main versions (v1.1.14, v1.1.24, v1.1.26-v1.1.39) must stay backfillable) while waving every rebuild
 # through. The step that records the built commit feeds the bump's --signed-commit on
 # EVERY path, so it must carry no `if:` at all.
 refuse = next((s for s in steps if s.get("name") == "Refuse a commit that is not on main (#8747)"), None)

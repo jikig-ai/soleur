@@ -899,19 +899,27 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    image. It does NOT deploy.
 
    **A tag on a PR-branch commit is refused (#8747, ADR-232 §7).** The build job refuses
-   before building (`::error::vinngest-vX.Y.Z is on commit <sha>, which is not an ancestor
-   of main`). The bump job refuses at stage `ancestry` even when the tagged branch's
-   workflow copy predates the build-side check. Recover by deleting the tag, then re-cutting
-   it on `main` once the PR has merged:
+   before building (`::error::ancestry: vinngest-vX.Y.Z is on commit <sha>, which is not an
+   ancestor of main`) and posts to Slack. A branch forked before the fix carries no
+   build-side check; its bump then dies at stage `args` (no `--signed-commit`), and any
+   other bump run that meets the off-main tag dies at stage `ancestry`. Recover by deleting
+   the tag, waiting for the PR to merge, and tagging its squash-merge commit as a **new**
+   version — never re-use the name, because GHCR may still hold the off-main image under it:
 
    ```
    git push origin :refs/tags/vinngest-v1.1.16
    git tag -d vinngest-v1.1.16
+   git fetch origin main
+   git tag -a vinngest-v1.1.17 <squash-merge-sha> -m "inngest-bootstrap v1.1.17: <what>"
+   git push origin vinngest-v1.1.17
    ```
 
-   Until it is deleted, AC6 of `cloud-init-inngest-bootstrap.test.sh` reds `main` and every
-   open PR, because it demands a pin to that tag while the bump refuses to author it.
-   #8782 retires that trap.
+   That push runs its own publish and bump; do not re-run the failed run. **Exception: never
+   delete the tag `main` pins today** (the refusal says so when it is — e.g. `v1.1.39`, off
+   `main`, right after #8747 merged). Deleting it breaks the live pin; re-anchor by cutting
+   a new, higher version on `main` instead. Until an off-main tag is deleted, AC6 of
+   `cloud-init-inngest-bootstrap.test.sh` reds `main` and every open PR, because it demands a
+   pin to that tag while the bump refuses to author it. #8782 retires that trap.
 
    **Carrier-changing PR flow.** Merge the PR that changes a baked carrier first. Its
    `deploy-script-tests` GuardA row is red on the PR, which is expected and advisory. Then
@@ -920,13 +928,18 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    red from the merge until that bump lands; #4326 (auto-mint on infra push) closes the gap.
    A candidate image can no longer be built from an unmerged PR (#8781).
 
-   **Rolling back** to one of the legacy off-main versions (`v1.1.26`–`v1.1.39`) works
-   through a manual pin PR to the image that already exists. A *rebuild* of such a tag is
-   refused, so if a rebuild is needed, re-cut the old content on `main` as a new version.
+   **Rolling back** to one of the legacy off-main versions (`v1.1.14`, `v1.1.24`,
+   `v1.1.26`–`v1.1.39`) works through a manual pin PR to the image that already exists. A
+   *rebuild* of such a tag is refused, so if a rebuild is needed, re-cut the old content on
+   `main` as a new version.
 2. **The pin bump is authored automatically** by the publish workflow's
    `bump-cloud-init-pin` job (ADR-232): a `soleur-ai[bot]` PR on `soleur/inngest-pin-vX.Y.Z`
-   with auto-merge armed when this run's zot mirror reports `ok`. The detail below is the
-   **manual fallback**, for when that job fails (it posts to Slack) or holds the PR.
+   with auto-merge armed when this run's zot mirror reports `ok` and the image carries an
+   `org.opencontainers.image.revision` label naming the tag's commit (unlabelled legacy images
+   are opened held). The detail below is the **manual fallback**, for when that job fails (it
+   posts to Slack) or holds the PR. **Never use it after a failure at stage `ancestry` or
+   `args`**: those refusals mean the tag is off `main`, and a hand-written pin to it ships the
+   unreviewed bytes the gate exists to stop (#8747). Follow step 1's recovery instead.
    **Bump the cloud-init pin in lockstep** — there are **FOUR** pin sites across **TWO** files,
    not three in one: `IREF` and `ZIREF` in `apps/web-platform/infra/cloud-init-inngest.yml`
    (the dedicated host) and `IREF` and `ZIREF` in `apps/web-platform/infra/cloud-init.yml`
@@ -941,9 +954,10 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    `vinngest-v*` tag, so the tag in step 1 MUST exist first (else the bump PR's CI
    fails AC6); pushing the tag without bumping turns `main` red until this PR merges —
    and red **repo-wide**, on every concurrently open pull request that runs the suite, not just
-   on the bump branch. The build workflow has no failure notification of any kind, so nobody is
-   told the window has stayed open. Keep it to the length of one build run: do not push the tag
-   until the digest commit is ready to land.
+   on the bump branch. A failed bump posts to Slack and an ancestry-refused build posts to
+   Slack, but an ordinary build failure notifies nobody, so the window can stay open silently.
+   Keep it to the length of one build run: do not push the tag until the digest commit is
+   ready to land.
 
    **A stale-schema row is not a sick host.** `scheduled-inngest-health.yml` grades liveness and
    will keep reporting the host HEALTHY on a row the recut gate refuses as `stale_schema` — the
