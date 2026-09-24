@@ -46,3 +46,11 @@
 - Census: 3 installations, 33 repos; internal 1 model / 0 zero-view; external 1 model / 1 zero-view → #8740.
 - Follow-up filed: #8739 (Concierge edit does not reload the editor).
 - Beyond plan: C4Workspace ignores a save that finishes after a folder change (C4-C9).
+
+## Review Phase
+- Panel (12 seats, report-only, SHA d29421cfc4): security, structural-enumeration (replaced data-integrity; no DB surface), test-design, user-impact, architecture, code-quality, pattern, performance, git-history, semgrep (79 rules/16 files, 0 net-new), simplicity, agent-native. Anti-slop: advisory only, all pre-existing.
+- Sandbox forks routed to the CTO agent: /c4-out -> tmpfs + capped stdout (no writable host bind); close inherited fds in a bash step before choom -> nice -> bwrap; nested userns stays a residual (#8752). `--disable-userns` re-measured on 0.8.0 + prod seccomp: still fails.
+- Fixed inline (commits 6d6816835e, 5936e6b603): Sentry message carries phase/reason/class (tags do not split issues); Concierge + banner no longer promise a refresh on a supersede; Save enabled while stale; folder-keyed staleness + useC4Project stale-response guard; busy diagnostic + 20 s slot wait + nice; kept stage holds its slot and is skipped by the sweep; err=null on the remaining writer reports; launcher pin; shallow-prefix refusal; timer armed after spawn; launcher-enoent/spawn-timeout/killed classes; checker row per return code + meta-row; pool grant/lower-bound rows; brace-scoped probe wiring; child_process import pin; ADR class parity; real-bwrap fd-leak/status/tmpfs-cap/loopback/elements-only rows.
+- Mutation battery on the redesign: 28/28 killed by their intended assertions (the UI keyed-state row re-run after its first form crashed on syntax).
+- Filed: #8752 (shared seccomp filter + agent-sandbox inherited fds, CTO-mandated).
+- Not done, with reason: test-scaffolding extraction and probe-module split (cleanup only); probe latch (called once from listen); C4_BWRAP_REQUIRED self-test (needs a bwrap-path seam); raw likec4 stderr in Sentry extra (same tenant, needed for triage, previously the Error message); per-repo render coalescing (slot wait + busy copy + the writer's supersede check cover correctness); client 524 copy (pre-existing); duplicate probe catch in index.ts (plan's backstop).
