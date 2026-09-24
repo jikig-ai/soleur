@@ -517,6 +517,7 @@ resource "sentry_alert" "auth_callback_no_code_burst" {
 # below) are Terraform-owned sentry_alert blocks with ignore_changes = [environment]
 # only (#7650); live drift is caught by scripts/sentry-alert-live-fidelity.sh.
 # auth_per_user_loop is Terraform-frozen (see its banner). Match by id, never by name.
+# Names are operator-keyed (email filters, runbook `startswith("auth-")` reads): do not rename.
 resource "sentry_alert" "auth_exchange_code_burst" {
   organization      = var.sentry_org
   name              = "auth-exchange-code-burst"

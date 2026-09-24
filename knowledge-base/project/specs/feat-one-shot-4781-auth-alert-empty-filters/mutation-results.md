@@ -22,3 +22,5 @@ F1, F13, F10, F22, G4-6, F35, F36. The probe is mutated in place and restored wi
 
 H2: F1, F13 and G4-6 stayed green on the unmutated tree (M0) and in the full run (69/0).
 No surviving mutants. Axes NOT exercised: bidi/zero-width characters in names (deferred), a refusal before the verdict (accepted trade, see plan Sharp Edges).
+
+H1b (plan-predicted "guard keeps matching without LC_ALL=C") is FALSE: bash translates the `line N:` prefix (measured at review under LANGUAGE=de/fr), so `LC_ALL=C` is load-bearing.

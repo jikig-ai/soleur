@@ -232,7 +232,7 @@ Two files were cut from the note list by the plan review:
   UNMANAGED loop DOWN to sit after the derivation needs no split around the
   vendor-registry check and moves no refusal. The per-rule DRIFT loop stays above every
   refusal.
-- **F36, the G4-16 reorder row, and a 13-row mutation matrix** (DHH, simplicity). These
+- **The G4-16 reorder row, and a 13-row mutation matrix** (DHH, simplicity; F36 was reinstated at deepen on the security P1). These
   covered speculative shapes or a reorder this design no longer makes.
 - **An ADR-031 amendment.** It adds nothing new.
 
@@ -275,7 +275,7 @@ Two files were cut from the note list by the plan review:
   - Cover a second frozen member.
 - **DHH / simplicity:**
   - Move the loop instead of hoisting.
-  - Cut F36, the G4-16 reorder row and most of the matrix.
+  - Cut the G4-16 reorder row and most of the matrix (F36 reinstated at deepen).
   - Keep notes short.
   - Cut 2 notes.
   - Keep the `.tf` edit small.
@@ -537,7 +537,7 @@ Files to Edit on 2026-09-23.
 - [ ] AC3: The unmutated tree first exits 0. Then every Guard Contract mutation makes the
   suite exit 1 with the named row printing `[FAIL]`, and was observed doing so (each one
   restored with `git checkout -- <file>`). The PR body records the **full** red set for each mutation, including
-  expected collateral (for example, M3 also reds F35, and M6's abort also reds F10 and F22),
+  expected collateral (measured: M3 does NOT red F35, which asserts only the absence of UNMANAGED for frozen names; M6's abort also reds F10 and F22),
   so a later reviewer can tell collateral from a regression.
 - [ ] AC4: `git diff origin/main -- tests/scripts/lib/sentry-alert-projection.jq apps/web-platform/infra/sentry/alert-reference.json`
   is empty. In `issue-alerts.tf` and `apply-sentry-infra.yml`, every changed line is a
@@ -619,9 +619,10 @@ the projection module, which is unchanged.
 
 - **H1 (a suite edit that must RED):** point F35's selector at a non-existent name. The
   `_mutant` landing check reports `NOOP` and F35 fails.
-- **H1b:** drop `LC_ALL=C` from `_run` and run under a non-English locale that has bash
-  translations installed. The guard keeps matching, because it keys on the untranslated
-  `line N:` prefix. This is recorded as a check, not a CI row.
+- **H1b (corrected at review):** bash TRANSLATES the `<script>: line N:` prefix
+  (`Zeile`, `ligne`) and honours `LANGUAGE` unless the locale is C, so the guard
+  keys on English text and `LC_ALL=C` in `_run`/`_run_env` is load-bearing, not a
+  belt. The original prediction ("keeps matching") was wrong; measured by review.
 - **H2 (inputs that must PASS but are not canonical):** F1 identity, F13 (API-shaped payload)
   and G4-6 (frozen pin identity) stay green after Phase 2.
 

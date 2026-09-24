@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=69
+EXPECTED_TESTS=73
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -123,20 +123,31 @@ fi
 # `SENTRY_REFERENCE_FILE` points at the derived reference; a second argument
 # overrides it for the reference-side rows.
 _out=""; _rc=0
-# BASH'S OWN ERROR PREFIX IN THE PROBE'S OUTPUT IS A FAILURE, whatever else the
-# row asserts. `_run` merges stderr into `$_out`, so a stray command substitution
-# (#4781: unescaped backticks around `def excluded` ran `def` as a command on every
-# UNMANAGED finding and dropped the noun from its remedy) or a `set -u` abort reads
-# as ordinary noise to a row that greps only for its marker. Keyed on the
-# `<script>: line N:` prefix rather than on `command not found`, because that
-# prefix is not translated and also covers `unbound variable`; `LC_ALL=C` below
-# pins the rest of the message. No finding text in the probe contains `: line N`.
+# A BASH ERROR IN THE PROBE'S OUTPUT FAILS EVERY ROW, not only the rows that look
+# for one: `_run` merges stderr into `$_out`, so a stray command substitution
+# (#4781: unescaped backticks ran `def` as a command and dropped the noun from the
+# remedy) or a `set -u` abort reads as noise to a row grepping for its marker.
+# `_bash_err` forces `_rc=97`, which no row accepts. It keys on the
+# `<script>: line N:` prefix, which bash TRANSLATES (`Zeile`, `ligne`) — so
+# `LC_ALL=C` below is what makes this guard work at all; do not drop it. No
+# finding text in the probe contains `: line N`.
 BASH_ERR_RE='sentry-alert-live-fidelity\.sh: line [0-9]+: '
+_bash_err() { # $1 = text; rc 0 = a bash error is present, 1 = absent, exits 2 on a broken regex
+  local rc=0
+  grep -qE -- "$BASH_ERR_RE" <<<"$1" || rc=$?
+  if [[ "$rc" -ge 2 ]]; then
+    printf '[FATAL] BASH_ERR_RE did not evaluate (grep rc=%s)\n' "$rc" >&2
+    exit 2
+  fi
+  return "$rc"
+}
+_guard_out() { if _bash_err "$_out"; then _rc=97; _out+=$'\n[harness] bash error in probe output (rc forced to 97)'; fi; }
 _run() {
   _rc=0
   _out=$(LC_ALL=C SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture \
          SENTRY_REFERENCE_FILE="${2:-$REFERENCE}" \
          SENTRY_FIXTURE_RULES="$1" bash "$PROBE" 2>&1) || _rc=$?
+  _guard_out
 }
 
 # _mutant <label> <jq-program> -> path to the mutated live payload.
@@ -166,10 +177,10 @@ _drift_case() { # $1=label $2=jq-program $3=expected-marker $4=human description
     return
   fi
   _run "$f"
-  if [[ "$_rc" -eq 1 ]] && grep -q "$3" <<<"$_out" && ! grep -qE "$BASH_ERR_RE" <<<"$_out"; then
+  if [[ "$_rc" -eq 1 ]] && grep -q "$3" <<<"$_out"; then
     _report "$4" ok
   else
-    _report "$4" fail "rc=$_rc (want 1), marker '$3' not found or a bash error was printed. Output: $(head -c 400 <<<"$_out")"
+    _report "$4" fail "rc=$_rc (want 1; 97 = bash error in probe output); marker '$3' $(grep -q "$3" <<<"$_out" && echo found || echo 'not found'). Output: $(head -c 400 <<<"$_out")"
   fi
 }
 
@@ -349,25 +360,13 @@ t_comparison_interval_drift() {
 
 # The other direction. A live in-scope rule the capture never saw is one nothing
 # in this repo manages, and regenerating from the capture would not produce it.
-#
-# The remedy is asserted on the finding's OWN line, not the whole output: its noun
-# (`def excluded`) was silently eaten by an unescaped command substitution (#4781)
-# while the prefix this row used to grep still printed.
+# The marker runs on to the remedy noun, whose loss to an unescaped command
+# substitution (#4781) left the finding's prefix intact.
 t_unmanaged_new_rule() {
-  local f; f=$(_mutant unmanaged \
-    '. + [{"name":"created-in-the-ui","enabled":true,"detectorIds":["1213799"],"environment":null,"id":"999999","config":{"frequency":5},"triggers":{"logicType":"any-short","conditions":[{"type":"first_seen_event","comparison":true}],"actions":[]},"actionFilters":[]}]')
-  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then
-    _report "F10 unmanaged" fail "the mutation did not land ($f)"
-    return
-  fi
-  _run "$f"
-  local line; line=$(grep -F -- "UNMANAGED: 'created-in-the-ui'" <<<"$_out" || true)
-  if [[ "$_rc" -eq 1 ]] && grep -qF -- "is live and in scope but declared nowhere" <<<"$line" \
-     && grep -qF -- "def excluded" <<<"$line" && ! grep -qE "$BASH_ERR_RE" <<<"$_out"; then
-    _report "F10 an in-scope live rule absent from the reference is reported as UNMANAGED (= undeclared), and its remedy line names def excluded intact" ok
-  else
-    _report "F10 unmanaged" fail "rc=$_rc (want 1). Line: $(head -c 400 <<<"$line"). Output: $(head -c 400 <<<"$_out")"
-  fi
+  _drift_case unmanaged \
+    '. + [{"name":"created-in-the-ui","enabled":true,"detectorIds":["1213799"],"environment":null,"id":"999999","config":{"frequency":5},"triggers":{"logicType":"any-short","conditions":[{"type":"first_seen_event","comparison":true}],"actions":[]},"actionFilters":[]}]' \
+    "UNMANAGED: 'created-in-the-ui' (live id 999999) is live and in scope but declared nowhere.*def excluded" \
+    "F10 an in-scope live rule absent from the reference is reported as UNMANAGED (= undeclared), with its live id and its remedy noun intact"
 }
 
 # ── Anti-vacuity: the probe must refuse to certify having checked nothing. ──
@@ -417,7 +416,7 @@ t_reference_minus_one_rule() {
   jq 'del(.["auth-signout-burst"])' "$REFERENCE" > "$ref"
   jq -e 'has("auth-signout-burst") | not' "$ref" >/dev/null || { _report "F22 reference minus one rule" fail "mutation did not land"; return; }
   _run "$CAPTURE" "$ref"
-  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED: 'auth-signout-burst'" <<<"$_out" && ! grep -qE "$BASH_ERR_RE" <<<"$_out"; then
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED: 'auth-signout-burst'" <<<"$_out"; then
     _report "F22 a rule removed from the reference is reported UNMANAGED (the live side still has it)" ok
   else
     _report "F22 reference minus one rule → UNMANAGED" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
@@ -840,6 +839,7 @@ _run_env() {
   _out=$(env LC_ALL=C SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture \
          SENTRY_REFERENCE_FILE="$REFERENCE" \
          SENTRY_FIXTURE_RULES="$fx" "$@" bash "$PROBE" 2>&1) || _rc=$?
+  _guard_out
 }
 
 t_g4_identity_pins_census() {
@@ -1285,14 +1285,12 @@ t_g4_handoff_is_reconciled() {
 # The 2026-06-02 incident shape (all four auth rules with empty triggers and tag
 # filters), plus the second Terraform-frozen member. Emptying a FROZEN rule's
 # triggers removes its excluded trigger type, so it enters the live projection's
-# scope where the reference cannot declare it (tf_legacy_floor). It must be
-# reported as the frozen rule it is — never as UNMANAGED, whose remedy says
-# "delete it in Sentry". One array drives the fixture, the header arithmetic and
-# the per-name loops, so the member count is never typed.
+# scope, where the reference cannot declare it (tf_legacy_floor). It must be
+# reported as the frozen rule it is, never as UNMANAGED ("delete it in Sentry").
 F4781_FROZEN=(auth-per-user-loop sandbox-startup-failure)
 F4781_BURST=(auth-callback-no-code-burst auth-exchange-code-burst auth-signout-burst)
 t_auth_rules_emptied_4781() {
-  local names_json; names_json=$(printf '%s\n' "${F4781_BURST[@]}" "${F4781_FROZEN[@]}" | jq -R -s -c 'split("\n") | map(select(. != ""))')
+  local names_json; names_json=$(jq -nc '$ARGS.positional' --args "${F4781_BURST[@]}" "${F4781_FROZEN[@]}")
   # `map(if … else . end)`, NOT `map(select(…))`: the select form deletes every
   # other workflow, and each assertion below would still pass on that fixture.
   local f; f=$(_mutant auth4781 \
@@ -1304,21 +1302,24 @@ t_auth_rules_emptied_4781() {
   _run "$f"
   local detail="" n
   [[ "$_rc" -eq 1 ]] || detail+=" [rc=$_rc want 1]"
+  # The frozen list is typed, so pin it to the set the probe derives from the .tf.
+  [[ "${#F4781_FROZEN[@]}" -eq "$FROZEN_TF_N" ]] || detail+=" [F4781_FROZEN has ${#F4781_FROZEN[@]} names, the .tf freezes $FROZEN_TF_N]"
+  # Fixture precondition: every frozen member entered scope and no burst rule left it.
   grep -qF -- "comparing ${N} declared rule(s) against $((N + ${#F4781_FROZEN[@]})) live in-scope rule(s)" <<<"$_out" \
     || detail+=" [header: want ${N} vs $((N + ${#F4781_FROZEN[@]}))]"
   ! grep -qF -- "DELETED or RENAMED" <<<"$_out" || detail+=" [DELETED or RENAMED printed]"
+  ! grep -qF -- "delete it in Sentry" <<<"$_out" || detail+=" [a delete-it remedy printed]"
   for n in "${F4781_BURST[@]}"; do
     grep -qF -- "DRIFT: '$n'.triggerConditions" <<<"$_out" || detail+=" [no DRIFT $n.triggerConditions]"
     grep -qF -- "DRIFT: '$n'.actionFilters" <<<"$_out" || detail+=" [no DRIFT $n.actionFilters]"
   done
-  grep -qF -- "FROZEN DRIFT: 'auth-per-user-loop'.triggerConditions" <<<"$_out" || detail+=" [no FROZEN DRIFT auth-per-user-loop]"
   for n in "${F4781_FROZEN[@]}"; do
+    grep -qF -- "FROZEN DRIFT: '$n'.triggerConditions" <<<"$_out" || detail+=" [no FROZEN DRIFT $n]"
     grep -qF -- "FROZEN RULE LEFT SCOPE: '$n'" <<<"$_out" || detail+=" [no LEFT SCOPE $n]"
     ! grep -qF -- "UNMANAGED: '$n'" <<<"$_out" || detail+=" [UNMANAGED printed for frozen $n]"
   done
-  ! grep -qE "$BASH_ERR_RE" <<<"$_out" || detail+=" [bash error printed]"
   if [[ -z "$detail" ]]; then
-    _report "F35 #4781: all four auth rules (and the second frozen member) emptied live -> DRIFT on each burst rule's triggers and filters, FROZEN DRIFT + FROZEN RULE LEFT SCOPE for each frozen rule, and no UNMANAGED (delete-it) co-finding" ok
+    _report "F35 #4781: all four auth rules (and the second frozen member) emptied live -> DRIFT on each burst rule's triggers and filters, FROZEN DRIFT + FROZEN RULE LEFT SCOPE for each frozen rule, and no delete-it co-finding" ok
   else
     _report "F35 #4781 auth rules emptied" fail "$detail. Output: $(head -c 600 <<<"$_out")"
   fi
@@ -1344,10 +1345,9 @@ t_unmanaged_name_is_scrubbed_and_whole() {
   # the producer and the negation would then read as clean.
   ! grep -q '^::error::spoofed' <<<"${_out//$'\r'/$'\n'}" || detail+=" [a line starts with ::error::spoofed]"
   ! grep -qF -- "FROZEN RULE LEFT SCOPE: 'auth-per-user-loop'" <<<"$_out" || detail+=" [a fragment impersonated the frozen rule]"
-  um=$(grep -cF -- "UNMANAGED: '" <<<"$_out" || true)
+  um=$(grep -c "^  UNMANAGED: '" <<<"$_out" || true)
   [[ "$um" -eq 1 ]] || detail+=" [UNMANAGED lines=$um want 1]"
   grep -qF -- "UNMANAGED: 'auth-per-user-loopx::error::spoofed'" <<<"$_out" || detail+=" [no scrubbed whole-name UNMANAGED line]"
-  ! grep -qE "$BASH_ERR_RE" <<<"$_out" || detail+=" [bash error printed]"
   if [[ -z "$detail" ]]; then
     _report "F36 an undeclared live name carrying LF, CR and a :: command is classified WHOLE and printed scrubbed on exactly one UNMANAGED line" ok
   else
@@ -1355,7 +1355,79 @@ t_unmanaged_name_is_scrubbed_and_whole() {
   fi
 }
 
+# LEFT SCOPE ALONE must fail the run. F35 always carries a FROZEN DRIFT beside it,
+# which keeps rc 1 on its own; here the capture entry itself has no excluded type,
+# so the pin matches and LEFT is the only finding.
+t_left_scope_alone_fails() {
+  local cap="$TMPD/capture-left-only.json"
+  jq 'map(if .name=="auth-per-user-loop" then .triggers.conditions=[] else . end)' "$CAPTURE" > "$cap"
+  jq -e 'map(select(.name=="auth-per-user-loop"))[0].triggers.conditions == []' "$cap" >/dev/null \
+    || { _report "F37 LEFT SCOPE alone" fail "the fixture did not land"; return; }
+  _run_env "$cap" SENTRY_FROZEN_CAPTURE_FILE="$cap"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "FROZEN RULE LEFT SCOPE: 'auth-per-user-loop' (live id 566671; captured id 566671)" <<<"$_out" \
+     && ! grep -q 'live fidelity: PASS' <<<"$_out" && ! grep -qF -- "FROZEN DRIFT" <<<"$_out"; then
+    _report "F37 a frozen rule that left scope while still matching its capture entry fails the run on FROZEN RULE LEFT SCOPE alone" ok
+  else
+    _report "F37 LEFT SCOPE alone" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
+# A name that scrubs to another rule's name must say so, and carry its own id.
+t_scrubbed_name_is_flagged() {
+  local f; f=$(_mutant belname \
+    '. + [{"name":"auth-per-user-loop\u0007","enabled":true,"detectorIds":["1213799"],"environment":null,"id":"999997","config":{"frequency":5},"triggers":{"logicType":"any-short","conditions":[{"type":"first_seen_event","comparison":true}],"actions":[]},"actionFilters":[]}]')
+  [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]] && { _report "F38 scrubbed name" fail "the mutation did not land ($f)"; return; }
+  _run "$f"
+  local line; line=$(grep "^  UNMANAGED: 'auth-per-user-loop'" <<<"$_out" || true)
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "(live id 999997)" <<<"$line" && grep -qF -- "DISPLAY NAME ALTERED" <<<"$line" \
+     && ! grep -qF -- "FROZEN RULE LEFT SCOPE: 'auth-per-user-loop'" <<<"$_out"; then
+    _report "F38 an undeclared name that scrubs to a frozen rule's name is printed with its live id and a DISPLAY NAME ALTERED warning, never as that rule" ok
+  else
+    _report "F38 scrubbed name" fail "rc=$_rc (want 1). Line: $(head -c 400 <<<"$line")"
+  fi
+}
+
+# FROZEN DUPLICATE had no row.
+t_frozen_duplicate() {
+  _drift_case g4frozendup \
+    '. + [ (map(select(.name=="auth-per-user-loop"))[0] | .id="999996") ]' \
+    "FROZEN DUPLICATE: 'auth-per-user-loop'" \
+    "F39 a Terraform-frozen name live twice is FROZEN DUPLICATE"
+}
+
+# A frozen block the derivation cannot parse must refuse, not leave the pin.
+t_frozen_derivation_parity_refuses() {
+  local d="$TMPD/tf-multiline"; mkdir -p "$d"
+  cp "$REPO_ROOT"/apps/web-platform/infra/sentry/*.tf "$d/"
+  python3 - "$d/issue-alerts.tf" <<'PY' || { _report "F40 multi-line legacy list" fail "the .tf edit did not land"; return; }
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '  legacy_trigger_conditions = ["event_unique_user_frequency_count"]'
+assert s.count(old) >= 1
+i = s.index(old)
+open(p, 'w').write(s[:i] + '  legacy_trigger_conditions = [\n    "event_unique_user_frequency_count",\n  ]' + s[i + len(old):])
+PY
+  _run_env "$CAPTURE" SENTRY_FROZEN_TF_DIR="$d"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "but the frozen-name derivation read" <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "F40 a frozen block whose legacy list the derivation cannot parse REFUSES, instead of silently leaving the frozen-rule pin" ok
+  else
+    _report "F40 multi-line legacy list" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+
+# INSTRUMENT SELF-TEST for the bash-error guard: it must match a bash error and
+# pass a clean finding line (a regex grep cannot evaluate exits 2, which
+# `_bash_err` turns into a fatal). Reported by printf/exit, never through the guard.
+_selftest_bash_err() {
+  _bash_err "$PROBE: line 1: def: command not found" \
+    || { printf '[FATAL] BASH_ERR_RE does not match a bash error line\n' >&2; exit 2; }
+  if _bash_err "  UNMANAGED: 'x' (live id 1) is live and in scope"; then
+    printf '[FATAL] BASH_ERR_RE matches a clean finding line\n' >&2; exit 2
+  fi
+}
+
 _selftest_report
+_selftest_bash_err
 t_identity_passes
 t_live_api_shape
 t_deleted
@@ -1425,6 +1497,10 @@ t_g4_duplicate_managed_name_warns
 t_g4_handoff_is_reconciled
 t_auth_rules_emptied_4781
 t_unmanaged_name_is_scrubbed_and_whole
+t_left_scope_alone_fails
+t_scrubbed_name_is_flagged
+t_frozen_duplicate
+t_frozen_derivation_parity_refuses
 
 echo "=== $pass passed, $fail failed ==="
 

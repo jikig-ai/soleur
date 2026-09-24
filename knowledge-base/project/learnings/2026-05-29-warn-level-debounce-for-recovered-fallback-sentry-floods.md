@@ -17,9 +17,8 @@ A production Sentry alert (`auth-callback-no-code-burst`, Sentry ID
 `ac2d712121d94ad9ab154a16f6178fa7`) fired on `GET /login` with the chain
 `TimeoutError → "getIdentityFlags failed and no default flag handler was provided"`.
 
-> **Corrected 2026-09-23 (#4781):** this rule really fired. All four `auth-*` rules had
-> empty trigger conditions and tag filters from 2026-05-17 to 2026-06-02 07:32Z and
-> matched every issue in the project. See
+> **Corrected 2026-09-23 (#4781):** this rule really fired: all four `auth-*` rules
+> matched every issue from 2026-05-17 to 2026-06-02. See
 > `bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
 > With its intended filters (`feature=auth AND op=callback_no_code`) this rule cannot match
 > a `feature=feature-flags` event; the debounce below still bounds any rule that does.

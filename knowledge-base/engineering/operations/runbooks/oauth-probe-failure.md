@@ -580,64 +580,31 @@ system owns each rule's definition — see the ownership table below.
 
 ### Reconcile alert rules (rule drift / missing rule)
 
-> **This recipe is currently BLOCKED (2026-08-19, #7590). Read before running.**
-> `configure-sentry-alerts.sh` reads and writes
-> `projects/{org}/{proj}/rules/`, which Sentry deprecated on 2026-05-14 and
-> now serves under scheduled **brownouts** — 410 for a window on a recurring
-> schedule, 200 the rest of the time. Two consequences for an operator
-> reaching this page mid-incident:
->
-> 1. A run that fails with `curl: (22) … error: 410` has hit the brownout,
->    not a broken token or a bad region. Re-running minutes later may well
->    succeed, and that success is not evidence the problem is gone.
-> 2. Migrating the script is not a URL swap. The replacement,
->    `organizations/{org}/workflows/`, has no `conditions`/`filters`/`actions`
->    keys — it carries `triggers` and `actionFilters[]` — so every write
->    payload in this script is structurally dead against it. Tracked
->    separately; do not attempt it inline during an incident.
->
-> If the rules are drifted and this script will not run, the fallback is the
-> Sentry UI. Do NOT delete this script — but note the ownership split changed
-> on 2026-09-04 (#7650 Phase 2) and again on 2026-09-21 (#8451), and this
-> recipe reconciles NONE of the four rules now:
->
-> | rule | owner | how to reconcile drift |
-> |---|---|---|
-> | `auth-per-user-loop` | Terraform-frozen `sentry_alert` (`ignore_changes = all`) | PUT from its entry in the committed capture (an apply never writes it) |
-> | `auth-signout-burst` | Terraform (`sentry_alert`) | `terraform apply` on the sentry root |
-> | `auth-exchange-code-burst` | Terraform (`sentry_alert`) | `terraform apply` on the sentry root |
-> | `auth-callback-no-code-burst` | Terraform (`sentry_alert`) | `terraform apply` on the sentry root |
->
-> Since #8451 (2026-09-21) `auth-per-user-loop` is a Terraform-frozen
-> `sentry_alert` (`legacy_trigger_conditions`, `ignore_changes = all`): its live
-> content is pinned against the committed capture by
-> `scripts/sentry-alert-live-fidelity.sh`, but an apply never writes it, so drift
-> is repaired by a PUT from the capture entry. This script's own header marks it
-> superseded, and its `rules/` endpoint now returns 410. The other three now
-> carry their real definitions in `infra/sentry/issue-alerts.tf` with `ignore_changes = [environment]` only, so
-> Terraform genuinely owns them and an apply DOES restore them.
->
-> If all four drifted (the 2026-06-02 mode — #4781; detected daily by
-> `scripts/sentry-alert-live-fidelity.sh`), reconcile the three burst rules via
-> the Sentry root's apply and `auth-per-user-loop` by a PUT from its capture
-> entry. `auth-per-user-loop` cannot become a native, apply-repaired rule until
-> the jianyuan/sentry provider ships `event_unique_user_frequency_count` as a
-> trigger (tracked by #7985).
+Drift in any of the four auth rules is reported daily, and after every apply, by
+`scripts/sentry-alert-live-fidelity.sh` (via `scheduled-sentry-alert-drift.yml`,
+which files an issue naming each finding's class and remedy). Ownership since
+2026-09-21 (#8451):
 
-If a rule is missing from the GET output above, or someone edited a
-rule via the Sentry UI and it has drifted from the configurator's
-canonical config, re-run the idempotent configurator:
+| rule | owner | how to reconcile drift |
+|---|---|---|
+| `auth-per-user-loop` | Terraform-frozen `sentry_alert` (`legacy_trigger_conditions`, `ignore_changes = all`); an apply never writes it | PUT its capture entry back (below) |
+| `auth-signout-burst` | Terraform (`sentry_alert`, `ignore_changes = [environment]`) | re-dispatch `apply-sentry-infra.yml` |
+| `auth-exchange-code-burst` | Terraform (`sentry_alert`, `ignore_changes = [environment]`) | re-dispatch `apply-sentry-infra.yml` |
+| `auth-callback-no-code-burst` | Terraform (`sentry_alert`, `ignore_changes = [environment]`) | re-dispatch `apply-sentry-infra.yml` |
 
-```bash
-SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain) \
-SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain) \
-SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT -p soleur -c prd --plain) \
-bash apps/web-platform/scripts/configure-sentry-alerts.sh
-```
+To repair `auth-per-user-loop` (captured id `566671`): take its entry from the
+committed capture
+(`jq '.[] | select(.name == "auth-per-user-loop")' knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json`),
+PUT it to `/api/0/organizations/<org>/workflows/566671/`, GET it back, and re-run
+the probe. This is the same remedy the drift issue's reading guide gives for the
+`FROZEN …` classes. The rule cannot become a native, apply-repaired rule until
+the provider ships `event_unique_user_frequency_count` as a trigger (#7985).
 
-The script is idempotent: re-running produces zero net changes when
-state is already correct. It fails closed if a rule name has been
-duplicated in the UI (resolve the duplicate manually before re-running).
+> **Superseded 2026-09-21 (#8451): `apps/web-platform/scripts/configure-sentry-alerts.sh`
+> is not a repair path.** Its `projects/{org}/{proj}/rules/` endpoint now returns
+> 410 persistently (the scheduled brownout recorded here on 2026-08-19, #7590,
+> ended in removal), and it owns none of the four rules. Do not run it; it is
+> kept only until #7634 settles its write path.
 
 #### Accepted Sentry alert intervals
 
