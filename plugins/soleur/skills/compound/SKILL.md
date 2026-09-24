@@ -504,7 +504,7 @@ On feature branches (`feat-*`, `feat/*`, `fix-*`, or `fix/*`), consolidation run
 
 The automatic consolidation:
 
-1. **Discovers artifacts** -- first confirms `"${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"` is readable and stops the consolidation if it is not (step 4 needs it, and failing there would leave step 2's edits committed without the archival), then extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/project/{brainstorms,plans}/*<slug>*` and `knowledge-base/project/specs/feat-<slug>/` (excluding `*/archive/`)
+1. **Discovers artifacts** -- stops first if step 4's `archive-kb.sh` is unreadable, then extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/project/{brainstorms,plans}/*<slug>*` and `knowledge-base/project/specs/feat-<slug>/` (excluding `*/archive/`)
 2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and project `README.md`
 3. **Approval flow** -- **Headless mode:** auto-accept all proposals (idempotency still checked via substring match). **Interactive mode:** proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
 4. **Archives sources** -- runs `bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"` to move all discovered artifacts to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix. **Headless mode:** auto-confirm archival without prompting
