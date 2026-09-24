@@ -2416,7 +2416,7 @@
 "id": "77po0w"
 },
 "16b5j7r": {
-"title": "CI installs the Grok CLI (x.ai install.sh) and runs the inspect-contract + golden-path eval (grok-fidelity)",
+"title": "CI installs a pinned Grok CLI (versioned x.ai binary, sha256 content pin) and runs the inspect-contract + golden-path eval (grok-fidelity, ADR-245)",
 "technology": "HTTPS (curl) + CLI",
 "source": {
 "model": "github"
@@ -7877,7 +7877,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__emailSender",
-"x": 3572,
+"x": 3543,
 "y": 1198,
 "width": 345,
 "height": 180,
@@ -8682,7 +8682,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cloudflare",
-"x": 2282,
+"x": 2259,
 "y": 1608,
 "width": 331,
 "height": 180,
@@ -8763,7 +8763,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 3237,
+"x": 3231,
 "y": 1608,
 "width": 362,
 "height": 180,
@@ -8840,7 +8840,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sentry",
-"x": 4129,
+"x": 4100,
 "y": 1608,
 "width": 325,
 "height": 180,
@@ -9000,7 +9000,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__zotRegistry",
-"x": 6548,
+"x": 6549,
 "y": 1198,
 "width": 354,
 "height": 180,
@@ -10110,27 +10110,27 @@
 "label": "Reads release notes for the in-app \nReleases page",
 "points": [
 [
-2880,
+2878,
 2049
 ],
 [
-2945,
-1764
+2936,
+1763
 ],
 [
-3190,
-877
+3163,
+871
 ],
 [
-3800,
+3770,
 617
 ],
 [
-4062,
-505
+4038,
+504
 ],
 [
-4902,
+4897,
 477
 ],
 [
@@ -10139,7 +10139,7 @@
 ]
 ],
 "labelBBox": {
-"x": 3202,
+"x": 3183,
 "y": 1257,
 "width": 219,
 "height": 56
@@ -10194,40 +10194,40 @@
 2218
 ],
 [
-3751,
-2088
+3754,
+2089
 ],
 [
 3802,
 1848
 ],
 [
-3877,
-1496
+3869,
+1516
 ],
 [
-4320,
-657
+4288,
+658
 ],
 [
-4382,
+4353,
 617
 ],
 [
-4527,
-523
+4503,
+521
 ],
 [
-5010,
-488
+5004,
+486
 ],
 [
 5280,
-475
+474
 ]
 ],
 "labelBBox": {
-"x": 3946,
+"x": 3939,
 "y": 1471,
 "width": 136,
 "height": 39
@@ -10290,56 +10290,56 @@
 470
 ],
 [
-4883,
+4879,
 476
 ],
 [
-3892,
+3869,
 504
 ],
 [
-3580,
+3552,
 617
 ],
 [
-3084,
-797
+3059,
+793
 ],
 [
-3061,
-1098
+3040,
+1100
 ],
 [
-2926,
+2916,
 1608
 ],
 [
-2898,
+2890,
 1713
 ],
 [
-2890,
+2884,
 1740
 ],
 [
-2876,
+2872,
 1848
 ],
 [
-2868,
+2865,
 1911
 ],
 [
-2864,
+2863,
 1983
 ],
 [
-2863,
+2862,
 2039
 ]
 ],
 "labelBBox": {
-"x": 3034,
+"x": 3016,
 "y": 1275,
 "width": 25,
 "height": 18
@@ -10357,67 +10357,67 @@
 "id": "aiwncp",
 "source": "github",
 "target": "platform.grokBuild",
-"label": "CI installs the Grok CLI (x.ai \ninstall.sh) and runs the \ninspect-contract + golden-path eval \n(grok-fidelity)",
+"label": "CI installs a pinned Grok CLI (versioned \nx.ai binary, sha256 content pin) and \nruns the inspect-contract + golden-path \neval (grok-fidelity, ADR-245)",
 "points": [
 [
 5290,
-477
+474
 ],
 [
-5042,
-499
+5035,
+493
 ],
 [
-4621,
-582
+4592,
+571
 ],
 [
-4621,
+4592,
 876
 ],
 [
-4621,
+4592,
 876
 ],
 [
-4621,
+4592,
 876
 ],
 [
-4599,
+4570,
 1494
 ],
 [
-4599,
+4570,
 1562
 ],
 [
-4556,
-1738
+4526,
+1737
 ],
 [
-4510,
+4481,
 1788
 ],
 [
-4460,
-1842
+4437,
+1838
 ],
 [
-4409,
-1797
+4390,
+1801
 ],
 [
-4355,
+4343,
 1848
 ],
 [
-4177,
-2015
+4171,
+2019
 ],
 [
-4090,
-2300
+4088,
+2301
 ],
 [
 4054,
@@ -10425,9 +10425,9 @@
 ]
 ],
 "labelBBox": {
-"x": 4622,
+"x": 4593,
 "y": 1446,
-"width": 222,
+"width": 251,
 "height": 89
 },
 "parent": null,
@@ -10681,47 +10681,47 @@
 "points": [
 [
 2702,
-2117
+2119
 ],
 [
-2524,
-2091
+2518,
+2094
 ],
 [
-2253,
-2039
+2233,
+2042
 ],
 [
-2191,
+2168,
 1958
 ],
 [
-2161,
-1919
+2138,
+1920
 ],
 [
-2167,
+2144,
 1891
 ],
 [
-2191,
+2168,
 1848
 ],
 [
-2211,
+2188,
 1814
 ],
 [
-2241,
+2218,
 1788
 ],
 [
-2273,
+2250,
 1767
 ]
 ],
 "labelBBox": {
-"x": 2192,
+"x": 2169,
 "y": 1848,
 "width": 265,
 "height": 106
@@ -10746,44 +10746,44 @@
 468
 ],
 [
-4714,
-470
+4710,
+469
 ],
 [
-2912,
-485
+2886,
+484
 ],
 [
-2689,
+2660,
 617
 ],
 [
-2504,
+2474,
 726
 ],
 [
-2491,
+2462,
 820
 ],
 [
-2432,
+2403,
 1027
 ],
 [
-2375,
+2346,
 1223
 ],
 [
-2404,
+2378,
 1465
 ],
 [
-2427,
+2403,
 1598
 ]
 ],
 "labelBBox": {
-"x": 2433,
+"x": 2404,
 "y": 1027,
 "width": 255,
 "height": 106
@@ -10804,36 +10804,36 @@
 "label": "Tunnel, DNS, CDN",
 "points": [
 [
-2476,
+2453,
 1788
 ],
 [
-2497,
+2473,
 1842
 ],
 [
-2529,
-1909
+2505,
+1910
 ],
 [
-2573,
+2550,
 1958
 ],
 [
-2607,
-1996
+2590,
+2001
 ],
 [
-2650,
-2029
+2642,
+2037
 ],
 [
 2693,
-2055
+2065
 ]
 ],
 "labelBBox": {
-"x": 2574,
+"x": 2551,
 "y": 1881,
 "width": 122,
 "height": 39
@@ -11243,24 +11243,24 @@
 "label": "Sends email to the operator address",
 "points": [
 [
-3674,
+3650,
 1377
 ],
 [
-3621,
+3601,
 1443
 ],
 [
-3550,
+3534,
 1533
 ],
 [
-3496,
+3484,
 1600
 ]
 ],
 "labelBBox": {
-"x": 3621,
+"x": 3601,
 "y": 1471,
 "width": 230,
 "height": 39
@@ -11281,7 +11281,7 @@
 "label": "Statutory triage notifications (outbound \nemail), incl. the push-failure fallback \n(ADR-136)",
 "points": [
 [
-2910,
+2911,
 2049
 ],
 [
@@ -11297,16 +11297,16 @@
 1848
 ],
 [
-3099,
-1805
+3097,
+1806
 ],
 [
-3165,
-1773
+3161,
+1774
 ],
 [
-3227,
-1750
+3221,
+1751
 ]
 ],
 "labelBBox": {
@@ -11336,44 +11336,44 @@
 469
 ],
 [
-4950,
-475
+4946,
+474
 ],
 [
-4220,
-500
+4197,
+498
 ],
 [
-4001,
+3972,
 617
 ],
 [
-3704,
-775
+3675,
+774
 ],
 [
-3662,
-894
+3626,
+891
 ],
 [
-3517,
+3488,
 1198
 ],
 [
-3455,
-1327
+3430,
+1328
 ],
 [
-3432,
+3415,
 1494
 ],
 [
-3423,
+3412,
 1598
 ]
 ],
 "labelBBox": {
-"x": 3598,
+"x": 3566,
 "y": 1027,
 "width": 258,
 "height": 106
@@ -11394,15 +11394,15 @@
 "label": "Inbound email webhook (operator inbox \ningress)",
 "points": [
 [
-3402,
+3398,
 1788
 ],
 [
-3387,
+3385,
 1843
 ],
 [
-3361,
+3360,
 1912
 ],
 [
@@ -11411,19 +11411,19 @@
 ],
 [
 3239,
-2035
+2036
 ],
 [
 3126,
-2080
+2081
 ],
 [
 3032,
-2105
+2106
 ]
 ],
 "labelBBox": {
-"x": 3383,
+"x": 3380,
 "y": 1873,
 "width": 250,
 "height": 56
@@ -11574,15 +11574,15 @@
 967
 ],
 [
-7729,
+7730,
 1113
 ],
 [
-7200,
+7201,
 1214
 ],
 [
-6912,
+6913,
 1260
 ]
 ],
@@ -11612,7 +11612,7 @@
 967
 ],
 [
-5637,
+5636,
 1025
 ],
 [
@@ -11624,15 +11624,15 @@
 1138
 ],
 [
-6065,
+6066,
 1232
 ],
 [
-6353,
+6354,
 1267
 ],
 [
-6538,
+6539,
 1279
 ]
 ],
@@ -11658,7 +11658,7 @@
 "label": "Pulls its OWN zot binary at boot from \nthe PUBLIC upstream registry — NEVER \nfrom itself (bootstrap paradox). \nPer-arch @sha256 digest-pinned \n(local.zot_image_{amd64,arm64}), pinned ",
 "points": [
 [
-6748,
+6749,
 1377
 ],
 [
@@ -11666,7 +11666,7 @@
 1443
 ],
 [
-6787,
+6788,
 1531
 ],
 [
@@ -11758,27 +11758,27 @@
 "label": "Ships disk-state observability — df% of \n/var/lib/zot + resize2fs before/after + \nzot health — as one SOLEUR_ZOT_DISK \nevent, plus a SOLEUR_PRIVATE_NIC \nprivate-NIC convergence event (#6415), ",
 "points": [
 [
-6553,
+6554,
 1378
 ],
 [
-6524,
+6525,
 1396
 ],
 [
-6496,
+6497,
 1416
 ],
 [
-6472,
+6473,
 1438
 ],
 [
-6420,
-1484
+6421,
+1485
 ],
 [
-6373,
+6374,
 1547
 ],
 [
@@ -11787,7 +11787,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6473,
+"x": 6474,
 "y": 1437,
 "width": 264,
 "height": 106
@@ -11847,43 +11847,43 @@
 "points": [
 [
 3022,
-2113
+2112
 ],
 [
 3185,
-2085
+2084
 ],
 [
-3445,
+3443,
 2033
 ],
 [
-3661,
+3658,
 1958
 ],
 [
-3768,
+3766,
 1921
 ],
 [
-3787,
-1892
+3786,
+1894
 ],
 [
 3891,
 1848
 ],
 [
-3965,
-1816
+3956,
+1820
 ],
 [
-4049,
-1785
+4028,
+1790
 ],
 [
-4120,
-1759
+4091,
+1765
 ]
 ],
 "labelBBox": {
@@ -11908,48 +11908,48 @@
 "label": "CI is both an emitter and the applier: \nthe ./.github/actions/sentry-heartbeat \ncomposite posts ok|error check-ins from \n14 workflows, in two groups — 8 \nGHA-`schedule:`-fired ",
 "points": [
 [
-5291,
-479
+5290,
+478
 ],
 [
-5056,
-496
+5050,
+494
 ],
 [
-4658,
-537
+4634,
+534
 ],
 [
-4538,
+4509,
 617
 ],
 [
-4360,
-736
+4330,
+735
 ],
 [
-4343,
+4314,
 821
 ],
 [
-4284,
+4255,
 1027
 ],
 [
-4228,
+4199,
 1223
 ],
 [
-4253,
+4224,
 1465
 ],
 [
-4274,
+4245,
 1598
 ]
 ],
 "labelBBox": {
-"x": 4285,
+"x": 4256,
 "y": 1027,
 "width": 252,
 "height": 106
@@ -11970,15 +11970,15 @@
 "label": "Pages the operator — the LARGER of two \nindependent exits (betterstack is the \nother; a Sentry outage is survivable BY \nDESIGN). Issue alerts route to email → \ntarget_type issue owners with ",
 "points": [
 [
-4339,
+4319,
 1788
 ],
 [
-4375,
+4362,
 1847
 ],
 [
-4431,
+4426,
 1920
 ],
 [
@@ -11986,16 +11986,16 @@
 1958
 ],
 [
-4772,
-2104
+4777,
+2095
 ],
 [
-5687,
-2132
+5688,
+2128
 ],
 [
 6089,
-2137
+2135
 ]
 ],
 "labelBBox": {
@@ -14871,7 +14871,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 13372,
+"x": 13387,
 "y": 3285,
 "width": 372,
 "height": 180,
@@ -17865,7 +17865,7 @@
 "id": "aiwncp",
 "source": "github",
 "target": "platform.grokBuild",
-"label": "CI installs the Grok CLI (x.ai \ninstall.sh) and runs the \ninspect-contract + golden-path eval \n(grok-fidelity)",
+"label": "CI installs a pinned Grok CLI (versioned \nx.ai binary, sha256 content pin) and \nruns the inspect-contract + golden-path \neval (grok-fidelity, ADR-245)",
 "points": [
 [
 12755,
@@ -17935,7 +17935,7 @@
 "labelBBox": {
 "x": 13825,
 "y": 1580,
-"width": 222,
+"width": 251,
 "height": 90
 },
 "parent": null,
@@ -21947,7 +21947,7 @@
 1401
 ],
 [
-11902,
+11901,
 1487
 ],
 [
@@ -21955,56 +21955,56 @@
 1542
 ],
 [
-12150,
-1583
+12152,
+1584
 ],
 [
-13978,
-1515
+14005,
+1514
 ],
 [
-14075,
+14104,
 1572
 ],
 [
-14194,
+14223,
 1642
 ],
 [
-14230,
+14259,
 1704
 ],
 [
-14230,
+14259,
 1842
 ],
 [
-14230,
+14259,
 1842
 ],
 [
-14230,
+14259,
 1842
 ],
 [
-14230,
+14259,
 3006
 ],
 [
-14230,
-3225
+14259,
+3230
 ],
 [
-13953,
-3315
+13972,
+3318
 ],
 [
-13755,
-3351
+13769,
+3353
 ]
 ],
 "labelBBox": {
-"x": 14231,
+"x": 14260,
 "y": 2003,
 "width": 264,
 "height": 106
@@ -22026,23 +22026,23 @@
 "points": [
 [
 12177,
-3052
+3051
 ],
 [
-12479,
+12482,
 3122
 ],
 [
-13058,
-3257
+13071,
+3258
 ],
 [
-13362,
-3328
+13377,
+3329
 ]
 ],
 "labelBBox": {
-"x": 12866,
+"x": 12874,
 "y": 3155,
 "width": 255,
 "height": 56
@@ -37483,7 +37483,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 826,
+"width": 829,
 "height": 984
 },
 "nodes": [
@@ -37675,7 +37675,7 @@
 "id": "aiwncp",
 "source": "github",
 "target": "platform.grokBuild",
-"label": "CI installs the Grok CLI (x.ai \ninstall.sh) and runs the \ninspect-contract + golden-path eval \n(grok-fidelity)",
+"label": "CI installs a pinned Grok CLI (versioned \nx.ai binary, sha256 content pin) and \nruns the inspect-contract + golden-path \neval (grok-fidelity, ADR-245)",
 "points": [
 [
 608,
@@ -37709,7 +37709,7 @@
 "labelBBox": {
 "x": 577,
 "y": 240,
-"width": 222,
+"width": 251,
 "height": 89
 },
 "parent": null,
