@@ -876,7 +876,7 @@ existing provenance note.
 - [x] AC1. `apps/web-platform/infra/sentry/cron-monitor-alerts.tf` declares exactly one
   `resource "sentry_alert" "cron_monitor_failure"` with an inline `monitor_ids` list of
   `sentry_cron_monitor.<label>.id` references,
-  `frequency_minutes = 1440`, `enabled = true`, exactly the three lifecycle triggers (`first_seen_event`,
+  `frequency_minutes = 1441` (amended at review: 1440 is `anthropic_credit_exhausted`'s), `enabled = true`, exactly the three lifecycle triggers (`first_seen_event`,
   `reappeared_event`, `regression_event`; no `event_frequency_count`), one action filter with
   `conditions = []`, and email `issue_owners`/`ActiveMembers`. Verify with
   `grep -c '^resource "sentry_alert"' apps/web-platform/infra/sentry/cron-monitor-alerts.tf` = 1
