@@ -786,28 +786,18 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 #
 # The parser lives in a real file so the parity harness can execute it.
 #
-# RATIONALE CORRECTED (#7450). This comment used to argue FOR `git rev-parse
-# --show-toplevel` and AGAINST `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}`, on the grounds
-# that CLAUDE_PLUGIN_ROOT is unset in a plain session and the `:-` default would silently
-# make the path CWD-relative. The PREMISE is true and is ADR-179's own headline finding.
-# The CONCLUSION does not follow: it is true of the `:-plugins/soleur` form it was written
-# against, but NOT of the canonical BARE `${CLAUDE_PLUGIN_ROOT}` form, whose unset
-# expansion is root-anchored rather than CWD-relative — and the loader substitutes the
-# bare token at delivery time, so it is not unset at the point of use (measured, #7450).
-# Resolving via the git root is ADR-179's explicitly-rejected option (d): after a
-# `gh pr checkout` the git root is the REVIEWED PARTY's tree.
-#
-# The two operands in this file are deliberately NOT migrated here (#7450 DC-1) — they are
-# not secret-emission gates, so they are routed to #7453 with a severity flag. Only this
-# falsified argument is corrected, so the next reader does not take it as authority and
-# propagate the rejected form.
+# Both Check 10 operands resolve through the loader token (ADR-179, #7453): the loader
+# substitutes it with the INSTALLED plugin root at delivery. Never the git root — after a
+# `gh pr checkout` that is the REVIEWED PARTY's tree (ADR-179's rejected option (d)). Under
+# this check's `set -u` an unset token aborts at the assignment ("unbound variable"); an empty one
+# expands to a root-anchored `/skills/...` path that the `test -r` below refuses.
 #
 # Hard-fail on a load error. `awk -f <missing>` exits 2 with EMPTY stdout, and
 # `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a
 # missing parser would leave $CMD empty and Form B would silently parse a DIFFERENT
 # command. Never fall through.
-FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"
-test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK"; exit 1; }
+FORM_A_AWK="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/parse-form-a.awk"
+test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK (plugin root unresolved? export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>, never a path inside this repository)"; exit 1; }
 CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
 AWK_RC=$?
 if [[ "$AWK_RC" -ne 0 ]]; then
@@ -1008,7 +998,7 @@ verb was `""`; a Form A block scalar kept a leading `#`, so it was `"#"`). Conte
 the allowlist literal cannot detect behavioural drift.
 
 ```bash
-PROBE_GATE="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh"
+PROBE_GATE="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/probe-verb-gate.sh"
 test -r "$PROBE_GATE" || { echo "FAIL: Check 10 probe-verb gate missing at $PROBE_GATE"; exit 1; }
 if ! PROBE_REJECT="$(bash "$PROBE_GATE" "$CMD")"; then
   echo "FAIL: $(sanitize "$PROBE_REJECT")"

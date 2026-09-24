@@ -65,9 +65,8 @@
 #
 # THE `# repo-path: runtime` OPT-OUT IS PER LINE, NOT PER FILE. A file-scoped skip would pass
 # every row a naive matrix writes while silently exempting a real rot target -- the exact
-# failure this rule exists for. Its real user today is
-# `inngest-cutover-flip-rollout-7761.sh`'s `AFTER_FILE`: untracked, absent, read only if
-# readable, and written by the operator in response to the probe's own output.
+# failure this rule exists for. It has no live user since #7761 committed that probe's `.after`
+# sidecar (2026-09-24); the lint's own suite pins it with a synthetic fixture (R3-M20).
 #
 # DECLARED BLIND SPOTS (named, not silent): a path built by concatenation across lines or by
 # `printf -v`; a path assembled inside `$(cd ... && pwd)`; anything containing `..` (a

@@ -3468,14 +3468,8 @@ if want_scripts; then
   # the defect alarm. The suite also pins FAIL-precedence over PASS, fault-to-TRANSIENT on each
   # of the three queries, and the missing-creds arm (TRANSIENT, never a spurious FAIL page).
   run_suite "scripts/ship-merge-mergebase-verdict-8151" bash scripts/followthroughs/ship-merge-mergebase-verdict-8151.test.sh
-  # #8006: exit-code harness for the test-scripts* leg-duration soak probe. Registered
-  # explicitly (orphan-suite class above). Its exit code is the closure of #8006 (0 closes;
-  # 1 = a qualifying leg breached the 900 s bound; 2 = NOT YET — under-sampled, unclocked,
-  # or every run non-qualifying; 3 = gh failed). Load-bearing arms: a run qualifies ONLY
-  # when all 9 post-carve-out legs are present, green, and measured — a skipped leg is
-  # unmeasurable and fail-closed, never a green leg; and a pre-merge run (no
-  # test-scripts-heavy legs) is stale data, not a small sample.
-  run_suite "scripts/ci-leg-durations-8006" bash scripts/followthroughs/ci-leg-durations-8006.test.sh
+  # (#8006 retired 2026-09-24 — issue closed on sweeper PASS; probe script +
+  # suite deleted per the script's own RETIREMENT note.)
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the

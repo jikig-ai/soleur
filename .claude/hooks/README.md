@@ -571,15 +571,26 @@ The directory is gitignored.
 
 A PreToolUse(Bash) hook that defers a hardcoded list of prod-write commands
 for explicit operator approval. Position 4 in the PreToolUse(Bash) chain,
-after `ship-unpushed-commits-gate.sh`.
+after `ship-unpushed-commits-gate.sh`. Also registered for the `Monitor` tool
+(#8486): a Monitor script is a shell command in the same `tool_input.command`
+slot, so a write started as a monitor does not bypass the gate.
 
-### Starter manifest (3 entries, telemetry-driven expansion)
+### Manifest (4 entries; the first three telemetry-driven)
 
 | `rule_id` | matches |
 |---|---|
 | `prod-write-defer-git-push-main` | `git push origin {main,master,HEAD:main,HEAD:master}` incl. `-f`, `--force-with-lease`, refspec, env-prefix, wrapped via `-- <cmd>`, chained `&&`/`;` |
 | `prod-write-defer-terraform-apply` | `terraform apply` and `tofu apply` (same anchors) |
+| `prod-write-defer-operator-ack-script` | a write-mode invocation of any operator script that gates its production writes on the operator-script library's TTY ack (#8486, ADR-249): `flag-create`/`flag-delete` (dir-qualified, or bare after `cd` into the skill dir), `flip.sh`, `set-role.sh`, `provision-hetzner.sh`, `audit-sentry-extra-text-references.sh --apply`. Direct execution, interpreter words, `doppler run --`, `bash -c`, and PTY wrappers (`script`, `unbuffer`, `expect`, `pty.spawn`, `yes \|`) all match. Every call in the command is evaluated; `--dry-run` escapes only within that call's own argument tail, never under a PTY wrapper; a reader (`cat`, `grep`, `git`, …) escapes unless the command pipes into a shell. Fails CLOSED on its own error. Population pinned to `plugins/soleur/test/fixtures/operator-ack-arms.tsv` by set identity (Guard 3 in the `.test.sh`). |
 | `prod-write-defer-doppler-secrets-stdout` | `doppler secrets {set,delete} ... --config {prd,prd_terraform,prd_orchestration,dev,ci}` (rejects `prd-staging`, equals-form `--config=prd`, `--help`/`-h`); widened 2026-05-18 via #4029 — `delete` renders the post-deletion surviving-secrets table to stdout, leaking value chunks from sibling secrets; `prd_orchestration` added at PR review since tenant-* runbooks operate against it |
+
+**Expansion gate.** New entries normally land only after 2-week dry-run
+telemetry. `prod-write-defer-operator-ack-script` is the exception: after #8486
+no legitimate agent invocation of those scripts exists in write mode (the
+script itself refuses a write with no TTY, exit 64, before any credential
+fetch), so a false-positive defer costs nothing a correct run would have
+produced. The existing three rules still evaluate their read-only escape
+against the whole command; that pre-existing escape is tracked in #8662.
 
 Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
 `(^|&&|\|\||;|[[:space:]]--[[:space:]])` catches wrapped invocations per

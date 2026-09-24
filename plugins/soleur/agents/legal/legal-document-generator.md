@@ -70,7 +70,7 @@ Substrates are pinned, hash-verified corpus. **Never edit `references/templates/
 
 Order matters — augmentation goes ON TOP of stripped output, never before it (the strip drops the vendor header only when it is line 1; a blockquote added first strands the header at line 2 and the scan halts):
 
-1. Run `${CLAUDE_PLUGIN_ROOT}/skills/legal-generate/scripts/strip-vendor-credit.sh` on the filled **scratch copy**. It removes the line-1 attribution header and the trailing vendor credit block, normalizes invisible codepoints, and exits non-zero if the expected credit marker is absent or misplaced — a non-zero exit means the substrate is anomalous; stop and report, do not emit.
+1. Run `"${CLAUDE_PLUGIN_ROOT}/skills/legal-generate/scripts/strip-vendor-credit.sh"` on the filled **scratch copy**. It removes the line-1 attribution header and the trailing vendor credit block, normalizes invisible codepoints, and exits non-zero if the expected credit marker is absent or misplaced — a non-zero exit means the substrate is anomalous; stop and report, do not emit.
 2. Augment the stripped output: prepend the mandatory DRAFT blockquote and YAML frontmatter (below), append the closing blockquote.
 3. Scan the **final augmented bytes** before presenting. All must return zero:
    - `general[-.[:space:]]?legal` (covers `general.legal`, `General Legal`, `General-Legal`)

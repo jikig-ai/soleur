@@ -43,6 +43,11 @@ type AckReason = "doc-mention" | "operator-handoff";
 // `operator-handoff`: the prose itself hands the command to a human to type.
 // Growing this table is a reviewed decision: the prose at the site must read as its reason.
 const ACKS: Record<string, { reason: AckReason; lines: number }> = {
+  // Guard 3 of #8486: the defer-gate suite drives each script path as a test fixture; it
+  // directs no invocation (the rows assert the hook DEFERS those commands).
+  ".claude/hooks/prod-write-defer-gate.test.sh|flag-delete": { reason: "doc-mention", lines: 3 },
+  ".claude/hooks/prod-write-defer-gate.test.sh|provision-hetzner": { reason: "doc-mention", lines: 1 },
+  ".claude/hooks/prod-write-defer-gate.test.sh|user-set-role": { reason: "doc-mention", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/admin-ip-drift.md|admin-ip-refresh": { reason: "operator-handoff", lines: 5 },
   "knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md|admin-ip-refresh": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-cloudflare": { reason: "operator-handoff", lines: 1 },

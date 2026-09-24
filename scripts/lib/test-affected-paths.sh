@@ -145,6 +145,11 @@ ALWAYS_ON_SUITES=(
   # property over each. A diff adding a consumer anywhere must re-run it —
   # scoping to the lib's own path would decline exactly that diff.
   "plugins/soleur/test/operator-script.test.sh"
+  # operator-ack-guard (#8486): Guard 1 censuses every tracked *.sh for raw typed-yes
+  # prompts and confirm-skip flags, and Guard 2's population is every
+  # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
+  # anywhere must re-run it — scoping to the scripts it names would decline that diff.
+  "plugins/soleur/test/operator-ack-guard.test.sh"
   "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
   "apps/web-platform/test/parse-gitleaks-allowlists"
