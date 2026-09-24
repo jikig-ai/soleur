@@ -1077,7 +1077,7 @@ if grep -q 'timeout 1 bash' <<<"$(declare -f drive_blocked)"; then
 else
   fail "g4 harness (a.i): the no-TTY probe lost its \`timeout\` wrapper — a reorder mutation would hang the runner"
 fi
-unwrapped_out="$(timeout 30 bash "$SB/drive.sh" "$PRISTINE" soleur_op_barrier SOLEUR_TEST_SKIP_BARRIER 'x: ' <"$BLOCK_FIFO" 2>&1)"
+timeout 30 bash "$SB/drive.sh" "$PRISTINE" soleur_op_barrier SOLEUR_TEST_SKIP_BARRIER 'x: ' <"$BLOCK_FIFO" >/dev/null 2>&1
 unwrapped_rc=$?
 if [[ "$unwrapped_rc" -eq 64 ]]; then
   pass "g4 harness (a.ii): the compliant library exits 64 (not 124) against the same blocked stdin — row 3's RED is the reorder, not the kill"

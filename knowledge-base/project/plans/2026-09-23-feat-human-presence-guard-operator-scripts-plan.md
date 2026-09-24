@@ -836,24 +836,30 @@ error_reporting:
   destination: stdout marker + bootstrap-runs.jsonl run_halt line beside the script; WORM RPC failures exit 4 with a FATAL line on stderr before any mutation
   fail_loud: true
 failure_modes:
+  # This whole surface executes on the operator's/agent's own self-hosted CLI
+  # (Claude Code Bash tool, a hook, a plugin script) -- observability layer 7
+  # (cli-stdout-artifact, ADR-171/ADR-179): the durable artifact IS the
+  # queryable surface, there is no server to instrument and no SSH fallback.
+  # Every detection/alert_route line below names that layer explicitly (review
+  # #8650, observability-coverage-reviewer).
   - mode: agent pipes yes or runs a write arm with no TTY
-    detection: exit 64 plus SOLEUR_BOOTSTRAP_INPUT_REQUIRED on stdout, emitted before any Doppler or curl call (Guard 2 M1)
-    alert_route: agent transcript; the SKILL.md tells the agent to hand the printed command to the operator
+    detection: "[cli-stdout-artifact/layer7] exit 64 plus SOLEUR_BOOTSTRAP_INPUT_REQUIRED on stdout, emitted before any Doppler or curl call (Guard 2 M1)"
+    alert_route: "[cli-stdout-artifact/layer7] agent transcript; the SKILL.md tells the agent to hand the printed command to the operator"
   - mode: flip.sh --confirmed reintroduced by a caller
-    detection: exit 2 with the removal message; Guard 1 census RED in CI
-    alert_route: CI failure on the PR
+    detection: "[cli-stdout-artifact/layer7 at runtime; ci-workflow-run-log at PR time] exit 2 with the removal message; Guard 1 census RED in CI"
+    alert_route: "[ci-workflow-run-log] CI failure on the PR"
   - mode: approval_method RPC parameter missing on the audit DB (migration not yet applied)
-    detection: audit RPC non-2xx -> exit 4 FATAL before any mutation
-    alert_route: operator terminal; PR body states the window (Phase 8.2)
+    detection: "[cli-stdout-artifact/layer7] audit RPC non-2xx -> exit 4 FATAL before any mutation; SOLEUR_BOOTSTRAP_AUDIT_APPEND_FAILED marker + a names-not-values ledger row (audit-flag-flip.sh, review #8650)"
+    alert_route: "[cli-stdout-artifact/layer7] operator terminal; PR body states the window (Phase 8.2)"
   - mode: down migration applied while the installed helper still sends p_approval_method
-    detection: audit RPC non-2xx -> exit 4 FATAL before any mutation, on every flag write
-    alert_route: operator terminal; rollback order in the .down.sql header and ADR (helper revert first); Flagsmith dashboard break-glass per the flag-set-role incident block
+    detection: "[cli-stdout-artifact/layer7] audit RPC non-2xx -> exit 4 FATAL before any mutation, on every flag write; SOLEUR_BOOTSTRAP_AUDIT_APPEND_FAILED marker"
+    alert_route: "[cli-stdout-artifact/layer7] operator terminal; rollback order in the .down.sql header and ADR (helper revert first); Flagsmith dashboard break-glass per the flag-set-role incident block"
   - mode: pipeline treats a printed handoff command as done
-    detection: exit 64 marker in the transcript; the handoff is recorded as an undone operator step (wg-block-pr-ready-on-undeferred-operator-steps)
-    alert_route: PR-ready blocked until the operator step is closed
+    detection: "[cli-stdout-artifact/layer7] exit 64 marker in the transcript; the handoff is recorded as an undone operator step (wg-block-pr-ready-on-undeferred-operator-steps)"
+    alert_route: "[cli-stdout-artifact/layer7] PR-ready blocked until the operator step is closed"
   - mode: defer rule misses a path shape
-    detection: Guard 3 shape matrix in CI; at runtime the TTY ack still refuses (exit 64)
-    alert_route: CI failure; runtime marker
+    detection: "[ci-workflow-run-log at CI time; cli-stdout-artifact/layer7 at runtime] Guard 3 shape matrix in CI; at runtime the TTY ack still refuses (exit 64)"
+    alert_route: "[ci-workflow-run-log + cli-stdout-artifact/layer7] CI failure; runtime marker"
 logs:
   where: stdout/stderr of the invocation; bootstrap-runs.jsonl beside each script (gitignored); .claude/logs/incidents.jsonl and approvals.jsonl for the hook
   retention: ledger files are local and unrotated; hook logs 1-year TTL via rotate_if_needed
@@ -912,6 +918,21 @@ covered by making the handoff a blocking operator step (Phase 7.1, AC15).
 exposes unreleased, possibly unfinished features, or a per-org segment detach that changes which
 tenants see a feature — both reachable with the operator's Doppler-held Flagsmith key and prd
 service-role key, which the agent can read (D2).
+
+**Two artifacts named directly (review #8650, user-impact-reviewer):**
+
+- `flag_flip_audit.approval_method` (migration 140) is self-reported — it records that the
+  operator script's TTY ack returned in-process, not that a person typed (ADR-249 D6). No current
+  UI or export renders this column; if a future incident report, audit-log UI, or compliance export
+  ever surfaces it, that consumer MUST carry the self-reported caveat verbatim rather than
+  presenting `tty-ack` as verified human authorization — the column comment already states this for
+  any reader of the schema.
+- `user-set-role/SKILL.md` has no incident-rollback block analogous to `flag-set-role/SKILL.md`'s
+  (AC15 scopes that block to `flag-set-role` only). A wrongly-promoted `users.role` row has no
+  documented fast-path correction in this PR beyond the standard dry-run-first flow; this is an
+  accepted scope decision (role-promotion correction is lower-frequency and lower-urgency than a
+  live flag/Sentry-rule incident, which is what the incident-rollback block exists for), not an
+  oversight — recorded here so a future reader does not conclude the omission was missed.
 
 **Brand-survival threshold:** single-user incident.
 

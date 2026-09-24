@@ -38,12 +38,32 @@ audit_flag_flip_rpc() {
   local url="$1" srk="$2" flag="$3" env="$4" target="$5" action="$6" before="$7" after="$8" actor="$9"
   local body resp code id
 
+  # Observability (review #8650): the WORM audit trail failing is the one failure
+  # this script's own contract exists to make impossible to miss. stderr alone is
+  # sufficient for an ack-refusal (the operator is at the keyboard that just typed
+  # `yes`), but a durable, names-not-values ledger row survives past a scrolled
+  # terminal. `soleur_op_ledger_note` is defined by operator-script.sh, which every
+  # caller sources before this function is ever invoked (append-before-flip runs
+  # after the ack) — guard with `declare -F` so this stays safe if that assumption
+  # ever stops holding.
+  # Always returns 0 — this is bookkeeping around a failure already being
+  # reported, and running under the caller's `set -e` a nonzero return here
+  # would abort the function before its own `return 4` executes.
+  _audit_failed_marker() {
+    printf 'SOLEUR_BOOTSTRAP_AUDIT_APPEND_FAILED reason=%s\n' "$1" >&2
+    if declare -F soleur_op_ledger_note >/dev/null 2>&1; then
+      soleur_op_ledger_note audit_append_failed "$flag" "$1" || true
+    fi
+    return 0
+  }
+
   if [[ "${SOLEUR_OP_ACKED:-}" != "tty-ack" ]]; then
     echo "FATAL: audit append before the ack — the class-2 yes prompt has not returned in this process (#8486)" >&2
+    _audit_failed_marker no-ack
     return 4
   fi
-  command -v jq >/dev/null   || { echo "FATAL: jq not found (audit append)" >&2; return 4; }
-  command -v curl >/dev/null || { echo "FATAL: curl not found (audit append)" >&2; return 4; }
+  command -v jq >/dev/null   || { echo "FATAL: jq not found (audit append)" >&2; _audit_failed_marker no-jq; return 4; }
+  command -v curl >/dev/null || { echo "FATAL: curl not found (audit append)" >&2; _audit_failed_marker no-curl; return 4; }
 
   # --argjson for the bool/null args; --arg for the text args.
   body=$(jq -nc \
@@ -51,18 +71,18 @@ audit_flag_flip_rpc() {
     --arg  a  "$action" --arg ac "$actor" --arg am "$SOLEUR_OP_ACKED" \
     --argjson b  "$before" --argjson af "$after" \
     '{p_flag_name:$f, p_env:$e, p_target:$t, p_action:$a, p_before_bool:$b, p_after_bool:$af, p_actor:$ac, p_approval_method:$am}') \
-    || { echo "FATAL: failed to build audit RPC body (bad before/after token: '$before'/'$after')" >&2; return 4; }
+    || { echo "FATAL: failed to build audit RPC body (bad before/after token: '$before'/'$after')" >&2; _audit_failed_marker bad-body; return 4; }
 
   resp=$(curl -sS -w '\n%{http_code}' -X POST \
     -H "apikey: ${srk}" -H "Authorization: Bearer ${srk}" \
     -H "Content-Type: application/json" -H "Accept: application/json" \
     "${url}/rest/v1/rpc/audit_flag_flip" -d "$body") \
-    || { echo "FATAL: audit RPC request failed (curl error)" >&2; return 4; }
+    || { echo "FATAL: audit RPC request failed (curl error)" >&2; _audit_failed_marker curl-error; return 4; }
 
   code=$(printf '%s' "$resp" | tail -n1)
   body=$(printf '%s' "$resp" | sed '$d')
   [[ "$code" =~ ^2[0-9][0-9]$ ]] \
-    || { echo "FATAL: audit RPC non-2xx (HTTP $code): $body" >&2; return 4; }
+    || { echo "FATAL: audit RPC non-2xx (HTTP $code): $body" >&2; _audit_failed_marker "http-$code"; return 4; }
 
   # RETURNS uuid -> PostgREST emits a bare JSON scalar; array branch is dead-but-safe.
   # `|| id=""` makes the no-id path deterministic under the caller's `set -e` (a jq
@@ -70,7 +90,7 @@ audit_flag_flip_rpc() {
   # guard); the uuid-shape match then rejects empty/null/non-uuid (incl. a 2xx `{}`).
   id=$(printf '%s' "$body" | jq -r 'if type=="array" then .[0] else . end' 2>/dev/null) || id=""
   [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
-    || { echo "FATAL: audit RPC returned no valid uuid: $body" >&2; return 4; }
+    || { echo "FATAL: audit RPC returned no valid uuid: $body" >&2; _audit_failed_marker no-valid-uuid; return 4; }
 
   printf '%s' "$id"
 }

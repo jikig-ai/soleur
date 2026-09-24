@@ -152,7 +152,6 @@ STUB
 S2_STUB="$(mktemp -d)"
 make_doppler_stub "$S2_STUB"
 make_flip_curl_stub "$S2_STUB"
-OLD_TRAP_DIR="$S1_STUB"
 trap 'rm -rf "$S1_STUB" "$S2_STUB"' EXIT
 
 run_flip() { # env knobs come from caller; runs from repo root (FLAG_ENV_VARS resolution)

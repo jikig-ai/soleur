@@ -119,7 +119,15 @@ the audit row. That widens the `approval_method` CHECK beyond `'tty-ack'`. Named
 
 - An agent can no longer complete a flag, role or Sentry-rule write by piping `yes` or passing a
   flag. It gets exit `64` before any credential is fetched. The only route left in Claude Code is a
-  PTY wrapper, and the defer gate stops that.
+  PTY wrapper, and the defer gate stops that **for the four scripts under their documented paths and
+  basenames**. The defer gate's `opack_prefilter` keys on the literal basename
+  (`flip.sh`/`create.sh`/`delete.sh`/`set-role.sh`/…), so a PTY wrapper invoking a byte-identical copy
+  under a different filename evades the prefilter entirely — no defer, no `approvals.jsonl` row, no
+  incident emission — while the primary `[[ -t 0 ]]` ack gate still requires a real pty to satisfy
+  (review #8650, security-sentinel). This basename-bypass-under-PTY combination is a **named residual**
+  alongside the PTY-generally residual above: closing it needs the prefilter to key on a content
+  fingerprint (does the resolved script source `operator-script.sh` / call
+  `soleur_op_ack_or_die`?) rather than on basename.
 - Plans that prescribe an agent `flag-create`/`flag-set-role` apply step now become printed-command
   handoffs. A pipeline that treated exit `64` as done would ship code whose safety depends on a flag
   state nobody set; the blocking-operator-step rule is what prevents that.
