@@ -68,8 +68,14 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.280
 # vite/esbuild/bundle-require never enter prod deps.
 # Pinned to 1.50.0 to MATCH the client renderer @likec4/core/@likec4/diagram@1.50.0
 # (package.json) so `export json` emits the exact schema LikeC4Model.create reads.
-# Lays out via bundled graphviz-wasm — no native `dot` binary needed (verified
-# 2026-06-05: `likec4@1.50.0 export json` exits 0 with no dot on PATH, ~0.8s).
+# Lays out via bundled graphviz-wasm. server/c4-render.ts passes `--no-use-dot`:
+# inside a container likec4 otherwise defaults to the native `dot` binary, which
+# this image does not have, and exports a model with ZERO views (exit 0, ~1 s).
+# With wasm layout an 82-view model takes 4-7 s at 2 CPUs (#8696, measured
+# 2026-09-24). The child runs inside bubblewrap (installed below), launched by
+# /usr/bin/bash -> choom -> nice -> bwrap -> prlimit -> sh, all from the base
+# image (bash, util-linux, coreutils, dash); in production each must resolve
+# under /usr or the render refuses to run.
 RUN npm install -g likec4@1.50.0
 
 # Install git (workspace provisioning) + bubblewrap/socat (Agent SDK sandbox)

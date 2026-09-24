@@ -33,6 +33,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/c4-diagram-path-scope.test.ts",
   "test/c4-likec4-version-pin.test.ts",
   "test/c4-project-route.test.ts",
+  "test/c4-render-boundary.test.ts",
   "test/cc-dispatcher-concierge-context.test.ts",
   "test/cc-reprovision-git-discriminator.test.ts",
   "test/cla-evidence/allowlist.test.ts",
