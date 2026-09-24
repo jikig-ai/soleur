@@ -85,9 +85,15 @@ function extractSummary(body) {
   // Get a clean, short summary from the agent body text. Marked regions
   // (`<!-- x:start -->`…`<!-- x:end -->`) and HTML comments are agent-read or attribution
   // text, never card prose.
-  const prose = body
-    .replace(/<!--\s*([\w-]+):start\s*-->[\s\S]*?<!--\s*\1:end\s*-->/g, "")
-    .replace(/<!--[\s\S]*?-->/g, "");
+  let prose = body.replace(/<!--\s*([\w-]+):start\s*-->[\s\S]*?<!--\s*\1:end\s*-->/g, "");
+  // Strip comments to a fixpoint, then drop an unterminated opener and everything after it
+  // (which is what a browser hides anyway), so no `<!--` can survive into card text.
+  let previous;
+  do {
+    previous = prose;
+    prose = prose.replace(/<!--[\s\S]*?-->/g, "");
+  } while (prose !== previous);
+  prose = prose.replace(/<!--[\s\S]*$/, "");
   const lines = prose.split("\n");
   for (const line of lines) {
     const trimmed = line.trim();

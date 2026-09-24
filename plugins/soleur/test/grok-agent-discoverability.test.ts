@@ -72,7 +72,7 @@ describe("grok-agent-discoverability", () => {
     // Membership is checked per registry id, not through the renderer's own pattern, so a
     // matching error shared by the generator and this test cannot hide a leak.
     const named = (text: string) =>
-      agents.map((a) => a.id).filter((id) => new RegExp(`${id.replace(/[-:]/g, "\\$&")}(?![A-Za-z0-9_])`).test(text));
+      agents.map((a) => a.id).filter((id) => new RegExp(`${id.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")}(?![A-Za-z0-9_])`).test(text));
     const leaked: string[] = [];
     const renderingAgents = new Set<string>();
     for (const a of agents) {
@@ -101,6 +101,11 @@ describe("grok-agent-discoverability", () => {
     // Trailing glue the census strips (`-`, `:`) still renders; a longer token does not.
     expect(renderAgentIdsForGrok("soleur:marketing:copywriter- first", ids)).toBe("soleur-marketing-copywriter- first");
     expect(renderAgentIdsForGrok("soleur:marketing:copywriters", ids)).toBe("soleur:marketing:copywriters");
+    // Ids are matched literally: a regex metacharacter or backslash in an id is escaped, not
+    // interpreted (CodeQL js/incomplete-sanitization on #8686).
+    const meta = new Set(["soleur:a.b", "soleur:c\\d"]);
+    expect(renderAgentIdsForGrok("soleur:aXb soleur:a.b", meta)).toBe("soleur:aXb soleur-a.b");
+    expect(renderAgentIdsForGrok("soleur:c\\d soleur:c7", meta)).toBe("soleur-c\\d soleur:c7");
   });
 
   test("every registry id segment is in the charset the renderer and the census agree on", () => {

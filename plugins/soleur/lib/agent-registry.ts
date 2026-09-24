@@ -135,7 +135,7 @@ export function buildCompatStubBody(relativeAgentPath: string): string {
 export function renderAgentIdsForGrok(text: string, agentIds: ReadonlySet<string>): string {
   const ids = [...agentIds].sort((a, b) => b.length - a.length);
   if (ids.length === 0) return text;
-  const alternation = ids.map((id) => id.replace(/[-:]/g, "\\$&")).join("|");
+  const alternation = ids.map((id) => id.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")).join("|");
   return text.replace(new RegExp(`(?<![A-Za-z0-9_:-])(?:${alternation})(?![A-Za-z0-9_])`, "g"), (id) =>
     agentIdToGrokSubagentType(id),
   );
