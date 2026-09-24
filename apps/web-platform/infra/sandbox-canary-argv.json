@@ -1,5 +1,5 @@
 {
-  "_comment": "Real-captured SDK bwrap SETUP argv (canonical projection) for the faithful sandbox canary (#5875 / #5913 / ADR-079). Populated by --capture driving the real @anthropic-ai/claude-agent-sdk query() with buildAgentSandboxConfig(), then normalizeCapturedArgv() (drops env-forwarding + random/host paths, keeps the seccomp-relevant --unshare-*/mount structure; ${CANARY_WS}/${CANARY_EMPTY} placeholders substituted at replay). MUST NOT be hand-authored (#4932 trap).",
+  "_comment": "Real-captured SDK bwrap SETUP argv (canonical projection) for the faithful sandbox canary (#5875 / #5913 / ADR-079). Populated by --capture driving the real @anthropic-ai/claude-agent-sdk query() with buildAgentSandboxConfig(), then normalizeCapturedArgv() (drops env-forwarding + random/host paths, keeps the seccomp-relevant --unshare-*/mount structure; ${CANARY_WS}/${CANARY_EMPTY}/${CANARY_C4_STAGING} placeholders substituted at replay). MUST NOT be hand-authored (#4932 trap).",
   "status": "captured",
   "schema": "canonical-bwrap-v1",
   "sdkPackage": "@anthropic-ai/claude-agent-sdk",
@@ -19,6 +19,8 @@
     "${CANARY_WS}",
     "--tmpfs",
     "/proc",
+    "--tmpfs",
+    "${CANARY_C4_STAGING}",
     "--ro-bind",
     "${CANARY_EMPTY}",
     "${CANARY_WS}/.claude",
@@ -92,11 +94,12 @@
   ],
   "prepDirs": [
     "${CANARY_WS}",
-    "${CANARY_EMPTY}"
+    "${CANARY_EMPTY}",
+    "${CANARY_C4_STAGING}"
   ],
   "droppedForDeterminism": {
     "setenv": 26,
-    "hostBind": 3,
+    "hostBind": 2,
     "randomSocket": 1,
     "randomEmptyDirBind": 10
   }

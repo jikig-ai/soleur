@@ -57,11 +57,12 @@ fi
 # isolation surface and the suite never executed against it -- greening that would
 # be a fail-open on a tenant-isolation gate. What changes is the diagnosis: the
 # author is told the run was displaced and that a re-run clears it, instead of
-# hunting a test failure that does not exist. A whole-run cancellation cannot
-# reach this arm: it would cancel this aggregator job too, so this line would
-# never execute.
+# hunting a test failure that does not exist. A whole-run GRACEFUL cancel also
+# reaches this arm: GitHub still runs this `if: always()` aggregator on a cancelled
+# run. cancel-superseded-pr-runs.yml does exactly that to runs on a superseded head
+# SHA (ADR-216 addendum 2026-09-24), so the message names that case first.
 if [[ "$detect" == "success" && "$suite" == "cancelled" ]]; then
-  echo "::error::tenant-integration gate FAILED closed: the heavy dev-Supabase suite was CANCELLED before it could report (detect-changes=success, tenant-integration=cancelled). OBSERVED, not diagnosed -- this gate receives two job results and cannot tell WHY the suite was cancelled. One cause that produces exactly this state is concurrency EVICTION: the job holds a per-ref 'dev-supabase-<ref>' mutex, GitHub keeps at most one PENDING job per group, and a third isolation-surface run on this ref (this PR, or main) displaces the one waiting. A manual cancel and a runner failure look identical here -- check the run timeline to tell them apart. Either way nothing was verified against this tree, so the gate cannot pass. 'Re-run failed jobs' clears the eviction case; if it recurs on every attempt, something other than eviction is cancelling the suite and the run timeline is where to look." >&2
+  echo "::error::tenant-integration gate FAILED closed: the heavy dev-Supabase suite was CANCELLED before it could report (detect-changes=success, tenant-integration=cancelled). OBSERVED, not diagnosed -- this gate receives two job results and cannot tell WHY the suite was cancelled. One cause that produces exactly this state is concurrency EVICTION: the job holds a per-ref 'dev-supabase-<ref>' mutex, GitHub keeps at most one PENDING job per group, and a third isolation-surface run on this ref (this PR, or main) displaces the one waiting. A manual cancel and a runner failure look identical here -- check the run timeline to tell them apart. If this SHA is no longer the PR head, cancel-superseded-pr-runs.yml reaped the run and no action is needed: the new head has its own run. Otherwise nothing was verified against this tree, so the gate cannot pass. 'Re-run failed jobs' clears the eviction case; if it recurs on every attempt, something other than eviction is cancelling the suite and the run timeline is where to look." >&2
   exit 1
 fi
 
