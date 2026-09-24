@@ -42,6 +42,8 @@ INSTRUCTIONS:
 - Report back: what you completed, files modified, any issues encountered"
 ```
 
+**A brief written by hand (a review-fix round, a one-shot slice) still owes this template's INSTRUCTIONS block verbatim**, and a slice that WRITES records describing a pipeline step (an enrolment, a tracker, a close) must run after that step, not before it. **Why:** #8708 — four ad-hoc briefs omitted the ratchet line and 13 unguarded fixture sites reached the tree; a records slice wrote "enrolled on #6122" before the enrolment ran, and two review seats flagged it.
+
 ## Step B3: Collect results and integrate
 
 Wait for all subagents to complete. Then:

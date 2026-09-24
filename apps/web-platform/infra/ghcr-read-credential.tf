@@ -5,6 +5,10 @@
 # (`--config prd` everywhere: ci-deploy.sh, cloud-init.yml). Mirrors the github-app.tf
 # doppler_secret precedent (config = "prd", ignore_changes = [value]).
 #
+# SUPERSEDED 2026-09-24 (#8036 1d): no fresh-boot template reads this any more, and the owner was
+# measured to be the operator's own account, not a machine account (ADR-096 amendment 2026-09-24).
+# The value is revoked; this file and the variables it reads are retired by 5.4 (#8714).
+#
 # Ownership / auth-model decision (ADR-087 D1, ADR-082 amendment): a scoped fine-grained
 # PAT on a MACHINE account over the two jikig-ai packages, recorded as a DELIBERATE,
 # narrow, read-only exception to hr-github-app-auth-not-pat. security-sentinel affirmed

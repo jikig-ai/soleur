@@ -187,11 +187,11 @@ readonly GHCR_DOCKER_CONFIG="${DOCKER_CONFIG}/config.json"
 # server.tf. It is NEVER baked into the DEPLOY image (circular trust).
 readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosign-trusted-root.json}"
 
-# Self-hosted zot registry (#6122/ADR-096). The pull path prefers zot ONLY when it is
-# confirmed-configured-and-live (see zot_gate_and_login) — a strict dark-launch: until
-# the operator provisions (1.8) + backfills (1.9) zot, ZOT_REGISTRY_URL is absent in
-# Doppler prd, ZOT_ACTIVE stays 0 — and since #8036 1c that is terminal, not a fall-through
-# (wg-dark-launch-deploy-gates). zot serves plain HTTP on the private net (cosign digest-
+# Self-hosted zot registry (#6122/ADR-096). The pull path uses zot ONLY when it is
+# confirmed-configured-and-live (see zot_gate_and_login). zot was provisioned and backfilled
+# before the 2026-07-17 cutover, so ZOT_REGISTRY_URL is set in Doppler prd; if it is ever
+# absent, or the gate otherwise misses, ZOT_ACTIVE stays 0 — and since #8036 1c that is
+# terminal, not a fall-through (wg-dark-launch-deploy-gates). zot serves plain HTTP on the private net (cosign digest-
 # pinning is the integrity guard, not TLS — Phase-0 spike), so cosign verify of a
 # zot-pulled digest needs --allow-insecure-registry (Edge B). ZOT_REGISTRY_URL is fetched
 # from Doppler at runtime by zot_gate_and_login (test-overridable); it is NOT readonly.
@@ -763,9 +763,10 @@ pull_auth_recovery_event() {
 # local-cache (#6512) is the last-resort same-version reload rescue — since 1c that means the
 # SOLE registry failed to serve an already-running image, a strictly worse condition than the
 # two-registry outage this comment used to describe — so it is level=warning, watched by the
-# DEDICATED local_cache_reload_rate issue-alert (NOT the zot soak). Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
-# pre-activation period emits nothing, so the flip stays a strict no-op until zot is
-# live. Fail-open, same Sentry store transport as pull_failure_event.
+# DEDICATED local_cache_reload_rate issue-alert (NOT the zot soak). Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1);
+# a deploy whose gate left ZOT_ACTIVE=0 emits no success breadcrumb (zot has been live since the
+# 2026-07-17 cutover, so that is an outage, not a dark launch; when zot is configured the gate
+# reports it via zot_gate_degraded_event). Fail-open, same Sentry store transport as pull_failure_event.
 registry_pull_event() {
   local registry="$1" image_kind="$2" tag="$3"
   logger -t "$LOG_TAG" "IMAGE_PULL_OK: registry=$registry image=$image_kind tag=$tag"
@@ -1434,10 +1435,11 @@ _doppler_get_observed() {
 #   SOLEUR_DEPLOY_CRED_FAIL secret=<NAME> rc=<n> empty=<0|1> err="<bounded stderr tail>"
 #
 # WHY RETRY, AND WHY BOUNDED (R25). `zot_gate_and_login` is annotated "Fail-open: never aborts
-# the deploy", and cloud-init bakes /etc/default/soleur-ghcr-read (for its OWN fresh-boot login;
-# #8036 1c retired this script's reader of that file) so a cold-boot
-# deploy proceeds when Doppler answers empty at the boot instant. A transient Doppler blip must
-# therefore never change the OUTCOME of a deploy; a bounded retry absorbs the blip so it cannot
+# the deploy". (It once added that cloud-init baked /etc/default/soleur-ghcr-read for a
+# fresh-boot GHCR login; #8036 1c retired this script's reader of that file and #8036 1d
+# stopped fresh hosts from writing it. web-1 keeps its first-boot copy, a revoked value.)
+# A cold-boot deploy must still proceed when Doppler answers empty at the boot instant, so a
+# transient Doppler blip must never change the OUTCOME of a deploy; a bounded retry absorbs the blip so it cannot
 # be MISREPORTED as a dead credential. It is not an outage-waiting loop: the caller degrades onto
 # exactly the path it took before either way. The zot-gate callers pass the default 2/2s (that
 # path had NO retry at all before); the GHCR prelude callers pass 3/5s, which is byte-for-byte
@@ -1709,9 +1711,10 @@ prefetch_deploy_secrets() {
 # test is false on a read-only mount) and therefore silently never sweep, while any acceptance
 # criterion graded on `home_ghcr_auth=none` read `inline` forever. The home entry is a pre-#6565
 # fossil written by no live code path (since the DOCKER_CONFIG relocation the deploy user's own
-# logins go to $DEPLOY_DOCKER_CONFIG_DIR); it is OBSERVED by the marker below, not swept, and it
-# rides the 1d follow-up alongside root's config, which is unreadable from here for the same
-# structural reason. `credential-persist-home-guard.test.sh` names the $HOME write as recurrence
+# logins go to $DEPLOY_DOCKER_CONFIG_DIR); it is OBSERVED by the marker below, not swept. #8036 1d
+# stopped fresh boots writing root's config (below) but did not sweep either file on a running
+# host: both are unreachable from this unit for the same structural reason, and both carry only
+# the revoked value. `credential-persist-home-guard.test.sh` names the $HOME write as recurrence
 # class #1 with its own CI gate — do not "fix" this by widening the scope.
 #
 # WHY `docker logout` AND NOT A HAND-ROLLED `jq` REWRITE: it is the registry's own removal verb
@@ -1808,10 +1811,12 @@ sweep_stale_registry_auth() {
 # unscrubbed). journald only, no Sentry: same volume rationale as the retired PRELUDE lines.
 # SOLEUR_GHCR_CONFIG_ROOT_PATH is a TEST-ONLY override.
 #
-# READ `root_ghcr_auth=inline` AS EXPECTED, NOT AS A HALF-LANDED CHANGE. After 1c the root slot
-# reads `inline` permanently: cloud-init's boot-time `ghcr_login` runs as root with DOCKER_CONFIG
-# unset, so it writes /root/.docker/config.json, and retiring THAT login is 1d scope. A reader
-# seeing `deploy_ghcr_auth=none swept=yes root_ghcr_auth=inline` is looking at a fully-landed 1c.
+# READ `root_ghcr_auth=inline` AS EXPECTED, NOT AS A HALF-LANDED CHANGE. Before #8036 1d,
+# cloud-init's boot-time `ghcr_login` ran as root with DOCKER_CONFIG unset and wrote
+# /root/.docker/config.json. 1d deleted that login, so a host created after 1d reads no GHCR
+# entry in root's config; a host created before it (web-1) keeps `inline` (a revoked value) for
+# its lifetime, because nothing on a running host re-writes root's config. A reader seeing
+# `deploy_ghcr_auth=none swept=yes root_ghcr_auth=inline` on web-1 is looking at a fully-landed 1c.
 emit_registry_config_marker() {
   _GHCR_CFG_MARKER=""
   _ghcr_cfg_probe deploy "$GHCR_DOCKER_CONFIG"
@@ -1831,8 +1836,8 @@ emit_registry_config_marker() {
 # present in Doppler prd AND a fast /v2/ probe answers AND the pull cred logs in. Any
 # miss leaves ZOT_ACTIVE=0, which since #8036 1c is TERMINAL for the deploy: there is no GHCR
 # leg left to fall through to, so the only remaining tier is the same-version local-cache rescue
-# (wg-dark-launch-deploy-gates), so this is a strict no-op until the operator provisions
-# (1.8) + backfills (1.9) zot. The zot `docker login` writes a second auths entry into
+# (wg-dark-launch-deploy-gates). zot was provisioned and backfilled before the 2026-07-17
+# cutover, so a miss here is an outage, not a pre-activation state. The zot `docker login` writes a second auths entry into
 # the SAME $GHCR_DOCKER_CONFIG the cosign verifier mounts :ro — so Edge B (insecure .sig
 # fetch auth) is satisfied ATOMICALLY with the pull cred. Fail-open: never aborts the
 # deploy. Runs AFTER prefetch_deploy_secrets + sweep_stale_registry_auth (which prefetched
@@ -2152,8 +2157,10 @@ pull_image_with_fallback() {
     # alarm's `registry = "ghcr-fallback"` condition was removed while its other four stayed
     # (apps/web-platform/infra/sentry/issue-alerts.tf), together with the matching
     # `FAIL_QUERIES[rolling]` entry and its cardinality floor in
-    # scripts/followthroughs/zot-soak-6122.sh. That tripwire was itself stale when executed — it
-    # said the soak's FAIL set was "FOUR entries, not two"; it was five, and is now four.
+    # scripts/followthroughs/zot-soak-6122.sh. #8036 1d then retired two more fresh-boot conditions
+    # and renamed a third, so the rule and the soak's FAIL set now hold TWO. That tripwire was itself
+    # stale when executed — it said the soak's FAIL set was "FOUR entries, not two"; it was five,
+    # became four at 1c, and is two since 1d.
     #
     # `registry_pull_event` is therefore never invoked with a ghcr-fallback argument anywhere in
     # this script. Written without the literal call form on purpose: the residual-zero guard and
