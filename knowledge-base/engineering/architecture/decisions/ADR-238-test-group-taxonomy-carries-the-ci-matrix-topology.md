@@ -82,10 +82,11 @@ be a second, driftable copy of the suite registry.
 - The heavy job's timing artifacts upload under a distinct
   `suite-timings-scripts-heavy-*` prefix — `upload-artifact` v4 names are
   immutable per run, and a shared name would red every leg.
-- #8006 stays open under a follow-through probe
-  (`scripts/followthroughs/ci-leg-durations-8006.sh`): the close criterion is
-  measured post-merge leg durations, and the probe auto-closes only when
-  ≥3 qualifying main runs show every `test-scripts*` leg under 900 s.
+- #8006 stayed open under a follow-through probe
+  (`scripts/followthroughs/ci-leg-durations-8006.sh`): the close criterion
+  was measured post-merge leg durations, auto-closing once ≥3 qualifying
+  main runs showed every `test-scripts*` leg under 900 s. (Closed
+  2026-09-24 on sweeper PASS, 20/20 qualifying runs — probe retired.)
 - Deferred with issue refs: internal battery splitting (#8006 remainder),
   intra-leg parallelism (#8231), affected-suites local gate (#8322),
   pre-commit battery cost (#8045), contention ceiling (#8163).
