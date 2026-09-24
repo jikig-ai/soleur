@@ -14,6 +14,39 @@ lane: cross-domain
 
 # fix: git-data-pin-redeploy source-run gate keys on the apply step, not the job conclusion
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24 (plan v3).
+**Sections enhanced:** Proposed Solution (decision rule, Files to Edit), Technical Considerations,
+Observability, Guard Contract, Acceptance Criteria, Test Scenarios, Dependencies & Risks, Sharp Edges.
+**Agents used:** `soleur:engineering:review:security-sentinel`,
+`soleur:engineering:review:architecture-strategist`, `soleur:engineering:review:test-design-reviewer`,
+`soleur:engineering:review:observability-coverage-reviewer`, and a mechanical verification pass
+(10 of 10 factual claims confirmed).
+
+### Key Improvements
+
+1. **The "pin published but not redeployed" state now emails ops.** A red job with a green apply
+   (runs 35979304442, 34836141887) leaves every erasure failing `host_key_mismatch` with only a run
+   annotation today; v3 adds gate output `pin_published` and a dedicated email step, still without
+   an automatic production redeploy.
+2. **ADR-237 is amended in this PR** (the plan said "no ADR change"; the trigger rule, a new
+   display-name coupling and the pin-lag bound all change) and four runbook recovery sites gain the
+   no-`source_run_id` arm.
+3. **Output sanitization is required**: conclusions pass an allowlist, counts a numeric check, and
+   no API-supplied name is ever printed (a branch dispatch controls those strings).
+4. **Every arm prints a distinct `verdict=` token**, closing three test gaps where a mutant could
+   pass through the wrong arm (a green job with an impossible apply conclusion is now exit 1 and
+   has row G16; a deleted row-3 branch is now caught; the 5a/5b wording split is asserted).
+
+### New Considerations Discovered
+
+- The gate is a correctness gate, not an authorization gate: write access can already force a
+  redeploy, so step-name forgery from a branch gains nothing (documented, no filter added).
+- A red job with `steps: []` is an `environment` refusal (e.g. `infra-privileged` on a branch
+  dispatch), not a possible pin publication — quiet, not a warning.
+- The existing gate header cites a non-existent "ADR-237 D6".
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -163,7 +196,7 @@ Two older birth runs show the other shapes the gate must grade (read-only, same 
 - **34822248580**: `git_data_host_create` `failure` at the plan step (the birth gate refused); the
   apply step is listed and `skipped`. Today's gate takes the "pin may be published" warning and
   advises a forced production redeploy although nothing was applied — rule row 3 below.
-- **34836141887**: birth apply `success`, boot poll `failure`, job `failure` — rule row 5 (`apply=success`).
+- **34836141887**: birth apply `success`, boot poll `failure`, job `failure` — rule row 5a (`verdict=pin_published`).
 - A job that failed early still lists **all** its steps (later ones `skipped`; 18 steps in both birth
   runs), so "apply step matched 0 times" in a job that ran steps means a rename, not an early stop.
   Runs that never started (`startup_failure` 35438190773, `cancelled` 35516720404) return
@@ -175,56 +208,75 @@ this issue closing.
 
 ## Proposed Solution
 
-### Decision rule (the new gate) — v2, simplified at plan review
+### Decision rule (the new gate) — v3, after plan review and deepen
 
 Per job (`git_data_host_create`, `git_data_host_replace`), let `N` = the number of entries in that
 job's `steps` whose `name` equals the job's apply-step constant (a missing or `null` `steps`
 counts as `N = 0` — test `(.steps | type) == "array"` explicitly, never `// []`), and `A` = that
-step's `conclusion` when `N == 1` (a JSON `null` is carried as the literal `null`, never coalesced
-to `""`).
+step's `conclusion` when `N == 1`, mapped through an allowlist before any use:
+`success|failure|cancelled|skipped|timed_out|neutral|action_required|stale` pass through, JSON
+`null` becomes the literal `null`, anything else becomes `unrecognized`. `N` is checked against
+`^[0-9]+$`. **The gate never prints a job or step `name` taken from the API** (a branch dispatch
+controls those strings); it prints only the two constants, `N`, `A` and the source run id.
 
-| # | Job | Apply step | Result for that job |
-|---|---|---|---|
-| 1 | absent or `skipped` | — | quiet: no apply |
-| 2 | `success` | `N == 1`, `A == success` | **proceed** (the pin rotated) |
-| 3 | any | `N == 1`, `A == skipped` | quiet `::notice::` containing `no apply ran` and the likely cause ("a `plan_only` rehearsal, or the job stopped before apply"): pin unchanged |
-| 4 | `success` | `N != 1` | **exit 1, fail closed**: a green job whose apply step cannot be identified (renamed, duplicated, or `steps` missing) |
-| 5 | not `success` | anything else | **warning** arm (`::warning::` + step-summary line, proceed=false) that prints `apply=<A, or "not found", or "matched N times">`. When `A == success` the text says the pin **was published**; otherwise that it **may be** published. |
+Rows are evaluated **in this order; the first match wins**. Each row prints a distinct `verdict=`
+token so every test can prove which arm ran:
+
+| Order | Job | Steps / apply step | Result for that job | Token |
+|---|---|---|---|---|
+| 1 | absent, or `skipped` | — | quiet notice: the job did not run | `verdict=not_run` |
+| 1b | not `success` | `steps` is an array and empty | quiet notice: the job never started a step (an `environment` refusal — e.g. `infra-privileged` refusing a branch dispatch — or a pending job cancelled by `git-data-state`) | `verdict=not_run` |
+| 4 | `success` | `N != 1`, or `A` is not `success`/`skipped` | **exit 1, fail closed**: a green job whose apply step cannot be identified or whose conclusion is impossible for a green job | `verdict=unidentified` |
+| 2 | `success` | `A == success` | **proceed** (the pin rotated) | `verdict=rotated` |
+| 3 | any | `A == skipped` | quiet `::notice::` with the words `no apply ran` and the likely cause ("a `plan_only` rehearsal, or the job stopped before apply"): pin unchanged | `verdict=no_apply` |
+| 5a | not `success` | `A == success` | `::warning::` + step-summary line: **the pin was published** but the job is red; proceed=false; gate output `pin_published=true` (drives a dedicated ops email, below) | `verdict=pin_published` |
+| 5b | not `success` | anything else (`N != 1`, `failure`, `cancelled`, `null`, …) | `::warning::` + step-summary line: the pin **may be** published; prints `apply=<A>` or `apply=not_found` or `apply=matched_<N>`; proceed=false | `verdict=pin_maybe_published` |
 
 Combination: any job in row 4 → exit 1 before emitting outputs. Else any job in row 2 → proceed,
-`source_job=<that job>` (birth wins a tie, as today). Else any job in row 5 → the warning arm. Else
-the quiet notice arm. Row 1 keeps today's lookup (`length == 1` else absent); job names are
-already pinned by the existing parity test (`terraform-target-parity.test.ts`, "The gate names the
-two jobs by their exact apply-workflow ids").
+`source_job=<that constant>` (birth wins a tie, as today). Else any job in 5a/5b → the warning arm
+(`pin_published=true` if any job is 5a). Else the quiet notice arm. Every notice and warning line
+carries, on the SAME line, `in run <id>`, the per-job `git_data_host_create=<c>` /
+`git_data_host_replace=<c>` tokens (row G3 reads them) and the `verdict=` token (runbook T-R1 greps
+one line for both).
 
-What each row buys (Property List): row 2 + the job-success conjunct → P2; row 3 → P1 (the #8710
-fix) and, for a red job, P4 (it stops today's false "pin may be published" advice to force a
-production redeploy when the plan was refused before apply — run 34822248580); row 4 → P3; row 5
-→ P4 (the operator sees `apply=success`, i.e. the pin was published). Both jobs through the same
+What each row buys: row 2 + the job-success conjunct → P2; row 3 → P1 (the #8710 fix), and for a
+red job it stops today's false "pin may be published" advice when the plan was refused before
+apply (run 34822248580); rows 1b/4 → P3 without false alarms; 5a/5b → P4. Both jobs through one
 rule → P5.
 
-**Messages the operator acts on (P4).**
+**Why 5a does not redeploy, and why it now emails.** A red job with a green apply is a host that
+failed its boot verification after the pin was published (runs 35979304442, 34836141887). The
+runbook's recovery for that state is a read first, never a second replace; redeploying production
+for it is not automatic. But the app now holds a pin for a host that no longer exists, so every
+erasure fails `host_key_mismatch` until someone acts — ADR-237's "pin lag is bounded" assumes a
+redeploy runs. Today that state produces only a run annotation. v3 adds an email for it
+(`pin_published=true`), so the operator learns of it without watching the Actions page.
 
-- Row 5 with `A == success` on the **replace** job names the runbook section
-  §"If the fresh host fails a boot check after step 3" and says: start with a read, do not replace
-  again; the redeploy, if wanted, is `gh workflow run git-data-pin-redeploy.yml --ref main` (no
-  `source_run_id`). On the **birth** job it names the same no-`source_run_id` dispatch as the only
-  recovery (a birth cannot be repeated).
-- Every exit-1 `::error::` names what to change (the apply-step constant in `source-run-gate.sh`,
+**Operator messages.**
+
+- 5a on the **replace** job names the runbook section
+  §"If the fresh host fails a boot check after step 3" (read first, do not replace again) and the
+  redeploy command for when the operator wants the app on the new pin:
+  `gh workflow run git-data-pin-redeploy.yml --ref main` (no `source_run_id`). On the **birth** job
+  it names that dispatch as the only recovery (a birth cannot be repeated).
+- Every row-4 `::error::` names what to change (the apply-step constant in `source-run-gate.sh`,
   or the workflow step name) and the same no-`source_run_id` dispatch for a pin that did rotate.
-- The follower's failure email (`git-data-pin-redeploy.yml`, step `Email ops when the pin is not
-  confirmed loaded`) today offers only "re-run" or `-f source_run_id=<apply run id>`, both of which
-  hit the same refusal for an exit-1 row. Add one sentence: read the run's annotations, and if the
-  source apply really published a pin, dispatch with **no** `source_run_id`. The existing
-  `-f source_run_id=` sentence stays (the parity test asserts it).
 
-Deliberately **not** modelled (plan review, v2): an in-progress source job (only a manual dispatch
-can reach it; it lands in row 5, a warning — never silent, never a redeploy); a renamed or
-duplicated **job** (caught in CI by the existing job-name parity assertion); a red job with
-`steps: []` (row 5 — a warning, which never emails and never redeploys).
+**This is a correctness gate, not an authorization gate.** A branch dispatch runs the branch's copy
+of the apply workflow, so its author controls job and step names and could fabricate a green step
+carrying the apply name. That can force one redeploy of `main`'s code — the gate and `track.sh`
+come from `main`'s checkout. Today it is easier still (any green job with the right name
+proceeds). Anyone who can dispatch the apply workflow already has write access and can dispatch
+the follower with no `source_run_id` for an unconditional redeploy, so no privilege is gained. No
+`head_branch == main` filter is added: a real birth or replace dispatched from a branch rotates
+the live key too, and filtering it would leave a stale pin.
 
-The gate's header comment carries this table verbatim, so the next maintainer does not need the
-plan.
+Deliberately **not** modelled: an in-progress source job (only a manual dispatch reaches it; it
+lands in 5b, never silent, never a redeploy); a renamed or duplicated **job** (caught in CI by the
+existing job-name parity assertion); a partial re-run (#8760).
+
+The gate's header comment carries this table verbatim and cites ADR-237 **D2** (the current header
+cites "ADR-237 D6", which does not exist — D6 is the old plan's numbering).
 
 ### Apply-step identity
 
@@ -236,50 +288,78 @@ that job of `.github/workflows/apply-web-platform-infra.yml`:
 
 Exact string equality (`jq --arg`), never a prefix/regex. A rename in the workflow without the gate
 fails parity test PT1 in CI; at runtime a green job reaches rule row 4 (exit 1, failure email) and a
-red job reaches row 5 (a warning naming `apply=not found`) — never a silent skip.
+red job reaches row 5b (a warning naming `apply=not_found`) — never a silent skip.
 
 ### Files to Edit
 
-- `.github/actions/dispatch-web-redeploy/source-run-gate.sh` — the decision rule above; header
-  comment carries the rule table (the property now reads "proceed iff the apply step concluded
-  success in a job that concluded success"). Write each mutation site (below) as a single, unique
-  line so `_mutant`'s `count == 1` precondition holds. Keep the notice/warning lines carrying the
-  `git_data_host_create=<c>` / `git_data_host_replace=<c>` tokens that row G3's
-  `::notice::.*git_data_host_create=skipped` assertion reads.
+- `.github/actions/dispatch-web-redeploy/source-run-gate.sh` — the v3 decision rule; the `A`
+  allowlist and `N` numeric check; never print API names; header comment carries the table and
+  cites ADR-237 D2. Write each mutation site (Guard Contract) as a single, unique line so
+  `_mutant`'s `count == 1` precondition holds. Emit `pin_published=true|false` alongside
+  `proceed` and `source_job`.
+- `.github/workflows/git-data-pin-redeploy.yml`:
+  - A new step, before the existing failure email, `Email ops when a pin was published but not
+    redeployed`, using `./.github/actions/notify-ops-email` with
+    `if: ${{ always() && steps.gate.outputs.pin_published == 'true' }}`, its own subject
+    ("git-data pin published but the app was not redeployed — erasures fail host_key_mismatch until
+    it is"), and a body built only from workflow-context scalars (`github.event.workflow_run.id`,
+    `github.run_id`, server URL) — no new `inputs.*` interpolation.
+  - The existing failure email body gains one sentence: read the run's annotations; if the source
+    apply really published a pin, dispatch `gh workflow run git-data-pin-redeploy.yml --ref main`
+    with **no** `source_run_id`. The existing `-f source_run_id=` sentence stays (the parity test
+    asserts it). The header `Recovery:` comment gets the same sentence.
+  - The parity test's "only `RESEND_API_KEY`" assertion stays true: the new email step binds the
+    same secret, so the test's exact list becomes two occurrences of `secrets.RESEND_API_KEY` —
+    update that one expectation, nothing else.
 - `tests/scripts/test-dispatch-web-redeploy.sh`:
   - `_gjobs` writes per-job `status: "completed"`, `conclusion`, and `steps[]` entries of the
     measured shape (`name`, `conclusion`, `number`, `status`); a job's steps list the real
-    neighbouring step names (plan step, boot anchor, apply, poll, dispatch summary) so the fixture
-    reads like runs 35979044625 / 35979304442.
-  - `_mutant` gains a source parameter (`_mutant SRC NAME FROM TO`, output `<basename>-mut-<NAME>.sh`)
-    and `_mut_row` passes `$TRACK` for the existing track.sh rows and `$GATE` for the new gate rows.
-  - Rows per Test Scenarios; the header row table rewritten; the `GH` stub loop lists every RED /
-    exit-1 gate row explicitly (G3 G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G18).
+    neighbouring step names (plan step, boot anchor, apply, poll, dispatch summary).
+  - `_mutant` gains a source parameter (`_mutant SRC NAME FROM TO`, output
+    `<basename>-mut-<NAME>.sh`, same `count == 1` guard); `_mut_row` passes `$TRACK` for the
+    existing track.sh rows and `$GATE` for the new gate rows.
+  - Rows per Test Scenarios, asserting the `verdict=` token of the arm expected (never the shared
+    `fail closed` phrase alone); the header row table rewritten; the `GH` stub loop lists every
+    RED / exit-1 gate row explicitly.
 - `plugins/soleur/test/terraform-target-parity.test.ts` — in `describe("git-data-pin-redeploy.yml")`,
   a predicate `applyStepParity(doc, gateSrc)` returning the list of violations, run on the real
-  parsed workflow (must return `[]`) and on two in-test mutated copies (the `parseYaml(wf)` mutation
-  pattern the file already uses) that must each return a violation:
+  parsed workflow (must return `[]`) and on in-test mutated copies (the `parseYaml(wf)` mutation
+  pattern the file already uses), each of which must return a violation:
   - **PT1** for each job, exactly one step has `id: apply`, and its `name` appears as a
-    double-quoted literal in `source-run-gate.sh`. Mutant: rename that step.
-  - **PT2** for each job, that step is the only one whose `run:` matches the command-position
-    regex `/^\s*(if\s+!?\s*)?terraform(\s+-\S+)*\s+apply\b/m` (verified 2026-09-24: only the
-    two `id: apply` steps match). Mutant: append a second step running `terraform apply -auto-approve`.
-  - The replace apply step's `plan_only` guard is **not** re-asserted here: census row G5a
-    (`tests/scripts/test-infra-privileged-tier-census.sh`) already enforces it on every mutating
-    step of `git_data_host_replace`.
-- `.github/workflows/git-data-pin-redeploy.yml` — the failure email body gains one sentence (read
-  the run's annotations; if the source apply really published a pin, dispatch with **no**
-  `source_run_id`). The existing `-f source_run_id=` sentence stays: the parity test asserts it.
-  The header's `Recovery:` comment gets the same sentence.
+    double-quoted literal in `source-run-gate.sh`. Mutants: rename that step's `name:` in the
+    birth job; separately in the replace job; separately change its `id:`.
+  - **PT2** for each job, that step is the only one whose `run:` matches the command-position regex
+    `/^\s*(if\s+!?\s*)?terraform(\s+-\S+)*\s+apply\b/m` (verified 2026-09-24: only the two
+    `id: apply` steps match). Mutant: append a second step running `terraform apply -auto-approve`.
+  - **PT3** the follower has a `notify-ops-email` step whose `if:` references
+    `steps.gate.outputs.pin_published`, and the failure email body contains both the
+    `-f source_run_id=` sentence and a no-`source_run_id` dispatch sentence.
+  - The replace apply step's `plan_only` guard is **not** re-asserted: census row G5a already
+    enforces it on every mutating step of `git_data_host_replace`.
+- `knowledge-base/engineering/architecture/decisions/ADR-237-ssh-host-keys-are-pinned.md` (status
+  `adopting`, amended in place):
+  - D2 and the first Consequences bullet: the follower forces a release when a birth or replace
+    job **and its apply step** both succeeded — not on every completed run; a `plan_only`
+    rehearsal never redeploys.
+  - A bullet beside "Coupled to a display name": the gate also depends on the two apply-step
+    display names; a rename is caught by PT1 in CI, and at runtime by exit 1 (green job) or
+    `apply=not_found` (red job).
+  - "Pin lag is bounded": the bound holds when the job is green; a red job with a green apply
+    publishes the pin without a redeploy and emails ops (`pin_published`); its recovery is the
+    no-`source_run_id` dispatch.
 - `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`:
+  - Step 3 GO check ("It must end `success`"): a green follower does not by itself mean a redeploy
+    happened — check its `Dispatch web-platform-release and wait for its deploy` step.
   - The bullet under §"Boot order on the replace: what is already published when the poll reds"
     that says the gate "reads the source run's job conclusions and proceeds **only** when
-    `git_data_host_replace` concluded `success`": it now reads the apply step; a red boot poll after
-    a green apply is reported as `apply=success` / "pin was published"; recovery unchanged. Add:
-    a green follower run does not mean a redeploy happened — check its
-    `Dispatch web-platform-release and wait for its deploy` step.
+    `git_data_host_replace` concluded `success`": it now reads the apply step, prints
+    `verdict=pin_published`, and emails ops; recovery unchanged.
+  - The four recovery sites that offer only `gh run rerun … --failed` or `-f source_run_id=`
+    (step 3 "If only the redeploy failed", the `git_data_pin=absent` NO-GO bullet, the first
+    `host_key_mismatch` remedy, and the step-3 pin-lag note): add the no-`source_run_id` arm,
+    scoped to "the gate exited 1, or printed `verdict=pin_published`".
   - §2026-09-24 table, **runbook row G2** "Clean means" cell: replace "shows no run it triggered"
-    with the T-R1 check (Test Scenarios). No other line of the §2026-09-24 record changes.
+    with the T-R1 check. No other line of the §2026-09-24 record changes.
 
 ### Files to Create
 
@@ -306,10 +386,16 @@ None.
 - **`git_data_host_create` has no `plan_only` arm.** The input's description scopes it to
   `web-host-replace` and `git-data-host-replace`; a birth with `plan_only=true` applies. The re-keyed
   gate handles it correctly (the apply step runs, so it proceeds) — noted, not changed here.
-- **Architecture:** no ADR change. ADR-237 D2 already says the follower "forces a release when the
-  apply run completes"; it does not state the job-conclusion rule. The C4 model does not model
-  CI-to-CI edges (ADR-237 Consequences). No new decision is being made — the gate is being made to
-  implement the one already recorded.
+- **Architecture (corrected at deepen):** ADR-237 is amended in this PR (Files to Edit). The
+  trigger rule it records ("when the apply run completes") is narrowed to "the job and its apply
+  step both succeeded", the apply-step display-name coupling joins its "Coupled to a display name"
+  consequence, and its pin-lag bound gains the red-job case. No new ADR: this refines D2 rather
+  than making a new decision. C4 does not model CI-to-CI edges (ADR-237 Consequences), so no
+  `.c4` edit.
+- **Network-outage gate (deepen-plan 4.5): evaluated, not applicable.** The only trigger hits are
+  the substring `ssh` inside identifiers (`git_data_ssh_host_key`, ADR-237's title). The change
+  adds no network path: the gate's one call is `gh run view` to `api.github.com` with
+  `github.token`, exactly as today; no SSH, firewall, DNS or TLS surface is touched.
 - **Attack surface:** the gate reads only GitHub's own run metadata with `github.token`; the source
   run id is validated `^[0-9]+$` before use (unchanged). Step names are matched with `jq --arg`, never
   interpolated into a filter or a workflow command.
@@ -348,6 +434,13 @@ Earlier inputs: `soleur:product:spec-flow-analyzer` (7 gaps) and the Step 4.5 ad
 | Read-only run of the rewritten gate against four real source runs before merge (AC5) | CTO #3 | taste | yes — persisted |
 | Decision table verbatim in the gate's header comment; T-R1 follower-lookup command | CTO #5, #6 | taste | yes — persisted |
 | Split apply into its own job | advisor consult | rejected (see Alternatives) | no |
+| v3: `pin_published` output + dedicated email step | architecture #3 + observability #1 (deepen) | mechanical | yes |
+| v3: amend ADR-237; runbook step-3 caveat + four recovery sites; header cites D2 | architecture #1, #2, #4 | mechanical | yes |
+| v3: `A` allowlist, numeric `N`, never print API names; injection row G19 | security #1 | mechanical | yes |
+| v3: red job with `steps: []` → quiet `verdict=not_run` (row 1b, G21) | security #3 | mechanical | yes |
+| v3: green job with impossible apply conclusion → exit 1 (G16); fixed evaluation order; `verdict=` tokens; G3b, G20 | test-design #1, #2, #3, #4, #6, #7 | mechanical | yes |
+| v3: layer-6 citations; unreadable-document failure mode | observability #2, #6 | mechanical | yes |
+| Optional `workflow_run.path` filter on the follower | security #2 | taste | no — not needed for any property; noted in the rule section |
 
 ## User-Brand Impact
 
@@ -365,47 +458,53 @@ Earlier inputs: `soleur:product:spec-flow-analyzer` (7 gaps) and the Step 4.5 ad
 
 ```yaml
 liveness_signal:
-  what: "the pin-redeploy run's gate step log line prefixed `source-run-gate:` (one per source run, naming the source run id), plus the run's `Dispatch web-platform-release and wait for its deploy` step conclusion (success = proceeded, skipped = did not)"
+  what: "the pin-redeploy run's gate step log line prefixed `source-run-gate:` carrying `in run <source id>` and one `verdict=` token (rotated, no_apply, not_run, pin_published, pin_maybe_published, unidentified), plus the run's `Dispatch web-platform-release and wait for its deploy` step conclusion (success = proceeded, skipped = did not)"
   cadence: "per completed dispatched apply-web-platform-infra run (workflow_run)"
-  alert_target: "operator email via notify-ops-email on any failure of the redeploy job (subject: git-data pin NOT loaded by the app); GitHub run annotations (::warning:: / ::error::) on the run page"
-  configured_in: ".github/workflows/git-data-pin-redeploy.yml (steps gate + Email ops when the pin is not confirmed loaded)"
+  alert_target: "operator email via notify-ops-email — on any failure of the redeploy job (subject: git-data pin NOT loaded by the app), and on verdict=pin_published (subject: git-data pin published but the app was not redeployed); GitHub run annotations on the run page"
+  configured_in: ".github/workflows/git-data-pin-redeploy.yml (step gate; step Email ops when a pin was published but not redeployed; step Email ops when the pin is not confirmed loaded)"
 
 error_reporting:
-  destination: "GitHub Actions annotations on the pin-redeploy run + Resend email to ops on job failure"
-  fail_loud: "`::error::source-run-gate: … (fail closed)` and exit 1 when the jobs document is unreadable or a green git-data job's apply step is matched 0 or 2+ times; `::warning::source-run-gate: … apply=<conclusion> …` for a red job (pin published / may be published)"
+  destination: "layer 6 — workflow run log and ::error::/::warning:: annotations on the pin-redeploy run; Resend email to ops for exit 1 and for verdict=pin_published"
+  fail_loud: "`::error::source-run-gate: … verdict=unidentified … (fail closed)` and exit 1 when a green git-data job's apply step cannot be identified exactly once or has an impossible conclusion; the existing `(fail closed)` exits when the jobs document is unreadable; `::warning::` + email for verdict=pin_published"
 
 failure_modes:
   - mode: "apply step renamed in apply-web-platform-infra.yml without updating the gate constant"
-    detection: "CI: parity test PT1 in terraform-target-parity.test.ts goes red on the PR; runtime: rule row 4 exits 1 for a green job, row 5 warns `apply=not found` for a red one"
-    alert_route: "PR check failure; at runtime the redeploy job fails and emails ops (green job) or annotates the run (red job)"
+    detection: "CI: parity test PT1 goes red on the PR; runtime (layer 6): verdict=unidentified exit 1 for a green job, verdict=pin_maybe_published with apply=not_found for a red job"
+    alert_route: "PR check failure; at runtime the failure email (green job) or a run annotation (red job)"
   - mode: "GitHub drops `steps` from the jobs document"
-    detection: "rule row 4 exits 1 for a green job (N = 0)"
-    alert_route: "redeploy job failure email to ops"
-  - mode: "real apply succeeded but the job went red (boot poll failure)"
-    detection: "rule row 5 `::warning::` with `apply=success` (pin was published) + a step-summary recovery line"
-    alert_route: "run annotation; runbook git-data-luks-cutover-5274.md §If the fresh host fails a boot check after step 3"
+    detection: "layer 6: verdict=unidentified exit 1 for a green job (N = 0)"
+    alert_route: "failure email to ops"
+  - mode: "jobs document unreadable (gh failure, non-numeric id, non-{jobs:[...]} body)"
+    detection: "layer 6: existing `(fail closed)` ::error:: and exit 1"
+    alert_route: "failure email to ops"
+  - mode: "real apply succeeded but the job went red (boot poll failure): pin published, app not redeployed"
+    detection: "layer 6: verdict=pin_published ::warning:: + step-summary recovery line; gate output pin_published=true"
+    alert_route: "email to ops (pin published, not redeployed); runbook git-data-luks-cutover-5274.md §If the fresh host fails a boot check after step 3"
 
 logs:
   where: "GitHub Actions run logs of git-data-pin-redeploy.yml (gh run view <id> --log)"
   retention: "GitHub Actions log retention for the repository (90 days default)"
 
 discoverability_test:
-  command: "grep -m1 -o 'no apply ran' .github/actions/dispatch-web-redeploy/source-run-gate.sh"
-  expected_output: "no apply ran"
+  command: "grep -m1 -o 'verdict=no_apply' .github/actions/dispatch-web-redeploy/source-run-gate.sh"
+  expected_output: "verdict=no_apply"
 ```
 
-`no apply ran` is the fixed phrase of the rule-row-3 notice (the #8710 skip). The work phase writes
-the notice with this exact phrase, and row G9 asserts it in the gate's output. (`-m1` keeps a
-second occurrence, e.g. in the header comment, from printing a second line.)
+`verdict=no_apply` is the fixed, whitespace-free token of the rule-row-3 notice (the #8710 skip):
+deepen-plan Phase 4.7 rejects an `expected_output` whose only token contains whitespace, so an
+earlier `no apply ran` literal could never match under preflight Check 10's tokenizer. The work
+phase writes the token as a literal in the source (never assembled from a variable). Limit: this
+probe proves the token is in the gate's source, not that the arm is reached at runtime — row G9
+proves that. It correctly fails on `main` today (0 occurrences).
 
 ## Guard Contract
 
 ### Guard 1 — source-run gate proceeds only on a real apply
 
 **Property.** `source-run-gate.sh` emits `proceed=true` for a source run if and only if one of the
-two git-data jobs concluded `success` **and** that job's single `id: apply` step concluded `success`;
-every other readable shape emits `proceed=false`, and a green git-data job whose apply step cannot
-be identified exactly once exits 1.
+two git-data jobs concluded `success` **and** that job's single `id: apply` step concluded
+`success`; every other readable shape emits `proceed=false`, and a green git-data job whose apply
+step cannot be identified exactly once, or carries a conclusion impossible for a green job, exits 1.
 
 **Assembly.** One chokepoint for the input: the single `gh run view "$rid" --json jobs` document the
 gate reads. The decision quantifies over BOTH members of the job set (`BIRTH_JOB`, `REPLACE_JOB`) —
@@ -413,34 +512,40 @@ a check that inspects only one job is the defect class. Apply-step identity has 
 `name:` of the `id: apply` step in each job of `apply-web-platform-infra.yml`, bound to the gate's
 constants by parity test PT1. The pin-write chokepoint is that same step (the only command-position
 `terraform apply` in each job — PT2), and "rehearsal ⇒ apply skipped" is carried by census row G5a
-in `tests/scripts/test-infra-privileged-tier-census.sh`.
+in `tests/scripts/test-infra-privileged-tier-census.sh`. Output chokepoint: every line the gate
+prints passes through the `A` allowlist and never includes an API-supplied name.
 
 **Mutation matrix** (each FROM is a single unique line of the rewritten gate, applied with
-`_mutant "$GATE" …`; the work phase records the exact FROM→TO literal pairs in the suite):
+`_mutant "$GATE" …`; the work phase records the exact FROM→TO literal pairs in the suite). The
+evaluation order 1, 1b, 4, 2, 3, 5 is part of the contract; rows 1 and 2 go RED whatever order a
+mutant leaves behind because G16 carries an impossible conclusion on a green job:
 
 | # | Mutation | Row that must go RED |
 |---|---|---|
-| 1 | Revert the proceed test to the job conclusion only | G9 plan_only rehearsal → proceed=true |
-| 2 | Treat a `skipped` apply step as a rotation (`!= failure` instead of `== success`) | G9 |
+| 1 | Revert the proceed test to the job conclusion only | G9 → proceed=true; G16 → proceed=true instead of exit 1 |
+| 2 | Treat any non-`failure` apply conclusion as a rotation (`!= failure` instead of `== success`) | G16 (green job, apply `cancelled`) → proceed instead of exit 1 |
 | 3 | Drop the birth job from the loop over jobs (second member) | G1 birth apply success → proceed=false |
 | 4 | Take the first apply-named step instead of requiring `N == 1` | G15 two apply-named steps in a green job → proceed instead of exit 1 |
 | 5 | Treat `N == 0` in a green job as a quiet skip | G14 renamed apply step → exit 0 instead of exit 1 |
 | 6 | Drop the job-success conjunct (proceed on apply success alone) | G10 real-replace shape → proceed=true |
-| 7 | Gate stubbed to `exit 0` right after `set -euo pipefail` (own dispatch) | every row in the GH list |
-| 8 | Rename the replace job's `id: apply` step in a parsed copy of the workflow | PT1 reports a violation (in-test mutated YAML) |
-| 9 | Append a second step running `terraform apply -auto-approve` to a parsed copy of the replace job | PT2 reports a violation (in-test mutated YAML) |
+| 7 | Delete row 3's branch (skipped apply falls through) | G9 → prints `verdict=not_run` or exits 1 instead of `verdict=no_apply` |
+| 8 | Emit `pin_published=true` for every warning (drop the `A == success` split) | G12 → `pin_published=true` |
+| 9 | Print the matched step's API `name` in the warning | G19 (injection fixture) → a line starting with the injected `::error::` |
+| 10 | Gate stubbed to `exit 0` right after `set -euo pipefail` (own dispatch) | every row in the GH list |
+| 11 | Rename the `id: apply` step's `name:` in a parsed copy of the workflow — birth job; separately replace job; separately change its `id:` | PT1 reports a violation for each (in-test mutated YAML) |
+| 12 | Append a second step running `terraform apply -auto-approve` to a parsed copy of the replace job | PT2 reports a violation |
+| 13 | Drop the `pin_published` email step, or its `if:` reference, from a parsed copy of the follower | PT3 reports a violation |
 
 **Harness rows.**
 
 - Suite edit that must go RED: run the new G9 against the pre-fix gate
   (`git show origin/main:.github/actions/dispatch-web-redeploy/source-run-gate.sh`) before editing
-  the gate — it must fail there (AC2). A G9 that passes against the old gate is testing its own
-  fixture. Recorded once in the PR body, not kept as suite code.
+  the gate — it must fail there (AC2). Recorded once in the PR body, not kept as suite code.
 - Must-PASS non-canonical input: G1's birth fixture lists its steps in a non-canonical order and
   carries an extra step whose name has the apply name as a prefix
   (`Terraform apply (git-data birth) summary`, `success`); it must still proceed with
-  `source_job=git_data_host_create`. A gate that rejects everything fails it; a prefix-matching
-  gate reaches `N == 2` and exits 1.
+  `source_job=git_data_host_create`. A gate that rejects everything fails it; a prefix or
+  `contains` matcher reaches `N == 2`, and an unescaped `test()` regex reaches `N == 0` — both exit 1.
 
 **Anchor.** The gate constants and the workflow step names can be edited in one diff; PT1 proves
 consistency, not integrity. What must move outside the commit for a weakening to pass: the
@@ -450,87 +555,99 @@ source runs, whose recorded outputs the PR body carries.
 
 ## Acceptance Criteria
 
-- [ ] AC1 — Mutation 1 (revert to job conclusion) turns G9 RED; mutation 6 turns G10 RED.
+- [ ] AC1 — Mutation 1 (revert to job conclusion) turns G9 and G16 RED; mutation 6 turns G10 RED.
 - [ ] AC2 — Row **G9** (the #8710 regression, shape of run 35979044625: replace job `success`,
-  apply step `skipped`) yields `proceed=false`, exit 0, a `::notice::` containing `no apply ran`,
-  and **no** `::warning::`. G9 fails against the pre-fix gate (run it against
-  `git show origin/main:.github/actions/dispatch-web-redeploy/source-run-gate.sh` before editing
-  the gate — RED first, per `cq-write-failing-tests-before`); the red output is in the PR body.
-- [ ] AC3 — G9b: the same rehearsal shape for the birth job → `proceed=false`, so both jobs are
-  covered.
-- [ ] AC4 — G1/G2 proceed with the right `source_job`; G10 (shape of 35979304442: apply `success`,
-  poll `failure`, job `failure`) → `proceed=false`, `::warning::` containing `apply=success`;
-  G11 (birth job `failure` at the plan step, apply `skipped` — shape of 34822248580) →
-  `proceed=false`, notice only, no `::warning::`; G12 (apply `failure`) → the "pin may be
-  published" warning and summary line (G4's and G8's assertions move here; G4 and G8 are deleted);
-  G14 (green job, no step with the exact apply name), G15 (green job, two), G18 (green job, no
-  `steps` key) → exit 1 with `fail closed`; G3/G5/G6/G7 unchanged in intent, fixtures carry steps.
+  apply step `skipped`) yields `proceed=false`, exit 0, a `::notice::` containing
+  `verdict=no_apply` and the words `no apply ran`, and **no** `::warning::`. G9 fails against the
+  pre-fix gate (run it against
+  `git show origin/main:.github/actions/dispatch-web-redeploy/source-run-gate.sh` before editing the
+  gate — RED first, per `cq-write-failing-tests-before`); the red output is in the PR body.
+- [ ] AC3 — G9b: the same rehearsal shape for the birth job → `proceed=false`, `verdict=no_apply`,
+  so both jobs are covered.
+- [ ] AC4 — Every row in Test Scenarios passes, each asserting its own `verdict=` token (and, for
+  G3, the absence of `verdict=no_apply`; for G10, the absence of `may be published`; for G12, the
+  absence of `was published`), with the warning assertions anchored to the `::warning::` line.
 - [ ] AC5 — Before merge, the rewritten gate is run **read-only** against the four real source
   runs (`SOURCE_RUN_ID=<id> bash .github/actions/dispatch-web-redeploy/source-run-gate.sh`, which
-  only calls `gh run view <id> --json jobs`): 35979044625 → `proceed=false` with `no apply ran`;
-  35979304442 → `proceed=false` with `apply=success`; 34822248580 → `proceed=false`, no warning;
-  34836141887 → `proceed=false` with `apply=success`. This is the only check that exercises the
-  em-dash step name against the real API; outputs go in the PR body.
-- [ ] AC6 — Mutations 2–5 and 7 turn their named rows RED inside
-  `tests/scripts/test-dispatch-web-redeploy.sh` (via `_mut_row` with the gate as source); the `GH`
-  loop lists G3 G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G18.
+  only calls `gh run view <id> --json jobs`): 35979044625 → `verdict=no_apply`;
+  35979304442 → `verdict=pin_published`; 34822248580 → `verdict=no_apply`, no warning;
+  34836141887 → `verdict=pin_published`. This is the only check that exercises the em-dash step name
+  against the real API; outputs go in the PR body.
+- [ ] AC6 — Mutations 2–10 turn their named rows RED inside
+  `tests/scripts/test-dispatch-web-redeploy.sh` (via `_mut_row` with `$GATE` as source); the `GH`
+  loop lists G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G21.
 - [ ] AC7 — `terraform-target-parity.test.ts`: `applyStepParity` returns `[]` for the real workflow
-  and a violation for each of mutations 8 and 9 (in-test, no scratch copy).
-- [ ] AC8 — Runbook: the "Boot order on the replace" bullet and the §2026-09-24 runbook row G2
-  "Clean means" cell are corrected; `grep -c 'shows no run it triggered'
-  knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md` prints `0`.
-- [ ] AC9 — The follower's failure email body contains both the existing
-  `-f source_run_id=` sentence and a no-`source_run_id` dispatch sentence
-  (`grep -c 'gh workflow run git-data-pin-redeploy.yml --ref main' .github/workflows/git-data-pin-redeploy.yml`
-  is at least 2 lines, one in the email body).
-- [ ] AC10 — `bash tests/scripts/test-dispatch-web-redeploy.sh`, `bun test
+  and a violation for each of mutations 11–13 (in-test, no scratch copy); the least-privilege test's
+  secrets list is updated to the two `secrets.RESEND_API_KEY` occurrences and still admits no other
+  secret.
+- [ ] AC8 — ADR-237 carries the three amendments (Files to Edit); the runbook carries the step-3 GO
+  caveat, the "Boot order" bullet, the four recovery sites and the runbook row G2 cell;
+  `grep -c 'shows no run it triggered'
+  knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md` prints `0`; the
+  gate header no longer cites `ADR-237 D6`.
+- [ ] AC9 — `bash tests/scripts/test-dispatch-web-redeploy.sh`, `bun test
   plugins/soleur/test/terraform-target-parity.test.ts` and `bash
   tests/scripts/test-infra-privileged-tier-census.sh` pass; `scripts/test-all.sh --capacity` is run
   before any commit that stages a `.ts` file.
-- [ ] AC11 — Every verification is hermetic or read-only: the suite runs with the `gh` PATH stub
+- [ ] AC10 — Every verification is hermetic or read-only: the suite runs with the `gh` PATH stub
   (exit 64 on any unexpected argv), AC5 calls only `gh run view … --json jobs`, and no task in
   `tasks.md` invokes `gh workflow run`, `gh run rerun` or a `dispatches` API.
-- [ ] AC12 — Merge only when every context in
+- [ ] AC11 — Merge only when every context in
   `scripts/ci-required-ruleset-canonical-required-status-checks.json` is present **and** `success`
   by name on the exact head SHA (`gh api repos/{o}/{r}/commits/<sha>/check-runs` joined by name).
   Normal auto-merge (the PR edits `.github/actions/`, so no agent admin-merge); if `main` livelocks
   the queue, stop and hand the merge to the operator.
-- [ ] AC13 — After merge, `gh issue view 8710 --json state,closedByPullRequestsReferences` shows it
+- [ ] AC12 — After merge, `gh issue view 8710 --json state,closedByPullRequestsReferences` shows it
   closed by this PR (the runbook row G2 precondition).
 
 ## Test Scenarios
 
 Hermetic, in `tests/scripts/test-dispatch-web-redeploy.sh` (fixtures synthesized in the measured
-shape; the `gh` stub keeps refusing any other argv with exit 64). Each negative row has a positive
-control on the same fixture shape differing only in the field under test (G9 ↔ G2, G9b ↔ G1,
-G14/G15/G18 ↔ G2):
+shape; the `gh` stub keeps refusing any other argv with exit 64). Every row asserts its own
+`verdict=` token, so no row can pass through a different arm. Positive controls on the same
+fixture shape: G9 ↔ G2, G9b ↔ G1, G14/G15/G16/G18 ↔ G2.
 
 - **G1** (must-PASS, non-canonical) Birth job `success`, steps reordered, a prefix-named decoy step
-  `success`, apply `success` → `proceed=true`, `source_job=git_data_host_create`.
+  `success`, apply `success` → `proceed=true`, `source_job=git_data_host_create`, `verdict=rotated`.
 - **G2** Replace job `success`, apply `success` → `proceed=true`, `source_job=git_data_host_replace`.
-- **G3** Both jobs `skipped`, `steps: []` → quiet `proceed=false`.
+- **G3** Both jobs `skipped`, `steps: []` → quiet `proceed=false`, `verdict=not_run`, no
+  `verdict=no_apply`, no `::warning::`.
+- **G3b** A jobs document with no git-data jobs at all → the same as G3.
 - **G9** Replace job `success`, apply `skipped` (plan_only rehearsal) → `proceed=false`, rc 0,
-  notice with `no apply ran`, no `::warning::`.
+  `verdict=no_apply` + `no apply ran`, no `::warning::`.
 - **G9b** The same for the birth job.
-- **G10** Replace job `failure`, apply `success`, poll `failure` → `proceed=false`, `::warning::`
-  with `apply=success`, summary line naming the runbook section and the no-`source_run_id` dispatch.
-- **G11** Birth job `failure` at the plan step, apply `skipped` → `proceed=false`, notice only.
-- **G12** Replace job `failure`, apply `failure` → the "pin may be published" warning + summary line.
-- **G14** Replace job `success`, no step named exactly the apply constant → exit 1, `fail closed`.
-- **G15** Replace job `success`, two steps with the apply name → exit 1.
-- **G18** Replace job `success`, no `steps` key → exit 1.
+- **G10** Replace job `failure`, apply `success`, poll `failure` → `proceed=false`,
+  `pin_published=true`, `::warning::.*verdict=pin_published` naming the runbook section and the
+  no-`source_run_id` dispatch; no `may be published`.
+- **G11** Birth job `failure` at the plan step, apply `skipped` → `verdict=no_apply`, notice only.
+- **G12** Replace job `failure`, apply `failure` → `::warning::.*verdict=pin_maybe_published`,
+  `apply=failure`, `pin_published=false`; no `was published`. (G4's and G8's assertions move here;
+  G4 and G8 are deleted.)
+- **G14** Replace job `success`, no step named exactly the apply constant → exit 1,
+  `verdict=unidentified`.
+- **G15** Replace job `success`, two steps with the apply name → exit 1, `verdict=unidentified`.
+- **G16** Replace job `success`, apply `cancelled` (impossible for a green job) → exit 1,
+  `verdict=unidentified`.
+- **G18** Replace job `success`, no `steps` key → exit 1, `verdict=unidentified`.
+- **G19** (injection) Replace job `failure`, apply-named step with conclusion
+  `"success\n::error::x"` → no output line begins with `::error::x`; the conclusion prints as
+  `apply=unrecognized`.
+- **G20** (tie) Both jobs `success` with apply `success` → `source_job=git_data_host_create`.
+- **G21** Replace job `failure`, `steps: []` (an `environment` refusal) → quiet
+  `verdict=not_run`, no `::warning::`.
 - **G5 / G6 / G7** unchanged (gh failure, non-numeric id, non-`{jobs:[…]}` document).
 
 Parity (bun): **PT1** apply-step name ⇄ gate constant for both jobs; **PT2** one command-position
-`terraform apply` step per job — each run on the real workflow and on an in-test mutated copy.
+`terraform apply` step per job; **PT3** the `pin_published` email step and both recovery sentences
+in the follower — each run on the real files and on in-test mutated copies.
 
 Runbook read check (**T-R1**, the read-only lookup the runbook row G2 cell will carry — documented
-here, not executed by this change). Find the follower run by its log, since a `workflow_run` run does not expose its
-source run id:
+here, not executed by this change). Find the follower run by its log, since a `workflow_run` run
+does not expose its source run id; the notice line carries both strings on one line:
 
 ```bash
 for id in $(gh run list --workflow git-data-pin-redeploy.yml --created ">=<G2 start>" --json databaseId --jq '.[].databaseId'); do
-  gh run view "$id" --log | grep -F "in run <G2 run id>" | grep -q 'no apply ran' && echo "$id"
+  gh run view "$id" --log | grep -F "in run <G2 run id>" | grep -q 'verdict=no_apply' && echo "$id"
 done
 ```
 
@@ -560,11 +677,15 @@ moment it merges; no deploy step is involved.
   a missed one, and only when a *different* job in that run failed. No re-run of any workflow exists
   in the repository's last 500 runs to capture the real shape from, so no fixture is written from
   memory. Tracked as #8760 (re-evaluate when a real partial re-run can be captured).
-- **Rule row 5 ends the follower green** (no failure email), exactly as today's warning arm. Kept:
-  the operator is already handling a red apply job, the warning and step summary carry the
-  recovery command, and turning them red would conflate "pin not loaded" with the gate's own
-  fail-closed errors. For a birth with `apply=success` the warning names the only recovery (a dispatch with no
-  `source_run_id`), since a birth cannot be repeated.
+- **Rows 5a/5b end the follower green**, as today's warning arm, so the `failure()` email does not
+  fire for them; turning them red would conflate "pin not loaded" with the gate's own fail-closed
+  errors. 5a (pin published, app not redeployed) is the one that strands erasures, so it gets its
+  own email step (deepen: architecture + observability reviews). 5b (pin *may* be published: apply
+  failed or was cancelled mid-flight) stays annotation-only: the operator is already handling a red
+  apply job, and the apply job's own failure is the louder signal.
+- **Existing HTML interpolation in the failure email** (`inputs.source_run_id` rendered raw).
+  Pre-existing and reachable only by someone with write access (a manual dispatch); the new email
+  step adds no `inputs.*` interpolation, and the edited sentence adds no `${{ }}` expression.
 - **Concurrent edits:** no open PR touches these files (checked 2026-09-24). If a merge conflict
   lands in `scripts/guard-vacuity-floor.test.sh` `PROMOTED_FILES`, resolve as a union; re-derive
   baselines/floors after every merge.
@@ -581,6 +702,13 @@ moment it merges; no deploy step is involved.
   there. A G9 that passes against the old gate is testing its own fixture, not the fix.
 - `jq` defaults: never write `.conclusion // ""` — a `null` apply conclusion must print as
   `apply=null` in the warning, not vanish. Test `(.steps | type) == "array"` explicitly.
+- Sanitize before printing: `A` through the `case` allowlist (else `unrecognized`), `N` through
+  `^[0-9]+$`, and never echo a job or step `name` read from the API — only the two constants.
+  Row G19 is the injection fixture.
+- `pin_published` must be written to `$GITHUB_OUTPUT` on every non-exit path (`true` or `false`),
+  so the email step's `if:` never reads an empty string as a stale value.
+- The new email step binds `secrets.RESEND_API_KEY` a second time; update the least-privilege test's
+  exact secrets list in the same commit, or it reds.
 - The `gh` stub's accepted argv stays exactly `run view <id> --json jobs`; the gate must not grow a
   second `gh` call (the stub exits 64 on anything else, which is how a drifted call shape reds the
   suite).
@@ -603,4 +731,6 @@ and its tests). No user-facing surface, no copy, no pricing, no legal or data-pr
 - `plan_only` rationale: `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md` §plan_only.
 - ADR-237 (`knowledge-base/engineering/architecture/decisions/ADR-237-ssh-host-keys-are-pinned.md`) D2 + Consequences.
 - Runs: 35979044625, 35979135707, 35979149543, 35979304442, 35980551109 (read-only).
-- Issues: #8710 (this), #5274, #5914, #7226.
+- Issues: #8710 (this), #5274, #5914, #7226, #8760 (deferred re-run edge).
+- Provenance: the gate and the follower workflow were introduced by PR #8511 (merged 2026-09-22,
+  `git log -- .github/actions/dispatch-web-redeploy/source-run-gate.sh` → `0aa119838b`).

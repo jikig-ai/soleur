@@ -1,6 +1,6 @@
 # Tasks: fix #8710 — pin-redeploy gate keys on the apply step
 
-Plan: `knowledge-base/project/plans/2026-09-24-fix-pin-redeploy-gate-keys-on-apply-step-plan.md`.
+Plan (v3, deepened): `knowledge-base/project/plans/2026-09-24-fix-pin-redeploy-gate-keys-on-apply-step-plan.md`.
 Constraint: no workflow dispatch of any kind. Verification is the hermetic suite, the parity test
 and read-only `gh run view` calls.
 
@@ -18,23 +18,28 @@ and read-only `gh run view` calls.
 - [ ] 2.3 Add G9 and G9b; run them against
   `git show origin/main:.github/actions/dispatch-web-redeploy/source-run-gate.sh` and record the RED
   output for the PR body (AC2).
-- [ ] 2.4 Add G1 (decoy, non-canonical must-PASS), G2, G10, G11, G12, G14, G15, G18; delete G4 and
-  G8 (their assertions move to G12); keep G3, G5, G6, G7.
-- [ ] 2.5 Add PT1 and PT2 (`applyStepParity`) with their in-test mutated-YAML cases.
+- [ ] 2.4 Add G1 (decoy, non-canonical must-PASS), G2, G3b, G10, G11, G12, G14, G15, G16, G18, G19,
+  G20, G21; delete G4 and G8 (their assertions move to G12); keep G3 (plus its new negative
+  assertions), G5, G6, G7. Every row asserts its own `verdict=` token.
+- [ ] 2.5 Add PT1, PT2, PT3 (`applyStepParity`) with their in-test mutated-YAML cases.
 
 ## Phase 3: Core implementation
 
-- [ ] 3.1 Rewrite `source-run-gate.sh` to the five-row rule; header comment carries the table;
-  each mutation site on a single unique line; notice phrase `no apply ran`; warning prints
-  `apply=<conclusion|not found|matched N times>`; exit-1 errors name the fix and the
-  no-`source_run_id` dispatch.
-  - [ ] 3.1.1 Replace-job `apply=success` warning names the runbook section
-    "If the fresh host fails a boot check after step 3".
-- [ ] 3.2 Add the mutation rows 1–7 over the gate; list the GH loop rows explicitly.
-- [ ] 3.3 `git-data-pin-redeploy.yml`: one no-`source_run_id` sentence in the failure email body
-  and the header `Recovery:` comment.
-- [ ] 3.4 Runbook `git-data-luks-cutover-5274.md`: the "Boot order on the replace" bullet, and the
-  §2026-09-24 runbook row G2 "Clean means" cell (T-R1).
+- [ ] 3.1 Rewrite `source-run-gate.sh` to the v3 rule (order 1, 1b, 4, 2, 3, 5a/5b).
+  - [ ] 3.1.1 `A` allowlist (else `unrecognized`), numeric `N`, never print an API name.
+  - [ ] 3.1.2 Distinct `verdict=` tokens on the same line as `in run <id>` and the per-job tokens.
+  - [ ] 3.1.3 Emit `proceed`, `source_job`, `pin_published` on every non-exit path.
+  - [ ] 3.1.4 5a replace-job warning names the runbook section "If the fresh host fails a boot
+    check after step 3"; birth-job warning names the no-`source_run_id` dispatch as the only recovery.
+  - [ ] 3.1.5 Header comment carries the table and cites ADR-237 D2; each mutation site one unique line.
+- [ ] 3.2 Add mutation rows 1–10 over the gate; list the GH loop rows (AC6).
+- [ ] 3.3 `git-data-pin-redeploy.yml`: new `pin_published` email step; one no-`source_run_id`
+  sentence in the failure email body and the header `Recovery:` comment; update the parity test's
+  secrets list to two `secrets.RESEND_API_KEY` occurrences.
+- [ ] 3.4 ADR-237: the D2 / first-Consequences narrowing, the apply-step display-name bullet, the
+  pin-lag red-job case.
+- [ ] 3.5 Runbook `git-data-luks-cutover-5274.md`: step-3 GO caveat, the "Boot order on the
+  replace" bullet, the four recovery sites, the §2026-09-24 runbook row G2 cell (T-R1).
 
 ## Phase 4: Testing
 
@@ -49,7 +54,7 @@ and read-only `gh run view` calls.
 ## Phase 5: Ship
 
 - [ ] 5.1 PR body: first line "Merging this alone mutates nothing in production"; `Closes #8710`;
-  Ref #5274, #5914, #8760; AC2 and AC5 outputs.
+  Ref #5274, #5914, #8760; AC2 and AC5 outputs; render `decision-challenges.md`.
 - [ ] 5.2 Merge only when every context in
   `scripts/ci-required-ruleset-canonical-required-status-checks.json` is `success` by name on the
   exact head SHA; normal auto-merge; on a `main` livelock, stop and hand the merge to the operator.
