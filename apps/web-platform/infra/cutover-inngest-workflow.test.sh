@@ -888,40 +888,130 @@ assert "#7674 the shared reader queries via betterstack-query.sh (no SSH, no new
 assert "#7674 the shared reader queries via prd_terraform (the betterstack-query cred config)" \
   "grep -qF -- '-c prd_terraform' '$FLQ_FN'"
 
+# --- GENERATION FIXTURES (2026-09-24 host-replace class). -------------------------------------
+# Every liveness row now carries the two clocks the generation floor reads: the host's own event
+# time (journald `__REALTIME_TIMESTAMP`, µs, inside the double-encoded `.raw`) and Better Stack's
+# ingest time (`dt`). The mocked Hetzner `created` is ONE synthetic `+00:00` string, relative to
+# the wall clock so the young/old and future bounds hold on any runner, and the floor is DERIVED
+# from it here exactly once — never written twice as a literal.
+FIX_NOW=$(date -u +%s)
+FIX_CREATED_EPOCH=$(( (FIX_NOW - 7200) / 60 * 60 ))
+FIX_CREATED="$(date -u -d "@$FIX_CREATED_EPOCH" '+%Y-%m-%dT%H:%M:%S+00:00')"
+FIX_FLOOR="$(jq -rn --arg c "$FIX_CREATED" '$c | sub("\\+00:00$"; "Z") | fromdateiso8601')"
+# fix_row <host> <host_name> <event µs | -> <ingest epoch s> — one Better Stack row, built with jq
+# so the `.raw` double encoding is exactly what the warehouse returns. `-` omits the event time.
+fix_row() {
+  jq -cn --arg h "$1" --arg hn "$2" --arg ts "$3" \
+     --arg dt "$(date -u -d "@$4" '+%Y-%m-%d %H:%M:%S.000000')" \
+     '{dt: $dt, raw: ({host: $h, host_name: $hn, message: "x", _BOOT_ID: "b", _MACHINE_ID: "m",
+                       __MONOTONIC_TIMESTAMP: "1000"}
+                      + (if $ts == "-" then {} else {__REALTIME_TIMESTAMP: $ts} end) | tojson)}'
+}
+# The current server's rows: stamped and ingested AFTER created (first row measured +145 s).
+FIX_CUR_1="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)))"
+FIX_CUR_2="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)))"
+# THE 2026-09-24 SHAPE: the destroyed predecessor carried the SAME host/host_name pair, and its
+# rows were both stamped and ingested BEFORE the current server existed.
+FIX_PRE_1="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 16000))000000" $((FIX_FLOOR - 15999)))"
+FIX_PRE_2="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 15950))000000" $((FIX_FLOOR - 15949)))"
+# foreign/spoofed keep POST-floor clocks, so their `0` stays attributable to the #6616 host
+# conjunct and never to the generation floor.
+FIX_FOREIGN_1="$(fix_row soleur-web-platform soleur-web-platform "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)))"
+FIX_FOREIGN_2="$(fix_row soleur-web-platform soleur-web-platform "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)))"
+FIX_SPOOF_1="$(fix_row soleur-web-platform soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)))"
+FIX_SPOOF_2="$(fix_row soleur-web-platform soleur-inngest-prd "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)))"
+
 FLV_ARGV="$(mktemp)"; SCRATCH+=("$FLV_ARGV")
+FLV_CURL_ARGV="$(mktemp)"; SCRATCH+=("$FLV_CURL_ARGV")
+FLV_CURL_STDIN="$(mktemp)"; SCRATCH+=("$FLV_CURL_STDIN")
+FLV_CURL_CALLS="$(mktemp)"; SCRATCH+=("$FLV_CURL_CALLS")
+FLV_HC_READS="$(mktemp)"; SCRATCH+=("$FLV_HC_READS")
+FLV_ERR="$(mktemp)"; SCRATCH+=("$FLV_ERR")
+# The generation-anchor functions the readers call. Extracted here and eval'd inside every reader
+# harness; an empty extraction would leave every mode reading __UNREADABLE__ via "command not
+# found", which the non-vacuity rows below refuse.
+GEN_FN="$(mktemp)"; SCRATCH+=("$GEN_FN")
+for _gfn in _hcloud_created_epoch _inngest_server_created_epoch _current_instance_row_counts _generation_scoped_count; do
+  awk -v f="$_gfn" '$0 == f "() {" {p=1} p {print} p && /^\}$/ {p=0}' "$BODY_SH" >> "$GEN_FN"
+done
 FLV_OUT=""; FLV_RC=0
-call_flip_liveness_count() { # $1 = rows | foreign | empty | fail
-  local mode="$1"
+# lv_rows <mode> — the Better Stack rows each mode returns. Shared by the flip and LUKS harnesses.
+lv_rows() {
+  case "$1" in
+    rows|current) printf '%s\n' "$FIX_CUR_1" "$FIX_CUR_2" ;;
+    foreign)      printf '%s\n' "$FIX_FOREIGN_1" "$FIX_FOREIGN_2" ;;
+    # THE #6616 COLLISION, FIXTURED: a WEB host self-labelling with the dedicated node's
+    # sed-rendered host_name literal (#6616 is OPEN precisely because this was observed).
+    # host_name ALONE counts these as our liveness -> H>0 -> `clear` -> the exact fail-open
+    # this gate exists to close. The `host` conjunct is what excludes them, so this fixture
+    # is what makes the dual-field filter load-bearing rather than decorative.
+    spoofed)      printf '%s\n' "$FIX_SPOOF_1" "$FIX_SPOOF_2" ;;
+    predecessor)  printf '%s\n' "$FIX_PRE_1" "$FIX_PRE_2" ;;
+    *)            : ;;
+  esac
+}
+# lv_mocks <rows-mode> <anchor-mode> <token-mode> — the reader's three external commands, each
+# replaying its real contract. `doppler` branches on its ARGUMENTS before the mode: a mode-only
+# mock answered the HCLOUD token read with row JSON, which made a failure row pass for the wrong
+# reason. `curl` (called without -f) returns rc 0 plus the body plus `\n<code>`, as
+# `-w '\n%{http_code}'` does; a non-zero rc is a transport fault only.
+lv_mocks() {
+  LV_MODE="$1"; LV_ANCHOR="${2:-ok}"; LV_TOK="${3:-both}"
+  : > "$FLV_ARGV"; : > "$FLV_CURL_ARGV"; : > "$FLV_CURL_STDIN"; : > "$FLV_CURL_CALLS"; : > "$FLV_HC_READS"
+  # shellcheck disable=SC2317  # invoked indirectly, by the eval'd readers
+  doppler() {
+    case "$*" in
+      "secrets get HCLOUD_TOKEN_READONLY "*)
+        echo HCLOUD_TOKEN_READONLY >> "$FLV_HC_READS"
+        case "$LV_TOK" in both|ro) printf '%s\n' 'RO-TOKEN-SENTINEL' ;; esac
+        return 0 ;;
+      "secrets get HCLOUD_TOKEN "*)
+        echo HCLOUD_TOKEN >> "$FLV_HC_READS"
+        case "$LV_TOK" in both|rw) printf '%s\n' 'RW-TOKEN-SENTINEL' ;; esac
+        return 0 ;;
+    esac
+    printf '%s\n' "$*" > "$FLV_ARGV"
+    case "$LV_MODE" in
+      fail) return 7 ;;
+      *) lv_rows "$LV_MODE"; return 0 ;;
+    esac
+  }
+  # shellcheck disable=SC2317  # invoked indirectly, by the eval'd anchor
+  curl() {
+    printf '%s\n' "$@" > "$FLV_CURL_ARGV"
+    cat > "$FLV_CURL_STDIN"
+    echo called >> "$FLV_CURL_CALLS"
+    local c="$FIX_CREATED"
+    case "$LV_ANCHOR" in
+      ok)       ;;
+      young)    c="$(date -u -d "@$(( $(date -u +%s) - 60 ))" '+%Y-%m-%dT%H:%M:%S+00:00')" ;;
+      late)     c="$(date -u -d "@$(( FIX_FLOOR + 3600 ))" '+%Y-%m-%dT%H:%M:%S+00:00')" ;;
+      zform)    c="$(date -u -d "@$FIX_FLOOR" '+%Y-%m-%dT%H:%M:%SZ')" ;;
+      pre2025)  c='2024-06-01T00:00:00+00:00' ;;
+      future)   c="$(date -u -d "@$(( $(date -u +%s) + 3600 ))" '+%Y-%m-%dT%H:%M:%S+00:00')" ;;
+      forged)   printf '%s\n200' "{\"servers\":[{\"name\":\"soleur-inngest\",\"created\":\"$FIX_CREATED\\n::error::FORGED\"}]}"; return 0 ;;
+      absent)   printf '%s\n200' '{"servers":[],"meta":{}}'; return 0 ;;
+      two)      printf '%s\n200' "{\"servers\":[{\"name\":\"soleur-inngest\",\"created\":\"$FIX_CREATED\"},{\"name\":\"soleur-inngest\",\"created\":\"$FIX_CREATED\"}]}"; return 0 ;;
+      nonjson)  printf '%s\n200' 'BODYSENTINEL'; return 0 ;;
+      xfield)   printf '%s\n200' '{"servers":[],"x":"BODYSENTINEL"}'; return 0 ;;
+      strsrv)   printf '%s\n200' '{"servers":"BODYSENTINEL"}'; return 0 ;;
+      garbage)  printf '%s\n200' '{"servers":[{"name":"soleur-inngest","created":"BODYSENTINEL"}]}'; return 0 ;;
+      http401)  printf '%s\n401' '{"error":{"code":"unauthorized","message":"BODYSENTINEL"}}'; return 0 ;;
+      http429)  printf '%s\n429' '{"error":{"code":"rate_limit_exceeded","message":"BODYSENTINEL"}}'; return 0 ;;
+      http503)  printf '%s\n503' 'BODYSENTINEL upstream unavailable'; return 0 ;;
+      rc28)     return 28 ;;
+      rc6)      return 6 ;;
+    esac
+    printf '{"servers":[{"id":167310350,"name":"soleur-inngest-old","created":"2020-01-01T00:00:00+00:00"},{"id":167310351,"name":"soleur-inngest","created":"%s","status":"running"}],"meta":{"pagination":{"page":1}}}\n200' "$c"
+  }
+}
+call_flip_liveness_count() { # $1 = rows mode, $2 = anchor mode (default ok), $3 = token mode (default both)
   set +e
   FLV_OUT=$(
     eval "$(cat "$FLQ_FN")"
+    eval "$(cat "$GEN_FN")"
     eval "$(cat "$FLV_FN")"
-    # shellcheck disable=SC2317  # invoked indirectly, by the eval'd reader above
-    doppler() {
-      printf '%s\n' "$*" > "$FLV_ARGV"
-      case "$mode" in
-        rows)
-          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-inngest\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"x\"}"}'
-          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-inngest\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"y\"}"}'
-          return 0 ;;
-        foreign)
-          # web-1 rows in the SAME multiplexed source — must NOT count as dedicated-host liveness.
-          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-web-platform\",\"message\":\"x\"}"}'
-          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-web-platform\",\"message\":\"y\"}"}'
-          return 0 ;;
-        spoofed)
-          # THE #6616 COLLISION, FIXTURED: a WEB host self-labelling with the dedicated node's
-          # sed-rendered host_name literal (#6616 is OPEN precisely because this was observed).
-          # host_name ALONE counts these as our liveness -> H>0 -> `clear` -> the exact fail-open
-          # this gate exists to close. The `host` conjunct is what excludes them, so this fixture
-          # is what makes the dual-field filter load-bearing rather than decorative.
-          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"x\"}"}'
-          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"y\"}"}'
-          return 0 ;;
-        empty) return 0 ;;
-        *)     return 7 ;;
-      esac
-    }
+    lv_mocks "$1" "${2:-ok}" "${3:-both}"
     # DO NOT export FLIP_LIVENESS_SINCE here (#7674 review). Exporting it made the `--since 15m`
     # argv assertion measure the TEST'S OWN value, so widening the SUT to 365d — the fail-open
     # direction the SUT comment warns about — survived with the suite green. Source the real
@@ -933,7 +1023,7 @@ call_flip_liveness_count() { # $1 = rows | foreign | empty | fail
     # reader at 0 — the exact fail-shape the isolation assertions below exist to catch.
     export INNGEST_HOST="soleur-inngest"
     export INNGEST_HOST_NAME="soleur-inngest-prd"
-    _flip_liveness_count 2>/dev/null
+    _flip_liveness_count 2>"$FLV_ERR"
   )
   FLV_RC=$?
   set -e
@@ -951,7 +1041,11 @@ assert "#7674 a FAILED liveness query yields __UNREADABLE__, never 0 (fail-close
 call_flip_liveness_count spoofed
 assert "#6616 a web host SPOOFING our host_name counts 0, NOT as our liveness (got '$FLV_OUT')" \
   "[[ '$FLV_OUT' == '0' ]]"
+call_flip_liveness_count predecessor
+assert "G3 generation: the DESTROYED predecessor's same-name rows count 0 — the 2026-09-24 pass (got '$FLV_OUT')" \
+  "[[ '$FLV_OUT' == '0' ]]"
 
+call_flip_liveness_count spoofed
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 FLV_ARGV_SEEN="$(cat "$FLV_ARGV")"
 assert "#7674 liveness reader bounds the window with --since \$FLIP_LIVENESS_SINCE" \
@@ -3420,7 +3514,8 @@ _DISPATCHED=$((PASS + FAIL))
 #   control, the heartbeat read-failure render, eight per-token refusal renders, the H2
 #   aborted must-PASS, the dark-warning truth row, and eleven mutation rows (M1.1, M1.2, the
 #   same-line second call, M2.6, M2.7, M2.8, S1, M2.9, the nested $(gh …), S3, S6).
-_EXACT_FLOOR=753
+# 753 -> 754 (+1) G3 generation scope, RED commit: the `predecessor` row (the 2026-09-24 pass).
+_EXACT_FLOOR=754
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
