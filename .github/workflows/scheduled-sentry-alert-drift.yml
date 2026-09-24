@@ -14,7 +14,7 @@
 #
 # RELATION TO scheduled-terraform-drift.yml's SENTRY LEG (#6612). That leg plans the
 # FULL ROOT twice daily (state against config, every resource type). This workflow
-# stays the field-level fidelity check for every `sentry_alert`, including the rules
+# stays the field-level fidelity check for every `sentry_alert`, including the attributes
 # under `ignore_changes`, which the plan cannot see; it makes ONE read-only GET against
 # the non-deprecated org workflows endpoint. The two are complementary. The leg's
 # vendor read failures go to the shared `[ERROR]` email, not to an issue, under

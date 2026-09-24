@@ -263,10 +263,30 @@ leg of `scheduled-terraform-drift.yml` (#6612, ADR-031's 2026-09-24 amendment).
 Twice daily it runs a full-root `terraform plan -detailed-exitcode` (no
 `-target=`), so every resource type is compared, cron and uptime monitors
 included. It authenticates exactly as the apply does: the `SENTRY_IAC_AUTH_TOKEN`
-repository secret bound as the raw `SENTRY_AUTH_TOKEN`, with no `doppler run`.
-Exit 2 files an `infra-drift` issue; exit 1 (a vendor read failure, a missing
-token) sends the `[ERROR]` email and files no issue. To reconcile, first check
-whether an `apply-sentry-infra.yml` run on `main` is still in flight, then re-run
-the CI apply — `gh workflow run apply-sentry-infra.yml --ref main -f reason="..."`
-— never a local apply (`use_lockfile = false`). It cannot see attributes under
-`ignore_changes`, so field fidelity for those stays with the probe above.
+repository secret bound as the raw `SENTRY_AUTH_TOKEN`, with no `doppler run`,
+and terraform sees only an `env -i` allowlist. Exit 2 files an `infra-drift`
+issue; exit 1 (a vendor read failure, a missing token) sends the `[ERROR]` email
+and files no issue. The issue's step 2 routes the fix by what the plan shows,
+because a manual dispatch of the apply passes the same gates as a merge: a
+dispatch reconciles in-place updates only; an object deleted in Sentry's web UI
+(`+` with no recent merge) needs a PR, since the create gate refuses it; a
+destroy needs a re-run of the failed push apply or a PR carrying
+`[ack-destroy]`, since a dispatch never carries the ack. Never apply locally
+(`use_lockfile = false`). The leg cannot see attributes under `ignore_changes`,
+so field fidelity for those stays with the probe above.
+
+ADR-031's exit criterion for this leg counts its plan failures over 30 days
+from the job annotations (a job id is its check-run id):
+
+```bash
+gh run list -w scheduled-terraform-drift.yml -L 100 --created ">=$(date -u -d '30 days ago' +%F)" \
+  --json databaseId --jq '.[].databaseId' \
+| while read -r run; do
+    gh api "repos/jikig-ai/soleur/actions/runs/$run/jobs" \
+      --jq '.jobs[] | select(.name == "drift-check (apps/web-platform/infra/sentry)") | .id'
+  done \
+| while read -r job; do
+    gh api "repos/jikig-ai/soleur/check-runs/$job/annotations" \
+      --jq '[.[] | select(.message | test("Terraform plan failed in web-platform/sentry"))] | length'
+  done | paste -sd+ - | bc
+```
