@@ -820,6 +820,27 @@ else
   fi
 fi
 
+# ------------- Test 33: a SUBDIRECTORY cwd resolves to the worktree root (#8611) ----
+# Claude Code hands the hook the session's cwd, which is a subdirectory whenever a
+# session is started or resumed there. Rooting on it verbatim read
+# `<subdir>/AGENTS.rules.md` (absent) — a zero-rule load — and planted the manifest
+# under `<subdir>/.claude/`, where it blocked resolve-regenerable-conflicts.sh.
+TOTAL=$((TOTAL+1))
+T33=$(mktemp -d); LATE_TMPDIRS+=("$T33"); setup_repo "$T33" docs
+mkdir -p "$T33/apps/web"
+ctx33=$(invoke_hook "$T33/apps/web" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+m33=$(printf '%s' "$ctx33" | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
+n33=$(grep -c '^- \[id: ' "$T33/AGENTS.md")
+if printf '%s' "$ctx33" | grep -qE "loaded: ${n33} of ${n33} rules" \
+   && [[ -n "$m33" && "$m33" == "$T33/.claude/.session-manifests/"* && -f "$m33" ]] \
+   && [[ ! -e "$T33/apps/web/.claude" ]]; then
+  echo "PASS: subdirectory cwd loads ${n33} of ${n33} rules and writes the manifest at the worktree root"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: subdirectory cwd — stamp: $(printf '%s' "$ctx33" | head -1 | cut -c1-160) — manifest: ${m33:-none}"
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1

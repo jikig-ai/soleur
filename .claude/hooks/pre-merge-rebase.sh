@@ -263,7 +263,7 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]] && [[ -z "$REVIEW_ISSUE
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: "BLOCKED: No review evidence for commits in origin/main..HEAD. If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>. Signals checked: todos/ tagged code-review introduced by this branch, a review: commit or Reviewed-By-Soleur: trailer, a code-review-labelled issue citing this PR. Note the scope is this branch only — evidence already on main does not count. Run the trailer script as its own command, then re-issue gh pr merge: a chained `emit-review-trailer.sh && gh pr merge` is denied because this hook evaluates the whole command before any of it runs."
+      permissionDecisionReason: "BLOCKED: No review evidence for commits in origin/main..HEAD. If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>. Signals checked: todos/ tagged code-review introduced by this branch, a review: commit or Reviewed-By-Soleur: trailer, a code-review-labelled issue citing this PR. Note the scope is this branch only — evidence already on main does not count. Run the trailer script as its own command, then git push, then re-issue gh pr merge: a chained `emit-review-trailer.sh && gh pr merge` is denied because this hook evaluates the whole command before any of it runs."
     }
   }'
   exit 0

@@ -165,7 +165,14 @@ fi
 # manifest writes to arbitrary writable locations. See review on PR #3496.
 REPO_ROOT=""
 if [[ -n "$CWD" && -d "$CWD" ]]; then
-  REPO_ROOT="$CWD"
+  # The envelope cwd is the SESSION's directory, which is a subdirectory whenever a
+  # session starts or resumes there. Rooting on it verbatim read
+  # `<subdir>/AGENTS.rules.md` — absent, so a zero-rule load — and planted the
+  # manifest under `<subdir>/.claude/` (#8611). `--show-toplevel` only ever returns a
+  # worktree root, so the inside-a-worktree refusal below still holds; the `$CWD`
+  # fallback keeps a bare root and a non-repo cwd on their existing paths.
+  REPO_ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)"
+  REPO_ROOT="${REPO_ROOT:-$CWD}"
 elif command -v git >/dev/null 2>&1; then
   # `git-common-dir` resolves to `<bare>/.git` or `<bare>/.git/worktrees/<name>`.
   # `--show-toplevel` is the working-tree we want; only use common-dir as a

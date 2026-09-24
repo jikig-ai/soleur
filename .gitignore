@@ -134,10 +134,12 @@ reports/mutation/
 .stryker-tmp/
 mutants/
 /.AGENTS.md.source
-# `**/`, not a bare path (an inner slash root-anchors a pattern). session-rules-loader.sh
-# writes manifests under the session's CWD, so a session started in apps/web-platform/
-# plants one there; the old root-anchored line left it untracked, and
-# resolve-regenerable-conflicts.sh then refused on a dirty tree (#8611).
+# Defence-in-depth behind session-rules-loader.sh resolving its root with
+# `git rev-parse --show-toplevel` (#8611): a loader older than that fix rooted on the
+# session cwd and planted manifests under e.g. apps/web-platform/.claude/, where the
+# untracked file made resolve-regenerable-conflicts.sh refuse. `**/` because an inner
+# slash otherwise root-anchors the pattern. The sibling `.claude/.*` sinks above stay
+# root-anchored on purpose: their writers root on BASH_SOURCE / CLAUDE_PROJECT_DIR.
 **/.claude/.session-manifests/
 
 # Compound Promotion Loop (#2720). promotion-config.yml is TRACKED so the
