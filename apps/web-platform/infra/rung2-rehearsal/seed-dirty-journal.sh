@@ -5,8 +5,27 @@
 #
 # WHAT IT REPRODUCES. The 2026-09-24 production state: a host destroyed while the retained
 # plaintext volume was mounted read-write, so its ext4 journal is dirty. It mounts the rehearsal
-# plaintext volume rw (no noload), writes, flushes, and powers the host off WITHOUT unmounting.
-# The payload phase then replaces this host and boots the real payload against that volume.
+# plaintext volume rw (no noload), writes, and powers the host off WITHOUT unmounting. The payload
+# phase then replaces this host and boots the real payload against that volume.
+#
+# THE SEQUENCE MAKES THE REHEARSAL PROVE REPLAY, not only the needs_recovery flag (#5274 review):
+#   1. write the marker; mkdir repositories/seed-probe.git
+#   2. `sync -f` (syncfs): commits the journal AND writes the home blocks, so the probe directory
+#      is on disk in the volume's own metadata
+#   3. rmdir repositories/seed-probe.git
+#   4. fsync ONLY — coreutils `sync <path>` without -f fsyncs the named file or directory — on
+#      repositories/ and the marker: ext4 commits the removal to the JOURNAL and returns, leaving
+#      the updated directory/bitmap home blocks dirty in memory
+#   5. `echo o > /proc/sysrq-trigger`, immediately
+# So the volume's home blocks still list seed-probe.git while its journal holds the removal. A read
+# that SKIPS replay (mount -o noload) would count one repository and the payload's
+# git-data-bootstrap.sh would FATAL `plaintext_residue count=1`; a read that replays counts zero.
+# The payload's PASS therefore needs a repositories/ count of 0 AND
+# plaintext_journal=dirty, and together those prove the journal was replayed into the dm-snapshot
+# COW rather than merely that needs_recovery was set. Not overclaimed: the kernel could write the
+# dirty home blocks back in the few milliseconds between the fsync and the power-off, in which case
+# this run proves only the flag path — possible, not expected, since dirty buffers are written back
+# after dirty_expire_centisecs (30 s by default) and a jbd2 checkpoint is not forced by an fsync.
 #
 # IT ASSERTS NOTHING ABOUT needs_recovery: that flag is set whenever an ext4 is mounted rw, so a
 # seed-side check proves nothing. The proof is the payload's own boot_complete reading
@@ -58,16 +77,20 @@ emit mount info "mounted rw"
 
 if ! { printf 'rung-2 seed %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MNT/rung2-seed-marker" \
        && mkdir -p "$MNT/repositories" \
-       && mkdir "$MNT/repositories/seed-probe.git" \
-       && rmdir "$MNT/repositories/seed-probe.git"; }; then
+       && mkdir "$MNT/repositories/seed-probe.git"; }; then
   emit write fatal "the seed writes failed"
   exit 1
 fi
-emit write info "marker written, repositories/ probe created and removed"
-
+# Step 2: syncfs — the probe directory reaches the home blocks, not just the journal.
 if ! sync -f "$MNT/rung2-seed-marker"; then emit sync fatal "sync -f failed"; exit 1; fi
-emit poweroff info "powering off WITHOUT unmounting"
+emit write info "marker and repositories/seed-probe.git written through to the home blocks"
+# The last emit BEFORE the removal: a network round-trip between the fsync and the power-off would
+# widen the window in which the home blocks could be written back.
+emit poweroff info "removing the probe, fsync only, then powering off WITHOUT unmounting"
 
+# Steps 3-5, with nothing between the fsync and the power-off.
+if ! rmdir "$MNT/repositories/seed-probe.git"; then emit unlink fatal "rmdir of the probe failed"; exit 1; fi
+if ! sync "$MNT/repositories" "$MNT/rung2-seed-marker"; then emit fsync fatal "fsync failed"; exit 1; fi
 # Immediate power-off, no unmount, no remount-ro: the predecessor's state. Writing to
 # /proc/sysrq-trigger as root works regardless of kernel.sysrq's mask.
 echo o > /proc/sysrq-trigger

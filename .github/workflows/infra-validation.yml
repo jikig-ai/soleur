@@ -1205,8 +1205,10 @@ jobs:
       # measures the kernel facts that design rests on (a --setro origin refuses a direct ro mount;
       # a snapshot stacks on it and replays into the COW; the origin's sha256 is unchanged).
       # Root-only for the same reason as the two loopback suites above (#7076). `dmsetup` is
-      # installed rather than assumed — the unit's cloud-init lists it explicitly too.
+      # installed rather than assumed — the unit's cloud-init lists it explicitly too. Bounded: a
+      # wedged loop device or a dm table that never tears down must fail the job, not hang it.
       - name: Run git-data plaintext snapshot loopback evidence (#5274 dirty-journal forward fix)
+        timeout-minutes: 10
         run: |
           sudo apt-get install -y -qq dmsetup e2fsprogs
           sudo bash apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh

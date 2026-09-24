@@ -956,9 +956,11 @@ runcmd:
 
   # (#8211, ADR-239) /mnt/git-data is the LUKS store's mountpoint, created here; the luks_open
   # heredoc below mounts the MAPPER on it. The PLAINTEXT volume is NOT mounted here and gets NO
-  # fstab line: nothing mounts it after boot. git-data-bootstrap.sh mounts it once, read-only
-  # and privately, only to prove it holds no repository (7b step 2), then unmounts it. The
-  # attachment is automount=false (git-data.tf), so Hetzner does not mount it either.
+  # fstab line: nothing mounts it after boot. git-data-bootstrap.sh never mounts it either: it
+  # sets it kernel read-only, stacks a throwaway dm snapshot on it (COW in RAM), mounts the
+  # SNAPSHOT read-only and privately to prove the post-replay tree holds no repository (7b step
+  # 2), then tears the snapshot down (ADR-239 amendment 2026-09-24). The attachment is
+  # automount=false (git-data.tf), so Hetzner does not mount it either.
   - |
     STAGE=volume_mount # (#6982) name the stage for the top-armed on_err fatal
     ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
@@ -1109,6 +1111,9 @@ runcmd:
     # deny-all host is strictly worse than a reported failure.
     trap luks_err EXIT
     DEV="/dev/disk/by-id/scsi-0HC_Volume_${git_data_luks_volume_id}"
+    # (#5274) A LUKS id mis-wired to the plaintext volume's would luksFormat the RETAINED
+    # plaintext volume below, before the bootstrap ever sets it read-only. Refused, never formatted.
+    [ -z "${git_data_volume_id}" ] || [ "${git_data_volume_id}" != "${git_data_luks_volume_id}" ] || { echo "[git-data-luks] FATAL: the LUKS volume id equals the plaintext volume id — refusing to format the retained plaintext volume" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
     [ -n "$GIT_DATA_LUKS_KEY" ] || { echo "[git-data-luks] FATAL: GIT_DATA_LUKS_KEY empty — refusing unencrypted mount" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
     # (#7216) rc CAPTURE + A POSITIVE BLANKNESS PROOF. Measured on 2.7.0: rc 1 is cryptsetup's
     # DEFAULT errno bucket, not a "no header" signal — a LUKS2 device with corrupted header JSON

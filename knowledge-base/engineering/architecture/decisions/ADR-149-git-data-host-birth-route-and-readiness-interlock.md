@@ -998,6 +998,8 @@ The rehearsal route now seeds a dirty plaintext journal, boots the payload (boot
 unchanged), then replaces the host again (boot #2, adopting the LUKS volume boot #1 formatted).
 Every plan passes `scripts/git-data-rung2-plan-shape.sh`; the evidence upload additionally gates on
 the replace arm (`RUNG2_REPLACE_BOOT`), and teardown is its own `if: always()` job. The birth
-readiness gate is unchanged: it reads neither the reboot nor the replace key, and enforcement comes
-from the upload gate plus its existing `RUN_NOT_SUCCESS` / `RUN_NO_EVIDENCE_ARTIFACT` refusals.
+readiness gate still ignores the reboot key, but now also requires the replace keys: exactly one
+`RUNG2_REPLACE_BOOT=PASS` and one `RUNG2_REPLACE_SENTRY_CROSSCHECK`, classified over the same closed
+set as `RUNG2_SENTRY_CROSSCHECK` (UNAVAILABLE takes the same run-keyed ack). A hand-assembled
+evidence file therefore cannot release on boot #1 alone.
 Runbook: `git-data-rung2-rehearsal.md`.

@@ -15,8 +15,15 @@
 #              fresh plaintext volume makes the seed vacuous, and a fresh LUKS volume skips the
 #              adopt arm the replace exists to rehearse.
 #
+# BOTH MODES also refuse any resource_change carrying a non-null `.change.importing`: an import
+# plans as `no-op` (or `update`), so the verb deny-list alone would ADMIT a plan that adopts an
+# existing object — a production volume, say — into this root, where the teardown destroys it.
+#
 # DENY-LIST THE INERT VERBS, never allow-list the destructive ones: an action Terraform adds
-# later (it grew `forget`) is refused by default. Addresses are matched EXACTLY, never by glob.
+# later (it grew `forget`) is refused by default. Replace/update addresses are matched EXACTLY.
+# A CREATE must be a root-module `<type>.rehearsal` or `<type>.rehearsal_<suffix>` address,
+# anchored by regex rather than globbed: the earlier `*.rehearsal|*.rehearsal_*` case glob let `*`
+# span dots, so `module.git_data.hcloud_server.rehearsal` read as rehearsal-scoped.
 # An unparseable plan fails closed. The plan JSON embeds sensitive variables verbatim, so this
 # script reads it and prints only addresses and action verbs.
 #
@@ -38,14 +45,19 @@ fi
 # replace test below; `create,delete` (create_before_destroy) is still a replace.
 changes="$(jq -r '.resource_changes[]? | select(.change.actions | map(select(. != "create" and . != "read" and . != "no-op")) | length > 0) | "\(.address)\t\(.change.actions | join(","))"' "$PLAN")"
 creates="$(jq -r '.resource_changes[]? | select(.change.actions == ["create"]) | .address' "$PLAN")"
+imports="$(jq -r '.resource_changes[]? | select((.change.importing // null) != null) | .address' "$PLAN")"
 
 bad=0
 while IFS= read -r addr; do
   [[ -n "$addr" ]] || continue
-  case "$addr" in
-    *.rehearsal|*.rehearsal_*) ;;
-    *) echo "::error::plan-shape: the plan would create a NON-rehearsal address: ${addr}"; bad=1 ;;
-  esac
+  echo "::error::plan-shape: the plan IMPORTS ${addr} — an import plans as no-op/update and would adopt an existing object into the rehearsal root, whose teardown destroys it"
+  bad=1
+done <<<"$imports"
+while IFS= read -r addr; do
+  [[ -n "$addr" ]] || continue
+  if [[ ! "$addr" =~ ^[a-z0-9_]+\.rehearsal(_[a-z0-9_]+)?$ ]]; then
+    echo "::error::plan-shape: the plan would create a NON-rehearsal address: ${addr}"; bad=1
+  fi
 done <<<"$creates"
 
 if [[ "$MODE" == additive ]]; then

@@ -967,6 +967,13 @@ destroyed. The fix shortens the Art. 17 refusal window ADR-239 accepted. The Art
 (PA-36 (g)) does not name the `noload` mechanism, so no register edit. `soleur:gdpr-gate` is run
 because the threshold is `single-user incident` (trigger b).
 
+> **Superseded 2026-09-24 (review, CLO seat):** the "no register edit" sentence above is wrong. PA-36 (g)
+> names `mount -o ro,noload` twice (item (1) and item (2)(ii)), and its `boot_complete` field list
+> lacks `plaintext_journal`. The register gains two mechanism-only superseded markers and one
+> field addendum. There is still no new processing activity, recipient or transfer. One qualifier
+> to "destroyed" above: if teardown fails, the RAM COW file can survive until that host reboots
+> or is replaced; that boot ends `FATAL … reason=umount` with no marker.
+
 **gdpr-gate result (2026-09-24, advisory, not legal review):** no Files-to-Edit/Create path matches
 the canonical regulated-data regex; none of the five v1 checks fire (no schema column, no FK to
 `users`, no new vendor — Hetzner/Better Stack/Sentry are existing processors — no Art. 9 column).

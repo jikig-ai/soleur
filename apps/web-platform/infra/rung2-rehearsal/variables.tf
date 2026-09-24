@@ -45,6 +45,19 @@ variable "betterstack_ingest_url" {
   # Not a credential, so hr-tf-variable-no-operator-mint-default does not apply — an ingest
   # URL is a public endpoint; the token that authorizes writing to it is separate.
   default = "https://s2734275.eu-central-1a.betterstackdata.com/"
+
+  # (#5274 review W8) PINNED AT PLAN TIME, not only at boot. seed-dirty-journal.sh refuses any
+  # other rendered URL — correctly, since the ingest token must reach git-data's own source only —
+  # but a refusal on the seed host emits nothing, so the run learned of it only when the 10-minute
+  # power-off poll expired. Validated here, a TF_VAR_betterstack_ingest_url override (the Doppler
+  # tf-var transformer would supply one if prd_terraform ever held that name) fails `terraform
+  # plan` before a host is spent. The literal is the seed script's BS_URL_PINNED;
+  # git-data-rung2-rehearsal.test.sh requires this condition, the default above and that pin to
+  # be the same string.
+  validation {
+    condition     = var.betterstack_ingest_url == "https://s2734275.eu-central-1a.betterstackdata.com/"
+    error_message = "betterstack_ingest_url must be git-data's own Better Stack ingest endpoint (https://s2734275.eu-central-1a.betterstackdata.com/): the rehearsal must ship to production's sink, and the seed host refuses any other URL."
+  }
 }
 
 variable "git_data_betterstack_logs_token" {
