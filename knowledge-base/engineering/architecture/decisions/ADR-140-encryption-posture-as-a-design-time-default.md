@@ -261,12 +261,12 @@ with `checks: write` on a branch can post a `test` check-run as integration 1536
 every synthetic-backed required check, not specific to this one. An exception can expire after
 a PR's CI ran green; the PR can then merge until `main` moves or CI re-runs.
 
-## Amendment — ADR-242 (2026-09-23, #8532)
+## Amendment — ADR-246 (2026-09-23, #8532)
 
 The `non_store_types` seed was mechanical: every type that was not obviously a volume or a
 bucket went in, with no per-type reason. One type was wrong. `hcloud_server` is now a store
 class (`host-root-disk`), because the root disks hold LUKS passphrases or tokens that fetch
-them, the persistent journal, and the Inngest SQLite directory. ADR-242 also makes the
+them, the persistent journal, and the Inngest SQLite directory. ADR-246 also makes the
 positive-work floor exact and requires a `for_each`/`count` row to declare its instances. The
 rationale lives there. The other `non_store_types` entries still carry no reason (see
-ADR-242, Alternatives).
+ADR-246, Alternatives).

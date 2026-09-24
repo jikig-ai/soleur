@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
+import { stripComments } from "./helpers/strip-comments";
 
 /**
  * The e2e harness runs TWO next dev servers (a public origin and an authenticated one).
@@ -24,9 +25,6 @@ import { describe, expect, it } from "vitest";
  * the comment explaining it (cq-assert-anchor-not-bare-token).
  */
 
-/** Remove `//` line comments and block comments so prose cannot satisfy an assertion. */
-const stripComments = (src: string): string =>
-  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 const read = (name: string) => stripComments(readFileSync(join(__dirname, "..", name), "utf-8"));
 

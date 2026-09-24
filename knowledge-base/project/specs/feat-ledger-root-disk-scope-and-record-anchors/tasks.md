@@ -41,7 +41,7 @@ Nothing here edits `apps/web-platform/infra/`.
 - [x] 2.4 ~~Rename~~ Narrow `git_data.baked_credentials_on_host` by dated addendum to the metadata-endpoint threat and the two live Doppler-fallback sites (`git-data-gc-failure.service`, `git-data-luks-reopen-failure.service`). The id is KEPT: five earlier plans cite it, and the host row now carries the root-disk copies.
 - [x] 2.5 `check_instance_multiplicity` plus MB-14 (and MB-23 orphan rows, MB-24 fail-closed shapes, MB-25 singletons), with a two-instance fixture whose second member is the offender.
 - [x] 2.6 Amend the ~~four~~ five `luks` rows' `does_not_defend` to name where each passphrase lives.
-- [x] 2.7 Schema update (plus a script/schema parity test and unknown-row-key rejection); ADR-242 (ordinal provisional); ADR-140 amended.
+- [x] 2.7 Schema update (plus a script/schema parity test and unknown-row-key rejection); ADR-246 (ordinal provisional); ADR-140 amended.
 
 ## Phase 3 — PR-3: record anchors (#8532)
 
@@ -51,7 +51,7 @@ Nothing here edits `apps/web-platform/infra/`.
 - [x] 3.4 Regenerate `model.likec4.json` in the same commit; run the C4 freshness and parity suites (all pass).
 - [x] 3.5 Register: the five CLO amendments (plus PA-1/2/21/22/36 and the cross-cutting encryption bullet), each with a dated amendment marker, plus the visible `(encryption-posture ledger: <id>)` clauses.
 - [x] 3.6 Record the amendment convention in the register's maintenance section, which has none today.
-- [x] 3.7 Route the register edits through the CLO before marking the PR ready. DISCHARGED with conditions: all 44 register pairs are in `records` (done); follow-ups filed as #8624 (PA-14 amendment + published claim review) and #8625 (no Hetzner backups; Art. 32(1)(c)). ADR-245 records the binding.
+- [x] 3.7 Route the register edits through the CLO before marking the PR ready. DISCHARGED with conditions: all 44 register pairs are in `records` (done); follow-ups filed as #8624 (PA-14 amendment + published claim review) and #8625 (no Hetzner backups; Art. 32(1)(c)). ADR-247 records the binding.
 
 ## Phase 4 — PR-4: the web-host root-disk images (operator-gated)
 

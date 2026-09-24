@@ -59,8 +59,8 @@ in lint-encryption-posture.test.sh)
      row conforms to its store class); instance multiplicity for
      for_each/count/module blocks; disclosure anchors resolve exactly once and
      a luks row's claim sentence claims encryption without denying it; record
-     anchors in record_surfaces agree with the ledger by equality (ADR-242,
-     ADR-245).
+     anchors in record_surfaces agree with the ledger by equality (ADR-246,
+     ADR-247).
 
 Exit codes: 0 PASS (or a graceful skip), 1 one or more FAIL, 2 argument/IO error.
 """

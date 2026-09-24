@@ -202,6 +202,10 @@ summary line has not been killed.
     edits, run a CLO consistency check on the combined cell before pushing. A clean textual merge
     of two additive markers says nothing about whether they agree.
 
+## Addendum — 2026-09-24 (#8626)
+
+Session Error 1 and Session Error 2 above say the parse-view bullet is routed to `work/SKILL.md`. That is superseded. Syncing with `origin/main` on 2026-09-24 put `work/SKILL.md` 204 bytes over its 362000-byte ceiling, because main had grown into the ~20 bytes of headroom recorded above. The bullet now lives in `review/SKILL.md`, in "Defect Classes This Review Reliably Catches". `work/SKILL.md` is byte-identical to `origin/main` again. The author side no longer carries the rule, so the reviewer-side rule is the only place it is enforced, which item 2 already named as the enforcement point.
+
 ## Tags
 
 category: workflow-patterns

@@ -464,9 +464,12 @@ on-host loopback re-query
 **Reference incident:** 2026-05-27 `scheduled-community-monitor` missed
 check-in (Sentry incident #5010688). Last successful check-in
 2026-05-25T11:56:14Z. Preceded by 15+ web-platform deploys in a 24h window
-(TR9 Phase 2 merge burst) and a function-count jump from ~18 to 40. Sentry
-alert triggered by `auth-callback-no-code-burst` was coincidental (unrelated
-issue alert type).
+(TR9 Phase 2 merge burst) and a function-count jump from ~18 to 40. The
+"triggered by `auth-callback-no-code-burst`" line in that email was NOT a
+coincidence: that rule really fired, because all four `auth-*` rules had empty
+trigger conditions and tag filters from 2026-05-17 to 2026-06-02 and matched
+every issue (#4781). See
+`knowledge-base/project/learnings/bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
 
 **Preventive guard:** `function-registry-count.test.ts` asserts route.ts
 function count, cron-file ↔ route.ts parity, and SENTRY_MONITOR_SLUG ↔

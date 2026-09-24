@@ -22,8 +22,9 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   existence only, until #7985's native conversion. No resource reads the legacy
   endpoint, and `apply-sentry-infra.yml`'s brownout retry was deleted in #8451.
 
-  `configure-sentry-alerts.sh` is NOT deleted: it remains the
-  only executable definition of `auth-per-user-loop`. Older rules that terraform
+  `configure-sentry-alerts.sh` is NOT deleted, but it is not a repair path: its `rules/`
+  endpoint returns 410 and it owns none of the rules; `auth-per-user-loop` is
+  repaired by a PUT from the committed capture (#4781). Older rules that terraform
   owns from real `conditions_v2`/`filters_v2`/`actions_v2` include the
   BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`, #4364).
   `byok-art-33-breach` uses `action_match = "any"` over three event-lifecycle
@@ -64,6 +65,7 @@ secrets**:
 R2 backend credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) come from
 Doppler `prd_terraform` via `doppler secrets get --plain` — same pattern as
 `scheduled-terraform-drift.yml` extracts them. See ADR-031 §secret-store-divergence.
+(The drift leg reads the Sentry token from the same repository secret as the apply.)
 
 ## Local invocation
 
@@ -200,7 +202,8 @@ Class D candidates as *unresolved*, never as clean.
 
 ## Drift detection
 
-Two different things drift here, and they have two different detectors.
+Two different things drift here (alert-rule fields, and the root's state against its
+config), and each has its own detector.
 
 **Alert-rule fidelity** — `scripts/sentry-alert-live-fidelity.sh`: one
 read-only GET against the non-deprecated workflows endpoint, diffed
@@ -256,12 +259,35 @@ Phase 3.4 captures under `knowledge-base/project/specs/fix-7650-sentry-alert-mig
 are history (the adoption record and `sentry-adoption-plan-assert.sh`'s
 self-skipping bijection input), not the probe's reference.
 
-**Everything else in the root** is still not on `scheduled-terraform-drift.yml`'s
-matrix, and adding `apps/web-platform/infra/sentry/` to it is DELIBERATELY not
-the fix for the alert rules. That leg would plan the FULL ROOT, which until
-#8451 refreshed the last two `sentry_issue_alert` resources through the
-deprecated endpoint, so it would have gone red on Sentry's read failures (a
-brownout, then #8451's persistent 410) rather than on drift, and been muted.
-Since #8451 no resource reads that endpoint; the alert rules' drift is covered by
-the live probe above, and the remaining gap (cron and uptime monitors) is
-unchanged from #3814.
+**The whole root, state against config** — the `apps/web-platform/infra/sentry`
+leg of `scheduled-terraform-drift.yml` (#6612, ADR-031's 2026-09-24 amendment).
+Twice daily it runs a full-root `terraform plan -detailed-exitcode` (no
+`-target=`), so every resource type is compared, cron and uptime monitors
+included. It authenticates exactly as the apply does: the `SENTRY_IAC_AUTH_TOKEN`
+repository secret bound as the raw `SENTRY_AUTH_TOKEN`, with no `doppler run`,
+and terraform sees only an `env -i` allowlist. Exit 2 files an `infra-drift`
+issue; exit 1 (a vendor read failure, a missing token) sends the `[ERROR]` email
+and files no issue. The issue's step 2 routes the fix by what the plan shows,
+because a manual dispatch of the apply passes the same gates as a merge: a
+dispatch reconciles in-place updates only; an object deleted in Sentry's web UI
+(`+` with no recent merge) needs a PR, since the create gate refuses it; a
+destroy needs a re-run of the failed push apply or a PR carrying
+`[ack-destroy]`, since a dispatch never carries the ack. Never apply locally
+(`use_lockfile = false`). The leg cannot see attributes under `ignore_changes`,
+so field fidelity for those stays with the probe above.
+
+ADR-031's exit criterion for this leg counts its plan failures over 30 days
+from the job annotations (a job id is its check-run id):
+
+```bash
+gh run list -w scheduled-terraform-drift.yml -L 100 --created ">=$(date -u -d '30 days ago' +%F)" \
+  --json databaseId --jq '.[].databaseId' \
+| while read -r run; do
+    gh api "repos/jikig-ai/soleur/actions/runs/$run/jobs" \
+      --jq '.jobs[] | select(.name == "drift-check (apps/web-platform/infra/sentry)") | .id'
+  done \
+| while read -r job; do
+    gh api "repos/jikig-ai/soleur/check-runs/$job/annotations" \
+      --jq '[.[] | select(.message | test("Terraform plan failed in web-platform/sentry"))] | length'
+  done | paste -sd+ - | bc
+```
