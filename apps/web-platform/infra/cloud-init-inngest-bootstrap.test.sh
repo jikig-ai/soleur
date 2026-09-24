@@ -295,7 +295,12 @@ else
     # The generic "bump to it" advice would route around that gate by hand.
     # A subshell rather than `git -C`: read-only, and it keeps this diagnostic
     # out of the fixture-operand census, whose verb list matches `merge-base`.
-    if ! (cd "$SCRIPT_DIR" && git merge-base --is-ancestor "refs/tags/vinngest-$LATEST_TAG^{commit}" HEAD) 2>/dev/null; then
+    # Judge against origin/main when the checkout has it: on a PR branch that
+    # carries the tag's commit, HEAD would call an unmerged tag "on main".
+    anc_base=HEAD
+    (cd "$SCRIPT_DIR" && git rev-parse -q --verify refs/remotes/origin/main >/dev/null 2>&1) \
+      && anc_base=refs/remotes/origin/main
+    if ! (cd "$SCRIPT_DIR" && git merge-base --is-ancestor "refs/tags/vinngest-$LATEST_TAG^{commit}" "$anc_base") 2>/dev/null; then
       echo "        #8747: vinngest-$LATEST_TAG is NOT on main (or its ancestry cannot be read) — do NOT"
       echo "        bump to it. Delete it (git push origin :refs/tags/vinngest-$LATEST_TAG) unless main"
       echo "        pins it, and tag a NEW version on main (runbook inngest-server.md, release step 1)."

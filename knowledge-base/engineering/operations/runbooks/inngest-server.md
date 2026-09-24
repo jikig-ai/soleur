@@ -964,7 +964,10 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    `main`, right after #8747 merged). Deleting it breaks the live pin; re-anchor by cutting
    a new, higher version on `main` instead. Until an off-main tag is deleted, AC6 of
    `cloud-init-inngest-bootstrap.test.sh` reds `main` and every open PR, because it demands a
-   pin to that tag while the bump refuses to author it. #8782 retires that trap.
+   pin to that tag while the bump refuses to author it. #8782 retires that trap. A
+   `mirror_only` backfill still mirrors while the semver-max tag is off `main` (the
+   build-side check is skipped on that path), but its bump job ends `result=error` at stage
+   `ancestry`: that red is the bump refusing the off-main target, not the backfill failing.
 
    **Carrier-changing PR flow.** Merge the PR that changes a baked carrier first. Its
    `deploy-script-tests` GuardA row is red on the PR, which is expected and advisory. Then

@@ -801,7 +801,9 @@ The mirror-only suite adds the exact-string `if: ${{ !inputs.mirror_only }}` ass
       `bash .github/scripts/test/test-inngest-bootstrap-tag-guard.sh` and
       `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` pass. AC6 and GuardA are green,
       `cloud-init-inngest-bootstrap.test.sh` is unmodified, and `test-inngest-bootstrap-tag-guard.sh`
-      differs only in its corrected header comment.
+      differs only in its corrected header comment. *Amended at review:* `cloud-init-inngest-bootstrap.test.sh`
+      gained only an AC6 DRIFT-branch diagnostic (an off-main semver-max tag prints the #8747
+      recovery instead of "bump to it"); no assertion changed and its count stays 230.
 - [ ] **AC5** ADR-232 carries §7, `ancestry` in §6, the rewritten Context/§2/Consequences passages, the
       amendment note and two Alternatives rows. The bump script header's stage list includes `ancestry`.
 - [ ] **AC6** `inngest-server.md` §Bootstrap-image release says the tag goes on the squash-merge commit
