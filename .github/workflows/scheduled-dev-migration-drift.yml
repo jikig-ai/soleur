@@ -39,7 +39,11 @@ permissions:
 jobs:
   drift:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The probe's worst case: a 60 s git fetch, a 120 s ledger read and the
+    # classifier's `timeout -k 5 240` bound (its own budget is 225 s), then the
+    # rpc-body step. 12 min keeps the classifier's transient exit ahead of the job
+    # kill (pinned by dev-ledger-parity.test.sh, W-timeout).
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

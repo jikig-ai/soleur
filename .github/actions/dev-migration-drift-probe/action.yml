@@ -35,10 +35,15 @@
 # `dev-ledger-parity.sh classify-missing` (ADR-061 amendments 2026-09-23,
 # #8520, #8605): a row a fresh, unmerged live branch holds is that PR's
 # in-flight row (warning); a row whose every fresh holder's latest pull
-# request closed at the branch tip is closed-grace (warning) for 24 h, then
-# closed (blocking); ownerless, stale-owner and unclassifiable rows still
-# fail. The classifier reads pull-request state with the caller's
-# `github-token` (pull-requests: read), passed to that one call only.
+# request closed unmerged at the branch tip is closed-grace (warning) for
+# 24 h, then closed (blocking) — or closed-tracked (warning, plus a Sentry
+# event on the scheduled surface) while an open action-required
+# [ci/dev-ledger-reconcile] issue names that pull request; ownerless,
+# stale-owner and unclassifiable rows still fail. The classifier reads
+# pull-request and issue state with the caller's `github-token`
+# (pull-requests: read): the value sits in this step's environment as
+# CLASSIFIER_GH_TOKEN, is unset for the doppler/psql children, and is passed
+# as GH_TOKEN to the classify-missing call only.
 #
 # Replaces inline drift-probe step in `tenant-integration.yml`. Designed
 # to be invoked from any workflow that needs dev-vs-main drift visibility
@@ -84,9 +89,11 @@ inputs:
     default: 'false'
   github-token:
     description: >-
-      Token for the classifier's pull-request state lookups (the caller's
-      github.token; the job needs pull-requests: read). Exported as GH_TOKEN on
-      the classify-missing call only. Unused when fail-on-ledger-drift is false.
+      Token for the classifier's pull-request and reconcile-issue lookups (the
+      caller's github.token; the job needs pull-requests: read). It is in the
+      probe step's environment as CLASSIFIER_GH_TOKEN (unset for the doppler/psql
+      children) and is passed as GH_TOKEN to the classify-missing call only.
+      Unused when fail-on-ledger-drift is false.
     required: false
     default: ''
 
@@ -129,7 +136,8 @@ runs:
         # is unbound) would abort the step before psql runs.
         # Bounded: a connect/query stall here runs INSIDE the dev-suite mutex
         # window and extends the hold for every waiter.
-        if ! applied=$(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
+        # env -u: the classifier's GitHub token never reaches the database child.
+        if ! applied=$(env -u CLASSIFIER_GH_TOKEN doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
               sh -c 'PGCONNECT_TIMEOUT=10 timeout 120 psql "$DATABASE_URL_POOLER" -w --no-psqlrc -tAq --set ON_ERROR_STOP=1 -F "|" -c "SELECT filename, COALESCE(content_sha, '"'"''"'"') FROM public._schema_migrations ORDER BY filename;"'); then
           echo "drift-detected=false" >> "$GITHUB_OUTPUT"
           if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
@@ -167,7 +175,9 @@ runs:
           path="apps/web-platform/supabase/migrations/$f"
           # `git ls-tree origin/main -- <path>` returns `<mode> <type> <sha> <path>`.
           # Empty stdout means the file is not on origin/main (missing-class drift).
-          ls_out=$(git ls-tree origin/main -- "$path" 2>/dev/null || true)
+          # :(top,literal) anchors the pathspec at the repository root whatever the
+          # step's working directory (the #8606 class).
+          ls_out=$(git ls-tree origin/main -- ":(top,literal)$path" 2>/dev/null || true)
           # content_sha is dev state a PR's migration can write: never echo a
           # value that is not a 40-hex blob id (annotation injection), and never
           # hand one to the classifier (it would refuse the whole batch).
@@ -218,15 +228,19 @@ runs:
         merged_lines=""
         closed_grace_lines=""
         closed_lines=""
+        closed_tracked_lines=""
         unclassified=""
         if [[ "$FAIL_ON_DRIFT" == "true" && -n "$missing_pairs" ]]; then
           cls_err=$(mktemp)
           cls_rc=0
           # Bounded: this runs inside the dev-suite mutex window on push, and a
-          # hang must land on the UNCLASSIFIED arm, not on the job timeout.
+          # hang must land on the UNCLASSIFIED arm, not on the job timeout. The
+          # classifier keeps its own 225 s budget inside this 240 s bound, so a
+          # slow GitHub API exits 2 (transient) before the kill. Every caller's
+          # job timeout-minutes leaves room for it (pinned by the suite).
           # GH_TOKEN is scoped to this one call: the classifier's pull-request
-          # state lookups are the only GitHub API use in this action.
-          cls_out=$(GH_TOKEN="$CLASSIFIER_GH_TOKEN" timeout -k 5 90 bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing \
+          # and issue lookups are the only GitHub API use in this action.
+          cls_out=$(GH_TOKEN="$CLASSIFIER_GH_TOKEN" timeout -k 5 240 bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing \
             --base-branch main --repo "$GITHUB_WORKSPACE" <<<"$missing_pairs" 2>"$cls_err") || cls_rc=$?
           cls_summary=$(grep -m1 '^ledger-classify: ' "$cls_err" || true)
           mapfile -t want_files < <(printf '%s' "$missing_drift" | sed '/^$/d')
@@ -235,10 +249,15 @@ runs:
           # reordered or substituted verdict set.
           cls_ok="true"
           cls_reason="rc=$cls_rc"
+          # The class token: the classifier's own cannot-measure class, timeout
+          # when the bound killed it, malformed-output when its lines were wrong.
+          cls_class=$(grep -oE 'cannot measure \((transient|config|connect)\)' "$cls_err" | head -n 1 | sed -E 's/.*\((.*)\)/\1/' || true)
+          case "$cls_rc" in 124|137) cls_class="timeout" ;; esac
+          [[ -n "$cls_class" ]] || cls_class="unknown"
           if [[ "$cls_rc" != "0" ]]; then
             cls_ok="false"
           elif [[ "${#got_lines[@]}" != "${#want_files[@]}" ]]; then
-            cls_ok="false"; cls_reason="count got=${#got_lines[@]} want=${#want_files[@]}"
+            cls_ok="false"; cls_reason="count got=${#got_lines[@]} want=${#want_files[@]}"; cls_class="malformed-output"
           fi
           branch_re='^[A-Za-z0-9._/<>-]+$'
           STALE_DAYS_LABEL=30
@@ -246,24 +265,28 @@ runs:
           orphans=""
           if [[ "$cls_ok" == "true" ]]; then
             for i in "${!want_files[@]}"; do
-              v="" vf="" vb="" vx="" vh=""
-              IFS=$'\t' read -r v vf vb vx vh <<<"${got_lines[$i]}"
-              if [[ "$vf" != "${want_files[$i]}" ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) names another file"; break; fi
+              v="" vf="" vb="" vx="" vh="" vi=""
+              IFS=$'\t' read -r v vf vb vx vh vi <<<"${got_lines[$i]}"
+              if [[ "$vf" != "${want_files[$i]}" ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) names another file"; cls_class="malformed-output"; break; fi
               case "$v" in
                 in-flight)
-                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^(exact|blob|slug)$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; break; fi
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^(exact|blob|slug)$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; cls_class="malformed-output"; break; fi
                   if [[ "$vx" == "exact" ]]; then
                     inflight_lines+="  - $vf (in-flight: unmerged on live branch $vb via exact name — merging clears it; deleting the branch unmerged turns main red)"$'\n'
                   else
                     inflight_lines+="  - $vf (in-flight: live branch $vb holds this migration under another name, matched via $vx — that PR must restore the applied name before it merges, or this row becomes an orphan)"$'\n'
                   fi ;;
                 stale)
-                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^([0-9]+|future-dated|undated)$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; break; fi
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^([0-9]+|future-dated|undated)$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; cls_class="malformed-output"; break; fi
                   stale_lines+="  - $vf (stale: owner $vb has no commit dated within the last $STALE_DAYS_LABEL days (age: $vx) — push to it, or discard its dev rows with gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<its PR> (a dry run first) and delete the branch)"$'\n' ;;
+                closed-tracked)
+                  # As closed, plus the number of the open reconcile issue.
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^[0-9]+$ || ! "$vh" =~ ^[0-9]+$ || ! "$vi" =~ ^[0-9]+$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; cls_class="malformed-output"; break; fi
+                  closed_tracked_lines+="  - $vf (owner branch $vb has no open pull request; #$vx closed $vh h ago — tracked by open issue #$vi, so this warns instead of blocking until the issue is closed. Preview the discard: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=$vx)"$'\n' ;;
                 closed-grace|closed)
                   # PR number and hours are integers the classifier measured; the
                   # branch is its sanitized label. Nothing else reaches the line.
-                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^[0-9]+$ || ! "$vh" =~ ^[0-9]+$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; break; fi
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^[0-9]+$ || ! "$vh" =~ ^[0-9]+$ || -n "$vi" ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; cls_class="malformed-output"; break; fi
                   if [[ "$v" == "closed-grace" ]]; then
                     closed_grace_lines+="  - $vf (owner branch $vb has no open pull request; #$vx closed $vh h ago — the close-time dev-ledger-reconcile run normally discards this row; blocking after $CLOSED_GRACE_H_LABEL h. Preview: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=$vx)"$'\n'
                   else
@@ -274,7 +297,7 @@ runs:
                 orphan)
                   orphans+="$vf"$'\n' ;;
                 *)
-                  cls_ok="false"; cls_reason="line=$((i + 1)) unknown verdict"; break ;;
+                  cls_ok="false"; cls_reason="line=$((i + 1)) unknown verdict"; cls_class="malformed-output"; break ;;
               esac
             done
           fi
@@ -284,11 +307,12 @@ runs:
             merged_lines=""
             closed_grace_lines=""
             closed_lines=""
+            closed_tracked_lines=""
             orphans=""
             unclassified="$missing_drift"
             drift_seen="true"
             # FIRST, so the failure is never read as drift.
-            echo "::error::ledger-classify: UNCLASSIFIED (rows=${#want_files[@]} $cls_reason) — these rows ARE missing on origin/main, but their ownership could not be established; failing closed"
+            echo "::error::ledger-classify: UNCLASSIFIED (rows=${#want_files[@]} $cls_reason class=$cls_class) — these rows ARE missing on origin/main, but their ownership could not be established; failing closed"
             echo "::error::Unclassified:"
             while IFS= read -r f; do
               [[ -z "$f" ]] && continue
@@ -325,6 +349,14 @@ runs:
             echo "::warning::$l"
           done <<<"$closed_grace_lines"
         fi
+        if [[ -n "$closed_tracked_lines" ]]; then
+          drift_seen="true"
+          echo "::warning::dev-Supabase has _schema_migrations rows whose fresh owner branches' latest pull request closed at the branch tip $CLOSED_GRACE_H_LABEL h or more ago, each tracked by an open action-required reconcile issue (closed-tracked; #8605):"
+          while IFS= read -r l; do
+            [[ -z "$l" ]] && continue
+            echo "::warning::$l"
+          done <<<"$closed_tracked_lines"
+        fi
         if [[ -n "$stale_lines" ]]; then
           drift_seen="true"
           echo "::error::dev-Supabase has _schema_migrations rows whose only owner branch is stale (no commit for more than 30 days):"
@@ -347,7 +379,7 @@ runs:
           echo "::${sev}::See #4241 + knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md for revert procedure."
           if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
             echo "::${sev}::no fresh live branch owns these rows, or their filename is in origin/main's history — a dev reconcile is required (learning gap 2)"
-            echo "::${sev}::if a pull request applied a row and its branch was deleted: gh pr list --state closed --search <file>, then preview the discard: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<N>"
+            echo "::${sev}::if a pull request applied a row and its branch was deleted, find it with git: git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*' && git log --all --diff-filter=A --format='%h %D' -- apps/web-platform/supabase/migrations/<file>, then preview the discard: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<N>"
           fi
           echo "::${sev}::Missing-on-main:"
           while IFS= read -r f; do
@@ -371,12 +403,15 @@ runs:
         echo "drift-detected=${drift_seen}" >> "$GITHUB_OUTPUT"
         # The scheduled surface (the only caller passing sentry-dsn) has no human
         # reading its red run, so a blocking class there also emits one Sentry
-        # event per class. Static message; class names only, never row text.
+        # event per class, and closed-tracked (tracked by an open issue, not
+        # blocking) emits one at warning level every run. Static message; class
+        # names only, never row text; fingerprinted per class.
         if [[ "$FAIL_ON_DRIFT" == "true" && -n "${SENTRY_DSN:-}" ]]; then
           ledger_classes=""
           [[ -n "$orphans" ]] && ledger_classes+=" orphan"
           [[ -n "$stale_lines" ]] && ledger_classes+=" stale"
           [[ -n "$closed_lines" ]] && ledger_classes+=" closed"
+          [[ -n "$closed_tracked_lines" ]] && ledger_classes+=" closed-tracked"
           [[ -n "$unclassified" ]] && ledger_classes+=" unclassified"
           [[ -n "$content_drift" ]] && ledger_classes+=" content-drift"
           if [[ -n "$ledger_classes" ]]; then
@@ -384,7 +419,9 @@ runs:
             s_host=$(printf '%s' "$SENTRY_DSN" | sed -E 's#^https?://[^@]+@([^/]+)/.*#\1#')
             s_proj=$(printf '%s' "$SENTRY_DSN" | sed -E 's#.*/([0-9]+)/?$#\1#')
             for cls in $ledger_classes; do
-              s_payload=$(jq -nc --arg cls "$cls" '{message:"dev ledger drift", level:"error", platform:"other", tags:{feature:"dev-migration-drift", op:"ledger-drift", ledger_class:$cls}}')
+              s_level="error"
+              [[ "$cls" == "closed-tracked" ]] && s_level="warning"
+              s_payload=$(jq -nc --arg cls "$cls" --arg lvl "$s_level" '{message:"dev ledger drift", level:$lvl, platform:"other", fingerprint:["dev-ledger-drift", $cls], tags:{feature:"dev-migration-drift", op:"ledger-drift", ledger_class:$cls}}')
               s_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST "https://${s_host}/api/${s_proj}/store/" \
                 -H "Content-Type: application/json" \
                 -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_client=dev-ledger-drift-gha/1.0, sentry_key=${s_key}" \
@@ -396,8 +433,8 @@ runs:
           fi
         fi
         # Fail closed AFTER emitting every annotation so the run log names all
-        # drifted rows, not just the first. In-flight, merged and closed-grace rows
-        # alone never fail.
+        # drifted rows, not just the first. In-flight, merged, closed-grace and
+        # closed-tracked rows alone never fail.
         if [[ "$FAIL_ON_DRIFT" == "true" ]] \
           && [[ -n "$orphans" || -n "$stale_lines" || -n "$closed_lines" || -n "$unclassified" || -n "$content_drift" ]]; then
           exit 1

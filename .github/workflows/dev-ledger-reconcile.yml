@@ -9,24 +9,34 @@
 #
 # Triggers:
 #   - pull_request_target closed, unmerged, same-repo head: the close-time discard
-#     (--execute --require-closed, never --allow-later-rows). A refusal, a failed
-#     step, or a ledger-only discard (schema residue) files an action-required
-#     issue; after 24 h the drift probe reports the rows as `closed` (blocking).
+#     (--execute --require-closed, never --allow-later-rows).
 #   - workflow_dispatch from main: a DRY RUN unless execute=true.
 #       gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<N>
 #       gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<N> -f execute=true
 #
+# A refusal, a failed job, schema residue from a ledger-only discard, or a row the
+# writer reports `unreachable` files (or comments on) ONE issue per PR, titled
+# "[ci/dev-ledger-reconcile] PR #<N> …" and labelled ci/dev-ledger-reconcile +
+# action-required — on the close path, and on a dispatch with execute=true. While
+# it is open the drift probe reports the PR's rows as closed-tracked (a warning
+# plus a Sentry event every scheduled run); with no issue they turn `closed`
+# (blocking) 24 h after the close. The classifier finds the issue by that label
+# and title prefix (dev-ledger-parity.sh RECONCILE_ISSUE_*; the suite pins both).
+#
 # SECURITY ENVELOPE: pull_request_target runs this BASE-branch workflow with the
 # base branch's secrets and cache scope. Never check out, build or execute
-# PR-head code here: the checkout below has NO ref: key, so both events check out
-# main's tip, and only main's copy of the writer runs. The PR's .down.sql is DATA:
-# the writer fetches it by blob id, verifies its hash, refuses it on any backslash
-# byte (psql meta-commands such as \! would run a shell) and on transaction-control
-# or non-transactional statements, and runs it only against the dev database with
-# GH_TOKEN unset. Every PR-derived value (number, actor) reaches a run: body via
-# env: and is re-validated there; no ${{ }} expression appears inside any run:
-# body. Fork PRs are excluded in the job if: (their CI never held the dev secret,
-# so they never applied anything). No cache is restored.
+# PR-head code here: the one checkout below has NO ref: key, so both events check
+# out main's tip, and only main's copy of the writer runs. The PR's .down.sql is
+# DATA: the writer fetches it by blob id, verifies its hash, refuses it on any
+# backslash byte (psql meta-commands such as \! would run a shell), and runs it
+# only inside a PL/pgSQL EXECUTE against the dev database with GH_TOKEN,
+# GITHUB_TOKEN and DOPPLER_TOKEN unset. Every PR-derived value (number, actor)
+# reaches a run: body via env: and is re-validated there; no ${{ }} expression
+# appears inside any run: body. Fork PRs are excluded in the job if: (their CI
+# never held the dev secret, so they never applied anything). No cache is
+# restored. The job that holds the dev secret has only contents: read and
+# pull-requests: read; the issue/comment writes run in a separate `report` job
+# that holds no secret and runs no repository code.
 #
 # No concurrency group: the dev-suite mutex serializes writers and the
 # compare-and-set makes a repeated run a no-op.
@@ -46,7 +56,7 @@ on:
         type: boolean
         default: false
       allow_later_rows:
-        description: "allow a .down.sql with CASCADE or a redefinition while other rows were applied after it — dry run first"
+        description: "allow a .down.sql with CASCADE or a redefinition while other rows were applied after it, or a destructive one while a main migration was — dry run first"
         required: false
         type: boolean
         default: false
@@ -63,13 +73,27 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == false && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # pull-requests: read — the writer reads the PR's state, head and author;
-    # issues: write — the audit comment on the PR and the action-required issue.
+    # Setup ~2 min + a 600 s mutex wait + the in-mutex section (ledger reads,
+    # PR-state lookups, a unit bounded at 150 s).
+    timeout-minutes: 25
+    # Read-only: the writer reads the PR's state, head, author and every fresh
+    # holder's pull requests. Nothing here writes to GitHub.
     permissions:
       contents: read
       pull-requests: read
-      issues: write
+    outputs:
+      pr_ok: ${{ steps.reconcile.outputs.pr_ok }}
+      rc: ${{ steps.reconcile.outputs.rc }}
+      verb: ${{ steps.reconcile.outputs.verb }}
+      eligible: ${{ steps.reconcile.outputs.eligible }}
+      ledger_only: ${{ steps.reconcile.outputs.ledger_only }}
+      unreachable: ${{ steps.reconcile.outputs.unreachable }}
+      refusal: ${{ steps.reconcile.outputs.refusal }}
+      kept_b64: ${{ steps.reconcile.outputs.kept_b64 }}
+      out_checkout: ${{ steps.checkout.outcome }}
+      out_doppler_cli: ${{ steps.doppler_cli.outcome }}
+      out_doppler_dev: ${{ steps.doppler_dev.outcome }}
+      out_reconcile: ${{ steps.reconcile.outcome }}
     steps:
       # main's tip for both events (no ref: key). Never the PR head.
       - name: Checkout main
@@ -85,7 +109,8 @@ jobs:
 
       # Copied from tenant-integration.yml: the token must resolve to the dev
       # environment, and dev_scheduled must hold no Management-API token (#8028
-      # DC-1). The writer repeats the environment check in-process.
+      # DC-1). The writer repeats the environment check in-process. Every jq call
+      # is branched on its exit code: a parse error fails closed, never "absent".
       - name: Assert Doppler config resolves to environment=dev
         id: doppler_dev
         env:
@@ -96,10 +121,11 @@ jobs:
             echo "::error::DOPPLER_TOKEN_DEV_SCHEDULED is not set; this workflow cannot reach dev and refuses to guess another config."
             exit 1
           fi
-          env_name=$(doppler configs get dev_scheduled -p soleur --json 2>/dev/null \
-            | jq -r '.environment // empty') || env_name=""
-          if [[ -z "$env_name" ]]; then
-            echo "::error::doppler configs get dev_scheduled -p soleur returned empty. Config does not exist or token lacks read access."
+          cfg_json=$(doppler configs get dev_scheduled -p soleur --json 2>/dev/null) || cfg_json=""
+          jrc=0
+          env_name=$(jq -er '.environment | strings' <<<"$cfg_json" 2>/dev/null) || jrc=$?
+          if [[ "$jrc" != "0" || -z "$env_name" ]]; then
+            echo "::error::doppler configs get dev_scheduled -p soleur returned no parseable environment (jq rc=$jrc). Config does not exist, token lacks read access, or the output is not JSON."
             exit 1
           fi
           if [[ "$env_name" != "dev" ]]; then
@@ -110,14 +136,22 @@ jobs:
           fi
           echo "Doppler config dev_scheduled -> environment=dev (verified)."
           names_json=$(doppler secrets --only-names --json -p soleur -c dev_scheduled 2>/dev/null) || names_json=""
-          if [[ -z "$names_json" ]]; then
-            echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled returned empty. Cannot verify the token's absence; failing closed."
-            exit 1
-          fi
-          if printf '%s' "$names_json" | jq -e 'has("SUPABASE_ACCESS_TOKEN")' >/dev/null; then
-            echo "::error::SUPABASE_ACCESS_TOKEN is present in Doppler dev_scheduled — a job running PR-authored SQL must not hold a Management-API token (#8028 DC-1)."
-            exit 1
-          fi
+          jrc=0
+          jq -e 'type == "object" and has("SUPABASE_ACCESS_TOKEN")' >/dev/null 2>&1 <<<"$names_json" || jrc=$?
+          case "$jrc" in
+            0)
+              echo "::error::SUPABASE_ACCESS_TOKEN is present in Doppler dev_scheduled — a job running PR-authored SQL must not hold a Management-API token (#8028 DC-1)."
+              exit 1 ;;
+            1)
+              # false or null: only a JSON object that lacks the key is proof of absence.
+              if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$names_json"; then
+                echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled did not return a JSON object; cannot verify the token's absence; failing closed."
+                exit 1
+              fi ;;
+            *)
+              echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled returned unparseable output (jq rc=$jrc); cannot verify the token's absence; failing closed."
+              exit 1 ;;
+          esac
           echo "Doppler config dev_scheduled carries no SUPABASE_ACCESS_TOKEN (verified)."
 
       - name: Reconcile
@@ -138,9 +172,10 @@ jobs:
           : > "$kept"
           if [[ ! "$PR" =~ ^[1-9][0-9]{0,6}$ ]]; then
             echo "::error::dev-ledger-reconcile: the pr value is not a pull request number; nothing was run"
-            { echo "rc=2"; echo "eligible=0"; echo "ledger_only=0"; echo "refusal="; } >> "$GITHUB_OUTPUT"
+            { echo "pr_ok=false"; echo "rc=2"; echo "verb="; echo "eligible=0"; echo "ledger_only=0"; echo "unreachable=0"; echo "refusal="; echo "kept_b64="; } >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          echo "pr_ok=true" >> "$GITHUB_OUTPUT"
           args=(--pr "$PR" --repo "$GITHUB_WORKSPACE" --base-branch main)
           # The close path is fixed here, whatever the env says: execute, require
           # the PR to still be closed, never allow later rows, no actor.
@@ -166,22 +201,30 @@ jobs:
             | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g' \
             | grep -E \
               -e '^ledger-discard: (nothing to do|skipped|dry-run|executed|refused|failed) \(pr=[0-9]+( [a-z-]+=[a-z0-9-]+)*\)$' \
+              -e '^ledger-discard: held-by [A-Za-z0-9._-]+ [A-Za-z0-9._/<>-]+$' \
+              -e '^ledger-discard: unreachable [A-Za-z0-9._-]+ reason=(force-pushed|slug|no-history)$' \
               -e '^would-discard [A-Za-z0-9._-]+ [0-9a-f]{40} down=([0-9a-f]{40}|none)$' \
               -e '^later-row [A-Za-z0-9._<>-]+ ([0-9]{20}|undated)$' \
-              -e '^stacked [A-Za-z0-9._/<>-]+ [A-Za-z0-9._-]+$' \
               -e '^::notice::ledger-discard: discarded [A-Za-z0-9._-]+ \(applied blob [0-9a-f]{40}, down ([0-9a-f]{40}|none)\) for PR #[0-9]+$' \
               -e '^::warning::ledger-discard: [A-Za-z0-9._-]+ has no \.down\.sql paired with applied blob [0-9a-f]{40}; objects its body created stay on dev$' \
-              -e '^::error::ledger-discard: ' \
+              -e '^::error::ledger-discard: (cannot measure \((transient|config|connect)\): |the |after the |PR #[0-9]+ |[A-Za-z0-9._-]+\.sql (has|is) )' \
               > "$kept" || true
-          summary=$(sed -n '/^ledger-discard: /p' "$kept" | tail -n 1)
+          summary=$(grep -E '^ledger-discard: (nothing to do|skipped|dry-run|executed|refused|failed) \(' "$kept" | tail -n 1 || true)
+          verb=$(sed -n -E 's/^ledger-discard: ([a-z -]+) \(.*/\1/p' <<<"$summary")
           eligible=$(sed -n 's/.* eligible=\([0-9][0-9]*\).*/\1/p' <<<"$summary")
           ledger_only=$(sed -n 's/.* ledger-only=\([0-9][0-9]*\).*/\1/p' <<<"$summary")
+          unreachable=$(sed -n 's/.* unreachable=\([0-9][0-9]*\).*/\1/p' <<<"$summary")
           refusal=$(sed -n 's/.* reason=\([a-z-][a-z-]*\))$/\1/p' <<<"$summary")
+          [[ "$verb" =~ ^(nothing\ to\ do|skipped|dry-run|executed|refused|failed)$ ]] || verb=""
           [[ "$eligible" =~ ^[0-9]+$ ]] || eligible=0
           [[ "$ledger_only" =~ ^[0-9]+$ ]] || ledger_only=0
+          [[ "$unreachable" =~ ^[0-9]+$ ]] || unreachable=0
           [[ "$refusal" =~ ^[a-z-]{1,40}$ ]] || refusal=""
           [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
-          { echo "rc=$rc"; echo "eligible=$eligible"; echo "ledger_only=$ledger_only"; echo "refusal=$refusal"; } >> "$GITHUB_OUTPUT"
+          # The kept lines travel to the report job as one bounded base64 output.
+          kept_b64=$(head -c 60000 "$kept" | base64 -w0)
+          { echo "rc=$rc"; echo "verb=$verb"; echo "eligible=$eligible"; echo "ledger_only=$ledger_only"
+            echo "unreachable=$unreachable"; echo "refusal=$refusal"; echo "kept_b64=$kept_b64"; } >> "$GITHUB_OUTPUT"
           {
             printf '### dev ledger reconcile: PR #%s (%s)\n\n' "$PR" "$EVENT_NAME"
             printf '```\n'
@@ -189,22 +232,39 @@ jobs:
             printf '```\n'
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ "$rc" != "0" ]]; then
-            echo "::error::dev-ledger-reconcile: the writer exited $rc; its own ::error:: lines above name the refusal or the failed measurement"
+            if grep -q '^::error::' "$kept"; then
+              echo "::error::dev-ledger-reconcile: the writer exited $rc; its ::error:: lines above name the refusal or the failed measurement"
+            else
+              echo "::error::dev-ledger-reconcile: the writer exited $rc and printed no ::error:: line of its own; read its output above"
+            fi
             exit 1
           fi
 
+  # The only job that writes to GitHub. It holds no secret, checks nothing out and
+  # runs no repository code: it reads the reconcile job's validated outputs.
+  report:
+    needs: reconcile
+    if: always() && needs.reconcile.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
       # REST, not `gh pr comment` (GraphQL). Built only from validated writer lines.
       - name: Audit comment on the pull request
         id: comment
-        if: always() && steps.reconcile.outcome != 'skipped' && (steps.reconcile.outputs.rc != '0' || steps.reconcile.outputs.eligible != '0')
+        if: always() && needs.reconcile.outputs.pr_ok == 'true' && (needs.reconcile.outputs.rc != '0' || needs.reconcile.outputs.eligible != '0' || needs.reconcile.outputs.unreachable != '0')
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number || inputs.pr }}
           EVENT_NAME: ${{ github.event_name }}
           ACTOR: ${{ github.triggering_actor }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          RC: ${{ steps.reconcile.outputs.rc }}
-          LEDGER_ONLY: ${{ steps.reconcile.outputs.ledger_only }}
+          RC: ${{ needs.reconcile.outputs.rc }}
+          VERB: ${{ needs.reconcile.outputs.verb }}
+          LEDGER_ONLY: ${{ needs.reconcile.outputs.ledger_only }}
+          KEPT_B64: ${{ needs.reconcile.outputs.kept_b64 }}
         run: |
           set -uo pipefail
           if [[ ! "$PR" =~ ^[1-9][0-9]{0,6}$ ]]; then
@@ -216,6 +276,7 @@ jobs:
           rc_safe="$RC"
           [[ "$rc_safe" =~ ^[0-9]+$ ]] || rc_safe="none"
           kept="$RUNNER_TEMP/ledger-discard.kept"
+          printf '%s' "$KEPT_B64" | base64 -d 2>/dev/null | LC_ALL=C tr -d '\000-\010\013-\037\177' > "$kept" || : > "$kept"
           body="$RUNNER_TEMP/ledger-discard-comment.md"
           bt=$'\x60'   # a literal backtick, for Markdown code spans
           {
@@ -224,35 +285,43 @@ jobs:
             printf '```\n'
             if [[ -s "$kept" ]]; then cat "$kept"; else printf '(the writer printed no summary line)\n'; fi
             printf '```\n\n'
-            if [[ "${LEDGER_ONLY:-0}" != "0" ]]; then
-              printf 'Rows listed with %sdown=none%s are discarded ledger-only: the objects their bodies created stay on dev.\n\n' "$bt" "$bt"
+            # Residue exists only after an EXECUTED discard; a dry run or a refusal changed nothing.
+            if [[ "$VERB" == "executed" && "${LEDGER_ONLY:-0}" =~ ^[1-9][0-9]*$ ]]; then
+              printf 'Rows listed with %sdown=none%s were discarded ledger-only: the objects their bodies created stay on dev.\n\n' "$bt" "$bt"
             fi
             printf 'PostgREST picks up a discarded schema change on its ~10-min schema-cache poll. Preview again: %sgh workflow run dev-ledger-reconcile.yml --ref main -f pr=%s%s\n' "$bt" "$PR" "$bt"
           } > "$body"
           crc=0
-          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$body" >/dev/null 2>&1 || crc=$?
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$body" >/dev/null 2>&1 || crc=$?
           if [[ "$crc" != "0" ]]; then
             echo "::warning::dev-ledger-reconcile: posting the audit comment failed (gh rc=$crc); the job summary still carries the record"
           fi
 
-      # The unattended path must always reach a human: ANY failure of this job on
-      # the close path (including checkout or Doppler before the reconcile step),
-      # a refusal, or schema residue from a ledger-only discard files (or
-      # comments on) one action-required issue per PR. If that fails the job
-      # fails; the drift probe's 24 h `closed` verdict is the backstop.
-      - name: File or update the action-required issue (close-time path)
+      # The unattended path must always reach a human: on the close path ANY failure
+      # of the reconcile job (including checkout or Doppler before the reconcile
+      # step), a refusal, schema residue from an executed ledger-only discard, or an
+      # unreachable row files (or comments on) one issue per PR; on a dispatch the
+      # same, when execute=true. If that fails this job fails; the drift probe's
+      # `closed` verdict 24 h after the close is the backstop.
+      - name: File or update the action-required issue
         id: issue
-        if: always() && github.event_name == 'pull_request_target' && (job.status == 'failure' || steps.reconcile.outcome != 'success' || steps.reconcile.outputs.ledger_only != '0')
+        if: >-
+          always() && (github.event_name == 'pull_request_target' || (github.event_name == 'workflow_dispatch' && inputs.execute)) &&
+          (needs.reconcile.result != 'success' || needs.reconcile.outputs.unreachable != '0' ||
+          (needs.reconcile.outputs.verb == 'executed' && needs.reconcile.outputs.ledger_only != '0'))
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          OUT_CHECKOUT: ${{ steps.checkout.outcome }}
-          OUT_DOPPLER_CLI: ${{ steps.doppler_cli.outcome }}
-          OUT_DOPPLER_DEV: ${{ steps.doppler_dev.outcome }}
-          OUT_RECONCILE: ${{ steps.reconcile.outcome }}
-          LEDGER_ONLY: ${{ steps.reconcile.outputs.ledger_only }}
-          REFUSAL: ${{ steps.reconcile.outputs.refusal }}
+          OUT_CHECKOUT: ${{ needs.reconcile.outputs.out_checkout }}
+          OUT_DOPPLER_CLI: ${{ needs.reconcile.outputs.out_doppler_cli }}
+          OUT_DOPPLER_DEV: ${{ needs.reconcile.outputs.out_doppler_dev }}
+          OUT_RECONCILE: ${{ needs.reconcile.outputs.out_reconcile }}
+          VERB: ${{ needs.reconcile.outputs.verb }}
+          LEDGER_ONLY: ${{ needs.reconcile.outputs.ledger_only }}
+          UNREACHABLE: ${{ needs.reconcile.outputs.unreachable }}
+          REFUSAL: ${{ needs.reconcile.outputs.refusal }}
+          KEPT_B64: ${{ needs.reconcile.outputs.kept_b64 }}
         run: |
           set -uo pipefail
           if [[ ! "$PR" =~ ^[1-9][0-9]{0,6}$ ]]; then
@@ -265,13 +334,22 @@ jobs:
             if [[ "${pair##*=}" != "success" ]]; then failing="${pair%=*} (${pair##*=})"; break; fi
           done
           kept="$RUNNER_TEMP/ledger-discard.kept"
+          printf '%s' "$KEPT_B64" | base64 -d 2>/dev/null | LC_ALL=C tr -d '\000-\010\013-\037\177' > "$kept" || : > "$kept"
           body="$RUNNER_TEMP/ledger-discard-issue.md"
-          title="dev ledger: close-time reconcile for PR #$PR needs attention"
+          # The title prefix and the label are what the drift probe's classifier
+          # matches (dev-ledger-parity.sh RECONCILE_ISSUE_PREFIX / _LABEL).
+          label="ci/dev-ledger-reconcile"
+          title="[ci/dev-ledger-reconcile] PR #$PR dev ledger rows need attention"
           bt=$'\x60'   # a literal backtick, for Markdown code spans
+          # The cause, named from what this run measured.
+          if [[ -n "$failing" && "$OUT_RECONCILE" != "success" && -n "$REFUSAL" ]]; then cause="the writer refused (reason $bt$REFUSAL$bt)"
+          elif [[ -n "$failing" ]]; then cause="the step $failing did not succeed"
+          elif [[ "${UNREACHABLE:-0}" =~ ^[1-9][0-9]*$ ]]; then cause="$UNREACHABLE row(s) attributed to #$PR are unreachable in its history and were not discarded"
+          else cause="an executed discard left schema residue"
+          fi
           {
-            printf 'The close-time dev ledger reconcile for #%s needs attention.\n\n' "$PR"
+            printf 'The dev ledger reconcile for #%s needs attention: %s.\n\n' "$PR" "$cause"
             printf -- '- Run: %s\n' "$RUN_URL"
-            if [[ -n "$failing" ]]; then printf -- '- First step that did not succeed: %s\n' "$failing"; fi
             if [[ -s "$kept" ]]; then
               printf -- '- The writer'"'"'s own lines (validated):\n\n```\n'
               cat "$kept"
@@ -281,32 +359,38 @@ jobs:
               printf '\nPreview the discard (a dry run), then run it:\n\n```\n'
               printf 'gh workflow run dev-ledger-reconcile.yml --ref main -f pr=%s\n' "$PR"
               printf 'gh workflow run dev-ledger-reconcile.yml --ref main -f pr=%s -f execute=true\n' "$PR"
-              if [[ "${REFUSAL:-}" == "later-row" ]]; then
+              if [[ "${REFUSAL:-}" == "later-row" || "${REFUSAL:-}" == "destructive-superseded" ]]; then
                 printf '# only after reviewing the later-row lines of the dry run:\n'
                 printf 'gh workflow run dev-ledger-reconcile.yml --ref main -f pr=%s -f execute=true -f allow_later_rows=true\n' "$PR"
               fi
               printf '```\n'
             fi
-            if [[ "${LEDGER_ONLY:-0}" =~ ^[1-9][0-9]*$ ]]; then
+            if [[ "$VERB" == "executed" && "${LEDGER_ONLY:-0}" =~ ^[1-9][0-9]*$ ]]; then
               printf '\n%s row(s) were discarded ledger-only (%sdown=none%s above): the objects their bodies created stay on dev. Drop them by hand per knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md.\n' "$LEDGER_ONLY" "$bt" "$bt"
             fi
-            printf '\nUntil this is resolved the drift probe reports these rows as closed-grace, and as closed (blocking) 24 h after the close.\n'
+            if [[ "${UNREACHABLE:-0}" =~ ^[1-9][0-9]*$ ]]; then
+              printf '\nRows listed as %sunreachable%s are attributed to #%s, but the applied body is not in its first-parent history under that name; reconcile them by hand per the same learning.\n' "$bt" "$bt" "$PR"
+            fi
+            printf '\nWhile this issue is open the drift probe reports this PR'"'"'s remaining rows as closed-tracked (a warning, with a Sentry event every scheduled run). Close it once dev is reconciled: with no open issue, a remaining row turns closed (blocking) 24 h after the PR closed.\n'
           } > "$body"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/labels" -f name="$label" -f color=B60205 \
+            -f description="A dev ledger reconcile needs a human (dev-ledger-reconcile.yml)" >/dev/null 2>&1 || true
           lrc=0
-          existing=$(gh api -X GET "repos/$GITHUB_REPOSITORY/issues" -f state=open -f labels=action-required -f per_page=100 --paginate \
+          existing=$(gh api -X GET "repos/$GITHUB_REPOSITORY/issues" -f state=open -f labels="$label,action-required" -f per_page=100 --paginate \
             --jq '.[] | select(.pull_request == null) | [(.number | tostring), .title] | @tsv' 2>/dev/null) || lrc=$?
           if [[ "$lrc" != "0" ]]; then
-            echo "::error::dev-ledger-reconcile: listing open action-required issues failed (gh rc=$lrc); the issue was not filed"
+            echo "::error::dev-ledger-reconcile: listing open $label issues failed (gh rc=$lrc); the issue was not filed"
             exit 1
           fi
           num=$(awk -F'\t' -v t="$title" '$2 == t { print $1; exit }' <<<"$existing")
           wrc=0
           if [[ "$num" =~ ^[0-9]+$ ]]; then
-            gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" -F body=@"$body" >/dev/null 2>&1 || wrc=$?
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$num/comments" -F body=@"$body" >/dev/null 2>&1 || wrc=$?
             what="commenting on issue #$num"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label action-required \
-              --label domain/engineering --label priority/p2-medium --body-file "$body" >/dev/null 2>&1 || wrc=$?
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@"$body" \
+              -f "labels[]=$label" -f "labels[]=action-required" -f "labels[]=domain/engineering" -f "labels[]=priority/p2-medium" \
+              >/dev/null 2>&1 || wrc=$?
             what="creating the issue"
           fi
           if [[ "$wrc" != "0" ]]; then
