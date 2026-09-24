@@ -367,13 +367,15 @@ locals {
     # template no longer logs in to ghcr.io or pulls from it, and zot is the only boot-time read
     # path. `var.ghcr_read_*` survives only for `doppler_secret.ghcr_read_*` until task 5.4.)
     # #7462 (ADR-096) — the zot arm for the cold-boot bootstrap pull, baked so that cold boot
-    # does not depend on Doppler answering at the boot instant. The mechanism DIVERGES from cloud-init.yml's web-host arm, which
-    # reads ZOT_REGISTRY_URL / ZOT_PULL_* from Doppler at boot. That path is structurally
-    # unavailable here — this host's Doppler token is scoped to project `soleur-inngest`, so
-    # those keys are unreadable, and adding them to `soleur-inngest/prd` would break the
-    # fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no boot at all).
-    # Amended into ADR-096; a future reader comparing the two hosts would otherwise read the
-    # divergence as an oversight. Precision, because #6500's title is easy to misread: what
+    # does not depend on Doppler answering at the boot instant. When this landed it DIVERGED
+    # from cloud-init.yml's web-host arm, which then read ZOT_REGISTRY_URL / ZOT_PULL_* from
+    # Doppler at boot; since #8660 the web arm bakes registry_endpoint + zot_pull_* through its
+    # own templatefile the same way, and neither host reads zot values from Doppler at boot. The
+    # Doppler path was never an option here — this host's Doppler token is scoped to project
+    # `soleur-inngest`, so those keys are unreadable, and adding them to `soleur-inngest/prd`
+    # would break the fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no
+    # boot at all). Amended into ADR-096; a reader wondering why this host never took the
+    # Doppler route would otherwise read it as an oversight. Precision, because #6500's title is easy to misread: what
     # three new keys trip is the IDENTITY assertion `n_total -ne n_inngest`, NOT the `-lt 5`
     # floor (`n_inngest` stays 5). The file's own note — "The floor stays 5 ON PURPOSE" — warns
     # against exactly that confusion.

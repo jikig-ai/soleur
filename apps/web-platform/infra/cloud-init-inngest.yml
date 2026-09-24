@@ -1607,13 +1607,14 @@ runcmd:
     # ZOT IS THE ONLY PULL (#8036 item 1d / ADR-096 5.3b-i). The GHCR leg that used to follow a
     # zot miss is deleted: the read PAT it presented is REVOKED (AP-016 lapsed 2026-07-30,
     # #7071), so it could only ever 401, and it cost a failed login and a failed pull per boot.
-    # A zot miss therefore ENDS THE BOOT: `inngest_pull_fatal` on both channels (Better Stack
-    # phone-home + Sentry at level fatal, which zot-mirror-fallback-rate pages on), then a
-    # non-zero exit. The exit is a plain `exit` in this item, never in a subshell: cloud-init
+    # A zot miss (retries exhausted, or a timeout) therefore ENDS THE BOOT: `inngest_pull_fatal`
+    # on both channels (Better Stack phone-home + Sentry at level fatal, which
+    # zot-mirror-fallback-rate pages on), then a non-zero exit. The exit is a plain `exit` in this item, never in a subshell: cloud-init
     # runs every runcmd item in ONE /bin/sh, so it ends the whole runcmd. Both emits are
     # `|| true` because set -e is live here: a failed phone-home must not cost the Sentry emit.
-    # The stage name shares no prefix with `inngest_zot` — Better Stack greps are substring
-    # matches, and an `inngest_zot…` failure stage would count a dark boot as a served one.
+    # No emitted stage begins with `inngest_zot` other than `inngest_zot` itself (the fatal stage
+    # does share the `inngest_` prefix) — Better Stack greps are substring matches, and an
+    # `inngest_zot…` failure stage would count a dark boot as a served one.
     #
     # An empty endpoint takes the same fatal path. `local.registry_endpoint` is a compile-time
     # constant, so that arm is unreachable in this root; it exists so an empty value can never
@@ -1631,8 +1632,20 @@ runcmd:
       # BOUNDED. Without a timeout an unreachable-but-routable zot (firewall DROP, daemon down)
       # stalls cloud-init for minutes on the SOLE scheduler, where boot latency is outage
       # duration. rc 124 lands on the miss arm and ends the boot like any other miss.
-      timeout 180 docker pull "$ZIREF" > /var/log/inngest-zot-pull.log 2>&1
-      zot_rc=$?
+      #
+      # RETRIED, up to 3 attempts 5s apart. With no second registry, a single transient reset
+      # (a zot restart, a dropped private-net connection) would otherwise leave the sole
+      # scheduler dark until an operator re-replaces the host. A TIMEOUT is not retried: rc 124
+      # means zot is unreachable rather than flaky, and retrying it would triple the stall, so
+      # the worst case stays one 180s window plus the fast failures and sleeps before it. The
+      # log is rewritten per attempt, so the shipped tail is the LAST attempt's.
+      for zot_try in 1 2 3; do
+        timeout 180 docker pull "$ZIREF" > /var/log/inngest-zot-pull.log 2>&1
+        zot_rc=$?
+        [ "$zot_rc" -eq 0 ] && break
+        [ "$zot_rc" -eq 124 ] && break
+        [ "$zot_try" -lt 3 ] && sleep 5
+      done
       set -e
       zot_tail="$(tail -n 4 /var/log/inngest-zot-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
       if [ "$zot_rc" -eq 0 ]; then
@@ -1644,7 +1657,7 @@ runcmd:
         # carries its own soleur-boot-emit, so the stage reaches Sentry at level fatal and the
         # zot-soak `[freshboot]` count covers it; the Better Stack marker (with the redacted
         # pull tail) is the second, independently-credentialed channel.
-        /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal "zot miss ep=$ZOT_EP rc=$zot_rc tail=$zot_tail" || true
+        /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal "zot miss ep=$ZOT_EP rc=$zot_rc tries=$zot_try tail=$zot_tail" || true
         soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true
         echo "FATAL: zot pull failed rc=$zot_rc - no second registry (ADR-096 5.3b-i)" >&2
         exit "$zot_rc"
