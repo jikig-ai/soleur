@@ -40,7 +40,7 @@ Platform detection is centralized in [community-router.sh](./scripts/community-r
 bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh" platforms
 ```
 
-The anchor is **bare and quoted** (ADR-179 decision 1), not `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}`
+The anchor is **bare and quoted** (ADR-179 decision 1), not a `:-` default arm on the token
 and not a bare `plugins/soleur/…` path. The router dispatches to the scripts that consume
 `DISCORD_BOT_TOKEN`, `X_API_SECRET` and `LINKEDIN_ACCESS_TOKEN`, so a CWD-relative resolution would
 hand those credentials to whatever `skills/community/scripts/community-router.sh` exists in the tree
