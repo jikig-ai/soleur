@@ -698,7 +698,7 @@ logs:
   retention: "GitHub Actions log retention for the repo (90 days default)"
 
 discoverability_test:
-  command: "curl -s --max-time 10 \"https://api.github.com/repos/jikig-ai/soleur/actions/workflows/web-platform-release.yml/runs?per_page=1\""
+  command: curl -s --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/web-platform-release.yml/runs?per_page=1
   expected_output: "workflow_runs"
 ```
 

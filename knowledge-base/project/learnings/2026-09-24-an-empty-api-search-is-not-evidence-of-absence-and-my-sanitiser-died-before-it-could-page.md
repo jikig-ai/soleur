@@ -98,6 +98,11 @@ ARGUMENT (status ignored) or behind a here-string with a reader that consumes al
 15. **Stop-hook fired twice on first-person commitments while waiting on background agents.**
     Recovery: `<stop>BLOCKED: …</stop>` with the wait named. **Prevention:** while waiting, close
     with the BLOCKED form, never with "I will …".
+16. **The plan's `discoverability_test.command` failed preflight Check 10 (curl rc=3)** although the
+    plan said it "printed `workflow_runs`" live. It was a YAML double-quoted scalar with escaped
+    inner quotes; Check 10 strips only the outer pair, so curl got a URL wrapped in literal `\"`.
+    Recovery: unquoted the scalar (no shell-active token needed quoting). **Prevention:** verify a
+    probe through Check 10's own parse + sandbox path, never by pasting it into a shell.
 
 ## Tags
 
