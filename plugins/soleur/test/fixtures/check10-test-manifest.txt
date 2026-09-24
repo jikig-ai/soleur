@@ -90,9 +90,9 @@ Row 8: PASS (rc=0 OR matching expected) — 401 in '200 or 401'
 S1 does NOT consume a less-indented non-key line (reviewer/executor differential)
 SENSITIVE_PATH_RE literal appears ≥2 times (Check 6 + Check 10)
 Shared Plan-File Resolution sub-section referenced from ≥3 places (header + 2 callers)
-Step 10.4 calls the extracted awk via git rev-parse, not CLAUDE_PLUGIN_ROOT
 Step 10.4 delegates to the extracted probe-verb gate (#7393, ex-CPO condition C1)
 Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B
+Step 10.4 resolves both Check 10 operands through the loader token, never the git root
 Step 10.5 reject set includes newline
 awk interpreter is a known implementation (mawk or gawk)
 classifier returns FAIL with DNS reason when stub executor returns (rc=6, stdout='')

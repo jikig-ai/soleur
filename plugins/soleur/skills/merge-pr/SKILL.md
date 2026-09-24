@@ -326,7 +326,7 @@ Announce the PR URL.
 ### 5.1 Queue Auto-Merge
 
 ```bash
-SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
   bash "$SS_LIB" with_lock merge-main 600 -- \
     gh pr merge <number> --squash --auto
@@ -525,7 +525,7 @@ To rollback: git reset --hard <starting-sha> && git push --force-with-lease orig
 
 ```
 
-The state-machine details (`mergeStateStatus` enum coverage, fail-open required-check fetch, fixture at `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`) are documented in `plugins/soleur/skills/ship/SKILL.md` Phase 7. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](../ship/references/settle-then-admin-merge.md) for the settle-then-admin-merge escape hatch (zero-conflict-surface changes only). Any `--admin` merge, whether through this hatch or authorized by the operator, requires `plugins/soleur/scripts/admin-merge-ready.sh <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). When the operator authorizes `--admin` on a BEHIND PR whose prior head was green, the surface classifier is waived but the gate is not: `--green-sha <prior-green-sha>` carries the certification to the new head only if it is GitHub's own verified merge of that sha and the base (see the reference's "was-green carryover" section); UNTRUSTED-CI and DIRTY still refuse. On `[ship.phase7.required_failed]` or `[ship.phase7.dirty]`, follow ship/SKILL.md Phase 7's handling for a poll that exits on a required-check failure or a DIRTY state (`gh pr checks <N>` to inspect; `git merge origin/main` to resolve locally). On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.` (a `kind=fetch` one is informational — the poll continues), do the next action the `[pr-behind-sync] kind=…` line above it names (resolve and push, reconcile a concurrent push, or clear the worktree state), then re-invoke this §5.2 poll — a routine conflict is not an operator handoff. `[ship.phase7.sync_noop]` is GitHub state lag (uncounted; the poll continues); `[ship.phase7.behind_no_sync]` means auto-sync was disabled — run the printed command from the PR worktree, then re-arm the poll.
+The state-machine details (`mergeStateStatus` enum coverage, fail-open required-check fetch, fixture at `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`) are documented in `plugins/soleur/skills/ship/SKILL.md` Phase 7. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the settle-then-admin-merge escape hatch (zero-conflict-surface changes only). Any `--admin` merge, whether through this hatch or authorized by the operator, requires `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). When the operator authorizes `--admin` on a BEHIND PR whose prior head was green, the surface classifier is waived but the gate is not: `--green-sha <prior-green-sha>` carries the certification to the new head only if it is GitHub's own verified merge of that sha and the base (see the reference's "was-green carryover" section); UNTRUSTED-CI and DIRTY still refuse. On `[ship.phase7.required_failed]` or `[ship.phase7.dirty]`, follow ship/SKILL.md Phase 7's handling for a poll that exits on a required-check failure or a DIRTY state (`gh pr checks <N>` to inspect; `git merge origin/main` to resolve locally). On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.` (a `kind=fetch` one is informational — the poll continues), do the next action the `[pr-behind-sync] kind=…` line above it names (resolve and push, reconcile a concurrent push, or clear the worktree state), then re-invoke this §5.2 poll — a routine conflict is not an operator handoff. `[ship.phase7.sync_noop]` is GitHub state lag (uncounted; the poll continues); `[ship.phase7.behind_no_sync]` means auto-sync was disabled — run the printed command from the PR worktree, then re-arm the poll.
 
 ## Phase 6: Cleanup and Report
 
@@ -538,7 +538,7 @@ Navigate to the main repository root directory (the parent of `.worktrees/`). Ru
 ### 6.2 Run cleanup
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged
 
 ```
 

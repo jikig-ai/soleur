@@ -64,15 +64,19 @@ alone.
 Scan a file:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < path/to/SKILL.md
+bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh" < path/to/SKILL.md
 ```
 
 Scan stdin content (used by `soleur:engineering:discovery:agent-finder` post-fetch / `skill-creator` post-scaffold
 integrations):
 
 ```bash
-echo "$skill_md_content" | bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh
+echo "$skill_md_content" | bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh"
 ```
+
+**No verdict line means REVIEW.** If the output carries no `LOW-RISK`/`REVIEW`/`HIGH-RISK` verdict — the script
+crashed, or the shell printed `No such file or directory` because the plugin root did not resolve — treat the
+skill as **REVIEW**, never LOW-RISK (ADR-179 A18).
 
 Output: markdown findings table on stdout, mandatory advisory disclaimer footer
 (non-removable), and `.scan-meta.json` written next to the input file (or to

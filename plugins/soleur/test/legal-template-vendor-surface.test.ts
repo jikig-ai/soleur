@@ -171,7 +171,7 @@ describe("Guard 1b — protocol anchors (the prose the corpus guard depends on)"
     // them and prescribe the working copy.
     expect(GENERATOR).toMatch(/Never edit `references\/templates/);
     expect(GENERATOR).toMatch(/scratch file|scratch copy/i);
-    expect(GENERATOR).toMatch(/strip-vendor-credit\.sh`? on the filled/);
+    expect(GENERATOR).toMatch(/strip-vendor-credit\.sh"?`? on the filled/);
   });
 
   test("generator doc enumerates BOTH placeholder grammars — <mark> AND bare [bracket]", () => {

@@ -25,7 +25,7 @@ views {
       // endpoints (founder, platform.plugin) are already in this view so the
       // edges render rather than leaving a disconnected box.
       devin,
-      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers, systemdUser,
+      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, flagsmith, sigstore, letsencrypt, publicResolvers, systemdUser,
       // #7980: the browser the agent drives is an L1 external system like every other
       // third party here; its edges derive to `platform` (via plugin.snapshotGuard), so
       // it renders connected rather than as a disconnected box (#7332).

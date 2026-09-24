@@ -410,7 +410,7 @@ if [[ "${FULL_BATTERY:-}" == "true" ]]; then
   echo "battery FORCED (--full) — running the full battery"
   bash scripts/test-all.sh --full
 else
-  bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/battery-owed.sh"
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/battery-owed.sh"
   rc=$?
   if [[ "$rc" -eq 42 ]]; then
     echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
@@ -1262,7 +1262,7 @@ Enforces the operator's standing rule — **every detected incident gets a post-
    # branch on its exit — 0 = signal (prints "INCIDENT-SIGNAL: yes"), 1 = no signal,
    # ANYTHING ELSE = the scan did not run (2 = usage/gh failure; 127 = no script at that path).
    # The script lives at THIS repository's root, so resolve it from the current tree. The
-   # previous form, `${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/…`, was depth-relative: from a
+   # previous form (the token with a `.` default arm, then `../../scripts/…`) was depth-relative: from a
    # `.worktrees/<name>/` cwd it silently ran the PRIMARY checkout's copy (a different tree —
    # `hr-when-in-a-worktree-never-read-from-bare`), from the repo root and on the hosted path it
    # was 127, and the `if`/`else` around it read 127 as "no signal" — a verdict the scan never
@@ -1718,7 +1718,7 @@ fi
 
 **Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** — a stale tracking ref re-introduces the silent-miss class this gate exists to prevent, so the hook denies and prompts the operator to fetch manually. See rule `wg-ship-push-before-merge` in `AGENTS.rules.md` for the canonical contract.
 
-**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait, which is dead time you are already spending. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings — otherwise batching work into the wait buys a cycle and spends a review. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set at the worst possible moment: the PR is one check from merging, and the cycle it restarts is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](./references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 full CI cycles, one of them because a correct-but-late ADR commit landed at 65 of 67 checks — the change was known-needed earlier in the session, and moving it into the review wait would have cost nothing.
+**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait, which is dead time you are already spending. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings — otherwise batching work into the wait buys a cycle and spends a review. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set at the worst possible moment: the PR is one check from merging, and the cycle it restarts is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 full CI cycles, one of them because a correct-but-late ADR commit landed at 65 of 67 checks — the change was known-needed earlier in the session, and moving it into the review wait would have cost nothing.
 
 **Hook ordering** matters: the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json) so any auto-sync push performed by the rebase hook has updated the upstream tracking ref before this gate counts unpushed commits. `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces the ordering invariant — keep it green if either hook moves.
 
@@ -1775,9 +1775,12 @@ TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp); TMP_COMMITS=$(mktemp)
 printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
 printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
 git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
-T_MATCHES=$(bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/auto-close-scan.sh "$TMP_TITLE")
-B_MATCHES=$(bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/auto-close-scan.sh "$TMP_BODY")
-C_MATCHES=$(bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/auto-close-scan.sh "$TMP_COMMITS")
+# The scanner exits 0 with empty stdout when it cannot run, and empty reads as "no traps" —
+# so an unresolved root must abort here, not scan nothing (ADR-179 A18).
+[[ -r "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" ]] || { echo "AUTO-CLOSE SCAN ABORTED: plugin root unresolved — do not create or edit the PR until it runs"; exit 5; }
+T_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_TITLE")
+B_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_BODY")
+C_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_COMMITS")
 ```
 
 If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
@@ -2022,7 +2025,7 @@ Replace `BRANCH_NAME` with the actual branch name.
    gh pr ready PR_NUMBER
    ```
 
-   If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](./references/settle-then-admin-merge.md). **Why:** #8611.
+   If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
 7. Present the PR URL to the user.
 
@@ -2203,7 +2206,7 @@ retired both the driver and AC17.)
 After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI. Wrap the call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
-SS_LIB="${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/lib/session-state.sh"
+SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
   bash "$SS_LIB" with_lock merge-main 600 -- \
     gh pr merge <number> --squash --auto
@@ -2446,7 +2449,7 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→
 
 **ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` IS a required status check — [scripts/required-checks.txt](../../../../scripts/required-checks.txt) is the SSOT row, applied via [infra/github/ruleset-ci-required.tf](../../../../infra/github/ruleset-ci-required.tf) (#6049/#6050, 2026-07-05); read the current set with `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq '[.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context]'` — and `main` enforces the strict up-to-date policy, so the collision is caught on the PR, not on `main`: the sync pushes a new head, the PR's `adr-ordinals` job re-runs red, and the required-check-failure exit below names it. The queued auto-merge does not fire and nothing lands red on `main` (an earlier revision of this paragraph said the opposite; #7941 corrected it — PR #5945's collision landed on `main` because the ruleset did not yet carry the check, which #6050 fixed two days later). What the loop does NOT do is renumber for you: whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push — that restarts the poll loop on a head that can go green. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
 
-**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` merges faster than this PR's CI cycle, the BEHIND loop livelocks — every sync restarts CI and `main` moves again before it settles. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](./references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path. Any `--admin` merge, whether through this hatch or authorized by the operator, requires `plugins/soleur/scripts/admin-merge-ready.sh <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). An operator-authorized merge on a BEHIND PR whose prior head was green is NOT limited to zero-conflict-surface diffs — the authorization replaces the classifier — but it still goes through the gate via `--green-sha <prior-green-sha>` (the reference's "was-green carryover" section), and UNTRUSTED-CI / DIRTY still refuse.
+**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` merges faster than this PR's CI cycle, the BEHIND loop livelocks — every sync restarts CI and `main` moves again before it settles. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path. Any `--admin` merge, whether through this hatch or authorized by the operator, requires `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). An operator-authorized merge on a BEHIND PR whose prior head was green is NOT limited to zero-conflict-surface diffs — the authorization replaces the classifier — but it still goes through the gate via `--green-sha <prior-green-sha>` (the reference's "was-green carryover" section), and UNTRUSTED-CI / DIRTY still refuse.
 
 **Classify the failing STEP before exiting — a setup failure is not a red diff.** The exit below is correct to stop on a required-check failure, but the check NAME does not say whether your code failed or a tool download did. Before treating an exit as a diagnosis, read the failing step:
 
@@ -2975,7 +2978,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
 4. Clean up worktree and local branch:
 
-   Navigate to the repository root directory, then run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
+   Navigate to the repository root directory, then run `bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged`.
 
 This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
 
