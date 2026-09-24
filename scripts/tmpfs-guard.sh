@@ -3,9 +3,18 @@
 #
 # Two reapers, both scoped to files owned by the current user (no sudo):
 #
-#   1. reap_output_files    — oversized Claude Code task .output files.
-#   2. reap_scratch_entries — stale, large, own-uid scratch entries at the top
-#                             level of /tmp (added #6789).
+#   1. reap_output_files        — oversized Claude Code task .output files.
+#   2. reap_scratch_entries     — stale, large, own-uid scratch entries at the
+#                                 top level of /tmp ONLY (added #6789;
+#                                 find -delete, never multi-base).
+#   3. reap_orphan_scratch_roots — ownership-keyed reclamation of
+#                                 soleur-run.<pid>.*/​.soleur-owned roots on
+#                                 TMPFS_GUARD_SCRATCH_BASES (added #7004):
+#                                 dead owner + no live handles + stale tree →
+#                                 tmpfs-class base: delete (prompt RAM reclaim);
+#                                 disk-class base: mv to soleur-quarantine.
+#   drain_scratch_quarantine    — TTL drain of quarantine dirs (the ONLY place
+#                                 deletion is permitted inside them).
 #
 # WHY (2) EXISTS. /tmp is a 4 GiB tmpfs — Layer 3 of the 2026-03-28 tmpfs guard,
 # deliberately capped so a runaway file cannot consume all system memory. The
@@ -68,7 +77,8 @@
 #   TMPFS_GUARD_LOG_SINK, TMPFS_GUARD_ALARM_FILE,
 #   TMPFS_GUARD_COUNT_TRIGGER, TMPFS_GUARD_UNIX_SOCKETS,
 #   TMPFS_GUARD_HEARTBEAT_FILE, TMPFS_GUARD_LOCKFILE, TMPFS_GUARD_NO_FLOCK,
-#   TMPFS_GUARD_WATERMARK_FILE
+#   TMPFS_GUARD_WATERMARK_FILE,
+#   TMPFS_GUARD_SCRATCH_BASES, TMPFS_GUARD_QUAR_TTL_MIN
 #
 # Every name above is read by the code below. Keep this list exact: a seam that
 # is documented but unimplemented produces a test that sets it, observes no
@@ -145,6 +155,31 @@ ALARM_MAX_LINES=200
 HEARTBEAT_FILE="${TMPFS_GUARD_HEARTBEAT_FILE:-${HOME:-/nonexistent}/.local/state/soleur/tmpfs-guard-last-run}"
 
 CLAUDE_TMP="$TMP_ROOT/claude-$(id -u)"
+
+# --- Ownership-keyed reclamation (#7004) --------------------------------------
+# SCRATCH_BASES is the multi-base surface for Reaper 3 — NOT for Reaper 2,
+# which stays pinned to $TMP_ROOT (its `find -delete` must never reach a
+# shared disk base). An explicitly-empty list is fail-closed: the arm skips
+# and says so rather than guessing at bases.
+# Note the `-` (not `:-`): UNSET takes the default; an explicitly EMPTY list is
+# honored as "reap nothing" — the fail-closed arm.
+SCRATCH_BASES="${TMPFS_GUARD_SCRATCH_BASES-/tmp /var/tmp}"
+QUAR_TTL_MIN="${TMPFS_GUARD_QUAR_TTL_MIN:-10080}"     # 7d scratch/prefix drain
+QUAR_WT_TTL_MIN="${TMPFS_GUARD_QUAR_WT_TTL_MIN:-43200}"  # 30d worktree drain
+
+# The classifier lib owns the shared marker/schema/liveness definitions so the
+# guard, the purge, and the session-start sweep cannot drift. Repo-side path —
+# the guard itself is repo-side (a user cron runs it from a checkout).
+_GUARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_TC_LIB_OK=0
+if [[ -f "$_GUARD_DIR/../plugins/soleur/scripts/lib/tmp-classify.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$_GUARD_DIR/../plugins/soleur/scripts/lib/tmp-classify.sh"
+  _TC_LIB_OK=1
+fi
+# The classifier's seams follow the guard's seams so test fixtures cover both.
+# (Plain `[[ ]] && assign` at top level would trip set -e when the test fails.)
+if [[ -n "${TMPFS_GUARD_PROC:-}" ]]; then TC_PROC="$TMPFS_GUARD_PROC"; fi
 
 # --- Logging seam ----------------------------------------------------------
 # Every log line goes through here. The default sink is the journal, exactly as
@@ -315,7 +350,8 @@ declare -A _FRESH_TOP
 # the measurement that motivated it.
 _build_fresh_top() {
   _FRESH_TOP=()
-  local age_min="$1" top
+  local age_min="$1"; shift
+  local top b bases="${*:-$TMP_ROOT}"
   # Sentinel. The walk below runs inside a process substitution, so its exit
   # status is unreachable to `pipefail` and a failure — awk without NUL-in-RS,
   # find aborting, a full $TMPDIR (which is the very filesystem under pressure)
@@ -327,32 +363,52 @@ _build_fresh_top() {
   # awk dedupes; the consumer is an associative-array write, so a `sort -zu`
   # stage would only buffer the whole set to do work the array does for free.
   # On the measured leak host that is ~268,000 records saved.
-  while IFS= read -r -d '' top; do
-    [[ -n "$top" ]] && _FRESH_TOP["$TMP_ROOT/$top"]=1
-  done < <(
-    find "$TMP_ROOT" -mindepth 1 -mmin "-${age_min}" -print0 2>/dev/null \
-      | awk -v RS='\0' -v ORS='\0' -v root="$TMP_ROOT/" '
-          {
-            s = substr($0, length(root) + 1)
-            i = index(s, "/")
-            t = (i ? substr(s, 1, i - 1) : s)
-            if (!seen[t]++) print t
-          }'
-  )
+  # Multi-base (#7004): keys remain absolute top-level paths, so one map serves
+  # every base the caller passes — Reaper 2 passes $TMP_ROOT alone, Reaper 3
+  # passes $SCRATCH_BASES.
+  for b in $bases; do
+    [[ -d "$b" ]] || continue
+    while IFS= read -r -d '' top; do
+      [[ -n "$top" ]] && _FRESH_TOP["$b/$top"]=1
+    done < <(
+      find "$b" -mindepth 1 -mmin "-${age_min}" -print0 2>/dev/null \
+        | awk -v RS='\0' -v ORS='\0' -v root="$b/" '
+            {
+              s = substr($0, length(root) + 1)
+              i = index(s, "/")
+              t = (i ? substr(s, 1, i - 1) : s)
+              if (!seen[t]++) print t
+            }'
+    )
+  done
 }
-# Map an absolute path to its top-level $TMP_ROOT entry and mark it in use.
+# Map an absolute path to its top-level entry under ANY configured base and
+# mark it in use. Multi-base (#7004): the map keys stay absolute paths, so a
+# Reaper-3 candidate on /var/tmp is protected by the same pass that protects
+# /tmp. `_GUARD_BASES` is the union of $TMP_ROOT and $SCRATCH_BASES.
+_GUARD_BASES="$TMP_ROOT"
+for _b in $SCRATCH_BASES; do
+  case " $_GUARD_BASES " in *" $_b "*) ;; *) _GUARD_BASES="$_GUARD_BASES $_b" ;; esac
+done
+
 _mark_inuse() {
-  local target="$1" rest top
-  case "$target" in
-    "$TMP_ROOT"/*)
-      rest="${target#"$TMP_ROOT"/}"
-      top="${rest%%/*}"
-      [[ -n "$top" ]] && _INUSE_TOP["$TMP_ROOT/$top"]=1
-      ;;
-  esac
+  local target="$1" rest top b
+  for b in $_GUARD_BASES; do
+    case "$target" in
+      "$b"/*)
+        rest="${target#"$b"/}"
+        top="${rest%%/*}"
+        [[ -n "$top" ]] && _INUSE_TOP["$b/$top"]=1
+        ;;
+    esac
+  done
 }
 _build_inuse_top() {
   _INUSE_TOP=()
+  # Fail-closed: an unreadable procfs leaves __built__ UNSET, and every consumer
+  # of this map must refuse to reap without it — "couldn't look" can never read
+  # as "nothing is live".
+  [[ -d "$PROC_ROOT" ]] || return 1
   local p fd target
   for p in "$PROC_ROOT"/[0-9]*; do
     if [[ -e "$p/cwd" ]]; then
@@ -416,6 +472,7 @@ _build_inuse_top() {
         "$UNIX_SOCKETS" 2>/dev/null || true
     )
   fi
+  _INUSE_TOP["__built__"]=1   # set LAST — presence proves the walk completed
 }
 
 # --- Reaper 1: oversized .output files (pre-existing behaviour) -------------
@@ -568,7 +625,17 @@ reap_scratch_entries() {
   age_min="$SCRATCH_AGE_MIN"
   max_reap=0   # 0 = uncapped; the floors already bound the candidate set
 
-  _build_inuse_top
+  _build_inuse_top || {
+    # /proc unreadable (hidepid, container): the in-use map is absent, so every
+    # candidate would look dead. Refuse the whole arm and say so.
+    guard_log "liveness map unavailable ($PROC_ROOT unreadable) — scratch reap skipped (fail closed)"
+    alarm_record "tmpfs-guard: cannot read $PROC_ROOT — liveness gating is impossible; reap arms skipped this run"
+    return 0
+  }
+  [[ -n "${_INUSE_TOP[__built__]:-}" ]] || {
+    guard_log "liveness map unbuilt — scratch reap skipped (fail closed)"
+    return 0
+  }
 
   # SIZE FIRST, via a SINGLE batched `du`. Size is the most selective gate — a
   # measured 3 of thousands of entries qualify — but it is also the only gate
@@ -623,7 +690,7 @@ reap_scratch_entries() {
   # forever, and an unconditional build would pay a full recursive walk of the
   # whole tree for a map nothing then reads. Safe to skip: an empty
   # "$sized_file" means the loop below never runs, so _FRESH_TOP is unreachable.
-  [[ -s "$sized_file" ]] && _build_fresh_top "$age_min"
+  [[ -s "$sized_file" ]] && _build_fresh_top "$age_min" "$TMP_ROOT"
 
   while IFS=$'\t' read -r size_mb e; do
     [[ -n "$e" ]] || continue
@@ -643,7 +710,7 @@ reap_scratch_entries() {
     # from a live /tmp listing on 2026-07-27 rather than assumed; the previous
     # 9-entry list predates the pressure tier and was never audited against one.
     case "$base" in
-      claude-*|soleur-session-state*|node-compile-cache|.X11-unix|.ICE-unix|.font-unix|.XIM-unix|.Test-unix|systemd-*|snap*)
+      claude-*|soleur-session-state*|soleur-run.*|soleur-quarantine.*|node-compile-cache|.X11-unix|.ICE-unix|.font-unix|.XIM-unix|.Test-unix|systemd-*|snap*)
         continue ;;
       com.google.Chrome.*|.org.chromium.*|.com.google.Chrome.*|chromium-*|firefox-*|\
       dbus-*|pulse-*|.mount_*|tmux-*|ssh-*|.X*-lock|gpg-*|wayland-*|at-spi2-*)
@@ -731,6 +798,121 @@ reap_scratch_entries() {
   return 0
 }
 
+# --- Reaper 3: orphaned ownership-keyed scratch roots (#7004) ------------------
+# Reclaims only entries that DECLARE an owner — `soleur-run.<pid>.*` schema
+# dirs or `.soleur-owned` marker dirs — and whose owner is provably dead:
+# owner pid absent AND no live fd/cwd/environ handle AND nothing in the tree
+# modified within the age floor AND the marker's pid-namespace matches ours
+# (a container producer on a host bind-mount would otherwise read dead).
+#
+# Disposal differs by base class (operator decision 2026-09-24): on a tmpfs
+# base the schema/marker attribution is certain and a same-base `mv` frees
+# zero RAM, so dead roots are deleted directly; on a disk base every reap
+# goes through soleur-quarantine.<uid>/scratch/ for TTL drain + ledger
+# recoverability. Unattributable classes are never touched here — that's the
+# purge's job (operator-invoked) and tmpfiles' job (30d aging).
+reap_orphan_scratch_roots() {
+  ORPHAN_REAPED=0; ORPHAN_QUAR=0; ORPHAN_RETAINED=0
+  # Fail-closed arms: no classifier, no bases, no liveness map → no reap.
+  if [[ "$_TC_LIB_OK" != "1" ]]; then
+    guard_log "reaper3: tmp-classify.sh unavailable — arm skipped (fail closed)"
+    return 0
+  fi
+  if [[ -z "${SCRATCH_BASES//[[:space:]]/}" ]]; then
+    guard_log "reaper3: TMPFS_GUARD_SCRATCH_BASES empty — arm skipped (fail closed)"
+    return 0
+  fi
+  if [[ -z "${_INUSE_TOP[__built__]:-}" ]]; then
+    _build_inuse_top || {
+      guard_log "reaper3: liveness map unavailable — arm skipped (fail closed)"
+      return 0
+    }
+  fi
+
+  local uid; uid="$(id -u)"
+  local base d name pid base_fstype dest
+
+  # First pass: collect declared-owner candidates; the fresh-map build is only
+  # paid when candidates exist (a healthy host has none for weeks).
+  local -a cand=()
+  for base in $SCRATCH_BASES; do
+    [[ -d "$base" ]] || continue
+    while IFS= read -r d; do
+      cand+=("$d")
+    done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -user "$uid" -name 'soleur-run.*' -print 2>/dev/null)
+    while IFS= read -r d; do
+      cand+=("${d%/.soleur-owned}")
+    done < <(find "$base" -mindepth 2 -maxdepth 2 -type f -user "$uid" -name '.soleur-owned' -print 2>/dev/null)
+  done
+  ((${#cand[@]})) || { guard_log "SOLEUR_TMP_REAP bases=[$SCRATCH_BASES] reaped=0 quarantined=0 retained=0"; return 0; }
+
+  _build_fresh_top "$SCRATCH_AGE_MIN" $SCRATCH_BASES
+  [[ -n "${_FRESH_TOP[__built__]:-}" ]] || {
+    guard_log "reaper3: freshness map unbuilt — arm skipped (fail closed)"
+    return 0
+  }
+
+  for d in "${cand[@]}"; do
+    [[ -d "$d" ]] || continue
+    name="$(basename -- "$d")"
+    if ! pid="$(tc_schema_owner_pid "$name" 2>/dev/null)"; then
+      pid="$(tc_marker_owner_pid "$d" 2>/dev/null || true)"
+    fi
+    [[ -n "$pid" ]] || { ORPHAN_RETAINED=$((ORPHAN_RETAINED+1)); continue; }
+    tc_owner_alive "$pid" && { ORPHAN_RETAINED=$((ORPHAN_RETAINED+1)); continue; }
+    [[ -n "${_INUSE_TOP[$d]:-}" ]] && { ORPHAN_RETAINED=$((ORPHAN_RETAINED+1)); continue; }
+    [[ -n "${_FRESH_TOP[$d]:-}" ]] && continue
+    if [[ "$DRY_RUN" == "1" ]]; then
+      guard_log "would reap orphan $d"
+      ORPHAN_REAPED=$((ORPHAN_REAPED+1)); continue
+    fi
+    base="$(dirname -- "$d")"
+    base_fstype="$(findmnt -no FSTYPE --target "$base" 2>/dev/null || true)"
+    if [[ "$base_fstype" == "tmpfs" || "$base_fstype" == "ramfs" ]]; then
+      # tmpfs: certain attribution + mv frees no RAM → direct delete.
+      find "$d" -depth -delete 2>/dev/null || true
+      ORPHAN_REAPED=$((ORPHAN_REAPED+1))
+    else
+      if dest="$(tc_quarantine_move "$d" "$base" "scratch" 2>/dev/null)"; then
+        guard_log "quarantined orphan $d -> $dest"
+        ORPHAN_QUAR=$((ORPHAN_QUAR+1))
+      else
+        ORPHAN_RETAINED=$((ORPHAN_RETAINED+1))
+      fi
+    fi
+  done
+  guard_log "SOLEUR_TMP_REAP bases=[$SCRATCH_BASES] reaped=$ORPHAN_REAPED quarantined=$ORPHAN_QUAR retained=$ORPHAN_RETAINED"
+}
+
+# --- Quarantine TTL drain ------------------------------------------------------
+# The ONLY deletion permitted inside soleur-quarantine.<uid>/ — entries older
+# than their class TTL (subdir name encodes it: worktrees 30d, else scratch 7d).
+drain_scratch_quarantine() {
+  [[ "$_TC_LIB_OK" == "1" ]] || return 0
+  local base qdir entry age ttl drained=0
+  for base in $SCRATCH_BASES; do
+    for qdir in "$base"/soleur-quarantine."$(id -u)"/*/; do
+      [[ -d "$qdir" ]] || continue
+      case "$(basename -- "$qdir")" in
+        worktrees) ttl="$QUAR_WT_TTL_MIN" ;;
+        *) ttl="$QUAR_TTL_MIN" ;;
+      esac
+      while IFS= read -r entry; do
+        [[ -e "$entry" ]] || continue
+        age="$(tc_tree_age_min "$entry")"
+        (( age >= ttl )) || continue
+        if [[ "$DRY_RUN" == "1" ]]; then
+          guard_log "would drain $entry (age ${age}m >= ttl ${ttl}m)"
+          continue
+        fi
+        find "$entry" -depth -delete 2>/dev/null && drained=$((drained+1)) || true
+      done < <(find "$qdir" -mindepth 1 -maxdepth 1 2>/dev/null)
+    done
+  done
+  (( drained > 0 )) && guard_log "drained $drained quarantine entries past TTL"
+  return 0
+}
+
 main() {
   local usage_pct
   usage_pct="$(tmpfs_usage_pct)"
@@ -750,6 +932,8 @@ main() {
 
   reap_output_files "$usage_pct"
   reap_scratch_entries "$usage_pct"
+  reap_orphan_scratch_roots
+  drain_scratch_quarantine
 
   # Per-run liveness line, emitted on EVERY run including a healthy one. Without
   # it "the guard is silent because nothing needed doing" and "the guard is not
@@ -810,7 +994,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # lock at all before. Non-blocking: if a run is already in flight, this one
   # exits rather than queueing up behind it (a queue of guards is its own leak).
   if [[ "${TMPFS_GUARD_NO_FLOCK:-0}" != "1" ]] && command -v flock >/dev/null 2>&1; then
-    _lockfile="${TMPFS_GUARD_LOCKFILE:-${TMPDIR:-/tmp}/.tmpfs-guard-$(id -u).lock}"
+    # TMPDIR-independent (#7004 task 2.11): under the scratch allocator TMPDIR
+    # is a per-session root that dies with the session, so a lockfile inside it
+    # would serialize nothing and would be swept as residue. The durable
+    # per-uid state dir is the same literal path soleur-tmp-purge.sh and the
+    # session-start sweep take — one domain lock for all three consumers.
+    _lockfile="${TMPFS_GUARD_LOCKFILE:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/soleur/tmp-guard.lock}"
+    mkdir -p -- "$(dirname "$_lockfile")" 2>/dev/null || true
     # If the lockfile cannot be created, run UNSERIALISED and say so — do not
     # fall back to `exec 9>/dev/null`. That path locks the /dev/null inode,
     # which is shared with every process on the box, so an unrelated flocker

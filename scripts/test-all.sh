@@ -3205,6 +3205,10 @@ if want_scripts; then
   # so every ladder rung (marker/schema/git/empty/prefix/protected/liveness)
   # is asserted in both directions under a sentinel base.
   run_suite "tests/scripts/tmp-purge" bash tests/scripts/test-tmp-purge.sh
+  # #7004: the session allocator + Reaper 3 + quarantine drain. begin() exports
+  # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
+  # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
+  run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
   # #7537: the orphaned-PROCESS reaper. It SIGNALS processes, so every gate
   # (own-uid, unlinked cwd, unlinked fd/255, self-exclusion, mount/pid
   # namespace, age floor) is asserted in both directions here. Registered

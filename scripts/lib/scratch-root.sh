@@ -41,6 +41,129 @@
 [[ -n "${_SOLEUR_SCRATCH_ROOT_SOURCED:-}" ]] && return 0
 _SOLEUR_SCRATCH_ROOT_SOURCED=1
 
+# --- Session-scoped ownership-keyed allocation (#7004) ---------------------------
+#
+# soleur_scratch_session_begin allocates ONE per-process root named
+# <base>/soleur-run.<pid>.XXXXXXXX, marks it .soleur-owned, exports TMPDIR at it
+# (so every descendant `mktemp` lands inside it), and holds a directory fd so
+# liveness survives execve. Dead-owner roots are reclaimed by Reaper 3
+# (scripts/tmpfs-guard.sh) and the session-start sweep — ownership-keyed, so
+# reclaiming them needs no name heuristics.
+#
+#   source "$(git rev-parse --show-toplevel)/scripts/lib/scratch-root.sh"
+#   soleur_scratch_session_begin          # sets + exports TMPDIR
+#   ... trap list gains _soleur_scratch_cleanup (see CONTRACT below)
+#
+# TRAP CONTRACT (ADR-129 — one trap per script): this function does NOT install
+# a trap by default — a later `trap ... EXIT` at the call site would clobber
+# it and leak the root while reading green. Callers splice
+# `_soleur_scratch_cleanup` into their EXISTING EXIT trap's function list,
+# ending it `|| true` so a failing cleanup cannot abort sibling trap arms.
+# Opt-in trap mode (`begin --with-trap`) exists only for callers that install
+# no later EXIT trap.
+#
+# NESTED CALLERS: a second begin() while SOLEUR_SCRATCH_SESSION_ROOT is already
+# exported no-ops — the PARENT's root governs (run-registered-suites inside
+# test-all inherits test-all's root).
+#
+# BASE: the base of the effective TMPDIR — an inherited `TMPDIR=/var/tmp`
+# selects that base ("respects explicit caller TMPDIR"), never suppressed.
+#
+# Liveness record: <root>/.soleur-owned carries pid=$$ (top-level harness pid),
+# schema=1, ns=pid:[<inode>] — the pid-namespace discriminator that keeps a
+# container-produced root from reading dead to a host reaper.
+
+soleur_scratch_session_begin() {
+  # Caller-frame guard: invoked from a sourced context is fine; invoked in a
+  # subshell (`$(begin)`) is not — the fd + export would die with the subshell.
+  if [[ "$BASHPID" != "$$" ]]; then
+    echo "scratch-session: refusing to allocate inside a subshell (export/fd would be lost)" >&2
+    return 1
+  fi
+  # Nested begin → parent root governs.
+  if [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" ]]; then
+    return 0
+  fi
+
+  local base="" with_trap=0 a
+  for a in "$@"; do
+    case "$a" in --with-trap) with_trap=1 ;; *) base="$a" ;; esac
+  done
+  base="${base:-${TMPDIR:-/var/tmp}}"
+  base="${base%/}"
+  if [[ -z "$base" || "$base" != /* ]]; then
+    echo "scratch-session: base '$base' is not an absolute path; refusing (fail-closed)" >&2
+    return 1
+  fi
+  if [[ ! -d "$base" || ! -w "$base" ]]; then
+    echo "scratch-session: base '$base' is not a writable directory" >&2
+    return 1
+  fi
+
+  local root
+  root="$(mktemp -d "$base/soleur-run.$$.XXXXXXXX")" || return 1
+  chmod 0700 "$root" 2>/dev/null || true
+
+  # Ownership record — pid is the TOP-LEVEL harness pid ($$ here), not a
+  # fixture's own $$ which dies at suite exit and would reap the dir mid-run.
+  local ns
+  ns="$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')"
+  printf 'pid=%s\nschema=1\nns=%s\n' "$$" "$ns" > "$root/.soleur-owned"
+
+  # Holder fd — `declare -g` is load-bearing: a function-local {var} fd closes
+  # when the function returns and the liveness conjunct silently dies.
+  declare -g _SOLEUR_SCRATCH_FD=""
+  exec {_SOLEUR_SCRATCH_FD}< "$root" || {
+    echo "scratch-session: cannot hold fd on $root" >&2
+    rm -rf -- "$root" 2>/dev/null || true   # own just-created dir — safe
+    return 1
+  }
+
+  SOLEUR_SCRATCH_SESSION_ROOT="$root"
+  SOLEUR_SCRATCH_OWNER_PID="$$"
+  export SOLEUR_SCRATCH_SESSION_ROOT SOLEUR_SCRATCH_OWNER_PID
+  export TMPDIR="$root"
+
+  if [[ "$with_trap" == "1" ]]; then
+    trap '_soleur_scratch_cleanup' EXIT
+  fi
+}
+
+# _soleur_scratch_cleanup — splice into the caller's existing EXIT trap list.
+# Deletes the session root outright: the owner has certain attribution at
+# creation, and a tmpfs mv-to-quarantine frees zero RAM — direct owner-exit
+# delete is the prompt-reclaim path (operator decision 2026-09-24). Ends 0.
+_soleur_scratch_cleanup() {
+  local root="${SOLEUR_SCRATCH_SESSION_ROOT:-}"
+  [[ -n "$root" ]] || return 0
+  case "$root" in
+    */soleur-run.*) ;;                      # shape pin — never delete arbitrary TMPDIR
+    *) echo "scratch-session: root '$root' fails the soleur-run.* shape; refusing to delete" >&2; return 0 ;;
+  esac
+  find "$root" -depth -delete 2>/dev/null || true
+  return 0
+}
+
+# soleur_scratch_mark_owned <dir> [owner_root]
+# Writes <dir>/.soleur-owned so long-lived fixture trees declare an owner the
+# reaper can check. pid= defaults to the session owner (the harness pid when
+# begin ran), never the fixture's own transient pid.
+soleur_scratch_mark_owned() {
+  local dir="${1:-}" oroot="${2:-}"
+  [[ -n "$dir" && -d "$dir" ]] || { echo "mark-owned: '$dir' not a directory" >&2; return 1; }
+  local ns
+  ns="$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')"
+  {
+    if [[ -n "$oroot" ]]; then
+      printf 'owner_root=%s\n' "$oroot"
+    else
+      printf 'pid=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}"
+    fi
+    printf 'schema=1\nns=%s\n' "$ns"
+  } > "$dir/.soleur-owned"
+}
+
+
 # soleur_scratch_root
 #
 # Prints an absolute, existing, writable, disk-backed directory. Returns non-zero and
