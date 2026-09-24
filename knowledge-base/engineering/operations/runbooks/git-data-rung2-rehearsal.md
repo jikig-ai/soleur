@@ -29,9 +29,11 @@ restated here, because a second copy drifts. Two human gates and nothing else: t
 `web-platform-infra-apply` environment approval on the dispatch, and your review of the
 evidence PR. There is no SSH anywhere in this route; the rehearsal host is never logged into.
 
-Start with `dry_run=true`. It renders, plans, asserts the plan **creates only rehearsal
-addresses and destroys nothing**, and stops. Re-dispatch with `dry_run=false` when you intend
-to spend a real host (~€0.02, ~8 minutes).
+Start with `dry_run=true`. It renders, plans the **seed** phase, asserts that plan **creates only
+rehearsal addresses and destroys nothing** (`scripts/git-data-rung2-plan-shape.sh … additive`), and
+stops. Re-dispatch with `dry_run=false` when you intend to spend a real host. Since #5274 a real run
+boots three times on one address (see *The three-boot run*), so budget roughly three short host
+lifetimes and up to ~2 hours of wall clock in the worst case.
 
 ## The three artifacts, and what each one rules out
 
@@ -262,8 +264,9 @@ luks_mounted=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes
 `fence_on_mapper` and `erasure_probe` are new in PR #8564. `fence_on_mapper` says the `pre-receive`
 fence resolved onto `/dev/mapper/git-data` rather than onto the mountpoint underneath it;
 `erasure_probe` says one real run of `git-data-remove.sh`, as the `git` uid on a synthetic id,
-exited 0 with `not present (no-op)` on stderr. `plaintext_empty` says the retained plaintext volume
-was mounted read-only and counted at zero. `git-data-rung2-evidence-capture.sh` refuses to write
+exited 0 with `not present (no-op)` on stderr. `plaintext_empty` says the retained plaintext volume's
+post-journal-replay tree was counted at zero (since #5274 it is read through a dm snapshot over a
+kernel-read-only origin, never mounted itself). `git-data-rung2-evidence-capture.sh` refuses to write
 evidence if any terminal boolean reads `no`.
 
 **Reboot arm — the re-attach target.** The reboot arm must read:
@@ -277,9 +280,68 @@ what proves the mapper came back at the serving path rather than at some other m
 other `target` is a FAIL. The capture's `HOST_SQL` reads the column, and
 `tests/scripts/test-git-data-rung2-evidence-capture.sh` covers both arms.
 
-**Informational, not gating:** `plaintext_volume=present|absent` and `served_repos=<n>`. A non-zero
+**Informational to the birth poll, but gating HERE:** `plaintext_volume` and `plaintext_journal`
+(#5274) — the capture PASSes only when every `boot_complete` row reads `plaintext_volume=present`
+**and** `plaintext_journal=dirty`; see *The three-boot run*. **Informational everywhere:**
+`served_repos=<n>`. A non-zero
 `served_repos` is not informational — it ends the boot as `FATAL: luks_residue count=<n>`, so it
 never reaches a `boot_complete` a capture would accept.
+
+## The three-boot run (#5274)
+
+The 2026-09-24 production replace FATALed because the predecessor was destroyed with the plaintext
+volume mounted read-write, leaving a dirty ext4 journal the old rehearsal never produced. A real run
+now reproduces it, on one address, in three boots:
+
+1. **Seed** (`rehearsal_phase=seed`, plan-shape `additive`). `rung2-rehearsal/seed-dirty-journal.sh`
+   mounts the plaintext volume read-write, writes a marker, creates and removes a
+   `repositories/` probe, `sync -f`s, and powers off with `sysrq o` — never unmounting. It emits one
+   Better Stack row per step as `stage=seed_<step>`, `host_name=<rehearsal-host>-seed`. The workflow
+   polls the Hetzner API until the host is `off` (10 min); a timeout FAILs the run pointing at those
+   rows, and the payload is never booted against an undirtied volume.
+2. **Payload, boot #1** (`rehearsal_phase=payload`, plan-shape `host-only`). Terraform replaces the
+   server (and both attachments) with the unmodified module render — the production event. Capture
+   #1 must read `plaintext_volume=present plaintext_journal=dirty` on every `boot_complete` row
+   (Guard 2). Then the existing settle / hard reset / unattended-reopen arm.
+3. **Replace arm, boot #2** (`-replace=hcloud_server.rehearsal -replace=tls_private_key.rehearsal_host_ssh`,
+   plan-shape `host-only`). Boot #2 **adopts** a LUKS volume boot #1 formatted and abandoned
+   mounted — the state the production replace boots into — against the plaintext volume boot #1
+   read. It must read `plaintext_journal=dirty` **again**: if boot #1 had written the volume it may
+   only read, the journal would be clean. Its window is `RUNG2_REPLACE_SINCE`, stamped before its
+   apply (the host name is reused across all three boots). A PASS appends `RUNG2_REPLACE_BOOT=PASS`
+   to the evidence. Stated gap: the rehearsal root has no private network and no Doppler host-key
+   secret, so those two production replace targets are not rehearsed.
+
+**`host-only` admits** only a replace of `hcloud_server.rehearsal`, `hcloud_volume_attachment.rehearsal`,
+`hcloud_volume_attachment.rehearsal_luks` (all three required) and `tls_private_key.rehearsal_host_ssh`,
+and an update of `hcloud_firewall_attachment.rehearsal`. Any change to either volume is refused: a
+fresh plaintext volume makes the seed vacuous; a fresh LUKS volume skips the adopt arm.
+
+**Releasing evidence exists only if all three boots pass.** The evidence upload's `if:` requires the
+capture, reboot and replace rcs to be `0`; the gate needs no change, because it already refuses a
+run that did not succeed (`RUN_NOT_SUCCESS`) or left no evidence artifact
+(`RUN_NO_EVIDENCE_ARTIFACT`).
+
+**Budget and teardown.** The rehearse job's ceiling (120 min) is the sum of its own bounds: three
+step-level apply timeouts (15 + 25 + 15), four poll deadlines (seed off 10, capture 16, reboot 10,
+replace 16), the 2-minute settle and the 2-minute reset loop. Teardown is a separate job
+(`needs: rehearse`, `if: always()`, no `environment:` so it never waits for a second approval), so a
+rehearse job that hits its ceiling still destroys its paid hosts. `teardown_only=true` stays the
+manual fallback.
+
+**When a run does not PASS** (cap: **two paid runs per payload hash**; a named FATAL always needs a
+code PR, never a re-run):
+
+| Outcome | Next |
+|---|---|
+| seed off-poll timeout | read the `stage=seed_*` rows for `<host>-seed`; fix the seed in a PR |
+| payload FATAL `reason=snapshot` / `mount` / `journal` / `source` | code PR; if it is the kernel mechanism itself, stop and return to ADR-239's alternatives with the CTO and CLO |
+| capture #1 PASS, replace arm FAIL | read boot #2's fatal row; the LUKS adopt arm is the suspect; code PR |
+| teardown did not complete | dispatch with `teardown_only=true` (operator-gated like every dispatch) |
+| TRANSIENT (source-liveness anchor silent) | one re-dispatch, counted against the cap |
+
+Every future rehearsal pays for the seed and replace boots; re-evaluate when #8571's wipe empties the
+plaintext volume id (that PR amends the `present`+`dirty` PASS rule in its own rehearsal).
 
 ## Changing the payload: the two-PR sequence
 

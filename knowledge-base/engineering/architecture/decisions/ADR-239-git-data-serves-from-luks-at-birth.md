@@ -65,6 +65,10 @@ selector, no toggle.
    `repositories/`, unmounts and removes the directory. A failed mount or a wrong source is FATAL
    `plaintext_unverified`; a non-zero count is FATAL `plaintext_residue count=<n>`. The volume is
    retained and was never writable.
+
+   > **Amended 2026-09-24 (#5274):** the plaintext volume is no longer mounted. It is set kernel
+   > read-only and read through a throwaway dm snapshot; see
+   > [Amendment 2026-09-24](#amendment-2026-09-24--the-dirty-journal-gap-is-closed-5274-5914).
 3. **Every store-acting script asserts the device and a positive marker.**
    `git-data-provision.sh`, `git-data-remove.sh`, `git-data-transport-wrapper.sh` and
    `git-data-gc.sh` refuse, fail-closed and named, unless `findmnt` is on PATH,
@@ -106,12 +110,14 @@ selector, no toggle.
   tag:** any such tag must postdate #8511, and no rung-2 evidence exists for #8511's template
   alone. Recovery is a read first, never another replace. The recovery procedure is in
   `git-data-luks-cutover-5274.md`.
-- **The dirty-journal `noload` gap is real and accepted.** The rung-2 rehearsal's plaintext volume
+- ~~**The dirty-journal `noload` gap is real and accepted.** The rung-2 rehearsal's plaintext volume
   is freshly formatted, so it never boots the production case: a volume last mounted read-write by
   a destroyed host, with a dirty ext4 journal. If `mount -o ro,noload` then refuses it, step 2
   fails closed as `plaintext_unverified` on the first production boot the rehearsal could not
   reproduce. The failure is safe — read-only, data retained, no marker written — and its recovery
-  is written down, but the rehearsal cannot pre-empt it.
+  is written down, but the rehearsal cannot pre-empt it.~~ **Closed 2026-09-24** — it happened
+  exactly as described (see the amendment below), and both halves are now answered: the count reads
+  a dirty journal, and the rehearsal reproduces one.
 - **The wipe branch needs a rehearsal of its own.** Emptying `git_data_volume_id` selects a render
   branch no rehearsal has booted. The wipe PR therefore carries its own rung-2 rehearsal with an
   empty volume id, declared under `RUNG2_VAR_DIVERGENCE`.
@@ -139,6 +145,57 @@ selector, no toggle.
 | F | Prove emptiness with the existing dry run's `store_not_empty` probe instead of on the host | Before step 3 the dry run refuses at the precheck for want of a pin, so its store probes never run. Verified against `git-data-flag-precheck.sh`. |
 | G | A replace-job step that reads the `prd` flag (CTO condition 1 as written) | Needs a `prd` token in `apply-web-platform-infra.yml`, the file #8209 is redesigning. The CTO accepted the on-host check instead. |
 | H | Ship PR1 and PR2 as one PR | Pushes the hash-bound half past the #8511 rehearsal, costing a second paid rehearsal and widening the emergency-replace gap. |
+| I | (2026-09-24) Mount the plaintext volume rw once so ext4 replays its journal | Writes the retained volume; violates D2 ("never writable"). |
+| J | (2026-09-24) Keep `noload` (or `debugfs -c`) and count the stale on-disk tree | Can miss an entry that exists only in the journal — the reason the FATAL existed. The loopback suite's arm C builds exactly that entry. |
+| K | (2026-09-24) `e2fsck` a full copy of the volume | A volume-sized copy on a 4 GB host with no spare disk. |
+| L | (2026-09-24) A second, throwaway host that repairs the volume's filesystem before the count | Rejected: the repair writes the volume, it adds a path outside the replace, and it is not replace-durable. |
+| M | (2026-09-24) Use the snapshot only when `needs_recovery` is set | Two code paths, and the clean one would be the only one the old rehearsal booted. |
+
+## Amendment 2026-09-24 — the dirty-journal gap is closed (#5274, #5914)
+
+**Motivating event.** ADR-237 post-merge step 3 (`git_data_host_replace`, run 35979304442) applied
+cleanly and the fresh host FATALed at 09:09:30Z:
+`plaintext_unverified reason=journal … has needs_recovery set; its tree was not counted`. The
+predecessor was destroyed while the plaintext volume was mounted read-write, so its journal was
+dirty — the accepted gap above, on the first production boot. Nothing was written; no marker; every
+Art. 17 erasure refused until a later boot writes one.
+
+**Decision 2 now reads the volume through a non-persistent dm snapshot.** The bootstrap resolves the
+by-id link once; refuses a LUKS device or one with holders; sets the device kernel read-only
+(`blockdev --setro`, read back) before any mount, dm table or write-capable open, and never clears
+it (nothing on the host writes the volume later; the wipe is terraform-side); stacks a dm
+`snapshot` target on it (which opens its origin read-only) with a copy-on-write file on `/dev/shm`
+sized from the journal geometry; and mounts the **snapshot** read-only **without** `noload`, so the
+journal replays into the COW and the counted tree is the post-replay tree. It then requires the
+mount SOURCE to be the snapshot, the snapshot superblock to no longer need recovery and not read
+`with errors`, ext4's `errors_count` to stay 0 across the count (ext4 readdir skips a
+checksum-failed directory block with only a log line), the snapshot not to be `Invalid`, and the
+kernel log to show no write attempt against the origin. Teardown is collect-then-exit. Every failure
+is a named `FATAL: plaintext_unverified reason=source|snapshot|mount|journal|umount` (`snapshot` is
+the one new word); `plaintext_residue count=<n>` is unchanged. `boot_complete` gains the
+informational `plaintext_journal=dirty|clean|absent`.
+
+**D2 ("never writable") still holds, and the kernel read-only flag is a stated backstop, not the
+proof.** With the origin kernel-read-only, ext4 refuses to replay a journal onto it
+(`write access unavailable, cannot proceed`) — the loopback suite's negative control measures this
+on the CI kernel. But the flag does not reject every write: in Linux v6.8 `bio_check_ro` only warns,
+and it cannot stop a writer that opened the device before `--setro`. The proof that nothing was
+written is the loopback suite's sha256 of the origin before and after every arm, not the flag.
+
+**The COW is in RAM on purpose.** It holds replayed filesystem metadata — directory entries, which
+name workspaces — so nothing of it may land on the root disk. It lives only for the count and is
+destroyed at teardown; a teardown failure is FATAL `reason=umount`, no marker.
+
+**The rehearsal now reproduces the production case.** The rung-2 rehearsal boots three times on one
+address: a seed that mounts the plaintext volume read-write, writes, and powers off without
+unmounting; the payload (boot #1), whose evidence can PASS only on
+`plaintext_volume=present plaintext_journal=dirty`; and a replace (boot #2) that adopts a LUKS
+volume a predecessor formatted and abandoned mounted, and must read the journal dirty again — the
+real-image proof that boot #1 did not write the volume it read. Details:
+`git-data-rung2-rehearsal.md`.
+
+Status stays `adopting`; the flip rule above is unchanged, and it is also the rule that proves this
+amendment in production.
 
 ## References
 

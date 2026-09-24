@@ -989,3 +989,15 @@ owed is either reachability or deletion, plus a floor that distinguishes "shallo
 history" from "no prior version".
 
 Both are carried by #8397.
+
+## Amendment — 2026-09-24 (#5274): the rung-2 rehearsal boots three times
+
+Pointer only; the decision lives in
+[ADR-239's 2026-09-24 amendment](./ADR-239-git-data-serves-from-luks-at-birth.md#amendment-2026-09-24--the-dirty-journal-gap-is-closed-5274-5914).
+The rehearsal route now seeds a dirty plaintext journal, boots the payload (boot #1, reboot arm
+unchanged), then replaces the host again (boot #2, adopting the LUKS volume boot #1 formatted).
+Every plan passes `scripts/git-data-rung2-plan-shape.sh`; the evidence upload additionally gates on
+the replace arm (`RUNG2_REPLACE_BOOT`), and teardown is its own `if: always()` job. The birth
+readiness gate is unchanged: it reads neither the reboot nor the replace key, and enforcement comes
+from the upload gate plus its existing `RUN_NOT_SUCCESS` / `RUN_NO_EVIDENCE_ARTIFACT` refusals.
+Runbook: `git-data-rung2-rehearsal.md`.
