@@ -76,7 +76,8 @@ legs within 5% of optimal, so each refresh moves only what balance
 requires. Regenerate when:
 
 - `scripts-shard-manifest.test.sh` reds (n drift, phantom rows, malformed),
-- the follow-through probe reports a leg >900s while others sit near-idle,
+- the `suite-timings-*` artifacts show one `test-scripts*` leg drifting well
+  past its peers (the probe that auto-reported this retired with issue 8006),
 - a suite was renamed (its old row becomes a phantom; the lint names it).
 
 **Merge conflict on the TSV → regenerate, never hand-merge.** Re-run the
@@ -192,6 +193,3 @@ two pages and inflate the population. The raw `jobs.tsv` is committed at
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — the
   synthetic `test` check has six light legs; a failed or skipped heavy
   matrix fails it.
-- `scripts/followthroughs/ci-leg-durations-8006.sh` — post-merge soak
-  probe; auto-closes #8006 when ≥3 qualifying main runs show every
-  `test-scripts*` leg under 900 s.
