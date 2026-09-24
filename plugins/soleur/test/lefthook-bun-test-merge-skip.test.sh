@@ -23,7 +23,7 @@ PY
 get() { printf '%s\n' "$out" | sed -n "s/^$1=//p"; }
 assert_eq "merge" "$(get skip)" "bun-test skip is exactly [merge]"
 assert_eq '*.{ts,tsx,js,jsx}' "$(get glob)" "bun-test glob is unchanged"
-assert_eq "SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh" "$(get run)" "bun-test run still carries the ADR-196 hatch"
+assert_eq "bash scripts/test-all.sh --affected" "$(get run)" "bun-test run uses the affected gate (no ALLOW_FULL_GATE hatch — affected is exempt by construction, #8322)"
 assert_eq "bun-test" "$(get skippers)" "bun-test is the only pre-commit command with a skip"
 assert_eq "False" "$(get hook_skip)" "the skip is on the command, not the pre-commit hook"
 print_results 5
