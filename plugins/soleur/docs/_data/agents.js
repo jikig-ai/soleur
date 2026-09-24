@@ -54,6 +54,7 @@ const DOMAIN_META = {
 
 const SUB_LABELS = {
   design: "Design",
+  discovery: "Discovery",
   infra: "Infra",
   research: "Research",
   review: "Review",
@@ -183,7 +184,10 @@ export default function () {
 
   // Sort and structure output
   const domainOrder = ["engineering", "finance", "legal", "marketing", "operations", "product", "sales", "support"];
-  const subOrder = ["review", "design", "infra", "research", "workflow"];
+  // Every agent subdirectory must be listed, or its agents are silently dropped from the page
+  // and from the domain count (engineering/discovery was, until #8317). The registry-parity
+  // test in docs-agents-data.test.ts pins that.
+  const subOrder = ["review", "design", "discovery", "infra", "research", "workflow"];
 
   const domains = [];
   for (const key of domainOrder) {
