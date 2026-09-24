@@ -67,8 +67,10 @@ TC_UID="${TMP_CLASSIFY_UID:-$(id -u)}"
 # a protection. Quarantine artifacts are excluded from enumeration entirely
 # here as a second layer beneath the caller's own exclusion.
 
+# Takes a path OR a basename; ${1##*/} avoids a spawn per candidate — sweep
+# callers enumerate tens of thousands of entries on a shared base.
 tc_is_protected() {
-  local name; name="$(basename -- "$1")"
+  local name="${1##*/}"
   case "$name" in
     soleur-quarantine|soleur-quarantine.*|*.quarantine-meta) return 0 ;;
     tmp|tmp.*) return 0 ;;              # bare mktemp — unattributable, tmpfiles' job
@@ -127,12 +129,70 @@ tc_owner_alive() {
   [[ "$pid" =~ ^[0-9]+$ && -d "$TC_PROC/$pid" ]]
 }
 
+# tc_build_inuse_map <base>... — ONE /proc pass marking every top-level entry
+# under the given bases that any live process touches via cwd, an open fd, or
+# an environ token. Callers sweeping many candidates (the session-start sweep)
+# build it once and get O(1) membership from tc_tree_has_live_handles instead
+# of paying a full procfs walk per candidate — the same amortization the
+# guard's _INUSE_TOP has, exposed for shipped-lib consumers.
+declare -gA TC_INUSE_MAP=()
+
+# Internal marker — dynamic-scoped over the caller's `_tc_bases` array.
+_tc_mark_inuse() {
+  local t="$1" rest top bb
+  for bb in "${_tc_bases[@]}"; do
+    case "$t" in
+      "$bb"/*)
+        rest="${t#"$bb"/}"
+        top="${rest%%/*}"
+        [[ -n "$top" ]] && TC_INUSE_MAP["$bb/$top"]=1
+        ;;
+    esac
+  done
+}
+
+tc_build_inuse_map() {
+  TC_INUSE_MAP=()
+  [[ -d "$TC_PROC" ]] || return 1   # sentinel stays unset → per-candidate fallback
+  local -a _tc_bases=("$@")
+  local target tok
+
+  # cwd + fd targets in ONE find: `-printf '%l'` hands back link targets with no
+  # per-entry readlink spawn — ~30k syscalls collapse to a single walk. Pseudo
+  # links (`socket:[…]`, `anon_inode:…`) are not absolute and never match a base.
+  while IFS= read -r target; do
+    [[ "$target" == /* ]] && _tc_mark_inuse "$target"
+  done < <(find "$TC_PROC"/[0-9]*/fd "$TC_PROC"/[0-9]*/cwd -type l -printf '%l\n' 2>/dev/null)
+
+  # environ values are NUL-separated VAR=val; a descendant of a dead owner can
+  # still carry TMPDIR=<root>. One concatenated pass rather than a grep per pid
+  # (a per-pid spawn measured ~10s for a single candidate on a busy host).
+  while IFS= read -r tok; do
+    [[ -n "$tok" ]] && _tc_mark_inuse "$tok"
+  done < <(cat "$TC_PROC"/[0-9]*/environ 2>/dev/null \
+             | tr '\0' '\n' \
+             | grep -oE '/[^[:space:]"'"'"']+' 2>/dev/null \
+             | head -2000)
+
+  TC_INUSE_MAP["__built__"]=1
+}
+
 # tc_tree_has_live_handles <dir> — scan procfs once for ANY process holding the
 # dir: cwd, open fds, or environ containing the path. Fails CLOSED (returns
 # "live") when procfs is unreadable — a degraded host must never prove "dead".
+# When a caller has run tc_build_inuse_map, membership is the answer and the
+# walk is skipped entirely.
 tc_tree_has_live_handles() {
   local dir="$1" p fd target
   [[ -d "$TC_PROC" ]] || return 0
+  if [[ -n "${TC_INUSE_MAP[__built__]:-}" ]]; then
+    local a="$dir"
+    while [[ "$a" == */* && "$a" != "/" ]]; do
+      [[ -n "${TC_INUSE_MAP[$a]:-}" ]] && return 0
+      a="${a%/*}"
+    done
+    return 1
+  fi
   for p in "$TC_PROC"/[0-9]*; do
     [[ -d "$p" ]] || continue
     if target="$(readlink "$p/cwd" 2>/dev/null)" && [[ "$target" == "$dir" || "$target" == "$dir"/* ]]; then
@@ -342,8 +402,22 @@ tc_file_class() {
 
 # tc_classify_entry <path> → prints the class; never mutates.
 tc_classify_entry() {
-  local p="$1" name pid
+  local p="$1" name pid gc
   name="$(basename -- "$p")"
+  # Git-pointer rung precedes the protected check: a `.git` FILE resolves the
+  # entry through the OWNING repo's worktree registry — verified attribution,
+  # not the name heuristic the protect list exists to block. Without this the
+  # measured backlog class (`tmp.*` dirs bearing `.git`, ~1.5k on the reference
+  # host) would be invisible to every consumer. `.git` DIRECTORIES
+  # (standalone clones) keep protected-first ordering — report-only either way.
+  if [[ -d "$p" && -f "$p/.git" && ! -L "$p/.git" ]]; then
+    if ! tc_prefix_class "$p" >/dev/null 2>&1; then
+      gc="$(tc_classify_git_dir "$p")"
+      case "$gc" in
+        registered|unregistered|unverifiable) echo "worktree:$gc"; return 0 ;;
+      esac
+    fi
+  fi
   tc_is_protected "$p" && { echo "protected"; return 0; }
   if [[ -f "$p" && ! -d "$p" ]]; then
     tc_file_class "$p" || echo "unattributable"
@@ -354,17 +428,9 @@ tc_classify_entry() {
   if pid="$(tc_marker_owner_pid "$p")"; then echo "marker:$pid"; return 0; fi
   # schema rung
   if pid="$(tc_schema_owner_pid "$name")"; then echo "schema:$pid"; return 0; fi
-  # git rungs
-  local gc
+  # standalone-clone rung (.git dir; report-only)
   gc="$(tc_classify_git_dir "$p")"
-  case "$gc" in
-    standalone-clone|registered|unregistered|unverifiable)
-      # A dir matching a signed prefix class AND carrying .git still classifies
-      # by prefix — known fixture clones reclaim via their producer signature.
-      if tc_prefix_class "$p" >/dev/null 2>&1; then tc_prefix_class "$p"; return 0; fi
-      [[ "$gc" == "standalone-clone" ]] && { echo "standalone-clone"; return 0; }
-      echo "worktree:$gc"; return 0 ;;
-  esac
+  [[ "$gc" == "standalone-clone" ]] && { echo "standalone-clone"; return 0; }
   # empty rung
   tc_is_reapable_empty "$p" && { echo "empty"; return 0; }
   # prefix rung

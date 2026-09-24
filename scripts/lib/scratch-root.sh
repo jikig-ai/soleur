@@ -121,7 +121,8 @@ soleur_scratch_session_begin() {
 
   SOLEUR_SCRATCH_SESSION_ROOT="$root"
   SOLEUR_SCRATCH_OWNER_PID="$$"
-  export SOLEUR_SCRATCH_SESSION_ROOT SOLEUR_SCRATCH_OWNER_PID
+  SOLEUR_SCRATCH_BASE="$base"
+  export SOLEUR_SCRATCH_SESSION_ROOT SOLEUR_SCRATCH_OWNER_PID SOLEUR_SCRATCH_BASE
   export TMPDIR="$root"
 
   if [[ "$with_trap" == "1" ]]; then

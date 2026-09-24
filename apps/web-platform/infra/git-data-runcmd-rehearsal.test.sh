@@ -274,7 +274,9 @@ _reh_cleanup() {
   # mtime, so it can never reap a CONCURRENT run's tree — parallel worktrees are this repo's
   # documented workflow, and a reaper that takes a live sibling's fixtures out from under it
   # produces exactly the nondeterministic starvation #7501 is about.
-  find "${TMPDIR:-/var/tmp}" -maxdepth 1 -type d -name 'gdreh.*' -mmin +720 \
+  # Base-pinned under the #7004 allocator: when a session root redirected TMPDIR
+  # the enumeration must still scan the BASE, not the root (or it no-ops forever).
+  find "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/var/tmp}}" -maxdepth 1 -type d -name 'gdreh.*' -mmin +720 \
     -exec rm -rf {} + 2>/dev/null || true
 }
 trap _reh_cleanup EXIT

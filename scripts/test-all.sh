@@ -393,6 +393,23 @@ fi
 # Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# Session scratch root (#7004): allocate <base>/soleur-run.<pid>.XXXXXXXX under
+# the effective TMPDIR's base, export TMPDIR at it so every descendant mktemp
+# lands inside the session root, and write .soleur-owned so Reaper 3 and the
+# session-start sweep can reclaim a dead run's residue without name heuristics.
+# Sourced opportunistically — a missing lib degrades to the pre-#7004 shape,
+# never blocks the gate. The EXIT trap at the acquire site gains
+# `_soleur_scratch_cleanup` (spliced, not a second trap — ADR-129).
+_SCRATCH_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "$TMPDIR" || true
+fi
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+
 # Pin the #6789 contention instrumentation to /tmp, INDEPENDENTLY of TMPDIR above.
 #
 # test-contention.sh binds `TC_TMPDIR="${TC_TMPDIR:-${TMPDIR:-/tmp}}"` at SOURCE time, so
@@ -2797,7 +2814,7 @@ _soleur_inc_cleanup() {
   # test-all-runtime-ceiling and test-all-killed-classification.
   return 0
 }
-trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' EXIT
+trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass

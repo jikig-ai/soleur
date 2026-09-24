@@ -221,6 +221,60 @@ out="$(reap3)"
 cases=$((cases + 1)); [[ -d "$FAKE_TMP/random-dir" && -d "$FAKE_TMP/tmp.nonschema999" ]] \
   && pass "non-schema non-marker dirs never touched" || fail "foreign dir reaped"
 
+# --- Arm 6: session-start sweep (worktree-manager.sh) -----------------------------------
+WM="$REPO_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+SWEEP_STATE="$TESTROOT/sweep-state"
+sweep() {
+  env -i PATH="$PATH" HOME="$HOME" \
+    SOLEUR_SWEEP_BASES="${SWEEP_BASES:-$FAKE_TMP}" SOLEUR_SWEEP_AGE_MIN=0 \
+    SOLEUR_SWEEP_WT_AGE_MIN=0 SOLEUR_SWEEP_WT_CAP="${SOLEUR_SWEEP_WT_CAP:-50}" \
+    XDG_STATE_HOME="$SWEEP_STATE" TMP_CLASSIFY_PROC="${TC_PROC_OVERRIDE:-/proc}" \
+    TMP_CLASSIFY_RETAIN_DIR="$TESTROOT/retain" \
+    bash -c "source '$WM' >/dev/null 2>&1 || true; sweep_orphan_scratch_dirs" 2>&1 || true
+}
+
+# dead schema root reclaimed; protected/unattributable untouched
+reset_fixtures
+mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.sweepdead1"; : > "$FAKE_TMP/soleur-run.${DEAD}.sweepdead1/x"
+mkdir -p "$FAKE_TMP/soleur-run.${LIVE}.sweeplive1"; mkdir -p "$FAKE_PROC/$LIVE"
+out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep)"
+cases=$((cases + 1)); [[ ! -d "$FAKE_TMP/soleur-run.${DEAD}.sweepdead1" ]] \
+  && pass "sweep reaps dead schema root" || fail "sweep retained dead root: $out"
+cases=$((cases + 1)); [[ -d "$FAKE_TMP/soleur-run.${LIVE}.sweeplive1" ]] \
+  && pass "sweep retains live schema root" || fail "sweep reaped live root"
+cases=$((cases + 1)); printf '%s' "$out" | grep -q 'SOLEUR_TMP_SWEEP.*reaped=[0-9]' \
+  && pass "sweep emits SOLEUR_TMP_SWEEP telemetry" || fail "sweep telemetry missing: $out"
+rm -rf "$FAKE_PROC/$LIVE"
+
+# lock contention → loud skip, no mutation
+reset_fixtures
+mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.sweeplock1"; : > "$FAKE_TMP/soleur-run.${DEAD}.sweeplock1/x"
+mkdir -p "$SWEEP_STATE/soleur"
+( flock -n 9 && sleep 5 ) 9>"$SWEEP_STATE/soleur/tmp-guard.lock" & sleep 0.3
+out="$(sweep)"; wait || true
+cases=$((cases + 1)); printf '%s' "$out" | grep -q 'reason=lock-contended' \
+  && pass "sweep skips loudly on lock contention" || fail "contention not reported: $out"
+cases=$((cases + 1)); [[ -d "$FAKE_TMP/soleur-run.${DEAD}.sweeplock1" ]] \
+  && pass "contended sweep mutates nothing" || fail "contended sweep still reaped"
+
+# missing classifier → loud skip (SCRIPT_DIR rebound so the lib path misses)
+out="$(env -i PATH="$PATH" HOME="$HOME" bash -c "
+  source '$WM' >/dev/null 2>&1 || true
+  SCRIPT_DIR=/nonexistent
+  sweep_orphan_scratch_dirs
+" 2>&1 || true)"
+cases=$((cases + 1)); printf '%s' "$out" | grep -q 'reason=classifier-missing' \
+  && pass "missing classifier skips loudly" || fail "classifier-missing not reported: $out"
+
+# bounded worktree batch defers past the cap
+reset_fixtures
+for i in 1 2 3; do mkdir -p "$FAKE_TMP/wt-$i"; printf 'gitdir: /nonexistent\n' > "$FAKE_TMP/wt-$i/.git"; done
+out="$(SOLEUR_SWEEP_WT_CAP=1 sweep)"
+cases=$((cases + 1)); printf '%s' "$out" | grep -q 'SWEEP-DEFER' \
+  && pass "over-cap worktree batch emits SWEEP-DEFER" || fail "no defer marker: $out"
+cases=$((cases + 1)); [[ -d "$FAKE_TMP/wt-2" ]] \
+  && pass "deferred worktrees are not moved" || fail "deferred worktree moved"
+
 # --- Conservation ----------------------------------------------------------------------
 echo ""
 echo "test-scratch-session: $pass_n passed, $fails failed ($cases cases)"

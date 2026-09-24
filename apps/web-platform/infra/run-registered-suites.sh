@@ -221,6 +221,23 @@ LIST_ONLY=0
 [[ "${1:-}" == "--list" ]] && LIST_ONLY=1
 
 ROOT="$(git rev-parse --show-toplevel)"
+
+# Session scratch root (#7004): allocate under the effective TMPDIR's base and
+# export TMPDIR at it so every suite's mktemp lands inside an owned root a dead
+# run can have reclaimed. `_SUITE_TMP_BASE` captures the PRE-adoption base —
+# the startup self-reap below must enumerate the base, not the session root,
+# or it scans a dir containing only this run's own allocation and no-ops
+# forever. Nested inside test-all.sh this no-ops (parent root governs).
+_SUITE_TMP_BASE="$TMPDIR"
+_SCRATCH_LIB="$ROOT/scripts/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "$_SUITE_TMP_BASE" || true
+fi
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
 cd "$ROOT" || exit 1
 
 WF="${INFRA_WF:-.github/workflows/infra-validation.yml}"
@@ -383,7 +400,7 @@ LOG="$(mktemp)" || { echo "FATAL: mktemp failed for the summary log (TMPDIR=$TMP
 # because run-registered-suites.test.sh is itself a registered suite and drives this runner
 # ~10x per invocation with deliberate REDs (measured: 414 dirs / 23 MB on the author's box
 # before this reaper existed). Mirrors ADR-133's own `meta_dir` precedent.
-find "${TMPDIR}" -maxdepth 1 -name 'infra-suites.*' -type d -mmin +720 \
+find "${_SUITE_TMP_BASE}" -maxdepth 1 -name 'infra-suites.*' -type d -mmin +720 \
   -exec rm -rf {} + 2>/dev/null || true
 
 # Initialise BEFORE the trap references it: `set -u` is active, so an unset var inside the
@@ -393,7 +410,7 @@ find "${TMPDIR}" -maxdepth 1 -name 'infra-suites.*' -type d -mmin +720 \
 # keeps its evidence.
 SOLEUR_SUITE_LOGDIR=""
 SOLEUR_KEEP_LOGDIR=""
-trap 'rm -f "${LOG:-}"; [[ -n "${SOLEUR_KEEP_LOGDIR:-}" ]] || rm -rf "${SOLEUR_SUITE_LOGDIR:-/nonexistent}"' EXIT
+trap 'rm -f "${LOG:-}"; [[ -n "${SOLEUR_KEEP_LOGDIR:-}" ]] || rm -rf "${SOLEUR_SUITE_LOGDIR:-/nonexistent}"; _soleur_scratch_cleanup 2>/dev/null || true' EXIT
 SOLEUR_SUITE_LOGDIR="$(mktemp -d -t infra-suites.XXXXXXXX)" || {
   echo "FATAL: mktemp -d failed for the per-suite log dir (TMPDIR=$TMPDIR)." >&2
   echo "       Refusing to run: every suite's capture would fail and the accounting" >&2

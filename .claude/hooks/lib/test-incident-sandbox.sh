@@ -79,7 +79,9 @@ _soleur_test_incident_sandbox_init() {
   #                                   merely trying to start.
   # It does NOT use the `-delete` action: that implies `-depth` and would descend, which is a wider
   # blast radius than intended for a sweep running unattended before every hook suite.
-  find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'soleur-inc-*' -mmin +180 \
+  # Base-pinned under the #7004 allocator: when a session root redirected TMPDIR
+  # the enumeration must still scan the BASE, not the root (or it no-ops forever).
+  find "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/tmp}}" -maxdepth 1 -type d -name 'soleur-inc-*' -mmin +180 \
     -exec rm -rf -- {} + 2>/dev/null || true
 
   if ! d=$(mktemp -d -t soleur-inc-XXXXXX) || [ -z "$d" ]; then
