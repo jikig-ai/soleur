@@ -84,11 +84,15 @@ function uuidv5(name: string, namespace: string): string {
 
 // Per-model unit pricing in USD per token. Cache-read tokens bill at ~10% of
 // input; cache-creation tokens at 125% of input FOR THE 5-MINUTE TTL used at
-// the call site below — the 1-hour TTL bills at 200% instead. Anthropic's
-// `usage.cache_creation_input_tokens` does not distinguish the two, so if any
-// call here ever passes `cache_control: { ttl: "1h" }` this row silently
-// under-attributes cache writes by 37.5% with the pinning test still green.
-// (Checked: no `ttl` is passed today, so the 5m default applies.)
+// the call site below — the 1-hour TTL bills at 200% instead. The code prices
+// the combined `usage.cache_creation_input_tokens` at the 5m rate (the SDK also
+// returns a per-TTL split in `usage.cache_creation.ephemeral_{5m,1h}_input_tokens`,
+// which is not read here), so if any call here ever passes
+// `cache_control: { ttl: "1h" }` this row silently under-attributes cache writes
+// by 37.5% with the pricing pin still green. (Checked: neither marker at the
+// call site — the system block's nor the top-level request field's — passes a
+// `ttl`, so the 5m default applies; the Guard 1 exact-shape test in
+// agent-on-spawn-requested-leader-loop.test.ts pins that.)
 // Verified against https://platform.claude.com/docs/en/about-claude/pricing.md
 // on 2026-07-24.
 //
@@ -654,17 +658,24 @@ export async function agentOnSpawnRequestedHandler({
             const sdkResult = (await client.messages.create({
               model: leaderModule.model,
               max_tokens: LEADER_MAX_TOKENS,
+              // Automatic caching: the API places this breakpoint on the last
+              // cacheable block and advances it every turn, so calls 2..N read
+              // the conversation so far from cache. It uses 1 of the request's
+              // 4 breakpoint slots. 5-minute default TTL on purpose;
+              // MODEL_PRICING's cache-write rate assumes it.
+              cache_control: { type: "ephemeral" },
               system: [
                 {
                   type: "text",
                   text: leaderModule.systemPrompt,
+                  // The single explicit marker. Tools render before system, so
+                  // this covers the tool definitions too. Do NOT add per-tool
+                  // markers: security.cve_alert has 5 tools, and 5 + 1 + 1
+                  // exceeds the 4-breakpoint cap (the request 400s).
                   cache_control: { type: "ephemeral" },
                 },
               ],
-              tools: leaderModule.tools.map((t) => ({
-                ...t,
-                cache_control: { type: "ephemeral" },
-              })) as never,
+              tools: leaderModule.tools as never,
               messages: messages as never,
             })) as unknown as AnthropicTurnResult;
 

@@ -18,6 +18,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LEADER_PROMPTS } from "@/server/inngest/leader-prompts";
 
 // --- Module mocks (hoisted by vitest) ----------------------------------------
 
@@ -1156,5 +1157,102 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(leaderId).toBe(
       "agent.spawn.requested:engineering.pr_review_pending",
     );
+  });
+});
+
+// --- Guard 1: cache breakpoints stay under the API cap (ADR-042 §I5) ---------
+
+// Counts every `cache_control` object key anywhere in the request: top-level,
+// system, tools and messages. A quoted "cache_control" inside prompt text
+// serializes as \"cache_control\", which this regex does not match, so only an
+// object key counts. Such a key in a tool schema or tool_use input would fail
+// loud (a false RED), never silently.
+function countBreakpoints(params: unknown): number {
+  return JSON.stringify(params).match(/"cache_control"/g)?.length ?? 0;
+}
+
+type CreateParams = Record<string, unknown> & {
+  system: { cache_control?: unknown }[];
+  messages: { role: string; content: unknown }[];
+};
+
+function expectCompliantRequest(params: CreateParams, cls: string): void {
+  // The Messages API rejects a request with more than 4 breakpoints (the
+  // top-level automatic one included). `=== 2` is the tighter pin: one explicit
+  // system marker plus the automatic one, on every turn.
+  expect(countBreakpoints(params)).toBeLessThanOrEqual(4);
+  expect(countBreakpoints(params)).toBe(2);
+  // Exact shape, so no `ttl` can creep in: MODEL_PRICING's cache-write rate
+  // assumes the 5-minute default.
+  expect(params.cache_control).toEqual({ type: "ephemeral" });
+  expect(params.system.at(-1)?.cache_control).toEqual({ type: "ephemeral" });
+  // Tools go out exactly as the class module defines them, with no marker.
+  expect(params.tools).toEqual(
+    LEADER_PROMPTS[cls as keyof typeof LEADER_PROMPTS].tools,
+  );
+}
+
+describe("Guard 1 — leader-loop cache breakpoints (ADR-042 §I5)", () => {
+  it.each(Object.keys(LEADER_PROMPTS))(
+    "%s: one system marker plus top-level automatic caching, tools unmarked",
+    async (cls) => {
+      const captured: CreateParams[] = [];
+      anthropicCreateSpy.mockImplementation(async (p: CreateParams) => {
+        captured.push(structuredClone(p));
+        return endTurnResponse();
+      });
+      const { agentOnSpawnRequestedHandler } = await import(
+        "@/server/inngest/functions/agent-on-spawn-requested"
+      );
+      await agentOnSpawnRequestedHandler({
+        event: makeEvent({ sourceRef: "pr-acme:repo:7", actionClass: cls }),
+        step: makeStep(),
+        logger,
+      });
+      // Floor: a class that exits before `create` must not pass over zero calls.
+      expect(captured.length).toBeGreaterThan(0);
+      for (const params of captured) expectCompliantRequest(params, cls);
+    },
+  );
+
+  it("multi-turn: every request stays compliant as the conversation grows", async () => {
+    const cls = "engineering.pr_review_pending";
+    const toolTurn = () =>
+      endTurnResponse({
+        tools: [
+          {
+            name: "createComment",
+            input: { owner: "acme", repo: "repo", issue_number: 7, body: "ok" },
+          },
+        ],
+      });
+    const responses = [toolTurn(), toolTurn(), endTurnResponse()];
+    // The handler passes one shared `messages` array and appends to it after
+    // each call, so `mock.calls[i][0]` would all show the final state. Clone
+    // each request as it is made.
+    const captured: CreateParams[] = [];
+    anthropicCreateSpy.mockImplementation(async (p: CreateParams) => {
+      captured.push(structuredClone(p));
+      return responses.shift();
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7", actionClass: cls }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toMatchObject({ acknowledged: true });
+    expect(captured).toHaveLength(3);
+    expect(captured[0].messages).toHaveLength(1);
+    for (const params of captured) expectCompliantRequest(params, cls);
+    const blockTypes = captured[2].messages.flatMap((m) =>
+      Array.isArray(m.content)
+        ? (m.content as { type: string }[]).map((b) => b.type)
+        : [],
+    );
+    expect(blockTypes).toContain("tool_use");
+    expect(blockTypes).toContain("tool_result");
   });
 });
