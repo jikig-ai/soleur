@@ -15,6 +15,52 @@ lane: cross-domain
 
 # security: rotate the web-probes-read prd Doppler token held in retained web-1 snapshot 411798619
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. **Agents:**
+
+- soleur:engineering:review:security-sentinel
+- soleur:engineering:review:user-impact-reviewer
+- soleur:engineering:review:test-design-reviewer
+- soleur:engineering:review:observability-coverage-reviewer
+- soleur:engineering:infra:terraform-architect (verified inline after its report did not return)
+- a verify-the-negative sweep
+
+**Key improvements:**
+
+1. **The sweep gained a transitive test.** The leaked token could read the read/write
+   `GHCR_MINTER_DOPPLER_TOKEN`, now **#8737**, which also covers an orphaned
+   `ghcr-minter-write-20260729`. #8734 now records the wider exposure window (2026-07-18 until the
+   rotation) and the ordering (#8737 first).
+2. **The guards cannot be satisfied by a vacuous checker.** Exit 2 means "instrument broken, not
+   evidence", every guard has a C0 control row, and mutations are block-scoped. New rows cover a hash
+   moved into `input`, floor erosion, a second reference inside `hcloud_server.web`, whole-file
+   `lifecycle` scanning, schema drift, a live-path `curl` stub, and credential-leak sentinels.
+   `PROMOTED_FILES` promotion is now required.
+3. **Observability is honest about what exists.** The git-data beat is paused and absent (#6548), so
+   the git-data probe is proven through a literal Logs SQL query with a positive control. Every
+   failure mode names its layer (workflow run log, vector). `UNAVAILABLE` is inconclusive, not a
+   verdict.
+4. **The verifier's credential is pinned.** A read service token gets 403 on the list endpoint, so
+   `DOPPLER_TOKEN_TF` is resolved Tier-B first. It is passed by file descriptor, with timeouts and
+   the no-paging response verified.
+5. **User-impact coverage.** The SSH stage must have nothing pending before merge, so only the four
+   probe installers re-fire. The rehearsal asserts that web-1 stays in the firewall attachment. The
+   installers never restart the app.
+
+**Verified premises:**
+
+- `name` is `ForceNew: true` in `DopplerHQ/terraform-provider-doppler` at `v1.21.2`
+  (`doppler/resource_service_token.go`).
+- `create_before_destroy` propagates only **to dependencies** of the CBD resource. The docs say:
+  "Terraform propagates and applies `create_before_destroy` behavior to all resource dependencies…
+  Because resource `A` is dependent on resource `B`, Terraform enables `create_before_destroy` for
+  resource `B` implicitly"
+  (<https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle>). The token has no
+  dependencies, so `hcloud_server.web` and the installers, which depend *on* it, keep their default
+  destroy-then-create order. web-host-replace semantics are unchanged.
+- Every negative claim in the plan was confirmed by file:line. None was contradicted.
+
 ## Overview
 
 `doppler_service_token.web_probes` (Doppler name `web-probes-read`, config `soleur/prd`, access
@@ -140,13 +186,28 @@ provisioners, web-1's first-boot user_data (2026-03-17), `soleur-doppler-token.t
 |---|---|---|---|---|
 | `web-probes-read` (soleur/prd) | 2026-07-18 | yes | **yes**: 4 installers, run 29642722055 | **ROTATE (this PR)** |
 | `workspaces-luks-boot` (prd_workspaces_luks) | 2026-07-18 | yes | yes | already rotated by #8703 (`…-2026-09-24`, created 09-24T11:35Z); the old token is gone from the API listing |
-| web-1 first-boot `var.doppler_token` (webhook-deploy) | ≤2026-03-17 | yes | yes | already revoked 2026-07-30 (`server.tf` `local.webhook_doppler_token_env` rationale); today's `DOPPLER_TOKEN` in prd_terraform is `terraform-prd-20260730` (confirmed via `/v3/me`), created after the image |
+| web-1 first-boot root-variable `doppler_token` (webhook-deploy; a Doppler token, not a GitHub credential) | ≤2026-03-17 | yes | yes | already revoked 2026-07-30 (`server.tf` `local.webhook_doppler_token_env` rationale); today's `DOPPLER_TOKEN` in prd_terraform is `terraform-prd-20260730` (confirmed via `/v3/me`), created after the image |
 | `github-ci-prd` (soleur/prd) | 2026-03-29 | yes | no: GitHub secret `DOPPLER_TOKEN_PRD`, used only runner-side (release migrations, verify, secret-presence assert, registry preflight); never forwarded to a host | out of scope |
 | `web-arm-read` (prd_terraform) | 2026-07-18 | yes | no: `github_actions_secret.doppler_token_web_arm`, runner-side arm gate only | out of scope |
 | `ci-tf-write`, `github-actions-ci` ×2 (prd_terraform) | 03-21 / 05-20 | yes | no: CI-only | out of scope |
 | `cloud-scheduled-tasks` (prd_scheduled), `ci-cla-evidence-workflow` (prd_cla), `kb-drift-ci-tf` / `kb-drift-tf-prd` (prd_kb_drift_walker), `dev_scheduled_ci` (dev_scheduled) | 03-24 … 05-20 | yes | no: CI-only | out of scope |
 | `zot-registry-boot` (soleur-registry/prd) | 2026-07-07 | yes | no: registry host only, and no registry image exists | out of scope |
 | `inngest-boot`, `inngest-cutover-arm`, `git-data-luks-boot`, `git-data-root-read`, `token-drift-ci-tf-*`, `terraform-prd-20260730`, `ghcr-minter-write*` | ≥2026-07-24 | **no** | n/a | out of scope |
+
+**Transitive test (added by deepen-plan security review).** A second way to reach web-1's leak is
+to read a token's **key stored as a value in a config the leaked token can read**. On 2026-09-24 a
+names-only scan of `soleur/prd` values against `^dp\.(st|sa|pt|ct)\.` found one hit:
+`GHCR_MINTER_DOPPLER_TOKEN`. It is `ghcr-minter-write`, slug `61c939b5…`, **read/write** on prd,
+created 2026-07-30. It stays live after this PR, so it is filed as **#8737**. The same listing shows
+an orphaned live `ghcr-minter-write-20260729` (slug `e8e5187f…`, read/write prd) that no Terraform
+resource declares; it is also in #8737. Neither rotation is folded in here. Rotating the minter
+changes the running app's minter until the next deploy, so it is its own change with its own
+deploy-coupled verification.
+
+**Usage evidence.** Doppler's `/v3/logs` and per-config logs record management events only (token
+create and delete, secret writes), never reads. So whether slug `01941a89` was used from outside
+web-1 or web-2 cannot be established through the API, and the evidence is INCONCLUSIVE. This is
+recorded on #8734.
 
 **Residual stated plainly.** A Doppler token that someone put on web-1 by hand (for example a
 `doppler login` in an SSH session) would not appear in any repo write path. The API cannot attribute
@@ -268,8 +329,9 @@ Write the Guard Contract matrix first, then the suite.
   token sequences, `STR` tokens whose `has_template` is true (the installers' `printf` references live
   there), and `HEREDOC` bodies.
 - **Floors** are counted at the call site, never through `fail`, per `scripts/guard-vacuity-floor.test.sh`.
-  If that suite's derived population picks this file up, promote it through `PROMOTED_FILES`. Never
-  raise the ratchet.
+  Promote this suite through that file's `PROMOTED_FILES` in this PR. This is required:
+  `apps/web-platform/infra/` is in `DEFERRED_DIRS`, and `MAX_DEFERRED` only ratchets down. Never raise
+  the ratchet. The shared rules and the full matrix are in the Guard Contract.
 - **Suite header note:** the installer floor (4) encodes today's probe count. Retiring a probe on
   purpose means editing the floor on purpose.
 - **Registration:** add the suite to `.github/workflows/infra-validation.yml` next to the web-probe
@@ -288,10 +350,18 @@ command. The verifier is parameterized, and its defaults are this rotation's val
 
 The next rotation, of this token or a sibling, then needs new arguments, not a new script.
 
-- **Read.** `GET /v3/configs/config/tokens?project=soleur&config=<config>`, authorized with
-  `DOPPLER_TOKEN_TF`. The token comes from the environment, or else from
-  `doppler secrets get DOPPLER_TOKEN_TF --plain -p soleur -c prd_terraform`. No xtrace. It never prints
-  a key; the list endpoint returns none.
+- **Read.** `GET /v3/configs/config/tokens?project=soleur&config=<config>`. It needs a *workplace*
+  token: a read service token gets HTTP 403 on this endpoint (measured 2026-09-24).
+  - **Credential.** `DOPPLER_TOKEN_TF` (`dp.pt.`, Tier-B), resolved in this order: the environment;
+    then `soleur-infra-privileged/prd`; then the pre-#8209-O10 fallback `soleur/prd_terraform`.
+  - **Handling.** The header is passed on a file descriptor
+    (`curl -K <(printf 'header = "Authorization: Bearer %s"\n' "$T")`), never in argv. It uses
+    `set +x`, runs `unset T` after the call, uses `--max-time 10` on both the `doppler` and `curl`
+    calls, and never echoes the command on error.
+  - **No paging.** The endpoint returns no paging field (measured 2026-09-24: the top-level keys are
+    `success` and `tokens`). If a `page` key ever appears, that is `UNAVAILABLE`.
+  - **Fixture mode.** When `WEB_PROBES_TOKEN_LIST_JSON` is set, no credential is fetched, and the
+    verdict line gets a trailing `(fixture)` marker, so a stray variable is visible in a live run.
 - **Verdicts.** Each exit goes through one verdict function:
 
   | Verdict | Exit | Condition |
@@ -324,6 +394,10 @@ itself is the fragile step:
    - **Check the main stage deletes nothing else.** Read the plan summary of the latest `main` push
      run's main `Terraform apply` step and confirm it deleted nothing in the targeted set.
      `[ack-destroy]` acks every delete in the plan, not only this one.
+   - **Check the SSH stage has nothing pending.** That same run's
+     `Terraform apply (SSH-provisioned resources, over the bridge)` step must read
+     `0 added, 0 changed, 0 destroyed`. Then this merge re-fires only the four probe installers, and
+     none of the roughly 20 other web-1 installers, such as the nftables, vector and journald ones.
 2. **Squash message.** Write it with `gh pr merge --squash --body-file <file>`. The file carries
    `Ref #8705`, `Ref #8734`, and `[ack-destroy]` on its own line, outside any fence or trailer.
    Afterwards, check that `git log -1 --format=%B origin/main` contains the line.
@@ -351,7 +425,8 @@ itself is the fragile step:
    running the command below with `-f plan_only=true` added. It runs the job's gate with no apply,
    `-replace` or host contact. This is the first web-host-replace with a create-before-destroy token
    among the server's dependencies, so the rehearsal checks that no deposed object makes the gate
-   refuse. Then run the real dispatch:
+   refuse. In its plan log, confirm that `hcloud_firewall_attachment.web` is an in-place update whose
+   `server_ids` still contain web-1's id (`123931471`). Then run the real dispatch:
 
    ```bash
    gh workflow run apply-web-platform-infra.yml \
@@ -469,10 +544,24 @@ stay green.
   Doppler config, including `SUPABASE_SERVICE_ROLE_KEY` (which bypasses RLS on every user's rows) and
   the BYOK encryption material. Anyone holding image `411798619` holds a token that can read the
   *current* values until this merges.
-- **Residual (not closed by this PR):** the service-role key *value*, and the other prd values as of
-  2026-07-23, very likely persist in image `411798619` (Docker container env, Doppler fallback
-  files). Rotating a token cannot revoke a copied value. This is tracked in **#8734**: delete the image
-  by 2026-10-06 at the latest, or rotate the values. The PR text must say "forward read access
+- **Residual (not closed by this PR):**
+  - **Copied values.** The image very likely holds the service-role key *value* and the other prd
+    values (Docker container env, Doppler fallback files). Worse, the old token could read **any prd
+    value as it stood between 2026-07-18 and this rotation**. Rotating a token cannot revoke a
+    copied value. Tracked in **#8734**: delete the image by 2026-10-06 at the latest, or rotate the
+    values. Doppler's API logs no secret reads, so evidence that the token was not used is
+    INCONCLUSIVE.
+  - **Transitive credential.** The old token could read `GHCR_MINTER_DOPPLER_TOKEN`, a
+    **read/write** prd token that survives this rotation. Tracked in **#8737**, which must precede any
+    #8734 value rotation.
+- **What the host steps cannot reach (user-impact review):**
+  - The four web-1 installers only rewrite `/etc/default/*` and `enable --now` their own timers. They
+    never restart docker, cloudflared or the app, and the probes take no corrective action.
+  - The web-2 replace leaves the app's serving path alone: the only tunnel connector is web-1
+    (`web_tunnel_connector = each.key == "web-1"`), and the gate refuses any change to
+    `cloudflare_record.app`.
+  - The replace does update the fleet-wide `hcloud_firewall_attachment.web` in place. The
+    `plan_only` rehearsal asserts that web-1's server id stays in `server_ids`. The PR text must say "forward read access
   closed; value exposure tracked in #8734", never "exposure closed" (CLO wording rule).
 - **Brand-survival threshold:** `single-user incident`. A service-role read of one user's data from a
   leaked image is brand-ending even once. So CPO sign-off applies at plan time, and
@@ -483,39 +572,48 @@ stay green.
 ```yaml
 liveness_signal:
   what: >-
-    Better Stack heartbeats fed by the four probe units, each of which beats ONLY after `doppler run`
-    authenticates with the delivered token — soleur-web-nic-guard-web-1, soleur-web-zot-consumer-web-1,
-    soleur-web-nic-guard-web-2, soleur-web-zot-consumer-web-2, soleur-inngest-consumer-prd, and the
-    git-data heartbeat. A beat after the merge is in-surface proof the new token authenticates on that host.
-  cadence: "60s probe timers (nic-guard 5 min); beats period 180s/360s, grace 60s/120s"
+    Better Stack heartbeats fed by the probe units, each of which beats ONLY after `doppler run`
+    authenticates with the delivered token (the heartbeat URL itself comes from the doppler run env):
+    soleur-web-nic-guard-web-1, soleur-web-zot-consumer-web-1, soleur-web-nic-guard-web-2,
+    soleur-web-zot-consumer-web-2, soleur-inngest-consumer-prd. The git-data beat
+    (betteruptime_heartbeat.git_data_prd, "soleur-git-data-prd") is declared paused and is absent
+    from the live heartbeat list (#6548), so the git-data probe is proven through its vector
+    (Better Stack Logs) lines instead.
+  cadence: "probe timers 60s (nic-guard 5 min); heartbeats period 180s grace 60s (zot, inngest-consumer), period 360s grace 120s (nic-guard) — live-read 2026-09-24"
   alert_target: "operator email (Better Stack heartbeat alerting, email=true)"
-  configured_in: "apps/web-platform/infra/web-probe.tf (betteruptime_heartbeat.web_zot_consumer / .web_nic_guard, for_each var.web_hosts)"
+  configured_in: "apps/web-platform/infra/web-probe.tf (betteruptime_heartbeat.web_zot_consumer / .web_nic_guard, for_each var.web_hosts); inngest.tf (inngest_consumer)"
 error_reporting:
-  destination: "Better Stack Logs Source 4 (web-host journald via Vector) for probe FATAL lines; GitHub Actions run conclusion for the apply"
-  fail_loud: "apply run red at `Terraform apply (SSH-provisioned resources, over the bridge)`; or the #7539 notify-ops email `SSH stage SKIPPED`; heartbeats flip to down"
+  destination: "vector → Better Stack Logs (web-host journald, SYSLOG_IDENTIFIER web-nic-guard / web-zot-consumer-probe / web-git-data-probe / inngest-consumer-probe) for probe FATAL and Doppler 401 lines; workflow run log for the apply"
+  fail_loud: "workflow run log red at `Terraform apply (SSH-provisioned resources, over the bridge)`; or the #7539 notify-ops email `SSH stage SKIPPED`; heartbeats flip to down"
 failure_modes:
   - mode: "SSH stage fails or is skipped after the main apply deleted the old token (web-1 probes hold a dead token)"
-    detection: "apply run conclusion != success at the SSH step, or ssh_apply_skip=true notify-ops email; web-1 heartbeats down within period+grace"
+    detection: "workflow run log: SSH step conclusion != success, or the ssh_apply_skip=true notify-ops email; web-1 heartbeats down within period+grace"
     alert_route: "GitHub failure notification + Better Stack email; recovery `gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun`"
-  - mode: "web-2 not re-seeded (dispatch not run or failed)"
-    detection: "soleur-web-nic-guard-web-2 / soleur-web-zot-consumer-web-2 heartbeats down"
-    alert_route: "Better Stack email"
+  - mode: "merge run cancelled/superseded, [ack-destroy] lost, every later push apply HALTs"
+    detection: "workflow run log: the push run for the merge head_sha concluded cancelled, or a later run's destroy-guard HALT names doppler_service_token.web_probes"
+    alert_route: "GitHub failure notification; recovery = comment-only commit carrying [ack-destroy] (Phase 3 step 4)"
+  - mode: "web-2 not re-seeded (dispatch not run, dropped, or failed)"
+    detection: "soleur-web-nic-guard-web-2 / soleur-web-zot-consumer-web-2 heartbeats down; workflow run log shows no web_host_replace success"
+    alert_route: "Better Stack email; postmerge step re-dispatches"
+  - mode: "web-2 shared-beat units (inngest-consumer, git-data) 401 while web-1 keeps the shared beats up (masked)"
+    detection: "vector: Better Stack Logs SQL for host soleur-web-2 with those SYSLOG_IDENTIFIERs shows FATAL/401 lines (query in Acceptance Criteria)"
+    alert_route: "postmerge verification step (blocks closing #8705)"
   - mode: "new token create fails in the main apply"
-    detection: "main `Terraform apply` step red; create_before_destroy means the old token was NOT deleted, so no host loses auth"
+    detection: "workflow run log: main `Terraform apply` step red; create_before_destroy means the old token was NOT deleted, so no host loses auth"
     alert_route: "GitHub failure notification"
   - mode: "rotation silently skipped (e.g. merged with [skip-web-platform-apply])"
-    detection: "web-probes-token-rotation-verify.sh prints STALE (exit 1); the post-merge AC read fails"
+    detection: "web-probes-token-rotation-verify.sh prints STALE (exit 1)"
     alert_route: "ship/postmerge verification step (blocks closing #8705)"
-  - mode: "web-2 replace dispatch silently dropped by the workflow concurrency group"
-    detection: "no workflow_dispatch run with a web_host_replace job conclusion=success after the dispatch; web-2 beats stay down"
-    alert_route: "postmerge verification step re-dispatches; Better Stack email meanwhile"
+  - mode: "verifier cannot read the listing (credential moved by #8209 O10, Doppler outage)"
+    detection: "web-probes-token-rotation-verify.sh prints UNAVAILABLE (exit 2) — inconclusive, never a verdict"
+    alert_route: "postmerge step retries once, then escalates in the #8705 checklist comment; #8705 stays open"
 logs:
-  where: "GitHub Actions run logs (apply-web-platform-infra.yml); Better Stack Logs Source 4 for host-side probe lines"
+  where: "workflow run log (apply-web-platform-infra.yml runs); vector → Better Stack Logs default shared source for host-side probe lines"
   retention: "GitHub Actions 90 days; Better Stack per plan retention"
 discoverability_test:
   command: bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh
   expected_output: "ROTATED"
-  credentials_required: "Doppler token-list read on soleur/prd (DOPPLER_TOKEN_TF from Doppler soleur/prd_terraform) — service-token metadata (slug, name, created_at) is exposed by no unauthenticated endpoint, and the property verified (the snapshot-exposed token slug 01941a89 no longer exists; a replacement post-dates the image) is observable only through that listing."
+  credentials_required: "Doppler workplace token-list read on soleur/prd (DOPPLER_TOKEN_TF, Tier-B: soleur-infra-privileged/prd, pre-#8209-O10 fallback soleur/prd_terraform) — service-token metadata (slug, created_at) is exposed by no unauthenticated endpoint and a read service token gets HTTP 403 on the list (measured 2026-09-24), and the property verified (slug 01941a89 no longer exists; a replacement post-dates the image) is observable only through that listing."
 ```
 
 ## Encryption Posture
@@ -549,67 +647,89 @@ exception:
 
 ## Guard Contract
 
-The plan review cut this section down. The leaked-names denylist and the name-date pattern are
-**gone**: a token's name is only a label, and re-using a name mints a new key rather than reviving the
-leaked one (simplicity finding). The class taxonomy is gone too, and the heredoc and alias rows were
-folded into one rule (DHH).
+The plan review cut this contract down. The leaked-names denylist and the name-date pattern are
+gone: a token's name is only a label, and re-using a name mints a new key, it does not revive the
+leaked one. Deepen-plan (test-design review) then hardened what remained.
+
+**Rules every guard below shares.** They are written into the suite; they are not left to the
+implementer.
+
+- **Exit codes.** The embedded `python3` checker exits `0` for PASS and `1` for a property violation.
+  It must print a violation message naming the block, for example
+  `G1 terraform_data.git_data_probe_install: no sha256 trigger in triggers_replace`. It exits `2` for
+  any uncaught exception or `ScanError`, via a top-level `try/except`.
+- **What counts as RED.** A mutation row is RED only if the checker exits `1` **and** prints the
+  expected message. Exit `2` or higher is "instrument broken, not evidence", and the row fails.
+- **Confirm the mutation applied.** Each mutation is applied to a temp copy, and the copy must differ
+  from the original, or the row reports `mutation did not apply`.
+- **Control row C0.** An unmutated temp copy must PASS. Without it, a checker that always exits 1 would
+  pass every RED row.
+- **Floors.** Floors are counted at the call site, never through `fail`. Each block floor inside the
+  Python checker is also passed to bash as its own assertion row, so `scripts/guard-vacuity-floor.test.sh`
+  can see it. The suite is added to that file's `PROMOTED_FILES` in this PR, as a requirement: its
+  directory is in `DEFERRED_DIRS`, and `MAX_DEFERRED` only ratchets down. Put the `MIN_ASSERTIONS`
+  literal directly above its `if`, and add an ok()/no() self-test with a `pass+fail==cases` check.
 
 ### Guard 1 — every provisioner consumer of the probe token re-fires on rotation
 
-**Property.** Every block that references `doppler_service_token.web_probes` is one of three kinds.
-A `resource "terraform_data"` block is allowed only when its `triggers_replace` expression contains
-`sha256(doppler_service_token.web_probes.key)`. The other two are the allowed exceptions:
+**Property.** Every reference to `doppler_service_token.web_probes` in `apps/web-platform/infra/*.tf`
+sits in one of three places:
 
-- the defining `resource "doppler_service_token" "web_probes"` block;
-- the `web_probes_token = doppler_service_token.web_probes.key` argument inside
-  `resource "hcloud_server" "web"`, the fresh-host path.
+1. Inside `resource "terraform_data"` blocks whose own `triggers_replace` expression contains
+   `sha256(doppler_service_token.web_probes.key)`.
+2. The single `web_probes_token = doppler_service_token.web_probes.key` argument of
+   `resource "hcloud_server" "web"`. The exception is matched on that argument, not on the whole
+   block.
+3. The defining `resource "doppler_service_token" "web_probes"` block.
 
-Any other reference is RED: a `locals` alias, an `output`, a `github_actions_secret`, or a
-`terraform_data` without the hash.
+Anything else is RED.
 
-**Assembly.** The chokepoint is every `*.tf` file of `apps/web-platform/infra/`, lexed by
-`tokenize()`. Its heredoc token carries its body, per Phase 2. References are matched in `ID . ID`
-sequences, templated `STR` tokens, and `HEREDOC` bodies. The population is counted **per enclosing
-top-level block**, never per reference. Each installer holds two references, one in its trigger and
-one in its `printf`, and the block count is what the property is about.
+**Assembly.** The input is every `*.tf` file in `apps/web-platform/infra/`, lexed by `tokenize()`
+(its `HEREDOC` token carries the body, per Phase 2). The reference matcher:
 
-Floors, counted at the call site:
+- matches `ID . ID` sequences, tolerating `NL` tokens inside brackets;
+- matches templated `STR` tokens and `HEREDOC` bodies by word-boundary regex, so `web_probes_v2`
+  never counts as a match.
 
-| Block kind | Floor |
-|---|---|
-| hash-bearing `terraform_data` blocks | at least 4 |
-| `hcloud_server.web` exception | exactly 1 |
-| definition block | exactly 1 |
+The population is counted **per enclosing top-level block**. Floors:
 
-Targeting in the post-bridge SSH stage is enforced by `terraform-target-parity.test.ts` Guard 1. It is
-cited here, not duplicated.
+- hash-bearing `terraform_data` blocks: at least 4;
+- the `hcloud_server.web` exception argument: exactly 1;
+- the definition block: exactly 1.
+
+Targeting in the post-bridge SSH stage is `terraform-target-parity.test.ts` Guard 1. This guard
+cites it rather than duplicating it.
 
 **Mutation matrix:**
 
-| # | Mutation (each must be confirmed applied to the temp copy) | Expected |
+| # | Mutation (confirmed applied; scoped to the named block's line range) | Expected |
 |---|---|---|
-| 1 | Delete the `nonsensitive(sha256(doppler_service_token.web_probes.key))` line from `git_data_probe_install`'s `triggers_replace` | RED |
+| 1 | In `git_data_probe_install` only, delete the `nonsensitive(sha256(doppler_service_token.web_probes.key))` line. It is the 4th of 4 identical lines, so edit inside that block's range. | RED, exactly one violation, naming `git_data_probe_install` |
 | 2 | Guard dispatch: scan an empty directory, or break the matcher so it matches nothing | RED (floors) |
-| 3 | Add a fifth `terraform_data` whose `remote-exec` `printf` interpolates the key, with no hash trigger, after four compliant members | RED |
+| 3 | Add a fifth `terraform_data` after four compliant ones. Its `remote-exec` `printf` interpolates the key, and it has no hash trigger. | RED, naming the new block |
 | 4 | Move the hash into a `#` comment inside `triggers_replace` | RED (comments are lexed out) |
-| 5 | Add `locals { probe_tok = doppler_service_token.web_probes.key }` and consume `local.probe_tok` from a new `terraform_data` | RED (reference outside the allowed blocks) |
-| 6 | Put the only key reference of a new `terraform_data` inside a `<<-EOT … EOT` heredoc | RED (heredoc bodies are matched) |
+| 5 | Add `locals { probe_tok = doppler_service_token.web_probes.key }` | RED (reference outside allowed blocks) |
+| 6 | A new `terraform_data` whose only key reference is inside a `<<-EOT … EOT` heredoc | RED (heredoc bodies are matched) |
+| 7 | Move the hash out of `triggers_replace` into `input = …` in the same block | RED (the hash must be inside `triggers_replace`) |
+| 8 | Delete the whole `inngest_consumer_probe_install` block | RED from the floor message (3 < 4) |
+| 9 | Add a second key reference inside `hcloud_server.web`, such as a `provisioner "remote-exec"` that prints it | RED (the exception is the one argument, not the block) |
+| 10 | A new `terraform_data` whose reference is split across lines inside parentheses (`(doppler_service_token` / `.web_probes.key)`) with no hash | RED |
 
 **Harness rows:**
 
 | # | Row | Expected |
 |---|---|---|
+| C0 | Unmutated temp copy | PASS |
 | H1 | Must-PASS non-canonical input: one installer's trigger rewritten as a bare `triggers_replace = nonsensitive(sha256(doppler_service_token.web_probes.key))`, the `workspaces-luks.tf` form | PASS |
-| H2 | Suite edit: stub the per-block check to always return ok | RED (the call-site block counter ≠ the verdict count) |
+| H2 | Run the battery against a **copy of the suite** whose per-block check is stubbed to always return ok. The inner run sets an environment variable that skips the harness rows, so it does not recurse. | The inner run reports rows 1, 3, 5, 6, 7 and 9 as not caught, so the outer row is RED |
 
 ### Guard 2 — the token keeps `create_before_destroy`
 
-**Property.** `resource "doppler_service_token" "web_probes"` carries
-`lifecycle { create_before_destroy = true }`, so a failed create during any future rotation can never
-land after the delete.
+**Property.** The one `resource "doppler_service_token" "web_probes"` block itself carries
+`lifecycle { create_before_destroy = true }`.
 
-**Assembly.** Exactly one lexed `doppler_service_token` block labelled `web_probes`, found anywhere in
-the root. Finding zero blocks, or two, is RED.
+**Assembly.** The lexed `doppler_service_token` blocks labelled `web_probes` across the root. The
+count must be exactly one, and the `lifecycle` check is scoped to that block's own tokens.
 
 **Mutation matrix:**
 
@@ -618,42 +738,52 @@ the root. Finding zero blocks, or two, is RED.
 | 1 | Remove the `lifecycle` block | RED |
 | 2 | Set `create_before_destroy = false` | RED |
 | 3 | Comment out the `lifecycle` block | RED |
-| 4 | Guard dispatch: rename the resource label so the block count is 0 | RED |
+| 4 | Guard dispatch: rename the resource label, leaving a count of 0 | RED |
+| 5 | Remove `lifecycle` from `web_probes` and add `create_before_destroy = true` to a second, synthetic resource in the same file | RED (the check does not scan the whole file) |
+| 6 | Duplicate the `web_probes` block, leaving a count of 2 | RED |
 
 **Harness rows:**
 
 | # | Row | Expected |
 |---|---|---|
-| H1 | Must-PASS non-canonical input: the `lifecycle` block written on one line versus multi-line | PASS in both forms |
+| C0 | Unmutated temp copy | PASS |
+| H1 | Must-PASS non-canonical input: `lifecycle` written on one line, and written across several lines | PASS in both forms |
 
-### Guard 3 — the rotation verifier reports ROTATED only on positive evidence
+### Guard 3 — the rotation verifier prints ROTATED only on positive evidence
 
-**Property.** `web-probes-token-rotation-verify.sh` exits 0 with `ROTATED` if and only if all three
-hold:
+**Property.** `web-probes-token-rotation-verify.sh` exits 0 with `ROTATED` if and only if all of
+these hold:
 
-- the listing is a non-empty `tokens` array;
-- no slug in it starts with `--retired-slug`;
-- a token whose name starts with `--name-prefix` has `created_at` later than `--not-before`.
+- the listing is a non-empty `tokens` array in which every entry has `slug`, `name` and
+  `created_at`;
+- no slug starts with `--retired-slug`;
+- a token whose name starts with `--name-prefix` has a `created_at` (parsed with fractional seconds
+  tolerated) strictly later than `--not-before`.
 
-**Assembly.** One verdict function, one input (the listing body, from the fixture seam or the API).
-The suite asserts that each verdict word occurs exactly once in the script, and that no `exit 0` sits
-outside the verdict function.
+**Assembly.** One verdict function with one input: the listing body, which comes from the fixture
+seam or from the live `curl`. The suite asserts two things about the script: each verdict word
+appears once, and no `exit 0` sits outside the verdict function. At least one row drives the live
+fetch path through a stubbed `curl` on `PATH`.
 
-**Mutation matrix:** (fixtures, synthesized slugs and names only)
+**Mutation matrix:** (fixtures use synthesized slugs and names only)
 
-| # | Fixture | Expected |
+| # | Input | Expected |
 |---|---|---|
 | 1 | `{"tokens": []}` | `UNAVAILABLE`, exit 2 |
 | 2 | `{}`, or a body that is not JSON | `UNAVAILABLE`, exit 2 |
-| 3 | The retired slug together with a dated replacement, a second member after a compliant first | `STALE`, exit 1 |
+| 3 | The retired slug alongside a dated replacement (a second member after a compliant first) | `STALE`, exit 1 |
 | 4 | Retired slug absent; replacement `created_at` earlier than `--not-before` | `MISSING`, exit 1 |
-| 5 | Retired slug absent; no token with the prefix | `MISSING`, exit 1 |
+| 5 | Retired slug absent; no token has the prefix | `MISSING`, exit 1 |
+| 6 | Tokens missing the `slug` field | `UNAVAILABLE`, exit 2 |
+| 7 | Replacement `created_at` exactly equal to `--not-before` | `MISSING`, exit 1 |
+| 8 | Live path: a stubbed `curl` on `PATH` exits 22 or returns a 401 body | `UNAVAILABLE`, exit 2 |
+| 9 | Live path with `DOPPLER_TOKEN_TF` set to a sentinel value | the sentinel appears in neither stdout nor stderr, and not in the stub's recorded argv |
 
 **Harness rows:**
 
 | # | Row | Expected |
 |---|---|---|
-| H1 | Must-PASS non-canonical input: a rotated listing that also holds unrelated tokens and a later `web-probes-read-2027-01-15` | `ROTATED`, exit 0 |
+| H1 | Must-PASS non-canonical input: a rotated listing with unrelated tokens, a later `web-probes-read-2027-01-15`, and millisecond `created_at` values (`…T10:00:00.123Z`) | `ROTATED`, exit 0 |
 
 ## Files to Edit
 
@@ -670,8 +800,8 @@ outside the verdict function.
   a 2026-09-24 addendum paragraph (Phase 1 step 6).
 - `knowledge-base/engineering/operations/runbooks/web-host-replace.md`: add "re-seed a rotated baked
   credential" to the route's documented uses (Phase 1 step 6).
-- `scripts/guard-vacuity-floor.test.sh`: edit only if its derived population picks up the new suite,
-  and then only through `PROMOTED_FILES` (check at work time).
+- `scripts/guard-vacuity-floor.test.sh`: add the new suite to `PROMOTED_FILES`. This is required
+  (deepen-plan test-design finding).
 
 ## Files to Create
 
@@ -739,7 +869,7 @@ Checked 77 open `code-review` issues against every planned path.
   `terraform_data` replaces (their triggers read the not-yet-known key).
 - [ ] The first line of the PR body answers "does merging this alone mutate production?" with **yes**:
   the merge apply mints the new token and deletes `web-probes-read`, hence `[ack-destroy]`.
-- [ ] The PR body carries `Ref #8705` and `Ref #8734`, never `Closes`, and
+- [ ] The PR body carries `Ref #8705`, `Ref #8734` and `Ref #8737`, never `Closes`, and
   `gh pr view <N> --json closingIssuesReferences` returns `[]`. It says "forward read access closed;
   value exposure tracked in #8734", never "exposure closed". It names the web-2 re-seed and the web-2
   heartbeat alert window.
@@ -760,15 +890,27 @@ Checked 77 open `code-review` issues against every planned path.
   - `soleur-web-nic-guard-web-1`
   - `soleur-web-zot-consumer-web-1`
   - `soleur-inngest-consumer-prd`
-  - the git-data heartbeat
 
-  web-2 still holds a dead token at this point, so the shared beats prove web-1 alone.
+  web-2 still holds a dead token at this point, so the shared beat proves web-1 alone.
+  `soleur-git-data-prd` is paused and missing from the live list (#6548). Prove the git-data probe on
+  web-1 instead, with the Logs query below: host `soleur-web-platform`, identifier
+  `web-git-data-probe`. Require at least one row after the SSH stage and no `FATAL` or `401` rows.
 - [ ] **web-2:** after the operator's go-ahead, a `plan_only=true` rehearsal passes. The real
   `web-host-replace` run, resolved by id, then has its `web_host_replace` job conclude `success`, and
   Hetzner shows web-2 `created` after the merge. `soleur-web-nic-guard-web-2` and
-  `soleur-web-zot-consumer-web-2` read `status=up` on two reads at least 8 minutes apart. A Better Stack
-  Logs query of Source 4 for host `soleur-web-2` returns no probe `FATAL` or Doppler `401` lines after
-  the job ended.
+  `soleur-web-zot-consumer-web-2` read `status=up` on two reads at least 8 minutes apart. The Logs
+  query below, run for host `soleur-web-2` from the job's end, returns **at least one** row for each of
+  the four probe identifiers. That positive control rules out a dark shipper. None of those rows may
+  be a `FATAL` or Doppler `401` line.
+- [ ] **The Logs query** (vector → Better Stack Logs, read-only ClickHouse connection):
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT dt, JSONExtractString(raw,'SYSLOG_IDENTIFIER') AS unit, JSONExtractString(raw,'message') AS msg FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 30 MINUTE AND JSONExtractString(raw,'host') = '<host>' AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') IN ('web-nic-guard','web-zot-consumer-probe','web-git-data-probe','inngest-consumer-probe') ORDER BY dt DESC LIMIT 200 FORMAT JSONEachRow"
+  ```
+
+  Replace `<host>` with `soleur-web-platform` (web-1) or `soleur-web-2`. Before relying on it, confirm
+  once that the `host` field name matches, by running the same query with the host filter removed.
 - [ ] No push run was `cancelled` while the dispatch waited for approval. If one was, a `manual-rerun`
   was dispatched and succeeded.
 - [ ] #8705 is closed with a comment that cites the verifier output, the apply run and the web-2
@@ -850,8 +992,14 @@ its verdict is recorded on the line below.
 - Given web-2 still holds the old token, when its timers fire after the merge, then `doppler run`
   gets a 401 and deletes that token's fallback (CLI `canUseFallback`), and web-2's per-host beats go
   down. That is the expected signal, and it clears once web-2 is replaced.
-- Given the verifier fixtures (rotated, stale, missing, empty, non-JSON), when it runs, then it
-  prints exactly `ROTATED`/`STALE`/`MISSING`/`UNAVAILABLE` with exit 0/1/1/2.
+- Given the verifier fixtures, when it runs, then each fixture gives its fixed verdict and exit code:
+
+  | Fixture | Verdict | Exit |
+  |---|---|---|
+  | rotated | `ROTATED` | 0 |
+  | stale | `STALE` | 1 |
+  | missing | `MISSING` | 1 |
+  | empty, non-JSON, slug-less, or curl failure | `UNAVAILABLE` | 2 |
 
 ## Plan Review Revisions (2026-09-24)
 
@@ -898,6 +1046,12 @@ Taste or User-Challenge entries and no `decision-challenges.md`.
   fixture rows.
 
 ## Sharp Edges
+
+- **Deepen-plan (2026-09-24):** the verifier's credential `DOPPLER_TOKEN_TF` moves to
+  `soleur-infra-privileged/prd` at #8209 O10, so resolve it Tier-B first. A read service token gets
+  HTTP 403 on the token list, so no lower-privilege substitute exists today.
+- `soleur-git-data-prd` is paused and absent from the live heartbeat list (#6548). Never write an AC
+  that expects it to read `up`.
 
 - A plan whose `## User-Brand Impact` section is empty, holds only `TBD`/`TODO`/placeholder text, or
   omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or

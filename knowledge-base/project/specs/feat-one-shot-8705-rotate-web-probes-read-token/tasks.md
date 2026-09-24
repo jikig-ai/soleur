@@ -21,15 +21,34 @@ lane: cross-domain
 - 2.1 Change `scripts/lint-doppler-description-length.py` so its `HEREDOC` token carries the heredoc
   body in the value slot. Confirm `python3 scripts/lint-doppler-description-length.py` still exits 0.
 - 2.2 Write `apps/web-platform/infra/web-probes-token-rotation.test.sh`:
-  - 2.2.1 Guard 1: the per-block consumer census. Lex with `tokenize()` loaded through `importlib`.
-    Match references in `ID . ID` sequences, templated `STR` tokens and `HEREDOC` bodies. Enforce the
-    block floors 4 / 1 / 1. Treat `ScanError` as RED.
-  - 2.2.2 Guard 2: `create_before_destroy` on `doppler_service_token.web_probes`.
-  - 2.2.3 Guard 3: the verifier fixture rows (rotated, stale, missing ×2, empty, non-JSON) and the
-    single-verdict-function assertion.
-  - 2.2.4 A mutation battery in the default run. Each mutation is confirmed applied to its temp copy.
-    Call-site counters; no floor enforced through `fail`.
-  - 2.2.5 A suite header note that the installer floor encodes today's probe count.
+  - 2.2.0 Shared rules, per the plan's Guard Contract:
+    - the checker exits 0 for pass, 1 for a violation (printing the named-block message) and 2 for any
+      exception or `ScanError`;
+    - a row counts as RED only on exit 1 with the expected message;
+    - every guard has a C0 row: an unmutated copy passes;
+    - each mutation is confirmed applied to its temp copy and scoped to the block it names.
+  - 2.2.1 Guard 1: a per-block consumer census.
+    - Lex with `tokenize()`, loaded through `importlib`.
+    - Match `ID . ID` sequences, tolerating `NL` inside brackets. Match templated `STR` tokens and
+      `HEREDOC` bodies with word boundaries.
+    - The `hcloud_server.web` exception matches the `web_probes_token` argument, not the whole block.
+    - Floors: 4 / 1 / 1.
+    - Rows 1–10 plus C0, H1 and H2. H2 runs against a copy of the suite, with an environment variable
+      that stops it recursing.
+  - 2.2.2 Guard 2: `create_before_destroy` scoped to the one `web_probes` block. Rows 1–6 plus C0 and
+    H1.
+  - 2.2.3 Guard 3:
+    - verifier fixture rows 1–7;
+    - rows 8–9 on the live path, with a stubbed `curl` on `PATH` and a sentinel token that must never
+      be printed;
+    - H1 uses millisecond timestamps;
+    - the single-verdict-function assertion.
+  - 2.2.4 The mutation battery runs by default. Counters are incremented at the call site. Each
+    Python block floor is passed to bash as its own row. The ok()/no() self-test checks
+    `pass+fail==cases`.
+  - 2.2.5 The suite header notes that the installer floor encodes today's probe count.
+  - 2.2.6 Add the suite to `PROMOTED_FILES` in `scripts/guard-vacuity-floor.test.sh`. This is
+    required. Put the `MIN_ASSERTIONS` literal directly above its `if`.
 - 2.3 Run the suite. Guard 2 is RED on the current tree (no `lifecycle` yet), and Guard 3 is RED (no
   verifier yet).
 
@@ -42,6 +61,12 @@ lane: cross-domain
 - 3.2 `apps/web-platform/infra/server.tf`: reword the four "`-replace` rotation" comments. Comment
   only.
 - 3.3 Create `apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh`:
+  - resolve `DOPPLER_TOKEN_TF` from the environment, then `soleur-infra-privileged/prd`, then
+    `soleur/prd_terraform`;
+  - pass the header via `curl -K <(…)`, never in argv;
+  - `set +x`; `unset` the token after use; `--max-time 10` on both calls;
+  - a `page` key in the response means UNAVAILABLE;
+  - fixture mode fetches no credential and prints a trailing `(fixture)` marker;
   - flags `--config`, `--retired-slug`, `--name-prefix` and `--not-before`, with defaults;
   - verdicts ROTATED/STALE/MISSING/UNAVAILABLE with exits 0/1/1/2;
   - the fixture seam `WEB_PROBES_TOKEN_LIST_JSON`;
@@ -73,11 +98,12 @@ lane: cross-domain
 
 - 5.1 The PR body:
   - first line: "merging mutates production: yes";
-  - `Ref #8705` and `Ref #8734`, never `Closes`, with `closingIssuesReferences == []`;
+  - `Ref #8705`, `Ref #8734` and `Ref #8737`, never `Closes`, with `closingIssuesReferences == []`;
   - the wording "forward read access closed; value exposure tracked in #8734".
 - 5.2 Before merging:
   - the concurrency group is idle on both apply workflows;
   - the latest main push run's main stage deleted nothing;
+  - that run's SSH stage read `0 added, 0 changed, 0 destroyed`;
   - the PR plan job differs from main's run only by the token replace and the four installer
     replaces.
 - 5.3 Merge with `gh pr merge --squash --body-file`, with `[ack-destroy]` on its own line. Then check
@@ -88,12 +114,17 @@ lane: cross-domain
   - on failure, follow the Phase 3 step 4 recovery.
 - 5.5 Post the resume checklist comment on #8705.
 - 5.6 Run the verifier; it must print `ROTATED`. Then read the web-1 beats twice, at least 8 minutes
-  apart: nic-guard, zot-consumer, inngest-consumer, and git-data.
+  apart: nic-guard, zot-consumer and inngest-consumer. The git-data beat is paused (#6548), so prove
+  that probe through the plan's Logs query: host `soleur-web-platform`, at least one row, no
+  FATAL/401 lines.
 - 5.7 Send the operator the plain-language message, then wait for the go-ahead.
-- 5.8 Run the `web-host-replace` `plan_only=true` rehearsal, then the real replace.
+- 5.8 Run the `web-host-replace` `plan_only=true` rehearsal. It must show
+  `hcloud_firewall_attachment.web` updated in place, with web-1 (`123931471`) still in
+  `server_ids`. Then run the real replace.
 - 5.9 After the replace:
   - monitor the run by id to `web_host_replace` `success`;
   - read the web-2 beats twice, at least 8 minutes apart;
-  - query Source 4 for FATAL or 401 lines;
+  - run the Logs query for host `soleur-web-2`: at least one row per probe identifier, and no
+    FATAL/401 lines;
   - sweep for cancelled push runs.
 - 5.10 Close #8705 with the evidence comment. #8734 stays open.
