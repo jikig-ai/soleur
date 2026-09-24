@@ -12,6 +12,51 @@ lane: cross-domain
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24
+**Sections enhanced:** Research Insights (semantics + precedent + verify-the-negative),
+Technical Considerations (deepen gate record).
+**Pipeline note:** this planning subagent has no Task/agent tool; the deepen fan-out
+(skills, learnings, research/review agents, the 4.45 realism passes) ran inline,
+sequentially — `Reviewed-Coverage: sequential-fallback` — and is not claimed as an
+independent panel.
+
+### Key Improvements
+
+1. **Attribution mechanism is stronger than the plan stated.** A step `timeout-minutes`
+   firing reports API `conclusion: timed_out` on the named step (the jobs API
+   conclusion enum includes `timed_out` for both jobs and steps) — distinguishable
+   from an anonymous job-level `cancelled`, not merely "a step failed with its name".
+2. **Verify-the-negative pass (Phase 4.45) confirmed all four negative claims:**
+   `git-data-runcmd-rehearsal.test.sh` contains zero `timeout` tokens;
+   `git-data-ownership.test.sh`'s single `timeout` token (:236) is a static regex
+   asserting the gc unit's shape inside the boot code — its `docker run` at :321 is
+   unbounded; `git-data-cutover-access.test.sh` carries the `timeout -k 10 480`
+   internal bound as cited; and no file under `tests/`, `.github/scripts/`, or
+   `scripts/` greps the three step names.
+3. **Deepen gate verdicts recorded:** Phase 4.6 (User-Brand) PASS with the
+   `threshold: none, reason:` scope-out (the workflow name matches the sensitive-path
+   regex); Phase 4.7 (Observability) PASS — `discoverability_test.command` uses the
+   allowlisted `grep` verb, no SSH, literal `expected_output`, no shell metacharacters
+   (Check-10-safe); Phase 4.8 (PAT) PASS — no hits; Phase 4.9 (UI/.pen) skip — no UI
+   surface; Phase 4.10 (encryption) skip — no store/connection; Phase 4.11 (Guard
+   Contract) skip — the deliverable is config values, not a guard artifact; Phase
+   4.55 (Downtime) doesn't fire — no hcloud/migration/router change.
+
+### New Considerations Discovered
+
+- **Network-Outage Deep-Dive (Phase 4.5, `timeout` trigger fired):** not applicable.
+  The plan's `timeout` occurrences are GitHub Actions YAML keys, not connectivity
+  symptoms; the plan drives no SSH, no `terraform apply`, no `remote-exec`/`file`
+  provisioners. L3/L7 layers have nothing to verify.
+- **Precedent-Diff (Phase 4.4):** precedent exists — the same file already ships the
+  `timeout-minutes` + measured-comment form on four steps (ci-deploy comment
+  `:688–692` / key `:695`, plugin-seed `:998–1036`, web-zot `:1064`,
+  registry-userdata `:1412–1416`).
+  The prescribed edit mirrors that shape verbatim: key as sibling of `name:`/`run:`,
+  measured comment above it. Not a novel pattern.
+
 ## Overview
 
 *No `spec.md` exists for this branch — `lane:` defaulted to `cross-domain` (fail-closed).*
@@ -41,9 +86,13 @@ steps.
   MEASURED/RE-DERIVED entries that size the ceiling at ~1.4× a measured basis stated as a
   range on named run sets, and instruct re-derivation whenever steps are added. The
   attribution convention is real and present twice: plugin-seed `timeout-minutes: 1`
-  (`:1035–1037`, comment at `:525–528`), `Run ci-deploy.sh tests` `timeout-minutes: 3`
-  (`:694–696`, comment at `:688–693` — "Its value is ATTRIBUTION, not budget"), plus
-  web-zot-seed `:1064` (5) and registry-userdata-budget `:1416` (2).
+  (key `:1036`, measured comment `:998–1009`), `Run ci-deploy.sh tests`
+  `timeout-minutes: 3` (key `:695`, comment `:688–692` — "Its value is ATTRIBUTION,
+  not budget"), plus web-zot-seed `:1064` (5) and registry-userdata-budget `:1416` (2).
+  Noted drift: the ceiling block's own plugin-seed caveat at `:527` still says
+  `timeout-minutes: 3` while the key is `1` — a dated comment outliving its value is
+  exactly why the file dates every measurement entry, and why the new step comments
+  should cite the measured range and date rather than only the number.
 - **ADR corpus check (mechanism keywords, not issue refs)**: `ADR-166` (a CI message may only
   name a cause the job measured) supports step-level attribution bounds. `ADR-238`
   (TEST_GROUP taxonomy) records "splitting multiplies fixed cost" for the sibling `ci.yml`
@@ -479,9 +528,10 @@ Query: `gh issue list --label code-review --state open` (77 issues) searched for
       cancel here is a runner-variance observation, not a verdict on the diff, UNLESS the
       in-flight step is one the diff left unbounded.
 - [ ] If any subsequent run fails or cancels, the failed step is identifiable by name —
-      a bounded step reporting its own timeout, or per-step API durations naming the
-      offender. An anonymous "The operation was canceled" at the job ceiling on a step
-      with no bound is the failure this change exists to prevent.
+      a bounded step reporting `conclusion: timed_out` (the jobs API enum value a step
+      timeout produces), or per-step API durations naming the offender. An anonymous
+      `cancelled` at the job ceiling on a step with no bound is the failure this change
+      exists to prevent.
 
 Rationale for verify-once rather than a soak: the ceiling margin is deterministic
 arithmetic (1.44× vs the 1.11× that was cancelling), and the attribution property is
