@@ -2,9 +2,15 @@
 title: The local test runner treats the shared tmpfs as a managed resource and serialises worktrees via an advisory lock
 status: active
 date: 2026-07-22
+amended-by: ADR-249
 ---
 
 # ADR-133: `test-all.sh` — managed tmpfs + advisory cross-worktree lock
+
+> **Amended by ADR-249 (2026-09-24, #7004):** scratch reclamation moved from
+> name heuristics to ownership keys (`soleur-run.<pid>.*` roots +
+> `.soleur-owned` markers). Reaper 2 stays `/tmp`-only; Reaper 3 and the
+> session-start sweep reclaim dead-owner roots on `/tmp` AND `/var/tmp`.
 
 ## Context
 
