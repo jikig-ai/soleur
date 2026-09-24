@@ -204,8 +204,9 @@ elif grep -qvE '^#?[0-9]+$' <<<"$_tok_scan"; then
   MERGE_TARGET_WHY="a gh pr merge invocation does not name a bare PR number; put the number right after 'gh pr merge'"
 elif [[ "$(grep -c . <<<"$_pr_nums" || true)" != "1" ]]; then
   MERGE_TARGET_WHY="more than one PR number; merge one PR per command"
-elif grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_args" \
-     || grep -qE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=' <<<"$SCAN"; then
+elif grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_args"; then
+  MERGE_TARGET_WHY="the command points gh at another repository (-R/--repo, GH_REPO or GH_HOST)"
+elif grep -qE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=' <<<"$SCAN"; then
   MERGE_TARGET_WHY="the command points gh at another repository (-R/--repo, GH_REPO or GH_HOST)"
 else
   _origin=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null || true)
