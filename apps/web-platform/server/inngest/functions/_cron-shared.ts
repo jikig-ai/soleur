@@ -102,9 +102,16 @@ export async function deployLeaseAgeMsIfFresh(
 /**
  * Thrown by setupEphemeralWorkspace when a fresh deploy lease is present. A
  * distinct class (not a bare Error) so the deferral is queryable in
- * Sentry/Better Stack and is never confused with a real setup failure. Inngest
- * `retries: 1` re-dispatches the run; the retry normally lands after the bounded
- * deploy completes (worst case: the cron skips this one fire — fail-safe).
+ * Sentry/Better Stack and is never confused with a real setup failure.
+ *
+ * The class does NOT survive an Inngest step boundary (#8726): once the
+ * `setup-workspace` step's retries are exhausted the handler receives the SDK's
+ * rebuilt StepError, so `instanceof DeployInProgressError` outside the step can
+ * never match. Deferral-aware callers therefore wrap the step callback in
+ * `deferDeployOnFinalAttempt` (the check runs where the error is live) and
+ * re-materialize the deferral with `throwIfDeployDeferred` in the handler body.
+ * A non-final attempt still throws, so Inngest's per-step retry re-checks the
+ * lease (worst case: the cron skips this one fire — fail-safe).
  */
 export class DeployInProgressError extends Error {
   readonly cronName: string;
@@ -116,6 +123,73 @@ export class DeployInProgressError extends Error {
     this.name = "DeployInProgressError";
     this.cronName = cronName;
     this.leaseAgeMs = leaseAgeMs;
+  }
+}
+
+/**
+ * The one final-attempt predicate (#8726). `finalizeOutputAwareHeartbeat` and
+ * `deferDeployOnFinalAttempt` both call it so they cannot drift.
+ *
+ * With `maxAttempts` present it agrees with the SDK's own choice between a
+ * retriable StepError and a terminal StepFailed (`maxAttempts - 1 === attempt`
+ * in inngest's execution/v2). With it ABSENT this reads "final" where the SDK
+ * would retry — deliberately: a caller that plumbed nothing degrades to
+ * skipping one fire or over-paging, never to masking a real failure.
+ */
+export function isFinalAttempt(ctx: { attempt?: number; maxAttempts?: number }): boolean {
+  return (ctx.attempt ?? 0) >= ((ctx.maxAttempts ?? 1) - 1);
+}
+
+/**
+ * What the `setup-workspace` step returns across the Inngest step boundary
+ * (#8726). A returned verdict survives memoization; a thrown class does not.
+ * Generic over the workspace so this module never imports the substrate (which
+ * imports this module). Keep every field JSON-plain: HandlerArgs' step type is
+ * not Inngest's Jsonify, so tsc will not flag a field that cannot cross.
+ */
+export type WorkspaceSetupVerdict<W> =
+  | { kind: "ready"; workspace: W }
+  | { kind: "deploy-deferred"; leaseAgeMs: number };
+
+/**
+ * Run INSIDE `step.run("setup-workspace", …)`, where a DeployInProgressError is
+ * still live and `instanceof` is valid.
+ *
+ *   - non-final attempt + DeployInProgressError → rethrow: Inngest retries the
+ *     STEP, and the retry re-checks the lease (ADR-078).
+ *   - final attempt + DeployInProgressError → return `deploy-deferred`.
+ *   - any other error → rethrow unchanged (the caller's setup-failure arm).
+ *
+ * `ctx`'s keys are required (values may be undefined) so a caller that has not
+ * plumbed attempt/maxAttempts fails tsc instead of silently losing the retry.
+ */
+export async function deferDeployOnFinalAttempt<W>(
+  setup: () => Promise<W>,
+  ctx: { attempt: number | undefined; maxAttempts: number | undefined },
+): Promise<WorkspaceSetupVerdict<W>> {
+  try {
+    return { kind: "ready", workspace: await setup() };
+  } catch (err) {
+    if (err instanceof DeployInProgressError && isFinalAttempt(ctx)) {
+      return { kind: "deploy-deferred", leaseAgeMs: err.leaseAgeMs };
+    }
+    throw err;
+  }
+}
+
+/**
+ * The ADR-078 deferral, re-materialized in the handler body from the returned
+ * verdict. Call it AFTER the setup try/catch (inside, the setup-failure arm
+ * would swallow it) and BEFORE the body's try/finally (a deferred run has no
+ * workspace to tear down). Thrown from the handler body rather than a step, the
+ * DeployInProgressError keeps its class name in Sentry and posts no heartbeat.
+ */
+export function throwIfDeployDeferred<W>(
+  verdict: WorkspaceSetupVerdict<W>,
+  cronName: string,
+): asserts verdict is { kind: "ready"; workspace: W } {
+  if (verdict.kind === "deploy-deferred") {
+    throw new DeployInProgressError(cronName, verdict.leaseAgeMs);
   }
 }
 
@@ -437,8 +511,9 @@ export async function postSentryHeartbeat(args: {
 //     producers that file a silence-hole fallback issue when red, ordered before
 //     the heartbeat so the heartbeat stays last and is never double-signalled.
 //
-// DeployInProgressError MUST be excluded by the caller BEFORE invoking this
-// helper (rethrow bare, no heartbeat — the ADR-078 fail-safe deploy defer).
+// A deploy deferral never reaches this helper: the caller exits through
+// `throwIfDeployDeferred` before the guarded body (no heartbeat — the ADR-078
+// fail-safe deploy defer, #8726).
 export async function finalizeOutputAwareHeartbeat(args: {
   step: HandlerArgs["step"];
   heartbeatOk: boolean;
@@ -485,13 +560,13 @@ export async function finalizeOutputAwareHeartbeat(args: {
   // behavior). maxAttempts is OPTIONAL on Inngest's BaseContext, so a missing
   // value collapses to always-final → every failed attempt posts error: degrades
   // to OVER-paging (the original bug), never to masking a failure with false ok.
-  const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
+  const finalAttempt = isFinalAttempt({ attempt, maxAttempts });
   // `retryEligible !== false` (not a truthiness test) so OMITTING the field is
   // indistinguishable from today's behavior for the 7 callers that do not pass it.
   const failed = threw && !heartbeatOk && retryEligible !== false;
-  if (failed && !isFinalAttempt) {
+  if (failed && !finalAttempt) {
     logger.warn(
-      { fn: cronName, attempt: attempt ?? 0, isFinalAttempt },
+      { fn: cronName, attempt: attempt ?? 0, isFinalAttempt: finalAttempt },
       `${cronName} failed on a non-final attempt — skipping the heartbeat step (memoization-safe) and retrying`,
     );
     return { retry: true };

@@ -125,7 +125,7 @@ vi.mock("@/server/cron-liveness-marker", async (importOriginal) => ({
 }));
 
 // Partial mock — keep digestIssueExistsForDate, finalizeOutputAwareHeartbeat,
-// postSentryHeartbeat, DeployInProgressError REAL; stub only the spawn-adjacent
+// postSentryHeartbeat and the #8726 deploy-deferral helpers REAL; stub only the spawn-adjacent
 // deps so the dedup read + skip-path heartbeat are exercised end-to-end.
 vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
   const actual =
@@ -139,6 +139,7 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
 });
 
 import { digestIssueExistsForDate } from "@/server/inngest/functions/_cron-shared";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 import { cronRoadmapReviewHandler } from "@/server/inngest/functions/cron-roadmap-review";
 import { cronContentGeneratorHandler } from "@/server/inngest/functions/cron-content-generator";
 import { cronGrowthAuditHandler } from "@/server/inngest/functions/cron-growth-audit";
@@ -879,21 +880,73 @@ describe("#6750 — handler-local liveness across the cohort", () => {
       });
     });
   });
+});
 
-  // --- scenario 11: the NAMED RESIDUAL, asserted as what it is -------------
-  it("DeployInProgressError rethrows bare with NO heartbeat — a NAMED RESIDUAL, not a safety property", async () => {
-    const row = LIVENESS_ROWS[0];
-    const { DeployInProgressError } = await import(
-      "@/server/inngest/functions/_cron-shared"
+// #8726 — the deploy-lease deferral, driven ACROSS the step boundary. The
+// suites above use an inline `makeStep`, under which an error thrown inside
+// `setup-workspace` reaches the handler as the ORIGINAL class; in production
+// it arrives as the SDK's rebuilt StepError, so an `instanceof` check in the
+// handler's catch can never match. `runLikeInngest` rebuilds it the way the SDK
+// does and re-enters the handler after every step (maxAttempts 2 = retries: 1).
+describe("#8726 — deploy-lease deferral across the Inngest step boundary", () => {
+  const runAcrossBoundary = (handler: AnyHandler) =>
+    runLikeInngest(
+      ({ step, attempt, maxAttempts }) =>
+        handler({ step: step as unknown, logger: logger as unknown, attempt, maxAttempts }),
+      { maxAttempts: 2 },
     );
-    const { res, step } = await runFresh(row, {
-      step: makeStep("safe-commit-pr", new DeployInProgressError(row.cronName, 1234)),
+  const heartbeatCalls = () => heartbeatUrls().filter((u) => u.includes("/cron/"));
+
+  describe.each(ROWS)("$name", (row) => {
+    it("S1 — a lease that outlasts the step retry takes the ADR-078 deferral arm", async () => {
+      const { DeployInProgressError } = await import("@/server/inngest/functions/_cron-shared");
+      setupWorkspaceSpy.mockImplementation(async () => {
+        throw new DeployInProgressError(row.cronName, 1234);
+      });
+      const out = await runAcrossBoundary(row.handler);
+      // Asserted first: on the pre-#8726 handler the outcome is `returned`
+      // `{ ok: false }` — the setup-failure arm — which is the defect.
+      expect(out.outcome).toBe("threw");
+      expect(out.error).toBeInstanceOf(DeployInProgressError);
+      // Called on both attempts: the step retry that re-checks the lease survived.
+      expect(setupWorkspaceSpy).toHaveBeenCalledTimes(2);
+      expect(heartbeatCalls()).toEqual([]);
+      expect(reportSilentFallbackSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ op: "setup-ephemeral-workspace" }),
+      );
+      expect(spawnClaudeEvalSpy).not.toHaveBeenCalled();
     });
-    // It propagates, so Inngest retries — and that retry fires the exact hazard
-    // retryEligible exists to close, because the workspace is already gone. This
-    // is recorded in the ADR-126 amendment as residual 1, NOT fixed here.
-    expect(res).toBeInstanceOf(DeployInProgressError);
-    expect(step.executed).not.toContain("sentry-heartbeat");
-    expect(fetchSpy).not.toHaveBeenCalled();
+
+    it("S2 — a lease that clears before the retry still gets the retry, and the run proceeds", async () => {
+      const { DeployInProgressError } = await import("@/server/inngest/functions/_cron-shared");
+      setupWorkspaceSpy
+        .mockImplementationOnce(async () => {
+          throw new DeployInProgressError(row.cronName, 1234);
+        })
+        .mockResolvedValue({ ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" });
+      seedSpawnFor(row);
+      seedCommitFor(row);
+      const out = await runAcrossBoundary(row.handler);
+      expect(out.outcome).toBe("returned");
+      expect(setupWorkspaceSpy).toHaveBeenCalledTimes(2);
+      expect(spawnClaudeEvalSpy).toHaveBeenCalled();
+    });
+
+    it("S3 — a genuine setup failure on the final attempt still takes the setup-failure arm", async () => {
+      setupWorkspaceSpy.mockImplementation(async () => {
+        throw new Error("git clone failed");
+      });
+      const out = await runAcrossBoundary(row.handler);
+      expect(out).toMatchObject({ outcome: "returned", value: { ok: false } });
+      expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ op: "setup-ephemeral-workspace" }),
+      );
+      const beats = heartbeatCalls();
+      expect(beats).toHaveLength(1);
+      expect(beats[0]).toContain("status=error");
+      expect(spawnClaudeEvalSpy).not.toHaveBeenCalled();
+    });
   });
 });

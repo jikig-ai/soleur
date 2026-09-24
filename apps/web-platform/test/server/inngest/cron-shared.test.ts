@@ -61,7 +61,11 @@ vi.mock("@/server/github/probe-octokit", () => ({
 import {
   AnthropicApiError,
   classifyEvalFatal,
+  deferDeployOnFinalAttempt,
   deferIfTier2Cron,
+  DeployInProgressError,
+  isFinalAttempt,
+  throwIfDeployDeferred,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   digestIssueExistsForDate,
   ensureDedupIssue,
@@ -2268,5 +2272,72 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
         octokit,
       }),
     ).resolves.toBe(false);
+  });
+});
+
+// #8726 (plan S4) — the deferral helpers. The check runs INSIDE the step, where
+// the DeployInProgressError is still live; the verdict is what crosses the step
+// boundary, because the class does not.
+describe("isFinalAttempt / deferDeployOnFinalAttempt / throwIfDeployDeferred (#8726)", () => {
+  const ws = { ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" };
+
+  it("isFinalAttempt matches the SDK's StepFailed choice when maxAttempts is present", () => {
+    expect(isFinalAttempt({ attempt: 0, maxAttempts: 2 })).toBe(false);
+    expect(isFinalAttempt({ attempt: 1, maxAttempts: 2 })).toBe(true);
+    expect(isFinalAttempt({ attempt: 0, maxAttempts: 1 })).toBe(true);
+  });
+
+  it("isFinalAttempt reads 'final' when maxAttempts is absent (the documented divergence from the SDK)", () => {
+    expect(isFinalAttempt({ attempt: 0, maxAttempts: undefined })).toBe(true);
+    expect(isFinalAttempt({})).toBe(true);
+  });
+
+  it("a non-final attempt rethrows the SAME DeployInProgressError, so Inngest retries the step", async () => {
+    const err = new DeployInProgressError("cron-x", 1234);
+    await expect(
+      deferDeployOnFinalAttempt(async () => { throw err; }, { attempt: 0, maxAttempts: 2 }),
+    ).rejects.toBe(err);
+  });
+
+  it("the final attempt returns a JSON-plain deploy-deferred verdict", async () => {
+    const v = await deferDeployOnFinalAttempt(
+      async () => { throw new DeployInProgressError("cron-x", 1234); },
+      { attempt: 1, maxAttempts: 2 },
+    );
+    expect(v).toEqual({ kind: "deploy-deferred", leaseAgeMs: 1234 });
+    expect(JSON.parse(JSON.stringify(v))).toEqual(v);
+  });
+
+  it("with maxAttempts absent the deferral returns on attempt 0 (no retry)", async () => {
+    const v = await deferDeployOnFinalAttempt(
+      async () => { throw new DeployInProgressError("cron-x", 5); },
+      { attempt: 0, maxAttempts: undefined },
+    );
+    expect(v.kind).toBe("deploy-deferred");
+  });
+
+  it("any other error is rethrown unchanged, even on the final attempt", async () => {
+    const err = new Error("git clone failed");
+    await expect(
+      deferDeployOnFinalAttempt(async () => { throw err; }, { attempt: 1, maxAttempts: 2 }),
+    ).rejects.toBe(err);
+  });
+
+  it("success returns the workspace as a ready verdict", async () => {
+    await expect(
+      deferDeployOnFinalAttempt(async () => ws, { attempt: 0, maxAttempts: 2 }),
+    ).resolves.toEqual({ kind: "ready", workspace: ws });
+  });
+
+  it("throwIfDeployDeferred re-materializes the deferral with the cron name and lease age", () => {
+    let thrown: unknown;
+    try {
+      throwIfDeployDeferred({ kind: "deploy-deferred", leaseAgeMs: 42 }, "cron-x");
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(DeployInProgressError);
+    expect(thrown).toMatchObject({ cronName: "cron-x", leaseAgeMs: 42 });
+    expect(() => throwIfDeployDeferred({ kind: "ready", workspace: ws }, "cron-x")).not.toThrow();
   });
 });

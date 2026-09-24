@@ -60,7 +60,9 @@ import {
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
-  DeployInProgressError,
+  deferDeployOnFinalAttempt,
+  throwIfDeployDeferred,
+  type WorkspaceSetupVerdict,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -297,15 +299,19 @@ export async function cronSeoAeoAuditHandler({
   // downstream success/failure.
   let ephemeralRoot: string | null = null;
   let spawnCwd: string | null = null;
+  let verdict: WorkspaceSetupVerdict<Awaited<ReturnType<typeof setupEphemeralWorkspace>>>;
   try {
-    const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace({ installationToken, cronName: "cron-seo-aeo-audit" });
-    });
-    ephemeralRoot = workspace.ephemeralRoot;
-    spawnCwd = workspace.spawnCwd;
+    // #8726 — the deploy-lease check runs INSIDE the step, where the error is
+    // live: a non-final attempt rethrows (Inngest's step retry re-checks the
+    // lease), the final one returns a `deploy-deferred` verdict. Outside the
+    // step it would arrive as a rebuilt StepError and `instanceof` never matches.
+    verdict = await step.run("setup-workspace", async () =>
+      deferDeployOnFinalAttempt(
+        () => setupEphemeralWorkspace({ installationToken, cronName: "cron-seo-aeo-audit" }),
+        { attempt, maxAttempts },
+      ),
+    );
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no heartbeat.
-    if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -322,6 +328,13 @@ export async function cronSeoAeoAuditHandler({
     });
     return { ok: false };
   }
+
+  // ADR-078 deploy deferral (#8726): no heartbeat, DeployInProgressError thrown
+  // from the handler body. Deliberately OUTSIDE the catch above (it would swallow
+  // the throw) and BEFORE the try/finally below (there is no workspace to tear down).
+  throwIfDeployDeferred(verdict, "cron-seo-aeo-audit");
+  ephemeralRoot = verdict.workspace.ephemeralRoot;
+  spawnCwd = verdict.workspace.spawnCwd;
 
   // Wrap the entire post-setup pipeline in try/finally so the ephemeral
   // workspace is torn down even if claude-eval throws at the Inngest step
@@ -543,13 +556,11 @@ export async function cronSeoAeoAuditHandler({
         });
       }
     } catch (err) {
-      // #5728 G1 — a deploy-in-progress defer is benign (ADR-078/#5686): rethrow
-      // bare with NO heartbeat so Inngest retries after the swap. Any OTHER throw
-      // is a real failure — flag it; finalizeOutputAwareHeartbeat decides
+      // #5728 — a deploy deferral never reaches this body (throwIfDeployDeferred
+      // exits before it, #8726), so any throw here is a real failure — flag it; finalizeOutputAwareHeartbeat decides
       // error-vs-retry below. An output-PRESENT run that threw in a TRAILING step
       // (safe-commit-pr) stays GREEN — heartbeatOk is already true and the
       // persistence failure self-reports here.
-      if (err instanceof DeployInProgressError) throw err;
       threw = true;
       const e = err as Error;
       const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -607,8 +618,8 @@ export async function cronSeoAeoAuditHandler({
       // the re-spawned agent burns real Anthropic spend against a path that no
       // longer exists. One honest terminal RED beats a retry that cannot succeed.
       // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
-      // itself) are unaffected and still retry into a fresh workspace, and
-      // DeployInProgressError still rethrows bare.
+      // itself) are unaffected and still retry into a fresh workspace. A deploy deferral never gets
+      // here: throwIfDeployDeferred exits before the guarded body (#8726).
       //
       // This is a PREREQUISITE for consuming safeCommitAndPr's return value, not a
       // peer of it: that consumption lowers heartbeatOk, which on a run that also

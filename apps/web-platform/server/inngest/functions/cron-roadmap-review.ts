@@ -58,7 +58,9 @@ import {
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
-  DeployInProgressError,
+  deferDeployOnFinalAttempt,
+  throwIfDeployDeferred,
+  type WorkspaceSetupVerdict,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -259,15 +261,19 @@ export async function cronRoadmapReviewHandler({
   // downstream success/failure.
   let ephemeralRoot: string | null = null;
   let spawnCwd: string | null = null;
+  let verdict: WorkspaceSetupVerdict<Awaited<ReturnType<typeof setupEphemeralWorkspace>>>;
   try {
-    const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace({ installationToken, cronName: "cron-roadmap-review" });
-    });
-    ephemeralRoot = workspace.ephemeralRoot;
-    spawnCwd = workspace.spawnCwd;
+    // #8726 — the deploy-lease check runs INSIDE the step, where the error is
+    // live: a non-final attempt rethrows (Inngest's step retry re-checks the
+    // lease), the final one returns a `deploy-deferred` verdict. Outside the
+    // step it would arrive as a rebuilt StepError and `instanceof` never matches.
+    verdict = await step.run("setup-workspace", async () =>
+      deferDeployOnFinalAttempt(
+        () => setupEphemeralWorkspace({ installationToken, cronName: "cron-roadmap-review" }),
+        { attempt, maxAttempts },
+      ),
+    );
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no heartbeat.
-    if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -284,6 +290,13 @@ export async function cronRoadmapReviewHandler({
     });
     return { ok: false };
   }
+
+  // ADR-078 deploy deferral (#8726): no heartbeat, DeployInProgressError thrown
+  // from the handler body. Deliberately OUTSIDE the catch above (it would swallow
+  // the throw) and BEFORE the try/finally below (there is no workspace to tear down).
+  throwIfDeployDeferred(verdict, "cron-roadmap-review");
+  ephemeralRoot = verdict.workspace.ephemeralRoot;
+  spawnCwd = verdict.workspace.spawnCwd;
 
   // Wrap the entire post-setup pipeline in try/finally so the ephemeral
   // workspace is torn down even if claude-eval throws at the Inngest step
@@ -363,10 +376,9 @@ export async function cronRoadmapReviewHandler({
         }),
       );
     } catch (err) {
-      // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no
-      // heartbeat. Any OTHER throw is a real failure — flag it;
+      // #5728 — a deploy deferral never reaches this body (throwIfDeployDeferred
+      // exits before it, #8726), so any throw here is a real failure — flag it;
       // finalizeOutputAwareHeartbeat decides error-vs-retry below.
-      if (err instanceof DeployInProgressError) throw err;
       threw = true;
       const e = err as Error;
       const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -407,8 +419,8 @@ export async function cronRoadmapReviewHandler({
       // the re-spawned agent burns real Anthropic spend against a path that no
       // longer exists. One honest terminal RED beats a retry that cannot succeed.
       // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
-      // itself) are unaffected and still retry into a fresh workspace, and
-      // DeployInProgressError still rethrows bare.
+      // itself) are unaffected and still retry into a fresh workspace. A deploy deferral never gets
+      // here: throwIfDeployDeferred exits before the guarded body (#8726).
       //
       // This cron routes persistence through the agent's own hook-guarded commit
       // rather than safeCommitAndPr, so it gains no `livenessOk` remedy — but its

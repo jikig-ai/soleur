@@ -15,8 +15,9 @@
 //     step must not replay a stale signal)
 //   - happy path → exactly one `ok`
 //   - a trailing safe-commit-pr throw on an OUTPUT-PRESENT run stays GREEN
-//   - DeployInProgressError is rethrown bare with NO heartbeat from BOTH the
-//     existing first catch (setup-workspace) AND the new inner catch
+//   - a deploy lease that outlasts the setup step's retry takes the ADR-078
+//     deferral (DeployInProgressError thrown from the handler body, NO
+//     heartbeat), driven across the real step boundary (#8726)
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Short-circuit the inngest client startup-key check (same path next build uses).
@@ -96,6 +97,7 @@ import {
   COMMUNITY_DIGEST_DIR,
 } from "@/server/inngest/functions/cron-community-monitor";
 import { DeployInProgressError } from "@/server/inngest/functions/_cron-shared";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 
 /**
  * `throwOn` makes the named step reject, which is the only seam for simulating a
@@ -264,18 +266,30 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
     expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "handler-body-threw")).toBe(true);
   });
 
-  it("DeployInProgressError from the inner body is rethrown bare with NO heartbeat", async () => {
-    spawnClaudeEvalSpy.mockRejectedValue(new DeployInProgressError("cron-community-monitor", 1234));
-    const step = makeStep();
-    await expect(invoke(step, 1, 2)).rejects.toBeInstanceOf(DeployInProgressError);
+  // #8726 — driven through runLikeInngest, because an inline `makeStep` hands
+  // the handler the ORIGINAL error class; production hands it the SDK's rebuilt
+  // StepError after the step's retries are exhausted. (The former inner-body
+  // scenario injected DeployInProgressError from the spawn, which nothing in
+  // production produces — the substrate's setup is its only producer.)
+  it("S1 — a lease that outlasts the setup step's retry takes the ADR-078 deferral arm", async () => {
+    setupWorkspaceSpy.mockImplementation(async () => {
+      throw new DeployInProgressError("cron-community-monitor", 5678);
+    });
+    const out = await runLikeInngest(
+      ({ step, attempt, maxAttempts }) =>
+        cronCommunityMonitorHandler({
+          step: step as unknown as HandlerArg["step"],
+          logger: logger as unknown as HandlerArg["logger"],
+          attempt,
+          maxAttempts,
+        } as HandlerArg),
+      { maxAttempts: 2 },
+    );
+    expect(out.outcome).toBe("threw");
+    expect(out.error).toBeInstanceOf(DeployInProgressError);
+    expect(setupWorkspaceSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("DeployInProgressError from setup-workspace (first catch) is rethrown bare with NO error heartbeat", async () => {
-    setupWorkspaceSpy.mockRejectedValue(new DeployInProgressError("cron-community-monitor", 5678));
-    const step = makeStep();
-    await expect(invoke(step, 1, 2)).rejects.toBeInstanceOf(DeployInProgressError);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "setup-ephemeral-workspace")).toBe(false);
   });
 });
 

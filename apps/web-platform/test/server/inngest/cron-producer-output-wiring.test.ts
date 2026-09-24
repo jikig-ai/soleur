@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { stripComments } from "../../helpers/strip-comments";
 
 const FN_DIR = resolve(__dirname, "../../../server/inngest/functions");
 
@@ -81,12 +82,11 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
 
       // #5728 — the terminal heartbeat routes through the shared
       // finalizeOutputAwareHeartbeat helper (NOT a second inline postSentryHeartbeat
-      // call site, which would double-signal under retry memoization), and the
-      // handler body throw + setup-workspace catch BOTH rethrow a benign
-      // DeployInProgressError bare (no heartbeat — the ADR-068 fail-safe defer).
-      // A revert of just this wiring would otherwise pass the whole suite.
+      // call site, which would double-signal under retry memoization). The deploy
+      // deferral's wiring is carried by tsc (an un-narrowed WorkspaceSetupVerdict
+      // has no `workspace`), by the step-boundary scenarios (#8726), and by the
+      // census below. A revert of just this wiring would otherwise pass the suite.
       expect(src).toContain("finalizeOutputAwareHeartbeat(");
-      expect(src).toContain("instanceof DeployInProgressError");
       expect(src).toContain('op: "handler-body-threw"');
 
       // #4773 — the diagnostic triple (exitCode + stderrTail + stdoutTail) must
@@ -265,4 +265,32 @@ describe("headless skill resolution parity (#4993)", () => {
       expect(flagsBlock.indexOf('"plugins/soleur"')).toBeLessThan(endMarker);
     },
   );
+});
+
+// #8726 — step-boundary census. A DeployInProgressError thrown inside
+// `step.run("setup-workspace")` reaches the handler as the SDK's rebuilt
+// StepError after the step's retries, so ANY handler-side reference to the class
+// — `instanceof`, a `.name ===` compare, sniffing the rebuilt message or stack —
+// is a check that can never match in production. After #8726 the only code
+// that may name it is its producer (the substrate) and the helpers that check it
+// while it is still live inside the step (_cron-shared). A token census over the
+// whole directory, not a list of the 9 crons, so #8762's callers are covered too.
+describe("DeployInProgressError never crosses a step boundary (#8726)", () => {
+  const ALLOWED = new Set(["_cron-shared.ts", "_cron-claude-eval-substrate.ts"]);
+  const files = readdirSync(FN_DIR).filter((f) => f.endsWith(".ts"));
+
+  it("walks the real directory (floor: the 9 deferral-aware crons and _cron-shared.ts are all seen)", () => {
+    for (const name of [...WIRED_PRODUCERS, "cron-architecture-diagram-sync.ts", "_cron-shared.ts"]) {
+      expect(files).toContain(name);
+    }
+  });
+
+  it("no file outside the producer and _cron-shared names the class in code", () => {
+    const offenders = files.filter(
+      (f) =>
+        !ALLOWED.has(f) &&
+        stripComments(readFileSync(resolve(FN_DIR, f), "utf-8"), f).includes("DeployInProgressError"),
+    );
+    expect(offenders).toEqual([]);
+  });
 });
