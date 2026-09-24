@@ -923,8 +923,8 @@ service-role key, which the agent can read (D2).
 
 - `flag_flip_audit.approval_method` (migration 140) is self-reported — it records that the
   operator script's TTY ack returned in-process, not that a person typed (ADR-249 D6). No current
-  UI or export renders this column; if a future incident report, audit-log UI, or compliance export
-  ever surfaces it, that consumer MUST carry the self-reported caveat verbatim rather than
+  UI or export renders this column; if a future incident write-up, audit-log UI, or compliance
+  export ever surfaces it, that consumer MUST carry the self-reported caveat verbatim rather than
   presenting `tty-ack` as verified human authorization — the column comment already states this for
   any reader of the schema.
 - `user-set-role/SKILL.md` has no incident-rollback block analogous to `flag-set-role/SKILL.md`'s
