@@ -1799,27 +1799,34 @@ else
     # 11.9 of 45 MB on the 2026-09-24 replace, the checksum then refused the partial file, and the
     # host booted with no log shipper. Retry up to 4 times. `-C -` resumes the partial file, so
     # progress accumulates across attempts instead of restarting. The checksum is checked after
-    # every attempt, whatever curl returned: a complete file can come back with a non-zero rc
-    # (a resume request against a finished file is refused), and that file is still good.
+    # every attempt, whatever curl returned: the bytes on disk decide, not curl's exit code.
     # This runs after inngest-server has started, so the extra time never delays scheduling.
-    # Worst case: 4 x 180s plus 50s of backoff.
+    # Worst case: 4 x 180s plus 30s of backoff.
     for attempt in 1 2 3 4; do
       rc=0
       curl -fsSL -C - --connect-timeout 15 --max-time 180 -o "$tmp/vector.tar.gz" "$VECTOR_DOWNLOAD_URL" || rc=$?
       if [[ -s "$tmp/vector.tar.gz" ]]; then
         actual_sha="$(sha256sum "$tmp/vector.tar.gz" | awk '{print $1}')"
         [[ "$actual_sha" == "$VECTOR_CLI_SHA256" ]] && break
-        if [[ "$rc" -eq 0 ]]; then
-          # curl finished and the bytes are wrong: resuming would only append to a bad file.
-          log "warn: vector download attempt $attempt: sha256 mismatch; discarding the file"
-          rm -f "$tmp/vector.tar.gz"
-        fi
+        # Start clean when resuming cannot help:
+        #   rc 0      curl finished and the bytes are wrong, so appending would extend a bad file;
+        #   rc 33/36  the server will not resume (it ignores Range), so every later `-C -` would
+        #             fail the same way against the same partial file.
+        case "$rc" in
+          0|33|36)
+            log "warn: vector download attempt $attempt: discarding the partial file (curl rc=$rc)"
+            rm -f "$tmp/vector.tar.gz"
+            actual_sha=""
+            ;;
+        esac
       fi
       log "warn: vector download attempt $attempt incomplete (curl rc=$rc)"
       if [[ "$attempt" -lt 4 ]]; then sleep $((attempt * 5)); fi
     done
     if [[ "$actual_sha" != "$VECTOR_CLI_SHA256" ]]; then
-      log "error: vector sha256 mismatch: expected $VECTOR_CLI_SHA256 actual $actual_sha"
+      # Name the last curl rc: with a dead network there is no file to hash, and a checksum
+      # message alone would point at the wrong cause.
+      log "error: vector download failed after $attempt attempts (last curl rc=$rc, last sha256=${actual_sha:-none}, expected $VECTOR_CLI_SHA256)"
       return 1
     fi
     tar -xzf "$tmp/vector.tar.gz" -C "$tmp"

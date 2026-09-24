@@ -56,7 +56,8 @@ SIZE="$(wc -c < "$WORK/vector.tar.gz")"
 #   partial  -> append the next quarter (rounded up) of the file, exit 28 (a stall). Four
 #               only complete the file when each resumes where the last one stopped.
 #   rest     -> append everything that is still missing, exit 0
-#   full     -> write the whole file from scratch (ignores -C -), exit 0
+#   norange  -> a server that ignores Range: with a partial file on disk, curl's `-C -`
+#               request fails rc 33 and writes nothing; with no file, it downloads it all.
 #   corrupt  -> write a same-sized file of wrong bytes, exit 0
 #   late     -> append everything still missing, but exit 28 (the file is complete, curl says no)
 #   dead     -> write nothing, exit 7
@@ -74,7 +75,7 @@ have=0; [[ -f "$out" ]] && have=$(wc -c < "$out")
 case "$step" in
   partial) chunk=$(( (STUB_SIZE + 3) / 4 )); tail -c +$((have + 1)) "$STUB_SRC" | head -c "$chunk" >> "$out"; exit 28 ;;
   rest)    tail -c +$((have + 1)) "$STUB_SRC" >> "$out"; exit 0 ;;
-  full)    cat "$STUB_SRC" > "$out"; exit 0 ;;
+  norange) if [[ "$have" -gt 0 ]]; then exit 33; fi; cat "$STUB_SRC" > "$out"; exit 0 ;;
   corrupt) head -c "$STUB_SIZE" /dev/zero > "$out"; exit 0 ;;
   late)    tail -c +$((have + 1)) "$STUB_SRC" >> "$out"; exit 28 ;;
   *)       exit 7 ;;
@@ -96,7 +97,7 @@ run_case() {
     VECTOR_CLI_VERSION=0.43.1 VECTOR_CLI_SHA256="$GOOD_SHA" vec_triple="$TRIPLE" \
     VECTOR_DOWNLOAD_URL="https://packages.example.invalid/vector.tar.gz" \
     VECTOR_INSTALL_PATH="$c/vector" VECTOR_VERSION_FILE="$c/version" \
-    bash -c 'set -euo pipefail; log() { echo "[inngest-bootstrap] $*"; }; eval "$1"; install_vector_binary' _ "$FN" \
+    bash -c 'set -euo pipefail; log() { echo "[inngest-bootstrap] $*"; }; eval "$1"; install_vector_binary || exit $?' _ "$FN" \
     > "$c/log" 2>&1 || RC=$?
   ATTEMPTS="$(cat "$c/attempts")"
   INSTALLED=0
@@ -119,9 +120,11 @@ else
   no "four stalls: rc=$RC installed=$INSTALLED attempts=$ATTEMPTS"
 fi
 
-# 3. The network never answers: bounded at 4 attempts, returns non-zero, installs nothing.
+# 3. The network never answers: bounded at 4 attempts, returns non-zero, installs nothing,
+#    and the final error names the curl rc rather than an empty checksum.
 run_case dead dead dead dead dead dead
-if [[ "$RC" -ne 0 && "$INSTALLED" -eq 0 && "$ATTEMPTS" -eq 4 ]]; then
+if [[ "$RC" -ne 0 && "$INSTALLED" -eq 0 && "$ATTEMPTS" -eq 4 ]] \
+  && grep -q 'last curl rc=7, last sha256=none' "$WORK/case-dead/log"; then
   ok "dead network: gives up after 4 attempts with a non-zero return"
 else
   no "dead network: rc=$RC installed=$INSTALLED attempts=$ATTEMPTS"
@@ -130,14 +133,14 @@ fi
 # 4. Wrong bytes with rc 0 are discarded, never resumed onto; the next attempt starts clean.
 run_case corrupt-then-good corrupt rest
 if [[ "$RC" -eq 0 && "$INSTALLED" -eq 1 && "$ATTEMPTS" -eq 2 ]] \
-  && grep -q 'sha256 mismatch; discarding' "$WORK/case-corrupt-then-good/log"; then
+  && grep -q 'discarding the partial file (curl rc=0)' "$WORK/case-corrupt-then-good/log"; then
   ok "wrong bytes: discarded, clean retry installs"
 else
   no "wrong bytes: rc=$RC installed=$INSTALLED attempts=$ATTEMPTS"
 fi
 
-# 5. A complete file that comes back with a non-zero rc is still accepted on its checksum,
-#    and the loop stops there rather than asking for a range past the end.
+# 5. The bytes on disk decide, not curl's exit code: a complete file that arrives with a
+#    non-zero rc is accepted on its checksum, and the loop stops there.
 run_case complete-but-late partial late
 if [[ "$RC" -eq 0 && "$INSTALLED" -eq 1 && "$ATTEMPTS" -eq 2 ]]; then
   ok "complete file: accepted on its checksum and stops retrying"
@@ -151,6 +154,16 @@ if [[ "$RC" -ne 0 && "$INSTALLED" -eq 0 && "$ATTEMPTS" -eq 4 ]]; then
   ok "always-wrong bytes: never installs"
 else
   no "always-wrong bytes: rc=$RC installed=$INSTALLED attempts=$ATTEMPTS"
+fi
+
+# 7. A server that ignores Range: the partial file is discarded on rc 33 and the next attempt
+#    downloads from zero, instead of every later attempt failing against the same partial.
+run_case no-range partial norange norange norange
+if [[ "$RC" -eq 0 && "$INSTALLED" -eq 1 && "$ATTEMPTS" -eq 3 ]] \
+  && grep -q 'discarding the partial file (curl rc=33)' "$WORK/case-no-range/log"; then
+  ok "server ignores Range: discards the partial on rc 33, installs on attempt 3"
+else
+  no "server ignores Range: rc=$RC installed=$INSTALLED attempts=$ATTEMPTS"
 fi
 
 echo "=== inngest-vector-download: $pass passed, $fail failed ==="
