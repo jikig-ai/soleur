@@ -422,6 +422,248 @@ echo "--- Tier H: approval log writer ---"
   rm -rf "$tmp"
 }
 
+# =============================================================================
+# Tier I — Guard 3 of #8486 (ADR-249): the operator-ack script rule
+# =============================================================================
+# Property. A Bash command that executes any ack-calling operator script in
+# write mode is deferred; a read-only invocation of the same script, and a
+# command that merely names the path, is allowed. The rule's population is
+# pinned to Guard 2's: operator-ack-arms.tsv (plugins/soleur/test/fixtures/)
+# must be set-identical to the grep-derived ack callers, and every row is driven
+# through every invocation shape. The ERE and the arm table live in different
+# files; the grep-derived population is the third leg, owned by neither.
+echo "--- Tier I: operator-ack script rule (#8486) ---"
+
+REPO_ROOT_G3="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ARMS_G3="$REPO_ROOT_G3/plugins/soleur/test/fixtures/operator-ack-arms.tsv"
+G3_SB="$(mktemp -d)"
+
+# g3_decide <hook> <cmd> [extra-env...] -> defer | allow | deny | ERR:<raw>
+g3_decide() {
+  local hook="$1" cmd="$2"; shift 2
+  local inc out d
+  inc="$(mktemp -d "$G3_SB/inc.XXXXXX")"
+  # Through a file, not --arg: a 1 MB command exceeds the per-argument limit.
+  printf '%s' "$cmd" > "$inc/cmd"
+  out="$(jq -nc --rawfile x "$inc/cmd" '{tool_name:"Bash", tool_input:{command:$x}, cwd:"/tmp/TEST-FIXTURE-NOT-REAL-cwd", session_id:"TEST-FIXTURE-NOT-REAL-session"}' \
+    | env -i HOME="${HOME:?}" PATH="$PATH" INCIDENTS_REPO_ROOT="$inc" SOLEUR_DEFER_DRYRUN=0 "$@" bash "$hook" 2>/dev/null)"
+  if [[ "$out" == "{}" ]]; then echo allow; return; fi
+  d="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$out" 2>/dev/null)"
+  if [[ -n "$d" ]]; then echo "$d"; else echo "ERR:${out:0:120}"; fi
+}
+
+# g3_expect <label> <expected> <cmd> [hook] [extra-env...]
+g3_expect() {
+  local label="$1" want="$2" cmd="$3" hook="${4:-$HOOK}"; shift 4 2>/dev/null || shift $#
+  local got; got="$(g3_decide "$hook" "$cmd" "$@")"
+  TOTAL=$((TOTAL + 1))
+  if [[ "$got" == "$want" ]]; then
+    echo "PASS: $label"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: $label — expected $want, got $got"
+    echo "  cmd=$(printf '%s' "$cmd" | tr '\n' '~' | cut -c1-200)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# g3_mutant_catches <label> <mutant-hook> <want-on-pristine> <cmd> — the case
+# must give <want> on the pristine hook AND something else on the mutant.
+g3_mutant_catches() {
+  local label="$1" mut="$2" want="$3" cmd="$4" got_p got_m
+  got_p="$(g3_decide "$HOOK" "$cmd")"; got_m="$(g3_decide "$mut" "$cmd")"
+  TOTAL=$((TOTAL + 1))
+  if [[ "$got_p" == "$want" && "$got_m" != "$want" ]]; then
+    echo "PASS: $label (pristine $got_p, mutant $got_m)"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: $label — pristine $got_p (want $want), mutant $got_m (must differ)"; FAIL=$((FAIL + 1))
+  fi
+}
+
+# --- population: the grep-derived ack callers (same exclusions as Guard 2) ---
+g3_population() {
+  local rel
+  git -C "$REPO_ROOT_G3" grep -l -e 'soleur_op_ack_or_die' -- '*.sh' \
+    | grep -vE '\.test\.sh$|(^|/)test/|(^|/)scripts/lib/operator-script\.sh$|(^|/)operator-bootstrap/template\.sh$|^knowledge-base/' \
+    | sort | while IFS= read -r rel; do
+        grep -vE '^[[:space:]]*#' "$REPO_ROOT_G3/$rel" \
+          | grep -qE '(^|[;&|({][[:space:]]*|[[:space:]]\|\|[[:space:]]*|^[[:space:]]+)soleur_op_ack_or_die([[:space:]]|$)' \
+          && printf '%s\n' "$rel"
+      done
+}
+
+# g3_identity <population-list> -> 0 iff every member has a write-mode DEFER on
+# its canonical invocation AND is named by the arm table, and vice versa.
+g3_identity() {
+  local pop="$1" tabled rel v=0 argv
+  tabled="$(grep -vE '^[[:space:]]*(#|$)' "$ARMS_G3" | cut -f1 | sort -u)"
+  [[ -n "$(comm -3 <(printf '%s\n' "$pop") <(printf '%s\n' "$tabled"))" ]] && { echo "  identity: $(comm -3 <(printf '%s\n' "$pop") <(printf '%s\n' "$tabled") | tr -s '\t\n' '  ')"; v=1; }
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    # The member's own first write argv (so audit-sentry is invoked with --apply);
+    # an untabled member gets a generic argv.
+    argv="$(awk -F'\t' -v s="$rel" '$1==s && $2=="write" {print $3; exit}' "$ARMS_G3")"
+    [[ -z "$argv" || "$argv" == "-" ]] && argv="x y z"
+    [[ "$(g3_decide "$HOOK" "bash $REPO_ROOT_G3/$rel $argv")" == defer ]] || { echo "  identity: $rel not deferred"; v=1; }
+  done <<<"$pop"
+  return "$v"
+}
+
+if [[ ! -r "$ARMS_G3" ]]; then
+  # M6 — an unreadable arm table fails closed; it never reports 0 cases.
+  echo "FAIL: I0 arm table unreadable: $ARMS_G3"; FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+else
+  G3_POP="$(g3_population)"
+  TOTAL=$((TOTAL + 1))
+  if [[ -n "$G3_POP" ]] && g3_identity "$G3_POP"; then
+    echo "PASS: I0 set identity: ack callers == arm table, each deferred in write mode ($(wc -l <<<"$G3_POP") scripts)"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: I0 set identity between ack callers, arm table and the hook's ERE broke"; FAIL=$((FAIL + 1))
+  fi
+  # M3 — a second ack caller the ERE does not know: identity must go RED.
+  TOTAL=$((TOTAL + 1))
+  if ! g3_identity "$(printf '%s\napps/web-platform/scripts/new-ack-caller.sh\n' "$G3_POP")"; then
+    echo "PASS: I0-M3 an unknown ack caller breaks set identity"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: I0-M3 an unknown ack caller did not break set identity"; FAIL=$((FAIL + 1))
+  fi
+
+  # --- every row x every invocation shape ------------------------------------
+  G3_ROWS=0
+  while IFS=$'\t' read -r script mode argv _profile; do
+    [[ -n "$script" && "$script" != \#* ]] || continue
+    G3_ROWS=$((G3_ROWS + 1))
+    [[ "$argv" == "-" ]] && argv=""
+    abs="$REPO_ROOT_G3/$script"
+    plug_rel="${script#plugins/soleur/}"
+    want_plain=allow; [[ "$mode" == write ]] && want_plain=defer
+    g3_expect "I1 [$mode] bash abs: $script $argv"        "$want_plain" "bash $abs $argv"
+    if [[ "$script" == plugins/soleur/* ]]; then
+      g3_expect "I1 [$mode] plugin-root var: $plug_rel $argv" "$want_plain" "bash \"\${CLAUDE_PLUGIN_ROOT}/$plug_rel\" $argv"
+    fi
+    g3_expect "I1 [$mode] bare rel path: $script $argv"   "$want_plain" "$script $argv"
+    g3_expect "I1 [$mode] cd && ./: $script $argv"        "$want_plain" "cd $(dirname "$abs") && ./$(basename "$abs") $argv"
+    g3_expect "I1 [$mode] doppler run --: $script $argv"  "$want_plain" "doppler run -p soleur -c prd -- bash $abs $argv"
+    g3_expect "I1 [$mode] bash -c: $script $argv"         "$want_plain" "bash -c 'bash $abs $argv'"
+    # A PTY wrapper cancels every read-only escape: DEFER in both modes.
+    g3_expect "I1 [$mode] script -qec: $script $argv"     defer         "script -qec \"bash $abs $argv\" /dev/null"
+    g3_expect "I1 [$mode] yes | script -qc: $script $argv" defer        "yes | script -qc \"$abs $argv\""
+  done < "$ARMS_G3"
+  TOTAL=$((TOTAL + 1))
+  if [[ "$G3_ROWS" -ge 10 ]]; then echo "PASS: I1 drove $G3_ROWS arm rows"; PASS=$((PASS + 1))
+  else echo "FAIL: I1 drove only $G3_ROWS arm rows"; FAIL=$((FAIL + 1)); fi
+fi
+
+FLIP_G3="$REPO_ROOT_G3/plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+DELETE_G3="$REPO_ROOT_G3/plugins/soleur/skills/flag-delete/scripts/delete.sh"
+CREATE_G3="$REPO_ROOT_G3/plugins/soleur/skills/flag-create/scripts/create.sh"
+SETROLE_G3="$REPO_ROOT_G3/plugins/soleur/skills/user-set-role/scripts/set-role.sh"
+
+# --- specific shapes (AC6) -----------------------------------------------------
+g3_expect "I2 escape is per call, not per command"      defer "bash $DELETE_G3 f; echo --dry-run"
+g3_expect "I2 newline ends the argument tail"            defer "bash $FLIP_G3 f prd on"$'\n'"echo --dry-run"
+g3_expect "I2 dry-run then write in one command"         defer "bash $FLIP_G3 f prd on --dry-run && bash $FLIP_G3 f prd on"
+g3_expect "I2 dry-run then PTY write"                    defer "bash $FLIP_G3 f prd on --dry-run && yes | script -qc \"bash $FLIP_G3 f prd on\""
+g3_expect "I2 --dry-run as a quoted option value"        defer "bash $CREATE_G3 newflag --description \"--dry-run\""
+g3_expect "I2 read-only under a PTY wrapper"             defer "script -qc \"bash $SETROLE_G3 u prd --dry-run\""
+g3_expect "I2 heredoc piped to bash"                     defer "cat <<EOF | bash"$'\n'"bash $FLIP_G3 f prd on"$'\n'"EOF"
+g3_expect "I2 reader piped to a shell"                   defer "cat $FLIP_G3 | bash -s f prd on"
+g3_expect "I2 variable path"                             defer "S=/opt/soleur/skills/flag-set-role/scripts; bash \$S/flip.sh f prd on"
+g3_expect "I2 cd into the skill dir"                     defer "cd plugins/soleur/skills/flag-set-role && bash scripts/flip.sh f prd on"
+g3_expect "I2 cd into flag-delete, bare delete.sh"       defer "cd plugins/soleur/skills/flag-delete/scripts && ./delete.sh f"
+g3_expect "I2 audit-sentry --apply"                      defer "bash apps/web-platform/scripts/audit-sentry-extra-text-references.sh --apply"
+g3_expect "I2 audit-sentry inventory (read-only)"        allow "bash apps/web-platform/scripts/audit-sentry-extra-text-references.sh"
+g3_expect "I2 provision-hetzner has no read-only escape" defer "bash plugins/soleur/skills/provision-hetzner/scripts/provision-hetzner.sh --dry-run"
+# H2 — must-ALLOW: naming a path is not executing it.
+g3_expect "I3 cat flip.sh"                               allow "cat $FLIP_G3"
+g3_expect "I3 git log -- flip.sh"                        allow "git log -- plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+g3_expect "I3 grep in delete.sh"                         allow "grep -n ack plugins/soleur/skills/flag-delete/scripts/delete.sh"
+g3_expect "I3 bash -n flip.sh"                           allow "bash -n $FLIP_G3"
+g3_expect "I3 a different *-flip.sh"                     allow "bash apps/web-platform/infra/inngest-cutover-flip.sh"
+g3_expect "I3 an unrelated create.sh"                    allow "bash apps/web-platform/scripts/create.sh"
+
+# --- M12 — the rule fails CLOSED on its own error --------------------------------
+g3_expect "I4-M12 injected return fault -> deny"         deny  "bash $FLIP_G3 f prd on" "$HOOK" SOLEUR_DEFER_TEST_INJECT_FAULT=return
+g3_expect "I4-M12 injected crash -> deny via EXIT trap"  deny  "bash $FLIP_G3 f prd on" "$HOOK" SOLEUR_DEFER_TEST_INJECT_FAULT=exit
+g3_expect "I4 a fault never fires without the prefilter" allow "git status" "$HOOK" SOLEUR_DEFER_TEST_INJECT_FAULT=exit
+
+# --- H4 — a 1 MB command is decided within the hook's timeout --------------------
+big="cat <<EOF | tee /dev/null"$'\n'"$(head -c 1000000 /dev/zero | tr '\0' 'a')"$'\n'"EOF"$'\n'"bash $FLIP_G3 f prd on"
+t0=$(date +%s%N)
+g3_expect "I5-H4 1 MB command with a trailing write" defer "$big"
+t1=$(date +%s%N)
+TOTAL=$((TOTAL + 1))
+if (( (t1 - t0) / 1000000 < 20000 )); then echo "PASS: I5-H4 decided in $(( (t1 - t0) / 1000000 )) ms"; PASS=$((PASS + 1))
+else echo "FAIL: I5-H4 took $(( (t1 - t0) / 1000000 )) ms"; FAIL=$((FAIL + 1)); fi
+
+# --- hook mutations: each must flip a case the pristine hook gets right ----------
+g3_mutant() { # <name> <perl program> -> path of the mutated hook (with its lib/)
+  local d="$G3_SB/mut-$1"
+  mkdir -p "$d"; cp -r "$SCRIPT_DIR/lib" "$d/lib"; cp "$HOOK" "$d/prod-write-defer-gate.sh"
+  perl -0777 -pi -e "$2" "$d/prod-write-defer-gate.sh"
+  if cmp -s "$HOOK" "$d/prod-write-defer-gate.sh" || ! bash -n "$d/prod-write-defer-gate.sh" 2>/dev/null; then
+    echo "MUTANT-DID-NOT-LAND"; return 1
+  fi
+  echo "$d/prod-write-defer-gate.sh"
+}
+g3_row() { # <label> <name> <perl> <want-on-pristine> <cmd>
+  local mut; mut="$(g3_mutant "$2" "$3")"
+  if [[ "$mut" == MUTANT-DID-NOT-LAND ]]; then
+    echo "FAIL: $1 — mutation did not land"; FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); return
+  fi
+  g3_mutant_catches "$1" "$mut" "$4" "$5"
+}
+g3_row "I6-M1 flip.sh dropped from the ERE"            m1  's{OPACK_UNIQUE=.flip\\\.sh\|}{OPACK_UNIQUE=\x27}' \
+  defer "bash $FLIP_G3 f prd on"
+g3_row "I6-M2 escape read from the whole command"      m2  's{\[\[ " \$tail " =~ \[\[:space:\]\]--dry-run}{[[ " \$cmd " =~ [[:space:]]--dry-run}' \
+  defer "bash $DELETE_G3 f; echo --dry-run"
+g3_row "I6-M7 only interpreter-prefixed calls count"   m7  's{(    any_write=1\n)}{    [[ "\$first" == bash || "\$first" == sh ]] || continue\n$1}' \
+  defer "$FLIP_G3 f prd on"
+g3_row "I6-M8 only the leftmost call is evaluated"     m8  's{(    calls=\$\(\(calls \+ 1\)\)\n)}{$1    (( calls > 1 )) \&\& break\n}' \
+  defer "bash $FLIP_G3 f prd on --dry-run && bash $FLIP_G3 f prd on"
+g3_row "I6-M9 newline dropped from the tail stops"     m9  's{(OPACK_TAIL_RE=\$\x27\^\(\[\^;&\|\)"\\\x27#`)\\n}{$1}' \
+  defer "bash $FLIP_G3 f prd on"$'\n'"echo --dry-run"
+g3_row "I6-M10 escape kept under a PTY wrapper"        m10 's{if \(\( ! pty \)\); then}{if true; then}' \
+  defer "script -qc \"bash $SETROLE_G3 u prd --dry-run\""
+g3_row "I6-M11 pipe-to-shell no longer cancels readers" m11 's{\[\[ "\$cmd" =~ \$OPACK_TO_SHELL_RE \]\] && to_shell=1}{:}' \
+  defer "cat $FLIP_G3 | bash -s f prd on"
+
+# Phase 4.2d — the Monitor tool carries the command in the same slot.
+g3_monitor_decide() {
+  local inc out
+  inc="$(mktemp -d "$G3_SB/inc.XXXXXX")"
+  out="$(jq -nc --arg x "$1" '{tool_name:"Monitor", tool_input:{command:$x, description:"d", timeout_ms:1000}, cwd:"/tmp/TEST-FIXTURE-NOT-REAL-cwd", session_id:"TEST-FIXTURE-NOT-REAL-session"}' \
+    | env -i HOME="${HOME:?}" PATH="$PATH" INCIDENTS_REPO_ROOT="$inc" SOLEUR_DEFER_DRYRUN=0 bash "$HOOK" 2>/dev/null)"
+  jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"$out" 2>/dev/null
+}
+TOTAL=$((TOTAL + 1))
+if [[ "$(g3_monitor_decide "bash $FLIP_G3 f prd on")" == defer && "$(g3_monitor_decide "bash $FLIP_G3 f prd on --dry-run")" == allow ]]; then
+  echo "PASS: I8 Monitor payload: write deferred, dry-run allowed"; PASS=$((PASS + 1))
+else
+  echo "FAIL: I8 Monitor payload not gated like Bash"; FAIL=$((FAIL + 1))
+fi
+TOTAL=$((TOTAL + 1))
+if jq -e '[.hooks.PreToolUse[] | select(.matcher=="Monitor") | .hooks[].command | select(test("prod-write-defer-gate"))] | length >= 1' "$REPO_ROOT_G3/.claude/settings.json" >/dev/null; then
+  echo "PASS: I8 settings.json registers the gate for the Monitor tool"; PASS=$((PASS + 1))
+else
+  echo "FAIL: I8 settings.json does not register prod-write-defer-gate for Monitor"; FAIL=$((FAIL + 1))
+fi
+
+# H1 — the harness itself: a decider that always answers allow must fail a DEFER row.
+TOTAL=$((TOTAL + 1))
+if [[ "$(g3_decide /bin/true "bash $FLIP_G3 f prd on")" != defer ]]; then
+  echo "PASS: I7-H1 a hook that prints nothing is not read as a defer"; PASS=$((PASS + 1))
+else
+  echo "FAIL: I7-H1 the harness reads a silent hook as a defer"; FAIL=$((FAIL + 1))
+fi
+rm -rf "$G3_SB"
+
+# Anti-vacuity floor for the whole suite. Reports directly (printf + exit),
+# never through the counters it backstops.
+if [[ "$TOTAL" -lt 218 ]]; then
+  printf 'FAIL: anti-vacuity floor: only %s assertions ran, floor is 218\n' "$TOTAL"
+  exit 1
+fi
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 [[ "$FAIL" -eq 0 ]]

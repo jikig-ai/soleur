@@ -572,6 +572,13 @@ g2_check() {
         muts="$(g2_is_mutating_log "$G2_LOG")"
         if [[ "$G2_RC" != 0 ]]; then echo "g2: ${script} ${argv}: read-only run without a TTY exited ${G2_RC}, expected 0: $(tail -3 <<<"$G2_OUT" | tr '\n' ' ')"; v=1; fi
         if [[ "$muts" -ne 0 ]]; then echo "g2: ${script} ${argv}: read-only run made ${muts} mutating call(s)"; v=1; fi
+        # Guard 3 H3 (escape/parser agreement): the defer hook ALLOWS this row
+        # without a PTY wrapper, so the script must treat it as read-only even
+        # when a person answers yes — a mode the hook calls read-only must never
+        # write, whatever is typed.
+        g2_run "$root" "$script" pty $'yes\n' "$stubdir" "${av[@]}"
+        muts="$(g2_is_mutating_log "$G2_LOG")"
+        if [[ "$muts" -ne 0 ]]; then echo "g2: ${script} ${argv}: a read-only row answered yes on a pty made ${muts} mutating call(s)"; v=1; fi
         ;;
       *) echo "g2: unknown mode '${mode}' for ${script}"; v=1 ;;
     esac
