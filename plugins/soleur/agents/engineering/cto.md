@@ -25,7 +25,7 @@ After completing the assessment, check whether any agents or skills are missing 
 
 #### Architecture Decision Detection
 
-When the assessment identifies an architectural decision (new service, infrastructure change, data model change, cross-boundary integration, technology choice), recommend the user run `/soleur:architecture create` with a suggested title. Example: "This involves choosing PostgreSQL over MongoDB for the event store — consider running `/soleur:architecture create 'Use PostgreSQL for event store'` to capture the rationale."
+When the assessment identifies an architectural decision (new service, infrastructure change, data model change, cross-boundary integration, technology choice), recommend the user run `soleur:architecture create` with a suggested title. Example: "This involves choosing PostgreSQL over MongoDB for the event store — consider running `soleur:architecture create 'Use PostgreSQL for event store'` to capture the rationale."
 
 ### 2. Recommend
 

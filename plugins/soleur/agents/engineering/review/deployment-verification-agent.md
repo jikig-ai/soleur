@@ -105,7 +105,7 @@ Per `hr-no-dashboard-eyeball-pull-data-yourself`: emit concrete queries with det
 | Missing data count | `SELECT COUNT(*) FROM <table> WHERE <new_column> IS NULL AND <old_column> IS NOT NULL` via Supabase Management API `/database/query` | count > 0 |
 | User-impact signal | `gh issue list --label "incident" --state all -L 200 --search "created:>$(date -u +%Y-%m-%dT%H:%M:%S --date='deploy time')" --json number,title --jq length` | count >= 1 |
 
-Schedule the verdict rules as a `--once` GitHub Actions workflow firing at +1h / +24h via `/soleur:schedule --once`. The workflow runs the queries and either auto-closes the deployment ticket (all FAIL verdicts false) or opens a follow-through issue with the failing query output. **Do not** prescribe operator dashboard-watching.
+Schedule the verdict rules as a `--once` GitHub Actions workflow firing at +1h / +24h via `soleur:schedule --once`. The workflow runs the queries and either auto-closes the deployment ticket (all FAIL verdicts false) or opens a follow-through issue with the failing query output. **Do not** prescribe operator dashboard-watching.
 
 **Sample auto-verification query (run 1 hour after deploy via the scheduled workflow, NOT manually):**
 

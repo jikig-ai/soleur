@@ -35,7 +35,7 @@ Your evaluation must verify:
 - API contracts and interfaces remain stable or are properly versioned
 - Design patterns are consistently applied
 - Architectural decisions are properly documented when significant
-- If the PR introduces a new service, cross-boundary integration, or infrastructure change, check `knowledge-base/engineering/architecture/decisions/` for a corresponding ADR. Report missing ADRs as advisory findings (not blockers): "Consider creating an ADR for this architectural change — run `/soleur:architecture create`"
+- If the PR introduces a new service, cross-boundary integration, or infrastructure change, check `knowledge-base/engineering/architecture/decisions/` for a corresponding ADR. Report missing ADRs as advisory findings (not blockers): "Consider creating an ADR for this architectural change — run `soleur:architecture create`"
 - Read `knowledge-base/engineering/architecture/principles-register.md` if it exists. For PRs that introduce infrastructure changes, new services, data model changes, or cross-boundary integrations, check alignment with relevant principles (AP-NNN). Report deviations as advisory findings (not blockers): "This change may deviate from AP-NNN (Title) — [brief explanation]"
 
 Provide your analysis in a structured format that includes:
