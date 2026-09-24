@@ -41,6 +41,7 @@ import { createGitHubAppClient } from "@/server/github/app-client";
 import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import { reportSilentFallback } from "@/server/observability";
 import { runWithByokLease } from "@/server/byok-lease";
+import { isAnthropicCreditExhausted } from "@/server/anthropic-credit";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
 import { persistTurnCostAwaitable } from "@/server/cost-writer";
 import { notifyOfflineUser, isCostBreakerReason } from "@/server/notifications";
@@ -84,11 +85,15 @@ function uuidv5(name: string, namespace: string): string {
 
 // Per-model unit pricing in USD per token. Cache-read tokens bill at ~10% of
 // input; cache-creation tokens at 125% of input FOR THE 5-MINUTE TTL used at
-// the call site below — the 1-hour TTL bills at 200% instead. Anthropic's
-// `usage.cache_creation_input_tokens` does not distinguish the two, so if any
-// call here ever passes `cache_control: { ttl: "1h" }` this row silently
-// under-attributes cache writes by 37.5% with the pinning test still green.
-// (Checked: no `ttl` is passed today, so the 5m default applies.)
+// the call site below — the 1-hour TTL bills at 200% instead. The code prices
+// the combined `usage.cache_creation_input_tokens` at the 5m rate (the SDK also
+// returns a per-TTL split in `usage.cache_creation.ephemeral_{5m,1h}_input_tokens`,
+// which is not read here), so if any call here ever passes
+// `cache_control: { ttl: "1h" }` this row silently under-attributes cache writes
+// by 37.5% with the pricing pin still green. (Checked: neither marker at the
+// call site — the system block's nor the top-level request field's — passes a
+// `ttl`, so the 5m default applies; the Guard 1 exact-shape test in
+// agent-on-spawn-requested-leader-loop.test.ts pins that.)
 // Verified against https://platform.claude.com/docs/en/about-claude/pricing.md
 // on 2026-07-24.
 //
@@ -209,8 +214,13 @@ type FailureReason =
   | "byok_lease_unavailable"
   | "anthropic_timeout"
   | "anthropic_rate_limited"
+  // A request the API rejects deterministically (400/404/413/422…); retrying
+  // fails the same way. See TurnRejection.
+  | "anthropic_request_rejected"
   | "leader_max_turns_exceeded"
   | "leader_response_truncated"
+  // The model declined the task (stop_reason=refusal).
+  | "leader_refused"
   | "leader_tool_invalid"
   | "leader_class_disabled"
   // feat-l5-runaway-guard PR-A: spawn-entry pause gate + distinct
@@ -250,6 +260,25 @@ interface MessageContentText {
 }
 
 type AnthropicContentBlock = ToolUseBlock | MessageContentText | { type: string };
+
+// The `turn-${n}-claude` step's second terminal outcome (ADR-042 §I1): a
+// deterministic failure it returns instead of throwing. Plain JSON, so Inngest
+// memoizes it and never retries the step.
+interface TurnRejection {
+  // A constant tag, so no field the API ever adds to a response can be read
+  // as a rejection.
+  kind: "turn_rejection";
+  rejected: NonNullable<ReturnType<typeof classifyLiveRejection>>;
+  status: number | null;
+  message: string;
+  stack: string;
+}
+
+function isTurnRejection(
+  r: AnthropicTurnResult | TurnRejection,
+): r is TurnRejection {
+  return (r as { kind?: unknown }).kind === "turn_rejection";
+}
 
 interface AnthropicTurnResult {
   id: string;
@@ -638,35 +667,64 @@ export async function agentOnSpawnRequestedHandler({
 
     // Step: turn-n-claude — opens the BYOK lease inside the step so ALS
     // cannot escape and idempotency under replay is preserved (ADR-042).
-    let turnResult: AnthropicTurnResult;
+    let stepResult: AnthropicTurnResult | TurnRejection;
     try {
-      turnResult = (await step.run(`turn-${n}-claude`, async () => {
+      stepResult = await step.run(`turn-${n}-claude`, async () => {
         return runWithByokLease(
           {
             workspaceContextUserId: founderId,
             keyOwnerUserId: founderId,
           },
-          async (lease) => {
-            // Raw-REST consumer (`new Anthropic({apiKey})`) — MUST use the
-            // api_key row; an oauth_token cannot authenticate the REST API.
-            const apiKey = await lease.getRestApiKey();
-            const client = new Anthropic({ apiKey });
-            const sdkResult = (await client.messages.create({
-              model: leaderModule.model,
-              max_tokens: LEADER_MAX_TOKENS,
-              system: [
-                {
-                  type: "text",
-                  text: leaderModule.systemPrompt,
-                  cache_control: { type: "ephemeral" },
-                },
-              ],
-              tools: leaderModule.tools.map((t) => ({
-                ...t,
+          async (lease): Promise<AnthropicTurnResult | TurnRejection> => {
+            // Pre-billing only: nothing after `create` resolves may be read as
+            // a rejection, because by then the founder's key has been billed.
+            let sdkResult: AnthropicTurnResult;
+            try {
+              // Raw-REST consumer (`new Anthropic({apiKey})`) — MUST use the
+              // api_key row; an oauth_token cannot authenticate the REST API.
+              const apiKey = await lease.getRestApiKey();
+              const client = new Anthropic({ apiKey });
+              sdkResult = (await client.messages.create({
+                model: leaderModule.model,
+                max_tokens: LEADER_MAX_TOKENS,
+                // Automatic caching: the API places this breakpoint on the last
+                // cacheable block and advances it every turn, so calls 2..N read
+                // the conversation so far from cache. It uses 1 of the request's
+                // 4 breakpoint slots. 5-minute default TTL on purpose;
+                // MODEL_PRICING's cache-write rate assumes it.
                 cache_control: { type: "ephemeral" },
-              })) as never,
-              messages: messages as never,
-            })) as unknown as AnthropicTurnResult;
+                system: [
+                  {
+                    type: "text",
+                    text: leaderModule.systemPrompt,
+                    // The single explicit marker. Tools render before system, so
+                    // it covers the tool definitions too; it is inert until
+                    // tools + system exceed the model's minimum cacheable length.
+                    // Do NOT add per-tool markers: with this marker and the
+                    // automatic one, 3 or more tools exceed the 4-breakpoint
+                    // cap and the request 400s.
+                    cache_control: { type: "ephemeral" },
+                  },
+                ],
+                tools: leaderModule.tools as never,
+                messages: messages as never,
+              })) as unknown as AnthropicTurnResult;
+            } catch (err) {
+              // A deterministic failure is RETURNED, not thrown: Inngest
+              // memoizes a returned value and never retries it, while a thrown
+              // error is retried 3 times and reaches the handler as a StepError
+              // with `status` and custom `name` stripped (ADR-042 §I1).
+              const rejected = classifyLiveRejection(err);
+              if (rejected === null) throw err;
+              const status = (err as { status?: unknown }).status;
+              return {
+                kind: "turn_rejection",
+                rejected,
+                status: typeof status === "number" ? status : null,
+                message: String((err as Error).message),
+                stack: (err as Error).stack ?? "",
+              };
+            }
 
             const usage = sdkResult.usage;
             const pricing = MODEL_PRICING[leaderModule.model] ?? {
@@ -707,7 +765,7 @@ export async function agentOnSpawnRequestedHandler({
             return sdkResult;
           },
         );
-      })) as AnthropicTurnResult;
+      });
     } catch (err) {
       const reason = classifyAnthropicOrLeaseError(err);
       return persistFailure(step, {
@@ -719,20 +777,47 @@ export async function agentOnSpawnRequestedHandler({
         actionClass,
         sourceRef,
         logger,
+        extra: { turn: n, model: leaderModule.model },
       });
     }
-
-    // Handle stop_reason: max_tokens / end_turn / tool_use.
-    if (turnResult.stop_reason === "max_tokens") {
+    if (isTurnRejection(stepResult)) {
       return persistFailure(step, {
         actionSendId,
-        reason: "leader_response_truncated",
-        err: new Error(`stop_reason=max_tokens on turn ${n}`),
+        reason: stepResult.rejected,
+        // Rebuilt so Sentry gets the SDK's own message and stack.
+        err: Object.assign(new Error(stepResult.message), {
+          stack: stepResult.stack,
+        }),
         founderId,
         messageId,
         actionClass,
         sourceRef,
         logger,
+        extra: { status: stepResult.status, turn: n, model: leaderModule.model },
+      });
+    }
+    const turnResult: AnthropicTurnResult = stepResult;
+
+    // Handle stop_reason. Only end_turn and tool_use continue; any other stop
+    // is terminal here. Falling through would append an assistant message with
+    // no user turn after it, and the next request would 400 as a prefill.
+    if (
+      turnResult.stop_reason !== "end_turn" &&
+      turnResult.stop_reason !== "tool_use"
+    ) {
+      return persistFailure(step, {
+        actionSendId,
+        reason:
+          turnResult.stop_reason === "refusal"
+            ? "leader_refused"
+            : "leader_response_truncated",
+        err: new Error(`stop_reason=${turnResult.stop_reason} on turn ${n}`),
+        founderId,
+        messageId,
+        actionClass,
+        sourceRef,
+        logger,
+        extra: { turn: n, model: leaderModule.model },
       });
     }
 
@@ -1091,6 +1176,45 @@ function tryParseSourceRef(sourceRef: string): ParsedSourceRef | null {
   return { owner: m[1], repo: m[2], number: parseInt(m[3], 10) };
 }
 
+// 408, 409 and 429 are transient: the SDK retries them itself, and Inngest
+// retries whatever still fails. Every other 4xx fails the same way on retry.
+const TRANSIENT_4XX = new Set([408, 409, 429]);
+
+// Classifies the LIVE error inside the `turn-${n}-claude` step. `status` and a
+// custom `name` do not survive Inngest's StepError serialization, so this is
+// the only place they can be read. Returns null for anything retryable, which
+// the step rethrows. Never `instanceof Anthropic.APIError`: the leader-loop
+// suite mocks the SDK without it.
+function classifyLiveRejection(
+  err: unknown,
+): "byok_lease_unavailable" | "anthropic_request_rejected" | null {
+  const { name, status, message } = (err ?? {}) as {
+    name?: unknown;
+    status?: unknown;
+    message?: unknown;
+  };
+  if (name === "MissingByokKeyError") return "byok_lease_unavailable";
+  if (typeof status !== "number" || status < 400 || status >= 500) return null;
+  if (TRANSIENT_4XX.has(status)) return null;
+  // The founder's account, not the request: an invalid key, billing, missing
+  // permission, an exhausted credit balance or the founder's own spend cap.
+  // The last two arrive as 400 invalid_request_error, not 402.
+  if (
+    status === 401 ||
+    status === 402 ||
+    status === 403 ||
+    isAnthropicCreditExhausted(String(message ?? "")) ||
+    /specified API usage limits/i.test(String(message ?? ""))
+  ) {
+    return "byok_lease_unavailable";
+  }
+  // A request built wrong (400/404/413/422…).
+  return "anthropic_request_rejected";
+}
+
+// Classifies what reaches the handler's catch. In production that is an
+// Inngest StepError carrying only message, stack and a string `cause`, so the
+// `name`/`status` arms below fire only for errors thrown in-process.
 function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
   const name = (err as { name?: string } | null)?.name ?? "";
   const cause = (err as { cause?: string } | null)?.cause ?? "";
@@ -1133,6 +1257,8 @@ async function persistFailure(
       cumulativeCents: number | null;
       ceilingCents: number | null;
     };
+    /** Extra discriminators for the dead-letter line (e.g. status, turn, model). */
+    extra?: Record<string, unknown>;
   },
 ): Promise<{ acknowledged: false; failureReason: string }> {
   const { actionSendId, reason, err } = args;
@@ -1141,6 +1267,7 @@ async function persistFailure(
     op: "agent-on-spawn-requested",
     message: `agent-on-spawn deadlettered: ${reason}`,
     extra: {
+      ...args.extra,
       founderId: args.founderId,
       messageId: args.messageId,
       actionClass: args.actionClass,

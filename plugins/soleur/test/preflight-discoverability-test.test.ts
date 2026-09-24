@@ -2425,13 +2425,18 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // credentials from Doppler soleur/prd_terraform. NO SUBSTITUTE: `plaintext_journal` rides the
   // git-data host's boot_complete, which lands only in Better Stack Logs and Sentry; the host is
   // on the private network and no unauthenticated endpoint exposes its boot state. Genuine.
-  // #8705 (2026-09-24): +1 (25 -> 26, after #5274 took 24 -> 25) for `2026-09-24-security-rotate-web-probes-read-doppler-token-plan.md`.
+  // #8717 (2026-09-24): +1 (25 -> 26, after #5274 took 24 -> 25) for `2026-09-24-fix-leader-loop-prompt-caching-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/betterstack-query.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the leader-loop SOLEUR_CLAUDE_COST markers
+  // exist only in the Better Stack Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #8705 (2026-09-24): +1 (26 -> 27, after #8717 took 25 -> 26) for `2026-09-24-security-rotate-web-probes-read-doppler-token-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the probe (`apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh`) lists
   // soleur/prd service tokens with the Tier-B DOPPLER_TOKEN_TF. NO SUBSTITUTE: service-token
   // metadata (slug, created_at) has no unauthenticated endpoint, and a read service token gets HTTP
   // 403 on the listing (measured 2026-09-24). Genuine declaration.
-  const BASELINE_DECLARED_PROBES = 26;
+  const BASELINE_DECLARED_PROBES = 27;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

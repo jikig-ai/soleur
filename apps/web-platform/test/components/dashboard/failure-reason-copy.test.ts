@@ -22,8 +22,10 @@ const ALL_REASONS: FailureReason[] = [
   "byok_lease_unavailable",
   "anthropic_timeout",
   "anthropic_rate_limited",
+  "anthropic_request_rejected",
   "leader_max_turns_exceeded",
   "leader_response_truncated",
+  "leader_refused",
   "leader_tool_invalid",
   "leader_class_disabled",
   "cancelled_by_operator",
@@ -66,6 +68,9 @@ describe("FAILURE_REASON_COPY", () => {
     expect(FAILURE_REASON_COPY.byok_lease_unavailable.retryEligible).toBe(true);
     expect(FAILURE_REASON_COPY.anthropic_timeout.retryEligible).toBe(true);
     expect(FAILURE_REASON_COPY.anthropic_rate_limited.retryEligible).toBe(
+      false,
+    );
+    expect(FAILURE_REASON_COPY.anthropic_request_rejected.retryEligible).toBe(
       false,
     );
     expect(FAILURE_REASON_COPY.leader_max_turns_exceeded.retryEligible).toBe(
