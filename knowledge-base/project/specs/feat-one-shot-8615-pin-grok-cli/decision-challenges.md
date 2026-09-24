@@ -32,3 +32,7 @@ and the plan was left unchanged on these points.
   ordering argument.
 - **Disposition:** left to the operator. The plan-review simplicity pass argued the opposite, and the
   Codex/Devin arms do not strip either.
+
+**Update 2026-09-24 (review, PR #8756):** T3 resolved in favour of the strip — the 5-seat review
+(security-sentinel P3) made the same call, and a harness row proves a multi-line `--version` cannot
+start a workflow command, reddening without the strip.
