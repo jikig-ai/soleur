@@ -627,7 +627,7 @@ above matches a UI-surface path.
 
 ## Deferred Follow-ups
 
-Filed by this PR (numbers recorded after filing):
+Filed by this PR: #8790 (CLA gate) and #8791 (residual tracker).
 
 - **`cla-signed-author-gate.sh` scans the session cwd** — a false ALLOW from a root-anchored session
   on a compliance gate. Its own issue.
@@ -638,6 +638,30 @@ Filed by this PR (numbers recorded after filing):
   main-anchored sessions; the `soleur:schedule` template merges from `main`), unparsed PR-ref
   spellings (URL, branch, flags-first, bare), and suggesting `gh pr merge --match-head-commit <oid>`
   on ALLOW to close the check-then-merge race.
+
+## Code Review Revisions (2026-09-24)
+
+A ten-seat review of e4f48abdf0 found the resolver's INPUT narrower than its property. All fixed in
+2ebaa49385 unless listed as tracked:
+
+- **Target binding (security P1).** The number was the first digits after ANY `gh pr merge` text, so a
+  donor PR's evidence could approve a different merge (echo, comment, `||` arm, quoted or suffixed
+  number, or a MERGED PR whose squashed head never reaches main). Now every real invocation is parsed
+  with the detector's anchor in both `$SCAN` and `$CMD`; the resolver runs only when all name the same
+  bare number. State L carries the reason.
+- **Repository retargeting (security P1).** `-Rx`, `-sdR x`, `GH_REPO`/`GH_HOST` and a `cd` into a
+  checkout whose origin differs now force L; a `-R` elsewhere in the command no longer does.
+- **Not-OPEN and fork PRs** read no local signals (Signal 3 only): a merged donor's head, or a fork
+  author's self-written trailer, is not this merge's evidence.
+- **Messages (agent-native).** The deny names the range actually read, a failed origin/main fetch, and
+  the PR's checkout to run the trailer script in; the sync-skip notice now precedes the detached-HEAD
+  exit and distinguishes a stale own branch.
+- **Tests.** Donor, override, repeated-number (#7409), stacked-branch, fork, not-OPEN, cd, behind and
+  Signal 3 cases; a call-site case floor + `_verdict` self-test (promoted in guard-vacuity-floor).
+- **Tracked in #8791, not fixed here:** the main/master early exit; a PR stacked on another branch is
+  measured against `origin/main`, not its base; detector spellings that never reach the gate (env
+  prefix, `if`/`else` arms, pipes, `bash -c`); an `upstream`-vs-`origin` remote layout; state O on an
+  up-to-date branch leaving a local-only trailer unpushed (relies on `ship-unpushed-commits-gate.sh`).
 
 ## Plan Review Revisions
 
