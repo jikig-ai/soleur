@@ -71,10 +71,22 @@ fi
 # S4: Better Stack delivery is the DIRECT-CURL path (Vector-independent — a marker that shipped
 # via Vector would vanish exactly when Vector is dark, defeating the dark-host diagnostic), and is
 # best-effort: guarded on BOTH creds being present so an unprovisioned host degrades, never aborts.
-if printf '%s\n' "$HELPER" | grep -qE 'curl -fsS'; then
-  ok "S4a: Better Stack delivery uses direct curl -fsS (Vector-independent)"
+# The curl is transport-confined (#7797): `--disable` first so ~/.curlrc is never parsed, and
+# `--noproxy '*'` so a proxy env var cannot redirect the bearer.
+if printf '%s\n' "$HELPER" | grep -qF "curl --disable --noproxy '*' -fsS"; then
+  ok "S4a: Better Stack delivery uses direct, transport-confined curl -fsS (Vector-independent)"
 else
-  no "S4a: helper must post to Better Stack via curl -fsS (not through Vector)"
+  no "S4a: helper must post to Better Stack via curl --disable --noproxy '*' -fsS (not through Vector)"
+fi
+# S4d: the bearer goes only to the pinned destination, and the pin equals the Terraform literal
+# the web host is rendered with (zot-registry.tf local.betterstack_logs_ingest_url).
+TF_INGEST=$(sed -n 's/^[[:space:]]*betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/zot-registry.tf" | head -1)
+if [ -n "$TF_INGEST" ] \
+  && printf '%s\n' "$HELPER" | grep -qxF "readonly INGEST_URL_PINNED=\"$TF_INGEST\"" \
+  && printf '%s\n' "$HELPER" | grep -qF '[ "$INGEST_URL" = "$INGEST_URL_PINNED" ]'; then
+  ok "S4d: Better Stack post is gated on the pinned destination ($TF_INGEST)"
+else
+  no "S4d: helper must pin INGEST_URL to zot-registry.tf's betterstack_logs_ingest_url (got '${TF_INGEST:-unparsed}')"
 fi
 if printf '%s\n' "$HELPER" | grep -qE 'BETTERSTACK_LOGS_TOKEN' && printf '%s\n' "$HELPER" | grep -qE 'BETTERSTACK_INGEST_URL'; then
   ok "S4b: reads BETTERSTACK_LOGS_TOKEN + BETTERSTACK_INGEST_URL from env"

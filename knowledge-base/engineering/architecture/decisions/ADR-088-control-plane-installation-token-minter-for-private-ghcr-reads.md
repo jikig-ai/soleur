@@ -114,7 +114,12 @@ username value change.
 > web, both writing root's docker config) and `cloud-init-inngest.yml`. Retiring
 > `GHCR_READ_TOKEN` therefore does NOT break the deploy path — read this section's "no consumer
 > changes" as history, or a 1d/5.4 reader will defer a retirement that is already safe for the
-> deploy half. The `doppler_secret` resources stay declared-existence with
+> deploy half.
+>
+> **Superseded 2026-09-24 (#8036 item 1d, PR #8708):** the fresh-boot consumers listed above are
+> gone. No host template passes or reads `GHCR_READ_TOKEN`/`GHCR_READ_USER` any more; the remaining
+> consumer is `doppler_secret.ghcr_read_*` itself, which 5.4 (#8714) retires together with the
+> minter. The `doppler_secret` resources stay declared-existence with
 `ignore_changes = [value]` (the minter owns value churn; terraform does not clobber it).
 
 **Prerequisite:** add `packages: read` to the App manifest (absent today) → one org-owner
