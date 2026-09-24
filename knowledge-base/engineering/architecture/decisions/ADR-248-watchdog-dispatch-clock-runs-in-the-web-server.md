@@ -16,8 +16,11 @@ the alarm could no longer separate a real outage from GitHub dropping ticks. On 
 dedicated Inngest scheduler was down for about 59 minutes and nothing filed: the whole outage
 fell inside one gap between runs.
 
-`main-health-monitor.yml` shows the fix: its runs are started by `workflow_dispatch`, and they
-start within seconds of the dispatch every time. GitHub drops `schedule` ticks, not dispatches.
+`main-health-monitor.yml` shows the fix: its runs are started by `workflow_dispatch`, and the
+RUN is created within seconds of every dispatch — GitHub drops `schedule` ticks, not
+dispatches. The run's JOBS still wait in the org runner queue like any other job (#8450's
+concurrency budget): measured on the last 40 runs of each watchdog (job `started_at −
+created_at`, 2026-09-24), median ~30 s, p90 ~20 min, max ~40 min.
 Its dispatcher is an Inngest cron, which these two workflows cannot use: a watcher of Inngest
 cannot be scheduled by Inngest (ADR-033, anti-circularity corollary).
 
@@ -29,13 +32,23 @@ The web-platform Node server runs a **watchdog dispatch clock**
 - Every 30 s it checks each row of `WATCHDOG_DISPATCH_TABLE`
   (`server/watchdog-dispatch-table.ts`). When a UTC slot (15 or 60 min) is due, after a
   per-slot random jitter of 30–120 s, it mints a GitHub App installation token scoped to
-  `actions: write` on `jikig-ai/soleur` only. It reads the workflow's newest run, and sends
-  `POST …/dispatches {ref: "main"}` unless that run was created at or after the slot start.
+  `actions: write` on `jikig-ai/soleur` only. It reads the workflow's recent runs on `main`
+  and sends `POST …/dispatches {ref: "main"}` unless the newest run that could have covered
+  the slot (event `schedule` or `workflow_dispatch`, not cancelled/skipped/startup-failed) was
+  created at or after the slot start.
 - It arms only when `NODE_ENV=production` and `SOLEUR_HOST_ID` is set. Only `ci-deploy.sh`
   sets that variable, so the clock runs on each deployed web host and never in CI, e2e or dev.
 - Each workflow keeps its `schedule:` cron as a **fallback**. The Sentry monitor margins are
-  budgeted for the clock: `*/15` margin 15, hourly margin 30. A dead trigger pages within
-  interval + margin (30 / 90 min).
+  budgeted for the clock PLUS the measured runner queue: inngest-health margin 45 (was 15),
+  zot 60 (was 120). The margin bounds only dead-trigger detection (clock dark on both hosts
+  and no GitHub tick): interval + margin = 60 / 120 min. A real outage pages as soon as a run
+  executes and posts `?status=error` — slot + ~4 min + queue + runtime, typically ~10 min and
+  ~30 min at p90 — independent of the margin. `sentry-monitor-iac-parity.test.ts` enforces
+  the budget.
+- The workflows tolerate a repeat run in one slot (a host collision, estimated ~5–10% of
+  slots, or a late fallback tick): tracker create-or-comment lookups LIST by label rather than
+  search (GitHub issue search lags a just-created issue), and the auto-restart step skips when
+  a dispatched restart is queued, running or under 12 min old.
 - A tick is bounded at 90 s and fenced three times (inner catch, an outer catch that emits
   `tick_escaped`, fail-open reporting), because `crash-handlers.ts` exits the process on an
   unhandled rejection. Every tick emits a WARN `SOLEUR_WATCHDOG_DISPATCH` marker.
@@ -60,7 +73,7 @@ uses the Inngest dispatch pattern (`cron-main-health-monitor`) instead.
 | Zot registry host | Yes | The zot alarm run |
 | web-1 app container (also Inngest's execution host, via `sdk_url`) | Yes, from web-2 | Better Stack uptime; web-2 keeps dispatching |
 | web-2 | Yes, from web-1 | web-2's absence-alerted Better Stack heartbeats (ADR-143 R1(a)) cover the HOST only; a crashed web-2 app container is visible only as that host's missing `SOLEUR_WATCHDOG_DISPATCH` rows, while web-1 carries the clock alone |
-| Both web hosts | No | Better Stack uptime; Sentry missed check-in within 30 min; the `schedule:` fallback still runs, late |
+| Both web hosts | No | Better Stack uptime; Sentry missed check-in within 60 min; the `schedule:` fallback still runs, late |
 | GitHub API / Actions | No, and the fallback is impaired too | Sentry missed check-in (Sentry does not depend on GitHub) |
 
 This satisfies ADR-033's corollary test ("if the thing being checked fails completely, can the
@@ -73,9 +86,11 @@ the clock is the primary trigger and `schedule:` stays behind it.
 Every deployed web host runs the same image, so each runs its own copy of every in-process
 timer started at boot (this ADR states the rule; ADR-068 established the multi-host fleet it
 applies to). A timer whose external side effect is not idempotent per slot must deduplicate
-across the fleet. Here that is the per-slot jitter plus the slot-scoped read; a rare collision
-(both hosts inside the read's visibility lag) yields one extra queued run, which both workflows
-tolerate (`cancel-in-progress: false`, issue dedup). Under ADR-027 this is Bucket B,
+across the fleet. Here that is the per-slot jitter plus the slot-scoped read; a collision
+(both hosts inside the read's visibility lag, ~5–10% of slots) yields one extra queued run,
+which both workflows tolerate (`cancel-in-progress: false`, label-listed tracker dedup, the
+restart dedup). Host clocks are not explicitly NTP-provisioned by the web cloud-init; skew
+beyond the 30-s minimum jitter would only produce duplicate runs, never a missed slot. Under ADR-027 this is Bucket B,
 duplicate-tolerant. The rule is about timers with EXTERNAL side effects: `ccIdleReaper` acts on
 process-local state, and `stuckActiveReaper` writes shared rows through an RPC whose updates are
 conditional on the row still being stuck, so a second host's pass finds nothing to change.
@@ -99,9 +114,13 @@ covered by the other host, and the new container's first poll re-reads the curre
 
 ## Consequences
 
-- inngest-health goes from about 11 to 96 runs a day, and zot from about 11 to 24. The restart
-  arm of inngest-health can again fire up to about three times per incident inside its 45-min
-  give-up window, which is the #6374 design.
+- inngest-health goes from about 5–8 to 96 runs a day, and zot from about 5–8 to 24 (plus the
+  late fallback ticks and ~5–10% collision duplicates). Each run is a few minutes on a
+  standard runner (public repo, no minute cost); averaged over the day that is well under one
+  concurrent job of the org's 20-job budget (#8450), whose queue is dominated by PR fan-out.
+  The restart arm can again fire up to about three times per incident inside its 45-min
+  give-up window, which is the #6374 design; the restart dedup keeps a same-slot repeat run
+  from adding a fourth.
 - The short-lived canary container also carries a clock for its few minutes of life (it gets
   the same `SOLEUR_HOST_ID`). Its slot-scoped read keeps it from double-dispatching, but Vector
   does not ship the canary's logs, so a run it dispatches shows in `gh run list` with no marker,
@@ -109,9 +128,9 @@ covered by the other host, and the new container's first poll re-reads the curre
   "canary fires no crons" comment in `ci-deploy.sh` is now stale and was deliberately NOT edited
   here: `ci-deploy.sh` is a hashed `triggers_replace` input of the host provisioner
   (`server.tf`), so even a comment edit re-provisions live hosts.
-- The zot monitor's 30-min margin assumes the clock. Rolling the web image back to before #8495
-  returns zot to GitHub's 2–7 h cadence and it will page as missed; roll the margin back with it
-  (the inngest monitor keeps margin 15 either way).
+- The margins assume the clock. Rolling the web image back to before #8495 returns both
+  workflows to GitHub's 2–7 h cadence and both monitors page as missed; restore the pre-#8495
+  margins (inngest 15, zot 120) with it.
 
 ## Reversal triggers
 

@@ -5,28 +5,40 @@
 // C1-C15 + Guard 2). Every scenario injects its table, so a two-entry table is
 // used only where the second member is the point (C11, C15).
 
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 // C12 drives the DEFAULT mint (no `mint` injected) through these two seams, so
 // the token-scope contract is asserted at the boundary the clock does not own.
-const { generateInstallationTokenMock, createProbeOctokitMock } = vi.hoisted(
-  () => ({
-    generateInstallationTokenMock: vi.fn(
-      async (..._args: unknown[]) => "ghs_DEFAULTMINTTOKEN",
-    ),
-    createProbeOctokitMock: vi.fn(async (..._args: unknown[]) => ({
-      request: vi.fn(async (..._a: unknown[]) => ({ data: { id: 4242 } })),
-    })),
-  }),
-);
+const { generateInstallationTokenMock, createAppJwtOctokitMock, lookupMock } =
+  vi.hoisted(() => {
+    const lookupMock = vi.fn(async (..._a: unknown[]) => ({ data: { id: 4242 } }));
+    return {
+      generateInstallationTokenMock: vi.fn(
+        async (..._args: unknown[]) => "ghs_DEFAULTMINTTOKEN",
+      ),
+      lookupMock,
+      createAppJwtOctokitMock: vi.fn(async (..._args: unknown[]) => ({
+        octokit: { request: lookupMock },
+      })),
+    };
+  });
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: generateInstallationTokenMock,
 }));
 vi.mock("@/server/github/probe-octokit", () => ({
-  createProbeOctokit: createProbeOctokitMock,
+  createAppJwtOctokit: createAppJwtOctokitMock,
+  // The clock must never use createProbeOctokit (it reports its own failures
+  // under feature=cron-oauth-probe); a call here throws.
+  createProbeOctokit: () => {
+    throw new Error("createProbeOctokit must not be used by the clock");
+  },
+  PROBE_ISSUE_OWNER: "jikig-ai",
+  PROBE_ISSUE_REPO: "soleur",
 }));
 
 import {
@@ -77,6 +89,8 @@ interface FakeRun {
   id: number;
   event: string;
   status: string;
+  conclusion: string | null;
+  headBranch: string;
   createdAtMs: number;
   visibleAtMs: number;
 }
@@ -98,8 +112,11 @@ function fakeGitHub(opts: { visibilityDelayMs?: number } = {}) {
       if (route === RUNS_ROUTE) {
         if (hooks.read) return hooks.read(params);
         const now = Date.now();
+        // Mirrors the real endpoint: newest-first, `branch` filters head_branch,
+        // `per_page` bounds the page.
         const visible = (runs.get(wf) ?? [])
           .filter((x) => x.visibleAtMs <= now)
+          .filter((x) => params.branch === undefined || x.headBranch === params.branch)
           .sort((a, b) => b.createdAtMs - a.createdAtMs)
           .slice(0, Number(params.per_page ?? 30));
         return {
@@ -109,6 +126,8 @@ function fakeGitHub(opts: { visibilityDelayMs?: number } = {}) {
               id: x.id,
               event: x.event,
               status: x.status,
+              conclusion: x.conclusion,
+              head_branch: x.headBranch,
               created_at: new Date(x.createdAtMs).toISOString(),
             })),
           },
@@ -122,6 +141,8 @@ function fakeGitHub(opts: { visibilityDelayMs?: number } = {}) {
           id: nextId++,
           event: "workflow_dispatch",
           status: "queued",
+          conclusion: null,
+          headBranch: String(params.ref),
           createdAtMs: now,
           visibleAtMs: now + delay,
         });
@@ -142,6 +163,8 @@ function fakeGitHub(opts: { visibilityDelayMs?: number } = {}) {
         id: run.id ?? nextId++,
         event: run.event ?? "schedule",
         status: run.status ?? "completed",
+        conclusion: run.conclusion === undefined ? "success" : run.conclusion,
+        headBranch: run.headBranch ?? "main",
         createdAtMs: run.createdAtMs,
         visibleAtMs: run.visibleAtMs ?? run.createdAtMs,
       });
@@ -170,6 +193,8 @@ let unhandled: Mock<(...args: unknown[]) => void>;
 let report: Mock<(...args: unknown[]) => void>;
 let emit: Mock<(...args: unknown[]) => void>;
 let stops: Array<() => void>;
+// Set by the one case that deliberately drives the outer fence.
+let allowEscaped = false;
 
 function markers(): WatchdogDispatchMarker[] {
   return emit.mock.calls.map((c) => c[0] as WatchdogDispatchMarker);
@@ -198,6 +223,25 @@ function start(
   return clock;
 }
 
+function assertNoTokenAnywhere() {
+  const blob = JSON.stringify([
+    report.mock.calls.map(([err, opts]) => [
+      { name: (err as Error)?.name, message: (err as Error)?.message },
+      opts,
+    ]),
+    emit.mock.calls,
+  ]);
+  expect(blob).not.toContain(TOKEN);
+  for (const [err] of report.mock.calls) {
+    expect(err).toBeInstanceOf(Error);
+    expect(String((err as Error).message)).not.toContain(TOKEN);
+    for (const k of ["request", "response", "headers"]) {
+      expect(Object.keys(err as object)).not.toContain(k);
+      expect((err as Record<string, unknown>)[k]).toBeUndefined();
+    }
+  }
+}
+
 async function advanceTo(t: number) {
   const delta = t - Date.now();
   if (delta > 0) await vi.advanceTimersByTimeAsync(delta);
@@ -211,8 +255,10 @@ beforeEach(() => {
   report = vi.fn((..._a: unknown[]) => undefined);
   emit = vi.fn((..._a: unknown[]) => undefined);
   stops = [];
+  allowEscaped = false;
   generateInstallationTokenMock.mockClear();
-  createProbeOctokitMock.mockClear();
+  createAppJwtOctokitMock.mockClear();
+  lookupMock.mockClear();
 });
 
 afterEach(async () => {
@@ -221,7 +267,7 @@ afterEach(async () => {
   process.off("unhandledRejection", unhandled);
   // No tick may ever escape its fences (Guard 2) — asserted for EVERY case.
   expect(unhandled).not.toHaveBeenCalled();
-  expect(outcomes()).not.toContain("tick_escaped");
+  if (!allowEscaped) expect(outcomes()).not.toContain("tick_escaped");
   vi.useRealTimers();
 });
 
@@ -366,16 +412,24 @@ describe("C6 dedup read fails → fail-open", () => {
   it("still dispatches, reports op=dedup-read, and the next slot still ticks", async () => {
     const gh = fakeGitHub();
     gh.hooks.read = async () => {
-      throw Object.assign(new Error("boom"), { status: 502 });
+      throw Object.assign(new Error(`bad gateway for token ${TOKEN}`), {
+        name: "HttpError",
+        status: 502,
+        request: { headers: { authorization: `token ${TOKEN}` } },
+        response: { data: { message: `x ${TOKEN}` }, headers: {} },
+      });
     };
     start(gh);
     await advanceTo(S0 + 40_000);
     expect(gh.posts(INNGEST.workflowFile)).toBe(1);
     expect(report).toHaveBeenCalledTimes(1);
+    assertNoTokenAnywhere();
+    expect((report.mock.calls[0][0] as Error).name).toBe("HttpError:dedup-read");
     expect(report.mock.calls[0][1]).toMatchObject({
       feature: "watchdog-dispatch-clock",
       op: "dedup-read",
       extra: expect.objectContaining({ reason: "http", status: 502 }),
+      tags: { workflow: INNGEST.workflowFile, reason: "http", status: "502" },
     });
     await advanceTo(S0 + 15 * MIN + 40_000);
     expect(gh.posts(INNGEST.workflowFile)).toBe(2);
@@ -383,25 +437,6 @@ describe("C6 dedup read fails → fail-open", () => {
 });
 
 describe("C7 failures are reported redacted, fenced, and never stall the clock", () => {
-  function assertNoTokenAnywhere() {
-    const blob = JSON.stringify([
-      report.mock.calls.map(([err, opts]) => [
-        { name: (err as Error)?.name, message: (err as Error)?.message },
-        opts,
-      ]),
-      emit.mock.calls,
-    ]);
-    expect(blob).not.toContain(TOKEN);
-    for (const [err] of report.mock.calls) {
-      expect(err).toBeInstanceOf(Error);
-      expect(String((err as Error).message)).not.toContain(TOKEN);
-      for (const k of ["request", "response", "headers"]) {
-        expect(Object.keys(err as object)).not.toContain(k);
-        expect((err as Record<string, unknown>)[k]).toBeUndefined();
-      }
-    }
-  }
-
   async function assertNextSlotTicks(gh: ReturnType<typeof fakeGitHub>) {
     const before = gh.calls.length;
     gh.hooks.read = undefined;
@@ -459,7 +494,10 @@ describe("C7 failures are reported redacted, fenced, and never stall the clock",
       op: "dispatch",
       extra: expect.objectContaining({ reason: "http", status: 422 }),
     });
-    expect((err as Error).name).toBe("HttpError");
+    expect((err as Error).name).toBe("HttpError:dispatch");
+    expect(opts).toMatchObject({
+      tags: { workflow: INNGEST.workflowFile, reason: "http", status: "422" },
+    });
     expect((err as Error).message).toContain("[REDACTED-INSTALLATION-TOKEN]");
     expect(markers()).toContainEqual(
       expect.objectContaining({
@@ -569,7 +607,11 @@ describe("C12 token scope and request shape (default mint)", () => {
     const gh = fakeGitHub();
     start(gh, { mint: undefined, octokitFor: () => gh.api });
     await advanceTo(S0 + 40_000);
-    expect(createProbeOctokitMock).toHaveBeenCalledTimes(1);
+    expect(createAppJwtOctokitMock).toHaveBeenCalledTimes(1);
+    expect(lookupMock).toHaveBeenCalledWith(
+      "GET /repos/{owner}/{repo}/installation",
+      { owner: "jikig-ai", repo: "soleur" },
+    );
     expect(generateInstallationTokenMock).toHaveBeenCalledTimes(1);
     expect(generateInstallationTokenMock.mock.calls[0][0]).toBe(4242);
     expect(generateInstallationTokenMock.mock.calls[0][1]).toMatchObject({
@@ -596,8 +638,23 @@ describe("C12 token scope and request shape (default mint)", () => {
       owner: "jikig-ai",
       repo: "soleur",
       workflow_id: "scheduled-inngest-health.yml",
-      per_page: 1,
+      branch: "main",
     });
+    expect(Number(read?.params.per_page)).toBeGreaterThanOrEqual(5);
+  });
+
+  it("caches the installation id: a second slot mints without a second lookup; a failure drops the cache", async () => {
+    const gh = fakeGitHub();
+    start(gh, { mint: undefined, octokitFor: () => gh.api });
+    await advanceTo(S0 + 40_000);
+    await advanceTo(S0 + 15 * MIN + 40_000);
+    expect(lookupMock).toHaveBeenCalledTimes(1);
+    expect(generateInstallationTokenMock).toHaveBeenCalledTimes(2);
+    generateInstallationTokenMock.mockRejectedValueOnce(new Error("revoked"));
+    await advanceTo(S0 + 30 * MIN + 40_000);
+    await advanceTo(S0 + 45 * MIN + 40_000);
+    expect(lookupMock).toHaveBeenCalledTimes(2);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(3);
   });
 });
 
@@ -670,57 +727,256 @@ describe("C15 one jitter draw per slot per entry (two-entry table)", () => {
   });
 });
 
+describe("C16 dedup read counts only runs that could have covered the slot", () => {
+  it.each([
+    ["a pull_request run (branch/fork copy with an extra trigger)", { event: "pull_request" }],
+    ["a dispatch on a non-main ref", { event: "workflow_dispatch", headBranch: "feat-x" }],
+    ["a cancelled run (replaced in the concurrency queue)", { conclusion: "cancelled" }],
+    ["a startup_failure run", { conclusion: "startup_failure" }],
+  ])("%s created in-slot does NOT suppress the dispatch", async (_label, over) => {
+    const gh = fakeGitHub();
+    gh.seed(INNGEST.workflowFile, { createdAtMs: S0 + 5_000, ...over });
+    start(gh);
+    await advanceTo(S0 + 40_000);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+  });
+
+  it("an eligible in-slot run behind newer ineligible ones still suppresses", async () => {
+    const gh = fakeGitHub();
+    gh.seed(INNGEST.workflowFile, { id: 501, event: "schedule", createdAtMs: S0 + 2_000 });
+    gh.seed(INNGEST.workflowFile, { event: "pull_request", createdAtMs: S0 + 10_000 });
+    gh.seed(INNGEST.workflowFile, { conclusion: "cancelled", createdAtMs: S0 + 20_000 });
+    start(gh);
+    await advanceTo(S0 + 40_000);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(0);
+    expect(markers()).toContainEqual(
+      expect.objectContaining({ outcome: "skipped_slot_has_run", run_id: 501 }),
+    );
+  });
+
+  it("an in-progress run (not yet concluded) in-slot suppresses", async () => {
+    const gh = fakeGitHub();
+    gh.seed(INNGEST.workflowFile, {
+      createdAtMs: S0 + 2_000,
+      status: "in_progress",
+      conclusion: null,
+    });
+    start(gh);
+    await advanceTo(S0 + 40_000);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(0);
+  });
+});
+
+describe("C17 the tick deadline aborts the in-flight request and discards a late result", () => {
+  it("the dispatch request's AbortSignal is aborted at TICK_DEADLINE_MS", async () => {
+    const gh = fakeGitHub();
+    let seen: AbortSignal | undefined;
+    gh.hooks.dispatch = (p) => {
+      seen = (p.request as { signal?: AbortSignal } | undefined)?.signal;
+      return new Promise(() => undefined);
+    };
+    start(gh);
+    await advanceTo(S0 + 30_000 + 1);
+    expect(seen).toBeDefined();
+    expect(seen!.aborted).toBe(false);
+    await advanceTo(S0 + 30_000 + TICK_DEADLINE_MS + 1);
+    expect(seen!.aborted).toBe(true);
+  });
+
+  it("the runs read also carries the AbortSignal", async () => {
+    const gh = fakeGitHub();
+    start(gh);
+    await advanceTo(S0 + 40_000);
+    const read = gh.calls.find((c) => c.route === RUNS_ROUTE)!;
+    expect((read.params.request as { signal?: unknown }).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("a dispatch that succeeds AFTER the deadline yields exactly one `failed` marker, never `dispatched`", async () => {
+    const gh = fakeGitHub();
+    gh.hooks.dispatch = () =>
+      new Promise((res) => setTimeout(() => res({ status: 204 }), TICK_DEADLINE_MS + 5_000));
+    start(gh);
+    await advanceTo(S0 + 30_000 + TICK_DEADLINE_MS + 10_000);
+    expect(outcomes(INNGEST.workflowFile)).toEqual(["failed"]);
+  });
+
+  it("a mint that resolves AFTER the deadline never reads or dispatches", async () => {
+    const gh = fakeGitHub();
+    start(gh, {
+      mint: () => new Promise((res) => setTimeout(() => res(TOKEN), TICK_DEADLINE_MS + 5_000)),
+    });
+    await advanceTo(S0 + 30_000 + TICK_DEADLINE_MS + 10_000);
+    expect(gh.calls).toEqual([]);
+    expect(outcomes(INNGEST.workflowFile)).toEqual(["failed"]);
+  });
+});
+
+describe("C18 the outer fence and the poll guard", () => {
+  it("an error whose `message` getter throws escapes the inner catch; the outer fence contains it and the next slot proceeds", async () => {
+    allowEscaped = true;
+    const gh = fakeGitHub();
+    let calls = 0;
+    const hostile = {
+      get message(): string {
+        throw new Error("hostile getter");
+      },
+      name: "Hostile",
+    };
+    start(gh, {
+      mint: async () => {
+        calls++;
+        if (calls === 1) throw hostile;
+        return TOKEN;
+      },
+    });
+    await advanceTo(S0 + 40_000);
+    expect(outcomes(INNGEST.workflowFile)).toContain("tick_escaped");
+    expect(report.mock.calls.map((c) => (c[1] as { op?: string }).op)).toContain("tick");
+    await advanceTo(S0 + 15 * MIN + 40_000);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+  });
+
+  it("a poll that throws is reported (op=poll) and the clock keeps ticking", async () => {
+    const gh = fakeGitHub();
+    let n = 0;
+    start(gh, {
+      random: () => {
+        n++;
+        if (n === 1) throw new Error("rng broke");
+        return 0;
+      },
+    });
+    await advanceTo(S0 + 40_000);
+    expect(report.mock.calls.map((c) => (c[1] as { op?: string }).op)).toContain("poll");
+    await advanceTo(S0 + 70_000);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+  });
+});
+
+describe("C19 table and clock sanity", () => {
+  it("a row with a non-positive/non-integer interval is dropped loudly and never storms; valid rows still tick", async () => {
+    const gh = fakeGitHub();
+    const BAD: WatchdogDispatchEntry = { ...ZOT, workflowFile: "bad.yml", intervalMinutes: 0 };
+    start(gh, { table: [BAD, INNGEST] });
+    expect(report.mock.calls.map((c) => (c[1] as { op?: string }).op)).toContain("arm");
+    await advanceTo(S0 + 5 * MIN);
+    expect(gh.posts("bad.yml")).toBe(0);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+  });
+
+  it("a backwards clock step never replays an already-handled slot", async () => {
+    const gh = fakeGitHub();
+    vi.setSystemTime(S0 + 15 * MIN);
+    start(gh);
+    await advanceTo(S0 + 15 * MIN + 40_000);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+    // NTP steps the clock back into the previous slot.
+    vi.setSystemTime(S0 + 5 * MIN);
+    await vi.advanceTimersByTimeAsync(3 * POLL_MS);
+    await flushReal();
+    expect(gh.reads(INNGEST.workflowFile)).toBe(1);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Guard 2 (static half) — the clock must never route through the thing it
-// watches. Walks the clock's TRANSITIVE value-import graph (type-only imports
-// are erased and skipped) and asserts no module under server/inngest/ is
-// reachable. Enforced here rather than in the generated, non-blocking
-// .dependency-cruiser.cjs, because this suite runs in the required `test` context.
+// watches. Walks the clock's TRANSITIVE import graph with the TypeScript parser
+// (static import/export-from, `import x = require()`, `require()`, and
+// `import()` in any position or quoting) and asserts no module under
+// server/inngest/ is reachable. It FAILS CLOSED: a local specifier that does
+// not resolve, or an `import()`/`require()` with a non-literal argument, is an
+// offender rather than a silently dropped edge. Enforced here rather than in
+// the generated, non-blocking .dependency-cruiser.cjs, because this suite runs
+// in the required `test` context. Type-only imports are erased and skipped.
 // ---------------------------------------------------------------------------
 const APP_ROOT = resolve(__dirname, "../..");
+const SOURCE_EXTS = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
 
-function resolveSpecifier(spec: string, fromFile: string): string | null {
+function resolveSpecifier(spec: string, fromFile: string): string | null | "unresolved" {
   let base: string;
   if (spec.startsWith("@/")) base = join(APP_ROOT, spec.slice(2));
   else if (spec.startsWith(".")) base = resolve(dirname(fromFile), spec);
-  else return null; // bare package
-  for (const cand of [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts")]) {
-    if (existsSync(cand) && /\.(tsx?)$/.test(cand)) return cand;
+  else return null; // bare package — outside the property
+  const stem = base.replace(/\.(js|mjs|cjs)$/, "");
+  const candidates = [
+    base,
+    ...SOURCE_EXTS.map((e) => `${stem}${e}`),
+    ...SOURCE_EXTS.map((e) => join(base, `index${e}`)),
+  ];
+  for (const cand of candidates) {
+    if (existsSync(cand) && SOURCE_EXTS.some((e) => cand.endsWith(e))) return cand;
   }
-  return null;
+  return "unresolved";
 }
 
-function valueImports(file: string): string[] {
+function specifiersOf(file: string): string[] {
   const src = readFileSync(file, "utf-8");
-  const specs: string[] = [];
-  const re =
-    /^\s*(import|export)\s+(?!type\b)(?:[^;]*?\sfrom\s+)?["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/gm;
-  for (const m of src.matchAll(re)) specs.push(m[2] ?? m[3]);
-  return specs;
+  const sf = ts.createSourceFile(
+    file,
+    src,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : file.endsWith(".ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS,
+  );
+  const out: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (
+      (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) &&
+      n.moduleSpecifier &&
+      ts.isStringLiteral(n.moduleSpecifier)
+    ) {
+      const typeOnly = ts.isImportDeclaration(n) ? !!n.importClause?.isTypeOnly : n.isTypeOnly;
+      if (!typeOnly) out.push(n.moduleSpecifier.text);
+    } else if (
+      ts.isImportEqualsDeclaration(n) &&
+      ts.isExternalModuleReference(n.moduleReference) &&
+      ts.isStringLiteral(n.moduleReference.expression)
+    ) {
+      out.push(n.moduleReference.expression.text);
+    } else if (
+      ts.isCallExpression(n) &&
+      (n.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(n.expression) && n.expression.text === "require"))
+    ) {
+      const a = n.arguments[0];
+      if (a && (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a))) out.push(a.text);
+      else out.push("<non-literal-dynamic-import>");
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
 }
 
-function reachableFrom(entry: string): Set<string> {
-  const seen = new Set<string>();
+function walk(entry: string): { reach: Set<string>; problems: string[] } {
+  const reach = new Set<string>();
+  const problems: string[] = [];
   const stack = [entry];
   while (stack.length) {
     const f = stack.pop()!;
-    if (seen.has(f)) continue;
-    seen.add(f);
-    for (const spec of valueImports(f)) {
+    if (reach.has(f)) continue;
+    reach.add(f);
+    for (const spec of specifiersOf(f)) {
+      if (spec === "<non-literal-dynamic-import>") {
+        problems.push(`${f}: non-literal import()/require()`);
+        continue;
+      }
       const target = resolveSpecifier(spec, f);
-      if (target) stack.push(target);
+      if (target === "unresolved") problems.push(`${f}: unresolved local specifier ${spec}`);
+      else if (target) stack.push(target);
     }
   }
-  return seen;
+  return { reach, problems };
 }
+
+const rel = (p: string) => p.slice(APP_ROOT.length + 1);
 
 describe("Guard 2 — the clock never imports the Inngest tree", () => {
   const CLOCK = join(APP_ROOT, "server/watchdog-dispatch-clock.ts");
 
   it("the walker is live: it finds the clock's known direct dependencies", () => {
-    const reach = [...reachableFrom(CLOCK)].map((p) =>
-      p.slice(APP_ROOT.length + 1),
-    );
+    const reach = [...walk(CLOCK).reach].map(rel);
     expect(reach).toEqual(
       expect.arrayContaining([
         "server/watchdog-dispatch-clock.ts",
@@ -733,21 +989,53 @@ describe("Guard 2 — the clock never imports the Inngest tree", () => {
     );
   });
 
+  it("the walk is total: every local specifier resolved and every dynamic import is a literal", () => {
+    expect(walk(CLOCK).problems).toEqual([]);
+  });
+
   it("no module under server/inngest/ is transitively reachable", () => {
-    const offenders = [...reachableFrom(CLOCK)]
-      .map((p) => p.slice(APP_ROOT.length + 1))
-      .filter((p) => p.startsWith("server/inngest/"));
+    const offenders = [...walk(CLOCK).reach].map(rel).filter((p) => p.startsWith("server/inngest/"));
     expect(offenders).toEqual([]);
   });
 
-  it("the walker detects a server/inngest import (positive control)", () => {
-    const fake = join(APP_ROOT, "server/watchdog-dispatch-clock.ts");
-    // Resolving the forbidden specifier from the clock's own directory must land
-    // under server/inngest/ — proves resolveSpecifier can see the tree it guards.
-    const target = resolveSpecifier(
-      "@/server/inngest/functions/_cron-shared",
-      fake,
-    );
-    expect(target && target.includes("/server/inngest/")).toBe(true);
+  // Positive control: every import form the walker claims to see must, when
+  // pointed at the Inngest tree, land there — through the SAME walk the real
+  // assertion uses.
+  it.each([
+    ["static import", `import { inngest } from "@/server/inngest/client";`],
+    ["import after another statement", `const a = 1; import { inngest } from "@/server/inngest/client";`],
+    ["export-from", `export * from "@/server/inngest/client";`],
+    ["require()", `const c = require("@/server/inngest/client");`],
+    ["import = require()", `import c = require("@/server/inngest/client");`],
+    ["dynamic import()", `void import("@/server/inngest/client");`],
+    ["dynamic import() with comment", `void import(/* x */ "@/server/inngest/client");`],
+    ["template-literal import()", "void import(`@/server/inngest/client`);"],
+    [".js-suffixed specifier", `import { inngest } from "@/server/inngest/client.js";`],
+  ])("positive control: %s reaching server/inngest/ is detected", (_label, code) => {
+    const dir = mkdtempSync(join(tmpdir(), "wd-walk-"));
+    try {
+      const f = join(dir, "probe.ts");
+      writeFileSync(f, `${code}\n`);
+      const reach = [...walk(f).reach].filter((p) => p.startsWith(APP_ROOT)).map(rel);
+      expect(reach.some((p) => p.startsWith("server/inngest/"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("positive control: a non-literal import() and an unresolvable local specifier are problems, not silent drops", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wd-walk-"));
+    try {
+      const f = join(dir, "probe.ts");
+      writeFileSync(
+        f,
+        `const p = "@/server/inngest/client"; void import(p);\nimport "@/server/does-not-exist";\n`,
+      );
+      const { problems } = walk(f);
+      expect(problems.some((x) => x.includes("non-literal"))).toBe(true);
+      expect(problems.some((x) => x.includes("unresolved local specifier @/server/does-not-exist"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

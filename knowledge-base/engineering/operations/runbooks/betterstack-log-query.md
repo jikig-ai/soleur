@@ -524,13 +524,14 @@ boot (`outcome` `armed`/`disarmed`) and once per tick (`dispatched`, `skipped_sl
 `failed`, `tick_escaped`). Fields: `host_id`, `workflow`, `slot` (ISO slot start), `outcome`,
 and on a failure `op` (`mint`/`dedup-read`/`dispatch`), `reason` (`timeout`/`http`/`throw`),
 `status`; a skip carries `run_id` + `run_event` of the run that already covered the slot.
-Expect about five tick rows an hour per web host. `tick_escaped` must never appear. The
+Expect about five tick rows an hour per web host (`host_name` is Vector's, outside the marker).
+`tick_escaped` must never appear. The
 canary container's rows are not shipped (Vector matches the prod container name exactly).
 
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH \
-  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true) | [.host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | .host_name as $h | .message | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true) | [$h, .host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
 ```
 
 ### `SOLEUR_RUN_REPORT_SWEEP` — the 12:00Z run-report arm changed state

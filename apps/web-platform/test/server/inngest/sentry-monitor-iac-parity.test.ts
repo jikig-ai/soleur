@@ -14,6 +14,7 @@
 // monitors with no Inngest slug (GHA-fired workflows like
 // scheduled-terraform-drift, host-timer beacons like cron-egress-resolve).
 
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -617,27 +618,105 @@ function intervalCrontab(minutes: number): string {
   throw new Error(`no canonical crontab for a ${minutes}-min interval`);
 }
 
-// Margin floor = the clock's own delay (poll 0.5 + jitter JITTER_MAX_MS + tick
-// deadline TICK_DEADLINE_MS, in minutes) + the monitor's max runtime; ceiling =
-// one interval, so a dead trigger pages within 2 × interval.
+// Margin budget for a clock-dispatched monitor. Floor = the clock's own delay
+// (poll + JITTER_MAX_MS + TICK_DEADLINE_MS) + runner QUEUE + the monitor's max
+// runtime. The queue allowance is MEASURED, not assumed: job started_at −
+// created_at on the last 40 runs of each watchdog (2026-09-24, #8495 review):
+//   scheduled-inngest-health: median 32 s, p75 635 s, p90 1274 s, max 2272 s
+//   scheduled-zot-restart-loop: median 17 s, p75 680 s, p90 1169 s, max 2438 s
+// Re-measure with the command in cron-monitors.tf before changing it. Ceiling:
+// a dead trigger must page within interval + MAX_MARGIN_MINUTES.
 const CLOCK_DELAY_MINUTES = (POLL_MS + JITTER_MAX_MS + TICK_DEADLINE_MS) / 60_000;
+const QUEUE_ALLOWANCE_MINUTES = 30;
+const MAX_MARGIN_MINUTES = 60;
 function marginWithinBudget(
   margin: number,
-  intervalMinutes: number,
   maxRuntimeMinutes: number,
 ): boolean {
   return (
-    margin >= Math.ceil(CLOCK_DELAY_MINUTES + maxRuntimeMinutes) &&
-    margin <= intervalMinutes
+    margin >= Math.ceil(CLOCK_DELAY_MINUTES + QUEUE_ALLOWANCE_MINUTES + maxRuntimeMinutes) &&
+    margin <= MAX_MARGIN_MINUTES
   );
 }
 
+// Every job-level `concurrency` in a workflow doc (a job-scoped
+// cancel-in-progress: true would cancel the queued duplicate run the clock's
+// dedup relies on being harmless).
+function jobConcurrencies(doc: Record<string, unknown>): Array<Record<string, unknown>> {
+  const jobs = (doc.jobs ?? {}) as Record<string, { concurrency?: unknown }>;
+  return Object.values(jobs)
+    .map((j) => j?.concurrency)
+    .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null);
+}
+
+// Files that could put SOLEUR_HOST_ID into a non-deployed environment. The only
+// legitimate setter is apps/web-platform/infra/ci-deploy.sh (the deploy).
+const REPO_ROOT = resolve(__dirname, "../../../../..");
+function hostIdScanFiles(): string[] {
+  const out = execFileSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--",
+      ".github",
+      "apps/web-platform/scripts",
+      "apps/web-platform/e2e",
+      ":(glob)apps/web-platform/test/setup*",
+      ":(glob)apps/web-platform/Dockerfile*",
+      ":(glob)apps/web-platform/.env*",
+      ":(glob)apps/web-platform/*.config.*",
+      "apps/web-platform/package.json",
+      ":(glob)**/docker-compose*.y*ml",
+    ],
+    { cwd: REPO_ROOT, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+  )
+    .split("\0")
+    .filter(Boolean);
+  return out.filter(
+    (f) =>
+      (f.startsWith(".github/") && /\.(ya?ml|sh|js|mjs|ts)$/.test(f)) ||
+      /^apps\/web-platform\/(Dockerfile[^/]*|package\.json|\.env[^/]*|vitest\.config\.[cm]?[jt]s|playwright[^/]*\.config\.[cm]?[jt]s)$/.test(f) ||
+      /^apps\/web-platform\/(scripts|e2e|test\/setup[^/]*)\//.test(f) ||
+      /(^|\/)docker-compose[^/]*\.ya?ml$/.test(f),
+  );
+}
+// Matches an assignment in YAML (`SOLEUR_HOST_ID:`, quoted keys), shell/env
+// (`SOLEUR_HOST_ID=`), JS object keys, and a docker `-e SOLEUR_HOST_ID`
+// passthrough — but not the distinct SOLEUR_HOST_ID_OVERRIDE test seam.
+const HOST_ID_SET_RE =
+  /(?:["']?\bSOLEUR_HOST_ID(?![A-Z0-9_])["']?\s*[:=])|(?:-e\s+["']?SOLEUR_HOST_ID(?![A-Z0-9_]))/;
+
 describe("Watchdog dispatch clock parity (#8495)", () => {
   it("marginWithinBudget: boundary + permitted rows pass, over-wide / too-tight rows fail", () => {
-    expect(marginWithinBudget(15, 15, 8)).toBe(true);
-    expect(marginWithinBudget(20, 30, 10)).toBe(true);
-    expect(marginWithinBudget(120, 60, 10)).toBe(false);
-    expect(marginWithinBudget(10, 15, 8)).toBe(false);
+    // floor = ceil(4 + 30 + runtime); ceiling = MAX_MARGIN_MINUTES.
+    expect(marginWithinBudget(42, 8)).toBe(true); // inclusive floor
+    expect(marginWithinBudget(60, 10)).toBe(true); // inclusive ceiling
+    expect(marginWithinBudget(41, 8)).toBe(false); // one under the floor
+    expect(marginWithinBudget(15, 8)).toBe(false); // the pre-review margin (queue-blind)
+    expect(marginWithinBudget(120, 10)).toBe(false); // the #8450 jitter margin
+  });
+
+  it("HOST_ID_SET_RE matches every setter spelling and not the override seam", () => {
+    for (const hit of [
+      "      SOLEUR_HOST_ID: x",
+      '      "SOLEUR_HOST_ID": x',
+      "      'SOLEUR_HOST_ID': x",
+      'echo "SOLEUR_HOST_ID=ci" >> "$GITHUB_ENV"',
+      "export SOLEUR_HOST_ID=local",
+      "ENV SOLEUR_HOST_ID=image",
+      '"start:e2e": "NODE_ENV=production SOLEUR_HOST_ID=e2e node x"',
+      "docker run -e SOLEUR_HOST_ID img",
+      "env: { SOLEUR_HOST_ID: 'x' }",
+    ]) {
+      expect(HOST_ID_SET_RE.test(hit), hit).toBe(true);
+    }
+    for (const miss of [
+      "SOLEUR_HOST_ID_OVERRIDE=123",
+      "# the clock reads SOLEUR_HOST_ID from the environment",
+    ]) {
+      expect(HOST_ID_SET_RE.test(miss), miss).toBe(false);
+    }
   });
 
   it("every table entry agrees with its workflow and its Sentry monitor", () => {
@@ -674,9 +753,21 @@ describe("Watchdog dispatch clock parity (#8495)", () => {
           `${tag}: needs a top-level concurrency group with cancel-in-progress: false (duplicate dispatches must queue, not cancel)`,
         );
       }
+      for (const jc of jobConcurrencies(doc)) {
+        if (jc["cancel-in-progress"] === true) {
+          problems.push(`${tag}: a job-level concurrency sets cancel-in-progress: true`);
+        }
+      }
+      if (!(Number.isInteger(entry.intervalMinutes) && entry.intervalMinutes > 0)) {
+        problems.push(`${tag}: intervalMinutes must be a positive integer`);
+      }
       const expectedCron = intervalCrontab(entry.intervalMinutes);
-      if (!workflowCrons(entry.workflowFile).includes(expectedCron)) {
-        problems.push(`${tag}: fallback on.schedule must include "${expectedCron}"`);
+      // Read the fallback from the PARSED on.schedule, not a raw-text grep (a
+      // `cron:` string elsewhere in the file must not satisfy this).
+      const schedule = (on.schedule ?? []) as Array<{ cron?: unknown }>;
+      const parsedCrons = Array.isArray(schedule) ? schedule.map((x) => x?.cron) : [];
+      if (!parsedCrons.includes(expectedCron)) {
+        problems.push(`${tag}: fallback on.schedule must include "${expectedCron}" (parsed: ${JSON.stringify(parsedCrons)})`);
       }
       if (!(slugFiles.get(entry.monitorSlug) ?? []).includes(entry.workflowFile)) {
         problems.push(`${tag}: ${entry.workflowFile} has no sentry-heartbeat step with this monitor-slug`);
@@ -691,10 +782,10 @@ describe("Watchdog dispatch clock parity (#8495)", () => {
       if (
         margin === undefined ||
         maxRuntime === undefined ||
-        !marginWithinBudget(margin, entry.intervalMinutes, maxRuntime)
+        !marginWithinBudget(margin, maxRuntime)
       ) {
         problems.push(
-          `${tag}: checkin_margin_minutes=${margin} outside [ceil(${CLOCK_DELAY_MINUTES} + max_runtime=${maxRuntime}), interval=${entry.intervalMinutes}]`,
+          `${tag}: checkin_margin_minutes=${margin} outside [ceil(${CLOCK_DELAY_MINUTES} clock + ${QUEUE_ALLOWANCE_MINUTES} queue + max_runtime=${maxRuntime}), ${MAX_MARGIN_MINUTES}]`,
         );
       }
     }
@@ -717,20 +808,23 @@ describe("Watchdog dispatch clock parity (#8495)", () => {
     ).toBeLessThanOrEqual(15);
   });
 
-  it("no workflow or e2e config sets SOLEUR_HOST_ID (it would arm the clock in CI)", () => {
-    const offenders: string[] = [];
-    for (const file of readdirSync(WORKFLOWS_DIR)) {
-      if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
-      const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
-      if (/SOLEUR_HOST_ID\s*[:=]/.test(src)) offenders.push(file);
-    }
-    const appRoot = resolve(__dirname, "../../..");
-    for (const file of readdirSync(appRoot)) {
-      if (!/^playwright.*\.config\.[cm]?[jt]s$/.test(file)) continue;
-      if (readFileSync(join(appRoot, file), "utf-8").includes("SOLEUR_HOST_ID")) {
-        offenders.push(file);
-      }
-    }
+  it("nothing outside the deploy sets SOLEUR_HOST_ID (it would arm the clock where it must not)", () => {
+    const files = hostIdScanFiles();
+    // Anti-vacuity: the scan must see the workflow set and the app's build/e2e config.
+    expect(files.filter((f) => f.startsWith(".github/workflows/")).length).toBeGreaterThan(50);
+    expect(files).toEqual(
+      expect.arrayContaining([
+        "apps/web-platform/Dockerfile",
+        "apps/web-platform/package.json",
+        "apps/web-platform/playwright.config.ts",
+      ]),
+    );
+    expect(files.some((f) => f.startsWith(".github/actions/"))).toBe(true);
+    const offenders = files.filter((f) =>
+      readFileSync(join(REPO_ROOT, f), "utf-8")
+        .split("\n")
+        .some((line) => !/^\s*#/.test(line) && HOST_ID_SET_RE.test(line)),
+    );
     expect(offenders).toEqual([]);
   });
 });

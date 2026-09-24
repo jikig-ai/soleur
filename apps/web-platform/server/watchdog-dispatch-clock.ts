@@ -3,15 +3,20 @@
 // GitHub Actions `schedule:` drops ticks: the external Inngest watchdog
 // (*/15) measured one run every 2-7 h, so an Inngest outage went unseen for
 // hours. This in-process poll fires `workflow_dispatch` for each row of
-// WATCHDOG_DISPATCH_TABLE on a UTC wall-clock slot; dispatched runs start within
-// seconds. The workflows keep their `schedule:` crons as a fallback.
+// WATCHDOG_DISPATCH_TABLE on a UTC wall-clock slot. A dispatched RUN is created
+// within seconds; its JOB still waits in the org runner queue like any other
+// job (measured on these workflows 2026-09-24: median ~30 s, p90 ~20 min — the
+// Sentry margins in cron-monitors.tf absorb it). The workflows keep their
+// `schedule:` crons as a fallback.
 //
 // It is NOT an Inngest function (a watcher of Inngest cannot be scheduled by
 // Inngest — ADR-033 anti-circularity) and must never import server/inngest/
 // (pinned by watchdog-dispatch-clock.test.ts). It runs on every deployed web
 // host; per-slot jitter plus a slot-scoped "does this slot already have a run?"
-// read keep the hosts from double-dispatching (a rare collision is a harmless,
-// queued duplicate — both workflows use cancel-in-progress: false).
+// read keep the hosts from double-dispatching in most slots. A collision (both
+// hosts inside the read's visibility lag, estimated ~5-10% of slots) and a late
+// fallback `schedule:` tick both yield a second, queued run — the workflows use
+// cancel-in-progress: false and are written to tolerate a repeat run.
 //
 // Safety: crash-handlers.ts exits the process on unhandledRejection, so every
 // tick sits inside three fences (inner try/catch/finally, an outer .catch that
@@ -19,7 +24,11 @@
 // by TICK_DEADLINE_MS. Errors are rebuilt from a token-redacted message; the
 // raw Octokit error (whose request/response carry the token) is never forwarded.
 
-import { createProbeOctokit } from "@/server/github/probe-octokit";
+import {
+  createAppJwtOctokit,
+  PROBE_ISSUE_OWNER as REPO_OWNER,
+  PROBE_ISSUE_REPO as REPO_NAME,
+} from "@/server/github/probe-octokit";
 import { generateInstallationToken } from "@/server/github-app";
 import {
   reportSilentFallback,
@@ -35,19 +44,28 @@ import {
 } from "@/server/watchdog-dispatch-table";
 
 const FEATURE = "watchdog-dispatch-clock";
-const REPO_OWNER = "jikig-ai";
-const REPO_NAME = "soleur";
 
 export const POLL_MS = 30_000;
 // Jitter spreads the web hosts so the later one's read sees the earlier one's
 // run. JITTER_MAX_MS is part of the Sentry margin budget documented on the
-// monitors in apps/web-platform/infra/sentry/cron-monitors.tf (poll 0.5 min +
-// jitter 2 min + tick <= 1.5 min + job runtime must fit inside
+// monitors in apps/web-platform/infra/sentry/cron-monitors.tf (poll + jitter +
+// tick deadline + runner queue + job runtime must fit inside
 // checkin_margin_minutes).
 export const JITTER_MIN_MS = 30_000;
 export const JITTER_MAX_MS = 120_000;
 export const TICK_DEADLINE_MS = 90_000;
 const TOKEN_MIN_LIFETIME_MS = 5 * 60_000;
+// Runs read per dedup check. The list is newest-first; we take the newest run
+// that could have covered the slot, skipping ineligible ones (other branches,
+// other events, runs that never executed).
+const RUNS_READ_PAGE = 10;
+// Runs that end in these conclusions never executed the workflow's steps, so
+// they never post the Sentry check-in and must not suppress the slot.
+const NON_EXECUTED_CONCLUSIONS = new Set(["cancelled", "skipped", "startup_failure"]);
+// Only the triggers the parity test allows. A branch copy with `pull_request:`
+// (including from a fork whose head branch is literally `main`) shares this
+// workflow's id and must never suppress a slot.
+const COVERING_EVENTS = new Set(["schedule", "workflow_dispatch"]);
 
 type Op = NonNullable<WatchdogDispatchMarker["op"]>;
 type Reason = "timeout" | "http" | "throw";
@@ -79,18 +97,40 @@ export function slotStartAt(nowMs: number, intervalMinutes: number): number {
   return Math.floor(nowMs / len) * len;
 }
 
-/** True iff a run created at `createdAtIso` belongs to the slot starting at `slotStartMs`. */
+/** True iff a run created at `createdAtIso` was created inside the slot starting at `slotStartMs`. */
 export function slotAlreadyHasRun(
   createdAtIso: string,
   slotStartMs: number,
 ): boolean {
   const created = Date.parse(createdAtIso);
-  // No tolerance before the slot: GitHub creates `schedule:` runs late, never
-  // early, and a dispatch happens >= JITTER_MIN_MS into the slot, so any run of
-  // this slot has created_at >= slot start (NTP skew is far below 30 s). A run
-  // from the previous slot, however late, never suppresses this one.
+  // No tolerance before the slot: a dispatch happens >= JITTER_MIN_MS into the
+  // slot and GitHub creates `schedule:` runs late, never early, so a run meant
+  // for this slot has created_at >= slot start as long as host clocks are
+  // within 30 s of GitHub's (skew beyond that only causes a duplicate run).
+  // A previous slot's run created before this slot never suppresses it; a very
+  // late `schedule:` run created INSIDE this slot does — acceptable, because
+  // that run executes and checks in for this slot.
   // Unparseable → "not this slot": fail open to a (harmless) dispatch.
   return Number.isFinite(created) && created >= slotStartMs;
+}
+
+interface RunSummary {
+  id?: number;
+  event?: string;
+  status?: string;
+  conclusion?: string | null;
+  created_at?: string;
+}
+
+/** The newest run that could have covered a slot, or undefined. */
+export function newestCoveringRun(
+  runs: ReadonlyArray<RunSummary> | undefined,
+): RunSummary | undefined {
+  return (runs ?? []).find(
+    (r) =>
+      COVERING_EVENTS.has(String(r.event)) &&
+      !(r.status === "completed" && NON_EXECUTED_CONCLUSIONS.has(String(r.conclusion))),
+  );
 }
 
 export function shouldArmWatchdogClock(env: WatchdogClockDeps["env"]): {
@@ -101,8 +141,8 @@ export function shouldArmWatchdogClock(env: WatchdogClockDeps["env"]): {
   const hostId = (env.SOLEUR_HOST_ID ?? "").trim();
   // SOLEUR_HOST_ID is injected only by ci-deploy.sh into the deployed prod and
   // canary containers; NODE_ENV=production alone is not enough (a local
-  // `npm start` or a future CI job can set it). Guarded by the parity test's
-  // "no workflow or e2e config sets SOLEUR_HOST_ID" row.
+  // `npm start` or the Docker image run by hand sets it). Guarded by the parity
+  // test's "no workflow, action, script or e2e config sets SOLEUR_HOST_ID" row.
   if (env.NODE_ENV !== "production") {
     return { arm: false, hostId, reason: "not-production" };
   }
@@ -110,19 +150,37 @@ export function shouldArmWatchdogClock(env: WatchdogClockDeps["env"]): {
   return { arm: true, hostId };
 }
 
-async function defaultMint(): Promise<string> {
-  const octokit = await createProbeOctokit();
-  const { data: installation } = await octokit.request(
-    "GET /repos/{owner}/{repo}/installation",
-    { owner: REPO_OWNER, repo: REPO_NAME },
-  );
-  // Narrowest grant that can dispatch (and read runs): actions:write on this
-  // one repo. The scope is part of generateInstallationToken's cache key.
-  return generateInstallationToken(installation.id, {
-    minRemainingMs: TOKEN_MIN_LIFETIME_MS,
-    permissions: { actions: "write" },
-    repositories: [REPO_NAME],
-  });
+/**
+ * The production mint. The installation id is looked up once (App-JWT client,
+ * one round trip) and cached per clock; generateInstallationToken caches the
+ * token itself (scope is part of its key), so a steady-state tick signs no JWT
+ * and makes no lookup. Any failure drops the cached id so the next tick re-reads
+ * it (a reinstalled App gets a new id).
+ */
+function makeDefaultMint(): () => Promise<string> {
+  let installationId: number | null = null;
+  return async () => {
+    try {
+      if (installationId === null) {
+        const { octokit } = await createAppJwtOctokit();
+        const { data } = await octokit.request(
+          "GET /repos/{owner}/{repo}/installation",
+          { owner: REPO_OWNER, repo: REPO_NAME },
+        );
+        installationId = data.id;
+      }
+      // Narrowest grant that can dispatch (and read runs): actions:write on
+      // this one repo.
+      return await generateInstallationToken(installationId, {
+        minRemainingMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: { actions: "write" },
+        repositories: [REPO_NAME],
+      });
+    } catch (err) {
+      installationId = null;
+      throw err;
+    }
+  };
 }
 
 async function defaultOctokitFor(token: string): Promise<GitHubRequestClient> {
@@ -141,11 +199,16 @@ function redact(s: string, token: string): string {
   return token ? s.replaceAll(token, "[REDACTED-INSTALLATION-TOKEN]") : s;
 }
 
-/** A NEW Error built from the redacted message — never the raw Octokit error. */
-function rebuild(err: unknown, token: string): Error {
+/**
+ * A NEW Error built from the redacted message — never the raw Octokit error.
+ * The name carries the op (`HttpError:dispatch`) so Sentry, which groups on
+ * exception type + stack, keeps mint / dedup-read / dispatch failures in
+ * separate issues even though every rebuilt error has the same stack.
+ */
+function rebuild(err: unknown, token: string, op: string): Error {
   const e = err as { message?: unknown; name?: unknown } | null;
   const safe = new Error(redact(String(e?.message ?? err), token));
-  if (typeof e?.name === "string") safe.name = e.name;
+  safe.name = `${typeof e?.name === "string" ? e.name : "Error"}:${op}`;
   return safe;
 }
 
@@ -157,10 +220,10 @@ function classify(err: unknown): { reason: Reason; status?: number } {
     : { reason: "throw" };
 }
 
-interface RunSummary {
-  id?: number;
-  event?: string;
-  created_at?: string;
+function failureTags(workflow: string, c: { reason: Reason; status?: number }) {
+  const tags: Record<string, string> = { workflow, reason: c.reason };
+  if (c.status !== undefined) tags.status = String(c.status);
+  return tags;
 }
 
 interface EntryState {
@@ -177,7 +240,7 @@ export function startWatchdogDispatchClock(
     table: overrides.table ?? WATCHDOG_DISPATCH_TABLE,
     env: overrides.env ?? process.env,
     random: overrides.random ?? Math.random,
-    mint: overrides.mint ?? defaultMint,
+    mint: overrides.mint ?? makeDefaultMint(),
     octokitFor: overrides.octokitFor ?? defaultOctokitFor,
     report: overrides.report ?? reportSilentFallback,
     emit: overrides.emit ?? emitWatchdogDispatch,
@@ -219,10 +282,26 @@ export function startWatchdogDispatchClock(
     }
     return { stop: () => undefined };
   }
+
+  // A row whose interval is not a positive integer would make slotStartAt
+  // return NaN, which never equals handledSlot — a dispatch every poll. Drop it
+  // loudly rather than storm (the parity test also refuses such a row).
+  const table = deps.table.filter((e) => {
+    const ok = Number.isInteger(e.intervalMinutes) && e.intervalMinutes > 0;
+    if (!ok) {
+      safeReport(null, {
+        feature: FEATURE,
+        op: "arm",
+        message: `watchdog dispatch clock: invalid intervalMinutes for ${e.workflowFile}; row skipped`,
+        extra: { workflow: e.workflowFile, intervalMinutes: e.intervalMinutes },
+      });
+    }
+    return ok;
+  });
   safeEmit({ host_id: hostId, outcome: "armed" });
 
   const state = new Map<string, EntryState>();
-  for (const e of deps.table) {
+  for (const e of table) {
     state.set(e.workflowFile, {
       handledSlot: null,
       inFlight: false,
@@ -265,33 +344,35 @@ export function startWatchdogDispatchClock(
         if (signal.aborted) return;
         op = "dedup-read";
         const gh = await deps.octokitFor(token);
-        let newest: RunSummary | undefined;
+        let covering: RunSummary | undefined;
         try {
           const res = await gh.request(
             "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
-            { ...wf, per_page: 1, request: { signal } },
+            { ...wf, branch: "main", per_page: RUNS_READ_PAGE, request: { signal } },
           );
-          newest = (res.data as { workflow_runs?: RunSummary[] } | undefined)
-            ?.workflow_runs?.[0];
+          covering = newestCoveringRun(
+            (res.data as { workflow_runs?: RunSummary[] } | undefined)?.workflow_runs,
+          );
         } catch (readErr) {
           if (signal.aborted) return;
           // Fail OPEN: a skipped watchdog is the defect this clock fixes; a
           // duplicate run is harmless.
           const c = classify(readErr);
-          safeReport(rebuild(readErr, token), {
+          safeReport(rebuild(readErr, token, "dedup-read"), {
             feature: FEATURE,
             op: "dedup-read",
             message: "watchdog dispatch clock: runs read failed; dispatching anyway",
             extra: { workflow: entry.workflowFile, ...c },
+            tags: failureTags(entry.workflowFile, c),
           });
         }
         if (signal.aborted) return;
-        if (newest?.created_at && slotAlreadyHasRun(newest.created_at, slot)) {
+        if (covering?.created_at && slotAlreadyHasRun(covering.created_at, slot)) {
           safeEmit({
             ...base,
             outcome: "skipped_slot_has_run",
-            run_id: newest.id,
-            run_event: newest.event,
+            run_id: covering.id,
+            run_event: covering.event,
           });
           return;
         }
@@ -305,11 +386,12 @@ export function startWatchdogDispatchClock(
       });
     } catch (err) {
       const c = classify(err);
-      safeReport(rebuild(err, token), {
+      safeReport(rebuild(err, token, op), {
         feature: FEATURE,
         op,
         message: `watchdog dispatch clock: ${op} failed for ${entry.workflowFile}`,
         extra: { workflow: entry.workflowFile, ...c },
+        tags: failureTags(entry.workflowFile, c),
       });
       safeEmit({ ...base, outcome: "failed", op, ...c });
     } finally {
@@ -324,11 +406,11 @@ export function startWatchdogDispatchClock(
     if (stopped) return;
     try {
       const now = Date.now();
-      for (const entry of deps.table) {
-        const st = state.get(entry.workflowFile);
-        if (!st) continue;
+      for (const entry of table) {
+        const st = state.get(entry.workflowFile)!;
         const slot = slotStartAt(now, entry.intervalMinutes);
-        if (st.handledSlot === slot || st.inFlight) continue;
+        // `<=`, not `===`: a backwards clock step must not replay an older slot.
+        if ((st.handledSlot !== null && slot <= st.handledSlot) || st.inFlight) continue;
         if (st.jitterSlot !== slot) {
           const r = Math.min(1, Math.max(0, deps.random()));
           st.jitterSlot = slot;
@@ -337,8 +419,8 @@ export function startWatchdogDispatchClock(
         if (now < slot + st.jitterMs) continue;
         st.inFlight = true;
         void runTickSafely(entry, slot, st).catch((escaped: unknown) => {
-          // Outer fence. Unreachable by design (Guard 2 pins it); if it ever
-          // fires, the process must survive and the next slot must proceed.
+          // Outer fence: reached only if the inner catch itself throws. The
+          // process must survive and the next slot must proceed.
           st.inFlight = false;
           st.handledSlot = slot;
           safeEmit({
@@ -347,19 +429,26 @@ export function startWatchdogDispatchClock(
             slot: new Date(slot).toISOString(),
             outcome: "tick_escaped",
           });
-          safeReport(rebuild(escaped, ""), {
+          safeReport(new Error("watchdog dispatch clock: a tick escaped its fences"), {
             feature: FEATURE,
             op: "tick",
-            message: "watchdog dispatch clock: a tick escaped its fences",
-            extra: { workflow: entry.workflowFile },
+            extra: {
+              workflow: entry.workflowFile,
+              escapedName: (() => {
+                try {
+                  return String((escaped as { name?: unknown } | null)?.name ?? "");
+                } catch {
+                  return "";
+                }
+              })(),
+            },
           });
         });
       }
-    } catch (err) {
-      safeReport(rebuild(err, ""), {
+    } catch {
+      safeReport(new Error("watchdog dispatch clock: poll threw"), {
         feature: FEATURE,
         op: "poll",
-        message: "watchdog dispatch clock: poll threw",
       });
     }
   }

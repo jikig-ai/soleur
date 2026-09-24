@@ -425,6 +425,18 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # #8495: a slot can hold a second, queued run of this workflow (dispatch-clock host
+          # collision or a late fallback `schedule:` tick). Do not stack a second restart on one
+          # that is queued/running or finished < 12 min ago (its verify poll alone is 600 s).
+          # Fail-open: a failed read dispatches, exactly as before this gate existed.
+          # shellcheck source=/dev/null
+          source "$GITHUB_WORKSPACE/scripts/inngest-restart-age-gate.sh"
+          RECENT_JSON=$(gh run list --repo "$GH_REPO" --workflow restart-inngest-server.yml --limit 10 \
+            --json event,status,createdAt 2>/dev/null) || RECENT_JSON=""
+          if [[ "$(restart_recently_dispatched "$RECENT_JSON" "$(date -u +%s)" 12)" == "true" ]]; then
+            echo "::notice::restart-inngest-server is queued/running or was dispatched <12 min ago — not dispatching a second restart (#8495)."
+            exit 0
+          fi
           echo "Dispatching restart-inngest-server.yml (auto-recovery)…"
           gh workflow run restart-inngest-server.yml --repo "$GH_REPO" --ref main || \
             echo "::warning::restart dispatch failed — the tracking issue below carries the escalation."
@@ -473,7 +485,6 @@ jobs:
           BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
           if [[ "$ISSUE_CLASS" == "disabled-unattributed" ]]; then
             ISSUE_TITLE="[ci/inngest-disabled-unattributed] Web inngest scheduler disabled without a quiesce marker"
-            ISSUE_SEARCH='in:title "[ci/inngest-disabled-unattributed] Web inngest scheduler disabled without a quiesce marker"'
             gh label create "ci/inngest-disabled-unattributed" --repo "$GH_REPO" \
               --description "External watchdog: web inngest-server stopped+disabled with no valid op=quiesce-web marker — dispatch op=rollback" --color "B60205" 2>/dev/null || true
             gh label create "action-required" --repo "$GH_REPO" --color D93F0B \
@@ -487,7 +498,7 @@ jobs:
               printf '### Not a deliberate quiesce — and NOT restarted\n\n`inngest-server.service` on the web host is stopped and **disabled**, but there is no valid `op=quiesce-web` marker (`/var/lib/inngest/quiesced-by-op`), or the unit started after the marker was written. Nothing attributes this stop, so the web scheduler may be down with no live replacement. No restart is dispatched: a restart would START a disabled unit and bury who disabled it.\n\n'
               printf '### Remediation\n\nDispatch the cutover workflow with **op=rollback** — it retires any stale capture, removes the marker, enables and starts the web unit. If a cutover is genuinely in progress, re-run **op=quiesce-web** afterwards to take a fresh capture and marker. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still disabled with no quiesce marker at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. NO restart dispatched; remedy op=rollback. Run: ${RUN_URL}"
             else
@@ -503,7 +514,6 @@ jobs:
             # this mode (see the check-in step) so a transient deploy-race window does not
             # false-page — this issue is the surviving soft signal.
             ISSUE_TITLE="[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"
-            ISSUE_SEARCH='in:title "[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"'
             gh label create "ci/inngest-probe-unavailable" --repo "$GH_REPO" \
               --description "External watchdog: the inngest LIVENESS probe path is unavailable (deploy race / CF-Access — NOT a confirmed down)" --color "5319E7" 2>/dev/null || true
             {
@@ -515,7 +525,7 @@ jobs:
               printf '### The probe path is unavailable — this is NOT a confirmed inngest-down\n\nThe `/hooks/inngest-liveness` GET returned a non-200 with no well-formed body (404/000/403). Most common cause: the **deploy-race window** right after the #6374 merge — the repointed workflow is live but the on-host hook has not landed yet (it ships async via the infra-config push). It also fires on a Cloudflare Access or `webhook.service` degrade. NO restart is dispatched (a restart cannot fix a broken probe path), and this does NOT open a `[ci/inngest-down]` issue.\n\n'
               printf '### Remediation\n\n1. If this is right after the #6374 merge, WAIT one infra-config push cycle — `curl https://deploy.soleur.ai/hooks/inngest-liveness` (HMAC + CF-Access) should return the liveness JSON once the hook lands; the watchdog then auto-closes this issue.\n2. Otherwise check CF-Access / `webhook.service` health per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Liveness probe still unavailable at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
             else
@@ -532,7 +542,6 @@ jobs:
             # Sentry heartbeat stays `ok` for this mode. A SUSTAINED degraded state escalates to
             # inngest_down via the persistence gate (this issue's age) — see the effmode step.
             ISSUE_TITLE="[ci/inngest-functions-degraded] Inngest functions query transiently degraded"
-            ISSUE_SEARCH='in:title "[ci/inngest-functions-degraded] Inngest functions query transiently degraded"'
             gh label create "ci/inngest-functions-degraded" --repo "$GH_REPO" \
               --description "External watchdog: /v0/gql functions read transiently failed but /health=200 (inngest serving) — soft, NO restart" --color "5319E7" 2>/dev/null || true
             {
@@ -545,7 +554,7 @@ jobs:
               printf '### Persistence-escalation ceiling\n\nIf this degraded state persists for >= ~45 min (3 `*/15` cycles), the watchdog reclassifies it to `inngest_down` (dispatch restart + Sentry page) — a `/health`-ok-but-functions-permanently-wedged residual is not soft-masked forever. First occurrence = soft; sustained = escalates.\n\n'
               printf '### Remediation\n\nUsually self-resolves on the next `*/15` tick (auto-closes on recovery). If it persists, query Better Stack for `SOLEUR_INNGEST_LIVENESS_VERDICT mode=degraded` (tag `inngest-inventory`) and check inngest-server function registration per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Functions query still degraded at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. /health=200 (inngest serving); NO restart. Run: ${RUN_URL}"
             else
@@ -554,7 +563,6 @@ jobs:
             fi
           elif [[ "$ISSUE_CLASS" == "pool-probe" ]]; then
             ISSUE_TITLE="[ci/inngest-pool-probe] Inngest pool probe unavailable"
-            ISSUE_SEARCH='in:title "[ci/inngest-pool-probe] Inngest pool probe unavailable"'
             gh label create "ci/inngest-pool-probe" --repo "$GH_REPO" \
               --description "External watchdog: the pool-utilization probe itself is degraded (not pool-hot)" --color "5319E7" 2>/dev/null || true
             {
@@ -566,7 +574,7 @@ jobs:
               printf '### The probe is degraded — the pool is NOT necessarily hot\n\nThe Management-API pool read failed (401/403/scope, non-JSON body, or curl error). This is a dark-probe alert: the watchdog cannot see the session pool, so pool pressure could degrade the durable backend invisibly (the #5558 class). Do NOT restart inngest-server (the pool reading is unknown, not exhausted).\n\n'
               printf '### Remediation\n\n1. Read the printed response body in the **Detail** above / run log — a Supabase Management-API 401 is often a validation/scope signal, not pure auth.\n2. Verify `SUPABASE_ACCESS_TOKEN` is set as a GH Actions secret (TF `github_actions_secret.supabase_access_token`) AND in Doppler `prd`, and that the PAT owner has read access to project `pigsfuxruiopinouvjwy`.\n3. Re-run the read-only probe per the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Probe still unavailable at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
             else
@@ -575,7 +583,6 @@ jobs:
             fi
           elif [[ "$ISSUE_CLASS" == "pool" ]]; then
             ISSUE_TITLE="[ci/inngest-pool] Inngest session-pool pressure/exhaustion"
-            ISSUE_SEARCH='in:title "[ci/inngest-pool] Inngest session-pool pressure/exhaustion"'
             gh label create "ci/inngest-pool" --repo "$GH_REPO" \
               --description "External watchdog detected inngest session-pool pressure/exhaustion (do NOT restart)" --color "FBCA04" 2>/dev/null || true
             {
@@ -587,7 +594,7 @@ jobs:
               printf '### Do NOT restart inngest-server\n\nA restart re-opens all of inngest'\''s pooler connections at once, churning MORE session connections and DEEPENING `EMAXCONNSESSION`. This issue is intentionally excluded from the auto-restart gate.\n\n'
               printf '### Remediation (stale-session / client-cap)\n\n1. Read **Detail** above: `pool_pressure` is inngest-attributable client connections vs inngest'\''s worst-case total footprint (INNGEST_CLIENT_CAP = P × per-pool cap 5 ≤ 20); `pool_exhausted` is an actual `EMAXCONNSESSION` from the pooler. The per-backend breakdown is in the run log (`Inngest client backends: …`).\n2. Confirm the cap holds: inngest-server runs with `--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1` (#6258, ADR-105). --postgres-max-open-conns is PER-POOL (not total), so worst-case total is P×5; if inngest-attributable connections approach the cap, inngest is opening more pools than expected — check for a stuck/looping function holding pooled connections.\n3. If sessions are stale (idle/idle-in-transaction climbing), terminate them via the read-only Management API path (`pg_terminate_backend`) — see the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH first).\n4. The leading indicator tracks inngest'\''s worst-case total footprint (P × per-pool cap), NOT the pooler `default_pool_size` (which is Supabase-infra-dominated) — so this alert is decoupled from the #5562 `default_pool_size` 30→15 revert (that revert is SUPERSEDED; default_pool_size stays 30 — ADR-105). Refs #6258 #5558.\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still hot at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Do NOT restart. Run: ${RUN_URL}"
             else
@@ -596,7 +603,6 @@ jobs:
             fi
           else
             ISSUE_TITLE="[ci/inngest-down] Inngest health watchdog failed"
-            ISSUE_SEARCH='in:title "[ci/inngest-down] Inngest health watchdog failed"'
             gh label create "ci/inngest-down" --repo "$GH_REPO" \
               --description "External watchdog detected inngest-server down/unhealthy" --color "B60205" 2>/dev/null || true
             {
@@ -607,7 +613,7 @@ jobs:
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
               printf '### Auto-recovery\n\nThis run dispatched `restart-inngest-server.yml`. If inngest stays down after the restart, the durable backend likely lost its Redis (`inngest-redis.service` missing → crash-loop): the deploy must re-stage the redis assets, OR roll the ExecStart back to SQLite-only. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` + the #5542 incident.\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
             if [[ -n "$EXISTING" ]]; then
               # #6374 Defect 3: the comment text must be TRUTHFUL about whether a restart
               # was actually dispatched (the age gate may have suppressed it). When
@@ -727,7 +733,6 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
           set -euo pipefail
           ISSUE_TITLE="[ci/inngest-degraded-durability] Inngest non-durable between deploys"
-          ISSUE_SEARCH='in:title "[ci/inngest-degraded-durability] Inngest non-durable between deploys"'
           gh label create "ci/inngest-degraded-durability" --repo "$GH_REPO" \
             --description "Between-deploy detector: inngest running non-durable (sqlite_only/degraded)" --color "D93F0B" 2>/dev/null || true
           # Severity: degraded (durable backend configured but the durability invariant
@@ -748,7 +753,7 @@ jobs:
             printf '### Remediation\n\n'
             printf 'Re-deploy inngest with Redis ready (the deploy re-stages the redis assets → durable ExecStart), or restart `inngest-redis.service`. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` and the #5450 durability epic. This is the continuous between-deploy detector; the deploy-time `ci-deploy.sh` signal fires only at deploy time.\n'
           } > "$BODY_FILE"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             # Keep severity accurate across sqlite_only<->degraded transitions so the
             # issue never rots at a stale severity (#5553 review P2-1): add the current
@@ -960,7 +965,7 @@ jobs:
           gh label create "ci/inngest-dedicated-host" --repo "$GH_REPO" --color BFD4F2 2>/dev/null || true
           gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
           TITLE="[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken"
-          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --search "$TITLE" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number,title 2>/dev/null | jq -r --arg t "$TITLE" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null || true)"
           BODY="$(printf '%s\n' \
             "verdict: \`arm-crashed\`" "" \
             "The dedicated-host arm did not complete, so nothing measured whether 10.0.1.40 is serving. Absence of a verdict is NOT health." "" \
@@ -1226,7 +1231,6 @@ jobs:
             # No ${COUNT} in the title: it must be stable across a 2->3 transition, or the
             # dedupe re-collides and files a second issue for the same condition.
             ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has MORE THAN ONE connector — ingress origin is non-deterministic"
-            ISSUE_SEARCH="in:title \"$ISSUE_TITLE\""
             {
               printf '## More than one connector is registered on the tunnel\n\n'
               printf -- '- **Connectors:** `%s` (invariant: exactly 1)\n' "$COUNT"
@@ -1239,7 +1243,6 @@ jobs:
             } > "$BODY_FILE"
           else
             ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has ZERO live connectors — every tunnel-routed surface is dark"
-            ISSUE_SEARCH="in:title \"$ISSUE_TITLE\""
             {
               printf '## The tunnel has no live connectors\n\n'
               printf -- '- **Connectors:** `0` (invariant: exactly 1)\n'
@@ -1254,7 +1257,7 @@ jobs:
           # issues carrying it. The sibling ci/inngest-* labels this workflow files are NOT
           # harvested — so without this label the alert would be detected and then discarded
           # into a log nobody reads until the next 16h investigation.
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
               --body "Still \`${VERDICT}\` (connectors=${COUNT}) at ${NOW}. Run: ${RUN_URL}"

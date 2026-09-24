@@ -306,8 +306,8 @@ export function emitRunReportSweep(m: RunReportSweepMarker): void {
 // arm decision and every tick outcome, from each web host. `run_id`/`run_event`
 // on a skip name the run that already covered the slot, which separates "a GH
 // schedule tick got there first" from "the other host got there first".
-// Fields are a host id, a workflow basename, an ISO slot, closed enums and
-// numbers. NEVER add an error message or a token here: this instance has no
+// Fields are a host id, a workflow basename, an ISO slot, closed enums,
+// numbers, and GitHub's own run event name (`run_event`, e.g. "schedule"). NEVER add an error message or a token here: this instance has no
 // `redact` (see the boundary note at the top of this file).
 
 export interface WatchdogDispatchMarker {

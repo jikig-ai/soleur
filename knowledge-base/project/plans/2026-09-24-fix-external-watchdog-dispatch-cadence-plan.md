@@ -712,13 +712,13 @@ The option table under Proposed Solution is the decision record, and ADR-248 car
 
 ```yaml
 liveness_signal:
-  what: "Sentry cron monitors scheduled-inngest-health (*/15, margin 15) and scheduled-zot-restart-loop (0 * * * *, margin 30), fed by each workflow's final sentry-heartbeat step; after this change they measure clock + dispatch + run end to end. Per-tick in-surface marker SOLEUR_WATCHDOG_DISPATCH (WARN) from each web host"
-  cadence: "15 min (inngest-health) / 60 min (zot); a dead trigger pages within interval + margin = 30 min / 90 min"
+  what: "Sentry cron monitors scheduled-inngest-health (*/15, margin 45) and scheduled-zot-restart-loop (0 * * * *, margin 60), fed by each workflow's final sentry-heartbeat step; after this change they measure clock + dispatch + runner queue + run end to end (margins sized to the MEASURED job queue, #8495 review). Per-tick in-surface marker SOLEUR_WATCHDOG_DISPATCH (WARN) from each web host"
+  cadence: "15 min (inngest-health) / 60 min (zot); a dead trigger pages within interval + margin = 60 min / 120 min; a real outage pages when a run executes (error check-in), independent of the margin"
   alert_target: "Sentry monitor-failure issue -> operator page (failure_issue_threshold = 1)"
   configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf (sentry_cron_monitor.scheduled_inngest_health, sentry_cron_monitor.zot_restart_loop_alarm); apps/web-platform/server/watchdog-dispatch-table.ts; apps/web-platform/server/cron-liveness-marker.ts (emitWatchdogDispatch)"
 
 error_reporting:
-  destination: "Sentry web-platform project via reportSilentFallback (@/server/observability), feature=watchdog-dispatch-clock, op in {arm, mint, dedup-read, dispatch}, extra {workflow, reason in {timeout, http, throw}, status}"
+  destination: "Sentry web-platform project via reportSilentFallback (@/server/observability), feature=watchdog-dispatch-clock, op in {arm, mint, dedup-read, dispatch, tick, poll}, tags {workflow, reason in {timeout, http, throw}, status}; the rebuilt error name carries the op (e.g. HttpError:dispatch) so Sentry groups per op"
   fail_loud: "SOLEUR_WATCHDOG_DISPATCH marker with outcome=failed|tick_escaped|disarmed (WARN, reaches Better Stack) plus a Sentry event; the per-slot missed check-in pages if every host fails"
 
 failure_modes:
@@ -732,19 +732,19 @@ failure_modes:
     detection: "pino layer 2 reportSilentFallback op=dedup-read -> Sentry; the tick still dispatches (fail-open)"
     alert_route: "Sentry issue (non-paging)"
   - mode: "tick hangs"
-    detection: "90 s tick deadline -> reportSilentFallback reason=timeout -> Sentry; marker outcome=failed; inFlight cleared so the next slot proceeds"
+    detection: "90 s tick deadline aborts the request -> pino layer 2 (reportSilentFallback reason=timeout -> Sentry) + vector Source 3 -> Better Stack (marker outcome=failed); inFlight cleared so the next slot proceeds"
     alert_route: "Sentry issue"
   - mode: "a fence breaks (tick_escaped)"
     detection: "vector Source 3 marker outcome=tick_escaped -> Better Stack; Guard 2 pins it never happens"
     alert_route: "Sentry issue via the same reportSilentFallback call"
   - mode: "web-1 app container down (also the Inngest execution host)"
-    detection: "Better Stack uptime monitor on app.soleur.ai; web-2 clock keeps dispatching, so the Sentry monitor stays ok"
+    detection: "Better Stack uptime monitor on app.soleur.ai; vector Source 3 -> Better Stack (web-1's SOLEUR_WATCHDOG_DISPATCH rows stop); web-2 clock keeps dispatching, so the Sentry monitor stays ok (accepted residual: half the clock redundancy can be lost with no page)"
     alert_route: "Better Stack incident"
   - mode: "web-2 down"
-    detection: "absence-alerted Better Stack heartbeats web_nic_guard / web_zot_consumer (ADR-143 R1(a)); web-1 clock keeps dispatching"
+    detection: "absence-alerted Better Stack heartbeats web_nic_guard / web_zot_consumer (ADR-143 R1(a)) for the host; vector Source 3 -> Better Stack (web-2's SOLEUR_WATCHDOG_DISPATCH rows stop) for a crashed container; web-1 clock keeps dispatching (accepted residual as above)"
     alert_route: "Better Stack heartbeat incident"
   - mode: "both web hosts down"
-    detection: "Better Stack uptime; Sentry monitor missed check-in within 30 min; GH schedule fallback still runs late"
+    detection: "Better Stack uptime; Sentry cron monitor missed check-in within 60 min; GH schedule fallback still runs late"
     alert_route: "Better Stack incident + Sentry page"
   - mode: "systematic duplicate dispatches"
     detection: "workflow run log (gh run list: two workflow_dispatch runs in one slot) + vector Source 3 markers (two outcome=dispatched for one {workflow, slot})"
