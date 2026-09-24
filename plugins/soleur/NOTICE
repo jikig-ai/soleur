@@ -143,10 +143,6 @@ mattpocock/skills
     references/questionnaire.template),
     skills/triage/SKILL.md (intake pre-checks),
     agents/support/ticket-triage.md (intake pre-checks),
-    ../../.openhands/skills/ticket-triage/SKILL.md (intake pre-checks --
-      the OpenHands mirror of the agent above; it carries the same derived
-      prose and is listed because a Used-in list that omits one of three
-      mirrors understates the reach of the attribution) (#8289),
     skills/skill-creator/references/authoring-levers.md (#8290),
     skills/product-roadmap/SKILL.md (#8292: Where Work Lives, the
       next frontier, workshop step 1.6)
