@@ -91,3 +91,25 @@ unaddressed.
 
 The three docker-heavy suites the ceiling PR bounded (rehearsal 189 s,
 cutover 70 s, ownership 23 s) carry the per-suite override-map entries.
+
+## Shipped structure (verification record)
+
+- `deploy-script-tests` → K=4 matrix (`fail-fast: false`), each leg invokes
+  `run-registered-suites.sh` with `SOLEUR_INFRA_SHARD=k/4`. Per-leg
+  `timeout-minutes: 15` ≈ 2.2× the measured worst leg (~6.7 min).
+- `deploy-script-tests-fixed`: 3 privileged `sudo bash` loopback suites, the
+  5 `test/infra` alert guards, 2 terraform validates, fixtures, sandbox-canary,
+  sigpipe probe, freshness + provenance guards (provenance last, per #8052).
+- `deploy-script-tests-done`: `if: always()` aggregator over both legs'
+  results with the #7931 cancelled-vs-superseded discriminator;
+  `notify-main-failure` now reads it (#8735).
+- Seeded `apps/web-platform/infra/suite-shard-legs.tsv` (143 rows) via
+  `regenerate-shard-manifest.py --group infra` from the 5-run step table:
+  legs 369–370 s each, 1 s spread.
+- Registration gate rewritten to the connection contract (runner step +
+  shard wiring + unmasked + fail-fast + privileged-sudo + aggregator
+  needs + test/infra coverage); mutation battery 17/17 green.
+- Suites' self-registration assertions updated to the runner-connection
+  check (apex ×2, zot-inventory, inngest-host-state, git-data-root-key,
+  cutover-access, flag-precheck, infra-config-gate, handler-bootstrap,
+  tunnel-origin-relative, verify-tunnel-ingress, scan-workflow).

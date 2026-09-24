@@ -94,10 +94,10 @@ echo "== BOTH gates are actually WIRED (this file's header claims it; now it ass
 # registered in ZERO runners. A PR arguing that unwired guards are worse than
 # none had shipped its best guard unwired. Delete either line below and this
 # goes RED.
-if grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh' "$INFRA_VALIDATION"; then
-  pass "this shape guard is registered as a step in infra-validation.yml"
+if grep -qF 'run: bash apps/web-platform/infra/run-registered-suites.sh' "$INFRA_VALIDATION"; then
+  pass "this shape guard's runner is invoked in infra-validation.yml (presence under infra/ is registration, #8736)"
 else
-  fail "shape guard is wired" "no 'run: bash …/supabase-advisor/scan-workflow.test.sh' step in infra-validation.yml — this guard would never run in CI"
+  fail "shape guard is wired" "no 'run: bash …/run-registered-suites.sh' step in infra-validation.yml — no infra suite, this one included, would run in CI"
 fi
 if [[ -f "$HARNESS" ]]; then
   pass "the behavioural harness exists"
@@ -111,11 +111,13 @@ else
 fi
 # Third gate, same reasoning: the mutation attestation is what proves the checks
 # below still DISCRIMINATE (they pass on an unmutated tree either way — #6572).
-# Unregistered, it would be the strongest evidence in this subsystem, running nowhere.
-if [[ -f "$MUTATION_HARNESS" ]] && grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh' "$INFRA_VALIDATION"; then
-  pass "the mutation attestation exists and is registered in infra-validation.yml"
+# Since #8736 presence under apps/web-platform/infra/ IS registration — so the
+# check is file-exists (the registration half) + the runner invocation is wired
+# (the execution half), not a per-suite step.
+if [[ -f "$MUTATION_HARNESS" ]] && grep -qF 'run: bash apps/web-platform/infra/run-registered-suites.sh' "$INFRA_VALIDATION"; then
+  pass "the mutation attestation exists and its runner is invoked in infra-validation.yml"
 else
-  fail "mutation attestation is wired" "scan-workflow-mutation.test.sh is missing or has no 'run:' step in infra-validation.yml — this guard's non-vacuity would rest on prose again (#6572)"
+  fail "mutation attestation is wired" "scan-workflow-mutation.test.sh is missing, or no 'run: bash …/run-registered-suites.sh' step exists in infra-validation.yml — this guard's non-vacuity would rest on prose again (#6572)"
 fi
 # Fourth gate, same reasoning, for the #6578 triage probe. The assertion lives
 # HERE rather than in the probe's own attestation on purpose: a script cannot
@@ -136,10 +138,10 @@ fi
 # argument: delete the attestation's run: step and every gate here stayed green
 # while the entire non-vacuity apparatus silently stopped running.
 SIGPIPE_ATTEST="$REPO_ROOT/apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh"
-if [[ -f "$SIGPIPE_ATTEST" ]] && grep -qF 'bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh' "$INFRA_VALIDATION"; then
-  pass "the sigpipe probe's attestation exists and is registered in infra-validation.yml (#6578)"
+if [[ -f "$SIGPIPE_ATTEST" ]] && grep -qF 'run: bash apps/web-platform/infra/run-registered-suites.sh' "$INFRA_VALIDATION"; then
+  pass "the sigpipe probe's attestation exists and its runner is invoked in infra-validation.yml (#6578; glob registration since #8736)"
 else
-  fail "sigpipe attestation is wired" "sigpipe-triage-feasibility.test.sh is missing or has no 'run:' step in infra-validation.yml — the probe's false-all-clear guards would rest on prose, unproven, which is the exact failure this file exists to catch"
+  fail "sigpipe attestation is wired" "sigpipe-triage-feasibility.test.sh is missing or no 'run: bash …/run-registered-suites.sh' step exists in infra-validation.yml — the probe's false-all-clear guards would rest on prose, unproven, which is the exact failure this file exists to catch"
 fi
 
 echo "== no check in this file feeds a producer into grep -q (#6572) =="

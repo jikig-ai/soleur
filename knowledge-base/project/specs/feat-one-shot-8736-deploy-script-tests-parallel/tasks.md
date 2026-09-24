@@ -18,38 +18,38 @@ Execution rules for `soleur:work`:
 
 ## task/phase-0-measure-and-freeze
 
-- [ ] Re-pull per-step durations for the last ≥5 green `deploy-script-tests`
+- [x] Re-pull per-step durations for the last ≥5 green `deploy-script-tests`
   main-push runs (`gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`);
   recompute the sticky-LPT partition for K ∈ {3,4,6}; record the measured
   per-leg fixed cost (checkout + terraform/cloud-init/nftables + docker
   assert).
-- [ ] Write
+- [x] Write
   `knowledge-base/project/specs/feat-one-shot-8736-deploy-script-tests-parallel/measurements.md`
   with the raw step table, partition, and fixed-cost derivation.
-- [ ] Choose K (default 4 unless measurements moved) and record the choice
+- [x] Choose K (default 4 unless measurements moved) and record the choice
   and rationale in measurements.md.
-- [ ] `gh issue view 8744` — confirm the apt flake is still unfixed on main
+- [x] `gh issue view 8744` — confirm the apt flake is still unfixed on main
   (a transiently-green fleet is not a fix).
 
 ## task/phase-1-fixture-apt-retry-8744
 
-- [ ] `apps/web-platform/infra/git-data-ownership.test.sh` (the
+- [x] `apps/web-platform/infra/git-data-ownership.test.sh` (the
   `apt-get update && apt-get install` site near `:280`): capture apt output
   to a fixture log file (no more `>/dev/null`); `-o Acquire::Retries=5` plus a
   3-attempt loop with `sleep 10`/`sleep 30` backoff; on exhaustion print the
   last ~20 lines of the captured apt output before `FIXTURE_APT_FAILED`;
   keep fail-closed rc=100 and the `CI=true` escalation.
-- [ ] Same shape in `apps/web-platform/infra/git-data-cutover-access.test.sh`
+- [x] Same shape in `apps/web-platform/infra/git-data-cutover-access.test.sh`
   (site near `:1770`).
-- [ ] Audit sibling unprotected apt-in-container sites —
+- [x] Audit sibling unprotected apt-in-container sites —
   `git-data-runcmd-rehearsal.test.sh` carries ≥3 (`apt-get update`/`install`
   pairs inside drive.sh heredocs near `:1064`, `:1357`, `:1574`); apply the
   same retry+diagnose shape there ONLY if draft PR #8738 has not landed —
   else file the remainder as a follow-up (collision risk, see plan Risks).
-- [ ] RED first: reproduce with a poisoned `sources.list` inside a local
+- [x] RED first: reproduce with a poisoned `sources.list` inside a local
   `ubuntu:24.04` docker run → expect `FIXTURE_APT_FAILED` preceded by the
   apt stderr tail.
-- [ ] GREEN: suite reports the named failure cause; CI arm still reds on
+- [x] GREEN: suite reports the named failure cause; CI arm still reds on
   genuine exhaustion.
 
 ## task/phase-2-runner-shard-contract
@@ -57,59 +57,59 @@ Execution rules for `soleur:work`:
 Contract-changing phase — lands before any consumer (Phase 3+4) depends on
 the new derivation/env shape.
 
-- [ ] `apps/web-platform/infra/run-registered-suites.sh`:
-  - [ ] derivation → `git ls-files "${SOLEUR_INFRA_DIR}/*.test.sh"`
+- [x] `apps/web-platform/infra/run-registered-suites.sh`:
+  - [x] derivation → `git ls-files "${SOLEUR_INFRA_DIR}/*.test.sh"`
     (git pathspec `*` matches `/`; returns all 146 incl. subdirs). Keep the
     `SOLEUR_INFRA_DIR` test seam; add a glob-seam if fixtures need it.
-  - [ ] `PRIVILEGED` bucket (`name|reason|#issue`): the 3 loopback suites;
+  - [x] `PRIVILEGED` bucket (`name|reason|#issue`): the 3 loopback suites;
     derived but not executed — printed as a counted SKIP set; never
     `sudo`'d by the runner.
-  - [ ] `SOLEUR_INFRA_SHARD=k/N` env: unset=full set, malformed/out-of-range
+  - [x] `SOLEUR_INFRA_SHARD=k/N` env: unset=full set, malformed/out-of-range
     = exit 2 naming the value (mirror the `SCRIPTS_SHARD` parse contract at
     `scripts/test-all.sh` ~348-380). Partition via
     `apps/web-platform/infra/suite-shard-legs.tsv` manifest when present and
     `n` matches; deterministic positional/hash fallback otherwise, announced
     in the log; zero-assignment shard → refuse loudly.
-  - [ ] per-suite timeout wrapper in the xargs shim: default budget +
+  - [x] per-suite timeout wrapper in the xargs shim: default budget +
     `name|seconds` override map (rehearsal/cutover/ownership heavies); the
     bounder is resolved once at startup using the `timeout`→`gtimeout`
     portability pattern (`.claude/hooks/memory-backstop.sh` ~381); under
     `CI=true` absence of both is a fail-LOUD startup error; rc=124 → `RED
     <path>`.
-  - [ ] `RED` emits `::error file=<path>::suite failed` with the path
+  - [x] `RED` emits `::error file=<path>::suite failed` with the path
     CR/LF-stripped (`${var//[$'\n\r']/}`).
-  - [ ] emit per-suite `label<TAB>ms<TAB>verdict` timings (from the existing
+  - [x] emit per-suite `label<TAB>ms<TAB>verdict` timings (from the existing
     `.meta` fields) to a caller-provided artifact dir.
-- [ ] Update the runner header (the "cannot drift" claim becomes literal;
+- [x] Update the runner header (the "cannot drift" claim becomes literal;
   document PRIVILEGED and SOLEUR_INFRA_SHARD).
-- [ ] `apps/web-platform/infra/run-registered-suites.test.sh` — update T2b/T2d
+- [x] `apps/web-platform/infra/run-registered-suites.test.sh` — update T2b/T2d
   expectations to derive independently (no shared-regex-with-SUT), add rows
   for: glob pickup of a subdir suite, privileged SKIP counted, shard
   partition disjoint+total over a fixture set, malformed `SOLEUR_INFRA_SHARD`
   → exit 2, zero-assignment refusal, timeout wrapper rc=124 → RED naming.
-- [ ] `scripts/test-all-infra-coverage-notice.test.sh`,
+- [x] `scripts/test-all-infra-coverage-notice.test.sh`,
   `scripts/test-all-killed-classification.test.sh` — update fixtures pinning
   the old scrape shape.
-- [ ] Local check: `bash run-registered-suites.sh --list` prints 143
+- [x] Local check: `bash run-registered-suites.sh --list` prints 143
   executable + 3 privileged SKIP (146 derived).
 
 ## task/phase-3-workflow-restructure
 
-- [ ] `deploy-script-tests` → `strategy: { fail-fast: false, matrix: { leg: [1,2,3,4] } }`
+- [x] `deploy-script-tests` → `strategy: { fail-fast: false, matrix: { leg: [1,2,3,4] } }`
   (K per Phase 0); steps per leg: checkout → setup-terraform → install
   cloud-init → install nftables → `docker info` assert (must precede the
   runner step on every leg) → `env: SOLEUR_INFRA_SHARD=${{ matrix.leg }}/${{ strategy.job-total }}`
   `run: bash apps/web-platform/infra/run-registered-suites.sh` →
   `if: always()` artifact uploads `infra-suite-logs-leg-<k>` and
   `suite-timings-infra-<k>` (distinct names — v4 immutability).
-- [ ] Per-leg `timeout-minutes` re-derived at ~1.4× worst measured leg with
+- [x] Per-leg `timeout-minutes` re-derived at ~1.4× worst measured leg with
   the derivation comment preserved.
-- [ ] `deploy-script-tests-fixed` job: 3 `sudo bash` loopback steps,
+- [x] `deploy-script-tests-fixed` job: 3 `sudo bash` loopback steps,
   2 terraform validate blocks, `fixtures-validate-infra-templates.sh`,
   evidence-freshness + systemd-lint + userdata-cap + provenance blocks,
   5 `apps/web-platform/test/infra/*.test.sh` steps,
   `sandbox-canary-regression.test.sh`; own toolchain setup; own ceiling.
-- [ ] `deploy-script-tests-done` aggregator: `needs:
+- [x] `deploy-script-tests-done` aggregator: `needs:
   [deploy-script-tests, deploy-script-tests-fixed]`, `if: always()`, exits
   non-zero when any need is `failure|cancelled` — copy the
   `Aggregate shard results` step shape from `ci.yml` (~line 1525) verbatim,
@@ -120,30 +120,30 @@ the new derivation/env shape.
   `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` (it extracts
   and executes the ci.yml body over synthetic result triples) for the new
   job.
-- [ ] `notify-main-failure`: re-key on `deploy-script-tests-done.result`,
+- [x] `notify-main-failure`: re-key on `deploy-script-tests-done.result`,
   add `cancelled` to the disjunction (#8735).
-- [ ] `main-health-monitor.yml`: update the 35-min reference + derived-set
+- [x] `main-health-monitor.yml`: update the 35-min reference + derived-set
   prose; the monitor's runner invocation stays unsharded (unset env = full
   set).
-- [ ] `actionlint` the workflow; extract embedded `run:` snippets and
+- [x] `actionlint` the workflow; extract embedded `run:` snippets and
   `bash -c` them (not `bash -n` on the file).
 
 ## task/phase-4-gate-and-totality
 
-- [ ] Rewrite `.github/scripts/test/test-infra-suite-registration.sh` to the
+- [x] Rewrite `.github/scripts/test/test-infra-suite-registration.sh` to the
   registration-list contract (plan Guard 1): workflow invokes runner × N
   matrix legs with `SOLEUR_INFRA_SHARD` bound; glob == derived ∪ exclusions;
   privileged suites still invoked in `deploy-script-tests-fixed`; masking
   check rescoped (ban on suite-executing steps, allowlist for upload/
   aggregator `if: always()`); delete `KNOWN_UNDERIVABLE`.
-- [ ] Extend `test-infra-suite-registration-mutations.sh` with the Guard 1
+- [x] Extend `test-infra-suite-registration-mutations.sh` with the Guard 1
   and Guard 2 mutation rows from the plan (each ≥3 rows incl. own-dispatch
   and second-member).
-- [ ] `scripts/regenerate-shard-manifest.py` — add `--group infra` emitting
+- [x] `scripts/regenerate-shard-manifest.py` — add `--group infra` emitting
   `apps/web-platform/infra/suite-shard-legs.tsv` from `suite-timings-infra-*`
   artifacts; seed the first manifest from the Phase 0 step table so the
   first sharded run is already balanced.
-- [ ] Verify RED: each mutation row drives the gate/harness red; verify the
+- [x] Verify RED: each mutation row drives the gate/harness red; verify the
   harness's own rows (missing runner invocation, `1/1` single-leg legal
   shape).
 - [ ] Lint: manifest rows ⊆ derived set; `n` in manifest == matrix leg count.

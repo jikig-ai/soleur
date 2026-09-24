@@ -1,325 +1,267 @@
 #!/usr/bin/env bash
 # test-infra-suite-registration.sh -- fail when an infra *.test.sh is registered nowhere, or
-# is registered in a shape the local runner cannot derive.
+# the sharded runner invocation that reaches it has been disconnected.
 #
-# WHY (#7068). Infra suites are registered ONLY as explicit `run: bash …` steps in
-# .github/workflows/infra-validation.yml -- there is no glob. scripts/test-all.sh reaches
-# apps/web-platform/infra/ only through run-registered-suites.sh, which DERIVES its list from
-# this same job -- so an unregistered suite is uncovered locally too, not merely in CI. A suite
-# that nobody remembers to register therefore runs in NO job, and is invisible TWICE: it never
-# runs, and it never reds. That is strictly worse than having no suite at all, because the file reads as
-# coverage to anyone grepping for a guard on the thing it names.
+# WHY (#7068, re-shaped by #8736). Infra suites were once registered ONLY as explicit
+# `run: bash …` steps in .github/workflows/infra-validation.yml, and this gate asserted that
+# step shape. #8736 replaced ~146 serial named steps with a K=4 matrix whose legs all invoke
+# apps/web-platform/infra/run-registered-suites.sh, and the runner now DERIVES its execute set
+# by `git ls-files` glob: presence under apps/web-platform/infra/ IS registration (ADR-250).
 #
-# The orphan REPORTER that names these suites landed in 2f46570c1 (#6730); #7000 left the seven
-# unadopted; they were surfaced and filed while working on #7025; #7068 cleaned them up. The
-# prevention recorded in 2026-06-16-infra-test-orphan-suites-and-node-options-env-file-clobber.md
-# is a HUMAN HABIT ("grep the enumerator and add yourself"), and that habit has failed
-# repeatedly. This is the mechanical version.
+# That makes the old per-suite step check tautological — every tracked suite is registered by
+# construction — so what remains to gate is the CONNECTION, and the exceptions:
 #
-# WHAT IT ASSERTS, precisely: every infra *.test.sh tracked by git is invoked by a SINGLE-LINE
-# `run: bash <path>` step inside the `deploy-script-tests` job of infra-validation.yml, or
-# carries an exclusion with a reason and a tracking issue. Failure modes are reported
-# distinctly because they have different fixes: not registered at all (runs in no
-# deploy-script-tests step), and registered in a shape run-registered-suites.sh cannot derive
-# (runs in CI, never runs locally).
-#
-# SCOPE, deliberately narrow: this gate makes REGISTRATION blocking. It says nothing about
-# whether a suite's VERDICT blocks merge -- deploy-script-tests is advisory, and promoting it
-# is #6480's job, not this gate's. The two are orthogonal, and registration is the one #7068
-# is about. Registration still has real teeth today regardless of #6480, because
-# apps/web-platform/infra/run-registered-suites.sh DERIVES its execute set from the same
-# workflow steps, ends in `(( RED == 0 ))`, and is mandated as an infra exit gate by both the
-# work and ship skills. That is also why the single-line shape is asserted rather than mere
-# "invoked somewhere": a multi-line `run: |` still runs in CI but is invisible to that runner,
-# so it silently removes the teeth while looking registered.
+#   1. The `deploy-script-tests` matrix job must exist and invoke the runner with
+#      SOLEUR_INFRA_SHARD wired from `matrix.leg`, with `fail-fast: false` — otherwise
+#      one leg's failure cancels its siblings and coverage silently shrinks.
+#   2. The runner step itself must carry NO `if:`/`continue-on-error:` — the masking
+#      check, now scoped to the step that matters (artifact-upload steps legitimately
+#      carry `if: failure()`/`always()`).
+#   3. The PRIVILEGED set (suites that need root and therefore must NOT run under the
+#      unprivileged runner — the derive-but-do-not-execute contract from #7076) must
+#      each be `sudo bash`-invoked inside `deploy-script-tests-fixed`. The exclusion
+#      waives the RUNNER, never the invocation.
+#   4. `deploy-script-tests-done` must exist and need both legs — it is the single
+#      verdict `notify-main-failure` reads.
 #
 # WHAT IT DOES *NOT* ASSERT, stated so no reader over-reads a green run:
-#   - Step-level `if:` / `continue-on-error:`. It asserts the job carries neither (see the
-#     MASKING CHECK below), which covers today's file, but it does not parse YAML, so a
-#     sufficiently creative masking construct is out of scope.
-#   - That infra-validation.yml runs at all for a given PR. That workflow is `pull_request` +
-#     `paths:`-filtered with NO `merge_group:` trigger, while THIS gate runs in a
-#     merge_group-triggered, path-filter-free required check. So the gate can be green in the
-#     merge queue for a workflow that the merge queue never runs. Registration is still the
-#     right thing to gate; the trigger asymmetry is simply not something this gate can fix.
+#   - Whether a suite's VERDICT blocks merge. deploy-script-tests is advisory; promotion
+#     is #6480's job, not this gate's.
+#   - That infra-validation.yml runs at all for a given PR (paths-filtered, no
+#     merge_group trigger) — same trigger asymmetry the old contract had.
+#   - Manifest/matrix coherence: a stale suite-shard-legs.tsv degrades legs to
+#     positional assignment — a balance problem, never a coverage one — so this gate
+#     does not enforce it.
+#
+# The privileged list is read FROM THE RUNNER (its PRIVILEGED_WHY map), never
+# duplicated here — two lists over one set is the drift this file exists to prevent,
+# one level up. Each entry must cite a tracking issue, the same fail-closed discipline
+# the old EXCLUSIONS array carried.
 #
 # WHY IT LIVES HERE. The `test-*.sh` glob in run-all.sh feeds guard-script-fixture-tests --
 # REQUIRED, merge_group-triggered, path-filter-free. So this gate is genuinely blocking while
-# adding NO new required-check name: no ruleset-ci-required.tf edit and no
-# scripts/required-checks.txt edit. It honours that glob's BASH-ONLY contract verbatim (git +
-# sed + grep, reading YAML as text) -- no terraform, no cloud-init, no apt -- so the #6454
-# hazard (a package-mirror dependency on the merge-queue critical path) is not tripped.
-# #6454 was about apt on that path, not about any dependency at all.
-#
-# It must ALSO stay outside `scripts/` and `.github/workflows/`: run-registered-suites.sh's
-# orphan scan is a bare-basename `git grep` over exactly those two pathspecs, so an EXCLUSIONS
-# entry naming a suite would silence that reporter if this file were moved under them.
-#
-# It STARTS GREEN: #7068 drove the orphan set to zero first. A ratchet, not a backlog.
+# adding NO new required-check name. It honours that glob's BASH-ONLY contract verbatim
+# (git + sed + grep + awk, reading YAML as text) -- no terraform, no cloud-init, no apt.
 #
 # Its own non-vacuity is pinned by a committed harness, not by a comment:
-# test-infra-suite-registration-mutations.sh (same directory, so also auto-globbed). Every
-# arm below has a mutation row there. An earlier version of this header claimed the gate was
-# "mutation-proved inline, and that proof is recorded in the PR body" -- that is the
-# perishable-evidence anti-pattern recorded in
-# knowledge-base/project/learnings/2026-07-15-ad-hoc-verification-evidence-is-as-perishable-as-uncommitted-code.md,
-# and the "a harness would reproduce the orphan problem in miniature" argument that justified
-# it was self-refuting: a harness in THIS directory is auto-globbed and therefore cannot be
-# orphaned, as the paragraph above says in as many words.
-#
-# COST. Measured #7068 review, clean env (`env -i PATH=/usr/bin:/bin`) in a sandbox with both
-# versions at their real path and BOTH exiting 0: this one-pass form ~0.12-0.15s, the earlier
-# per-suite-grep form ~0.91-1.07s. ~7x, and the per-suite form was also quadratic in suite
-# count (each registration adds both an iteration and a line to the scanned corpus), which is
-# a poor shape for a required merge-queue gate even while its absolute cost was acceptable.
-#
-# Pin the real binaries when re-measuring. In an agent session `grep` is often a shim shell
-# function wrapping a slower engine, which inflated this script to ~15s and the per-suite form
-# to ~1.9s. And run both arms to rc=0: an arm that early-exits on its own cardinality guard
-# (e.g. copied to /tmp, breaking the BASH_SOURCE-relative REPO_ROOT) reports ~20ms and reads
-# exactly like a fast pass. Both mistakes were made and caught while writing this line.
+# test-infra-suite-registration-mutations.sh (same directory, so also auto-globbed).
+# Every arm below has a mutation row there.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 WF_REL=".github/workflows/infra-validation.yml"
 WF="$REPO_ROOT/$WF_REL"
+RUNNER_REL="apps/web-platform/infra/run-registered-suites.sh"
+RUNNER="$REPO_ROOT/$RUNNER_REL"
 JOB="deploy-script-tests"
+FIXED_JOB="deploy-script-tests-fixed"
+DONE_JOB="deploy-script-tests-done"
 INFRA_PREFIX="apps/web-platform/infra"
 
 err() { echo "::error::infra-suite-registration: $1" >&2; }
-
-# name | reason (must cite a tracking issue)
-#
-# An exclusion is for a suite that cannot carry the single-line shape asserted below. Exactly
-# one today. An entry here is a debt, not a fix -- #7068 registered all 94, so nothing else
-# needs absorbing, and closing #7076 should let this entry go too.
-EXCLUSIONS=(
-  "git-data-plaintext-snapshot-loopback.test.sh|invoked as \`sudo bash\` inside a multi-line \`run: |\` block (infra-validation.yml), because it needs root for losetup/dmsetup/blockdev --setro/mount. Same shape and same reason as the two loopback entries below: the suite exits 2 unprivileged, so deriving it into run-registered-suites.sh would turn that mandated ship gate permanently RED for any operator without passwordless sudo. Its stub-harness half is git-data-bootstrap-store-verify.test.sh, which carries a plain single-line registration and IS derived. Fixing the derivation properly (derive-but-do-not-execute) is tracked in #7076."
-  "inngest-redis-luks-loopback.test.sh|invoked as \`sudo bash\` inside a multi-line \`run: |\` block (infra-validation.yml), because it needs root for losetup/cryptsetup/mkfs.ext4. Same shape and same reason as the workspaces loopback entry below: the suite exits 2 unprivileged, so deriving it into run-registered-suites.sh would turn that mandated ship gate permanently RED for any operator without passwordless sudo. Its STRUCTURAL half is a separate file, apps/web-platform/infra/inngest-redis-luks.test.sh, which carries a plain single-line registration and IS derived — the split exists precisely so the arms that need no privilege stay inside the local gate. Fixing the derivation properly (derive-but-do-not-execute) is tracked in #7076."
-  "workspaces-luks-loopback.test.sh|invoked as \`sudo bash\` inside a multi-line \`run: |\` block (infra-validation.yml), because it needs root for losetup/luksFormat. It therefore runs in CI but is invisible to run-registered-suites.sh's single-line derivation -- and it must STAY invisible to it: the suite exits 2 unprivileged, so deriving it would turn that mandated ship gate permanently RED for any operator without passwordless sudo. Fixing the derivation properly (derive-but-do-not-execute) is tracked in #7076."
-)
-
-# Suites that live in a SUBDIRECTORY of apps/web-platform/infra/. They carry correct
-# single-line steps and DO run in CI -- but run-registered-suites.sh cannot derive them,
-# because its extraction character class ([A-Za-z0-9._-]+) excludes `/`. So they never run
-# through the local runner that both the work and ship skills mandate.
-#
-# This list is a PIN, not documentation. The subdirectory gap is a predicate on paths, not a
-# closed set of seven: without this pin an 8th subdirectory suite registers GREEN and silently
-# never runs locally, forever, which is the same accretion that produced the seven orphans
-# #7068 is cleaning up. Fixing the runner's derivation is #7076; until then a new
-# subdirectory suite must be a deliberate, visible decision.
-KNOWN_UNDERIVABLE=(
-  "$INFRA_PREFIX/inngest-rls/apply-inngest-rls-workflow.test.sh"
-  "$INFRA_PREFIX/inngest-rls/inngest-rls.test.sh"
-  "$INFRA_PREFIX/scripts/gen-github-egress-cidr.test.sh"
-  "$INFRA_PREFIX/scripts/sigpipe-triage-feasibility.test.sh"
-  "$INFRA_PREFIX/supabase-advisor/scan-workflow-mutation.test.sh"
-  "$INFRA_PREFIX/supabase-advisor/scan-workflow.test.sh"
-)
 
 if [[ ! -f "$WF" ]]; then
   err "$WF_REL not found -- cannot verify infra suite registration"
   exit 1
 fi
+if [[ ! -f "$RUNNER" ]]; then
+  err "$RUNNER_REL not found -- the runner this gate asserts wiring FOR is missing"
+  exit 1
+fi
 
-# Slice the deploy-script-tests job, then strip comment lines.
-#
-# Job-scoping is load-bearing, not tidiness: the error messages below name that job by name,
-# and a whole-file scan cannot honestly say "runs in no CI job" (measured at review: relocating
-# a suite's step into the `plan` job, which is itself gated on a Doppler token, left a
-# whole-file scan GREEN while the suite ran in no job on most PRs).
-#
-# Comments are stripped BEFORE matching. This is the anti-vacuity core: the local runner's own
-# orphan scan is a bare-basename `git grep`, so prose naming a suite silences it while running
-# nothing -- the shape cq-assert-anchor-not-bare-token forbids, and the loophole #7068's own
-# block comment had to be written around. Anchoring on the invocation shape is only half the
-# fix; without this strip a commented-out `# run: bash …/foo.test.sh` would still satisfy it.
-JOB_RAW=$(awk -v job="  ${JOB}:" '
-  $0 == job { injob = 1; next }
-  injob && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { injob = 0 }
-  injob { print }
-' "$WF")
+# Slice a job's YAML text (comment lines stripped — a commented-out invocation must
+# never satisfy a check; that was the anti-vacuity core of the old gate too).
+# Job-scoping is load-bearing: a whole-file scan cannot honestly say "runs in no CI job".
+slice_job() {  # slice_job <job-name>
+  awk -v job="  $1:" '
+    $0 == job { injob = 1; next }
+    injob && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { injob = 0 }
+    injob { print }
+  ' "$WF" | grep -vE '^[[:space:]]*#' || true
+}
+
+JOB_RAW=$(slice_job "$JOB")
+FIXED_RAW=$(slice_job "$FIXED_JOB")
+DONE_RAW=$(slice_job "$DONE_JOB")
+
+fails=0
 
 if [[ -z "${JOB_RAW//[[:space:]]/}" ]]; then
-  err "could not slice the \`${JOB}\` job out of $WF_REL -- the job was renamed, removed, or"
+  err "could not slice the \`$JOB\` job out of $WF_REL -- the job was renamed, removed, or"
   err "  its indentation changed. This gate cannot make any claim; fix the slice, do not delete it."
   exit 1
 fi
+if [[ -z "${FIXED_RAW//[[:space:]]/}" ]]; then
+  err "could not slice the \`$FIXED_JOB\` job out of $WF_REL -- the privileged suites and"
+  err "  fixed checks have nowhere to run. Restore the job or remove the privileged set."
+  exit 1
+fi
+if [[ -z "${DONE_RAW//[[:space:]]/}" ]]; then
+  err "could not slice the \`$DONE_JOB\` job out of $WF_REL -- notify-main-failure reads"
+  err "  that aggregator's result; without it a red leg alerts nobody."
+  exit 1
+fi
 
-JOB_CODE=$(printf '%s\n' "$JOB_RAW" | grep -vE '^[[:space:]]*#' || true)
+# ── Arm 1: the matrix job invokes the runner, sharded, fail-open-proof ────────
+# The runner step is identified by its `run:` line, not its name — names are prose.
+RUNNER_STEPS=$(printf '%s\n' "$JOB_RAW" | grep -cE "run: bash ${RUNNER_REL}[[:space:]]*$" || true)
+if (( RUNNER_STEPS != 1 )); then
+  err "the \`$JOB\` job contains ${RUNNER_STEPS} \`run: bash ${RUNNER_REL}\` invocations"
+  err "  (expected exactly 1). The suite set executes through that one step; zero means"
+  err "  no infra suite runs in CI, two means every suite runs twice."
+  fails=$((fails + 1))
+fi
 
-# MASKING CHECK. A step that exists can still be neutralised by `continue-on-error: true`
-# (which this workflow warns yields conclusion=success over outcome=failure) or by a false
-# `if:`. Both are zero in this job today, so asserting it is a ratchet rather than a cleanup.
-mask_hits=$(printf '%s\n' "$JOB_CODE" | grep -cE '^[[:space:]]+(continue-on-error|if):' || true)
+# SOLEUR_INFRA_SHARD must be wired from the matrix leg — a leg running the FULL set
+# quadruples the wall clock this restructure exists to cut, and four identical legs
+# are worse than one because they look sharded.
+if ! grep -qE 'SOLEUR_INFRA_SHARD:[[:space:]]+\$\{\{[[:space:]]*matrix\.leg[[:space:]]*\}\}' <<< "$JOB_RAW"; then
+  err "the \`$JOB\` job does not set SOLEUR_INFRA_SHARD from matrix.leg — without it"
+  err "  every leg runs the FULL suite set (4x the wall clock, zero sharding)."
+  fails=$((fails + 1))
+fi
+
+# A matrix without legs, or legs that are not k/N strings, is a silent full-set run.
+LEG_ROWS=$(printf '%s\n' "$JOB_RAW" | grep -cE 'leg:[[:space:]]*\[' || true)
+if (( LEG_ROWS < 1 )) || ! grep -qE 'leg:[[:space:]]*\["1/[0-9]+"' <<< "$JOB_RAW"; then
+  err "the \`$JOB\` job's matrix has no \`leg: [\"k/N\", ...]\` list — the legs and the"
+  err "  runner's shard parser have drifted."
+  fails=$((fails + 1))
+fi
+
+# fail-fast: false — a RED leg must not cancel its siblings; the aggregator needs
+# every leg's verdict and a cancelled sibling's suites never ran (coverage, not
+# just attribution).
+if ! grep -qE 'fail-fast:[[:space:]]*false' <<< "$JOB_RAW"; then
+  err "the \`$JOB\` matrix lacks \`fail-fast: false\` — one RED leg cancels the other"
+  err "  three, and a quarter of the suite set silently never runs."
+  fails=$((fails + 1))
+fi
+
+# ── Arm 2: masking — scoped to the RUNNER STEP, not the job ───────────────────
+# The old gate asserted zero `if:`/`continue-on-error:` keys job-wide, because then
+# every step was a suite and masking any step masked coverage. Now the load-bearing
+# step is the runner invocation; upload steps legitimately carry `if: failure()`/
+# `always()`. Assert the runner step's own block is unmasked.
+mask_hits=$(printf '%s\n' "$JOB_RAW" | awk -v RS='      - ' '/run-registered-suites\.sh/{print; exit}' \
+  | grep -cE '^[[:space:]]+(continue-on-error|if):' || true)
 if (( mask_hits > 0 )); then
-  err "the \`${JOB}\` job now contains ${mask_hits} \`continue-on-error:\`/\`if:\` key(s)."
-  err "  Those can mask a suite failure (conclusion=success over outcome=failure) or skip the"
-  err "  step entirely, so registration would no longer imply execution. If this is deliberate,"
-  err "  narrow this check rather than deleting it."
-  exit 1
+  err "the \`$JOB\` runner step carries ${mask_hits} \`continue-on-error:\`/\`if:\` key(s) —"
+  err "  masking the one step that executes every suite. Artifact-upload steps may carry"
+  err "  \`if:\`; the runner step may not."
+  fails=$((fails + 1))
 fi
 
-# ONE pass to build both sets, keyed by exact path string.
-#
-# Extracting into associative arrays -- instead of building a per-suite regex from the
-# filename -- removes an entire defect class: `${rel//./\\.}` escaped only `.`, so a suite
-# named `foo+bar.test.sh` produced a FALSE message telling the author to add a step that was
-# already there (fail-closed, but a lie). Exact string lookup cannot misread any filename.
-declare -A REGISTERED=()   # single-line `run: bash <path>` (optional trailing # comment)
-declare -A INVOKED=()      # `bash <path>` in ANY shape, incl. multi-line run:| and sudo
+# ── Arm 3: the privileged set — derived from the RUNNER, invoked via sudo ─────
+# PRIVILEGED_WHY lives in run-registered-suites.sh — the single source of truth for
+# "needs root, never run unprivileged". Parse its `[basename]="reason"` entries.
+# The map must parse AND be non-empty: an empty map is a legitimate future state
+# (no root suites), so the floor is "the block parsed at all", asserted by the
+# per-suite loop below — a suite under a privileged basename with no map entry is
+# just a normal suite, which is the #7076 hole in reverse and is caught by... the
+# local run itself going red. What THIS gate pins is narrower: every map entry is
+# a real tracked suite AND is sudo-invoked in the fixed job.
+declare -A PRIVILEGED=()
+while IFS= read -r line; do
+  base="${line%%]=*}"
+  reason="${line#*]=}"
+  [[ -n "$base" ]] || continue
+  if ! grep -qE '#[1-9][0-9]*' <<< "$reason"; then
+    err "privileged entry '$base' in ${RUNNER_REL}'s PRIVILEGED_WHY cites no tracking"
+    err "  issue — an exclusion is a recorded decision, not a silent absorption."
+    fails=$((fails + 1))
+  fi
+  PRIVILEGED["$base"]=1
+done < <(sed -n 's/^  \[\([A-Za-z0-9._-]*\.test\.sh\)\]="\(.*\)"$/\1]=\2/p' "$RUNNER")
 
-while IFS= read -r p; do
-  [[ -n "$p" ]] && REGISTERED["$p"]=1
-done < <(printf '%s\n' "$JOB_CODE" | sed -nE \
-  "s|^[[:space:]]*run: bash (${INFRA_PREFIX}/[^[:space:]]+\.test\.sh)[[:space:]]*(#.*)?$|\1|p")
-
-while IFS= read -r p; do
-  [[ -n "$p" ]] && INVOKED["$p"]=1
-done < <(printf '%s\n' "$JOB_CODE" | grep -oE \
-  "(^|[[:space:]])(sudo[[:space:]]+)?bash[[:space:]]+${INFRA_PREFIX}/[^[:space:]]+\.test\.sh" \
-  | sed -E 's|.*bash[[:space:]]+||' || true)
-
-# Extraction non-vacuity. If the sed above stops matching (indentation change, `run:` reworded),
-# every suite would report "not registered" -- loud, but for the wrong reason. Naming it is
-# cheaper to debug than 90 identical errors.
-if (( ${#REGISTERED[@]} < 50 )); then
-  err "extracted only ${#REGISTERED[@]} single-line \`run: bash\` step(s) from the \`${JOB}\` job"
-  err "  -- expected ~98. The extraction is broken, not the workflow. Fix the pattern."
-  exit 1
-fi
-
-# Enumerate with git ls-files, mirroring run-registered-suites.sh's own pathspec.
-#
-# NOT `find`: find sees untracked files, and run-registered-suites.test.sh writes a real
-# fixture into the tracked tree with no trap covering it, so an interrupted run leaves a
-# stray suite behind -- which would red this REQUIRED check and tell the operator to register
-# a test fixture. git ls-files also matches the sibling precedent (lint-orphan-test-suites.sh).
+# Enumerate the tracked suite set — same `git ls-files` pathspec the runner uses.
 SUITES=()
 while IFS= read -r f; do
   [[ -n "$f" ]] && SUITES+=("$f")
 done < <(git -C "$REPO_ROOT" ls-files \
   "${INFRA_PREFIX}/*.test.sh" "${INFRA_PREFIX}/**/*.test.sh" | LC_ALL=C sort -u)
 
-# Minimum-cardinality guard. Without it a broken enumeration (renamed directory, bad pathspec)
-# yields ZERO suites and the loop below passes with zero coverage -- a green run that checked
-# nothing, which is the same silent-and-green shape this gate exists to remove. 94 suites
-# today; a count this low means the enumeration broke, not that suites were deleted.
-# Lower it deliberately, with a reason, if the directory ever genuinely shrinks that far.
+# Minimum-cardinality guard: a broken enumeration yielding ZERO would pass every
+# per-suite check below while certifying nothing.
 if (( ${#SUITES[@]} < 50 )); then
-  err "enumerated only ${#SUITES[@]} infra suite(s) under ${INFRA_PREFIX} -- expected ~94."
+  err "enumerated only ${#SUITES[@]} infra suite(s) under ${INFRA_PREFIX} -- expected ~140."
   err "  The enumeration is broken; this gate cannot make any claim. Fix it, do not lower the floor."
   exit 1
 fi
 
-declare -A UNDERIVABLE_PIN=()
-for u in "${KNOWN_UNDERIVABLE[@]}"; do UNDERIVABLE_PIN["$u"]=1; done
+declare -A TRACKED=()
+for rel in "${SUITES[@]}"; do TRACKED["${rel##*/}"]=1; done
 
-fails=0
-excluded_n=0
-underivable_n=0
-
-for rel in "${SUITES[@]}"; do
-  base="${rel##*/}"
-
-  excluded=""
-  for e in "${EXCLUSIONS[@]}"; do
-    [[ "${e%%|*}" == "$base" ]] && excluded="${e#*|}"
-  done
-
-  if [[ -n "$excluded" ]]; then
-    # Fail-closed on a reasonless or issue-less exclusion: skipping must be a recorded
-    # decision, not a silent absorption. `#[1-9][0-9]*` rather than `#[0-9]+` so a
-    # placeholder `#0` cannot satisfy "cites a tracking issue".
-    if [[ -z "${excluded// /}" ]] || ! grep -qE '#[1-9][0-9]*' <<< "$excluded"; then
-      err "exclusion for $rel has no reason or no tracking issue"
-      fails=$((fails + 1))
-    # An exclusion waives the SHAPE requirement, never EXISTENCE. Without this arm the
-    # exclusion is a blanket exemption: deleting the excluded suite's invocation outright
-    # stops it running in CI and this gate stays green -- a fail-open, narrow but real, and
-    # one introduced by the exclusion itself. Measured: with only the reason/issue check
-    # above, removing loopback's `sudo bash` line left the gate at rc=0.
-    elif [[ -z "${INVOKED[$rel]+x}" ]]; then
-      err "$rel is EXCLUDED from the single-line shape requirement, but it is not invoked"
-      err "  anywhere in the \`${JOB}\` job -- so it runs in no CI step there."
-      err "  An exclusion waives the shape, never the registration. Either restore its"
-      err "  invocation, or delete both the suite and its exclusion entry."
-      fails=$((fails + 1))
-    else
-      echo "note: $base excluded -- $excluded"
-      excluded_n=$((excluded_n + 1))
-    fi
-    continue
-  fi
-
-  if [[ -z "${REGISTERED[$rel]+x}" ]]; then
-    # Distinguish the two failure modes -- they have different fixes.
-    if [[ -n "${INVOKED[$rel]+x}" ]]; then
-      err "$rel IS invoked in the \`${JOB}\` job, but not in the single-line"
-      err "  \`run: bash <path>\` form this gate requires. Do NOT fix this by adding a second"
-      err "  step -- convert the existing one, or the suite runs twice."
-      err "  Most such shapes -- an inline env prefix, a quoted scalar, a \`./\` prefix, a"
-      err "  multi-line \`run: |\` -- also de-register the suite from run-registered-suites.sh,"
-      err "  which derives single-line only, so it would never run locally even though CI does."
-      err "  (A trailing \`&& cmd\` or \`| cmd\` IS still derivable locally; it is refused here"
-      err "  because CI and the local run would then execute different commands.)"
-      err "  Step-level \`env:\` is safe, and so is a trailing \`# comment\`. If the shape is"
-      err "  unavoidable (it needs sudo), add a reasoned exclusion -- see below."
-    else
-      err "$rel is registered in NO single-line \`run: bash\` step of the \`${JOB}\` job in"
-      err "  $WF_REL. scripts/test-all.sh reaches ${INFRA_PREFIX} only through"
-      err "  run-registered-suites.sh, which DERIVES its list from that same job -- so an"
-      err "  unregistered suite is uncovered locally too, not just in CI."
-      err "  (Only that job is checked; another workflow invoking it would not count here.)"
-      err "  Add a \`- name:\` / \`run: bash $rel\` step pair to that job -- a bare \`run:\` line"
-      err "  appended to an existing step would clobber that step's own command."
-    fi
-    err "  To exclude instead: add \"<basename>|<reason citing #NNNN>\" to the EXCLUSIONS array"
-    err "  in .github/scripts/test/test-infra-suite-registration.sh."
+for base in "${!PRIVILEGED[@]}"; do
+  if [[ -z "${TRACKED[$base]+x}" ]]; then
+    err "PRIVILEGED_WHY in ${RUNNER_REL} lists '$base', which is not a tracked infra"
+    err "  suite — a stale exclusion licenses a gap that is no longer real. Remove it."
     fails=$((fails + 1))
     continue
   fi
-
-  # Registered correctly. Now pin the subdirectory class (see KNOWN_UNDERIVABLE above).
-  if [[ "${rel#"$INFRA_PREFIX/"}" == */* ]]; then
-    if [[ -n "${UNDERIVABLE_PIN[$rel]+x}" ]]; then
-      underivable_n=$((underivable_n + 1))
-    else
-      err "$rel is correctly registered in CI, but it lives in a SUBDIRECTORY of"
-      err "  ${INFRA_PREFIX}, and run-registered-suites.sh cannot derive it: its extraction"
-      err "  character class excludes \`/\` (#7076). So it will run in CI and NEVER run through"
-      err "  the local runner that the work and ship skills mandate as the infra exit gate."
-      err "  Either move it to ${INFRA_PREFIX}/ (top level), or -- if the subdirectory is"
-      err "  deliberate -- add it to KNOWN_UNDERIVABLE in this file and say so on #7076."
-      fails=$((fails + 1))
-    fi
-  fi
-done
-
-# A pinned entry that no longer exists means the pin is stale: #7076 may have been fixed, or
-# the suite was moved/deleted. Either way the list must shrink with reality, or it silently
-# licenses a gap that is no longer real.
-for u in "${KNOWN_UNDERIVABLE[@]}"; do
-  found=""
-  for rel in "${SUITES[@]}"; do [[ "$rel" == "$u" ]] && found=1 && break; done
-  if [[ -z "$found" ]]; then
-    err "KNOWN_UNDERIVABLE lists $u, which is not a tracked infra suite."
-    err "  Remove the stale entry (and if #7076 is fixed, remove the whole list)."
+  # The exclusion waives the runner, never the invocation: it must be `sudo bash`ed
+  # inside deploy-script-tests-fixed. Any shape inside that job counts (multi-line
+  # `run: |` included — the sudo steps carry setup commands).
+  if ! grep -qE "(^|[[:space:]])sudo[[:space:]]+bash[[:space:]]+${INFRA_PREFIX}/([A-Za-z0-9._-]+/)*${base}([[:space:]]|$)" <<< "$FIXED_RAW"; then
+    err "$base is PRIVILEGED (excluded from the runner, needs root) but is NOT"
+    err "  sudo-invoked anywhere in the \`$FIXED_JOB\` job — so it runs in NO job."
+    err "  Either restore its \`sudo bash\` step there, or delete it from PRIVILEGED_WHY"
+    err "  and let the legs run it unprivileged (only if it no longer needs root)."
     fails=$((fails + 1))
   fi
 done
+
+# ── Arm 3b: test/infra suites must be invoked SOMEWHERE ──────────────────────
+# apps/web-platform/test/infra/*.test.sh lives OUTSIDE the runner's glob and is
+# not uniformly registered in this workflow — vector-pii-scrub runs in another
+# workflow entirely. The invariant is the weaker one this domain actually has:
+# every tracked suite there is `bash`-invoked by at least one workflow file.
+# (Per-suite home-job scoping stays a lint-orphan-test-suites.sh concern — it
+# owns the six-surface census; duplicating its bookkeeping here is the drift
+# this rewrite exists to remove.)
+TESTINFRA_PREFIX="apps/web-platform/test/infra"
+WF_STRIPPED_ALL=$(for w in "$REPO_ROOT"/.github/workflows/*.yml; do
+    grep -vE '^[[:space:]]*#' "$w"
+  done)
+while IFS= read -r rel; do
+  [[ -n "$rel" ]] || continue
+  # NOTE: herestrings, not `printf | grep -q` — under pipefail, grep -q exits on
+  # first match and printf dies SIGPIPE (rc=141), which reads as "not found" here.
+  # Measured: all six suites red-failed on a 1.4 MB stream.
+  if ! grep -qE "(^|[[:space:]])bash[[:space:]]+${rel}([[:space:]]|$)" <<< "$WF_STRIPPED_ALL" \
+     && ! grep -qE "sudo[[:space:]]+bash[[:space:]]+${rel}([[:space:]]|$)" <<< "$WF_STRIPPED_ALL"; then
+    err "$rel is a tracked ${TESTINFRA_PREFIX}/ suite invoked by NO workflow —"
+    err "  the runner's glob does not reach that directory, so it runs nowhere."
+    fails=$((fails + 1))
+  fi
+done < <(git -C "$REPO_ROOT" ls-files "${TESTINFRA_PREFIX}/*.test.sh")
+
+# ── Arm 4: the aggregator needs both legs ─────────────────────────────────────
+for need in "$JOB" "$FIXED_JOB"; do
+  # Membership, not substring: `deploy-script-tests` is a PREFIX of
+  # `deploy-script-tests-fixed`, so a bare grep for the name is satisfied by the
+  # sibling's entry — measured: dropping the matrix from needs: stayed green.
+  # The job name must be followed by `]`, `,`, space, or end-of-line to count.
+  # (`[] ,]` — a `]` first inside a bracket expression is a literal, not a close.)
+  if ! grep -qE "needs:.*${need}([] ,]|$)" <<< "$DONE_RAW"; then
+    err "\`$DONE_JOB\` does not list \`$need\` in its needs: — a leg can go red or"
+    err "  be cancelled without the aggregator ever seeing it."
+    fails=$((fails + 1))
+  fi
+done
+if ! grep -qE 'if: always\(\)' <<< "$DONE_RAW"; then
+  err "\`$DONE_JOB\` lacks \`if: always()\` — default needs: semantics render a"
+  err "  cancelled/failed upstream as \`skipped\`, which some branch protection"
+  err "  treats as success (fail-open)."
+  fails=$((fails + 1))
+fi
 
 if (( fails > 0 )); then
-  # Deliberately mode-agnostic. An earlier version said "unregistered infra test suites: N",
-  # which mislabelled every shape failure as an absence -- and the fix that mislabel implies
-  # (ADD a step) leaves the malformed step in place, runs the suite twice, and returns rc=0.
-  echo "infra suite registration: $fails failure(s) of ${#SUITES[@]} suite(s) on disk" >&2
+  echo "infra suite registration: $fails failure(s)" >&2
   exit 1
 fi
 
-derivable=$(( ${#SUITES[@]} - excluded_n - underivable_n ))
-echo "infra suite registration: ${#SUITES[@]} suites registered in \`${JOB}\`" \
-     "(${derivable} derivable by run-registered-suites.sh;" \
-     "${underivable_n} in subdirectories, not derivable -- #7076; ${excluded_n} excluded)"
+echo "infra suite registration: ${#SUITES[@]} suites covered by the ${JOB} matrix" \
+     "(${#PRIVILEGED[@]} privileged -> sudo in ${FIXED_JOB}; presence under" \
+     "${INFRA_PREFIX}/ IS registration)"

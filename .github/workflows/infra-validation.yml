@@ -454,194 +454,178 @@ jobs:
 
   deploy-script-tests:
     runs-on: ubuntu-24.04
-    # (#8010) `actions: read` + GH_TOKEN on the freshness step below. Since #8010 that step
-    # resolves the evidence's Actions run over the API, and without this grant it reads
-    # ANONYMOUSLY — 60 requests/hour per IP, shared behind hosted-runner NAT with every other
-    # job on the box. A rate limit there is `HOLD [RUN_RATE_LIMITED]`, which fails closed and
-    # correctly, but it turns an infra PR that changed nothing about the evidence into a red
-    # check for reasons that have nothing to do with it. This is the one call site of the four
-    # that is editable this cycle (the two apply-workflow sites are blocked behind #8361/#8362,
-    # and the sweeper runs under `env -i`); #8397 carries the rest.
+    # `actions: read` is needed by the rung-2 evidence freshness step, which lives in
+    # deploy-script-tests-fixed now — the grant stays here for parity (both jobs carry the
+    # same minimum token surface; see the fixed job for the consuming step).
     permissions:
       contents: read
       actions: read
-    # 8 (was 12, was 8, was 5): the #5875 sandbox-canary regression below builds a
-    # small alpine+bubblewrap image and runs two docker bwrap probes on top of the
-    # existing bash suite. Self-validating (SKIPs if the runner cannot do bwrap userns).
+    # SHARDED, K=4 (#8736). This job used to run ~146 `run: bash <suite>.test.sh` steps
+    # SERIALLY — 1170-1462 s measured, with the ceiling re-derived upward six times in ten
+    # weeks because every landed suite added itself serially (8 -> 12 -> 14 -> 15 -> 20 ->
+    # 27 -> 35 min). Each matrix leg now runs its quarter of the derived set through
+    # apps/web-platform/infra/run-registered-suites.sh, which parallelizes at -P
+    # min(4, nproc-2) and prints per-suite PASS/RED + ::error annotations — attribution is
+    # per-suite, per-leg, never anonymous.
     #
-    # 12→8 (#6665). #6649 bumped 8→12 because the `ci-deploy.sh tests` step alone
-    # measured ~407s of mostly-real `sleep`, pushing the job past the 8-min ceiling
-    # mid-suite. #6665 removed that cost at the root: the no-op `sleep` mock in
-    # ci-deploy.test.sh is now installed by DEFAULT (opt out with MOCK_SLEEP_REAL=1),
-    # so the step no longer pays wall clock where no timing fidelity is asserted.
+    # REGISTRATION IS NOW THE FILESYSTEM: presence under apps/web-platform/infra/**.test.sh
+    # IS registration (ADR-250). The runner derives its execute set by `git ls-files` glob —
+    # the same set a fresh checkout contains — so a new suite lands on a leg with NO
+    # workflow edit and NO ceiling re-derivation. The suite-command-registration gate
+    # (.github/scripts/test/test-infra-suite-registration.sh) was rewritten in the same
+    # change to assert THIS contract instead of the step shape.
     #
-    # Measured from the API, not estimated. Pre-change, across 26 runs on other infra
-    # branches: step 399-409s, whole job 507-574s over the 23 that SUCCEEDED, and
-    # 440-615s including the 3 that failed. Either way the max is ABOVE the old 480s
-    # ceiling, which is the cancellation #6649 was reacting to. (Stating the filter
-    # because a duration ceiling has to hold for failing runs too — they occupy the
-    # runner just the same.)
+    # fail-fast: false — a RED leg must not cancel its siblings; every leg's verdict is
+    # needed for attribution (mirrors ci.yml's test-scripts matrix).
     #
-    # Post-change, measured at THIS ceiling (not at the old one): 5 runs on this PR,
-    # all `success` — runs/30303303433, /30305631089, /30309264705, /30346685660,
-    # /30346763422 — whole job **184-189s**, step 22-26s. Stated as a RANGE on a named
-    # run set rather than as a single max: every later push adds a run, so a lone
-    # "observed max" figure goes stale on its own branch (it moved 187 -> 189 during
-    # this PR). Non-suite overhead (checkout, setup-terraform, apt-get cloud-init, the
-    # docker build, ~55 other suites) measured 108-166s across the pre-change set, so
-    # the worst projected job is ~166+26 = ~192s.
-    #
-    # 8 minutes = 480s is therefore ~2.5x both the observed max and the worst
-    # projection. Note 189s is within a few seconds of that projection — it is being
-    # met, not beaten. Deliberately not lower: this is a ceiling absorbing runner
-    # variance on network-bound, heavy-tailed steps, not a budget to spend. Nearly all
-    # remaining variance is now in the non-suite overhead, not in the suite (22-26s).
-    #
-    # #7068 RE-DERIVATION (this paragraph exists because the instruction below says to
-    # do it, and this PR is the case it was written for). #7068 adds EIGHT steps: the
-    # seven previously-orphan suites plus one `docker info` assertion.
-    #
-    # Increment, measured FROM THE API on this branch (not projected): the eight added
-    # steps cost **8s** in aggregate — plugin-seed 3s, mu1-cleanup 2s, the docker assert
-    # 2s, cutover-flip 1s, and bwrap-uid / config-state / flip-guard / live-verify 0s
-    # each at second resolution. (Locally, serially and warm, the seven sum to 3.78s.)
-    #
-    # Whole job, measured on this branch across all 7 runs — **242-270s**, max 270s, all
-    # `success`. Stated as a range on a measured run set, per the convention above.
-    #
-    # Read that against the 184-189s figure recorded above: the job has grown ~70s since that
-    # set was measured, on a DIFFERENT branch, from steps unrelated to #7068 (the git-data
-    # runcmd rehearsal alone is 50s, the web-host parity mutation battery 39s, the LUKS G4
-    # battery 20s). Re-derive, do not extrapolate from an inherited number — the instruction
-    # below already says so, and the plugin-seed step comment further down is where ignoring
-    # it actually cost something.
-    #
-    # Ceiling NOT bumped. 480s is ~1.8x the observed 270s max. That is tighter than the
-    # ~2.5x recorded above, and the reason is the ~70s of unrelated growth, not this
-    # PR's 8s. Flagged rather than silently absorbed: if a future run set exceeds ~320s
-    # (~1.5x), re-derive and consider bumping — and attribute the growth to the steps
-    # that caused it rather than to whatever step the cancel happens to land on.
-    #
-    # One caveat stated rather than buried: plugin-seed's local measurement was against
-    # an ALREADY-WARM docker cache. It is the one added step that builds an image, which
-    # is why it carries its own `timeout-minutes: 1` for attribution — a cold-pull stall
-    # names that step instead of cancelling the job at an unrelated one. (The key has been
-    # 1 since the step's own comment block re-derived it; this caveat lagged the value.)
-    #
-    # Re-derive this if steps are added to the job — the numbers above are a property
-    # of its current composition, not of the suite alone. If a future run exceeds
-    # ~300s, suspect the sleep mock has been bypassed (a /bin/sleep in ci-deploy.sh,
-    # or MOCK_SLEEP_REAL leaking into the environment) before bumping the ceiling.
-    # If this job CANCELS: do not blame the step it stopped on — the cancel lands
-    # wherever the clock ran out. Pull per-step durations from the API instead
-    # (`gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`); see
-    # knowledge-base/project/learnings/best-practices/2026-07-18-deploy-script-tests-at-budget-timeout-and-infra-pr-ci-gotchas.md
-    #
-    # RE-DERIVED 2026-08-06 (#7299), as the block above instructs, because this PR adds a step.
-    # The 242-270 s figures recorded above are two revisions stale and the "~300 s → suspect the
-    # sleep mock" tripwire has been blown without anyone re-deriving. Measured from the API over
-    # the last 14 `Infra Validation` runs, whole-job seconds:
-    #   384 390 398 407 411 416 432 436 451 456 465 470 483* 501*   (* CANCELLED at the 480 s ceiling)
-    # So the job is ALREADY through its ceiling 2 of 14 runs (14%) before this PR. The added
-    # drift-guard step measures 0-1 s, i.e. ~0.2% — it is not the cause and does not meaningfully
-    # move the distribution, but shipping a step into a job that cancels at this rate would make
-    # the next unrelated failure look like this PR's.
-    #
-    # RE-DERIVED 2026-08-11 (#7376), as the block above instructs, because that PR makes an
-    # EXISTING step materially slower — the same class of composition change as adding one.
-    # `run-registered-suites.test.sh` gains a 9-row mutation matrix that re-executes the suite
-    # in child processes; measured on a 16-core box, 3 s -> 67 s (+64 s). Against the 501 s max
-    # recorded above that is ~565 s, i.e. 720/565 = 1.27x — inside the ceiling but below the
-    # ~1.4x margin this block sized for, so the ceiling moves with it: 565 x 1.4 = 791 -> 14 min.
-    #
-    # Two costs were removed before re-deriving rather than absorbed into the budget: the OOM
-    # fixture's `sleep 5` (the fixture holds the xargs pipe open while it sleeps, so `tee`
-    # blocks the full duration, x8 invocations) became `sleep 1`, and the mutation children now
-    # skip the repo-level assertions (the 93-suite corpus scan, the registration ratchet) that
-    # no mutation of the runner can affect. Those took it from ~108 s to 67 s.
-    #
-    # 8 → 12 minutes (720 s) restored ~1.4x over the observed 501 s max. Deliberately NOT larger:
-    # the ceiling's purpose is to catch a bypassed sleep mock, and a 20-minute ceiling would not.
-    # Current long poles (run 31054177230): git-data runcmd rehearsal 96 s, web-host parity
-    # mutation 47 s, ci-deploy 35 s, LUKS verify 28 s.
-    #
-    # RE-DERIVED 2026-08-20 (#7546 review). The 2026-08-16 derivation below was correct for the
-    # battery AS IT THEN STOOD, and the battery has since gone 22 -> 40 rows (commit 2e44a01c5,
-    # "22 -> 40 battery rows, because 4 of the old 21 shared one detector") while this block kept
-    # sizing itself on 22. A timeout budget derived from a superseded row count is exactly the
-    # stale-number class this PR exists to fix, and it fails in the direction that cancels a job
-    # rather than the direction that merely wastes a runner.
-    #
-    # MEASURED 2026-08-20: `bash apps/web-platform/infra/infra-config-repush-mutation.test.sh`
-    # = 194 s wall clock, 40/40 rows, on a 16-core box where the battery's own min(4, nproc-2)
-    # cap yields JOBS=4. The 17-row figure recorded below was 85 s under the same conditions, so
-    # 17 -> 40 rows costs +109 s locally. CI is a 4-vCPU runner where the same cap yields JOBS=2,
-    # so budget roughly 2x: +218 s there.
-    #   observed deploy-script-tests max (15 runs, successful only) : 581 s
-    #   + the 17 -> 40 battery growth in CI                          : +218 s
-    #   new basis                                                    : ~799 s
-    #   799 x 1.4 = 1119 s = 18.6 min -> 20
-    # 15 -> 20 minutes. At 15 the margin would be 900/799 = 1.13x, well under the ~1.4x this
-    # block sizes for, and the battery alone would be ~43% of the whole budget.
-    #
-    # The superseded 2026-08-16 derivation, kept because its METHOD is the one applied above:
-    # EXISTING step materially slower: the infra-config re-push mutation battery goes 17 -> 22 rows.
-    # Measured from the API over the last 15 `Infra Validation` runs, deploy-script-tests job
-    # seconds, successful only (one 65 s failure excluded — it died early and is not a duration):
-    #   422 436 439 462 475 484 485 493 497 498 503 505 564 581
-    # So the 565 s basis recorded above is itself now stale: the observed max is 581 s.
-    # The battery's added cost: 85 s -> 102 s measured locally at JOBS=4 on 16 cores, and CI is a
-    # 4-vCPU runner where the battery's own min(4, nproc-2) cap yields JOBS=2, so the +5 rows cost
-    # roughly +45 s there rather than +17 s. New basis ~626 s.
-    #   626 x 1.4 = 876 s = 14.6 min -> 15.
-    # 14 -> 15 minutes. At 14 the margin would be 840/626 = 1.34x, below the ~1.4x this block sizes
-    # for. Still deliberately not larger, for the reason stated above.
-    #
-    # AMENDED 2026-08-20 (#7587): this PR adds one step to this job,
-    # `arm-heartbeats.test.sh` — pure bash + jq with every `sleep` stubbed, measured at 21.6 s
-    # locally on a 16-core box. Against the 20-minute (1200 s) budget derived directly above that
-    # is ~1.8 %, and against the ~799 s basis it is ~2.7 %, so the ~1.4x margin this block sizes
-    # for survives the addition (799 + 22 = 821; 1200/821 = 1.46x). NOT re-bumped: an addition
-    # this size does not move the derivation, and the block's own rule is that a ceiling meant to
-    # catch a bypassed sleep mock is not raised casually.
-    #
-    # RE-DERIVED 2026-09-15 (#8189), as the block above instructs, because that PR adds steps to
-    # this job (the git-data flag precheck suite, the git-data root-key drift-guards + its terraform
-    # validate) and grows the cutover access suite. The ~799 s basis above is stale: measured from
-    # the API over the last 10 successful `Infra Validation` runs on main, deploy-script-tests
-    # job seconds:
-    #   899 902 925 937 969 981 998 1012 1023 1030
-    # So at 20 minutes the job was already at 1200/1030 = 1.17x before this PR.
-    #   observed deploy-script-tests max (10 runs, successful only) : 1030 s
-    #   + the #8189 additions (measured locally, budgeted high)     : +90 s
-    #   new basis                                                    : ~1120 s (basis refreshed at #8539 review: ~1204 s after +84 s of new inngest suites, 1.35x against the 1620 s ceiling -- still fits, no bump needed)
-    #   1120 x 1.4 = 1568 s = 26.1 min -> 27
-    # 20 -> 27 minutes. At 20 the margin would be 1200/1120 = 1.07x, i.e. one slow runner away
-    # from a cancel that lands on whatever step the clock runs out in.
-    #
-    # RE-DERIVED 2026-09-24 (#8688), as the block above instructs — the ~1120 s basis above went
-    # stale while suites kept landing without the re-derivation the block requires. Measured from
-    # the API over the last 19 successful `Infra Validation` main-push runs, deploy-script-tests
-    # job seconds:
-    #   1066 1085 1170 1184 1217 1232 1255 1257 1272 1304
-    #   1332 1369 1384 1387 1420 1426 1454 1459 1462
-    #   observed deploy-script-tests max (19 runs, successful only) : 1462 s
-    #   1462 x 1.4 = 2047 s = 34.1 min -> 35
-    # 27 -> 35 minutes. At 27 the margin was 1620/1462 = 1.11x — under the ~1.4x this block
-    # sizes for, and it produced four consecutive main-push cancels at the cap on 2026-09-24
-    # (runs 35963237265, 35976102327, 35991817044, 36001457260; a fifth, 36005279479,
-    # cancelled while this change was in flight). Cancelled runs are excluded from the basis —
-    # cancelled is not a duration, per the successful-only rule used above.
-    #
-    # The cancel landed in `Rehearse the git-data runcmd chain` every time (285-533 s in-flight
-    # vs a 184-267 s green range, n=10) — a whole-runner docker-slowdown signature, not proof of
-    # a hang, but indistinguishable from one while the step had no bound. 16 named steps trail
-    # the rehearsal, so even a completed slow run projects ~1700-1850 s and would still have died
-    # at 27. At 35 the margin is 2100/1462 = 1.44x. This PR also adds step-level
-    # `timeout-minutes` to the three docker-runtime git-data steps below (rehearsal 10,
-    # cutover-access 10, ownership 5) — the file's ATTRIBUTION convention — so the next stall
-    # names its step instead of cancelling anonymously. Re-derive against that composition.
-    timeout-minutes: 35
+    # timeout-minutes: measured on this branch before shipping — worst leg ~6.7 min
+    # (403 s suite time + ~60 s fixed), K=4 chosen because K=2 projected ~12.6 min and
+    # K=8 buys ~90 s for +3 min of duplicated fixed cost (ADR-238's objection, measured
+    # at ~60 s per leg: checkout + terraform + cloud-init + nftables + docker assert).
+    # 15 min = ~2.2x the measured worst leg — the same convention the old 1.4x serial
+    # ceiling used, held against a MEASURED leg rather than a projected whole.
+    # Per-suite stalls are bounded INSIDE the leg by the runner's `timeout` wrapper
+    # (default 360 s; the seven suites that carried step-level `timeout-minutes` keep
+    # them as overrides in the runner's bound map).
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ["1/4", "2/4", "3/4", "4/4"]
+    steps:
+      # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
+      # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
+      # pin against the latest published tag. Without tags the guard self-skips
+      # (visible SKIP, never false-green). detect-changes already uses
+      # fetch-depth: 0 as precedent.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # #6178: the cloud-init-inngest-bootstrap drift-guard (below) includes an AC7
+      # terraform-render leg — the behavioral authority for the web_colocate_inngest gate
+      # (only a real `terraform templatefile` render exercises the load-bearing `~}`
+      # whitespace-strip). Without terraform on PATH the leg SKIPs; this step makes it
+      # execute (a broken gate then reds this job's log). NOTE: deploy-script-tests is an
+      # advisory job (not in ruleset-ci-required.tf) — this is a visible-red signal, not a
+      # merge-blocking gate. terraform_wrapper: false keeps `terraform console` stdout
+      # byte-clean so the render leg's heredoc-strip (render_yaml_ok, which depends on the
+      # last output line being exactly `EOT`) is not corrupted by the default log wrapper.
+      # terraform_version pinned (#6454): this step was unpinned and floated to latest
+      # while every other setup-terraform here pins env.TERRAFORM_VERSION. The template
+      # fixtures below assert on `terraform console`'s encoding behaviour, so a silent
+      # major bump would red them for a non-reason.
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # cloud-init here serves TWO consumers in this job, both of which SKIP or fail
+      # rather than false-green without it:
+      #
+      #  1. (#6446) the render leg in cloud-init-inngest-bootstrap.test.sh runs `cloud-init
+      #     schema` on the RENDERED document. Without the binary the leg SKIPs visibly
+      #     rather than false-greening; this step makes it execute.
+      #  2. (#6454) the validate-infra-templates.sh fixture suite below.
+      #
+      # Neither replaces the `validate` job's raw-source `Validate cloud-init schema` step —
+      # that step is KEPT and directive-stripped (cited by step name, not line number: this
+      # PR's own +lines shift it, and a bare line reference is self-invalidating). An earlier
+      # draft of #6446 deleted it; #6426 landed a different fix on main mid-pipeline (keep
+      # the step, strip the col-0 `%{` lines, schema-check the remainder) and both were
+      # kept, an operator call — re-affirmed when #6454 landed the render-then-validate
+      # gate. The reasoning and the exit condition for dropping the stripped step live on
+      # the step itself.
+      - name: Install cloud-init (render-leg schema check + infra-template fixtures)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          cloud-init --version
+
+      # (#7749) ssl-full-mitigation.test.sh guards the ONE Cloudflare config rule
+      # holding soleur.ai + www.soleur.ai up. The GitHub Pages origin cert expired
+      # 2026-08-16 and is never renewed (ADR-194); `ssl = "full"` is what keeps the
+      # apex off HTTP 526 for the whole pre-cutover interval, and nothing in CI
+      # protected it before this. The guard is stage-aware — it reads dns.tf and
+      # stops requiring the rule once the apex leaves GitHub Pages.
+      # (#7772, task 5.4) THE ONE PLACE THE nft SYNTAX CHECK ACTUALLY DISCRIMINATES.
+      # `nft -c -f` needs privilege: measured on nftables v1.0.9, an unprivileged run reports
+      # `cache initialization failed: Operation not permitted` for a VALID ruleset and an INVALID
+      # one alike, so it cannot tell a syntax error from its own lack of rights. The suite proves
+      # the checker discriminates before trusting it, and skips loudly where it cannot — so this
+      # step installs nftables to make that proof possible. Without the install the suite still
+      # runs (run-registered-suites.sh auto-discovers it) but only reaches its extraction and
+      # non-vacuity arms.
+      # The install is a SEPARATE step on purpose. `test-infra-suite-registration.sh` requires
+      # every infra suite to be invoked as a single-line `run: bash <path>` — a multi-line
+      # `run: |` block both fails that gate and DE-REGISTERS the suite from
+      # run-registered-suites.sh, which derives single-line only. Measured here: the first draft
+      # folded the apt-get into the same step, and the suite silently vanished from the local
+      # runner's roster (112 recorded of 121 on disk) while CI would still have run it.
+      - name: Install nftables (for the git-data ruleset syntax gate, #7772)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables
+
+      # The plugin-seed suite is the ONLY one of the seven needing a real docker daemon, and it
+      # self-skips when docker is absent — which on this job would be a silent SKIP of the only
+      # thing it asserts. This step is the fail-closed half: if the daemon is gone, the job reds
+      # HERE with an unambiguous cause instead of the suite passing vacuously.
+      #
+      # It is a SEPARATE step on purpose. Folding `docker info` into the suite's own step would
+      # make that step a multi-line `run: |`, which the local runner's derivation regex cannot
+      # match — silently re-orphaning the suite from the gate this PR is widening. Keeping the
+      # suite at a single-line `run: bash` also leaves its local docker-less skip intact.
+      - name: Assert docker is available (cloud-init-plugin-seed needs a real daemon)
+        run: docker info >/dev/null
+
+      - name: Run registered infra suites — leg ${{ matrix.leg }}
+        env:
+          SOLEUR_INFRA_SHARD: ${{ matrix.leg }}
+          # The leg's per-suite timings feed — uploaded below as suite-timings-infra-N
+          # and consumed by `regenerate-shard-manifest.py --group infra`, which is how
+          # the leg assignments in apps/web-platform/infra/suite-shard-legs.tsv stay
+          # duration-aware (ADR-240's sticky-LPT) instead of decaying to alphabetical.
+          SOLEUR_INFRA_TIMINGS: ${{ runner.temp }}/suite-timings.tsv
+        run: bash apps/web-platform/infra/run-registered-suites.sh
+
+      # Per-suite logs are the attribution artifact: on RED the runner retains its
+      # per-suite log dir under $TMPDIR and prints `retained per-suite log dir:` —
+      # this uploads that dir so a failed leg's per-suite logs survive the runner's
+      # teardown. if: failure() — a green leg's logs carry nothing to read.
+      # The glob covers both TMPDIR homes: runner.temp on GitHub-hosted runners,
+      # /var/tmp where TMPDIR points there.
+      - name: Upload per-suite logs — leg ${{ matrix.leg }}
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: infra-suite-logs-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/infra-suites.*
+            /var/tmp/infra-suites.*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload suite timings — leg ${{ matrix.leg }}
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: suite-timings-infra-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/suite-timings.tsv
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # The non-globbed half of the old job (#8736): everything that is NOT a
+  # `apps/web-platform/infra/**.test.sh` glob suite — the three privileged `sudo bash`
+  # loopback suites (derive-but-do-not-execute, #7076), the five
+  # apps/web-platform/test/infra/ alert-guard suites, the terraform validates, the
+  # fixture/sandbox/provenance checks. Kept serial and named — these are dozens of
+  # seconds, not the tail latency the matrix exists to cut.
+  deploy-script-tests-fixed:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 15
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -709,164 +693,6 @@ jobs:
       - name: Fixture tests for validate-infra-templates.sh (#6454)
         run: bash .github/scripts/test/fixtures-validate-infra-templates.sh
 
-      # #6665: a step-level ceiling on the long-pole step, adopted from the architecture
-      # recommendation recorded in 2026-07-18-deploy-script-tests-at-budget-timeout-and-infra-pr-ci-gotchas.md.
-      # Measured 22-25s; 3 minutes is ~7x that. Its value is ATTRIBUTION, not budget: if this suite
-      # ever hangs (the wall-clock-gated hot-spin class the sleep mock's invocation cap guards), the
-      # job fails naming THIS step, instead of the job ceiling cancelling at whatever unrelated step
-      # the clock happened to reach — the red herring documented in that learning.
-      - name: Run ci-deploy.sh tests
-        timeout-minutes: 3
-        run: bash apps/web-platform/infra/ci-deploy.test.sh
-
-      # (#7749) ssl-full-mitigation.test.sh guards the ONE Cloudflare config rule
-      # holding soleur.ai + www.soleur.ai up. The GitHub Pages origin cert expired
-      # 2026-08-16 and is never renewed (ADR-194); `ssl = "full"` is what keeps the
-      # apex off HTTP 526 for the whole pre-cutover interval, and nothing in CI
-      # protected it before this. The guard is stage-aware — it reads dns.tf and
-      # stops requiring the rule once the apex leaves GitHub Pages.
-      # (#7772, task 5.4) THE ONE PLACE THE nft SYNTAX CHECK ACTUALLY DISCRIMINATES.
-      # `nft -c -f` needs privilege: measured on nftables v1.0.9, an unprivileged run reports
-      # `cache initialization failed: Operation not permitted` for a VALID ruleset and an INVALID
-      # one alike, so it cannot tell a syntax error from its own lack of rights. The suite proves
-      # the checker discriminates before trusting it, and skips loudly where it cannot — so this
-      # step installs nftables to make that proof possible. Without the install the suite still
-      # runs (run-registered-suites.sh auto-discovers it) but only reaches its extraction and
-      # non-vacuity arms.
-      # The install is a SEPARATE step on purpose. `test-infra-suite-registration.sh` requires
-      # every infra suite to be invoked as a single-line `run: bash <path>` — a multi-line
-      # `run: |` block both fails that gate and DE-REGISTERS the suite from
-      # run-registered-suites.sh, which derives single-line only. Measured here: the first draft
-      # folded the apt-get into the same step, and the suite silently vanished from the local
-      # runner's roster (112 recorded of 121 on disk) while CI would still have run it.
-      - name: Install nftables (for the git-data ruleset syntax gate, #7772)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables
-
-      - name: git-data nftables ruleset syntax (#7772)
-        run: bash apps/web-platform/infra/git-data-nftables-syntax.test.sh
-
-      - name: ssl=full apex mitigation guard (#7749)
-        run: bash apps/web-platform/infra/ssl-full-mitigation.test.sh
-
-      # Its mutation battery. A config-file assertion is exactly the class that rots
-      # into vacuity, so the guard's falsifiability is itself committed rather than
-      # left as a claim: 20 rows across three axes — 16 kill rows (the rule's fields;
-      # a competing ssl rule above, below, or matching the apex WITHOUT naming it;
-      # count/for_each and lifecycle on the resource; phase; the rule's absence; and
-      # the guard's own verdict helpers) plus 4 GREEN rows, two of which pin the
-      # stage against ordinary refactors that used to retire the guard silently.
-      - name: ssl=full apex mitigation mutation battery (#7749)
-        run: bash apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
-
-      - name: Run cosign trusted-root staleness + integrity gate (#6005)
-        run: bash apps/web-platform/infra/cosign-trusted-root-staleness.test.sh
-
-      # Per-PR COHERENCE half of the zot pin cadence (#7282). This workflow carries a
-      # `paths:` filter, which is exactly right here (every PR touching the pin or its
-      # sidecar is under apps/*/infra/**) and insufficient for the AGE half — a repo that
-      # goes 90 days without an infra PR would never redden. The age backstop is therefore
-      # a second, PR-cadence-independent trigger on rule-audit.yml's cron.
-      - name: Run zot image pin staleness + coherence gate (#7282)
-        run: bash apps/web-platform/infra/zot-image-staleness.test.sh
-
-      # The battery that proves the gate above can actually go RED. Registered, not orphaned:
-      # under its original `*.mutation.sh` name no gate could see it, no runner enumerated it,
-      # and no orphan reporter would have named it -- while every sibling bash mutation battery
-      # in this repo is `*-mutation.test.sh` AND registered. An unrun battery is a claim.
-      - name: Run zot image pin mutation battery (#7282)
-        run: bash apps/web-platform/infra/zot-image-staleness-mutation.test.sh
-
-      # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
-      # unregistered suite is ZERO coverage, silently and greenly). (#7278) Guards three files
-      # that are NOT under apps/*/infra/**, which is why they were added to this workflow's
-      # pull_request.paths in the same change — a suite that cannot fire on an edit to its own
-      # subject gates nothing:
-      #   - registry-zot-inventory.yml            the #6425 job-level dispatch guard, over ALL
-      #                                           jobs rather than one pinned key, with a
-      #                                           mutation arm that requires the probe to go RED
-      #   - registry-zot-inventory-dispatch.yml   the label AND issue.user.type == 'Bot'
-      #                                           authority boundary (a label alone needs only
-      #                                           Triage)
-      #   - cf-tunnel-registry-bridge/action.yml  the fail-closed `!= 'true'` login gate
-      # Everything is asserted against PARSED YAML, including this very registration and the
-      # paths entries above — a grep for either would pass on a commented-out line, i.e. the
-      # suite would certify its own de-registration. Needs only python3 + pyyaml, both present
-      # on ubuntu-24.04.
-      #
-      # Nothing may sit between `run: bash` and the path (see the two invariants recorded on
-      # the #7068 block below): run-registered-suites.sh derives its execute set from a literal
-      # single-line match, and the suite asserts that form of itself.
-      - name: Run registry zot-inventory workflow guard (#7278 #6425 guard + label/Bot boundary + fail-closed skip-docker-login)
-        run: bash apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh
-
-      # (#8449 UC2) The one-tap inngest-host-state dispatch wrapper: inputs via env only, SHA
-      # pins, and the run: block EXECUTED per script exit code. Host output never reaches the
-      # public job log, step summary or an artifact.
-      - name: Run inngest-host-state workflow guard (#8449 UC2)
-        run: bash apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh
-
-
-      - name: Run inngest config-refresh bundle packager guard (#6780 ADR-135 HARD-2 + fail-closed)
-        run: bash apps/web-platform/infra/inngest-config-bundle-pack.test.sh
-
-      - name: Run inngest config-refresh drift comparator guard (#6780 ADR-135 HARD-8 + channel-live)
-        run: bash apps/web-platform/infra/inngest-config-drift-compare.test.sh
-
-      - name: Run cloud-init GHCR seed-login regression guard (#6005 private-pull fix)
-        run: bash apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh
-
-      - name: Run fresh-boot observability probe guard (#6090 baked-DSN + readiness gates + H3)
-        run: bash apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
-
-      # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
-      # unregistered suite is ZERO coverage, silently and greenly). This suite is hybrid: static
-      # drift-guards over the authored marker + a BEHAVIORAL extraction that runs the baked
-      # soleur-fresh-boot-ready helper against stubbed commands + path seams, asserting the
-      # ready=/reason= decision per unmet field (the fixture-cardinality rule, not string-matching).
-      - name: Run fresh-boot readiness marker guard (#6459/#6538 SOLEUR_FRESH_BOOT_READY dark-host)
-        run: bash apps/web-platform/infra/fresh-boot-ready.test.sh
-
-      # LOAD-BEARING registration (see the note above — this job has no glob). Hybrid suite:
-      # static drift-guards over the call-site's fail-closed shape, plus a BEHAVIORAL harness
-      # that extracts both baked heredocs and drives helper -> trap -> the REAL soleur-boot-emit,
-      # asserting the emitted body. Needs `jq` (preinstalled on ubuntu-latest) and is gated on it.
-      - name: Run boot-stage error-channel guard (#6969/ADR-147 doppler_download names its cause)
-        run: bash apps/web-platform/infra/doppler-download-error-channel.test.sh
-
-      # LOAD-BEARING registration (explicit list, no glob). Byte-identity + wiring guard for the
-      # Phase-2.2 fresh-boot parity bakes (orphan-reaper + bwrap-userns sysctl). Pins the baked unit
-      # bodies to their retained SSH-heredoc twins so the two delivery paths cannot silently drift.
-      - name: Run fresh-boot parity guard (#6459 Phase 2.2 baked==SSH-heredoc + wiring)
-        run: bash apps/web-platform/infra/fresh-boot-parity.test.sh
-
-      # LOAD-BEARING registration (explicit list, no glob — an unregistered suite is silent ZERO
-      # coverage). BREADTH half of the dual-delivery invariant, complementing fresh-boot-parity
-      # above (which pins the 5 Phase-2.2 resources deeply). Sweeps ALL 18 web-1-pinned SSH
-      # provisioners in server.tf and every artifact each delivers, asserting each has a fresh-boot
-      # counterpart (bake + cloud-init) so a fresh cattle host cannot silently come up without it.
-      # Before #7000, 10 of the 15 had no suite pinning that correspondence and 5 were named by no
-      # suite at all. Also pins the web-1 host-scoping itself: a for_each fan-out fails here,
-      # because CI has one SSH route (web-1) and a bare -target hits every instance. Also runs
-      # Guard 2 (#7226, ADR-237): every Terraform connection block in every .tf pins host_key,
-      # and a web-1 block pins it to local.web_1_ssh_host_key.
-      - name: Run web-host provisioner dual-delivery parity guard (#7000 all 18 SSH provisioners, #7226 host_key)
-        run: bash apps/web-platform/infra/web-host-provisioner-parity.test.sh
-
-      # (#7226 / #8125, ADR-237 Guard 3, HCL site) local.web_1_ssh_host_key, extracted verbatim
-      # from server.tf, evaluated with `terraform console` (no providers) against fixture pin
-      # files: 0/2 key lines, CR smuggling, a trailing comment, a leading space, a truncated or
-      # non-ECDSA key must ERROR, a valid file must yield the key, and the bash writer twin must
-      # agree on every fixture. Needs the setup-terraform step above.
-      - name: Run web-1 SSH host-key pin HCL tests (#7226 Guard 3)
-        run: bash apps/web-platform/infra/web-1-host-key-local.test.sh
-
-      # The guard above is GREEN the day it lands, as every drift guard is; green says nothing
-      # about whether it CAN go red. This battery breaks each invariant on a sandbox copy and
-      # requires a RED for each, plus a positive control that must stay GREEN so an always-red
-      # guard cannot score a clean run. Same shape as the LUKS G4 mutation battery below.
-      - name: Run web-host provisioner parity MUTATION battery (#7000 the guard can actually fail)
-        run: bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
-
       # (#8097 / ADR-218) The Better Stack Logs alert that pages on SOLEUR_*_SEND_FAILED /
       # _REFUSED rows. Pins the predicate's three anchors + needle SET, discovers every
       # emit_refusal() definer and holds it to `logger -p user.crit` (or a named non-crit
@@ -897,117 +723,6 @@ jobs:
       - name: Run Anthropic-spend alerts drift guard (#8611)
         run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
 
-      # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
-      # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
-      # guard above sweeps: orphan-reaper.test.sh backs terraform_data.orphan_reaper_install (its
-      # decorative coverage is called out in #7000 itself), and disk-monitor.test.sh backs
-      # terraform_data.disk_monitor_install, one of the five provisioners that was named by no
-      # suite at all. Both measured green (8/8 and 11/11) and need nothing beyond curl/jq, which
-      # this ubuntu-24.04 job already has.
-      #
-      # The remaining orphans this block once enumerated as deliberately unadopted were adopted
-      # by #7068 (see the block below). The reason recorded here for leaving them — that adopting
-      # them "would put a container dependency on this job for unrelated scope" — was independently
-      # false: this job ALREADY builds a container image, at the sandbox-canary regression step.
-      # Recorded rather than silently deleted, because the stale-rationale shape is the defect
-      # #7068 is about.
-      - name: Run orphan-reaper guard (#7000 adopting an unregistered suite)
-        run: bash apps/web-platform/infra/orphan-reaper.test.sh
-
-      - name: Run disk-monitor guard (#7000 adopting an unregistered suite)
-        run: bash apps/web-platform/infra/disk-monitor.test.sh
-
-      # (#7068) The remaining SEVEN orphan suites, adopted. Each was run locally before any
-      # decision was taken and each PASSED; each subject-under-test was then verified still wired
-      # on main by grep, not inferred from its filename — which refutes the filed hypothesis that
-      # the migration-sounding ones (cutover-flip, runbook-cleanup, plugin-seed) guard things now
-      # gone. Outcome: 7 register, 0 delete.
-      #
-      # Registration here is not decorative, and that is the whole argument for doing it: the
-      # local runner apps/web-platform/infra/run-registered-suites.sh DERIVES its execute set from
-      # this job's steps and ends in `(( RED == 0 ))`, and both the work and ship skills mandate it
-      # as an infra exit gate. So a suite registered here gains real teeth even though THIS check
-      # is advisory (promotion of the checks' verdicts is #6480's, not this PR's).
-      #
-      # Two invariants of the shape below, both load-bearing:
-      #   1. Nothing may sit between `run: bash` and the path. The derivation is literal and
-      #      single-line, so an inline env prefix or a multi-line `run: |` silently de-registers
-      #      the suite from the local runner while it still LOOKS registered here. Step-level
-      #      `env:` is safe; that is why the docker assertion below is its own step.
-      #   2. A comment naming a suite file silences the orphan report without running anything
-      #      (the scan is a basename grep over this directory). The steps below are what make
-      #      these seven actually run; do not let a future edit reduce one to prose.
-
-      # audit-bwrap-uid.sh is live on main and is named by the MU1 runbook as its AC-4
-      # verification. Mocks docker, so no daemon is needed here.
-      - name: Run audit-bwrap-uid guard (#7068 adopting an unregistered suite)
-        run: bash apps/web-platform/infra/audit-bwrap-uid.test.sh
-
-      # cat-infra-config-state.sh is delivered by server.tf and invoked by hooks.json.tmpl as
-      # /usr/local/bin/cat-infra-config-state.sh. Needs jq, which this ubuntu-24.04 job has.
-      - name: Run cat-infra-config-state guard (#7068 adopting an unregistered suite)
-        run: bash apps/web-platform/infra/cat-infra-config-state.test.sh
-
-      # Highest-stakes of the seven: inngest-cutover-flip.sh is installed by inngest-bootstrap.sh
-      # and enabled as a live systemd timer, and this suite pins an 8-state FSM gating a
-      # DESTRUCTIVE Redis FLUSHALL (#6178 / ADR-100). It mocks systemctl + redis inside a
-      # mktemp -d, so no real Redis is reached and no FLUSHALL is executed. Needs jq.
-      - name: Run inngest-cutover-flip FSM guard (#7068 adopting an unregistered suite)
-        run: bash apps/web-platform/infra/inngest-cutover-flip.test.sh
-
-      # (#7228 P0-5) The monotonic re-flush latch — the guard that decides whether a FLUSHALL may
-      # run at all. Separate from the FSM suite above because it owns a different contract: the
-      # FSM suite covers state transitions, this covers the catastrophe guard across them.
-      - name: Run inngest cutover monotonic re-flush latch tests
-        run: bash apps/web-platform/infra/inngest-cutover-latch.test.sh
-
-      # (#6894) The LUKS blue-green cutover FSM: drives the REAL script under --fixture-seams over a
-      # modelled block layer, so the copy and T2's byte-equality run on real files. Needs jq + flock.
-      - name: Run inngest LUKS cutover FSM guard (#6894)
-        run: bash apps/web-platform/infra/inngest-luks-cutover.test.sh
-
-      # #7228: inngest-boot-phone-home.sh is the SINGLE delivery path for all eight
-      # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host
-      # with no SSH — and all three of its failure modes used to be `exit 0` with no output.
-      # This suite drives the extracted emitter through each of them plus the happy path, and
-      # holds the tag<->vector.toml allowlist pair from the emitter's side (a tag that is not
-      # allowlisted is silence that reads as health). Registered HERE because
-      # run-registered-suites.sh DERIVES its list from this file: an unregistered suite runs in
-      # no runner at all, locally or in CI, while reading as coverage.
-      - name: Run inngest boot-trace emitter loudness tests
-        run: bash apps/web-platform/infra/inngest-boot-emitter.test.sh
-
-      # (#7695) The STRUCTURAL half of the LUKS apparatus evidence. Registered in the plain
-      # single-line form ON PURPOSE: its sibling loopback suite needs root and is therefore
-      # invisible to run-registered-suites.sh's derivation, and these are the arms that caught the
-      # two P0s this branch had already committed (a boot-reopen unit that was never enabled, and
-      # one reading its passphrase from a file that does not carry it). Putting them behind a
-      # privilege check would have kept them out of the local gate the work and ship skills mandate.
-      - name: Run inngest Redis AOF LUKS structural guard (#7695 reopen unit enabled + credentialed, two-state mount guard)
-        run: bash apps/web-platform/infra/inngest-redis-luks.test.sh
-
-      # inngest-server-flip-guard.sh is the live ExecStartPre guard, in documented lockstep with
-      # the cutover FSM above (#6553). Registering this makes that ADR-100 lockstep CI-enforced
-      # for the first time. DELIBERATE TRIPWIRE: the suite awk-derives the FSM's start_server
-      # states from inngest-cutover-flip.sh and asserts they are a subset of this guard's ALLOW
-      # allowlist, so a legitimate FSM refactor WILL red it with a "derivation broken" message.
-      # That is the intended behaviour, not a brittle test — it is a live prod script's textual
-      # shape becoming CI-load-bearing.
-      - name: Run inngest-server-flip-guard lockstep (#7068 adopting an unregistered suite)
-        run: bash apps/web-platform/infra/inngest-server-flip-guard.test.sh
-
-      # live-verify.tf is a hard [[ -f ]] precondition of bootstrap-live-verify.sh. The suite
-      # asserts the provider-side mint AND the ABSENCE of an operator-mint variable, i.e. it is
-      # the guard for hr-tf-variable-no-operator-mint-default. Pure grep, no tooling.
-      - name: Run live-verify.tf provider-mint guard (#7068 adopting an unregistered suite)
-        run: bash apps/web-platform/infra/live-verify.tf.test.sh
-
-      # mu1-cleanup-guard.mjs is imported by the MU1 runbook and named in ADR-023 as the
-      # destructive-cleanup gate; its cases include a credential-exfiltration bypass class
-      # (<ref>.supabase.co.evil.com must be rejected). Needs node, which this job has.
-      - name: Run mu1-runbook-cleanup guard (#7068 adopting an unregistered suite)
-        run: bash apps/web-platform/infra/mu1-runbook-cleanup.test.sh
-
       # The plugin-seed suite is the ONLY one of the seven needing a real docker daemon, and it
       # self-skips when docker is absent — which on this job would be a silent SKIP of the only
       # thing it asserts. This step is the fail-closed half: if the daemon is gone, the job reds
@@ -1019,162 +734,6 @@ jobs:
       # suite at a single-line `run: bash` also leaves its local docker-less skip intact.
       - name: Assert docker is available (cloud-init-plugin-seed needs a real daemon)
         run: docker info >/dev/null
-
-      # The /opt/soleur/plugin seed is live in cloud-init.yml and ci-deploy.sh. This is the one
-      # suite of the seven that builds a container (a small busybox image), so it gets a
-      # step-level ceiling for the same reason ci-deploy.sh tests above does: ATTRIBUTION, not
-      # budget. A cold-pull stall must fail naming THIS step rather than let the job ceiling
-      # cancel at whatever unrelated step the clock reached.
-      #
-      # The multiple IS statable, from CI rather than from the warm local cache. API-measured on
-      # this step: 0-4s across the 7 runs that preceded this ceiling, and **6s** on run
-      # 30539863151 — the first run to actually execute under the 60s ceiling. So 60s is ~10x the
-      # observed worst case, comparable to the ci-deploy.sh tests ceiling above (3min against an
-      # API-measured 25s, ~7.2x).
-      #
-      # The superseded figure is named rather than quietly overwritten, because the correction is
-      # the point. #7072 set this ceiling and wrote "~15-30x" from the 7-run sample; the very next
-      # run measured 6s and made that false. A multiple quoted from an N-run sample is a claim
-      # with a shelf life — re-derive it (not extrapolate) whenever the fixture image or the
-      # runner class changes. #7072 was the PR about comments that assert untrue things, and it
-      # shipped one; this is the fix.
-      #
-      # 60s, not the 180s an earlier revision carried, because at 180s the ceiling DEFEATS the
-      # attribution it exists to provide. Whole-job is API-measured 242-270s over those same 7
-      # runs (NOT the 184-189s figure this comment used to quote — that was inherited from a
-      # different branch at a different job composition, and is the same stale-rationale defect
-      # #7068 is about; the top-of-job comment re-derived it and this one was missed):
-      #
-      #   270s job max - 4s this step + 180s full-ceiling hang = 446s vs the 480s job ceiling
-      #     -> 34s margin, which is LESS than this branch's own 28s job spread. The JOB ceiling
-      #        cancels first, at whatever step the clock reached — the exact red herring a
-      #        step-level ceiling exists to prevent.
-      #   270s - 4s + 60s = 326s -> 154s margin (32%). The step ceiling fires first.
-      #
-      # Trade-off stated rather than buried: 60s is a real cold-pull allowance for a ~4 MB
-      # busybox image, but it is tighter than 180s, so a pathologically slow registry could
-      # flake this step. That is the intended direction — a step that names itself beats a job
-      # that cancels anonymously. Re-derive both numbers from the API if the job composition
-      # changes.
-      - name: Run cloud-init-plugin-seed guard (#7068 adopting an unregistered suite)
-        timeout-minutes: 1
-        run: bash apps/web-platform/infra/cloud-init-plugin-seed.test.sh
-
-      # LOAD-BEARING registration (explicit, no glob — an unregistered suite is silent ZERO
-      # coverage; this is exactly the "gate that looks present but does nothing" class #6575
-      # deleted). Rebuilt ADR-068 §(c) / ADR-143 D3 anti-pooling gate: fail-closed serving-weight
-      # top-guard (web-2 weight==0 standby PASSES; weight>0 pre-flip with unmet flip-shape FAILS,
-      # AC7) + the WORKSPACES_LUKS precondition (coupling #2 — a plaintext web-2 cannot be pooled)
-      # + Condition C static committed-HCL assertions (dns.tf web-1-only, connector excludes web-2,
-      # no LB pools web-2). Guards the "workspace-gone" single-user incident (#6459/#6575).
-      - name: Run anti-pooling LB-weight gate guard (#6575 rebuild / ADR-143 D3 — web-2 not pooled pre-flip)
-        run: bash apps/web-platform/infra/lb-weight-gate.test.sh
-
-      # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
-      # unregistered suite is ZERO coverage, silently and greenly). This suite is behavioural,
-      # not grep-only: it extracts the baked soleur-wait-nic helper and EXECUTES it against a
-      # stub `ip`, which is the only way the fail-open contract (always exit 0 — CF-5) and the
-      # probe-fault-is-not-absence arm (#6415) are actually asserted rather than string-matched.
-      - name: Run first-boot NIC-wait gate guard (#6441 ADR-114 I1 defer-not-abort + 3 arms)
-        run: bash apps/web-platform/infra/nic-wait-gate.test.sh
-
-      # LOAD-BEARING registration (explicit, no glob). #8651: renders cloud-init.yml through
-      # terraform templatefile, EXECUTES the web seed pull under stubs (zot-first by bake, no
-      # doppler, bounded fail-open pre-pull NIC wait, both legs named in the fatal) plus a
-      # mutation battery, and exercises the boot trail's --image-origin read. Needs this job's
-      # terraform (render leg — FAILS, never skips, under CI) and fetch-depth: 0 (the census's
-      # pinned-commit baseline, git show 3aaaede525). Advisory job: soleur:ship reads it.
-      - name: Run web fresh-boot zot-seed guard (#8651 bake + NIC wait + Doppler census)
-        timeout-minutes: 5
-        run: bash apps/web-platform/infra/cloud-init-web-zot-seed.test.sh
-
-      # LOAD-BEARING registration (explicit, no glob). Behavioural, not grep-only: it renders
-      # cloud-init-inngest.yml through terraform templatefile + local.inngest_rationale_strip
-      # (inngest-userdata-budget.sh; this job sets up terraform), extracts soleur-inngest-nic-wait
-      # and the 99-soleur-private-fallback.network file from the RENDERED write_files, and
-      # EXECUTES the helper against stub `ip`/`networkctl`/emitters: fail-open, exactly one
-      # private_nic_* event per channel, byte-identical <=120-char detail, plus the Guard 2
-      # mutation battery (#8539).
-      - name: Run inngest private-NIC wait guard (#8539 late-attached NIC, one event, fail-open)
-        run: bash apps/web-platform/infra/inngest-nic-wait.test.sh
-
-      - name: Run /workspaces LUKS drift observability guard (#6604 emit tags/DSN + daily probe + gate)
-        run: bash apps/web-platform/infra/luks-monitor.test.sh
-
-      - name: Run /workspaces LUKS C1 verify diagnosability guard (#6604 separate stdout/stderr + emit path before rm/die)
-        run: bash apps/web-platform/infra/workspaces-luks-verify.test.sh
-
-      # MECHANISM + STRUCTURE harness for #6733. The G4 quiescence probe used to create+unlink an
-      # entry INSIDE $MOUNT between the pass-2 delta rsync and C1, advancing the transfer root's
-      # mtime, so the itemized verify emitted `.d..t...... ./` and five real cutovers safe-aborted
-      # on a byte-identical tree. Keeps the RED reproduction (so the mechanism stays measured, not
-      # remembered), then pins the SHIPPED shape: the probe is a READ-open of $MOUNT/workspaces
-      # (`exec 9<`), the holder filter subtracts by PID rather than by path (which is what makes
-      # reusing a real path safe), the lsof child cannot inherit fd 9, and the bracket-era repair
-      # helpers are gone from the file. Also pins that C1 itself is never narrowed to paper over it.
-      # Skips cleanly on non-GNU coreutils / an ACL-less filesystem rather than false-greening.
-      - name: Run /workspaces LUKS C1 root-mtime mechanism + read-probe structure (#6733)
-        run: bash apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
-
-      # The #6733 MUTATION BATTERY. Distinct from the reproduction harness above, and registered
-      # separately BECAUSE registration here is the only coverage this directory gets (no glob):
-      # the harness above proves the MECHANISM with filesystem physics, this suite mutates the SUT
-      # (it copies workspaces-cutover.sh into scratch, edits it against a pristine backup, and runs
-      # the REAL assert_mount_quiesced out of the mutated copy) and mutates the DESTINATION tree to
-      # prove C1 still rejects every difference it rejected before the fix.
-      #
-      # Covers: m1-m12 + a newline-bearing hostile filename (C1 non-regression, every icode MEASURED
-      # by running rsync — none predicted); m13/m14 the non-vacuity pair, one character apart (the
-      # shipped `exec 9<` vs a reverted `exec 9>`), run at BOTH call-site phases (`pre-verify` AND
-      # `freeze` — the freeze phase was structurally uncovered before this change); m15 an absent
-      # workspaces/ fails closed (the wrong-device / empty-bind-source state in which every
-      # downstream gate compares empty against empty and reports green); m16 our own fd and any
-      # inheriting child are NOT counted as stragglers WHILE a genuine straggler still IS (the pair
-      # that pins the PID filter's operator); m18 a post-probe foreign write still aborts C1;
-      # m19 lsof header/format drift fails closed; m20 a read-only mount fails closed while
-      # `errors=remount-ro` does NOT (the substring trap); m21 lsof-unavailable refuses; m22 the
-      # positive control still requires BOTH our PID and the probed path.
-      # m17 is deliberately NOT asserted — it is FALSIFIED and re-measured as such on every run.
-      #
-      # Every mutation carries a landing assertion against a pristine backup measured with an
-      # instrument INDEPENDENT of rsync; a mutation that did not land reports UN-RUN and reds the
-      # job rather than passing. Skips cleanly (exit 0) when nanosecond mtime fidelity or ACL/xattr
-      # support is absent, rather than false-greening on a host that cannot observe the defect.
-      - name: Run /workspaces LUKS G4 mutation battery (#6733 C1 non-regression + read-probe mutations)
-        run: bash apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh
-
-      # LOAD-BEARING registration: this job lists each infra test explicitly (no glob), so an
-      # unregistered suite is ZERO coverage, silently and greenly.
-      - name: Run /workspaces LUKS freeze-quiesce guard (#6588 redis in quiesce set + fail-closed G4 + /health canary)
-        run: bash apps/web-platform/infra/workspaces-luks-freeze.test.sh
-
-      # Shares workspaces-luks-harness.sh with the freeze suite above. Registered EXPLICITLY for the
-      # same reason as every line in this job: an unregistered suite is zero coverage, silently green.
-      - name: Run /workspaces LUKS staging-target guard (#6588 mkfs-if-empty + fail-closed staging mount + capacity gate)
-        run: bash apps/web-platform/infra/workspaces-luks-staging.test.sh
-
-      # Guards the cutover WORKFLOW rather than the script: the `environment:` gate expression
-      # (exact-string, because operand inversion silently ungates a destructive arm) and the
-      # pre-gate mode validation, which it asserts by EXECUTING the workflow's own extracted `run:`
-      # body against every input combination. Registered explicitly for the same reason as every
-      # line in this job: an unregistered suite is zero coverage, silently green.
-      - name: Run /workspaces LUKS cutover WORKFLOW gate (#6588 mode gating + CLEAN_STRAY reachability)
-        run: bash apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh
-      # Guards the VERIFY workflow's classification contract (#6808). Sibling of the cutover-workflow
-      # suite above and registered for the same reason: it EXECUTES the workflow's extracted `run:`
-      # bodies over stubbed ssh/curl/tar/doppler/gh rather than grepping them, so it can prove all
-      # four outcome classes are producible and that the alarm's `if:` is reachable on a failing run.
-      # A grep-only guard here would pass vacuously -- which is the exact defect class this workflow
-      # exists to prevent on the live LUKS surface.
-      - name: Run /workspaces LUKS verify WORKFLOW gate (#6808 schedule + alarm classification)
-        run: bash apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
-
-      # (#8632) The boot-token delivery path: luks-monitor-token-refresh.sh (runs on web-1) and
-      # terraform_data.luks_monitor_token_install, which ships it in the apply that rotates the token.
-      # Pins stdin-only token handling, prove-before-write, restore on mismatch, parity with the
-      # cutover's replace code, the token-hash-only trigger, and the per-merge SSH -target.
-      - name: Run /workspaces LUKS boot-token refresh gate (#8632)
-        run: bash apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh
 
       # REGISTRATION IS NOT ENVIRONMENT. The loopback suite below is the only workspaces-luks test
       # that touches a REAL block device (losetup + real cryptsetup luksFormat/luksOpen + real
@@ -1237,180 +796,6 @@ jobs:
           sudo apt-get install -y -qq dmsetup e2fsprogs
           sudo bash apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh
 
-      # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
-      # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
-      # #6357 fail-fast mitigation on the registry origin was inert for weeks while every apply
-      # re-planned it. This job lists its tests explicitly (no glob), so an unregistered test file
-      # ships as zero coverage — the trap tests/scripts/test-stock-preflight-gate.sh documents.
-      - name: Run tunnel origin_request schema-type guard (#6511 connect_timeout string vs int)
-        run: bash apps/web-platform/infra/tunnel-origin-request-types.test.sh
-
-      - name: Run tunnel origin-relative ingress guard (#6594 ADR-114 I2 coin-flipped management plane)
-        run: bash apps/web-platform/infra/tunnel-origin-relative-ingress.test.sh
-
-      - name: Run tunnel-ingress verify infra-dir resolution guard (#6595 relative-INFRA_DIR cd)
-        run: bash apps/web-platform/infra/verify-tunnel-ingress-origin-infradir.test.sh
-
-      - name: Run infra-config apply gate adjudicator guard (#6594 content assert vs stale-same-count)
-        run: bash apps/web-platform/infra/infra-config-gate.test.sh
-
-      - name: "Run infra-config verification-body guard (#7104 extracted body does not actuate)"
-        run: bash apps/web-platform/infra/infra-config-verify.test.sh
-
-      # AC21 — the Guard 1 + Guard 2 mutation matrices, executable rather than tabulated. This job
-      # lists its tests explicitly (no glob), so an unregistered battery is a CLAIM: no gate sees
-      # it, no runner enumerates it, and no orphan reporter names it. The rows drive the two suites
-      # above against 40 single-mutation sandboxes and assert the expected exit code AND that a
-      # FAILING check named the property — "some assertion failed" is not detection, and neither is
-      # "the marker appears somewhere in the log", which is what this asserted until #7104's review
-      # measured that 11 of the then-17 markers were present in a GREEN baseline.
-      #
-      # REGISTRATION IS HARD-GATED; EXECUTION HERE IS ADVISORY *IN THIS JOB*, AND MERGE-BLOCKING
-      # ELSEWHERE. Registration is enforced by `guard-script-fixture-tests`, which IS a required
-      # check — an unregistered suite fails CI. And `deploy-script-tests`, the job this step runs
-      # in, is NOT in scripts/required-checks.txt, so a RED row in THIS job does not block a merge.
-      #
-      # CORRECTED 2026-08-20 (#7546 review): the previous sentence stopped there and concluded
-      # "it is not a merge gate", which is false for exactly the PRs these suites exist to cover.
-      # All three ARE registered in apps/web-platform/infra/run-registered-suites.sh (measured:
-      # entries 37, 40, 41), scripts/test-all.sh invokes that runner as a nested suite whenever
-      # the diff touches `apps/web-platform/infra/` (or when diff detection fails, which
-      # fail-safes to running it), and `test` IS a required context. So on any infra-touching PR
-      # a RED row here blocks the merge through that route. The distinction is real but it is
-      # about WHICH JOB, not about whether the guards gate anything — and a comment that tells a
-      # future reader these batteries are advisory is the kind of claim this PR exists to stop.
-      #
-      # TIMING, re-derived 2026-08-20 (#7546 review): the battery is now 40 rows, not 22, and
-      # measures 194 s wall clock at JOBS=4 on 16 cores (40/40). CI caps at JOBS=2 on 4 vCPU,
-      # so budget roughly 2x -- ~390 s of the job's 20-minute allowance. The superseded
-      # 22-row derivation follows, kept for its method:
-      # TIMING, re-derived 2026-08-16 (#7104 review) because this PR takes it 17 -> 22 rows:
-      # measured 102 s wall clock on a 16-core box at JOBS=4. That is NOT the CI figure — the
-      # battery caps itself at min(4, nproc-2), and the public runner has 4 vCPU, so CI runs it at
-      # JOBS=2 on slower cores. Budget roughly 2x the local number. The previously recorded "~85 s
-      # … 4 at a time" was a 16-core figure presented without that qualification, which is how the
-      # job's own timeout budget came to be sized against a number CI never sees.
-      - name: "Run infra-config re-push Guard 1 + Guard 2 mutation battery (#7104 AC21)"
-        run: bash apps/web-platform/infra/infra-config-repush-mutation.test.sh
-
-      - name: Run ci-deploy-wrapper.sh tests
-        run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
-
-      - name: Run canary-bundle-claim-check.sh tests
-        run: bash apps/web-platform/infra/canary-bundle-claim-check.test.sh
-
-      - name: Run infra-config-apply.sh tests
-        run: bash apps/web-platform/infra/infra-config-apply.test.sh
-
-      - name: Run infra-config-install.sh helper tests
-        run: bash apps/web-platform/infra/infra-config-install.test.sh
-
-      - name: Run infra-config-handler-bootstrap drift-guard
-        run: bash apps/web-platform/infra/infra-config-handler-bootstrap.test.sh
-
-      - name: Run www-apex-canonicalizer drift-guard
-        run: bash apps/web-platform/infra/www-apex-canonicalizer.test.sh
-
-      # The battery that proves the guard above can actually go RED (#7640). Registered, not
-      # orphaned: this job lists each infra test explicitly -- no glob -- so an unregistered
-      # battery is ZERO coverage, silently and greenly, and run-registered-suites.sh derives
-      # its list from THIS file, so registering here is what makes it runnable locally too.
-      #
-      # It carries more weight than the sibling batteries do. scripts/guard-vacuity-floor.test.sh
-      # gives the guard above NO mutation coverage: its floor is an exact cardinality (`-ne`),
-      # which that meta-guard's `floor_lines_of` does not classify as a floor candidate, and
-      # apps/web-platform/infra/ is in its DEFERRED_DIRS regardless. This battery is therefore
-      # the guard's ONLY falsifiability evidence. It has already earned it -- running the matrix
-      # found a version-pinned `npx wrangler@4 pages deploy` that the guard's invocation
-      # detector could not see, which made BOTH cross-file coupling assertions vacuous.
-      - name: Run www-apex-canonicalizer mutation battery (#7640)
-        run: bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
-
-      # (#8364) Three sampled seo_redirect_* probes watch one representative URL per
-      # edge-redirect mechanism (zone ruleset, bulk-list item, generated pair). This
-      # guard pins each probe's 301 expectation, no-follow semantics, armed channel,
-      # declared-source-set membership, and the apply workflow's -target wiring.
-      - name: Run seo-redirect-monitors drift-guard (#8364)
-        run: bash apps/web-platform/infra/seo-redirect-monitors.test.sh
-
-      # (#7640, ADR-194 plan D5) The apex cutover is expressed as ONE Terraform resource
-      # address so core's replace semantics supply the Delete->Create ordering Cloudflare
-      # requires (81053 rejects an A and a CNAME coexisting at one name). This guard keeps
-      # it that way. It ships one merge BEFORE the flip and is stage-aware, so it is green
-      # on main in the window between PR4a and PR4b rather than blocking every unrelated
-      # infra PR until the flip lands.
-      - name: Run apex-single-node-replace drift-guard (#7640)
-        run: bash apps/web-platform/infra/apex-single-node-replace.test.sh
-
-      # Registered in the SAME commit that adds the suite. An unregistered
-      # infra suite never gates: infra-validation.yml runs explicit steps, not a
-      # glob, and run-registered-suites.sh derives its list from THIS file — so
-      # an unregistered suite is uncovered locally too, silently and green.
-      - name: Run PR5 anchor-integrity guard (#7640)
-        run: bash apps/web-platform/infra/pr5-anchor-integrity.test.sh
-
-      # Its falsifiability evidence. The thing that would see a real moved-index
-      # mismatch in dns.tf is the GUARD above; this battery is what proves the guard's
-      # cases can actually go RED -- including M3, the mismatch Terraform does NOT error
-      # on (it no-ops the move and the apex plans as two concurrent addresses again).
-      #
-      # Rows name the FAIL string they expect: `rc != 0` is a symptom several assertions
-      # share, so scoring on the exit code alone credits a row for an unrelated failure.
-      - name: Run apex-single-node-replace mutation battery (#7640)
-        run: bash apps/web-platform/infra/apex-single-node-replace-mutation.test.sh
-
-      # The rollback generator (#7640 PR4b, AC70). `git revert` of the cutover is
-      # FORBIDDEN -- measured, it plans two unrelated addresses concurrently and
-      # reproduces Cloudflare 81053 in the reverse direction, on an apex that is
-      # already failing. This script is what stands in for it, so its own tests are
-      # part of the cutover's safety case rather than an accessory to it.
-      #
-      # Its strongest row asserts the generated dns.tf returns BYTE-IDENTICALLY to the
-      # shape PR4a left (modulo the reverse `moved` block, which PR4a's file does not
-      # carry and the rollback cannot work without). The refusal rows matter as much:
-      # a generator that emits against the wrong tree produces something that LOOKS
-      # like a correct rollback and gets applied during an incident.
-      - name: Run apex rollback-PR generator unit tests (#7640)
-        run: bash apps/web-platform/infra/generate-apex-rollback-pr.test.sh
-
-      # The build-identity probe is the detector for a deploy that lands on a
-      # preview alias while the served origin keeps the previous build. Case M2
-      # is ADR-194 AC19's "run where the expected SHA is deliberately wrong".
-      - name: Run pages build-identity probe test (#7640)
-        run: bash apps/web-platform/infra/pages-build-identity-probe.test.sh
-
-      - name: Run cloud-init inngest-bootstrap pin drift-guard
-        run: bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
-
-      # #7462: proves the guard ABOVE can fail. It asserts the zot-primary pull arm is shaped
-      # correctly; only this proves those assertions are not unmatchable. Sandboxes the tree,
-      # applies one Guard Contract mutation per case, and requires the guard to go RED on the
-      # assertion that row targets. Needs python3 (preinstalled on ubuntu-24.04) and the
-      # terraform this job already sets up — the guard's render leg runs inside each case.
-      - name: Run zot-primary bootstrap pull mutation battery
-        run: bash apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
-
-      - name: Run inngest-bootstrap mirror_only false-green guard
-        run: bash apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh
-
-      - name: Run inngest-bootstrap Vector download resilience suite
-        run: bash apps/web-platform/infra/inngest-vector-download.test.sh
-
-      - name: Run journald persistent-storage tests
-        run: bash apps/web-platform/infra/journald-config.test.sh
-
-      - name: Run bwrap userns sysctl drift-guard
-        run: bash apps/web-platform/infra/bwrap-userns-sysctl.test.sh
-
-      - name: Run cron-egress firewall drift-guard
-        run: bash apps/web-platform/infra/cron-egress-firewall.test.sh
-
-      - name: Run fresh-host egress-enforcement probe drift-guard
-        run: bash apps/web-platform/infra/cron-egress-enforce-probe.test.sh
-
-      - name: Run GitHub /meta CIDR generator tests
-        run: bash apps/web-platform/infra/scripts/gen-github-egress-cidr.test.sh
-
       # #6578. The probe refuses to emit a verdict on a host whose grep does not
       # early-exit (a draining grep reads 0/N and yields a false all-clear), so
       # this step doubles as the assertion that CI's grep can still observe the
@@ -1420,167 +805,6 @@ jobs:
       # its measurements now live in one place, on timeout-minutes above.)
       - name: Run sigpipe guard triage-feasibility probe
         run: bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh
-
-      - name: Run sigpipe triage-feasibility probe attestation
-        run: bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh
-
-      - name: Run server.tf remote-exec set -e drift-guard
-        run: bash apps/web-platform/infra/server-tf-set-e.test.sh
-
-      - name: Run registry insecure-config (zot) drift-guard (#6122)
-        run: bash apps/web-platform/infra/registry-insecure-config.test.sh
-
-      - name: Run zot entry-gate tests (#6122)
-        run: bash apps/web-platform/infra/zot-entry-gate.test.sh
-
-      - name: Run registry boot-guard + disk-observability tests (#6240/#6244)
-        run: bash apps/web-platform/infra/registry-boot-guard.test.sh
-
-      # (#7299) Pins that registry-userdata-budget.sh measures the render terraform actually
-      # STORES — that the strip is extracted-and-applied, and that an absent/duplicated/malformed
-      # declaration fails CLOSED with exit 2. Without it the script could regress to measuring the
-      # unstripped render and its own budget step would still report green.
-      #
-      # Registered HERE and not in the sibling `registry-userdata-budget` job, because
-      # .github/scripts/test/test-infra-suite-registration.sh gates on `JOB="deploy-script-tests"`
-      # and counts only single-line `run: bash` steps within it. (Precisely: run-registered-suites.sh
-      # greps the WHOLE workflow file, so a suite registered in another job would still be derived
-      # and would still run locally -- an earlier draft of this comment claimed otherwise. The
-      # job-scoping is the registration gate's rule, not the runner's.) This job also already
-      # provides the terraform the suite needs; in a job without it the suite would SKIP, which is
-      # vacuous rather than loud.
-      #
-      # timeout-minutes matches the job's attribution convention (see ci-deploy.sh tests at 3 and
-      # cloud-init-plugin-seed at 1): a bounded step names itself when the job hits its ceiling,
-      # instead of the cancellation landing on whatever was running. Measured 0-1 s; 2 is ~120x.
-      - name: Run registry user_data budget drift-guard (#7299)
-        timeout-minutes: 2
-        run: bash apps/web-platform/infra/registry-userdata-budget.test.sh
-
-      # #6895 registry guest-side LUKS-at-rest guard suite (mutation-tested). Registered explicitly
-      # (this job runs named steps, not a glob — an unregistered infra suite gates NOTHING and fails
-      # silently green, #3366/#6520).
-      - name: Run registry LUKS-at-rest guard suite (#6895)
-        run: bash apps/web-platform/infra/registry-luks.test.sh
-
-      - name: Run registry private-NIC boot-converger tests (#6415)
-        run: bash apps/web-platform/infra/private-nic-guard.test.sh
-
-      # #6438/#6548 web-host private-net probe primitive. Registered explicitly (this job runs
-      # named steps, not a glob — an unregistered infra suite gates NOTHING and fails silently
-      # green, #3366/#6520). Env-driven plain bash executed directly against synthesized fixtures
-      # + PATH stubs; the zot/git-data suites also stand up a python3 loopback server. ubuntu-24.04
-      # already carries bash + python3 + curl, so no apt is added to this job.
-      - name: Run web-host private-NIC self-report guard tests (#6438 §3, AC4 — no-reboot invariant)
-        run: bash apps/web-platform/infra/web-private-nic-guard.test.sh
-
-      - name: Run web-host zot consumer-probe tests (#6438 §1, AC1 — authed serviceability, -u/no-f)
-        run: bash apps/web-platform/infra/web-zot-consumer-probe.test.sh
-
-      - name: Run web-host git-data consumer-probe tests (#6548 — fail-soft reachability)
-        run: bash apps/web-platform/infra/web-git-data-probe.test.sh
-
-      # Registered explicitly because this job runs named steps, not a glob — an unregistered
-      # infra suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + PATH
-      # stubs: no terraform, cloud-init, docker, network, or root, so this job's existing
-      # environment already carries everything it needs.
-      - name: Run zot liveness-heartbeat feeder tests (#6537 — private-IP probe, not localhost)
-        run: bash apps/web-platform/infra/zot-liveness-heartbeat.test.sh
-
-      # #7440. THIS is the registration point for an infra suite, and getting it wrong ships a
-      # silent orphan: scripts/test-all.sh does not register apps/web-platform/infra/*.test.sh at
-      # all — it registers run-registered-suites.sh as a NESTED suite, and that runner DERIVES its
-      # list from the `run: bash …` steps in THIS file (deliberately, so the runner and CI cannot
-      # fork). A suite added only to test-all.sh would execute in ZERO runners, green and invisible.
-      # Needs only bash + jq + flock + timeout; no terraform, cloud-init, docker, network or root.
-      - name: Run zot container-log shipper tests (#7440 — envelope, cap exemption, cursor durability)
-        run: bash apps/web-platform/infra/zot-log-shipper.test.sh
-
-      # Guard 1 (#7500). The heartbeat's producer-side redaction. Registered HERE, not only in
-      # test-all.sh: run-registered-suites.sh derives its list from the `run: bash …` steps in
-      # THIS file, so a suite added only to test-all.sh executes in zero runners -- green and
-      # invisible. Needs only bash + jq; no terraform, cloud-init, docker, network or root
-      # (it extracts the block from the template and drives it against synthesized PATH stubs).
-      - name: Run zot disk-heartbeat redaction tests (#7500 — per-line redact, tier gate, degrade-closed)
-        run: bash apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
-
-      # Guard 1 (#8417). No templatefile()-rendered source carries a bare `$$<ident>` (Terraform
-      # passes it through verbatim and bash reads the PID). The file set is derived from the .tf
-      # call sites, nested modules included. Needs only bash + git + python3.
-      - name: Run templatefile bare-dollar guard (#8417 — derived template set, rendered store_probe_rc)
-        run: bash apps/web-platform/infra/templatefile-bare-dollar-guard.test.sh
-
-      # Guard 3 (#8386). Every mount-source resolution in the repo (lsblk inverse walk + Hetzner
-      # by-id reverse map) agrees on leaf-counting, namespace scoping and hit-counting. Registered
-      # HERE, as a SINGLE-LINE `run:`: run-registered-suites.sh derives its list from the
-      # `run: bash …` steps in this file, and a multi-line `run: |` block de-registers the suite.
-      # Needs only bash + git; no terraform, cloud-init, docker, network or root.
-      - name: Run store-vs-data mount-source parity drift-guard (#8386 — leaf count, namespace scope, hit count)
-        run: bash apps/web-platform/infra/store-vs-data-mount-parity.test.sh
-
-      # Guard 3 (#7555). Needs bash + python3 + terraform (the render) + docker (the pinned
-      # digest adjudicates the config), all of which this job already provides — terraform via
-      # the setup-terraform step above, docker via the runner. It renders the user_data and
-      # boots `zot verify` against the bytes that reach the host, because the registry host is
-      # cloud-init-only (ADR-096): a config zot rejects fails AFTER the destroy and create, on
-      # a host with no SSH, so plan-time validation cannot see it.
-      - name: Run zot HTTP-deadline config guard (#7555 — split-brain, gcDelay bound, digest acceptance)
-        run: bash apps/web-platform/infra/zot-config-deadlines.test.sh
-
-      # Guard 4 (#8408 b). zot's start is gated on a sentinel inside the LUKS filesystem, bound
-      # with --mount (which refuses a missing source; -v would create it). The docker-gated half
-      # MEASURES start/restart failing after the source is deleted, with a -v negative control,
-      # on an image imported offline from the runner's /bin/true. Fails closed without a daemon.
-      - name: Run registry LUKS launch-gate guard (#8408 — sentinel bind, recovery arm, arm vocabulary)
-        run: bash apps/web-platform/infra/registry-luks-launch-gate.test.sh
-
-      # Guard 5 (#8408 c). The daily escrow re-test: every result token reachable from one stubbed
-      # condition, the memory pre-check, atomic state writes, and a key canary over the state
-      # file, stdout, stderr and every argv. Needs only bash + coreutils.
-      - name: Run registry LUKS escrow re-test guard (#8408 — vocabulary, memory pre-check, key canary)
-        run: bash apps/web-platform/infra/registry-luks-escrow.test.sh
-
-      - name: Run deploy fan-out peer-list parity drift-guard
-        run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
-
-      - name: Run cross-pipeline web-1-swap concurrency parity drift-guard (#6060)
-        run: bash apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh
-
-      # Pins the local runner that derives ITS suite list from this file (#6730).
-      # Registered here deliberately: the runner exists because these suites are
-      # invisible to scripts/test-all.sh, so leaving its own test unregistered
-      # would make it the very orphan class the runner reports.
-      - name: Run registered-infra-suite runner self-tests (#6730)
-        run: bash apps/web-platform/infra/run-registered-suites.test.sh
-
-
-      - name: Run web-1 known-good tag resolver semver-guard tests (#6147)
-        run: bash apps/web-platform/infra/resolve-web1-known-good-tag.test.sh
-
-      - name: Run firewall port-9000 deny drift-guard
-        run: bash apps/web-platform/infra/firewall-9000-deny.test.sh
-
-
-      # Host monitor family (#5417 registered these; resource-monitor +
-      # cat-deploy-state were pre-existing orphan suites CI never ran).
-      - name: Run container-restart-monitor.sh tests
-        run: bash apps/web-platform/infra/container-restart-monitor.test.sh
-
-      - name: Run resource-monitor.sh tests
-        run: bash apps/web-platform/infra/resource-monitor.test.sh
-
-      # #7898 §2: the laptop-run Resend bootstrap's key-shape / path-allowlist /
-      # transport-confinement guards (env -i, fake key, --config fd asserted
-      # in-process).
-      - name: Run resend-inbound-bootstrap.sh tests
-        run: bash apps/web-platform/infra/resend-inbound-bootstrap.test.sh
-
-      - name: Run cat-deploy-state.sh tests
-        run: bash apps/web-platform/infra/cat-deploy-state.test.sh
-
-      # Faithful sandbox canary soak accumulator (#5875 / ADR-079).
-      - name: Run sandbox-canary-soak.sh tests
-        run: bash apps/web-platform/infra/sandbox-canary-soak.test.sh
 
       # #5875 item 3 / ADR-079 — docker-run bwrap would-have-caught proof. Sets the
       # userns sysctl (ephemeral GH-hosted runner ONLY, guardrail 3 — re-gate if CI
@@ -1595,213 +819,6 @@ jobs:
         env:
           SDK_SANDBOX_REGRESSION_DOCKER: "1"
         run: bash apps/web-platform/scripts/sandbox-canary-regression.test.sh
-
-      # No-SSH inngest cutover orchestration (#5450).
-      - name: Run inngest-enumerate-reminders.sh tests
-        run: bash apps/web-platform/infra/inngest-enumerate-reminders.test.sh
-
-      - name: Run inngest-rearm-reminders.sh tests
-        run: bash apps/web-platform/infra/inngest-rearm-reminders.test.sh
-
-      - name: Run inngest-wiped-volume-verify.sh tests
-        run: bash apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
-
-      # #7095 re-read in the two webhook scripts above (found live 2026-09-13 at op=execute 2.1).
-      - name: Run webhook-doppler-token-reread tests
-        run: bash apps/web-platform/infra/webhook-doppler-token-reread.test.sh
-
-      - name: Run cat-inngest-verify-state.sh tests
-        run: bash apps/web-platform/infra/cat-inngest-verify-state.test.sh
-
-      - name: Run inngest-inventory.sh tests
-        run: bash apps/web-platform/infra/inngest-inventory.test.sh
-
-      - name: Run inngest-doublefire-probe.sh tests
-        run: bash apps/web-platform/infra/inngest-doublefire-probe.test.sh
-
-      - name: Run inngest-registry-probe.sh tests
-        run: bash apps/web-platform/infra/inngest-registry-probe.test.sh
-
-      # (#7228) The web-host consumer probe that asserts 10.0.1.40 actually SERVES its registry.
-      # Registration is not a formality here: run-registered-suites.sh DERIVES its suite list from
-      # THIS FILE (:128), so an unregistered suite runs in no runner, locally or in CI, and reports
-      # nothing while reading as coverage.
-      - name: Run inngest-consumer-probe.sh tests
-        run: bash apps/web-platform/infra/inngest-consumer-probe.test.sh
-
-      - name: Run git-lock-chardevice-sweep.sh tests
-        run: bash apps/web-platform/infra/git-lock-chardevice-sweep.test.sh
-
-      - name: Run inngest.tf + bootstrap drift-guards
-        run: bash apps/web-platform/infra/inngest.test.sh
-
-      - name: Run inngest-host.tf dedicated-host drift-guard (#6178)
-        run: bash apps/web-platform/infra/inngest-host.test.sh
-
-      - name: Run cutover-inngest.yml workflow tests
-        run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
-
-      - name: Run dedicated-host probe-consumer classifier tests (#7674)
-        run: bash apps/web-platform/infra/inngest-dedicated-host-classify.test.sh
-
-      - name: Run restart-inngest-server.yml self-trigger guard tests (#6425)
-        run: bash apps/web-platform/infra/restart-inngest-workflow-guard.test.sh
-
-      - name: Run inngest-rls lockdown SQL shape guards
-        run: bash apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
-
-      - name: Run apply-inngest-rls.yml workflow shape guards
-        run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh
-
-      # (#3366) This step is the ONLY thing that makes the advisor-scan shape
-      # guard run in CI: this workflow hand-enumerates every .test.sh and has no
-      # glob/find runner, so an unregistered guard is a file nobody calls —
-      # green locally, gating nothing. Registered here rather than relying on
-      # discovery, and asserted by AC9b so it cannot be silently dropped.
-      - name: Run scheduled-supabase-advisor-scan.yml shape + drift guards
-        run: bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh
-
-      # Proves the step above still DISCRIMINATES. Its checks used to be shaped
-      # `<producer> | grep -q P` under pipefail, which inverts when grep -q exits
-      # first and SIGPIPEs the producer (#6572) — at the match⇒fail sites that
-      # inverts into a SILENT PASS on the headline assertion. The guard passes on
-      # an unmutated tree whether or not it is broken, so only a size-amplified
-      # differential can tell the two apart. Mutates sandbox copies only.
-      - name: Run supabase-advisor scan-workflow mutation attestation
-        run: bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh
-
-
-      - name: Run git-data writer-side CAS fence tests
-        run: bash apps/web-platform/infra/git-data-pre-receive.test.sh
-
-      - name: Run git-data bare-repo provisioner tests
-        run: bash apps/web-platform/infra/git-data-provision.test.sh
-
-      - name: Run git-data bare-repo erasure (Art. 17) tests
-        run: bash apps/web-platform/infra/git-data-remove.test.sh
-
-      # (#8211, ADR-239) Guard 1: only a verified, mapper-served store is acted on. The
-      # population is DERIVED from the file() bindings in modules/git-data-userdata/main.tf —
-      # the same set the rung-2 birth gate hashes — so a FIFTH store-acting payload added to
-      # the render later cannot slip past four per-script suites. Also carries git-data-gc.sh's
-      # runtime C1 rows (no other suite executes gc), the sshd client-environment lint and the
-      # gc.service `env -u` seam strip. Guard 1's mutation rows 1-9 are self-tests that mutate
-      # a temporary copy and must RED.
-      - name: Run git-data store-device census (Guard 1, #8211)
-        run: bash apps/web-platform/infra/git-data-store-device-census.test.sh
-
-      # (#8043 F7/F9, Guard 3) The git account cannot rewrite its own authorization map or the
-      # hook it is fenced by. Static arm over the bootstrap's last-writer literals; runtime arm
-      # applies them in the pinned image and proves sshd accepts the map (with a negative
-      # control). Under CI=true the runtime arm is a FAILURE if docker is unavailable.
-      #
-      # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
-      # cloud-init-plugin-seed at 1). Green range 25-100 s over the last 10 successful
-      # main-push runs; on the five 2026-09-24 cancels it measured 33-80 s — inside that
-      # range, so this step showed no slowdown itself. The bound covers the class, not a
-      # demonstrated offender: its docker-run site carries no internal bound, and a stall
-      # there would otherwise cancel the job anonymously. 5 minutes is ~3x the green max —
-      # a pathological runner could flake it; that is the intended direction.
-      - name: Run git-data ownership tests (authorization map + hook dir, Guard 3)
-        timeout-minutes: 5
-        run: bash apps/web-platform/infra/git-data-ownership.test.sh
-
-      - name: Run git-data LUKS-at-rest cutover drift-guards
-        run: bash apps/web-platform/infra/git-data-luks.test.sh
-
-      # (#8210) Guard 1 for the boot-time LUKS reopen: static rows over the script, the unit
-      # pair, cloud-init, bootstrap, gc.service, issue-alerts.tf and the module variables, plus
-      # a runtime arm that drives the script and the OnFailure reporter against stubs.
-      - name: Run git-data LUKS boot-reopen guards (Guard 1, #8210)
-        run: bash apps/web-platform/infra/git-data-luks-reopen.test.sh
-
-      # (#8211, ADR-239) Guard 2: an instance proves its layout before any store action is
-      # allowed. The bootstrap's store-verification steps are extracted from their sentinel
-      # comments and driven WITHOUT ROOT against stub mount/umount/dumpe2fs/findmnt/runuser
-      # binaries, so a CI runner adjudicates the plaintext-volume check, the luks_residue count,
-      # the fence-on-mapper read, the store marker and the erasure probe for real. Guard 2's
-      # mutation rows 1, 2, 3, 5 and 7 are self-tests that must RED.
-      - name: Run git-data bootstrap store-verification guards (Guard 2, #8211)
-        run: bash apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh
-
-      # (#6680, ADR-220) git-data-cutover's read-only proof: the access gate precedes every store
-      # probe, the store probes fail closed (a failed read is probe_failed, never a store state),
-      # probe bytes never reach the workflow-command parser, the bridge's server-ip export set is
-      # exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}, and the workflow wiring and step gating. Runtime arm
-      # drives the real script against real OpenSSH in the pinned image; under CI=true a missing
-      # docker FAILS. The root token's reference census runs on every PR from scripts/test-all.sh
-      # (tests/scripts/test-git-data-root-token-census.sh), not here.
-      #
-      # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
-      # cloud-init-plugin-seed at 1). Green range 70-77 s over the
-      # last 10 successful main-push runs; 78-206 s on the five 2026-09-24 cancels. The suite's
-      # `docker run` carries an internal `timeout -k 10 480` bound, but its host-side legs —
-      # `docker info`, `docker rm -f`, the fixture build — sit outside it; on this observed
-      # failure class (whole-runner docker degradation) a wedged-daemon hang there would
-      # otherwise cancel the job anonymously. 10 minutes leaves the inner 480 s bound room to
-      # fire first on a container stall (the richer rc=124 diagnostic) while capping the
-      # unbounded host-side legs.
-      - name: Run git-data cutover access-path tests (ADR-220)
-        timeout-minutes: 10
-        run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
-
-      # (#8189) The flag read fails closed, refuses a `true` flag, and is the only step
-      # that holds the prd read token (Guard 1).
-      - name: Run git-data flag precheck tests (fail-closed flag read, Guard 1)
-        run: bash apps/web-platform/infra/git-data-flag-precheck.test.sh
-
-      # (#6982) Behavioural tests for the boot emitter — the redactor's two arms, the
-      # no-UUID/no-repo-path guarantee, and the delivery assertion. Extracts the emitter
-      # from a REAL terraform render rather than a hand-copied fixture, so it needs the
-      # terraform this job already installs.
-      - name: Run git-data boot-emitter redaction + delivery tests
-        run: bash apps/web-platform/infra/git-data-emit.test.sh
-
-      # (#6982, W12 rung 1) RUNTIME rehearsal of the runcmd chain in the pinned Ubuntu
-      # 24.04 image. Every other git-data gate is static, and the failure class they defend
-      # against is only observable when the code RUNS — the Phase-0 W0 probe passed every
-      # static check and would still have booted dark. Skips cleanly without docker.
-      #
-      # #8688: step ceiling per the job's attribution convention (ci-deploy.sh tests at 3,
-      # cloud-init-plugin-seed at 1). Green range 184-267 s over the last 10 successful
-      # main-push runs; it was in flight at 285-533 s on all five 2026-09-24 cancels — a
-      # whole-runner docker slowdown, not proven a hang, but indistinguishable from one while
-      # the step had no bound (its docker-run sites have no internal `timeout` wrapper).
-      # 10 minutes is ~2.2x the green max: a stall now fails naming THIS step instead of
-      # cancelling the job anonymously — a step that names itself beats a job that cancels
-      # anonymously. A pathological runner could flake it; that is the intended direction.
-      - name: Rehearse the git-data runcmd chain (abort ordering + rc guard)
-        timeout-minutes: 10
-        run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
-
-      # (#6982, ADR-152) The render-strip contract. git-data.tf strips whole-line comments
-      # from the nine injected payloads so rationale does not compete with the 32,768 B
-      # ForceNew cap. Two things make that safe and neither is self-enforcing: the strip
-      # expression is hand-mirrored in git-data-userdata-budget.sh (the render harness for
-      # two other suites, so drift means CI renders a different payload than production),
-      # and it must never eat a shebang — three payloads run via authorized_keys
-      # command="...", where a lost #! falls back to dash SILENTLY rather than ENOEXEC.
-      - name: Verify the git-data render-strip contract (parity + shebang + no-op guards)
-        run: bash apps/web-platform/infra/git-data-render-strip-parity.test.sh
-
-      # (#7264) The TEMPLATE half of the same contract. The suite above proves the two
-      # hand-mirrored copies of each EXPRESSION agree; this one proves the expression applied
-      # to the cloud-init BODY does the right thing to the DOCUMENT — that the stripped render
-      # still opens with `#cloud-config` (ADR-152 names deleting it as a dark-host defect: the
-      # apply succeeds, the host boots, cloud-init never recognises the payload), that every
-      # shebang survives, that the strip is not a no-op, that each write_files/runcmd entry
-      # differs ONLY by strip-matching lines, and that no interpolated payload delivers a line
-      # the template strip would eat. Both suites are required; neither is sufficient.
-      - name: Verify the git-data cloud-init template strip (header + per-entry + interpolation)
-        run: bash apps/web-platform/infra/git-data-template-strip.test.sh
-
-      # (#7025) The rung-2 rehearsal route's drift-guards: root purity, the distinct state
-      # key, the no-auto-commit permission set, the dry-run default, the shared concurrency
-      # literal, and the trailing hyphen on the rehearsal name prefix. Registered HERE
-      # because run-registered-suites.sh DERIVES the infra suite list from this workflow —
-      # an unregistered suite is silent AND green.
-      - name: Run rung-2 rehearsal route drift-guards
-        run: bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh
 
       # (#7025) THE REHEARSAL ROOT GETS NO `terraform validate` FROM THE `validate` JOB.
       # That job derives its matrix with `sed -E 's|^(apps/[^/]+/infra)/.*|\1|'`, which
@@ -1824,12 +841,6 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform validate
-
-      # (#8189, ADR-220) The git-data root-key root's drift-guards: the additive-only allowlist
-      # (executed against synthesized plan fixtures), the root census, every prevent_destroy,
-      # the distinct state key, git-data-state parity and the parent apply's path exclusion.
-      - name: Run git-data root-key root drift-guards
-        run: bash apps/web-platform/infra/git-data-root-key.test.sh
 
       # (#8189) Same gap as the rung-2 root above: detect-changes collapses the nested root to
       # apps/web-platform/infra, so the `validate` matrix never parses it. -backend=false, the
@@ -1926,46 +937,6 @@ jobs:
       - name: Check git-data user_data stays under the Hetzner 32 KB cap
         run: bash apps/web-platform/infra/git-data-userdata-budget.sh
 
-      - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-119)
-        run: bash apps/web-platform/infra/workspaces-luks.test.sh
-
-      - name: Run /workspaces LUKS header-escrow wiring drift-guards (#6649)
-        run: bash apps/web-platform/infra/workspaces-luks-header.test.sh
-
-      - name: Run git-data transport-wrapper allowlist tests
-        run: bash apps/web-platform/infra/git-data-transport-wrapper.test.sh
-
-      # Registered explicitly because this job runs named steps, not a glob — an unregistered infra
-      # suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + python3: no
-      # terraform, cloud-init, docker, network, or root, so this job's environment already suffices.
-      - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
-        run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
-
-      # Registered explicitly for the same reason as the guard above. Guard 2 of #7761: every
-      # `doppler run` unit whose target script takes an environment value in command position
-      # bounds its injected secret set with `--only-secrets`, or carries a reasoned ack whose
-      # cardinality is pinned. Same environment needs: pure bash + python3, no terraform,
-      # cloud-init, docker, network or root.
-      - name: Run doppler-injection bound guard (#7761 — --only-secrets on every doppler run unit)
-        run: bash apps/web-platform/infra/doppler-injection-bound.test.sh
-
-      # Registered here and NOWHERE ELSE (#7587). `run-registered-suites.sh` DERIVES its list by
-      # grepping this file for step commands that invoke a `.test.sh` in the infra directory. That
-      # pattern is deliberately NOT spelled out literally here: `run-registered-suites.test.sh`'s
-      # T2e oracle greps this same file with that same shape, so a prose copy of it is read as a
-      # ninth registered-but-underived suite and reds the gate (a comment defeating a guard --
-      # see knowledge-base/project/learnings/2026-08-02-my-comments-defeated-three-gates*). And
-      # `scripts/lint-orphan-test-suites.sh` walks every tracked `*.test.sh` repo-wide and reports
-      # anything no runner references — so an unregistered suite gates nothing AND fails the orphan
-      # lint. It also must not be registered twice: that linter treats a suite covered by more than
-      # one registration surface as an error, because the covered set is a union and a second
-      # surface makes de-registering from the first a silent no-op.
-      # Pure bash + jq + PATH stubs — no terraform, cloud-init, docker, network or root — so this
-      # job's environment already suffices (the jq dependency is shared with three sibling suites
-      # already registered in it).
-      - name: Run measured-beat ARM gate behavioural tests (#7587 — deadlines, rollback, state file)
-        run: bash apps/web-platform/infra/arm-heartbeats.test.sh
-
       # (#8043 NFR2 / Guard 4, ARM 2) THE EVIDENCE-PROVENANCE GUARD, PR-RANGE ARM.
       #
       # git-data-rung2-boot-evidence.env must never be ADDED or MODIFIED in the same change as
@@ -2025,6 +996,77 @@ jobs:
             echo "::error::rung-2 evidence provenance HOLD (advisory in this job; blocking at the birth). This change adds or modifies ${EV} in the same range as a file the evidence's hash binds — or the range could not be resolved. A voided attestation must be DELETED, not refreshed by hand; a real rehearsal lands its evidence in its own change. See the gate's message above."
             exit 1
           fi
+
+  # Aggregator (#8736): the single verdict downstream consumers read. Modeled on
+  # ci.yml's `test` job — `if: always()` + per-leg `result` inspection is the
+  # fail-closed pattern (default `needs:` semantics would render a cancelled or
+  # failed upstream as `skipped`, which some branch protection treats as success).
+  # It also carries the #8735 discrimination: a leg killed by its own
+  # `timeout-minutes` reads `cancelled`/`failure` identically to a superseded run —
+  # the classifier below names which shape it saw instead of guessing.
+  deploy-script-tests-done:
+    needs: [deploy-script-tests, deploy-script-tests-fixed]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Aggregate deploy-script-tests results
+        env:
+          MATRIX_RESULT: ${{ needs.deploy-script-tests.result }}
+          FIXED_RESULT: ${{ needs.deploy-script-tests-fixed.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # deploy-script-tests is a MATRIX — its result rolls four legs into one
+          # string; a leg-level failure says "check the failing leg" rather than
+          # claiming a cause. The cancelled discrimination is the same one ci.yml's
+          # `test` aggregator carries: supersession cancels the WHOLE run (all legs
+          # cancelled), a timeout-minutes kill stops ONE leg while siblings conclude.
+          fail=0
+          entries=( "deploy-script-tests:$MATRIX_RESULT" "deploy-script-tests-fixed:$FIXED_RESULT" )
+          for entry in "${entries[@]}"; do
+            shard="${entry%%:*}"
+            result="${entry#*:}"
+            if [[ "$result" == "success" ]]; then
+              continue
+            fi
+            fail=1
+            case "$result" in
+              failure)
+                if [[ "$shard" == "deploy-script-tests" ]]; then
+                  echo "$shard: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation or an rc=124 suite line before assuming assertions." >&2
+                else
+                  echo "$shard: FAILED — the leg concluded failure. Check its job log for a timeout annotation before assuming assertions." >&2
+                fi
+                ;;
+              skipped)
+                echo "$shard: SKIPPED — the job did not run" >&2
+                ;;
+              cancelled)
+                other_result=""
+                for other in "${entries[@]}"; do
+                  [[ "${other%%:*}" == "$shard" ]] && continue
+                  other_result="${other#*:}"
+                done
+                if [[ "$other_result" == "cancelled" ]]; then
+                  if [[ "$EVENT_NAME" == "pull_request" ]]; then
+                    echo "$shard: SUPERSEDED — the run was cancelled (a newer commit landed)" >&2
+                  else
+                    echo "$shard: CANCELLED — the whole run was cancelled on a '$EVENT_NAME' event; supersession cannot occur here (cancel-in-progress is pull_request-only), so this is a manual or infra cancellation" >&2
+                  fi
+                else
+                  echo "$shard: CANCELLED while its sibling concluded '$other_result' — the usual cause is its own declared timeout-minutes" >&2
+                fi
+                ;;
+              *)
+                echo "$shard: UNCLASSIFIED — result='$result'; cause not determined from the result shape" >&2
+                ;;
+            esac
+          done
+          if [[ $fail -ne 0 ]]; then
+            exit 1
+          fi
+          echo "deploy-script-tests: matrix + fixed legs all succeeded"
+
 
   # Registry user_data byte budget (#7282). Its OWN job, deliberately, for two reasons.
   #
@@ -2378,11 +1420,17 @@ jobs:
   # there would be noise. `always()` is required because this job exists to run when its
   # dependencies failed. `continue-on-error` so a Resend outage cannot itself red the run.
   notify-main-failure:
-    needs: [detect-changes, validate, deploy-script-tests, registry-userdata-budget, inngest-userdata-budget, infra-validate-required]
+    # Reads the AGGREGATOR, not the matrix: `deploy-script-tests` is a 4-leg matrix
+    # since #8736, and `deploy-script-tests-done` is the single verdict that already
+    # discriminates a cancelled leg from a superseded run (#8735 — a cancelled leg
+    # used to fall through this notification entirely). A non-success aggregator
+    # result — failure OR cancelled — is alertable on push: supersession cannot
+    # occur on push (cancel-in-progress is pull_request-only).
+    needs: [detect-changes, validate, deploy-script-tests-done, registry-userdata-budget, inngest-userdata-budget, infra-validate-required]
     if: |
       always() && github.event_name == 'push' &&
       (needs.validate.result == 'failure' ||
-       needs.deploy-script-tests.result == 'failure' ||
+       needs.deploy-script-tests-done.result != 'success' ||
        needs.registry-userdata-budget.result == 'failure' ||
        needs.inngest-userdata-budget.result == 'failure' ||
        needs.infra-validate-required.result == 'failure')
@@ -2395,5 +1443,5 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[ALERT] Infra Validation failed on main'
-          body: '<p><strong>Infra Validation failed on a push to main.</strong></p><p>Commit: <code>${{ github.sha }}</code></p><p>validate=${{ needs.validate.result }} · deploy-script-tests=${{ needs.deploy-script-tests.result }} · registry-userdata-budget=${{ needs.registry-userdata-budget.result }} · inngest-userdata-budget=${{ needs.inngest-userdata-budget.result }} · infra-validate-required=${{ needs.infra-validate-required.result }}</p><p>A red infra gate on main means the merged state was never validated by a PR run of this workflow — an admin/force merge, or two individually-green PRs whose merge order produced an untested state.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          body: '<p><strong>Infra Validation failed on a push to main.</strong></p><p>Commit: <code>${{ github.sha }}</code></p><p>validate=${{ needs.validate.result }} · deploy-script-tests-done=${{ needs.deploy-script-tests-done.result }} · registry-userdata-budget=${{ needs.registry-userdata-budget.result }} · inngest-userdata-budget=${{ needs.inngest-userdata-budget.result }} · infra-validate-required=${{ needs.infra-validate-required.result }}</p><p>A red infra gate on main means the merged state was never validated by a PR run of this workflow — an admin/force merge, or two individually-green PRs whose merge order produced an untested state.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}

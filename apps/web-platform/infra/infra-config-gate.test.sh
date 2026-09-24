@@ -321,12 +321,15 @@ fi
 
 # ===================================================================================
 # Registration self-check (AC-3d): the suite must be wired into infra-validation.yml.
+# Since #8736 that means the deploy-script-tests legs invoke the glob runner —
+# presence under apps/web-platform/infra/ is the registration half, asserted by the
+# registration gate; what this suite pins is the connection.
 # ===================================================================================
 if [[ -f "$INFRA_VALIDATION" ]] \
-   && grep -qE 'bash apps/web-platform/infra/infra-config-gate\.test\.sh' "$INFRA_VALIDATION"; then
-  pass "suite is registered as an explicit step in infra-validation.yml (AC-3d, #5417 class)"
+   && grep -qE 'run: bash apps/web-platform/infra/run-registered-suites\.sh' "$INFRA_VALIDATION"; then
+  pass "the suite runner is invoked in infra-validation.yml (AC-3d, #5417 class; glob registration since #8736)"
 else
-  fail "suite is NOT registered in infra-validation.yml — it would be an orphan (#5417 class)"
+  fail "the suite runner is NOT invoked in infra-validation.yml — every infra suite, this one included, would be an orphan (#5417 class)"
 fi
 
 # ===================================================================================

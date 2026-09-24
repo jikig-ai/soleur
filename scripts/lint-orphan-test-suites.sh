@@ -265,25 +265,28 @@ LC_ALL=C sort -u -o "$WORK/raw2" "$WORK/raw2"
 
 # --- Surface 3: the infra suites, DELEGATED to run-registered-suites.sh --------------------
 # Three authorities already derive over this one domain (this file, run-registered-suites.sh's
-# own report_orphans, and .github/scripts/test/test-infra-suite-registration.sh) and they
-# disagreed on method. Re-grepping infra-validation.yml here would make a fourth. `--list`
-# prints the runner's OWN derivation, so a change to that extraction cannot silently
-# desynchronise from what this file believes runs (#7402 step 8).
+# own untracked-file report, and .github/scripts/test/test-infra-suite-registration.sh) and
+# they disagreed on method. Re-grepping infra-validation.yml here would make a fourth.
+# `--enumerate` prints the runner's OWN EXECUTE set (the derived set minus the privileged
+# sudo suites, which are covered by surface 6's `run: |` multi-line arm instead) — a change
+# to that derivation cannot silently desynchronise from what this file believes runs
+# (#7402 step 8).
 #
-# INFRA_ORPHAN_LIST=/dev/null suppresses the runner's own orphan section, for two reasons.
-# (1) That section is a naive bare-basename `git grep` -- the technique this file rejects, and
-# the one that reports a suite covered because a COMMENT names it; consuming its output would
-# re-import the method through the back door. (2) It prints its members with the same
-# two-space indent as the derived list and costs 10.6 s of `git grep` per invocation, against
-# 0.03 s without it.
+# INFRA_ORPHAN_LIST=/dev/null suppresses the runner's own untracked-file section, for two
+# reasons. (1) It prints its members with the same two-space indent as the derived list —
+# consuming it would double-count. (2) It costs per-candidate `git` calls against 0.03 s
+# without it.
 infra_rc=0
 ( cd "$REPO_ROOT" && INFRA_ORPHAN_LIST=/dev/null bash "$INFRA_RUNNER" --list ) > "$WORK/infra_list" 2>/dev/null || infra_rc=$?
-# The header states the count the runner derived. Assert the parse recovered exactly that
-# many: a header saying 98 over a body this file read as 3 is a broken parse, and a broken
-# parse here manufactures 95 phantom orphans that a reader would rightly ignore -- after which
-# the check is ignored permanently.
+( cd "$REPO_ROOT" && bash "$INFRA_RUNNER" --enumerate ) > "$WORK/infra_enum" 2>/dev/null || infra_rc=$?
+# The --list header states the count the runner DERIVED (on disk = registered). The
+# SUITE_REGISTRATION rows state the count it EXECUTES. Their difference is the
+# privileged set, printed as `  SKIP privileged:` lines — assert all three agree:
+# a header saying 146 over an execute set this file read as 3 is a broken parse, and
+# a broken parse here manufactures phantom orphans a reader would rightly ignore.
 infra_declared=$(sed -nE 's/^Derived ([0-9]+) registered infra suite.*/\1/p' "$WORK/infra_list" | head -1)
-sed -nE 's/^  ([A-Za-z0-9._\/-]+\.test\.sh)$/\1/p' "$WORK/infra_list" | LC_ALL=C sort -u > "$WORK/raw3"
+infra_priv=$(grep -c '^  SKIP privileged: ' "$WORK/infra_list" || true)
+sed -nE 's/^SUITE_REGISTRATION\t(.*\.test\.sh)$/\1/p' "$WORK/infra_enum" | LC_ALL=C sort -u > "$WORK/raw3"
 infra_parsed=$(wc -l < "$WORK/raw3" | tr -d ' ')
 # SURFACE-3 FLOOR. The declared-vs-parsed check below compares two numbers that move TOGETHER:
 # narrow run-registered-suites.sh's derivation and both shrink, they still agree, and surface 5
@@ -297,8 +300,8 @@ if (( infra_parsed < MIN_INFRA_DERIVED )); then
   echo "ERROR: surface 3 derived only ${infra_parsed} infra suites, below the floor of ${MIN_INFRA_DERIVED} -- run-registered-suites.sh's derivation has narrowed. This is invisible to the declared-vs-parsed check (both numbers shrink together) and to the totals (surface 5's subtraction absorbs exactly the dropped paths), so nothing else in this file can see it." >&2
   fails=$((fails + 1))
 fi
-if (( infra_rc != 0 )) || [[ -z "$infra_declared" ]] || [[ "$infra_declared" != "$infra_parsed" ]]; then
-  echo "ERROR: 'run-registered-suites.sh --list' exited ${infra_rc} and declared '${infra_declared:-<no header>}' derived suites while this parse recovered ${infra_parsed} -- the infra registration surface is not readable, so every infra suite would be judged against an incomplete covered set." >&2
+if (( infra_rc != 0 )) || [[ -z "$infra_declared" ]] || (( infra_parsed + infra_priv != infra_declared )); then
+  echo "ERROR: 'run-registered-suites.sh' exited ${infra_rc}; --list declared '${infra_declared:-<no header>}' derived suites (${infra_priv} privileged) while --enumerate recovered ${infra_parsed} executable -- the infra registration surface is not readable, so every infra suite would be judged against an incomplete covered set." >&2
   fails=$((fails + 1))
 fi
 
@@ -321,11 +324,10 @@ fi
 # --- Surface 5: single-line `run: … bash <path>.test.sh` in any workflow --------------------
 # Every workflow, INCLUDING infra-validation.yml, minus whatever surface 3 already derived.
 # Subtracting surface 3's actual output (rather than excluding the file, or excluding a path
-# prefix) is what keeps the two surfaces disjoint AND complete: the seven suites under
-# apps/web-platform/infra/<subdir>/ carry correct single-line steps but are structurally
-# underivable by run-registered-suites.sh, whose extraction class excludes `/` (#7076,
-# pinned as KNOWN_UNDERIVABLE in .github/scripts/test/test-infra-suite-registration.sh).
-# Excluding the file would have dropped all seven and reported them as orphans.
+# prefix) is what keeps the two surfaces disjoint AND complete — since #8736 the infra
+# suites are glob-registered (presence is registration) rather than step-registered, so
+# surface 5's infra membership is now ordinarily EMPTY and it exists for the other
+# workflows' explicit `run: bash …test.sh` steps.
 #
 # Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
 # claimed. Measured 2026-08-13: five suites are legitimately covered twice -- registered both
@@ -346,8 +348,10 @@ LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
 
 # --- Surface 6: `bash <path>.test.sh` inside a multi-line `run: |` block ---------------------
 # The line carries no `run:` -- it is a body line of a block scalar -- and it may carry a
-# prefix. Today's only member is `sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh`
-# at infra-validation.yml, which needs root for losetup/luksFormat.
+# prefix. Its members today are the three privileged `sudo bash` loopback suites in
+# infra-validation.yml's deploy-script-tests-fixed job (#8736) — suites that need root
+# for losetup/luksFormat/dmsetup and so are derived-but-not-executed by surface 3's
+# runner (#7076).
 #
 # THIS SURFACE IS WHY ZERO ORPHANS IS SATISFIABLE. Without it that suite is reported as an
 # orphan while it demonstrably runs in CI, and the only ways to make the report green would

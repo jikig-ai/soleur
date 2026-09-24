@@ -183,8 +183,11 @@ assert "remote-exec asserts the INFRA_CONFIG_INSTALL grant landed" \
 echo ""
 echo "--- AC6: drift-guard wired into infra-validation.yml ---"
 assert "infra-validation.yml exists" "[[ -f '$INFRA_VALIDATION' ]]"
-assert "infra-validation.yml invokes this drift-guard" \
-  "grep -qE 'bash apps/web-platform/infra/infra-config-handler-bootstrap\.test\.sh' '$INFRA_VALIDATION'"
+# Since #8736 presence under apps/web-platform/infra/ IS registration — the
+# deploy-script-tests legs glob-derive this suite — so what to pin is the
+# CONNECTION: the runner invocation the legs execute.
+assert "infra-validation.yml invokes this drift-guard's runner" \
+  "grep -qE 'run: bash apps/web-platform/infra/run-registered-suites\.sh' '$INFRA_VALIDATION'"
 
 # --- AC8 (#7103 R2 3.9): deploy_pipeline_fix depends_on the handler bootstrap ---
 # ORDERING IS A TASK, NOT A HOPE. deploy_pipeline_fix PUSHES the payload to the webhook; this

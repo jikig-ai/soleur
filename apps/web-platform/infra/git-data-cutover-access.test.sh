@@ -1251,8 +1251,11 @@ for k in ("key_fetch", "ssh_config", "secrets_check", "teardown"):
     if isinstance(s.get("run"), str):
         open("%s/%s.sh" % (steps_dir, k), "w").write(s["run"])
 ivsteps = [s for j in (iv.get("jobs") or {}).values() for s in (j.get("steps") or [])]
-mine = [s for s in ivsteps if isinstance(s.get("run"), str) and s["run"].strip() == "bash apps/web-platform/infra/git-data-cutover-access.test.sh"]
-check("AC10: infra-validation.yml runs this suite in exactly one step with no if:/continue-on-error",
+# Since #8736 this suite is registered by PRESENCE (the deploy-script-tests
+# legs glob-derive it), so the step under test is the legs' runner invocation —
+# one step definition (the matrix fans it out), unmasked.
+mine = [s for s in ivsteps if isinstance(s.get("run"), str) and s["run"].strip() == "bash apps/web-platform/infra/run-registered-suites.sh"]
+check("AC10: infra-validation.yml's legs invoke the suite runner in exactly one step with no if:/continue-on-error",
       len(mine) == 1 and "if" not in mine[0] and not mine[0].get("continue-on-error"), len(mine))
 print("\n".join(out))
 PY
@@ -1767,7 +1770,25 @@ else
   cat > "$T/rt/drive.sh" <<'DRV'
 set -u
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq openssh-server openssh-client netcat-openbsd iproute2 git >/dev/null 2>&1 || { echo FIXTURE_APT_FAILED; exit 100; }
+# Bounded apt (#8744): Acquire::Retries=5 inside each call and a 3-attempt loop with
+# 10s/30s backoff around the pair. The pair sits inside `if` — a tested context — so a
+# failed update can never fall through into an install attempt that was skipped. Output
+# goes to a fixture log instead of /dev/null: on exhaustion its credential-scrubbed tail
+# (apt error text can embed proxy user:pass@host) prints BEFORE the marker, so the fleet
+# log says WHY instead of a bare rc=100. The host greps the marker with -qx, so it stays
+# a bare line. Tail and marker both go to stderr: docker demuxes stdout/stderr, so a
+# stdout marker would race a stderr tail and could land BEFORE the diagnostics it
+# follows (measured — a cross-stream write order is not preserved).
+_apt_log=/tmp/apt-fixture.log; : > "$_apt_log"
+_apt_ok=0
+for _apt_try in 1 2 3; do
+  if apt-get update -qq -o Acquire::Retries=5 >> "$_apt_log" 2>&1 \
+     && apt-get install -y -qq -o Acquire::Retries=5 openssh-server openssh-client netcat-openbsd iproute2 git >> "$_apt_log" 2>&1; then
+    _apt_ok=1; break
+  fi
+  case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
+done
+[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
 mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh
 ssh-keygen -A >/dev/null 2>&1
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k && cp /tmp/k.pub /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
