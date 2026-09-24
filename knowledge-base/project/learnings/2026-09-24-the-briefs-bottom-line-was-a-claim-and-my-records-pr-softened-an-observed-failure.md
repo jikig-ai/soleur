@@ -65,3 +65,7 @@ wrong as one that inflates it; the softened form is worse because it licenses th
 12. **Searched for the C4 freshness suite with a wrong glob.** Recovery: `git ls-files | grep`. **Prevention:** locate suites with `git ls-files`, not `ls` globs.
 13. **`grep -c 'START=2026-…'` returned 0** because the literal is `START="${ZOT_SOAK_START:-…}"`. Recovery: re-grepped the value. **Prevention:** grep the value, not an assumed assignment shape.
 14. **Stop hook fired on a first-person commitment while waiting on agents.** Recovery: emitted an explicit `<stop>BLOCKED:` line. **Prevention:** when waiting on background work, end with the stop marker, not a promise.
+
+## Addendum 2026-09-24 (PR #8684)
+
+15. **Recorded task 5.5 (revoke the leaked PAT) as done from the operator's empty token lists, without checking WHICH account held the PAT.** ADR-096's own 2026-07-30 correction and `variables.tf` say it was a fine-grained PAT on a machine account, and the new amendment even misquoted that correction as "user-account". Caught by the security reviewer. Recovery: 5.5 reopened with the machine-account check named. **Prevention:** before closing a credential-revocation task on evidence, grep the repo for the credential's owner (`variables.tf` description, the ADR's credential section) and confirm the evidence was taken on THAT principal.
