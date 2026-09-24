@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gitCleanEnv } from "./lib/git-clean-env";
 import {
   classifyDiscoverabilityResult,
   extractObservabilityBlock,
@@ -597,6 +598,7 @@ function expectBoth(block: string, expected: string): void {
 function runAwk(block: string): string {
   const proc = Bun.spawnSync({
     cmd: ["awk", "-f", AWK_PATH],
+    env: gitCleanEnv(),
     stdin: new TextEncoder().encode(block),
     stdout: "pipe",
     stderr: "pipe",
@@ -1089,7 +1091,7 @@ describe("#6772 P1-P3 — awk/TS parity harness", () => {
   // A CI image swapping mawk for gawk (or busybox awk) surfaces as a NAMED
   // failure here rather than a mystery diff in P1.
   test("awk interpreter is a known implementation (mawk or gawk)", () => {
-    const proc = Bun.spawnSync({ cmd: ["awk", "--version"], stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawnSync({ cmd: ["awk", "--version"], env: gitCleanEnv(), stdout: "pipe", stderr: "pipe" });
     const banner =
       new TextDecoder().decode(proc.stdout) +
       new TextDecoder().decode(proc.stderr);
@@ -1215,7 +1217,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
   // the gate. It asserts identical VERDICT and identical REASON, so a message
   // reworded on one side alone also reddens.
   const runGate = (cmd: string): { rejected: boolean; reason: string } => {
-    const p = Bun.spawnSync({ cmd: ["bash", GATE_PATH, cmd], stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawnSync({ cmd: ["bash", GATE_PATH, cmd], env: gitCleanEnv(), stdout: "pipe", stderr: "pipe" });
     const out = new TextDecoder().decode(p.stdout).trim();
     expect(p.exitCode, `gate must exit 0 or 1 for: ${cmd}`).not.toBe(2);
     return { rejected: p.exitCode === 1, reason: out };
@@ -2484,7 +2486,7 @@ describe("Check 10 Form A block — unset plugin root never executes the checked
     const env = gitFixtureEnv(dir);
     delete env.CLAUDE_PLUGIN_ROOT;
     delete env.GROK_PLUGIN_ROOT;
-    Bun.spawnSync({ cmd: ["git", "init", "-q", dir], env, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "init", "-q", dir], { env, stdout: "pipe", stderr: "pipe" });
     const ledger = join(dir, "decoy-ledger");
     writeFileSync(ledger, "");
     const decoyDir = join(dir, "plugins", "soleur", "skills", "preflight", "scripts");

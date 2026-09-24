@@ -362,7 +362,7 @@ refused_root() { # <id> <cwd> <root-value>
   else fail "$1: rc=$rc out=$(tr '\n' '|' < "$d/out") gh=$(tr '\n' '|' < "$d/gh.log") ready=$(tr '\n' '|' < "$d/ready.log")"; fi
 }
 CHK="$G3/checkout"; assert_fixture_dir "$CHK"; rm -rf "$CHK"; mkdir -p "$CHK/plugins"
-env -i PATH="$PATH" HOME="$G3" git init -q "$CHK" || { echo "[FATAL] M15: git init failed" >&2; exit 1; }
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$CHK" || exit 1; git init -q "$CHK" ) || { echo "[FATAL] M15: git init failed" >&2; exit 1; }
 cp -R "$G3/root" "$CHK/plugins/soleur"
 [[ -x "$CHK/plugins/soleur/scripts/admin-merge-ready.sh" && -r "$CHK/plugins/soleur/.claude-plugin/plugin.json" ]] \
   || { echo "[FATAL] M15: fixture root copy incomplete" >&2; exit 1; }
