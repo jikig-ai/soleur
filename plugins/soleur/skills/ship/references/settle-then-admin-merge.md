@@ -44,7 +44,7 @@ At that trigger or at the 6-sync cap, if this change has **zero conflict surface
 
    ```bash
    SHA=$(gh pr view <N> --json headRefOid --jq .headRefOid)
-   bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh" <N> "$SHA" --wait --timeout 3600
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA" --wait --timeout 3600
    ```
 
    Branch on the exit code alone: 0 → go to step 3; 4 → the head moved or the PR closed, so re-read `SHA` and restart this step; anything else → stop and report the ABSENT/PENDING/FAILED contexts it names, and never merge. A PR that edits `.github/workflows/` or `.github/actions/` always exits 1 (`UNTRUSTED-CI`): it has no agent admin-merge path, and the operator merges it by hand. How the script decides (the required set from every ruleset, the latest run by check-run id, app pinning) is documented once, in its header. The property is the same one `gh pr checks <N>` cannot express alone: it must show every required context **present and green on the current SHA**, not merely absent from the `pending` and `fail` buckets: an empty rollup on a just-pushed head satisfies "nothing is failing" vacuously, and after a conflict-resolved sync merge (whose commit the `bun-test` pre-commit hook skips by configuration) that head's ONLY execution is this CI run. **`--admin` bypasses the ENTIRE `required_status_checks` rule — every `required_check` context as well as the up-to-date gate — so nothing server-side will stop a red, pending or absent merge; this step is the only check that exists.** Measured against `infra/github/ruleset-ci-required.tf`: `strict_required_status_checks_policy` and every `required_check` are sibling parameters of ONE rule, and `ci-required-ruleset-canonical-bypass-actors.json` grants OrganizationAdmin and RepositoryRole 5 `bypass_mode: "pull_request"`. Ruleset bypass is granted per rule, never per parameter. This paragraph previously claimed `--admin` bypassed "ONLY the up-to-date gate, NOT the checks"; that was false for this repo, and it was the sole thing standing between the hatch and an unverified merge.
@@ -57,7 +57,7 @@ At that trigger or at the 6-sync cap, if this change has **zero conflict surface
    landed() { [[ "$(gh pr view <N> --json state,headRefOid --jq '"\(.state) \(.headRefOid)"')" == "MERGED $SHA" ]]; }
    for i in $(seq 1 20); do
      landed && { echo "ADMIN-MERGED $SHA"; exit 0; }
-     bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh" <N> "$SHA"; rc=$?
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA"; rc=$?
      (( rc == 0 )) || { echo "ADMIN-MERGE ABORTED rc=$rc"; exit "$rc"; }
      if err=$(gh pr merge <N> --squash --admin --match-head-commit "$SHA" 2>&1); then break; fi
      if ! grep -q 'Base branch was modified' <<<"$err"; then
@@ -86,7 +86,7 @@ The hatch above is *agent-initiated*, which is why it is scoped to zero-conflict
 
    ```bash
    SHA=$(gh pr view <N> --json headRefOid --jq .headRefOid)
-   bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh" <N> "$SHA" --green-sha "$G"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA" --green-sha "$G"
    ```
 
    `--green-sha` certifies `$SHA` only if it is a verified 2-parent GitHub merge whose first parent is `G` and whose second parent is an ancestor-or-equal of `origin/<base>` — then grades `G`'s required contexts. A `gh pr update-branch` merge always has this shape; a locally-created merge is **unsigned** and is refused (`carryover-unverified`), as is any head that isn't a merge, has a different first parent, or merged anything that isn't on the base (`carryover-not-merge` / `carryover-first-parent` / `carryover-not-base`). Refusal is not an error — it means wait for the new head's own suite like the normal path.

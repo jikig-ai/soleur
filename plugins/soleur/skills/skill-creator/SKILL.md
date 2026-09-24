@@ -147,7 +147,7 @@ When creating a new skill from scratch, always run the `init_skill.py` script. T
 Usage:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/init_skill.py <skill-name> --path <output-directory>
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/init_skill.py" <skill-name> --path <output-directory>
 ```
 
 The script:
@@ -188,13 +188,13 @@ To complete SKILL.md, answer the following questions:
 Once the skill is ready, it should be packaged into a distributable zip file that gets shared with the user. The packaging process automatically validates the skill first to ensure it meets all requirements:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/package_skill.py <path/to/skill-folder>
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/package_skill.py" <path/to/skill-folder>
 ```
 
 Optional output directory specification:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/package_skill.py <path/to/skill-folder> ./dist
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/package_skill.py" <path/to/skill-folder> ./dist
 ```
 
 The packaging script will:
@@ -216,12 +216,14 @@ distributed, invoke the `skill-security-scan` advisory gate against the
 newly-scaffolded SKILL.md:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < <skill-folder>/SKILL.md
+bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh" < <skill-folder>/SKILL.md
 ```
 
 Operator handling:
 
 - **`LOW-RISK`** — proceed with packaging.
+- **No verdict line** (a crash, or `No such file or directory` on an unresolved plugin root) — treat as
+  **`REVIEW`**, never `LOW-RISK`.
 - **`REVIEW`** — present findings as informational; ask operator to confirm
   before packaging.
 - **`HIGH-RISK`** — present findings + override instructions referencing
