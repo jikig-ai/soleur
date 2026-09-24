@@ -175,3 +175,37 @@ that diagram change is deferred with this ADR.
 - A crashed/SIGKILLed deploy can leave a stale lease; the substrate's TTL
   fail-open (`DEPLOY_LEASE_MAX_AGE_MS`, default 90 min > drain + overhead) ignores
   it, so a crashed deploy never darks crons indefinitely.
+
+## Amendment 2026-09-24 (#8726) — how the deferral crosses the Inngest step boundary
+
+The lease, its trigger and its outcome are unchanged. `DeployInProgressError` does not survive an
+Inngest step boundary (the handler receives the SDK's rebuilt `StepError`, `name "Error"`, no custom
+fields), so the `instanceof` check the nine deferral-aware claude-eval crons carried never matched
+and a deploy that outlasted the retry read as a setup failure with a red heartbeat. See `AP-028`.
+
+- **Mechanism.** `setup-workspace` wraps its callback in `deferDeployOnFinalAttempt`; the handler
+  calls `unwrapSetupVerdict` after the setup `catch` and before the body's `try/finally`
+  (`_cron-shared.ts`).
+- **Correction.** The `DeployInProgressError` doc comment said "`retries: 1` re-dispatches the run;
+  the retry normally lands after the bounded deploy completes", and Context above says a killed cron
+  is re-run on the new container. For the deferral it is a **step** retry on Inngest's default
+  backoff, not a re-dispatch of the run, and that backoff has not been measured against the lease
+  lifetime (decision-challenge DC-2 on #8726).
+- **What a deferral that outlasts the retry visibly produces.** Two `op=deploy-lease-fresh`
+  error-level Sentry messages (one per step attempt, from the substrate); `DeployInProgressError`
+  Sentry exception events from `middleware/sentry-correlation.ts`, one per handler-level attempt —
+  two if Inngest resets the attempt counter after the step settles (as Inngest documents per-step
+  retry counters, and as the test harness assumes but cannot verify), one otherwise; one `failed`
+  `routine_runs` row; and a *missed* check-in about 60 minutes later (`checkin_margin_minutes =
+  60`). "Benign" means no false setup-failure report, not silence (decision-challenge DC-1 on #8726).
+- **Accepted cost.** The handler-level retry after the verdict replays the memoized verdict and
+  cannot re-check the lease — the "a replay cannot recover" shape of ADR-126 decision 6, acceptable
+  here because no workspace exists yet.
+- **In-flight runs.** `unwrapSetupVerdict` also accepts the pre-#8726 memoized shape, so a run that
+  set up its workspace before this deploy and resumes after it still completes.
+- **Precedent.** The ADR-042 amendment of 2026-09-24 (the leader loop's returned `turn_rejection`).
+- **Rejected.** A message marker matched in the handler (string routing across the boundary; a
+  wording change re-breaks it silently). Returning the verdict on every attempt (a returned step is
+  memoized, so the lease is never re-checked). `NonRetriableError` for the handler throw: a subclass
+  can keep its name, but a non-retriable throw on handler attempt 0 is never the final attempt to
+  `middleware/run-log.ts`, which skips non-final throws, so no `routine_runs` row would be written.

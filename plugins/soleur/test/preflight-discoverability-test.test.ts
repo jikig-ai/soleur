@@ -2449,7 +2449,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // probe (`scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`) reads
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. NO SUBSTITUTE: the evidence is the dedicated host's
   // journald rows in the Logs warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 28;
+  // #8705 (2026-09-24): +1 (28 -> 29, after #7761 took 27 -> 28) for `2026-09-24-security-rotate-web-probes-read-doppler-token-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh`) lists
+  // soleur/prd service tokens with the Tier-B DOPPLER_TOKEN_TF. NO SUBSTITUTE: service-token
+  // metadata (slug, created_at) has no unauthenticated endpoint, and a read service token gets HTTP
+  // 403 on the listing (measured 2026-09-24). Genuine declaration.
+  const BASELINE_DECLARED_PROBES = 29;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

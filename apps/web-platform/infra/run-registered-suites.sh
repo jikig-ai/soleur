@@ -218,7 +218,13 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 LIST_ONLY=0
-[[ "${1:-}" == "--list" ]] && LIST_ONLY=1
+case "${1:-}" in
+  "") ;;
+  --list) LIST_ONLY=1 ;;
+  # Any other argument used to fall through to a FULL battery run (#8705: `--help` started all
+  # 137 suites). Refuse instead: the only accepted argument is --list.
+  *) echo "usage: ${0##*/} [--list]" >&2; exit 64 ;;
+esac
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT" || exit 1
