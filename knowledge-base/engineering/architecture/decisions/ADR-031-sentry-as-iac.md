@@ -1136,6 +1136,10 @@ now has a monitor.**
   issue, so a routed monitor can still page nobody. The audit's Class A now counts muted
   environments and annotates every apply run; unmuting is a tracked operator write (#8704), not
   a Terraform change.
+- **Supersedes the Class A invariant stated above** (`class_a_count == cron_detector_count`, in the
+  routing-graph passage). That equality described the pre-#8630 org, in which no cron detector
+  routed. The healthy state is now `class_a_count == 0`; a non-zero count lists each unrouted slug
+  (a pending two-PR route or live drift) and emits a `::warning::` on the apply run.
 - **The monitor-binding gate becomes address-aware.** `scripts/sentry-monitor-binding-gate.sh`
   still requires every other `sentry_alert` to bind exactly the issue-stream detector. The
   cron-bound address set is a literal in the gate: `sentry_alert.cron_monitor_failure` must bind a

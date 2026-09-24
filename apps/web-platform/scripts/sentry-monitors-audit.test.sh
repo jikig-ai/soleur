@@ -79,10 +79,10 @@ fi
 # -workflowIds-> workflow). The old fixture bound `monitor.slug` inside rule
 # filters, a shape that matches 0 rows in the live org and always did.
 #
-# Class A is reported as a COUNT, not a per-slug list, so identity is pinned
-# by the count being 1-of-2 rather than by grepping a slug: a predicate that
-# ignored `workflowIds` would report 2, and one that inverted it would also
-# report 1 — which is why T15 fixtures the OTHER direction (both routed -> 0).
+# This row pins the COUNT (1-of-2): a predicate that ignored `workflowIds`
+# would report 2, and one that inverted it would also report 1 — which is why
+# T15 fixtures the OTHER direction (both routed -> 0). Slug IDENTITY — which of
+# the two is listed — is pinned by T19 since #8630 made Class A per-slug.
 # ------------------------------------------------------------------------
 echo "T3: Class A — cron detector with no routing workflow"
 TMP3=$(mktemp -d)
@@ -614,13 +614,27 @@ SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
   SENTRY_FIXTURE_MONITORS="$TMP15/monitors.json" \
   SENTRY_FIXTURE_RULES="$TMP15/workflows.json" \
   SENTRY_FIXTURE_DETECTORS="$TMP15/detectors.json" \
-  AUDIT_OUT_DIR="$TMP15" bash "$SCRIPT" >/dev/null 2>&1
+  AUDIT_OUT_DIR="$TMP15" bash "$SCRIPT" >/dev/null 2>"$TMP15/stderr.txt"
 report=$(ls "$TMP15"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-if grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report"; then
-  pass "all-routed fixture yields Class A count 0 of 2"
+if grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report" \
+   && ! grep -qE '^- `monitor-[ab]` — ' "$report"; then
+  pass "all-routed fixture yields Class A count 0 of 2, no slug listed"
 else
   fail "Class A far direction"
   sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -12 >&2 || true
+fi
+
+# T15b — the healthy state is SILENT on stderr. Nothing unrouted and nothing
+# muted (no environment carries `isMuted`), so the routing `::warning::` must
+# not fire: a warning on every healthy apply run is one nobody reads.
+echo "T15b: all routed, nothing muted — no routing ::warning::"
+if [[ -f "$report" ]] \
+   && grep -qE 'Muted monitors: \*\*0\*\*' "$report" \
+   && ! grep -q '::warning::Sentry cron routing' "$TMP15/stderr.txt"; then
+  pass "healthy state: muted count 0 reported, no routing warning on stderr"
+else
+  fail "routing ::warning:: fired (or muted count missing) in the all-routed case"
+  cat "$TMP15/stderr.txt" >&2 || true
 fi
 rm -rf "$TMP15"
 
@@ -926,36 +940,157 @@ fi
 rm -rf "$TMP18"
 
 # ------------------------------------------------------------------------
-# T19 — the Class A invariant, asserted where something reads it.
-# `class_a_count == cron_detector_count` distinguishes ordinary growth from a
-# real routing attachment from an extraction failure; a literal baseline of 55
-# would go stale the moment monitor 56 lands and can distinguish none of them.
+# T19 — Class A lists the UNROUTED slugs, and says so on stderr (#8630).
+#
+# INVERTED in #8630. Before it, no cron detector routed anywhere, so
+# `class_a_count == cron_detector_count` was the normal fact and the report
+# deliberately listed no slug (55 identical bullets per run). Once every cron
+# detector is bound to the cron-monitor-failure workflow the healthy state is
+# ZERO unrouted, so an unrouted detector is the exception and must be named:
+# a pending route under the two-PR rule, or live drift.
+#
+# T3's 1-of-2 shape: m1 unrouted, m2 routed. The workflow EXISTS and has an
+# action, so neither Class C nor Class E adds noise to the report or stderr.
+# stderr is captured to ITS OWN file: the `::warning::` is a job-log signal and
+# must not leak into the report, which is the Article 30 evidence artifact.
 # ------------------------------------------------------------------------
-echo "T19: Class A invariant is machine-checked"
+# One shared workflows fixture, written once to a mktemp-rooted path (T19-T19d
+# never mutate it), so the helper below writes no fixture file of its own.
+T19_WORKFLOWS=$(mktemp)
+printf '%s' '[{"id": "9001", "name": "cron-monitor-failure", "triggers": {"actions": [{"id": "NotifyEmailAction"}]}, "actionFilters": []}]' > "$T19_WORKFLOWS"
+# $1 = fixture dir holding monitors.json + detectors.json. Writes the report
+# into $1 and stderr to $1/stderr.txt; the SUT's stdout is discarded.
+t19_run() {
+  local d="$1"
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+    SENTRY_API_HOST=de.sentry.io \
+    SENTRY_FIXTURE_MONITORS="$d/monitors.json" \
+    SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" \
+    SENTRY_FIXTURE_DETECTORS="$d/detectors.json" \
+    AUDIT_OUT_DIR="$d" bash "$SCRIPT" >/dev/null 2>"$d/stderr.txt"
+}
+# The ONE routing warning line, isolated from the SUT's other `::warning::`s.
+t19_warning() { grep -E '^::warning::Sentry cron routing:' "$1/stderr.txt" 2>/dev/null || true; }
+
+echo "T19: Class A lists the unrouted slug, not the routed one"
 TMP19=$(mktemp -d)
-cat > "$TMP19/monitors.json" <<'EOF'
-[{"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
-EOF
-printf '[]' > "$TMP19/workflows.json"
-cat > "$TMP19/detectors.json" <<'EOF'
-[{"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []}]
-EOF
-SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
-  SENTRY_API_HOST=de.sentry.io \
-  SENTRY_FIXTURE_MONITORS="$TMP19/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP19/workflows.json" \
-  SENTRY_FIXTURE_DETECTORS="$TMP19/detectors.json" \
-  AUDIT_OUT_DIR="$TMP19" bash "$SCRIPT" >/dev/null 2>&1
+cat > "$TMP19/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19"
 report=$(ls "$TMP19"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-if grep -qE '\*\*1\*\* of \*\*1\*\* cron detectors' "$report" \
-   && grep -qE 'Invariant `class_a_count == cron_detector_count` HOLDS' "$report" \
-   && ! grep -qE '^- `m1` — ' "$report"; then
-  pass "invariant reported when it holds; no per-slug list emitted"
+if grep -qE '\*\*1\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -qE '^- `m1` — ' "$report" \
+   && ! grep -qE '^- `m2` — ' "$report" \
+   && grep -qE 'Healthy state: \*\*0\*\* unrouted' "$report" \
+   && grep -q 'cron_monitor_alert_unrouted' "$report" \
+   && ! grep -qE 'Invariant .* HOLDS' "$report"; then
+  pass "unrouted m1 listed as a bullet, routed m2 not; healthy state stated as 0"
 else
-  fail "invariant not machine-checked"
-  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -12 >&2 || true
+  fail "Class A did not list exactly the unrouted slug"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+
+echo "T19b: the unrouted slug is named in a stderr ::warning::, never in the report"
+w19=$(t19_warning "$TMP19")
+if [[ -n "$w19" ]] \
+   && grep -qw 'm1' <<<"$w19" \
+   && ! grep -qw 'm2' <<<"$w19" \
+   && ! grep -q '::warning::' "$report"; then
+  pass "stderr ::warning:: names m1 (not m2) and is absent from the report"
+else
+  fail "routing ::warning:: missing, wrong, or leaked into the report: [${w19}]"
+  cat "$TMP19/stderr.txt" >&2 || true
 fi
 rm -rf "$TMP19"
+
+# ------------------------------------------------------------------------
+# T19c — the unrouted slug comes from the STRUCTURED binding, not `.name`.
+# Every other Class A fixture binds via the `.name` fallback, where slug and
+# name are identical, so a listing built from `.name` alone would pass them
+# all. Here the detector was renamed in the UI: `.name` no longer slugifies to
+# the monitor, `dataSources[].queryObj.slug` still does.
+# ------------------------------------------------------------------------
+echo "T19c: unrouted listing is slug-first (structured binding), not .name"
+TMP19C=$(mktemp -d)
+cat > "$TMP19C/monitors.json" <<'JSON'
+[{"slug": "real-unrouted", "name": "Real", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19C/detectors.json" <<'JSON'
+[
+  {
+    "id": "1901",
+    "name": "renamed-in-the-ui",
+    "type": "monitor_check_in_failure",
+    "workflowIds": [],
+    "dataSources": [{"queryObj": {"slug": "real-unrouted"}}]
+  }
+]
+JSON
+t19_run "$TMP19C"
+report=$(ls "$TMP19C"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19c=$(t19_warning "$TMP19C")
+if grep -qE '^- `real-unrouted` — ' "$report" \
+   && ! grep -q 'renamed-in-the-ui' "$report" \
+   && grep -q 'real-unrouted' <<<"$w19c" \
+   && ! grep -q 'renamed-in-the-ui' <<<"$w19c"; then
+  pass "structured slug listed in report and warning; UI display name used in neither"
+else
+  fail "unrouted listing did not prefer the structured slug: [${w19c}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19C"
+
+# ------------------------------------------------------------------------
+# T19d — a MUTED environment. Sentry mutes a monitor per environment, and a
+# muted monitor sends nothing even when it is routed, so routing alone is not
+# the whole answer. Every detector here IS routed, so the warning can only
+# have come from the muted count — that isolates the muted arm from Class A.
+# m2 carries an environment with `isMuted: false`, which must not count.
+# ------------------------------------------------------------------------
+echo "T19d: a muted monitor environment is counted, listed and warned"
+TMP19D=$(mktemp -d)
+cat > "$TMP19D/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"},
+   "environments": [{"name": "production", "isMuted": true, "lastCheckIn": "2026-09-24T00:00:00Z"}]},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "config": {"schedule": "0 0 * * *"},
+   "environments": [{"name": "production", "isMuted": false, "lastCheckIn": "2026-09-24T00:00:00Z"}]}
+]
+JSON
+cat > "$TMP19D/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19D"
+report=$(ls "$TMP19D"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19d=$(t19_warning "$TMP19D")
+if grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: production' "$report" \
+   && ! grep -qE '^- `m2` — ' "$report" \
+   && grep -qE 'muted[^;]*: m1([ .;]|$)' <<<"$w19d" \
+   && ! grep -q 'not bound' <<<"$w19d" \
+   && ! grep -qw 'm2' <<<"$w19d" \
+   && ! grep -q '::warning::' "$report"; then
+  pass "muted m1 counted and listed in the report; stderr warning names m1 only"
+else
+  fail "muted environment not surfaced: [${w19d}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19D"
+rm -f "$T19_WORKFLOWS"
 
 # ------------------------------------------------------------------------
 # T20d — a Link with rel="next" and NO `results` field. This is the arm the
@@ -1899,8 +2034,8 @@ if [[ "$PASS" -ne $((_h_p + 1)) || "$FAIL" -ne $((_h_f + 1)) ]]; then
   exit 1
 fi
 PASS=$_h_p; FAIL=$_h_f
-if [[ $((PASS + FAIL)) -lt 47 ]]; then
-  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 47.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 51 ]]; then
+  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 51.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 
