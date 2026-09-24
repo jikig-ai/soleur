@@ -82,8 +82,9 @@ Separately, content drift accumulated for months: 26 rows on 2026-09-21. The cau
 
 ## Amendment 2026-09-23 (#8605, #8606): closed-PR ownership and a dev reconcile path
 
-**Status:** Accepted. **Issues:** #8605, #8606. Append-only: every section above is unchanged, and
-two of its sentences are superseded by name below.
+**Status:** Accepted (revised 2026-09-24 by the #8642 review ruling, before merge). **Issues:** #8605,
+#8606. Append-only: every section above is unchanged, and two of its sentences are superseded by name
+below.
 
 ### Context
 
@@ -100,35 +101,81 @@ every file read as "not on origin/main" (#8606, fixed by anchoring both pathspec
 1. **Ownership rule, restated.** A missing-on-main row is an in-flight `::warning::` if and only if the
    conditions of the previous amendment hold AND at least one fresh live holder branch has an open pull
    request, has none, or has a latest closed pull request whose head is not the branch's current tip.
-   When every fresh holder's latest pull request closed AT the branch tip, the verdict is `closed-grace`
-   (a warning) for `CLOSED_GRACE_H=24` hours after the close, then `closed` (blocking, with a Sentry
-   event on the scheduled surface). The evidence is bound to the commit (`head.sha` == branch tip), never
-   the branch name, so a re-pushed or recreated branch is not condemned by an old PR. A closed holder is
-   decided before the stale tiers run.
-2. **The classifier reads PR state.** `classify-missing` calls `GET /repos/{repo}/pulls?head=…` with the
-   job's `GITHUB_TOKEN` and `pull-requests: read`, only for fresh owner branches (a probe with no fresh
-   candidate makes no call), memoised per run. It stays fail-closed: 401/403/404 exit as `config`
-   (naming the status), 429/5xx get one retry and then exit as `transient`, and a malformed body exits
-   as `transient`; the probe reports any of these as UNCLASSIFIED (blocking).
+   When every fresh holder's latest pull request closed unmerged (`merged_at` null) AT the branch tip,
+   the verdict is `closed-grace` (a warning) for `CLOSED_GRACE_H=24` hours after the close, and then:
+   - `closed-tracked` (a warning) while an open issue labelled `ci/dev-ledger-reconcile` and
+     `action-required`, titled `[ci/dev-ledger-reconcile] PR #<N> …`, exists for that pull request;
+   - `closed` (blocking, with a Sentry event on the scheduled surface) when no such issue is open.
+
+   The evidence is bound to the commit (`head.sha` == branch tip), never the branch name, so a
+   re-pushed or recreated branch is not condemned by an old PR. A closed holder is decided before the
+   stale tiers run. A pull request that MERGED at the tip is never `closed`; its rows fall through to
+   the stale and orphan tiers. Unreconciled closed rows are never silent: each is either an open issue
+   plus a Sentry event from every 6-hourly scheduled probe run, or main red.
+2. **The classifier reads GitHub state, fail-closed.** `classify-missing` calls
+   `GET /repos/{repo}/pulls?head=…` with the job's `GITHUB_TOKEN` and `pull-requests: read`, only for
+   fresh owner branches (a probe with no fresh candidate makes no call), memoised per run, plus one
+   listing of open issues per run for the `closed-tracked` check.
+   - **Per-run API cost:** one pull-request listing per unique fresh holder branch, plus one issue
+     listing.
+   - **Deadline:** the probe bounds the call with `timeout -k 5 240` (240 s, raised from 90 s), and the
+     classifier stops retrying against an in-process deadline under that bound, so a slow API lands on
+     `transient`, not on the kill.
+   - **Failure classes (all exit 2, reported by the probe as UNCLASSIFIED, blocking):** a 403 or 429
+     that says the rate limit is exhausted (`x-ratelimit-remaining: 0` or a "rate limit" body) is
+     `transient`; any other 401/403/404 is `config` (naming the status); 5xx and network failures are
+     retried within the deadline, then `transient`. A 200 whose objects lack `state`, `head.sha` or a
+     numeric `number`, or a listing that fills the 100-item page, fails closed instead of reading as
+     "no pull request". A failed issue lookup is UNCLASSIFIED too, never a `closed-tracked` warning.
 3. **DC-1: a CI path writes to the shared DEV ledger and schema, never prd.** `dev-ledger-reconcile.yml`
    runs `apps/web-platform/scripts/dev-ledger-reconcile.sh`, a writer kept in its own file (it sources the
    read-only guard as a library, so the guard `tenant-integration.yml` extracts stays write-free). For one
-   pull request it discards the rows that PR owns: in one `psql --single-transaction` unit it deletes each
-   ledger row by compare-and-set on filename AND `content_sha` (raising unless exactly one row matched) and
-   runs the paired `.down.sql` when there is one, newest `applied_at` first, under the dev-suite mutex
-   (proceeding only on `DEV_SUITE_MUTEX_ACQUIRED`), with `lock_timeout`/`statement_timeout`. It runs
-   automatically when a same-repo PR is closed without merging (`pull_request_target`, base-branch
-   workflow, no PR-head code executed) and on `workflow_dispatch` from `main` (dry run by default).
+   pull request it discards the rows that PR owns, in one `psql --single-transaction` unit under the
+   dev-suite mutex (proceeding only on `DEV_SUITE_MUTEX_ACQUIRED`), with `lock_timeout`/`statement_timeout`,
+   newest `applied_at` first. It runs automatically when a same-repo PR is closed without merging
+   (`pull_request_target`, base-branch workflow, no PR-head code executed) and on `workflow_dispatch`
+   from `main` (dry run by default). The writer job's timeout is 25 minutes.
+   - **The unit.** After the two `SET LOCAL` timeouts (so `lock_timeout` bounds the lock), its first
+     statement is `LOCK TABLE public._schema_migrations IN SHARE ROW EXCLUSIVE MODE` (a lock timeout,
+     `55P03`, is transient). A `DO` block then asserts that
+     `md5(string_agg(filename || content_sha || applied_at ORDER BY filename))` over the ledger equals
+     the snapshot the writer planned from, so a ledger that changed between plan and write aborts the
+     unit. Each ledger row is deleted by compare-and-set on filename AND `content_sha` (raising unless
+     exactly one row matched), and the paired `.down.sql` runs when there is one. Inside the mutex the
+     writer re-fetches the row owners and the holders' pull-request states before building the unit.
+     After `psql` it re-reads the ledger: each claimed (file, blob) must be gone and no other row
+     changed, or the run exits 1.
+   - **Server-side enforcement.** Each down body runs as `DO $t1$ BEGIN EXECUTE $t2$<body>$t2$; END $t1$`,
+     with random dollar-quote tags that do not occur in the body. Inside that wrapper the server itself
+     rejects transaction control and statements that cannot run in a transaction block, and the body
+     reaches psql only inside a dollar-quoted literal whose tag it does not contain. The python classifier (and the
+     backslash refusal) stay as advisory pre-checks that give an early, readable refusal: the classifier
+     is a mistake-guard, not a security control. Error positions the server reports reference the
+     wrapping `DO`, not the `.down.sql` file's own lines.
+   - **Which rows a run owns.** The writer runs the probe's own row classification over the missing
+     rows. The rows the classifier attributes to PR N as `closed`/`closed-grace` are a superset of the
+     rows the writer finds eligible, and the difference always files an issue: every attributed row
+     ends as discarded, or as `ledger-discard: held-by <file> <branch>`, or as
+     `ledger-discard: unreachable <file> reason=force-pushed|slug|no-history`. A row whose applied blob
+     was force-pushed away is never discarded blind.
+   - **Shared rows (`held-by`).** Another fresh holder of the same (file, blob) whose branch has an open
+     pull request or none protects the row, regardless of ancestry; a holder whose pull request closed
+     at its tip does not. So closing a stacked child PR leaves the rows it shares with its parent until
+     the parent closes.
+   - **Merged PRs** are refused: `ledger-discard: refused (pr=<N> reason=merged)`.
    - **Authorization boundary:** repo write access, the same boundary that already lets a PR's CI apply
-     its SQL to dev. Fork PRs are excluded (they never applied anything). An OPEN PR's rows can be
-     discarded only by its author (`github.triggering_actor`) and only for rows with a paired `.down.sql`.
+     its SQL to dev. Fork PRs are excluded (they never applied anything). Any user with write access can
+     close a same-repo PR and thereby trigger the discard of its rows, whoever authored it, and can
+     dispatch the workflow from `main`. An OPEN PR's rows can be discarded only by its author
+     (`github.triggering_actor`) and only for rows with a paired `.down.sql`.
    - **Why the PR's own `.down.sql` may run with the dev credential under `pull_request_target`:** it is
-     refused on any backslash byte (psql would run a meta-command such as `\!` from a `-f` file), checked
-     before any mutex or database contact; on transaction-control and non-transactional statements, matched
-     on a view with comments, strings and dollar-quoted bodies stripped; and it runs with `GH_TOKEN` unset.
-     A single wrapping `BEGIN`/`COMMIT` pair is normalized away. This is why the path is not a
-     `contributor` path in C4: forks are excluded, and same-repo authors already hold the credential
-     through PR CI.
+     fetched by blob id and hash-checked, runs inside the server-side wrapper above with `GH_TOKEN`,
+     `GITHUB_TOKEN` and `DOPPLER_TOKEN` unset, and is pre-checked for a backslash byte and, on a view with
+     comments, strings and dollar-quoted bodies stripped, for transaction-control and non-transactional
+     statements. A single wrapping `BEGIN`/`COMMIT` pair is normalized away. This is why the path is not
+     a `contributor` path in C4: every trigger (closing a same-repo PR, or a dispatch from `main`)
+     requires repo write access, forks are excluded, and every same-repo author already holds the dev
+     credential through PR CI.
    - **Dev only:** the workflow asserts the `dev_scheduled` Doppler config resolves to `environment=dev`
      and holds no `SUPABASE_ACCESS_TOKEN`, and the writer checks `DOPPLER_ENVIRONMENT=dev` in-process
      before any `psql`.
@@ -137,16 +184,25 @@ every file read as "not on origin/main" (#8606, fixed by anchoring both pathspec
    edited-after-apply migration stays "restore the applied body and ship a new migration". A CLOSED PR's
    row with no `.down.sql` is discarded ledger-only; its objects stay on dev, and the workflow files an
    `action-required` issue naming the residue.
-5. **Later-row safety.** A down body that uses `CASCADE` or redefines shared objects (`CREATE OR
-   REPLACE`, policies, grants, `ALTER FUNCTION`/`PROCEDURE`) is refused while the ledger holds any row
-   applied at or after this PR's earliest row, because it could drop another branch's objects or revert
-   main's later definition. `allow_later_rows` (dispatch only, never the close path) overrides after a dry
-   run lists those rows. Residual: detection is by `applied_at`, so an object an out-of-order apply created
-   before this PR's row and that depends on it is not seen.
+5. **Later-row safety.** Two refusal classes guard rows applied after this PR's:
+   - **later-row-sensitive:** a down body that uses `CASCADE` or redefines shared objects (`CREATE OR
+     REPLACE`, policies, grants, `ALTER FUNCTION`/`PROCEDURE`) is refused while the ledger holds any row
+     applied at or after this PR's earliest row, because it could drop another branch's objects or revert
+     main's later definition. `allow_later_rows` (dispatch only, never the close path) overrides after a
+     dry run lists those rows.
+   - **destructive-superseded:** a plain `DROP`, `ALTER … DROP`, `TRUNCATE`, `DELETE` or `UPDATE` is
+     refused only when a later row is a file on the base branch's tip. `allow_later_rows` overrides it
+     the same way (dispatch only, after a dry run).
+
+   Measured rate: 50 of the 95 `.down.sql` files on `origin/main` (`afaec5d6e5`) contain a
+   later-row-sensitive statement (`dev-ledger-reconcile.sh --scan-down` over each file extracted with
+   `git show`, 2026-09-24). The close path never overrides, so whenever later rows exist it refuses such
+   a file and files an issue; expect that often. Residual: detection is by `applied_at`, so
+   an object an out-of-order apply created before this PR's row and that depends on it is not seen.
 
 **Superseded sentences** (previous amendment, Decision 1 and Consequences): "It uses git only: a bare
 owner repo and one blobless fetch of origin's heads. No GitHub API, no new permissions." (now: git plus
-the `pull-requests: read` lookup above) and "Self-service reconcile is tracked in #8605." (now:
+the `pull-requests: read` lookups above) and "Self-service reconcile is tracked in #8605." (now:
 `dev-ledger-reconcile.yml`).
 
 ### Rejected alternatives (additions)
@@ -159,18 +215,32 @@ the `pull-requests: read` lookup above) and "Self-service reconcile is tracked i
   residue is disclosed and filed instead.
 - **A warning-only `closed` verdict with dispatch-only reconcile.** Leaves closed PRs' rows unowned
   indefinitely.
+- **Narrow the classifier so `closed` names only rows the writer would discard.** Rejected by the
+  #8642 review ruling in favour of the superset rule in Decision 3: rows the writer cannot discard stay
+  attributed and file an issue.
+- **The python classifier as the enforcement boundary.** A text classifier over SQL is a mistake-guard;
+  the server-side `EXECUTE` wrapping is the enforcement.
 - **Degrade a transient PR-state failure to an in-flight warning.** Contradicts the fail-closed
-  direction; one retry is used instead.
+  direction; bounded retries within the deadline are used instead.
 - **An audit table on dev.** A migration that would also land on prd; the PR comment, job summary and
   `action-required` issue carry the audit trail.
 
 ### Consequences
 
-- Closing a migration PR unmerged with its branch retained discards its dev rows within minutes. A
-  refused or failed close-time run files an `action-required` issue and turns blocking after 24 hours.
+- Closing a migration PR unmerged with its branch retained discards its dev rows within minutes, except
+  rows it refuses, holds (`held-by`) or cannot reach (`unreachable`); those file or update the
+  `action-required` issue, and its rows then read `closed-tracked` (a warning with a Sentry event each
+  scheduled probe run) while that issue is open. Closing the issue without reconciling turns them
+  `closed` (blocking) on the next probe run.
+- Any repo-write user who closes someone else's same-repo migration PR triggers the discard of its dev
+  rows.
 - A PR closed by a `GITHUB_TOKEN`-authenticated workflow fires no `pull_request_target` event and relies
   on the grace. A PR closed with "delete branch" reads `orphan` (blocking, no grace) until the close-time
-  run lands, as before, now bounded by minutes; the orphan line carries a `gh pr list` lookup hint.
-- The detection ceiling for a close-time run that never happened is about 30 hours (the 24-hour grace
-  plus the 6-hour probe cadence).
-- A GitHub API outage on an authoritative probe can red main while fresh owners exist (fail-closed).
+  run lands, as before, now bounded by minutes; the orphan line's lookup hint is
+  `git log --all --diff-filter=A --format='%h %D' -- <path>`.
+- Detection ceiling, re-derived for the warning downgrade: a closed row with no close-time run and no
+  open issue turns blocking within about 30 hours (the 24-hour grace plus the 6-hour probe cadence). A
+  row whose close-time run refused or failed has an open issue and stays a warning; if filing that issue
+  failed, the run is red and the row falls back to the same 30-hour ceiling. There is no silent state.
+- A GitHub API outage or exhausted rate limit on an authoritative probe can red main while fresh owners
+  exist (fail-closed).
