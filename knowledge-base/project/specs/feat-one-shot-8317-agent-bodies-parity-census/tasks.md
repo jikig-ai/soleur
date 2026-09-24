@@ -11,22 +11,22 @@ Plan: `knowledge-base/project/plans/2026-09-24-feat-harness-parity-census-agent-
   - [ ] Keep URLs and steps byte-identical.
 - [ ] 1.2 Rewrite the 3 relative links as in-document references.
 - [ ] 1.3 `git rm` the references file. Update the `discoverAgentPaths` comment.
-- [ ] 1.4 Run `scripts/sync-readme-counts.sh`, then `--check`. Set `### Operations (5)`. Change `nfr-register.md` and `grok-onboarding.md` to 67. Leave historical 68s alone.
+- [ ] 1.4 Run `scripts/sync-readme-counts.sh`, then `--check`. The script also rewrites `### Operations (5)`. Change `nfr-register.md` and `grok-onboarding.md` to 67. Leave historical 68s alone.
 
 ## 2. Tests first (RED)
 
-- [ ] 2.1 Create the 6 agent fixtures (`agents/<case>/cpo.md`) and `skills/self-name-under-skill.md`.
+- [ ] 2.1 Create the 7 agent fixtures (`agents/<case>/cpo.md`, including `harness-forms`) and `skills/self-name-under-skill.md`.
 - [ ] 2.2 In `harness-parity.test.ts`:
   - [ ] Extend `fixture()` to agents.
   - [ ] Add a test per fixture, with message assertions.
-  - [ ] Add a table-driven grammar test using inline strings (quoted, comment, double space, CRLF, no/unterminated frontmatter).
+  - [ ] Add a table-driven grammar test using inline strings (comment, double space, CRLF, no/unterminated frontmatter, frontmatter not on line 1).
   - [ ] Flip the plumbing assertion. Add the depth-5 positive and the anchored negative.
   - [ ] Pin `fixDoc` byte-identity.
   - [ ] Make the H5 loader recursive and files-only.
   - [ ] Make the no-orphan check a per-case literal.
 - [ ] 2.3 In `harness-parity-tree.test.ts`:
   - [ ] Add `OWN_AGENTS` to the admission proof, with a count of `EXPECTED_SOLEUR_AGENT_COUNT`.
-  - [ ] Add a per-doc "exactly one self-name" test with readable messages and a checked-count denominator.
+  - [ ] Add a per-doc "exactly one self-name" test as an offenders list, with readable messages and a checked-count denominator.
 - [ ] 2.4 In `c4-count-parity.test.sh`, add `derive_registry_agents` and row C8.
 - [ ] 2.5 Run the suites and record the RED set per test, as listed in Phase 2.5.
 

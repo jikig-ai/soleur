@@ -15,6 +15,39 @@ lane: cross-domain
 
 # feat(harness): widen the harness-parity census to agent bodies
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. **Passes:**
+
+- a plan-review panel of DHH, Kieran, code-simplicity, architecture, spec-flow and the CTO in devex mode;
+- a scoped advisor consult;
+- a test-design review;
+- a verify-the-negative sweep over 10 claims (all confirmed; the manifest-embeds-descriptions point was already in Phase 5.1);
+- the mechanical halts at 4.6, 4.7, 4.8 and 4.11: User-Brand Impact present, Observability 5-field schema, no PAT-shaped variables, `lint-guard-contract.py` green;
+- a rule-id and cited-path audit.
+
+### Key improvements
+
+1. **Self-name grammar.** The **first `^name:` line** decides, and a rejected line gets a dedicated message that tells the author not to canonicalize `name:`. This closes an author dead end and a YAML-vs-line-grammar split.
+2. **Grok stub descriptions are adapter-rendered** (colon registry ids become Grok spawn stems) in the generator this PR already runs. `agents.manifest.json` stays canonical.
+3. **The test surface is cut by about a third:**
+   - 7 fixture files plus one inline table;
+   - one per-doc self-name test (an offenders list), which replaces the registry-purity, policy and manifest-agreement tests;
+   - no c4 row-id or cross-file sentinel.
+
+   Two mutations no test caught are now pinned: `"agent"` honouring harness-forms, and frontmatter not on line 1.
+4. **Verification is runnable as written:**
+   - RED expectations recorded per phase (2.5, 3a, 3b);
+   - a captured unknown-ns baseline;
+   - an exact manifest-name diff;
+   - Grok discovery run through the existing tests;
+   - the full plugin battery instead of a hand-picked list.
+
+### New considerations discovered
+
+- **A phantom Claude subagent.** `agents/operations/references/service-deep-links.md` loads as a phantom subagent and a phantom docs card, which is why the public count read 68 against a registry of 67. It is folded in (inlined into its only consumer). The live count becomes 67 in README ×2, `plugins/soleur/README.md` (plus the Operations heading), `nfr-register.md`, `grok-onboarding.md`, and at the next release in `NEXT_PUBLIC_AGENT_COUNT`.
+- **The observability probe must be static.** Preflight Check 10's sandbox PATH has no `bun` on this workstation, so the probe is a `grep` over `harness-parity.ts` and the CI test is the liveness signal.
+
 ## Overview
 
 The spec has no valid `lane:`, so this plan defaults to `cross-domain` (TR2 fail-closed).
@@ -158,7 +191,7 @@ The harness-parity census (ADR-226) checks that every component reference in age
 1.4. Live counts:
 
 - Run `bash scripts/sync-readme-counts.sh`, then `--check`. Expected: `README.md` ×2 and `plugins/soleur/README.md` go from 68 to 67.
-- Hand-edit `plugins/soleur/README.md` `### Operations (6)` to 5, if the script does not.
+- The same script rewrites `plugins/soleur/README.md` `### Operations (6)` to 5 through its domain-header loop (verified in `scripts/sync-readme-counts.sh`).
 - Hand-edit `knowledge-base/engineering/architecture/nfr-register.md` ("65 domain agents" to 67).
 - Hand-edit `knowledge-base/engineering/grok-onboarding.md` ("**68** Soleur agents" to 67).
 - `reusable-release.yml` (`find plugins/soleur/agents -name "*.md"` → `NEXT_PUBLIC_AGENT_COUNT` → `apps/web-platform/components/connect-repo/ready-state.tsx`) will derive 67 at the next release without an edit. Note it in the PR body.
@@ -176,15 +209,19 @@ The harness-parity census (ADR-226) checks that every component reference in age
 | `quoted-then-bare` | `name: "cpo"`, then `name: cpo` | 0 SELF-NAME, 2 NONCANONICAL, the first with the dedicated message (the first `^name:` line decides) |
 | `in-body` | valid frontmatter, plus a body line `name: cpo` | 1 SELF-NAME + 1 NONCANONICAL (the body line) |
 | `description` | valid `name: cpo`, plus `description: "Use cpo for X."` | 1 SELF-NAME + 1 NONCANONICAL (the description) |
+| `harness-forms` | valid frontmatter, plus a `<!-- harness-forms:start -->` / `-->end` pair around a `/plan` line | 1 NONCANONICAL, 0 EXEMPT, and `fixDoc(…, "agent")` rewrites the line inside the region. This pins D1's "agent does not honour harness-forms" (test-design #1) |
 
 Plus `skills/self-name-under-skill.md`: the same frontmatter under the `skill` policy gives 1 NONCANONICAL, because the carve-out is scoped by policy.
 
-The remaining grammar shapes are **one table-driven test with inline strings**, needing no fixture files: `name: cpo # c`, `name:  cpo`, `name: cpo\r` (CRLF), no leading `---`, and no closing `---`. Inline strings keep the `\r` from being normalized by an editor or git (spec-flow P2-10). Each must give 0 SELF-NAME and 1 NONCANONICAL with the dedicated message. The classifier is called directly with `classifyDoc(text, index, "agent", "agents/x/cpo.md")`.
+The remaining grammar shapes are **one table-driven test with inline strings**, needing no fixture files: `name: cpo # c`, `name:  cpo`, `name: cpo\r` (CRLF), no leading `---`, no closing `---`, and frontmatter that does not start on line 1 (`# T\n---\nname: cpo\n---\n`, test-design #2). Inline strings keep the `\r` from being normalized by an editor or git (spec-flow P2-10). Each must give 0 SELF-NAME and 1 NONCANONICAL with the dedicated message. The classifier is called directly with `classifyDoc(text, index, "agent", "agents/x/cpo.md")`.
 
 2.2. **`plugins/soleur/test/harness-parity.test.ts`**:
 
 - `fixture()`: accept `dir: "skills" | "commands" | "agents"`. For agents, take `name` as `<case>/cpo.md`, derive the policy through `regionPolicyForPath("plugins/soleur/agents/product/cpo.md")` (never hand-assigned), and pass the display path `agents/<case>/cpo.md` to `classifyDoc`.
-- One test per fixture row, asserting counts **and** the message text for the dedicated-message rows.
+- One test per fixture row, asserting counts and messages:
+  - dedicated-message rows match the stable anchor (`/agent self-name must be exactly/`) and `not.toMatch(/write soleur:/)`;
+  - `wrong-leaf` asserts the message names `name: cpo` (the path stem, not the token);
+  - `second-name-line` asserts the second site carries the default `write soleur:product:cpo` hint, so the dedicated message stays scoped to the first `^name:` line.
 - Plumbing: flip `regionPolicyForPath("plugins/soleur/agents/product/cpo.md")` from `toBeUndefined()` to `toBe("agent")`. Add the depth-5 `plugins/soleur/agents/engineering/review/security-sentinel.md` → `"agent"` (exercises `**`) and the anchored-prefix negative `vendor/plugins/soleur/agents/legal/clo.md` → `undefined`.
 - **fixDoc pin:** `fixDoc(selfNameFixtureText, index, "agent") === selfNameFixtureText`, byte-identical.
 - **H5 loader:** for `agents`, walk recursively and keep **files only**. `readdirSync(…, {recursive: true})` also yields directory entries, which throw `EISDIR` (Kieran P1-2). Use policy `"agent"` and path `agents/<case>/cpo.md`. Add the RED agent fixtures to the expected red list.
@@ -193,7 +230,7 @@ The remaining grammar shapes are **one table-driven test with inline strings**, 
 2.3. **`plugins/soleur/test/harness-parity-tree.test.ts`**:
 
 - Admission proof: add the literal `const OWN_AGENTS = ":(glob)plugins/soleur/agents/**/*.md"`. Add `lsFiles(OWN_AGENTS)` to `expected` and to `admitted`. Add `expect(lsFiles(OWN_AGENTS).length).toBe(EXPECTED_SOLEUR_AGENT_COUNT)` with a failure message: "every .md under agents/ loads as a Claude subagent; agent-owned reference text belongs in the agent body".
-- New test, **"each agent doc carries exactly one self-name"**: for every doc whose path starts `plugins/soleur/agents/`, `counts["SELF-NAME"] === 1`. The message names the file and the rule (CTO DX-2), for example `<path>: 0 self-name — frontmatter must open on line 1 with --- and contain exactly "name: <stem>"`. This single assertion covers a non-agent `.md` dropped under `agents/` (0 self-names), a rewritten, quoted or missing `name:`, and a policy regression. It replaces the separate registry-purity, policy-resolution and manifest-agreement tests an earlier draft had (simplicity, DHH). The test also asserts that the number of agent docs it checked equals `EXPECTED_SOLEUR_AGENT_COUNT`, so a filter typo that matches nothing cannot pass vacuously.
+- New test, **"each agent doc carries exactly one self-name"**: collect every doc whose path starts `plugins/soleur/agents/` and whose `counts["SELF-NAME"] !== 1` into an offenders list, then `expect(offenders).toEqual([])`, the existing `missing` pattern, so one run names every failing doc (test-design #3d). The message names the file and the rule (CTO DX-2), for example `<path>: 0 self-name — frontmatter must open on line 1 with --- and contain exactly "name: <stem>"`. This single assertion covers a non-agent `.md` dropped under `agents/` (0 self-names), a rewritten, quoted or missing `name:`, and a policy regression. It replaces the separate registry-purity, policy-resolution and manifest-agreement tests an earlier draft had (simplicity, DHH). The test also asserts that the number of agent docs it checked equals `EXPECTED_SOLEUR_AGENT_COUNT`, so a filter typo that matches nothing cannot pass vacuously.
 - The bounded-EXEMPT test stays byte-identical (21 / go.md / 3 regions / `EXCLUDED_BY_PATH.size === 4`), which proves the carve-out did not use the exemption channel.
 
 2.4. **`plugins/soleur/test/c4-count-parity.test.sh`**: add `derive_registry_agents()`, which is `{ git -C "$REPO_ROOT" ls-files -- ':(glob)plugins/soleur/agents/**/*.md' || true; } | wc -l | tr -d ' '`. Add the row `"C8|plugin.agents|[0-9]+ domain agents across|num|derive_registry_agents|git ls-files ':(glob)plugins/soleur/agents/**/*.md' | wc -l"`.
@@ -202,7 +239,7 @@ The remaining grammar shapes are **one table-driven test with inline strings**, 
 
 - Every agents fixture test REDs with `no population glob matched`. This is a harness RED, not a classifier RED; Phase 3a converts it.
 - The tree admission proof REDs, because `docs.length` is short by 67.
-- The "exactly one self-name" test is vacuously GREEN: no agent docs are in the population yet.
+- The "exactly one self-name" test REDs on its checked-count denominator (0 agent docs checked, not 67).
 - C8 REDs: the prose says 65 and the derivation gives 67.
 
 ### Phase 3: Library change
@@ -265,7 +302,7 @@ Expected after 3b: the fixture suite is GREEN. The tree shows exactly 220 NONCAN
 6.1. Run the whole plugin battery, not a hand-picked list (spec-flow P1-6):
 
 - `bun test plugins/soleur`.
-- Every `plugins/soleur/test/*.test.sh`, including `c4-count-parity`, `c4-model-freshness`, `ticket-triage-clauses`, `ux-design-lead-*-guard`, `eval-gate`, and `agent-originality` (record the new top-pair score; `agent-finder` ↔ `functional-discovery` was about 41.7% against a 50% fail line).
+- Every `plugins/soleur/test/*.test.sh`, including `c4-count-parity`, `c4-model-freshness`, `ticket-triage-clauses`, `ux-design-lead-*-guard` and `agent-originality`. Also run `plugins/soleur/skills/eval-harness/test/eval-gate.test.sh` (record the new top-pair score; `agent-finder` ↔ `functional-discovery` was about 41.7% against a 50% fail line).
 - `bash scripts/lint-agents-enforcement-tags.test.sh`.
 - `cd apps/web-platform && npx vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts`.
 
@@ -296,7 +333,7 @@ Expected after 3b: the fixture suite is GREEN. The tree shows exactly 220 NONCAN
 
 ## Files to Create
 
-- `plugins/soleur/test/fixtures/harness-parity/agents/{self-name,wrong-leaf,second-name-line,quoted-then-bare,in-body,description}/cpo.md`
+- `plugins/soleur/test/fixtures/harness-parity/agents/{self-name,wrong-leaf,second-name-line,quoted-then-bare,in-body,description,harness-forms}/cpo.md`
 - `plugins/soleur/test/fixtures/harness-parity/skills/self-name-under-skill.md`
 
 ## Files to Delete
@@ -343,7 +380,43 @@ None.
 
 ## Observability
 
-Not required under the plan Phase 2.9 skip condition. No edited path sits under `apps/*/server/`, `apps/*/src/` or `apps/*/infra/`, and there is no new infrastructure. One edited script, `plugins/soleur/scripts/sync-grok-agent-compat.ts`, is a local generator with a `--check` drift mode already wired to CI, not a runtime surface. The deliverable is a CI gate. Its signal is the per-doc test names under the required `test` check, and `harness-parity-census.ts --report` run locally.
+The deliverable is a CI gate over plugin prose, plus one local generator. There is no runtime service, so this section describes the gate's own signal. Deepen-plan Phase 4.7 applies because `plugins/soleur/lib/*.ts` and `plugins/soleur/scripts/*.ts` are code-class paths.
+
+```yaml
+liveness_signal:
+  what: "the per-doc harness-parity tests (one named test per examined doc, 67 agent docs included) and the per-agent self-name test in harness-parity-tree.test.ts"
+  cadence: "every PR and every push to main (the bun test shard)"
+  alert_target: "the required `test` check on the PR (red check names the doc and the rule)"
+  configured_in: "plugins/soleur/test/harness-parity-tree.test.ts, run by .github/workflows/ci.yml"
+
+error_reporting:
+  destination: "CI job log + GitHub check annotation (no Sentry: build-time gate, no runtime surface)"
+  fail_loud: "`<path>:<line>: <site> — <harness form>; write <id>`, or the dedicated `agent self-name must be exactly \"name: <stem>\"` message"
+
+failure_modes:
+  - mode: "an agent doc introduces a non-canonical reference (bare sibling leaf, /plan, /soleur:x)"
+    detection: "the per-doc test for that agent goes red in CI"
+    alert_route: "the PR's required `test` check"
+  - mode: "an agent's own name: line is rewritten, quoted or removed"
+    detection: "the per-doc 'exactly one self-name' test goes red"
+    alert_route: "the PR's required `test` check"
+  - mode: "a non-agent .md is dropped under plugins/soleur/agents/ (the phantom-subagent class)"
+    detection: "the admission-proof count (!= EXPECTED_SOLEUR_AGENT_COUNT) and the per-doc self-name test go red"
+    alert_route: "the PR's required `test` check"
+  - mode: "Grok stub descriptions drift from the agent descriptions"
+    detection: "sync-grok-agent-compat.ts --check and grok-agent-discoverability.test.ts go red"
+    alert_route: "the PR's required `test` check"
+
+logs:
+  where: "GitHub Actions run log for the test shard"
+  retention: "GitHub Actions default log retention for the repo"
+
+discoverability_test:
+  command: "grep -l -e SELF-NAME plugins/soleur/lib/harness-parity.ts"
+  expected_output: "plugins/soleur/lib/harness-parity.ts"
+```
+
+The probe is static on purpose. Preflight Check 10 runs with `PATH=/usr/local/bin:/usr/bin:/bin`, and `bun` is not installed on that PATH on the operator workstation (it is mise-managed). A `bun …/harness-parity-census.ts --report` probe would therefore fail with rc 127 on a healthy tree. The grep proves the carve-out is wired into the census library. The CI test is the liveness signal for the property itself. Locally, the same command the census CLI's usage names, `bun plugins/soleur/scripts/harness-parity-census.ts --report`, prints the full picture.
 
 ## Architecture Decision (ADR/C4)
 
@@ -433,6 +506,8 @@ The anchor is the tree test's per-doc exactly-one assertion.
 | 11 | Post-remediation self-match: the carve-out also matches canonical ids that remediation wrote into descriptions | RED: per-doc count would be greater than 1 in 50 docs |
 | H1 | Harness: `fixture()` hand-assigns `"skill"` to agent fixtures | RED: the `self-name` must-PASS row |
 | H2 | Harness: the H5 loader omits `agents/`, or the no-orphan check reverts to `split("/")` | RED: the H5 red-list mismatch, plus the per-case literal no-orphan assertion |
+| 12 | `"agent"` made to honour harness-forms (`=== "command"` becomes `!== "skill"` in `classifyDoc` or `fixDoc`) | RED: the `harness-forms` fixture |
+| 13 | Frontmatter located as the first `---…---` pair anywhere, not from line 1 | RED: the "frontmatter not on line 1" table row |
 | H3 | Harness, must-PASS permitted variant: `name:` as the third frontmatter key (the live tree has 67 instances; `description` precedes `name` in none, but the rule is key-order independent), checked by one inline table row | PASS |
 
 **Anchor.** The per-doc `counts["SELF-NAME"] === 1` compares against a property of each live file, and its denominator is pinned to `EXPECTED_SOLEUR_AGENT_COUNT`, a constant outside `harness-parity.ts`. The bounded-EXEMPT pin is untouched.
