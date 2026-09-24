@@ -622,7 +622,7 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # It qualifies on the same shape as its #8597 sibling: the floor is `-lt` over `$CASES`,
 # incremented at the CALL SITES and never inside pass()/fail(); emitted by `printf` + `exit 1`,
 # never through the verdict helpers (ADR-193); an instrument self-test exits 1 before any row if
-# either helper fails to count; and the bound (`EXPECTED_CASES=100`) is a literal on the line
+# either helper fails to count; and the bound (`EXPECTED_CASES=256`) is a literal on the line
 # directly above its `if`, so the mutant is CONSTRUCTIBLE.
 # `apps/web-platform/scripts/anthropic-key-distinctness.test.sh` added by #8618 (#8505) — the
 # CI/prd Anthropic key fingerprint-distinctness suite, born floor-bearing in the same deferred
