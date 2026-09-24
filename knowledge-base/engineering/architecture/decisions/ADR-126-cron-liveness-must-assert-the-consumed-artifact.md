@@ -305,12 +305,15 @@ future observation shows a `no-changes` run for a Class A producer, that demotes
 
 Written down with numbers rather than papered over:
 
-1. **A deploy's drain timeout mid-spawn.** When `CRON_DRAIN_TIMEOUT` expires, the deploy kills an
-   in-flight `claude` (`op=cron-drain-timeout`, ADR-078), and Inngest then retries the step against
-   a workspace the handler's `finally` already deleted — the exact hazard `retryEligible` exists to
-   close. Outside this amendment's reach. *(Reworded 2026-09-24, #8726: this residual originally
-   named "`DeployInProgressError` mid-spawn", an error with no producer inside the guarded body —
-   the substrate's setup is its only producer — and one that could not have matched `instanceof`
+1. **A deploy's drain timeout mid-spawn.** When `CRON_DRAIN_TIMEOUT` expires the deploy stops the
+   whole container (`docker stop`, not only `claude`), so the in-flight `claude-eval` request never
+   settles and the handler's `finally` never runs. Inngest then retries that step on the new
+   container against the memoized `ephemeralRoot`, which still exists on the host volume but is
+   partly mutated — or is gone if `cron-workspace-gc` (dirs older than 60 minutes) swept it first.
+   A step-level retry into a stale workspace, not the handler-level replay `retryEligible` closes;
+   outside this amendment's reach. *(Reworded 2026-09-24, #8726: this residual originally named
+   "`DeployInProgressError` mid-spawn", an error with no producer inside the guarded body — the
+   substrate's setup is its only producer — and one that could not have matched `instanceof`
    across a step boundary anyway.)*
 2. **A throw inside the `sentry-heartbeat` step itself** is outside `retryEligible`'s reach.
 3. **The detector posts no check-in of its own**, so if it stops running its silence reads as healthy

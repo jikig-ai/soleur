@@ -15,6 +15,11 @@ brand_survival_threshold: aggregate pattern
 
 ## Enhancement Summary
 
+> **Amended at review (2026-09-24).** `throwIfDeployDeferred` shipped as `unwrapSetupVerdict`
+> (returns the workspace and accepts the pre-#8726 memoized shape); the verdict type is not generic;
+> a leak THROWN inside `drift-check` takes the leak path; the census walks `server/inngest/`
+> recursively and checks wiring. See the PR's review commits.
+
 **Deepened on:** 2026-09-24. **Plan review:** DHH, Kieran, code-simplicity, CTO (devex). **Deepen
 seats:** security-sentinel, observability-coverage-reviewer, test-design-reviewer,
 architecture-strategist, a verify-the-negative sweep (15 claims, 0 contradicted), Context7 (Inngest
@@ -520,7 +525,7 @@ failure modes are mislabelled operator alerts, not user data movement.
 liveness_signal:
   what: "Existing Sentry cron monitor per cron (postSentryHeartbeat via finalizeOutputAwareHeartbeat) and the drift guard's scheduled-github-app-drift-guard monitor; the deferral arm deliberately posts no check-in (ADR-078)"
   cadence: "per scheduled fire (weekly / twice-monthly per claude-eval cron; drift guard hourly)"
-  alert_target: "Sentry cron-monitor issue. Whether a monitor issue pages anyone depends on the monitor's alert-workflow binding, which is not in Terraform (issue-alerts.tf notes the anthropic-credit-probe monitor's detector routes to no workflow). This plan does not change that routing; tasks.md 4.7 reads the live binding for the 10 monitors and records it in the PR."
+  alert_target: "Sentry cron-monitor issue. Measured 2026-09-24 (read-only Sentry API): all 10 monitors are bound to workflow 1297055 `cron-monitor-failure` (enabled; email to issue owners, fallthrough ActiveMembers), so a failed or missed check-in emails the team. The binding is not in Terraform; this plan does not change it."
   configured_in: "apps/web-platform/server/inngest/functions/_cron-shared.ts (postSentryHeartbeat), apps/web-platform/infra/sentry/cron-monitors.tf"
 
 error_reporting:
@@ -535,13 +540,13 @@ failure_modes:
     detection: "layer 2: reportSilentFallback op=setup-ephemeral-workspace; Sentry monitor: ?status=error check-in (both unchanged)"
     alert_route: "Sentry cron-monitor issue (routing as in alert_target)"
   - mode: "Leak tripwire in drift-check"
-    detection: "op=leak-tripwire extra.step=drift-check; [security/leak-suspected] issue filed by issue-handling; ?status=error check-in; return failureMode leak_tripwire_fired"
+    detection: "layer 2 (pino -> Sentry mirror, reportSilentFallback(null) message path, tags feature/op=leak-tripwire, extra.step=drift-check); Sentry monitor ?status=error check-in (scheduled-github-app-drift-guard -> workflow 1297055); [security/leak-suspected] issue filed by issue-handling; return failureMode leak_tripwire_fired"
     alert_route: "GitHub issue labelled security/leak-suspected + priority/p1-high; no sentry_alert rule pages on op=leak-tripwire (stated, not added)"
   - mode: "Leak tripwire in issue-handling (issue body or comment)"
-    detection: "op=leak-tripwire extra.step=issue-handling; the same step files the [security/leak-suspected] issue; the leak email variant follows; ?status=error check-in"
+    detection: "layer 2 (pino -> Sentry mirror, op=leak-tripwire extra.step=issue-handling); Sentry monitor ?status=error check-in (workflow 1297055); the same step files the [security/leak-suspected] issue; the leak email variant follows"
     alert_route: "GitHub issue + ops email; no sentry_alert rule pages on op=leak-tripwire"
   - mode: "Leak tripwire in notify-ops-email (Resend body, subject or error body)"
-    detection: "op=leak-tripwire extra.step=notify-ops-email; no email is sent and no leak issue is filed (issue-handling already ran); ?status=error check-in; return leakDetected true"
+    detection: "layer 2 (pino -> Sentry mirror, op=leak-tripwire extra.step=notify-ops-email); Sentry monitor ?status=error check-in (workflow 1297055); no email is sent and no leak issue is filed (issue-handling already ran); return leakDetected true"
     alert_route: "Sentry issue stream only (op=leak-tripwire) plus the cron-monitor error check-in; no sentry_alert rule pages on it"
 
 logs:
@@ -549,7 +554,7 @@ logs:
   retention: "Better Stack plan retention"
 
 discoverability_test:
-  command: "rg -c -F 'throwIfDeployDeferred(verdict' apps/web-platform/server/inngest/functions/"
+  command: "rg -c -F 'unwrapSetupVerdict(verdict' apps/web-platform/server/inngest/functions/"
   expected_output: "cron-growth-audit.ts:1"
 ```
 
