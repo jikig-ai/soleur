@@ -185,6 +185,7 @@ describe("deriveTodayCardState (AC11)", () => {
       "anthropic_request_rejected",
       "leader_max_turns_exceeded",
       "leader_response_truncated",
+      "leader_refused",
       "leader_tool_invalid",
       "leader_class_disabled",
       "cancelled_by_operator",

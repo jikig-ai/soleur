@@ -38,6 +38,15 @@ The spec has no valid `lane:` (there is no `spec.md` for this one-shot branch), 
 - The `audit_byok_use` cost rows round to whole cents per turn. With caching, more sub-0.5¢ turns will be written as 0¢. This is pre-existing and negligible, and it is out of scope. It is not filed: it is a rounding property of the existing writer, with no user-visible consequence at current spend.
 - A research agent read the docs as "automatic caching does not consume a slot". The same docs' own 400 condition, "automatic caching with 4 existing explicit breakpoints", only makes sense if it does, and the claim is stated explicitly in the claude-api reference. The plan counts it as a slot, which is conservative: Guard 1's total of 2 holds either way.
 
+## Review Addendum — 2026-09-24
+
+The 11-agent review changed four things this plan specified. The sections below keep the original text as the record.
+
+- **One classifier for the live error.** `isDeterministicRejection` and the widened `classifyAnthropicOrLeaseError` are replaced by `classifyLiveRejection` (transient set `TRANSIENT_4XX = {408, 409, 429}` defined once). `classifyAnthropicOrLeaseError` is back to `main`'s shape, because in production it only ever sees a StepError.
+- **Founder-account 400s.** A 400 for an exhausted credit balance (`isAnthropicCreditExhausted`) or the founder's own spend cap maps to `byok_lease_unavailable`, not `anthropic_request_rejected`. Five reviewers found it; the repo's own credit-probe records that incident as HTTP 400.
+- **Unhandled `stop_reason`.** Any stop other than `end_turn`/`tool_use` is now terminal: `refusal` → new reason `leader_refused`, anything else → `leader_response_truncated`. Before, it appended an assistant message with no user turn after it, and the next request 400ed, which this change would otherwise have labelled "request rejected".
+- **Harness.** `makeRetryingStep` always serializes the escaping error the way Inngest does; the `serializeThrow` option is gone. The rejection carries a constant tag (`kind: "turn_rejection"`).
+
 ## Overview
 
 The BYOK leader loop in `apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts`
@@ -97,7 +106,7 @@ The main reason for this change is correctness: P1 fixes a deterministic 400 on 
 
   In dollars that is a fraction of a cent up to ~3¢ per spawn. Output cost is unchanged.
 - **`cache_read_input_tokens` = 0 is expected in several cases:** for `engineering.pr_review_pending`, for `engineering.ci_failed`, and for both Haiku classes (minimum 4,096). It is not a failure signal there.
-- **The write premium.** A call pays the 1.25x write premium without ever reading it back whenever the first call that clears the minimum is also the last call. That happens on a 1-call spawn, or when the prompt first crosses 1,024 tokens on the final turn. So "≥ 2 calls" is **not** the break-even rule. Break-even needs at least one call *after* the first cacheable one. The loss in those cases is under $0.001 per spawn.
+- **The write premium.** A call pays the 1.25x write premium without ever reading it back whenever the first call that clears the minimum is also the last call. That happens on a 1-call spawn, or when the prompt first crosses 1,024 tokens on the final turn. So "≥ 2 calls" is **not** the break-even rule. Break-even needs at least one call *after* the first cacheable one. The loss in those cases is bounded by one turn's new tokens at the 0.25x premium: about $0.003 per spawn at most, when a `cve_alert` blob of up to `LEADER_MAX_TOKENS` output tokens lands on the final turn (performance review, 2026-09-24).
 
 Measured after deploy with the verdict query in `## Success Metrics`, grouped by model.
 
@@ -261,7 +270,7 @@ None. The breakpoint tests reuse the existing leader-loop harness, whose ~400 li
 - A 1-hour TTL, intermediate lookback breakpoints, or cache pre-warming (see the Cut List).
 - Correct labelling of a *transient* failure that survives all 3 retries. A 429 or lease `subscription_limit` still reads "Anthropic API timeout" after the Inngest round-trip. That is today's behavior; every transient reason tells the founder to try again, and fixing it would need an error-borne carrier (see Phase 2, Known residual).
 - Returning other deterministic lease failures: `ByokLeaseError("decrypt_failed")` and `subscription_limit` are still thrown and retried 3 times. They cost nothing and are outside this plan's scope. This is the stated exception to "deterministic means returned".
-- A distinct "credit balance too low" reason. That arrives as a 400 `invalid_request_error` and will read as "rejected". See Sharp Edges.
+- A distinct "credit balance too low" reason. *(Superseded by the review addendum: the 400 for an exhausted credit balance or spend cap now classifies as `byok_lease_unavailable`.)*
 
 ## Technical Considerations
 
@@ -551,7 +560,7 @@ Run with: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/in
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `soleur:work`.
 - `@anthropic-ai/sdk` is `vi.mock`ed in the leader-loop test file (a default-export class only), so `Anthropic.APIError` and its subclasses are **not** available from the mocked module. Synthesize `{status, message}` errors, and never use `instanceof Anthropic.APIError` in the production code either: under the mock it throws a TypeError. Detect deterministic failures by a numeric `status` and by `name === "MissingByokKeyError"`. That class sets `this.name`, and the live error is read in-step, before any serialization.
 - The Anthropic SDK's error `.name` is `"Error"` for every class (measured). After Inngest serialization, every custom `name` becomes `"Error"` and `status` is dropped, though string `cause` survives (measured). Never route a decision that crosses the step boundary on an error's `name` or `status`. Return it from the step. Two earlier drafts of this plan were each falsified by this, one carrying the verdict in a custom-named error and one in a message tag.
-- A founder whose Anthropic account has a billing problem gets a 402 `billing_error`, which maps to `byok_lease_unavailable` ("Verify your API key in Settings → BYOK"). That is actionable, if imprecise. If an exhausted balance ever arrives as a 400 `invalid_request_error` (older accounts), it reads "Anthropic rejected this request… CTO has been notified": honest, but not actionable for the founder. Noted rather than special-cased. Revisit if the pino dead-letter lines show it.
+- A founder whose Anthropic account has a billing problem gets a 402 `billing_error`, which maps to `byok_lease_unavailable` ("Verify your API key in Settings → BYOK"). That is actionable, if imprecise. If an exhausted balance ever arrives as a 400 `invalid_request_error` (older accounts), it reads "Anthropic rejected this request… CTO has been notified": honest, but not actionable for the founder. Noted rather than special-cased. Revisit if the pino dead-letter lines show it. *(Superseded by the review addendum: the 400 case is now special-cased.)*
 - Do not add a marker to the first user message "to cache the PR diff". Automatic caching already covers it, and an explicit marker there would be a third slot for no gain.
 
 ## References & Research

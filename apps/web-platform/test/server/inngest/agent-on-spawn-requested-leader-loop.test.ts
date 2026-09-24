@@ -303,13 +303,10 @@ function makeStep(opts?: { seedMemo?: Map<string, unknown> }): MockStep {
 
 // Like makeStep, but re-invokes a throwing callback up to `retries` more times,
 // the way Inngest's `retries: 3` does (makeStep memoizes only on success, so a
-// re-invocation re-runs the callback). With `serializeThrow`, the error that
-// finally escapes is rebuilt the way it survives Inngest's StepError round-trip:
-// `message`, `stack` and `cause` are kept; `status` and a custom `name` are not.
-function makeRetryingStep(opts: {
-  retries: number;
-  serializeThrow?: boolean;
-}): MockStep {
+// re-invocation re-runs the callback). The error that finally escapes is
+// rebuilt the way it survives Inngest's StepError round-trip: `message`,
+// `stack` and a string `cause` are kept; `status` and a custom `name` are not.
+function makeRetryingStep(opts: { retries: number }): MockStep {
   const calls: { name: string }[] = [];
   const memoized = new Map<string, unknown>();
   return {
@@ -328,23 +325,25 @@ function makeRetryingStep(opts: {
           lastErr = err;
         }
       }
-      if (opts.serializeThrow) {
-        const e = lastErr as Error & { cause?: unknown };
-        throw Object.assign(new Error(e.message), {
-          cause: e.cause,
-          stack: e.stack,
-        });
-      }
-      throw lastErr;
+      const e = lastErr as Error & { cause?: unknown };
+      throw Object.assign(new Error(e.message), {
+        cause: e.cause,
+        stack: e.stack,
+      });
     },
   };
 }
 
 // The SDK is vi.mock'ed, so its error classes are unavailable: synthesize the
 // fields production reads (`status`, message prefix).
-function apiError(status: number): Error & { status: number } {
+function apiError(
+  status: number,
+  message = "synthetic",
+): Error & { status: number } {
   return Object.assign(
-    new Error(`${status} {"type":"error","error":{"type":"x","message":"synthetic"}}`),
+    new Error(
+      `${status} {"type":"error","error":{"type":"x","message":"${message}"}}`,
+    ),
     { status },
   );
 }
@@ -461,6 +460,7 @@ beforeEach(() => {
   // vitest 4: mockReset restores the original implementation, so a per-case
   // mockRejectedValue cannot leak into the next test.
   getRestApiKeySpy.mockReset();
+  persistTurnCostAwaitableSpy.mockReset();
 });
 
 // --- Tests ------------------------------------------------------------------
@@ -958,7 +958,7 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     });
   });
 
-  it("AC10 anthropic_rate_limited: SDK 429 error → persist failure (no retry)", async () => {
+  it("AC10 anthropic_rate_limited: an in-process SDK 429 error classifies as rate-limited", async () => {
     anthropicCreateSpy.mockRejectedValueOnce(
       Object.assign(new Error("Rate limited"), { status: 429 }),
     );
@@ -1311,6 +1311,49 @@ describe("Guard 1 — leader-loop cache breakpoints (ADR-042 §I5)", () => {
   });
 });
 
+// --- Guard 1b: the cached prefix is byte-stable across turns ------------------
+
+describe("Guard 1 — the cached prefix is byte-stable across turns (ADR-042 §I5)", () => {
+  it("system, tools and every earlier message are unchanged on each later turn", async () => {
+    const toolTurn = () =>
+      endTurnResponse({
+        tools: [
+          {
+            name: "createComment",
+            input: { owner: "acme", repo: "repo", issue_number: 7, body: "ok" },
+          },
+        ],
+      });
+    const responses = [toolTurn(), toolTurn(), endTurnResponse()];
+    const captured: CreateParams[] = [];
+    anthropicCreateSpy.mockImplementation(async (p: CreateParams) => {
+      captured.push(structuredClone(p));
+      return responses.shift();
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(captured).toHaveLength(3);
+    for (let i = 1; i < captured.length; i++) {
+      const prev = captured[i - 1];
+      const cur = captured[i];
+      // Anything that varies per turn in this prefix breaks the cache on
+      // every call, which is the change's whole point.
+      expect(JSON.stringify(cur.system)).toBe(JSON.stringify(prev.system));
+      expect(JSON.stringify(cur.tools)).toBe(JSON.stringify(prev.tools));
+      expect(cur.messages.length).toBeGreaterThan(prev.messages.length);
+      expect(cur.messages.slice(0, prev.messages.length)).toEqual(
+        prev.messages,
+      );
+    }
+  });
+});
+
 // --- Guard 2: deterministic API rejections are returned, not retried --------
 
 describe("Guard 2 — deterministic rejections are returned from the step (ADR-042 §I1)", () => {
@@ -1333,17 +1376,20 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     );
   }
 
-  it("400 → anthropic_request_rejected after exactly one create call; Sentry gets the SDK message", async () => {
-    anthropicCreateSpy.mockRejectedValue(apiError(400));
+  it("400 → anthropic_request_rejected after one create call; Sentry gets the SDK message and stack", async () => {
+    const original = apiError(400);
+    anthropicCreateSpy.mockRejectedValue(original);
     const result = await runWith(makeRetryingStep({ retries: 3 }));
     expect(result).toEqual({
       acknowledged: false,
       failureReason: "anthropic_request_rejected",
     });
     expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    expect(persistTurnCostAwaitableSpy).not.toHaveBeenCalled();
     const call = deadletterCall();
     expect(call).toBeDefined();
     expect((call![0] as Error).message.startsWith("400 ")).toBe(true);
+    expect((call![0] as Error).stack).toBe(original.stack);
     expect((call![1] as { extra: Record<string, unknown> }).extra).toMatchObject({
       status: 400,
       turn: 1,
@@ -1351,16 +1397,37 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     });
   });
 
-  it.each([401, 402, 403])(
-    "%i → byok_lease_unavailable after exactly one create call",
+  it.each([404, 413, 422])(
+    "%i → anthropic_request_rejected after one create call",
     async (status) => {
       anthropicCreateSpy.mockRejectedValue(apiError(status));
+      const result = await runWith(makeRetryingStep({ retries: 3 }));
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "anthropic_request_rejected",
+      });
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    [401, "invalid x-api-key"],
+    [402, "billing"],
+    [403, "permission"],
+    // The founder's account, reported as 400 invalid_request_error.
+    [400, "Your credit balance is too low to access the Anthropic API."],
+    [400, "You have reached your specified API usage limits."],
+  ])(
+    "%i (%s) → byok_lease_unavailable after one create call",
+    async (status, message) => {
+      anthropicCreateSpy.mockRejectedValue(apiError(status, message));
       const result = await runWith(makeRetryingStep({ retries: 3 }));
       expect(result).toEqual({
         acknowledged: false,
         failureReason: "byok_lease_unavailable",
       });
       expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+      expect(persistTurnCostAwaitableSpy).not.toHaveBeenCalled();
     },
   );
 
@@ -1370,27 +1437,39 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
         name: "MissingByokKeyError",
       }),
     );
-    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    const step = makeRetryingStep({ retries: 3 });
+    const result = await runWith(step);
     expect(result).toEqual({
       acknowledged: false,
       failureReason: "byok_lease_unavailable",
     });
     expect(getRestApiKeySpy).toHaveBeenCalledTimes(1);
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
+    expect(
+      (step.memoized.get("turn-1-claude") as { status: unknown }).status,
+    ).toBeNull();
   });
 
-  it.each([
-    [429, "anthropic_rate_limited"],
-    [500, "anthropic_timeout"],
-    [408, "anthropic_timeout"],
-  ])("%i is transient: thrown, retried 3 times, then %s", async (status, reason) => {
-    anthropicCreateSpy.mockRejectedValue(apiError(status));
-    const result = await runWith(makeRetryingStep({ retries: 3 }));
-    expect(result).toEqual({ acknowledged: false, failureReason: reason });
-    expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
-  });
+  // Transient errors are thrown and retried. The step rebuilds the final error
+  // the way Inngest does, so `status` is gone by the time the handler
+  // classifies it: a 429 that survives every retry reads anthropic_timeout
+  // (the documented residual).
+  it.each([429, 500, 408, 409])(
+    "%i is transient: thrown, retried 3 times, then anthropic_timeout",
+    async (status) => {
+      anthropicCreateSpy.mockRejectedValue(apiError(status));
+      const step = makeRetryingStep({ retries: 3 });
+      const result = await runWith(step);
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "anthropic_timeout",
+      });
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
+      expect(step.memoized.has("turn-1-claude")).toBe(false);
+    },
+  );
 
-  it("a lease ByokLeaseError(fetch_failed) is still thrown and retried", async () => {
+  it("a lease ByokLeaseError(fetch_failed) is thrown, retried, and classified by its surviving cause", async () => {
     getRestApiKeySpy.mockRejectedValue(
       Object.assign(new Error("fetch failed"), {
         name: "ByokLeaseError",
@@ -1405,45 +1484,42 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     expect(getRestApiKeySpy).toHaveBeenCalledTimes(4);
   });
 
-  describe("after the StepError round-trip (status and custom name dropped)", () => {
-    it("429 that survives every retry reads anthropic_timeout (documented residual)", async () => {
-      anthropicCreateSpy.mockRejectedValue(apiError(429));
-      const result = await runWith(
-        makeRetryingStep({ retries: 3, serializeThrow: true }),
-      );
-      expect(result).toEqual({
-        acknowledged: false,
-        failureReason: "anthropic_timeout",
-      });
-    });
-
-    it("ByokLeaseError(fetch_failed) still classifies via the surviving cause", async () => {
-      getRestApiKeySpy.mockRejectedValue(
-        Object.assign(new Error("fetch failed"), {
-          name: "ByokLeaseError",
-          cause: "fetch_failed",
+  it("a rejection on turn 2 records turn 2, after turn 1's cost", async () => {
+    anthropicCreateSpy
+      .mockResolvedValueOnce(
+        endTurnResponse({
+          tools: [
+            {
+              name: "createComment",
+              input: { owner: "acme", repo: "repo", issue_number: 7, body: "ok" },
+            },
+          ],
         }),
-      );
-      const result = await runWith(
-        makeRetryingStep({ retries: 3, serializeThrow: true }),
-      );
-      expect(result).toEqual({
-        acknowledged: false,
-        failureReason: "byok_lease_unavailable",
-      });
-      expect(getRestApiKeySpy).toHaveBeenCalledTimes(4);
+      )
+      .mockRejectedValueOnce(apiError(400));
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "anthropic_request_rejected",
     });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(2);
+    expect(persistTurnCostAwaitableSpy).toHaveBeenCalledTimes(1);
+    expect(
+      (deadletterCall()![1] as { extra: Record<string, unknown> }).extra,
+    ).toMatchObject({ status: 400, turn: 2 });
+  });
 
-    it("400 is unaffected: the verdict never crosses the boundary as an error", async () => {
-      anthropicCreateSpy.mockRejectedValue(apiError(400));
-      const result = await runWith(
-        makeRetryingStep({ retries: 3, serializeThrow: true }),
-      );
-      expect(result).toEqual({
-        acknowledged: false,
-        failureReason: "anthropic_request_rejected",
-      });
-      expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+  it("an error after billing is never read as a rejection, even with a 4xx status", async () => {
+    anthropicCreateSpy.mockResolvedValue(endTurnResponse());
+    persistTurnCostAwaitableSpy.mockRejectedValue(
+      Object.assign(new Error("rpc failed"), { status: 400 }),
+    );
+    const step = makeRetryingStep({ retries: 3 });
+    const result = await runWith(step);
+    expect(step.memoized.has("turn-1-claude")).toBe(false);
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "anthropic_timeout",
     });
   });
 
@@ -1454,10 +1530,36 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     const memo = step.memoized.get("turn-1-claude") as Record<string, unknown>;
     expect(JSON.parse(JSON.stringify(memo))).toEqual(memo);
     expect(memo).toMatchObject({
+      kind: "turn_rejection",
       rejected: "anthropic_request_rejected",
       status: 400,
     });
     expect(String(memo.message).startsWith("400 ")).toBe(true);
     expect(typeof memo.stack).toBe("string");
+  });
+});
+
+// --- Terminal stop reasons ------------------------------------------------------
+
+describe("stop_reason other than end_turn/tool_use is terminal", () => {
+  it.each([
+    ["refusal", "leader_refused"],
+    ["model_context_window_exceeded", "leader_response_truncated"],
+    ["max_tokens", "leader_response_truncated"],
+  ])("%s → %s, with no further create call", async (stopReason, reason) => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: stopReason,
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: reason });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -25,6 +25,7 @@ export type FailureReason =
   | "anthropic_request_rejected"
   | "leader_max_turns_exceeded"
   | "leader_response_truncated"
+  | "leader_refused"
   | "leader_tool_invalid"
   | "leader_class_disabled"
   | "cancelled_by_operator"
@@ -49,7 +50,8 @@ export interface FailureReasonRow {
    *     manual review; cancelled_by_operator → user-initiated;
    *     leader_max_turns_exceeded → task refinement;
    *     leader_tool_invalid → CTO investigates;
-   *     anthropic_request_rejected → the same request fails the same way).
+   *     anthropic_request_rejected → the same request fails the same way;
+   *     leader_refused → the model declined the task).
    */
   retryEligible: boolean;
 }
@@ -109,7 +111,8 @@ export const FAILURE_REASON_COPY: Record<FailureReason, FailureReasonRow> = {
   anthropic_request_rejected: {
     // A deterministic 4xx (400/404/413/422…): the request Soleur built was
     // refused, so a retry would be refused too. Key/billing problems
-    // (401/402/403) map to byok_lease_unavailable instead.
+    // (401/402/403, and the 400s for an exhausted credit balance or the
+    // founder's own spend cap) map to byok_lease_unavailable instead.
     copy:
       "Anthropic rejected this request, so retrying won't help. CTO has been notified.",
     retryEligible: false,
@@ -122,6 +125,12 @@ export const FAILURE_REASON_COPY: Record<FailureReason, FailureReasonRow> = {
     copy:
       "Model response truncated (max_tokens). Retry usually works.",
     retryEligible: true,
+  },
+  leader_refused: {
+    // stop_reason=refusal: the model declined the task. Retrying the same
+    // task is refused the same way.
+    copy: "The agent declined this task. CTO has been notified.",
+    retryEligible: false,
   },
   leader_tool_invalid: {
     copy: "Agent tried an unauthorized action. CTO has been notified.",

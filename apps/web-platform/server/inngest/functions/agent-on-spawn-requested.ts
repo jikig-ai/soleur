@@ -41,6 +41,7 @@ import { createGitHubAppClient } from "@/server/github/app-client";
 import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import { reportSilentFallback } from "@/server/observability";
 import { runWithByokLease } from "@/server/byok-lease";
+import { isAnthropicCreditExhausted } from "@/server/anthropic-credit";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
 import { persistTurnCostAwaitable } from "@/server/cost-writer";
 import { notifyOfflineUser, isCostBreakerReason } from "@/server/notifications";
@@ -218,6 +219,8 @@ type FailureReason =
   | "anthropic_request_rejected"
   | "leader_max_turns_exceeded"
   | "leader_response_truncated"
+  // The model declined the task (stop_reason=refusal).
+  | "leader_refused"
   | "leader_tool_invalid"
   | "leader_class_disabled"
   // feat-l5-runaway-guard PR-A: spawn-entry pause gate + distinct
@@ -262,10 +265,19 @@ type AnthropicContentBlock = ToolUseBlock | MessageContentText | { type: string 
 // deterministic failure it returns instead of throwing. Plain JSON, so Inngest
 // memoizes it and never retries the step.
 interface TurnRejection {
-  rejected: FailureReason;
+  // A constant tag, so no field the API ever adds to a response can be read
+  // as a rejection.
+  kind: "turn_rejection";
+  rejected: NonNullable<ReturnType<typeof classifyLiveRejection>>;
   status: number | null;
   message: string;
   stack: string;
+}
+
+function isTurnRejection(
+  r: AnthropicTurnResult | TurnRejection,
+): r is TurnRejection {
+  return (r as { kind?: unknown }).kind === "turn_rejection";
 }
 
 interface AnthropicTurnResult {
@@ -686,9 +698,11 @@ export async function agentOnSpawnRequestedHandler({
                     type: "text",
                     text: leaderModule.systemPrompt,
                     // The single explicit marker. Tools render before system, so
-                    // this covers the tool definitions too. Do NOT add per-tool
-                    // markers: security.cve_alert has 5 tools, and 5 + 1 + 1
-                    // exceeds the 4-breakpoint cap (the request 400s).
+                    // it covers the tool definitions too; it is inert until
+                    // tools + system exceed the model's minimum cacheable length.
+                    // Do NOT add per-tool markers: with this marker and the
+                    // automatic one, 3 or more tools exceed the 4-breakpoint
+                    // cap and the request 400s.
                     cache_control: { type: "ephemeral" },
                   },
                 ],
@@ -700,16 +714,16 @@ export async function agentOnSpawnRequestedHandler({
               // memoizes a returned value and never retries it, while a thrown
               // error is retried 3 times and reaches the handler as a StepError
               // with `status` and custom `name` stripped (ADR-042 §I1).
-              if (isDeterministicRejection(err)) {
-                const status = (err as { status?: unknown }).status;
-                return {
-                  rejected: classifyAnthropicOrLeaseError(err),
-                  status: typeof status === "number" ? status : null,
-                  message: String((err as Error).message),
-                  stack: (err as Error).stack ?? "",
-                };
-              }
-              throw err;
+              const rejected = classifyLiveRejection(err);
+              if (rejected === null) throw err;
+              const status = (err as { status?: unknown }).status;
+              return {
+                kind: "turn_rejection",
+                rejected,
+                status: typeof status === "number" ? status : null,
+                message: String((err as Error).message),
+                stack: (err as Error).stack ?? "",
+              };
             }
 
             const usage = sdkResult.usage;
@@ -763,9 +777,10 @@ export async function agentOnSpawnRequestedHandler({
         actionClass,
         sourceRef,
         logger,
+        extra: { turn: n, model: leaderModule.model },
       });
     }
-    if ("rejected" in stepResult) {
+    if (isTurnRejection(stepResult)) {
       return persistFailure(step, {
         actionSendId,
         reason: stepResult.rejected,
@@ -783,17 +798,26 @@ export async function agentOnSpawnRequestedHandler({
     }
     const turnResult: AnthropicTurnResult = stepResult;
 
-    // Handle stop_reason: max_tokens / end_turn / tool_use.
-    if (turnResult.stop_reason === "max_tokens") {
+    // Handle stop_reason. Only end_turn and tool_use continue; any other stop
+    // is terminal here. Falling through would append an assistant message with
+    // no user turn after it, and the next request would 400 as a prefill.
+    if (
+      turnResult.stop_reason !== "end_turn" &&
+      turnResult.stop_reason !== "tool_use"
+    ) {
       return persistFailure(step, {
         actionSendId,
-        reason: "leader_response_truncated",
-        err: new Error(`stop_reason=max_tokens on turn ${n}`),
+        reason:
+          turnResult.stop_reason === "refusal"
+            ? "leader_refused"
+            : "leader_response_truncated",
+        err: new Error(`stop_reason=${turnResult.stop_reason} on turn ${n}`),
         founderId,
         messageId,
         actionClass,
         sourceRef,
         logger,
+        extra: { turn: n, model: leaderModule.model },
       });
     }
 
@@ -1152,26 +1176,45 @@ function tryParseSourceRef(sourceRef: string): ParsedSourceRef | null {
   return { owner: m[1], repo: m[2], number: parseInt(m[3], 10) };
 }
 
-function isClientErrorStatus(status: unknown): status is number {
-  return typeof status === "number" && status >= 400 && status < 500;
-}
+// 408, 409 and 429 are transient: the SDK retries them itself, and Inngest
+// retries whatever still fails. Every other 4xx fails the same way on retry.
+const TRANSIENT_4XX = new Set([408, 409, 429]);
 
-// Must be read on the LIVE error, inside the step: `status` and a custom `name`
-// do not survive Inngest's StepError serialization. Never `instanceof
-// Anthropic.APIError` — the leader-loop suite mocks the SDK without it.
-function isDeterministicRejection(err: unknown): boolean {
-  const status = (err as { status?: unknown } | null)?.status;
+// Classifies the LIVE error inside the `turn-${n}-claude` step. `status` and a
+// custom `name` do not survive Inngest's StepError serialization, so this is
+// the only place they can be read. Returns null for anything retryable, which
+// the step rethrows. Never `instanceof Anthropic.APIError`: the leader-loop
+// suite mocks the SDK without it.
+function classifyLiveRejection(
+  err: unknown,
+): "byok_lease_unavailable" | "anthropic_request_rejected" | null {
+  const { name, status, message } = (err ?? {}) as {
+    name?: unknown;
+    status?: unknown;
+    message?: unknown;
+  };
+  if (name === "MissingByokKeyError") return "byok_lease_unavailable";
+  if (typeof status !== "number" || status < 400 || status >= 500) return null;
+  if (TRANSIENT_4XX.has(status)) return null;
+  // The founder's account, not the request: an invalid key, billing, missing
+  // permission, an exhausted credit balance or the founder's own spend cap.
+  // The last two arrive as 400 invalid_request_error, not 402.
   if (
-    isClientErrorStatus(status) &&
-    status !== 408 &&
-    status !== 409 &&
-    status !== 429
+    status === 401 ||
+    status === 402 ||
+    status === 403 ||
+    isAnthropicCreditExhausted(String(message ?? "")) ||
+    /specified API usage limits/i.test(String(message ?? ""))
   ) {
-    return true;
+    return "byok_lease_unavailable";
   }
-  return (err as { name?: unknown } | null)?.name === "MissingByokKeyError";
+  // A request built wrong (400/404/413/422…).
+  return "anthropic_request_rejected";
 }
 
+// Classifies what reaches the handler's catch. In production that is an
+// Inngest StepError carrying only message, stack and a string `cause`, so the
+// `name`/`status` arms below fire only for errors thrown in-process.
 function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
   const name = (err as { name?: string } | null)?.name ?? "";
   const cause = (err as { cause?: string } | null)?.cause ?? "";
@@ -1183,15 +1226,6 @@ function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
     return "byok_lease_unavailable";
   }
   if (status === 429) return "anthropic_rate_limited";
-  // The founder's account: invalid key, billing failure, missing permission.
-  if (status === 401 || status === 402 || status === 403) {
-    return "byok_lease_unavailable";
-  }
-  // A request built wrong (400/404/413/422…). 408/409 are transient; the SDK
-  // retries them itself.
-  if (isClientErrorStatus(status) && status !== 408 && status !== 409) {
-    return "anthropic_request_rejected";
-  }
   if (
     name === "APIConnectionTimeoutError" ||
     name === "APIConnectionError" ||
