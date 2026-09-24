@@ -1021,49 +1021,97 @@ orphan_alerts=()          # Class B
 empty_action_rule_ids=()  # Class C
 class_a_count=0
 class_a_unrouted=0
-class_a_unrouted_slugs=()
+class_a_unrouted_labels=()
 
-# Class A — cron detectors whose failures route to no workflow.
-#
-# Since #8630 every cron detector is bound to the cron-monitor-failure
-# workflow (apps/web-platform/infra/sentry/cron-monitor-alerts.tf), so the
-# HEALTHY state is `class_a_count == 0`. Before it no cron detector routed
-# anywhere and the report printed only a count; now an unrouted detector is
-# the exception, and the exception is named per slug. A non-zero count is
-# either a pending route under the two-PR rule (the label sits in
-# `cron_monitor_alert_unrouted`) or live drift.
-#
-# The predicate (`workflowIds` empty) is unchanged. The slug comes from the
-# shared `cron_binding` above: structured slug first, `.name` as the fallback,
-# so a detector renamed in the UI is still listed under its monitor's slug.
+# Strip every character that could end or forge a workflow-command line (C0
+# controls incl. CR/LF, DEL, NEL, LS, PS) from text bound for a `::warning::`.
+warn_sanitize() {
+  local s
+  s=$(LC_ALL=C tr -d '\000-\037\177' <<<"$1")
+  s="${s//$'\xc2\x85'/}"; s="${s//$'\xe2\x80\xa8'/}"; s="${s//$'\xe2\x80\xa9'/}"
+  printf '%s' "$s"
+}
+
+# Class A — cron detectors whose failures route to no workflow. Healthy is
+# `class_a_count == 0`, so each unrouted detector is named: one label per
+# detector from the count's own predicate (its slug, else a placeholder, since
+# `.name` is free text bound for a `::warning::`). jq to a file + rc, as Class C.
 if (( detectors_evaluated == 1 )); then
   class_a_unrouted=$(jq '[ .[] | select(((.workflowIds // []) | length) == 0) ] | length' <<<"$cron_detectors")
   class_a_count="$class_a_unrouted"
-  while IFS= read -r slug; do
-    [[ -z "$slug" ]] && continue
-    class_a_unrouted_slugs+=("$slug")
-  done < <(jq -r "${jq_cron_binding}"' .[] | select(((.workflowIds // []) | length) == 0) | cron_binding' <<<"$cron_detectors" | sort -u)
+  class_a_out="$AUDIT_SCRATCH/class_a.txt"
+  if ! jq -r "${jq_cron_binding}"'
+    .[] | select(((.workflowIds // []) | length) == 0)
+    | ((.id // "") | tostring | gsub("[^A-Za-z0-9_-]"; "?")) as $id
+    | [cron_binding] as $b
+    | if ($b | length) == 0 then "<unresolved detector id=\($id)>"
+      else $b | map(if type == "string" and test("\\A[a-z0-9][a-z0-9-]*\\z") then .
+                    else "<non-slug detector id=\($id)>" end) | unique | join(",")
+      end
+  ' <<<"$cron_detectors" > "$class_a_out" 2>"$AUDIT_SCRATCH/class_a.err"; then
+    echo "ERROR: Class A extraction failed — the detectors payload did not match the expected shape. Refusing to report unrouted cron detectors from a failed extraction. jq said:" >&2
+    head -c 300 "$AUDIT_SCRATCH/class_a.err" >&2
+    exit 1
+  fi
+  while IFS= read -r label; do
+    class_a_unrouted_labels+=("$label")
+  done < "$class_a_out"
 fi
 
-# Muted monitors. Sentry mutes a monitor PER ENVIRONMENT
-# (`environments[].isMuted`), and a muted monitor sends nothing even when its
-# detector is routed, so Class A alone cannot answer "does a cron failure reach
-# anyone". Read from the monitors payload already fetched above; the top-level
-# `isMuted` is honoured too. Not an orphan class and not a verdict input: it is
-# reported and warned, never failed on.
+# Silent monitors — muted or disabled. A muted environment
+# (`environments[].isMuted`, or the monitor-level `isMuted`) or a
+# `status: disabled` monitor sends nothing even when its detector is routed,
+# so Class A alone cannot answer "does a cron failure reach anyone". Reported
+# and warned, never failed on. Extraction fails loud like Class C. Muted is
+# "unknown" when no monitor carries `isMuted` at all: a 0 there would be
+# indistinguishable from "checked, none muted".
+silent_out="$AUDIT_SCRATCH/silent_monitors.txt"
+if ! jq -r '
+  def envs: [ .environments[]? | select(type == "object") ];
+  ( [ .[] | select(has("isMuted") or any(envs[]; has("isMuted"))) ] | length | "carriers\t\(.)" ),
+  ( .[]
+    | (.isMuted == true) as $top
+    | [ envs[] | select(.isMuted == true) | (.name // "?" | tostring) ] as $menvs
+    | ($top or ($menvs | length) > 0) as $muted
+    | (.status == "disabled") as $disabled
+    | select($muted or $disabled)
+    | [ "row",
+        (.slug // "" | tostring | if . == "" then "?" else . end),
+        (if $muted then "1" else "0" end),
+        (if $disabled then "1" else "0" end),
+        (if $top or ($menvs | length) == 0 then "all environments" else ($menvs | join(", ")) end) ]
+    | @tsv )
+' <<<"$monitors_json" > "$silent_out" 2>"$AUDIT_SCRATCH/silent.err"; then
+  echo "ERROR: muted/disabled monitor extraction failed — the monitors payload did not match the expected shape. Refusing to report 'Muted monitors: 0' from a failed extraction. jq said:" >&2
+  head -c 300 "$AUDIT_SCRATCH/silent.err" >&2
+  exit 1
+fi
+muted_carriers=0
 muted_monitor_slugs=()
-muted_monitor_rows=()
-while IFS=$'\t' read -r slug envs; do
-  [[ -z "$slug" ]] && continue
-  muted_monitor_slugs+=("$slug")
-  printf -v muted_row -- '- `%s` — muted in: %s' "$slug" "$envs"
-  muted_monitor_rows+=("$muted_row")
-done < <(jq -r '
-  .[]
-  | select((.isMuted == true) or any(.environments[]?; .isMuted == true))
-  | [ .slug, ([ .environments[]? | select(.isMuted == true) | (.name // "?") ] | if length == 0 then "all environments" else join(", ") end) ]
-  | @tsv
-' <<<"$monitors_json" | sort -u)
+disabled_monitor_slugs=()
+silent_monitor_rows=()
+while IFS=$'\t' read -r kind slug is_muted is_disabled envs; do
+  if [[ "$kind" == "carriers" ]]; then
+    muted_carriers="$slug"
+    continue
+  fi
+  [[ "$slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || slug="<non-slug monitor>"
+  row_label=""
+  if [[ "$is_disabled" == "1" ]]; then
+    disabled_monitor_slugs+=("$slug")
+    row_label="disabled"
+  fi
+  if [[ "$is_muted" == "1" ]]; then
+    muted_monitor_slugs+=("$slug")
+    row_label="${row_label:+${row_label}; }muted in: ${envs}"
+  fi
+  printf -v silent_row -- '- `%s` — %s' "$slug" "$row_label"
+  silent_monitor_rows+=("$silent_row")
+done < "$silent_out"
+muted_unknown=0
+if (( muted_carriers == 0 )) && [[ "$(jq 'length' <<<"$monitors_json")" != "0" ]]; then
+  muted_unknown=1
+fi
 
 # Class B — a cron detector naming a monitor that does not exist live.
 # `cron_detector_slugs` is slug-first with a `.name` fallback (see the binding
@@ -1081,7 +1129,7 @@ if (( detectors_evaluated == 1 )); then
     [[ -z "$ref" ]] && continue
     if ! [[ "$ref" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
       class_b_discarded=$(( class_b_discarded + 1 ))
-      echo "::warning::cron detector binding '${ref}' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
+      echo "::warning::cron detector binding '$(warn_sanitize "$ref")' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
       continue
     fi
     if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
@@ -1409,25 +1457,30 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
     printf '_Class A (cron detector with no routing workflow):_\n\n'
     printf -- '- **%s** of **%s** cron detectors have an empty `workflowIds`.\n' \
       "$class_a_count" "$cron_detector_count"
-    printf -- '- Healthy state: **0** unrouted (every cron detector bound to the cron-monitor-failure workflow).\n'
+    printf -- '- Healthy state: **0** unrouted (every cron detector bound to a workflow).\n'
     if (( class_a_count > 0 )); then
-      printf -- '- A non-zero count means a cron detector is not bound to the cron-monitor-failure workflow: either a pending route under the two-PR rule, listed in `cron_monitor_alert_unrouted` in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf`, or live drift.\n\n'
+      printf -- '- A non-zero count means a cron detector is bound to no workflow: either a pending route under the two-PR rule, listed in `cron_monitor_alert_unrouted` in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf`, or live drift.\n\n'
       printf '_Unrouted cron detectors (by monitor slug):_\n\n'
-      for slug in "${class_a_unrouted_slugs[@]}"; do
-        printf -- '- `%s` — no routing workflow; a check-in failure for this monitor notifies no one.\n' "$slug"
+      for label in "${class_a_unrouted_labels[@]}"; do
+        printf -- '- `%s` — bound to no workflow; a check-in failure for this monitor notifies no one.\n' "$label"
       done
     fi
     printf '\n'
   fi
 
   # Printed on every run, detectors payload or not: it reads only the monitors
-  # payload. The count line is there at zero too, so "checked and none muted"
-  # is distinguishable from "not checked".
-  printf '_Muted monitors (a muted environment sends nothing, routed or not):_\n\n'
-  printf -- '- Muted monitors: **%s** (at least one environment with `isMuted: true`).\n' \
-    "${#muted_monitor_slugs[@]}"
-  if (( ${#muted_monitor_rows[@]} > 0 )); then
-    printf '%s\n' "${muted_monitor_rows[@]}"
+  # payload. The count lines are there at zero too, so "checked and none" is
+  # distinguishable from "not checked" (which prints **unknown**).
+  printf '_Silent monitors (muted or disabled: sends nothing, routed or not):_\n\n'
+  if (( muted_unknown == 1 )); then
+    printf -- '- Muted monitors: **unknown** (no monitor in the payload carries isMuted)\n'
+  else
+    printf -- '- Muted monitors: **%s** (monitor-level `isMuted: true`, or at least one environment with it).\n' \
+      "${#muted_monitor_slugs[@]}"
+  fi
+  printf -- '- Disabled monitors: **%s** (`status: disabled`).\n' "${#disabled_monitor_slugs[@]}"
+  if (( ${#silent_monitor_rows[@]} > 0 )); then
+    printf '%s\n' "${silent_monitor_rows[@]}"
   fi
   printf '\n'
 
@@ -1492,26 +1545,31 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
 
 echo "[ok] Wrote audit report: $out_file"
 
-# --- Routing warning (Class A + muted) ------------------------------------
-# ONE line, on stderr, OUTSIDE the report redirect like every other warning
-# here: the report is the Article 30 evidence artifact, this is a job-log
-# signal. It makes a pending route under the two-PR rule (or a muted monitor)
-# visible on every apply run, not only in a report nobody opens. Emitted
-# BEFORE the Class D gate, which exits, so a Class D failure cannot hide it.
-# Silent when both lists are empty: a warning on every healthy run is noise.
+# --- Routing warning (Class A + silent monitors) ---------------------------
+# ONE line on stderr, outside the report (the Article 30 evidence artifact):
+# a job-log signal on every apply run. It describes the state BEFORE this
+# run's apply — the audit runs ahead of `terraform plan`. Emitted before the
+# Class D gate, which exits, so a Class D failure cannot hide it. Gated on the
+# same count the report prints; silent when everything is routed and nothing
+# is muted, disabled, or unknown.
 routing_warn_parts=()
-if (( ${#class_a_unrouted_slugs[@]} > 0 )); then
-  routing_warn_parts+=("${#class_a_unrouted_slugs[@]} cron detector(s) not bound to the cron-monitor-failure workflow (healthy state is 0; a pending route under the two-PR rule or live drift): ${class_a_unrouted_slugs[*]}")
+if (( class_a_count > 0 )); then
+  routing_warn_parts+=("${class_a_count} cron detector(s) bound to no workflow (healthy state is 0, so this is a pending route under the two-PR rule or live drift): ${class_a_unrouted_labels[*]}")
 fi
-if (( ${#muted_monitor_slugs[@]} > 0 )); then
+if (( muted_unknown == 1 )); then
+  routing_warn_parts+=("muted monitors unknown (no monitor in the payload carries isMuted)")
+elif (( ${#muted_monitor_slugs[@]} > 0 )); then
   routing_warn_parts+=("${#muted_monitor_slugs[@]} monitor(s) muted in at least one environment (a muted monitor sends nothing): ${muted_monitor_slugs[*]}")
+fi
+if (( ${#disabled_monitor_slugs[@]} > 0 )); then
+  routing_warn_parts+=("${#disabled_monitor_slugs[@]} monitor(s) disabled (a disabled monitor sends nothing): ${disabled_monitor_slugs[*]}")
 fi
 if (( ${#routing_warn_parts[@]} > 0 )); then
   routing_warn="${routing_warn_parts[0]}"
-  if (( ${#routing_warn_parts[@]} > 1 )); then
-    routing_warn+="; ${routing_warn_parts[1]}"
-  fi
-  echo "::warning::Sentry cron routing: ${routing_warn}. See ${out_file}." >&2
+  for part in "${routing_warn_parts[@]:1}"; do
+    routing_warn+="; ${part}"
+  done
+  echo "::warning::$(warn_sanitize "Sentry cron routing: pre-apply state (before this run's apply): ${routing_warn}. See ${out_file}.")" >&2
 fi
 
 # --- Class D gate ---------------------------------------------------------
