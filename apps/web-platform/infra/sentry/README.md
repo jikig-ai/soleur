@@ -2,8 +2,9 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **33 `sentry_alert` rules** (33 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505. 31 are
-  fully Terraform-owned: `ignore_changes = [environment]` only, real
+- **34 `sentry_alert` rules** (34 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630. 32 are
+  fully Terraform-owned (31 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+  `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint.
 
@@ -38,6 +39,11 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
   `schedule:` block is re-enabled (currently manual-dispatch only).
+  **Routing (#8630):** every declared monitor is bound to the one
+  `sentry_alert.cron_monitor_failure` workflow in `cron-monitor-alerts.tf`, which
+  emails `issue_owners` → `ActiveMembers` at most once a day per monitor. A
+  **muted** monitor environment creates no issue, so it sends nothing even though
+  it is routed; mute cannot be set through the provider.
 - **4 uptime monitors** — vendor-hosted HTTP checks, auto-applied on the same
   push-to-main path.
 
@@ -172,6 +178,34 @@ grep -c '^resource "sentry_cron_monitor"' apps/web-platform/infra/sentry/*.tf
   `knowledge-base/engineering/architecture/diagrams/model.c4` (parity-gated by
   `plugins/soleur/test/c4-count-parity.test.sh`). Miss a ledger and a
   different gate goes red post-merge (#8586).
+
+### Adding or removing a cron monitor — the two-PR rule (#8630)
+
+A monitor's detector id does not exist until its first apply, and the
+projection floor in `tests/scripts/lib/sentry-alert-projection.jq` refuses to
+route an id that is not known at plan time (a same-PR route would turn `main`
+red after a complete apply). So routing a new monitor takes two PRs:
+
+1. **PR 1** declares the `sentry_cron_monitor` and adds
+   `<label> = "route after first apply (#N)"` to `local.cron_monitor_alert_unrouted`
+   in `cron-monitor-alerts.tf`, where `#N` is the monitor's tracking issue.
+2. **PR 2**, after PR 1's apply, moves the label into
+   `sentry_alert.cron_monitor_failure.monitor_ids` and regenerates
+   `alert-reference.json` from the `sentry-alert-reference-expected-<run>` CI
+   artifact (the `detectorIds` change).
+
+- **Removing a monitor** deletes its `monitor_ids` element in the same PR, and
+  that PR regenerates `alert-reference.json`. One apply is safe: the alert
+  depends on the monitor, so its update is ordered before the destroy.
+- **A monitor deleted outside Terraform** is recreated by the next plan with an
+  id that does not exist yet, and the projection floor then refuses every Sentry
+  plan. Recover by moving its label to `cron_monitor_alert_unrouted`, letting the
+  apply recreate it, and routing it again in the next PR.
+
+The routing-parity guard
+(`apps/web-platform/test/server/inngest/sentry-cron-monitor-routing-parity.test.ts`)
+fails any PR that leaves a declared monitor in neither list. Until PR 2 lands,
+the audit's Class A lists the pending monitor and annotates every apply run.
 
 ## Audit
 

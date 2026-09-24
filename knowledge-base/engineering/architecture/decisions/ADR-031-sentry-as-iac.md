@@ -1110,6 +1110,53 @@ now has a monitor.**
   (`ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md`), the
   2026-06-02 scope note under Option C.
 
+**Amendment (2026-09-24, #8630) — cron detectors route to one email workflow.**
+
+- **Verdict.** The pinned `jianyuan/sentry` 0.15.7 can express the link: `sentry_alert.monitor_ids`
+  is the workflow's `detectorIds`, and `sentry_cron_monitor.id` is the detector id. The evidence
+  (schema, provider source at the tag, the vendor's own example, and the getsentry paths for
+  hop 2 and the throttle) is M1-M12 in
+  `knowledge-base/project/plans/2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
+  Hop 2 was also confirmed on a live event (the #8630 measurement comment).
+- **Design.** One `sentry_alert.cron_monitor_failure`, in its own file `cron-monitor-alerts.tf`,
+  binds every declared cron monitor inline. It fires on `first_seen_event`, `reappeared_event`
+  and `regression_event`, with `frequency_minutes = 1440` (the throttle is per workflow, action
+  and issue group, so at most one email per monitor environment per day), and emails
+  `issue_owners` with fallthrough `ActiveMembers`. There is deliberately no
+  `event_frequency_count` re-page, so a persistent failure emails once, at its start. The
+  4 uptime detectors stay bound to no workflow; this amendment claims no route for them.
+- **The two-PR rule.** A monitor's detector id does not exist until its first apply. The
+  projection now refuses a `monitor_ids` element that is unknown at plan time, because the
+  post-apply fidelity probe would otherwise compare a live id against a `null` reference and turn
+  `main` red after a complete apply (the #8050 contract). A new monitor is declared in one PR with
+  an entry in `local.cron_monitor_alert_unrouted`, and routed in the next. A routing-parity guard
+  fails any declared monitor in neither list. The procedure is in the root README.
+- **Mute is not expressible.** The provider has no mute attribute, and Sentry auto-mutes a monitor
+  environment after a long open incident and never unmutes it. A muted environment creates no
+  issue, so a routed monitor can still page nobody. The audit's Class A now counts muted
+  environments and annotates every apply run; unmuting is a tracked operator write (#8704), not
+  a Terraform change.
+- **The monitor-binding gate becomes address-aware.** `scripts/sentry-monitor-binding-gate.sh`
+  still requires every other `sentry_alert` to bind exactly the issue-stream detector. The
+  cron-bound address set is a literal in the gate: `sentry_alert.cron_monitor_failure` must bind a
+  non-empty set of the plan's own `sentry_cron_monitor` ids, never the issue-stream detector and
+  never `null`.
+- **Exit criterion (b) of the #6612 amendment fires here, and is met by removal.** The sentry leg
+  of `scheduled-terraform-drift.yml` no longer posts to the shared `scheduled-terraform-drift`
+  slug (`if: always() && matrix.directory != 'apps/web-platform/infra/sentry'`), so its failure
+  cannot page and then auto-resolve on a sibling's `ok`. This is a coverage reduction for that
+  leg on the monitor channel: its failures reach the per-leg `[ERROR]` email, and a Sentry API
+  read failure also reaches `scheduled-sentry-alert-drift.yml`, which has its own slug. The other
+  two legs keep the shared slug; one leg's `error` followed by another's `ok` still resolves the
+  issue, but the email has already been sent. Rejected: a separate seat-billed
+  `scheduled-terraform-drift-sentry` monitor, and accepting the shared-slug behaviour.
+- **Rejected alternative.** Binding the issue-stream detector with an `issue_category = cron`
+  filter. It needs no per-monitor list, but it depends on a Sentry-side, automator-modifiable
+  option this repo cannot pin, it leaves Class A reporting every cron detector unrouted, and it
+  needs a new condition kind in the projection.
+- **Revisit when** pending route PRs pile up: a live-to-live `detectorIds` check in the fidelity
+  probe would retire the two-PR rule.
+
 ## Consequences
 
 ### Positive
