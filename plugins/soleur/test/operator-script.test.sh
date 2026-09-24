@@ -1322,6 +1322,50 @@ if [[ -r "$HETZNER_SRC" ]]; then
 fi
 
 # =============================================================================
+# Guard 9b — every gated-skill destructive script sources the library
+# =============================================================================
+#
+# Guard 9 (gack_check) only ever walks g3_sourcing_scripts -- scripts that
+# ALREADY source operator-script.sh -- so it is positive-detection: a brand
+# new script under one of the four gated skill directories that matches
+# DESTRUCTIVE_RE but forgets to source the library is entirely invisible to
+# it, with no partial signal (test-design-reviewer, review #8650).
+#
+# Deliberately scoped to the four skill directories this PR governs, not
+# repo-wide: DESTRUCTIVE_RE also matches ~104 other tracked .sh files
+# (apps/web-platform/infra/*, .github/scripts/*, unrelated plugin skills,
+# etc.), each belonging to an unrelated subsystem with its own safety
+# mechanism -- judging all of them is cross-cutting-refactor, tracked
+# separately (review #8650, CONCUR-adjudicated). This guard closes exactly
+# the regression this PR's own surface could reintroduce.
+gack2_check() {
+  local root="$1" v=0 f stripped dir
+  for dir in flag-create flag-delete flag-set-role user-set-role; do
+    [[ -d "$root/skills/$dir" ]] || continue
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      stripped="$(gack_prep "$f")"
+      grep -qE "$DESTRUCTIVE_RE" <<<"$stripped" || continue
+      grep -qF 'lib/operator-script.sh' "$f" || {
+        echo "gack2: ${f}: destructive call pattern with no operator-script.sh source"
+        v=1
+      }
+    done < <(find "$root/skills/$dir" -name '*.sh' ! -name '*.test.sh' 2>/dev/null | sort)
+  done
+  return "$v"
+}
+
+echo "== Guard 9b — every gated-skill destructive script sources the library =="
+assert_green gack2_check "live scripts" "$PLUGIN_ROOT"
+mkdir -p "$SB/gack2/skills/flag-create/scripts" "$SB/gack2/skills/flag-delete/scripts" \
+  "$SB/gack2/skills/flag-set-role/scripts" "$SB/gack2/skills/user-set-role/scripts"
+printf '#!/usr/bin/env bash\ncurl -sS -X POST "https://api.example.invalid/x/"\n' \
+  > "$SB/gack2/skills/flag-create/scripts/rogue.sh"
+assert_red gack2_check "gack2-M1 a new unsourced destructive script under a gated dir" "$SB/gack2"
+rm -f "$SB/gack2/skills/flag-create/scripts/rogue.sh"
+assert_green gack2_check "gack2 control: clean sandbox tree with no rogue script" "$SB/gack2"
+
+# =============================================================================
 # Guard 5' — prologue placement and library scope (Deepen-Plan Ruling 1)
 # =============================================================================
 #
@@ -1992,7 +2036,7 @@ fi
 # an attacker of the guard would neuter next. scripts/guard-vacuity-floor.test.sh
 # measures this shape across the repo and reddens on the fail()-routed form.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=142
+FLOOR=145
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"
