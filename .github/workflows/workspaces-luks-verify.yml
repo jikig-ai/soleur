@@ -47,6 +47,16 @@
 # operator SSH to seed the baseline by hand (hr-no-ssh-fallback-in-runbooks). Every normal verify
 # writes nothing.
 #
+# SECOND carve-out, the refresh_host_token input (#8632): the dispatch-only `refresh-host-token` job
+# rewrites ONE line of web-1's /etc/default/luks-monitor (DOPPLER_TOKEN=), then starts
+# luks-monitor.service to prove the daily probe reads WORKSPACES_LUKS_KEY with it. It exists because a
+# Terraform rotation of doppler_service_token.workspaces_luks revokes the token the host holds, and
+# the only other writer of that file (workspaces-cutover.sh) now refuses to run. It rides the cutover
+# SSH channel that ADR-119 §(e) grants for standing observability config on web-1, it is gated by the
+# workspaces-luks-cutover environment (a required reviewer), and it is a separate JOB so that gate
+# never touches the scheduled `verify` job. The host code is luks-monitor-token-refresh.sh; its gate
+# is workspaces-luks-host-token-refresh.test.sh.
+#
 # ---------------------------------------------------------------------------------------------
 # #6808 — SCHEDULED, AND THEREFORE ALARMED. The two land together, deliberately.
 #
@@ -137,6 +147,16 @@ on:
           so without it the operator-reaching path would first execute during a genuine incident.
           The committed test evaluates OUR MODEL of GitHub expression evaluation; this evaluates
           GitHub's. Fire once post-merge, then close the issue.
+        required: false
+        type: boolean
+        default: false
+      refresh_host_token:
+        description: >-
+          Dispatch-only (#8632). Runs the separate refresh-host-token job: writes the CURRENT
+          WORKSPACES_LUKS_BOOT_TOKEN into web-1's /etc/default/luks-monitor and requires
+          luks-monitor.service to start green with it. Use it once after a Terraform rotation of
+          doppler_service_token.workspaces_luks. Waits for approval on the workspaces-luks-cutover
+          environment. The verify job below runs as usual alongside it.
         required: false
         type: boolean
         default: false
@@ -962,3 +982,93 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+  # #8632 — deliver a rotated boot token to web-1's luks-monitor EnvironmentFile.
+  #
+  # A SEPARATE JOB, deliberately. `environment:` is job-scoped, and a required-reviewer gate on the
+  # `verify` job would park every 04:41 scheduled run waiting for approval, which is the silence the
+  # Sentry Crons monitor pages on. So the gate lives here, `verify` stays byte-identical in its
+  # triggers, and the two jobs share nothing but the checkout.
+  #
+  # Dispatch-only and input-gated: GitHub hands a schedule event no inputs, so the `if:` is false on
+  # every cron run. workspaces-luks-host-token-refresh.test.sh evaluates it over the event x input grid.
+  refresh-host-token:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_host_token }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: workspaces-luks-cutover
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: CF Tunnel SSH bridge
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+          server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
+
+      - name: Replace web-1's luks-monitor boot token and prove the daily probe with it
+        id: refresh
+        env:
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+          WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
+        run: |
+          set +e
+          set -uo pipefail
+          [[ -n "${WORKSPACES_LUKS_BOOT_TOKEN:-}" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN is not configured. Run the DEFAULT apply of apply-web-platform-infra.yml to publish it (#6649), then re-dispatch."; exit 1; }
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::the CF Tunnel SSH bridge did not export WEB_HOST_SSH, so web-1 is unreachable. Check the bridge step logs."; exit 1; }
+          # Bounded, like every SSH in the verify job: the bridge's own invocation carries no timeout.
+          WEB_HOST_SSH="${WEB_HOST_SSH} -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+
+          # shellcheck disable=SC2086
+          REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-token.XXXXXX')"
+          rc=$?
+          [[ "$rc" -eq 0 && -n "$REMOTE_DIR" ]] || { echo "::error::could not create the remote bundle dir on web-1 (ssh rc=$rc). rc 255 is transport or a host-key mismatch; see the verify job's host-key note."; exit 1; }
+          # shellcheck disable=SC2086
+          tar czf - -C "$INFRA_DIR" luks-monitor-token-refresh.sh \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'"
+          rc=$?
+          [[ "$rc" -eq 0 ]] || { echo "::error::failed to ship luks-monitor-token-refresh.sh to web-1 (rc=$rc)."; exit 1; }
+
+          # The token rides STDIN only. The host helper never prints it; it prints a sha256 prefix,
+          # which this step recomputes from the secret so a stale or wrong value cannot read green.
+          log="${RUNNER_TEMP:-/tmp}/luks-token-refresh.log"
+          # shellcheck disable=SC2086
+          printf '%s\n' "$WORKSPACES_LUKS_BOOT_TOKEN" \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "bash '$REMOTE_DIR/luks-monitor-token-refresh.sh'; rc=\$?; rm -rf '$REMOTE_DIR'; exit \$rc" \
+            > "$log" 2>&1
+          rc=$?
+          cat "$log"
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::the host refresh failed (rc=$rc). The reason is on the [luks-token-refresh] result=fail line above, and in Better Stack as SOLEUR_LUKS_HOST_TOKEN_REFRESH under the luks-monitor tag. Do NOT reboot web-1."
+            exit 1
+          fi
+          want="$(printf '%s' "$WORKSPACES_LUKS_BOOT_TOKEN" | sha256sum | cut -c1-16)"
+          # A FILE grep, never a pipe into grep -q: under pipefail an early match can SIGPIPE the producer.
+          if [[ "$(grep -cxF "[luks-token-refresh] result=ok token_sha256_16=${want}" "$log" || true)" -lt 1 ]]; then
+            echo "::error::web-1 did not confirm the CURRENT boot token (no ok line carrying this secret's hash). Treat the refresh as NOT done."
+            exit 1
+          fi
+          echo "web-1 now holds the current boot token, and luks-monitor.service ran green with it."
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
+            shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi

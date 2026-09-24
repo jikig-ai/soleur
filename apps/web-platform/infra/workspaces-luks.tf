@@ -125,10 +125,22 @@ resource "doppler_secret" "workspaces_luks_key" {
 #   `doppler run --config prd_workspaces_luks -- …`      → injects all ~116 + the key
 #   `doppler secrets download --config prd_workspaces_luks` → same, into a file
 # Neither this .tf nor its guard can see host-side code, so nothing here pins it.
+#
+# ROTATION (#8632) is a change to `name`. Every user-set attribute of this resource is ForceNew
+# in the pinned provider (DopplerHQ/doppler v1.21.2, resource_service_token.go), so a rename
+# plans as one replace: the apply deletes the old token, mints a new one, and rewrites
+# WORKSPACES_LUKS_BOOT_TOKEN below. The merge must carry `[ack-destroy]`. Web-1's copy in
+# /etc/default/luks-monitor is NOT updated by the apply; dispatch
+# `workspaces-luks-verify.yml -f refresh_host_token=true` afterwards
+# (luks-monitor-token-refresh.sh). Never `-replace random_password.workspaces_luks`: that
+# rotates the PASSPHRASE, not this token.
+#
+# Rotated 2026-09-24 from `workspaces-luks-boot` (created 2026-07-18) because retained web-1
+# snapshot 411798619 very likely holds that token.
 resource "doppler_service_token" "workspaces_luks" {
   project = "soleur"
   config  = "prd_workspaces_luks"
-  name    = "workspaces-luks-boot"
+  name    = "workspaces-luks-boot-2026-09-24"
   access  = "read"
 }
 

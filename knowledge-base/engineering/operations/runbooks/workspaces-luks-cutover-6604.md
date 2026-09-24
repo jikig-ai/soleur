@@ -243,6 +243,29 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    This dispatch re-verifies the durable run-keyed `canary_ok` header UUID against the live mapper
    immediately before `blkdiscard` (DP-7).
 
+## Rotating the boot token (#8632)
+
+The host reads `WORKSPACES_LUKS_KEY` with the `prd_workspaces_luks` service token in
+`/etc/default/luks-monitor`. Terraform owns that token (`doppler_service_token.workspaces_luks` in
+`apps/web-platform/infra/workspaces-luks.tf`), so a rotation is a code change, and the host copy is
+delivered separately:
+
+1. Change the token's `name` in `workspaces-luks.tf`. It is `ForceNew`, so the plan shows one
+   replace of the token and an update of `github_actions_secret.workspaces_luks_boot_token`. Nothing
+   else may change: never `-replace random_password.workspaces_luks`, which is the passphrase.
+2. Merge with `[ack-destroy]` on its own line. The apply revokes the old token. Until step 3, the
+   daily `luks-monitor.timer` fails with `doppler_unreachable`. It cannot lock the volume, because
+   nothing unlocks with this token at boot (crypttab uses keyfile `none`).
+3. Dispatch `workspaces-luks-verify.yml -f refresh_host_token=true` and approve the
+   `workspaces-luks-cutover` environment. The `refresh-host-token` job runs
+   `luks-monitor-token-refresh.sh` on web-1. It replaces only the `DOPPLER_TOKEN=` line, then
+   requires `luks-monitor.service` to start green with the new token. A failure prints
+   `[luks-token-refresh] result=fail reason=<reason>`, and Better Stack carries
+   `SOLEUR_LUKS_HOST_TOKEN_REFRESH` under the `luks-monitor` tag.
+4. Confirm that Doppler lists only the new token and that `scheduled-terraform-drift` is clean.
+
+Do not reboot web-1 as part of a rotation.
+
 ## Rollback
 
 `gh workflow run workspaces-luks-cutover.yml -f confirm=CUTOVER-WORKSPACES-LUKS -f dry_run=false -f rollback=true`
