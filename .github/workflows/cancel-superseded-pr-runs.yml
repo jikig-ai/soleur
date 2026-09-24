@@ -1,32 +1,25 @@
 name: Cancel superseded PR runs
 
 # Reaps this PR's still-queued / still-running workflow runs whose head SHA is no
-# longer the PR head, so a superseded run stops holding a hosted runner and, for
-# tenant-integration.yml, the dev-Supabase mutex the new head's required check waits
-# on. On 2026-09-23 an operator cancelled 17 such runs by hand (tenant-integration,
-# vendor-pin-verify, infra-validation, constraint-gates, cla-evidence, CLA Assistant
-# and CodeQL default-setup `dynamic` runs).
-#
-# SAME-SHA IS NEVER CANCELLED. tenant-integration.yml and vendor-pin-verify.yml keep
-# `cancel-in-progress: false` on purpose (#5585 R3): a group-keyed cancel also fires on
-# a SAME-SHA re-trigger (ready_for_review, a label) and fails the required gate on the
-# head SHA. This workflow keys on head_sha instead and never cancels a run whose head
-# SHA is the PR's current head, so those settings are unaffected and stay as they are.
-# Selection rules, race guards and the graceful-cancel-only rule live in the script
-# header; decision record: ADR-216, addendum 2026-09-24.
+# longer the PR head, freeing hosted runners and the dev-Supabase mutex for the new
+# head. It never cancels a run on the PR's current head SHA, so the
+# `cancel-in-progress: false` blocks in tenant-integration.yml / vendor-pin-verify.yml
+# (#5585 R3, a same-ref re-run race) are unaffected. Decision record: ADR-216,
+# addendum 2026-09-24; selection rules: the script header.
 #
 # SECURITY. This is a pull_request workflow holding `actions: write`, so the executed
-# script is checked out from the DEFAULT BRANCH, never from the PR: changing
-# .github/scripts/ needs no `workflows` permission, and a PR-controlled copy would hand
-# actions: write (cancel any run, dispatch workflows) to anyone who can push a branch.
-# There is deliberately no fallback to the PR's copy. PR-controlled values (head.ref)
-# reach the script only through env:, never inside run:.
+# script (and the fan-out ledger it reads) is checked out from the DEFAULT BRANCH, never
+# from the PR: changing .github/scripts/ needs no `workflows` permission, and a
+# PR-controlled copy would hand actions: write to anyone who can push a branch. Not
+# `base.sha`: on a stacked PR that is a branch a PR author can move. There is no fallback
+# to the PR's copy. This YAML itself still comes from the PR's merge ref (gated by the
+# `workflows` permission and CODEOWNERS), so the env contract below only ever grows: the
+# script treats new variables as optional and ignores unknown ones. PR-controlled values
+# (head.ref) reach the script only through env:, never inside run:.
 #
-# CONCURRENCY: per PR, cancel-in-progress, so an older reaper still queued is replaced
-# by the newer one. scripts/pr-fanout-ledger.txt carries this workflow's row with
-# cancel=yes; plugins/soleur/test/pr-fanout-ledger.test.sh reddens if that flag and
-# this block ever disagree. Fixture suite:
-# .github/scripts/test/test-cancel-superseded-pr-runs.sh (guard-script-fixture-tests).
+# scripts/pr-fanout-ledger.txt carries this workflow's row (cancel=yes);
+# plugins/soleur/test/pr-fanout-ledger.test.sh reddens if that flag and the concurrency
+# block below disagree. Fixture suite: .github/scripts/test/test-cancel-superseded-pr-runs.sh.
 
 on:
   pull_request:
@@ -58,7 +51,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.repository.default_branch }}
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            scripts/pr-fanout-ledger.txt
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Cancel this PR's runs on superseded head SHAs
         env:
