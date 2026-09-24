@@ -215,6 +215,12 @@ _EMIT_COMMANDS=0
 _AFFECTED_REQ=0        # --affected (or --print-affected-set) named explicitly
 _FULL_REQ=0            # --full named explicitly
 _PRINT_AFFECTED=0
+# Wall-clock bound for the enumerate family (#8761). Overridable by
+# SOLEUR_ENUM_DEADLINE_S (digits only, else the default holds); the deadline is
+# a safety bound on a seconds-scale walk, not a performance assertion — a clean
+# walk measures ~35s, a loaded host has taken >300s, so the default sits well
+# above either while still capping the multi-hour incident class.
+_ENUM_DEADLINE_S=900
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --enumerate)
@@ -284,6 +290,9 @@ Modes (local default is --affected; CI always runs the full battery):
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
+
+Enumerate modes die at a hard wall-clock deadline — SOLEUR_ENUM_DEADLINE_S
+seconds (default 900); a deleted-cwd walk exits 4, it never spins.
 USAGE
       exit 0
       ;;
@@ -558,6 +567,32 @@ if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
   echo "Stale files at the bare root diverge from HEAD and produce phantom test failures." >&2
   echo "Run from a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh" >&2
   exit 1
+fi
+
+# --- Deleted-checkout guard (#8761) -------------------------------------------
+# A run whose cwd is deleted — before launch or mid-walk — must fail fast with a
+# named error, never spin and never complete `exit 0` over a truncated receipt
+# set (two `test-all.sh` processes spun ~97% CPU for ~5h on a deleted worktree).
+# The probe is PATH-based on purpose: `[[ -e . ]]`/`[[ -d . ]]`/`stat .` stay
+# TRUE on a deleted-but-open cwd (fd-relative stat resolves the retained inode);
+# `[[ -d "$PWD" ]]` and `git rev-parse --show-toplevel` both fail. Emitted to
+# stderr AND stdout: an operator-protection signal must reach the harness's
+# captured stdout, and the receipt stream is prefix-keyed so a non-record line
+# is contract-tolerated. `exit` not `return`: the `_shard_selects` call sites
+# are `|| return 0`, so a return is swallowed as non-selection.
+_wt_missing_die() {
+  echo "ERROR: working tree missing (deleted worktree?)" >&2
+  echo "ERROR: working tree missing (deleted worktree?)"
+  exit 4
+}
+# NOT gated on `git rev-parse --show-toplevel`: a LIVE non-git cwd is a
+# legitimate degraded run (test-all-group-affected's undeterminable-diff arms
+# require fail-open there); only the path being gone is the refusal condition.
+if [[ ! -d "$PWD" ]]; then
+  _wt_missing_die
+fi
+if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0-9]+$ ]]; then
+  _ENUM_DEADLINE_S="$SOLEUR_ENUM_DEADLINE_S"
 fi
 
 # --- Contention instrumentation (#6789) ---
@@ -1186,6 +1221,18 @@ _shard_selects() {
     echo "       The manifest lookup is keyed on it — a missing argument is a programming" >&2
     echo "       error, not a suite to place." >&2
     exit 2
+  fi
+  # Deleted-cwd liveness (#8761): the single chokepoint every registration
+  # funnels through, in EVERY mode — a checkout deleted mid-walk is caught at
+  # the next dispatch rather than completing over a truncated receipt set.
+  [[ -d "$PWD" ]] || _wt_missing_die
+  # Enumerate-scoped graceful deadline: a walk past the bound declines further
+  # registrations by dying — the watchdog subshell remains the hard bound for a
+  # spin that never reaches this check.
+  if (( _ENUMERATE == 1 && SECONDS > _ENUM_DEADLINE_S )); then
+    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s) at registration ${_shard_ordinal}" >&2
+    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s) at registration ${_shard_ordinal}"
+    exit 4
   fi
   local label="$1"
   _shard_ordinal=$(( _shard_ordinal + 1 ))
@@ -2035,6 +2082,9 @@ _affected_derive() {
     local -a _queue=("$_suite_file") _seen=("$_suite_file")
     local _depth=0
     while (( ${#_queue[@]} > 0 && _depth < 8 )); do
+      # Deleted-cwd re-check inside the one multi-iteration site of a single
+      # registration's classify (#8761) — same probe as _shard_selects.
+      [[ -d "$PWD" ]] || _wt_missing_die
       _depth=$(( _depth + 1 ))
       local -a _next=()
       local _f
@@ -2825,6 +2875,41 @@ trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' E
 # verbatim in a comment takes the count above one and breaks every sandbox build before a single
 # assertion runs — which is why the prose above describes them instead of reproducing them.
 if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
+
+# --- Enumerate watchdog (#8761) ----------------------------------------------
+# The enumerate/print path answers to record-consumers and previously had NO
+# wall-clock bound: a run holding a deleted cwd spun ~97% CPU for ~5h on two
+# cores. The per-registration deadline in _shard_selects is the graceful first
+# line; this subshell is the HARD bound — it ends the run even when control
+# flow never advances (a pure-compute spin inside one loop iteration, the
+# un-located incident-site class). Pure bash (sleep + kill): timeout(1) is
+# absent on stock macOS; the bounded-wait precedent is lib/test-contention.sh's
+# _tc_queue_wait. Disarmed at the single enumerate terminator ([shard]
+# enumerate complete) before `trap - EXIT`.
+#
+# DISARM MUST KILL THE WATCHDOG'S CHILD TOO: the sleep inherits the runner's
+# stdout, so when a consumer reads the run through $( ) or a pipe, a killed
+# subshell whose sleep survives orphaned keeps the write end open and the
+# reader blocks for the rest of the deadline — the same "process gone, consumer
+# still waits" shape this issue is about. The subshell's TERM trap kills the
+# tracked sleep before exiting; `wait` gates the fire phase on a NATURAL sleep
+# exit, so a disarm TERM can never advance it to the kill.
+if (( _ENUMERATE == 1 )); then
+  _ENUM_TOP_PID=$$
+  (
+    _wd_sleep=""
+    trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
+    sleep "$_ENUM_DEADLINE_S" & _wd_sleep=$!
+    if wait "$_wd_sleep" 2>/dev/null; then
+      printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk\n' "$_ENUM_DEADLINE_S" >&2
+      printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk\n' "$_ENUM_DEADLINE_S"
+      kill -TERM "$_ENUM_TOP_PID" 2>/dev/null || true
+      sleep 5
+      kill -KILL "$_ENUM_TOP_PID" 2>/dev/null || true
+    fi
+  ) &
+  _ENUM_WD_PID=$!
+fi
 tc_acquire "test-all"
 
 # --- ARM THE REF-STORE STATE PREDICATE (#7917, AP-025) --------------------------------------
@@ -4452,6 +4537,13 @@ fi
 # clean enumerate pass.
 if (( _ENUMERATE == 1 )); then
   echo "[shard] enumerate complete: ${_shard_assigned} registration(s) assigned of ${_shard_ordinal} walked (k/N=${_SHARD_K}/${_SHARD_N})" >&2
+  # Disarm the #8761 watchdog: the walk finished inside the deadline. Guarded —
+  # an exit through a guard above skips arming; a killed sleeper is reaped by
+  # wait so it cannot linger as a zombie past this point.
+  if [[ -n "${_ENUM_WD_PID:-}" ]]; then
+    kill "$_ENUM_WD_PID" 2>/dev/null || true
+    wait "$_ENUM_WD_PID" 2>/dev/null || true
+  fi
   trap - EXIT
   exit 0
 fi
