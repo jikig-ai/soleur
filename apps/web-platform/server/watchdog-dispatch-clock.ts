@@ -41,16 +41,11 @@ const REPO_NAME = "soleur";
 export const POLL_MS = 30_000;
 // Jitter spreads the web hosts so the later one's read sees the earlier one's
 // run. JITTER_MAX_MS is part of the Sentry margin budget documented on the
-// monitors in apps/web-platform/infra/sentry/cron-monitors.tf (jitter 2.5 min +
-// poll 0.5 min + job runtime must fit inside checkin_margin_minutes).
+// monitors in apps/web-platform/infra/sentry/cron-monitors.tf (poll 0.5 min +
+// jitter 2 min + tick <= 1.5 min + job runtime must fit inside
+// checkin_margin_minutes).
 export const JITTER_MIN_MS = 30_000;
-export const JITTER_MAX_MS = 150_000;
-// A run created in a slot's final 2 minutes would fall inside the NEXT slot's
-// 60-s dedup tolerance and wrongly suppress it, so no tick starts that late.
-export const LATE_CUTOFF_MS = 2 * 60_000;
-// A run created up to 60 s before the slot start counts as this slot's run
-// (clock skew and GitHub's own schedule jitter around the boundary).
-export const SLOT_TOLERANCE_MS = 60_000;
+export const JITTER_MAX_MS = 120_000;
 export const TICK_DEADLINE_MS = 90_000;
 const TOKEN_MIN_LIFETIME_MS = 5 * 60_000;
 
@@ -69,7 +64,6 @@ type TimerHandle = { unref?: () => unknown };
 export interface WatchdogClockDeps {
   table: ReadonlyArray<WatchdogDispatchEntry>;
   env: { NODE_ENV?: string; SOLEUR_HOST_ID?: string };
-  now: () => number;
   random: () => number;
   mint: () => Promise<string>;
   octokitFor: (token: string) => GitHubRequestClient | Promise<GitHubRequestClient>;
@@ -77,8 +71,6 @@ export interface WatchdogClockDeps {
   emit: (m: WatchdogDispatchMarker) => void;
   setInterval: (fn: () => void, ms: number) => TimerHandle;
   clearInterval: (h: TimerHandle) => void;
-  setTimeout: (fn: () => void, ms: number) => unknown;
-  clearTimeout: (h: unknown) => void;
 }
 
 /** UTC wall-clock multiple of `intervalMinutes` at or before `nowMs`. */
@@ -93,8 +85,12 @@ export function slotAlreadyHasRun(
   slotStartMs: number,
 ): boolean {
   const created = Date.parse(createdAtIso);
+  // No tolerance before the slot: GitHub creates `schedule:` runs late, never
+  // early, and a dispatch happens >= JITTER_MIN_MS into the slot, so any run of
+  // this slot has created_at >= slot start (NTP skew is far below 30 s). A run
+  // from the previous slot, however late, never suppresses this one.
   // Unparseable → "not this slot": fail open to a (harmless) dispatch.
-  return Number.isFinite(created) && created >= slotStartMs - SLOT_TOLERANCE_MS;
+  return Number.isFinite(created) && created >= slotStartMs;
 }
 
 export function shouldArmWatchdogClock(env: WatchdogClockDeps["env"]): {
@@ -103,8 +99,10 @@ export function shouldArmWatchdogClock(env: WatchdogClockDeps["env"]): {
   reason?: "not-production" | "no-host-id";
 } {
   const hostId = (env.SOLEUR_HOST_ID ?? "").trim();
-  // SOLEUR_HOST_ID is injected only by ci-deploy.sh into deployed prod/canary
-  // containers, so CI and e2e (which also run NODE_ENV=production) never arm.
+  // SOLEUR_HOST_ID is injected only by ci-deploy.sh into the deployed prod and
+  // canary containers; NODE_ENV=production alone is not enough (a local
+  // `npm start` or a future CI job can set it). Guarded by the parity test's
+  // "no workflow or e2e config sets SOLEUR_HOST_ID" row.
   if (env.NODE_ENV !== "production") {
     return { arm: false, hostId, reason: "not-production" };
   }
@@ -178,7 +176,6 @@ export function startWatchdogDispatchClock(
   const deps: WatchdogClockDeps = {
     table: overrides.table ?? WATCHDOG_DISPATCH_TABLE,
     env: overrides.env ?? process.env,
-    now: overrides.now ?? (() => Date.now()),
     random: overrides.random ?? Math.random,
     mint: overrides.mint ?? defaultMint,
     octokitFor: overrides.octokitFor ?? defaultOctokitFor,
@@ -190,10 +187,6 @@ export function startWatchdogDispatchClock(
     clearInterval:
       overrides.clearInterval ??
       ((h) => clearInterval(h as ReturnType<typeof setInterval>)),
-    setTimeout: overrides.setTimeout ?? ((fn, ms) => setTimeout(fn, ms)),
-    clearTimeout:
-      overrides.clearTimeout ??
-      ((h) => clearTimeout(h as ReturnType<typeof setTimeout>)),
   };
 
   const safeEmit = (m: WatchdogDispatchMarker) => {
@@ -241,15 +234,15 @@ export function startWatchdogDispatchClock(
 
   function withTimeout<T>(body: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const ac = new AbortController();
-    let timer: unknown;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
-      timer = deps.setTimeout(() => {
+      timer = setTimeout(() => {
         ac.abort();
         reject(new TickTimeoutError());
       }, TICK_DEADLINE_MS);
     });
     return Promise.race([body(ac.signal), deadline]).finally(() =>
-      deps.clearTimeout(timer),
+      clearTimeout(timer),
     );
   }
 
@@ -330,7 +323,7 @@ export function startWatchdogDispatchClock(
   function poll(): void {
     if (stopped) return;
     try {
-      const now = deps.now();
+      const now = Date.now();
       for (const entry of deps.table) {
         const st = state.get(entry.workflowFile);
         if (!st) continue;
@@ -342,7 +335,6 @@ export function startWatchdogDispatchClock(
           st.jitterMs = JITTER_MIN_MS + Math.round(r * (JITTER_MAX_MS - JITTER_MIN_MS));
         }
         if (now < slot + st.jitterMs) continue;
-        if (now >= slot + entry.intervalMinutes * 60_000 - LATE_CUTOFF_MS) continue;
         st.inFlight = true;
         void runTickSafely(entry, slot, st).catch((escaped: unknown) => {
           // Outer fence. Unreachable by design (Guard 2 pins it); if it ever

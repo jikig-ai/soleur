@@ -665,10 +665,11 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
 # clock (apps/web-platform/server/watchdog-dispatch-clock.ts, ADR-248) fires
 # workflow_dispatch every 15-min slot from both web hosts; the workflow's own
 # `schedule:` cron is only the FALLBACK (GHA measured one scheduled run per 2-7 h).
-# checkin_margin_minutes = 15 is budgeted for that reliable clock: jitter (<= 2.5 min)
-# + poll granularity (<= 0.5 min) + job runtime (max_runtime_minutes = 8, the job's
-# `timeout-minutes: 8`; the census job runs in parallel in <= 5) = <= 11 min, leaving
-# ~4 min for runner queue (measured 0 s in 39/40 runs, 157 s worst). A dead trigger
+# checkin_margin_minutes = 15 is budgeted for that reliable clock: poll granularity
+# (<= 0.5 min) + jitter (<= 2 min, JITTER_MAX_MS) + the tick itself (<= 1.5 min deadline)
+# + job runtime (max_runtime_minutes = 8, the probe job's `timeout-minutes: 8`; the single
+# final heartbeat is in that job, the parallel census job does not gate it) = <= 12 min,
+# leaving ~3 min for runner queue (measured 0 s in 39/40 runs, 157 s worst). A dead trigger
 # (clock dark on both hosts AND no GHA tick) pages within interval + margin = 30 min;
 # inngest-down is a brand-survival outage, so the margin stays at one interval. Slug MUST match the `monitor-slug` in the
 # workflow's sentry-heartbeat step (parity-asserted by
@@ -1059,8 +1060,9 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 # hourly slot from both web hosts; the workflow's `schedule:` cron is only the FALLBACK. The old
 # margin of 120 (2× the interval) existed to absorb GHA `schedule:` jitter (measured gaps up to
 # 243 min on the old */30 cadence); a dispatched run starts within seconds, so it is re-derived:
-# checkin_margin_minutes = 30 = jitter (<= 2.5 min) + poll granularity (<= 0.5 min) + runtime
-# (max_runtime_minutes = 10; the job's `timeout-minutes: 8`) = <= 13 min, plus queue headroom.
+# checkin_margin_minutes = 30 >= poll (<= 0.5 min) + jitter (<= 2 min) + tick (<= 1.5 min) +
+# runtime (max_runtime_minutes = 10; the job's `timeout-minutes: 8`) = <= 14 min, plus queue
+# headroom.
 # A dead trigger (clock dark on both hosts AND no GHA tick) pages within interval + margin = 90 min
 # (was ~3 h). This monitor posts a SINGLE end-of-run heartbeat within ~1-2 min of the checker
 # finishing (a small bash probe, not a claude-eval spawn); detection of a loop itself stays

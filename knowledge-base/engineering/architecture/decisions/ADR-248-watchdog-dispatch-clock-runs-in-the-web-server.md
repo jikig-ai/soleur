@@ -28,9 +28,9 @@ The web-platform Node server runs a **watchdog dispatch clock**
 
 - Every 30 s it checks each row of `WATCHDOG_DISPATCH_TABLE`
   (`server/watchdog-dispatch-table.ts`). When a UTC slot (15 or 60 min) is due, after a
-  per-slot random jitter of 30–150 s, it mints a GitHub App installation token scoped to
+  per-slot random jitter of 30–120 s, it mints a GitHub App installation token scoped to
   `actions: write` on `jikig-ai/soleur` only. It reads the workflow's newest run, and sends
-  `POST …/dispatches {ref: "main"}` unless that run was created at or after slot start − 60 s.
+  `POST …/dispatches {ref: "main"}` unless that run was created at or after the slot start.
 - It arms only when `NODE_ENV=production` and `SOLEUR_HOST_ID` is set. Only `ci-deploy.sh`
   sets that variable, so the clock runs on each deployed web host and never in CI, e2e or dev.
 - Each workflow keeps its `schedule:` cron as a **fallback**. The Sentry monitor margins are
@@ -59,7 +59,7 @@ uses the Inngest dispatch pattern (`cron-main-health-monitor`) instead.
 | Inngest scheduler (dedicated host) or the web Inngest unit | Yes: the clocks run on the web hosts | The watchdog run itself, and its Sentry check-in |
 | Zot registry host | Yes | The zot alarm run |
 | web-1 app container (also Inngest's execution host, via `sdk_url`) | Yes, from web-2 | Better Stack uptime; web-2 keeps dispatching |
-| web-2 | Yes, from web-1 | web-2's absence-alerted Better Stack heartbeats (ADR-143 R1(a)) |
+| web-2 | Yes, from web-1 | web-2's absence-alerted Better Stack heartbeats (ADR-143 R1(a)) cover the HOST only; a crashed web-2 app container is visible only as that host's missing `SOLEUR_WATCHDOG_DISPATCH` rows, while web-1 carries the clock alone |
 | Both web hosts | No | Better Stack uptime; Sentry missed check-in within 30 min; the `schedule:` fallback still runs, late |
 | GitHub API / Actions | No, and the fallback is impaired too | Sentry missed check-in (Sentry does not depend on GitHub) |
 
@@ -70,13 +70,16 @@ the clock is the primary trigger and `schedule:` stays behind it.
 
 ### Fleet rule (ADR-068, ADR-027)
 
-Each deployed web host runs its own copy of every process-local timer (ADR-068). A timer whose
-external side effect is not idempotent per slot must deduplicate across the fleet. Here that is
-the per-slot jitter plus the slot-scoped read; a rare collision (both hosts inside the read's
-visibility lag) yields one extra queued run, which both workflows tolerate
-(`cancel-in-progress: false`, issue dedup). Under ADR-027 this is Bucket B, duplicate-tolerant.
-The existing in-process reapers act on process-local state and need no such dedup; this rule
-does not make them non-compliant.
+Every deployed web host runs the same image, so each runs its own copy of every in-process
+timer started at boot (this ADR states the rule; ADR-068 established the multi-host fleet it
+applies to). A timer whose external side effect is not idempotent per slot must deduplicate
+across the fleet. Here that is the per-slot jitter plus the slot-scoped read; a rare collision
+(both hosts inside the read's visibility lag) yields one extra queued run, which both workflows
+tolerate (`cancel-in-progress: false`, issue dedup). Under ADR-027 this is Bucket B,
+duplicate-tolerant. The rule is about timers with EXTERNAL side effects: `ccIdleReaper` acts on
+process-local state, and `stuckActiveReaper` writes shared rows through an RPC whose updates are
+conditional on the row still being stuck, so a second host's pass finds nothing to change.
+Neither is non-compliant.
 
 ### Why the clock does not join the ADR-078 cron drain
 
@@ -99,8 +102,16 @@ covered by the other host, and the new container's first poll re-reads the curre
 - inngest-health goes from about 11 to 96 runs a day, and zot from about 11 to 24. The restart
   arm of inngest-health can again fire up to about three times per incident inside its 45-min
   give-up window, which is the #6374 design.
-- The short-lived canary container also carries a clock for its few minutes of life. Vector
-  does not ship the canary's logs, so a run it dispatches shows in `gh run list` with no marker.
+- The short-lived canary container also carries a clock for its few minutes of life (it gets
+  the same `SOLEUR_HOST_ID`). Its slot-scoped read keeps it from double-dispatching, but Vector
+  does not ship the canary's logs, so a run it dispatches shows in `gh run list` with no marker,
+  and its Sentry reports carry the same `host_id` as that host's prod container. The
+  "canary fires no crons" comment in `ci-deploy.sh` is now stale and was deliberately NOT edited
+  here: `ci-deploy.sh` is a hashed `triggers_replace` input of the host provisioner
+  (`server.tf`), so even a comment edit re-provisions live hosts.
+- The zot monitor's 30-min margin assumes the clock. Rolling the web image back to before #8495
+  returns zot to GitHub's 2–7 h cadence and it will page as missed; roll the margin back with it
+  (the inngest monitor keeps margin 15 either way).
 
 ## Reversal triggers
 

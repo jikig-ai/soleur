@@ -327,19 +327,20 @@ describe("C4 an earlier slot's run never suppresses this slot (age-window regres
 });
 
 describe("C4b dedup cutoff exactness", () => {
-  it("slotAlreadyHasRun: created exactly S−60 s → true; S−60.001 s → false", () => {
+  it("slotAlreadyHasRun: created exactly at S → true; S−1 ms → false", () => {
     const S = S0;
-    expect(slotAlreadyHasRun(new Date(S - 60_000).toISOString(), S)).toBe(true);
-    expect(slotAlreadyHasRun(new Date(S - 60_001).toISOString(), S)).toBe(
-      false,
-    );
+    expect(slotAlreadyHasRun(new Date(S).toISOString(), S)).toBe(true);
+    expect(slotAlreadyHasRun(new Date(S - 1).toISOString(), S)).toBe(false);
     // Unparseable → "not this slot" (fail-open to dispatch).
     expect(slotAlreadyHasRun("not-a-date", S)).toBe(false);
   });
 
   it.each([
-    [-60_000, 0],
-    [-60_001, 1],
+    [0, 0],
+    [-1, 1],
+    // A LATE run of the previous slot (created in its final seconds) never
+    // suppresses this slot.
+    [-5_000, 1],
   ])("run at S%+i ms → %i POST", async (offset, expected) => {
     const gh = fakeGitHub();
     gh.seed(INNGEST.workflowFile, { createdAtMs: S0 + offset });
@@ -528,31 +529,17 @@ describe("C9 once per slot", () => {
   });
 });
 
-describe("C10 late cutoff", () => {
-  it("boot at S+13:30 → no tick for S, then a tick for S+15", async () => {
+describe("C10 a late boot still covers the current slot", () => {
+  it("boot at S+13:30 → the tick for S fires, then one for S+15", async () => {
     vi.setSystemTime(S0 + 13 * MIN + 30_000);
     const gh = fakeGitHub();
     start(gh);
-    await advanceTo(S0 + 15 * MIN - 1);
-    expect(gh.reads(INNGEST.workflowFile)).toBe(0);
+    await advanceTo(S0 + 14 * MIN + 1);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
+    // The S-slot run (created S+14:00) is older than S+15, so it does not
+    // suppress the next slot.
     await advanceTo(S0 + 15 * MIN + 60_000);
-    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
-  });
-
-  it("exact boundary: a poll at S+12:59.999 ticks", async () => {
-    vi.setSystemTime(S0 + 12 * MIN + 29_999);
-    const gh = fakeGitHub();
-    start(gh);
-    await advanceTo(S0 + 12 * MIN + 59_999);
-    expect(gh.posts(INNGEST.workflowFile)).toBe(1);
-  });
-
-  it("exact boundary: a poll at S+13:00.000 does not tick", async () => {
-    vi.setSystemTime(S0 + 12 * MIN + 30_000);
-    const gh = fakeGitHub();
-    start(gh);
-    await advanceTo(S0 + 15 * MIN - 1);
-    expect(gh.reads(INNGEST.workflowFile)).toBe(0);
+    expect(gh.posts(INNGEST.workflowFile)).toBe(2);
   });
 });
 
@@ -652,12 +639,12 @@ describe("C14 jitter bounds", () => {
     expect(gh.posts(INNGEST.workflowFile)).toBe(1);
   });
 
-  it("random=max: no tick before S+150 s, a tick at S+150 s", async () => {
+  it("random=max: no tick before S+JITTER_MAX_MS, a tick at it", async () => {
     const gh = fakeGitHub();
     start(gh, { random: () => 1 });
-    await advanceTo(S0 + 149_999);
+    await advanceTo(S0 + JITTER_MAX_MS - 1);
     expect(gh.reads(INNGEST.workflowFile)).toBe(0);
-    await advanceTo(S0 + 150_000);
+    await advanceTo(S0 + JITTER_MAX_MS);
     expect(gh.posts(INNGEST.workflowFile)).toBe(1);
   });
 });
@@ -671,12 +658,12 @@ describe("C15 one jitter draw per slot per entry (two-entry table)", () => {
       .mockReturnValueOnce(0.999)
       .mockReturnValue(0);
     start(gh, { table: [INNGEST, ZOT], random });
-    await advanceTo(S0 + 120_000);
+    await advanceTo(S0 + 90_000);
     // A fresh draw on every poll would have ticked both at S+60 s.
     expect(gh.posts(INNGEST.workflowFile)).toBe(0);
     expect(gh.posts(ZOT.workflowFile)).toBe(0);
     expect(random).toHaveBeenCalledTimes(2);
-    await advanceTo(S0 + 150_000);
+    await advanceTo(S0 + JITTER_MAX_MS);
     expect(gh.posts(INNGEST.workflowFile)).toBe(1);
     expect(gh.posts(ZOT.workflowFile)).toBe(1);
     expect(random).toHaveBeenCalledTimes(2);

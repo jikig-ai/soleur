@@ -614,8 +614,11 @@ end to end.
    Healthy is one `workflow_dispatch` run per 15-min slot. A `disarmed` row, or a Sentry event
    with `feature=watchdog-dispatch-clock op=arm`, means `SOLEUR_HOST_ID` was empty at boot.
 2. **How do I stop it?** `gh workflow disable scheduled-inngest-health.yml` (or the zot file)
-   stops both the clock's dispatches (they fail with a reported 422) and the fallback cron.
-   Reverting the PR removes the clock.
+   stops both the clock's dispatches and the fallback cron. Expect one Sentry event per host per
+   slot while it is disabled (`feature=watchdog-dispatch-clock op=dispatch status=422`, about 8
+   an hour for inngest-health), grouped into one issue. Reverting the PR removes the clock; if
+   you revert it, also restore the zot monitor margin to 120, or zot pages as missed on
+   GitHub's slower cadence.
 3. **How do I add or remove a table row?** Edit `WATCHDOG_DISPATCH_TABLE`
    (`apps/web-platform/server/watchdog-dispatch-table.ts`) with a non-empty `eligibility`
    argument (ADR-248: the job must watch the scheduling substrate or what it depends on;

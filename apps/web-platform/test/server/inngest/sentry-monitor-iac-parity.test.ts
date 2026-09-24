@@ -19,6 +19,11 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { WATCHDOG_DISPATCH_TABLE } from "@/server/watchdog-dispatch-table";
+import {
+  JITTER_MAX_MS,
+  POLL_MS,
+  TICK_DEADLINE_MS,
+} from "@/server/watchdog-dispatch-clock";
 
 const FUNCTIONS_DIR = resolve(__dirname, "../../../server/inngest/functions");
 const MONITORS_TF = resolve(
@@ -612,15 +617,19 @@ function intervalCrontab(minutes: number): string {
   throw new Error(`no canonical crontab for a ${minutes}-min interval`);
 }
 
-// Margin floor = jitter (2.5 min) + poll granularity (0.5 min) + the monitor's
-// own max runtime; ceiling = one interval, so a dead trigger pages within
-// 2 × interval.
+// Margin floor = the clock's own delay (poll 0.5 + jitter JITTER_MAX_MS + tick
+// deadline TICK_DEADLINE_MS, in minutes) + the monitor's max runtime; ceiling =
+// one interval, so a dead trigger pages within 2 × interval.
+const CLOCK_DELAY_MINUTES = (POLL_MS + JITTER_MAX_MS + TICK_DEADLINE_MS) / 60_000;
 function marginWithinBudget(
   margin: number,
   intervalMinutes: number,
   maxRuntimeMinutes: number,
 ): boolean {
-  return margin >= Math.ceil(3 + maxRuntimeMinutes) && margin <= intervalMinutes;
+  return (
+    margin >= Math.ceil(CLOCK_DELAY_MINUTES + maxRuntimeMinutes) &&
+    margin <= intervalMinutes
+  );
 }
 
 describe("Watchdog dispatch clock parity (#8495)", () => {
@@ -685,7 +694,7 @@ describe("Watchdog dispatch clock parity (#8495)", () => {
         !marginWithinBudget(margin, entry.intervalMinutes, maxRuntime)
       ) {
         problems.push(
-          `${tag}: checkin_margin_minutes=${margin} outside [ceil(3 + max_runtime=${maxRuntime}), interval=${entry.intervalMinutes}]`,
+          `${tag}: checkin_margin_minutes=${margin} outside [ceil(${CLOCK_DELAY_MINUTES} + max_runtime=${maxRuntime}), interval=${entry.intervalMinutes}]`,
         );
       }
     }
