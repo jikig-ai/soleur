@@ -13,6 +13,38 @@ brand_survival_threshold: aggregate pattern
 
 # fix(inngest): cron step-boundary verdicts as returned values
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24. **Plan review:** DHH, Kieran, code-simplicity, CTO (devex). **Deepen
+seats:** security-sentinel, observability-coverage-reviewer, test-design-reviewer,
+architecture-strategist, a verify-the-negative sweep (15 claims, 0 contradicted), Context7 (Inngest
+docs: per-step retry counters, `RetryAfterError`), a plan-time advisor consult.
+
+### Key Improvements
+
+1. **A second secret channel closed in the drift guard.** `drift-check` returned raw upstream
+   error text (PEM included) as its step output, persisted in Inngest run state. It now scans its
+   result with `assertNoLeak("drift-result", …)` and rethrows other errors already redacted.
+2. **Every leak arm reports to Sentry** (`op: "leak-tripwire"`); before, a leak caught in
+   `notify-ops-email` left only a red heartbeat.
+3. **The harness is specified against the SDK's real behaviour where it matters** (`undefined` →
+   `null`, per-invocation duplicate-ID check, `HarnessError` for its own failures) and its
+   self-test asserts fixed facts instead of comparing the harness with itself.
+4. **One final-attempt predicate** (`isFinalAttempt`), shared with `finalizeOutputAwareHeartbeat`,
+   with its one divergence from the SDK documented and tested.
+5. **Mechanisms cut at review** (`label`, SDK pin, Guard 2's positive set, harness extras); Guard 2
+   became a token census over the whole functions directory.
+
+### New Considerations Discovered
+
+- Posting no heartbeat still alerts: each claude-eval monitor opens a *missed* check-in issue after
+  60 minutes, and `sentry-correlation` captures the deferral twice (DC-1).
+- Whether a cron-monitor issue pages anyone is not in Terraform; Phase 4 reads it live.
+- `RetryAfterError` could time the deferral retry after the deploy, but only for handler-level
+  rejections in SDK 3.54.2 (DC-2).
+- Follow-ups filed: #8762 (8 callers with no deferral arm), #8764 (move boundary-crossing suites
+  onto the harness; a general census).
+
 ## Overview
 
 Nine claude-eval cron handlers and the GitHub App drift guard decide how to react to a failure by
@@ -45,7 +77,7 @@ Two outcomes change in production:
 | Claim (issue / task brief) | Reality on `origin/main` (7909263fae) | Plan response |
 |---|---|---|
 | "Return a tagged value from the step instead of throwing" | Throwing is what buys the deferral's retry. Inngest retries the **step** (the SDK sends `StepOpCode.StepError` on a non-final attempt, `node_modules/inngest/components/execution/v2.js` `errorIsRetriable`), and that retry re-checks the lease. A step that *returns* is memoized and never re-run, so returning on every attempt would turn every deferral into an immediate skip. | Attempt-aware: the step **throws** on a non-final attempt (unchanged retry) and **returns** `{ kind: "deploy-deferred" }` on the final attempt, using `finalizeOutputAwareHeartbeat`'s final-attempt predicate (which agrees with the SDK's `StepFailed`-vs-`StepError` choice whenever `maxAttempts` is present). |
-| "18 `DeployInProgressError` sites" | 9 files x 2 sites. The first (setup-workspace catch) is the broken one. The second (inner body catch) is **unreachable**: the only producer is `setupEphemeralWorkspace` (`_cron-claude-eval-substrate.ts`, the `throw new DeployInProgressError` after `deployLeaseAgeMsIfFresh`), which no inner body calls. | Remove the inner-body checks; dissolve ADR-126 "Named residual 1", which describes an error with no producer. |
+| "18 `DeployInProgressError` sites" | 9 files x 2 sites. The first (setup-workspace catch) is the broken one. The second (inner body catch) is **unreachable**: the only producer is `setupEphemeralWorkspace` (`_cron-claude-eval-substrate.ts`, the `throw new DeployInProgressError` after `deployLeaseAgeMsIfFresh`), which no inner body calls. | Remove the inner-body checks. ADR-126 "Named residual 1" names an error with no producer there; reword it in place to the real hazard it was reaching for (see Architecture Decision). |
 | "The handler rethrows bare so Inngest retries after the container swap" (code comment at every first site, from PR #5729) | The handler `catch` never sees the error on a non-final attempt: the SDK ends the request and retries the step. The catch only ever sees a `StepError` after exhaustion, when there is no retry left to buy. | Comments rewritten to state the real mechanism. |
 | "Custom `name` does not survive" (learning, #8717) | Measured against the installed SDK (3.54.2): `serializeError(new DeployInProgressError(...))` yields `name: "Error"`, `leaseAgeMs` absent; `new StepError(id, json)` has `name "Error"`, `instanceof DeployInProgressError === false`; `message` survives verbatim. | The harness uses the real `serializeError` + `StepError` exported from `inngest`, not a hand model. |
 | Issue lists 9 cron files + drift guard | Census of `instanceof` / `.name ===` / `.status ===` on errors under `server/inngest/`: `cron-anthropic-cost-report.ts`, `cron-anthropic-credit-probe.ts`, `cron-gh-pages-cert-reissue.ts` and every `(err as { status?: number }).status` site test a **live** error inside a step callback or a helper. Correct as is. | No other file in scope. |
@@ -177,30 +209,33 @@ suites keep the real implementation):
 
 ```ts
 // _cron-shared.ts
-export type EphemeralWorkspace = { ephemeralRoot: string; spawnCwd: string };
 
-export type WorkspaceSetupVerdict =
-  | { kind: "ready"; workspace: EphemeralWorkspace }
+/** The one final-attempt predicate. finalizeOutputAwareHeartbeat is refactored to call it too. */
+export function isFinalAttempt(ctx: { attempt?: number; maxAttempts?: number }): boolean {
+  return (ctx.attempt ?? 0) >= ((ctx.maxAttempts ?? 1) - 1);
+}
+
+// Generic over the workspace so _cron-shared.ts never imports the substrate (which imports
+// _cron-shared.ts) and the substrate's return type cannot drift from a copy.
+export type WorkspaceSetupVerdict<W> =
+  | { kind: "ready"; workspace: W }
   | { kind: "deploy-deferred"; leaseAgeMs: number };
 
-/**
- * Run INSIDE step.run("setup-workspace"). The error is live here, so instanceof is valid.
- * Final-attempt predicate mirrors finalizeOutputAwareHeartbeat (same file).
- */
-export async function deferDeployOnFinalAttempt(
-  setup: () => Promise<EphemeralWorkspace>,
+/** Run INSIDE step.run("setup-workspace"). The error is live here, so instanceof is valid. */
+export async function deferDeployOnFinalAttempt<W>(
+  setup: () => Promise<W>,
   ctx: { attempt: number | undefined; maxAttempts: number | undefined }, // keys required: see below
-): Promise<WorkspaceSetupVerdict>;
+): Promise<WorkspaceSetupVerdict<W>>;
 // non-final attempt + DeployInProgressError -> rethrow (Inngest retries the step, re-checking the lease)
 // final attempt     + DeployInProgressError -> return { kind: "deploy-deferred", leaseAgeMs }
 // any other error                            -> rethrow unchanged
 // success                                    -> { kind: "ready", workspace }
 
-/** Call in the handler body, AFTER the setup-workspace try/catch has closed. */
-export function throwIfDeployDeferred(
-  v: WorkspaceSetupVerdict,
+/** Call in the handler body, AFTER the setup-workspace try/catch and BEFORE the body's try/finally. */
+export function throwIfDeployDeferred<W>(
+  v: WorkspaceSetupVerdict<W>,
   cronName: string,
-): asserts v is { kind: "ready"; workspace: EphemeralWorkspace };
+): asserts v is { kind: "ready"; workspace: W };
 ```
 
 The `ctx` keys are required (their values may be `undefined`), so a future caller that has not
@@ -211,7 +246,7 @@ callers pass neither today). `HandlerArgs.attempt` is `number | undefined`, so t
 Each cron's setup block becomes (growth-audit shown; the other 8 are the same shape):
 
 ```ts
-let verdict: WorkspaceSetupVerdict;
+let verdict: WorkspaceSetupVerdict<{ ephemeralRoot: string; spawnCwd: string }>;
 try {
   verdict = await step.run("setup-workspace", async () =>
     deferDeployOnFinalAttempt(
@@ -233,8 +268,9 @@ spawnCwd = verdict.workspace.spawnCwd;
 
 The inner-body `if (err instanceof DeployInProgressError) throw err;` line is deleted in all 9.
 
-Why this final-attempt predicate: it is `finalizeOutputAwareHeartbeat`'s `(attempt ?? 0) >= ((maxAttempts ?? 1) - 1)`
-(same file). When `maxAttempts` is present it agrees with the SDK's own choice between a retriable
+Why this final-attempt predicate: `isFinalAttempt` is `finalizeOutputAwareHeartbeat`'s existing
+`(attempt ?? 0) >= ((maxAttempts ?? 1) - 1)`, extracted so both helpers call one function and cannot
+drift. When `maxAttempts` is present it agrees with the SDK's own choice between a retriable
 `StepError` and a terminal `StepFailed` (`maxAttempts - 1 === attempt`, `v2.js`), so "throw" happens
 exactly when a throw buys a retry. They diverge only when `maxAttempts` is absent: the SDK then
 treats the step as retriable, this predicate treats it as final (see Fail-safe default; S4 pins it).
@@ -246,15 +282,31 @@ The same `if (!isFinalAttempt) throw err` shape already exists in `cron-anthropi
   (`handleLeakIssue({ octokit, detectedAtIso, runUrl })` takes no label), so the verdicts carry a
   boolean only.
 - All three steps return the same shape:
-  - `drift-check` → `{ result: DriftResult; leakDetected: boolean }`. Its callback catches a live
-    `LeakDetectedError` and returns `{ result: EMPTY_RESULT, leakDetected: true }`; anything else
-    still throws. The outer catch keeps the `github_api_network` conversion and loses its dead
-    `instanceof` branch.
+  - `drift-check` → `{ result: DriftResult; leakDetected: boolean }`. Inside the callback:
+    1. a live `LeakDetectedError` from the probe returns `{ result: EMPTY_RESULT, leakDetected: true }`;
+    2. **before returning a probe result, the callback runs
+       `assertNoLeak("drift-result", JSON.stringify(result))`**, and a match takes the same arm.
+       Without this, `probeDriftGuard`'s network branch
+       (`` `GET /app -> network error: ${e.name}: ${e.message}` ``) puts raw upstream error text,
+       PEM included, into the step output, which Inngest persists in run state (pre-existing; found
+       at deepen-plan by the security seat);
+    3. any other error is rethrown as `redactedError(err)`, so the error Inngest stores for a
+       failed step is the redacted one (today the raw error is stored before the outer catch
+       redacts it). The outer catch reads no `.status`, so nothing is lost; it keeps the
+       `github_api_network` conversion, builds `failureDetail` from the already-redacted message,
+       and loses its dead `instanceof` branch.
   - `issue-handling` → `{ leakDetected: boolean }`. The callback holds a local `let leak = false`,
     sets it in the inner `catch (innerErr)` arm, and returns `{ leakDetected: leak }` **after** its
     outer try/catch, so a leak followed by a failing `handleLeakIssue` (for example a 403 on the
-    issue write, which the outer catch reports and swallows) still returns `true`.
-  - `notify-ops-email` → `{ leakDetected: boolean }`, same local-variable shape.
+    issue write, which the outer catch reports and swallows) still returns `true`. The outer catch's
+    `reportSilentFallback` reports `extra.leakDetected: leak` (the local), not the handler variable.
+  - `notify-ops-email` → `{ leakDetected: boolean }`, same local-variable shape. Its outer catch keeps
+    the literal `op: "notify-ops-email"`: the `issue-alerts.tf` rule filters on it and
+    `test/sentry-ops-email-delivery-alert-op-contract.test.ts` pins it.
+- Each leak arm (all three steps) emits, inside the step so a replay does not repeat it,
+  `reportSilentFallback(null, { feature: "cron-github-app-drift-guard", op: "leak-tripwire", extra: { step: "<step-id>" } })`
+  with no matched text. Today no leak arm reports to Sentry at all, and a leak caught in
+  `notify-ops-email` files no issue and sends no email, so the red heartbeat was its only trace.
 - The handler folds each returned value into its own `leakDetected`. No step callback assigns a
   handler-scope variable.
 
@@ -265,24 +317,32 @@ the scenarios need and nothing more:
 
 - `rebuildAsStepError(stepId, err)` → `new StepError(stepId, JSON.parse(JSON.stringify(serializeError(err))))`,
   both imported from `"inngest"`.
-- `runLikeInngest(invoke, { maxAttempts })` drives a handler the way async-mode Inngest does:
-  - one memo map shared across invocations (the caller may pass its own `Map` to read step outputs,
-    which AC7 does); step outputs are JSON round-tripped when memoized;
-  - on the first un-memoized step in an invocation: run it; success → memoize, end the invocation,
-    re-enter; throw on a non-final attempt → end the invocation, re-enter with `attempt + 1`; throw
-    on the final attempt → memoize `rebuildAsStepError(...)`, end, re-enter;
+- `runLikeInngest(invoke, { maxAttempts, memo? })` drives a handler the way async-mode Inngest does:
+  - one memo map shared across invocations. The caller may pass its own `Map`, to read step outputs
+    (AC7) or to **seed** a step's memoized output (S6, S6b, S7 seed `drift-check`);
+  - step outputs are memoized as `JSON.parse(JSON.stringify(v ?? null))`: `undefined` becomes
+    `null`, as the SDK's `undefinedToNull` does. A bare `JSON.stringify(undefined)` returns
+    `undefined` and the parse throws, which would crash every `sentry-heartbeat` step;
+  - on the first un-memoized step in an invocation: run it; success → memoize, then end the
+    invocation, re-enter; throw on a non-final attempt → end the invocation, re-enter with
+    `attempt + 1`; throw on the final attempt → memoize `rebuildAsStepError(...)`, end, re-enter.
+    The interruption fires only after the memo write;
   - a memoized failure makes `step.run` reject with the stored `StepError`;
   - "end the invocation" = `step.run` returns a never-settling promise and the driver races it, so
-    the handler's own `catch` cannot observe an interruption (as in production);
+    the handler's own `catch` cannot observe an interruption (as in production). A pending promise
+    holds no event-loop handle, so vitest does not hang; an interrupted invocation's `finally`
+    never runs, exactly as in the SDK, so no scenario asserts teardown counts;
   - a handler-body throw ends the run (outcome `threw`); a handler return ends it (outcome
     `returned`);
-  - a hard cap on invocations, so a loop fails the test instead of hanging;
-  - a step ID seen twice in one run fails loudly (the SDK would suffix it as `id:1`; replaying the
-    first result silently would hide the bug);
+  - harness-detected problems throw a dedicated `HarnessError` class: the invocation cap, a step ID
+    seen twice **within one invocation** (the SDK would suffix it as `id:1`; counting across
+    invocations would trip on every replay), and an output that cannot be JSON-serialized. A RED
+    run therefore shows either a scenario assertion or a `HarnessError`, never one disguised as the
+    other;
   - returns `{ outcome: "returned" | "threw", value?, error? }`.
-- The docstring states the one guessed behaviour: `attempt` after a successful step is reset to 0
-  (the SDK shows how a request uses `attempt`, not what the server sends next). No scenario's
-  assertion depends on it.
+- The docstring states the one guessed behaviour: `attempt` after a successful step is reset to 0.
+  Inngest's docs say each `step.run` has its own retry counter, which supports it, but the value the
+  server sends is not in the SDK. No scenario's assertion depends on it.
 
 ## Technical Considerations
 
@@ -306,10 +366,15 @@ the scenarios need and nothing more:
   `drift-check` step's return type changes from `DriftResult` to `{ result, leakDetected }`; grep
   `step.run("drift-check"` and every `result.` read in the handler and its test.
   `LeakDetectedError` and `assertNoLeak` are unchanged.
-- **Leak verdict content.** The verdicts carry a boolean only. They must never carry the matched
-  fragment or a `LeakDetectedError` message: a step's return value is persisted in Inngest run state
-  and shown in the Inngest dashboard. This narrows today's exposure, where the thrown error's message
-  (with a 16-char prefix of the match) is serialized into step-error state.
+- **What reaches Inngest run state.** A step's return value and a failed step's error are both
+  persisted and shown in the Inngest dashboard. Today three drift-guard channels put secret-derived
+  text there: the `drift-check` result's `failureDetail` (raw upstream error text); a thrown
+  `LeakDetectedError`, whose message carries a 16-character prefix of the match and then flows on
+  into a `ci/guard-broken` issue body, the ops email and Sentry (the prefix is mostly a non-secret
+  header such as `eyJhbGciOi` or `BEGIN RSA PRIVAT`, so the impact is low); and any other probe
+  error, stored raw before the outer catch redacts it. After the fix: verdicts are booleans, the
+  result is scanned before it is returned, a leak never escapes the step as an error, and other
+  errors leave the step already redacted.
 - **`assertNoLeak` blocking is unchanged.** Every emission site still throws before emitting; only
   the routing after the block changes.
 - **The step type hides the JSON boundary.** All 10 handlers take `HandlerArgs`
@@ -326,10 +391,11 @@ Every `assertNoLeak` call site and the step it runs in:
 | Site | Step | Today after exhaustion / replay | After |
 |---|---|---|---|
 | `suppress-warning` (in `probeDriftGuard`) | `drift-check` | `StepError` → `github_api_network`, `ci/guard-broken` | returned `{ leakDetected: true }` → `[security/leak-suspected]` |
+| `drift-result` (new: the probe result, scanned before `drift-check` returns it) | `drift-check` | raw upstream error text, PEM included, persisted as the step output | returned `{ leakDetected: true }`; the result is replaced by `EMPTY_RESULT` |
 | `issue-body`, `issue-comment` (in `handleFailureIssue`) | `issue-handling` | live catch files leak issue; `leakDetected` lost on re-entry | returned `{ leakDetected: true }` |
 | `resend-body`, `resend-subject`, `resend-error-body` (in `notifyOpsEmail`) | `notify-ops-email` | `leakDetected` lost on re-entry | returned `{ leakDetected: true }` |
 
-No other `assertNoLeak` call exists (`grep -n "assertNoLeak(" cron-github-app-drift-guard.ts`).
+No other `assertNoLeak` call exists today (`grep -n "assertNoLeak(" cron-github-app-drift-guard.ts`); `drift-result` is the one this plan adds.
 
 ## Implementation Phases
 
@@ -337,18 +403,19 @@ No other `assertNoLeak` call exists (`grep -n "assertNoLeak(" cron-github-app-dr
 
 1. Write `test/helpers/inngest-step-harness.ts` and `test/helpers/inngest-step-harness.test.ts`
    (harness self-test: see Guard 1).
-2. Add the failing scenarios (Test Scenarios S1, S2, S3, S5, S6, S6b, S7) using the harness. Confirm S1,
-   S5, S6, S7 fail on the current code for the stated reason (setup-failure arm reached; leak routed
+2. Add the failing scenarios (Test Scenarios S1, S2, S3, S5, S5b) using the harness. Confirm S1,
+   S5, S5b fail on the current code for the stated reason (setup-failure arm reached; leak routed
    as `github_api_network`; `leakDetected` false).
 
 ### Phase 2 — Deploy deferral (GREEN)
 
-1. `_cron-shared.ts`: add `WorkspaceSetupVerdict`, `deferDeployOnFinalAttempt`,
-   `throwIfDeployDeferred`; update the `DeployInProgressError` doc comment and the
+1. `_cron-shared.ts`: add `isFinalAttempt` and refactor `finalizeOutputAwareHeartbeat` to call it;
+   add `WorkspaceSetupVerdict<W>`, `deferDeployOnFinalAttempt<W>`, `throwIfDeployDeferred<W>`; update the `DeployInProgressError` doc comment and the
    `finalizeOutputAwareHeartbeat` comment ("excluded by the caller BEFORE…") to name the helper.
 2. The 9 crons: wrap the setup step, delete both `instanceof DeployInProgressError` lines, add
    `throwIfDeployDeferred` after the setup try/catch, rewrite the "#5728 G1" comments to state the
-   real mechanism. Update the "DeployInProgressError still rethrows bare" `retryEligible` comment.
+   real mechanism. Update the "DeployInProgressError still rethrows bare" comment beside
+   `retryEligible: false` in **all 9** crons, and drop the now-unused `DeployInProgressError` import.
 3. Update `cron-community-monitor-heartbeat.test.ts` (delete the inner-body scenario, which injects
    an error with no production producer; move the setup-workspace scenario onto the harness),
    `cron-cohort-dedup.test.ts` scenario 11 (delete: it injects `DeployInProgressError` at
@@ -359,15 +426,24 @@ No other `assertNoLeak` call exists (`grep -n "assertNoLeak(" cron-github-app-dr
 
 ### Phase 3 — Drift guard (GREEN)
 
-1. `drift-check` returns `{ result, leakDetected }`; `issue-handling` / `notify-ops-email` return
-   `{ leakDetected }` from a callback-local variable; fold all three into the handler.
-2. Move the three leak scenarios (and add S6b) in `cron-github-app-drift-guard.test.ts` onto the harness; keep the
+1. `drift-check` returns `{ result, leakDetected }`, scans its result with
+   `assertNoLeak("drift-result", …)` before returning, and rethrows other errors as
+   `redactedError(err)`; `issue-handling` / `notify-ops-email` return `{ leakDetected }` from a
+   callback-local variable (the 403 report reads the local); every leak arm reports
+   `op: "leak-tripwire"`; fold all three into the handler; keep `op: "notify-ops-email"` verbatim.
+2. In `cron-github-app-drift-guard.test.ts`, move the leak scenarios onto the harness (S5b replaces
+   the old "leak tripwire fires" setup; add S6, S6b, S7 with a seeded `drift-check` memo); keep the
    in-process `makeStep` for the rest of that file.
 
 ### Phase 4 — Docs and verification
 
-1. ADR-078 amendment; ADR-126 residual 1 dissolved (see Architecture Decision).
-2. The AC10 `vitest run` and `tsc --noEmit` commands, then `bash plugins/soleur/test/c4-count-parity.test.sh`.
+1. ADR-078 amendment; ADR-126 residual 1 reworded in place; principles-register AP-028 (see
+   Architecture Decision). AP-028 is provisional: re-check the next free AP number against
+   `origin/main` before merge.
+2. Read the live alert-workflow binding of the 10 cron monitors (read-only Sentry API, token from
+   Doppler) and record in the PR which of them page anyone; if some do not, say so in the PR body
+   and comment on #8764 rather than widening this PR.
+3. The AC10 `vitest run` and `tsc --noEmit` commands, then `bash plugins/soleur/test/c4-count-parity.test.sh`.
 
 ## Files to Edit
 
@@ -388,6 +464,7 @@ No other `assertNoLeak` call exists (`grep -n "assertNoLeak(" cron-github-app-dr
 - `apps/web-platform/test/server/inngest/cron-github-app-drift-guard.test.ts`
 - `knowledge-base/engineering/architecture/decisions/ADR-078-graceful-cron-drain-before-container-swap.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-126-cron-liveness-must-assert-the-consumed-artifact.md`
+- `knowledge-base/engineering/architecture/principles-register.md`
 
 `_cron-claude-eval-substrate.ts` is **not** edited: `setupEphemeralWorkspace` keeps throwing, so its
 8 other callers (#8762) and `test/server/cron-drain-lease.test.ts` are unaffected.
@@ -442,36 +519,42 @@ failure modes are mislabelled operator alerts, not user data movement.
 ```yaml
 liveness_signal:
   what: "Existing Sentry cron monitor per cron (postSentryHeartbeat via finalizeOutputAwareHeartbeat) and the drift guard's scheduled-github-app-drift-guard monitor; the deferral arm deliberately posts no check-in (ADR-078)"
-  cadence: "per scheduled fire (daily/weekly per cron; drift guard hourly)"
-  alert_target: "Sentry cron monitor alerts to the operator email"
-  configured_in: "apps/web-platform/server/inngest/functions/_cron-shared.ts (postSentryHeartbeat), apps/web-platform/infra sentry cron monitor resources"
+  cadence: "per scheduled fire (weekly / twice-monthly per claude-eval cron; drift guard hourly)"
+  alert_target: "Sentry cron-monitor issue. Whether a monitor issue pages anyone depends on the monitor's alert-workflow binding, which is not in Terraform (issue-alerts.tf notes the anthropic-credit-probe monitor's detector routes to no workflow). This plan does not change that routing; tasks.md 4.7 reads the live binding for the 10 monitors and records it in the PR."
+  configured_in: "apps/web-platform/server/inngest/functions/_cron-shared.ts (postSentryHeartbeat), apps/web-platform/infra/sentry/cron-monitors.tf"
 
 error_reporting:
   destination: "Sentry (web-platform project, SENTRY_DSN)"
-  fail_loud: "Every deferral attempt: reportSilentFallback feature=cron-claude-eval op=deploy-lease-fresh. Deferral that outlasts the retry: two Sentry events named DeployInProgressError from middleware/sentry-correlation.ts (one per handler-level attempt; a live throw, so the name now survives), then a missed check-in on the cron monitor. Drift-guard leak: [security/leak-suspected] GitHub issue + ?status=error heartbeat."
+  fail_loud: "Every deferral attempt: reportSilentFallback feature=cron-claude-eval op=deploy-lease-fresh (layer 2, pino + Sentry). Deferral that outlasts the retry: two Sentry events named DeployInProgressError from middleware/sentry-correlation.ts transformOutput (layer 1; one per handler-level attempt; a live throw, so the name now survives), then a missed check-in. Drift-guard leak in any step: reportSilentFallback op=leak-tripwire with extra.step (new), plus a ?status=error check-in."
 
 failure_modes:
   - mode: "A deploy outlasts the step retry"
-    detection: "op=deploy-lease-fresh reports on both attempts, then two DeployInProgressError Sentry events (one per handler-level attempt); no op=setup-ephemeral-workspace report"
-    alert_route: "Sentry issue stream, plus the cron monitor's MISSED check-in: every one of the 9 monitors has checkin_margin_minutes = 60 and failure_issue_threshold = 1 (apps/web-platform/infra/sentry/cron-monitors.tf), so a skipped fire opens a missed-check-in issue about an hour later. That is true (the job did not run) and is the documented ADR-078 outcome; see decision-challenges DC-1."
+    detection: "layer 2: op=deploy-lease-fresh on both attempts; layer 1: two DeployInProgressError events from sentry-correlation; no op=setup-ephemeral-workspace report"
+    alert_route: "Sentry issue stream, plus the cron monitor's MISSED check-in: all 9 monitors have checkin_margin_minutes = 60 and failure_issue_threshold = 1 (apps/web-platform/infra/sentry/cron-monitors.tf), so a skipped fire opens a missed-check-in issue about an hour later. True (the job did not run) and the documented ADR-078 outcome; see decision-challenges DC-1."
   - mode: "A genuine setup failure on the final attempt"
-    detection: "reportSilentFallback op=setup-ephemeral-workspace + ?status=error check-in (unchanged)"
-    alert_route: "Sentry cron monitor alert"
-  - mode: "Leak tripwire inside drift-check / issue-handling / notify-ops-email"
-    detection: "[security/leak-suspected] issue filed; heartbeat ?status=error; return failureMode leak_tripwire_fired"
-    alert_route: "GitHub issue labelled security/leak-suspected + priority/p1-high, Sentry monitor alert"
-  - mode: "Regression: someone reintroduces instanceof on a step-crossing error"
-    detection: "cron-producer-output-wiring.test.ts negative assertion (Guard 2) and the harness scenarios in CI"
-    alert_route: "CI red on the PR"
+    detection: "layer 2: reportSilentFallback op=setup-ephemeral-workspace; Sentry monitor: ?status=error check-in (both unchanged)"
+    alert_route: "Sentry cron-monitor issue (routing as in alert_target)"
+  - mode: "Leak tripwire in drift-check"
+    detection: "op=leak-tripwire extra.step=drift-check; [security/leak-suspected] issue filed by issue-handling; ?status=error check-in; return failureMode leak_tripwire_fired"
+    alert_route: "GitHub issue labelled security/leak-suspected + priority/p1-high; no sentry_alert rule pages on op=leak-tripwire (stated, not added)"
+  - mode: "Leak tripwire in issue-handling (issue body or comment)"
+    detection: "op=leak-tripwire extra.step=issue-handling; the same step files the [security/leak-suspected] issue; the leak email variant follows; ?status=error check-in"
+    alert_route: "GitHub issue + ops email; no sentry_alert rule pages on op=leak-tripwire"
+  - mode: "Leak tripwire in notify-ops-email (Resend body, subject or error body)"
+    detection: "op=leak-tripwire extra.step=notify-ops-email; no email is sent and no leak issue is filed (issue-handling already ran); ?status=error check-in; return leakDetected true"
+    alert_route: "Sentry issue stream only (op=leak-tripwire) plus the cron-monitor error check-in; no sentry_alert rule pages on it"
 
 logs:
   where: "pino logger via the Inngest bound-logger middleware, shipped to Better Stack"
   retention: "Better Stack plan retention"
 
 discoverability_test:
-  command: "grep -c 'op: \"deploy-lease-fresh\"' apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts"
-  expected_output: "1"
+  command: "rg -c -F 'throwIfDeployDeferred(verdict' apps/web-platform/server/inngest/functions/"
+  expected_output: "cron-growth-audit.ts:1"
 ```
+
+The regression guard for this defect class (Guard 2 and the harness scenarios, red in CI) is in
+`## Guard Contract`, not listed here as a runtime failure mode.
 
 ## Guard Contract
 
@@ -494,18 +577,22 @@ never against the harness's own output.
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Harness re-throws the raw error on the final attempt instead of `rebuildAsStepError` | RED (self-test: caught error is `instanceof DeployInProgressError`, not `instanceof StepError`) |
+| 1 | Harness re-throws the raw error on the final attempt instead of `rebuildAsStepError` | RED (self-test asserts fixed facts, not a comparison with the harness's own rebuild: the caught error has `name === "Error"`, is not `instanceof DeployInProgressError`, has no `leaseAgeMs`, and keeps the original `message`) |
 | 2 | Harness surfaces a non-final step failure to the handler (rejects instead of never settling) | RED (self-test: the probe handler's `catch` records an error on attempt 0) |
 | 3 | Harness stops re-entering the handler after a successful step | RED (self-test: a flag assigned inside step A's callback is still `true` when step B runs) |
 | 4 | Harness dispatch: `runLikeInngest` returns after the first invocation | RED (self-test: a two-step probe handler's second step never ran) |
+| 5 | Harness memoizes `undefined` by bare `JSON.stringify` (drops `?? null`) | RED (self-test: a step returning nothing crashes with a `SyntaxError` instead of memoizing `null`) |
+| 6 | Duplicate-step-ID or invocation-cap check removed, or counted across invocations | RED (self-test: a handler calling `step.run("a")` twice in one invocation throws `HarnessError`; a two-step handler replayed normally does not; a handler that never returns hits the cap with `HarnessError`) |
 
 **Harness rows.**
 
-- Suite edit that must go RED: drive the self-test's probe handler with the in-process `makeStep`
-  from `cron-cohort-dedup.test.ts` instead of `runLikeInngest` → rows 1–3 fail. This is the row that
-  shows the old mock is blind and the new harness is not.
-- Suite edit that must go RED: S1, S5, S6 and S7 run against the pre-fix handler source (AC3 / AC6
-  record this RED run).
+- Negative control, kept as a permanent test (not a manual edit): the same probe handler driven by
+  a naive inline driver (the `makeStep` shape used in `cron-cohort-dedup.test.ts`) is asserted to
+  MISS what `runLikeInngest` sees (the caught error IS `instanceof DeployInProgressError`; the
+  in-step flag survives). This shows the old mock is blind and the harness is not.
+- Suite edit that must go RED: S1, S5 and S5b run against the pre-fix handler source (AC3 / AC6
+  record this RED run; each entry names the first failing assertion and shows it is not a
+  `HarnessError`).
 - Must-PASS input that is not the canonical: a probe handler whose first step fails once and then
   succeeds, and whose second step is exhausted, produces exactly one rebuilt `StepError`, for the
   second step, and the first step's value is memoized.
@@ -544,18 +631,43 @@ cron file is NOT a false positive (strip comments before scanning, using
 
 Not a new architectural decision: the deferral mechanism, its trigger and its outcome stay as ADR-078
 records them; the change is how the verdict crosses the step boundary. Two ADR texts become false or
-stale and are corrected in this PR:
+stale and are corrected in this PR, and the pattern, now used three times, gets a principles-register
+row.
 
 ### ADR
 
-- **ADR-078 — amend.** Add an amendment (2026-09-24, #8726): the substrate still throws
-  `DeployInProgressError`; the 9 deferral-aware crons wrap the setup step so a non-final attempt
-  throws (Inngest's step retry re-checks the lease) and the final attempt returns a
-  `deploy-deferred` verdict, which the handler re-materializes as `DeployInProgressError` outside the
-  setup catch. Record the rejected alternatives (message marker; return on every attempt).
-- **ADR-126 — amend residual 1.** "`DeployInProgressError` mid-spawn" has no producer inside the
-  guarded body and could not have matched a step-crossing error anyway; mark it dissolved by #8726
-  and update the §"Scoped precisely" sentence that says `DeployInProgressError` "still rethrows bare".
+- **ADR-078 — amend** (a dated `## Amendment 2026-09-24 (#8726)` section; one paragraph plus a short
+  list):
+  - the substrate still throws `DeployInProgressError`; the 9 deferral-aware crons wrap the setup
+    step so a non-final attempt throws (Inngest's per-step retry re-checks the lease) and the final
+    attempt returns a `deploy-deferred` verdict, which the handler re-materializes as
+    `DeployInProgressError` after the setup catch and before the body's try/finally;
+  - correct the sentence "`retries: 1` re-dispatches the run; the retry normally lands after the
+    bounded deploy completes": it is a **step** retry on Inngest's default backoff, and that backoff
+    has not been measured against the lease lifetime (DC-2);
+  - state what a deferral that outlasts the retry now visibly produces, since the ADR calls a skip
+    "benign": two `DeployInProgressError` Sentry events, a `failed` `routine_runs` row, and a missed
+    check-in about 60 minutes later (DC-1);
+  - record the handler-level retry after the verdict as an accepted cost: it replays the memoized
+    verdict and cannot re-check the lease, the same "a replay cannot recover" shape as ADR-126
+    decision 6, acceptable here because no workspace exists yet;
+  - cite the ADR-042 amendment of 2026-09-24 (the leader loop's returned `turn_rejection`) as the
+    precedent, and list the rejected alternatives one line each (message marker; return on every
+    attempt; `NonRetriableError`).
+- **ADR-126 — amend in place, no renumbering** (the same section later refers to "Residual 4"):
+  - Named residual 1 ("`DeployInProgressError` mid-spawn") names an error with no producer inside
+    the guarded body, and a step-crossing one could not have matched `instanceof` anyway. Reword it
+    to the hazard it was reaching for: a deploy's drain **timeout** kills an in-flight `claude`
+    (`op=cron-drain-timeout`, ADR-078), after which Inngest retries the step against a workspace the
+    handler's `finally` already deleted. Mark the `DeployInProgressError` wording resolved by #8726.
+  - Accepted negative 2's closing "`DeployInProgressError` still rethrows bare" becomes "a deploy
+    deferral exits before the guarded body (see ADR-078 amendment 2026-09-24)".
+- **Principles register — add AP-028**
+  (`knowledge-base/engineering/architecture/principles-register.md`): "A verdict that crosses an
+  Inngest step boundary is returned from the step, never read from a caught error's class, `name`
+  or `status`." Canonical source: ADR-042 amendment 2026-09-24 and ADR-078 amendment 2026-09-24.
+  Enforcement: advisory (Guard 2 enforces it for `DeployInProgressError` only; #8764 tracks a
+  general census).
 
 ### C4 views
 
@@ -563,8 +675,10 @@ No C4 impact. Enumerated against `knowledge-base/engineering/architecture/diagra
 external actors (none added or changed: the operator and GitHub are unchanged), external systems
 (Inngest Server, Sentry, GitHub, Resend — all already modeled, no new edge), containers/data stores
 (none touched; step state already lives in the modeled Inngest Server/Redis), access relationships
-(none change). No cron or monitor is added or removed, so no cardinality in `model.c4` edge prose
-moves; verified by running `plugins/soleur/test/c4-count-parity.test.sh` green in Phase 4.
+(none change). The only drift-guard mention in `model.c4` is audit-row prose on the `api -> supabase`
+edge, which this change does not touch (architecture seat, deepen-plan). No cron or monitor is added
+or removed, so no cardinality in `model.c4` edge prose moves; verified by running
+`plugins/soleur/test/c4-count-parity.test.sh` green in Phase 4.
 
 ## Acceptance Criteria
 
@@ -573,11 +687,12 @@ moves; verified by running `plugins/soleur/test/c4-count-parity.test.sh` green i
 - [ ] AC3 — S1 passes for all 9 crons under `runLikeInngest` and fails on `origin/main` code (recorded in the PR body as the RED run).
 - [ ] AC4 — S2: a lease present on attempt 0 and absent on attempt 1 reaches the spawn (retry preserved).
 - [ ] AC5 — S3: a non-deferral setup error on the final attempt still produces `op: "setup-ephemeral-workspace"` and a `?status=error` check-in.
-- [ ] AC6 — Drift guard: S5, S6, S6b, S7 pass under `runLikeInngest`, and S5, S6, S7 fail on `origin/main` code. No `step.run` callback in `cron-github-app-drift-guard.ts` assigns a handler-scope variable; a text grep cannot scope a match to a callback, so this is carried by S6/S7 (the re-entering harness is what makes such an assignment observable), and the reviewer checks the three callbacks by reading them.
-- [ ] AC7 — The memoized output of each of the three drift-guard steps contains no substring of the injected synthetic secret (asserted in S5, S6 and S7 by reading the harness memo); `drift-check`'s output has exactly the keys `result` and `leakDetected`.
-- [ ] AC8 — `test/helpers/inngest-step-harness.test.ts` passes and contains one assertion per Guard 1 mutation-matrix row (rows 1–4) plus the must-PASS row, each compared against `new StepError(...)` from `inngest`.
-- [ ] AC9 — ADR-078 amendment and ADR-126 residual-1 edit present; `plugins/soleur/test/c4-count-parity.test.sh` green.
-- [ ] AC10 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; `cd apps/web-platform && ./node_modules/.bin/vitest run test/helpers/inngest-step-harness.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-community-monitor-heartbeat.test.ts test/server/inngest/cron-producer-output-wiring.test.ts test/server/inngest/cron-github-app-drift-guard.test.ts test/server/cron-drain-lease.test.ts` green. (The package runner is vitest; `bun test` is blocked by `apps/web-platform/bunfig.toml`, and `npm run -w` fails for lack of a root `workspaces` field.)
+- [ ] AC6 — Drift guard: S5, S5b, S6, S6b, S7 pass under `runLikeInngest`; S5 and S5b fail on `origin/main` code (recorded in the PR body); deleting either fold (S6, S7) turns its scenario RED. No `step.run` callback in `cron-github-app-drift-guard.ts` assigns a handler-scope variable; a text grep cannot scope a match to a callback, so this is carried by S6/S7 (the re-entering harness is what makes such an assignment observable), and the reviewer checks the three callbacks by reading them.
+- [ ] AC7 — In S5 and S5b, no memoized step output contains any substring of the injected synthetic secret (read from the caller-owned memo; memoized failures are scanned after `serializeError`, because `JSON.stringify` of an `Error` is `"{}"` and would pass vacuously); `drift-check`'s output has exactly the keys `result` and `leakDetected`.
+- [ ] AC8 — `test/helpers/inngest-step-harness.test.ts` passes and contains one assertion per Guard 1 mutation-matrix row (rows 1–6), the must-PASS row and the permanent negative control, each asserting fixed facts (not a comparison with the harness's own rebuild).
+- [ ] AC9 — ADR-078 `## Amendment 2026-09-24 (#8726)` present with the four points listed under Architecture Decision; ADR-126 residual 1 reworded in place (residual numbering unchanged, so "Residual 4" still resolves); principles-register row for the step-boundary rule present at the next free AP number; `bash plugins/soleur/test/c4-count-parity.test.sh` green.
+- [ ] AC10 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; `cd apps/web-platform && ./node_modules/.bin/vitest run test/helpers/inngest-step-harness.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-community-monitor-heartbeat.test.ts test/server/inngest/cron-producer-output-wiring.test.ts test/server/inngest/cron-github-app-drift-guard.test.ts test/server/cron-drain-lease.test.ts test/sentry-ops-email-delivery-alert-op-contract.test.ts` green. (The package runner is vitest; `bun test` is blocked by `apps/web-platform/bunfig.toml`, and `npm run -w` fails for lack of a root `workspaces` field.)
+- [ ] AC11 — Drift guard: every leak arm emits `op: "leak-tripwire"` (S5, S5b, S6, S7 assert it with the matching `extra.step`), and `test/sentry-ops-email-delivery-alert-op-contract.test.ts` is green.
 
 ## Domain Review
 
@@ -589,46 +704,67 @@ no user-facing surface, content, pricing, legal document or vendor change).
 ## Test Scenarios
 
 All step-boundary scenarios run under `runLikeInngest({ maxAttempts: 2 })` (the crons' `retries: 1`).
+Spies called inside a step (the substrate, the heartbeat `fetch`, reports inside a step callback)
+are deterministic and may use exact counts; spies called outside any step run again on every
+re-entry, so assert presence or absence only. Filter `fetch` calls by URL: the heartbeat and the
+Resend POST both go through it.
 
-- **S1 (P1, fleet: 8 `ROWS` crons in `cron-cohort-dedup`, plus `cron-community-monitor-heartbeat`).**
-  Given the substrate throws `DeployInProgressError` on every call, when the run completes, then:
-  outcome `threw` with an error `instanceof DeployInProgressError`; no `sentry-heartbeat` step ran and
-  no heartbeat `fetch`; no `reportSilentFallback` call with `op: "setup-ephemeral-workspace"`; the
-  substrate was called twice (the retry happened). On `origin/main` code this fails: the rebuilt
-  `StepError` reaches the setup catch.
+- **S1 (P1, fleet).** `it.each(ROWS)` over the 8 `ROWS` crons in `cron-cohort-dedup`, plus one case
+  in `cron-community-monitor-heartbeat` (per-cron cases, so counts reset and a failure names the
+  cron). Given the substrate throws `DeployInProgressError` on every call, then, asserted in this
+  order: outcome is `threw` (on `origin/main` code it is `returned { ok: false }`, which is the RED
+  reason); the error is `instanceof DeployInProgressError`; the substrate was called exactly twice
+  (the retry happened, and the run got past the dedup early-return, which also posts a heartbeat);
+  no heartbeat `fetch`; no `reportSilentFallback` with `op: "setup-ephemeral-workspace"`.
 - **S2 (P2).** Given the substrate throws `DeployInProgressError` on its first call and returns a
   workspace on its second, then the spawn runs and the run returns normally.
 - **S3 (P3).** Given the substrate throws a plain `Error("git clone failed")` on every call, then
   `op: "setup-ephemeral-workspace"` is reported and the check-in is `?status=error`; outcome
-  `returned` with `{ ok: false }`.
-- **S4 (fail-safe).** Unit test of `deferDeployOnFinalAttempt` with `maxAttempts` undefined:
-  returns the deferred verdict on attempt 0 (the documented divergence from the SDK, which would
-  retry). With `attempt: 0, maxAttempts: 2`: rethrows the same
-  error object. With a non-`DeployInProgressError` on the final attempt: rethrows.
-- **S5 (P4, drift-check).** Given the mocked suppression file (`readFileSpy` for the
-  `MANIFEST_DRIFT_SUPPRESS_UNTIL` path) holds a synthetic JWT-shaped string (`eyJ` + 24 or more
-  URL-safe characters), so `readSuppression` returns it inside `warning` — a PEM header does NOT
-  work here, because `readSuppression` strips all whitespace before building the warning and the
-  PEM regex needs the spaces in `BEGIN RSA PRIVATE KEY` — then a `[security/leak-suspected]` issue is filed, no `github_api_network` / `ci/guard-broken`
-  failure issue is filed, `out.leakDetected === true`, `out.failureMode === "leak_tripwire_fired"`,
-  heartbeat `?status=error`.
-- **S6 (P4, issue-handling re-entry).** The existing "leak tripwire fires" scenario (PEM in the
-  `GET /app` error, tripping `issue-body`) under `runLikeInngest`: `out.leakDetected === true` and the
-  ops email is the leak variant. On `origin/main` code `out.leakDetected` is `false`.
-- **S7 (P4, notify-ops-email fold).** The existing "resend-body" test uses the same PEM-in-`GET /app`
-  setup as S6, so after the fix the leak trips at `issue-body` first and `resend-body` never fires.
-  Rewrite it: `failureDetail` still carries the PEM, but `issue-handling` fails for a non-leak reason
-  (`createProbeOctokit` rejects), so the only leak is the one `assertNoLeak("resend-body")` raises
-  inside `notify-ops-email`. Assert no Resend POST was made and `out.leakDetected === true`.
-  Dropping the `notify-ops-email` fold must turn this RED.
+  `returned` with `{ ok: false }`; and no memoized step output contains the installation token.
+- **S4 (predicate).** Unit tests of `isFinalAttempt` and `deferDeployOnFinalAttempt`: with
+  `maxAttempts` undefined the deferral returns on attempt 0 (the documented divergence from the
+  SDK, which would retry); with `attempt: 0, maxAttempts: 2` it rethrows the same error object; a
+  non-`DeployInProgressError` on the final attempt is rethrown; `finalizeOutputAwareHeartbeat`'s
+  existing suites stay green on the extracted predicate.
+- **S5 (P4, `drift-check`, live `LeakDetectedError`).** Given the mocked suppression file
+  (`readFileSpy` for the `MANIFEST_DRIFT_SUPPRESS_UNTIL` path) holds a JWT-shaped string built at
+  runtime (`"eyJ" + "A".repeat(24)`, as the existing test near the `assertNoLeak` cases does; never
+  a committed three-part JWT literal), so `readSuppression` puts it in `warning`. A PEM header does
+  NOT work here: `readSuppression` strips all whitespace before building the warning and the PEM
+  regex needs the spaces in `BEGIN RSA PRIVATE KEY`. Then: a `[security/leak-suspected]` issue is
+  filed; no `github_api_network` / `ci/guard-broken` failure issue; `op: "probeDriftGuard"` never
+  reported; `op: "leak-tripwire"` with `extra.step: "drift-check"` reported;
+  `out.leakDetected === true`; `out.failureMode === "leak_tripwire_fired"`; heartbeat `?status=error`.
+  RED on `origin/main` code.
+- **S5b (P4, `drift-check`, secret in upstream error text).** The existing "leak tripwire fires"
+  setup (a PEM in the `GET /app` error): after the fix the `drift-result` scan trips inside
+  `drift-check`, so the same outcomes as S5 hold, and the memoized `drift-check` output contains no
+  PEM (AC7). RED on `origin/main` code (there the leak trips later, at `issue-body`, and the flag is
+  lost on re-entry, so `out.leakDetected` is `false`).
+- **S6 (P4, `issue-handling` fold).** After the fix no probe result can carry a secret past
+  `drift-check`, so the `issue-handling` and `notify-ops-email` leak arms are defence in depth and
+  are reached by **seeding** the harness memo with an unscanned `drift-check` output
+  (`{ result: <failure whose failureDetail holds a PEM>, leakDetected: false }`), which is exactly
+  the state Inngest hands a re-entered handler. Then `issue-body` trips inside `issue-handling`:
+  the leak issue is filed, the ops email is the leak variant, `op: "leak-tripwire"` with
+  `extra.step: "issue-handling"` is reported, and `out.leakDetected === true`. Deleting the fold of
+  `issue-handling`'s returned value must turn this RED.
 - **S6b (P4, leak then failed leak-issue write).** As S6, plus `handleLeakIssue`'s
-  `POST /repos/{owner}/{repo}/issues` rejects with a 403: `out.leakDetected === true` (the
-  `issue-handling` callback returns its local flag after the outer catch swallows the 403), and
-  `op: "issue_write_403"` is reported.
-- **S8 (P5, harness self-test).** Guard 1 rows 1–4, each asserted against the SDK referent
-  (`new StepError(...)` from `inngest`), plus the must-PASS row.
+  `POST /repos/{owner}/{repo}/issues` rejects with a 403: `out.leakDetected === true` (the callback
+  returns its local flag after the outer catch swallows the 403), and `op: "issue_write_403"` is
+  reported with `extra.leakDetected: true`.
+- **S7 (P4, `notify-ops-email` fold).** Seed the memo as in S6, and make `issue-handling` fail for a
+  non-leak reason (`createProbeOctokit` rejects), so the only leak is the one
+  `assertNoLeak("resend-body")` raises inside `notify-ops-email`. Positive anchors first: the
+  `notify-ops-email` step ran, `createProbeOctokit` was called, `op: "handleIssue"` was reported
+  (inside a step, so an exact count is fine). Then: no Resend POST (filtered by URL),
+  `op: "leak-tripwire"` with `extra.step: "notify-ops-email"`, and `out.leakDetected === true`.
+  Deleting the `notify-ops-email` fold must turn this RED.
+- **S8 (P5, harness self-test).** Guard 1 rows 1–6 as assertions on fixed facts, the must-PASS row,
+  and the permanent negative control.
 - **Regression.** `test/server/cron-drain-lease.test.ts` unchanged and green (the substrate still
-  throws).
+  throws); `test/sentry-ops-email-delivery-alert-op-contract.test.ts` green (the
+  `notify-ops-email` op literal is kept).
 
 ## Risks
 
@@ -660,3 +796,13 @@ All step-boundary scenarios run under `runLikeInngest({ maxAttempts: 2 })` (the 
   value: step outputs are persisted by Inngest.
 - Import `StepError` and `serializeError` from `"inngest"`, not `"inngest/helpers/errors"` (not an
   exported subpath).
+- `throwIfDeployDeferred` must also run **before** the body's `try { … } finally { teardownEphemeralWorkspace }`.
+  All 9 crons have that shape today; moving the deferral inside the teardown scope would run a
+  teardown for a workspace that was never created.
+- Keep the literal `op: "notify-ops-email"` in the drift guard: a `sentry_alert` in
+  `apps/web-platform/infra/sentry/issue-alerts.tf` filters on it and
+  `test/sentry-ops-email-delivery-alert-op-contract.test.ts` pins it.
+- The harness memoizes `v ?? null`, never a bare `JSON.stringify(v)`: `sentry-heartbeat`,
+  `issue-handling` and `notify-ops-email` return nothing today.
+- Build JWT-shaped fixtures at runtime (`"eyJ" + "A".repeat(24)`); never commit a three-part JWT
+  literal (GitHub push protection and the repo's `lint-fixture-content` hook).
