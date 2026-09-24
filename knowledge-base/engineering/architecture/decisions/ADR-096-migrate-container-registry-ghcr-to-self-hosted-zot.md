@@ -13,21 +13,25 @@
 read PAT was revoked outside any repo change (amendments 2026-07-30 and 2026-09-22; cutover record
 in `runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). That holds for **rolling
 deploys**. A **fresh web boot failed** on 2026-09-23 (web-2 booted dark at `stage=pull`, #8651).
-The fix, PR #8660, merged on 2026-09-24 and is armed in source but not yet observed on a host, so
-`stage:"app_zot"` still has 0 events. Do not treat a web-host replace as safe until #8651 closes.
-Retirement is partial:
+The fix, PR #8660, merged on 2026-09-24; as of 2026-09-24 it is armed in source but not yet
+observed on a host, and `stage:"app_zot"` has 0 events. Do not treat a web-host replace as safe
+until #8651 closes. Retirement is partial:
 
 - **5.3a** (the `ci-deploy.sh` GHCR read path) is done (2026-09-23, #8036 item 1c; see "Amendment
   2026-09-23 (#8036 item 1c)" under §Cold-boot-dependency statement).
 - **5.3b** is narrowed by the operator's `DECISION: B3` (2026-09-24): CI keeps pushing to GHCR as
-  ADR-169's restore source, so "stop GHCR push" is no longer a retirement step. What remains of
-  5.3b (fresh-boot GHCR branches; re-scoped egress) and 5.4 wait on the #6122 soak, which cannot
-  pass until #8651 closes and needs a re-armed window (the backfilled verdict is a recorded FAIL;
-  #6500 is open). See "Amendment 2026-09-24 (#6122)".
-- **5.5**'s revoke is observed: the operator's account holds no personal access token of either
-  type (2026-09-24).
+  ADR-169's restore source, so "stop GHCR push" is no longer a retirement step. Two parts remain:
+  5.3b-i (remove the fresh-boot GHCR branches) and 5.3b-iii (re-scope, then remove, the GHCR egress
+  allow). See "Amendment 2026-09-24 (#6122)".
+- **5.3b and 5.4 wait on the #6122 soak.** It cannot pass until #8651 closes (its `WEB_BLOCKER`
+  arm), and its backfilled verdict is a recorded FAIL, so it needs a re-armed window. Re-arming,
+  and authorizing #6500 and #6122, are the operator's acts on #6122.
+- **5.5 is open.** The credential is a fine-grained PAT on a machine account (`variables.tf`
+  `ghcr_read_token`). Its current Doppler value returns 401, and the operator's own GitHub account
+  holds no personal access token of either type (2026-09-24). The machine account's token list has
+  not been checked.
 
-This ADR flips to **accepted** (task 5.6) once the narrowed 5.3b and 5.4 are complete.
+This ADR flips to **accepted** (task 5.6) when 5.3b-i, 5.3b-iii, 5.4 and 5.5 are all complete.
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
@@ -536,8 +540,11 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   not TLS); local-fs (single-datacenter) durability until an R2/snapshot revisit (NG3).
 - **Retirement (post-soak):** remove the pull-site GHCR fallback branch (5.3a — **done
   2026-09-23, #8036 1c**, on the narrower no-reachable-success-arm ground recorded in the task
-  5.3 amendment; not a soak pass), stop GHCR push + egress allow (5.3b, still gated; **"stop GHCR push" dropped 2026-09-24 by `DECISION: B3`, see the amendment of that date**), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
-  `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5; **revoke observed 2026-09-24**, see the amendment of that date).
+  5.3 amendment; not a soak pass); remove the fresh-boot GHCR branches and the re-scoped GHCR egress
+  allow (5.3b, still gated); retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
+  `GHCR_MINTER_DISABLED` gate (5.4); then rotate + revoke the exposed PAT (5.5). **Amended
+  2026-09-24:** "stop GHCR push" was part of 5.3b until the operator's `DECISION: B3` dropped it;
+  see the amendment of that date.
 - **Host sizing + region (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live nbg1, provisioned
   during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**→`cx23`(4 GB, #6497/#6463, 2026-07-16, after telemetry showed the 8 GB was never needed)→**`cpx22`(2 vCPU / 4 GB, #7309, 2026-08-06 — stock volatility; see the amendment at the end of this ADR)**. The 4 GB cx23
   restart-looped zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent —
@@ -1431,17 +1438,22 @@ copy` fills zot from there.
 **What changes in the retirement plan.**
 
 - **5.3b** drops "stop GHCR push". What remains:
-  - 5.3b-i: remove the fresh-boot GHCR branches. Sequenced after #8651 closes; overlaps #8036
-    item 1d.
+  - 5.3b-i: remove the fresh-boot GHCR branches. Waits on the #6122 soak and is sequenced after
+    #8651 closes. It overlaps #8036 item 1d, which also owns the dedicated inngest host's GHCR
+    login and fallback pull in `cloud-init-inngest.yml` (recorded on #8036). The 5.3a "no reachable
+    success arm" ground may also apply to this arm; whether it releases 5.3b-i from the soak is the
+    operator's call.
   - 5.3b-iii: remove the GHCR egress allow. Needs re-scoping first: the cosign verifier and zot's
     own image still pull anonymously from ghcr.io, and a cut would fail verification open
     (`IMAGE_VERIFY_MODE` defaults to `warn`).
-- **5.5** is recorded as done. On 2026-09-24 the operator's GitHub account listed no classic and
-  no fine-grained personal access token, and the value in `GHCR_READ_TOKEN` returns 401
-  (amendment 2026-07-30). Rotation is moot: no GHCR PAT consumer remains after 5.3a, and the boot
-  sites present the dead value only until 5.3b-i / 1d remove them. The observation covers the
-  operator's account only. ADR-096 records the leaked credential as a user-account PAT, so a PAT
-  minted on any other account would not appear here.
+- **5.5 stays open.** The leaked credential is a fine-grained read:packages PAT on a **machine
+  account** (`variables.tf` `ghcr_read_user` / `ghcr_read_token`; the 2026-07-30 correction above).
+  Two facts are established: the value now in `GHCR_READ_TOKEN` returns 401 (amendment 2026-07-30),
+  and on 2026-09-24 the operator's own GitHub account listed no classic and no fine-grained personal
+  access token. Neither shows the machine account's tokens: that list must be read (or the machine
+  account removed from the org) before 5.5 closes. Rotation is not moot either: the fresh-boot
+  sites still read `GHCR_READ_TOKEN` until 5.3b-i and #8036 item 1d land, so a new PAT written to
+  Doppler would be picked up again.
 - **5.4** and **5.6** are unchanged.
 
 **What this does NOT decide.** Option A (#6126) stays open as a separate availability question.
@@ -1452,3 +1464,11 @@ the only option that addresses it. It is not a 5.3b unblocker any more.
 and on GitHub continuing to let the Actions token read private repo-linked packages. A1 depended on
 both before this decision; B3 makes that dependency permanent rather than transitional. GHCR also
 remains a supply-chain publish surface, so "off GHCR" means off GHCR for pulls, not for publishing.
+
+That surface is also a **write path into production** through the restore. Several workflows hold
+`packages: write` on GHCR, and `scripts/registry-restore-from-ghcr.sh` copies each image and checks
+that its signature exists, but does not run `cosign verify`. Hosts verify at pull in
+`IMAGE_VERIFY_MODE=warn` by default (`ci-deploy.sh`), so an image altered on GHCR and then restored
+would deploy with a warning. B3 keeps GHCR as a restore input for good, which makes the
+WARN→ENFORCE flip for cosign verification (#6129) the mitigation this decision depends on. #6129
+stays gated behind the soak, as before.
