@@ -7,10 +7,13 @@ import type { Diagnostic } from "./c4-shared";
 
 /** Line 2 of the stale strip when the save carried no diagnostic (#8695). The
  *  server returns `rerendered:false` with no reason only when a newer source
- *  change superseded this save's render; nothing on this page reloads on its
- *  own, so the copy names the supersede and promises no refresh. */
+ *  change superseded this save's render. Nothing on this page reloads on its
+ *  own, and that newer change may never render here (a push from outside
+ *  Soleur, or a render that failed), so the copy names the supersede, promises
+ *  nothing, and points at the one action that works: Save stays enabled while
+ *  the diagram is stale. */
 export const SUPERSEDED_LINE =
-  "A newer change to the diagram source was saved before this one was rendered. Reopen the diagram to see the latest version.";
+  "A newer change to the diagram source was saved before this one was rendered, so this save did not update the diagram. Save again to render the latest version.";
 
 function capitalizeFirst(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);

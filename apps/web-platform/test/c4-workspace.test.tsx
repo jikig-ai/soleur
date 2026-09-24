@@ -118,13 +118,16 @@ vi.mock("@/components/kb/c4-shared", async () => {
     // plumbing.
     C4CodePanel: ({
       onSaved,
+      allowResave,
     }: {
       onSaved: (
         rerendered: boolean,
         diagnostic?: string,
       ) => void | Promise<void>;
+      allowResave?: boolean;
     }) => (
       <>
+        <span data-testid="c4-allow-resave" data-value={allowResave ? "true" : "false"} />
         <button data-testid="c4-save-ok" onClick={() => void onSaved(true)}>
           save-ok
         </button>
@@ -202,8 +205,8 @@ async function renderC4WithHeader(suppressSidebar = true, c4Edit = true) {
   return render(await c4Tree(suppressSidebar, c4Edit));
 }
 
-const SUPERSEDED =
-  "A newer change to the diagram source was saved before this one was rendered. Reopen the diagram to see the latest version.";
+// The copy itself is pinned literally in c4-shared.test.tsx.
+const { SUPERSEDED_LINE: SUPERSEDED } = await import("@/components/kb/c4-diagnostics");
 
 /**
  * #7222 — C4Workspace picks its topology from a live matchMedia read (it is
@@ -354,9 +357,37 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
     expect(screen.queryByText(/out of date/i)).toBeNull();
     expect(screen.queryByText("Diagram not updated: x")).toBeNull();
 
+    // Staleness belongs to folder A's model, which is still stale: returning
+    // shows A's own reason again, never another folder's.
     rerender(await c4Tree(true, true, DIR_A));
-    expect(banner().getAttribute("data-stale")).toBe("false");
-    expect(screen.queryByText(/out of date/i)).toBeNull();
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
+  });
+
+  it("C4-C10 (#8695): Save is re-enabled while stale, and a late success for another folder does not clear this folder's banner", async () => {
+    const DIR_A = "knowledge-base/diagrams";
+    const DIR_B = "knowledge-base/other-diagrams";
+    const allow = () => screen.getByTestId("c4-allow-resave").getAttribute("data-value");
+    const { rerender } = render(await c4Tree(true, true, DIR_B));
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    expect(allow()).toBe("false");
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() => expect(screen.getByText("Diagram not updated: x")).toBeTruthy());
+    expect(allow()).toBe("true");
+    // A save made in folder A that succeeds late must leave B's banner alone.
+    rerender(await c4Tree(true, true, DIR_A));
+    let release!: () => void;
+    reloadState.gate = new Promise<void>((r) => (release = r));
+    try {
+      fireEvent.click(screen.getByTestId("c4-save-ok"));
+      rerender(await c4Tree(true, true, DIR_B));
+      release();
+      await reloadState.gate;
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
+    } finally {
+      reloadState.gate = null;
+    }
   });
 
   it("C4-C9 (#8695): a save still in flight when the user changes folder does not mark the new folder", async () => {
@@ -376,6 +407,9 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
       expect(banner.getAttribute("data-stale")).toBe("false");
       expect(banner.getAttribute("data-stale-diagnostic")).toBe("");
       expect(screen.queryByText("Diagram not updated: x")).toBeNull();
+      // The late result is attributed to the folder it was saved in.
+      rerender(await c4Tree(true, true, DIR_A));
+      expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
     } finally {
       reloadState.gate = null;
     }

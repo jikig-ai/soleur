@@ -81,18 +81,27 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
   const [loading, setLoading] = useState(true);
 
   const url = options?.url;
+  const endpoint =
+    url ?? `/api/kb/c4/project?dir=${encodeURIComponent(dirPath)}`;
+  // The endpoint this hook currently serves. A reload bound to an earlier
+  // folder (a save that finishes after the user navigated) must not overwrite
+  // the folder now on screen.
+  const currentEndpoint = useRef(endpoint);
+  useEffect(() => {
+    currentEndpoint.current = endpoint;
+  }, [endpoint]);
   const reload = useCallback(async () => {
+    const isCurrent = () => currentEndpoint.current === endpoint;
     setLoading(true);
     setError(null);
     try {
-      const endpoint =
-        url ?? `/api/kb/c4/project?dir=${encodeURIComponent(dirPath)}`;
       const res = await fetch(endpoint);
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `Request failed (${res.status})`);
       }
       const json = (await res.json()) as Partial<ProjectResponse>;
+      if (!isCurrent()) return;
       setData({
         dir: json.dir ?? dirPath,
         sources: json.sources ?? {},
@@ -101,11 +110,11 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
         diagnostics: json.diagnostics ?? [],
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load diagram");
+      if (isCurrent()) setError(e instanceof Error ? e.message : "Failed to load diagram");
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [dirPath, url]);
+  }, [dirPath, endpoint]);
 
   useEffect(() => {
     void reload();
@@ -343,6 +352,7 @@ export function C4CodePanel({
   data,
   dirPath,
   onSaved,
+  allowResave = false,
   height = "100%",
 }: {
   data: ProjectResponse;
@@ -353,6 +363,9 @@ export function C4CodePanel({
    *  `diagnostic` is the server's reason, passed only when present, so the
    *  parent's stale banner can state it (#8695). */
   onSaved: (rerendered: boolean, diagnostic?: string) => void | Promise<void>;
+  /** Enable Save for an unchanged file: the parent's diagram is stale and the
+   *  banner tells the user to save again (#8695). */
+  allowResave?: boolean;
   height?: string;
 }) {
   const files = useMemo(() => Object.keys(data.sources), [data.sources]);
@@ -464,7 +477,7 @@ export function C4CodePanel({
           : diagnostic
             ? `Saved — ${diagnostic}`
             : // No reason: a newer source change superseded this render (#8695).
-              "Saved — a newer change replaced this one before it was rendered.",
+              "Saved — a newer change was saved before this one was rendered.",
       );
       // One arg when there is no diagnostic, so a parent (and its tests) see
       // exactly `onSaved(rerendered)`.
@@ -544,7 +557,7 @@ export function C4CodePanel({
             )}
             <button
               onClick={() => void save()}
-              disabled={saving || !dirty}
+              disabled={saving || (!dirty && !allowResave)}
               className="rounded bg-soleur-accent-gold-fg/90 px-2.5 py-1 text-xs font-medium text-black disabled:opacity-40"
             >
               {saving ? "Saving…" : "Save"}

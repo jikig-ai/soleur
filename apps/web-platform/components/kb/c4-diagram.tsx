@@ -99,12 +99,11 @@ export default function C4Diagram({
                 data={data}
                 dirPath={dirPath}
                 height="560px"
+                allowResave={stale}
                 onSaved={async (rerendered, diagnostic) => {
                   await reload();
                   setStale(!rerendered);
-                  setStaleDiagnostic(
-                    !rerendered && diagnostic ? diagnostic : null,
-                  );
+                  setStaleDiagnostic(diagnostic ?? null);
                   setTab("diagram");
                 }}
               />

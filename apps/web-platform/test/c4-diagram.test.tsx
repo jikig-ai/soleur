@@ -72,8 +72,8 @@ vi.mock("@/components/kb/c4-shared", async () => {
   };
 });
 
-const SUPERSEDED =
-  "A newer change to the diagram source was saved before this one was rendered. Reopen the diagram to see the latest version.";
+// The copy itself is pinned literally in c4-shared.test.tsx.
+const { SUPERSEDED_LINE: SUPERSEDED } = await import("@/components/kb/c4-diagnostics");
 
 async function renderEmbed(c4Edit = true, readOnly = false) {
   const { default: C4Diagram } = await import("@/components/kb/c4-diagram");

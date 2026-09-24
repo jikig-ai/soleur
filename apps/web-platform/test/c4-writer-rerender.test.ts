@@ -250,7 +250,9 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
     expect(opts).toMatchObject({
       feature: "c4-rerender",
       op: "render",
-      message: "c4 re-render failed: non_zero_exit",
+      // The class is IN the message: Sentry groups captureMessage by message
+      // text, so a tag alone would fold every class into one issue.
+      message: "c4 re-render failed: spawn/non_zero_exit/likec4-exit",
       tags: { reason: "non_zero_exit", phase: "spawn", detail_class: "likec4-exit" },
       extra: expect.objectContaining({ detail: "exit=1 stderr=boom", relativePath: C4 }),
     });
@@ -271,7 +273,7 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
     expect(mocks.reportSilentFallback.mock.calls[0][1].tags).toMatchObject({ reason: r.reason, detail_class: r.detailClass });
   });
 
-  it("#8696: a render-slot wait is load, not a defect — a warning, still the internal diagnostic", async () => {
+  it("#8696: a render-slot wait is load, not a defect — a warning with its own busy diagnostic", async () => {
     renderReturns({ ok: false, reason: "timeout", detail: "render slot wait", phase: "spawn", detailClass: "slot-wait" });
     const res = await writeC4Diagram(source(C4));
     if (!res.ok) throw new Error("save failed");
@@ -280,7 +282,29 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
     const [err, opts] = mocks.warnSilentFallback.mock.calls[0];
     expect(err).toBeNull();
     expect(opts.tags).toMatchObject({ reason: "timeout", detail_class: "slot-wait" });
-    expect(res.rerenderDiagnostic).toMatch(/could not be rendered this time/);
+    expect(opts.message).toBe("c4 re-render failed: spawn/timeout/slot-wait");
+    expect(res.rerenderDiagnostic).toBe(
+      "diagram not updated: the diagram renderer is busy. Save again in a moment.",
+    );
+  });
+
+  it("#8629: every error-level c4 report passes err=null (a real Error loses its tags to the pino mirror)", async () => {
+    const arrangements: Array<() => void> = [
+      () => mocks.githubApiPost.mockResolvedValueOnce({}), // no commit sha
+      () => renderReturns({ ok: true, durationMs: 1, json: "x".repeat(8 * 1024 * 1024) }), // oversized
+      () => mocks.syncWorkspace.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: new Error("sync") }),
+      () => mocks.githubApiPost.mockResolvedValueOnce({ commit: { sha: "c" } }).mockRejectedValueOnce(new Error("500")),
+    ];
+    for (const arrange of arrangements) {
+      mocks.reportSilentFallback.mockReset();
+      mocks.githubApiPost.mockReset().mockResolvedValue({ commit: { sha: "commit123" } });
+      mocks.syncWorkspace.mockReset().mockResolvedValue({ ok: true });
+      renderReturns({ ok: true, durationMs: 12, json: RENDERED_JSON });
+      arrange();
+      await writeC4Diagram(source(C4));
+      expect(mocks.reportSilentFallback).toHaveBeenCalledTimes(1);
+      expect(mocks.reportSilentFallback.mock.calls[0][0]).toBeNull();
+    }
   });
 
   it("#8696: a successful re-render logs its queueWaitMs", async () => {

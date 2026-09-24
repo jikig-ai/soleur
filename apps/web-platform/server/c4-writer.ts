@@ -244,6 +244,10 @@ export const TOO_LARGE_DIAGNOSTIC =
   "which is too much to update automatically. Combine or remove some diagram files to turn automatic updates back on.";
 export const MODEL_TOO_LARGE_DIAGNOSTIC =
   "diagram not updated: the rendered diagram is larger than 4 MB, which is too large to save. Simplify the diagram to turn automatic updates back on.";
+/** The render pool stayed full for the whole slot wait (#8696): load, not a
+ *  defect, so no "contact support". */
+export const BUSY_DIAGNOSTIC =
+  "diagram not updated: the diagram renderer is busy. Save again in a moment.";
 export const INTERNAL_DIAGNOSTIC =
   "diagram not updated: the diagram could not be rendered this time. Save again to retry; if it keeps happening, contact support.";
 export const REFUSAL_NOUN: Record<"likec4-config" | "symlink" | "gitlink", string> = {
@@ -296,6 +300,7 @@ function buildRerenderDiagnostic(render: RenderFailure): string {
     if (render.detail === FORBIDDEN_DETAIL) return FORBIDDEN_DIAGNOSTIC;
     return RETRY_DIAGNOSTIC;
   }
+  if (render.detailClass === "slot-wait") return BUSY_DIAGNOSTIC;
   if (render.reason !== "empty_model") return INTERNAL_DIAGNOSTIC;
   const raw = render.detail ?? "";
   const match = raw.match(/Could not resolve reference to \w+ named '[^']+'/);
@@ -346,12 +351,12 @@ async function rerenderAndCommit(
   const jsonRelPath = `${C4_DIAGRAMS_DIR}/${C4_MODEL_JSON}`;
   const jsonFilePath = `knowledge-base/${jsonRelPath}`;
   if (!commitSha) {
-    reportSilentFallback(new Error("no commit sha"), {
+    reportSilentFallback(null, {
       feature: "c4-rerender",
       op: "render",
-      extra: { userId, relativePath, reason: "io_error" },
-      tags: { reason: "io_error", phase: "stage" },
-      message: "c4 re-render failed — source committed, diagram stale",
+      extra: { userId, relativePath, reason: "io_error", detail: "no commit sha" },
+      tags: { reason: "io_error", phase: "stage", detail_class: "no-commit-sha" },
+      message: "c4 re-render failed: stage/io_error/no-commit-sha",
     });
     return { rerendered: false, diagnostic: RETRY_DIAGNOSTIC };
   }
@@ -383,9 +388,11 @@ async function rerenderAndCommit(
         });
       } else {
         // err = null: a real Error is captured first by the pino mirror and
-        // Sentry drops the tagged capture (#8629). A fixed message per reason
-        // keeps grouping stable; `detail_class` opens one issue per failure
-        // class. A slot wait is load, not a defect: warning level.
+        // Sentry drops the tagged capture (#8629). Sentry groups a
+        // captureMessage by its TEXT, not its tags, so the phase, reason and
+        // class are all in the (low-cardinality) message: each failure class
+        // opens its own issue and fires the first-seen alert. A slot wait is
+        // load, not a defect: warning level.
         const report = render.detailClass === "slot-wait" ? warnSilentFallback : reportSilentFallback;
         report(null, {
           feature: "c4-rerender",
@@ -399,7 +406,7 @@ async function rerenderAndCommit(
             phase: render.phase,
             detail_class: render.detailClass ?? "other",
           },
-          message: `c4 re-render failed: ${render.reason}`,
+          message: `c4 re-render failed: ${render.phase}/${render.reason}/${render.detailClass ?? "other"}`,
         });
       }
       return { rerendered: false, diagnostic: buildRerenderDiagnostic(render) };
@@ -407,7 +414,7 @@ async function rerenderAndCommit(
     if (!staged?.ok) {
       // Cannot happen (a successful render implies a successful stage); if a
       // refactor ever breaks that, never commit without a verified source set.
-      reportSilentFallback(new Error("render ok without a staged source set"), {
+      reportSilentFallback(null, {
         feature: "c4-rerender",
         op: "commit-json",
         extra: { userId, relativePath },
@@ -424,10 +431,10 @@ async function rerenderAndCommit(
     const json = render.json;
     const size = Buffer.byteLength(json, "utf8");
     if (size > MAX_C4_MODEL_BYTES) {
-      reportSilentFallback(new Error(`model.likec4.json ${size}B exceeds cap`), {
+      reportSilentFallback(null, {
         feature: "c4-rerender",
         op: "commit-json",
-        extra: { userId, relativePath, size },
+        extra: { userId, relativePath, size, detail: `model.likec4.json ${size}B exceeds cap` },
         tags: { phase: "commit" },
         message: "c4 re-render: regenerated model too large to commit",
       });
@@ -453,8 +460,8 @@ async function rerenderAndCommit(
         // HEAD now carries something the render refuses: a newer source change
         // (not this render's) — superseded, not an incident. Unlike a plain
         // supersede, no later save will render it either (every save stages
-        // HEAD's tree), so name the refused file rather than leave the
-        // Concierge to promise the diagram "will update shortly".
+        // HEAD's tree), so name the refused file rather than a supersede whose
+        // "save again" could never succeed.
         if (head.reason === "unsafe_source") {
           superseded("head-refused");
           return {
@@ -490,10 +497,10 @@ async function rerenderAndCommit(
       op: "manual",
     });
     if (!resync.ok) {
-      reportSilentFallback(resync.error, {
+      reportSilentFallback(null, {
         feature: "c4-rerender",
         op: "resync",
-        extra: { userId, relativePath },
+        extra: { userId, relativePath, err: String(resync.error) },
         message: "c4 re-render: JSON committed but re-sync failed",
       });
       // The model IS committed on GitHub but not on this clone, so the page
@@ -512,10 +519,10 @@ async function rerenderAndCommit(
     );
     return { rerendered: true };
   } catch (err) {
-    reportSilentFallback(err, {
+    reportSilentFallback(null, {
       feature: "c4-rerender",
       op: "commit-json",
-      extra: { userId, relativePath },
+      extra: { userId, relativePath, err: String(err) },
       tags: { phase: "commit" },
       message: "c4 re-render: regenerate/commit failed — source committed, diagram stale",
     });
