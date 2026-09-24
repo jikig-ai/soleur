@@ -1028,3 +1028,28 @@ and the test-suite bulk. Per plan-review, **delete was preferred over fix**.
 - The ADR-031 amendment is **append-only**. Do not edit the #6589 amendment's "3. No scheduled drift
   check covers this root" line or the `(follow-up)` Consequences bullet. The new block supersedes them
   by reference (AC13).
+
+## Review Revisions (2026-09-24, 9-seat panel on PR #8679)
+
+The sections above record the plan as reviewed at plan time. The panel changed three things;
+where they disagree with the text above, this section is authoritative.
+
+- **`env -u` became an `env -i` allowlist.** Every Phase 2 / Guard Contract / AC mention of
+  `env -u DOPPLER_TOKEN … -u TF_LOG_PROVIDER` is superseded. A deny-list could not keep out what
+  `infra-credentials` exports through `$GITHUB_ENV` (a Hetzner token today; the whole Tier-B
+  project, including `TF_VAR_*`, after cutover), nor `TF_CLI_ARGS*`, `TF_WORKSPACE`, `TF_LOG_CORE`
+  or proxies. terraform now sees exactly `PATH HOME AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  SENTRY_AUTH_TOKEN`; B1 asserts that exact name set against a decoy environment.
+- **The drift issue's remediation is routed by plan content.** A dispatch only for in-place
+  updates; a PR for an object deleted in Sentry's UI (the create gate refuses a dispatch); a
+  re-run of the failed push apply, or a PR carrying `[ack-destroy]`, for destroys (a dispatch has
+  no head commit message). The single "re-run the CI apply" instruction in Phase 2 step 4 is
+  superseded.
+- **Routing claim corrected.** The shared `scheduled-terraform-drift` check-in cannot carry this
+  leg's errors (a sibling leg's later `ok` overwrites them); the ADR exit criterion is now counted
+  from job annotations and also trips when #8630 lands.
+
+Test rows added at review: B9 (request-body redaction), E3 (drift diff survives, 4000-byte cap),
+E4 (init-failure email). The suite asserts exact argv, the exact env-name set, parsed-env
+equality, a `row()` dispatch self-test, and an exact row-ID ledger. Mutation battery at review:
+17 workflow mutants and 4 dispatch mutants, all killed; control green.
