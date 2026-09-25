@@ -69,7 +69,7 @@ So the fix goes where the cost is. A skill's scan verdict is a pure function of 
 `SKILL.md` content plus the scanner** (`runScanVerdict` pipes the one file into `run-scan.sh` on
 stdin). A markdown commit can therefore change only the verdicts of the `SKILL.md` files it stages —
 unless it stages the scanner itself. The hook passes its staged markdown list to the suite; the
-calibration then scans only those `SKILL.md` files (full corpus if the scanner is staged); CI never
+calibration then scans only those `SKILL.md` files (full-corpus-if-scanner-staged fallback dropped at plan review); CI never
 scopes. Everything else in the plugin suite keeps running on every plugin-markdown commit, so no
 markdown validator loses local coverage.
 

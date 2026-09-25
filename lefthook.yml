@@ -375,10 +375,11 @@ pre-commit:
     plugin-component-test:
       priority: 7
       glob: "plugins/soleur/**/*.md"
-      # The scope variable limits skill-security-scan's calibration to the staged SKILL.md files:
-      # a verdict is a function of one SKILL.md, and the whole-corpus rescan was 116 s of this
-      # hook's 176 s on a one-bullet edit (measured 2026-09-25). An agent or references/ edit
-      # stages no SKILL.md, so the calibration tests skip. CI ignores the variable (CI=true).
+      # The scope variable limits skill-security-scan's HIGH-RISK calibration to the staged
+      # SKILL.md files (a verdict is a function of one SKILL.md plus the rule pack, whose
+      # .yaml/.sh never match this glob); the whole-corpus rescan was 116 s of this command's
+      # 176 s (profiled 2026-09-25). The <5% REVIEW ratio is a corpus property, so it skips here
+      # and runs only unscoped. CI ignores the variable (CI=true) and scans the full corpus.
       # The `unset` is the fix for #7833 and is load-bearing. In a LINKED WORKTREE — which every
       # feature branch here is — git exports GIT_DIR and GIT_INDEX_FILE to its hooks as ABSOLUTE
       # paths, and a `git` subprocess honours them over both its working directory and `-C`. A

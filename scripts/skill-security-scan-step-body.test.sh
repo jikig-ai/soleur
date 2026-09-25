@@ -441,6 +441,52 @@ else
   fail "1f.ii REAL ADDITION: the added path is absent from GITHUB_OUTPUT, so the scan loop would receive an empty ADDED even with no_new_skills=false"
 fi
 
+# ── 1f.iii / 1f.iv / 1e.iv — a path git QUOTES must not drop out of the scan ─────
+# `git diff --name-only` wraps a path containing non-ASCII bytes (core.quotePath=true, the
+# default) or a tab/newline/`"`/`\` (always) in double quotes with octal escapes, so
+# `"plugins/soleur/agents/caf\303\251.md"` fails the `^plugins/...` filter and the file is
+# neither scanned nor audited: a weaponised agent named `café.md` passed the required gate.
+# 1f.iii: a non-ASCII agent path must reach ADDED verbatim. 1f.iv / 1e.iv: a path git still
+# quotes after quotePath=false must FAIL CLOSED in both the PR gate and the postmerge audit.
+_fx=$(mkfixture 1f-iii)
+( cd "$_fx" && git init -q -b main . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m base \
+  && mkdir -p plugins/soleur/agents \
+  && printf -- '---\nname: cafe\n---\nbody\n' > "plugins/soleur/agents/café.md" \
+  && git add -A && git -c user.email=t@t -c user.name=t commit -q -m add-agent ) >/dev/null 2>&1 || {
+  printf 'FAIL: 1f.iii fixture repo could not be built\n' >&2; exit 2; }
+BASE_SHA=$(git -C "$_fx" rev-parse HEAD~1) \
+HEAD_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_IDENT" "$_fx"
+if [ "$RC" -eq 0 ] && grep -qxF 'plugins/soleur/agents/café.md' "$_fx/gh_output" 2>/dev/null; then
+  pass
+else
+  fail "1f.iii NON-ASCII PATH: exit $RC and GITHUB_OUTPUT does not name plugins/soleur/agents/café.md verbatim — git quoted the path and the filter dropped it, so the gate never scans it. Output: $(head -c 250 "$OUT")"
+fi
+_fx=$(mkfixture 1f-iv)
+( cd "$_fx" && git init -q -b main . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m base \
+  && mkdir -p plugins/soleur/agents \
+  && printf -- '---\nname: tab\n---\nbody\n' > "plugins/soleur/agents/a$(printf '\t')b.md" \
+  && git add -A && git -c user.email=t@t -c user.name=t commit -q -m add-agent ) >/dev/null 2>&1 || {
+  printf 'FAIL: 1f.iv fixture repo could not be built\n' >&2; exit 2; }
+BASE_SHA=$(git -C "$_fx" rev-parse HEAD~1) \
+HEAD_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_IDENT" "$_fx"
+if [ "$RC" -ne 0 ] && grep -q 'quoted path' "$OUT" 2>/dev/null; then
+  pass
+else
+  fail "1f.iv QUOTED PATH (PR gate): exit $RC — a tab-bearing agent path git still quotes was not refused, so it silently left the scan set. Output: $(head -c 250 "$OUT")"
+fi
+EVENT_BEFORE=$(git -C "$_fx" rev-parse HEAD~1) \
+MERGE_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_AUDIT" "$_fx"
+if [ "$RC" -ne 0 ] && grep -q 'quoted path' "$OUT" 2>/dev/null; then
+  pass
+else
+  fail "1e.iv QUOTED PATH (postmerge audit): exit $RC — a tab-bearing agent path git still quotes was not refused, so the audit skipped it. Output: $(head -c 250 "$OUT")"
+fi
+
 # ── 1e.ii — the postmerge audit must honour a SUPPLIED base ────────────────────
 # The `*)` branch -- the github.event.before path #7629 adds, and the whole reason the
 # multi-commit push shape is now visible -- was exercised by no fixture: 1e leaves
@@ -564,7 +610,7 @@ fi
 # reports a clean total. This one compares against a literal and exits
 # directly, so deleting assertions above reddens the run rather than shrinking
 # both sides of an equality.
-# Set to the FULL measured count (26, measured 2026-08-20), not a slack figure: any headroom
+# Set to the FULL measured count (29, measured 2026-09-25; was 26 on 2026-08-20), not a slack figure: any headroom
 # between a floor and the real total is deletable-assertion budget, not padding.
 #
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS -- no comment between them, and none between
@@ -575,7 +621,7 @@ fi
 # mutant rather than a covered floor. Measured: that is exactly how this floor tripped the
 # guard's construction ratchet (15 -> 16) on 2026-08-20.
 _total=$((passes + fails))
-_FLOOR=26
+_FLOOR=29
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
