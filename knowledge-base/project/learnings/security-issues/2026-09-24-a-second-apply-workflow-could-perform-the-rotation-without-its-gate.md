@@ -84,3 +84,14 @@ module: apps/web-platform/infra
 ## Addendum: one more session error
 
 19. **I ran `bash` on a `.ts` test file.** Bash executed its first line `import …` as ImageMagick's `import` screenshot command, which blocked for ~2 h waiting for a click inside a background task. Recovery: killed it and ran `bun test`. **Prevention:** run `plugins/soleur/test/*.ts` with `bun test`, never `bash`; `.ts` is not a shell script.
+
+## Addendum: ship and post-merge errors (2026-09-25)
+
+The rotation completed. Merge `96a87c89` came from PR #8733. Apply run 36063185028 printed `ROTATED`. The web-2 replace was run 36117021829. #8705 is closed with the evidence.
+
+20. **Preflight Checks 6 and 10 ran against the draft PR's placeholder body.** With no plan link, `PLAN` was empty, and `awk … "$PLAN"` read stdin and hung until the tool timed out. Recovery: wrote the PR body first, then re-ran both checks. **Prevention:** write the PR body (with its plan link) before preflight. Guard every `awk … "$FILE"` with `[[ -f "$FILE" ]]`, since an empty path makes awk read stdin.
+21. **The first PR body carried "Close #8705" in a numbered list.** The auto-close scanner caught it before the edit, and `closingIssuesReferences` stayed `[]`. **Prevention:** already covered by ship Phase 6; one-off.
+22. **The plan's expected merge-apply counts were wrong: `1 added, 0 changed, 1 destroyed` against an actual `2 added, 1 changed, 1 destroyed`.** Every main apply re-applies `cloudflare_bot_management.soleur_ai` and a GitHub environment deployment policy (#8754). **Prevention:** before writing an AC that pins apply counts, read the last main apply's `Plan:` line and add the recurring drift to the expected numbers.
+23. **The plan's web-2 log check (`FATAL` or `401` rows) would have passed a host whose token was revoked.** A revoked Doppler service token logs `Doppler Error: Invalid Auth token` and `Unable to download secrets`, with neither word present. **Prevention:** a negative log check for Doppler auth matches `Invalid Auth|Unable to download|401|FATAL`, and it runs once against a host that is known to be failing (here, web-2 before the replace) as its positive control.
+24. **The first admin merge failed with `Head branch was modified`.** The pre-merge hook merged `origin/main` into the branch and pushed, so the head no longer matched `--match-head-commit`. Recovery: confirmed that the delta was main's own commit with no infra files, then merged the new head. **Prevention:** expect the pre-merge sync. Re-read `headRefOid` after the hook runs, and diff the pinned head against the new one before merging.
+25. **One heartbeat read returned curl rc=22** (a transient Better Stack HTTP error). An immediate retry returned 200. **Prevention:** a timed read inside a Monitor retries a small bounded number of times and prints the HTTP code, never a bare rc.
