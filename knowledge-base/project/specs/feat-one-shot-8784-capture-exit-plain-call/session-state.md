@@ -29,3 +29,14 @@ Planning subagent canceled by user interrupt after committing the plan; no Sessi
 ### Pending
 - `test-all.sh --affected` running in background
 - review -> qa -> compound -> ship -> merge -> postmerge
+
+## Review Phase
+- Panel: 4/8 dominant seats via Devin run_subagent (code-quality, architecture, test-design, security+blast-radius); trailer emitted degraded 4/8 (87c6352b8c).
+- Findings: ~20 deduped (1 P1 same-line set-ordering miss, ~8 P2 detector/model bugs, rest P3 coverage). All resolved inline in c2649419bb.
+- Live bugs the gate found and this PR fixes: worktree-manager.sh `git branch -D`, ci-deploy.sh `docker exec`, guardrails.sh `git diff --cached`, sdk-bump-sandbox-gate.sh `git log`, + 15 unguarded captures in test files (`|| true`).
+- S4 count dropped 18->10 after `}`-mis-pop fix (7 false tails in git-data-cutover-access.test.sh). PIPESTATUS exemption retired the ci-deploy.sh:3455 baseline candidate.
+- QA: auto-skipped (prose-only Test Scenarios; coverage in unit suite).
+- Compound: learning written (2026-09-25-the-errexit-model-must-be-judged-at-the-commands-position...).
+
+### Remaining
+- ship -> merge -> postmerge

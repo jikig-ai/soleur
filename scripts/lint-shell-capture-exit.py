@@ -332,6 +332,33 @@ def set_errexit_verdict(args: str) -> bool | None:
     return set_verdicts(args).get("errexit")
 
 
+def _unquoted(text: str) -> str:
+    """Quoted spans blanked, so `||`/`&&`/`|` inside `'...'`/`"..."` are not
+    read as operators. A `\\` inside double quotes escapes the next char; a
+    lone unclosed quote blanks to EOL -- both documented limits."""
+    out = []
+    i = 0
+    in_s = in_d = False
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and in_d and i + 1 < len(text):
+            out.append(" ")
+            i += 2
+            continue
+        if ch == "'" and not in_d:
+            in_s = not in_s
+            out.append("'")
+        elif ch == '"' and not in_s:
+            in_d = not in_d
+            out.append('"')
+        elif in_s or in_d:
+            out.append(" ")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def substituted_commands(body: str) -> list[str]:
     """Split a substitution body into its pipeline stages, ignoring `||`/`&&` right operands.
 
@@ -341,7 +368,8 @@ def substituted_commands(body: str) -> list[str]:
     one does) makes every stage load-bearing.
     """
     # Anything after a `||` or `&&` is a DECISION, not the question being asked.
-    head = re.split(r"\|\||&&", body)[0]
+    # Operator chars inside quotes are not operators: `grep 'a||b'` is one stage.
+    head = re.split(r"\|\||&&", _unquoted(body))[0]
     return [seg.strip() for seg in head.split("|") if seg.strip()]
 
 
@@ -552,7 +580,7 @@ def scan(path: str) -> list[tuple[int, str, str]]:
                     # decides inside.
                     elif not m.group("decl") and not (
                         OUTER_DECIDES_RE.search(stripped[m.end("body"):])
-                        or re.search(r"\|\||&&", body)
+                        or re.search(r"\|\||&&", _unquoted(body))
                     ):
                         findings.append((lineno, "S1", stripped))
                         s1s2_positions.add(pos)
