@@ -2158,6 +2158,11 @@ resource "sentry_alert" "anthropic_credit_exhausted" {
 # says either "disabled via LEADER_CLASSES_DISABLED" (the kill switch working) or "no
 # leader module for class X" (a defect). `actionClass`, `status`, `turn`, `model` and
 # `tool` in the same data discriminate the other reasons.
+#
+# #8803: runs the handler never finished (a retry-exhausted throw, the finish timeout, an
+# Inngest-level cancel) are settled by `agent-on-spawn-settle` and page
+# `leader_internal_error` with a message suffix `(failed)`, `(cancelled)`, `(timed_out)` or
+# `(settle_failed)`. Triage per suffix: knowledge-base/engineering/operations/runbooks/spawn-dead-letter-triage.md.
 resource "sentry_alert" "spawn_agent_dead_letter" {
   organization      = var.sentry_org
   name              = "spawn-agent-dead-letter"
@@ -2178,7 +2183,7 @@ resource "sentry_alert" "spawn_agent_dead_letter" {
       conditions = [
         { tagged_event = { key = "feature", match = "eq", value = "spawn-agent" } },
         { tagged_event = { key = "op", match = "eq", value = "agent-on-spawn-requested" } },
-        { tagged_event = { key = "reason", match = "in", value = "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_refused,leader_response_truncated,leader_tool_invalid" } },
+        { tagged_event = { key = "reason", match = "in", value = "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_internal_error,leader_refused,leader_response_truncated,leader_tool_invalid" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
