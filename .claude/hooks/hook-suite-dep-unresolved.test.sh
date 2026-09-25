@@ -380,9 +380,11 @@ if ! bash "$REPO_ROOT/scripts/test-all.sh" --print-suite-globs > "$GLOBS" 2> "$R
   exit 2
 fi
 SUITE_LIST=()
+roots_read=0
 shopt -s nullglob
 while IFS= read -r g; do
   case "$g" in .claude/hooks/*) ;; *) continue ;; esac
+  roots_read=$((roots_read + 1))
   n_root=0
   for s in "$REPO_ROOT"/$g; do
     [[ -f "$s" ]] || continue
@@ -395,6 +397,13 @@ while IFS= read -r g; do
   fi
 done < "$GLOBS"
 shopt -u nullglob
+# Every hook root the runner declares must have been walked: a filtered read of the glob list
+# drops a whole root, and its suites with it, while every per-root check stays silent.
+roots_declared="$(grep -c '^\.claude/hooks/' "$GLOBS" || true)"
+if [[ "$roots_read" -ne "$roots_declared" ]]; then
+  printf '[FATAL] the runner declares %s .claude/hooks/ root(s) but %s were walked\n' "$roots_declared" "$roots_read" >&2
+  exit 1
+fi
 if [[ ${#SUITE_LIST[@]} -eq 0 ]]; then
   printf '[FATAL] no .claude/hooks/ suites found under the runner globs\n' >&2
   exit 2
