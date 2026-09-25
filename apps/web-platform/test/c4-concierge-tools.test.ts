@@ -21,8 +21,7 @@ vi.mock("@/server/c4-writer", () => ({
 }));
 
 // #8739: the tool handler mirrors a throwing notify callback via
-// reportSilentFallback, imported dynamically (server-only chains stay out of
-// this module's static graph). Mocked so the mirror is assertable.
+// reportSilentFallback. Mocked so the mirror is assertable.
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mocks.reportSilentFallback,
 }));
@@ -225,6 +224,24 @@ describe("buildC4ConciergeTools", () => {
       content: "x",
     });
     expect(res.isError).toBe(true);
+    expect(onDiagramSaved).not.toHaveBeenCalled();
+  });
+
+  // A `.md` view-embed save never re-renders, so emitting `rerendered:true`
+  // for it would clear a stale banner while the rendered model still predates
+  // the `.c4` source — silent staleness with no race required.
+  it("does NOT fire onDiagramSaved for a `.md` save (no re-render happened)", async () => {
+    const onDiagramSaved = vi.fn();
+    mocks.writeC4Diagram.mockResolvedValue({
+      ok: true,
+      commitSha: "def456",
+      rerendered: true,
+    });
+    const res = await handlerWith({ onDiagramSaved })({
+      relativePath: "engineering/architecture/diagrams/c4-model.md",
+      content: "# Model\n",
+    });
+    expect(res.isError).toBeUndefined();
     expect(onDiagramSaved).not.toHaveBeenCalled();
   });
 

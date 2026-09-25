@@ -5,7 +5,7 @@
 // (diagram ‖ Concierge/Code) lives in c4-workspace.tsx and is what KB diagram
 // pages use; this inline form is the fallback for embeds elsewhere.
 // Loaded via next/dynamic({ ssr: false }) — @likec4/diagram is browser-only.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Spinner,
   useC4Project,
@@ -14,7 +14,11 @@ import {
   C4CodePanel,
 } from "@/components/kb/c4-shared";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
-import { C4_EDIT_FLAG } from "@/lib/c4-constants";
+import {
+  C4_DIAGRAM_SAVED_EVENT,
+  C4_EDIT_FLAG,
+  type C4DiagramSavedDetail,
+} from "@/lib/c4-constants";
 
 export default function C4Diagram({
   viewId,
@@ -48,6 +52,25 @@ export default function C4Diagram({
   // C4CodePanel and its `Saved — <diagnostic>` line, so the banner is the only
   // place left to show it. Every save overwrites it.
   const [staleDiagnostic, setStaleDiagnostic] = useState<string | null>(null);
+
+  // #8739 — the embed is a live consumer of the same stale state: a Concierge
+  // save elsewhere in the app must refresh it too. Same contract as
+  // C4Workspace's listener — dirPath scope filter, typeof guard fails closed,
+  // silent refetch (no spinner flash), banner reconciled like `onSaved` minus
+  // the tab switch (the user did not save from here).
+  useEffect(() => {
+    const onDiagramSaved = (e: Event) => {
+      const d = (e as CustomEvent<C4DiagramSavedDetail>).detail;
+      if (d?.dirPath !== dirPath || typeof d.rerendered !== "boolean") return;
+      void (async () => {
+        await reload({ silent: true });
+        setStale(!d.rerendered);
+        setStaleDiagnostic(d.diagnostic ?? null);
+      })();
+    };
+    window.addEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
+    return () => window.removeEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
+  }, [dirPath, reload]);
 
   return (
     <div className="mb-4 overflow-hidden rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/40">

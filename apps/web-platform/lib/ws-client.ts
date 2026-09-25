@@ -977,13 +977,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "c4_diagram_saved": {
           // #8739 — a Concierge `edit_c4_diagram` write completed on the
-          // server. Re-broadcast as a DOM event so the open C4Workspace —
-          // which holds no handle on this socket and may belong to a
-          // DIFFERENT conversation's page — refetches and reconciles its
-          // stale banner. One live socket per user (supersedeExistingUser-
-          // Socket), so exactly one translator fires per emit; a superseded
-          // tab is already terminal-disconnected and refetches on remount.
-          // Live-only: not buffered (ADR-059), and the reducer never sees it.
+          // server. Re-broadcast as a DOM event so the open C4Workspace (or
+          // a likec4-view embed) — which holds no handle on this socket and
+          // may belong to a DIFFERENT conversation's page — refetches and
+          // reconciles its stale banner. Same-window only: one live socket
+          // per user (supersedeExistingUserSocket) means exactly one
+          // translator fires per emit, and a superseded tab is already
+          // terminal-disconnected and refetches on remount.
+          // Live-only: not buffered (the replay ring is per-conversation and
+          // this frame is user-scoped), and the reducer never sees it.
           if (typeof window !== "undefined") {
             window.dispatchEvent(
               new CustomEvent(C4_DIAGRAM_SAVED_EVENT, {

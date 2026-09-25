@@ -103,8 +103,8 @@ vi.mock("@/components/kb/c4-shared", async () => {
       loading: false,
       // A test can hold the reload open (reloadGate) to model a save that is
       // still in flight when the user navigates.
-      reload: () => {
-        reloadState.reload();
+      reload: (...args: unknown[]) => {
+        reloadState.reload(...args);
         return reloadState.gate ?? Promise.resolve();
       },
     }),
@@ -466,16 +466,19 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
 
 describe("C4Workspace — c4_diagram_saved Concierge-save notice (#8739)", () => {
   // Production dirPath shape: KB-relative dirname, no `knowledge-base/` prefix
-  // (page.tsx passes pathSegments.join("/") — the prefix is contextPath's).
+  // (page.tsx passes `pathSegments.slice(0, -1).join("/")` — the prefix is
+  // contextPath's).
   const DIR = "engineering/architecture/diagrams";
   const banner = () => screen.getByTestId("c4-diagnostics");
 
-  function fireSaved(detail: {
+  // Async act: the listener's `setStaleSave` lands after `await reload()` —
+  // one microtask past the dispatch — and must flush inside act.
+  async function fireSaved(detail: {
     dirPath: string;
     rerendered: boolean;
     diagnostic?: string | null;
   }) {
-    act(() => {
+    await act(async () => {
       window.dispatchEvent(new CustomEvent(C4_DIAGRAM_SAVED_EVENT, { detail }));
     });
   }
@@ -500,7 +503,7 @@ describe("C4Workspace — c4_diagram_saved Concierge-save notice (#8739)", () =>
     );
     const callsBefore = reloadState.reload.mock.calls.length;
 
-    fireSaved({ dirPath: DIR, rerendered: true, diagnostic: null });
+    await fireSaved({ dirPath: DIR, rerendered: true, diagnostic: null });
 
     await waitFor(() => {
       expect(reloadState.reload.mock.calls.length).toBeGreaterThan(callsBefore);
@@ -513,7 +516,7 @@ describe("C4Workspace — c4_diagram_saved Concierge-save notice (#8739)", () =>
     await renderC4WithHeader(true, true, DIR);
     expect(banner().getAttribute("data-stale")).toBe("false");
 
-    fireSaved({
+    await fireSaved({
       dirPath: DIR,
       rerendered: false,
       diagnostic: "superseded by a newer save",
@@ -531,7 +534,7 @@ describe("C4Workspace — c4_diagram_saved Concierge-save notice (#8739)", () =>
   it("a frame for another folder is a no-op — no refetch, no banner", async () => {
     await renderC4WithHeader(true, true, DIR);
 
-    fireSaved({
+    await fireSaved({
       dirPath: "engineering/other-diagrams",
       rerendered: true,
       diagnostic: null,
@@ -541,6 +544,26 @@ describe("C4Workspace — c4_diagram_saved Concierge-save notice (#8739)", () =>
     expect(reloadState.reload).not.toHaveBeenCalled();
     expect(banner().getAttribute("data-stale")).toBe("false");
     expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
+  });
+
+  it("refetches silently on concierge reopen — the recovery point for a save that landed while the socket was gone", async () => {
+    await renderC4WithHeader(true, true, DIR);
+    const callsBefore = reloadState.reload.mock.calls.length;
+
+    // Collapse unmounts the socket-owning concierge panel — a save landing
+    // now emits nothing. Reopen is the in-page recovery.
+    fireEvent.click(screen.getByLabelText("Collapse Concierge"));
+    expect(screen.queryByTestId("kb-chat-content")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: /ask about this document/i }),
+    );
+
+    await waitFor(() =>
+      expect(reloadState.reload.mock.calls.length).toBeGreaterThan(
+        callsBefore,
+      ),
+    );
+    expect(reloadState.reload).toHaveBeenLastCalledWith({ silent: true });
   });
 });
 

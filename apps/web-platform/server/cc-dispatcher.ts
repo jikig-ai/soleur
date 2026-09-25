@@ -2335,9 +2335,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           // `c4_diagram_saved` frame on the user's one live socket
           // (supersedeExistingUserSocket) so an open C4Workspace refetches
           // and reconciles its stale banner (the "then reload the page"
-          // workaround this frame replaces). A `false` return (no live
-          // socket) is benign — no open page can be stale when no client
-          // is connected; next mount refetches.
+          // workaround this frame replaces). A `false` return means the
+          // socket was already gone — concierge collapsed mid-turn or a
+          // transient disconnect — and the live-only frame is lost; the
+          // workspace refetches on concierge reopen / next mount to cover it.
           onDiagramSaved: ({ dirPath, rerendered, diagnostic }) => {
             try {
               defaultSendToClient(args.userId, {
@@ -2346,14 +2347,17 @@ export const realSdkQueryFactory: QueryFactory = async (
                 rerendered,
                 diagnostic,
               });
-            } catch {
+            } catch (err) {
               // null first arg, never a real Error — the pino mirror
               // captures a passed Error first and Sentry drops the tagged
-              // second capture (#8629).
+              // second capture (#8629); err identity lives in `extra`.
               reportSilentFallback(null, {
                 feature: "cc-dispatcher",
                 op: "c4-saved-notify",
-                extra: { dirPath },
+                extra: {
+                  dirPath,
+                  errName: err instanceof Error ? err.name : "unknown",
+                },
                 message: "c4_diagram_saved frame emit threw",
               });
             }

@@ -102,6 +102,25 @@ describe("useWebSocket — c4_diagram_saved → DOM CustomEvent (#8739)", () => 
         rerendered: true,
         diagnostic: null,
       });
+
+      // Negative control: another known frame type must NOT dispatch the
+      // event (guards a dispatch-on-every-type mutant).
+      deliver({ type: "upgrade_pending" });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(seen).toHaveLength(1);
+
+      // `diagnostic` omitted on the wire normalizes to null in the detail.
+      deliver({
+        type: "c4_diagram_saved",
+        dirPath: "engineering/architecture/diagrams",
+        rerendered: false,
+      });
+      await waitFor(() => expect(seen).toHaveLength(2));
+      expect(seen[1]).toEqual({
+        dirPath: "engineering/architecture/diagrams",
+        rerendered: false,
+        diagnostic: null,
+      });
     } finally {
       window.removeEventListener(C4_DIAGRAM_SAVED_EVENT, onSaved);
     }

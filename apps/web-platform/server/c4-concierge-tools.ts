@@ -9,6 +9,11 @@
 // the diagrams-dir scope guard (`isC4DiagramPath`) as the hard boundary.
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+// `reportSilentFallback` is statically safe here (unlike `c4-writer`, whose
+// `import "server-only"` guard must stay out of the static graph for vitest —
+// hence the dynamic import in the handler): observability's chain has no
+// server-only module and is already static in cc-dispatcher's graph.
+import { reportSilentFallback } from "@/server/observability";
 // NOTE: `@/server/c4-writer` is imported dynamically inside the handler (not at
 // module top) so its `import "server-only"` guard stays out of the static graph
 // of cc-dispatcher — otherwise every test that loads the real dispatcher would
@@ -85,7 +90,7 @@ export const C4_PROMPT_ADDENDUM =
   "existing line exactly as it is and append one `//` comment line at the " +
   "end (saving the `.md` page does not re-render); an open diagram editor " +
   "refreshes itself when the save lands — that is only a refetch of the saved " +
-  "model and says nothing about whether this save re-rendered (#8739). For " +
+  "model and says nothing about whether this save re-rendered. For " +
   "any other folder you cannot re-render it: tell the " +
   "user to re-run the diagram export for that folder in their repository.";
 
@@ -158,12 +163,14 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
             true,
           );
         }
-        // #8739 — notify the open workspace. A notify throw must NEVER break
-        // the tool response (the save already committed); the catch mirrors
-        // via reportSilentFallback, imported dynamically for the same reason
-        // c4-writer is — `@/server/observability`'s server-only chain must
-        // stay out of this module's static graph for vitest.
-        if (opts.onDiagramSaved) {
+        // #8739 — notify the open workspace on `.c4` writes. `.md` view-embed
+        // saves never re-render, so reporting them `rerendered:true` would let
+        // a stale banner clear while the rendered model still predates the
+        // `.c4` source — emit only for renderable source files. A notify throw
+        // must NEVER break the tool response (the save already committed); the
+        // catch mirrors via reportSilentFallback, statically imported
+        // (observability's chain has no server-only guard).
+        if (opts.onDiagramSaved && args.relativePath.endsWith(".c4")) {
           try {
             opts.onDiagramSaved({
               dirPath: args.relativePath.slice(
@@ -173,16 +180,17 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
               rerendered: result.rerendered,
               diagnostic: result.rerenderDiagnostic ?? null,
             });
-          } catch {
-            const { reportSilentFallback } = await import(
-              "@/server/observability"
-            );
+          } catch (err) {
             // null first arg — the pino mirror captures a passed Error first
-            // and Sentry drops the tagged second capture (#8629).
+            // and Sentry drops the tagged second capture (#8629); the thrown
+            // error's identity is preserved in `extra` for triage.
             reportSilentFallback(null, {
               feature: "c4-concierge-tools",
               op: "diagram-saved-notify",
-              extra: { relativePath: args.relativePath },
+              extra: {
+                relativePath: args.relativePath,
+                errName: err instanceof Error ? err.name : "unknown",
+              },
               message: "onDiagramSaved callback threw; the save itself committed",
             });
           }
