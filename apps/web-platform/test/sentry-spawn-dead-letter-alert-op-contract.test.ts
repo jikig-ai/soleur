@@ -23,6 +23,7 @@ const PINNED_PAGED_REASONS = [
   "acknowledgment_persist_failed",
   "anthropic_request_rejected",
   "leader_class_disabled",
+  "leader_internal_error",
   "leader_refused",
   "leader_response_truncated",
   "leader_tool_invalid",
@@ -31,6 +32,7 @@ const PINNED_PAGED_REASONS = [
 const PROMISED_NOTIFICATION = [
   "anthropic_request_rejected",
   "leader_class_disabled",
+  "leader_internal_error",
   "leader_refused",
   "leader_tool_invalid",
 ];
@@ -90,7 +92,7 @@ function filterValue(key: string): { match: string; value: string } {
 }
 
 describe("spawn_agent_dead_letter — emitter/rule contract (#8719)", () => {
-  it("the paged set is exactly the six pinned reasons, derived from PAGES_OPERATOR", () => {
+  it("the paged set is exactly the pinned reasons, derived from PAGES_OPERATOR", () => {
     expect([...PAGED_DEAD_LETTER_REASONS]).toEqual(PINNED_PAGED_REASONS);
     const fromDecision = Object.entries(PAGES_OPERATOR)
       .filter(([, pages]) => pages)
@@ -110,12 +112,15 @@ describe("spawn_agent_dead_letter — emitter/rule contract (#8719)", () => {
     expect(ruleBlock()).not.toMatch(/logic_type\s*=\s*"any"/);
   });
 
-  it("filters `reason` with `in` over exactly the paged set", () => {
+  it("filters `reason` with `in` over exactly the pinned paged set, which is non-empty", () => {
     const { match, value } = filterValue("reason");
     expect(match).toBe("in");
     // Comma-separated with no spaces, like the other `in` rules.
     expect(value).not.toMatch(/\s/);
-    const tfSet = value.split(",").map((s) => s.trim()).sort();
+    const tfSet = value.split(",").map((s) => s.trim()).filter((s) => s.length > 0).sort();
+    // A broken extraction must not compare two empty sets.
+    expect(tfSet.length).toBeGreaterThan(0);
+    expect(tfSet).toEqual(PINNED_PAGED_REASONS);
     const expected = [...PAGED_DEAD_LETTER_REASONS].join(",");
     expect(
       tfSet,
@@ -165,7 +170,7 @@ describe("spawn_agent_dead_letter — emitter/rule contract (#8719)", () => {
 });
 
 describe("spawn dead-letter — the founder copy's promise matches the paging decision (#8719)", () => {
-  it("the rows promising a notification are exactly the pinned four, and each pages", () => {
+  it("the rows promising a notification are exactly the pinned set, and each pages", () => {
     // "notif" / "alert" / "paged" cover the ways copy can promise a human was told.
     const promised = Object.entries(FAILURE_REASON_COPY)
       .filter(([, row]) => /notif|alert|paged/i.test(row.copy))

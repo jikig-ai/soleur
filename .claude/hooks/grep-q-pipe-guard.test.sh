@@ -46,10 +46,25 @@ cd "$REPO_ROOT"
 
 FAIL=0
 
-# Match a pipe feeding grep with a -q anywhere in its flag cluster (-q, -qE,
-# -qiE, -qF, -qs...). Anchored on the pipe + grep + q so a comment that merely
-# mentions the words cannot match.
-PATTERN='\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'
+# Match a pipe feeding grep with a -q anywhere in its FIRST flag cluster (-q, -qE,
+# -qiE, -qF, -qs...). Anchored on the pipe + grep + q so prose naming the words
+# without the pipe shape cannot match; prose that spells the shape still does,
+# which is why the #7024 pass strips comment lines. The pipe must be a SINGLE bar (`|` or `|&`)
+# preceded by line start or a non-bar: without `(^|[^|])` the second bar of a
+# logical OR (`a || grep -q p <<<"$x"`, already the safe form) read as a pipe (#8807).
+PATTERN='(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'
+# Not matched (no instance in the scanned paths today): --quiet/--silent, -q in a
+# later cluster (-E -q), command/env/\grep/egrep wrappers, grep inside { }, and a
+# pipe split across lines. Widening is tracked in #7005 with the rest of the sweep.
+
+# A PATTERN that does not compile must not read as "no hits": every grep below
+# folds exit 2 into exit 1 (`|| true`, `! grep`), so it would pass all three
+# checks having scanned nothing (#8807 review).
+rc=0; grep -E -- "$PATTERN" </dev/null >/dev/null 2>&1 || rc=$?
+if [[ "$rc" -ne 1 ]]; then
+  echo "UNRESOLVED: guard PATTERN does not compile as an ERE (grep rc=$rc) — this suite asserted nothing"
+  exit 3
+fi
 
 # A second, hand-ported harness hook tree was in this pathspec from #7173 until
 # it was retired in ADR-245 / #8306; its glob is gone with the tree. The scope
@@ -107,16 +122,35 @@ fi
 # this, a typo in PATTERN would make the guard pass forever on any input.
 probe="$(mktemp -d)"
 trap 'rm -rf "$probe"' EXIT
-printf 'echo "$x" | grep -qE '"'"'p'"'"'\n' > "$probe/bad.sh"
-printf 'grep -qE '"'"'p'"'"' <<<"$x"\n' > "$probe/good.sh"
+cat > "$probe/bad.sh" <<'EOF'
+echo "$x" | grep -q 'p'
+echo "$x"|grep -Eq 'p'
+| grep -qE 'p'
+echo "$x" |& grep -qE 'p'
+done|grep -iq 'p'
+$(f)|grep -sq 'p'
+EOF
+cat > "$probe/good.sh" <<'EOF'
+grep -qE 'p' <<<"$x"
+a || grep -qE 'p' <<<"$x"
+     || grep -qE 'p' <<<"$b"; then
+|| grep -qE 'p' <<<"$x"
+EOF
 
-if grep -qE "$PATTERN" "$probe/bad.sh" && ! grep -qE "$PATTERN" "$probe/good.sh"; then
-  echo "PASS: guard pattern matches the forbidden shape and not the fixed shape"
+# Every bad line must match and no good line may, compared as COUNTS: a grep error
+# prints no count, so it can never equal the line total or 0 (a negated `grep -q`
+# would read exit 2 as a pass). Both files must be non-empty, or either half
+# passes having checked nothing.
+bad_lines=$(wc -l < "$probe/bad.sh")
+bad_hits=$(grep -cE -- "$PATTERN" "$probe/bad.sh" || true)
+good_hits=$(grep -cE -- "$PATTERN" "$probe/good.sh" || true)
+if [[ "$bad_lines" -gt 0 && "$bad_hits" == "$bad_lines" && -s "$probe/good.sh" && "$good_hits" == 0 ]]; then
+  echo "PASS: guard pattern matches the forbidden shapes and not the fixed shapes (incl. || herestrings, #8807)"
 else
   FAIL=1
-  echo "FAIL: guard pattern is broken — it cannot distinguish the two shapes"
-  echo "  matches forbidden shape: $(grep -cE "$PATTERN" "$probe/bad.sh" || true) (want 1)"
-  echo "  matches fixed shape:     $(grep -cE "$PATTERN" "$probe/good.sh" || true) (want 0)"
+  echo "FAIL: guard pattern is broken — it cannot distinguish the shapes"
+  echo "  forbidden lines matched: ${bad_hits:-<grep error>}/$bad_lines (want all)"
+  echo "  fixed lines matched:     ${good_hits:-<grep error>} (want 0)"
 fi
 
 exit "$FAIL"

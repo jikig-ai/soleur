@@ -19,7 +19,7 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
 import { detachFromConsumerCancel, streamRequestInfo } from "@/server/inngest/stream-detach";
-import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
+import { agentOnSpawnRequested, agentOnSpawnSettle } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
@@ -130,6 +130,9 @@ const handlers = serve({
   client: inngest,
   functions: [
     agentOnSpawnRequested,
+    // #8803: settles runs agentOnSpawnRequested never finished. Its `-failure`
+    // function is registered by the SDK from the onFailure key.
+    agentOnSpawnSettle,
     cfoOnPaymentFailed,
     cronActionRequiredSla,
     slaIssueProcess,

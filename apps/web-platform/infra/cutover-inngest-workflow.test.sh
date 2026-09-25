@@ -2442,7 +2442,7 @@ _gate_census() {  # $1 = script → stdout "arms=N bad=<…>"; rc 1 when the set
   local arm c n=0 bad=""
   while IFS= read -r arm; do
     n=$((n + 1))
-    c=$(awk -v a="$arm" '$0 ~ "^  "a"\\)$"{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | grep -v '^[[:space:]]*#' | grep -o 'inngest_execute_registry_gate' | wc -l)
+    c=$(awk -v a="$arm" '$0 ~ "^  "a"\\)$"{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | grep -v '^[[:space:]]*#' | grep -o 'inngest_execute_registry_gate' | wc -l) || true
     case "$arm" in
       execute|registry-probe) [[ "$c" -eq 1 ]] || bad="$bad $arm=$c(want 1)" ;;
       *)                      [[ "$c" -eq 0 ]] || bad="$bad $arm=$c(want 0)" ;;
@@ -2499,7 +2499,7 @@ _arm_exit_gaps() {  # $1 = arm file, $2 = verdict var → tokens whose body lack
   local tok gaps="" body
   for tok in $ERG_TOKENS '\\*'; do
     [[ "$tok" == "dark" ]] && continue
-    body=$(awk -v t="$tok" '$0 ~ "^        "t"\\)"{f=1;print;next} f&&/^        [a-z_*]+\)/{exit} f' "$1" | grep -v '^[[:space:]]*#')
+    body=$(awk -v t="$tok" '$0 ~ "^        "t"\\)"{f=1;print;next} f&&/^        [a-z_*]+\)/{exit} f' "$1" | grep -v '^[[:space:]]*#') || true
     grep -q 'exit 1' <<<"$body" && grep -q 'Do NOT SSH the host' <<<"$body" || gaps="$gaps $tok"
   done
   printf '%s' "$gaps"

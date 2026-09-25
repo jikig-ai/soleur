@@ -67,7 +67,9 @@ SDK_PACKAGES=("@anthropic-ai/claude-agent-sdk" "@anthropic-ai/claude-code")
 # base..HEAD` exits 128 "unknown revision". Fail loudly and name the cause.
 read_branch_messages() {
   local out rc
-  out="$(git log "${BASE_REF}..HEAD" --format=%B 2>/dev/null)"; rc=$?
+  # `if` (not `; rc=$?`): under `set -e` a failed `git log` aborts before the
+  # read -- the error arm below would never name the shallow-fetch cause.
+  if out="$(git log "${BASE_REF}..HEAD" --format=%B 2>/dev/null)"; then rc=0; else rc=$?; fi
   if (( rc != 0 )); then
     echo "::error::sdk-bump-gate: could not read the commit range '${BASE_REF}..HEAD' (git exit ${rc})." >&2
     echo "::error::This is NOT a missing acknowledgement — the range is unreadable, usually because '${BASE_REF}' was fetched shallow so there is no merge base. Deepen the fetch (drop --depth on the 'git fetch origin main'), or pass SDK_GATE_ACK_TEXT." >&2
