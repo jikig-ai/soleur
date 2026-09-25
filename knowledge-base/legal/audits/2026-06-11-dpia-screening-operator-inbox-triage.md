@@ -168,3 +168,8 @@ ships a deletion API (adopt it) or extends the window (re-balance).
 > replacement. Until a post-replacement measurement confirms the binding, read the cloud-firewall
 > layer as absent. The breach assessment is recorded at
 > `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.
+>
+> Two precisions to this correction, added 2026-09-25 before merge. The nftables statement describes
+> the chain as provisioned on every host; its load was measured on the live host only, and on the
+> destroyed hosts it cannot now be measured. The SSH-log statement covers the third interval only up
+> to the 2026-09-25 read; the rest of that interval is read when the firewall is measured restored.

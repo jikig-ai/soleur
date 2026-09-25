@@ -252,3 +252,24 @@ On a flip:
 This record is **append-only**. A later limb result, the restored marker, a changed disposition or
 a correction is added as a dated addendum below, citing the text it annotates and amending nothing
 above it. That is the 2026-06-29 precedent's convention.
+
+## Addendum — 2026-09-25 (ship-gate corrections; counsel review `2026-09-counsel-review-8754.md`)
+
+This addendum amends nothing above. It narrows three statements and records two pointers.
+
+1. **L1, interval 3.** "RESOLVED for intervals 2 and 3" (frontmatter, §L1, §Findings) covers
+   interval 3 only up to the 2026-09-25 Better Stack read. Interval 3 stays open until the
+   post-replace check. When the restored marker is appended, the same query (sshd rows from host
+   `soleur-inngest`; `Accepted publickey` and `session opened for user`) is re-run from the end of
+   the 2026-09-25 read to the post-replace measurement, and its counts are recorded with the marker.
+   A non-zero count from anything but the operator's legitimate path is a flip under §If the finding
+   flips.
+2. **L2 travels with the nftables statement.** Where a record says `:8288`/`:8289` were filtered by
+   host-local nftables during the intervals, it describes the chain as provisioned on every host.
+   Its load was measured on the live host only (L2).
+3. **Activities on the store.** The list in §Why this is indexed is not closed. PA-16 (sends
+   dispatched at the `inngest.send` boundary) and PA-17 (GitHub-sourced signals, Inngest-dispatched)
+   also route events through this server. On a flip, the activities and the controllers owed an
+   Art. 33(2) notice are re-derived from the Inngest function manifest before any notice is sent.
+4. **Pointers.** The RECOMMENDED drift assertion (§Conditions) is tracked in #8870. The clause (o)
+   staleness named under §PROCESS — published documents is tracked in #8872.
