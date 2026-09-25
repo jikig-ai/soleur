@@ -43,6 +43,9 @@ REPO="$(cd "$HERE/../.." && pwd)"
 PROBE_NAME="inngest-luks-property-8296.sh"
 PROBE_SRC="$HERE/$PROBE_NAME"
 CUTOVER_SRC="$REPO/scripts/cutover-inngest.sh"
+# The shared probe-row predicate (#8846). The sandbox copies it next to the probe copy, exactly as
+# the probe resolves it from its own repo root; a case can skip the copy (C_LIB=__none__).
+LIB_SRC="$REPO/scripts/lib/inngest-probe-row.sh"
 
 fails=0
 passes=0
@@ -52,6 +55,7 @@ fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
 [[ -f "$PROBE_SRC" ]] || { echo "FATAL: probe not found at $PROBE_SRC" >&2; exit 1; }
 [[ -f "$CUTOVER_SRC" ]] || { echo "FATAL: cutover script not found at $CUTOVER_SRC" >&2; exit 1; }
+[[ -f "$LIB_SRC" ]] || { echo "FATAL: probe-row lib not found at $LIB_SRC" >&2; exit 1; }
 
 # Canonical guard, copied byte-for-byte from plugins/soleur/test/test-helpers.sh: every scratch
 # write below is rooted at $WORK, and this refuses an empty, relative or root-resolving one.
@@ -91,9 +95,10 @@ msg() { # <host_role> <data_mount_src> <data_mount_devid> [tail]
   printf 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active vector_active=active redis_active=active uptime_s=900 boot_id=%s image_ref=synthetic instance_id=hetzner-100000001 cli_version=1.0.0 cutover_flag=done probe_schema=8 host_role=%s flush_latched=true redis_keys=10 redis_expires=9 redis_key_patterns=synthetic:* data_mount_src=%s data_bytes=1000 data_mount_base=/dev/sdb data_mount_devid=%s registry_fns=7%s' \
     "$BOOT" "$1" "$2" "$3" "${4:+ $4}"
 }
-row() { # <dt> <message> [host] -> one JSONEachRow line with the documented double-encoded raw
-  jq -cn --arg dt "$1" --arg m "$2" --arg h "${3:-soleur-inngest}" \
-    '{dt: $dt, raw: ({host: $h, host_name: "soleur-inngest-prd", message: $m} | tojson)}'
+row() { # <dt> <message> [host] [emitter] -> one JSONEachRow line with the documented double-encoded raw
+  # The emitter is journald's SYSLOG_IDENTIFIER; the probe's own logger tag unless a case says so.
+  jq -cn --arg dt "$1" --arg m "$2" --arg h "${3:-soleur-inngest}" --arg e "${4:-inngest-server-probe}" \
+    '{dt: $dt, raw: ({host: $h, host_name: "soleur-inngest-prd", SYSLOG_IDENTIFIER: $e, message: $m} | tojson)}'
 }
 ded()  { row "$1" "$(msg dedicated "$2" "${3:-$VOL}" "${4:-}")"; }
 web()  { row "$1" "$(msg web "$2" "${3:-$VOL}")" soleur-web-1; }
@@ -124,9 +129,12 @@ ledger() { # <out> <luks-mechanism> <luks-mapper> <backstop-expires|__none__>
 #   C_STUB    ok | fail | garbage | none                           or raw:<file>, or absent
 #   C_NOW     SOLEUR_FT_NOW (default $NOW; "__unset__")  C_PROBE   probe source (default shipped)
 #   C_XTRACE  1 -> run under bash -x                     C_UNSET   a BETTERSTACK_QUERY_* to blank
+#   C_LIB     lib file copied to $root/scripts/lib/ (default the shipped one; __none__ skips the copy)
+#   C_LIBENV  INNGEST_PROBE_ROW_LIB passed to the probe (default: not passed)
 reset_case() {
   C_ROWS="/dev/null"; C_LEDGER="luks inngest-redis $EXP_FUTURE"; C_STUB="ok"; C_NOW="$NOW"
   C_PROBE="$PROBE_SRC"; C_XTRACE=0; C_UNSET=""; C_REQUIRE=""; C_LEAD=0; C_ARGS=""
+  C_LIB="$LIB_SRC"; C_LIBENV=""
 }
 reset_case
 
@@ -137,6 +145,10 @@ run_probe() { # -> echoes the status; combined output in $OUT
   case "$root" in "$WORK"/root) rm -rf -- "$root" ;; *) echo 199; return ;; esac
   mkdir -p "$root/scripts/followthroughs"
   cp "$C_PROBE" "$probe"
+  if [[ "$C_LIB" != "__none__" ]]; then
+    mkdir -p "$root/scripts/lib"
+    cp "$C_LIB" "$root/scripts/lib/inngest-probe-row.sh"
+  fi
 
   case "$C_LEDGER" in
     absent) : ;;
@@ -174,6 +186,7 @@ STUB
     if [[ "$C_UNSET" == "$v" ]]; then envv+=("$v="); else envv+=("$v=stub"); fi
   done
   [[ "$C_NOW" == "__unset__" ]] || envv+=("SOLEUR_FT_NOW=$C_NOW")
+  [[ -z "$C_LIBENV" ]] || envv+=("INNGEST_PROBE_ROW_LIB=$C_LIBENV")
   local -a sh=(bash)
   [[ "$C_XTRACE" == "1" ]] && sh=(bash -x)
   # env -i mirrors the sweeper: no ambient SOLEUR_FT_* reaches the probe.
@@ -495,6 +508,41 @@ expect "H3 reverted pair (plaintext claim, plaintext store)" 2 agree
 reset_case; C_ROWS="$WORK/fx/h3.jsonl"; C_LEDGER="plaintext-exception inngest-redis $EXP_PAST"
 expect "H5 reverted pair past expiry" 2 agree
 
+echo "== probe-row emitter (#8846) =="
+# (b) FORGED shape -- NOT observed live. Every live SYSLOG_IDENTIFIER=doppler row seen begins
+# {"caller":"api",...} and quotes the marker mid-string, which the anchor already sets aside. But
+# journald splits multi-line stdout into one entry per line, so a doppler row whose message BEGINS
+# with the marker, a space and the probe's own fields is the adversarial shape an anchor alone
+# reads as a measurement. Here it is the NEWEST dedicated-host row and says the store is on
+# /dev/sdb; only the emitter check keeps it from deciding.
+_forged_newest="$({ ded "$DT_FRESH" "$LUKS_SRC"; row "$DT_NEWEST" "$(msg dedicated "$PLAIN_SRC" "$VOL")" "" doppler; } | fx forgedNewest)"
+reset_case; C_ROWS="$_forged_newest"
+expect "emitter: forged doppler row beginning with the marker, newest, is not a probe row" 2 agree
+# The same forged row alone: no probe row at all, never a measurement.
+reset_case; C_ROWS="$(row "$DT_FRESH" "$(msg dedicated "$LUKS_SRC" "$VOL")" "" doppler | fx forgedOnly)"
+C_REQUIRE="role=dedicated"
+expect "emitter: a forged doppler row alone is no row" 3 no_rows
+# The lib is not in the tree: a DEDICATED selector_unavailable line, never no_rows (whose text says
+# the dedicated host sent nothing) and never a graded verdict.
+reset_case; C_ROWS="$_fresh_luks"; C_LIB="__none__"
+C_REQUIRE="CANNOT ESTABLISH: reason=selector_unavailable lib=$WORK/root/scripts/lib/inngest-probe-row.sh"
+expect "emitter: lib missing from the tree -> selector_unavailable" 3 query_failed
+# INNGEST_PROBE_ROW_LIB is honoured: with no lib in the tree, the override alone grades the forged pair.
+reset_case; C_ROWS="$_forged_newest"; C_LIB="__none__"; C_LIBENV="$LIB_SRC"
+expect "emitter: INNGEST_PROBE_ROW_LIB override is honoured" 2 agree
+# ... and an override naming a missing file is not silently replaced by the in-tree copy.
+reset_case; C_ROWS="$_fresh_luks"; C_LIBENV="$WORK/nonexistent/inngest-probe-row.sh"
+C_REQUIRE="CANNOT ESTABLISH: reason=selector_unavailable lib=$WORK/nonexistent/inngest-probe-row.sh"
+expect "emitter: INNGEST_PROBE_ROW_LIB naming a missing file -> selector_unavailable" 3 query_failed
+# A selector that loads but errors at runtime: jq's non-zero status must not read as an empty window.
+cat > "$WORK/fx/broken-lib.sh" <<'LIB'
+INNGEST_PROBE_EMITTER="inngest-server-probe"
+INNGEST_PROBE_MARKER="SOLEUR_INNGEST_SERVER_PROBE"
+INNGEST_PROBE_ROW_JQ='def inngest_probe_row: error("synthetic selector fault");'
+LIB
+reset_case; C_ROWS="$_fresh_luks"; C_LIB="$WORK/fx/broken-lib.sh"; C_REQUIRE="reason=selector_failed"
+expect "emitter: selector jq failure is query_failed, not no_rows" 3 query_failed
+
 # ── mutation machinery ────────────────────────────────────────────────────────────────────────
 echo "== mutation runner self-test =="
 # verdict_holds: did the last run produce exactly <rc> + verdict=<marker>?
@@ -783,7 +831,9 @@ if (( passes + fails != cases )); then
   exit 1
 fi
 # H4: a HARD-CODED floor. A runtime-derived one falls when a case is deleted.
-MIN_PASSES=114
+# 114 before #8846, + 6 probe-row emitter cases (forged newest, forged only, lib missing, override
+# honoured, override missing, selector jq failure) = 120.
+MIN_PASSES=120
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

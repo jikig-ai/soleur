@@ -54,13 +54,21 @@ SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 BASH_ABS="$(command -v bash)"
 
+# HERMETIC LIB RESOLUTION (#8846). The SUT resolves scripts/lib/inngest-probe-row.sh through
+# INNGEST_PROBE_ROW_LIB when it is set; an inherited value from a parent suite or shell would
+# make every case below grade against a lib this suite did not choose. Only T22 sets it.
+unset INNGEST_PROBE_ROW_LIB
+
 # One warehouse row, as betterstack-query.sh emits it: {"dt":…,"raw":"<json string>"}
+# row <dt> <host> <message> [<emitter>] — the emitter is the journald SYSLOG_IDENTIFIER. It
+# defaults to the probe's own logger tag; the inngest server's event log ships under `doppler`
+# on the SAME host (#8846), and a row carrying that emitter is never a probe row.
 row() {
   python3 -c '
 import json, sys
-dt, host, msg = sys.argv[1], sys.argv[2], sys.argv[3]
-print(json.dumps({"dt": dt, "raw": json.dumps({"host": host, "host_name": "soleur-inngest-prd", "message": msg})}))
-' "$1" "$2" "$3"
+dt, host, msg, emitter = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+print(json.dumps({"dt": dt, "raw": json.dumps({"host": host, "host_name": "soleur-inngest-prd", "SYSLOG_IDENTIFIER": emitter, "message": msg})}))
+' "$1" "$2" "$3" "${4:-inngest-server-probe}"
 }
 
 DEDICATED_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_active=active instance_id=hetzner-166317708 boot_id=abc cutover_flag=done probe_schema=8 host_role=dedicated redis_keys=442 redis_expires=431 data_mount_src=/dev/sdb data_mount_devid=scsi-0HC_Volume_106261946 data_bytes=58898716 registry_fns=7 flush_latched=true'
@@ -244,7 +252,8 @@ echo "T9: a webhook payload that merely QUOTES host_role=dedicated is not a prob
 make_query
 {
   row "2026-09-17 13:00:00" soleur-inngest "$DEDICATED_MSG"
-  row "2026-09-17 13:15:05" soleur-inngest '{"caller":"api","event":{"data":{"githubEvent":"pull_request","rawBody":"the pin is host_role=dedicated and host=soleur-inngest"}}}'
+  # Emitter `doppler`: the live shape — the inngest server's event log (#8846).
+  row "2026-09-17 13:15:05" soleur-inngest '{"caller":"api","event":{"data":{"githubEvent":"pull_request","rawBody":"the pin is host_role=dedicated and host=soleur-inngest"}}}' doppler
 } > "$SANDBOX/probe.jsonl"
 res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
 rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
@@ -453,12 +462,79 @@ fi
 # still exit 4. Dropping the `nonempty > 0 and` conjunct is killed by T5 alone (measured), so
 # a dedicated case here is byte-identical setup with a strictly weaker assertion.
 
+# ── THE EMITTER IS PART OF WHAT A PROBE ROW IS (#8846) ─────────────────────────────────────
+# The inngest server's own event log ships under SYSLOG_IDENTIFIER=doppler on the SAME host
+# (host=soleur-inngest), so the host pin cannot exclude it. T9 covers the LIVE shape (a JSON
+# line that quotes the marker mid-string), which the startswith anchor already rejects. T21 is
+# the FORGED shape — not observed live: journald splits multi-line stdout into one entry per
+# line, so an event-log line that BEGINS with the marker is the adversarial case, and it is the
+# only shape that reaches past the anchor. The forged row is the serving DEDICATED_MSG
+# unchanged except for its emitter, placed LAST (rows[-1] is file order, the newest), so the
+# emitter check is the SOLE reason it is excluded. Without that check a crash-looping host
+# reads `SERVING=yes` off a quoted line. The assertion is the `SERVING=no` token, never
+# `NOT SERVING`/`SERVING` (a substring of each other).
+echo "T21: a FORGED event-log row (emitter doppler) that begins with the marker is not a probe row"
+make_query
+{ row "2026-09-17 13:00:00" soleur-inngest \
+    "${DEDICATED_MSG/http_code=200 server_active=active/http_code=000 server_active=activating}"
+  row "2026-09-17 13:10:00" soleur-inngest "$DEDICATED_MSG" doppler; } > "$SANDBOX/probe.jsonl"
+res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+if [[ "$rc" -eq 0 ]] && grep -q 'SERVING=no' <<<"$out" && ! grep -q 'SERVING=yes' <<<"$out"; then
+  pass "doppler-emitted row beginning with the marker excluded; the real activating row decides (SERVING=no)"
+else
+  fail "a doppler event-log row was read as the newest probe row (#8846) — rc=$rc out='$out'"
+fi
+
+# The trailing space of the anchor. A probe-emitter line whose first token merely STARTS WITH the
+# marker text (a longer token) is not a probe reading; without the space the anchor admits it.
+echo "T21b: a probe-emitter line whose first token only extends the marker is not a probe row"
+make_query
+{ row "2026-09-17 13:00:00" soleur-inngest \
+    "${DEDICATED_MSG/http_code=200 server_active=active/http_code=000 server_active=activating}"
+  row "2026-09-17 13:10:00" soleur-inngest "${DEDICATED_MSG/SOLEUR_INNGEST_SERVER_PROBE /SOLEUR_INNGEST_SERVER_PROBE_V2 }"; } \
+  > "$SANDBOX/probe.jsonl"
+res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+if [[ "$rc" -eq 0 ]] && grep -q 'SERVING=no' <<<"$out" && ! grep -q 'SERVING=yes' <<<"$out"; then
+  pass "marker-prefixed longer token excluded; the anchor requires the marker followed by a space"
+else
+  fail "the anchor admitted a token that only extends the marker — rc=$rc out='$out'"
+fi
+
+# A MISSING PREDICATE IS A READ FAILURE, NOT A HOST FINDING. The probe-row definition lives in
+# scripts/lib/inngest-probe-row.sh; a SUT that cannot load it cannot tell a probe row from an
+# event-log row, so it must refuse in the exit-6 class rather than grade with a guess.
+echo "T22: the probe-row lib cannot be loaded -> exit 6, no verdict"
+make_query; row "2026-09-17 13:00:00" soleur-inngest "$DEDICATED_MSG" > "$SANDBOX/probe.jsonl"
+rc=0
+out="$(BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+  INNGEST_PROBE_ROW_LIB=/nonexistent INNGEST_STATE_QUERY="$SANDBOX/q.sh" \
+  "$BASH_ABS" "$SUT" --no-errors 2>"$SANDBOX/t22.err")" || rc=$?
+err_txt="$(cat "$SANDBOX/t22.err")"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$rc" -eq 6 && -z "$out" ]]; then
+  pass "lib unloadable -> exit 6, empty stdout"
+else
+  fail "an unloadable probe-row lib still produced a verdict — rc=$rc out='$out'"
+fi
+echo "T22b: the exit-6 diagnostic names the lib path and does not blame the host"
+CASES_RUN=$((CASES_RUN + 1))
+if grep -qF '/nonexistent' <<<"$err_txt" && grep -q 'THE READ FAILED' <<<"$err_txt" \
+   && ! grep -q 'host is not shipping' <<<"$err_txt"; then
+  pass "the diagnostic names /nonexistent as the unloadable lib"
+else
+  fail "the lib-load failure did not name the path or blamed the host: '$err_txt'"
+fi
+
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
 # printf + exit DIRECTLY, never through pass()/fail(). `[FATAL]` is the sentinel the
 # guard-vacuity-floor meta-suite matches on — a bare `FATAL:` is not in its vocabulary.
-_min_cases=25
+# 29 = T1..T20 (T3/T3b, T8/T8b, T12/T13, T18 x4 fields) = 25, plus #8846's T21 (forged
+# doppler row), T21b (marker + space anchor), T22 (lib unloadable -> 6), T22b (names the path).
+_min_cases=29
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s — the suite lost coverage\n' \
     "$CASES_RUN" "$_min_cases" >&2

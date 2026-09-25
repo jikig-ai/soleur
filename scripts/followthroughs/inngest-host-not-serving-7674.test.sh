@@ -19,6 +19,9 @@
 # querying the wrong thing -- dropping --grep, or shrinking the window, stays green forever.
 
 set -uo pipefail
+# Hermetic: the probe resolves the shared predicate relative to itself unless this is set. A value
+# leaked from the caller's env would silently point every case at some other lib (or none).
+unset INNGEST_PROBE_ROW_LIB
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE="$HERE/inngest-host-not-serving-7674.sh"
@@ -49,11 +52,23 @@ cat "${STUB_ROWS:-/dev/null}"
 STUB
 chmod +x "$WORK/stub-query"
 
-# row <message> [host] [host_name] — ONE production-shaped, double-encoded JSONEachRow line.
+# row <message> [host] [host_name] [emitter] — ONE production-shaped, double-encoded JSONEachRow
+# line. The emitter is journald's SYSLOG_IDENTIFIER (#8846): the probe logs under
+# `inngest-server-probe`, and the inngest server's own event log ships under `doppler` on the SAME
+# host, quoting the marker whenever an issue/PR/comment about the probe is webhooked in.
 row() {
-  local msg="$1" h="${2:-soleur-inngest}" hn="${3:-soleur-inngest-prd}"
-  jq -cn --arg m "$msg" --arg h "$h" --arg hn "$hn" \
-    '{dt:"2026-09-10 10:00:00", raw: ({message:$m, host:$h, host_name:$hn, shipper:"vector"} | tostring)}'
+  local msg="$1" h="${2:-soleur-inngest}" hn="${3:-soleur-inngest-prd}" ident="${4:-inngest-server-probe}"
+  jq -cn --arg m "$msg" --arg h "$h" --arg hn "$hn" --arg id "$ident" \
+    '{dt:"2026-09-10 10:00:00", raw: ({message:$m, host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$id, shipper:"vector"} | tostring)}'
+}
+
+# eventlog_row — the LIVE shape (#8846): the inngest event log on the dedicated host, emitter
+# `doppler`, whose message is a JSON event whose body QUOTES a serving probe line. Every token the
+# probe parses is followed by a space, so a substring reader is certain to grade it as serving.
+eventlog_row() {
+  local body='Measured on the host: SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active registry_fns=9 cutover_flag=done -- closing.'
+  row "$(jq -cn --arg b "$body" '{caller:"api", event:{data:{action:"closed", issue:{number:7674}, body:$b}}} | tostring')" \
+    soleur-inngest soleur-inngest-prd doppler
 }
 
 # probe_row <server_active> <http_code> [extra fields...]
@@ -168,6 +183,44 @@ else
   fail "C10 a failing warehouse query returned PASS — a read error read as a healthy host"
 fi
 
+# --- C11 THE #8846 FAIL-OPEN: an event-log row quoting a serving line is not a probe reading ----
+# The real probe says the host is dark; the inngest event log on the SAME host (emitter `doppler`)
+# carries an issue body quoting a serving probe line. A substring reader PASSED this and closed
+# #7674 (and cleared apply-workflow G18) on a host serving nothing.
+{ row "$(probe_row inactive 000 registry_fns=0)"
+  eventlog_row; } > "$WORK/eventlog-quote.jsonl"
+run "$WORK/eventlog-quote.jsonl"
+expect "C11 real inactive probe + a doppler event-log row QUOTING a serving line => not_serving, never PASS" 2 "reason=not_serving"
+expect "C11 ...and the verdict reads the REAL probe row, not the quoted one" 2 "server_active=inactive http_code=000"
+
+# --- C12 the event-log row alone is no probe row at all ---------------------------------------
+eventlog_row > "$WORK/eventlog-only.jsonl"
+run "$WORK/eventlog-only.jsonl"
+expect "C12 ONLY a doppler event-log row quoting a serving line => channel_dark" 2 "reason=channel_dark"
+
+# --- C13 FORGED shape: not observed live (journald splits multi-line stdout into one entry per
+# line, so a quoted line CAN begin a message); the emitter clause alone must reject it -----------
+row "$(probe_row active 200 registry_fns=12)" soleur-inngest soleur-inngest-prd doppler > "$WORK/forged.jsonl"
+run "$WORK/forged.jsonl"
+expect "C13 a doppler row that BEGINS with the marker (forged shape) => channel_dark, never PASS" 2 "reason=channel_dark"
+
+# --- C14 an unloadable selector is its own TRANSIENT, never channel_dark and never PASS -------
+INNGEST_PROBE_ROW_LIB=/nonexistent run "$WORK/pass.jsonl"
+expect "C14 INNGEST_PROBE_ROW_LIB=/nonexistent on a serving row => selector_unavailable" 2 "reason=selector_unavailable"
+expect "C14 ...and names the path it could not load" 2 "lib=/nonexistent"
+
+# --- C15 a def that does not compile is a decode failure, never silence and never PASS --------
+# jq exits 3 on a compile error. Piped straight into grep, that exit code vanished: zero rows out
+# read as channel_dark, or (after a grep that no longer runs) as nothing at all.
+printf '%s\n' 'INNGEST_PROBE_ROW_JQ="def inngest_probe_row: ((( ;"' > "$WORK/broken-def.sh"
+INNGEST_PROBE_ROW_LIB="$WORK/broken-def.sh" run "$WORK/pass.jsonl"
+expect "C15 a lib whose def does not compile => decode_failed with jq's exit code" 2 "reason=decode_failed jq_rc="
+
+# --- C16 a lib that sources cleanly but defines nothing is still an unavailable selector ------
+printf '%s\n' '# defines nothing' > "$WORK/empty-lib.sh"
+INNGEST_PROBE_ROW_LIB="$WORK/empty-lib.sh" run "$WORK/pass.jsonl"
+expect "C16 a lib that defines no INNGEST_PROBE_ROW_JQ => selector_unavailable, not a set -u abort" 2 "reason=selector_unavailable"
+
 # --- anti-vacuity floor ---------------------------------------------------------------------
 # Equal to the count, so deleting any case reds the suite. Reported with printf + exit, never
 # through the helpers it backstops (ADR-193): a floor that calls fail() is disarmed by the same
@@ -176,7 +229,8 @@ fi
 # NOT `checks` -- see the note on the helpers above. Reported with printf + exit directly, never
 # through the helpers it backstops (a floor dispatched through `fail()` is disarmed by the same
 # one-line edit that disarms every assertion it protects).
-FLOOR=14
+# 14 pre-#8846 + 8 (#8846): C11 x2, C12, C13, C14 x2, C15, C16.
+FLOOR=22
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1

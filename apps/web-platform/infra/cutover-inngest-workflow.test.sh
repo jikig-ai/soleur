@@ -904,46 +904,66 @@ FIX_NOW=$(date -u +%s)
 FIX_CREATED_EPOCH=$(( (FIX_NOW - 7200) / 60 * 60 ))
 FIX_CREATED="$(date -u -d "@$FIX_CREATED_EPOCH" '+%Y-%m-%dT%H:%M:%S+00:00')"
 FIX_FLOOR="$(jq -rn --arg c "$FIX_CREATED" '$c | sub("\\+00:00$"; "Z") | fromdateiso8601')"
-# fix_row <host> <host_name> <event µs | -> <ingest epoch s> — one Better Stack row, built with jq
-# so the `.raw` double encoding is exactly what the warehouse returns. `-` omits the event time.
+# fix_row <host> <host_name> <event µs | -> <ingest epoch s> <emitter tag> — one Better Stack row,
+# built with jq so the `.raw` double encoding is exactly what the warehouse returns. `-` omits the
+# event time. The emitter tag is journald's SYSLOG_IDENTIFIER: the FSM's own LOG_TAG on a real
+# liveness row, `doppler` on the inngest server's event-log row that merely QUOTES the tag (#8846).
 fix_row() {
-  jq -cn --arg h "$1" --arg hn "$2" --arg ts "$3" \
+  jq -cn --arg h "$1" --arg hn "$2" --arg ts "$3" --arg tag "$5" \
      --arg dt "$(date -u -d "@$4" '+%Y-%m-%d %H:%M:%S.000000')" \
-     '{dt: $dt, raw: ({host: $h, host_name: $hn, message: "ROWSENTINEL", _BOOT_ID: "b", _MACHINE_ID: "m",
-                       __MONOTONIC_TIMESTAMP: "1000"}
+     '{dt: $dt, raw: ({host: $h, host_name: $hn, SYSLOG_IDENTIFIER: $tag, message: "ROWSENTINEL",
+                       _BOOT_ID: "b", _MACHINE_ID: "m", __MONOTONIC_TIMESTAMP: "1000"}
                       + (if $ts == "-" then {} else {__REALTIME_TIMESTAMP: $ts} end) | tojson)}'
 }
-# The current server's rows: stamped and ingested AFTER created (first row measured +145 s).
-FIX_CUR_1="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)))"
-FIX_CUR_2="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)))"
-# THE 2026-09-24 SHAPE: the destroyed predecessor carried the SAME host/host_name pair, and its
-# rows were both stamped and ingested BEFORE the current server existed.
-FIX_PRE_1="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 16000))000000" $((FIX_FLOOR - 15999)))"
-FIX_PRE_2="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 15950))000000" $((FIX_FLOOR - 15949)))"
-# foreign/spoofed keep POST-floor clocks, so their `0` stays attributable to the #6616 host
-# conjunct and never to the generation floor.
-FIX_FOREIGN_1="$(fix_row soleur-web-platform soleur-web-platform "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)))"
-FIX_FOREIGN_2="$(fix_row soleur-web-platform soleur-web-platform "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)))"
-FIX_SPOOF_1="$(fix_row soleur-web-platform soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)))"
-FIX_SPOOF_2="$(fix_row soleur-web-platform soleur-inngest-prd "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)))"
-
-# Mixed-generation, malformed and clock-edge rows for the Guard 1 matrix.
-FIX_NOTS="$(fix_row soleur-inngest soleur-inngest-prd - $((FIX_FLOOR + 146)))"
-FIX_LATE_1="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 30))000000" $((FIX_FLOOR + 146)))"
-FIX_LATE_2="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 20))000000" $((FIX_FLOOR + 176)))"
-FIX_AHEAD_1="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 30))000000" $((FIX_FLOOR - 300)))"
-FIX_AHEAD_2="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 40))000000" $((FIX_FLOOR - 290)))"
-# A row whose event time carries a trailing newline: jq's `$` matches before a final newline, so an
-# unanchored decimal test admits it and `tonumber` then aborts the WHOLE count. Excluded, not fatal.
-FIX_NLTS="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 150))000000"$'\n' $((FIX_FLOOR + 151)))"
-# Ingest clock boundary: stamped after created, ingested ONE second before it -> excluded.
-FIX_DTMINUS="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 30))000000" $((FIX_FLOOR - 1)))"
-FIX_EDGE="$(fix_row soleur-inngest soleur-inngest-prd "${FIX_FLOOR}000000" "$FIX_FLOOR")"
-FIX_EDGE_MINUS="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR * 1000000 - 1))" "$FIX_FLOOR")"
-# Non-canonical but valid: keys reordered, extra journald fields, a bare-seconds dt.
-FIX_REORDER="$(jq -cn --arg ts "$((FIX_FLOOR + 145))000000" --arg dt "$(date -u -d "@$((FIX_FLOOR + 146))" '+%Y-%m-%d %H:%M:%S')" \
-  '{raw: ({_SYSTEMD_UNIT: "inngest-cutover-flip.service", __REALTIME_TIMESTAMP: $ts, PRIORITY: "6",
-           host_name: "soleur-inngest-prd", _PID: "42", host: "soleur-inngest"} | tojson), dt: $dt, extra: 1}')"
+# The fixture rows are built TWICE, once per FSM emitter: FIX_<NAME>_FLIP carry inngest-cutover-flip
+# (the flip harness) and FIX_<NAME>_LUKS carry inngest-luks-cutover (the LUKS harness), so a reader
+# passing the OTHER FSM's tag reads 0 on its own rows. Built eagerly with literal tags: this runs at
+# load time under `set -euo pipefail`, where a `${LV_TAG:?}`-style builder would abort the suite.
+FIX_TAG_FLIP="inngest-cutover-flip"
+FIX_TAG_LUKS="inngest-luks-cutover"
+fix_set() { # $1 = set suffix (FLIP|LUKS), $2 = that FSM's emitter tag
+  local s="$1" t="$2"
+  # The current server's rows: stamped and ingested AFTER created (first row measured +145 s).
+  printf -v "FIX_CUR_1_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)) "$t")"
+  printf -v "FIX_CUR_2_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)) "$t")"
+  # THE 2026-09-24 SHAPE: the destroyed predecessor carried the SAME host/host_name pair, and its
+  # rows were both stamped and ingested BEFORE the current server existed.
+  printf -v "FIX_PRE_1_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 16000))000000" $((FIX_FLOOR - 15999)) "$t")"
+  printf -v "FIX_PRE_2_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 15950))000000" $((FIX_FLOOR - 15949)) "$t")"
+  # foreign/spoofed keep POST-floor clocks, so their `0` stays attributable to the #6616 host
+  # conjunct and never to the generation floor.
+  printf -v "FIX_FOREIGN_1_$s" '%s' "$(fix_row soleur-web-platform soleur-web-platform "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)) "$t")"
+  printf -v "FIX_FOREIGN_2_$s" '%s' "$(fix_row soleur-web-platform soleur-web-platform "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)) "$t")"
+  printf -v "FIX_SPOOF_1_$s" '%s' "$(fix_row soleur-web-platform soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)) "$t")"
+  printf -v "FIX_SPOOF_2_$s" '%s' "$(fix_row soleur-web-platform soleur-inngest-prd "$((FIX_FLOOR + 175))000000" $((FIX_FLOOR + 176)) "$t")"
+  # Mixed-generation, malformed and clock-edge rows for the Guard 1 matrix.
+  printf -v "FIX_NOTS_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd - $((FIX_FLOOR + 146)) "$t")"
+  printf -v "FIX_LATE_1_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 30))000000" $((FIX_FLOOR + 146)) "$t")"
+  printf -v "FIX_LATE_2_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR - 20))000000" $((FIX_FLOOR + 176)) "$t")"
+  printf -v "FIX_AHEAD_1_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 30))000000" $((FIX_FLOOR - 300)) "$t")"
+  printf -v "FIX_AHEAD_2_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 40))000000" $((FIX_FLOOR - 290)) "$t")"
+  # A row whose event time carries a trailing newline: jq's `$` matches before a final newline, so an
+  # unanchored decimal test admits it and `tonumber` then aborts the WHOLE count. Excluded, not fatal.
+  printf -v "FIX_NLTS_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 150))000000"$'\n' $((FIX_FLOOR + 151)) "$t")"
+  # Ingest clock boundary: stamped after created, ingested ONE second before it -> excluded.
+  printf -v "FIX_DTMINUS_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 30))000000" $((FIX_FLOOR - 1)) "$t")"
+  printf -v "FIX_EDGE_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "${FIX_FLOOR}000000" "$FIX_FLOOR" "$t")"
+  printf -v "FIX_EDGE_MINUS_$s" '%s' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR * 1000000 - 1))" "$FIX_FLOOR" "$t")"
+  # Non-canonical but valid: keys reordered, extra journald fields, a bare-seconds dt; the emitter
+  # field sits mid-object, where a positional read would miss it.
+  printf -v "FIX_REORDER_$s" '%s' "$(jq -cn --arg ts "$((FIX_FLOOR + 145))000000" --arg dt "$(date -u -d "@$((FIX_FLOOR + 146))" '+%Y-%m-%d %H:%M:%S')" --arg tag "$t" \
+    '{raw: ({_SYSTEMD_UNIT: "inngest-cutover-flip.service", __REALTIME_TIMESTAMP: $ts, PRIORITY: "6",
+             host_name: "soleur-inngest-prd", SYSLOG_IDENTIFIER: $tag, _PID: "42", host: "soleur-inngest"} | tojson), dt: $dt, extra: 1}')"
+}
+fix_set FLIP "$FIX_TAG_FLIP"
+fix_set LUKS "$FIX_TAG_LUKS"
+# #8846 THE EVENT-LOG SHAPE: the inngest server's own event log (emitter `doppler`, the unit that
+# wraps inngest under `doppler run`) quoting an FSM tag — a GitHub webhook body that names
+# `inngest-cutover-flip`, ~22 rows/day live. Same host pair, current generation on BOTH clocks, so
+# only the emitter conjunct can exclude it; without that conjunct these read as liveness (audible).
+# One set serves both harnesses: the row is the same whichever FSM tag it happens to quote.
+FIX_EVLOG_1="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 160))000000" $((FIX_FLOOR + 161)) doppler)"
+FIX_EVLOG_2="$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 190))000000" $((FIX_FLOOR + 191)) doppler)"
 
 FLV_ARGV="$(mktemp)"; SCRATCH+=("$FLV_ARGV")
 FLV_CURL_ARGV="$(mktemp)"; SCRATCH+=("$FLV_CURL_ARGV")
@@ -962,43 +982,64 @@ for _gfn in _hcloud_created_epoch _inngest_server_created_epoch _current_instanc
   awk -v f="$_gfn" '$0 == f "() {" {p=1} p {print} p && /^\}$/ {p=0}' "$BODY_SH" >> "$GEN_FN"
 done
 FLV_OUT=""; FLV_RC=0
-# lv_rows <mode> — the Better Stack rows each mode returns. Shared by the flip and LUKS harnesses.
+# lv_emit <set> <NAME>... — print FIX_<NAME>_<set> for each NAME. An unknown set or name is logged
+# to the stub-miss ledger (asserted empty below) instead of printing nothing: an empty mode would
+# read '0' and pass every "counts 0" row vacuously.
+lv_emit() {
+  local s="$1" n v; shift
+  for n in "$@"; do
+    v="FIX_${n}_${s}"
+    if [[ -z "${!v+x}" ]]; then echo "unexpected-lv-fixture: $v" >> "$FLV_STUB_MISS"; continue; fi
+    printf '%s\n' "${!v}"
+  done
+}
+# lv_rows <mode> <set> — the Better Stack rows each mode returns, from fixture set FLIP or LUKS (the
+# harness's own FSM emitter). Shared by the flip and LUKS harnesses.
 lv_rows() {
+  local s="${2:-}" tv
+  case "$s" in
+    FLIP|LUKS) ;;
+    *) echo "unexpected-lv-set: '$s'" >> "$FLV_STUB_MISS"; return 0 ;;
+  esac
   case "$1" in
-    rows|current) printf '%s\n' "$FIX_CUR_1" "$FIX_CUR_2" ;;
-    foreign)      printf '%s\n' "$FIX_FOREIGN_1" "$FIX_FOREIGN_2" ;;
+    rows|current) lv_emit "$s" CUR_1 CUR_2 ;;
+    foreign)      lv_emit "$s" FOREIGN_1 FOREIGN_2 ;;
     # THE #6616 COLLISION, FIXTURED: a WEB host self-labelling with the dedicated node's
     # sed-rendered host_name literal (#6616 is OPEN precisely because this was observed).
     # host_name ALONE counts these as our liveness -> H>0 -> `clear` -> the exact fail-open
     # this gate exists to close. The `host` conjunct is what excludes them, so this fixture
     # is what makes the dual-field filter load-bearing rather than decorative.
-    spoofed)      printf '%s\n' "$FIX_SPOOF_1" "$FIX_SPOOF_2" ;;
-    predecessor)  printf '%s\n' "$FIX_PRE_1" "$FIX_PRE_2" ;;
-    mixed-pc)     printf '%s\n' "$FIX_PRE_1" "$FIX_PRE_2" "$FIX_CUR_1" "$FIX_CUR_2" ;;
-    mixed-cp)     printf '%s\n' "$FIX_CUR_1" "$FIX_CUR_2" "$FIX_PRE_1" "$FIX_PRE_2" ;;
-    no-ts)        printf '%s\n' "$FIX_NOTS" ;;
-    no-ts+2cur)   printf '%s\n' "$FIX_NOTS" "$FIX_CUR_1" "$FIX_CUR_2" ;;
-    late-ingest)  printf '%s\n' "$FIX_LATE_1" "$FIX_LATE_2" ;;
-    clock-ahead)  printf '%s\n' "$FIX_AHEAD_1" "$FIX_AHEAD_2" ;;
-    edge)         printf '%s\n' "$FIX_EDGE" ;;
-    nlts+2cur)    printf '%s\n' "$FIX_NLTS" "$FIX_CUR_1" "$FIX_CUR_2" ;;
-    dt-minus)     printf '%s\n' "$FIX_DTMINUS" ;;
+    spoofed)      lv_emit "$s" SPOOF_1 SPOOF_2 ;;
+    predecessor)  lv_emit "$s" PRE_1 PRE_2 ;;
+    mixed-pc)     lv_emit "$s" PRE_1 PRE_2 CUR_1 CUR_2 ;;
+    mixed-cp)     lv_emit "$s" CUR_1 CUR_2 PRE_1 PRE_2 ;;
+    no-ts)        lv_emit "$s" NOTS ;;
+    no-ts+2cur)   lv_emit "$s" NOTS CUR_1 CUR_2 ;;
+    late-ingest)  lv_emit "$s" LATE_1 LATE_2 ;;
+    clock-ahead)  lv_emit "$s" AHEAD_1 AHEAD_2 ;;
+    edge)         lv_emit "$s" EDGE ;;
+    nlts+2cur)    lv_emit "$s" NLTS CUR_1 CUR_2 ;;
+    dt-minus)     lv_emit "$s" DTMINUS ;;
     fresh)        # rows from a server created seconds ago, stamped after it (young AND counted > 0)
-                  local n; n=$(date -u +%s)
-                  fix_row soleur-inngest soleur-inngest-prd "$((n - 20))000000" $((n - 19))
-                  fix_row soleur-inngest soleur-inngest-prd "$((n - 10))000000" $((n - 9)) ;;
-    edge-minus)   printf '%s\n' "$FIX_EDGE_MINUS" ;;
-    reorder)      printf '%s\n' "$FIX_REORDER" ;;
+                  local n; n=$(date -u +%s); tv="FIX_TAG_$s"
+                  fix_row soleur-inngest soleur-inngest-prd "$((n - 20))000000" $((n - 19)) "${!tv}"
+                  fix_row soleur-inngest soleur-inngest-prd "$((n - 10))000000" $((n - 9)) "${!tv}" ;;
+    edge-minus)   lv_emit "$s" EDGE_MINUS ;;
+    reorder)      lv_emit "$s" REORDER ;;
+    # #8846: the inngest server's event log quoting the FSM tag — host pair, current generation,
+    # emitter `doppler`. Not liveness: the emitter conjunct alone must exclude it.
+    eventlog)     printf '%s\n' "$FIX_EVLOG_1" "$FIX_EVLOG_2" ;;
+    eventlog+2cur) printf '%s\n' "$FIX_EVLOG_1" "$FIX_EVLOG_2"; lv_emit "$s" CUR_1 CUR_2 ;;
     *)            : ;;
   esac
 }
-# lv_mocks <rows-mode> <anchor-mode> <token-mode> — the reader's three external commands, each
+# lv_mocks <rows-mode> <anchor-mode> <token-mode> <fixture-set> — the reader's three external commands, each
 # replaying its real contract. `doppler` branches on its ARGUMENTS before the mode: a mode-only
 # mock answered the HCLOUD token read with row JSON, which made a failure row pass for the wrong
 # reason. `curl` (called without -f) returns rc 0 plus the body plus `\n<code>`, as
 # `-w '\n%{http_code}'` does; a non-zero rc is a transport fault only.
 lv_mocks() {
-  LV_MODE="$1"; LV_ANCHOR="${2:-ok}"; LV_TOK="${3:-both}"
+  LV_MODE="$1"; LV_ANCHOR="${2:-ok}"; LV_TOK="${3:-both}"; LV_SET="${4:-}"
   : > "$FLV_ARGV"; : > "$FLV_CURL_ARGV"; : > "$FLV_CURL_STDIN"; : > "$FLV_CURL_CALLS"; : > "$FLV_HC_READS"
   # shellcheck disable=SC2317  # invoked indirectly, by the eval'd readers
   doppler() {
@@ -1016,7 +1057,7 @@ lv_mocks() {
     printf '%s\n' "$*" > "$FLV_ARGV"
     case "$LV_MODE" in
       fail) return 7 ;;
-      *) lv_rows "$LV_MODE"; return 0 ;;
+      *) lv_rows "$LV_MODE" "$LV_SET"; return 0 ;;
     esac
   }
   # shellcheck disable=SC2317  # invoked indirectly, by the eval'd anchor
@@ -1076,7 +1117,7 @@ call_flip_liveness_count() { # $1 = rows mode, $2 = anchor mode (default ok), $3
     eval "$(cat "$FLQ_FN")"
     eval "$(cat "$GEN_FN")"
     eval "$(cat "$FLV_FN")"
-    lv_mocks "$1" "${2:-ok}" "${3:-both}"
+    lv_mocks "$1" "${2:-ok}" "${3:-both}" FLIP
     # DO NOT export FLIP_LIVENESS_SINCE here (#7674 review). Exporting it made the `--since 15m`
     # argv assertion measure the TEST'S OWN value, so widening the SUT to 365d — the fail-open
     # direction the SUT comment warns about — survived with the suite green. Source the real
@@ -1149,13 +1190,25 @@ assert "G3 generation: jq parses Hetzner created (Z and +00:00) and the Better S
   "[[ \"\$(jq -rn '\"2026-09-24T18:57:33+00:00\" | sub(\"\\\\+00:00\$\"; \"Z\") | strptime(\"%Y-%m-%dT%H:%M:%SZ\") | mktime')\" == 1790276253 && \"\$(jq -rn '\"2026-09-24 19:08:26.1\" | sub(\"\\\\.[0-9]+\$\"; \"\") | strptime(\"%Y-%m-%d %H:%M:%S\") | mktime')\" == 1790276906 ]]"
 # H1: foreign/spoofed must stay POST-floor on both clocks, so their 0 is the #6616 host conjunct's.
 H1_CHECKED=0; H1_BAD=0
-for _r in "$FIX_FOREIGN_1" "$FIX_FOREIGN_2" "$FIX_SPOOF_1" "$FIX_SPOOF_2"; do
+for _r in "$FIX_FOREIGN_1_FLIP" "$FIX_FOREIGN_2_FLIP" "$FIX_SPOOF_1_FLIP" "$FIX_SPOOF_2_FLIP"; do
   H1_CHECKED=$((H1_CHECKED + 1))
   jq -e --argjson f "$FIX_FLOOR" '(.raw | fromjson | .__REALTIME_TIMESTAMP | tonumber) >= ($f * 1000000)
       and ((.dt | sub("\\.[0-9]+$"; "") | strptime("%Y-%m-%d %H:%M:%S") | mktime) >= $f)' <<<"$_r" >/dev/null || H1_BAD=$((H1_BAD + 1))
 done
 assert "G3 generation H1: the foreign/spoofed fixtures are post-floor on both clocks (checked=$H1_CHECKED bad=$H1_BAD)" \
   "[[ '$H1_CHECKED' -eq 4 && '$H1_BAD' -eq 0 ]]"
+# #8846 fixture control: the event-log rows carry OUR host pair and are post-floor on both clocks,
+# with emitter `doppler`, so their '0' below is the emitter conjunct's and never the host or floor's.
+EL_CHECKED=0; EL_BAD=0
+for _r in "$FIX_EVLOG_1" "$FIX_EVLOG_2"; do
+  EL_CHECKED=$((EL_CHECKED + 1))
+  jq -e --argjson f "$FIX_FLOOR" '(.raw | fromjson) as $r
+      | $r.host == "soleur-inngest" and $r.host_name == "soleur-inngest-prd" and $r.SYSLOG_IDENTIFIER == "doppler"
+      and ($r.__REALTIME_TIMESTAMP | tonumber) >= ($f * 1000000)
+      and ((.dt | sub("\\.[0-9]+$"; "") | strptime("%Y-%m-%d %H:%M:%S") | mktime) >= $f)' <<<"$_r" >/dev/null || EL_BAD=$((EL_BAD + 1))
+done
+assert "#8846 fixture control: the event-log rows are host-pair, post-floor on both clocks, emitter doppler (checked=$EL_CHECKED bad=$EL_BAD)" \
+  "[[ '$EL_CHECKED' -eq 2 && '$EL_BAD' -eq 0 ]]"
 
 # Guard 1 — the row predicate, executed through the real reader.
 lv_case() { # $1 desc, $2 rows mode, $3 anchor mode, $4 expected token
@@ -1182,6 +1235,15 @@ lv_case "boundary: one microsecond before created does not"        edge-minus  o
 lv_case "boundary: ingested ONE second before created does not, whatever it is stamped" dt-minus ok 0
 lv_case "a top-level extra field and a sentinel-bearing label do not disturb the decode" current xfield 2
 lv_case "non-canonical row (reordered keys, extra fields, bare-seconds dt) counts" reorder ok 1
+# #8846: the inngest server's event log quotes the FSM tag in a webhook body (emitter `doppler`,
+# ~22 rows/day live). host + host_name alone counted those as flip liveness — `audible` on a host
+# whose FSM may be dead. Only rows the FSM itself emitted (SYSLOG_IDENTIFIER == its tag) count.
+lv_case "#8846 event-log rows quoting the tag (emitter doppler) are NOT liveness" eventlog ok 0
+# shellcheck disable=SC2034  # read inside the eval'd assert condition below
+EL_NOTICE="$(grep -F '::notice::' "$FLV_ERR" || true)"
+assert "#8846 the event-log notice reports host_pair=0: host_pair counts rows from the FSM's own emitter only" \
+  "grep -qE 'rows=2 counted=0 host_pair=0 pre_floor=0 malformed=0 skew_suspect=0$' <<<\"\$EL_NOTICE\""
+lv_case "#8846 event-log rows beside two real FSM rows: only the FSM's own rows count" eventlog+2cur ok 2
 call_flip_liveness_count predecessor ok
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 PRE_NOTICE="$(grep -F '::notice::' "$FLV_ERR" || true)"
@@ -1258,14 +1320,20 @@ assert "G3 generation anchor: a rejected token names the variable that was sent"
 # A local filter fault must warn, so the `unreadable` refusal never points at a warning that is absent.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' 'garbage'; }
-  printf '%s\n' "$FIX_CUR_1" | _generation_scoped_count "$FIX_FLOOR" test 2>"$FLV_ERR" )"
+  printf '%s\n' "$FIX_CUR_1_FLIP" | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
 assert "G3 generation: a filter that does not yield six integers -> __UNREADABLE__ WITH a warning naming it" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]] && grep -qF 'row-count filter did not yield six integers' '$FLV_ERR'"
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' '2 2 2 0 0 0 9'; }
-  printf '%s\n' "$FIX_CUR_1" | _generation_scoped_count "$FIX_FLOOR" test 2>"$FLV_ERR" )"
+  printf '%s\n' "$FIX_CUR_1_FLIP" | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
 assert "G3 generation: a SEVENTH token from the filter is refused, not silently absorbed" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]]"
+# #8846: a counter reached without an emitter tag cannot scope to the FSM, so it refuses, and says
+# the defect is in the script (not the host) — on STDERR, never inside the stdout token.
+FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
+  printf '%s\n' "$FIX_CUR_1_FLIP" "$FIX_CUR_2_FLIP" | _generation_scoped_count "$FIX_FLOOR" test "" 2>"$FLV_ERR" )"
+assert "#8846 an EMPTY emitter tag -> __UNREADABLE__ (got '$FILTER_OUT'), with the missing-tag warning on stderr" \
+  "[[ '$FILTER_OUT' == '__UNREADABLE__' ]] && grep -qF '::warning::' '$FLV_ERR' && grep -qF 'liveness counter called without an emitter tag — a defect in cutover-inngest.sh, not a host state' '$FLV_ERR'"
 # Closure: the host-pair predicate lives in exactly ONE place, and both write-gating readers reach it.
 HP_SITES=$(grep -cF '.r.host == $h and .r.host_name == $hn' "$BODY_SH" || true)
 OLD_HP=$(grep -cF 'select(.host == $h and .host_name == $hn)' "$BODY_SH" || true)
@@ -1331,7 +1399,7 @@ call_luks_liveness_count() {
   set +e
   LKL_OUT=$(
     eval "$(cat "$FLQ_FN")"; eval "$(cat "$GEN_FN")"; eval "$(cat "$LKL_FN")"
-    lv_mocks "$1" "${2:-ok}" both
+    lv_mocks "$1" "${2:-ok}" both LUKS
     eval "$(grep -E '^LUKS_LIVENESS_SINCE=' "$BODY_SH")"
     export INNGEST_HOST="soleur-inngest" INNGEST_HOST_NAME="soleur-inngest-prd"
     _luks_liveness_count 2>"$FLV_ERR"
@@ -1346,6 +1414,10 @@ assert "G3 generation: LUKS liveness keeps its own tag" "grep -qF -- '--grep inn
 call_luks_liveness_count current absent
 assert "G3 generation: LUKS liveness fails closed on an unreadable anchor and skips Better Stack" \
   "[[ '$LKL_OUT' == '__UNREADABLE__' && ! -s '$FLV_ARGV' ]]"
+call_luks_liveness_count eventlog
+assert "#8846 LUKS liveness: event-log rows quoting the tag (emitter doppler) are NOT liveness (got '$LKL_OUT')" "[[ '$LKL_OUT' == '0' ]]"
+call_luks_liveness_count eventlog+2cur
+assert "#8846 LUKS liveness: beside two real LUKS FSM rows, only those count (got '$LKL_OUT')" "[[ '$LKL_OUT' == '2' ]]"
 
 # The latch is deliberately unfloored and never reaches Hetzner.
 : > "$FL_CURL_CALLS"
@@ -3894,7 +3966,10 @@ _DISPATCHED=$((PASS + FAIL))
 #   (+17), the dt-minus and extra-field decode rows, the 590/610 s and young-but-shipping warning rows,
 #   the rc28/rc6 cause rows, the read/write mask row, 7 one-definition pins, the latch-body pin, the
 #   stub-miss ledger and its positive control; minus one (xfield left the failure loop).
-_EXACT_FLOOR=914
+# 914 -> 923 (+9) at #8846 (liveness counters scoped by emitter), measured: the event-log fixture
+#   control, two flip lv_case pairs (eventlog, eventlog+2cur: value + sentinel-absence rows, +4), the
+#   event-log host_pair=0 notice row, the two LUKS event-log rows, and the empty-tag refusal row.
+_EXACT_FLOOR=923
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
