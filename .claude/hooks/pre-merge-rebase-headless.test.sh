@@ -50,8 +50,8 @@ PASS=0; FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
-command -v jq  >/dev/null 2>&1 || { echo "SKIP: jq missing";  exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq  >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 # Build a minimal work repo with review evidence so we get past the
 # review-evidence gate and reach the detached-HEAD warn at line 110.
