@@ -47,9 +47,11 @@
 #
 # HOW IT READS. The deploy webhook forwards only `from` and `function_ids` to the on-host probe
 # (apps/web-platform/infra/hooks.json.tmpl), so the window is open-topped and the ONLY cost lever
-# is the POPULATION: the 52 ids are dealt round-robin into 5 slices of ≤ 11 from a density-sorted
+# is the POPULATION: the 52 ids are dealt round-robin into 7 slices of ≤ 8 from a density-sorted
 # file (inngest-soak-6178.function-ids.txt — the sort IS the balancing lever) so no slice
-# approaches the host's 18-page / 1800-run feasibility gate (90 s ÷ 5 s/page × 100). A registry
+# approaches the host's 18-page / 1800-run feasibility gate (90 s ÷ 5 s/page × 100). It was 5
+# slices of ≤ 11 until 2026-09-25, when slice 1 (1023 runs) timed out on page 8 on every retry
+# while its two halves read cleanly on their own; 7 slices put the */20 minter's slice at 775. A registry
 # GET first requires every population id to still be registered; a registry that GREW is reported
 # as UNMEASURED ids and QUALIFIES the verdict rather than blocking it.
 #
@@ -151,7 +153,7 @@ SOAK_FROM=2026-09-15T12:40:00Z      # bucket_floor(09-15 verify pass 13:23:00Z) 
 SOAK_END=2026-09-22T13:23:00Z       # the 09-15 verify pass instant + 7 days
 SOAK_STALE=2026-10-06T00:00:00Z     # past this, refuse before any GET: the reading is no longer takeable and the verbs are overdue
 PERIOD=1200
-SLICE_MAX=11
+SLICE_MAX=8
 POPULATION_SIZE=52
 RUN_FLOOR=800                       # half the day-3.6 count (826); a hole that lost > half the window
 PROBE_BUDGET_S=420                  # wall-clock cap for the slice loop: the sweeper's job is 15 min for ALL probes

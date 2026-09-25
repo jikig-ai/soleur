@@ -1482,8 +1482,10 @@ groups, and each was attributed read-only against `routine_runs` and Better Stac
 named above, and `cron-ghcr-token-minter` ×3 in bucket 1491719 (09-22) is a catch-up of the same shape
 as 09-17, after a dedicated-host replace left no scheduler until `op=resume` run 35698687536. Each is
 pinned into the probe's explained set as its exact run-id set; #6178 comment 5829980093 is the full
-record, including web-1's quiesced shape across the window. Nothing is flipped, released or closed
-by this update.
+record, including web-1's quiesced shape across the window. The same change re-deals the probe's
+population into 7 slices (it was 5): on 2026-09-25 the 1023-run heaviest slice timed out on the
+host's page 8 on every retry, while at 7 slices the live read-only reading was clean (2304 runs,
+explained=5, UNEXPLAINED=0). Nothing is flipped, released or closed by this update.
 
 ## Addendum — 2026-09-19 (#6488, #6617) — the dark tables are gone, and the probe that could not see its own verdict
 

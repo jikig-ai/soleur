@@ -471,3 +471,17 @@ The panel was DHH, Kieran, code-simplicity, plus CTO (devex lens), and before th
 - `unique_by(.bucket)` is correct only while all pins in one bucket share one attribution. Today only 1491374 has two pins, and both fall back. Say so in a code comment. (`unique_by(.why)` would give byte-identical output on today's data, because the four attributions differ, so no case distinguishes the two. Bucket is the key the output names.)
 - The test harness's `run()` always pins the clock. New cases pass `NOW=$NOW_0925` explicitly, and none reads the wall clock.
 - Run `npx markdownlint-cli2` on this plan and `tasks.md` before committing (lefthook lints both).
+
+## Addendum — 2026-09-25 (work phase): E2 found the reading untakeable; slices re-dealt 5 → 7
+
+E2 (sweeper dry run 36121535964 on this branch) returned `CANNOT ESTABLISH: reason=slice_unreadable
+slice=1/5 http=500 cause=probe_fatal`. The host's own body, read directly three times, was
+`FATAL empty/truncated runs response on page 8 after 1 retry (last_curl_exit=28, total_count=1023)`,
+deterministic at ~34 s. The minter alone (713 runs, 8 pages, 19 s) and the other ten slice-1 ids
+(310 runs, 4 s) each read HTTP 200. So `main`'s probe could no longer take the reading either,
+independent of this PR. Scope grew by one constant: `SLICE_MAX` 11 → 8 (7 slices). The harness
+now derives its loops from `SLICES=7`, its curl stub rejects > 8 ids, and a literal pin reds on
+drift. The live read-only run of this branch at 7 slices returned rc=5 SOAK CLEAN, 2304 runs,
+explained=5, UNEXPLAINED=0, s1=775. The population order is unchanged, and the dated measurement
+in the population file is appended to, not edited.
+

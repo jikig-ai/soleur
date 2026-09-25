@@ -87,12 +87,12 @@ case "$url" in
   "https://deploy.soleur.ai/hooks/inngest-doublefire-probe?from=2026-09-15T12:40:00Z&function_ids="*)
     csv="${url#*function_ids=}"
     n="$(printf '%s' "$csv" | tr ',' '\n' | grep -c .)"
-    [[ "$n" -le 11 ]] || { echo "stub: slice carries $n ids (> 11)" >&2; exit 64; }
+    [[ "$n" -le 8 ]] || { echo "stub: slice carries $n ids (> 8)" >&2; exit 64; }
     printf '%s\n' "$csv" >> "$cfg/slice-ids.log"
     first="${csv%%,*}"
     line="$(grep -nxF "$first" "$cfg/population.txt" | cut -d: -f1)"
     [[ -n "$line" ]] || { echo "stub: first id not in population" >&2; exit 66; }
-    k=$(( (line - 1) % 5 + 1 ))
+    k=$(( (line - 1) % 7 + 1 ))
     body="$cfg/slice-$k.json"; code="$(cat "$cfg/slice-$k.code" 2>/dev/null || echo 200)" ;;
   *) printf 'stub: unexpected url %s\n' "$url" >&2; printf '%s\n' "OFFHOST $url" >> "$cfg/calls.log"; exit 99 ;;
 esac
@@ -105,7 +105,7 @@ chmod 0755 "$WORK/bin/curl"
 
 # ── fixtures ──────────────────────────────────────────────────────────────────────────────────
 UUID18='["a0000000-0000-4000-8000-000000000001","a0000000-0000-4000-8000-000000000002","a0000000-0000-4000-8000-000000000003","a0000000-0000-4000-8000-000000000004","a0000000-0000-4000-8000-000000000005","a0000000-0000-4000-8000-000000000006","a0000000-0000-4000-8000-000000000007","a0000000-0000-4000-8000-000000000008","a0000000-0000-4000-8000-000000000009","a0000000-0000-4000-8000-000000000010","a0000000-0000-4000-8000-000000000011","a0000000-0000-4000-8000-000000000012","a0000000-0000-4000-8000-000000000013","a0000000-0000-4000-8000-000000000014","a0000000-0000-4000-8000-000000000015","a0000000-0000-4000-8000-000000000016","a0000000-0000-4000-8000-000000000017","a0000000-0000-4000-8000-000000000018"]'
-SLICES=5   # the probe's N_SLICES = ceil(52 / 11); the dealer here mirrors the probe's `(NR-1) % N_SLICES`
+SLICES=7   # the probe's N_SLICES = ceil(52 / 8); the dealer here mirrors the probe's `(NR-1) % N_SLICES`
 pop_ids() { cat "$WORK/population.txt"; }
 dealt() { pop_ids | awk -v n="$SLICES" -v k="$(( $1 - 1 ))" '(NR-1)%n==k'; }
 slice_of() { local n; n="$(pop_ids | grep -nxF "$1" | cut -d: -f1)"; [[ -n "$n" ]] || { echo "harness: $1 not in population" >&2; exit 1; }; echo "$(( (n - 1) % SLICES + 1 ))"; }
@@ -145,7 +145,7 @@ default_fixtures() {
   rm -f "$WORK"/slice-*.json "$WORK"/slice-*.code "$WORK/registry.code" "$WORK/curl.rc"
   registry_fixture
   local k
-  for k in 1 2 3 4 5; do
+  for (( k = 1; k <= SLICES; k++ )); do
     mapfile -t _ids < <(dealt "$k")
     slice_fixture "$k" "${_ids[@]}"
   done
@@ -247,6 +247,9 @@ fi
 SOAK_END_ISO="$(grep -oE '^SOAK_END=[^ ]+' "$PROBE" | cut -d= -f2)"
 SOAK_END_EPOCH="$(date -u -d "$SOAK_END_ISO" +%s)"
 [[ "$SOAK_END_EPOCH" == "1790083380" ]] && pass "the probe's SOAK_END is 2026-09-22T13:23:00Z (epoch 1790083380)" || fail "SOAK_END drifted: $SOAK_END_ISO → $SOAK_END_EPOCH"
+# SLICE_MAX is a literal here, not read back: 11 ids per slice put 1023 runs behind one GET on
+# 2026-09-25, and the host's scan timed out on page 8 on every retry (#6178 comment 5829980093 follow-up).
+[[ "$(grep -oE '^SLICE_MAX=[0-9]+' "$PROBE")" == "SLICE_MAX=8" ]] && pass "the probe deals ≤ 8 ids per slice (7 slices)" || fail "SLICE_MAX drifted: $(grep -oE '^SLICE_MAX=[0-9]+' "$PROBE")"
 MINTER=26e6836b-97ad-503f-8b08-490d8a2f4ce8
 CREDIT=2e625d3c-0207-569f-b10b-567bc685ad5e
 OTHER=11bb44a3-ae8d-57b0-8d41-e76e57f0277a
@@ -290,7 +293,7 @@ expect "C0d registry HTTP 500 → registry_unreadable" 3 "reason=registry_unread
 # ── C1 / C2 / C3 the three verdicts ──────────────────────────────────────────────────────────
 default_fixtures; run C1
 expect "C1 clean reading before SOAK_END → NOT YET (rc 2)" 2 "NOT YET: interim reading at day"
-expect "C1 ...the reading block is present with the full run count" 2 "slices=5/5 runs=833 "
+expect "C1 ...the reading block is present with the full run count" 2 "slices=7/7 runs=833 "
 default_fixtures; NOW=$SOAK_END_EPOCH run C2
 expect "C2 clean reading at SOAK_END → ACTION REQUIRED (rc 5)" 5 "SOAK CLEAN"
 _last="$(last_line)"
@@ -396,7 +399,7 @@ expect "C26q the heaviest clean output (QUALIFIED) → SOAK CLEAN" 5 "SOAK CLEAN
 
 # ── C6 / C7 unreadable slices ────────────────────────────────────────────────────────────────
 default_fixtures; echo 500 > "$WORK/slice-3.code"; printf '{"error":"boom"}' > "$WORK/slice-3.json"; run C6
-expect "C6 slice 3 HTTP 500 with a JSON body → slice_unreadable slice=3/5" 3 "reason=slice_unreadable slice=3/5"
+expect "C6 slice 3 HTTP 500 with a JSON body → slice_unreadable slice=3/7" 3 "reason=slice_unreadable slice=3/7"
 expect "C6 ...cause=other with the body excerpt" 3 "cause=other"
 expect "C6 ...http=500 is named" 3 "http=500"
 expect_absent "C6 ...a MAPPED exit (3) does not also trip the unmapped-exit trap (an exit-1 here would be rewritten to 3 and read identical by rc alone)" "unmapped_exit"
@@ -408,7 +411,7 @@ expect_absent "C6c ...and no '<' is ever printed (the sweeper republishes stdout
 default_fixtures; printf 'inngest-doublefire-probe: FATAL preflight scan aborted reason=deadline pages_scanned=14 (deadline_s=90 page_ceiling=1000 from=2026-09-15T12:40:00Z total_count=1900) — narrow the window' > "$WORK/slice-2.json"; run C7
 expect "C7 a FATAL body on HTTP 200 → slice_unreadable (never jq_failed, never clean)" 3 "reason=slice_unreadable"
 expect "C7 ...cause=probe_fatal" 3 "cause=probe_fatal"
-expect "C7 ...slice=2/5" 3 "slice=2/5"
+expect "C7 ...slice=2/7" 3 "slice=2/7"
 expect "C7 ...the host's own reason tokens are extracted" 3 "reason=deadline pages_scanned=14"
 default_fixtures; echo 500 > "$WORK/registry.code"; printf 'inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["dial tcp 10.0.1.40:8288: connect: connection refused"] data_keys=[]); is the dedicated inngest-server reachable at http://10.0.1.40:8288/v0/gql? — refusing to emit a false-clean empty registry' > "$WORK/registry.json"; run C7b
 expect "C7b a registry FATAL is classified probe-fatal with a bounded token" 3 "body_class=probe-fatal"
@@ -419,11 +422,11 @@ expect_absent "C7b ...but not the free-text tail" "refusing to emit"
 default_fixtures; printf '{"runs":null,"total_count":7}' > "$WORK/slice-4.json"; run C8
 expect "C8 .runs null → CANNOT ESTABLISH" 3 "cause=bad_run_shape"
 default_fixtures; printf '{"runs":[],"total_count":0}' > "$WORK/slice-1.json"; run C9
-expect "C9 an empty slice → slice_vacuous (never clean)" 3 "reason=slice_vacuous slice=1/5"
+expect "C9 an empty slice → slice_vacuous (never clean)" 3 "reason=slice_vacuous slice=1/7"
 default_fixtures; jq '.total_count = "unknown"' "$WORK/slice-1.json" > "$WORK/t.tmp" && mv "$WORK/t.tmp" "$WORK/slice-1.json"; run C9b
-expect "C9b total_count \"unknown\" with runs present → total_count_unknown (not vacuous, not clean)" 3 "reason=total_count_unknown slice=1/5"
+expect "C9b total_count \"unknown\" with runs present → total_count_unknown (not vacuous, not clean)" 3 "reason=total_count_unknown slice=1/7"
 default_fixtures; jq '.total_count = 999' "$WORK/slice-5.json" > "$WORK/t.tmp" && mv "$WORK/t.tmp" "$WORK/slice-5.json"; run C10
-expect "C10 deduped < total_count (a page went missing) → slice_incomplete" 3 "reason=slice_incomplete slice=5/5 deduped=160 total_count=999"
+expect "C10 deduped < total_count (a page went missing) → slice_incomplete" 3 "reason=slice_incomplete slice=5/7 deduped=112 total_count=999"
 default_fixtures; append_runs 2 "$(jq -c '[.runs[0]]' "$WORK/slice-2.json")"; run C11
 expect "C11 a run repeated across pages is deduped by id → no group (rc 2)" 2 "explained=0 UNEXPLAINED=0"
 default_fixtures; append_runs "$(slice_of $OTHER)" "[{\"id\":\"01M2QNULLSTART000000000000\",\"functionID\":\"$OTHER\",\"startedAt\":null}]"; run C12
@@ -458,18 +461,18 @@ expect "C14 an empty credential → credentials_unprovisioned (3, not 2)" 3 "rea
 # ── C15 chunking: complete coverage under the cap, and the dealing itself ─────────────────────
 default_fixtures; run C15
 expect "C15 a clean run" 2 "NOT YET: interim reading at day"
-[[ "$(slice_calls)" == 5 ]] && pass "C15 exactly 5 slice requests" || fail "C15 slice requests = $(slice_calls), want 5"
+[[ "$(slice_calls)" == 7 ]] && pass "C15 exactly 7 slice requests" || fail "C15 slice requests = $(slice_calls), want 7"
 _over="$(awk -F, '{ if (NF > 11) c++ } END { print c + 0 }' "$WORK/slice-ids.log")"
 [[ "$_over" == 0 ]] && pass "C15 every request carries ≤ 11 ids" || fail "C15 $_over request(s) exceed 11 ids"
 if diff <(tr ',' '\n' < "$WORK/slice-ids.log" | sort) <(pop_ids | sort) >/dev/null; then pass "C15 the union of requested ids equals the committed population"; else fail "C15 requested ids ≠ population"; fi
-[[ "$(grep -c 'from=2026-09-15T12:40:00Z' "$WORK/calls.log")" == 5 ]] && pass "C15 every slice is pinned to from=2026-09-15T12:40:00Z" || fail "C15 a slice request drifted from the anchor"
+[[ "$(grep -c 'from=2026-09-15T12:40:00Z' "$WORK/calls.log")" == "$SLICES" ]] && pass "C15 every slice is pinned to from=2026-09-15T12:40:00Z" || fail "C15 a slice request drifted from the anchor"
 # P-C: the dealing is round-robin over the density-sorted file — a contiguous chunking keeps the
 # union identical and puts the minter beside the four hourlies in one slice.
 _deal_ok=1
-for k in 1 2 3 4 5; do
+for (( k = 1; k <= SLICES; k++ )); do
   [[ "$(sed -n "${k}p" "$WORK/slice-ids.log")" == "$(dealt "$k" | paste -sd, -)" ]] || _deal_ok=0
 done
-[[ "$_deal_ok" == 1 ]] && pass "C15 request k carries exactly the ids line i≡k−1 (mod 5) — round-robin, not contiguous" || fail "C15 the dealing is not round-robin over the file"
+[[ "$_deal_ok" == 1 ]] && pass "C15 request k carries exactly the ids line i≡k−1 (mod 7) — round-robin, not contiguous" || fail "C15 the dealing is not round-robin over the file"
 
 # ── C16 / C22 population file ────────────────────────────────────────────────────────────────
 default_fixtures; pop_ids | head -51 > "$WORK/pop51.txt"; POPFILE="$WORK/pop51.txt" run C16
@@ -493,10 +496,10 @@ default_fixtures; append_runs 2 '[{"id":"01M2QFOREIGN00000000000000","functionID
 expect "C18c a run for a function this slice did not request → foreign_function_id" 3 "cause=foreign_function_id foreign=1"
 
 # ── C20 population thin: the floor is a boundary, pinned on both sides ───────────────────────
-default_fixtures; for k in 1 2 3 4 5; do mapfile -t _ids < <(dealt "$k"); TICKS=15 slice_fixture "$k" "${_ids[@]}"; done; extra_runs "$(slice_of $OTHER)" 18 "$OTHER"; run C20
+default_fixtures; for (( k = 1; k <= SLICES; k++ )); do mapfile -t _ids < <(dealt "$k"); TICKS=15 slice_fixture "$k" "${_ids[@]}"; done; extra_runs "$(slice_of $OTHER)" 18 "$OTHER"; run C20
 expect "C20 799 distinct runs → population_thin (one below RUN_FLOOR=800)" 3 "reason=population_thin runs=799 floor=800"
-default_fixtures; for k in 1 2 3 4 5; do mapfile -t _ids < <(dealt "$k"); TICKS=15 slice_fixture "$k" "${_ids[@]}"; done; extra_runs "$(slice_of $OTHER)" 19 "$OTHER"; run C20b
-expect "C20b 800 distinct runs → accepted (rc 2)" 2 "slices=5/5 runs=800 "
+default_fixtures; for (( k = 1; k <= SLICES; k++ )); do mapfile -t _ids < <(dealt "$k"); TICKS=15 slice_fixture "$k" "${_ids[@]}"; done; extra_runs "$(slice_of $OTHER)" 19 "$OTHER"; run C20b
+expect "C20b 800 distinct runs → accepted (rc 2)" 2 "slices=7/7 runs=800 "
 
 # ── C23 a throwing jq must not fall through to a clean verdict ───────────────────────────────
 # `2026-09-18T03:00:00.5.5Z` satisfies the shape regex ([0-9:.]+Z) but after the fractional strip
@@ -540,7 +543,7 @@ fi
 # FLOOR is bound IMMEDIATELY above the floor it feeds: guard-vacuity-floor.test.sh slices the
 # floor block backward over contiguous simple assignments only, so a non-assignment line between
 # the binding and the `if` leaves the mutant unbound and the floor scored "not constructible".
-FLOOR=144
+FLOOR=145
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1
