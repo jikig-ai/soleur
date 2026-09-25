@@ -131,7 +131,7 @@ Run this phase only when **both** hold:
 
 Otherwise skip it. A project whose Blog note sets no jargon limits gets no scan.
 
-[blog-jargon-scan.sh](./scripts/blog-jargon-scan.sh) flags reader-visible lines that carry a backtick, a `--flag`, or a visible issue or PR number (`#` plus two or more digits). It reads the `title:`, `seoTitle:` and `description:` values (including folded, multi-line values) and the body, skipping JSON-LD blocks and markdown link targets. That is a **fixed subset** of what a Blog note may ban: file paths, command or skill names, API names and bare numbers are not detected, whatever the note says. Apply the rest of the note's jargon limits yourself while drafting.
+[blog-jargon-scan.sh](./scripts/blog-jargon-scan.sh) flags reader-visible lines that carry a backtick, a `<code>` or `<pre>` tag, a `--flag`, or a visible issue or PR number (`#` plus two or more digits). It reads the `title:`, `seoTitle:` and `description:` values (including folded, multi-line values) and the body, skipping JSON-LD blocks and markdown link targets. That is a **fixed subset** of what a Blog note may ban: indented code blocks, file paths, command or skill names, API names and bare numbers are not detected, whatever the note says. Apply the rest of the note's jargon limits yourself while drafting.
 
 Scan the draft through a file, never by pasting it into a shell command: a heredoc is broken by a draft line equal to its delimiter, and re-pasting the whole draft on every re-scan costs its full length each time.
 

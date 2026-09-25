@@ -241,6 +241,9 @@ const RED_FIXTURE = [
   '{"a": "#99"}', //                                 14 skipped: JSON-LD
   "</script>", //                                    15
   "After the schema, run `ls`.", //                  16 hit: body after JSON-LD
+  '<script type="application/ld+json">{"b": 1}</script>', // 17 one-line JSON-LD
+  "Then use <code>go</code> here.", //               18 hit: <code> after a one-line block
+  "And <pre>npx x</pre> too.", //                    19 hit: <pre>
   "",
 ].join("\n");
 
@@ -263,7 +266,7 @@ const PASS_FIXTURE = [
   '{"answer": "#123 and `code`"}',
   "</script>",
   "",
-  "After the schema, plain words.",
+  "After the schema, plain words, a <codex> word and <b>bold</b>.",
   "",
 ].join("\n");
 
@@ -298,10 +301,10 @@ describe("Guard 2 — blog-jargon-scan.sh", () => {
     expect(existsSync(SCAN_SCRIPT)).toBe(true);
   });
 
-  test("RED fixture: exit 1 and exactly lines 2, 3, 5, 8, 10, 11, 12, 16", () => {
+  test("RED fixture: exit 1 and exactly lines 2, 3, 5, 8, 10, 11, 12, 16, 18, 19", () => {
     const r = scan(fixturePath("red.md"));
     expect(r.status).toBe(1);
-    expect(hitLines(r.stdout)).toEqual([2, 3, 5, 8, 10, 11, 12, 16]);
+    expect(hitLines(r.stdout)).toEqual([2, 3, 5, 8, 10, 11, 12, 16, 18, 19]);
     expect(r.stdout.split("\n")).toContain("8: Run `next` to see it.");
   });
 
