@@ -127,6 +127,7 @@ Read the brand guide sections that inform content generation:
 3. Read `## Channel Notes > ### X/Twitter` -- apply X/Twitter-specific guidelines
 4. Read `## Channel Notes > ### LinkedIn Personal` -- apply LinkedIn personal profile guidelines
 5. Read `## Channel Notes > ### LinkedIn Company Page` -- apply LinkedIn company page guidelines
+6. Read `## Channel Notes > ### Blog` and `### Hacker News` -- apply any rule they set for distributing a blog post (for example, not submitting it to Hacker News as-is)
 
 If a channel notes section is missing for a platform, generate content using only the `## Voice` section.
 
@@ -173,6 +174,8 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 - Reddit detects and punishes self-promotion -- frame as sharing knowledge
 
 #### 5.5 Hacker News Submission
+
+If the brand guide's `### Blog` or `### Hacker News` note says not to submit blog posts to Hacker News as-is, write the section as a one-line note instead: point to the post's technical write-up if the post links one, otherwise say HN is skipped for this post.
 
 - Title maximum 80 characters
 - No marketing language, no ALL CAPS, no exclamation marks

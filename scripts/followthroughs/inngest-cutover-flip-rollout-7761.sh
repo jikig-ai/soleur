@@ -1,94 +1,97 @@
 #!/usr/bin/env bash
-# #7761 — the seam-gate + injection-bound reached the dedicated inngest host, and the host is
-# still in its safe terminal state afterwards.
+# #7761 — the seam-gate + injection-bound reached the dedicated inngest host, and the host rests in
+# its POST-CUTOVER steady state (`done`, re-earned by the FSM on THIS machine) afterwards.
 #
-# TRACKER: **#7761**. It stays OPEN until this reads PASS. scripts/sweep-followthroughs.sh lists
-# `--state open`, so hosting a probe on a CLOSED issue is a permanent silent no-op — which is why
-# the PR that ships this carries `Ref #7761` and NOT `Closes #7761`.
+# TRACKER: **#7761**. It stays OPEN until this reads PASS; scripts/sweep-followthroughs.sh closes
+# it on exit 0 and lists `--state open`, so a PR changing this probe carries `Ref #7761`, never a
+# closing keyword.
+# RUN IT: doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh
+# RETIREMENT: when #7761 closes, delete this probe, its .test.sh, the `.after` sidecar, the #7761
+# PROBE PARITY block in apps/web-platform/infra/cutover-inngest-workflow.test.sh, and this path's
+# entry in .github/workflows/infra-validation.yml `pull_request.paths`.
 #
-# WHY THIS PROBE IS A COMMITTED DELIVERABLE RATHER THAN AN IN-SESSION CHECK. Merging this fix
-# changes NOTHING on the live host. Every on-host asset here is baked into the OCI bootstrap image
-# and pulled by a digest literal in `user_data`, which is ForceNew on `hcloud_server.inngest` with
-# no `ignore_changes` (ADR-100 addendum 2026-08-25 / #7674). So delivery is a tag -> image build ->
-# digest bump -> HOST REPLACE of the fleet's sole scheduler. A production destroy-and-recreate
-# whose verification cannot be re-run is an unauditable change, so the verification ships with it.
+# WHY A COMMITTED PROBE. Delivery is tag -> image build -> digest bump -> HOST REPLACE of the
+# fleet's sole scheduler (the digest is ForceNew in user_data; ADR-100 addendum 2026-08-25 /
+# #7674). A production destroy-and-recreate whose verification cannot be re-run is unauditable.
 #
-# WHAT IT VERIFIES — POSITIVELY, NEVER BY ABSENCE ALONE.
+# THE ANSWER KEY (rewritten 2026-09-24, after the cutover completed). INLINE, never env-supplied:
+# this authorizes closing a P1 security issue, and an environment-supplied answer key is the very
+# class of untrusted input #7761 is about. cutover-inngest.yml op=resume wrote `flushed` and the host
+# FSM's `flushed)` arm completed it to `done` on 2026-09-23; the flush latch on /mnt/data is
+# monotonic and G3.7 refuses op=arm once a FLUSHALL is on record, so `done` is the ONLY passable
+# state — and only when the FSM re-earned it here:
+#   P1 delivery    every post-boundary noop-done row carries guard=7761 (only the post-#7761 script
+#                  stamps it), and they all come from ONE machine M.
+#   P2 liveness    >= 2 DISTINCT stamped noop-done heartbeats on M after its op=resume row, the
+#                  newest within the last HEARTBEAT_MAX_AGE_S (the 30s timer is cycling NOW).
+#   P3 no refusal  zero SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED rows under the tag since the boundary.
+#   P4 provenance  M has a post-boundary, guard-stamped `flushed-resume-no-reflush` row. A replaced
+#                  host emits noop-done under an INHERITED done until op=resume runs; that never counts.
+#   P5 no drift    since the boundary, no flip-FSM row other than that resume shape.
+# Ownership binds to journald `_MACHINE_ID`, not the hostname: the done-owner marker lives on the
+# root disk (a replace destroys it) while the hostname survives a replace. A PASS is only as
+# trustworthy as the log source's shared ingest token — anyone holding it can write any field.
 #
-#   1. The NEW script is actually on the host. Every other observable here — the flag value, the
-#      noop markers, the absence of flush transitions — is emitted BYTE-IDENTICALLY by the pre-fix
-#      script, so without this the probe would report "delivered" for a replace that silently kept
-#      the old image (a digest that never moved, a flip-asset copy that fell through its `|| true`
-#      guard). emit_state stamps `guard:<GUARD_REV>`; only the post-#7761 script emits it.
+# DRIFT IS A POSITIVE OBSERVATION, NOT THE PRESENCE OF A FLAG. emit_state writes the POST-run flag,
+# so a transition into flipping/flushed exists in the warehouse only as its outcome REASON. ONE
+# sparse OR-query over the whole since-boundary interval (by warehouse `dt`) — DRIFT_GREPS: every
+# emitter reason except the noop-done heartbeat, plus flag:flipping/flushed as defence in depth —
+# returns only the resume row on a healthy host (measured 2026-09-24: exactly 1 row). A resting
+# rolled-back/aborted after the cutover is a dark scheduler, so it is drift, not a pass. A reason
+# the emitter gains and DRIFT_GREPS lacks is invisible here: the #7761 parity block in
+# apps/web-platform/infra/cutover-inngest-workflow.test.sh is the guard for that, not the runtime.
 #
-#   2. At least two `noop-rolled-back` markers carry timestamps AFTER the replace. Two, not one:
-#      one marker proves the host booted and emitted once; two proves the 30-second timer is
-#      actually CYCLING, which is the property that makes the flag a live control channel rather
-#      than a value nobody is reading. A host with no inbound SSH has no other channel.
+# THE WAREHOUSE SHAPE. The flip FSM's `message` is a parsed JSON OBJECT inside `raw` (2,743 of 2,743
+# rows in a 30h sample, 2026-09-24), and DRIFT_GREPS' quoted terms match only that shape: in a
+# STRING-shaped message the quotes are escaped and nothing matches. So mine() marks a row decoded
+# from a string (or a `{`-string that no longer parses — logger truncates at 1 KiB), and any such
+# flip row in LIVE refuses the PASS (`message_shape_unsupported`): the drift half would be blind.
 #
-#   3. No flag drift after the replace. This is what "the flush latch is intact" means in an
-#      observable form: the latch file lives on /mnt/data and this repo has no SSH path to read it
-#      (hr-no-ssh-fallback-in-runbooks), and in the `rolled-back` terminal state the FSM never
-#      consults it. What the latch EXISTS to guarantee is observable — that nothing moved off the
-#      terminal state. ANY other post-boundary flag fails, not just the three flush-path ones:
-#      `armed` is the state whose NEXT poll stops the server and runs the FLUSHALL, so accepting it
-#      would report all-clear on the last quiet moment before the destructive arm.
+# THE BOUNDARY. FLIP_ROLLOUT_AFTER, else the committed `.after` sidecar (a regular one-line file;
+# the sweeper runs probes under `env -i`, so the sidecar is its only channel), else DERIVED from
+# telemetry. A SUPPLIED boundary may yield PASS/FAIL/TRANSIENT; a DERIVED one PASS/TRANSIENT only
+# (#7695, verdict_fail()) — and in practice never PASS, because the owning machine's flip rows
+# always predate the first hourly probe row the derivation reads. Machine M must emit NO flip row
+# at or before the boundary (queried by its _MACHINE_ID over 30 days), so moving the sidecar can
+# re-certify only a NEW machine; it cannot erase drift on the current one.
 #
-#   4. No seam refusal. A `SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED` marker on the live host means a
-#      name in the soleur-inngest/prd Doppler config collided with a fixture seam — the #7761
-#      condition itself, occurring. Queried separately because it is a raw string, not emit_state
-#      JSON, so the JSON selector below discards it by construction.
-#
-# WHY THE MARKER GREP IS THE TAG AND NOT A `SOLEUR_` STRING. An earlier revision grepped
-# `SOLEUR_INNGEST_CUTOVER`, which compiles to `raw LIKE '%SOLEUR_INNGEST_CUTOVER%'`. emit_state's
-# rows are BARE JSON — the identity lives in the syslog tag, not the payload — so that grep matched
-# only the four exceptional-path markers, all of which `fromjson?` then discarded. The probe could
-# never return PASS and its flush assertion could never return FAIL: a permanent silent no-op, the
-# exact failure its own header claims to retire. `SYSLOG_IDENTIFIER` IS present in `raw` (proved by
-# betterstack-query.sh's `--raw-only` mode having to exclude it), so the tag is the correct grep.
-#
-# THE BOUNDARY IS REQUIRED, AND ITS ABSENCE IS NOT A PASS. "After the replace" cannot be evaluated
-# without knowing when the replace happened, and a window reaching back past it would be satisfied
-# by the OLD host's markers — the probe would certify the rollout using evidence produced by the
-# machine the rollout replaced. Read from FLIP_ROLLOUT_AFTER, else the committed `.after` sidecar,
-# else DERIVED from telemetry (see the provenance split below).
-# A boundary that is OLD with still no markers is a FAIL, not a TRANSIENT: at a 30-second cadence
-# "not yet" expires in minutes, and leaving it TRANSIENT forever makes a permanently bricked
-# scheduler indistinguishable from a rollout nobody has run.
-#
-# THAT FAIL ARM IS SCOPED TO A *SUPPLIED* BOUNDARY (#7695). It rests on the boundary being an
-# ASSERTION -- a human or an apply said "the replace happened at T" -- so silence after T really is
-# a bricked scheduler. Since #7695 the boundary can instead be DERIVED from telemetry (the earliest
-# probe row whose image_ref carries the pinned digest) when neither source supplies one, because
-# the `.after` sidecar never existed and nothing writes it, so this probe returned
-# `boundary_unknown` on every sweep and measured nothing for the life of the issue.
-#
-# A derived boundary is an INFERENCE, and it can be wrong in the one direction that manufactures a
-# false condemnation: any re-pin to a digest some host already reported -- a rollback re-pin above
-# all -- derives a boundary in the PAST, on the machine the rollout was meant to replace. So:
-#
-#   SUPPLIED boundary -> PASS / FAIL / TRANSIENT, exactly as above. Nothing changes.
-#   DERIVED  boundary -> PASS or TRANSIENT only, NEVER FAIL (enforced by verdict_fail()).
-#
-# The two rules govern disjoint provenances, so neither overrides the other. The anti-brick signal
-# is ROUTED, not lost: where the derived arm would have failed it exits 2 with
-# `derived_boundary_stale_supply_authoritative_boundary`, which names the missing authority and
-# says how to re-arm the FAIL arm, rather than blaming the host on the strength of an inference.
-#
-# EXIT CONTRACT (scripts/sweep-followthroughs.sh):
-#   0 = PASS       new script on host, >=2 post-boundary rolled-back markers, no drift, no refusal.
-#   1 = FAIL       a real regression: flag moved, a flush ran, a seam was refused, or the host has
-#                  been silent well past the boundary. The boundary-dependent arms of this are
-#                  reachable ONLY under a SUPPLIED boundary (see the provenance split above). THREE
-#                  boundary-independent arms fail under either provenance, because none consults the
-#                  boundary: `cutover_armed`, `seam_refused`, and the Doppler flag mismatch.
-#                  NOTE the Doppler one is INERT in scheduled-followthrough-sweeper.yml, which
-#                  provisions no Doppler token and installs no Doppler CLI -- so in the only
-#                  environment that runs this on a schedule the surviving pair is `cutover_armed`
-#                  (telemetry) and `seam_refused`. That is why `cutover_armed` must stay uncapped:
-#                  it is the FLUSHALL alarm on the one channel CI actually has.
-#   2 = TRANSIENT  not delivered yet, boundary unknown, credentials unprovisioned, or any
-#                  query/decode failure. Nothing was measured; this is never an all-clear.
+# VERDICT TABLE (reason= : meaning -> action). Exit 0 = PASS, 1 = FAIL, 2 = TRANSIENT (the sweeper's
+# NOT YET), 3 = CANNOT ESTABLISH (a config error, or a read-path failure against a supplied boundary
+# more than 7 days old). Every remediation is an Actions dispatch, a sidecar edit, or a Better Stack
+# read (scripts/betterstack-query.sh --since <boundary> --grep inngest-cutover-flip); none needs SSH.
+#   flush_path_transition_after_replace  : a flush-path row since the boundary -> Redis suspect; do not re-dispatch
+#   drift_after_replace                  : any other FSM row since the boundary -> read the rows; human review
+#   stale_image                          : a post-boundary heartbeat lacks guard=7761 -> the replace kept the old
+#                                          image; compare the cloud-init-inngest.yml digest pins with the build
+#   multiple_machines_since_boundary     : >1 _MACHINE_ID emitted since the boundary -> the host was replaced
+#                                          after it: move the sidecar to that replace's completion time (exit 3)
+#   done_not_resumed                     : done not re-earned on this machine yet -> `gh workflow run
+#                                          cutover-inngest.yml -f op=resume` (waits for inngest-cutover approval)
+#   done_not_resumed_past_deadline       : the same, past the deadline under a supplied boundary -> as above
+#   insufficient_post_replace_markers    : < 2 heartbeats after the resume -> re-run shortly
+#   insufficient_post_replace_markers_past_deadline : the same, long after the resume -> the timer is not cycling
+#   heartbeat_stale                      : M's newest heartbeat is older than HEARTBEAT_MAX_AGE_S -> the timer stopped
+#   channel_dark                         : no flip-tag rows from this host -> re-run; the host may be booting
+#   channel_dark_past_deadline           : the same past the deadline -> the unit is not running (read its tag rows)
+#   cutover_armed                        : an `armed` row (uncapped) -> establish who armed it
+#   seam_refused                         : a seam refusal on the live host -> rename the colliding Doppler secret
+#   doppler_flag_not_done                : Doppler's INNGEST_CUTOVER_FLIP is not `done` -> explain before any apply
+#   boundary_inside_owning_machine_lifetime : M emitted before the boundary -> restore the sidecar to the replace
+#                                          that created M; drift on M needs human review, not a sidecar edit (exit 3)
+#   message_shape_unsupported            : string-shaped flip rows -> the drift query cannot see them (exit 3)
+#   machine_id_absent                    : heartbeats carry no _MACHINE_ID -> the shipper changed (exit 3)
+#   drift_query_truncated / refusals_query_truncated / boundary_check_truncated : a full page with no finding
+#   drift_query_failed / refusals_query_failed / query_failed / row_decode_failed : read path -> re-run
+#   boundary_check_query_failed          : read path of the boundary check -> re-run
+#     (the read-path and truncation rows above exit 2, and 3 once a supplied boundary is > 7 days old)
+#   drift_limit_invalid / limit_invalid  : a malformed FLIP_ROLLOUT_* numeric seam -> unset it (exit 3)
+#   sidecar_is_symlink / sidecar_oversize : the `.after` sidecar is not a one-line regular file (exit 3)
+#   boundary_unparseable                 : the boundary is not a real ISO-8601 UTC instant (exit 3)
+#   credentials_unprovisioned / jq_unavailable : the environment cannot read -> BETTERSTACK_QUERY_* from
+#                                          Doppler soleur/prd_terraform; install jq
+#   derived_boundary_stale_supply_authoritative_boundary : a derived boundary cannot FAIL -> commit one
+#   pin_unreadable / probe_channel_dark / boundary_underivable : the derivation had nothing to read
+#   (exit 78: refused to run under xtrace with a live credential set — #7797)
 set -uo pipefail
 
 # #7797: this probe binds BETTERSTACK_QUERY_PASSWORD, and `-x` would print it. Refuse to run
@@ -105,54 +108,77 @@ esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${FLIP_ROLLOUT_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
-AFTER_FILE="${FLIP_ROLLOUT_AFTER_FILE:-$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.after}"  # repo-path: runtime -- written by the operator in response to this probe's own output; absent and untracked by design
-# Seamed like QUERY so the Doppler arm is drivable by the suite. Without this the corroboration
-# branch is unreachable by design and its FAIL arm has no coverage.
+# The committed boundary: 2026-09-23T19:36:32Z = apply run 35910239344, job inngest_host_replace,
+# completedAt (the old machine's last row 19:35:23Z, the new machine's first start_ts 19:37:57Z,
+# its op=resume 19:42:45Z). LIFECYCLE: it belongs to #7761 and retires with this probe. If the host
+# is replaced while #7761 is still open, the sidecar must MOVE to that replace's completion time.
+AFTER_FILE="${FLIP_ROLLOUT_AFTER_FILE:-$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.after}"
+# Seamed like QUERY so the Doppler arm is drivable by the suite.
 DOPPLER_BIN="${FLIP_ROLLOUT_DOPPLER_BIN:-doppler}"
 
-# The syslog TAG, not a marker substring. See the header.
+# The syslog TAG, not a marker substring: emit_state rows are bare JSON whose identity lives in the
+# tag, and SYSLOG_IDENTIFIER is present in `raw`.
 TAG="${FLIP_ROLLOUT_TAG:-inngest-cutover-flip}"
 REFUSAL_MARKER="SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED"
-# Two identity fields, both required (#6616 — `host_name` telemetry has been observed lying: a web
-# host self-labelled with the sed-rendered dedicated-host literal). `host` is Vector's auto-derived
-# OS hostname, which a stale literal cannot forge. A PASS here closes #7761, so a row matching only
-# `host_name` would close the tracker on evidence from the wrong machine.
+# Two identity fields, both required (#6616 — `host_name` telemetry has been observed lying).
 FLIP_HOST="${FLIP_ROLLOUT_HOST:-soleur-inngest}"
 FLIP_HOST_NAME="${FLIP_ROLLOUT_HOST_NAME:-soleur-inngest-prd}"
-# The liveness window is deliberately NARROW. The tag emits ~2,880 rows/day at a 30s cadence, so a
-# 24h window against any sane row limit takes the NEWEST N rows and silently examines a slice —
-# reporting a slice as the window is the failure cutover-inngest.sh documents for this same tag.
-# Two markers at 30s needs minutes, not hours.
+# LIVE is deliberately NARROW (~274 rows/h under the tag): it only has to hold the newest
+# heartbeats. Everything that must span the whole since-boundary interval is its own sparse query.
 WINDOW="${FLIP_ROLLOUT_WINDOW:-2h}"
 LIMIT="${FLIP_ROLLOUT_LIMIT:-500}"
-# The drift and refusal queries run over a WIDER window with their own narrow greps, so their row
-# counts are tiny and the limit is not binding on them.
-DRIFT_WINDOW="${FLIP_ROLLOUT_DRIFT_WINDOW:-24h}"
+# The drift page. Healthy = 1 row; 5000 leaves ~1.7 days of headroom even under a 2,880-row/day
+# flood, and past that a finding is already a FAIL. A test seam, not an answer-key member: shrinking
+# it can only yield TRANSIENT, growing it only makes the page more complete.
+DRIFT_LIMIT="${FLIP_ROLLOUT_DRIFT_LIMIT:-5000}"
+BOUNDARY_CHECK_LIMIT=5000
 DOPPLER_PROJECT_NAME="${FLIP_ROLLOUT_DOPPLER_PROJECT:-soleur-inngest}"
 DOPPLER_CONFIG_NAME="${FLIP_ROLLOUT_DOPPLER_CONFIG:-prd}"
-# The expected terminal flag and the marker threshold are INLINE, not env-overridable. An earlier
-# revision exposed them as FLIP_ROLLOUT_EXPECTED_FLAG / _MIN_MARKERS, which is an environment-
-# supplied answer key on a probe that authorizes closing a security issue — in a PR whose entire
-# thesis is that environment-supplied values are untrusted.
-EXPECTED_FLAG="rolled-back"
-# #7695 P0 — THE LIVE FLAG IS `aborted`, NOT `rolled-back`, AND BOTH ARE TERMINAL NO-OPS.
-# Measured 2026-09-07: `doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd` returns
-# `aborted`, and the live rows are {"reason":"noop-aborted","flag":"aborted"} every 30s. Matching
-# only `rolled-back` made post_ok 0 forever AND made the drift selector match EVERY row -- so this
-# probe still could not PASS, having swapped `boundary_unknown` for `flag_drift`: the same
-# permanent silent no-op wearing a different reason string, which is the exact class this file's
-# header exists to retire. ADR-199's clearance predicate already accepts both.
-#
-# INLINE, not env-overridable, for the same reason EXPECTED_FLAG is: this is the answer key on a
-# probe that authorizes closing a type/security issue.
-#
-# `armed`, `flipping`, `flushed` and `done` are deliberately NOT here -- they are the condemnations.
-TERMINAL_SAFE_FLAGS='["rolled-back","aborted"]'
-MIN_MARKERS=2
-# The guard revision the post-#7761 script stamps into every emit_state row.
-EXPECTED_GUARD="${FLIP_ROLLOUT_EXPECTED_GUARD:-7761}"
-# How long after the boundary a silent host stops being "not yet" and becomes a failure.
+# How long after the boundary a silent host stops being "not yet" and becomes a failure. A test
+# seam: it can move FAIL<->TRANSIENT, never manufacture a PASS.
 STALE_AFTER_S="${FLIP_ROLLOUT_STALE_AFTER_S:-3600}"
+# The newest heartbeat on the owning machine must be at most this old (30s cadence; generous slack).
+HEARTBEAT_MAX_AGE_S=600
+# A read-path non-verdict against a supplied boundary older than this is CANNOT ESTABLISH (exit 3),
+# not NOT YET forever.
+NON_VERDICT_MAX_AGE_S=604800
+
+# --- THE ANSWER KEY (inline; see the header) --------------------------------------------------
+POST_CUTOVER_FLAG="done"
+DONE_ENTRY_REASON="flushed-resume-no-reflush"
+EXPECTED_GUARD="7761"
+MIN_MARKERS=2
+FLUSH_PATH_REASONS='["flip-complete","flushall-failed","dbsize-nonzero"]'
+FLUSH_PATH_FLAGS='["flipping","flushed"]'
+# Quoted terms (`'"reason":"<r>'`) match because `message` is an object inside raw. No term carries
+# `_`, which ClickHouse LIKE reads as a wildcard. One term per line: the parity loop reads this block.
+DRIFT_GREPS=(
+  '"reason":"dbsize-nonzero'
+  '"reason":"flip-complete'
+  '"reason":"flushall-failed'
+  '"reason":"flushed-resume-no-reflush'
+  '"reason":"latch-unrecordable'
+  '"reason":"refuse-rearm-after-done'
+  '"reason":"rolled-back'
+  '"reason":"unexpected-exit'
+  '"reason":"verify-health'
+  '"reason":"verify-owner-unrecordable'
+  '"reason":"verify-registry-empty'
+  '"reason":"verify-registry-unreadable'
+  '"reason":"verify-unknown'
+  '"reason":"noop-unset'
+  '"reason":"noop-rolled-back'
+  '"reason":"noop-aborted'
+  '"flag":"flipping"'
+  '"flag":"flushed"'
+)
+# Every reason literal the emitter can write, for DISPLAY only: a finding prints its reason only
+# when it is one of these (noop-unset / unexpected-exit(from=…) embed the raw flag value, and this
+# output lands in a PUBLIC issue comment that the runner's secret masker never sees).
+KNOWN_REASONS='["dbsize-nonzero","flip-complete","flushall-failed","flushed-resume-no-reflush",
+  "latch-unrecordable","refuse-rearm-after-done","rolled-back","verify-health",
+  "verify-owner-unrecordable","verify-registry-empty","verify-registry-unreadable","verify-unknown",
+  "noop-done","noop-unset","noop-rolled-back","noop-aborted"]'
 
 # --- the boundary -----------------------------------------------------------------------------
 AFTER="${FLIP_ROLLOUT_AFTER:-}"
@@ -161,170 +187,220 @@ AFTER="${FLIP_ROLLOUT_AFTER:-}"
 # apply verbatim. A DERIVED boundary is an INFERENCE and is capped at PASS-or-TRANSIENT by
 # verdict_fail(). The two rules govern disjoint provenances; neither overrides the other.
 BOUNDARY_PROVENANCE=supplied
-if [[ -z "$AFTER" && -r "$AFTER_FILE" ]]; then
-  AFTER="$(tr -d '[:space:]' < "$AFTER_FILE" 2>/dev/null || true)"
+if [[ -z "$AFTER" ]]; then
+  # The sidecar's contents reach a PUBLIC issue comment through every message below, so it is read
+  # as a one-line regular file or not at all: a symlink to /proc/self/environ would otherwise
+  # publish BETTERSTACK_QUERY_PASSWORD through boundary_unparseable.
+  if [[ -L "$AFTER_FILE" ]]; then
+    echo "CANNOT_ESTABLISH: reason=sidecar_is_symlink — ${AFTER_FILE##*/} is a symlink; it must be a regular" >&2
+    echo "           one-line file holding the replace time. Its target was not read." >&2
+    exit 3
+  fi
+  if [[ -f "$AFTER_FILE" && -r "$AFTER_FILE" ]]; then
+    _sidecar="$(head -c 65 "$AFTER_FILE" 2>/dev/null || true)"
+    if [[ "${#_sidecar}" -gt 64 ]]; then
+      echo "CANNOT_ESTABLISH: reason=sidecar_oversize — ${AFTER_FILE##*/} holds more than 64 bytes; it must be" >&2
+      echo "           exactly one ISO-8601 UTC timestamp. Its contents were not printed." >&2
+      exit 3
+    fi
+    AFTER="$(printf '%s' "$_sidecar" | tr -d '[:space:]')"
+  fi
 fi
 if [[ -z "$AFTER" ]]; then
-  # #7695 4.1 — DO NOT exit here. This block is pure env/file I/O and sits AHEAD of everything the
-  # derivation needs (the BETTERSTACK_QUERY_* check, the jq check, mine()). Record that the
-  # boundary must be derived and continue; the derivation runs after those preflights, which also
-  # yields the better reason for free -- absent credentials exit `credentials_unprovisioned`,
-  # which is more accurate than a boundary complaint.
+  # #7695 4.1 — DO NOT exit here: the derivation runs after the credential/jq preflights below.
   BOUNDARY_PROVENANCE=derived
 fi
 if [[ "$BOUNDARY_PROVENANCE" == "supplied" ]] && ! [[ "$AFTER" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-  echo "TRANSIENT: reason=boundary_unparseable value='${AFTER}' — expected ISO-8601 UTC" >&2
+  # The LENGTH only, never the value (see the sidecar note above).
+  echo "CANNOT_ESTABLISH: reason=boundary_unparseable length=${#AFTER} — expected ISO-8601 UTC" >&2
   echo "           (YYYY-MM-DDTHH:MM:SSZ). A boundary that cannot be parsed must not be" >&2
   echo "           silently widened to 'any time', which would let pre-replace markers pass." >&2
-  exit 2
+  exit 3
 fi
 
-# --- 1. the flag, CORROBORATED from Doppler when a credential happens to be present ------------
-#
-# NOT a hard requirement, and that is a deliberate correction. The sweeper
-# (scheduled-followthrough-sweeper.yml) exposes BETTERSTACK_QUERY_* and several other secrets but
-# NO Doppler token, so a probe that REQUIRED a Doppler read would return `flag_unreadable` on every
-# sweep for the life of the issue — a permanent silent no-op, precisely the failure mode the
-# sibling #7674 probe was written to retire. The flag is available on the channel the sweeper DOES
-# have: emit_state stamps it into every marker. That reading is the primary source below; a Doppler
-# read, when a credential is present, is strictly better evidence for one narrow case — the flag
-# changed in Doppler but not yet observed by the host — so it FAILS FAST when available.
+# --- the flag, CORROBORATED from Doppler when a credential happens to be present ---------------
+# Not a hard requirement: the sweeper provisions no Doppler token, so in CI this arm is inert and
+# the flag is read from the rows themselves. When a credential IS present it fails fast: any value
+# other than the post-cutover `done` — `rolled-back` and `aborted` included — blocks a PASS.
 doppler_flag=""
 if command -v "$DOPPLER_BIN" >/dev/null 2>&1; then
-  doppler_flag="$("$DOPPLER_BIN" secrets get INNGEST_CUTOVER_FLIP \
-                    -p "$DOPPLER_PROJECT_NAME" -c "$DOPPLER_CONFIG_NAME" --plain 2>/dev/null || true)"
-  doppler_flag="$(printf '%s' "$doppler_flag" | tr -d '[:space:]')"
+  # A FAILED read is no read: stdout from a failing doppler must never be taken as the flag.
+  if _dout="$("$DOPPLER_BIN" secrets get INNGEST_CUTOVER_FLIP \
+                -p "$DOPPLER_PROJECT_NAME" -c "$DOPPLER_CONFIG_NAME" --plain 2>/dev/null)"; then
+    doppler_flag="$(printf '%s' "$_dout" | tr -d '[:space:]')"
+  fi
 fi
-# #7695: membership in the terminal-safe SET, not equality with one member -- `aborted` is the
-# live value and is as terminal as `rolled-back`.
-_flag_is_terminal_safe() {
-  [[ -n "${1:-}" ]] || return 1
-  printf '%s' "$TERMINAL_SAFE_FLAGS" | jq -e --arg f "$1" 'index($f) != null' >/dev/null 2>&1
-}
 # #7695 P3: print the value only when it is a known FSM enum member. This string is echoed into a
-# PUBLIC GitHub issue comment by sweep-followthroughs.sh, whose own comment records that issue
-# bodies do NOT pass the runner's secret masker -- so an unconstrained print publishes whatever
-# the secret happens to hold.
+# PUBLIC GitHub issue comment, which the runner's secret masker never sees.
 _flag_for_display() {
   case "${1:-}" in
-    rolled-back|aborted|armed|flipping|flushed|done|"") printf '%s' "${1:-<empty>}" ;;
+    rolled-back|rollback|aborted|armed|flipping|flushed|done|unset) printf '%s' "$1" ;;
     *) printf '<non-enum value, %s chars>' "${#1}" ;;
   esac
 }
-if [[ -n "$doppler_flag" ]] && ! _flag_is_terminal_safe "$doppler_flag"; then
-  echo "FAIL: the FSM flag in ${DOPPLER_PROJECT_NAME}/${DOPPLER_CONFIG_NAME} reads" >&2
-  echo "      '$(_flag_for_display "$doppler_flag")', expected one of ${TERMINAL_SAFE_FLAGS}." >&2
-  echo "      The host was braked and serving nothing before this rollout; a flag that has moved" >&2
-  echo "      means either someone armed a cutover or the replace resumed a transient. Do NOT" >&2
-  echo "      re-dispatch the apply until this is explained — the armed path ends in FLUSHALL." >&2
+if [[ -n "$doppler_flag" && "$doppler_flag" != "$POST_CUTOVER_FLAG" ]]; then
+  echo "FAIL: reason=doppler_flag_not_done — INNGEST_CUTOVER_FLIP in ${DOPPLER_PROJECT_NAME}/${DOPPLER_CONFIG_NAME} reads" >&2
+  echo "      '$(_flag_for_display "$doppler_flag")', expected '${POST_CUTOVER_FLAG}'. The cutover completed, so the" >&2
+  echo "      scheduler's steady state is done; any other value means a rollback, an abort, or an armed" >&2
+  echo "      cutover. Do NOT re-dispatch the apply until this is explained — the armed path ends in FLUSHALL." >&2
   exit 1
 fi
 
-# --- credentials for the marker read ----------------------------------------------------------
+# --- credentials and tooling for the marker read ----------------------------------------------
 missing=""
 [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]] && missing="${missing} BETTERSTACK_QUERY_HOST"
 [[ -z "${BETTERSTACK_QUERY_USERNAME:-}" ]] && missing="${missing} BETTERSTACK_QUERY_USERNAME"
 [[ -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]] && missing="${missing} BETTERSTACK_QUERY_PASSWORD"
 if [[ -n "$missing" ]]; then
   echo "TRANSIENT: reason=credentials_unprovisioned — missing:${missing}." >&2
-  echo "           The flag read above passed, but the liveness half was never asked. That is" >&2
-  echo "           NOT a PASS: a correct flag on a host that stopped polling is exactly the" >&2
-  echo "           twelve-day false-'done' shape ADR-100 records (#7228)." >&2
+  echo "           The liveness half was never asked. That is NOT a PASS: a correct flag on a host" >&2
+  echo "           that stopped polling is the twelve-day false-'done' shape ADR-100 records (#7228)." >&2
   exit 2
 fi
 # jq is load-bearing for every selector below. Unpreflighted, a missing jq empties the row set and
-# the probe blames the HOST ("not reporting") for a local tooling fault.
+# the probe blames the HOST for a local tooling fault.
 if ! command -v jq >/dev/null 2>&1; then
   echo "TRANSIENT: reason=jq_unavailable — the decode path is unusable, so nothing was measured." >&2
   exit 2
 fi
+# The limits interpolate into SQL and into bash arithmetic. A leading zero is refused: `08` is not
+# a bash integer, so `-ge` would error and silently skip the page-full check.
+if ! [[ "$DRIFT_LIMIT" =~ ^[1-9][0-9]{0,5}$ ]]; then
+  echo "CANNOT_ESTABLISH: reason=drift_limit_invalid — FLIP_ROLLOUT_DRIFT_LIMIT must match ^[1-9][0-9]{0,5}\$." >&2
+  exit 3
+fi
+if ! [[ "$LIMIT" =~ ^[1-9][0-9]{0,5}$ && "$STALE_AFTER_S" =~ ^[1-9][0-9]{0,6}$ ]]; then
+  # STALE_AFTER_S reaches `[[ -gt ]]`, which evaluates its operands as arithmetic.
+  echo "CANNOT_ESTABLISH: reason=limit_invalid — FLIP_ROLLOUT_LIMIT / FLIP_ROLLOUT_STALE_AFTER_S must be plain integers." >&2
+  exit 3
+fi
 
-# mine <window> <grep-term> — decode, then field-isolate on the DECODED object. `-R` plus
-# `fromjson?` at BOTH levels is load-bearing rather than defensive habit: without `-R`, ONE
-# malformed line aborts the whole jq invocation and every valid row after it is lost — which would
-# surface as "the host emits nothing" on a window that in fact contained a clean PASS.
+# mine <since> <limit> <tag|""> [--until <until>] <term>... — ONE query, OR over the terms, then
+# decode and field-isolate on the DECODED row. Emits one compact line per row: an emit_state
+# message becomes its JSON object plus `_mid` (journald _MACHINE_ID); any other message (a refusal
+# marker, a Doppler stderr line) passes through as a JSON string. `tag` non-empty additionally
+# requires SYSLOG_IDENTIFIER == tag — the LUKS cutover FSM on this SAME host emits the same noop-*
+# reasons under its own tag.
+#
+# THE MESSAGE SHAPE. In the warehouse the flip FSM's `message` is a parsed JSON OBJECT inside raw
+# (measured 2026-09-24: 2,743 of 2,743 rows). The pre-2026-09-24 `.message? // empty` under `jq -r`
+# pretty-printed each object over several lines, the caller's `fromjson?` then failed on every
+# one, and every live row was dropped. The legacy STRING shape is still decoded (`fromjson`), carries
+# `_mid`, and is MARKED `_str` — a `{`-string that no longer parses becomes `_undecodable` — because
+# the drift query's quoted terms cannot see that shape, so the caller refuses a PASS on it.
+#
+# THE PAGE-FULL SENTINEL. A trailing `__PAGE_FULL__` line when the RAW page (before the host
+# filter, so foreign rows count) reached the limit: an absence conclusion drawn from a full
+# newest-first page is invalid, because the oldest rows are the ones it dropped. Callers strip it
+# before any emptiness check.
 mine() {
-  local window="$1" term="$2" rows qrc
-  rows="$("$QUERY" --since "$window" --grep "$term" --limit "$LIMIT" 2>/dev/null)"; qrc=$?
+  local since="$1" limit="$2" tag="$3"; shift 3
+  local until_args=() grep_args=() t rows qrc n out jrc
+  if [[ "${1:-}" == "--until" ]]; then until_args=(--until "$2"); shift 2; fi
+  for t in "$@"; do grep_args+=(--grep "$t"); done
+  rows="$("$QUERY" --since "$since" "${until_args[@]}" "${grep_args[@]}" --limit "$limit" 2>/dev/null)"; qrc=$?
   if [[ "$qrc" -ne 0 ]]; then printf '__QUERY_FAILED__%s' "$qrc"; return 0; fi
-  printf '%s\n' "$rows" \
-    | jq -R -r --arg h "$FLIP_HOST" --arg hn "$FLIP_HOST_NAME" \
-         'fromjson? | .raw? | fromjson?
-          | select(.host == $h and .host_name == $hn)
-          | .message? // empty' 2>/dev/null
+  n="$(grep -c . <<<"$rows" || true)"
+  # `-R` plus `fromjson?` is load-bearing: without `-R`, ONE malformed line aborts the whole jq
+  # invocation and every valid row after it is lost.
+  out="$(printf '%s\n' "$rows" \
+    | jq -R -c --arg h "$FLIP_HOST" --arg hn "$FLIP_HOST_NAME" --arg tag "$tag" '
+        fromjson? | .raw? | fromjson?
+        | select(type == "object")
+        | select(.host == $h and .host_name == $hn)
+        | select($tag == "" or .SYSLOG_IDENTIFIER == $tag)
+        | (._MACHINE_ID // "") as $mid
+        | .message
+        | if type == "object" then . + {_mid: $mid}
+          elif type == "string" then
+            ((try fromjson catch null) as $d
+             | if ($d | type) == "object" then $d + {_mid: $mid, _str: true}
+               elif startswith("{") then {_mid: $mid, _undecodable: true}
+               else . end)
+          else empty end' 2>/dev/null)"; jrc=$?
+  if [[ "$jrc" -ne 0 ]]; then printf '__DECODE_FAILED__%s' "$jrc"; return 0; fi
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  if [[ "${n:-0}" -ge "$limit" ]]; then printf '__PAGE_FULL__\n'; fi
+  return 0
 }
+_strip_sentinel() { grep -vx '__PAGE_FULL__' <<<"$1" || true; }
+_page_full() { grep -qx '__PAGE_FULL__' <<<"$1"; }
 
+# Shared jq for decoding the stripped rows, and for DISPLAYING a row in a public comment.
+JQ_LIB='
+def iso: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
+def rows: [inputs | fromjson? | select(type == "object")];
+def flagdisp: if . == null or . == "" then "<empty>"
+  elif type == "string" and (. as $f | ["rolled-back","aborted","armed","flipping","flushed","done","unset"] | index($f) != null) then .
+  else "<non-enum value, \(tostring | length) chars>" end;
+def reasondisp($known): if type != "string" then "<non-enum reason>"
+  elif (. as $r | $known | index($r) != null) then .
+  elif test("^unexpected-exit\\(from=.*\\)$") then "unexpected-exit(from=\(capture("^unexpected-exit\\(from=(?<x>.*)\\)$").x | flagdisp))"
+  else "<non-enum reason, \(length) chars>" end;
+def tsdisp: if iso or . == "unknown" then . else "<non-date, \(tostring | length) chars>" end;
+def middisp: if type == "string" and test("^[0-9a-zA-Z]{8}") then .[0:8] else "<none>" end;
+def line($known): "flag=\(.flag | flagdisp) reason=\(.reason | reasondisp($known)) at=\(.start_ts | tsdisp) mid=\(._mid | middisp)";
+'
 
-# --- #7695 4.0: the ONE place a FAIL may be emitted -------------------------------------------
+# --- #7695 4.0: the ONE place a boundary-dependent FAIL may be emitted ------------------------
 #
-# THE RULE, AND WHY IT IS STRUCTURAL RATHER THAN REMEMBERED. A DERIVED boundary may produce
-# PASS or TRANSIENT and NEVER FAIL. Every BOUNDARY-DEPENDENT FAIL routes through this helper, so
-# a later edit that adds a bare `exit 1` to one of those arms is a visible deviation rather than
-# a silent restoration of the hazard below.
+# A DERIVED boundary may produce PASS or TRANSIENT and NEVER FAIL: an inferred boundary can
+# misattribute a PRE-replace event as post-replace, and a re-pin to a digest some host already
+# reported derives a boundary on the very machine the rollout replaced. Every BOUNDARY-DEPENDENT
+# FAIL routes through here. Three arms deliberately do not, because none consults the boundary:
+# the Doppler flag (its CURRENT value), `cutover_armed` (never a resting state), and `seam_refused`
+# (the #7761 condition itself, occurring now).
 #
-# TWO FAIL ARMS DELIBERATELY DO NOT ROUTE THROUGH IT, AND MUST NOT. The cap exists because an
-# INFERRED boundary can misattribute a PRE-replace event as post-replace. An arm that never
-# consults the boundary cannot make that error, and capping it would suppress a true present-tense
-# alarm for no gain:
-#   * the Doppler FSM-flag mismatch — reads the flag's CURRENT value, no $AFTER anywhere. A flag
-#     that has moved means someone armed a cutover, and the armed path ends in FLUSHALL.
-#   * `cutover_armed` — matches `flag == "armed"` over DRIFT_WINDOW with NO $AFTER filter. `armed`
-#     is never a resting state, so it is an alarm regardless of when the replace happened.
-#   * `seam_refused` — counts refusal markers over DRIFT_WINDOW, not relative to $AFTER. It is the
-#     #7761 condition itself occurring, on the live host, right now.
-# Both are boundary-independent by inspection; if a future edit makes either consult $AFTER, it
-# must move under this helper in the same edit.
-#
-# THE HAZARD. The derivation reads the pin. Any re-pin to a digest some host ALREADY reported --
-# a rollback re-pin above all -- derives a boundary in the PAST, on the very machine the rollout
-# was meant to replace. `boundary_age > STALE_AFTER_S` would then convert ordinary silence into
-# `FAIL reason=stale_image`, whose text tells the operator "the replace kept the old image ...
-# the seam exposure is still live" FOR A REPLACE THAT NEVER HAPPENED -- a false accusation, on a
-# type/security tracker. This script's own header warns against certifying a rollout with
-# evidence from the machine it replaced; an unbounded derivation reintroduces that inverted.
-#
-# THE ANTI-BRICK SIGNAL IS ROUTED, NOT LOST. Where the derived arm would have failed it exits 2
-# naming the MISSING AUTHORITY rather than blaming the host, and says how to re-arm the
-# authoritative FAIL arm. A bricked scheduler stays distinguishable -- via a reason that demands
-# the authoritative input, not via a condemnation built on an inference.
+# The FAIL line is printed FIRST and LAST: the sweeper keeps only the tail of the output, so a long
+# evidence list would otherwise push the verdict out of the comment.
 verdict_fail() {
   local reason="$1"; shift
   if [[ "${BOUNDARY_PROVENANCE:-supplied}" == "derived" ]]; then
     echo "TRANSIENT: reason=derived_boundary_stale_supply_authoritative_boundary" >&2
-    echo "           (the derived arm would have reported ${reason})" >&2
+    echo "           would_be=${reason%% *} (the derived arm would have reported ${reason})" >&2
     echo "           The boundary was INFERRED from the earliest probe row carrying the pinned" >&2
     echo "           digest -- nobody asserted a replace time. An inference is not entitled to" >&2
-    echo "           declare a regression, so this is capped at TRANSIENT." >&2
-    echo "           To re-arm the authoritative FAIL arm, set FLIP_ROLLOUT_AFTER to the apply's" >&2
-    echo "           completion time (ISO-8601 UTC) or write it to ${AFTER_FILE}." >&2
-    # #7695 P3 (review): print the detail lines here too. Capping the VERDICT is the point; dropping
-    # the evidence is not -- without this the operator loses the flag/reason/timestamp rows and keeps
-    # only the reason token, which is a paging-detail regression introduced by the cap itself.
+    echo "           declare a regression, so this is capped at TRANSIENT. To re-arm the FAIL arm," >&2
+    echo "           commit the replace's completion time (ISO-8601 UTC) to ${AFTER_FILE##*/}." >&2
+    # Capping the VERDICT is the point; dropping the evidence is not.
     [[ "$#" -gt 0 ]] && printf '%s\n' "$@" >&2
     exit 2
   fi
   echo "FAIL: reason=${reason}" >&2
-  printf '%s\n' "$@" >&2
+  if [[ "$#" -gt 0 ]]; then
+    printf '%s\n' "$@" >&2
+    echo "FAIL: reason=${reason}" >&2
+  fi
   exit 1
+}
+
+# A read-path non-verdict: nothing was measured. Exit 2 (NOT YET) — but against a SUPPLIED boundary
+# more than 7 days old, exit 3 (CANNOT ESTABLISH): a stuck read path is then something to fix, and
+# rendering it NOT YET every day forever is the state this probe exists to end. A derived boundary
+# keeps exit 2: an inferred boundary's age proves nothing.
+non_verdict() {
+  local reason="$1"; shift
+  local code=2
+  if [[ "$BOUNDARY_PROVENANCE" == "supplied" && "${boundary_age:-0}" -gt "$NON_VERDICT_MAX_AGE_S" ]]; then code=3; fi
+  if [[ "$code" == "3" ]]; then echo "CANNOT_ESTABLISH: reason=${reason}" >&2; else echo "TRANSIENT: reason=${reason}" >&2; fi
+  [[ "$#" -gt 0 ]] && printf '%s\n' "$@" >&2
+  if [[ "$code" == "3" ]]; then
+    echo "           The supplied boundary is ${boundary_age}s old (> ${NON_VERDICT_MAX_AGE_S}s)." >&2
+    echo "           A read-path non-verdict this long after the boundary is not 'not yet': fix the read path." >&2
+  fi
+  exit "$code"
 }
 
 # --- #7695 4.1-4.6: derive the boundary when none was supplied --------------------------------
 if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
-  # 4.6: "first" is a SLICE. mine()'s --limit returns the NEWEST N rows before re-sorting, so past
-  # roughly 500 probe rows the earliest row FOUND is not the earliest that exists. Raise the limit
-  # for this query specifically -- and note the residual is bounded in the safe direction: a slice
-  # can only push the derived boundary LATER, which delays a PASS. Under verdict_fail()'s cap it
-  # can never manufacture a condemnation. THAT CLAIM IS ONE-SIDED AND THE OTHER SIDE MATTERS: the
-  # same later boundary also SHRINKS the drift arm's window (it filters `.start_ts > $after`), so a
-  # slice can manufacture a false ACQUITTAL on the safety half. That is why the derivation runs over
-  # DRIFT_WINDOW below -- the two horizons then agree by construction and both directions are
-  # bounded.
-  # #7695 P1/P2 — DERIVE OVER THE *DRIFT* HORIZON, NOT THE LIVENESS ONE. WINDOW (2h) is sized for
-  # the flip tag's 30s cadence; the host probe fires HOURLY, so a 2h derivation has a margin of one
-  # sample AND -- worse -- pins AFTER to the window edge, silently collapsing the drift arm's
-  # documented 24h horizon to 2h and discarding 22h of safety evidence before printing "no flag
-  # drift". Default to DRIFT_WINDOW so the two agree by construction.
-  DERIVE_WINDOW="${FLIP_ROLLOUT_DERIVE_WINDOW:-$DRIFT_WINDOW}"
+  # 4.6: "first" is a SLICE. mine_dt()'s --limit returns the NEWEST N rows before re-sorting, so
+  # past roughly DERIVE_LIMIT probe rows the earliest row FOUND is not the earliest that exists.
+  # The residual is bounded in the safe direction: a slice can only push the derived boundary
+  # LATER, which delays a PASS, and under verdict_fail()'s cap it can never manufacture a
+  # condemnation.
+  # #7695 P1/P2 — the host probe fires HOURLY, so the derivation needs a wide window: 24h, its own
+  # default since 2026-09-24 (it used to inherit the retired drift window's).
+  DERIVE_WINDOW="${FLIP_ROLLOUT_DERIVE_WINDOW:-24h}"
   DERIVE_LIMIT="${FLIP_ROLLOUT_DERIVE_LIMIT:-5000}"
   # betterstack-query.sh interpolates LIMIT into SQL uninterpolated. Shape-check it here rather
   # than extending that unvalidated-env-var class by one more member.
@@ -345,7 +421,7 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
     echo "           about the host." >&2
     exit 2
   fi
-  # 4.4: mine() emits .message only, and the probe row carries no time INSIDE the message -- the
+  # 4.4: the probe row carries no time INSIDE the message -- the
   # emitter writes a flat key=value string, so the timestamp exists only as the row's outer `dt`
   # column. A sibling selector is required: bind the outer row, then emit "dt <TAB> message".
   # 4.5: inherit the SAME two-field host filter (#6616 -- host_name can lie, so both are checked).
@@ -430,7 +506,7 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
   # widen the window to "any time", which is the failure the validator exists to prevent.
   AFTER="$(date -u -d "$DERIVED_RAW" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
   if ! [[ "$AFTER" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-    echo "TRANSIENT: reason=boundary_unparseable value='${DERIVED_RAW}' (derived) — the row's dt" >&2
+    echo "TRANSIENT: reason=boundary_unparseable length=${#DERIVED_RAW} (derived) — the row's dt" >&2
     echo "           could not be normalised to ISO-8601 UTC, so nothing was measured." >&2
     exit 2
   fi
@@ -438,173 +514,293 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
   echo "      verdicts are capped at PASS-or-TRANSIENT for this provenance." >&2
 fi
 
-LIVE="$(mine "$WINDOW" "$TAG")"
-case "$LIVE" in
-  __QUERY_FAILED__*)
-    echo "TRANSIENT: reason=query_failed rc=${LIVE#__QUERY_FAILED__} — the ClickHouse read path did not answer." >&2
-    echo "           Nothing about the host's liveness was measured. Observed 2026-09-03: this" >&2
-    echo "           source answers 503 'under maintenance', which is a read-path outage and says" >&2
-    echo "           nothing about the host." >&2
-    exit 2 ;;
-esac
-
-# --- how stale is the boundary? ---------------------------------------------------------------
-# Used only to decide whether silence is "not yet" or "never". Computed before the marker counts
-# so both the empty and the insufficient arms can consult it.
+# --- how old is the boundary? -----------------------------------------------------------------
+# Decides whether silence is "not yet" or "never", and whether a read-path non-verdict has aged
+# into CANNOT ESTABLISH. Computed before the first query so every arm can consult it.
 now_epoch="$(date -u +%s 2>/dev/null || echo 0)"
 after_epoch="$(date -u -d "$AFTER" +%s 2>/dev/null || echo 0)"
+# A value can match the ISO shape and still not be an instant (2026-02-30T00:00:00Z). An epoch of 0
+# would silently zero boundary_age and disarm every deadline arm, so refuse it here.
+if ! [[ "$after_epoch" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CANNOT_ESTABLISH: reason=boundary_unparseable length=${#AFTER} — the boundary matches the ISO shape but is" >&2
+  echo "           not a real UTC instant, so no deadline can be computed." >&2
+  exit 3
+fi
 boundary_age=0
-if [[ "$now_epoch" -gt 0 && "$after_epoch" -gt 0 ]]; then boundary_age=$(( now_epoch - after_epoch )); fi
+if [[ "$now_epoch" -gt 0 ]]; then boundary_age=$(( now_epoch - after_epoch )); fi
 stale_note="the boundary is ${boundary_age}s old; a silent host stops being 'not yet' after ${STALE_AFTER_S}s"
+
+# _read_or_stop <raw> <query-failed-token> <label> — route a mine() failure sentinel to its
+# non-verdict. Every query result passes through here, so a failed read can never be read as silence.
+_read_or_stop() {
+  case "$1" in
+    __QUERY_FAILED__*)
+      non_verdict "$2 rc=${1#__QUERY_FAILED__} — the $3 read did not answer; nothing was measured." ;;
+    __DECODE_FAILED__*)
+      non_verdict "row_decode_failed rc=${1#__DECODE_FAILED__} jq=$(jq --version 2>/dev/null || echo unknown) — the $3 rows" \
+        "           were not decoded; nothing was measured. A probe defect, not a statement about the host." ;;
+  esac
+}
+# _num <value> <label> — a jq-derived count that is not a number means jq failed; never read it as 0.
+_num() {
+  [[ "$1" =~ ^[0-9]+$ ]] || non_verdict "row_decode_failed — the $2 count could not be computed; nothing was measured."
+}
+# _cap_rows <n> — print at most 20 lines of stdin, then "(+N more)". The sweeper keeps only the last
+# 4000 bytes of output, so an uncapped list would push the verdict line out of the comment.
+_cap_rows() {
+  local total="$1"
+  head -n 20
+  if [[ "$total" -gt 20 ]]; then echo "      (+$(( total - 20 )) more)"; fi
+}
+
+# --- LIVE: the newest flip-tag rows from this host --------------------------------------------
+LIVE_RAW="$(mine "$WINDOW" "$LIMIT" "$TAG" "$TAG")"
+_read_or_stop "$LIVE_RAW" query_failed LIVE
+# Strip the page-full sentinel BEFORE the emptiness check: a page full of FOREIGN rows is a dark
+# channel for this host, not a non-empty one.
+LIVE="$(_strip_sentinel "$LIVE_RAW")"
+
+# `armed` — kept as defence in depth (the current emitter never writes it into a row's flag), and
+# UNCAPPED: `armed` is never a resting state, so it is an alarm whatever the boundary's provenance.
+armed_n="$(printf '%s\n' "$LIVE" | jq -R -n -r "$JQ_LIB"'[rows[] | select(.flag == "armed")] | length' 2>/dev/null)"
+_num "$armed_n" armed
+if [[ "$armed_n" -gt 0 ]]; then
+  echo "FAIL: reason=cutover_armed — ${armed_n} 'armed' FSM row(s) are present on the LIVE host." >&2
+  printf '%s\n' "$LIVE" | jq -R -n -r --argjson known "$KNOWN_REASONS" "$JQ_LIB"'rows[] | select(.flag == "armed") | "      " + line($known)' 2>/dev/null \
+    | _cap_rows "$armed_n" >&2
+  echo "      A cutover is QUEUED: the next 30s poll stops inngest-server and runs FLUSHALL against" >&2
+  echo "      the Redis AOF holding user job payloads. Establish who armed it before anything else." >&2
+  echo "FAIL: reason=cutover_armed" >&2
+  exit 1
+fi
 
 if [[ -z "$LIVE" ]]; then
   if [[ "$boundary_age" -gt "$STALE_AFTER_S" ]]; then
     verdict_fail "channel_dark_past_deadline host=${FLIP_HOST}/${FLIP_HOST_NAME} — zero rows" \
-      "      in ${WINDOW}, and ${stale_note}." \
-      "      At a 30-second cadence this is not a host that has yet to boot; it is a host that" \
-      "      is not running the unit. Check for a mount-namespace setup failure from the" \
-      "      ReadWritePaths/StateDirectory directives, which kills the unit on every fire and" \
-      "      emits nothing at all."
+      "      in the newest ${LIMIT} rows / ${WINDOW}, and ${stale_note}." \
+      "      At a 30-second cadence this is not a host that has yet to boot; it is a host that is not" \
+      "      running the unit. Read the host's own tag rows for a mount-namespace setup failure:" \
+      "      scripts/betterstack-query.sh --since ${AFTER} --grep inngest-cutover-flip"
   fi
-  echo "TRANSIENT: reason=channel_dark host=${FLIP_HOST}/${FLIP_HOST_NAME} window=${WINDOW} — zero rows." >&2
+  echo "TRANSIENT: reason=channel_dark host=${FLIP_HOST}/${FLIP_HOST_NAME} — zero rows in the newest ${LIMIT} rows / ${WINDOW}." >&2
   echo "           The host is not reporting, so its FSM state is UNKNOWN — not 'healthy'. If the" >&2
   echo "           apply has just run, the host may still be booting (${stale_note})." >&2
   exit 2
 fi
 
-# --- 2. liveness, and 1. the delivery discriminator -------------------------------------------
-# `.start_ts` is compared as a STRING, so a row whose stamp is not a date must be excluded rather
-# than sorted: inngest-cutover-flip.sh falls back to the literal `unknown` when `date` fails, and
-# "unknown" > "2026-…" lexicographically — so a broken-clock row, INCLUDING one from the replaced
-# host, would otherwise count as post-boundary evidence toward the PASS.
-post_ok="$(printf '%s\n' "$LIVE" \
-  | jq -R -r --arg after "$AFTER" --argjson safe "$TERMINAL_SAFE_FLAGS" --arg guard "$EXPECTED_GUARD" \
-       'fromjson?
-        | select(.start_ts | type == "string" and test("^[0-9]{4}-"))
-        | select(.start_ts > $after)
-        | select(.flag as $f | $safe | index($f) != null)
-        | select(.reason == ("noop-" + .flag) and .guard == $guard)
-        | .start_ts' 2>/dev/null | grep -c . || true)"
-case "$post_ok" in ''|*[!0-9]*) post_ok=0 ;; esac
-
-# Post-boundary rows that are well-formed but carry the WRONG guard rev (or none) — i.e. the
-# pre-#7761 script is still running. Distinguished from "no rows" so the operator is told the
-# replace kept the old image rather than that the host is silent.
-post_oldrev="$(printf '%s\n' "$LIVE" \
-  | jq -R -r --arg after "$AFTER" --arg guard "$EXPECTED_GUARD" \
-       'fromjson?
-        | select(.start_ts | type == "string" and test("^[0-9]{4}-"))
-        | select(.start_ts > $after)
-        | select((.guard // "") != $guard)
-        | .start_ts' 2>/dev/null | grep -c . || true)"
-case "$post_oldrev" in ''|*[!0-9]*) post_oldrev=0 ;; esac
-
-if [[ "$post_oldrev" -gt 0 && "$post_ok" -eq 0 ]]; then
-  verdict_fail "stale_image — ${post_oldrev} post-boundary marker(s) carry no guard=${EXPECTED_GUARD} stamp." \
-    "      The host is alive and polling, but it is running the PRE-#7761 script. The replace" \
-    "      did not deliver the fix: check that BOTH image digest pins in cloud-init-inngest.yml" \
-    "      moved to the digest the Phase 8 build produced, and that the flip-asset copy in the" \
-    "      bootstrap did not fall through its || true guard. The seam exposure is still live."
+# The drift half can only see OBJECT-shaped rows (see the header), so a string-shaped flip row in
+# LIVE means the since-boundary drift query may be blind. That is not a PASS.
+shape_n="$(printf '%s\n' "$LIVE" | jq -R -n -r "$JQ_LIB"'[rows[] | select(._str == true or ._undecodable == true)] | length' 2>/dev/null)"
+_num "$shape_n" message-shape
+if [[ "$shape_n" -gt 0 ]]; then
+  echo "CANNOT_ESTABLISH: reason=message_shape_unsupported count=${shape_n} — flip-tag rows arrived with a STRING" >&2
+  echo "           message (or one that no longer parses). DRIFT_GREPS matches only the object shape, so a" >&2
+  echo "           drift row in that shape would be invisible. Nothing about drift was established." >&2
+  exit 3
 fi
 
-# --- 3. flag drift, over the WIDE window with its own narrow grep ------------------------------
-# ANY post-boundary flag other than the expected terminal one fails. Enumerating only the three
-# flush-path states would let `armed` through — the state whose next poll runs the FLUSHALL.
-DRIFT_ROWS="$(mine "$DRIFT_WINDOW" "$TAG")"
-case "$DRIFT_ROWS" in
-  __QUERY_FAILED__*)
-    echo "TRANSIENT: reason=drift_query_failed rc=${DRIFT_ROWS#__QUERY_FAILED__} — the safety half was not measured." >&2
-    exit 2 ;;
-esac
-# #7695 P1 — `armed` IS BOUNDARY-INDEPENDENT AND MUST NOT BE CAPPED.
-#
-# The derived-boundary cap exists because an INFERRED boundary can misattribute a PRE-replace event
-# as post-replace. That reasoning holds for the ABSENCE arms (silence read as "the replace kept the
-# old image"). It does NOT hold for `armed`: that is a positively-observed row, and `armed` is never
-# a resting state -- it is transient by design, and its next 30s poll stops the server and runs the
-# FLUSHALL. So an `armed` row anywhere in DRIFT_WINDOW is an alarm irrespective of when the replace
-# happened, which makes it exempt by this file's OWN criterion rather than by carve-out.
-#
-# WHY THIS MATTERS OPERATIONALLY. scheduled-followthrough-sweeper.yml provisions no Doppler token
-# and installs no Doppler CLI, so the uncapped Doppler arm above is inert on every real sweep. If
-# `armed` stayed capped, the FLUSHALL alarm would be reachable ONLY on a channel that does not
-# exist in CI, while the telemetry channel that always exists reported TRANSIENT.
-armed_rows="$(printf '%s\n' "$DRIFT_ROWS" \
-  | jq -R -r 'fromjson?
-        | select(.flag == "armed")
-        | "flag=\(.flag) reason=\(.reason) at=\(.start_ts)"' 2>/dev/null)"
-if [[ -n "$armed_rows" ]]; then
-  echo "FAIL: reason=cutover_armed — an 'armed' FSM row is present on the LIVE host." >&2
-  printf '%s\n' "$armed_rows" | sed 's/^/      /' >&2
-  echo "      A cutover is QUEUED: the next 30s poll stops inngest-server and runs FLUSHALL against" >&2
-  echo "      the Redis AOF holding user job payloads. Establish who armed it before anything else." >&2
-  echo "      This arm is deliberately NOT subject to the derived-boundary cap: 'armed' is never a" >&2
-  echo "      resting state, so it is an alarm regardless of when the replace happened." >&2
-  exit 1
-fi
-
-drift="$(printf '%s\n' "$DRIFT_ROWS" \
-  | jq -R -r --arg after "$AFTER" --argjson safe "$TERMINAL_SAFE_FLAGS" \
-       'fromjson?
-        | select(.start_ts | type == "string" and test("^[0-9]{4}-"))
-        | select(.start_ts > $after)
-        | select(.flag as $f | $safe | index($f) == null)
-        | "flag=\(.flag) reason=\(.reason) at=\(.start_ts)"' 2>/dev/null)"
-if [[ -n "$drift" ]]; then
-  drift_detail="$(printf '%s\n' "$drift" | sed 's/^/      /')"
-  # Herestring, NOT a pipe. This file sets `pipefail`, under which `producer | grep -q` takes
-  # SIGPIPE (141) when the match is early enough that the producer is still writing -- failing
-  # the pipeline EVEN THOUGH grep matched, and presenting as an unreproducible flake.
-  if grep -qE 'flag=(flipping|flushed|done)' <<<"$drift"; then
-    verdict_fail "flush_path_transition_after_replace — the latch guarantee is broken." \
-      "$drift_detail" \
-      "      The host was braked; nothing should have moved off a terminal-safe flag. Treat the" \
-      "      Redis contents as suspect and do not re-dispatch."
-  else
-    verdict_fail "flag_drift_after_replace — the FSM flag moved off the terminal-safe set." \
-      "$drift_detail" \
-      "      ('armed' is handled above by its own uncapped arm, so this is a non-armed drift.)" \
-      "      Establish what moved the flag before re-dispatching anything."
+# --- P5: drift — ONE sparse query over the WHOLE since-boundary interval ----------------------
+DRIFT_RAW="$(mine "$AFTER" "$DRIFT_LIMIT" "$TAG" "${DRIFT_GREPS[@]}")"
+_read_or_stop "$DRIFT_RAW" drift_query_failed drift
+DRIFT_FULL=0
+_page_full "$DRIFT_RAW" && DRIFT_FULL=1
+DRIFT="$(_strip_sentinel "$DRIFT_RAW")"
+# ONE jq call. The query is bounded by warehouse `dt` (since the boundary), so EVERY returned row is
+# considered — including a run whose start_ts predates the boundary but which emitted after it: a
+# row the query placed after the boundary is never dropped. The single EXEMPT shape is the op=resume
+# row (reason + flag only); guard, machine and time are OWNERSHIP questions, answered below — but its
+# machine still counts toward multiple_machines_since_boundary. Every other row is a finding, classed
+# flush-path when its reason, its flag, or an `unexpected-exit(from=flipping|flushed)` says so.
+ANALYSIS="$(printf '%s\n' "$DRIFT" | jq -R -n -c \
+  --arg after "$AFTER" --arg entry "$DONE_ENTRY_REASON" --arg steady "$POST_CUTOVER_FLAG" \
+  --arg guard "$EXPECTED_GUARD" --argjson fr "$FLUSH_PATH_REASONS" --argjson ff "$FLUSH_PATH_FLAGS" \
+  --argjson known "$KNOWN_REASONS" "$JQ_LIB"'
+  rows as $considered
+  | ($considered | map(select((.reason == $entry and .flag == $steady) | not))) as $findings
+  | { owners: [ $considered[]
+                | select(.reason == $entry and .flag == $steady and (.start_ts | iso)
+                         and .start_ts > $after and .guard == $guard)
+                | {ts: .start_ts, mid: (._mid // "")} ],
+      mids: ([ $considered[] | ._mid // "" | select(. != "") ] | unique),
+      findings: ($findings | length),
+      flush: ([ $findings[]
+                | select((.reason as $r | $fr | index($r) != null)
+                         or (.flag as $f | $ff | index($f) != null)
+                         or ((.reason | type) == "string"
+                             and (.reason | test("^unexpected-exit\\(from=(flipping|flushed)\\)$")))) ]
+              | length),
+      lines: [ $findings[] | line($known) ] }' 2>/dev/null)"
+[[ -n "$ANALYSIS" ]] || non_verdict "row_decode_failed — the drift rows could not be analysed; nothing was measured."
+read -r n_findings n_flush <<<"$(jq -r '"\(.findings) \(.flush)"' <<<"$ANALYSIS" 2>/dev/null)"
+_num "${n_findings:-}" drift-finding
+_num "${n_flush:-}" flush-path
+if [[ "$n_findings" -gt 0 ]]; then
+  mapfile -t _fl < <(jq -r '.lines[] | "      " + .' <<<"$ANALYSIS" | _cap_rows "$n_findings")
+  if [[ "$n_flush" -gt 0 ]]; then
+    verdict_fail "flush_path_transition_after_replace — the latch guarantee is broken (${n_findings} row(s) since ${AFTER})." \
+      "${_fl[@]}" \
+      "      A flush-path transition ran after the cutover. Treat the Redis contents as suspect and do" \
+      "      not re-dispatch anything until it is explained."
   fi
+  verdict_fail "drift_after_replace — the flip FSM left its post-cutover steady state (${n_findings} row(s) since ${AFTER})." \
+    "${_fl[@]}" \
+    "      The only FSM rows expected after the boundary are the op=resume row and the noop-done" \
+    "      heartbeat. Establish what moved it before re-dispatching anything. Drift on THIS machine" \
+    "      needs human review — moving the sidecar cannot clear it."
 fi
 
-# --- 4. seam refusals -------------------------------------------------------------------------
-# Queried separately: the refusal marker is a RAW string, not emit_state JSON, so every selector
-# above discards it by construction. Without this the single most interesting thing this PR can
-# emit has no reader at all.
-REFUSALS="$(mine "$DRIFT_WINDOW" "$REFUSAL_MARKER")"
-case "$REFUSALS" in
-  __QUERY_FAILED__*) REFUSALS="" ;;  # already reported by the drift arm; do not double-fail
-esac
-refusal_count="$(printf '%s\n' "$REFUSALS" | grep -cF "$REFUSAL_MARKER" || true)"
-case "$refusal_count" in ''|*[!0-9]*) refusal_count=0 ;; esac
+# --- P3: seam refusals since the boundary -----------------------------------------------------
+# The refusal is a raw `logger -t inngest-cutover-flip` line, so it is tag-isolated like everything
+# else, and only a message that STARTS with the marker counts (a row merely quoting it does not).
+# Boundary-independent in meaning (the #7761 condition occurring), so it is not capped.
+REFUSALS_RAW="$(mine "$AFTER" "$DRIFT_LIMIT" "$TAG" "$REFUSAL_MARKER")"
+_read_or_stop "$REFUSALS_RAW" refusals_query_failed seam-refusal
+refusal_count="$(_strip_sentinel "$REFUSALS_RAW" | jq -R -n -r --arg mk "$REFUSAL_MARKER" \
+  '[inputs | fromjson? | select(type == "string" and startswith($mk + " "))] | length' 2>/dev/null)"
+_num "$refusal_count" seam-refusal
 if [[ "$refusal_count" -gt 0 ]]; then
   echo "FAIL: reason=seam_refused count=${refusal_count} — the gate refused a fixture seam on the LIVE host." >&2
-  echo "      That means a name in the ${DOPPLER_PROJECT_NAME}/${DOPPLER_CONFIG_NAME} Doppler config" >&2
-  echo "      collided with a fixture seam name: the #7761 condition itself, occurring. The gate" >&2
-  echo "      held, so nothing was executed — but rename the offending secret before it collides" >&2
-  echo "      with a name the gate does not cover." >&2
+  echo "      A name in the ${DOPPLER_PROJECT_NAME}/${DOPPLER_CONFIG_NAME} Doppler config collided with a fixture" >&2
+  echo "      seam name: the #7761 condition itself, occurring. The gate held, so nothing was executed —" >&2
+  echo "      but rename the offending secret before it collides with a name the gate does not cover." >&2
+  echo "FAIL: reason=seam_refused" >&2
   exit 1
 fi
 
-if [[ "$post_ok" -ge "$MIN_MARKERS" ]]; then
-  corroboration="doppler read skipped (no credential in this environment)"
-  [[ -n "$doppler_flag" ]] && corroboration="doppler corroborates: ${doppler_flag}"
-  echo "PASS: #7761 delivered. ${post_ok} '${EXPECTED_FLAG}' marker(s) after ${AFTER} carrying"
-  echo "      guard=${EXPECTED_GUARD} (so the NEW script is on the host, not merely a host that"
-  echo "      booted after the timestamp); >= ${MIN_MARKERS}, so the 30s timer is cycling rather"
-  echo "      than having booted once; no flag drift; no seam refusal; ${corroboration}."
-  exit 0
+# --- truncation: only now may an ABSENCE be concluded ------------------------------------------
+# Findings are positive observations and stand on a truncated page. "No drift", "no owning resume"
+# and "no refusal" are absences, and a newest-first page drops the OLDEST rows first.
+if [[ "$DRIFT_FULL" == "1" ]]; then
+  non_verdict "drift_query_truncated limit=${DRIFT_LIMIT} — the since-boundary drift page is full, so" \
+    "           neither 'no drift' nor 'no owning resume' can be concluded from it."
+fi
+if _page_full "$REFUSALS_RAW"; then
+  non_verdict "refusals_query_truncated limit=${DRIFT_LIMIT} — the since-boundary refusal page is full, so" \
+    "           'no seam refusal' cannot be concluded from it."
 fi
 
-if [[ "$boundary_age" -gt "$STALE_AFTER_S" ]]; then
-  verdict_fail "insufficient_post_replace_markers_past_deadline count=${post_ok}" \
-    "      want>=${MIN_MARKERS} after ${AFTER}, and ${stale_note}." \
-    "      The flag is correct and nothing flushed, but the host has not been observed POLLING" \
-    "      since the replace. At a 30-second cadence that is not 'not yet'."
+# --- P1: delivery — every post-boundary heartbeat is stamped, and from ONE machine --------------
+read -r post_stamped post_oldrev MACHINE <<<"$(printf '%s\n' "$LIVE" | jq -R -n -r \
+  --arg after "$AFTER" --arg guard "$EXPECTED_GUARD" "$JQ_LIB"'
+  [ rows[] | select(.reason == "noop-done" and .flag == "done" and (.start_ts | iso) and .start_ts > $after) ] as $p
+  | ($p | map(select(.guard == $guard))) as $s
+  | "\($s | length) \($p | map(select((.guard // "") != $guard)) | length) \(
+      ($s | sort_by(.start_ts) | last | ._mid // "") | if . == "" then "-" else . end)"' 2>/dev/null)"
+_num "${post_stamped:-}" stamped-heartbeat
+_num "${post_oldrev:-}" unstamped-heartbeat
+[[ "${MACHINE:-}" =~ ^[0-9a-zA-Z]+$ ]] || MACHINE="-"
+
+# ANY unstamped post-boundary heartbeat is a stale image, even beside stamped ones: an old-image
+# emitter under the same identity is exactly what the stamp exists to expose, and the absence of
+# unstamped rows is the one thing a forger cannot remove from a genuinely stale host.
+if [[ "$post_oldrev" -gt 0 ]]; then
+  verdict_fail "stale_image — ${post_oldrev} post-boundary noop-done marker(s) carry no guard=${EXPECTED_GUARD} stamp." \
+    "      A PRE-#7761 script is polling on this host identity. The replace did not deliver the fix:" \
+    "      check that BOTH image digest pins in cloud-init-inngest.yml moved to the digest the build" \
+    "      produced (build-inngest-bootstrap-image.yml run log). The seam exposure is still live."
 fi
-echo "TRANSIENT: reason=insufficient_post_replace_markers count=${post_ok}" >&2
-echo "           want>=${MIN_MARKERS} after ${AFTER} (window ${WINDOW}); ${stale_note}." >&2
-echo "           The flag is correct and nothing flushed, but the host has not yet been observed" >&2
-echo "           POLLING since the replace. At a 30-second cadence this resolves within minutes." >&2
-exit 2
+
+_insufficient() { # _insufficient <count> <since-what> <since-epoch>
+  if [[ $(( now_epoch - $3 )) -gt "$STALE_AFTER_S" ]]; then
+    verdict_fail "insufficient_post_replace_markers_past_deadline count=$1" \
+      "      want>=${MIN_MARKERS} distinct stamped noop-done after $2, more than ${STALE_AFTER_S}s ago." \
+      "      The host has not been observed POLLING since then. At a 30-second cadence that is not 'not yet'."
+  fi
+  echo "TRANSIENT: reason=insufficient_post_replace_markers count=$1" >&2
+  echo "           want>=${MIN_MARKERS} distinct stamped noop-done after $2 (newest ${LIMIT} rows / ${WINDOW})." >&2
+  echo "           At a 30-second cadence this resolves within minutes." >&2
+  exit 2
+}
+if [[ "$post_stamped" -eq 0 ]]; then
+  _insufficient 0 "the boundary ${AFTER}" "$after_epoch"
+fi
+if [[ "$MACHINE" == "-" ]]; then
+  echo "CANNOT_ESTABLISH: reason=machine_id_absent count=${post_stamped} — stamped heartbeats carry no _MACHINE_ID," >&2
+  echo "           so ownership cannot be bound to a machine. The shipper's journald fields changed." >&2
+  exit 3
+fi
+# ONE machine since the boundary: heartbeats (LIVE) and every drift-query row (resume rows included).
+n_mids="$( { printf '%s\n' "$LIVE" | jq -R -n -r --arg after "$AFTER" "$JQ_LIB"'
+             rows[] | select(.reason == "noop-done" and (.start_ts | iso) and .start_ts > $after) | ._mid // empty'
+           jq -r '.mids[]' <<<"$ANALYSIS"; } 2>/dev/null | grep -v '^$' | sort -u | grep -c . || true)"
+_num "$n_mids" machine
+if [[ "$n_mids" -gt 1 ]]; then
+  echo "CANNOT_ESTABLISH: reason=multiple_machines_since_boundary count=${n_mids} — more than one _MACHINE_ID emitted" >&2
+  echo "           flip rows after ${AFTER}. The host was replaced after the boundary (or a second emitter" >&2
+  echo "           shares its identity): move the sidecar to the latest replace's inngest_host_replace completedAt." >&2
+  exit 3
+fi
+
+# --- the boundary must PRECEDE the owning machine's first row ---------------------------------
+# Otherwise moving the sidecar forward past a drift event would erase it — a false PASS on a P1
+# tracker. A real replace time always precedes the new machine's first row (2026-09-23: replace
+# 19:36:32, first row 19:37:57), so ANY row from machine M at or before the boundary means the
+# boundary sits inside M's lifetime. Queried by M's own _MACHINE_ID over 30 days (sparse, and
+# independent of how long M was silent), bounded by `dt` <= the boundary.
+check_since="$(date -u -d "@$(( after_epoch - 30 * 86400 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+BC_RAW="$(mine "$check_since" "$BOUNDARY_CHECK_LIMIT" "$TAG" --until "$AFTER" "\"_MACHINE_ID\":\"${MACHINE}\"")"
+_read_or_stop "$BC_RAW" boundary_check_query_failed boundary-check
+inside="$(_strip_sentinel "$BC_RAW" | jq -R -n -r --arg m "$MACHINE" "$JQ_LIB"'[rows[] | select(._mid == $m)] | length' 2>/dev/null)"
+_num "$inside" boundary-check
+if [[ "$inside" -gt 0 ]]; then
+  echo "CANNOT_ESTABLISH: reason=boundary_inside_owning_machine_lifetime — machine ${MACHINE:0:8} emitted ${inside} row(s)" >&2
+  echo "           at or before the boundary ${AFTER}, so the boundary is after this machine booted." >&2
+  echo "           The sidecar must hold the completion time of the replace that created this machine; moving it" >&2
+  echo "           later can re-certify only a NEW machine. Drift on this machine needs human review." >&2
+  exit 3
+fi
+if _page_full "$BC_RAW"; then
+  non_verdict "boundary_check_truncated — the boundary check filled a ${BOUNDARY_CHECK_LIMIT}-row page."
+fi
+
+# --- P4: done provenance — the FSM re-earned done on THIS machine after the boundary -----------
+OWNED_SINCE="$(jq -r --arg m "$MACHINE" '[.owners[] | select(.mid == $m) | .ts] | sort | first // ""' <<<"$ANALYSIS" 2>/dev/null)"
+if [[ -n "$OWNED_SINCE" && ! "$OWNED_SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  non_verdict "row_decode_failed — the owning resume's timestamp did not parse; nothing was measured."
+fi
+if [[ -z "$OWNED_SINCE" ]]; then
+  _dnr=(
+    "      Machine ${MACHINE:0:8} emits guard-stamped noop-done after the boundary ${AFTER}, but has no"
+    "      post-boundary, guard-stamped '${DONE_ENTRY_REASON}' row: its done is INHERITED, not re-earned."
+    "      Run \`gh workflow run cutover-inngest.yml -f op=resume\` (it waits for approval on the"
+    "      inngest-cutover environment). If the host was replaced after ${AFTER}, the sidecar must move to"
+    "      that apply run's inngest_host_replace completedAt."
+  )
+  if [[ "$boundary_age" -gt "$STALE_AFTER_S" ]]; then
+    verdict_fail "done_not_resumed_past_deadline — no op=resume on machine ${MACHINE:0:8} since ${AFTER}." "${_dnr[@]}"
+  fi
+  echo "TRANSIENT: reason=done_not_resumed — no op=resume on machine ${MACHINE:0:8} since ${AFTER} (${stale_note})." >&2
+  printf '%s\n' "${_dnr[@]}" >&2
+  exit 2
+fi
+
+# --- P2: liveness AFTER the owning resume, and NOW ---------------------------------------------
+# DISTINCT start_ts: one heartbeat delivered twice is one heartbeat.
+read -r post_ok newest_hb <<<"$(printf '%s\n' "$LIVE" | jq -R -n -r \
+  --arg m "$MACHINE" --arg since "$OWNED_SINCE" --arg guard "$EXPECTED_GUARD" "$JQ_LIB"'
+  [ rows[] | select(.reason == "noop-done" and .flag == "done" and .guard == $guard and ._mid == $m
+                    and (.start_ts | iso) and .start_ts > $since) | .start_ts ] | unique
+  | "\(length) \(last // "-")"' 2>/dev/null)"
+_num "${post_ok:-}" liveness
+owned_epoch="$(date -u -d "$OWNED_SINCE" +%s 2>/dev/null || echo "$after_epoch")"
+if [[ "$post_ok" -lt "$MIN_MARKERS" ]]; then
+  _insufficient "$post_ok" "the op=resume at ${OWNED_SINCE}" "$owned_epoch"
+fi
+newest_epoch="$(date -u -d "${newest_hb:-}" +%s 2>/dev/null || echo 0)"
+if [[ $(( now_epoch - newest_epoch )) -gt "$HEARTBEAT_MAX_AGE_S" ]]; then
+  echo "TRANSIENT: reason=heartbeat_stale newest=${newest_hb:-none} — machine ${MACHINE:0:8}'s newest heartbeat is more" >&2
+  echo "           than ${HEARTBEAT_MAX_AGE_S}s old, so the 30s timer is not observed cycling NOW." >&2
+  exit 2
+fi
+
+corroboration="doppler read skipped (no credential in this environment)"
+[[ -n "$doppler_flag" ]] && corroboration="doppler corroborates: ${doppler_flag}"
+# Disclose any seam that shaped this run. Under the sweeper's `env -i` it is always `default`.
+seams=""
+for _v in $(compgen -v FLIP_ROLLOUT_ || true); do
+  [[ -n "${!_v:-}" ]] && seams="${seams:+${seams},}${_v}"
+done
+echo "PASS: #7761 delivered — ${post_ok} guard=${EXPECTED_GUARD} noop-done heartbeats on machine ${MACHINE:0:8} owned since ${OWNED_SINCE}"
+echo "      (op=resume after the boundary ${AFTER}); no drift and no seam refusal since the boundary; ${corroboration}"
+echo "      seams=${seams:+overridden:}${seams:-default}"
+exit 0

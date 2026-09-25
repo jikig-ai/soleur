@@ -1399,6 +1399,13 @@ _git_data_rung2_hash_at_sha() {
   # an unprovable destructive operation. The residual is one directory per gate call.
   _tmp="$(mktemp -d -t rung2-archive.XXXXXXXX)" || {
     printf 'RUN_HASH_UNCOMPUTABLE|could not create a scratch directory to extract the archived tree. Nothing was measured — check free space and TMPDIR, then re-run.\n'; return 1; }
+  # Declare the owner the tmp reaper can check (#7004): pid= is the session
+  # harness owner when soleur_scratch_session_begin ran, else this process —
+  # the dir deliberately outlives the call (the bounded-leak trade documented
+  # above), so the marker is what lets Reaper 3 reclaim it once the owner dies.
+  printf 'pid=%s\nschema=1\nns=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}" \
+    "$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')" \
+    > "$_tmp/.soleur-owned" 2>/dev/null || true
   # `core.attributesfile=/dev/null` DISABLES THE GLOBAL/SYSTEM ATTRIBUTES FILE, AND NOTHING
   # MORE — the earlier comment here claimed it stopped a future `export-ignore`/`export-subst`
   # entry from making archived bytes differ from the worktree bytes, and that is false.

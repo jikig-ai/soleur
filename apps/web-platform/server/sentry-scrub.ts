@@ -22,6 +22,11 @@
 // The rename wins over `SENSITIVE_LOWER.has()` so a future addition of
 // `userId` to `SENSITIVE_KEY_NAMES` does not bury the pseudonymous
 // identifier under `[Redacted]`.
+//
+// `founderId` (the same person id under the Inngest event-data name) is hashed
+// in place as `founderIdHash` (#8719): the sentry-correlation middleware attaches
+// the raw `inngest.event_data` to every event of a run, and several
+// agent/workspace events carry `founderId`.
 
 import { SENSITIVE_LOWER, SENSITIVE_KEY_NAMES } from "./sensitive-keys";
 import { hashUserIdValue } from "./userid-pseudonymize";
@@ -119,6 +124,11 @@ function scrubRecursive(
         out["userIdHash"] = hashUserIdValue(v);
         renamedHashWritten = true;
       }
+      continue;
+    }
+
+    if (keyLower === "founderid") {
+      out["founderIdHash"] = hashUserIdValue(v);
       continue;
     }
 

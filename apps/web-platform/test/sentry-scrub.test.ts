@@ -133,6 +133,21 @@ describe("scrubSentryEvent — userId / user_id rename to userIdHash", () => {
   });
 });
 
+describe("scrubSentryEvent — founderId in Inngest event data (#8719)", () => {
+  test("`inngest.event_data.founderId` → `founderIdHash`, raw id gone", () => {
+    const raw = "0f4c1d2e-3a5b-4c6d-8e9f-a0b1c2d3e4f5";
+    const event = { extra: { "inngest.event_data": { founderId: raw, actionSendId: "row-1" } } };
+    const result = scrubSentryEvent(event) as {
+      extra: Record<string, Record<string, unknown>>;
+    };
+    expect(result.extra["inngest.event_data"]).toEqual({
+      founderIdHash: expectedHashFor(raw),
+      actionSendId: "row-1",
+    });
+    expect(JSON.stringify(result)).not.toContain(raw);
+  });
+});
+
 describe("scrubSentryEvent — inbound-email attachment metadata (S1)", () => {
   test("`attachments` and `filename` keys are redacted (middleware ships event_data via setExtra)", () => {
     // Attachment filenames are third-party-controlled PII (e.g.

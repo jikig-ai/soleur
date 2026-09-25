@@ -41,17 +41,27 @@ set -euo pipefail
 #      runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
-#   4  REFUSED before anything ran. FOUR producers. The first two are
+#   4  REFUSED before anything ran. SIX producers. The first two are
 #      overridden by SOLEUR_ALLOW_FULL_GATE=1:
 #        (a) SOLEUR_SUBAGENT=1 is set — a DECLARED spawned agent;
 #        (b) a sibling full-gate run is already in flight — a MEASURED condition (#7553).
 #        (b) is the reachable one: nothing in this repo sets SOLEUR_SUBAGENT, so (a)'s
 #        antecedent only holds when someone exports it deliberately.
-#      The other two are affected-mode SELECTION refusals (#8322) — no hatch:
+#      The next two are affected-mode SELECTION refusals (#8322) — no hatch:
 #        (c) AFFECTED_UNRESOLVED reason=zero-selected — the diff selects zero
 #            runnable registrations, which is no gate;
 #        (d) AFFECTED_UNRESOLVED reason=below-floor — the always-on set fell
 #            below _MIN_ALWAYS_ON_DECLARED, meaning the index was gutted.
+#      The last two are #8761's enumerate/deleted-checkout protections:
+#        (e) working tree missing — a deleted cwd detected up-front, or
+#            mid-walk while still in enumerate mode or before the first
+#            registration (the deleted-checkout probe is mode-agnostic, but
+#            once an EXECUTING battery's walk has begun it exits 3 instead — a mid-run
+#            abort leaves real coverage unresolved, which is 3's shape);
+#        (f) enumerate deadline — the graceful per-registration bound for the
+#            enumerate family. Its hard-bound sibling is the watchdog's
+#            SIGTERM/SIGKILL (143/137), which is not a runner code at all: a
+#            walk that stopped advancing is killed, not refused.
 #      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
 #      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
 #      would make a refused run read as a killed suite.
@@ -215,6 +225,12 @@ _EMIT_COMMANDS=0
 _AFFECTED_REQ=0        # --affected (or --print-affected-set) named explicitly
 _FULL_REQ=0            # --full named explicitly
 _PRINT_AFFECTED=0
+# Wall-clock bound for the enumerate family (#8761). Overridable by
+# SOLEUR_ENUM_DEADLINE_S (digits only, else the default holds); the deadline is
+# a safety bound on a seconds-scale walk, not a performance assertion — a clean
+# walk measures ~35s, a loaded host has taken >300s, so the default sits well
+# above either while still capping the multi-hour incident class.
+_ENUM_DEADLINE_S=900
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --enumerate)
@@ -284,6 +300,9 @@ Modes (local default is --affected; CI always runs the full battery):
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
+
+Enumerate modes die at a hard wall-clock deadline — SOLEUR_ENUM_DEADLINE_S
+seconds (default 900); a deleted-cwd walk exits 4, it never spins.
 USAGE
       exit 0
       ;;
@@ -392,6 +411,23 @@ fi
 #
 # Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
 export TMPDIR="${TMPDIR:-/var/tmp}"
+
+# Session scratch root (#7004): allocate <base>/soleur-run.<pid>.XXXXXXXX under
+# the effective TMPDIR's base, export TMPDIR at it so every descendant mktemp
+# lands inside the session root, and write .soleur-owned so Reaper 3 and the
+# session-start sweep can reclaim a dead run's residue without name heuristics.
+# Sourced opportunistically — a missing lib degrades to the pre-#7004 shape,
+# never blocks the gate. The EXIT trap at the acquire site gains
+# `_soleur_scratch_cleanup` (spliced, not a second trap — ADR-129).
+_SCRATCH_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "$TMPDIR" || true
+fi
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
 
 # Pin the #6789 contention instrumentation to /tmp, INDEPENDENTLY of TMPDIR above.
 #
@@ -558,6 +594,140 @@ if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
   echo "Stale files at the bare root diverge from HEAD and produce phantom test failures." >&2
   echo "Run from a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh" >&2
   exit 1
+fi
+
+# --- Deleted-checkout guard (#8761) -------------------------------------------
+# A run whose cwd is deleted — before launch or mid-walk — must fail fast with a
+# named error, never spin and never complete `exit 0` over a truncated receipt
+# set (two `test-all.sh` processes spun ~97% CPU for ~5h on a deleted worktree).
+# The probe is PATH-based on purpose: `[[ -e . ]]`/`[[ -d . ]]`/`stat .` stay
+# TRUE on a deleted-but-open cwd (fd-relative stat resolves the retained inode);
+# `[[ -d "$PWD" ]]` resolves the path and fails. Emitted to
+# stderr AND stdout: an operator-protection signal must reach the harness's
+# captured stdout, and the receipt stream is prefix-keyed so a non-record line
+# is contract-tolerated. `exit` not `return`: the `_shard_selects` call sites
+# are `|| return 0`, so a return is swallowed as non-selection. Residual edge:
+# a deleted-then-RECREATED same-path directory keeps `[[ -d "$PWD" ]]` true —
+# accepted; the incident shape is a removal that stays removed.
+_wt_missing_die() {
+  echo "ERROR: working tree missing (deleted worktree?)" >&2
+  echo "ERROR: working tree missing (deleted worktree?)"
+  # 4 when nothing could have run — enumerate mode executes nothing by
+  # definition, and before the first registration in any mode; 3 once the
+  # walk has begun in an executing battery, because a mid-run cwd loss leaves
+  # coverage unresolved — the contract's 3-shape, not a refusal.
+  if (( _ENUMERATE == 1 || ${_shard_ordinal:-0} == 0 )); then exit 4; else exit 3; fi
+}
+# NOT gated on `git rev-parse --show-toplevel`: a LIVE non-git cwd is a
+# legitimate degraded run (test-all-group-affected's undeterminable-diff arms
+# require fail-open there); only the path being gone is the refusal condition.
+if [[ ! -d "$PWD" ]]; then
+  # _soleur_inc_cleanup is not yet defined and the EXIT trap is not yet
+  # armed — a refusal here would leak the minted soleur-inc-* sandbox.
+  [[ -n "${_soleur_inc_owned:-}" && "$_soleur_inc_owned" == /* ]]     && rm -rf "$_soleur_inc_owned"
+  _wt_missing_die
+fi
+# `10#` and `> 0` mirror the TC_RUNTIME_CEILING_S parse (same file): a bare
+# `=~ ^[0-9]+$` accepts `08` (octal literal → `(( ))` errors on it per
+# registration, silently killing the graceful layer) and `0` (fires the
+# watchdog instantly on every enumerate run). Non-numeric or zero falls back
+# to the default — the deadline is the fix, it cannot be disabled.
+if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0123456789]{1,9}$ ]] && (( 10#$SOLEUR_ENUM_DEADLINE_S > 0 )); then
+  _ENUM_DEADLINE_S=$(( 10#$SOLEUR_ENUM_DEADLINE_S ))
+fi
+
+# --- Enumerate watchdog (#8761) ----------------------------------------------
+# The enumerate/print path answers to record-consumers and previously had NO
+# wall-clock bound: a run holding a deleted cwd spun ~97% CPU for ~5h on two
+# cores. The per-registration deadline in _shard_selects is the graceful first
+# line; this subshell is the HARD bound — it ends the run even when control
+# flow never advances (a pure-compute spin inside one loop iteration, the
+# un-located incident-site class). Pure bash (sleep + kill): timeout(1) is
+# absent on stock macOS; the bounded-wait precedent is lib/test-contention.sh's
+# _tc_wait_heartbeat's tracked-sleep pattern. Armed HERE — before the preamble
+# and the walk, so a wedge anywhere in the enumerate run is bounded; exits
+# before the EXIT trap installs rely on the kill -0 poll (~1s) for disarm.
+# Residual: flag-parse, the bare-repo rev-parse and the INCIDENTS mktemp sit
+# above this line — bounded code, but a wedged-fs hang there is uncovered.
+# Disarmed at the single enumerate terminator ([shard] enumerate complete)
+# and from the EXIT trap (_enum_wd_disarm) — a terminator-only disarm would
+# leak the subshell past _wt_missing_die's exit, this fix's primary path.
+#
+# DISARM MUST KILL THE WATCHDOG'S CHILD TOO: the sleep inherits the runner's
+# stdout, so when a consumer reads the run through $( ) or a pipe, a killed
+# subshell whose sleep survives orphaned keeps the write end open and the
+# reader blocks for the rest of the deadline — the same "process gone, consumer
+# still waits" shape this issue is about. The subshell's TERM trap kills the
+# tracked sleep before exiting. The 1s granularity doubles as a parent-liveness
+# poll: `kill -0` each iteration exits the watchdog within ~1s of an
+# untrappable parent death (SIGKILL/OOM runs no EXIT trap, no disarm), and the
+# lstart identity comparison at fire time closes pid-reuse on the kill target.
+if (( _ENUMERATE == 1 )); then
+  _ENUM_TOP_PID=$$
+  _ENUM_TOP_LSTART="$(ps -o lstart= -p $$ 2>/dev/null)"
+  _ENUM_T0=$SECONDS
+  (
+    _wd_sleep=""
+    # $BASHPID is bash 4.0+; the runner targets bash 3.2 (stock macOS), where
+    # under set -u a bare $BASHPID aborts the sweep before the parent's TERM.
+    # A nested shell's $PPID IS this subshell's pid — the portable spelling.
+    _wd_self="$(bash -c 'echo "$PPID"')"
+    trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
+    # SIGPIPE must not kill the watchdog mid-fire: the consumer's read end is
+    # often already gone on the path that most needs the kill. printf under
+    # this trap fails with EPIPE (rc>0) instead of dying.
+    trap '' PIPE
+    _wd_end=$(( SECONDS + _ENUM_DEADLINE_S ))
+    # kill -0 alone answers true for an UNREAPED ZOMBIE parent — the stat
+    # check treats a zombie as dead so the poll exits instead of waiting out
+    # the deadline on a corpse (ps absent -> empty -> falls back to kill -0).
+    while kill -0 "$_ENUM_TOP_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_ENUM_TOP_PID" 2>/dev/null)" != Z* ]] \
+      && (( SECONDS < _wd_end )); do
+      sleep 1 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+    done
+    # The loop exits EITHER on deadline or on parent death — an untrappable
+    # parent death (SIGKILL/OOM runs no EXIT trap, no disarm) releases the
+    # consumer's pipe here instead of holding it to the deadline.
+    if (( SECONDS >= _wd_end )) && kill -0 "$_ENUM_TOP_PID" 2>/dev/null; then
+      # Identity before kill: a pid recycled after the parent's death must
+      # never take the signal. Fire iff the captured start-time matches; if
+      # no baseline was captured (ps absent at arm) or the fire-time read is
+      # empty (pid dead or ps broke), fire anyway — the deadline is the
+      # contract, and kill on a dead pid is a harmless ESRCH.
+      _wd_now="$(ps -o lstart= -p "$_ENUM_TOP_PID" 2>/dev/null)"
+      if [[ -z "$_ENUM_TOP_LSTART" || -z "$_wd_now" \
+          || "$_wd_now" == "$_ENUM_TOP_LSTART" ]]; then
+        # Kill the walk's IN-FLIGHT CHILDREN first: a wedged git/grep child
+        # keeps burning CPU AND holds the inherited receipt pipe open — the
+        # same gone-but-held shape this issue is about. Direct children only
+        # (pgrep -P); the runner shares the caller's process group, so a
+        # group kill would take the caller with it. $BASHPID is THIS subshell
+        # — it is itself a direct child of the runner and must be excluded,
+        # or the sweep self-terminates before the parent's TERM is sent.
+        # Snapshot the child list ONCE: after the parent dies they reparent
+        # to init and a second pgrep -P enumerates nothing — a TERM-ignoring
+        # wedged child would survive the KILL leg and hold the receipt pipe.
+        _wd_kids="$(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null || true)"
+        for _wd_kid in $_wd_kids; do
+          [[ "$_wd_kid" == "$_wd_self" ]] && continue
+          kill -TERM "$_wd_kid" 2>/dev/null || true
+        done
+        kill -TERM "$_ENUM_TOP_PID" 2>/dev/null || true
+        printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S" >&2 || true
+        printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S" || true
+        sleep 5 & _wd_sleep=$!
+        wait "$_wd_sleep" 2>/dev/null || true
+        kill -KILL "$_ENUM_TOP_PID" 2>/dev/null || true
+        for _wd_kid in $_wd_kids; do
+          [[ "$_wd_kid" == "$_wd_self" ]] && continue
+          kill -KILL "$_wd_kid" 2>/dev/null || true
+        done
+      fi
+    fi
+  ) &
+  _ENUM_WD_PID=$!
 fi
 
 # --- Contention instrumentation (#6789) ---
@@ -1186,6 +1356,20 @@ _shard_selects() {
     echo "       The manifest lookup is keyed on it — a missing argument is a programming" >&2
     echo "       error, not a suite to place." >&2
     exit 2
+  fi
+  # Deleted-cwd liveness (#8761): the single chokepoint every registration
+  # funnels through, in EVERY mode — a checkout deleted mid-walk is caught at
+  # the next dispatch rather than completing over a truncated receipt set.
+  [[ -d "$PWD" ]] || _wt_missing_die
+  # Enumerate-scoped graceful deadline: at the wall the watchdog's 1s poll
+  # usually wins the race; this layer's value is the named exit 4 and the
+  # registration ordinal when a boundary lands first (the watchdog's signal
+  # death carries neither). The watchdog remains the hard bound for a spin
+  # that never reaches this check.
+  if (( _ENUMERATE == 1 && SECONDS - ${_ENUM_T0:-0} > _ENUM_DEADLINE_S )); then
+    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s, SOLEUR_ENUM_DEADLINE_S) after ${_shard_ordinal} registrations walked" >&2
+    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s, SOLEUR_ENUM_DEADLINE_S) after ${_shard_ordinal} registrations walked"
+    exit 4
   fi
   local label="$1"
   _shard_ordinal=$(( _shard_ordinal + 1 ))
@@ -2035,6 +2219,9 @@ _affected_derive() {
     local -a _queue=("$_suite_file") _seen=("$_suite_file")
     local _depth=0
     while (( ${#_queue[@]} > 0 && _depth < 8 )); do
+      # Deleted-cwd re-check inside the one multi-iteration site of a single
+      # registration's classify (#8761) — same probe as _shard_selects.
+      [[ -d "$PWD" ]] || _wt_missing_die
       _depth=$(( _depth + 1 ))
       local -a _next=()
       local _f
@@ -2797,7 +2984,33 @@ _soleur_inc_cleanup() {
   # test-all-runtime-ceiling and test-all-killed-classification.
   return 0
 }
-trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' EXIT
+
+# Watchdog disarm must live in the EXIT trap, not only at the enumerate
+# terminator: every abnormal exit after arming — `_wt_missing_die` (the #8761
+# primary path), the graceful deadline's exit 4, any mid-walk `exit`/`set -e`
+# abort — would otherwise leak the watchdog subshell's `sleep` holding an
+# inherited stdout pipe open until the deadline, blocking a `$( )`/pipe
+# consumer for up to _ENUM_DEADLINE_S after the runner is gone. Guarded by
+# `${_ENUM_WD_PID:-}` — exits before the arm site are no-ops.
+_enum_wd_disarm() {
+  if [[ -n "${_ENUM_WD_PID:-}" ]]; then
+    kill "$_ENUM_WD_PID" 2>/dev/null || true
+    # SIGTERM can be inherited MASKED — the watchdog's TERM trap then never
+    # runs and a bare wait would block until the deadline fires (its TERM is
+    # blocked too, and the KILL lands on a healthy run mid-trap). Poll ~2s —
+    # a live trap exits in ms; a zombie answers kill -0, so it is excluded —
+    # then escalate to SIGKILL, which no mask stops.
+    local _d=0
+    while (( _d < 20 )) \
+      && kill -0 "$_ENUM_WD_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_ENUM_WD_PID" 2>/dev/null)" != Z* ]]; do
+      sleep 0.1; _d=$(( _d + 1 ))
+    done
+    kill -KILL "$_ENUM_WD_PID" 2>/dev/null || true
+    wait "$_ENUM_WD_PID" 2>/dev/null || true
+  fi
+}
+trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -2825,6 +3038,7 @@ trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' E
 # verbatim in a comment takes the count above one and breaks every sandbox build before a single
 # assertion runs — which is why the prose above describes them instead of reproducing them.
 if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
+
 tc_acquire "test-all"
 
 # --- ARM THE REF-STORE STATE PREDICATE (#7917, AP-025) --------------------------------------
@@ -3201,6 +3415,14 @@ if want_scripts; then
   # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
   # (age/size/ownership/liveness/protected-path) is asserted in both directions.
   run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
+  # #7004: the tmp backlog purge + shared classifier. It MOVES operator files,
+  # so every ladder rung (marker/schema/git/empty/prefix/protected/liveness)
+  # is asserted in both directions under a sentinel base.
+  run_suite "tests/scripts/tmp-purge" bash tests/scripts/test-tmp-purge.sh
+  # #7004: the session allocator + Reaper 3 + quarantine drain. begin() exports
+  # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
+  # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
+  run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
   # #7537: the orphaned-PROCESS reaper. It SIGNALS processes, so every gate
   # (own-uid, unlinked cwd, unlinked fd/255, self-exclusion, mount/pid
   # namespace, age floor) is asserted in both directions here. Registered
@@ -3443,14 +3665,8 @@ if want_scripts; then
   # the defect alarm. The suite also pins FAIL-precedence over PASS, fault-to-TRANSIENT on each
   # of the three queries, and the missing-creds arm (TRANSIENT, never a spurious FAIL page).
   run_suite "scripts/ship-merge-mergebase-verdict-8151" bash scripts/followthroughs/ship-merge-mergebase-verdict-8151.test.sh
-  # #8006: exit-code harness for the test-scripts* leg-duration soak probe. Registered
-  # explicitly (orphan-suite class above). Its exit code is the closure of #8006 (0 closes;
-  # 1 = a qualifying leg breached the 900 s bound; 2 = NOT YET — under-sampled, unclocked,
-  # or every run non-qualifying; 3 = gh failed). Load-bearing arms: a run qualifies ONLY
-  # when all 9 post-carve-out legs are present, green, and measured — a skipped leg is
-  # unmeasurable and fail-closed, never a green leg; and a pre-merge run (no
-  # test-scripts-heavy legs) is stale data, not a small sample.
-  run_suite "scripts/ci-leg-durations-8006" bash scripts/followthroughs/ci-leg-durations-8006.test.sh
+  # (#8006 retired 2026-09-24 — issue closed on sweeper PASS; probe script +
+  # suite deleted per the script's own RETIREMENT note.)
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -4452,6 +4668,15 @@ fi
 # clean enumerate pass.
 if (( _ENUMERATE == 1 )); then
   echo "[shard] enumerate complete: ${_shard_assigned} registration(s) assigned of ${_shard_ordinal} walked (k/N=${_SHARD_K}/${_SHARD_N})" >&2
+  # Disarm the #8761 watchdog: the walk finished inside the deadline. Guarded —
+  # an exit through a guard above skips arming; wait reaps the watchdog
+  # subshell (its own TERM trap already killed the tracked sleep grandchild).
+  _enum_wd_disarm
+  # The wholesale `trap - EXIT` also bypasses the two cleanups the chain
+  # carries — run them explicitly so an enumerate pass does not leak a
+  # soleur-inc-*/soleur-refguard.* tmpdir per invocation.
+  _soleur_refguard_cleanup
+  _soleur_inc_cleanup
   trap - EXIT
   exit 0
 fi

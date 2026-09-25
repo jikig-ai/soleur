@@ -81,9 +81,54 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 ```
 
 **G3 is a live precondition, not a formality.** It requires the host to be audible on Better
-Stack, and a *freshly replaced* host is not audible until Vector is up and shipping. If `op=resume`
-refuses on G3, that is the expected ordering — wait for the host to start shipping (read it with
-`scripts/inngest-host-state.sh`) and re-dispatch.
+Stack **from the current server**: only rows stamped AND ingested after that server's Hetzner
+`created` time count, so a destroyed predecessor with the same name never satisfies it (the
+2026-09-24 replace: the old server's rows made G3 pass before the new one shipped anything —
+ADR-225 §4 amendment). A *freshly replaced* host is therefore not audible until its own Vector is up
+and shipping. If `op=resume` refuses on G3, read the run log's generation notice before acting:
+
+```
+::notice::inngest-cutover-flip liveness scoped to server soleur-inngest created <iso> (<age>s ago): rows=<R> counted=<C> host_pair=<N> pre_floor=<P> malformed=<M> skew_suspect=<K>
+```
+
+(The LUKS gate prints the same line labelled `inngest-luks-cutover liveness`.)
+
+- `rows` — decoded rows the query returned, from any host. The read keeps the newest 50 in the
+  15-minute window, so `rows=50` means the window was truncated and the older counters are lower
+  bounds.
+- `counted` — rows from the current server. G3 passes when this is above 0.
+- `host_pair` — rows matching both `host` and `host_name`, from any server generation.
+- `pre_floor` — well-formed host-pair rows that fail either clock. It **includes** `skew_suspect`,
+  so `pre_floor − skew_suspect` are the predecessor's rows.
+- `skew_suspect` above 0 — rows ingested after `created` but stamped before it: the current
+  server IS shipping and its clock is behind. It self-heals once the clock passes `created`;
+  re-dispatch then.
+- `malformed` above 0 — host-pair rows without a parseable event time or `dt`: a Vector or
+  warehouse schema change. File an issue with the run URL.
+
+When `counted=0`, the log carries at most one `::warning::` saying why, and each says **do NOT
+replace it**: `skew_suspect > 0` (check the host's NTP sync), `malformed > 0` (schema change), or a
+server under 600s old (`WAIT and re-dispatch`). **Believe it**: a replace resets `created` and the
+wait starts over. Wait for the host to start shipping (read it with `scripts/inngest-host-state.sh`)
+and re-dispatch. Only a server more than 600s old with `counted=0`, `skew_suspect=0` and
+`malformed=0` is a candidate for an `inngest-host-replace`.
+
+When G3 refuses `unreadable`, the `::warning::` above it names the read that failed: Better Stack
+(`BETTERSTACK_QUERY_*` in `prd_terraform`), the **Hetzner generation anchor**, or the local row
+filter (a jq fault — file an issue). The anchor's classes:
+
+- **re-dispatch later is enough:** rate-limited (429), Hetzner outage (5xx), transport fault, or no
+  server named `soleur-inngest` in the token's project (a replace in flight — re-dispatch once it
+  exists);
+- **re-dispatching does nothing until the cause is fixed:** the Doppler token read returned nothing,
+  the token was rejected (HTTP 401/403 — the warning names which variable was sent), or `created` is
+  out of bounds.
+
+Nothing was written in any of these cases. The anchor also prints which token it used: today that is
+the read/write `HCLOUD_TOKEN`, because `HCLOUD_TOKEN_READONLY` is not yet minted
+(`infra-credential-tiers-8209.md` step O5). The same generation scope applies to op=arm G3.7's
+liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops now also refuse
+while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback.
 
 **Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
 it. For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
@@ -885,18 +930,65 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 (`hr-no-ssh-fallback-in-runbooks`). Full context + gotchas:
 `knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md`.
 
-1. **Push an ANNOTATED `vinngest-vX.Y.Z` tag** on the commit carrying the change
-   (the repo forces annotated tags — a bare `git tag <name> <sha>` fails
-   `fatal: no tag message?`):
+1. **Push an ANNOTATED `vinngest-vX.Y.Z` tag on the squash-merge commit on `main`,
+   after the PR that changes the carrier has merged** (the repo forces annotated tags — a
+   bare `git tag <name> <sha>` fails `fatal: no tag message?`):
 
    ```
+   git fetch origin main
    git tag -a vinngest-v1.1.16 <main-sha> -m "inngest-bootstrap v1.1.16: <what>"
    git push origin vinngest-v1.1.16
    ```
 
    Fires `build-inngest-bootstrap-image.yml` → builds + SHA-verifies + pushes the
    image. It does NOT deploy.
-2. **Bump the cloud-init pin in lockstep** — there are **FOUR** pin sites across **TWO** files,
+
+   **A tag on a PR-branch commit is refused (#8747, ADR-232 §7).** The build job refuses
+   before building (`::error::ancestry: vinngest-vX.Y.Z is on commit <sha>, which is not an
+   ancestor of main`) and posts to Slack. A branch forked before the fix carries no
+   build-side check; its bump then dies at stage `args` (no `--signed-commit`), and any
+   other bump run that meets the off-main tag dies at stage `ancestry`. Recover by deleting
+   the tag, waiting for the PR to merge, and tagging its squash-merge commit as a **new**
+   version — never re-use the name, because GHCR may still hold the off-main image under it:
+
+   ```
+   git push origin :refs/tags/vinngest-v1.1.16
+   git tag -d vinngest-v1.1.16
+   git fetch origin main
+   git tag -a vinngest-v1.1.17 <squash-merge-sha> -m "inngest-bootstrap v1.1.17: <what>"
+   git push origin vinngest-v1.1.17
+   ```
+
+   That push runs its own publish and bump; do not re-run the failed run. **Exception: never
+   delete the tag `main` pins today** (the refusal says so when it is — e.g. `v1.1.39`, off
+   `main`, right after #8747 merged). Deleting it breaks the live pin; re-anchor by cutting
+   a new, higher version on `main` instead. Until an off-main tag is deleted, AC6 of
+   `cloud-init-inngest-bootstrap.test.sh` reds `main` and every open PR, because it demands a
+   pin to that tag while the bump refuses to author it. #8782 retires that trap. A
+   `mirror_only` backfill still mirrors while the semver-max tag is off `main` (the
+   build-side check is skipped on that path), but its bump job ends `result=error` at stage
+   `ancestry`: that red is the bump refusing the off-main target, not the backfill failing.
+
+   **Carrier-changing PR flow.** Merge the PR that changes a baked carrier first. Its
+   `deploy-script-tests` GuardA row is red on the PR, which is expected and advisory. Then
+   tag the squash-merge commit (above). The publish passes the ancestry check, and the
+   automated bump PR (step 2) auto-merges when the zot mirror is healthy. `main`'s GuardA is
+   red from the merge until that bump lands; #4326 (auto-mint on infra push) closes the gap.
+   A candidate image can no longer be built from an unmerged PR (#8781).
+
+   **Rolling back** to one of the legacy off-main versions (`v1.1.14`, `v1.1.24`,
+   `v1.1.26`–`v1.1.39`) works through a manual pin PR to the image that already exists. A
+   *rebuild* of such a tag is refused, so if a rebuild is needed, re-cut the old content on
+   `main` as a new version.
+2. **The pin bump is authored automatically** by the publish workflow's
+   `bump-cloud-init-pin` job (ADR-232): a `soleur-ai[bot]` PR on `soleur/inngest-pin-vX.Y.Z`
+   with auto-merge armed when this run's zot mirror reports `ok` and the image carries an
+   `org.opencontainers.image.revision` label naming the tag's commit (unlabelled legacy images
+   are opened held). The detail below is the **manual fallback**, for when that job fails (it
+   posts to Slack) or holds the PR. **Never use it after a failure at stage `ancestry` or
+   `args`**: those refusals mean the tag is off `main`, and a hand-written pin to it ships the
+   unreviewed bytes the gate exists to stop (#8747). Follow step 1's recovery instead.
+   **Bump the cloud-init pin in lockstep** — there are **FOUR** pin sites across **TWO** files,
    not three in one: `IREF` and `ZIREF` in `apps/web-platform/infra/cloud-init-inngest.yml`
    (the dedicated host) and `IREF` and `ZIREF` in `apps/web-platform/infra/cloud-init.yml`
    (the web host). CORRECTED 2026-09-10 (#8017) — the old count named one file and missed the
@@ -910,9 +1002,10 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    `vinngest-v*` tag, so the tag in step 1 MUST exist first (else the bump PR's CI
    fails AC6); pushing the tag without bumping turns `main` red until this PR merges —
    and red **repo-wide**, on every concurrently open pull request that runs the suite, not just
-   on the bump branch. The build workflow has no failure notification of any kind, so nobody is
-   told the window has stayed open. Keep it to the length of one build run: do not push the tag
-   until the digest commit is ready to land.
+   on the bump branch. A failed bump posts to Slack and an ancestry-refused build posts to
+   Slack, but an ordinary build failure notifies nobody, so the window can stay open silently.
+   Keep it to the length of one build run: do not push the tag until the digest commit is
+   ready to land.
 
    **A stale-schema row is not a sick host.** `scheduled-inngest-health.yml` grades liveness and
    will keep reporting the host HEALTHY on a row the recut gate refuses as `stale_schema` — the
@@ -1572,7 +1665,9 @@ ADR-100, amendment 2026-09-14.
      `INNGEST_CUTOVER_FLIP` at `armed`, a value **inside** the flip guard's prod-start allowlist, so a
      reboot in that ~30-60s window would start a SECOND prod scheduler. Fails closed if Better Stack
      cannot be read (G6 confirms over the same path, so an unconfirmable arm is refused rather than
-     dispatched). It is a **pre-filter, not the authority** — the on-host latch is what actually
+     dispatched), and — since the 2026-09-24 generation scope — if the Hetzner API cannot name the
+     current `soleur-inngest` server, because its liveness signal counts only that server's rows
+     (the latch count stays unscoped: a predecessor's `flip-complete` is still valid evidence). It is a **pre-filter, not the authority** — the on-host latch is what actually
      prevents a second `FLUSHALL`, and this gate can only ever ADD a refusal.
      **Remediation:** there is none while the latch stands, and `op=resume` is not it (its G1 accepts
      `done` only). The latch clears only when the store is measured empty AND the host's `/mnt/data`
