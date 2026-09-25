@@ -103,6 +103,34 @@ else
   echo "PASS: no pipe-into-grep-q in the two files #7024 took to zero"
 fi
 
+# The zot-pull mutation battery and the guard it mutates, taken to zero in #8664: a piped
+# early-exit scorer mis-scored killed rows under load, and a piped splitter killed the guard.
+# Same comment filter as the #7024 pass; no opt-out marker. Each file must exist first: a
+# git grep over a renamed or deleted path returns nothing and would switch this pin off.
+FILES_8664=(
+  'apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh'
+  'apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh'
+)
+missing_8664=""
+for f in "${FILES_8664[@]}"; do
+  git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || missing_8664="$missing_8664 $f"
+done
+hits_8664="$(git grep -nE "$PATTERN" -- "${FILES_8664[@]}" \
+  | grep -vE ':[0-9]+:[[:space:]]*#' || true)"
+
+if [[ -n "$missing_8664" ]]; then
+  FAIL=1
+  echo "FAIL: a file #8664 pins at zero is not tracked, so the pin covers nothing:$missing_8664"
+elif [[ -n "$hits_8664" ]]; then
+  FAIL=1
+  echo "FAIL: pipe-into-grep-q found in a file #8664 took to zero"
+  echo "$hits_8664" | sed 's/^/  /'
+  echo
+  echo "  Capture into a variable and match in bash, or use a herestring."
+else
+  echo "PASS: grep-q-zero-8664-pass (zot-pull battery and its guard)"
+fi
+
 # Non-vacuity: the pattern must actually match the shape it forbids. Without
 # this, a typo in PATTERN would make the guard pass forever on any input.
 probe="$(mktemp -d)"
