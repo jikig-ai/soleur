@@ -1423,7 +1423,8 @@ and only attribution against `routine_runs` (each run's intended tick) can tell 
 second scheduler. The host's projection carries no `queuedAt`, so the probe cannot do that
 attribution itself. The two groups are therefore recorded here as an operator-attributed,
 immutable, historical EXCEPTION to Decision 7's bucket criterion, and the flip condition is
-"the criterion holds outside that one bucket". The accepted residual runs the other way (P2-c):
+"the criterion holds outside that one bucket". [Updated 2026-09-25 — the exception now spans four
+buckets (five groups); see the update at the end of this addendum.] The accepted residual runs the other way (P2-c):
 two runs of one tick started more than 20 minutes apart land in different buckets and read clean.
 
 **What the day-7 probe measures.** `scripts/followthroughs/inngest-soak-6178.sh` is enrolled on
@@ -1473,6 +1474,16 @@ on #8349. The reading stays takeable for roughly one to two weeks after day 7; a
 heaviest slice outgrows the host's page budget and the probe reports CANNOT ESTABLISH until the
 tracker is closed, which is expected. The status stays `adopting` until the day-7 reading is clean
 outside the explained set; this addendum flips nothing.
+
+[Updated 2026-09-25 — three more groups attributed.] The day-9 readings reported three further
+groups, and each was attributed read-only against `routine_runs` and Better Stack: `cron-compound-promote`
+×2 in bucket 1491540 (09-19, two manual triggers, a failed run and its retry) and `cron-terraform-drift`
+×2 in bucket 1491858 (09-24, a scheduled tick plus a manual trigger) are the manual-trigger residual
+named above, and `cron-ghcr-token-minter` ×3 in bucket 1491719 (09-22) is a catch-up of the same shape
+as 09-17, after a dedicated-host replace left no scheduler until `op=resume` run 35698687536. Each is
+pinned into the probe's explained set as its exact run-id set; #6178 comment 5829980093 is the full
+record, including web-1's quiesced shape across the window. Nothing is flipped, released or closed
+by this update.
 
 ## Addendum — 2026-09-19 (#6488, #6617) — the dark tables are gone, and the probe that could not see its own verdict
 

@@ -20,12 +20,15 @@
 #
 # WHAT IT MEASURES. Over the pinned 52-cron population and the open-topped window from SOAK_FROM,
 # every (functionID, 1200 s startedAt-bucket) group holding more than one distinct run is a
-# finding. Exactly two such groups are EXPLAINED — the 2026-09-17T12:40–13:00Z catch-up after the
-# 76-minute no-scheduler window (PR #8252; `op=resume` run 35223389582) — and they are pinned as
-# the exact RUN-ID SETS the host reported, joined to `routine_runs.run_id` (the ULID the run-log
-# middleware writes), so the functionID→name mapping is proven rather than inferred from counts:
-# a group is explained only if its members are exactly those ids. The minter at 5 (or 3), a third
-# function in that bucket, or the same counts with different run ids, are all UNEXPLAINED.
+# finding. Five such groups, from four attributed events, are EXPLAINED: the 2026-09-17T12:40–13:00Z
+# catch-up after the 76-minute no-scheduler window (two groups; PR #8252, `op=resume` run
+# 35223389582), the 09-19 manual retry, the 09-22 catch-up and the 09-24 manual trigger
+# (attributions on #6178 comments 5738682595 and 5829980093). Each is pinned as the exact RUN-ID SET
+# the host reported, joined to `routine_runs.run_id` (the ULID the run-log middleware writes), so
+# the functionID→name mapping is proven rather than inferred from counts: a group is explained only
+# if its members are exactly those ids. The minter at 5 (or 3) in 1491374, a third function in a
+# pinned bucket, or the same counts with different run ids, are all UNEXPLAINED. Each explained
+# bucket prints one `explained_why: bucket=<b>` line carrying its own attribution.
 #
 # ANCHOR PROVENANCE (ADR-146; runbook inngest-server.md §"Scan window + trust anchor"). SOAK_FROM
 # is an `override`-class anchor: bucket_floor(2026-09-15T13:23:00Z) − 2×1200 s, where 13:23:00Z
@@ -39,7 +42,8 @@
 # started more than 20 minutes apart land in different buckets and read clean; a MANUAL trigger of
 # a cron (`cron/<id>.manual-trigger`) within 1200 s of its scheduled tick reads as a group — the
 # host's projection carries neither `queuedAt` nor the trigger source, so attribution against
-# `routine_runs.trigger_source` is the operator's step, never this probe's.
+# `routine_runs.trigger_source` is the operator's step, never this probe's. An attributed
+# manual-trigger group is then recorded as a pin in EXPLAINED, as two already are.
 #
 # HOW IT READS. The deploy webhook forwards only `from` and `function_ids` to the on-host probe
 # (apps/web-platform/infra/hooks.json.tmpl), so the window is open-topped and the ONLY cost lever
@@ -156,7 +160,17 @@ PROBE_BUDGET_S=420                  # wall-clock cap for the slice loop: the swe
 # rows started 12:53:07–12:53:30Z). The (functionID, bucket, count) triple must match AND the
 # member ids must equal the set — bucket 1491374 is historical and immutable, so any other member
 # set in it is a new finding.
+# Only the two 09-17 pins omit `why` (they print EXPLAINED_WHY); every other pin must carry its own.
 EXPLAINED='[
+  {"functionID":"9a26ac57-a722-5c59-9f36-115675eecbad","bucket":1491540,"count":2,
+   "ids":["01M2XM4813N3QE97TEZZVW9TT7","01M2XMEM8TZEDVAMRTZSCPWVVZ"],
+   "why":"2026-09-19 20:01Z+20:06Z: two manual triggers (trigger_source=manual), an operator retry of a failed run"},
+  {"functionID":"26e6836b-97ad-503f-8b08-490d8a2f4ce8","bucket":1491719,"count":3,
+   "ids":["01M341XPCWG79VZZPDJQ9W64KG","01M341XQ4SX2KGWVF5J0XQ9PTG","01M341XQNXQDFJSNW1C5PDP4TH"],
+   "why":"2026-09-22 catch-up: 07:00/07:20/07:40 ticks missed with no scheduler, each fired once at resume 35698687536"},
+  {"functionID":"209d5706-72bd-561c-88dc-92d7e23c1849","bucket":1491858,"count":2,
+   "ids":["01M38ZZP4PKKDB2QJ3HB77JTEY","01M390P0W5ZT51H3VDD1M2CTYJ"],
+   "why":"2026-09-24 06:00Z scheduled tick plus a manual trigger at 06:12:11Z (trigger_source=manual)"},
   {"functionID":"26e6836b-97ad-503f-8b08-490d8a2f4ce8","bucket":1491374,"count":4,
    "ids":["01M2QPSG3066F4DRDEBX5FCJSC","01M2QPSGN9WFA6ERRYCJP8ACNY","01M2QPSH0C5MWWGVM45D73QFGF","01M2QPSHH0TRCGYC9DBAHHCA1J"]},
   {"functionID":"2e625d3c-0207-569f-b10b-567bc685ad5e","bucket":1491374,"count":2,
@@ -399,7 +413,9 @@ jqv groups groups -c --argjson period "$PERIOD" \
   "$WORK/runs.json"
 # Exact split: explained iff (functionID, bucket, count) equals a pin AND the member ids equal its set.
 jqv split split -c --argjson ex "$EXPLAINED" \
-  '[ .[] | . as $g | . + { explained: any($ex[]; .functionID == $g.functionID and .bucket == $g.bucket and .count == $g.count and ((.ids | sort) == $g.ids)) } ]' <<<"$groups"
+  '[ .[] | . as $g
+     | ([ $ex[] | select(.functionID == $g.functionID and .bucket == $g.bucket and .count == $g.count and ((.ids | sort) == $g.ids)) ] | first) as $pin
+     | . + { explained: ($pin != null), why: ($pin.why // "") } ]' <<<"$groups"
 jqv explained_n explained_n '[.[] | select(.explained)] | length' <<<"$split"
 jqv unexplained_n unexplained_n '[.[] | select(.explained | not)] | length' <<<"$split"
 
@@ -434,7 +450,16 @@ printf 'reading: window=%s..%s slices=%s/%s runs=%s null_started=%s explained=%s
 jqv expl_rows expl_rows -r '.[] | select(.explained) | [.functionID, .bucket, .count] | @tsv' <<<"$split"
 jqv unexpl_rows unexpl_rows -r '.[] | select(.explained | not) | [.functionID, .bucket, .count] | @tsv' <<<"$split"
 print_groups "$expl_rows" "explained"
-[[ "$explained_n" -gt 0 ]] && printf 'explained_why: %s\n' "$EXPLAINED_WHY"
+# One attribution line per explained bucket; a pin with no `why` (only the 09-17 pins) falls back to
+# EXPLAINED_WHY in jq, so no TSV field is empty. unique_by(.bucket) collapses the two 09-17 groups,
+# which is correct only while every pin in one bucket shares one `why` (true: only 1491374 holds two).
+jqv why_rows why_rows -r --arg w "$EXPLAINED_WHY" \
+  '[.[] | select(.explained) | {bucket, why: (if .why == "" then $w else .why end)}] | unique_by(.bucket) | .[] | [.bucket, .why] | @tsv' <<<"$split"
+while IFS=$'\t' read -r b w; do
+  [[ -n "$b" ]] || continue
+  [[ "$b" =~ $INT_RE ]] || cannot_establish "shape_failed site=why_bucket" "an explained bucket index was not an integer"
+  printf 'explained_why: bucket=%s %s\n' "$b" "$w"
+done <<<"$why_rows"
 print_groups "$unexpl_rows" "UNEXPLAINED"
 
 if [[ "$NOW_EPOCH" -lt "$SOAK_END_EPOCH" ]]; then

@@ -540,7 +540,7 @@ fi
 # FLOOR is bound IMMEDIATELY above the floor it feeds: guard-vacuity-floor.test.sh slices the
 # floor block backward over contiguous simple assignments only, so a non-assignment line between
 # the binding and the `if` leaves the mutant unbound and the floor scored "not constructible".
-FLOOR=117
+FLOOR=144
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1
