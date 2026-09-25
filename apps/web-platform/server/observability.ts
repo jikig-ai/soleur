@@ -433,6 +433,11 @@ export function infoSilentFallback(
  *   Also `owner-attribution-probe` (warn-level via `reportSilentFallback`,
  *   emitted only on a transient owner-read DB error — NOT on zero owners;
  *   reconcile falls back to the workspace-keyed audit; see #5734/#5591).
+ * - `c4-project-read` family: `c4-project-read:zero-view-model` (warn-level
+ *   via `mirrorWarnWithDebounce`; dedup key is
+ *   `${activeWorkspaceId}:${modelPath}`, NOT a userId — the permanent
+ *   read-side detector for a committed model with elements but no views, from
+ *   any writer; see #8740, #8861).
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.

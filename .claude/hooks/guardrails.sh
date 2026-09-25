@@ -414,8 +414,15 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
   STAGED_DIFF=""
   DIFF_RC=0
   if [ "$IN_REPO" -eq 1 ]; then
-    STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff \
-      --src-prefix=a/ --dst-prefix=b/ --no-relative 2>/dev/null); DIFF_RC=$?
+    # `if` (not `; DIFF_RC=$?`): under `set -e` a failed `git diff --cached`
+    # aborts before the read -- which is exactly the failure the could-not-verify
+    # arm below exists to report.
+    if STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff \
+      --src-prefix=a/ --dst-prefix=b/ --no-relative 2>/dev/null); then
+      DIFF_RC=0
+    else
+      DIFF_RC=$?
+    fi
   fi
   if [ "$IN_REPO" -eq 1 ] && [ "$DIFF_RC" -ne 0 ]; then
     emit_incident "guardrails-block-conflict-markers" "warn" "git diff --cached failed; cannot verify" "$COMMAND"
