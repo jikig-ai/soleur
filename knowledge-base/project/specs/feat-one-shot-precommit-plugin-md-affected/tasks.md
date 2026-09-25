@@ -30,7 +30,9 @@ lane: cross-domain
 - [ ] 3.1 Plan Phase 3.1 (one SKILL.md → `scoped 1/<N>`, green, < 20 s).
 - [ ] 3.2 Plan Phase 3.2 (two SKILL.md → `scoped 2/<N>`).
 - [ ] 3.3 Plan Phase 3.3 (agent `.md` → `scoped 0/<N>`, 2 skips).
-- [ ] 3.4 Plan Phase 3.4 (`CI=1` + scope → collection log `full <N>/<N>`).
+- [ ] 3.4 Plan Phase 3.4 (`CI=1` + scope → collection log `full <N>/<N>`; bun exits 1 on the
+  zero-match `-t` filter — assert on the log line, not rc).
+- [ ] 3.4b Observability probe: `grep -c -e 'SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE=' lefthook.yml` prints `1`.
 - [ ] 3.5 Mutation spot-checks M1–M5 by hand against rows 3.1–3.4; log RED observations in `measurements.md`.
 - [ ] 3.6 `bash plugins/soleur/test/hook-git-env-coverage.test.sh` → `run_lines=32 runners=3`.
 - [ ] 3.7 `bash plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh` → 5/5.

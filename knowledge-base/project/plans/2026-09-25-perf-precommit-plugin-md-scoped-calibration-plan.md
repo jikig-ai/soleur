@@ -11,6 +11,35 @@ brand_survival_threshold: none
 
 # perf(hooks): stop paying a whole-corpus security recalibration on every plugin-markdown commit
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25 (proportional pass per operator direction: halt gates run mechanically,
+claims probed directly, no agent panel).
+
+### Key improvements
+
+1. Verified on the installed bun 1.4.2 with a scratch suite the three runtime behaviours the design
+   rests on: (a) a `describe` body — and its `console.log` — runs at collection even under a
+   zero-match `-t` filter, which then exits 1; (b) `test.skipIf` inside a `describe` reports skips in
+   bun's summary (`0 pass / 2 skip` for a scoped-zero run); (c) a newline-separated scope with a
+   trailing newline filters cleanly. Phase 3.4 now names the expected rc 1.
+2. Added the `## Observability` block that deepen-plan Phase 4.7 requires for a non-docs Files-to-Edit
+   list (`lefthook.yml`, a `plugins/soleur/test/` file, a `plugins/*/skills/` SKILL.md), with a
+   sub-second, allowlisted, literal-output discoverability probe.
+3. Halt gates: 4.6 pass (threshold `none`, no sensitive path), 4.7 pass after the addition,
+   4.8 pass (no PAT-shaped token), 4.9/4.10 not triggered, 4.11 pass
+   (`lint-guard-contract: … 1 guard entry`, rc 0). Cited rule ids all active in AGENTS.md;
+   #7833/#7941/#8322 closed, #8634 open and untouched, ADR-183 exists.
+
+### New considerations discovered
+
+- bun's rc 1 on a zero-match filter would read as a failure to anyone asserting on Phase 3.4's exit
+  code — recorded so the work phase asserts on the log line.
+- The discoverability probe prints `0` until the work phase edits `lefthook.yml`; `1` is the
+  post-implementation value.
+- The hook's glob `plugins/soleur/**/*.md` (unchanged, pre-existing) is a gobwas pattern; whether it
+  matches depth-1 files such as `plugins/soleur/AGENTS.md` is outside this change and unaffected by it.
+
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spec.md` exists for this branch.)
 
 ## Overview
@@ -56,7 +85,7 @@ contributed nothing at all.
 | "If it does not select, add missing declared edges in `scripts/lib/test-affected-paths.sh`" | Moot: the selector over-selects, it does not under-select. Declared edges are per-registration and are UNIONED with derived edges (rung 2–3 ∪ rung 4, `_affected_classify` doc) — no declaration can narrow `plugins/soleur` | No edit to `test-affected-paths.sh`, hence no conflict with the two sibling PRs editing it |
 | ~80 bun suites, the blanket run is the cost | 89 files; `skill-security-scan.test.ts` = 127.9 s of 163 s summed test time; its corpus calibration alone = 116.5 s | Scope the calibration, keep the other 88 files |
 | work/ship SKILL.md prose mentions `plugin-component-test` ~65 s | Only `plugins/soleur/skills/ship/SKILL.md` Phase 7 merge step 4 ("`plugin-component-test` runs `bun test plugins/soleur/test/` (~65 s)"); nothing in work/SKILL.md or AGENTS rules | Update that one sentence |
-| Consider `bun-test` `skip: merge` and its interaction with md | `lefthook-bun-test-merge-skip.test.sh` pins `bun-test` as the **only** pre-commit command with a `skip` (#7941 Thread 3). With scoping, a merge commit's calibration cost is bounded by the count of `SKILL.md` files the merge stages | No `skip: merge` on `plugin-component-test`; pin test unchanged |
+| Consider `bun-test` `skip: merge` and its interaction with md | `lefthook-bun-test-merge-skip.test.sh` pins `bun-test` as the **only** pre-commit command with a `skip` (#7941 Thread 3, landed in #8070). With scoping, a merge commit's calibration cost is bounded by the count of `SKILL.md` files the merge stages | No `skip: merge` on `plugin-component-test`; pin test unchanged |
 
 ## Research Insights
 
@@ -247,8 +276,8 @@ suites for a plugin md diff). Each row names the mutation it catches (Guard Cont
     → log `scoped 0/<N>`; the two calibration tests are reported as **skip**, not pass.
 3.4 CI override without paying the full scan: `CI=1 SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE=plugins/soleur/skills/ship/SKILL.md bun test plugins/soleur/test/skill-security-scan.test.ts -t 'no-such-test-name'`
     → the collection-time log line reads `full <N>/<N>` (the describe body runs at collection; no
-    test executes). Record the exit code bun gives for a zero-match filter; the log line is the
-    assertion.
+    test executes). bun exits **1** here (`error: regex "no-such-test-name" matched 0 tests`,
+    verified on bun 1.4.2) — expected; the log line is the assertion, not the exit code.
 3.5 `bash plugins/soleur/test/hook-git-env-coverage.test.sh` → receipt `run_lines=32 runners=3`.
 3.6 `bash plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh` → 5/5.
 3.7 **Dogfood:** the commit that stages `plugins/soleur/skills/ship/SKILL.md` fires the new hook for
@@ -309,6 +338,35 @@ plus skip, not an error.
 `.github/workflows/skill-security-scan-corpus.yml` runs the calibration without the hook. One diff
 cannot both weaken the scoping and make CI stop setting `CI`.
 
+## Observability
+
+```yaml
+liveness_signal:
+  what: "[skill-security-scan calibration] scoped|full <k>/<N>" line printed by the calibration describe
+  cadence: every plugin-markdown commit (hook) and every CI test-bun / corpus-calibration run
+  alert_target: the committing terminal (lefthook output); CI job log for the unscoped run
+  configured_in: plugins/soleur/test/skill-security-scan.test.ts (calibration describe)
+error_reporting:
+  destination: lefthook exits non-zero and blocks the commit; CI required check turns red
+  fail_loud: true
+failure_modes:
+  - mode: scoping silently disabled (hook assignment dropped)
+    detection: log line reads "full" on a hook run; hook time returns to ~3 min
+    alert_route: committing terminal
+  - mode: CI accidentally scoped
+    detection: CI job log line reads "scoped"; AC8 census finds a second setter
+    alert_route: PR review of the job log and AC8
+  - mode: staged SKILL.md not matched (path mismatch)
+    detection: log reads "scoped 0/<N>" when a SKILL.md was staged
+    alert_route: committing terminal
+logs:
+  where: lefthook stdout in the committing terminal; GitHub Actions job logs for CI
+  retention: terminal is ephemeral; GitHub Actions logs per repo retention (90 days default)
+discoverability_test:
+  command: grep -c -e 'SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE=' lefthook.yml
+  expected_output: "1"
+```
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** (the user here is the plugin maintainer/operator) a
@@ -356,8 +414,6 @@ test's corpus scope). No user-facing surface, no infrastructure, no regulated da
 
 ## Gates Not Applicable
 
-- Observability (2.9): no Files-to-Edit under `apps/*/server|src|infra` or `plugins/*/scripts`; no new
-  runtime surface. The failure surface is the committing terminal; CI is the enforcement.
 - IaC (2.8), Encryption (2.11), GDPR (2.7), ADR/C4 (2.10): no infra, store, connection, regulated data,
   or architectural decision.
 - Skill description budget (1.8): no `description:` edit.
