@@ -55,7 +55,9 @@ jobs:
   # one checkout + one git diff, NO Doppler/dev-Supabase access. Mirrors
   # ci.yml's detect-changes (single boolean output). BASE_REF is only set on
   # pull_request; non-PR events (push to main / workflow_dispatch) short-circuit
-  # to tenant=true (main is the source of truth). BASE_REF is passed via env: +
+  # to tenant=true (main is the source of truth) — EXCEPT a push proven to be a
+  # duplicate of the merged PR's green run on the identical tree (#8919). BASE_REF
+  # is passed via env: +
   # quoted "$BASE_REF" per workflow-injection guidance.
   detect-changes:
     runs-on: ubuntu-latest

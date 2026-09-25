@@ -1,6 +1,6 @@
 ---
 task: feat-one-shot-ci-main-duplicate-skip
-pr: TBD
+pr: 8919
 created: 2026-09-25
 ---
 # Session state — CI item 5 (duplicate main-push gate skip)

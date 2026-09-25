@@ -30,16 +30,28 @@ printf '%s\n' "$*" >> "$STUB_LOG"
 # jq on the SUT side would read unfiltered JSON and still pass.
 # --jq <prog> and --arg <name> <value> — the arg VALUE follows the name, so
 # pending_arg_name carries it across one iteration.
-jq_prog=""; prev=""; pending_arg=""; jq_args=()
+# Flag whitelist mirroring REAL `gh api` (it has NO --arg — cli/cli#10263; a
+# SUT that invents one dies here exactly as on a real runner).
+jq_prog=""; prev=""
 for a in "$@"; do
-  if [ -n "$pending_arg" ]; then jq_args+=(--arg "$pending_arg" "$a"); pending_arg=""; prev="$a"; continue; fi
-  case "$prev" in
-    --jq) jq_prog="$a";;
-    --arg) pending_arg="$a";;
-  esac
-  prev="$a"
+  [ "$prev" = "--jq" ] && jq_prog="$a"; prev="$a"
 done
-respond() { [ -n "$jq_prog" ] && jq -r "${jq_args[@]}" "$jq_prog" || cat; }
+for a in "$@"; do
+  case "$a" in
+    --jq|-q|--paginate|-X|--method|-f|-F|--raw-field|--input|--hostname) ;;
+    *) ;;
+  esac
+done
+# --jq takes its program as the next arg; any leftover --flag we don't know is a miss.
+prev=""; skip_next=""
+for a in "$@"; do
+  [ -n "$skip_next" ] && { skip_next=""; continue; }
+  case "$a" in
+    --jq|-q|--paginate|-X|--method|-f|-F|--raw-field|--input|--hostname|--verbose) skip_next="";;
+    --*) echo "stub: unknown flag $a" >&2; exit 64 ;;
+  esac
+done
+respond() { [ -n "$jq_prog" ] && jq -r "$jq_prog" || cat; }
 for a in "$@"; do
   case "$a" in
     */commits/*/pulls)
@@ -56,6 +68,10 @@ for a in "$@"; do
       head=""
       for b in "$@"; do case "$b" in *head_sha=*) head="${b#*head_sha=}"; head="${head%%&*}";; esac; done
       f="$STUB_DIR/runs-$head"; [ -f "$f" ] || exit 64
+      respond < "$f"; exit 0 ;;
+    */compare/*)
+      pair="${a##*/compare/}"
+      f="$STUB_DIR/compare-$pair"; [ -f "$f" ] || exit 64
       respond < "$f"; exit 0 ;;
     */runs/*/jobs*)
       id="${a%/jobs*}"; id="${id##*/}"
@@ -77,14 +93,15 @@ run_sut() {  # $1=out-file  $2..=sut args
 
 mksha() { local out=""; while (( ${#out} < 40 )); do out+="$1"; done; printf '%s' "${out:0:40}"; }
 SHA_MERGE=$(mksha a); SHA_HEAD=$(mksha b); TREE_OK=$(mksha c); TREE_BAD=$(mksha d)
-RUN_OK=111; SHA_OTHER_MERGE=$(mksha e)
+RUN_OK=111; SHA_PARENT=$(mksha f); SHA_OTHER_MERGE=$(mksha e)
 
 WF="wf-under-test.yml"
 # fixture builders ------------------------------------------------------------
 pulls()  { printf '[{"head":{"sha":"%s"},"merged_at":"%s","merge_commit_sha":"%s"}]\n' "$1" "$2" "$3"; }
-commit() { printf '{"tree":{"sha":"%s"}}\n' "$1"; }
+commit() { printf '{"tree":{"sha":"%s"},"parents":[{"sha":"%s"}]}\n' "$1" "$2"; }
+compare() { printf '{"merge_base_commit":{"sha":"%s"}}\n' "$1"; }
 runs()   { printf '{"workflow_runs":[%s]}\n' "$1"; }
-jobs()   { printf '{"jobs":[%s]}\n' "$1"; }
+jobs()   { printf '{"total_count":%d,"jobs":[%s]}\n' "$(printf '%s' "$1" | grep -o 'conclusion' | wc -l)" "$1"; }
 
 check() {  # $1=label $2=want(true|false) $3..=sut args
   local _label="$1" _want="$2"; shift 2
@@ -96,7 +113,9 @@ check() {  # $1=label $2=want(true|false) $3..=sut args
 
 # --- ROW 1: happy path — merged PR, merge_commit_sha match, trees equal, run+jobs green
 pulls "$SHA_HEAD" 2026-09-25T00:00:00Z "$SHA_MERGE" > "$STUB_DIR/pulls-$SHA_MERGE"
-commit "$TREE_OK" > "$STUB_DIR/commit-$SHA_HEAD"; commit "$TREE_OK" > "$STUB_DIR/commit-$SHA_MERGE"
+commit "$TREE_OK" "$SHA_PARENT" > "$STUB_DIR/commit-$SHA_HEAD"
+commit "$TREE_OK" "$SHA_PARENT" > "$STUB_DIR/commit-$SHA_MERGE"
+compare "$SHA_PARENT" > "$STUB_DIR/compare-$SHA_PARENT...$SHA_HEAD"
 runs '{"id":111,"status":"completed","conclusion":"success"}' > "$STUB_DIR/runs-$SHA_HEAD"
 jobs '{"name":"validate","conclusion":"success"},{"name":"deploy-script-tests (1/4)","conclusion":"success"}' > "$STUB_DIR/jobs-$RUN_OK"
 check "happy: tree-identical + green run + executed jobs" true "$WF" "$SHA_MERGE" validate deploy-script-tests
@@ -117,9 +136,9 @@ check "unmerged association" false "$WF" "$SHA_MERGE" validate
 
 # --- ROW 5: tree drift (main moved between check and merge)
 pulls "$SHA_HEAD" 2026-09-25T00:00:00Z "$SHA_MERGE" > "$STUB_DIR/pulls-$SHA_MERGE"
-commit "$TREE_BAD" > "$STUB_DIR/commit-$SHA_MERGE"
+commit "$TREE_BAD" "$SHA_PARENT" > "$STUB_DIR/commit-$SHA_MERGE"
 check "tree-differs: stale base / merge-order" false "$WF" "$SHA_MERGE" validate
-commit "$TREE_OK" > "$STUB_DIR/commit-$SHA_MERGE"
+commit "$TREE_OK" "$SHA_PARENT" > "$STUB_DIR/commit-$SHA_MERGE"
 
 # --- ROW 6: run not green — latest completed is cancelled
 runs '{"id":112,"status":"completed","conclusion":"cancelled"},{"id":111,"status":"completed","conclusion":"success"}' > "$STUB_DIR/runs-$SHA_HEAD"
@@ -164,7 +183,9 @@ rc=$?; [ "$rc" = 0 ] && [ "$(cat "$out")" = "duplicate=false" ] && pass || fail 
 # ═══ MUTATION BATTERY — each must drive a check RED on a true-fixture ════════
 setup_happy() {
   pulls "$SHA_HEAD" 2026-09-25T00:00:00Z "$SHA_MERGE" > "$STUB_DIR/pulls-$SHA_MERGE"
-  commit "$TREE_OK" > "$STUB_DIR/commit-$SHA_HEAD"; commit "$TREE_OK" > "$STUB_DIR/commit-$SHA_MERGE"
+  commit "$TREE_OK" "$SHA_PARENT" > "$STUB_DIR/commit-$SHA_HEAD"
+  commit "$TREE_OK" "$SHA_PARENT" > "$STUB_DIR/commit-$SHA_MERGE"
+  compare "$SHA_PARENT" > "$STUB_DIR/compare-$SHA_PARENT...$SHA_HEAD"
   runs '{"id":111,"status":"completed","conclusion":"success"}' > "$STUB_DIR/runs-$SHA_HEAD"
   jobs '{"name":"validate","conclusion":"success"}' > "$STUB_DIR/jobs-$RUN_OK"
 }
@@ -174,10 +195,10 @@ mutant() {  # $1=label $2=sed-expression applied to a SUT copy
 setup_happy
 
 # M1 drop the tree equality arm — a differs-fixture now emits true
-M=$(mutant m1 's/\[ -n "\$head_tree" \] && \[ "\$head_tree" = "\$merge_tree" \]/true/')
-commit "$TREE_BAD" > "$STUB_DIR/commit-$SHA_MERGE"
+M=$(mutant m1 's/\[ "\$head_tree" = "\$merge_tree" \]/true/')
+commit "$TREE_BAD" "$SHA_PARENT" > "$STUB_DIR/commit-$SHA_MERGE"
 o=$(PATH="$TMP/bin:$PATH" bash "$M" "$WF" "$SHA_MERGE" validate); [ "$o" = "duplicate=true" ] && pass || fail "M1 tree-check-drop should still emit true (mutation detects)"
-commit "$TREE_OK" > "$STUB_DIR/commit-$SHA_MERGE"
+commit "$TREE_OK" "$SHA_PARENT" > "$STUB_DIR/commit-$SHA_MERGE"
 
 # M3 accept cancelled as coverage (conclusion!=failure)
 M=$(mutant m3 's/conclusion=="success"/conclusion!="failure"/g')
@@ -191,6 +212,34 @@ M=$(mutant m4 's/\.conclusion=="success")/(.conclusion=="success" or .conclusion
 jobs '{"name":"validate","conclusion":"skipped"}' > "$STUB_DIR/jobs-$RUN_OK"
 o=$(PATH="$TMP/bin:$PATH" bash "$M" "$WF" "$SHA_MERGE" validate); [ "$o" = "duplicate=true" ] && pass || fail "M4 skipped-counted should emit true"
 jobs '{"name":"validate","conclusion":"success"}' > "$STUB_DIR/jobs-$RUN_OK"
+
+# M2 — drop the merge_commit_sha bind (association by membership only): the
+# unmerged-association row must not reach true
+M=$(mutant m2 's/select(.merged_at != null and .merge_commit_sha == \$sha)/select(.merged_at != null)/')
+printf '[{"head":{"sha":"%s"},"merged_at":"t","merge_commit_sha":"%s"}]\n' "$SHA_HEAD" "$SHA_OTHER_MERGE" > "$STUB_DIR/pulls-$SHA_MERGE"
+o=$(PATH="$TMP/bin:$PATH" bash "$M" "$WF" "$SHA_MERGE" validate); [ "$o" = "duplicate=true" ] && pass || fail "M2 bind-drop should emit true on mismatched association"
+pulls "$SHA_HEAD" 2026-09-25T00:00:00Z "$SHA_MERGE" > "$STUB_DIR/pulls-$SHA_MERGE"
+
+# M5 — die on API failure instead of emitting false: exit must be nonzero or output wrong
+M=$(mutant m5 's/emit false; exit 0/exit 1/g')
+chmod 000 "$STUB_DIR/pulls-$SHA_MERGE"
+o=$(PATH="$TMP/bin:$PATH" bash "$M" "$WF" "$SHA_MERGE" validate 2>/dev/null); rc=$?
+{ [ "$rc" -ne 0 ] || [ "$o" != "duplicate=false" ]; } && pass || fail "M5 exit-1-on-error should break the fail-open invariant"
+chmod 644 "$STUB_DIR/pulls-$SHA_MERGE"
+
+# M6 — contains() instead of exact-or-prefix match: deploy-script-tests-done must satisfy deploy-script-tests
+M=$(mutant m6 's/.name == \$p or (.name | startswith(\$p + " "))/.name | contains(\$p)/')
+jobs '{"name":"deploy-script-tests-done","conclusion":"success"}' > "$STUB_DIR/jobs-$RUN_OK"
+o=$(PATH="$TMP/bin:$PATH" bash "$M" "$WF" "$SHA_MERGE" deploy-script-tests); [ "$o" = "duplicate=true" ] && pass || fail "M6 contains-match should satisfy the collision"
+jobs '{"name":"validate","conclusion":"success"}' > "$STUB_DIR/jobs-$RUN_OK"
+
+# ── Guard 4 pin — notify-main-failure carries the pr_duplicate conjunct ──────
+# A skipped deploy-script-tests-done result is != 'success'; without the
+# conjunct every proven-duplicate push emails ops a false "[ALERT] Infra
+# Validation failed on main". Assert-anchor form: grep the conjunct line.
+if grep -q "needs.detect-changes.outputs.pr_duplicate != 'true'" \
+     "$REPO_ROOT/.github/workflows/infra-validation.yml"; then pass
+else fail "Guard-4: notify-main-failure lost the pr_duplicate conjunct"; fi
 
 echo "test-main-duplicate-skip: $passes passed, $fails failed"
 [ "$fails" -eq 0 ]

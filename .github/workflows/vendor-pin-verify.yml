@@ -41,7 +41,8 @@ jobs:
   # detect-changes: decides whether the upstream-blob verification runs
   # (#8203). Cheap — one checkout + one git diff. BASE_REF is only set on
   # pull_request; non-PR events (push to main / workflow_dispatch)
-  # short-circuit to vendor=true (main is the source of truth). BASE_REF is
+  # short-circuit to vendor=true (main is the source of truth) — except a push
+  # proven duplicate of the merged PR's green run (#8919). BASE_REF is
   # passed via env: + quoted "$BASE_REF" per workflow-injection guidance.
   detect-changes:
     runs-on: ubuntu-latest

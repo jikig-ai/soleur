@@ -37,7 +37,8 @@ on:
       # The gate itself. What this actually buys, stated precisely: `detect-changes` maps only
       # the two content globs to directories, so a workflow-ONLY push yields DIRS=[] and both
       # `validate` and `registry-userdata-budget` skip. What still runs is `deploy-script-tests`
-      # (no `needs:`, no `if:`), which carries the budget drift-guard suite — so the measurement
+      # (which gained `needs: detect-changes` + a proven-duplicate `if:` only for push — #8919),
+      # carrying the budget drift-guard suite — so the measurement
       # is re-run, just not via the standalone job. That is the coverage worth having here; do
       # not read this entry as re-running the full matrix.
       - ".github/workflows/infra-validation.yml"
@@ -478,9 +479,10 @@ jobs:
   # therefore NOT a one-line ruleset edit — the prerequisites are: drop `paths:` here
   # (keep the heavy matrix gated on `detect-changes`), add `merge_group:`, register the
   # context in ruleset-ci-required.tf AND scripts/required-checks.txt (bot PRs block
-  # otherwise). And `deploy-script-tests` + `check-secrets` currently have NO
-  # `needs:`/`if:`, so dropping `paths:` without gating them on `detect-changes` puts
-  # an 8-minute docker build on every docs-only PR. Tracked in #6480.
+  # otherwise). And `check-secrets` still has NO `needs:`/`if:` (deploy-script-tests*
+  # gained a duplicate-proof conjunct for push only — #8919), so dropping `paths:`
+  # without gating them on `detect-changes` puts an 8-minute docker build on every
+  # docs-only PR. Tracked in #6480.
   infra-validate-required:
     name: infra-validate-required
     needs: [detect-changes, validate]

@@ -34,10 +34,18 @@ head="$(jq -r --arg sha "$SHA" \
   <<<"$prs")"
 [ -n "$head" ] || { emit false; exit 0; }
 
-# 2. Tree identity — the load-bearing proof.
+# 2. Tree identity + base ancestry — the load-bearing proof. pull_request runs
+#    check out the PREVIEW merge ref, not the head commit; identical trees alone
+#    could green-light a run the preview never tested (base content added to the
+#    preview then removed before merge). Requiring merge_base(head, merge-parent)
+#    == merge-parent proves head CONTAINS the merge-time base — every preview the
+#    PR runs ever saw is then an ancestor-diff of exactly the proven tree.
 head_tree="$(gh api "repos/${REPO}/git/commits/${head}" --jq .tree.sha 2>/dev/null)" || { emit false; exit 0; }
+parent_sha="$(gh api "repos/${REPO}/git/commits/${SHA}" --jq '.parents[0].sha' 2>/dev/null)" || { emit false; exit 0; }
 merge_tree="$(gh api "repos/${REPO}/git/commits/${SHA}" --jq .tree.sha 2>/dev/null)" || { emit false; exit 0; }
-[ -n "$head_tree" ] && [ "$head_tree" = "$merge_tree" ] || { emit false; exit 0; }
+[ -n "$head_tree" ] && [ -n "$parent_sha" ] && [ "$head_tree" = "$merge_tree" ] || { emit false; exit 0; }
+mb="$(gh api "repos/${REPO}/compare/${parent_sha}...${head}" --jq .merge_base_commit.sha 2>/dev/null)" || { emit false; exit 0; }
+[ "$mb" = "$parent_sha" ] || { emit false; exit 0; }
 
 # 3. This workflow's own latest completed pull_request run at the head must be green.
 run_id="$(gh api "repos/${REPO}/actions/workflows/${WF}/runs?head_sha=${head}&event=pull_request&per_page=10" \
@@ -49,9 +57,12 @@ run_id="$(gh api "repos/${REPO}/actions/workflows/${WF}/runs?head_sha=${head}&ev
 #    Match is exact-or-"<prefix> <shard-suffix>" ('deploy-script-tests' matches
 #    'deploy-script-tests (1/4)' but NOT 'deploy-script-tests-done').
 for prefix in "$@"; do
-  ok="$(gh api "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100" \
-    --arg p "$prefix" \
-    --jq '[.jobs[] | select(.name == $p or (.name | startswith($p + " ")))  ] | if length==0 then "missing" elif all(.[]; .conclusion=="success") then "ok" else "bad" end' \
+  # gh api does NOT support --arg (cli/cli#10263) — fetch, then standalone jq.
+  # total_count guard: jobs?per_page=100 is unpaginated; a >100-job run would
+  # truncate page 2 and could false-true — emit "missing" (→ false) instead.
+  ok="$(gh api "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null \
+    | jq -r --arg p "$prefix" \
+      'if .total_count > 100 then "missing" else ([.jobs[] | select(.name == $p or (.name | startswith($p + " ")))] | if length==0 then "missing" elif all(.[]; .conclusion=="success") then "ok" else "bad" end) end' \
     2>/dev/null)" || { emit false; exit 0; }
   [ "$ok" = "ok" ] || { emit false; exit 0; }
 done
