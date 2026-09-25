@@ -627,6 +627,8 @@ fi
 # _tc_wait_heartbeat's tracked-sleep pattern. Armed HERE — before the preamble
 # and the walk, so a wedge anywhere in the enumerate run is bounded; exits
 # before the EXIT trap installs rely on the kill -0 poll (~1s) for disarm.
+# Residual: flag-parse, the bare-repo rev-parse and the INCIDENTS mktemp sit
+# above this line — bounded code, but a wedged-fs hang there is uncovered.
 # Disarmed at the single enumerate terminator ([shard] enumerate complete)
 # and from the EXIT trap (_enum_wd_disarm) — a terminator-only disarm would
 # leak the subshell past _wt_missing_die's exit, this fix's primary path.
@@ -647,28 +649,54 @@ if (( _ENUMERATE == 1 )); then
   (
     _wd_sleep=""
     trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
+    # SIGPIPE must not kill the watchdog mid-fire: the consumer's read end is
+    # often already gone on the path that most needs the kill. printf under
+    # this trap fails with EPIPE (rc>0) instead of dying.
+    trap '' PIPE
     _wd_end=$(( SECONDS + _ENUM_DEADLINE_S ))
-    while kill -0 "$_ENUM_TOP_PID" 2>/dev/null && (( SECONDS < _wd_end )); do
+    # kill -0 alone answers true for an UNREAPED ZOMBIE parent — the stat
+    # check treats a zombie as dead so the poll exits instead of waiting out
+    # the deadline on a corpse (ps absent -> empty -> falls back to kill -0).
+    while kill -0 "$_ENUM_TOP_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_ENUM_TOP_PID" 2>/dev/null)" != Z* ]] \
+      && (( SECONDS < _wd_end )); do
       sleep 1 & _wd_sleep=$!
-      wait "$_wd_sleep" 2>/dev/null
+      wait "$_wd_sleep" 2>/dev/null || true
     done
-    # The kill -0 loop exits EITHER on deadline or on parent death — an
-    # untrappable parent death (SIGKILL/OOM runs no EXIT trap, no disarm)
-    # releases the consumer's pipe here instead of holding it to the
-    # deadline. Only the deadline arm fires, and only at a pid still
-    # bearing the start-time captured at arm — a recycled pid can never
-    # take the kill.
-    if (( SECONDS >= _wd_end )) \
-      && [[ -z "$_ENUM_TOP_LSTART" \
-        || "$(ps -o lstart= -p "$_ENUM_TOP_PID" 2>/dev/null)" == "$_ENUM_TOP_LSTART" ]]; then
-      # Kill BEFORE printing: a dead or undrained consumer pipe would SIGPIPE/
-      # stall the printf, and the deadline must not depend on the output path.
-      kill -TERM "$_ENUM_TOP_PID" 2>/dev/null || true
-      printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S" >&2
-      printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S"
-      sleep 5 & _wd_sleep=$!
-      wait "$_wd_sleep" 2>/dev/null
-      kill -KILL "$_ENUM_TOP_PID" 2>/dev/null || true
+    # The loop exits EITHER on deadline or on parent death — an untrappable
+    # parent death (SIGKILL/OOM runs no EXIT trap, no disarm) releases the
+    # consumer's pipe here instead of holding it to the deadline.
+    if (( SECONDS >= _wd_end )) && kill -0 "$_ENUM_TOP_PID" 2>/dev/null; then
+      # Identity before kill: a pid recycled after the parent's death must
+      # never take the signal. Fire iff the captured start-time matches; if
+      # no baseline was captured (ps absent at arm) or the fire-time read is
+      # empty (pid dead or ps broke), fire anyway — the deadline is the
+      # contract, and kill on a dead pid is a harmless ESRCH.
+      _wd_now="$(ps -o lstart= -p "$_ENUM_TOP_PID" 2>/dev/null)"
+      if [[ -z "$_ENUM_TOP_LSTART" || -z "$_wd_now" \
+          || "$_wd_now" == "$_ENUM_TOP_LSTART" ]]; then
+        # Kill the walk's IN-FLIGHT CHILDREN first: a wedged git/grep child
+        # keeps burning CPU AND holds the inherited receipt pipe open — the
+        # same gone-but-held shape this issue is about. Direct children only
+        # (pgrep -P); the runner shares the caller's process group, so a
+        # group kill would take the caller with it. $BASHPID is THIS subshell
+        # — it is itself a direct child of the runner and must be excluded,
+        # or the sweep self-terminates before the parent's TERM is sent.
+        for _wd_kid in $(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null); do
+          [[ "$_wd_kid" == "$BASHPID" ]] && continue
+          kill -TERM "$_wd_kid" 2>/dev/null || true
+        done
+        kill -TERM "$_ENUM_TOP_PID" 2>/dev/null || true
+        printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S" >&2 || true
+        printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S" || true
+        sleep 5 & _wd_sleep=$!
+        wait "$_wd_sleep" 2>/dev/null || true
+        kill -KILL "$_ENUM_TOP_PID" 2>/dev/null || true
+        for _wd_kid in $(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null); do
+          [[ "$_wd_kid" == "$BASHPID" ]] && continue
+          kill -KILL "$_wd_kid" 2>/dev/null || true
+        done
+      fi
     fi
   ) &
   _ENUM_WD_PID=$!
@@ -1305,9 +1333,11 @@ _shard_selects() {
   # funnels through, in EVERY mode — a checkout deleted mid-walk is caught at
   # the next dispatch rather than completing over a truncated receipt set.
   [[ -d "$PWD" ]] || _wt_missing_die
-  # Enumerate-scoped graceful deadline: a walk past the bound declines further
-  # registrations by dying — the watchdog subshell remains the hard bound for a
-  # spin that never reaches this check.
+  # Enumerate-scoped graceful deadline: at the wall the watchdog's 1s poll
+  # usually wins the race; this layer's value is the named exit 4 and the
+  # registration ordinal when a boundary lands first (the watchdog's signal
+  # death carries neither). The watchdog remains the hard bound for a spin
+  # that never reaches this check.
   if (( _ENUMERATE == 1 && SECONDS - ${_ENUM_T0:-0} > _ENUM_DEADLINE_S )); then
     echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s, SOLEUR_ENUM_DEADLINE_S) after ${_shard_ordinal} registrations walked" >&2
     echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s, SOLEUR_ENUM_DEADLINE_S) after ${_shard_ordinal} registrations walked"
@@ -2937,6 +2967,18 @@ _soleur_inc_cleanup() {
 _enum_wd_disarm() {
   if [[ -n "${_ENUM_WD_PID:-}" ]]; then
     kill "$_ENUM_WD_PID" 2>/dev/null || true
+    # SIGTERM can be inherited MASKED — the watchdog's TERM trap then never
+    # runs and a bare wait would block until the deadline fires (its TERM is
+    # blocked too, and the KILL lands on a healthy run mid-trap). Poll ~2s —
+    # a live trap exits in ms; a zombie answers kill -0, so it is excluded —
+    # then escalate to SIGKILL, which no mask stops.
+    local _d=0
+    while (( _d < 20 )) \
+      && kill -0 "$_ENUM_WD_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_ENUM_WD_PID" 2>/dev/null)" != Z* ]]; do
+      sleep 0.1; _d=$(( _d + 1 ))
+    done
+    kill -KILL "$_ENUM_WD_PID" 2>/dev/null || true
     wait "$_ENUM_WD_PID" 2>/dev/null || true
   fi
 }
