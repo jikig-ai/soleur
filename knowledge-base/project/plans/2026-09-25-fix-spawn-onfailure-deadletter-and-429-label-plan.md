@@ -550,26 +550,26 @@ The ADR amendment ships in this PR, in Phase 4.
 
 ### Functional
 
-- [ ] AC1: `lib/failure-reason.ts` declares `leader_internal_error` in `FailureReason`, and `PAGES_OPERATOR.leader_internal_error === true`. The six existing `true` rows are unchanged and all other rows stay `false` (`git diff` of `PAGES_OPERATOR` shows exactly one added line).
-- [ ] AC2: `FAILURE_REASON_COPY.leader_internal_error` exists, contains "CTO has been notified", does not contain the raw key, and has `retryEligible: false`.
-- [ ] AC3: `sentry_alert.spawn_agent_dead_letter`'s `reason` `in` value is exactly `acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_internal_error,leader_refused,leader_response_truncated,leader_tool_invalid`. `infra/sentry/alert-reference.json` is regenerated, and `scripts/sentry-alert-reference-gate.sh` is green in `apply-sentry-infra.yml`.
-- [ ] AC4: `grep -Ec '^[[:space:]]*onFailure[[:space:]]*:' apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts` prints `1`. That is the exact predicate `scripts/followthroughs/spawn-onfailure-deadletter-8794.sh` applies to `main`'s copy.
-- [ ] AC5: `agentOnSpawnSettle` is exported and served from `app/api/inngest/route.ts`. It is triggered by `inngest/function.cancelled` with `if` equal to the SDK-generated `event.data.function_id == 'soleur-runtime-agent-on-spawn-requested'`, AND by `agent.spawn.orphaned`, which `onFailure` forwards. It is configured with `retries: 3` and `idempotency: "event.data.run_id"`. `function-registry-count.test.ts` pins 70.
-- [ ] AC6: `settleOrphanedSpawn` follows the T8 precedence matrix. Every query is scoped by `id` + `user_id` + `message_id`. It reports only on rows the UPDATE returned, plus the `attempt > 0` re-read (T12b). A terminal, undone, missing or foreign row produces zero reports (T10, T13). Envelope validation rejects with a fixed message (T14). A step failure produces exactly one `(settle_failed)` page (T12). It never throws. A settled row renders as the failure card, not "Working" (T22).
-- [ ] AC7: A retry-exhausted Anthropic 429 ends as `anthropic_rate_limited`, both through `makeRetryingStep` and through `runLikeInngest` (real serializer). 500/408/409 end as `anthropic_timeout`. `create` is still called 4 times for each (retry behaviour unchanged).
-- [ ] AC8: `classifyAnthropicOrLeaseError` has no unconditional `anthropic_timeout` return and no `/timeout/i` regex. An untagged thrown error → `leader_internal_error`. `ByokLeaseError` causes, including `subscription_limit` → `byok_lease_unavailable`.
-- [ ] AC9: `scripts/followthroughs/leader-429-label-8758.sh` no longer references #8764 (`grep -c 8764` prints `0`). Its PASS predicate matches the branch's handler file when applied locally (the same `grep` the probe runs, over the working-tree file). It passes `scripts/lint-followthrough-varq-ban.sh`.
-- [ ] AC10: ADR-042 carries the §I1 2026-09-25 amendment (the tag carrier, the catch-all paging consequence, the rejected `maxAttempts`) and a new §I6 terminal-state invariant. The new fleet ADR (provisional ADR-251, ordinal re-verified against `origin/main` before merge) exists and is linked from §I6.
+- [x] AC1: `lib/failure-reason.ts` declares `leader_internal_error` in `FailureReason`, and `PAGES_OPERATOR.leader_internal_error === true`. The six existing `true` rows are unchanged and all other rows stay `false` (`git diff` of `PAGES_OPERATOR` shows exactly one added line).
+- [x] AC2: `FAILURE_REASON_COPY.leader_internal_error` exists, contains "CTO has been notified", does not contain the raw key, and has `retryEligible: false`.
+- [x] AC3 (TF + alert-reference.json edited; `sentry-alert-reference-gate.sh` verdict in CI): `sentry_alert.spawn_agent_dead_letter`'s `reason` `in` value is exactly `acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_internal_error,leader_refused,leader_response_truncated,leader_tool_invalid`. `infra/sentry/alert-reference.json` is regenerated, and `scripts/sentry-alert-reference-gate.sh` is green in `apply-sentry-infra.yml`.
+- [x] AC4: `grep -Ec '^[[:space:]]*onFailure[[:space:]]*:' apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts` prints `1`. That is the exact predicate `scripts/followthroughs/spawn-onfailure-deadletter-8794.sh` applies to `main`'s copy.
+- [x] AC5: `agentOnSpawnSettle` is exported and served from `app/api/inngest/route.ts`. It is triggered by `inngest/function.cancelled` with `if` equal to the SDK-generated `event.data.function_id == 'soleur-runtime-agent-on-spawn-requested'`, AND by `agent.spawn.orphaned`, which `onFailure` forwards. It is configured with `retries: 3` and `idempotency: "event.data.run_id"`. `function-registry-count.test.ts` pins 70.
+- [x] AC6: `settleOrphanedSpawn` follows the T8 precedence matrix. Every query is scoped by `id` + `user_id` + `message_id`. It reports only on rows the UPDATE returned, plus the `attempt > 0` re-read (T12b). A terminal, undone, missing or foreign row produces zero reports (T10, T13). Envelope validation rejects with a fixed message (T14). A step failure produces exactly one `(settle_failed)` page (T12). It never throws. A settled row renders as the failure card, not "Working" (T22).
+- [x] AC7: A retry-exhausted Anthropic 429 ends as `anthropic_rate_limited`, both through `makeRetryingStep` and through `runLikeInngest` (real serializer). 500/408/409 end as `anthropic_timeout`. `create` is still called 4 times for each (retry behaviour unchanged).
+- [x] AC8: `classifyAnthropicOrLeaseError` has no unconditional `anthropic_timeout` return and no `/timeout/i` regex. An untagged thrown error → `leader_internal_error`. `ByokLeaseError` causes, including `subscription_limit` → `byok_lease_unavailable`.
+- [x] AC9: `scripts/followthroughs/leader-429-label-8758.sh` no longer references #8764 (`grep -c 8764` prints `0`). Its PASS predicate matches the branch's handler file when applied locally (the same `grep` the probe runs, over the working-tree file). It passes `scripts/lint-followthrough-varq-ban.sh`.
+- [x] AC10: ADR-042 carries the §I1 2026-09-25 amendment (the tag carrier, the catch-all paging consequence, the rejected `maxAttempts`) and a new §I6 terminal-state invariant. The new fleet ADR (provisional ADR-251, ordinal re-verified against `origin/main` before merge) exists and is linked from §I6.
 
 ### Non-functional
 
-- [ ] AC11: No raw `founderId` appears anywhere in a lifecycle dead-letter's Sentry event. The test searches the whole event after `scrubSentryEvent`, covering `captureMessage` args, breadcrumbs and the `inngest.event_data` scope extra shape (nested `event.data.founderId`).
-- [ ] AC12: No step's return shape changes. `git diff` of `agent-on-spawn-requested.ts` shows no change to `TurnRejection` / `AnthropicTurnResult` or to any EXISTING `step.run` callback's return value. The new `settle-orphaned-spawn` step runs in new functions and strands nothing.
-- [ ] AC13: `plugins/soleur/test/c4-count-parity.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` are green (the "no C4 impact" claim).
-- [ ] AC14: The touched web-platform vitest suites (`cd apps/web-platform && ./node_modules/.bin/vitest run <paths>`) and `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` are green. `tsc` is the enumerator for every exhaustive `Record<FailureReason, …>`: `PAGES_OPERATOR` and `FAILURE_REASON_COPY`.
+- [x] AC11: No raw `founderId` appears anywhere in a lifecycle dead-letter's Sentry event. The test searches the whole event after `scrubSentryEvent`, covering `captureMessage` args, breadcrumbs and the `inngest.event_data` scope extra shape (nested `event.data.founderId`).
+- [x] AC12: No step's return shape changes. `git diff` of `agent-on-spawn-requested.ts` shows no change to `TurnRejection` / `AnthropicTurnResult` or to any EXISTING `step.run` callback's return value. The new `settle-orphaned-spawn` step runs in new functions and strands nothing.
+- [x] AC13: `plugins/soleur/test/c4-count-parity.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` are green (the "no C4 impact" claim).
+- [x] AC14: The touched web-platform vitest suites (`cd apps/web-platform && ./node_modules/.bin/vitest run <paths>`) and `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` are green. `tsc` is the enumerator for every exhaustive `Record<FailureReason, …>`: `PAGES_OPERATOR` and `FAILURE_REASON_COPY`.
 
-- [ ] AC17: `agentOnSpawnRequestedOnFailure`, `agentOnSpawnSettleHandler` and `settleOrphanedSpawn` never reference the ctx `logger` (T23).
-- [ ] AC18: `spawn-dead-letter-triage.md` exists, contains no `ssh` command, and is linked from the TF rule comment and the `server/spawn-dead-letter.ts` header.
+- [x] AC17: `agentOnSpawnRequestedOnFailure`, `agentOnSpawnSettleHandler` and `settleOrphanedSpawn` never reference the ctx `logger` (T23).
+- [x] AC18: `spawn-dead-letter-triage.md` exists, contains no `ssh` command, and is linked from the TF rule comment and the `server/spawn-dead-letter.ts` header.
 
 ### Post-merge (automated, `soleur:postmerge`)
 
@@ -676,6 +676,12 @@ The only founder-visible change is one new copy row in an existing table (`failu
 - `makeRetryingStep` copies `cause` by hand, so it cannot prove the tag survives. Only the `runLikeInngest` case (T2) does. Do not delete T2 as redundant.
 - Regenerating `alert-reference.json` needs Sentry read credentials. If the session has none, take the expected file from the gate's `sentry-alert-reference-expected-<run-id>` artifact. Never hand-edit it twice.
 - `leader-429-label-8758.sh` must be rewritten in THIS PR. Otherwise the sweeper's `closed_precheck` reopens #8783 the day after merge.
+
+## Work-phase deviations (2026-09-25)
+
+- Envelope validation runs in the handler BEFORE any step (and before the cancel grace sleep), not as the settle step's first statements. The input is the immutable event, so the check is deterministic and replay-safe; a malformed envelope pages `(settle_failed)` exactly once without three wasted step retries. T14 pins the behaviour (no DB call, one page, fixed message).
+- QA I-1 was run at work time against `inngest-cli` 1.19.4-2c8385ba8 + SDK 3.54.2: finish timeout and `DELETE /v1/runs` each emit `inngest/function.cancelled` (no `data.error`), `onFailure` fires only on a failure past retries, and a hand-sent `inngest/function.cancelled` is rejected 400. Recorded in ADR-251.
+- T20 shipped in its fallback form: the lifecycle suite asserts no raw founder id in any Sentry spy call, and `sentry-scrub.test.ts` pins hashing of a nested lifecycle-envelope `founderId`.
 
 ## Plan Review Log (2026-09-25)
 
