@@ -573,13 +573,13 @@ The ADR amendment ships in this PR, in Phase 4.
 
 ### Post-merge (automated, `soleur:postmerge`)
 
-- [ ] AC15: Postmerge P-1: both follow-through probes print `PASS:` against `main`.
-- [ ] AC16: Postmerge P-3: `apply-sentry-infra.yml` ran green on the merge commit.
-- [ ] AC19: Postmerge P-4: the prd registry lists both `…-failure` and `…-agent-on-spawn-settle`.
+- [x] AC15: Postmerge P-1: both follow-through probes print `PASS:` against `main`. (2026-09-25, merge 38a4ac44b0; #8803 and #8783 closed by hand with the probe output, because the follow-through close guard blocked a merge-time close.)
+- [x] AC16: Postmerge P-3: `apply-sentry-infra.yml` ran green on the merge commit. (run 36133378879: `sentry_alert.spawn_agent_dead_letter` modified in place, id 1297589.)
+- [x] AC19: Postmerge P-4: the prd registry lists both `…-failure` and `…-agent-on-spawn-settle`. (cutover-inngest op=registry-probe run 36137185178: function_count=72 = 70 served + 2 SDK `-failure` functions; was 69 + 1. By count: the probe prints UUIDs, not slugs.)
 
 ### PR body
 
-- [ ] `Closes #8803` and `Closes #8783` in the body, not the title. `Ref #8839 #8840 #8841 #8845`.
+- [x] PR body carries `Ref #8803` and `Ref #8783` (not `Closes`: the follow-through close guard refuses a merge-time close of a `follow-through` tracker), plus `Ref #8839 #8840 #8841 #8845`; both trackers were closed by hand after P-1.
 
 ## Domain Review
 
