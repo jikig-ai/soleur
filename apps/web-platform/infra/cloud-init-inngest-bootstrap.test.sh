@@ -145,8 +145,8 @@ assert "drift comment clarifies pin is bootstrap-image version, not inngest-cli 
 # --- AC4: positional ordering ---
 echo ""
 echo "--- AC4: positioned BEFORE soleur-web-platform docker run ---"
-BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
-WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
+BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 assert "bootstrap line found in cloud-init.yml"      "[[ -n '$BOOTSTRAP_LINE' ]]"
 assert "soleur-web-platform run line found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
 assert "bootstrap block precedes web-platform start" "(( BOOTSTRAP_LINE < WEBPLATFORM_LINE ))"
@@ -374,12 +374,12 @@ assert "col-0 '%{ if ~}' / '%{ endif ~}' directives balance" \
 # spaces behind after the `~` trim and corrupts the runcmd: list.
 assert "exactly one col-0 '%{ if web_tunnel_connector ~}' directive (#6425)" \
   "(( \$(grep -cE '^%\{ if web_tunnel_connector ~\}$' '$CLOUD_INIT') == 1 ))"
-IF_LINE=$(grep -nE '^%\{ if web_colocate_inngest ~\}$' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
-COMMENT_LINE=$(grep -nE 'Bootstrap Inngest server on first boot' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
+IF_LINE=$(grep -nE '^%\{ if web_colocate_inngest ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+COMMENT_LINE=$(grep -nE 'Bootstrap Inngest server on first boot' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 # The first endif AT OR AFTER this block's if — `head -1` of the file would since #6425 return
 # the web_tunnel_connector pair's endif (which sits earlier) and false-FAIL the ordering assert.
 ENDIF_LINE=$(awk -v s="$IF_LINE" 'NR > s && /^%\{ endif ~\}$/ { print NR; exit }' "$CLOUD_INIT")
-TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
+TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 assert "if-directive precedes the bootstrap comment"        "(( IF_LINE < COMMENT_LINE ))"
 assert "endif-directive follows the block's trap disarm"    "(( ENDIF_LINE > TRAP_DISARM_LINE ))"
 # `type = bool` is LOAD-BEARING: Terraform's `%{ if }` directive HCL-bool-converts its

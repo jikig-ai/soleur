@@ -1973,8 +1973,8 @@ assert_bprime_cosign_invocation() {
   local argsfile args sentry ok=1
   argsfile=$(mktemp)
   ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
-  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | sed -n '1p')
-  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | sed -n '1p')
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
+  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | head -1)
   rm -f "$argsfile"
   [[ -n "$args" ]] || ok=0
   printf '%s' "$args" | grep -cF -- >/dev/null '--network host' || ok=0
@@ -2014,7 +2014,7 @@ assert_cosign_reads_mounted_config() {
   local argsfile args dc n_user n_dc ok=1 why=""
   argsfile=$(mktemp)
   ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
-  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | sed -n '1p')
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
   rm -f "$argsfile"
   [[ -n "$args" ]] || { ok=0; why="no verify argv captured"; }
   n_user=$( { printf '%s' "$args" | grep -oE -- '(^| )(-u|--user)( |=)' || true; } | wc -l | tr -d ' ')
@@ -7066,7 +7066,7 @@ T3_STDERR="Doppler Error: ${T3_FILLER}${T3_CANARY}"$'\t'$'\a'" TAILSENTINEL7095"
 T3_D=$(mktemp -d); T3_F="$T3_D/logger.txt"; : > "$T3_F"
 run_deploy_cred_capture "$T3_F" \
   "export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR=\"\$T3_STDERR\"" || true
-T3_LINE="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T3_F" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | sed -n '1p')"
+T3_LINE="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T3_F" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | head -1)"
 # `err="…"` is the LAST field on the line precisely so the payload is extractable without a parser.
 T3_PAY="${T3_LINE#*err=\"}"; T3_PAY="${T3_PAY%\"}"
 T3_BAD=""
@@ -7335,7 +7335,7 @@ assert_marker_field() {
   # [a-z0-9_] silently truncates it to `deploy` — which is the OTHER hook's id, so the
   # assertion compares a real value against a real value and can false-pass. Measured: this
   # exact omission reported `expected deploy-peer, got deploy` against a correct marker.
-  actual=$(printf '%s' "$line" | grep -oE "${field}=[a-z0-9_-]+" | sed -n '1p' | cut -d= -f2)
+  actual=$(printf '%s' "$line" | grep -oE "${field}=[a-z0-9_-]+" | head -1 | cut -d= -f2)
   if [[ "$actual" == "$expected" ]]; then
     PASS=$((PASS + 1)); echo "  PASS: $label ($field=$expected)"
   else

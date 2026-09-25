@@ -2359,8 +2359,8 @@ test_fatal_channel_handoff_requires_ownership() {
   # STRUCTURAL: anchored on the shell test construct, which a comment cannot produce (verified
   # unique in-file). Also pins ORDER — a trust gate below the read is not a trust gate.
   local guard_line read_line
-  guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | sed -n '1p' | cut -d: -f1)
-  read_line=$(grep -n 'IFS= read -r f_rc' "$HANDLER" | sed -n '1p' | cut -d: -f1)
+  guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | head -1 | cut -d: -f1)
+  read_line=$(grep -n 'IFS= read -r f_rc' "$HANDLER" | head -1 | cut -d: -f1)
   if [[ -n "$guard_line" ]]; then
     echo "  PASS: the handoff read is ownership-gated (line $guard_line)"; CASES=$((CASES + 1)); pass
   else

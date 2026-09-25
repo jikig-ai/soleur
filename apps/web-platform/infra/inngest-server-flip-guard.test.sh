@@ -368,7 +368,7 @@ if [[ ! -f "$FSM" ]]; then
   fail "FSM source $FSM not found — cannot verify lockstep"
 else
   # Guard allowlist: the tokens before ')' on the `flag_ok=true` case line.
-  guard_allow=$(grep -E 'flag_ok=true' "$TARGET" | sed -n '1p' | sed -E 's/\).*//' \
+  guard_allow=$(grep -E 'flag_ok=true' "$TARGET" | head -1 | sed -E 's/\).*//' \
     | tr '|' '\n' | sed -E 's/[[:space:]]//g' | grep -E '^[a-z-]+$' | LC_ALL=C sort -u)
   # FSM start-states: walk top-down tracking the nearest preceding `flag_set <arg>` OR case-arm
   # label `<state>)`, and emit that state at every line that STARTS THE SERVER. "Starts the

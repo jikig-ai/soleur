@@ -1940,8 +1940,8 @@ S1DRV
   # while the chain arms `set -e` AFTER this stage. If a later edit moved the arming earlier,
   # production would abort at `sshd -t` BEFORE `_sshd_t_rc=$?` — the stage would never emit its
   # own fatal — while S1 kept modelling the old world and stayed green through the divergence.
-  _s1_stage_ln=$(grep -n '^[[:space:]]*STAGE=sshd_config[[:space:]]*$' "$TMP/runcmd-all.sh" | sed -n '1p' | cut -d: -f1)
-  _s1_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | sed -n '1p' | cut -d: -f1)
+  _s1_stage_ln=$(grep -n '^[[:space:]]*STAGE=sshd_config[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
+  _s1_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
   if [ -n "$_s1_stage_ln" ] && [ -n "$_s1_sete_ln" ] && [ "$_s1_stage_ln" -lt "$_s1_sete_ln" ]; then pass; else
     fail "S1: the shipped chain arms 'set -e' at or before the sshd stage (stage=${_s1_stage_ln:-?}, set -e=${_s1_sete_ln:-?})" \
          "S1's child-sh model runs with errexit OFF and now tests the opposite of what ships."; fi
@@ -2733,7 +2733,7 @@ if [ -s "$TMP/luks-stage.code.sh" ]; then
   # emptiness check below is what decides. Bare in the 208-entry baseline as a literal
   # pattern; single-sourcing the pattern re-presented it to lint-shell-capture-exit as new.
   _mut_seed=$(grep -n "$_R3_SEED_PAT" "$_r3_mut" | sed -n '1p' | cut -d: -f1 || true)
-  _mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | sed -n '1p' | cut -d: -f1)
+  _mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | head -1 | cut -d: -f1)
   if [ -n "$_mut_seed" ] && [ -n "$_mut_app" ] && [ "$_mut_seed" -gt "$_mut_app" ]; then pass; else
     fail "R3(2c) MUTATION did not land: relocated seed=${_mut_seed:-none} first-append=${_mut_app:-none}, expected seed AFTER append" \
          "R3(2)'s green above certifies nothing — the ordering check has no demonstrated failing direction."; fi
@@ -3529,8 +3529,8 @@ _r2d_ordered() {  # $1 = comment-stripped concatenated runcmd
   # `|| true` for the same reason as _mut_seed above -- a no-match is a normal answer and
   # the `[ -n "$s" ]` guard below is what decides.
   s=$(grep -n "$_R3_R2D_PAT" "$1" | sed -n '1p' | cut -d: -f1 || true)
-  t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | sed -n '1p' | cut -d: -f1)
-  a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | sed -n '1p' | cut -d: -f1)
+  t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | head -1 | cut -d: -f1)
+  a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | head -1 | cut -d: -f1)
   if [ -n "$s" ] && [ -n "$t" ] && [ -n "$a" ] && [ "$s" -lt "$t" ] && [ "$s" -lt "$a" ]; then
     echo 1
   else

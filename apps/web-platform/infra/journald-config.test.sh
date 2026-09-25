@@ -170,8 +170,8 @@ echo "--- AC5: journald-persistence runs (in the bootstrap) before the container
 # carries the persistence steps AND that the extraction launcher precedes the container start.
 assert "bootstrap sets up journald persistence (mkdir + tmpfiles + restart + flush)" \
   "grep -q 'mkdir -p /var/log/journal' '$BOOTSTRAP' && grep -q 'systemd-tmpfiles --create --prefix /var/log/journal' '$BOOTSTRAP' && grep -q 'systemctl restart systemd-journald' '$BOOTSTRAP' && grep -q 'journalctl --flush' '$BOOTSTRAP'"
-EXTRACT_LINE=$(grep -nE 'BEGIN host-script extraction' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
-WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
+EXTRACT_LINE=$(grep -nE 'BEGIN host-script extraction' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 assert "host-script extraction (runs the bootstrap) found" "[[ -n '$EXTRACT_LINE' ]]"
 assert "soleur-web-platform container-start found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
 assert "the bootstrap runs BEFORE the container starts" \
@@ -403,7 +403,7 @@ assert "every pii_scrub_string capture ref is templatefile-escaped (\$\${N}, nev
 # rule). `$${N}` is unescaped to the `${N}` Vector itself sees before perl runs it.
 vrl_rule_apply() {
   local marker="$1" input="$2" line re rep
-  line="$(grep -F 'replace(msg,' <<<"$PSS" | grep -F "$marker" | sed -n '1p')"
+  line="$(grep -F 'replace(msg,' <<<"$PSS" | grep -F "$marker" | head -1)"
   # Missing rule -> return the input UNCHANGED, so the redaction assertions below go red.
   # Erroring here instead would make a deleted rule look like a harness fault.
   if [[ -z "$line" ]]; then printf '%s\n' "$input"; return 0; fi

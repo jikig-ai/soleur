@@ -258,8 +258,8 @@ test_df_connect_timeout_and_clamp() {
     echo "  PASS: per-page budget floored to PREFLIGHT_PAGE_MIN_S (anti-starvation)"; PASS=$((PASS+1));
   else echo "  FAIL: per-page budget NOT floored to PREFLIGHT_PAGE_MIN_S — late pages can starve"; FAIL=$((FAIL+1)); fi
   # SUM bound must remain airtight: DEADLINE default + PAGE_MIN default < the 120s outer curl.
-  local dl pmin; dl=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$TARGET" | sed -n '1p')
-  pmin=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$TARGET" | sed -n '1p')
+  local dl pmin; dl=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$TARGET" | head -1)
+  pmin=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$TARGET" | head -1)
   if [[ -n "$dl" && -n "$pmin" && $(( dl + pmin )) -lt 120 ]]; then
     echo "  PASS: SUM bound DEADLINE($dl)+PAGE_MIN($pmin) < 120 outer curl"; PASS=$((PASS+1));
   else echo "  FAIL: SUM bound violated: DEADLINE($dl)+PAGE_MIN($pmin) not < 120"; FAIL=$((FAIL+1)); fi
@@ -749,8 +749,8 @@ test_df_build_body_harness_is_live() {
   # ORDER: the fixture seam must sit BELOW body construction, else every
   # fixture-driven test bypasses the real path again (how #6617 shipped green).
   local build_ln seam_ln
-  build_ln=$(grep -n 'body=$(build_request_body' "$TARGET" | sed -n '1p' | cut -d: -f1)
-  seam_ln=$(grep -n 'if \[\[ -n "$FIXTURE_DIR" \]\]' "$TARGET" | sed -n '1p' | cut -d: -f1)
+  build_ln=$(grep -n 'body=$(build_request_body' "$TARGET" | head -1 | cut -d: -f1)
+  seam_ln=$(grep -n 'if \[\[ -n "$FIXTURE_DIR" \]\]' "$TARGET" | head -1 | cut -d: -f1)
   if [[ -z "$build_ln" || -z "$seam_ln" ]]; then
     echo "  FAIL: could not locate anchors (build=$build_ln seam=$seam_ln)"; FAIL=$((FAIL+1))
   elif [[ "$build_ln" -lt "$seam_ln" ]]; then

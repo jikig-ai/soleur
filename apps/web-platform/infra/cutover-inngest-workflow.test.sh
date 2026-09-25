@@ -311,8 +311,8 @@ done
 assert "pool pre-check reads SUPABASE_ACCESS_TOKEN (read-only mgmt API)" "grep -qF 'secrets.SUPABASE_ACCESS_TOKEN' '$WF'"
 # Ordering: the pre-check MUST run BEFORE the 2.0 registry probe (2.0 opens its own
 # GQL→Postgres connection that would otherwise be counted against the readiness baseline).
-PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | sed -n '1p' | cut -d: -f1)
-REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | sed -n '1p' | cut -d: -f1)
+PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | head -1 | cut -d: -f1)
+REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | head -1 | cut -d: -f1)
 assert "case (a) 2.-1 pool pre-check runs BEFORE the 2.0 registry probe" "[[ -n '$PRECHECK_LN' && -n '$REGPROBE_LN' && '$PRECHECK_LN' -lt '$REGPROBE_LN' ]]"
 assert "case (a) clean pool below ceiling emits ::notice:: and proceeds" "grep -qF '2.-1 pool pre-check CLEAN' '$WF'"
 # (b) gates on readiness baseline + burst headroom, NOT the 80%-of-cap pressure line
@@ -343,13 +343,13 @@ DF_SH="$REPO_ROOT/apps/web-platform/infra/inngest-doublefire-probe.sh"
 # in-script DEFAULT deadline < the outer curl --max-time for each op. inventory 22 < 30,
 # doublefire 50 < 60 — an ordering-only check (deadline < outer) would be met even WITHOUT
 # the clamp, so we ALSO assert the remaining-budget clamp exists in each script.
-INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | sed -n '1p')
-DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | sed -n '1p')
+INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | head -1)
+DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | head -1)
 assert "inventory in-script deadline (22) < outer curl --max-time 30 (SUM bound)" "[[ -n '$INV_DEADLINE' && '$INV_DEADLINE' -lt 30 ]]"
 # #6919 — the doublefire budget was raised (deadline 50→90, outer curl 60→120) + a per-page
 # FLOOR added so late pages never starve to ~0s → empty → false "malformed". SUM bound stays
 # airtight: deadline(90) + PAGE_MIN(8) = 98 < the 120s outer curl.
-DF_PAGE_MIN=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$DF_SH" | sed -n '1p')
+DF_PAGE_MIN=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$DF_SH" | head -1)
 assert "doublefire in-script deadline (90) < outer curl --max-time 120 (SUM bound, #6919)" "[[ -n '$DF_DEADLINE' && '$DF_DEADLINE' -lt 120 ]]"
 assert "doublefire SUM bound airtight: deadline + PAGE_MIN < 120 (#6919)" "[[ -n '$DF_DEADLINE' && -n '$DF_PAGE_MIN' && \$(( DF_DEADLINE + DF_PAGE_MIN )) -lt 120 ]]"
 assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-starvation, #6919)" "grep -qE 'max_time < PREFLIGHT_PAGE_MIN_S \)\) && max_time=\\\$PREFLIGHT_PAGE_MIN_S' '$DF_SH'"
@@ -474,8 +474,8 @@ assert "arm) reads POSTGRES_URI read-through from prd_terraform (no -p/-c on the
 assert "arm) does NOT reference a dropped operator seed (INNGEST_POSTGRES_URI_PROD)" "! grep -qE 'INNGEST_POSTGRES_URI_PROD' '$ARM_FILE'"
 
 # AC7 write order: armed written AFTER both URIs.
-PG_SET_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1)
-FLIP_SET_LN=$(grep -nE 'secrets set INNGEST_CUTOVER_FLIP ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1)
+PG_SET_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+FLIP_SET_LN=$(grep -nE 'secrets set INNGEST_CUTOVER_FLIP ' "$ARM_FILE" | head -1 | cut -d: -f1)
 assert "arm) writes POSTGRES_URI BEFORE INNGEST_CUTOVER_FLIP=armed (write order AC7)" "[[ -n '$PG_SET_LN' && -n '$FLIP_SET_LN' && '$PG_SET_LN' -lt '$FLIP_SET_LN' ]]"
 
 # AC8 / G3 positive prod-URI assertion + :6543 reject; G1 pre-write FSM-state guard (DI-C2).
@@ -1546,8 +1546,8 @@ assert "arm) G3.6 refuses BEFORE the first prod write (G4)" "[[ -n '$G36_LN' && 
 assert "arm) G3.5 cites the #6178 cutover-502 condition in its remediation" "grep -qF 'cutover-502' '$ARM_FILE'"
 # The parity gate runs BEFORE the arm writes (G4/G5) — a divergent channel must
 # block the flip, never be written past.
-PARITY_LN=$(grep -nF 'G3.5 CHANNEL-KEY PARITY GATE FAILED' "$ARM_FILE" | sed -n '1p' | cut -d: -f1)
-G4_WRITE_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1)
+PARITY_LN=$(grep -nF 'G3.5 CHANNEL-KEY PARITY GATE FAILED' "$ARM_FILE" | head -1 | cut -d: -f1)
+G4_WRITE_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
 assert "arm) G3.5 parity gate precedes the G4 POSTGRES_URI write (blocks before arming)" "[[ -n '$PARITY_LN' && -n '$G4_WRITE_LN' && '$PARITY_LN' -lt '$G4_WRITE_LN' ]]"
 
 # D5/C4 environment required-reviewer gate + C5 conditional token env (repo-level, not in the case body).
@@ -2080,7 +2080,7 @@ assert "#6178 _flip_transition_dt fails (no row) when the query returns nothing 
 # TRUNCATION: a FULL page means betterstack-query.sh's newest-N LIMIT may have hidden the
 # earliest transition, so the row we would pick is LATER than truth — a NARROWER window,
 # the unsafe direction. It must refuse rather than derive an under-covering anchor.
-FTD_LIMIT=$(grep -oE 'local limit=[0-9]+' "$DF_HARNESS_SRC" | grep -oE '[0-9]+' | sed -n '1p')
+FTD_LIMIT=$(grep -oE 'local limit=[0-9]+' "$DF_HARNESS_SRC" | grep -oE '[0-9]+' | head -1)
 assert "#6178 the truncation limit was extracted from the SUT (not hardcoded here)" "[[ '$FTD_LIMIT' =~ ^[0-9]+$ && '$FTD_LIMIT' -gt 1 ]]"
 # BOUNDARY PAIR, derived: limit-1 must be accepted, limit must be refused. Sampling only
 # {0,1,3,50} left `-ge $limit` indistinguishable from `-ge 4`.
@@ -2315,7 +2315,7 @@ assert "#6178 op=verify QUALIFIES a clean verdict when the claim is weaker" \
 # extraction replaced it). `// "absent"` is load-bearing: a bare .total_count on a body
 # lacking the field yields the string "null", which matches NONE of the gate's literals, so
 # a partial GraphQL error would sail through the vacuity gate.
-TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | sed -n '1p' | sed "s/^jq -r '//; s/'\$//")
+TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | head -1 | sed "s/^jq -r '//; s/'\$//")
 assert "#6178 the total_count extraction expression was found in the verify arm" "[[ -n '$TC_EXPR' ]]"
 for _tc_case in '{}|absent' '{"total_count":0}|0' '{"total_count":"unknown"}|unknown' '{"total_count":728}|728'; do
   _tc_body="${_tc_case%%|*}"; _tc_want="${_tc_case##*|}"

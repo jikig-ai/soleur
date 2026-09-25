@@ -208,9 +208,9 @@ TOTAL=$((TOTAL + 1))
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 WORKFLOW="$REPO_ROOT/.github/workflows/web-platform-release.yml"
 wrapper_seconds=$(grep -oE -- '--kill-after=[0-9]+s [0-9]+s /usr/local/bin/ci-deploy\.sh' "$WRAPPER" \
-  | grep -oE ' [0-9]+s /' | grep -oE '[0-9]+' | sed -n '1p')
+  | grep -oE ' [0-9]+s /' | grep -oE '[0-9]+' | head -1)
 workflow_seconds=$(grep -oE '^[[:space:]]*IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WORKFLOW" \
-  | grep -oE '[0-9]+$' | sed -n '1p')
+  | grep -oE '[0-9]+$' | head -1)
 if [[ -z "$wrapper_seconds" ]]; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: could not extract wrapper timeout seconds from $WRAPPER"
