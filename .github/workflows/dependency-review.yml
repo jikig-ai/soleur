@@ -48,19 +48,29 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -uo pipefail
-          files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
-            --jq '.[].filename' 2>/dev/null || true)
-          # '(^|/)name$' so manifests at any depth count; the workflow's own
-          # path self-triggers (gate edits must run the gate).
-          re='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lock|bun\.lockb|deno\.lock|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Pipfile[^/]*|setup\.py|setup\.cfg|go\.mod|go\.sum|go\.work[^/]*|Cargo\.toml|Cargo\.lock|Gemfile[^/]*|[^/]*\.gemspec|composer\.(json|lock)|pom\.xml|[^/]*\.gradle(\.kts)?|gradle\.lockfile|gradle/libs\.versions\.toml|[^/]*\.(csproj|fsproj|vbproj|sln)|packages\.config|pubspec\.(yaml|lock)|Package\.(swift|resolved)|Podfile[^/]*|mix\.(exs|lock)|environment\.yml|conda-lock\.yml)$'
+          # GATE ON EXIT STATUS, NOT ON EMPTINESS: --paginate streams page
+          # output before a later page can fail — `|| true` would evaluate the
+          # regex against a truncated list (the file beyond the failed page
+          # silently skipped). Any fetch failure emits deps=true.
+          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[].filename'); then
+            echo "deps=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # '(^|/)name$' so manifests at any depth count. ANY workflow file
+          # self-triggers: dependency-review covers the github-actions
+          # ecosystem (`uses:` entries in every .github/workflows/* are
+          # dependency-graph deps — a vuln action added to another workflow
+          # must not skip the gate).
+          re='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lock|bun\.lockb|deno\.lock|deno\.jsonc?|uv\.lock|requirements[^/]*\.txt|requirements/[^/]+\.txt|pyproject\.toml|poetry\.lock|Pipfile[^/]*|setup\.py|setup\.cfg|go\.mod|go\.sum|go\.work[^/]*|Cargo\.toml|Cargo\.lock|Gemfile[^/]*|gems\.(rb|locked)|[^/]*\.gemspec|composer\.(json|lock)|pom\.xml|[^/]*\.gradle(\.kts)?|gradle\.lockfile|gradle/libs\.versions\.toml|[^/]*\.(csproj|fsproj|vbproj|vcxproj|sln|nuspec|podspec)|packages\.(config|lock\.json)|Directory\.(Packages|Build)\.props|pubspec\.(yaml|lock)|Package\.(swift|resolved)|Podfile[^/]*|mix\.(exs|lock)|environment\.ya?ml|conda-lock\.yml)$'
           if printf '%s\n' "$files" | grep -qE "$re" \
-             || printf '%s\n' "$files" | grep -qE '^\.github/workflows/dependency-review\.yml$' \
+             || printf '%s\n' "$files" | grep -qE '^\.github/workflows/' \
              || [ -z "$files" ]; then
             echo "deps=true" >> "$GITHUB_OUTPUT"
           else
             echo "deps=false" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: github.event_name == 'merge_group' || steps.detect.outputs.deps == 'true'
       - name: Dependency Review (pull_request)
         if: github.event_name == 'pull_request' && steps.detect.outputs.deps == 'true'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0

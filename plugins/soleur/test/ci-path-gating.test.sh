@@ -54,12 +54,25 @@ for m in 'package\.json' 'package-lock\.json' 'bun\.lock' 'requirements[^/]*\.tx
   if grep -qF "$m" "$DEP"; then pass; else fail "A4: manifest regex missing $m"; fi
 done
 
-# A5 — the workflow self-path self-triggers.
-if grep -qF "dependency-review\\.yml" "$DEP"; then pass; else fail "A5: dependency-review self-path trigger missing"; fi
+# A5 — ALL workflow files self-trigger: `uses:` in any .github/workflows/* is
+# a github-actions dependency; gating only the single file would false-skip
+# a vuln action added elsewhere.
+if grep -q "github/workflows/" "$DEP" && ! grep -q "github/workflows/dependency-review\\.yml" "$DEP"; then pass; else
+  fail "A5: dependency-review must trigger on ALL .github/workflows/ edits"; fi
 
-# A6 — the fail-open branches exist: empty/unresolvable file list → deps=true.
-if grep -q '\-z "\$files"' "$DEP" && grep -q 'deps=true' "$DEP"; then pass; else
-  fail "A6: dependency-review fail-open branch missing"; fi
+# A6 — fail-open: exit-status capture (a `|| true` capture lets a failed page
+# leave a truncated list → false-skip) plus the empty-list arm.
+fetch_line=$(grep -n "pulls/\$PR_NUMBER/files" "$DEP" | head -1 || true)
+if grep -q 'if ! files=$(gh api --paginate' "$DEP" && grep -q 'deps=true' "$DEP" \
+   && ! printf '%s' "$fetch_line" | grep -q '|| true'; then
+  pass
+else
+  fail "A6: dependency-review must gate on gh api EXIT STATUS, not emptiness"
+fi
+# A6b — extra manifest coverage added post-P1 (workflows ecosystem + stragglers).
+for m in 'uv\.lock' 'deno\.jsonc' 'nuspec' 'vcxproj' 'lock\.json' 'Directory\.(Packages|Build)\.props' 'environment\.ya' 'requirements/[^/]+\.txt'; do
+  if grep -qF "$m" "$DEP"; then pass; else fail "A6b: manifest regex missing $m"; fi
+done
 
 # B1 — pr-quality-guards detect job exists with the five outputs.
 if grep -q '^  detect:' "$PQG"; then pass; else fail "B1: detect job missing"; fi
@@ -85,6 +98,23 @@ for req in guard-script-fixture-tests markdown-lint; do
   if printf '%s' "$block" | grep -q 'needs: detect'; then
     fail "B3: required job $req reads needs: detect"; else pass; fi
 done
+
+# B4a — gated jobs run even when detect FAILS (needs.detect.result escape) —
+# skip on proof, never on uncertainty.
+for job in "${!GATE[@]}"; do
+  out="${GATE[$job]}"
+  block=$(awk -v j="  $job:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
+  if printf '%s' "$block" | grep -q 'always()' \
+     && printf '%s' "$block" | grep -q "needs.detect.result != 'success'"; then pass; else
+    fail "B4a: $job lacks the detect-failure escape"; fi
+done
+# B4b — same exit-status-capture rule for the detect job's file list.
+if grep -q 'if ! files=$(gh api --paginate' "$PQG"; then pass; else
+  fail "B4b: detect job must gate on gh api EXIT STATUS"; fi
+# B4c — the sweep glob-char guard must include backslash (\| would swallow
+# the next alternation → permanently dead trigger).
+if grep -q 'grep -qE ..\[\*?[^]]*\\\\' "$PQG" || grep -qF '\\]' "$PQG"; then pass; else
+  fail "B4c: sweep unresolvable-chars guard missing backslash"; fi
 
 # B4 — fail-open: non-PR event / empty list emits all-true; registry unreadable → sweep=true.
 if grep -q 'EVENT_NAME" != "pull_request"' "$PQG" && grep -q 'emit true' "$PQG" \
