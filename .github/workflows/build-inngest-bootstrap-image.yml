@@ -61,6 +61,12 @@ jobs:
       # stdout token, so a stray notice line can never masquerade as a digest.
       digest: ${{ steps.sign.outputs.digest }}
       mirror_status: ${{ steps.zot_mirror.outputs.mirror_status }}
+      # The commit this job checked out (and, off mirror_only, built — the
+      # Build step stamps it into the image as org.opencontainers.image.revision).
+      # The bump binds to it (--signed-commit, #8747), so a tag re-pointed while
+      # this run was in flight cannot get the digest built from its old commit
+      # pinned.
+      commit: ${{ steps.commit.outputs.commit }}
     permissions:
       contents: read
       packages: write
@@ -87,14 +93,17 @@ jobs:
             echo "ERROR: workflow_dispatch ref '$REF' is not an existing vinngest-vX.Y.Z tag"; exit 1
           fi
 
-      # `ref: ${{ inputs.ref }}` is empty on the push path → checkout uses the
-      # triggering tag. The requested/triggering tag is created locally via
-      # actions/checkout's `+refs/tags/X:refs/tags/X` refspec, so no fetch-tags
-      # / fetch-depth: 0 is needed. `inputs.ref` is regex-validated above
-      # before it reaches this `ref:`.
+      # On push the `ref:` expression is '' → checkout uses the triggering tag.
+      # On dispatch it is the FULLY QUALIFIED refs/tags/<inputs.ref>, so a
+      # branch with the same name can never be checked out in the tag's place.
+      # `inputs.ref` is regex-validated above before it reaches this `ref:`.
+      # fetch-depth: 0 (#8747) fetches every branch as refs/remotes/origin/*
+      # plus the full history, which the ancestry refusal below needs: a
+      # shallow tag tree cannot say whether its commit is on main.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.ref) || '' }}
+          fetch-depth: 0
 
       - name: Resolve image tag
         id: tag
@@ -104,9 +113,14 @@ jobs:
         # This logic is INLINE (not a checked-out script) on purpose: the
         # checkout above lands `inputs.ref`'s tree (an existing tag, predating
         # this workflow), so a `.github/scripts/*.sh` helper would not exist
-        # there and the step would fail with exit 127. The workflow file is
-        # always read from the default branch, so inline logic is current
-        # regardless of which tag tree is checked out. The post-strip regex
+        # there and the step would fail with exit 127. Which copy of THIS file
+        # runs depends on the trigger: a dispatch runs the copy on the ref it was
+        # dispatched from (the default branch unless `--ref` names another), and
+        # a tag push runs the copy in the TAGGED commit — so a tag cut on a branch
+        # forked before a change here runs that branch's older logic.
+        # That is why the #8747 ancestry refusal below is defence-in-depth and
+        # the bump script's `ancestry` stage (main's copy) is the authoritative
+        # check. The post-strip regex
         # `^v[0-9]+\.[0-9]+\.[0-9]+$` is byte-identical to the consumer
         # drift-guard's regex (cloud-init-inngest-bootstrap.test.sh) — a parity
         # test asserts it; an inline-equivalent harness unit-tests the logic.
@@ -129,6 +143,100 @@ jobs:
             echo "ERROR: resolved tag '$tag' is not vX.Y.Z (from ref '$src', event '$GH_EVENT')"; exit 1
           fi
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+      # Runs on EVERY path, mirror_only included: its output feeds the bump's
+      # --signed-commit binding, and the bump job needs it however the run began.
+      - name: Record the built commit (#8747)
+        id: commit
+        run: |
+          set -euo pipefail
+          c=$(git rev-parse --verify 'HEAD^{commit}')
+          if [[ ! "$c" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::HEAD did not resolve to a 40-hex commit (got '$c')"; exit 1
+          fi
+          printf 'commit=%s\n' "$c" >> "$GITHUB_OUTPUT"
+
+      # Refuse to build a commit main cannot reach (#8747): a tag cut on an open
+      # PR's commit published an image of unreviewed bytes, and its automated
+      # pin bump merged before the PR did. HEAD is judged directly, so what is
+      # verified is exactly what gets built. INLINE because the dispatch path
+      # checks out an existing tag's tree, which predates any helper (#4700).
+      # Skipped under mirror_only: that path builds nothing and cannot move a
+      # digest, and refusing it would strand the legacy off-main versions from
+      # zot backfill. The bump script refuses an off-main TARGET on every path.
+      # TAG and HEAD_SHA arrive through env from validated outputs (vX.Y.Z and
+      # 40-hex): no expression is interpolated into the body and nothing below
+      # prints free text, so no CR/LF can reach an annotation.
+      - name: Refuse a commit that is not on main (#8747)
+        id: ancestry
+        if: ${{ !inputs.mirror_only }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          HEAD_SHA: ${{ steps.commit.outputs.commit }}
+        run: |
+          set -euo pipefail
+          refuse() {
+            echo "::error::ancestry: $1"
+            printf '### inngest-bootstrap publish REFUSED (#8747)\n\n%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          # Refused unless the answer is exactly `false`: a cut-off history can
+          # report a real ancestor as off-main, and a quiet git error prints nothing.
+          shallow=$(git rev-parse --is-shallow-repository 2>/dev/null || true)
+          [ "$shallow" = false ] \
+            || refuse "cannot decide whether vinngest-$TAG is on main: the checkout is shallow (is-shallow-repository='${shallow:-<empty>}') - this step needs fetch-depth: 0"
+          git rev-parse -q --verify refs/remotes/origin/main >/dev/null \
+            || refuse "no refs/remotes/origin/main in this checkout - cannot decide whether vinngest-$TAG is on main"
+          tag_c=$(git rev-parse -q --verify "refs/tags/vinngest-$TAG^{commit}") \
+            || refuse "tag not found: refs/tags/vinngest-$TAG does not resolve to a commit"
+          # Internal consistency only: actions/checkout forces the local tag onto
+          # the checked-out commit, so this cannot detect a tag re-pointed on the
+          # remote. That race is caught by the bump's --signed-commit binding.
+          [ "$tag_c" = "$HEAD_SHA" ] \
+            || refuse "the checkout ($HEAD_SHA) is not the commit the local vinngest-$TAG names ($tag_c) - the checkout invariant this step relies on broke; refusing."
+          rc=0
+          git merge-base --is-ancestor "$HEAD_SHA" refs/remotes/origin/main 2>/dev/null || rc=$?
+          case "$rc" in
+            0)
+              echo "verdict=on-main commit=$HEAD_SHA"
+              printf 'verdict=on-main commit=%s\n' "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            1) refuse "vinngest-$TAG is on commit $HEAD_SHA, which is not an ancestor of main: it was cut on an unmerged branch, and publishing it would ship unreviewed bytes. Delete it (git push origin :refs/tags/vinngest-$TAG; git tag -d vinngest-$TAG), wait for the source PR to merge, then tag its squash-merge commit on main as a NEW version, never a re-used name (git tag -a vinngest-vX.Y.Z <main-sha> -m ... && git push origin vinngest-vX.Y.Z). That tag push runs its own publish and bump." ;;
+            *) refuse "could not decide whether vinngest-$TAG ($HEAD_SHA) is on main: git merge-base exited $rc - refusing rather than guessing" ;;
+          esac
+
+      # A refused publish must not be silent: the job fails, the bump job is
+      # skipped (needs: build), and otherwise the only signal is AC6 turning main
+      # red. Gated on the refusal step's own outcome so an unrelated build
+      # failure does not post a misleading "not on main" alert.
+      - name: "Post to Slack (publish refused, #8747)"
+        if: ${{ failure() && steps.ancestry.outcome == 'failure' }}
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::SLACK_RELEASES_WEBHOOK_URL unset; skipping publish-refused notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+          MESSAGE="❌ inngest-bootstrap publish REFUSED for vinngest-${TAG:-unknown}: its commit is not on main (#8747). Delete the tag and tag a NEW version on main after the source PR merges. Run: ${RUN_URL}"
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK" || echo "000")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
+          fi
 
       - name: Read pinned inngest-cli + vector versions + SHAs from *.tf
         id: pin
@@ -205,8 +313,12 @@ jobs:
           INNGEST_SHA256: ${{ steps.pin.outputs.inngest_sha256 }}
           VECTOR_VERSION: ${{ steps.pin.outputs.vector_version }}
           VECTOR_SHA256: ${{ steps.pin.outputs.vector_sha256 }}
+          # The checked-out commit, stamped into the image config below so the
+          # bump can prove which commit a digest was built from (#8747).
+          REVISION: ${{ steps.commit.outputs.commit }}
         run: |
           set -euo pipefail
+          [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::REVISION is not a 40-hex commit"; exit 1; }
           BUILD_DIR=$(mktemp -d)
 
           # SHA256-verify the inngest-cli binary at build time. If this fails,
@@ -275,7 +387,7 @@ jobs:
           ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && cp /inngest-redis.conf /inngest-redis.service /inngest-redis-bootstrap.sh /tmp/ && cp /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh /inngest-cutover-flip.service /inngest-cutover-flip.timer /tmp/ && cp /inngest-luks-cutover.sh /inngest-luks-cutover.service /inngest-luks-cutover.timer /tmp/ && /inngest-bootstrap.sh"]
           DOCKERFILE
 
-          docker build -t "$IMAGE:$TAG" "$BUILD_DIR"
+          docker build --label "org.opencontainers.image.revision=$REVISION" -t "$IMAGE:$TAG" "$BUILD_DIR"
           docker push "$IMAGE:$TAG"
           echo "Pushed $IMAGE:$TAG"
 
@@ -1044,6 +1156,7 @@ jobs:
           GH_TOKEN: ${{ steps.mint.outputs.token }}
           TAG: ${{ needs.build.outputs.tag }}
           SIGNED_DIGEST: ${{ needs.build.outputs.digest }}
+          SIGNED_COMMIT: ${{ needs.build.outputs.commit }}
           MIRROR_STATUS: ${{ needs.build.outputs.mirror_status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -1051,6 +1164,7 @@ jobs:
           bash .github/scripts/bump-inngest-bootstrap-pin.sh \
             --signed-tag "$TAG" \
             --signed-digest "$SIGNED_DIGEST" \
+            --signed-commit "$SIGNED_COMMIT" \
             --mirror-status "$MIRROR_STATUS" \
             --run-url "$RUN_URL"
 

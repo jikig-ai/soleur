@@ -8,7 +8,13 @@
 # (3) GitHub issues with "code-review" label referencing the branch's PR (current, post-#1329)
 # No escape hatch — run /review before merging.
 #
-# Auto-sync: merges origin/main into the feature branch to ensure it is current before merge.
+# Signals 1-2 read the commits of the PR BEING MERGED, resolved from GitHub
+# (`gh pr view <N>`), not whatever HEAD the session is anchored on (#8778). See
+# the "PR-head evidence range" block below for the four states.
+#
+# Auto-sync: merges origin/main into the feature branch to ensure it is current before merge,
+# only when the session cwd is PR N's own checkout (state O) or the PR could not be
+# resolved (state L); from any other checkout it is skipped and reported (#8778).
 # Note: filename says "rebase" for historical reasons; strategy is merge (not rebase).
 #
 # Corresponding prose rules:
@@ -104,7 +110,11 @@ fi
 # so the wrapped form does NOT bypass the review-evidence gate, the
 # uncommitted-changes check, or the origin/main auto-sync.
 
-# Determine working directory from hook input (.cwd is authoritative).
+# Working directory from hook input. `.cwd` is the SESSION's anchored directory,
+# not where an in-command `cd` lands — a root-anchored subagent running
+# `cd <worktree> && gh pr merge N` still reports the root here (#8778). So it
+# locates a git repository and the sync target; it does not decide WHICH commits
+# the review gate reads — the PR-head resolver below does.
 WORK_DIR="$HOOK_CWD"
 if [[ -z "$WORK_DIR" ]] || [[ ! -d "$WORK_DIR" ]]; then
   exit 0
@@ -118,15 +128,17 @@ fi
 # Resolve current branch for main/master skip and detached HEAD handling
 CURRENT_BRANCH=$(git -C "$WORK_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
-# Skip if already on main/master -- no local review evidence to check,
-# and nothing to sync (the agent is merging a PR *into* main, not from it)
+# Skip if already on main/master -- nothing to sync (the agent is merging a PR
+# *into* main, not from it). This also skips the review gate for a session
+# anchored on main, the same cwd-dependence #8778 fixes elsewhere; kept because
+# the soleur:schedule template merges bot PRs from a main checkout (#8791).
 if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; then
   exit 0
 fi
 
 # Refresh origin/main BEFORE the review-evidence gate (#6724).
 #
-# Both local signals below are scoped with `origin/main..HEAD`, so they are only
+# Both local signals below are scoped with `origin/main..<evidence tip>`, so they are only
 # as accurate as the locally-cached origin/main ref. A stale ref silently widens
 # that range and lets commits already on main count as this branch's own review
 # evidence — which re-opens the vacuity the scoping exists to close. This hook
@@ -143,11 +155,136 @@ if ! git -C "$WORK_DIR" fetch --no-tags origin main >/dev/null 2>&1; then
   FETCH_OK=0
 fi
 
+# PR-head evidence range (#8778). The gate must read the commits GitHub will
+# merge, not the session's HEAD (`.cwd` is the session anchor, not where an
+# in-command `cd` lands). States (the #8778 plan's L/O/P/N table):
+#   L legacy — the merge target is not ONE bare PR number in this repository
+#              (see "Which PR is being merged" below), or gh did not answer with
+#              a 40-hex head oid: today's `origin/main..HEAD` in the session cwd.
+#   O own    — the cwd IS PR N's branch and descends from its head: keep
+#              `origin/main..HEAD`, so a trailer commit not yet pushed still counts
+#              (ship-unpushed-commits-gate.sh denies a merge that leaves it
+#              unpushed; this state leans on that sibling, see its T11 ordering).
+#   P PR     — otherwise, when the head commit is local (after fetching
+#              refs/pull/<N>/head if needed): `origin/main..<oid>`.
+#   N none   — the head cannot be fetched, the PR is not OPEN, or it comes from a
+#              fork (its author wrote every commit in the range, so a trailer
+#              there is self-asserted): Signals 1-2 are skipped and only Signal 3
+#              (a code-review-labelled issue, which needs triage rights) can allow.
+EVIDENCE_TIP="HEAD"
+RANGE_SOURCE="session cwd $WORK_DIR"
+PR_HEAD_NUMBER=""
+PR_HEAD_OID=""
+PR_HEAD_REF=""
+OWN_CHECKOUT=0
+SAME_BRANCH=0
+
+# Which PR is being merged. Every REAL `gh pr merge` invocation is parsed with
+# the detector's own anchor, in BOTH $SCAN (quoted text blanked) and $CMD (raw):
+# a number must survive quote-stripping unchanged (`877"9"` strips to `877`), and
+# text that merely mentions `gh pr merge 1` (an `echo`, a comment) is not an
+# invocation. The resolver runs only when every invocation's first argument is
+# the SAME bare PR number and nothing points gh at another repository;
+# otherwise the reason is carried into the deny text. `|| true` on each capture:
+# a no-match grep exits 1 under pipefail and would abort the hook (fail-open).
+_merge_args() {
+  grep -oE '(^|&&|\|\||;|[[:space:]]--[[:space:]])[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?' <<<"$1" \
+    | sed -E 's/^[^g]*gh[[:space:]]+pr[[:space:]]+merge//' || true
+  # `^[^g]*`, not `.*`: the match's prefix is only separators, and a greedy `.*`
+  # would skip to the LAST `gh pr merge` in the segment (`… 4243 # gh pr merge 4242`).
+}
+_scan_args=$(_merge_args "$SCAN")
+_tok_scan=$(awk '{ print ($1 == "" ? "-" : $1) }' <<<"$_scan_args" || true)
+_tok_cmd=$(awk '{ print ($1 == "" ? "-" : $1) }' <<<"$(_merge_args "$CMD")" || true)
+_pr_nums=$(sed 's/^#//' <<<"$_tok_scan" | grep -E '^[0-9]+$' | sort -u || true)
+MERGE_TARGET_WHY=""
+if [[ "$_tok_scan" != "$_tok_cmd" ]]; then
+  MERGE_TARGET_WHY="the gh pr merge invocations differ once quoted text is removed"
+elif grep -qvE '^#?[0-9]+$' <<<"$_tok_scan"; then
+  MERGE_TARGET_WHY="a gh pr merge invocation does not name a bare PR number; put the number right after 'gh pr merge'"
+elif [[ "$(grep -c . <<<"$_pr_nums" || true)" != "1" ]]; then
+  MERGE_TARGET_WHY="more than one PR number; merge one PR per command"
+elif grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_args"; then
+  MERGE_TARGET_WHY="the command points gh at another repository (-R/--repo, GH_REPO or GH_HOST)"
+elif grep -qE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=' <<<"$SCAN"; then
+  MERGE_TARGET_WHY="the command points gh at another repository (-R/--repo, GH_REPO or GH_HOST)"
+else
+  _origin=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null || true)
+  while IFS= read -r _dir; do
+    [[ -n "$_dir" ]] || continue
+    [[ "$_dir" == /* ]] || _dir="$WORK_DIR/$_dir"
+    [[ -d "$_dir" ]] || continue
+    _dir_origin=$(git -C "$_dir" remote get-url origin 2>/dev/null || true)
+    if [[ -n "$_dir_origin" && "$_dir_origin" != "$_origin" ]]; then
+      MERGE_TARGET_WHY="the command cd's into a checkout of another repository"
+    fi
+  done < <(grep -oE '(^|&&|\|\||;)[[:space:]]*(cd|pushd)[[:space:]]+[^;&|[:space:]]+' <<<"$SCAN" | awk '{ print $NF }' || true)
+fi
+
+if [[ -z "$MERGE_TARGET_WHY" ]]; then
+  PR_HEAD_NUMBER="$_pr_nums"
+  # timeout -> gtimeout -> unbounded (stock macOS has neither; a bare `timeout`
+  # would exit 127 there and pin every Mac in L). The guarded expansion keeps an
+  # empty array safe if -u is ever enabled (git-commit-secret-scan.sh precedent).
+  _to=()
+  if command -v timeout >/dev/null 2>&1; then _to=(timeout -k 2 10)
+  elif command -v gtimeout >/dev/null 2>&1; then _to=(gtimeout -k 2 10); fi
+  # From inside $WORK_DIR with no --repo: gh resolves the repository from the
+  # checkout's own remotes (the pre-merge-auto-close-scan.sh precedent, #6775).
+  _pr_json=$(cd "$WORK_DIR" && ${_to[@]+"${_to[@]}"} gh pr view "$PR_HEAD_NUMBER" \
+               --json headRefName,headRefOid,isCrossRepository,state 2>/dev/null) || _pr_json=""
+  # One parse; "-" sentinels because tab is IFS whitespace and an empty field
+  # would shift every later one left.
+  IFS=$'\t' read -r _oid _ref _xrepo _state < <(jq -r \
+    '[(.headRefOid // "-"), (.headRefName // "-"), ((.isCrossRepository // false) | tostring), (.state // "-")] | @tsv' \
+    <<<"$_pr_json" 2>/dev/null || true) || true
+  # Validated before it reaches any git argv: a branch name or `--flag` must never
+  # become a revision. headRefName never reaches git at all.
+  if [[ "$_oid" =~ ^[0-9a-f]{40}$ ]]; then
+    PR_HEAD_OID="$_oid"
+    [[ "$_ref" == "-" ]] || PR_HEAD_REF="$_ref"
+    [[ -n "$PR_HEAD_REF" && "$CURRENT_BRANCH" == "$PR_HEAD_REF" ]] && SAME_BRANCH=1
+    if [[ "$_state" != "OPEN" ]]; then
+      EVIDENCE_TIP=""
+      RANGE_SOURCE="PR #${PR_HEAD_NUMBER} is ${_state}, not OPEN; its commits are not this merge's evidence"
+    elif [[ "$_xrepo" == "true" ]]; then
+      EVIDENCE_TIP=""
+      RANGE_SOURCE="PR #${PR_HEAD_NUMBER} is from a fork; commits its author wrote are not review evidence, only a code-review-labelled issue counts"
+    else
+      _have=0
+      git -C "$WORK_DIR" cat-file -e "${_oid}^{commit}" 2>/dev/null && _have=1
+      if [[ "$_have" == "0" ]]; then
+        # refs/pull/<N>/head, not refs/heads/<name>: it needs no branch name in a
+        # git argv. Objects and FETCH_HEAD only; no branch ref moves.
+        ${_to[@]+"${_to[@]}"} git -C "$WORK_DIR" fetch --no-tags --quiet origin \
+          "refs/pull/${PR_HEAD_NUMBER}/head" >/dev/null 2>&1 || true
+        git -C "$WORK_DIR" cat-file -e "${_oid}^{commit}" 2>/dev/null && _have=1
+      fi
+      if [[ "$SAME_BRANCH" == "1" && "$_have" == "1" ]] \
+         && git -C "$WORK_DIR" merge-base --is-ancestor "$_oid" HEAD 2>/dev/null; then
+        OWN_CHECKOUT=1
+        RANGE_SOURCE="PR #${PR_HEAD_NUMBER}'s own checkout $WORK_DIR"
+      elif [[ "$_have" == "1" ]]; then
+        EVIDENCE_TIP="$_oid"
+        RANGE_SOURCE="PR #${PR_HEAD_NUMBER} head per GitHub"
+      else
+        EVIDENCE_TIP=""
+        RANGE_SOURCE="PR #${PR_HEAD_NUMBER} head ${_oid:0:12} not fetchable, so its commits were NOT evaluated; run: git fetch origin pull/${PR_HEAD_NUMBER}/head and re-issue (if that fetch fails, the network is the blocker, not review)"
+      fi
+    fi
+  else
+    RANGE_SOURCE+="; PR #${PR_HEAD_NUMBER} head not resolved (gh pr view gave no valid head oid: retry if it timed out, otherwise check gh auth status / gh pr view ${PR_HEAD_NUMBER})"
+  fi
+else
+  RANGE_SOURCE+="; PR head not resolved: ${MERGE_TARGET_WHY}"
+fi
+
 # pre-merge:review-evidence-gate — Review evidence gate.
 # Block gh pr merge when no review evidence exists on the branch.
 # Signals 1-2 are local; Signal 3 requires network (gh API).
-# Fires before detached HEAD exit because gh pr merge operates on a PR number,
-# not the local checkout state -- review evidence is still visible in detached HEAD.
+# Fires before the detached-HEAD exit because gh pr merge acts on a PR number:
+# the resolver above reads that PR's head, so no branch checkout is needed
+# (except in state L, which reads the session cwd's HEAD).
 
 # Check 1 (legacy): todo files tagged "code-review" INTRODUCED BY THIS BRANCH.
 #
@@ -171,17 +308,21 @@ fi
 # `-G` alone is still not enough: it matches lines ADDED **or REMOVED**, so a
 # sweep that merely deletes a completed review todo (`git rm todos/...`) would
 # count as evidence. So each candidate path must ALSO still carry the tag in
-# HEAD's blob — evidence that was introduced and is still there.
+# evidence tip's blob — evidence that was introduced and is still there.
 REVIEW_TODOS=""
+REVIEW_COMMIT=""
+# Never hand git an empty tip: `origin/main..` means `origin/main..HEAD`, which is
+# state N's false ALLOW re-entering through the back door.
+if [[ -n "$EVIDENCE_TIP" ]]; then
 while IFS= read -r _todo; do
   [[ -n "$_todo" ]] || continue
   # grep -c, not grep -q: -c reads all input and never early-closes the pipe,
   # so the producer cannot take SIGPIPE and be misread as "no match" (#6992).
-  if [ "$(git -C "$WORK_DIR" show "HEAD:$_todo" 2>/dev/null | grep -c "code-review" || true)" -gt 0 ]; then
+  if [ "$(git -C "$WORK_DIR" show "$EVIDENCE_TIP:$_todo" 2>/dev/null | grep -c "code-review" || true)" -gt 0 ]; then
     REVIEW_TODOS="$_todo"
     break
   fi
-done < <(git -C "$WORK_DIR" log origin/main..HEAD -G'code-review' \
+done < <(git -C "$WORK_DIR" log "origin/main..$EVIDENCE_TIP" -G'code-review' \
            --name-only --format= -- todos/ 2>/dev/null | sort -u)
 
 # Check 2: review commit, or the machine-emitted review trailer.
@@ -198,12 +339,13 @@ done < <(git -C "$WORK_DIR" log origin/main..HEAD -G'code-review' \
 # conventional-commit scope -- this repo writes `review(6178): ...`, which a
 # bare `review: ` regex misses, reading as "review never ran"; PR #6933) from
 # rf-review-finding-default-fix-inline (post-#2374).
-REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
+REVIEW_COMMIT=$(git -C "$WORK_DIR" log "origin/main..$EVIDENCE_TIP" --oneline 2>/dev/null \
   | grep -E "^[a-f0-9]+ (refactor: add code review findings|review(\([^)]*\))?: )" || true)
 if [[ -z "$REVIEW_COMMIT" ]]; then
-  REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD \
+  REVIEW_COMMIT=$(git -C "$WORK_DIR" log "origin/main..$EVIDENCE_TIP" \
     --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' 2>/dev/null \
     | grep '[^[:space:]]' || true)
+fi
 fi
 
 # Check 3 (current): GitHub issues with "code-review" label referencing this PR.
@@ -211,18 +353,16 @@ fi
 # Fail open if gh is unavailable or network fails (Signal 3 is additive, not required).
 REVIEW_ISSUES=""
 if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
-  # Only run the network check if local signals found nothing
-  # Reads $CMD (not $SCAN) intentionally: by here the command IS a real merge
-  # (passed the SCAN filter), and the PR-number arg lives outside quotes, so
-  # the #4600 quote-strip is unnecessary for the extraction.
-  # `head -1` is load-bearing, not defensive: a command may contain MORE THAN ONE
-  # `gh pr merge <number>` — #7409's degrade-open snippets put the same merge in a
-  # locked arm and an unlocked else arm, so an unbounded extraction yields
-  # "N\nN", the search phrase below becomes "PR #N\nN", it matches no issue, and
-  # this gate denies with "No review evidence" on a PR that has it. The sibling
-  # extraction in pre-merge-auto-close-scan.sh already bounds itself this way.
-  PR_NUMBER=$(echo "$CMD" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' | head -1 || true)
-  if [[ -z "$PR_NUMBER" ]]; then
+  # Only run the network check if local signals found nothing.
+  # The PR number is the resolver's parse above (#8778), so Signals 1-2 and
+  # Signal 3 read the same PR. #7409's repeated locked/unlocked arms name the SAME
+  # number and resolve to one (an unbounded extraction made the search phrase
+  # "PR #N\nN" and denied a PR that had evidence). When the target could not be
+  # tied to one PR of this repository, Signal 3 is skipped rather than guessed,
+  # except for a merge naming no number at all (legacy branch lookup).
+  PR_NUMBER="$PR_HEAD_NUMBER"
+  if [[ -z "$PR_NUMBER" && -z "$_pr_nums" ]] \
+     && ! grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_args"; then
     # No PR number in command args -- fall back to branch-based lookup
     PR_NUMBER=$(gh pr list --repo "$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||')" \
       --head "$CURRENT_BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
@@ -251,6 +391,7 @@ fi
 #
 # Signal 3 is unaffected (it queries the remote by PR number, not the local
 # range), so a fetch failure degrades to Signal-3-only rather than to a bypass.
+# The same widening applies to any evidence tip, not only HEAD.
 if [[ "$FETCH_OK" != "1" ]]; then
   REVIEW_TODOS=""
   REVIEW_COMMIT=""
@@ -259,13 +400,45 @@ fi
 if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]] && [[ -z "$REVIEW_ISSUES" ]]; then
   emit_incident "rf-never-skip-qa-review-before-merging" deny \
     "Never skip QA/review before merging. Full pipeline:" "$CMD"
-  jq -n '{
+  # The range actually read, derived from the tip so the label cannot drift from it.
+  _range="origin/main..${EVIDENCE_TIP:0:12}"
+  [[ -n "$EVIDENCE_TIP" && "$FETCH_OK" == "1" ]] || _range="none (local signals skipped)"
+  _notes=""
+  [[ "$FETCH_OK" == "1" ]] || _notes+=" origin/main could not be fetched, so the local signals were discarded: run git fetch origin main and re-issue."
+  # Where to fix it. A subagent's cwd resets per call, so name the PR's checkout.
+  _where=""
+  if [[ -n "$PR_HEAD_REF" && "$OWN_CHECKOUT" != "1" ]]; then
+    _wt=$(git -C "$WORK_DIR" worktree list --porcelain 2>/dev/null \
+      | awk -v b="branch refs/heads/$PR_HEAD_REF" '/^worktree /{w=substr($0,10)} $0==b{print w; exit}' || true)
+    if [[ -n "$_wt" ]]; then
+      _where=" Run the trailer script and the push from PR #$PR_HEAD_NUMBER's checkout: cd $_wt first (the gate reads the PR head as pushed, so an unpushed trailer there does not count)."
+    else
+      _where=" Run the trailer script and the push from a checkout of PR #$PR_HEAD_NUMBER's branch ($PR_HEAD_REF); the gate reads the PR head as pushed."
+    fi
+  fi
+  jq -n --arg range "$_range" --arg source "$RANGE_SOURCE" --arg notes "$_notes" --arg where "$_where" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: "BLOCKED: No review evidence for commits in origin/main..HEAD. If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>. Signals checked: todos/ tagged code-review introduced by this branch, a review: commit or Reviewed-By-Soleur: trailer, a code-review-labelled issue citing this PR. Note the scope is this branch only — evidence already on main does not count. Run the trailer script as its own command, then git push, then re-issue gh pr merge: a chained `emit-review-trailer.sh && gh pr merge` is denied because this hook evaluates the whole command before any of it runs."
+      permissionDecisionReason: ("BLOCKED: No review evidence for commits in " + $range + " (" + $source + ")." + $notes + " If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>." + $where + " Signals checked: todos/ tagged code-review introduced by the PR, a review: commit or Reviewed-By-Soleur: trailer, a code-review-labelled issue citing this PR. Note the scope is the PR only — evidence already on main does not count. Run the trailer script as its own command, then git push, then re-issue gh pr merge: a chained `emit-review-trailer.sh && gh pr merge` is denied because this hook evaluates the whole command before any of it runs. A code-review issue filed only to satisfy this gate is not review.")
     }
   }'
+  exit 0
+fi
+
+# Sync only the PR's own checkout (#8778). When GitHub answered and the cwd is not
+# PR N's branch at or ahead of its head (state P or N), the dirty-tree check,
+# `git merge origin/main` and `git push` would act on a branch that is not being
+# merged. Placed BEFORE the detached-HEAD exit so a root-anchored session is told
+# too. Reported through additionalContext, which the agent sees; stderr it does not.
+if [[ -n "$PR_HEAD_OID" && "$OWN_CHECKOUT" != "1" ]]; then
+  if [[ "$SAME_BRANCH" == "1" ]]; then
+    _skip="is PR #$PR_HEAD_NUMBER's branch but is not at or ahead of its pushed head ${PR_HEAD_OID:0:12} (behind or diverged; pull before relying on local state)"
+  else
+    _skip="is not PR #$PR_HEAD_NUMBER's checkout (${PR_HEAD_REF:-?} @ ${PR_HEAD_OID:0:12})"
+  fi
+  jq -n --arg m "Pre-merge hook: $WORK_DIR ($CURRENT_BRANCH) $_skip; skipped the uncommitted-changes check and the origin/main auto-sync. GitHub merges the PR head as pushed; if it rejects the PR as not up to date, run gh pr update-branch $PR_HEAD_NUMBER." \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
   exit 0
 fi
 
