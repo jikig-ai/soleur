@@ -3236,7 +3236,7 @@ assert_probe_output_purity() {
     problems="$problems diagnostic-text-destroyed-in-journald"
   fi
   # A CR must not survive into the journald line -- it would forge a second record.
-  if printf '%s' "$line" | grep -c $ >/dev/null'\r'; then problems="$problems CR-survived"; fi
+  if printf '%s' "$line" | grep -c $'\r' >/dev/null; then problems="$problems CR-survived"; fi
   # The non-ASCII leg must ASSERT something (review finding, #8026): the two bytes of `é`
   # are blanked by `tr -c '[:print:]'` under LC_ALL=C, so no byte outside printable ASCII
   # may reach the journald line, and the `caf` prefix must survive as ordinary text.
@@ -5308,7 +5308,7 @@ fi
 #
 # The `HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin.../' ...)` extraction that stood here is
 # DELETED rather than left in place: once the function is gone the awk range yields an EMPTY
-# STRING, and every `! printf '%s' "$HELPER_BODY" | grep -c ... >/dev/null` negative over it is then
+# STRING, and every `! printf '%s' "$HELPER_BODY" | grep -q ...` negative over it is then
 # vacuously true -- a block that reports green while measuring nothing.
 TOTAL=$((TOTAL + 1))
 CAPTURE_BODY=$(awk '/^_docker_login_capture\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
@@ -6272,7 +6272,7 @@ rm -f "$T16_LIB"
 #      was `grep -q`, whose normal non-match returns 1. There is no `grep -q` here at all, so the
 #      dominant abort class is designed out AT THE ROOT rather than contained — a strict
 #      improvement on the plan, and the reason its falsifier no longer falsifies.
-#   2. The plan's abort measurement is real but TOP-LEVEL ONLY. `kw="$(… | grep -c ZZZ >/dev/null …)"` does
+#   2. The plan's abort measurement is real but TOP-LEVEL ONLY. `kw="$(… | grep -q ZZZ …)"` does
 #      abort under `set -euo pipefail` at top level; the SAME code inside a function invoked
 #      through a command substitution does NOT — and `$( ( _login_hatch … ) )` is exactly how all
 #      three sites call it.

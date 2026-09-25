@@ -581,7 +581,7 @@ if [[ "${1:-}" == "--row" ]]; then
   # rows had silently degenerated to `rc == 1` and were scoring "some assertion, somewhere,
   # failed" as detection of the specific property they name.
   #
-  # Filtered through a variable rather than `grep '^  FAIL:' "$_log" | grep -cF ... >/dev/null`: under this
+  # Filtered through a variable rather than `grep '^  FAIL:' "$_log" | grep -qF ...`: under this
   # file's `set -o pipefail`, `grep -q` closes the pipe on its first match and the producer takes
   # SIGPIPE (141), which pipefail then promotes — so the pipeline can report FAILURE on a
   # successful early match. A herestring has no pipe and cannot flake that way.

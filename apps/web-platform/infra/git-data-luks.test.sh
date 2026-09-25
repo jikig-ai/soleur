@@ -567,7 +567,7 @@ p_set_e_before_checksum() {
 # A26: no BARE terraform directive anywhere (AC4). The doubled form `curl -w` would need
 # must still pass, so the pattern is negative-lookbehind, not a plain substring.
 p_no_bare_directive() {
-  # NOT `grep -cP … | grep -c '^0$' >/dev/null`: grep -c PRINTS 0 but EXITS 1 when there are no
+  # NOT `grep -qP … | grep -q '^0$'`: grep -c PRINTS 0 but EXITS 1 when there are no
   # matches, and this file runs under `set -o pipefail`, so that pipeline fails on a
   # CLEAN file and the guard reports the opposite of the truth.
   local n

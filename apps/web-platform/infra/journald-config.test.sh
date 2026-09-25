@@ -110,7 +110,7 @@ echo "--- AC3: server.tf provisioner wiring (running-host path) ---"
 # grep -cE not grep -qE (same SIGPIPE-under-pipefail class as above): this NEGATIVE assert would
 # fail OPEN if the b64 arg were ever re-inlined — grep -q matches early, SIGPIPEs the streaming awk,
 # the pipeline flakes non-zero, and `!` inverts that into a spurious PASS, masking the regression.
-# grep -c reads all input (no early close) so the `!` reflects the real match state. `>/dev/null`
+# printf|grep -c|>/dev/null, not printf|grep -q: grep -c reads all input (no early close) so the `!` reflects the real match state.
 # drops the count so the `!` sees only the exit code.
 assert "journald_soleur_conf_b64 is NOT passed to the cloud-init templatefile" \
   "! { awk '/user_data = templatefile\(\"\\\$\{path.module\}\/cloud-init.yml\"/,/^  \}\)/' '$SERVER_TF' | grep -cE 'journald_soleur_conf_b64' >/dev/null; }"

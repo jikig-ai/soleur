@@ -14,7 +14,7 @@
 #
 # HARNESS: run_case, the stub set and every predicate live in workspaces-luks-harness.sh, shared
 # with workspaces-luks-staging.test.sh (#6588 staging-target guards). The no-pipe rule that file
-# documents is the reason this suite was rewritten once already: `calls | grep -c PAT >/dev/null` under
+# documents is the reason this suite was rewritten once already: `calls | grep -q PAT` under
 # `set -o pipefail` returns 141 when grep matches EARLY and the producer takes SIGPIPE, so a
 # NEGATIVE assertion (`if ! ...`) fails OPEN — and because `HARNESS_UNDEFINED:` is line 1 and
 # always an early match, `undef()` itself failed open and the vacuity guard was vacuous.
@@ -669,8 +669,8 @@ else
 fi
 rm -f "$MUT2"
 
-MUT3="$(mutate 's|^ *lsof +D "\$MOUNT" 9<&- >"\$lout" 2>"\$lerr"; rc=\$?$|  holders=""; lsof +D "$MOUNT" 2>/dev/null \| grep -c . >/dev/null \&\& holders=x; rc=0; : >"$lout"; : >"$lerr"; printf "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME\\nbash %s root 9r DIR 0,50 40 1 %s\\n" "$$" "$wsdir" >>"$lout"|')"
-if ! grep -qF 'lsof +D "$MOUNT" 2>/dev/null | grep -c . >/dev/null && holders=x' "$MUT3"; then
+MUT3="$(mutate 's|^ *lsof +D "\$MOUNT" 9<&- >"\$lout" 2>"\$lerr"; rc=\$?$|  holders=""; lsof +D "$MOUNT" 2>/dev/null \| grep -q . \&\& holders=x; rc=0; : >"$lout"; : >"$lerr"; printf "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME\\nbash %s root 9r DIR 0,50 40 1 %s\\n" "$$" "$wsdir" >>"$lout"|')"
+if ! grep -qF 'lsof +D "$MOUNT" 2>/dev/null | grep -q . && holders=x' "$MUT3"; then
   no "mutation M3 sed did NOT land — treat as un-run, not evidence"
 else
   run_case "$MUT3" 'freeze_writers' 'freeze_writers' LSOF_OUT_FILE="$BIGF"

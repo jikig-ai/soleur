@@ -80,7 +80,7 @@ check "the zot run never binds the sentinel with -v (which would CREATE a missin
   "! grep -qE -- '-v[[:blank:]]+$SENT' <<<\"\$ZOT_RUNS\""
 
 # Ordering, on physical line numbers: gate < conjunction < write < run.
-GATE_LN="$(grep -nF 'findmnt -no SOURCE /var/lib/zot | grep -cx /dev/mapper/registry >/dev/null ||' "$CI_YML" | sed -n '1p' | cut -d: -f1)"
+GATE_LN="$(grep -nF 'findmnt -no SOURCE /var/lib/zot | grep -qx /dev/mapper/registry ||' "$CI_YML" | sed -n '1p' | cut -d: -f1)"
 CONJ_LN="$(grep -nF 'if [ "$(findmnt -no SOURCE /var/lib/zot)" = /dev/mapper/registry ]; then' "$CI_YML" | sed -n '1p' | cut -d: -f1)"
 WRITE_LN="$(grep -nE "install -m 0444 -o root -g root /dev/null $SENT( \|\| true)?\$" "$CI_YML" | sed -n '1p' | cut -d: -f1)"
 FI_LN="$(awk -v s="${CONJ_LN:-0}" 'NR > s && /^[[:blank:]]*fi[[:blank:]]*$/ { print NR; exit }' "$CI_YML")"

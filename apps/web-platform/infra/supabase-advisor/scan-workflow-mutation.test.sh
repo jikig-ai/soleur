@@ -4,7 +4,7 @@
 #
 # WHY THIS FILE EXISTS
 # ====================
-# scan-workflow.test.sh had 7 checks shaped `<producer> | grep -c P >/dev/null` under
+# scan-workflow.test.sh had 7 checks shaped `<producer> | grep -q P` under
 # `set -uo pipefail`. grep -q exits on first match, the producer's next write()
 # takes SIGPIPE (141), and pipefail promotes 141 to the pipeline status —
 # inverting the `if`. At the match⇒fail sites that inverts INTO A SILENT PASS,
@@ -90,8 +90,8 @@ count_false_negatives() {  # $1 = shape id; echoes the count over N runs
   local n=0 i
   for ((i = 0; i < N; i++)); do
     case "$1" in
-      piped)   ( set -uo pipefail; grep -vE '^\s*#' "$AMP" | grep -cE "$PAT" >/dev/null ) ;;
-      printf)  ( set -uo pipefail; c="$(grep -vE '^\s*#' "$AMP")"; printf '%s' "$c" | grep -cE "$PAT" >/dev/null ) ;;
+      piped)   ( set -uo pipefail; grep -vE '^\s*#' "$AMP" | grep -qE "$PAT" ) ;;
+      printf)  ( set -uo pipefail; c="$(grep -vE '^\s*#' "$AMP")"; printf '%s' "$c" | grep -qE "$PAT" ) ;;
       heredoc) ( set -uo pipefail; c="$(grep -vE '^\s*#' "$AMP")"; grep -qE "$PAT" <<<"$c" ) ;;
     esac || n=$((n + 1))
   done
@@ -155,7 +155,7 @@ fi
 
 # R1 (RED half) — revert ONE site to the piped form.
 MUT="$PROBE_DIR/reverted.test.sh"
-sed 's|if grep -qF '"'"'\.lints\[\]?'"'"' <<<"\$script_code"; then|if printf '"'"'%s'"'"' "$script_code" \| grep -cF '"' >/dev/null"'.lints[]?'"'"'; then|' "$PRISTINE" > "$MUT"
+sed 's|if grep -qF '"'"'\.lints\[\]?'"'"' <<<"\$script_code"; then|if printf '"'"'%s'"'"' "$script_code" \| grep -qF '"'"'.lints[]?'"'"'; then|' "$PRISTINE" > "$MUT"
 if assert_mutated "$PRISTINE" "$MUT" "R1 residual guard goes RED"; then
   out="$(cd "$REPO_ROOT" && bash "$MUT" 2>&1)"
   if grep -qF 'FAIL no early-exit-pipe form remains' <<<"$out"; then
@@ -175,7 +175,7 @@ echo "== N: each normalisation in the residual guard is necessary =="
 STRIP_STAGE="  | sed 's/\"[^\"]*\"//g' \\"
 FOLD_STAGE="  | sed -E ':b;/\\|[[:space:]]*\$/{N;s/\\|[[:space:]]*\\n[[:space:]]*/| /;bb}' \\"
 PASS_ANCHOR='pass "every check matches a here-string'
-SELF_MATCH_MSG='pass "never write producer | grep -cF x >/dev/null — every check matches a here-string'
+SELF_MATCH_MSG='pass "never write producer | grep -qF x — every check matches a here-string'
 
 mutate() {  # $1 = src, $2 = dst, $3 = exact find, $4 = replace ("" deletes find's line)
   # Non-zero on ANY no-op: anchor absent (2) or output identical to input (3).

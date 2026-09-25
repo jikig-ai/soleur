@@ -67,7 +67,7 @@
 # ---------------------------------------------------------------------------------------------
 #
 # HARNESS DISCIPLINE (both classes below have bitten this repo inside the last week):
-#   * NEVER `producer | grep -c PATTERN >/dev/null` under pipefail. `grep -q` exits on first match, the
+#   * NEVER `producer | grep -q PATTERN` under pipefail. `grep -q` exits on first match, the
 #     producer takes SIGPIPE, the pipeline returns 141, and a NEGATIVE assertion fails OPEN and
 #     reports green forever. Every grep here runs against a real FILE or a herestring.
 #     (2026-07-19: "the harness broke the rule it enforced")

@@ -3460,7 +3460,7 @@ assert "#6921 §9 row: 502 x3 with no inngest-inventory: line -> UNKNOWN naming 
 # line. FATAL_BODY is CRLF-split and longer than 120 chars; its marker sits past char 120.
 R22_EXCERPT_HEAD='ERROR: /v0/gql functions query failed'
 assert "#6921 Guard3: the UNKNOWN line carries a CR/LF-stripped, 120-char excerpt of the last body" \
-  "printf '%s\n' \"\$R22_FL\" | grep -E '^quiesce check .*UNKNOWN' | grep -cF '$R22_EXCERPT_HEAD' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -cF 'PAST_CHAR_120_MARKER' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -cE '^inngest-inventory: FATAL' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -c \$ >/dev/null'\r'"
+  "printf '%s\n' \"\$R22_FL\" | grep -E '^quiesce check .*UNKNOWN' | grep -cF '$R22_EXCERPT_HEAD' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -cF 'PAST_CHAR_120_MARKER' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -cE '^inngest-inventory: FATAL' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -c \$'\\r' >/dev/null"
 # shellcheck disable=SC2034
 R22_FF0="$(render_2_2 "$R22_REGION" live '500:FATAL_BODY,500:FATAL_BODY,000:EMPTY_BODY')"
 assert "#6921 §9 excerpt: FATAL,FATAL,000 -> the excerpt is the last NON-EMPTY body (a trailing 000 does not hide the FATAL)" \

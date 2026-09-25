@@ -29,7 +29,7 @@
 #
 # HARNESS DISCIPLINE (both classes bit this repo inside the last week — see the 2026-07-19
 # learnings):
-#   * NEVER `producer | grep -c PATTERN >/dev/null` under pipefail. `grep -q` exits on first match, the
+#   * NEVER `producer | grep -q PATTERN` under pipefail. `grep -q` exits on first match, the
 #     producer takes SIGPIPE, the pipeline returns 141, and a NEGATIVE assertion fails OPEN.
 #     Every grep in this file runs against a real FILE or a herestring (task 5.7g).
 #   * Every mutation carries a LANDING ASSERTION against a pristine backup, computed by an
