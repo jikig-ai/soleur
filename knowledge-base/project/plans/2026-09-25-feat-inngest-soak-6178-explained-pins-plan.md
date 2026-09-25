@@ -484,4 +484,3 @@ now derives its loops from `SLICES=7`, its curl stub rejects > 8 ids, and a lite
 drift. The live read-only run of this branch at 7 slices returned rc=5 SOAK CLEAN, 2304 runs,
 explained=5, UNEXPLAINED=0, s1=775. The population order is unchanged, and the dated measurement
 in the population file is appended to, not edited.
-
