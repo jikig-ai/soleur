@@ -38,7 +38,7 @@ class ADR-217 fixed by keying push runs on `github.sha`.
 
 | File | Verified state | Verdict |
 |---|---|---|
-| `infra-validation.yml` | push:main + pull_request (paths-filtered). **No** workflow-level concurrency. Job-level `terraform-plan-${{ github.event.number \|\| github.run_id }}-${{ matrix.directory }}` at line ~2177, no cancel flag (defaults false). `plan` job is pull_request-only, `-refresh=false`, R2 `use_lockfile=false` → no state lock held mid-flight. `infra-validate-required` is an `if: always()` aggregator that is **deliberately NOT a required context** (comment cites #6480). No `merge_group` trigger. | **INCLUDE** — workflow-level canonical block. Job-level group untouched. |
+| `infra-validation.yml` | push:main + pull_request (paths-filtered) + workflow_dispatch (same-SHA runs now serialize harmlessly — cancel=false on that arm). **No** workflow-level concurrency. Job-level `terraform-plan-${{ github.event.number \|\| github.run_id }}-${{ matrix.directory }}` at line ~2177, no cancel flag (defaults false). `plan` job is pull_request-only, `-refresh=false`, R2 `use_lockfile=false` → no state lock held mid-flight. `infra-validate-required` is an `if: always()` aggregator that is **deliberately NOT a required context** (comment cites #6480). No `merge_group` trigger. | **INCLUDE** — workflow-level canonical block. Job-level group untouched. |
 | `constraint-gates.yml` | pull_request `[opened, synchronize, reopened]` only. No concurrency. Informational — NOT a required check (promotion blocked on #5791). Body is **parity-locked** to `plugins/soleur/skills/constraint-scaffold/references/constraint-gates-workflow.template` (parity.test.sh rows 3–4 pin template ↔ `apps/web-platform/.github/workflows/constraint-gates.yml` ↔ repo-root copy). | **INCLUDE** — requires editing all 3 copies + the template carries the block to every future scaffolded repo. |
 | `cla.yml` | pull_request_target `[opened, synchronize, reopened]` + issue_comment. No concurrency. Ledger row already records: `no cancel: privileged trigger, keep its run shape untouched`. `cla-check` is a CLA Required ruleset context. The reaper deliberately skips in-progress pull_request_target runs (SELECT_JQ rule 9b, "secrets, outside writes"). | **EXCLUDE** — privileged-trigger policy already codified; cancelling mid-flight risks interrupting the signature push to `cla-signatures` (lost signature → silent re-prompt). |
 | `cla-evidence.yml` | pull_request_target + issue_comment `[created, edited, deleted]`. Concurrency exists, `cancel-in-progress: false`. `cla-evidence` is a CLA Required ruleset context. Each event produces a distinct content-addressed R2 evidence record; a cancelled comment-event run loses that record's upload (including `edited`/`deleted` tombstones under the R2 Lock Rule). | **EXCLUDE** — do not flip to `true`; the evidence layer must not drop events. Ledger `no cancel: privileged trigger, same as cla.yml`. |
@@ -96,7 +96,7 @@ Semantics:
 
 Add the identical block to:
 - `plugins/soleur/skills/constraint-scaffold/references/constraint-gates-workflow.template`
-  (before `permissions:`), then
+  (between `permissions:` and `jobs:`), then
 - `apps/web-platform/.github/workflows/constraint-gates.yml` (the emitted copy —
   byte-identical after `__TARGET_DIR__` substitution; the block has no
   placeholder), and
@@ -251,10 +251,11 @@ constraint-gates is ~195 × ~1 job-min — small but free.
 
 ## Blast radius (files changed)
 
-- `.github/workflows/infra-validation.yml` — +3 lines (concurrency block).
-- `.github/workflows/constraint-gates.yml` — +3 lines.
-- `apps/web-platform/.github/workflows/constraint-gates.yml` — +3 lines.
-- `plugins/soleur/skills/constraint-scaffold/references/constraint-gates-workflow.template` — +3 lines.
+- `.github/workflows/infra-validation.yml` — +12 lines (block + comment) and
+  a one-line `!cancelled()` guard on `Post plan comment`.
+- `.github/workflows/constraint-gates.yml` — +7 lines (block + comment).
+- `apps/web-platform/.github/workflows/constraint-gates.yml` — +7 lines.
+- `plugins/soleur/skills/constraint-scaffold/references/constraint-gates-workflow.template` — +7 lines.
 - `scripts/pr-fanout-ledger.txt` — 2 rows updated (cancel flag + reason text).
 
 Total: 5 files, all additive except the ledger reason text. No jobs, triggers,

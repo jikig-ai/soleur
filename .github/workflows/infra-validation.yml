@@ -2352,7 +2352,10 @@ jobs:
           exit "$PLAN_EXIT"
 
       - name: Post plan comment
-        if: always() && steps.plan.outcome != 'skipped'
+        # `!cancelled()`: a concurrency-cancelled run would otherwise post a
+        # "❌ Failed (exit code: )" sticky comment with an empty plan block;
+        # the superseding run's own comment overwrites it on the same header.
+        if: always() && !cancelled() && steps.plan.outcome != 'skipped'
         uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # v3.0.2
         with:
           header: terraform-plan-${{ matrix.directory }}
