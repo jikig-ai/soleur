@@ -443,7 +443,8 @@ These notes are for #8548's own PR. This PR does not act on them.
 - an OG image;
 - the distribution file;
 - the `apps/web-platform/infra/seo-bulk-redirects.tf` dated-slug entry;
-- a rewrite of the content-strategy row and calendar entry.
+- a rewrite of the content-strategy row and calendar entry;
+- tags that place it outside the blog index's default "Engineering Deep Dives" bucket (`plugins/soleur/docs/pages/blog.njk` files every post not tagged `CaaS`, `ai-agents`, `comparison` or `case-study` there). Whether that index needs a founder-facing category is a separate call for the post PR.
 
 Run `blog-jargon-scan.sh` on the draft before asking for founder review.
 

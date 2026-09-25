@@ -228,6 +228,8 @@ Zero existing content on model-tier economics despite BYOK cost being a live buy
 
 All content maps to one of four pillars. Each pillar targets a specific audience segment and search intent.
 
+> **[2026-09-25, #8774]** New blog posts in every pillar follow brand-guide `### Blog`: they are written for non-technical founders and target the words a founder types when they have the problem. The developer-query keywords listed under Pillars 2 and 3 ("agentic engineering", "Claude Code plugins") now apply to GitHub and docs content, not to new blog posts; a planned post built on one of them is re-angled to the founder problem underneath it. Pillar audiences below are unchanged for non-blog channels.
+
 ### Pillar 1: Category Definition
 
 **Audience:** Founders and thought leaders exploring the future of work and AI organizations.
@@ -246,9 +248,6 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 ### Pillar 2: Methodology
 
 **Audience:** Technical builders looking for structured AI development workflows.
-
-> **[2026-09-25, #8774]** New blog posts in every pillar follow brand-guide `### Blog`. This pillar's technical depth moves to GitHub and the docs.
-
 **Search intent:** Informational.
 **Keywords:** agentic engineering, compound engineering, vibe coding vs agentic engineering, AI coding workflow, knowledge compounding.
 **Voice:** Confident, concrete. Brand guide "Product announcements" tone.

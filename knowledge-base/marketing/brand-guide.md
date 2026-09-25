@@ -28,7 +28,7 @@ Solo founders who think in billions. Technical builders who refuse to accept tha
 | Technical builders | Founders who code, use Claude Code, think in systems. The beachhead audience. | HN, GitHub, Discord, docs |
 | Non-technical founders | Founders who use AI tools (ChatGPT, Notion) but don't code. Want business leverage, not technical leverage. | Blog, website, LinkedIn, X/Twitter, onboarding content |
 
-The blog is written for non-technical founders by default (see `### Blog` under Channel Notes). Technical write-ups live on GitHub or in the docs, not on the blog.
+The blog is written for non-technical founders by default (see `### Blog` under Channel Notes). Technical write-ups live on GitHub or in the docs, not on the blog. This reverses the 2026-03-29 routing (#1004), which sent the blog to technical builders; it changed on 2026-09-25 (#8774) after a mechanism-first post was rejected for losing its non-technical reader.
 
 ### Positioning
 
@@ -476,6 +476,7 @@ Same guardrails as X/Twitter apply (see above), with these Bluesky-specific addi
 - Respect HN culture: be direct, cite sources, admit limitations, engage with criticism honestly.
 - When discussing Soleur, focus on the technical architecture and specific capabilities, not positioning or branding.
 - Example story title: "Soleur -- AI agents that run the non-engineering 70% of a solo founder's company"
+- Blog posts are written for non-technical founders, so do not submit one here as-is. Submit its technical write-up (the pull request, architecture decision record, or README) instead, or skip HN for that post (see `### Blog`).
 - Example comment reply: "The knowledge base is a git-tracked directory of markdown files. Agents read and write to it like a shared filesystem. No vector DB, no embeddings -- just files the founder can read and edit directly."
 
 ### Website / Landing Page
