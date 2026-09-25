@@ -287,3 +287,21 @@ nf_tables. The agent sandbox on the same replica has the same exposure, so the f
 `bwrap --seccomp` filter for both, tracked with the agent sandbox's inherited-fd gap in #8752. Memory is bounded by the container `--memory`
 cap and the sandbox tmpfs sizes, not per render. A Concierge `edit_c4_diagram` completing while the
 editor is open does not reload it (#8739).
+
+## Addendum — 2026-09-25 (#8740): zero-view models detected on read
+
+The 2026-09-24 "zero-view models refused" gate covers the server writer (`server/c4-render.ts`)
+only. The plugin writers (`plugins/soleur/scripts/render-c4-model.sh`,
+`generate-c4-from-components.ts`) still run `likec4 export json` without `--no-use-dot` or a views
+gate, so run inside a container without graphviz they can still commit a zero-view model (#8861),
+and models committed before the fix stay in tenant repositories. The 2026-09-25 census found one, in an external tenant repository.
+
+`GET /api/kb/c4/project` therefore detects the state on read, from any writer: when the committed
+model has a non-empty plain-object `elements` and no views, it returns one model-level diagnostic
+(`line: 0`, `sourceFsPath: model.likec4.json`) in its `diagnostics` array and emits a debounced
+warning (`feature=c4-project-read`, `op=zero-view-model`, keyed on workspace and model path). The
+copy says the saved layout is incomplete and the source is fine, and names the fix: a Concierge
+`.c4` comment edit in the diagrams folder, a re-run of the export elsewhere. The Concierge prompt
+addendum carries the same reading. No write goes to the tenant repository; #8740 closes on a
+14-day follow-through (`scripts/followthroughs/c4-zero-view-model-8740.sh`) once no production
+zero-view load is seen with the fix live.
