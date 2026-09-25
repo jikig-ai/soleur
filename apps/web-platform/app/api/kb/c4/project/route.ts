@@ -57,12 +57,14 @@ function toGithubDir(requestedDir: string): string | null {
 // claims only that. Inside the Concierge-writable folder a Concierge re-render
 // (a `.c4` edit) fixes it; elsewhere the Concierge cannot write, so the copy
 // points at the export. "re-render this diagram" is the phrase the Concierge
-// prompt addendum keys on. "then reload the page" stays until #8739 reloads
-// the workspace after a Concierge edit.
+// prompt addendum keys on. #8739: the open editor reloads itself when a
+// Concierge save lands (c4_diagram_saved), so the canonical copy no longer
+// asks the user to reload; OTHER_DIR keeps its reload instruction because an
+// out-of-app `likec4 export` + push emits no event the page can hear.
 const ZERO_VIEW_PREFIX =
   "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, ";
 const ZERO_VIEW_DIAGNOSTIC =
-  ZERO_VIEW_PREFIX + "ask the Concierge to re-render this diagram, then reload the page.";
+  ZERO_VIEW_PREFIX + "ask the Concierge to re-render this diagram.";
 const ZERO_VIEW_DIAGNOSTIC_OTHER_DIR =
   ZERO_VIEW_PREFIX + "re-run the diagram export for this folder in your repository, then reload the page.";
 

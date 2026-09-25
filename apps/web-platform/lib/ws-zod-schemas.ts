@@ -444,6 +444,16 @@ const contextResetSchema = z.strictObject({
   conversationId: z.string(),
 });
 const upgradePendingSchema = z.strictObject({ type: z.literal("upgrade_pending") });
+// #8739 — Concierge `edit_c4_diagram` save notice: the open C4 workspace
+// refetches and reconciles its stale banner when this lands. Live-only
+// server→client frame — no seq, excluded from the replay buffer per ADR-059;
+// not an ADR-025 conversation notice (no `reason`, no in-thread render).
+const c4DiagramSavedSchema = z.strictObject({
+  type: z.literal("c4_diagram_saved"),
+  dirPath: z.string().max(1024),
+  rerendered: z.boolean(),
+  diagnostic: z.string().max(20000).nullable().optional(),
+});
 // #3930 — cross-process JWT-deny discriminator. See lib/types.ts WSMessage
 // revocation_notice variant for the full prose. `reason` and `deniedAt` are
 // nullable because the underlying `my_revocation_status()` RPC returns NULL
@@ -628,6 +638,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   fanoutTruncatedSchema,
   contextResetSchema,
   upgradePendingSchema,
+  c4DiagramSavedSchema,
   errorSchema,
   revocationNoticeSchema,
   subagentSpawnSchema,
