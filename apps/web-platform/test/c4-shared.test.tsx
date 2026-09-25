@@ -175,14 +175,15 @@ describe("C4Diagnostics — model-level diagnostics carry no line prefix", () =>
     expect(screen.queryByText(/line -?\d/)).toBeNull();
   });
 
-  it("S2: a positive line keeps the `line N:` prefix", () => {
+  // Line numbers start at 1, so line 1 (a file's first line) must keep its prefix.
+  it.each([1, 3])("S2: positive line %i keeps the `line N:` prefix", (line) => {
     render(
       <C4Diagnostics
-        diagnostics={[{ message: "bad ref", line: 3, sourceFsPath: "model.c4" }]}
+        diagnostics={[{ message: "bad ref", line, sourceFsPath: "model.c4" }]}
         hasModel={true}
       />,
     );
-    expect(screen.getAllByRole("listitem")[0].textContent).toBe("line 3: bad ref");
+    expect(screen.getAllByRole("listitem")[0].textContent).toBe(`line ${line}: bad ref`);
   });
 });
 

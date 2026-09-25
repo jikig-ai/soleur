@@ -51,7 +51,7 @@ Plan: `knowledge-base/project/plans/2026-09-25-fix-c4-zero-view-model-project-di
 - [x] 2.7 Concierge (GREEN): append the plan's sentence to `C4_PROMPT_ADDENDUM` in `server/c4-concierge-tools.ts`. Run both copy suites.
 - [x] 2.8 Add the errorClass registry line in `server/observability.ts`.
 - [x] 2.9 Add the ADR-050 addendum paragraph on its own lines. Do not touch the `Failure classes:` line.
-- [x] 2.10 Follow-through probe
+- [x] 2.10 Follow-through probe (**deleted in review, 2026-09-25, CTO ruling option A**: the tenant cannot load the flag-gated viewer, so a Sentry-absence close would be vacuous)
   - [x] 2.10.1 Write `scripts/followthroughs/c4-zero-view-model-8740.test.sh` first (RED):
     - its own `pass`/`fail` counters and an instrument self-test;
     - `curl` and `git` stubs that log their argv, exit 99 on anything unrouted, and are scoped to the probe run;
@@ -77,13 +77,9 @@ Plan: `knowledge-base/project/plans/2026-09-25-fix-c4-zero-view-model-project-di
 ## Phase 4: Ship (issue hygiene, automated)
 
 - [ ] 4.1 PR body: `Ref #8740`, `Ref #8861`, and the Re-render Decision summary. No closing keyword in the title or body.
-- [ ] 4.2 After deploy:
-  - paste the verbatim `<!-- soleur:followthrough … -->` block into #8740, unfenced, with `earliest` = deploy + 14 days;
-  - add the `follow-through` label;
-  - run the sweeper with `dry_run=true` and confirm #8740 is parsed.
+- [ ] 4.2 (Withdrawn in review: no follow-through directive and no `follow-through` label on #8740.)
 - [ ] 4.3 Comment on #8740 with:
   - what shipped;
   - options (a), (b) and (c);
-  - the close rule;
-  - how to stop FAIL comments.
+  - the close rule: a read-only census re-run finding 0 zero-view models (re-run it before `c4-visualizer` is promoted beyond `role-dev`).
 - [ ] 4.4 Comment on #8739 naming the three "then reload the page" clauses to remove: the two route copies and the addendum.

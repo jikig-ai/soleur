@@ -300,8 +300,11 @@ and models committed before the fix stay in tenant repositories. The 2026-09-25 
 model has a non-empty plain-object `elements` and no views, it returns one model-level diagnostic
 (`line: 0`, `sourceFsPath: model.likec4.json`) in its `diagnostics` array and emits a debounced
 warning (`feature=c4-project-read`, `op=zero-view-model`, keyed on workspace and model path). The
-copy says the saved layout is incomplete and the source is fine, and names the fix: a Concierge
-`.c4` comment edit in the diagrams folder, a re-run of the export elsewhere. The Concierge prompt
-addendum carries the same reading. No write goes to the tenant repository; #8740 closes on a
-14-day follow-through (`scripts/followthroughs/c4-zero-view-model-8740.sh`) once no production
-zero-view load is seen with the fix live.
+copy says the saved layout is incomplete and that this is not caused by the diagram source (the
+source is not validated on this path), and names the fix: a Concierge re-render in the diagrams
+folder, a re-run of the export elsewhere. The Concierge prompt addendum carries the same reading
+and re-renders by appending one `//` comment line to the smallest `.c4` file in that folder. The
+public share route (`app/api/shared/[token]/c4`) neither shows nor reports the state. No write goes
+to the tenant repository. #8740 stays open until a read-only census re-run finds no zero-view model:
+a quiet Sentry window is not accepted as repair evidence, because the viewer is flag-gated to
+`role-dev` (`c4-visualizer`) and the affected tenant cannot reach it.

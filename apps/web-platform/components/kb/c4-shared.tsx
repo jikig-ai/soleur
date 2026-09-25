@@ -52,7 +52,6 @@ const c4MantineTheme = createTheme({
   defaultRadius: "sm",
 });
 
-export type { Diagnostic } from "@/lib/c4-model-shape";
 export type ProjectResponse = {
   dir: string;
   sources: Record<string, string>;

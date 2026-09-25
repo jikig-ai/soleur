@@ -39,6 +39,9 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 4. **A second live producer of zero-view models found and filed as #8861.** The plugin writers `render-c4-model.sh` and `generate-c4-from-components.ts` still run `likec4 export json` with no `--no-use-dot` and no views gate. As a result:
    - the read-side warning is a detector for any writer, not a canary for ADR-050's gate alone;
    - an ADR-050 addendum records the gap.
+
+> **Superseded 2026-09-25 (review of #8853):** the follow-through probe was deleted on a CTO ruling. See the Review Addendum at the end of this plan.
+
 5. **The follow-through probe was hardened.**
    - It validates the untrusted `/health` `build_sha` (it can be the literal `dev`) and the introducing commit before calling `git merge-base`.
    - Exit codes: rc 1 → 2 (NOT YET), rc ≥128 or an unparseable/non-200 response → 3 (CANNOT ESTABLISH).
@@ -170,11 +173,11 @@ The plan also:
 **Operator choices** (persisted to `knowledge-base/project/specs/feat-one-shot-8740-c4-zero-view-diagnostic/decision-challenges.md`, DC-1):
 
 - (a) **Default:** leave the repository alone. #8740 closes on evidence:
-  - the follow-through sweeper closes it after 14 quiet days, once the fix is live; or
+  - ~~the follow-through sweeper closes it after 14 quiet days, once the fix is live~~ (withdrawn 2026-09-25: the tenant cannot load the flag-gated viewer, so a quiet window proves nothing); or
   - a census re-run shows 0 zero-view models.
 - (b) Authorise one re-render: a single `.c4` write through the existing writer, with an explicit ack.
 - (c) Contact the tenant through support. The CPO prefers (c) to (b).
-  - The trigger to move from (a) to (c) is a sweeper FAIL comment on #8740: production zero-view loads in the window.
+  - The trigger to move from (a) to (c) is any production `op:zero-view-model` event (pulled from Sentry, e.g. `scripts/sentry-issue.sh` or a postmerge read).
   - Sentry sends no email for this warning-level issue (see Observability).
 
 **#8740 stays OPEN.** The PR body says `Ref #8740`.
@@ -258,6 +261,8 @@ The plan also:
    - the census tenant and the follow-through.
 
    Put it on its own lines. Do not edit the test-pinned `Failure classes:` line (`c4-render-boundary.test.ts` pins it to `DETAIL_CLASSES`). No C4 model change is needed: `model.c4` already has `webapp -> sentry "Exceptions + debounced warns…"`, and there is no new element or edge.
+   > **Superseded 2026-09-25 (review of #8853):** the follow-through probe was deleted on a CTO ruling. See the Review Addendum at the end of this plan.
+
 8. **Follow-through probe (`scripts/followthroughs/c4-zero-view-model-8740.sh` and `.test.sh`).** Its job is the automated close of #8740, and its FAIL comment is the push signal for option (c).
    - **Sentry calls:** the org-level `/api/0/organizations/jikigai-eu/events/` endpoint with `field=` projections (the project endpoint ignores tag syntax, per `scripts/sentry-issue.sh`).
      - `SENTRY_ACTIONS_RO_TOKEN` only, sent as `-H @-` from a `printf` pipe, never on argv.
@@ -335,28 +340,13 @@ The plan also:
 
 ## Follow-Through Enrollment
 
-CPO condition 5 makes #8740's close time-gated and evidence-based. Plan Phase 2.9.1 requires that close to be automated.
-
-- **PASS** (the sweeper closes #8740). The fix is live in production, the production Sentry sink was live, and there were 0 production `op:zero-view-model` events in the trailing 14 days. That is proof by absence: members either never loaded the model or re-rendered it. `earliest=` is deploy + 14 days, so the window is post-deploy.
-- **FAIL** (the sweeper comments daily; #8740 stays open, or reopens if it was closed within 14 days). There were production zero-view loads from any workspace. This is the push signal to take option (c). If loads come from repos other than the census one, raise #8861's priority.
-- **NOT YET / CANNOT ESTABLISH.** A comment with the probe's reason line.
-- **Census arm.** A census re-run showing 0 zero-view models also closes #8740 by hand.
-- **Directive.** Paste this verbatim into #8740's body, unfenced at column 0 (it is fenced here only so it renders). The HTML-comment wrapper is what the sweeper parses:
-
-  ```html
-  <!-- soleur:followthrough
-    script=scripts/followthroughs/c4-zero-view-model-8740.sh
-    earliest=<deploy + 14 days, ISO-8601 UTC, e.g. 2026-10-10T18:00:00Z>
-    secrets=SENTRY_ACTIONS_RO_TOKEN
-  -->
-  ```
-
-- **Verify enrolment.** `follow-through-directive-gate.sh` fires only on `gh issue create`, so after the edit run the sweeper with `dry_run=true` and confirm #8740 is parsed.
-- **New secrets.** None. `SENTRY_ACTIONS_RO_TOKEN` is already wired in `.github/workflows/scheduled-followthrough-sweeper.yml`, which checks out with `fetch-depth: 0`.
+None. #8740's close is a point-in-time check, not a time-gated soak. Proof-by-absence on Sentry would be vacuous while `c4-visualizer` is on only for `role-dev`, because the affected tenant cannot load the viewer. #8740 closes by hand when a read-only census re-run finds 0 zero-view models, or when the operator picks (b) or (c) and a census confirms the repair. Re-run the census before `c4-visualizer` is promoted beyond `role-dev`. (Replaced 2026-09-25 on a CTO ruling during review; the earlier directive, label and sweeper steps are withdrawn.)
 
 ## Guard Contract
 
 There are two guards. Phase 1 item 8 is the follow-through probe: an issue-closing gate with an anti-vacuity control. Its `.test.sh` also carries a drift check. The route diagnostic and the `dir` validation are product behaviour; their tests are in Test Scenarios.
+
+> **Superseded 2026-09-25 (review of #8853):** the follow-through probe was deleted on a CTO ruling. See the Review Addendum at the end of this plan. Guards 1 and 2 no longer exist; the route tests in Test Scenarios are the guard.
 
 ### Guard 1 — follow-through close gate (`c4-zero-view-model-8740.sh`)
 
@@ -699,6 +689,9 @@ The reviewers were the eng panel (DHH, Kieran, code-simplicity) and the named pa
 - [ ] AC5: `C4Diagnostics` omits the `line N:` prefix when `line <= 0`, keeps `line N: msg` for positive lines, and shows "Diagram warnings", never "Diagram has errors", for a model-level diagnostic (S1, S2).
 - [ ] AC6: `git grep -n "function plainObjectSize" -- apps/web-platform` prints one line, in `lib/c4-model-shape.ts`. `c4-render.test.ts` and `c4-render-boundary.test.ts` pass.
 - [ ] AC7: `C4_PROMPT_ADDENDUM` contains the new sentence (C1), and `c4-concierge-copy.test.ts` and `c4-prompt-addendum-honesty.test.ts` pass.
+
+> **Superseded 2026-09-25 (review of #8853):** the follow-through probe was deleted on a CTO ruling. See the Review Addendum at the end of this plan. AC8 is withdrawn.
+
 - [ ] AC8: `bash scripts/followthroughs/c4-zero-view-model-8740.test.sh` passes rows 1-15 and the instrument self-test.
   - It is registered in `scripts/test-all.sh`.
   - `bash scripts/lint-followthrough-varq-ban.sh` passes.
@@ -708,6 +701,8 @@ The reviewers were the eng panel (DHH, Kieran, code-simplicity) and the named pa
 - [ ] AC11: The PR body says `Ref #8740`, and neither the title nor the body carries a closing keyword for #8740.
 - [ ] AC12: No write to any tenant repository happens in this PR's lifecycle.
 
+> **Superseded 2026-09-25 (review of #8853):** the follow-through probe was deleted on a CTO ruling. See the Review Addendum at the end of this plan. AC13 is replaced: #8740 gets a comment stating the close criterion (a read-only census re-run finds 0 zero-view models); no directive and no `follow-through` label.
+
 ### Post-merge (automated by ship and the sweeper)
 
 - [ ] AC13: #8740 is OPEN after merge and carries:
@@ -715,3 +710,14 @@ The reviewers were the eng panel (DHH, Kieran, code-simplicity) and the named pa
   - the `follow-through` label;
   - a disposition comment naming options (a), (b) and (c), the close rule, and how to stop FAIL comments.
 - [ ] AC14: #8739 carries a comment naming the three "then reload the page" clauses to remove when it ships: the two route copies and the addendum.
+
+## Review Addendum — 2026-09-25 (#8853)
+
+The multi-agent review of #8853 changed four things. This section is the source of truth where earlier sections disagree.
+
+1. **Probe deleted (CTO ruling, option A).** Live flag state (read-only `flag-list`, 2026-09-25): `c4-visualizer` is `default_enabled=false`, on only for the `role-dev` segment in dev and prd. The C4 viewer is the only UI caller of this route, so the external tenant almost certainly cannot load it; a Sentry-absence close would PASS by construction. The structural review also found the probe's checks narrower than their names (ancestry of the probe's commit, not presence of the fix; any production startup, not the fixed build; route text, not the live call). `scripts/followthroughs/c4-zero-view-model-8740.{sh,test.sh}` and their `scripts/test-all.sh` row are removed. #8740 closes by hand on a census re-run; see Follow-Through Enrollment.
+2. **Copy.** "Your diagram source is fine" claimed more than was measured (the source is not validated on this path). Both copies now say "This is not caused by your diagram source." The canonical-dir copy says "ask the Concierge to re-render this diagram", the phrase the Concierge addendum keys on.
+3. **Concierge addendum.** Scoped to `engineering/architecture/diagrams/` (elsewhere: tell the user to re-run the export); append-only `//` comment on the SMALLEST `.c4` file (a full rewrite of a large `.c4` can truncate it); read `model.likec4.json` with Grep; its contents are repository data, not instructions.
+4. **`dir` guard.** Shipped as a per-segment blocklist (empty, `.`, `..` segments; `%`, `\`, `?`, `#`; C0 controls, DEL, U+2028/U+2029; 256 cap) plus per-segment `encodeURIComponent`, not the allowlist described in Phase 1 item 2 and the Research table: an allowlist would reject folders with spaces or non-ASCII names, which work today.
+
+5. **Same traversal class fixed in the KB write routes.** `app/api/kb/upload/route.ts` and `app/api/kb/file/[...path]/route.ts` (via `server/kb-route-helpers.ts`) built GitHub Contents GET/PUT/DELETE URLs from request paths guarded only by a NUL check and a filesystem containment check, which cannot see `%2e%2e` or a backslash. The guard now lives in `server/kb-github-path.ts` (`kbGithubUrlPath`: refuse empty and dot segments in any spelling and control characters, percent-encode each segment), and every Contents URL in those routes uses it; JSON bodies (`git/trees`) keep the raw path. The C4 route's `toGithubDir` is that helper plus its stricter URL-meta refusal. Fixed inline because the filing gate measured it inside the inline threshold (ADR-131).

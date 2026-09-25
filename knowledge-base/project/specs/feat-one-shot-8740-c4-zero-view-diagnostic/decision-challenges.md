@@ -14,16 +14,19 @@ operator ack (`hr-menu-option-ack-not-prod-write-auth`). A headless pipeline can
 **Default taken:** (a), do not write. The `/project` diagnostic and the Concierge now both
 explain the empty canvas and name the edit that redraws it.
 
-- **(a) Leave it (default, from the CPO).** The follow-through sweeper closes #8740 after 14 days
-  with no production zero-view loads, once the fix is live. A census re-run showing 0 zero-view
-  models also closes it.
+- **(a) Leave it (default, from the CPO).** #8740 stays open and closes only on a census re-run
+  showing 0 zero-view models. It does not auto-close: with `c4-visualizer` limited to `role-dev`
+  (live flag state, 2026-09-25), the tenant cannot load the diagram, so an absence of Sentry
+  events would prove nothing. The `op=zero-view-model` warning remains the ongoing signal, and any
+  production event is the trigger to take (c). (Revised 2026-09-25 on a CTO ruling during review;
+  the earlier 14-day follow-through close is withdrawn.)
 - **(b) Authorise one re-render.** A single `.c4` write through the existing writer, with your
   explicit ack. The commit lands in the tenant's repository under the Soleur app.
 - **(c) Contact the tenant through support.**
   - The CPO prefers this to (b), because it asks before writing.
   - The DHH review argued it should be the default, as the cheapest real resolution.
-  - The trigger to move from (a) to (c) is a sweeper FAIL comment on #8740: production zero-view
-    loads in the window.
+  - The trigger to move from (a) to (c) is any production `op:zero-view-model` event, pulled from
+    Sentry (no sweeper runs for #8740).
   - Sentry sends no email for this warning-level issue. The only unfiltered alert rule fires on
     high-priority issues.
 
@@ -79,6 +82,18 @@ The second sentence is true by ADR-050's measurement: a successful layout always
   KB.
 - **Why it is folded in:** the fix is in the same file, and the new warning's dedup key would
   otherwise be built on the uncanonical value.
-- **The fix:** a per-segment allowlist, a length cap, control and line-separator rejection, and
-  per-segment encoding (plan Phase 1 item 2, rows T6).
+- **The fix:** a per-segment blocklist (empty, `.` and `..` segments; `%`, `\`, `?`, `#`), a
+  length cap, control and line-separator rejection, and per-segment encoding (rows T6). A
+  blocklist rather than the plan's allowlist, so folders with spaces or non-ASCII names keep
+  working (as in `server/validate-context-path.ts`).
 - **Why this is listed:** the PR grows beyond #8740's literal ask.
+
+## Review revisions (2026-09-25, #8853)
+
+- **DC-2:** the shipped copy no longer says "Your diagram source is fine"; it says "This is not
+  caused by your diagram source." The source is not validated on this path, so only the cause
+  was established.
+- **DC-3:** the canonical-folder copy now says "ask the Concierge to re-render this diagram",
+  the CPO's primary wording. The Concierge addendum keys on that phrase and performs the
+  re-render as an append-only `//` comment on the smallest `.c4` file in
+  `engineering/architecture/diagrams/`, so the user no longer has to describe the mechanism.

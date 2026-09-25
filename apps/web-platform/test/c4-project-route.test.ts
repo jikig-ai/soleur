@@ -89,11 +89,14 @@ function setupGitHub(
     listingError?: unknown;
     blobErrors?: Record<string, unknown>;
     dir?: string;
+    /** The listing's own path prefix, when it should differ from the request
+     *  dir (GitHub reports its canonical path, not the caller's spelling). */
+    listingDir?: string;
   } = {},
 ) {
   const entries = Object.keys(files).map((name) => ({
     name,
-    path: `knowledge-base/${opts.dir ?? C4_DIAGRAMS_DIR}/${name}`,
+    path: `knowledge-base/${opts.listingDir ?? opts.dir ?? C4_DIAGRAMS_DIR}/${name}`,
     sha: `sha-${name}`,
     type: "file",
   }));
@@ -353,18 +356,22 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
 // explains it through the existing diagnostics channel.
 describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => {
   const CANONICAL_COPY =
-    "This diagram has no views to draw because its saved layout is incomplete. Your diagram source is fine. To fix it, ask the Concierge to add a comment to this diagram's source, then reload the page.";
+    "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, ask the Concierge to re-render this diagram, then reload the page.";
   const OTHER_DIR_COPY =
-    "This diagram has no views to draw because its saved layout is incomplete. Your diagram source is fine. To fix it, re-run the diagram export for this folder in your repository, then reload the page.";
+    "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, re-run the diagram export for this folder in your repository, then reload the page.";
   const CANONICAL_MODEL_PATH = `knowledge-base/${C4_DIAGRAMS_DIR}/model.likec4.json`;
 
   function zeroViewModel() {
     return JSON.stringify({ elements: { a: { id: "a" }, b: { id: "b" } }, views: {} });
   }
 
-  it("T1: elements + empty views → one model-level diagnostic and one debounced warn", async () => {
+  // The real client always sends `?dir=` (useC4Project), so T1 runs both with
+  // the explicit canonical dir and with the route's default.
+  it.each([["explicit dir", C4_DIAGRAMS_DIR], ["default dir", undefined]])(
+    "T1 (%s): elements + empty views → one model-level diagnostic and one debounced warn",
+    async (_label, dir) => {
     setupGitHub({ "model.c4": "model {}", "model.likec4.json": zeroViewModel() });
-    const res = await callGET();
+    const res = await callGET(dir);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.viewIds).toEqual([]);
@@ -383,10 +390,18 @@ describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => 
     );
     expect(ctx).not.toHaveProperty("tags");
     expect(ctx.extra).toEqual(
-      expect.objectContaining({ modelPath: CANONICAL_MODEL_PATH, elementCount: 2 }),
+      expect.objectContaining({
+        dir: C4_DIAGRAMS_DIR,
+        modelPath: CANONICAL_MODEL_PATH,
+        elementCount: 2,
+        userIdHash: expect.any(String),
+      }),
     );
+    expect(ctx.extra).not.toHaveProperty("userId");
     expect(key).toBe(`ws-1:${CANONICAL_MODEL_PATH}`);
     expect(errorClass).toBe("c4-project-read:zero-view-model");
+    // The zero-view state is a warning, never a paged failure.
+    expect(mocks.mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
   it("T2: a model with a view → no diagnostic, no warn", async () => {
@@ -412,7 +427,8 @@ describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => 
 
   it.each([
     ["absent views", { elements: { a: { id: "a" } } }, true],
-    ["array views", { elements: { a: { id: "a" } }, views: [] }, true],
+    // A non-empty ARRAY of views is still no views: only a plain object counts.
+    ["array views", { elements: { a: { id: "a" } }, views: ["index"] }, true],
     ["array elements", { elements: ["x"], views: {} }, false],
     ["string elements", { elements: "xy", views: {} }, false],
   ])("T4: %s → diagnostic=%s", async (_label, model, expectDiag) => {
@@ -424,15 +440,30 @@ describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => 
     expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledTimes(expectDiag ? 1 : 0);
   });
 
-  it("T5: outside the Concierge-writable folder → the export copy, which does not name the Concierge", async () => {
-    setupGitHub({ "model.likec4.json": zeroViewModel() }, { dir: "product/diagrams" });
-    const res = await callGET("product/diagrams");
+  // The Concierge can write only DIRECTLY under the canonical folder
+  // (isC4DiagramPath), so near misses on either side get the export copy.
+  it.each(["product/diagrams", `${C4_DIAGRAMS_DIR}/sub`, `x/${C4_DIAGRAMS_DIR}`])(
+    "T5: %s is outside the Concierge-writable folder → the export copy, which does not name the Concierge",
+    async (dir) => {
+      setupGitHub({ "model.likec4.json": zeroViewModel() }, { dir });
+      const res = await callGET(dir);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.diagnostics).toEqual([
+        { message: OTHER_DIR_COPY, line: 0, sourceFsPath: "model.likec4.json" },
+      ]);
+      expect(body.diagnostics[0].message).not.toContain("Concierge");
+    },
+  );
+
+  it("T5b: a model whose JSON is `null` → 200, no diagnostic, no misattributed read failure", async () => {
+    setupGitHub({ "model.likec4.json": "null" });
+    const res = await callGET();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.diagnostics).toEqual([
-      { message: OTHER_DIR_COPY, line: 0, sourceFsPath: "model.likec4.json" },
-    ]);
-    expect(body.diagnostics[0].message).not.toContain("Concierge");
+    expect(body.viewIds).toEqual([]);
+    expect(body.diagnostics).toEqual([]);
+    expect(mocks.mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -445,7 +476,10 @@ describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => 
     "a/../b",
     "a/./b",
     "x\u0001y",
-    "x y",
+    "x\u0000y",
+    "x\u007fy",
+    "x\u2028y",
+    "x\u2029y",
     "a?ref=main",
     "a#b",
     "a\\b",
@@ -479,12 +513,15 @@ describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => 
   });
 
   it("T7: the debounce key is the listing's canonical path, not the raw request dir", async () => {
-    setupGitHub({ "model.likec4.json": zeroViewModel() });
-    await callGET();
-    setupGitHub({ "model.likec4.json": zeroViewModel() });
-    await callGET(C4_DIAGRAMS_DIR);
+    // GitHub reports its own spelling of the path; the key must use it, so
+    // the fixture's listing path deliberately differs from the request dir.
+    setupGitHub(
+      { "model.likec4.json": zeroViewModel() },
+      { dir: "Product/Diagrams", listingDir: "product/diagrams" },
+    );
+    await callGET("Product/Diagrams");
     const keys = mocks.mockMirrorWarnWithDebounce.mock.calls.map((c) => c[2]);
-    expect(keys).toEqual([`ws-1:${CANONICAL_MODEL_PATH}`, `ws-1:${CANONICAL_MODEL_PATH}`]);
+    expect(keys).toEqual(["ws-1:knowledge-base/product/diagrams/model.likec4.json"]);
   });
 
   it("T8: the zero-view op slug occurs exactly once in the route source", async () => {
