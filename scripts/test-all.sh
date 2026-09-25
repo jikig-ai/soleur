@@ -3288,14 +3288,18 @@ if want_scripts; then
   # 2 of 17 sites for workflows and is the CORRECT rule here, which is why widening the sibling
   # would have meant each gate covering the other's blind spot badly.
   #
-  # The live run carries a BASELINE of 216 pre-existing findings (206 abort-risk, 10
-  # double-emit). The gate blocks NEW occurrences only; the baseline may shrink and must never
-  # grow. Burn-down is tracked in the learning that ships with this gate. Registering it
-  # baseline-free would have meant either a permanently red suite or a silently narrowed rule.
+  # The live run carries a BASELINE of 203 unique finding keys (S1/S2 plus the S3/S4
+  # sites the #8784 extension grandfathered). The gate blocks NEW occurrences only;
+  # the baseline may shrink and must never grow. Burn-down is tracked in the learning
+  # that ships with this gate. Registering it baseline-free would have meant either
+  # a permanently red suite or a silently narrowed rule.
   # #8392 twin registration: the fixture suite pins the DETECTOR, the -live row runs
   # it over the repo. Registering only one makes a lint decoration.
   run_suite "scripts/lint-anthropic-content-position" bash scripts/lint-anthropic-content-position.test.sh
   run_suite "scripts/lint-anthropic-content-position-live" python3 scripts/lint-anthropic-content-position.py
+  # lint-shell-capture-exit classes: S1 unprotected capture, S2 double-emit || echo
+  # guard, S3 dead status read (`cmd` then `rc=$?` under set -e -- #8784),
+  # S4 status-leaking `test && action` function tail.
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt

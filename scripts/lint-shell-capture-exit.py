@@ -54,12 +54,28 @@ repo's CI and flagged none of the three instances above.
 THE RULE
 --------
 Under errexit, flag a command substitution whose command is in NONZERO_IS_AN_ANSWER, unless
-the site explicitly decides what a non-zero exit means. Two finding classes:
+the site explicitly decides what a non-zero exit means. Four finding classes:
 
   S1 (abort)       an unprotected capture -- the script dies on a normal answer.
   S2 (double-emit) a capture protected by `|| echo <literal>` where the command already
                    PRINTS a value on failure (`grep -c`). The guard fires ON TOP of the
                    command's own output and the variable gets two lines.
+  S3 (dead read)   a status read (`rc=$?`, `rc="$?"`, `rc=${PIPESTATUS[n]}`,
+                   `local rc=$?`, `declare -i rc=$?`) whose command already ran armed:
+                   under `set -e` the command aborts BEFORE the read runs, so the read
+                   can only ever see 0. Judged at the COMMAND's line, not the read's --
+                   `cmd` then `set +e` then `rc=$?` is the mis-fix, not a fix.
+  S4 (leak tail)   a function's last statement is `(( expr )) && act` or
+                   `[ expr ]`/`[[ expr ]]`/`test expr && act` with no `||` arm: the
+                   false arm returns the TEST's non-zero status to a `set -e` caller,
+                   and a normal "nothing to report" outcome reads as a crash.
+
+S3 has TWO context arms and one fix. `cmd` followed by `rc=$?` is dead when the enclosing
+code runs under plain `set -e`, and FRAGILE when the enclosing function is only ever
+invoked in a condition/`||` context (errexit is suppressed for the whole call tree, so the
+read works today and breaks the day somebody calls the function plainly). The rewrite
+`if cmd; then rc=0; else rc=$?; fi` is correct in both, so flagging unconditionally is
+honest.
 
 WHAT IS DELIBERATELY NOT FLAGGED (each would be a false positive)
 ------------------------------------------------------------------
@@ -70,8 +86,52 @@ WHAT IS DELIBERATELY NOT FLAGGED (each would be a false positive)
                                      status, which masks the substitution's. Not an abort
                                      risk, so not an S1. (It hides real errors, but that is
                                      shellcheck SC2155's rule, not this gate's.)
+  * `cmd || rc=$?` / `cmd && rc=$?` -- the read is an operator's right operand. `||`
+                                     decides; `&&` short-circuits on failure, so the read
+                                     is SKIPPED, not dead. A different class entirely.
+  * `local rc=$?` at a function   -- the read sits at the head of a `name() {`/brace block
+     head / brace head               and captures the CALLER's status on purpose (trap
+                                     handlers, status passthrough).
+  * reads inside `$( )` / `( )`   -- the carry-status-out idiom; depth is tracked and
+                                     the read is inside a still-open group.
+  * bare `$?` in arguments or     -- `echo "rc=$?"`, `[[ $? -ne 0 ]]`, `exit $?`: real but
+     conditions                      noisier (`exit $?` is idiomatic); scoped out.
+  * bare `[[ cond ]]` tails       -- the predicate idiom; `&&` INSIDE the brackets is not
+                                     the leak.
+  * `test && act || fallback`     -- the `||` arm decides the status.
+  * `[[ c ]] && return|exit|break|continue` -- explicit status flow, not a leak.
+  * predicate-named functions     -- `is_*`, `has_*`, `check_*`, `assert_*`, `can_*`,
+                                     `should_*`, `need_*`, `same_*`, `valid*`, `*_ok`
+                                     contract to return the test's status.
   * anything under `set +e`       -- state is tracked, not assumed.
   * scripts with no `set -e`      -- the premise does not hold.
+
+HEURISTIC LIMITS (fail-silent direction, deliberately)
+------------------------------------------------------
+  * Function bodies are found by `name() {` / `function name` openers and `}`-ONLY
+    closers; a `cmd; }` sharing the tail's line is a miss, `name() (`
+    paren-bodied functions are never tracked for S4, and a `})`-form close is
+    never a pop (the function simply stays open).
+  * `depth` counts raw `(`/`)` characters; pathological paren text (case-arm heads
+    inside multi-line `$( )`, parens in literals) can skew it. Comments and heredoc
+    bodies are already blanked before counting.
+  * A `}`-ONLY line inside a function closes the innermost tracked `{` group; a
+    `{`-bearing line whose closer shares a line with other text can still mis-pop.
+    A `{`-grouped command as the read's antecedent (`{ cmd; rc=$?; }`) is a miss.
+  * A `set` line inside a multi-line SINGLE-quoted string (`bash -c 'set -e; ...'`)
+    still spoofs the state model -- quote context is checked per-line, not across
+    lines.
+  * The statement-segment model splits only on `;`. `x=pre$?` (literal prefix)
+    under-matches; a pipeline as the antecedent is reported whole (`a | b`) rather
+    than per-stage.
+  * `PIPESTATUS` reads after a pipeline are judged live when `set -o pipefail` is
+    not armed at the command's line -- the pipeline's status is then its last
+    stage's, so earlier stages' failures never trip errexit.
+  * Function tracking keys on `name() {`-shaped openers; `f()\n{` (brace on the
+    next line) and `};`-form group closers outside `}`-only lines are misses.
+  * A multi-line compound's LAST line (`fi`, `done`, `esac`) stays protected --
+    the model tracks lines, not blocks; `if c; then cmd; fi` on ONE line is
+    flagged correctly while the three-line form is a documented miss.
 """
 
 from __future__ import annotations
@@ -108,18 +168,66 @@ PRINTS_ON_FAILURE_RE = re.compile(r"\bgrep\s+(?:-\w*\s+)*-\w*c|\bgrep\s+(?:-\w*\
 ASSIGN_SUBST_RE = re.compile(
     r"""(?P<decl>\b(?:local|export|declare|readonly|typeset)\s+(?:-\w+\s+)*)?"""
     r"""(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?="""
-    r"""(?P<q>["']?)\$\((?P<body>.*)\)(?P=q)(?P<tail>\s*(?:\|\||&&)\s*\S.*)?\s*$"""
+    r"""(?P<q>["']?)\$\((?P<body>.*)\)(?P=q)(?P<tail>\s*(?:\|\||&&|;)\s*\S.*)?\s*;?\s*$"""
 )
 
 SET_RE = re.compile(r"^\s*set\s+(.*)$")
 CONTROL_PREFIX_RE = re.compile(
-    r"^\s*(if|elif|while|until|then|else|fi|do|done|case|esac|return|local\s+-r)\b"
+    r"^\s*(if|elif|while|until|then|else|fi|do|done|case|esac|for|select"
+    r"|return|exit|break|continue|local\s+-r)\b"
 )
 HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 # A decision attached to the OUTER command: `... || true`, `|| :`, `|| x=0`, `|| continue`.
 OUTER_DECIDES_RE = re.compile(r"\|\|")
 # `|| echo <literal>` / `|| printf <literal>` -- adds a value rather than choosing one.
 ADDS_A_VALUE_RE = re.compile(r"\|\|\s*(?:echo|printf)\b")
+
+# A read of an exit status, captured into a variable. The VALUE forms: `$?`, `${?}`,
+# `$PIPESTATUS`, `${PIPESTATUS[n]}`, each optionally DOUBLE-quoted. The NAME side
+# covers indexed and attributed forms alike: `rc=$?`, `rc="$?"`, `rc[0]=$?`,
+# `declare -i rc=$?`, `local rc=$?`. A SINGLE-quoted value (`rc='$?'`) is a literal
+# two-character string, not a read, and is correctly not matched.
+#
+# This is the ASSIGNMENT anchor only. Bare in-argument reads (`echo "rc=$?"`,
+# `[[ $? -ne 0 ]]`, `exit $?`) are real but noisier (`exit $?` is idiomatic) and stay
+# scoped out -- see the docstring's WHAT IS DELIBERATELY NOT FLAGGED.
+_STATUS = r'"?(?:\$\?|\$\{\?\}|\$\{PIPESTATUS\[[@*a-zA-Z0-9_]+\]\}|\$PIPESTATUS\b)"?'
+READ_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?=" + _STATUS)
+
+# A `local`/`declare`/`typeset`/`readonly`/`export` prefix on the read itself -- a
+# modifier of the assignment, not a command whose status the read is about.
+DECL_PREFIX_RE = re.compile(
+    r"^(?:local|declare|typeset|readonly|export)(?:\s+-[A-Za-z]+)*\s*$"
+)
+
+# A function opener: `name() {`, `function name {`, `function name() {`. The group
+# carries the function name for S4's predicate-name exemption.
+FUNC_OPEN_RE = re.compile(
+    r"^\s*(?:(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)"
+    r"|function\s+([A-Za-z_][A-Za-z0-9_]*))\s*\{"
+)
+
+# A line that is ONLY a closing brace -- the S4 function-body heuristic's closer. A
+# `cmd; }` sharing the tail's line is a documented miss (see the docstring).
+BRACE_CLOSE_RE = re.compile(r"^}\s*$")
+
+# The S4 tail shapes: a test builtin whose `&&` sits STRICTLY OUTSIDE the test. `[[ a
+# && b ]]` alone does not match -- the leak is the unguarded `&&` between the test and
+# the action, not a conjunction inside the predicate.
+S4_TAIL_RES = (
+    re.compile(r"^\(\(.*\)\)\s*&&\s*(?P<act>.+)$"),        # (( expr )) && act
+    re.compile(r"^\[\[.*\]\]\s*&&\s*(?P<act>.+)$"),       # [[ expr ]] && act
+    re.compile(r"^\[(?!\[)[^\]]*\]\s*&&\s*(?P<act>.+)$"),  # [ expr ] && act
+    re.compile(r"^test\s+.*&&\s*(?P<act>.+)$"),            # test expr && act
+)
+
+# Actions that make a tail an explicit status flow rather than a leak.
+S4_FLOW_WORDS = {"return", "exit", "break", "continue"}
+
+# Names declaring the function's status IS the answer -- a test tail is the contract.
+PREDICATE_NAME_RE = re.compile(
+    r"^(?:is_|has_|check_|assert_|can_|should_|need_|same_|valid)|_ok$"
+)
 
 
 def strip_comment_lines(lines: list[str]) -> list[str]:
@@ -163,23 +271,133 @@ def join_continuations(lines: list[str]) -> list[tuple[int, str]]:
     return out
 
 
-def errexit_after(args: str, current: bool) -> bool:
-    """Apply a `set` statement's tokens to the current errexit state."""
-    state = current
-    for tok in args.split():
+def _strip_comment_tail(args: str) -> str:
+    """Drop an unquoted `# ...` tail from a `set` argument string.
+
+    `set -uo pipefail  # deliberately NOT -e` used to tokenize the `-e` inside the
+    comment as an ARGUMENT and phantom-arm the errexit model for the rest of the file.
+    A `#` outside quotes starts a comment only at a word boundary, so the tail is
+    data, not flags.
+    """
+    in_single = in_double = False
+    for i, ch in enumerate(args):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif (
+            ch == "#" and not in_single and not in_double
+            and (i == 0 or args[i - 1] in " \t")
+        ):
+            return args[:i]
+    return args
+
+
+def set_verdicts(args: str) -> dict[str, bool]:
+    """Option deltas from a `set` line: `{name: True}` for CLEARED, `{name: False}`
+    for ARMED -- `set +e` -> `{'errexit': True}`, `set -o pipefail` ->
+    `{'pipefail': False}`.
+
+    Compound forms are matched by token, never by literal string: `set -euo pipefail`
+    re-arms errexit AND pipefail, `set +o errexit` clears, and a cluster-FINAL `o`
+    consumes the NEXT token as the option name (`set -o errexit`, `set -euo
+    pipefail`) rather than being parsed as a cluster member. Tokens after `--` are
+    positional parameters, not options.
+    """
+    out: dict[str, bool] = {}
+    toks = _strip_comment_tail(args).split()
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if tok == "--":
+            break
         if tok.startswith("--"):
+            i += 1
             continue
-        if tok.startswith("-") and not tok.startswith("-o") and "e" in tok[1:]:
-            state = True
-        elif tok.startswith("+") and "e" in tok[1:]:
-            state = False
-        elif tok == "-o":
+        if tok.startswith(("-", "+")):
+            sign = tok.startswith("+")
+            cluster = tok[1:]
+            opt_i = cluster.find("o")
+            if opt_i != -1:
+                # `o` consumes the REST OF THE WORD (or the next token, when it
+                # is the cluster's last letter) as the option name:
+                # `set -o pipefail`, `set -euo pipefail`, `set -opipefail`,
+                # `set -onounset` all parse this way -- only the name field
+                # matters; the leftover cluster still carries `e` if present.
+                name = cluster[opt_i + 1:] or (toks[i + 1] if i + 1 < len(toks) else "")
+                if name in ("errexit", "pipefail"):
+                    out[name] = sign
+                i += 1 if cluster[opt_i + 1:] else 2
+                cluster = cluster[:opt_i]
+            else:
+                i += 1
+            if "e" in cluster:
+                out["errexit"] = sign
             continue
-    if re.search(r"(?<![\w-])-o\s+errexit", args):
-        state = True
-    if re.search(r"(?<![\w-])\+o\s+errexit", args):
-        state = False
-    return state
+        i += 1
+    return out
+
+
+def set_errexit_verdict(args: str) -> bool | None:
+    """True if this `set` CLEARS -e, False if it ARMS it, None if it says nothing."""
+    return set_verdicts(args).get("errexit")
+
+
+def _unquoted(text: str) -> str:
+    """Quoted spans blanked, so `||`/`&&`/`|` inside `'...'`/`"..."` are not
+    read as operators. A `\\` inside double quotes escapes the next char; a
+    lone unclosed quote blanks to EOL -- both documented limits."""
+    out = []
+    i = 0
+    in_s = in_d = False
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and in_d and i + 1 < len(text):
+            out.append(" ")
+            i += 2
+            continue
+        if ch == "'" and not in_d:
+            in_s = not in_s
+            out.append("'")
+        elif ch == '"' and not in_s:
+            in_d = not in_d
+            out.append('"')
+        elif in_s or in_d:
+            out.append(" ")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _segments(text: str, start_depth: int = 0) -> list[tuple[str, int]]:
+    """`;`-separated statement segments with the paren depth at each segment's
+    START. `;` is the only separator: `|`, `||`, `&&`, `&` belong to the command
+    (pipeline stages, operands, `2>&1` redirects), never to boundaries.
+    `start_depth` is the outer depth the text begins under, so `;` inside a
+    `$(`/`(` group still records depth > 0 for the segments it splits into.
+    """
+    segs: list[tuple[str, int]] = []
+    d = start_depth
+    seg_depth = d
+    cur: list[str] = []
+    for ch in text:
+        if ch == ";":
+            seg = "".join(cur).strip()
+            if seg:
+                segs.append((seg, seg_depth))
+            cur = []
+            seg_depth = d
+            continue
+        if ch == "(":
+            d += 1
+        elif ch == ")":
+            d = max(0, d - 1)
+        cur.append(ch)
+    tail = "".join(cur).strip()
+    if tail:
+        segs.append((tail, seg_depth))
+    return segs
 
 
 def substituted_commands(body: str) -> list[str]:
@@ -191,7 +409,8 @@ def substituted_commands(body: str) -> list[str]:
     one does) makes every stage load-bearing.
     """
     # Anything after a `||` or `&&` is a DECISION, not the question being asked.
-    head = re.split(r"\|\||&&", body)[0]
+    # Operator chars inside quotes are not operators: `grep 'a||b'` is one stage.
+    head = re.split(r"\|\||&&", _unquoted(body))[0]
     return [seg.strip() for seg in head.split("|") if seg.strip()]
 
 
@@ -204,61 +423,360 @@ def first_word(cmd: str) -> str:
     return ""
 
 
+def is_protected(cmd: str) -> bool:
+    """Whether this command's failure is already handled, so errexit never fires on it."""
+    c = cmd.strip()
+    if not c:
+        return True
+    if CONTROL_PREFIX_RE.match(c) and (
+        ";" not in c or not re.search(r"\b(fi|done|esac)\b", c)
+    ):
+        return True
+    # A `;`-containing control cand with no closer is a condition HEAD running
+    # mid-construct (`if c; then`, `for x in y; do`) -- protected. One WITH a
+    # closer is a whole compound (`if c; then cmd; fi`, `while c; do cmd; done`)
+    # whose armed arm can still abort -- NOT protected.
+    # `!`-negated commands are exempt from errexit by POSIX -- a real protection.
+    if c.startswith("!"):
+        return True
+    # DELIBERATELY no `||`/`&&` substring test here, ported from the sibling gate: under
+    # errexit `a && b` DOES abort when `b` fails, so only left operands are exempt, and an
+    # operator inside a quoted argument (`bash -c "a && b"`) has no bearing on this shell
+    # at all. The real `cmd || rc=$?` idiom is judged precisely at the read site below,
+    # which is where the protection lives -- a property of the read's position, not of an
+    # operator somewhere in the command.
+    return False
+
+
+def _s3_exempt_command(cmd: str, depth: int = 0) -> bool:
+    """Shell-specific S3 exemptions beyond is_protected().
+
+    The resolved "command" is a composite boundary, so the read is not about it:
+
+      * a function opener (`name() {`, `function name`) -- a read just inside the body
+        captures the CALLER's status on purpose (`local rc=$?` at a function head, e.g.
+        a trap handler reading the status it was invoked with);
+      * a bare `{`/`}` -- group open or composite close: the read sees the composite's
+        or the caller's status;
+      * a command ending in `{` (`cmd || {`, `if c; then {`) -- the read opens the
+        compound block and sees the status that SELECTED it: `cmd || { rc=$?` is the
+        protection idiom itself, not a leak;
+      * a case-arm head (`start)`, `stop|restart)`, `*)`) -- an unmatched close-paren,
+        not a command. The paren-count check keeps `x=$(cmd)` (balanced) out of this,
+        and the depth gate keeps a `$(` continuation tail (`bar)` on the line that
+        closes a multi-line substitution) from masquerading as a case arm.
+      * `trap`/`eval` are NOT exemptions here: reads INSIDE their string arguments
+        are already scoped out by the read-side quote checks; `eval "$script"; rc=$?`
+        is a real dead read.
+    """
+    c = cmd.strip()
+    if FUNC_OPEN_RE.match(c):
+        return True
+    if c.startswith(("{", "}")) or c.endswith("{"):
+        return True
+    if depth == 0 and re.match(r"^\S+\)", c) and c.count("(") < c.count(")"):
+        return True
+    return False
+
+
+def _s4_check(
+    tail: str, lineno: int, func_name: str, findings: list[tuple[int, str, str]]
+) -> None:
+    """Append an S4 finding if `tail` is a status-leaking `test-builtin && action`.
+
+    Silent arms, in order: a `||` in the ACTION decides the tail's status (a `||`
+    INSIDE the test predicate does not); the action being `return`/`exit`/`break`/
+    `continue` is explicit status flow; and a predicate-named function (`is_*`,
+    `check_*`, `*_ok`, ...) contracts to return the test's status.
+    """
+    for rex in S4_TAIL_RES:
+        m = rex.match(tail)
+        if not m:
+            continue
+        act = m.group("act").strip()
+        if "||" in _unquoted(act):
+            return  # a `||` arm decides; inside act's quotes it is not an arm
+        toks = act.split()
+        first = toks[0].rstrip(";") if toks else ""
+        if first == "{" and len(toks) > 1:
+            first = toks[1].rstrip(";")
+        if first in S4_FLOW_WORDS or PREDICATE_NAME_RE.search(func_name):
+            return
+        findings.append((lineno, "S4", tail))
+        return
+
+
 def scan(path: str) -> list[tuple[int, str, str]]:
-    """Return (line, code, logical_line) findings for one script."""
+    """Return (line, code, logical_line) findings for one script.
+
+    Two passes, ported from lint-workflow-errexit-capture.py's scan_body(): pass 1
+    computes the errexit state and unclosed-paren depth BEFORE each logical line;
+    pass 2 judges each construct against the state at ITS line -- the state at the
+    COMMAND's line, not at the read's, because `cmd` then `set +e` then `rc=$?` is the
+    canonical mis-fix and judging at the read would make it invisible.
+    """
     try:
         raw = open(path, encoding="utf-8", errors="replace").read().split("\n")
     except OSError:
         return []
 
     lines = drop_heredocs(strip_comment_lines(raw))
-    findings: list[tuple[int, str, str]] = []
-    errexit = False
+    logical = join_continuations(lines)
 
-    for lineno, logical in join_continuations(lines):
-        stripped = logical.strip()
+    # --- pass 1: errexit/pipefail state and paren depth before each line ------
+    state: list[bool] = []
+    pipefail_at: list[bool] = []
+    depth_at: list[int] = []
+    errexit = False
+    pipefail = False
+    depth = 0  # unclosed `(` -- a `set` inside `$( )`/`( )` is scoped to the subshell
+    for _idx, text in logical:
+        state.append(errexit)
+        pipefail_at.append(pipefail)
+        depth_at.append(depth)
+        # `set` verdicts are per-SEGMENT, not just line-initial: `foo; set -e`
+        # arms like a line-initial set, while a `set` inside `$( )`/`( )` scopes
+        # to the group -- the same depth rule for clears AND arms.
+        for seg, sdep in _segments(text, depth):
+            if sdep != 0:
+                continue
+            m = SET_RE.match(seg)
+            if not m:
+                continue
+            v = set_verdicts(m.group(1))
+            ev = v.get("errexit")
+            if ev is True:
+                errexit = False
+            elif ev is False:
+                errexit = True
+            pv = v.get("pipefail")
+            if pv is True:
+                pipefail = False
+            elif pv is False:
+                pipefail = True
+        depth += text.count("(") - text.count(")")
+        if depth < 0:
+            depth = 0
+
+    # --- pass 2: S1/S2 captures, S3 dead reads, S4 leaking tails ---------------
+    findings: list[tuple[int, str, str]] = []
+    s1s2_positions: set[int] = set()  # logical positions that already emitted S1/S2
+    # (name, open_pos, inner_group_depth, same-line body prefix)
+    func_stack: list[tuple[str, int, int, str]] = []
+    last_nonempty: int | None = None
+
+    for pos, (lineno, text) in enumerate(logical):
+        stripped = text.strip()
         if not stripped:
             continue
 
-        m_set = SET_RE.match(logical)
-        if m_set:
-            errexit = errexit_after(m_set.group(1), errexit)
+        if SET_RE.match(text):
+            last_nonempty = pos
             continue
 
-        if not errexit:
-            continue
-        if CONTROL_PREFIX_RE.match(logical):
-            continue
+        # --- function-boundary tracking for S4 --------------------------------
+        # This bookkeeping is ADDITIVE: opener and group lines still run the
+        # S1/S2/S3 checks below (`f() { x=$(grep p f); }` is an S1 on any tree).
+        fm = FUNC_OPEN_RE.match(stripped)
+        if fm:
+            func_name = fm.group(1) or fm.group(2)
+            inner = stripped[fm.end():]
+            close = inner.rfind("}")
+            if close != -1:
+                # `name() { ...; }` on one line: the tail is the last `;`-separated
+                # segment before the closer. `;` inside the segment text is a
+                # documented heuristic limit.
+                segments = [s for s in inner[:close].split(";") if s.strip()]
+                if segments and state[pos]:
+                    _s4_check(segments[-1].strip(), lineno, func_name, findings)
+            else:
+                func_stack.append((func_name, pos, 0, inner.strip()))
+        elif func_stack and stripped.endswith("{"):
+            # An inner `{` group opener inside the body (`cmd || {`, a bare `{`):
+            # its `}` closes the GROUP, not the function.
+            n, o, g, s0 = func_stack[-1]
+            func_stack[-1] = (n, o, g + 1, s0)
+        elif BRACE_CLOSE_RE.match(stripped) and func_stack:
+            func_name, open_pos, groups, open_body = func_stack[-1]
+            if groups > 0:
+                func_stack[-1] = (func_name, open_pos, groups - 1, open_body)
+            else:
+                func_stack.pop()
+                # The tail is the last logical line before this `}` -- judged against
+                # the state at ITS line, so a `set +e` region disarms it honestly.
+                if last_nonempty is not None and state[last_nonempty]:
+                    t_lineno, t_text = logical[last_nonempty]
+                    tail = t_text.strip()
+                    if last_nonempty == open_pos:
+                        # Two-line `f() { tail` form: the tail shares the opener
+                        # line; check the part AFTER the `{`.
+                        tail = open_body
+                    _s4_check(tail, t_lineno, func_name, findings)
 
-        m = ASSIGN_SUBST_RE.search(stripped)
-        if not m:
-            continue
+        # --- S1/S2: the capture itself must run armed --------------------------
+        if state[pos] and not CONTROL_PREFIX_RE.match(text):
+            m = ASSIGN_SUBST_RE.search(stripped)
+            if m:
+                body = m.group("body")
+                stages = substituted_commands(body)
+                if any(first_word(s) in NONZERO_IS_AN_ANSWER for s in stages):
+                    # S2 first: a `|| echo`-style guard on a command that already prints
+                    # on failure is a WRONG VALUE, and reporting it as a mere abort
+                    # risk would misname the defect.
+                    adds_value = ADDS_A_VALUE_RE.search(stripped)
+                    if adds_value and PRINTS_ON_FAILURE_RE.search(body):
+                        findings.append((lineno, "S2", stripped))
+                        s1s2_positions.add(pos)
+                    # `local`/`export`/... return their OWN status, so the substitution
+                    # cannot abort. `... || <anything>` decides; `$( ... || ... )`
+                    # decides inside.
+                    elif not m.group("decl") and not (
+                        OUTER_DECIDES_RE.search(stripped[m.end("body"):])
+                        or re.search(r"\|\||&&", _unquoted(body))
+                    ):
+                        findings.append((lineno, "S1", stripped))
+                        s1s2_positions.add(pos)
 
-        body = m.group("body")
-        stages = substituted_commands(body)
-        if not any(first_word(s) in NONZERO_IS_AN_ANSWER for s in stages):
-            continue
+        # --- S3: a status read whose command already ran armed -----------------
+        # EVERY read on the line is evaluated -- `echo rc=$?; rc2=$?` skips the
+        # first (arg-position) and still judges the second.
+        for anchor in READ_RE.finditer(stripped):
+            before = stripped[: anchor.start()].rstrip()
+            # The read's OWN statement context: the text between the last `;` and
+            # the read itself. Only `;` splits statements here -- `|`, `||`, `&&`
+            # and `&` belong to the command being resolved (a pipeline, an
+            # operand, a `2>&1` redirect), not to statement boundaries.
+            region = before.split(";")[-1].strip()
 
-        # S2 first: a `|| echo`-style guard on a command that already prints on failure is a
-        # WRONG VALUE, and reporting it as a mere abort risk would misname the defect.
-        adds_value = ADDS_A_VALUE_RE.search(stripped)
-        if adds_value and PRINTS_ON_FAILURE_RE.search(body):
-            findings.append((lineno, "S2", stripped))
-            continue
+            if "||" in region or "&&" in region:
+                # The canonical `cmd || rc=$?` protection idiom and the documented
+                # `cmd && rc=$?` exclusion: the read is the right-hand operand of
+                # the command it reads. A `||`/`&&` BEFORE the last `;` is an
+                # earlier statement (`a || b; rc=$?` -- still dead).
+                continue
+            if before.endswith("{"):
+                # The read sits at a brace/function head on this same line
+                # (`f() { rc=$?`, `{ rc=$?`) -- caller-status idiom. `${var}` and
+                # `{a,b}` mid-line are not brace heads.
+                continue
+            q = _unquoted(before)
+            if (
+                q.count("'") % 2 == 1 or q.count('"') % 2 == 1
+                or q.count("(") > q.count(")")
+            ):
+                # The read sits inside an unclosed QUOTED STRING or `$( )`/`( )` group
+                # opened on this same line: `trap 'rc=$?; ...'`, `bash -c '...'`,
+                # `echo "rc=$?"`, `x=$(cmd; rc=$?; echo $rc)`. It is evaluated by a
+                # different context -- the trap's fire-time shell, the -c'd
+                # interpreter, the substitution -- never by this line's errexit.
+                # Quoted spans are blanked first so `don't` / `"("` cannot spoof
+                # the parity counts.
+                continue
+            if (
+                region
+                and not DECL_PREFIX_RE.match(region)
+                and not SET_RE.match(region)
+            ):
+                # A word between the last `;` and the read that is not a
+                # declaration prefix or a `set` statement means the read is an
+                # ARGUMENT of an enclosing command (`echo rc=$?`, `env rc=$? x`)
+                # or a control word's arm (`then`, `else`) -- the
+                # bare-in-arguments class, deliberately scoped out. `set +e;
+                # rc=$?` is NOT an argument -- it resolves through the segments.
+                continue
 
-        # `local`/`export`/... return their OWN status, so the substitution cannot abort.
-        if m.group("decl"):
-            continue
-        # `... || <anything>` decides; `$( ... || ... )` decides inside.
-        if OUTER_DECIDES_RE.search(stripped[m.end("body"):]) or re.search(r"\|\||&&", body):
-            continue
+            # Whose exit status is this? Resolve the antecedent: the last
+            # non-`set` statement segment before the read on this line,
+            # else the previous non-`set` logical line (back-walk). `set`
+            # verdicts fold FORWARD through the segments so `set +e;
+            # out=$(cmd); rc=$?` is judged disarmed -- while `cmd; set +e;
+            # rc=$?` still fires, because the clear ran AFTER the armed
+            # command. A `set` segment inside `$(`/`(` scopes to the group.
+            segs = _segments(before)
+            seg_state: list[bool] = [state[pos]] * len(segs)
+            run_state = state[pos]
+            clear_idx = -1  # last segment index holding a `set +e` clear
+            last_idx = -1
+            for idx, (seg, sdep) in enumerate(segs):
+                m_seg_set = SET_RE.match(seg)
+                if m_seg_set:
+                    ev = set_verdicts(m_seg_set.group(1)).get("errexit")
+                    if sdep == 0 and depth_at[pos] == 0:
+                        if ev is True:
+                            run_state = False
+                            clear_idx = idx
+                        elif ev is False:
+                            run_state = True
+                    continue
+                seg_state[idx] = run_state
+                last_idx = idx
 
-        findings.append((lineno, "S1", stripped))
+            cmd, cmd_pos, cmd_state = None, None, run_state
+            if last_idx >= 0:
+                # Drop trailing declaration prefixes and `set` statements --
+                # they modify the READ (`cmd; local rc=$?` resolves `cmd`),
+                # they are never the antecedent.
+                while last_idx >= 0 and (
+                    DECL_PREFIX_RE.match(segs[last_idx][0])
+                    or SET_RE.match(segs[last_idx][0])
+                ):
+                    last_idx -= 1
+            if last_idx >= 0:
+                cand = segs[last_idx][0]
+                # Rejoin fragments the `;` split cut open inside `$(`/`(`:
+                # `x=$(a; b); rc=$?` leaves `b)` as a phantom segment.
+                while last_idx > 0 and cand.count(")") > cand.count("("):
+                    last_idx -= 1
+                    cand = segs[last_idx][0] + ";" + cand
+                cmd, cmd_pos, cmd_state = cand, pos, seg_state[last_idx]
+            cleared_after = clear_idx > last_idx
+            if cmd is None:
+                for back in range(pos - 1, -1, -1):
+                    cand = logical[back][1].strip()
+                    if not cand or SET_RE.match(cand):
+                        continue
+                    cmd, cmd_pos, cmd_state = cand, back, state[back]
+                    break
+
+            if (
+                cmd is not None
+                and cmd_state               # the COMMAND ran armed -- judged at its line
+                and depth_at[pos] == 0      # the read is not inside an open `$( )`/`( )`
+                and cmd_pos not in s1s2_positions  # same defect, one report (S1/S2 won)
+                and not is_protected(cmd)
+                and not _s3_exempt_command(cmd, depth_at[cmd_pos])
+                # A PIPESTATUS read is live unless pipefail is armed: without
+                # it a pipeline's status is its LAST stage's, so the earlier
+                # stages' failures never trip errexit and the read sees them.
+                and not (
+                    "PIPESTATUS" in stripped
+                    and "|" in cmd
+                    and not pipefail_at[cmd_pos]
+                )
+            ):
+                note = ""
+                if cleared_after or (
+                    cmd_pos != pos and any(
+                        SET_RE.match(logical[b][1].strip())
+                        and set_errexit_verdict(
+                            SET_RE.match(logical[b][1].strip()).group(1)
+                        ) is True
+                        for b in range(cmd_pos + 1, pos)
+                    )
+                ):
+                    note = ("   [errexit cleared AFTER this command, not before it"
+                            " -- the command already ran armed]")
+                findings.append(
+                    (lineno, "S3", cmd.strip() + note + "   << read: " + stripped)
+                )
+                break  # one S3 finding per line is enough
+
+        last_nonempty = pos
 
     return findings
 
 
-def collect_targets(root: str, explicit: list[str]) -> list[str]:
+def collect_targets(root: str, explicit: list[str]) -> "list[str] | None":
     if explicit:
         return explicit
     try:
@@ -267,7 +785,7 @@ def collect_targets(root: str, explicit: list[str]) -> list[str]:
             capture_output=True, text=True, check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError):
-        return []
+        return None
     return [os.path.join(root, p) for p in out.split("\0") if p]
 
 
@@ -301,6 +819,13 @@ def main() -> int:
     args = ap.parse_args()
 
     targets = collect_targets(args.root, args.paths)
+    if targets is None:
+        # Collection failed (bad --root, no git). Report a failure, not an
+        # empty scan -- a silently-green gate that never looked at a file is
+        # the worst shape of green.
+        print("lint-shell-capture-exit: could not enumerate scripts under "
+              f"{args.root!r} (git ls-files failed)", file=sys.stderr)
+        return 2
     if not targets:
         print("lint-shell-capture-exit: no shell scripts to scan.")
         return 0
@@ -314,8 +839,17 @@ def main() -> int:
         if not args.baseline:
             print("--write-baseline requires --baseline PATH", file=sys.stderr)
             return 2
+        if args.paths:
+            # Baseline regeneration must see the WHOLE tree -- a subset run
+            # would write only those files' keys and silently truncate the
+            # grandfathered set. Same refusal the sibling gate enforces.
+            print("--write-baseline refuses explicit paths (would truncate "
+                  "the baseline)", file=sys.stderr)
+            return 2
+        # set() dedup: an identical line at two sites in one file is ONE key --
+        # duplicates would bloat the count and read as new entries on every diff.
         keys = sorted(
-            fingerprint(os.path.relpath(p, args.root), c, t) for p, _, c, t in findings
+            {fingerprint(os.path.relpath(p, args.root), c, t) for p, _, c, t in findings}
         )
         with open(args.baseline, "w", encoding="utf-8") as fh:
             fh.write(
@@ -351,10 +885,21 @@ def main() -> int:
             why = ("captures a command whose non-zero exit is a normal answer; under `set -e` "
                    "the script dies on 'no match'")
             fix = "decide what the exit means: `x=$(cmd) || true`, `x=$(cmd || echo)`, or `if x=$(cmd); then`"
-        else:
+        elif code == "S2":
             why = ("`grep -c` PRINTS `0` and exits 1, so this `|| echo` appends a SECOND value "
                    "-- the variable gets two lines")
             fix = "drop the `|| echo <literal>` and use `|| true`, which keeps the `0` the command already printed"
+        elif code == "S3":
+            why = ("this status read can never see a failure: under `set -e` the command "
+                   "above aborts the script BEFORE the read runs -- it is dead code")
+            fix = ("decide the status explicitly: `if cmd; then rc=0; else rc=$?; fi`, or "
+                   "protect the command itself with `cmd || rc=$?`")
+        else:
+            why = ("this `test && action` is the function's last statement: on the false arm "
+                   "the function returns the TEST's non-zero status, so a `set -e` caller "
+                   "dies on a normal 'nothing to report' outcome")
+            fix = ("give the tail an explicit status: append `|| true` (or `|| :`), or end "
+                   "the function with a real `return`")
         print(f"{rel}:{lineno}: [{code}] {why}")
         print(f"    {text}")
         print(f"    fix: {fix}")
