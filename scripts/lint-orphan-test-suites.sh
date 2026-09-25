@@ -248,7 +248,7 @@ sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Z
 # buys is that the guarantee stops depending on the ORDER of two blocks in a 2400-line file —
 # the same reason `-u TEST_GROUP` is here rather than trusting the caller.
 globs_rc=0
-env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
+env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
 globs_n=$(wc -l < "$WORK/globs" | tr -d ' ')
 if (( globs_rc != 0 )) || (( globs_n < 1 )); then
   echo "ERROR: 'bash scripts/test-all.sh --print-suite-globs' exited ${globs_rc} and printed ${globs_n} pattern(s) -- this linter derives the auto-discovery surface from that flag, so without it every glob-registered suite would be reported as an orphan. Restore the flag rather than re-copying the patterns here." >&2
@@ -878,7 +878,7 @@ else
   # the child enumerates, and the session-state handler must never serialize on
   # the advisory lock this process's own parent holds.
   aff_enum_rc=0
-  env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+  env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S SOLEUR_DISABLE_SESSION_STATE=1 \
     bash "$RUNNER" --enumerate-commands > "$WORK/aff_enum" 2>/dev/null || aff_enum_rc=$?
   awk -F'\t' '$1=="SUITE_COMMAND"{print $2}' "$WORK/aff_enum" \
     | LC_ALL=C sort -u > "$WORK/aff_runnable"
@@ -891,6 +891,10 @@ else
   aff_label_n=$(wc -l < "$WORK/aff_labels" | tr -d ' ')
   if (( aff_enum_rc != 0 )) || (( aff_label_n < 1 )); then
     echo "ERROR: 'bash scripts/test-all.sh --enumerate-commands' exited ${aff_enum_rc} and emitted ${aff_label_n} registrations -- the census cannot derive the live floor, so every check below would certify a subset." >&2
+    # `|| true` is load-bearing: a child that died by signal (SIGKILL, OOM)
+    # emits no ERROR/FATAL line — grep's rc=1 under set -o pipefail would
+    # abort the linter before fails++ and truncate every check below.
+    grep -E '^(ERROR|FATAL):' "$WORK/aff_enum" | sed 's/^/    child: /' >&2 || true
     fails=$((fails + 1))
   fi
 
@@ -1063,10 +1067,11 @@ else
   # Fail-closed if the flag is gone (same contract as --print-suite-globs); RED
   # on any runnable registration the runner could not classify.
   aff_set_rc=0
-  env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+  env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S SOLEUR_DISABLE_SESSION_STATE=1 \
     bash "$RUNNER" --affected --print-affected-set > "$WORK/aff_set" 2>/dev/null || aff_set_rc=$?
   if (( aff_set_rc != 0 )); then
     echo "ERROR: 'bash scripts/test-all.sh --affected --print-affected-set' exited ${aff_set_rc} -- the census derives classification from that flag's receipts; without them every check below is vacuous. Restore the flag rather than re-deriving here." >&2
+    grep -E '^(ERROR|FATAL):' "$WORK/aff_set" | sed 's/^/    child: /' >&2 || true
     fails=$((fails + 1))
   else
     awk -F'\t' '$1=="AFFECTED_CLASS"{print $2"\t"$3}' "$WORK/aff_set" \

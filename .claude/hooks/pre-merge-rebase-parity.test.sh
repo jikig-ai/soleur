@@ -47,6 +47,11 @@ set -uo pipefail
 # kept writing the real ledger. See the helper header.
 . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 
+# pre-merge-rebase.sh now calls `gh pr view <N>` from the fixture's checkout
+# (#8778). With a local-path origin gh fails fast offline; GH_REPO/GH_HOST would
+# make it skip the remotes and query the real API with these fixture PR numbers.
+unset GH_REPO GH_HOST
+
 # Refuse before writing, rather than let an empty operand retarget a git write at whatever
 # repository the caller happens to be standing in. `git -C ""` does NOT error — it silently
 # operates on the current directory, which under TEST_GROUP=scripts is the developer's live
