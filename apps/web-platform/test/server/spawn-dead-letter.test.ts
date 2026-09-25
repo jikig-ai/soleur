@@ -259,3 +259,51 @@ describe("reportSpawnPersistFailed", () => {
     expect(JSON.stringify(captureMessageSpy.mock.calls)).not.toContain(FOUNDER_ID);
   });
 });
+
+// #8803 — the lifecycle settle path appends its lifecycle to the grouping text,
+// so a crash, a cancel, a timeout and a settle-step failure are separate Sentry
+// issues with separate throttles. The in-body path passes none and keeps the
+// legacy text byte-for-byte (existing issues keep grouping).
+describe("spawnDeadLetterMessage / lifecycle suffix (#8803)", () => {
+  it("is byte-identical to the legacy text with no lifecycle", async () => {
+    const { spawnDeadLetterMessage } = await load();
+    expect(spawnDeadLetterMessage("leader_tool_invalid", CLASS)).toBe(
+      `agent-on-spawn deadlettered: leader_tool_invalid [${CLASS}]`,
+    );
+  });
+
+  it("yields a distinct string per lifecycle", async () => {
+    const { spawnDeadLetterMessage } = await load();
+    const lifecycles = ["failed", "cancelled", "timed_out", "settle_failed"] as const;
+    const messages = lifecycles.map((l) =>
+      spawnDeadLetterMessage("leader_internal_error", CLASS, l),
+    );
+    expect(new Set(messages).size).toBe(lifecycles.length);
+    lifecycles.forEach((l, i) => {
+      expect(messages[i]).toBe(
+        `agent-on-spawn deadlettered: leader_internal_error [${CLASS}] (${l})`,
+      );
+    });
+  });
+
+  it("reportSpawnDeadLetter sends the suffixed message at error level, lifecycle in extra, tags unchanged", async () => {
+    const { reportSpawnDeadLetter, SPAWN_DEAD_LETTER_FEATURE, SPAWN_DEAD_LETTER_OP } = await load();
+    reportSpawnDeadLetter({
+      reason: "leader_internal_error",
+      actionClass: CLASS,
+      err: new Error("function cancelled"),
+      lifecycle: "timed_out",
+      extra: { founderId: FOUNDER_ID },
+    });
+    const [message, ctx] = onlyMessage();
+    expect(message).toBe(`agent-on-spawn deadlettered: leader_internal_error [${CLASS}] (timed_out)`);
+    expect(ctx.level).toBe("error");
+    expect(ctx.tags).toEqual({
+      feature: SPAWN_DEAD_LETTER_FEATURE,
+      op: SPAWN_DEAD_LETTER_OP,
+      reason: "leader_internal_error",
+    });
+    expect(ctx.extra.lifecycle).toBe("timed_out");
+    expect(JSON.stringify(captureMessageSpy.mock.calls)).not.toContain(FOUNDER_ID);
+  });
+});
