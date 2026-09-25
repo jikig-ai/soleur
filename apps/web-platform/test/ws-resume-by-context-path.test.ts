@@ -9,6 +9,7 @@ const mockUpdate = vi.fn().mockReturnValue({ eq: mockUpdateEq });
 // from().select().eq(user_id, ...).eq(context_path, ...).is(archived_at, null).order().limit().maybeSingle()
 let conversationLookupResult: { data: unknown; error: unknown } = { data: null, error: null };
 let messageCountResult: { count: number; error: unknown } = { count: 0, error: null };
+let engineRunLookupResult: { data: unknown; error: unknown } = { data: null, error: null };
 
 const mockMaybeSingle = vi.fn(() => Promise.resolve(conversationLookupResult));
 const mockCountQuery = vi.fn(() => Promise.resolve(messageCountResult));
@@ -72,6 +73,14 @@ function makeFromDispatcher(): (table: string) => unknown {
         }),
       };
     }
+    if (table === "agent_engine_runs") {
+      const engineEqChain: Record<string, unknown> = {};
+      engineEqChain.eq = vi.fn(() => engineEqChain);
+      engineEqChain.maybeSingle = () => Promise.resolve(engineRunLookupResult);
+      return {
+        select: () => engineEqChain,
+      };
+    }
     return {
       insert: mockInsert,
       update: mockUpdate,
@@ -131,7 +140,7 @@ vi.mock("@/lib/supabase/tenant", () => ({
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
-vi.mock("./agent-runner", () => ({
+vi.mock("@/server/agent-runner", () => ({
   startAgentSession: vi.fn().mockResolvedValue(undefined),
   sendUserMessage: vi.fn().mockResolvedValue(undefined),
   resolveReviewGate: vi.fn().mockResolvedValue(undefined),
@@ -164,6 +173,8 @@ vi.mock("@/server/current-repo-url", () => ({
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
 import { setUserWorkspace } from "@/server/agent-session-registry";
+import { getCcStartSessionRateLimiter } from "@/server/cc-dispatcher";
+import { sendUserMessage } from "@/server/agent-runner";
 
 function createMockSession(): { session: ClientSession; sent: any[] } {
   const sent: any[] = [];
@@ -180,9 +191,11 @@ function createMockSession(): { session: ClientSession; sent: any[] } {
 describe("start_session resumeByContextPath", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(getCcStartSessionRateLimiter(), "check").mockReturnValue({ allowed: true });
     sessions.clear();
     conversationLookupResult = { data: null, error: null };
     messageCountResult = { count: 0, error: null };
+    engineRunLookupResult = { data: null, error: null };
     // Fall-through-to-pending paths reach the slot acquire, which resolves
     // getUserWorkspace(userId) (set at session-open in prod) and fails loud if
     // absent — mig 093 passes it as the slot's NOT NULL workspace_id.
@@ -220,6 +233,67 @@ describe("start_session resumeByContextPath", () => {
     expect(session.conversationId).toBe("existing-conv-123");
     expect(session.pending).toBeUndefined();
     expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Codex-bound context-path resume before announcing it", async () => {
+    conversationLookupResult = {
+      data: {
+        id: "existing-conv-123",
+        last_active: "2026-04-15T10:00:00Z",
+        context_path: "knowledge-base/product/roadmap.md",
+      },
+      error: null,
+    };
+    engineRunLookupResult = {
+      data: { id: "run-1", execution_kind: "conversation", conversation_id: "existing-conv-123", engine_id: "codex" },
+      error: null,
+    };
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage("user-1", JSON.stringify({
+      type: "start_session",
+      context: { path: "knowledge-base/product/roadmap.md", type: "kb-viewer" },
+      resumeByContextPath: "knowledge-base/product/roadmap.md",
+    }));
+
+    expect(session.conversationId).toBeUndefined();
+    expect(sent.some((m) => m.type === "session_resumed")).toBe(false);
+    expect(sent.some((m) => m.type === "error")).toBe(true);
+  });
+
+  it("rejects a Codex-bound context-path collision before dispatching its first chat turn", async () => {
+    conversationLookupResult = {
+      data: {
+        id: "existing-conv-123",
+        last_active: "2026-04-15T10:00:00Z",
+        context_path: "knowledge-base/product/roadmap.md",
+      },
+      error: null,
+    };
+    mockMaybeSingle.mockResolvedValueOnce({ data: null, error: null });
+    mockInsert.mockResolvedValueOnce({
+      error: { code: "23505", constraint: "conversations_context_path_user_uniq", message: "duplicate" },
+    });
+    engineRunLookupResult = {
+      data: { id: "run-1", execution_kind: "conversation", conversation_id: "existing-conv-123", engine_id: "codex" },
+      error: null,
+    };
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage("user-1", JSON.stringify({
+      type: "start_session",
+      context: { path: "knowledge-base/product/roadmap.md", type: "kb-viewer" },
+      resumeByContextPath: "knowledge-base/product/roadmap.md",
+    }));
+    expect(session.pending).toBeDefined();
+    await handleMessage("user-1", JSON.stringify({ type: "chat", content: "synthetic hello" }));
+
+    expect(mockInsert).toHaveBeenCalledOnce();
+    expect(session.conversationId).toBeUndefined();
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(sent.some((m) => m.type === "error")).toBe(true);
   });
 
   it("falls through to pending creation when no existing row found", async () => {

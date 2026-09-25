@@ -27,7 +27,7 @@ const CONV_ID = "conv-resume-1";
 const WORKSPACE_ID = "a1b2c3d4-0000-4000-8000-000000000123";
 const USER_ID = "user-resume-A";
 
-const { rpcSpy, singleSpy } = vi.hoisted(() => ({
+const { rpcSpy, singleSpy, engineRunSpy } = vi.hoisted(() => ({
   rpcSpy: vi.fn(
     async (): Promise<{
       error: { code: string; message: string } | null;
@@ -42,6 +42,7 @@ const { rpcSpy, singleSpy } = vi.hoisted(() => ({
     },
     error: null,
   })),
+  engineRunSpy: vi.fn(async (): Promise<{ data: Record<string, unknown> | null; error: null }> => ({ data: null, error: null })),
 }));
 
 vi.mock("@/server/current-repo-url", () => ({
@@ -73,12 +74,13 @@ vi.mock("@/lib/supabase/tenant", () => {
   // sibling-slot probe (`.select().eq().neq().gte()`, awaited directly) resolve.
   // `.single()` yields the conversation row; awaiting the chain yields an empty
   // slot set (no live sibling).
-  const makeChain = () => {
+  const makeChain = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of ["select", "eq", "neq", "gte", "lte", "order", "limit"]) {
       chain[m] = () => chain;
     }
     chain.single = singleSpy;
+    chain.maybeSingle = table === "agent_engine_runs" ? engineRunSpy : singleSpy;
     // Thenable so `await tenantClient.from(...).select().eq().neq().gte()`
     // resolves to an empty (no live sibling slot) result.
     chain.then = (resolve: (v: { data: unknown[]; error: null }) => unknown) =>
@@ -86,7 +88,7 @@ vi.mock("@/lib/supabase/tenant", () => {
     return chain;
   };
   const tenantClient = {
-    from: () => makeChain(),
+    from: (table: string) => makeChain(table),
     rpc: rpcSpy,
   };
   return {
@@ -119,6 +121,8 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
   beforeEach(() => {
     rpcSpy.mockClear();
     singleSpy.mockClear();
+    engineRunSpy.mockReset();
+    engineRunSpy.mockResolvedValue({ data: null, error: null });
   });
 
   afterEach(() => {
@@ -195,6 +199,63 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
     };
     const frames = sendMock.mock.calls.map(
       (c: unknown[]) => JSON.parse(c[0] as string).type,
+    );
+    expect(frames).toContain("error");
+    expect(frames).not.toContain("session_started");
+  });
+
+  it("rejects a Codex-bound conversation before workspace rebind or legacy session start", async () => {
+    engineRunSpy.mockResolvedValueOnce({
+      data: {
+        id: "run-codex-1",
+        execution_kind: "conversation",
+        conversation_id: CONV_ID,
+        workspace_id: WORKSPACE_ID,
+        engine_id: "codex",
+        auth_mode: "api-key",
+        adapter_version: "1",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      error: null,
+    });
+    const session = makeSession();
+    sessions.set(USER_ID, session);
+
+    await handleMessage(USER_ID, JSON.stringify({ type: "resume_session", conversationId: CONV_ID }));
+
+    expect(engineRunSpy).toHaveBeenCalledOnce();
+    expect(rpcSpy).not.toHaveBeenCalled();
+    expect(sessions.get(USER_ID)?.conversationId).toBeUndefined();
+    const frames = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call: unknown[]) => JSON.parse(call[0] as string).type,
+    );
+    expect(frames).toContain("error");
+    expect(frames).not.toContain("session_started");
+  });
+
+  it("rejects a Codex-bound chat turn on an already resumed session", async () => {
+    engineRunSpy.mockResolvedValueOnce({
+      data: {
+        id: "run-codex-1",
+        execution_kind: "conversation",
+        conversation_id: CONV_ID,
+        workspace_id: WORKSPACE_ID,
+        engine_id: "codex",
+        auth_mode: "api-key",
+        adapter_version: "1",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      error: null,
+    });
+    const session = makeSession();
+    session.conversationId = CONV_ID;
+    sessions.set(USER_ID, session);
+
+    await handleMessage(USER_ID, JSON.stringify({ type: "chat", content: "synthetic hello" }));
+
+    expect(engineRunSpy).toHaveBeenCalledOnce();
+    const frames = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call: unknown[]) => JSON.parse(call[0] as string).type,
     );
     expect(frames).toContain("error");
     expect(frames).not.toContain("session_started");

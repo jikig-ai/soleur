@@ -134,6 +134,7 @@ export class AgentEnginePersistenceRepository {
   async getConversationRun(conversationId: string): Promise<unknown> {
     const result = await this.client.from("agent_engine_runs")
       .select("*")
+      .eq("execution_kind", "conversation")
       .eq("conversation_id", conversationId)
       .maybeSingle();
     if (result.error) throw new Error(`conversation engine run lookup failed: ${result.error.message}`);

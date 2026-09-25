@@ -19,3 +19,18 @@ export function assertLegacyEngineBinding(binding: unknown): void {
     });
   }
 }
+
+/** Recheck an existing conversation's immutable binding before legacy chat. */
+export async function assertLegacyConversationEngineBinding(
+  repository: { getConversationRun(conversationId: string): Promise<unknown> },
+  conversationId: string,
+): Promise<void> {
+  const persisted = await repository.getConversationRun(conversationId);
+  // Conversations created before engine bindings were introduced have no run.
+  if (persisted === null) return;
+  assertLegacyEngineBinding(
+    persisted && typeof persisted === "object" && "binding" in persisted
+      ? (persisted as { binding: unknown }).binding
+      : persisted,
+  );
+}
