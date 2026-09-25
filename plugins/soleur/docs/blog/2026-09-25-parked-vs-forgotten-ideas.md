@@ -54,11 +54,11 @@ You don't need new software. Open wherever your ideas live now and work through 
 
 The first pass is the slow one. After that, each new idea needs one question: which of the four places does it go in?
 
-## How I found out the hard way
+## My AI team had blind spots too
 
-I run my company with an AI team, so I assumed nothing on my list could slip. The part of my AI team that plans our roadmap once pointed me at the wrong priority. It also saw only about a quarter of our current plan, and it never warned me about either. Now it reads the whole plan, and tells me when it can't.
+I run my company with an AI team, so I assumed nothing on my list could slip. The part of my AI team that plans our roadmap once pointed me at the wrong priority. It also saw only about a quarter of our current plan, and it never warned me about either. Now it reads all of it, and tells me when it can't.
 
-That's what convinced me the four places were more than tidiness. The same fix that made my AI team read the whole plan also gave the plan its two missing places. When a list can't tell parked from forgotten, neither can anything that reads it, whether that's you, a cofounder or an AI.
+I fixed both in the same round of work that gave my plan its two missing places, not yet defined and decided against. Together they changed how I think about any list: it only helps if whoever reads it, whether that's you, a cofounder or an AI, can see all of it and can tell what was decided.
 
 ## What changed: decisions stay decided
 
@@ -66,7 +66,7 @@ Here is what's different now:
 
 - Ideas I can't phrase yet go on a "not yet defined" list instead of into a half-made plan.
 - Anything I rule out is closed with one line on why, so I stop re-arguing it.
-- My AI team sees the whole plan, and tells me when it can't.
+- My AI team sees all of the current plan, and tells me when it can't.
 - When it suggests what to work on next, it's something I can start today.
 
 I still make every call about which place an idea goes. My AI team keeps the list and flags anything on it that doesn't have a place yet. It's the same split I use for [the rest of the company](/blog/how-to-run-every-department-with-ai-agents/): I decide, and the team keeps track.
@@ -82,7 +82,7 @@ Running a company alone shouldn't mean remembering everything alone.
   </details>
   <details class="faq-item">
     <summary class="faq-question">When is an idea 'not yet defined' instead of 'later'?</summary>
-    <p class="faq-answer">An idea is not yet defined when you cannot state the question it would answer. It belongs under later when you can state that question, even if you cannot answer it yet. "Do a podcast" is not yet defined. "Should a podcast replace my newsletter?" is a question, so it goes under later.</p>
+    <p class="faq-answer">An idea is not yet defined when you cannot state the question it would answer. It belongs under Later when you can state that question, even if you cannot answer it yet. "Do a podcast" is not yet defined. "Should a podcast replace my newsletter?" is a question, so it goes under Later.</p>
   </details>
   <details class="faq-item">
     <summary class="faq-question">How do I stop going back over decisions I've already made?</summary>
@@ -112,7 +112,7 @@ For the technical write-up, see [how we fixed it](https://github.com/jikig-ai/so
       "name": "When is an idea 'not yet defined' instead of 'later'?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "An idea is not yet defined when you cannot state the question it would answer. It belongs under later when you can state that question, even if you cannot answer it yet. \"Do a podcast\" is not yet defined. \"Should a podcast replace my newsletter?\" is a question, so it goes under later."
+        "text": "An idea is not yet defined when you cannot state the question it would answer. It belongs under Later when you can state that question, even if you cannot answer it yet. \"Do a podcast\" is not yet defined. \"Should a podcast replace my newsletter?\" is a question, so it goes under Later."
       }
     },
     {
