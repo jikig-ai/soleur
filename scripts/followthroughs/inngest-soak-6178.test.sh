@@ -14,7 +14,7 @@
 # slice past the page cap, or drifting the `from=` anchor — every one of those would stay green
 # forever. The stub refuses (exit 64) unless the request carries `-X GET`, `X-Signature-256:
 # sha256=`, both CF-Access headers, and — for slices — the pinned URL prefix with
-# `from=2026-09-15T12:40:00Z` and at most 11 ids; and it serves the fixture for the slice that
+# `from=2026-09-15T12:40:00Z` and at most 8 ids; and it serves the fixture for the slice that
 # HOLDS the first requested id (not the Nth fixture for the Nth call), so a re-dealt probe is
 # answered with the wrong function set and P-C reds. H2 proves the refusal is live.
 #
@@ -87,8 +87,8 @@ case "$url" in
   "https://deploy.soleur.ai/hooks/inngest-doublefire-probe?from=2026-09-15T12:40:00Z&function_ids="*)
     csv="${url#*function_ids=}"
     n="$(printf '%s' "$csv" | tr ',' '\n' | grep -c .)"
+    printf '%s\n' "$csv" >> "$cfg/slice-ids.log"   # logged BEFORE the cap, so C15 sees an oversized slice
     [[ "$n" -le 8 ]] || { echo "stub: slice carries $n ids (> 8)" >&2; exit 64; }
-    printf '%s\n' "$csv" >> "$cfg/slice-ids.log"
     first="${csv%%,*}"
     line="$(grep -nxF "$first" "$cfg/population.txt" | cut -d: -f1)"
     [[ -n "$line" ]] || { echo "stub: first id not in population" >&2; exit 66; }
@@ -248,7 +248,8 @@ SOAK_END_ISO="$(grep -oE '^SOAK_END=[^ ]+' "$PROBE" | cut -d= -f2)"
 SOAK_END_EPOCH="$(date -u -d "$SOAK_END_ISO" +%s)"
 [[ "$SOAK_END_EPOCH" == "1790083380" ]] && pass "the probe's SOAK_END is 2026-09-22T13:23:00Z (epoch 1790083380)" || fail "SOAK_END drifted: $SOAK_END_ISO → $SOAK_END_EPOCH"
 # SLICE_MAX is a literal here, not read back: 11 ids per slice put 1023 runs behind one GET on
-# 2026-09-25, and the host's scan timed out on page 8 on every retry (#6178 comment 5829980093 follow-up).
+# 2026-09-25, and the host's scan timed out on page 8 on every retry (sweeper dry run 36121535964;
+# the plan's 2026-09-25 work-phase addendum records the measurement).
 [[ "$(grep -oE '^SLICE_MAX=[0-9]+' "$PROBE")" == "SLICE_MAX=8" ]] && pass "the probe deals ≤ 8 ids per slice (7 slices)" || fail "SLICE_MAX drifted: $(grep -oE '^SLICE_MAX=[0-9]+' "$PROBE")"
 MINTER=26e6836b-97ad-503f-8b08-490d8a2f4ce8
 CREDIT=2e625d3c-0207-569f-b10b-567bc685ad5e
@@ -272,6 +273,17 @@ WHY_1491858='explained_why: bucket=1491858 2026-09-24 06:00Z scheduled tick plus
 # tail_head <out>: the first line the sweeper's `tail -c 4000` republishes, plus the byte size and margin.
 tail_head() { printf '%s' "$1" | tail -c 4000 | head -n 1; }
 out_bytes() { printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '; }
+# tail_head self-test: an over-budget output must lose its first line, an under-budget one keep it.
+_big="reading: x
+$(printf 'y%.0s' $(seq 1 4100))"
+[[ "$(tail_head "$_big")" != reading:* ]] && pass "INSTRUMENT: tail_head drops the first line of a >4000-byte output" || fail "INSTRUMENT: tail_head kept 'reading:' on a 4100-byte output"
+[[ "$(tail_head "reading: x
+short")" == reading:* ]] && pass "INSTRUMENT: tail_head keeps the first line of a short output" || fail "INSTRUMENT: tail_head lost 'reading:' on a short output"
+# The EXPLAINED rule, read from the probe itself: only the two 09-17 pins (bucket 1491374) may omit `why`.
+_ex="$(awk '/^EXPLAINED=.\[/{f=1; sub(/^EXPLAINED=./,"")} f{print} f&&/^\]'"'"'$/{exit}' "$PROBE" | sed '$ s/'"'"'$//')"
+_bad="$(jq -r '[.[] | select(.bucket != 1491374 and ((.why // "") == ""))] | length' <<<"$_ex" 2>/dev/null || echo ERR)"
+_n="$(jq -r 'length' <<<"$_ex" 2>/dev/null || echo ERR)"
+[[ "$_bad" == 0 && "$_n" == 5 ]] && pass "EXPLAINED: 5 pins, and every pin outside bucket 1491374 carries its own why" || fail "EXPLAINED rule: pins=$_n missing_why=$_bad"
 
 # ── C0 registry gate ──────────────────────────────────────────────────────────────────────────
 default_fixtures; run C0
@@ -337,6 +349,7 @@ default_fixtures; add_explained; append_runs "$(slice_of $OTHER)" "$C5_RUNS"; NO
 expect "C5 a THIRD function in bucket 1491374 → UNEXPLAINED (a bare-bucket pin would pass it)" 5 "UNEXPLAINED: functionID=$OTHER bucket=1491374"
 default_fixtures; add_explained; append_runs "$(slice_of $MINTER)" '[{"id":"01M2QC5BX0000000000000000X","functionID":"26e6836b-97ad-503f-8b08-490d8a2f4ce8","startedAt":"2026-09-17T12:55:00Z"}]'; NOW=$SOAK_END_EPOCH run C5b
 expect "C5b the minter at count 5 (pin is 4) → UNEXPLAINED" 5 "UNEXPLAINED: functionID=$MINTER bucket=1491374 ($MINTER_BUCKET_WINDOW) count=5"
+expect_absent "C5b ...and no attribution line sits beside the UNEXPLAINED group in its bucket" "explained_why: bucket=1491374"
 default_fixtures; append_runs "$(slice_of $CREDIT)" "$EXPLAINED_CREDIT"; append_runs "$(slice_of $MINTER)" "$(jq -c '.[0:3]' <<<"$EXPLAINED_MINTER")"; NOW=$SOAK_END_EPOCH run C5c
 expect "C5c the minter at count 3 (below the pin) → UNEXPLAINED, not clean" 5 "UNEXPLAINED: functionID=$MINTER bucket=1491374 ($MINTER_BUCKET_WINDOW) count=3"
 # P-A: the pinned triple's functionID and count, one bucket over — the `.bucket` conjunct.
@@ -386,9 +399,14 @@ expect "C26c ...names that group UNEXPLAINED" 5 "UNEXPLAINED: functionID=$MINTER
 expect_absent "C26c ...and prints no attribution for its bucket" "explained_why: bucket=1491719"
 expect "C26c ...the 09-17 minter group (same function, other pin) stays explained" 5 "explained: functionID=$MINTER bucket=1491374"
 
+# C26g: the 09-19 pinned run ids reported under a DIFFERENT function — only the functionID conjunct rejects it.
+default_fixtures; add_explained; append_runs "$(slice_of $OTHER)" "$(jq -c --arg o "$OTHER" 'map(.functionID = $o)' <<<"$PIN_PROMOTE")"; NOW=$NOW_0925 run C26g
+expect "C26g pinned ids under another functionID → UNEXPLAINED" 5 "UNEXPLAINED: functionID=$OTHER bucket=1491540"
+expect_absent "C26g ...and no attribution for that bucket" "explained_why: bucket=1491540"
+
 C26F_RUNS='[{"id":"01M2XC26F00000000000000A0A","functionID":"11bb44a3-ae8d-57b0-8d41-e76e57f0277a","startedAt":"2026-09-19T20:25:00Z"},{"id":"01M2XC26F00000000000000B0B","functionID":"11bb44a3-ae8d-57b0-8d41-e76e57f0277a","startedAt":"2026-09-19T20:30:00Z"}]'
 default_fixtures; add_explained; add_new_pins; append_runs "$(slice_of $OTHER)" "$C26F_RUNS"; NOW=$NOW_0925 run C26f
-expect "C26f all five pins + an unrelated fourth group → SOAK NOT CLEAN" 5 "SOAK NOT CLEAN"
+expect "C26f all five pins + ONE unrelated group → SOAK NOT CLEAN" 5 "SOAK NOT CLEAN"
 expect "C26f ...reading block counts explained=5 UNEXPLAINED=1" 5 "explained=5 UNEXPLAINED=1"
 expect "C26f ...names the unrelated group" 5 "UNEXPLAINED: functionID=$OTHER bucket=1491541"
 [[ "$(tail_head "$OUT")" == reading:* ]] && pass "C26f ...the NOT CLEAN output fits the sweeper's 4000-byte tail ($(out_bytes "$OUT") B)" || fail "C26f reading: line cut from tail -c 4000: $(out_bytes "$OUT") bytes, margin $((4000 - $(out_bytes "$OUT")))"
@@ -462,8 +480,8 @@ expect "C14 an empty credential → credentials_unprovisioned (3, not 2)" 3 "rea
 default_fixtures; run C15
 expect "C15 a clean run" 2 "NOT YET: interim reading at day"
 [[ "$(slice_calls)" == 7 ]] && pass "C15 exactly 7 slice requests" || fail "C15 slice requests = $(slice_calls), want 7"
-_over="$(awk -F, '{ if (NF > 11) c++ } END { print c + 0 }' "$WORK/slice-ids.log")"
-[[ "$_over" == 0 ]] && pass "C15 every request carries ≤ 11 ids" || fail "C15 $_over request(s) exceed 11 ids"
+_over="$(awk -F, '{ if (NF > 8) c++ } END { print c + 0 }' "$WORK/slice-ids.log")"
+[[ "$_over" == 0 ]] && pass "C15 every request carries ≤ 8 ids" || fail "C15 $_over request(s) exceed 8 ids"
 if diff <(tr ',' '\n' < "$WORK/slice-ids.log" | sort) <(pop_ids | sort) >/dev/null; then pass "C15 the union of requested ids equals the committed population"; else fail "C15 requested ids ≠ population"; fi
 [[ "$(grep -c 'from=2026-09-15T12:40:00Z' "$WORK/calls.log")" == "$SLICES" ]] && pass "C15 every slice is pinned to from=2026-09-15T12:40:00Z" || fail "C15 a slice request drifted from the anchor"
 # P-C: the dealing is round-robin over the density-sorted file — a contiguous chunking keeps the
@@ -543,7 +561,7 @@ fi
 # FLOOR is bound IMMEDIATELY above the floor it feeds: guard-vacuity-floor.test.sh slices the
 # floor block backward over contiguous simple assignments only, so a non-assignment line between
 # the binding and the `if` leaves the mutant unbound and the floor scored "not constructible".
-FLOOR=145
+FLOOR=151
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1

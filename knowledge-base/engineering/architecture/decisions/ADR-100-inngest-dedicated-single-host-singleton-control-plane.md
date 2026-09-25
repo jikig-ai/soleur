@@ -1434,7 +1434,8 @@ the liveness signal) and replaces the 07-07 extraction plan's Phase 4.1
 prescription (`inngest-double-fire-6178.sh`, exit 0 = close) with a NOTIFY-ONLY probe (exit 2 NOT
 YET / 3 CANNOT ESTABLISH / 5 ACTION REQUIRED; never 0, never 1) — the close authorises this
 status flip and the release of four rollback snapshots, which are operator verbs. It reads the
-same on-host doublefire probe in five population slices (the deploy webhook forwards only `from`
+same on-host doublefire probe in five population slices [seven since 2026-09-25, see the update
+at the end of this addendum] (the deploy webhook forwards only `from`
 and `function_ids`, so there is no time slicing), buckets exactly as `op=verify` 2.6 does, and pins
 the two groups above as exact RUN-ID SETS: the host's `.id` is the ULID the run-log middleware
 writes to `routine_runs.run_id`, and the join on 2026-09-19 matched the minter's four ids
@@ -1445,7 +1446,8 @@ or the same counts with other members are all UNEXPLAINED. Before any slice it G
 a pinned cron that vanished refuses (`registry_drift`); a registry that grew (70 on 09-15, 09-19
 and at the probe's first run) is reported as UNMEASURED functions and qualifies the verdict rather
 than blocking it. A manual trigger of a cron within 1200 s of its scheduled tick reads as a group
-(three manual runs of `cron-compound-promote` already sit in the window without colliding); the
+(three manual runs of `cron-compound-promote` already sit in the window without colliding [as of
+09-19; two later ones did, see the update at the end of this addendum]); the
 probe cannot see `trigger_source`, so that attribution against `routine_runs` is the operator's
 step. On a clean day-7 reading its ACTION REQUIRED text names the verbs in order: flip this ADR
 `adopting → accepted` (reversible); wait for the NEXT sweep's comment to read SOAK CLEAN again — a
@@ -1470,7 +1472,8 @@ the tracker three days early; the sweeper's closed-set path returns silently on 
 day-7 reading would never be posted (the enrolling PR says `Ref #6178`, and its ship step sweeps
 open PRs for a premature close keyword). The sweeper itself has no `sentry-heartbeat`, so a sweep
 that never fires on 09-22 is indistinguishable from one that found nothing — pre-existing, tracked
-on #8349. The reading stays takeable for roughly one to two weeks after day 7; after that the
+on #8349. The reading stays takeable for roughly one to two weeks after day 7 [measured shorter on
+2026-09-25, see the update at the end of this addendum]; after that the
 heaviest slice outgrows the host's page budget and the probe reports CANNOT ESTABLISH until the
 tracker is closed, which is expected. The status stays `adopting` until the day-7 reading is clean
 outside the explained set; this addendum flips nothing.
@@ -1485,7 +1488,14 @@ pinned into the probe's explained set as its exact run-id set; #6178 comment 582
 record, including web-1's quiesced shape across the window. The same change re-deals the probe's
 population into 7 slices (it was 5): on 2026-09-25 the 1023-run heaviest slice timed out on the
 host's page 8 on every retry, while at 7 slices the live read-only reading was clean (2304 runs,
-explained=5, UNEXPLAINED=0). Nothing is flipped, released or closed by this update.
+explained=5, UNEXPLAINED=0). That buys days, not weeks: the heaviest slice is almost all the `*/20`
+minter (~72 runs/day), round-robin cannot thin it further, and at that rate it passes the failing
+1023 again around 2026-09-28, after which the probe reports CANNOT ESTABLISH until #6178 closes. So
+the flip, the re-read and the release should follow a clean reading promptly. In practice the flip
+condition is now "every multi-run group outside the explained set is attributed to one scheduler",
+because both shapes recur: a catch-up after a host replace (the private-NIC boot race behind 09-22
+stays open as #8562) and a manual trigger near a tick. Nothing is flipped, released or closed by
+this update.
 
 ## Addendum — 2026-09-19 (#6488, #6617) — the dark tables are gone, and the probe that could not see its own verdict
 

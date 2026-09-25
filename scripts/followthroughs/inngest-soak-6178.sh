@@ -49,9 +49,12 @@
 # (apps/web-platform/infra/hooks.json.tmpl), so the window is open-topped and the ONLY cost lever
 # is the POPULATION: the 52 ids are dealt round-robin into 7 slices of ≤ 8 from a density-sorted
 # file (inngest-soak-6178.function-ids.txt — the sort IS the balancing lever) so no slice
-# approaches the host's 18-page / 1800-run feasibility gate (90 s ÷ 5 s/page × 100). It was 5
-# slices of ≤ 11 until 2026-09-25, when slice 1 (1023 runs) timed out on page 8 on every retry
-# while its two halves read cleanly on their own; 7 slices put the */20 minter's slice at 775. A registry
+# approaches the host's 18-page / 1800-run feasibility gate (90 s ÷ 5 s/page × 100). That gate is
+# NOT the binding limit: on 2026-09-25 slice 1 (5 slices of ≤ 11, 1023 runs) failed on page 8 (a
+# per-page timeout) on every retry while its two halves read cleanly on their own, so the probe
+# now deals 7 slices of ≤ 8 and slice 1 read 775. That slice is almost all the */20 minter
+# (~72 runs/day) and round-robin cannot thin it further, so at that rate it passes 1023 again
+# around 2026-09-28; a page-8 probe_fatal on slice 1 after that is the expected horizon. A registry
 # GET first requires every population id to still be registered; a registry that GREW is reported
 # as UNMEASURED ids and QUALIFIES the verdict rather than blocking it.
 #
@@ -157,12 +160,13 @@ SLICE_MAX=8
 POPULATION_SIZE=52
 RUN_FLOOR=800                       # half the day-3.6 count (826); a hole that lost > half the window
 PROBE_BUDGET_S=420                  # wall-clock cap for the slice loop: the sweeper's job is 15 min for ALL probes
-# The explained groups, pinned as exact run-id SETS (host `.id` == `routine_runs.run_id`, read
-# 2026-09-19 from prd: the four `cron-ghcr-token-minter` rows and the two `cron-anthropic-credit-probe`
-# rows started 12:53:07–12:53:30Z). The (functionID, bucket, count) triple must match AND the
-# member ids must equal the set — bucket 1491374 is historical and immutable, so any other member
-# set in it is a new finding.
-# Only the two 09-17 pins omit `why` (they print EXPLAINED_WHY); every other pin must carry its own.
+# The explained groups, pinned as exact run-id SETS (host `.id` == `routine_runs.run_id`): the two
+# 09-17 catch-up pins (bucket 1491374, read 2026-09-19 from prd: the four `cron-ghcr-token-minter`
+# rows and the two `cron-anthropic-credit-probe` rows started 12:53:07–12:53:30Z) and the three pins
+# attributed 2026-09-25 on #6178 comment 5829980093. The (functionID, bucket, count) triple must
+# match AND the member ids must equal the set, so any other member set in a pinned bucket is a new
+# finding. Only the two 09-17 pins omit `why` (they print EXPLAINED_WHY); every other pin must carry
+# its own — the suite reads this constant and reds a pin outside 1491374 with no `why`.
 EXPLAINED='[
   {"functionID":"9a26ac57-a722-5c59-9f36-115675eecbad","bucket":1491540,"count":2,
    "ids":["01M2XM4813N3QE97TEZZVW9TT7","01M2XMEM8TZEDVAMRTZSCPWVVZ"],
@@ -185,7 +189,7 @@ UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$'
 INT_RE='^[0-9]{1,12}$'              # bounded: bash arithmetic wraps at 64 bits, so an unbounded digit run is not an integer
 BETTERSTACK_HINT='doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 24h --grep SOLEUR_INNGEST_PREFLIGHT --limit 20'
-SLICE_REMEDY='retry next sweep; hmac_mismatch = WEBHOOK_DEPLOY_SECRET rotated (the repo secret the sweeper forwards, not the Doppler copy); cf_access = the CF-Access pair; probe_fatal names the host'"'"'s own reason and the slice to re-sort, and more than a week after day 7 it is the expected page-budget horizon, not a broken probe (this reading stays takeable for roughly one to two weeks after day 7; after that the heaviest slice outgrows the host'"'"'s page budget and the probe reports CANNOT ESTABLISH until #6178 is closed); bad_run_shape = the host probe'"'"'s projection changed — compare its emitted shape against op=verify 2.6'
+SLICE_REMEDY='retry next sweep; hmac_mismatch = WEBHOOK_DEPLOY_SECRET rotated (the repo secret the sweeper forwards, not the Doppler copy); cf_access = the CF-Access pair; probe_fatal names the host'"'"'s own reason and the slice to re-sort, and a page-8 timeout on slice 1 from about 2026-09-28 is the expected horizon, not a broken probe (slice 1 is almost all the */20 minter and outgrows the host'"'"'s per-page latency; the probe then reports CANNOT ESTABLISH until #6178 is closed); bad_run_shape = the host probe'"'"'s projection changed — compare its emitted shape against op=verify 2.6'
 SCOPE_LINE='SCOPE: this reading is the dedicated host'"'"'s (10.0.1.40) run index only — it is NOT a web-host double-fire detector (op=verify P2-a); before flipping, hold web-1'"'"'s quiesced shape too: doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh'
 PROVENANCE='window anchored on the 09-15 verify pass (run 34974655656, itself a QUALIFIED verdict: override anchor, population scoped to these 52 crons — ADR-146); this is a soak reading over the startedAt proxy, not a complete exactly-once proof: two runs of one tick started more than 20 minutes apart land in different buckets and read clean (P2-c), and a manual trigger within 1200 s of a scheduled tick reads as a group'
 
@@ -455,8 +459,12 @@ print_groups "$expl_rows" "explained"
 # One attribution line per explained bucket; a pin with no `why` (only the 09-17 pins) falls back to
 # EXPLAINED_WHY in jq, so no TSV field is empty. unique_by(.bucket) collapses the two 09-17 groups,
 # which is correct only while every pin in one bucket shares one `why` (true: only 1491374 holds two).
+# A bucket that ALSO holds an UNEXPLAINED group prints no attribution, so the line can never sit
+# beside a finding it does not explain.
 jqv why_rows why_rows -r --arg w "$EXPLAINED_WHY" \
-  '[.[] | select(.explained) | {bucket, why: (if .why == "" then $w else .why end)}] | unique_by(.bucket) | .[] | [.bucket, .why] | @tsv' <<<"$split"
+  '([.[] | select(.explained | not) | .bucket]) as $ub
+   | [.[] | select(.explained) | . as $g | select($ub | index($g.bucket) | not) | {bucket, why: (if .why == "" then $w else .why end)}]
+   | unique_by(.bucket) | .[] | [.bucket, .why] | @tsv' <<<"$split"
 while IFS=$'\t' read -r b w; do
   [[ -n "$b" ]] || continue
   [[ "$b" =~ $INT_RE ]] || cannot_establish "shape_failed site=why_bucket" "an explained bucket index was not an integer"
@@ -488,5 +496,5 @@ if [[ "$unexplained_n" -eq 0 ]]; then
 fi
 printf 'operator verbs: attribute each UNEXPLAINED group above against routine_runs (read-only GET /rest/v1/routine_runs?select=routine_id,run_id,trigger_source,started_at on prd, started_at inside the bucket window; routine_runs under-records the host index by ~2%%, so a member with no row is attributed by its neighbours) before any flip; a group whose members are one scheduled tick fired twice by two schedulers means the soak FAILED and the rollback path in the runbook applies, not the flip; a manual trigger (trigger_source=manual) beside a scheduled tick is a false group — record it here and re-read.\n'
 printf '%s\n' "$SCOPE_LINE"
-printf 'ACTION REQUIRED: SOAK NOT CLEAN%s — %s UNEXPLAINED group(s) outside the explained bucket; investigate the listed groups before flipping\n' "$QUAL" "$unexplained_n"
+printf 'ACTION REQUIRED: SOAK NOT CLEAN%s — %s UNEXPLAINED group(s) outside the explained set; investigate the listed groups before flipping\n' "$QUAL" "$unexplained_n"
 exit 5

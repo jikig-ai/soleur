@@ -20,7 +20,11 @@ while the comment above them lists four `explained_why: bucket=` lines.
 (its SNAPSHOTS change). Editing them here would conflict with #8626 and take over its scope, which
 the brief forbids.
 
-**Suggested disposition:** #8626 pluralises the wording ("outside the explained buckets") when it
+**Disposition at review (2026-09-25):** the NOT CLEAN verdict line is not in #8626's diff, so this
+PR changed it to "outside the explained set" (the phrase ADR-100 uses). The CLEAN verdict line
+is inside #8626's hunk and stays singular here; a note on #8626 asks for the same wording there.
+
+**Original suggested disposition:** #8626 pluralises the wording ("outside the explained buckets") when it
 rewrites those printfs. The reading stays correct either way: every explained bucket is named on
 its own line. This is wording only, and the probe is retired after the #6178 close.
 

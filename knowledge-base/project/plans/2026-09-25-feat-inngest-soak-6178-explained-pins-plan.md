@@ -228,6 +228,7 @@ Do **not** append at EOF, because #8626 appends its 2026-09-23 addendum there.
 - `scripts/followthroughs/inngest-soak-6178.sh`
 - `scripts/followthroughs/inngest-soak-6178.test.sh`
 - `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md`
+- `scripts/followthroughs/inngest-soak-6178.function-ids.txt` (added by the work-phase addendum: header only)
 
 ## Files to Create
 

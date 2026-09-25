@@ -55,3 +55,14 @@ lane: cross-domain
 - 6.2 Include the RED output, the byte counts from C26q and C26f, and the E1/E2 results.
 - 6.3 Include the web-1 quiesced-shape evidence as prose: last `server_active=active` at 2026-09-15 08:29Z, before SOAK_FROM, then 242 later hourly rows all inactive, per #6178 comment 5829980093.
 - 6.4 Fold in `decision-challenges.md` (DC-1 and DC-2).
+
+## 7. Scope added in work and review (2026-09-25)
+
+- 7.1 E2 found slice 1 (1023 runs) timing out on host page 8. Set `SLICE_MAX` 11 → 8 (7 slices). Set the harness `SLICES=7`, the stub `% 7` and cap `≤ 8`, and pin the literal. Append the measurement to the population-file header. Re-run E2: `exit=5`, SOAK CLEAN.
+- 7.2 Review: an attribution line never prints beside an UNEXPLAINED group in its bucket (C5b).
+- 7.3 Review: the functionID conjunct has a fixture (C26g).
+- 7.4 Review: `tail_head` self-test.
+- 7.5 Review: a static check that every pin outside 1491374 carries a `why`.
+- 7.6 Review: C15 cap is live, because the stub logs before its cap.
+- 7.7 Review: the NOT CLEAN verdict now says "explained set".
+- 7.8 Review: the horizon forecast (~2026-09-28) is in the probe header, the population header and ADR-100.
