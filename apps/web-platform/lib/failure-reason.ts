@@ -39,6 +39,10 @@ export type FailureReason =
   | "leader_refused"
   | "leader_tool_invalid"
   | "leader_class_disabled"
+  // The leader loop ended without the handler recording a terminal state
+  // (retry-exhausted throw, finish timeout, Inngest-level cancel), or an
+  // in-step error no arm positively classifies (#8803).
+  | "leader_internal_error"
   | "cancelled_by_operator"
   // feat-l5-runaway-guard PR-A: spawn-entry pause gate + distinct
   // transient-cap-check reason (a DB error is not a budget breach).
@@ -66,6 +70,8 @@ export const PAGES_OPERATOR: Record<FailureReason, boolean> = {
   leader_response_truncated: true,
   // The prompt and the tool surface disagree. Copy promises a notification.
   leader_tool_invalid: true,
+  // A defect on our side: nothing positively explains the failure. Copy promises a notification.
+  leader_internal_error: true,
   anthropic_rate_limited: false,
   anthropic_timeout: false,
   byok_cap_exceeded: false,

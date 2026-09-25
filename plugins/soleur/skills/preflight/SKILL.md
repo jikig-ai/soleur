@@ -720,6 +720,9 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # FAILs with "no command could be parsed" — a false FAIL on a plan that is
 # perfectly well-formed. Verified against #6698's plan: unanchored extracted 47
 # lines of the wrong section; anchored reaches the real block.
+# Separate Bash calls do not share variables, so re-assert the plan path here: awk
+# given an EMPTY filename skips it and reads stdin, which hangs the call (#8705).
+[[ -n "${PLAN_PATH:-}" && -f "$PLAN_PATH" ]] || { echo "SKIP: no readable plan file (PLAN_PATH='${PLAN_PATH:-}') — re-run Shared Plan-File Resolution in this call."; exit 0; }
 awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
 test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```

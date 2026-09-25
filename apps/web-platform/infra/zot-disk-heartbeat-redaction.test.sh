@@ -87,7 +87,7 @@ apply_rationale_strip() { sed -E '/^[[:blank:]]*#([[:blank:]].*)?$/d' "$1"; }
 RAW="$TMP/hb.raw.sh"
 extract_block "$HB_PATH" "$RAW"
 assert "T1 heartbeat block extracted from the template (non-empty)" "[[ -s '$RAW' ]]"
-assert "T1 extracted block is the heartbeat (has a shebang)" "head -1 '$RAW' | grep -q '^#!'"
+assert "T1 extracted block is the heartbeat (has a shebang)" "head -1 '$RAW' | grep -c '^#!' >/dev/null"
 
 HB="$TMP/hb.sh"
 apply_rationale_strip "$RAW" > "$HB"
@@ -324,7 +324,7 @@ run_hb() {
 }
 
 # last_err_of <posted-body> -> the zot_last_err value (emitted LAST, free-text).
-last_err_of() { sed -n 's/.* zot_last_err=//p' <<<"$1" | sed 's/\\"}"*$//' | head -1; }
+last_err_of() { sed -n 's/.* zot_last_err=//p' <<<"$1" | sed 's/\\"}"*$//' | sed -n '1p'; }
 
 # assert_emit <name> <fixture> <mode:absent|present> <needle> [extra-env...]
 assert_emit() {
@@ -388,7 +388,7 @@ _head_tokens_ok() {
 # #8386 review and sat OUTSIDE this check until the review's structural-enumeration seat found
 # it, because the list said five and the row carried six. Deriving means a new posture field
 # joins the trusted-region ordering requirement by existing.
-POSTURE_FIELDS="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI_YML" | head -1 \
+POSTURE_FIELDS="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI_YML" | sed -n '1p' \
   | grep -oE 'store_[a-z_]+=' | sed 's/=$//' | sort -u)"
 [ -n "$POSTURE_FIELDS" ] || { printf '  FATAL: derived ZERO posture fields from LINE= -- the extraction broke, so every ordering assertion below would pass vacuously.\n' >&2; exit 2; }
 POSTURE_FIELD_N="$(printf '%s\n' "$POSTURE_FIELDS" | wc -l | tr -d ' ')"
@@ -503,11 +503,11 @@ tier2_of() { grep -aE "$TIER2_RE" <<<"$1" | head -n 3; }
 assert "G1-fixture MIXED_BLOB is >1 line AFTER tier-1 selection" \
   "[[ \$(tier1_of \"\$MIXED_BLOB\" | wc -l) -ge 2 ]]"
 assert "G1-fixture MIXED_BLOB still carries the needle after tier-1 selection" \
-  "tier1_of \"\$MIXED_BLOB\" | grep -q UNANTICIPATED-VALUE"
+  "tier1_of \"\$MIXED_BLOB\" | grep -c UNANTICIPATED-VALUE >/dev/null"
 assert "G1-fixture ALLJSON_BLOB is >1 line AFTER tier-2 selection" \
   "[[ \$(tier2_of \"\$ALLJSON_BLOB\" | wc -l) -ge 2 ]]"
 assert "G1-fixture ALLJSON_BLOB still carries the needle after tier-2 selection" \
-  "tier2_of \"\$ALLJSON_BLOB\" | grep -q UNANTICIPATED-VALUE"
+  "tier2_of \"\$ALLJSON_BLOB\" | grep -c UNANTICIPATED-VALUE >/dev/null"
 
 echo "=== Guard 1 — producer-side redaction of the diagnostic sample (#7500) ==="
 
@@ -609,7 +609,7 @@ assert "G1-s the degrade path does NOT re-tag the tier" \
 # err_redact_rev is what the #7960 follow-through probe keys delivery on, so it must be on EVERY
 # row and in the TRUSTED region (before the first ` zot_last_err=`, the attacker-influenceable
 # free-text tail). The probe's fixtures read the token from this same LINE= assignment.
-_LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1)"
+_LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | sed -n '1p')"
 # Bounded on the HEAD with ( |$), not on a trailing space: a trailing space would silently pin
 # "some field must follow err_redact_rev", so moving the token to the end of the trusted region
 # would red this with a message about the VALUE CLASS rather than about placement.
@@ -934,7 +934,7 @@ _loa_case open-failed open_failed open_failed
 _loa_case garbage 'opened; rm -rf /' __UNREADABLE__
 rm -f "$LOA"
 assert "P-loa luks_open_arm precedes ' zot_last_err=' in the LINE= assembly" \
-  "grep -qE 'store_luks=[^ ]+ luks_open_arm=' <<<\"\$(grep -F 'LINE=\"SOLEUR_ZOT_DISK' '$RAW' | head -1 | sed 's/ zot_last_err=.*//')\""
+  "grep -qE 'store_luks=[^ ]+ luks_open_arm=' <<<\"\$(grep -F 'LINE=\"SOLEUR_ZOT_DISK' '$RAW' | sed -n '1p' | sed 's/ zot_last_err=.*//')\""
 
 # --- (#8408 (c)) store_escrow: the daily escrow re-test's verdict, READ (never run) here ---------
 ESC="$TMP/var-lib-soleur-registry/escrow.state"
@@ -992,14 +992,14 @@ rm -f "$TMP/uptime"
 _esc_case uptime-unreadable-absent __ABSENT__ none -1
 printf '99999.50 12345.00\n' > "$TMP/uptime"
 rm -f "$ESC"
-_ESC_LINE_HEAD="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1 | sed 's/ zot_last_err=.*//')"
+_ESC_LINE_HEAD="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | sed -n '1p' | sed 's/ zot_last_err=.*//')"
 assert "P-esc store_escrow and store_escrow_age_s precede ' zot_last_err=' in the LINE= assembly" \
   "grep -qE 'store_escrow=[^ ]+ store_escrow_age_s=[^ ]+ host=' <<<\"\$_ESC_LINE_HEAD\""
 assert "P-esc the heartbeat never RUNS the escrow (no luksOpen / test-passphrase in its body)" \
   "! grep -qE 'luksOpen|test-passphrase' '$HB'"
 
 # --- Structural: the order pin, on the source text rather than one rendered row --------------
-_P_LINE="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1)"
+_P_LINE="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | sed -n '1p')"
 assert "P-s all five posture fields precede ' zot_last_err=' in the LINE= assembly" \
   "grep -qE 'store_mount_src=.*store_backing_dev=.*store_mount_devid=.*store_expected_devid=.*store_luks=' <<<\"\${_P_LINE%% zot_last_err=*}\""
 assert "P-s store_expected_devid is the SINGLE-dollar templatefile variable, not a shell one" \

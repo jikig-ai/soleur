@@ -240,6 +240,31 @@ describe("reportSpawnDeadLetter — a failure inside the report never escapes", 
   });
 });
 
+describe("reportSpawnDeadLetter — the report-failed fallback keeps the lifecycle suffix (#8803)", () => {
+  it("a throwing reporter on a lifecycle report sends the suffixed 'report failed' message", async () => {
+    vi.doMock("@/server/observability", () => ({
+      reportSilentFallback: () => {
+        throw new Error("synthetic reporter failure");
+      },
+      warnSilentFallback: () => {
+        throw new Error("synthetic reporter failure");
+      },
+    }));
+    const { reportSpawnDeadLetter } = await load();
+    reportSpawnDeadLetter({
+      reason: "leader_internal_error",
+      actionClass: CLASS,
+      err: new Error("x"),
+      lifecycle: "settle_failed",
+      extra: {},
+    });
+    expect(captureMessageSpy).toHaveBeenCalledWith(
+      `agent-on-spawn deadlettered: report failed: leader_internal_error [${CLASS}] (settle_failed)`,
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+});
+
 describe("reportSpawnPersistFailed", () => {
   it("reports the failed terminal write on the message path with a hashed founder id", async () => {
     const { reportSpawnPersistFailed, SPAWN_DEAD_LETTER_FEATURE } = await load();
@@ -256,6 +281,54 @@ describe("reportSpawnPersistFailed", () => {
     expect(ctx.tags).toMatchObject({ feature: SPAWN_DEAD_LETTER_FEATURE, op: "persist-failure", reason: "leader_refused", pg_code: "57014" });
     expect(ctx.extra.actionSendId).toBe("11111111-1111-1111-1111-111111111111");
     expect(typeof ctx.extra.userIdHash).toBe("string");
+    expect(JSON.stringify(captureMessageSpy.mock.calls)).not.toContain(FOUNDER_ID);
+  });
+});
+
+// #8803 — the lifecycle settle path appends its lifecycle to the grouping text,
+// so a crash, a cancel, a timeout and a settle-step failure are separate Sentry
+// issues with separate throttles. The in-body path passes none and keeps the
+// legacy text byte-for-byte (existing issues keep grouping).
+describe("spawnDeadLetterMessage / lifecycle suffix (#8803)", () => {
+  it("is byte-identical to the legacy text with no lifecycle", async () => {
+    const { spawnDeadLetterMessage } = await load();
+    expect(spawnDeadLetterMessage("leader_tool_invalid", CLASS)).toBe(
+      `agent-on-spawn deadlettered: leader_tool_invalid [${CLASS}]`,
+    );
+  });
+
+  it("yields a distinct string per lifecycle", async () => {
+    const { spawnDeadLetterMessage } = await load();
+    const lifecycles = ["failed", "cancelled", "timed_out", "settle_failed"] as const;
+    const messages = lifecycles.map((l) =>
+      spawnDeadLetterMessage("leader_internal_error", CLASS, l),
+    );
+    expect(new Set(messages).size).toBe(lifecycles.length);
+    lifecycles.forEach((l, i) => {
+      expect(messages[i]).toBe(
+        `agent-on-spawn deadlettered: leader_internal_error [${CLASS}] (${l})`,
+      );
+    });
+  });
+
+  it("reportSpawnDeadLetter sends the suffixed message at error level, lifecycle in extra, tags unchanged", async () => {
+    const { reportSpawnDeadLetter, SPAWN_DEAD_LETTER_FEATURE, SPAWN_DEAD_LETTER_OP } = await load();
+    reportSpawnDeadLetter({
+      reason: "leader_internal_error",
+      actionClass: CLASS,
+      err: new Error("function cancelled"),
+      lifecycle: "timed_out",
+      extra: { founderId: FOUNDER_ID },
+    });
+    const [message, ctx] = onlyMessage();
+    expect(message).toBe(`agent-on-spawn deadlettered: leader_internal_error [${CLASS}] (timed_out)`);
+    expect(ctx.level).toBe("error");
+    expect(ctx.tags).toEqual({
+      feature: SPAWN_DEAD_LETTER_FEATURE,
+      op: SPAWN_DEAD_LETTER_OP,
+      reason: "leader_internal_error",
+    });
+    expect(ctx.extra.lifecycle).toBe("timed_out");
     expect(JSON.stringify(captureMessageSpy.mock.calls)).not.toContain(FOUNDER_ID);
   });
 });

@@ -83,6 +83,7 @@ import type { Readable } from "node:stream";
 import * as Sentry from "@sentry/nextjs";
 import { canonicalizeC4Model } from "@/lib/c4-canonical.mjs";
 import { C4_MODEL_JSON } from "@/lib/c4-constants";
+import { c4ModelCounts } from "@/lib/c4-model-shape";
 import { c4RenderStagingRoot } from "@/server/c4-staging-root";
 import type { RefusalClass, StageResult } from "@/server/c4-stage-sources";
 import logger from "@/server/logger";
@@ -762,7 +763,8 @@ async function renderToValidatedModel(dir: string): Promise<RenderResult> {
     // Gate on a NON-EMPTY plain object of elements. `elements` is untrusted CLI
     // output — a non-empty string/array would make a bare `Object.keys(…)` non-
     // zero and let a malformed export through (the exact clobber this prevents).
-    const elementCount = plainObjectSize(model.elements);
+    const counts = c4ModelCounts(model);
+    const elementCount = counts.elements;
     if (elementCount === 0) {
       // The diagnostic IS the captured stderr (the `Could not resolve …` lines);
       // gate on element count, never on stderr substring (wording can drift
@@ -778,7 +780,7 @@ async function renderToValidatedModel(dir: string): Promise<RenderResult> {
     // Views gate: a successful layout always emits at least `index` (measured,
     // even for a source with no `views {}` block), so zero views is OUR layout
     // failing — never commit it over the good model.
-    if (plainObjectSize(model.views) === 0) {
+    if (counts.views === 0) {
       return {
         ok: false,
         phase: "spawn",
@@ -820,10 +822,6 @@ async function renderToValidatedModel(dir: string): Promise<RenderResult> {
       detailClass: "other",
     };
   }
-}
-
-function plainObjectSize(v: unknown): number {
-  return v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v).length : 0;
 }
 
 function runLikeC4(
@@ -1010,7 +1008,7 @@ export async function verifyC4RenderSandboxOnce(): Promise<void> {
   try {
     const res = await renderC4Model(PROBE_STAGE);
     if (res.ok) {
-      const views = plainObjectSize((JSON.parse(res.json) as { views?: unknown }).views);
+      const views = c4ModelCounts(JSON.parse(res.json)).views;
       logger.info(
         { event: "c4_render_sandbox_probe", ok: true, durationMs: res.durationMs, views },
         "kb/c4: render sandbox self-probe ok",

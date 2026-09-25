@@ -65,7 +65,7 @@ pass=0; fail=0
 
 # Deliberately-nonzero grep inside a command substitution must not trip `set -e`
 # (accumulate-then-exit foot-gun): the trailing `|| true` keeps a no-match empty.
-line_of() { { grep -nF -- "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; } || true; }
+line_of() { { grep -nF -- "$2" "$1" 2>/dev/null | sed -n '1p' | cut -d: -f1; } || true; }
 
 # ── AC0: the extraction above is actually job-scoped ──────────────────────────────
 # Every assertion that greps $JOB inherits its correctness from this one. Measured,
@@ -176,7 +176,7 @@ fi
 # Non-vacuity: the set +e must appear AFTER the extraction's rm -rf "$SEED" and
 # BEFORE the bare cloudflared apt install.
 rm_ln=$(line_of "$CI" 'rm -rf "$SEED"')
-h3_ln=$(grep -nE 'set \+e.*H3' "$CI" | head -1 | cut -d: -f1 || true)
+h3_ln=$(grep -nE 'set \+e.*H3' "$CI" | sed -n '1p' | cut -d: -f1 || true)
 apt_ln=$(line_of "$CI" 'apt-get install -y cloudflared')
 if [ -n "$rm_ln" ] && [ -n "$h3_ln" ] && [ -n "$apt_ln" ] && [ "$rm_ln" -lt "$h3_ln" ] && [ "$h3_ln" -lt "$apt_ln" ]; then
   ok "H3: set +e (line $h3_ln) sits between extraction end ($rm_ln) and cloudflared apt ($apt_ln)"
@@ -290,7 +290,7 @@ fi
 # emitted nothing" identically to a host that genuinely did. So the check runs in
 # BOTH directions: every literal in the QUERY must be emitted somewhere, and every
 # canonical emit must appear in the QUERY.
-QUERY_LINE=$({ grep -nE "^\s*QUERY='" "$TRAIL" || true; } | head -1 | cut -d: -f1)
+QUERY_LINE=$({ grep -nE "^\s*QUERY='" "$TRAIL" || true; } | sed -n '1p' | cut -d: -f1)
 if [ -z "$QUERY_LINE" ]; then
   no "AC8: could not locate the QUERY line in $(basename "$TRAIL")"
 else
@@ -328,8 +328,8 @@ else
   # fallback message's `(zot miss)` would turn into a regex group.
   # Both operands are READ, not restated: the QUERY literal from the trail, the beacon message
   # from the _emit call site — two constants compared to each other can never fail.
-  q_lit=$(printf '%s' "$QUERY" | grep -oE 'message:"app image served[^"]*"' | sed -E 's/message:"([^"]+)"/\1/' | head -1) || q_lit=""
-  z_msg=$(grep -vE '^[[:space:]]*#' "$CI" | grep -oE '_emit "app image served by zot" "app_zot"' | sed -E 's/_emit "([^"]+)".*/\1/' | head -1) || z_msg=""
+  q_lit=$(printf '%s' "$QUERY" | grep -oE 'message:"app image served[^"]*"' | sed -E 's/message:"([^"]+)"/\1/' | sed -n '1p') || q_lit=""
+  z_msg=$(grep -vE '^[[:space:]]*#' "$CI" | grep -oE '_emit "app image served by zot" "app_zot"' | sed -E 's/_emit "([^"]+)".*/\1/' | sed -n '1p') || z_msg=""
   if [ -n "$q_lit" ] && [ -n "$z_msg" ] && case "$z_msg" in "$q_lit"*) true ;; *) false ;; esac; then
     ok "AC8: the QUERY literal '$q_lit' is a prefix of the emitted app_zot message '$z_msg' (MSG_RE matches the beacon)"
   else no "AC8: QUERY literal '${q_lit:-<none>}' must be a prefix of the emitted app_zot message '${z_msg:-<none>}'"; fi
@@ -644,7 +644,7 @@ fi
 # spot. The fix moves on_err to the TOP of runcmd and bumps STAGE per install step. Guard that:
 #   (a) on_err is armed BEFORE the doppler download (early coverage), and
 #   (b) on_err is defined exactly ONCE (moved, not duplicated — no transport drift / no bytes).
-armln=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+armln=$(grep -nE '^\s*trap on_err EXIT' "$CI" | sed -n '1p' | cut -d: -f1 || true)
 dopplerln=$(line_of "$CI" 'tar xzf /tmp/doppler.tar.gz')
 if [ -n "$armln" ] && [ -n "$dopplerln" ] && [ "$armln" -lt "$dopplerln" ]; then
   ok "AC12: on_err trap armed (line $armln) BEFORE the doppler install ($dopplerln) — pre-extraction covered"
@@ -713,9 +713,9 @@ else
 fi
 # Ordering: STAGE must be set BEFORE the hang-capable command (else the fatal mis-attributes), and
 # the apt block must sit AFTER the trap arm (else no emit coverage). Guards a silent regression.
-su_ln=$(grep -nE '^\s*STAGE=apt_update' "$CI" | head -1 | cut -d: -f1 || true)
-auu_ln=$(grep -nE 'timeout [0-9]+ apt-get update' "$CI" | head -1 | cut -d: -f1 || true)
-armln2=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+su_ln=$(grep -nE '^\s*STAGE=apt_update' "$CI" | sed -n '1p' | cut -d: -f1 || true)
+auu_ln=$(grep -nE 'timeout [0-9]+ apt-get update' "$CI" | sed -n '1p' | cut -d: -f1 || true)
+armln2=$(grep -nE '^\s*trap on_err EXIT' "$CI" | sed -n '1p' | cut -d: -f1 || true)
 if [ -n "$su_ln" ] && [ -n "$auu_ln" ] && [ -n "$armln2" ] && [ "$armln2" -lt "$su_ln" ] && [ "$su_ln" -lt "$auu_ln" ]; then
   ok "AC17: trap-arm ($armln2) < STAGE=apt_update ($su_ln) < apt-get update ($auu_ln) — covered + correctly attributed"
 else
@@ -724,7 +724,7 @@ fi
 # The cloudflare keyring must be fetched BEFORE the first apt-get update — the cloudflare source is
 # active from boot (write_files), so an update before the key deterministically fails (missing
 # signed-by keyring) and masks the real cause. (Anchor on the curl fetch, not the deb/signed-by line.)
-cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | head -1 | cut -d: -f1 || true)
+cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | sed -n '1p' | cut -d: -f1 || true)
 if [ -n "$cfk_ln" ] && [ -n "$auu_ln" ] && [ "$cfk_ln" -lt "$auu_ln" ]; then
   ok "AC17: cloudflare keyring fetched (line $cfk_ln) BEFORE apt-get update ($auu_ln) — no missing-key fatal"
 else
@@ -971,8 +971,8 @@ fi
 # (2) cloud-init call site: fail-open + wall-clock-bounded, at end-of-chain. The outer `timeout`
 #     MUST strictly exceed the helper's inner `curl --max-time N` — else a slow cold-boot tarball
 #     fetch is SIGTERM-truncated into a silently-absent Better Stack source (perf review P2).
-outer_to=$( (grep -oE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | head -1 | grep -oE '[0-9]+') || true )
-inner_ct=$( (grep -oE 'curl -fsSL --max-time [0-9]+' "$BOOT" | head -1 | grep -oE '[0-9]+$') || true )
+outer_to=$( (grep -oE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | sed -n '1p' | grep -oE '[0-9]+') || true )
+inner_ct=$( (grep -oE 'curl -fsSL --max-time [0-9]+' "$BOOT" | sed -n '1p' | grep -oE '[0-9]+$') || true )
 if grep -qE "timeout [0-9]+ sh -c 'soleur-vector-install' \|\| true" "$CI" \
    && [ -n "$outer_to" ] && [ -n "$inner_ct" ] && [ "$outer_to" -gt "$inner_ct" ]; then
   ok "AC22: cloud-init Vector install is fail-open + timeout-bounded; outer timeout ${outer_to}s > inner curl ${inner_ct}s"
@@ -980,8 +980,8 @@ else
   no "AC22: ungated Vector install must be 'timeout N sh -c … || true' with outer N (${outer_to:-?}) > inner curl --max-time (${inner_ct:-?})"
 fi
 # (3) the call site is the LAST runcmd — AFTER the terminal cloud_init_complete breadcrumb
-vi_ln=$( (grep -nE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | head -1 | cut -d: -f1) || true )
-cc_ln=$( (grep -nF 'soleur-boot-emit cloud_init_complete info' "$CI" | head -1 | cut -d: -f1) || true )
+vi_ln=$( (grep -nE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | sed -n '1p' | cut -d: -f1) || true )
+cc_ln=$( (grep -nF 'soleur-boot-emit cloud_init_complete info' "$CI" | sed -n '1p' | cut -d: -f1) || true )
 if [ -n "$vi_ln" ] && [ -n "$cc_ln" ] && [ "$vi_ln" -gt "$cc_ln" ]; then
   ok "AC22: Vector install runcmd (line $vi_ln) is AFTER cloud_init_complete (line $cc_ln) — end-of-chain"
 else
@@ -1101,8 +1101,8 @@ else
   no "AC23: terminal block must arm 'trap rc=\$?; rm -f \${TMPENV:-}; [ \$rc = 0 ] || soleur-boot-emit \$stage fatal EXIT'"
 fi
 # (2) armed EARLY: stage=terminal_preamble appears BEFORE the hostscripts poweroff test
-tp_ln=$( (grep -nF 'stage=terminal_preamble' "$CI" | head -1 | cut -d: -f1) || true )
-hs_ln=$( (grep -nF 'refusing to start app' "$CI" | head -1 | cut -d: -f1) || true )
+tp_ln=$( (grep -nF 'stage=terminal_preamble' "$CI" | sed -n '1p' | cut -d: -f1) || true )
+hs_ln=$( (grep -nF 'refusing to start app' "$CI" | sed -n '1p' | cut -d: -f1) || true )
 if [ -n "$tp_ln" ] && [ -n "$hs_ln" ] && [ "$tp_ln" -lt "$hs_ln" ]; then
   ok "AC23: stage=terminal_preamble armed (line $tp_ln) before the hostscripts poweroff (line $hs_ln)"
 else
@@ -1121,9 +1121,9 @@ else
   no "AC23: the trap stage must advance through doppler_download + docker_run"
 fi
 # (5) disarm (trap - EXIT) AFTER docker_run/rm-TMPENV, BEFORE the self-emitting egress probe
-dr_ln=$( (grep -nF 'stage=docker_run' "$CI" | head -1 | cut -d: -f1) || true )
+dr_ln=$( (grep -nF 'stage=docker_run' "$CI" | sed -n '1p' | cut -d: -f1) || true )
 # find the disarm that sits between docker_run and the egress probe
-ep_ln=$( (grep -nF 'cron-egress-enforce-probe.sh' "$CI" | head -1 | cut -d: -f1) || true )
+ep_ln=$( (grep -nF 'cron-egress-enforce-probe.sh' "$CI" | sed -n '1p' | cut -d: -f1) || true )
 disarm_ln=$( (awk -v a="$dr_ln" -v b="$ep_ln" 'NR>a && NR<b && /^    trap - EXIT$/ {print NR; exit}' "$CI") || true )
 if [ -n "$disarm_ln" ]; then
   ok "AC23: EXIT trap disarmed (line $disarm_ln) between docker_run and the self-emitting egress probe"

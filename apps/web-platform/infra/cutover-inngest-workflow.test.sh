@@ -412,9 +412,9 @@ assert "#6178 op=doublefire-probe NEVER calls the narrowed fsm form" "! grep -qF
 # maps to a webhook non-200 ONLY IF the hook has include-command-output-in-response-on-error.
 # Then the workflow's CODE!=200 cause-branch surfaces the real SOLEUR_*_TIMEOUT text — NOT
 # the 200-branch shape guard. Assert BOTH halves of that mapping.
-assert "inventory hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-inventory\"' '$HOOKS_TMPL' | grep -q 'include-command-output-in-response-on-error.*true'"
-assert "doublefire hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-doublefire-probe\"' '$HOOKS_TMPL' | grep -q 'include-command-output-in-response-on-error.*true'"
-assert "registry-probe hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-registry-probe\"' '$HOOKS_TMPL' | grep -q 'include-command-output-in-response-on-error.*true'"
+assert "inventory hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-inventory\"' '$HOOKS_TMPL' | grep -c 'include-command-output-in-response-on-error.*true' >/dev/null"
+assert "doublefire hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-doublefire-probe\"' '$HOOKS_TMPL' | grep -c 'include-command-output-in-response-on-error.*true' >/dev/null"
+assert "registry-probe hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-registry-probe\"' '$HOOKS_TMPL' | grep -c 'include-command-output-in-response-on-error.*true' >/dev/null"
 assert "inventory arm surfaces the non-200 CAUSE body via CODE!=200 branch" "grep -qE 'inventory returned HTTP \\\$CODE after 2 attempts' '$WF'"
 assert "verify registry-probe arm surfaces the non-200 CAUSE via CODE!=200 branch" "grep -qE 'registry-probe returned HTTP \\\$CODE after 2 attempts' '$WF'"
 assert "verify doublefire arm surfaces the non-200 CAUSE via CODE!=200 branch" "grep -qE 'doublefire-probe returned HTTP \\\$CODE after 2 attempts' '$WF'"
@@ -427,7 +427,7 @@ assert "exactly 3 bounded transport retries (inventory + 2 verify curls)" "[[ '$
 assert "retry backoff gap present (sleep 5 between attempts)" "grep -qE 'retrying in 5s' '$WF'"
 assert "retry fails CLOSED (still-non-200 after 2 attempts exits 1)" "grep -qE 'after 2 attempts' '$WF'"
 # NEGATIVE scoping: the DI-C3 execute inventory gate (:565, /tmp/exec-inv) is NOT retried.
-assert "DI-C3 execute inventory gate is NOT wrapped in a retry (single-shot)" "! grep -B2 'BASE/inngest-inventory\" || echo \"000\")' '$WF' | grep -q 'exec-inv.*for attempt'"
+assert "DI-C3 execute inventory gate is NOT wrapped in a retry (single-shot)" "! grep -B2 'BASE/inngest-inventory\" || echo \"000\")' '$WF' | grep -c 'exec-inv.*for attempt' >/dev/null"
 # The registry_empty VERDICT (registry_empty != false) is downstream of the retry loop, un-retried.
 assert "registry_empty verdict is a separate downstream check (not inside the retry loop)" "grep -qE 'verify precondition FAILED' '$WF'"
 
@@ -515,8 +515,8 @@ assert "arm) exactly three prod secret writes remain (URI, heartbeat, flag)" "[[
 # boots against the dark backend and the job exits 0. Measured: it satisfied every other assertion
 # here. Pin the REGION instead — from the first prod write to the `armed` write there must be no
 # branching at all, because all three writes are unconditional by design.
-W_START=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
-W_END=$(grep -nF "printf '%s' 'armed'" "$ARM_FILE" | head -1 | cut -d: -f1) || true
+W_START=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
+W_END=$(grep -nF "printf '%s' 'armed'" "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
 W_BRANCH=$(awk -v a="$W_START" -v b="$W_END" 'NR>=a && NR<=b' "$ARM_FILE" | grep -cE '^[[:space:]]*(if|else|elif|fi)\b' || true)
 assert "arm) the prod-write region is non-empty (F6 non-vacuity)" "[[ -n '$W_START' && -n '$W_END' && '$W_END' -gt '$W_START' ]]"
 assert "arm) NO branching between the first prod write and the armed write" "[[ '$W_BRANCH' -eq 0 ]]"
@@ -686,8 +686,8 @@ assert "g3_action scenarios actually dispatched (>=7)" "[[ '$ACT_EVALS' -ge 7 ]]
 # One abort gate, routed through the tested function, sitting before the first prod write.
 assert "arm) has exactly one G3 abort gate routed through g3_action" "[[ \$(grep -cF 'if [[ \"\$(g3_action \"\$G3_OUTCOME\")\" == \"abort\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
 assert "arm) no G3 outcome arm carries its own exit (the gate decides)" "! grep -qE '^[[:space:]]+(refuse|skip|write)[a-z-]*\)[^#]*exit 1' '$ARM_FILE'"
-G3ABORT_LN=$(grep -nF 'g3_action "$G3_OUTCOME"' "$ARM_FILE" | head -1 | cut -d: -f1) || true
-G3ABORT_PGW=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+G3ABORT_LN=$(grep -nF 'g3_action "$G3_OUTCOME"' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
+G3ABORT_PGW=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
 assert "arm) the G3 abort gate precedes the first prod write" "[[ -n '$G3ABORT_LN' && -n '$G3ABORT_PGW' && '$G3ABORT_LN' -lt '$G3ABORT_PGW' ]]"
 
 # G3.6's decision, driven the same way. Greps over the arm body could not see this: adding
@@ -1126,7 +1126,7 @@ assert "#7674 liveness reader does NOT enumerate noop-* reasons (would read H=0 
 assert "#7674 host isolation is NOT attempted via --grep (which is OR-combined, so it would widen)" \
   "! grep -qE '\\-\\-grep[= ]*[\"'\'']?host_name' <<<\"\$FLV_ARGV_SEEN\""
 assert "#7674 the liveness reader decodes .raw before matching the host (raw is double-encoded; since the generation scope, in the floored filter it calls)" \
-  "grep -vE '^[[:space:]]*#' '$GEN_FN' | grep -qE '\\(\\.raw \\| if type == \"string\" then \\(fromjson'"
+  "grep -vE '^[[:space:]]*#' '$GEN_FN' | grep -cE '\\(\\.raw \\| if type == \"string\" then \\(fromjson' >/dev/null"
 # DELIBERATELY A LITERAL, not env-overridable (#7674 review): it is not mapped into
 # cutover-inngest.yml's step env, so an override would be an unperformable remediation (the
 # #6617 dead-remediation class), and widening this window is the FAIL-OPEN direction.
@@ -1365,7 +1365,7 @@ assert "G3 generation invariant: vector.toml never ships previous boots (no curr
 assert "G3 generation invariant: nothing rebuilds a server in place (no API or CLI server-rebuild call in scripts/, .github/, apps/, plugins/)" \
   "! grep -rqE 'actions/[r]ebuild|server [r]ebuild' '$REPO_ROOT/scripts' '$REPO_ROOT/.github' '$REPO_ROOT/apps' '$REPO_ROOT/plugins' --include='*.sh' --include='*.yml' --include='*.yaml' --include='*.tf' --include='*.ts' --include='*.py'"
 assert "G3 generation: the workflow YAML carries no knob that could weaken the floor" \
-  "! grep -vE '^[[:space:]]*#' '$WF_YAML' | grep -qE 'INNGEST_HOST|FLOOR|SKEW|HCLOUD'"
+  "! grep -vE '^[[:space:]]*#' '$WF_YAML' | grep -cE 'INNGEST_HOST|FLOOR|SKEW|HCLOUD' >/dev/null"
 assert "G3 generation: resume's silent refusal makes the replace advice conditional on the server's age" \
   "grep -qF 'Only if that ::notice:: shows the server is more than 600s old with counted=0, skew_suspect=0 AND malformed=0 is an inngest-host-replace the path forward' '$RESUME_FILE'"
 assert "G3 generation: the unreadable refusals point at the ::warning:: naming the failed read (resume, LUKS, arm)" \
@@ -1414,8 +1414,8 @@ assert "#7674 resume does NOT reuse flush_latch_decide (L's polarity inverts bet
 # this row existed). The gate must be fed by the real reader.
 assert "#7674 resume) feeds G3 from _flip_liveness_count, not a literal (severing it must red)" \
   "grep -qF 'RS_LIVE_N=\"\$(_flip_liveness_count)\"' '$RESUME_FILE'"
-RSL_RD=$(grep -nF 'RS_LIVE_N="$(_flip_liveness_count)"' "$RESUME_FILE" | head -1 | cut -d: -f1) || true
-RSL_WR=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$RESUME_FILE" | head -1 | cut -d: -f1) || true
+RSL_RD=$(grep -nF 'RS_LIVE_N="$(_flip_liveness_count)"' "$RESUME_FILE" | sed -n '1p' | cut -d: -f1) || true
+RSL_WR=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$RESUME_FILE" | sed -n '1p' | cut -d: -f1) || true
 assert "#7674 resume) reads liveness BEFORE writing flushed (got read=$RSL_RD write=$RSL_WR)" \
   "[[ -n '$RSL_RD' && -n '$RSL_WR' && '$RSL_RD' -lt '$RSL_WR' ]]"
 assert "#7674 resume) routes through resume_liveness_decide exactly once" \
@@ -1470,8 +1470,8 @@ assert "#7674 the confirm + liveness call sites pass the flip tag and the one-pa
 FLV_SITES=$(grep -cE '^[[:space:]]+FLIP_LIVENESS_N="?\$\(_flip_liveness_count' "$ARM_FILE") || true
 assert "arm) reads liveness via _flip_liveness_count exactly once, got $FLV_SITES" \
   "[[ '$FLV_SITES' -eq 1 ]]"
-FLV_LN=$(grep -nE '^[[:space:]]+FLIP_LIVENESS_N=' "$ARM_FILE" | head -1 | cut -d: -f1) || true
-FLD_LN=$(grep -nE '^[[:space:]]+FL_OUTCOME=' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FLV_LN=$(grep -nE '^[[:space:]]+FLIP_LIVENESS_N=' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
+FLD_LN=$(grep -nE '^[[:space:]]+FL_OUTCOME=' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
 assert "arm) the liveness reader is invoked BEFORE flush_latch_decide (H is never stale/unset)" \
   "[[ -n '$FLV_LN' && -n '$FLD_LN' && '$FLV_LN' -lt '$FLD_LN' ]]"
 assert "arm) flush_latch_decide is called with BOTH signals (a one-arg call is the old fail-open)" \
@@ -1479,16 +1479,16 @@ assert "arm) flush_latch_decide is called with BOTH signals (a one-arg call is t
 assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
   "! grep -qE '^[[:space:]]+(clear|latched|unreadable|silent)\\)[^#]*exit 1' '$ARM_FILE'"
 # shellcheck disable=SC2016  # literal search pattern, not an expansion (G3ABORT_LN precedent)
-FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | head -1 | cut -d: -f1) || true
-FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
-FL_ARMW_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
+FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
+FL_ARMW_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
 assert "arm) the G3.7 gate precedes the first prod write (pre-G4, not merely pre-G5)" \
   "[[ -n '$FL_GATE_LN' && -n '$FL_PGW_LN' && '$FL_GATE_LN' -lt '$FL_PGW_LN' ]]"
 assert "arm) the G3.7 gate precedes the 'armed' write (the double-fire window it closes)" \
   "[[ -n '$FL_GATE_LN' && -n '$FL_ARMW_LN' && '$FL_GATE_LN' -lt '$FL_ARMW_LN' ]]"
 # It must run AFTER G3.6 — both are pre-write refusals, and the cheaper Doppler read should not
 # be gated behind a Better Stack round-trip.
-FL_DIAG_LN=$(grep -nE 'case "\$\(diag_boot_decide ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FL_DIAG_LN=$(grep -nE 'case "\$\(diag_boot_decide ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
 assert "arm) G3.7 runs after G3.6 (ordering is stated, not incidental)" \
   "[[ -n '$FL_DIAG_LN' && -n '$FL_GATE_LN' && '$FL_DIAG_LN' -lt '$FL_GATE_LN' ]]"
 # The refusal must name the durable latch and forbid SSH, like every other refusal in this file.
@@ -1540,8 +1540,8 @@ assert "arm) G3.5 is a HARD GATE — a divergence exits op=arm non-zero (PARITY_
 assert "arm) has a G3.6 diagnostic-boot hard gate" "grep -qF 'G3.6 REFUSING' '$ARM_FILE'"
 assert "arm) G3.6 reads INNGEST_DIAGNOSTIC_BOOT from the isolated config via the arm token" "grep -qE 'doppler secrets get INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd' '$ARM_FILE'"
 assert "arm) G3.6 fails CLOSED on an unreadable diagnostic flag" "grep -qF '__UNREADABLE__' '$ARM_FILE'"
-G36_LN=$(grep -nF 'G3.6 REFUSING' "$ARM_FILE" | head -1 | cut -d: -f1) || true
-G36_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+G36_LN=$(grep -nF 'G3.6 REFUSING' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
+G36_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
 assert "arm) G3.6 refuses BEFORE the first prod write (G4)" "[[ -n '$G36_LN' && -n '$G36_PGW_LN' && '$G36_LN' -lt '$G36_PGW_LN' ]]"
 assert "arm) G3.5 cites the #6178 cutover-502 condition in its remediation" "grep -qF 'cutover-502' '$ARM_FILE'"
 # The parity gate runs BEFORE the arm writes (G4/G5) — a divergent channel must
@@ -1618,7 +1618,7 @@ assert "#7228 a failed pause WARNs and does not block the web re-enable" \
 # -A4, not -A1: the mask is now preceded by its own rationale comment. The property is that the
 # mask lands BEFORE any use, not that it is literally the next line.
 assert "#7228 BETTERSTACK_API_TOKEN is masked immediately after capture, before any use" \
-  "grep -A4 'BS_API=\$(doppler secrets get BETTERSTACK_API_TOKEN' '$ROLLBACK_FILE' | grep -qF '::add-mask::'"
+  "grep -A4 'BS_API=\$(doppler secrets get BETTERSTACK_API_TOKEN' '$ROLLBACK_FILE' | grep -cF '::add-mask::' >/dev/null"
 # The read must be SCOPED: this was the only Doppler read in the file without -p/-c, so it
 # depended on ambient config the workflow does not document, while the warning beneath it named
 # prd_terraform explicitly. Fail-open is right here; an unscoped read made it the likely path.
@@ -1702,7 +1702,7 @@ assert "#6617 both are curl -X GET" "[[ \"\$(grep -c -- '-X GET' '$PROBE_ARMS_FI
 assert "#6617 both are bounded (--max-time)" "[[ \"\$(grep -c -- '--max-time' '$PROBE_ARMS_FILE')\" == '2' ]]"
 
 # 2. No request body, by any tool or flag spelling.
-assert "#6617 probe arms send NO request body (long forms anywhere; -d/-T only judged on a curl line — mktemp -d is not a body)" "! grep -qE '(^|[[:space:]])(--data|--data-binary|--data-raw|--data-urlencode|--post-data|--post-file|--upload-file)([[:space:]]|=)' '$PROBE_ARMS_CODE' && ! grep -E '(^|[^a-z-])curl[[:space:]]' '$PROBE_ARMS_CODE' | grep -qE '[[:space:]](-d|-T)([[:space:]]|=)'"
+assert "#6617 probe arms send NO request body (long forms anywhere; -d/-T only judged on a curl line — mktemp -d is not a body)" "! grep -qE '(^|[[:space:]])(--data|--data-binary|--data-raw|--data-urlencode|--post-data|--post-file|--upload-file)([[:space:]]|=)' '$PROBE_ARMS_CODE' && ! grep -E '(^|[^a-z-])curl[[:space:]]' '$PROBE_ARMS_CODE' | grep -cE '[[:space:]](-d|-T)([[:space:]]|=)' >/dev/null"
 assert "#6617 probe arms use NO non-GET method flag" "! grep -qE '(-X|--request)[[:space:]]*(POST|PUT|PATCH|DELETE)' '$PROBE_ARMS_FILE'"
 
 # 3. No mutating tool present at all, whatever its flag order.
@@ -1723,7 +1723,7 @@ assert "#6617 probe arms touch NO flip/quiesce/rearm hook" "! grep -qE 'inngest-
 # Anchored at LINE START: a loop keyword only ever begins a statement there.
 # The unanchored form matched the word "for" inside this arm's own comments —
 # the same comment-vs-code collision cq-assert-anchor-not-bare-token warns about.
-assert "#6617 probe arms add NO retry loop (the one emit-file read loop is allowlisted by its exact header)" "! grep -vF 'while IFS= read -r _rpg_line; do' '$PROBE_ARMS_CODE' | grep -qE '^[[:space:]]*(for|while|until)[[:space:]]'"
+assert "#6617 probe arms add NO retry loop (the one emit-file read loop is allowlisted by its exact header)" "! grep -vF 'while IFS= read -r _rpg_line; do' '$PROBE_ARMS_CODE' | grep -cE '^[[:space:]]*(for|while|until)[[:space:]]' >/dev/null"
 
 # --- Reviewer-gate membership (B-AC3, amended #7228) -----------------------------------------
 # This was a byte-identity pin on the environment: expression, whose purpose is to stop the
@@ -1734,22 +1734,22 @@ assert "#6617 probe arms add NO retry loop (the one emit-file read loop is allow
 # both directions — every prod-writing op is gated, and the read-only probe ops still are not.
 # That is strictly stronger than the byte pin: it would also catch a REMOVAL, which byte identity
 # only caught incidentally.
-ENV_EXPR=$(grep -E '^[[:space:]]+environment:' "$WF" | head -1 || true)
+ENV_EXPR=$(grep -E '^[[:space:]]+environment:' "$WF" | sed -n '1p' || true)
 assert "#7228 the environment: expression was located (else these pins are vacuous)" \
   "[[ -n \"\$ENV_EXPR\" ]]"
 for _op in arm rollback resume; do
   assert "#7228 prod-writing op '\$_op' is INSIDE the required-reviewer gate" \
-    "printf '%s' \"\$ENV_EXPR\" | grep -qF \"inputs.op == '\$_op'\""
+    "printf '%s' \"\$ENV_EXPR\" | grep -cF \"inputs.op == '\$_op'\" >/dev/null"
 done
 assert "#7228 the gate still resolves to the inngest-cutover environment" \
-  "printf '%s' \"\$ENV_EXPR\" | grep -qF \"'inngest-cutover'\""
+  "printf '%s' \"\$ENV_EXPR\" | grep -cF \"'inngest-cutover'\" >/dev/null"
 # THE OP SET IS DUPLICATED IN TWO EXPRESSIONS AND NOTHING TIED THEM TOGETHER (#7674 review).
 # `environment:` decides WHO MUST APPROVE; the DOPPLER_TOKEN_INNGEST_ARM expression decides WHO
 # GETS THE PROD-WRITE TOKEN. Adding an op to the token expression but not the environment one
 # hands that op an arm-capable credential with NO required reviewer — and every pre-existing
 # assertion here passed, because they check the two expressions independently. Pin the SETS equal.
 ENV_OPS=$(printf '%s' "$ENV_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
-TOK_EXPR=$(grep -E 'DOPPLER_TOKEN_INNGEST_ARM:' "$WF" | head -1) || true
+TOK_EXPR=$(grep -E 'DOPPLER_TOKEN_INNGEST_ARM:' "$WF" | sed -n '1p') || true
 TOK_OPS=$(printf '%s' "$TOK_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
 assert "#7674 the token expression was located (else the parity row below is vacuous)" \
   "[[ -n '$TOK_EXPR' ]]"
@@ -1762,7 +1762,7 @@ assert "#7674 environment: and DOPPLER_TOKEN_INNGEST_ARM gate the SAME op set (n
 assert "#7674 no step tolerates failure (a continue-on-error would green-light every refused gate)" \
   "! grep -qE '^[[:space:]]*continue-on-error:' '$WF_YAML'"
 
-assert "#6617 neither probe op appears in the environment: expression" "! grep -E '^[[:space:]]+environment:' '$WF' | grep -qE 'registry-probe|doublefire-probe'"
+assert "#6617 neither probe op appears in the environment: expression" "! grep -E '^[[:space:]]+environment:' '$WF' | grep -cE 'registry-probe|doublefire-probe' >/dev/null"
 
 # --- Scope caveat carried verbatim from op=verify 2.6 (B-AC7) ---
 # #6921 D5: the caveat names the web HOST (web-1's colocated scheduler), not web-2 — the cattle web-2
@@ -1782,7 +1782,7 @@ assert "#6617 doublefire-probe carries the 2.6 scope caveat" "grep -qF 'NOT a we
 # reads this boolean with `//`; the only correct read is bare `.registry_empty`. (Single-line
 # only — a jq program split across lines is an accepted residual gap, not a realistic hand-edit.)
 assert "no jq '//'-on-boolean read of registry_empty (false // x == x bug, #6178)" \
-  "! grep -vE '^[[:space:]]*#' '$WF' | grep -qE '\.registry_empty[[:space:]]*//'"
+  "! grep -vE '^[[:space:]]*#' '$WF' | grep -cE '\.registry_empty[[:space:]]*//' >/dev/null"
 # And assert BOTH consumer preconditions read the boolean directly (parity — they had drifted).
 assert "registry_empty read directly (bare, no //) at least twice (op=rearm + op=verify)" \
   "[[ \"\$(grep -cE \"jq -r '\.registry_empty'\" '$WF')\" -ge 2 ]]"
@@ -2294,7 +2294,7 @@ done <<<"$DEDUPE_PROGS"
 assert "#6178 the dedupe loop executed both sites" "[[ '$di' -eq 2 ]]"
 VERIFY_ARM_BODY=$(grep -vE '^[[:space:]]*#' "$WF") || true
 assert "#6178 op=verify FAILS an incomplete scan (deduped RUN_COUNT < total_count) instead of printing a verdict" \
-  "grep -A2 -F '(( RUN_COUNT < TOTAL_COUNT ))' <<<\"\$VERIFY_ARM_BODY\" | grep -qF '2.6 INCOMPLETE SCAN' && grep -A3 -F '2.6 INCOMPLETE SCAN' <<<\"\$VERIFY_ARM_BODY\" | grep -qE '^[[:space:]]*exit 1'"
+  "grep -A2 -F '(( RUN_COUNT < TOTAL_COUNT ))' <<<\"\$VERIFY_ARM_BODY\" | grep -cF '2.6 INCOMPLETE SCAN' >/dev/null && grep -A3 -F '2.6 INCOMPLETE SCAN' <<<\"\$VERIFY_ARM_BODY\" | grep -cE '^[[:space:]]*exit 1' >/dev/null"
 assert "#6178 op=verify QUALIFIES a verdict whose dedupe fell back off the run id" \
   "grep -qF '[[ \"\$DEDUPE_KEY\" != \"run-id\" ]]' <<<\"\$VERIFY_ARM_BODY\""
 
@@ -2306,7 +2306,7 @@ assert "#6178 op=verify HARD-FAILS a vacuous scan rather than reporting a verdic
 assert "#6178 the vacuity gate covers 0, unknown, absent AND run_count==0" \
   "grep -qF '\"\$TOTAL_COUNT\" == \"0\"' '$VERIFY_ARM_FILE' && grep -qF '\"\$TOTAL_COUNT\" == \"unknown\"' '$VERIFY_ARM_FILE' && grep -qF '\"\$TOTAL_COUNT\" == \"absent\"' '$VERIFY_ARM_FILE' && grep -qF '\"\$RUN_COUNT\" -eq 0' '$VERIFY_ARM_FILE'"
 assert "#6178 the vacuity gate EXITS (a warning would still let the verdict print)" \
-  "grep -A3 'VACUOUS SCAN' '$VERIFY_ARM_FILE' | grep -qE 'exit 1'"
+  "grep -A3 'VACUOUS SCAN' '$VERIFY_ARM_FILE' | grep -cE 'exit 1' >/dev/null"
 assert "#6178 op=verify QUALIFIES a clean verdict when the claim is weaker" \
   "grep -qF 'VERDICT_QUALIFIERS' '$VERIFY_ARM_FILE' && grep -qF 'exactly-once VERIFIED (QUALIFIED)' '$VERIFY_ARM_FILE'"
 # EXECUTED against the SUT's OWN expression, extracted from the arm -- not a copy retyped
@@ -2352,7 +2352,7 @@ assert "#8054 execute arm extraction is non-vacuous (>100 non-comment lines, got
 ERG_CALLS=$(grep -v '^[[:space:]]*#' "$EXEC_ARM_FILE" | grep -cE '^[[:space:]]*ERG_VERDICT="?\$\(inngest_execute_registry_gate ' || true)
 assert "#8054 2.0 routes through EXACTLY one inngest_execute_registry_gate call, got $ERG_CALLS" "[[ '$ERG_CALLS' -eq 1 ]]"
 assert "#8054 the gate call is ||-guarded (a bare \$(…) under set -e aborts before any ::error:: prints)" \
-  "grep -v '^[[:space:]]*#' '$EXEC_ARM_FILE' | grep -E '^[[:space:]]*ERG_VERDICT=' | grep -qE '\|\| ERG_RC=\\\$\?'"
+  "grep -v '^[[:space:]]*#' '$EXEC_ARM_FILE' | grep -E '^[[:space:]]*ERG_VERDICT=' | grep -cE '\|\| ERG_RC=\\\$\?' >/dev/null"
 assert "#8054 the gate lib is sourced under an || guard (a missing lib on an old ref names the fix, not a mute abort)" \
   "grep -qE '^[[:space:]]*source tests/scripts/lib/inngest-host-dark-gate.sh \|\| \{' '$EXEC_ARM_FILE'"
 # #8079 D7 row 1 / AC13 — the gate's consumer set is exactly {execute, registry-probe}. A per-arm
@@ -2370,7 +2370,7 @@ _gate_census() {  # $1 = script → stdout "arms=N bad=<…>"; rc 1 when the set
   local arm c n=0 bad=""
   while IFS= read -r arm; do
     n=$((n + 1))
-    c=$(awk -v a="$arm" '$0 ~ "^  "a"\\)$"{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | grep -v '^[[:space:]]*#' | grep -o 'inngest_execute_registry_gate' | wc -l)
+    c=$(awk -v a="$arm" '$0 ~ "^  "a"\\)$"{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | grep -v '^[[:space:]]*#' | grep -o 'inngest_execute_registry_gate' | wc -l) || true
     case "$arm" in
       execute|registry-probe) [[ "$c" -eq 1 ]] || bad="$bad $arm=$c(want 1)" ;;
       *)                      [[ "$c" -eq 0 ]] || bad="$bad $arm=$c(want 0)" ;;
@@ -2419,7 +2419,7 @@ for _tok in $ERG_TOKENS; do
 done
 assert "#8079 every execute-gate token has its own case arm in registry-probe too (missing:${_missing_probe_arms:- none})" "[[ -z '$_missing_probe_arms' ]]"
 assert "#8079 the registry-probe *) arm exits 1 and names the GATE as the defect, never the host" \
-  "awk '/^        \*\)\$/{f=1} f' '$PROBE_ARM_FILE' | sed -n '1,8p' | grep -qE 'defect in tests/scripts/lib/inngest-host-dark-gate.sh or in this arm.*NOT a host state' && awk '/^        \*\)\$/{f=1} f' '$PROBE_ARM_FILE' | sed -n '1,8p' | grep -q 'exit 1 ;;'"
+  "awk '/^        \*\)\$/{f=1} f' '$PROBE_ARM_FILE' | sed -n '1,8p' | grep -cE 'defect in tests/scripts/lib/inngest-host-dark-gate.sh or in this arm.*NOT a host state' >/dev/null && awk '/^        \*\)\$/{f=1} f' '$PROBE_ARM_FILE' | sed -n '1,8p' | grep -c 'exit 1 ;;' >/dev/null"
 # PER ARM, not an aggregate: review of #8079 measured 15 `exit 1` lines against a `>= 10` floor, so
 # four tokens could lose their exit (a REFUSED that then exits 0) with the row green. Every non-dark
 # token's body — comment-stripped — must carry `exit 1` AND the no-SSH sentence; the `*)` arm too.
@@ -2427,7 +2427,7 @@ _arm_exit_gaps() {  # $1 = arm file, $2 = verdict var → tokens whose body lack
   local tok gaps="" body
   for tok in $ERG_TOKENS '\\*'; do
     [[ "$tok" == "dark" ]] && continue
-    body=$(awk -v t="$tok" '$0 ~ "^        "t"\\)"{f=1;print;next} f&&/^        [a-z_*]+\)/{exit} f' "$1" | grep -v '^[[:space:]]*#')
+    body=$(awk -v t="$tok" '$0 ~ "^        "t"\\)"{f=1;print;next} f&&/^        [a-z_*]+\)/{exit} f' "$1" | grep -v '^[[:space:]]*#') || true
     grep -q 'exit 1' <<<"$body" && grep -q 'Do NOT SSH the host' <<<"$body" || gaps="$gaps $tok"
   done
   printf '%s' "$gaps"
@@ -2477,9 +2477,9 @@ _EXEC_GAPS="$(_arm_remedy_gaps "$EXEC_ARM_FILE")"; _PROBE_GAPS="$(_arm_remedy_ga
 assert "#8079 every non-dark 2.0 remedy names a no-SSH instrument (gaps:${_EXEC_GAPS:- none})" "[[ -z '$_EXEC_GAPS' ]]"
 assert "#8079 every non-dark registry-probe remedy names a no-SSH instrument (gaps:${_PROBE_GAPS:- none})" "[[ -z '$_PROBE_GAPS' ]]"
 assert "#8079 each case head carries a # twin: pointer at the other arm" \
-  "grep -B3 '^      case \"\$ERG_VERDICT\" in$' '$EXEC_ARM_FILE' | grep -q '# twin: the registry-probe arm' && grep -B3 '^      case \"\$RPG_VERDICT\" in$' '$PROBE_ARM_FILE' | grep -q '# twin: the 2.0 arm'"
+  "grep -B3 '^      case \"\$ERG_VERDICT\" in$' '$EXEC_ARM_FILE' | grep -c '# twin: the registry-probe arm' >/dev/null && grep -B3 '^      case \"\$RPG_VERDICT\" in$' '$PROBE_ARM_FILE' | grep -c '# twin: the 2.0 arm' >/dev/null"
 assert "#8054 the *) arm exits 1 and names the gate as the defect, never the host" \
-  "awk '/^        \*\)\$/{f=1} f' '$EXEC_ARM_FILE' | sed -n '1,8p' | grep -qE 'defect in the gate, not a host state.*exit 1 ;;'"
+  "awk '/^        \*\)\$/{f=1} f' '$EXEC_ARM_FILE' | sed -n '1,8p' | grep -cE 'defect in the gate, not a host state.*exit 1 ;;' >/dev/null"
 # Every refusal arm exits 1: count `exit 1` inside the case at least once per non-dark token.
 _case_exits=$(awk '/^      case "\$ERG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$EXEC_ARM_FILE" | grep -c 'exit 1' || true)
 assert "#8054 the 2.0 case carries an exit 1 per refusal token (>= 10, got $_case_exits)" "[[ '$_case_exits' -ge 10 ]]"
@@ -2489,7 +2489,7 @@ ERG_READS=$(grep -v '^[[:space:]]*#' "$EXEC_ARM_FILE" | grep -E '_bs_query_rows 
 ERG_READ_N=$(printf '%s\n' "$ERG_READS" | grep -c . || true)
 assert "#8054 2.0 makes exactly two Better Stack reads, got $ERG_READ_N" "[[ '$ERG_READ_N' -eq 2 ]]"
 assert "#8054 one read carries the probe marker, the other the flip tag, and neither carries both" \
-  "printf '%s\n' \"\$ERG_READS\" | grep -c 'SOLEUR_INNGEST_SERVER_PROBE' | grep -qx 1 && printf '%s\n' \"\$ERG_READS\" | grep -c 'inngest-cutover-flip' | grep -qx 1 && ! printf '%s\n' \"\$ERG_READS\" | grep 'SOLEUR_INNGEST_SERVER_PROBE' | grep -q 'inngest-cutover-flip'"
+  "printf '%s\n' \"\$ERG_READS\" | grep -c 'SOLEUR_INNGEST_SERVER_PROBE' | grep -cx 1 >/dev/null && printf '%s\n' \"\$ERG_READS\" | grep -c 'inngest-cutover-flip' | grep -cx 1 >/dev/null && ! printf '%s\n' \"\$ERG_READS\" | grep 'SOLEUR_INNGEST_SERVER_PROBE' | grep -c 'inngest-cutover-flip' >/dev/null"
 assert "#8054 both reads capture stderr to a file and return the query's rc into a *_RC variable" \
   "[[ \$(printf '%s\n' \"\$ERG_READS\" | grep -cE '^[[:space:]]*(PROBE|HB)_RC=0;[[:space:]]+_bs_query_rows .* \"\\\$(PROBE|HB)_ERR\" > \"\\\$(PROBE|HB)_ROWS\" \|\| (PROBE|HB)_RC=\\\$\?$') -eq 2 ]]"
 _trap_line="trap 'rm -rf \"\$ERG_DIR\"' EXIT"
@@ -2502,7 +2502,7 @@ assert "#8054 the row files live under a private mktemp -d -t (0700, TMPDIR-base
 # + __FETCH_FAILED__ from inngest-registry-probe.sh); every other non-200 is a WEBHOOK-PATH fault
 # and refuses without reading Better Stack at all.
 assert "#8054 the dark arm is gated on HTTP 500 + the __FETCH_FAILED__ signature; other non-200s refuse as webhook_path" \
-  "grep -qE '^[[:space:]]*if \[\[ \"\\\$CODE\" != \"500\" \|\| \"\\\$BODY\" != \*\"__FETCH_FAILED__\"\* \]\]; then' '$EXEC_ARM_FILE' && grep -qE 'REFUSED \(webhook_path\).*op=registry-probe' '$EXEC_ARM_FILE' && grep -A2 -E 'REFUSED \(webhook_path\)' '$EXEC_ARM_FILE' | grep -qE '^[[:space:]]*exit 1$'"
+  "grep -qE '^[[:space:]]*if \[\[ \"\\\$CODE\" != \"500\" \|\| \"\\\$BODY\" != \*\"__FETCH_FAILED__\"\* \]\]; then' '$EXEC_ARM_FILE' && grep -qE 'REFUSED \(webhook_path\).*op=registry-probe' '$EXEC_ARM_FILE' && grep -A2 -E 'REFUSED \(webhook_path\)' '$EXEC_ARM_FILE' | grep -cE '^[[:space:]]*exit 1$' >/dev/null"
 
 # ── Purity: no annotation line interpolates a row file, the body or the cause (AC9) ──
 ANNOT_LEAKS=$(awk '/# ---- 2\.0 DARK ARM/{f=1} f&&/^    else$/{exit} f' "$EXEC_ARM_FILE" \
@@ -2512,9 +2512,9 @@ assert "#8054 the webhook body is printed ONCE, as a plain non-annotation line, 
   "[[ \$(grep -cE '^[[:space:]]*echo \"2\.0 webhook body \(HTTP \\\$CODE, informational' '$EXEC_ARM_FILE') -eq 1 ]]"
 
 # ── ERG_* values: read only from --emit-file behind the shape regex; none on the HTTP-200 path (AC16b) ──
-GATE_CALL_LN=$(grep -nE '^[[:space:]]*ERG_VERDICT="?\$\(inngest_execute_registry_gate ' "$EXEC_ARM_FILE" | head -1 | cut -d: -f1 || true)
+GATE_CALL_LN=$(grep -nE '^[[:space:]]*ERG_VERDICT="?\$\(inngest_execute_registry_gate ' "$EXEC_ARM_FILE" | sed -n '1p' | cut -d: -f1 || true)
 ELSE_LN=$(awk '/# ---- 2\.0 DARK ARM/{f=1} f&&/^    else$/{print NR; exit}' "$EXEC_ARM_FILE")
-PREFLIGHT_LN=$(grep -nF '::notice::2.0 registry-probe: dark registry EMPTY' "$EXEC_ARM_FILE" | head -1 | cut -d: -f1 || true)
+PREFLIGHT_LN=$(grep -nF '::notice::2.0 registry-probe: dark registry EMPTY' "$EXEC_ARM_FILE" | sed -n '1p' | cut -d: -f1 || true)
 assert "#8054 anchors resolve (gate call, else, pre-flight clear)" "[[ -n '$GATE_CALL_LN' && -n '$ELSE_LN' && -n '$PREFLIGHT_LN' && '$GATE_CALL_LN' -lt '$ELSE_LN' && '$ELSE_LN' -lt '$PREFLIGHT_LN' ]]"
 _erg_before=$(sed -n "1,${GATE_CALL_LN}p" "$EXEC_ARM_FILE" | grep -v '^[[:space:]]*#' | grep -E '\$\{?ERG_(FLAG|BOOT|ROW_AGE|HB_AGE|HB_FLAG|VERDICT|SAN)\b' | grep -c . || true)
 assert "#8054 no ERG_ value is interpolated BEFORE the gate call (got $_erg_before)" "[[ '$_erg_before' -eq 0 ]]"
@@ -2547,16 +2547,16 @@ AC7EOF
 assert "#8054 AC7: the reachable-empty decision logic is byte-identical to its pre-#8054 form (modulo indentation, comments and the D4 echo)" \
   "[[ -s '$AC7_HEAD' ]] && diff -q '$AC7_PIN' '$AC7_HEAD' >/dev/null"
 assert "#8054 D4: the impossible step (2) is gone and the replacement names an operator-performable read" \
-  "! grep -v '^[[:space:]]*#' '$EXEC_ARM_FILE' | grep -q 'stop the dark inngest-server' && grep -qE 'Remediation \(P1-6\).*scheduled-inngest-health' '$EXEC_ARM_FILE'"
+  "! grep -v '^[[:space:]]*#' '$EXEC_ARM_FILE' | grep -c 'stop the dark inngest-server' >/dev/null && grep -qE 'Remediation \(P1-6\).*scheduled-inngest-health' '$EXEC_ARM_FILE'"
 assert "#8054 the reachable-empty arm gains its out-of-sequence warning after pre-flight clear (#8072)" \
-  "sed -n \"\$((PREFLIGHT_LN + 1))p\" '$EXEC_ARM_FILE' | grep -qE '^[[:space:]]*echo \"::warning::2\.0: a dedicated host that ANSWERS pre-arm is out of sequence.*#8072'"
+  "sed -n \"\$((PREFLIGHT_LN + 1))p\" '$EXEC_ARM_FILE' | grep -cE '^[[:space:]]*echo \"::warning::2\.0: a dedicated host that ANSWERS pre-arm is out of sequence.*#8072' >/dev/null"
 assert "#8054 2.2 STILL RUNNING carries the first-run 'designed stop' sentence" \
   "grep -qF 'On the first execute of a cutover this is the designed stop and the run is red by design' '$EXEC_ARM_FILE'"
 
 # ── E11/E13 allowlist is DERIVED from the P1-5 source, not retyped (AC16) ────────
 # Order-independent: anchored on the `flag_ok=true` arm, not on `armed` being its first alternative
 # (the same derivation inngest-server-flip-guard.test.sh uses).
-P15_SET=$(grep -E 'flag_ok=true' "$FLIP_GUARD" | grep -vE '^[[:space:]]*#' | head -1 | sed -E 's/\).*$//; s/[[:space:]]//g' | tr '|' '\n' | sort | tr '\n' ',' || true)
+P15_SET=$(grep -E 'flag_ok=true' "$FLIP_GUARD" | grep -vE '^[[:space:]]*#' | sed -n '1p' | sed -E 's/\).*$//; s/[[:space:]]//g' | tr '|' '\n' | sort | tr '\n' ',' || true)
 e11_set_of() { awk '/^_erg_flag_class\(\) \{$/,/^}$/' "$1" | grep -oE "^[[:space:]]*[a-z|-]+\) printf 'armed'" | sed -E "s/\) printf 'armed'//; s/^[[:space:]]*//" | tr '|' '\n' | sort | tr '\n' ','; }
 E11_SET=$(e11_set_of "$GATE_LIB")
 assert "#8054 AC16: E11/E13 arm set [$E11_SET] is SET-EQUAL to the P1-5 allowlist [$P15_SET] in $(basename "$FLIP_GUARD") (read from $(basename "$GATE_LIB"))" \
@@ -2567,12 +2567,12 @@ assert "#8054 AC16: E11/E13 arm set [$E11_SET] is SET-EQUAL to the P1-5 allowlis
 # Derive that literal from the PRODUCER and require the script to test for the same bytes; a rename
 # on either side otherwise refuses every execute as webhook_path with both suites green.
 REGISTRY_PROBE="$REPO_ROOT/apps/web-platform/infra/inngest-registry-probe.sh"
-FF_LITERAL_PRODUCER="$(grep -oE '"message":"__[A-Z_]+__"' "$REGISTRY_PROBE" | head -1 | grep -oE '__[A-Z_]+__' || true)"
-FF_LITERAL_SCRIPT="$(grep -oE '"\$BODY" != \*"__[A-Z_]+__"\*' "$EXEC_ARM_FILE" | head -1 | grep -oE '__[A-Z_]+__' || true)"
+FF_LITERAL_PRODUCER="$(grep -oE '"message":"__[A-Z_]+__"' "$REGISTRY_PROBE" | sed -n '1p' | grep -oE '__[A-Z_]+__' || true)"
+FF_LITERAL_SCRIPT="$(grep -oE '"\$BODY" != \*"__[A-Z_]+__"\*' "$EXEC_ARM_FILE" | sed -n '1p' | grep -oE '__[A-Z_]+__' || true)"
 assert "#8054 the dark arm's admission literal [$FF_LITERAL_SCRIPT] equals the web-host probe's fetch-failure literal [$FF_LITERAL_PRODUCER] (derived from $(basename "$REGISTRY_PROBE"))" \
   "[[ -n '$FF_LITERAL_PRODUCER' && '$FF_LITERAL_PRODUCER' == '$FF_LITERAL_SCRIPT' ]]"
 assert "#8054 the web-host probe still exits 1 on that literal (the hook's error passthrough turns it into the HTTP 500 the script requires)" \
-  "grep -qE 'include-command-output-in-response-on-error.*true' '$REPO_ROOT/apps/web-platform/infra/hooks.json.tmpl' && awk '/^run_probe\(\) \{$/,/^\}$/' '$REGISTRY_PROBE' | grep -qE '^[[:space:]]*exit 1$'"
+  "grep -qE 'include-command-output-in-response-on-error.*true' '$REPO_ROOT/apps/web-platform/infra/hooks.json.tmpl' && awk '/^run_probe\(\) \{$/,/^\}$/' '$REGISTRY_PROBE' | grep -cE '^[[:space:]]*exit 1$' >/dev/null"
 
 # ── RENDER the dark arm against the H5 fixture (AC16b) and the reachable-empty arm (H6) ──
 # The 2.0 region is extracted from the script and executed with the network stubbed: `curl`
@@ -2728,29 +2728,29 @@ render_tmpd_of() { printf '%s\n' "$1" | sed -n 's/^__TMPD=//p' | tail -1; }
 FF_BODY='inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["__FETCH_FAILED__"] data_keys=[]); is the dedicated inngest-server reachable at http://10.0.1.40:8288/v0/gql?'
 # shellcheck disable=SC2034  # the *_OUT captures are read inside assert's eval'd condition strings
 H5_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" h5 h5)"
-assert "#8054 H5 render: the dark arm PASSES and falls through to 2.1 (rc 0)" "printf '%s\n' \"\$H5_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$H5_OUT\" | grep -qx '__REGION_FELL_THROUGH__'"
-assert "#8054 H5 render: the pre-arm notice names P1-5 and the webhook code" "printf '%s\n' \"\$H5_OUT\" | grep -qE '^::notice::2\.0 expected pre-arm \(P1-5\): webhook probe HTTP 500'"
+assert "#8054 H5 render: the dark arm PASSES and falls through to 2.1 (rc 0)" "printf '%s\n' \"\$H5_OUT\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$H5_OUT\" | grep -cx '__REGION_FELL_THROUGH__' >/dev/null"
+assert "#8054 H5 render: the pre-arm notice names P1-5 and the webhook code" "printf '%s\n' \"\$H5_OUT\" | grep -cE '^::notice::2\.0 expected pre-arm \(P1-5\): webhook probe HTTP 500' >/dev/null"
 assert "#8054 H5 render: the dark notice carries boot_id=<36-char uuid> then flag=(aborted|rolled-back)" \
-  "printf '%s\n' \"\$H5_OUT\" | grep -E '^::notice::2\.0 dark-host arm PASSED' | grep -qE 'boot_id=[0-9a-f-]{36}.*flag=(aborted|rolled-back)'"
+  "printf '%s\n' \"\$H5_OUT\" | grep -E '^::notice::2\.0 dark-host arm PASSED' | grep -cE 'boot_id=[0-9a-f-]{36}.*flag=(aborted|rolled-back)' >/dev/null"
 assert "#8054 H5 render: the dark notice says in plain words that the refusal to start is the correct pre-flip posture" \
-  "printf '%s\n' \"\$H5_OUT\" | grep -qF 'intentionally refusing to start until op=arm; a non-200 loopback with the server not active is the correct pre-flip posture, not a fault'"
+  "printf '%s\n' \"\$H5_OUT\" | grep -cF 'intentionally refusing to start until op=arm; a non-200 loopback with the server not active is the correct pre-flip posture, not a fault' >/dev/null"
 assert "#8054 H5 render: the notice reports BOTH ages and the heartbeat flag from the emit file (no raw row)" \
-  "printf '%s\n' \"\$H5_OUT\" | grep -E '^::notice::2\.0 dark-host arm PASSED' | grep -qE 'probe row [0-9]+s old with flag=rolled-back, FSM heartbeat [0-9]+s old with flag=rolled-back' && ! printf '%s\n' \"\$H5_OUT\" | grep -q 'zz_trailing'"
+  "printf '%s\n' \"\$H5_OUT\" | grep -E '^::notice::2\.0 dark-host arm PASSED' | grep -cE 'probe row [0-9]+s old with flag=rolled-back, FSM heartbeat [0-9]+s old with flag=rolled-back' >/dev/null && ! printf '%s\n' \"\$H5_OUT\" | grep -c 'zz_trailing' >/dev/null"
 H5_TMPD="$(render_tmpd_of "$H5_OUT")"
 assert "#8054 H5 render: the REAL reader was exec'd twice with the pinned operands (24h/SOLEUR_INNGEST_SERVER_PROBE/500, 30m/inngest-cutover-flip/200)" \
   "grep -qE -- '--since 24h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 500' '$H5_TMPD/doppler.argv' && grep -qE -- '--since 30m --grep inngest-cutover-flip --limit 200' '$H5_TMPD/doppler.argv' && [[ \$(wc -l < '$H5_TMPD/doppler.argv') -eq 2 ]]"
 assert "#8054 H5 render: the heartbeat window (30m) is WIDER than the gate's 900 s bound and the probe window (24h) wider than 5400 s" \
   "[[ 1800 -gt 900 && 86400 -gt 5400 ]] && grep -qE -- '--since 30m --grep inngest-cutover-flip' '$H5_TMPD/doppler.argv' && grep -qE -- '--since 24h --grep SOLEUR' '$H5_TMPD/doppler.argv'"
 assert "#8054 H5 render: the webhook body appears exactly once, as a plain line" \
-  "[[ \$(printf '%s\n' \"\$H5_OUT\" | grep -c '__FETCH_FAILED__') -eq 1 ]] && printf '%s\n' \"\$H5_OUT\" | grep -q '^2\.0 webhook body (HTTP 500, informational'"
+  "[[ \$(printf '%s\n' \"\$H5_OUT\" | grep -c '__FETCH_FAILED__') -eq 1 ]] && printf '%s\n' \"\$H5_OUT\" | grep -c '^2\.0 webhook body (HTTP 500, informational' >/dev/null"
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
 SILENT_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" empty h5)"
 assert "#8054 silent render: zero probe rows REFUSE with the silent remedy and rc 1 (silence is not darkness)" \
-  "printf '%s\n' \"\$SILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$SILENT_OUT\" | grep -qE '^::error::2\.0 REFUSED \(silent\)' && ! printf '%s\n' \"\$SILENT_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
+  "printf '%s\n' \"\$SILENT_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$SILENT_OUT\" | grep -cE '^::error::2\.0 REFUSED \(silent\)' >/dev/null && ! printf '%s\n' \"\$SILENT_OUT\" | grep -c '__REGION_FELL_THROUGH__' >/dev/null"
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
 FAILREAD_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" fail h5)"
 assert "#8054 read-failure render: probe rc 22 (maintenance body) routes to the REAL read remedy — 'under maintenance', body NOT printed, never a host verdict" \
-  "printf '%s\n' \"\$FAILREAD_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$FAILREAD_OUT\" | grep -qE '^::error::2\.0 probe read: the ClickHouse read path is under maintenance' && ! printf '%s\n' \"\$FAILREAD_OUT\" | grep -q 'Memory limit exceeded' && printf '%s\n' \"\$FAILREAD_OUT\" | grep -qF 'NOTHING about the dedicated host was measured'"
+  "printf '%s\n' \"\$FAILREAD_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$FAILREAD_OUT\" | grep -cE '^::error::2\.0 probe read: the ClickHouse read path is under maintenance' >/dev/null && ! printf '%s\n' \"\$FAILREAD_OUT\" | grep -c 'Memory limit exceeded' >/dev/null && printf '%s\n' \"\$FAILREAD_OUT\" | grep -cF 'NOTHING about the dedicated host was measured' >/dev/null"
 # THE CREDENTIAL-REJECTED BODY NAMES THE USERNAME. A ClickHouse 403 body is `Code: 516.
 # DB::Exception: <BETTERSTACK_QUERY_USERNAME>: Authentication failed…` — half of the Basic-auth pair,
 # injected by doppler inside the reader so GitHub never masks it, on a PUBLIC repo's run log.
@@ -2758,39 +2758,39 @@ assert "#8054 read-failure render: probe rc 22 (maintenance body) routes to the 
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
 AUTHFAIL_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" authfail h5)"
 assert "#8054 auth-failure render: a credentials-rejected read body is classified and NEVER printed (the username must not reach the run log)" \
-  "printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -qE '^::error::2\.0 probe read: the ClickHouse read path REJECTED the credentials' && ! printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -q 'u123secretuser'"
+  "printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -cE '^::error::2\.0 probe read: the ClickHouse read path REJECTED the credentials' >/dev/null && ! printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -c 'u123secretuser' >/dev/null"
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
 FSMSILENT_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" h5 empty)"
 assert "#8054 fsm_silent render: a dark probe row with no same-boot heartbeat REFUSES (freshness cannot be established)" \
-  "printf '%s\n' \"\$FSMSILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$FSMSILENT_OUT\" | grep -qE '^::error::2\.0 REFUSED \(fsm_silent\)'"
+  "printf '%s\n' \"\$FSMSILENT_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$FSMSILENT_OUT\" | grep -cE '^::error::2\.0 REFUSED \(fsm_silent\)' >/dev/null"
 # H6 — the reachable-empty arm: webhook 200 + registry_empty=true, NO Better Stack read at all.
 # Positive control for the read markers: a non-200 webhook with the same stubs MUST leave both
 # markers, or the H6 absence assertion below is vacuous.
 CTRL_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" forbidden forbidden)"; CTRL_TMPD="$(render_tmpd_of "$CTRL_OUT")"
 assert "#8054 marker control: the dark arm performs both reads (markers present) — so H6's absence is a measurement" \
-  "[[ -e '$CTRL_TMPD/PROBE_READ_HAPPENED' && -e '$CTRL_TMPD/HB_READ_HAPPENED' ]] && printf '%s\n' \"\$CTRL_OUT\" | grep -qx '__RC=1'"
+  "[[ -e '$CTRL_TMPD/PROBE_READ_HAPPENED' && -e '$CTRL_TMPD/HB_READ_HAPPENED' ]] && printf '%s\n' \"\$CTRL_OUT\" | grep -cx '__RC=1' >/dev/null"
 H6_OUT="$(render_2_0 "$REGION_FILE" 200 '{"registry_empty":true,"function_count":0}' forbidden forbidden)"; H6_TMPD="$(render_tmpd_of "$H6_OUT")"
 assert "#8054 H6 render: the reachable-empty arm still passes (rc 0, pre-flight clear, then the #8072 warning)" \
-  "printf '%s\n' \"\$H6_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$H6_OUT\" | grep -q 'pre-flight clear' && printf '%s\n' \"\$H6_OUT\" | grep -qE '^::warning::2\.0: a dedicated host that ANSWERS pre-arm'"
+  "printf '%s\n' \"\$H6_OUT\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$H6_OUT\" | grep -c 'pre-flight clear' >/dev/null && printf '%s\n' \"\$H6_OUT\" | grep -cE '^::warning::2\.0: a dedicated host that ANSWERS pre-arm' >/dev/null"
 assert "#8054 H6 render: the reachable-empty arm performed NO Better Stack read (it must not route through the gate)" \
   "[[ ! -e '$H6_TMPD/PROBE_READ_HAPPENED' && ! -e '$H6_TMPD/HB_READ_HAPPENED' ]]"
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
 H6N_OUT="$(render_2_0 "$REGION_FILE" 200 '{"registry_empty":false,"function_count":3}' forbidden forbidden)"
 assert "#8054 H6 render: the reachable NON-empty arm still aborts with the P1-6 remediation, rc 1" \
-  "printf '%s\n' \"\$H6N_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$H6N_OUT\" | grep -qE '^::error::Remediation \(P1-6\).*scheduled-inngest-health'"
+  "printf '%s\n' \"\$H6N_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$H6N_OUT\" | grep -cE '^::error::Remediation \(P1-6\).*scheduled-inngest-health' >/dev/null"
 # webhook_path — a CF Access 403 and a 500 WITHOUT the refusal signature both refuse BEFORE any
 # Better Stack read; a stale dark row + fresh heartbeat must not be consulted when the live path
 # said nothing about the host.
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
 WP403_OUT="$(render_2_0 "$REGION_FILE" 403 '{"error":"cf access"}' forbidden forbidden)"; WP403_TMPD="$(render_tmpd_of "$WP403_OUT")"
 assert "#8054 webhook_path render: HTTP 403 refuses naming the webhook path (op=registry-probe), rc 1, with NO Better Stack read" \
-  "printf '%s\n' \"\$WP403_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$WP403_OUT\" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\).*op=registry-probe' && [[ ! -e '$WP403_TMPD/PROBE_READ_HAPPENED' && ! -e '$WP403_TMPD/HB_READ_HAPPENED' ]]"
+  "printf '%s\n' \"\$WP403_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$WP403_OUT\" | grep -cE '^::error::2\.0 REFUSED \(webhook_path\).*op=registry-probe' >/dev/null && [[ ! -e '$WP403_TMPD/PROBE_READ_HAPPENED' && ! -e '$WP403_TMPD/HB_READ_HAPPENED' ]]"
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
 WP500_OUT="$(render_2_0 "$REGION_FILE" 500 'inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["some other graphql error"] data_keys=["functions"])' forbidden forbidden)"; WP500_TMPD="$(render_tmpd_of "$WP500_OUT")"
 assert "#8054 webhook_path render: HTTP 500 WITHOUT __FETCH_FAILED__ (a reachable server's GQL error) refuses as webhook_path, no read" \
-  "printf '%s\n' \"\$WP500_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$WP500_OUT\" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\)' && [[ ! -e '$WP500_TMPD/PROBE_READ_HAPPENED' ]]"
+  "printf '%s\n' \"\$WP500_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$WP500_OUT\" | grep -cE '^::error::2\.0 REFUSED \(webhook_path\)' >/dev/null && [[ ! -e '$WP500_TMPD/PROBE_READ_HAPPENED' ]]"
 assert "#8054 webhook_path render: the refusal never falls through to 2.1" \
-  "! printf '%s\n' \"\$WP403_OUT\" | grep -q '__REGION_FELL_THROUGH__' && ! printf '%s\n' \"\$WP500_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
+  "! printf '%s\n' \"\$WP403_OUT\" | grep -c '__REGION_FELL_THROUGH__' >/dev/null && ! printf '%s\n' \"\$WP500_OUT\" | grep -c '__REGION_FELL_THROUGH__' >/dev/null"
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # #8079 — op=registry-probe routes its non-200 branch through the SAME gate. The region is
@@ -2802,7 +2802,7 @@ awk '/# ---- registry-probe host-state gate \(#8079\)/{f=1} f&&/# ---- end regis
 PROBE_REGION_N=$(grep -cv '^[[:space:]]*#' "$PROBE_REGION_FILE" || true)
 assert "#8079 probe region extraction is non-vacuous (>90 non-comment lines, got $PROBE_REGION_N)" "[[ '$PROBE_REGION_N' -gt 90 ]]"
 assert "#8079 probe region starts at SIG= (binds CODE/BODY itself; a later start dies on unbound CODE under set -u) and ends at the arm's fi" \
-  "grep -vE '^[[:space:]]*(#|$)' '$PROBE_REGION_FILE' | sed -n '1p' | grep -qE '^    SIG=' && grep -vE '^[[:space:]]*(#|$)' '$PROBE_REGION_FILE' | sed -n '\$p' | grep -qE '^    fi$'"
+  "grep -vE '^[[:space:]]*(#|$)' '$PROBE_REGION_FILE' | sed -n '1p' | grep -cE '^    SIG=' >/dev/null && grep -vE '^[[:space:]]*(#|$)' '$PROBE_REGION_FILE' | sed -n '\$p' | grep -cE '^    fi$' >/dev/null"
 # Selection control: the markers must select the REGISTRY-PROBE arm, not 2.0's — a marker
 # collision would source 2.0 here and every render below would certify the wrong arm.
 # Herestring, not `grep -v | grep -q`: the producer is ~16 KB, `grep -q` exits on its first match
@@ -2839,12 +2839,12 @@ assert "#8079 AC2 control: the 200 path (outside the sub-block) DOES emit the tr
 # D2 / AC3 — the caveat warning: two greppable clause openers, the field named with NO trailing
 # `=` (which is what keeps it clear of AC2), and the follow-up op named.
 assert "#8079 AC3: the dark warning carries both clause openers and names op=doublefire-probe" \
-  "grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -q 'What it does not establish:' && grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -q 'op=doublefire-probe'"
+  "grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -c 'What it does not establish:' >/dev/null && grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -c 'op=doublefire-probe' >/dev/null"
 assert "#8079 AC3: the warning names registry_empty with NO trailing = (a mutation appending =false must redden AC2)" \
-  "grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -qE 'registry_empty was not measured' && ! grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -q 'registry_empty='"
+  "grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -cE 'registry_empty was not measured' >/dev/null && ! grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -c 'registry_empty=' >/dev/null"
 # D6 — webhook_path names op=inventory AND carries the discrimination rule in the string.
 assert "#8079 D6: the webhook_path refusal names op=inventory with its discrimination rule (200 -> hook; non-200 -> path)" \
-  "grep -E 'REFUSED \(webhook_path\)' '$PROBE_REGION_CODE' | grep -q 'op=inventory' && grep -E 'REFUSED \(webhook_path\)' '$PROBE_REGION_CODE' | grep -qE 'returns 200 the path is healthy.*if it also fails, the path is at fault'"
+  "grep -E 'REFUSED \(webhook_path\)' '$PROBE_REGION_CODE' | grep -c 'op=inventory' >/dev/null && grep -E 'REFUSED \(webhook_path\)' '$PROBE_REGION_CODE' | grep -cE 'returns 200 the path is healthy.*if it also fails, the path is at fault' >/dev/null"
 # The per-arm exit/no-SSH pairing lives in _arm_exit_gaps above (D10 block); this view of the
 # case feeds the AC4 static rows.
 _probe_case="$(awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$PROBE_REGION_CODE")"
@@ -2853,16 +2853,16 @@ _probe_case="$(awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exi
 assert "#8079 AC4: no done-branch message says 'the cutover already completed', names op=verify, or names restart-inngest-server" \
   "! grep -qE 'the cutover already completed|op=verify|restart-inngest-server' <<<\"\$_probe_case\""
 assert "#8079 AC4: the hourly-row done branch carries the 90-minute staleness qualifier and does not interpolate RPG_HB_AGE" \
-  "grep -A3 'REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag' <<<\"\$_probe_case\" | grep -q 'lag reality by up to 90 minutes' && ! grep -A6 'REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag' <<<\"\$_probe_case\" | grep -q 'RPG_HB_AGE'"
+  "grep -A3 'REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag' <<<\"\$_probe_case\" | grep -c 'lag reality by up to 90 minutes' >/dev/null && ! grep -A6 'REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag' <<<\"\$_probe_case\" | grep -c 'RPG_HB_AGE' >/dev/null"
 # AC10 — no annotation interpolates a raw rows file, BODY, or CAUSE; the only body prints are
 # the CR/LF-stripped CAUSE on plain lines.
 # Scoped to the DARK sub-block (the code this PR adds). The 200 path's malformed-JSON branch
 # carries a PRE-EXISTING raw `echo "$BODY"` that AC9 pins byte-for-byte to main; it is recorded
 # in the PR rather than fixed here, because fixing it breaks the content pin the plan requires.
 assert "#8079 AC10: no ::error/notice/warning:: in the dark sub-block interpolates RPG_PROBE_ROWS, RPG_HB_ROWS, \$RPG_DIR, \$BODY/\${BODY} or \$CAUSE/\${CAUSE} (echo or printf)" \
-  "! grep -E '(echo|printf) .*\"::(error|notice|warning)::' <<<\"\$DARK_SUBBLOCK\" | grep -qE 'RPG_PROBE_ROWS|RPG_HB_ROWS|\\\$\{?RPG_DIR|\\\$\{?BODY|\\\$\{?CAUSE|registry-probe-body'"
+  "! grep -E '(echo|printf) .*\"::(error|notice|warning)::' <<<\"\$DARK_SUBBLOCK\" | grep -cE 'RPG_PROBE_ROWS|RPG_HB_ROWS|\\\$\{?RPG_DIR|\\\$\{?BODY|\\\$\{?CAUSE|registry-probe-body' >/dev/null"
 assert "#8079 AC10: in the dark sub-block every print of the webhook body uses the CR/LF-stripped CAUSE on a plain line, never raw BODY (echo or printf, either brace form)" \
-  "[[ \$(grep -cE '^[[:space:]]*echo \"registry-probe webhook body \(HTTP \\\$CODE.*\\\$\{CAUSE:-' <<<\"\$DARK_SUBBLOCK\") -eq 2 ]] && ! grep -E '^[[:space:]]*(echo|printf) ' <<<\"\$DARK_SUBBLOCK\" | grep -v 'CAUSE' | grep -qE '\\\$\{?BODY|registry-probe-body'"
+  "[[ \$(grep -cE '^[[:space:]]*echo \"registry-probe webhook body \(HTTP \\\$CODE.*\\\$\{CAUSE:-' <<<\"\$DARK_SUBBLOCK\") -eq 2 ]] && ! grep -E '^[[:space:]]*(echo|printf) ' <<<\"\$DARK_SUBBLOCK\" | grep -v 'CAUSE' | grep -cE '\\\$\{?BODY|registry-probe-body' >/dev/null"
 # AC9 — the HTTP-200 path is content-pinned modulo leading whitespace and comments, VERBATIM,
 # the way AC7 pins 2.0 (see its comment: a comparison against origin/main is main==main once this
 # merges, and went RED the moment the arm was restructured — review of #8079 measured 725/726
@@ -2893,17 +2893,17 @@ assert "#8079 AC9: the HTTP-200 path is content-identical to the verbatim pin, m
 # (the else-branch is skipped, the fi is reached) rather than falling into the 200 path.
 RPG_DARK_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 h5)"; RPG_DARK_TMPD="$(render_tmpd_of "$RPG_DARK_OUT")"
 assert "#8079 AC1 dark render: rc 0 and the region reaches its end (no exit, no fall-through into the 200 path)" \
-  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$RPG_DARK_OUT\" | grep -qx '__REGION_FELL_THROUGH__'"
+  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$RPG_DARK_OUT\" | grep -cx '__REGION_FELL_THROUGH__' >/dev/null"
 assert "#8079 AC1 dark render: prints the HOST-STATE VERDICT notice with boot_id, both ages and both flags from the emit file" \
-  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -E '^::notice::registry-probe HOST-STATE VERDICT: dark' | grep -qE 'boot_id=[0-9a-f-]{36}: probe row [0-9]+s old with flag=rolled-back, FSM heartbeat [0-9]+s old with flag=rolled-back'"
+  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -E '^::notice::registry-probe HOST-STATE VERDICT: dark' | grep -cE 'boot_id=[0-9a-f-]{36}: probe row [0-9]+s old with flag=rolled-back, FSM heartbeat [0-9]+s old with flag=rolled-back' >/dev/null"
 assert "#8079 AC1/AC3 dark render: the caveat warning is emitted with both clauses and the follow-up op" \
-  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -E '^::warning::registry-probe: What this establishes:' | grep -q 'What it does not establish:.*op=doublefire-probe'"
+  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -E '^::warning::registry-probe: What this establishes:' | grep -c 'What it does not establish:.*op=doublefire-probe' >/dev/null"
 assert "#8079 AC2 dark render: the OUTPUT carries none of registry_empty= / function_count= / ids=[ (a dark verdict is not a live measurement)" \
-  "! printf '%s\n' \"\$RPG_DARK_OUT\" | grep -qE 'registry_empty=|function_count=|ids=\['"
+  "! printf '%s\n' \"\$RPG_DARK_OUT\" | grep -cE 'registry_empty=|function_count=|ids=\[' >/dev/null"
 assert "#8079 dark render: the REAL reader was exec'd twice with the pinned operands (same windows as 2.0)" \
   "grep -qE -- '--since 24h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 500' '$RPG_DARK_TMPD/doppler.argv' && grep -qE -- '--since 30m --grep inngest-cutover-flip --limit 200' '$RPG_DARK_TMPD/doppler.argv' && [[ \$(wc -l < '$RPG_DARK_TMPD/doppler.argv') -eq 2 ]]"
 assert "#8079 dark render: the webhook body appears exactly once, as a plain informational line" \
-  "[[ \$(printf '%s\n' \"\$RPG_DARK_OUT\" | grep -c '__FETCH_FAILED__') -eq 1 ]] && printf '%s\n' \"\$RPG_DARK_OUT\" | grep -q '^registry-probe webhook body (HTTP 500, informational'"
+  "[[ \$(printf '%s\n' \"\$RPG_DARK_OUT\" | grep -c '__FETCH_FAILED__') -eq 1 ]] && printf '%s\n' \"\$RPG_DARK_OUT\" | grep -c '^registry-probe webhook body (HTTP 500, informational' >/dev/null"
 # AC7 — webhook_path: a 403 and a 500 without the signature refuse BEFORE any read, rc 1, naming
 # op=inventory; the marker control from 2.0 (both reads happen on the graded path) makes the
 # absence a measurement.
@@ -2913,9 +2913,9 @@ RPG_CTRL_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" forbidden forbidd
 assert "#8079 AC7 marker control: on the graded path BOTH reads happen (so the absences below are measurements)" \
   "[[ -e '$RPG_CTRL_TMPD/PROBE_READ_HAPPENED' && -e '$RPG_CTRL_TMPD/HB_READ_HAPPENED' ]]"
 assert "#8079 AC7 render: HTTP 403 refuses as webhook_path naming op=inventory, rc 1, NO Better Stack read, never reaches the end" \
-  "printf '%s\n' \"\$RPG_WP403_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_WP403_OUT\" | grep -qE '^::error::registry-probe REFUSED \(webhook_path\).*op=inventory' && [[ ! -e '$RPG_WP403_TMPD/PROBE_READ_HAPPENED' && ! -e '$RPG_WP403_TMPD/HB_READ_HAPPENED' ]] && ! printf '%s\n' \"\$RPG_WP403_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
+  "printf '%s\n' \"\$RPG_WP403_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_WP403_OUT\" | grep -cE '^::error::registry-probe REFUSED \(webhook_path\).*op=inventory' >/dev/null && [[ ! -e '$RPG_WP403_TMPD/PROBE_READ_HAPPENED' && ! -e '$RPG_WP403_TMPD/HB_READ_HAPPENED' ]] && ! printf '%s\n' \"\$RPG_WP403_OUT\" | grep -c '__REGION_FELL_THROUGH__' >/dev/null"
 assert "#8079 AC7 render: HTTP 500 WITHOUT __FETCH_FAILED__ refuses as webhook_path, rc 1, no read" \
-  "printf '%s\n' \"\$RPG_WP500_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_WP500_OUT\" | grep -qE '^::error::registry-probe REFUSED \(webhook_path\)' && [[ ! -e '$RPG_WP500_TMPD/PROBE_READ_HAPPENED' ]]"
+  "printf '%s\n' \"\$RPG_WP500_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_WP500_OUT\" | grep -cE '^::error::registry-probe REFUSED \(webhook_path\)' >/dev/null && [[ ! -e '$RPG_WP500_TMPD/PROBE_READ_HAPPENED' ]]"
 # AC4 — flag_armed 2x2: four DISTINCT messages, each naming the sample it quotes.
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_FA11D_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" 'done' h5)"
@@ -2926,39 +2926,39 @@ RPG_FA13D_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 'done')"
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_FA13A_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 armed)"
 assert "#8079 AC4 E11/done render: rc 1, headline names flag_armed/done and 'scheduling may be DOWN' and points at the plain next steps, quotes the HOURLY row with the 90-minute qualifier" \
-  "printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -qE '^::error::registry-probe REFUSED \(flag_armed/done\).*scheduling may be DOWN — the numbered registry-probe: next steps are in this step.s log' && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -q 'HOURLY probe row.*lag reality by up to 90 minutes'"
+  "printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -cE '^::error::registry-probe REFUSED \(flag_armed/done\).*scheduling may be DOWN — the numbered registry-probe: next steps are in this step.s log' >/dev/null && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -c 'HOURLY probe row.*lag reality by up to 90 minutes' >/dev/null"
 assert "#8079 AC4 E11/done render: the ordered steps are PLAIN log lines, the watchdog read comes FIRST, the state script names its prerequisite, the runbook is third" \
-  "printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -q '^registry-probe: 1. read the latest watchdog verdict first' && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -q '^registry-probe: 2. read the host.*inngest-host-state.sh (needs BETTERSTACK_QUERY_' && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -q '^registry-probe: 3. .*runbooks/inngest-server.md'"
+  "printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -c '^registry-probe: 1. read the latest watchdog verdict first' >/dev/null && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -c '^registry-probe: 2. read the host.*inngest-host-state.sh (needs BETTERSTACK_QUERY_' >/dev/null && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -c '^registry-probe: 3. .*runbooks/inngest-server.md' >/dev/null"
 assert "#8079 AC4 E11/armed render: rc 1, names flag_armed with the HOURLY row and 'in flight', dispatches nothing" \
-  "printf '%s\n' \"\$RPG_FA11A_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FA11A_OUT\" | grep -qE '^::error::registry-probe REFUSED \(flag_armed\): the dedicated host.s newest HOURLY probe row.*in flight.*Dispatch nothing'"
+  "printf '%s\n' \"\$RPG_FA11A_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_FA11A_OUT\" | grep -cE '^::error::registry-probe REFUSED \(flag_armed\): the dedicated host.s newest HOURLY probe row.*in flight.*Dispatch nothing' >/dev/null"
 assert "#8079 AC4 E13/done render: rc 1, headline quotes the same-boot HEARTBEAT as a live sample and does NOT call it hourly" \
-  "printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -qE '^::error::registry-probe REFUSED \(flag_armed/done\).*same-boot heartbeat.*a live sample, not the hourly row' && ! printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -q 'HOURLY probe row'"
+  "printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -cE '^::error::registry-probe REFUSED \(flag_armed/done\).*same-boot heartbeat.*a live sample, not the hourly row' >/dev/null && ! printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -c 'HOURLY probe row' >/dev/null"
 assert "#8079 AC4 E13/armed render: rc 1, quotes the same-boot heartbeat, 'in flight right now'" \
-  "printf '%s\n' \"\$RPG_FA13A_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FA13A_OUT\" | grep -qE '^::error::registry-probe REFUSED \(flag_armed\): the flip FSM.s newest same-boot heartbeat.*in flight right now'"
+  "printf '%s\n' \"\$RPG_FA13A_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_FA13A_OUT\" | grep -cE '^::error::registry-probe REFUSED \(flag_armed\): the flip FSM.s newest same-boot heartbeat.*in flight right now' >/dev/null"
 assert "#8079 AC4: the four 2x2 headlines are pairwise DISTINCT" \
-  "[[ \$(for o in \"\$RPG_FA11D_OUT\" \"\$RPG_FA11A_OUT\" \"\$RPG_FA13D_OUT\" \"\$RPG_FA13A_OUT\"; do printf '%s\n' \"\$o\" | grep -E '^::error::registry-probe REFUSED \(flag_armed' | head -1; done | sort -u | wc -l) -eq 4 ]]"
+  "[[ \$(for o in \"\$RPG_FA11D_OUT\" \"\$RPG_FA11A_OUT\" \"\$RPG_FA13D_OUT\" \"\$RPG_FA13A_OUT\"; do printf '%s\n' \"\$o\" | grep -E '^::error::registry-probe REFUSED \(flag_armed' | sed -n '1p'; done | sort -u | wc -l) -eq 4 ]]"
 assert "#8079 AC4/D5: no 2x2 message names a mutating op or 2.0's remedy" \
-  "! printf '%s\n%s\n%s\n%s\n' \"\$RPG_FA11D_OUT\" \"\$RPG_FA11A_OUT\" \"\$RPG_FA13D_OUT\" \"\$RPG_FA13A_OUT\" | grep -qE 'op=(execute|resume|rollback|arm)([^a-z-]|\$)|the cutover already completed|op=verify|restart-inngest-server'"
+  "! printf '%s\n%s\n%s\n%s\n' \"\$RPG_FA11D_OUT\" \"\$RPG_FA11A_OUT\" \"\$RPG_FA13D_OUT\" \"\$RPG_FA13A_OUT\" | grep -cE 'op=(execute|resume|rollback|arm)([^a-z-]|\$)|the cutover already completed|op=verify|restart-inngest-server' >/dev/null"
 # AC6 — a refusing fixture still prints its ::error:: (the || RPG_RC=\$? guard is load-bearing).
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_SILENT_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" empty h5)"
 assert "#8079 AC6 silent render: rc 1 with the silent remedy — and it names the 2026-08-14 ingest-402 case BEFORE the host-replace step" \
-  "printf '%s\n' \"\$RPG_SILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_SILENT_OUT\" | grep -E '^::error::registry-probe REFUSED \(silent\)' | grep -qE 'confirm INGEST health/quota.*402.*Two consecutive probe-unavailable'"
+  "printf '%s\n' \"\$RPG_SILENT_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_SILENT_OUT\" | grep -E '^::error::registry-probe REFUSED \(silent\)' | grep -cE 'confirm INGEST health/quota.*402.*Two consecutive probe-unavailable' >/dev/null"
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_FSMSILENT_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 empty)"
 assert "#8079 fsm_silent render: rc 1 with the fsm_silent remedy" \
-  "printf '%s\n' \"\$RPG_FSMSILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FSMSILENT_OUT\" | grep -qE '^::error::registry-probe REFUSED \(fsm_silent\)'"
+  "printf '%s\n' \"\$RPG_FSMSILENT_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_FSMSILENT_OUT\" | grep -cE '^::error::registry-probe REFUSED \(fsm_silent\)' >/dev/null"
 # D4 — the read-failure arms delegate to _bs_read_remedy with the TRAILING step operand, so the
 # nine messages report 'registry-probe', never '2.0'. This is the render that proves D4's operand
 # reaches the printer; the census row proved the printer has no hardcoded step left.
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_FAILREAD_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" fail h5)"
 assert "#8079 D4 read-failure render: rc 22 routes to the shared remedy and it reports 'registry-probe', never '2.0' (the step operand landed)" \
-  "printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -qE '^::error::registry-probe probe read: the ClickHouse read path is under maintenance' && printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -qE '^::error::registry-probe probe read failed — NOTHING about the dedicated host was measured' && ! printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -q '::error::2\.0 '"
+  "printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -cE '^::error::registry-probe probe read: the ClickHouse read path is under maintenance' >/dev/null && printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -cE '^::error::registry-probe probe read failed — NOTHING about the dedicated host was measured' >/dev/null && ! printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -c '::error::2\.0 ' >/dev/null"
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_AUTHFAIL_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" authfail h5)"
 assert "#8079 D4 auth-failure render: a credentials-rejected body is classified and NEVER printed (the username must not reach the run log)" \
-  "printf '%s\n' \"\$RPG_AUTHFAIL_OUT\" | grep -qE '^::error::registry-probe probe read: the ClickHouse read path REJECTED the credentials' && ! printf '%s\n' \"\$RPG_AUTHFAIL_OUT\" | grep -q 'u123secretuser'"
+  "printf '%s\n' \"\$RPG_AUTHFAIL_OUT\" | grep -cE '^::error::registry-probe probe read: the ClickHouse read path REJECTED the credentials' >/dev/null && ! printf '%s\n' \"\$RPG_AUTHFAIL_OUT\" | grep -c 'u123secretuser' >/dev/null"
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_HBFAIL_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 fail)"
 assert "#8079 D4 heartbeat read-failure render: rc 22 on the HEARTBEAT leg routes to the shared remedy labelled 'heartbeat' and reports 'registry-probe', never '2.0' (the step operand landed on BOTH legs)" \
@@ -2969,7 +2969,7 @@ assert "#8079 D4 heartbeat read-failure render: rc 22 on the HEARTBEAT leg route
 _rpg_refusal() {  # $1 label  $2 pmode  $3 hmode  $4 token  $5 headline ERE
   local out _rr_re="$5"; out="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" "$2" "$3")"
   assert "#8079 $1 render ($2/$3): rc 1, REFUSED ($4) headline carries its property, no ::error::2.0, no fall-through" \
-    "grep -qx '__RC=1' <<<\"\$out\" && grep -E '^::error::registry-probe REFUSED \\($4\\)' <<<\"\$out\" | grep -qE \"\$_rr_re\" && ! grep -q '::error::2\\.0 ' <<<\"\$out\" && ! grep -q '__REGION_FELL_THROUGH__' <<<\"\$out\""
+    "grep -qx '__RC=1' <<<\"\$out\" && grep -E '^::error::registry-probe REFUSED \\($4\\)' <<<\"\$out\" | grep -cE \"\$_rr_re\" >/dev/null && ! grep -q '::error::2\\.0 ' <<<\"\$out\" && ! grep -q '__REGION_FELL_THROUGH__' <<<\"\$out\""
 }
 _rpg_refusal 'host_serving' serving h5 host_serving 'row \([0-9]+s old — hourly.*90 minutes\).*WAS serving.*hook just failed to reach 10\.0\.1\.40:8288.*inngest-host-state\.sh.*op=inventory reads the WEB host'
 _rpg_refusal 'wrong_host' wronghost h5 wrong_host 'Two causes with opposite remedies.*dead host, not a mislabel.*inngest-host-state\.sh.*treat this as silent'
@@ -2984,25 +2984,25 @@ _rpg_refusal 'fsm_unreadable rc=0' h5 badjson fsm_unreadable 'answered \(rc=0\).
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_ABORTED_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" aborted aborted)"
 assert "#8079 H2 must-PASS non-canonical: an aborted/aborted host renders dark at rc 0 with flag=aborted on both samples" \
-  "grep -qx '__RC=0' <<<\"\$RPG_ABORTED_OUT\" && grep -E '^::notice::registry-probe HOST-STATE VERDICT: dark' <<<\"\$RPG_ABORTED_OUT\" | grep -q 'flag=aborted, FSM heartbeat [0-9]*s old with flag=aborted'"
+  "grep -qx '__RC=0' <<<\"\$RPG_ABORTED_OUT\" && grep -E '^::notice::registry-probe HOST-STATE VERDICT: dark' <<<\"\$RPG_ABORTED_OUT\" | grep -c 'flag=aborted, FSM heartbeat [0-9]*s old with flag=aborted' >/dev/null"
 # D2 truth — the warning states the INTERVAL it measured and the rollback caveat, never a
 # since-boot universal (a rollback is a stop, not a reboot: the server served on this same boot).
 assert "#8079 dark render: the warning claims only the measured interval and carries the same-boot rollback caveat, never 'since boot'/'has not been bound on this boot'" \
-  "grep -E '^::warning::registry-probe: What this establishes:' <<<\"\$RPG_DARK_OUT\" | grep -qE 'NOT serving as of its [0-9]+s-old probe row.*no FSM transition has landed since.*in THAT interval.*after a rollback the server was bound and served on this same boot' && ! grep -qE 'since boot|has not been bound on this boot|no SDK can have reached it' <<<\"\$RPG_DARK_OUT\""
+  "grep -E '^::warning::registry-probe: What this establishes:' <<<\"\$RPG_DARK_OUT\" | grep -cE 'NOT serving as of its [0-9]+s-old probe row.*no FSM transition has landed since.*in THAT interval.*after a rollback the server was bound and served on this same boot' >/dev/null && ! grep -qE 'since boot|has not been bound on this boot|no SDK can have reached it' <<<\"\$RPG_DARK_OUT\""
 # AC9 renders — the 200 path is untouched in behaviour and performs NO Better Stack read.
 RPG_200_OUT="$(render_2_0 "$PROBE_REGION_FILE" 200 '{"registry_empty":true,"function_count":0}' forbidden forbidden)"; RPG_200_TMPD="$(render_tmpd_of "$RPG_200_OUT")"
 assert "#8079 AC9 render: HTTP 200 + empty registry -> rc 0, the live triple with registry_empty=true, the EMPTY notice, NO Better Stack read" \
-  "printf '%s\n' \"\$RPG_200_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$RPG_200_OUT\" | grep -q '^::notice::registry-probe: registry_empty=true function_count=0 ids=\[\]' && printf '%s\n' \"\$RPG_200_OUT\" | grep -q 'dedicated registry is EMPTY' && [[ ! -e '$RPG_200_TMPD/PROBE_READ_HAPPENED' && ! -e '$RPG_200_TMPD/HB_READ_HAPPENED' ]]"
+  "printf '%s\n' \"\$RPG_200_OUT\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$RPG_200_OUT\" | grep -c '^::notice::registry-probe: registry_empty=true function_count=0 ids=\[\]' >/dev/null && printf '%s\n' \"\$RPG_200_OUT\" | grep -c 'dedicated registry is EMPTY' >/dev/null && [[ ! -e '$RPG_200_TMPD/PROBE_READ_HAPPENED' && ! -e '$RPG_200_TMPD/HB_READ_HAPPENED' ]]"
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_200N_OUT="$(render_2_0 "$PROBE_REGION_FILE" 200 '{"registry_empty":false,"function_count":3,"function_ids":["a","b","c"]}' forbidden forbidden)"
 assert "#8079 AC9 render: HTTP 200 + non-empty registry -> rc 0 (diagnostic, not gating), live triple with the ids, the REGISTERED warning" \
-  "printf '%s\n' \"\$RPG_200N_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$RPG_200N_OUT\" | grep -q '^::notice::registry-probe: registry_empty=false function_count=3 ids=\[a,b,c\]' && printf '%s\n' \"\$RPG_200N_OUT\" | grep -qE '^::warning::registry-probe: the dedicated host \(10.0.1.40\) has 3 REGISTERED'"
+  "printf '%s\n' \"\$RPG_200N_OUT\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$RPG_200N_OUT\" | grep -c '^::notice::registry-probe: registry_empty=false function_count=3 ids=\[a,b,c\]' >/dev/null && printf '%s\n' \"\$RPG_200N_OUT\" | grep -cE '^::warning::registry-probe: the dedicated host \(10.0.1.40\) has 3 REGISTERED' >/dev/null"
 # AC10 render — annotation log-injection: a body carrying a literal newline followed by a
 # forged ::notice:: must NOT produce that line at column 0 in the output.
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 RPG_INJ_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY"$'\n'"::notice::PASS forged" h5 h5)"
 assert "#8079 AC10 render: a webhook body with an embedded newline + forged ::notice:: is CR/LF-stripped — the forged line never lands at column 0" \
-  "! printf '%s\n' \"\$RPG_INJ_OUT\" | grep -qx '::notice::PASS forged' && printf '%s\n' \"\$RPG_INJ_OUT\" | grep -q '__FETCH_FAILED__.* ::notice::PASS forged'"
+  "! printf '%s\n' \"\$RPG_INJ_OUT\" | grep -cx '::notice::PASS forged' >/dev/null && printf '%s\n' \"\$RPG_INJ_OUT\" | grep -c '__FETCH_FAILED__.* ::notice::PASS forged' >/dev/null"
 
 # ── mutate_file: the matrix rows that live in the SCRIPT (17, 18, 19) and the lib (20) ────
 # Patches a PRISTINE copy of a file with one single-line `sed` (same cmp + exactly-one-line guards
@@ -3055,7 +3055,7 @@ check_reader_returns_rc() {
 mutate_file "row17 reader swallows rc" "$BODY_SH" 's|^  rows=\$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "\$since" --grep "\$term" --limit "\$limit" 2>"\$errfile") \|\| rc=\$?$|  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") \|\| true|' check_reader_returns_rc
 # Row 18 — the *) arm falls through. Property: the *) arm exits 1.
 check_star_arm_exits() {
-  awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | awk '/^        \*\)$/{f=1} f' | sed -n '1,8p' | grep -qE 'exit 1 ;;'
+  awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | awk '/^        \*\)$/{f=1} f' | sed -n '1,8p' | grep -cE 'exit 1 ;;' >/dev/null
 }
 mutate_file "row18 *) arm falls through" "$BODY_SH" 's|^          echo "::error::2.0 REFUSED: the dark-host gate returned an unrecognised verdict .*; exit 1 ;;$|          : ;;|' check_star_arm_exits
 # Row 19 — the production call un-guarded. Property (DYNAMIC): a refusing fixture still prints its
@@ -3065,7 +3065,7 @@ check_refusal_is_not_mute() {
   region="$(mktemp)"; SCRATCH+=("$region")
   awk '/# ---- 2\.0 empty-registry pre-flight/{f=1} f&&/# ---- 2\.1 capture/{exit} f' "$f" > "$region"
   out="$(render_2_0 "$region" 500 "$FF_BODY" empty h5)"
-  printf '%s\n' "$out" | grep -qE '^::error::2\.0 REFUSED \(silent\)' && printf '%s\n' "$out" | grep -qx '__RC=1'
+  printf '%s\n' "$out" | grep -cE '^::error::2\.0 REFUSED \(silent\)' >/dev/null && printf '%s\n' "$out" | grep -cx '__RC=1' >/dev/null
 }
 mutate_file "row19 gate call un-guarded" "$BODY_SH" 's|^      ERG_VERDICT="\$(inngest_execute_registry_gate \(.*\))" \|\| ERG_RC=\$?$|      ERG_VERDICT="$(inngest_execute_registry_gate \1)"|' check_refusal_is_not_mute
 # webhook_path gate — neuter the signature test. Property (DYNAMIC): a 403 must refuse without a read.
@@ -3074,7 +3074,7 @@ check_403_refuses_without_read() {
   region="$(mktemp)"; SCRATCH+=("$region")
   awk '/# ---- 2\.0 empty-registry pre-flight/{f=1} f&&/# ---- 2\.1 capture/{exit} f' "$f" > "$region"
   out="$(render_2_0 "$region" 403 '{"error":"cf access"}' forbidden forbidden)"; tmpd="$(render_tmpd_of "$out")"
-  printf '%s\n' "$out" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\)' && [[ ! -e "$tmpd/PROBE_READ_HAPPENED" ]]
+  printf '%s\n' "$out" | grep -cE '^::error::2\.0 REFUSED \(webhook_path\)' >/dev/null && [[ ! -e "$tmpd/PROBE_READ_HAPPENED" ]]
 }
 # Range-scoped to the 2.0 region since #8079: the probe arm carries this line byte-identically
 # (the plumbing-parity guard requires it), so a file-global sed would change 2 lines.
@@ -3096,27 +3096,27 @@ _rpg_region_of() {  # $1 = (possibly mutated) script → prints a temp file hold
 # ::error::; un-guarded, set -e aborts before the case — fail-closed but MUTE.
 check_rpg_refusal_is_not_mute() {
   local out; out="$(render_2_0 "$(_rpg_region_of "$1")" 500 "$FF_BODY" empty h5)"
-  printf '%s\n' "$out" | grep -qE '^::error::registry-probe REFUSED \(silent\)' && printf '%s\n' "$out" | grep -qx '__RC=1'
+  printf '%s\n' "$out" | grep -cE '^::error::registry-probe REFUSED \(silent\)' >/dev/null && printf '%s\n' "$out" | grep -cx '__RC=1' >/dev/null
 }
 mutate_file "rpg gate call un-guarded" "$BODY_SH" "${_RPG_RANGE}"'s|^      RPG_VERDICT="\$(inngest_execute_registry_gate \(.*\))" \|\| RPG_RC=\$?$|      RPG_VERDICT="$(inngest_execute_registry_gate \1)"|' check_rpg_refusal_is_not_mute
 # Row B — the signature test neutered. Property (DYNAMIC): a 403 must refuse without a read.
 check_rpg_403_refuses_without_read() {
   local out tmpd; out="$(render_2_0 "$(_rpg_region_of "$1")" 403 '{"error":"cf access"}' forbidden forbidden)"; tmpd="$(render_tmpd_of "$out")"
-  printf '%s\n' "$out" | grep -qE '^::error::registry-probe REFUSED \(webhook_path\)' && [[ ! -e "$tmpd/PROBE_READ_HAPPENED" ]]
+  printf '%s\n' "$out" | grep -cE '^::error::registry-probe REFUSED \(webhook_path\)' >/dev/null && [[ ! -e "$tmpd/PROBE_READ_HAPPENED" ]]
 }
 mutate_file "rpg webhook_path gate neutered" "$BODY_SH" "${_RPG_RANGE}"'s|^      if \[\[ "\$CODE" != "500" \|\| "\$BODY" != \*"__FETCH_FAILED__"\* \]\]; then$|      if false; then|' check_rpg_403_refuses_without_read
 # Row C — D1 inverted: `dark` made to exit 1. Property (DYNAMIC): the dark render is rc 0 and
 # reaches the region's end.
 check_rpg_dark_exits_zero() {
   local out; out="$(render_2_0 "$(_rpg_region_of "$1")" 500 "$FF_BODY" h5 h5)"
-  printf '%s\n' "$out" | grep -qx '__RC=0' && printf '%s\n' "$out" | grep -qx '__REGION_FELL_THROUGH__'
+  printf '%s\n' "$out" | grep -cx '__RC=0' >/dev/null && printf '%s\n' "$out" | grep -cx '__REGION_FELL_THROUGH__' >/dev/null
 }
 mutate_file "rpg dark verdict exits 1" "$BODY_SH" "${_RPG_RANGE}"'s|^\(          echo "::warning::registry-probe: What this establishes:.*\) ;;$|\1; exit 1 ;;|' check_rpg_dark_exits_zero
 # Row D — D2 violated: the warning names the field WITH a trailing `=false`. Property (STATIC +
 # DYNAMIC): the dark sub-block and the dark OUTPUT carry none of the reserved triple.
 check_rpg_dark_emits_no_triple() {
   local r out; r="$(_rpg_region_of "$1")"
-  ! awk '/^    if \[\[ "\$CODE" != "200" \]\]; then$/{f=1} f&&/^    else$/{exit} f' "$r" | grep -v '^[[:space:]]*#' | grep -qE 'registry_empty=|function_count=|ids=\[' \
+  ! grep -qE 'registry_empty=|function_count=|ids=\[' <<<"$(awk '/^    if \[\[ "\$CODE" != "200" \]\]; then$/{f=1} f&&/^    else$/{exit} f' "$r" | grep -v '^[[:space:]]*#')" \
     && out="$(render_2_0 "$r" 500 "$FF_BODY" h5 h5)" && ! grep -qE 'registry_empty=|function_count=|ids=\[' <<<"$out"
 }
 mutate_file "rpg warning appends =false to the reserved field" "$BODY_SH" "${_RPG_RANGE}"'s|registry_empty was not measured, because a dark host answers no read\.|registry_empty=false was not measured, because a dark host answers no read.|' check_rpg_dark_emits_no_triple
@@ -3127,18 +3127,18 @@ check_rpg_no_request_body() {
   local code; code="$(mktemp)"; SCRATCH+=("$code")
   awk '/^[[:space:]]+registry-probe\)$/,/^[[:space:]]+rearm\)$/' "$1" > "$code.arms"; SCRATCH+=("$code.arms")
   _probe_arms_code_of "$code.arms" > "$code"
-  ! grep -E '(^|[^a-z-])curl[[:space:]]' "$code" | grep -qE '[[:space:]](-d|-T)([[:space:]]|=)'
+  ! grep -qE '[[:space:]](-d|-T)([[:space:]]|=)' <<<"$(grep -E '(^|[^a-z-])curl[[:space:]]' "$code")" 
 }
 mutate_file "rpg curl gains a request body" "$BODY_SH" "${_RPG_RANGE}"'s|^      "\$BASE/inngest-registry-probe" \|\| echo "000")$|      -d '"'"'{}'"'"' "$BASE/inngest-registry-probe" \|\| echo "000")|' check_rpg_no_request_body
 # Row F — D5 violated: a remedy names op=execute. Property (STATIC): AC8's flat ban reds.
 check_rpg_no_mutating_op() {
-  ! grep -v '^[[:space:]]*#' "$(_rpg_region_of "$1")" | grep -qE 'op=(execute|resume|rollback|arm)([^a-z-]|$)'
+  ! grep -qE 'op=(execute|resume|rollback|arm)([^a-z-]|$)' <<<"$(grep -v '^[[:space:]]*#' "$(_rpg_region_of "$1")")" 
 }
 mutate_file "rpg remedy names op=execute" "$BODY_SH" "${_RPG_RANGE}"'s|Dispatch nothing from here; this op is a read and its answer would describe a host mid-transition\.|Then re-dispatch op=execute.|' check_rpg_no_mutating_op
 # Row G — D8 violated: the done branch reverts to 2.0's remedy. Property (STATIC): AC4's ban on
 # "the cutover already completed" reds.
 check_rpg_done_not_2_0_remedy() {
-  ! awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$(_rpg_region_of "$1")" | grep -v '^[[:space:]]*#' | grep -qE 'the cutover already completed|op=verify|restart-inngest-server'
+  ! grep -qE 'the cutover already completed|op=verify|restart-inngest-server' <<<"$(awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$(_rpg_region_of "$1")" | grep -v '^[[:space:]]*#')" 
 }
 mutate_file "rpg done branch reverts to 2.0 remedy" "$BODY_SH" "${_RPG_RANGE}"'s|^\(              echo "::error::registry-probe REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag reads .done.\.\) Since cutover step 2\.4 this host owns production cron scheduling, so scheduling may be DOWN — the numbered registry-probe: next steps are in this step.s log\."$|\1 done => the cutover already completed: dispatch op=verify."|' check_rpg_done_not_2_0_remedy
 # Row H — M1.2: the probe arm's call renamed. Property: the census (registry-probe=1) reds.
@@ -3159,7 +3159,7 @@ check_rpg_2x2_distinct() {
   # Ages are normalised before the distinct-count: the headlines interpolate the row age, and two
   # renders straddling a second boundary print 421s/422s — a mutant collapsing the 2x2 then
   # survived 1 run in 3 on the age alone (measured).
-  n=$(for m in "done h5" "armed h5" "h5 done" "h5 armed"; do render_2_0 "$r" 500 "$FF_BODY" $m | grep -m1 -E '^::error::registry-probe REFUSED \(flag_armed'; done | sed -E 's/[0-9]+s old/Ns old/g' | sort -u | wc -l) || true
+  n=$(for m in "done h5" "armed h5" "h5 done" "h5 armed"; do render_2_0 "$r" 500 "$FF_BODY" $m | grep -E '^::error::registry-probe REFUSED \(flag_armed' | sed -n '1p'; done | sed -E 's/[0-9]+s old/Ns old/g' | sort -u | wc -l) || true
   [[ "${n:-0}" -eq 4 ]]
 }
 mutate_file "rpg 2x2 collapsed to the hourly sample (M2.6)" "$BODY_SH" "${_RPG_RANGE}"'{/^        flag_armed)$/,/^        host_serving)$/s|^          if \[\[ "\$RPG_HB_FLAG" == "__UNREAD__" \]\]; then$|          if true; then|}' check_rpg_2x2_distinct
@@ -3192,7 +3192,7 @@ mutate_file "rpg heartbeat _bs_read_remedy step operand reverted to 2.0 (S3)" "$
 # wrong-sample class D8 fixed for flag_armed). Property: the E11 render prints a numeric row age.
 check_rpg_e11_unreadable_sample() {
   local out; out="$(render_2_0 "$(_rpg_region_of "$1")" 500 "$FF_BODY" unknownflag h5)"
-  grep -E '^::error::registry-probe REFUSED \(flag_unreadable\)' <<<"$out" | grep -qE 'HOURLY probe row \([0-9]+s old\)'
+  grep -E '^::error::registry-probe REFUSED \(flag_unreadable\)' <<<"$out" | grep -cE 'HOURLY probe row \([0-9]+s old\)' >/dev/null
 }
 mutate_file "rpg E11 flag_unreadable quotes the heartbeat age (S6)" "$BODY_SH" "${_RPG_RANGE}"'s|^\(            echo "::error::registry-probe REFUSED (flag_unreadable): the dedicated host.s newest HOURLY probe row (\)\${RPG_ROW_AGE}s old)|\1${RPG_HB_AGE}s old)|' check_rpg_e11_unreadable_sample
 # Row 20 — the lib's allowlist retyped with one member missing. Property: set-equality with P1-5.
@@ -3224,7 +3224,7 @@ S21_WARN_N=$(ncl "$EXEC_ARM_FILE" | grep -cF '::warning::2.1:' || true)
 # shellcheck disable=SC2016
 S21_NOTE_SET=$(ncl "$EXEC_ARM_FILE" | grep -cF 'CAPTURED_AT_NOTE=" captured_at=$CAPTURED_AT quiesced_since=$QUIESCED_SINCE rebooted_since_quiesce=$REBOOTED_SINCE_QUIESCE"' || true)
 assert "#6921 FR9 2.1 has ONE notice, shaped 'Σcaptured=\$SIGMA_CAPTURED source=\$SOURCE\${CAPTURED_AT_NOTE}', captured_at/quiesced_since/rebooted_since_quiesce set only on the persisted branch, no ::warning::2.1: (notices=$S21_NOTICE_N shape=$S21_SHAPE_N note=$S21_NOTE_SET warn=$S21_WARN_N)" \
-  "[[ '$S21_NOTICE_N' -eq 1 && '$S21_SHAPE_N' -eq 1 && '$S21_WARN_N' -eq 0 && '$S21_NOTE_SET' -eq 1 ]] && ncl '$EXEC_ARM_FILE' | grep -B1 -F 'CAPTURED_AT_NOTE=\" captured_at=' | grep -qF 'if [[ \"\$SOURCE\" == \"persisted\" ]]; then'"
+  "[[ '$S21_NOTICE_N' -eq 1 && '$S21_SHAPE_N' -eq 1 && '$S21_WARN_N' -eq 0 && '$S21_NOTE_SET' -eq 1 ]] && ncl '$EXEC_ARM_FILE' | grep -B1 -F 'CAPTURED_AT_NOTE=\" captured_at=' | grep -cF 'if [[ \"\$SOURCE\" == \"persisted\" ]]; then' >/dev/null"
 # The two new persisted fields are read with an empty default. quiesced_since is a number, so
 # `// ""` is safe; rebooted_since_quiesce is a BOOLEAN, and jq's `//` treats `false` as empty — the
 # registry_empty trap (#6178) — so `// ""` would print a rebooted=false resume as blank. The read line
@@ -3248,7 +3248,7 @@ CAP_ARM_FILE="$(mktemp)"; SCRATCH+=("$CAP_ARM_FILE")
 awk '/^  capture\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$BODY_SH" > "$CAP_ARM_FILE"
 # shellcheck disable=SC2016
 assert "#6921 FR9 op=capture reads .source // \"live\" + .captured_at and prints both on its notice" \
-  "ncl '$CAP_ARM_FILE' | sed 's/^[[:space:]]*//' | grep -qxF -- \"\$S21_SRC_LINE\" && ncl '$CAP_ARM_FILE' | sed 's/^[[:space:]]*//' | grep -qxF -- \"\$S21_CAT_LINE\" && ncl '$CAP_ARM_FILE' | grep -F 'echo \"::notice::capture: ' | grep -F 'source=\$SOURCE' | grep -qF 'captured_at='"
+  "ncl '$CAP_ARM_FILE' | sed 's/^[[:space:]]*//' | grep -cxF -- >/dev/null \"\$S21_SRC_LINE\" && ncl '$CAP_ARM_FILE' | sed 's/^[[:space:]]*//' | grep -cxF -- >/dev/null \"\$S21_CAT_LINE\" && ncl '$CAP_ARM_FILE' | grep -F 'echo \"::notice::capture: ' | grep -F 'source=\$SOURCE' | grep -cF 'captured_at=' >/dev/null"
 # PANEL MUTATION R1: `SOURCE="live"` inserted before the `# ---- 2.2` marker stayed green, because
 # render_2_2 injects SOURCE from outside the region. Pin it statically: from 2.1's read to the SEAM,
 # the ONLY write to SOURCE is 2.1's own read line (assignment, append, read, declare, := default).
@@ -3273,7 +3273,7 @@ RA_REGION="$(mktemp)"; SCRATCH+=("$RA_REGION")
 awk '/^  rearm\)$/{a=1} a&&/RBODY=\$\(cat \/tmp\/rearm-body/{f=1} f{print} f&&/::notice::re-arm completed/{exit}' "$BODY_SH" > "$RA_REGION"
 RA_N=$(grep -cE '^[[:space:]]*RCOUNTS=\$\(printf .*sed -n' "$RA_REGION" || true)
 assert "#6921 FR15 P2-b parser region extracts non-vacuously (RCOUNTS parse lines=$RA_N, ends at the completion notice)" \
-  "[[ '$RA_N' -eq 1 ]] && grep -qF 'could not parse' '$RA_REGION' && tail -1 '$RA_REGION' | grep -qF '::notice::re-arm completed'"
+  "[[ '$RA_N' -eq 1 ]] && grep -qF 'could not parse' '$RA_REGION' && tail -1 '$RA_REGION' | grep -cF '::notice::re-arm completed' >/dev/null"
 run_p2b() { # $1 body → stdout+stderr, then __RC=
   local d rc=0; d="$(mktemp -d)"; printf '%s\n' "$d" >> "$RENDER_TMPDS"
   printf '%s' "$1" > "$d/rearm-body"
@@ -3286,30 +3286,30 @@ P2B_ZERO_OUT="$(run_p2b $'inngest-rearm-reminders: nothing to re-arm\ninngest-re
 # shellcheck disable=SC2034
 P2B_OLD_OUT="$(run_p2b $'inngest-rearm-reminders: nothing to re-arm\n')"
 assert "#6921 FR15 the Σ=0 canonical body (held_back=0) reconciles 0+0+0 == 0 (rc 0), never 'could not parse'" \
-  "printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -qF '::notice::re-arm completed: rearmed=0 held_back=0 == Σcaptured(total)=0' && ! printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -qF 'could not parse'"
+  "printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -cF '::notice::re-arm completed: rearmed=0 held_back=0 == Σcaptured(total)=0' >/dev/null && ! printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -cF 'could not parse' >/dev/null"
 # held_back (records due before the quiesce, already fired on the web scheduler, never POSTed) is a
 # SUCCESS term: N+F+H must equal K, and F must be 0. An absent held_back field (a host script that
 # predates it) reads as 0 — it is never an unparsed body.
 # shellcheck disable=SC2034
 P2B_HELD_OUT="$(run_p2b $'inngest-rearm-reminders: held back 1 reminder(s) due before the quiesce: rem-a\ninngest-rearm-reminders: re-armed=2 failed=0 held_back=1 total=3\n')"
 assert "#6921 FR15 held_back row: re-armed=2 failed=0 held_back=1 total=3 reconciles (rc 0) and names the held-back id" \
-  "printf '%s\n' \"\$P2B_HELD_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$P2B_HELD_OUT\" | grep -qF '::notice::re-arm completed: rearmed=2 held_back=1 == Σcaptured(total)=3' && printf '%s\n' \"\$P2B_HELD_OUT\" | grep -E '^::notice::re-arm held back' | grep -qF 'rem-a'"
+  "printf '%s\n' \"\$P2B_HELD_OUT\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$P2B_HELD_OUT\" | grep -cF '::notice::re-arm completed: rearmed=2 held_back=1 == Σcaptured(total)=3' >/dev/null && printf '%s\n' \"\$P2B_HELD_OUT\" | grep -E '^::notice::re-arm held back' | grep -cF 'rem-a' >/dev/null"
 # shellcheck disable=SC2034
 P2B_NOHELD_OUT="$(run_p2b $'inngest-rearm-reminders: re-armed=0 failed=0 total=0\n')"
 assert "#6921 FR15 an absent held_back field reads as 0 (re-armed=0 failed=0 total=0 -> rc 0)" \
-  "printf '%s\n' \"\$P2B_NOHELD_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$P2B_NOHELD_OUT\" | grep -qF 'rearmed=0 held_back=0 == Σcaptured(total)=0'"
+  "printf '%s\n' \"\$P2B_NOHELD_OUT\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$P2B_NOHELD_OUT\" | grep -cF 'rearmed=0 held_back=0 == Σcaptured(total)=0' >/dev/null"
 # shellcheck disable=SC2034
 P2B_SUM_OUT="$(run_p2b $'inngest-rearm-reminders: re-armed=2 failed=0 held_back=0 total=3\n')"
 assert "#6921 FR15 N+F+H != K (2+0+0 != 3) refuses as a reconciliation failure (rc 1), not a partial" \
-  "printf '%s\n' \"\$P2B_SUM_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$P2B_SUM_OUT\" | grep -qF 're-arm reconciliation FAILED (P2-b): re-armed=2 + failed=0 + held_back=0 != total=3' && ! printf '%s\n' \"\$P2B_SUM_OUT\" | grep -qF 're-arm completed'"
+  "printf '%s\n' \"\$P2B_SUM_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$P2B_SUM_OUT\" | grep -cF 're-arm reconciliation FAILED (P2-b): re-armed=2 + failed=0 + held_back=0 != total=3' >/dev/null && ! printf '%s\n' \"\$P2B_SUM_OUT\" | grep -cF 're-arm completed' >/dev/null"
 # shellcheck disable=SC2034
 P2B_PART_OUT="$(run_p2b $'inngest-rearm-reminders: re-arm failed for reminder_id=rem-b (HTTP 500)\ninngest-rearm-reminders: re-armed=1 failed=1 held_back=1 total=3\n')"
 assert "#6921 FR15 failed>0 with a consistent sum is a PARTIAL (rc 1) naming the missing id" \
-  "printf '%s\n' \"\$P2B_PART_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$P2B_PART_OUT\" | grep -E '^::error::re-arm PARTIAL' | grep -qF '[rem-b]' && ! printf '%s\n' \"\$P2B_PART_OUT\" | grep -qF 're-arm completed'"
+  "printf '%s\n' \"\$P2B_PART_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$P2B_PART_OUT\" | grep -E '^::error::re-arm PARTIAL' | grep -cF '[rem-b]' >/dev/null && ! printf '%s\n' \"\$P2B_PART_OUT\" | grep -cF 're-arm completed' >/dev/null"
 assert "#6921 rearm arm comment: a 503 is cutover-quiesce OR backend-refused (X-Soleur-Unavailable)" \
-  "awk '/^  rearm\\)\$/{f=1;next} f&&/^  [a-z-]+\\)\$/{exit} f' '$BODY_SH' | grep -E '^[[:space:]]*#' | grep -F 'X-Soleur-Unavailable' | grep -qF 'backend-refused'"
+  "awk '/^  rearm\\)\$/{f=1;next} f&&/^  [a-z-]+\\)\$/{exit} f' '$BODY_SH' | grep -E '^[[:space:]]*#' | grep -F 'X-Soleur-Unavailable' | grep -cF 'backend-refused' >/dev/null"
 assert "#6921 FR15 control: the pre-D1c Σ=0 body (no canonical line) still refuses as unparsed (rc 1)" \
-  "printf '%s\n' \"\$P2B_OLD_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$P2B_OLD_OUT\" | grep -qF 'could not parse'"
+  "printf '%s\n' \"\$P2B_OLD_OUT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$P2B_OLD_OUT\" | grep -cF 'could not parse' >/dev/null"
 
 # ── D4 (Guard 3, FR8): 2.2 certifies the QUIESCED unit shape — RENDERED ──────────────────────────
 # The 2.2 region is extracted and executed in a fresh bash with `curl` stubbed. Unlike render_2_0's
@@ -3380,14 +3380,14 @@ DRIVER
 #   unknown: rc 1, an UNKNOWN quiesce-check line, gate failure, never PASSED.
 r22_is() {
   local out="$1" v="$2"
-  printf '%s\n' "$out" | grep -q '__SEQ_EXHAUSTED__' && return 1
+  printf '%s\n' "$out" | grep -c '__SEQ_EXHAUSTED__' >/dev/null && return 1
   case "$v" in
-    passed)  printf '%s\n' "$out" | grep -qx '__RC=0' && printf '%s\n' "$out" | grep -qE '^::notice::2\.2 QUIESCE HARD GATE PASSED' \
-               && printf '%s\n' "$out" | grep -qx '__REGION_FELL_THROUGH__' && ! printf '%s\n' "$out" | grep -qE '^::error::2\.2 QUIESCE HARD GATE FAILED' ;;
-    still)   printf '%s\n' "$out" | grep -qx '__RC=1' && printf '%s\n' "$out" | grep -qE '^quiesce check .*STILL RUNNING' \
-               && printf '%s\n' "$out" | grep -qE '^::error::2\.2 QUIESCE HARD GATE FAILED' && ! printf '%s\n' "$out" | grep -qE 'HARD GATE PASSED|__REGION_FELL_THROUGH__' ;;
-    unknown) printf '%s\n' "$out" | grep -qx '__RC=1' && printf '%s\n' "$out" | grep -qE '^quiesce check .*UNKNOWN' \
-               && printf '%s\n' "$out" | grep -qE '^::error::2\.2 QUIESCE HARD GATE FAILED' && ! printf '%s\n' "$out" | grep -qE 'HARD GATE PASSED|__REGION_FELL_THROUGH__|STILL RUNNING' ;;
+    passed)  printf '%s\n' "$out" | grep -cx '__RC=0' >/dev/null && printf '%s\n' "$out" | grep -cE '^::notice::2\.2 QUIESCE HARD GATE PASSED' >/dev/null \
+               && printf '%s\n' "$out" | grep -cx '__REGION_FELL_THROUGH__' >/dev/null && ! printf '%s\n' "$out" | grep -cE '^::error::2\.2 QUIESCE HARD GATE FAILED' >/dev/null ;;
+    still)   printf '%s\n' "$out" | grep -cx '__RC=1' >/dev/null && printf '%s\n' "$out" | grep -cE '^quiesce check .*STILL RUNNING' >/dev/null \
+               && printf '%s\n' "$out" | grep -cE '^::error::2\.2 QUIESCE HARD GATE FAILED' >/dev/null && ! printf '%s\n' "$out" | grep -cE 'HARD GATE PASSED|__REGION_FELL_THROUGH__' >/dev/null ;;
+    unknown) printf '%s\n' "$out" | grep -cx '__RC=1' >/dev/null && printf '%s\n' "$out" | grep -cE '^quiesce check .*UNKNOWN' >/dev/null \
+               && printf '%s\n' "$out" | grep -cE '^::error::2\.2 QUIESCE HARD GATE FAILED' >/dev/null && ! printf '%s\n' "$out" | grep -cE 'HARD GATE PASSED|__REGION_FELL_THROUGH__|STILL RUNNING' >/dev/null ;;
     *) return 1 ;;
   esac
 }
@@ -3396,27 +3396,27 @@ R22_Q3="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,500:QUIESCED_BODY,500
 assert "#6921 Guard3 row1: 3x QUIESCED -> PASSED" "r22_is \"\$R22_Q3\" passed"
 # r22_first_verb_is_warned <output> — the FIRST line naming op=quiesce-web is a ::warning::2.2: line
 # (an operator reads top-down; the verb that stops production scheduling is never met before the warning).
-r22_first_verb_is_warned() { printf '%s\n' "$1" | grep -m1 -F 'op=quiesce-web' | grep -qE '^::warning::2\.2: '; }
+r22_first_verb_is_warned() { printf '%s\n' "$1" | grep -F 'op=quiesce-web' | sed -n '1p' | grep -cE '^::warning::2\.2: ' >/dev/null; }
 # shellcheck disable=SC2034
 R22_FL="$(render_2_2 "$R22_REGION" live '500:FATAL_BODY,500:FATAL_BODY,500:FATAL_BODY')"
 assert "#6921 Guard3 row2: 3x FATAL + SOURCE=live -> UNKNOWN, remedy names the op=quiesce-web dispatch AFTER the maintenance-window warning" \
-  "r22_is \"\$R22_FL\" unknown && printf '%s\n' \"\$R22_FL\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -F 'the unit is not in the quiesced shape (2.1 answered live)' | grep -qF \"gh workflow run cutover-inngest.yml --field op=quiesce-web\" && r22_first_verb_is_warned \"\$R22_FL\" && printf '%s\n' \"\$R22_FL\" | grep -E '^::warning::2\.2: ' | grep -qF 'STOPS production scheduling'"
+  "r22_is \"\$R22_FL\" unknown && printf '%s\n' \"\$R22_FL\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -F 'the unit is not in the quiesced shape (2.1 answered live)' | grep -cF \"gh workflow run cutover-inngest.yml --field op=quiesce-web\" >/dev/null && r22_first_verb_is_warned \"\$R22_FL\" && printf '%s\n' \"\$R22_FL\" | grep -E '^::warning::2\.2: ' | grep -cF 'STOPS production scheduling' >/dev/null"
 # shellcheck disable=SC2034
 R22_FP="$(render_2_2 "$R22_REGION" persisted '500:FATAL_BODY,500:FATAL_BODY,500:FATAL_BODY')"
 assert "#6921 Guard3 row5b: 3x FATAL + SOURCE=persisted -> UNKNOWN naming the stale on-host inventory script + the config-push read, and NOWHERE op=quiesce-web" \
-  "r22_is \"\$R22_FP\" unknown && printf '%s\n' \"\$R22_FP\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'the on-host inngest-inventory.sh likely predates the QUIESCED verdict; confirm the apply-deploy-pipeline-fix.yml run for the merge wrote /usr/local/bin/inngest-inventory.sh (read /hooks/infra-config-status sha256) and re-dispatch op=execute — do NOT re-run quiesce-web' && ! printf '%s\n' \"\$R22_FP\" | grep -qF 'op=quiesce-web'"
+  "r22_is \"\$R22_FP\" unknown && printf '%s\n' \"\$R22_FP\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -cF 'the on-host inngest-inventory.sh likely predates the QUIESCED verdict; confirm the apply-deploy-pipeline-fix.yml run for the merge wrote /usr/local/bin/inngest-inventory.sh (read /hooks/infra-config-status sha256) and re-dispatch op=execute — do NOT re-run quiesce-web' >/dev/null && ! printf '%s\n' \"\$R22_FP\" | grep -cF 'op=quiesce-web' >/dev/null"
 # shellcheck disable=SC2034
 R22_Q2Q="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,200:EMPTY_BODY,500:QUIESCED_BODY')"
 assert "#6921 Guard3 row2m: QUIESCED,200,QUIESCED -> STILL RUNNING (a sentinel never outranks a 200; loop stops at the 200: calls=2)" \
-  "r22_is \"\$R22_Q2Q\" still && printf '%s\n' \"\$R22_Q2Q\" | grep -qx '__CALLS=2' && r22_first_verb_is_warned \"\$R22_Q2Q\""
+  "r22_is \"\$R22_Q2Q\" still && printf '%s\n' \"\$R22_Q2Q\" | grep -cx '__CALLS=2' >/dev/null && r22_first_verb_is_warned \"\$R22_Q2Q\""
 # shellcheck disable=SC2034
 R22_QQ2="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,500:QUIESCED_BODY,200:EMPTY_BODY')"
 assert "#6921 Guard3 row5: QUIESCED,QUIESCED,200 -> STILL RUNNING (the loop keeps reading after a sentinel: calls=3)" \
-  "r22_is \"\$R22_QQ2\" still && printf '%s\n' \"\$R22_QQ2\" | grep -qx '__CALLS=3'"
+  "r22_is \"\$R22_QQ2\" still && printf '%s\n' \"\$R22_QQ2\" | grep -cx '__CALLS=3' >/dev/null"
 # shellcheck disable=SC2034
 R22_000="$(render_2_2 "$R22_REGION" live '000:EMPTY_BODY,000:EMPTY_BODY,000:EMPTY_BODY')"
 assert "#6921 Guard3: 3x 000 -> UNREADABLE / UNKNOWN, fail-closed" \
-  "r22_is \"\$R22_000\" unknown && printf '%s\n' \"\$R22_000\" | grep -qE '^quiesce check .*UNREADABLE' && printf '%s\n' \"\$R22_000\" | grep -qx '__CALLS=3'"
+  "r22_is \"\$R22_000\" unknown && printf '%s\n' \"\$R22_000\" | grep -cE '^quiesce check .*UNREADABLE' >/dev/null && printf '%s\n' \"\$R22_000\" | grep -cx '__CALLS=3' >/dev/null"
 # shellcheck disable=SC2034
 R22_NQ="$(render_2_2 "$R22_REGION" live '500:NOTQ_BODY,500:NOTQ_BODY,500:NOTQ_BODY')"
 assert "#6921 Guard3 row3: a FATAL body that merely MENTIONS QUIESCED mid-line -> UNKNOWN (anchored sentinel)" "r22_is \"\$R22_NQ\" unknown"
@@ -3436,37 +3436,37 @@ assert "#6921 §9 row: 000,000,QUIESCED -> PASSED (000 is no answer; the one ans
 # shellcheck disable=SC2034
 R22_UA="$(render_2_2 "$R22_REGION" persisted '500:UNATTR_BODY,500:UNATTR_BODY,500:UNATTR_BODY')"
 assert "#6921 §9 row: DISABLED_UNATTRIBUTED x3 -> UNKNOWN naming the op=rollback dispatch, and NOWHERE op=quiesce-web" \
-  "r22_is \"\$R22_UA\" unknown && printf '%s\n' \"\$R22_UA\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -F 'DISABLED_UNATTRIBUTED' | grep -qF 'gh workflow run cutover-inngest.yml --field op=rollback' && ! printf '%s\n' \"\$R22_UA\" | grep -qF 'op=quiesce-web'"
+  "r22_is \"\$R22_UA\" unknown && printf '%s\n' \"\$R22_UA\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -F 'DISABLED_UNATTRIBUTED' | grep -cF 'gh workflow run cutover-inngest.yml --field op=rollback' >/dev/null && ! printf '%s\n' \"\$R22_UA\" | grep -cF 'op=quiesce-web' >/dev/null"
 # shellcheck disable=SC2034
 R22_QUA="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,500:UNATTR_BODY,500:QUIESCED_BODY')"
 assert "#6921 §9 row: QUIESCED,DISABLED_UNATTRIBUTED,QUIESCED -> UNKNOWN naming op=rollback (unattributed outranks the sentinel)" \
-  "r22_is \"\$R22_QUA\" unknown && printf '%s\n' \"\$R22_QUA\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'op=rollback'"
+  "r22_is \"\$R22_QUA\" unknown && printf '%s\n' \"\$R22_QUA\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -cF 'op=rollback' >/dev/null"
 # The remedy branches on the HTTP class BEFORE the 2.1 source: an answer the inventory script never
 # produced says nothing about the unit, so it must not send the operator to quiesce-web OR to the
 # config push.
 # shellcheck disable=SC2034
 R22_403="$(render_2_2 "$R22_REGION" live '403:FORBIDDEN_BODY,403:FORBIDDEN_BODY,403:FORBIDDEN_BODY')"
 assert "#6921 §9 row: 403 x3 -> UNKNOWN naming CF-Access/HMAC, not op=quiesce-web, not the config push" \
-  "r22_is \"\$R22_403\" unknown && printf '%s\n' \"\$R22_403\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'CF-Access' && ! printf '%s\n' \"\$R22_403\" | grep -qF 'op=quiesce-web' && ! printf '%s\n' \"\$R22_403\" | grep -qF 'predates the QUIESCED verdict'"
+  "r22_is \"\$R22_403\" unknown && printf '%s\n' \"\$R22_403\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -cF 'CF-Access' >/dev/null && ! printf '%s\n' \"\$R22_403\" | grep -cF 'op=quiesce-web' >/dev/null && ! printf '%s\n' \"\$R22_403\" | grep -cF 'predates the QUIESCED verdict' >/dev/null"
 # shellcheck disable=SC2034
 R22_404="$(render_2_2 "$R22_REGION" persisted '404:NOTFOUND_BODY,404:NOTFOUND_BODY,404:NOTFOUND_BODY')"
 assert "#6921 §9 row: 404 x3 -> UNKNOWN naming the undeployed inngest-inventory hook, not the stale-script remedy" \
-  "r22_is \"\$R22_404\" unknown && printf '%s\n' \"\$R22_404\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'hook is not deployed' && ! printf '%s\n' \"\$R22_404\" | grep -qF 'predates the QUIESCED verdict'"
+  "r22_is \"\$R22_404\" unknown && printf '%s\n' \"\$R22_404\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -cF 'hook is not deployed' >/dev/null && ! printf '%s\n' \"\$R22_404\" | grep -cF 'predates the QUIESCED verdict' >/dev/null"
 # shellcheck disable=SC2034
 R22_502="$(render_2_2 "$R22_REGION" live '502:GATEWAY_BODY,502:GATEWAY_BODY,502:GATEWAY_BODY')"
 assert "#6921 §9 row: 502 x3 with no inngest-inventory: line -> UNKNOWN naming the gateway, not op=quiesce-web" \
-  "r22_is \"\$R22_502\" unknown && printf '%s\n' \"\$R22_502\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'gateway' && ! printf '%s\n' \"\$R22_502\" | grep -qF 'op=quiesce-web'"
+  "r22_is \"\$R22_502\" unknown && printf '%s\n' \"\$R22_502\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -cF 'gateway' >/dev/null && ! printf '%s\n' \"\$R22_502\" | grep -cF 'op=quiesce-web' >/dev/null"
 # The UNKNOWN line carries what the host said: the first 120 chars of the last NON-EMPTY body, on ONE
 # line. FATAL_BODY is CRLF-split and longer than 120 chars; its marker sits past char 120.
 R22_EXCERPT_HEAD='ERROR: /v0/gql functions query failed'
 assert "#6921 Guard3: the UNKNOWN line carries a CR/LF-stripped, 120-char excerpt of the last body" \
-  "printf '%s\n' \"\$R22_FL\" | grep -E '^quiesce check .*UNKNOWN' | grep -qF '$R22_EXCERPT_HEAD' && ! printf '%s\n' \"\$R22_FL\" | grep -qF 'PAST_CHAR_120_MARKER' && ! printf '%s\n' \"\$R22_FL\" | grep -qE '^inngest-inventory: FATAL' && ! printf '%s\n' \"\$R22_FL\" | grep -q \$'\r'"
+  "printf '%s\n' \"\$R22_FL\" | grep -E '^quiesce check .*UNKNOWN' | grep -cF '$R22_EXCERPT_HEAD' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -cF 'PAST_CHAR_120_MARKER' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -cE '^inngest-inventory: FATAL' >/dev/null && ! printf '%s\n' \"\$R22_FL\" | grep -c \$'\\r' >/dev/null"
 # shellcheck disable=SC2034
 R22_FF0="$(render_2_2 "$R22_REGION" live '500:FATAL_BODY,500:FATAL_BODY,000:EMPTY_BODY')"
 assert "#6921 §9 excerpt: FATAL,FATAL,000 -> the excerpt is the last NON-EMPTY body (a trailing 000 does not hide the FATAL)" \
-  "r22_is \"\$R22_FF0\" unknown && printf '%s\n' \"\$R22_FF0\" | grep -E '^quiesce check .*UNKNOWN' | grep -qF '$R22_EXCERPT_HEAD'"
+  "r22_is \"\$R22_FF0\" unknown && printf '%s\n' \"\$R22_FF0\" | grep -E '^quiesce check .*UNKNOWN' | grep -cF '$R22_EXCERPT_HEAD' >/dev/null"
 assert "#6921 Guard3: the 2.2 gate still feeds the SEAM withhold through STILL_RUNNING / UNKNOWN_COUNT" \
-  "ncl '$R22_REGION' | grep -qF 'if [[ \"\$STILL_RUNNING\" -gt 0 || \"\$UNKNOWN_COUNT\" -gt 0 ]]; then' && ncl '$R22_REGION' | grep -qE '^[[:space:]]*quiesced_n=0$' && ! ncl '$R22_REGION' | grep -qF 'reached_non200' && ! ncl '$R22_REGION' | grep -qF '\${SOURCE:-'"
+  "ncl '$R22_REGION' | grep -cF 'if [[ \"\$STILL_RUNNING\" -gt 0 || \"\$UNKNOWN_COUNT\" -gt 0 ]]; then' >/dev/null && ncl '$R22_REGION' | grep -cE '^[[:space:]]*quiesced_n=0$' >/dev/null && ! ncl '$R22_REGION' | grep -cF 'reached_non200' >/dev/null && ! ncl '$R22_REGION' | grep -cF '\${SOURCE:-' >/dev/null"
 # In-suite mutation rows (Guard 3 #1, #3, and the §9 every-body requirement) through mutate_file.
 check_2_2_fatal_is_unknown() {
   local f="$1" region out
@@ -3499,7 +3499,7 @@ mutate_file "§9 every-body requirement weakened to any-body" "$BODY_SH" 's|^   
 QW_ARM_FILE="$(mktemp)"; SCRATCH+=("$QW_ARM_FILE")
 awk '/^  quiesce-web\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$BODY_SH" > "$QW_ARM_FILE"
 assert "#6921 quiesce-web secondary confirm greps the anchored sentinel and prints present/absent, with its own 000/unreadable branch" \
-  "ncl '$QW_ARM_FILE' | grep -qF \"grep -qE '^inngest-inventory: QUIESCED' /tmp/quiesce-inv\" && ncl '$QW_ARM_FILE' | grep -qF 'QUIESCED sentinel=present' && ncl '$QW_ARM_FILE' | grep -qF 'QUIESCED sentinel=absent' && ncl '$QW_ARM_FILE' | grep -F 'echo \"::warning::quiesce-web: SECONDARY inventory confirm UNREADABLE' | grep -qF 'HTTP 000'"
+  "ncl '$QW_ARM_FILE' | grep -cF \"grep -qE '^inngest-inventory: QUIESCED' /tmp/quiesce-inv\" >/dev/null && ncl '$QW_ARM_FILE' | grep -cF 'QUIESCED sentinel=present' >/dev/null && ncl '$QW_ARM_FILE' | grep -cF 'QUIESCED sentinel=absent' >/dev/null && ncl '$QW_ARM_FILE' | grep -F 'echo \"::warning::quiesce-web: SECONDARY inventory confirm UNREADABLE' | grep -cF 'HTTP 000' >/dev/null"
 
 # ── §9 quiesce-web PREFLIGHT: the config push landed BEFORE anything is stopped — RENDERED ────────
 # The quiesce handler, the inventory QUIESCED verdict, the persisted-capture resume and the enumerate
@@ -3515,10 +3515,10 @@ done
 assert "#6921 §9 preflight list is the four cutover scripts, each a FILE_MAP-delivered /usr/local/bin dest (list='$QW_PF_NAMES' undelivered='${QW_PF_UNDELIVERED# }')" \
   "[[ '$QW_PF_N' -eq 1 && '$QW_PF_NAMES' == 'ci-deploy.sh inngest-inventory.sh inngest-rearm-reminders.sh inngest-enumerate-reminders.sh' && -z '$QW_PF_UNDELIVERED' ]]"
 # shellcheck disable=SC2016  # literal source text, not expansions
-QW_PF_STATUS_LN="$(ncl "$QW_ARM_FILE" | grep -nF '"$BASE/infra-config-status"' | head -1 | cut -d: -f1 || true)"
+QW_PF_STATUS_LN="$(ncl "$QW_ARM_FILE" | grep -nF '"$BASE/infra-config-status"' | sed -n '1p' | cut -d: -f1 || true)"
 # shellcheck disable=SC2016
-QW_PF_DEPLOY_LN="$(ncl "$QW_ARM_FILE" | grep -nF '"$BASE/deploy" ||' | head -1 | cut -d: -f1 || true)"
-QW_PF_WARN_LN="$(ncl "$QW_ARM_FILE" | grep -nF 'echo "::warning::quiesce-web: this STOPS' | head -1 | cut -d: -f1 || true)"
+QW_PF_DEPLOY_LN="$(ncl "$QW_ARM_FILE" | grep -nF '"$BASE/deploy" ||' | sed -n '1p' | cut -d: -f1 || true)"
+QW_PF_WARN_LN="$(ncl "$QW_ARM_FILE" | grep -nF 'echo "::warning::quiesce-web: this STOPS' | sed -n '1p' | cut -d: -f1 || true)"
 assert "#6921 §9 the preflight read precedes the maintenance-window warning and the fan-out POST (status=$QW_PF_STATUS_LN warn=$QW_PF_WARN_LN deploy=$QW_PF_DEPLOY_LN)" \
   "[[ '$QW_PF_STATUS_LN' =~ ^[0-9]+\$ && '$QW_PF_WARN_LN' =~ ^[0-9]+\$ && '$QW_PF_DEPLOY_LN' =~ ^[0-9]+\$ ]] && (( QW_PF_STATUS_LN < QW_PF_WARN_LN && QW_PF_WARN_LN < QW_PF_DEPLOY_LN ))"
 QW_PF_REGION="$(mktemp)"; SCRATCH+=("$QW_PF_REGION")
@@ -3574,17 +3574,17 @@ DRIVER
   return 0
 }
 qw_pf_refused() { # <output> <needle> — rc 1, one ::error:: naming the needle, never passed, never POSTed
-  printf '%s\n' "$1" | grep -qx '__RC=1' && printf '%s\n' "$1" | grep -E '^::error::quiesce-web PREFLIGHT: config push not landed' | grep -qF -- "$2" \
-    && ! printf '%s\n' "$1" | grep -qE '__PREFLIGHT_PASSED__|__DEPLOY_POSTED__'
+  printf '%s\n' "$1" | grep -cx '__RC=1' >/dev/null && printf '%s\n' "$1" | grep -E '^::error::quiesce-web PREFLIGHT: config push not landed' | grep -cF -- >/dev/null "$2" \
+    && ! printf '%s\n' "$1" | grep -cE '__PREFLIGHT_PASSED__|__DEPLOY_POSTED__' >/dev/null
 }
 # shellcheck disable=SC2034  # read inside assert's eval'd condition strings
 QW_PF_OK="$(render_qw_pf 200 "$(qw_pf_frame '' '')" '')"
 assert "#6921 §9 preflight: all four host sha256 == checkout -> passes (rc 0, no ::error::)" \
-  "printf '%s\n' \"\$QW_PF_OK\" | grep -qx '__RC=0' && printf '%s\n' \"\$QW_PF_OK\" | grep -qx '__PREFLIGHT_PASSED__' && ! printf '%s\n' \"\$QW_PF_OK\" | grep -q '^::error::'"
+  "printf '%s\n' \"\$QW_PF_OK\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$QW_PF_OK\" | grep -cx '__PREFLIGHT_PASSED__' >/dev/null && ! printf '%s\n' \"\$QW_PF_OK\" | grep -c '^::error::' >/dev/null"
 # shellcheck disable=SC2034
 QW_PF_DIV="$(render_qw_pf 200 "$(qw_pf_frame inngest-inventory.sh diverge)" '')"
 assert "#6921 §9 preflight: a diverging inngest-inventory.sh -> refuses naming host=<sha> checkout=<sha>, plus the apply-deploy-pipeline-fix.yml remedy" \
-  "qw_pf_refused \"\$QW_PF_DIV\" '/usr/local/bin/inngest-inventory.sh host=$(printf '%s' stub-inngest-inventory.sh | sha256sum | awk '{print $1}') checkout=${QW_PF_SHA[inngest-inventory.sh]}' && printf '%s\n' \"\$QW_PF_DIV\" | grep -qF 'apply-deploy-pipeline-fix.yml'"
+  "qw_pf_refused \"\$QW_PF_DIV\" '/usr/local/bin/inngest-inventory.sh host=$(printf '%s' stub-inngest-inventory.sh | sha256sum | awk '{print $1}') checkout=${QW_PF_SHA[inngest-inventory.sh]}' && printf '%s\n' \"\$QW_PF_DIV\" | grep -cF 'apply-deploy-pipeline-fix.yml' >/dev/null"
 # shellcheck disable=SC2034
 QW_PF_DROP="$(render_qw_pf 200 "$(qw_pf_frame inngest-enumerate-reminders.sh drop)" '')"
 assert "#6921 §9 preflight: inngest-enumerate-reminders.sh absent from files[] -> refuses with host=missing" \
@@ -3609,7 +3609,7 @@ check_qw_pf_divergence_refuses() {
   awk '/^  quiesce-web\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$f" > "$arm"
   awk '/# ---- quiesce-web PREFLIGHT/{f=1} f&&/echo "::warning::quiesce-web: this STOPS/{exit} f' "$arm" > "$region"
   out="$(QW_PF_REGION="$region" render_qw_pf 200 "$(qw_pf_frame inngest-inventory.sh diverge)" '')"
-  printf '%s\n' "$out" | grep -qx '__RC=1' && ! printf '%s\n' "$out" | grep -qx '__PREFLIGHT_PASSED__'
+  printf '%s\n' "$out" | grep -cx '__RC=1' >/dev/null && ! printf '%s\n' "$out" | grep -cx '__PREFLIGHT_PASSED__' >/dev/null
 }
 # shellcheck disable=SC2016
 mutate_file "§9 preflight refusal neutered" "$BODY_SH" 's|^    if \[\[ "\$PF_FAIL" -ne 0 \]\]; then$|    if false; then|' check_qw_pf_divergence_refuses
@@ -3653,18 +3653,18 @@ DRIVER
 }
 qw_poll_failed() { # <output> <calls> <needle>… — rc 1, stopped at call <calls>, the ::error:: carries every needle
   local out="$1" calls="$2" line; shift 2
-  printf '%s\n' "$out" | grep -qx '__RC=1' && printf '%s\n' "$out" | grep -qx "__CALLS=$calls" && ! printf '%s\n' "$out" | grep -qx '__POLL_FELL_THROUGH__' || return 1
-  line="$(printf '%s\n' "$out" | grep -E '^::error::' | head -1 || true)"
-  while [[ $# -gt 0 ]]; do printf '%s' "$line" | grep -qF -- "$1" || return 1; shift; done
+  printf '%s\n' "$out" | grep -cx '__RC=1' >/dev/null && printf '%s\n' "$out" | grep -cx "__CALLS=$calls" >/dev/null && ! printf '%s\n' "$out" | grep -cx '__POLL_FELL_THROUGH__' >/dev/null || return 1
+  line="$(printf '%s\n' "$out" | grep -E '^::error::' | sed -n '1p' || true)"
+  while [[ $# -gt 0 ]]; do printf '%s' "$line" | grep -cF -- >/dev/null "$1" || return 1; shift; done
 }
 # shellcheck disable=SC2034
 QW_POLL_LC="$(render_qw_poll 'running:-1,lock_contention:1,quiesced:0')"
 assert "#6921 §9 poller: running, lock_contention, quiesced -> keeps polling past lock_contention and confirms (rc 0, calls=3)" \
-  "printf '%s\n' \"\$QW_POLL_LC\" | grep -qx '__RC=0' && printf '%s\n' \"\$QW_POLL_LC\" | grep -qx '__CALLS=3' && printf '%s\n' \"\$QW_POLL_LC\" | grep -qx '__POLL_FELL_THROUGH__' && printf '%s\n' \"\$QW_POLL_LC\" | grep -qE '^::notice::quiesce-web: host-side QUIESCED confirmed'"
+  "printf '%s\n' \"\$QW_POLL_LC\" | grep -cx '__RC=0' >/dev/null && printf '%s\n' \"\$QW_POLL_LC\" | grep -cx '__CALLS=3' >/dev/null && printf '%s\n' \"\$QW_POLL_LC\" | grep -cx '__POLL_FELL_THROUGH__' >/dev/null && printf '%s\n' \"\$QW_POLL_LC\" | grep -cE '^::notice::quiesce-web: host-side QUIESCED confirmed' >/dev/null"
 # shellcheck disable=SC2034
 QW_POLL_LCT="$(render_qw_poll 'lock_contention:1')"
 assert "#6921 §9 poller: lock_contention to the end -> the timeout error names lock_contention as the last reason (rc 1)" \
-  "printf '%s\n' \"\$QW_POLL_LCT\" | grep -qx '__RC=1' && printf '%s\n' \"\$QW_POLL_LCT\" | grep -E '^::error::quiesce-web did not reach' | grep -qF 'lock_contention'"
+  "printf '%s\n' \"\$QW_POLL_LCT\" | grep -cx '__RC=1' >/dev/null && printf '%s\n' \"\$QW_POLL_LCT\" | grep -E '^::error::quiesce-web did not reach' | grep -cF 'lock_contention' >/dev/null"
 # shellcheck disable=SC2034
 QW_POLL_CF="$(render_qw_poll 'quiesce_capture_failed:1')"
 assert "#6921 §9 poller: quiesce_capture_failed -> fails fast naming the Better Stack read, restart-inngest-server.yml and the re-dispatch" \
@@ -3697,7 +3697,7 @@ done
 _n=$(grep -cE 'auto-restart the web scheduler|currently fails at 2\.1' "$BODY_SH" || true)
 assert "#6921 FR10 whole-file: 'auto-restart the web scheduler|currently fails at 2.1' is gone (got $_n)" "[[ '$_n' -eq 0 ]]"
 # echo_has <file> <echo-prefix> <phrase> — a NON-COMMENT echo line starting with the prefix carries the phrase.
-echo_has() { ncl "$1" | grep -F -- "echo \"$2" | grep -qF -- "$3"; }
+echo_has() { ncl "$1" | grep -F -- "echo \"$2" | grep -cF -- >/dev/null "$3"; }
 assert "#6921 D5 2.2 STILL RUNNING warning: a second op=execute resumes 2.1 from the persisted capture, and the watchdog leaves a quiesced unit alone" \
   "echo_has '$EXEC_ARM_FILE' '::warning::2.2:' 'a second op=execute resumes 2.1 from the persisted capture taken at the quiesce boundary' && echo_has '$EXEC_ARM_FILE' '::warning::2.2:' 'leaves a quiesced unit alone'"
 assert "#6921 D5 quiesce-web warning: capture-before-stop resume + the watchdog leaves a quiesced unit alone" \
@@ -3717,13 +3717,13 @@ assert "#6921 D5 quiesce-web completion notice: web-2 scope points at SEAM 2.2a,
 _n=$(ncl "$BODY_SH" | grep -F 'SCOPE CAVEAT (P2-a / DI-C3)' | grep -F 'NOT a web-host double-fire detector' | grep -cF 'SEAM 2.2a' || true)
 assert "#6921 D5 both doublefire scope caveats (doublefire-probe + verify 2.6) name the web host and point web-2 at SEAM 2.2a (got $_n)" "[[ '$_n' -eq 2 ]]"
 assert "#6921 D5 the quiesce-web #6178 poll-window comment includes the 120 s capture bound and the peer fan-out term, drift-guarded" \
-  "grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -qF '120 s quiesce capture bound' && grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -qF 'peer fan-out' && grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -qF 'drift-guarded by ci-deploy.test.sh'"
+  "grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -cF '120 s quiesce capture bound' >/dev/null && grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -cF 'peer fan-out' >/dev/null && grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -cF 'drift-guarded by ci-deploy.test.sh' >/dev/null"
 # The deploy. tunnel ingress is web-1-only (tunnel.tf pins the origin to web_hosts["web-1"]): there is no
 # load balancer in front of these hooks, so no text may say there is.
 _n=$(grep -cE 'LB-routed|LB-reachable|LB-scoped|LOAD BALANCER|the LB may' "$BODY_SH" || true)
 assert "#6921 D5 whole-file: no 'LB-routed / LB-reachable / LOAD BALANCER' wording (the deploy. ingress is web-1-only) (got $_n)" "[[ '$_n' -eq 0 ]]"
 assert "#6921 D5 the tunnel fact the wording rests on still holds: tunnel.tf pins deploy. to web-1" \
-  "grep -A2 -F 'hostname = \"deploy.\${var.app_domain_base}\"' '$REPO_ROOT/apps/web-platform/infra/tunnel.tf' | grep -qF 'var.web_hosts[\"web-1\"].private_ip'"
+  "grep -A2 -F 'hostname = \"deploy.\${var.app_domain_base}\"' '$REPO_ROOT/apps/web-platform/infra/tunnel.tf' | grep -cF 'var.web_hosts[\"web-1\"].private_ip' >/dev/null"
 
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
@@ -3780,17 +3780,17 @@ assert "#6894 luks) case body is a real block (non-vacuity for every row below, 
 assert "#6894 choice list offers luks-cutover and luks-rollback" \
   "grep -qE '^[[:space:]]+-[[:space:]]*luks-cutover\$' '$WF_YAML' && grep -qE '^[[:space:]]+-[[:space:]]*luks-rollback\$' '$WF_YAML'"
 assert "#6894 both ops are in the reviewer-gated environment set (an op in the list with an unextended ternary runs ungated)" \
-  "printf '%s' \"\$ENV_OPS\" | grep -qF \"inputs.op == 'luks-cutover'\" && printf '%s' \"\$ENV_OPS\" | grep -qF \"inputs.op == 'luks-rollback'\""
+  "printf '%s' \"\$ENV_OPS\" | grep -cF \"inputs.op == 'luks-cutover'\" >/dev/null && printf '%s' \"\$ENV_OPS\" | grep -cF \"inputs.op == 'luks-rollback'\" >/dev/null"
 LK_STDIN=0;  grep -qF 'printf '"'"'%s'"'"' "$LK_WANT" | DOPPLER_TOKEN=' "$LUKS_FILE" && LK_STDIN=1
 LK_ARGV=0;   grep -qE 'secrets set INNGEST_LUKS_CUTOVER=' "$LUKS_FILE" && LK_ARGV=1
-LK_SILENT=0; grep -E 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | grep -q '>/dev/null' && LK_SILENT=1
+LK_SILENT=0; grep -E 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | grep -c '>/dev/null' >/dev/null && LK_SILENT=1
 LK_FLIPW=0;  grep -qE 'secrets set INNGEST_CUTOVER_FLIP' "$LUKS_FILE" && LK_FLIPW=1
 # `|| true` because "no match" is a possible answer here, not a crash: an EMPTY line number means
 # the anchor moved, and the two assertions below require `-n` on each before comparing — so the
 # miss reds THERE, with the value printed, instead of killing the suite here with nothing said.
-LK_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | head -1 | cut -d: -f1) || true
+LK_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | sed -n '1p' | cut -d: -f1) || true
 LK_LASTG3_LN=$(grep -n 'G3 REFUSING' "$LUKS_FILE" | tail -1 | cut -d: -f1) || true
-LK_TS_LN=$(grep -n 'LK_TS=' "$LUKS_FILE" | head -1 | cut -d: -f1) || true
+LK_TS_LN=$(grep -n 'LK_TS=' "$LUKS_FILE" | sed -n '1p' | cut -d: -f1) || true
 LK_G1READ=0; grep -qE 'doppler secrets get INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --plain' "$LUKS_FILE" && LK_G1READ=1
 # BOTH fail-closed arms, by their DISTINCT sentences: one for "the config could not be read at
 # all", one for "the name exists but its value could not be read". A count alone (or the shared

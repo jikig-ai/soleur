@@ -19,6 +19,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LEADER_PROMPTS } from "@/server/inngest/leader-prompts";
+import { runLikeInngest, type StepMemo } from "../../helpers/inngest-step-harness";
+import { StepError } from "inngest";
 
 // --- Module mocks (hoisted by vitest) ----------------------------------------
 
@@ -106,7 +108,7 @@ function buildSupabaseClient() {
       }
       return Promise.resolve({ data: null, error: null });
     },
-    // The Layer-2 window anchor read (`action_sends.created_at`) terminates in
+    // The Layer-2 window anchor read (`action_sends.clicked_at`) terminates in
     // `.single()`, unlike the sibling reads above which use `.maybeSingle()`.
     single() {
       if (currentTable === "action_sends") {
@@ -273,10 +275,18 @@ class AnthropicMock {
   messages = { create: anthropicCreateSpy };
   constructor(public opts: { apiKey: string }) {}
 }
-vi.mock("@anthropic-ai/sdk", () => ({
-  default: AnthropicMock,
-  __esModule: true,
-}));
+// The REAL connection-error classes: production classifies them by
+// `instanceof`, and their runtime `name` is "Error" (SDK 0.93), so a hand-named
+// Error would test a shape production never sees (#8803).
+vi.mock("@anthropic-ai/sdk", async () => {
+  const actual = await vi.importActual<typeof import("@anthropic-ai/sdk")>("@anthropic-ai/sdk");
+  return {
+    default: AnthropicMock,
+    APIConnectionError: actual.APIConnectionError,
+    APIConnectionTimeoutError: actual.APIConnectionTimeoutError,
+    __esModule: true,
+  };
+});
 
 // --- Helpers ----------------------------------------------------------------
 
@@ -438,11 +448,11 @@ beforeEach(() => {
     error: null,
   };
   actionSendsSelectResult = {
-    // created_at is the Layer-2 window anchor (#7774); cancellation_requested_at
+    // clicked_at is the Layer-2 window anchor (#7774); cancellation_requested_at
     // is read by the same table's cancel-check step.
     data: {
       cancellation_requested_at: null,
-      created_at: "2026-09-03T10:00:00.000Z",
+      clicked_at: "2026-09-03T10:00:00.000Z",
     },
     error: null,
   };
@@ -688,7 +698,7 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
         step: makeStep(),
         logger,
       }),
-    ).rejects.toThrow(/could not read action_sends\.created_at/);
+    ).rejects.toThrow(/could not read action_sends\.clicked_at/);
     // Fail-closed means no model spend on an unverifiable window.
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
   });
@@ -716,12 +726,12 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
 
   it("AC10 cancelled_by_operator: cancellation_requested_at NOT NULL → short-circuit", async () => {
     actionSendsSelectResult = {
-      // created_at is present on every real action_sends row and is the
+      // clicked_at is present on every real action_sends row and is the
       // Layer-2 window anchor (#7774); a fixture omitting it models a row
       // the producer cannot emit.
       data: {
         cancellation_requested_at: "2026-05-25T12:00:00Z",
-        created_at: "2026-09-03T10:00:00.000Z",
+        clicked_at: "2026-09-03T10:00:00.000Z",
       },
       error: null,
     };
@@ -856,12 +866,12 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
 
   it("AC3 notify: cancelled_by_operator NEVER notifies (operator-initiated stops are not surprises)", async () => {
     actionSendsSelectResult = {
-      // created_at is present on every real action_sends row and is the
+      // clicked_at is present on every real action_sends row and is the
       // Layer-2 window anchor (#7774); a fixture omitting it models a row
       // the producer cannot emit.
       data: {
         cancellation_requested_at: "2026-05-25T12:00:00Z",
-        created_at: "2026-09-03T10:00:00.000Z",
+        clicked_at: "2026-09-03T10:00:00.000Z",
       },
       error: null,
     };
@@ -1078,8 +1088,13 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
   });
 
   it("AC10 anthropic_timeout: SDK times out → persist failure", async () => {
-    const err: Error & { status?: number } = new Error("Request timed out");
-    err.name = "APIConnectionTimeoutError";
+    const { APIConnectionTimeoutError } = await vi.importActual<
+      typeof import("@anthropic-ai/sdk")
+    >("@anthropic-ai/sdk");
+    const err = new APIConnectionTimeoutError();
+    // The shape production sees: no custom name, no status (#8803).
+    expect(err.name).toBe("Error");
+    expect((err as { status?: unknown }).status).toBeUndefined();
     anthropicCreateSpy.mockRejectedValueOnce(err);
     const { agentOnSpawnRequestedHandler } = await import(
       "@/server/inngest/functions/agent-on-spawn-requested"
@@ -1573,17 +1588,25 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
 
   // Transient errors are thrown and retried. The step rebuilds the final error
   // the way Inngest does, so `status` is gone by the time the handler
-  // classifies it: a 429 that survives every retry reads anthropic_timeout
-  // (the documented residual).
-  it.each([429, 500, 408, 409])(
-    "%i is transient: thrown, retried 3 times, then anthropic_timeout",
-    async (status) => {
+  // classifies it. The live error is tagged with its FailureReason as a string
+  // `cause` inside the step, which survives (#8783).
+  it.each([
+    [429, "anthropic_rate_limited"],
+    [500, "anthropic_timeout"],
+    [408, "anthropic_timeout"],
+    [409, "anthropic_timeout"],
+    // The open 5xx range, not just its lower edge: 503 and 529 (overloaded).
+    [503, "anthropic_timeout"],
+    [529, "anthropic_timeout"],
+  ])(
+    "%i is transient: thrown, retried 3 times, then %s",
+    async (status, reason) => {
       anthropicCreateSpy.mockRejectedValue(apiError(status));
       const step = makeRetryingStep({ retries: 3 });
       const result = await runWith(step);
       expect(result).toEqual({
         acknowledged: false,
-        failureReason: "anthropic_timeout",
+        failureReason: reason,
       });
       expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
       expect(step.memoized.has("turn-1-claude")).toBe(false);
@@ -1638,9 +1661,98 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     const step = makeRetryingStep({ retries: 3 });
     const result = await runWith(step);
     expect(step.memoized.has("turn-1-claude")).toBe(false);
+    // Our own post-billing defect: no arm positively identifies it, so it pages
+    // instead of reading as an Anthropic timeout (#8803).
     expect(result).toEqual({
       acknowledged: false,
-      failureReason: "anthropic_timeout",
+      failureReason: "leader_internal_error",
+    });
+  });
+
+  it("an unclassified in-step error (a plain TypeError from create) → leader_internal_error, error level", async () => {
+    anthropicCreateSpy.mockRejectedValue(new TypeError("cannot read properties of undefined"));
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "leader_internal_error",
+    });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
+    const paged = reportSilentFallbackSpy.mock.calls.filter((c) =>
+      String((c[1] as { message?: string }).message).includes("deadlettered"),
+    );
+    expect(paged).toHaveLength(1);
+    expect((paged[0][1] as { tags: Record<string, string> }).tags).toEqual({
+      reason: "leader_internal_error",
+    });
+  });
+
+  it.each(["subscription_limit", "decrypt_failed", "escape"])(
+    "a ByokLeaseError(%s) after retries → byok_lease_unavailable (the classifier is cause-only)",
+    async (cause) => {
+      getRestApiKeySpy.mockRejectedValue(
+        Object.assign(new Error(`lease ${cause}`), { name: "ByokLeaseError", cause }),
+      );
+      const result = await runWith(makeRetryingStep({ retries: 3 }));
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "byok_lease_unavailable",
+      });
+    },
+  );
+
+  // makeRetryingStep copies `cause` by hand, so only the REAL serializer proves
+  // the tag crosses the step boundary (#8783, Guard 3).
+  describe("through the real step boundary (runLikeInngest)", () => {
+    async function runReal(memo: StepMemo) {
+      const { agentOnSpawnRequestedHandler } = await import(
+        "@/server/inngest/functions/agent-on-spawn-requested"
+      );
+      return runLikeInngest(
+        ({ step, attempt }) =>
+          agentOnSpawnRequestedHandler({
+            event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+            step,
+            logger,
+            attempt,
+          }),
+        { maxAttempts: 4, memo },
+      );
+    }
+
+    it("a 429 on every attempt → anthropic_rate_limited, memoized as a StepError with cause anthropic_rate_limited", async () => {
+      anthropicCreateSpy.mockRejectedValue(apiError(429));
+      const memo: StepMemo = new Map();
+      const out = await runReal(memo);
+      expect(out.outcome).toBe("returned");
+      expect(out.value).toEqual({
+        acknowledged: false,
+        failureReason: "anthropic_rate_limited",
+      });
+      const entry = memo.get("turn-1-claude");
+      expect(entry?.ok).toBe(false);
+      const stepErr = (entry as { ok: false; error: Error & { cause?: unknown } }).error;
+      // The harness rebuilt it through the real serializer (not an in-process pass-through).
+      expect(stepErr).toBeInstanceOf(StepError);
+      expect(stepErr.cause).toBe("anthropic_rate_limited");
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
+    });
+
+    it("a ByokLeaseError(subscription_limit) on every attempt → byok_lease_unavailable, its own cause surviving", async () => {
+      getRestApiKeySpy.mockRejectedValue(
+        Object.assign(new Error("subscription limit"), {
+          name: "ByokLeaseError",
+          cause: "subscription_limit",
+        }),
+      );
+      const memo: StepMemo = new Map();
+      const out = await runReal(memo);
+      expect(out.value).toEqual({
+        acknowledged: false,
+        failureReason: "byok_lease_unavailable",
+      });
+      const entry = memo.get("turn-1-claude") as { ok: false; error: Error & { cause?: unknown } };
+      expect(entry.ok).toBe(false);
+      expect(entry.error.cause).toBe("subscription_limit");
     });
   });
 

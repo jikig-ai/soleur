@@ -76,7 +76,7 @@ awk -v want="  - path: $GUARD_PATH" '
 ' "$CI" > "$RENDERED"
 
 assert "guard block extracted from the template (non-empty)" "[[ -s '$RENDERED' ]]"
-assert "extracted block is the guard (has a shebang)" "head -1 '$RENDERED' | grep -q '^#!'"
+assert "extracted block is the guard (has a shebang)" "head -1 '$RENDERED' | grep -c '^#!' >/dev/null"
 
 # Substitute every terraform variable the guard interpolates, then un-escape the TF-escaped
 # shell expansions ($${VAR} -> ${VAR}). BOTH are required: a missed TF var survives into the
@@ -272,7 +272,7 @@ run_guard() {
   COUNTER="$(cat "$root/var/lib/soleur/private-nic-reboots" 2>/dev/null || true)"
 }
 
-field() { printf '%s' "$EMIT" | grep -oE "$1=[^ \"]+" | head -1 | cut -d= -f2; }
+field() { printf '%s' "$EMIT" | grep -oE "$1=[^ \"]+" | sed -n '1p' | cut -d= -f2; }
 
 # --- BEHAVIORAL: T1 healthy => ZERO mutation (AC3) ---------------------------------------
 echo "--- behavioral: T1 healthy (ip present, store mounted) => zero mutation ---"
@@ -484,14 +484,14 @@ assert "the counter write is atomic (rename(2), so a reader never sees a torn fi
 assert "an unwritable counter withholds the reboot (fails CLOSED)" \
   "grep -qE 'CONVERGED_BY=counter-unwritable' <<<\"\$GUARD_BLOCK\""
 
-COUNTER_WRITE_LN="$(grep -n '> "\$COUNTER_FILE.tmp"' "$RENDERED" | head -1 | cut -d: -f1)"
-REBOOT_LN="$(grep -nE '^[[:space:]]*reboot[[:space:]]*$' "$RENDERED" | head -1 | cut -d: -f1)"
+COUNTER_WRITE_LN="$(grep -n '> "\$COUNTER_FILE.tmp"' "$RENDERED" | sed -n '1p' | cut -d: -f1)"
+REBOOT_LN="$(grep -nE '^[[:space:]]*reboot[[:space:]]*$' "$RENDERED" | sed -n '1p' | cut -d: -f1)"
 assert "the counter write was located" "[[ -n '$COUNTER_WRITE_LN' ]]"
 assert "the reboot call was located" "[[ -n '$REBOOT_LN' ]]"
 assert "counter is written BEFORE the reboot (fail-safe ordering)" \
   "[[ '$COUNTER_WRITE_LN' -lt '$REBOOT_LN' ]]"
 assert "the emit precedes the reboot (a converge is never silent)" \
-  "[[ \"\$(grep -n 'SOLEUR_PRIVATE_NIC nic_ok=' '$RENDERED' | head -1 | cut -d: -f1)\" -lt '$REBOOT_LN' ]]"
+  "[[ \"\$(grep -n 'SOLEUR_PRIVATE_NIC nic_ok=' '$RENDERED' | sed -n '1p' | cut -d: -f1)\" -lt '$REBOOT_LN' ]]"
 
 # ALL-MEMBERS, not first-member. The guard greps for EXPECTED_IP twice — the initial predicate
 # AND the re-check inside the bounded wait. A `grep -q` any-occurrence assert stays green when
@@ -525,7 +525,7 @@ assert "a 5-min cron invokes the guard (offset from the disk heartbeat's */5)" \
 assert "the cron.d block declares a PATH (cron's default omits /usr/sbin)" \
   "grep -qE '^\s*PATH=' <<<\"\$CRON_BLOCK\""
 assert "that PATH includes /usr/sbin, where ip and reboot live" \
-  "grep -E '^\s*PATH=' <<<\"\$CRON_BLOCK\" | grep -q '/usr/sbin'"
+  "grep -E '^\s*PATH=' <<<\"\$CRON_BLOCK\" | grep -c '/usr/sbin' >/dev/null"
 assert "the cron takes the flock" "grep -q 'flock' <<<\"\$CRON_LINE\""
 assert "the cron wraps in doppler run --project soleur-registry --config prd" \
   "grep -q 'doppler run --project soleur-registry --config prd' <<<\"\$CRON_LINE\""
@@ -533,13 +533,13 @@ assert "the boot invocation takes the SAME flock (else boot and cron race)" \
   "grep -q 'flock' <<<\"\$BOOT_LINE\""
 assert "the boot invocation is fail-open (|| true)" "grep -q '|| true' <<<\"\$BOOT_LINE\""
 assert "cron and boot take the same lock path" \
-  "[[ \"\$(grep -oE '/run/lock/[a-z.-]+' <<<\"\$CRON_LINE\" | head -1)\" == \"\$(grep -oE '/run/lock/[a-z.-]+' <<<\"\$BOOT_LINE\" | head -1)\" ]]"
+  "[[ \"\$(grep -oE '/run/lock/[a-z.-]+' <<<\"\$CRON_LINE\" | sed -n '1p')\" == \"\$(grep -oE '/run/lock/[a-z.-]+' <<<\"\$BOOT_LINE\" | sed -n '1p')\" ]]"
 
 # The boot invocation MUST follow the Doppler token file: anywhere earlier has no token, so
 # `doppler run` resolves nothing, the POST dies, and `|| true` swallows it SILENTLY — a silent
 # failure inside the control built to end silent failures (kieran P1-3).
-TOKEN_LINE="$(grep -n 'registry-doppler$' "$CI" | grep -F 'printf' | head -1 | cut -d: -f1)"
-BOOT_LINE_NO="$(grep -n 'soleur-private-nic-guard.sh' "$CI" | grep -F '|| true' | head -1 | cut -d: -f1)"
+TOKEN_LINE="$(grep -n 'registry-doppler$' "$CI" | grep -F 'printf' | sed -n '1p' | cut -d: -f1)"
+BOOT_LINE_NO="$(grep -n 'soleur-private-nic-guard.sh' "$CI" | grep -F '|| true' | sed -n '1p' | cut -d: -f1)"
 assert "the Doppler token file write was located" "[[ -n '$TOKEN_LINE' ]]"
 assert "the boot invocation was located" "[[ -n '$BOOT_LINE_NO' ]]"
 assert "the boot invocation comes AFTER the Doppler token file is written" \

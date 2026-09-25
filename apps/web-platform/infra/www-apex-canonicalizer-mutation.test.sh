@@ -557,7 +557,7 @@ case_row() {
   # of the rows below expect a case naming `--branch` / `--project-name`, and without `--`
   # grep parses the expectation as an option, exits 2, and the row reports MISROUTED against
   # a guard that named its case correctly. Measured on the first run of this file.
-  if ! grep -E '^  FAIL|^\[FATAL\]' "$log" | grep -qF -- "$expect"; then
+  if ! grep -E '^  FAIL|^\[FATAL\]' "$log" | grep -cF -- >/dev/null "$expect"; then
     FAIL=$((FAIL + 1))
     printf '  MISROUTED: %-9s the guard went RED, but NOT on the case this row targets.\n' "$id"
     printf '             expected a failure naming: %s\n' "$expect"

@@ -138,8 +138,8 @@ run_case "$CUTOVER" 'freeze_writers' 'freeze_writers emit_freeze_holders' LSOF_O
 markerF 'SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER' \
   && ok "T9 G4 emits SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER to the Better Stack channel" \
   || no "T9 no FREEZE_HOLDER marker — a G4 abort stays undiagnosable without SSH"
-emit_line="$(grep -n 'SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER' <<<"$CASE_OUT" | head -1 | cut -d: -f1)"
-die_line="$(grep -n '^DIE:' <<<"$CASE_OUT" | head -1 | cut -d: -f1)"
+emit_line="$(grep -n 'SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER' <<<"$CASE_OUT" | sed -n '1p' | cut -d: -f1)"
+die_line="$(grep -n '^DIE:' <<<"$CASE_OUT" | sed -n '1p' | cut -d: -f1)"
 if [ -n "$emit_line" ] && [ -n "$die_line" ] && [ "$emit_line" -lt "$die_line" ]; then
   ok "T9b the holder emit PRECEDES die (evidence survives the abort)"
 else
@@ -450,14 +450,14 @@ done
 # The sourced-detection guard is the boundary between definitions and the main body.
 T25BODY="$RUN_SCRATCH/t25body"
 grep -vE '^[[:space:]]*#' "$CUTOVER" > "$T25BODY" || :
-t25_guard=$(grep -nE 'BASH_SOURCE\[0\]:-\$0.*!=' "$T25BODY" | head -1 | cut -d: -f1 || true)
+t25_guard=$(grep -nE 'BASH_SOURCE\[0\]:-\$0.*!=' "$T25BODY" | sed -n '1p' | cut -d: -f1 || true)
 if [ -z "$t25_guard" ]; then
   no "T25 could not locate the sourced-detection guard — the main-body boundary is unfindable, so the ordering assertion would be scoped to the wrong region"
   t25_canary=""; t25_disarm=""
 else
   awk -v g="$t25_guard" 'NR>g' "$T25BODY" > "$T25BODY.main"
-  t25_canary=$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" | head -1 | cut -d: -f1 || true)
-  t25_disarm=$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" | head -1 | cut -d: -f1 || true)
+  t25_canary=$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+  t25_disarm=$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
 fi
 if [ -n "$t25_canary" ] && [ -n "$t25_disarm" ] && [ "$t25_canary" -lt "$t25_disarm" ]; then
   ok "T25 app_canary is invoked BEFORE disarm_dead_man (the unattended backstop spans the canary)"
@@ -470,8 +470,8 @@ fi
 # disarm_dead_man inside the one `if [ "$DRY_RUN" != "1" ]` block, so its leading whitespace must
 # EQUAL its siblings'. A wrapping conditional deepens the indent; an inline `; app_canary;` fails the
 # own-line anchor. Compare the exact indent string, not just "present".
-t25b_canary_ws="$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" 2>/dev/null | head -1 | sed -E 's/^[0-9]+:([[:space:]]*)app_canary.*/\1/' | cat -A | sed 's/\$$//')"
-t25b_disarm_ws="$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" 2>/dev/null | head -1 | sed -E 's/^[0-9]+:([[:space:]]*)disarm_dead_man.*/\1/' | cat -A | sed 's/\$$//')"
+t25b_canary_ws="$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" 2>/dev/null | sed -n '1p' | sed -E 's/^[0-9]+:([[:space:]]*)app_canary.*/\1/' | cat -A | sed 's/\$$//')"
+t25b_disarm_ws="$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" 2>/dev/null | sed -n '1p' | sed -E 's/^[0-9]+:([[:space:]]*)disarm_dead_man.*/\1/' | cat -A | sed 's/\$$//')"
 # Also assert app_canary never appears at a DEEPER indent than the sibling in the main body (a
 # nested guard). Count main-body app_canary lines whose indent is strictly longer than the sibling.
 t25b_deeper="$(awk -v sib="$t25b_disarm_ws" '
@@ -583,10 +583,10 @@ fi
 #
 # Every operand is EXTRACTED BY SHAPE from its own source file. Hardcoding any of them would let a
 # future knob change (attempts 30 -> 300) sail past a guard that still asserts the old arithmetic.
-ac8_attempts=$(grep -oE 'WORKSPACES_CANARY_ATTEMPTS:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
-ac8_interval=$(grep -oE 'WORKSPACES_CANARY_INTERVAL_S:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
-ac8_maxtime=$(grep -oE '\-\-max-time [0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
-ac8_deadman=$(grep -oE 'WORKSPACES_DEAD_MAN_MIN:-[0-9]+' "$CUTOVER" | grep -oE '[0-9]+$' | head -1 || true)
+ac8_attempts=$(grep -oE 'WORKSPACES_CANARY_ATTEMPTS:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | sed -n '1p' || true)
+ac8_interval=$(grep -oE 'WORKSPACES_CANARY_INTERVAL_S:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | sed -n '1p' || true)
+ac8_maxtime=$(grep -oE '\-\-max-time [0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | sed -n '1p' || true)
+ac8_deadman=$(grep -oE 'WORKSPACES_DEAD_MAN_MIN:-[0-9]+' "$CUTOVER" | grep -oE '[0-9]+$' | sed -n '1p' || true)
 # MEASURED, not assumed: freeze/arm 22:11:49.09 -> canary 22:14:50.31 on run 29782780158. This is
 # the ONE hardcoded operand (nothing in-repo to extract it from), and it is a LOWER BOUND: the
 # arm->canary span contains the freeze + full rsync + G3 gate, which scale with total workspace

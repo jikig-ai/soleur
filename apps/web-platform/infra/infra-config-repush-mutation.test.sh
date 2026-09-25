@@ -809,7 +809,7 @@ if [[ "$N" -lt 40 ]]; then
 fi
 # The stay-green control must actually be present, not merely counted. A battery of
 # must-trip rows cannot distinguish working guards from guards that red on everything.
-if ! printf '%s\n' "${ROWS[@]}" | grep -q '^STAY-GREEN|'; then
+if ! printf '%s\n' "${ROWS[@]}" | grep -c '^STAY-GREEN|' >/dev/null; then
   echo "  FAIL: the stay-green control row is absent — with every row expecting rc=1, a suite that has become impossible to satisfy scores a perfect result" >&2
   exit 1
 fi

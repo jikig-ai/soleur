@@ -3,7 +3,7 @@
 // The C4 diagnostics / staleness banner. Lives in its own light module (no
 // CodeMirror, Mantine or @likec4/diagram) so tests can render the REAL banner;
 // c4-shared.tsx re-exports it, so every import site is unchanged.
-import type { Diagnostic } from "./c4-shared";
+import { MODEL_LEVEL_LINE, type Diagnostic } from "@/lib/c4-model-shape";
 
 /** Line 2 of the stale strip when the save carried no diagnostic (#8695). The
  *  server returns `rerendered:false` with no reason only when a newer source
@@ -67,8 +67,12 @@ export function C4Diagnostics({
           </p>
           <ul className="space-y-0.5">
             {diagnostics.slice(0, 8).map((d, i) => (
+              // `line <= MODEL_LEVEL_LINE` is reserved for a diagnostic about the
+              // whole model (the zero-view model, #8740), which has no source
+              // line. A second producer or reader should move to a `kind` field.
               <li key={i}>
-                line {d.line}: {d.message}
+                {d.line > MODEL_LEVEL_LINE ? `line ${d.line}: ` : ""}
+                {d.message}
               </li>
             ))}
           </ul>
