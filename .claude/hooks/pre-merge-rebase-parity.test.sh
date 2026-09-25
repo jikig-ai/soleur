@@ -90,11 +90,13 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 # A skip is not a pass: it increments neither PASS nor the total, but it IS
 # counted and printed. Without this the python3-gated cases silently turned a
 # 20/20 into an 18/18 with no signal — the same accounting hole the sibling
-# contract suite closed.
-skip() { echo "  SKIP: $1"; SKIPPED=$((SKIPPED + 1)); }
+# contract suite closed. A counted skip makes the suite exit 3 (UNRESOLVED)
+# below the results line, so a python3-less run is never green whatever the
+# case floor says (#8616).
+skip() { echo "  UNRESOLVED: $1"; SKIPPED=$((SKIPPED + 1)); }
 
-command -v jq  >/dev/null 2>&1 || { echo "SKIP: jq missing"; echo "=== Results: 0/0 passed, 0 failed, 1 skipped ==="; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq  >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; echo "=== Results: 0/0 passed, 0 failed, 1 skipped ==="; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 [[ -f "$CLAUDE_HOOK" ]] || { echo "FAIL: hook missing: $CLAUDE_HOOK"; exit 1; }
 
@@ -323,7 +325,7 @@ want_env() {
 }
 
 if [[ -z "$SURROGATE_PAYLOAD" ]]; then
-  skip "python3 missing — unreadable-envelope case (1 assertion not run)"
+  skip "surrogate payload not generated (python3 missing or failed) — unreadable-envelope case not run"
 else
   # exit 0 is half the point: the ask has to arrive as a DECISION. Before #7173
   # the same input aborted the script, which a verdict-only assertion could not
@@ -376,7 +378,7 @@ sys.stdout.write(json.dumps({"cwd":"/tmp",
   "tool_input":{"command":sys.argv[1]+"\n"+("#"*79+"\n")*1700}}))' "$1"
 }
 if ! command -v python3 >/dev/null 2>&1; then
-  skip "python3 missing — SIGPIPE padding-bypass case (1 assertion not run)"
+  skip "python3 missing — SIGPIPE padding-bypass case not run"
 else
   # `rm -rf $HOME` and not `git stash`: the stash guard only fires when the
   # resolved dir is inside a worktree, so on a /tmp fixture it correctly allows
@@ -404,6 +406,11 @@ done
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed, $SKIPPED skipped ==="
+
+if (( SKIPPED > 0 && FAIL == 0 )); then
+  echo "UNRESOLVED: $SKIPPED case(s) not run (a tool was missing) — not green" >&2
+  exit 3
+fi
 
 # --- ANTI-VACUITY FLOOR (ADR-193) -----------------------------------------------------------
 # Absolute and hand-ratcheted, NOT derived from the run. `FAIL -eq 0` alone is satisfied by a

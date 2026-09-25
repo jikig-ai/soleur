@@ -69,7 +69,7 @@ function setupServiceChain(args: {
     id: string;
     user_id: string;
     action_class: string;
-    created_at: string;
+    clicked_at: string;
     acknowledged_at: string | null;
     message_id?: string;
   } | null;
@@ -134,7 +134,7 @@ describe("GET /api/dashboard/today/[id]/cost", () => {
         id: "as-1",
         user_id: FOUNDER_ID,
         action_class: "engineering.pr_review_pending",
-        created_at: "2026-05-25T12:00:00Z",
+        clicked_at: "2026-05-25T12:00:00Z",
         acknowledged_at: "2026-05-25T12:05:00Z",
         message_id: MESSAGE_ID,
       },
@@ -163,7 +163,7 @@ describe("GET /api/dashboard/today/[id]/cost", () => {
         id: "as-2",
         user_id: FOUNDER_ID,
         action_class: "triage.p0p1_issue",
-        created_at: "2026-05-25T12:00:00Z",
+        clicked_at: "2026-05-25T12:00:00Z",
         acknowledged_at: null,
         message_id: MESSAGE_ID,
       },
@@ -191,7 +191,7 @@ describe("GET /api/dashboard/today/[id]/cost", () => {
         id: "as-x",
         user_id: "different-founder",
         action_class: "engineering.pr_review_pending",
-        created_at: "2026-05-25T12:00:00Z",
+        clicked_at: "2026-05-25T12:00:00Z",
         acknowledged_at: null,
         message_id: MESSAGE_ID,
       },
