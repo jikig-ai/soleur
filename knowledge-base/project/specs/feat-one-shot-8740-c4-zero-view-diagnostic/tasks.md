@@ -72,11 +72,11 @@ Plan: `knowledge-base/project/plans/2026-09-25-fix-c4-zero-view-model-project-di
 - [x] 3.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
 - [x] 3.3 `bash scripts/followthroughs/c4-zero-view-model-8740.test.sh` and `bash scripts/lint-followthrough-varq-ban.sh`
 - [x] 3.4 `git grep -n "function plainObjectSize" -- apps/web-platform` prints exactly one line.
-- [ ] 3.5 At QA, attach a screenshot of the zero-view workspace state at the minimum left-panel width.
+- [ ] 3.5 At QA, attach a screenshot of the zero-view workspace state at the minimum left-panel width. Not done: Playwright MCP failed to connect in the ship session, and the viewer is behind the `c4-visualizer` flag (`role-dev` only). The change reuses the existing warnings strip; `c4-shared.test.tsx` covers the rendered text.
 
 ## Phase 4: Ship (issue hygiene, automated)
 
-- [ ] 4.1 PR body: `Ref #8740`, `Ref #8861`, and the Re-render Decision summary. No closing keyword in the title or body.
+- [x] 4.1 PR body: `Ref #8740`, `Ref #8861`, and the Re-render Decision summary. No closing keyword in the title or body.
 - [ ] 4.2 (Withdrawn in review: no follow-through directive and no `follow-through` label on #8740.)
 - [ ] 4.3 Comment on #8740 with:
   - what shipped;
