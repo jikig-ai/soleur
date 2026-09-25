@@ -14,6 +14,51 @@ lane: cross-domain
 
 # Blog posts target non-technical solo founders
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25. **Sections enhanced:** Proposed Solution B and C, Observability, Guard Contract, Acceptance Criteria.
+
+**Agents used:**
+
+- `soleur:engineering:review:test-design-reviewer`
+- `soleur:engineering:review:pattern-recognition-specialist`
+- a `standard`-tier verify-the-negative and self-audit pass, which confirmed all 7 negative claims and found no stale references to cut items
+
+**Key improvements:**
+
+1. **ADR-179 compliance.** The `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}` fallback from plan review is reversed. On a marketplace install it would execute a file from the customer's own repo. The scan now uses the bare token, with no retry.
+2. **The scan no longer passes silently.**
+   - An unreadable file or a directory exits 2, not 0.
+   - Markdown link targets are stripped, so `#anchor` and `/pull/N` URLs are not flagged.
+   - The scan re-runs after every citation Fix or Edit cycle, so text rewritten by a fix is not skipped.
+3. **Test hardening.**
+   - The Guard 2 test asserts exact line numbers.
+   - Every regex alternative has its own deletion row, and so do the `&/#` exclusion and the link strip.
+   - Status assertions are exact, and there is an instrument guard.
+   - Guard 1 is anchored (`/^### Blog$/gm`), with a slice-integrity check, a moved-heading row and a uniqueness check on the `--audience` bullet.
+4. **The Observability block is filled.** The deepen Phase 4.7 gate treats skill and script edits as non-docs. The block has a local `grep` probe, allow-listed by `probe-verb-gate.sh`.
+5. **Skill-convention details.**
+   - The temp file follows the `legal-generate` pattern: `mktemp`, a trap, and a quoted heredoc.
+   - The skill's Phase 4 report line is extended.
+   - The headless-defaults list gains an entry.
+   - The script header carries a `# Usage:` and an `# Exit codes:` block.
+
+**Gates passed:**
+
+- 4.6 User-Brand Impact: threshold `none`, no sensitive paths.
+- 4.7 Observability.
+- 4.8 PAT sweep: 0 hits.
+- 4.9 UI wireframe: no UI surface.
+- 4.10 Encryption: no store or connection.
+- 4.11 Guard Contract: `lint-guard-contract.py` green, and the assembly is structural.
+- 4.5 network and 4.55 downtime: not triggered.
+
+**Also verified:**
+
+- Rule IDs: all 6 cited are active.
+- Cited issues and PRs, checked live: #8548 open, #8649 closed, #8774 open, #8536 merged, #3649 open, #1004 closed, #8647 merged.
+- `origin/main` has not drifted on `brand-guide.md`, content-writer `SKILL.md` or ship `SKILL.md`. Ship is at 270,963 of a 274,000 byte ceiling; the new sentence is 70 bytes, measured.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -154,13 +199,21 @@ This skill is plugin-generic. Other projects run it against their own brand guid
 3. **New `## Phase 2.4: Blog Note Scan`.**
    - **When it runs.** Only when the output is a blog post (the default path, or a `--path` under a `blog/` directory) **and** the `### Blog` note contains the literal label `**Jargon limits.**`. The trigger is deterministic, from the CTO and simplicity reviews. A project whose note sets no jargon limits gets no scan.
    - **Linking.** Link the script from SKILL.md as a markdown link, `[blog-jargon-scan.sh](./scripts/blog-jargon-scan.sh)`, per the plugin's Skill Compliance Checklist.
-   - **Temp file.** Write the draft to a `mktemp` file. Never use a literal `/tmp/...` path: `plugins/soleur/test/scratch-path-collision.test.ts` rejects it.
-   - **Invocation.** Run `bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/content-writer/scripts/blog-jargon-scan.sh" "$DRAFT"`.
-     - The `:-plugins/soleur` fallback is from the CTO review. The cron registers the plugin with `--plugin-dir plugins/soleur` from the repo root, and cloud exec shells do not export `CLAUDE_PLUGIN_ROOT`.
+   - **Temp file.** Follow the `plugins/soleur/skills/legal-generate/SKILL.md` precedent:
+     - `DRAFT="$(mktemp)" || { …warn and skip the scan… }`, followed by `trap 'rm -f "$DRAFT"' EXIT INT TERM HUP`.
+     - Write the draft with a **quoted** heredoc delimiter (`<<'DRAFT_EOF'`). Drafts contain backticks and `$`, and an unquoted heredoc would execute them and change the text being scanned.
+     - Never use a literal `/tmp/...` path: `plugins/soleur/test/scratch-path-collision.test.ts` rejects it.
+   - **Invocation.** Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh" "$DRAFT"`. This is the canonical token form every sibling skill uses (`archive-kb`, `community`, `cf-token-scope`).
+     - The harness substitutes `${CLAUDE_PLUGIN_ROOT}` when it loads the skill text, including in a headless `claude -p --plugin-dir` run. So the path resolves for installed customers and for the cron.
+     - **No fallback and no retry.** This follows ADR-179 (`knowledge-base/engineering/architecture/decisions/ADR-179-bare-plugin-root-anchor-for-customer-facing-executables.md`). A `:-plugins/soleur` default, or a retry through a repo-relative path, would resolve into the customer's own repo on a marketplace install and execute their file. `plugins/soleur/skills/incident/SKILL.md` states the same "no fallback arm".
+     - Deepen reversed the CTO review's fallback suggestion on these grounds. The failure is safe anyway: an unresolvable path exits 127, which falls into the warn-and-report branch below.
+   - **Re-run with citations.** Re-run Phase 2.4 every time Phase 2.5 re-runs, which happens after each Phase 3 **Edit** or headless **Fix** cycle. Otherwise text rewritten by a citation fix is never scanned. This coverage gap was found by the pattern review.
    - **Exit 1.** Rewrite each listed line in plain words, or move the detail into the single closing technical link, whose URL carries any number. Re-scan, for at most 2 cycles. For hits left after that:
      - interactive: show them in Phase 3;
      - headless: list them in the Phase 4 report.
-   - **Any other non-zero exit** (usage error, script missing, exit 127): warn, list it in the Phase 4 report, and continue. Never block a draft on a broken scan.
+   - **Any other non-zero exit** (usage error, script missing, exit 127): print the literal line `blog-jargon-scan unavailable (rc=<N>)` in the Phase 4 report, and continue. That string is the Observability `fail_loud` literal. Never block a draft on a broken scan.
+   - **Phase 4 report.** Phase 4 today is one `Report: "Article written to …"` sentence. Extend it: after that sentence, emit one line per leftover scan hit, or the `blog-jargon-scan unavailable (rc=<N>)` line. This is the "Phase 4 report" the bullets above refer to.
+   - **Headless defaults list.** Add one bullet to the skill's existing `**Headless defaults for interactive gates:**` list under `## Headless Mode Detection`: "Phase 2.4 (Blog Note Scan): leftover hits after 2 fix cycles, or a scan that could not run, are listed in the Phase 4 report; the draft is never blocked." This keeps every headless behavior in the one list the skill already uses (Kieran P1 #5 from plan review, still applicable to 2.4 after Phase 1.5 was cut).
 4. **Important Guidelines.** Keep the "`### Blog` missing → use `## Voice` only (no error)" bullet. Add: "and keep the `technical` blog default; the scan runs only when the note sets jargon limits."
 
 ### C. New `plugins/soleur/skills/content-writer/scripts/blog-jargon-scan.sh`
@@ -193,22 +246,53 @@ Exit codes: `0` for a clean body, `1` for hits, `2` for a usage error (no argume
 
 Every hit on the case studies is a backticked internal agent name, which the new note forbids anyway.
 
-Candidate implementation. The work phase may tighten it, but the three patterns and the three exit codes are the contract:
+Candidate implementation, hardened in deepen. The work phase may tighten it, but the three patterns, the link-target strip and the three exit codes are the contract. The header follows the skill-script convention (`# Usage:` plus an `# Exit codes:` block), as in `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh`.
 
 ```bash
 #!/usr/bin/env bash
-# blog-jargon-scan.sh <post.md> - flag reader-visible jargon a brand guide's Blog note bans.
+# blog-jargon-scan.sh - flag reader-visible jargon that a brand guide's Blog note bans.
+#
+# Usage: blog-jargon-scan.sh <post.md>
+#
+# Scans the frontmatter title/seoTitle/description values and the body up to the
+# first JSON-LD <script> block. Markdown link targets "](...)" are stripped first:
+# a URL is not reader-visible text. Flags a backtick, a --flag token, or a #NN number.
+#
+# Exit codes:
+#   0  no hits
+#   1  hits found; each printed as "<line>: <text>"
+#   2  usage error, or the file could not be read or scanned
 set -euo pipefail
-[[ $# -eq 1 && -r "$1" ]] || { echo "usage: blog-jargon-scan.sh <post.md>" >&2; exit 2; }
-hits=$(awk 'NR==1 && /^---[[:space:]]*$/ {fm=1; next}
-            fm && /^---[[:space:]]*$/ {fm=0; next}
-            fm { if ($0 ~ /^(title|seoTitle|description):/) print NR": "$0; next }
-            /<script type="application\/ld\+json">/ {exit}
-            {print NR": "$0}' "$1" \
-  | grep -E '`|(^|[[:space:](])--[a-z][a-z-]+|(^|[^[:alnum:]&/#])#[0-9]{2,}' || true)
+[[ $# -eq 1 && -f "$1" && -r "$1" ]] || { echo "usage: blog-jargon-scan.sh <post.md>" >&2; exit 2; }
+visible=$(awk 'NR==1 && /^---[[:space:]]*$/ {fm=1; next}
+               fm && /^---[[:space:]]*$/ {fm=0; next}
+               fm { if ($0 ~ /^(title|seoTitle|description):/) print NR": "$0; next }
+               /<script type="application\/ld\+json">/ {exit}
+               {print NR": "$0}' "$1" | sed -E 's/\]\([^)]*\)/]()/g') \
+  || { echo "blog-jargon-scan: cannot scan $1" >&2; exit 2; }
+rc=0
+hits=$(printf '%s\n' "$visible" | grep -E '`|(^|[[:space:](])--[a-z][a-z-]+|(^|[^[:alnum:]&/#])#[0-9]{2,}') || rc=$?
+(( rc > 1 )) && { echo "blog-jargon-scan: grep failed (rc=$rc)" >&2; exit 2; }
 [[ -z "$hits" ]] && exit 0
-printf '%s\n' "$hits"; exit 1
+printf '%s\n' "$hits"
+exit 1
 ```
+
+**Deepen hardening.** Changes from the plan-review draft:
+
+- **Unreadable files.** The draft's `|| true` over the whole pipeline let an awk failure fall through to exit 0. Now a failed read exits 2, and so does a directory argument.
+- **Link targets.** They are stripped, so `[x](#10-tips)` and `/pull/N` URLs are not flagged. This matches the note's "the number lives only in the URL".
+
+Measured in deepen:
+
+| Input | Result |
+|---|---|
+| The rejected #8548 draft | 24 hits, exit 1 |
+| Case studies and `why-most-agentic-tools-plateau` | 3, 2, 1, 4, 1 and 3 hits |
+| `best-ai-tools-for-solo-founders-2026` | 0 hits |
+| No argument, a missing file, a directory | exit 2 |
+| Must-PASS fixture | exit 0 |
+| RED fixture | lines 2, 3, 6, 8, 10, exit 1 |
 
 The script uses only `bash`, POSIX `awk` character classes and `grep -E`, so it runs on macOS as well as Linux (Sharp Edges: portability).
 
@@ -391,65 +475,128 @@ No open code-review issue mentions `brand-guide.md`, `content-writer/SKILL.md`, 
 
 ## Observability
 
-Not required. No Files-to-Edit entry sits under `apps/*/server/`, `apps/*/src/`, `apps/*/infra/` or `plugins/*/scripts/`, and no infrastructure surface is added.
+This plan edits no server, infra or `plugins/*/scripts/` path, so plan Phase 2.9 would not require this block. It is filled anyway, because deepen-plan Phase 4.7 treats a skill `SKILL.md`, a skill-local `.sh` and a `.test.ts` as non-docs.
 
-The new script does run on a customer's CLI (observability layer 7), since it ships in the plugin. Layer 7 is N/A for it: the drafting skill consumes its exit codes in-process, and any exit other than 0 or 1 is warned and listed in the skill's own report. It never fails silently or blocks.
+The block covers layer 7. The new script ships inside the plugin and runs on the operator's or customer's CLI, and in the cron sandbox. Its only consumer is the drafting skill, which reads its exit codes in the same process.
 
-The headless cron's existing liveness signal and audit-issue signal in `cron-content-generator.ts` are unchanged. That the cron's audit issue does not surface scan residue is a known gap, routed to `decision-challenges.md` (T-5).
+```yaml
+liveness_signal:
+  what: "plugins/soleur/test/blog-audience-contract.test.ts (Guard 1 heading contract + Guard 2 scan contract) inside the plugins/soleur bun suite"
+  cadence: "every PR push and every push to main (CI test job running bash scripts/test-all.sh)"
+  alert_target: "red CI test check on the PR (blocks merge) or on main"
+  configured_in: "scripts/test-all.sh run_suite plugins/soleur (bun test plugins/soleur/)"
+
+error_reporting:
+  destination: "content-writer's own run output: the Phase 3 approval screen (interactive) and the Phase 4 report line (headless). No Sentry: the script runs on a local CLI or in the cron sandbox, not in the web app"
+  fail_loud: "any blog-jargon-scan.sh exit other than 0 or 1 prints a 'blog-jargon-scan unavailable (rc=N)' line in the Phase 4 report; leftover hits after 2 fix cycles are listed line-by-line there"
+
+failure_modes:
+  - mode: "### Blog heading renamed or duplicated, so content-writer silently falls back to ## Voice only"
+    detection: "Guard 1 of blog-audience-contract.test.ts goes red in CI, and the message names brand-guide.md and the heading"
+    alert_route: "red PR check blocks the merge"
+  - mode: "technical-blog routing phrase reintroduced in brand-guide.md or vision.md"
+    detection: "Guard 1 routing-phrase assertion goes red in CI"
+    alert_route: "red PR check blocks the merge"
+  - mode: "scan script unreachable in a run (CLAUDE_PLUGIN_ROOT not substituted, exit 127) or file unreadable (exit 2)"
+    detection: "Phase 2.4 treats every exit other than 0 or 1 as warn-and-report; the Phase 4 report carries the rc"
+    alert_route: "the run's report line. The headless cron's audit issue does not relay it yet (decision-challenges T-5)"
+  - mode: "headless draft keeps flagged jargon after 2 fix cycles"
+    detection: "leftover hits listed in the Phase 4 report; the cron's auto-PR diff shows the article"
+    alert_route: "the auto-PR on GitHub; relay to the audit issue is T-5"
+
+logs:
+  where: "the Claude session transcript for interactive runs; cron runs do not capture agent stdout (cron-content-generator.ts header), so the PR diff plus the [Scheduled] Content Generator audit issue are the durable record"
+  retention: "session transcript: local session lifetime; PR and audit issue: permanent on GitHub"
+
+discoverability_test:
+  command: "grep -c -x '### Blog' knowledge-base/marketing/brand-guide.md"
+  expected_output: "1"
+```
+
+- **Checked at plan time with `plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh`:** the probe uses the allowed `grep` verb, contains no shell-active character, and finishes in milliseconds.
+- **Before the change:** the same command prints `0` today. Its sibling `grep -c -x '### Discord' …` prints `1`.
 
 ## Guard Contract
 
 ### Guard 1 — Blog-note heading contract (brand guide ↔ content-writer)
 
-**Property.** content-writer resolves a blog post's register through a `### Blog` note that exists exactly once inside the brand guide's `## Channel Notes`, and no brand-guide or vision routing line sends the blog to the technical register.
+**Property.** content-writer resolves a blog post's register through a `### Blog` note that exists exactly once in the brand guide and sits inside `## Channel Notes`, and no brand-guide or vision routing line sends the blog to the technical register.
 
-**Assembly.** Three files and one chokepoint each:
+**Assembly.** Three files, with one chokepoint each:
 
-- `brand-guide.md`: the `## Channel Notes` slice (from that heading to the next level-2 heading) and a whole-file count of `^### Blog$`;
-- `brand-guide.md` and `vision.md`: every line, for the `technical blog` phrase (case-insensitive);
-- content-writer `SKILL.md`: the Phase 1 `--audience` bullet, the one line that starts with `` - `--audience` ``.
+- **`brand-guide.md`:**
+  - the `## Channel Notes` slice, which runs from that heading to the next level-2 heading or end of file;
+  - a whole-file count of the anchored regex `/^### Blog$/gm`.
+- **`brand-guide.md` and `vision.md`:** every line, checked for the phrase `technical blog`, case-insensitive.
+- **content-writer `SKILL.md`:** the Phase 1 `--audience` bullet, the one line starting with `` - `--audience` ``.
 
-Plan review cut the per-row table parse. The phrase `technical blog` is the only routing phrase the old guide used, and DHH and the CTO argued that parsing prose tables makes every future edit to the brand guide a test edit.
+The validators are pure functions over a string. Each one runs on the real file and on inline synthesized failing and passing fixtures.
+
+Plan review cut the per-row table parse. `technical blog` is the only routing phrase the old guide used. DHH and the CTO argued that parsing prose tables would make every brand-guide edit a test edit.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Rename `### Blog` to `### Blog Posts` in brand-guide.md | RED: the message names the heading content-writer reads and the test file |
-| 2 | Add a **second** `### Blog` heading elsewhere in the guide, after a compliant first one | RED: the whole-file count must equal 1 |
-| 3 | Put `technical blog posts` back in the Technical builders row, or in the Technical register line, or in `vision.md` | RED |
-| 4 | Revert the content-writer `--audience` bullet to `(blog → technical, landing page → general)` | RED: the bullet must contain `## Channel Notes > ### Blog` |
-| 5 | Guard dispatch: point the brand-guide path at a missing file, or make the Channel Notes slice come back empty | RED: the test asserts the file read succeeds and the slice is non-empty before counting |
+| 1 | Rename `### Blog` to `### Blog Posts` | RED. The regex is anchored, so the prefix regex `/^### Blog/m` would not catch this. |
+| 2 | Add a **second** `### Blog` after a compliant first one | RED: the whole-file count must be exactly 1 |
+| 3 | Move `### Blog` out of Channel Notes, under `## Voice` (whole-file count stays 1) | RED: `slice.match(/^### Blog$/gm)?.length` must be 1 |
+| 4 | Put `technical blog posts` back in the Technical builders row, the Technical register line, or `vision.md` | RED |
+| 5 | Revert the `--audience` bullet to `(blog → technical, landing page → general)`, or keep both the old and the new text | RED. The bullet must contain `## Channel Notes > ### Blog` and must **not** contain `blog → technical`. |
+| 6 | Guard dispatch: delete the `## Channel Notes` heading, so `indexOf` returns -1 and `slice(-1)` is one character; or point the path at a missing file | RED. The test asserts `slice.startsWith("## Channel Notes\n")` and `/^### Discord$/m` inside the slice. A read failure throws. |
 
 **Harness rows:**
 
 | # | Suite edit | Expected |
 |---|---|---|
-| H1 | Replace the heading validator with `() => true` | RED: the inline fixture guide without `### Blog` must fail the validator |
+| H1 | Replace the heading validator with `() => true`, or with the prefix form `/^### Blog/m` | RED: three inline failing fixtures (`### Blog Posts` only, `### Blog` outside Channel Notes, and two `### Blog` headings) must each fail |
 | H2 | must-PASS: an inline fixture guide where `### Blog` sits between two other Channel Notes subsections, not last | PASS: position is a permitted variation |
+| H3 | The `--audience` extractor matches zero lines, or two | RED: the test asserts exactly one matching line before checking its content |
 
 ### Guard 2 — `blog-jargon-scan.sh` flags reader-visible jargon only
 
-**Property.** The script exits 1 and prints every matching line if and only if a reader-visible line has a backtick, a `--letter` flag or a visible `#NN` number. Reader-visible means frontmatter `title:`, `seoTitle:` and `description:`, plus body lines before any JSON-LD block. It exits 0 otherwise, and 2 on a usage error.
+**Property.** The script exits 1 and prints every matching line **if and only if** a reader-visible line has one of three things: a backtick, a `--letter` flag, or a visible `#NN` number.
 
-**Assembly.** One chokepoint: the `awk` extractor, with three arms, feeding one `grep -E`. The exit code is derived from whether `hits` is empty. The test covers it with three fixtures (DHH and the simplicity review): RED, must-PASS and usage.
+- **Reader-visible** means the frontmatter `title:`, `seoTitle:` and `description:` values, plus body lines before any JSON-LD block.
+- **Markdown link targets** `](...)` are stripped first, because a URL is not text a reader sees.
+- **Otherwise** the script exits 0.
+- **Exit 2** means a usage error or a file it cannot scan. It never exits 0 on a file it could not read.
+
+**Assembly.** One chokepoint: the `awk` extractor (three arms), then the link-target `sed`, then one `grep -E` with three alternatives. The exit code comes from `hits` being empty, plus `grep` rc > 1 mapped to 2.
+
+The test runs the tracked script by default. The mutation battery runs against copies whose path is passed in `BLOG_SCAN_SCRIPT`; the tracked file is never edited in place. Every status assertion is exact (`toBe(0)`, `toBe(1)`, `toBe(2)`), never `not.toBe(0)`, so a missing script's 127 cannot pass. An instrument guard asserts `existsSync(script)` and `r.error === undefined`.
+
+**RED fixture:** `title: "Fixing the --limit bug"` and `description: "About #42"` in the frontmatter, plus body lines with `` `next` ``, `Use --force now.` and `issue (#1423)`. The test asserts the exact printed line numbers, `[2, 3, 6, 8, 10]` for the fixture measured in deepen.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the `--[a-z]` alternative from the regex | RED: the RED fixture's `title: "Fixing the --limit bug"` line must be printed |
-| 2 | Drop the `exit` on the JSON-LD opener, or drop the frontmatter key filter | RED: the must-PASS fixture carries `#123` inside JSON-LD and in a non-reader frontmatter key |
-| 3 | Stop after the first hit (`grep -m1`) | RED: the RED fixture asserts all three hit line numbers are printed |
-| 4 | Guard dispatch: `exit 0` unconditionally, or an awk that prints nothing | RED: the RED fixture asserts exit 1 **and** non-empty stdout |
-| 5 | Remove the usage check | RED: running with no argument asserts exit 2 |
+| 1 | Delete the `--[a-z]` alternative | RED: lines 2 and 8 are missing from the exact set |
+| 2 | Delete the backtick alternative | RED: line 6 is missing |
+| 3 | Delete the `#NN` alternative | RED: lines 3 and 10 are missing |
+| 4 | Drop the frontmatter reader-key arm | RED: lines 2 and 3 are missing |
+| 5 | Drop the key filter, so all frontmatter is scanned | RED: the must-PASS `ref: "#123"` key hits |
+| 6 | Drop the `exit` on the JSON-LD opener | RED: the must-PASS JSON-LD `#123` and backtick hit |
+| 7 | Remove `&/#` from the pre-`#` exclusion class | RED: the must-PASS `&#8212;` entity hits |
+| 8 | Drop the link-target `sed` strip | RED: the must-PASS `[tips](#10-tips)` and `/pull/8536` link targets hit |
+| 9 | Stop after the first hit (`grep -m1`) | RED: the exact line-number set is not matched |
+| 10 | Guard dispatch: `exit 0` unconditionally, or remove the usage/readability check | RED: the RED fixture asserts status 1 and non-empty stdout. No argument, a missing file and a directory each assert status 2 and stderr matching `/^usage: blog-jargon-scan\.sh/`. |
 
 **Harness rows:**
 
 | # | Suite edit | Expected |
 |---|---|---|
-| H1 | Swap the RED fixture for the must-PASS fixture | RED: the suite asserts exit 1 on the RED fixture |
-| H2 | must-PASS content: founder prose using a double-hyphen as a dash, a link to `https://github.com/org/repo/pull/8536`, a markdown heading, a `<details>` FAQ answer, a `ref: "#123"` non-reader frontmatter key, and `#123` plus a backtick inside JSON-LD | exit 0 |
+| H1 | Swap the RED fixture for the must-PASS fixture | RED: the suite asserts status 1 on the RED fixture |
+| H2 | must-PASS content | Status 0. Measured in deepen: exit 0. |
+
+The must-PASS content in H2 is:
+
+- a `ref: "#123"` non-reader frontmatter key;
+- prose with a double-hyphen dash and a `&#8212;` entity;
+- `[the fix](https://github.com/o/r/pull/8536)`, `[tips](#10-tips)` and a bare `https://example.com/#12`;
+- a markdown heading;
+- `#123` and a backtick inside JSON-LD.
 
 ## Acceptance Criteria
 
@@ -462,8 +609,8 @@ Plan review cut the per-row table parse. The phrase `technical blog` is the only
 - [ ] **AC4.** content-writer's blog default resolves through the note, with no unconditional technical default left.
   - `grep -c 'blog → technical, landing page → general' plugins/soleur/skills/content-writer/SKILL.md` prints `0`.
   - `grep -c 'blog posts default to .technical.' plugins/soleur/skills/content-writer/SKILL.md` prints `0`.
-  - `grep -c '## Channel Notes > ### Blog' plugins/soleur/skills/content-writer/SKILL.md` prints at least `3`: the `--audience` bullet, Phase 2 step 2, and the Important Guidelines bullet.
-  - The file contains `## Phase 2.4: Blog Note Scan`. Its trigger names the literal `**Jargon limits.**` label, and its non-zero-exit branch says warn, list in the report, and continue.
+  - The single `` - `--audience` `` bullet contains `## Channel Notes > ### Blog` and does not contain `blog → technical`. This is scoped to the bullet: the whole-file count is already 2 on `origin/main`, so a count check proves little (test-design review).
+  - The file contains `## Phase 2.4: Blog Note Scan`. Its trigger names the literal `**Jargon limits.**` label. It says the scan re-runs alongside Phase 2.5. Its other-exit branch prints `blog-jargon-scan unavailable (rc=<N>)` and continues. Its invocation is the bare `bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh"`, with no `:-` fallback: `grep -c 'CLAUDE_PLUGIN_ROOT:-' plugins/soleur/skills/content-writer/SKILL.md` prints `0`.
 - [ ] **AC5.** content-writer gains no new interactive gate: `git diff origin/main -- plugins/soleur/skills/content-writer/SKILL.md | grep -c '^+.*AskUserQuestion'` prints `0`, and `grep -c '^
 - [ ] **AC6.** The scan behaves the same on real files as on the fixtures:
   - on the rejected #8548 draft: `D=$(mktemp); git show origin/feat-content-8548-roadmap-undecided-vs-forgotten:plugins/soleur/docs/blog/2026-09-24-roadmap-undecided-vs-forgotten.md > "$D"; bash plugins/soleur/skills/content-writer/scripts/blog-jargon-scan.sh "$D" | wc -l` prints 20 or more, and exits 1;
@@ -540,9 +687,9 @@ Not applicable. No UI-surface file is in the Files to Edit or Files to Create li
 - **Skill default.** Given the content-writer `--audience` bullet without `## Channel Notes > ### Blog`, when the test runs, then it fails.
 - **No-note behavior (other projects).** Given a brand guide with no `### Blog` note, content-writer keeps `technical` and runs no scan. This is checked by reading SKILL.md and the Important Guidelines bullet (AC4).
 - **Headless draft.** Given `soleur:content-writer "<a mechanism-first topic>" --headless` against the updated guide, Phase 2 applies the note's founder sentence and unattended re-angle rule, drafts, and never aborts on audience grounds. This is checked by reading SKILL.md (AC5): the skill has no new abort or ask path, and an end-to-end LLM run is not a deterministic test.
-- **Scan, RED.** Given a synthesized post with `title: "Fixing the --limit bug"` and body lines containing `` `next` `` and `issue #1423`, when the scan runs, then it exits 1 and prints all three lines with their line numbers.
-- **Scan, PASS.** Given founder prose with double-hyphen dashes, a link to `.../pull/8536`, headings, `#123` only in a non-reader frontmatter key, and `#123` plus a backtick only inside JSON-LD, when the scan runs, then it exits 0.
-- **Scan, usage.** Given no argument or a missing file, when the scan runs, then it exits 2 with a usage line on stderr.
+- **Scan, RED.** Given the synthesized RED fixture from Guard 2, when the scan runs, then it exits 1 and prints exactly lines 2, 3, 6, 8 and 10. That fixture has `title: "Fixing the --limit bug"` and `description: "About #42"`, plus body lines `` `next` ``, `Use --force now.` and `issue (#1423)`.
+- **Scan, PASS.** Given the Guard 2 must-PASS fixture, when the scan runs, then it exits 0. That fixture has a double-hyphen dash, a `&#8212;` entity, the link targets `/pull/8536` and `#10-tips`, a bare `https://example.com/#12`, headings, `#123` only in a non-reader frontmatter key, and `#123` plus a backtick only inside JSON-LD.
+- **Scan, usage.** Given no argument, a missing file or a directory, when the scan runs, then it exits 2 and stderr matches `/^usage: blog-jargon-scan\.sh/`.
 - **Regression.** Given the Release Digest lockstep test, when the brand guide is edited, then it still passes because `#### Release Digest` is byte-identical.
 
 ## Advisor Consult (plan Step 4.5)
@@ -569,7 +716,7 @@ Plan review ran headless, with five seats: `soleur:engineering:review:dhh-rails-
 - **Guard 1 cut from 8 mutations plus a table parse to 5 heading and phrase rows** (DHH, CTO, simplicity). The pure-function validators and an HTML comment above `### Blog` naming the test come from the CTO review.
 - **Guard 2 cut to three fixtures and five mutation rows** (DHH, simplicity). The `soleur:` pattern was removed from the plugin-generic script (DHH, CTO).
 - **Scan trigger is the literal `**Jargon limits.**` label, not a judgment call** (CTO, simplicity).
-- **`${CLAUDE_PLUGIN_ROOT:-plugins/soleur}` fallback, with any exit other than 0 or 1 treated as warn-and-report** (CTO P1-b).
+- **Any exit other than 0 or 1 is treated as warn-and-report** (CTO P1-b). The CTO's proposed `:-plugins/soleur` fallback was **reversed in deepen** per ADR-179.
 - **AC6 captures the `mktemp` path** (Kieran P2). **AC1 adds the whole-file count** (Kieran P2). **AC4 adds the step-4 phrase** (Kieran P2).
 - **AC7 no longer asks for per-row observations in the PR body** (DHH, CTO).
 - **The Observability reasoning now names layer 7** (Kieran P2).
