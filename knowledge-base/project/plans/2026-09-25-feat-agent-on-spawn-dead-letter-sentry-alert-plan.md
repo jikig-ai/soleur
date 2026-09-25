@@ -579,7 +579,7 @@ logs:
   retention: "Better Stack source retention for 2457081; Sentry event retention per plan"
 
 discoverability_test:
-  command: "jq -r '.\"spawn-agent-dead-letter\".actionFilters[0].actions[0].fallthroughType' apps/web-platform/infra/sentry/alert-reference.json"
+  command: jq -r '."spawn-agent-dead-letter".actionFilters[0].actions[0].fallthroughType' apps/web-platform/infra/sentry/alert-reference.json
   expected_output: "ActiveMembers"
 ```
 
