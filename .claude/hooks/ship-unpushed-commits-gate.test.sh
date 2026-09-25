@@ -324,15 +324,18 @@ t9_fetch_failure_deny() {
 }
 
 # --- T10: settings.json structural validity (integration) ----------------
-# Skips if settings.json does not yet reference the hook (Phase B not done).
+# settings.json and the hook's registration are repo-owned: their absence is a
+# defect in the tree, so it FAILs rather than skips (#8616 taxonomy).
 t10_settings_json_valid() {
   local settings="$REPO_ROOT/.claude/settings.json"
   if [[ ! -f "$settings" ]]; then
-    echo "SKIP: T10 settings.json not found"
+    echo "FAIL: T10 settings.json not found"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if ! grep -q "ship-unpushed-commits-gate.sh" "$settings"; then
-    echo "SKIP: T10 hook not yet wired in settings.json (Phase B pending)"
+    echo "FAIL: T10 ship-unpushed-commits-gate.sh is not registered in settings.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if jq . "$settings" > /dev/null 2>&1; then
@@ -350,11 +353,13 @@ t10_settings_json_valid() {
 t11_hook_ordering() {
   local settings="$REPO_ROOT/.claude/settings.json"
   if [[ ! -f "$settings" ]]; then
-    echo "SKIP: T11 settings.json not found"
+    echo "FAIL: T11 settings.json not found"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if ! grep -q "ship-unpushed-commits-gate.sh" "$settings"; then
-    echo "SKIP: T11 hook not yet wired in settings.json (Phase B pending)"
+    echo "FAIL: T11 ship-unpushed-commits-gate.sh is not registered in settings.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   # Extract Bash-matcher hook commands in document order.

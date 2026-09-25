@@ -32,8 +32,8 @@ HOOK="$SCRIPT_DIR/grep-rewrite.sh"
 # jq is a PRECONDITION, not a skip. `SKIP … exit 0` reports success having
 # asserted nothing, which is the same vacuity this suite exists to prevent —
 # and it is reachable on any CI shard that lacks jq. Exit 3 (UNRESOLVED), not 1:
-# nothing was asserted, so nothing FAILED (#8616; taxonomy in
-# hook-suite-dep-unresolved.test.sh).
+# no assertion ran, so none failed — run_suite still counts it [FAIL], and the
+# line below names the cause (#8616; taxonomy in hook-suite-dep-unresolved.test.sh).
 command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 [[ -x "$HOOK" ]] || { echo "FAIL: $HOOK is not executable — the suite invokes it directly"; exit 1; }
 

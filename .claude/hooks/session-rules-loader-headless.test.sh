@@ -75,7 +75,8 @@ if command -v script >/dev/null; then
   fi
   rm -f "$TYPESCRIPT"
 else
-  echo "  skip: script(1) missing"
+  echo "  UNRESOLVED: script missing — T4 pty case not run; install script (util-linux)"
+  UNRESOLVED_ARMS=1
 fi
 
 # T5: CLAUDECODE unset → HEADLESS_MODE=0 regardless of TTY
@@ -92,4 +93,6 @@ echo "=== Results ==="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
+# An arm that could not run is not a pass (#8616).
+[[ "${UNRESOLVED_ARMS:-0}" -eq 0 ]] || exit 3
 exit 0
