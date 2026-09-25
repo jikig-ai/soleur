@@ -4103,6 +4103,7 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 133_heartbeat_threshold_backoff.down.sql
 137_byok_cap_breach_audit_row.down.sql
 140_flag_flip_audit_approval_method.down.sql
+141_conversation_engine_binding_state.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \
