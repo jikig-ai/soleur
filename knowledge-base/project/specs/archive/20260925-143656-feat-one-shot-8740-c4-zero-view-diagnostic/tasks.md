@@ -1,6 +1,6 @@
 # Tasks: fix(c4): zero-view model diagnostic on GET /api/kb/c4/project (#8740)
 
-Plan: `knowledge-base/project/plans/2026-09-25-fix-c4-zero-view-model-project-diagnostic-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260925-143657-2026-09-25-fix-c4-zero-view-model-project-diagnostic-plan.md`
 (deepened 2026-09-25). Ref #8740, Ref #8861. Do not close #8740. Do not write to any tenant repository.
 
 ## Phase 1: Setup

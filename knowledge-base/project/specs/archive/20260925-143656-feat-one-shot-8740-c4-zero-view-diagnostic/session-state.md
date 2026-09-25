@@ -2,7 +2,7 @@
 
 ## Plan Phase
 
-- Plan file: knowledge-base/project/plans/2026-09-25-fix-c4-zero-view-model-project-diagnostic-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260925-143657-2026-09-25-fix-c4-zero-view-model-project-diagnostic-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 

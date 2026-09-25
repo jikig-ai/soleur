@@ -2,7 +2,7 @@
 
 These are decisions made during headless planning that need the operator's eye. They are
 recorded per ADR-084, and `ship` renders them into the PR body. The plan is
-`knowledge-base/project/plans/2026-09-25-fix-c4-zero-view-model-project-diagnostic-plan.md`.
+`knowledge-base/project/plans/archive/20260925-143657-2026-09-25-fix-c4-zero-view-model-project-diagnostic-plan.md`.
 
 ---
 

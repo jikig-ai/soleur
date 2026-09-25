@@ -170,7 +170,7 @@ The plan also:
 - A re-render is a commit into a tenant repository the tenant did not ask for. Under `hr-menu-option-ack-not-prod-write-auth` it needs an explicit operator ack.
 - After this PR, the canvas and the Concierge both explain the state and name the edit that fixes it.
 
-**Operator choices** (persisted to `knowledge-base/project/specs/feat-one-shot-8740-c4-zero-view-diagnostic/decision-challenges.md`, DC-1):
+**Operator choices** (persisted to `knowledge-base/project/specs/archive/20260925-143656-feat-one-shot-8740-c4-zero-view-diagnostic/decision-challenges.md`, DC-1):
 
 - (a) **Default:** leave the repository alone. #8740 closes on evidence:
   - ~~the follow-through sweeper closes it after 14 quiet days, once the fix is live~~ (withdrawn 2026-09-25: the tenant cannot load the flag-gated viewer, so a quiet window proves nothing); or
@@ -431,8 +431,8 @@ The two Sentry query strings are the second chokepoint. Both must carry `environ
 - `apps/web-platform/lib/c4-model-shape.ts`
 - `scripts/followthroughs/c4-zero-view-model-8740.sh` (mode 100755)
 - `scripts/followthroughs/c4-zero-view-model-8740.test.sh` (mode 100755)
-- `knowledge-base/project/specs/feat-one-shot-8740-c4-zero-view-diagnostic/tasks.md`
-- `knowledge-base/project/specs/feat-one-shot-8740-c4-zero-view-diagnostic/decision-challenges.md`
+- `knowledge-base/project/specs/archive/20260925-143656-feat-one-shot-8740-c4-zero-view-diagnostic/tasks.md`
+- `knowledge-base/project/specs/archive/20260925-143656-feat-one-shot-8740-c4-zero-view-diagnostic/decision-challenges.md`
 
 ## Open Code-Review Overlap
 
