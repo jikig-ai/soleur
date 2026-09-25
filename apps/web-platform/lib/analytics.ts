@@ -10,6 +10,9 @@ export interface UserRow {
   // 'provisioning' | 'ready' (001_initial_schema.sql). Drives the funnel's
   // "workspace ready" stage; computeMetrics ignores it.
   workspace_status: string;
+  // Cohort membership tag (migration 141; null for non-cohort users). Written
+  // only by /api/internal/cohort; read for the `?cohort=` scope.
+  cohort_key?: string | null;
 }
 
 export interface ConversationRow {

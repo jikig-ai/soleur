@@ -28,7 +28,7 @@ date: 2026-09-25
 
 - [ ] 2.1 `alpha-tester-onboarding.md` v2 — hosted path steps, Slack channel step, `arm-checkpoint.sh` arming (date-embedded ids, operator @mention), quiet protocol + `nudged_at`, tester-#1 repair checklist, recruitment update (screening question, non-CC first, channel:framing, stall fallback), day-0 emit verify, cohort_key runbook record, exit-interview section (#1443: WTP $49 + testimonial opt-in + nudge disclosure)
 - [ ] 2.2 `scripts/arm-checkpoint.sh` — POSTs `checkpoint-tester-N-<date>` + `cohort-quiet-tester-N` via `/api/internal/schedule-reminder` (env-read secret); prints armed ids
-- [ ] 2.3 `plugins/soleur/docs/alpha-tester-setup.md` — tester-facing setup doc (Anthropic key walkthrough, OTP/spam note, OAuth steering, GitHub skip path, 3 starter prompts, Slack link)
+- [ ] 2.3 `plugins/soleur/tester-docs/alpha-tester-setup.md` — tester-facing setup doc (Anthropic key walkthrough, OTP/spam note, OAuth steering, GitHub skip path, 3 starter prompts, Slack link)
 - [ ] 2.4 Welcome-message block updated (copywriter drop-in; immutable legal paragraphs verbatim)
 - [ ] 2.5 `knowledge-base/marketing/recruitment-messaging-templates.md` — screening question appended to each DM variant
 

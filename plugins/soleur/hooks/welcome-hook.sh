@@ -11,9 +11,11 @@ source "$SCRIPT_DIR/../scripts/resolve-git-root.sh" || {
 }
 PROJECT_ROOT="$GIT_ROOT"
 
-# Only run in projects that have the Soleur plugin installed locally.
-# Plugin hooks are global — without this guard, every project gets a sentinel file.
-[[ -d "${PROJECT_ROOT}/plugins/soleur" ]] || exit 0
+# The plugin's own SessionStart registration implies the plugin is active in
+# this project — no further "installed" probe is needed (and the old
+# `plugins/soleur`-directory guard silently never fired on marketplace
+# installs, where the plugin lives outside the project tree). The per-project
+# sentinel below is the dedupe.
 
 SENTINEL_FILE="${PROJECT_ROOT}/.claude/soleur-welcomed.local"
 

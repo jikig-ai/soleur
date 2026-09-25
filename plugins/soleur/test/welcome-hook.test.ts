@@ -40,7 +40,7 @@ function runHook(cwd: string, codex = false): { exitCode: number; stdout: string
   };
 }
 
-describe("welcome-hook project scope guard", () => {
+describe("welcome-hook first-session sentinel", () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -52,23 +52,16 @@ describe("welcome-hook project scope guard", () => {
   });
 
   test("Codex uses its own bootstrap without a Claude welcome sentinel", () => {
-    mkdirSync(join(tempDir, "plugins", "soleur"), { recursive: true });
     const result = runHook(tempDir, true);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
     expect(existsSync(join(tempDir, ".claude", "soleur-welcomed.local"))).toBe(false);
   });
 
-  test("non-Soleur git repo: exits 0, no sentinel created", () => {
-    const result = runHook(tempDir);
-
-    expect(result.exitCode).toBe(0);
-    expect(existsSync(join(tempDir, ".claude", "soleur-welcomed.local"))).toBe(false);
-  });
-
-  test("git repo with plugins/soleur/ directory: creates sentinel and outputs welcome JSON", () => {
-    mkdirSync(join(tempDir, "plugins", "soleur"), { recursive: true });
-
+  test("git repo without a plugins/soleur dir (marketplace install): creates sentinel and outputs welcome JSON", () => {
+    // The hook's own SessionStart registration implies the plugin is active;
+    // a vendored plugins/soleur directory is a dev-checkout artifact that real
+    // (marketplace) installs never carry.
     const result = runHook(tempDir);
 
     expect(result.exitCode).toBe(0);
@@ -77,8 +70,20 @@ describe("welcome-hook project scope guard", () => {
     expect(result.stdout).toContain("SessionStart");
   });
 
-  test("Soleur project with existing sentinel: exits 0 immediately, no output", () => {
-    mkdirSync(join(tempDir, "plugins", "soleur"), { recursive: true });
+  test("second project gets its own sentinel (welcome is per-project)", () => {
+    const other = createTempGitRepo();
+    try {
+      const first = runHook(tempDir);
+      const second = runHook(other);
+      expect(first.stdout).toContain("hookSpecificOutput");
+      expect(second.stdout).toContain("hookSpecificOutput");
+      expect(existsSync(join(other, ".claude", "soleur-welcomed.local"))).toBe(true);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test("project with existing sentinel: exits 0 immediately, no output", () => {
     mkdirSync(join(tempDir, ".claude"), { recursive: true });
     writeFileSync(join(tempDir, ".claude", "soleur-welcomed.local"), "");
 
@@ -88,12 +93,12 @@ describe("welcome-hook project scope guard", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("git repo with CLAUDE.md not referencing soleur: exits 0, no sentinel", () => {
+  test("git repo with CLAUDE.md not referencing soleur: still welcomed (plugin registration is the predicate)", () => {
     writeFileSync(join(tempDir, "CLAUDE.md"), "# My Project\n\nSome instructions.");
 
     const result = runHook(tempDir);
 
     expect(result.exitCode).toBe(0);
-    expect(existsSync(join(tempDir, ".claude", "soleur-welcomed.local"))).toBe(false);
+    expect(existsSync(join(tempDir, ".claude", "soleur-welcomed.local"))).toBe(true);
   });
 });

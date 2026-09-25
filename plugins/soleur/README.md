@@ -75,7 +75,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 67 |
 | Commands | 3 |
-| Skills | 102 |
+| Skills | 103 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -299,6 +299,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
 | `archive-kb` | Archive knowledge-base artifacts with timestamped prefixes |
 | `cf-token-scope` | Widen a Cloudflare API token's scope via Playwright, then run the ADR-130 retained-scope probe set |
+| `cohort-status` | Print the alpha-tester cohort table: tally, checkpoint state, quiet flags (pull-based, operator-invoked) |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `invoice` | Get paid via your own Stripe account: list who owes you, create/send behind an approval preview, chase overdue (test mode only in v1) |

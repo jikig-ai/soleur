@@ -188,7 +188,7 @@ are workspace-membership with an ordering hazard (conversion-optimizer finding);
      `checkpoint-tester-N-<date>` / `cohort-quiet-tester-N` convention — cohort-status
      derives expected ids from the convention; no markdown-table write per review-cut).
      Portable-bash (operator machine may be macOS — same portability contract as 1.1).
-2.3. `plugins/soleur/docs/alpha-tester-setup.md` — tester-facing hosted setup doc (the welcome
+2.3. `plugins/soleur/tester-docs/alpha-tester-setup.md` — tester-facing hosted setup doc (the welcome
      message's missing link target): screenshot-level Anthropic-key instructions, "check spam
      for the OTP", steer Google OAuth, GitHub "Skip this step — connect later with help",
      three starter prompts, Slack link. Linked via github.com blob URL.
@@ -207,10 +207,14 @@ are workspace-membership with an ordering hazard (conversion-optimizer finding);
      `CHECK (cohort_key ~ '^[a-z0-9-]+$')` (free-text fragments like `alpha-3` vs `alpha-03`
      split the cohort) + `-- LAWFUL_BASIS: Art. 6(1)(f)` annotation + COMMENT (write via
      service role only — migration 006 already REVOKEs authenticated UPDATE).
-3.2. `apps/web-platform/app/api/admin/cohort/route.ts` — `PATCH` gated on `ADMIN_USER_IDS` +
-     `createServiceClient()`: `{userId, cohort_key}` → update (normalize lowercase before
-     write). Mirrors the analytics route's auth shape. Test file alongside. The runbook
-     pairs this with the runbook-row record (2.1h) so the tag is never server-only.
+3.2. `apps/web-platform/app/api/internal/cohort/route.ts` — `PATCH` gated on the
+     `INNGEST_MANUAL_TRIGGER_SECRET` bearer (trigger-cron shape) + `createServiceClient()`:
+     `{userId, cohort_key}` → update (lowercase-normalize before write). **Deviation from
+     the drafted path (admin/):** `/api/admin/*` is session-cookie auth — the operator
+     cannot curl it. Internal-ops writes belong under `/api/internal/` + a narrow
+     PUBLIC_PATHS entry (`/api/internal/cohort` registered; do NOT broaden the prefix).
+     Test file alongside. The runbook pairs the PATCH with the runbook-row record (2.1h)
+     so the tag is never server-only.
 3.3. `apps/web-platform/app/api/admin/analytics/route.ts` + `lib/analytics.ts` — `?cohort=`
      query param: select `cohort_key` into `UserRow`, filter users before
      `computeFunnel`/`computeMetrics`, and filter `conversations` server-side with
@@ -284,7 +288,7 @@ repair checklist — it does not gate tester #2 on the merge.
 - `plugins/soleur/scripts/alpha-metrics.sh`
 - `plugins/soleur/scripts/alpha-metrics.test.sh`
 - `plugins/soleur/skills/cohort-status/SKILL.md`
-- `plugins/soleur/docs/alpha-tester-setup.md`
+- `plugins/soleur/tester-docs/alpha-tester-setup.md`
 - `scripts/arm-checkpoint.sh`
 - `apps/web-platform/app/api/admin/cohort/route.ts` (+ test)
 - `apps/web-platform/supabase/migrations/141_users_cohort_key.sql`
@@ -332,7 +336,7 @@ zero matches.
 - [ ] AC10: Runbook v2 names the hosted path end-to-end incl. guided-key step, Slack step,
       armed-checkpoint step (with `reminder_id` recording), quiet thresholds, tester-#1
       repair checklist, and the screening question.
-- [ ] AC11: Tester setup doc exists at `plugins/soleur/docs/alpha-tester-setup.md` and the
+- [ ] AC11: Tester setup doc exists at `plugins/soleur/tester-docs/alpha-tester-setup.md` and the
       runbook welcome message links to it; immutable legal paragraphs preserved verbatim
       (diff-verified against the prior block).
 - [ ] AC12: `ADR-251-*` exists documenting the decision-log substrate (or ordinal renumbered
@@ -574,3 +578,9 @@ Applied (operator-approved):
 Declined: cohort-quiet keeps the `cohort_key IS NULL` signup listing (only automated
 un-tagged-signup detector — SpecFlow gap outweighs the two-jobs aesthetic); rotation kept
 (~5 lines, years of headroom at ~200 B/line).
+
+Implementation-time deviations recorded: cohort PATCH lives at `/api/internal/cohort`
+(shared-secret bearer, PUBLIC_PATHS narrow entry) — the `/api/admin/` cookie auth cannot
+be curled. Art. 30 Slack coverage gap filed as #8896 (register has only the release
+webhook + deferred Slack-DM mention; tester-comms channel needs a PA row or recorded
+coverage decision).

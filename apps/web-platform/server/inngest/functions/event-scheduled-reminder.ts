@@ -266,6 +266,153 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
       return failClosed(`Sentry query failed (${msg.slice(0, 80)})`);
     }
   },
+
+  // Alpha-cohort quiet probe (#8880). Reports cohort members who went quiet
+  // inside the onboarding window AND recent signups nobody tagged yet — the
+  // two blind spots a per-tester checkpoint cannot see. Armed per tester as
+  // `cohort-quiet-tester-N` at day 3 by scripts/arm-checkpoint.sh; each arm
+  // re-runs the SAME cohort-scope check (the registry entry is the detector,
+  // the arming is just the timer).
+  //
+  // Quiet predicate (runbook §quiet-protocol): a member is quiet when
+  //   (a) they have ≥1 non-failed conversation AND daysSince(last activity) >= 3
+  //       where last activity = GREATEST(created_at, COALESCE(last_active,
+  //       created_at)) per conversation — a `failed` conversation never
+  //       suppresses quiet, and a resumed thread counts via last_active; OR
+  //   (b) they have ZERO conversations AND signup_age >= 3 — the
+  //       never-activated tester, the highest churn risk, invisible to a
+  //       daysSinceLastSession-only predicate.
+  // Both arms bounded to signup_age <= 10 — past the window the checkpoint
+  // owns the tester, not the quiet probe.
+  //
+  // The untagged pass lists users created in the last 7d with
+  // cohort_key IS NULL — the gap between signup and the operator's PATCH
+  // would otherwise leave a fresh tester invisible to every cohort metric.
+  //
+  // Fail-closed on any error (verdict info + warnSilentFallback) — a broken
+  // detector must never read as "nobody is quiet".
+  "cohort-quiet": async (_octokit, params) => {
+    const failClosed = (reason: string): CheckResult => {
+      warnSilentFallback(new Error(`cohort-quiet fail-closed: ${reason}`), {
+        feature: FUNCTION_NAME,
+        op: "cohort-quiet-fail-closed",
+        message: "cohort-quiet fail-closed",
+        extra: { fn: FUNCTION_NAME, check: "cohort-quiet", reason },
+      });
+      return {
+        verdict: "info" as const,
+        body: `\`cohort-quiet\`: fail-closed — ${reason}. No verdict produced; treat as unread, not as "everyone active".`,
+      };
+    };
+
+    const cohortKey =
+      typeof params?.cohort_key === "string" && params.cohort_key.length > 0
+        ? params.cohort_key
+        : null;
+    if (!cohortKey) return failClosed("missing params.cohort_key");
+
+    const DAY_MS = 86_400_000;
+    const QUIET_DAYS = 3;
+    const WINDOW_DAYS = 10;
+    const UNTAGGED_DAYS = 7;
+    const now = Date.now();
+
+    try {
+      // Dynamic import mirrors the route's pattern — keeps the handler
+      // importable during `next build` page-data collection.
+      const { createServiceClient } = await import("@/lib/supabase/service");
+      const supabase = createServiceClient();
+
+      const { data: members, error: mErr } = await supabase
+        .from("users")
+        .select("id,email,created_at")
+        .eq("cohort_key", cohortKey);
+      if (mErr) return failClosed(`users read failed: ${mErr.message.slice(0, 80)}`);
+      const cohort = (members ?? []) as Array<{
+        id: string;
+        email: string;
+        created_at: string;
+      }>;
+
+      const quietLines: string[] = [];
+      if (cohort.length > 0) {
+        const { data: convs, error: cErr } = await supabase
+          .from("conversations")
+          .select("user_id,created_at,last_active,status")
+          .in(
+            "user_id",
+            cohort.map((m) => m.id),
+          )
+          .neq("status", "failed");
+        if (cErr) return failClosed(`conversations read failed: ${cErr.message.slice(0, 80)}`);
+
+        const lastActiveByUser = new Map<string, number>();
+        for (const c of (convs ?? []) as Array<{
+          user_id: string;
+          created_at: string;
+          last_active: string | null;
+        }>) {
+          const ms = Math.max(
+            new Date(c.created_at).getTime(),
+            c.last_active ? new Date(c.last_active).getTime() : 0,
+          );
+          const prev = lastActiveByUser.get(c.user_id);
+          if (prev === undefined || ms > prev) lastActiveByUser.set(c.user_id, ms);
+        }
+
+        for (const m of cohort) {
+          const signupAgeDays = (now - new Date(m.created_at).getTime()) / DAY_MS;
+          if (signupAgeDays > WINDOW_DAYS) continue; // checkpoint owns them now
+          const lastMs = lastActiveByUser.get(m.id);
+          const quiet =
+            lastMs === undefined
+              ? signupAgeDays >= QUIET_DAYS // never activated
+              : (now - lastMs) / DAY_MS >= QUIET_DAYS;
+          if (quiet) {
+            quietLines.push(
+              `- ${m.email} — ${
+                lastMs === undefined
+                  ? `never activated (signed up ${Math.floor(signupAgeDays)}d ago)`
+                  : `last active ${Math.floor((now - lastMs) / DAY_MS)}d ago`
+              }`,
+            );
+          }
+        }
+      }
+
+      const { data: untagged, error: uErr } = await supabase
+        .from("users")
+        .select("email,created_at")
+        .is("cohort_key", null)
+        .gte(
+          "created_at",
+          new Date(now - UNTAGGED_DAYS * DAY_MS).toISOString(),
+        );
+      if (uErr) return failClosed(`untagged read failed: ${uErr.message.slice(0, 80)}`);
+
+      const untaggedLines = ((untagged ?? []) as Array<{ email: string }>).map(
+        (u) => `- ${u.email} (signed up, cohort_key unset — PATCH via /api/admin/cohort)`,
+      );
+
+      const sections: string[] = [
+        `\`cohort-quiet\` (cohort \`${cohortKey}\`) at ${new Date(now).toISOString()}:`,
+      ];
+      sections.push(
+        quietLines.length > 0
+          ? `Quiet testers (>=${QUIET_DAYS}d inside the 10d window):\n${quietLines.join("\n")}`
+          : "No quiet testers in the window.",
+      );
+      sections.push(
+        untaggedLines.length > 0
+          ? `Un-tagged recent signups (<${UNTAGGED_DAYS}d):\n${untaggedLines.join("\n")}`
+          : "No un-tagged recent signups.",
+      );
+      return { verdict: "info" as const, body: sections.join("\n\n") };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return failClosed(`unexpected error (${msg.slice(0, 80)})`);
+    }
+  },
 };
 
 type HandlerResult = { ok: false; reason: string } | { ok: true; reason: string };

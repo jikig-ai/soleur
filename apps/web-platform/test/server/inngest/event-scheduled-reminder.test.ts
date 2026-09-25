@@ -211,7 +211,7 @@ describe("eventScheduledReminderHandler — named-check", () => {
     // Adding/removing a CHECK_REGISTRY key is a deliberate, code-reviewed change —
     // this exact-set assertion forces that review (a stray/typo'd key fails CI).
     expect(new Set(Object.keys(CHECK_REGISTRY))).toEqual(
-      new Set(["open-silence-issue-count", "sentry-issue-rate"]),
+      new Set(["open-silence-issue-count", "sentry-issue-rate", "cohort-quiet"]),
     );
   });
 });
