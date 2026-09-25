@@ -7,17 +7,14 @@ wanted to go further than the brief ("small one-shot, one PR"). The default take
 ## 1. The same scorer bug in four sibling mutation batteries
 
 - **Source:** CTO devex review, finding F1 (taste).
-- **What:** four other batteries in `apps/web-platform/infra/` score rows with the same early-exit
-  pipe this PR removes (`grep … "$log" | grep -qF -- "$expect"`), so they can flake the same way
-  under the parallel runner. The six sites are in:
-  - `apex-single-node-replace-mutation.test.sh:178`
-  - `ssl-full-mitigation-mutation.test.sh:365`
-  - `web-host-provisioner-parity-mutation.test.sh:289,875,1203`
-  - `www-apex-canonicalizer-mutation.test.sh:560`
+- **What:** other mutation batteries score rows with the same early-exit shape this PR removes (a
+  log grep piped into `grep -qF --`), so they can flake the same way under the parallel runner.
+  Tracked in #8855, which lists the sites, including two a review re-census found outside the
+  `infra/` directory (`apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh`
+  `attributed()`, and the `STAY-GREEN` floor in `infra-config-repush-mutation.test.sh`).
 - **Default taken:** not folded in. The brief asked for a small one-PR fix, and
   `apex-single-node-replace-mutation.test.sh` is already in sibling PR #8763's diff. The work phase
-  files one tracking issue listing the six sites, the capture-and-glob fix, and the option of a
-  shared `infra/lib/mutation-scorer.sh`.
+  filed #8855, which makes a shared scorer library the default remedy.
 - **Alternative:** fold the five sites outside #8763 into this PR. Each is a one-line change, plus
   adding each file to `.claude/hooks/grep-q-pipe-guard.test.sh`'s named list.
 

@@ -385,7 +385,7 @@ commit pins them. Review is the anchor, and this is declared.
   `BOOTSTRAP_SUITE_OK unconditional=153 floor=153 total=230 rendered=ran`. This is on a host with
   terraform, as CI's `setup-terraform` provides. Without terraform the line reads
   `rendered=SKIPPED-no-terraform` and the total differs, so the AC pins `rendered=ran` (Kieran P2-5).
-- [ ] **AC3 (the issue's acceptance; equivalent concurrent load).** One round of 10 concurrent battery
+- [x] **AC3 (the issue's acceptance; equivalent concurrent load).** One round of 10 concurrent battery
   copies with a shared `TMPDIR=/var/tmp/<dir>` produces **0 non-KILLED rows across 10 runs**. Every
   copy must also exit rc=0 and end with `=== Results: 61/61 mutants killed ===` followed by `OK`. A
   copy that aborts with exit 2 (a non-green baseline under load, a self-test abort, or an OOM) prints
@@ -414,7 +414,8 @@ commit pins them. Review is the anchor, and this is declared.
   `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base HEAD origin/main)"` passes (no
   SKILL.md is touched, so this is a no-op, and that is confirmed rather than assumed). No `.ts` is
   touched, so eslint has nothing to lint: confirm with `git diff --name-only origin/main... | grep -c '\.ts$'` → `0`.
-  `shellcheck` is clean on the three touched `.sh` files, at the severity CI uses.
+  `shellcheck -S warning` reports no finding the branch adds over `origin/main` (22 pre-existing
+  SC2034 on variables read inside `assert`'s eval strings).
 - [x] **AC8.** `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-25-fix-zot-pull-mutation-harness-row-misroute-plan.md` exits 0.
 - [x] **AC9.** The diff touches no file in #8763's set (`run-registered-suites.sh`, `suite-shard-legs.tsv`, …):
   `git diff --name-only origin/main... | grep -cE 'run-registered-suites|suite-shard-legs'` → `0`.
@@ -580,3 +581,35 @@ Observed outputs, as captured by the work phase:
   - 0 `.ts` files.
   - `shellcheck -S warning` over the three files emits 22 findings, the same count as `origin/main`. All are pre-existing SC2034 on variables read inside `assert`'s eval strings. The two new `WF_*` variables carry a disable annotation.
 - **Sibling scorer sites**: tracked in #8855. `web-host-provisioner-parity-mutation.test.sh` scores on `grep -F "[FAIL]" "$OUT"`. A work-time re-census keyed on `"$log"` missed its three sites, and the plan's list is what caught them.
+
+## Review Addendum — 2026-09-25 (10-seat panel)
+
+The review added the following, and corrects two passages above.
+
+- **Corrections to this plan.**
+  - "Files to Edit" item 1 says there is "no separate unreadable-log arm". The shipped `failed_on` does abort with rc 2 on a grep rc ≥ 2, and the self-test pins it.
+  - "Key improvements" item 2 says the "rc-2 arm" was cut. Only its probe counter was cut; the arm itself shipped.
+  - AC7's shellcheck wording is amended in place: no new warning-level finding.
+- **Structural roll-up.** Most findings were one gap. The drift pin and the diagnostics covered only the `| grep -q` spelling and the BROKE site, while the class is any early-exit reader and any crash-shaped verdict.
+- **Fixes, battery.**
+  - `case_mutate`'s MISROUTED branch ended in a bare `return` after a `| head -5` display. That handed the display pipeline's status to the harness rows' `|| die`, which is a scheduling-dependent abort (structural seat). The fix is an explicit `return 0` plus a shared `show_failures` helper (`grep -m5` on the file, no `head`). The helper reports a guard that printed no FAIL line as `CRASHED rc=N (SIG…)` with the log's last three lines. It is used by the MISROUTED, BROKE and baseline-abort sites; the baseline's old `>&2 | head -20` capped nothing.
+  - The summary line now lists the failing row ids.
+  - The NIC-G1 harness row's PASS text prints its inner verdict in lowercase, so `grep MISROUTED` no longer matches a passing line.
+- **Fixes, the padded row.**
+  - It now has a positive control. A sandbox guard with the pre-#8664 piped splitter restored must report `BROKE` as a crash on the padded tree.
+  - The pad asserts it exceeds 131,072 B and holds no comment line. It uses identical lines to spare the compressed user_data budget.
+- **Fixes, `failed_on`.** It gets named locals. Two new probes pin its two aborts: an empty needle and an unreadable log each exit 2. The fixture's PASS line carries `  FAIL` (two spaces), so a lost `^` anchor is caught.
+- **Fixes, the drift guard.**
+  - The pattern is widened to `grep -F -q`, `--quiet`, `--silent`, `-m` and `--max-count`, plus a single-line piped `awk … exit` for the #8664 files. There are 0 hits in every scope today.
+  - Every pinned file, #7024's included, must be tracked, and the member counts are pinned.
+  - The battery's self-test call is pinned.
+  - An affected-path edge now selects the guard when either infra file changes.
+- **Fixes, the guard.**
+  - `WF_*` captures fall back to an empty block rather than dying without a FAIL line.
+  - The NG1 trap extends the Guard 1b trap instead of replacing it. This was a pre-existing leak of five temp files per run, found by three seats.
+  - `SNIPPET_FILE` uses `mktemp -t`.
+  - The header rule now names its `| head -1` exemption.
+- **Declined, pre-existing.**
+  - The 0600 assert is a first-match check, so a duplicate `permissions:` key or a second write_files entry could slip past it. The template is repo-owned, and adding assertions moves the guard's floor.
+  - Line-continued pipes are a declared gap in the drift guard.
+- **The merge still runs `apply-web-platform-infra.yml`.** The push touches `apps/web-platform/infra/**`, so the privileged apply job runs. Its Terraform plan is expected to be a no-op, but its SSH-bridge and heartbeat-arming steps still execute.

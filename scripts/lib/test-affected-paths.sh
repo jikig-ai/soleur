@@ -969,6 +969,8 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 # repo paths its suite file names.
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
+  "apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh"
+  "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh"
   ".claude/hooks/grep-q-pipe-guard.test.sh"
   ".claude/hooks/lib/"
   "plugins/."

@@ -30,9 +30,12 @@ CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 # enough for the producer to still be writing, so it presents as an unreproducible flake. Four
 # sites carried it; one surfaced as the mutation battery's sandbox baseline going RED while the
 # SAME assertion passed in the worktree seconds earlier. Use `grep -cE … -gt 0` (reads all
-# input) or a herestring — never `| grep -q`. The rule covers ANY consumer that can stop before
-# EOF (`grep -q`, `awk … exit`, `head`): a piped `awk … exit` splitter killed this suite under
-# load with no FAIL line (#8664), so feed such a consumer a file operand or a variable instead.
+# input) or a herestring — never `| grep -q`. The same holds for ANY reader that can stop before
+# EOF (`grep -q`/`-m`, `awk … exit`, `head`) behind a producer with multi-KB output: a piped
+# `awk … exit` splitter killed this suite under load with no FAIL line (#8664). Feed such a reader
+# a file operand or a variable. The remaining `| head -1` sites are exempt only because each
+# producer is one short line written in a single call, or the capture carries `|| true`; a new
+# site uses `grep -m1` on a file operand instead.
 PASS=0
 FAIL=0
 TOTAL=0
@@ -156,7 +159,7 @@ assert "bootstrap block precedes web-platform start" "(( BOOTSTRAP_LINE < WEBPLA
 # --- AC4: extracted shell snippet is POSIX clean ---
 echo ""
 echo "--- AC4: extracted shell snippet POSIX-portable ---"
-SNIPPET_FILE=$(mktemp /tmp/inngest-runcmd-XXXXXX.sh)
+SNIPPET_FILE=$(mktemp -t inngest-runcmd-XXXXXX.sh)
 trap 'rm -f "$SNIPPET_FILE"' EXIT
 
 # Extract the runcmd block following the Inngest bootstrap comment.
@@ -1089,9 +1092,7 @@ trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_
 # then … fi`, a `case`, a loop) is not an unconditional statement of the arm. A nested `else` must
 # not flip arms and a nested `fi` must not end the extraction. Heredoc bodies are data, not code,
 # and are skipped whole (`: <<'OFF' … OFF` is the other way to write dead code).
-# awk reads the file itself (comment lines skipped by its first rule), NOT from a pipe: awk
-# exits at the missed arm's closing `fi` while a producer would still be writing, and under
-# load that producer's SIGPIPE killed this whole suite with no FAIL line (#8664).
+# A file operand, not a pipe: awk exits at the missed arm's closing `fi` (see the header rule, #8664).
 awk -v Z="$ARM_ZOT" -v F="$ARM_FB" '
   /^[[:space:]]*#/ { next }
   hd != "" { t = $0; sub(/^[[:space:]]+/, "", t); if (t == hd) hd = ""; next }
@@ -1134,12 +1135,14 @@ assert "G1b: no soleur-boot-emit call is backgrounded (it could outlive cloud-fi
 # carries the templatefile variable. Each entry is sliced to its own `- path:` block so a
 # permissions line from the NEXT entry cannot satisfy it.
 wf_block() { awk -v p="  - path: $1" '$0==p{f=1;print;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI_YML"; }
-# Computed into variables BEFORE the asserts, never as `$(wf_block …)` inside the eval'd
-# condition: that would expand at the call site and splice block text into the eval string.
+# Computed into variables BEFORE the asserts, never as an unescaped `$(wf_block …)` inside the
+# eval'd condition (it would expand at the call site and splice block text into the eval string).
+# An unreadable template yields an empty block, which fails the named asserts below rather than
+# killing the suite under set -e with no FAIL line.
 # shellcheck disable=SC2034  # both are read inside assert's eval'd condition strings
-WF_EMIT="$(wf_block /usr/local/bin/soleur-boot-emit)"
+WF_EMIT="$(wf_block /usr/local/bin/soleur-boot-emit)" || WF_EMIT=""
 # shellcheck disable=SC2034
-WF_DSN="$(wf_block /etc/default/soleur-sentry-dsn)"
+WF_DSN="$(wf_block /etc/default/soleur-sentry-dsn)" || WF_DSN=""
 assert "G1b: write_files delivers /usr/local/bin/soleur-boot-emit 0755" \
   "grep -qxF \"    permissions: '0755'\" <<<\"\$WF_EMIT\""
 assert "G1b: write_files delivers /etc/default/soleur-sentry-dsn 0600 (the DSN never world-readable)" \
@@ -1518,7 +1521,9 @@ assert "NIC-G1 anti-vacuity (raw rows): the section ran its full inventory (expe
 _COND_BEFORE=$TOTAL
 if command -v terraform >/dev/null 2>&1; then
   NG1_DIR="$(mktemp -d -t nicg1-XXXXXX)"
-  trap 'rm -rf "$NG1_DIR"' EXIT
+  # Extends the Guard 1b trap rather than replacing it: a bare `rm -rf "$NG1_DIR"` here leaked
+  # the five temp files above on every run wherever terraform is installed.
+  trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; rm -rf "$NG1_DIR"' EXIT
   NG1_RENDER="$NG1_DIR/rendered.yml"
   bash "$SCRIPT_DIR/inngest-userdata-budget.sh" "$NG1_RENDER" > "$NG1_DIR/budget.log" 2>&1 || true
   NG1_RENDER_BYTES=$(wc -c < "$NG1_RENDER" 2>/dev/null | tr -cd '0-9' || true)
