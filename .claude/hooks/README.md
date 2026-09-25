@@ -475,6 +475,19 @@ PostToolUse runs after the tool's write, so these cannot block. Most are telemet
 | `pencil-collapse-guard.sh` | `.claude/.rule-incidents.jsonl` (`cq-pencil-collapse-auto-recover`, `warn`) | PostToolUse on `mcp__pencil__open_document`: auto-restores a tracked `.pen` collapsed to empty document state from `git HEAD` + emits an `additionalContext` warning. Fail-open, non-destructive. Issue #4859. |
 <!-- markdownlint-enable MD038 -->
 
+## Adding a hook test suite
+
+- **Guard every tool the suite needs** with the canonical line, never a skip:
+  `command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }`.
+  The taxonomy (whole suite 3, repo-owned file missing 1, one arm non-zero) and what the checker can and cannot
+  see live in the header of `hook-suite-dep-unresolved.test.sh`, which runs every guarded suite with the tool removed.
+- **Three registrations only whole-repo gates see.**
+  - Source `lib/test-incident-sandbox.sh` (`incident-sandbox-coverage.test.sh`).
+  - Add an edge or an ALWAYS_ON entry in `scripts/lib/test-affected-paths.sh`, or `lint-orphan-test-suites.sh`
+    reports the suite UNCLASSIFIED.
+  - If the suite carries an anti-vacuity floor, add a `PROMOTED_FILES` entry in `scripts/guard-vacuity-floor.test.sh`.
+    That ratchet reads tracked files, so measure it only after `git add` (#8616).
+
 ## macOS note
 
 `flock` is not installed by default on macOS. Dev machines need:
