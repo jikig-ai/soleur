@@ -26,7 +26,7 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 PASS=0
 FAIL=0
 # Anti-vacuity floor. Raise deliberately when adding fixtures.
-MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-74}"
+MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-133}"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() {
@@ -802,6 +802,634 @@ echo "don't"; rc=$?
 EOF
 )"
 assert_fires "$f" 3 S3 "S3: ' inside a \"-quoted word cannot spoof the quote parity check"
+
+# --- quote model: cross-line quote state + quote-aware `;` split -----------------
+# Issue #8884: quote context was per-line only, so `set`/`;`/reads inside a
+# multi-line quoted string spoofed the model in BOTH directions, and a quoted
+# `;` mis-segmented the antecedent.
+
+f="$(write_fix s3-quoted-clear-multiline <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+  set +e
+  inner_work
+'
+worker
+rc=$?
+EOF
+)"
+assert_fires "$f" 8 S3 "S3: set +e inside a multi-line quoted string is data, not a disarm"
+
+f="$(write_fix s3-quoted-semicolon <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'a;b'; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: quoted ; does not split -- the read still fires"
+run_lint "$f"
+if grep -qF "echo 'a;b'   << read:" <<<"$LINT_OUT"; then
+  pass "S3: quoted ; -- antecedent names echo 'a;b', not a b' fragment"
+else
+  fail "S3: quoted ; antecedent" "echo 'a;b'   << read:" "$(tr '\n' ' ' <<<"$LINT_OUT")"
+fi
+
+f="$(write_fix s3-quoted-set-segment <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'x;set +e'; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: 'x;set +e' quoted -- no phantom set segment minted"
+run_lint "$f"
+if grep -qF "echo 'x;set +e'   << read:" <<<"$LINT_OUT"; then
+  pass "S3: quoted set segment -- antecedent is the echo, not a set +e' fragment"
+else
+  fail "S3: quoted set segment antecedent" "echo 'x;set +e'   << read:" "$(tr '\n' ' ' <<<"$LINT_OUT")"
+fi
+
+f="$(write_fix s3-quoted-arm-multiline <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+bash -c '
+  set -e
+  inner_work
+'
+x=$(grep p f)
+EOF
+)"
+assert_silent "$f" "S3/S1: set -e inside a multi-line quoted string cannot arm the model"
+
+f="$(write_fix s3-read-inside-quote <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+  worker
+  rc=$?
+'
+other
+EOF
+)"
+assert_silent "$f" "S3: rc=\$? inside a multi-line quoted literal is data for the inner interpreter"
+
+f="$(write_fix s3-second-string-clear <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+  step_one
+'
+bash -c '
+  set +e
+  step_two
+'
+worker
+rc=$?
+EOF
+)"
+assert_fires "$f" 11 S3 "S3: quote state carries past the FIRST string -- a set +e in the second is still data"
+
+f="$(write_fix s3-paren-literal <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'a(b'
+worker
+rc=$?
+EOF
+)"
+assert_fires "$f" 5 S3 "S3: ( inside a literal does not skew depth -- the read still fires"
+
+f="$(write_fix unterminated-quote <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+x=$(grep p f)
+EOF
+)"
+assert_fires "$f" 4 S1 "unterminated quote: the skipped tail is re-judged as code (fail-closed)"
+
+f="$(write_fix quoted-heredoc-interleave <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+  cat <<EOF2
+  payload
+EOF2
+'
+worker
+rc=$?
+EOF
+)"
+assert_fires "$f" 9 S3 "S3: heredoc-shaped text inside quotes still leaves the real read live"
+
+# --- S3 compound closers as antecedents (#8884) ---------------------------------
+# A read after a CLOSED multi-line compound was a miss: `fi`/`done`/`esac`/`}`
+# lines stayed protected as antecedents while the one-line `if c; then cmd; fi`
+# form was already flagged. The closer reclassifies as the just-closed compound.
+
+f="$(write_fix s3-multiline-if <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -f f ]]; then
+  worker
+fi
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: multi-line if/fi then rc=\$? -- the compound's armed arm aborts"
+
+f="$(write_fix s3-multiline-while <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while read -r l; do
+  worker "$l"
+done < f
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: while/done < f then rc=\$? -- redirect tail is still a closer"
+
+f="$(write_fix s3-multiline-for <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+for x in a b; do
+  worker "$x"
+done
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: for/done then rc=\$?"
+
+f="$(write_fix s3-multiline-case <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  a) worker ;;
+esac
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: case/esac then rc=\$?"
+
+f="$(write_fix s3-group-close <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+{
+  worker
+}
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: { group } then rc=\$? -- the group's last command ran armed"
+
+f="$(write_fix s3-sameline-fi <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if c; then w; fi; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: if c; then w; fi; rc=\$? -- a closer SEGMENT is a compound antecedent"
+
+f="$(write_fix s3-sameline-done <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while c; do w; done; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: while c; do w; done; rc=\$? -- mid-line done segment"
+
+f="$(write_fix s3-until-done <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+until c; do
+  w
+done
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: until/done then rc=\$? -- same conservative verdict as the one-line rule"
+
+f="$(write_fix s3-multiline-canonical <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if some_command; then
+  rc=0
+else
+  rc=$?
+fi
+echo "$rc"
+EOF
+)"
+assert_silent "$f" "S3: multi-line if cmd; then rc=0; else rc=\$?; fi -- the gate's own remediation stays silent"
+
+f="$(write_fix s3-funcdef-sameline <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() { worker; }
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: f() { worker; } then rc=\$? -- a function DEFINITION close is not an execution"
+
+f="$(write_fix s3-funcdef-multiline <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() {
+  worker
+}
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: multi-line function definition close then rc=\$? -- definition status, not dead read"
+
+# --- S4 function shapes (#8884) ------------------------------------------------
+# The function stack tracked only `name() {` openers and `}`-only closers.
+# Deferred-brace (`f()` newline `{`), paren-bodied (`f() (`), and mid-line
+# `}` closers all missed the body entirely.
+
+f="$(write_fix s4-deferred-brace <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report()
+{
+  (( c > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: name() newline { -- the deferred-brace opener still owns the tail"
+
+f="$(write_fix s4-paren-body <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() (
+  (( c > 0 )) && echo x
+)
+EOF
+)"
+assert_fires "$f" 4 S4 "S4: name() ( ... ) -- a paren-bodied function tail leaks too"
+
+f="$(write_fix s4-midline-close <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  local total=0
+  (( total > 0 )) && echo "t=$total"; }
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: test && act; } -- a mid-line closer still pops the tail"
+
+f="$(write_fix s4-brace-led-close <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  local total=0
+  (( total > 0 )) && echo "t=$total"
+}; echo done
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: }; rest -- a }-led line with trailing text still closes"
+
+f="$(write_fix s4-pending-paren <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report()
+(
+  (( c > 0 )) && echo x
+)
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: name() newline ( -- pending paren opener"
+
+f="$(write_fix s4-function-kw-deferred <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+function report
+{
+  (( c > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: function name newline { -- the keyword form defers too"
+
+f="$(write_fix s4-brace-noise <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  local x=${v}_{a,b}
+  (( c > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: \${v} and {a,b} inside a body must not perturb the group counter"
+
+f="$(write_fix s4-oneline-inner-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  cmd || { a; b; }
+  (( t > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: cmd || { a; b; } on one line does not mis-pop the function"
+
+f="$(write_fix s4-predicate-deferred <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+is_ready()
+{
+  [[ -c /dev/x ]] && notify
+}
+EOF
+)"
+assert_silent "$f" "S4: predicate name exempt under the deferred-brace opener too"
+
+f="$(write_fix s4-predicate-paren <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+check_x() (
+  [[ -c /dev/x ]] && notify
+)
+EOF
+)"
+assert_silent "$f" "S4: predicate name exempt under a paren body too"
+
+f="$(write_fix s3-paren-funcdef-close <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() (
+  worker
+)
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: ) closing a paren function DEFINITION is not a dead-read antecedent"
+
+# --- S3 literal-prefix status reads (#8884) -----------------------------------
+# `x=pre$?` reads $? just as surely as `x=$?` -- the literal prefix was a miss.
+
+f="$(write_fix s3-prefix-read <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+worker
+x=pre$?
+EOF
+)"
+assert_fires "$f" 4 S3 "S3: x=pre\$? reads the dead status just like x=\$?"
+
+f="$(write_fix s3-prefix-read-unarmed <<'EOF'
+#!/usr/bin/env bash
+set +e
+worker
+x=pre$?
+EOF
+)"
+assert_silent "$f" "S3: x=pre\$? under set +e -- the read is live, no finding"
+
+f="$(write_fix s3-prefix-quoted <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+worker
+x='pre$?'
+EOF
+)"
+assert_silent "$f" "S3: x='pre\$?' is literal text, not a status read"
+
+f="$(write_fix s3-prefix-dq <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+worker
+x="pre$?"
+EOF
+)"
+assert_fires "$f" 4 S3 "S3: x=\"pre\$?\" reads the dead status inside a double quote"
+
+# --- quote-model regressions -------------------------------------------------
+# Apostrophes in inline comments, `${#arr}` length expansions, `$(` inside
+# `"…"`, and `)`-closing quote tails all used to desync the quote tracker and
+# silently blank the rest of the file.
+
+f="$(write_fix qm-comment-apos <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo ok # don't
+count=$(grep -c pat "$1")
+echo mid # isn't
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: apostrophe in a comment tail cannot desync the quote tracker"
+
+f="$(write_fix qm-len-expand <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+A=(1 2)
+(( ${#A[@]} )) && echo nonempty
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 5 S1 "S1: \${#arr[@]} is a length expansion, not a comment start"
+
+f="$(write_fix qm-dq-subst <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+payload="$(jq -nc --arg v "$1" '{a: $v}' 2>/dev/null)"
+inner="$(echo "$(printf x)")"
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 5 S1 "S1: \$( inside dq relexes; nested \$(a \$(b)) cannot desync"
+
+f="$(write_fix qm-close-paren <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+x=$(bash -c "
+  inner
+" 2>&1)
+set -e
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 7 S1 "S1: paren closing a subst on a carried-quote line still counts toward depth"
+
+f="$(write_fix qm-multiline-sub <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+payload="$(jq -nc '
+  {a:1}
+' 2>/dev/null)" || true
+set -e
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 7 S1 "S1: multi-line single-quote inside a subst inside dq closes cleanly"
+
+# --- frame/regressions -------------------------------------------------------
+# `{`/`}`/`(`/`)` inside `$(…)` arguments cannot perturb the function frame;
+# `set`-led lines can still carry a closer.
+
+f="$(write_fix frame-subst-brace <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  v=$( { a; }; cat)
+  (( t > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: a brace inside a substitution arg must not close the function frame"
+
+f="$(write_fix frame-set-closer <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() {
+  a
+  set +u; }
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: set-led line still closes the definition -- the read is not dead"
+
+f="$(write_fix frame-if-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  if { probe; }; then
+    echo y
+  fi
+  [ -n "$z" ] && echo done
+}
+EOF
+)"
+assert_fires "$f" 7 S4 "S4: if-group condition inside a body does not pop the function"
+
+f="$(write_fix frame-neg-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+! { worker; }
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: negated brace group is errexit-exempt -- the read is live"
+
+f="$(write_fix frame-and-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+guard && {
+  worker
+}
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: guard-amp-amp brace group aborts under set -e -- the read is dead"
+
+f="$(write_fix frame-midline-defclose <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() {
+  worker; }
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: mid-line brace close ends a definition, not an execution"
+
+f="$(write_fix frame-oneline-def-read <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() { a; }; rc=$?
+EOF
+)"
+assert_silent "$f" "S3: one-line definition close is not the read's antecedent"
+
+# --- statement/capture regressions -------------------------------------------
+
+f="$(write_fix cap-multi-stmt-subst <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x=$(a; grep -c pat f)
+EOF
+)"
+assert_fires "$f" 3 S1 "S1: multi-statement subst -- the last semicolon statement carries the status"
+
+f="$(write_fix cap-sq-subst <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x='$(grep p f)'
+EOF
+)"
+assert_silent "$f" "S1: single-quoted dollar-paren is a literal string, not a capture"
+
+f="$(write_fix cap-and-tail <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x=$(grep -c p f) && next
+EOF
+)"
+assert_silent "$f" "S1: capture followed by amp-amp is errexit-exempt (non-final operand)"
+
+f="$(write_fix cap-neg-assign <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+! x=$(grep -c p f)
+EOF
+)"
+assert_silent "$f" "S1: negated assignment is errexit-exempt"
+
+f="$(write_fix cap-group-pipeline <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+n=$({ printf x | grep -oE pat | wc -l; } | tr -d ' ')
+EOF
+)"
+assert_fires "$f" 3 S1 "S1: group pipeline inside subst surfaces under pipefail"
+
+# --- set-verdict regressions --------------------------------------------------
+
+f="$(write_fix set-brace-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+{ set +e; }
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_silent "$f" "S1: brace-grouped set clears errexit in this shell"
+
+f="$(write_fix set-subshell <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+( set +e; inner )
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: paren-grouped set scopes to the subshell -- outer stays armed"
+
+f="$(write_fix set-comment-spoof <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x=1; # note; set +e
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: set text inside a comment tail cannot clear errexit"
+
+# --- heredoc regressions ------------------------------------------------------
+
+f="$(write_fix hd-quoted-ltlt <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "usage: feed <<EOF lines"
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: quoted heredoc marker opens nothing -- later lines still scan"
+
+f="$(write_fix hd-arith-shift <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x=$((a<<b))
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: arithmetic shift is not a heredoc"
 
 # --- baseline behaviour ------------------------------------------------------
 # --write-baseline refuses explicit paths (a subset scan would truncate the
