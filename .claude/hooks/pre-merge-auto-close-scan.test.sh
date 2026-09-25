@@ -40,9 +40,9 @@ _cleanup_tmp() {
 }
 trap _cleanup_tmp EXIT
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
-[[ -f "$SCANNER" ]] || { echo "SKIP: auto-close-scan.sh not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
+[[ -f "$SCANNER" ]] || { echo "FAIL: $SCANNER not found — the scanner under test is repo-owned, so its absence is a defect"; exit 1; }
 
 # Per-case options. Set immediately before a run_case call; run_case clears them
 # afterwards so they never leak into the next case.
