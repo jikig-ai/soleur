@@ -407,8 +407,10 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     # apply — drift probe just won't have content_sha to compare).
     content_sha=$(sha1sum "$migration_file" 2>/dev/null | awk '{print $1}' || echo "")
   fi
-  # Apply migration and record it in a single atomic transaction. The INSERT
-  # row carries content_sha when known; NULL otherwise (column is nullable).
+  # Apply migration and record it in one transaction when the migration body
+  # has no explicit transaction commands. psql's --single-transaction requires
+  # -f/-c; plain piped stdin silently disables it. The INSERT row carries
+  # content_sha when known; NULL otherwise (column is nullable).
   if ! {
     cat "$migration_file"
     if [[ -n "$content_sha" ]]; then
@@ -416,7 +418,7 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     else
       printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
     fi
-  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1; then
+  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 -f -; then
     echo "::error::Migration failed: $filename"
     exit 1
   fi

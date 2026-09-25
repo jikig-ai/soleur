@@ -3,8 +3,7 @@
 -- backfill, so its legacy-only predicate missed every pre-existing run.
 -- Repair only rows with a persisted conversation run. No prompt or content
 -- columns are read or changed.
-
-BEGIN;
+-- The migration runner wraps this body and its ledger INSERT in one transaction.
 
 -- A tenant role cannot authorize a marker transition with a custom GUC.
 -- The SECURITY DEFINER bind RPC and the migration runner execute as postgres.
@@ -37,5 +36,3 @@ UPDATE public.conversations AS c
  WHERE r.conversation_id = c.id
    AND r.execution_kind = 'conversation'
    AND c.engine_binding_state IS DISTINCT FROM 'bound';
-
-COMMIT;

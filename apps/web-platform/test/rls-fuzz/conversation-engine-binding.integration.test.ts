@@ -55,4 +55,10 @@ describe.skipIf(!ENABLED)("conversation engine binding authority (local)", () =>
       message: "conversation engine binding state is immutable",
     });
   });
+
+  test("a workspace co-member cannot bind another owner's private conversation", async () => {
+    await expect(asTenant(sql, ctx.userC, async (t) => {
+      await t`select public.bind_agent_engine_run(${ctx.wsA}, 'conversation', ${ctx.convA}, null, null, ${ctx.userC})`;
+    })).rejects.toMatchObject({ code: "42501" });
+  });
 });
