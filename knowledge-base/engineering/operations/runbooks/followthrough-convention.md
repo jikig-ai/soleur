@@ -76,6 +76,15 @@ verification passes — no human revisit required.
 
 5. **Open a PR** that lands the script + (optionally) any new secrets in the workflow env. CI on the PR includes the workflow file's syntax check.
 
+**Before shipping a change to a probe, dry-run the REAL sweeper on the branch.** A fixture suite
+certifies the probe's logic. It cannot see whether the host can still answer the query at today's
+data volume, and an open-topped window's volume grows daily. Run
+`gh workflow run scheduled-followthrough-sweeper.yml --ref <branch> -f dry_run=true`. It is
+read-only and posts nothing. Then read the tracker's `exit=` line and output tail in the run log.
+**Why:** #6178/PR #8835. A 144/0 suite shipped pins for a probe whose heaviest slice timed out on
+the host's page 8 every time, and only the dry run showed it
+([learning](../../../project/learnings/2026-09-25-a-fixture-suite-cannot-see-that-the-probe-can-no-longer-take-its-reading.md)).
+
 ## Directive fields
 
 | Field | Required | Notes |
