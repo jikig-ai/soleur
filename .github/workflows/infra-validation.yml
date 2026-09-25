@@ -598,6 +598,11 @@ jobs:
       - name: Upload per-suite logs — leg ${{ matrix.leg }}
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # Artifact uploads bypass Actions log masking: the contract that makes
+        # this safe is that suites may only print FIXTURE credentials (the
+        # userinfo scrub in the fixture paths exists for exactly this sink) —
+        # a real secret must never reach a suite's stdout/stderr in the first
+        # place, not just its log line.
         with:
           name: infra-suite-logs-${{ strategy.job-index }}
           path: |
