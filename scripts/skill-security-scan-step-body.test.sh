@@ -45,7 +45,9 @@ pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); FAILURES+=("$1"); printf 'FAIL: %s\n' "$1" >&2; }
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-WF_PR="$REPO_ROOT/.github/workflows/skill-security-scan-pr-trailer.yml"
+# The three in-scope steps live under jobs.skill-security-scan since #8902
+# folded skill-security-scan-pr-trailer.yml into the shared PR-gates file.
+WF_PR="$REPO_ROOT/.github/workflows/pr-quality-guards.yml"
 WF_PM="$REPO_ROOT/.github/workflows/skill-security-scan-postmerge.yml"
 
 SANDBOX=$(mktemp -d -t sss-step-body.XXXXXXXX) || {
@@ -82,12 +84,13 @@ EXCLUDED=(
   "Assert jq present (runner-image dependency — no install, no network)"
 )
 
-extract_body() {  # $1=workflow $2=step name $3=destination file
-  python3 - "$1" "$2" "$3" <<'PY'
+extract_body() {  # $1=workflow $2=step name $3=destination file $4=job filter (optional)
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
 import sys, yaml
-wf, want, dest = sys.argv[1], sys.argv[2], sys.argv[3]
+wf, want, dest, jf = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 d = yaml.safe_load(open(wf))
-hits = [s for j in d["jobs"].values() for s in j.get("steps", []) if s.get("name", "") == want]
+jobs = [d["jobs"][jf]] if jf else d["jobs"].values()
+hits = [s for j in jobs for s in j.get("steps", []) if s.get("name", "") == want]
 if len(hits) != 1:
     sys.stderr.write(f"expected exactly 1 step named {want!r} in {wf}, found {len(hits)}\n")
     sys.exit(1)
@@ -112,14 +115,14 @@ _dest_for() {
 }
 _extracted=0
 for _n in "${IN_SCOPE_PR[@]}"; do
-  if extract_body "$WF_PR" "$_n" "$(_dest_for "$_n")" 2>"$SANDBOX/x.err"; then
+  if extract_body "$WF_PR" "$_n" "$(_dest_for "$_n")" "skill-security-scan" 2>"$SANDBOX/x.err"; then
     pass; _extracted=$((_extracted + 1))
   else
     fail "G1.1 pr-trailer: could not extract step $_n: $(cat "$SANDBOX/x.err")"
   fi
 done
 for _n in "${IN_SCOPE_PM[@]}"; do
-  if extract_body "$WF_PM" "$_n" "$(_dest_for "$_n")" 2>"$SANDBOX/x.err"; then
+  if extract_body "$WF_PM" "$_n" "$(_dest_for "$_n")" "" 2>"$SANDBOX/x.err"; then
     pass; _extracted=$((_extracted + 1))
   else
     fail "G1.2 postmerge: could not extract step $_n: $(cat "$SANDBOX/x.err")"
@@ -155,7 +158,9 @@ excluded = {n for n in os.environ["SSS_EXCLUDED"].split("\n") if n}
 out = []
 for wf in sys.argv[1:]:
     d = yaml.safe_load(open(wf))
-    for j in d["jobs"].values():
+    job_filter = "skill-security-scan" if os.path.basename(wf) == "pr-quality-guards.yml" else None
+    jobs = [d["jobs"][job_filter]] if job_filter else d["jobs"].values()
+    for j in jobs:
         for s in j.get("steps", []):
             if "run" not in s:
                 continue
@@ -183,7 +188,7 @@ fi
 # declare `CI: 'true'`, and running their bodies without it exercises the opposite mode from
 # production.
 _wrapper=$(python3 - "$WF_PR" "$WF_PM" <<'PY'
-import sys, yaml
+import os, sys, yaml
 want = {
   "Identify added SKILL/agent files in PR diff",
   "Validate override artifacts (if any)",
@@ -193,7 +198,9 @@ want = {
 out = []
 for wf in sys.argv[1:]:
     d = yaml.safe_load(open(wf))
-    for jn, j in d["jobs"].items():
+    job_filter = "skill-security-scan" if os.path.basename(wf) == "pr-quality-guards.yml" else None
+    items = [(job_filter, d["jobs"][job_filter])] if job_filter else d["jobs"].items()
+    for jn, j in items:
         if j.get("continue-on-error"):
             out.append(f"{wf}:job {jn}: continue-on-error")
         for s in j.get("steps", []):

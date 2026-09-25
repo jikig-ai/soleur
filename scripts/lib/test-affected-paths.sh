@@ -683,7 +683,7 @@ AFFECTED_SCRIPTS_MD_TO_MRKDWN_PATHS=(
 # repo paths its suite file names.
 AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
   ".github/workflows/skill-security-scan-postmerge.yml"
-  ".github/workflows/skill-security-scan-pr-trailer.yml"
+  ".github/workflows/pr-quality-guards.yml"
   "plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh"
   "plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh"
   "scripts/guard-vacuity-floor.test.sh"
@@ -732,7 +732,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_SCRIPT_TESTS_AGGREGATOR_DIAGNOSIS_TEST_SH_PA
 # not reach its two workflow subjects; declared from the repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
   ".github/workflows"
-  ".github/workflows/dependency-review.yml"
   ".github/workflows/pr-quality-guards.yml"
   ".github/scripts/check-client-pii-sentry.sh"
   ".github/scripts/check-settings-integrity.sh"
@@ -929,7 +928,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_GENERATOR_TEST_SH_PATHS=
 # plugins/soleur/skills/constraint-scaffold/test/parity.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
-  ".github/workflows/constraint-gates.yml"
+  ".github/workflows/pr-quality-guards.yml"
   ".github/workflows/fix-constraints-stage-a.yml"
   ".github/workflows/fix-constraints-stage-b.yml"
   "apps/web-platform"
