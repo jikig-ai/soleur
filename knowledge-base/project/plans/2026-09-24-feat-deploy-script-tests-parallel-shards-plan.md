@@ -13,6 +13,44 @@ requires_cpo_signoff: true
 
 # feat: shard deploy-script-tests into a matrix runner with duration-aware assignment
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-24
+**Sections enhanced:** Runner contract (per-suite timeout portability,
+`::error` sanitization, emit-shape literals), aggregator design (ci.yml:1525
+verbatim shape incl. cancelled-vs-superseded discrimination), observability
+(follow-through soak enrollment), risks (production-mutation answer,
+workflow_run consumer census).
+**Research agents used:** none spawned — this pipeline runs headless without
+a Task surface; every deepen-plan gate and verification was executed inline
+with direct repo/API reads (`Reviewed-Coverage: sequential-fallback`).
+
+### Key Improvements
+
+1. Aggregator job spec changed from "the `test`-aggregator pattern" to the
+   verbatim `ci.yml` `Aggregate shard results` shape — including its
+   measured insight that a leg-level `timeout-minutes` kill reports
+   `cancelled`, not `failure` (load-bearing for the #8735 notify fix).
+2. Per-suite timeout bound gained the macOS-portability requirement
+   (`timeout`→`gtimeout`→absent; fail-loud under CI) — the runner executes
+   on operator hosts.
+3. ADR provisional ordinal corrected 246 → 250 (ADR-245/248/249 occupied on
+   branch and `origin/main`).
+4. `RED  <path>` emit literal normalized to the two-space form the monitor
+   anchors on (`run-registered-suites.sh:437`, monitor comment ~420).
+
+### New Considerations Discovered
+
+- The aggregator body carries an executable guard precedent —
+  `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` extracts and
+  executes the ci.yml step over synthetic result triples; the new job gets
+  the same treatment.
+- No `workflow_run` consumer watches this workflow (enumerated), so leg
+  redness cannot dark a downstream deploy gate — the `#8570` blast-radius
+  edge is clear.
+- `git ls-files` pathspec `*` crosses `/` — one glob returns all 146 tracked
+  suites including the six subdirectory ones (verified).
+
 ## Overview
 
 `deploy-script-tests` in `.github/workflows/infra-validation.yml` executes its
@@ -192,7 +230,7 @@ structure, reusing the ADR-238/ADR-240 topology rather than inventing one:
 |---|---|---|
 | `deploy-script-tests` | `strategy.matrix.leg: [1..K]`, `fail-fast: false` | Per leg: checkout → toolchain setup (terraform, cloud-init, nftables, docker assert) → `SOLEUR_INFRA_SHARD=<leg>/K bash apps/web-platform/infra/run-registered-suites.sh` → per-suite log/timing artifact upload. Each leg runs its assigned subset through the runner's existing `-P` executor. |
 | `deploy-script-tests-fixed` | single job, parallel with the legs | The items that cannot or should not be glob-derived or run K times: the 3 sudo loopback suites, the 2 inline `terraform validate` blocks, `fixtures-validate-infra-templates.sh`, the evidence-freshness / systemd-lint / provenance blocks, the 5 `apps/web-platform/test/infra/*.test.sh` steps, and `sandbox-canary-regression.test.sh`. Keeps its own per-step `timeout-minutes` and named-step attribution. |
-| `deploy-script-tests-done` | `needs: [deploy-script-tests, deploy-script-tests-fixed]`, `if: always()` | Synthetic aggregator (the `test`-check pattern from `ci.yml`): exits non-zero if any need is `failure` or `cancelled`. Gives consumers — `notify-main-failure`, future required-check wiring (#6766/#6480) — ONE stable result name. |
+| `deploy-script-tests-done` | `needs: [deploy-script-tests, deploy-script-tests-fixed]`, `if: always()` | Synthetic aggregator modeled verbatim on ci.yml's `test` job (`Aggregate shard results` step, `ci.yml:~1525`): per-need `result` strings into `env:`, colon-delimited `entries=(...)` list, fail on ANY non-success — with the same cancelled-vs-superseded discrimination (a `timeout-minutes` kill cancels ONE leg while siblings conclude; a concurrency cancel cancels all — the two `cancelled` shapes are distinguished in the diagnostic, and the verdict never depends on it). Gives consumers — `notify-main-failure`, future required-check wiring (#6766/#6480) — ONE stable result name. |
 
 Runner changes in `apps/web-platform/infra/run-registered-suites.sh`:
 
@@ -438,7 +476,7 @@ cost ≈ 4×90 s = 6 min aggregate vs ~19 min of wall-clock saving).
 
 #### Phase 5 — ADR + docs + monitor
 
-- New ADR (provisional next-free ordinal — ADR-246 at plan time, re-verified
+- New ADR (provisional next-free ordinal — ADR-250 at plan time, re-verified
   against `origin/main` at ship): infra suite registration is filesystem
   glob + justified exclusions; `deploy-script-tests` topology is matrix legs
   × parallel runner; per-suite attribution lives in verdict lines/artifacts,
@@ -493,7 +531,7 @@ liveness_signal:
 
 error_reporting:
   destination: "GitHub check conclusion on the aggregator + 'RED  <path>' lines and '::error file=<path>' annotations in leg logs; notify-ops-email on main-push red/cancelled"
-  fail_loud: "aggregator exits non-zero when any leg or the fixed job is failure|cancelled; a suite failure prints RED <path> and uploads its log"
+  fail_loud: "aggregator exits non-zero when any leg or the fixed job is failure|cancelled; a suite failure prints RED  <path> and uploads its log"
 
 failure_modes:
   - mode: "a shard leg drops part of its assignment (manifest/env bug)"
@@ -631,7 +669,7 @@ of both the manifest and the workflow.
 ### Guard 3 — per-suite timeout attribution
 
 **Property.** Every suite execution carries a finite bound, and a suite that
-exceeds it produces a `RED <path>` naming the suite — never an anonymous job
+exceeds it produces a `RED  <path>` naming the suite — never an anonymous job
 cancel.
 
 **Assembly.** The single shim inside the runner's `xargs -P` dispatch (the one
@@ -696,7 +734,7 @@ is a deliverable of this plan, not a follow-up.
 
 ### ADR
 
-- **Create** provisional ADR-246 (next-free ordinal at plan time; `soleur:ship`
+- **Create** provisional ADR-250 (next-free ordinal at plan time; `soleur:ship`
   re-verifies against `origin/main`): *infra suite registration is filesystem
   glob + justified exclusions; `deploy-script-tests` partitions via matrix
   legs × the parallel runner; per-suite attribution lives in verdict lines,
@@ -704,7 +742,7 @@ is a deliverable of this plan, not a follow-up.
   workflow steps.* It extends the ADR-238/ADR-240 shard pattern to the
   infra-validation surface and supersedes the registration-contract
   assumptions embedded in `test-infra-suite-registration.sh`'s header.
-- Renumber sweep obligation if the ordinal collides: `grep -rn 'ADR-246'
+- Renumber sweep obligation if the ordinal collides: `grep -rn 'ADR-250'
   knowledge-base/project/{plans,specs}/feat-one-shot-8736-deploy-script-tests-parallel/`
   plus this file.
 
@@ -740,7 +778,7 @@ The ADR is authored in this PR describing the shipped topology directly
 - [ ] Push-to-main coverage unchanged: the union of leg assignments equals
       the derived execute set on every run (totality guard + runner
       zero-assignment refusal).
-- [ ] Per-suite attribution: a failing suite produces `RED <path>`, an
+- [ ] Per-suite attribution: a failing suite produces `RED  <path>`, an
       `::error` annotation naming it, and a retained per-suite log artifact —
       demonstrated in the PR with a deliberately-broken fixture suite.
 - [ ] Per-suite timeout bounds exist for every suite (default + override
@@ -777,7 +815,7 @@ The ADR is authored in this PR describing the shipped topology directly
   when the registration gate runs, then it reds naming the suite and the
   missing invocation.
 - Given a fixture suite forced to exceed its timeout bound, when a leg runs,
-  then the suite reports `RED <path>` with rc=124 recorded in `.meta` and the
+  then the suite reports `RED  <path>` with rc=124 recorded in `.meta` and the
   job does not cancel.
 - Given forced apt failure inside the ownership fixture, when the runtime arm
   runs, then `FIXTURE_APT_FAILED` is preceded by the captured apt stderr tail
@@ -853,6 +891,34 @@ The ADR is authored in this PR describing the shipped topology directly
   "two more re-derivations within a quarter" — met).
 - Measured run set: `gh api repos/jikig-ai/soleur/actions/runs/36037220776/jobs`
   (1504 s / 168 steps, 2026-09-24).
+
+## Deepen-Pass Gate Record
+
+Executed inline on 2026-09-24 (`Reviewed-Coverage: sequential-fallback` — no
+subagent fan-out available in this pipeline; every mechanical gate ran
+against the plan file directly).
+
+| Gate | Result | Evidence |
+|---|---|---|
+| 4.6 User-Brand Impact halt | PASS | `## User-Brand Impact` present; threshold `single-user incident` (valid enum) |
+| 4.7 Observability halt | PASS | all 5 fields present with children; `discoverability_test.command` verb `bash` ∈ allowlist, no ssh, <15 s (`--list` is a grep+sort); `expected_output` is the literal `registered infra suite` |
+| 4.8 PAT halt | PASS | regex sweep over the plan: zero hits |
+| 4.9 UI-wireframe halt | SKIP | no UI-surface file in Files-to-Edit |
+| 4.10 Encryption Posture halt | SKIP | Files-to-Edit matches no `.tf`/migration/cloud-init/compose path; prose names no new store class — suite-log artifacts ride the existing `upload-artifact` mechanism inside the Actions boundary (no new cross-component connection) |
+| 4.11 Guard Contract halt | PASS | `python3 scripts/lint-guard-contract.py` green: 3 guard entries, all fields non-empty |
+| 4.5 Network-outage deep-dive | FIRED | `timeout` trigger matched; Hypotheses section carries the L3→L7 verification record; telemetry emitted |
+| 4.55 Downtime halt | SKIP | no host-replace / lock-taking-DDL / serving-surface-swap class in the diff |
+| 4.4 Precedent-diff | PASS | every mechanism binds an in-repo precedent: matrix×runner (`scripts/test-all.sh` + ci.yml legs), manifest (ADR-240 + `regenerate-shard-manifest.py`), aggregator (`ci.yml:1498-1560`), soak probe (`scripts/followthroughs/ci-leg-durations-8006.sh`), timeout portability (`memory-backstop.sh:~381`) |
+| 4.45 verify-the-negative | PASS | `workflow_run` consumer census (4 consumers, none watch `Infra Validation`); 146-on-disk vs 137-derived re-measured; `test-relevance-paths.sh` confirmed to have no per-suite infra edges |
+| 4.45 post-edit self-audit | PASS | dropped symbols (`KNOWN_UNDERIVABLE`, workflow-scrape derivation, the `run: bash` step contract) are referenced only as removal targets |
+
+Quality-checklist results: labels verified (`follow-through`,
+`action-required` exist); one rule-ID citation in the plan body —
+`wg-use-closes-n-in-pr-body-not-title-to` — verified active in AGENTS.md;
+literal sweep consistent (`SOLEUR_INFRA_SHARD` ×12, `suite-shard-legs.tsv`,
+`FIXTURE_APT_FAILED`); no external SHA/version citations; no `gh issue
+close`/`Closes #N` overreach (`closes:` frontmatter covers #8736/#8744/#7076
+— all land IN this PR); markdownlint clean on plan + tasks.md.
 
 ## Sharp Edges
 

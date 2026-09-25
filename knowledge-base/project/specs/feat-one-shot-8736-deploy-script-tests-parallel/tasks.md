@@ -111,8 +111,15 @@ the new derivation/env shape.
   `sandbox-canary-regression.test.sh`; own toolchain setup; own ceiling.
 - [ ] `deploy-script-tests-done` aggregator: `needs:
   [deploy-script-tests, deploy-script-tests-fixed]`, `if: always()`, exits
-  non-zero when any need is `failure|cancelled` (the `test`-aggregator
-  pattern from `ci.yml`).
+  non-zero when any need is `failure|cancelled` — copy the
+  `Aggregate shard results` step shape from `ci.yml` (~line 1525) verbatim,
+  including the cancelled-vs-superseded leg discrimination (a leg-level
+  `timeout-minutes` kill reads `cancelled` with surviving siblings; a
+  concurrency cancel reads `cancelled` on all — the aggregator fails on
+  either, the diagnostic names which). Guard: extend or mirror
+  `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` (it extracts
+  and executes the ci.yml body over synthetic result triples) for the new
+  job.
 - [ ] `notify-main-failure`: re-key on `deploy-script-tests-done.result`,
   add `cancelled` to the disjunction (#8735).
 - [ ] `main-health-monitor.yml`: update the 35-min reference + derived-set
