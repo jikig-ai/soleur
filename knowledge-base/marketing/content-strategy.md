@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-22
+last_updated: 2026-09-25
 last_reviewed: 2026-06-08
 review_cadence: weekly
 owner: CMO
@@ -246,6 +246,9 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 ### Pillar 2: Methodology
 
 **Audience:** Technical builders looking for structured AI development workflows.
+
+> **[2026-09-25, #8774]** New blog posts in every pillar follow brand-guide `### Blog`. This pillar's technical depth moves to GitHub and the docs.
+
 **Search intent:** Informational.
 **Keywords:** agentic engineering, compound engineering, vibe coding vs agentic engineering, AI coding workflow, knowledge compounding.
 **Voice:** Confident, concrete. Brand guide "Product announcements" tone.
