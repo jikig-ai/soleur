@@ -87,3 +87,18 @@ The founder has a day between the merge and the social posts. Setting the distri
 - The handoff lists the redirect row as a deliverable of this PR.
 - content-writer's default path is dated, and every recent post is dated.
 - The dated URL was never live, because the permalink strips the date. The row exists only for the convention and the Guard 1 parity check. It is additive and reverts by deleting the row.
+
+---
+
+## DC-6: "A quarter of our plan" corrected to "about a quarter of our current plan"
+
+**Classification:** User-Challenge (a fact-check correction to wording the operator specified)
+
+**Decision:** the post says "about a quarter of our current plan" and states the two defects side by side.
+
+**Why:** the brief asked for "a quarter of our plan". The deepen-plan fact-check (2026-09-25, against the PR #8536 body) found two problems:
+
+- **Scope.** The tool saw 30 of the **current phase's** 118 open issues. Against the whole plan (about 125 + 6 + 1,268 open issues across milestones), that is about 2%, not a quarter.
+- **Cause.** The wrong-priority pick came from a separate defect: a phase status row without a frozen count. It was not caused by the 30-issue limit, so the post must not say one caused the other.
+
+"Our current plan" keeps the operator's phrasing and is accurate for the stage in progress. If the founder prefers exact wording, "a quarter of the plan for the stage I was in" also passes.

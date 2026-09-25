@@ -13,10 +13,13 @@ Plan: `knowledge-base/project/plans/2026-09-25-content-blog-parked-vs-forgotten-
 - [ ] 2.1 Draft the post with `soleur:content-writer`, run inline, using the plan's Post specification as the outline.
   - [ ] 2.1.1 Write the file to `plugins/soleur/docs/blog/<YYYY-MM-DD>-parked-vs-forgotten-ideas.md`, with `date:` unquoted and equal to the filename date.
   - [ ] 2.1.2 Write in the founder's first person. The opening sentence stays verbatim (DC-4). Do not say "assistant".
-  - [ ] 2.1.3 Credit Matt Pocock with an inline link at first mention. Do not put "open source" near "Soleur".
+  - [ ] 2.1.3 Credit Matt Pocock with an inline link at first mention, using the fact-checked wording: only "not yet defined" and "decided against" come from his wayfinder method, and the four-place rule and the "forgotten" test are ours. Do not put "open source" near "Soleur".
+  - [ ] 2.1.3a The story paragraph says "about a quarter of our current plan", not "of our plan" (DC-6). State the wrong pick and the limit side by side, with neither as the cause of the other.
+  - [ ] 2.1.3b Frontmatter: `seoTitle: "Parked vs. Forgotten Ideas: How Solo Founders Track Decisions"`. The description is 120-160 characters and names parked vs forgotten. Do not set `pillar:`.
+  - [ ] 2.1.3c Use "idea parking lot" once within the first 100 words, with a one-sentence definition. Add one inline contextual link to `/blog/how-to-run-every-department-with-ai-agents/`; it is not a CTA, and its link text contains no "agent".
   - [ ] 2.1.4 Write the one CTA as `[{{ site.primaryCta.label }}]({{ site.primaryCta.url }})`.
   - [ ] 2.1.5 Make the closing technical link the last line: "For the technical write-up, see [how we fixed it](https://github.com/jikig-ai/soleur/pull/8536)".
-  - [ ] 2.1.6 Add 2-3 plain-words FAQs. The body, the `<details>` blocks and the JSON-LD must agree.
+  - [ ] 2.1.6 Add three standalone FAQs using the `faq-list`/`faq-item` markup and `"@type": "FAQPage"` JSON-LD. The questions come from the plan, and each answer is 40-60 words with no links. File order: body → FAQ → CTA → closing link → JSON-LD.
   - [ ] 2.1.7 Reach `SCAN_RC=0` on the jargon scan and PASS or SOURCED on every fact-check claim.
   - [ ] 2.1.8 Run a `soleur:marketing:copywriter` voice pass on the finished draft, then re-run the scan. Re-run the fact-check only if a claim changed.
 - [ ] 2.2 Generate the OG image with deterministic PIL: 1200×630, textless, gold on `#1A1A1A`. Save it as `plugins/soleur/docs/images/blog/og-parked-vs-forgotten-ideas.png`, then run the all-posts `ogImage` audit.

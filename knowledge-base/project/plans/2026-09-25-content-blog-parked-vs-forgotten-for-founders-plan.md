@@ -12,6 +12,45 @@ brand_survival_threshold: none
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25
+**Sections enhanced:** 6 (Research Insights / facts, Post specification, X thread, FAQ and SEO, Acceptance Criteria, Relevant files)
+**Research agents used:** soleur:marketing:fact-checker, soleur:marketing:seo-aeo-analyst, soleur:marketing:growth-strategist, and a standard-tier verify-the-negative and self-audit pass
+
+**Halt gates:** all passed.
+
+- **4.6 User-Brand Impact:** the section is present, with the `none` threshold and a sensitive-path scope-out.
+- **4.7 Observability:** all five fields are present. `probe-verb-gate.sh` exits 0 on the probe. It was re-run live and printed `301`.
+- **4.8 PAT:** no hits.
+- **4.9 UI wireframe:** no UI-surface file is touched.
+- **4.10 Encryption:** the section is present. There are no store or connection entries.
+- **4.11 Guard:** no guard is delivered.
+- **4.5 and 4.55:** did not trigger.
+
+### Key Improvements
+
+1. **Fact correction (DC-6).** "30 of 118" is a quarter of the *current phase*, not of the whole plan, which is about 2% against every open milestone. The wrong-priority pick and the 30-item limit were separate defects. The story now says "about a quarter of our current plan" and states the two defects side by side, with neither presented as the cause of the other.
+2. **Credit accuracy.** Only two of the four places (not yet defined, and decided against) come from Pocock's wayfinder. The four-place rule and the "forgotten" test are Soleur's own. Fact-checked wording is now in the spec.
+3. **SEO and AEO:**
+   - the seoTitle is cut from 69 to 61 characters;
+   - "idea parking lot", the phrase founders actually search, appears in the first 100 words;
+   - the FAQ questions are standalone and answer-engine liftable;
+   - the FAQ markup pattern and the `"@type": "FAQPage"` literal are pinned;
+   - the file order is fixed so AC5 holds;
+   - there is one inline contextual link to the founder playbook, and no `pillar:`.
+4. **Negatives verified against code:**
+   - the only apply workflow is `apply-web-platform-infra.yml`;
+   - Eleventy has no future-date filter;
+   - the site has no signup page;
+   - the publisher's stale and today logic, and its auto-channel set, are as described;
+   - the Nunjucks CTA renders, and no lint scans blog posts for `{{`.
+
+### New Considerations Discovered
+
+- `blog-jargon-scan.sh` is blind to text in `{{ }}` braces. The CTA's link text renders from `site.json`, so check the built HTML, as Phase 5 already does.
+- `infra-validation.yml` also fires on `apps/*/infra/**`, but it runs no apply.
+
 ## Overview
 
 Plan for the re-angled #8548 blog post. The earlier draft spoke to engineers and was rejected at founder review; the brand guide now carries a Blog channel note that targets non-technical solo founders. This plan re-angles the post around the founder's own problem (parked ideas and forgotten ideas look the same), reuses the earlier draft's verified facts, and ships the post together with its X thread.
@@ -86,8 +125,10 @@ Not applicable. The plan justifies itself on audience fit, not on cost or perfor
 
 ### Facts carried forward from the old draft (verified against PR #8536's body)
 
-- Before the fix, our roadmap assistant could see 30 of the 118 open items in the phase we were working on. That is about 25.4%, so the post says "about a quarter of our plan". Source: PR #8536, section "Pre-existing `next` defects folded in".
-- It recommended work planned for a later stage (Phase 5, the desktop app) while Phase 4 was active. It gave no warning. The post puts it as "it pointed us at the wrong priority".
+- Before the fix, our roadmap assistant could see 30 of the 118 open items in the phase we were working on. That is about 25.4%. Source: PR #8536, section "Pre-existing `next` defects folded in".
+  - **Deepen fact-check correction (2026-09-25):** 30 of 118 is a quarter of the *current phase*, not of the whole plan. The open milestones hold roughly 125 + 6 + 1,268 issues, so against the whole plan it is about 2%. The brief's "a quarter of our plan" is therefore rendered as **"about a quarter of our current plan"**, meaning the stage in progress (recorded as DC-6).
+- It recommended work planned for a later stage (Phase 5, the desktop app) while Phase 4 was active. It gave no warning. The post puts it as "it pointed me at the wrong priority".
+  - **Deepen fact-check correction:** the wrong pick and the 30-item limit were two *separate* defects. The phase was skipped because Phase 4's Current State row had no frozen count; the limit is a different bug. The post must not say the wrong pick happened *because* it could see only a quarter. State them side by side, not as cause and effect.
 - After the fix, it reads all 118 and names a current-phase item.
 - The four places are: a phase row (doing now), Post-MVP / Later (chosen for later), Not Yet Specified (you cannot yet state the question), and Out of Scope (closed as not planned, with a one-line reason). Anything outside those four with no record was forgotten. An open item with no placement is "unsorted".
 - The test for "not yet defined" is whether you can state the question precisely now, not whether you can answer it. Sources: PR #8536 Summary, and `plugins/soleur/NOTICE` Bundle 5.
@@ -172,8 +213,8 @@ Write one new post with `soleur:content-writer`, which applies the Blog note and
 - **File:** `plugins/soleur/docs/blog/<YYYY-MM-DD>-parked-vs-forgotten-ideas.md`. `<YYYY-MM-DD>` is the UTC date the post goes live, which is the merge date. Pick it at drafting time, and re-date it at ship time if the merge slips (see Phase 5). The live URL is `https://soleur.ai/blog/parked-vs-forgotten-ideas/`.
 - **Frontmatter:** match the recent siblings. Use `title`, `seoTitle`, `date` (unquoted, equal to the filename date), `description`, `ogImage: "blog/og-parked-vs-forgotten-ideas.png"` (no leading `/images/`) and `tags`. Do not set `layout` or `ogType`, since `blog.json` supplies both.
   - `title: "Parked or Forgotten? How to Tell Before It Costs You"`
-  - `seoTitle: "Parked vs. Forgotten Ideas: How Solo Founders Keep Track of Decisions"`
-  - `description`: 120-160 characters, naming the problem. Starting point: "Can't tell what you decided from what you forgot? Put every idea in one of four places, in any tool, and stop re-debating decisions you already made."
+  - `seoTitle: "Parked vs. Forgotten Ideas: How Solo Founders Track Decisions"`. At 61 characters it is rendered verbatim into `<title>` by `base.njk` line 126, which adds no suffix. The earlier 69-character version would be truncated in search results (deepen: SEO/AEO analyst).
+  - `description`: 120-160 characters, naming the problem. Starting point, 149 characters: "Can't tell a parked idea from a forgotten one? Sort every idea into one of four places, in any tool, and stop re-debating decisions you already made."
   - `tags`: `solo-founder`, `decision-making`, `ai-agents`.
 - **Voice:** first person singular throughout, in the General register. "Explain, don't dumb down." Say "your AI team" and "my AI team". Never say "assistant", "copilot", "agent" or "skill" counts.
 - **Opening (first paragraph):** "I lose track of what I decided and what I just forgot. From the outside, a parked idea and a forgotten one look exactly the same." Add a third sentence naming the cost, for example: "So I re-argue choices I already made, or find an idea months later and realize I never decided anything about it."
@@ -188,14 +229,14 @@ Write one new post with `soleur:content-writer`, which applies the Blog note and
        - Include one founder example. For instance, "Do a podcast" has no question yet, so it stays here. "Should a podcast replace my newsletter?" is a question you can state now, so the idea goes under Later.
      - *Decided against, with one line on why.* A changed mind is a new decision, not a reopened one.
      - Close the section with: anything in none of the four wasn't parked; it was forgotten.
-     - First mention credits Matt Pocock inline, for example "an idea I borrowed from [Matt Pocock's free, public collection of AI working methods](https://github.com/mattpocock/skills)". Do not use the word "skills" as link text. Do not put "Soleur" within 40 characters before any "open source" wording (`marketing-content-drift.test.ts` Test 2c2). Preferably avoid "open source" altogether.
+     - First mention credits Matt Pocock inline and accurately. Two of the four places ("not yet defined" and "decided against, with a reason") come from the wayfinder method in his collection. The four-place rule itself, and the "anything outside is forgotten" test, are ours: PR #8536 says "A four-places rule ties it together", and phase rows and Post-MVP already existed. Wording verified by the fact-checker: "Two of those places, not yet defined and decided against, come from [Matt Pocock's free, public collection of AI working methods](https://github.com/mattpocock/skills). I added them to the now and later lists I already had, and made the rule that anything in none of the four was forgotten." Do not use the word "skills" as link text. Do not put "Soleur" within 40 characters before any "open source" wording (`marketing-content-drift.test.ts` Test 2c2). Preferably avoid "open source" altogether.
   3. **Sort your list this week, with any tool.** Numbered steps work in a notebook, Notion or a spreadsheet:
      1. List everything.
      2. Place each item in one of the four places.
      3. For each "not yet defined" item, write the question it would answer. If you can't write it yet, the item stays there.
      4. For each "decided against" item, write one line on why.
      5. Anything left unplaced was forgotten. Decide on it now, or place it.
-  4. **How I found out the hard way.** One short paragraph that states the failure and the fix together, so it does not read as an unfixed product defect: "The part of my AI team that plans our roadmap once pointed me at the wrong priority, with no warning. It could see only about a quarter of our plan. Now it sees all of it, and tells me when it can't." Our story illustrates the problem; it is not the subject.
+  4. **How I found out the hard way.** One short paragraph that states the failure and the fix together, so it does not read as an unfixed product defect: "The part of my AI team that plans our roadmap once pointed me at the wrong priority. It could also see only about a quarter of our current plan, and it never warned me about either. Now it reads the whole plan, and tells me when it can't." The two defects sit side by side; neither is presented as the cause of the other (fact-check correction). Our story illustrates the problem; it is not the subject.
   5. **What changed: decisions stay decided.** Describe outcomes, not the system. Claim only what PR #8536 shipped, in plain words:
      - ideas I can't phrase yet go on a "not yet defined" list instead of into a half-made plan;
      - anything I rule out is closed with one line on why;
@@ -203,10 +244,17 @@ Write one new post with `soleur:content-writer`, which applies the Blog note and
      - what it suggests next is something I can start today.
      Avoid "unblocked", "frontier" and other system words. Say what the founder still decides (which place each idea goes) and what the AI team does (keeps the list, flags anything unplaced). No hours-saved claims. Close the section with the Blog note's general thesis, for example: "Running a company alone shouldn't mean remembering everything alone."
   6. **CTA (one).** For example: "Want an AI team that keeps the list while you make the calls? [{{ site.primaryCta.label }}]({{ site.primaryCta.url }})". Blog markdown is rendered through Nunjucks (`eleventy.config.js` `markdownTemplateEngine: "njk"`, precedent `{{ site.url }}` in `2026-03-16-soleur-vs-anthropic-cowork.md`), so the CTA follows `site.json` and changes with it when the waitlist becomes signup.
-- **FAQ (2-3 plain-words entries)**, rendered with `<details>` and matching FAQPage JSON-LD. The three copies must agree word for word in substance. Candidates:
-  - "What's the difference between 'later' and 'not yet defined'?"
-  - "What should I do with ideas I've decided against?"
-  - "What if an idea seems to fit two places?"
+- **FAQ (3 plain-words entries)**, with matching FAQPage JSON-LD. The body, the `<details>` blocks and the JSON-LD must agree word for word in substance.
+  - **Questions.** Each one names the idea itself, so an answer engine can lift it out of the post (deepen: SEO/AEO analyst and growth-strategist):
+    - "What is the difference between a parked idea and a forgotten idea?"
+    - "When is an idea 'not yet defined' instead of 'later'?"
+    - "How do I stop going back over decisions I've already made?" The answer: write down the one-line reason for every "decided against".
+  - **Answers.** 40-60 words each, readable on their own, with no brand name, no links and no markdown. Markdown is not rendered inside raw HTML.
+  - **Markup.** Copy the pattern in `2026-06-01-claude-code-plugin-vs-skill-vs-mcp.md`: `<div class="faq-list"><details class="faq-item"><summary class="faq-question">…</summary><p class="faq-answer">…</p></details></div>`. Write the JSON-LD with `"@type": "FAQPage"` exactly, space after the colon, because `validate-seo.sh` looks for that string whenever a page has `faq-item`. Use straight ASCII apostrophes in both copies.
+  - **File order:** body → FAQ → CTA → closing technical link → FAQ JSON-LD `<script>`. AC5 needs the closing link to be the last non-JSON-LD line.
+- **Search phrase.** Use "idea parking lot" once within the first 100 words, and define it in one quotable sentence. Then show that the four-place sort adds the "forgotten" check a plain parking lot lacks. That phrase is the one founders actually search for; "parked vs forgotten" has no measurable volume (growth-strategist). Secondary phrases for the body only: "too many ideas", "decision log".
+- **Inline contextual link (not a CTA).** Link one phrase in section 5, such as "the rest of the company", to `/blog/how-to-run-every-department-with-ai-agents/`. Keep "agent" out of the link text and do not phrase it as a next step. `validate-blog-links.sh` checks that it resolves.
+- **Do not set `pillar:`.** It requires a `pillars.js` entry, which is outside this diff. `ogImageAlt` is optional, e.g. "Four outlined containers holding ideas, with stray ones drifting away".
 - **Closing technical link: the last line, below the CTA, and the only place a PR number may appear.** "For the technical write-up, see [how we fixed it](https://github.com/jikig-ai/soleur/pull/8536)."
 - **Length:** about 1,100-1,600 words. The issue's 1,500-2,000 target assumed the retrospective framing that the handoff drops.
 - **Hard exclusions** from every reader-visible line (title, headings, body, FAQ, tag chips):
@@ -245,7 +293,7 @@ Run `soleur:social-distribute` on the post. It writes `knowledge-base/marketing/
 1. "From the outside, a parked idea and a forgotten one look exactly the same. That's how solo founders end up re-arguing settled decisions and quietly losing good ones."
 2. "2/ Every idea belongs in one of four places. Now. Later, chosen on purpose. Not defined yet: you can't say what question it answers. Decided against, with one line on why."
 3. "3/ Anything in none of the four wasn't parked. It was forgotten."
-4. "4/ I learned this the hard way. My AI team once pointed me at the wrong priority. It could see only about a quarter of our plan. Now it sees all of it, and says when it can't."
+4. "4/ I learned this the hard way. My AI team once pointed me at the wrong priority, and it could see only about a quarter of our current plan. No warning about either. Now it reads the whole plan, and says when it can't."
 5. "5/ How to sort your list this week, with a notebook, Notion or a spreadsheet:" plus the undated UTM URL `https://soleur.ai/blog/parked-vs-forgotten-ideas/?utm_source=x&utm_medium=social&utm_campaign=parked-vs-forgotten-ideas` and `#solofounder`.
 
 Every posted URL uses the **undated** slug with an absolute `https://soleur.ai`. `validate-blog-links.sh` and `distribution-content-format.test.ts` both check this.
@@ -267,7 +315,7 @@ Replace the #8548 Pillar-2 row and the rolling-calendar entry in `knowledge-base
 - the new title and slug;
 - audience: non-technical solo founders;
 - hook: parked and forgotten ideas look the same;
-- proof: "about a quarter of our plan";
+- proof: "about a quarter of our current plan";
 - CTA: the site primary CTA;
 - channels: blog, plus an X thread, Discord, Bluesky and both LinkedIn pages at the first publisher run after go-live, with **no Hacker News**;
 - status: published on merge date, with a link to the post.
@@ -309,7 +357,8 @@ Pipeline-written files the diff will also carry: `knowledge-base/project/plans/<
   - `--path plugins/soleur/docs/blog/<YYYY-MM-DD>-parked-vs-forgotten-ideas.md`.
 - Its Phase 2.4 runs `blog-jargon-scan.sh`, and the draft must end with `SCAN_RC=0`.
 - Its Phase 2.5 runs `soleur:marketing:fact-checker`. Every claim must come back PASS or SOURCED:
-  - "about a quarter of our plan" → PR #8536 body;
+  - "about a quarter of our current plan" (the current phase) → PR #8536 body;
+  - the wrong pick and the limit stated as separate defects → PR #8536 body;
   - the four places and their test → PR #8536 and `NOTICE`;
   - the Matt Pocock credit → the repo URL.
 - Apply the hard-exclusion list by hand after the scan. The scan detects only a fixed subset.
