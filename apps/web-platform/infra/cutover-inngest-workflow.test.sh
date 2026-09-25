@@ -3751,6 +3751,7 @@ done
 
 # Workflow shape: a boolean input defaulting to false, mapped into env exactly once. The awk is
 # scoped to the input's own block: an unscoped grep is satisfied by any other boolean input.
+# shellcheck disable=SC2034  # read inside assert's eval
 MTR_INPUT_BLOCK=$(awk '/^      missed_tick_candidates:$/{f=1;next} f&&/^      [a-z_]+:$/{exit} f&&/^  [^ ]/{exit} f' "$WF_YAML")
 assert "#6939 input missed_tick_candidates is type: boolean" "grep -qE '^[[:space:]]+type:[[:space:]]*boolean\$' <<<\"\$MTR_INPUT_BLOCK\""
 assert "#6939 input missed_tick_candidates defaults to false" "grep -qE '^[[:space:]]+default:[[:space:]]*false\$' <<<\"\$MTR_INPUT_BLOCK\""
@@ -3785,6 +3786,7 @@ MTR_CASES=0
 mtr_run() {  # $1 gate  $2 body-json  $3 win-from  $4 win-until  -> $MTR_OUT, $MTR_RC
   MTR_CASES=$((MTR_CASES + 1))
   set +e
+  # shellcheck source=/dev/null  # the extracted missed_tick_report() body
   ( cd "$MTR_CWD"; set -euo pipefail; source "$MTR_FN"; missed_tick_report "$1" "$2" 3600 "$3" "$4" ) > "$MTR_OUT" 2>&1
   MTR_RC=$?
   set -e
