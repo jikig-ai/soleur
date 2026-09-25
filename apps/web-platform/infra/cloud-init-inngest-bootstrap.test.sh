@@ -1136,7 +1136,9 @@ assert "G1b: no soleur-boot-emit call is backgrounded (it could outlive cloud-fi
 wf_block() { awk -v p="  - path: $1" '$0==p{f=1;print;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI_YML"; }
 # Computed into variables BEFORE the asserts, never as `$(wf_block …)` inside the eval'd
 # condition: that would expand at the call site and splice block text into the eval string.
+# shellcheck disable=SC2034  # both are read inside assert's eval'd condition strings
 WF_EMIT="$(wf_block /usr/local/bin/soleur-boot-emit)"
+# shellcheck disable=SC2034
 WF_DSN="$(wf_block /etc/default/soleur-sentry-dsn)"
 assert "G1b: write_files delivers /usr/local/bin/soleur-boot-emit 0755" \
   "grep -qxF \"    permissions: '0755'\" <<<\"\$WF_EMIT\""
