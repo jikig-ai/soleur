@@ -26,6 +26,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS conversations_engine_binding_state_insert ON public.conversations;
 CREATE TRIGGER conversations_engine_binding_state_insert
   BEFORE INSERT ON public.conversations
   FOR EACH ROW EXECUTE FUNCTION public.guard_conversation_engine_binding_state();

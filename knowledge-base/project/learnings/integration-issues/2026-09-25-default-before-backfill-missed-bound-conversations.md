@@ -24,6 +24,11 @@ without explicit transaction commands, so its body and ledger INSERT share
 one transaction. Older migrations with their own `COMMIT` still need a
 separate audit.
 
+The repair must stay safe under a partial rollback. The paired down file
+leaves the stricter guard in place and keeps corrected rows bound; forward
+reapplication replaces its INSERT trigger in the same transaction. The 141
+down file drops that trigger if the entire binding feature is rolled back.
+
 ## Session command errors
 
 - The worktree manager returned a usage error for `--help`; its help entry is
@@ -39,3 +44,7 @@ separate audit.
 - The issue filing hook could not inspect a `--body-file` created in the same
   shell command as `gh issue create`. Write the body in a separate tool step,
   then invoke `gh` so the hook can inspect it.
+- An `apply_patch` request tried to delete and add the same file in one patch;
+  the tool rejected that shape. Use one update operation for a full rewrite.
+- A later learning edit used the wrong line wrap in its patch context and
+  failed to apply. Re-read the target before retrying a context-sensitive edit.
