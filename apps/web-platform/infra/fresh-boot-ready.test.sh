@@ -29,7 +29,7 @@ no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 # Deliberately-nonzero grep in a command substitution must not trip anything: read FILES directly,
 # never `producer | grep -q` (SIGPIPE early-match fail-open under pipefail — 2026-07-18 learning).
 # `line_of <file> <literal>` → first 1-indexed line number of an exact-substring match, or empty.
-line_of() { { grep -nF -- "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; } || true; }
+line_of() { { grep -nF -- "$2" "$1" 2>/dev/null | sed -n '1p' | cut -d: -f1; } || true; }
 
 # ─────────────────────────────── (A) STRUCTURAL ───────────────────────────────
 
@@ -57,12 +57,12 @@ else
 fi
 
 # S3: DUAL-CHANNEL emit — a local journald breadcrumb (logger) AND a Sentry event (soleur-boot-emit).
-if printf '%s\n' "$HELPER" | grep -qE 'logger -t SOLEUR_FRESH_BOOT_READY'; then
+if printf '%s\n' "$HELPER" | grep -cE 'logger -t SOLEUR_FRESH_BOOT_READY' >/dev/null; then
   ok "S3a: emits the SOLEUR_FRESH_BOOT_READY journald breadcrumb via logger -t"
 else
   no "S3a: helper must 'logger -t SOLEUR_FRESH_BOOT_READY' (local journald breadcrumb)"
 fi
-if printf '%s\n' "$HELPER" | grep -qE 'soleur-boot-emit'; then
+if printf '%s\n' "$HELPER" | grep -cE 'soleur-boot-emit' >/dev/null; then
   ok "S3b: emits to Sentry via the baked soleur-boot-emit (Vector-independent backup)"
 else
   no "S3b: helper must call soleur-boot-emit (always-available Sentry channel)"
@@ -73,37 +73,37 @@ fi
 # best-effort: guarded on BOTH creds being present so an unprovisioned host degrades, never aborts.
 # The curl is transport-confined (#7797): `--disable` first so ~/.curlrc is never parsed, and
 # `--noproxy '*'` so a proxy env var cannot redirect the bearer.
-if printf '%s\n' "$HELPER" | grep -qF "curl --disable --noproxy '*' -fsS"; then
+if printf '%s\n' "$HELPER" | grep -cF "curl --disable --noproxy '*' -fsS" >/dev/null; then
   ok "S4a: Better Stack delivery uses direct, transport-confined curl -fsS (Vector-independent)"
 else
   no "S4a: helper must post to Better Stack via curl --disable --noproxy '*' -fsS (not through Vector)"
 fi
 # S4d: the bearer goes only to the pinned destination, and the pin equals the Terraform literal
 # the web host is rendered with (zot-registry.tf local.betterstack_logs_ingest_url).
-TF_INGEST=$(sed -n 's/^[[:space:]]*betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/zot-registry.tf" | head -1)
+TF_INGEST=$(sed -n 's/^[[:space:]]*betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/zot-registry.tf" | sed -n '1p')
 if [ -n "$TF_INGEST" ] \
-  && printf '%s\n' "$HELPER" | grep -qxF "readonly INGEST_URL_PINNED=\"$TF_INGEST\"" \
-  && printf '%s\n' "$HELPER" | grep -qF '[ "$INGEST_URL" = "$INGEST_URL_PINNED" ]'; then
+  && printf '%s\n' "$HELPER" | grep -cxF "readonly INGEST_URL_PINNED=\"$TF_INGEST\"" >/dev/null \
+  && printf '%s\n' "$HELPER" | grep -cF '[ "$INGEST_URL" = "$INGEST_URL_PINNED" ]' >/dev/null; then
   ok "S4d: Better Stack post is gated on the pinned destination ($TF_INGEST)"
 else
   no "S4d: helper must pin INGEST_URL to zot-registry.tf's betterstack_logs_ingest_url (got '${TF_INGEST:-unparsed}')"
 fi
-if printf '%s\n' "$HELPER" | grep -qE 'BETTERSTACK_LOGS_TOKEN' && printf '%s\n' "$HELPER" | grep -qE 'BETTERSTACK_INGEST_URL'; then
+if printf '%s\n' "$HELPER" | grep -cE 'BETTERSTACK_LOGS_TOKEN' >/dev/null && printf '%s\n' "$HELPER" | grep -cE 'BETTERSTACK_INGEST_URL' >/dev/null; then
   ok "S4b: reads BETTERSTACK_LOGS_TOKEN + BETTERSTACK_INGEST_URL from env"
 else
   no "S4b: helper must read BETTERSTACK_LOGS_TOKEN and BETTERSTACK_INGEST_URL"
 fi
 # best-effort guard: the curl must be gated on non-empty creds (no hard failure when unprovisioned).
-if printf '%s\n' "$HELPER" | grep -qE '\[ -n "\$(BS_?)?TOKEN' || printf '%s\n' "$HELPER" | grep -qE '\[ -n "\$TOKEN" \] && \[ -n "\$INGEST_URL" \]'; then
+if printf '%s\n' "$HELPER" | grep -cE '\[ -n "\$(BS_?)?TOKEN' >/dev/null || printf '%s\n' "$HELPER" | grep -cE '\[ -n "\$TOKEN" \] && \[ -n "\$INGEST_URL" \]' >/dev/null; then
   ok "S4c: Better Stack post is gated on non-empty creds (best-effort, degrades gracefully)"
 else
   no "S4c: the curl post must be guarded by a non-empty-creds test (best-effort)"
 fi
 
 # S5: the boot-window timeout is a QUANTIFIED integer (absence-detection deadline).
-win_line="$(printf '%s\n' "$HELPER" | grep -oE 'SOLEUR_FRESH_BOOT_WINDOW_SECONDS=[0-9]+' | head -1)"
+win_line="$(printf '%s\n' "$HELPER" | grep -oE 'SOLEUR_FRESH_BOOT_WINDOW_SECONDS=[0-9]+' | sed -n '1p')"
 win_val="${win_line##*=}"
-if printf '%s' "$win_val" | grep -qE '^[0-9]+$' && [ "${win_val:-0}" -ge 60 ]; then
+if printf '%s' "$win_val" | grep -cE '^[0-9]+$' >/dev/null && [ "${win_val:-0}" -ge 60 ]; then
   ok "S5: SOLEUR_FRESH_BOOT_WINDOW_SECONDS is a quantified integer ($win_val s)"
 else
   no "S5: expected a quantified integer SOLEUR_FRESH_BOOT_WINDOW_SECONDS>=60 (got '${win_val:-}')"
@@ -112,7 +112,7 @@ fi
 # S6: the emitted LINE carries the full readiness field set (parseable marker).
 missing=""
 for field in "SOLEUR_FRESH_BOOT_READY ready=" "stage=cloud_init_complete" "token=" "vector=" "volume=" "luks=" "reason=" "boot_window_s="; do
-  printf '%s\n' "$HELPER" | grep -qF -- "$field" || missing="$missing '$field'"
+  printf '%s\n' "$HELPER" | grep -cF -- >/dev/null "$field" || missing="$missing '$field'"
 done
 if [ -z "$missing" ]; then
   ok "S6: the marker LINE carries ready/stage/token/vector/volume/luks/reason/boot_window_s"
@@ -136,14 +136,14 @@ fi
 
 # S8: the token is fetched from Doppler INSIDE the baked helper (0 user_data, no hardcoded token),
 # and the call site never aborts the boot.
-if printf '%s\n' "$HELPER" | grep -qE 'doppler secrets get BETTERSTACK_LOGS_TOKEN'; then
+if printf '%s\n' "$HELPER" | grep -cE 'doppler secrets get BETTERSTACK_LOGS_TOKEN' >/dev/null; then
   ok "S8a: baked helper sources BETTERSTACK_LOGS_TOKEN from Doppler (0 user_data, no hardcoded token)"
 else
   no "S8a: helper must fetch BETTERSTACK_LOGS_TOKEN via 'doppler secrets get' (baked)"
 fi
 # the marker is observability, not a gate — the call site must not let it abort the runcmd.
 ci_marker_region="$(awk '/soleur-fresh-boot-ready/{print} ' "$CI")"
-if printf '%s\n' "$ci_marker_region" | grep -qE '\|\| true'; then
+if printf '%s\n' "$ci_marker_region" | grep -cE '\|\| true' >/dev/null; then
   ok "S8b: marker invocation is '|| true' (never aborts the boot)"
 else
   no "S8b: the soleur-fresh-boot-ready call site must be suffixed '|| true'"
@@ -157,14 +157,14 @@ else
 fi
 
 # S10: NO ssh anywhere in the new readiness surface (discoverability_test has NO ssh — plan 1.2).
-if printf '%s\n' "$HELPER" | grep -qE '(^|[^[:alnum:]])ssh '; then
+if printf '%s\n' "$HELPER" | grep -cE '(^|[^[:alnum:]])ssh ' >/dev/null; then
   no "S10: the fresh-boot readiness helper must not invoke ssh"
 else
   ok "S10: no ssh in the fresh-boot readiness helper"
 fi
 
 # S11: the helper always exits 0 (pure observability marker — never poweroffs a running host).
-if printf '%s\n' "$HELPER" | grep -qE '^exit 0$'; then
+if printf '%s\n' "$HELPER" | grep -cE '^exit 0$' >/dev/null; then
   ok "S11: helper ends 'exit 0' (observability marker, not a gate)"
 else
   no "S11: helper must end with 'exit 0' (always-0 like soleur-boot-emit)"
@@ -210,8 +210,8 @@ STUB
     WEBHOOK_ENV_FILE="$envfile" WORKSPACES_MOUNT="/whatever" LUKS_MAPPER="$mapper" \
     FBR_MOUNTED="${FBR_MOUNTED:-0}" FBR_VECTOR_ACTIVE="${FBR_VECTOR_ACTIVE:-0}" \
     sh -c "$HELPER" >/dev/null 2>&1 )
-  local got; got="$(cat "$cap" 2>/dev/null | grep -F 'SOLEUR_FRESH_BOOT_READY' | head -1)"
-  if printf '%s' "$got" | grep -qF -- "$expect"; then
+  local got; got="$(cat "$cap" 2>/dev/null | grep -F 'SOLEUR_FRESH_BOOT_READY' | sed -n '1p')"
+  if printf '%s' "$got" | grep -cF -- >/dev/null "$expect"; then
     ok "B: $label → '$expect'"
   else
     no "B: $label → expected '$expect', got: ${got:-<no marker emitted>}"

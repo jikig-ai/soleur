@@ -109,8 +109,8 @@ fi
 # --- 3. The preamble must precede the procedure it corrects. ---
 # This is the defect the preamble exists to fix: a correction BELOW the
 # procedure is not a correction. Line-number comparison is the property.
-pre_ln=$(grep -nF 'READ THIS BEFORE `### Procedure`' "$RUNBOOK" | head -1 | cut -d: -f1)
-proc_ln=$(grep -nE '^### Procedure' "$RUNBOOK" | head -1 | cut -d: -f1)
+pre_ln=$(grep -nF 'READ THIS BEFORE `### Procedure`' "$RUNBOOK" | sed -n '1p' | cut -d: -f1)
+proc_ln=$(grep -nE '^### Procedure' "$RUNBOOK" | sed -n '1p' | cut -d: -f1)
 if [[ -n "$pre_ln" && -n "$proc_ln" && "$pre_ln" -lt "$proc_ln" ]]; then
   pass "the acts 0-4 preamble (line ${pre_ln}) precedes ### Procedure (line ${proc_ln})"
 else
@@ -125,7 +125,7 @@ bare=0
 for f in "$RUNBOOK" "$WORKFLOW" "$MODEL"; do
   while IFS= read -r hit; do
     [[ -n "$hit" ]] || continue
-    if ! printf '%s' "$hit" | grep -qiE 'four|, or four|not one|rationale'; then
+    if ! printf '%s' "$hit" | grep -ciE 'four|, or four|not one|rationale' >/dev/null; then
       fail "bare act count with no conditional-fourth qualifier in $(basename "$f"): ${hit:0:90}"
       bare=$((bare + 1))
     fi
@@ -140,12 +140,12 @@ done
 # it. Scope to the acts block so a mention elsewhere in the runbook cannot stand
 # in for the precondition being IN the rollback path.
 acts_block=$(awk '/READ THIS BEFORE `### Procedure`/,/^### The merge path is the only path/' "$RUNBOOK")
-if printf '%s' "$acts_block" | grep -qF 'seo-config-rules.tf'; then
+if printf '%s' "$acts_block" | grep -cF 'seo-config-rules.tf' >/dev/null; then
   pass "the acts 0-4 block names seo-config-rules.tf as the act-0 precondition"
 else
   fail "the acts 0-4 block no longer names the ssl=full precondition file (act 0)"
 fi
-if printf '%s' "$acts_block" | grep -qF '526'; then
+if printf '%s' "$acts_block" | grep -cF '526' >/dev/null; then
   pass "the acts 0-4 block states the HTTP 526 consequence of a missing act 0"
 else
   fail "the acts 0-4 block no longer states the 526 consequence"

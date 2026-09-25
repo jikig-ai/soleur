@@ -705,6 +705,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh — same class as
+# the ci.yml sibling above; declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_SCRIPT_TESTS_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
+  ".github/workflows"
+  ".github/workflows/infra-validation.yml"
+  "plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/concurrent-ship.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(

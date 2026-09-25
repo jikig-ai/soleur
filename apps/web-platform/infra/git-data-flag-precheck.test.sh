@@ -27,7 +27,7 @@
 # Seams of the SUITE: GDC_PRECHECK (the script), GDC_WORKFLOW (git-data-cutover.yml).
 #
 # Run: bash apps/web-platform/infra/git-data-flag-precheck.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -380,8 +380,11 @@ check("G1-census: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d 
       len(steps) >= 1 and sites == [("step", "flag_precheck")], sites)
 iv = yaml.safe_load(open(iv_path))
 ivsteps = [s for j in (iv.get("jobs") or {}).values() for s in (j.get("steps") or [])]
-mine = [s for s in ivsteps if isinstance(s.get("run"), str) and s["run"].strip() == "bash apps/web-platform/infra/git-data-flag-precheck.test.sh"]
-check("AC10: infra-validation.yml runs this suite in exactly one step with no if:/continue-on-error",
+# Since #8736 this suite is registered by PRESENCE (the deploy-script-tests
+# legs glob-derive it), so the step under test is the legs' runner invocation —
+# one step definition (the matrix fans it out), unmasked.
+mine = [s for s in ivsteps if isinstance(s.get("run"), str) and s["run"].strip() == "bash apps/web-platform/infra/run-registered-suites.sh"]
+check("AC10: infra-validation.yml's legs invoke the suite runner in exactly one step with no if:/continue-on-error",
       len(mine) == 1 and "if" not in mine[0] and not mine[0].get("continue-on-error"), len(mine))
 print("\n".join(out))
 PY

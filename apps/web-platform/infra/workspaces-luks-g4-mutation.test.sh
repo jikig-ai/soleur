@@ -113,9 +113,9 @@ command -v python3 >/dev/null 2>&1 || skip "python3 required — it is the rsync
 SCRATCH="$(mktemp -d)"        # never a fixed /tmp name: parallel worktrees are normal here
 trap 'rm -rf "$SCRATCH"' EXIT
 
-COREUTILS_VENDOR="$(stat --version 2>/dev/null | head -1 || echo unknown)"
+COREUTILS_VENDOR="$(stat --version 2>/dev/null | sed -n '1p' || echo unknown)"
 note "coreutils in use: ${COREUTILS_VENDOR}"
-note "rsync in use: $(rsync --version 2>/dev/null | head -1)"
+note "rsync in use: $(rsync --version 2>/dev/null | sed -n '1p')"
 
 stat -c %y -- "$SCRATCH" >/dev/null 2>&1 || skip "'stat -c %y' unsupported — the ns read-back cannot be measured here"
 mkdir -p "$SCRATCH/.cap"
@@ -837,7 +837,7 @@ fi
 # missing anchor rather than yielding '' into an arithmetic comparison that would silently pass.
 ln_of() {
   local name="$1" pat="$2" v
-  v="$(grep -nE -- "$pat" "$FUNC" | head -1 | cut -d: -f1)"
+  v="$(grep -nE -- "$pat" "$FUNC" | sed -n '1p' | cut -d: -f1)"
   if [ -z "$v" ]; then
     fail "C-order: ANCHOR MISSING for '$name' (/$pat/) — the ordering assertions that depend on it cannot run and must not report green"
     return 1
@@ -984,10 +984,10 @@ fi
 
 # Entrypoint coupling (task 5.10): the perturbing call must sit between the pass-2 write and C1.
 # shellcheck disable=SC2016
-p2_ln="$(grep -nE -- '^[[:space:]]*rsync -aHAX --numeric-ids --delete --checksum "\$MOUNT"/ "\$STAGING"/' "$BODY_NC" | head -1 | cut -d: -f1)"
-q_ln="$(grep -nE -- '^[[:space:]]*assert_mount_quiesced pre-verify$' "$BODY_NC" | head -1 | cut -d: -f1)"
+p2_ln="$(grep -nE -- '^[[:space:]]*rsync -aHAX --numeric-ids --delete --checksum "\$MOUNT"/ "\$STAGING"/' "$BODY_NC" | sed -n '1p' | cut -d: -f1)"
+q_ln="$(grep -nE -- '^[[:space:]]*assert_mount_quiesced pre-verify$' "$BODY_NC" | sed -n '1p' | cut -d: -f1)"
 # shellcheck disable=SC2016
-v_ln="$(grep -nE -- '^[[:space:]]*verify_byte_identity "\$MOUNT" "\$STAGING"$' "$BODY_NC" | head -1 | cut -d: -f1)"
+v_ln="$(grep -nE -- '^[[:space:]]*verify_byte_identity "\$MOUNT" "\$STAGING"$' "$BODY_NC" | sed -n '1p' | cut -d: -f1)"
 if [ -n "$p2_ln" ] && [ -n "$q_ln" ] && [ -n "$v_ln" ] && [ "$p2_ln" -lt "$q_ln" ] && [ "$q_ln" -lt "$v_ln" ]; then
   ok "C-path: 'assert_mount_quiesced pre-verify' (line $q_ln) sits BETWEEN the pass-2 rsync (line $p2_ln) and C1 (line $v_ln) — Part B exercises the real abort path"
 else
