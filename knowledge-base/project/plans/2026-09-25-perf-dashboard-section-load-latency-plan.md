@@ -271,7 +271,7 @@ exception:
 - `apps/web-platform/app/(dashboard)/dashboard-shell.tsx` — `"use client"` island holding today's layout body verbatim
 - `apps/web-platform/components/dashboard/payment-warning-banner.tsx` — moved verbatim out of `layout.tsx` (test import paths updated)
 - `apps/web-platform/test/server/request-auth.test.ts` — header-present/header-absent/spoofed-header cases (satisfies `test/**/*.test.ts` vitest glob)
-- `knowledge-base/engineering/architecture/decisions/ADR-0253-*.md` — the verdict-caching + identity-header ADR
+- `knowledge-base/engineering/architecture/decisions/ADR-253-*.md` — the verdict-caching + identity-header ADR
 - `knowledge-base/product/design/dashboard/dashboard-load-states.pen` — committed this session
 
 ## Implementation Phases

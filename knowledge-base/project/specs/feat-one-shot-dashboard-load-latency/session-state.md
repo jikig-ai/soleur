@@ -20,3 +20,26 @@
 
 ### Components Invoked
 - soleur:plan (inline, all phases), soleur:deepen-plan (inline, two rounds), scripts/lint-guard-contract.py, markdownlint-cli2, gh issue/PR verification, curl production probes.
+
+## Work Phase
+- Status: implementation complete; pre-commit battery in progress (run 3 — prior runs queued ~40min behind sibling session batteries and failed on 5 test-layer findings, all fixed inline)
+- Execution: Tier-0 lifecycle parallelism — code agent + test agent from interface-contract.md; ux-design-lead implementation brief consumed for Phase 4/6 render semantics
+- Tier-0 artifacts: interface-contract.md committed (35e728ea99); ADR-253 authored (ADR-0253→ADR-253 ordinal-naming fix applied after plugins/soleur check-adr-ordinals failure)
+
+### Implementation deltas vs plan
+- lib/feature-flags/server.ts also edited (contract gap — Identity/ANON_IDENTITY live there, not identity.ts)
+- Foundation shimmer condition = `foundationData === undefined && !foundationErr && conversations.length > 0` (`!foundationErr` added — error must not pin shimmer)
+- command-center-empty branch gains `!loading` (ux brief recommendation — "No conversations yet" must not flash while list in flight)
+- isAdmin guarded on non-null userId (closes ADMIN_USER_IDS="" anonymous-match edge)
+- page.tsx orphan-count SWR fetcher getUser→getSession (same Phase-5 defect class, plan-silent)
+- VerifiedUser named type exported from request-auth.ts; 10 consumer signatures + 2 shared handler factories narrowed
+- Identity literals across 9 server/route files + test fixtures gained explicit `email: null, subscriptionStatus: null` (type widening fallout — plan claimed "existing consumers unaffected" which held only for readers, not constructors)
+
+### Battery-run fixes (pre-commit red)
+- matcher-coverage.test.ts: `**/` inside a /* */ JSDoc comment self-terminated the block (regex/template cascade) — rewrote as // lines
+- ADR-0253 → ADR-253 (ordinal convention is unpadded)
+- update-status.test.tsx: added getSession mock + SwrTestProvider wrap (missed by repair pass)
+- sentry-scope-isolation.test.ts + with-user-rate-limit.test.ts + request-auth.test.ts: addBreadcrumb added to @sentry/nextjs mocks
+- billing-enforcement.test.ts AC5: distinct user id — positive-only tcRowCache legitimately serves warm pass through DB blip (cold-path contract is what AC5 pins)
+- conversations-rail-insert.test.tsx: unused `url` arg → `_url` (+1 over no-unused-vars baseline)
+- eslint-config ratchet: count now 74 ≤ baseline 74 (verified via full eslint -f json)

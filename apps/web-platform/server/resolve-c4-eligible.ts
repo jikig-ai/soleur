@@ -38,7 +38,7 @@ export async function resolveC4FlagEnabled(userId: string): Promise<boolean> {
     .eq("id", userId)
     .single<{ role: unknown }>();
   const role: Role = roleRow?.role === "dev" ? "dev" : "prd";
-  return getRuntimeFlag(C4_VISUALIZER_FLAG, { userId, role, orgId: null });
+  return getRuntimeFlag(C4_VISUALIZER_FLAG, { userId, role, orgId: null, email: null, subscriptionStatus: null });
 }
 
 /**

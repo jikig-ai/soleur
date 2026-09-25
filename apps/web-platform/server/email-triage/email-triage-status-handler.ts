@@ -26,7 +26,7 @@
  */
 
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import { createClient } from "@/lib/supabase/server";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -41,7 +41,7 @@ const OP_BY_STATUS = {
 export function makeEmailTriageStatusHandler(
   status: "acknowledged" | "archived",
 ) {
-  return async function postHandler(req: Request, user: User) {
+  return async function postHandler(req: Request, user: VerifiedUser) {
     // Path shape: /api/inbox/emails/<id>/<verb>
     const segments = new URL(req.url).pathname.split("/").filter(Boolean);
     const id = segments.at(-2) ?? "";

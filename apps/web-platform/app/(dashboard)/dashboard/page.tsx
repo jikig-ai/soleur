@@ -141,8 +141,10 @@ export default function DashboardPage() {
   // ---------------------------------------------------------------------------
 
   // ADR-067: cache the foundation status so returning to the dashboard renders
-  // instantly. The skeleton gates on `foundationData === undefined && !err`
-  // (GAP F) — a warm remount keeps it defined, so the skeleton never re-shows.
+  // instantly. A warm remount keeps `foundationData` defined, so the render
+  // branches below take their resolved shapes immediately (GAP F) — the fetch
+  // no longer gates the page at all (#5654); it only feeds foundation-card
+  // checkmarks and the vision-existence predicates.
   // This is a targeted stat of ~10 known paths, not a whole-tree walk, so it
   // resolves far faster than the old /api/kb/tree buildTree() consumer.
   const fetchFoundationStatus = useCallback(async (): Promise<{
@@ -173,8 +175,6 @@ export default function DashboardPage() {
   // 401 (kind "redirect") holds the skeleton through the /login navigation.
   const isRedirecting401 =
     foundationErr instanceof DashFoundationError && foundationErr.kind === "redirect";
-  const kbLoading =
-    foundationData === undefined && (foundationErr === undefined || isRedirecting401);
   const kbError: "provisioning" | "error" | null =
     foundationErr instanceof DashFoundationError
       ? foundationErr.kind === "redirect"
@@ -245,12 +245,15 @@ export default function DashboardPage() {
     noActiveRepo ? swrKeys.dashboardOrphanCount() : null,
     async (): Promise<number> => {
       const supabase = createClient();
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) return 0;
+      // getSession() is the local cookie read — getUser() was a remote RTT
+      // for an id-only read (Phase 5 pattern; authorization stays RLS-side).
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionUserId = sessionData?.session?.user?.id;
+      if (!sessionUserId) return 0;
       const { count } = await supabase
         .from("conversations")
         .select("id", { count: "exact", head: true })
-        .eq("user_id", auth.user.id)
+        .eq("user_id", sessionUserId)
         .not("repo_url", "is", null);
       return count ?? 0;
     },
@@ -395,10 +398,15 @@ export default function DashboardPage() {
   const hasActiveFilter = statusFilter !== null || domainFilter !== null || archiveFilter !== "active";
 
   // ---------------------------------------------------------------------------
-  // Loading skeleton (shown while foundation status loads)
+  // Redirect-hold skeleton (foundation fetch bounced to /login)
   // ---------------------------------------------------------------------------
 
-  if (kbLoading) {
+  // Only the revocation-bounce hold keeps a whole-page skeleton — it exists to
+  // hold paint during the /login navigation. A merely-PENDING foundation
+  // fetch no longer gates the page (#5654): it falls through to the inbox
+  // structure below, and the first-run / command-center branches carry their
+  // own `foundationData !== undefined` guards so neither can flash early.
+  if (isRedirecting401) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <div className="mb-6 h-12 w-12 animate-pulse rounded-lg bg-amber-600/50" />
@@ -434,7 +442,23 @@ export default function DashboardPage() {
   // a mobile top-bar indicator is out of scope here — it needs its own
   // wireframe). A statutory clock is thus no longer hidden by the
   // conversation-less first-run screen on desktop, and is one tap away on mobile.
-  if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
+  //
+  // Gating (Phase 4, #5654): `foundationData !== undefined` — vision existence
+  // must be CONFIRMED, not defaulted-false while the fetch is pending (an
+  // existing user with a vision must never flash this screen); `!loading` —
+  // conversations must be resolved so a user WITH conversations never sees the
+  // first-run form while the list is in flight. The 2026-04-10 learning removed
+  // `!loading` here because mocked CI hangs stranded a Command-Center
+  // assertion — this re-add is deliberately narrow: a hung conversation fetch
+  // now yields the inbox section skeletons, not the wrong screen.
+  if (
+    foundationData !== undefined &&
+    !loading &&
+    !kbError &&
+    !visionExists &&
+    conversations.length === 0 &&
+    !hasActiveFilter
+  ) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-soleur-accent-gold-fg">
@@ -575,7 +599,10 @@ export default function DashboardPage() {
   // placeholder or suggested prompts depending on foundation status.
   // ---------------------------------------------------------------------------
 
-  if (conversations.length === 0 && !hasActiveFilter) {
+  // `foundationData !== undefined && !loading` — "No conversations yet" must
+  // not flash while the foundation fetch or the conversation list is still in
+  // flight; pending state falls through to the inbox shell below.
+  if (foundationData !== undefined && !loading && conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allTasksComplete ? "pt-10" : "justify-center"}`}>
         {/* Foundation + operational cards (hidden when all complete) */}
@@ -615,7 +642,10 @@ export default function DashboardPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Command Center — inbox (conversations exist)
+  // Command Center — inbox (conversations exist, OR still loading, OR
+  // foundation fetch pending). A foundation-error cold load (non-503:
+  // foundationData stays undefined forever, zero conversations) also lands on
+  // this inbox shell — accepted behavior per the Phase-4 render contract.
   // ---------------------------------------------------------------------------
 
   return (
@@ -656,6 +686,36 @@ export default function DashboardPage() {
           getIconPath={getIconPath}
           onIncompleteClick={handlePromptClick}
         />
+      )}
+
+      {/* Foundation-status pending: reserve FoundationSection's slot with a
+          fixed-height shimmer so its pop-in cannot shift the conversation
+          list (no-layout-shift invariant). Only while conversations are
+          already present (a resolved list with rows); a pending/errored
+          foundation fetch or an empty list renders no reservation.
+          Heights mirror FoundationSection's structure, measured from its
+          classnames — FOUNDATIONS heading (text-xs ≈16px + mb-2), the
+          description line (text-sm ≈20px + mb-4), and FoundationCards'
+          grid-cols-2 gap-3 md:grid-cols-4 cells (p-4 + h-5 avatar + text
+          rows ≈ 120px each, allCards-count cells — while pending every
+          card reads not-done so the worst-case grid is reserved). */}
+      {foundationData === undefined && !foundationErr && conversations.length > 0 && (
+        <div
+          data-testid="foundation-section-shimmer"
+          aria-hidden="true"
+          className="mb-6 animate-pulse"
+        >
+          <div className="mb-2 h-4 w-28 rounded bg-soleur-bg-surface-2" />
+          <div className="mb-4 h-5 w-72 max-w-full rounded bg-soleur-bg-surface-2" />
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {allCards.map((card) => (
+              <div
+                key={card.id}
+                className="h-[120px] rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50"
+              />
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Filter bar */}

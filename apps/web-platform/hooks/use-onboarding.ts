@@ -47,10 +47,14 @@ export function useOnboarding() {
     [],
   );
 
-  // Fetch onboarding state on mount, store user ID for later reuse
+  // Fetch onboarding state on mount, store user ID for later reuse.
+  // getSession() is the local cookie read — the former getUser() was a
+  // browser→Supabase RTT for an id-only read (Phase 5); authorization stays
+  // server-side (middleware + RLS).
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const user = session?.user;
       if (!user) {
         setOnboardingLoaded(true);
         return;

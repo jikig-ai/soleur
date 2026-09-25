@@ -1,6 +1,7 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 import { TC_EXEMPT_PATHS } from "@/lib/routes";
+import { TC_VERSION } from "@/lib/legal/tc-version";
 
 // Plan AC5 / AC10: middleware MUST NOT fail open on a Supabase
 // SELECT-tc_accepted_version error. On non-exempt paths, redirect to
@@ -25,12 +26,16 @@ const {
   mockRpc,
   mockFrom,
   mockReportSilentFallback,
+  mockTcSingle,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockGetSession: vi.fn(),
   mockRpc: vi.fn(),
   mockFrom: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  // Terminal spy for the users-table SELECT (T&C gate) — module-scoped so the
+  // "never cached" assertions can count invocations across requests.
+  mockTcSingle: vi.fn(),
 }));
 
 vi.mock("@supabase/ssr", () => ({
@@ -71,11 +76,12 @@ beforeEach(() => {
   mockRpc.mockResolvedValue({ data: null, error: null });
 
   // Default: users SELECT returns tcError != null (the "DB incident" shape).
-  const single = vi.fn().mockResolvedValue({
+  // The terminal spy is module-scoped so cache tests can count re-queries.
+  mockTcSingle.mockResolvedValue({
     data: null,
     error: { message: "ECONNRESET", code: "53000" },
   });
-  const eq = vi.fn().mockReturnValue({ single });
+  const eq = vi.fn().mockReturnValue({ single: mockTcSingle });
   const select = vi.fn().mockReturnValue({ eq });
   mockFrom.mockReturnValue({ select });
 });
@@ -125,5 +131,74 @@ describe("middleware tcError fail-closed (AC5 / AC10)", () => {
       expect.objectContaining({ message: "ECONNRESET" }),
       expect.objectContaining({ feature: "middleware" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// perf-dashboard-section-load-latency Guard 2 — the T&C verdict cache is
+// POSITIVE-ONLY: only rows satisfying `tc_accepted_version === TC_VERSION &&
+// subscription_status !== "unpaid"` may be stored. Errors and stale-version
+// rows must be re-computed per request, so fail-closed freshness is exact.
+// ---------------------------------------------------------------------------
+
+describe("T&C verdict cache — deny paths are never cached (Guard 2)", () => {
+  test("tcError → /accept-terms redirect on EVERY request (error never cached)", async () => {
+    const res1 = await middleware(makeRequest("/dashboard"));
+    const res2 = await middleware(makeRequest("/dashboard"));
+
+    for (const res of [res1, res2]) {
+      expect([307, 308]).toContain(res.status);
+      const loc = res.headers.get("location");
+      expect(loc, "redirect Location header missing").not.toBeNull();
+      expect(new URL(loc!).pathname).toBe("/accept-terms");
+      expect(new URL(loc!).searchParams.get("error")).toBe("db_unavailable");
+    }
+    // A cached error row would have skipped request 2's select entirely.
+    expect(mockTcSingle).toHaveBeenCalledTimes(2);
+  });
+
+  test("tc_accepted_version ≠ TC_VERSION is never cached — the next request re-queries", async () => {
+    mockTcSingle.mockResolvedValue({
+      data: { tc_accepted_version: "0.0.0-old", subscription_status: "active" },
+      error: null,
+    });
+
+    const res1 = await middleware(makeRequest("/dashboard"));
+    const res2 = await middleware(makeRequest("/dashboard"));
+
+    for (const res of [res1, res2]) {
+      expect(res.headers.get("location") ?? "").toContain("/accept-terms");
+    }
+    expect(mockTcSingle).toHaveBeenCalledTimes(2);
+  });
+
+  test("a user who just accepted T&C is not stale-bounced — the pre-acceptance row was never cached", async () => {
+    // Request 1 lands BEFORE acceptance commits (row still old-version →
+    // redirect, and crucially NOT stored). Request 2 sees the committed row —
+    // a cached old-version entry would stale-bounce this user for the TTL.
+    mockTcSingle
+      .mockResolvedValueOnce({
+        data: {
+          tc_accepted_version: "0.0.0-old",
+          subscription_status: "active",
+        },
+        error: null,
+      })
+      .mockResolvedValue({
+        data: {
+          tc_accepted_version: TC_VERSION,
+          subscription_status: "active",
+        },
+        error: null,
+      });
+
+    const res1 = await middleware(makeRequest("/dashboard"));
+    expect(res1.headers.get("location") ?? "").toContain("/accept-terms");
+
+    const res2 = await middleware(makeRequest("/dashboard"));
+    expect(mockTcSingle).toHaveBeenCalledTimes(2);
+    // Passthrough: no redirect to /accept-terms once the fresh row is read.
+    expect(res2.headers.get("location") ?? "").not.toContain("/accept-terms");
+    expect(res2.headers.get("location") ?? "").not.toContain("/login");
   });
 });

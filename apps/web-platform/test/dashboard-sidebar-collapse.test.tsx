@@ -67,7 +67,10 @@ vi.mock("@/hooks/use-team-names", () => ({
   useTeamNames: () => createUseTeamNamesMock(),
 }));
 
-import DashboardLayout from "@/app/(dashboard)/layout";
+// Phase 6: the (dashboard) layout is an async server component feeding the
+// client DashboardShell — tests render the shell directly with the props the
+// layout used to resolve via mount effects (admin check + users row).
+import { DashboardShell } from "@/app/(dashboard)/dashboard-shell";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 
 // happy-dom does not provide window.matchMedia by default, but ThemeProvider
@@ -109,7 +112,7 @@ describe("Dashboard sidebar collapse", () => {
   // Both collapse/expand affordances are present: the floated « toggle button
   // AND the resize slider. (The full-hide 0px control was removed.)
   it("renders both the collapse toggle button and the resize slider", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
     expect(screen.getByLabelText("Resize sidebar")).toBeInTheDocument();
     // Full-hide is gone — no "Hide sidebar" / "Show sidebar" controls remain.
@@ -119,7 +122,7 @@ describe("Dashboard sidebar collapse", () => {
 
   // The « toggle button collapses/expands; its aria-label flips with state.
   it("toggles collapse when the « toggle button is clicked", () => {
-    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     const aside = asideOf(container);
     expect(isExpanded(aside)).toBe(true);
     fireEvent.click(screen.getByLabelText("Collapse sidebar"));
@@ -130,7 +133,7 @@ describe("Dashboard sidebar collapse", () => {
 
   // The toggle glyph rotates 180° (« → ») when collapsed so it reads as "expand".
   it("rotates the toggle glyph when collapsed", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     const expandedGlyph = screen.getByLabelText("Collapse sidebar").querySelector("svg");
     expect(expandedGlyph?.getAttribute("class") ?? "").not.toContain("rotate-180");
     fireEvent.click(screen.getByLabelText("Collapse sidebar"));
@@ -140,7 +143,7 @@ describe("Dashboard sidebar collapse", () => {
 
   // Double-clicking the slider also toggles collapse (second affordance).
   it("toggles collapse when the resize slider is double-clicked", () => {
-    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     const aside = asideOf(container);
     expect(isExpanded(aside)).toBe(true);
     fireEvent.doubleClick(screen.getByLabelText("Resize sidebar"));
@@ -150,7 +153,7 @@ describe("Dashboard sidebar collapse", () => {
   });
 
   it("adds title attributes to nav links when collapsed", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(screen.getByTitle("Dashboard")).toBeInTheDocument();
     expect(screen.getByTitle("Knowledge Base")).toBeInTheDocument();
@@ -158,18 +161,18 @@ describe("Dashboard sidebar collapse", () => {
   });
 
   it("does not show title attributes when expanded", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     expect(screen.queryByTitle("Dashboard")).not.toBeInTheDocument();
   });
 
   it("persists collapse state to localStorage", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(localStorage.getItem("soleur:sidebar.main.collapsed")).toBe("1");
   });
 
   it("toggles sidebar on Cmd+B when on /dashboard", () => {
-    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     const aside = asideOf(container);
     expect(isExpanded(aside)).toBe(true);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
@@ -177,7 +180,7 @@ describe("Dashboard sidebar collapse", () => {
   });
 
   it("toggles sidebar on Ctrl+B when on /dashboard", () => {
-    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     const aside = asideOf(container);
     fireEvent.keyDown(document, { key: "b", ctrlKey: true });
     expect(isCollapsed(aside)).toBe(true);
@@ -188,7 +191,7 @@ describe("Dashboard sidebar collapse", () => {
   // previously suppressed it there are gone).
   it("DOES toggle the single rail on Cmd+B when on /dashboard/kb route", () => {
     mockPathname = "/dashboard/kb/some-file";
-    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     const aside = asideOf(container);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(isCollapsed(aside)).toBe(true);
@@ -196,7 +199,7 @@ describe("Dashboard sidebar collapse", () => {
 
   it("DOES toggle the single rail on Cmd+B when on /dashboard/settings route", () => {
     mockPathname = "/dashboard/settings/team";
-    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     const aside = asideOf(container);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(isCollapsed(aside)).toBe(true);
@@ -204,7 +207,7 @@ describe("Dashboard sidebar collapse", () => {
 
   it("DOES toggle the single rail on Cmd+B when on /dashboard/chat route", () => {
     mockPathname = "/dashboard/chat/abc-123";
-    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}><div>content</div></DashboardShell></Wrap>);
     const aside = asideOf(container);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(isCollapsed(aside)).toBe(true);
@@ -213,9 +216,9 @@ describe("Dashboard sidebar collapse", () => {
   it("ignores Cmd+B when focus is in an input element", () => {
     const { container } = render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <input data-testid="test-input" />
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     const aside = asideOf(container);
@@ -227,9 +230,9 @@ describe("Dashboard sidebar collapse", () => {
   it("ignores Cmd+B when focus is in a textarea", () => {
     const { container } = render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <textarea data-testid="test-textarea" />
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     const aside = asideOf(container);
