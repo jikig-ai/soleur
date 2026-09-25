@@ -517,12 +517,17 @@ _inngest_server_created_epoch() {
   return 0
 }
 
-# _current_instance_row_counts <floor_epoch_s> — PURE. Raw Better Stack rows on stdin; prints ONE
-# line of six integers: <rows> <counted> <host_pair> <pre_floor> <malformed> <skew_suspect> — or
-# __UNREADABLE__ for a non-decimal floor, or nothing if jq itself fails (the caller warns on both).
-#   rows          decoded row objects returned, from ANY host (the read is capped at --limit 50,
-#                 newest first, so 50 means the window was truncated)
-#   host_pair     rows whose decoded .raw carries host == $INNGEST_HOST and host_name == $INNGEST_HOST_NAME
+# _current_instance_row_counts <floor_epoch_s> <tag> — PURE. Raw Better Stack rows on stdin; prints
+# ONE line of six integers: <rows> <counted> <host_pair> <pre_floor> <malformed> <skew_suspect> — or
+# __UNREADABLE__ for a non-decimal floor or an empty tag, or nothing if jq itself fails (the caller
+# warns on all three).
+#   rows          decoded row objects returned, from ANY host and ANY emitter (the read is capped at
+#                 --limit 50, newest first, so 50 means the window was truncated)
+#   host_pair     host-pair rows FROM THE EMITTER <tag>: decoded .raw carries host == $INNGEST_HOST,
+#                 host_name == $INNGEST_HOST_NAME AND SYSLOG_IDENTIFIER == <tag> (#8846). The
+#                 Better Stack --grep on the tag matches any row that QUOTES it — the inngest
+#                 server's own event log (emitter `doppler`) quotes it in webhook bodies ~22/day on
+#                 the same host pair — and such a row is not the FSM being alive.
 #   counted       host-pair rows whose event time >= floor AND whose ingest dt >= floor
 #   malformed     host-pair rows with a missing/non-decimal __REALTIME_TIMESTAMP or an unparseable dt
 #                 — excluded, never defaulted (a default is the widening direction)
@@ -532,15 +537,17 @@ _inngest_server_created_epoch() {
 #                 predecessor cannot produce one, so it points at the CURRENT server's clock
 # Counts only; never echoes a row.
 _current_instance_row_counts() {
-  local floor="${1:-}"
+  local floor="${1:-}" tag="${2:-}"
   case "$floor" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
-  jq -R -s -r --argjson f "$floor" --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" '
+  [[ -n "$tag" ]] || { printf '%s' '__UNREADABLE__'; return 0; }
+  jq -R -s -r --argjson f "$floor" --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" --arg t "$tag" '
     [ split("\n")[] | fromjson? | select(type == "object") ] as $all
     | [ $all[]
       | { dt: .dt, r: (.raw | if type == "string" then (fromjson? // null) else null end) }
       | select((.r | type) == "object" and .r.host == $h and .r.host_name == $hn)
+      | select(.r.SYSLOG_IDENTIFIER == $t)
       | { ts: (.r["__REALTIME_TIMESTAMP"]
                  | if type == "string" and test("\\A[0-9]+\\z") then (try tonumber catch null) else null end),
           dt: (.dt | if type == "string"
@@ -553,8 +560,11 @@ _current_instance_row_counts() {
   ' 2>/dev/null || true
 }
 
-# _generation_scoped_count <floor_epoch_s> <label> — raw rows on stdin; prints the COUNTED token
-# (or __UNREADABLE__) on stdout. On stderr: one ::notice:: carrying the six counters, and — when
+# _generation_scoped_count <floor_epoch_s> <label> <tag> — raw rows on stdin; prints the COUNTED
+# token (or __UNREADABLE__) on stdout. <tag> is the FSM's own emitter (its LOG_TAG, a literal at
+# every caller); only rows journald attributes to it count (#8846). An empty <tag> is a defect in
+# this script, so it refuses with its own warning rather than counting every emitter's rows.
+# On stderr: one ::notice:: carrying the six counters, and — when
 # nothing counted — at most one warning saying which counter explains it: skew_suspect > 0 (the
 # current server IS shipping, its clock is behind), malformed > 0 (rows lost their timestamps), or
 # a server under 600 s old (it has not shipped yet). Each says not to replace the server: a replace
@@ -562,11 +572,15 @@ _current_instance_row_counts() {
 # never lacks the ::warning:: it points at. Built only from validated integers and $INNGEST_HOST;
 # no string from any response reaches an annotation.
 _generation_scoped_count() {
-  local floor="${1:-}" label="${2:-liveness}" line r c p pf m k extra v now age iso
+  local floor="${1:-}" label="${2:-liveness}" tag="${3:-}" line r c p pf m k extra v now age iso
   case "$floor" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
-  line="$(_current_instance_row_counts "$floor")"
+  if [[ -z "$tag" ]]; then
+    echo "::warning::$label: liveness counter called without an emitter tag — a defect in cutover-inngest.sh, not a host state. Nothing was written; file an issue with this run URL." >&2
+    printf '%s' '__UNREADABLE__'; return 0
+  fi
+  line="$(_current_instance_row_counts "$floor" "$tag")"
   read -r r c p pf m k extra <<<"$line" || true
   for v in "$r" "$c" "$p" "$pf" "$m" "$k"; do
     case "$v" in
@@ -651,10 +665,11 @@ _flip_liveness_count() {
     printf '%s' '__UNREADABLE__'
     return 0
   fi
-  # Decode `.raw` first (it is double-encoded), then match the host field literal AND the current
+  # Decode `.raw` first (it is double-encoded), then match the host field literal, this FSM's own
+  # emitter (#8846: --grep also returns rows that merely quote the tag) AND the current
   # generation's two clocks. Counts only; never echoes a row, the standing purity contract of every
   # Better Stack reader here.
-  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-cutover-flip liveness")"
+  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-cutover-flip liveness" "inngest-cutover-flip")"
   case "$n" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
@@ -680,7 +695,7 @@ _luks_liveness_count() {
     printf '%s' '__UNREADABLE__'
     return 0
   fi
-  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-luks-cutover liveness")"
+  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-luks-cutover liveness" "inngest-luks-cutover")"
   case "$n" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac

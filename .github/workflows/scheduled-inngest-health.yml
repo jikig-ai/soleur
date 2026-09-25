@@ -861,6 +861,19 @@ jobs:
               | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
           }
 
+          # #8846: the ONE definition of "a probe row" (emitter + anchored marker) lives in the shared
+          # lib. A failed source is a broken READER, never a host state: write the cause, fail the
+          # step, and let "Dedicated-host consumer crashed" file it — never grade the host off rows
+          # the selector could not filter. (INNGEST_PROBE_ROW_LIB is the test-sandbox override.)
+          PROBE_ROW_LIB="${INNGEST_PROBE_ROW_LIB:-$GITHUB_WORKSPACE/scripts/lib/inngest-probe-row.sh}"
+          # shellcheck source=/dev/null
+          source "$PROBE_ROW_LIB" || {
+            LIB_SAFE="$(strip_log_injection "$PROBE_ROW_LIB")"
+            echo "crash_reason=selector_unavailable lib=${LIB_SAFE}" >> "$GITHUB_OUTPUT"
+            echo "::error::#8846 dedicated-host arm: cannot load the probe-row selector (${LIB_SAFE}) — the host was NOT measured this run. This is a broken reader, not a host state."
+            exit 1
+          }
+
           if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
             echo "::warning::#7674 dedicated-host arm: BETTERSTACK_QUERY_* unset — reporting probe-unavailable rather than a false healthy."
             {
@@ -873,9 +886,14 @@ jobs:
           # rc is captured, never allowed to abort the step: the default Actions shell runs with
           # -e, so `ROWS="$(cmd)"; rc=$?` would kill the step at that line and the classification
           # below — the whole point of the arm — would never run.
+          # --limit 500, not 50 (#8846): the --grep is a SUBSTRING match, so the window also returns
+          # the inngest event-log rows that quote the marker; 50 left too little headroom for the
+          # real probe rows once those are counted. DETAIL reports returned=<n>/500 so a window that
+          # saturates the limit is visible rather than silently truncated.
           rc=0
           ROWS="$(bash "$GITHUB_WORKSPACE/scripts/betterstack-query.sh" \
-            --since "$PROBE_WINDOW" --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 50 2>/dev/null)" || rc=$?
+            --since "$PROBE_WINDOW" --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 500 2>/dev/null)" || rc=$?
+          LINES="$(printf '%s\n' "$ROWS" | grep -c . || true)"
 
           if [[ "$rc" -ne 0 ]]; then
             N="__UNREADABLE__"; ACTIVE=""; CODE=""; FLAG=""
@@ -891,9 +909,27 @@ jobs:
             # probe's header): without it jq parses the STREAM, so ONE malformed line aborts the
             # whole invocation and every valid row after it is lost — which would surface as
             # probe-unavailable ("the host is silent") on a window that contained a real verdict.
-            MINE="$(printf '%s\n' "$ROWS" | jq -R -r 'fromjson? | .raw? | fromjson?
+            #
+            # SELECT BY EMITTER, NOT BY SUBSTRING (#8846). The inngest server's own event log ships
+            # under SYSLOG_IDENTIFIER=doppler on THIS host and quotes the marker whenever a GitHub
+            # issue/PR/comment about the probe is webhooked in. The old `grep -F` on the message
+            # kept those rows, the newest one won `tail -1`, and a healthy host graded
+            # probe-unavailable (hourly P1 pairs, #8833/#8834). `inngest_probe_row` (the shared def)
+            # keeps only rows whose emitter is the probe's logger tag AND whose message BEGINS with
+            # the marker. It runs BEFORE the host clause because it is type-safe (`type ==
+            # "object" and …` short-circuits), so a row whose raw decodes to a non-object yields
+            # false instead of a jq error. jq's exit code is captured, not swallowed: a jq that
+            # cannot run is a broken reader, and must not read as "no rows" (= probe-unavailable).
+            JQ_RC=0
+            MINE="$(printf '%s\n' "$ROWS" | jq -R -r "$INNGEST_PROBE_ROW_JQ"' fromjson? | .raw? | fromjson?
+                      | select(inngest_probe_row)
                       | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME)
-                      | .message // empty' 2>/dev/null | grep -F 'SOLEUR_INNGEST_SERVER_PROBE' || true)"
+                      | .message')" || JQ_RC=$?
+            if [[ "$JQ_RC" -ne 0 ]]; then
+              echo "crash_reason=jq_rc=${JQ_RC}" >> "$GITHUB_OUTPUT"
+              echo "::error::#8846 dedicated-host arm: the probe-row selector (jq) exited ${JQ_RC} — the host was NOT measured this run. This is a broken reader, not a host state."
+              exit 1
+            fi
             N="$(printf '%s' "$MINE" | grep -c . || true)"
             LAST="$(printf '%s\n' "$MINE" | tail -1)"
             ACTIVE="$(strip_log_injection "$(printf '%s' "$LAST" | grep -oE 'server_active=[^ ]+' | head -1 | cut -d= -f2 || true)")"
@@ -912,7 +948,7 @@ jobs:
             not-serving)
               DETAIL="NOT serving and UNEXPLAINED: server_active='${ACTIVE}' http_code='${CODE}' with cutover_flag='${FLAG:-<none>}', which does not account for the stop. This is a genuine diagnosis, not a known brake." ;;
             *)
-              DETAIL="no SOLEUR_INNGEST_SERVER_PROBE row from ${DEDICATED_HOST_NAME} within ${PROBE_WINDOW}, or the read failed (rows='${N}'). Absence is reported as unavailable, never as healthy." ;;
+              DETAIL="no SOLEUR_INNGEST_SERVER_PROBE row from ${DEDICATED_HOST_NAME} within ${PROBE_WINDOW}, or the read failed (rows='${N}', returned=${LINES}/500). Absence is reported as unavailable, never as healthy." ;;
           esac
           {
             echo "verdict=$VERDICT"
@@ -979,21 +1015,37 @@ jobs:
       # check-in computes its status from steps.effmode alone. A broken consumer would be
       # indistinguishable from a healthy host: precisely the defect this PR exists to fix, one
       # level up. This branch keys on the step's OUTCOME, which exists even when its outputs do not.
+      #
+      # #8846: the arm writes `crash_reason` to $GITHUB_OUTPUT BEFORE it exits 1 on a selector it
+      # cannot run (`selector_unavailable lib=<path>` or `jq_rc=<n>`). Outputs written before a
+      # step fails are still exported, so the issue can name the cause; any other crash (no
+      # crash_reason written) reads `unknown`. Passed through env, never interpolated into shell.
       - name: Dedicated-host consumer crashed (#7674)
         if: always() && steps.dedicated.outcome != 'success' && steps.dedicated.outcome != 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEDICATED_OUTCOME: ${{ steps.dedicated.outcome }}
+          CRASH_REASON: ${{ steps.dedicated.outputs.crash_reason || 'unknown' }}
         run: |
           set -uo pipefail
-          echo "::error::#7674 the dedicated-host probe consumer itself FAILED (outcome=${{ steps.dedicated.outcome }}) — the host's serving state was NOT measured this run. This is a broken reader, not a healthy host."
+          # This workflow's header contract: an echoed value goes through strip_log_injection. The
+          # cause carries a path, so it is stripped here too (byte-identical helper, per-step).
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+          CAUSE="$(strip_log_injection "${CRASH_REASON:-unknown}")"
+          [[ -n "$CAUSE" ]] || CAUSE="unknown"
+          echo "::error::#7674 the dedicated-host probe consumer itself FAILED (outcome=${DEDICATED_OUTCOME}, cause: ${CAUSE}) — the host's serving state was NOT measured this run. This is a broken reader, not a healthy host."
           gh label create "ci/inngest-dedicated-host" --repo "$GH_REPO" --color BFD4F2 2>/dev/null || true
           gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
           TITLE="[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken"
           EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number,title 2>/dev/null | jq -r --arg t "$TITLE" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null || true)"
           BODY="$(printf '%s\n' \
             "verdict: \`arm-crashed\`" "" \
+            "cause: \`${CAUSE}\`" "" \
             "The dedicated-host arm did not complete, so nothing measured whether 10.0.1.40 is serving. Absence of a verdict is NOT health." "" \
             "Run: ${RUN_URL}")"
           if [[ -n "$EXISTING" ]]; then
@@ -1040,18 +1092,27 @@ jobs:
           grace_min="${INNGEST_QUIESCE_GRACE_MIN:-60}"
           [[ "$grace_min" =~ ^[0-9]{1,5}$ ]] || grace_min=60
           alarm=false; detail=""
+          # #8846: an EMPTY verdict means the dedicated-host consumer failed (it exits before
+          # writing verdict=), so the host was NOT MEASURED. Say so — "verdict='<none>'" read as a
+          # host that is not serving and sent the operator after the wrong machine. The alarm
+          # itself is unchanged: an unmeasured host still cannot confirm a live scheduler.
+          if [[ -z "$verdict" ]]; then
+            ded="dedicated host NOT MEASURED — the dedicated-host consumer failed; see the [ci/inngest-dedicated-host] consumer-broken issue"
+          else
+            ded="dedicated host verdict='${verdict}'"
+          fi
           if [[ -n "$since" && "$verdict" != "healthy" ]]; then
             if [[ ! "$since" =~ ^[0-9]{9,11}$ ]]; then
               alarm=true
-              detail="web scheduler QUIESCED (quiesce epoch unknown) and dedicated host verdict='${verdict:-<none>}' — no live scheduler can be confirmed"
+              detail="web scheduler QUIESCED (quiesce epoch unknown) and ${ded} — no live scheduler can be confirmed"
             else
               now=$(date -u +%s)
               age_min=$(( (now - since) / 60 ))
               if (( now - since > grace_min * 60 )); then
                 alarm=true
-                detail="web scheduler QUIESCED ${age_min} min ago (grace ${grace_min} min) and dedicated host verdict='${verdict:-<none>}' — nothing is firing crons or reminders"
+                detail="web scheduler QUIESCED ${age_min} min ago (grace ${grace_min} min) and ${ded} — nothing is firing crons or reminders"
               else
-                detail="web scheduler QUIESCED ${age_min} min ago, within the ${grace_min}-min cutover grace (dedicated verdict='${verdict:-<none>}')"
+                detail="web scheduler QUIESCED ${age_min} min ago, within the ${grace_min}-min cutover grace (${ded})"
               fi
             fi
           fi

@@ -29,6 +29,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # FLIP_ROLLOUT_TEST_TARGET: the mutation battery runs this suite against COPIES of the probe, never
 # the tracked file.
 TARGET="${FLIP_ROLLOUT_TEST_TARGET:-$SCRIPT_DIR/inngest-cutover-flip-rollout-7761.sh}"
+# #8846: the derivation selects probe rows through the shared predicate, which the probe finds at a
+# REPO-RELATIVE path. A copy run from a temp dir has no such path and would read row_decode_failed on
+# every derive case, so every run is pointed at the repo lib. Assigned, not defaulted: a stale value
+# inherited from the caller's shell must not decide which predicate the suite certifies.
+export INNGEST_PROBE_ROW_LIB="$SCRIPT_DIR/../lib/inngest-probe-row.sh"
+[[ -f "$INNGEST_PROBE_ROW_LIB" ]] || { echo "SETUP FAIL: shared predicate missing at $INNGEST_PROBE_ROW_LIB" >&2; exit 2; }
 
 PASS=0; FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
@@ -767,6 +773,41 @@ rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$
 expect "derive-T1" 2 boundary_underivable probe_channel_dark
 grep -qF 'observed=sha256:bbbb' "$WORK/probe-out" && pass "reports the OBSERVED digest alongside the pinned one" || fail "observed digest not reported"
 
+# #8846 — the inngest server's own event log ships under SYSLOG_IDENTIFIER=doppler on THIS host and
+# quotes a probe line whenever an issue/PR about the probe is webhooked in. LIVE shape: the message
+# is a `{"caller":"api",...}` STRING with the probe line mid-body, so `image_ref=<pin>` is a
+# whitespace-delimited token the key=value parser would read. Placed EARLIEST on purpose: the
+# derivation takes the earliest match, so a quoted row there would move the boundary.
+doppler_row() { # doppler_row <dt> <image_ref>
+  local dt="$1" ref="$2" inner
+  inner="$(jq -nc --arg h "$HOST" --arg hn "$HOST_NAME" --arg r "$ref" '
+    {host:$h, host_name:$hn, SYSLOG_IDENTIFIER:"doppler",
+     message: ({caller:"api", event:{data:{action:"closed", number:8833,
+                body:("Saw this on the host: SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active image_ref=" + $r + " cutover_flag=done -- closing.")}}} | tojson)}')"
+  jq -nc --arg dt "$dt" --arg raw "$inner" '{dt:$dt, raw:$raw}'
+}
+echo "TEST: #8846 a doppler event-log row QUOTING a probe line with the pinned digest derives no boundary"
+f="$WORK/rows-derive-quoted"
+{ doppler_row "$(_ck -4300)" "10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:v9.9.9@${PIN_DIGEST}"
+  probe_row "$(_ck -4200)" "10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:$(printf 'b%.0s' {1..64})"
+  row "done" flushed-resume-no-reflush "$(_at -2700)"
+  row "done" noop-done "$(_at -240)"
+  row "done" noop-done "$(_at -180)"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
+expect "derive-quoted" 2 boundary_underivable probe_channel_dark row_decode_failed
+! grep -qF 'boundary DERIVED from telemetry' "$WORK/probe-out" && pass "derive-quoted: the quoted row supplied no boundary" \
+  || fail "derive-quoted: a quoted doppler row derived the boundary: $(probe_out | head -3 | tr '\n' ' ')"
+_obs="$(grep -oE 'observed=[^ ]*( sha256:[0-9a-f]{64})*' "$WORK/probe-out" || true)"
+[[ "$_obs" == *sha256:bbbb* && "$_obs" != *"$PIN_DIGEST"* ]] && pass "derive-quoted: observed= lists only the real probe row's digest" \
+  || fail "derive-quoted: observed='${_obs}' (want the probe row's bbbb digest and not the quoted pin)"
+
+echo "TEST: #8846 an unreadable shared predicate is row_decode_failed, never a derivation"
+f="$WORK/rows-derive-ok"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE" INNGEST_PROBE_ROW_LIB=/nonexistent)"
+expect "derive-lib-missing" 2 row_decode_failed probe_channel_dark boundary_underivable
+! grep -qF 'boundary DERIVED from telemetry' "$WORK/probe-out" && pass "derive-lib-missing: no boundary derived without the predicate" \
+  || fail "derive-lib-missing: derived a boundary with no predicate: $(probe_out | head -3 | tr '\n' ' ')"
+
 # =============================================================================================
 # REVIEW-ROUND FIXTURES (PR #8690): every positive-evidence path is bounded by what the absence
 # queries can see — shape, scope, time, and machine.
@@ -932,8 +973,10 @@ _vneg="$(verdict_parity_missing "$WORK/probe-notable.sh")"
 
 # --- floor ------------------------------------------------------------------------------------
 # Every assertion above gates only on FAIL, so deleting a whole block would drop PASS and still
-# exit 0. Derived from a green run, never guessed: 307 measured on 2026-09-24 (#7761 review round).
-MIN_ASSERTIONS=307
+# exit 0. Derived from a green run, never guessed: 307 measured on 2026-09-24 (#7761 review round);
+# 320 on 2026-09-25 (#8846: +13 = derive-quoted 7 [exit, reason, no-PASS, 2 competing, no-derive,
+# observed] + derive-lib-missing 6 [exit, reason, no-PASS, 2 competing, no-derive]).
+MIN_ASSERTIONS=320
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

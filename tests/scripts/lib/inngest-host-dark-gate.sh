@@ -183,15 +183,38 @@
 #
 # SPLIT IN TWO SINCE #8054. `_IHDG_IDENT` is the decode + host-identity conjunction — the part
 # every stream this lib reads shares, the heartbeat included — and `_IHDG_SELECT` is that plus the
-# probe marker. The heartbeat reader embeds `_IHDG_IDENT` and adds its own identifier test, so the
-# host conjunction is still written exactly once (the suite counts its occurrences).
+# probe-row predicate. The heartbeat reader embeds `_IHDG_IDENT` and adds its own identifier test,
+# so the host conjunction is still written exactly once (the suite counts its occurrences).
+#
+# THE PROBE-ROW PREDICATE IS NO LONGER DEFINED HERE (#8846). A marker-anchored `test(...)` was the
+# whole of it, and it was not enough: the inngest server's own event log ships from the SAME host
+# under SYSLOG_IDENTIFIER=doppler and quotes the marker whenever a GitHub issue/PR/comment about the
+# probe is webhooked in. The emitter is part of a probe row's identity, and "what is a probe row" is
+# now answered in ONE place for every reader in the repo — scripts/lib/inngest-probe-row.sh, whose
+# `inngest_probe_row` jq def checks the emitter AND the anchor. `_IHDG_PROBE` applies it to the
+# DECODED row; every jq program that embeds it is prefixed with "$INNGEST_PROBE_ROW_JQ".
+#
+# RESOLVED FROM THIS FILE'S OWN LOCATION, with an override for test sandboxes that run a COPY of
+# this lib from a temp dir (INNGEST_PROBE_ROW_LIB). A failed source is NOT silence: it sets
+# `_IHDG_PROBE_LIB_OK=0`, and both entry points refuse `unreadable` on that before anything else.
+# The `|| true` keeps a failed `cd` from aborting a `set -e` caller at the assignment — the path is
+# then `/scripts/lib/…`, the source fails, and the flag carries the refusal instead.
+_IHDG_PROBE_ROW_LIB="${INNGEST_PROBE_ROW_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/inngest-probe-row.sh}" || true
+_IHDG_PROBE_LIB_OK=1
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+source "$_IHDG_PROBE_ROW_LIB" 2>/dev/null || _IHDG_PROBE_LIB_OK=0
+# A file that sources cleanly but defines no predicate (a truncated checkout, /dev/null) is the
+# same missing selector: every jq program below would fail to compile on `inngest_probe_row`.
+[[ -n "${INNGEST_PROBE_ROW_JQ-}" ]] || _IHDG_PROBE_LIB_OK=0
+
 _IHDG_IDENT='
         | . as $outer
         | ((.raw? // empty) | fromjson?) as $d
         | select(($d | type) == "object")
         | select($d.host == $h and $d.host_name == $hn)'
-_IHDG_SELECT="$_IHDG_IDENT"'
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))'
+# ONE LINE, deliberately: the suite's B10 row ERG-M-PROBE empties it with a single-line sed.
+_IHDG_PROBE='| select($d | inngest_probe_row)'
+_IHDG_SELECT="$_IHDG_IDENT$_IHDG_PROBE"
 
 # THE EXPECTED PROBE SCHEMA, DEFINED ONCE. Both entry points default `--expected-schema` to this
 # and the execute gate's caller interpolates it into the `stale_schema` remedy. The emitter's
@@ -262,7 +285,7 @@ _ihdg_field() {
 # reading the OLDEST row and calling it current.
 _ihdg_rows() {
   local rows_file="$1" host="$2" host_name="$3"
-  jq -Rn --arg h "$host" --arg hn "$host_name" '
+  jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs
         | fromjson?
         | select(type == "object")
@@ -282,7 +305,7 @@ _ihdg_rows() {
 # filter and same sort as `_ihdg_rows`, so the row it names is the row the gate grades.
 _ihdg_newest_dt() {
   local rows_file="$1" host="$2" host_name="$3"
-  jq -Rn --arg h "$host" --arg hn "$host_name" '
+  jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs
         | fromjson?
         | select(type == "object")
@@ -302,7 +325,7 @@ _ihdg_newest_dt() {
 # caller's numeric predicate refuses.
 _ihdg_row_count() {
   local rows_file="$1" host="$2" host_name="$3"
-  jq -Rn --arg h "$host" --arg hn "$host_name" '
+  jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs
         | fromjson?
         | select(type == "object")
@@ -318,7 +341,7 @@ _ihdg_row_count() {
 # refuse. Echoes `0` on any read failure, so an unparseable file lands on the refusal.
 _ihdg_tied_newest() {
   local rows_file="$1" host="$2" host_name="$3" out
-  out="$(jq -Rn --arg h "$host" --arg hn "$host_name" '
+  out="$(jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs
         | fromjson?
         | select(type == "object")
@@ -498,12 +521,16 @@ _ihdg_graded_row() {
   # sed-rendered `soleur-inngest-prd` literal — which is why `host`, Vector's auto-derived OS
   # hostname that a stale literal cannot forge, is required alongside it. G5 and G6 are separate
   # predicates for that reason: either one alone is spoofable.)
+  #
+  # A census of PROBE rows, through the same shared predicate the selector uses (#8846): decode,
+  # `$_IHDG_PROBE`, then the NEGATED host conjunction. A forged event-log row from the web host is
+  # not evidence that the identity filter is wrong, so it must not turn `silent` into `wrong_host`.
   local wrong_host_rows
-  wrong_host_rows="$(jq -Rn --arg h "$host" --arg hn "$host_name" '
+  wrong_host_rows="$(jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs | fromjson? | select(type == "object")
         | ((.raw? // empty) | fromjson?) as $d
         | select(($d | type) == "object")
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
+        '"$_IHDG_PROBE"'
         | select(($d.host != $h) or ($d.host_name != $hn))
       ] | length' < "$rows_file" 2>/dev/null)"
   [[ "$wrong_host_rows" =~ ^[0-9]+$ ]] || { _ihdg_refuse unreadable; return 1; }
@@ -668,6 +695,15 @@ _ihdg_verdict() {
 }
 
 inngest_host_dark_gate() {
+  # ── G0 — the probe-row selector is LOADED (#8846) ───────────────────────────────
+  # FIRST, before argument parsing, G1 and every dispatch-time predicate (G18's
+  # `followthrough_7674` included): without the selector no row was measured, and any later token
+  # would name a host-side remedy for a reader-side defect. The path goes to STDERR; stdout stays
+  # the bare token, because the caller reads it with `$(…)`.
+  if [[ "${_IHDG_PROBE_LIB_OK:-0}" != "1" ]]; then
+    echo "inngest-host-dark-gate: probe-row selector unavailable — could not load '${_IHDG_PROBE_ROW_LIB:-<unresolved>}' (scripts/lib/inngest-probe-row.sh, or INNGEST_PROBE_ROW_LIB); nothing was measured" >&2
+    _ihdg_verdict "unreadable"; return $?
+  fi
   local rows_file="" query_rc="" finished_file="" finished_rc=""
   local expected_volume_id="" live_attachment_id="" followthrough_rc=""
   local cutover_flag="" diagnostic_boot=""
@@ -1147,6 +1183,15 @@ _erg_hb_newest() {
 }
 
 inngest_execute_registry_gate() {
+  # ── E0 — the probe-row selector is LOADED (#8846) ───────────────────────────────
+  # Same refusal, same position, same reason as the sibling's G0 — duplicated rather than hoisted
+  # for the reason the whitelist `case` below records (a helper may not call `_ihdg_verdict`). Both
+  # production callers truncate the emit file themselves before the call, so refusing ahead of this
+  # gate's own truncation leaves no stale value for the caller's notice to read.
+  if [[ "${_IHDG_PROBE_LIB_OK:-0}" != "1" ]]; then
+    echo "inngest-host-dark-gate: probe-row selector unavailable — could not load '${_IHDG_PROBE_ROW_LIB:-<unresolved>}' (scripts/lib/inngest-probe-row.sh, or INNGEST_PROBE_ROW_LIB); nothing was measured" >&2
+    _ihdg_verdict "unreadable"; return $?
+  fi
   local rows_file="" query_rc="" hb_file="" hb_rc="" emit_file=""
   local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="$_IHDG_EXPECTED_SCHEMA"
   # Two freshness bounds, both NUMERIC seconds. The caller's `FLIP_LIVENESS_SINCE` is the string

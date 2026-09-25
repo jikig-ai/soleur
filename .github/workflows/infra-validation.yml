@@ -130,6 +130,9 @@ on:
       - "scripts/cutover-inngest.sh"
       - "tests/scripts/lib/inngest-host-dark-gate.sh"
       - "scripts/lib/betterstack-read-classify.sh"
+      # (#8846) the shared probe-row predicate the dark-gate lib, the cutover liveness counters and
+      # the #7674 watchdog step all source; the classify and cutover suites execute it.
+      - "scripts/lib/inngest-probe-row.sh"
       # (#7761) The same suite's probe-parity loop reads the follow-through probe's DRIFT_GREPS
       # block. Without this path a PR that edits ONLY the probe (dropping a drift term, say)
       # skips the one guard that pins the probe's drift set to the emitter's reason vocabulary.

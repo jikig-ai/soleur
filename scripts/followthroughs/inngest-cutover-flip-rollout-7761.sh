@@ -429,8 +429,18 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
   # bootstrap image and emits the same marker, and this PR bumps all four pin sites to ONE digest,
   # so a colocated web host would emit rows carrying the pinned digest. Dormant today
   # (web_colocate_inngest defaults false), latent tomorrow.
+  # #8846 — 4.7: the host pair says WHERE a row came from, not WHAT it is. The inngest server's own
+  # event log ships under SYSLOG_IDENTIFIER=doppler on this same host and quotes a probe line (with
+  # its image_ref= token) whenever an issue/PR about the probe is webhooked in; read as a probe row,
+  # that quote derived a false boundary. Rows are selected through the ONE shared predicate
+  # (emitter + anchored marker). The lib path honours INNGEST_PROBE_ROW_LIB because the test seam
+  # runs COPIES of this probe from a temp dir. A lib that cannot be sourced is the probe's own
+  # fault, so it routes to the same row_decode_failed marker as a jq failure — never to silence.
   mine_dt() {
     local window="$1" term="$2" rows qrc out jrc
+    local lib="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
+    # shellcheck source=scripts/lib/inngest-probe-row.sh
+    source "$lib" 2>/dev/null || { printf '__DECODE_FAILED__lib_unavailable'; return 0; }
     rows="$("$QUERY" --since "$window" --grep "$term" --limit "$DERIVE_LIMIT" 2>/dev/null)"; qrc=$?
     if [[ "$qrc" -ne 0 ]]; then printf '__QUERY_FAILED__%s' "$qrc"; return 0; fi
     # `(fromjson?) as $row`, PARENTHESISED. `fromjson? as $row` is a SYNTAX ERROR in jq 1.7.x --
@@ -445,10 +455,12 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
     # again be read as silence from the host.
     out="$(printf '%s\n' "$rows" \
       | jq -R -r --arg h "$FLIP_HOST" --arg hn "$FLIP_HOST_NAME" \
-           '(fromjson?) as $row
+           "$INNGEST_PROBE_ROW_JQ"'
+            (fromjson?) as $row
             | ($row.raw? | fromjson?) as $m
             | select($m != null)
             | select($m.host == $h and $m.host_name == $hn)
+            | select($m | inngest_probe_row)
             | "\($row.dt)\t\($m.message // "")"' 2>/dev/null)"; jrc=$?
     if [[ "$jrc" -ne 0 ]]; then printf '__DECODE_FAILED__%s' "$jrc"; return 0; fi
     printf '%s' "$out"

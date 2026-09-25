@@ -99,6 +99,23 @@ HOST_NAME="${INNGEST_SERVING_HOST_NAME:-soleur-inngest-prd}"
 WINDOW="${INNGEST_SERVING_WINDOW:-24h}"
 LIMIT="${INNGEST_SERVING_LIMIT:-500}"
 
+# --- the ONE probe-row predicate (#8846) -------------------------------------------------------
+# A marker SUBSTRING is not a probe row. The inngest server's own event log ships from THIS host
+# under SYSLOG_IDENTIFIER=doppler and quotes the marker whenever an issue/PR/comment about the
+# probe is webhooked in — so a substring match read an issue body quoting a serving line as the
+# host serving, PASSED, cleared apply-workflow G18 and closed the tracker on a dark host. The
+# predicate (emitter + anchored marker) lives in scripts/lib/inngest-probe-row.sh; this file does
+# not restate it. An unloadable selector is its OWN reason: never channel_dark (that blames the
+# host) and never PASS.
+PROBE_ROW_LIB="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+if ! source "$PROBE_ROW_LIB" 2>/dev/null || [[ -z "${INNGEST_PROBE_ROW_JQ:-}" ]]; then
+  echo "TRANSIENT: reason=selector_unavailable lib=${PROBE_ROW_LIB} — the probe-row predicate did not load." >&2
+  echo "           Nothing about the host was measured: this is a broken checkout or lib, not a" >&2
+  echo "           host outage and not 'not serving yet'." >&2
+  exit 2
+fi
+
 # --- credentials: absent is TRANSIENT, and must say so in its own words ------------------------
 missing=""
 [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]] && missing="${missing} BETTERSTACK_QUERY_HOST"
@@ -128,12 +145,25 @@ fi
 # malformed line aborts the whole invocation and every valid row after it is lost — which would
 # surface as reason=channel_dark ("the host emits nothing") on a window that in fact contained a
 # clean PASS. A warehouse read is exactly where a truncated line shows up.
+# `inngest_probe_row` runs on the decoded row (it reads SYSLOG_IDENTIFIER and .message), AFTER the
+# host pair: the predicate says nothing about which host a row came from.
 mine="$(printf '%s\n' "$rows" \
   | jq -R -r --arg h "$INNGEST_HOST" --arg hn "$HOST_NAME" \
-       'fromjson? | .raw? | fromjson?
+       "$INNGEST_PROBE_ROW_JQ"'
+        fromjson? | .raw? | fromjson?
+        | select(type == "object")
         | select(.host == $h and .host_name == $hn)
-        | .message? // empty' 2>/dev/null \
-  | grep -F "$MARKER")"
+        | select(inngest_probe_row)
+        | .message' 2>/dev/null)"
+jrc=$?
+# jq's exit code is read, not piped away: a def that no longer compiles yields ZERO rows, which
+# would otherwise read as channel_dark ("the host emits nothing").
+if [[ "$jrc" -ne 0 ]]; then
+  echo "TRANSIENT: reason=decode_failed jq_rc=${jrc} — the row selector did not run." >&2
+  echo "           Nothing about the host was measured. Check scripts/lib/inngest-probe-row.sh" >&2
+  echo "           (bash scripts/lib/inngest-probe-row.sh --selftest)." >&2
+  exit 2
+fi
 
 if [[ -z "$mine" ]]; then
   echo "TRANSIENT: reason=channel_dark host=${INNGEST_HOST}/${HOST_NAME} window=${WINDOW} — zero ${MARKER} rows." >&2

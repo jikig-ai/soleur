@@ -21,11 +21,16 @@
 #   78 xtrace_refused     shell tracing is on while BETTERSTACK_QUERY_PASSWORD is set
 #    3 clock_malformed    SOLEUR_FT_NOW is set but is not an ISO-8601 UTC instant
 #    3 query_failed       the helper is missing, a credential is unset, the helper failed, or it
-#                         answered lines of which none decode as warehouse rows
+#                         answered lines of which none decode as warehouse rows; also the shared
+#                         probe-row predicate (scripts/lib/inngest-probe-row.sh, or
+#                         INNGEST_PROBE_ROW_LIB) cannot be loaded (reason=selector_unavailable,
+#                         checked first, before usage) or its jq selection failed
+#                         (reason=selector_failed)
 #   64 usage              any argument was passed
 #    3 no_rows            no row from the dedicated host (host=soleur-inngest,
-#                         host_name=soleur-inngest-prd) whose message STARTS with
-#                         SOLEUR_INNGEST_SERVER_PROBE and whose FIRST host_role= token is dedicated,
+#                         host_name=soleur-inngest-prd) that the shared predicate reads as a probe
+#                         row (emitter inngest-server-probe AND a message STARTING with
+#                         SOLEUR_INNGEST_SERVER_PROBE) and whose FIRST host_role= token is dedicated,
 #                         in --since 26h
 #    3 row_unusable       the newest such row (by dt, 'T' and ' ' normalised) has a dt that is not
 #                         YYYY-MM-DD HH:MM:SS (field=dt) or lies more than 5 min in the future
@@ -116,6 +121,15 @@ RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-689
 HOST="soleur-inngest"
 HOST_NAME="soleur-inngest-prd"
 FUTURE_SLACK_SECS=300
+# The ONE definition of a probe row (#8846): emitter AND anchored marker. Resolved from this file's
+# repo root so a sandboxed copy reads its own tree; INNGEST_PROBE_ROW_LIB overrides it.
+PROBE_ROW_LIB="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+if ! source "$PROBE_ROW_LIB" 2>/dev/null || [[ -z "${INNGEST_PROBE_ROW_JQ:-}" ]]; then
+  marker "query_failed" "reason=selector_unavailable"
+  echo "CANNOT ESTABLISH: reason=selector_unavailable lib=$PROBE_ROW_LIB -- the shared probe-row predicate could not be loaded, so no row can be read as a measurement. This says nothing about the store or the producer."
+  exit 3
+fi
 
 if [[ "$#" -ne 0 ]]; then
   marker "usage" "argc=$#"
@@ -186,23 +200,32 @@ measure() {
   fi
 
   # ANCHORED, NOT A BARE TOKEN: the row must come from the dedicated host (every host writes into
-  # one Logs source), the message must START with the marker (a webhook body quoting it is
-  # third-party content), and the role is the FIRST host_role= token, the same first-wins rule the
-  # field reader applies. The helper's --grep is an unanchored LIKE, so this filter is the probe's
-  # own, never the query's. dt is normalised ('T' -> ' ') so the sort compares like with like.
-  local rows
-  rows="$(printf '%s\n' "$raw" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" --arg pm "$PROBE_MARKER " '
+  # one Logs source), it must be a probe row by the shared predicate -- the probe's own emitter AND
+  # a message that STARTS with the marker (the inngest event log is shipped as `doppler` on the
+  # same host and quotes the marker whenever an issue about the probe is webhooked in) -- and the
+  # role is the FIRST host_role= token, the same first-wins rule the field reader applies. The
+  # helper's --grep is an unanchored LIKE, so this filter is the probe's own, never the query's.
+  # dt is normalised ('T' -> ' ') so the sort compares like with like. jq's status is captured
+  # BEFORE the sort: a failed selection is an instrument fault, never an empty window.
+  local sel jrc rows
+  sel="$(printf '%s\n' "$raw" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" "$INNGEST_PROBE_ROW_JQ"'
       fromjson? | select(type == "object") | . as $o
       | ((.raw // "") | fromjson?) | select(type == "object")
       | select(.host == $h and .host_name == $hn)
-      | (.message // "") | select(type == "string")
-      | select(startswith($pm))
+      | select(inngest_probe_row)
+      | .message
       | select(((capture("(?:^| )host_role=(?<r>[^ ]*)")? // {r: ""}).r) == "dedicated")
-      | [(($o.dt // "") | tostring | sub("T"; " ")), .] | @tsv' 2>/dev/null \
-    | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1)"
+      | [(($o.dt // "") | tostring | sub("T"; " ")), .] | @tsv' 2>/dev/null)"
+  jrc=$?
+  if [[ "$jrc" -ne 0 ]]; then
+    marker "query_failed" "reason=selector_failed status=$jrc"
+    echo "CANNOT ESTABLISH: the probe-row selection (jq over the shared predicate) failed with status $jrc, so no row was graded. This says nothing about the store."
+    exit 3
+  fi
+  rows="$(printf '%s\n' "$sel" | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1)"
   if [[ -z "$rows" ]]; then
     marker "no_rows" "window=$WINDOW role=dedicated"
-    echo "CANNOT ESTABLISH: no host_role=dedicated $PROBE_MARKER row in $WINDOW (rows from other roles or quoting content were set aside)."
+    echo "CANNOT ESTABLISH: no host_role=dedicated $PROBE_MARKER row in $WINDOW (rows from other roles, from another emitter or quoting content were set aside)."
     exit 3
   fi
 

@@ -131,6 +131,25 @@ EOF
   exit 3
 fi
 
+# THE ONE DEFINITION OF A PROBE ROW (#8846). The emitter and the marker come from the shared
+# lib, never from literals here: the inngest server's own event log ships under
+# SYSLOG_IDENTIFIER=doppler on this SAME host and quotes the marker, so "starts with the
+# marker" alone is not a probe row. A lib that cannot be loaded means this script cannot tell
+# a probe row from an event-log row — that is a fault in the READER, so it takes the exit-6
+# read-failure class below, never a host verdict. The explicit non-empty check covers a file
+# that sources cleanly but defines nothing (an unset variable would otherwise abort under
+# `set -u` with exit 1, outside the documented codes).
+PROBE_ROW_LIB="${INNGEST_PROBE_ROW_LIB:-$SCRIPT_DIR/lib/inngest-probe-row.sh}"
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+if ! source "$PROBE_ROW_LIB" 2>/dev/null \
+   || [[ -z "${INNGEST_PROBE_EMITTER:-}" || -z "${INNGEST_PROBE_MARKER:-}" ]]; then
+  echo "inngest-host-state.sh: THE READ FAILED (probe-row lib unavailable: ${PROBE_ROW_LIB}). NOTHING about the host was measured." >&2
+  echo "  Without the shared probe-row definition a probe row cannot be told apart from the" >&2
+  echo "  inngest event log on the same host, so no verdict is possible. This is NOT a statement" >&2
+  echo "  about the dedicated inngest host — it is a statement about the reader." >&2
+  exit 6
+fi
+
 # THE READ IS MEASURED, NOT ASSUMED. The rc and stderr are both captured: `|| true` plus
 # `2>/dev/null` is what let a 503, a rejected credential and a missing binary all render as
 # "the host is not shipping". An instrument fault exits 6 below and NEVER reaches the
@@ -154,8 +173,9 @@ if [[ "$probe_rc" -ne 0 ]]; then
   exit 6
 fi
 
-state_out="$(printf '%s\n' "$probe_rows" | python3 -c '
-import sys, json, re
+state_out="$(printf '%s\n' "$probe_rows" \
+  | INNGEST_PROBE_EMITTER="$INNGEST_PROBE_EMITTER" INNGEST_PROBE_MARKER="$INNGEST_PROBE_MARKER" python3 -c '
+import sys, json, re, os
 
 rows = []
 # BYTES ARRIVED BUT NOTHING PARSED IS AN INSTRUMENT FAULT, NOT A HOST FINDING. A proxy or CDN
@@ -189,7 +209,17 @@ for line in sys.stdin:
     # `host_role=dedicated` — the description of the PR adding this script — became the
     # "newest probe row". Every field then parsed as absent and the summary still printed
     # a confident `VERDICT NOT SERVING` about a healthy host.
-    if not m.startswith("SOLEUR_INNGEST_SERVER_PROBE"):
+    #
+    # THE EMITTER, AND THE SPACE (#8846). The event log (SYSLOG_IDENTIFIER=doppler) lives on
+    # this same host, so the host pin above cannot exclude it; a line of it that BEGINS with the
+    # marker passed the anchor and was read as the newest probe row. The emitter check is the
+    # clause that rejects it. The trailing space rejects a longer token that merely starts with
+    # the marker text. Both values come from scripts/lib/inngest-probe-row.sh via the
+    # environment; os.environ[...] (no default) raises KeyError if they were not passed, which
+    # exits non-zero and lands in the exit-6 read-failure class — never a silent default.
+    if r.get("SYSLOG_IDENTIFIER") != os.environ["INNGEST_PROBE_EMITTER"]:
+        continue
+    if not m.startswith(os.environ["INNGEST_PROBE_MARKER"] + " "):
         continue
     if "host_role=dedicated" not in m:
         continue
