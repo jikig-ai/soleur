@@ -24,7 +24,7 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
 make_payload() {
   local cmd="$1" cwd="${2:-/tmp/TEST-FIXTURE-NOT-REAL-cwd}"

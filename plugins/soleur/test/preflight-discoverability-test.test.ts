@@ -2449,7 +2449,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // probe (`scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`) reads
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. NO SUBSTITUTE: the evidence is the dedicated host's
   // journald rows in the Logs warehouse, which has no unauthenticated read path. Genuine.
-  // #8705 (2026-09-24): +1 (28 -> 29, after #7761 took 27 -> 28) for `2026-09-24-security-rotate-web-probes-read-doppler-token-plan.md`.
+  // #8705 (2026-09-24): +1 (28 -> 29, after #7761 took 27 -> 28) for `2026-09-24-security-rotate-web-probes-read-doppler-token-plan.md` (archived under plans/archive/).
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the probe (`apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh`) lists
   // soleur/prd service tokens with the Tier-B DOPPLER_TOKEN_TF. NO SUBSTITUTE: service-token

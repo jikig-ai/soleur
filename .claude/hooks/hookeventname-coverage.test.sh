@@ -88,7 +88,8 @@ REPO_ROOT_DIR="$(cd "$HOOK_DIR/../.." && pwd)"
 SETTINGS="$REPO_ROOT_DIR/.claude/settings.json"
 
 if ! command -v jq >/dev/null 2>&1; then
-  echo "SKIP: jq missing — registration/exec-bit/single-rewriter gates not run"
+  echo "UNRESOLVED: jq missing — registration/exec-bit/single-rewriter gates not run; install jq"
+  fail=1
 elif [[ ! -f "$SETTINGS" ]]; then
   echo "FAIL: $SETTINGS not found — cannot derive the registered hook list."
   fail=1
