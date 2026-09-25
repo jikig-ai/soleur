@@ -579,4 +579,4 @@ Observed outputs, as captured by the work phase:
   - `lint-skill-body-budget --base <merge-base>` OK.
   - 0 `.ts` files.
   - `shellcheck -S warning` over the three files emits 22 findings, the same count as `origin/main`. All are pre-existing SC2034 on variables read inside `assert`'s eval strings. The two new `WF_*` variables carry a disable annotation.
-- **Sibling scorer sites**: tracked in #8855. `web-host-provisioner-parity-mutation.test.sh` scores on `grep -F "[FAIL]" "$OUT"`, which the plan's `$log`-shaped census would have missed.
+- **Sibling scorer sites**: tracked in #8855. `web-host-provisioner-parity-mutation.test.sh` scores on `grep -F "[FAIL]" "$OUT"`. A work-time re-census keyed on `"$log"` missed its three sites, and the plan's list is what caught them.
