@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
+import { kbGithubUrlPath } from "@/server/kb-github-path";
 import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
 import { sanitizeFilename } from "@/server/kb-validation";
 import { syncWorkspace } from "@/server/kb-route-helpers";
@@ -208,6 +209,16 @@ export async function POST(request: Request) {
   }
 
   const filePath = `knowledge-base/${targetDir}/${sanitizedName}`;
+  // The GitHub URL form, per-segment encoded. The filesystem containment check
+  // above cannot see URL-level traversal (`%2e%2e`, `\`), so this refuses dot
+  // segments and makes every other character a literal name.
+  const urlFilePath = kbGithubUrlPath(`${targetDir}/${sanitizedName}`);
+  if (!urlFilePath) {
+    return NextResponse.json(
+      { error: "Invalid target directory" },
+      { status: 400 },
+    );
+  }
 
   try {
     // If no sha provided, check if file exists (duplicate detection)
@@ -215,7 +226,7 @@ export async function POST(request: Request) {
       try {
         const existing = await githubApiGet<{ sha: string }>(
           userData.github_installation_id,
-          `/repos/${owner}/${repo}/contents/${filePath}`,
+          `/repos/${owner}/${repo}/contents/${urlFilePath}`,
         );
         // File exists — return 409 with sha for client to use for overwrite
         return NextResponse.json(
@@ -248,7 +259,7 @@ export async function POST(request: Request) {
       commit: { sha: string };
     }>(
       userData.github_installation_id,
-      `/repos/${owner}/${repo}/contents/${filePath}`,
+      `/repos/${owner}/${repo}/contents/${urlFilePath}`,
       {
         message: `Upload ${sanitizedName} via Soleur`,
         content: base64Content,
