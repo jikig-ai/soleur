@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import {
   KbChatContext,
   type KbChatContextValue,
@@ -80,7 +80,12 @@ vi.mock("@/components/ui/markdown-renderer", () => ({
   MarkdownRenderer: () => <div data-testid="markdown" />,
 }));
 
-const reloadState = vi.hoisted(() => ({ gate: null as Promise<void> | null }));
+const reloadState = vi.hoisted(() => ({
+  gate: null as Promise<void> | null,
+  // #8739: count refetches so a c4_diagram_saved DOM event can be asserted to
+  // reach useC4Project's reload. `vi.clearAllMocks` in beforeEach resets it.
+  reload: vi.fn(),
+}));
 
 vi.mock("@/components/kb/c4-shared", async () => {
   // #8695: the REAL banner (from its own light module, so CodeMirror/Mantine/
@@ -98,7 +103,10 @@ vi.mock("@/components/kb/c4-shared", async () => {
       loading: false,
       // A test can hold the reload open (reloadGate) to model a save that is
       // still in flight when the user navigates.
-      reload: () => reloadState.gate ?? Promise.resolve(),
+      reload: () => {
+        reloadState.reload();
+        return reloadState.gate ?? Promise.resolve();
+      },
     }),
     C4Canvas: () => <div data-testid="c4-canvas" />,
     // Expose the `stale` prop so the staleness-wiring test can assert C4Workspace
@@ -146,6 +154,10 @@ vi.mock("@/components/kb/c4-shared", async () => {
 });
 
 const CONTEXT_PATH = "knowledge-base/diagrams/c4-model.md";
+
+// #8739 — the DOM event ws-client re-broadcasts when a c4_diagram_saved frame
+// arrives. Imported (not a literal) so a rename updates both sides.
+import { C4_DIAGRAM_SAVED_EVENT } from "@/lib/c4-constants";
 
 /**
  * Mounts C4Workspace under a real-ish KbChatContext provider that models the
@@ -201,8 +213,12 @@ async function c4Tree(
   );
 }
 
-async function renderC4WithHeader(suppressSidebar = true, c4Edit = true) {
-  return render(await c4Tree(suppressSidebar, c4Edit));
+async function renderC4WithHeader(
+  suppressSidebar = true,
+  c4Edit = true,
+  dirPath?: string,
+) {
+  return render(await c4Tree(suppressSidebar, c4Edit, dirPath));
 }
 
 // The copy itself is pinned literally in c4-shared.test.tsx.
@@ -445,6 +461,86 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
     );
     fireEvent.click(screen.getByRole("button", { name: /ask about this document/i }));
     expect(openedSide).toBe(true);
+  });
+});
+
+describe("C4Workspace — c4_diagram_saved Concierge-save notice (#8739)", () => {
+  // Production dirPath shape: KB-relative dirname, no `knowledge-base/` prefix
+  // (page.tsx passes pathSegments.join("/") — the prefix is contextPath's).
+  const DIR = "engineering/architecture/diagrams";
+  const banner = () => screen.getByTestId("c4-diagnostics");
+
+  function fireSaved(detail: {
+    dirPath: string;
+    rerendered: boolean;
+    diagnostic?: string | null;
+  }) {
+    act(() => {
+      window.dispatchEvent(new CustomEvent(C4_DIAGRAM_SAVED_EVENT, { detail }));
+    });
+  }
+
+  beforeEach(() => {
+    // happy-dom ships a real fetch; the event handler triggers a refetch of
+    // /api/kb/c4/project. The mocked useC4Project never reaches it, but a
+    // transitive consumer might — keep the suite off the loopback
+    // (learnings: 2026-05-20-happy-dom-ws-fetch-blockade).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({}) })),
+    );
+  });
+
+  it("a Concierge save for the open folder refetches and clears the stale banner", async () => {
+    await renderC4WithHeader(true, true, DIR);
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    const callsBefore = reloadState.reload.mock.calls.length;
+
+    fireSaved({ dirPath: DIR, rerendered: true, diagnostic: null });
+
+    await waitFor(() => {
+      expect(reloadState.reload.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(banner().getAttribute("data-stale")).toBe("false");
+    });
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
+  });
+
+  it("a Concierge save that did NOT re-render sets the banner with the server's diagnostic", async () => {
+    await renderC4WithHeader(true, true, DIR);
+    expect(banner().getAttribute("data-stale")).toBe("false");
+
+    fireSaved({
+      dirPath: DIR,
+      rerendered: false,
+      diagnostic: "superseded by a newer save",
+    });
+
+    await waitFor(() => {
+      expect(banner().getAttribute("data-stale")).toBe("true");
+      expect(banner().getAttribute("data-stale-diagnostic")).toBe(
+        "superseded by a newer save",
+      );
+    });
+    expect(reloadState.reload).toHaveBeenCalled();
+  });
+
+  it("a frame for another folder is a no-op — no refetch, no banner", async () => {
+    await renderC4WithHeader(true, true, DIR);
+
+    fireSaved({
+      dirPath: "engineering/other-diagrams",
+      rerendered: true,
+      diagnostic: null,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(reloadState.reload).not.toHaveBeenCalled();
+    expect(banner().getAttribute("data-stale")).toBe("false");
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
   });
 });
 

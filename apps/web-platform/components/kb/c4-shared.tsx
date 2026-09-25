@@ -90,9 +90,11 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
   useEffect(() => {
     currentEndpoint.current = endpoint;
   }, [endpoint]);
-  const reload = useCallback(async () => {
+  // #8739 — `silent` refetches without the loading flip: a Concierge save
+  // completing elsewhere must not unmount the canvas to flash a spinner.
+  const reload = useCallback(async (opts?: { silent?: boolean }) => {
     const isCurrent = () => currentEndpoint.current === endpoint;
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
     setError(null);
     try {
       const res = await fetch(endpoint);
@@ -112,7 +114,7 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
     } catch (e) {
       if (isCurrent()) setError(e instanceof Error ? e.message : "Failed to load diagram");
     } finally {
-      if (isCurrent()) setLoading(false);
+      if (isCurrent() && !opts?.silent) setLoading(false);
     }
   }, [dirPath, endpoint]);
 

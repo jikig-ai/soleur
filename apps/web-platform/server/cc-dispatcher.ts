@@ -2331,6 +2331,33 @@ export const realSdkQueryFactory: QueryFactory = async (
           owner,
           repo,
           workspacePath,
+          // #8739 — a successful Concierge `.c4` save pushes a
+          // `c4_diagram_saved` frame on the user's one live socket
+          // (supersedeExistingUserSocket) so an open C4Workspace refetches
+          // and reconciles its stale banner (the "then reload the page"
+          // workaround this frame replaces). A `false` return (no live
+          // socket) is benign — no open page can be stale when no client
+          // is connected; next mount refetches.
+          onDiagramSaved: ({ dirPath, rerendered, diagnostic }) => {
+            try {
+              defaultSendToClient(args.userId, {
+                type: "c4_diagram_saved",
+                dirPath,
+                rerendered,
+                diagnostic,
+              });
+            } catch {
+              // null first arg, never a real Error — the pino mirror
+              // captures a passed Error first and Sentry drops the tagged
+              // second capture (#8629).
+              reportSilentFallback(null, {
+                feature: "cc-dispatcher",
+                op: "c4-saved-notify",
+                extra: { dirPath },
+                message: "c4_diagram_saved frame emit threw",
+              });
+            }
+          },
         });
         c4ToolName = C4_TOOL_FQN;
         c4PromptAddendum = C4_PROMPT_ADDENDUM;

@@ -10,7 +10,7 @@
 // open-by-default (which lives in useKbLayoutState, not here). Below `md` the
 // diagram takes the whole viewport and the Concierge starts closed, opening as
 // a full-screen overlay on top of it.
-import { useContext, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { KbChatContent } from "@/components/chat/kb-chat-content";
@@ -25,7 +25,11 @@ import {
   C4CodePanel,
 } from "@/components/kb/c4-shared";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
-import { C4_EDIT_FLAG } from "@/lib/c4-constants";
+import {
+  C4_DIAGRAM_SAVED_EVENT,
+  C4_EDIT_FLAG,
+  type C4DiagramSavedDetail,
+} from "@/lib/c4-constants";
 
 function ResizeHandle() {
   // Active/drag wash is brand gold (`soleur-accent-gold-fill/70`), grey on hover
@@ -75,6 +79,43 @@ export default function C4Workspace({
   } | null>(null);
   const stale = staleSave?.dirPath === dirPath;
   const staleDiagnostic = stale ? staleSave.diagnostic : null;
+
+  // The save-outcome transition shared by the Code panel (`onSaved`) and the
+  // #8739 Concierge-save event listener: refetch, then reconcile THIS folder's
+  // banner — stale only when the server could NOT re-render; a success clears
+  // only its own folder. `dirPath` is the folder bound at this render. The
+  // listener passes `silent` — an unsolicited refetch must not unmount the
+  // canvas for a spinner flash.
+  const applySavedOutcome = useCallback(
+    async (rerendered: boolean, diagnostic?: string | null, silent?: boolean) => {
+      await reload({ silent });
+      setStaleSave((cur) =>
+        rerendered
+          ? cur?.dirPath === dirPath
+            ? null
+            : cur
+          : { dirPath, diagnostic: diagnostic ?? null },
+      );
+    },
+    [dirPath, reload],
+  );
+
+  // #8739 — a Concierge `edit_c4_diagram` save pushes `c4_diagram_saved` on
+  // the user's one live socket (supersedeExistingUserSocket); `ws-client`
+  // re-broadcasts it as this DOM event. The listener lives HERE — C4Workspace
+  // stays mounted for the page's life while the concierge window unmounts on
+  // collapse, so an in-flight turn that completes after collapse is still
+  // heard. `dirPath` match is the scope filter: the frame is user-scoped, so
+  // a workspace showing another folder must not refetch.
+  useEffect(() => {
+    const onDiagramSaved = (e: Event) => {
+      const d = (e as CustomEvent<C4DiagramSavedDetail>).detail;
+      if (d?.dirPath !== dirPath) return;
+      void applySavedOutcome(d.rerendered, d.diagnostic ?? null, true);
+    };
+    window.addEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
+    return () => window.removeEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
+  }, [dirPath, applySavedOutcome]);
   // Reveal/collapse is LIFTED to KbChatContext so the SHARED top-bar trigger
   // ("Ask about this document", in KbContentHeader) drives it — consistent with
   // the markdown viewer. The C4 page keeps setSuppressSidebar(true) so the
@@ -202,19 +243,7 @@ export default function C4Workspace({
                 data={data}
                 dirPath={dirPath}
                 allowResave={stale}
-                onSaved={async (rerendered, diagnostic) => {
-                  await reload();
-                  // `dirPath` is the folder this save was made in (the render
-                  // that created this handler). Stale only when the server
-                  // could NOT re-render; a success clears only its own folder.
-                  setStaleSave((cur) =>
-                    rerendered
-                      ? cur?.dirPath === dirPath
-                        ? null
-                        : cur
-                      : { dirPath, diagnostic: diagnostic ?? null },
-                  );
-                }}
+                onSaved={applySavedOutcome}
               />
             ) : (
               <Spinner />

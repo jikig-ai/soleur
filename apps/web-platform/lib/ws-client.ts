@@ -29,6 +29,7 @@ import { reportSilentFallback, warnSilentFallback } from "@/lib/client-observabi
 import * as Sentry from "@sentry/nextjs";
 import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { C4_DIAGRAM_SAVED_EVENT } from "@/lib/c4-constants";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 
@@ -971,6 +972,29 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "autonomous_posture": {
           // Server truth for the persistent chip — never a message-presence guess.
           setAutonomousPosture(msg.autonomous);
+          break;
+        }
+
+        case "c4_diagram_saved": {
+          // #8739 — a Concierge `edit_c4_diagram` write completed on the
+          // server. Re-broadcast as a DOM event so the open C4Workspace —
+          // which holds no handle on this socket and may belong to a
+          // DIFFERENT conversation's page — refetches and reconciles its
+          // stale banner. One live socket per user (supersedeExistingUser-
+          // Socket), so exactly one translator fires per emit; a superseded
+          // tab is already terminal-disconnected and refetches on remount.
+          // Live-only: not buffered (ADR-059), and the reducer never sees it.
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent(C4_DIAGRAM_SAVED_EVENT, {
+                detail: {
+                  dirPath: msg.dirPath,
+                  rerendered: msg.rerendered,
+                  diagnostic: msg.diagnostic ?? null,
+                },
+              }),
+            );
+          }
           break;
         }
 
