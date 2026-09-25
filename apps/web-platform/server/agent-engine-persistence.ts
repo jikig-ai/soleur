@@ -141,6 +141,17 @@ export class AgentEnginePersistenceRepository {
     return normalizeRun(result.data);
   }
 
+  async getConversationBindingState(conversationId: string): Promise<string | null> {
+    const result = await this.client.from("conversations")
+      .select("engine_binding_state")
+      .eq("id", conversationId)
+      .maybeSingle();
+    if (result.error) throw new Error(`conversation engine binding state lookup failed: ${result.error.message}`);
+    if (!result.data || typeof result.data !== "object") return null;
+    const state = (result.data as { engine_binding_state?: unknown }).engine_binding_state;
+    return typeof state === "string" ? state : null;
+  }
+
   async getRoutineRun(routineId: string, routineRunId: string): Promise<unknown> {
     const result = await this.client.from("agent_engine_runs")
       .select("*")

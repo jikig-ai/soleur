@@ -42,4 +42,11 @@ describe("existing conversation engine route guard", () => {
       { getConversationRun: async () => { throw new Error("db_down"); } }, "conv-1",
     )).rejects.toThrow("db_down");
   });
+
+  it("fails closed when a modern conversation has no binding yet", async () => {
+    await expect(assertLegacyConversationEngineBinding({
+      getConversationRun: async () => null,
+      getConversationBindingState: async () => "pending",
+    }, "conv-pending")).rejects.toMatchObject({ code: "engine_binding_invalid" });
+  });
 });

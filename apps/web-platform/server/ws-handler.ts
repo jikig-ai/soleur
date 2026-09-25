@@ -1024,6 +1024,7 @@ async function createConversation(
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
     context_path: contextPath ?? null,
+    engine_binding_state: "pending",
     ...(activeWorkflow !== undefined ? { active_workflow: activeWorkflow } : {}),
   });
 
@@ -1038,7 +1039,7 @@ async function createConversation(
       // visibility-sweep-audit: owner-scoped — 23505 fallback resolves user's own duplicate
       const { data: existing, error: lookupErr } = await tenant
         .from("conversations")
-        .select("id, active_workflow, context_path")
+        .select("id, active_workflow, context_path, engine_binding_state")
         .eq("user_id", userId)
         .eq("repo_url", repoUrl)
         .eq("context_path", contextPath)

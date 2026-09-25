@@ -22,12 +22,21 @@ export function assertLegacyEngineBinding(binding: unknown): void {
 
 /** Recheck an existing conversation's immutable binding before legacy chat. */
 export async function assertLegacyConversationEngineBinding(
-  repository: { getConversationRun(conversationId: string): Promise<unknown> },
+  repository: {
+    getConversationRun(conversationId: string): Promise<unknown>;
+    getConversationBindingState?(conversationId: string): Promise<string | null>;
+  },
   conversationId: string,
 ): Promise<void> {
   const persisted = await repository.getConversationRun(conversationId);
+  const state = await repository.getConversationBindingState?.(conversationId);
   // Conversations created before engine bindings were introduced have no run.
-  if (persisted === null) return;
+  if (persisted === null) {
+    if (state === undefined || state === null || state === "legacy") return;
+    throw Object.assign(new Error("conversation engine binding is missing"), {
+      code: "engine_binding_invalid",
+    });
+  }
   assertLegacyEngineBinding(
     persisted && typeof persisted === "object" && "binding" in persisted
       ? (persisted as { binding: unknown }).binding
