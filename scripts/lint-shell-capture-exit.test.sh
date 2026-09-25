@@ -26,7 +26,7 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 PASS=0
 FAIL=0
 # Anti-vacuity floor. Raise deliberately when adding fixtures.
-MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-96}"
+MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-110}"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() {
@@ -1041,6 +1041,159 @@ rc=$?
 EOF
 )"
 assert_silent "$f" "S3: multi-line function definition close then rc=\$? -- definition status, not dead read"
+
+# --- S4 function shapes (#8884) ------------------------------------------------
+# The function stack tracked only `name() {` openers and `}`-only closers.
+# Deferred-brace (`f()` newline `{`), paren-bodied (`f() (`), and mid-line
+# `}` closers all missed the body entirely.
+
+f="$(write_fix s4-deferred-brace <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report()
+{
+  (( c > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: name() newline { -- the deferred-brace opener still owns the tail"
+
+f="$(write_fix s4-paren-body <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() (
+  (( c > 0 )) && echo x
+)
+EOF
+)"
+assert_fires "$f" 4 S4 "S4: name() ( ... ) -- a paren-bodied function tail leaks too"
+
+f="$(write_fix s4-midline-close <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  local total=0
+  (( total > 0 )) && echo "t=$total"; }
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: test && act; } -- a mid-line closer still pops the tail"
+
+f="$(write_fix s4-brace-led-close <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  local total=0
+  (( total > 0 )) && echo "t=$total"
+}; echo done
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: }; rest -- a }-led line with trailing text still closes"
+
+f="$(write_fix s4-pending-paren <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report()
+(
+  (( c > 0 )) && echo x
+)
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: name() newline ( -- pending paren opener"
+
+f="$(write_fix s4-function-kw-deferred <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+function report
+{
+  (( c > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: function name newline { -- the keyword form defers too"
+
+f="$(write_fix s4-brace-noise <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  local x=${v}_{a,b}
+  (( c > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: \${v} and {a,b} inside a body must not perturb the group counter"
+
+f="$(write_fix s4-oneline-inner-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  cmd || { a; b; }
+  (( t > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: cmd || { a; b; } on one line does not mis-pop the function"
+
+f="$(write_fix s4-predicate-deferred <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+is_ready()
+{
+  [[ -c /dev/x ]] && notify
+}
+EOF
+)"
+assert_silent "$f" "S4: predicate name exempt under the deferred-brace opener too"
+
+f="$(write_fix s4-predicate-paren <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+check_x() (
+  [[ -c /dev/x ]] && notify
+)
+EOF
+)"
+assert_silent "$f" "S4: predicate name exempt under a paren body too"
+
+f="$(write_fix s3-paren-funcdef-close <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() (
+  worker
+)
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: ) closing a paren function DEFINITION is not a dead-read antecedent"
+
+# --- S3 literal-prefix status reads (#8884) -----------------------------------
+# `x=pre$?` reads $? just as surely as `x=$?` -- the literal prefix was a miss.
+
+f="$(write_fix s3-prefix-read <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+worker
+x=pre$?
+EOF
+)"
+assert_fires "$f" 4 S3 "S3: x=pre\$? reads the dead status just like x=\$?"
+
+f="$(write_fix s3-prefix-read-unarmed <<'EOF'
+#!/usr/bin/env bash
+set +e
+worker
+x=pre$?
+EOF
+)"
+assert_silent "$f" "S3: x=pre\$? under set +e -- the read is live, no finding"
+
+f="$(write_fix s3-prefix-quoted <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+worker
+x='pre$?'
+EOF
+)"
+assert_silent "$f" "S3: x='pre\$?' is literal text, not a status read"
 
 # --- baseline behaviour ------------------------------------------------------
 # --write-baseline refuses explicit paths (a subset scan would truncate the

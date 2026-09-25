@@ -65,10 +65,19 @@ the site explicitly decides what a non-zero exit means. Four finding classes:
                    under `set -e` the command aborts BEFORE the read runs, so the read
                    can only ever see 0. Judged at the COMMAND's line, not the read's --
                    `cmd` then `set +e` then `rc=$?` is the mis-fix, not a fix.
+  S3 (cont.)       the antecedent may also be a compound's closer: `fi`, `done`,
+                   `esac`, or a group `}`/`);` is reclassified as the just-closed
+                   compound -- unprotected, judged armed at the closer. A `}`/`)`
+                   that closed a function DEFINITION is exempt: a definition's
+                   status is the definition's, not an executed command's.
   S4 (leak tail)   a function's last statement is `(( expr )) && act` or
                    `[ expr ]`/`[[ expr ]]`/`test expr && act` with no `||` arm: the
                    false arm returns the TEST's non-zero status to a `set -e` caller,
-                   and a normal "nothing to report" outcome reads as a crash.
+                   and a normal "nothing to report" outcome reads as a crash. All
+                   definition shapes are tracked -- `name() {`, `name() (`,
+                   `function name`, deferred `name()` newline `{`/`(` -- and
+                   closers are recognised at segment granularity (`cmd; }`,
+                   `}; rest`).
 
 S3 has TWO context arms and one fix. `cmd` followed by `rc=$?` is dead when the enclosing
 code runs under plain `set -e`, and FRAGILE when the enclosing function is only ever
@@ -108,30 +117,25 @@ WHAT IS DELIBERATELY NOT FLAGGED (each would be a false positive)
 
 HEURISTIC LIMITS (fail-silent direction, deliberately)
 ------------------------------------------------------
-  * Function bodies are found by `name() {` / `function name` openers and `}`-ONLY
-    closers; a `cmd; }` sharing the tail's line is a miss, `name() (`
-    paren-bodied functions are never tracked for S4, and a `})`-form close is
-    never a pop (the function simply stays open).
-  * `depth` counts raw `(`/`)` characters; pathological paren text (case-arm heads
-    inside multi-line `$( )`, parens in literals) can skew it. Comments and heredoc
-    bodies are already blanked before counting.
-  * A `}`-ONLY line inside a function closes the innermost tracked `{` group; a
-    `{`-bearing line whose closer shares a line with other text can still mis-pop.
-    A `{`-grouped command as the read's antecedent (`{ cmd; rc=$?; }`) is a miss.
-  * A `set` line inside a multi-line SINGLE-quoted string (`bash -c 'set -e; ...'`)
-    still spoofs the state model -- quote context is checked per-line, not across
-    lines.
-  * The statement-segment model splits only on `;`. `x=pre$?` (literal prefix)
-    under-matches; a pipeline as the antecedent is reported whole (`a | b`) rather
-    than per-stage.
+  * A line that BEGINS inside a multi-line `'…'`/`"…"` string is data for the
+    whole line -- the real code after a mid-line closing quote (`'; cmd`,
+    `'; set +e`) is a residual miss. `$'…'` ANSI-C strings share the tracker,
+    but their `\\'`-escape semantics differ, so `$'don\\'t'`-style strings can
+    still resync a line early.
+  * `name() cmd` single-command bodies are never opened (the opener is `{`/`(`
+    only); their tails are a miss.
+  * `;;` inside a `case` arm is not modelled -- an arm tail past `;;` merges
+    into the next segment.
+  * A `{`-grouped command as the read's antecedent (`{ cmd; rc=$?; }`) is a
+    miss -- the group `}`/`;` frame hides the inner command.
+  * The statement-segment model splits only on `;` (quote-aware). A pipeline as
+    the antecedent is reported whole (`a | b`) rather than per-stage.
   * `PIPESTATUS` reads after a pipeline are judged live when `set -o pipefail` is
     not armed at the command's line -- the pipeline's status is then its last
     stage's, so earlier stages' failures never trip errexit.
-  * Function tracking keys on `name() {`-shaped openers; `f()\n{` (brace on the
-    next line) and `};`-form group closers outside `}`-only lines are misses.
-  * A multi-line compound's LAST line (`fi`, `done`, `esac`) stays protected --
-    the model tracks lines, not blocks; `if c; then cmd; fi` on ONE line is
-    flagged correctly while the three-line form is a documented miss.
+  * `depth` counts the statement-visible parens: a `(`/`)` inside a literal or
+    escaped (`\\(`) does not move it, but an unclosed `(` inside an UNQUOTED
+    construct (case-arm heads inside multi-line `$( )`) can still skew it.
 """
 
 from __future__ import annotations
@@ -183,16 +187,22 @@ OUTER_DECIDES_RE = re.compile(r"\|\|")
 ADDS_A_VALUE_RE = re.compile(r"\|\|\s*(?:echo|printf)\b")
 
 # A read of an exit status, captured into a variable. The VALUE forms: `$?`, `${?}`,
-# `$PIPESTATUS`, `${PIPESTATUS[n]}`, each optionally DOUBLE-quoted. The NAME side
+# `$PIPESTATUS`, `${PIPESTATUS[n]}`, each optionally DOUBLE-quoted and optionally
+# carrying a LITERAL PREFIX -- `x=pre$?` embeds the same read as `x=$?` (the
+# prefix class excludes `$`, quotes, whitespace, shell operators and `\\`, so an
+# escaped `\$` or a single-quoted literal still does not match). The NAME side
 # covers indexed and attributed forms alike: `rc=$?`, `rc="$?"`, `rc[0]=$?`,
-# `declare -i rc=$?`, `local rc=$?`. A SINGLE-quoted value (`rc='$?'`) is a literal
-# two-character string, not a read, and is correctly not matched.
+# `declare -i rc=$?`, `local rc=$?`. A SINGLE-quoted value (`rc='$?'`,
+# `rc='pre$?'`) is a literal string, not a read, and is correctly not matched.
 #
 # This is the ASSIGNMENT anchor only. Bare in-argument reads (`echo "rc=$?"`,
 # `[[ $? -ne 0 ]]`, `exit $?`) are real but noisier (`exit $?` is idiomatic) and stay
 # scoped out -- see the docstring's WHAT IS DELIBERATELY NOT FLAGGED.
 _STATUS = r'"?(?:\$\?|\$\{\?\}|\$\{PIPESTATUS\[[@*a-zA-Z0-9_]+\]\}|\$PIPESTATUS\b)"?'
-READ_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?=" + _STATUS)
+_READ_PREFIX = r"[^\s'\"$;&|<>(){}`\\]*"
+READ_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?=" + _READ_PREFIX + _STATUS
+)
 
 # A `local`/`declare`/`typeset`/`readonly`/`export` prefix on the read itself -- a
 # modifier of the assignment, not a command whose status the read is about.
@@ -200,16 +210,23 @@ DECL_PREFIX_RE = re.compile(
     r"^(?:local|declare|typeset|readonly|export)(?:\s+-[A-Za-z]+)*\s*$"
 )
 
-# A function opener: `name() {`, `function name {`, `function name() {`. The group
-# carries the function name for S4's predicate-name exemption.
+# A function opener: `name() {`, `name() (`, `function name {`,
+# `function name() {`, `function name (`. Group 3 is the opener char (`{` or
+# `(`) so the caller knows which closer the body ends with; groups 1/2 carry
+# the function name for S4's predicate-name exemption.
 FUNC_OPEN_RE = re.compile(
     r"^\s*(?:(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)"
-    r"|function\s+([A-Za-z_][A-Za-z0-9_]*))\s*\{"
+    r"|function\s+([A-Za-z_][A-Za-z0-9_]*))\s*([{(])"
 )
 
-# A line that is ONLY a closing brace -- the S4 function-body heuristic's closer. A
-# `cmd; }` sharing the tail's line is a documented miss (see the docstring).
-BRACE_CLOSE_RE = re.compile(r"^}\s*$")
+# A bare function head with the opener DEFERRED to the next line:
+# `name()`, `name ()`, `function name`, `function name()`. It records a
+# pending function; the next non-blank logical line leading with `{` or `(`
+# opens the body, anything else discards the pending record.
+FUNC_HEAD_RE = re.compile(
+    r"^\s*(?:(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)"
+    r"|function\s+([A-Za-z_][A-Za-z0-9_]*))\s*$"
+)
 
 # A compound's closer word followed only by redirects/`;` (`fi`, `done < f`,
 # `esac`, `done 2>&1`). Anything else after the word means the line is not a
@@ -223,8 +240,11 @@ def _closer_head(cand: str) -> str | None:
     command, else None.
 
     `fi`/`done`/`esac` may carry trailing redirects and `;`. A bare `}`/`};`
-    is a GROUP close -- whether it instead closed a function DEFINITION is the
-    caller's func_stack question (def_close_pos), not decidable from the text.
+    or `)`/`);` is a GROUP close -- whether it instead closed a function
+    DEFINITION is the caller's func_stack question (def_close_pos), not
+    decidable from the text. A `)` that is NOT a standalone token (case-arm
+    heads like `start)`, `x=($(cmd))`) is filtered by requiring the `)` to
+    lead the text.
     """
     c = cand.strip()
     m = _WORD_CLOSER_RE.match(c)
@@ -232,6 +252,8 @@ def _closer_head(cand: str) -> str | None:
         return "word" if _CLOSER_TAIL_RE.match(c[m.end() :]) else None
     if c.startswith("}"):
         return "brace"
+    if re.match(r"^\)(?=$|[\s;])", c):
+        return "paren"
     return None
 
 # The S4 tail shapes: a test builtin whose `&&` sits STRICTLY OUTSIDE the test. `[[ a
@@ -677,12 +699,15 @@ def scan(path: str) -> list[tuple[int, str, str]]:
     # --- pass 2: S1/S2 captures, S3 dead reads, S4 leaking tails ---------------
     findings: list[tuple[int, str, str]] = []
     s1s2_positions: set[int] = set()  # logical positions that already emitted S1/S2
-    # (name, open_pos, inner_group_depth, same-line body prefix)
-    func_stack: list[tuple[str, int, int, str]] = []
-    # Positions where a `}` closed a function DEFINITION (vs a `{ }` group):
-    # the S3 antecedent resolver consults it -- a read after a definition close
-    # sees the definition's status (always 0), which is boring, not dead.
+    # (name, open_pos, brace_group_depth, paren_group_depth, open_body, closer)
+    func_stack: list[tuple[str, int, int, int, str, str]] = []
+    # Positions where a `}` or `)` closed a function DEFINITION (vs a `{ }`/
+    # `( )` group): the S3 antecedent resolver consults it -- a read after a
+    # definition close sees the definition's status (always 0), which is
+    # boring, not dead.
     def_close_pos: set[int] = set()
+    # A bare `name()` / `function name` head awaiting its deferred opener.
+    pending_name: str | None = None
     last_nonempty: int | None = None
 
     for pos, (lineno, text) in enumerate(logical):
@@ -704,45 +729,126 @@ def scan(path: str) -> list[tuple[int, str, str]]:
             continue
 
         # --- function-boundary tracking for S4 --------------------------------
-        # This bookkeeping is ADDITIVE: opener and group lines still run the
-        # S1/S2/S3 checks below (`f() { x=$(grep p f); }` is an S1 on any tree).
+        # Every POSIX definition shape: `name() {`, `name() (`, `function name`,
+        # and the deferred openers (`name()` / `function name` on their own
+        # line, then `{`/`(` on the next). Group tokens are recognised at
+        # SEGMENT granularity on the vis text -- a `{`/`(` opens an inner group
+        # when it leads its segment or trails it after an operator
+        # (`cmd || {`), a `}`/`)`-led segment closes the innermost matching
+        # group or, with none open, the function itself. `${x}`/`{a,b}`, quoted
+        # braces and `x)` case arms never reach this code (masked out or never
+        # standalone tokens). The bookkeeping is ADDITIVE: opener and group
+        # lines still run the S1/S2/S3 checks below.
+        def_open = False
         fm = FUNC_OPEN_RE.match(mstrip)
         if fm:
+            pending_name = None  # a real opener discards any pending head
             func_name = fm.group(1) or fm.group(2)
-            inner = stripped[fm.end():]
-            close = mstrip[fm.end():].rfind("}")
+            closer = "}" if fm.group(3) == "{" else ")"
+            inner = stripped[fm.end() :]
+            inner_vis = mstrip[fm.end() :]
+            close = inner_vis.rfind(closer)
             if close != -1:
-                # `name() { ...; }` on one line: the tail is the last `;`-separated
-                # segment before the closer, split quote-aware so a `;` inside a
-                # literal stays inside its segment.
+                # `name() { ...; }` on one line: the tail is the last
+                # `;`-separated segment before the closer, split quote-aware.
                 def_close_pos.add(pos)
                 segments = [s for s, _d in _segments(inner[:close]) if s.strip()]
                 if segments and state[pos]:
                     _s4_check(segments[-1].strip(), lineno, func_name, findings)
             else:
-                func_stack.append((func_name, pos, 0, inner.strip()))
-        elif func_stack and stripped.endswith("{"):
-            # An inner `{` group opener inside the body (`cmd || {`, a bare `{`):
-            # its `}` closes the GROUP, not the function.
-            n, o, g, s0 = func_stack[-1]
-            func_stack[-1] = (n, o, g + 1, s0)
-        elif BRACE_CLOSE_RE.match(mstrip) and func_stack:
-            func_name, open_pos, groups, open_body = func_stack[-1]
-            if groups > 0:
-                func_stack[-1] = (func_name, open_pos, groups - 1, open_body)
-            else:
-                func_stack.pop()
+                # (name, open_pos, brace_groups, paren_groups, open_body, closer)
+                func_stack.append((func_name, pos, 0, 0, inner.strip(), closer))
+            def_open = True
+        elif pending_name is not None and mstrip[:1] in ("{", "("):
+            # Deferred opener: `name()` / `function name` on its own line, then
+            # `{`/`(` leading this one. The opener char chooses the closer.
+            func_name = pending_name
+            pending_name = None
+            closer = "}" if mstrip[0] == "{" else ")"
+            inner = stripped[1:]
+            inner_vis = mstrip[1:]
+            close = inner_vis.rfind(closer)
+            if close != -1:
                 def_close_pos.add(pos)
-                # The tail is the last logical line before this `}` -- judged against
-                # the state at ITS line, so a `set +e` region disarms it honestly.
-                if last_nonempty is not None and state[last_nonempty]:
-                    t_lineno, t_text = logical[last_nonempty]
-                    tail = t_text.strip()
-                    if last_nonempty == open_pos:
-                        # Two-line `f() { tail` form: the tail shares the opener
-                        # line; check the part AFTER the `{`.
-                        tail = open_body
-                    _s4_check(tail, t_lineno, func_name, findings)
+                segments = [s for s, _d in _segments(inner[:close]) if s.strip()]
+                if segments and state[pos]:
+                    _s4_check(segments[-1].strip(), lineno, func_name, findings)
+            else:
+                func_stack.append((func_name, pos, 0, 0, inner.strip(), closer))
+            def_open = True
+        if not def_open:
+            pending_name = None
+            head = FUNC_HEAD_RE.match(mstrip)
+            if head:
+                pending_name = head.group(1) or head.group(2)
+            elif func_stack:
+                # Group bookkeeping inside a body, per segment. `{`/`(`/`}`/`)`
+                # are structural only in COMMAND POSITION -- the first word of
+                # a segment or the word right after `&&`/`||`/`|`/`!`/`then`/
+                # `do`/`else`/`time`. Anywhere else they are literal text
+                # (`x }` args, `${x}`/`{a,b}` tokens, `x)` case arms) or already
+                # invisible (quoted spans masked out of `mstrip`).
+                segs_m = _segments(mstrip)
+                segs_o = _segments(stripped)
+                for si, (seg, _sd) in enumerate(segs_m):
+                    toks = seg.split()
+                    cmd_tok = True  # next token sits in command position
+                    for tok in toks:
+                        if not func_stack:
+                            break
+                        if cmd_tok and tok in ("{", "("):
+                            fname, fpos, bg, pg, obody, fcloser = func_stack[-1]
+                            if tok == "{":
+                                bg += 1
+                            else:
+                                pg += 1
+                            func_stack[-1] = (fname, fpos, bg, pg, obody,
+                                              fcloser)
+                            cmd_tok = False  # group content follows the opener
+                            continue
+                        if cmd_tok and tok in ("}", ")"):
+                            fname, fpos, bg, pg, obody, fcloser = func_stack[-1]
+                            if tok == "}" and bg > 0:
+                                func_stack[-1] = (fname, fpos, bg - 1, pg,
+                                                  obody, fcloser)
+                            elif tok == ")" and pg > 0:
+                                func_stack[-1] = (fname, fpos, bg, pg - 1,
+                                                  obody, fcloser)
+                            elif tok == fcloser:
+                                # The closer pops the FUNCTION itself.
+                                func_stack.pop()
+                                def_close_pos.add(pos)
+                                # The tail is the segment just before this
+                                # closer on the same line (`cmd; }`; `}; rest`
+                                # falls through to the prior line) -- judged
+                                # armed at ITS line, so a `set +e` region
+                                # disarms it honestly.
+                                tail = ""
+                                tail_lineno = lineno
+                                tail_state = False
+                                if si > 0 and segs_o[si - 1][0].strip():
+                                    tail = segs_o[si - 1][0].strip()
+                                    # A bare `{`/`(` leading the tail seg is the
+                                    # group opener -- never a real `(` (an
+                                    # arithmetic `((` stays put).
+                                    if re.match(r"^[{]|^\(\s", tail):
+                                        tail = tail[1:].strip()
+                                    tail_state = state[pos]
+                                elif last_nonempty is not None:
+                                    tail_lineno, t_text = logical[last_nonempty]
+                                    tail = t_text.strip()
+                                    tail_state = state[last_nonempty]
+                                    if last_nonempty == fpos:
+                                        # Two-line `f() { tail` form: the tail
+                                        # shares the opener line; check the
+                                        # part AFTER the opener.
+                                        tail = obody
+                                if tail_state:
+                                    _s4_check(tail, tail_lineno, fname, findings)
+                            cmd_tok = True  # a statement follows the closer
+                            continue
+                        cmd_tok = tok in ("&&", "||", "|", "!", "then", "do",
+                                          "else", "time")
 
         # --- S1/S2: the capture itself must run armed --------------------------
         if state[pos] and not CONTROL_PREFIX_RE.match(text):
@@ -892,7 +998,7 @@ def scan(path: str) -> list[tuple[int, str, str]]:
                 ck = _closer_head(cmd)
                 if ck == "word":
                     compound = True
-                elif ck == "brace":
+                elif ck in ("brace", "paren"):
                     tail_segs = _segments(cmd)
                     if len(tail_segs) > 1:
                         cmd = tail_segs[-1][0]

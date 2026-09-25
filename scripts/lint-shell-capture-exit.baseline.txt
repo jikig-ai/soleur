@@ -63,15 +63,6 @@ apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	PRECHECK_LN=$(grep -
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | head -1 | cut -d: -f1)
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | head -1 | sed "s/^jq -r '//; s/'\$//")
 apps/web-platform/infra/git-data-bootstrap.sh	S4	[[ "$_v" =~ ^[0-9]+$ ]] && printf '%s' "$_v"
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	_mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | head -1 | cut -d: -f1)
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	_s1_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	_s1_stage_ln=$(grep -n '^[[:space:]]*STAGE=sshd_config[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | head -1 | cut -d: -f1)
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | head -1 | cut -d: -f1)
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S3	' >"$TMP/out/stdout" 2>&1 << read: local rc=$?
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S3	( cd "$TMP" && dash ./git-data-emit "m" "s" info >/dev/null 2>&1 ) << read: _d_rc=$?
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S3	( cd "$TMP" && dash ./git-data-emit.d1mut "m" "s" info >/dev/null 2>&1 ) << read: _d1m_rc=$?
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S3	docker run --rm -e "S1_RESTART_MODE=${S1_RESTART_MODE:-ok}" -e "SSHD_T_MODE=${SSHD_T_MODE:-real}" -e "S1_HOSTKEY_MODE=${S1_HOSTKEY_MODE:-rendered}" -v "$TMP/hostkey:/work/hostkey:ro" -v "$TMP/hostkey.pub:/work/hostkey.pub:ro" -v "$1:/work/sshd-stage.sh:ro" -v "$_dropin:/work/01-hardening.conf:ro" -v "$TMP/sshd-drive.sh:/work/sshd-drive.sh:ro" -v "$TMP/s1out:/out" "$UBUNTU_BASE" bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1 << read: S1_DOCKER_RC=$?
 apps/web-platform/infra/infra-config-apply.test.sh	S1	MANAGED_N=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -cE '^[[:space:]]*"[A-Z0-9_]+\|')
 apps/web-platform/infra/infra-config-apply.test.sh	S1	granted_units=$(grep -E '^Cmnd_Alias DROPIN_TRY_RESTART = ' "$sudoers" | sed 's/^Cmnd_Alias DROPIN_TRY_RESTART = //' | tr ',' '\n' | sed -n 's#.*try-restart[[:space:]]\{1,\}\([^[:space:],]\{1,\}\).*#\1#p')
 apps/web-platform/infra/infra-config-apply.test.sh	S1	guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | head -1 | cut -d: -f1)
@@ -164,15 +155,11 @@ plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --list --jso
 plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/typical" 2>&1) << read: rc=$?
 plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" --close 1 --status resolved --linked-issue 2723 2>&1) << read: rc=$?
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	S1	MUTATED="$(printf '%s\n' "$BLOCK" | grep -v 'oven-sh/setup-bun')"
-plugins/soleur/test/session-state.test.sh	S1	T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1)
-plugins/soleur/test/session-state.test.sh	S1	t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2)
-plugins/soleur/test/session-state.test.sh	S3	" >/dev/null 2>&1 << read: t9_acq_rc=$?
 scripts/expenses-verify-by-check.sh	S1	marker_hits=$({ printf '%s' "$line" | grep -oE '<!--[[:space:]]*estimate[[:space:]]' | wc -l; } | tr -d '[:space:]')
 scripts/lint-agents-compound-sync.test.sh	S1	remaining=$(grep -c '2>&1' "$root/plugins/soleur/skills/compound/SKILL.md")
 scripts/lint-agents-rule-budget.test.sh	S1	reported=$(printf '%s' "$out" | grep -oE 'B_ALWAYS=[0-9]+' | head -1 | cut -d= -f2)
 scripts/rule-metrics-aggregate.test.sh	S3	out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null) << read: out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null); rc=$?
 scripts/suite-exit-class-parity.test.sh	S3	probe=$(kill -l 65 2>/dev/null) << read: local probe; probe=$(kill -l 65 2>/dev/null); local prc=$?
-scripts/test-all-killed-classification.test.sh	S3	ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= TEST_TIMING_LOG="$timing" TEST_GROUP=all timeout 120 bash "$sb" 2>&1) << read: ARM_RC=$?
 scripts/test-all-runtime-ceiling.test.sh	S3	( cd "$REPO_ROOT" && env -u CI TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1 << read: rc=$?
 scripts/test-all-runtime-ceiling.test.sh	S3	( cd "$REPO_ROOT" && env CI=1 TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1 << read: rc=$?
 scripts/test-content-publisher.sh	S1	status=$(grep '^status:' "$fixture/stale-test.md" | sed 's/^status: *//')
@@ -206,5 +193,4 @@ tests/scripts/test-sentry-destroy-counts.sh	S1	dc=$(grep -oP '^destroy_count=\K.
 tests/scripts/test-sentry-destroy-counts.sh	S1	local calls; calls=$(grep -cE 'sentry-destroy-counts\.sh' "$wf")
 tests/scripts/test-sentry-destroy-counts.sh	S1	nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
 tests/scripts/test-sentry-destroy-counts.sh	S1	rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out")
-tests/scripts/test-sentry-full-root-apply.sh	S1	body=$(grep -vE '^ZZZ_NEVER_MATCHES' "$big")
 tests/scripts/test-sentry-full-root-apply.sh	S1	local hits; hits=$(_strip_comments "$WORKFLOW" | grep -nE -- '-target=' | head -5)
