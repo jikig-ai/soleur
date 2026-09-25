@@ -14,6 +14,46 @@ lane: cross-domain
 
 # fix(inngest-health): select dedicated-host probe rows by emitter, not by substring
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25
+**Agents used:**
+
+- plan-review panel: DHH, Kieran and code-simplicity reviewers, plus the CTO on a devex lens;
+- deepen pass: observability-coverage-reviewer, test-design-reviewer, and a verify-the-negative sweep;
+- the Step 4.5 scoped advisor consult, on both the primary and fallback tiers.
+
+### Key improvements
+
+1. **Assertion floors.** Three exact floors would have gone red on every suite touched:
+   - classify `EXPECTED_ASSERTIONS=104`
+   - dark-gate `_FLOOR=282`
+   - cutover `_EXACT_FLOOR=914`
+
+   Four `-lt` floors would have gone stale. All seven are now updated in the Phase 1 commit.
+2. **Fixture expectations corrected against the real suites:**
+   - host-state now asserts `SERVING=yes` becoming `SERVING=no`, not `VERDICT SERVING`.
+   - 8296 now expects `5 rollback_inversion` becoming `2 agree`.
+   - 7761 now asserts that `boundary DERIVED` is absent, with competing reasons.
+   - The execute-gate row gets its own `$EROWS`/`$HB` pair, with a dt that does not tie.
+   - Two dark-gate rows built outside `bs_line` gain the emitter field.
+3. **Selector-failure routing reaches a human.**
+   - The watchdog writes `crash_reason` into the existing consumer-broken issue.
+   - The no-live-scheduler step stops calling an unmeasured host "not serving".
+   - The dark-gate lib refuses `unreadable` **before** G18. Otherwise a missing lib in the apply workflow would read as `followthrough_7674`, because that workflow sends the 7674 script's own stderr to /dev/null.
+4. **`JQ_RC=0` before use.** Without it, `set -u` would crash the healthy path and start a new issue loop. A must-PASS row pins it.
+5. **Guard precision.**
+   - The emitter-parity reader binds to the `LOG_TAG=` nearest the logger line. The file has two `LOG_TAG`s.
+   - The census takes an injectable file list, so the mutation rows never touch the git index.
+   - A per-reader count covers the one file with two raw reads.
+   - The Guard 2 caller rule now uses the real argument positions.
+
+### New considerations discovered
+
+- **6894 is retired.** Its header says "Nothing runs this file now". It gets the predicate but no harness.
+- **Merging fires the web-platform push apply.** The edited suites live under `apps/web-platform/infra/**`. This is routine, and #8759 did the same. It is covered by AC13.
+- **The class of bug has recurred three times.** The class-wide guard is filed as **#8875**. The `.tf` alert is deferred as **#8874**.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -28,7 +68,7 @@ The loop feeds itself. The watchdog closes the issues when the host is healthy, 
 - #8829 and #8830
 - #8833 and #8834
 - #8850 and #8851
-- #8862 and #8863 (still open at plan time)
+- #8862 and #8863 (open when planning began; by the deepen pass the loop had closed them itself, ready to file the next pair)
 
 The fix: every consumer selects probe rows by the program that wrote them (the emitter, `SYSLOG_IDENTIFIER == "inngest-server-probe"`) and requires the marker at the start of the message. The rule is defined once, in a sourced library, `scripts/lib/inngest-probe-row.sh`. Each consumer's suite gets a fixture that goes red on today's code. The same blind spot exists in the liveness counters in `scripts/cutover-inngest.sh`, where it fails open, so those counters now filter by emitter too.
 
@@ -179,12 +219,12 @@ Each consumer sources the lib and adds `select(… inngest_probe_row)` on the de
 
 | Consumer | Failure arm |
 |---|---|
-| Watchdog | `::error::` then **exit 1**. The existing "Dedicated-host consumer crashed (#7674)" step then files `[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken`, a reader fault rather than a host outage (CTO #7). |
-| 7674 | `TRANSIENT: reason=selector_unavailable lib=<path>`, exit 2. Never `channel_dark`, never PASS. |
-| 7761 | The existing `__DECODE_FAILED__` path. |
-| 8296 | The existing `no_rows`/`CANNOT ESTABLISH` path, with a `selector_unavailable` marker. |
+| Watchdog | Write `crash_reason=selector_unavailable lib=<path>` or `crash_reason=jq_rc=<n>` to `$GITHUB_OUTPUT`, then `::error::`, then **exit 1**. The existing "Dedicated-host consumer crashed (#7674)" step then files `[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken`, and its body now includes `steps.dedicated.outputs.crash_reason`. That issue names a broken reader, not a host outage (CTO #7, deepen obs F6). |
+| 7674 | `TRANSIENT: reason=selector_unavailable lib=<path>`, exit 2. Never `channel_dark`, never PASS. In production its only caller is apply-workflow G18, which throws away its stdout and stderr (`>/dev/null 2>&1`). The dark-gate lib's own refusal below is therefore what surfaces this case in that run (deepen obs F1). |
+| 7761 | The existing `__DECODE_FAILED__` path. The tracker is closed and no workflow runs the script, so only tests reach this arm. |
+| 8296 | A dedicated line, `CANNOT ESTABLISH: reason=selector_unavailable lib=<path>`, exit 3. It must not reuse `no_rows`, whose text says "no row from the dedicated host" (deepen obs F7). The `source` sits **after** `trap on_exit EXIT`, because the suite pins the trap as the first top-level statement after the xtrace refusal. |
 | host-state | The existing exit-6 read-failure class. |
-| Dark-gate lib | Refuses with the existing `unreadable` token, naming the lib path (CTO #8). |
+| Dark-gate lib | Both entry points refuse with the existing `unreadable` token **as their first check, before G1 and G18**. The message naming the lib path goes to **stderr**. stdout stays the bare token only, because callers read it with `tail -1` and `$(…)` (CTO #8, deepen obs F1/F3). |
 
 - The watchdog also raises `--limit 50` to `500`. Its existing DETAIL gains `returned=${LINES}/500`.
 - 6894 gets the same predicate, and a missing lib there exits 2 as TRANSIENT.
@@ -192,7 +232,7 @@ Each consumer sources the lib and adds `select(… inngest_probe_row)` on the de
 ### 3. Liveness counters
 
 - `_current_instance_row_counts <floor> <tag>` selects `.r.SYSLOG_IDENTIFIER == $tag`.
-- `_generation_scoped_count <floor> <label> <tag>` validates that the tag is non-empty. An empty tag gives its own `::warning::` ("liveness counter called without an emitter tag — a defect in cutover-inngest.sh, not a host state") and `__UNREADABLE__` (Kieran #12).
+- `_generation_scoped_count <floor> <label> <tag>` validates that the tag is non-empty. An empty tag produces its own `::warning::` **on stderr** ("liveness counter called without an emitter tag — a defect in cutover-inngest.sh, not a host state") and returns `__UNREADABLE__` (Kieran #12, deepen obs F3). The tag is argument **2** of `_current_instance_row_counts` and argument **3** of `_generation_scoped_count`.
 - `_flip_liveness_count` passes `inngest-cutover-flip`, and `_luks_liveness_count` passes `inngest-luks-cutover`.
 
 ### 4. Census + parity
@@ -218,30 +258,45 @@ Fixture shapes, all on `soleur-inngest`/`soleur-inngest-prd`, placed **LAST** (n
 
 A quoted line must carry the exact tokens the consumer parses, each followed by a space or end of line, so that the RED is certain. The exact messages are in the table.
 
+**Harness changes that ship in this Phase 1 commit, not Phase 3** (deepen test-design #10). The RED cases depend on them.
+
+- `inngest-dedicated-host-classify.test.sh`:
+  - Add `"SYSLOG_IDENTIFIER":"inngest-server-probe"` to each `R_*` literal. They are literals, not builders.
+  - The stub reader appends its argv to a log.
+  - `run_arm` runs `unset INNGEST_PROBE_ROW_LIB`, copies the lib into `$ws/scripts/lib/` unless a case opts out, and returns the step's exit code and `detail=` next to `verdict=`. `arm_case`'s string compare and its canary must keep working.
+- Two dark-gate rows skip `bs_line`: "outer-envelope host_name must not launder" (a `jq -cn` row) and "[I2] an EMBEDDED NEWLINE" (a python `json.dumps` row). Add `SYSLOG_IDENTIFIER:"inngest-server-probe"` to both. Without it they read `silent` after the fix, instead of `wrong_host` / `unreadable`.
+- `inngest-host-state.test.sh`: its existing `rawBody` case passes `doppler` explicitly, so it keeps modelling the live shape.
+- **Every exact assertion-count floor** is updated to the measured count, with an itemised comment in the style of the cutover suite. The exact floors are classify `EXPECTED_ASSERTIONS=104`, dark-gate `_FLOOR=282` (`-ne`) and cutover `_EXACT_FLOOR=914`. The `-lt` floors that would otherwise go stale are 7674 `FLOOR=14`, 7761 `MIN_ASSERTIONS=307`, 8296 `MIN_PASSES=114` and host-state `_min_cases=25`. The new suite is under `scripts/guard-vacuity-floor.test.sh`'s `COVERED_DIRS`, so if it has a floor, that floor must be able to fail.
+
 | Suite | Case (rows oldest → newest) | Current → | Fixed → |
 |---|---|---|---|
-| `apps/web-platform/infra/inngest-dedicated-host-classify.test.sh` | `R_OK`, then (a) whose quoted text has **no** `server_active=` / `http_code=` token | `probe-unavailable` (the incident) | `healthy` |
+| `apps/web-platform/infra/inngest-dedicated-host-classify.test.sh` | `R_OK`, then (a) whose quoted text has **no** `server_active=` / `http_code=` token | `probe-unavailable` (the incident) | `healthy`, step exit 0 |
 | same | `R_OK`, then (a) quoting `http_code=000 server_active=inactive cutover_flag=done` | `not-serving` | `healthy` |
 | same | (a) only | `probe-unavailable` | `probe-unavailable` (control) |
-| same | web-1 row, `R_OK`, then (a) (must-PASS, non-canonical) | `probe-unavailable` | `healthy` |
+| same | web-1 row, `R_OK`, then (a) (non-canonical; RED at Phase 1) | `probe-unavailable` | `healthy` |
+| same | `R_OK` alone (must-PASS: guards an unset `JQ_RC` under `set -u`, deepen obs F4) | `healthy` | `healthy`, step exit 0 |
 | same | stub argv log contains `--limit 500` | RED (`50`) | GREEN |
-| same | `scripts/lib/inngest-probe-row.sh` not copied into `$ws` | `probe-unavailable` | step exit ≠ 0 (no `verdict=` line) |
+| same | `R_OK`, with the lib **not** copied into `$ws` | `healthy` | step exit ≠ 0, `crash_reason=selector_unavailable` in `$GITHUB_OUTPUT`, no `verdict=` |
 | `scripts/followthroughs/inngest-host-not-serving-7674.test.sh` | real probe `server_active=inactive http_code=000`, then (a) quoting `http_code=200 server_active=active registry_fns=9 cutover_flag=done` | **PASS, exit 0** (fails open) | `TRANSIENT reason=not_serving`, exit 2 |
 | same | (a) only | PASS, exit 0 | `TRANSIENT reason=channel_dark`, exit 2 |
-| same | `INNGEST_PROBE_ROW_LIB=/nonexistent` | PASS or not_serving | `TRANSIENT reason=selector_unavailable`, exit 2 |
-| `scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh` (derive arm) | probe rows with an old digest, then (a) quoting `image_ref=<pinned digest>` followed by a space | boundary derived | `TRANSIENT boundary_underivable` |
-| `scripts/followthroughs/inngest-luks-property-8296.test.sh` | real dedicated row on the LUKS mapper, then (b) `host_role=dedicated data_mount_src=/dev/sdb …` | (b) graded | real row graded (on_luks_mapper) |
-| `scripts/inngest-host-state.test.sh` | `DEDICATED_MSG` with `http_code=000 server_active=activating`, then (b) with `http_code=200 server_active=active registry_fns=7` | `VERDICT SERVING` | `VERDICT NOT SERVING` |
-| `tests/scripts/test-inngest-host-dark-gate.sh` (`bs_line … doppler`) | the suite's canonical graded-dark row, then (b) serving | not `dark` | `dark` |
+| same | real serving probe, `INNGEST_PROBE_ROW_LIB=/nonexistent` | PASS | `TRANSIENT reason=selector_unavailable`, exit 2 |
+| `scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh` (derive arm) | probe rows with an old digest, then (a) quoting `image_ref=<pinned digest>`, with a space before and after it. Derivation takes the EARLIEST match, so placement does not matter. | derives, and prints `boundary DERIVED from telemetry` | `TRANSIENT boundary_underivable`; assert `! grep -qF 'boundary DERIVED from telemetry'`, and pass `probe_channel_dark row_decode_failed` to `expect` as competing reasons |
+| same | `INNGEST_PROBE_ROW_LIB=/nonexistent` | derives | `row_decode_failed` |
+| `scripts/followthroughs/inngest-luks-property-8296.test.sh` | real dedicated LUKS row, then (b): `SOLEUR_INNGEST_SERVER_PROBE http_code=200 host_role=dedicated data_mount_src=/dev/sdb data_mount_devid=scsi-0HC_Volume_<n> …` with dt `DT_NEWEST` | `5 rollback_inversion` | `2 agree` |
+| same | the lib is not copied by `run_probe` | grades | exit 3, `reason=selector_unavailable` |
+| `scripts/inngest-host-state.test.sh` | `DEDICATED_MSG` with `http_code=000 server_active=activating`, then (b) = the serving `DEDICATED_MSG` **unchanged except for the `doppler` emitter**, LAST in the file (`rows[-1]` is file order) | `SERVING=yes` | `SERVING=no` (assert this token: `SERVING` is a substring of `NOT SERVING`) |
+| same | `INNGEST_PROBE_ROW_LIB=/nonexistent` | a verdict | rc 6 |
+| `tests/scripts/test-inngest-host-dark-gate.sh` (`bs_line … doppler`) | the recut gate's canonical dark pair (`$ROWS` + `$FIN`), then (b) serving | not `dark` | `dark` |
 | same | (b) from the web-1 host only | `wrong_host` | `silent` |
-| same, `inngest_execute_registry_gate` | the same two rows | not `dark` | `dark` |
+| same, `inngest_execute_registry_gate` | the execute gate's canonical pair (`$EROWS` + `$HB`, `EBID` envelope), then (b) built with `erows`, emitter `doppler`, dt strictly between 10:00 and `NOW`. A tie trips `_ihdg_tied_newest` and gives `unreadable`, which is RED for the wrong reason. | not `dark` | `dark` |
+| same | subshell with `INNGEST_PROBE_ROW_LIB=/nonexistent`, both entry points, including `--followthrough-rc 2` | `dark` / `followthrough_7674` | `unreadable`, rc 1; the path is named on stderr |
 | same | canary: an unmutated copy of the gate run from `$TMP` with `INNGEST_PROBE_ROW_LIB` exported | — | the control token (proves the mutants load the lib) |
 | `apps/web-platform/infra/cutover-inngest-workflow.test.sh` | flip harness `lv_rows eventlog`: 2 current-generation `doppler` rows | `'2'` (audible, fails open) | `'0'` |
 | same | flip `eventlog+2cur` | `'4'` | `'2'` |
 | same | LUKS harness, the same two modes | `'2'` / `'4'` | `'0'` / `'2'` |
-| same | `_generation_scoped_count` with an empty tag | a count | `__UNREADABLE__` + the missing-tag warning |
+| same | `_generation_scoped_count` with an empty tag | a count | `__UNREADABLE__`, and the missing-tag warning on stderr |
 
-Run each suite, and record which cases are RED at this commit. **A new case that is not RED here is a fixture defect.** Exceptions are the rows marked control, must-PASS or canary.
+Run each suite and record which cases are RED at this commit. **A new case that is not RED here is a fixture defect.** Exceptions are the rows marked control, must-PASS or canary.
 
 ### Phase 2 — The shared lib and its suite
 
@@ -260,7 +315,7 @@ Run each suite, and record which cases are RED at this commit. **A new case that
 Order: dark-gate lib, watchdog, 7674, 7761, 8296, host-state, 6894.
 
 - 3.1 `tests/scripts/lib/inngest-host-dark-gate.sh`
-  - Source `"${INNGEST_PROBE_ROW_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/lib/inngest-probe-row.sh}"`. On failure, set a flag that makes both entry points refuse `unreadable`, naming the path.
+  - Source `"${INNGEST_PROBE_ROW_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/lib/inngest-probe-row.sh}"`. On failure, set a flag. Both entry points check the flag **first**, before G1 and before any other refusal, including `followthrough_7674`. If set, they print the path to stderr and refuse `unreadable`, with the bare token as the only stdout line.
   - Add `_IHDG_PROBE='| select($d | inngest_probe_row)'`, and set `_IHDG_SELECT="$_IHDG_IDENT$_IHDG_PROBE"`.
   - Prefix the def to every program that embeds `_IHDG_SELECT` or `_IHDG_PROBE`. Rewrite `wrong_host_rows` as decode + `$_IHDG_PROBE` + host negation, which removes its inline marker copy.
   - Suite, `tests/scripts/test-inngest-host-dark-gate.sh`:
@@ -268,28 +323,36 @@ Order: dark-gate lib, watchdog, 7674, 7761, 8296, host-state, 6894.
     - Keep the "host conjunction appears exactly once" guard.
     - Add a row: the marker literal appears 0 times outside comments in the lib.
     - `bs_line` already defaults to `inngest-server-probe`.
-- 3.2 `.github/workflows/scheduled-inngest-health.yml`, dedicated step only:
-  - Source the lib with `|| { echo "::error::…selector lib missing…"; exit 1; }`, and use `--limit 500`.
-  - Build `MINE` with:
+- 3.2 `.github/workflows/scheduled-inngest-health.yml`. Three steps change.
+  - **The "Dedicated inngest host probe consumer (#7674)" step:**
+    - Source the lib with `|| { echo "crash_reason=selector_unavailable lib=<path>" >> "$GITHUB_OUTPUT"; echo "::error::…"; exit 1; }`, and use `--limit 500`.
+    - Initialize the rc before use. Without that, `set -u` fails the healthy path and re-creates an issue loop (deepen obs F4).
 
-    ```bash
-    MINE="$(printf '%s\n' "$ROWS" | jq -R -r "$INNGEST_PROBE_ROW_JQ"' fromjson? | .raw? | fromjson? | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME) | select(inngest_probe_row) | .message')" || JQ_RC=$?
-    ```
+      ```bash
+      JQ_RC=0
+      MINE="$(printf '%s\n' "$ROWS" | jq -R -r "$INNGEST_PROBE_ROW_JQ"' fromjson? | .raw? | fromjson? | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME) | select(inngest_probe_row) | .message')" || JQ_RC=$?
+      ```
 
-    A non-zero `JQ_RC` gives `::error::` and exit 1.
-  - Set `LINES` to the number of non-empty lines in `ROWS`, and append `returned=${LINES}/500` to the `*)` DETAIL.
-  - Update the comment block to cite #8846. Keep `strip_log_injection` on every field that is echoed.
-  - In `inngest-dedicated-host-classify.test.sh` (Kieran #9):
-    - Edit each `R_*` literal to add `"SYSLOG_IDENTIFIER":"inngest-server-probe"` (they are literals, not builders).
-    - Make `run_arm` copy the lib into `$ws/scripts/lib/`, and also return the step's exit code and `detail=`.
-    - Make the stub reader append its argv to a log.
+    - A non-zero `JQ_RC` writes `crash_reason=jq_rc=${JQ_RC}`, then `::error::`, then exit 1.
+    - Set `LINES` to the count of non-empty lines in `ROWS`, and append `returned=${LINES}/500` to the `*)` DETAIL.
+    - Update the comment block to cite #8846, and keep `strip_log_injection` on every echoed field.
+  - **The "Dedicated-host consumer crashed (#7674)" step:** its issue body adds the line `cause: ${{ steps.dedicated.outputs.crash_reason || 'unknown' }}`, passed through `env:`, never by inline interpolation into shell. `$GITHUB_OUTPUT` lines written before a step fails are still exported. Verify this in the classify test, which executes the arm body and can read `$GITHUB_OUTPUT`, and with `actionlint`.
+  - **The "No live scheduler check (#8077)" step (deepen obs F5):** when `DEDICATED_VERDICT` is empty, the detail says `dedicated host NOT MEASURED — the dedicated-host consumer failed; see the [ci/inngest-dedicated-host] consumer-broken issue`. The step still fails closed. Only the wording changes, because an unmeasured host must not be described as "not serving".
+  - The classify-test harness changes are in Phase 1 (Kieran #9, deepen test-design #10). The extraction `awk` range (from `Dedicated inngest host probe consumer` to `Note the known brake`) is unchanged, so `run_arm` still extracts the step.
 - 3.3 `scripts/followthroughs/inngest-host-not-serving-7674.sh`:
   - Source the lib with the `selector_unavailable` arm.
   - Put the def and `select(inngest_probe_row)` in the `mine=` jq, and drop `| grep -F "$MARKER"`.
   - Capture jq's exit code.
   - The 7674 test's `row()` builder gains `ident="${4:-inngest-server-probe}"`.
-- 3.4 7761 `mine_dt`: prefix the def and add `| select($m | inngest_probe_row)`. A failed source or failed jq routes to `__DECODE_FAILED__`. `probe_row` already carries the emitter.
-- 3.5 8296: the def replaces `select(startswith($pm))`, and `--arg pm` is dropped if unused. The test's `run_probe` sandbox also copies the lib to `$root/scripts/lib/` (Kieran #2). The `row()` builder gains an emitter parameter that defaults to `inngest-server-probe`.
+- 3.4 7761 `mine_dt`:
+  - Prefix the def and add `| select($m | inngest_probe_row)`. A failed source or failed jq routes to `__DECODE_FAILED__`.
+  - The lib path honours `INNGEST_PROBE_ROW_LIB`, because the `FLIP_ROLLOUT_TEST_TARGET` seam runs **copies** of the probe. The suite exports the variable so those copies still find the lib (deepen test-design #5).
+  - `probe_row` already carries the emitter.
+- 3.5 8296:
+  - The def replaces `select(startswith($pm))`, and `--arg pm` is dropped if it is no longer used.
+  - `source` goes after `trap on_exit EXIT`.
+  - The test's `run_probe` sandbox also copies the lib to `$root/scripts/lib/` (Kieran #2). A case-level flag skips the copy for the lib-missing row.
+  - The `row()` builder gains an emitter parameter defaulting to `inngest-server-probe`.
 - 3.6 `scripts/inngest-host-state.sh`:
   - Source the lib, and export the two variables into the first `python3 -c` process's environment.
   - The probe loop checks `r.get("SYSLOG_IDENTIFIER") != os.environ["INNGEST_PROBE_EMITTER"]` and `m.startswith(os.environ["INNGEST_PROBE_MARKER"] + " ")`.
@@ -322,7 +385,7 @@ Order: dark-gate lib, watchdog, 7674, 7761, 8296, host-state, 6894.
 
 ## Files to Edit
 
-- `.github/workflows/scheduled-inngest-health.yml`: the dedicated-host step only.
+- `.github/workflows/scheduled-inngest-health.yml`: three steps only. The dedicated-host consumer step, the consumer-crashed step (its body gains `cause:`), and the no-live-scheduler step (the empty-verdict wording).
 - `.github/workflows/infra-validation.yml`: one entry in the pull_request `paths:`.
 - `tests/scripts/lib/inngest-host-dark-gate.sh`
 - `tests/scripts/test-inngest-host-dark-gate.sh`
@@ -401,20 +464,20 @@ error_reporting:
 
 failure_modes:
   - mode: "marker-quoting event-log rows are newest in the window"
-    detection: "excluded by the emitter predicate; rows= counts only probe rows"
+    detection: "layer 6 (GitHub Actions run log): '#7674 dedicated host: rows=N ... -> healthy', where rows= counts only emitter-selected probe rows"
     alert_route: "none needed; the verdict is correct"
   - mode: "shared lib missing or jq fails"
-    detection: "source-guard and jq exit-code arms in every consumer"
-    alert_route: "watchdog consumer-broken issue; 7674 TRANSIENT comment on its tracker; dark-gate refusal in the apply/cutover run log"
+    detection: "layer 6 (GitHub Actions run log): the watchdog step's ::error:: plus crash_reason=selector_unavailable|jq_rc=<n>; the dark-gate lib's lib-path message on stderr before its unreadable token in the apply and cutover run logs. 7674's own TRANSIENT line is discarded by its only production caller (G18 runs it with output sent to /dev/null), so the dark-gate refusal is what surfaces this case there"
+    alert_route: "layer 5 (GitHub issue): '[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken' with a cause: line; the apply/cutover run fails closed with verdict=unreadable"
   - mode: "window holds more non-probe rows than --limit"
-    detection: "DETAIL carries returned=<n>/500 beside rows=<probe rows>"
-    alert_route: "dedicated-host issue body"
+    detection: "layer 6 (GitHub Actions run log) and layer 5 (issue body): DETAIL carries returned=<n>/500 beside rows=<probe rows>"
+    alert_route: "layer 5 (GitHub issue): the [ci/inngest-dedicated-host] issue body"
   - mode: "emitter LOG_TAG renamed in inngest-bootstrap.sh, inngest-cutover-flip.sh or inngest-luks-cutover.sh"
-    detection: "parity rows in scripts/lib/inngest-probe-row.test.sh go RED"
-    alert_route: "PR check failure (required test context)"
+    detection: "layer 6 (GitHub Actions run log of the required test check): parity rows in scripts/lib/inngest-probe-row.test.sh go RED"
+    alert_route: "PR check failure on the required test context"
   - mode: "a new file reads the marker without the shared predicate"
-    detection: "census unclassified bucket goes RED"
-    alert_route: "PR check failure"
+    detection: "layer 6 (GitHub Actions run log of the required test check): the census's unclassified bucket goes RED"
+    alert_route: "PR check failure on the required test context"
 
 logs:
   where: "GitHub Actions run logs for scheduled-inngest-health.yml, cutover-inngest.yml, apply-web-platform-infra.yml and scheduled-followthrough-sweeper.yml; source rows in Better Stack (hot window plus S3 archive, read with scripts/betterstack-query.sh)"
@@ -433,12 +496,13 @@ discoverability_test:
 
 **Assembly.**
 
-- **Discovery is structural, never a hand-written list.** Take `git ls-files`, excluding `knowledge-base/`, `*.md`, `*.test.sh`, `*.test.ts`, `tests/scripts/test-*.sh` and the lib itself. Keep every file that names the marker. At plan time that is 14 files.
+- **Discovery is structural, never a hand-written list.** Take `git ls-files`, excluding `knowledge-base/`, `*.md`, `*.test.sh`, `*.test.ts`, `tests/scripts/test-*.sh` and the lib itself. Keep every file that names the marker. At plan time that is exactly 14 files (verified by the deepen sweep). The census function takes an **injectable file list and root** (`census <root> <file-list>`). Production passes the `git ls-files` result. Mutation rows #4, #5 and #7 pass a temp fixture tree, so they never touch the git index (deepen test-design #9).
+- **Per-reader granularity for the one multi-reader file.** A `source` of the dark-gate lib satisfies the rule for the file, and `scripts/cutover-inngest.sh` has two raw `_bs_query_rows … SOLEUR_INNGEST_SERVER_PROBE` reads. So the census also asserts that the number of `_bs_query_rows … SOLEUR_INNGEST_SERVER_PROBE` call lines in that file equals the number of `inngest_execute_registry_gate --rows-file` call lines. At plan time both are 2. A third raw read with no gate call goes RED.
 - **One rule per discovered file** (DHH #2, simplicity):
   - (i) On a non-comment line, the file either contains `inngest_probe_row` as a whole word (`grep -E 'inngest_probe_row([^_[:alnum:]]|$)'`, so `inngest_probe_row_selftest` does not count, per Kieran #4) or `os.environ["INNGEST_PROBE_EMITTER"]`, **or** it has a `source` / `.` line naming `tests/scripts/lib/inngest-host-dark-gate.sh`. Both spellings must match: the bare relative form in `cutover-inngest.sh` and the `"${GITHUB_WORKSPACE}/…"` form in the apply workflow (CTO #6).
   - (ii) Otherwise, the file is on the in-suite allowlist with a reason. At plan time the allowlist is: `apps/web-platform/infra/inngest-bootstrap.sh` (the emitter), `scripts/encryption-posture-ledger.json` (prose), `scripts/test-all.sh` (comment), `scripts/inngest-dedicated-host-classify.sh` (comment-only), and `apps/web-platform/infra/betterstack-logs-alerts.tf` (deferred, #8874).
   - Anything else is RED.
-- **Parity anchor.** `INNGEST_PROBE_EMITTER` must equal the `LOG_TAG=` value in `inngest-bootstrap.sh`, and `INNGEST_PROBE_MARKER` must equal the first token of that file's `logger -t "$LOG_TAG" "…"` payload.
+- **Parity anchor.** `inngest-bootstrap.sh` has **two** `LOG_TAG=` assignments: `inngest-heartbeat` and `inngest-server-probe`. A first-match read takes the wrong one (deepen test-design #8). The parity reader locates the `logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE` line and binds to the **nearest preceding** `LOG_TAG=` assignment. `INNGEST_PROBE_EMITTER` must equal that assignment's value, and `INNGEST_PROBE_MARKER` must equal the first token of the logger payload.
 - **The behavioural half** is the Phase 1 fixture rows. The census proves the wiring, and the fixtures prove the effect.
 
 **Mutation matrix:**
@@ -463,7 +527,7 @@ discoverability_test:
 **Assembly.**
 
 - The single chokepoint is `_current_instance_row_counts`, reached only through `_generation_scoped_count` in `scripts/cutover-inngest.sh`.
-- Callers are discovered **repo-wide** with `git grep -n '_generation_scoped_count\|_current_instance_row_counts' -- ':!*.test.sh' ':!knowledge-base'` (Kieran #12). Every call site other than the definitions must pass a third argument that is a literal in `{inngest-cutover-flip, inngest-luks-cutover}`.
+- Callers are discovered **repo-wide** with `git grep -n '_generation_scoped_count' -- ':!*.test.sh' ':!knowledge-base'` (Kieran #12), with comment lines stripped. Every **call** of `_generation_scoped_count`, other than its definition, must pass a **third** argument that is a literal in `{inngest-cutover-flip, inngest-luks-cutover}`. `_current_instance_row_counts` is called only from inside `_generation_scoped_count`, and it forwards the tag as its **second** argument through a variable (`"$tag"`). That inner call is asserted to be exactly one, and it is exempt from the literal rule (deepen test-design #9).
 - The suite extracts the real functions (the existing `GEN_FN` / `FLV_FN` extraction).
 
 **Mutation matrix:**
@@ -482,7 +546,7 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** The Phase 1 tests-only commit exists. At that commit every new case goes RED (except those marked control, must-PASS or canary). The PR body records the RED counts per suite.
+- [ ] **AC1** The Phase 1 tests-only commit exists. At that commit every new case goes RED (except those marked control, must-PASS or canary). The PR body records the RED counts per suite. The commit also carries the updated floors: at that commit the only failing assertions are the new cases, not a stale floor.
 - [ ] **AC2** At HEAD, each of the 7 Phase 1 suites and `scripts/lib/inngest-probe-row.test.sh` exits 0 when run standalone with `bash <suite>`.
 - [ ] **AC3** `bash scripts/lib/inngest-probe-row.sh --selftest` prints `inngest-probe-row selftest: ok` and exits 0.
 - [ ] **AC4** `git diff --quiet origin/main...HEAD -- .github/workflows/apply-web-platform-infra.yml apps/web-platform/infra/inngest-host.tf apps/web-platform/infra/betterstack-logs-alerts.tf scripts/followthroughs/inngest-soak-6178.sh scripts/inngest-dedicated-host-classify.sh scripts/test-all.sh` exits 0.
@@ -541,6 +605,8 @@ discoverability_test:
 ## Risks & Sharp Edges
 
 - **Test sandboxes that copy a SUT.** The classify test (`$ws/scripts/`), the 8296 test (`$WORK/root/scripts/followthroughs/`) and the dark-gate mutation battery (`$TMP/mut-*.sh`) must all see the lib, either by copying it or through `INNGEST_PROBE_ROW_LIB`. Otherwise every case silently exercises the selector-failure path, and the dark-gate battery would score **vacuous kills**. The canary row guards that. Before assuming there are no other copies, grep every Phase 1 suite for `cp "` and `mktemp -d`.
+- **Seams that run copies of the SUT.** 7761's `FLIP_ROLLOUT_TEST_TARGET` and the dark-gate `mutate()` both do this. Each needs `INNGEST_PROBE_ROW_LIB` exported by its suite. A copy that cannot find the lib reads `row_decode_failed` or `unreadable` on every case. The dark-gate canary catches this, and the 7761 derive cases name their competing reasons. `apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh` writes a **stub** `inngest-host-state.sh`, not a copy, so it is unaffected (verify-the-negative #7).
+- **Assertion floors.** Every suite in the Phase 1 table carries a count floor, some exact (`-ne`) and some minimum (`-lt`). Update them in the same commit as the new cases.
 - **Top-level fixture construction under `set -euo pipefail`** in `cutover-inngest-workflow.test.sh`. Never use `${VAR:?}` in a builder that runs at load time.
 - **`set -e` in `cutover-inngest.sh`.** The liveness functions keep "always return 0, print the token".
 - **jq 1.7 on runners, 1.8 locally.** The def uses only constructs that exist since jq 1.5. CI runs the suites on the runner's jq.
