@@ -44,6 +44,15 @@ HOST="soleur-inngest"
 HOST_NAME="soleur-inngest-prd"
 
 if [[ ! -r "$QUERY" ]]; then echo "TRANSIENT: $QUERY missing"; exit 2; fi
+# The ONE probe-row predicate (#8846): emitter + anchored marker. The inngest event log ships from
+# the same host under SYSLOG_IDENTIFIER=doppler and quotes probe lines, so host isolation alone does
+# not make a row a probe reading.
+PROBE_ROW_LIB="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+if ! source "$PROBE_ROW_LIB" 2>/dev/null || [[ -z "${INNGEST_PROBE_ROW_JQ:-}" ]]; then
+  echo "TRANSIENT: reason=selector_unavailable lib=${PROBE_ROW_LIB}"
+  exit 2
+fi
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
   if [[ -z "${!v:-}" ]]; then echo "TRANSIENT: $v is not set in the probe environment"; exit 2; fi
 done
@@ -107,14 +116,22 @@ fi
 # The probe row must pin a volume alias (never __NOMATCH__ / __AMBIGUOUS__ / __UNREADABLE__ — an
 # unresolved device is not evidence of anything) and its mount source must be the CANONICAL mapper,
 # which is what "the store is on the encrypted volume" looks like from off-host.
-ON_MAPPER=$(printf '%s\n' "$PROBE" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
+ON_MAPPER_OUT=$(printf '%s\n' "$PROBE" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" "$INNGEST_PROBE_ROW_JQ"'
   fromjson? | .raw? | fromjson?
+  | select(type == "object")
   | select(.host == $h and .host_name == $hn)
-  | (.message // "") | select(test("host_role=dedicated "))
+  | select(inngest_probe_row)
+  | .message | select(test("host_role=dedicated "))
   | select(test("data_mount_src=/dev/mapper/inngest-redis "))
   | select(test("data_mount_devid=scsi-0HC_Volume_[0-9]+ "))
   | select(test("redis_active=active|redis_active=true"))
-  | 1' 2>/dev/null | grep -c '^1$' || true)
+  | 1' 2>/dev/null)
+RC=$?
+if (( RC != 0 )); then
+  echo "TRANSIENT: reason=decode_failed jq_rc=$RC on the probe-row selector"
+  exit 2
+fi
+ON_MAPPER=$(printf '%s\n' "$ON_MAPPER_OUT" | grep -c '^1$' || true)
 
 echo "terminal cutover-complete rows: ${DONE_N} (newest ${NEWEST_DONE:-none})"
 echo "newest rolled-back/aborted row: ${NEWEST_BAD:-none}"
