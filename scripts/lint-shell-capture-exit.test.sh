@@ -26,7 +26,7 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 PASS=0
 FAIL=0
 # Anti-vacuity floor. Raise deliberately when adding fixtures.
-MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-110}"
+MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-133}"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() {
@@ -1194,6 +1194,242 @@ x='pre$?'
 EOF
 )"
 assert_silent "$f" "S3: x='pre\$?' is literal text, not a status read"
+
+f="$(write_fix s3-prefix-dq <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+worker
+x="pre$?"
+EOF
+)"
+assert_fires "$f" 4 S3 "S3: x=\"pre\$?\" reads the dead status inside a double quote"
+
+# --- quote-model regressions -------------------------------------------------
+# Apostrophes in inline comments, `${#arr}` length expansions, `$(` inside
+# `"…"`, and `)`-closing quote tails all used to desync the quote tracker and
+# silently blank the rest of the file.
+
+f="$(write_fix qm-comment-apos <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo ok # don't
+count=$(grep -c pat "$1")
+echo mid # isn't
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: apostrophe in a comment tail cannot desync the quote tracker"
+
+f="$(write_fix qm-len-expand <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+A=(1 2)
+(( ${#A[@]} )) && echo nonempty
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 5 S1 "S1: \${#arr[@]} is a length expansion, not a comment start"
+
+f="$(write_fix qm-dq-subst <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+payload="$(jq -nc --arg v "$1" '{a: $v}' 2>/dev/null)"
+inner="$(echo "$(printf x)")"
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 5 S1 "S1: \$( inside dq relexes; nested \$(a \$(b)) cannot desync"
+
+f="$(write_fix qm-close-paren <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+x=$(bash -c "
+  inner
+" 2>&1)
+set -e
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 7 S1 "S1: paren closing a subst on a carried-quote line still counts toward depth"
+
+f="$(write_fix qm-multiline-sub <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+payload="$(jq -nc '
+  {a:1}
+' 2>/dev/null)" || true
+set -e
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 7 S1 "S1: multi-line single-quote inside a subst inside dq closes cleanly"
+
+# --- frame/regressions -------------------------------------------------------
+# `{`/`}`/`(`/`)` inside `$(…)` arguments cannot perturb the function frame;
+# `set`-led lines can still carry a closer.
+
+f="$(write_fix frame-subst-brace <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  v=$( { a; }; cat)
+  (( t > 0 )) && echo x
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4: a brace inside a substitution arg must not close the function frame"
+
+f="$(write_fix frame-set-closer <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() {
+  a
+  set +u; }
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: set-led line still closes the definition -- the read is not dead"
+
+f="$(write_fix frame-if-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  if { probe; }; then
+    echo y
+  fi
+  [ -n "$z" ] && echo done
+}
+EOF
+)"
+assert_fires "$f" 7 S4 "S4: if-group condition inside a body does not pop the function"
+
+f="$(write_fix frame-neg-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+! { worker; }
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: negated brace group is errexit-exempt -- the read is live"
+
+f="$(write_fix frame-and-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+guard && {
+  worker
+}
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: guard-amp-amp brace group aborts under set -e -- the read is dead"
+
+f="$(write_fix frame-midline-defclose <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() {
+  worker; }
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: mid-line brace close ends a definition, not an execution"
+
+f="$(write_fix frame-oneline-def-read <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() { a; }; rc=$?
+EOF
+)"
+assert_silent "$f" "S3: one-line definition close is not the read's antecedent"
+
+# --- statement/capture regressions -------------------------------------------
+
+f="$(write_fix cap-multi-stmt-subst <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x=$(a; grep -c pat f)
+EOF
+)"
+assert_fires "$f" 3 S1 "S1: multi-statement subst -- the last semicolon statement carries the status"
+
+f="$(write_fix cap-sq-subst <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x='$(grep p f)'
+EOF
+)"
+assert_silent "$f" "S1: single-quoted dollar-paren is a literal string, not a capture"
+
+f="$(write_fix cap-and-tail <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x=$(grep -c p f) && next
+EOF
+)"
+assert_silent "$f" "S1: capture followed by amp-amp is errexit-exempt (non-final operand)"
+
+f="$(write_fix cap-neg-assign <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+! x=$(grep -c p f)
+EOF
+)"
+assert_silent "$f" "S1: negated assignment is errexit-exempt"
+
+f="$(write_fix cap-group-pipeline <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+n=$({ printf x | grep -oE pat | wc -l; } | tr -d ' ')
+EOF
+)"
+assert_fires "$f" 3 S1 "S1: group pipeline inside subst surfaces under pipefail"
+
+# --- set-verdict regressions --------------------------------------------------
+
+f="$(write_fix set-brace-group <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+{ set +e; }
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_silent "$f" "S1: brace-grouped set clears errexit in this shell"
+
+f="$(write_fix set-subshell <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+( set +e; inner )
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: paren-grouped set scopes to the subshell -- outer stays armed"
+
+f="$(write_fix set-comment-spoof <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x=1; # note; set +e
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: set text inside a comment tail cannot clear errexit"
+
+# --- heredoc regressions ------------------------------------------------------
+
+f="$(write_fix hd-quoted-ltlt <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "usage: feed <<EOF lines"
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: quoted heredoc marker opens nothing -- later lines still scan"
+
+f="$(write_fix hd-arith-shift <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+x=$((a<<b))
+count=$(grep -c pat "$1")
+EOF
+)"
+assert_fires "$f" 4 S1 "S1: arithmetic shift is not a heredoc"
 
 # --- baseline behaviour ------------------------------------------------------
 # --write-baseline refuses explicit paths (a subset scan would truncate the

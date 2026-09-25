@@ -155,6 +155,9 @@ plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --list --jso
 plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/typical" 2>&1) << read: rc=$?
 plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" --close 1 --status resolved --linked-issue 2723 2>&1) << read: rc=$?
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	S1	MUTATED="$(printf '%s\n' "$BLOCK" | grep -v 'oven-sh/setup-bun')"
+plugins/soleur/test/session-state.test.sh	S1	T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1)
+plugins/soleur/test/session-state.test.sh	S1	t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2)
+plugins/soleur/test/session-state.test.sh	S3	bash -c " << read: t9_acq_rc=$?
 scripts/expenses-verify-by-check.sh	S1	marker_hits=$({ printf '%s' "$line" | grep -oE '<!--[[:space:]]*estimate[[:space:]]' | wc -l; } | tr -d '[:space:]')
 scripts/lint-agents-compound-sync.test.sh	S1	remaining=$(grep -c '2>&1' "$root/plugins/soleur/skills/compound/SKILL.md")
 scripts/lint-agents-rule-budget.test.sh	S1	reported=$(printf '%s' "$out" | grep -oE 'B_ALWAYS=[0-9]+' | head -1 | cut -d= -f2)
@@ -193,4 +196,5 @@ tests/scripts/test-sentry-destroy-counts.sh	S1	dc=$(grep -oP '^destroy_count=\K.
 tests/scripts/test-sentry-destroy-counts.sh	S1	local calls; calls=$(grep -cE 'sentry-destroy-counts\.sh' "$wf")
 tests/scripts/test-sentry-destroy-counts.sh	S1	nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
 tests/scripts/test-sentry-destroy-counts.sh	S1	rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out")
+tests/scripts/test-sentry-full-root-apply.sh	S1	body=$(grep -vE '^ZZZ_NEVER_MATCHES' "$big")
 tests/scripts/test-sentry-full-root-apply.sh	S1	local hits; hits=$(_strip_comments "$WORKFLOW" | grep -nE -- '-target=' | head -5)
