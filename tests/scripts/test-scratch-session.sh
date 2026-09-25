@@ -38,6 +38,17 @@ assert_fixture_dir() {
 cleanup() { assert_fixture_dir "$TESTROOT"; rm -rf "$TESTROOT" "${DISK_BASE:-}"; }
 trap cleanup EXIT
 
+# Fixture-env adoption (#7833/#7849): fixture git writes run under the
+# synthesized identity + hermetic config + discovery ceiling, not the
+# ambient developer environment.
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+git_fixture_env "$TESTROOT" || { echo "FATAL: git_fixture_env refused fixture root $TESTROOT" >&2; exit 2; }
+
+# Under the battery, test-all.sh exports its OWN session root — the nested
+# no-op is correct behaviour, but every begin arm below must start un-nested
+# or it measures the parent's root, not the allocation under test.
+unset SOLEUR_SCRATCH_SESSION_ROOT SOLEUR_SCRATCH_OWNER_PID SOLEUR_SCRATCH_BASE
+
 [[ -f "$GUARD" && -f "$LIB" ]] || { echo "ERROR: fixture targets missing" >&2; exit 1; }
 
 # TESTROOT lives under /tmp — tmpfs on the reference host → exercises the
