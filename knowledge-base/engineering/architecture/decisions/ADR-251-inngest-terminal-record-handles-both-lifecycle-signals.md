@@ -25,7 +25,9 @@ A second constraint: the SDK registers `onFailure` as its own `<id>-failure` fun
 An Inngest function that owes a terminal record handles BOTH lifecycle signals and does the settling in ONE function:
 
 1. The owning function declares `onFailure`. That handler only forwards the failed run as an app event (for the leader loop, `agent.spawn.orphaned`, carrying `data.event` and `data.run_id` from the failure envelope). It does no database work.
-2. A dedicated settle function (for the leader loop, `agent-on-spawn-settle`) triggers on both that forwarded event and `inngest/function.cancelled`. The cancelled trigger's `if` is the literal expression the SDK generates for the owner's failure trigger, so it can never match the `-failure` id. The settle function has retries (`3`) and idempotency on the orphaned run id (`event.data.run_id`).
+2. A dedicated settle function (for the leader loop, `agent-on-spawn-settle`) triggers on both that forwarded event and `inngest/function.cancelled`. The cancelled trigger's `if` is the expression the SDK generates for the owner's failure trigger, built from the client id (`inngest.id`) and the owner's function id, so it can never match the `-failure` id and cannot drift from a rename. The settle function has retries (`3`) and idempotency on the orphaned run id (`event.data.run_id`), which the settle validates as a ULID so a missing id cannot collapse every settle onto one key.
+   - The forward is an ordinary app event, so anyone holding the event key can send one. The control is the settle's founder-scoped conditional write: a forged envelope must carry the real row, founder and message ids to write anything. A holder of the event key can already forge `agent.spawn.requested` itself, which is strictly worse.
+   - If the forward itself exhausts its retries, `onFailure` pages `(settle_failed)`, because the settle will never run.
 3. The settle write is conditional. It applies only to a row with no terminal state, it is scoped to the owning user, and it reports only on rows it actually wrote. For a cancel, a grace `step.sleep` comes first, because Inngest does not abort a step request already in flight.
 4. Handlers read `event.data.event` and `event.data.run_id`, never the ctx `runId`, which belongs to the handler's own run.
 
@@ -33,7 +35,7 @@ Known pre-existing gap, not changed here: `cronGhPagesCertReissueOnFailure` (`se
 
 ## Consequences
 
-- Every exit of such a run now leaves a terminal record: a caught failure, a retry-exhausted throw, a finish timeout and an API or dashboard cancel. The one exception is a run Inngest loses entirely, which fires no lifecycle event (tracked in #8839).
-- Every function covered by this pattern adds one extra served Inngest function, and each is pinned in `function-registry-count.test.ts`.
+- A caught failure, a retry-exhausted throw, a finish timeout and an API or dashboard cancel now each leave a terminal record. Four exits still do not, all tracked in #8839: a run Inngest loses entirely (no lifecycle event fires); a terminal write inside the owner that fails and is swallowed; and a settle or forward that exhausts its retries (both page, but nothing is written).
+- Each owner covered by this pattern adds one served function (the settle function, pinned in `function-registry-count.test.ts`), and the SDK registers a second, `<id>-failure`, from the `onFailure` key.
 - A cancel settles after the grace sleep, not immediately. For the leader loop, a timed-out card can show "Working" for up to about 12 minutes.
 - The pattern depends on server behaviour measured on 1.19.4. An Inngest server upgrade should re-run the measurement (the plan's I-1 recipe) before relying on it.

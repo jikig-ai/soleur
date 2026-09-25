@@ -2137,8 +2137,8 @@ resource "sentry_alert" "anthropic_credit_exhausted" {
 }
 
 # #8719 — leader-loop dead-letters of agent.spawn.requested. Emitted by
-# server/spawn-dead-letter.ts (`reportSpawnDeadLetter`), which `persistFailure` in
-# inngest/functions/agent-on-spawn-requested.ts calls for every dead-lettered spawn. The
+# server/spawn-dead-letter.ts (`reportSpawnDeadLetter`), which `persistFailure` and the
+# lifecycle settle in inngest/functions/agent-on-spawn-requested.ts call. The
 # emitter uses the MESSAGE path with a `reason` tag on purpose — see its header for why
 # the Error path would reach Sentry with no tags (#8629) and never match this rule.
 #
