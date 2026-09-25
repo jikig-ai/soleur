@@ -11,8 +11,9 @@
 # UUIDv5 of the function slug (tried). The registry held 70 functions on 09-15 and 09-19; the
 # probe pins that count and refuses (registry_drift) if it moves.
 #
-# ORDER IS THE BALANCING LEVER. The probe deals line i (0-based) into slice i mod 5 and never
-# time-slices (the deploy webhook forwards only `from` and `function_ids`), so the sort decides
+# ORDER IS THE BALANCING LEVER. The probe deals line i (0-based) into slice i mod N_SLICES (7 since
+# 2026-09-25; 5 before) and never time-slices (the deploy webhook forwards only `from` and
+# `function_ids`), so the sort decides
 # which ids share a GET. Sort key: -runs, then id. Reorder ONLY by re-measuring; never by hand.
 #
 # Sort measured at 2026-09-19T03:57:28Z (from=2026-09-15T12:40:00Z, read-only): 831 distinct runs,
@@ -22,6 +23,11 @@
 # registry 70/70, per-slice total_count s1=374 s2=125 s3=114 s4=113 s5=112, 838 distinct runs,
 # explained=2 (the 09-17 run-id sets), UNEXPLAINED=0 — the day-7 feasibility evidence: the heaviest
 # slice forecasts ≈ 374 × 7 / 3.7 ≈ 710 runs ≈ 8 pages against the host's 18-page / 1800-run gate.
+# Re-dealt 2026-09-25 (read-only): at 5 slices, slice 1 had total_count=1023 and the host's scan
+# failed on page 8 (curl exit 28) on three consecutive GETs, while the minter alone (713 runs, 19 s)
+# and the other ten ids (310 runs, 4 s) each read cleanly. At 7 slices (SLICE_MAX=8) the live reading
+# was rc=5, 2304 distinct runs, s1=775 s2=301 s3=298 s4=299 s5=280 s6=267 s7=84. Order unchanged.
+# Horizon: s1 is almost all the */20 minter (~72 runs/day) and passes 1023 again around 2026-09-28.
 26e6836b-97ad-503f-8b08-490d8a2f4ce8
 2e625d3c-0207-569f-b10b-567bc685ad5e
 11bb44a3-ae8d-57b0-8d41-e76e57f0277a
