@@ -1899,8 +1899,12 @@ ADR-100, amendment 2026-09-14.
    It reaches the dedicated GQL over the private net via `/hooks/inngest-doublefire-probe`
    (P1-12 — the runner cannot curl `10.0.1.40` directly), buckets every run by
    `(functionID, floor(startedAt / cron_period))`, and fails if any bucket has >1 run
-   (double-fire). It also auto-emits the missed-tick `soleur:trigger-cron` list for ticks that
-   fell in the quiesce→register gap (P2-16). Re-fire that list via `soleur:trigger-cron`.
+   (double-fire). By default it then prints one `missed-tick candidates NOT EMITTED` notice
+   pointing to [§ Bounded-outage note](#bounded-outage-note), which is the only recovery path for
+   a tick skipped in the quiesce→register gap (P2-16, #6939). Dispatching with
+   `missed_tick_candidates=true` adds UNVERIFIED `candidate function_id=… empty_bucket_start=…`
+   lines. They are **not** a re-fire list: a line can be an event-driven function or a bucket a
+   slower cron was never due in, and re-firing one double-fires that cron.
 
    > **`op=verify` caveats — read before trusting the verdict:**
    > - **Reads only the dedicated host (P2-a).** The doublefire-probe reads **only the dedicated
@@ -2185,8 +2189,32 @@ parent plan's **accepted bounded residual** (ADR-100: a fully zero-downtime swit
 impossible under the single-writer constraint — two schedulers on prod Postgres would
 double-fire every cron, strictly worse than a brief gap). The flip oneshot restarts inngest
 **in place** (pre-installed during dark, so the window is bounded by the restart + app-redeploy,
-target < 5 min — NOT a cold OCI pull). Ticks missed in-window are not backfilled; `op=verify`
-enumerates them for `soleur:trigger-cron` re-fire.
+target < 5 min — NOT a cold OCI pull). Ticks missed in-window are not backfilled.
+
+**Recovering a skipped tick (#6939).** `op=verify` does not print a re-fire list. A per-bucket
+list cannot tell a tick that was due from one that was never due, and re-firing a never-due tick
+double-fires that cron. The default is safe when you cannot complete step 2:
+
+1. **Default: do nothing.** A tick skipped in the gap is the accepted residual above, and the
+   cron's next scheduled tick runs normally.
+2. Re-fire only when a skipped tick matters **and** all three checks hold:
+   - (a) The cron's own schedule (the `{ cron: }` trigger in
+     `apps/web-platform/server/inngest/functions/cron-<name>.ts`) put a tick strictly inside the
+     gap window that `op=verify` printed. A function with no `{ cron: }` trigger is event-only
+     and is never missed.
+   - (b) The cron's Sentry monitor shows a **missed** check-in for that tick. The slug is the
+     `SENTRY_MONITOR_SLUG` constant in `cron-<name>.ts`, which is not always `cron-<name>` (for
+     example `cron-workspace-gc` uses `scheduled-workspace-gc`). Read it only after the tick time
+     plus that monitor's `checkin_margin_minutes` in `apps/web-platform/infra/sentry/cron-monitors.tf`,
+     and read it through the API, not a dashboard:
+     `curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/?limit=10" | jq -r '.[] | "\(.dateCreated) \(.status)"'`.
+     **If the cron has no monitor, no-run cannot be confirmed, so do not re-fire.**
+   - (c) Only then run `soleur:trigger-cron --event cron/<name>.manual-trigger`.
+3. Take particular care with the destructive or user-facing crons: `cron-workspace-gc`,
+   `cron-rule-prune` and `cron-action-required-sla` (a duplicate SLA notification reaches a user).
+
+The opt-in `missed_tick_candidates=true` lines are keyed by function UUID, which has no in-repo
+name mapping. Naming them and filtering them to due ticks is the proper fix, tracked on #6940.
 
 ## Concurrency conventions
 

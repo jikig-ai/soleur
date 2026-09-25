@@ -90,6 +90,10 @@ The cutover pre-flight hooks MUST bound scan **duration/cost** (in addition to A
      `cutover-inngest.yml`, content-anchored: the block beginning `# ---- Missed-tick
      auto-enumeration (P2-16)`) → operator re-fire → **double-fire**, the exact harm the cutover
      prevents. This is a SEPARATE invariant from the inventory "superset" one.
+     *[Location update 2026-09-25, #6939:]* since ADR-150 the block lives in
+     `scripts/cutover-inngest.sh`, and since #6939 it sits in `missed_tick_report()` and its
+     per-bucket list is opt-in (`missed_tick_candidates`, default off, never command-shaped). The
+     anchor text is unchanged, and the invariant above still applies to the opt-in list.
 
    > **Amended by [ADR-146](./ADR-146-trust-anchor-for-cutover-coexistence-window.md) (#6178,
    > 2026-07-24).** The clause "the window is **never narrowed**" was retired for the doublefire scan
