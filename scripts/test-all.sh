@@ -605,6 +605,9 @@ _wt_missing_die() {
 # legitimate degraded run (test-all-group-affected's undeterminable-diff arms
 # require fail-open there); only the path being gone is the refusal condition.
 if [[ ! -d "$PWD" ]]; then
+  # _soleur_inc_cleanup is not yet defined and the EXIT trap is not yet
+  # armed — a refusal here would leak the minted soleur-inc-* sandbox.
+  [[ -n "${_soleur_inc_owned:-}" && "$_soleur_inc_owned" == /* ]]     && rm -rf "$_soleur_inc_owned"
   _wt_missing_die
 fi
 # `10#` and `> 0` mirror the TC_RUNTIME_CEILING_S parse (same file): a bare
@@ -612,7 +615,7 @@ fi
 # registration, silently killing the graceful layer) and `0` (fires the
 # watchdog instantly on every enumerate run). Non-numeric or zero falls back
 # to the default — the deadline is the fix, it cannot be disabled.
-if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0-9]{1,9}$ ]] && (( 10#$SOLEUR_ENUM_DEADLINE_S > 0 )); then
+if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0123456789]{1,9}$ ]] && (( 10#$SOLEUR_ENUM_DEADLINE_S > 0 )); then
   _ENUM_DEADLINE_S=$(( 10#$SOLEUR_ENUM_DEADLINE_S ))
 fi
 
@@ -648,6 +651,10 @@ if (( _ENUMERATE == 1 )); then
   _ENUM_T0=$SECONDS
   (
     _wd_sleep=""
+    # $BASHPID is bash 4.0+; the runner targets bash 3.2 (stock macOS), where
+    # under set -u a bare $BASHPID aborts the sweep before the parent's TERM.
+    # A nested shell's $PPID IS this subshell's pid — the portable spelling.
+    _wd_self="$(bash -c 'echo "$PPID"')"
     trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
     # SIGPIPE must not kill the watchdog mid-fire: the consumer's read end is
     # often already gone on the path that most needs the kill. printf under
@@ -682,8 +689,12 @@ if (( _ENUMERATE == 1 )); then
         # group kill would take the caller with it. $BASHPID is THIS subshell
         # — it is itself a direct child of the runner and must be excluded,
         # or the sweep self-terminates before the parent's TERM is sent.
-        for _wd_kid in $(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null); do
-          [[ "$_wd_kid" == "$BASHPID" ]] && continue
+        # Snapshot the child list ONCE: after the parent dies they reparent
+        # to init and a second pgrep -P enumerates nothing — a TERM-ignoring
+        # wedged child would survive the KILL leg and hold the receipt pipe.
+        _wd_kids="$(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null)"
+        for _wd_kid in $_wd_kids; do
+          [[ "$_wd_kid" == "$_wd_self" ]] && continue
           kill -TERM "$_wd_kid" 2>/dev/null || true
         done
         kill -TERM "$_ENUM_TOP_PID" 2>/dev/null || true
@@ -692,8 +703,8 @@ if (( _ENUMERATE == 1 )); then
         sleep 5 & _wd_sleep=$!
         wait "$_wd_sleep" 2>/dev/null || true
         kill -KILL "$_ENUM_TOP_PID" 2>/dev/null || true
-        for _wd_kid in $(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null); do
-          [[ "$_wd_kid" == "$BASHPID" ]] && continue
+        for _wd_kid in $_wd_kids; do
+          [[ "$_wd_kid" == "$_wd_self" ]] && continue
           kill -KILL "$_wd_kid" 2>/dev/null || true
         done
       fi

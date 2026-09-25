@@ -1183,13 +1183,27 @@ PY
   fi
 fi
 
+# --- z8: a live NON-git cwd fails open (advisor finding #6) ------------------
+cases=$((cases + 1))
+_ng_dir="$TESTROOT/non-git-cwd"
+build_sandbox "$_ng_dir/test-all.sh" with-lib
+_out=$(cd "$_ng_dir" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash ./test-all.sh --enumerate 2>&1) || _ng_rc=$?
+if [[ "${_ng_rc:-0}" == "0" ]] \
+  && grep -q 'enumerate complete' <<<"$_out" \
+  && ! grep -qF 'working tree missing' <<<"$_out"; then
+  pass "z8: live non-git cwd fails open (enumerate complete, no refusal)"
+else
+  fail "z8: rc=${_ng_rc:-0} out=$(tail -3 <<<"$_out" | tr '\n' ' ')"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=42
+MIN_CASES=43
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
