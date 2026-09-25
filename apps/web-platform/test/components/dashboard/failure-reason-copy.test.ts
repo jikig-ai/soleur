@@ -28,6 +28,8 @@ const ALL_REASONS: FailureReason[] = [
   "leader_refused",
   "leader_tool_invalid",
   "leader_class_disabled",
+  // #8803: the leader loop ended without the handler recording a terminal state.
+  "leader_internal_error",
   "cancelled_by_operator",
   // feat-l5-runaway-guard PR-A.
   "run_paused",
@@ -94,6 +96,12 @@ describe("FAILURE_REASON_COPY", () => {
       FAILURE_REASON_COPY.acknowledgment_persist_failed.retryEligible,
     ).toBe(false);
     expect(FAILURE_REASON_COPY.leader_class_disabled.retryEligible).toBe(false);
+    // #8803: Retry cannot re-fire an archived message (#8840), and a defect
+    // on our side is not the founder's to retry.
+    expect(FAILURE_REASON_COPY.leader_internal_error.retryEligible).toBe(false);
+    expect(FAILURE_REASON_COPY.leader_internal_error.copy).toContain(
+      "CTO has been notified",
+    );
     // feat-l5-runaway-guard: a paused account must be cleared out-of-band
     // (operator resume), and a failed cap-check needs a wait — neither shows
     // an inline Retry.
