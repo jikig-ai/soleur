@@ -39,7 +39,9 @@ import { inngest } from "@/server/inngest/client";
 import { getServiceClient } from "@/lib/supabase/service";
 import { createGitHubAppClient } from "@/server/github/app-client";
 import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
-import { reportSilentFallback } from "@/server/observability";
+import type { FailureReason } from "@/lib/failure-reason";
+import { reportSpawnDeadLetter, reportSpawnPersistFailed } from "@/server/spawn-dead-letter";
+import { sanitizeToolNameForLog } from "@/lib/tool-name-sanitize";
 import { runWithByokLease } from "@/server/byok-lease";
 import { isAnthropicCreditExhausted } from "@/server/anthropic-credit";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
@@ -198,36 +200,6 @@ interface HandlerArgs {
   attempt?: number;
 }
 
-// AC10 — the failure-reason taxonomy admitted on `action_sends.failure_reason`.
-// PR-A's set ({github_installation_unauthorized, github_target_not_found,
-// github_api_error, malformed_source_ref, acknowledgment_persist_failed})
-// is preserved; PR-B extends with the leader-loop reasons.
-type FailureReason =
-  | "github_installation_unauthorized"
-  | "github_target_not_found"
-  | "github_api_error"
-  | "malformed_source_ref"
-  | "acknowledgment_persist_failed"
-  | "byok_cap_exceeded"
-  | "cost_ceiling_exceeded"
-  | "cancelled_by_operator"
-  | "byok_lease_unavailable"
-  | "anthropic_timeout"
-  | "anthropic_rate_limited"
-  // A request the API rejects deterministically (400/404/413/422…); retrying
-  // fails the same way. See TurnRejection.
-  | "anthropic_request_rejected"
-  | "leader_max_turns_exceeded"
-  | "leader_response_truncated"
-  // The model declined the task (stop_reason=refusal).
-  | "leader_refused"
-  | "leader_tool_invalid"
-  | "leader_class_disabled"
-  // feat-l5-runaway-guard PR-A: spawn-entry pause gate + distinct
-  // transient-cap-check reason (P2-H — a DB error is not a budget breach).
-  | "run_paused"
-  | "cap_check_unavailable";
-
 interface ReversalHandle {
   kind:
     | "pr_review_comment"
@@ -324,9 +296,9 @@ export async function agentOnSpawnRequestedHandler({
         getServiceClient(),
       );
       if (install === null) {
-        throw new Error(
-          `agent-on-spawn: no github_installation_id for founder ${founderId}`,
-        );
+        // No founder id in the text: this message reaches Sentry and Better
+        // Stack verbatim via the dead-letter report (#8719).
+        throw new Error("agent-on-spawn: founder has no github_installation_id");
       }
       return install;
     });
@@ -439,7 +411,7 @@ export async function agentOnSpawnRequestedHandler({
     });
   } catch (err) {
     // Read error → halt (fail-closed). run_paused keeps the Resume-button UX;
-    // persistFailure's reportSilentFallback mirrors it to Sentry (observable
+    // persistFailure's reportSpawnDeadLetter mirrors it to Sentry (observable
     // without SSH, cq-silent-fallback-must-mirror-to-sentry).
     return persistFailure(step, {
       actionSendId,
@@ -827,17 +799,18 @@ export async function agentOnSpawnRequestedHandler({
       if (block.type === "tool_use") {
         const tu = block as ToolUseBlock;
         if (!allowedTools.has(tu.name)) {
+          // The name is model-chosen: sanitize it everywhere it is logged.
+          const tool = sanitizeToolNameForLog(tu.name);
           return persistFailure(step, {
             actionSendId,
             reason: "leader_tool_invalid",
-            err: new Error(
-              `tool ${tu.name} not in allowlist for ${actionClass}`,
-            ),
+            err: new Error(`tool ${tool} not in allowlist for ${actionClass}`),
             founderId,
             messageId,
             actionClass,
             sourceRef,
             logger,
+            extra: { turn: n, model: leaderModule.model, tool },
           });
         }
         toolUseBlocks.push(tu);
@@ -1262,15 +1235,16 @@ async function persistFailure(
   },
 ): Promise<{ acknowledged: false; failureReason: string }> {
   const { actionSendId, reason, err } = args;
-  reportSilentFallback(err instanceof Error ? err : new Error(String(err)), {
-    feature: "spawn-agent",
-    op: "agent-on-spawn-requested",
-    message: `agent-on-spawn deadlettered: ${reason}`,
+  // Message path with a `reason` tag, so sentry_alert.spawn_agent_dead_letter
+  // can match it (#8719); never throws (server/spawn-dead-letter.ts).
+  reportSpawnDeadLetter({
+    reason,
+    actionClass: args.actionClass,
+    err,
     extra: {
       ...args.extra,
       founderId: args.founderId,
       messageId: args.messageId,
-      actionClass: args.actionClass,
       sourceRef: args.sourceRef,
       actionSendId,
     },
@@ -1312,15 +1286,14 @@ async function persistFailure(
       }
     });
   } catch (persistErr) {
-    args.logger.warn(
-      {
-        founderId: args.founderId,
-        actionSendId,
-        reason,
-        persistErr,
-      },
-      "agent-on-spawn: persist-failure UPDATE failed; terminal state recorded via Sentry mirror only",
-    );
+    // Reported to Sentry + pino with a hashed founder id, never via the Inngest
+    // ctx logger (not pino, so it would log the raw id) (#8719).
+    reportSpawnPersistFailed({
+      reason,
+      actionSendId,
+      founderId: args.founderId,
+      err: persistErr,
+    });
   }
   return { acknowledged: false, failureReason: reason };
 }

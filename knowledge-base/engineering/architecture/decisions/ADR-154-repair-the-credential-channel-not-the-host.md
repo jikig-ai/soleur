@@ -214,6 +214,12 @@ to deploy is to mint a new version.
 > hel1-dc2 and fsn1-dc14). Web-1 still cannot be redeployed, so the in-place edit is taken under
 > this exception.
 
+> **Re-examined 2026-09-24 (#8705) — the trigger fired again; the exception STANDS.** #8705 rotates
+> `doppler_service_token.web_probes` and re-fires web-1's four probe installers in place (their
+> `/etc/default/*` files are rewritten whole). Re-probed `/v1/datacenters`
+> `.server_types.available` at 2026-09-24T18:08Z: `cx33` (id 115) is available in none of the 6
+> datacenters. Web-1 still cannot be redeployed.
+
 ## Rejected alternatives
 
 **Convert the Access tokens from Terraform `output`s to `doppler_secret` resources.** This was the

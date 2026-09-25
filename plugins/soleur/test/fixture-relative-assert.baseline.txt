@@ -241,7 +241,7 @@
 1	.claude/hooks/post-dispatch-watch-gate.sh
 1	.claude/hooks/pre-merge-auto-close-scan.test.sh
 1	.claude/hooks/pre-merge-rebase-parity.test.sh
-5	.claude/hooks/pre-merge-rebase.sh
+7	.claude/hooks/pre-merge-rebase.sh
 1	.claude/hooks/prod-write-defer-gate.sh
 1	.claude/hooks/session-rules-loader.sh
 4	.claude/hooks/ship-soak-followthrough-gate.test.sh

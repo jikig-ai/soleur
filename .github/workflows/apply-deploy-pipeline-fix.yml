@@ -351,6 +351,42 @@ jobs:
           fi
           echo "deploy-pipeline-fix plan creates no hcloud_server (host_creates=0; hcloud_volume not counted since #6919/T55)."
 
+          # (#8705) NO NON-terraform_data DELETE OR FORGET on this path. The -targets above reach
+          # hcloud_server.web["web-1"] and, through its user_data, every credential its
+          # templatefile reads — so a pending credential rename (doppler_service_token.web_probes)
+          # plans as a replace HERE, where there is no [ack-destroy] and the credential's SSH
+          # installers are not re-fired. Replacing this workflow's own terraform_data resources
+          # is routine; anything else belongs to apply-web-platform-infra.yml.
+          ntd_rc=0
+          ntd_deletes=$(echo "$counts" | jq -r '.non_terraform_data_deletes') || ntd_rc=$?
+          if [[ "$ntd_rc" -ne 0 || ! "$ntd_deletes" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (non_terraform_data_deletes='${ntd_deletes}', jq rc=${ntd_rc}). The guard CANNOT evaluate, so this run aborts fail-CLOSED. Fix the filter or its consumer — do NOT re-run."
+            exit 1
+          fi
+          if [[ "$ntd_deletes" -gt 0 ]]; then
+            ntd_addrs=$(jq -r '[.resource_changes[]? | select((.mode // "managed") == "managed") | select(.type != "terraform_data") | select((.change.actions // []) | any(. == "delete" or . == "forget")) | .address] | join(", ")' tfplan.json 2>/dev/null || echo "<could not list>")
+            echo "::error::deploy-pipeline-fix plan would DELETE or FORGET ${ntd_deletes} resource(s) that are not its own terraform_data: ${ntd_addrs}. This workflow never removes credentials, hosts or volumes."
+            echo "::error::ROUTING — do NOT re-run this workflow yet. That change belongs to apply-web-platform-infra.yml (the merge commit that makes it must carry [ack-destroy] on its own line). Once that run is green, re-run this workflow. NO BYPASS on this path."
+            exit 1
+          fi
+          echo "deploy-pipeline-fix plan deletes nothing but its own terraform_data (non_terraform_data_deletes=0)."
+
+          # (#8705 review) NO REBOOT-FORCING UPDATE on this path either. The same transitive reach
+          # means a pending hcloud_server.web server_type / placement_group_id change would be
+          # applied HERE, rebooting web-1 with no [ack-destroy]. Same shared filter counter the
+          # apply job reads.
+          rb_rc=0
+          rb_updates=$(echo "$counts" | jq -r '.reboot_updates') || rb_rc=$?
+          if [[ "$rb_rc" -ne 0 || ! "$rb_updates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (reboot_updates='${rb_updates}', jq rc=${rb_rc}). The guard CANNOT evaluate, so this run aborts fail-CLOSED. Fix the filter or its consumer — do NOT re-run."
+            exit 1
+          fi
+          if [[ "$rb_updates" -gt 0 ]]; then
+            echo "::error::deploy-pipeline-fix plan would apply ${rb_updates} reboot-forcing server update(s) (server_type / placement group). This workflow never reboots a host."
+            echo "::error::ROUTING — do NOT re-run this workflow yet. That change belongs to apply-web-platform-infra.yml (the merge commit that makes it must carry [ack-destroy] on its own line). Once that run is green, re-run this workflow. NO BYPASS on this path."
+            exit 1
+          fi
+
           # #7104 — WAS A PUSH EVEN EXPECTED ON THIS RUN?
           #
           # The push that publishes a status frame is a provisioner ON

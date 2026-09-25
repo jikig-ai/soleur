@@ -8,6 +8,11 @@
 
 set -euo pipefail
 
+# pre-merge-rebase.sh now calls `gh pr view <N>` from the fixture's checkout
+# (#8778). With a local-path origin gh fails fast offline; GH_REPO/GH_HOST would
+# make it skip the remotes and query the real API with these fixture PR numbers.
+unset GH_REPO GH_HOST
+
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
 # security_reminder_hook is a .py, so pairing by filename missed it and it
