@@ -29,8 +29,8 @@ Branch: `feat-one-shot-ci-test-scripts-sharding`
       match literal `["1/7"…"7/7"]`, mutant drops leg 7. Also update the
       `/6`-citing comment at `scripts-shard-totality.test.sh` ~line 170.
 - [ ] 2a.3 `python3 scripts/regenerate-shard-manifest.py --run <id> --write`
-      (manifest `# n=` becomes 7). Commit TSV as generated output — never
-      hand-edit.
+      (manifest `# n=` becomes 7 — the regenerator derives N from ci.yml, so
+      2a.1 MUST land first). Commit TSV as generated output — never hand-edit.
 - [ ] 2a.4 Runbook `ci-test-scripts-sharding.md` — update TL;DR K reference +
       "Current topology" table (K, legs, worst leg) + one "Measured history"
       line citing the run ids. Stay in the disjoint sections (PR #8763 edits

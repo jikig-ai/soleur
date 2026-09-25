@@ -11,6 +11,53 @@ brand_survival_threshold: none
 
 # ci: rebalance the already-sharded test-scripts legs under the ~10-minute ceiling
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25
+**Sections enhanced:** Research Reconciliation, Research Insights, Proposed
+Solution, Technical Considerations, Guard Contract, Acceptance Criteria
+**Research/review mode:** inline sequential pass (planning subagent has no
+Task-spawn surface; `Reviewed-Coverage: sequential-fallback` — no independent
+agent review ran). Mechanical gates executed for real: PAT-shaped-variable
+grep (clean), `lint-guard-contract.py` (1 guard entry, green), User-Brand
+Impact + Observability section checks, markdownlint (clean).
+
+### Key Improvements
+
+1. **Premise correction (load-bearing):** the sharding the brief asks for is
+   already merged (#8585/#8612/#8665, verified live via `gh pr view` — all
+   MERGED). Residual scope is manifest regeneration ± K=6→K=7 tune, decided by
+   a measured gate, not a re-implementation.
+2. **Real baselines measured, not quoted:** leg timings pulled from the run's
+   own `suite-timings-scripts-*` artifacts (run 36123485360): light legs
+   7.6–12.9 min suite time, setup ≈ 0.4 min/leg, 502 light + 3 heavy
+   registrations. The cited baseline run 32415069661 is dated 2026-08-20 —
+   pre-shard.
+3. **K-bump blast radius enumerated:** ci.yml matrix + in-job `K=6` comments
+   (incl. the `timeout-minutes` block), `suite-shard-legs.tsv` `# n=` header,
+   `scripts-shard-totality-mutations.sh` ROW5 literal, runbook tables. All
+   other guards (`scripts-shard-manifest.test.sh`, `scripts-shard-totality
+   .test.sh`, `ci-test-aggregator-diagnosis.test.sh`) derive N/K dynamically.
+4. **Ordering constraint discovered in deepen:** `regenerate-shard-manifest.py`
+   derives N from ci.yml via `read_ci_leg_count(job)` — the matrix edit MUST
+   land before `--write` or the TSV regenerates with stale `n=6`.
+5. **merge_group invariant verified:** the only two `github.event_name ==
+   'pull_request'` job gates in ci.yml are `sandbox-canary-capture-gate` and
+   `plugin-root-propagation-gate` — neither is a required context
+   (cross-checked against `scripts/required-checks.txt`).
+
+### New Considerations Discovered
+
+- Job-minutes comparison is confounded: ~53→~108 min/run is mostly organic
+  suite growth (374→505 registrations) + new jobs; shard overhead is only
+  ~0.4 min setup per leg. Public repo → minutes unmetered; the real budget is
+  the org's 20-concurrent-job ceiling (#8450).
+- The `registry-gate-mutation-battery` contention ceiling (14.3–27.9 min under
+  load, per runbook) cannot be beaten by any K — AC1 is evaluated on nominal
+  green-run timings and the caveat is disclosed.
+- `regenerate-shard-manifest.py` default lookup (`latest green main ci.yml
+  run`) returned HTTP 404 when probed — always pass `--run <id>` explicitly.
+
 ## Overview
 
 The feature ask — "shard the `test-scripts` job in `.github/workflows/ci.yml`
@@ -261,6 +308,9 @@ are untouched.
   ~170 describes the ROW5 shape — cosmetic but drift-prone).
 - `python3 scripts/regenerate-shard-manifest.py --run <id> --write` — the
   TSV's `# n=` header becomes 7; `scripts-shard-manifest.test.sh` stays green.
+  **Ordering is load-bearing:** the regenerator derives N from ci.yml via
+  `read_ci_leg_count()` (`scripts/regenerate-shard-manifest.py`), so the
+  matrix edit MUST land before `--write`, or the TSV regenerates with `n=6`.
 - Runbook: update TL;DR + "Current topology" table (K, worst-leg figures) +
   one "Measured history" line citing the run ids.
 
