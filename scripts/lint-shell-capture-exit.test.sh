@@ -26,7 +26,7 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 PASS=0
 FAIL=0
 # Anti-vacuity floor. Raise deliberately when adding fixtures.
-MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-74}"
+MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-96}"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() {
@@ -802,6 +802,245 @@ echo "don't"; rc=$?
 EOF
 )"
 assert_fires "$f" 3 S3 "S3: ' inside a \"-quoted word cannot spoof the quote parity check"
+
+# --- quote model: cross-line quote state + quote-aware `;` split -----------------
+# Issue #8884: quote context was per-line only, so `set`/`;`/reads inside a
+# multi-line quoted string spoofed the model in BOTH directions, and a quoted
+# `;` mis-segmented the antecedent.
+
+f="$(write_fix s3-quoted-clear-multiline <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+  set +e
+  inner_work
+'
+worker
+rc=$?
+EOF
+)"
+assert_fires "$f" 8 S3 "S3: set +e inside a multi-line quoted string is data, not a disarm"
+
+f="$(write_fix s3-quoted-semicolon <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'a;b'; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: quoted ; does not split -- the read still fires"
+run_lint "$f"
+if grep -qF "echo 'a;b'   << read:" <<<"$LINT_OUT"; then
+  pass "S3: quoted ; -- antecedent names echo 'a;b', not a b' fragment"
+else
+  fail "S3: quoted ; antecedent" "echo 'a;b'   << read:" "$(tr '\n' ' ' <<<"$LINT_OUT")"
+fi
+
+f="$(write_fix s3-quoted-set-segment <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'x;set +e'; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: 'x;set +e' quoted -- no phantom set segment minted"
+run_lint "$f"
+if grep -qF "echo 'x;set +e'   << read:" <<<"$LINT_OUT"; then
+  pass "S3: quoted set segment -- antecedent is the echo, not a set +e' fragment"
+else
+  fail "S3: quoted set segment antecedent" "echo 'x;set +e'   << read:" "$(tr '\n' ' ' <<<"$LINT_OUT")"
+fi
+
+f="$(write_fix s3-quoted-arm-multiline <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+bash -c '
+  set -e
+  inner_work
+'
+x=$(grep p f)
+EOF
+)"
+assert_silent "$f" "S3/S1: set -e inside a multi-line quoted string cannot arm the model"
+
+f="$(write_fix s3-read-inside-quote <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+  worker
+  rc=$?
+'
+other
+EOF
+)"
+assert_silent "$f" "S3: rc=\$? inside a multi-line quoted literal is data for the inner interpreter"
+
+f="$(write_fix s3-second-string-clear <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+  step_one
+'
+bash -c '
+  set +e
+  step_two
+'
+worker
+rc=$?
+EOF
+)"
+assert_fires "$f" 11 S3 "S3: quote state carries past the FIRST string -- a set +e in the second is still data"
+
+f="$(write_fix s3-paren-literal <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'a(b'
+worker
+rc=$?
+EOF
+)"
+assert_fires "$f" 5 S3 "S3: ( inside a literal does not skew depth -- the read still fires"
+
+f="$(write_fix unterminated-quote <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+x=$(grep p f)
+EOF
+)"
+assert_fires "$f" 4 S1 "unterminated quote: the skipped tail is re-judged as code (fail-closed)"
+
+f="$(write_fix quoted-heredoc-interleave <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash -c '
+  cat <<EOF2
+  payload
+EOF2
+'
+worker
+rc=$?
+EOF
+)"
+assert_fires "$f" 9 S3 "S3: heredoc-shaped text inside quotes still leaves the real read live"
+
+# --- S3 compound closers as antecedents (#8884) ---------------------------------
+# A read after a CLOSED multi-line compound was a miss: `fi`/`done`/`esac`/`}`
+# lines stayed protected as antecedents while the one-line `if c; then cmd; fi`
+# form was already flagged. The closer reclassifies as the just-closed compound.
+
+f="$(write_fix s3-multiline-if <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -f f ]]; then
+  worker
+fi
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: multi-line if/fi then rc=\$? -- the compound's armed arm aborts"
+
+f="$(write_fix s3-multiline-while <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while read -r l; do
+  worker "$l"
+done < f
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: while/done < f then rc=\$? -- redirect tail is still a closer"
+
+f="$(write_fix s3-multiline-for <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+for x in a b; do
+  worker "$x"
+done
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: for/done then rc=\$?"
+
+f="$(write_fix s3-multiline-case <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  a) worker ;;
+esac
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: case/esac then rc=\$?"
+
+f="$(write_fix s3-group-close <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+{
+  worker
+}
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: { group } then rc=\$? -- the group's last command ran armed"
+
+f="$(write_fix s3-sameline-fi <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if c; then w; fi; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: if c; then w; fi; rc=\$? -- a closer SEGMENT is a compound antecedent"
+
+f="$(write_fix s3-sameline-done <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while c; do w; done; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: while c; do w; done; rc=\$? -- mid-line done segment"
+
+f="$(write_fix s3-until-done <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+until c; do
+  w
+done
+rc=$?
+EOF
+)"
+assert_fires "$f" 6 S3 "S3: until/done then rc=\$? -- same conservative verdict as the one-line rule"
+
+f="$(write_fix s3-multiline-canonical <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if some_command; then
+  rc=0
+else
+  rc=$?
+fi
+echo "$rc"
+EOF
+)"
+assert_silent "$f" "S3: multi-line if cmd; then rc=0; else rc=\$?; fi -- the gate's own remediation stays silent"
+
+f="$(write_fix s3-funcdef-sameline <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() { worker; }
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: f() { worker; } then rc=\$? -- a function DEFINITION close is not an execution"
+
+f="$(write_fix s3-funcdef-multiline <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f() {
+  worker
+}
+rc=$?
+EOF
+)"
+assert_silent "$f" "S3: multi-line function definition close then rc=\$? -- definition status, not dead read"
 
 # --- baseline behaviour ------------------------------------------------------
 # --write-baseline refuses explicit paths (a subset scan would truncate the
