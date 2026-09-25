@@ -49,17 +49,32 @@ cd "$REPO_ROOT"
 
 FAIL=0
 
-# Match a pipe feeding a grep that can stop at its first match: -q or -m in any
-# flag cluster (-q, -qE, -F -q, -m1, ...) or the long forms --quiet, --silent,
-# --max-count. Anchored on the pipe + grep so a comment that merely mentions the
-# words cannot match. A pipe that ends one line with the grep on the next is not
-# seen (a declared gap), nor is `| head` (the #8664 files keep 19 one-line
-# `| head -1` sites whose producers are single short writes).
-PATTERN='\|[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Za-z]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'
-# A piped awk whose program exits on the same line. A multi-line awk program is
-# not seen by a line search; #8664's splitter shape is held by the battery's
+# Match a pipe feeding a grep that can stop at its first match: -q or -m in any flag
+# cluster (-q, -qE, -F -q, -m1, ...) or the long forms --quiet, --silent, --max-count.
+# Anchored on the pipe + grep so prose naming the words without the pipe shape cannot
+# match; prose that spells the shape still does, which is why the named-file passes strip
+# comment lines. The pipe must be a SINGLE bar (`|` or `|&`) preceded by line start or a
+# non-bar: without `(^|[^|])` the second bar of a logical OR (`a || grep -q p <<<"$x"`,
+# already the safe form) read as a pipe (#8807). The flag widening is #8664's.
+PATTERN='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Za-z]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'
+# A piped awk whose program exits on the same line (#8664). A multi-line awk program is not
+# seen by a line search; #8664's splitter shape is held by the battery's
 # g1b-mustpass-padded-pull-item row and its positive control instead.
-PATTERN_AWK_EXIT='\|[[:space:]]*awk[^|]*[^[:alnum:]_]exit([^[:alnum:]_]|$)'
+PATTERN_AWK_EXIT='(^|[^|])\|&?[[:space:]]*awk[^|]*[^[:alnum:]_]exit([^[:alnum:]_]|$)'
+# Not matched (no instance in the scanned paths today): command/env/\grep/egrep wrappers,
+# grep inside { }, a pipe split across lines, and `| head` (the #8664 files keep 19 one-line
+# `| head -1` sites whose producers are single short writes). Widening is tracked in #7005.
+
+# A PATTERN that does not compile must not read as "no hits": every grep below
+# folds exit 2 into exit 1 (`|| true`, `! grep`), so it would pass all three
+# checks having scanned nothing (#8807 review).
+for _pat in "$PATTERN" "$PATTERN_AWK_EXIT"; do
+  rc=0; grep -E -- "$_pat" </dev/null >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" -ne 1 ]]; then
+    echo "UNRESOLVED: a guard pattern does not compile as an ERE (grep rc=$rc) — this suite asserted nothing"
+    exit 3
+  fi
+done
 
 # A second, hand-ported harness hook tree was in this pathspec from #7173 until
 # it was retired in ADR-245 / #8306; its glob is gone with the tree. The scope
@@ -157,21 +172,49 @@ fi
 # this, a typo in PATTERN would make the guard pass forever on any input.
 probe="$(mktemp -d)"
 trap 'rm -rf "$probe"' EXIT
-printf 'echo "$x" | grep -qE '"'"'p'"'"'\n' > "$probe/bad.sh"
-printf 'echo "$x" | grep -F -q p\n' > "$probe/bad2.sh"
-printf 'echo "$x" | grep --quiet p\n' > "$probe/bad3.sh"
-printf 'echo "$x" | awk '"'"'/p/ { exit }'"'"'\n' > "$probe/bad4.sh"
-printf 'grep -qE '"'"'p'"'"' <<<"$x"\n' > "$probe/good.sh"
+cat > "$probe/bad.sh" <<'EOF'
+echo "$x" | grep -q 'p'
+echo "$x"|grep -Eq 'p'
+| grep -qE 'p'
+echo "$x" |& grep -qE 'p'
+done|grep -iq 'p'
+$(f)|grep -sq 'p'
+echo "$x" | grep -F -q p
+echo "$x" | grep --quiet p
+echo "$x" | grep -m1 p
+EOF
+cat > "$probe/good.sh" <<'EOF'
+grep -qE 'p' <<<"$x"
+a || grep -qE 'p' <<<"$x"
+     || grep -qE 'p' <<<"$b"; then
+|| grep -qE 'p' <<<"$x"
+EOF
+cat > "$probe/bad-awk.sh" <<'EOF'
+echo "$x" | awk '/p/ { exit }'
+EOF
+cat > "$probe/good-awk.sh" <<'EOF'
+awk '/p/ { exit }' "$f"
+a || awk '/p/ { exit }' "$f"
+EOF
 
-if grep -qE "$PATTERN" "$probe/bad.sh" && grep -qE "$PATTERN" "$probe/bad2.sh" \
-  && grep -qE "$PATTERN" "$probe/bad3.sh" && grep -qE "$PATTERN_AWK_EXIT" "$probe/bad4.sh" \
-  && ! grep -qE "$PATTERN" "$probe/good.sh"; then
-  echo "PASS: guard pattern matches the forbidden shape and not the fixed shape"
+# Every bad line must match and no good line may, compared as COUNTS: a grep error
+# prints no count, so it can never equal the line total or 0 (a negated `grep -q`
+# would read exit 2 as a pass). Both files must be non-empty, or either half
+# passes having checked nothing.
+bad_lines=$(wc -l < "$probe/bad.sh")
+bad_hits=$(grep -cE -- "$PATTERN" "$probe/bad.sh" || true)
+good_hits=$(grep -cE -- "$PATTERN" "$probe/good.sh" || true)
+awk_bad_hits=$(grep -cE -- "$PATTERN_AWK_EXIT" "$probe/bad-awk.sh" || true)
+awk_good_hits=$(grep -cE -- "$PATTERN_AWK_EXIT" "$probe/good-awk.sh" || true)
+if [[ "$bad_lines" -gt 0 && "$bad_hits" == "$bad_lines" && -s "$probe/good.sh" && "$good_hits" == 0 \
+      && "$awk_bad_hits" == 1 && "$awk_good_hits" == 0 ]]; then
+  echo "PASS: guard pattern matches the forbidden shapes and not the fixed shapes (incl. || herestrings, #8807)"
 else
   FAIL=1
-  echo "FAIL: guard pattern is broken — it cannot distinguish the two shapes"
-  echo "  matches forbidden shape: $(grep -cE "$PATTERN" "$probe/bad.sh" || true) (want 1)"
-  echo "  matches fixed shape:     $(grep -cE "$PATTERN" "$probe/good.sh" || true) (want 0)"
+  echo "FAIL: guard pattern is broken — it cannot distinguish the shapes"
+  echo "  forbidden lines matched: ${bad_hits:-<grep error>}/$bad_lines (want all)"
+  echo "  fixed lines matched:     ${good_hits:-<grep error>} (want 0)"
+  echo "  piped awk exit matched:  ${awk_bad_hits:-<grep error>}/1, fixed awk: ${awk_good_hits:-<grep error>} (want 0)"
 fi
 
 exit "$FAIL"
