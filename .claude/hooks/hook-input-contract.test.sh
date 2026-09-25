@@ -34,32 +34,33 @@ TOTAL=0
 SKIPPED=0
 
 # Printed on EVERY exit path, including the jq precondition below, so a jq-less
-# machine cannot exit 0 emitting no line at all.
+# machine never exits without a verdict line.
 #
 # It is for a HUMAN reading the log. An earlier version of this comment said the
-# summary "is the only thing an aggregate runner reads", which is false and was
-# load-bearing for the wrong reason: `run_suite` in scripts/test-all.sh branches
-# on the EXIT CODE alone and never parses this line. So the aggregate-level half
-# of #7190 item 5 is NOT closed by this change — a skipped suite still records
-# `ok` upstream. What is closed is legibility: the skip is now counted and
-# visible instead of silently shrinking the denominator.
+# summary "is the only thing an aggregate runner reads", which is false:
+# `run_suite` in scripts/test-all.sh branches on the EXIT CODE alone and never
+# parses this line. That is why the jq precondition below now exits 3 rather
+# than 0 (#8616) — the exit code is the only channel upstream reads.
 summary() { echo; echo "=== hook-input-contract: $PASS/$TOTAL pass, $SKIPPED skipped ==="; }
 
-# jq absent → SKIP, deliberately retained. #7190 item 5 asked us to consider a
-# hard failure here and justify either way. Rejected, four reasons:
-#   (a) CI has jq, so a hard-fail is unreachable there — dead code guarding a
-#       hypothetical image change;
-#   (b) if CI ever lost jq, this suite is struck along with everything else, so
-#       the hard-fail buys no earlier signal;
-#   (c) it turns a green test-all.sh red on a jq-less dev machine for an
-#       environment reason, not a defect;
-#   (d) it buys false comfort while 21 SIBLING suites still skip silently in
-#       exactly that scenario.
-# If aggregate skip-invisibility is the real concern the fix is skip-accounting
-# in test-all.sh — one place, all 22 suites — and that is not this change.
-# What IS fixed here: the skip is now COUNTED and PRINTED rather than invisible.
+# jq absent → UNRESOLVED (exit 3). #7190 item 5 kept a SKIP (exit 0) here for
+# four reasons; #8616 reversed that decision, and each reason is answered:
+#   (a) "CI has jq, so a hard-fail is unreachable there." True, and CI behaviour
+#       does not change. The change targets local and non-CI runs, where "not
+#       measured" read as green.
+#   (b) "If CI lost jq, this suite is struck along with everything else." The
+#       unguarded jq suites do go red without jq, but the guarded ones read `ok`
+#       inside that red run, which misstates which suites measured anything.
+#   (c) "It turns test-all.sh red on a jq-less machine for an environment
+#       reason." It does — run_suite still prints [FAIL] for rc 3 — but the
+#       suite's own UNRESOLVED line directly above it names the environment as
+#       the cause, and `bash <suite>` alone exits 3, not 1. Not-green is still
+#       correct: the hooks under test cannot parse their input without jq.
+#   (d) "False comfort while 21 sibling suites still skip." All of them were
+#       converted together, and hook-suite-dep-unresolved.test.sh checks every
+#       guard it can derive (it holds the taxonomy and names what it cannot see).
 command -v jq >/dev/null 2>&1 || {
-  SKIPPED=$((SKIPPED + 1)); echo "SKIP: jq missing — whole suite"; summary; exit 0
+  SKIPPED=$((SKIPPED + 1)); echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; summary; exit 3
 }
 
 # ADR-129 rule (c): ONE owning trap for every tempfile this suite allocates.
@@ -137,8 +138,9 @@ _hi_assert_helpers_can_fail
 # A skip is NOT a pass. It increments neither PASS nor TOTAL — inflating the
 # pass count with unrun assertions is the thing being fixed — but it is counted
 # and surfaced in the summary so "48 here, 49 there" is legible instead of
-# mysterious.
-skip(){ SKIPPED=$((SKIPPED + 1)); echo "SKIP: $1"; }
+# mysterious. A counted skip still makes the suite exit 3 (UNRESOLVED) below, so
+# a python3-less run is never green whatever the assertion floor says (#8616).
+skip(){ SKIPPED=$((SKIPPED + 1)); echo "UNRESOLVED: $1"; }
 
 # Size of a ledger in bytes, with ABSENT deliberately equal to 0 rather than an
 # error or an empty string. That equivalence is what lets the worktree-ledger
@@ -1612,6 +1614,11 @@ a20_internal_arms
 a21_ask_json_parses
 
 summary
+
+if (( SKIPPED > 0 && FAIL == 0 )); then
+  echo "UNRESOLVED: $SKIPPED arm(s) not run (a tool was missing) — not green" >&2
+  exit 3
+fi
 
 # MIN_ASSERTIONS — the floor under everything above.
 #
