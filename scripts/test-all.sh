@@ -4049,6 +4049,9 @@ if want_scripts; then
   # #8279. The dispatcher's derivation helper (which merged change does this run deliver, and
   # where is its verdict tracked). Same registration reason as the line above: tests/scripts/
   # is not globbed, so this explicit line is the suite's ONLY runner.
+  # (#8919) The main-push duplicate-skip proof script's mutation battery. tests/scripts/
+  # is NOT auto-globbed — this line is the only registration.
+  run_suite "tests/scripts/main-duplicate-skip" bash tests/scripts/test-main-duplicate-skip.sh
   run_suite "tests/scripts/registry-delivery-change" bash tests/scripts/test-registry-delivery-change.sh
   # Its mutation battery (~70 s, sandboxed copies, every row asserts it landed). Committed and
   # registered rather than left in a transcript, so its kills protect something tomorrow.

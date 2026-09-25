@@ -69,6 +69,6 @@ gdpr-gate-self-test.yml	3	yes	yes	gdpr-gate fixture self-test, path-filtered to 
 infra-validation.yml	11	yes	yes	terraform validate/fmt/plan over infra roots, path-filtered; workflow-level ci.yml ternary block added 2026-09-25 (plan job's R2 backends run use_lockfile=false, so no state lock is held mid-cancel; the job-level terraform-plan-* group is a different key, untouched)
 rls-authz-fuzz.yml	1	yes	yes	RLS fuzz, path-filtered to migrations/policies; cancels per ref already
 sentry-audit-gate.yml	1	yes	yes	Sentry IaC audit, path-filtered to apps/web-platform/infra/sentry; superseded PR runs cancel per ref
-skill-security-scan-corpus.yml	1	yes	yes	corpus scan, path-filtered to the scanner's rules/scripts; superseded PR runs cancel per ref
-validate-vector-config.yml	1	yes	yes	vector.toml validation, path-filtered to the vector config; superseded PR runs cancel per ref
+skill-security-scan-corpus.yml	2	yes	yes	corpus scan, path-filtered to the scanner's rules/scripts; superseded PR runs cancel per ref; detect-duplicate job: tree-identity proof gating the push arm (#8919)
+validate-vector-config.yml	2	yes	yes	vector.toml validation, path-filtered to the vector config; superseded PR runs cancel per ref; detect-duplicate job: tree-identity proof gating the push arm (#8919)
 vendor-pin-verify.yml	3	no	no	required context vendor-pin-required, always-run aggregator over the path-gated upstream-blob verification (#8203, ADR-032 ABI); no cancel: job-level per-ref group on verify-upstream-blobs with cancel-in-progress:false; detect-changes + aggregator deliberately outside the group
