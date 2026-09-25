@@ -43,7 +43,7 @@
 # GDC_* variables are seams of the SUITE (GDC_SCRIPT, GDC_WORKFLOW, GDC_ACTION).
 #
 # Run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 # pass() cannot fail, so the runtime rows' `cond && pass || fail` is a true if/else.
 # shellcheck disable=SC2015
@@ -1788,7 +1788,7 @@ for _apt_try in 1 2 3; do
   fi
   case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
 done
-[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
 mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh
 ssh-keygen -A >/dev/null 2>&1
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k && cp /tmp/k.pub /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys

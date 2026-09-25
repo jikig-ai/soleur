@@ -29,7 +29,7 @@
 # That is cq-assert-anchor-not-bare-token, and it is not hypothetical here: the four
 # prod-address strings in rung2-rehearsal/*.tf are all prose.
 #
-# Registered as a step in .github/workflows/infra-validation.yml — the suite list is DERIVED
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 # from that workflow by run-registered-suites.sh, whose extraction character class excludes
 # `/`, which is why this file is at the infra root and NOT inside rung2-rehearsal/. Nested,
 # it would be silently underived AND exempt from the orphan report: invisible twice.

@@ -27,7 +27,7 @@
 #      falls back to `sh`, which is dash on 24.04. That is silent bash/dash divergence on a
 #      fail-closed host: the same defect class as the gc-unit `. <file>` bug this PR fixes.
 #
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 

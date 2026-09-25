@@ -16,7 +16,7 @@
 # host rung, which is the banner-clear issue's precondition (#7025) — NOT this file's.
 #
 # Run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -262,8 +262,8 @@ TMP="$(mktemp -d -p "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/var/tmp}}" gdreh.XXXXXXXX
 # Reproducing #7501 required hand-patching the trap precisely because it removed the tree
 # unconditionally.
 #
-# ON CI THIS IS A LOCAL-ONLY AID: infra-validation.yml has no upload-artifact step, so the
-# retained tree does not survive the runner. The CI signal remains the run log.
+# ON CI the retained tree survives only via the leg's failure upload-artifact
+# step (#8736) — the primary signal remains the run log.
 _reh_cleanup() {
   _rc=$?
   if [ "$_rc" -ne 0 ] || [ -n "${GIT_DATA_REHEARSAL_KEEP_TMP:-}" ]; then
@@ -1079,7 +1079,7 @@ run_case() {
            && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
         case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
       done
-      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1
   local rc=$?
@@ -1384,7 +1384,7 @@ else
            && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
         case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
       done
-      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1; _t5m_rc=$?
   # rc is CAPTURED AND USED. The trailing `|| true` this replaces discarded the one datum that
@@ -1613,7 +1613,7 @@ docker run --rm \
          && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
       case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
     done
-    [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+    [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
     echo T17M_APT_OK
     bash /work/drive.sh
   ' >"$TMP/out/t17m.stdout" 2>&1; _t17m_rc=$?

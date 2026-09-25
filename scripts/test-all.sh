@@ -3880,7 +3880,7 @@ if want_scripts; then
   run_suite "scripts/dogfood/grok-measure" bash scripts/dogfood/grok-measure.test.sh
   # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
   # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
-  # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line
+  # infra-validation.yml dispatches only apps/web-platform/infra/*.test.sh (via the runner glob). Without this line
   # the gate that stands between a -replace and a stranded fleet ships with zero coverage.
   run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
 

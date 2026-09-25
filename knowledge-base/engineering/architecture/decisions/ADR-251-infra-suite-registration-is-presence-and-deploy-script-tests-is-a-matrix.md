@@ -61,11 +61,16 @@ was the objection any infra sharding had to answer *with numbers*.
    runner invocation per leg** carrying `SOLEUR_INFRA_SHARD=k/4`. The
    runner executes each leg's subset at `-P min(nproc,6)` — 4-wide on the
    4-vCPU runner it actually gets. Full width is a considered choice, not
-   an oversight: #7376's measured `-P4` flakiness was the tmpfs/live-tree
-   collision class (fixed at source), and per-suite bounds + named RED +
-   `::error` bound the residual blast radius to one attributable suite on
-   one leg. `main-health-monitor` keeps `JOBS:1` because its failure mode
-   is a spurious P1 page, which is worse than a slow leg here.
+   an oversight — but an honest one: #7376 measured `-P4` flakiness on
+   exactly this hardware and left the cause *unresolved* (resource
+   exhaustion vs shared-state collision was never established). What this
+   design changes is not the race but the blast radius: under the old
+   serial job a flaky suite was an anonymous red step; under a leg it is
+   a bounded, named RED with a retained log — attributable in one click
+   rather than six executions. If #7376's mechanism resurfaces, it lands
+   on one leg with the suite named. `main-health-monitor` keeps `JOBS:1`
+   because its failure mode is a spurious P1 page, which is worse than a
+   slow leg here.
 
 3. **Attribution moved from step count to verdict lines + artifacts.**
    Per-suite `PASS`/`RED` lines and `::error` annotations name the suite;

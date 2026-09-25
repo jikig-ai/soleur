@@ -17,7 +17,7 @@
 # authorized_keys under the TARGET USER's uid), so the acceptance row is shown able to fail.
 #
 # Run: bash apps/web-platform/infra/git-data-ownership.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -295,7 +295,7 @@ for _apt_try in 1 2 3; do
   fi
   case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
 done
-[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' >&2; echo "FIXTURE_APT_FAILED" >&2; exit 100; }
+[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo "FIXTURE_APT_FAILED" >&2; exit 100; }
 useradd -m -s "${GIT_SHELL:?}" git || exit 2
 mkdir -p /run/sshd /mnt/git-data/repositories /mnt/git-data/hooks
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k

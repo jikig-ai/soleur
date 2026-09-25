@@ -24,7 +24,7 @@
 # own prose also contains (cq-assert-anchor-not-bare-token).
 #
 # Run: bash apps/web-platform/infra/workspaces-luks-header.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 #
 # `set -e` is deliberately ABSENT: deliberately-nonzero greps are wrapped so the harness never
 # aborts mid-suite.

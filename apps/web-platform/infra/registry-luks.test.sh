@@ -24,7 +24,7 @@
 # foot-gun). Deliberately-nonzero commands are wrapped in `$(… || true)` so `set -e` never aborts.
 #
 # Run: bash apps/web-platform/infra/registry-luks.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml (infra .test.sh are NOT globbed).
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 

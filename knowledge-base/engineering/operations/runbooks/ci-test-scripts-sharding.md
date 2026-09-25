@@ -67,6 +67,10 @@ benchmark the lookup, not the parse.
 ```bash
 python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write
 python3 scripts/regenerate-shard-manifest.py --group heavy --run <green-ci-run-id> --write
+# INFRA (#8736): the infra table lives at apps/web-platform/infra/suite-shard-legs.tsv.
+# Its run must be a green infra-validation.yml run on main (the suite-timings-infra-N
+# artifacts), and its registered set is `--enumerate`d by run-registered-suites.sh.
+python3 scripts/regenerate-shard-manifest.py --group infra --run <green-infra-run-id> --write
 ```
 
 Without `--write` it prints predicted per-leg totals and the incumbent diff.

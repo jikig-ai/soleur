@@ -59,7 +59,7 @@
 # floors are reported with printf + exit, never through pass()/fail().
 #
 # Run: bash apps/web-platform/infra/git-data-store-device-census.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"

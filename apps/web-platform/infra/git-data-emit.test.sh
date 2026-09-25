@@ -15,7 +15,7 @@
 # this test track the artifact that actually ships.
 #
 # Run: bash apps/web-platform/infra/git-data-emit.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
