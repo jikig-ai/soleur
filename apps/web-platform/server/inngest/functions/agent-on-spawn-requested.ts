@@ -33,7 +33,7 @@
 
 import { createHash } from "node:crypto";
 
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { APIConnectionError } from "@anthropic-ai/sdk";
 
 import { inngest } from "@/server/inngest/client";
 import { getServiceClient } from "@/lib/supabase/service";
@@ -687,7 +687,8 @@ export async function agentOnSpawnRequestedHandler({
               // error is retried 3 times and reaches the handler as a StepError
               // with `status` and custom `name` stripped (ADR-042 §I1).
               const rejected = classifyLiveRejection(err);
-              if (rejected === null) throw err;
+              // Still retried; only the label of the final failure changes (#8783).
+              if (rejected === null) throw tagTransientAnthropicError(err);
               const status = (err as { status?: unknown }).status;
               return {
                 kind: "turn_rejection",
@@ -1185,28 +1186,59 @@ function classifyLiveRejection(
   return "anthropic_request_rejected";
 }
 
-// Classifies what reaches the handler's catch. In production that is an
-// Inngest StepError carrying only message, stack and a string `cause`, so the
-// `name`/`status` arms below fire only for errors thrown in-process.
-function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
-  const name = (err as { name?: string } | null)?.name ?? "";
-  const cause = (err as { cause?: string } | null)?.cause ?? "";
-  const status = (err as { status?: number } | null)?.status;
-  if (name === "ByokLeaseError" || cause === "fetch_failed" || cause === "decrypt_failed" || cause === "escape") {
-    return "byok_lease_unavailable";
-  }
-  if (name === "MissingByokKeyError") {
-    return "byok_lease_unavailable";
-  }
-  if (status === 429) return "anthropic_rate_limited";
-  if (
-    name === "APIConnectionTimeoutError" ||
-    name === "APIConnectionError" ||
-    /timeout/i.test(String((err as Error | null)?.message ?? ""))
+// The labels a thrown transient Anthropic error carries across the step
+// boundary (#8783). The tag IS the FailureReason, so the classifier below needs
+// no translation table.
+export const TRANSIENT_ANTHROPIC_CAUSES = [
+  "anthropic_rate_limited",
+  "anthropic_timeout",
+] as const satisfies readonly FailureReason[];
+
+// `ByokLeaseError.cause` values (server/byok-lease.ts).
+const BYOK_LEASE_CAUSES = new Set([
+  "fetch_failed",
+  "decrypt_failed",
+  "escape",
+  "subscription_limit",
+]);
+
+// Tags a retryable LIVE error inside `turn-${n}-claude` with its FailureReason,
+// while `status` and the SDK class are still readable. The tag rides a string
+// own-property `cause`, the one field that survives Inngest's StepError
+// serialization (ADR-042 §I1, 2026-09-25 amendment). Connection errors are
+// matched by `instanceof`, never `name`: the SDK sets `name === "Error"` on
+// both connection classes, and Next.js minifies `constructor.name`. Anything
+// else (e.g. a ByokLeaseError, whose own cause must survive) is returned as-is.
+function tagTransientAnthropicError(err: unknown): unknown {
+  const status = (err as { status?: unknown } | null)?.status;
+  let cause: (typeof TRANSIENT_ANTHROPIC_CAUSES)[number] | null = null;
+  if (status === 429) {
+    cause = "anthropic_rate_limited";
+  } else if (
+    (typeof status === "number" && (status === 408 || status === 409 || status >= 500)) ||
+    err instanceof APIConnectionError
   ) {
-    return "anthropic_timeout";
+    cause = "anthropic_timeout";
   }
-  return "anthropic_timeout";
+  if (cause === null) return err;
+  const tagged = new Error(String((err as Error).message), { cause });
+  tagged.stack = (err as Error).stack ?? tagged.stack;
+  return tagged;
+}
+
+// Classifies what reaches the handler's catch: in production an Inngest
+// StepError carrying only message, stack and a string `cause`. Positive match
+// only (#8803): a failure no arm identifies is OUR defect and pages, rather
+// than reading as an Anthropic timeout.
+function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
+  const cause = (err as { cause?: unknown } | null)?.cause;
+  if (typeof cause === "string") {
+    if (BYOK_LEASE_CAUSES.has(cause)) return "byok_lease_unavailable";
+    for (const c of TRANSIENT_ANTHROPIC_CAUSES) {
+      if (cause === c) return c;
+    }
+  }
+  return "leader_internal_error";
 }
 
 async function persistFailure(
