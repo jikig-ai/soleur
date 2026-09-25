@@ -188,6 +188,19 @@ on:
 permissions:
   contents: read
 
+# Stateless validation (validate/fmt/plan; the plan job runs -refresh=false
+# against R2 backends with use_lockfile=false — no state lock is held
+# mid-flight), so a mid-run cancel leaves nothing half-written. On push the
+# group resolves to the commit SHA, so `main` runs never cancel each other.
+# The job-level `terraform-plan-*-${{ matrix.directory }}` group below is a
+# different key and is untouched. scripts/pr-fanout-ledger.txt carries this
+# workflow's row with cancel=yes; plugins/soleur/test/pr-fanout-ledger.test.sh
+# reddens if that flag and this block ever disagree. Byte-for-byte the ci.yml
+# (ADR-217) block, per ledger test A6.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   TERRAFORM_VERSION: "1.10.5"
   # (#7226) MUST equal TERRAFORM_VERSION (terraform-target-parity pins it); feeds
@@ -1358,7 +1371,10 @@ jobs:
           exit "$PLAN_EXIT"
 
       - name: Post plan comment
-        if: always() && steps.plan.outcome != 'skipped'
+        # `!cancelled()`: a concurrency-cancelled run would otherwise post a
+        # "❌ Failed (exit code: )" sticky comment with an empty plan block;
+        # the superseding run's own comment overwrites it on the same header.
+        if: always() && !cancelled() && steps.plan.outcome != 'skipped'
         uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # v3.0.2
         with:
           header: terraform-plan-${{ matrix.directory }}
