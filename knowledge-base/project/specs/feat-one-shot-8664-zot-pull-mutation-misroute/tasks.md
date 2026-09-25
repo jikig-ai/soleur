@@ -8,7 +8,7 @@ Plan: `knowledge-base/project/plans/2026-09-25-fix-zot-pull-mutation-harness-row
   named-assertion check into `failed_on` **as-is** (still piped), and call it from `case_mutate`.
 - [ ] 1.2 Add the scorer self-test directly after `failed_on`:
   - [ ] 1.2.1 Write the fixture `$WORK/scorer-selftest.log` with a single `awk 'BEGIN{…}'`. It holds a
-    PASS line with `SELFTEST-ONLY-ON-PASS`, then a FAIL line with `SELFTEST-TARGET`, then about
+    PASS line `^  PASS: SELFTEST-ONLY-ON-PASS would FAIL if unscoped`, then a FAIL line with `SELFTEST-TARGET`, then about
     20,000 FAIL filler lines (≥1 MiB). Then pin the fixture's shape: line 2 must be exactly
     `^  FAIL: SELFTEST-TARGET` (`^` = line start), and the file must hold at least 20000 `^  FAIL: filler` lines.
     Either check failing is a `die`.
@@ -16,7 +16,8 @@ Plan: `knowledge-base/project/plans/2026-09-25-fix-zot-pull-mutation-harness-row
     `SELFTEST-ONLY-ON-PASS`. Otherwise `die`, which exits 2.
 - [ ] 1.3 RED: run the battery and confirm it aborts with exit 2 on the needle-first probe. Record the
   output (AC1a).
-- [ ] 1.4 GREEN: switch `failed_on` to capture-and-glob. A grep rc ≥ 2 is a `die`. Keep the existing
+- [ ] 1.4 GREEN: switch `failed_on` to capture-and-glob. An empty expected string is a `die`, and so
+  is a grep rc ≥ 2. Keep the existing
   display re-grep for the MISROUTED list. Confirm the self-test passes.
 
 ## Phase 2: Site B, the guard's Guard 1b splitter (RED, then GREEN)
@@ -24,6 +25,8 @@ Plan: `knowledge-base/project/plans/2026-09-25-fix-zot-pull-mutation-harness-row
 - [ ] 2.1 Add the must-PASS row `g1b-mustpass-padded-pull-item`. It inserts 2,400 non-comment
   `: pad-NNNNN …` lines after the exactly-once 4-space-indented
   `docker create --name soleur-inngest-bootstrap-extract "$IREF"` anchor.
+- [ ] 2.1b In `case_must_pass`'s BROKE display, print `tail -1 "$log"` when the log has no FAIL
+  lines. Put a comment on the padded row naming the one property it guards.
 - [ ] 2.2 Bump `BATTERY_MIN_ROWS` from 60 to 61 and add a history line. Keep the literal directly
   above its `if`.
 - [ ] 2.3 RED: with the guard unfixed, the row reports BROKE (non-zero rc, no FAIL lines). Record the
@@ -39,8 +42,10 @@ Plan: `knowledge-base/project/plans/2026-09-25-fix-zot-pull-mutation-harness-row
 
 ## Phase 3: Drift guard and baselines
 
-- [ ] 3.1 Add both files to `.claude/hooks/grep-q-pipe-guard.test.sh`'s named-file,
-  comment-stripped zero pass, and update its message.
+- [ ] 3.1 Add both files to `.claude/hooks/grep-q-pipe-guard.test.sh` in their own labelled,
+  comment-stripped zero pass (`hits_8664`). The PASS line carries the literal `grep-q-zero-8664-pass`
+  and the FAIL line does not. That literal is the plan's Observability probe output. Run
+  `git ls-files --error-unmatch` on each named file first.
 - [ ] 3.2 AC4: the pattern count over the two files goes from 4 to 0. Reinserting `| grep -qF`
   into `failed_on` must turn the drift guard RED. Revert that edit.
 - [ ] 3.3 Run `bash plugins/soleur/test/fixture-relative-assert.test.sh`. Regenerate the baseline
@@ -54,7 +59,8 @@ Plan: `knowledge-base/project/plans/2026-09-25-fix-zot-pull-mutation-harness-row
 - [ ] 4.2 AC5: drive Guard 1 rows 1-3 and 5, and Guard 2 rows 1-2, as scratch edits, then revert. Quote one
   output line for each.
 - [ ] 4.3 AC3 (non-gating): run one round of 10 concurrent batteries with a shared `TMPDIR`, and expect
-  0 non-KILLED rows. Record `nproc` and the peak load average alongside the result.
+  0 non-KILLED rows. Every copy must also exit rc=0 and end with `61/61` and `OK`. Record `nproc` and
+  the peak load average alongside the result.
 - [ ] 4.4 AC7: run `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base HEAD origin/main)"`,
   confirm the diff touches no `.ts` file, and run shellcheck on the three touched `.sh` files.
 - [ ] 4.5 AC8/AC9: run `lint-guard-contract.py` on the plan, and confirm the diff touches no file

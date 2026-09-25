@@ -35,6 +35,44 @@ has finished writing**. Under CPU contention the first stage then takes SIGPIPE 
 | **A**: battery scorer, `case_mutate` (`cloud-init-inngest-zot-pull-mutation.test.sh:205`) | `grep -E '^  FAIL' "$log" \| grep -qF "$expect"` | A row that WAS killed on its named assertion is scored **MISROUTED** | 64/3000 false negatives (2.1%) on the real 5,075-byte FAIL stream of `row6` |
 | **B**: guard's Guard 1b arm splitter (`cloud-init-inngest-bootstrap.test.sh`, the `sed -E '/^[[:space:]]*#/d' "$DED_BLOCK_FILE" \| awk … exit` pipeline under the `--- Guard 1b (#6500)` header) | `awk` `exit`s at the missed arm's closing `fi`, while `sed` still has ~6 KB to write | The guard (`set -euo pipefail`) **dies silently** before any Guard 1b assertion runs: rc≠0, zero `^  FAIL` lines | 33/3000 (1.1%) per guard run. The battery runs the guard about 62 times, so P(at least one hit per battery run) is about 50% at this load |
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25. **Passes run:** plan-review panel (DHH, Kieran, code-simplicity, CTO
+devex), the deepen-plan halt gates (4.6 user-brand, 4.7 observability, 4.8 PAT, 4.11 guard
+contract; 4.5, 4.55, 4.9 and 4.10 do not trigger), an implementation-realism prototype, and a
+test-design review.
+
+### Key improvements
+
+1. **The prototype executed both fixes in scratch, not just reasoned about them.** `failed_on` with
+   the needle-first fixture: the self-test passes, and the old piped form false-negatives **50/50**
+   on the same 1,260,054-byte fixture. A directory passed as the log makes it `die` with rc 2. A
+   metacharacter-laden expected string (`[x] (a*b)?`) matches literally. The three `wf_block`
+   herestring asserts, written in the variables-first form under the guard's own `eval`-based
+   `assert()`, give 3 PASS, and a mutated-permissions negative control FAILs. That proves the
+   quoting (Kieran P1-1) and yields zero drift-guard pattern hits.
+2. Plan review cut ceremony: the causal-floor awk pass, the `SCORER_PROBES` floor, the rc-2 arm with
+   its probe, the padded-row self-checks, and 20 of the 30 AC3 runs. It kept Kieran's two
+   one-line fixture-shape checks as the #8644 guard.
+3. The test-design review added six cheap hardenings:
+   - an empty-expected-string `die` in `failed_on`;
+   - a PASS-only probe line that also contains `FAIL`;
+   - a `tail -1` diagnostic when BROKE has no FAIL lines;
+   - a one-property comment on the padded row;
+   - a `git ls-files --error-unmatch` check in the drift-guard pass;
+   - an AC3 rule that every copy exits rc=0 with `61/61` and `OK`.
+4. The Observability probe now expects a literal Check 10 can match
+   (`grep-q-zero-8664-pass`), and `configured_in` cites suite paths rather than the step names that
+   #8763 restructures.
+
+### New considerations discovered
+
+- Four sibling batteries carry the same scorer bug in six places. They are deferred, with a
+  tracking issue and a `decision-challenges.md` entry, because one of them is in #8763's diff.
+- The issue named the wrong row: `grep MISROUTED` matches the harness row's PASS line.
+- The SIGPIPE exposure floor is the producer's write size (~4 KiB), not the 64 KiB pipe capacity,
+  which corrects the framing in #7005.
+
 ## Research Reconciliation — Issue vs. Codebase
 
 | Issue claim | Reality (measured 2026-09-25) | Plan response |
@@ -64,7 +102,10 @@ inputs that make each old shape fail every time rather than 1-2% of the time.
 
 1. **`apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh`** (the battery)
    - Extract the named-assertion check into one scorer function:
-     `failed_on() { local fails rc; fails="$(grep -E '^  FAIL' "$1")"; rc=$?; (( rc > 1 )) && die "scorer could not read $1 (grep rc=$rc)"; [[ "$fails" == *"$2"* ]]; }`.
+     `failed_on() { [[ -n "$2" ]] || die "failed_on: empty expected string"; local fails rc; fails="$(grep -E '^  FAIL' "$1")"; rc=$?; (( rc > 1 )) && die "scorer could not read $1 (grep rc=$rc)"; [[ "$fails" == *"$2"* ]]; }`.
+     The empty-`$2` guard matters because `*""*` matches anything. Without it, an empty expected string
+     would score KILLED on a log with zero FAIL lines, where the old `grep -qF ""` returned 1
+     (test-design review, finding 6).
      It captures once (bash reads to EOF, so nothing is left for SIGPIPE to hit) and matches with a
      pure-bash glob (no second process). The quoted `"$2"` inside the pattern is literal: Kieran
      verified this with `a[b]*?c`. It is equivalent to the old pipeline for every non-empty,
@@ -78,7 +119,8 @@ inputs that make each old shape fail every time rather than 1-2% of the time.
    - **Scorer self-test** (one fixture, two probes, `die` → exit 2, per this file's "HARNESS
      FAILURES ABORT" contract). It sits directly after `failed_on`'s definition. The fixture is
      `$WORK/scorer-selftest.log`, which the existing EXIT trap owns (no new trap). Line 1 is
-     `^  PASS: SELFTEST-ONLY-ON-PASS`, line 2 is `^  FAIL: SELFTEST-TARGET`, and after that come
+     `^  PASS: SELFTEST-ONLY-ON-PASS would FAIL if unscoped`. The word `FAIL` is on that PASS line
+     so that a scope loosened to an unanchored `FAIL` is also caught (test-design review, finding 5). line 2 is `^  FAIL: SELFTEST-TARGET`, and after that come
      about 20,000 `^  FAIL: filler NNNNNN yyyy…` lines (≥1 MiB). Throughout this plan, `^` marks the
      start of a line: each literal line begins with two spaces, as `assert()` prints it. Generate the fixture with ONE
      `awk 'BEGIN{…}' > "$f"`, never `yes | head` or `seq | sed`, since those would recreate an
@@ -105,7 +147,14 @@ inputs that make each old shape fail every time rather than 1-2% of the time.
      flake signature, reproduced deterministically. The **fixed** guard exits rc=0 with
      `BOOTSTRAP_SUITE_OK unconditional=153 floor=153 total=230`. The pad comes after the G4 slice's
      `docker create` end-line and after the arm split, and it carries no `docker`/`curl`/`10.0.x`
-     token, so it changes no other verdict.
+     token, so it changes no other verdict. A comment on the row names the single property it
+     guards: the Guard 1b splitter must survive a producer that is still writing. That keeps a
+     future size or line budget from being misread as a splitter regression (test-design review,
+     finding 2).
+   - **`case_must_pass`'s BROKE display:** when the log has no `^  FAIL` lines, print
+     `tail -1 "$log"` in their place. The splitter regression this PR guards against dies silently
+     at the `--- Guard 1b (#6500)` header, and today that shows up as an empty list under a
+     misleading "the guard is over-fitted" line (test-design review, finding 1).
    - Floor: `BATTERY_MIN_ROWS=60` → `61`, with a history line (`61 (#8664): +1 must-PASS
      padded-pull-item row`). Keep the literal on the line directly above its `if`, as
      `scripts/guard-vacuity-floor.test.sh` requires.
@@ -132,7 +181,12 @@ inputs that make each old shape fail every time rather than 1-2% of the time.
 
 3. **`.claude/hooks/grep-q-pipe-guard.test.sh`**: add both files to the named-file, comment-stripped
    zero pass. This is the one #7024 established, and its scope note says: "Growth happens by adding
-   a named file, never by widening a glob." Update that pass's PASS/FAIL message to name #8664. This
+   a named file, never by widening a glob." Give the two files their own labelled pass (`hits_8664`).
+   Its PASS line must carry the literal `grep-q-zero-8664-pass` (the Observability probe's expected
+   output), and its FAIL line must not. Before the pass, check each named file with
+   `git ls-files --error-unmatch <file> || FAIL=1`. `git grep` on a renamed or deleted path returns
+   nothing and would PASS, which would silently switch off the zero pin (test-design review,
+   finding 3). This
    is the residual control for a *second* verdict site that reintroduces the `| grep -q` spelling,
    anywhere in either file.
 
@@ -234,8 +288,16 @@ logs:
   retention: "GitHub Actions log retention for the repository (90-day default); local logs until the runner's scratch root is reaped"
 discoverability_test:
   command: "bash .claude/hooks/grep-q-pipe-guard.test.sh"
-  expected_output: "PASS: no pipe-into-grep-q in"
+  expected_output: "grep-q-zero-8664-pass"
 ```
+
+The literal `grep-q-zero-8664-pass` is a token that item 3 of Files to Edit requires the new
+named-file pass to print on its PASS line **only**, never on its FAIL line. The earlier value,
+`PASS: no pipe-into-grep-q in`, is one token that contains whitespace. deepen-plan Phase 4.7 rejects
+that shape, and it would also match the unrelated hooks-tree PASS line. Phase 4.7's "suite-shaped
+command" proxy matches `grep-q-pipe-guard.test.sh`, and that is a false hit: the file is a
+0.24-second `git grep` drift check (measured), not a suite, and it finishes well inside Check 10's
+15-second cap. It is also shell-metacharacter-free, and its first token `bash` is on the allowlist.
 
 ## Guard Contract
 
@@ -324,7 +386,11 @@ commit pins them. Review is the anchor, and this is declared.
   terraform, as CI's `setup-terraform` provides. Without terraform the line reads
   `rendered=SKIPPED-no-terraform` and the total differs, so the AC pins `rendered=ran` (Kieran P2-5).
 - [ ] **AC3 (the issue's acceptance; equivalent concurrent load).** One round of 10 concurrent battery
-  copies with a shared `TMPDIR=/var/tmp/<dir>` produces **0 non-KILLED rows across 10 runs**. The
+  copies with a shared `TMPDIR=/var/tmp/<dir>` produces **0 non-KILLED rows across 10 runs**. Every
+  copy must also exit rc=0 and end with `=== Results: 61/61 mutants killed ===` followed by `OK`. A
+  copy that aborts with exit 2 (a non-green baseline under load, a self-test abort, or an OOM) prints
+  no verdict lines, so counting verdict lines alone would score it clean (test-design review,
+  finding 4). The
   pre-fix baseline on the same harness and machine was **6/20** runs failing, one non-KILLED row each:
   round 1 had 5/10 at load 30-45, and round 2 had 1/10 at load 27-30. That gives an unfixed per-run
   rate of about 0.3, so P(0/10 | unfixed) ≈ 0.03. The deterministic drivers in AC1 are the primary
