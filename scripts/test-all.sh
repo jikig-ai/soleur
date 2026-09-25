@@ -412,6 +412,23 @@ fi
 # Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# Session scratch root (#7004): allocate <base>/soleur-run.<pid>.XXXXXXXX under
+# the effective TMPDIR's base, export TMPDIR at it so every descendant mktemp
+# lands inside the session root, and write .soleur-owned so Reaper 3 and the
+# session-start sweep can reclaim a dead run's residue without name heuristics.
+# Sourced opportunistically — a missing lib degrades to the pre-#7004 shape,
+# never blocks the gate. The EXIT trap at the acquire site gains
+# `_soleur_scratch_cleanup` (spliced, not a second trap — ADR-129).
+_SCRATCH_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "$TMPDIR" || true
+fi
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+
 # Pin the #6789 contention instrumentation to /tmp, INDEPENDENTLY of TMPDIR above.
 #
 # test-contention.sh binds `TC_TMPDIR="${TC_TMPDIR:-${TMPDIR:-/tmp}}"` at SOURCE time, so
@@ -2993,7 +3010,7 @@ _enum_wd_disarm() {
     wait "$_ENUM_WD_PID" 2>/dev/null || true
   fi
 }
-trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _enum_wd_disarm' EXIT
+trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -3398,6 +3415,14 @@ if want_scripts; then
   # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
   # (age/size/ownership/liveness/protected-path) is asserted in both directions.
   run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
+  # #7004: the tmp backlog purge + shared classifier. It MOVES operator files,
+  # so every ladder rung (marker/schema/git/empty/prefix/protected/liveness)
+  # is asserted in both directions under a sentinel base.
+  run_suite "tests/scripts/tmp-purge" bash tests/scripts/test-tmp-purge.sh
+  # #7004: the session allocator + Reaper 3 + quarantine drain. begin() exports
+  # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
+  # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
+  run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
   # #7537: the orphaned-PROCESS reaper. It SIGNALS processes, so every gate
   # (own-uid, unlinked cwd, unlinked fd/255, self-exclusion, mount/pid
   # namespace, age floor) is asserted in both directions here. Registered
@@ -3640,14 +3665,8 @@ if want_scripts; then
   # the defect alarm. The suite also pins FAIL-precedence over PASS, fault-to-TRANSIENT on each
   # of the three queries, and the missing-creds arm (TRANSIENT, never a spurious FAIL page).
   run_suite "scripts/ship-merge-mergebase-verdict-8151" bash scripts/followthroughs/ship-merge-mergebase-verdict-8151.test.sh
-  # #8006: exit-code harness for the test-scripts* leg-duration soak probe. Registered
-  # explicitly (orphan-suite class above). Its exit code is the closure of #8006 (0 closes;
-  # 1 = a qualifying leg breached the 900 s bound; 2 = NOT YET — under-sampled, unclocked,
-  # or every run non-qualifying; 3 = gh failed). Load-bearing arms: a run qualifies ONLY
-  # when all 9 post-carve-out legs are present, green, and measured — a skipped leg is
-  # unmeasurable and fail-closed, never a green leg; and a pre-merge run (no
-  # test-scripts-heavy legs) is stale data, not a small sample.
-  run_suite "scripts/ci-leg-durations-8006" bash scripts/followthroughs/ci-leg-durations-8006.test.sh
+  # (#8006 retired 2026-09-24 — issue closed on sweeper PASS; probe script +
+  # suite deleted per the script's own RETIREMENT note.)
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the

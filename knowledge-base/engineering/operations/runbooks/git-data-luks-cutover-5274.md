@@ -206,7 +206,16 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
      ```
 
      It must end `success`, and Better Stack must then show `git_data_pin=present` with the
-     fingerprint the source apply run printed (go/no-go below).
+     fingerprint the source apply run printed (go/no-go below). A green follower does not by itself
+     mean a redeploy happened: since #8710 its gate proceeds only when the job **and** its apply step
+     both succeeded, and otherwise does not redeploy (green with a notice or warning, red when it
+     cannot decide). Check that its
+     `Dispatch web-platform-release and wait for its deploy` step is `success`, not `skipped`:
+
+     ```bash
+     gh run view <pin-redeploy-run-id> --json jobs --jq '.jobs[0].steps[] | select(.name | startswith("Dispatch web-platform-release")) | .conclusion'
+     ```
+
    - **If the replace failed after the secret published:** re-dispatch the replace. The replace gate
      accepts that plan.
    - **If the replace failed before the new server was created:** state holds the new key, no server,
@@ -219,6 +228,14 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
      ```bash
      gh run rerun <pin-redeploy-run-id> --failed
      gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>
+     ```
+
+     If the gate exited 1 with `verdict=unidentified`, or printed `verdict=pin_published` or `verdict=pin_maybe_published`, the same `source_run_id` refuses again.
+     When the source apply step published a pin, dispatch with **no** `source_run_id` (it redeploys
+     unconditionally):
+
+     ```bash
+     gh workflow run git-data-pin-redeploy.yml --ref main
      ```
 
 4. **Strict dry run.** Dispatch `git-data-cutover.yml` from `main`. It must read
@@ -280,7 +297,8 @@ required; it now also rotates the host key and redeploys the app automatically.
 - `git_data_pin=absent` or `git_data_pin=invalid` on the new deploy is **NO-GO**: the release did not
   load the pin. Re-run the redeploy (`gh run rerun <pin-redeploy-run-id> --failed`, or
   `gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>`), then read
-  again.
+  again. If the gate exited 1 with `verdict=unidentified`, or printed `verdict=pin_published` or `verdict=pin_maybe_published`, dispatch
+  `gh workflow run git-data-pin-redeploy.yml --ref main` with no `source_run_id` instead.
 - **The first rotation cannot produce `host_key_mismatch`.** Until the redeploy, the app has no pin
   and stays on its fallback arm against the new host. Pin lag matters only from the second rotation
   on, and once the store flag is on it stalls replication pushes and fetches as well as erasures.
@@ -401,10 +419,13 @@ Measured against `apply-web-platform-infra.yml`, `git-data.tf` and
   `doppler_secret.git_data_ssh_host_key` carries `depends_on = [hcloud_server.git_data]` and is
   written by that apply. **So a red boot poll leaves the new pin already published to `prd`.**
 - `git-data-pin-redeploy.yml` triggers on the apply workflow's `workflow_run` `completed`, whatever
-  the conclusion, so the follower run does start. Its gate then reads the source run's job
-  conclusions and proceeds **only** when `git_data_host_replace` concluded `success`. A boot-poll
-  red fails that job, so `source-run-gate.sh` emits a `::warning::` and skips: **the redeploy does
-  not fire by itself.**
+  the conclusion, so the follower run does start. Its gate then reads the source run's jobs and
+  their apply steps (#8710), and proceeds **only** when `git_data_host_replace` concluded `success`
+  **and** its step `Terraform apply (git-data-host -replace) — both-volumes-preserved assert`
+  concluded `success`. A boot-poll red fails that job after the apply succeeded, so
+  `source-run-gate.sh` emits a `::warning::` carrying `verdict=pin_published`, sets the gate output
+  `pin_published=true` and emails ops ("git-data pin published but the app was not redeployed"):
+  **the redeploy does not fire by itself.**
 - Recovery for that skip is a dispatch with **no** `source_run_id`, because passing the same id
   re-reads the same non-success and skips again:
 
@@ -466,7 +487,7 @@ amendment 2026-09-24).
 | # | Dispatch | Precondition | Clean means |
 |---|---|---|---|
 | G1 | `git-data-rung2-rehearsal.yml` `dry_run=false` (paid) | the fix PR merged | the run concludes `success`, and its evidence lands through an evidence-only PR |
-| G2 | `apply-web-platform-infra.yml` `apply_target=git-data-host-replace plan_only=true` | the evidence PR merged **and** `gh issue view 8710 --json state,closedByPullRequestsReferences` shows #8710 closed by a merged PR (otherwise this rehearsal fires a production redeploy again) | the job's destroy-guard (`git_data_host_replace_gate`, `tests/scripts/lib/git-data-host-replace-gate.sh` — the single source for which addresses a replace may touch; neither volume is among them) admits the plan and the run concludes `success`, and `gh run list --workflow=git-data-pin-redeploy.yml --created ">=<G2 start>"` shows no run it triggered. For reference, run 35979304442 planned `6 to add, 1 to change, 4 to destroy` because `tls_private_key.git_data_host_ssh` and `doppler_secret.git_data_ssh_host_key` were not yet in state; with both in state the counts differ, so compare against the gate, never against that line |
+| G2 | `apply-web-platform-infra.yml` `apply_target=git-data-host-replace plan_only=true` | the evidence PR merged **and** `gh issue view 8710 --json state,closedByPullRequestsReferences` shows #8710 closed by a merged PR (otherwise this rehearsal fires a production redeploy again) | the job's destroy-guard (`git_data_host_replace_gate`, `tests/scripts/lib/git-data-host-replace-gate.sh` — the single source for which addresses a replace may touch; neither volume is among them) admits the plan and the run concludes `success`, and the pin-redeploy run it triggered did not redeploy: find it with `for id in $(gh run list --workflow git-data-pin-redeploy.yml --created ">=<G2 start>" --json databaseId --jq '.[].databaseId'); do gh run view "$id" --log \| grep -F "in run <G2 run id>" \| grep -q 'verdict=no_apply' && echo "$id"; done`, then `gh run view <that id> --json jobs --jq '.jobs[0].steps[] \| select(.name \| startswith("Dispatch web-platform-release")) \| .conclusion'` prints `skipped`. For reference, run 35979304442 planned `6 to add, 1 to change, 4 to destroy` because `tls_private_key.git_data_host_ssh` and `doppler_secret.git_data_ssh_host_key` were not yet in state; with both in state the counts differ, so compare against the gate, never against that line. (Check amended 2026-09-24 by #8710: the pin-redeploy run always starts, so read its verdict rather than its absence.) |
 | G3 | the same, real (one attempt) | G2 read clean | GO, below |
 | G4 | `git-data-cutover.yml` strict dry run | G3's `boot_complete` | `role=git-data-auth verdict=ok` |
 
@@ -586,6 +607,8 @@ In the app, the same mismatch surfaces as the Art. 17 erasure outcome `erasure_o
 (paging through the existing `art17_erasure_incomplete` rule). Its first remedy is (b)'s redeploy half:
 the app holds a stale or wrong pin. Re-run the redeploy (`gh run rerun <pin-redeploy-run-id> --failed`),
 or dispatch `gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>`.
+If that run's gate exited 1 with `verdict=unidentified`, or printed `verdict=pin_published` or `verdict=pin_maybe_published`, dispatch
+`gh workflow run git-data-pin-redeploy.yml --ref main` with no `source_run_id`.
 
 ### Store not empty (`store_not_empty`)
 
@@ -737,10 +760,12 @@ re-mint refusal, which blocks a create of the key while the fingerprint file is 
 
 **git-data's SSH host key rotates on every replace (ADR-237).** The gated replace job re-mints
 `tls_private_key.git_data_host_ssh` with the host and republishes `GIT_DATA_SSH_HOST_KEY`; the birth
-job mints and publishes it the same way. When that apply run completes, `git-data-pin-redeploy.yml`
-forces a web release, so the app loads the new pin within about one release cycle. No step outside
-Terraform copies the pin, and no separate rotation input exists. If the redeploy fails (it emails
-ops), re-run it with `gh run rerun <pin-redeploy-run-id> --failed`; until it succeeds, erasures page
+job mints and publishes it the same way. When that apply run completes with the job and its apply
+step both green, `git-data-pin-redeploy.yml` forces a web release, so the app loads the new pin
+within about one release cycle. No step outside Terraform copies the pin, and no separate rotation
+input exists. If the redeploy fails (it emails ops), re-run it with
+`gh run rerun <pin-redeploy-run-id> --failed`; if its gate exited 1 with `verdict=unidentified`, or printed `verdict=pin_published` or `verdict=pin_maybe_published` (a red job whose apply published the pin, also emailed), dispatch
+`gh workflow run git-data-pin-redeploy.yml --ref main` with no `source_run_id`. Until it succeeds, erasures page
 with `erasure_outcome=host_key_mismatch` from the second rotation on, and with the store on,
 replication pushes and fetches fail too.
 

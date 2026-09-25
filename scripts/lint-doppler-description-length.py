@@ -113,7 +113,8 @@ def scan_string(text, i, line):
 
 
 def tokenize(text):
-    """(kind, value, line, has_template) tokens; comments dropped, heredocs collapsed."""
+    """(kind, value, line, has_template) tokens; comments dropped, heredocs collapsed to one token
+    carrying the body. has_template is always False for HEREDOC: consumers branch on the kind."""
     toks, i, n, line = [], 0, len(text), 1
     while i < n:
         c = text[i]
@@ -140,16 +141,20 @@ def tokenize(text):
             m = HEREDOC.match(text, i)
             ident, start = m.group(1), line
             i, line = m.end(), line + 1
+            body_start = i
             while True:
                 j = text.find("\n", i)
                 end = n if j < 0 else j
                 if text[i:end].strip() == ident:
+                    body = text[body_start:i]
                     i = end
                     break
                 if j < 0:
                     raise ScanError("unterminated heredoc", start)
                 i, line = j + 1, line + 1
-            toks.append(("HEREDOC", ident, start, False))
+            # The value slot carries the BODY (scan() never reads it; consumers such as
+            # apps/web-platform/infra/web-probes-token-rotation.test.sh match references inside it).
+            toks.append(("HEREDOC", body, start, False))
         elif c.isalpha() or c == "_":
             m = IDENT.match(text, i)
             toks.append(("ID", m.group(0), line, False))

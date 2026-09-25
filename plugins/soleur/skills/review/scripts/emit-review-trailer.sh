@@ -230,8 +230,9 @@ if [[ -z "$BRANCH" ]]; then
   exit 2
 fi
 
-# Never emit on main/master or in detached HEAD. The gate skips those cases
-# too, so a commit here would be pure noise on the trunk's history.
+# Never emit on main/master or in detached HEAD: nothing to mark there. The gate
+# reads the merged PR's own head (#8778), so the trailer must land on the PR's
+# branch — run this from that checkout, then push.
 if [[ "$BRANCH" == "main" || "$BRANCH" == "master" || "$BRANCH" == "HEAD" ]]; then
   echo "emit-review-trailer: on '$BRANCH' — nothing to mark, skipping."
   exit 0

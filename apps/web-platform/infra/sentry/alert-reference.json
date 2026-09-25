@@ -577,6 +577,101 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "cron-monitor-failure": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1214782",
+      "1214783",
+      "1214784",
+      "1214785",
+      "1214786",
+      "1214787",
+      "1214788",
+      "1214789",
+      "1227831",
+      "1229213",
+      "1258965",
+      "1259317",
+      "1259607",
+      "1259665",
+      "1259709",
+      "1262314",
+      "1262315",
+      "1266135",
+      "1266136",
+      "1285280",
+      "1292935",
+      "1299460",
+      "1307281",
+      "1317679",
+      "1339297",
+      "1342329",
+      "1343350",
+      "1343351",
+      "1343352",
+      "1343353",
+      "1343354",
+      "1343355",
+      "1343356",
+      "1343357",
+      "1343358",
+      "1343359",
+      "1343360",
+      "1343361",
+      "1343362",
+      "1343373",
+      "1343967",
+      "1359253",
+      "1425262",
+      "1431677",
+      "1442264",
+      "1477566",
+      "1479329",
+      "1493363",
+      "1509581",
+      "1516759",
+      "1542986",
+      "1591228",
+      "1596605",
+      "1623727",
+      "1636072",
+      "2185845",
+      "2204550",
+      "2270831",
+      "2275153"
+    ],
+    "enabled": true,
+    "frequency": 1441,
+    "name": "cron-monitor-failure",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "disk-io-wal-concentration": {
     "actionFilters": [
       {
@@ -1338,6 +1433,75 @@
       }
     ],
     "triggerLogicType": "single"
+  },
+  "spawn-agent-dead-letter": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "spawn-agent"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "agent-on-spawn-requested"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "reason",
+              "match": "in",
+              "value": "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_refused,leader_response_truncated,leader_tool_invalid"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 1442,
+    "name": "spawn-agent-dead-letter",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
   },
   "stale-bot-pr": {
     "actionFilters": [

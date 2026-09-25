@@ -110,6 +110,7 @@ Check for `knowledge-base/marketing/brand-guide.md`. If it exists, read the Iden
 
 - Align keyword relevance assessments with the brand's target audience and positioning
 - Ensure rewrite suggestions match the brand voice
+- For any page under a `blog/` directory, also read `## Channel Notes > ### Blog` if it exists and follow it: its reader, its search rules for choosing keywords, and its scope rule for existing posts (for example, whether a refresh may change a title or meta description)
 - Prioritize content topics that reinforce the brand's positioning
 
 If no brand guide exists, proceed without it and note its absence.
