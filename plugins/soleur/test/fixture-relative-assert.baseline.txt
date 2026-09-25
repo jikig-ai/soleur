@@ -391,7 +391,7 @@
 2	scripts/sweep-followthroughs.sh
 93	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
-8	scripts/test-all-affected.test.sh
+9	scripts/test-all-affected.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-group-affected.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh
