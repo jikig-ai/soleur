@@ -3,10 +3,10 @@
 # .github/workflows/apply-web-platform-infra.yml, #6894 — ADR-142 Guard 3).
 #
 # The gate grades every resource_changes entry against a per-address permitted-actions table over
-# the job's 18 -target= addresses. Creates are PERMITTED, never REQUIRED.
+# this job's -target addresses. Creates are PERMITTED, never REQUIRED.
 #
 # ONE CASE PER PREDICATE, AND ONE PER FORBIDDEN CELL of the permitted table. Every fixture starts
-# from the REALISTIC base — all 18 addresses present as ["no-op"] (untargeted-but-present is the
+# from the REALISTIC base — every -target address present as ["no-op"] (untargeted-but-present is the
 # live shape) — and changes ONE thing, and every RED asserts the gate's `reason=<token>` rather than
 # merely rc. Must-PASS rows are counted from the file (H2), so a gate stuck at "reject everything"
 # cannot hide behind a RED-only battery.
@@ -64,8 +64,8 @@ _job_body() {
 JOB="$(_job_body inngest_host)"
 TARGETS="$(grep -oE "\-target='[^']+'" <<<"$JOB" | sed -E "s/^-target='([^']+)'$/\1/" | sort)"
 _n_targets="$(grep -c . <<<"$TARGETS" || true)"
-if [[ "$_n_targets" != "18" ]]; then
-  printf '[FATAL] expected the inngest_host job to carry 18 -target= addresses, derived %s — the extraction or the job drifted\n' "$_n_targets" >&2
+if [[ "$_n_targets" != "17" ]]; then
+  printf '[FATAL] expected the inngest_host job to carry 17 -target= addresses, derived %s — the extraction or the job drifted\n' "$_n_targets" >&2
   exit 2
 fi
 
@@ -126,7 +126,7 @@ if ! gate_harness_selftest; then fails=$((fails + 1)); fi
 
 # ── MUST-PASS ─────────────────────────────────────────────────────────────────────
 build
-check "PASS: all 18 addresses no-op (no create is ever required)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
+check "PASS: every -target address no-op (no create is ever required)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
 all_of '["create"]'
 check "PASS: full from-scratch build (every address create, passphrase pair absent)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
 build 'doppler_secret.inngest_betterstack_logs_token=["update"]'
@@ -181,11 +181,12 @@ red luks_attachment_touched "$LA=[\"forget\"]"
 red network_touched 'hcloud_server_network.inngest=["update"]'
 red network_touched 'hcloud_server_network.inngest=["delete"]'
 red network_touched 'hcloud_server_network.inngest=["forget"]'
-# firewall + its attachment: no-op | create (an update is an ingress change on a no-inbound host)
+# firewall: no-op | create (an update is an ingress change on a no-inbound host)
 red firewall_touched 'hcloud_firewall.inngest=["update"]'
-red firewall_touched 'hcloud_firewall_attachment.inngest=["update"]'
 red firewall_touched 'hcloud_firewall.inngest=["delete"]'
-red firewall_touched 'hcloud_firewall_attachment.inngest=["forget"]'
+# The attachment left the allow-set (#8754): any action on it is refused by the global predicates.
+red out_of_scope 'hcloud_firewall_attachment.inngest=["update"]'
+red forget_present 'hcloud_firewall_attachment.inngest=["forget"]'
 # generated secrets: no-op | create — a regeneration rotates the host's credentials
 red generated_secret_touched 'random_id.inngest_signing_key_dedicated=["update"]'
 red generated_secret_touched 'random_id.inngest_event_key_dedicated=["delete","create"]'

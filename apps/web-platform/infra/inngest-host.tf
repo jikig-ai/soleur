@@ -467,6 +467,11 @@ resource "hcloud_server" "inngest" {
     ipv6_enabled = true
   }
 
+  # The deny-all firewall binds HERE, inside ServerCreate, so every birth and every -replace boots
+  # with it (#8754, ADR-100 2026-09-25 addendum). Not ForceNew. Optional+Computed, so deleting this
+  # line plans nothing and detaches nothing: Guard 1 in inngest-host.test.sh is what pins it.
+  firewall_ids = [hcloud_firewall.inngest.id]
+
   user_data = local.inngest_user_data_b64gz
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
@@ -622,16 +627,19 @@ resource "hcloud_firewall" "inngest" {
   }
 }
 
-# server_ids is update-in-place (NOT ForceNew), so the scoped `inngest-host-replace` dispatch
-# (#6197) does NOT -target this attachment — after that replace it transiently points at the
-# destroyed server id and the new host boots with NO hcloud firewall attached until the next
-# full/drift apply reconciles server_ids (verify re-attach on replace, as with the Redis volume).
-# Low blast radius: this firewall is a zero-rule deny-all; the real :8288/:8289 ingress control is
-# host-local nftables (cloud-init, independent of the hcloud firewall) and /api/inngest is HMAC
-# fail-closed. Do NOT add it to the replace allow-set — an in-place update is not a replace.
-resource "hcloud_firewall_attachment" "inngest" {
-  firewall_id = hcloud_firewall.inngest.id
-  server_ids  = [hcloud_server.inngest.id]
+# FORGET the old hcloud_firewall_attachment.inngest (#8754). It kept a destroyed server id after
+# every replace, so the host ran with no Hetzner firewall (ADR-100 2026-09-25 addendum).
+# `destroy = false` drops the state entry only; a destroy would call the detach API. Under -target,
+# a removed block is planned only if its address is targeted, so the per-merge `apply` job carries
+# `-target=hcloud_firewall_attachment.inngest` and the `inngest_host` job does not (a birth never
+# plans a forget). KEEP this block and that -target permanently (the doppler-write-token.tf
+# precedent): once the forget has applied, a removed block for an absent address is a no-op tombstone.
+removed {
+  from = hcloud_firewall_attachment.inngest
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ---------------- Liveness (PUSH heartbeat) ----------------
