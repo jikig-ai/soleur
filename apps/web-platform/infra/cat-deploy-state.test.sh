@@ -460,14 +460,14 @@ done
 # durable` from three probes 8s apart — so any AC keyed on is-active alone asserts a proxy.
 for prop in NRestarts ExecMainStartTimestamp ActiveEnterTimestamp Result ExecMainStatus; do
   assert "inngest_redis_result carries $prop" \
-    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF '$prop='"
+    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -cF '$prop=' >/dev/null"
 done
 # By-key parse, NOT positional: the mock returns properties in systemd's canonical order and
 # omits MemoryPeak. A positional read would bind NRestarts to whatever sits at that index.
 assert "inngest_redis_result binds NRestarts to its VALUE, not a positional neighbour" \
-  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF 'NRestarts=11704'"
+  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -cF 'NRestarts=11704' >/dev/null"
 assert "inngest_redis_result tolerates an unsupported MemoryPeak (systemd < 253) without shifting" \
-  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF 'Result=exit-code'"
+  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -cF 'Result=exit-code' >/dev/null"
 
 # --- Scrub: no secret class may reach the HTTP response body -----------------
 # This is load-bearing, not hygiene. On a config-parse failure redis echoes the offending
@@ -477,7 +477,7 @@ assert "inngest_redis_result tolerates an unsupported MemoryPeak (systemd < 253)
 REDIS_TAIL=$(printf '%s' "$REDIS_OUT" | jq -r '.services.inngest_redis_journal_tail')
 for secret in "hunter2synthetic" "SYNTHETIC_NOT_A_REAL_TOKEN"; do
   assert "scrubbed from inngest_redis_journal_tail: $secret" \
-    "! printf '%s' \"\$REDIS_TAIL\" | grep -qF '$secret'"
+    "! printf '%s' \"\$REDIS_TAIL\" | grep -cF '$secret' >/dev/null"
 done
 
 # --- #7286 review: the three falsifying inputs the first-draft scrubber let through ---------
@@ -505,7 +505,7 @@ while IFS='|' read -r line secret why; do
     | sed -E 's#([a-z][a-z0-9+.-]*://)[^:/@[:space:]]+:[^@/[:space:]]+@#\1REDACTED@#gI' \
     | sed -E 's#(rediss?://):[^@[:space:]]+@#\1REDACTED@#gI')
   assert "scrubber neutralizes: $why" \
-    "! printf '%s' \"\$scrubbed\" | grep -qF '$secret'"
+    "! printf '%s' \"\$scrubbed\" | grep -cF '$secret' >/dev/null"
 done < "$SCRUB_CASES"
 rm -f "$SCRUB_CASES"
 
@@ -533,7 +533,7 @@ assert "the redis tail is non-empty (scrub proves something, not nothing)" \
 # addition does not force a fixture rewrite.
 for signal in "FATAL CONFIG FILE ERROR" "Bad directive or wrong number of arguments" "Doppler Error"; do
   assert "diagnostic SURVIVES the scrubber (no over-redaction): $signal" \
-    "printf '%s' \"\$REDIS_TAIL\" | grep -qF '$signal'"
+    "printf '%s' \"\$REDIS_TAIL\" | grep -cF '$signal' >/dev/null"
 done
 # The scrubber must be the SHARED one, so hardening it hardens all six tails at once — and so a
 # future rule added for one tail cannot silently miss the others. Asserted structurally rather
@@ -568,11 +568,11 @@ REDIS_OUT_LOADED=$(PATH="$REDIS_MOCK:$PATH" \
 assert "inngest_redis_dropin names the loaded drop-in by EXACT basename" \
   "[[ \$(printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin') == '10-inngest-redis-doppler-token.conf' ]]"
 assert "inngest_redis_dropin emits no PATH separator (basenames only)" \
-  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qF '/'"
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -cF '/' >/dev/null"
 # The comment's stated hazard is `Environment=`, which the longer `EnvironmentFile=` literal does
 # not match — so the original negative forbade the wrong token. Forbid the shorter one.
 assert "inngest_redis_dropin emits basenames only (never drop-in CONTENT)" \
-  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qE 'Environment='"
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -cE 'Environment=' >/dev/null"
 
 # --- tail_status disambiguates the four states service_journal_tail collapses ---
 assert "inngest_redis_tail_status is ok when the tail has content" \
@@ -596,7 +596,7 @@ assert "inngest_redis_tail_status is unit-unknown when systemd reports LoadState
 # from the payload at all. SyslogIdentifier is the emitter half of the Source-4 pair.
 for prop in LoadState ActiveState SyslogIdentifier; do
   assert "inngest_redis_result emits $prop (was fetched-and-discarded or absent)" \
-    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF '$prop='"
+    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -cF '$prop=' >/dev/null"
 done
 
 # --- #7286 review: the PRESENT branches were unreachable in the entire suite -----------------
@@ -614,15 +614,15 @@ REDIS_OUT_PRESENT=$(PATH="$REDIS_MOCK:$PATH" \
   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
 
 assert "credfile present branch reports presence + mtime + bytes" \
-  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -qE '^present mtime=[0-9]+ bytes=[0-9]+$'"
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -cE '^present mtime=[0-9]+ bytes=[0-9]+$' >/dev/null"
 # The whole point of the field: length, never value.
 assert "credfile NEVER emits the credential value" \
-  "! printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -qF 'SYNTHETIC_FIXTURE'"
+  "! printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -cF 'SYNTHETIC_FIXTURE' >/dev/null"
 assert "datadir present branch reports owner:group mode and use%" \
-  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_datadir' | grep -qE '^present [^ ]+:[^ ]+ [0-7]{3,4} use='"
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_datadir' | grep -cE '^present [^ ]+:[^ ]+ [0-7]{3,4} use=' >/dev/null"
 # vector_config_identity's load-bearing half: does the RUNNING config allowlist the tag?
 assert "vector_config_identity answers redis_allowlisted=yes on a config carrying the entry" \
-  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.vector_config_identity' | grep -qF 'redis_allowlisted=yes'"
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.vector_config_identity' | grep -cF 'redis_allowlisted=yes' >/dev/null"
 
 # The discriminating case: a config that only MENTIONS inngest-redis in a comment must NOT
 # report the allowlist as live. Without this the grep could be satisfied by prose — the exact
@@ -632,7 +632,7 @@ REDIS_OUT_COMMENT=$(PATH="$REDIS_MOCK:$PATH" \
   VECTOR_CONFIG_PATH="$PRESENT_DIR/vector-comment-only.toml" \
   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
 assert "vector_config_identity reports redis_allowlisted=no when only a COMMENT names the tag" \
-  "printf '%s' '$REDIS_OUT_COMMENT' | jq -r '.services.vector_config_identity' | grep -qF 'redis_allowlisted=no'"
+  "printf '%s' '$REDIS_OUT_COMMENT' | jq -r '.services.vector_config_identity' | grep -cF 'redis_allowlisted=no' >/dev/null"
 
 # The file-disclosure guard had NO assertion at all — deleting the `test -L` branch left the
 # suite fully green, because no fixture ever pointed the data dir at a symlink. The code comment
@@ -650,7 +650,7 @@ REDIS_OUT_NOBIN=$(PATH="$REDIS_MOCK:$PATH" \
   SOLEUR_REDIS_SERVER_BIN="$PRESENT_DIR/definitely-not-here" \
   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
 assert "inngest_redis_binary says 'absent' rather than emitting a bare distro_unit= " \
-  "printf '%s' '$REDIS_OUT_NOBIN' | jq -r '.services.inngest_redis_binary' | grep -qE '^absent '"
+  "printf '%s' '$REDIS_OUT_NOBIN' | jq -r '.services.inngest_redis_binary' | grep -cE '^absent ' >/dev/null"
 
 rm -rf "$PRESENT_DIR"
 

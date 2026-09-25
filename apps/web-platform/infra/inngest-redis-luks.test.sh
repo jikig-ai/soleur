@@ -97,7 +97,7 @@ if grep -qF '[ -s /etc/default/inngest-luks ] ||' "$CLOUD_INIT"; then ok "T1.5 t
 # satisfied by two bounds in ONE reader and none in the other, which is precisely the state the arm
 # names ("missing from one of the two"). Split at the runcmd stage's heredoc opener: above it is
 # the write_files region shipping the boot-2 reopen script, below it the first-boot runcmd stage.
-_split6="$(grep -n "bash -s <<'LUKSEOF'" "$CLOUD_INIT" | head -1 | cut -d: -f1)"
+_split6="$(grep -n "bash -s <<'LUKSEOF'" "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)"
 if [ -n "$_split6" ]; then
   _w6r="$(head -n "$((_split6 - 1))" "$CLOUD_INIT" | grep -cE '\[ "\$_i" -lt 30 \]|\[ "\$\$_i" -lt 30 \]')"
   _w6c="$(tail -n +"$_split6" "$CLOUD_INIT" | grep -cE '\[ "\$_i" -lt 30 \]|\[ "\$\$_i" -lt 30 \]')"
@@ -122,7 +122,7 @@ if [ -n "$LUKS_BLOCK" ]; then ok "T1.7a the LUKS stage block extracts"; else no 
 # The first and last lines of the block are the two facts that actually pin it.
 _ops="$(printf '%s\n' "$LUKS_BLOCK" | grep -cE '^[[:space:]]*(mount|mountpoint|mkfs|cryptsetup)')"
 if [ "$_ops" -ge 5 ]; then ok "T1.7a2 the extracted block carries the device operations (${_ops} >= 5)"; else no "T1.7a2 the extraction captured only ${_ops} device operations — the range is truncated and T1.7b/c are vacuous"; fi
-_first="$(printf '%s\n' "$LUKS_BLOCK" | head -1)"
+_first="$(printf '%s\n' "$LUKS_BLOCK" | sed -n '1p')"
 _last="$(printf '%s\n' "$LUKS_BLOCK" | tail -1)"
 case "$_first" in *"bash -s <<'LUKSEOF'") _fok=1 ;; *) _fok=0 ;; esac
 case "$_last"  in *LUKSEOF)               _lok=1 ;; *) _lok=0 ;; esac
@@ -161,8 +161,8 @@ if grep -qE "grep -q ' /mnt/data(-luks)? ' /etc/fstab \|\|" "$CLOUD_INIT"; then 
 # T1.8d fstab_set REPLACES and then asserts EXACTLY ONE. Both halves, field-exact on the mountpoint
 # ($2), so /mnt/data never matches /mnt/data-luks.
 _FS_DEF="$(awk '/^    fstab_set\(\) \{$/,/^    \}$/' "$CLOUD_INIT")"
-if printf '%s\n' "$_FS_DEF" | grep -qF "\$2 != mp"; then ok "T1.8d1 fstab_set drops the mountpoint's existing line before writing (replace, not append)"; else no "T1.8d1 fstab_set does not filter the mountpoint's existing line — it appends"; fi
-if printf '%s\n' "$_FS_DEF" | grep -qF '[ "$_fs_n" -eq 1 ] ||'; then ok "T1.8d2 fstab_set asserts exactly one line for the mountpoint after writing"; else no "T1.8d2 fstab_set does not assert exactly one line"; fi
+if printf '%s\n' "$_FS_DEF" | grep -cF "\$2 != mp" >/dev/null; then ok "T1.8d1 fstab_set drops the mountpoint's existing line before writing (replace, not append)"; else no "T1.8d1 fstab_set does not filter the mountpoint's existing line — it appends"; fi
+if printf '%s\n' "$_FS_DEF" | grep -cF '[ "$_fs_n" -eq 1 ] ||' >/dev/null; then ok "T1.8d2 fstab_set asserts exactly one line for the mountpoint after writing"; else no "T1.8d2 fstab_set does not assert exactly one line"; fi
 if grep -qE '^    _fstab_n="\$\(awk .\$1 !~ /\^#/ && \$2 == "/mnt/data". /etc/fstab \| wc -l\)"$' "$CLOUD_INIT" \
    && grep -qF '[ "$_fstab_n" -eq 1 ] ||' "$CLOUD_INIT"; then ok "T1.8e stage=fstab asserts EXACTLY ONE /mnt/data line, not merely one-or-more"; else no "T1.8e stage=fstab no longer asserts exactly one /mnt/data line"; fi
 
@@ -179,8 +179,8 @@ if grep -qE '^    _fstab_n="\$\(awk .\$1 !~ /\^#/ && \$2 == "/mnt/data". /etc/fs
 _UNIT_CODE="$(grep -vE '^[[:space:]]*#' "$REDIS_UNIT" || true)"
 _BOOT_CODE="$(grep -vE '^[[:space:]]*#' "$REDIS_BOOTSTRAP" || true)"
 
-if printf '%s\n' "$_UNIT_CODE" | grep -qF 'ExecStartPre=/usr/local/bin/inngest-redis-mount-guard.sh'; then ok "T1.9a the Redis unit carries the mount guard (live directive, not a commented one)"; else no "T1.9a inngest-redis.service has no live ExecStartPre mount guard"; fi
-if printf '%s\n' "$_BOOT_CODE" | grep -qF 'if [ -e "$MAPPER" ]; then'; then ok "T1.9b the guard is TWO-state (mapper-conditional), not a bare mapper demand"; else no "T1.9b the mount guard is not mapper-conditional — it would refuse to start Redis on the pre-recut ext4 host"; fi
+if printf '%s\n' "$_UNIT_CODE" | grep -cF 'ExecStartPre=/usr/local/bin/inngest-redis-mount-guard.sh' >/dev/null; then ok "T1.9a the Redis unit carries the mount guard (live directive, not a commented one)"; else no "T1.9a inngest-redis.service has no live ExecStartPre mount guard"; fi
+if printf '%s\n' "$_BOOT_CODE" | grep -cF 'if [ -e "$MAPPER" ]; then' >/dev/null; then ok "T1.9b the guard is TWO-state (mapper-conditional), not a bare mapper demand"; else no "T1.9b the mount guard is not mapper-conditional — it would refuse to start Redis on the pre-recut ext4 host"; fi
 # T1.9c The identity read FAILS CLOSED. `proj=""` used to fall through to the `|| exit 0` written
 # for the web host, so a dedicated host whose env file failed to write — the exact host this guard
 # exists for — was waved through. Anchored on the refusal, which is the thing that can be deleted.
@@ -196,11 +196,11 @@ if printf '%s\n' "$_BOOT_CODE" | grep -qF 'if [ -e "$MAPPER" ]; then'; then ok "
 #
 # Each refusal is now located by its own message and the FOLLOWING non-blank line must be `exit 1`.
 _next_stmt() {  # _next_stmt <needle> — the first non-blank executable line after the match
-  printf '%s\n' "$_BOOT_CODE" | grep -A3 -F "$1" | tail -n +2 | grep -vE '^\s*$' | head -1 | sed 's/^[[:space:]]*//'
+  printf '%s\n' "$_BOOT_CODE" | grep -A3 -F "$1" | tail -n +2 | grep -vE '^\s*$' | sed -n '1p' | sed 's/^[[:space:]]*//'
 }
-if printf '%s\n' "$_BOOT_CODE" | grep -qF 'DOPPLER_PROJECT:-'; then ok "T1.9c1 the guard actually READS the host identity"; else no "T1.9c1 the guard never reads DOPPLER_PROJECT — it cannot know which host it is on"; fi
-if printf '%s\n' "$_BOOT_CODE" | grep -qF 'if [ -z "$proj" ]; then'; then ok "T1.9c2 an EMPTY identity is its own branch"; else no "T1.9c2 an empty DOPPLER_PROJECT is not branched on — it falls through to the web-host exit 0"; fi
-if printf '%s\n' "$_BOOT_CODE" | grep -qF '[ ! -r "$ENVFILE" ]'; then ok "T1.9c3 an UNREADABLE env file is its own branch"; else no "T1.9c3 an unreadable env file is not branched on"; fi
+if printf '%s\n' "$_BOOT_CODE" | grep -cF 'DOPPLER_PROJECT:-' >/dev/null; then ok "T1.9c1 the guard actually READS the host identity"; else no "T1.9c1 the guard never reads DOPPLER_PROJECT — it cannot know which host it is on"; fi
+if printf '%s\n' "$_BOOT_CODE" | grep -cF 'if [ -z "$proj" ]; then' >/dev/null; then ok "T1.9c2 an EMPTY identity is its own branch"; else no "T1.9c2 an empty DOPPLER_PROJECT is not branched on — it falls through to the web-host exit 0"; fi
+if printf '%s\n' "$_BOOT_CODE" | grep -cF '[ ! -r "$ENVFILE" ]' >/dev/null; then ok "T1.9c3 an UNREADABLE env file is its own branch"; else no "T1.9c3 an unreadable env file is not branched on"; fi
 _x_unreadable="$(_next_stmt 'exists but is unreadable')"
 _x_noproj="$(_next_stmt 'carries no DOPPLER_PROJECT')"
 if [ "$_x_unreadable" = "exit 1" ] && [ "$_x_noproj" = "exit 1" ]; then
@@ -219,7 +219,7 @@ fi
 # down is the first-boot runcmd stage. Anchoring on the reopen unit's NAME does not split them —
 # the unit is declared above the runcmd, so one side got both readers and the other got neither,
 # which is precisely the vacuity this arm is supposed to detect.
-_split="$(grep -n "bash -s <<'LUKSEOF'" "$CLOUD_INIT" | head -1 | cut -d: -f1)"
+_split="$(grep -n "bash -s <<'LUKSEOF'" "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)"
 if [ -n "$_split" ]; then
   _expect_reopen="$(head -n "$((_split - 1))" "$CLOUD_INIT" | grep -cF 'inngest_expect_luks')"
   _expect_runcmd="$(tail -n +"$_split" "$CLOUD_INIT" | grep -cF 'inngest_expect_luks')"
@@ -245,7 +245,7 @@ if grep -qF 'MUST NOT FLIP IN THE SAME CHANGE' "$VARIABLES_TF"; then ok "T1.11a 
 # whose whole subject is that class.
 if grep -qE '^# This flips on the recut branch' "$VARIABLES_TF"; then no "T1.11b the superseded one-decision instruction is back as a live directive in variables.tf"; else ok "T1.11b the superseded one-decision instruction is not present as a directive"; fi
 # And the default must still be false at merge — the whole ordering rests on it.
-if grep -A4 'variable "inngest_expect_luks"' "$VARIABLES_TF" | grep -qE '^\s*default\s*=\s*false\s*$'; then ok "T1.11c inngest_expect_luks still defaults to false at merge"; else no "T1.11c inngest_expect_luks no longer defaults to false — the next host replace would refuse the ext4 mount"; fi
+if grep -A4 'variable "inngest_expect_luks"' "$VARIABLES_TF" | grep -cE '^\s*default\s*=\s*false\s*$' >/dev/null; then ok "T1.11c inngest_expect_luks still defaults to false at merge"; else no "T1.11c inngest_expect_luks no longer defaults to false — the next host replace would refuse the ext4 mount"; fi
 
 # T1.12 THE EXIT TRAP MUST NOT TREAT SUCCESS AS FAILURE. Driven, not grepped — the trap machinery
 # is extracted verbatim and run both ways, which needs no root and so belongs in THIS tier rather
@@ -271,10 +271,10 @@ EXPECT_LUKS=false
 if grep -q '^luks_err() {' "$_T12/trap.sh" && grep -q '^trap luks_err EXIT$' "$_T12/trap.sh"; then ok "T1.12a the EXIT-trap machinery extracts (handler + arming line)"; else no "T1.12a could not extract the EXIT trap — T1.12b/c would be vacuous"; fi
 cp "$_T12/trap.sh" "$_T12/ok.sh"; printf 'exit 0\n' >> "$_T12/ok.sh"
 _rc=0; _out="$(bash "$_T12/ok.sh" 2>&1)" || _rc=$?
-if [ "$_rc" -eq 0 ] && ! printf '%s' "$_out" | grep -q 'inngest-luks-FAILED'; then ok "T1.12b a SUCCESSFUL stage exits 0 and does not phone home a failure"; else no "T1.12b a successful stage exited rc=${_rc} / phoned home a failure — every healthy boot would report itself failed (out: ${_out})"; fi
+if [ "$_rc" -eq 0 ] && ! printf '%s' "$_out" | grep -c 'inngest-luks-FAILED' >/dev/null; then ok "T1.12b a SUCCESSFUL stage exits 0 and does not phone home a failure"; else no "T1.12b a successful stage exited rc=${_rc} / phoned home a failure — every healthy boot would report itself failed (out: ${_out})"; fi
 cp "$_T12/trap.sh" "$_T12/bad.sh"; printf 'false\n' >> "$_T12/bad.sh"
 _rc=0; _out="$(bash "$_T12/bad.sh" 2>&1)" || _rc=$?
-if [ "$_rc" -ne 0 ] && printf '%s' "$_out" | grep -q 'inngest-luks-FAILED'; then ok "T1.12c a FAILED stage still exits non-zero and phones home"; else no "T1.12c the rc guard is disarmed — a failed stage exited rc=${_rc} without phoning home (out: ${_out})"; fi
+if [ "$_rc" -ne 0 ] && printf '%s' "$_out" | grep -c 'inngest-luks-FAILED' >/dev/null; then ok "T1.12c a FAILED stage still exits non-zero and phones home"; else no "T1.12c the rc guard is disarmed — a failed stage exited rc=${_rc} without phoning home (out: ${_out})"; fi
 
 # ═══ TIER 1b — the delivered bytes, rendered as Terraform renders them (#6894) ═══════════════
 # T1.13 EVERY write_files SHELL SCRIPT PARSES AS DELIVERED. Terraform's template unescape is exactly
@@ -302,7 +302,7 @@ awk -v out="${_T13:?}" '
 ' "$CLOUD_INIT"
 for _wf in "${_T13:?}"/wf.*; do
   case "$_wf" in *.path|*.r) continue ;; esac
-  head -1 "$_wf" | grep -qE '^#!.*(ba)?sh' || continue
+  head -1 "$_wf" | grep -cE '^#!.*(ba)?sh' >/dev/null || continue
   _t13_n=$((_t13_n + 1))
   _t13_render < "$_wf" > "$_wf.r"
   if ! bash -n "$_wf.r" 2>/dev/null; then _t13_bad="${_t13_bad} $(cat "$_wf.path")"; fi
@@ -367,12 +367,12 @@ if _g1_order "$_G1_STAGE" && _g1_order "$_G1_REOPEN"; then ok "G1.d both readers
 # G1.e mkfs targets ONLY a mapper, and only AFTER the luksOpen that creates it (mutation row 6).
 _g1_mkfs_bad="$(printf '%s\n' "$_G1_STAGE" | grep -E '^[[:space:]]*mkfs' | grep -vE 'mkfs\.ext4 -q "\$(MAPPER|STAGING_MAPPER)"' || true)"
 if [ -z "$_g1_mkfs_bad" ]; then ok "G1.e every mkfs in the stage targets a mapper, never a raw device"; else no "G1.e an mkfs targets something other than a mapper: ${_g1_mkfs_bad}"; fi
-_stg_open="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*\[ -e "\$STAGING_MAPPER" \] \|\| printf' | head -1 | cut -d: -f1)"
-_stg_mkfs="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*mkfs\.ext4 -q "\$STAGING_MAPPER"' | head -1 | cut -d: -f1)"
+_stg_open="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*\[ -e "\$STAGING_MAPPER" \] \|\| printf' | sed -n '1p' | cut -d: -f1)"
+_stg_mkfs="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*mkfs\.ext4 -q "\$STAGING_MAPPER"' | sed -n '1p' | cut -d: -f1)"
 if [ -n "$_stg_open" ] && [ -n "$_stg_mkfs" ] && [ "$_stg_open" -lt "$_stg_mkfs" ]; then ok "G1.f the staging mkfs comes after the staging luksOpen (line ${_stg_open} < ${_stg_mkfs})"; else no "G1.f staging mkfs is not after its luksOpen (open=${_stg_open:-none} mkfs=${_stg_mkfs:-none})"; fi
 # G1.g the staging arm never opens the CANONICAL mapper name: the Redis mount guard keys on it.
 _stg_region="$(printf '%s\n' "$_G1_STAGE" | awk '/STAGE=staging_wait/{f=1} f')"
-if printf '%s\n' "$_stg_region" | grep -qE 'cryptsetup luksOpen .* inngest-redis[[:space:]]|cryptsetup luksOpen .* inngest-redis[[:space:]]*2>>'; then no "G1.g the staging arm opens the canonical inngest-redis name — it would trip the Redis guard's mapper-open state"; else ok "G1.g the staging arm opens only the non-canonical inngest-redis-staging name"; fi
+if printf '%s\n' "$_stg_region" | grep -cE 'cryptsetup luksOpen .* inngest-redis[[:space:]]|cryptsetup luksOpen .* inngest-redis[[:space:]]*2>>' >/dev/null; then no "G1.g the staging arm opens the canonical inngest-redis name — it would trip the Redis guard's mapper-open state"; else ok "G1.g the staging arm opens only the non-canonical inngest-redis-staging name"; fi
 
 # ═══ TIER 3 — Guard 4: the pointer decides, never the signature (#6894) ════════════════════
 # THE POPULATION IS DERIVED. Every line in a DELIVERED artifact that names the pointer is found by
@@ -442,12 +442,12 @@ if [ "$_g4_dispatch_read" -eq 1 ]; then ok "G4.i the dispatch's pointer gate rea
 # G4.d the pointer arm REFUSES; it never formats and never falls back to the other volume.
 _PTR_ARM="$(printf '%s\n' "$_G1_STAGE" | awk '/^    if \[ "\$MODE" = pointer \]; then$/{f=1;next} f&&/^    else$/{exit} f')"
 if [ -n "$_PTR_ARM" ]; then ok "G4.d1 the pointer arm extracts"; else no "G4.d1 could not extract the pointer arm — G4.d2..d4 would be vacuous"; fi
-if printf '%s\n' "$_PTR_ARM" | grep -qE '^[[:space:]]*(mkfs|printf .* cryptsetup luksFormat)|luksFormat'; then no "G4.d2 the pointer arm can FORMAT — it would hand Redis an empty store and call it the store"; else ok "G4.d2 the pointer arm never formats and never runs mkfs"; fi
-if printf '%s\n' "$_PTR_ARM" | grep -qF '[ "$${BLK_TYPE:-}" = crypto_LUKS ] || {'; then ok "G4.d3 the pointer's device must CORROBORATE as crypto_LUKS (mutation row 3)"; else no "G4.d3 the crypto_LUKS corroboration is gone — the pointer could certify a plaintext device as the store"; fi
-if printf '%s\n' "$_PTR_ARM" | grep -qE '"\$DEV"'; then no "G4.d4 the pointer arm references the plaintext device — a fallback path exists (mutation row 2)"; else ok "G4.d4 the pointer arm never references the plaintext device (no fall-through)"; fi
+if printf '%s\n' "$_PTR_ARM" | grep -cE '^[[:space:]]*(mkfs|printf .* cryptsetup luksFormat)|luksFormat' >/dev/null; then no "G4.d2 the pointer arm can FORMAT — it would hand Redis an empty store and call it the store"; else ok "G4.d2 the pointer arm never formats and never runs mkfs"; fi
+if printf '%s\n' "$_PTR_ARM" | grep -cF '[ "$${BLK_TYPE:-}" = crypto_LUKS ] || {' >/dev/null; then ok "G4.d3 the pointer's device must CORROBORATE as crypto_LUKS (mutation row 3)"; else no "G4.d3 the crypto_LUKS corroboration is gone — the pointer could certify a plaintext device as the store"; fi
+if printf '%s\n' "$_PTR_ARM" | grep -cE '"\$DEV"' >/dev/null; then no "G4.d4 the pointer arm references the plaintext device — a fallback path exists (mutation row 2)"; else ok "G4.d4 the pointer arm never references the plaintext device (no fall-through)"; fi
 # G4.e the resolver refuses both malformed pointer shapes rather than deriving a path from them.
 _RES="$(printf '%s\n' "$_G1_STAGE" | awk '/^    STAGE=resolve$/{f=1} f&&/^    esac$/{print; exit} f')"
-if printf '%s\n' "$_RES" | grep -qF '*[!0-9]*)' && printf '%s\n' "$_RES" | grep -qF '"$PLAIN_ID"|"$LUKS_ID")' && printf '%s\n' "$_RES" | grep -qE '^      \*\)$'; then ok "G4.e the resolver has explicit arms for non-numeric, own-id and third-id pointers"; else no "G4.e the resolver lost an arm (non-numeric / one-of-two-ids / third id)"; fi
+if printf '%s\n' "$_RES" | grep -cF '*[!0-9]*)' >/dev/null && printf '%s\n' "$_RES" | grep -cF '"$PLAIN_ID"|"$LUKS_ID")' >/dev/null && printf '%s\n' "$_RES" | grep -cE '^      \*\)$' >/dev/null; then ok "G4.e the resolver has explicit arms for non-numeric, own-id and third-id pointers"; else no "G4.e the resolver lost an arm (non-numeric / one-of-two-ids / third id)"; fi
 # G4.f the arming marker MEASURES the unit, it does not trust enable's exit status.
 if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/dev/null || true)"' "$CLOUD_INIT" \
    && grep -qF 'if [ "$_reopen_state" = "active" ]; then' "$CLOUD_INIT"; then ok "G4.f inngest-luks-reopen-armed is emitted only when the unit reads active"; else no "G4.f the reopen arming marker trusts enable --now again — it reported success on 2026-09-17 on a boot where the unit failed"; fi

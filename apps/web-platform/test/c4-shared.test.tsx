@@ -158,6 +158,35 @@ describe("C4Diagnostics — stale line 2 states the save diagnostic (#8695)", ()
   });
 });
 
+// #8740: a model-level diagnostic (the zero-view model) has no source line.
+describe("C4Diagnostics — model-level diagnostics carry no line prefix", () => {
+  it.each([0, -1])("S1: line %i renders the message alone under the warnings header", (line) => {
+    render(
+      <C4Diagnostics
+        diagnostics={[{ message: "M", line, sourceFsPath: "model.likec4.json" }]}
+        hasModel={true}
+      />,
+    );
+    expect(screen.getByText("Diagram warnings")).toBeTruthy();
+    expect(screen.queryByText(/Diagram has errors/)).toBeNull();
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toBe("M");
+    expect(screen.queryByText(/line -?\d/)).toBeNull();
+  });
+
+  // Line numbers start at 1, so line 1 (a file's first line) must keep its prefix.
+  it.each([1, 3])("S2: positive line %i keeps the `line N:` prefix", (line) => {
+    render(
+      <C4Diagnostics
+        diagnostics={[{ message: "bad ref", line, sourceFsPath: "model.c4" }]}
+        hasModel={true}
+      />,
+    );
+    expect(screen.getAllByRole("listitem")[0].textContent).toBe(`line ${line}: bad ref`);
+  });
+});
+
 describe("C4CodePanel — honest save copy (Layer 1)", () => {
   const data: ProjectResponse = {
     dir: "knowledge-base/diagrams",

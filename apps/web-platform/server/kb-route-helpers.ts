@@ -8,6 +8,7 @@ import {
 } from "@/server/workspace-resolver";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
+import { kbGithubUrlPath } from "@/server/kb-github-path";
 // `syncWorkspace` (the git-pull reconcile + gated self-heal) was extracted to
 // `@/server/workspace-sync` so surfaces that must stay out of the App-Router
 // `next/headers` graph (c4-writer → cc-dispatcher WS bundle) can import it
@@ -28,7 +29,8 @@ export type KbRouteContext = {
   owner: string;
   repo: string;
   relativePath: string; // e.g. "domain/file.pdf"
-  filePath: string; // e.g. "knowledge-base/domain/file.pdf"
+  filePath: string; // e.g. "knowledge-base/domain/file.pdf" (raw: JSON bodies, logs)
+  urlPath: string; // filePath percent-encoded per segment: for GitHub API URLs only
   kbRoot: string; // absolute path to workspace/knowledge-base
   fullPath: string; // kbRoot + relativePath
   ext: string; // ".pdf" (lowercased)
@@ -130,6 +132,12 @@ export async function authenticateAndResolveKbPath(
     return err(400, "Invalid path: null byte detected");
   }
 
+  // The GitHub URL form of the path, per-segment encoded. The filesystem
+  // containment check below cannot see URL-level traversal (`%2e%2e`, `\`),
+  // so this is the guard for every Contents URL built from the path.
+  const urlPath = kbGithubUrlPath(relativePath);
+  if (!urlPath) return err(400, "Invalid path");
+
   const ext = path.extname(relativePath).toLowerCase();
   if (opts.blockMarkdown && ext === ".md") {
     return err(
@@ -172,6 +180,7 @@ export async function authenticateAndResolveKbPath(
       repo,
       relativePath,
       filePath,
+      urlPath,
       kbRoot,
       fullPath,
       ext,

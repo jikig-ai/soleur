@@ -94,7 +94,7 @@ cp -a "$REPO_ROOT/.github/workflows/build-inngest-bootstrap-image.yml" "$SANDBOX
 # rather than skipped: on the unmutated sandbox the tag's tree IS the working tree, and a case
 # that mutates a carrier reds it for real. The tag name is derived from the pin literal exactly
 # as the guard derives it, so the two cannot drift apart.
-_pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTINE/cloud-init-inngest.yml" 2>/dev/null | head -1 | sed 's/.*://')"
+_pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTINE/cloud-init-inngest.yml" 2>/dev/null | sed -n '1p' | sed 's/.*://')"
 [[ -n "$_pin_tag" ]] || die "could not derive the pinned tag for the sandbox git fixture"
 (
   set -e
@@ -178,7 +178,7 @@ if [[ "$BASE_RC" != "0" ]]; then
   exit 2
 fi
 echo "=== Guard 1 (#7462) mutation battery ==="
-echo "baseline: guard GREEN on unmutated sandbox ($(grep -oE '[0-9]+/[0-9]+ passed' "$BASE_LOG" | head -1))"
+echo "baseline: guard GREEN on unmutated sandbox ($(grep -oE '[0-9]+/[0-9]+ passed' "$BASE_LOG" | sed -n '1p'))"
 echo ""
 
 # failed_on <log> <expected> — 0 iff some `  FAIL`-prefixed line of <log> contains <expected>.
