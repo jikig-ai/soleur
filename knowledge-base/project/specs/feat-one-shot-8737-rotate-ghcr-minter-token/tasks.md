@@ -9,34 +9,34 @@ lane: cross-domain
 
 ## 1. Setup
 
-- [ ] 1.1 Bump `BASELINE_DECLARED_PROBES` 29 → 30 in `plugins/soleur/test/preflight-discoverability-test.test.ts`, with a PLACEMENT/TRUTH/NO SUBSTITUTE comment. Do this in the first commit; the plan's `credentials_required` already moved the count.
-- [ ] 1.2 Positive control: the main verifier invocation prints `STALE` (exit 1) against today's Doppler state.
+- [x] 1.1 Bump `BASELINE_DECLARED_PROBES` 29 → 30 in `plugins/soleur/test/preflight-discoverability-test.test.ts`, with a PLACEMENT/TRUTH/NO SUBSTITUTE comment. Do this in the first commit; the plan's `credentials_required` already moved the count.
+- [x] 1.2 Positive control: the main verifier invocation prints `STALE` (exit 1) against today's Doppler state.
 
 ## 2. Core implementation
 
-- [ ] 2.1 `apps/web-platform/infra/ghcr-minter-doppler-token.tf`:
-  - [ ] 2.1.1 Set `name = "ghcr-minter-write-2026-09-25"` and add `lifecycle { create_before_destroy = true }` to `doppler_service_token.ghcr_minter`.
-  - [ ] 2.1.2 Replace the header's `-replace` rotation sentence with a ROTATION note of four lines at most (rename + CBD + `[ack-destroy]`; inert container copy under `GHCR_MINTER_DISABLED`; rotated-from line with slug `61c939b5…`, #8705/#8737 and the ADR-096 5.4 retirement; the `Verify:` command).
-  - [ ] 2.1.3 Correct the `doppler_secret` comment: the delivery route is `ci-deploy.sh` → `docker run --env-file`, not `webhook-deploy`, and "a rotation (the rename above)" replaces "a `-replace` rotation".
-- [ ] 2.2 `apps/web-platform/infra/token-drift-read-tokens.tf`: reword the "NO DISPATCH ROUTE" paragraph (comment only). `web_probes` and `ghcr_minter` now document the rename route, and #7263 still covers the `-replace` arm.
-- [ ] 2.3 `apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh`, header comments only:
+- [x] 2.1 `apps/web-platform/infra/ghcr-minter-doppler-token.tf`:
+  - [x] 2.1.1 Set `name = "ghcr-minter-write-2026-09-25"` and add `lifecycle { create_before_destroy = true }` to `doppler_service_token.ghcr_minter`.
+  - [x] 2.1.2 Replace the header's `-replace` rotation sentence with a ROTATION note of four lines at most (rename + CBD + `[ack-destroy]`; inert container copy under `GHCR_MINTER_DISABLED`; rotated-from line with slug `61c939b5…`, #8705/#8737 and the ADR-096 5.4 retirement; the `Verify:` command).
+  - [x] 2.1.3 Correct the `doppler_secret` comment: the delivery route is `ci-deploy.sh` → `docker run --env-file`, not `webhook-deploy`, and "a rotation (the rename above)" replaces "a `-replace` rotation".
+- [x] 2.2 `apps/web-platform/infra/token-drift-read-tokens.tf`: reword the "NO DISPATCH ROUTE" paragraph (comment only). `web_probes` and `ghcr_minter` now document the rename route, and #7263 still covers the `-replace` arm.
+- [x] 2.3 `apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh`, header comments only:
   - say it is the generic verifier for a Doppler service-token rotation (`web_probes`, `ghcr_minter`);
   - change REMOVAL to "retire when no `.tf` ROTATION note references it".
-- [ ] 2.4 `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`, in the O12b row and the paragraph that repeats it:
+- [x] 2.4 `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`, in the O12b row and the paragraph that repeats it:
   - change the name to `ghcr-minter-write-*`;
   - replace the `ghcr-minter-doppler-token.tf:45` cite with the content anchor `` resource "doppler_service_token" "ghcr_minter" ``.
 
 ## 3. Testing and pre-merge verification
 
-- [ ] 3.1 `grep -c -- '-replace' apps/web-platform/infra/ghcr-minter-doppler-token.tf` prints `0`, and `grep -c 'webhook-deploy'` on the same file prints `0`.
+- [x] 3.1 `grep -c -- '-replace' apps/web-platform/infra/ghcr-minter-doppler-token.tf` prints `0`, and `grep -c 'webhook-deploy'` on the same file prints `0`.
 - [ ] 3.2 `terraform validate`. In the PR plan, `doppler_service_token.ghcr_minter` shows `must be replaced` (`+/- create replacement and then destroy`) and the secret shows `will be updated in-place`. Stop if either shape differs.
-- [ ] 3.3 These stay green:
+- [x] 3.3 These stay green:
   - `bun test plugins/soleur/test/preflight-discoverability-test.test.ts`
   - `bash apps/web-platform/infra/web-probes-token-rotation.test.sh`
   - `bash plugins/soleur/test/c4-count-parity.test.sh`
   - `bun test plugins/soleur/test/terraform-target-parity.test.ts`
   - `python3 scripts/lint-infra-no-human-steps.py --changed`
-- [ ] 3.4 C4: read `model.c4`, `views.c4` and `spec.c4`, and confirm there is no element or edge change (`inngest -> doppler` is already marked inert).
+- [x] 3.4 C4: read `model.c4`, `views.c4` and `spec.c4`, and confirm there is no element or edge change (`inngest -> doppler` is already marked inert).
 - [ ] 3.5 PR body:
   - the first line answers "does merging this mutate production?" with **yes**;
   - it carries `Ref #8737`, `Ref #8734` and `Ref #8714`, never `Closes`;

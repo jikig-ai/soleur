@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # web-probes-token-rotation-verify.sh — read-only check that a Doppler service-token rotation
-# actually happened (#8705). Lists the service tokens of one soleur config and prints ONE verdict
+# actually happened — the generic verifier for a Doppler service-token rotation, used by
+# doppler_service_token.web_probes (#8705) and doppler_service_token.ghcr_minter (#8737). Lists the service tokens of one soleur config and prints ONE verdict
 # line: the rotation is proven only by POSITIVE evidence (the retired token is gone AND a
 # replacement named with the expected prefix was created after the cut-off), never by an absence.
 #
@@ -36,7 +37,7 @@
 # Tests drive this through a stubbed `curl` on PATH (web-probes-token-rotation.test.sh); there is
 # deliberately no environment-selectable fixture seam.
 #
-# REMOVAL: this probe is meaningful only until image 411798619 is deleted (#8734).
+# REMOVAL: retire when no `.tf` ROTATION note references it (grep `rotation-verify.sh` in *.tf).
 set -uo pipefail
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;

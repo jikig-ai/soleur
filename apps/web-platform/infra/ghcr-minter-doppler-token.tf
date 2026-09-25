@@ -35,9 +35,13 @@
 # State: doppler_service_token.ghcr_minter.key is Computed + Sensitive — the value
 # lands in terraform.tfstate (R2-backed encrypted bucket, same posture as
 # doppler_service_token.write). It CANNOT be re-read from the Doppler API after
-# create; rotation is `terraform apply -replace=doppler_service_token.ghcr_minter`,
-# which propagates the new .key to GHCR_MINTER_DOPPLER_TOKEN in the same apply
+# create. The new .key reaches GHCR_MINTER_DOPPLER_TOKEN in the same apply
 # (no ignore_changes on that secret, mirroring doppler-write-token.tf).
+#
+# ROTATION (#8737): change `name` (ForceNew in DopplerHQ/doppler v1.21.2) with create_before_destroy, merged with `[ack-destroy]`; shared mechanics in workspaces-luks.tf's ROTATION comment.
+#   The running container keeps the old value until its next deploy; that copy is inert while GHCR_MINTER_DISABLED=true (the handler returns before reading the token).
+#   Rotated 2026-09-25 from `ghcr-minter-write` (slug 61c939b5…), readable via the leaked web-probes-read token until 2026-09-24T21:44:28Z (#8705). ADR-096 task 5.4 (#8714) retires this file.
+#   Verify: bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh --retired-slug 61c939b5 --retired-name ghcr-minter-write --name-prefix ghcr-minter-write- --not-before 2026-09-24T21:44:28Z
 #
 # autonomy-considered: provider-mint-applied (doppler_service_token).
 # dev intentionally NOT provisioned — hosts read `--config prd` only (hr-dev-prd-distinct).
@@ -45,13 +49,17 @@
 resource "doppler_service_token" "ghcr_minter" {
   project = "soleur"
   config  = "prd"
-  name    = "ghcr-minter-write"
+  name    = "ghcr-minter-write-2026-09-25"
   access  = "read/write"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Surfaces the write token into the minter runtime via the existing single
-# `--config prd` env-file path — the `> /etc/default/webhook-deploy` write in
-# cloud-init.yml. NO ignore_changes: a `-replace` rotation of the token must
+# `--config prd` env-file path — ci-deploy.sh's `doppler secrets download` into
+# `docker run --env-file`. NO ignore_changes: a rotation (the rename above) must
 # reach the runtime in the same apply.
 resource "doppler_secret" "ghcr_minter_doppler_token" {
   project = "soleur"
