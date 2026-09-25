@@ -576,14 +576,23 @@ fi
 # is what regresses, so the shape is what is asserted, and it reddens in milliseconds.
 # Comment lines are excluded: both files DESCRIBE the forbidden form in prose, which is the
 # bare-token-over-prose distinction the guard itself is built on.
+qpipe_re='(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'
+# Pin the regex before trusting its zero: a planted pipe must count 1 and a `||` herestring 0,
+# and an unparseable regex prints no count at all rather than reading as zero hits (#8807).
+_qp_bar='|'
+_qp_pos="$(grep -cE -- "$qpipe_re" <<<"echo \"\$x\" ${_qp_bar} grep -q y" || true)"
+_qp_neg="$(grep -cE -- "$qpipe_re" <<<'a || grep -q y <<<"$x"' || true)"
+if [[ "$_qp_pos" == 1 && "$_qp_neg" == 0 ]]; then pass; else
+  fail "row 10: qpipe regex self-check failed (planted pipe=${_qp_pos:-<grep error>} want 1, || herestring=${_qp_neg:-<grep error>} want 0)"
+fi
 qpipe_hits=0
 for f in "$GUARD" "${BASH_SOURCE[0]}"; do
-  n="$(grep -vE '^[[:space:]]*#' "$f" | grep -cE '(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' || true)"
+  n="$(grep -vE '^[[:space:]]*#' "$f" | grep -cE "$qpipe_re" || true)"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   if [[ "$n" -gt 0 ]]; then
     qpipe_hits=$((qpipe_hits + n))
     echo "  $f: $n mid-pipe \`grep -q\` line(s):" >&2
-    grep -nvE '^[[:space:]]*#' "$f" | grep -E '(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' >&2 || true
+    grep -nvE '^[[:space:]]*#' "$f" | grep -E "$qpipe_re" >&2 || true
   fi
 done
 if [[ "$qpipe_hits" -eq 0 ]]; then pass; else
@@ -630,7 +639,7 @@ echo "lint-supabase-deprecated-endpoints: $passes passed, $fails failed"
 # runner reads only the exit code. Set to the FULL count of a green run, not a slack value: a
 # floor left trailing its population lets the newest assertion be deleted unnoticed. It stays
 # `-lt` (a floor, never `-eq`) so ADDING assertions is free; only deletion reds.
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=46
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $((passes + fails)) assertions ran, expected >= ${MIN_ASSERTIONS}. An empty or unreadable fixture source must not exit 0 with zero coverage." >&2
   exit 1

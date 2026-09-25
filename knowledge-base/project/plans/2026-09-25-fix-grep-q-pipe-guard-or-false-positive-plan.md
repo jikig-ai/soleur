@@ -333,6 +333,7 @@ four class-sweep paths and the string `grep-q-pipe-guard`, and got 0 hits.
   - `good.sh` contains `a || grep -qE 'p' <<<"$x"` and a column-0 `|| grep -qE 'p' <<<"$x"`.
   - `bad.sh` contains `echo "$x" | grep -q 'p'`, `echo "$x"|grep -Eq 'p'`, a column-0 `| grep -qE 'p'` and `echo "$x" |& grep -qE 'p'`.
   - The check uses `[[ -s … ]]` on both files and `! grep -qvE` for the bad side.
+  - **Amended at review (#8866):** the negated `grep -q` checks read grep's exit 2 (a PATTERN that does not compile) as a pass, so the shipped check compares COUNTS (`grep -c` hits == line total for bad, == 0 for good), a compile pre-check exits 3, and `bad.sh` gained `done|grep -iq` and `$(f)|grep -sq` (6 lines) to pin the `[^|]` prefix and lowercase pre-`q` flags.
 - [x] **AC5** Census. `git grep -nE "'\\\\\|(\[\[:space:\]\]\*| \*)grep" -- ':!knowledge-base'` prints exactly two lines, one in `apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh` (the `SHAPE=` literal, acknowledged) and one in `apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh` (the `A3-nopipe` literal, deferred to #8869). Also, `git grep -cF '(^|[^|])\|&?[[:space:]]*grep' -- .claude/hooks/grep-q-pipe-guard.test.sh tests/scripts/test-lint-supabase-deprecated-endpoints.sh` reports `1` and `2`.
 - [x] **AC6** `bash tests/scripts/test-lint-supabase-deprecated-endpoints.sh` reports `45 passed, 0 failed`.
 - [x] **AC7** The diff touches no path under `apps/web-platform/infra/`: `git diff --name-only origin/main...HEAD -- apps/web-platform/infra/` prints nothing.
