@@ -13,6 +13,26 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25
+**Sections enhanced:** Proposed Solution (Phases 1, 4), Risks, ACs, Architecture Decision, Files to Edit/Create, Observability
+**Research agents used:** sequential-fallback — no Task fan-out in this runtime; deepen-plan halt gates, sharp-edges catalogue, precedent-diff, and test-compatibility audit applied inline
+
+### Key Improvements
+
+1. `NextResponse.next` header-snapshot ordering proved against installed `next@16.3.6` (`handleMiddlewareField` copies `init.request.headers` at construction) — the identity-header `.set` must precede (re-)construction, hedged wording removed.
+2. Revocation verdict cache key changed to `(jwt sub, iat)` — both derivable from the local JWT decode, so the cache check preempts the RPC *before* `getUser()` resolves instead of serializing behind it.
+3. Parallel revocation leg specified as settle-handled (`Promise.allSettled`/`catch`-armed) — an un-awaited rejection on a redirecting path would be an unhandled rejection.
+4. ADR-253 ordinal verified free across **all** `origin/*` refs (max ADR-252), not just `origin/main`.
+5. Two Guard Contract entries added (matcher-coverage walk; positive-only verdict store) — `scripts/lint-guard-contract.py` green.
+
+### New Considerations Discovered
+
+- `PaymentWarningBanner` is imported by `use-sidebar-collapse.ts` only as a comment reference; moving it is still correct but the move is to `components/dashboard/payment-warning-banner.tsx` with test-path updates.
+- Route-level unit tests invoking handlers without middleware keep working because `verifiedUserId()`'s absent-header path falls back to `getUser()` — the fallback is what preserves the existing ~40 `getUser`-mocking test files' semantics.
+- The 2026-04-10 CI-mock-hang learning interacts with re-adding `!loading` to the first-run gate — documented as a work-phase verification against `start-fresh-onboarding.test.tsx`.
+
 ## Overview
 
 The production dashboard (app.soleur.ai) takes seconds to render each section because every request pays a serial multi-round-trip Supabase auth/gate chain in `middleware.ts`, pays it again inside API route wrappers, and then the client shell issues ~10 mount-time fetches — including a whole-page skeleton gated on a foundation-status fetch — before any meaningful content paints. This plan collapses the per-request tax (parallelization + positive-only short-TTL verdict caching + middleware-verified identity forwarding), removes the duplicated handler-side auth call, un-gates the dashboard's first paint from the foundation-status fetch, and server-renders the dashboard chrome's identity data so nav/banner state is present in the initial HTML instead of cascading in post-hydration.
@@ -72,12 +92,12 @@ Five phases, ordered cheapest-and-highest-leverage first. Phases 1–2 are the d
 
 `apps/web-platform/middleware.ts`:
 
-1. **Reorder for parallelism, semantics-identical.** `getSession()` is a local cookie read — hoist it before `getUser()`. When an access token exists, kick off the revocation leg (JWT `iat` decode → `check_my_revocation` RPC) as an un-awaited promise and `Promise.all` it with `getUser()`. The T&C/billing `users` select still runs only after a verified `user` exists (unchanged dependency) but now overlaps the revocation RPC's tail when present. Serial RTTs: 3 → at most 2 (one of which is the auth check itself).
+1. **Reorder for parallelism, semantics-identical.** `getSession()` is a local cookie read — hoist it before `getUser()`. When an access token exists, locally decode the JWT `sub` + `iat` (the `iat` decode already exists for the revocation leg) and check the revocation-verdict cache *before* launching any RPC; on miss, kick off `check_my_revocation` as an un-awaited promise and `Promise.allSettled`-style join it with `getUser()` (the parallel leg must be settle-handled so a revoked/error result on an already-redirecting path can't surface as an unhandled rejection). The T&C/billing `users` select still runs only after a verified `user` exists (unchanged dependency) but now overlaps the revocation RPC's tail when present. Serial RTTs: 3 → at most 2 (one of which is the auth check itself).
 2. **Positive-only TTL verdict caches** using the existing `LRUCache` primitive (module-scope `const`, e.g. `new LRUCache<string, true>(2000, MW_VERDICT_TTL_MS)` with `MW_VERDICT_TTL_MS = 30_000`):
-   - *Revocation:* key `"${user.id}:${iatSeconds}"`. Cache **only** `revoked === false` verdicts. `revoked === true`, RPC errors, and decode hiccups are never cached — every fail-closed/branch and every `reportEdgeSilentFallback` call site is preserved verbatim. Effect: a member removed mid-session keeps passing the middleware bounce for ≤ TTL; the load-bearing data boundary (RLS `is_workspace_member`) still denies them immediately — this bounded-staleness trade-off is the ADR's subject.
+   - *Revocation:* key `"${jwtSub}:${iatSeconds}"` where `jwtSub` is the `sub` claim from the same local JWT decode that already yields `iat` — computable before `getUser()` resolves, so the cache check can preempt the RPC entirely on a hit (keying on `user.id` would serialize the lookup behind the auth RTT and defeat the parallelism). Cache **only** `revoked === false` verdicts. `revoked === true`, RPC errors, and decode hiccups are never cached — every fail-closed/branch and every `reportEdgeSilentFallback` call site is preserved verbatim. Effect: a member removed mid-session keeps passing the middleware bounce for ≤ TTL; the load-bearing data boundary (RLS `is_workspace_member`) still denies them immediately — this bounded-staleness trade-off is the ADR's subject.
    - *T&C/billing:* key `user.id` → `{ tc_accepted_version, subscription_status }`. Store **only fully-passing rows** (`tc_accepted_version === TC_VERSION` *and* `subscription_status !== "unpaid"`). On read, a hit is honored only while `row.tc_accepted_version === TC_VERSION` — a `TC_VERSION` bump self-invalidates every entry without a write path. A user who newly accepts T&C was never cached (their prior row failed the store predicate), so the accept→dashboard path cannot stale-bounce. A `paid → unpaid` transition can serve ≤ TTL of stale write access (accepted residual; Stripe webhook propagation is already asynchronous); `unpaid → paid` is instantly correct because unpaid rows are never cached.
    - Isolate coherence: single-process Hetzner deployment means one middleware isolate; the cache is coherent. At multi-replica scale the worst case is the same ≤ TTL bound per isolate — documented in the ADR.
-3. **Verified-identity header.** Immediately after `const requestHeaders = new Headers(request.headers)` — *before* the PUBLIC_PATHS early return — `requestHeaders.delete("x-soleur-auth-user-id")` strips any client-supplied spoof. After `getUser()` resolves a user, `requestHeaders.set("x-soleur-auth-user-id", user.id)`. The header only reaches a handler when middleware `next()`s the request, i.e., only after auth + revocation grace + T&C/billing all pass. Implementation note for `soleur:work`: verify the header propagates through the `NextResponse.next({ request: { headers: requestHeaders } })` created before auth resolves — if Next snapshots the headers at `next()` time, re-issue the `next()` response (or move its construction) after the header is set; a vitest asserting the wrapped handler observes the header is the proof.
+3. **Verified-identity header.** Immediately after `const requestHeaders = new Headers(request.headers)` — *before* the PUBLIC_PATHS early return — `requestHeaders.delete("x-soleur-auth-user-id")` strips any client-supplied spoof. After `getUser()` resolves a user, `requestHeaders.set("x-soleur-auth-user-id", user.id)`. The header only reaches a handler when middleware `next()`s the request, i.e., only after auth + revocation grace + T&C/billing all pass. **Ordering is load-bearing and verified against installed `next@16.3.6`** (`node_modules/next/dist/server/web/spec-extension/response.js`, `handleMiddlewareField`): `NextResponse.next({ request: { headers } })` iterates and *snapshots* the headers into `x-middleware-request-*` at construction time — a `requestHeaders.set` made after the response object exists does NOT propagate. Therefore the `next()` response consumed by the handler must be constructed (or re-issued, as `setAll` already does on cookie writes) **after** the `set` — the minimal change is to defer/re-issue the `NextResponse.next` call once auth resolves. A vitest asserting a wrapped handler observes the header is the proof.
 4. **Per-stage `Server-Timing` header** on document responses (`mw-auth;dur=`, `mw-revoke;dur=`, `mw-tc;dur=`, each with `;desc=hit|miss|grace` where applicable) — the no-SSH instrument that lets post-deploy measurement confirm the tax collapse. Added on the success path only; redirect paths unchanged.
 
 ### Phase 2 — Handler-side: consume the verified identity
@@ -303,7 +323,7 @@ Open `code-review` issues touching planned files (queried 2026-09-25, 84 open is
 ### Pre-merge (PR)
 
 - [ ] `middleware.ts` runs `getUser()` concurrently with the revocation leg and emits `Server-Timing` stage durations (`mw-auth`, `mw-revoke`, `mw-tc`) on authenticated document responses.
-- [ ] A second authenticated request for the same `(user.id, iat)` within `MW_VERDICT_TTL_MS` performs **zero** `check_my_revocation` RPC calls; a `revoked=true` verdict is never served from cache.
+- [ ] A second authenticated request for the same `(jwt sub, iat)` within `MW_VERDICT_TTL_MS` performs **zero** `check_my_revocation` RPC calls; a `revoked=true` verdict is never served from cache.
 - [ ] A `users`-row fetch is skipped for a warm `(user.id, tc_accepted_version === TC_VERSION, non-unpaid)` entry; a `TC_VERSION` bump, an `unpaid` row, and a `tcError` are never cached — every deny path re-queries.
 - [ ] `x-soleur-auth-user-id` is deleted from inbound headers before any early return and set after `getUser()`; a vitest proves a `withUserRateLimit` handler observes it on a middleware-traversed request, and that a client-supplied value is stripped.
 - [ ] `withUserRateLimit` performs no `getUser()` when the header is present and still 401s unauthenticated callers via the `getUser()` fallback when it is absent.
@@ -333,11 +353,15 @@ Open `code-review` issues touching planned files (queried 2026-09-25, 84 open is
 - Given `visionExists === false`, zero conversations, and both fetches resolved, when `/dashboard` renders, then the first-run state appears exactly once (no intermediate wrong state).
 - Given an admin user, when the dashboard layout server-renders, then `ADMIN_NAV_ITEMS` markup is present in the SSR HTML before hydration.
 
+## Downtime & Cutover
+
+No offline-inducing operation: no infra change, no migration, no router/tunnel change. Deployment rides the standard `web-platform-release.yml` path (merge → image build → container swap), identical in risk profile to every routine `apps/web-platform/**` merge — no drain design is introduced by this diff. Rollback is a plain `git revert` (in-process caches carry no state to drain). The only behavioral window is the container restart itself, already governed by the existing release pipeline.
+
 ## Dependencies & Risks
 
 - **Bounded-staleness security trade-off** (primary risk): a removed/role-changed member can ride a cached `revoked=false` for ≤30 s; RLS (`is_workspace_member`, `messages_workspace_member_select`) remains the authoritative data boundary and denies them regardless — but the UX-level bounce delays by ≤ TTL. Mitigations: TTL kept at 30 s (not the ~1 h JWT validity the gate was designed against), positive-only caching, ADR-253 records the acceptance, security-sentinel review at PR time is mandatory.
 - **Header trust boundary**: a future matcher narrowing or an early-return path that leaks an unstripped header would make `x-soleur-auth-user-id` client-forgeable to migrated handlers. Mitigations: Guard 1 (matcher coverage) + Guard 1 row 5 (delete-before-any-return) + the `getUser()` fallback keeps the header advisory, never sole-authoritative.
-- **`NextResponse.next` header-snapshot behavior**: if Next captures `requestHeaders` at `next()`-construction time rather than by reference, late `.set()` won't propagate — the Phase-1 vitest proves propagation and the plan prescribes the fix (re-issue `next()` after auth resolves).
+- **`NextResponse.next` header-snapshot ordering** — confirmed at `next@16.3.6` (`handleMiddlewareField` copies `init.request.headers` into `x-middleware-request-*` at construction): the `next()` response must be (re-)constructed after `x-soleur-auth-user-id` is set, and the propagation vitest is the load-bearing proof. Also: the parallel revocation leg must be `Promise.allSettled`/`catch`-armed — an un-awaited rejected promise on a redirecting path is an unhandled rejection.
 - **`resolveIdentity` callers see a wider `Identity`** (additive `email`/`subscriptionStatus`) — consumer grep done at plan time; `tsc` is the gate.
 - **CI-mock hang interplay** (the 2026-04-10 learning): re-adding `!loading` to the first-run branch could strand first-run behind a hung conversations fetch in mocked e2e — mitigated because command-center assertions are unaffected and the first-run tests resolve their conversation mocks; flagged for the work phase to verify `start-fresh-onboarding.test.tsx` still passes.
 - **Rollback**: single `git revert` of the PR — the caches are in-process (nothing to drain, no schema, no migration); the header is additive with a fallback, so a partial revert of Phase 2 alone also works.
