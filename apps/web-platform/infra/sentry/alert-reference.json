@@ -1434,6 +1434,75 @@
     ],
     "triggerLogicType": "single"
   },
+  "spawn-agent-dead-letter": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "spawn-agent"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "agent-on-spawn-requested"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "reason",
+              "match": "in",
+              "value": "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_refused,leader_response_truncated,leader_tool_invalid"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 1442,
+    "name": "spawn-agent-dead-letter",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "stale-bot-pr": {
     "actionFilters": [
       {
