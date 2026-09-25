@@ -190,7 +190,7 @@ test_df_deadline_abort() {
   if echo "$STDOUT_CAP" | jq -e '.runs' >/dev/null 2>&1; then
     echo "  FAIL: stdout is a jq-parseable {runs} object on a deadline abort (false-clean)"; FAIL=$((FAIL+1));
   else echo "  PASS: stdout NOT a jq-parseable runs object on abort"; PASS=$((PASS+1)); fi
-  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*op=verify-doublefire.*reason=deadline'; then
+  if echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*op=verify-doublefire.*reason=deadline' >/dev/null; then
     echo "  PASS: TIMEOUT reason=deadline marker (op=verify-doublefire)"; PASS=$((PASS+1));
   else echo "  FAIL: no TIMEOUT reason=deadline marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   rm -rf "$dir"
@@ -205,7 +205,7 @@ test_df_page_ceiling_abort() {
   make_page false "" "[$(make_edge run-3 fn-a 2026-07-08T10:02:00Z)]" > "$dir/page-3.json"
   run_probe_logcap "$dir" INNGEST_MAX_PAGES=2
   if [[ "$RC" -eq 1 ]]; then echo "  PASS: ceiling abort exits 1"; PASS=$((PASS+1)); else echo "  FAIL: ceiling abort rc=$RC"; FAIL=$((FAIL+1)); fi
-  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=page_ceiling'; then
+  if echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=page_ceiling' >/dev/null; then
     echo "  PASS: TIMEOUT reason=page_ceiling marker"; PASS=$((PASS+1));
   else echo "  FAIL: no TIMEOUT reason=page_ceiling marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   # A page-ceiling abort must also refuse to emit a truncated (false-clean) parseable body.
@@ -231,12 +231,12 @@ test_df_markers_journald_only() {
   make_page false "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" > "$dir/page-1.json"
   run_probe_logcap "$dir"
   if [[ "$RC" -eq 0 ]]; then echo "  PASS: happy path exits 0"; PASS=$((PASS+1)); else echo "  FAIL: happy path rc=$RC"; FAIL=$((FAIL+1)); fi
-  if echo "$STDOUT_CAP" | jq -e '.runs | type == "array"' >/dev/null 2>&1 && ! echo "$STDOUT_CAP" | grep -q SOLEUR; then
+  if echo "$STDOUT_CAP" | jq -e '.runs | type == "array"' >/dev/null 2>&1 && ! echo "$STDOUT_CAP" | grep -c SOLEUR >/dev/null; then
     echo "  PASS: stdout is a pure {runs} object, no marker leaked"; PASS=$((PASS+1));
   else echo "  FAIL: stdout polluted or missing runs (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
-  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-doublefire' \
+  echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-doublefire' >/dev/null \
     && { echo "  PASS: START in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no START (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
-  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_DONE op=verify-doublefire pages=' \
+  echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_DONE op=verify-doublefire pages=' >/dev/null \
     && { echo "  PASS: DONE in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no DONE (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
   rm -rf "$dir"
 }
@@ -258,8 +258,8 @@ test_df_connect_timeout_and_clamp() {
     echo "  PASS: per-page budget floored to PREFLIGHT_PAGE_MIN_S (anti-starvation)"; PASS=$((PASS+1));
   else echo "  FAIL: per-page budget NOT floored to PREFLIGHT_PAGE_MIN_S — late pages can starve"; FAIL=$((FAIL+1)); fi
   # SUM bound must remain airtight: DEADLINE default + PAGE_MIN default < the 120s outer curl.
-  local dl pmin; dl=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$TARGET" | head -1)
-  pmin=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$TARGET" | head -1)
+  local dl pmin; dl=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$TARGET" | sed -n '1p')
+  pmin=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$TARGET" | sed -n '1p')
   if [[ -n "$dl" && -n "$pmin" && $(( dl + pmin )) -lt 120 ]]; then
     echo "  PASS: SUM bound DEADLINE($dl)+PAGE_MIN($pmin) < 120 outer curl"; PASS=$((PASS+1));
   else echo "  FAIL: SUM bound violated: DEADLINE($dl)+PAGE_MIN($pmin) not < 120"; FAIL=$((FAIL+1)); fi
@@ -305,7 +305,7 @@ test_df_transient_page_recovers_on_retry() {
   assert_eq "recovered run is reported (1 run)" "1" "$(echo "$STDOUT_CAP" | jq -r '.runs | length' 2>/dev/null || echo x)"
   assert_eq "recovered run functionID projected" "fn-a" "$(echo "$STDOUT_CAP" | jq -r '.runs[0].functionID' 2>/dev/null || echo x)"
   # a recovered transient must NOT leave a false malformed/transport marker.
-  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT'; then
+  if echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT' >/dev/null; then
     echo "  FAIL: a recovered transient emitted a TIMEOUT abort marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1));
   else echo "  PASS: no abort marker on a recovered transient"; PASS=$((PASS+1)); fi
   rm -rf "$dir"
@@ -324,17 +324,17 @@ test_df_transport_exhaustion_fails_loud() {
     echo "  FAIL: emitted a false-clean {runs} object on transport exhaustion"; FAIL=$((FAIL+1));
   else echo "  PASS: no false-clean runs object on transport exhaustion"; PASS=$((PASS+1)); fi
   # ACCURATE marker: reason=transport (NOT gql_error/malformed).
-  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=transport'; then
+  if echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=transport' >/dev/null; then
     echo "  PASS: TIMEOUT reason=transport marker"; PASS=$((PASS+1));
   else echo "  FAIL: no reason=transport marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   # the transient empty must NOT be mislabeled as the (misleading) 'malformed runs response'.
-  if echo "$STDOUT_CAP" | grep -q 'malformed runs response'; then
+  if echo "$STDOUT_CAP" | grep -c 'malformed runs response' >/dev/null; then
     echo "  FAIL: transient empty mislabeled as 'malformed runs response' (the #6919 bug)"; FAIL=$((FAIL+1));
   else echo "  PASS: transient empty NOT mislabeled 'malformed runs response'"; PASS=$((PASS+1)); fi
   # and it carries an accurate, LIVE operator remediation. (#6178: this used to assert
   # "increase PREFLIGHT_DEADLINE_S", which the SUM bound caps at 112 s — ~14 pages against
   # a window needing ~1,456. Asserting dead advice is how the dead advice survived.)
-  if echo "$STDOUT_CAP" | grep -qE 'CUTOVER_WINDOW_FROM|narrow the window'; then
+  if echo "$STDOUT_CAP" | grep -cE 'CUTOVER_WINDOW_FROM|narrow the window' >/dev/null; then
     echo "  PASS: accurate LIVE remediation (narrow the window / scope functionIDs)"; PASS=$((PASS+1));
   else echo "  FAIL: no accurate remediation in the FATAL message (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
   rm -rf "$dir"
@@ -353,10 +353,10 @@ test_df_nonempty_malformed_still_loud() {
     echo "  FAIL: emitted a false-clean {runs} object on a malformed body"; FAIL=$((FAIL+1));
   else echo "  PASS: no false-clean runs object on a malformed body"; PASS=$((PASS+1)); fi
   # classified as gql_error (genuine malformed), NOT transport — the body was non-empty.
-  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=gql_error'; then
+  if echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=gql_error' >/dev/null; then
     echo "  PASS: TIMEOUT reason=gql_error (genuine malformed)"; PASS=$((PASS+1));
   else echo "  FAIL: expected reason=gql_error (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
-  if echo "$MARKERS_CAP" | grep -q 'reason=transport'; then
+  if echo "$MARKERS_CAP" | grep -c 'reason=transport' >/dev/null; then
     echo "  FAIL: a NON-EMPTY malformed body was WRONGLY treated as transient/transport"; FAIL=$((FAIL+1));
   else echo "  PASS: non-empty malformed body NOT treated as transport"; PASS=$((PASS+1)); fi
   rm -rf "$dir"
@@ -499,7 +499,7 @@ test_df_total_count_emitted() {
     "$(echo "$STDOUT_CAP" | jq -r '.total_count' 2>/dev/null || echo x)"
   assert_eq "runs still projected alongside total_count" "1" \
     "$(echo "$STDOUT_CAP" | jq -r '.runs | length' 2>/dev/null || echo x)"
-  if echo "$MARKERS_CAP" | grep -qE 'SOLEUR_INNGEST_PREFLIGHT_DONE .*total_count=7'; then
+  if echo "$MARKERS_CAP" | grep -cE 'SOLEUR_INNGEST_PREFLIGHT_DONE .*total_count=7' >/dev/null; then
     echo "  PASS: DONE marker carries total_count=7"; PASS=$((PASS+1));
   else echo "  FAIL: DONE marker lacks total_count=7 (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   rm -rf "$dir"
@@ -522,11 +522,11 @@ test_df_total_count_unknown_before_page1() {
   # DEADLINE=0 aborts at the top of the loop, before any page is fetched or parsed.
   run_probe_logcap "$dir" PREFLIGHT_DEADLINE_S=0
   assert_eq "pre-page-1 deadline abort exits 1" "1" "$RC"
-  if echo "$MARKERS_CAP" | grep -qE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*total_count=unknown'; then
+  if echo "$MARKERS_CAP" | grep -cE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*total_count=unknown' >/dev/null; then
     echo "  PASS: TIMEOUT marker carries total_count=unknown"; PASS=$((PASS+1));
   else echo "  FAIL: no total_count=unknown in TIMEOUT marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   # NEGATIVE: it must not read as a measured zero.
-  if echo "$MARKERS_CAP" | grep -qE 'total_count=(0|)( |$)'; then
+  if echo "$MARKERS_CAP" | grep -cE 'total_count=(0|)( |$)' >/dev/null; then
     echo "  FAIL: pre-page-1 abort reported total_count as 0/empty (false-clean shape)"; FAIL=$((FAIL+1));
   else echo "  PASS: never reports a measured 0 before page 1 parses"; PASS=$((PASS+1)); fi
   rm -rf "$dir"
@@ -557,20 +557,20 @@ test_df_page1_feasibility_gate() {
   if echo "$STDOUT_CAP" | jq -e '.runs' >/dev/null 2>&1; then
     echo "  FAIL: emitted a false-clean {runs} object on an over-budget window"; FAIL=$((FAIL+1));
   else echo "  PASS: no false-clean runs object on the feasibility abort"; PASS=$((PASS+1)); fi
-  if echo "$MARKERS_CAP" | grep -qE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=window_too_wide'; then
+  if echo "$MARKERS_CAP" | grep -cE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=window_too_wide' >/dev/null; then
     echo "  PASS: TIMEOUT reason=window_too_wide"; PASS=$((PASS+1));
   else echo "  FAIL: expected reason=window_too_wide (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   # The marker must carry the MEASURED scale, not just the enum.
-  if echo "$MARKERS_CAP" | grep -qE 'total_count=145600'; then
+  if echo "$MARKERS_CAP" | grep -cE 'total_count=145600' >/dev/null; then
     echo "  PASS: marker carries the measured total_count=145600"; PASS=$((PASS+1));
   else echo "  FAIL: marker lacks the measured total_count (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   # COMPUTED remediation: an ISO instant the operator can paste, derived from the
   # observed density — not a static "try a smaller window" platitude.
-  if echo "$STDOUT_CAP" | grep -qE 'CUTOVER_ANCHOR_FROM[^0-9]*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'; then
+  if echo "$STDOUT_CAP" | grep -cE 'CUTOVER_ANCHOR_FROM[^0-9]*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' >/dev/null; then
     echo "  PASS: remediation names a COMPUTED latest-viable ISO anchor"; PASS=$((PASS+1));
   else echo "  FAIL: remediation carries no computed ISO anchor (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
   # The abort must be fast: it happens on page 1, so it must NOT have paginated.
-  if echo "$MARKERS_CAP" | grep -qE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*pages=1 '; then
+  if echo "$MARKERS_CAP" | grep -cE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*pages=1 ' >/dev/null; then
     echo "  PASS: aborted ON page 1 (no wasted pagination)"; PASS=$((PASS+1));
   else echo "  FAIL: did not abort on page 1 (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   rm -rf "$dir"
@@ -593,7 +593,7 @@ test_df_page1_gate_allows_feasible_window() {
   assert_eq "feasible window completes (exit 0)" "0" "$RC"
   assert_eq "feasible window still emits its runs" "1" \
     "$(echo "$STDOUT_CAP" | jq -r '.runs | length' 2>/dev/null || echo x)"
-  if echo "$MARKERS_CAP" | grep -q 'reason=window_too_wide'; then
+  if echo "$MARKERS_CAP" | grep -c 'reason=window_too_wide' >/dev/null; then
     echo "  FAIL: the gate fired on a FEASIBLE window (it cannot discriminate)"; FAIL=$((FAIL+1));
   else echo "  PASS: gate silent on a feasible window"; PASS=$((PASS+1)); fi
   rm -rf "$dir"
@@ -749,8 +749,8 @@ test_df_build_body_harness_is_live() {
   # ORDER: the fixture seam must sit BELOW body construction, else every
   # fixture-driven test bypasses the real path again (how #6617 shipped green).
   local build_ln seam_ln
-  build_ln=$(grep -n 'body=$(build_request_body' "$TARGET" | head -1 | cut -d: -f1)
-  seam_ln=$(grep -n 'if \[\[ -n "$FIXTURE_DIR" \]\]' "$TARGET" | head -1 | cut -d: -f1)
+  build_ln=$(grep -n 'body=$(build_request_body' "$TARGET" | sed -n '1p' | cut -d: -f1)
+  seam_ln=$(grep -n 'if \[\[ -n "$FIXTURE_DIR" \]\]' "$TARGET" | sed -n '1p' | cut -d: -f1)
   if [[ -z "$build_ln" || -z "$seam_ln" ]]; then
     echo "  FAIL: could not locate anchors (build=$build_ln seam=$seam_ln)"; FAIL=$((FAIL+1))
   elif [[ "$build_ln" -lt "$seam_ln" ]]; then

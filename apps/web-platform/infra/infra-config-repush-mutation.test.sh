@@ -581,7 +581,7 @@ if [[ "${1:-}" == "--row" ]]; then
   # rows had silently degenerated to `rc == 1` and were scoring "some assertion, somewhere,
   # failed" as detection of the specific property they name.
   #
-  # Filtered through a variable rather than `grep '^  FAIL:' "$_log" | grep -qF ...`: under this
+  # Filtered through a variable rather than `grep '^  FAIL:' "$_log" | grep -cF ... >/dev/null`: under this
   # file's `set -o pipefail`, `grep -q` closes the pipe on its first match and the producer takes
   # SIGPIPE (141), which pipefail then promotes — so the pipeline can report FAILURE on a
   # successful early match. A herestring has no pipe and cannot flake that way.
@@ -809,7 +809,7 @@ if [[ "$N" -lt 40 ]]; then
 fi
 # The stay-green control must actually be present, not merely counted. A battery of
 # must-trip rows cannot distinguish working guards from guards that red on everything.
-if ! printf '%s\n' "${ROWS[@]}" | grep -q '^STAY-GREEN|'; then
+if ! printf '%s\n' "${ROWS[@]}" | grep -c '^STAY-GREEN|' >/dev/null; then
   echo "  FAIL: the stay-green control row is absent — with every row expecting rc=1, a suite that has become impossible to satisfy scores a perfect result" >&2
   exit 1
 fi

@@ -476,7 +476,7 @@ jobs:
     # failure there than a slow leg is here.
     #
     # REGISTRATION IS NOW THE FILESYSTEM: presence under apps/web-platform/infra/**.test.sh
-    # IS registration (ADR-251). The runner derives its execute set by `git ls-files` glob —
+    # IS registration (ADR-252). The runner derives its execute set by `git ls-files` glob —
     # the same set a fresh checkout contains — so a new suite lands on a leg with NO
     # workflow edit and NO ceiling re-derivation. The suite-command-registration gate
     # (.github/scripts/test/test-infra-suite-registration.sh) was rewritten in the same

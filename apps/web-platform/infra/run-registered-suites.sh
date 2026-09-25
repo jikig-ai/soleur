@@ -25,7 +25,7 @@
 # which of those happened, keyed on whether this runner actually ran.
 #
 # The suite list is DERIVED by filesystem glob over apps/web-platform/infra/
-# (ADR-251) rather than scraped off the workflow's `run: bash` steps, so this
+# (ADR-252) rather than scraped off the workflow's `run: bash` steps, so this
 # runner and CI cannot drift — literally: presence IS registration, and a suite
 # added on disk is picked up here AND by the deploy-script-tests matrix legs
 # automatically. (The scrape this replaced could not see subdirectory or
@@ -291,7 +291,7 @@ SOLEUR_INFRA_DIR="${SOLEUR_INFRA_DIR:-apps/web-platform/infra}"
   exit 2
 }
 
-# Derivation is the FILESYSTEM GLOB, not a workflow `run: bash` scrape (ADR-251):
+# Derivation is the FILESYSTEM GLOB, not a workflow `run: bash` scrape (ADR-252):
 # presence under SOLEUR_INFRA_DIR IS registration — a suite on disk is in the
 # execute set unless it carries a justified PRIVILEGED exclusion below. The scrape
 # this replaced could not see subdirectory suites (its basename class excluded `/`)

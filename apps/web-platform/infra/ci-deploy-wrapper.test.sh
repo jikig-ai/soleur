@@ -68,7 +68,7 @@ fi
 # kill semantic, divergent exit-code contract. `gnu-coreutils` package
 # provides /usr/bin/gnutimeout for those environments.
 pick_timeout() {
-  if timeout --version 2>&1 | head -1 | grep -qi uutils; then
+  if timeout --version 2>&1 | sed -n '1p' | grep -ci uutils >/dev/null; then
     if command -v gnutimeout >/dev/null 2>&1; then
       echo gnutimeout
     else
@@ -153,8 +153,8 @@ rc=$?
 set -e
 
 if [[ "$rc" -eq 0 ]] \
-  && printf '%s\n' "$output" | grep -qF "MARKER=hello" \
-  && printf '%s\n' "$output" | grep -qF "SSH_ORIGINAL_COMMAND=deploy web-platform x v1"; then
+  && printf '%s\n' "$output" | grep -cF "MARKER=hello" >/dev/null \
+  && printf '%s\n' "$output" | grep -cF "SSH_ORIGINAL_COMMAND=deploy web-platform x v1" >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: env vars propagate through exec timeout (MARKER + SSH_ORIGINAL_COMMAND)"
 else
@@ -188,7 +188,7 @@ output=$("$mock_dir/success-wrapper.sh" 2>&1)
 rc=$?
 set -e
 
-if [[ "$rc" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "deploy ok"; then
+if [[ "$rc" -eq 0 ]] && printf '%s\n' "$output" | grep -cF "deploy ok" >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: wrapper exits 0 and forwards child stdout on success path"
 else
@@ -208,9 +208,9 @@ TOTAL=$((TOTAL + 1))
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 WORKFLOW="$REPO_ROOT/.github/workflows/web-platform-release.yml"
 wrapper_seconds=$(grep -oE -- '--kill-after=[0-9]+s [0-9]+s /usr/local/bin/ci-deploy\.sh' "$WRAPPER" \
-  | grep -oE ' [0-9]+s /' | grep -oE '[0-9]+' | head -1)
+  | grep -oE ' [0-9]+s /' | grep -oE '[0-9]+' | sed -n '1p')
 workflow_seconds=$(grep -oE '^[[:space:]]*IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WORKFLOW" \
-  | grep -oE '[0-9]+$' | head -1)
+  | grep -oE '[0-9]+$' | sed -n '1p')
 if [[ -z "$wrapper_seconds" ]]; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: could not extract wrapper timeout seconds from $WRAPPER"

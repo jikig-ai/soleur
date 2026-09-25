@@ -93,30 +93,30 @@ assert "block is non-empty" "[[ -n \"\$BLOCK\" ]]"
 echo ""
 echo "--- AC2: SSH connection block matches the 7-sibling shape ---"
 assert "SSH connection block (type = ssh)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'type[[:space:]]*=[[:space:]]*\"ssh\"' >/dev/null"
 assert "connection host = hcloud_server.web[\"web-1\"].ipv4_address" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address' >/dev/null"
 assert "connection user = root" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'user[[:space:]]*=[[:space:]]*\"root\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'user[[:space:]]*=[[:space:]]*\"root\"' >/dev/null"
 # `agent = true` was stale post-#4845: server.tf now uses the dual-context
 # toggle `agent = var.ci_ssh_private_key == null` (operator ssh-agent locally,
 # explicit Doppler key in CI). The literal-`true` regex previously false-passed
 # by matching this block's #4829 dual-context comment prose, not real config;
 # the conditional regex below matches only the real `agent = var…` line.
 assert "connection uses the dual-context ssh-agent toggle agent = var.ci_ssh_private_key == null" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null' >/dev/null"
 
 # --- AC3: triggers_replace references all three trigger inputs ---
 echo ""
 echo "--- AC3: triggers_replace complete (handler + status script + hooks.json) ---"
 assert "triggers_replace uses the sha256(join(...)) wrapper" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(join\('"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(join\(' >/dev/null"
 assert "triggers_replace references infra-config-apply.sh" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/infra-config-apply\.sh\"\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'file\(\"\\\$\{path\.module\}/infra-config-apply\.sh\"\)' >/dev/null"
 assert "triggers_replace references cat-infra-config-state.sh" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'file\(\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"\)' >/dev/null"
 assert "triggers_replace references local.hooks_json" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'local\.hooks_json'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'local\.hooks_json' >/dev/null"
 
 # --- AC4: handler delivered (the load-bearing anti-regression invariant) ---
 echo ""
@@ -128,29 +128,29 @@ echo "--- AC4: resource DELIVERS the handler via provisioner \"file\" ---"
 # were deleted (the exact regression this test exists to catch). Assert both the
 # destination (only ever on the scp block) AND the path.module source.
 assert "file provisioner delivers infra-config-apply.sh to /usr/local/bin (destination)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-apply\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-apply\.sh\"' >/dev/null"
 assert "file provisioner sources infra-config-apply.sh from path.module" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-apply\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-apply\.sh\"' >/dev/null"
 assert "file provisioner delivers cat-infra-config-state.sh to /usr/local/bin (destination)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/cat-infra-config-state\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/cat-infra-config-state\.sh\"' >/dev/null"
 assert "file provisioner sources cat-infra-config-state.sh from path.module" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"' >/dev/null"
 assert "resource writes /etc/webhook/hooks.json" \
-  "printf '%s' \"\$BLOCK\" | grep -qE '/etc/webhook/hooks\.json'"
+  "printf '%s' \"\$BLOCK\" | grep -cE '/etc/webhook/hooks\.json' >/dev/null"
 # hooks.json is a secret-bearing templatefile() render (not on disk), so it must
 # be delivered via a base64 heredoc, not a provisioner \"file\" source.
 assert "hooks.json delivered via base64encode(local.hooks_json) heredoc" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'base64encode\(local\.hooks_json\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'base64encode\(local\.hooks_json\)' >/dev/null"
 
 # --- AC5: positive post-write assertions (prove it took, don't observe it) ---
 echo ""
 echo "--- AC5: positive assertions in remote-exec ---"
 assert "asserts hooks.json re-registers infra-config-status hook" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'infra-config-status'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'infra-config-status' >/dev/null"
 assert "asserts hooks.json maps cat_infra_config_state_sh_b64 key" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'cat_infra_config_state_sh_b64'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'cat_infra_config_state_sh_b64' >/dev/null"
 assert "asserts the webhook unit is active (is-active)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'systemctl is-active webhook'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'systemctl is-active webhook' >/dev/null"
 
 # --- AC7: #4827 — bridge also bootstraps the escalation helper + sudoers grant ---
 # The webhook handler's prod-mode escalation needs BOTH infra-config-install AND
@@ -161,23 +161,23 @@ assert "asserts the webhook unit is active (is-active)" \
 echo ""
 echo "--- AC7: escalation helper + sudoers delivered over root SSH (#4827) ---"
 assert "triggers_replace references infra-config-install.sh" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/infra-config-install\.sh\"\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'file\(\"\\\$\{path\.module\}/infra-config-install\.sh\"\)' >/dev/null"
 assert "triggers_replace references deploy-inngest-bootstrap.sudoers" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'file\(\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"\)' >/dev/null"
 assert "file provisioner delivers infra-config-install (destination)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-install\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-install\"' >/dev/null"
 assert "file provisioner sources infra-config-install.sh from path.module" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-install\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-install\.sh\"' >/dev/null"
 assert "file provisioner sources the sudoers grant from path.module" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"' >/dev/null"
 assert "remote-exec visudo-validates the staged sudoers before install" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'visudo -cf /tmp/deploy-inngest-bootstrap\.sudoers\.staged'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'visudo -cf /tmp/deploy-inngest-bootstrap\.sudoers\.staged' >/dev/null"
 assert "remote-exec atomically installs the sudoers grant root:root 0440" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap\.sudoers\.staged /etc/sudoers\.d/deploy-inngest-bootstrap'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap\.sudoers\.staged /etc/sudoers\.d/deploy-inngest-bootstrap' >/dev/null"
 assert "remote-exec asserts the helper is executable (test -x)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'test -x /usr/local/bin/infra-config-install'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'test -x /usr/local/bin/infra-config-install' >/dev/null"
 assert "remote-exec asserts the INFRA_CONFIG_INSTALL grant landed" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'grep -q INFRA_CONFIG_INSTALL /etc/sudoers\.d/deploy-inngest-bootstrap'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'grep -q INFRA_CONFIG_INSTALL /etc/sudoers\.d/deploy-inngest-bootstrap' >/dev/null"
 
 # --- AC6: wired into CI (infra-validation.yml) ---
 echo ""
@@ -215,7 +215,7 @@ DPF_DEPENDS=$(printf '%s\n' "$DPF_BLOCK" \
   | awk '/^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f && /\]/{exit}')
 assert "deploy_pipeline_fix declares a depends_on list" "[[ -n \"\$DPF_DEPENDS\" ]]"
 assert "the list names terraform_data.infra_config_handler_bootstrap" \
-  "printf '%s' \"\$DPF_DEPENDS\" | grep -qE 'terraform_data\\.infra_config_handler_bootstrap'"
+  "printf '%s' \"\$DPF_DEPENDS\" | grep -cE 'terraform_data\\.infra_config_handler_bootstrap' >/dev/null"
 
 # --- #7220 B6: the grant is PROVEN, and activation is asserted, not assumed ---
 echo ""
@@ -228,32 +228,32 @@ echo "--- #7220 B6: daemon-reload grant + DropInPaths activation assertions ---"
 # resolves the real policy for the real user and exits non-zero if it is not permitted --
 # which is the property #7220 needed and did not have.
 assert "post-write asserts the daemon-reload grant landed in the file" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap' >/dev/null"
 # EXECUTES the grant rather than listing it: proves the grant is EFFECTIVE, not merely present,
 # and performs the reload the DropInPaths assertions below depend on. Also asserts the FATAL
 # tail, because in a remote-exec inline block the `|| { ...; exit 1; }` is the only thing that
 # makes the probe a gate rather than an advisory line.
 assert "post-write EXECUTES the daemon-reload grant as deploy (not just lists it)" \
-  "printf '%s' \"\$BLOCK\" | grep -qF 'runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload'"
+  "printf '%s' \"\$BLOCK\" | grep -cF 'runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload' >/dev/null"
 assert "the daemon-reload probe is fatal, not advisory" \
-  "printf '%s' \"\$BLOCK\" | grep -F 'runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload' | grep -qF 'exit 1'"
+  "printf '%s' \"\$BLOCK\" | grep -F 'runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload' | grep -cF 'exit 1' >/dev/null"
 assert "list-mode availability is probed before the policy probes (could-not-measure is its own outcome)" \
-  "printf '%s' \"\$BLOCK\" | grep -qF 'sudo -n -l -U deploy >/dev/null 2>&1 ||'"
+  "printf '%s' \"\$BLOCK\" | grep -cF 'sudo -n -l -U deploy >/dev/null 2>&1 ||' >/dev/null"
 assert "post-write probes sudo policy for the --collect self-restart argv" \
-  "printf '%s' \"\$BLOCK\" | grep -qF 'sudo -n -l -U deploy /usr/bin/systemd-run --collect'"
+  "printf '%s' \"\$BLOCK\" | grep -cF 'sudo -n -l -U deploy /usr/bin/systemd-run --collect' >/dev/null"
 # TAIL SWEEP (#7220 review). The daemon-reload probe above already asserted its `exit 1` tail;
 # these three did not, so mutating any of them to `|| true` left this suite fully green while the
 # probe became an advisory log line. In a remote-exec `inline` block there is no implicit errexit
 # and only the LAST command's status is consulted, so the `|| { ...; exit 1; }` tail IS the gate —
 # a probe without it cannot fail the apply no matter what sudo answers.
 assert "the self-restart argv probe is fatal, not advisory" \
-  "printf '%s' \"\$BLOCK\" | grep -F 'sudo -n -l -U deploy /usr/bin/systemd-run --collect' | grep -qF 'exit 1'"
+  "printf '%s' \"\$BLOCK\" | grep -F 'sudo -n -l -U deploy /usr/bin/systemd-run --collect' | grep -cF 'exit 1' >/dev/null"
 assert "the list-mode availability probe is fatal, not advisory" \
-  "printf '%s' \"\$BLOCK\" | grep -F 'sudo -n -l -U deploy >/dev/null 2>&1 ||' | grep -qF 'exit 1'"
+  "printf '%s' \"\$BLOCK\" | grep -F 'sudo -n -l -U deploy >/dev/null 2>&1 ||' | grep -cF 'exit 1' >/dev/null"
 assert "the inngest-heartbeat DropInPaths assertion is fatal, not advisory" \
-  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-heartbeat.service' | grep -qF 'exit 1'"
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-heartbeat.service' | grep -cF 'exit 1' >/dev/null"
 assert "the inngest-server DropInPaths assertion is fatal, not advisory" \
-  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-server.service' | grep -qF 'exit 1'"
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-server.service' | grep -cF 'exit 1' >/dev/null"
 # And the DropInPaths probes must grep for a NON-EMPTY pattern. `grep -q ''` matches any output,
 # including the output for a unit with no drop-in at all, so the probe would hold in exactly the
 # state AC-B4 exists to detect. The real probes anchor on `doppler-token.conf`; pin that both
@@ -273,9 +273,9 @@ assert "no DropInPaths probe was weakened to an empty grep pattern" \
 # Asserting DropInPaths is the difference between "we fixed reload" and "we fixed what reload
 # was for": it proves systemd ADOPTED the drop-in this channel delivered.
 assert "post-write asserts inngest-heartbeat drop-in is LOADED (DropInPaths)" \
-  "printf '%s' \"\$BLOCK\" | grep -qF 'DropInPaths inngest-heartbeat.service'"
+  "printf '%s' \"\$BLOCK\" | grep -cF 'DropInPaths inngest-heartbeat.service' >/dev/null"
 assert "post-write asserts inngest-server drop-in is LOADED (DropInPaths)" \
-  "printf '%s' \"\$BLOCK\" | grep -qF 'DropInPaths inngest-server.service'"
+  "printf '%s' \"\$BLOCK\" | grep -cF 'DropInPaths inngest-server.service' >/dev/null"
 
 # ── ASSERTION-COUNT FLOOR (#7220 review) ───────────────────────────────────────────────
 # This suite had NO floor, so deleting assert calls — or an `assert` helper that silently stopped

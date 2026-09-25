@@ -111,7 +111,7 @@ fi
 rm -f "$_priv" "$_epriv"
 fi
 
-if printf '%s\n' "$OUT" | grep -qE '^(PASS|RED) '; then
+if printf '%s\n' "$OUT" | grep -cE '^(PASS|RED) ' >/dev/null; then
   no "T2c: --list executed suites (found PASS/RED lines)"
 else
   ok "T2c: --list executed nothing"
@@ -127,13 +127,13 @@ OUT_ZERO="$(SOLEUR_INFRA_DIR="$TMP/empty-dir" bash "$SUT" --list 2>&1)"; rc_zero
 if (( rc_zero == 2 )); then ok "T3a: zero-derivation exits 2"
 else no "T3a: zero-derivation exited $rc_zero, expected 2"; fi
 
-if printf '%s\n' "$OUT_ZERO" | grep -q 'derived ZERO suites'; then
+if printf '%s\n' "$OUT_ZERO" | grep -c 'derived ZERO suites' >/dev/null; then
   ok "T3b: zero-derivation names the cause"
 else
   no "T3b: zero-derivation did not explain itself: $OUT_ZERO"
 fi
 
-if printf '%s\n' "$OUT_ZERO" | grep -qE '0 (passed|failed)'; then
+if printf '%s\n' "$OUT_ZERO" | grep -cE '0 (passed|failed)' >/dev/null; then
   no "T3c: zero-derivation printed a pass/fail summary (reads as success)"
 else
   ok "T3c: zero-derivation prints no pass/fail summary"
@@ -165,13 +165,13 @@ ORPHAN_FIXTURE="apps/web-platform/infra/zzz-orphan-fixture-not-on-disk.test.sh"
 printf '%s\n' "$ORPHAN_FIXTURE" > "$TMP/orphan-candidates.txt"
 OUT_ORPH="$(INFRA_ORPHAN_LIST="$TMP/orphan-candidates.txt" timeout 60 bash "$SUT" --list 2>&1)"
 
-if printf '%s\n' "$OUT_ORPH" | grep -qF "zzz-orphan-fixture-not-on-disk.test.sh"; then
+if printf '%s\n' "$OUT_ORPH" | grep -cF "zzz-orphan-fixture-not-on-disk.test.sh" >/dev/null; then
   ok "T5a: orphan scan reports an unreferenced suite"
 else
   no "T5a: orphan scan missed a suite nothing references"
 fi
 
-if printf '%s\n' "$OUT_ORPH" | grep -q 'NOT git-tracked'; then
+if printf '%s\n' "$OUT_ORPH" | grep -c 'NOT git-tracked' >/dev/null; then
   ok "T5b: untracked-suite scan explains what the list means"
 else
   no "T5b: untracked-suite scan printed no explanation"
@@ -226,14 +226,14 @@ OUT6="$(SOLEUR_INFRA_DIR="$FIXDIR" timeout 120 bash "$SUT" 2>&1)" || rc6=$?
 if (( rc6 != 0 )); then ok "T6a: a RED suite makes the runner exit non-zero (rc=$rc6)"
 else no "T6a: runner exited 0 with a RED suite"; fi
 
-if printf '%s\n' "$OUT6" | grep -qF "RED  ${FIXDIR}/aaa-red.test.sh"; then
+if printf '%s\n' "$OUT6" | grep -cF "RED  ${FIXDIR}/aaa-red.test.sh" >/dev/null; then
   ok "T6b: the RED summary line keeps its exact byte shape (\`RED  <path>\`, two spaces)"
 else
   no "T6b: the \`RED  <path>\` summary line changed shape"
 fi
 
 # The core of the instrument: the failing assertion — emitted early, on stderr — is present.
-if printf '%s\n' "$OUT6" | grep -qF "T6-EARLY-SENTINEL"; then
+if printf '%s\n' "$OUT6" | grep -cF "T6-EARLY-SENTINEL" >/dev/null; then
   ok "T6c: the EARLY failing assertion appears in the dump (anchored selection, not a blind tail)"
 else
   no "T6c: the early failing assertion is absent — selection fell back to a blind tail, or stderr was lost"
@@ -241,19 +241,19 @@ fi
 
 # Capture ORDER: `2>&1 >"$f"` would send stderr to the OLD stdout and lose every marker.
 # T6c is what detects that, but state it separately so the mutation matrix can name it.
-if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*T6-EARLY-SENTINEL'; then
+if printf '%s\n' "$OUT6" | grep -cE '^SOLEUR\| .*T6-EARLY-SENTINEL' >/dev/null; then
   ok "T6d: the dumped assertion is PREFIXED with the sentinel"
 else
   no "T6d: the dumped assertion is not sentinel-prefixed — it would reach the public issue body"
 fi
 
-if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*rc=1'; then
+if printf '%s\n' "$OUT6" | grep -cE '^SOLEUR\| .*rc=1' >/dev/null; then
   ok "T6e: the dump banner records the suite's exit code"
 else
   no "T6e: the dump banner has no rc"
 fi
 
-if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*elapsed='; then
+if printf '%s\n' "$OUT6" | grep -cE '^SOLEUR\| .*elapsed=' >/dev/null; then
   ok "T6f: the dump banner records elapsed time"
 else
   no "T6f: the dump banner has no elapsed time"
@@ -261,7 +261,7 @@ fi
 
 # start offset — without it "which neighbours overlapped the failure window" is unanswerable,
 # so H2-as-victim is not falsifiable.
-if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*start_offset='; then
+if printf '%s\n' "$OUT6" | grep -cE '^SOLEUR\| .*start_offset=' >/dev/null; then
   ok "T6g: the dump banner records a start offset"
 else
   no "T6g: the dump banner has no start offset"
@@ -271,8 +271,8 @@ fi
 # `DUMPED <= 60` on this fixture, which emits ~10 prefixed lines — it could not fail whether the
 # cap existed or not, and the row that actually pins the cap is T6p (10,000 marker lines).
 # The green suite must NOT be dumped.
-if printf '%s\n' "$OUT6" | grep -qF "bbb-green.test.sh" \
-   && ! printf '%s\n' "$OUT6" | grep -E '^SOLEUR\| ' | grep -qF "bbb-green.test.sh"; then
+if printf '%s\n' "$OUT6" | grep -cF "bbb-green.test.sh" >/dev/null \
+   && ! printf '%s\n' "$OUT6" | grep -E '^SOLEUR\| ' | grep -cF "bbb-green.test.sh" >/dev/null; then
   ok "T6i: only the RED suite is dumped"
 else
   no "T6i: a PASSing suite was dumped (or the PASS line vanished)"
@@ -280,7 +280,7 @@ fi
 
 # Log dir retained on failure, and its path printed — prefixed, like everything else the
 # parent emits after xargs (an unprefixed path would reach the monitor's tail).
-if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*(retained|log dir)'; then
+if printf '%s\n' "$OUT6" | grep -cE '^SOLEUR\| .*(retained|log dir)' >/dev/null; then
   ok "T6j: the retained log dir path is printed, prefixed"
 else
   no "T6j: no retained log dir path in the output"
@@ -312,12 +312,12 @@ exit 7
 FIXEOF
 chmod +x "$FIXDIR2"/*.test.sh
 OUT6M="$(SOLEUR_INFRA_DIR="$FIXDIR2" timeout 60 bash "$SUT" 2>&1)" || true
-if printf '%s\n' "$OUT6M" | grep -qE '^SOLEUR\| .*rc=7'; then
+if printf '%s\n' "$OUT6M" | grep -cE '^SOLEUR\| .*rc=7' >/dev/null; then
   ok "T6m: a non-1 exit code is recorded verbatim (rc=7)"
 else
   no "T6m: rc=7 not recorded — exit codes 137/124 would be unreadable"
 fi
-if printf '%s\n' "$OUT6M" | grep -qiE '^SOLEUR\| .*(selection|fallback|tail)'; then
+if printf '%s\n' "$OUT6M" | grep -ciE '^SOLEUR\| .*(selection|fallback|tail)' >/dev/null; then
   ok "T6n: the runner names which excerpt selection it used"
 else
   no "T6n: the runner does not say whether the excerpt was anchored or a blind tail"
@@ -368,13 +368,13 @@ exit 1
 FIXEOF
 chmod +x "$FIXDIR4"/*.test.sh
 OUT6Q="$(SOLEUR_INFRA_DIR="$FIXDIR4" timeout 60 bash "$SUT" 2>&1)" || true
-if printf '%s\n' "$OUT6Q" | grep -qF "marker-from-aaa" && printf '%s\n' "$OUT6Q" | grep -qF "marker-from-bbb"; then
+if printf '%s\n' "$OUT6Q" | grep -cF "marker-from-aaa" >/dev/null && printf '%s\n' "$OUT6Q" | grep -cF "marker-from-bbb" >/dev/null; then
   ok "T6q: both concurrently-failing suites are dumped"
 else
   no "T6q: a concurrently-failing suite was not dumped"
 fi
-ORDER_A=$(printf '%s\n' "$OUT6Q" | grep -nF "marker-from-aaa" | head -1 | cut -d: -f1)
-ORDER_B=$(printf '%s\n' "$OUT6Q" | grep -nF "marker-from-bbb" | head -1 | cut -d: -f1)
+ORDER_A=$(printf '%s\n' "$OUT6Q" | grep -nF "marker-from-aaa" | sed -n '1p' | cut -d: -f1)
+ORDER_B=$(printf '%s\n' "$OUT6Q" | grep -nF "marker-from-bbb" | sed -n '1p' | cut -d: -f1)
 if [[ -n "$ORDER_A" && -n "$ORDER_B" ]] && (( ORDER_A < ORDER_B )); then
   ok "T6r: dump order is deterministic (sorted), not completion order"
 else
@@ -384,8 +384,8 @@ fi
 # ── T6s: one log file per derived suite (filename-collision probe) ────────────
 # Keying the per-suite log on `basename` instead of the sanitised full path would
 # collide the moment two suites share a basename across subdirectories.
-if printf '%s\n' "$OUT6Q" | grep -qE '^SOLEUR\| .*log dir: '; then
-  LD=$(printf '%s\n' "$OUT6Q" | grep -oE 'log dir: .*' | head -1 | sed 's/^log dir: //')
+if printf '%s\n' "$OUT6Q" | grep -cE '^SOLEUR\| .*log dir: ' >/dev/null; then
+  LD=$(printf '%s\n' "$OUT6Q" | grep -oE 'log dir: .*' | sed -n '1p' | sed 's/^log dir: //')
   if [[ -d "$LD" ]] && (( $(find "$LD" -name '*.log' | wc -l) == 2 )); then
     ok "T6s: one log file per derived suite (no filename collision)"
   else
@@ -407,12 +407,12 @@ rc6t=0
 OUT6T="$(SOLEUR_INFRA_DIR="$FIXDIR5" timeout 60 bash "$SUT" 2>&1)" || rc6t=$?
 if (( rc6t == 0 )); then ok "T6t: an all-green run exits 0"
 else no "T6t: an all-green run exited $rc6t"; fi
-if ! printf '%s\n' "$OUT6T" | grep -qE '^SOLEUR\| '; then
+if ! printf '%s\n' "$OUT6T" | grep -cE '^SOLEUR\| ' >/dev/null; then
   ok "T6u: an all-green run emits no dump at all"
 else
   no "T6u: an all-green run emitted prefixed dump lines"
 fi
-if printf '%s\n' "$OUT6T" | grep -q '=== registered infra suites: 1 passed, 0 failed, 0 unaccounted (of 1) ==='; then
+if printf '%s\n' "$OUT6T" | grep -c '=== registered infra suites: 1 passed, 0 failed, 0 unaccounted (of 1) ===' >/dev/null; then
   ok "T6v: the summary line survives unchanged and unprefixed"
 else
   no "T6v: the summary line changed shape — the monitor's tail depends on it"
@@ -454,12 +454,12 @@ if (( rc7 != 0 )); then
 else
   no "T7a: FALSE GREEN — a vanished suite still exited 0"
 fi
-if printf '%s\n' "$OUT7" | grep -qiE 'accounting|did not report|unaccounted'; then
+if printf '%s\n' "$OUT7" | grep -ciE 'accounting|did not report|unaccounted' >/dev/null; then
   ok "T7b: the runner names the accounting failure"
 else
   no "T7b: the runner does not explain that a suite failed to report"
 fi
-if printf '%s\n' "$OUT7" | grep -qF "aaa-suicide.test.sh"; then
+if printf '%s\n' "$OUT7" | grep -cF "aaa-suicide.test.sh" >/dev/null; then
   ok "T7c: the runner names the suite that never reported"
 else
   no "T7c: the unaccounted suite is not named"
@@ -499,14 +499,14 @@ fi
 # (T6v here, and plugins/soleur/test/main-health-monitor-workflow.test.sh:554,571). A killed
 # suite is still counted among `failed` there — deliberately imprecise, because correcting the
 # LABEL would break both consumers. The precision is carried by the gated line T10c asserts.
-if printf '%s\n' "$OUT10A" | grep -qF '=== registered infra suites: 0 passed, 1 failed, 0 unaccounted (of 1) ==='; then
+if printf '%s\n' "$OUT10A" | grep -cF '=== registered infra suites: 0 passed, 1 failed, 0 unaccounted (of 1) ===' >/dev/null; then
   ok "T10b: the summary line keeps its exact byte shape on a killed run (killed still counted in \`failed\`)"
 else
   no "T10b: the summary line changed on a killed run — its two exact-string consumers would break"
 fi
 
-if printf '%s\n' "$OUT10A" | grep -qF '1 were TERMINATED BY A SIGNAL' \
-   && printf '%s\n' "$OUT10A" | grep -qF 'propagating rc 137 = SIGKILL'; then
+if printf '%s\n' "$OUT10A" | grep -cF '1 were TERMINATED BY A SIGNAL' >/dev/null \
+   && printf '%s\n' "$OUT10A" | grep -cF 'propagating rc 137 = SIGKILL' >/dev/null; then
   ok "T10c: the gated breakdown line reports the killed count and the propagated rc, decoded"
 else
   no "T10c: no killed breakdown line — the summary's \`failed\` label is then the only reading available"
@@ -534,7 +534,7 @@ fi
 # The DETECTION half: the kill must still have been seen and reported, not silently absorbed
 # into `failed`. Without this, "failure dominates" is indistinguishable from "kills are
 # invisible" — and the second is the defect this whole PR exists to remove.
-if printf '%s\n' "$OUT10D" | grep -qF '1 were TERMINATED BY A SIGNAL'; then
+if printf '%s\n' "$OUT10D" | grep -cF '1 were TERMINATED BY A SIGNAL' >/dev/null; then
   ok "T10d: the dominated kill is still DETECTED and reported (breakdown names 1 terminated suite)"
 else
   no "T10d: exit 1 was reached with NO killed breakdown — the termination was absorbed into the failure count, so the runner cannot distinguish a starved suite from a regression"
@@ -546,7 +546,7 @@ printf '#!/usr/bin/env bash\nexit 124\n' > "$FIXDIR9/aaa-timeout.test.sh"
 chmod +x "$FIXDIR9"/*.test.sh
 rc10e=0
 OUT10E="$(SOLEUR_INFRA_DIR="$FIXDIR9" timeout 60 bash "$SUT" 2>&1)" || rc10e=$?
-if (( rc10e == 1 )) && ! printf '%s\n' "$OUT10E" | grep -qF 'TERMINATED BY A SIGNAL'; then
+if (( rc10e == 1 )) && ! printf '%s\n' "$OUT10E" | grep -cF 'TERMINATED BY A SIGNAL' >/dev/null; then
   ok "T10e: rc 124 (GNU timeout's own exit) stays a plain failure — exit 1, no killed line"
 else
   no "T10e: rc 124 exited ${rc10e} / claimed a termination — timeout's attributed verdict was folded into the unattributed bucket"
@@ -561,7 +561,7 @@ printf '#!/usr/bin/env bash\nexit 128\n' > "$FIXDIR10/aaa-b128.test.sh"
 chmod +x "$FIXDIR10"/*.test.sh
 rc10f1=0
 OUT10F1="$(SOLEUR_INFRA_DIR="$FIXDIR10" timeout 60 bash "$SUT" 2>&1)" || rc10f1=$?
-if (( rc10f1 == 1 )) && ! printf '%s\n' "$OUT10F1" | grep -qF 'TERMINATED BY A SIGNAL'; then
+if (( rc10f1 == 1 )) && ! printf '%s\n' "$OUT10F1" | grep -cF 'TERMINATED BY A SIGNAL' >/dev/null; then
   ok "T10f-128: GUARD rc>128 — rc 128 stays a failure (\`kill -l 0\` returns EXIT)"
 else
   no "T10f-128: rc 128 exited ${rc10f1} / claimed a termination — the \`rc > 128\` guard is gone"
@@ -572,7 +572,7 @@ printf '#!/usr/bin/env bash\nexit 160\n' > "$FIXDIR11/aaa-b160.test.sh"
 chmod +x "$FIXDIR11"/*.test.sh
 rc10f2=0
 OUT10F2="$(SOLEUR_INFRA_DIR="$FIXDIR11" timeout 60 bash "$SUT" 2>&1)" || rc10f2=$?
-if (( rc10f2 == 1 )) && ! printf '%s\n' "$OUT10F2" | grep -qF 'TERMINATED BY A SIGNAL'; then
+if (( rc10f2 == 1 )) && ! printf '%s\n' "$OUT10F2" | grep -cF 'TERMINATED BY A SIGNAL' >/dev/null; then
   ok "T10f-160: GUARD -n name — rc 160 stays a failure (\`kill -l 32\` succeeds with EMPTY output)"
 else
   no "T10f-160: rc 160 exited ${rc10f2} / claimed a termination — the non-empty-name guard is gone"
@@ -604,7 +604,7 @@ printf '#!/usr/bin/env bash\n_shim=$PPID\n[[ -n "${SOLEUR_TIMEOUT_BIN:-}" ]] && 
 chmod +x "$FIXDIR12"/*.test.sh
 rc10g=0
 OUT10G="$(SOLEUR_INFRA_DIR="$FIXDIR12" timeout 60 bash "$SUT" 2>&1)" || rc10g=$?
-if printf '%s\n' "$OUT10G" | grep -qF 'MEASURED: xargs exited 125'; then
+if printf '%s\n' "$OUT10G" | grep -cF 'MEASURED: xargs exited 125' >/dev/null; then
   ok "T10g-125: a signal at the SHIM is MEASURED — xargs' 125 reaches the report (the A6 tripwire)"
 else
   no "T10g-125: the runner did not report xargs' 125 — a layer between the shim and here is swallowing the signal, or the rc is no longer captured"
@@ -643,7 +643,7 @@ if (( rc10h == 143 )); then
 else
   no "T10h-rule: exited ${rc10h}, expected 143 (137 = first-completed, 154 = last-completed or max-rc, 1 = a saturating killed counter)"
 fi
-if printf '%s\n' "$OUT10H" | grep -qF '3 were TERMINATED BY A SIGNAL'; then
+if printf '%s\n' "$OUT10H" | grep -cF '3 were TERMINATED BY A SIGNAL' >/dev/null; then
   ok "T10h-count: the killed counter ACCUMULATES to 3 rather than saturating at 1"
 else
   no "T10h-count: the breakdown did not report 3 terminated suites"
@@ -652,14 +652,14 @@ fi
 # ── T10i: a clean run's bytes are unchanged — the breakdown line is GATED ─────
 # Reuses T6t's all-green capture. Without the `killed > 0` gate this line would ride on every
 # green run, which is how the same change broke byte-identical output the last two times.
-if printf '%s\n' "$OUT6T" | grep -qF 'TERMINATED BY A SIGNAL'; then
+if printf '%s\n' "$OUT6T" | grep -cF 'TERMINATED BY A SIGNAL' >/dev/null; then
   no "T10i: an all-green run emitted the killed breakdown line — the \`killed > 0\` gate is gone"
 else
   ok "T10i: an all-green run emits no killed breakdown line (the gate holds)"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T11 — shard partition + privileged bucket + per-suite bound (ADR-251).
+# T11 — shard partition + privileged bucket + per-suite bound (ADR-252).
 # The contract the CI matrix legs rely on: disjoint+total over the derived set,
 # fail-closed on a malformed SOLEUR_INFRA_SHARD, and a leg that owns nothing
 # REFUSES rather than printing "0 failed".
@@ -672,7 +672,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$FIXSH/sub/deep.test.sh"
 # the old scrape's basename class could not see it). The fixture dir is
 # out-of-tree, so this exercises the filesystem arm.
 OUT_SUB="$(SOLEUR_INFRA_DIR="$FIXSH" bash "$SUT" --list 2>&1)"
-if printf '%s\n' "$OUT_SUB" | grep -qF "$FIXSH/sub/deep.test.sh"; then
+if printf '%s\n' "$OUT_SUB" | grep -cF "$FIXSH/sub/deep.test.sh" >/dev/null; then
   ok "T11a: a subdirectory suite derives under the glob"
 else
   no "T11a: subdir suite missing from --list output: $OUT_SUB"
@@ -711,7 +711,7 @@ fi
 mkdir -p "$TMP/empty2"; printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/empty2/a.test.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/empty2/b.test.sh"
 rc_empty=0
 OUT_EMPTY="$(SOLEUR_INFRA_SHARD=3/3 SOLEUR_INFRA_MANIFEST=off SOLEUR_INFRA_DIR="$TMP/empty2" bash "$SUT" 2>&1)" || rc_empty=$?
-if (( rc_empty == 2 )) && printf '%s\n' "$OUT_EMPTY" | grep -q 'owns ZERO'; then
+if (( rc_empty == 2 )) && printf '%s\n' "$OUT_EMPTY" | grep -c 'owns ZERO' >/dev/null; then
   ok "T11d: a zero-assignment leg exits 2 naming the shard"
 else
   no "T11d: zero-assignment leg rc=$rc_empty (want 2 + 'owns ZERO'): $(printf '%s' "$OUT_EMPTY" | tail -3)"
@@ -722,10 +722,10 @@ FIXP="$TMP/privfix"; mkdir -p "$FIXP"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FIXP/normal-suite.test.sh"
 printf '#!/usr/bin/env bash\necho SHOULD-NOT-RUN\nexit 0\n' > "$FIXP/workspaces-luks-loopback.test.sh"
 OUT_PRIV="$(SOLEUR_INFRA_DIR="$FIXP" timeout 60 bash "$SUT" 2>&1)"
-if printf '%s\n' "$OUT_PRIV" | grep -q 'SHOULD-NOT-RUN'; then
+if printf '%s\n' "$OUT_PRIV" | grep -c 'SHOULD-NOT-RUN' >/dev/null; then
   no "T11e: a privileged-named suite EXECUTED"
-elif printf '%s\n' "$OUT_PRIV" | grep -q 'privileged suite' && \
-     printf '%s\n' "$OUT_PRIV" | grep -q '1 passed, 0 failed'; then
+elif printf '%s\n' "$OUT_PRIV" | grep -c 'privileged suite' >/dev/null && \
+     printf '%s\n' "$OUT_PRIV" | grep -c '1 passed, 0 failed' >/dev/null; then
   ok "T11e: privileged basename derived-skipped; the normal suite ran"
 else
   no "T11e: unexpected run shape: $(printf '%s' "$OUT_PRIV" | tail -4)"
@@ -739,9 +739,9 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$FIXT/quick.test.sh"
 printf '#!/usr/bin/env bash\nsleep 30\n' > "$FIXT/stalls.test.sh"
 OUT_TO="$(SOLEUR_INFRA_DIR="$FIXT" SOLEUR_SUITE_TIMEOUT_DEFAULT=2 SOLEUR_INFRA_TIMINGS="$TMP/timings.tsv" \
   timeout 60 bash "$SUT" 2>&1)" || true
-if printf '%s\n' "$OUT_TO" | grep -q 'RED  .*stalls\.test\.sh' && \
-   printf '%s\n' "$OUT_TO" | grep -q '::error file=.*stalls\.test\.sh::suite exceeded its 2s bound' && \
-   printf '%s\n' "$OUT_TO" | grep -q '1 passed, 1 failed'; then
+if printf '%s\n' "$OUT_TO" | grep -c 'RED  .*stalls\.test\.sh' >/dev/null && \
+   printf '%s\n' "$OUT_TO" | grep -c '::error file=.*stalls\.test\.sh::suite exceeded its 2s bound' >/dev/null && \
+   printf '%s\n' "$OUT_TO" | grep -c '1 passed, 1 failed' >/dev/null; then
   ok "T11f: a stalled suite REDs named (rc=124) with an ::error annotation"
 else
   no "T11f: timeout attribution missing: $(printf '%s' "$OUT_TO" | grep -E 'RED|::error|passed' | head -4)"
@@ -759,8 +759,8 @@ fi
 # (privileged excluded — they are never timed, so the manifest lint would red
 # on a row no leg can produce).
 ENUM_OUT="$(SOLEUR_INFRA_DIR="$FIXP" bash "$SUT" --enumerate 2>/dev/null)"
-if printf '%s\n' "$ENUM_OUT" | grep -qP '^SUITE_REGISTRATION\t\S*normal-suite\.test\.sh$' && \
-   ! printf '%s\n' "$ENUM_OUT" | grep -q 'loopback'; then
+if printf '%s\n' "$ENUM_OUT" | grep -cP '^SUITE_REGISTRATION\t\S*normal-suite\.test\.sh$' >/dev/null && \
+   ! printf '%s\n' "$ENUM_OUT" | grep -c 'loopback' >/dev/null; then
   ok "T11h: --enumerate emits the execute set, privileged excluded"
 else
   no "T11h: --enumerate wrong: $(printf '%s' "$ENUM_OUT" | head -4)"
@@ -787,10 +787,10 @@ _m1="$(SOLEUR_INFRA_SHARD=1/3 SOLEUR_INFRA_MANIFEST="$FIXM" SOLEUR_INFRA_DIR="$F
       bash "$SUT" --list 2>/dev/null | awk '/^Shard/{f=1;next}/^$/{f=0}f')"
 _m3="$(SOLEUR_INFRA_SHARD=3/3 SOLEUR_INFRA_MANIFEST="$FIXM" SOLEUR_INFRA_DIR="$FIXSH" \
       bash "$SUT" --list 2>/dev/null | awk '/^Shard/{f=1;next}/^$/{f=0}f')"
-if printf '%s\n' "$_m1" | grep -qF "sub/deep.test.sh" && \
-   ! printf '%s\n' "$_m1" | grep -qF "s1.test.sh" && \
-   printf '%s\n' "$_m3" | grep -qF "s1.test.sh" && \
-   ! printf '%s\n' "$_m3" | grep -qF "deep.test.sh"; then
+if printf '%s\n' "$_m1" | grep -cF "sub/deep.test.sh" >/dev/null && \
+   ! printf '%s\n' "$_m1" | grep -cF "s1.test.sh" >/dev/null && \
+   printf '%s\n' "$_m3" | grep -cF "s1.test.sh" >/dev/null && \
+   ! printf '%s\n' "$_m3" | grep -cF "deep.test.sh" >/dev/null; then
   ok "T11i: an active manifest drives leg ownership byte-for-byte (non-positional)"
 else
   no "T11i: manifest assignment ignored or positionally identical: leg1=[$_m1] leg3=[$_m3]"

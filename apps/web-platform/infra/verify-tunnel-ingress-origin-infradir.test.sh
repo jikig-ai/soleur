@@ -52,7 +52,7 @@ OUT="$(cd "$INFRA_ABS" && INFRA_DIR="$REL_INFRA_DIR" PATH="$STUB_DIR:$PATH" \
   bash "$TARGET" 2>&1)"
 set -e
 
-if printf '%s' "$OUT" | grep -qiE 'cd:.*No such file or directory'; then
+if printf '%s' "$OUT" | grep -ciE 'cd:.*No such file or directory' >/dev/null; then
   echo "FAIL: script died on the relative-INFRA_DIR cd — #6595 regression:"
   printf '%s\n' "$OUT" | sed 's/^/    /'
   fails=1

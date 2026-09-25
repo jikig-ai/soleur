@@ -1188,7 +1188,7 @@ assert_exit_contains() {
   local actual_exit
   output=$(run_deploy "$cmd" 2>&1) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq "$expected_exit" ]] && printf '%s\n' "$output" | grep -qF "$expected_text"; then
+  if [[ "$actual_exit" -eq "$expected_exit" ]] && printf '%s\n' "$output" | grep -cF "$expected_text" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -1295,7 +1295,7 @@ assert_inngest_docker_trace() {
 
   # The inngest branch's first observable docker call is `pull`. If we see
   # the trace marker, the branch routed correctly.
-  if printf '%s' "$output" | grep -qF "DOCKER_TRACE:pull"; then
+  if printf '%s' "$output" | grep -cF "DOCKER_TRACE:pull" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -1384,8 +1384,8 @@ assert_prune_before_pull() {
 
   # Check that DOCKER_TRACE:image appears before DOCKER_TRACE:pull in output
   local prune_line pull_line
-  prune_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:image" || true; } | head -1 | cut -d: -f1)
-  pull_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:pull" || true; } | head -1 | cut -d: -f1)
+  prune_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:image" || true; } | sed -n '1p' | cut -d: -f1)
+  pull_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:pull" || true; } | sed -n '1p' | cut -d: -f1)
 
   if [[ "$actual_exit" -eq 0 ]] && [[ -n "$prune_line" ]] && [[ -n "$pull_line" ]] && [[ "$prune_line" -lt "$pull_line" ]]; then
     PASS=$((PASS + 1))
@@ -1408,7 +1408,7 @@ assert_disk_space_rejection() {
   local output actual_exit
   output=$(export MOCK_DF_LOW=1; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "insufficient disk space"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -cF "insufficient disk space" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: low disk space rejects deploy"
   else
@@ -1596,8 +1596,8 @@ assert_pull_failure_host_id() {
   TOTAL=$((TOTAL + 1))
   local body
   body="$(awk '/^pull_failure_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
-  if printf '%s' "$body" | grep -qE -- '--arg h "\$\{HOST_ID:-\}"' \
-     && printf '%s' "$body" | grep -qE 'host_id: \$h'; then
+  if printf '%s' "$body" | grep -cE -- >/dev/null '--arg h "\$\{HOST_ID:-\}"' \
+     && printf '%s' "$body" | grep -cE 'host_id: \$h' >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: pull_failure_event threads --arg h \"\${HOST_ID:-}\" into tags.host_id (#6396)"
   else
@@ -1679,7 +1679,7 @@ assert_flock_rejection() {
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "another deploy in progress"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -cF "another deploy in progress" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: flock rejects concurrent deploy"
   else
@@ -1817,11 +1817,11 @@ assert_doppler_arms_still_failclosed() {
   local body bad=""
   body="$(awk '/^resolve_env_file\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
   [[ -n "$body" ]] || bad="${bad} resolve_env_file-not-found"
-  printf '%s' "$body" | grep -qF 'Doppler CLI not installed' || bad="${bad} missing-cli-message"
-  printf '%s' "$body" | grep -qF 'DOPPLER_TOKEN environment variable not set' || bad="${bad} missing-token-message"
+  printf '%s' "$body" | grep -cF 'Doppler CLI not installed' >/dev/null || bad="${bad} missing-cli-message"
+  printf '%s' "$body" | grep -cF 'DOPPLER_TOKEN environment variable not set' >/dev/null || bad="${bad} missing-token-message"
   # Fail-closed: neither arm may reach a local env file. Anchored on the redirect/source shapes,
   # not on the bare word ".env", which the surrounding rationale comments also contain.
-  printf '%s' "$body" | grep -qE '(^|[^#]*)(\. |source )[^|]*\.env' && bad="${bad} sources-a-local-env"
+  printf '%s' "$body" | grep -cE '(^|[^#]*)(\. |source )[^|]*\.env' >/dev/null && bad="${bad} sources-a-local-env"
   if [[ -z "$bad" ]]; then
     PASS=$((PASS + 1))
     echo "  PASS: resolve_env_file's doppler-absent and token-absent arms are present and fail-closed (source guard; unreachable through a full deploy since #8036 1c)"
@@ -1842,7 +1842,7 @@ assert_doppler_download_fails() {
     run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "Failed to download secrets from Doppler:"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -cF "Failed to download secrets from Doppler:" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: doppler download failure exits with error"
   else
@@ -1863,7 +1863,7 @@ assert_doppler_error_logged() {
     run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "read-only file system"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -cF "read-only file system" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: doppler error message included in output"
   else
@@ -1886,7 +1886,7 @@ assert_no_env_fallback() {
     run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if ! printf '%s\n' "$output" | grep -qF "/mnt/data/.env"; then
+  if ! printf '%s\n' "$output" | grep -cF "/mnt/data/.env" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: no fallback to /mnt/data/.env"
   else
@@ -1973,19 +1973,19 @@ assert_bprime_cosign_invocation() {
   local argsfile args sentry ok=1
   argsfile=$(mktemp)
   ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
-  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
-  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | head -1)
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | sed -n '1p')
+  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | sed -n '1p')
   rm -f "$argsfile"
   [[ -n "$args" ]] || ok=0
-  printf '%s' "$args" | grep -qF -- '--network host' || ok=0
+  printf '%s' "$args" | grep -cF -- >/dev/null '--network host' || ok=0
   # T-1a-2 (#8036 P2): the :ro mount is the DEPLOY config specifically — the anonymous CLI config
   # the verifier-image pull now uses must never replace the credential the in-container .sig
   # fetch authenticates with. (#8037: mounted where DOCKER_CONFIG points, never /root/.docker —
   # see T-8037-1 below for why.)
-  printf '%s' "$args" | grep -qF -- "-v $DEPLOY_DOCKER_CONFIG_DIR/config.json:/cosign-docker/config.json:ro" || ok=0
-  printf '%s' "$args" | grep -qE -- '-v [^ ]+:/etc/cosign/trusted_root\.json:ro' || ok=0
-  printf '%s' "$args" | grep -qF -- '--offline' || ok=0
-  printf '%s' "$args" | grep -qF -- '--trusted-root=/etc/cosign/trusted_root.json' || ok=0
+  printf '%s' "$args" | grep -cF -- >/dev/null "-v $DEPLOY_DOCKER_CONFIG_DIR/config.json:/cosign-docker/config.json:ro" || ok=0
+  printf '%s' "$args" | grep -cE -- >/dev/null '-v [^ ]+:/etc/cosign/trusted_root\.json:ro' || ok=0
+  printf '%s' "$args" | grep -cF -- >/dev/null '--offline' || ok=0
+  printf '%s' "$args" | grep -cF -- >/dev/null '--trusted-root=/etc/cosign/trusted_root.json' || ok=0
   # SENTRY_* set at verify time (not the UNSET sentinel) — telemetry not dark.
   [[ -n "$sentry" && "$sentry" != "SENTRY_AT_VERIFY:UNSET" ]] || ok=0
   if [[ "$ok" == "1" ]]; then
@@ -2014,7 +2014,7 @@ assert_cosign_reads_mounted_config() {
   local argsfile args dc n_user n_dc ok=1 why=""
   argsfile=$(mktemp)
   ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
-  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | sed -n '1p')
   rm -f "$argsfile"
   [[ -n "$args" ]] || { ok=0; why="no verify argv captured"; }
   n_user=$( { printf '%s' "$args" | grep -oE -- '(^| )(-u|--user)( |=)' || true; } | wc -l | tr -d ' ')
@@ -2090,14 +2090,14 @@ seed_canary_deploy_cfg() {
 }
 # _anon_field <argsfile> <key>: the value of one `ANON_CFG_AT_VERIFY` key (empty if absent).
 _anon_field() {
-  grep '^ANON_CFG_AT_VERIFY:' "$1" 2>/dev/null | head -1 | tr ' :' '\n\n' | sed -n "s/^$2=//p" | head -1
+  grep '^ANON_CFG_AT_VERIFY:' "$1" 2>/dev/null | sed -n '1p' | tr ' :' '\n\n' | sed -n "s/^$2=//p" | sed -n '1p'
 }
 
 # T-1a-1 (P1) + T-1a-3 (the canary is not visible to the pull) — one deploy, two assertions.
 T1A_DIR="$(mktemp -d)"
 seed_canary_deploy_cfg "$T1A_DIR"
 run_cosign_anon_capture "$T1A_DIR" "export DOCKER_AUTH_CONFIG='{\"auths\":{\"ghcr.io\":{\"auth\":\"$COSIGN_ANON_CANARY\"}}}'"
-T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | head -1)"
+T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | sed -n '1p')"
 TOTAL=$((TOTAL + 1))
 if [[ -n "$T1A_DC" && "$T1A_DC" != "UNSET" && "$T1A_DC" == /* \
       && "$T1A_DC" != "$T1A_DIR/deploy-cfg" && "${T1A_DC%/}" != "$T1A_DIR/deploy-cfg" \
@@ -2147,7 +2147,7 @@ assert_anon_dir_removed() {
   d="$(mktemp -d)"
   seed_canary_deploy_cfg "$d"
   run_cosign_anon_capture "$d" "$extra"
-  dc="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$d/cosign.args" | head -1)"
+  dc="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$d/cosign.args" | sed -n '1p')"
   if [[ -n "$dc" && "$dc" == /* && "$dc" != "$d/deploy-cfg" && ! -e "$dc" \
         && -f "$d/deploy-cfg/config.json" && "$(cat "$d/rc")" == "0" ]]; then
     PASS=$((PASS + 1)); echo "  PASS: T-1a-4 anonymous verifier config dir removed after the $label arm; deploy config untouched (#8036 1a)"
@@ -2168,7 +2168,7 @@ seed_canary_deploy_cfg "$T1A_DIR"
 mkdir -p "$T1A_DIR/deploy-cfg/anon-cosign"
 printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$COSIGN_ANON_CANARY" > "$T1A_DIR/deploy-cfg/anon-cosign/config.json"
 run_cosign_anon_capture "$T1A_DIR" "export SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1"
-T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | head -1)"
+T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | sed -n '1p')"
 TOTAL=$((TOTAL + 1))
 if [[ "$T1A_DC" == "$T1A_DIR/deploy-cfg/anon-cosign" \
       && "$(_anon_field "$T1A_DIR/cosign.args" config_is_anon)" == "1" \
@@ -2188,7 +2188,7 @@ rm -rf "$T1A_DIR"
 T1A_DIR="$(mktemp -d)"
 seed_canary_deploy_cfg "$T1A_DIR"
 run_cosign_anon_capture "$T1A_DIR" "export SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=all"
-T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | head -1)"
+T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | sed -n '1p')"
 TOTAL=$((TOTAL + 1))
 if grep -qF 'IMAGE_VERIFY_PREP: anon_config=unavailable' "$T1A_DIR/logger.txt" \
    && [[ "$T1A_DC" == "$T1A_DIR/deploy-cfg" && -f "$T1A_DIR/deploy-cfg/config.json" && "$(cat "$T1A_DIR/rc")" == "0" ]] \
@@ -2210,7 +2210,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$COSIGN_ANON_CANARY" > "$T1A_DIR/deploy-cfg/anon-cosign/config.json"
   chmod 555 "$T1A_DIR/deploy-cfg/anon-cosign"
   run_cosign_anon_capture "$T1A_DIR" "export SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1"
-  T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | head -1)"
+  T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | sed -n '1p')"
   TOTAL=$((TOTAL + 1))
   if [[ -d "$T1A_DIR/deploy-cfg/anon-cosign" && "$T1A_DC" == "$T1A_DIR/deploy-cfg" && "$(cat "$T1A_DIR/rc")" == "0" ]] \
      && grep -qF 'IMAGE_VERIFY_PREP: anon_config=unavailable' "$T1A_DIR/logger.txt"; then
@@ -2364,7 +2364,7 @@ assert_apparmor_profile() {
 
   local all_have_apparmor=true
   while IFS= read -r line; do
-    if ! printf '%s\n' "$line" | grep -qF "apparmor=soleur-bwrap"; then
+    if ! printf '%s\n' "$line" | grep -cF "apparmor=soleur-bwrap" >/dev/null; then
       all_have_apparmor=false
       break
     fi
@@ -2419,11 +2419,11 @@ assert_tmpfs_flag() {
   local any_has_noexec=false
   while IFS= read -r line; do
     # Positive: --tmpfs /tmp:<opts with size=256m>
-    if ! printf '%s\n' "$line" | grep -qE -- "--tmpfs /tmp:[^ ]*size=256m"; then
+    if ! printf '%s\n' "$line" | grep -cE -- >/dev/null "--tmpfs /tmp:[^ ]*size=256m"; then
       all_have_tmpfs=false
     fi
     # Negative: no noexec on the /tmp tmpfs argument specifically.
-    if printf '%s\n' "$line" | grep -qE -- "--tmpfs /tmp:[^ ]*noexec"; then
+    if printf '%s\n' "$line" | grep -cE -- >/dev/null "--tmpfs /tmp:[^ ]*noexec"; then
       any_has_noexec=true
     fi
   done <<< "$run_lines"
@@ -2483,7 +2483,7 @@ assert_cron_workspace_root() {
 
   local all_have_root=true
   while IFS= read -r line; do
-    if ! printf '%s\n' "$line" | grep -qF -- "-e CRON_WORKSPACE_ROOT=/workspaces"; then
+    if ! printf '%s\n' "$line" | grep -cF -- >/dev/null "-e CRON_WORKSPACE_ROOT=/workspaces"; then
       all_have_root=false
       break
     fi
@@ -2537,7 +2537,7 @@ assert_soleur_host_id() {
 
   local all_have_id=true
   while IFS= read -r line; do
-    if ! printf '%s\n' "$line" | grep -qF -- "-e SOLEUR_HOST_ID=${expected}"; then
+    if ! printf '%s\n' "$line" | grep -cF -- >/dev/null "-e SOLEUR_HOST_ID=${expected}"; then
       all_have_id=false
       break
     fi
@@ -2571,14 +2571,14 @@ if [[ -f "$HOOKS_TMPL" ]]; then
   peer_env="$(printf '%s' "$rendered" | jq -r '.[] | select(.id=="deploy-peer") | (.["pass-environment-to-command"] // [])[].envname' 2>/dev/null)"
 
   TOTAL=$((TOTAL + 1))
-  if printf '%s\n' "$deploy_env" | grep -qx "SOLEUR_DEPLOY_PEERS"; then
+  if printf '%s\n' "$deploy_env" | grep -cx "SOLEUR_DEPLOY_PEERS" >/dev/null; then
     PASS=$((PASS + 1)); echo "  PASS: /hooks/deploy passes SOLEUR_DEPLOY_PEERS (fan-out trigger)"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: /hooks/deploy is missing SOLEUR_DEPLOY_PEERS — fan-out would never fire"
   fi
 
   TOTAL=$((TOTAL + 1))
-  if printf '%s\n' "$peer_env" | grep -qx "SOLEUR_DEPLOY_PEERS"; then
+  if printf '%s\n' "$peer_env" | grep -cx "SOLEUR_DEPLOY_PEERS" >/dev/null; then
     FAIL=$((FAIL + 1)); echo "  FAIL: /hooks/deploy-peer passes SOLEUR_DEPLOY_PEERS — a forwarded deploy would RE-FAN (loop)"
   else
     PASS=$((PASS + 1)); echo "  PASS: /hooks/deploy-peer does NOT pass SOLEUR_DEPLOY_PEERS (loop-prevented)"
@@ -2600,7 +2600,7 @@ assert_bwrap_canary_check() {
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "BWRAP_CANARY_CHECK"; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -cF "BWRAP_CANARY_CHECK" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: bwrap canary sandbox check runs during deploy"
   else
@@ -2622,7 +2622,7 @@ assert_bwrap_canary_failure_rollback() {
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -ne 0 ]] && printf '%s\n' "$output" | grep -qiF "sandbox"; then
+  if [[ "$actual_exit" -ne 0 ]] && printf '%s\n' "$output" | grep -ciF "sandbox" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: bwrap canary failure triggers rollback"
   else
@@ -3066,7 +3066,7 @@ assert_blocking_probe_line() {
 
   local pat failed=0
   for pat in "$@"; do
-    if ! printf '%s' "$line" | grep -qE -- "$pat"; then
+    if ! printf '%s' "$line" | grep -cE -- >/dev/null "$pat"; then
       failed=1
       echo "  (missing field pattern: $pat)"
     fi
@@ -3161,8 +3161,8 @@ assert_probe_pass_chatter_reemits() {
   # the webhook leg where no literal can find it (review finding, #8026).
   local ok_line; ok_line=$(grep -F 'SANDBOX_PROBE_OK' "$logger_file" || true)
   local ok_err=0
-  printf '%s' "$ok_line" | grep -qE 'err_chars=[0-9]+ bwrap_err="[^"]*namespace fallback engaged"$' && ok_err=1
-  if [[ "$rb" == "0" ]] && [[ "$ok" == "1" ]] && [[ "$ok_err" == "1" ]] && printf '%s' "$output" | grep -qF 'namespace fallback engaged'; then
+  printf '%s' "$ok_line" | grep -cE 'err_chars=[0-9]+ bwrap_err="[^"]*namespace fallback engaged"$' >/dev/null && ok_err=1
+  if [[ "$rb" == "0" ]] && [[ "$ok" == "1" ]] && [[ "$ok_err" == "1" ]] && printf '%s' "$output" | grep -cF 'namespace fallback engaged' >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: #8016 pass-with-chatter: no rollback, probe output re-emitted AND carried on the OK line"
   else
@@ -3224,26 +3224,26 @@ assert_probe_output_purity() {
   # have caught it was the one asserting half of what it said.
   local t
   for t in "$dp_tok" "$sk_tok" "$jwt_tok" "$wh_tok"; do
-    if printf '%s' "$line"   | grep -qF -- "$t"; then problems="$problems raw-token-in-journald"; fi
-    if printf '%s' "$output" | grep -qF -- "$t"; then problems="$problems raw-token-in-stdout"; fi
+    if printf '%s' "$line"   | grep -cF -- >/dev/null "$t"; then problems="$problems raw-token-in-journald"; fi
+    if printf '%s' "$output" | grep -cF -- >/dev/null "$t"; then problems="$problems raw-token-in-stdout"; fi
   done
   # RETENTION, not absence. The canary is ordinary diagnostic text, and preserving
   # ordinary text is the sanitizer's JOB -- asserting its absence would demand
   # over-redaction. Every fixture here asserts a secret is REMOVED; without this
   # arm nothing catches _cred_err_tail becoming too aggressive and destroying the
   # diagnostic the whole change exists to produce. Direction axis, not content.
-  if ! printf '%s' "$line" | grep -qF -- 'SENTINEL_LEAK_CANARY'; then
+  if ! printf '%s' "$line" | grep -cF -- >/dev/null 'SENTINEL_LEAK_CANARY'; then
     problems="$problems diagnostic-text-destroyed-in-journald"
   fi
   # A CR must not survive into the journald line -- it would forge a second record.
-  if printf '%s' "$line" | grep -q $'\r'; then problems="$problems CR-survived"; fi
+  if printf '%s' "$line" | grep -c $ >/dev/null'\r'; then problems="$problems CR-survived"; fi
   # The non-ASCII leg must ASSERT something (review finding, #8026): the two bytes of `é`
   # are blanked by `tr -c '[:print:]'` under LC_ALL=C, so no byte outside printable ASCII
   # may reach the journald line, and the `caf` prefix must survive as ordinary text.
   if LC_ALL=C grep -q '[^ -~]' <<<"$line"; then problems="$problems non-ascii-byte-in-journald"; fi
-  if ! printf '%s' "$line" | grep -qF 'caf '; then problems="$problems non-ascii-leg-shredded-neighbour"; fi
+  if ! printf '%s' "$line" | grep -cF 'caf ' >/dev/null; then problems="$problems non-ascii-leg-shredded-neighbour"; fi
   # The field must remain parseable: bwrap_err is last, value carries no bare quote.
-  if ! printf '%s' "$line" | grep -qE 'bwrap_err="[^"]*"$'; then problems="$problems err-field-unparseable"; fi
+  if ! printf '%s' "$line" | grep -cE 'bwrap_err="[^"]*"$' >/dev/null; then problems="$problems err-field-unparseable"; fi
 
   if [[ -z "$problems" ]]; then
     PASS=$((PASS + 1))
@@ -3481,7 +3481,7 @@ assert_adr027_pre_run_assertion() {
   )
 
   if [[ "$actual_exit" -ne 0 ]] \
-    && printf '%s\n' "$output" | grep -qF "ADR-027" \
+    && printf '%s\n' "$output" | grep -cF "ADR-027" >/dev/null \
     && [[ -z "$prod_run_lines" ]]; then
     PASS=$((PASS + 1))
     echo "  PASS: leftover soleur-web-platform aborts deploy with ADR-027 message (no prod docker-run after abort)"
@@ -3819,8 +3819,8 @@ for qs_case in "quiesced|qs_write_marker \"\$ROW_DIR/marker\" $QS_NOW" "disabled
   if [[ "$qs_want" == quiesced ]]; then qs_reason=inngest_quiesced_deploy_refused; else qs_reason=inngest_disabled_unattributed_deploy_refused; fi
   ok=0
   if [[ "$ROW_REASON" == "$qs_reason" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
-        && ! printf '%s' "$ROW_OUT" | grep -qF 'DOCKER_TRACE:pull' \
-        && ! printf '%s' "$ROW_OUT" | grep -qF 'DOCKER_TRACE:create' \
+        && ! printf '%s' "$ROW_OUT" | grep -cF 'DOCKER_TRACE:pull' >/dev/null \
+        && ! printf '%s' "$ROW_OUT" | grep -cF 'DOCKER_TRACE:create' >/dev/null \
         && grep -qF "INNGEST_DEPLOY_REFUSED: state=$qs_want unit=inactive enabled=disabled" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
   row_verdict "deploy inngest _ <tag> refuses a $qs_want unit → $qs_reason, no DOCKER_TRACE:pull" "$ok" \
     "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
@@ -3895,7 +3895,7 @@ unset QSF_M
 # deploy-inngest block (e.g. via awk between the arm's case label and `;;`).
 TOTAL=$((TOTAL + 1))
 DI_VERIFY_LINE=$(grep -nE '^[[:space:]]*verify_inngest_health[[:space:]]*$' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
-DI_SUCCESS_LINE=$(grep -nE 'SUCCESS: inngest .* deployed' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1)
+DI_SUCCESS_LINE=$(grep -nE 'SUCCESS: inngest .* deployed' "$DEPLOY_SCRIPT" | sed -n '1p' | cut -d: -f1)
 DI_FAIL_LINE=$(grep -nE 'final_write_state 1 "inngest_health_failed"' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
 if [[ -n "$DI_VERIFY_LINE" && -n "$DI_SUCCESS_LINE" && -n "$DI_FAIL_LINE" \
       && "$DI_VERIFY_LINE" -lt "$DI_FAIL_LINE" && "$DI_FAIL_LINE" -lt "$DI_SUCCESS_LINE" ]]; then
@@ -3978,11 +3978,11 @@ if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_EXIT" == "1" && "$ROW_R
       && grep -qE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=1 stderr_tail=.*enumeration failed' "$ROW_DIR/logger" 2>/dev/null \
       && ! grep -qF 'MOCKLEAKVALUE123' "$ROW_DIR/logger"; then ok=1; fi
 row_verdict "quiesce fails closed when the capture fails (quiesce_capture_failed) and stops NOTHING" "$ok" \
-  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE "$ROW_DIR/logger" 2>/dev/null | head -1)"
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE "$ROW_DIR/logger" 2>/dev/null | sed -n '1p')"
 
 # Capture stderr carrying a connection string is logged SCRUBBED (URI, user:pass@, password=).
 run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_FAIL=1 MOCK_REARM_CAPTURE_FAIL_TEXT='ERROR: capture: db down postgresql://u:Secret@h/db password=Hunter2x'"
-QC_LINE=$(grep -F 'INNGEST_QUIESCE_CAPTURE_FAILED' "$ROW_DIR/logger" 2>/dev/null | head -1 || true)
+QC_LINE=$(grep -F 'INNGEST_QUIESCE_CAPTURE_FAILED' "$ROW_DIR/logger" 2>/dev/null | sed -n '1p' || true)
 ok=0
 if [[ "$ROW_REASON" == "quiesce_capture_failed" && -n "$QC_LINE" && "$QC_LINE" == *"db down"* && "$QC_LINE" == *"redacted"* \
       && "$QC_LINE" != *Secret* && "$QC_LINE" != *postgresql://* && "$QC_LINE" != *Hunter2x* ]] \
@@ -3993,7 +3993,7 @@ row_verdict "quiesce capture stderr with postgresql://u:Secret@h/db is scrubbed 
 # Guard 5 #5b: the capture is bounded. The mock blocks 8 s against a 1 s bound; asserted as
 # non-zero (not exactly 124 — dev boxes may carry uutils timeout) and nothing stopped.
 run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_SLEEP=8 QUIESCE_CAPTURE_TIMEOUT=1"
-QC_RC=$(grep -oE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=[0-9]+' "$ROW_DIR/logger" 2>/dev/null | head -1 | grep -oE '[0-9]+$' || true)
+QC_RC=$(grep -oE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=[0-9]+' "$ROW_DIR/logger" 2>/dev/null | sed -n '1p' | grep -oE '[0-9]+$' || true)
 ok=0
 if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_EXIT" == "1" && "$ROW_UNITV" == "capture" \
       && "$QC_RC" =~ ^[0-9]+$ && "$QC_RC" -ne 0 ]]; then ok=1; fi
@@ -4051,7 +4051,7 @@ for qc_case in "failed|enabled|export MOCK_SYSTEMCTL_ACTIVE_STATE=failed MOCK_SY
   if [[ "$ROW_REASON" == "quiesce_capture_unavailable" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 && -s "$ROW_DIR/verbs" && -z "$ROW_UNITV" && ! -e "$ROW_DIR/marker" ]] \
         && grep -qF "INNGEST_QUIESCE_CAPTURE_UNAVAILABLE unit=$qc_a enabled=$qc_e state=$qc_st" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
   row_verdict "quiesce on $qc_a+$qc_e ($qc_st) → quiesce_capture_unavailable, no capture/disable/stop" "$ok" \
-    "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE_UNAVAILABLE "$ROW_DIR/logger" 2>/dev/null | head -1)"
+    "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE_UNAVAILABLE "$ROW_DIR/logger" 2>/dev/null | sed -n '1p')"
 done
 unset qc_case qc_a qc_rest qc_e qc_env qc_st
 
@@ -4116,14 +4116,14 @@ assert_state_contains "enable web-platform rejected (component_not_enableable)" 
 # enable/start. The mock's watch lines record both paths' existence AT the enable verb.
 run_inngest_row "enable inngest _ _" 'export MOCK_SYSTEMCTL_ENABLED_STATE=enabled MOCK_SYSTEMCTL_WATCH="$ROW_DIR/marker $ROW_DIR/capture.json"; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"'; printf "[]" > "$ROW_DIR/capture.json"'
 QE_SEQ=$(grep -E '^(enable|start|watch:.*)$' "$ROW_DIR/verbs" 2>/dev/null | paste -sd, - || true)
-QE_RETIRED=$(find "$ROW_DIR" -maxdepth 1 -name 'capture.json.retired-*' -print 2>/dev/null | head -1)
+QE_RETIRED=$(find "$ROW_DIR" -maxdepth 1 -name 'capture.json.retired-*' -print 2>/dev/null | sed -n '1p')
 ok=0
 if [[ "$ROW_REASON" == "enabled" && "$ROW_EXIT" == "0" \
       && "$QE_SEQ" == "enable,watch:marker=absent,watch:capture.json=absent,start,watch:marker=absent,watch:capture.json=absent" \
       && -n "$QE_RETIRED" && "$QE_RETIRED" =~ \.retired-[0-9]{9,11}$ && ! -e "$ROW_DIR/marker" && ! -e "$ROW_DIR/capture.json" ]] \
       && grep -qF "INNGEST_ENABLE: retired capture=$QE_RETIRED marker_removed=true" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
 row_verdict "enable retires the capture and removes the marker BEFORE enable/start (logged)" "$ok" \
-  "reason=$ROW_REASON seq=$QE_SEQ retired=${QE_RETIRED:-<none>} logger=$(grep -F INNGEST_ENABLE "$ROW_DIR/logger" 2>/dev/null | head -1)"
+  "reason=$ROW_REASON seq=$QE_SEQ retired=${QE_RETIRED:-<none>} logger=$(grep -F INNGEST_ENABLE "$ROW_DIR/logger" 2>/dev/null | sed -n '1p')"
 
 # Nothing to retire → capture=none marker_removed=false.
 run_inngest_row "enable inngest _ _" "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
@@ -4218,14 +4218,14 @@ RESTART_BLOCK=$(awk '/^# --- Restart action handler/,/^# --- Quiesce action hand
 # non-empty AND containing the restart handler's own `systemctl restart` — before trusting
 # the enable/disable-absence assertion.
 TOTAL=$((TOTAL + 1))
-if [[ -n "$RESTART_BLOCK" ]] && printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl restart'; then
+if [[ -n "$RESTART_BLOCK" ]] && printf '%s\n' "$RESTART_BLOCK" | grep -cE 'systemctl restart' >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: restart-purity guard captured a non-empty block containing 'systemctl restart' (awk range not vacuous)"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: restart-purity awk range captured empty/wrong block (marker renamed?) — the purity grep would pass vacuously"
 fi
-if ! printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl (enable|disable)'; then
+if ! printf '%s\n' "$RESTART_BLOCK" | grep -cE 'systemctl (enable|disable)' >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: restart handler stays pure (no enable/disable folded in) — #6178 regression guard"
 else
@@ -4457,9 +4457,9 @@ echo "--- verify_inngest_health cron-plan budget (#5145) ---"
 TOTAL=$((TOTAL + 1))
 CRON_PIN_COUNT=$(grep -cE '^[[:space:]]*local cron_max_attempts=10\b' "$DEPLOY_SCRIPT" || true)
 CRON_SEQ_COUNT=$(grep -cE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" || true)
-HEALTH_SEQ_LINE=$(grep -nE 'seq 1 "\$max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
-CRON_SEQ_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
-FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 .*http://127\.0\.0\.1:8288/v0/gql' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+HEALTH_SEQ_LINE=$(grep -nE 'seq 1 "\$max_attempts"' "$DEPLOY_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
+CRON_SEQ_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
+FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 .*http://127\.0\.0\.1:8288/v0/gql' "$DEPLOY_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
 # Probe pin scoped to the function region — a third `curl -sf --max-time 5`
 # exists outside verify_inngest_health (the deploy-arm web-platform health
 # probe), so a file-global count would be wrong.
@@ -4497,13 +4497,13 @@ RESTART_WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/restart-inngest-server.
 BOOTSTRAP_SCRIPT="$SCRIPT_DIR/inngest-bootstrap.sh"
 # tail -1 on the digit runs: "${1:-10}" tokenizes to "1" then "10" — the
 # DEFAULT is the last run, not the first.
-DG_HEALTH=$(grep -oE '\$\{1:-[0-9]+\}' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
-DG_INTERVAL=$(grep -oE '\$\{2:-[0-9]+\}' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
-DG_CRON=$(grep -oE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
+DG_HEALTH=$(grep -oE '\$\{1:-[0-9]+\}' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' | tail -1 || true)
+DG_INTERVAL=$(grep -oE '\$\{2:-[0-9]+\}' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' | tail -1 || true)
+DG_CRON=$(grep -oE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' || true)
 DG_INNGEST_UNIT=$(awk '/Description=Inngest self-hosted server/,/^UNITEOF$/' "$BOOTSTRAP_SCRIPT")
-DG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
-DG_MAX_POLLS=$(grep -oE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
-DG_POLL_INTERVAL=$(grep -oE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+DG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | sed -n '1p' | grep -oE '[0-9]+' || true)
+DG_MAX_POLLS=$(grep -oE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" | sed -n '1p' | grep -oE '[0-9]+' || true)
+DG_POLL_INTERVAL=$(grep -oE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" | sed -n '1p' | grep -oE '[0-9]+' || true)
 # Exactly-one assignment per extraction shape — a duplicate (or zero) match
 # makes the head -1 extraction silently ambiguous (e.g. a future helper
 # earlier in ci-deploy.sh with its own ${1:-N} default would hijack
@@ -4562,11 +4562,11 @@ TOTAL=$((TOTAL + 1))
 # the YAML would extract empty strings and fail on "non-integer extraction", which is how
 # this fired on the extraction PR.
 CUTOVER_WORKFLOW="$SCRIPT_DIR/../../../scripts/cutover-inngest.sh"
-QDG_ATTEMPTS=$(grep -oE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
-QDG_INTERVAL=$(grep -oE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
-QDG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
-QDG_MAX_POLLS=$(grep -oE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
-QDG_POLL_INTERVAL=$(grep -oE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+QDG_ATTEMPTS=$(grep -oE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' || true)
+QDG_INTERVAL=$(grep -oE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' || true)
+QDG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | sed -n '1p' | grep -oE '[0-9]+' || true)
+QDG_MAX_POLLS=$(grep -oE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" | sed -n '1p' | grep -oE '[0-9]+' || true)
+QDG_POLL_INTERVAL=$(grep -oE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" | sed -n '1p' | grep -oE '[0-9]+' || true)
 # Exactly-one-assignment guards so a duplicate/zero match can't silently skew the inequality.
 QDG_ATTEMPTS_COUNT=$(grep -cE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" || true)
 QDG_INTERVAL_COUNT=$(grep -cE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" || true)
@@ -4582,9 +4582,9 @@ QDG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0
 # as 120 and `--kill-after=1m` as 1 — a unit suffix changes the wall clock by 60x while the guard
 # stayed green. With the anchors a suffix breaks the shape, extraction is empty, and the guard fails.
 QDG_CAP_SHAPE='timeout --kill-after=[0-9]+ "\$\{QUIESCE_CAPTURE_TIMEOUT:-[0-9]+\}" '
-QDG_CAPTURE=$(grep -oE "$QDG_CAP_SHAPE" "$DEPLOY_SCRIPT" | head -1 | grep -oE ':-[0-9]+\}' | grep -oE '[0-9]+' || true)
+QDG_CAPTURE=$(grep -oE "$QDG_CAP_SHAPE" "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE ':-[0-9]+\}' | grep -oE '[0-9]+' || true)
 QDG_CAPTURE_COUNT=$(grep -cE 'QUIESCE_CAPTURE_TIMEOUT:-' "$DEPLOY_SCRIPT" || true)
-QDG_KILL_AFTER=$(grep -oE "$QDG_CAP_SHAPE" "$DEPLOY_SCRIPT" | head -1 | grep -oE '^timeout --kill-after=[0-9]+ ' | grep -oE '[0-9]+' || true)
+QDG_KILL_AFTER=$(grep -oE "$QDG_CAP_SHAPE" "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '^timeout --kill-after=[0-9]+ ' | grep -oE '[0-9]+' || true)
 # The peer fan-out runs on the SAME deploy-status clock after the verify: one
 # `curl … --max-time T` per peer inside fan_out_to_peers. T is extracted by shape from that
 # function's body (exactly one `--max-time <int> ` there). PEERS is hardcoded to 1: the peer list is
@@ -4754,9 +4754,9 @@ unset qp_path qp_count qp_body qp_sha QP_N QP_REF QP_FILES QP_BAD
 # and it still precedes their start. (Owned elsewhere; their own suites prove the behaviour — this
 # pins that the start writer the inventory above counts is still behind the guard.)
 QW_F="$SCRIPT_DIR/inngest-wiped-volume-verify.sh"
-QW_GATE=$(grep -nE '\( "\$unit_active" == inactive \|\| "\$unit_active" == failed \) && "\$unit_enabled" == disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
-QW_ABORT=$(grep -nE 'abort "quiesced_refused"' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
-QW_START=$(grep -nE '^[^#]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_GATE=$(grep -nE '\( "\$unit_active" == inactive \|\| "\$unit_active" == failed \) && "\$unit_enabled" == disabled' "$QW_F" 2>/dev/null | sed -n '1p' | cut -d: -f1)
+QW_ABORT=$(grep -nE 'abort "quiesced_refused"' "$QW_F" 2>/dev/null | sed -n '1p' | cut -d: -f1)
+QW_START=$(grep -nE '^[^#]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | sed -n '1p' | cut -d: -f1)
 TOTAL=$((TOTAL + 1))
 if [[ -n "$QW_GATE" && -n "$QW_ABORT" && -n "$QW_START" && "$QW_GATE" -lt "$QW_ABORT" && "$QW_ABORT" -lt "$QW_START" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: inngest-wiped-volume-verify.sh keeps its shape-only quiesced_refused gate ahead of its start (contract §3)"
@@ -4765,8 +4765,8 @@ else
 fi
 QW_F="$SCRIPT_DIR/workspaces-cutover.sh"
 # reconcile: an is-enabled == disabled test ahead of the plain start; dead-man: `= disabled ] || systemctl start` in the sh -c string.
-QW_REC_GATE=$(grep -nE '^[^#]*"\$\(systemctl is-enabled inngest-server\.service[^)]*\)" = disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
-QW_REC_START=$(grep -nE '^[[:space:]]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_REC_GATE=$(grep -nE '^[^#]*"\$\(systemctl is-enabled inngest-server\.service[^)]*\)" = disabled' "$QW_F" 2>/dev/null | sed -n '1p' | cut -d: -f1)
+QW_REC_START=$(grep -nE '^[[:space:]]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | sed -n '1p' | cut -d: -f1)
 QW_DEADMAN=$(grep -cE 'is-enabled inngest-server\.service 2>/dev/null\)\\?" = disabled \] \|\| systemctl start inngest-server\.service' "$QW_F" 2>/dev/null || true)
 TOTAL=$((TOTAL + 1))
 if [[ -n "$QW_REC_GATE" && -n "$QW_REC_START" && "$QW_REC_GATE" -lt "$QW_REC_START" && "$QW_DEADMAN" -eq 1 ]]; then
@@ -4886,8 +4886,8 @@ TOTAL=$((TOTAL + 1))
 # `f &&` guards the exit rule so the same literal in the top-of-file comment does
 # not terminate awk before the swap section begins.
 SWAP_BLOCK=$(awk '/SUCCESS: swap canary to production/{f=1} f{print} f && /docker stop --time=12 soleur-web-platform/{exit}' "$DEPLOY_SCRIPT")
-T6_CANARY=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'docker stop soleur-web-platform-canary' | head -1 | cut -d: -f1)
-T6_DRAIN=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'while cron_in_flight' | head -1 | cut -d: -f1)
+T6_CANARY=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'docker stop soleur-web-platform-canary' | sed -n '1p' | cut -d: -f1)
+T6_DRAIN=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'while cron_in_flight' | sed -n '1p' | cut -d: -f1)
 if [[ -n "$T6_CANARY" && -n "$T6_DRAIN" && "$T6_CANARY" -lt "$T6_DRAIN" ]]; then
   PASS=$((PASS + 1))
   echo "  PASS: T6 canary torn down before the drain loop in the swap branch (memory-dwell fix)"
@@ -4901,8 +4901,8 @@ fi
 # cannot extend the drain past the wall-clock (G5).
 TOTAL=$((TOTAL + 1))
 T7_FN=$(awk '/^cron_in_flight\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT")
-if printf '%s' "$T7_FN" | grep -qF 'timeout "${CRON_DRAIN_PROBE_TIMEOUT}"' \
-   && printf '%s' "$T7_FN" | grep -qF 'pgrep -f "claude"'; then
+if printf '%s' "$T7_FN" | grep -cF 'timeout "${CRON_DRAIN_PROBE_TIMEOUT}"' >/dev/null \
+   && printf '%s' "$T7_FN" | grep -cF 'pgrep -f "claude"' >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: T7 cron_in_flight is pool-agnostic (pgrep -f claude) with its own probe timeout"
 else
@@ -4952,7 +4952,7 @@ fi
 # T6/T9/wrapper-Test-6 all stay green.
 TOTAL=$((TOTAL + 1))
 WC_YML="$(dirname "$DEPLOY_SCRIPT")/../../../.github/workflows/web-platform-release.yml"
-WC_CEILING=$(grep -oE 'IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WC_YML" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+WC_CEILING=$(grep -oE 'IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WC_YML" 2>/dev/null | grep -oE '[0-9]+$' | sed -n '1p')
 WC_DRAIN=$(grep -oE 'CRON_DRAIN_TIMEOUT:-[0-9]+' "$DEPLOY_SCRIPT" | grep -oE '[0-9]+$')
 WC_MARGIN=300
 if [[ -n "$WC_CEILING" && -n "$WC_DRAIN" && $(( WC_CEILING - WC_DRAIN )) -ge "$WC_MARGIN" ]]; then
@@ -4969,8 +4969,8 @@ fi
 # order: lease write < `while cron_in_flight` < `docker stop --time=12`.
 TOTAL=$((TOTAL + 1))
 LO_BLOCK=$(awk '/SUCCESS: swap canary to production/{f=1} f{print} f && /docker stop --time=12 soleur-web-platform/{exit}' "$DEPLOY_SCRIPT")
-LO_LEASE=$(printf '%s\n' "$LO_BLOCK" | grep -nE ': > "\$CRON_DEPLOY_LEASE_FILE"' | head -1 | cut -d: -f1)
-LO_DRAIN=$(printf '%s\n' "$LO_BLOCK" | grep -nE 'while cron_in_flight' | head -1 | cut -d: -f1)
+LO_LEASE=$(printf '%s\n' "$LO_BLOCK" | grep -nE ': > "\$CRON_DEPLOY_LEASE_FILE"' | sed -n '1p' | cut -d: -f1)
+LO_DRAIN=$(printf '%s\n' "$LO_BLOCK" | grep -nE 'while cron_in_flight' | sed -n '1p' | cut -d: -f1)
 if [[ -n "$LO_LEASE" && -n "$LO_DRAIN" && "$LO_LEASE" -lt "$LO_DRAIN" ]]; then
   PASS=$((PASS + 1))
   echo "  PASS: T-LEASE-ORDER lease written (L$LO_LEASE) before drain loop (L$LO_DRAIN) — start-race closed"
@@ -5113,7 +5113,7 @@ run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/d
 TOTAL=$((TOTAL + 1))
 _frc1_marker='IMAGE_PULL: zot pull failed for'
 _frc1_hits=$(grep -cF "$_frc1_marker" "$MOCK_LOGGER_CAPTURE_FILE" || true)
-_frc1_line=$(grep -F "$_frc1_marker" "$MOCK_LOGGER_CAPTURE_FILE" | head -1)
+_frc1_line=$(grep -F "$_frc1_marker" "$MOCK_LOGGER_CAPTURE_FILE" | sed -n '1p')
 if [[ "$_frc1_hits" == "1" ]] \
    && [[ "$_frc1_line" == *"ZOTSENTINELMID"* ]] \
    && [[ "$_frc1_line" == *"ZOTSENTINELTAIL"* ]] \
@@ -5308,18 +5308,18 @@ fi
 #
 # The `HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin.../' ...)` extraction that stood here is
 # DELETED rather than left in place: once the function is gone the awk range yields an EMPTY
-# STRING, and every `! printf '%s' "$HELPER_BODY" | grep -q ...` negative over it is then
+# STRING, and every `! printf '%s' "$HELPER_BODY" | grep -c ... >/dev/null` negative over it is then
 # vacuously true -- a block that reports green while measuring nothing.
 TOTAL=$((TOTAL + 1))
 CAPTURE_BODY=$(awk '/^_docker_login_capture\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
 ZOT_GATE_BODY=$(awk '/^zot_gate_and_login\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
 RECOV_BODY=$(awk '/^pull_auth_recovery_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
-if printf '%s' "$CAPTURE_BODY" | grep -q -- '--password-stdin' \
-   && printf '%s' "$CAPTURE_BODY" | grep -qE 'printf .*"\$_tok" \| docker login' \
-   && ! printf '%s' "$CAPTURE_BODY" | grep -qE 'docker login[^|]*\$_tok' \
-   && printf '%s' "$ZOT_GATE_BODY" | grep -qE '_docker_login_capture "\$' \
-   && printf '%s' "$RECOV_BODY" | grep -q 'jq -n --arg' \
-   && ! printf '%s' "$RECOV_BODY" | grep -qE 'detail_raw|tail -c 400|\$perr'; then
+if printf '%s' "$CAPTURE_BODY" | grep -c -- >/dev/null '--password-stdin' \
+   && printf '%s' "$CAPTURE_BODY" | grep -cE 'printf .*"\$_tok" \| docker login' >/dev/null \
+   && ! printf '%s' "$CAPTURE_BODY" | grep -cE 'docker login[^|]*\$_tok' >/dev/null \
+   && printf '%s' "$ZOT_GATE_BODY" | grep -cE '_docker_login_capture "\$' >/dev/null \
+   && printf '%s' "$RECOV_BODY" | grep -c 'jq -n --arg' >/dev/null \
+   && ! printf '%s' "$RECOV_BODY" | grep -cE 'detail_raw|tail -c 400|\$perr' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: AC6 token via --password-stdin inside the shared capture helper, reached only through it; recovery payload jq -n --arg, no raw stderr"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC6 token/stderr hygiene (re-pointed onto the surviving zot login)"
@@ -5380,8 +5380,8 @@ dc_assign_count="$(printf '%s\n' "$DOCKERCFG_CODE" \
   | grep -vxE '[[:space:]]*--user "\$cosign_user" -e "DOCKER_CONFIG=\$cosign_cfg_dir" \\' \
   | grep -vxE '[[:space:]]*DOCKER_CONFIG="\$\(dirname "\$f"\)" docker logout ghcr\.io >/dev/null 2>&1 \|\| true' \
   | grep -cE '(^|[^A-Za-z0-9_])DOCKER_CONFIG=' || true)"
-if printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE 'DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/' \
-   && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE '/home/deploy' \
+if printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -cE 'DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/' >/dev/null \
+   && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -cE '/home/deploy' >/dev/null \
    && [[ "$dc_assign_count" -eq 1 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: docker config relocated off ProtectHome (/mnt/data default; DOCKER_CONFIG assigned exactly once; no /home/deploy)"
 else
@@ -5397,7 +5397,7 @@ fi
 TOTAL=$((TOTAL + 1))
 if grep -qE '^[[:space:]]*readonly[[:space:]]+GHCR_DOCKER_CONFIG="\$\{DOCKER_CONFIG\}/config\.json"' "$DEPLOY_SCRIPT" \
    && grep -qE '^[[:space:]]*export[[:space:]]+DOCKER_CONFIG="\$DEPLOY_DOCKER_CONFIG_DIR"' "$DEPLOY_SCRIPT" \
-   && ! printf '%s\n' "$DOCKERCFG_CODE" | grep -qE -- '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
+   && ! printf '%s\n' "$DOCKERCFG_CODE" | grep -cE -- >/dev/null '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
   PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; no --config path override (login-write == cosign-mount by construction)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced, or a --config path override can split login-write from cosign-mount"
@@ -5592,8 +5592,8 @@ TOTAL=$((TOTAL + 1))
 TRANSIENT_DEF_COUNT=$(grep -cE '^_pull_result_is_transient\(\) \{' "$DEPLOY_SCRIPT")
 PFE_BODY="$(awk '/^pull_failure_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
 if [[ "$TRANSIENT_DEF_COUNT" -eq 1 ]] \
-   && printf '%s' "$PFE_BODY" | grep -qE '_pull_result_is_transient "\$detail_raw"' \
-   && ! printf '%s' "$PFE_BODY" | grep -qE "grep -qiE '[^']*timed out\|temporary failure\|no route"; then
+   && printf '%s' "$PFE_BODY" | grep -cE '_pull_result_is_transient "\$detail_raw"' >/dev/null \
+   && ! printf '%s' "$PFE_BODY" | grep -cE "grep -qiE '[^']*timed out\|temporary failure\|no route" >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: single _pull_result_is_transient definition; pull_failure_event calls the shared predicate (no inline network regex)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-7 (transient_def=$TRANSIENT_DEF_COUNT; expected exactly 1 def + shared-predicate call + no inline network regex in pull_failure_event)"
@@ -5911,8 +5911,8 @@ echo "--- #6497 T-5B-9: zot_gate_degraded_event threads HOST_ID into its payload
 TOTAL=$((TOTAL + 1))
 ZGD_BODY="$(awk '/^zot_gate_degraded_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
 if [[ -n "$ZGD_BODY" ]] \
-   && printf '%s' "$ZGD_BODY" | grep -qE -- '--arg h "\$\{HOST_ID:-\}"' \
-   && printf '%s' "$ZGD_BODY" | grep -qE 'host_id: \$h'; then
+   && printf '%s' "$ZGD_BODY" | grep -cE -- >/dev/null '--arg h "\$\{HOST_ID:-\}"' \
+   && printf '%s' "$ZGD_BODY" | grep -cE 'host_id: \$h' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: zot_gate_degraded_event threads --arg h \"\${HOST_ID:-}\" into tags.host_id"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: zot_gate_degraded_event must pass --arg h \"\${HOST_ID:-}\" AND put host_id: \$h in tags"
@@ -5948,15 +5948,15 @@ run_deploy_zot_login_stderr "$T10D/s_a.txt" 'zqxjv totally unrecognized failure 
 run_deploy_zot_login_stderr "$T10D/s_b.txt" '' "$T10D/l_b.txt" 'zqxjv the error went to stdout instead'
 # (c) H-B-nowhere: a SILENT failure — no stderr, no stdout, only an rc
 run_deploy_zot_login_stderr "$T10D/s_c.txt" '' "$T10D/l_c.txt" '' 'MOCK_ZOT_LOGIN_FAIL_RC=1'
-T10_A="$(grep -o 'class=unclassified.*' "$T10D/l_a.txt" 2>/dev/null | head -1)"
-T10_B="$(grep -o 'class=unclassified.*' "$T10D/l_b.txt" 2>/dev/null | head -1)"
-T10_C="$(grep -o 'class=unclassified.*' "$T10D/l_c.txt" 2>/dev/null | head -1)"
+T10_A="$(grep -o 'class=unclassified.*' "$T10D/l_a.txt" 2>/dev/null | sed -n '1p')"
+T10_B="$(grep -o 'class=unclassified.*' "$T10D/l_b.txt" 2>/dev/null | sed -n '1p')"
+T10_C="$(grep -o 'class=unclassified.*' "$T10D/l_c.txt" 2>/dev/null | sed -n '1p')"
 if [[ -n "$T10_A" && -n "$T10_B" && -n "$T10_C" ]] \
-   && printf '%s' "$T10_A" | grep -qE 'stderr_chars=[1-9][0-9]*' \
-   && printf '%s' "$T10_B" | grep -q 'stderr_chars=0' \
-   && printf '%s' "$T10_B" | grep -qE 'stdout_chars=[1-9][0-9]*' \
-   && printf '%s' "$T10_C" | grep -q 'stderr_chars=0' \
-   && printf '%s' "$T10_C" | grep -q 'stdout_chars=0' \
+   && printf '%s' "$T10_A" | grep -cE 'stderr_chars=[1-9][0-9]*' >/dev/null \
+   && printf '%s' "$T10_B" | grep -c 'stderr_chars=0' >/dev/null \
+   && printf '%s' "$T10_B" | grep -cE 'stdout_chars=[1-9][0-9]*' >/dev/null \
+   && printf '%s' "$T10_C" | grep -c 'stderr_chars=0' >/dev/null \
+   && printf '%s' "$T10_C" | grep -c 'stdout_chars=0' >/dev/null \
    && [[ "$T10_A" != "$T10_B" && "$T10_B" != "$T10_C" && "$T10_A" != "$T10_C" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: the three unclassified states emit three DISTINCT payloads"
 else
@@ -5977,7 +5977,7 @@ TOTAL=$((TOTAL + 1))
 T11D=$(mktemp -d)
 T11_LONG="zqxjv$(printf 'a%.0s' $(seq 1 600))"   # 605 chars, matches no arm, first token is the lot
 run_deploy_zot_login_stderr "$T11D/s.txt" "$T11_LONG" "$T11D/l.txt"
-T11_N="$(grep -o 'stderr_chars=[0-9]*' "$T11D/l.txt" 2>/dev/null | head -1 | cut -d= -f2)"
+T11_N="$(grep -o 'stderr_chars=[0-9]*' "$T11D/l.txt" 2>/dev/null | sed -n '1p' | cut -d= -f2)"
 if [[ -n "$T11_N" && "$T11_N" -gt 400 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: stderr_chars=$T11_N — the true length, past the 400 truncation edge"
 else
@@ -5996,7 +5996,7 @@ TOTAL=$((TOTAL + 1))
 T11BD=$(mktemp -d)
 T11B_LONG="zqxjv$(printf 'b%.0s' $(seq 1 600))"   # 605 chars on STDOUT, nothing on stderr
 run_deploy_zot_login_stderr "$T11BD/s.txt" '' "$T11BD/l.txt" "$T11B_LONG"
-T11B_N="$(grep -o 'stdout_chars=[0-9]*' "$T11BD/l.txt" 2>/dev/null | head -1 | cut -d= -f2)"
+T11B_N="$(grep -o 'stdout_chars=[0-9]*' "$T11BD/l.txt" 2>/dev/null | sed -n '1p' | cut -d= -f2)"
 if [[ -n "$T11B_N" && "$T11B_N" -gt 400 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: stdout_chars=$T11B_N — a real length; a boolean or a truncation would be <=1 or 400"
 else
@@ -6181,7 +6181,7 @@ else
   T16_CLOSED="$(printf '%s\n' "$TOK_BODY" | grep -oE "printf '[a-zA-Z]+'" | grep -oE "'[a-zA-Z]+'" | tr -d "'" | sort -u)"
   T16_CLOSED_N="$(printf '%s\n' "$T16_CLOSED" | grep -c .)"
   _t16_tok_closed() {
-    printf '%s\n' "$T16_CLOSED" | grep -qxF "$1"
+    printf '%s\n' "$T16_CLOSED" | grep -cxF "$1" >/dev/null
   }
   # _login_kw's oracle needs no member list: its ENTIRE output vocabulary is comma-joined
   # lowercase literals, so `^([a-z]+,)*$` is the closed-form property. Any Form-A mutation that
@@ -6272,7 +6272,7 @@ rm -f "$T16_LIB"
 #      was `grep -q`, whose normal non-match returns 1. There is no `grep -q` here at all, so the
 #      dominant abort class is designed out AT THE ROOT rather than contained — a strict
 #      improvement on the plan, and the reason its falsifier no longer falsifies.
-#   2. The plan's abort measurement is real but TOP-LEVEL ONLY. `kw="$(… | grep -q ZZZ …)"` does
+#   2. The plan's abort measurement is real but TOP-LEVEL ONLY. `kw="$(… | grep -c ZZZ >/dev/null …)"` does
 #      abort under `set -euo pipefail` at top level; the SAME code inside a function invoked
 #      through a command substitution does NOT — and `$( ( _login_hatch … ) )` is exactly how all
 #      three sites call it.
@@ -6698,8 +6698,8 @@ assert_cred_fail_shape() {
   d=$(mktemp -d); f="$d/logger.txt"; : > "$f"
   run_deploy_cred_capture "$f" "$fixture" || true
   local cred_line gate_line
-  cred_line="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$f" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | head -1)"
-  gate_line="$(grep -F 'ZOT_GATE: doppler read FAILED' "$f" 2>/dev/null | head -1)"
+  cred_line="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$f" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | sed -n '1p')"
+  gate_line="$(grep -F 'ZOT_GATE: doppler read FAILED' "$f" 2>/dev/null | sed -n '1p')"
   # POSITIVE 1 — the observation marker exists and carries BOTH measured fields.
   [[ -n "$cred_line" ]] || bad="${bad}\n    no SOLEUR_DEPLOY_CRED_FAIL line for secret=ZOT_REGISTRY_URL"
   case "$cred_line" in
@@ -7043,7 +7043,7 @@ TOTAL=$((TOTAL + 1))
 T2B_D=$(mktemp -d); T2B_F="$T2B_D/logger.txt"; : > "$T2B_F"
 run_deploy_cred_capture "$T2B_F" \
   'export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR="Doppler Error: Invalid Auth token"' || true
-if grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T2B_F" 2>/dev/null | grep -qF 'Invalid Auth token'; then
+if grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T2B_F" 2>/dev/null | grep -cF 'Invalid Auth token' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: the doppler stderr tail rides the marker (it is no longer discarded)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: the doppler stderr tail never reached journald"
@@ -7066,7 +7066,7 @@ T3_STDERR="Doppler Error: ${T3_FILLER}${T3_CANARY}"$'\t'$'\a'" TAILSENTINEL7095"
 T3_D=$(mktemp -d); T3_F="$T3_D/logger.txt"; : > "$T3_F"
 run_deploy_cred_capture "$T3_F" \
   "export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR=\"\$T3_STDERR\"" || true
-T3_LINE="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T3_F" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | head -1)"
+T3_LINE="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T3_F" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | sed -n '1p')"
 # `err="…"` is the LAST field on the line precisely so the payload is extractable without a parser.
 T3_PAY="${T3_LINE#*err=\"}"; T3_PAY="${T3_PAY%\"}"
 T3_BAD=""
@@ -7121,14 +7121,14 @@ T4_BAD=""
 # POSITIVE — the marker names each SENTRY_* secret that came back empty. All three, not one: a
 # single-secret assertion passes against a loop that reports only its first iteration.
 for _t4s in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY; do
-  grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | grep -qF "secret=$_t4s" \
+  grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | grep -cF "secret=$_t4s" >/dev/null \
     || T4_BAD="${T4_BAD}\n    no SOLEUR_DEPLOY_CRED_FAIL for secret=$_t4s"
 done
 unset _t4s
 # NEGATIVE (#8036 1c) — no cred-fail marker may name a GHCR secret, because the prelude reads
 # none. This is the half that catches the read being restored: a positive-only row would stay
 # green with a GHCR_READ_TOKEN fetch quietly re-added beside the SENTRY_* loop.
-if grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | grep -qE 'secret=GHCR_READ_(USER|TOKEN)'; then
+if grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | grep -cE 'secret=GHCR_READ_(USER|TOKEN)' >/dev/null; then
   T4_BAD="${T4_BAD}\n    a SOLEUR_DEPLOY_CRED_FAIL named a GHCR secret — the retired host-side read is back"
 fi
 if [[ -z "$T4_BAD" ]]; then
@@ -7335,7 +7335,7 @@ assert_marker_field() {
   # [a-z0-9_] silently truncates it to `deploy` — which is the OTHER hook's id, so the
   # assertion compares a real value against a real value and can false-pass. Measured: this
   # exact omission reported `expected deploy-peer, got deploy` against a correct marker.
-  actual=$(printf '%s' "$line" | grep -oE "${field}=[a-z0-9_-]+" | head -1 | cut -d= -f2)
+  actual=$(printf '%s' "$line" | grep -oE "${field}=[a-z0-9_-]+" | sed -n '1p' | cut -d= -f2)
   if [[ "$actual" == "$expected" ]]; then
     PASS=$((PASS + 1)); echo "  PASS: $label ($field=$expected)"
   else
@@ -7370,7 +7370,7 @@ assert_marker_field "hook id reported when passed" absent "export SOLEUR_DEPLOY_
 # credential byte. Assert against the FIXTURE TOKEN specifically, not just "looks clean".
 TOTAL=$((TOTAL + 1))
 _purity_line=$(_marker_run present "")
-if [[ -n "$_purity_line" ]] && ! printf '%s' "$_purity_line" | grep -qF 'dp.st.prd.fixture-not-a-real-token'; then
+if [[ -n "$_purity_line" ]] && ! printf '%s' "$_purity_line" | grep -cF 'dp.st.prd.fixture-not-a-real-token' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: marker carries no credential bytes"
 else
   FAIL=$((FAIL + 1))
@@ -7397,7 +7397,7 @@ _ids=$(grep -A3 '"envname": "SOLEUR_DEPLOY_HOOK_ID"' "$_tmpl" 2>/dev/null | grep
 _ids_alt=$(grep -B3 '"envname": "SOLEUR_DEPLOY_HOOK_ID"' "$_tmpl" 2>/dev/null | grep -oE '"name": "[a-z-]+"' | cut -d'"' -f4 | sort)
 _ids="$(printf '%s\n%s\n' "$_ids" "$_ids_alt" | grep -E '^(deploy|deploy-peer)$' | sort -u)"
 _n=$(printf '%s\n' "$_ids" | grep -c .)
-if [[ "$_n" -eq 2 ]] && printf '%s\n' "$_ids" | grep -qx 'deploy' && printf '%s\n' "$_ids" | grep -qx 'deploy-peer'; then
+if [[ "$_n" -eq 2 ]] && printf '%s\n' "$_ids" | grep -cx 'deploy' >/dev/null && printf '%s\n' "$_ids" | grep -cx 'deploy-peer' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: deploy and deploy-peer carry distinct SOLEUR_DEPLOY_HOOK_ID values"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: expected 2 distinct hook ids (deploy, deploy-peer), got $_n: $(printf '%s' "$_ids" | tr '\n' ' ')"
@@ -7643,7 +7643,7 @@ assert_ghcr_cfg_one_line_absent_cfg() {
   _gcfg_place "$d" absent
   run_ghcr_cfg_capture "$d" ""
   n="$(_gcfg_lines "$d/logger.txt" | grep -c . || true)"
-  if [[ "$n" == "1" ]] && _gcfg_lines "$d/logger.txt" | grep -qE ' swept=na_[a-z]+ '; then
+  if [[ "$n" == "1" ]] && _gcfg_lines "$d/logger.txt" | grep -cE ' swept=na_[a-z]+ ' >/dev/null; then
     PASS=$((PASS + 1)); echo "  PASS: T-1b-3 exactly one SOLEUR_DEPLOY_GHCR_CONFIG line on the sweep-declined path, carrying a swept=na_* refusal token (#8036 1c)"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-3 sweep-declined path: $n marker line(s); marker: $(_gcfg_lines "$d/logger.txt")"
@@ -8076,8 +8076,8 @@ _1c_place "$T1C5"
 run_1c "$T1C5" "export MOCK_ZOT_CONFIGURED=1"
 # `|| true` INSIDE the substitution: a no-match grep exits 1, which under `set -e` would abort the
 # whole suite rather than leave the variable empty for the `-n` guard below to report.
-_1c5_sentry="$(grep -nE '^SENTRY_INGEST_DOMAIN$' "$T1C5/doppler.txt" | head -1 | cut -d: -f1 || true)"
-_1c5_zot="$(grep -nE '^ZOT_REGISTRY_URL$' "$T1C5/doppler.txt" | head -1 | cut -d: -f1 || true)"
+_1c5_sentry="$(grep -nE '^SENTRY_INGEST_DOMAIN$' "$T1C5/doppler.txt" | sed -n '1p' | cut -d: -f1 || true)"
+_1c5_zot="$(grep -nE '^ZOT_REGISTRY_URL$' "$T1C5/doppler.txt" | sed -n '1p' | cut -d: -f1 || true)"
 if [[ -n "$_1c5_sentry" && -n "$_1c5_zot" && "$_1c5_sentry" -lt "$_1c5_zot" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: T-1c-5 the SENTRY_* prefetch still runs and precedes the zot gate's first Doppler read (#8036 1c / #7095)"
 else

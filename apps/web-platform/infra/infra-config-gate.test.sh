@@ -356,11 +356,11 @@ else
   # (1) production INVOKES the extracted body. Anchored on the `run:` command
   #     shape, not a bare basename: a bare grep would match a comment naming
   #     the file (cq-assert-anchor-not-bare-token).
-  invoke_line=$(grep -nE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF" | head -1 | cut -d: -f1)
+  invoke_line=$(grep -nE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF" | sed -n '1p' | cut -d: -f1)
   # (2) the terminal adjudication is called at all, inside the extracted body
-  adj_line=$(grep -nE '(^|[^_[:alnum:]])adjudicate_infra_config[[:space:]]+"\$STATUS_RESPONSE"' "$VERIFY_SH" | head -1 | cut -d: -f1)
+  adj_line=$(grep -nE '(^|[^_[:alnum:]])adjudicate_infra_config[[:space:]]+"\$STATUS_RESPONSE"' "$VERIFY_SH" | sed -n '1p' | cut -d: -f1)
   # (3) the in-loop fast-path uses count_invariant (NOT adjudicate)
-  ci_line=$(grep -nE 'infra_config_count_invariant[[:space:]]+"\$STATUS_RESPONSE"' "$VERIFY_SH" | head -1 | cut -d: -f1)
+  ci_line=$(grep -nE 'infra_config_count_invariant[[:space:]]+"\$STATUS_RESPONSE"' "$VERIFY_SH" | sed -n '1p' | cut -d: -f1)
   if [[ -z "$invoke_line" ]]; then
     fail "apply-deploy-pipeline-fix.yml does NOT invoke infra-config-verify.sh — the extracted gate is DEAD in production"
   elif [[ -z "$adj_line" ]]; then
@@ -958,7 +958,7 @@ fi
 if grep -n 'schema_version' "$REAL_INFRA/infra-config-gate.sh" \
    | awk -F: -v s="$(grep -n '^infra_config_count_invariant()' "$REAL_INFRA/infra-config-gate.sh" | cut -d: -f1)" \
              -v e="$(grep -n '^infra_config_content_assert()'  "$REAL_INFRA/infra-config-gate.sh" | cut -d: -f1)" \
-             '$1>s && $1<e' | grep -q .; then
+             '$1>s && $1<e' | grep -c . >/dev/null; then
   fail "the activation contract leaked into infra_config_count_invariant — the poll break-condition must stay timing-independent"
 else
   pass "activation contract is absent from the poll break-condition (terminal only)"
@@ -1610,8 +1610,8 @@ else
   fi
   # Ordering across the boundary: the sensor read must precede the step that runs
   # the verification body.
-  DPF_LINE=$(grep -nE '\$\(infra_config_dpf_replaced[[:space:]]' "$APPLY_WF" | head -1 | cut -d: -f1)
-  INVOKE_LINE=$(grep -nE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF" | head -1 | cut -d: -f1)
+  DPF_LINE=$(grep -nE '\$\(infra_config_dpf_replaced[[:space:]]' "$APPLY_WF" | sed -n '1p' | cut -d: -f1)
+  INVOKE_LINE=$(grep -nE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF" | sed -n '1p' | cut -d: -f1)
   if [[ -n "$DPF_LINE" && -n "$INVOKE_LINE" && "$DPF_LINE" -lt "$INVOKE_LINE" ]]; then
     pass "#7104 call-site: the sensor is read (L$DPF_LINE) before the step that runs the verification body (L$INVOKE_LINE)"
   else
@@ -2104,7 +2104,7 @@ TASK_40_MEASURED_CARDINALITY=1
 # WHY THIS IS NOW A PARSED-YAML EQUALITY AND NOT A grep (#7104 PR-B review).
 #
 # The three assertions this block replaces were: a `grep -qE "...repush_graded == '1'"` over
-# the WHOLE FILE, and a `grep -nE '^\s+id: repush_apply$' -A2 | grep -qE "if: success\(\)"`.
+# the WHOLE FILE, and a `grep -nE '^\s+id: repush_apply$' -A2 | grep -cE "if: success\(\)" >/dev/null`.
 # Both are extractor escapes, and a mutation battery run against them measured the top
 # survivor of the whole PR:
 #
@@ -2321,7 +2321,7 @@ fi
 # Scoped to the LEDGER, not a bare grep: this workflow legitimately comments on #4804 and on
 # drift issues, and an unscoped assert would fail on pre-existing, correct code — the
 # false-positive that a bare-token assert produces.
-if grep -nE 'gh issue (comment|reopen)' "$APPLY_WF" | grep -qiE 'ledger|LEDGER_TITLE|\$num'; then
+if grep -nE 'gh issue (comment|reopen)' "$APPLY_WF" | grep -ciE 'ledger|LEDGER_TITLE|\$num' >/dev/null; then
   fail "#7104 AC18: the workflow comments on or reopens the ledger issue — either would notify, defeating the property the closed-ledger design buys by construction"
 else
   pass "#7104 AC18: the workflow never comments on or reopens the ledger (it is created closed and only edited)"

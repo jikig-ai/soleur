@@ -6,7 +6,7 @@
 # `run: bash …` steps in .github/workflows/infra-validation.yml, and this gate asserted that
 # step shape. #8736 replaced ~146 serial named steps with a K=4 matrix whose legs all invoke
 # apps/web-platform/infra/run-registered-suites.sh, and the runner now DERIVES its execute set
-# by `git ls-files` glob: presence under apps/web-platform/infra/ IS registration (ADR-251).
+# by `git ls-files` glob: presence under apps/web-platform/infra/ IS registration (ADR-252).
 #
 # That makes the old per-suite step check tautological — every tracked suite is registered by
 # construction — so what remains to gate is the CONNECTION, and the exceptions:

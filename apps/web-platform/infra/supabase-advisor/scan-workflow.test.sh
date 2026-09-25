@@ -13,7 +13,7 @@
 # runs in ZERO CI workflows (it is a local-only tool here)", is no longer true.)
 #
 # It reaches CI through the deploy-script-tests matrix legs — presence under
-# apps/web-platform/infra/ IS registration since #8736 (ADR-251), so no explicit
+# apps/web-platform/infra/ IS registration since #8736 (ADR-252), so no explicit
 # step is needed; the checks below pin the runner connection instead.
 # That is the same defect shape this whole gate exists to catch, which is why
 # the wiring is asserted by AC9b rather than assumed.
@@ -398,7 +398,7 @@ fi
 # the coverage-bearing tier depend on the advisory one's health — ADR-112
 # inverted through the back door). The behavioural harness proves both directions
 # empirically; this is the structural companion.
-rung3_gate="$(awk '/^# --- Rung 3:/,/^# --- Rung 4:/' "$SCRIPT" | grep -E '^if ' | head -1)"
+rung3_gate="$(awk '/^# --- Rung 3:/,/^# --- Rung 4:/' "$SCRIPT" | grep -E '^if ' | sed -n '1p')"
 if [[ "$rung3_gate" == *'identity_ok'* ]]; then
   pass "catalog rung is gated on identity_ok (runs even when the advisor is broken)"
 else
@@ -520,9 +520,9 @@ echo "== cross-file: the Inngest schedule and the Sentry monitor window agree ==
 # pages nightly for a run that arrived on time, or opens a blind window. Both
 # operands are extracted by shape — hardcoding either would re-create the drift
 # class this asserts against.
-fn_cron="$(grep -oE '\{ cron: "[^"]+" \}' "$INNGEST_FN" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+fn_cron="$(grep -oE '\{ cron: "[^"]+" \}' "$INNGEST_FN" | sed -n '1p' | sed -E 's/.*"([^"]+)".*/\1/')"
 tf_cron="$(awk '/resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan"/,/^}/' "$MONITORS_TF" |
-  grep -E '^\s*schedule\s*=' | head -1 | sed -E 's/.*crontab\s*=\s*"([^"]+)".*/\1/')"
+  grep -E '^\s*schedule\s*=' | sed -n '1p' | sed -E 's/.*crontab\s*=\s*"([^"]+)".*/\1/')"
 if [[ -n "$fn_cron" && "$fn_cron" == "$tf_cron" ]]; then
   pass "Inngest cron '$fn_cron' == Sentry monitor crontab '$tf_cron'"
 else
@@ -531,8 +531,8 @@ fi
 
 echo "== cross-file: slugify(tf name) == workflow monitor-slug =="
 tf_name="$(awk '/resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan"/,/^}/' "$MONITORS_TF" \
-  | grep -E '^\s*name\s*=' | head -1 | sed -E 's/.*=\s*"([^"]+)".*/\1/')"
-wf_slug="$(grep -E '^\s*monitor-slug:' "$WORKFLOW" | head -1 | sed -E 's/.*monitor-slug:\s*//')"
+  | grep -E '^\s*name\s*=' | sed -n '1p' | sed -E 's/.*=\s*"([^"]+)".*/\1/')"
+wf_slug="$(grep -E '^\s*monitor-slug:' "$WORKFLOW" | sed -n '1p' | sed -E 's/.*monitor-slug:\s*//')"
 # Sentry derives the slug by slugifying `name`; writing `name` already
 # slug-shaped makes the two literally equal.
 tf_slug="$(printf '%s' "$tf_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
@@ -547,7 +547,7 @@ echo "== cross-file: model.c4's enumeration matches live cron-monitors.tf =="
 # untouched would have locked in a now-false model — verify the invariant, not
 # the silence.
 tf_count="$(grep -c '^resource "sentry_cron_monitor"' "$MONITORS_TF")"
-c4_count="$(grep -oE 'Of [0-9]+ cron monitors' "$MODEL_C4" | head -1 | grep -oE '[0-9]+')"
+c4_count="$(grep -oE 'Of [0-9]+ cron monitors' "$MODEL_C4" | sed -n '1p' | grep -oE '[0-9]+')"
 if [[ -n "$c4_count" && "$tf_count" == "$c4_count" ]]; then
   pass "model.c4 says $c4_count cron monitors; cron-monitors.tf declares $tf_count"
 else

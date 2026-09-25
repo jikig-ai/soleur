@@ -56,8 +56,8 @@ fi
 # Anchor `baked_ln` on the CODE construct (the `[ -r … ]` guard), NOT the bare path — the path also
 # appears in the header COMMENT above the code, so a bare-token `head -1` would match the comment and
 # pass even if the code were reordered doppler-first (the exact vacuity this check exists to prevent).
-baked_ln=$(grep -nE '\[ -r /etc/default/luks-monitor \]' "$EMIT" | head -1 | cut -d: -f1 || true)
-dop_ln=$(grep -nE 'doppler secrets get SENTRY_DSN' "$EMIT" | head -1 | cut -d: -f1 || true)
+baked_ln=$(grep -nE '\[ -r /etc/default/luks-monitor \]' "$EMIT" | sed -n '1p' | cut -d: -f1 || true)
+dop_ln=$(grep -nE 'doppler secrets get SENTRY_DSN' "$EMIT" | sed -n '1p' | cut -d: -f1 || true)
 if [ -n "$baked_ln" ] && { [ -z "$dop_ln" ] || [ "$baked_ln" -lt "$dop_ln" ]; }; then
   ok "workspaces-luks-emit.sh reads the BAKED DSN before any Doppler fallback (DP-9)"
 else
@@ -131,10 +131,10 @@ fi
 # element reds this and forces a human to re-read it.
 drift_block="$(awk '/^resource "sentry_alert" "workspaces_luks_drift"/{p=1} p{print} p&&/^}/{exit}' "$SENTRY")"
 drift_logic_n="$(printf '%s\n' "$drift_block" | grep -cE '^[[:space:]]*logic_type[[:space:]]*=' || true)"
-if printf '%s\n' "$drift_block" | grep -q 'value = "workspaces-luks"' \
-  && printf '%s\n' "$drift_block" | grep -q 'value = "workspaces-luks-drift"' \
+if printf '%s\n' "$drift_block" | grep -c 'value = "workspaces-luks"' >/dev/null \
+  && printf '%s\n' "$drift_block" | grep -c 'value = "workspaces-luks-drift"' >/dev/null \
   && [ "$drift_logic_n" = "1" ] \
-  && printf '%s\n' "$drift_block" | grep -qE '^[[:space:]]*logic_type[[:space:]]*=[[:space:]]*"all"'; then
+  && printf '%s\n' "$drift_block" | grep -cE '^[[:space:]]*logic_type[[:space:]]*=[[:space:]]*"all"' >/dev/null; then
   ok "sentry_alert.workspaces_luks_drift ANDs (one action_filter, logic_type=all) feature=workspaces-luks AND op=workspaces-luks-drift"
 else
   no "sentry_alert.workspaces_luks_drift must carry exactly ONE action_filters element with logic_type=\"all\" over BOTH feature=workspaces-luks and op=workspaces-luks-drift (a single-tag rule, logic_type=any, or a second OR-ed element all page on either tag alone). Found ${drift_logic_n} logic_type line(s)."
@@ -398,10 +398,10 @@ done
 # literal grep pattern from the workflow and run it against a real success emission — producer and
 # consumer pinned to each other, not both to a hand-copied string.
 VERIFY_WF="$DIR/../../../.github/workflows/workspaces-luks-verify.yml"
-wf_anchor="$(grep -oE "grep -cE '\^\\\\\[luks-monitor\\\\\] SOLEUR_WORKSPACES_READYZ ready=true '" "$VERIFY_WF" | head -1 | sed -E "s/^grep -cE '//; s/'$//")"
+wf_anchor="$(grep -oE "grep -cE '\^\\\\\[luks-monitor\\\\\] SOLEUR_WORKSPACES_READYZ ready=true '" "$VERIFY_WF" | sed -n '1p' | sed -E "s/^grep -cE '//; s/'$//")"
 mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
 mon_run LUKS_MONITOR_ASSERT_READYZ=1
-if [ -n "$wf_anchor" ] && printf '%s\n' "$MON_OUT" | grep -qE "$wf_anchor"; then
+if [ -n "$wf_anchor" ] && printf '%s\n' "$MON_OUT" | grep -cE "$wf_anchor" >/dev/null; then
   ok "the verify workflow's verdict-line anchor matches the emitted line (producer/consumer pinned)"
 else
   no "the workflow's positive-control anchor [$wf_anchor] does NOT match the emitted verdict line — the workflow would fail closed on every run: ${MON_OUT:0:200}"

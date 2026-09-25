@@ -148,8 +148,8 @@ fi
 cases=$((cases + 1)); pass "the address enumeration is non-vacuous (${_n_addr} hcloud_*/doppler_* resources)"
 
 # ── 2. A DISTINCT STATE KEY — the control, not a guard ─────────────────────────────
-reh_key="$(grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' "$REH_CODE" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
-par_key="$(sed 's/^[[:space:]]*#.*$//' "$DIR/main.tf" | grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+reh_key="$(grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' "$REH_CODE" | sed -n '1p' | sed 's/.*"\([^"]*\)"$/\1/')"
+par_key="$(sed 's/^[[:space:]]*#.*$//' "$DIR/main.tf" | grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' | sed -n '1p' | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_key" && -n "$par_key" && "$reh_key" != "$par_key" ]]; then
   cases=$((cases + 1)); pass "the rehearsal backend key (${reh_key}) is DISTINCT from the parent root's (${par_key})"
 else
@@ -244,8 +244,8 @@ for _hk in host_ssh_ed25519_private_key host_ssh_ed25519_public_key; do
     *) cases=$((cases + 1)); fail "${_hk} is missing from the divergence allowlist — every rehearsal diverges on it by construction" ;;
   esac
 done
-if printf '%s\n' "$_module_block" | grep -qE '^[[:space:]]+host_ssh_ed25519_private_key[[:space:]]*=[[:space:]]*tls_private_key\.rehearsal_host_ssh\.private_key_openssh[[:space:]]*$' \
-   && printf '%s\n' "$_module_block" | grep -qE '^[[:space:]]+host_ssh_ed25519_public_key[[:space:]]*=[[:space:]]*trimspace\(tls_private_key\.rehearsal_host_ssh\.public_key_openssh\)[[:space:]]*$' \
+if printf '%s\n' "$_module_block" | grep -cE '^[[:space:]]+host_ssh_ed25519_private_key[[:space:]]*=[[:space:]]*tls_private_key\.rehearsal_host_ssh\.private_key_openssh[[:space:]]*$' >/dev/null \
+   && printf '%s\n' "$_module_block" | grep -cE '^[[:space:]]+host_ssh_ed25519_public_key[[:space:]]*=[[:space:]]*trimspace\(tls_private_key\.rehearsal_host_ssh\.public_key_openssh\)[[:space:]]*$' >/dev/null \
    && grep -qE '^resource "tls_private_key" "rehearsal_host_ssh"' "$REH_CODE"; then
   cases=$((cases + 1)); pass "the rehearsal mints its own SSH host key and binds both halves from it"
 else
@@ -277,7 +277,7 @@ reh_ingest="$(sed 's/^[[:space:]]*#.*$//' "$REH/variables.tf" \
   | awk '/^variable "betterstack_ingest_url"/{i=1} i&&/^[[:space:]]*default[[:space:]]*=/{print;exit} i&&/^}/{exit}' \
   | sed 's/.*"\([^"]*\)".*/\1/')"
 prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/git-data.tf" \
-  | grep -oE 'git_data_betterstack_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 \
+  | grep -oE 'git_data_betterstack_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | sed -n '1p' \
   | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_ingest" && -n "$prod_ingest" && "$reh_ingest" == "$prod_ingest" ]]; then
   _value_proven="${_value_proven} betterstack_ingest_url"
@@ -479,7 +479,7 @@ for _pair in "$DIR/git-data.tf:git_data" "$REH/rehearsal.tf:rehearsal"; do
           | awk -v r="$_res" '$0 ~ "^resource \"hcloud_server\" \""r"\"" {i=1} i; i&&/^}/{exit}')"
   if [[ -z "$_blk" ]]; then
     _srv_drift="${_srv_drift} $(basename "$_f")(no hcloud_server.${_res} block)"
-  elif ! printf '%s\n' "$_blk" | grep -qE '^[[:space:]]*server_type[[:space:]]*=[[:space:]]*var\.git_data_server_type[[:space:]]*$'; then
+  elif ! printf '%s\n' "$_blk" | grep -cE '^[[:space:]]*server_type[[:space:]]*=[[:space:]]*var\.git_data_server_type[[:space:]]*$' >/dev/null; then
     _srv_drift="${_srv_drift} $(basename "$_f")"
   fi
 done
@@ -500,7 +500,7 @@ while IFS= read -r _line; do
   # `source` is a module META-ARGUMENT, not a templatefile argument, and both roots' values
   # are asserted BY NAME in arm 5 — a stricter check than "these two strings differ".
   [[ "$_k" == "source" ]] && continue
-  _pexpr="$(printf '%s\n' "$_prod_binds" | grep -E "^${_k}=" | head -1 | sed "s/^${_k}=//")"
+  _pexpr="$(printf '%s\n' "$_prod_binds" | grep -E "^${_k}=" | sed -n '1p' | sed "s/^${_k}=//")"
   # A ONE-SIDED binding is a divergence, not a skip. The original `continue` meant any input
   # the rehearsal overrides and production does not (or vice versa) never entered _derived,
   # never entered _common, and so could never reach REHEARSAL_DIVERGENCE for R6 to refuse.
@@ -522,7 +522,7 @@ while IFS= read -r _line; do
   [[ -z "$_line" ]] && continue
   _k="${_line%%=*}"
   [[ "$_k" == "source" ]] && continue
-  printf '%s\n' "$_reh_binds" | grep -qE "^${_k}=" && continue
+  printf '%s\n' "$_reh_binds" | grep -cE "^${_k}=" >/dev/null && continue
   _onesided="${_onesided} ${_k}"
   _derived="${_derived}${_derived:+,}${_k}"
 done <<< "$_prod_binds"
@@ -542,7 +542,7 @@ if [[ -n "$_onesided" ]]; then
   cases=$((cases + 1)); fail "module input(s) bound by only ONE root:${_onesided}" \
     "a one-sided binding is a render divergence; counted into the derived set so R6 must refuse it rather than never seeing it"
 fi
-_declared="$(grep -oE '^[[:space:]]*REHEARSAL_DIVERGENCE:[[:space:]]*\S+' "$WF" | head -1 | awk '{print $2}')"
+_declared="$(grep -oE '^[[:space:]]*REHEARSAL_DIVERGENCE:[[:space:]]*\S+' "$WF" | sed -n '1p' | awk '{print $2}')"
 # Sort both sides: the derived set comes out of `sort`, the declared literal is hand-ordered.
 _derived_sorted="$(printf '%s' "$_derived" | tr ',' '\n' | sort | paste -sd, -)"
 _declared_sorted="$(printf '%s' "$_declared" | tr ',' '\n' | sort | paste -sd, -)"
@@ -1013,7 +1013,7 @@ PY
     else
       _rcc_all="$(_run_capture "$_mut_c" pass_on_3)"
       _rcc="${_rcc_all%%|*}"; _restc="${_rcc_all#*|}"; _attc="${_restc%%|*}"; _restc="${_restc#*|}"; _outc="${_restc#*|}"
-      if [[ "$_attc" -eq 1 && "$_rcc" -eq 0 ]] || grep -q 'Rung-2 rehearsal: PASS' "$_outc/gh_summary" 2>/dev/null; then
+      if [[ "$_attc" -eq 1 && "$_rcc" -eq 0 ]] || grep -c 'Rung-2 rehearsal: PASS' >/dev/null "$_outc/gh_summary" 2>/dev/null; then
         cases=$((cases + 1)); pass "MUTATION 13c (set -e before the read): produces the SILENT FALSE PASS — ${_attc} attempt(s), exit ${_rcc}; the ordering is load-bearing and pinned"
       else
         cases=$((cases + 1)); fail "MUTATION 13c did not reproduce the false-PASS shape (${_attc} attempt(s), exit ${_rcc})" \
@@ -1275,9 +1275,9 @@ fi
 # sweep) and compared here rather than trusted. The TRAILING HYPHEN is the load-bearing part:
 # `soleur-git-data` is a prefix of the rehearsal names, so a match written without it reports
 # the PRODUCTION host as a leaked rehearsal.
-_pfx_tf="$(grep -oE 'rehearsal_host_name[[:space:]]*=[[:space:]]*"[^"]*"' "$REH_CODE" | head -1 | sed 's/.*"\(.*\)"$/\1/')"
-_pfx_wf="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$WF" | head -1 | awk '{print $2}')"
-_pfx_drift="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$DRIFT_WF" | head -1 | awk '{print $2}')"
+_pfx_tf="$(grep -oE 'rehearsal_host_name[[:space:]]*=[[:space:]]*"[^"]*"' "$REH_CODE" | sed -n '1p' | sed 's/.*"\(.*\)"$/\1/')"
+_pfx_wf="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$WF" | sed -n '1p' | awk '{print $2}')"
+_pfx_drift="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$DRIFT_WF" | sed -n '1p' | awk '{print $2}')"
 if [[ "$_pfx_wf" == "soleur-git-data-rehearsal-" && "$_pfx_drift" == "soleur-git-data-rehearsal-" ]]; then
   cases=$((cases + 1)); pass "the rehearsal prefix agrees in the dispatch workflow and the orphan sweep"
 else
@@ -1317,7 +1317,7 @@ fi
 # #7204's learning is named for. The runtime arm 6b in the capture suite is what actually
 # caught the revert; this arm is the drift guard and must not be the one that lies.
 _pfx_cap="$(grep -oE '=~[[:space:]]*\^soleur-git-data-rehearsal-' \
-  "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | head -1 | sed 's/.*\^//')"
+  "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | sed -n '1p' | sed 's/.*\^//')"
 if [[ "$_pfx_cap" == "$_pfx_wf" ]]; then
   cases=$((cases + 1)); pass "the evidence-capture script's --host-name constraint pins the same rehearsal prefix"
 else
@@ -1486,7 +1486,7 @@ PY
   _pmissing="$(printf '%s\n' "$_paths_probe" | sed -n 's/^MISSING=//p' | tr '\n' ' ')"
   _pnofile="$(printf '%s\n' "$_paths_probe" | sed -n 's/^NOFILE=//p' | tr '\n' ' ')"
   _pcontrol="$(printf '%s\n' "$_paths_probe" | sed -n 's/^CONTROL_ROUTES=//p')"
-  if printf '%s' "$_paths_probe" | grep -q 'PROBE_FAILED=1'; then
+  if printf '%s' "$_paths_probe" | grep -c 'PROBE_FAILED=1' >/dev/null; then
     cases=$((cases + 1)); fail "could not parse infra-validation.yml's pull_request filter — refusing to read an unparseable filter as coverage"
   # EXTRACTION FLOOR, reported directly (ADR-193 #1). Kept in ITS ORIGINAL CHAIN POSITION:
   # an unparseable probe leaves _pguarded empty, so hoisting this above the PROBE_FAILED arm
@@ -1521,13 +1521,13 @@ if [[ -r "$_CAP" ]]; then
   # message) cannot satisfy these — cq-assert-anchor-not-bare-token.
   _hostsql="$(awk '/^HOST_SQL="/{f=1} f{print} f&&/FORMAT JSONEachRow"/{exit}' "$_CAP")"
 
-  if printf '%s' "$_hostsql" | grep -qE "JSONExtractString\(raw,'detail'\)"; then
+  if printf '%s' "$_hostsql" | grep -cE "JSONExtractString\(raw,'detail'\)" >/dev/null; then
     cases=$((cases + 1)); pass "20a HOST_SQL projects detail"
   else
     cases=$((cases + 1)); fail "20a HOST_SQL does not project detail" \
          "A FAIL artifact then carries a verdict with no cause — the #7204 defect."
   fi
-  if printf '%s' "$_hostsql" | grep -qE "JSONExtractString\(raw,'rc'\)"; then
+  if printf '%s' "$_hostsql" | grep -cE "JSONExtractString\(raw,'rc'\)" >/dev/null; then
     cases=$((cases + 1)); pass "20b HOST_SQL projects rc"
   else
     cases=$((cases + 1)); fail "20b HOST_SQL does not project rc" \
@@ -1537,7 +1537,7 @@ if [[ -r "$_CAP" ]]; then
   # MUTATION for both: strip the projections and prove the arms flip. Without this the two
   # greps above are satisfied by any file that happens to contain the strings.
   _mut="$(printf '%s' "$_hostsql" | sed -E "/JSONExtractString\(raw,'(detail|rc)'\)/d")"
-  if printf '%s' "$_mut" | grep -qE "JSONExtractString\(raw,'(detail|rc)'\)"; then
+  if printf '%s' "$_mut" | grep -cE "JSONExtractString\(raw,'(detail|rc)'\)" >/dev/null; then
     cases=$((cases + 1)); fail "20c MUTATION did not land — the projections survived deletion" \
          "20a/20b certify nothing; re-anchor the slice."
   else
@@ -1895,7 +1895,7 @@ done
 # the generic `else` -- the exact pre-#7855 behaviour, restored silently, with the suite green.
 # Nothing tied the reader's path to the writer's until this arm.
 cases=$((cases + 1))
-_cap_written=$(grep -oE 'tee /tmp/[A-Za-z0-9_/.-]+' "$WF" | head -1 | awk '{print $2}')
+_cap_written=$(grep -oE 'tee /tmp/[A-Za-z0-9_/.-]+' "$WF" | sed -n '1p' | awk '{print $2}')
 _cap_read=$(grep -oE "grep -q '[^']+' /tmp/[A-Za-z0-9_/.-]+" "$WF" | grep -oE '/tmp/[A-Za-z0-9_/.-]+' | sort -u)
 _cap_read_n=$(printf '%s\n' "$_cap_read" | grep -c . || true)
 if [[ -n "$_cap_written" && "$_cap_read_n" -eq 1 && "$_cap_read" == "$_cap_written" ]]; then
@@ -1952,7 +1952,7 @@ else
     "a startswith(prefix) resolution reaches soleur-git-data and any survivor; this step resets what it resolves"
 fi
 cases=$((cases + 1))
-if grep -vE '^\s*#' <<<"$_reset_body" | grep -qF 'startswith'; then
+if grep -vE '^\s*#' <<<"$_reset_body" | grep -cF 'startswith' >/dev/null; then
   fail "the reset step uses a prefix match" "$_reset_body"
 else
   pass "the reset step carries no prefix match"
@@ -1968,8 +1968,8 @@ fi
 # land after the host has already booted and emitted, so the probe's window would exclude the
 # very row it looks for and every healthy reset would read TRANSIENT.
 cases=$((cases + 1))
-_since_at=$(grep -n 'RUNG2_REBOOT_SINCE=\$(date' <<<"$_reset_body" | head -1 | cut -d: -f1)
-_post_at=$(grep -n 'actions/reset"' <<<"$_reset_body" | head -1 | cut -d: -f1)
+_since_at=$(grep -n 'RUNG2_REBOOT_SINCE=\$(date' <<<"$_reset_body" | sed -n '1p' | cut -d: -f1)
+_post_at=$(grep -n 'actions/reset"' <<<"$_reset_body" | sed -n '1p' | cut -d: -f1)
 if [[ -n "$_since_at" && -n "$_post_at" && "$_since_at" -lt "$_post_at" ]]; then
   pass "RUNG2_REBOOT_SINCE is recorded BEFORE the reset POST (line ${_since_at} < ${_post_at})"
 else
@@ -1995,7 +1995,7 @@ _settle=$(awk '/name: Settle before the reset/{f=1} f{print} f&&/^      - name: 
 # reports "no settle step" for a settle that was merely shortened, which is the likelier drift
 # and the one whose message would misdirect. `${_settle_s:-0}` keeps a missing step at 0 rather
 # than making this arm itself a syntax error under set -u.
-_settle_s=$(grep -oE '^\s*sleep [0-9]+$' <<<"$_settle" | grep -oE '[0-9]+' | head -1)
+_settle_s=$(grep -oE '^\s*sleep [0-9]+$' <<<"$_settle" | grep -oE '[0-9]+' | sed -n '1p')
 if [[ "${_settle_s:-0}" -ge 100 ]]; then
   pass "a settle of >= 100s precedes the reset (${_settle_s}s)"
 else
@@ -2245,8 +2245,8 @@ fi
 # passes it as --replace-since, RUNG2_SENTRY_SINCE is written exactly once, and the upload gates on it.
 cases=$((cases + 1))
 _ar=$(awk '/id: apply_replace$/{f=1} f{print} f&&/^      - name: Capture the replace boot/{exit}' "$WF")
-_st=$(grep -n 'RUNG2_REPLACE_SINCE=\$(date' <<<"$_ar" | head -1 | cut -d: -f1)
-_ap=$(grep -n 'terraform apply -auto-approve -input=false tfplan-replace' <<<"$_ar" | head -1 | cut -d: -f1)
+_st=$(grep -n 'RUNG2_REPLACE_SINCE=\$(date' <<<"$_ar" | sed -n '1p' | cut -d: -f1)
+_ap=$(grep -n 'terraform apply -auto-approve -input=false tfplan-replace' <<<"$_ar" | sed -n '1p' | cut -d: -f1)
 _ss_writes=$(grep -c 'RUNG2_SENTRY_SINCE=\$(date' "$WF" || true)
 if [[ -n "$_st" && -n "$_ap" && "$_st" -lt "$_ap" && "$_ss_writes" == 1 ]] \
    && grep -qF -- '--replace-since "${RUNG2_REPLACE_SINCE}"' "$WF"; then
@@ -2614,7 +2614,7 @@ for u in unb[:5]:
 W6PY
 )"
 _w6_line=$(grep '^STEPS=' <<<"$_w6")
-_w6f() { tr ' ' '\n' <<<"$_w6_line" | sed -n "s/^$1=//p" | head -1; }
+_w6f() { tr ' ' '\n' <<<"$_w6_line" | sed -n "s/^$1=//p" | sed -n '1p'; }
 _w6_steps=$(_w6f STEPS); _w6_unb=$(_w6f UNBOUNDED); _w6_sum=$(_w6f SUM); _w6_job=$(_w6f JOB)
 _w6_polls=$(_w6f POLLS); _w6_short=$(_w6f SHORT)
 cases=$((cases + 1))

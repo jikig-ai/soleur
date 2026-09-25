@@ -70,7 +70,7 @@ printf '\n=== git-data-render-strip-parity ===\n\n'
 #
 # Extracted by shape (`git_data_rationale_strip = <literal>`) rather than by line number, so
 # neither file's formatting can silently decouple them.
-# COMMENTS STRIPPED FIRST. `grep … | head -1` over an unstripped file will happily pick a
+# COMMENTS STRIPPED FIRST. `grep … | sed -n '1p'` over an unstripped file will happily pick a
 # COMMENT that mentions the assignment — and this repo's house style is dense inline
 # rationale, so a line like `# git_data_rationale_strip = "<old form>"` explaining a past
 # change is exactly the kind of prose that gets written. Both files would then be compared on
@@ -85,7 +85,7 @@ printf '\n=== git-data-render-strip-parity ===\n\n'
 # `git_data_template_rationale_strip` does not contain `git_data_rationale_strip` as a
 # substring, which is why the template local is named with the qualifier in the MIDDLE and
 # not as a `_template` suffix.
-extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$2" | grep -oE "$1"'[[:space:]]*=[[:space:]]*".*"' | head -1 | sed 's/^[^=]*=[[:space:]]*//'; }
+extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$2" | grep -oE "$1"'[[:space:]]*=[[:space:]]*".*"' | sed -n '1p' | sed 's/^[^=]*=[[:space:]]*//'; }
 
 tf_strip="$(extract_strip git_data_rationale_strip "$TF")"
 # The budget script emits its locals block through an UNQUOTED heredoc, so bash halves every
@@ -164,7 +164,7 @@ fi
 # one line in main.tf reverts what a git-data host boots from, on a ForceNew attribute, and
 # nothing else in CI can see it.
 _tf_code="$(grep -vE '^[[:space:]]*(#|//)' "$TF")"
-_open_ln="$(grep -nE '^[[:space:]]*rendered[[:space:]]*=[[:space:]]*replace\(templatefile\(' <<<"$_tf_code" | head -1 | cut -d: -f1)"
+_open_ln="$(grep -nE '^[[:space:]]*rendered[[:space:]]*=[[:space:]]*replace\(templatefile\(' <<<"$_tf_code" | sed -n '1p' | cut -d: -f1)"
 CASES=$((CASES + 1))
 if [[ -z "$_open_ln" ]]; then
   fail "the render does NOT apply the template strip" \
@@ -372,7 +372,7 @@ PY
     _fstab="$(grep -nE '>>[[:space:]]*/etc/fstab' "$RENDER" || true)"
     _n_fstab="$(printf '%s' "$_fstab" | grep -c . || true)"
     if [[ "$_n_fstab" -eq 1 ]] \
-       && printf '%s\n' "$_fstab" | grep -qF '/dev/mapper/git-data /mnt/git-data ext4'; then
+       && printf '%s\n' "$_fstab" | grep -cF '/dev/mapper/git-data /mnt/git-data ext4' >/dev/null; then
       pass "the render writes EXACTLY ONE fstab line, and it is /dev/mapper/git-data at /mnt/git-data"
     else
       fail "the render's fstab appends are not the single mapper line" \

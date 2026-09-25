@@ -348,7 +348,7 @@ test_missing_env_file() {
     export PROC_ROOT="$mock_dir/proc"
     bash "$MONITOR_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
-  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qiF "warning"; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -ciF "warning" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -371,7 +371,7 @@ test_missing_resend_key() {
     export MOCK_NO_WEBHOOK=1
     setup_mocks_and_run "$mock_dir" 2>&1
   ) && actual_exit=0 || actual_exit=$?
-  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qiF "warning"; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -ciF "warning" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -435,7 +435,7 @@ test_curl_failure() {
   # and the failing call itself must have carried the four transport flags.
   local ok=1 largs="$mock_dir/logger_args"
   [[ "$actual_exit" -eq 0 ]] || ok=0
-  printf '%s\n' "$output" | grep -qF "Resend API POST failed" || ok=0
+  printf '%s\n' "$output" | grep -cF "Resend API POST failed" >/dev/null || ok=0
   [[ -f "$largs" ]] || ok=0
   grep -qF -- "-p user.crit" "$largs" 2>/dev/null || ok=0
   grep -qF -- "-t resource-monitor" "$largs" 2>/dev/null || ok=0
@@ -525,8 +525,8 @@ test_logger_absent() {
     setup_mocks_and_run "$mock_dir" 2>&1
   ) && actual_exit=0 || actual_exit=$?
   if [[ "$actual_exit" -eq 0 ]] \
-     && printf '%s\n' "$output" | grep -qF "Resend API POST failed" \
-     && printf '%s\n' "$output" | grep -qF "logger=absent" \
+     && printf '%s\n' "$output" | grep -cF "Resend API POST failed" >/dev/null \
+     && printf '%s\n' "$output" | grep -cF "logger=absent" >/dev/null \
      && [[ ! -f "$mock_dir/logger_args" ]]; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"

@@ -167,9 +167,9 @@ echo "TEST: #7228 diagnostic boot adopts NO registry (cannot double-fire prod cr
 assert_rc "the diagnostic branch repoints --sdk-url at a closed loopback port" \
   "0" "$(grep -qE "^  SDK_URL='http://127\.0\.0\.1:1/api/inngest'\$" "$SCRIPT_DIR/inngest-bootstrap.sh" && echo 0 || echo 1)"
 # ...and it must sit INSIDE the diagnostic arm, not above it, or every boot loses its registry.
-DIAG_ARM_START=$(grep -nE '^if \[\[ "\$DIAGNOSTIC_BOOT" == "1" \]\]; then$' "$SCRIPT_DIR/inngest-bootstrap.sh" | head -1 | cut -d: -f1 || true)
-SDK_NEUTER_LINE=$(grep -nE "^  SDK_URL='http://127\.0\.0\.1:1/api/inngest'\$" "$SCRIPT_DIR/inngest-bootstrap.sh" | head -1 | cut -d: -f1 || true)
-DIAG_ELIF=$(grep -nE '^elif \[\[ "\$REDIS_READY" == "1" \]\]; then$' "$SCRIPT_DIR/inngest-bootstrap.sh" | head -1 | cut -d: -f1 || true)
+DIAG_ARM_START=$(grep -nE '^if \[\[ "\$DIAGNOSTIC_BOOT" == "1" \]\]; then$' "$SCRIPT_DIR/inngest-bootstrap.sh" | sed -n '1p' | cut -d: -f1 || true)
+SDK_NEUTER_LINE=$(grep -nE "^  SDK_URL='http://127\.0\.0\.1:1/api/inngest'\$" "$SCRIPT_DIR/inngest-bootstrap.sh" | sed -n '1p' | cut -d: -f1 || true)
+DIAG_ELIF=$(grep -nE '^elif \[\[ "\$REDIS_READY" == "1" \]\]; then$' "$SCRIPT_DIR/inngest-bootstrap.sh" | sed -n '1p' | cut -d: -f1 || true)
 assert_rc "the neutralisation is scoped to the diagnostic arm (a normal boot keeps its registry)" \
   "0" "$([[ -n "$DIAG_ARM_START" && -n "$SDK_NEUTER_LINE" && -n "$DIAG_ELIF" && "$SDK_NEUTER_LINE" -gt "$DIAG_ARM_START" && "$SDK_NEUTER_LINE" -lt "$DIAG_ELIF" ]] && echo 0 || echo 1)"
 
@@ -203,7 +203,7 @@ assert_rc "the neutralisation is scoped to the diagnostic arm (a normal boot kee
 #      "two halves disagree" state the guard refuses, so the result was a guaranteed BLOCK.
 echo "TEST: #7228 diagnostic boot is admitted by the boot self-check AND delivered to the bootstrap"
 CLOUD_INIT_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
-ISO_RE=$(grep -oE "grep -Ec '\^\(INNGEST_\([^']*\)\|BETTERSTACK_LOGS_TOKEN\)\\$'" "$CLOUD_INIT_INNGEST" | head -1 || true)
+ISO_RE=$(grep -oE "grep -Ec '\^\(INNGEST_\([^']*\)\|BETTERSTACK_LOGS_TOKEN\)\\$'" "$CLOUD_INIT_INNGEST" | sed -n '1p' || true)
 assert_rc "the boot isolation allowlist was extracted by shape (else these pins are vacuous)" \
   "0" "$([[ -n "$ISO_RE" ]] && echo 0 || echo 1)"
 assert_rc "(a) the isolation allowlist ADMITS DIAGNOSTIC_BOOT (an unadmitted name FATALs every re-provision)" \
@@ -219,9 +219,9 @@ assert_rc "(b) the delivery read is bounded by a timeout (it precedes the observ
 echo "TEST: the done-owner marker path agrees between the FSM writer and this guard (#7228)"
 FLIP_SH="$SCRIPT_DIR/inngest-cutover-flip.sh"
 GUARD_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{GUARD_DONE_OWNER_MARKER:-[^}]+\}"' "$TARGET" \
-  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
 FLIP_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{CUTOVER_DONE_OWNER_MARKER:-[^}]+\}"' "$FLIP_SH" \
-  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
 if [[ -z "$GUARD_PATH" || -z "$FLIP_PATH" ]]; then
   fail "could not extract the marker path from both files by shape (guard='$GUARD_PATH' flip='$FLIP_PATH') — this pin is vacuous"
 elif [[ "$GUARD_PATH" != "$FLIP_PATH" ]]; then
@@ -257,7 +257,7 @@ fi
 #      "two halves disagree" state the guard refuses, so the result was a guaranteed BLOCK.
 echo "TEST: #7228 diagnostic boot is admitted by the boot self-check AND delivered to the bootstrap"
 CLOUD_INIT_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
-ISO_RE=$(grep -oE "grep -Ec '\^\(INNGEST_\([^']*\)\|BETTERSTACK_LOGS_TOKEN\)\\$'" "$CLOUD_INIT_INNGEST" | head -1 || true)
+ISO_RE=$(grep -oE "grep -Ec '\^\(INNGEST_\([^']*\)\|BETTERSTACK_LOGS_TOKEN\)\\$'" "$CLOUD_INIT_INNGEST" | sed -n '1p' || true)
 assert_rc "the boot isolation allowlist was extracted by shape (else these pins are vacuous)" \
   "0" "$([[ -n "$ISO_RE" ]] && echo 0 || echo 1)"
 assert_rc "(a) the isolation allowlist ADMITS DIAGNOSTIC_BOOT (an unadmitted name FATALs every re-provision)" \
@@ -273,9 +273,9 @@ assert_rc "(b) the delivery read is bounded by a timeout (it precedes the observ
 echo "TEST: the done-owner marker path agrees between the FSM writer and this guard (#7228)"
 FLIP_SH="$SCRIPT_DIR/inngest-cutover-flip.sh"
 GUARD_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{GUARD_DONE_OWNER_MARKER:-[^}]+\}"' "$TARGET" \
-  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
 FLIP_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{CUTOVER_DONE_OWNER_MARKER:-[^}]+\}"' "$FLIP_SH" \
-  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
 if [[ -z "$GUARD_PATH" || -z "$FLIP_PATH" ]]; then
   fail "could not extract the marker path from both files by shape (guard='$GUARD_PATH' flip='$FLIP_PATH') — this pin is vacuous"
 elif [[ "$GUARD_PATH" != "$FLIP_PATH" ]]; then
@@ -351,7 +351,7 @@ else
   fail "the durable sentinel drifted between the guard and inngest-bootstrap.sh — the guard can no longer tell a durable unit from a SQLite one"
 fi
 # The bootstrap's diagnostic branch must produce a unit the guard will accept: no backend flags.
-if awk '/DIAGNOSTIC_BOOT" == "1"/,/^elif/' "$BOOTSTRAP" | grep -qE "^[[:space:]]*BACKEND_FLAGS=''[[:space:]]*$"; then
+if awk '/DIAGNOSTIC_BOOT" == "1"/,/^elif/' "$BOOTSTRAP" | grep -cE "^[[:space:]]*BACKEND_FLAGS=''[[:space:]]*$" >/dev/null; then
   pass "bootstrap's diagnostic branch emits EMPTY backend flags (so the guard can prove non-durable)"
 else
   fail "bootstrap's diagnostic branch does not clear BACKEND_FLAGS — the guard would block its own diagnostic unit"
@@ -368,7 +368,7 @@ if [[ ! -f "$FSM" ]]; then
   fail "FSM source $FSM not found — cannot verify lockstep"
 else
   # Guard allowlist: the tokens before ')' on the `flag_ok=true` case line.
-  guard_allow=$(grep -E 'flag_ok=true' "$TARGET" | head -1 | sed -E 's/\).*//' \
+  guard_allow=$(grep -E 'flag_ok=true' "$TARGET" | sed -n '1p' | sed -E 's/\).*//' \
     | tr '|' '\n' | sed -E 's/[[:space:]]//g' | grep -E '^[a-z-]+$' | LC_ALL=C sort -u)
   # FSM start-states: walk top-down tracking the nearest preceding `flag_set <arg>` OR case-arm
   # label `<state>)`, and emit that state at every line that STARTS THE SERVER. "Starts the
@@ -402,7 +402,7 @@ else
     fail "FSM start_server call-site count = $start_site_count, expected $EXPECTED_START_SITES — a start site was added/removed (or a derivation rule dropped one). Re-verify each new state is in the guard allowlist, then update EXPECTED_START_SITES. Derived states: [$(printf '%s' "$fsm_states" | tr '\n' ' ')]"
   # Non-vacuity: the derivation MUST find the known start-state (flushed). A silent empty
   # derivation would make the subset check pass vacuously.
-  elif ! printf '%s\n' "$fsm_states" | grep -qx 'flushed'; then
+  elif ! printf '%s\n' "$fsm_states" | grep -cx 'flushed' >/dev/null; then
     fail "lockstep derivation did not find the known 'flushed' start-state (derivation broken?); got: [$(printf '%s' "$fsm_states" | tr '\n' ' ')]"
   else
     missing=$(LC_ALL=C comm -23 <(printf '%s\n' "$fsm_states") <(printf '%s\n' "$guard_allow"))

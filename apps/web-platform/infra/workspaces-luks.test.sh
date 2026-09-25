@@ -81,7 +81,7 @@ p_tf_random() {
   local b
   b="$(block_of "$1" random_password workspaces_luks)"
   if [ -z "$b" ]; then echo 0; return; fi
-  if printf '%s' "$b" | grep -Eq '^[[:space:]]*length[[:space:]]*=[[:space:]]*40[[:space:]]*$'; then echo 1; else echo 0; fi
+  if printf '%s' "$b" | grep -Ec '^[[:space:]]*length[[:space:]]*=[[:space:]]*40[[:space:]]*$' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A2 — `special = false` keeps the passphrase shell/stdin-safe for the
@@ -92,7 +92,7 @@ p_special_false() {
   local b
   b="$(block_of "$1" random_password workspaces_luks)"
   if [ -z "$b" ]; then echo 0; return; fi
-  if printf '%s' "$b" | grep -Eq '^[[:space:]]*special[[:space:]]*=[[:space:]]*false[[:space:]]*$'; then echo 1; else echo 0; fi
+  if printf '%s' "$b" | grep -Ec '^[[:space:]]*special[[:space:]]*=[[:space:]]*false[[:space:]]*$' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A3 — the Doppler secret is masked.
@@ -102,7 +102,7 @@ p_masked() {
   local b
   b="$(block_of "$1" doppler_secret workspaces_luks_key)"
   if [ -z "$b" ]; then echo 0; return; fi
-  if printf '%s' "$b" | grep -Eq '^[[:space:]]*visibility[[:space:]]*=[[:space:]]*"masked"[[:space:]]*$'; then echo 1; else echo 0; fi
+  if printf '%s' "$b" | grep -Ec '^[[:space:]]*visibility[[:space:]]*=[[:space:]]*"masked"[[:space:]]*$' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A4 — THE ISSUE'S ACCEPTANCE CRITERION. The new volume must carry NO `format`
@@ -115,7 +115,7 @@ p_no_format() {
   # Comment-stripped: this .tf DISCUSSES the omitted `format` at length, and a
   # `/* format = "ext4" ... */` note would otherwise false-FAIL the guard. Documenting
   # WHY a construct is absent must never redden the guard that forbids it.
-  if strip_comments "$1" | grep -Eq '^[[:space:]]*format[[:space:]]*='; then echo 0; else echo 1; fi
+  if strip_comments "$1" | grep -Ec '^[[:space:]]*format[[:space:]]*=' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A5 — the volume resource exists and is a SINGLETON, not `for_each`. C18: a
@@ -126,7 +126,7 @@ p_singleton_volume() {
   local block
   block="$(block_of "$1" hcloud_volume workspaces_luks)"
   if [ -z "$block" ]; then echo 0; return; fi
-  if printf '%s' "$block" | grep -Eq '^[[:space:]]*for_each[[:space:]]*='; then echo 0; else echo 1; fi
+  if printf '%s' "$block" | grep -Ec '^[[:space:]]*for_each[[:space:]]*=' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A6 — the attachment pins to web-1 explicitly. web-1 is the sole live origin
@@ -135,7 +135,7 @@ p_attach_web1() {
   local block
   block="$(block_of "$1" hcloud_volume_attachment workspaces_luks)"
   if [ -z "$block" ]; then echo 0; return; fi
-  if printf '%s' "$block" | grep -Eq 'hcloud_server\.web\["web-1"\]\.id'; then echo 1; else echo 0; fi
+  if printf '%s' "$block" | grep -Ec 'hcloud_server\.web\["web-1"\]\.id' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A7 — C6, security-load-bearing. The key MUST live in a dedicated Doppler config,
@@ -148,7 +148,7 @@ p_dedicated_config() {
   local block
   block="$(block_of "$1" doppler_secret workspaces_luks_key)"
   if [ -z "$block" ]; then echo 0; return; fi
-  if printf '%s' "$block" | grep -Eq '^[[:space:]]*config[[:space:]]*=[[:space:]]*"prd_workspaces_luks"'; then
+  if printf '%s' "$block" | grep -Ec '^[[:space:]]*config[[:space:]]*=[[:space:]]*"prd_workspaces_luks"' >/dev/null; then
     echo 1
   else
     echo 0
@@ -168,7 +168,7 @@ p_token_read_only() {
   local block
   block="$(block_of "$1" doppler_service_token workspaces_luks)"
   if [ -z "$block" ]; then echo 0; return; fi
-  if printf '%s' "$block" | grep -Eq '^[[:space:]]*access[[:space:]]*=[[:space:]]*"read"'; then echo 1; else echo 0; fi
+  if printf '%s' "$block" | grep -Ec '^[[:space:]]*access[[:space:]]*=[[:space:]]*"read"' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A9 — no `ignore_changes` on the passphrase. Both precedents agree rotation must be
@@ -185,7 +185,7 @@ p_no_ignore_changes() {
   # `|` delimiter collides with the alternation's own `|` and sed dies with
   # "unknown option to `s'" — which `set -uo pipefail` does NOT abort on, so the
   # predicate silently degraded to grepping the unstripped file.
-  if sed -E 's~^[[:space:]]*(#|//).*$~~' "$1" | grep -Eq 'ignore_changes[[:space:]]*='; then
+  if sed -E 's~^[[:space:]]*(#|//).*$~~' "$1" | grep -Ec 'ignore_changes[[:space:]]*=' >/dev/null; then
     echo 0
   else
     echo 1

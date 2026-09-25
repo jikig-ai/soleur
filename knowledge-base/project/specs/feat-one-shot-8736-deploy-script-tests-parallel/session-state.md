@@ -27,7 +27,7 @@ Commits on the branch:
 - `87127d095c` feat(8736): runner glob-derives, SOLEUR_INFRA_SHARD, per-suite timeout+timings
 - `b6298817f7` feat(8736): workflow restructure — K=4 matrix + fixed job + done aggregator;
   gate rewritten to connection contract (17/17 mutation arms); 12 suite self-checks
-  re-pointed; manifest seeded 143 rows (legs 369-370s); ADR-251 authored; monitor + skill refs
+  re-pointed; manifest seeded 143 rows (legs 369-370s); ADR-252 authored; monitor + skill refs
 - `3f2cd7dd5a` feat(8736): followthrough soak probe + stub-gh test (6/6)
 
 All local verification green: run-registered-suites.test.sh 82/82 (19/19 mutants),
@@ -69,7 +69,7 @@ Full review panel (9 seats) folded in — five post-merge commits:
   persist-credentials:false on legs, SUPERSEDED-CLASS rewording (no
   concurrency block here), stale comments
 - prose: 25 "Registered as a step" headers, runcmd retained-tree
-  comment, test-all pointer, ADR-251 #7376 cause marked unresolved
+  comment, test-all pointer, ADR-252 #7376 cause marked unresolved
   upstream, runbook --group infra, apt scrub colonless userinfo x5,
   fanout-ledger 9->11, lint-orphan floor 90->135
 

@@ -59,7 +59,7 @@ done
 # made the fixture row go RED and the battery abort with "[FATAL] fixture is
 # RED" — a real drift reported as a broken control, the most misleading
 # diagnosis available.
-SURVIVING_KEY="$(grep -oE '^SURVIVING_APEX_KEY="[^"]+"' "$GUARD" | head -1 | sed 's/.*="//; s/"$//')"
+SURVIVING_KEY="$(grep -oE '^SURVIVING_APEX_KEY="[^"]+"' "$GUARD" | sed -n '1p' | sed 's/.*="//; s/"$//')"
 if [[ ! "$SURVIVING_KEY" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   printf '[FATAL] could not derive SURVIVING_APEX_KEY from the guard (got %q)\n' "$SURVIVING_KEY" >&2
   exit 2
@@ -175,7 +175,7 @@ score() {
       return
     fi
     # ATTRIBUTION: the guard went red, but on THIS row's case?
-    if [[ "$expect" != "-" ]] && ! grep -E '^  FAIL|^\[VACUITY\]|^\[FATAL\]' "$WORK/out.txt" | grep -qF -- "$expect"; then
+    if [[ "$expect" != "-" ]] && ! grep -E '^  FAIL|^\[VACUITY\]|^\[FATAL\]' "$WORK/out.txt" | grep -cF -- >/dev/null "$expect"; then
       verdict 1 "$id MISROUTED (exit $rc, but not on the case this row targets: '$expect')"
       return
     fi

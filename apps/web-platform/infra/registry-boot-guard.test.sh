@@ -38,7 +38,7 @@ assert "cloud-init-registry.yml exists" "[[ -f '$CI' ]]"
 # --- Extract the guard's admit-regex + cardinality straight from the file (no drift) ---
 GUARD_RE="$(grep -F 'n_admitted=' "$CI" | grep -oE "grep -Ec '[^']*'" | sed "s/grep -Ec '//; s/'$//")"
 # shellcheck disable=SC2016  # literal $n_total is intentional — we grep the file's own guard text
-CARD="$(grep -oE '\[ "\$n_total" -ne [0-9]+ \]' "$CI" | grep -oE '[0-9]+' | head -1)"
+CARD="$(grep -oE '\[ "\$n_total" -ne [0-9]+ \]' "$CI" | grep -oE '[0-9]+' | sed -n '1p')"
 echo "--- extracted: admit-regex='${GUARD_RE}' cardinality='${CARD}' ---"
 assert "admit-regex was extracted" "[[ -n '$GUARD_RE' ]]"
 assert "cardinality extracted and == 4" "[[ '$CARD' == '4' ]]"
@@ -81,7 +81,7 @@ assert "resize2fs is invoked in an if targeting the mapper (exit code captured, 
 # The silent-swallow was `resize2fs ... || true` on a COMMAND line; the historical comment that
 # documents the old bug legitimately still contains that string, so exclude comment lines first.
 assert "no 'resize2fs ... || true' silent-swallow on any command line" \
-  "! grep -vE '^[[:space:]]*#' '$CI' | grep -qE 'resize2fs.*\\|\\| true'"
+  "! grep -vE '^[[:space:]]*#' '$CI' | grep -cE 'resize2fs.*\\|\\| true' >/dev/null"
 assert "device-wait loop precedes mount (attach race)" \
   "grep -qE 'for i in \\\$\\(seq 1 30\\); do \\[ -b \"\\\$DEV\" \\]' '$CI'"
 assert "e2fsprogs is in packages:" "grep -qE '^[[:space:]]*-[[:space:]]*e2fsprogs' '$CI'"
@@ -100,7 +100,7 @@ assert "SOLEUR_ZOT_DISK marker line emitted" "grep -qF 'SOLEUR_ZOT_DISK pcent=' 
 # Tie each field to the LINE="SOLEUR_ZOT_DISK assignment ITSELF, not anywhere-in-file (Kieran P2:
 # the old anywhere grep false-passes a field named only in a comment). LINE= is one physical line.
 # shellcheck disable=SC2034  # used inside the eval'd `assert` condition strings below (shellcheck can't see it)
-LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
+LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | sed -n '1p')"
 # DERIVED, not restated. A hardcoded list is a claim about which posture fields exist and is
 # wrong the moment one is added: `store_mount_base` and `store_probe_rc` each sat outside this
 # loop until a review found them. Deriving means a new field joins the presence requirement by
@@ -259,7 +259,7 @@ assert "zot container --memory cap comes from the templated zot_memory_cap_mb, n
 # Comments still cite 7168m deliberately (they explain what the literal WAS and why deriving
 # replaced it) — the regression this guards is a literal creeping back into executable shell.
 assert "no hardcoded 7168m cap literal on any non-comment line" \
-  "! grep -vE '^[[:space:]]*#' '$CI' | grep -qF '7168m'"
+  "! grep -vE '^[[:space:]]*#' '$CI' | grep -cF '7168m' >/dev/null"
 # The probe must compare against the cap zot is ACTUALLY under, not a copy — a gate holding a
 # stale 7168 while the container is capped at 3072 tests an unreachable ceiling and rubber-stamps
 # a starved host. Read from the live cgroup, and reported in the telemetry the gate consumes.
@@ -396,7 +396,7 @@ p_registry_arch_derivation() {
   # Anchored on the ASSIGNMENT at line-start: that distinguishes a DECLARATION from a reference
   # such as `zot_image = local.registry_arch == "arm64" ? ...` two lines below, whose `==` an
   # unanchored `registry_arch[[:space:]]*=` would match first and read as the declaration.
-  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*registry_arch[[:space:]]*=' | head -1)"
+  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*registry_arch[[:space:]]*=' | sed -n '1p')"
   [ -n "$expr" ] || { echo 0; return; }
   pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.registry_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
   tval="$(printf '%s' "$expr" | grep -oE '\?[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
@@ -484,11 +484,11 @@ assert "#7500 the per-line helper is called from the sample chain" \
 
 # ORDER: the tier gate runs before redaction, which runs before the sanitizer. Behaviour pins
 # this in zot-disk-heartbeat-redaction.test.sh; this is the cheap structural companion.
-GATE_LN=$(grep -n 'ZOT_ERR_SRC" = fallback' "$CI" | head -1 | cut -d: -f1)
+GATE_LN=$(grep -n 'ZOT_ERR_SRC" = fallback' "$CI" | sed -n '1p' | cut -d: -f1)
 # shellcheck disable=SC2016  # literal '$ZOT_ERR_RAW' is the text being matched, not an expansion
-REDACT_LN=$(grep -n 'redact_sample_lines "\$ZOT_ERR_RAW"' "$CI" | head -1 | cut -d: -f1)
+REDACT_LN=$(grep -n 'redact_sample_lines "\$ZOT_ERR_RAW"' "$CI" | sed -n '1p' | cut -d: -f1)
 # shellcheck disable=SC2016  # literal '$(printf' is the text being matched, not an expansion
-SANITIZE_LN=$(grep -n '^[[:space:]]*ZOT_LAST_ERR=\$(printf' "$CI" | head -1 | cut -d: -f1)
+SANITIZE_LN=$(grep -n '^[[:space:]]*ZOT_LAST_ERR=\$(printf' "$CI" | sed -n '1p' | cut -d: -f1)
 assert "#7500 tier gate precedes the per-line redaction" \
   "[[ -n '$GATE_LN' && -n '$REDACT_LN' && '$GATE_LN' -lt '$REDACT_LN' ]]"
 assert "#7500 the per-line redaction precedes the sanitizer (post-sanitizer, the JSON branch cannot fire)" \
@@ -509,7 +509,7 @@ assert "#7500 the suppressed tier is a FLAT enum member, not a colon-qualified f
 # Scoped to the tier-gate REGION. `command -v jq` also occurs in the log-shipper block ~450
 # lines below, so a file-wide grep stayed green after deleting the tier gate's own guard.
 assert "#7500 the tier-4 message extraction is jq-gated (degrade closed)" \
-  "grep -A6 'ZOT_ERR_SRC\" = fallback' '$CI' | grep -qF 'command -v jq'"
+  "grep -A6 'ZOT_ERR_SRC\" = fallback' '$CI' | grep -cF 'command -v jq' >/dev/null"
 
 # --- POSITIVE CONTROL: assert() must still be able to REJECT --------------------------------
 # The floor below counts that assertions RAN. It cannot see a rewritten assert() that always

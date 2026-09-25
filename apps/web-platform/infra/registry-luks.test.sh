@@ -152,8 +152,8 @@ p_isolation_card4() {
 # has neither the CLI nor the token).
 p_p1b_order() {
   local f="$1" env_ln luks_ln
-  env_ln="$(grep -nF '> /etc/default/registry-doppler' "$f" | grep -F 'printf' | head -1 | cut -d: -f1)"
-  luks_ln="$(grep -nE 'cryptsetup[[:space:]]+luksFormat' "$f" | head -1 | cut -d: -f1)"
+  env_ln="$(grep -nF '> /etc/default/registry-doppler' "$f" | grep -F 'printf' | sed -n '1p' | cut -d: -f1)"
+  luks_ln="$(grep -nE 'cryptsetup[[:space:]]+luksFormat' "$f" | sed -n '1p' | cut -d: -f1)"
   if [ -n "$env_ln" ] && [ -n "$luks_ln" ] && [ "$env_ln" -lt "$luks_ln" ]; then echo 1; else echo 0; fi
 }
 
@@ -178,8 +178,8 @@ p_resize_mapper() {
 # (line order), so fail-loud => zot never starts => liveness absence.
 p_zot_mount_gate() {
   local f="$1" gate_ln run_ln
-  gate_ln="$(grep -nE 'findmnt -no SOURCE /var/lib/zot \| grep -qx /dev/mapper/registry' "$f" | head -1 | cut -d: -f1)"
-  run_ln="$(grep -nE 'docker run -d --name zot' "$f" | head -1 | cut -d: -f1)"
+  gate_ln="$(grep -nE 'findmnt -no SOURCE /var/lib/zot \| grep -cx /dev/mapper/registry >/dev/null' "$f" | sed -n '1p' | cut -d: -f1)"
+  run_ln="$(grep -nE 'docker run -d --name zot' "$f" | sed -n '1p' | cut -d: -f1)"
   if [ -n "$gate_ln" ] && [ -n "$run_ln" ] && [ "$gate_ln" -lt "$run_ln" ]; then echo 1; else echo 0; fi
 }
 
@@ -275,7 +275,7 @@ assert_mutation "A15 resize-mapper" p_resize_mapper "$CLOUD_INIT" 's#resize2fs /
 # A16 (FIX 1 / #6895 P1): the zot launch is gated on the LUKS mount (findmnt gate BEFORE docker run).
 assert_holds    "A16 zot-mount-gate" p_zot_mount_gate "$CLOUD_INIT"
 # Mutation: delete the findmnt mount-gate line -> zot would launch on an unmounted (empty) store.
-assert_mutation "A16 zot-mount-gate" p_zot_mount_gate "$CLOUD_INIT" '/findmnt -no SOURCE \/var\/lib\/zot \| grep -qx \/dev\/mapper\/registry/d'
+assert_mutation "A16 zot-mount-gate" p_zot_mount_gate "$CLOUD_INIT" '/findmnt -no SOURCE \/var\/lib\/zot \| grep -cx \/dev >/dev/null\/mapper\/registry/d'
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 # Floor = 34: 16 assert_holds + 18 assert_mutation (A1 and A6 each carry 2 mutations; A16 added).

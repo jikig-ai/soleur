@@ -1,5 +1,5 @@
 ---
-title: "ADR-251: Infra suite registration is filesystem presence; deploy-script-tests partitions via matrix legs over the parallel runner"
+title: "ADR-252: Infra suite registration is filesystem presence; deploy-script-tests partitions via matrix legs over the parallel runner"
 status: Accepted
 date: 2026-09-24
 supersedes: []
@@ -8,7 +8,7 @@ amends:
 tags: [ci, test-sharding, registration, fail-closed, infra-validation]
 ---
 
-# ADR-251: Infra suite registration is filesystem presence; deploy-script-tests partitions via matrix legs over the parallel runner
+# ADR-252: Infra suite registration is filesystem presence; deploy-script-tests partitions via matrix legs over the parallel runner
 
 ## Status
 

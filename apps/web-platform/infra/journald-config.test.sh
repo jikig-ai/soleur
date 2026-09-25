@@ -170,8 +170,8 @@ echo "--- AC5: journald-persistence runs (in the bootstrap) before the container
 # carries the persistence steps AND that the extraction launcher precedes the container start.
 assert "bootstrap sets up journald persistence (mkdir + tmpfiles + restart + flush)" \
   "grep -q 'mkdir -p /var/log/journal' '$BOOTSTRAP' && grep -q 'systemd-tmpfiles --create --prefix /var/log/journal' '$BOOTSTRAP' && grep -q 'systemctl restart systemd-journald' '$BOOTSTRAP' && grep -q 'journalctl --flush' '$BOOTSTRAP'"
-EXTRACT_LINE=$(grep -nE 'BEGIN host-script extraction' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+EXTRACT_LINE=$(grep -nE 'BEGIN host-script extraction' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
+WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
 assert "host-script extraction (runs the bootstrap) found" "[[ -n '$EXTRACT_LINE' ]]"
 assert "soleur-web-platform container-start found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
 assert "the bootstrap runs BEFORE the container starts" \
@@ -244,7 +244,7 @@ assert "P3-6 a failed /var/log/journal creation reports via the Vector-INDEPENDE
 # Ordering is load-bearing: created AFTER the fact, Vector's journald sources have already
 # opened (or failed to open) the directory. Assert the mkdir precedes the vector restart.
 assert "P3-6 the journal dir is created BEFORE vector.service is restarted (ordering)" \
-  "[[ \$(grep -nE '^[[:space:]]*mkdir -p /var/log/journal$' '$SCRIPT_DIR/inngest-bootstrap.sh' | cut -d: -f1 | head -1) -lt \$(grep -nE '^[[:space:]]*systemctl restart vector\\.service' '$SCRIPT_DIR/inngest-bootstrap.sh' | cut -d: -f1 | head -1) ]]"
+  "[[ \$(grep -nE '^[[:space:]]*mkdir -p /var/log/journal$' '$SCRIPT_DIR/inngest-bootstrap.sh' | cut -d: -f1 | sed -n '1p') -lt \$(grep -nE '^[[:space:]]*systemctl restart vector\\.service' '$SCRIPT_DIR/inngest-bootstrap.sh' | cut -d: -f1 | sed -n '1p') ]]"
 # Scope the identifier check to the [sources.host_scripts_journald] BLOCK (the Source 4 include list),
 # not the whole file — a name relocated into a comment / exclude / other sink would defeat a file-wide
 # grep while breaking Source-4 delivery (test-design + pattern review).
@@ -319,7 +319,7 @@ assert "vector side: Source 4 allowlists \"inngest-luks-stage\"" \
 # file and not the other is the silent-drop this block exists to catch, and a literal in the test
 # would have to be renamed too — i.e. it would be a third copy, not a check.
 CUTOVER_UNIT="$SCRIPT_DIR/inngest-luks-cutover.service"
-CUTOVER_TAG="$(sed -n 's/^SyslogIdentifier=\([A-Za-z0-9._-]*\)$/\1/p' "$CUTOVER_UNIT" 2>/dev/null | head -1)"
+CUTOVER_TAG="$(sed -n 's/^SyslogIdentifier=\([A-Za-z0-9._-]*\)$/\1/p' "$CUTOVER_UNIT" 2>/dev/null | sed -n '1p')"
 assert "unit side: inngest-luks-cutover.service declares exactly one SyslogIdentifier (read: '$CUTOVER_TAG')" \
   "[[ -n \"\$CUTOVER_TAG\" && \$(grep -c '^SyslogIdentifier=' '$CUTOVER_UNIT') -eq 1 ]]"
 assert "vector side: Source 4 allowlists the cutover unit's own SyslogIdentifier" \
@@ -346,7 +346,7 @@ assert "emitter side: inngest-luks-cutover.sh logs under the unit's tag (LOG_TAG
 # halves are asserted, and the tag is DERIVED from the emitter on one side rather than restated
 # twice — two hardcoded copies would agree with each other while both disagreeing with reality.
 PHONE_HOME_BODY="$(awk '/^  - path: \/usr\/local\/bin\/inngest-boot-phone-home\.sh$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI")"
-PHONE_HOME_TAG="$(grep -oP '^[[:space:]]*logger -t \K[a-z0-9-]+' <<<"$PHONE_HOME_BODY" | head -1 || true)"
+PHONE_HOME_TAG="$(grep -oP '^[[:space:]]*logger -t \K[a-z0-9-]+' <<<"$PHONE_HOME_BODY" | sed -n '1p' || true)"
 assert "CF-4a: inngest-boot-phone-home.sh DOES call logger on its failure arms (it must report its own death)" \
   "[[ -n \"\$PHONE_HOME_TAG\" ]]"
 assert "CF-4b: its tag ('${PHONE_HOME_TAG:-<none>}') IS in the Source 4 allowlist (an unallowlisted tag is silence that reads as health)" \
@@ -403,7 +403,7 @@ assert "every pii_scrub_string capture ref is templatefile-escaped (\$\${N}, nev
 # rule). `$${N}` is unescaped to the `${N}` Vector itself sees before perl runs it.
 vrl_rule_apply() {
   local marker="$1" input="$2" line re rep
-  line="$(grep -F 'replace(msg,' <<<"$PSS" | grep -F "$marker" | head -1)"
+  line="$(grep -F 'replace(msg,' <<<"$PSS" | grep -F "$marker" | sed -n '1p')"
   # Missing rule -> return the input UNCHANGED, so the redaction assertions below go red.
   # Erroring here instead would make a deleted rule look like a harness fault.
   if [[ -z "$line" ]]; then printf '%s\n' "$input"; return 0; fi
@@ -474,7 +474,7 @@ CI_DEPLOY_SH="$SCRIPT_DIR/ci-deploy.sh"
 # `readonly LOG_TAG=` took the suite from "79/79 passed" to no summary line, no FAIL:, and all
 # nine later assertions (R1-1.8a/b/c, R3-4.5a–f) never executing. The guard fired by killing the
 # run that would have reported it. The emptiness check on the next line is the real assertion.
-CI_DEPLOY_TAG="$(grep -oE '^readonly LOG_TAG="[^"]+"' "$CI_DEPLOY_SH" | head -1 | cut -d'"' -f2 || true)"
+CI_DEPLOY_TAG="$(grep -oE '^readonly LOG_TAG="[^"]+"' "$CI_DEPLOY_SH" | sed -n '1p' | cut -d'"' -f2 || true)"
 
 assert "R1-1.8a: ci-deploy.sh declares exactly ONE literal LOG_TAG (derivation is unambiguous)" \
   "[[ -n \"\$CI_DEPLOY_TAG\" ]] && [[ \"\$(grep -cE '^readonly LOG_TAG=' \"\$CI_DEPLOY_SH\")\" == 1 ]]"
@@ -532,14 +532,14 @@ assert "R3-4.5c: the probe EMITS SOLEUR_PROBE_CANARY (the allowlist entry is not
 assert "R3-4.5d: the canary is emitted from an ExecStartPre OUTSIDE the doppler wrapper" \
   "grep -qE '^ExecStartPre=-?/usr/local/bin/web-zot-consumer-probe\.sh --canary-only\$' \"\$ZOT_PROBE_UNIT\""
 assert "R3-4.5e: that ExecStartPre line does NOT route through doppler run" \
-  "! grep -E '^ExecStartPre=' \"\$ZOT_PROBE_UNIT\" | grep -q 'doppler'"
+  "! grep -E '^ExecStartPre=' \"\$ZOT_PROBE_UNIT\" | grep -c 'doppler' >/dev/null"
 # ORDERING, anchored on the BRANCH rather than on any occurrence of the flag name. The previous
-# form took `grep -n -- '--canary-only' | head -1`, and the first occurrence in the probe is a
+# form took `grep -n -- '--canary-only' | sed -n '1p'`, and the first occurrence in the probe is a
 # COMMENT (line 86) explaining the flag, twelve lines above the code that implements it (line
 # 100). So moving the real branch BELOW the credential FATAL guards — the precise regression
 # this arm names — left it green while the mutant FATALed instead of emitting. Mutation-verified.
 assert "R3-4.5f: the --canary-only BRANCH precedes the credential FATAL guards" \
-  "[[ \"\$(grep -nE '^if \\[ \"\\\$\\{1:-\\}\" = \"--canary-only\" \\]' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" ]]"
+  "[[ \"\$(grep -nE '^if \\[ \"\\\$\\{1:-\\}\" = \"--canary-only\" \\]' \"\$ZOT_PROBE_SH\" | sed -n '1p' | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | sed -n '1p' | cut -d: -f1)\" ]]"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
