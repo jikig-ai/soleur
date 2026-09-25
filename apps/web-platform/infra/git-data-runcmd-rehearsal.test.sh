@@ -1079,7 +1079,7 @@ run_case() {
            && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
         case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
       done
-      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1
   local rc=$?
@@ -1384,7 +1384,7 @@ else
            && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
         case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
       done
-      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1; _t5m_rc=$?
   # rc is CAPTURED AND USED. The trailing `|| true` this replaces discarded the one datum that
@@ -1613,7 +1613,7 @@ docker run --rm \
          && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
       case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
     done
-    [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+    [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
     echo T17M_APT_OK
     bash /work/drive.sh
   ' >"$TMP/out/t17m.stdout" 2>&1; _t17m_rc=$?

@@ -295,7 +295,7 @@ for _apt_try in 1 2 3; do
   fi
   case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
 done
-[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g; s#//[^/@[:space:]:]*@#//***@#g' >&2; echo "FIXTURE_APT_FAILED" >&2; exit 100; }
+[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo "FIXTURE_APT_FAILED" >&2; exit 100; }
 useradd -m -s "${GIT_SHELL:?}" git || exit 2
 mkdir -p /run/sshd /mnt/git-data/repositories /mnt/git-data/hooks
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k
