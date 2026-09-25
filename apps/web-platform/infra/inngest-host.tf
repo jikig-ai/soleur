@@ -467,6 +467,13 @@ resource "hcloud_server" "inngest" {
     ipv6_enabled = true
   }
 
+  # The deny-all firewall is bound HERE, on the server, not by an hcloud_firewall_attachment
+  # (#8754, ADR-100 2026-09-25 addendum). The provider sends firewall_ids as opts.Firewalls
+  # inside ServerCreate, so every birth and every -replace creates the host with the firewall
+  # already applied, before first boot. firewall_ids is not ForceNew: a later change applies in
+  # place. Guard 1 in inngest-host.test.sh pins this list to exactly this one firewall.
+  firewall_ids = [hcloud_firewall.inngest.id]
+
   user_data = local.inngest_user_data_b64gz
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
@@ -622,16 +629,28 @@ resource "hcloud_firewall" "inngest" {
   }
 }
 
-# server_ids is update-in-place (NOT ForceNew), so the scoped `inngest-host-replace` dispatch
-# (#6197) does NOT -target this attachment — after that replace it transiently points at the
-# destroyed server id and the new host boots with NO hcloud firewall attached until the next
-# full/drift apply reconciles server_ids (verify re-attach on replace, as with the Redis volume).
-# Low blast radius: this firewall is a zero-rule deny-all; the real :8288/:8289 ingress control is
-# host-local nftables (cloud-init, independent of the hcloud firewall) and /api/inngest is HMAC
-# fail-closed. Do NOT add it to the replace allow-set — an in-place update is not a replace.
-resource "hcloud_firewall_attachment" "inngest" {
-  firewall_id = hcloud_firewall.inngest.id
-  server_ids  = [hcloud_server.inngest.id]
+# FORGET the old attachment (#8754). It was `hcloud_firewall_attachment.inngest`, whose
+# server_ids bound the server id of the day. The scoped `inngest-host-replace` dispatch (#6197)
+# never targeted it, on the premise that "the next full/drift apply reconciles server_ids". No
+# such apply exists: the drift check only plans, and the per-merge apply never targeted it. So
+# every replace left it pointing at a destroyed server id, and host 167310350 ran with no Hetzner
+# firewall from its birth (measured 2026-09-25: firewall 11269127 applied_to=[], TCP 22 open on
+# the public IP). An attachment also attaches only AFTER first boot (ADR-145), even when it is
+# targeted. The binding now lives on hcloud_server.inngest.firewall_ids above, which applies at
+# create.
+#
+# FORGET, NOT DESTROY: `destroy = false` drops the state entry only. A destroy would call the
+# detach API for a binding that is applied to nothing today. The per-merge `apply` job carries
+# `-target=hcloud_firewall_attachment.inngest` because a `removed` block is planned only when its
+# address is targeted (the doppler-write-token.tf precedent). The `inngest_host` job no longer
+# targets it, so a birth never plans the forget. Remove this block and that -target once the
+# forget has applied.
+removed {
+  from = hcloud_firewall_attachment.inngest
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ---------------- Liveness (PUSH heartbeat) ----------------

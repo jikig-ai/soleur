@@ -6,6 +6,8 @@
 #   - Secrets on a SEPARATE Doppler PROJECT `soleur-inngest` (AC3), not a `prd` branch config.
 #   - hcloud_firewall.inngest is deny-all-public (zero inbound); nftables (not the cloud
 #     firewall) scopes :8288/:8289 to web-host IPs only, dropping git-data/.20 + registry/.30.
+#   - Guard 1 (#8754): the server is BORN with that firewall (firewall_ids), and no attachment
+#     binds it anywhere in the root.
 #   - NO lifecycle.ignore_changes=[user_data] (maintenance-window force-replace, ADR-100).
 #   - arm64 inngest-CLI SHA override (the amd64 image-env SHA would fail the arm64 verify).
 #   - Vector WIRED on this arm64 host (arm64 build + isolated-project token, #6197).
@@ -95,6 +97,128 @@ if awk '/resource "hcloud_firewall" "inngest"/{f=1} f&&/^}/{f=0} f' "$HOST_TF" |
 else
   pass
 fi
+
+# 3b. GUARD 1 (#8754, ADR-100 2026-09-25 addendum) — the inngest server is BORN with the deny-all
+#     firewall. `hcloud_server.firewall_ids` is sent as `opts.Firewalls` inside ServerCreate, so the
+#     firewall is on the host before first boot, on every birth and every -replace. The attachment
+#     it replaced bound a server id that went stale on each replace, and host 167310350 ran with no
+#     firewall from its birth. Property, in two halves:
+#       (a) the ONE `resource "hcloud_server" "inngest"` block sets firewall_ids to EXACTLY
+#           [hcloud_firewall.inngest.id] (layout-free: whitespace, a trailing comma and multi-line
+#           lists are all the same list);
+#       (b) NOTHING else binds that firewall: no hcloud_firewall_attachment (any name) in any *.tf
+#           of the root references it, none is named "inngest", and hcloud_firewall.inngest has no
+#           `apply_to` block.
+#     Plus the forget that keeps the removal non-destructive: `removed { from =
+#     hcloud_firewall_attachment.inngest … destroy = false }`.
+#     Runs over a DIRECTORY so the synthesized fixtures below exercise the same code as the real root.
+_g1_strip() { sed 's/#.*//' "$@"; }
+# Print one top-level block (header line through the first column-0 `}`), comment-stripped.
+_g1_block() { _g1_strip "$2" | awk -v h="$1" 'index($0, h) == 1 { f = 1 } f { print } f && /^}/ { exit }'; }
+# guard1_violations <dir> <host-tf-basename> — prints one line per violation, nothing when compliant.
+guard1_violations() {
+  local dir="$1" host="$1/$2" srv fw lists norm tf blk name n_tf=0
+  srv="$(_g1_block 'resource "hcloud_server" "inngest"' "$host")"
+  if [[ -z "$srv" ]]; then
+    echo "server block not found: no 'resource \"hcloud_server\" \"inngest\"' in $2 (never a vacuous pass)"
+  else
+    lists="$(tr '\n' ' ' <<<"$srv" | grep -oE 'firewall_ids[[:space:]]*=[[:space:]]*\[[^]]*\]' || true)"
+    if [[ -z "$lists" ]]; then
+      echo "hcloud_server.inngest sets no firewall_ids — the host would boot with no Hetzner firewall"
+    elif [[ "$(grep -c . <<<"$lists")" != "1" ]]; then
+      echo "hcloud_server.inngest sets firewall_ids more than once"
+    else
+      norm="$(tr -d '[:space:]' <<<"$lists" | sed 's/,]$/]/')"
+      [[ "$norm" == "firewall_ids=[hcloud_firewall.inngest.id]" ]] \
+        || echo "hcloud_server.inngest firewall_ids must be exactly [hcloud_firewall.inngest.id] (got '${norm}')"
+    fi
+  fi
+  fw="$(_g1_block 'resource "hcloud_firewall" "inngest"' "$host")"
+  if [[ -z "$fw" ]]; then
+    echo "firewall block not found: no 'resource \"hcloud_firewall\" \"inngest\"' in $2"
+  elif grep -qE '(^|[^a-z_])apply_to([^a-z_]|$)' <<<"$fw"; then
+    echo "hcloud_firewall.inngest carries an apply_to block — a second binding channel for the firewall"
+  fi
+  for tf in "$dir"/*.tf; do
+    [[ -f "$tf" ]] || continue
+    n_tf=$((n_tf + 1))
+    while IFS= read -r name; do
+      [[ -n "$name" ]] || continue
+      [[ "$name" == "inngest" ]] && echo "$(basename "$tf"): resource \"hcloud_firewall_attachment\" \"inngest\" is declared — it was replaced by a removed{} forget for #8754"
+      blk="$(_g1_block "resource \"hcloud_firewall_attachment\" \"${name}\"" "$tf")"
+      grep -qE 'hcloud_firewall\.inngest\.' <<<"$blk" \
+        && echo "$(basename "$tf"): hcloud_firewall_attachment.${name} binds hcloud_firewall.inngest — the binding must live on hcloud_server.inngest.firewall_ids"
+    done < <(_g1_strip "$tf" | sed -nE 's/^resource "hcloud_firewall_attachment" "([^"]+)".*/\1/p')
+  done
+  [[ "$n_tf" -gt 0 ]] || echo "no *.tf files under ${dir} (the attachment scan would be vacuous)"
+  tr '\n' ' ' < <(_g1_strip "$host") \
+    | grep -qE 'removed[[:space:]]*\{[[:space:]]*from[[:space:]]*=[[:space:]]*hcloud_firewall_attachment\.inngest[[:space:]]+lifecycle[[:space:]]*\{[[:space:]]*destroy[[:space:]]*=[[:space:]]*false[[:space:]]*\}[[:space:]]*\}' \
+    || echo "no 'removed { from = hcloud_firewall_attachment.inngest  lifecycle { destroy = false } }' in $2 — dropping the resource without it plans a DESTROY (a detach), not a forget"
+  return 0
+}
+_G1_OUT="$(guard1_violations "$DIR" "$(basename "$HOST_TF")")"
+if [[ -z "$_G1_OUT" ]]; then
+  pass
+else
+  while IFS= read -r _l; do fail "GUARD 1 (#8754): ${_l}"; done <<<"$_G1_OUT"
+fi
+
+# 3c. GUARD 1 harness + mutation rows over SYNTHESIZED fixture roots (cq-test-fixtures-synthesized-
+#     only). Each fixture is a two-file root: inngest-host.tf + other.tf. H-rows must PASS, M-rows
+#     must RED; together they prove the extractor is neither keyed on one layout nor vacuous.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+_G1_TMP="$(mktemp -d -t inngest-host-guard1.XXXXXXXX)" || { echo "FAIL: mktemp -d failed" >&2; exit 1; }
+trap 'rm -rf "${_G1_TMP:?}"' EXIT
+_G1_FW='resource "hcloud_firewall" "inngest" {
+  name = "soleur-inngest"
+}'
+_G1_REMOVED='removed {
+  from = hcloud_firewall_attachment.inngest
+
+  lifecycle {
+    destroy = false
+  }
+}'
+_G1_OTHER='resource "hcloud_firewall_attachment" "git_data" {
+  firewall_id = hcloud_firewall.git_data.id
+  server_ids  = [hcloud_server.git_data.id]
+}'
+# g1_fixture <name> <server-body> [<extra-host-tf>] [<other-tf>] — writes a fixture root, echoes its dir.
+g1_fixture() {
+  local d="${_G1_TMP}/$1"
+  mkdir -p "$d"
+  printf 'resource "hcloud_server" "inngest" {\n  name = "soleur-inngest-server"\n%s\n  labels = {\n    app = "x"\n  }\n}\n\n%s\n\n%s\n%s\n' \
+    "$2" "$_G1_FW" "$_G1_REMOVED" "${3:-}" > "$d/inngest-host.tf"
+  printf '%s\n' "${4:-$_G1_OTHER}" > "$d/other.tf"
+  echo "$d"
+}
+g1_row() { # g1_row <PASS|RED> <label> <dir> [<needle>]
+  local out
+  out="$(guard1_violations "$3" inngest-host.tf)"
+  if [[ "$1" == PASS ]]; then
+    [[ -z "$out" ]] && pass || fail "GUARD 1 $2 must PASS, got: ${out}"
+  else
+    [[ -n "$out" && "$out" == *"${4:-}"* ]] && pass || fail "GUARD 1 $2 must RED naming '${4:-<any>}', got: '${out}'"
+  fi
+}
+g1_row PASS "canonical" "$(g1_fixture canon '  firewall_ids = [hcloud_firewall.inngest.id]')"
+g1_row PASS "H1 extra whitespace + trailing comment" "$(g1_fixture h1 '  firewall_ids   =   [ hcloud_firewall.inngest.id ]   # deny-all')"
+g1_row PASS "H2 multi-line list with a trailing comma" "$(g1_fixture h2 $'  firewall_ids = [\n    hcloud_firewall.inngest.id,\n  ]')"
+g1_row RED "M1 firewall_ids line missing" "$(g1_fixture m1 '  image = "ubuntu-24.04"')" "sets no firewall_ids"
+g1_row RED "M1b firewall_ids only in a comment" "$(g1_fixture m1b '  # firewall_ids = [hcloud_firewall.inngest.id]')" "sets no firewall_ids"
+g1_row RED "M2 firewall_ids points at another firewall" "$(g1_fixture m2 '  firewall_ids = [hcloud_firewall.registry.id]')" "must be exactly"
+g1_row RED "M3 the attachment resource re-added" "$(g1_fixture m3 '  firewall_ids = [hcloud_firewall.inngest.id]' $'resource "hcloud_firewall_attachment" "inngest" {\n  firewall_id = hcloud_firewall.inngest.id\n  server_ids  = [hcloud_server.inngest.id]\n}')" '"inngest" is declared'
+g1_row RED "M4 a second firewall after a compliant first" "$(g1_fixture m4 '  firewall_ids = [hcloud_firewall.inngest.id, hcloud_firewall.web.id]')" "must be exactly"
+_g1_m5="$(g1_fixture m5 '  firewall_ids = [hcloud_firewall.inngest.id]')"
+sed -i 's/resource "hcloud_server" "inngest"/resource "hcloud_server" "inngest_renamed"/' "$_g1_m5/inngest-host.tf"
+g1_row RED "M5 server block renamed (no vacuous pass)" "$_g1_m5" "server block not found"
+g1_row RED "M6 an attachment under another name binding the inngest firewall" "$(g1_fixture m6 '  firewall_ids = [hcloud_firewall.inngest.id]' '' $'resource "hcloud_firewall_attachment" "sneaky" {\n  firewall_id = hcloud_firewall.inngest.id\n  server_ids  = [hcloud_server.inngest.id]\n}')" "hcloud_firewall_attachment.sneaky binds"
+_g1_m7="$(g1_fixture m7 '  firewall_ids = [hcloud_firewall.inngest.id]')"
+sed -i 's/^  name = "soleur-inngest"$/&\n  apply_to {\n    server = hcloud_server.inngest.id\n  }/' "$_g1_m7/inngest-host.tf"
+g1_row RED "M7 an apply_to block on hcloud_firewall.inngest" "$_g1_m7" "apply_to"
+_g1_m8="$(g1_fixture m8 '  firewall_ids = [hcloud_firewall.inngest.id]')"
+sed -i 's/destroy = false/destroy = true/' "$_g1_m8/inngest-host.tf"
+g1_row RED "M8 the removed block destroys instead of forgetting" "$_g1_m8" "removed"
 
 # 4. NO lifecycle.ignore_changes=[user_data]. Strip COMMENT lines first — the block carries a
 #    "Deliberately NO ...ignore_changes=[user_data]" prose comment a bare grep would false-match.
