@@ -94,7 +94,7 @@ cp -a "$REPO_ROOT/.github/workflows/build-inngest-bootstrap-image.yml" "$SANDBOX
 # rather than skipped: on the unmutated sandbox the tag's tree IS the working tree, and a case
 # that mutates a carrier reds it for real. The tag name is derived from the pin literal exactly
 # as the guard derives it, so the two cannot drift apart.
-_pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTINE/cloud-init-inngest.yml" 2>/dev/null | head -1 | sed 's/.*://')"
+_pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTINE/cloud-init-inngest.yml" 2>/dev/null | sed -n '1p' | sed 's/.*://')"
 [[ -n "$_pin_tag" ]] || die "could not derive the pinned tag for the sandbox git fixture"
 (
   set -e
@@ -160,7 +160,7 @@ if [[ "$BASE_RC" != "0" ]]; then
   exit 2
 fi
 echo "=== Guard 1 (#7462) mutation battery ==="
-echo "baseline: guard GREEN on unmutated sandbox ($(grep -oE '[0-9]+/[0-9]+ passed' "$BASE_LOG" | head -1))"
+echo "baseline: guard GREEN on unmutated sandbox ($(grep -oE '[0-9]+/[0-9]+ passed' "$BASE_LOG" | sed -n '1p'))"
 echo ""
 
 # case <id> <expected-failing-assertion-substring> <file-to-mutate> <python-mutator>
@@ -202,7 +202,7 @@ case_mutate() {
   # unscoped grep matched the PASS line of the very assertion the row claims went RED — 7 of 9
   # rows passed with their named assertion neutered to `true`, and one was misrouting on the
   # unmutated tree. The row's contract is "THIS assertion failed", not "the guard exited 1".
-  if ! grep -E '^  FAIL' "$log" | grep -qF "$expect"; then
+  if ! grep -E '^  FAIL' "$log" | grep -cF "$expect" >/dev/null; then
     FAIL=$((FAIL + 1))
     echo "  MISROUTED: $id — the guard went RED, but NOT on the assertion this row targets."
     echo "             expected a failure naming: $expect"
@@ -699,7 +699,7 @@ if [[ "$NG1_HARN_OUT" == *"KILLED:"* ]]; then
   echo "  SURVIVED: ng1-harness-row1-self-compare — row 1 still reports KILLED with the order comparison neutered"
 else
   PASS=$((PASS + 1))
-  echo "  KILLED:   ng1-harness-row1-self-compare — neutering the order comparison flips row 1 off KILLED ($(printf '%s' "$NG1_HARN_OUT" | grep -oE 'SURVIVED|MISROUTED' | head -1))"
+  echo "  KILLED:   ng1-harness-row1-self-compare — neutering the order comparison flips row 1 off KILLED ($(printf '%s' "$NG1_HARN_OUT" | grep -oE 'SURVIVED|MISROUTED' | sed -n '1p'))"
 fi
 
 # =======================================================================================

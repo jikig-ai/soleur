@@ -57,7 +57,7 @@ assert "no_happy_eyeballs is a bare bool (schema: bool), not quoted" \
 # rather than let the next person "fix" the tests to match a provider they didn't check.
 echo "--- provider pin guard (these assertions are v4-specific) ---"
 assert "cloudflare provider is still pinned to v4 (connect_timeout=string; v5 makes it an integer)" \
-  "grep -A2 'cloudflare = {' '$MAIN' | grep -qE 'version[[:space:]]*=[[:space:]]*\"~> 4\.[0-9]+\"'"
+  "grep -A2 'cloudflare = {' '$MAIN' | grep -cE 'version[[:space:]]*=[[:space:]]*\"~> 4\.[0-9]+\"' >/dev/null"
 
 printf '\n=== %s: %d passed, %d failed ===\n' "$(basename "$0")" "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

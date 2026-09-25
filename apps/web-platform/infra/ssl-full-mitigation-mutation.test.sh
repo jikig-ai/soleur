@@ -209,7 +209,7 @@ def h2_neuter_both(root):
 def h3_drop_a_case(root):
     """Delete one assertion case. The exact-cardinality floor must catch it."""
     sub_once("%s/%s" % (root, GRD),
-             """    rc=1; printf '%s' "$m_expr" | grep -qF 'www.soleur.ai' && rc=0
+             """    rc=1; printf '%s' "$m_expr" | grep -cF 'www.soleur.ai' >/dev/null && rc=0
     verdict "$rc" "the mitigation expression covers www.soleur.ai\"""",
              "")
 
@@ -362,7 +362,7 @@ case_row() {
     printf '            (b) the mutant is EQUIVALENT — prove no verdict changes, and say so here.\n'
     return
   fi
-  if ! grep -E '^  FAIL|^\[FATAL\]' "$log" | grep -qF -- "$expect"; then
+  if ! grep -E '^  FAIL|^\[FATAL\]' "$log" | grep -cF -- >/dev/null "$expect"; then
     FAIL=$((FAIL + 1))
     printf '  MISROUTED: %-8s the guard went RED, but NOT on the case this row targets.\n' "$id"
     printf '             expected a failure naming: %s\n' "$expect"

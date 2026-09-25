@@ -160,7 +160,7 @@ run_guard() {
   TRACE="$(cat "$root/trace" 2>/dev/null || true)"
 }
 
-field() { printf '%s' "$EMIT" | grep -oE "$1=[^ \"]+" | head -1 | cut -d= -f2; }
+field() { printf '%s' "$EMIT" | grep -oE "$1=[^ \"]+" | sed -n '1p' | cut -d= -f2; }
 
 # --- BEHAVIORAL: T1 ip present => nic_ok, converged_by=already, heartbeat PINGED ----------
 # T1 is the POSITIVE CONTROL for the whole ping suite: it proves the ping stub + mechanism are
@@ -235,19 +235,19 @@ assert "AC4: no REBOOT_CAP budget (the registry's reboot machinery is intentiona
 # the negative assert uses WOULD then match — so the negative assert is meaningful, not vacuous.
 echo "--- AC4 mutation controls: each negative assert is provably non-vacuous ---"
 assert "MUT: a standalone 'reboot' line is detected by the predicate" \
-  "printf '%s\n' \"\$STRIPPED\" 'reboot' | grep -qE '^[[:space:]]*reboot([[:space:]]|\$)'"
+  "printf '%s\n' \"\$STRIPPED\" 'reboot' | grep -cE '^[[:space:]]*reboot([[:space:]]|\$)' >/dev/null"
 assert "MUT: 'CONVERGED_BY=reboot' is detected by the predicate" \
-  "printf '%s\n' \"\$STRIPPED\" 'CONVERGED_BY=reboot' | grep -q 'CONVERGED_BY=reboot'"
+  "printf '%s\n' \"\$STRIPPED\" 'CONVERGED_BY=reboot' | grep -c 'CONVERGED_BY=reboot' >/dev/null"
 assert "MUT: 'DO_REBOOT' is detected by the predicate" \
-  "printf '%s\n' \"\$STRIPPED\" 'if [ \"\$DO_REBOOT\" = true ]; then' | grep -q 'DO_REBOOT'"
+  "printf '%s\n' \"\$STRIPPED\" 'if [ \"\$DO_REBOOT\" = true ]; then' | grep -c 'DO_REBOOT' >/dev/null"
 assert "MUT: '\$REBOOT_BIN' is detected by the predicate" \
-  "printf '%s\n' \"\$STRIPPED\" 'REBOOT_BIN=\$(command -v reboot)' | grep -q 'REBOOT_BIN'"
+  "printf '%s\n' \"\$STRIPPED\" 'REBOOT_BIN=\$(command -v reboot)' | grep -c 'REBOOT_BIN' >/dev/null"
 assert "MUT: 'REBOOT_CAP' is detected by the predicate" \
-  "printf '%s\n' \"\$STRIPPED\" 'REBOOT_CAP=2' | grep -q 'REBOOT_CAP'"
+  "printf '%s\n' \"\$STRIPPED\" 'REBOOT_CAP=2' | grep -c 'REBOOT_CAP' >/dev/null"
 # And prove the standalone-reboot predicate does NOT fire on the emit's `reboot_count=0` (the exact
 # false-positive the anchoring defends against) — so the negative asserts pass for the RIGHT reason.
 assert "MUT: the predicate does NOT mis-fire on the emit's 'reboot_count=0'" \
-  "! printf '%s\n' 'LINE=\"SOLEUR_PRIVATE_NIC reboot_count=0 boot_id=x\"' | grep -qE '^[[:space:]]*reboot([[:space:]]|\$)'"
+  "! printf '%s\n' 'LINE=\"SOLEUR_PRIVATE_NIC reboot_count=0 boot_id=x\"' | grep -cE '^[[:space:]]*reboot([[:space:]]|\$)' >/dev/null"
 
 # --- static drift-guard: doppler-auth unit-start contract (#6438 §3 unit-start fix) -------
 # The guard runs `doppler run` as ROOT. Without Environment=HOME=/root the doppler CLI dies
@@ -260,13 +260,13 @@ SERVER_TF="$SCRIPT_DIR/server.tf"
 assert "nic-guard .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
   "grep -qE '^Environment=HOME=/root\$' '$SVC'"
 assert "nic-guard .service does NOT source webhook-deploy (deploy-owned; imports /tmp/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'webhook-deploy'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'webhook-deploy' >/dev/null"
 assert "nic-guard .service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'DOPPLER_CONFIG_DIR' >/dev/null"
 assert "nic-guard .service does NOT reference /tmp/.doppler (#6536 clash surface)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c '/tmp/.doppler' >/dev/null"
 assert "nic-guard .service is root-run (no User=deploy without PrivateTmp=true)" \
-  "! grep -qE '^User=deploy' '$SVC' || grep -qE '^PrivateTmp=true' '$SVC'"
+  "! grep -qE '^User=deploy' '$SVC' || grep -cE '^PrivateTmp=true' >/dev/null '$SVC'"
 # Anchor on the token VALUE wiring (web_probes.key), not just the literal (test-design review).
 assert "server.tf private_nic_guard_install writes DOPPLER_TOKEN=<web_probes.key> into /etc/default/web-private-nic-guard" \
   "grep -qE 'DOPPLER_TOKEN=%s.*web_probes\\.key.*/etc/default/web-private-nic-guard' '$SERVER_TF'"

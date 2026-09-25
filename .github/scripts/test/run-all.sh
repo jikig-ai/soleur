@@ -11,8 +11,8 @@
 #
 # That is why `fixtures-validate-infra-templates.sh` sits in this directory but is
 # deliberately NOT named `test-*`: it needs terraform + cloud-init, so it runs from
-# the `deploy-script-tests` job in infra-validation.yml, which installs both. Do not
-# rename it back into this glob.
+# the `deploy-script-tests-fixed` job in infra-validation.yml, which installs both.
+# Do not rename it back into this glob.
 #
 # EXIT CONTRACT (#7429, ADR-187) — this is a NESTED runner. scripts/test-all.sh registers it
 # via `run_suite`, so whatever rc leaves this file is what `run_suite` classifies:

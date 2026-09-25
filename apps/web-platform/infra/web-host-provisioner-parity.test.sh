@@ -82,9 +82,9 @@ set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
 # SOLEUR_INFRA_DIR overrides the analysed directory so this guard's own logic can be
-# mutation-tested against a sandbox copy in under a second (same rationale as
-# run-registered-suites.sh's INFRA_WF override). CI never sets it — verified: the only
-# setter in the repo is the mutation battery.
+# mutation-tested against a sandbox copy in under a second (same seam the
+# run-registered-suites.sh fixtures use for glob derivation). CI never sets it —
+# verified: the only setter in the repo is the mutation battery.
 INFRA="${SOLEUR_INFRA_DIR:-$ROOT/apps/web-platform/infra}"
 
 # This loop is the guard's INPUT CONTRACT, and the mutation battery DERIVES its sandbox

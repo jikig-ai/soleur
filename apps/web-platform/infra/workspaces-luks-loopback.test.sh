@@ -336,7 +336,7 @@ echo "  findmnt -no SOURCE '$STAGING_DIR' => '$L4_SOURCE'"
 echo "  form                              => $L4_FORM"
 echo "  readlink -f of that               => $(readlink -f -- "${L4_SOURCE:-/nonexistent}" 2>/dev/null || echo '<unresolvable>')"
 echo "  readlink -f of \$MAPPER            => $MAPPER_REAL"
-echo "  kernel: $(uname -r 2>/dev/null)   util-linux findmnt: $(findmnt --version 2>/dev/null | head -1)"
+echo "  kernel: $(uname -r 2>/dev/null)   util-linux findmnt: $(findmnt --version 2>/dev/null | sed -n '1p')"
 echo "  => _same_dev canonicalizes both sides, so it is correct under EITHER form. A raw-string"
 echo "     comparison against \$MAPPER would be correct ONLY under the mapper-name form."
 echo "=================================================================================="
@@ -551,7 +551,7 @@ mk_repo() {
 # MEASURED (git 2.53.0) the shapes differ materially and select DIFFERENT classifier branches —
 #   commit/tree -> rc 128 + `fatal: loose object <sha> … is corrupt`  (matches _FSCK_CONTENT_FATAL_RE)
 #   blob        -> rc 3   + `missing blob <sha>` on STDOUT, ZERO fatal lines
-# `find | head -n1` picked by readdir order, which on ext4 is a per-filesystem hash of the object
+# `find | sed -n '1p'` picked by readdir order, which on ext4 is a per-filesystem hash of the object
 # name, so the branch under test was a coin flip per run and nothing asserted which one ran.
 corrupt_loose() {
   local repo="$1" kind="${2:-commit}" sha f
