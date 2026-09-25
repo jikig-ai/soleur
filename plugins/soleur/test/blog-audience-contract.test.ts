@@ -70,13 +70,13 @@ function routingPhraseLines(text: string): string[] {
 }
 
 function audienceBullets(skill: string): string[] {
-  return skill.split("\n").filter((l) => l.startsWith("- `--audience`"));
+  return skill.split("\n").filter((l) => l.startsWith("- `--audience"));
 }
 
 function audienceBulletProblems(skill: string): string[] {
   const bullets = audienceBullets(skill);
   if (bullets.length !== 1) {
-    return [`content-writer SKILL.md must have exactly one "- \`--audience\`" bullet (found ${bullets.length})`];
+    return [`content-writer SKILL.md must have exactly one "- \`--audience" bullet (found ${bullets.length})`];
   }
   const problems: string[] = [];
   if (!bullets[0].includes("## Channel Notes > ### Blog")) {

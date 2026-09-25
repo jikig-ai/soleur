@@ -29,6 +29,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--hea
 
 - Phase 3 (User Approval): auto-selects **Accept** when all citations are PASS or SOURCED. When any citation is FAIL, auto-selects **Fix** — removes or replaces the failed claims, re-runs soleur:marketing:fact-checker, and accepts only when all claims pass (max 2 fix cycles, then accepts with UNSOURCED markers for any remaining failures).
 - If citation verification was skipped (soleur:marketing:fact-checker unavailable), auto-selects **Accept** with a warning in the issue.
+- Phase 2.4 (Blog Note Scan): leftover hits after 2 fix cycles, or a scan that could not run, are listed in the Phase 4 report; the draft is never blocked.
 
 ## Phase 0: Prerequisites
 
@@ -65,7 +66,7 @@ Parse the arguments provided after the skill name:
 - `--outline "..."` (optional): article structure as inline text (Markdown list format)
 - `--keywords "kw1, kw2, kw3"` (optional): target keywords, comma-separated
 - `--path <output-path>` (optional): where to write the file
-- `--audience "technical|general"` (optional): audience register from brand guide. `technical` uses engineering vocabulary and developer proof points. `general` uses plain language and business-outcome proof points. Defaults to channel-appropriate (blog → technical, landing page → general).
+- `--audience "technical|general"` (optional): audience register from brand guide. `technical` uses engineering vocabulary and developer proof points. `general` uses plain language and business-outcome proof points. Blog posts use the register the brand guide's `## Channel Notes > ### Blog` note names. Without a Blog note they default to `technical`, as before. Landing pages and onboarding content default to `general`. An explicit `--audience` is honored as given.
 
 **Default output path** (if `--path` not provided): auto-generate from topic slug as `plugins/soleur/docs/blog/YYYY-MM-DD-<slug>.md`.
 
@@ -74,9 +75,9 @@ Parse the arguments provided after the skill name:
 Read the brand guide sections that inform content generation:
 
 1. Read `## Voice` -- apply brand voice, tone, do's and don'ts
-2. Read `## Channel Notes > ### Blog` -- apply blog-specific guidelines (if the section exists)
+2. Read `## Channel Notes > ### Blog` -- apply every rule in it, including any check it asks for before drafting and any rule for unattended runs (if the section exists). A Blog note never adds an abort or a question: in headless mode, follow its unattended-run rule.
 3. Read `## Identity` -- use mission and positioning for content alignment
-4. If `--audience` is set, read `### Audience Voice Profiles` from brand guide and apply the matching register's vocabulary, explanation depth, and proof point selection rules. If `--audience` is not set, infer from `--path` or topic context (blog posts default to `technical`, landing pages and onboarding content default to `general`).
+4. Resolve the register: `--audience` if set, otherwise the Phase 1 default (the register the Blog note names for blog posts, `technical` for blog posts without a Blog note, `general` for landing pages and onboarding content). Then read `### Audience Voice Profiles` from brand guide and apply that register's vocabulary, explanation depth, and proof point selection rules.
 
 Generate a full article draft that:
 
@@ -120,6 +121,36 @@ Generate a full article draft that:
   ```
 
 **If existing posts are present** in the target directory, read 1-2 of them to match frontmatter schema, layout name, and tag conventions.
+
+## Phase 2.4: Blog Note Scan
+
+Run this phase only when **both** hold:
+
+- the output is a blog post (the default output path, or a `--path` under a `blog/` directory), and
+- the brand guide's `## Channel Notes > ### Blog` note contains the literal label `**Jargon limits.**`.
+
+Otherwise skip it. A project whose Blog note sets no jargon limits gets no scan.
+
+[blog-jargon-scan.sh](./scripts/blog-jargon-scan.sh) flags reader-visible lines (the `title:`, `seoTitle:` and `description:` values, plus the body up to the first JSON-LD block) that carry a backtick, a `--flag`, or a visible issue or PR number. Link targets are not scanned. Write the draft to a temp file and scan it in **one** fenced block, so the cleanup trap belongs to the same shell that allocates the file. Use a quoted heredoc delimiter: drafts contain backticks and `$`, and an unquoted delimiter would execute them and change the text being scanned.
+
+```bash
+DRAFT="$(mktemp)" || { echo "blog-jargon-scan unavailable (rc=mktemp)"; exit 0; }
+trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+cat > "$DRAFT" <<'DRAFT_EOF'
+<full draft text>
+DRAFT_EOF
+rc=0
+bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh" "$DRAFT" || rc=$?
+echo "SCAN_RC=$rc"
+```
+
+The script path is the bare plugin-root anchor, with no fallback (ADR-179): a fallback would resolve into the working repository and execute a file from it.
+
+- **`SCAN_RC=0`:** no hits. Continue.
+- **`SCAN_RC=1`:** rewrite each listed line in plain words, or move the detail into the single closing technical link, whose URL may carry the number. Re-scan, for at most 2 cycles. Keep any hits left after that: interactive runs show them in Phase 3; headless runs list them in the Phase 4 report.
+- **Any other value** (usage error, unreadable file, `127` for a missing script): print `blog-jargon-scan unavailable (rc=<N>)` in the Phase 4 report and continue. Never block a draft on a broken scan.
+
+Re-run this phase every time Phase 2.5 re-runs (after each Phase 3 **Edit** or headless **Fix** cycle), so text rewritten by a citation fix is scanned too.
 
 ## Phase 2.5: Citation Verification
 
@@ -178,6 +209,8 @@ On acceptance, write the article to the output path.
 
 Report: "Article written to `<path>`. Review and commit when ready."
 
+If Phase 2.4 ran, add one line after that sentence for each leftover scan hit, or the `blog-jargon-scan unavailable (rc=<N>)` line if the scan could not run.
+
 ## Phase 4.5: OG Image Generation
 
 Every blog post must have an `ogImage` for social sharing differentiation. This is **mandatory, not optional** — `plugins/soleur/test/seo-aeo-drift-guard.test.ts` (#4753) FAILS CI for any post without an `ogImage` frontmatter field. A post that reaches CI without it red-lights the build. After writing the article:
@@ -202,5 +235,5 @@ Every blog post must have an `ogImage` for social sharing differentiation. This 
 - Do not scaffold blog infrastructure. If missing, direct the user to the docs-site skill.
 - The blog-post.njk layout generates BlogPosting JSON-LD automatically. Do not duplicate it in the post body.
 - Frontmatter fields should match existing posts in the target directory when possible. The `date:` field must be unquoted (e.g., `date: 2026-03-26`, not `date: "2026-03-26"`) -- Eleventy's `dateToRfc3339` filter requires a Date object, and quoted dates are parsed as strings.
-- If the brand guide's `## Channel Notes > ### Blog` section is missing, generate content using only the `## Voice` section (no error).
+- If the brand guide's `## Channel Notes > ### Blog` section is missing, generate content using only the `## Voice` section (no error), and keep the `technical` blog default; the scan runs only when the note sets jargon limits.
 - Every factual claim, statistic, and attributed quote must have a verifiable source URL. Phase 2.5 enforces this via the soleur:marketing:fact-checker agent -- claims without citations are flagged as UNSOURCED and claims with unsupporting sources are flagged as FAIL [enforced: soleur:marketing:fact-checker agent via Phase 2.5].
