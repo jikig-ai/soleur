@@ -206,7 +206,10 @@ describe("Guard 1 — real files", () => {
   test("content-writer SKILL.md invokes the scan by path and never pastes the draft into a heredoc", () => {
     const skill = readFileSync(CONTENT_WRITER, "utf8");
     expect(skill).toContain('bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh"');
-    expect(skill).not.toMatch(/<<-?\s*'?DRAFT/);
+    const phase = skill.split(/^## Phase 2\.4: /m)[1]?.split(/^## /m)[0] ?? "";
+    expect(phase).toContain("with the **Write** tool");
+    // Any heredoc, whatever its delimiter: a draft line equal to it ends the heredoc early.
+    expect(phase).not.toContain("<<");
   });
 
   test("brand-guide.md register lines: the blog is General, not Technical", () => {

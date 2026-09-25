@@ -151,7 +151,7 @@ The script path is the bare plugin-root anchor, with no fallback (ADR-179): a fa
 - **`SCAN_RC=0`:** no hits. Continue.
 - **`SCAN_RC=1`:** rewrite each listed line in plain words, or move the detail into one closing technical link at the end of the post (add it if the draft has none; if the draft links several technical write-ups, keep the most relevant one there), whose URL may carry the number. Re-scan after each fix cycle, for at most 2 fix cycles per run of this phase. Keep any hits left after that, as the line's text without the scratch file's line number: interactive runs show them in Phase 3; headless runs list them in the Phase 4 report.
 - **Any other value** (usage error, unreadable file, `127` for a missing script): print `blog-jargon-scan unavailable (rc=<N>)` in the Phase 4 report and continue. Never block a draft on a broken scan.
-- **The Bash call is refused** (a restricted runner, such as a scheduled job allowed only `gh` commands): print `blog-jargon-scan unavailable (denied)` in the Phase 4 report and continue without retrying. The Blog note's jargon limits still apply to the draft.
+- **Any Bash call in this phase is refused** (a restricted runner, such as a scheduled job allowed only `gh` commands; usually step 1 is the first refusal): print `blog-jargon-scan unavailable (denied)` in the Phase 4 report, stop this phase without retrying, and keep the draft you hold in context. If `draft.md` was already written, Read it back first. A refused `rm` leaves the scratch directory behind; that is harmless. The Blog note's jargon limits still apply to the draft.
 
 Re-run this phase every time Phase 2.5 re-runs (after each Phase 3 **Edit** or headless **Fix** cycle), so text rewritten by a citation fix is scanned too.
 

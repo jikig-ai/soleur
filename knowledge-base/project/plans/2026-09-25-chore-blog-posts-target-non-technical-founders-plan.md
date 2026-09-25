@@ -619,7 +619,7 @@ The must-PASS content in H2 is:
   - with no argument: exits 2.
 - [x] **AC7.** `bun test plugins/soleur/test/blog-audience-contract.test.ts` passes.
 - [x] **AC8.** `grep -c "apply the brand guide's Channel Notes > Blog note" plugins/soleur/skills/ship/SKILL.md` prints `1`, and `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0.
-- [x] **AC9.** `vision.md` has no "technical blog posts", and `content-strategy.md` Pillar 2 carries the dated #8774 line.
+- [x] **AC9.** `vision.md` has no "technical blog posts", and `content-strategy.md` carries the dated #8774 line under `## Content Pillars` (above Pillar 1, since it covers Pillars 2 and 3).
 - [x] **AC10.** These suites still pass:
   - `bun test apps/web-platform/test/server/inngest/cron-weekly-release-digest.test.ts`, the Release Digest lockstep;
   - `bun test plugins/soleur/test/marketing-content-drift.test.ts plugins/soleur/test/scratch-path-collision.test.ts plugins/soleur/test/components.test.ts`;
