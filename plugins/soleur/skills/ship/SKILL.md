@@ -849,7 +849,7 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **If triggered:**
 
-1. Spawn the CMO agent with a pre-ship content assessment prompt: "Assess content and distribution opportunities from this PR. What was produced, what data points are content-worthy, which channels should be used, and what's the recommended timing (ship with PR or schedule for later)?"
+1. Spawn the CMO agent with a pre-ship content assessment prompt: "Assess content and distribution opportunities from this PR. What was produced, what data points are content-worthy, which channels should be used, and what's the recommended timing (ship with PR or schedule for later)? For any blog post, apply the brand guide's Channel Notes > Blog note."
 2. Present the CMO's recommendations to the user.
 3. **Interactive mode:** Ask "Create content now, schedule for later, or skip?" Options: Create now (invoke content-writer/social-distribute), Schedule (create a GitHub issue with content brief), Skip.
 4. **Headless mode:** Auto-create a GitHub issue with the CMO's content brief for later action. Do not block the ship.
