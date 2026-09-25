@@ -104,6 +104,11 @@ ARGUMENT (status ignored) or behind a here-string with a reader that consumes al
     Recovery: unquoted the scalar (no shell-active token needed quoting). **Prevention:** verify a
     probe through Check 10's own parse + sandbox path, never by pasting it into a shell.
 
+## See also
+
+- Post-incident report: `knowledge-base/engineering/operations/post-mortems/2026-09-24-release-deploy-arm-false-skip-on-lagging-runs-search-postmortem.md`
+- Follow-ups and the ADR-084 retry decision: #8799
+
 ## Tags
 
 category: integration-issues
