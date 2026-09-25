@@ -37,7 +37,14 @@ its own per-command go-ahead.
 
 ## Phase 3.1: Inngest replace and resume (go-ahead required)
 
-- [ ] 3.1.1 Coordinate with #8833: read the probe and boot-stage rows, and name the approver.
+- [ ] 3.1.1 Coordinate with #8833 before dispatching:
+  - [ ] read the probe and boot-stage rows;
+  - [ ] name the approver;
+  - [ ] record the latest `SOLEUR_INNGEST_SERVER_PROBE` row (the AC-C3 baseline);
+  - [ ] read the post-retry branch of `sendInngestWithRetry`'s callers and record the user-visible
+        effect;
+  - [ ] confirm Inngest cron no-backfill on the pinned version;
+  - [ ] pick a low-traffic window.
 - [ ] 3.1.2 Dispatch `inngest-host-replace` and Monitor it to success.
 - [ ] 3.1.3 Dispatch `cutover-inngest.yml op=resume`, get the environment approval, and Monitor it to
       success.
@@ -46,7 +53,13 @@ its own per-command go-ahead.
 ## Phase 3.2: Git-data G2 and G3 (go-ahead required)
 
 - [ ] 3.2.1 Run G2 `plan_only`: success, with the gate PASS.
-- [ ] 3.2.2 Run the G3 real replace, then Monitor `git-data-pin-redeploy.yml` to success (AC-C4).
+- [ ] 3.2.2 Re-read the absence of `GIT_DATA_STORE_ENABLED`, then run the G3 real replace (one
+      attempt only). Check the runbook GO criteria:
+  - [ ] `boot_complete plaintext_journal=dirty plaintext_empty=yes fence_on_mapper=yes erasure_probe=yes`;
+  - [ ] zero `erasure_outcome` events;
+  - [ ] G4 `role=git-data-auth verdict=ok`.
+  Then Monitor `git-data-pin-redeploy.yml` to success (AC-C4). Record the Art. 12(3) sweep
+  (deadline 2026-10-24) on #5914.
 
 ## Phase 1B: PR-B, the standing tail (a branch cut from main after PR-A)
 

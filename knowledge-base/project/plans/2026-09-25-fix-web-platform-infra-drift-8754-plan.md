@@ -17,6 +17,42 @@ requires_cpo_signoff: true
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25
+
+**Sections enhanced:** Implementation Phases (3.1, 3.2, 0.4, 1B.4), Downtime & Cutover (new),
+Observability, User-Brand Impact, Acceptance Criteria (AC-C2), Per-resource classification
+(attributions), Research Insights.
+
+**Agents used:**
+
+- **Deepen pass:** security-sentinel, deployment-verification-agent,
+  observability-coverage-reviewer, user-impact-reviewer, and a verify-the-negative/attribution sweep.
+- **Planning, carried in:** terraform-architect, CTO (twice), CPO, spec-flow-analyzer (twice),
+  advisor consult, DHH, Kieran, code-simplicity and architecture-strategist.
+
+### Key Improvements
+
+1. The inngest firewall is now bound through `hcloud_server.firewall_ids`, so it attaches before
+   first boot. This replaces plan v2's target-plus-gate-counter design. Three reviewers converged on
+   it. It removes the boot window and the partial-failure dead end.
+2. A new `## Downtime & Cutover` section evaluates and rejects blue-green for the singleton
+   scheduler, with a bounded window and a rollback path for 3.1.
+3. The git-data G3 step now carries the runbook's one-attempt cap, its GO fields, and the Art. 12(3)
+   deadline of 2026-10-24.
+4. Observability now cites a layer for every failure mode, adds the stranded-scheduler mode, and
+   makes the probe print the server ids.
+
+### New Considerations Discovered
+
+- `sendInngestWithRetry` gives up after about 1.5 s. Events sent while the inngest host is down fail
+  at the caller, and that failure class is live today.
+- Two attributions in the draft were wrong: the heartbeat pair came from PR #5818, and the digest
+  came from PR #6839, not #6780.
+- The PR plan job's `GITHUB_TOKEN` cannot read deployment policies once an `import` block exists,
+  hence the `actions: read` change.
+
 ## Overview
 
 The scheduled drift check on the `web-platform` Terraform root reports a non-empty plan
@@ -75,16 +111,16 @@ Commit and PR attribution comes from `git log -S` on `origin/main` (the git-hist
 | 1 | `cloudflare_bot_management.soleur_ai` ~ (`sbfm_*` allow→null) | **Real drift (config)**: a perpetual diff | Pro zone; live value `allow`; config omits both attributes, so every merge apply has re-PUT them since at least #7316 | PR-B: declare `sbfm_definitely_automated = "allow"` and `sbfm_verified_bots = "allow"` |
 | 2 | `github_repository_environment_deployment_policy.web_platform_infra_apply_main` + | **Real drift (state)**: a phantom create that collides with a pre-existing live policy | Added by PR #6953 (2f46570c19, 2026-07-26). Live policy id is 49861552. Every merge apply records the phantom id `…:0` | PR-B: new address `…web_platform_infra_apply_main_adopted`, an `import` (id `soleur:web-platform-infra-apply:49861552`), and `removed{destroy=false}` for the old address |
 | 3 | `doppler_secret.zot_heartbeat_url_prd` − | **Un-applied removal** (no route) | Removed in PR #6654 (14075d1b43, 2026-07-18). It was never on any `-target` list, so no apply ever destroyed it. **Zero consumers** (see the ZOT audit) | PR-B: bare `-target` on the orphaned address in the per-merge list (a destroy "because not in configuration"); the squash commit carries `[ack-destroy]` |
-| 4 | `betteruptime_heartbeat.git_data_prd` + and `doppler_secret.git_data_heartbeat_url_prd` + | **Un-applied, no route**: an `OPERATOR_APPLIED_EXCLUSIONS` member whose route (a full-root apply outside CI) no longer exists | Heartbeat from PR #7642 (f2f3cc4bc2); secret from PR #6654. The feeder `web-git-data-probe.sh` now dereferences the URL through a per-run `doppler run` (`web-git-data-probe.service`), and heartbeat-manifest.ts flipped the row to `kind:"timer"`. `arm-heartbeats.sh` already has `arm_one 'betteruptime_heartbeat.git_data_prd'`. #6548 and the `l3-probe-armed-6438.sh` follow-through are both waiting on it (`soleur-git-data-prd=ABSENT`) | PR-B: move both to the per-merge `-target` list. The same merge apply's arm step measures a beat, then arms the heartbeat or rolls it back to paused |
+| 4 | `betteruptime_heartbeat.git_data_prd` + and `doppler_secret.git_data_heartbeat_url_prd` + | **Un-applied, no route**: an `OPERATOR_APPLIED_EXCLUSIONS` member whose route (a full-root apply outside CI) no longer exists | Both resources were declared by PR #5818 (e589457312, 2026-07-01); PR #6654 rewired the secret's consumer. The feeder `web-git-data-probe.sh` now dereferences the URL through a per-run `doppler run` (`web-git-data-probe.service`), and heartbeat-manifest.ts flipped the row to `kind:"timer"`. `arm-heartbeats.sh` already has `arm_one 'betteruptime_heartbeat.git_data_prd'`. #6548 and the `l3-probe-armed-6438.sh` follow-through are both waiting on it (`soleur-git-data-prd=ABSENT`) | PR-B: move both to the per-merge `-target` list. The same merge apply's arm step measures a beat, then arms the heartbeat or rolls it back to paused |
 | 5 | `tls_private_key.proxy_server`, `tls_self_signed_cert.proxy_server`, `doppler_secret.proxy_tls_{key,cert}` + | **Declared ahead of rollout** (no route; the consumer shipped, the rollout config is absent) | PR #5877 (d7f1fa55ff, 2026-07-01). `SOLEUR_PROXY_BIND` and `SOLEUR_PROXY_PEER_ALLOWLIST` are absent from Doppler prd. web-2 is a weight-0 standby until the Phase-6 flip (`lb-weight-gate.sh`). Delivering the material now would make `createProxyServer` fire a `reportSilentFallback` Sentry event on every container start (`session-proxy.ts`, `createProxyServer.no-bind`) | PR-B: gate all four behind `var.host_proxy_tls_enabled` (bool, default `false`), which the multi-host flip sets |
-| 6 | `doppler_secret.inngest_config_digest` + (value `""`) | **Declared ahead of need** (no promoted digest; channel not live) | PR #6780 (308455810b). `INNGEST_CONFIG_DIGEST` is absent from `prd_terraform`, so the variable takes its default `""`. `betterstack-query.sh --grep SOLEUR_INFRA_PULL_APPLIED --since 48h` returns nothing, so by the runbook's own gate the channel is not live | PR-B: `count = var.inngest_config_digest != "" ? 1 : 0`; file a follow-up for the missing promotion apply route |
+| 6 | `doppler_secret.inngest_config_digest` + (value `""`) | **Declared ahead of need** (no promoted digest; channel not live) | PR #6839 (32431c8249, 2026-07-23; issue #6780). `INNGEST_CONFIG_DIGEST` is absent from `prd_terraform`, so the variable takes its default `""`. `betterstack-query.sh --grep SOLEUR_INFRA_PULL_APPLIED --since 48h` returns nothing, so by the runbook's own gate the channel is not live | PR-B: `count = var.inngest_config_digest != "" ? 1 : 0`; file a follow-up for the missing promotion apply route |
 | 7 | `hcloud_firewall_attachment.inngest` ~ | **Real drift: a live security gap** | See Research Reconciliation row 2. The attachment's `server_ids` binds to the replaced server's id and nothing re-targets it; `inngest-host.tf` says "Do NOT add it to the replace allow-set" | PR-A: `firewall_ids = [hcloud_firewall.inngest.id]` on `hcloud_server.inngest`; `removed{destroy=false}` for the attachment. The next inngest replace creates the server with the firewall applied |
 | 8 | `hcloud_server.inngest` −/+ (+ `hcloud_server_network.inngest`, `hcloud_volume_attachment.inngest_redis{,_luks}`) | **Expected via another path** | user_data changed by PR #8802 (309ff2a316, pin v1.1.39→v1.1.40, ADR-232). The last replace was run 36044687768 (2026-09-24 18:56) | `apply_target=inngest-host-replace` after PR-A merges, then `cutover-inngest.yml op=resume`. One go-ahead covers both. Coordinate with #8833 |
 | 9 | `hcloud_server.git_data` −/+ (+ network, `hcloud_volume_attachment.git_data{,_luks}`) and `hcloud_firewall_attachment.git_data` ~ | **Expected via another path**. The firewall update is only the replace cascade: live firewall 11622852 is correctly applied to 167236662 | user_data changed by PR #8711 (a5b2e36b56, dm-snapshot count) after the 2026-09-24 09:08 replace. Rung-2 evidence landed in PR #8751 (`RUNG2_REPLACE_BOOT=PASS`). #8710 was fixed by PR #8755 | #5274 post-merge G2 (`plan_only=true`), then G3 (`apply_target=git-data-host-replace`); `git-data-pin-redeploy.yml` follows automatically. Per-command go-ahead |
 
 ### ZOT heartbeat secret audit (precondition for destroying #3)
 
-- `git grep -nIi -E 'ZOT_HEARTBEAT_URL|zot_heartbeat_url'` finds 20 files, and **every hit is a
+- `git grep -nIi -E 'ZOT_HEARTBEAT_URL|zot_heartbeat_url'` finds 20 files on `origin/main` (23 with this plan's own artifacts), and **every hit is a
   comment, an ADR, a learning, a brainstorm or a plan**. No code, workflow, cloud-init, script or
   test dereferences the value. Within `apps/ plugins/ scripts/ tests/ .github/ infra/` the only hits
   are three `.tf` comments and one parity-test comment. No glob-style `*_HEARTBEAT_URL` consumer
@@ -198,8 +234,9 @@ configs; provider sources read at the pinned tags):
 - `count` over a sensitive variable works on 1.10.5 with or without `nonsensitive()`.
 - `cloudflare_bot_management` v4.52.7: `sbfm_definitely_automated` and `sbfm_verified_bots` are
   Optional and not Computed. When config equals state there is no diff and no PUT.
-- The proxy-TLS resources have no references outside `proxy-tls.tf`, so there is no state
-  migration.
+- No other `.tf` file interpolates the proxy-TLS resources, so there is no state migration. The
+  only other references are string literals in `terraform-target-parity.test.ts` and
+  `test-destroy-guard-counter-web-platform.sh`, which keep matching index-free addresses.
 - The github provider import ID is `<repository>:<environment>:<policy_id>`.
 - A config-driven `import` still calls the provider Read under `-refresh=false`. That matters for the
   PR plan job (1B.3).
@@ -243,6 +280,8 @@ withheld, PR-B still merges, and the withheld-path deliverables below apply.
     - firewall 11269127 `applied_to` and the inngest server's `firewalls`;
     - a TCP connect probe of the inngest public IP on 22, 6379, 8288, 8289 and 9000 (today only 22
       is open);
+    - `GIT_DATA_STORE_ENABLED` absence from prd (names only, `doppler secrets -p soleur -c prd --only-names`).
+      The 3.2 "store is dark" premise depends on it, so it is re-read immediately before G3;
     - the live deployment policy id, via
       `gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply/deployment-branch-policies`.
     If any data port answers publicly, stop and route to the CLO for a GDPR assessment. If the
@@ -315,9 +354,14 @@ before editing `.tf`.
      `.github/workflows/infra-validation.yml`. Under `-refresh=false` an `import` still calls the
      provider Read, and GitHub's deployment-branch-policy GET needs Actions read. The payoff is that
      the PR's own plan comment then shows the import, the forgets, the destroy and the per-merge
-     creates BEFORE merge (AC-B6).
+     creates BEFORE merge (AC-B6). Fork PRs never run this job: its `if:` requires
+     `needs.check-secrets.outputs.has-doppler-token == 'true'`, and forks get no secrets. The added
+     scope is read-only.
 1B.4 **ZOT secret destroy.** Add `-target=doppler_secret.zot_heartbeat_url_prd` to the per-merge
-     list (a bare orphan target; no `removed` block). Update the NOTE in `zot-registry.tf` and the
+     list (a bare orphan target; no `removed` block). Restore path, if ever needed: Doppler keeps
+     secret version history for the `soleur/prd` config, and the value is only a Better Stack
+     heartbeat URL, which can be re-read from Better Stack. Never copy the value into a file or a
+     PR. Update the NOTE in `zot-registry.tf` and the
      parity-test comment that calls the exclusion obsolete.
 1B.5 **Git-data heartbeat pair.** Add `-target=betteruptime_heartbeat.git_data_prd` and
      `-target=doppler_secret.git_data_heartbeat_url_prd` to the per-merge list. Remove both from
@@ -410,9 +454,18 @@ Preconditions for every step:
     - Resume (measured `INNGEST_CUTOVER_FLIP=done`): `gh workflow run cutover-inngest.yml -f op=resume`,
       then the `inngest-cutover` environment approval. Watch the run to `success` with a Monitor
       loop.
-    - Partial failure: the firewall is applied inside the server create call, so a replace that dies
-      after creating the server still leaves a firewalled host. Re-dispatch the same replace, then
-      `op=resume` again.
+    - Partial failure: Hetzner applies the firewall as part of the server create. It is an
+      `apply_firewall` action returned with the create, per the provider's `opts.Firewalls`; this is
+      read from source and docs, not measured.
+      - If that action itself fails, the server can exist unfirewalled and tainted. So after ANY
+        partial failure, run the port-22 probe and the `applied_to` read before anything else, then
+        re-dispatch the same replace and run `op=resume` again.
+      - AC-C1's probe is the measurement of the "before first boot" claim on the real host.
+    - Last-resort scheduler restore: if the dedicated host cannot be brought to serving, dispatch
+      `gh workflow run cutover-inngest.yml --field op=rollback` to bring the web scheduler back. That
+      is the path `inngest-server.md` names. It is a separate prod write and needs its own go-ahead.
+    - Before dispatching, record the latest `SOLEUR_INNGEST_SERVER_PROBE` row and any queue or
+      reminder count it carries, so that AC-C3 compares before and after on a measured value.
     - Verify with AC-C1 to AC-C3.
 3.2 **Git-data (#5274 G2, then G3).** This runs before PR-B merges, so the newly armed
     `soleur-git-data-prd` heartbeat never watches a replace window.
@@ -427,13 +480,29 @@ Preconditions for every step:
       during the window.
     - Follower: `git-data-pin-redeploy.yml` forces one web release to load the rotated
       `GIT_DATA_SSH_HOST_KEY`. Watch it to `success` (`git_data_pin=present`).
+    - Runbook GO criteria (`git-data-luks-cutover-5274.md`, the G1 to G4 table):
+      - G3 is capped at **one attempt**. On failure, read the run first and never dispatch a second
+        replace to recover.
+      - The replace boot must emit `boot_complete` with `plaintext_journal=dirty plaintext_empty=yes fence_on_mapper=yes erasure_probe=yes`.
+        A production `plaintext_journal=clean` is NO-GO and an incident.
+      - Zero Sentry `erasure_outcome` events in the window.
+      - G4, the strict `git-data-cutover.yml` dry run, reads `role=git-data-auth verdict=ok`.
+      - The Art. 12(3) sweep of refused erasures (deadline **2026-10-24**) is recorded on #5914.
 3.3 Dispatch `scheduled-terraform-drift.yml` and expect `No drift detected in web-platform`.
     Re-check #8754's state, comment the run URL on it, and close it.
+
+**Timing.** Run 3.1 as soon as PR-A's apply is verified. PR-A only forgets the attachment, so the
+live host keeps a public sshd until 3.1 runs. While #8833 holds the host dark, a replace costs almost
+nothing.
 
 **If the 3.1 go-ahead is not given in-session:** file a dedicated issue labelled
 `priority/p1-high` and `type/security`, titled "inngest host has no Hetzner firewall attached". Link
 it to #8833 and #8754. It must name the owner (the operator), a date (the next inngest replace or
-2026-09-28, whichever is sooner), the exact command pair, and the measured exposure (sshd only).
+2026-09-28, whichever is sooner), the exact command pair, and the measured exposure (sshd only). It must also record the one interim
+option that needs no replace: a one-shot Hetzner `apply_to_resources` for firewall 11269127 against
+the live server. With `firewall_ids` declared and Optional+Computed, Terraform would then plan no
+change. That option needs a new gated dispatch path this plan does not build, so it is recorded
+there as an operator decision and not executed here.
 
 **If the 3.2 go-ahead is not given:** leave G2/G3 on #5274, where it already lives, and post the
 expected heartbeat absence there.
@@ -505,8 +574,10 @@ any of them.
   age alarm for addresses drifting 14+ days. Re-evaluate at the next drift triage.
 - **Other hosts' pre-boot firewall window.** Candidate: move git-data and registry to
   `firewall_ids`. Re-evaluate at the next replace-route change.
-- **Remove the one-shot adoption scaffolding** (the `import` block, the policy `removed` block, the
-  old policy `-target`, the attachment `-target`) after PR-B's apply is verified.
+- **Remove the one-shot adoption scaffolding** after PR-B's apply is verified. That covers the
+  `import` block, the policy `removed` block, the old policy `-target`, the attachment `-target`, and
+  the `actions: read` grant on the infra-validation plan job (it is only needed while an `import`
+  block exists).
 - **Proxy-TLS enable step:** recorded on #5274 as a comment, not a new issue.
 
 ## Guard Contract
@@ -533,6 +604,8 @@ to check 3 (the zero-inbound-rules assertion).
 | M3 | Re-add `resource "hcloud_firewall_attachment" "inngest"` in any `*.tf` of the root | RED |
 | M4 | Second member: add a second firewall to the list after a compliant first (`[hcloud_firewall.inngest.id, hcloud_firewall.web.id]`) | RED (the list must be exactly the inngest firewall) |
 | M5 | Own dispatch: rename the server block so the extractor finds nothing | RED ("server block not found"), never a vacuous pass |
+| M6 | Add an attachment under a different name whose `firewall_id = hcloud_firewall.inngest.id` | RED (the property quantifies over every attachment binding that firewall, not one resource name) |
+| M7 | Add an `apply_to` block to `resource "hcloud_firewall" "inngest"` | RED (a second binding channel for the same firewall) |
 
 **Harness rows.** H1 is a must-PASS row that differs from the canonical form: `firewall_ids` is
 written with extra whitespace and a trailing comment (`firewall_ids = [ hcloud_firewall.inngest.id ] # deny-all`),
@@ -549,33 +622,36 @@ firewall-related change.
 
 ```yaml
 liveness_signal:
-  what: scheduled-terraform-drift verdict for apps/web-platform/infra (exit 0 = no drift) plus the Hetzner firewall applied_to count for soleur-inngest
+  what: scheduled-terraform-drift verdict for apps/web-platform/infra (exit 0 = no drift) plus the Hetzner firewall applied_to set for soleur-inngest
   cadence: twice daily (Inngest cron-terraform-drift dispatch, 06:00 and 18:00 UTC) and on demand via workflow_dispatch; while #8833 holds the Inngest scheduler down it is dispatched by hand
-  alert_target: infra-drift GitHub issue (opened/commented by the drift workflow) + ops email on apply failures
+  alert_target: infra-drift GitHub issue (opened/commented by the drift workflow) + ops email from notify-apply-failure on a failed or cancelled apply job
   configured_in: .github/workflows/scheduled-terraform-drift.yml; .github/workflows/apply-web-platform-infra.yml
 error_reporting:
-  destination: GitHub Actions run conclusion and ::error:: annotations; drift issue comments; Better Stack heartbeat soleur-git-data-prd once armed
+  destination: layer 6 (GitHub Actions run conclusion and ::error::/::warning:: annotations); drift issue comments; layer 3 (Vector to Better Stack) for on-host inngest lines
   fail_loud: the inngest-host.test.sh firewall_ids check fails the infra-validation job on any regression before merge
 failure_modes:
   - mode: the inngest server loses its firewall binding in config
-    detection: inngest-host.test.sh Guard 1 RED in CI; drift plan shows a firewall_ids change
+    detection: layer 6 (infra-validation run log, Guard 1 RED); layer 6 (drift plan shows a firewall_ids change)
     alert_route: failed PR check; infra-drift issue
   - mode: the deployment-policy import does not fire (phantom persists)
-    detection: the PR plan comment (AC-B6) or the push apply plan shows a create for web_platform_infra_apply_main_adopted instead of an import
-    alert_route: PR check review; Phase 2.2 halts
+    detection: layer 6 (infra-validation plan job run log and its PR comment, AC-B6); layer 6 (Phase 2.2 greps the push-apply log for a create of web_platform_infra_apply_main_adopted)
+    alert_route: PR review blocks merge; Phase 2.2 halts
   - mode: the PR-B apply is cancelled or halted, leaving the zot destroy unacknowledged
-    detection: push apply conclusion cancelled or failure; later merge applies halt on destroy_count
-    alert_route: failed push run; recovery is an [ack-destroy] follow-up PR touching a watched path
+    detection: layer 6 (push-apply run conclusion). A run cancelled while still queued starts no job, so notify-apply-failure does not email; the Phase 2.2 Monitor watch on that exact run id is the synchronous signal
+    alert_route: Monitor event in the pipeline session; later merge applies halt on destroy_count (layer 6, notify-apply-failure email)
   - mode: the git-data heartbeat is armed and red during a later G3 window
-    detection: Better Stack absence alert on soleur-git-data-prd
+    detection: layer 6 (the arm step verdict in the PR-B apply run log); Better Stack heartbeat absence alert
     alert_route: Better Stack email (pre-announced on #5274)
+  - mode: the inngest scheduler is stranded by the inherited done flag after the replace
+    detection: layer 6 (the #7228 preflight ::warning:: in the replace run log); layer 3 (Vector ships the flip-guard BLOCK lines to Better Stack); scheduled-inngest-health (GitHub cron every 15 minutes, off-host)
+    alert_route: the ci/inngest-dedicated-host and ci/inngest-no-live-scheduler watchdog issues (#8833/#8834 class)
 logs:
-  where: GitHub Actions run logs (apply-web-platform-infra, scheduled-terraform-drift, git-data-pin-redeploy, cutover-inngest); Better Stack Logs for SOLEUR_INNGEST_SERVER_PROBE
+  where: GitHub Actions run logs (apply-web-platform-infra, infra-validation, scheduled-terraform-drift, git-data-pin-redeploy, cutover-inngest); Better Stack Logs for SOLEUR_INNGEST_SERVER_PROBE and the flip-guard lines
   retention: GitHub Actions default 90 days; Better Stack per plan
 discoverability_test:
-  command: curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" "https://api.hetzner.cloud/v1/firewalls?name=soleur-inngest" | jq -r '"applied_to=" + (.firewalls[0].applied_to | length | tostring)'
+  command: curl -sf -H "Authorization: Bearer ${HCLOUD_TOKEN}" "https://api.hetzner.cloud/v1/firewalls?name=soleur-inngest" | jq -r '"applied_to=" + (.firewalls[0].applied_to | length | tostring) + " server_ids=" + ([.firewalls[0].applied_to[].server.id | tostring] | join(","))'
   expected_output: "applied_to=1"
-  credentials_required: "Hetzner API token (Doppler soleur/prd_terraform HCLOUD_TOKEN, GET only). Hetzner exposes firewall attachment state only through the authenticated API; the unauthenticated alternative (a TCP connect to the host's port 22) needs the post-replace public IP, which changes on every replace, and a shell-active redirect"
+  credentials_required: "Hetzner API token (Doppler soleur/prd_terraform HCLOUD_TOKEN, GET only). Hetzner exposes firewall attachment state only through the authenticated API. The unauthenticated alternative, a TCP connect to the host's port 22, needs the public IP, which changes on every replace, and a bash /dev/tcp redirect that preflight Check 10 rejects as a shell-active token"
 ```
 
 ## Infrastructure (IaC)
@@ -618,6 +694,38 @@ URL already in state.
 
 The Cloudflare zone is **Pro** (measured `plan.legacy_id=pro`), so SBFM attributes are valid inputs.
 Hetzner `firewall_ids` has no tier dependency.
+
+## Downtime & Cutover
+
+These are the operations in this plan that can take something offline, and the zero-downtime
+options each one was checked against.
+
+| Operation | Surface affected | Zero-downtime path evaluated | Decision |
+|---|---|---|---|
+| PR-A and PR-B merge applies | None. They touch Better Stack, Doppler `prd`, GitHub environment state and Terraform state entries. No host is targeted. | Not needed | No downtime |
+| 3.1 `inngest-host-replace` (`-/+ hcloud_server.inngest`) | The dedicated Inngest scheduler (crons, reminders) | **Blue-green was rejected.** ADR-100 makes the scheduler a singleton, so two live schedulers would double-fire every cron and reminder. That is the #7228 hazard `inngest-server-flip-guard.sh` exists to prevent. **Re-pooling the web scheduler during the window was rejected.** It is the cutover FSM's own `op=rollback` path on `cutover-inngest.yml`, which is a separately authorized prod write with flip and FLUSH semantics, not a shim for a routine replace. **A state-only re-address does not apply,** because the change IS user_data (a new bootstrap image), and user_data is the host's only delivery channel. | Residual downtime accepted, bounded, and gated (below) |
+| 3.2 `git-data-host-replace` | The git-data store. It is dark: `GIT_DATA_STORE_ENABLED` is absent from prd, so no user traffic reaches it. There is also one forced web release from `git-data-pin-redeploy.yml`. | The replace window has no user-facing effect. The forced web release uses the normal release deploy path, the same as every merge. | No user-facing downtime beyond a normal release |
+
+**3.1 downtime bound and justification.**
+
+- **Today** the dedicated scheduler is not serving (#8833 and #8834 are open), so the replace takes
+  nothing offline that is currently up. It is also the delivery route for the fixed image.
+- **If #8833 is resolved before 3.1 runs**, the window is:
+  - the replace job, under a 20-minute `timeout-minutes`;
+  - the boot to `inngest-server` refusing on the inherited `done`;
+  - `op=resume` plus the `inngest-cutover` approval.
+
+  The target is under 30 minutes end to end. Reminders due in the window are delivered late, not
+  dropped, because the AOF survives on the preserved volumes (AC-C3).
+- **Per-stage verification and rollback:**
+  - The replace run's gate line (`redis_volume_destroyed=0 luks_volume_destroyed=0`) is checked
+    before the resume.
+  - `op=resume` is watched to `success`.
+  - `scheduled-inngest-health` must go green.
+  - Rollback path: the replace does not touch either volume, so a failed boot is re-dispatched on the
+    same route. A bad image is reverted by the next ADR-232 pin bump PR plus another replace.
+- **Operator sign-off** is the 3.1 go-ahead, which names the window and the approver in advance.
+  Prefer a low-traffic hour for reminders (per the health workflow's recent run history).
 
 ## Encryption Posture
 
@@ -673,15 +781,35 @@ ADR-100 lands in PR-A, and ADR-118 in PR-B.
 - **Reminders and scheduled agent runs that never fire.** An inngest replace can strand the
   scheduler or lose the Redis AOF queue.
 - **A late burst after the outage.** When the scheduler resumes (after `op=resume` and the
-  environment approval), every reminder whose fire time passed during the outage is delivered at
-  once, hours late, in Inngest's drain order. None are dropped. The window's length depends on a
-  human approval click, so 3.1's go-ahead names the approver in advance and the resume is watched to
-  `success`.
+  environment approval), every reminder already persisted in the AOF whose fire time passed during
+  the outage is delivered late, in Inngest's drain order.
+  - The replace hard-deletes the old server, so AOF writes inside the last fsync interval (about
+    1 s) can be lost. AC-C3's before/after record is how that gets measured.
+  - Cron schedules are not expected to backfill missed ticks. Only already-enqueued work drains. The
+    work phase confirms this against the pinned Inngest version before 3.1, because a burst of
+    overdue scheduled agent runs would spend BYOK users' credits and hit their per-user concurrency
+    caps.
+  - The window's length depends on a human approval click, so 3.1's go-ahead names the approver in
+    advance and the resume is watched to `success`.
+- **Events sent while the host is unreachable fail.** `sendInngestWithRetry`
+  (`apps/web-platform/server/inngest/send-with-retry.ts`) retries a transient failure twice with
+  500 ms and 1 s backoff, about 1.5 s in total. That is far shorter than a replace. Its callers
+  (`server/index.ts`, `server/routines/run-routine.ts`) then see the failure. Before 3.1, the work
+  phase reads the post-retry branch of both callers and records the user-visible effect (an error
+  shown, or a silent drop mirrored to Sentry) in the 3.1 go-ahead request. This class is already live
+  today while #8833 holds the host down.
+- **A brief reconnect for open chats.** `git-data-pin-redeploy.yml` forces one web release, and it
+  deploys through the normal release path, the same container swap as every merge to main. 3.2 runs
+  in the same low-traffic window as 3.1.
 - **AI answer engines blocked from soleur.ai** if a wrong `sbfm_*` value lands.
 - **A web host that cannot reach its git-data store** after the host-key rotation. The store is
   dark today, so this stays latent.
 
-**If this leaks, the user's data is exposed via:** the inngest host's public interface. As measured
+**If this leaks, the user's data is exposed via:** the inngest host's public interface.
+`GIT_DATA_HEARTBEAT_URL` also joins the web container's env, because `ci-deploy.sh` downloads the
+whole prd config. A leaked URL would let someone send fake beats that mask a git-data outage. That is
+the same class as every heartbeat URL already in prd (`INNGEST_HEARTBEAT_URL` and the per-host
+probe URLs), and it is accepted on the same basis: the URL grants no read and no write of user data. As measured
 on 2026-09-25, only sshd answers there with no Hetzner firewall. Sshd is key-only
 (`PasswordAuthentication no`), and Redis and the inngest ports (6379, 8288, 8289, 9000) are
 filtered. The host holds the Redis AOF with queued user event payloads. This plan closes the
@@ -735,7 +863,11 @@ measurement, AC-C3, and the withheld-path P1 issue.
       `-target` line cannot match. The command
       `git grep -nI 'ZOT_HEARTBEAT_URL' origin/main -- apps plugins scripts tests .github infra` must
       return only comment lines (case-sensitive: this matches the environment variable name).
-      The Doppler raw-value scan must find no reference. Record both results in the PR body.
+      The Doppler raw-value scan must find no reference; it covers every `prd` branch config
+      (`doppler configs -p soleur` lists them), since branch configs inherit from `prd`. Record both
+      results in the PR body. Deleting the Doppler copy does not revoke the Better Stack ping URL
+      itself, which grants only a heartbeat ping to whichever heartbeat it names; record that
+      heartbeat's name in the PR body.
 - [ ] **AC-B2** `terraform fmt -check` and `terraform validate` pass with `host_proxy_tls_enabled`
       unset and with it set to `true`. `python3 scripts/lint-encryption-posture.py` exits 0.
 - [ ] **AC-B3** `wc -c .github/workflows/apply-web-platform-infra.yml` ≤ 490000.
@@ -744,7 +876,8 @@ measurement, AC-C3, and the withheld-path P1 issue.
 - [ ] **AC-B5** No path matching `ghcr-minter-doppler-token.tf`, `ghcr-read-credential.tf` or
       `cron-egress-allowlist*` appears in `git diff --name-only origin/main...HEAD`. This applies to
       both PRs.
-- [ ] **AC-B6** The PR's own `infra-validation` plan comment for `apps/web-platform/infra` shows:
+- [ ] **AC-B6** The PR's own `infra-validation` plan comment, re-run on the final head immediately
+      before merging (the merge apply refreshes, while this plan runs `-refresh=false`), for `apps/web-platform/infra` shows:
       `…web_platform_infra_apply_main_adopted` as an import (not a create), the old policy address
       as a forget, and `doppler_secret.zot_heartbeat_url_prd` as a destroy. It shows no action on the
       four proxy-TLS addresses or on `doppler_secret.inngest_config_digest`. This is required before
@@ -767,8 +900,10 @@ measurement, AC-C3, and the withheld-path P1 issue.
 - [ ] **AC-C1** After 3.1, `curl … /v1/firewalls?name=soleur-inngest` prints `applied_to=1`, and
       the id equals the new `hcloud_server.inngest` id. A TCP connect to port 22 on the new public IP
       fails.
-- [ ] **AC-C2** After 3.1, `cutover-inngest.yml op=resume` concludes `success`,
-      `scheduled-inngest-health` concludes `success`, and #8833 and #8834 are closed by their own
+- [ ] **AC-C2** After 3.1, `cutover-inngest.yml op=resume` concludes `success`, and
+      `scheduled-inngest-health` concludes `success`. A fresh `SOLEUR_INNGEST_SERVER_PROBE` row from
+      the new host (Better Stack query via `scripts/betterstack-query.sh`) shows it serving. Both
+      checks stand even if the #8833/#8834 watchdog lags; those issues then close on their own
       watchdog.
 - [ ] **AC-C3** Queue continuity. The replace run's gate line reads `redis_volume_destroyed=0` and
       `luks_volume_destroyed=0`. The first post-resume `SOLEUR_INNGEST_SERVER_PROBE` row shows the
@@ -836,6 +971,8 @@ measurement, AC-C3, and the withheld-path P1 issue.
 | `firewall_ids` pointing at a different firewall | RED |
 | Two firewalls in the list | RED |
 | A re-added attachment resource | RED |
+| An attachment under another name that binds `hcloud_firewall.inngest` | RED |
+| An `apply_to` block on `hcloud_firewall.inngest` | RED |
 | Server block renamed | RED, and never a vacuous pass |
 
 **Parity**
