@@ -701,11 +701,11 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.39@sha256:ab0d157c91c00329d33e615ab40530ed23802ca0df970eeef900d1feb71cd8ab
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.40@sha256:5b61557d447708e4fddd7bde3e7c7cdb7a3316a60ab91d3eef86e1c995d536ad
     # #8036 1d: IREF above is the pin carrier (bump bot + AC6), never pulled. zot is the only
     # source (the seed item's zot login is reused); a miss is fatal, no second registry.
     ZURL='${registry_endpoint}'  # baked (#8651/#6985)
-    ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.39@sha256:ab0d157c91c00329d33e615ab40530ed23802ca0df970eeef900d1feb71cd8ab"
+    ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.40@sha256:5b61557d447708e4fddd7bde3e7c7cdb7a3316a60ab91d3eef86e1c995d536ad"
     if timeout 180 docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_pull_fatal fatal; exit 1; fi
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }

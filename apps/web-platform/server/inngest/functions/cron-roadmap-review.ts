@@ -58,7 +58,9 @@ import {
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
-  DeployInProgressError,
+  deferDeployOnFinalAttempt,
+  unwrapSetupVerdict,
+  type WorkspaceSetupVerdict,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -255,19 +257,15 @@ export async function cronRoadmapReviewHandler({
   );
 
   // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
-  // Track ephemeralRoot in handler-scope so teardown runs regardless of
-  // downstream success/failure.
-  let ephemeralRoot: string | null = null;
-  let spawnCwd: string | null = null;
+  let verdict: WorkspaceSetupVerdict;
   try {
-    const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace({ installationToken, cronName: "cron-roadmap-review" });
-    });
-    ephemeralRoot = workspace.ephemeralRoot;
-    spawnCwd = workspace.spawnCwd;
+    verdict = await step.run("setup-workspace", async () =>
+      deferDeployOnFinalAttempt(
+        () => setupEphemeralWorkspace({ installationToken, cronName: "cron-roadmap-review" }),
+        { attempt, maxAttempts },
+      ),
+    );
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no heartbeat.
-    if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -284,6 +282,9 @@ export async function cronRoadmapReviewHandler({
     });
     return { ok: false };
   }
+
+  // Outside the catch, before the try/finally — see unwrapSetupVerdict (#8726).
+  const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-roadmap-review");
 
   // Wrap the entire post-setup pipeline in try/finally so the ephemeral
   // workspace is torn down even if claude-eval throws at the Inngest step
@@ -316,7 +317,7 @@ export async function cronRoadmapReviewHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
             prompt: injectRunDate(ROADMAP_REVIEW_PROMPT, runStartedAt),
@@ -363,10 +364,8 @@ export async function cronRoadmapReviewHandler({
         }),
       );
     } catch (err) {
-      // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no
-      // heartbeat. Any OTHER throw is a real failure — flag it;
+      // #5728 — any throw here is a real failure — flag it;
       // finalizeOutputAwareHeartbeat decides error-vs-retry below.
-      if (err instanceof DeployInProgressError) throw err;
       threw = true;
       const e = err as Error;
       const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -407,8 +406,7 @@ export async function cronRoadmapReviewHandler({
       // the re-spawned agent burns real Anthropic spend against a path that no
       // longer exists. One honest terminal RED beats a retry that cannot succeed.
       // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
-      // itself) are unaffected and still retry into a fresh workspace, and
-      // DeployInProgressError still rethrows bare.
+      // itself) are unaffected and still retry into a fresh workspace.
       //
       // This cron routes persistence through the agent's own hook-guarded commit
       // rather than safeCommitAndPr, so it gains no `livenessOk` remedy — but its

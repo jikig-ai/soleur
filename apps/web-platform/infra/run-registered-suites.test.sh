@@ -659,7 +659,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T11 — shard partition + privileged bucket + per-suite bound (ADR-250).
+# T11 — shard partition + privileged bucket + per-suite bound (ADR-251).
 # The contract the CI matrix legs rely on: disjoint+total over the derived set,
 # fail-closed on a malformed SOLEUR_INFRA_SHARD, and a leg that owns nothing
 # REFUSES rather than printing "0 failed".

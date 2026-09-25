@@ -13,7 +13,7 @@
 # runs in ZERO CI workflows (it is a local-only tool here)", is no longer true.)
 #
 # It reaches CI through the deploy-script-tests matrix legs — presence under
-# apps/web-platform/infra/ IS registration since #8736 (ADR-250), so no explicit
+# apps/web-platform/infra/ IS registration since #8736 (ADR-251), so no explicit
 # step is needed; the checks below pin the runner connection instead.
 # That is the same defect shape this whole gate exists to catch, which is why
 # the wiring is asserted by AC9b rather than assumed.

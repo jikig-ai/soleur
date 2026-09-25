@@ -696,6 +696,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh — same class as
+# the ci.yml sibling above; declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_SCRIPT_TESTS_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
+  ".github/workflows"
+  ".github/workflows/infra-validation.yml"
+  "plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/concurrent-ship.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(
@@ -1079,4 +1088,24 @@ AFFECTED_PLUGINS_SOLEUR_TEST_ADMIN_MERGE_READY_WIRING_TEST_SH_PATHS=(
   "plugins/soleur/scripts/admin-merge-ready.sh"
   "plugins/soleur/test/admin-merge-ready-wiring.test.sh"
   "scripts/lib/test-affected-paths.sh"
+)
+
+# tests/scripts/tmp-purge — operator purge + shared classifier (#7004/ADR-250);
+# declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/soleur-tmp-purge.sh"
+  "tests/scripts/test-tmp-purge.sh"
+)
+
+# tests/scripts/scratch-session — allocator + Reaper 3 + session sweep
+# (#7004/ADR-250); declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SCRATCH_SESSION_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/tmpfs-guard.sh"
+  "tests/scripts/test-scratch-session.sh"
 )

@@ -174,6 +174,13 @@ git_data_boot_poll() {
     printf '::error::git-data boot poll: could not create a scratch directory under TMPDIR=%s — refusing to poll. This is a runner fault, not a host state.\n' "${TMPDIR:-/tmp}" >&2
     return 2
   fi
+  # Declare the owner the tmp reaper can check (#7004): this sourced lib cannot
+  # own a trap (ADR-129), so the marker is what lets Reaper 3 reclaim the dir
+  # once the owning process is gone. pid= is the session harness owner when
+  # soleur_scratch_session_begin ran, else this process.
+  printf 'pid=%s\nschema=1\nns=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}" \
+    "$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')" \
+    > "$scratch/.soleur-owned" 2>/dev/null || true
   out="$scratch/rows"; err="$scratch/err"
 
   for (( i = 1; i <= max_polls; i++ )); do

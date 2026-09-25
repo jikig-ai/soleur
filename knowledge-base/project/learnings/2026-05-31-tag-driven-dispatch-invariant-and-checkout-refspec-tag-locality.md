@@ -33,3 +33,12 @@ category: build-errors
 module: ci-workflows
 related: [[2026-04-21-workflow-dispatch-requires-default-branch]], [[2026-05-19-tag-glob-collision-blocks-plugin-release]], 2026-03-16-github-actions-workflow-dispatch-permissions.md
 issues: #4692, #4676, #4699, #4693, #4700
+
+## Addendum — 2026-09-24 (#8747)
+
+Rule (a)'s "the workflow *file* is always read from the default branch" is false as stated. A
+`workflow_dispatch` run reads the workflow file from the ref it was dispatched from (the default
+branch unless `--ref` names another), and a **tag push** reads it from the TAGGED commit. The
+inline-logic conclusion still holds for the dispatch-from-main path; it does not make an inline
+check authoritative on tag pushes, which is why ADR-232 §7 treats the bump script (main's copy)
+as the authoritative off-main-tag check.

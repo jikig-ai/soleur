@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-22
+last_updated: 2026-09-25
 last_reviewed: 2026-06-08
 review_cadence: weekly
 owner: CMO
@@ -227,6 +227,8 @@ Zero existing content on model-tier economics despite BYOK cost being a live buy
 ## Content Pillars
 
 All content maps to one of four pillars. Each pillar targets a specific audience segment and search intent.
+
+> **[2026-09-25, #8774]** New blog posts in every pillar follow brand-guide `### Blog`: they are written for non-technical founders and target the words a founder types when they have the problem. The developer-query keywords listed under Pillars 2 and 3 ("agentic engineering", "Claude Code plugins") now apply to GitHub and docs content, not to new blog posts; a planned post built on one of them is re-angled to the founder problem underneath it. Pillar audiences below are unchanged for non-blog channels.
 
 ### Pillar 1: Category Definition
 

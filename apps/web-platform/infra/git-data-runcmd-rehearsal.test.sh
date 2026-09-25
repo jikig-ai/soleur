@@ -246,7 +246,10 @@ command -v dash >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — da
 # no-op in exactly the retention case the forensics path creates.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
-TMP="$(mktemp -d -t gdreh.XXXXXXXX)" || { echo "FIXTURE-FAIL: mktemp -d failed" >&2; exit 2; }
+# Allocate at the BASE: the forensics-retain path (below) must outlive the
+# enclosing session's scratch-root cleanup, or the retained tree dies at the
+# parent's EXIT — collapsing the post-mortem window on the RED runs it is for.
+TMP="$(mktemp -d -p "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/var/tmp}}" gdreh.XXXXXXXX)" || { echo "FIXTURE-FAIL: mktemp -d failed" >&2; exit 2; }
 
 # FORENSICS ON ANY NON-ZERO EXIT — and this MODIFIES THE EXISTING HANDLER IN PLACE rather
 # than adding a second `trap ... EXIT`. Bash keeps only the LAST handler registered for a
@@ -274,7 +277,9 @@ _reh_cleanup() {
   # mtime, so it can never reap a CONCURRENT run's tree — parallel worktrees are this repo's
   # documented workflow, and a reaper that takes a live sibling's fixtures out from under it
   # produces exactly the nondeterministic starvation #7501 is about.
-  find "${TMPDIR:-/var/tmp}" -maxdepth 1 -type d -name 'gdreh.*' -mmin +720 \
+  # Base-pinned under the #7004 allocator: when a session root redirected TMPDIR
+  # the enumeration must still scan the BASE, not the root (or it no-ops forever).
+  find "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/var/tmp}}" -maxdepth 1 -type d -name 'gdreh.*' -mmin +720 \
     -exec rm -rf {} + 2>/dev/null || true
 }
 trap _reh_cleanup EXIT

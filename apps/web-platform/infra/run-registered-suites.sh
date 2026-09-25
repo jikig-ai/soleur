@@ -25,7 +25,7 @@
 # which of those happened, keyed on whether this runner actually ran.
 #
 # The suite list is DERIVED by filesystem glob over apps/web-platform/infra/
-# (ADR-250) rather than scraped off the workflow's `run: bash` steps, so this
+# (ADR-251) rather than scraped off the workflow's `run: bash` steps, so this
 # runner and CI cannot drift — literally: presence IS registration, and a suite
 # added on disk is picked up here AND by the deploy-script-tests matrix legs
 # automatically. (The scrape this replaced could not see subdirectory or
@@ -224,9 +224,37 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 LIST_ONLY=0
-[[ "${1:-}" == "--list" ]] && LIST_ONLY=1
+case "${1:-}" in
+  "") ;;
+  --list) LIST_ONLY=1 ;;
+  # --enumerate is the machine-readable SUITE_REGISTRATION form (handled after
+  # derivation below); it must be accepted here or the refusal would fire first.
+  --enumerate) ;;
+  # Any other argument used to fall through to a FULL battery run (#8705: `--help` started all
+  # 137 suites). Refuse instead: the only accepted arguments are --list and --enumerate.
+  *) echo "usage: ${0##*/} [--list|--enumerate]" >&2; exit 64 ;;
+esac
 
 ROOT="$(git rev-parse --show-toplevel)"
+
+# Session scratch root (#7004): allocate under the effective TMPDIR's base and
+# export TMPDIR at it so every suite's mktemp lands inside an owned root a dead
+# run can have reclaimed. `_SUITE_TMP_BASE` is the REAL base — under nesting
+# inside test-all.sh, TMPDIR is already the parent's session root, so raw
+# `$TMPDIR` would make the self-reap below enumerate inside a live root (the
+# exact no-op the comment warns about). SOLEUR_SCRATCH_BASE is the parent's
+# exported base when nested, unset standalone. `--list` skips begin — an
+# enumerate run that exits before the trap installs would leak a marked root.
+_SUITE_TMP_BASE="${SOLEUR_SCRATCH_BASE:-$TMPDIR}"
+_SCRATCH_LIB="$ROOT/scripts/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if (( LIST_ONLY == 0 )) && declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "$_SUITE_TMP_BASE" || true
+fi
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
 cd "$ROOT" || exit 1
 
 # SOLEUR_INFRA_DIR is a TEST SEAM. Namespaced because a bare
@@ -241,7 +269,7 @@ SOLEUR_INFRA_DIR="${SOLEUR_INFRA_DIR:-apps/web-platform/infra}"
   exit 2
 }
 
-# Derivation is the FILESYSTEM GLOB, not a workflow `run: bash` scrape (ADR-250):
+# Derivation is the FILESYSTEM GLOB, not a workflow `run: bash` scrape (ADR-251):
 # presence under SOLEUR_INFRA_DIR IS registration — a suite on disk is in the
 # execute set unless it carries a justified PRIVILEGED exclusion below. The scrape
 # this replaced could not see subdirectory suites (its basename class excluded `/`)
@@ -649,7 +677,7 @@ LOG="$(mktemp)" || { echo "FATAL: mktemp failed for the summary log (TMPDIR=$TMP
 # because run-registered-suites.test.sh is itself a registered suite and drives this runner
 # ~10x per invocation with deliberate REDs (measured: 414 dirs / 23 MB on the author's box
 # before this reaper existed). Mirrors ADR-133's own `meta_dir` precedent.
-find "${TMPDIR}" -maxdepth 1 -name 'infra-suites.*' -type d -mmin +720 \
+find "${_SUITE_TMP_BASE}" -maxdepth 1 -name 'infra-suites.*' -type d -mmin +720 \
   -exec rm -rf {} + 2>/dev/null || true
 
 # Initialise BEFORE the trap references it: `set -u` is active, so an unset var inside the
@@ -659,8 +687,13 @@ find "${TMPDIR}" -maxdepth 1 -name 'infra-suites.*' -type d -mmin +720 \
 # keeps its evidence.
 SOLEUR_SUITE_LOGDIR=""
 SOLEUR_KEEP_LOGDIR=""
-trap 'rm -f "${LOG:-}"; [[ -n "${SOLEUR_KEEP_LOGDIR:-}" ]] || rm -rf "${SOLEUR_SUITE_LOGDIR:-/nonexistent}"' EXIT
-SOLEUR_SUITE_LOGDIR="$(mktemp -d -t infra-suites.XXXXXXXX)" || {
+trap 'rm -f "${LOG:-}"; [[ -n "${SOLEUR_KEEP_LOGDIR:-}" ]] || rm -rf "${SOLEUR_SUITE_LOGDIR:-/nonexistent}"; _soleur_scratch_cleanup 2>/dev/null || true' EXIT
+# Logdir allocates at the BASE, not inside the session root: on RED the dir
+# is retained as evidence (SOLEUR_KEEP_LOGDIR), and a root-scoped delete at
+# EXIT would destroy exactly the artifact the retain path exists to keep.
+# Base placement also keeps it inside the `infra-suites.*` self-reap above
+# (12h floor) and the purge's signature row — bounded, attributable.
+SOLEUR_SUITE_LOGDIR="$(mktemp -d -p "$_SUITE_TMP_BASE" infra-suites.XXXXXXXX)" || {
   echo "FATAL: mktemp -d failed for the per-suite log dir (TMPDIR=$TMPDIR)." >&2
   echo "       Refusing to run: every suite's capture would fail and the accounting" >&2
   echo "       assertion would then blame a vanished wrapper for a disk problem." >&2

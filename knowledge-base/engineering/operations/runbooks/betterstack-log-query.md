@@ -104,7 +104,8 @@ Live standing alarms over this source:
     non-null `cost_usd` AND no credit-probe RED row (`op=anthropic-credit-exhausted` /
     `anthropic-key-invalid`). The marker path is broken (the emitter, Vector, or the field moved
     again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
-    credit probe's Sentry monitor.
+    `anthropic-credit-exhausted` Sentry issue alert (the credit probe's own cron monitor is
+    routed since #8630 but muted, #8704).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -204,7 +205,7 @@ List existing connections: `GET https://logs.betterstack.com/api/v1/connections`
   - **The canonical way to read git-data's own source is the environment, not the flag:** `export BS_TABLE=t520508_soleur_git_data_prd_logs` — which is what `scripts/followthroughs/git-data-rung2-evidence-capture.sh` does (its `PIN THE TABLE TO GIT-DATA'S OWN SOURCE` block), so every raw query it issues, and the derived `_s3` sibling, stay on one source by construction. Pinned by the `mode 1:` rows of `tests/scripts/test-betterstack-query-archive.sh`.
 - Always end SELECTs with `FORMAT JSONEachRow` for line-delimited JSON.
 - **(#8296) Three reads that report a false ABSENCE.** `--grep` is a literal `LIKE '%…%'` — `'a\|b'` matches the six-character string, never an alternation; run one grep per term. A tag read with `--limit` lets heartbeats scroll a rare transition row out of the window (the LUKS FSM `cutover-complete` row was "absent" for 30 min while present) — grep the transition REASON, not the tag. And an FSM row's `message` is a JSON OBJECT, so `.message[0:230]` errors and reads as no rows; test `type` before slicing. A negative read must also be bounded AFTER the action's own timestamp with slack: a window ending at `14:50:16` missed a write at `14:50:16.9`.
-- Columns: `dt` (event time, use for WHERE/ORDER), `raw` (the full log line as text/JSON).
+- Columns: `dt` (use for WHERE/ORDER), `raw` (the full log line as text/JSON). **What `dt` measures depends on the emitter.** For the Vector-shipped inngest source it is the warehouse's RECEIVE time, not the host's event time — measured 2026-09-24 (#8759): `dt` equals the `ingest_time` column byte-for-byte, sits ~1 s after the row's own journald `timestamp`, and one HTTP batch shares one `dt`. The host's own clock is inside `raw` (`timestamp`, `__REALTIME_TIMESTAMP`). Before treating `dt` as either clock for a new source, measure it: `SELECT dt, ingest_time, raw … LIMIT 5`.
 - Recent logs: `remote(t520508_..._logs)`. Older than the hot window: `s3Cluster(primary, t520508_..._s3)` with `WHERE _row_type = 1`, `UNION ALL`-combined.
 
 ## App container pino lines (cron failures) — now queryable (#4773, 2026-06-02)

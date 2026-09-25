@@ -162,9 +162,13 @@ vi.mock("@/server/github/app-client", () => ({
 }));
 
 // Observability — Sentry mirror.
+// Paged dead-letter reasons use reportSilentFallback (error level); the rest use
+// warnSilentFallback (warning level) — #8719.
 const reportSilentFallbackSpy = vi.fn();
+const warnSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
+  warnSilentFallback: warnSilentFallbackSpy,
 }));
 
 // Offline notification dispatch (feat-l5-runaway-guard). Records the payload
@@ -350,6 +354,31 @@ function apiError(
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
 
+// Both report spies' calls, in no particular order.
+function reportCalls(): unknown[][] {
+  return [...reportSilentFallbackSpy.mock.calls, ...warnSilentFallbackSpy.mock.calls];
+}
+
+// The dead-letter report reportSpawnDeadLetter sends through reportSilentFallback
+// or warnSilentFallback (#8719: a plain-object error on the message path, with a
+// `reason` tag).
+function deadletterCall() {
+  return reportCalls().find((c) =>
+    String((c[1] as { message?: string } | undefined)?.message).includes(
+      "deadlettered",
+    ),
+  );
+}
+
+// Exactly one dead-letter report per dead-lettered spawn (per invocation).
+function deadletterTags(): Record<string, string> | undefined {
+  const calls = reportCalls().filter((c) =>
+    String((c[1] as { message?: string } | undefined)?.message).includes("deadlettered"),
+  );
+  expect(calls).toHaveLength(1);
+  return (calls[0][1] as { tags?: Record<string, string> }).tags;
+}
+
 interface EventArgs {
   sourceRef: string;
   founderId?: string;
@@ -457,6 +486,9 @@ beforeEach(() => {
   capRpcThrows = null;
   leaseOpenThrows = null;
   anthropicCreateSpy.mockReset();
+  // The #8719 forced-throw case installs an implementation; clearAllMocks keeps it.
+  reportSilentFallbackSpy.mockReset();
+  warnSilentFallbackSpy.mockReset();
   // vitest 4: mockReset restores the original implementation, so a per-case
   // mockRejectedValue cannot leak into the next test.
   getRestApiKeySpy.mockReset();
@@ -753,8 +785,10 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(result).toEqual({ acknowledged: false, failureReason: "run_paused" });
     expect(recordByokUseAndCheckCapSpy).not.toHaveBeenCalled();
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
-    // Mirrored to Sentry (via persistFailure's reportSilentFallback).
-    expect(reportSilentFallbackSpy).toHaveBeenCalled();
+    // Mirrored to Sentry (persistFailure → reportSpawnDeadLetter); run_paused is
+    // not a paged reason, so it goes out at warning level.
+    expect(deadletterTags()).toEqual({ reason: "run_paused" });
+    expect(warnSilentFallbackSpy).toHaveBeenCalled();
   });
 
   it("cap_check_unavailable: a transient cap-check RPC error is NOT reported as byok_cap_exceeded", async () => {
@@ -866,6 +900,65 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
       acknowledged: false,
       failureReason: "leader_response_truncated",
     });
+    expect(deadletterTags()).toEqual({ reason: "leader_response_truncated" });
+  });
+
+  it("#8719: a failed persist-failure write is reported with a hashable founder id, never logged raw", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: "max_tokens",
+    });
+    const base = makeStep();
+    const step: MockStep = {
+      ...base,
+      run<T>(name: string, cb: () => Promise<T>): Promise<T> {
+        if (name === "persist-failure") {
+          return Promise.reject(new Error("synthetic action_sends update failure"));
+        }
+        return base.run(name, cb);
+      },
+    };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7", founderId: "founder-raw-id-8719" }),
+      step,
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "leader_response_truncated" });
+    const report = reportSilentFallbackSpy.mock.calls.find(
+      (c) => (c[1] as { op?: string }).op === "persist-failure",
+    );
+    expect(report).toBeDefined();
+    const opts = report![1] as { tags: Record<string, string>; extra: Record<string, unknown> };
+    expect(opts.tags).toEqual({ reason: "leader_response_truncated" });
+    expect(opts.extra.actionSendId).toEqual(expect.any(String));
+    // Passed as `userId` so reportSilentFallback hashes it; never as `founderId`.
+    expect(opts.extra.userId).toBe("founder-raw-id-8719");
+    expect(opts.extra.founderId).toBeUndefined();
+    // The Inngest ctx logger (not pino, so unhashed) carries nothing about it.
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("founder-raw-id-8719");
+  });
+
+  it("#8719: a model-chosen tool name is sanitized in BOTH extra.tool and the error message", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce(
+      endTurnResponse({ tools: [{ name: "evil\u2028name", input: {} }] }),
+    );
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "leader_tool_invalid" });
+    expect(deadletterTags()).toEqual({ reason: "leader_tool_invalid" });
+    const call = deadletterCall()!;
+    expect((call[1] as { extra: Record<string, unknown> }).extra.tool).toBe("evil?name");
+    expect(JSON.stringify(call)).not.toContain("\u2028");
+    expect((call[0] as { message: string }).message).toContain("evil?name");
   });
 
   it("AC10 leader_tool_invalid: out-of-allowlist tool call → persist failure", async () => {
@@ -892,6 +985,14 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(result).toEqual({
       acknowledged: false,
       failureReason: "leader_tool_invalid",
+    });
+    expect(deadletterTags()).toEqual({ reason: "leader_tool_invalid" });
+    expect(
+      (deadletterCall()![1] as { extra: Record<string, unknown> }).extra,
+    ).toMatchObject({
+      tool: "addLabels",
+      turn: 1,
+      model: LEADER_PROMPTS["engineering.pr_review_pending"].model,
     });
     // The out-of-allowlist tool must NEVER be invoked on GitHub.
     expect(
@@ -1145,6 +1246,8 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     });
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
     expect(createGitHubAppClientSpy).not.toHaveBeenCalled();
+    // #8719: the error text reaches Sentry/Better Stack verbatim — no founder id in it.
+    expect(JSON.stringify(deadletterCall()![0])).not.toContain("founder-123");
   });
 
   it("LEADER_CLASSES_DISABLED kill switch: configured class deadletters with leader_class_disabled, no Anthropic call", async () => {
@@ -1368,14 +1471,6 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     });
   }
 
-  function deadletterCall() {
-    return reportSilentFallbackSpy.mock.calls.find((c) =>
-      String((c[1] as { message?: string } | undefined)?.message).includes(
-        "deadlettered",
-      ),
-    );
-  }
-
   it("400 → anthropic_request_rejected after one create call; Sentry gets the SDK message and stack", async () => {
     const original = apiError(400);
     anthropicCreateSpy.mockRejectedValue(original);
@@ -1390,6 +1485,10 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     expect(call).toBeDefined();
     expect((call![0] as Error).message.startsWith("400 ")).toBe(true);
     expect((call![0] as Error).stack).toBe(original.stack);
+    expect(call![0]).not.toBeInstanceOf(Error);
+    expect((call![1] as { tags: Record<string, string> }).tags).toEqual({
+      reason: "anthropic_request_rejected",
+    });
     expect((call![1] as { extra: Record<string, unknown> }).extra).toMatchObject({
       status: 400,
       turn: 1,
@@ -1407,8 +1506,30 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
         failureReason: "anthropic_request_rejected",
       });
       expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+      expect(deadletterCall()![0]).not.toBeInstanceOf(Error);
+      expect(deadletterTags()).toEqual({ reason: "anthropic_request_rejected" });
     },
   );
+
+  it("a throwing dead-letter report never skips the terminal write (#8719)", async () => {
+    // Throw ONLY for the dead-letter call, so an unrelated earlier caller cannot absorb it.
+    reportSilentFallbackSpy.mockImplementation((_err: unknown, opts: { message?: string }) => {
+      if (String(opts?.message).includes("deadlettered")) {
+        throw new Error("synthetic reporter failure");
+      }
+    });
+    anthropicCreateSpy.mockRejectedValue(apiError(400));
+    const step = makeRetryingStep({ retries: 3 });
+    const result = await runWith(step);
+    expect(
+      reportSilentFallbackSpy.mock.results.some((r) => r.type === "throw"),
+    ).toBe(true);
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "anthropic_request_rejected",
+    });
+    expect(step.memoized.has("persist-failure")).toBe(true);
+  });
 
   it.each([
     [401, "invalid x-api-key"],
@@ -1561,5 +1682,6 @@ describe("stop_reason other than end_turn/tool_use is terminal", () => {
     });
     expect(result).toEqual({ acknowledged: false, failureReason: reason });
     expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    expect(deadletterTags()).toEqual({ reason });
   });
 });

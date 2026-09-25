@@ -27,7 +27,7 @@ Commits on the branch:
 - `87127d095c` feat(8736): runner glob-derives, SOLEUR_INFRA_SHARD, per-suite timeout+timings
 - `b6298817f7` feat(8736): workflow restructure — K=4 matrix + fixed job + done aggregator;
   gate rewritten to connection contract (17/17 mutation arms); 12 suite self-checks
-  re-pointed; manifest seeded 143 rows (legs 369-370s); ADR-250 authored; monitor + skill refs
+  re-pointed; manifest seeded 143 rows (legs 369-370s); ADR-251 authored; monitor + skill refs
 - `3f2cd7dd5a` feat(8736): followthrough soak probe + stub-gh test (6/6)
 
 All local verification green: run-registered-suites.test.sh 82/82 (19/19 mutants),

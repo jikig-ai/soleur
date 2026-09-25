@@ -2098,7 +2098,7 @@ resource "sentry_alert" "ops_email_delivery_failure" {
 # email-triage summarizer. The emitter uses the MESSAGE path on purpose — see the header
 # of anthropic-credit.ts for why the Error path would reach Sentry with no tags and never
 # match this rule. This rule does not depend on the `scheduled-anthropic-credit-probe`
-# cron monitor, whose detector routes to no workflow.
+# cron monitor, which is routed to cron-monitor-failure (#8630) but muted (#8704).
 #
 # `frequency_minutes = 1440`: while the balance stays empty the canary fires hourly, and an
 # hourly page during a known outage is what got that monitor muted. `event_frequency_count`
@@ -2124,6 +2124,61 @@ resource "sentry_alert" "anthropic_credit_exhausted" {
       conditions = [
         { tagged_event = { key = "feature", match = "eq", value = "anthropic-credit" } },
         { tagged_event = { key = "op", match = "eq", value = "anthropic-credit-exhausted" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #8719 — leader-loop dead-letters of agent.spawn.requested. Emitted by
+# server/spawn-dead-letter.ts (`reportSpawnDeadLetter`), which `persistFailure` in
+# inngest/functions/agent-on-spawn-requested.ts calls for every dead-lettered spawn. The
+# emitter uses the MESSAGE path with a `reason` tag on purpose — see its header for why
+# the Error path would reach Sentry with no tags (#8629) and never match this rule.
+#
+# The `reason` list is `PAGED_DEAD_LETTER_REASONS`, derived from `PAGES_OPERATOR` in
+# lib/failure-reason.ts: defects on our side, plus every reason whose founder copy says
+# "CTO has been notified". Change the decision there, then paste the list here;
+# test/sentry-spawn-dead-letter-alert-op-contract.test.ts refuses a mismatch.
+#
+# Triggers: the event is a message event with no stack trace, so Sentry groups it by
+# message text, which carries the reason and the action class — one issue per (reason,
+# class) pair for its whole life. The transition triggers alone would page once per
+# pair, ever; `event_frequency_count` keeps a persisting pair re-paging, and
+# `frequency_minutes = 1442` (unused elsewhere in the root) bounds that to at most once
+# per ~24 h per pair. Non-paged reasons are emitted at warning level.
+#
+# Reading a `leader_class_disabled` email: the event's additional data `err.message`
+# says either "disabled via LEADER_CLASSES_DISABLED" (the kill switch working) or "no
+# leader module for class X" (a defect). `actionClass`, `status`, `turn`, `model` and
+# `tool` in the same data discriminate the other reasons.
+resource "sentry_alert" "spawn_agent_dead_letter" {
+  organization      = var.sentry_org
+  name              = "spawn-agent-dead-letter"
+  enabled           = true
+  frequency_minutes = 1442
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "spawn-agent" } },
+        { tagged_event = { key = "op", match = "eq", value = "agent-on-spawn-requested" } },
+        { tagged_event = { key = "reason", match = "in", value = "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_refused,leader_response_truncated,leader_tool_invalid" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },

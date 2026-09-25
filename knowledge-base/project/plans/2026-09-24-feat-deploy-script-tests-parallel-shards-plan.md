@@ -476,7 +476,7 @@ cost ≈ 4×90 s = 6 min aggregate vs ~19 min of wall-clock saving).
 
 #### Phase 5 — ADR + docs + monitor
 
-- New ADR (provisional next-free ordinal — ADR-250 at plan time, re-verified
+- New ADR (provisional next-free ordinal — ADR-251 at plan time, re-verified
   against `origin/main` at ship): infra suite registration is filesystem
   glob + justified exclusions; `deploy-script-tests` topology is matrix legs
   × parallel runner; per-suite attribution lives in verdict lines/artifacts,
@@ -734,7 +734,7 @@ is a deliverable of this plan, not a follow-up.
 
 ### ADR
 
-- **Create** provisional ADR-250 (next-free ordinal at plan time; `soleur:ship`
+- **Create** provisional ADR-251 (next-free ordinal at plan time; `soleur:ship`
   re-verifies against `origin/main`): *infra suite registration is filesystem
   glob + justified exclusions; `deploy-script-tests` partitions via matrix
   legs × the parallel runner; per-suite attribution lives in verdict lines,
@@ -742,7 +742,7 @@ is a deliverable of this plan, not a follow-up.
   workflow steps.* It extends the ADR-238/ADR-240 shard pattern to the
   infra-validation surface and supersedes the registration-contract
   assumptions embedded in `test-infra-suite-registration.sh`'s header.
-- Renumber sweep obligation if the ordinal collides: `grep -rn 'ADR-250'
+- Renumber sweep obligation if the ordinal collides: `grep -rn 'ADR-251'
   knowledge-base/project/{plans,specs}/feat-one-shot-8736-deploy-script-tests-parallel/`
   plus this file.
 

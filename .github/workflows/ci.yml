@@ -962,11 +962,30 @@ jobs:
           npm install -g likec4@1.50.0
           likec4 --version
 
+      # #8696 — the render child runs inside bubblewrap, so the acceptance test
+      # (test/c4-render-tenant-config.test.ts) also renders THROUGH real bwrap
+      # and measures what a sandboxed
+      # payload can reach (H4). Ephemeral GH-hosted runner only: relaxing the
+      # userns sysctl mirrors scripts/sandbox-canary-regression.test.sh, and like
+      # it is best-effort: the suite's own bwrap probe plus C4_BWRAP_REQUIRED
+      # decide whether the sandbox works here.
+      # ubuntu-latest ships a newer bwrap than prod's 0.8.0; every option the
+      # argv uses exists in 0.8.0 (measured, ADR-050 amendment).
+      # C4_BWRAP_REQUIRED on the run step makes an unusable bwrap FAIL.
+      - name: Install bubblewrap (C4 render sandbox)
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends bubblewrap
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+
       - name: Run webplat tests (vitest --shard)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITEST_SHARD: ${{ matrix.shard }}
           LIKEC4_REQUIRED: "1"
+          C4_BWRAP_REQUIRED: "1"
         run: bash scripts/test-all.sh webplat
 
   test-bun:
@@ -1345,28 +1364,86 @@ jobs:
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
+  # Vendor CLI pinned per ADR-245 decision 3 (#8615); pin freshness is #8574's criterion.
   grok-fidelity:
     # 15m — measured max 0.5m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 15
     runs-on: ubuntu-latest
+    env:
+      GROK_PIN: "1.0.41"
+      # sha256 of grok-${GROK_PIN}-linux-x86_64, measured 2026-09-24. xAI publishes no
+      # checksum, so this IS the content pin. Bump it together with GROK_PIN.
+      GROK_SHA256: "9ce03ed23e16ea01072b4496263d6213a27899e1e3e107f008d36edf82e70407"
+      # A self-update mid-gate would void the pin; the post-gate step verifies it held.
+      GROK_DISABLE_AUTOUPDATER: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
           bun-version-file: ".bun-version"
 
-      - name: Install Grok CLI
+      - name: Install Grok CLI (exact pin + sha256 content pin)
         run: |
-          set -euo pipefail
-          curl -fsSL https://x.ai/cli/install.sh | bash
+          set -uo pipefail
+          # The pin is interpolated into a URL path: accept only X.Y.Z.
+          [[ "$GROK_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { printf '::error::grok-fidelity[grok] invalid-pin:%q\n' "$GROK_PIN"; exit 3; }
+          tmp="$RUNNER_TEMP/grok-${GROK_PIN}"
+          # x.ai, then the vendor installer's own fallback base. The digest check makes
+          # either source safe; a pruned or unreachable artifact reds this required check.
+          ok=; reason=
+          for base in https://x.ai/cli https://storage.googleapis.com/grok-build-public-artifacts/cli; do
+            if ! curl -fsSL --proto '=https' --proto-redir '=https' \
+              --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 90 \
+              "${base}/grok-${GROK_PIN}-linux-x86_64" -o "$tmp"; then
+              reason="${reason}${base#https://}: download-failed; "; continue
+            fi
+            if echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null; then ok=1; break; fi
+            reason="${reason}${base#https://}: binary-digest-mismatch got=$(sha256sum "$tmp" | cut -d' ' -f1); "
+          done
+          [ -n "$ok" ] || { echo "::error::grok-fidelity[grok] ${reason}pin=${GROK_PIN} (refusing to execute)"; exit 3; }
+          install -D -m 0755 "$tmp" "$HOME/.grok/bin/grok"
           echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
-          grok --version
+          export PATH="$HOME/.grok/bin:$PATH"
+          # NOT got="$(grok --version | grep …)": under bash -e that kills the step at the
+          # assignment on a semver-less banner (see harness-discovery's Codex step).
+          raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          raw="${raw//[$'\r\n']/ }"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$GROK_PIN" ] || {
+            echo "::error::grok-fidelity[grok] version-mismatch:${got:-<unparsed>}!=${GROK_PIN} raw=${raw:0:200}"
+            exit 3
+          }
+          echo "grok-fidelity[grok] pinned ${GROK_PIN} (sha256 ok)"
 
+      # The gate and its bun tests resolve `grok` BY NAME, so the checks around it assert
+      # that name is the pinned file, not only that the file is intact.
       - name: Grok fidelity gate (inspect contract + golden-path eval)
-        run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
+        run: |
+          at="$(command -v grok || true)"
+          [ "$at" = "$HOME/.grok/bin/grok" ] \
+            || { echo "::error::grok-fidelity[grok] resolved-elsewhere:${at:-<none>}"; exit 3; }
+          bash plugins/soleur/scripts/grok-fidelity-gate.sh
+
+      - name: Pinned Grok binary unchanged by the gate
+        run: |
+          set -uo pipefail
+          at="$(command -v grok || true)"
+          [ "$at" = "$HOME/.grok/bin/grok" ] \
+            || { echo "::error::grok-fidelity[grok] resolved-elsewhere-after-gate:${at:-<none>}"; exit 3; }
+          echo "${GROK_SHA256}  ${HOME}/.grok/bin/grok" | sha256sum -c - >/dev/null || {
+            echo "::error::grok-fidelity[grok] binary-changed-during-gate (auto-update?) got $(sha256sum "$HOME/.grok/bin/grok" | cut -d' ' -f1)"
+            exit 3
+          }
+          raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          got="$(printf '%s' "${raw//[$'\r\n']/ }" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$GROK_PIN" ] \
+            || { echo "::error::grok-fidelity[grok] version-changed-during-gate:${got:-<unparsed>}!=${GROK_PIN}"; exit 3; }
 
   # Rationale lives in ADR-245, not here (ADR-231: workflow files are byte-budgeted).
   # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
