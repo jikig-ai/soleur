@@ -62,7 +62,7 @@ fi
 
 # T1b — a verdict without its command is not a finding. Every emitted count must
 # be accompanied by the command that produced it (AC2).
-if printf '%s' "$t1_out" | grep -qF 'cmd:'; then
+if printf '%s' "$t1_out" | grep -cF 'cmd:' >/dev/null; then
   pass "  ...and every emitted count carries its command (AC2)"
 else
   fail "counts carry commands" "no 'cmd:' provenance lines in probe output"
@@ -111,7 +111,7 @@ fi
 
 # T2b — the refusal must NAME the cause, not just exit non-zero. A bare rc=1 in a
 # CI log gets retried; a named cause gets fixed.
-if printf '%s' "$t2_out" | grep -qiE 'grep|early.?exit|drain'; then
+if printf '%s' "$t2_out" | grep -ciE 'grep|early.?exit|drain' >/dev/null; then
   pass "  ...and the refusal names the grep as the cause"
 else
   fail "refusal is diagnosable" "non-zero exit carried no grep-related explanation: $(printf '%s' "$t2_out" | tr '\n' '~')"

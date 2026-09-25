@@ -59,7 +59,7 @@
 # floors are reported with printf + exit, never through pass()/fail().
 #
 # Run: bash apps/web-platform/infra/git-data-store-device-census.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -121,7 +121,7 @@ printf '\n=== git-data-store-device census (Guard 1) ===\n\n'
 # construct cannot satisfy an anchor (matrix row 5).
 _code() { sed 's/^[[:space:]]*#.*$//' "$1"; }
 # EVERY `grep -q` below reads a HERE-STRING, never the tail of a pipe. `grep -q` exits at the
-# first match, so `_code f | grep -q X` kills sed with SIGPIPE and `set -o pipefail` reports
+# first match, so `_code f | grep -c X >/dev/null` kills sed with SIGPIPE and `set -o pipefail` reports
 # the pipeline as FAILED — a present check read as absent, intermittently, by file size.
 BOOT_CODE="$(_code "$BOOTSTRAP")"
 
@@ -195,7 +195,7 @@ destructive_anchor() {
 store_check_gaps() { # store_check_gaps <script path> <basename>
   local f="$1" b="$2" C rootvar anchor mp dev mk destr
   C="$(_code "$f")"
-  rootvar="$(printf '%s\n' "$C" | sed -nE 's/.*mountpoint -q "\$([A-Z_]+)".*/\1/p' | head -1)"
+  rootvar="$(printf '%s\n' "$C" | sed -nE 's/.*mountpoint -q "\$([A-Z_]+)".*/\1/p' | sed -n '1p')"
   if [ -z "$rootvar" ]; then printf 'mount-guard\n'; return 0; fi
   grep -qE '^STORE_DEVICE="\$\{GIT_DATA_STORE_DEVICE:-/dev/mapper/git-data\}"$' <<< "$C" || printf 'device-seam\n'
   grep -qE '^STORE_VERIFIED="\$\{GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified\}"$' <<< "$C" || printf 'marker-seam\n'
@@ -206,10 +206,10 @@ store_check_gaps() { # store_check_gaps <script path> <basename>
   grep -qE '^\[ -n "\$store_uuid" \] && \[ -s "\$STORE_VERIFIED" \] && \[ "\$\(head -n 1 "\$STORE_VERIFIED"\)" = "\$store_uuid" \] \|\| ' <<< "$C" || printf 'marker-uuid\n'
   anchor="$(destructive_anchor "$b")"
   if [ -z "$anchor" ]; then printf 'no-destructive-anchor\n'; return 0; fi
-  mp=$(printf '%s\n' "$C" | grep -nF "mountpoint -q \"\$${rootvar}\"" | head -1 | cut -d: -f1)
-  dev=$(printf '%s\n' "$C" | grep -n 'findmnt -n -o SOURCE --mountpoint' | head -1 | cut -d: -f1)
-  mk=$(printf '%s\n' "$C" | grep -n 'head -n 1 "\$STORE_VERIFIED"' | head -1 | cut -d: -f1)
-  destr=$(printf '%s\n' "$C" | grep -nF "$anchor" | head -1 | cut -d: -f1)
+  mp=$(printf '%s\n' "$C" | grep -nF "mountpoint -q \"\$${rootvar}\"" | sed -n '1p' | cut -d: -f1)
+  dev=$(printf '%s\n' "$C" | grep -n 'findmnt -n -o SOURCE --mountpoint' | sed -n '1p' | cut -d: -f1)
+  mk=$(printf '%s\n' "$C" | grep -n 'head -n 1 "\$STORE_VERIFIED"' | sed -n '1p' | cut -d: -f1)
+  destr=$(printf '%s\n' "$C" | grep -nF "$anchor" | sed -n '1p' | cut -d: -f1)
   [ -n "$destr" ] || { printf 'destructive-anchor-absent\n'; return 0; }
   [ -n "$dev" ] && [ -n "$mp" ] && [ "$dev" -gt "$mp" ] || printf 'order-after-mountpoint\n'
   [ -n "$dev" ] && [ "$dev" -lt "$destr" ] || printf 'order-before-destructive\n'
@@ -227,7 +227,7 @@ done <<< "$STORE_SET"
 # AFTER doppler, so a key in prd_git_data cannot survive into gc's environment. The four are
 # the contract's; gc also strips GIT_DATA_ROOT, its own name for the mount seam, and that is
 # asserted separately rather than folded in, so dropping it is visible.
-_exec="$(grep -E '^ExecStart=' "$GC_SERVICE" | head -1)"
+_exec="$(grep -E '^ExecStart=' "$GC_SERVICE" | sed -n '1p')"
 for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_MOUNT_ROOT GIT_DATA_REPO_ROOT; do
   if grep -qF -- "-u $v" <<< "$_exec"; then pass "C: git-data-gc.service strips $v"
   else fail "C: git-data-gc.service ExecStart does not strip $v" "$_exec"; fi
@@ -244,7 +244,7 @@ else fail "C: env -u does not sit between doppler run and the gc script" "$_exec
 # prd_git_data retargeted the marker (every erasure then refuses — an Art. 17 denial of
 # service on a boot that reports green) or, through GIT_DATA_REMOVE_BIN, ran an arbitrary
 # binary as root at boot. Found by review, not by this census, which is why the row exists.
-_boot_exec="$(grep -E 'doppler run .*git-data-bootstrap\.sh' "$TEMPLATE" | head -1)"
+_boot_exec="$(grep -E 'doppler run .*git-data-bootstrap\.sh' "$TEMPLATE" | sed -n '1p')"
 if [ -n "$_boot_exec" ]; then pass "C2: the bootstrap invocation is present in the template"
 else fail "C2: could not find the bootstrap's doppler invocation in $TEMPLATE"; fi
 for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_REMOVE_BIN GIT_DATA_PLAINTEXT_DEV; do

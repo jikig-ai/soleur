@@ -24,7 +24,7 @@
 # own prose also contains (cq-assert-anchor-not-bare-token).
 #
 # Run: bash apps/web-platform/infra/workspaces-luks-header.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 #
 # `set -e` is deliberately ABSENT: deliberately-nonzero greps are wrapped so the harness never
 # aborts mid-suite.
@@ -116,7 +116,7 @@ p_script_reads_pinned() {
 # global flags so `doppler --config X run …` is caught too, not just the bare `doppler run` form
 # (blacklist-evasion surfaced by the test-design review).
 p_no_doppler_run() {
-  strip_comments "$1" | grep -Eq 'doppler[[:space:]]+([^[:space:]]+[[:space:]]+)*(run|secrets[[:space:]]+download)([[:space:]]|$)' && echo 0 || echo 1
+  strip_comments "$1" | grep -Ec 'doppler[[:space:]]+([^[:space:]]+[[:space:]]+)*(run|secrets[[:space:]]+download)([[:space:]]|$)' >/dev/null && echo 0 || echo 1
 }
 
 # H6 — every R2-targeting aws invocation carries --endpoint-url pointed at "$HEADER_R2_ENDPOINT".
@@ -130,7 +130,7 @@ p_endpoint_on_aws() {
 
 # H7 — the escrow creds NEVER appear on the workflow's sudo argv NOR in the workflow env.
 p_creds_not_in_workflow() {
-  strip_comments "$1" | grep -Eq 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|WORKSPACES_HEADER_R2_(ACCESS|SECRET)_|WORKSPACES_HEADER_BUCKET' && echo 0 || echo 1
+  strip_comments "$1" | grep -Ec 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|WORKSPACES_HEADER_R2_(ACCESS|SECRET)_|WORKSPACES_HEADER_BUCKET' >/dev/null && echo 0 || echo 1
 }
 
 # H9 — ensure_aws SHA256-verifies the installer BEFORE running it as root (the supply-chain gate).
@@ -141,8 +141,8 @@ p_creds_not_in_workflow() {
 p_sha_pin_gated() {
   local f="$1" sha_ln inst_ln stripped
   stripped="$(strip_comments "$f")"
-  sha_ln="$(grep -nE 'sha256sum -c' <<<"$stripped" | head -1 | cut -d: -f1)"
-  inst_ln="$(grep -nF './aws/install' <<<"$stripped" | head -1 | cut -d: -f1)"
+  sha_ln="$(grep -nE 'sha256sum -c' <<<"$stripped" | sed -n '1p' | cut -d: -f1)"
+  inst_ln="$(grep -nF './aws/install' <<<"$stripped" | sed -n '1p' | cut -d: -f1)"
   [ -n "$sha_ln" ] && [ -n "$inst_ln" ] && [ "$sha_ln" -lt "$inst_ln" ] && echo 1 || echo 0
 }
 
@@ -254,7 +254,7 @@ assert_mutation_append "H7 (cred leaked into workflow)" p_creds_not_in_workflow 
 # gate. Mutation: move the call to just AFTER `then` → it becomes inert in the dry-run arm → RED.
 probe_outside_gate() {  # $1 = script file
   local f="$1" step_ln gate_ln call ln
-  step_ln="$(grep -nE '^step "escrow proof' "$f" | head -1 | cut -d: -f1)"
+  step_ln="$(grep -nE '^step "escrow proof' "$f" | sed -n '1p' | cut -d: -f1)"
   [ -n "$step_ln" ] || { echo 0; return; }
   gate_ln="$(awk 'NR>'"$step_ln"' && /^if \[ "\$DRY_RUN" != "1" \]; then$/ { print NR; exit }' "$f")"
   [ -n "$gate_ln" ] || { echo 0; return; }

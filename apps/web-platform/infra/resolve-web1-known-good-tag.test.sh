@@ -102,7 +102,7 @@ if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(k) four-part 1.2.3.4 �
 
 # ── (i) diagnostic quality: rejection message names the rejected version inside the quoted slot + surfaces ::error:: ──
 STDERR="$(bash "$SCRIPT" "latest" 2>&1 >/dev/null)"
-if echo "$STDERR" | grep -q "::error::" && echo "$STDERR" | grep -q "version='latest'"; then
+if echo "$STDERR" | grep -c "::error::" >/dev/null && echo "$STDERR" | grep -c "version='latest'" >/dev/null; then
   pass
 else
   fail "(i) rejection diagnostic → expected ::error:: with version='latest', got: $STDERR"

@@ -405,7 +405,7 @@ t_resend_fail_mirror() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" || ok=0                                   # mirror still posted
-  printf '%s\n' "$out" | grep -qiF "resend" || ok=0          # warning logged
+  printf '%s\n' "$out" | grep -ciF "resend" >/dev/null || ok=0          # warning logged
   # (#7898 P9) the failed send ships off-box as a crit row: marker + http code,
   # never the key
   grep -qF -- "-p user.crit" "$d/logger_args" 2>/dev/null || ok=0
@@ -471,7 +471,7 @@ t_cooldown_suppressed() {
   [[ "$rc" -eq 0 ]] || ok=0
   ! resend_hit "$d" || ok=0                                     # email suppressed
   ! sentry_hit "$d" || ok=0                                     # both channels gated by cooldown
-  printf '%s\n' "$out" | grep -qiF "cooldown" || ok=0           # logged the suppression reason
+  printf '%s\n' "$out" | grep -ciF "cooldown" >/dev/null || ok=0           # logged the suppression reason
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: active cooldown suppresses the alert send (logged)";
   else FAIL=$((FAIL+1)); echo "  FAIL: cooldown suppression (rc=$rc) out: $out"; fi
   rm -rf "$d"
@@ -537,7 +537,7 @@ t_pin_refused_host() {
   grep -qF "example.test" "$d/curl_args" 2>/dev/null && ok=0            # no Sentry curl to the refused host
   resend_hit "$d" || ok=0                                                # Resend channel survives
   grep -qF "sentry channel refused" "$d/curl_args" 2>/dev/null || ok=0  # note rides the email payload
-  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" || ok=0
+  printf '%s\n' "$out" | grep -cF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" >/dev/null || ok=0
   grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" "$d/logger_args" 2>/dev/null || ok=0
   grep -qF "example.test" "$d/logger_args" 2>/dev/null && ok=0          # reason token only, never the host
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: refused ingest host → no Sentry curl, marker+crit row (reason token), email carries the note, exit 0";
@@ -557,7 +557,7 @@ t_pin_folded_host() {
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" || ok=0                                                # folded host in the request
   grep -qF "INGEST.DE.SENTRY.IO" "$d/curl_args" 2>/dev/null && ok=0     # never the raw value
-  printf '%s\n' "$out" | grep -qF "_REFUSED channel=sentry" && ok=0
+  printf '%s\n' "$out" | grep -cF "_REFUSED channel=sentry" >/dev/null && ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: uppercase + trailing-dot host is accepted and the request uses the folded host";
   else FAIL=$((FAIL+1)); echo "  FAIL: folded-host row (rc=$rc) out: $out"; echo "        curl: $(cat "$d/curl_args" 2>/dev/null)"; fi
   rm -rf "$d"
@@ -574,7 +574,7 @@ t_pin_smuggled_host() {
     out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_HOST="$host"; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
     [[ "$rc" -eq 0 ]] || ok=0
     grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0             # no Sentry curl at all
-    printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" || ok=0
+    printf '%s\n' "$out" | grep -cF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" >/dev/null || ok=0
     resend_hit "$d" || ok=0
   done
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: path/query suffix and %2F-encoded separator are refused with reason=host-shape";
@@ -592,7 +592,7 @@ t_pin_bad_key() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" && ok=0
-  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=key-shape" || ok=0
+  printf '%s\n' "$out" | grep -cF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=key-shape" >/dev/null || ok=0
   grep -qF "pubkey_test" "$d/logger_args" 2>/dev/null && ok=0
   resend_hit "$d" || ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo  "  PASS: non-hex public key is refused with reason=key-shape; email still fires";
@@ -610,7 +610,7 @@ t_pin_bad_project() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0
-  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=project-shape" || ok=0
+  printf '%s\n' "$out" | grep -cF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=project-shape" >/dev/null || ok=0
   resend_hit "$d" || ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo  "  PASS: non-numeric project id is refused with reason=project-shape; email still fires";
   else FAIL=$((FAIL+1)); echo "  FAIL: bad-project row (rc=$rc) out: $out"; fi
@@ -629,8 +629,8 @@ t_pin_triple_unset() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0
-  printf '%s\n' "$out" | grep -qF "Sentry env unset" || ok=0
-  printf '%s\n' "$out" | grep -qF "_REFUSED channel=sentry" && ok=0     # unset is not a refusal
+  printf '%s\n' "$out" | grep -cF "Sentry env unset" >/dev/null || ok=0
+  printf '%s\n' "$out" | grep -cF "_REFUSED channel=sentry" >/dev/null && ok=0     # unset is not a refusal
   grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=sentry reason=unset" "$d/logger_args" 2>/dev/null || ok=0   # but it is shipped off-box
   resend_hit "$d" || ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: triple unset → 'Sentry env unset' log + SEND_SKIPPED row, no refusal marker, Resend still fires, exit 0";
@@ -649,7 +649,7 @@ t_logger_absent() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" || ok=0
-  printf '%s\n' "$out" | grep -qF "logger=absent" || ok=0
+  printf '%s\n' "$out" | grep -cF "logger=absent" >/dev/null || ok=0
   [[ -f "$d/logger_args" ]] && ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: logger absent: alert still posts, exit 0, stderr carries logger=absent";
   else FAIL=$((FAIL+1)); echo "  FAIL: logger-absent row (rc=$rc) out: $out"; fi
