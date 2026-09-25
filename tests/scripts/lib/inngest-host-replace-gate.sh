@@ -26,13 +26,8 @@
 #     rotation that did NOT cascade to a host replace would fail inngest_server_replaced==1.)
 # This allow-set was DERIVED (2026-06, #6178) from the then-current web-2-recreate golden
 # fixture, which showed that a scoped `-replace` of an hcloud server touches EXACTLY
-# server + server_network + volume_attachment. It then claimed hcloud_firewall_attachment.*
-# (server_ids, non-ForceNew) "does NOT change". That premise was FALSE for inngest: the attachment
-# kept the destroyed server's id after every replace, and host 167310350 ran with no firewall from
-# birth (#8754). Since #8754 the firewall binds through hcloud_server.inngest.firewall_ids, which
-# the replacement server carries at create, before first boot, so there is no attachment to plan
-# and none belongs in the allow-set. hcloud_firewall.inngest appears in the plan only as a no-op
-# dependency, which no counter below scores.
+# server + server_network + volume_attachment. Its claim that the firewall attachment "does NOT
+# change" left inngest unfirewalled after every replace (#8754, ADR-100 2026-09-25 addendum).
 # That fixture was removed with the web-2 dispatch sweep (#6575, 2026-07-20); the derivation
 # it justified is unchanged and is now pinned by this gate's OWN tests, which are the live
 # guarantee. Do not re-add a pointer to a deleted fixture.
@@ -59,6 +54,8 @@
 #   random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key
 #                                               ABSENT (any entry, a no-op included)
 #                                                                     → luks_passphrase_in_graph
+#   hcloud_server.inngest (its create)          after.firewall_ids == [id of hcloud_firewall.inngest]
+#                                                                     → firewall_not_bound (#8754)
 #
 # PASS (rc=0) iff every counter is 0 and inngest_server_replaced==1. The ABORT line names the first
 # failing counter as `reason=<token>`.
@@ -85,7 +82,7 @@ fi
 
 inngest_host_replace_gate() {
   local plan_json="$1"
-  local counts oos rdel ldel replaced rvt lvt att lpig reason
+  local counts oos rdel ldel replaced rvt lvt att lpig fnb reason
 
   # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
   # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
@@ -192,6 +189,19 @@ inngest_host_replace_gate() {
               | select(.change.actions? | any(. == "delete" or . == "forget")) ]
             | length
           ),
+          firewall_not_bound: (
+            # #8754: the replacement must be CREATED bound to exactly the deny-all firewall. The id
+            # comes from the plan entry of that firewall (a no-op dependency on a replace). An absent
+            # entry or unknown id reads as "", which no firewall_ids list equals: fail closed.
+            ([ $plan.resource_changes[]? | select(.address == "hcloud_firewall.inngest")
+               | (.change.after.id? // .change.before.id?) ] | first // null) as $raw
+            | (if ($raw | type) == "number" or ($raw | type) == "string" then ($raw | tostring) else "" end) as $fw
+            | [ $plan.resource_changes[]?
+                | select(.address == "hcloud_server.inngest")
+                | select(.change.actions? | index("create"))
+                | select((.change.after.firewall_ids? | if type == "array" then map(tostring) else null end) != [$fw]) ]
+            | length
+          ),
           inngest_server_replaced: (
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_server.inngest")
@@ -211,16 +221,17 @@ inngest_host_replace_gate() {
   lvt=$(echo "$counts" | jq -r '.luks_volume_touched')
   att=$(echo "$counts" | jq -r '.attachment_touched')
   lpig=$(echo "$counts" | jq -r '.luks_passphrase_in_graph')
+  fnb=$(echo "$counts" | jq -r '.firewall_not_bound')
 
   # Every counter is a non-negative integer BEFORE any arithmetic compares one.
   # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
   # under bash coercion — so an uncomputed counter silently satisfies every threshold.
   # The shared helper names WHICH counter failed rather than reporting them all.
   plan_gate_assert_numeric "inngest_host_replace_gate" "inngest_out_of_scope_changes=${oos}" "redis_volume_destroyed=${rdel}" "luks_volume_destroyed=${ldel}" "inngest_server_replaced=${replaced}" \
-    "redis_volume_touched=${rvt}" "luks_volume_touched=${lvt}" "attachment_touched=${att}" "luks_passphrase_in_graph=${lpig}" || return 1
+    "redis_volume_touched=${rvt}" "luks_volume_touched=${lvt}" "attachment_touched=${att}" "luks_passphrase_in_graph=${lpig}" "firewall_not_bound=${fnb}" || return 1
 
-  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} luks_volume_destroyed=${ldel} inngest_server_replaced=${replaced} redis_volume_touched=${rvt} luks_volume_touched=${lvt} attachment_touched=${att} luks_passphrase_in_graph=${lpig}"
-  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$ldel" -eq 0 && "$replaced" -eq 1 && "$rvt" -eq 0 && "$lvt" -eq 0 && "$att" -eq 0 && "$lpig" -eq 0 ]]; then
+  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} luks_volume_destroyed=${ldel} inngest_server_replaced=${replaced} redis_volume_touched=${rvt} luks_volume_touched=${lvt} attachment_touched=${att} luks_passphrase_in_graph=${lpig} firewall_not_bound=${fnb}"
+  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$ldel" -eq 0 && "$replaced" -eq 1 && "$rvt" -eq 0 && "$lvt" -eq 0 && "$att" -eq 0 && "$lpig" -eq 0 && "$fnb" -eq 0 ]]; then
     echo "inngest_host_replace_gate: PASS — scoped inngest-host recreate permitted (server + 3 dependents replace; BOTH the Redis AOF volume and the ADR-142 additive target preserved)"
     return 0
   fi
@@ -234,7 +245,8 @@ inngest_host_replace_gate() {
   elif [[ "$att"  -ne 0 ]]; then reason=attachment_touched
   elif [[ "$oos"  -ne 0 ]]; then reason=inngest_out_of_scope_changes
   elif [[ "$replaced" -ne 1 ]]; then reason=server_not_replaced
+  elif [[ "$fnb"  -ne 0 ]]; then reason=firewall_not_bound
   fi
-  echo "inngest_host_replace_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, any action on the live Redis AOF volume, an update/delete/forget of the additive target, a bare attachment update/delete/forget, the LUKS passphrase pair in the plan, or no server replace)"
+  echo "inngest_host_replace_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, any action on the live Redis AOF volume, an update/delete/forget of the additive target, a bare attachment update/delete/forget, the LUKS passphrase pair in the plan, no server replace, or a replacement not born bound to hcloud_firewall.inngest)"
   return 1
 }
