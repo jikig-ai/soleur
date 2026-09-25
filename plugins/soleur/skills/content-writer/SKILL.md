@@ -131,7 +131,7 @@ Run this phase only when **both** hold:
 
 Otherwise skip it. A project whose Blog note sets no jargon limits gets no scan.
 
-[blog-jargon-scan.sh](./scripts/blog-jargon-scan.sh) flags reader-visible lines that carry a backtick, a `<code>` or `<pre>` tag, a `--flag`, or a visible issue or PR number (`#` plus two or more digits). It reads the `title:`, `seoTitle:` and `description:` values (including folded, multi-line values) and the body, skipping JSON-LD blocks and markdown link targets. That is a **fixed subset** of what a Blog note may ban: indented code blocks, file paths, command or skill names, API names and bare numbers are not detected, whatever the note says. Apply the rest of the note's jargon limits yourself while drafting.
+[blog-jargon-scan.sh](./scripts/blog-jargon-scan.sh) flags reader-visible lines that carry a backtick, a `<code>` or `<pre>` tag, a `--flag`, or a visible issue or PR number (`#` plus two or more digits). It reads the `title:`, `seoTitle:` and `description:` values (including folded, multi-line values) and the body, skipping JSON-LD blocks and markdown link targets. That is a **fixed subset** of what a Blog note may ban: indented code blocks, file paths, command or skill names, API names and bare numbers are not detected, whatever the note says. A clean scan therefore does not mean the note's jargon limits are met: before leaving this phase, check the draft against the rest of them too.
 
 Scan the draft through a file, never by pasting it into a shell command: a heredoc is broken by a draft line equal to its delimiter, and re-pasting the whole draft on every re-scan costs its full length each time.
 
@@ -143,12 +143,13 @@ Scan the draft through a file, never by pasting it into a shell command: a hered
    rc=0; bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh" "<that directory>/draft.md" || rc=$?; echo "SCAN_RC=$rc"
    ```
 
-4. Apply fixes to the draft file with the **Edit** tool, and re-run step 3. When the phase ends, remove the directory (`rm -rf "<that directory>"`).
+4. Apply fixes to the draft file with the **Edit** tool, and re-run step 3. When a rewritten line also appears in the FAQPage JSON-LD (a question or an answer), edit the JSON-LD to match: the scan skips JSON-LD, and the Blog note's limits cover FAQ answers.
+5. When the phase ends, Read `draft.md` back: it is the draft from here on (Phases 2.5 to 4). Then remove the directory (`rm -rf "<that directory>"`).
 
 The script path is the bare plugin-root anchor, with no fallback (ADR-179): a fallback would resolve into the working repository and execute a file from it.
 
 - **`SCAN_RC=0`:** no hits. Continue.
-- **`SCAN_RC=1`:** rewrite each listed line in plain words, or move the detail into the single closing technical link, whose URL may carry the number. Re-scan, for at most 2 cycles. Keep any hits left after that: interactive runs show them in Phase 3; headless runs list them in the Phase 4 report.
+- **`SCAN_RC=1`:** rewrite each listed line in plain words, or move the detail into one closing technical link at the end of the post (add it if the draft has none; if the draft links several technical write-ups, keep the most relevant one there), whose URL may carry the number. Re-scan after each fix cycle, for at most 2 fix cycles per run of this phase. Keep any hits left after that, as the line's text without the scratch file's line number: interactive runs show them in Phase 3; headless runs list them in the Phase 4 report.
 - **Any other value** (usage error, unreadable file, `127` for a missing script): print `blog-jargon-scan unavailable (rc=<N>)` in the Phase 4 report and continue. Never block a draft on a broken scan.
 - **The Bash call is refused** (a restricted runner, such as a scheduled job allowed only `gh` commands): print `blog-jargon-scan unavailable (denied)` in the Phase 4 report and continue without retrying. The Blog note's jargon limits still apply to the draft.
 
@@ -211,7 +212,7 @@ On acceptance, write the article to the output path.
 
 Report: "Article written to `<path>`. Review and commit when ready."
 
-If Phase 2.4 ran, add one line after that sentence for each leftover scan hit, or the `blog-jargon-scan unavailable (rc=<N>)` line if the scan could not run.
+If Phase 2.4 ran, add after that sentence the `blog-jargon-scan unavailable (rc=<N>)` or `blog-jargon-scan unavailable (denied)` line if the scan could not run. In a headless run, also add one line per leftover scan hit, in the form `blog-jargon-scan leftover: <line text>` (interactive runs already showed them in Phase 3).
 
 ## Phase 4.5: OG Image Generation
 
