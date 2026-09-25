@@ -1466,7 +1466,7 @@
             "comparison": {
               "key": "reason",
               "match": "in",
-              "value": "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_refused,leader_response_truncated,leader_tool_invalid"
+              "value": "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_internal_error,leader_refused,leader_response_truncated,leader_tool_invalid"
             },
             "type": "tagged_event"
           }

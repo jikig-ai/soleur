@@ -188,6 +188,7 @@ describe("deriveTodayCardState (AC11)", () => {
       "leader_refused",
       "leader_tool_invalid",
       "leader_class_disabled",
+      "leader_internal_error",
       "cancelled_by_operator",
       "github_installation_unauthorized",
       "github_target_not_found",

@@ -436,3 +436,18 @@ earlier in this ADR predates T17 and should be read as the set enumerated in `SK
 marker ABSENCE *and* an allowlisted rc, with a fixture-defect rung above it and a mount-source
 existence pre-check before the spin — so a deterministic bind failure and a mistyped `-v` source
 both red rather than declining. A vacuity finding with apt provably healthy still fails.
+
+## Addendum — 2026-09-25 (#8616): the hook suites extend the ownership axis to local runs
+
+This ADR requires a hard fail **under CI** for a precondition the runner is contracted to supply,
+and keeps a local skip (`_skip()` in the infra suites, for docker/terraform/python3). #8616 goes
+further for the hook suites under `.claude/hooks/`, which run everywhere the hooks do. There, a
+missing `jq`/`git`/`perl`/`realpath`/`python3`/`script` is never green, locally or in CI. The suite
+exits 3 (UNRESOLVED) and names the tool. The reason is specific to hooks: the hooks under test call
+the same tools, so on a machine without them the guardrails are degraded too, and a green suite there
+misstates what was measured.
+
+This is an extension, not a reversal. The infra `_skip()` semantics are unchanged, and so is the
+gitleaks probe (`plugins/soleur/test/lib/gitleaks-probe.sh`, #8266), which keeps its local skip and
+CI hard fail. `.claude/hooks/hook-suite-dep-unresolved.test.sh` names that probe as an accepted gap.
+The same idiom outside `.claude/hooks/` is tracked in #8773.
