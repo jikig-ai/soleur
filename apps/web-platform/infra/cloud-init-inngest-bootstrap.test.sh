@@ -1473,9 +1473,9 @@ assert "NIC-G1 row10: the cloud-init-inngest.yml map binds inngest_private_ip = 
 # that boot the host carried the other address -- and check.py's own OWN_IP then excluded the
 # wrong one. Measured at review. Pin the two copies to each other.
 NG1_TF_IP=$(grep -oE '^[[:space:]]*inngest_private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' "$SCRIPT_DIR/inngest-host.tf" \
-  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p' || true)
 NG1_STUB_IP=$(grep -oE 'inngest_private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' "$SCRIPT_DIR/inngest-userdata-budget.sh" \
-  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p' || true)
 assert "NIC-G1 row10b: the budget stub's inngest_private_ip equals local.inngest_private_ip (tf=${NG1_TF_IP:-none} stub=${NG1_STUB_IP:-none})" \
   "[[ -n \"\$NG1_TF_IP\" && \"\$NG1_TF_IP\" == \"\$NG1_STUB_IP\" ]]"
 

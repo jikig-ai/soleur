@@ -1168,11 +1168,11 @@ lv_case "the current server's rows count"                         current     ok
 lv_case "predecessor rows then current rows: only the current count" mixed-pc  ok     2
 lv_case "current rows then predecessor rows: only the current count" mixed-cp  ok     2
 lv_case "a row with no event time is excluded, never defaulted"   no-ts       ok     0
-grep -qE 'host_pair=1 pre_floor=0 malformed=1 ' "$FLV_ERR"; NOTS_M=$?
+if grep -qE 'host_pair=1 pre_floor=0 malformed=1 ' "$FLV_ERR"; then NOTS_M=0; else NOTS_M=$?; fi
 assert "G3 generation: the no-event-time row is reported as malformed=1 in the notice" "[[ '$NOTS_M' -eq 0 ]]"
 lv_case "one malformed row does not abort the count"              no-ts+2cur  ok     2
 lv_case "rows ingested after created but stamped before it do not count" late-ingest ok 0
-grep -qE 'skew_suspect=2$' "$FLV_ERR"; LATE_K=$?
+if grep -qE 'skew_suspect=2$' "$FLV_ERR"; then LATE_K=0; else LATE_K=$?; fi
 assert "G3 generation: late-ingest rows are reported as skew_suspect=2 (the current clock is behind)" "[[ '$LATE_K' -eq 0 ]]"
 lv_case "a predecessor whose clock ran ahead is caught by the ingest clock" clock-ahead ok 0
 lv_case "the floor comes from the anchor: the same rows before a LATER created count 0" current late 0
