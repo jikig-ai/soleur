@@ -26,7 +26,7 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 PASS=0
 FAIL=0
 # Anti-vacuity floor. Raise deliberately when adding fixtures.
-MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-50}"
+MIN_ASSERTIONS="${CAPTURE_LINT_MIN_ASSERTIONS:-61}"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() {
@@ -72,6 +72,10 @@ run_lint() {
 # assert_fires <path> <line> <code> <label>
 assert_fires() {
   local path="$1" line="$2" code="$3" label="$4"
+  if [[ ! -s "$path" ]]; then
+    fail "$label" "fixture $path exists and is non-empty" "missing/empty fixture file"
+    return
+  fi
   run_lint "$path"
   if [[ $LINT_RC -eq 0 ]]; then
     fail "$label" "exit 1 (finding at :$line [$code])" "exit 0 -- linter saw nothing"
@@ -87,6 +91,10 @@ assert_fires() {
 # assert_silent <path> <label>
 assert_silent() {
   local path="$1" label="$2"
+  if [[ ! -s "$path" ]]; then
+    fail "$label" "fixture $path exists and is non-empty" "missing/empty fixture file"
+    return
+  fi
   run_lint "$path"
   if [[ $LINT_RC -eq 0 ]]; then
     pass "$label"
@@ -570,15 +578,122 @@ EOF
 )"
 assert_silent "$f" "S4: tail inside a set +e file -- nothing aborts anyway"
 
+# --- S3/S4 coverage expansion (review findings) ---------------------------------
+f="$(write_fix s3-sameline-clear-after <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+some_command; set +e; rc=$?
+EOF
+)"
+assert_fires "$f" 3 S3 "S3: cmd; set +e; rc=\$? same line -- the clear runs AFTER the armed command"
+
+f="$(write_fix s3-canonical-fix <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if out="$(some_command)"; then
+  rc=0
+else
+  rc=$?
+fi
+echo "$rc $out"
+EOF
+)"
+assert_silent "$f" "S3: if cmd; then rc=0; else rc=\$?; fi -- the gate's own recommended fix"
+
+f="$(write_fix s3-trap-string <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+work
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then cleanup; fi' EXIT
+EOF
+)"
+assert_silent "$f" "S3: rc=\$? inside a trap string reads the fire-time status, not this line's"
+
+f="$(write_fix s3-or-brace-block <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+out=$(some_command 2>&1) || {
+  rc=$?
+  echo "failed rc=$rc" >&2
+}
+EOF
+)"
+assert_silent "$f" "S3: cmd || { rc=\$? ... } failure block -- the protection idiom itself"
+
+f="$(write_fix s3-pipeline-2gt1 <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+grep -E 'pat' "$1" 2>&1
+rc=$?
+EOF
+)"
+assert_fires "$f" 4 S3 "S3: 2>&1 before the read does not poison the segment split"
+
+f="$(write_fix s3-indexed-read <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+worker
+rcs[0]=$?
+EOF
+)"
+assert_fires "$f" 4 S3 "S3: rcs[0]=\$? indexed assignment is the same read"
+
+f="$(write_fix s3-quoted-read <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+worker
+rc="$?"
+EOF
+)"
+assert_fires "$f" 4 S3 "S3: rc=\"\$?\" quoted form is the same read"
+
+f="$(write_fix s4-single-bracket-tail <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  local total=0
+  [ "$total" -gt 0 ] && echo "total=$total"
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4d: [ expr ] && act tail -- single-bracket form leaks too"
+
+f="$(write_fix s4-test-tail <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+report() {
+  local total=0
+  test "$total" -gt 0 && echo "total=$total"
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4e: test expr && act tail -- the test-builtin form leaks too"
+
+f="$(write_fix s4-function-kw <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+function report {
+  local total=0
+  (( total > 0 )) && echo "total=$total"
+}
+EOF
+)"
+assert_fires "$f" 5 S4 "S4f: 'function name {' opener is still a function tail"
+
 # --- baseline behaviour ------------------------------------------------------
-f="$(write_fix baseline-src <<'EOF'
+# --write-baseline refuses explicit paths (a subset scan would truncate the
+# grandfathered set), so the write path is exercised through a mini git root.
+PROJ="$TMP/proj"
+mkdir -p "$PROJ"
+git -C "$PROJ" init -q 2>/dev/null
+cat > "$PROJ/one.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 hits=$(grep 'pattern' f)
 EOF
-)"
+git -C "$PROJ" add -A 2>/dev/null
 BASE="$TMP/base.txt"
-python3 "$LINTER" --root "$TMP" "$f" --baseline "$BASE" --write-baseline >/dev/null 2>&1 \
+python3 "$LINTER" --root "$PROJ" --baseline "$BASE" --write-baseline >/dev/null 2>&1 \
   || { fail "baseline: --write-baseline succeeded"; }
 if [[ -s "$BASE" ]]; then
   pass "baseline: --write-baseline produced a non-empty file"
@@ -587,7 +702,17 @@ else
 fi
 
 LINT_RC=0
-python3 "$LINTER" --root "$TMP" "$f" --baseline "$BASE" >/dev/null 2>&1 || LINT_RC=$?
+python3 "$LINTER" --root "$PROJ" "$PROJ/one.sh" --baseline "$BASE" --write-baseline >/dev/null 2>&1 || LINT_RC=$?
+if [[ $LINT_RC -eq 2 ]]; then
+  pass "baseline: --write-baseline refuses explicit paths (subset scan would truncate)"
+else
+  fail "baseline: --write-baseline refuses explicit paths" "exit 2" "exit $LINT_RC"
+fi
+
+f="$PROJ/one.sh"
+
+LINT_RC=0
+python3 "$LINTER" --root "$PROJ" "$f" --baseline "$BASE" >/dev/null 2>&1 || LINT_RC=$?
 if [[ $LINT_RC -eq 0 ]]; then
   pass "baseline: a grandfathered finding is suppressed"
 else

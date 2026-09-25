@@ -4754,7 +4754,7 @@ unset qp_path qp_count qp_body qp_sha QP_N QP_REF QP_FILES QP_BAD
 # and it still precedes their start. (Owned elsewhere; their own suites prove the behaviour — this
 # pins that the start writer the inventory above counts is still behind the guard.)
 QW_F="$SCRIPT_DIR/inngest-wiped-volume-verify.sh"
-QW_GATE=$(grep -nE '\( "\$unit_active" == inactive \|\| "\$unit_active" == failed \) && "\$unit_enabled" == disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_GATE=$(grep -nE '\( "\$unit_active" == inactive \|\| "\$unit_active" == failed \) && "\$unit_enabled" == disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
 QW_ABORT=$(grep -nE 'abort "quiesced_refused"' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
 QW_START=$(grep -nE '^[^#]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
 TOTAL=$((TOTAL + 1))
