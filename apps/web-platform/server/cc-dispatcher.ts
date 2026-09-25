@@ -2345,7 +2345,10 @@ export const realSdkQueryFactory: QueryFactory = async (
                 type: "c4_diagram_saved",
                 dirPath,
                 rerendered,
-                diagnostic,
+                // The wire schema caps diagnostic at 20000 chars; truncate
+                // emit-side or an oversized render diagnostic fails client
+                // parse and silently drops the frame.
+                diagnostic: diagnostic ? diagnostic.slice(0, 20000) : diagnostic,
               });
             } catch (err) {
               // null first arg, never a real Error — the pino mirror

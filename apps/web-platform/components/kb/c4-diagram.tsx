@@ -5,7 +5,7 @@
 // (diagram ‖ Concierge/Code) lives in c4-workspace.tsx and is what KB diagram
 // pages use; this inline form is the fallback for embeds elsewhere.
 // Loaded via next/dynamic({ ssr: false }) — @likec4/diagram is browser-only.
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import {
   Spinner,
   useC4Project,
@@ -14,6 +14,7 @@ import {
   C4CodePanel,
 } from "@/components/kb/c4-shared";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
+import { KbChatContext } from "@/components/kb/kb-chat-context";
 import {
   C4_DIAGRAM_SAVED_EVENT,
   C4_EDIT_FLAG,
@@ -71,6 +72,18 @@ export default function C4Diagram({
     window.addEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
     return () => window.removeEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
   }, [dirPath, reload]);
+
+  // Same reopen recovery as C4Workspace: a save landing while the page's only
+  // socket was unmounted emits nothing — refetch when the concierge reopens.
+  // No provider → no signal → the embed refetches on remount only.
+  const chatCtx = useContext(KbChatContext);
+  const conciergeOpen = chatCtx?.embeddedConciergeOpen;
+  const wasClosed = useRef(conciergeOpen === false);
+  useEffect(() => {
+    if (conciergeOpen === undefined) return;
+    if (wasClosed.current && conciergeOpen) void reload({ silent: true });
+    wasClosed.current = !conciergeOpen;
+  }, [conciergeOpen, reload]);
 
   return (
     <div className="mb-4 overflow-hidden rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/40">

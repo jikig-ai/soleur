@@ -90,6 +90,11 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
   useEffect(() => {
     currentEndpoint.current = endpoint;
   }, [endpoint]);
+  // Whether the hook has ever resolved data. A silent refetch that FAILS must
+  // not replace a rendered diagram with the error view — keep the last-good
+  // model on screen (a transient 5xx on an unsolicited refetch is otherwise a
+  // self-inflicted canvas teardown with no retry).
+  const dataPresent = useRef(false);
   // #8739 — `silent` refetches without the loading flip: a Concierge save
   // completing elsewhere must not unmount the canvas to flash a spinner.
   const reload = useCallback(async (opts?: { silent?: boolean }) => {
@@ -104,6 +109,7 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
       }
       const json = (await res.json()) as Partial<ProjectResponse>;
       if (!isCurrent()) return;
+      dataPresent.current = true;
       setData({
         dir: json.dir ?? dirPath,
         sources: json.sources ?? {},
@@ -112,7 +118,8 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
         diagnostics: json.diagnostics ?? [],
       });
     } catch (e) {
-      if (isCurrent()) setError(e instanceof Error ? e.message : "Failed to load diagram");
+      if (isCurrent() && !(opts?.silent && dataPresent.current))
+        setError(e instanceof Error ? e.message : "Failed to load diagram");
     } finally {
       if (isCurrent() && !opts?.silent) setLoading(false);
     }
