@@ -1,14 +1,26 @@
 // #8719 — the leader-loop dead-letter marker for agent.spawn.requested.
 //
-// `persistFailure` in inngest/functions/agent-on-spawn-requested.ts reports every
-// dead-lettered spawn here. `sentry_alert.spawn_agent_dead_letter`
+// `persistFailure` and the lifecycle settle in
+// inngest/functions/agent-on-spawn-requested.ts report dead-lettered spawns here
+// (see COVERAGE). `sentry_alert.spawn_agent_dead_letter`
 // (infra/sentry/issue-alerts.tf) emails the operator for the reasons
 // `PAGES_OPERATOR` (lib/failure-reason.ts) marks `true`, filtering on the
 // `feature`, `op` and `reason` tags this module sets.
 //
-// COVERAGE: only spawns that reach `persistFailure` are reported. A run that
-// fails past its retries, hits the `finish` timeout or is cancelled never gets
-// here and pages no one — tracked in #8803 (no `onFailure` handler yet).
+// COVERAGE (#8803): two paths report here. (1) `persistFailure`, for every
+// failure the handler itself catches — no lifecycle suffix. (2) The lifecycle
+// settle (`agent-on-spawn-settle`, reached from the handler's `onFailure` forward
+// and from `inngest/function.cancelled`), for a run the handler never finished —
+// a retry-exhausted throw, the `finish` timeout or an Inngest-level cancel —
+// with a `(failed)`, `(cancelled)`, `(timed_out)` or `(settle_failed)` suffix.
+// Four cases still leave the card on "Working", all tracked in #8839: a run
+// Inngest loses entirely (no lifecycle event fires); a `persist-failure` UPDATE
+// that fails inside `persistFailure` (it returns normally, so no lifecycle event
+// fires; `reportSpawnPersistFailed` reports it under op `persist-failure`, which
+// the paging rule does not match); and a settle, or the `onFailure` forward,
+// that exhausts its retries (both page `(settle_failed)`, but nothing is written).
+//
+// Triage per suffix: knowledge-base/engineering/operations/runbooks/spawn-dead-letter-triage.md.
 //
 // MESSAGE PATH ON PURPOSE — do not pass the Error through "for a stack trace". On
 // the Error path, `reportSilentFallback` logs first, the pino mirror
@@ -47,9 +59,25 @@ export const PAGED_DEAD_LETTER_REASONS: readonly FailureReason[] = Object.freeze
   (Object.keys(PAGES_OPERATOR) as FailureReason[]).filter((r) => PAGES_OPERATOR[r]).sort(),
 );
 
-/** The Sentry/pino message for one dead-letter. Grouping key: see GROUPING above. */
-export function spawnDeadLetterMessage(reason: FailureReason, actionClass: string): string {
-  return `agent-on-spawn deadlettered: ${reason} [${actionClass}]`;
+/**
+ * How a run the handler never finished ended (#8803). `settle_failed` is the
+ * settle step itself failing, kept distinct so it never hides inside a real
+ * crash's Sentry issue.
+ */
+export type SpawnLifecycle = "failed" | "cancelled" | "timed_out" | "settle_failed";
+
+/**
+ * The Sentry/pino message for one dead-letter. Grouping key: see GROUPING above.
+ * A lifecycle is appended so each cause is its own issue and throttle; without
+ * one (the in-body `persistFailure` path) the text is unchanged.
+ */
+export function spawnDeadLetterMessage(
+  reason: FailureReason,
+  actionClass: string,
+  lifecycle?: SpawnLifecycle,
+): string {
+  const base = `agent-on-spawn deadlettered: ${reason} [${actionClass}]`;
+  return lifecycle ? `${base} (${lifecycle})` : base;
 }
 
 interface MessagePathError {
@@ -89,9 +117,11 @@ function toReportExtra(
   extra: Record<string, unknown> | undefined,
   reason: FailureReason,
   actionClass: string,
+  lifecycle: SpawnLifecycle | undefined,
 ): Record<string, unknown> {
   const { founderId, ...rest } = extra ?? {};
   const out: Record<string, unknown> = { ...rest, reason, actionClass };
+  if (lifecycle !== undefined) out.lifecycle = lifecycle;
   if (founderId !== undefined) out.userId = founderId;
   return out;
 }
@@ -108,20 +138,22 @@ export function reportSpawnDeadLetter(args: {
   reason: FailureReason;
   actionClass: string;
   err: unknown;
+  lifecycle?: SpawnLifecycle;
   extra?: Record<string, unknown>;
 }): void {
-  const { reason, actionClass } = args;
+  const { reason, actionClass, lifecycle } = args;
   try {
     const emit = PAGES_OPERATOR[reason] ? reportSilentFallback : warnSilentFallback;
     emit(toMessagePathError(args.err), {
       feature: SPAWN_DEAD_LETTER_FEATURE,
       op: SPAWN_DEAD_LETTER_OP,
-      message: spawnDeadLetterMessage(reason, actionClass),
+      message: spawnDeadLetterMessage(reason, actionClass, lifecycle),
       tags: { reason },
-      extra: toReportExtra(args.extra, reason, actionClass),
+      extra: toReportExtra(args.extra, reason, actionClass, lifecycle),
     });
   } catch (caught) {
-    const message = `agent-on-spawn deadlettered: report failed: ${reason} [${actionClass}]`;
+    const suffix = lifecycle ? ` (${lifecycle})` : "";
+    const message = `agent-on-spawn deadlettered: report failed: ${reason} [${actionClass}]${suffix}`;
     try {
       logger.error(
         { err: caught, reason, actionClass, feature: SPAWN_DEAD_LETTER_FEATURE, op: SPAWN_DEAD_LETTER_OP },
