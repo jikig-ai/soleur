@@ -77,7 +77,7 @@ awk -v want="  - path: $FEEDER_PATH" '
 ' "$CI" > "$RENDERED"
 
 assert "feeder block extracted from the template (non-empty)" "[[ -s '$RENDERED' ]]"
-assert "extracted block is the feeder (has a shebang)" "head -1 '$RENDERED' | grep -q '^#!'"
+assert "extracted block is the feeder (has a shebang)" "head -1 '$RENDERED' | grep -c '^#!' >/dev/null"
 
 sed -i "s|\${private_ip}|$TEST_IP|g" "$RENDERED"
 sed -i "s|\${liveness_heartbeat_url}|$TEST_HB_URL|g" "$RENDERED"
@@ -250,11 +250,11 @@ assert "feeder probes the private IP via curl" \
 # Scoped to the PROBE line, not the file: the ping curl's own -m would otherwise satisfy a
 # file-wide grep and leave an unbounded probe green. T5 is the behavioral half of this.
 assert "the PROBE curl carries its own -m bound" \
-  "grep -E 'curl.*${TEST_IP_RE}:5000/v2/' '$CODE' | grep -qE -- '-m[[:space:]]+[0-9]+'"
+  "grep -E 'curl.*${TEST_IP_RE}:5000/v2/' '$CODE' | grep -cE -- >/dev/null '-m[[:space:]]+[0-9]+'"
 # -f on an auth-gated /v2/ exits 22 on the 401 that means "alive", so an -f probe can never
 # ping. This is the P1 regression guard; T1 is its behavioral half.
 assert "the PROBE curl does NOT use -f (401 IS liveness; -f exits 22 on it)" \
-  "! grep -E 'curl.*${TEST_IP_RE}:5000/v2/' '$CODE' | grep -qE -- '-f'"
+  "! grep -E 'curl.*${TEST_IP_RE}:5000/v2/' '$CODE' | grep -cE -- >/dev/null '-f'"
 assert "the feeder discriminates on the HTTP status code" \
   "grep -qF '%{http_code}' '$CODE' && grep -qE '200\\|401' '$CODE'"
 
