@@ -141,8 +141,8 @@ span to the NEXT registered mark.
   the hang cap, sized above the DECLARED expectation — a silent bound must
   never fire below a duration the repo calls legitimate (#7902 review).
 - **2026-09-25 K=6→K=7 rebalance:** suite growth (374→502 light
-  registrations) drifted the K=6 manifest's worst leg to 13.0 min suite
-  time on run 36123485360 (12.5 measured + setup). Dry-run regen at K=6
+  registrations) drifted the K=6 manifest's worst leg to 13.0 min wall
+  on run 36123485360 (12.9 min suite + ~0.4 min setup). Dry-run regen at K=6
   predicted a 614 s worst leg — above the ~10-min ceiling even after
   rebalancing — so the matrix moved to K=7 and the manifest regenerated
   from run 36125573947: legs 486–589 s, leg 5 = the atomic
@@ -199,5 +199,5 @@ two pages and inflate the population. The raw `jobs.tsv` is committed at
 - `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` — toolchain
   parity asserted on both jobs (bun, likec4, gitleaks).
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — the
-  synthetic `test` check has six light legs; a failed or skipped heavy
+  synthetic `test` check has six `needs:` jobs; a failed or skipped heavy
   matrix fails it.

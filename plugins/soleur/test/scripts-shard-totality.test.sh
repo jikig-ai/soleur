@@ -7,7 +7,7 @@
 # duplicates.
 #
 # WHY THIS IS THE HIGHEST-PRIORITY DELIVERABLE OF ITS PR. Sharding `test-scripts` makes the
-# required `test` check green off six legs (Guard 1b below covers the three-leg
+# required `test` check green off seven legs (Guard 1b below covers the three-leg
 # `test-scripts-heavy` matrix under the identical contract). If the partition drops a
 # registration, that check reports green while running a strict subset — a regression
 # reaching production behind a green pipeline. That is strictly WORSE than the blocked

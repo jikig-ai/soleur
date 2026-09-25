@@ -1028,11 +1028,12 @@ jobs:
     runs-on: ubuntu-latest
     # MATRIX SHARDED (#7902), K=7 after the heavy carve-out (#8006 phase 2) and
     # the 2026-09-25 rebalance (suite growth pushed K=6's worst leg to 13.0 min
-    # measured on run 36123485360; the dry-run regen predicted 614s).
+    # measured on run 36123485360; the K=6 dry-run regen predicted 614s).
     # The three cost-heaviest registrations moved to `test-scripts-heavy` below;
-    # what is left is ~60 min of light suite work, so seven legs measure ~8.5
-    # min each plus setup (the duration-aware manifest keeps assignment
-    # balanced as suites drift).
+    # what is left is ~60 min of light suite work, so seven legs measure
+    # ~8.1-9.8 min suite time each plus setup (leg 5 is a single 589 s atomic
+    # suite — no K splits it; the suite split is deferred, tracked in #8864;
+    # the duration-aware manifest keeps assignment balanced as suites drift).
     #
     # Positional sharding means leg membership is an ORDINAL ACCIDENT — adding
     # or renaming one suite re-rolls every leg, so no K table in this file can
@@ -1065,10 +1066,10 @@ jobs:
     # this leg, because a silent kill below a duration the repo itself
     # calls legitimate is indistinguishable from a hang:
     #
-    #   light leg ~8.5 min nominal at K=7 after the #8006 carve-out + phase-2 split and the 2026-09-25 K-bump. No light suite carries a
+    #   light leg ~8.1-9.8 min nominal at K=7 after the #8006 carve-out + phase-2 split and the 2026-09-25 K-bump. No light suite carries a
     #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
     #     moved to test-scripts-heavy, whose own derivation sits on that job.
-    #   -> 60 stays as the hang cap; it is ~6x the nominal leg, not a leg estimate.
+    #   -> 60 stays as the hang cap; it is ~7x the nominal leg, not a leg estimate.
     #
     # An earlier revision of this file set 30, sized against the leg's NOMINAL value. That
     # was a new silent-kill path: the battery measures 14.3-27.9 min and its own budget
@@ -1128,10 +1129,12 @@ jobs:
       # argument would overload one channel with two independent decisions.
       #
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
-      # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
-      # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # every leg would run the whole group (~489 suites at this commit) and all report green. Guard 1 reads ci.yml's
-      # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
+      # silently running the whole group. DELETING this line leaves SCRIPTS_SHARD unset, and unset
+      # legitimately means "run the full group" — so every leg would run the whole group (~502 suites
+      # at this commit) and all report green; the deletion itself is caught, loudly, by Guard 1's
+      # wire check on this binding. The residual gap is a REWRITE (a literal in place of the matrix
+      # interpolation): the mutation battery proves that direction RED for the heavy job (ROW5D)
+      # but the light binding has no mutation row. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
       # fetch-depth: 0 — scripts/lint-trap-tempfile-ownership.py scopes rule (c) to

@@ -660,7 +660,7 @@ in_range && hfrow "M8" "$WORK/hmanifest-phantom.tsv" GREEN \
 
 # M9: a header-only heavy table engages manifest mode (n matches) but puts
 # NOTHING on the table, so all three labels hash — {3,2,2} — and leg 1 starves.
-# Unlike the light group (489 labels cannot starve six legs), at n=3 over 3
+# Unlike the light group (~502 labels cannot starve seven legs), at n=3 over 3
 # labels the zero-assignment refusal is reachable through stale data: the
 # starved leg must fail closed rather than report zero-work green. The guard
 # going RED here is the refusal outranking totality, and it is the property

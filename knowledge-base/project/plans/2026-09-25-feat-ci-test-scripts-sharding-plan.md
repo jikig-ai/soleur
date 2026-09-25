@@ -51,7 +51,7 @@ Impact + Observability section checks, markdownlint (clean).
 - Job-minutes comparison is confounded: ~53→~108 min/run is mostly organic
   suite growth (374→505 registrations) + new jobs; shard overhead is only
   ~0.4 min setup per leg. Public repo → minutes unmetered; the real budget is
-  the org's 20-concurrent-job ceiling (#8450).
+  the org's 60-concurrent-job ceiling (Team plan, post-#8450).
 - The `registry-gate-mutation-battery` contention ceiling (14.3–27.9 min under
   load, per runbook) cannot be beaten by any K — AC1 is evaluated on nominal
   green-run timings and the caveat is disclosed.
@@ -74,7 +74,7 @@ The honest residual gap against the acceptance criteria, measured in this
 planning session on a current green CI run, is:
 
 - **Worst leg is ~13.0 min, not under ~10.** `test-scripts (6/6)` ran
-  12.5 min of suite time + ~0.4 min setup on run 36123485360 (2026-09-25);
+  12.9 min of suite time + ~0.4 min setup on run 36123485360 (2026-09-25);
   light-leg spread was 7.6–12.9 min suite time (mean ≈ 9.5 min over 502
   registrations). The current manifest was generated 2026-09-24 from run
   35945250103 and has already drifted.
@@ -82,8 +82,9 @@ planning session on a current green CI run, is:
   per CI run), but this is almost entirely organic suite growth (374 → 505
   registrations), not shard overhead: per-leg setup measures ~0.4 min, so a
   leg costs its suites + ~24 s. On a **public** repo, hosted-runner minutes
-  are unmetered; the real budget is wall-clock and the org's 20-concurrent-job
-  ceiling (#8450 brainstorm, 2026-09-21).
+  are unmetered; the real budget is wall-clock and the org's 60-job concurrency
+  ceiling (Team plan; #8450 closed via upgrade — brainstorm
+  2026-09-21 decided it).
 - All other acceptance criteria are already satisfied and must be preserved:
   only the synthetic `test` check is a required context (shard legs are not
   required contexts), `merge_group` coverage is unconditional, and suite-count
@@ -101,7 +102,7 @@ constraint vs. open PR #8763).
 |---|---|---|
 | "`test-scripts` is a single 27.7-min job (baseline run 32415069661)" | Run 32415069661 is dated 2026-08-20 and predates the shard merges; current `test-scripts` is a K=6 matrix (worst leg 13.0 min on run 36123485360) | Treat sharding as landed; residual scope is rebalancing under the ~10-min ceiling |
 | "~53 job-min per CI run" | ~108–122 job-min on 2026-09-25 PR runs — driven by suite growth (374→505) + new jobs, not shard overhead (~0.4 min setup/leg) | Report both numbers in the PR body with the confound named |
-| "Shard to cut wall-clock AND job-minutes" | Public repo → minutes unmetered; binding budgets are wall-clock and the 20-job org concurrency ceiling | Optimize worst-leg wall-clock; keep added legs minimal (each costs ~0.4 job-min + one runner slot) |
+| "Shard to cut wall-clock AND job-minutes" | Public repo → minutes unmetered; binding budgets are wall-clock and the 60-job org concurrency ceiling (Team plan, post-#8450) | Optimize worst-leg wall-clock; keep added legs minimal (each costs ~0.4 job-min + one runner slot) |
 | "No suite-count parity assertion exists — plan must add one" | `scripts-shard-totality.test.sh` + `--mutations.sh` battery + `scripts-shard-manifest.test.sh` already prove union-exactly-once and n-consistency | Reuse them as the parity gate; add a leg-union verification step at work time |
 | "Required-check names must stay satisfied" | `scripts/required-checks.txt` + `infra/github/ruleset-ci-required.tf` require only the `test` aggregate (plus `e2e`, `dependency-review`, `skill-security-scan PR gate` from ci.yml); legs are not required contexts | No ruleset/Terraform change needed; do not rename `test` or its `needs:` jobs |
 
@@ -201,7 +202,7 @@ wall / suite-time totals [9.3, 7.6, 9.7, 7.6, 9.9, 12.9] min; heavy legs
   docs arrays drift; the runbook topology table and the ROW5 mutation literal
   are the two drift surfaces this plan must update atomically with the matrix.
 - `2026-09-21-ci-runner-concurrency-brainstorm.md` — org `free` plan,
-  20-concurrent-job ceiling, ~33 jobs per CI run already; each added leg is
+  60-concurrent-job ceiling (Team plan, post-#8450), ~33 jobs per CI run; each added leg is
   one more slot against a saturating budget.
 
 ## Problem Statement / Motivation
@@ -228,7 +229,7 @@ Two-step, each step gated on measurement (runbook procedure throughout):
    ~10-min ceiling — the next suite addition or a slow runner pushes it over),
    bump the light matrix **K=6 → K=7**: suite time per leg ≈ 57/7 ≈ 8.1 min,
    +0.4 min setup → ~8.5 min worst leg with real margin. Cost: one runner slot
-   (+~0.4 job-min/run) against the org's 20-concurrency ceiling — acceptable
+   (+~0.4 job-min/run) against the org's 60-concurrency ceiling (Team plan, post-#8450) — acceptable
    and recorded. Then regenerate the manifest (its `# n=` header must equal
    the new matrix N — `scripts-shard-manifest.test.sh` fails closed on drift)
    and update the K-sensitive surfaces atomically:
@@ -259,7 +260,7 @@ are untouched.
 - **UNTRUSTED-CI.** This PR edits `.github/workflows/ci.yml` — workflow-file
   PRs merge only on green required checks; no `--admin` merge downstream.
 - **Runner-slot budget.** CI already dispatches ~33 jobs per run against the
-  org's 20-concurrent ceiling; queueing is the norm (runbook §Runner-availability
+  org's 60-concurrent ceiling (Team plan, post-#8450); queueing is still the norm on bursts (runbook §Runner-availability
   data: occupied on ~24% of main pushes). One added leg is marginal; a bigger
   K (8+) is rejected in Alternatives.
 - **Merge_group invariant.** No job may gain an `event_name`/`pull_request`
@@ -346,8 +347,8 @@ are untouched.
 | Approach | Why rejected |
 |---|---|
 | Hand-tune `suite-shard-legs.tsv` rows | The file is generated; next regen overwrites and `scripts-shard-manifest.test.sh` expects generator output. Regenerate, never hand-edit (runbook). |
-| K=8 or higher | Each leg costs a runner slot against the 20-job org ceiling and re-tests the whole toolchain setup path; K=7 already leaves ~1.5 min headroom. Revisit if suites keep growing — the runbook records the simulation method. |
-| Move `lint-orphan-test-suites-mutations` (508 s single suite, leg 5) or the battery to/within heavy group | A group move edits `want_scripts`/`want_scripts_heavy` in `scripts/test-all.sh` — the exact region open PR #8763 is editing. Deferred: file a follow-up issue rather than collide; both suites fit under 10 min today. |
+| K=8 or higher | Each leg costs a runner slot against the 60-job org ceiling (Team plan, post-#8450) and re-tests the whole toolchain setup path; K=7 already leaves ~1.5 min headroom. Revisit if suites keep growing — the runbook records the simulation method. |
+| Move `lint-orphan-test-suites-mutations` (588.8 s single suite, leg 5) or the battery to/within heavy group | A group move edits `want_scripts`/`want_scripts_heavy` in `scripts/test-all.sh` — the exact region open PR #8763 is editing. Deferred: file a follow-up issue rather than collide; both suites fit under 10 min today. |
 | Split `registry-gate-mutation-battery` into `--rows` shards like `shard-totality-mutations` | Its contention ceiling (14.3–27.9 min under load) is a documented floor no matrix beats; a row-split is a suite-internal change touching test-all.sh registration — same #8763 collision, larger scope. Deferred to a follow-up issue; the AC is evaluated on nominal timings. |
 | Positional round-robin at higher K | Runbook §Why the OLD positional method is retained — ordinal accidents swing worst legs ±5 min on suite churn; the manifest exists precisely to remove this. |
 | Reduce per-leg setup (~0.4 min) | Already near-zero (no npm ci on these legs); nothing to save. |
@@ -441,6 +442,12 @@ provenance so a stale table is attributable to a run id, not silently current.
       **under ~10 min wall-clock** (target ≤ ~9.5 incl. setup), verified via
       `gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs` — recorded in
       `knowledge-base/project/specs/feat-one-shot-ci-test-scripts-sharding/measurements.md`.
+      **Atomic-floor carve-out (post-review amendment):** leg 5 is the single
+      atomic suite `lint-orphan-test-suites-mutations` (588.8 s suite ≈ ~10.2
+      min wall predicted) — no K can split one suite, so leg 5 is exempt from
+      the strict ~10-min bound pending its suite-internal split/heavy move,
+      tracked in #8864. The AC is satisfied when every non-atomic leg lands
+      under ~10 min and the atomic leg is within ~0.5 min of it.
 - [ ] AC2: Required-check set unchanged — `git diff origin/main --
       scripts/required-checks.txt infra/github/` is empty, and the `test`
       job's `needs:` list + name are unmodified; no new required contexts, no
@@ -525,7 +532,7 @@ independent domain-leader review ran).
 
 **Status:** reviewed
 **Assessment:** Devex-positive (faster required-check feedback); cost is ≤1
-extra runner slot against the 20-job org ceiling, weighed and recorded in
+extra runner slot against the 60-job org ceiling (Team plan, post-#8450), weighed and recorded in
 Alternatives. No product/marketing/legal/finance surface; Product/UX gate
 not triggered (no UI-surface files in the edit set).
 
@@ -547,7 +554,7 @@ Conclusion: **no C4 impact**.
 ## Deferred Follow-ups
 
 - File a P3 issue at work time: "ci: split/move the two >8-min long-tail
-  suites (`lint-orphan-test-suites-mutations` ~508 s; the
+  suites (`lint-orphan-test-suites-mutations` ~588.8 s; the
   `registry-gate-mutation-battery` contention ceiling) if regen can no
   longer hold worst-leg < ~10 min" — blocked-by relationship to this PR's
   issue if one is filed; re-evaluate on next skew event (runbook trigger).
