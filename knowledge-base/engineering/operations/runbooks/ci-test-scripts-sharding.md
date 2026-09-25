@@ -16,7 +16,7 @@ n-mismatched table degrades to the old positional round-robin — coverage
 never depends on the table. The three heaviest suites live in the dedicated
 `test-scripts-heavy` matrix (#8006) with their own manifest
 `scripts/suite-shard-legs-heavy.tsv` under the identical contract; the
-light group runs K=6. Regenerate the manifests when legs skew or when
+light group runs K=7. Regenerate the manifests when legs skew or when
 `scripts-shard-manifest.test.sh` reds:
 `python3 scripts/regenerate-shard-manifest.py --run <green-ci-run> --write`
 (`--group heavy` for the heavy table).
@@ -25,7 +25,7 @@ light group runs K=6. Regenerate the manifests when legs skew or when
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=6 | light `scripts` group, manifest lookup + hash fallback | ~6.5-7.7 min suite time + setup |
+| `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | ~8.1-9.8 min suite time + setup (leg 5 is a single 589 s atomic suite — see Measured history) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 2 | battery rows split `--rows 1-12` / `13-24` | ~5 min each + setup |
 
@@ -140,6 +140,14 @@ span to the NEXT registered mark.
   14.3–27.9 min under contention). `timeout-minutes: 60` on both jobs is
   the hang cap, sized above the DECLARED expectation — a silent bound must
   never fire below a duration the repo calls legitimate (#7902 review).
+- **2026-09-25 K=6→K=7 rebalance:** suite growth (374→502 light
+  registrations) drifted the K=6 manifest's worst leg to 13.0 min wall
+  on run 36123485360 (12.9 min suite + ~0.4 min setup). Dry-run regen at K=6
+  predicted a 614 s worst leg — above the ~10-min ceiling even after
+  rebalancing — so the matrix moved to K=7 and the manifest regenerated
+  from run 36125573947: legs 486–589 s, leg 5 = the atomic
+  `lint-orphan-test-suites-mutations` (588.8 s alone — no K splits a single
+  suite; the suite-internal split is a deferred follow-up).
 
 ## Runner-availability data (why extra legs are not free)
 
@@ -191,5 +199,5 @@ two pages and inflate the population. The raw `jobs.tsv` is committed at
 - `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` — toolchain
   parity asserted on both jobs (bun, likec4, gitleaks).
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — the
-  synthetic `test` check has six light legs; a failed or skipped heavy
+  synthetic `test` check has six `needs:` jobs; a failed or skipped heavy
   matrix fails it.
