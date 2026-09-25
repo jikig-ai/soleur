@@ -45,13 +45,13 @@ lane: cross-domain
 
 ## 4. Orphan revoke (agent-run; explicit go-ahead; preferably before the merge)
 
-- [ ] 4.1 Per-item re-read of slug `e8e5187f…`, repeated right before the revoke if more than an hour has passed:
+- [x] 4.1 Per-item re-read of slug `e8e5187f…`, repeated right before the revoke if more than an hour has passed:
   - full slug, name, access, `created_at` and `last_seen_at`;
   - the creator from the config log (a `user`-kind actor is expected).
 
   If `last_seen_at` is later than `2026-07-30T11:20:45.359Z`, or the creator is an `apiToken`, take the incident branch: `soleur:incident`, an urgent revoke, and #8734 widened with a prd integrity sweep.
-- [ ] 4.2 Send one plain-language message that leads with the decision. After the go-ahead, run the fail-closed revoke from plan Phase 3 step 3: it refuses on an empty `DOPPLER_TOKEN_TF` and has no `2>/dev/null`.
-- [ ] 4.3 Post the pre-revoke fields and the outcome on #8737 immediately.
+- [x] 4.2 Send one plain-language message that leads with the decision. After the go-ahead, run the fail-closed revoke from plan Phase 3 step 3: it refuses on an empty `DOPPLER_TOKEN_TF` and has no `2>/dev/null`.
+- [x] 4.3 Post the pre-revoke fields and the outcome on #8737 immediately.
 - [ ] 4.4 Run the orphan verifier. It prints `MISSING` before the merge and `ROTATED` after it; `STALE` is a failure.
 
 ## 5. Merge and post-merge verification
