@@ -42,7 +42,11 @@ const {
   mockGetInstallationAccount,
   mockFindRepoOwnerInstallationForUser,
   mockEnsureWorkspaceRepoCloned,
+  mockResolveC4FlagEnabled,
+  mockWriteC4Diagram,
 } = vi.hoisted(() => ({
+  mockResolveC4FlagEnabled: vi.fn(async () => false),
+  mockWriteC4Diagram: vi.fn(),
   mockLogInfo: vi.fn(),
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -82,8 +86,13 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   getSessionMessages: vi.fn().mockResolvedValue([]),
   // Return inspectable shapes so the soleur_platform always-build assertion
   // (#5370 T2) can read tool names off the registered server. `tool(name,…)`
-  // → `{ name }`; `createSdkMcpServer(cfg)` → cfg (passthrough).
-  tool: vi.fn((name: string) => ({ name })),
+  // → `{ name, handler }` — the handler passthrough lets the #8739 emit-seam
+  // test invoke edit_c4_diagram's handler directly;
+  // `createSdkMcpServer(cfg)` → cfg (passthrough).
+  tool: vi.fn((name: string, _d: unknown, _s: unknown, handler: unknown) => ({
+    name,
+    handler,
+  })),
   createSdkMcpServer: vi.fn((cfg: unknown) => cfg),
 }));
 
@@ -278,6 +287,21 @@ vi.mock("@/server/ws-handler", () => ({
   sendToClient: mockSendToClient,
 }));
 
+// #8739: the flag resolver is real elsewhere — here it is a per-test switch so
+// the c4 gate (repo + installation + flag) is reachable without a Flagsmith
+// fixture. Defaults false: every pre-existing test's no-repo args never reach
+// it, and resolveC4Eligible stays false so the advertising path is unchanged.
+vi.mock("@/server/resolve-c4-eligible", () => ({
+  resolveC4FlagEnabled: mockResolveC4FlagEnabled,
+  resolveC4Eligible: vi.fn(async () => false),
+}));
+
+// #8739: the tool's persistence layer is never exercised from this file — the
+// emit-seam test needs a controllable ok/false result, not a GitHub commit.
+vi.mock("@/server/c4-writer", () => ({
+  writeC4Diagram: mockWriteC4Diagram,
+}));
+
 // `info` routes to the shared hoisted spy so the egress-posture log payload
 // is assertable (AC6-class: boolean only, never the token). Filter by
 // message string in assertions — every module's child logger shares it.
@@ -461,6 +485,46 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect.arrayContaining(["narrate", "summarize"]),
     );
     expect(toolNames).not.toContain("edit_c4_diagram");
+  });
+
+  // #8739 — the emit seam: buildC4ConciergeTools' onDiagramSaved opt is wired
+  // to defaultSendToClient INSIDE the factory. Without this test, deleting the
+  // prop leaves the whole suite green and the feature emits nothing.
+  it("a successful edit_c4_diagram emits c4_diagram_saved via sendToClient", async () => {
+    mockGetCurrentRepoUrl.mockResolvedValueOnce(
+      "https://github.com/acme/kb-repo",
+    );
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockResolveC4FlagEnabled.mockResolvedValueOnce(true);
+
+    await realSdkQueryFactory(makeArgs());
+    const tools =
+      mockQuery.mock.calls[0][0].options.mcpServers.soleur_platform.tools;
+    const c4 = (tools ?? []).find(
+      (t: { name: string }) => t.name === "edit_c4_diagram",
+    );
+    expect(c4).toBeDefined();
+
+    mockWriteC4Diagram.mockResolvedValueOnce({
+      ok: true,
+      commitSha: "abc123",
+      rerendered: true,
+      rerenderDiagnostic: null,
+    });
+    const res = await c4.handler({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+    expect(res.isError).toBeUndefined();
+
+    await vi.waitFor(() =>
+      expect(mockSendToClient).toHaveBeenCalledWith("user-1", {
+        type: "c4_diagram_saved",
+        dirPath: "engineering/architecture/diagrams",
+        rerendered: true,
+        diagnostic: null,
+      }),
+    );
   });
 
   // -------------------------------------------------------------------------

@@ -7,11 +7,11 @@ import { MODEL_LEVEL_LINE, type Diagnostic } from "@/lib/c4-model-shape";
 
 /** Line 2 of the stale strip when the save carried no diagnostic (#8695). The
  *  server returns `rerendered:false` with no reason only when a newer source
- *  change superseded this save's render. Nothing on this page reloads on its
- *  own, and that newer change may never render here (a push from outside
- *  Soleur, or a render that failed), so the copy names the supersede, promises
- *  nothing, and points at the one action that works: Save stays enabled while
- *  the diagram is stale. */
+ *  change superseded this save's render. That newer change may never render
+ *  here — a push from outside Soleur emits no `c4_diagram_saved` frame the
+ *  page can hear (#8739), and a render can fail — so the copy names the
+ *  supersede, promises nothing, and points at the one action that works: Save
+ *  stays enabled while the diagram is stale. */
 export const SUPERSEDED_LINE =
   "A newer change to the diagram source was saved before this one was rendered, so this save did not update the diagram. Save again to render the latest version.";
 
