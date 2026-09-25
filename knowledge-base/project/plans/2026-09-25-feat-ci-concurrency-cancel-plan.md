@@ -82,6 +82,7 @@ concurrency:
 ```
 
 Semantics:
+
 - `pull_request` → group `Infra Validation-refs/pull/<N>/merge`, cancel=true: a
   synchronize cancels queued + in-flight runs on the stale merge ref.
 - `push` to main → group `Infra Validation-<sha>` (per-SHA), cancel=false:
@@ -95,6 +96,7 @@ Semantics:
 ### 2. `constraint-gates.yml` (three lockstep edits)
 
 Add the identical block to:
+
 - `plugins/soleur/skills/constraint-scaffold/references/constraint-gates-workflow.template`
   (between `permissions:` and `jobs:`), then
 - `apps/web-platform/.github/workflows/constraint-gates.yml` (the emitted copy —
@@ -113,6 +115,7 @@ correct for an informational always-run gate).
 Flip two rows `cancel` no → yes and replace each `no cancel: <reason>` tail with
 the new standing reason (A5 still requires a consequence; the cancel column no
 longer needs an excuse):
+
 - `infra-validation.yml`: e.g. `… path-filtered; workflow-level ADR-217 ternary
   group cancels superseded PR runs (R2 use_lockfile=false — no state lock held);
   push arm keys per-SHA so main is never serialized or cancelled`
@@ -121,6 +124,35 @@ longer needs an excuse):
   emitted copies; pull_request-only so cancel resolves true on every fire`
 
 ## Guard Contract
+
+### Guard 1 — ledger ↔ workflow agreement
+
+**Property.** Every ledger row's `cancel` flag equals the truth in the
+workflow file it names: `cancel=yes` iff the workflow carries a qualifying
+block (ci.yml-ternary group + matching cancel spelling), and a `no` row
+always carries a `no cancel:` reason.
+
+**Assembly.** `plugins/soleur/test/pr-fanout-ledger.test.sh` enumerates every
+concurrency mapping in every synchronize-firing workflow: **A4b** compares
+the row's flag to the derived truth (deleting the block, `cancel-in-progress:
+false`, or a per-run-token group all red); **A4c** rejects cancel spellings
+outside `{true, false, ternary}`; **A5** requires the `no cancel:` tail on
+`no` rows; **A6** pins every ternary-form block to ci.yml's group byte-for-byte.
+Our rows flip to `yes` under the canonical block → green.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Flip a `cancel=yes` ledger row to `no` while the ternary block stands | RED — A5 requires a `no cancel:` reason, and the derived truth disagrees |
+| 2 | Spell `cancel-in-progress: true` in a touched workflow (non-ternary) | ledger green (a legal spelling) but the push-arm safety loses its A6 pin — guarded by review, not the enumerator; residual recorded |
+| 3 | Drop `group:`'s `|| github.sha` arm from one file's block | RED — A6's byte-exact ternary-group check against ci.yml's literal |
+| 4 | Add `cancel-in-progress: true` to a `pull_request_target` workflow + flip its ledger row | RED-by-design absent — the enumerator cannot see privilege; exclusion reason lives in the ledger comment + this plan's scope table |
+
+**Anchor.** `scripts/pr-fanout-ledger.txt` is the enumerated contract; the
+enumerator derives truth from the YAML, so a weakening must move file AND
+ledger row in one diff — and that pair is exactly what rows A4b/A5/A6
+cross-check.
 
 - `plugins/soleur/test/pr-fanout-ledger.test.sh`:
   - **A6** — a ternary-form block MUST carry ci.yml's group byte-for-byte (the
@@ -131,14 +163,47 @@ longer needs an excuse):
     group-shape rule; the `github.sha` fallback is on the non-PR branch of the
     `&&`/`||` so it is the ci.yml pattern, which the enumerator accepts.
   - **jobs ceiling** — unchanged (no jobs added).
-- `plugins/soleur/skills/constraint-scaffold/test/parity.test.sh` rows 3–4 —
-  template ↔ `apps/web-platform` copy ↔ repo-root copy; all three edits must
-  land in one commit or the gate reds between them.
-- Required checks untouched: `test`, `dependency-review`, `e2e`,
-  `skill-security-scan PR gate`, gitleaks/guard fixtures, `cla-check`,
-  `cla-evidence` — none of the edited files produce a required context, and no
-  `pull_request_target` / merge_group / push-main behavior changes.
-- UNTRUSTED-CI: no `--admin` merge; required checks must pass on the PR. The
+
+### Guard 2 — scaffold parity trio
+
+**Property.** The emitted constraint-gates workflow is byte-identical across
+all three surfaces (template → `__TARGET_DIR__` substitution → apps copy; the
+repo-root copy shares the body after its header strip).
+
+**Assembly.** `plugins/soleur/skills/constraint-scaffold/test/parity.test.sh`
+rows 3–4 pin template ↔ `apps/web-platform` copy ↔ repo-root copy; all three
+edits must land in one commit or the gate reds between them. The added
+concurrency block carries no `__TARGET_DIR__` placeholder, so substitution is
+transparent to it.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Edit the template's block but not the apps copy | RED — parity row 3 byte-diffs the substituted template against the emitted file |
+| 2 | Edit only the apps copy | RED — row 3 same; the template is the source of truth, drift reds either direction |
+| 3 | Diverge the repo-root copy's block text only | RED — parity row 4 compares comment-stripped bodies; the block lines are YAML, not comments |
+| 4 | Change the concurrency *comment* only in the repo-root copy | PASS today — row 4 strips comments; recorded as a known (accepted) blind spot, not a coverage claim |
+
+### Guard 3 — required checks untouched
+
+**Property.** No edited file produces a required context, and no trigger
+surface (`pull_request_target` / `merge_group` / `push` to main) changes.
+
+**Assembly.** `test`, `dependency-review`, `e2e`, `skill-security-scan PR
+gate`, gitleaks/guard fixtures, `cla-check`, `cla-evidence` are emitted by
+other workflows; the two touched workflows are non-required (infra-validation
+#6480, constraint-gates #5791).
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Add `merge_group:` to infra-validation's `on:` | the group resolves `workflow-<merge-group-sha>` with cancel=false — runs serialize per candidate, never cancel; branch-protection name unchanged |
+| 2 | Mark `L1 import-boundary gate` required in a ruleset without this analysis | external to the diff — promotion gate is #5791 + `infra/github/` TF, neither touched |
+| 3 | `cancel-in-progress` flip to unconditional `true` | a `push` run could then cancel an in-flight push run on a different SHA's group? No — groups are per-SHA; but main-status surfaces would lose their `always()` notify on a cancelled push — excluded by keeping the ternary spelling (ledger A6) |
+
+**Anchor.** UNTRUSTED-CI: no `--admin` merge; required checks must pass on the PR. The
   PR itself exercises the new constraint-gates group on every push to this
   branch (dogfood signal).
 
