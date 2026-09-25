@@ -8,7 +8,8 @@
  * recorded `.eq` / `.is(col, null)` filters, so an UPDATE returns the rows that
  * really match and the assertions are about behaviour (rows written, events
  * sent), not call arguments. The dead-letter reporter is REAL; only
- * `@sentry/nextjs` is mocked (the spawn-dead-letter.test.ts pattern).
+ * `@sentry/nextjs` is mocked, partially (`importOriginal`): the real inngest
+ * client loads the correlation middleware, which needs the rest of the SDK.
  *
  * The REAL inngest client is imported (NEXT_PHASE hoist, as model-tiers.test.ts
  * does) so the registration tests read the SDK's own generated config.
@@ -68,20 +69,26 @@ const db = vi.hoisted(() => ({
 }));
 
 function matches(row: FixtureRow, filters: Filter[]): boolean {
-  return filters.every(({ col, op, val }) => {
-    const v = (row as unknown as Record<string, unknown>)[col];
-    return op === "is" ? v === val : v === val;
-  });
+  return filters.every(({ col, val }) => (row as unknown as Record<string, unknown>)[col] === val);
 }
+
+// uuid columns: Postgres rejects a non-UUID operand with 22P02 rather than
+// matching zero rows, so the fake must too.
+const UUID_COLS = new Set(["id", "user_id", "message_id"]);
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class FakeQuery {
   private mode: "select" | "update" = "select";
   private filters: Filter[] = [];
   private patch: Record<string, unknown> | undefined;
   private selectCols = "";
+  // An UPDATE returns rows ONLY when `.select()` is chained: without it the
+  // real client answers `data: null`, and the settle would never page.
+  private returning = false;
   constructor(private table: string) {}
   select(cols: string) {
     if (this.mode === "select") this.selectCols = cols;
+    else this.returning = true;
     return this;
   }
   update(patch: Record<string, unknown>) {
@@ -98,10 +105,12 @@ class FakeQuery {
     return this;
   }
   maybeSingle() {
-    return this.execute().then(({ data, error }) => ({
-      data: Array.isArray(data) ? (data[0] ?? null) : data,
-      error,
-    }));
+    return this.execute().then(({ data, error }) => {
+      if (Array.isArray(data) && data.length > 1) {
+        return { data: null, error: { code: "PGRST116", message: "multiple rows" } };
+      }
+      return { data: Array.isArray(data) ? (data[0] ?? null) : data, error };
+    });
   }
   then<R1, R2>(
     onOk: (v: { data: unknown; error: unknown }) => R1,
@@ -117,6 +126,12 @@ class FakeQuery {
       patch: this.patch,
     });
     if (db.failAll) return { data: null, error: db.failAll };
+    const badUuid = this.filters.find(
+      (f) => f.op === "eq" && UUID_COLS.has(f.col) && !UUID_SHAPE.test(String(f.val)),
+    );
+    if (badUuid) {
+      return { data: null, error: { code: "22P02", message: `invalid input syntax for type uuid: "${String(badUuid.val)}"` } };
+    }
     if (
       this.mode === "select" &&
       db.failStopRead &&
@@ -127,7 +142,7 @@ class FakeQuery {
     const hit = (db.rows as FixtureRow[]).filter((r) => matches(r, this.filters));
     if (this.mode === "update") {
       for (const r of hit) Object.assign(r, this.patch);
-      return { data: hit.map((r) => ({ id: r.id })), error: null };
+      return { data: this.returning ? hit.map((r) => ({ id: r.id })) : null, error: null };
     }
     return { data: hit.map((r) => ({ ...r })), error: null };
   }
@@ -135,7 +150,6 @@ class FakeQuery {
 
 vi.mock("@/lib/supabase/service", () => ({
   getServiceClient: () => ({ from: (t: string) => new FakeQuery(t) }),
-  createServiceClient: () => ({ from: (t: string) => new FakeQuery(t) }),
 }));
 
 import {
@@ -148,6 +162,8 @@ import {
 import { deriveTodayCardState } from "@/components/dashboard/today-card-state-matrix";
 import { FAILURE_REASON_COPY } from "@/components/dashboard/failure-reason-copy";
 import { runLikeInngest } from "../../helpers/inngest-step-harness";
+import { stripComments } from "../../helpers/strip-comments";
+import { inngest } from "@/server/inngest/client";
 
 // --- Fixtures (synthesized, cq-test-fixtures-synthesized-only) -----------------
 
@@ -199,7 +215,6 @@ function orphanedEnvelope(opts: { ts?: number; orig?: unknown } = {}) {
       run_id: FAILED_RUN,
       error: { name: "Error", message: "turn-2-progress-write failed" },
       ts: opts.ts ?? QUEUED_AT + 30_000,
-      lifecycle: "failed",
     },
   };
 }
@@ -297,10 +312,37 @@ describe("onFailure forwards; it never settles in place (T7)", () => {
       run_id: FAILED_RUN,
       error: { name: "Error", message: "turn-2-progress-write failed" },
       ts: QUEUED_AT + 30_000,
-      lifecycle: "failed",
     });
     expect(db.ops).toHaveLength(0);
     expect(captureMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the envelope id when data.run_id is missing (the failure event's id IS the run id)", async () => {
+    const sendEvent = vi.fn(async () => undefined);
+    await agentOnSpawnRequestedOnFailure({
+      event: { id: FAILED_RUN, ts: QUEUED_AT, data: { event: original(), error: {} } },
+      step: { sendEvent },
+    } as never);
+    const [, payload] = sendEvent.mock.calls[0] as unknown as [string, { data: Record<string, unknown> }];
+    expect(payload.data.run_id).toBe(FAILED_RUN);
+  });
+
+  it("a forward that fails past its retries never throws and pages (settle_failed) once", async () => {
+    const sendEvent = vi.fn(async () => {
+      throw new Error("inngest api unreachable");
+    });
+    await expect(
+      agentOnSpawnRequestedOnFailure({
+        event: { ts: QUEUED_AT, data: { event: original(), run_id: FAILED_RUN, error: {} } },
+        step: { sendEvent },
+      } as never),
+    ).resolves.toBeUndefined();
+    const sent = deadLetters();
+    expect(sent).toHaveLength(1);
+    expect(sent[0][0]).toBe(`agent-on-spawn deadlettered: leader_internal_error [${CLASS}] (settle_failed)`);
+    expect(sent[0][1].level).toBe("error");
+    expect(sent[0][1].extra.failedRunId).toBe(FAILED_RUN);
+    expect(allSentryText()).not.toContain(FOUNDER);
   });
 });
 
@@ -339,6 +381,13 @@ describe("precedence matrix (T8)", () => {
       expect(ctx.tags.reason).toBe(reason);
       expect(ctx.extra.failedRunId).toBe(FAILED_RUN);
       expect(ctx.extra.actionSendId).toBe(ACTION_SEND);
+      if (lifecycle === "failed") {
+        // The failed run's own error is the triage payload.
+        expect(ctx.extra.err).toMatchObject({ name: "Error", message: "turn-2-progress-write failed" });
+        expect(ctx.extra.elapsedMs).toBe(30_000);
+      } else {
+        expect(ctx.extra.elapsedMs).toBe(lifecycle === "timed_out" ? FINISH_TIMEOUT_MS : FINISH_TIMEOUT_MS - 1);
+      }
       // No raw founder id anywhere Sentry was handed (T20, fallback form).
       expect(allSentryText()).not.toContain(FOUNDER);
 
@@ -368,6 +417,17 @@ describe("missing timestamps and a failed Stop read (T9)", () => {
     expect(ctx.extra.elapsedMs).toBeNull();
   });
 
+  it("a pending Stop with no timestamps is NOT honoured: nothing proves the cancel preceded the timeout", async () => {
+    row().cancellation_requested_at = "2026-09-25T10:01:00.000Z";
+    await agentOnSpawnSettleHandler({
+      event: cancelledEnvelope({ elapsedMs: null, orig: original({}, undefined) }),
+      step: makeSettleStep(),
+      attempt: 0,
+    } as never);
+    expect(row().failure_reason).toBe("leader_internal_error");
+    expect(deadLetters()[0][1].level).toBe("error");
+  });
+
   it("a Stop read error falls back to leader_internal_error (paged)", async () => {
     row().cancellation_requested_at = "2026-09-25T10:01:00.000Z";
     db.failStopRead = true;
@@ -391,12 +451,15 @@ describe("a row that is terminal or not the founder's is never touched (T10, T13
     ["undone", { undone_at: "2026-09-25T10:03:00.000Z", acknowledged_at: "2026-09-25T10:02:00.000Z" }],
     ["another founder's", { user_id: OTHER_FOUNDER }],
     ["anonymised", { user_id: null }],
-  ] as const)("%s row: unchanged, zero reports", async (_label, overrides) => {
-    db.rows = [fixtureRow(overrides as Partial<FixtureRow>)];
-    const before = { ...row() };
-    await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 0 } as never);
-    expect(row()).toEqual(before);
-    expect(deadLetters()).toHaveLength(0);
+  ] as const)("%s row: unchanged, zero reports, on a forwarded failure AND on a cancel", async (_label, overrides) => {
+    for (const event of [orphanedEnvelope(), cancelledEnvelope()]) {
+      db.rows = [fixtureRow(overrides as Partial<FixtureRow>)];
+      captureMessageSpy.mockReset();
+      const before = { ...row() };
+      await agentOnSpawnSettleHandler({ event, step: makeSettleStep(), attempt: 0 } as never);
+      expect(row()).toEqual(before);
+      expect(deadLetters()).toHaveLength(0);
+    }
   });
 
   it("the UPDATE carries every guard filter (Guard 2 row 4 — read from the recorded call)", async () => {
@@ -434,6 +497,12 @@ describe("a committed write whose page was lost to a retry (T11, T12b)", () => {
     expect(deadLetters()).toHaveLength(1);
   });
 
+  it("attempt > 0 on ANOTHER founder's row carrying the same reason → no report (the re-read is scoped)", async () => {
+    db.rows = [fixtureRow({ user_id: OTHER_FOUNDER, failure_reason: "leader_internal_error" })];
+    await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 2 } as never);
+    expect(deadLetters()).toHaveLength(0);
+  });
+
   it("attempt > 0, zero rows, re-read shows a DIFFERENT reason → no report", async () => {
     row().failure_reason = "leader_tool_invalid";
     await agentOnSpawnSettleHandler({ event: orphanedEnvelope(), step: makeSettleStep(), attempt: 2 } as never);
@@ -466,6 +535,9 @@ describe("replay and retry through the real step boundary (T12, T21)", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0][0]).toBe(`agent-on-spawn deadlettered: leader_internal_error [${CLASS}] (settle_failed)`);
     expect(sent[0][1].level).toBe("error");
+    expect(sent[0][1].extra.failedRunId).toBe(FAILED_RUN);
+    // The code only: a PostgREST message can echo a value.
+    expect(sent[0][1].extra.err?.message).toBe("settle-orphaned-spawn: action_sends update failed (code 08006)");
   });
 });
 
@@ -478,6 +550,9 @@ describe("envelope validation (T14)", () => {
     ["a non-UUID actionSendId", orphanedEnvelope({ orig: original({ actionSendId: FORGED }) })],
     ["a non-UUID founderId", orphanedEnvelope({ orig: original({ founderId: FORGED }) })],
     ["a missing messageId", orphanedEnvelope({ orig: original({ messageId: undefined }) })],
+    ["a non-UUID messageId", orphanedEnvelope({ orig: original({ messageId: FORGED }) })],
+    ["a missing run_id", { name: "agent.spawn.orphaned", data: { event: original() } }],
+    ["a non-ULID run_id", { name: "agent.spawn.orphaned", data: { event: original(), run_id: FORGED } }],
     ["no original event at all", { name: "agent.spawn.orphaned", data: { run_id: FAILED_RUN, lifecycle: "failed" } }],
   ])("%s → no DB call, one (settle_failed) page with a fixed message", async (_label, event) => {
     await agentOnSpawnSettleHandler({ event, step: makeSettleStep(), attempt: 0 } as never);
@@ -489,6 +564,9 @@ describe("envelope validation (T14)", () => {
       "agent-on-spawn-settle: lifecycle envelope failed validation",
     );
     expect(allSentryText()).not.toContain(FORGED);
+    // A well-formed run id is carried; a missing or forged one is not.
+    const runId = (event.data as { run_id?: unknown }).run_id;
+    expect(sent[0][1].extra.failedRunId).toBe(runId === FAILED_RUN ? FAILED_RUN : null);
   });
 
   it("an unknown actionClass is carried as [unknown] and still settles", async () => {
@@ -545,10 +623,7 @@ describe("the lifecycle handlers never touch the Inngest ctx logger (T23)", () =
     const end = src.indexOf("// --- end lifecycle settle ---");
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    const block = src
-      .slice(start, end)
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/\/\/.*$/gm, "");
+    const block = stripComments(src.slice(start, end));
     for (const fn of [
       "agentOnSpawnRequestedOnFailure",
       "agentOnSpawnSettleHandler",
@@ -569,33 +644,36 @@ type ConfigFn = {
     triggers: Array<{ event: string; expression?: string }>;
   }>;
 };
-const BASE = { baseUrl: new URL("http://localhost:3000/api/inngest"), appPrefix: "soleur-runtime" };
+// The SDK prefixes every function id with the client id, so derive it; a
+// hard-coded app id would pass here while production stopped matching.
+const BASE = { baseUrl: new URL("http://localhost:3000/api/inngest"), appPrefix: inngest.id };
 
 describe("registration (T15, T16)", () => {
   it("T15: agentOnSpawnRequested declares onFailure and yields the -failure function; finish derives from FINISH_TIMEOUT_MS", () => {
     const fn = agentOnSpawnRequested as unknown as ConfigFn;
     expect(fn.opts.onFailure).toBe(agentOnSpawnRequestedOnFailure);
     expect(fn.getConfig(BASE).map((c) => c.id)).toEqual([
-      "soleur-runtime-agent-on-spawn-requested",
-      "soleur-runtime-agent-on-spawn-requested-failure",
+      `${inngest.id}-agent-on-spawn-requested`,
+      `${inngest.id}-agent-on-spawn-requested-failure`,
     ]);
     expect(FINISH_TIMEOUT_MS).toBe(10 * 60_000);
-    expect(fn.opts.timeouts).toEqual({ finish: `${FINISH_TIMEOUT_MS / 60_000}m` });
+    expect((fn.getConfig(BASE)[0] as unknown as { timeouts: unknown }).timeouts).toEqual({ finish: "10m" });
   });
 
   it("T16: agentOnSpawnSettle has exactly the two triggers, the cancel filter equal to the SDK's own failure filter", () => {
     const requested = agentOnSpawnRequested as unknown as ConfigFn;
     const sdkFilter = requested.getConfig(BASE)[1].triggers[0].expression;
-    expect(sdkFilter).toBe("event.data.function_id == 'soleur-runtime-agent-on-spawn-requested'");
+    expect(sdkFilter).toBe(`event.data.function_id == '${inngest.id}-agent-on-spawn-requested'`);
 
     const settle = agentOnSpawnSettle as unknown as ConfigFn;
     const [cfg] = settle.getConfig(BASE);
-    expect(cfg.id).toBe("soleur-runtime-agent-on-spawn-settle");
+    expect(cfg.id).toBe(`${inngest.id}-agent-on-spawn-settle`);
     expect(cfg.triggers).toEqual([
       { event: "inngest/function.cancelled", expression: sdkFilter },
       { event: "agent.spawn.orphaned" },
     ]);
-    expect(settle.opts.idempotency).toBe("event.data.run_id");
-    expect(settle.opts.retries).toBe(3);
+    const built = cfg as unknown as { idempotency?: unknown; steps: Record<string, { retries?: unknown }> };
+    expect(built.idempotency).toBe("event.data.run_id");
+    expect(Object.values(built.steps).map((st) => st.retries)).toEqual([{ attempts: 3 }]);
   });
 });

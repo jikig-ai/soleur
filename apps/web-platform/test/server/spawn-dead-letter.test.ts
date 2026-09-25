@@ -240,6 +240,31 @@ describe("reportSpawnDeadLetter — a failure inside the report never escapes", 
   });
 });
 
+describe("reportSpawnDeadLetter — the report-failed fallback keeps the lifecycle suffix (#8803)", () => {
+  it("a throwing reporter on a lifecycle report sends the suffixed 'report failed' message", async () => {
+    vi.doMock("@/server/observability", () => ({
+      reportSilentFallback: () => {
+        throw new Error("synthetic reporter failure");
+      },
+      warnSilentFallback: () => {
+        throw new Error("synthetic reporter failure");
+      },
+    }));
+    const { reportSpawnDeadLetter } = await load();
+    reportSpawnDeadLetter({
+      reason: "leader_internal_error",
+      actionClass: CLASS,
+      err: new Error("x"),
+      lifecycle: "settle_failed",
+      extra: {},
+    });
+    expect(captureMessageSpy).toHaveBeenCalledWith(
+      `agent-on-spawn deadlettered: report failed: leader_internal_error [${CLASS}] (settle_failed)`,
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+});
+
 describe("reportSpawnPersistFailed", () => {
   it("reports the failed terminal write on the message path with a hashed founder id", async () => {
     const { reportSpawnPersistFailed, SPAWN_DEAD_LETTER_FEATURE } = await load();

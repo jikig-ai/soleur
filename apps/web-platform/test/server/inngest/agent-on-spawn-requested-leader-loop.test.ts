@@ -1595,6 +1595,9 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     [500, "anthropic_timeout"],
     [408, "anthropic_timeout"],
     [409, "anthropic_timeout"],
+    // The open 5xx range, not just its lower edge: 503 and 529 (overloaded).
+    [503, "anthropic_timeout"],
+    [529, "anthropic_timeout"],
   ])(
     "%i is transient: thrown, retried 3 times, then %s",
     async (status, reason) => {
@@ -1683,19 +1686,19 @@ describe("Guard 2 — deterministic rejections are returned from the step (ADR-0
     });
   });
 
-  it("a ByokLeaseError(subscription_limit) after retries → byok_lease_unavailable", async () => {
-    getRestApiKeySpy.mockRejectedValue(
-      Object.assign(new Error("subscription limit"), {
-        name: "ByokLeaseError",
-        cause: "subscription_limit",
-      }),
-    );
-    const result = await runWith(makeRetryingStep({ retries: 3 }));
-    expect(result).toEqual({
-      acknowledged: false,
-      failureReason: "byok_lease_unavailable",
-    });
-  });
+  it.each(["subscription_limit", "decrypt_failed", "escape"])(
+    "a ByokLeaseError(%s) after retries → byok_lease_unavailable (the classifier is cause-only)",
+    async (cause) => {
+      getRestApiKeySpy.mockRejectedValue(
+        Object.assign(new Error(`lease ${cause}`), { name: "ByokLeaseError", cause }),
+      );
+      const result = await runWith(makeRetryingStep({ retries: 3 }));
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "byok_lease_unavailable",
+      });
+    },
+  );
 
   // makeRetryingStep copies `cause` by hand, so only the REAL serializer proves
   // the tag crosses the step boundary (#8783, Guard 3).
