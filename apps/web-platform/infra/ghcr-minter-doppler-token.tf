@@ -38,10 +38,18 @@
 # create. The new .key reaches GHCR_MINTER_DOPPLER_TOKEN in the same apply
 # (no ignore_changes on that secret, mirroring doppler-write-token.tf).
 #
-# ROTATION (#8737): change `name` (ForceNew in DopplerHQ/doppler v1.21.2) with create_before_destroy, merged with `[ack-destroy]`; shared mechanics in workspaces-luks.tf's ROTATION comment.
-#   The running container keeps the old value until its next deploy; that copy is inert while GHCR_MINTER_DISABLED=true (the handler returns before reading the token).
-#   Rotated 2026-09-25 from `ghcr-minter-write` (slug 61c939b5…), readable via the leaked web-probes-read token until 2026-09-24T21:44:28Z (#8705). ADR-096 task 5.4 (#8714) retires this file.
-#   Verify: bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh --retired-slug 61c939b5 --retired-name ghcr-minter-write --name-prefix ghcr-minter-write- --not-before 2026-09-24T21:44:28Z
+# ROTATION (#8737) is a change to `name` (ForceNew in DopplerHQ/doppler v1.21.2) with
+# create_before_destroy, merged with `[ack-destroy]`; the shared mechanics are workspaces-luks.tf's
+# `ROTATION (#8632)` comment, and the deposed-object and revert hazards are web-probe-read-token.tf's
+# `ROTATION (#8705)` bullets. What differs here:
+#   - No host installer consumes the key. Containers read GHCR_MINTER_DOPPLER_TOKEN at their next
+#     deploy or first boot, so a running container holds the OLD key, which this same apply
+#     revokes. That copy is inert while GHCR_MINTER_DISABLED=true (the handler returns before
+#     reading the token); re-enabling the minter needs a redeploy, which delivers the new key.
+#   - Rotated 2026-09-25 from `ghcr-minter-write` (slug 61c939b5…), readable via the leaked
+#     web-probes-read token until 2026-09-24T21:44:28Z (#8705). ADR-096 task 5.4 (#8714) retires
+#     this file.
+# Verify: bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh --retired-slug 61c939b5 --retired-name ghcr-minter-write --name-prefix ghcr-minter-write- --not-before 2026-09-24T21:44:28Z
 #
 # autonomy-considered: provider-mint-applied (doppler_service_token).
 # dev intentionally NOT provisioned — hosts read `--config prd` only (hr-dev-prd-distinct).
@@ -57,10 +65,12 @@ resource "doppler_service_token" "ghcr_minter" {
   }
 }
 
-# Surfaces the write token into the minter runtime via the existing single
-# `--config prd` env-file path — ci-deploy.sh's `doppler secrets download` into
-# `docker run --env-file`. NO ignore_changes: a rotation (the rename above) must
-# reach the runtime in the same apply.
+# Surfaces the write token into the minter runtime via the `--config prd` env-file
+# downloads — every deploy (ci-deploy.sh `doppler secrets download`) and first boot
+# (soleur-host-bootstrap.sh `soleur-doppler-download`), both into `docker run
+# --env-file`. NO ignore_changes: a rotation (the rename above) must reach
+# GHCR_MINTER_DOPPLER_TOKEN in Doppler prd in the same apply; containers pick it up
+# at their next deploy.
 resource "doppler_secret" "ghcr_minter_doppler_token" {
   project = "soleur"
   config  = "prd"

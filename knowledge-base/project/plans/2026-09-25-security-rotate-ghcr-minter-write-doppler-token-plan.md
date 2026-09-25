@@ -433,6 +433,8 @@ Terraform, so no state holds it, and the provider cannot import it.
      `src=soleur/prd_terraform` verdict carries the verifier's documented RESIDUAL: until #8209 O11,
      `DOPPLER_TOKEN_WRITE` can write that config. That is acceptable only with the listing read above
      taken from the same source, and the evidence comment must name the source.
+   - **No Doppler syncs** (review: security). One metadata-only read of `soleur/prd`'s
+     integration syncs must return none; a sync would carry the new read/write value off Doppler.
    - **Write-limb evidence, read once, now** (CLO; both simplification reviewers collapsed it to one
      read). Read the `soleur/prd` config log across every page until one comes back empty. List
      every `apiToken`-attributed entry since 2026-07-29. A revoked token cannot write, so this read
@@ -487,8 +489,9 @@ Terraform, so no state holds it, and the provider cannot import it.
      (`git grep`, Research Insights).
 - **Where the new key lands** (deepen: security). It lands in several places:
   - Terraform state on R2;
-  - the apply job's `terraform show -json` output under `$RUNNER_TEMP`, on an ephemeral
-    `ubuntu-24.04` runner;
+  - the plan job's `tfplan.json` (`terraform show -json`, written to the infra directory on an
+    ephemeral `ubuntu-24.04` runner and never uploaded). It holds the OLD key in plaintext under
+    `before` (the new key is unknown at plan time); the same apply revokes that key;
   - `GHCR_MINTER_DOPPLER_TOKEN` in `soleur/prd`;
   - every later whole-config reader's copy, including Doppler fallback files and each web
     container's `config.v2.json` after its next deploy.

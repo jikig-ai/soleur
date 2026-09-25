@@ -2457,8 +2457,8 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // 403 on the listing (measured 2026-09-24). Genuine declaration.
   // #8737 (2026-09-25): +1 (29 -> 30, after #8705 took 28 -> 29) for `2026-09-25-security-rotate-ghcr-minter-write-doppler-token-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
-  // TRUTH: the probe is the same verifier (`web-probes-token-rotation-verify.sh`), run once per
-  // retired slug (61c939b5, e8e5187f) with the Tier-B DOPPLER_TOKEN_TF. NO SUBSTITUTE: identical to
+  // TRUTH: the declared probe is the same verifier (`web-probes-token-rotation-verify.sh`) run for
+  // retired slug 61c939b5 with the Tier-B DOPPLER_TOKEN_TF (the plan also runs it for e8e5187f). NO SUBSTITUTE: identical to
   // #8705 — service-token metadata has no unauthenticated endpoint. Genuine declaration.
   const BASELINE_DECLARED_PROBES = 30;
 
