@@ -15,6 +15,56 @@ lane: cross-domain
 
 # security: rotate the ghcr-minter-write prd Doppler token and delete its orphan sibling
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25.
+
+**Agents:**
+
+- soleur:engineering:review:security-sentinel
+- soleur:engineering:review:user-impact-reviewer
+- soleur:engineering:review:observability-coverage-reviewer
+- soleur:engineering:infra:terraform-architect
+- a verify-the-negative sweep (standard tier). It confirmed every negative and exclusivity claim
+  against the repo and found no contradictions.
+
+**Key improvements:**
+
+1. **The old token's last trace is captured.** `61c939b5`'s `last_seen_at` is re-read just before
+   the merge, since the apply destroys it. An advance past `2026-09-24T14:25:50.862Z` takes the
+   incident branch.
+2. **Containment comes before the merge when needed.** The route is an out-of-band revoke after a
+   go-ahead. The pinned provider's `resourceServiceTokenRead` drops a missing slug through
+   `handleNotFoundError`, so the merge then plans a plain create with no `[ack-destroy]`. It is
+   triggered by an incident or by the PR sitting 24 hours after it is marked ready.
+3. **The #8734 hand-off is honest about its scope.**
+   - The token-set check now covers every `soleur/prd` token, of any access level, including a
+     duplicate from a provider create-retry.
+   - #8705's transitive `^dp\.` names-only scan is repeated.
+   - The go-signal is scoped to Doppler `soleur/prd` credentials, and names the GitHub App key path
+     it does not cover.
+   - An incident widens #8734 instead of holding back rotation.
+4. **The revoke is safer.** It fails closed on an empty credential, so it never falls back to a
+   local CLI login. The orphan's creator is recorded, and a stale role read is repeated before the
+   revoke.
+5. **Recovery is safer.** A recovery `[ack-destroy]` is sent only when the halted run's refreshed
+   destroy guard names `doppler_service_token.ghcr_minter` alone.
+
+**Verified premises:**
+
+- In DopplerHQ/doppler `v1.21.2`, the token's `name` is ForceNew, and so is every other field of the
+  resource. For `doppler_secret`, only `project` and `config` are ForceNew; `value` updates in place
+  (`resource_secret.go`).
+- Under create-before-destroy, the order is: create the new token, update the secret, destroy the
+  deposed old token.
+- Every cited issue, PR and run was resolved live. That covers #8202, #8714, #8734, #8754, #7263,
+  #8850, #8851, #6074, #8733, #8703, #8036, #8209 and #6031, plus runs 36092626570, 36079251562 and
+  36077212409.
+- Every cited rule id is active in `AGENTS.md`.
+- The `discoverability_test.command` passes `probe-verb-gate.sh` (rc 0). The rest of
+  `preflight-discoverability-test.test.ts` passes over this plan (122 pass). The one fail is the
+  expected G1 ratchet, 29 to 30, which the first work commit bumps.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -242,6 +292,13 @@ Terraform, so no state holds it, and the provider cannot import it.
    - `last_seen_at`.
 
    Never identify the token by calling `/v3/me` with a stored value (Sharp Edges).
+
+   Also record the orphan's **creator** from the `soleur/prd` config log (deepen: security). The entry
+   `2026-07-29T20:57:54Z "Created read/write service token ghcr-minter-write-20260729"` is attributed
+   to a `user`-kind actor, the workplace owner account. That same identity performs every Terraform
+   apply, so the log cannot tell a Terraform apply from a manual action. An `apiToken`-kind creator
+   would mean a service token minted it, which is an incident. If more than an hour passes between
+   this read and the revoke (a late go-ahead), repeat it right before the revoke.
 2. **Branch on `last_seen_at`:**
    - **Unchanged at `2026-07-30T11:20:45.359Z`:** go to step 3.
    - **Later than that:** an unknown party is using a read/write prd token. That is a security
@@ -250,8 +307,9 @@ Terraform, so no state holds it, and the provider cannot import it.
        empty one) on #8737;
      - open a report with `soleur:incident`;
      - ask the operator for the revoke go-ahead **as urgent**, since revoking contains it;
-     - **withhold the #8734 go-signal** until the incident report assesses what the token could have
-       read or written.
+     - **widen #8734 instead of holding it back** (deepen: security). Once both tokens are revoked,
+       rotating values is always safe. The incident adds a full `soleur/prd` integrity sweep to
+       #8734: every value, and every key an attacker could have added.
 3. **One plain-language message to the operator** (CTO devex). It opens with the decision in plain
    words: "delete an unused spare production key that nothing has touched since July 30; it cannot
    be undone, and nothing will break". It then gives the evidence, then the exact command as
@@ -259,9 +317,16 @@ Terraform, so no state holds it, and the provider cannot import it.
    **only after an explicit go-ahead for it** (`hr-menu-option-ack-not-prod-write-auth`):
 
    ```bash
-   DOPPLER_TOKEN="$(doppler secrets get DOPPLER_TOKEN_TF --project soleur-infra-privileged --config prd --plain 2>/dev/null || doppler secrets get DOPPLER_TOKEN_TF --project soleur --config prd_terraform --plain)" \
-     doppler configs tokens revoke --project soleur --config prd --slug "<full slug from step 1>"
+   set +x
+   T="$(doppler secrets get DOPPLER_TOKEN_TF --project soleur-infra-privileged --config prd --plain)" \
+     || T="$(doppler secrets get DOPPLER_TOKEN_TF --project soleur --config prd_terraform --plain)"
+   [[ -n "$T" ]] || { echo "no DOPPLER_TOKEN_TF resolved; refusing (the CLI would fall back to a local login)" >&2; exit 1; }
+   DOPPLER_TOKEN="$T" doppler configs tokens revoke --project soleur --config prd --slug "<full slug from step 1>"
+   unset T
    ```
+
+   Fail closed on an empty credential (deepen: security). Otherwise the CLI silently falls back to
+   the local login, a different identity. Lookup errors are left visible, with no `2>/dev/null`.
 
    <!-- verified: 2026-09-25 source: `doppler configs tokens revoke --help` (flags --project, --config, --slug; alias delete) -->
 
@@ -301,6 +366,17 @@ Terraform, so no state holds it, and the provider cannot import it.
      set. The residual risk is drift that appears between that run and the merge; the post-merge AC
      on the "will be destroyed" list catches it after the fact. `[ack-destroy]` acks every delete in
      the targeted plan, not only this one.
+   - **Re-read `61c939b5`'s `last_seen_at`** and post it on #8737 (deepen: observability,
+     user-impact and security all flagged this). Once the apply deletes the token, the value can no
+     longer be read. If it is later than `2026-09-24T14:25:50.862Z`, take the Phase 3 step 2 incident
+     branch. Also **contain first**: after an explicit go-ahead, revoke `61c939b5` out-of-band with
+     the same fail-closed command and its full slug. The provider's `resourceServiceTokenRead` passes
+     a missing slug to `handleNotFoundError` (DopplerHQ/doppler v1.21.2
+     `doppler/resource_service_token.go`), which drops it from state. So the merge apply then plans
+     a plain create plus the secret update, with 0 to destroy, and needs no `[ack-destroy]`.
+   - **The merge is the containment clock.** `61c939b5` can write every prd secret until the apply
+     runs. Merge as soon as the PR is green. If it is not merged within 24 hours of being marked
+     ready, use the same out-of-band revoke path.
    - Merge with `gh pr merge --squash --match-head-commit <PR head> --body-file <file>`. The file
      carries `Ref #8737`, `Ref #8734` and `Ref #8714`, and `[ack-destroy]` on its own line, outside
      any fence or trailer.
@@ -325,7 +401,10 @@ Terraform, so no state holds it, and the provider cannot import it.
    - **Run cancelled or superseded before the apply:** nothing changed, and the next push run HALTs
      on the unacked delete, which blocks every other merge's apply. Recover at once with a
      comment-only commit to `ghcr-minter-doppler-token.tf` carrying `[ack-destroy]` on its own line.
-     First repeat step 1's "no other deletes" check against that commit's plan. Never re-run an
+     Only send it if **the halted push run's own destroy-guard output**, a refreshed plan, names
+     `doppler_service_token.ghcr_minter` and nothing else (deepen: user-impact). The PR's
+     `-refresh=false` plan cannot see drift, so it is not the check. The recovery commit also fires a
+     routine web-platform deploy. Never re-run an
      older run after `main` has moved; a dispatch cannot carry the ack.
    - **Create failed:** CBD means nothing was deleted and the secret still holds the old key. Fix the
      cause and recover the same way.
@@ -338,19 +417,37 @@ Terraform, so no state holds it, and the provider cannot import it.
    - `bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh --retired-slug 61c939b5 --retired-name ghcr-minter-write --name-prefix ghcr-minter-write- --not-before 2026-09-24T21:44:28Z`
      prints `ROTATED`.
    - The orphan invocation (Phase 3 step 5) prints `ROTATED`.
-   - **No other pre-cut-off read/write prd token.** One listing read shows no `soleur/prd` token with
-     `access == read/write` and `created_at` at or before `2026-09-24T21:44:28Z`. P5 depends on the
-     whole class, not just two slugs.
+   - **The `soleur/prd` token set is exactly the known set** (deepen: security and terraform). One
+     listing read must show these five tokens and no others:
+     - `web-probes-read-2026-09-24` (Terraform);
+     - `token-drift-ci-tf-prd` (Terraform);
+     - exactly **one** `ghcr-minter-write-2026-09-25` (Terraform). A provider retry after a timed-out
+       create can mint an untracked duplicate (`PerformRequestWithRetry` in `doppler/api.go`).
+     - `terraform-prd-20260730` and `github-ci-prd`. Both are read-only and outside Terraform, and
+       neither key is stored in `soleur/prd`.
+
+     Any other entry is an incident. Then repeat #8705's transitive test. A names-only scan of
+     `soleur/prd` values against `^dp\.(st|sa|pt|ct)\.` prints key **names** only, never values, and
+     must return exactly `GHCR_MINTER_DOPPLER_TOKEN`.
+   - **The verifier's credential source.** Record the `src=` from both verdict lines. A
+     `src=soleur/prd_terraform` verdict carries the verifier's documented RESIDUAL: until #8209 O11,
+     `DOPPLER_TOKEN_WRITE` can write that config. That is acceptable only with the listing read above
+     taken from the same source, and the evidence comment must name the source.
    - **Write-limb evidence, read once, now** (CLO; both simplification reviewers collapsed it to one
      read). Read the `soleur/prd` config log across every page until one comes back empty. List
      every `apiToken`-attributed entry since 2026-07-29. A revoked token cannot write, so this read
      covers the whole window.
 5. **Record and hand off:**
    - **#8737:** both verdict lines, the apply run URL and the write-limb read. Then close it by hand.
-   - **#8734:** the go-signal, **only if** four things hold: both verdicts read `ROTATED`, the
-     class check is clean, no `apiToken` write by `61c939b5` or `e8e5187f` appears, and Phase 3
-     took no incident branch. If any write appears, withhold the go-signal and open a report with
-     `soleur:incident`. The comment also asks #8734's step-4 correction to add a separate
+   - **#8734:** the go-signal once both verdicts read `ROTATED` and the token-set and transitive
+     checks are clean. The signal is scoped to **Doppler `soleur/prd` credentials**. The comment names
+     the path it does not cover: `GITHUB_APP_PRIVATE_KEY` sits in prd, and the app's
+     `administration`, `secrets`, `actions` and `contents` write grants
+     (`apps/web-platform/infra/github-app-manifest.json`) are a route to CI-held credentials. That
+     path belongs to #8734's value rotation. If any `apiToken` entry by either slug appears (token
+     create/delete, config change or secret write), or Phase 3 took the incident branch, open a report
+     with `soleur:incident` and **widen** #8734 with a full prd integrity sweep. Do not hold rotation
+     back. The comment also asks #8734's step-4 correction to add a separate
      **write/integrity** limb, with the read limb recorded as INCONCLUSIVE. It records the
      unexplained `61c939b5` authentication at 2026-09-24T14:25:50Z as an open item.
    - **#8714:** one comment that links #8737 and UC-1 and asks for 5.4 before the Encryption Posture
@@ -388,6 +485,13 @@ Terraform, so no state holds it, and the provider cannot import it.
      ever *presents* the key, and it is disabled.
   6. No `github_actions_secret`, host template or SSH provisioner consumes the key as a named input
      (`git grep`, Research Insights).
+- **Where the new key lands** (deepen: security). It lands in several places:
+  - Terraform state on R2;
+  - the apply job's `terraform show -json` output under `$RUNNER_TEMP`, on an ephemeral
+    `ubuntu-24.04` runner;
+  - `GHCR_MINTER_DOPPLER_TOKEN` in `soleur/prd`;
+  - every later whole-config reader's copy, including Doppler fallback files and each web
+    container's `config.v2.json` after its next deploy.
 - **What the new key inherits.** The same exposure as the old one had: every prd read credential can
   read it, including every web host's root disk through the container env. So a future snapshot of a
   web host holds a live read/write prd token. This is the residual that ADR-096 5.4 (#8714) removes,
@@ -402,6 +506,20 @@ Terraform, so no state holds it, and the provider cannot import it.
 
 No SSH or network step is involved. The change has no `provisioner`, no `connection` block and no
 post-bridge SSH stage effect. The network-outage checklist does not apply.
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The keyword scan fired on "SSH", but every hit is a negation. The resource-shape trigger does not
+fire: neither targeted address has a `provisioner` or a `connection` block. The only network path is
+the CI runner and the Terraform Doppler provider talking HTTPS to `api.doppler.com`, plus the
+agent's own verifier and revoke calls to the same host.
+
+| Layer | Status | Evidence |
+|---|---|---|
+| L3 firewall allow-list | Not in path | No host is contacted. Hetzner firewalls gate only tcp/22 and the private net. |
+| L3 DNS/routing | Verified | Push runs 36092626570, 36079251562 and 36077212409 (2026-09-25) concluded `success`, including the Doppler provider refresh of `doppler_service_token.ghcr_minter` |
+| L7 TLS | Verified | Same runs. The verifier's live read of the prd token listing returned HTTP 200 on 2026-09-25. |
+| L7 application | Verified | The `last_seen_at` / config-log reads in Research Insights, 2026-09-25 |
 
 ## Architecture Decision (ADR/C4)
 
@@ -479,14 +597,14 @@ failure_modes:
     detection: "workflow run log: main Terraform apply step red"
     alert_route: "GitHub failure notification; recovery = [ack-destroy] commit (Phase 4 step 3)"
   - mode: "rotation not effective: old token still listed (delete failed, apply skipped by [skip-web-platform-apply], or never ran) or orphan revoke did not take"
-    detection: "verifier prints STALE (exit 1) for --retired-slug 61c939b5 or e8e5187f"
+    detection: "layer: none of 1-7 applies (a one-off change made out of band from the runtime); signal = the verifier prints STALE (exit 1) for --retired-slug 61c939b5 or e8e5187f in the ship/postmerge session, recorded on #8737"
     alert_route: "postmerge step (blocks closing #8737 and the #8734 go-signal)"
   - mode: "verifier cannot read the listing (credential moved by #8209 O10, Doppler outage)"
-    detection: "verifier prints UNAVAILABLE (exit 2); inconclusive, never a verdict"
+    detection: "layer: none of 1-7 applies (a one-off change made out of band from the runtime); signal = the verifier prints UNAVAILABLE (exit 2), which is inconclusive and never a verdict"
     alert_route: "postmerge step retries once, then records it on #8737, which stays open"
   - mode: "an unknown party is using the orphan or the old token"
-    detection: "orphan last_seen_at later than 2026-07-30T11:20:45.359Z (Phase 3 step 2), or an apiToken write by either slug in the prd config log (Phase 4 step 4)"
-    alert_route: "soleur:incident report; #8734 go-signal withheld"
+    detection: "layer: none of 1-7 applies (a one-off change made out of band from the runtime); signal = the Doppler token listing's last_seen_at for e8e5187f (> 2026-07-30T11:20:45.359Z, Phase 3 step 2) or 61c939b5 (> 2026-09-24T14:25:50.862Z, Phase 4 step 1), or an apiToken-attributed prd config-log entry by either slug (Phase 4 step 4), read in the ship/postmerge session and recorded on #8737"
+    alert_route: "soleur:incident report; out-of-band revoke after the go-ahead; #8734 widened with a prd integrity sweep"
 logs:
   where: "GitHub Actions run log (apply-web-platform-infra.yml push run); Doppler soleur/prd config log (token create/delete and apiToken-attributed writes)"
   retention: "GitHub Actions 90 days; Doppler activity log per plan retention"
@@ -495,6 +613,12 @@ discoverability_test:
   expected_output: "ROTATED"
   credentials_required: "Doppler workplace token-list read on soleur/prd (DOPPLER_TOKEN_TF, Tier-B: soleur-infra-privileged/prd, pre-#8209-O10 fallback soleur/prd_terraform) — service-token metadata (slug, created_at) is exposed by no unauthenticated endpoint and a read service token gets HTTP 403 on the list (measured 2026-09-24), and the property verified (slug 61c939b5 no longer exists; a replacement post-dates 2026-09-24T21:44:28Z) is observable only through that listing."
 ```
+
+`ROTATED` is the result expected **after the merge only**. Before the merge, `STALE` is correct. For
+the `e8e5187f` run, `MISSING` is correct between the orphan revoke and the apply. The probe is
+SKIP-DECLARED at preflight through `credentials_required`. If that waiver is ever removed, set
+`DOPPLER_TOKEN_TF` in the environment first: the verifier's two `doppler secrets get --timeout 10s`
+fallbacks plus `curl --max-time 10` can exceed Check 10's 15-second cap.
 
 ## Encryption Posture
 
@@ -612,13 +736,18 @@ None. Checked the 81 open `code-review` issues against every file to edit. No ma
 - [ ] The orphan was revoked after its per-item re-read, and after an explicit go-ahead. Its
   pre-revoke `last_seen_at` is posted on #8737. The orphan verifier invocation prints `ROTATED` and
   exits 0.
-- [ ] One listing read shows no `soleur/prd` token with `access == read/write` and `created_at` at or
-  before `2026-09-24T21:44:28Z`.
+- [ ] Just before the merge, `61c939b5`'s `last_seen_at` is posted on #8737. A value later than
+  `2026-09-24T14:25:50.862Z` takes the incident branch, and the token is revoked out of band first.
+- [ ] One listing read shows exactly five tokens: `web-probes-read-2026-09-24`,
+  `token-drift-ci-tf-prd`, one `ghcr-minter-write-2026-09-25`, `terraform-prd-20260730` and
+  `github-ci-prd`. The names-only `^dp\.` value scan of `soleur/prd` returns only
+  `GHCR_MINTER_DOPPLER_TOKEN`. Each verdict's `src=` is recorded.
 - [ ] The `soleur/prd` config log, read across every page until one comes back empty, is quoted on
   #8737 as the list of `apiToken`-attributed entries since 2026-07-29.
-  - **If any entry names `61c939b5` or `e8e5187f`:** #8734 has **no** go-signal, and a report is
-    opened with `soleur:incident`.
-  - **Otherwise:** #8734 carries the go-signal and the write-limb request.
+  - **If any entry names `61c939b5` or `e8e5187f`:** a report is opened with `soleur:incident`, and
+    #8734 is widened with a full prd integrity sweep.
+  - **In either case:** #8734 carries the go-signal, scoped to Doppler `soleur/prd` credentials,
+    together with the write-limb request and the GitHub App key path it does not cover.
 - [ ] #8737 is closed with the evidence comments. #8734 stays open. #8714 carries the comment that
   links UC-1, asks for 5.4 before 2026-12-23, and states the `-target` retirement trap.
 
@@ -710,7 +839,7 @@ stated direction.
   instead of absolute counts.
 - **Added (spec-flow P0): an incident branch.**
   - An orphan `last_seen_at` later than 2026-07-30, or any `apiToken` write by either slug, is an
-    incident (`soleur:incident`). It withholds #8734's go-signal and makes the revoke urgent.
+    incident (`soleur:incident`). It makes the revoke urgent. The review wrote that it also withholds #8734's go-signal, but deepen-plan replaced that: an incident now widens #8734 with a prd integrity sweep instead of holding the go-signal back.
   - The write-log AC can now fail, and it requires reading every page.
 - **Fixed (spec-flow P1): the lock group.** The idle check now covers all four workflows in
   `terraform-apply-web-platform-host`. Other merges are held until the apply starts.
@@ -753,6 +882,19 @@ stated direction.
   pre-merge AC requires `must be replaced` in the PR plan.
 - **Kept against simplicity's suggestion:** the Encryption Posture block. Plan Phase 2.11 triggers
   on any `\.tf` in Files to Edit, and deepen-plan halts without it.
+- **Deepen-plan (2026-09-25), declined with reasons:**
+  - **A `postcondition { length(self.key) > 0 }` on the token** (terraform-architect). It is a
+    guard-shaped control, so it would need its own Guard Contract. The failure it prevents, an empty
+    `GHCR_MINTER_DOPPLER_TOKEN`, is inert while the minter is disabled, and the verifier and the apply
+    log would surface it.
+  - **Revoking `61c939b5` out of band as the default, not only as the containment branch**
+    (security P0-1). This keeps Terraform ownership and the stated rename + CBD shape. The exposure
+    difference is the PR's review window, which the 24-hour clock and the pre-merge `last_seen_at`
+    trigger now bound.
+  - **Refusing any `src=soleur/prd_terraform` verdict** (security P1-6). Today
+    `soleur-infra-privileged/prd` does not resolve (measured: the read fell back to
+    `prd_terraform`), so this would block all verification. The source is recorded and disclosed
+    instead.
 - **Advisory, not applied (architecture P2):** a standalone "token rotation by rename" ADR if a
   fourth token is rotated this way.
 
@@ -775,5 +917,7 @@ stated direction.
   it correctly reads `MISSING`.
 - Do not read `last_seen_at` of the new token as a liveness signal. It stays empty while the minter
   is disabled.
+- **The pre-merge `last_seen_at` read of `61c939b5` is the last chance.** After the apply deletes the
+  token, its authentication history is gone for good.
 - **Do not probe a token to identify it.** Calling `/v3/me` with a stored token value to learn its
   slug updates that token's `last_seen_at`, which destroys the evidence Phase 3 relies on.
