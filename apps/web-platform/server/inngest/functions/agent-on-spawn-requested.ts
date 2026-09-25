@@ -33,21 +33,25 @@
 
 import { createHash } from "node:crypto";
 
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { APIConnectionError } from "@anthropic-ai/sdk";
 
 import { inngest } from "@/server/inngest/client";
 import { getServiceClient } from "@/lib/supabase/service";
 import { createGitHubAppClient } from "@/server/github/app-client";
 import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import type { FailureReason } from "@/lib/failure-reason";
-import { reportSpawnDeadLetter, reportSpawnPersistFailed } from "@/server/spawn-dead-letter";
+import {
+  reportSpawnDeadLetter,
+  reportSpawnPersistFailed,
+  type SpawnLifecycle,
+} from "@/server/spawn-dead-letter";
 import { sanitizeToolNameForLog } from "@/lib/tool-name-sanitize";
-import { runWithByokLease } from "@/server/byok-lease";
+import { runWithByokLease, type ByokLeaseError } from "@/server/byok-lease";
 import { isAnthropicCreditExhausted } from "@/server/anthropic-credit";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
 import { persistTurnCostAwaitable } from "@/server/cost-writer";
 import { notifyOfflineUser, isCostBreakerReason } from "@/server/notifications";
-import type { ActionClass } from "@/server/scope-grants/action-class-map";
+import { ACTION_CLASSES, type ActionClass } from "@/server/scope-grants/action-class-map";
 import {
   LEADER_MAX_TURNS,
   LEADER_MAX_TOKENS,
@@ -441,7 +445,9 @@ export async function agentOnSpawnRequestedHandler({
     });
   }
 
-  // Window anchor for the Layer-2 ceiling. Read from the DB, NOT `new Date()`:
+  // Window anchor for the Layer-2 ceiling: `action_sends.clicked_at`, the row's
+  // insert time (the table has no `created_at`; reading one failed every spawn
+  // from #7774 until #8803's review). Read from the DB, NOT `new Date()`:
   // an Inngest replay re-executes this function body, so a wall-clock anchor
   // would re-derive a different window on every retry and make the ceiling
   // non-deterministic. `step.run` memoizes the DB value, so replays reuse the
@@ -452,20 +458,20 @@ export async function agentOnSpawnRequestedHandler({
       const sb = getServiceClient();
       const { data, error } = await sb
         .from("action_sends")
-        .select("created_at")
+        .select("clicked_at")
         .eq("id", actionSendId)
         .single();
-      if (error || !data?.created_at) {
+      if (error || !data?.clicked_at) {
         // Fail closed, matching the adjacent cap-check and precheck steps: a
         // missing anchor would otherwise silently widen the window back to
         // "all of history", which is the defect this read exists to close.
         throw new Error(
-          `agent-on-spawn: could not read action_sends.created_at for ${actionSendId}: ${
+          `agent-on-spawn: could not read action_sends.clicked_at for ${actionSendId}: ${
             error?.message ?? "no row"
           }`,
         );
       }
-      return data.created_at as string;
+      return data.clicked_at as string;
     },
   );
 
@@ -687,7 +693,8 @@ export async function agentOnSpawnRequestedHandler({
               // error is retried 3 times and reaches the handler as a StepError
               // with `status` and custom `name` stripped (ADR-042 §I1).
               const rejected = classifyLiveRejection(err);
-              if (rejected === null) throw err;
+              // Still retried; only the label of the final failure changes (#8783).
+              if (rejected === null) throw tagTransientAnthropicError(err);
               const status = (err as { status?: unknown }).status;
               return {
                 kind: "turn_rejection",
@@ -1185,28 +1192,56 @@ function classifyLiveRejection(
   return "anthropic_request_rejected";
 }
 
-// Classifies what reaches the handler's catch. In production that is an
-// Inngest StepError carrying only message, stack and a string `cause`, so the
-// `name`/`status` arms below fire only for errors thrown in-process.
-function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
-  const name = (err as { name?: string } | null)?.name ?? "";
-  const cause = (err as { cause?: string } | null)?.cause ?? "";
-  const status = (err as { status?: number } | null)?.status;
-  if (name === "ByokLeaseError" || cause === "fetch_failed" || cause === "decrypt_failed" || cause === "escape") {
-    return "byok_lease_unavailable";
-  }
-  if (name === "MissingByokKeyError") {
-    return "byok_lease_unavailable";
-  }
-  if (status === 429) return "anthropic_rate_limited";
-  if (
-    name === "APIConnectionTimeoutError" ||
-    name === "APIConnectionError" ||
-    /timeout/i.test(String((err as Error | null)?.message ?? ""))
+// The labels a thrown transient Anthropic error carries across the step
+// boundary (#8783). The tag IS the FailureReason, so the classifier below needs
+// no translation table.
+const TRANSIENT_ANTHROPIC_CAUSES: readonly string[] = [
+  "anthropic_rate_limited",
+  "anthropic_timeout",
+] as const satisfies readonly FailureReason[];
+
+// `ByokLeaseError.cause` values (server/byok-lease.ts).
+const BYOK_LEASE_CAUSES: ReadonlySet<string> = new Set(
+  ["fetch_failed", "decrypt_failed", "escape", "subscription_limit"] as const satisfies readonly ByokLeaseError["cause"][],
+);
+
+// Tags a retryable LIVE error inside `turn-${n}-claude` with its FailureReason,
+// while `status` and the SDK class are still readable: it returns a fresh Error
+// with the SDK's message and stack and a string own-property `cause`, the one
+// field that survives Inngest's StepError serialization (ADR-042 §I1,
+// 2026-09-25 amendment). Runs only when classifyLiveRejection returned null, so
+// the 408/409/5xx arm mirrors that function's TRANSIENT_4XX and `< 500` bounds. Connection errors are
+// matched by `instanceof`, never `name`: the SDK sets `name === "Error"` on
+// both connection classes, and Next.js minifies `constructor.name`. Anything
+// else (e.g. a ByokLeaseError, whose own cause must survive) is returned as-is.
+function tagTransientAnthropicError(err: unknown): unknown {
+  const status = (err as { status?: unknown } | null)?.status;
+  let cause: "anthropic_rate_limited" | "anthropic_timeout" | null = null;
+  if (status === 429) {
+    cause = "anthropic_rate_limited";
+  } else if (
+    (typeof status === "number" && (status === 408 || status === 409 || status >= 500)) ||
+    err instanceof APIConnectionError
   ) {
-    return "anthropic_timeout";
+    cause = "anthropic_timeout";
   }
-  return "anthropic_timeout";
+  if (cause === null) return err;
+  const tagged = new Error(String((err as Error).message), { cause });
+  tagged.stack = (err as Error).stack ?? tagged.stack;
+  return tagged;
+}
+
+// Classifies what reaches the handler's catch: in production an Inngest
+// StepError carrying only message, stack and a string `cause`. Positive match
+// only (#8803): a failure no arm identifies is OUR defect and pages, rather
+// than reading as an Anthropic timeout.
+function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
+  const cause = (err as { cause?: unknown } | null)?.cause;
+  if (typeof cause === "string") {
+    if (BYOK_LEASE_CAUSES.has(cause)) return "byok_lease_unavailable";
+    if (TRANSIENT_ANTHROPIC_CAUSES.includes(cause)) return cause as FailureReason;
+  }
+  return "leader_internal_error";
 }
 
 async function persistFailure(
@@ -1298,14 +1333,360 @@ async function persistFailure(
   return { acknowledged: false, failureReason: reason };
 }
 
+// --- Lifecycle settle (#8803) ---
+//
+// A run the handler never finished leaves no terminal state: a retry-exhausted
+// throw (five steps have no try/catch, and a synchronous throw lands here too),
+// the `finish` timeout, or an Inngest-level cancel. The Today card would stay on
+// "Working" and nobody would be paged. Inngest reports these through two
+// DIFFERENT signals, measured on our server version (v1.19.4):
+//   - a failure past retries fires `onFailure` (`inngest/function.failed`);
+//   - the finish timeout AND an API/dashboard cancel fire only
+//     `inngest/function.cancelled` — `onFailure` never sees them.
+// Both route to ONE settle function with retries and idempotency. `onFailure`
+// only FORWARDS, because the SDK pins its `-failure` function to a single retry
+// with no idempotency, so a brief DB blip there would leave the card stuck.
+// ADR-042 §I6; the fleet rule is ADR-251.
+
+/** `timeouts.finish` is built from this, so the `timed_out` hint cannot drift from it. */
+export const FINISH_TIMEOUT_MS = 10 * 60_000;
+
+// Covers an in-flight step request on web-1 that Inngest does not abort when it
+// cancels: in async mode at most ONE step request is in flight per run, and
+// every `action_sends` writer in the loop is a single UPDATE, so 2 minutes
+// outlasts it. A forwarded failure skips it — that run has already ended.
+const SETTLE_GRACE = "2m";
+
+const REQUESTED_FUNCTION_ID = "agent-on-spawn-requested";
+const ORPHANED_EVENT = "agent.spawn.orphaned";
+const CANCELLED_EVENT = "inngest/function.cancelled";
+
+// The fixed message for an envelope that fails validation. It keeps the Sentry
+// issue title and grouping bounded: a forged value never becomes message text.
+// (The correlation middleware still attaches the envelope as scope extra, which
+// the scrubber hashes by key only; see the #8803 review.)
+const INVALID_ENVELOPE_MESSAGE = "agent-on-spawn-settle: lifecycle envelope failed validation";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Inngest run ids are ULIDs (measured on v1.19.4; ADR-251). Required: the settle
+// function's idempotency key is the run id, so a missing one would collapse
+// every such settle onto one key.
+const RUN_ID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+// The SDK's cancelled payload type omits `data.event`, and neither lifecycle
+// type carries `ts`, so every field here is read through a narrowed local shape
+// and guarded.
+interface LifecycleEnvelope {
+  id?: unknown;
+  name?: unknown;
+  ts?: unknown;
+  data?: {
+    event?: unknown;
+    run_id?: unknown;
+    error?: unknown;
+    ts?: unknown;
+  };
+}
+
+interface OnFailureArgs {
+  event: LifecycleEnvelope;
+  step: {
+    sendEvent(
+      id: string,
+      payload: { name: string; data: Record<string, unknown> },
+    ): Promise<unknown>;
+  };
+}
+
+interface SettleArgs {
+  event: LifecycleEnvelope;
+  step: HandlerArgs["step"] & {
+    sleep(id: string, duration: string): Promise<unknown>;
+  };
+  attempt?: number;
+}
+
+type SettleLifecycle = Exclude<SpawnLifecycle, "settle_failed">;
+
+interface SettleTarget {
+  actionSendId: string;
+  founderId: string;
+  messageId: string;
+  // A cancel provably before the finish timeout: only then can a pending Stop
+  // be what ended the run.
+  stopEligible: boolean;
+}
+
+function asString(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+
+function asNumber(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
+}
+
+/** A known ActionClass, else "unknown": a forged class never mints Sentry issues. */
+function knownActionClass(v: unknown): string {
+  const raw = asString(v);
+  return raw !== null && (ACTION_CLASSES as readonly string[]).includes(raw) ? raw : "unknown";
+}
+
+/** The run id when it has the ULID shape Inngest issues, else null. */
+function runIdOrNull(v: unknown): string | null {
+  const raw = asString(v);
+  return raw !== null && RUN_ID_RE.test(raw) ? raw : null;
+}
+
+/**
+ * `onFailure` for `agent-on-spawn-requested`: forward the failed run to
+ * `agent-on-spawn-settle`. Reads `event.data.*` — the failure envelope is not
+ * the original event, and the ctx `runId` is this function's own run.
+ */
+export async function agentOnSpawnRequestedOnFailure({ event, step }: OnFailureArgs): Promise<void> {
+  const data = event.data ?? {};
+  const error = asRecord(data.error) ?? {};
+  // The failure envelope's own `id` equals the failed run's id (measured on
+  // v1.19.4), so it backs up a missing `data.run_id`.
+  const runId = asString(data.run_id) ?? asString(event.id);
+  try {
+    await step.sendEvent("forward-orphan", {
+      name: ORPHANED_EVENT,
+      data: {
+        event: data.event ?? null,
+        run_id: runId,
+        error: {
+          name: asString(error.name) ?? "Error",
+          message: asString(error.message) ?? "",
+        },
+        ts: asNumber(event.ts),
+      },
+    });
+  } catch (err) {
+    // Reached only once the forward exhausted its retries (the SDK gives this
+    // function one). The settle function will never run, so this is the page.
+    reportSpawnDeadLetter({
+      reason: "leader_internal_error",
+      actionClass: knownActionClass(asRecord(asRecord(data.event)?.data)?.actionClass),
+      err,
+      lifecycle: "settle_failed",
+      extra: { failedRunId: runIdOrNull(runId) },
+    });
+  }
+}
+
+/**
+ * Settle a run the handler never finished. Never throws: a settle failure is
+ * itself paged as `(settle_failed)`, because the card may still show "Working".
+ */
+export async function agentOnSpawnSettleHandler({
+  event,
+  step,
+  attempt,
+}: SettleArgs): Promise<{ settled: boolean }> {
+  const isCancel = event.name === CANCELLED_EVENT;
+  const data = event.data ?? {};
+  const original = asRecord(data.event);
+  const originalData = asRecord(original?.data);
+  const failedRunId = runIdOrNull(data.run_id);
+  const actionClass = knownActionClass(originalData?.actionClass);
+
+  // Queued-to-lifecycle-event span. Measured from when the event was QUEUED, not
+  // when the run started, which skews toward `timed_out`: fine for an operator hint.
+  const endTs = isCancel ? asNumber(event.ts) : asNumber(data.ts);
+  const startTs = asNumber(original?.ts);
+  const elapsedMs = endTs !== null && startTs !== null ? endTs - startTs : null;
+  const lifecycle: SettleLifecycle = !isCancel
+    ? "failed"
+    : elapsedMs !== null && elapsedMs >= FINISH_TIMEOUT_MS
+      ? "timed_out"
+      : "cancelled";
+
+  const actionSendId = asString(originalData?.actionSendId);
+  const founderId = asString(originalData?.founderId);
+  const messageId = asString(originalData?.messageId);
+  const valid =
+    original?.name === "agent.spawn.requested" &&
+    actionSendId !== null &&
+    UUID_RE.test(actionSendId) &&
+    founderId !== null &&
+    UUID_RE.test(founderId) &&
+    messageId !== null &&
+    UUID_RE.test(messageId) &&
+    failedRunId !== null;
+
+  if (!valid) {
+    // Validated before any step, so this runs once and pages once.
+    reportSpawnDeadLetter({
+      reason: "leader_internal_error",
+      actionClass,
+      err: new Error(INVALID_ENVELOPE_MESSAGE),
+      lifecycle: "settle_failed",
+      extra: { failedRunId, elapsedMs },
+    });
+    return { settled: false };
+  }
+
+  const target: SettleTarget = {
+    actionSendId,
+    founderId,
+    messageId,
+    // A missing timestamp cannot prove the cancel came before the timeout, so
+    // it takes the paged side rather than honouring a pending Stop.
+    stopEligible: lifecycle === "cancelled" && elapsedMs !== null,
+  };
+  const extra = {
+    founderId,
+    messageId,
+    sourceRef: asString(originalData?.sourceRef),
+    actionSendId,
+    failedRunId,
+    elapsedMs,
+  };
+
+  if (isCancel) await step.sleep("settle-grace", SETTLE_GRACE);
+
+  let outcome: { wrote: boolean; reason: FailureReason };
+  try {
+    outcome = await settleOrphanedSpawn(step, target, attempt ?? 0);
+  } catch (err) {
+    // Reached only once the step exhausted its retries: one page.
+    reportSpawnDeadLetter({
+      reason: "leader_internal_error",
+      actionClass,
+      err,
+      lifecycle: "settle_failed",
+      extra,
+    });
+    return { settled: false };
+  }
+
+  // After the memoized step, so a replay never re-reports (unlike
+  // persistFailure's own report, #8841). Reported only for rows THIS settle wrote.
+  if (outcome.wrote) {
+    const forwarded = asRecord(data.error);
+    reportSpawnDeadLetter({
+      reason: outcome.reason,
+      actionClass,
+      err: isCancel
+        ? new Error(lifecycle === "timed_out" ? "run cancelled at the finish timeout" : "run cancelled")
+        : {
+            name: asString(forwarded?.name) ?? "Error",
+            message: asString(forwarded?.message) ?? "",
+          },
+      lifecycle,
+      extra,
+    });
+  }
+  return { settled: outcome.wrote };
+}
+
+/**
+ * The one memoized step. Every query is scoped to the founder, so a forged or
+ * mismatched envelope matches zero rows and reports nothing.
+ */
+async function settleOrphanedSpawn(
+  step: HandlerArgs["step"],
+  target: SettleTarget,
+  attempt: number,
+): Promise<{ wrote: boolean; reason: FailureReason }> {
+  return step.run("settle-orphaned-spawn", async () => {
+    const sb = getServiceClient();
+    const { actionSendId, founderId, messageId } = target;
+
+    // A cancel before the finish timeout, after the founder clicked Stop, is
+    // the Stop honoured. Everything else is a defect and pages: a crash is a
+    // defect whatever the founder asked, and a timeout with a pending Stop is a
+    // hang (Stop only sets the column; nothing cancels the run on it). A read
+    // error takes the paged side.
+    let reason: FailureReason = "leader_internal_error";
+    if (target.stopEligible) {
+      const { data, error } = await sb
+        .from("action_sends")
+        .select("cancellation_requested_at")
+        .eq("id", actionSendId)
+        .eq("user_id", founderId)
+        .eq("message_id", messageId)
+        .maybeSingle();
+      const row = data as { cancellation_requested_at: string | null } | null;
+      if (!error && row?.cancellation_requested_at) reason = "cancelled_by_operator";
+    }
+
+    // Report on the rows THIS UPDATE returned: zero rows covers every no-op —
+    // a terminal state already recorded, a concurrent writer that won, a gone
+    // row, or an envelope that is not that founder's.
+    const { data: written, error } = await sb
+      .from("action_sends")
+      .update({ failure_reason: reason })
+      .eq("id", actionSendId)
+      .eq("user_id", founderId)
+      .eq("message_id", messageId)
+      .is("failure_reason", null)
+      .is("acknowledged_at", null)
+      .is("undone_at", null)
+      .select("id");
+    if (error) {
+      // The code only: a PostgREST message can echo a value.
+      throw new Error(
+        `settle-orphaned-spawn: action_sends update failed (code ${(error as { code?: string }).code ?? "unknown"})`,
+      );
+    }
+    if ((written ?? []).length > 0) return { wrote: true, reason };
+
+    // A retry after a write that committed but whose step then failed: the
+    // UPDATE now sees zero rows, so read back. A rare double page (when
+    // persistFailure had written the same reason) beats silence.
+    if (attempt > 0) {
+      const { data } = await sb
+        .from("action_sends")
+        .select("failure_reason")
+        .eq("id", actionSendId)
+        .eq("user_id", founderId)
+        .eq("message_id", messageId)
+        .maybeSingle();
+      if ((data as { failure_reason: string | null } | null)?.failure_reason === reason) {
+        return { wrote: true, reason };
+      }
+    }
+    return { wrote: false, reason };
+  });
+}
+
+export const agentOnSpawnSettle = inngest.createFunction(
+  {
+    id: "agent-on-spawn-settle",
+    retries: 3,
+    // Both payloads carry the ORPHANED run's id; one settle per run.
+    idempotency: "event.data.run_id",
+  } as unknown as Parameters<typeof inngest.createFunction>[0],
+  [
+    {
+      event: CANCELLED_EVENT,
+      // Literal `==`, so it never matches the SDK's own `…-failure` id. Built
+      // from the client id, which the SDK prefixes onto every function id.
+      if: `event.data.function_id == '${inngest.id}-${REQUESTED_FUNCTION_ID}'`,
+    },
+    { event: ORPHANED_EVENT },
+  ] as unknown as Parameters<typeof inngest.createFunction>[1],
+  agentOnSpawnSettleHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+);
+
+// --- end lifecycle settle ---
+
 export const agentOnSpawnRequested = inngest.createFunction(
   {
-    id: "agent-on-spawn-requested",
+    id: REQUESTED_FUNCTION_ID,
     idempotency: "event.data.actionSendId",
     retries: 3,
     // AC7 — 10-minute timeout. 8 turns × 60s per-turn budget + 2 min
     // for step replay + DB writes.
-    timeouts: { finish: "10m" },
+    timeouts: { finish: `${FINISH_TIMEOUT_MS / 60_000}m` },
+    // #8803: a run that fails past its retries is forwarded to
+    // agent-on-spawn-settle; a timeout or cancel reaches it directly.
+    onFailure: agentOnSpawnRequestedOnFailure,
   } as unknown as Parameters<typeof inngest.createFunction>[0],
   { event: "agent.spawn.requested" } as unknown as Parameters<
     typeof inngest.createFunction
