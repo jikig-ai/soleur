@@ -32,6 +32,37 @@ not just silence.
 Spec lacks valid `lane:` — no spec.md exists for this branch; defaulted to
 cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25 (soleur:deepen-plan, in-process — no Task tool on
+this harness; the agent fan-out was replaced by direct reads/greps/bash probes
+in this session, recorded under "Deepen-pass findings" below)
+
+**Sections enhanced:** Research Insights, Technical Considerations,
+Implementation Phase 1, Observability (added — deepen-plan Phase 4.7 halt
+requirement).
+
+### Key Improvements
+
+1. Bash semantics verified empirically at deepen time: `if`/`while`/`case`/`{ }`
+   bodies DO honor `set -e` in a non-exempt context (each aborts on an inner
+   `false`), a function DEFINITION always returns 0 (so a `}` popping
+   func_stack is never a dead-read antecedent), and `until` admits a
+   zero-iteration live path (inherited conservative verdict documented).
+2. Precedent-diff (Phase 4.4): the sibling
+   `scripts/lint-workflow-errexit-capture.py::_heredoc_opener` (:170-201)
+   already carries a quote-state scanner — adopt its `\`-escape rule
+   (`\` escapes the next char unless single-quoted), which additionally fixes
+   unquoted `\'` mis-tracking; and mirror its unterminated-heredoc
+   FAIL-CLOSED choice for a quote left open at EOF (re-judge the skipped tail
+   as code rather than silently dropping it).
+3. deepen halt gates evaluated: 4.6 User-Brand pass (threshold `none`, no
+   sensitive-path match — verified by running `SENSITIVE_PATH_RE` against the
+   Files-to-Edit list); 4.7 Observability — section ADDED (Files-to-Edit is
+   not pure-docs); 4.8 PAT sweep clean; 4.9 UI — no UI-surface files; 4.10
+   Encryption — no store/connection; 4.11 Guard Contract — `lint-guard-contract.py`
+   green on 3 entries, assemblies are structural (chokepoints named).
+
 ## Problem Statement / Motivation
 
 The gate is fail-silent by design — every heuristic limit documented in its
@@ -56,7 +87,7 @@ Empirical verification (fixtures run against the linter on this branch, 2026-09-
 | M9 | `if c; then worker; fi; rc=$?` (same line) | silent | miss — `fi` segment is protected even mid-line |
 | M10 | `case … esac` then `rc=$?` | silent | miss — same as M1 |
 | M11 | `{ worker }` group then `rc=$?` | silent | miss — `}` antecedent exempted wholesale |
-| M13 | `set -e` then `bash -c '…\nset +e\n…'` then `worker\nrc=$?` | silent | **fail-silent spoof** — quoted `set +e` clears the model, hiding the real dead read after it |
+| M12 | `set -e` then `bash -c '…\nset +e\n…'` then `worker\nrc=$?` | silent | **fail-silent spoof** — quoted `set +e` clears the model, hiding the real dead read after it |
 
 The same-line quoted-`;` defect also has a fail-silent arm: `echo 'x;set +e';
 rc=$?` produces a phantom `set +e'` segment that clears the model and silences
@@ -79,9 +110,9 @@ of it are live today.
   `lint-shell-capture-exit` at :3303 and `-live` at :3304, the latter invoked
   WITH `--baseline`). Tracked `*.sh` census is now 1275 (issue says 1272;
   drift only).
-- Every issue claim was re-verified empirically (the M1–M13 table above) —
+- Every issue claim was re-verified empirically (the M1–M12 table above) —
   none is stale, and two are worse than the issue describes: the quote spoofs
-  run in BOTH directions (M5 false-arm → false S1; M13 false-clear → hidden
+  run in BOTH directions (M5 false-arm → false S1; M12 false-clear → hidden
   real finding), and the `;` split mis-attributes an existing true positive
   (M7).
 - Mechanism check vs the ADR corpus: nothing here proposes a new mechanism —
@@ -159,7 +190,7 @@ of it are live today.
 - **Quote context** is per-line only: `_unquoted` (:346-370) is applied to
   single strings; pass 1 (:533-559) never carries quote state across logical
   lines, so a `set` line inside `bash -c '…` open-quote runs `set_verdicts`
-  as code (m5/m13 verified).
+  as code (m5/m12 verified).
 - **`_segments`** (:373-400) splits on every `;` byte — paren-aware via
   `d`, quote-blind (m7 verified, including the phantom `set +e'` segment).
 - **`READ_RE`** (:194-195): `name=` + `"?` + status — nothing between `=` and
@@ -188,6 +219,49 @@ of it are live today.
 - **SpecFlow (Phase 3)**: folded in-process — the bash-conditional edge cases
   are enumerated as the M-fixture matrix and the must-not-fire rows in
   Implementation Phases; no agent spawn capability in this harness.
+
+### Deepen-pass findings (Phase 4/4.4/4.45 — in-process)
+
+- **Precedent-diff (Phase 4.4):** the quote-state scanner this plan adds is NOT
+  novel — `scripts/lint-workflow-errexit-capture.py::_heredoc_opener`
+  (:170-201) already tracks `in_single`/`in_double` over a line to decide
+  whether `<<` is a real redirection. Side-by-side differences that matter:
+  (a) the sibling's escape rule is `\` skips the next char *unless
+  single-quoted* — correct for unquoted `\'` (`echo don\'t` does not open a
+  quote) and strictly more accurate than this linter's `_unquoted`, which
+  escapes only inside `"…"`; ADOPT the sibling rule for the cross-line
+  tracker and note the divergence (or unify `_unquoted` in the same edit —
+  measure churn, prefer unifying). (b) The sibling's unterminated-heredoc
+  rule is FAIL-CLOSED (blank nothing, keep scanning — :158-165, "fail toward
+  'scan it as code'"): mirror it for a quote still open at EOF — re-judge the
+  quote-skipped tail as code rather than silently dropping findings, and pin
+  the direction with a fixture.
+- **Empirical bash-semantics verification** (ran `bash -c` repros at deepen
+  time): `set -e` DOES abort on a failing command inside `if`/`while`/`case`/
+  `{ }` bodies evaluated in a non-exempt context — so a `rc=$?` after the
+  closer is genuinely dead on the armed path; a function DEFINITION
+  (`f() { false; }`) returns 0 and cannot abort, so the read after a
+  definition-closing `}` is boring-not-dead — the func_stack discriminator in
+  Guard 2 is load-bearing, not decorative; `until true; do false; done` runs
+  zero iterations and leaves a live `$?` — the conservative flag-anyway
+  verdict matches the existing one-line rule (symmetric, honest under both
+  context arms per the docstring's S3 note).
+- **Verify-the-negative pass (4.45):** the plan's negative claims were checked
+  against the code — `x='$?'` is already non-matching today (single-quoted
+  value, `READ_RE` requires `"`/bare status — verified by inspection of
+  :194-195); the sensitive-path claim was executed (grep of the Files-to-Edit
+  list against the canonical `SENSITIVE_PATH_RE` → no match); PAT sweep
+  (Phase 4.8 regex) clean. No claim contradicted.
+- **Post-edit self-audit (4.45):** plan greps its own citations — every
+  `knowledge-base/` path resolves; the only forward reference is this
+  feature's own `tasks.md` (created with it). Fixture numbering normalized
+  (no gaps in the M-table).
+- **Agent fan-out disclosure:** the deepen workflow prescribes parallel
+  skill/research/review Task agents (Phases 2/3/4/5). This harness exposes no
+  Task/subagent spawn; all passes were executed in-process by direct file
+  reads, `git`/`gh`/`grep` probes, and `bash -c` semantics checks — same
+  evidence, no panel breadth. Residual risk: a reviewer-seatable taste/class
+  finding an in-process pass cannot see; flagged for the PR review phase.
 
 ### Related issues / PRs
 
@@ -226,7 +300,7 @@ live-tree triage + baseline regeneration:
    open-quote character (`'` or `"`) in force at the START of each logical
    line, carried forward by the same scan `_unquoted` uses per-line. A line
    beginning inside an open quote is data for this shell: no `set_verdicts`
-   contribution (kills the m5 phantom-arm and the m13 phantom-clear), and no
+   contribution (kills the m5 phantom-arm and the m12 phantom-clear), and no
    S1/S2/S3 evaluation in pass 2 (a `rc=$?` inside a multi-line
    `bash -c '…'` literal is judged by the inner interpreter — the cross-line
    generalization of the existing same-line quote exemption at :662-674).
@@ -298,7 +372,7 @@ function-shape / quote-state paragraphs.
 - **NFR/runtime:** still one `git ls-files` pass; the quote tracker adds one
   linear scan per line — unchanged ~2s envelope over 1275 scripts.
 - **Security:** none — reads repo text only. The M5 fix REMOVES a wrong-direction
-  finding (phantom-armed `set` on data); the M13 fix removes a fail-silent
+  finding (phantom-armed `set` on data); the M12 fix removes a fail-silent
   suppression. No sensitive-path regex match (verified against preflight
   `SENSITIVE_PATH_RE`: `scripts/lint-*` matches none of its arms).
 - **Paper-resolution lint:** every FR above names its implementation locus —
@@ -309,11 +383,11 @@ function-shape / quote-state paragraphs.
 
 ## Implementation Phases
 
-### Phase 1: quote model (P3 — foundation; m5/m7/m13)
+### Phase 1: quote model (P3 — foundation; m5/m7/m12)
 
 - Fixtures FIRST (must go red against the unmodified linter):
   - must-fire: `set -e` + `bash -c 'a\nset +e\nb'` + `worker` + `rc=$?`
-    (m13 — the quoted clear must NOT disarm the real read);
+    (m12 — the quoted clear must NOT disarm the real read);
     `echo 'a;b'` + `rc=$?` fires S3 naming `echo 'a;b'` as antecedent.
   - must-not-fire: `set -uo pipefail` + `bash -c 'a\nset -e\nb'` +
     `x=$(grep p f)` (m5 — the quoted arm must NOT arm; grep capture under
@@ -321,6 +395,13 @@ function-shape / quote-state paragraphs.
     `bash -c '…'` string produces no finding.
 - Implement `quote_at[]` in pass 1 and the open-quote line skip in both
   passes; make `_segments` quote-aware; move depth counting onto masked text.
+  Escape semantics ADOPT the sibling precedent
+  `lint-workflow-errexit-capture.py::_heredoc_opener` (:170-201) — `\` escapes
+  the next char unless single-quoted (covers unquoted `\'`, which
+  `_unquoted`'s in-double-only rule mis-tracks); unify `_unquoted` to the same
+  rule or document the divergence in the docstring. A quote still open at EOF
+  re-judges the skipped tail as code — fail-closed, mirroring the sibling's
+  unterminated-heredoc rule (:158-165) — pin with a fixture.
 - Raise `MIN_ASSERTIONS` in the same edit as the fixtures land.
 
 ### Phase 2: S3 compound-closer antecedents (P1 — m1/m8/m9/m10/m11)
@@ -374,7 +455,7 @@ function-shape / quote-state paragraphs.
 | Approach | Why not |
 |---|---|
 | Full bash grammar/parser dependency | Cost and dependency footprint for a heuristic gate whose remaining misses are documented; the lexer deltas cover the issue's list. |
-| Defer the quote-spoof fix (M5 is "only" an FP) | M13 shows the same root runs fail-silent — a quoted `set +e` suppresses real later findings; fixing one direction without the other is impossible anyway (same quote-state mechanism). |
+| Defer the quote-spoof fix (M5 is "only" an FP) | M12 shows the same root runs fail-silent — a quoted `set +e` suppresses real later findings; fixing one direction without the other is impossible anyway (same quote-state mechanism). |
 | Scope to line-level closers only (skip `cmd; fi` mid-line segments) | m9 verified silent today; the segment path shares the resolver — half a fix at the same cost. |
 | Track function bodies with a brace counter only (no func_stack split) | `}` closing a function DEFINITION vs a group is the one distinction that decides a finding; a bare counter cannot express it. |
 | Fix PR-head evidence resolution here | Not a linter defect — already tracked by #8791/#8790; folding it in would mix a hook fix into a lint-gate diff. |
@@ -389,6 +470,42 @@ function-shape / quote-state paragraphs.
   nothing — the gate reads tracked shell files and prints findings; no data
   surfaces, no new network or credential paths.
 - **Brand-survival threshold:** `none`
+
+## Observability
+
+The deliverable is a CI lint gate — its observability surface IS the suite
+verdict. No new runtime surface is introduced.
+
+```yaml
+liveness_signal:
+  what: "the `lint-shell-capture-exit` / `lint-shell-capture-exit-live` suite verdict lines in test-all output"
+  cadence: "per local `scripts/test-all.sh` run and per CI invocation"
+  alert_target: "suite RED blocks the test-all aggregate (fails the commit/CI run)"
+  configured_in: "scripts/test-all.sh:3303-3305 (run_suite rows)"
+
+error_reporting:
+  destination: "stdout/stderr of the suite runner — the linter prints per-finding `[S1|S2|S3|S4]` blocks"
+  fail_loud: "a `[REJECT] lint-shell-capture-exit: N NEW finding(s)` line and non-zero exit"
+
+failure_modes:
+  - mode: "a newly-covered blind spot fires on the real tree (true positive on pre-existing code)"
+    detection: "`lint-shell-capture-exit-live` suite prints the finding file:line and exits 1"
+    alert_route: "the failing suite output itself — no external route"
+  - mode: "baseline regenerated from a subset scan (truncated grandfather set)"
+    detection: "`--write-baseline` with explicit paths exits 2 (refusal built into the gate)"
+    alert_route: "exit 2 + stderr refusal message"
+  - mode: "detector goes vacuous (parses nothing, reports 0)"
+    detection: "MIN_ASSERTIONS floor in scripts/lint-shell-capture-exit.test.sh fails the suite"
+    alert_route: "suite RED on the fixtures run"
+
+logs:
+  where: "suite stdout (local) / CI job log (workflows running test-all.sh)"
+  retention: "CI retention policy; local run is ephemeral"
+
+discoverability_test:
+  command: "python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt"
+  expected_output: "0 new findings"
+```
 
 ## Guard Contract
 
@@ -411,7 +528,7 @@ chokepoints: pass-1 state fold (`quote_at`, `set_verdicts`, `depth_at` in
 | 2 | Revert quote state to per-line (`quote_at` always "closed") | RED — the multi-line-quote fixtures all fail (dispatch/vacuity row) |
 | 3 | Two consecutive multi-line quoted strings, `set +e` inside the SECOND only | RED — state must carry past the first string, not reset per string (second-member row) |
 | 4 | `echo 'x;set +e'; rc=$?` (same-line quoted `;`) | RED — no phantom `set` segment; the read resolves `echo` as antecedent |
-| 5 | (Harness) drop the m13 must-fire fixture | RED via `MIN_ASSERTIONS` floor — the floor rises with the fixtures |
+| 5 | (Harness) drop the m12 must-fire fixture | RED via `MIN_ASSERTIONS` floor — the floor rises with the fixtures |
 | 6 | (Must-PASS, non-canonical) `bash -c '…\nset -e\n…'` under `set -uo pipefail` (no -e) | stays silent — a quoted `set -e` cannot arm the model either |
 
 ### Guard 2 — S3 compound-closer antecedents
@@ -597,5 +714,5 @@ path matches the ui-surface glob set.
   `.test.sh` header + `run_lint` comment; ADR-166 via the gate docstring;
   ADR-127 for why the review-trailer anchor question is not this linter's
   problem.
-- Empirical basis: the M1–M13 fixture table in Problem Statement was run
+- Empirical basis: the M1–M12 fixture table in Problem Statement was run
   against the live linter on this branch at plan time.

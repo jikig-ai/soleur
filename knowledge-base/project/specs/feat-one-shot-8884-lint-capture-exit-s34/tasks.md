@@ -8,7 +8,7 @@ Issue: #8884 — lint-shell-capture-exit S3/S4 residual blind spots (deferred fr
 - [ ] 1.1 Write failing fixtures FIRST in `scripts/lint-shell-capture-exit.test.sh`
   (they must fail against the unmodified linter):
   - must-fire: `set -e` + multi-line `bash -c '…\nset +e\n…'` + `worker` +
-    `rc=$?` (the quoted clear must NOT disarm the real read — m13 shape);
+    `rc=$?` (the quoted clear must NOT disarm the real read — m12 shape);
     `echo 'a;b'` + `rc=$?` fires S3 and names `echo 'a;b'` as antecedent.
   - must-not-fire: `set -uo pipefail` + `bash -c '…\nset -e\n…'` +
     `x=$(grep p f)` (quoted arm cannot arm — m5 shape); a `rc=$?` text inside
@@ -16,10 +16,15 @@ Issue: #8884 — lint-shell-capture-exit S3/S4 residual blind spots (deferred fr
 - [ ] 1.2 Add `quote_at[]` (open-quote char at each logical line's start) to the
   pass-1 state loop in `scan()` (`scripts/lint-shell-capture-exit.py`
   :533-559); skip `set_verdicts` contributions on lines that start inside an
-  open quote, and skip S1/S2/S3 evaluation for them in pass 2.
-- [ ] 1.3 Make `_segments` (:373-400) quote-aware (same `'`/`"` tracking and
-  `\\`-inside-double-quotes escape as `_unquoted` :346-370): a `;` inside
-  quotes accumulates instead of splitting.
+  open quote, and skip S1/S2/S3 evaluation for them in pass 2. Escape rule:
+  adopt the sibling precedent
+  `scripts/lint-workflow-errexit-capture.py::_heredoc_opener` (:170-201) —
+  `\` escapes the next char unless single-quoted (also fixes unquoted `\'`);
+  a quote still open at EOF re-judges the skipped tail as code (fail-closed,
+  mirroring the sibling's unterminated-heredoc rule :158-165) — pin with a
+  fixture.
+- [ ] 1.3 Make `_segments` (:373-400) quote-aware (same `'`/`"` tracking as
+  1.2's tracker): a `;` inside quotes accumulates instead of splitting.
 - [ ] 1.4 Move paren `depth` counting onto quote-masked text so `(`/`)` inside
   literals stop skewing depth (closes the "parens in literals" documented
   limit).
