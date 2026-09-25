@@ -413,7 +413,7 @@ logs:
   retention: "Better Stack source retention for the web-platform source; Sentry event retention per the org plan"
 
 discoverability_test:
-  command: "grep -hoE 'leader_internal_error|agentOnSpawnSettle' apps/web-platform/infra/sentry/alert-reference.json apps/web-platform/app/api/inngest/route.ts"
+  command: "grep -ho -e leader_internal_error -e agentOnSpawnSettle apps/web-platform/infra/sentry/alert-reference.json apps/web-platform/app/api/inngest/route.ts"
   expected_output: "leader_internal_error, agentOnSpawnSettle"
 ```
 
