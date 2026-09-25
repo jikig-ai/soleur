@@ -216,8 +216,15 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   // 68 -> 69: cron-machinery-drain (the weekly issue-flow measurement + drain).
+  // 69 -> 70: agentOnSpawnSettle (#8803, settles orphaned leader-loop runs).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(69);
+    expect(routeEntries.length).toBe(70);
+  });
+
+  // An event function is invisible to the cron-glob guards; an unserved settle
+  // function never runs, and every orphaned spawn stays on "Working" (#8803).
+  it("(a3) agentOnSpawnSettle event function is registered in route.ts", () => {
+    expect(routeEntries).toContain("agentOnSpawnSettle");
   });
 
   // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only
