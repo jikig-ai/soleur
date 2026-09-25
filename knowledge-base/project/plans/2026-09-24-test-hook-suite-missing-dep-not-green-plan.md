@@ -792,3 +792,37 @@ Deviations from the plan, each measured:
   checker itself. The fixture self-test runs first and refuses the broken instrument, which is the
   intended detection for an instrument row. The final battery is 17/17 caught (control rc 0).
 
+
+## Review Addendum — 2026-09-25 (9-seat panel)
+
+Earlier text in this plan that the review found false or narrower than stated. It is corrected here
+instead of being edited in place:
+
+- **ADR-188 citations.** ADR-188 never names jq, perl, realpath, gitleaks or #8266. Its local skip is
+  the infra `_skip()` (docker/terraform/python3), and it mandates a hard fail under CI only. This
+  change therefore extends its ownership axis to local hook-suite runs, recorded in ADR-188's #8616
+  addendum. It does not merely apply ADR-188. The gitleaks probe's local skip is #8266 behaviour,
+  kept, and named as an accepted gap.
+- **"Cosmetic" run_suite rendering (Alternatives).** This is false. Rendering a leaf rc 3 as
+  `[UNRESOLVED]` would move the top-level exit from 1 to 3, and `grok-pre-push-gate.sh` branches on 3.
+  Recorded in ADR-177's #8616 addendum.
+- **"Every guard exits in under 1 s."** False for the arm pairs: parity/python3 takes about 1.5–3.7 s
+  and hookeventname-coverage/jq about 0.6–0.75 s. Whole-suite guards are about 0.16 s at the median.
+- **"17/17 caught" (Implementation Notes).** That count included H2 and H3, which are must-PASS rows.
+  The battery re-run after review is reported in the PR body.
+- **"The line proves the guard ran before first use."** False. The suites run `set -uo pipefail`
+  without `-e`, so a use before the guard can fail with 127 and still reach the guard. The claim was
+  removed from the suite header.
+- **Population and property.** The checker's stated property was wider than what it assembled. The
+  review found hook suites green with a tool missing that no guard covered: grep-q-pipe-guard and
+  new-scheduled-cron without git, and session-rules-loader-headless without `script`. It also found
+  arms that were red only because of an assertion floor (hook-input-contract/python3,
+  parity/python3). These changes followed:
+  - The population now includes positive `if command -v … else` guards and quoted tool names.
+  - `if !` guards are classified from their own line.
+  - Counted skips exit 3.
+  - Those suites gained guards or UNRESOLVED lines.
+  - The header now states what is covered and what is not.
+  - The pair count is now 45 (`MIN_PAIRS=45`).
+- **M4.** The parity python3 verdict no longer depends on `MIN_CASES`, since a counted skip exits 3.
+  Row M4 now lowers the floor and removes the skip exit together.
