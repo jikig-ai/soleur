@@ -2455,7 +2455,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // soleur/prd service tokens with the Tier-B DOPPLER_TOKEN_TF. NO SUBSTITUTE: service-token
   // metadata (slug, created_at) has no unauthenticated endpoint, and a read service token gets HTTP
   // 403 on the listing (measured 2026-09-24). Genuine declaration.
-  const BASELINE_DECLARED_PROBES = 29;
+  // #8754 (2026-09-25): +1 (29 -> 30, after #8705 took 28 -> 29) for `2026-09-25-fix-web-platform-infra-drift-8754-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (a curl GET of the Hetzner firewalls API filtered to `soleur-inngest`) reads
+  // HCLOUD_TOKEN from Doppler soleur/prd_terraform. NO SUBSTITUTE: Hetzner exposes a firewall's
+  // `applied_to` set only through the authenticated API, and the unauthenticated alternative (a TCP
+  // connect to the host's port 22) needs a public IP that changes on every replace. Genuine.
+  const BASELINE_DECLARED_PROBES = 30;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
