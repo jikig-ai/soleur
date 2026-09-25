@@ -125,6 +125,29 @@ expect_line "R6 skipped" "$BODY" skipped success push \
 expect_line "R7 unclassified result" "$BODY" potato success push \
   "UNCLASSIFIED" 1
 
+# ── W: the env→needs wiring feeds the RIGHT results ──────────────────────────
+# The classifier reads MATRIX_RESULT/FIXED_RESULT — but the wiring lives in the
+# step's env: block, which the body extraction strips. Assert the mapping here
+# or a crossed wire (matrix env fed by -fixed's result) executes a perfect
+# classifier on swapped verdicts.
+WF_ENV="$(python3 - "$WF" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+job = (doc.get("jobs") or {}).get("deploy-script-tests-done") or {}
+for step in (job.get("steps") or []):
+    if step.get("name") == "Aggregate deploy-script-tests results":
+        for k, v in (step.get("env") or {}).items():
+            print("%s=%s" % (k, v))
+PY
+)"
+if grep -qE 'MATRIX_RESULT=\$\{\{[[:space:]]*needs\.deploy-script-tests\.result' <<<"$WF_ENV" \
+   && grep -qE 'FIXED_RESULT=\$\{\{[[:space:]]*needs\.deploy-script-tests-fixed\.result' <<<"$WF_ENV" \
+   && ! grep -qE 'MATRIX_RESULT=.*-fixed' <<<"$WF_ENV"; then
+  pass
+else
+  fail "W env wiring: MATRIX_RESULT/FIXED_RESULT do not map to their own needs.*.result — got: $(tr '\n' '|' <<<"$WF_ENV")"
+fi
+
 # ── Mutants — the arms must actually discriminate ────────────────────────────
 # M1: drop the cancelled arm — the timeout/superseded discrimination dies.
 sed '/cancelled)$/,/;;$/d' "$BODY" > "$SANDBOX/body.nocancelled"
@@ -148,5 +171,13 @@ else
 fi
 
 echo ""
+# Anti-vacuity floor — a dispatch layer that stops emitting keeps printing
+# 0 failed while certifying nothing.
+MIN_ASSERTS=10
+if (( passes + fails < MIN_ASSERTS )); then
+  printf 'FAIL: assertion floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$((passes + fails))" "$MIN_ASSERTS" >&2
+  fails=$((fails + 1))
+fi
 echo "=== deploy-script-tests-done aggregator: $passes passed, $fails failed ==="
 (( fails == 0 ))

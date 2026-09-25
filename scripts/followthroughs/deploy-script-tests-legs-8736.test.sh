@@ -221,6 +221,46 @@ else
   fail "F: expected NOT YET, got rc=$rc: $(tail -3 "$FIXTURE_DIR/out.log")"
 fi
 
+# --- Case G: malformed cutoff -> NOT YET (pins the canonical-ISO arm) -------
+# A sloppy cutoff string must never be read as "everything qualifies".
+setup
+for i in 1 2 3 4 5; do
+  mk_run "200$i" "2026-09-26T0${i}:00:00Z"
+  mk_jobs "200$i" 420 "2026-09-26"
+done
+finalize_runs
+rc=$(SOLEUR_FT_EARLIEST="Sept 25 2026" run_probe)
+if [[ "$rc" == "2" ]] && grep -q "not canonical ISO" "$FIXTURE_DIR/out.log"; then
+  pass "G: a malformed cutoff refuses (NOT YET), never silently broadens"
+else
+  fail "G: expected malformed-cutoff NOT YET, got rc=$rc: $(tail -3 "$FIXTURE_DIR/out.log")"
+fi
+
+# --- Case H: boundary — a run created AT the cutoff does NOT qualify --------
+# The probe's strict `created_epoch > CUTOFF_EPOCH` must exclude the boundary
+# second itself; an inclusive compare would let the cutoff run count.
+setup
+mk_run 3001 "$CUTOFF"            # exactly the boundary — excluded
+mk_jobs 3001 420 "2026-09-25"
+for i in 2 3 4 5 6; do
+  mk_run "300$i" "2026-09-25T0${i}:00:00Z"
+  mk_jobs "300$i" 420
+done
+finalize_runs
+rc=$(SOLEUR_FT_EARLIEST="$CUTOFF" run_probe)
+if [[ "$rc" == "0" ]]; then
+  pass "H: boundary run excluded — five post-cutoff runs qualify on their own"
+else
+  fail "H: expected PASS with 5 post-cutoff runs + 1 boundary run, got rc=$rc: $(tail -3 "$FIXTURE_DIR/out.log")"
+fi
+
+# Anti-vacuity floor — counts pass+fail, same idiom as the sibling batteries.
+MIN_ASSERTS=8
+if (( passes + fails < MIN_ASSERTS )); then
+  echo "FAIL: assertion floor: only $((passes + fails)) assertion(s) ran, expected >= $MIN_ASSERTS." >&2
+  fails=$((fails + 1))
+fi
+
 echo ""
 echo "=== deploy-script-tests-legs-8736: $passes passed, $fails failed ==="
 (( fails == 0 ))

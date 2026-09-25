@@ -111,29 +111,44 @@ while IFS=$'\t' read -r id created; do
   JOBS="$(gh api --paginate "repos/$REPO/actions/runs/$id/jobs?per_page=100" 2>/dev/null)" \
     || { echo "CANNOT ESTABLISH: jobs list for run $id unreadable" >&2; exit 3; }
 
-  # Per-run leg table: name<TAB>duration_s<TAB>ok. A leg counts `ok` only when
-  # conclusion==success AND both timestamps parse to epochs. --paginate on the
-  # jobs endpoint yields concatenated {jobs:[...]} pages; slurp merges them.
+  # Per-run leg table: name<TAB>duration_s<TAB>ok< TAB>k<TAB>n for legs. A leg
+  # counts `ok` only when conclusion==success AND both timestamps parse to
+  # epochs. --paginate on the jobs endpoint yields concatenated {jobs:[...]}
+  # pages; slurp merges them. The leg regex takes k/N from the NAME — the
+  # probe survives a future shard-count change (was: hardcoded /4, the
+  # same drift class the gate's totality arm exists to catch).
   TABLE="$(printf '%s' "$JOBS" | jq -rs '
     [ .[] | .jobs // [] | .[]
-      | select(.name | test("^deploy-script-tests( \\([0-9]+/4\\)|-fixed|-done)?$"))
+      | select(.name | test("^deploy-script-tests( \\([0-9]+/[0-9]+\\)|-fixed|-done)?$"))
+      | (.name | capture("^deploy-script-tests \\((?<k>[0-9]+)/(?<n>[0-9]+)\\)$") // null) as $leg
       | { name,
           dur: (if .started_at != null and .completed_at != null
                 then ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))
                 else null end),
-          ok: (.conclusion == "success" and .started_at != null and .completed_at != null) }
+          ok: (.conclusion == "success" and .started_at != null and .completed_at != null),
+          k: (if $leg then ($leg.k | tonumber) else null end),
+          n: (if $leg then ($leg.n | tonumber) else null end) }
     ]')" || { echo "CANNOT ESTABLISH: jobs list for run $id unparseable" >&2; exit 3; }
 
-  nlegs="$(jq '[.[] | select(.name | startswith("deploy-script-tests ("))] | length' <<<"$TABLE")"
-  nfixed="$(jq '[.[] | select(.name == "deploy-script-tests-fixed")] | length' <<<"$TABLE")"
-  ndone="$(jq '[.[] | select(.name == "deploy-script-tests-done")] | length' <<<"$TABLE")"
-  nok="$(jq '[.[] | select(.ok)] | length' <<<"$TABLE")"
-
-  # All six jobs present AND all green-and-measured. Anything else is
-  # non-qualifying, not a sample point (pre-shard shape, skipped leg,
-  # failed leg — each explained in the header).
-  if [[ "$nlegs" -ne 4 || "$nfixed" -ne 1 || "$ndone" -ne 1 || "$nok" -ne 6 ]]; then
-    echo "run $id: non-qualifying (legs=$nlegs/4 fixed=$nfixed/1 done=$ndone/1 green=$nok/6) — skipped"
+  # A run qualifies when its legs tile 1..N COMPLETELY (one shared N, N
+  # distinct k's) plus exactly one fixed and one done — every job green-and-
+  # measured. Anything else is non-qualifying, not a sample point (pre-shard
+  # shape, skipped leg, failed leg, partial matrix — each explained above).
+  QUAL="$(jq -r '
+    ([ .[] | select(.n != null) ]) as $legs
+    | ([ $legs[].n ] | unique) as $ns
+    | ([ $legs[].k ] | unique | length) as $distinct_k
+    | { legs: ($legs | length), n: ($ns | if length == 1 then .[0] else 0 end),
+        distinct: $distinct_k,
+        fixed: ([ .[] | select(.name == "deploy-script-tests-fixed")] | length),
+        done:  ([ .[] | select(.name == "deploy-script-tests-done")] | length),
+        ok:    ([ .[] | select(.ok)] | length),
+        total: length }
+    | "\(.legs) \(.n) \(.distinct) \(.fixed) \(.done) \(.ok) \(.total)"' <<<"$TABLE")"
+  read -r nlegs legn nk nfixed ndone nok ntotal <<<"$QUAL"
+  if [[ "$legn" -eq 0 || "$nlegs" -ne "$legn" || "$nk" -ne "$legn" \
+        || "$nfixed" -ne 1 || "$ndone" -ne 1 || "$nok" -ne "$ntotal" ]]; then
+    echo "run $id: non-qualifying (legs=$nlegs/$legn distinct=$nk fixed=$nfixed/1 done=$ndone/1 green=$nok/$ntotal) — skipped"
     continue
   fi
 

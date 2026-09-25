@@ -448,14 +448,19 @@ import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1])) or {}
 on = wf.get("on", wf.get(True)) or {}
 job = (wf.get("jobs") or {}).get("deploy-script-tests") or {}
-runs = [str(s.get("run", "")) for s in (job.get("steps") or [])]
+steps = (job.get("steps") or [])
+runs = [str(s.get("run", "")) for s in steps]
+# The shard env must sit ON the runner step — a sibling-step env would satisfy
+# a job-wide scan while the runner leg executes unsharded (the gate's own arm).
+runner_steps = [s for s in steps
+    if str(s.get("run", "")).strip() == "bash apps/web-platform/infra/run-registered-suites.sh"]
 pr_paths = list((on.get("pull_request") or {}).get("paths") or [])
 checks = {
     # Since #8736 presence under apps/web-platform/infra/ IS registration — the
     # runner glob-derives it — so what this suite pins is the CONNECTION: the
     # legs' run-registered-suites.sh invocation carrying SOLEUR_INFRA_SHARD.
-    "suite_registered": any(r.strip() == "bash apps/web-platform/infra/run-registered-suites.sh" for r in runs)
-        and any("SOLEUR_INFRA_SHARD" in str(s.get("env", {}) or {}) for s in (job.get("steps") or [])),
+    "suite_registered": len(runner_steps) == 1
+        and "SOLEUR_INFRA_SHARD" in str(runner_steps[0].get("env", {}) or {}),
     "wf_path": ".github/workflows/inngest-host-state.yml" in pr_paths,
     "script_path": "scripts/inngest-host-state.sh" in pr_paths,
 }

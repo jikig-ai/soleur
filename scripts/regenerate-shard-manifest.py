@@ -21,13 +21,15 @@ generated artifact that lands on every sibling PR.
 INPUT
 -----
 `suite-timings-scripts-N` artifacts from one CI run for --group light
-(`suite-timings.tsv` rows: `label<TAB>ms[<TAB>verdict|tmp_delta]`), or
-`suite-timings-scripts-heavy-N` for --group heavy. Boundary rows, skipped rows, and
-FAIL/KILLED/TRIPWIRE verdicts are excluded — a suite that did not finish carries a
-partial timing that would skew the balance. Each group's artifact pattern is
-exclusive: light legs never read heavy artifacts and vice versa, because the
-registered-label sets are disjoint (want_scripts vs want_scripts_heavy) and a
-wrong-group row would fail the ⊆ lint while consuming leg weight for nothing.
+(`suite-timings.tsv` rows: `label<TAB>ms[<TAB>verdict|tmp_delta]`),
+`suite-timings-scripts-heavy-N` for --group heavy, or `suite-timings-infra-N`
+for --group infra (the deploy-script-tests legs). Boundary rows, skipped rows,
+and FAIL/KILLED/TRIPWIRE verdicts are excluded — a suite that did not finish
+carries a partial timing that would skew the balance. Each group's artifact
+pattern is exclusive: light legs never read heavy artifacts and vice versa,
+because the registered-label sets are disjoint (want_scripts vs
+want_scripts_heavy) and a wrong-group row would fail the ⊆ lint while
+consuming leg weight for nothing.
 
 USAGE
 -----
@@ -35,6 +37,7 @@ USAGE
     python3 scripts/regenerate-shard-manifest.py                 # latest green main run, dry-run
     python3 scripts/regenerate-shard-manifest.py --timings-dir /tmp/timings --write
     python3 scripts/regenerate-shard-manifest.py --group heavy --run 35840517639 --write
+    python3 scripts/regenerate-shard-manifest.py --group infra --run 36060795570 --write
 
 Without --write: prints the predicted per-leg totals and the diff vs the incumbent
 manifest. With --write: rewrites the group's manifest deterministically (header +
@@ -93,15 +96,20 @@ def latest_green_main_run(workflow="ci.yml"):
     return int(out)
 
 
-def fetch_timings_from_run(run_id, artifact_re):
+def fetch_timings_from_run(run_id, artifact_re, expected_legs=None):
     """Return {label: ms} merged across the group's timing artifacts of RUN_ID."""
     arts = json.loads(gh([
-        "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts",
+        "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts?per_page=100",
         "--jq", "{artifacts: [.artifacts[] | {id: .id, name: .name}]}",
     ]))["artifacts"]
     names = [a for a in arts if artifact_re.match(a["name"])]
     if not names:
         die(f"run {run_id} has no {artifact_re.pattern} artifacts")
+    if expected_legs is not None and len(names) != expected_legs:
+        print(f"WARN: run {run_id} produced {len(names)} {artifact_re.pattern} "
+              f"artifact(s), expected {expected_legs} — a leg died before its "
+              f"feed write; that share of suites regresses to hash fallback in "
+              f"the regenerated manifest.", file=sys.stderr)
     merged = {}
     with tempfile.TemporaryDirectory() as td:
         for a in names:
@@ -115,7 +123,12 @@ def fetch_timings_from_run(run_id, artifact_re):
             with open(zpath, "wb") as f:
                 f.write(p.stdout)
             with zipfile.ZipFile(zpath) as z:
-                with z.open("suite-timings.tsv") as tf:
+                try:
+                    tf = z.open("suite-timings.tsv")
+                except KeyError:
+                    die(f"artifact {a['name']} (id {a['id']}) contains no "
+                        f"suite-timings.tsv — a leg uploaded a different shape")
+                with tf:
                     merge_tsv(io.TextIOWrapper(tf, encoding="utf-8"), merged,
                               source=a["name"])
     return merged
@@ -134,7 +147,9 @@ def fetch_timings_from_dir(d, artifact_re=None):
     # a local dir of arbitrary names (leg1/, leg2/) is not an artifact layout
     # and must merge whole rather than die on an empty filtered set.
     nested = matching if matching else nested_all
-    paths = sorted(nested + glob.glob(os.path.join(d, "*.tsv")))
+    # Flat files must be *timings*.tsv, not *.tsv — a stray notes.tsv in the
+    # dir would merge garbage labels or die on a bad ms field.
+    paths = sorted(nested + glob.glob(os.path.join(d, "*timings*.tsv")))
     if not paths:
         die(f"no suite-timings.tsv files found under {d}")
     for p in paths:
@@ -193,7 +208,9 @@ def registered_labels(group):
     env = {k: v for k, v in os.environ.items()
            if k not in ("SCRIPTS_SHARD", "TEST_GROUP",
                         "SOLEUR_SHARD_MANIFEST", "SOLEUR_SHARD_MANIFEST_HEAVY",
-                        "SOLEUR_INFRA_SHARD", "SOLEUR_INFRA_MANIFEST")}
+                        "SOLEUR_INFRA_SHARD", "SOLEUR_INFRA_MANIFEST",
+                        "SOLEUR_INFRA_DIR", "SOLEUR_INFRA_TIMINGS",
+                        "INFRA_ORPHAN_LIST")}
     if group == "infra":
         p = subprocess.run(
             ["bash", "apps/web-platform/infra/run-registered-suites.sh", "--enumerate"],
@@ -245,7 +262,7 @@ def render(legs, n, run_id, group):
     fname = {"light": "suite-shard-legs.tsv", "heavy": "suite-shard-legs-heavy.tsv",
              "infra": "suite-shard-legs.tsv"}[group]
     regen = {"light": "", "heavy": "--group heavy ", "infra": "--group infra "}[group]
-    runner = ("apps/web-platform/infra/run-registered-suites.sh `_shard_selects` equivalent"
+    runner = ("apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment"
               if group == "infra" else
               "scripts/test-all.sh `_shard_selects`")
     lines = [
@@ -300,7 +317,7 @@ def main():
     else:
         if run_id is None:
             run_id = latest_green_main_run(os.path.basename(workflow))
-        timings = fetch_timings_from_run(run_id, artifact_re)
+        timings = fetch_timings_from_run(run_id, artifact_re, expected_legs=n)
         src = f"run:{run_id}"
     if not timings:
         die(f"no usable suite timings from {src}")
@@ -316,7 +333,7 @@ def main():
               file=sys.stderr)
         del timings[label]
     if not timings:
-        die(f"no timed label is a registered scripts suite (source: {src})")
+        die(f"no timed label is a registered {group} suite (source: {src})")
 
     incumbent = read_incumbent(manifest_path)
     legs, loads = assign(timings, n, incumbent)
@@ -335,7 +352,10 @@ def main():
         print(f"vs incumbent: {moved} moved, {new} new, {gone} no longer timed")
 
     if args.write:
-        prov = (str(run_id) if run_id else
+        # Provenance follows the SOURCE the timings actually came from — a
+        # `--run` flag paired with `--timings-dir` must not stamp a run id on
+        # data that run never produced.
+        prov = (str(run_id) if not args.timings_dir and run_id else
                 f"local:{os.path.basename(os.path.abspath(args.timings_dir))}")
         with open(manifest_path, "w", encoding="utf-8") as f:
             f.write(render(legs, n, prov, args.group))

@@ -294,7 +294,7 @@ infra_parsed=$(wc -l < "$WORK/raw3" | tr -d ' ')
 # the only surface backed by a runner that actually EXECUTES its list, so its silent shrinkage is
 # the most consequential blind spot in the union. Absolute, hand-ratcheted, and deliberately not
 # derived from raw3 (that would be the floor deriving itself from its own subject).
-MIN_INFRA_DERIVED=90
+MIN_INFRA_DERIVED=135
 if (( infra_parsed < MIN_INFRA_DERIVED )); then
   echo "ERROR: surface 3 derived only ${infra_parsed} infra suites, below the floor of ${MIN_INFRA_DERIVED} -- run-registered-suites.sh's derivation has narrowed. This is invisible to the declared-vs-parsed check (both numbers shrink together) and to the totals (surface 5's subtraction absorbs exactly the dropped paths), so nothing else in this file can see it." >&2
   fails=$((fails + 1))
