@@ -780,6 +780,7 @@ jobs:
               -target=github_actions_secret.anthropic_api_key \
               -target=hcloud_firewall.web \
               -target=hcloud_firewall_attachment.web \
+              -target=hcloud_firewall_attachment.inngest \
               -target=doppler_secret.resend_receiving_api_key \
               -target=doppler_secret.cf_api_token_dns_edit \
               -target=betteruptime_heartbeat.web_zot_consumer \
@@ -1823,7 +1824,6 @@ jobs:
               -target='hcloud_volume_attachment.inngest_redis_luks' \
               -target='hcloud_server_network.inngest' \
               -target='hcloud_firewall.inngest' \
-              -target='hcloud_firewall_attachment.inngest' \
               -target='random_id.inngest_signing_key_dedicated' \
               -target='random_id.inngest_event_key_dedicated' \
               -target='random_password.inngest_redis_password_dedicated' \

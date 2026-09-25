@@ -26,8 +26,13 @@
 #     rotation that did NOT cascade to a host replace would fail inngest_server_replaced==1.)
 # This allow-set was DERIVED (2026-06, #6178) from the then-current web-2-recreate golden
 # fixture, which showed that a scoped `-replace` of an hcloud server touches EXACTLY
-# server + server_network + volume_attachment — hcloud_firewall_attachment.* (server_ids,
-# non-ForceNew) does NOT change, so it is DELIBERATELY absent from the allow-set.
+# server + server_network + volume_attachment. It then claimed hcloud_firewall_attachment.*
+# (server_ids, non-ForceNew) "does NOT change". That premise was FALSE for inngest: the attachment
+# kept the destroyed server's id after every replace, and host 167310350 ran with no firewall from
+# birth (#8754). Since #8754 the firewall binds through hcloud_server.inngest.firewall_ids, which
+# the replacement server carries at create, before first boot, so there is no attachment to plan
+# and none belongs in the allow-set. hcloud_firewall.inngest appears in the plan only as a no-op
+# dependency, which no counter below scores.
 # That fixture was removed with the web-2 dispatch sweep (#6575, 2026-07-20); the derivation
 # it justified is unchanged and is now pinned by this gate's OWN tests, which are the live
 # guarantee. Do not re-add a pointer to a deleted fixture.

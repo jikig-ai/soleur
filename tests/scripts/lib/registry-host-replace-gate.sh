@@ -17,10 +17,13 @@
 # in as a size update — WITHOUT it the guard would abort the very fix the incident needs):
 #   - hcloud_server_network.registry     (network.tf; server_id is ForceNew -> replace)
 #   - hcloud_volume_attachment.registry  (zot-registry.tf; server_id is ForceNew -> replace)
-#   - hcloud_firewall_attachment.registry (zot-registry.tf; server_ids update-in-place —
-#       INTENTIONAL deviation from inngest, which omits its firewall attachment. The registry
-#       has a real deny-all-public firewall to preserve; a -targeted dependent that is not
-#       re-planned would boot the new host WITHOUT the firewall on its public IP.)
+#   - hcloud_firewall_attachment.registry (zot-registry.tf; server_ids update-in-place. The
+#       registry has a real deny-all-public firewall to preserve; an attachment left untargeted
+#       keeps the destroyed server's id, and the new host runs WITHOUT the firewall. That is
+#       exactly what happened to inngest, whose replace omitted its attachment (#8754). Inngest
+#       now binds through hcloud_server.inngest.firewall_ids at create instead; moving the
+#       registry the same way, which would also close the attachment's after-first-boot window,
+#       is a follow-up recorded on #8754.)
 #   - hcloud_volume.registry             (the zot OCI store — MUST be preserved; permits ONLY
 #       an in-place size ["update"] or ["no-op"], NEVER delete/forget/replace)
 #   - doppler_secret.registry_betterstack_logs_token (#6244 — the isolated Better Stack Logs
