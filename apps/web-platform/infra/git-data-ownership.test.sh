@@ -17,7 +17,7 @@
 # authorized_keys under the TARGET USER's uid), so the acceptance row is shown able to fail.
 #
 # Run: bash apps/web-platform/infra/git-data-ownership.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -277,7 +277,25 @@ else
   cat > "$TMP/drive.sh" <<'DRV'
 set -u
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq openssh-server openssh-client git >/dev/null 2>&1 || { echo "FIXTURE_APT_FAILED"; exit 100; }
+# Bounded apt (#8744): Acquire::Retries=5 inside each call and a 3-attempt loop with
+# 10s/30s backoff around the pair. The pair sits inside `if` — a tested context — so a
+# failed update can never fall through into an install attempt that was skipped. Output
+# goes to a fixture log instead of /dev/null: on exhaustion its credential-scrubbed tail
+# (apt error text can embed proxy user:pass@host) prints BEFORE the marker, so the fleet
+# log says WHY instead of a bare rc=100. The host greps the marker with -qx, so it stays
+# a bare line. Tail and marker both go to stderr: docker demuxes stdout/stderr, so a
+# stdout marker would race a stderr tail and could land BEFORE the diagnostics it
+# follows (measured — a cross-stream write order is not preserved).
+_apt_log=/tmp/apt-fixture.log; : > "$_apt_log"
+_apt_ok=0
+for _apt_try in 1 2 3; do
+  if apt-get update -qq -o Acquire::Retries=5 >> "$_apt_log" 2>&1 \
+     && apt-get install -y -qq -o Acquire::Retries=5 openssh-server openssh-client git >> "$_apt_log" 2>&1; then
+    _apt_ok=1; break
+  fi
+  case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
+done
+[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo "FIXTURE_APT_FAILED" >&2; exit 100; }
 useradd -m -s "${GIT_SHELL:?}" git || exit 2
 mkdir -p /run/sshd /mnt/git-data/repositories /mnt/git-data/hooks
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k

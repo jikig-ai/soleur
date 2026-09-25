@@ -516,9 +516,9 @@ REGISTRY_PROBE_SH="$SCRIPT_DIR/inngest-registry-probe.sh"
 # irreversible recut, so a drifted bootstrap copy would measure a DIFFERENT question than the
 # cutover FSM's done-gate, silently, with both suites green.
 BOOTSTRAP_GQL_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
-fsm_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$TARGET" | head -1 || true)
-probe_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$REGISTRY_PROBE_SH" | head -1 || true)
-boot_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$BOOTSTRAP_GQL_SH" | head -1 || true)
+fsm_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$TARGET" | sed -n '1p' || true)
+probe_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$REGISTRY_PROBE_SH" | sed -n '1p' || true)
+boot_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$BOOTSTRAP_GQL_SH" | sed -n '1p' || true)
 if [[ -z "$fsm_q" || -z "$probe_q" || -z "$boot_q" ]]; then
   fail "could not extract FUNCTIONS_GQL_QUERY from all three files (fsm='$fsm_q' probe='$probe_q' bootstrap='$boot_q') — the drift pin is vacuous"
 elif [[ "$fsm_q" != "$probe_q" ]]; then
@@ -628,7 +628,7 @@ echo "TEST: #7228 the verify window fits under the unit's TimeoutStartSec"
 WINDOW_DEFAULT=$(grep -oE '^CUTOVER_VERIFY_WINDOW_S="\$\{CUTOVER_VERIFY_WINDOW_S:-[0-9]+\}"' "$TARGET" \
   | grep -oE '[0-9]+' | tail -1 || true)
 FLIP_UNIT="$SCRIPT_DIR/inngest-cutover-flip.service"
-UNIT_TIMEOUT=$(grep -oE '^TimeoutStartSec=[0-9]+' "$FLIP_UNIT" | grep -oE '[0-9]+' | head -1 || true)
+UNIT_TIMEOUT=$(grep -oE '^TimeoutStartSec=[0-9]+' "$FLIP_UNIT" | grep -oE '[0-9]+' | sed -n '1p' || true)
 if [[ -z "$UNIT_TIMEOUT" ]]; then
   fail "inngest-cutover-flip.service declares no TimeoutStartSec — the oneshot inherits the 90s default and will be killed mid-verify"
 elif [[ -z "$WINDOW_DEFAULT" ]]; then
@@ -641,7 +641,7 @@ fi
 
 echo "TEST: #7228 the verify window dominates inngest-server's --poll-interval"
 BOOTSTRAP_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
-POLL_INTERVAL=$(grep -oE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+POLL_INTERVAL=$(grep -oE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | sed -n '1p' || true)
 if [[ -z "$WINDOW_DEFAULT" || -z "$POLL_INTERVAL" ]]; then
   fail "could not extract both operands by shape (window='$WINDOW_DEFAULT' poll='$POLL_INTERVAL') — the pin is vacuous"
 elif [[ "$(grep -cE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH")" -eq 0 ]]; then
@@ -660,9 +660,9 @@ fi
 # already pinned for CUTOVER_VERIFY_WINDOW_S one line below it; the reasoning was not carried up.
 echo "TEST: #7228 the production probe URLs target the port the server actually binds"
 BOOTSTRAP_FOR_URL="$SCRIPT_DIR/inngest-bootstrap.sh"
-H_URL=$(grep -oE '^CUTOVER_HEALTH_URL="\$\{CUTOVER_HEALTH_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
-G_URL=$(grep -oE '^CUTOVER_GQL_URL="\$\{CUTOVER_GQL_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
-BIND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_FOR_URL" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+H_URL=$(grep -oE '^CUTOVER_HEALTH_URL="\$\{CUTOVER_HEALTH_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
+G_URL=$(grep -oE '^CUTOVER_GQL_URL="\$\{CUTOVER_GQL_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
+BIND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_FOR_URL" | grep -oE '[0-9]+' | sort -u | sed -n '1p' || true)
 if [[ -z "$H_URL" || -z "$G_URL" || -z "$BIND_PORT" ]]; then
   fail "could not extract both probe URLs and the bound port by shape (health='$H_URL' gql='$G_URL' port='$BIND_PORT') — this pin is vacuous"
 elif [[ "$H_URL" != "http://127.0.0.1:$BIND_PORT/health" ]]; then
@@ -811,7 +811,7 @@ UNGOVERNED=""
 while IFS= read -r v; do
   [[ -n "$v" ]] || continue
   case "$v" in CUTOVER_*|INNGEST_CUTOVER_*) continue ;; esac
-  if ! printf '%s\n' "$ASSIGNED_VARS" | grep -qxF "$v"; then
+  if ! printf '%s\n' "$ASSIGNED_VARS" | grep -cxF "$v" >/dev/null; then
     UNGOVERNED="$UNGOVERNED $v"
   fi
 done <<< "$CMD_POS_VARS"
@@ -823,13 +823,13 @@ echo "TEST: #7761 the gate's POSITION, its predicate, and its pre-trap-window sa
 # the STATE_FILE assignment (the FIRST seam read). Specified against STATE_FILE and not "after
 # read_flag": read_flag is only a DEFINITION and its seam is not evaluated until run_flip, so a gate
 # moved below it would still precede every deferred read and would stay green.
-SERVER_UNIT_LN="$(grep -nE '^readonly SERVER_UNIT=' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
-STATE_FILE_LN="$(grep -nE '^STATE_FILE=' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
+SERVER_UNIT_LN="$(grep -nE '^readonly SERVER_UNIT=' "$FLIP_SRC" | sed -n '1p' | cut -d: -f1 || true)"
+STATE_FILE_LN="$(grep -nE '^STATE_FILE=' "$FLIP_SRC" | sed -n '1p' | cut -d: -f1 || true)"
 # Anchored on the PREDICATE CONSTRUCT, not the bare flag name: a body-grep sees comments too, and
 # the script's own header documents this flag in prose. A bare-token anchor would resolve to that
 # header line — above `readonly SERVER_UNIT` — and fail a correctly-placed gate
 # (cq-assert-anchor-not-bare-token).
-GATE_LN="$(grep -nE '\$\{1:-\}.*--fixture-seams' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
+GATE_LN="$(grep -nE '\$\{1:-\}.*--fixture-seams' "$FLIP_SRC" | sed -n '1p' | cut -d: -f1 || true)"
 if [[ -n "$GATE_LN" && -n "$SERVER_UNIT_LN" && -n "$STATE_FILE_LN" \
       && "$GATE_LN" -gt "$SERVER_UNIT_LN" && "$GATE_LN" -lt "$STATE_FILE_LN" ]]; then
   pass "the gate sits between readonly SERVER_UNIT ($SERVER_UNIT_LN) and STATE_FILE ($STATE_FILE_LN), at $GATE_LN"
@@ -840,7 +840,7 @@ fi
 # exactly the writer this gate exists to exclude, and — if it were named CUTOVER_* — would put the
 # gate's own input inside the tripwire's derivation prefix, reddening it on its first green run.
 assert_contains "the gate's predicate reads positional argv, not the environment" \
-  "$(flip_src_nocomments | grep -F -- '--fixture-seams' | head -1 || true)" '${1:-}'
+  "$(flip_src_nocomments | grep -F -- '--fixture-seams' | sed -n '1p' || true)" '${1:-}'
 # The gate runs ~550 lines BEFORE `trap on_unexpected_exit ERR` is installed, so under
 # `set -Eeuo pipefail` any stray non-zero there is a SILENT death: no marker, no transition — the
 # one failure shape this FSM exists never to have. Pin the two constructs that would cause it.
@@ -1083,7 +1083,7 @@ UNIT_ENV="$(grep -E '^Environment=' "$UNIT_SRC" || true)"
 _env_seam_hits=0
 while IFS= read -r _s; do
   [[ -n "$_s" ]] || continue
-  if printf '%s\n' "$UNIT_ENV" | grep -qE "^Environment=${_s}="; then
+  if printf '%s\n' "$UNIT_ENV" | grep -cE "^Environment=${_s}=" >/dev/null; then
     _env_seam_hits=$((_env_seam_hits + 1))
     echo "    unit sets gated seam: ${_s}"
   fi
@@ -1105,7 +1105,7 @@ unset _s _env_seam_hits
 # that is unmeasured here and is not claimed.
 echo "TEST: #7761 the pinned Doppler CLI supports the flags the unit passes"
 CI_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
-PINNED_DOPPLER="$(grep -oE 'DOPPLER_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$CI_INNGEST" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+PINNED_DOPPLER="$(grep -oE 'DOPPLER_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$CI_INNGEST" 2>/dev/null | sed -n '1p' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
 DOPPLER_FLOOR="3.75.3"
 if [[ -n "$PINNED_DOPPLER" ]]; then
   pass "cloud-init-inngest.yml pins a Doppler CLI version (${PINNED_DOPPLER})"
@@ -1113,7 +1113,7 @@ else
   fail "could not read DOPPLER_VERSION out of cloud-init-inngest.yml — the coupling is unasserted"
 fi
 if [[ -n "$PINNED_DOPPLER" ]] \
-   && [[ "$(printf '%s\n%s\n' "$DOPPLER_FLOOR" "$PINNED_DOPPLER" | sort -V | head -1)" == "$DOPPLER_FLOOR" ]]; then
+   && [[ "$(printf '%s\n%s\n' "$DOPPLER_FLOOR" "$PINNED_DOPPLER" | sort -V | sed -n '1p')" == "$DOPPLER_FLOOR" ]]; then
   pass "pinned Doppler ${PINNED_DOPPLER} >= ${DOPPLER_FLOOR}, the version --only-secrets was measured on"
 else
   fail "pinned Doppler ${PINNED_DOPPLER:-<none>} is below ${DOPPLER_FLOOR} — the unit's --only-secrets bound may not parse"
@@ -1142,13 +1142,13 @@ fi
 # each tick (the noop-* reasons the S-block above already exercises); (c) the line is logged under
 # the `inngest-cutover-flip` tag Vector allowlists. This file does NOT edit the FSM — it is baked
 # into the host image — it only asserts what the FSM already emits.
-EMIT_JQ_KEYS="$(awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -oE "'\{[^']*\}'" | head -1 | tr -d "'{}" | tr ',' '\n' | sed -E 's/:.*$//; s/[[:space:]]//g' | sort | tr '\n' ' ' || true)"
+EMIT_JQ_KEYS="$(awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -oE "'\{[^']*\}'" | sed -n '1p' | tr -d "'{}" | tr ',' '\n' | sed -E 's/:.*$//; s/[[:space:]]//g' | sort | tr '\n' ' ' || true)"
 if [[ "$EMIT_JQ_KEYS" == *" flag "* || "$EMIT_JQ_KEYS" == "flag "* ]]; then
   pass "#8054 emit_state's jq program emits a top-level \`flag\` key (consumed by op=execute 2.0 E13); keys: ${EMIT_JQ_KEYS}"
 else
   fail "#8054 emit_state's jq program no longer emits \`flag\` — op=execute 2.0's E13 would refuse every dispatch as flag_unreadable; keys: ${EMIT_JQ_KEYS}"
 fi
-if awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -qE 'logger}" -t "\$LOG_TAG" "\$json"' \
+if awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -cE 'logger}" -t "\$LOG_TAG" "\$json"' >/dev/null \
    && grep -qE '^readonly LOG_TAG="inngest-cutover-flip"$' "$TARGET"; then
   pass "#8054 emit_state logs under LOG_TAG, and LOG_TAG is the literal inngest-cutover-flip (the tag vector.toml allowlists and 2.0 greps)"
 else

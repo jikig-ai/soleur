@@ -51,6 +51,13 @@
 #                  fixed a large false-positive class (removes more).
 #   1273 -> 1225   review round 3: +9 from the heredoc repair below, then -57 from clearing
 #                  `${TMPDIR:-/abs}`.
+#   2026-09-25   #8736 row moves (source edits, not detector): run-registered-suites.sh 3->5
+#                  (the shim's `$logdir/$key.{log,meta,trow}` writes arrive as argv `$2` and the
+#                  `rm -rf` targets `mktemp -d -p "$_SUITE_TMP_BASE"` -- a cross-scope root the
+#                  resolver cannot reach; `_TIMINGS_OUT` is validated `/*` at its binding in a
+#                  `[[ != /* ]]` form `_rel_guarded` deliberately does not read), its .test.sh
+#                  1->0 (the flagged site left with the removed `INFRA_WF` harness), and
+#                  test-all-killed-classification.test.sh 3->2 (a site retired by the merge).
 #
 #   isolated, against the shipped scanner:
 #     `-t` re-treated as a destination flag          +858 rows
@@ -189,8 +196,7 @@
 4	apps/web-platform/infra/resend-inbound-bootstrap.test.sh
 1	apps/web-platform/infra/resource-monitor.sh
 12	apps/web-platform/infra/resource-monitor.test.sh
-3	apps/web-platform/infra/run-registered-suites.sh
-1	apps/web-platform/infra/run-registered-suites.test.sh
+5	apps/web-platform/infra/run-registered-suites.sh
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 1	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
@@ -400,7 +406,7 @@
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-group-affected.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh
-3	scripts/test-all-killed-classification.test.sh
+2	scripts/test-all-killed-classification.test.sh
 1	scripts/test-all-runtime-ceiling.test.sh
 2	scripts/test-all.sh
 5	scripts/test-contention.test.sh

@@ -76,7 +76,7 @@ GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
 EXPECTED_INPUTS=(server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh webhook.service)
 
 mapfile -t DERIVED_INPUTS < <(
-  sed -n 's/^for f in \(.*\); do$/\1/p' "$GUARD" | head -1 | tr ' ' '\n' | sed '/^$/d'
+  sed -n 's/^for f in \(.*\); do$/\1/p' "$GUARD" | sed -n '1p' | tr ' ' '\n' | sed '/^$/d'
 )
 if [[ "${DERIVED_INPUTS[*]-}" != "${EXPECTED_INPUTS[*]}" ]]; then
   echo "FATAL: the guard's preflight input list has drifted." >&2
@@ -286,7 +286,7 @@ expect_red() {
   mutations_run=$((mutations_run + 1))
   if run_guard; then
     no "$label: guard still PASSED with the invariant broken -- it cannot detect this"
-  elif grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
+  elif grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor'. Either it failed for an unrelated reason
@@ -872,7 +872,7 @@ expect_probe_red() {
   probe_reds=$((probe_reds + 1))
   if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
     no "$label: guard still PASSED with the hygiene rule broken -- the check asserts nothing"
-  elif grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
+  elif grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor' -- unrelated reason. Output: $(<"$OUT")"
@@ -1200,7 +1200,7 @@ _g2_json_row() { # <label> <json> <expect: red|green> <anchor>
   if run_guard; then
     if [[ "$want" == green ]]; then ok "$label: guard stayed GREEN"
     else no "$label: guard still PASSED -- a .tf.json connection block is invisible to it"; fi
-  elif [[ "$want" == red ]] && grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
+  elif [[ "$want" == red ]] && grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: unexpected verdict (want $want, anchor '$anchor'). Output: $(<"$OUT")"
