@@ -355,8 +355,11 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
 // as "View `index` not found in the model." with nothing saying why. The route
 // explains it through the existing diagnostics channel.
 describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => {
+  // #8739: the open editor reloads itself on a Concierge save, so the
+  // canonical-folder copy no longer tells the user to reload. The OTHER_DIR
+  // copy keeps the clause — an out-of-app export emits no event the page hears.
   const CANONICAL_COPY =
-    "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, ask the Concierge to re-render this diagram, then reload the page.";
+    "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, ask the Concierge to re-render this diagram.";
   const OTHER_DIR_COPY =
     "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, re-run the diagram export for this folder in your repository, then reload the page.";
   const CANONICAL_MODEL_PATH = `knowledge-base/${C4_DIAGRAMS_DIR}/model.likec4.json`;

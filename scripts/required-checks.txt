@@ -160,7 +160,7 @@ rule-body-lint
 # contract + /go golden-path eval. Always-runs; installs Grok CLI on ubuntu-latest.
 grok-fidelity
 
-# #4384 — legal-doc-cross-document-gate.yml jobs.enforce. Always-runs (no
+# #4384 — pr-quality-guards.yml jobs.enforce (folded from legal-doc-cross-document-gate.yml, #8902). Always-runs (no
 # path filter post-#4384) — synthetic needed for bot PRs only.
 enforce
 # #5585 — tenant-integration.yml jobs.tenant-integration-required. Always-run

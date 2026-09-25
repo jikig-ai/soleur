@@ -13,15 +13,23 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 
 const mocks = vi.hoisted(() => ({
   writeC4Diagram: vi.fn(),
+  reportSilentFallback: vi.fn(),
 }));
 
 vi.mock("@/server/c4-writer", () => ({
   writeC4Diagram: mocks.writeC4Diagram,
 }));
 
+// #8739: the tool handler mirrors a throwing notify callback via
+// reportSilentFallback. Mocked so the mirror is assertable.
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mocks.reportSilentFallback,
+}));
+
 import {
   buildC4ConciergeTools,
   EDIT_C4_DIAGRAM_TOOL,
+  type BuildC4ConciergeToolsOpts,
 } from "@/server/c4-concierge-tools";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -37,8 +45,8 @@ const opts = {
   workspacePath: "/ws/user-1",
 };
 
-function handler(): ToolHandler {
-  const tools = buildC4ConciergeTools(opts) as unknown as Array<{
+function handlerWith(extra: Partial<BuildC4ConciergeToolsOpts> = {}): ToolHandler {
+  const tools = buildC4ConciergeTools({ ...opts, ...extra }) as unknown as Array<{
     name: string;
     handler: ToolHandler;
   }>;
@@ -47,7 +55,14 @@ function handler(): ToolHandler {
   return t.handler;
 }
 
-beforeEach(() => mocks.writeC4Diagram.mockReset());
+function handler(): ToolHandler {
+  return handlerWith();
+}
+
+beforeEach(() => {
+  mocks.writeC4Diagram.mockReset();
+  mocks.reportSilentFallback.mockReset();
+});
 
 describe("buildC4ConciergeTools", () => {
   it("registers the edit_c4_diagram tool", () => {
@@ -153,6 +168,108 @@ describe("buildC4ConciergeTools", () => {
     });
     expect(mocks.writeC4Diagram).toHaveBeenCalledTimes(1);
     expect(res.isError).toBeUndefined();
+  });
+
+  // #8739 — the dispatcher wires onDiagramSaved to a c4_diagram_saved WS
+  // frame so an open editor reloads itself after a Concierge save.
+  it("fires opts.onDiagramSaved once on a successful write, with the dirname — not the file", async () => {
+    const onDiagramSaved = vi.fn();
+    mocks.writeC4Diagram.mockResolvedValue({
+      ok: true,
+      commitSha: "abc123",
+      rerendered: true,
+    });
+    const res = await handlerWith({ onDiagramSaved })({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+    expect(res.isError).toBeUndefined();
+    expect(onDiagramSaved).toHaveBeenCalledTimes(1);
+    expect(onDiagramSaved).toHaveBeenCalledWith({
+      dirPath: "engineering/architecture/diagrams",
+      rerendered: true,
+      diagnostic: null,
+    });
+  });
+
+  it("passes a non-rerendered save's diagnostic through to onDiagramSaved", async () => {
+    const onDiagramSaved = vi.fn();
+    mocks.writeC4Diagram.mockResolvedValue({
+      ok: true,
+      commitSha: null,
+      rerendered: false,
+      rerenderDiagnostic: "diagram not updated: superseded",
+    });
+    await handlerWith({ onDiagramSaved })({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+    expect(onDiagramSaved).toHaveBeenCalledWith({
+      dirPath: "engineering/architecture/diagrams",
+      rerendered: false,
+      diagnostic: "diagram not updated: superseded",
+    });
+  });
+
+  it("does NOT fire onDiagramSaved on a failed write", async () => {
+    const onDiagramSaved = vi.fn();
+    mocks.writeC4Diagram.mockResolvedValue({
+      ok: false,
+      status: 400,
+      error: "Path is not a writable diagram source",
+      code: "OUT_OF_SCOPE",
+    });
+    const res = await handlerWith({ onDiagramSaved })({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "x",
+    });
+    expect(res.isError).toBe(true);
+    expect(onDiagramSaved).not.toHaveBeenCalled();
+  });
+
+  // A `.md` view-embed save never re-renders, so emitting `rerendered:true`
+  // for it would clear a stale banner while the rendered model still predates
+  // the `.c4` source — silent staleness with no race required.
+  it("does NOT fire onDiagramSaved for a `.md` save (no re-render happened)", async () => {
+    const onDiagramSaved = vi.fn();
+    mocks.writeC4Diagram.mockResolvedValue({
+      ok: true,
+      commitSha: "def456",
+      rerendered: true,
+    });
+    const res = await handlerWith({ onDiagramSaved })({
+      relativePath: "engineering/architecture/diagrams/c4-model.md",
+      content: "# Model\n",
+    });
+    expect(res.isError).toBeUndefined();
+    expect(onDiagramSaved).not.toHaveBeenCalled();
+  });
+
+  it("a throwing onDiagramSaved cannot break the tool response, and mirrors to Sentry", async () => {
+    const onDiagramSaved = vi.fn(() => {
+      throw new Error("socket send blew up");
+    });
+    mocks.writeC4Diagram.mockResolvedValue({
+      ok: true,
+      commitSha: "abc123",
+      rerendered: true,
+    });
+    const res = await handlerWith({ onDiagramSaved })({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+    expect(res.isError).toBeUndefined();
+    const payload = JSON.parse(res.content[0].text);
+    expect(payload).toMatchObject({ ok: true, rerendered: true });
+    await vi.waitFor(() =>
+      expect(mocks.reportSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({
+          feature: "c4-concierge-tools",
+          op: "diagram-saved-notify",
+        }),
+      ),
+    );
   });
 
   it("AC9 — the Concierge tool module never references the c4-edit flag (structural independence)", async () => {
