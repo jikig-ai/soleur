@@ -6,7 +6,9 @@
 //      categories.
 //   2. End-to-end run-scan.sh aggregator produces deterministic verdicts.
 //   3. Calibration corpus check: 0% HIGH-RISK + <5% REVIEW on
-//      plugins/soleur/skills/**/SKILL.md.
+//      plugins/soleur/skills/**/SKILL.md. The pre-commit hook narrows it to the
+//      staged SKILL.md files via SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE; CI ignores
+//      that variable and always scans the full corpus.
 //
 // Run with: `bun test plugins/soleur/test/skill-security-scan.test.ts`
 //
@@ -16,7 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 const REPO_ROOT = (() => {
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf-8" });
@@ -289,7 +291,14 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
     return out;
   }
 
-  const skills = discoverFirstPartySkills();
+  const all = discoverFirstPartySkills();
+  // Set only by lefthook's plugin-component-test (newline-separated staged plugin .md paths).
+  // CI is never scoped: the required checks own the full corpus.
+  const scopeRaw = process.env.SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE;
+  const scoped = scopeRaw !== undefined && !process.env.CI;
+  const staged = new Set((scopeRaw ?? "").split("\n").map((l) => l.trim()).filter(Boolean));
+  const skills = scoped ? all.filter((abs) => staged.has(relative(REPO_ROOT, abs))) : all;
+  console.log(`[skill-security-scan calibration] ${scoped ? "scoped" : "full"} ${skills.length}/${all.length}`);
 
   // Calibration over ~70 skills × ~5 categories/skill is slow; cache results
   // across both tests by running once and asserting both invariants.
@@ -303,7 +312,8 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
     return corpusResults;
   }
 
-  test(
+  // A scoped run with no staged SKILL.md (agent or references/ edit) skips visibly.
+  test.skipIf(scoped && skills.length === 0)(
     "0% of first-party SKILL.md emit HIGH-RISK",
     () => {
       const results = runCorpus();
@@ -322,7 +332,8 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
     180000,
   );
 
-  test(
+  // The REVIEW ratio is a corpus property; only an unscoped (CI) run can measure it.
+  test.skipIf(scoped)(
     "<5% of first-party SKILL.md emit REVIEW",
     () => {
       const results = runCorpus();

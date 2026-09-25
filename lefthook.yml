@@ -375,6 +375,10 @@ pre-commit:
     plugin-component-test:
       priority: 7
       glob: "plugins/soleur/**/*.md"
+      # The scope variable limits skill-security-scan's calibration to the staged SKILL.md files:
+      # a verdict is a function of one SKILL.md, and the whole-corpus rescan was 116 s of this
+      # hook's 176 s on a one-bullet edit (measured 2026-09-25). An agent or references/ edit
+      # stages no SKILL.md, so the calibration tests skip. CI ignores the variable (CI=true).
       # The `unset` is the fix for #7833 and is load-bearing. In a LINKED WORKTREE — which every
       # feature branch here is — git exports GIT_DIR and GIT_INDEX_FILE to its hooks as ABSOLUTE
       # paths, and a `git` subprocess honours them over both its working directory and `-C`. A
@@ -385,7 +389,7 @@ pre-commit:
       # the hazard is worktree-only, but not because a clone exports nothing.
       # scripts/test-all.sh (above) already carries the same unset internally; this is the second
       # test runner in this file and it had none.
-      run: unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH && bun test plugins/soleur/test/
+      run: unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH && SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE="$(printf '%s\n' {staged_files})" bun test plugins/soleur/test/
     terraform-fmt:
       priority: 8
       glob: "apps/*/infra/*.tf"
