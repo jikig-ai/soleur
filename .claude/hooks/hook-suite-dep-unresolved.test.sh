@@ -2,7 +2,7 @@
 # A hook suite that cannot run must never report green (#8616).
 #
 # Editing this checker? Re-run the Guard Contract mutation rows in the #8616 plan
-# (knowledge-base/project/plans/*-test-hook-suite-missing-dep-not-green-plan.md, §Guard Contract).
+# (knowledge-base/project/plans/archive/*-test-hook-suite-missing-dep-not-green-plan.md, §Guard Contract).
 #
 # ---------------------------------------------------------------------------------------
 # THE TAXONOMY (the single home for it; each converted guard's message is self-describing)
