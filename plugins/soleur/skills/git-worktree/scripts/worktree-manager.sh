@@ -3393,7 +3393,9 @@ cleanup_merged_worktrees() {
     # `error: branch 'X' not found`. On a customer CLI the terminal is the only sink, so
     # discarding git's own words costs the operator the one diagnostic they had (AP-021).
     local _branch_err _branch_rc
-    _branch_err=$(git branch -D "$branch" 2>&1); _branch_rc=$?
+    # `if` (not `; _branch_rc=$?`): under `set -e` a failed `git branch -D` aborts
+    # before the read, which is exactly the failure this block exists to report.
+    if _branch_err=$(git branch -D "$branch" 2>&1); then _branch_rc=0; else _branch_rc=$?; fi
     if [[ "$_branch_rc" -ne 0 ]]; then
       # The remote ref is already gone at this point, so say so rather than printing a line
       # that reads as "nothing was lost".

@@ -196,7 +196,7 @@ else pass; fi
 if grep -qF -- "timeout-minutes" "$OUT"; then pass; else
   fail "R1d the failure arm does not name the timeout ambiguity, so the reader is left with the same undiscriminated verdict #7902 had to reconstruct from the API"
 fi
-# R1e — test-scripts is a 3-leg MATRIX rollup, so "the job log" is not one log.
+# R1e — test-scripts is a MATRIX rollup, so "the job log" is not one log.
 run_body "$BODY" success success failure push
 if grep -qF -- "matrix" "$OUT"; then pass; else
   fail "R1e the test-scripts failure message points at a single job log, but test-scripts is a matrix rollup — that log does not exist"

@@ -386,12 +386,12 @@ in_range && SOLEUR_SHARD_MANIFEST=off row "ROW4" "$RUNNER" \
   RED "every leg claims every registration (union right, multiset wrong)"
 
 # --- Row 5: ci.yml leg count disagrees with N -------------------------------------------------
-# Five legs whose values still say /6: leg 6's suites run nowhere and all surviving legs are
+# Six legs whose values still say /7: leg 7's suites run nowhere and all surviving legs are
 # green. A count-based read of the matrix cannot see this.
 in_range && row "ROW5" "$CI_YML" \
-  '        shard: ["1/6", "2/6", "3/6", "4/6", "5/6", "6/6"]' \
-  '        shard: ["1/6", "2/6", "3/6", "4/6", "5/6"]' \
-  RED "ci.yml declares 5 legs while the partition computes mod 6"
+  '        shard: ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"]' \
+  '        shard: ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7"]' \
+  RED "ci.yml declares 6 legs while the partition computes mod 7"
 
 # --- Row 5b: the HEAVY job's leg count disagrees with N ----------------------------------------
 # Same defect shape one job down: the test-scripts-heavy matrix is its own literal, and the
@@ -660,7 +660,7 @@ in_range && hfrow "M8" "$WORK/hmanifest-phantom.tsv" GREEN \
 
 # M9: a header-only heavy table engages manifest mode (n matches) but puts
 # NOTHING on the table, so all three labels hash — {3,2,2} — and leg 1 starves.
-# Unlike the light group (489 labels cannot starve six legs), at n=3 over 3
+# Unlike the light group (~502 labels cannot starve seven legs), at n=3 over 3
 # labels the zero-assignment refusal is reachable through stale data: the
 # starved leg must fail closed rather than report zero-work green. The guard
 # going RED here is the refusal outranking totality, and it is the property

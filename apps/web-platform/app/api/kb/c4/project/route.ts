@@ -6,13 +6,19 @@ import {
 } from "@/server/workspace-resolver";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { githubApiGet, GitHubApiError } from "@/server/github-api";
-import { reportSilentFallback } from "@/server/observability";
+import { kbGithubUrlPath } from "@/server/kb-github-path";
+import { mirrorWarnWithDebounce, reportSilentFallback } from "@/server/observability";
 import {
   C4_DIAGRAMS_DIR,
   C4_SOURCE_EXT,
   C4_MODEL_JSON,
   MAX_C4_BYTES,
 } from "@/lib/c4-constants";
+import {
+  c4ModelCounts,
+  MODEL_LEVEL_LINE,
+  type Diagnostic,
+} from "@/lib/c4-model-shape";
 import logger from "@/server/logger";
 
 export const runtime = "nodejs";
@@ -24,6 +30,41 @@ type GitBlob = { content: string; encoding: string; size?: number };
  * GitHub-read failure so the caller can map it to a 413 (model) or skip it
  * (best-effort source) rather than a 503. */
 class BlobTooLargeError extends Error {}
+
+/** Longest `dir` accepted. Real KB folders are a few segments deep. */
+const MAX_DIR_LENGTH = 256;
+/** Characters that re-enter URL syntax: `%` (a pre-encoded `%2e%2e` is
+ *  resolved as `..` by the URL parser), `\\`, `?` and `#`. Defence in depth:
+ *  the per-segment encoding in `kbGithubUrlPath` already neutralises each,
+ *  so this only refuses early (at the cost of folder names containing `%`). */
+const DIR_URL_META = /[%\\?#]/;
+
+/** The `dir` query value as the GitHub path under `knowledge-base/`, or null
+ *  when it is not a plain KB-relative folder. The shared per-segment guard
+ *  (`kbGithubUrlPath`: dot/empty segments, control characters, per-segment
+ *  encoding) plus a stricter refusal of URL-meta characters and a shorter
+ *  length cap for a folder name. A blocklist rather than an allowlist so
+ *  folders with spaces or non-ASCII names keep working. */
+function toGithubDir(requestedDir: string): string | null {
+  if (DIR_URL_META.test(requestedDir)) return null;
+  return kbGithubUrlPath(requestedDir, MAX_DIR_LENGTH);
+}
+
+// #8740: a committed model with elements but no views renders as "View `index`
+// not found in the model." with no explanation. Zero views means the layout
+// step failed, never that the source caused it (ADR-050: a successful layout
+// always emits `index`); the source itself is not validated here, so the copy
+// claims only that. Inside the Concierge-writable folder a Concierge re-render
+// (a `.c4` edit) fixes it; elsewhere the Concierge cannot write, so the copy
+// points at the export. "re-render this diagram" is the phrase the Concierge
+// prompt addendum keys on. "then reload the page" stays until #8739 reloads
+// the workspace after a Concierge edit.
+const ZERO_VIEW_PREFIX =
+  "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, ";
+const ZERO_VIEW_DIAGNOSTIC =
+  ZERO_VIEW_PREFIX + "ask the Concierge to re-render this diagram, then reload the page.";
+const ZERO_VIEW_DIAGNOSTIC_OTHER_DIR =
+  ZERO_VIEW_PREFIX + "re-run the diagram export for this folder in your repository, then reload the page.";
 
 function isGitHub404(err: unknown): boolean {
   return err instanceof GitHubApiError && err.statusCode === 404;
@@ -117,17 +158,9 @@ export async function GET(request: Request) {
   // longer reads the on-disk clone, so we must NOT gate on clone filesystem
   // state (`isPathInWorkspace` against `kbRoot`) — a legitimately-shared dir can
   // be absent from a stale/empty local clone and would false-negative 400. A
-  // pure-string guard is both sufficient and correct: reject traversal (`..`),
-  // NUL, backslash, a leading slash, and the URL-meta chars (`?`/`#`) that would
-  // otherwise inject GitHub query params (e.g. `?ref=`) or truncate the path.
-  if (
-    requestedDir.includes("\0") ||
-    requestedDir.includes("..") ||
-    requestedDir.includes("\\") ||
-    requestedDir.includes("?") ||
-    requestedDir.includes("#") ||
-    requestedDir.startsWith("/")
-  ) {
+  // pure-string guard is both sufficient and correct (see `toGithubDir`).
+  const githubDir = toGithubDir(requestedDir);
+  if (githubDir === null) {
     return NextResponse.json({ error: "Invalid dir" }, { status: 400 });
   }
 
@@ -153,7 +186,6 @@ export async function GET(request: Request) {
   }
 
   const installationId = repoMeta.githubInstallationId;
-  const githubDir = `knowledge-base/${requestedDir}`;
   const userLog = renameUserIdToHash({ userId: user.id });
 
   try {
@@ -214,11 +246,45 @@ export async function GET(request: Request) {
         { status: 502 },
       );
     }
-    const views = (dump as { views?: unknown }).views;
+    const views =
+      dump && typeof dump === "object"
+        ? (dump as { views?: unknown }).views
+        : undefined;
     const viewIds =
       views && typeof views === "object" && !Array.isArray(views)
         ? Object.keys(views)
         : [];
+
+    // Count elements only when there are no views: the common, healthy model
+    // skips the `Object.keys(elements)` pass.
+    const elementCount = viewIds.length === 0 ? c4ModelCounts(dump).elements : 0;
+    let diagnostics: Diagnostic[] = [];
+    if (elementCount > 0) {
+      diagnostics = [
+        {
+          message:
+            requestedDir === C4_DIAGRAMS_DIR
+              ? ZERO_VIEW_DIAGNOSTIC
+              : ZERO_VIEW_DIAGNOSTIC_OTHER_DIR,
+          line: MODEL_LEVEL_LINE,
+          sourceFsPath: C4_MODEL_JSON,
+        },
+      ];
+      // Debounced per workspace + model: every page load re-reads the model.
+      // `err = null` keeps the tags (#8629). The key is GitHub's canonical
+      // path, so `dir` spellings cannot fan out past the debounce.
+      mirrorWarnWithDebounce(
+        null,
+        {
+          feature: "c4-project-read",
+          op: "zero-view-model",
+          message: "c4 project read: committed model has elements but no views",
+          extra: { ...userLog, dir: requestedDir, modelPath: modelEntry.path, elementCount },
+        },
+        `${activeWorkspaceId}:${modelEntry.path}`,
+        "c4-project-read:zero-view-model",
+      );
+    }
 
     // 3. Raw `.c4` editor sources PLUS the directory index README (exact
     //    `README.md` match — NOT a blanket `.md` — so the `c4-model.md`
@@ -254,7 +320,7 @@ export async function GET(request: Request) {
     for (const kv of fetched) if (kv) sources[kv[0]] = kv[1];
 
     return NextResponse.json(
-      { dir: requestedDir, sources, dump, viewIds, diagnostics: [] },
+      { dir: requestedDir, sources, dump, viewIds, diagnostics },
       { status: 200, headers: { "Cache-Control": "private, no-cache" } },
     );
   } catch (error) {

@@ -337,6 +337,39 @@ describe("POST /api/kb/upload", () => {
     expect(res.status).toBe(400);
   });
 
+  // 5b. Traversal the filesystem check cannot see (the mocked check PASSES):
+  // fetch's URL parser resolves `%2e%2e` as `..` and turns `\` into `/`.
+  test.each(["x/%2e%2e/%2e%2e", "x/.%2E", "x/./y", "x//y", "/x", "x/"])(
+    "returns 400 with zero GitHub calls for targetDir %j",
+    async (targetDir) => {
+      setupFullMocks();
+
+      const formData = createFormData(makeTestFile(), targetDir);
+      const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+      expect(res.status).toBe(400);
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    },
+  );
+
+  // 5c. A backslash or URL-meta character is sent as a literal name, never
+  // interpreted as a separator, query or fragment.
+  test("encodes each targetDir segment into the GitHub URL", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile(), "a\\..\\b/c?ref=main#x");
+    await POST(createRequest(formData, "https://app.soleur.ai"));
+    const urls = [
+      ...mockGithubApiGet.mock.calls.map((c) => c[1] as string),
+      ...mockGithubApiPost.mock.calls.map((c) => c[1] as string),
+    ];
+    expect(urls.length).toBeGreaterThan(0);
+    for (const u of urls) {
+      expect(u.startsWith("/repos/test-owner/test-repo/contents/knowledge-base/a%5C..%5Cb/c%3Fref%3Dmain%23x/")).toBe(true);
+      expect(u).not.toMatch(/[?#\\]/);
+    }
+  });
+
   // 6. Null byte
   test("returns 400 for null byte in targetDir", async () => {
     setupFullMocks();

@@ -51,7 +51,7 @@ echo ""
 
 # The declared N — same job-block scoping as scripts-shard-manifest.test.sh.
 CI_N="$(awk -v j='^  test-scripts:' '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML" \
-  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)"
+  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)" || true
 if [[ "$CI_N" =~ ^[0123456789]+$ ]] && (( 10#$CI_N >= 2 )); then
   check pass "ci.yml test-scripts matrix declares N=$CI_N"
 else
@@ -229,7 +229,7 @@ fi
 # (warned) — a light label in the heavy table would red the ⊆ lint while
 # consuming leg weight for nothing.
 CI_N_H="$(awk -v j='^  test-scripts-heavy:' '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML" \
-  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)"
+  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)" || true
 if [[ "$CI_N_H" =~ ^[0123456789]+$ ]] && (( 10#$CI_N_H >= 1 )); then
   check pass "ci.yml test-scripts-heavy matrix declares N=$CI_N_H"
 else
