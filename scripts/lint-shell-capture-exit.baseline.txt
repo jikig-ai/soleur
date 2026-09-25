@@ -110,6 +110,7 @@ apps/web-platform/infra/resource-monitor.test.sh	S1	[[ -f "$mock_dir/curl_args" 
 apps/web-platform/infra/tunnel-origin-relative-ingress.test.sh	S1	[[ -n "$rules" ]] && rule_count=$(printf '%s\n' "$rules" | grep -c '|')
 apps/web-platform/scripts/check-tc-document-sha.sh	S1	CANONICAL_TC_VERSION=$(grep -oE 'TC_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' "$LITERAL_FILE_TC" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
 apps/web-platform/scripts/check-tc-document-sha.sh	S1	SEED_VERSION=$(grep -oE '^TC_VERSION="[^"]+"' "$seed" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+apps/web-platform/scripts/dev-ledger-parity.test.sh	S4	[[ "$(units)" == "1" && ! -s "$BREACH" ]] && [[ "$(grep -c '^=== unit argv:' "$PAYLOAD" || true)" == "1" ]]
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	S1	body="$(grep -vE '^[[:space:]]*#' "$h")"
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	S1	digests="$(grep -oE '^FROM node:22-slim@sha256:[0-9a-f]{64}' "$DOCKERFILE" | sed 's/^FROM //')"
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	S1	uniq_n="$(printf '%s\n' "$digests" | grep -v '^$' | sort -u | wc -l)"
@@ -195,6 +196,7 @@ tests/scripts/test-destroy-guard-regex-parity.sh	S1	halt_line=$(grep -nF "$HALT_
 tests/scripts/test-destroy-guard-regex-parity.sh	S1	sum_line=$(grep -nF "$SUM_PATTERN" "$WF" | head -1 | cut -d: -f1)
 tests/scripts/test-kb-drift-walker.sh	S1	fields_missing=$(printf '%s' "$OUT" | grep -oE '"kind":"[^"]+","source_path":"[^"]+","target":"[^"]+","source_ref":"(link|anchor)-[0-9a-f]{16}"' | wc -l | tr -d '[:space:]')
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	[[ -n "$hits" ]] && n=$(grep -c '' <<<"$hits")
+tests/scripts/test-preapply-entrypoint-gate.sh	S1	_calls() { local n=0; [[ -s "$CALLLOG" ]] && n=$(grep -c '' <"$CALLLOG"); echo "$n"; }
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	local code; code="$(grep -vE '^[[:space:]]*#' <<<"$block")"
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	n=$(grep -c '' <<<"$types")
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	types=$(grep -E '^#[[:space:]]+[0-9]+\.[[:space:]]+cloudflare_' "$jq_file" | grep -oE 'cloudflare_[a-z_]+' | sort -u)
