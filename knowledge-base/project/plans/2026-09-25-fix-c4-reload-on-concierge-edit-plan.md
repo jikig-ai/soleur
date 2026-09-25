@@ -14,6 +14,17 @@ lane: cross-domain
 
 # fix(c4): reload the diagram and clear the stale banner when a Concierge edit_c4_diagram completes for the open folder
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25. **Inputs folded:** deepen-plan halt gates (4.6 user-brand, 4.7 observability, 4.8 PAT-shape, 4.9 UI-wireframe, 4.10 encryption, 4.11 guard-contract — see dispositions below), the sharp-edges verification pass, and two sibling learnings (`2026-05-20-happy-dom-ws-fetch-blockade` + the archived #8695 plan's deepen findings on `reportSilentFallback` arg shape and `onSaved` arity). The agent-fan-out phases (research/review sub-agents) were not available in this pipeline context; every deterministic gate and the standing per-mechanism/negative-claim checks were run inline instead. `Reviewed-Coverage: sequential-fallback` — no independent multi-agent review ran.
+
+### Key findings folded in
+
+1. **`reportSilentFallback` arg shape** (from the sibling #8695 plan's deepen row): the pino mirror captures a passed `Error` first and Sentry drops the tagged second capture (#8629). The emit-failure mirror therefore passes `err = null` with a fixed message + `extra`, not a real `Error`.
+2. **happy-dom test isolation** (`2026-05-20-happy-dom-ws-fetch-blockade`): `useC4Project` issues a real relative-path `fetch` under happy-dom — the component test MUST stub `globalThis.fetch` (file-level reassignment composes after the setup-file blockade) or it attempts a real loopback connect and flakes on full-suite runs.
+3. **`onSaved` arity convention:** `toHaveBeenCalledWith(false)` compares ALL args — when there is no diagnostic the callback is invoked with one arg; mirror that in the new tests.
+4. **Wireframe-gate exemption** recorded explicitly in Domain Review (copy/non-visual precedent from the archived #8695 plan).
+
 ## Overview
 
 In the C4 diagram editor (`apps/web-platform/components/kb/c4-workspace.tsx`), a Concierge `edit_c4_diagram` tool call that finishes while the editor is open changes nothing on screen: the workspace has no listener for Concierge tool results, the precomputed diagram (`useC4Project`) is not refetched, and a stale-save banner (when showing) keeps its old reason even after the Concierge edit re-rendered successfully (#8739, deferred out of the #8695/#8696 plan).
@@ -99,7 +110,9 @@ opts.onDiagramSaved?.({
 });
 ```
 
-`cc-dispatcher.ts` passes `onDiagramSaved` that wraps `defaultSendToClient` and mirrors a thrown emit via `reportSilentFallback` (`feature: "cc-dispatcher", op: "c4-saved-notify"`). A `false` return from `sendToClient` (no live socket) is benign — no open page can be stale when no client is connected.
+wrapped in try/catch so a notify throw can never break the tool response; the catch mirrors via `reportSilentFallback(null, …)` imported dynamically (`await import("@/server/observability")`) — `c4-concierge-tools.ts` keeps `server-only` modules out of its static graph so vitest can load it (same reason `writeC4Diagram` is dynamically imported).
+
+`cc-dispatcher.ts` passes `onDiagramSaved` that wraps `defaultSendToClient` and mirrors a thrown emit via `reportSilentFallback(null, { feature: "cc-dispatcher", op: "c4-saved-notify", extra: { dirPath } })` — **`null` first arg, never a real `Error`**: the pino mirror captures a passed Error first as `feature=pino-mirror` and Sentry drops the tagged second capture (#8629, folded in at deepen from the #8695 plan). A `false` return from `sendToClient` (no live socket) is benign — no open page can be stale when no client is connected.
 
 Client bridge in `ws-client.ts` onmessage:
 
@@ -249,11 +262,13 @@ discoverability_test:
 **Decision:** auto-accepted (pipeline)
 **Agents invoked:** none — Task-subagent spawn is unavailable in this pipeline context; the assessment was performed inline. No new interactive surface, copy is strictly a removal of a stale instruction.
 **Skipped specialists:** none required at advisory tier
-**Pencil available:** N/A (no UI surface)
+**Pencil available:** N/A (no UI surface) — non-visual exemption, see wireframe decision below
 
 #### Findings
 
 The user-visible delta is positive honesty: the diagram refreshes on its own and the stale banner reflects Concierge saves with the same semantics as Code-panel saves.
+
+**Wireframe gate decision (`wg-ui-feature-requires-pen-wireframe`): exempt — non-visual plumbing, precedent: the archived #8695/#8696 plan (`knowledge-base/project/plans/archive/20260924-191244-2026-09-24-fix-c4-stale-banner-diagnostic-and-likec4-bwrap-sandbox-plan.md`, "exempt — copy-only").** `ui-surface-terms.md` §Excluded covers changes with no structural/layout delta. This change adds an event listener + `staleSave` state plumbing to `c4-workspace.tsx` and REUSES the existing `C4Diagnostics` banner unchanged — same element, same classes, same `stale` show condition; no new element, interaction, state surface, route, modal or layout ships. The `.tsx` file matches the mechanical glob only because it hosts the listener. Explicit override naming the surface shipped without a new wireframe: **the `c4_diagram_saved` listener + `staleSave` transition inside `C4Workspace` (`components/kb/c4-workspace.tsx`); no rendered markup changes**. If a reviewer rejects the exemption, the fallback is `soleur:product:design:ux-design-lead` producing a `c4-concierge-edit-reload` Pencil file under `knowledge-base/product/design/kb-viewer/` (before/after: stale banner present → cleared on Concierge save) before `soleur:work` Phase 1.
 
 ## Test Scenarios
 
@@ -280,6 +295,9 @@ The user-visible delta is positive honesty: the diagram refreshes on its own and
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6 — it is filled above.
 - The listener must live in `C4Workspace`, not inside the concierge window — the panel unmounts on collapse while an in-flight turn can still complete.
 - `dirPath` is derived with `slice(0, lastIndexOf("/"))`, not hardcoded to `C4_DIAGRAMS_DIR`, so the payload stays honest if `isC4DiagramPath` ever widens.
+- Do NOT pass a real `Error` to `reportSilentFallback` on the new emit path: the pino mirror captures it first and Sentry drops the tagged capture (#8629). Pass `null` + a fixed message + `extra`.
+- The `c4-workspace.test.tsx` additions MUST stub `globalThis.fetch` (or `vi.mock` the fetch layer): happy-dom ships a real `fetch`/`WebSocket` and `useC4Project` hits `/api/kb/c4/project` on mount — an unmocked mount flakes with `ECONNREFUSED 127.0.0.1:3000` on full-suite runs (`2026-05-20-happy-dom-ws-fetch-blockade`).
+- `toHaveBeenCalledWith` compares ALL args: assert `onDiagramSaved`-shaped calls with the exact arg list the handler emits (one object arg).
 
 ## References & Research
 
@@ -287,3 +305,5 @@ The user-visible delta is positive honesty: the diagram refreshes on its own and
 - Prior art: #8695 (stale-banner semantics), #8696 (render hardening), PR #8853 (zero-view diagnostic copy), #2138 (raw tool names withheld), #3242 (no structured tool name on the wire), #3374 (precedent: emit a WS frame for in-band client reaction)
 - ADR-025 (WS lifecycle-notice family), ADR-059 (replay buffer; frame excluded)
 - Files: `components/kb/c4-workspace.tsx`, `components/kb/c4-shared.tsx` (`useC4Project`), `server/c4-concierge-tools.ts`, `server/cc-dispatcher.ts`, `server/ws-handler.ts` (`sendToClient`), `lib/{types,ws-known-types,ws-zod-schemas,ws-client}.ts`, `app/api/kb/c4/project/route.ts`
+- Sibling plan (same surface, deferral origin): `knowledge-base/project/plans/archive/20260924-191244-2026-09-24-fix-c4-stale-banner-diagnostic-and-likec4-bwrap-sandbox-plan.md`
+- Learnings: `2026-05-20-happy-dom-ws-fetch-blockade.md` (test fetch/WS blockade), `2026-05-05-kb-chat-continuing-banner-h1-h5-residual-races.md` (residual-race context for WS-driven UI state)
