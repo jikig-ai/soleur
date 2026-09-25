@@ -149,6 +149,24 @@ run_guard() {
   echo $?
 }
 
+# show_failures <log> <rc>: the guard's FAIL lines, or, when it printed none, a statement that it
+# CRASHED (rc, signal) plus where its log ends. The log lives under $WORK and is gone once the
+# battery exits, so these lines are all a reader ever sees. Display only, and it always returns 0:
+# a bare `return` after the old `| head -5` display handed that pipeline's status to the callers'
+# `|| die` (#8664). grep stops itself at 5 matches and sed reads to EOF, so no reader exits early.
+show_failures() {
+  local log="$1" rc="$2" sig=""
+  if grep -qE '^  FAIL' "$log" 2>/dev/null; then
+    grep -m5 -E '^  FAIL' "$log" | sed 's/^/               /'
+  else
+    (( rc > 128 )) && sig=" = SIG$(kill -l $((rc - 128)) 2>/dev/null)"
+    echo "               (no FAIL line: the guard CRASHED rc=${rc}${sig}, it did not assert. Its log ends:)"
+    tail -3 "$log" 2>/dev/null | sed 's/^/               | /'
+  fi
+  return 0
+}
+FAILED_ROWS=()
+
 # --- Baseline: the guard must be GREEN on an unmutated tree ------------------------------
 # Without this, every case below could be passing for a reason unrelated to its mutation.
 BASE_LOG="$WORK/baseline.log"
@@ -156,12 +174,55 @@ BASE_RC="$(run_guard "$PRISTINE" "$BASE_LOG")"
 if [[ "$BASE_RC" != "0" ]]; then
   echo "HARNESS ABORT: the guard is not green on an UNMUTATED sandbox (rc=$BASE_RC)." >&2
   echo "Every mutation case below would report RED for a reason that is not its mutation." >&2
-  grep -E '^  FAIL|^=== Results' "$BASE_LOG" >&2 | head -20
+  show_failures "$BASE_LOG" "$BASE_RC" >&2
   exit 2
 fi
 echo "=== Guard 1 (#7462) mutation battery ==="
 echo "baseline: guard GREEN on unmutated sandbox ($(grep -oE '[0-9]+/[0-9]+ passed' "$BASE_LOG" | sed -n '1p'))"
 echo ""
+
+# failed_on <log> <expected> — 0 iff some `  FAIL`-prefixed line of <log> contains <expected>.
+# The single verdict chokepoint for case_mutate's named-assertion check.
+# Capture, then match in bash — NO PIPE. A reader that stops at its first match leaves the
+# producer writing into a closed pipe; under load the producer takes SIGPIPE, pipefail reports
+# the pipeline failed, and a row that WAS killed on its named assertion scores MISROUTED (#8664).
+# The empty-string guard matters because a glob on "" matches anything. grep rc 1 is "no FAIL
+# lines" (a normal not-found); rc >= 2 is an unreadable log, which is a harness failure.
+failed_on() {
+  local log="$1" expect="$2" fails rc
+  [[ -n "$expect" ]] || die "failed_on: empty expected string"
+  fails="$(grep -E '^  FAIL' "$log")"; rc=$?
+  (( rc > 1 )) && die "failed_on: could not read $log (grep rc=$rc)"
+  [[ "$fails" == *"$expect"* ]]
+}
+
+# Scorer self-test (#8664). A row's verdict must be a function of its log's bytes, never of how
+# the machine scheduled the processes reading them. The fixture puts the needle FIRST and ~1 MiB
+# of FAIL output AFTER it, which is the shape an early-exit reader cannot survive: the output
+# still to be written after the match is what the old piped scorer lost on: 2.1% of runs on a
+# real 5 KB log under load, and every run on this fixture. The PASS line carries `  FAIL` (two
+# spaces, as assert() prints it) so a scorer that loses its `^` anchor or its FAIL scope is caught.
+SELFTEST_LOG="$WORK/scorer-selftest.log"
+awk 'BEGIN {
+  print "  PASS: SELFTEST-ONLY-ON-PASS would  FAIL if unscoped"
+  print "  FAIL: SELFTEST-TARGET"
+  pad = sprintf("%040d", 0); gsub(/0/, "y", pad)
+  for (i = 0; i < 20000; i++) printf "  FAIL: filler %06d %s\n", i, pad
+}' > "$SELFTEST_LOG" || die "scorer self-test: could not write its fixture"
+[[ "$(sed -n 2p "$SELFTEST_LOG")" == "  FAIL: SELFTEST-TARGET" ]] \
+  || die "scorer self-test: the needle is not line 2 of its fixture, so the probe tests nothing"
+(( $(grep -c '^  FAIL: filler' "$SELFTEST_LOG") >= 20000 )) \
+  || die "scorer self-test: the fixture lost its FAIL filler after the needle, so the probe tests nothing"
+failed_on "$SELFTEST_LOG" SELFTEST-TARGET \
+  || die "scorer self-test: a FAIL line followed by 1 MiB of FAIL output scored NOT found. failed_on must read the whole log (capture, then glob-match); no pipe into an early-exit reader (#8664)"
+failed_on "$SELFTEST_LOG" SELFTEST-ONLY-ON-PASS \
+  && die "scorer self-test: a string present only on a PASS line scored found. failed_on lost its '^  FAIL' scope"
+# Its two harness aborts must stay aborts, never a silent verdict: an empty needle (a glob on ""
+# matches anything) and an unreadable log (grep rc 2) each exit 2.
+_st_rc=0; ( failed_on "$SELFTEST_LOG" "" ) >/dev/null 2>&1 || _st_rc=$?
+[[ "$_st_rc" == "2" ]] || die "scorer self-test: an empty expected string did not abort (rc=$_st_rc)"
+_st_rc=0; ( failed_on "$WORK/no-such-case.log" SELFTEST-TARGET ) >/dev/null 2>&1 || _st_rc=$?
+[[ "$_st_rc" == "2" ]] || die "scorer self-test: an unreadable log did not abort (rc=$_st_rc)"
 
 # case <id> <expected-failing-assertion-substring> <file-to-mutate> <python-mutator>
 #
@@ -191,7 +252,7 @@ case_mutate() {
   local rc; rc="$(run_guard "$dir/$INFRA_REL" "$log")"
 
   if [[ "$rc" == "0" ]]; then
-    FAIL=$((FAIL + 1))
+    FAIL=$((FAIL + 1)); FAILED_ROWS+=("$id")
     echo "  SURVIVED: $id — the guard stayed GREEN under this mutation."
     echo "            Two readings, and one of them must be recorded before this ships:"
     echo "            (a) the guard's fixtures do not exercise the property — fix the FIXTURES;"
@@ -202,13 +263,13 @@ case_mutate() {
   # unscoped grep matched the PASS line of the very assertion the row claims went RED — 7 of 9
   # rows passed with their named assertion neutered to `true`, and one was misrouting on the
   # unmutated tree. The row's contract is "THIS assertion failed", not "the guard exited 1".
-  if ! grep -E '^  FAIL' "$log" | grep -cF "$expect" >/dev/null; then
-    FAIL=$((FAIL + 1))
+  if ! failed_on "$log" "$expect"; then
+    FAIL=$((FAIL + 1)); FAILED_ROWS+=("$id")
     echo "  MISROUTED: $id — the guard went RED, but NOT on the assertion this row targets."
     echo "             expected a failure naming: $expect"
-    echo "             actual failures:"
-    grep -E '^  FAIL' "$log" | head -5 | sed 's/^/               /'
-    return
+    echo "             actual failures (guard rc=$rc):"
+    show_failures "$log" "$rc"
+    return 0
   fi
   # A G4 row is scored against an EXECUTED harness, so "the named G4 assertion failed" is also
   # what an unrelated crash looks like: a mutant that stops the rendered item parsing, or kills a
@@ -224,7 +285,7 @@ case_mutate() {
       grep -qF "  PASS: $_live" "$log" || _dead="${_dead:+$_dead; }liveness row did not PASS: $_live"
     done
     if [[ -n "$_dead" ]]; then
-      FAIL=$((FAIL + 1))
+      FAIL=$((FAIL + 1)); FAILED_ROWS+=("$id")
       echo "  UNRESOLVED: $id — RED, but the harness was not live, so the RED proves nothing."
       echo "             $_dead"
       return
@@ -232,6 +293,8 @@ case_mutate() {
   fi
   PASS=$((PASS + 1))
   echo "  KILLED:   $id — RED on \"$expect\""
+  # A scored row's ~16 MB tree copy is no longer needed; keep only the failing ones to inspect.
+  rm -rf "$dir" "$before"
 }
 
 # ---------------------------------------------------------------------------------------
@@ -489,7 +552,7 @@ TOTAL=$((TOTAL + 1))
 if [[ "$G1_PROBE_RC" -eq 2 ]]; then
   PASS=$((PASS + 1)); echo "  KILLED:   g1-row13-harness-probe — an unlanded mutation ABORTS (rc=2)"
 else
-  FAIL=$((FAIL + 1)); echo "  SURVIVED: g1-row13-harness-probe — an unlanded mutation did not abort (rc=$G1_PROBE_RC)"
+  FAIL=$((FAIL + 1)); FAILED_ROWS+=("g1-row13-harness-probe"); echo "  SURVIVED: g1-row13-harness-probe — an unlanded mutation did not abort (rc=$G1_PROBE_RC)"
 fi
 
 # =======================================================================================
@@ -603,20 +666,22 @@ case_must_pass() {
   local log="$WORK/case-$id.log"
   local rc; rc="$(run_guard "$dir/$INFRA_REL" "$log")"
   if [[ "$rc" != "0" ]]; then
-    FAIL=$((FAIL + 1))
-    echo "  BROKE:    $id — a non-canonical but COMPLIANT input went RED (rc=$rc); the guard is over-fitted:"
-    grep -E '^  FAIL' "$log" | head -5 | sed 's/^/               /'
-    return
+    FAIL=$((FAIL + 1)); FAILED_ROWS+=("$id")
+    echo "  BROKE:    $id — a non-canonical but COMPLIANT input went RED (rc=$rc). FAIL lines mean the"
+    echo "            guard is over-fitted; a crash means a defect in the guard's own plumbing:"
+    show_failures "$log" "$rc"
+    return 0
   fi
   PASS=$((PASS + 1))
   echo "  HELD:     $id — compliant non-canonical input stays GREEN"
+  rm -rf "$dir" "$before"
 }
 # POSITIVE CONTROL for case_must_pass itself. Both must-PASS rows below reported HELD
 # unconditionally at review: the helper owns its own verdict, so neutering it is invisible to
 # TOTAL, to PASS/FAIL conservation and to BATTERY_MIN_ROWS alike. These rows are the only ones
 # asserting the guard is not OVER-fitted, so an unbacked HELD is the whole over-fit axis going
 # dark. Drive it with an input that MUST red the guard and require it to say BROKE.
-_mp_f=$FAIL
+_mp_f=$FAIL; _mp_n=${#FAILED_ROWS[@]}
 case_must_pass ng1-harness-mustpass-can-report-broke "$SRC" "$NG1_PY"'
 save(rep(RELOAD, ""))
 ' >/dev/null
@@ -624,7 +689,7 @@ if [[ "$FAIL" -ne $((_mp_f + 1)) ]]; then
   printf '[FATAL] harness: case_must_pass did not flag an input that reds the guard — every HELD above is unbacked\n' >&2
   exit 1
 fi
-FAIL=$_mp_f; TOTAL=$((TOTAL - 1))
+FAIL=$_mp_f; TOTAL=$((TOTAL - 1)); FAILED_ROWS=("${FAILED_ROWS[@]:0:_mp_n}")
 echo "  HARNESS:  case_must_pass can report BROKE (positive control)"
 
 # (i) Two unrelated runcmd items reordered ahead of the call, and blank lines inserted.
@@ -695,11 +760,14 @@ NG1_HARN_OUT="$( SANDBOX_ROOT="$NG1_HARN_ROOT"; case_mutate ng1-harness-row1-sel
   || die "NIC-G1 harness: the row-1 case aborted under the neutered guard"
 TOTAL=$((TOTAL + 1))
 if [[ "$NG1_HARN_OUT" == *"KILLED:"* ]]; then
-  FAIL=$((FAIL + 1))
+  FAIL=$((FAIL + 1)); FAILED_ROWS+=("ng1-harness-row1-self-compare")
   echo "  SURVIVED: ng1-harness-row1-self-compare — row 1 still reports KILLED with the order comparison neutered"
 else
   PASS=$((PASS + 1))
-  echo "  KILLED:   ng1-harness-row1-self-compare — neutering the order comparison flips row 1 off KILLED ($(printf '%s' "$NG1_HARN_OUT" | grep -oE 'SURVIVED|MISROUTED' | sed -n '1p'))"
+  # The inner verdict is printed lowercase: this line is a PASS, and an uppercase MISROUTED here
+  # is what a `grep MISROUTED` over a run log matched when #8664 named the wrong row.
+  _ng1_inner=misrouted; [[ "$NG1_HARN_OUT" == *"SURVIVED:"* ]] && _ng1_inner=survived
+  echo "  KILLED:   ng1-harness-row1-self-compare — neutering the order comparison flips row 1 off KILLED (inner row: $_ng1_inner)"
 fi
 
 # =======================================================================================
@@ -752,6 +820,52 @@ save(rep(EXIT, "        ( exit \"$zot_rc\" ) || true\n"))
 case_must_pass g4-row7a-bare-subshell-is-equivalent-under-set-e "$SRC" "$G4_PY"'
 save(rep(EXIT, "        ( exit \"$zot_rc\" )\n"))
 '
+# One property (#8664): the guard's Guard 1b arm splitter must survive a producer that is still
+# writing when the splitter stops reading. ~160 KB of no-op CODE lines (not comments, which the
+# splitter's comment filter drops) after the pull item's `docker create` is output still to be
+# written when the splitter exits at the missed arm's closing `fi`, which must exceed the 64 KiB
+# pipe buffer. A producer pipe there dies on every run with no FAIL line (SIGPIPE 141, or EPIPE
+# exit 4 where SIGPIPE is ignored). Anchored on the full code line: the first `docker create
+# --name …` in the file is a comment. Identical lines keep the compressed user_data small.
+G1B_PAD_PY='
+import sys
+p=sys.argv[1]; s=open(p).read()
+a="    docker create --name soleur-inngest-bootstrap-extract \"$IREF\"\n"
+assert s.count(a)==1, "docker create anchor not found exactly once"
+pad=("    : pad %s\n" % ("x"*58))*2400
+assert len(pad) >= 131072, "pad no longer exceeds twice the 64 KiB pipe buffer"
+assert not any(l.lstrip().startswith("#") for l in pad.splitlines()), "a comment pad is dropped before the pipe"
+open(p,"w").write(s.replace(a, a+pad, 1))
+'
+case_must_pass g1b-mustpass-padded-pull-item "$SRC" "$G1B_PAD_PY"
+# POSITIVE CONTROL for that row: with the pre-#8664 piped splitter restored in a sandbox copy of
+# the guard, the same padded tree must come back BROKE as a crash. Without this, shrinking the pad
+# or making it comments would leave the row HELD against the defect it exists to catch.
+G1B_HARN_ROOT="$WORK/harness-g1b"
+rm -rf "$G1B_HARN_ROOT"
+cp -a "$SANDBOX_ROOT" "$G1B_HARN_ROOT" || die "g1b harness: could not copy sandbox"
+cp "$G1B_HARN_ROOT/$INFRA_REL/$GUARD" "$WORK/harness-g1b.before" || die "g1b harness: could not back up the guard"
+python3 -c '
+import sys
+p=sys.argv[1]; s=open(p).read()
+a="awk -v Z=\"$ARM_ZOT\" -v F=\"$ARM_FB\" \x27\n  /^[[:space:]]*#/ { next }\n"
+b="  arm == \"f\" { print > F }\n\x27 \"$DED_BLOCK_FILE\"\n"
+assert s.count(a)==1 and s.count(b)==1, "splitter anchors not found exactly once"
+s=s.replace(a, "sed -E \x27/^[[:space:]]*#/d\x27 \"$DED_BLOCK_FILE\" | awk -v Z=\"$ARM_ZOT\" -v F=\"$ARM_FB\" \x27\n", 1)
+s=s.replace(b, "  arm == \"f\" { print > F }\n\x27\n", 1)
+open(p,"w").write(s)
+' "$G1B_HARN_ROOT/$INFRA_REL/$GUARD" || die "g1b harness: the pre-#8664 splitter did not apply — the control tested NOTHING"
+diff -q "$WORK/harness-g1b.before" "$G1B_HARN_ROOT/$INFRA_REL/$GUARD" >/dev/null 2>&1 \
+  && die "g1b harness: the splitter revert did not change the guard — the control tested NOTHING"
+G1B_HARN_OUT="$( SANDBOX_ROOT="$G1B_HARN_ROOT"; case_must_pass g1b-harness-piped-splitter-breaks "$SRC" "$G1B_PAD_PY" )" \
+  || die "g1b harness: the control case aborted"
+if [[ "$G1B_HARN_OUT" != *"BROKE:"* || "$G1B_HARN_OUT" != *"CRASHED"* ]]; then
+  printf '[FATAL] harness: the padded row did not break the pre-#8664 piped splitter as a crash — g1b-mustpass-padded-pull-item is unbacked\n' >&2
+  printf '%s\n' "$G1B_HARN_OUT" >&2
+  exit 1
+fi
+rm -rf "$G1B_HARN_ROOT"
+echo "  HARNESS:  the padded row breaks the pre-#8664 piped splitter (positive control)"
 # Phone-home-fails row: without `|| true`, a failing phone-home aborts the item under set -e
 # BEFORE the Sentry emit — the boot still dies, but silently on the channel that pages.
 case_mutate g4-phfail-phone-home-unguarded "G4 phone-home-fails: the Sentry emit inngest_pull_fatal fatal still runs" "$SRC" "$G4_PY"'
@@ -803,7 +917,7 @@ if [[ "$G4_SYNTAX_OUT" == *"UNRESOLVED:"* && "$G4_SYNTAX_OUT" != *"KILLED:"* ]];
   PASS=$((PASS + 1))
   echo "  KILLED:   g4-harness-syntax-error-not-killed — a parse-breaking mutant is scored UNRESOLVED, not KILLED"
 else
-  FAIL=$((FAIL + 1))
+  FAIL=$((FAIL + 1)); FAILED_ROWS+=("g4-harness-syntax-error-not-killed")
   echo "  SURVIVED: g4-harness-syntax-error-not-killed — a parse-breaking mutant was not scored UNRESOLVED:"
   printf '%s\n' "$G4_SYNTAX_OUT" | head -3 | sed 's/^/               /'
 fi
@@ -817,7 +931,8 @@ fi
 # must-PASS row (the bare-subshell equivalence under set -e).
 # 55 -> 60 (#8036 1d review): +2 retry rows (deleted, timeout retried), +2 pull-spelling rows
 # (Row1, G4 hit), +1 harness row (a parse-breaking mutant is UNRESOLVED, not KILLED).
-BATTERY_MIN_ROWS=60
+# 60 -> 61 (#8664): +1 must-PASS padded-pull-item row.
+BATTERY_MIN_ROWS=61
 if (( TOTAL < BATTERY_MIN_ROWS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d. A row was deleted or its dispatch line removed.\n' "$TOTAL" "$BATTERY_MIN_ROWS" >&2
   exit 1
@@ -827,6 +942,7 @@ echo ""
 echo "=== Results: $PASS/$TOTAL mutants killed ==="
 if (( FAIL > 0 )); then
   echo "FAIL: $FAIL mutant(s) survived or misrouted — the guard does not pin what it claims."
+  echo "      failing rows: ${FAILED_ROWS[*]}"
   exit 1
 fi
 echo "OK"
