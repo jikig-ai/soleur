@@ -6,6 +6,10 @@
 // `PAGES_OPERATOR` (lib/failure-reason.ts) marks `true`, filtering on the
 // `feature`, `op` and `reason` tags this module sets.
 //
+// COVERAGE: only spawns that reach `persistFailure` are reported. A run that
+// fails past its retries, hits the `finish` timeout or is cancelled never gets
+// here and pages no one — tracked in #8803 (no `onFailure` handler yet).
+//
 // MESSAGE PATH ON PURPOSE — do not pass the Error through "for a stack trace". On
 // the Error path, `reportSilentFallback` logs first, the pino mirror
 // (server/logger.ts `mirrorToSentry`) captures the SAME Error instance as
