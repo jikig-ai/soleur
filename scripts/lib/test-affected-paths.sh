@@ -158,6 +158,8 @@ ALWAYS_ON_SUITES=(
   "scripts/guard-vacuity-floor"
   "scripts/ensure-kb-index"
   "plugins/soleur/test/kb-caches-untracked.test.sh"
+  # (#8846) census of every tracked inngest probe-row reader over git ls-files.
+  "scripts/lib/inngest-probe-row.test.sh"
   "scripts/check-pa-22-unit"
   "scripts/check-tom4-rls-posture"
   "scripts/tenant-dpa-register-guard-unit"

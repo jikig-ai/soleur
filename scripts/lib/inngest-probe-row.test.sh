@@ -29,6 +29,19 @@ passes=0
 pass() { passes=$((passes + 1)); echo "[ok] $1"; }
 fail() { fails=$((fails + 1)); echo "[FAIL] $1" >&2; }
 
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
+# the verbatim body; see plugins/soleur/test/test-helpers.sh).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # Instrument self-test: drive both helpers once, require both counters to move, then reset.
 pass "instrument self-test (pass arm)" >/dev/null
 fail "instrument self-test (fail arm)" 2>/dev/null
@@ -211,10 +224,10 @@ mk_tree() { # -> tree root; seeds the allowlisted files plus one compliant reade
 }
 tree_list() { (cd "$1" && find . -type f | sed 's|^\./||' | sort) > "$1.list"; printf '%s\n' "$1.list"; }
 
-T="$(mk_tree)"; L="$(tree_list "$T")"
+T="$(mk_tree)"; assert_fixture_dir "$T"; L="$(tree_list "$T")"
 if [[ -z "$(census "$T" "$L")" ]]; then pass "census control: compliant fixture tree is clean"; else fail "census control tree not clean: $(census "$T" "$L")"; fi
 
-T="$(mk_tree)"
+T="$(mk_tree)"; assert_fixture_dir "$T"
 printf 'bash scripts/betterstack-query.sh --grep %s | tail -1\n' "$MARKER_LIT" > "$T/scripts/zz-new-reader.sh"
 L="$(tree_list "$T")"
 if grep -qx 'UNCLASSIFIED scripts/zz-new-reader.sh' <<<"$(census "$T" "$L")"; then
@@ -223,7 +236,7 @@ else
   fail "census missed a new raw reader"
 fi
 
-T="$(mk_tree)"
+T="$(mk_tree)"; assert_fixture_dir "$T"
 printf '. scripts/lib/inngest-probe-row.sh; inngest_probe_row_selftest; jq -r .message | grep -F %s\n' "$MARKER_LIT" > "$T/scripts/selftest-only.sh"
 L="$(tree_list "$T")"
 if grep -qx 'UNCLASSIFIED scripts/selftest-only.sh' <<<"$(census "$T" "$L")"; then
@@ -232,7 +245,7 @@ else
   fail "census accepted inngest_probe_row_selftest as a use of the def"
 fi
 
-T="$(mk_tree)"
+T="$(mk_tree)"; assert_fixture_dir "$T"
 printf '# inngest_probe_row is mentioned only in this comment\ngrep -F %s\n' "$MARKER_LIT" > "$T/scripts/comment-only.sh"
 L="$(tree_list "$T")"
 if grep -qx 'UNCLASSIFIED scripts/comment-only.sh' <<<"$(census "$T" "$L")"; then
@@ -241,7 +254,7 @@ else
   fail "census accepted a comment mention as a use of the def"
 fi
 
-T="$(mk_tree)"
+T="$(mk_tree)"; assert_fixture_dir "$T"
 rm -f "$T/scripts/test-all.sh"
 L="$(tree_list "$T")"
 if grep -qx 'STALE scripts/test-all.sh' <<<"$(census "$T" "$L")"; then
@@ -250,7 +263,7 @@ else
   fail "census missed a stale allowlist entry"
 fi
 
-T="$(mk_tree)"
+T="$(mk_tree)"; assert_fixture_dir "$T"
 mkdir -p "$T/.github/workflows"
 # shellcheck disable=SC2016
 printf '          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-host-dark-gate.sh"\n          # %s\n' "$MARKER_LIT" > "$T/.github/workflows/apply.yml"
