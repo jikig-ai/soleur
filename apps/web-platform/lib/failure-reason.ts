@@ -9,9 +9,13 @@
 // dependency.
 //
 // Adding a failure_reason: extend the union, add a PAGES_OPERATOR row below
-// (`tsc` refuses a missing one), and when the row is `true` add the reason to
-// the `in` list of sentry_alert.spawn_agent_dead_letter in
-// infra/sentry/issue-alerts.tf. Then add the copy row in failure-reason-copy.ts.
+// (`tsc` refuses a missing one), and when the row is `true` also (1) add the
+// reason to the `in` list of sentry_alert.spawn_agent_dead_letter in
+// infra/sentry/issue-alerts.tf, (2) update PINNED_PAGED_REASONS in
+// test/sentry-spawn-dead-letter-alert-op-contract.test.ts, and (3) regenerate
+// infra/sentry/alert-reference.json (infra/sentry/README.md, "Adding or editing a
+// rule"). Then add the copy row in failure-reason-copy.ts — copy that promises a
+// notification requires a `true` row here.
 
 export type FailureReason =
   // PR-A failure reasons.
@@ -46,7 +50,8 @@ export type FailureReason =
  * failure is a defect on our side, OR when the founder's copy promises the CTO
  * was notified (test/sentry-spawn-dead-letter-alert-op-contract.test.ts refuses
  * a promising row that is `false`). Cost breakers already notify the founder;
- * transient and founder-actionable reasons stay quiet.
+ * transient and founder-actionable reasons are reported at warning level and
+ * page no one (server/spawn-dead-letter.ts).
  */
 export const PAGES_OPERATOR: Record<FailureReason, boolean> = {
   // The GitHub side effect landed but our action_sends write failed.
@@ -57,7 +62,7 @@ export const PAGES_OPERATOR: Record<FailureReason, boolean> = {
   leader_class_disabled: true,
   // A systematic refusal on one class is a prompt defect. Copy promises a notification.
   leader_refused: true,
-  // A non-end_turn/tool_use stop: our token budget or prompt is wrong for the class.
+  // A non-end_turn/tool_use/refusal stop: our token budget or prompt is wrong for the class.
   leader_response_truncated: true,
   // The prompt and the tool surface disagree. Copy promises a notification.
   leader_tool_invalid: true,

@@ -44,10 +44,12 @@ const allTf = readdirSync(sentryDir)
   .map((f) => readFileSync(join(sentryDir, f), "utf8"))
   .join("\n");
 
-// Comment lines are STRIPPED before any match, so a commented-out filter, trigger or
-// action cannot satisfy the assertion that it is live.
+// Comments are STRIPPED before any match — whole-line `#`/`//` and `/* … */`
+// blocks — so a commented-out filter, trigger or action cannot satisfy the
+// assertion that it is live.
 const stripComments = (s: string) =>
   s
+    .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
     .filter((l) => !/^\s*(#|\/\/)/.test(l))
     .join("\n");
@@ -58,6 +60,15 @@ function ruleBlock(): string {
   );
   if (!m) throw new Error("fixture: spawn_agent_dead_letter resource block not found");
   return m[0];
+}
+
+/** Every `tagged_event` condition's key, in any attribute order. */
+function taggedEventKeys(): string[] {
+  return [...ruleBlock().matchAll(/tagged_event\s*=\s*\{([^}]*)\}/g)].map((m) => {
+    const key = m[1].match(/\bkey\s*=\s*"([^"]+)"/);
+    if (!key) throw new Error(`fixture: a tagged_event without a key: ${m[0]}`);
+    return key[1];
+  });
 }
 
 /** Every `tagged_event` filter on `key`, anchored on the HCL key so a comment cannot satisfy it. */
@@ -88,6 +99,10 @@ describe("spawn_agent_dead_letter — emitter/rule contract (#8719)", () => {
     expect(fromDecision).toEqual(PINNED_PAGED_REASONS);
   });
 
+  it("has exactly three tag conditions — feature, op, reason — and nothing else ANDed in", () => {
+    expect(taggedEventKeys().sort()).toEqual(["feature", "op", "reason"]);
+  });
+
   it("filters on feature and op with `eq`, joined by `all`", () => {
     expect(filterValue("feature")).toEqual({ match: "eq", value: SPAWN_DEAD_LETTER_FEATURE });
     expect(filterValue("op")).toEqual({ match: "eq", value: SPAWN_DEAD_LETTER_OP });
@@ -98,6 +113,8 @@ describe("spawn_agent_dead_letter — emitter/rule contract (#8719)", () => {
   it("filters `reason` with `in` over exactly the paged set", () => {
     const { match, value } = filterValue("reason");
     expect(match).toBe("in");
+    // Comma-separated with no spaces, like the other `in` rules.
+    expect(value).not.toMatch(/\s/);
     const tfSet = value.split(",").map((s) => s.trim()).sort();
     const expected = [...PAGED_DEAD_LETTER_REASONS].join(",");
     expect(
@@ -116,8 +133,17 @@ describe("spawn_agent_dead_letter — emitter/rule contract (#8719)", () => {
 
   it("pages on the first event AND keeps paging while a reason persists", () => {
     const block = ruleBlock();
-    expect(block).toMatch(/\{\s*first_seen_event\s*=\s*\{\}\s*\}/);
-    expect(block).toMatch(/\{\s*regression_event\s*=\s*\{\}\s*\}/);
+    const triggers = block.match(/trigger_conditions\s*=\s*\[([\s\S]*?)\n\s*\]/);
+    if (!triggers) throw new Error("fixture: trigger_conditions not found in the rule");
+    // One trigger per line: anchor on the line-leading `{` so a nested key
+    // (`interval = …` inside event_frequency_count) is not read as a trigger.
+    const kinds = [...triggers[1].matchAll(/^\s*\{\s*([a-z_]+)\s*=/gm)].map((m) => m[1]).sort();
+    expect(kinds).toEqual([
+      "event_frequency_count",
+      "first_seen_event",
+      "reappeared_event",
+      "regression_event",
+    ]);
     expect(block).toMatch(
       /\{\s*event_frequency_count\s*=\s*\{\s*interval\s*=\s*"1h"\s*,\s*value\s*=\s*0\s*\}\s*\}/,
     );
@@ -140,8 +166,9 @@ describe("spawn_agent_dead_letter — emitter/rule contract (#8719)", () => {
 
 describe("spawn dead-letter — the founder copy's promise matches the paging decision (#8719)", () => {
   it("the rows promising a notification are exactly the pinned four, and each pages", () => {
+    // "notif" / "alert" / "paged" cover the ways copy can promise a human was told.
     const promised = Object.entries(FAILURE_REASON_COPY)
-      .filter(([, row]) => /notif/i.test(row.copy))
+      .filter(([, row]) => /notif|alert|paged/i.test(row.copy))
       .map(([r]) => r)
       .sort();
     expect(promised).toEqual(PROMISED_NOTIFICATION);

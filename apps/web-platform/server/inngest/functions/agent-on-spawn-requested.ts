@@ -40,7 +40,8 @@ import { getServiceClient } from "@/lib/supabase/service";
 import { createGitHubAppClient } from "@/server/github/app-client";
 import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import type { FailureReason } from "@/lib/failure-reason";
-import { reportSpawnDeadLetter, safeToolName } from "@/server/spawn-dead-letter";
+import { reportSpawnDeadLetter, reportSpawnPersistFailed } from "@/server/spawn-dead-letter";
+import { sanitizeToolNameForLog } from "@/lib/tool-name-sanitize";
 import { runWithByokLease } from "@/server/byok-lease";
 import { isAnthropicCreditExhausted } from "@/server/anthropic-credit";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
@@ -295,9 +296,9 @@ export async function agentOnSpawnRequestedHandler({
         getServiceClient(),
       );
       if (install === null) {
-        throw new Error(
-          `agent-on-spawn: no github_installation_id for founder ${founderId}`,
-        );
+        // No founder id in the text: this message reaches Sentry and Better
+        // Stack verbatim via the dead-letter report (#8719).
+        throw new Error("agent-on-spawn: founder has no github_installation_id");
       }
       return install;
     });
@@ -798,18 +799,18 @@ export async function agentOnSpawnRequestedHandler({
       if (block.type === "tool_use") {
         const tu = block as ToolUseBlock;
         if (!allowedTools.has(tu.name)) {
+          // The name is model-chosen: sanitize it everywhere it is logged.
+          const tool = sanitizeToolNameForLog(tu.name);
           return persistFailure(step, {
             actionSendId,
             reason: "leader_tool_invalid",
-            err: new Error(
-              `tool ${tu.name} not in allowlist for ${actionClass}`,
-            ),
+            err: new Error(`tool ${tool} not in allowlist for ${actionClass}`),
             founderId,
             messageId,
             actionClass,
             sourceRef,
             logger,
-            extra: { turn: n, model: leaderModule.model, tool: safeToolName(tu.name) },
+            extra: { turn: n, model: leaderModule.model, tool },
           });
         }
         toolUseBlocks.push(tu);
@@ -1238,12 +1239,12 @@ async function persistFailure(
   // can match it (#8719); never throws (server/spawn-dead-letter.ts).
   reportSpawnDeadLetter({
     reason,
+    actionClass: args.actionClass,
     err,
     extra: {
       ...args.extra,
       founderId: args.founderId,
       messageId: args.messageId,
-      actionClass: args.actionClass,
       sourceRef: args.sourceRef,
       actionSendId,
     },
@@ -1285,16 +1286,14 @@ async function persistFailure(
       }
     });
   } catch (persistErr) {
-    // No founderId: this is the Inngest ctx logger, not pino, so the userId →
-    // userIdHash rename never runs here (#8719). actionSendId identifies the row.
-    args.logger.warn(
-      {
-        actionSendId,
-        reason,
-        persistErr,
-      },
-      "agent-on-spawn: persist-failure UPDATE failed; terminal state recorded via Sentry mirror only",
-    );
+    // Reported to Sentry + pino with a hashed founder id, never via the Inngest
+    // ctx logger (not pino, so it would log the raw id) (#8719).
+    reportSpawnPersistFailed({
+      reason,
+      actionSendId,
+      founderId: args.founderId,
+      err: persistErr,
+    });
   }
   return { acknowledged: false, failureReason: reason };
 }

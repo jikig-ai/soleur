@@ -40,9 +40,10 @@ DHH, Kieran, code-simplicity, CTO).
 - inngest 3.54.2's `StepError` keeps only `name`/`message`/`stack`/`cause`, so `pg_code` never
   reaches an `acknowledgment_persist_failed` event (confirmed in `node_modules/inngest/components/StepError.js`).
 - `@sentry/core` 10.59.0 defaults `attachStacktrace` to `false`, so the message event groups by
-  message text — one Sentry issue per reason (confirmed in `@sentry/core` `options.d.ts`).
-- The handler's other log lines still carry the raw `founderId`; out of scope here, tracked by an
-  issue filed at ship (tasks.md 4.3).
+  message text (confirmed in `@sentry/core` `options.d.ts`). Review (2026-09-25) added the action
+  class to the message, so it is one Sentry issue per (reason, class) pair.
+- ~~The handler's other log lines still carry the raw `founderId`.~~ Superseded 2026-09-25: fixed
+  inline at review (see Non-Goals).
 
 ## Overview
 
@@ -497,8 +498,10 @@ conclusion (`gh run list --workflow apply-sentry-infra.yml --branch main --limit
 - #8783 (retry-exhausted 429 labelled `anthropic_timeout`). A classification fix on a quiet reason;
   it depends on the step-harness migration (#8764).
 - Changing any founder-facing copy text. The paging decision is made to match the copy.
-- Pseudonymizing `founderId` on the handler's OTHER log lines (e.g. the `persist-failure` warn). This
-  PR fixes it on the dead-letter event only; a tracking issue is filed at ship (tasks.md 4.3).
+- ~~Pseudonymizing `founderId` on the handler's OTHER log lines.~~ Superseded 2026-09-25 (review):
+  the `persist-failure` warn was the only other one and is now reported via
+  `reportSpawnPersistFailed` with a hashed id; the resolve-installation error text no longer names the
+  founder; and `server/sentry-scrub.ts` hashes `founderId` in the middleware's `inngest.event_data`.
 
 ## Open Code-Review Overlap
 
@@ -527,8 +530,9 @@ conclusion (`gh run list --workflow apply-sentry-infra.yml --branch main --limit
   carried. The model-chosen tool name is added only when it matches `/^[A-Za-z0-9_-]{1,64}$/`. The
   issue title / email subject becomes a fixed template plus an enum, instead of the SDK's error
   text. Address-shaped substrings are still redacted by `redactErrorForEmit` (plain objects
-  included) and by the global `beforeSend` scrub. Residual: other log lines in the handler (e.g.
-  the `persist-failure` warn) still log `founderId` raw; unchanged by this PR.
+  included) and by the global `beforeSend` scrub. Review (2026-09-25) closed the residuals:
+  the founder id is hashed in the persist-failure report and in `inngest.event_data`, and removed from
+  the resolve-installation error text.
 - **Brand-survival threshold:** `aggregate pattern`
 
 ## Observability

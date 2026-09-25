@@ -2148,15 +2148,16 @@ resource "sentry_alert" "anthropic_credit_exhausted" {
 # test/sentry-spawn-dead-letter-alert-op-contract.test.ts refuses a mismatch.
 #
 # Triggers: the event is a message event with no stack trace, so Sentry groups it by
-# message text — one issue per reason for its whole life. The transition triggers alone
-# would page once per reason, ever; `event_frequency_count` keeps a persisting reason
-# re-paging, and `frequency_minutes = 1442` (unused elsewhere in the root) bounds that to
-# once a day per reason.
+# message text, which carries the reason and the action class — one issue per (reason,
+# class) pair for its whole life. The transition triggers alone would page once per
+# pair, ever; `event_frequency_count` keeps a persisting pair re-paging, and
+# `frequency_minutes = 1442` (unused elsewhere in the root) bounds that to at most once
+# per ~24 h per pair. Non-paged reasons are emitted at warning level.
 #
-# Reading a `leader_class_disabled` email: `extra.err.message` says either "disabled via
-# LEADER_CLASSES_DISABLED" (the kill switch working) or "no leader module for class X"
-# (a defect). `extra.actionClass`, `status`, `turn`, `model` and `tool` discriminate the
-# other reasons.
+# Reading a `leader_class_disabled` email: the event's additional data `err.message`
+# says either "disabled via LEADER_CLASSES_DISABLED" (the kill switch working) or "no
+# leader module for class X" (a defect). `actionClass`, `status`, `turn`, `model` and
+# `tool` in the same data discriminate the other reasons.
 resource "sentry_alert" "spawn_agent_dead_letter" {
   organization      = var.sentry_org
   name              = "spawn-agent-dead-letter"

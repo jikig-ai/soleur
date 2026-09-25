@@ -14,32 +14,39 @@
 // and the alert never matches it (#8629). `toMessagePathError` turns the error
 // into a plain object: `reportSilentFallback` then uses `captureMessage`, the pino
 // hook has no Error to capture, and the SDK's message and stack still reach Sentry
-// (`extra.err`) and the pino line for triage. `server/anthropic-credit.ts` is the
-// sibling workaround; revert both together when #8629 lands.
+// (`extra.err`) and the pino line for triage. It is one of several #8629
+// workarounds (`git grep -n '#8629' -- apps/web-platform/server`); revert them
+// together when #8629 lands.
 //
-// Never build the plain object with `...err`: the Anthropic SDK error carries its
-// response `headers` and vendor body, and a PostgREST error its `details`/`hint`.
-// Copy the named fields only.
+// Never build the plain object with `...err`: that would carry the Anthropic SDK
+// error's response `headers` and structured `error` body, and a PostgREST error's
+// `details`/`hint`. Copy the named fields only. The SDK's own `message` still
+// embeds the vendor body's JSON text; that is the triage payload #8717 chose.
+//
+// GROUPING: the event is a message event, so Sentry groups it by message text.
+// The message carries the reason AND the action class, so each (reason, class)
+// pair is its own issue with its own alert throttle — one class failing cannot
+// hide a second class failing the same way inside an already-throttled issue.
 
 import * as Sentry from "@sentry/nextjs";
 
-import type { FailureReason } from "@/lib/failure-reason";
-import { PAGES_OPERATOR } from "@/lib/failure-reason";
+import { PAGES_OPERATOR, type FailureReason } from "@/lib/failure-reason";
 import logger from "@/server/logger";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
 /** Sentry tag literals. `sentry-spawn-dead-letter-alert-op-contract.test.ts` pins the alert filter to these. */
 export const SPAWN_DEAD_LETTER_FEATURE = "spawn-agent";
 export const SPAWN_DEAD_LETTER_OP = "agent-on-spawn-requested";
 
 /** The reasons the alert's `reason` filter lists, sorted. Derived from PAGES_OPERATOR, never re-typed. */
-export const PAGED_DEAD_LETTER_REASONS: readonly FailureReason[] = (
-  Object.keys(PAGES_OPERATOR) as FailureReason[]
-)
-  .filter((r) => PAGES_OPERATOR[r])
-  .sort();
+export const PAGED_DEAD_LETTER_REASONS: readonly FailureReason[] = Object.freeze(
+  (Object.keys(PAGES_OPERATOR) as FailureReason[]).filter((r) => PAGES_OPERATOR[r]).sort(),
+);
 
-const REPORT_FAILED_MESSAGE = "agent-on-spawn deadlettered: report failed";
+/** The Sentry/pino message for one dead-letter. Grouping key: see GROUPING above. */
+export function spawnDeadLetterMessage(reason: FailureReason, actionClass: string): string {
+  return `agent-on-spawn deadlettered: ${reason} [${actionClass}]`;
+}
 
 interface MessagePathError {
   name: string;
@@ -50,7 +57,7 @@ interface MessagePathError {
 
 function readString(obj: object, key: string): string | undefined {
   // Plain property read: works on a prototype-less object and never calls a
-  // toString that could throw.
+  // toString. A throwing getter still throws; the caller's try/catch owns that.
   const v = (obj as Record<string, unknown>)[key];
   return typeof v === "string" ? v : undefined;
 }
@@ -77,58 +84,81 @@ function toMessagePathError(err: unknown): MessagePathError {
 function toReportExtra(
   extra: Record<string, unknown> | undefined,
   reason: FailureReason,
+  actionClass: string,
 ): Record<string, unknown> {
   const { founderId, ...rest } = extra ?? {};
-  const out: Record<string, unknown> = { ...rest, reason };
+  const out: Record<string, unknown> = { ...rest, reason, actionClass };
   if (founderId !== undefined) out.userId = founderId;
   return out;
 }
 
 /**
- * A model-chosen tool name, safe for a log line and a Sentry field: kept when it
- * matches the tool-name shape, otherwise replaced (no control characters, line
- * separators or unbounded length).
- */
-export function safeToolName(name: string): string {
-  return /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : "[invalid]";
-}
-
-/**
- * Report a leader-loop dead-letter. Never throws: a throw here would skip the
- * caller's `persist-failure` step and leave the founder's card without a
- * terminal state. A failure inside the report is itself reported, tagged so the
- * alert still matches a paged reason.
+ * Report a leader-loop dead-letter. Paged reasons are `error` events; the rest
+ * are `warning` events, so they neither match the paging rule nor become
+ * high-priority issues for Sentry's default alert. Never throws: a throw here
+ * would skip the caller's `persist-failure` step and leave the founder's card
+ * without a terminal state. A failure inside the report is itself reported,
+ * tagged so the alert still matches a paged reason.
  */
 export function reportSpawnDeadLetter(args: {
   reason: FailureReason;
+  actionClass: string;
   err: unknown;
   extra?: Record<string, unknown>;
 }): void {
-  const { reason } = args;
+  const { reason, actionClass } = args;
   try {
-    reportSilentFallback(toMessagePathError(args.err), {
+    const emit = PAGES_OPERATOR[reason] ? reportSilentFallback : warnSilentFallback;
+    emit(toMessagePathError(args.err), {
       feature: SPAWN_DEAD_LETTER_FEATURE,
       op: SPAWN_DEAD_LETTER_OP,
-      message: `agent-on-spawn deadlettered: ${reason}`,
+      message: spawnDeadLetterMessage(reason, actionClass),
       tags: { reason },
-      extra: toReportExtra(args.extra, reason),
+      extra: toReportExtra(args.extra, reason, actionClass),
     });
   } catch (caught) {
+    const message = `agent-on-spawn deadlettered: report failed: ${reason} [${actionClass}]`;
     try {
       logger.error(
-        { err: caught, reason, feature: SPAWN_DEAD_LETTER_FEATURE, op: SPAWN_DEAD_LETTER_OP },
-        REPORT_FAILED_MESSAGE,
+        { err: caught, reason, actionClass, feature: SPAWN_DEAD_LETTER_FEATURE, op: SPAWN_DEAD_LETTER_OP },
+        message,
       );
     } catch {
       // review: swallowed — the tagged captureMessage below is the remaining signal.
     }
     try {
-      Sentry.captureMessage(REPORT_FAILED_MESSAGE, {
+      Sentry.captureMessage(message, {
         level: "error",
         tags: { feature: SPAWN_DEAD_LETTER_FEATURE, op: SPAWN_DEAD_LETTER_OP, reason },
+        extra: { actionClass },
       });
     } catch {
       // review: swallowed — observability must never break the terminal write.
     }
+  }
+}
+
+/**
+ * The terminal `action_sends.failure_reason` write failed: the founder's card
+ * has no terminal state. Reported on the message path with the row id and a
+ * pseudonymized founder id (the Inngest ctx logger is not pino, so it would
+ * log the raw id). Never throws.
+ */
+export function reportSpawnPersistFailed(args: {
+  reason: FailureReason;
+  actionSendId: string;
+  founderId: string;
+  err: unknown;
+}): void {
+  try {
+    reportSilentFallback(toMessagePathError(args.err), {
+      feature: SPAWN_DEAD_LETTER_FEATURE,
+      op: "persist-failure",
+      message: "agent-on-spawn: persist-failure UPDATE failed; terminal state not recorded",
+      tags: { reason: args.reason },
+      extra: { actionSendId: args.actionSendId, userId: args.founderId, reason: args.reason },
+    });
+  } catch {
+    // review: swallowed — observability must never break the dead-letter return.
   }
 }

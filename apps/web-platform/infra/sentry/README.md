@@ -106,8 +106,9 @@ says 29 + 2 because #7989 ADDED a rule (`ops_email_delivery_failure`) rather tha
 migrating one — the only entry here whose +1 is a new rule, not a type change.
 (That was the count before #8451; #8442 then added `art17_erasure_incomplete`,
 and #8451 adopted the last two as frozen `sentry_alert`, so the root declares 32
-and 0. #8505 then added `anthropic_credit_exhausted`, a new rule, taking it to 33, and #8719 then
-added `spawn_agent_dead_letter`, a new rule. The current count
+and 0. #8505 then added `anthropic_credit_exhausted`, a new rule, taking it to 33; #8630 added
+`cron_monitor_failure` in `cron-monitor-alerts.tf`, taking the root to 34; and #8719 added
+`spawn_agent_dead_letter`, taking it to 35. The current count
 is at the top of this file, pinned by T25.)
 Historical note, kept because this count has been wrong twice: this paragraph
 said **2** until 2026-09-06 (#7826) while line 5 of this same file
