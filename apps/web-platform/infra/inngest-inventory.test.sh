@@ -565,7 +565,7 @@ host_id_tokens_missing() {  # $1=file — "" when every load-bearing token is pr
   body=$(extract_fn_body "$f" resolve_host_id)
   [[ -n "$body" ]] || { printf '%s' "$(basename "$f"):resolve_host_id-not-found"; return; }
   for tok in "${tokens[@]}"; do
-    printf '%s' "$body" | grep -qF -- "$tok" || missing="$missing $(basename "$f"):$tok"
+    printf '%s' "$body" | grep -cF -- >/dev/null "$tok" || missing="$missing $(basename "$f"):$tok"
   done
   printf '%s' "$missing"
 }
@@ -772,7 +772,7 @@ test_deadline_abort() {
   if echo "$STDOUT_CAP" | jq -e '.armed_reminders' >/dev/null 2>&1; then
     echo "  FAIL: stdout is a jq-parseable armed_reminders object on a deadline abort (truncated false-clean)"; FAIL=$((FAIL+1));
   else echo "  PASS: stdout NOT a jq-parseable armed_reminders object on abort"; PASS=$((PASS+1)); fi
-  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=deadline'; then
+  if echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=deadline' >/dev/null; then
     echo "  PASS: SOLEUR_INNGEST_PREFLIGHT_TIMEOUT reason=deadline emitted"; PASS=$((PASS+1));
   else echo "  FAIL: no TIMEOUT reason=deadline marker (markers=$markers)"; FAIL=$((FAIL+1)); fi
 }
@@ -787,7 +787,7 @@ test_page_ceiling_abort() {
   make_page false "" "[$(make_edge 01P5 reminder.scheduled rem5 "$FUTURE_MS" "[]")]" > "$d/page-5.json"
   run_inv_logcap "$d" "$ff" INNGEST_MAX_PAGES=2; local markers="$MARKERS_CAP"
   assert_eq "page ceiling hit exits 1 (loud-abort)" "1" "$RC"
-  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=page_ceiling'; then
+  if echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=page_ceiling' >/dev/null; then
     echo "  PASS: SOLEUR_INNGEST_PREFLIGHT_TIMEOUT reason=page_ceiling emitted"; PASS=$((PASS+1));
   else echo "  FAIL: no TIMEOUT reason=page_ceiling marker (markers=$markers)"; FAIL=$((FAIL+1)); fi
   # A page-ceiling abort is a distinct trigger from the deadline — assert it also refuses to
@@ -812,7 +812,7 @@ test_start_marker_first_on_functions_fail() {
   make_page false "" "[]" > "$d/page-1.json"
   run_inv_logcap "$d" "$ff"; local markers="$MARKERS_CAP"
   assert_eq "functions-fail still exits 1" "1" "$RC"
-  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory'; then
+  if echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory' >/dev/null; then
     echo "  PASS: START marker emitted before the functions query (absence-of-START = host-down)"; PASS=$((PASS+1));
   else echo "  FAIL: no START marker on a functions-query failure (markers=$markers)"; FAIL=$((FAIL+1)); fi
 }
@@ -825,12 +825,12 @@ test_markers_journald_only() {
   run_inv_logcap "$d" "$ff"; local markers="$MARKERS_CAP"
   assert_eq "happy path exits 0" "0" "$RC"
   assert_eq "stdout stays a pure JSON object (no marker leaked to stdout)" "object" "$(echo "$STDOUT_CAP" | jq -r 'type')"
-  if echo "$STDOUT_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT'; then
+  if echo "$STDOUT_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT' >/dev/null; then
     echo "  FAIL: a SOLEUR marker leaked onto stdout (would corrupt the webhook JSON body)"; FAIL=$((FAIL+1));
   else echo "  PASS: no SOLEUR marker on stdout (journald-only)"; PASS=$((PASS+1)); fi
-  echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory' \
+  echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory' >/dev/null \
     && { echo "  PASS: START in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no START in journald"; FAIL=$((FAIL+1)); }
-  echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_DONE op=inventory pages=' \
+  echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_DONE op=inventory pages=' >/dev/null \
     && { echo "  PASS: DONE (with pages) in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no DONE in journald"; FAIL=$((FAIL+1)); }
 }
 
@@ -873,7 +873,7 @@ test_completeness_differential() {
   # FROM_TS byte-identical: the 365-day clamp is unchanged and never narrowed for cost.
   if grep -q '365 days ago' "$TARGET"; then echo "  PASS: FROM_TS 365-day clamp unchanged (never narrowed)"; PASS=$((PASS+1));
   else echo "  FAIL: FROM_TS 365-day clamp missing (window narrowed for cost — completeness risk)"; FAIL=$((FAIL+1)); fi
-  if grep -qF 'eventNames:["reminder.scheduled"]' "$TARGET" || grep -qF "'[\"reminder.scheduled\"]'" "$TARGET"; then
+  if grep -qF 'eventNames:["reminder.scheduled"]' "$TARGET" || grep -cF "'[\"reminder.scheduled\"]'" >/dev/null "$TARGET"; then
     echo "  PASS: dedicated reminder.scheduled query present (armed by construction)"; PASS=$((PASS+1));
   else echo "  FAIL: no dedicated reminder.scheduled query (armed completeness not by construction)"; FAIL=$((FAIL+1)); fi
 }
@@ -891,7 +891,7 @@ test_marker_purity() {
   assert_eq "no '://' URI in any SOLEUR marker" "0" "$(echo "$soleur_lines" | grep -c '://' || true)"
   assert_eq "no user:pass@host in any SOLEUR marker" "0" "$(echo "$soleur_lines" | grep -cE '@[^ ]+:[0-9]+' || true)"
   assert_eq "raw GraphQL message never verbatim (reason is an enum)" "0" "$(echo "$soleur_lines" | grep -c 'password authentication' || true)"
-  if echo "$soleur_lines" | grep -q 'reason=gql_error'; then echo "  PASS: reason mapped to enum gql_error"; PASS=$((PASS+1));
+  if echo "$soleur_lines" | grep -c 'reason=gql_error' >/dev/null; then echo "  PASS: reason mapped to enum gql_error"; PASS=$((PASS+1));
   else echo "  FAIL: reason not mapped to the gql_error enum"; FAIL=$((FAIL+1)); fi
   # #6258 review P1: the DSN must ALSO be scrubbed from the sibling FATAL/ERROR
   # diagnostic lines — journald (→ Better Stack) AND stdout (→ the Actions run log) —
@@ -948,15 +948,15 @@ run_q() {
 }
 
 assert_first_line() {  # $1=desc $2=exact expected first line of the body
-  local first; first="$(printf '%s\n' "$STDOUT_CAP" | head -n 1)"
+  local first; first="$(printf '%s\n' "$STDOUT_CAP" | sed -n '1p')"
   assert_eq "$1: exact first body line" "$2" "$first"
 }
 
 assert_no_failure_noise() {  # $1=desc — a verdict tick logs no TIMEOUT marker and no ERROR line
-  if printf '%s\n' "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT'; then
+  if printf '%s\n' "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT' >/dev/null; then
     echo "  FAIL: $1: _pf_timeout_marker gql_error fired on a verdict tick"; FAIL=$((FAIL+1))
   else echo "  PASS: $1: no _pf_timeout_marker line"; PASS=$((PASS+1)); fi
-  if printf '%s\n' "$MARKERS_CAP" | grep -q '^ERROR:'; then
+  if printf '%s\n' "$MARKERS_CAP" | grep -c '^ERROR:' >/dev/null; then
     echo "  FAIL: $1: ERROR logger fired on a verdict tick"; FAIL=$((FAIL+1))
   else echo "  PASS: $1: no ERROR logger line"; PASS=$((PASS+1)); fi
   if [[ "$STDOUT_CAP" == *"inngest-inventory: FATAL"* ]]; then
@@ -974,7 +974,7 @@ assert_fatal_not_quiesced() {  # $1=desc
     echo "  FAIL: $1: a quiesce verdict emitted outside its shape (would suppress a real restart)"; FAIL=$((FAIL+1))
   else echo "  PASS: $1: no QUIESCED / DISABLED_UNATTRIBUTED"; PASS=$((PASS+1)); fi
   # Non-vacuity for assert_no_failure_noise: the FATAL path DOES log the gql_error TIMEOUT marker.
-  if printf '%s\n' "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=gql_error'; then
+  if printf '%s\n' "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=gql_error' >/dev/null; then
     echo "  PASS: $1: FATAL path still logs the gql_error TIMEOUT marker"; PASS=$((PASS+1))
   else echo "  FAIL: $1: FATAL path lost its gql_error TIMEOUT marker"; FAIL=$((FAIL+1)); fi
 }
@@ -999,7 +999,7 @@ test_quiesced_verdict() {
   assert_eq "Q1 liveness quiesced: exits 1" "1" "$RC"
   assert_first_line "Q1 liveness quiesced" "inngest-inventory: QUIESCED host_id=hetzner-777 unit=inactive enabled=disabled quiesced_since=$Q_EPOCH capture=present rebooted_since_quiesce=false$tail_q"
   assert_no_failure_noise "Q1 liveness quiesced"
-  if printf '%s\n' "$MARKERS_CAP" | grep -qE "^SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced quiesced_since=$Q_EPOCH .*host_id=hetzner-777\$"; then
+  if printf '%s\n' "$MARKERS_CAP" | grep -cE "^SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced quiesced_since=$Q_EPOCH .*host_id=hetzner-777\$" >/dev/null; then
     echo "  PASS: Q1: journald VERDICT mode=quiesced quiesced_since=… host_id=…"; PASS=$((PASS+1))
   else echo "  FAIL: Q1: no VERDICT mode=quiesced marker"; echo "    markers: $MARKERS_CAP"; FAIL=$((FAIL+1)); fi
 
@@ -1032,7 +1032,7 @@ test_quiesced_verdict() {
   assert_no_failure_noise "U1 no marker"
   if [[ "$STDOUT_CAP" == *"QUIESCED"* ]]; then echo "  FAIL: U1: QUIESCED emitted without a marker"; FAIL=$((FAIL+1));
   else echo "  PASS: U1: no QUIESCED without a marker"; PASS=$((PASS+1)); fi
-  if printf '%s\n' "$MARKERS_CAP" | grep -qE '^SOLEUR_INNGEST_LIVENESS_VERDICT mode=disabled_unattributed .*host_id=hetzner-777$'; then
+  if printf '%s\n' "$MARKERS_CAP" | grep -cE '^SOLEUR_INNGEST_LIVENESS_VERDICT mode=disabled_unattributed .*host_id=hetzner-777$' >/dev/null; then
     echo "  PASS: U1: journald VERDICT mode=disabled_unattributed"; PASS=$((PASS+1))
   else echo "  FAIL: U1: no VERDICT mode=disabled_unattributed marker"; echo "    markers: $MARKERS_CAP"; FAIL=$((FAIL+1)); fi
   run_q "$MK" "$CF" STUB_UNIT_ACTIVE=failed STUB_UNIT_ENABLED=disabled

@@ -129,12 +129,12 @@ test_rp_markers_journald_only() {
   make_functions '["fn-a"]' > "$fixture"
   run_probe_logcap "$fixture"
   if [[ "$RC" -eq 0 ]]; then echo "  PASS: happy path exits 0"; PASS=$((PASS+1)); else echo "  FAIL: rc=$RC"; FAIL=$((FAIL+1)); fi
-  if echo "$STDOUT_CAP" | jq -e 'has("registry_empty")' >/dev/null 2>&1 && ! echo "$STDOUT_CAP" | grep -q SOLEUR; then
+  if echo "$STDOUT_CAP" | jq -e 'has("registry_empty")' >/dev/null 2>&1 && ! echo "$STDOUT_CAP" | grep -c SOLEUR >/dev/null; then
     echo "  PASS: stdout is a pure object, no marker leaked"; PASS=$((PASS+1));
   else echo "  FAIL: stdout polluted (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
-  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-registry' \
+  echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-registry' >/dev/null \
     && { echo "  PASS: START in journald (before the single query)"; PASS=$((PASS+1)); } || { echo "  FAIL: no START (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
-  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_DONE op=verify-registry' \
+  echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_DONE op=verify-registry' >/dev/null \
     && { echo "  PASS: DONE in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no DONE (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
   rm -f "$fixture"
 }
@@ -147,7 +147,7 @@ test_rp_start_on_failure() {
   echo '{"errors":[{"message":"FATAL password for postgres://u:p@10.0.1.40:5432/db"}],"data":null}' > "$fixture"
   run_probe_logcap "$fixture"
   if [[ "$RC" -eq 1 ]]; then echo "  PASS: exits 1 on failure"; PASS=$((PASS+1)); else echo "  FAIL: rc=$RC"; FAIL=$((FAIL+1)); fi
-  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-registry' \
+  echo "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-registry' >/dev/null \
     && { echo "  PASS: START marker still emitted on a failed probe"; PASS=$((PASS+1)); } || { echo "  FAIL: no START on failure (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
   # The FATAL line legitimately prints the credential-less internal $GQL_URL
   # (http://10.0.1.40:8288/…), so assert on the credential-bearing DSN shape, not bare '://'.

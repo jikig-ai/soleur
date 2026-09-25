@@ -140,6 +140,11 @@ build_pristine() {
 
   git -C "$PRISTINE" init -q -b main >/dev/null 2>&1 || return 1
   git -C "$PRISTINE" add -A >/dev/null 2>&1 || return 1
+  # A COMMIT, not just a stage: since #8736 the sandbox runner derives its
+  # suite set from `git ls-tree HEAD`, so a staged-but-uncommitted file is
+  # invisible to surface 3 — the fixture that only `git add`ed measured a
+  # tree where every infra suite read as orphaned (the 144-orphan abort).
+  git -C "$PRISTINE" -c user.email=t@t -c user.name=t commit -qm init >/dev/null 2>&1 || return 1
 }
 
 # NORMALISE THE FIXTURE TO A FULLY-REGISTERED BASELINE.
@@ -276,7 +281,6 @@ row() { ROWS=$((ROWS + 1)); echo ""; echo "[$1] $2"; }
 BOARD_LINE='  run_suite "scripts/board/set-board-status" bash scripts/board/set-board-status.test.sh'
 BOARD_SUITE='scripts/board/set-board-status.test.sh'
 GLOB_LINE="  'apps/cla-evidence/scripts/*.test.sh'"
-INFRA_STEP='        run: bash apps/web-platform/infra/zot-log-shipper.test.sh'
 INFRA_SUITE='apps/web-platform/infra/zot-log-shipper.test.sh'
 HOOK_LINE='            bash main.test.sh'
 HOOK_SUITE='apps/cla-evidence/infra/main.test.sh'
@@ -327,6 +331,7 @@ new_sandbox m2
 mkdir -p "$SB/tools/nowhere" "$SB/docs/deep/nested" || harness_die "M2 mkdir"
 : > "$SB/tools/nowhere/alpha.test.sh"; : > "$SB/docs/deep/nested/beta.test.sh"
 git -C "$SB" add -A >/dev/null 2>&1 || harness_die "M2 git add"
+git -C "$SB" -c user.email=t@t -c user.name=t commit -qm m2 >/dev/null 2>&1 || harness_die "M2 git commit"
 run_lint "$SB"; rc=$?
 assert_red "M2" "$rc"
 assert_has "M2 — names the first new orphan" "tools/nowhere/alpha.test.sh ${ORPHAN_MSG}"
@@ -339,13 +344,19 @@ assert_has "M2 — names the second new orphan" "docs/deep/nested/beta.test.sh $
 # a second script's derivation — the likeliest surface to silently under-match.
 # =============================================================================================
 run_M3() {
-row M3 "delete a run: bash step from infra-validation.yml (surface 3)"
+row M3 "git mv an infra suite out of the glob (surface 3 de-registration)"
 new_sandbox m3
 require_single_surface "$SB" "$INFRA_SUITE" "M3"
-mutate_or_die "$SB/.github/workflows/infra-validation.yml" "$INFRA_STEP"$'\n' ""
+# #8736 replaced the per-suite `run:` step with presence-is-registration, so
+# the de-registration hazard moved with it: a suite moved OUT of
+# apps/web-platform/infra/ stays a tracked *.test.sh but leaves the runner's
+# glob — uncovered, silently, unless a surface catches it.
+mkdir -p "$SB/tools/nowhere" || harness_die "M3 mkdir"
+git -C "$SB" mv "$INFRA_SUITE" tools/nowhere/ >/dev/null 2>&1 || harness_die "M3 git mv"
+git -C "$SB" -c user.email=t@t -c user.name=t commit -qm m3 >/dev/null 2>&1 || harness_die "M3 git commit"
 run_lint "$SB"; rc=$?
 assert_red "M3" "$rc"
-assert_has "M3 — names the de-registered infra suite" "${INFRA_SUITE} ${ORPHAN_MSG}"
+assert_has "M3 — names the de-registered infra suite" "tools/nowhere/zot-log-shipper.test.sh ${ORPHAN_MSG}"
 }
 
 # =============================================================================================
@@ -566,6 +577,7 @@ new_sandbox m16
 mkdir -p "$SB/tools/nowhere" || harness_die "M16 mkdir"
 : > "$SB/tools/nowhere/gamma.test.sh"
 git -C "$SB" add -A >/dev/null 2>&1 || harness_die "M16 git add"
+git -C "$SB" -c user.email=t@t -c user.name=t commit -qm m16 >/dev/null 2>&1 || harness_die "M16 git commit"
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
   'EXCLUSIONS=( "tools/nowhere/gamma.test.sh|blocked on a fixture rewrite, tracked in #9999" )'
 run_lint "$SB"; rc=$?

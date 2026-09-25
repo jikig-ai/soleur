@@ -733,7 +733,7 @@ else
   echo no > "$STUB_LOG/curl.header"
 fi
 # The harness's own carriers of the sentinel (WPTR_SENTINEL, WPTR_DOPPLER_OUT) are excluded.
-if env | grep -vE '^WPTR_(SENTINEL|DOPPLER_OUT)=' | grep -qF -- "${WPTR_SENTINEL:-__unset__}"; then
+if env | grep -vE '^WPTR_(SENTINEL|DOPPLER_OUT)=' | grep -cF -- >/dev/null "${WPTR_SENTINEL:-__unset__}"; then
   echo yes > "$STUB_LOG/curl.env"
 else
   echo no > "$STUB_LOG/curl.env"

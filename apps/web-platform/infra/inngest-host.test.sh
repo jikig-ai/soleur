@@ -44,7 +44,7 @@ grep -qE 'resource "random_id" "inngest_signing_key_dedicated"' "$HOST_TF" \
 # Strip COMMENT lines first — the header comments reference the co-located key BY NAME as the
 # thing NOT reused (a bare grep would false-match that prose).
 if grep -qE 'random_id\.inngest_signing_key_dedicated\.hex' "$HOST_TF" \
-   && ! grep -vE '^[[:space:]]*#' "$HOST_TF" | grep -qE 'random_id\.inngest_(signing|event)_key_prd'; then
+   && ! grep -vE '^[[:space:]]*#' "$HOST_TF" | grep -cE 'random_id\.inngest_(signing|event)_key_prd' >/dev/null; then
   pass
 else
   fail "dedicated secrets reference the dedicated keys, not the co-located _prd keys"
@@ -75,8 +75,8 @@ TOKEN_ACCESS="$(awk '
 # two physical lines (`doppler secrets set … \` then `  --project … --silent`), so a --token
 # added on the continuation line would evade a line-scoped grep.
 FLAG_SET_BODY="$(awk '/^flag_set\(\)[[:space:]]*\{/{i=1} i{print} i&&/^\}/{exit}' "${DIR}/inngest-cutover-flip.sh")"
-printf '%s\n' "$FLAG_SET_BODY" | grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP' \
-  && ! printf '%s\n' "$FLAG_SET_BODY" | grep -qE -- '--token' \
+printf '%s\n' "$FLAG_SET_BODY" | grep -cE 'doppler secrets set INNGEST_CUTOVER_FLIP' >/dev/null \
+  && ! printf '%s\n' "$FLAG_SET_BODY" | grep -cE -- >/dev/null '--token' \
   && pass || fail "flip flag_set must write INNGEST_CUTOVER_FLIP under the ambient boot token (no explicit --token anywhere in the function body) — else the read/write requirement above is testing the wrong credential"
 
 # 2. Separate Doppler PROJECT (AC3), not a prd branch config.
@@ -92,7 +92,7 @@ fi
 
 # 3. Deny-all-public firewall (zero inbound rules) — intra-subnet is open by membership;
 #    signature-verify is the /api/inngest boundary; nftables scopes the control API.
-if awk '/resource "hcloud_firewall" "inngest"/{f=1} f&&/^}/{f=0} f' "$HOST_TF" | grep -qE 'rule[[:space:]]*\{|direction[[:space:]]*=[[:space:]]*"in"'; then
+if awk '/resource "hcloud_firewall" "inngest"/{f=1} f&&/^}/{f=0} f' "$HOST_TF" | grep -cE 'rule[[:space:]]*\{|direction[[:space:]]*=[[:space:]]*"in"' >/dev/null; then
   fail "hcloud_firewall.inngest must have ZERO inbound rules (deny-all-public)"
 else
   pass
@@ -365,7 +365,7 @@ _g1_calls_pass="$(sed 's/#.*//' "${BASH_SOURCE[0]}" | grep -cE '^[[:space:]]*g1_
 
 # 4. NO lifecycle.ignore_changes=[user_data]. Strip COMMENT lines first — the block carries a
 #    "Deliberately NO ...ignore_changes=[user_data]" prose comment a bare grep would false-match.
-if grep -vE '^[[:space:]]*#' "$HOST_TF" | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*user_data'; then
+if grep -vE '^[[:space:]]*#' "$HOST_TF" | grep -cE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*user_data' >/dev/null; then
   fail "hcloud_server.inngest must NOT set ignore_changes=[user_data] (ADR-100 force-replace)"
 else
   pass
@@ -414,7 +414,7 @@ fi
 # 6c. The web-host allowlist local must NOT contain git-data(.20)/registry(.30) (complementary
 #     to the parity guard: neither peer host may ever enter the :8288/:8289 allowlist).
 HOST_TF_NOCOMMENT=$(sed 's/#.*//' "$HOST_TF")
-if printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -qE 'web_host_private_ips[[:space:]]*=' && printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -E 'web_host_private_ips[[:space:]]*=' | grep -qE '10\.0\.1\.(20|30)'; then
+if printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -cE 'web_host_private_ips[[:space:]]*=' >/dev/null && printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -E 'web_host_private_ips[[:space:]]*=' | grep -cE '10\.0\.1\.(20|30)' >/dev/null; then
   fail "web_host_private_ips must NOT include git-data(.20)/registry(.30)"
 else
   pass
@@ -483,7 +483,7 @@ fi
 #     sets, so the assertions are about the decision the host actually makes.
 #     Mirrors registry-boot-guard.test.sh's extract-and-replay idiom (the sibling host).
 GUARD_RE="$(grep -E "n_inngest=.*grep -Ec" "$CLOUD_INIT" | grep -oE "grep -Ec '[^']*'" | sed "s/grep -Ec '//; s/'$//")"
-FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$CLOUD_INIT" | grep -oE '[0-9]+' | head -1)"
+FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$CLOUD_INIT" | grep -oE '[0-9]+' | sed -n '1p')"
 # Non-vacuity: a failed extraction must NOT silently pass every case below. An empty GUARD_RE
 # makes `grep -Ec ""` match every line, which would fake a clean replay.
 [[ -n "$GUARD_RE" ]] && pass || fail "could not extract the admit-regex from $CLOUD_INIT (the replay below would be vacuous)"

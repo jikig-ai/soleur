@@ -3669,8 +3669,14 @@ if want_scripts; then
   # the defect alarm. The suite also pins FAIL-precedence over PASS, fault-to-TRANSIENT on each
   # of the three queries, and the missing-creds arm (TRANSIENT, never a spurious FAIL page).
   run_suite "scripts/ship-merge-mergebase-verdict-8151" bash scripts/followthroughs/ship-merge-mergebase-verdict-8151.test.sh
-  # (#8006 retired 2026-09-24 — issue closed on sweeper PASS; probe script +
-  # suite deleted per the script's own RETIREMENT note.)
+  # #8736: exit-code harness for the deploy-script-tests leg-duration soak probe (the
+  # sharded structure's "under 10 min, measured over >=5 consecutive green runs" AC).
+  # Registered explicitly (orphan-suite class above). Its exit code is the closure of
+  # #8736 (0 closes; 1 = a qualifying leg breached the 600 s bound; 2 = NOT YET —
+  # under-sampled, unclocked, or every run non-qualifying; 3 = gh failed). A run
+  # qualifies ONLY when all six jobs (4 legs + fixed + done) are present, green, and
+  # measured — a skipped leg is unmeasurable and fail-closed, never a green leg.
+  run_suite "scripts/deploy-script-tests-legs-8736" bash scripts/followthroughs/deploy-script-tests-legs-8736.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -3878,7 +3884,7 @@ if want_scripts; then
   run_suite "scripts/dogfood/grok-measure" bash scripts/dogfood/grok-measure.test.sh
   # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
   # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
-  # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line
+  # infra-validation.yml dispatches only apps/web-platform/infra/*.test.sh (via the runner glob). Without this line
   # the gate that stands between a -replace and a stranded fleet ships with zero coverage.
   run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
 
@@ -3887,8 +3893,8 @@ if want_scripts; then
   # `test-<name>.sh` convention used under tests/scripts/ does not match (#7402 widened that
   # walk from scripts/*.test.sh to the whole repo, but the SUFFIX convention is the producer's
   # scope and tests/scripts/ is deliberately outside it), and
-  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list from
-  # infra-validation.yml's `run: bash apps/web-platform/infra/<name>.test.sh` steps, so a
+  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list by globbing
+  # `apps/web-platform/infra/**/*.test.sh` (presence is registration), so a
   # tests/scripts/ suite is structurally invisible to both. These three run_suite lines
   # are the ONLY registration — an unregistered gate suite is silent AND green, which is
   # the exact shape that let a fail-open rung ship in #3366.
@@ -4096,8 +4102,8 @@ if want_scripts; then
   # its #7278 siblings above: nothing auto-discovers tests/scripts/.
   #
   # ONLY this fixture suite belongs in this file. The shipper's own suite is an INFRA suite and its
-  # registration point is `.github/workflows/infra-validation.yml`, from which
-  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list — adding it here instead
+  # registration point is its path under `apps/web-platform/infra/`, which
+  # apps/web-platform/infra/run-registered-suites.sh derives by glob — adding it here instead
   # would run it in ZERO runners (#3366), silent and green.
   #
   # The probe is INERT UNTIL DISPATCHED (the registry host is cloud-init-only, so merging applies
@@ -4521,11 +4527,12 @@ fi
 # #6969). Each registration counts as ONE suite at the aggregate level; the nested runner
 # reports its own per-suite counts inside that line.
 #
-# The infra RUNNER is registered, never its 98 suites individually (re-derived 2026-08-13 via
-# `bash apps/web-platform/infra/run-registered-suites.sh --list`; the previous figure of 87 had
-# drifted). run-registered-suites.sh DERIVES its list from
-# .github/workflows/infra-validation.yml and reports unregistered orphans; enumerating the
-# suites here would fork that list and recreate the very drift the derivation prevents.
+# The infra RUNNER is registered, never its suites individually (re-derive via
+# `bash apps/web-platform/infra/run-registered-suites.sh --list`; the count moves
+# with the directory). run-registered-suites.sh derives its list by globbing
+# `apps/web-platform/infra/**/*.test.sh` (presence is registration) and reports
+# untracked stragglers; enumerating the suites here would fork that list and
+# recreate the very drift the derivation prevents.
 #
 # Do not hand-edit that count: `--list` prints it, and scripts/lint-orphan-test-suites.sh reads
 # the same command for its infra registration surface, so the number above is checkable in one
