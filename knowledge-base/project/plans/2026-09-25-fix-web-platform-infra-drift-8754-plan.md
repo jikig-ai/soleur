@@ -846,13 +846,13 @@ measurement, AC-C3, and the withheld-path P1 issue.
 
 ### Pre-merge — PR-A
 
-- [ ] **AC-A1** `bash apps/web-platform/infra/inngest-host.test.sh` passes with the Guard 1 rows.
+- [x] **AC-A1** `bash apps/web-platform/infra/inngest-host.test.sh` passes with the Guard 1 rows.
       Before the `.tf` edit, the canonical assertion was observed RED (today there is no
       `firewall_ids` and the attachment exists). Each of M1 to M5 was observed RED against the
       edited tree. The TDD log goes in the PR body.
-- [ ] **AC-A2** `bun test plugins/soleur/test/terraform-target-parity.test.ts plugins/soleur/test/workflow-file-size.test.ts plugins/soleur/test/preflight-discoverability-test.test.ts`
+- [x] **AC-A2** `bun test plugins/soleur/test/terraform-target-parity.test.ts plugins/soleur/test/workflow-file-size.test.ts plugins/soleur/test/preflight-discoverability-test.test.ts`
       and `bash tests/scripts/test-inngest-host-shape-gate.sh` pass.
-- [ ] **AC-A3** `terraform validate` (init `-backend=false`) passes in `apps/web-platform/infra`.
+- [x] **AC-A3** `terraform validate` (init `-backend=false`) passes in `apps/web-platform/infra`.
 - [ ] **AC-A4** The PR's own `infra-validation` plan comment for `apps/web-platform/infra` shows
       `hcloud_server.inngest` planned with `firewall_ids` containing the inngest firewall, and
       `hcloud_firewall_attachment.inngest` as a forget.

@@ -7,29 +7,29 @@ its own per-command go-ahead.
 
 ## Phase 0: Re-measure (read-only)
 
-- [ ] 0.1 Re-read the newest drift comment on #8754 and diff it against the classification table.
+- [x] 0.1 Re-read the newest drift comment on #8754 and diff it against the classification table.
       Re-check the issue state.
-- [ ] 0.2 Record queued/in-progress runs on the three concurrency groups.
-- [ ] 0.3 Re-run the ZOT consumer audit against `origin/main`, including the Doppler raw-value scan.
-- [ ] 0.4 Make GET-only reads: firewall 11269127 `applied_to`, inngest public-port probe
+- [x] 0.2 Record queued/in-progress runs on the three concurrency groups.
+- [x] 0.3 Re-run the ZOT consumer audit against `origin/main`, including the Doppler raw-value scan.
+- [x] 0.4 Make GET-only reads: firewall 11269127 `applied_to`, inngest public-port probe
       (22/6379/8288/8289/9000), and the live deployment policy id. If any data port answers,
       escalate to the CLO.
 
 ## Phase 1A: PR-A, the inngest firewall bound at server creation
 
-- [ ] 1A.0 Write the Guard 1 assertions in `apps/web-platform/infra/inngest-host.test.sh` and
+- [x] 1A.0 Write the Guard 1 assertions in `apps/web-platform/infra/inngest-host.test.sh` and
       observe them RED.
-- [ ] 1A.1 In `inngest-host.tf`, add `firewall_ids = [hcloud_firewall.inngest.id]` and replace the
+- [x] 1A.1 In `inngest-host.tf`, add `firewall_ids = [hcloud_firewall.inngest.id]` and replace the
       attachment with `removed{destroy=false}`. Rewrite its comment.
-- [ ] 1A.2 In the workflow, drop the attachment `-target` from the `inngest_host` job and add it to
+- [x] 1A.2 In the workflow, drop the attachment `-target` from the `inngest_host` job and add it to
       the per-merge `apply` list. Move the rationale to the runbook.
-- [ ] 1A.3 In the parity test, reclassify `hcloud_firewall_attachment.inngest` using the
+- [x] 1A.3 In the parity test, reclassify `hcloud_firewall_attachment.inngest` using the
       `doppler-write-token.tf` precedent.
-- [ ] 1A.4 In the shape gate and its test, drop the attachment from the allow list and the class,
+- [x] 1A.4 In the shape gate and its test, drop the attachment from the allow list and the class,
       change the derived target count from 18 to 17, and re-point the two red rows. Fix the comments
       in the replace gate and the registry gate.
-- [ ] 1A.5 Bump `BASELINE_DECLARED_PROBES` from 29 to 30, with the required comment.
-- [ ] 1A.6 Add the ADR-100 amendment.
+- [x] 1A.5 Bump `BASELINE_DECLARED_PROBES` from 29 to 30, with the required comment.
+- [x] 1A.6 Add the ADR-100 amendment.
 - [ ] 1A.7 Run the Phase 1 suites and check AC-A1 to AC-A4. The PR body's first line states the
       production effect. Use `Ref #8754`.
 - [ ] 1A.8 Merge into a quiet group. Verify 2A (plan = forget + the two perpetual entries), then
