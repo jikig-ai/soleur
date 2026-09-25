@@ -1451,12 +1451,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
-  // hcloud_firewall_attachment.inngest LEFT this set (#8754). It is no longer a declared
-  // resource: the firewall binds through hcloud_server.inngest.firewall_ids at create, and the old
-  // address is a `removed { lifecycle { destroy = false } }` forget in inngest-host.tf. Like the
-  // doppler-write-token.tf forgets, that address rides the per-merge `apply` -target list,
-  // because a `removed` block is planned only when its address is targeted. Pinned by the
-  // "#8754 inngest firewall attachment forget" block below.
+  // hcloud_firewall_attachment.inngest left this set (#8754): it is a removed{} forget now.
   "random_id.inngest_signing_key_dedicated",
   "random_id.inngest_event_key_dedicated",
   "random_password.inngest_redis_password_dedicated",
@@ -3671,9 +3666,7 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
     expect(defAllow).not.toBeNull();
     const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
-    // 17 since #8754: the firewall binding moved to hcloud_server.inngest.firewall_ids, so the
-    // job no longer targets hcloud_firewall_attachment.inngest.
-    expect(targets.length).toBe(17); // non-vacuity floor
+    expect(targets.length).toBe(17); // non-vacuity floor (#8754 dropped the inngest attachment)
     expect(allow).toEqual(targets);
     // The passphrase pair is per-merge -targeted and must never join this allow-set.
     expect(allow).not.toContain("random_password.inngest_redis_luks");
@@ -3682,30 +3675,34 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
 });
 
 /**
- * #8754 inngest firewall attachment forget. The binding moved to
- * hcloud_server.inngest.firewall_ids (applied at ServerCreate, before first boot), and the old
- * attachment address became a `removed { lifecycle { destroy = false } }` block. A `removed` block
- * is planned only when its address is targeted, so the PER-MERGE `apply` job must target it, and
- * the `inngest_host` birth job must not (a birth must never plan a forget; its shape gate reds
- * forget_present).
+ * #8754: `removed { from = hcloud_firewall_attachment.inngest … }` is planned only when its address is
+ * targeted, so the forget must ride the `apply` job's SAVED plan (`terraform plan … -out=tfplan`, the
+ * one the destroy guard grades), not the post-bridge `terraform apply`. The block's shape is Guard 1's
+ * (inngest-host.test.sh); the inngest_host job's side is the allow === targets check above.
  */
-describe("#8754 inngest firewall attachment forget rides the per-merge apply", () => {
-  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+describe("#8754 inngest firewall attachment forget rides the per-merge saved plan", () => {
   const ADDR = "hcloud_firewall_attachment.inngest";
-  const tf = stripComments(readFileSync(join(INFRA_DIR, "inngest-host.tf"), "utf8"));
+  const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
+  // One shell command: its first line through the first line with no trailing backslash.
+  const command = (start: RegExp): string => {
+    const lines = applyJob.split("\n");
+    const i = lines.findIndex((l) => start.test(l));
+    if (i < 0) return "";
+    const end = lines.findIndex((l, j) => j >= i && !/\\\s*$/.test(l));
+    return lines.slice(i, end < 0 ? lines.length : end + 1).join("\n");
+  };
+  const savedPlan = command(/^\s*terraform plan\b.*-out=tfplan/);
+  const postBridge = command(/^\s*terraform apply -auto-approve -input=false \\$/);
 
-  test("the address is a removed{destroy=false} block, not a declared resource", () => {
-    const all = listInfraTfFiles().flatMap((f) => extractAllResources(stripComments(readFileSync(f, "utf8"))));
-    expect(all).toContain("hcloud_server.inngest"); // non-vacuity: the extraction reached the file
-    expect(all).not.toContain(ADDR);
-    expect(tf).toMatch(/removed\s*\{\s*from\s*=\s*hcloud_firewall_attachment\.inngest\s+lifecycle\s*\{\s*destroy\s*=\s*false\s*\}\s*\}/);
+  test("the address is -targeted inside the saved-plan command", () => {
+    expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
+    expect(extractAllTargets(savedPlan).has(ADDR)).toBe(true);
   });
 
-  test("the per-merge apply job targets it; the inngest_host and inngest_host_replace jobs do not", () => {
-    const applyTargets = extractAllTargets(extractJobBlock(wf, "apply"));
-    expect(applyTargets.has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
-    expect(applyTargets.has(ADDR)).toBe(true);
-    expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has(ADDR)).toBe(false);
+  test("and not in the post-bridge terraform apply, nor in inngest_host_replace", () => {
+    expect(extractAllTargets(postBridge).has("terraform_data.disk_monitor_install")).toBe(true); // non-vacuity
+    expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
   });
 });
