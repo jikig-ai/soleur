@@ -105,10 +105,20 @@ jobs:
           # fail-closed branch this PR adds lives INSIDE a step gated on that flag, so the
           # bypass sat one step upstream of all of it.
           rc=0
-          raw=$(git diff --name-only --diff-filter=AMRT "$BASE_SHA"..."$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/diff.err") || rc=$?
+          raw=$(git -c core.quotePath=false diff --name-only --diff-filter=AMRT "$BASE_SHA"..."$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/diff.err") || rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::error::skill-security-scan: git could not resolve the diff for base=$BASE_SHA head=$HEAD_SHA (git exited $rc). Refusing to report a clean scan from a diff that never resolved."
             cat "${RUNNER_TEMP:-/tmp}/diff.err" >&2 || true
+            exit 1
+          fi
+          # QUOTED PATHS. Without `-c core.quotePath=false` git wraps any non-ASCII path in
+          # double quotes with octal escapes, so `plugins/soleur/agents/café.md` never matched
+          # the `^plugins/...` filter below and a weaponised agent skipped this gate. Even with
+          # it, git still quotes a path containing a tab, newline, `"` or `\`; refuse those
+          # rather than let them fall out of the scan set.
+          if printf '%s\n' "$raw" | grep -qE '^"(plugins/soleur/(skills|agents)/|\.claude/(skills|agents)/)'; then
+            echo "::error::skill-security-scan: a quoted path (tab, newline, quote or backslash in the name) under a scanned skill/agent directory cannot be scanned safely; rename it."
+            printf '%s\n' "$raw" | grep -E '^"' >&2 || true
             exit 1
           fi
           # `|| true` survives verbatim HERE, where it covers only grep.
