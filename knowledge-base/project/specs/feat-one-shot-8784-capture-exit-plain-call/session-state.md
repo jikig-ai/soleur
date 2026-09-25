@@ -40,3 +40,6 @@ Planning subagent canceled by user interrupt after committing the plan; no Sessi
 
 ### Remaining
 - ship -> merge -> postmerge
+- Advisor consult (ADR-083 scoped Task) ran: found real logic bugs, all fixed in ffc4cee5be (segment-depth gating, compound antecedents, -o attached parse, finditer reads, quote-parity on _unquoted, ;-tail S1, }-arm depth gate, mid-line set verdicts). Suite now 74/74.
+- Ship gates so far: trailer-parse green; artifacts committed; learning on branch; readme counts in sync; probe-residue clean; review-evidence trailer emitted (4/8 degraded); review-findings exit 0 unresolved; net-issue-flow PASS (net 0); undeferred operator-step n/a; vendor/expense n/a; domain gates n/a; PR title+body written; Closes #8784 linked ([8784]); auto-close scan clean; semver:minor label.
+- Phase 4 battery: --affected degrades to full (runner-changed); queued behind sibling full-gates via advisory lock (SOLEUR_ALLOW_FULL_GATE=1). Waiting.
