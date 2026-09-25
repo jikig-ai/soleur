@@ -60,6 +60,13 @@ cp "$REPO_ROOT/$RUNNER_REL" "$SB/runner.pristine" || setup_die "cp runner pristi
 # Arm 3b scans ALL workflows for test/infra registrations (a suite may legitimately
 # live in another workflow), so the sandbox carries the whole directory.
 cp "$REPO_ROOT"/.github/workflows/*.yml "$SB/.github/workflows/" || setup_die "cp workflows"
+# The manifest coherence arm only runs when the file exists — carry it (and a
+# pristine copy) or the whole arm is dead code inside this battery.
+mkdir -p "$SB/$INFRA_PREFIX"
+cp "$REPO_ROOT/apps/web-platform/infra/suite-shard-legs.tsv" \
+  "$SB/apps/web-platform/infra/suite-shard-legs.tsv" || setup_die "cp manifest"
+cp "$SB/apps/web-platform/infra/suite-shard-legs.tsv" "$SB/manifest.pristine" \
+  || setup_die "cp manifest pristine"
 
 mapfile -t REAL_SUITES < <(git -C "$REPO_ROOT" ls-files \
   "${INFRA_PREFIX}/*.test.sh" | LC_ALL=C sort -u)
@@ -85,7 +92,11 @@ done
 # The real-repo enumeration above is done; from here every git call is sandbox-scoped.
 git_fixture_env "$SB" || setup_die "git_fixture_env refused the mutation sandbox $SB"
 git -C "$SB" init -q                >/dev/null 2>&1 || setup_die "git init"
+sb_commit() { git -C "$SB" -c user.email=t@t -c user.name=t commit -qm "${1:-m}"   >/dev/null 2>&1 || setup_die "commit ${1:-m}"; }
+# The gate enumerates HEAD's TREE (ls-tree), matching the runner — staged-but-
+# uncommitted files are invisible to it, so every add below needs a commit.
 git -C "$SB" add -A                 >/dev/null 2>&1 || setup_die "git add"
+sb_commit init
 
 run_gate() { ( cd "$SB" && bash "$GATE_REL" >"$SB/out.log" 2>&1; echo $?; ); }
 
@@ -206,6 +217,7 @@ mv "$SB/$INFRA_PREFIX" "$SB/${INFRA_PREFIX}-moved" || setup_die "mv infra dir"
 mkdir -p "$SB/$INFRA_PREFIX"
 cp "$SB/runner.pristine" "$SB/$RUNNER_REL" || setup_die "restore runner under moved dir"
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add after mv"
+sb_commit after-mv
 rc=$(run_gate)
 if [[ "$rc" == "0" ]]; then
   bad "M9 enumeration collapse: gate stayed GREEN with zero suites"
@@ -215,6 +227,7 @@ fi
 rm -rf "$SB/$INFRA_PREFIX"
 mv "$SB/${INFRA_PREFIX}-moved" "$SB/$INFRA_PREFIX" || setup_die "mv back"
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add after mv back"
+sb_commit mv-back
 
 # M10 -- fail-fast removed: one RED leg cancels the other three and a quarter of
 # the suite set silently never runs.
@@ -244,6 +257,7 @@ NEWSUB="$INFRA_PREFIX/newdir/zzz-mutation-subdir.test.sh"
 mkdir -p "$SB/$(dirname "$NEWSUB")" || setup_die "mkdir newsub"
 : > "$SB/$NEWSUB" || setup_die "stub newsub"
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add newsub"
+sb_commit newsub
 restore_wf
 rc=$(run_gate)
 if [[ "$rc" == "0" ]]; then
@@ -253,6 +267,7 @@ else
 fi
 rm -f "$SB/$NEWSUB"; rmdir "$SB/$(dirname "$NEWSUB")" 2>/dev/null
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add after M13"
+sb_commit after-M13
 
 # M14 -- `if:` on an ARTIFACT-UPLOAD step stays green: the masking check is
 # scoped to the runner step, not the job. The pristine workflow ALREADY carries
@@ -272,6 +287,7 @@ NEWTI="apps/web-platform/test/infra/zzz-mutation-unwired.test.sh"
 mkdir -p "$SB/$(dirname "$NEWTI")" || setup_die "mkdir newti"
 : > "$SB/$NEWTI" || setup_die "stub newti"
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add newti"
+sb_commit newti
 restore_wf
 rc=$(run_gate)
 if [[ "$rc" == "0" ]]; then
@@ -283,37 +299,90 @@ else
 fi
 rm -f "$SB/$NEWTI"
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add after M15"
+sb_commit after-M15
 
 # M16 -- drop a leg from the matrix list. Every remaining leg still greens, but
 # the dropped residue class is executed by NO leg — silent coverage shrink.
 # The leg-totality arm (ADR-238 Decision 3) must catch it.
-sed -i 's/leg: \["1\/4", "2\/4", "3\/4", "4\/4"\]/leg: ["1\/4", "2\/4", "3\/4"]/' "$SB/$WF_REL"
-rc=$(run_gate)
-restore_wf
-if [[ "$rc" == "0" ]]; then
-  bad "M16 drop-a-leg: gate stayed GREEN (a residue class runs nowhere)"
-elif grep -qF "does not tile 1..N" "$SB/out.log"; then
-  ok "M16 drop-a-leg: rc=$rc and message names the totality gap"
-else
-  bad "M16 drop-a-leg: rc=$rc but expected message missing: $(tail -3 "$SB/out.log")"
-fi
+expect_red "M16 drop-a-leg" "does not tile 1..N" \
+  sed -i 's/leg: \["1\/4", "2\/4", "3\/4", "4\/4"\]/leg: ["1\/4", "2\/4", "3\/4"]/' "$SB/$WF_REL"
 
 # M17 -- duplicate a leg: ["1/4","1/4","2/4","4/4"] still tiles nothing for k=3.
-sed -i 's/leg: \["1\/4", "2\/4", "3\/4", "4\/4"\]/leg: ["1\/4", "1\/4", "2\/4", "4\/4"]/' "$SB/$WF_REL"
-rc=$(run_gate)
-restore_wf
-if [[ "$rc" == "0" ]]; then
-  bad "M17 duplicate-leg: gate stayed GREEN (k=3 runs nowhere, k=1 runs twice)"
-elif grep -qF "does not tile 1..N" "$SB/out.log"; then
-  ok "M17 duplicate-leg: rc=$rc and message names the totality gap"
-else
-  bad "M17 duplicate-leg: rc=$rc but expected message missing: $(tail -3 "$SB/out.log")"
-fi
+expect_red "M17 duplicate-leg" "does not tile 1..N" \
+  sed -i 's/leg: \["1\/4", "2\/4", "3\/4", "4\/4"\]/leg: ["1\/4", "1\/4", "2\/4", "4\/4"]/' "$SB/$WF_REL"
+
+# M18 -- a SECOND `leg:` key: the gate reads the first list, YAML executes the
+# last. An appended `leg: ["5/5"]` greens totality while every leg runs one
+# residue class.
+expect_red "M18 duplicate leg: key" "keys" \
+  sed -i 's|^        leg: \["1/4", "2/4", "3/4", "4/4"\]|        leg: ["1/4", "2/4", "3/4", "4/4"]\n        leg: ["5/5"]|' "$SB/$WF_REL"
+
+MANIFEST_REL="apps/web-platform/infra/suite-shard-legs.tsv"
+restore_manifest() { cp "$SB/manifest.pristine" "$SB/$MANIFEST_REL" || setup_die "restore manifest"; }
+expect_red_manifest() {  # manifest-mutating variant of expect_red
+  local label="$1" needle="$2"; shift 2
+  restore_wf; restore_manifest
+  "$@" || setup_die "mutation cmd for $label"
+  local rc; rc=$(run_gate)
+  restore_manifest
+  if [[ "$rc" == "0" ]]; then
+    bad "$label: gate stayed GREEN (vacuous arm)"
+  elif grep -qF "$needle" "$SB/out.log"; then
+    ok "$label: rc=$rc and message names the right mode"
+  else
+    bad "$label: rc=$rc but expected message missing ($needle): $(tail -3 "$SB/out.log")"
+  fi
+}
+
+# M19 -- a manifest row naming a suite that does not exist is drift the hash
+# fallback would absorb; the coherence arm must name it.
+expect_red_manifest "M19 stale manifest row" "not an executable infra" \
+  sh -c 'printf "%s\t%s\n" "apps/web-platform/infra/zzz-stale-row.test.sh" "1" >> "$1"' _ "$SB/$MANIFEST_REL"
+
+# M20 -- a manifest row assigned to a leg that does not exist (runner exit-2s
+# on this exact shape; the gate must surface it pre-merge).
+expect_red_manifest "M20 manifest leg out of range" "not a leg" \
+  sh -c 'printf "%s\t%s\n" "apps/web-platform/infra/ci-deploy.test.sh" "9" >> "$1"' _ "$SB/$MANIFEST_REL"
+
+# M21 -- a `# n=` header that disagrees with the matrix is the same drift one
+# level up (the runner degrades to positional silently).
+expect_red_manifest "M21 manifest n= mismatch" "leg count" \
+  sed -i 's|^# n=4$|# n=3|' "$SB/$MANIFEST_REL"
+
+# M22 -- `if: always()` dropped from -done: default needs: semantics render a
+# cancelled upstream `skipped`, which branch protection can treat as success.
+expect_red "M22 drop if: always() from -done" "always" \
+  sed -i '/^  deploy-script-tests-done:/,/^  [a-z][a-z0-9_-]*:/{/^    if: always()$/d}' "$SB/$WF_REL"
+
+# M23 -- notify reads the MATRIX job's result instead of the aggregate's: the
+# #8735 blind spot restored (a cancelled leg passes `== "failure"`).
+expect_red "M23 notify reads matrix result" "needs.deploy-script-tests-done.result" \
+  sed -i 's|needs\.deploy-script-tests-done\.result|needs.deploy-script-tests.result|' "$SB/$WF_REL"
+
+# M24 -- a second runner invocation means every suite runs twice (and the
+# zero-count twin is no coverage at all).
+expect_red "M24 duplicate runner step" "invocations" \
+  sed -i "s|^\(        run: bash ${RUNNER_REL}[[:space:]]*\)\$|\1\n      - name: duplicate runner\n        run: bash ${RUNNER_REL}|" "$SB/$WF_REL"
+
+# M25 -- a masked privileged sudo step: `if: false` under the loopback step
+# greens presence while the suite never executes.
+expect_red "M25 if: false on a privileged sudo step" "sudo step" \
+  sed -i 's|^\(      - name: Run /workspaces LUKS staging-target.*\)$|\1\n        if: false|' "$SB/$WF_REL"
+
+# M26 -- the fixed job's aggregate step masked: `if: false` on the aggregate
+# step greens every leg regardless of their results.
+expect_red "M26 if: false on the aggregate step" "aggregate step" \
+  sed -i 's|^\(      - name: Aggregate deploy-script-tests results\)$|\1\n        if: false|' "$SB/$WF_REL"
+
+# M27 -- SOLEUR_INFRA_DIR wired into the matrix job narrows the derived root:
+# legs tile and green on a silently shrunken suite set.
+expect_red "M27 SOLEUR_INFRA_DIR in matrix job" "SOLEUR_INFRA_DIR" \
+  sed -i 's|^\(          SOLEUR_INFRA_SHARD:.*\)$|\1\n          SOLEUR_INFRA_DIR: apps/web-platform/infra/inngest-rls|' "$SB/$WF_REL"
 
 # ---------------------------------------------------------------------------
 # Assertion floor.
 # ---------------------------------------------------------------------------
-MIN_ASSERTS=19
+MIN_ASSERTS=28
 if (( asserts < MIN_ASSERTS )); then
   echo "[FAIL] assertion floor: only $asserts assertion(s) ran, expected >= $MIN_ASSERTS." >&2
   echo "       Rows were removed or short-circuited. Lower the floor deliberately, with a reason." >&2
