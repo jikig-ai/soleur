@@ -228,8 +228,11 @@ jobs:
     # #8020 floor convention every ci.yml ceiling already uses. RAISING it reds B9 by name.
     # Since 2026-09-24 a run that finds no release run retries its lookup (3 x 20 s of sleep
     # plus 8 reads, measured ~70 s), so every docs-only run takes ~70 s longer: ~88 s against
-    # 900 s is ~10x headroom. With a flapping API (each read on its 3rd try) the worst case is
-    # ~6-7.5 min, still inside 15 m; gh api and the lazy fetch are time-bounded (see below).
+    # 900 s is ~10x headroom. With a flapping API (each read timing out twice, then answering
+    # on its 3rd 20 s try: 3 x 20 s + 5 s + 10 s of retry sleep = 75 s per read) the worst case
+    # is 8 x 75 s + 60 s backoff + 60 s lazy fetch = ~12 min, still inside 15 m but with little
+    # margin; a job timeout ends red with no skip_reason (email only, no Slack page). gh api and
+    # the lazy fetch are time-bounded (see below).
     # Consequence, not sizing: the liveness poll on the RELEASE run below is dead by
     # construction under ADR-217 D3(b) (this arm queues behind the release run on the shared
     # concurrency group, so the release is done before this job starts). If a future edit
