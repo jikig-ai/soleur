@@ -19,9 +19,9 @@ Date: 2026-09-25
 
 **Cost of the challenge:** it drops the mechanism you named. It rewrites a second follow-through probe. The `onFailure` single attempt is already harmless, because the conditional UPDATE makes a duplicate or missed retry a no-op, and the catch pages.
 
-**Default kept:** your direction. The plan ships `onFailure` plus a `function.cancelled` listener.
+**Default kept, with the benefit folded in (deepen-plan, architecture review):** the plan keeps `onFailure`, but makes it a one-step forward of `agent.spawn.orphaned` to a single `agent-on-spawn-settle` function. That function has `retries: 3`, idempotency and two triggers (the forward and `inngest/function.cancelled`). The settling gets DHH's retries and single code path, and your `onFailure` (plus the #8803 probe) stays.
 
-**Reverse it by:** telling the work phase "use a single two-trigger listener". The plan's settle helper is shared, so this only swaps the entry points.
+**Reverse it by:** telling the work phase to drop `onFailure` and add `inngest/function.failed` as a third trigger on `agent-on-spawn-settle`. The #8803 probe would then need a rewrite.
 
 ---
 
@@ -51,3 +51,4 @@ The CTO found that the Today card's Retry re-POSTs the send route, and the route
 
 - **Gating `mark-acknowledged` / `persist-failure` with `.is("failure_reason", null)`** (advisor): rejected. The late `mark-acknowledged` carries `reversal_handles`, and gating it would lose the founder's Undo. See the plan's Risks section.
 - **Trimming the Guard Contract matrices to one line each** (DHH): rejected. `scripts/lint-guard-contract.py` and deepen-plan Phase 4.11 require at least 3 rows per guard, plus harness rows.
+- **A Stop plus a timeout pages** (spec-flow + architecture, deepen). This is a correctness fix and was applied. It is listed here because it changes when the founder's Stop is honoured as "Stopped": that now requires a cancel BEFORE the finish timeout. A Stop on a hung run shows the `leader_internal_error` copy.
