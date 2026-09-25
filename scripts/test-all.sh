@@ -3296,6 +3296,9 @@ if want_scripts; then
   # it over the repo. Registering only one makes a lint decoration.
   run_suite "scripts/lint-anthropic-content-position" bash scripts/lint-anthropic-content-position.test.sh
   run_suite "scripts/lint-anthropic-content-position-live" python3 scripts/lint-anthropic-content-position.py
+  # lint-shell-capture-exit classes: S1 unprotected capture, S2 double-emit || echo
+  # guard, S3 dead status read (`cmd` then `rc=$?` under set -e -- #8784),
+  # S4 status-leaking `test && action` function tail.
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt

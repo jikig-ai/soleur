@@ -4,8 +4,12 @@
 # in scripts/test-all.sh. Regenerating it to admit a NEW finding defeats the
 # gate -- fix the finding instead.
 .claude/hooks/cla-signed-author-gate.test.sh	S2	[[ -f "$jsonl" ]] && denied=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || echo 0)
-plugins/soleur/test/session-state.test.sh	S1	T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1)
-plugins/soleur/test/session-state.test.sh	S1	t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2)
+.claude/hooks/cla-signed-author-gate.test.sh	S3	out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 1 --squash')") << read: out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 1 --squash')"); rc=$?
+.claude/hooks/cla-signed-author-gate.test.sh	S3	out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')") << read: out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
+.claude/hooks/cla-signed-author-gate.test.sh	S3	out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready 123')") << read: out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready 123')"); rc=$?
+.claude/hooks/cla-signed-author-gate.test.sh	S3	out=$(run_hook "$inc" "$(make_payload "$work" 'git status')") << read: out=$(run_hook "$inc" "$(make_payload "$work" 'git status')"); rc=$?
+.claude/hooks/follow-through-directive-gate.test.sh	S3	out=$(printf '%s' "$input" | "$HOOK" 2>&1) << read: rc=$?
+.claude/hooks/iac-plan-write-guard.sh	S4	[ -f "$resolved" ] && grep -qF "$ACK_LITERAL" "$resolved" 2>/dev/null
 .claude/hooks/pre-merge-auto-close-scan.test.sh	S1	HOOK_CODE="$(grep -vE '^[[:space:]]*#' "$HOOK")"
 .claude/hooks/session-rules-loader.test.sh	S1	bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.rules.md | wc -l | tr -d ' ')
 .claude/hooks/session-rules-loader.test.sh	S1	code26=$(grep -vE '^[[:space:]]*#' "$HOOK")
@@ -17,17 +21,16 @@ plugins/soleur/test/session-state.test.sh	S1	t9_pid=$(grep '^pid=' "$ROOT/leases
 .claude/hooks/session-rules-loader.test.sh	S1	manifest9=$(printf '%s' "$out9" | jq -r '.hookSpecificOutput.additionalContext' | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
 .claude/hooks/session-rules-loader.test.sh	S1	nasty_line=$(printf '%s' "$ctx_nasty" | grep -F '[tmpfs-guard]' | head -1)
 .claude/hooks/session-rules-loader.test.sh	S1	want32=$(grep -oE '^- \[id: [a-z0-9-]+\]' "$T32/AGENTS.md" | sed -E 's/^- \[id: (.*)\]$/\1/' | sort | tr '\n' ' ')
-.claude/hooks/ship-runbook-ssh-gate.sh	S1	added=$(git diff --unified=0 "$BASE"...HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]' | sed 's/^+//')
 .claude/hooks/ship-runbook-ssh-gate.sh	S1	last_resort_line=$(printf '%s\n' "$added" | grep -niE '(last-?resort|emergency only|when all else fails)' | head -1 | awk -F: '{print $1}')
-.claude/hooks/ship-soak-followthrough-gate.sh	S1	REFS=$(grep -oiE '(Ref|Tracks|Closes|Fixes)[[:space:]]+#[0-9]+' "$CORPUS" | grep -oE '[0-9]+' | sort -u)
-.claude/hooks/ship-soak-followthrough-gate.sh	S1	spath=$(printf '%s' "$body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
 .claude/hooks/ship-unpushed-commits-gate.test.sh	S1	rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1)
 .claude/hooks/ship-unpushed-commits-gate.test.sh	S1	ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)
 .claude/hooks/ship-unpushed-commits-gate.test.sh	S2	denied_rows=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || echo 0)
+apps/cla-evidence/scripts/_r2-endpoint.test.sh	S3	( assert_r2_endpoint "$url" ) >"$outfile" 2>&1 << read: local rc=$?
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	S1	workflow_seconds=$(grep -oE '^[[:space:]]*IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WORKFLOW" | grep -oE '[0-9]+$' | head -1)
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	S1	wrapper_seconds=$(grep -oE -- '--kill-after=[0-9]+s [0-9]+s /usr/local/bin/ci-deploy\.sh' "$WRAPPER" | grep -oE ' [0-9]+s /' | grep -oE '[0-9]+' | head -1)
 apps/web-platform/infra/ci-deploy.sh	S1	INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-)
 apps/web-platform/infra/ci-deploy.sh	S1	INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-)
+apps/web-platform/infra/ci-deploy.sh	S3	"$CANARY_LAYER_3_SCRIPT" http://localhost:3001 2>&1 | logger -t "$LOG_TAG" -p user.warning << read: layer3_rc=${PIPESTATUS[0]}
 apps/web-platform/infra/ci-deploy.test.sh	S1	T3_LINE="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T3_F" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | head -1)"
 apps/web-platform/infra/ci-deploy.test.sh	S1	_exit=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
 apps/web-platform/infra/ci-deploy.test.sh	S1	_ids="$(printf '%s\n%s\n' "$_ids" "$_ids_alt" | grep -E '^(deploy|deploy-peer)$' | sort -u)"
@@ -44,16 +47,10 @@ apps/web-platform/infra/ci-deploy.test.sh	S1	snap_exit=$(grep -oE '"exit_code":-
 apps/web-platform/infra/ci-deploy.test.sh	S1	snap_reason=$(grep -oE '"reason":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
 apps/web-platform/infra/ci-deploy.test.sh	S1	snap_tag=$(grep -oE '"tag":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
 apps/web-platform/infra/ci-deploy.test.sh	S1	traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
-apps/web-platform/infra/ci-deploy.test.sh	S1	traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
-apps/web-platform/infra/ci-deploy.test.sh	S1	traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
-apps/web-platform/infra/ci-deploy.test.sh	S1	traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
-apps/web-platform/infra/ci-deploy.test.sh	S1	traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
-apps/web-platform/infra/ci-deploy.test.sh	S1	traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	COMMENT_LINE=$(grep -nE 'Bootstrap Inngest server on first boot' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sort -u | wc -l)
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	IF_LINE=$(grep -nE '^%\{ if web_colocate_inngest ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	INNGEST_CI_PROSE="$(grep -E '^[[:space:]]*#' "$INNGEST_CI_YML" | sed -E 's/^[[:space:]]*#[[:space:]]?//' | tr '\n' ' ' | tr -s ' ')"
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	SUDOERS_CONTENT_ONLY=$(grep -vE '^\s*#|^\s*$' "$SUDOERS_SRC")
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
@@ -72,14 +69,27 @@ apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	PG_SET_LN=$(grep -nE
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | head -1 | cut -d: -f1)
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | head -1 | cut -d: -f1)
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | head -1 | sed "s/^jq -r '//; s/'\$//")
-apps/web-platform/infra/disk-monitor.test.sh	S1	[[ -f "$mock_dir/curl_args" ]] && curl_count=$(grep -c '^-s -o /dev/null' "$mock_dir/curl_args")
+apps/web-platform/infra/git-data-bootstrap.sh	S4	[[ "$_v" =~ ^[0-9]+$ ]] && printf '%s' "$_v"
+apps/web-platform/infra/git-data-cutover-access.test.sh	S3	env -i PATH="$T/kbin:/usr/bin:/bin" HOME="$KR" RUNNER_TEMP="$KR/rt" GITHUB_ENV="$KR/github_env" DOPPLER_STORE="$KR/store" DOPPLER_LOG="$KR/doppler.log" DOPPLER_TOKEN=fixture-root-read "$@" bash --noprofile --norc "${KF_FLAGS[@]}" "$T/steps/key_fetch.sh" > "$KR/stdout" 2>&1 << read: KF_RC=$?
+apps/web-platform/infra/git-data-cutover-access.test.sh	S3	env -i PATH="$T/tdbin:/usr/bin:/bin" HOME="$TDR" RUNNER_TEMP="$TDR/rt" TD_LOG="$TDR/log" SERVER_IP=10.0.1.10 CLOUDFLARED_PID="$pid" CI_SSH_KEYFILE="$TDR/ci-key" bash --noprofile --norc -e "$body" > "$TDR/stdout" 2>&1 << read: TD_RC=$?
+apps/web-platform/infra/git-data-cutover-access.test.sh	S3	env -i PATH=/usr/bin:/bin HOME="$SR" RUNNER_TEMP="$SR/rt" GITHUB_WORKSPACE="$ROOT" ${2:+CI_SSH_KEYFILE="$2"} bash --noprofile --norc -eo pipefail "$T/steps/ssh_config.sh" > "$SR/stdout" 2>&1 << read: SC_RC=$?; SC_CFG="$SR/rt/gd-ssh-config"; SC_KH="$SR/rt/gd-known-hosts"
+apps/web-platform/infra/git-data-cutover-access.test.sh	S4	[ "$(grep -cxF ' pin_hd="HOOKS_DIR=\"\${GIT_DATA_HOOKS_DIR:-$serving}\""' <<< "$code")" = 1 ] && [ "$(grep -cxF " pin_ex='exec git -c \"core.hooksPath=\${HOOKS_DIR}\" \"\${verb#git-}\" \"\$repo_real\"'" <<< "$code")" = 1 ] && [ "$(grep -cxF 'OLD_ROOT="${OLD_ROOT:-/mnt/git-data}" # the plaintext store every wrapper hardcodes' "$1")" = 1 ] && [ "$(grep -cxF 'HOOKS_DIR="${GIT_DATA_HOOKS_DIR:-/mnt/git-data/hooks}"' "$2")" = 1 ] && [ "$(grep -cxF 'exec git -c "core.hooksPath=${HOOKS_DIR}" "${verb#git-}" "$repo_real"' "$2")" = 1 ]
+apps/web-platform/infra/git-data-cutover-access.test.sh	S4	[ "$RC" = 0 ] && [ "$(grep -cE '^ssh ' "$TLF")" = 1 ] && grep -qE '^ssh .* 10\.0\.1\.20 h=/x/fresh/hooks; p="\$h/pre-receive"; src=/dev/mapper/git-data; sp=/mnt/git-data/hooks; w=/usr/local/bin/git-data-transport-wrapper\.sh; ' "$TLF" && grep -qF 'GIT_DATA_HOOKS_DIR:-/mnt/git-data/hooks' "$TLF"
+apps/web-platform/infra/git-data-cutover-access.test.sh	S4	[ "$RC" = 5 ] && [ ! -s "$TLF" ] && grep -qE '^\[git-data-cutover\] REFUSE verdict=real_cutover_unreconciled vars=' "$OUT" && [ "$(grep -E '^::' "$OUT")" = "::error title=git-data-cutover::verdict=real_cutover_unreconciled" ] && grep -q '#8211' "$OUT"
+apps/web-platform/infra/git-data-cutover-access.test.sh	S4	[ "$RC" = 5 ] && grep -qxF "[git-data-cutover] STORE probe=fence-shape verdict=probe_failed reason=$want" "$OUT" && ! grep -qE '^ssh ' "$TLF"
+apps/web-platform/infra/git-data-cutover-access.test.sh	S4	[ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=124' "$OUT"
+apps/web-platform/infra/git-data-cutover-access.test.sh	S4	[ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" && ! grep -q 'CANARY-SECOND-LINE' "$OUT" && no_count_probe
+apps/web-platform/infra/git-data-cutover-access.test.sh	S4	[ "$TD_RC" = 0 ] && [ ! -e "$TDR/rt/gd-root-key" ] && [ ! -e "$TDR/rt/gd-ssh-config" ] && [ ! -e "$TDR/ci-key" ] && [ "$alive" = 0 ] && [ ! -e "$TDR/rt/gd-known-hosts" ] && [ ! -e "$TDR/rt/git-data.pin" ] && grep -qxF 'iptables -t nat -D OUTPUT -d 10.0.1.10 -p tcp --dport 22 -j REDIRECT --to-ports 2222' "$TDR/log"
+apps/web-platform/infra/git-data-cutover-access.test.sh	S4	[ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 3 ]
 apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	_mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | head -1 | cut -d: -f1)
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	_mut_seed=$(grep -n 'GIT_DATA_LUKS_DETAIL=' "$_r3_mut" | head -1 | cut -d: -f1)
 apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	_s1_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
 apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	_s1_stage_ln=$(grep -n '^[[:space:]]*STAGE=sshd_config[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
 apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | head -1 | cut -d: -f1)
-apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	s=$(grep -n '^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=' "$1" | head -1 | cut -d: -f1)
 apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S1	t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | head -1 | cut -d: -f1)
+apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S3	' >"$TMP/out/stdout" 2>&1 << read: local rc=$?
+apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S3	( cd "$TMP" && dash ./git-data-emit "m" "s" info >/dev/null 2>&1 ) << read: _d_rc=$?
+apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S3	( cd "$TMP" && dash ./git-data-emit.d1mut "m" "s" info >/dev/null 2>&1 ) << read: _d1m_rc=$?
+apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	S3	docker run --rm -e "S1_RESTART_MODE=${S1_RESTART_MODE:-ok}" -e "SSHD_T_MODE=${SSHD_T_MODE:-real}" -e "S1_HOSTKEY_MODE=${S1_HOSTKEY_MODE:-rendered}" -v "$TMP/hostkey:/work/hostkey:ro" -v "$TMP/hostkey.pub:/work/hostkey.pub:ro" -v "$1:/work/sshd-stage.sh:ro" -v "$_dropin:/work/01-hardening.conf:ro" -v "$TMP/sshd-drive.sh:/work/sshd-drive.sh:ro" -v "$TMP/s1out:/out" "$UBUNTU_BASE" bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1 << read: S1_DOCKER_RC=$?
 apps/web-platform/infra/infra-config-apply.test.sh	S1	MANAGED_N=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -cE '^[[:space:]]*"[A-Z0-9_]+\|')
 apps/web-platform/infra/infra-config-apply.test.sh	S1	granted_units=$(grep -E '^Cmnd_Alias DROPIN_TRY_RESTART = ' "$sudoers" | sed 's/^Cmnd_Alias DROPIN_TRY_RESTART = //' | tr ',' '\n' | sed -n 's#.*try-restart[[:space:]]\{1,\}\([^[:space:],]\{1,\}\).*#\1#p')
 apps/web-platform/infra/infra-config-apply.test.sh	S1	guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | head -1 | cut -d: -f1)
@@ -89,6 +99,7 @@ apps/web-platform/infra/infra-config-apply.test.sh	S1	n_granted=$(_granted_argv 
 apps/web-platform/infra/infra-config-apply.test.sh	S1	pass_vars=$(grep -oE '"envname": "[A-Z0-9_]+_B64"' "$hooks" | sed -E 's/.*"([A-Z0-9_]+)".*/\1/' | sort -u)
 apps/web-platform/infra/infra-config-apply.test.sh	S1	push_keys=$(grep -oE '"[a-z0-9_]+_b64":' "$push" | sed -E 's/"([a-z0-9_]+)":/\1/' | tr '[:lower:]' '[:upper:]' | sort -u)
 apps/web-platform/infra/infra-config-apply.test.sh	S1	read_line=$(grep -n 'IFS= read -r f_rc' "$HANDLER" | head -1 | cut -d: -f1)
+apps/web-platform/infra/infra-config-apply.test.sh	S3	bash "$HANDLER" << read: local rc=$?
 apps/web-platform/infra/infra-config-install.test.sh	S1	filemap_count=$(grep -cE '^\s*"[A-Z_]+_B64\|/' "$HANDLER")
 apps/web-platform/infra/infra-config-install.test.sh	S1	filemap_rows=$(grep -cE '^[[:space:]]*"[A-Z0-9_]+\|' "$HANDLER")
 apps/web-platform/infra/inngest-bootstrap.sh	S1	TOKEN=$(grep -oP '(?<=^DOPPLER_TOKEN=)dp\.\S+' /etc/default/webhook-deploy | head -n1)
@@ -96,12 +107,10 @@ apps/web-platform/infra/inngest-doublefire-probe.test.sh	S1	build_ln=$(grep -n '
 apps/web-platform/infra/inngest-doublefire-probe.test.sh	S1	local dl pmin; dl=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$TARGET" | head -1)
 apps/web-platform/infra/inngest-doublefire-probe.test.sh	S1	pmin=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$TARGET" | head -1)
 apps/web-platform/infra/inngest-doublefire-probe.test.sh	S1	seam_ln=$(grep -n 'if \[\[ -n "$FIXTURE_DIR" \]\]' "$TARGET" | head -1 | cut -d: -f1)
+apps/web-platform/infra/inngest-nic-wait.test.sh	S4	[[ ${#d} -le 120 ]] && [[ "$d" =~ ^[A-Za-z0-9=.:_-]+$ ]] && [[ "$d" == "boot=$BOOT8."* ]]
+apps/web-platform/infra/inngest-rearm-reminders.sh	S4	[[ "${1-}" =~ ^[0-9]+$ ]] && date -u -d "@$1" +%FT%TZ
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	S1	local args; args=$(grep '^ARGS:' "$REQ_LOG" | head -1)
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	S1	local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
-apps/web-platform/infra/inngest-rearm-reminders.test.sh	S1	local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
-apps/web-platform/infra/inngest-rearm-reminders.test.sh	S1	local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
-apps/web-platform/infra/inngest-rearm-reminders.test.sh	S1	local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
-apps/web-platform/infra/inngest-rearm-reminders.test.sh	S1	local n; n=$(grep -c '^BODY:' "$REQ_LOG")
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	S1	local n; n=$(grep -c '^BODY:' "$REQ_LOG")
 apps/web-platform/infra/inngest-server-flip-guard.test.sh	S1	fsm_states=$(printf '%s\n' "$raw_starts" | grep -vE '^$' | LC_ALL=C sort -u)
 apps/web-platform/infra/inngest-server-flip-guard.test.sh	S1	guard_allow=$(grep -E 'flag_ok=true' "$TARGET" | head -1 | sed -E 's/\).*//' | tr '|' '\n' | sed -E 's/[[:space:]]//g' | grep -E '^[a-z-]+$' | LC_ALL=C sort -u)
@@ -120,12 +129,8 @@ apps/web-platform/infra/tunnel-origin-relative-ingress.test.sh	S1	[[ -n "$rules"
 apps/web-platform/scripts/check-tc-document-sha.sh	S1	CANONICAL_TC_VERSION=$(grep -oE 'TC_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' "$LITERAL_FILE_TC" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
 apps/web-platform/scripts/check-tc-document-sha.sh	S1	SEED_VERSION=$(grep -oE '^TC_VERSION="[^"]+"' "$seed" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	S1	body="$(grep -vE '^[[:space:]]*#' "$h")"
-apps/web-platform/scripts/lib/in-image-copy-src.test.sh	S1	body="$(grep -vE '^[[:space:]]*#' "$h")"
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	S1	digests="$(grep -oE '^FROM node:22-slim@sha256:[0-9a-f]{64}' "$DOCKERFILE" | sed 's/^FROM //')"
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	S1	uniq_n="$(printf '%s\n' "$digests" | grep -v '^$' | sort -u | wc -l)"
-apps/web-platform/scripts/sentry-monitors-audit.test.sh	S1	ids=$(grep -oE '<!-- ids: \[(.*)\] -->' "$report" | head -1 | sed -E 's/.*\[//;s/\].*//' | tr -d '"' | tr ',' ' ')
-apps/web-platform/scripts/sentry-monitors-audit.test.sh	S1	manifest_json=$(grep -oE '<!-- ids: .* -->' "$report" | head -1 | sed -E 's/^<!-- ids: //;s/ -->$//')
-apps/web-platform/scripts/sentry-monitors-audit.test.sh	S1	manifest_line=$(grep -oE '<!-- ids: .* -->' "$report" 2>/dev/null | head -1)
 apps/web-platform/scripts/sentry-monitors-audit.test.sh	S2	n_dup1=$(grep -cE '^\| dup-1 ' "$report" 2>/dev/null || echo 0)
 apps/web-platform/scripts/sentry-monitors-audit.test.sh	S2	n_dup2=$(grep -cE '^\| dup-2 ' "$report" 2>/dev/null || echo 0)
 apps/web-platform/scripts/sentry-monitors-audit.test.sh	S2	n_headers=$(grep -c '^# Sentry Monitors/Alerts Migration Audit' "$report" 2>/dev/null || echo 99)
@@ -134,13 +139,16 @@ apps/web-platform/test/infra/vector-pii-scrub.test.sh	S1	ACTUAL_TAGS=$(echo "$HO
 apps/web-platform/test/infra/vector-pii-scrub.test.sh	S1	EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" | grep -v '^$' | sort -u)
 apps/web-platform/test/infra/vector-pii-scrub.test.sh	S1	SYSLOG_ID_DERIVED=$(grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$INFRA_DIR"/*.sh | sort -u)
 apps/web-platform/test/infra/vector-pii-scrub.test.sh	S1	binpath=$(grep -m1 -oE '^ExecStart=[^[:space:]]+' "$svc" | sed 's/^ExecStart=//')
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	S4	[[ "$(rcof "$1")" != "2" && "$(rcof "$1")" != "none" ]] && stderr_has "$1" 'child pgid'
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	S4	[[ -f "$1/stderr.txt" ]] && grep -qF -- "$2" "$1/stderr.txt"
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	S4	[[ -f "$1/stdout.bin" ]] && grep -qaF -- "$2" "$1/stdout.bin"
 plugins/soleur/skills/compound/scripts/token-efficiency-report.sh	S1	LINES=$(grep -oE '[0-9]+ (insertion|deletion)' "$SHORTSTAT_TMP" | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh	S4	[[ -n "$d" ]] && printf '%s/%s' "$d" "$(basename -- "$1")"
 plugins/soleur/skills/linear-fetch/scripts/assert-no-linear-telemetry.sh	S1	match=$(printf '%s' "$input" | grep -oE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' | head -n 1)
 plugins/soleur/skills/linear-fetch/scripts/assert-no-linear-telemetry.sh	S1	match=$(printf '%s' "$input" | grep -oE '\b[A-Z]{2,}-[0-9]+\b' | head -n 1)
 plugins/soleur/skills/linear-fetch/scripts/redact-linear-urls.sh	S1	matches=$(printf '%s' "$output" | grep -oE "$pattern" | wc -l | tr -d '[:space:]')
 plugins/soleur/skills/model-launch-review/scripts/audit-models.sh	S1	_pin_sha="$(grep -ohE 'claude-code-action@[a-f0-9]{40}' "${pins[@]}" 2>/dev/null | head -1 | cut -d@ -f2)"
-plugins/soleur/skills/model-launch-review/scripts/audit-models.sh	S1	ids="$(grep -oE "$(autofix_from_re)" "$f" | sort -u | tr '\n' ' ')"
-plugins/soleur/skills/model-launch-review/scripts/audit-models.sh	S1	out="$(grep -rEl "$re" "$ROOT" --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.next --exclude-dir=test --exclude-dir=__tests__ --exclude-dir=spike --exclude-dir=archive --exclude-dir=community --exclude='*.test.*' --exclude='*.spec.*' 2>/dev/null)"
+plugins/soleur/skills/operator-bootstrap/template.sh	S4	[[ -f "$ENV_FILE" ]] && grep -aq '^EXAMPLE_PROVISIONED=' "$ENV_FILE"
 plugins/soleur/skills/product-roadmap/scripts/roadmap-reconcile.sh	S1	counts="$(printf '%s\n' "$line" | grep -oE '[0-9]+ open, [0-9]+ closed' | head -1)"
 plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh	S1	TOKEN_STATUS=$(echo "$VERIFY_RESULT" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
 plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh	S1	SA_SLUG=$(echo "$SA_RESPONSE" | grep -o '"slug":"[^"]*"' | head -1 | cut -d'"' -f4)
@@ -155,38 +163,40 @@ plugins/soleur/test/audit-flag-flip.test.sh	S1	mf=$(grep -nE "$3" "$1" | head -1
 plugins/soleur/test/flag-detach-shared.test.sh	S1	audit_line=$(grep -n '/rpc/audit_flag_flip' "$CURL_LOG" | head -1 | cut -d: -f1)
 plugins/soleur/test/flag-detach-shared.test.sh	S1	ver_line=$(grep -nE 'POST .*/versions/' "$CURL_LOG" | head -1 | cut -d: -f1)
 plugins/soleur/test/ralph-loop.test.sh	S1	ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//')
 plugins/soleur/test/ralph-loop.test.sh	S1	REPEAT_COUNT=$(grep '^repeat_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/repeat_count: *//')
 plugins/soleur/test/ralph-loop.test.sh	S1	SIMILARITY_COUNT=$(grep '^similarity_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/similarity_count: *//')
 plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
-plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
 plugins/soleur/test/ralph-loop.test.sh	S1	STUCK_COUNT_FM=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/stuck_count: *//')
+plugins/soleur/test/ralph-loop.test.sh	S3	HOOK_OUTPUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>&1) || true << read: EXIT_CODE=$?
+plugins/soleur/test/ralph-loop.test.sh	S3	HOOK_OUTPUT=$(cd "$TEST_DIR/sub/deep" && echo '{}' | bash "$HOOK" 2>&1) || true << read: EXIT_CODE=$?
 plugins/soleur/test/resolve-debt.test.sh	S1	high_line=$(echo "$out" | grep -n "legacy-schema-fixture" | head -1 | cut -d: -f1)
 plugins/soleur/test/resolve-debt.test.sh	S1	low_line=$(echo "$out" | grep -n "low-severity-fixture" | head -1 | cut -d: -f1)
 plugins/soleur/test/resolve-debt.test.sh	S1	med_line=$(echo "$out" | grep -n "current-schema-fixture" | head -1 | cut -d: -f1)
+plugins/soleur/test/resolve-debt.test.sh	S3	out=$(printf "1\nresolved\n2723\n" | PATH="$STUB_DIR_NV:$PATH" python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1) << read: rc=$?
+plugins/soleur/test/resolve-debt.test.sh	S3	out=$(printf "1\nresolved\n2723\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1) << read: rc=$?
+plugins/soleur/test/resolve-debt.test.sh	S3	out=$(printf "1\nwont-fix\n2723\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1) << read: rc=$?
+plugins/soleur/test/resolve-debt.test.sh	S3	out=$(printf "2\nwont-fix\n\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1) << read: rc=$?
+plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --help 2>&1) << read: rc=$?
+plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --list --json --ledger "$FIXTURE_DIR/typical" 2>&1) << read: rc=$?
+plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/typical" 2>&1) << read: rc=$?
+plugins/soleur/test/resolve-debt.test.sh	S3	out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" --close 1 --status resolved --linked-issue 2723 2>&1) << read: rc=$?
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	S1	MUTATED="$(printf '%s\n' "$BLOCK" | grep -v 'oven-sh/setup-bun')"
+plugins/soleur/test/session-state.test.sh	S1	T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1)
+plugins/soleur/test/session-state.test.sh	S1	t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2)
+plugins/soleur/test/session-state.test.sh	S3	" >/dev/null 2>&1 << read: t9_acq_rc=$?
 scripts/expenses-verify-by-check.sh	S1	marker_hits=$({ printf '%s' "$line" | grep -oE '<!--[[:space:]]*estimate[[:space:]]' | wc -l; } | tr -d '[:space:]')
 scripts/lint-agents-compound-sync.test.sh	S1	remaining=$(grep -c '2>&1' "$root/plugins/soleur/skills/compound/SKILL.md")
 scripts/lint-agents-rule-budget.test.sh	S1	reported=$(printf '%s' "$out" | grep -oE 'B_ALWAYS=[0-9]+' | head -1 | cut -d= -f2)
-scripts/rule-metrics-aggregate.test.sh	S1	srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md")
-scripts/rule-metrics-aggregate.test.sh	S1	te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl")
+scripts/rule-metrics-aggregate.test.sh	S3	out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null) << read: out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null); rc=$?
+scripts/test-all-killed-classification.test.sh	S3	ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= TEST_TIMING_LOG="$timing" TEST_GROUP=all timeout 120 bash "$sb" 2>&1) << read: ARM_RC=$?
+scripts/test-all-runtime-ceiling.test.sh	S3	( cd "$REPO_ROOT" && env -u CI TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1 << read: rc=$?
+scripts/test-all-runtime-ceiling.test.sh	S3	( cd "$REPO_ROOT" && env CI=1 TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1 << read: rc=$?
 scripts/test-content-publisher.sh	S1	status=$(grep '^status:' "$fixture/stale-test.md" | sed 's/^status: *//')
 scripts/test-contention.test.sh	S1	lib_code="$(grep -vE '^[[:space:]]*#' "$LIB")"
 scripts/tmpfs-guard.test.sh	S1	g_default=$(grep -oE "\\\$\{${var}:-[^}]*\}" "$GUARD" | head -1)
 scripts/tmpfs-guard.test.sh	S1	l_default=$(grep -oE "\\\$\{${var}:-[^}]*\}" "$LOADER" | head -1)
 scripts/tmpfs-guard.test.sh	S1	wm_default="$(grep -E '^WATERMARK_FILE=' "$GUARD" | head -1)"
+tests/commands/test-sync-domain-model.sh	S3	report="$(bash "$DRIFT" drift --repo "$smoke" --register "$reg" 2>/dev/null)" << read: report="$(bash "$DRIFT" drift --repo "$smoke" --register "$reg" 2>/dev/null)"; rc=$?
 tests/commands/test-sync-rule-prune.sh	S1	title=$(grep -E '^::rule-prune-pr-title::' "$root/out.txt" | head -n 1 | sed 's/^::rule-prune-pr-title:://')
 tests/commands/test-sync-rule-prune.sh	S2	bar=$(grep -cE '^cq-pr-stale-bar \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
 tests/commands/test-sync-rule-prune.sh	S2	foo=$(grep -cE '^wg-pr-stale-foo \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
@@ -195,15 +205,16 @@ tests/commands/test-sync-rule-prune.sh	S2	local n; n=$(grep -cE '^wg-dup \|' "$r
 tests/commands/test-sync-rule-prune.sh	S2	local n; n=$(grep -cE '^wg-pr-already-ret \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
 tests/scripts/lib/preapply-entrypoint-gate.sh	S1	matched_count=$(grep -c '' <<<"$matched")
 tests/scripts/test-audit-ruleset-bypass.sh	S1	tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$tf" | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+tests/scripts/test-betterstack-read-classify.sh	S3	_s="$(bs_read_scrub_err1 "/nonexistent/err-$$")" << read: _s="$(bs_read_scrub_err1 "/nonexistent/err-$$")"; _src=$?
 tests/scripts/test-destroy-guard-regex-parity.sh	S1	halt_line=$(grep -nF "$HALT_PATTERN" "$WF" | head -1 | cut -d: -f1)
 tests/scripts/test-destroy-guard-regex-parity.sh	S1	sum_line=$(grep -nF "$SUM_PATTERN" "$WF" | head -1 | cut -d: -f1)
 tests/scripts/test-kb-drift-walker.sh	S1	fields_missing=$(printf '%s' "$OUT" | grep -oE '"kind":"[^"]+","source_path":"[^"]+","target":"[^"]+","source_ref":"(link|anchor)-[0-9a-f]{16}"' | wc -l | tr -d '[:space:]')
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	[[ -n "$hits" ]] && n=$(grep -c '' <<<"$hits")
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	local code; code="$(grep -vE '^[[:space:]]*#' <<<"$block")"
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	n=$(grep -c '' <<<"$types")
-tests/scripts/test-preapply-entrypoint-gate.sh	S1	n=$(grep -c '' <<<"$types")
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	types=$(grep -E '^#[[:space:]]+[0-9]+\.[[:space:]]+cloudflare_' "$jq_file" | grep -oE 'cloudflare_[a-z_]+' | sort -u)
 tests/scripts/test-preapply-entrypoint-gate.sh	S1	types=$(grep -rhoE 'resource "cloudflare_[a-z_]+"' "$REPO_ROOT"/apps/web-platform/infra/*.tf | sed -E 's/resource "([a-z_]+)"/\1/' | sort -u)
+tests/scripts/test-preapply-entrypoint-gate.sh	S4	[[ "$allok" -eq 1 ]] && _report "G10 malformed/non-array/empty plan JSON all fail closed (never 'no matches → PASS')" ok
 tests/scripts/test-sentry-destroy-counts.sh	S1	dc=$(grep -oP '^destroy_count=\K.*' <<<"$out")
 tests/scripts/test-sentry-destroy-counts.sh	S1	local calls; calls=$(grep -cE 'sentry-destroy-counts\.sh' "$wf")
 tests/scripts/test-sentry-destroy-counts.sh	S1	nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
