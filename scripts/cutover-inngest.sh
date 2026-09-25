@@ -796,9 +796,9 @@ doublefire_from() {
   # dead-advice class this change removed from the deadline surfaces, relocated.
   #
   # It is a SEPARATE variable from CUTOVER_WINDOW_FROM on purpose: that one is also
-  # consumed by the missed-tick auto-enumeration as the quiesce→register gap START, and
-  # quiesce PRECEDES the cutover. Overloading it would silently re-base the expected-tick
-  # window so the gap ticks stop being enumerated — the omission half.
+  # consumed by missed_tick_report() as the quiesce→register gap START (it bounds the opt-in
+  # candidate list, #6939), and quiesce PRECEDES the cutover. Overloading it would silently
+  # re-base the expected-tick window so the gap ticks stop being listed — the omission half.
   #
   # An override NARROWS by construction, so it yields a window-limited verdict; the
   # verify arm downgrades VERIFIED accordingly.
@@ -1034,6 +1034,90 @@ g3_decide() {
 
   if [[ "$pg" == "$pg_dark" ]]; then printf '%s' 'skip-already-current'; return 0; fi
   printf '%s' 'write'
+  return 0
+}
+
+# #6939 — op=verify's missed-tick report. OFF by default: it prints one pointer to the runbook's
+# recovery procedure and no per-function line. ON (the missed_tick_candidates dispatch input)
+# prints UNVERIFIED candidates that are deliberately not command-shaped. The old output was a
+# `soleur:trigger-cron` line per empty (function, bucket) pair, carrying two flags the skill does
+# not accept, and listing buckets a slower cron was never due in, so acting on it double-fired
+# the cron. Naming a candidate and filtering it to due ticks is the proper fix, tracked on #6940.
+# Called with a plain call (no || / &&): bash ignores set -e inside a function called from a list.
+# args: $1 gate ("true" = ON)  $2 body-json  $3 cron-period-s  $4 win-from  $5 win-until
+# DO NOT RESHAPE: the P2-16 header below is ADR-106's content anchor; the OBSERVED jq call must keep
+# its `jq -c --argjson period "$CRON_PERIOD"` shape (the suite's perl extractor + null harness).
+missed_tick_report() {
+  local BODY="$2" CRON_PERIOD="$3"
+  # ---- Missed-tick auto-enumeration (P2-16): ticks that fell in the
+  # quiesce→register gap have no run. Window values are VALIDATED against the ISO shape, never
+  # just stripped: GitHub decodes %0A inside an annotation, and `date -d` accepts `tomorrow`.
+  local ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+  local WIN_FROM="" WIN_UNTIL="" SHOW_FROM="<unset>" SHOW_UNTIL="<unset>"
+  if [[ -n "$4" ]]; then SHOW_FROM="<invalid>"; fi
+  if [[ -n "$5" ]]; then SHOW_UNTIL="<invalid>"; fi
+  if [[ "$4" =~ $ISO_RE ]]; then WIN_FROM="$4"; SHOW_FROM="$4"; fi
+  if [[ "$5" =~ $ISO_RE ]]; then WIN_UNTIL="$5"; SHOW_UNTIL="$5"; fi
+  local RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-server.md § Bounded-outage note"
+
+  if [[ "$1" != "true" ]]; then
+    # OFF (the default): the window is echoed but never parsed, so a malformed CUTOVER_WINDOW_*
+    # cannot redden a run whose verdict above was clean.
+    echo "::notice::missed-tick candidates NOT EMITTED (default, #6939). A per-bucket list cannot tell a tick that was due from one that was never due, and re-firing a never-due tick double-fires that cron. Gap window as configured: [$SHOW_FROM, $SHOW_UNTIL]. A tick skipped in the gap is the accepted ADR-100 residual. Recover one ONLY via $RUNBOOK. Unverified per-bucket candidates: re-dispatch op=verify with missed_tick_candidates=true. Proper fix: #6940."
+    return 0
+  fi
+
+  if [[ -z "$4" || -z "$5" ]]; then
+    echo "::warning::missed-tick candidates requested (missed_tick_candidates=true) but CUTOVER_WINDOW_FROM and CUTOVER_WINDOW_UNTIL are not both set (the quiesce→register gap, ISO-8601 UTC); no candidates computed."
+    return 0
+  fi
+  local STANDS="Only the opt-in candidate list failed; the exactly-once verdict above STANDS."
+  local FROM_EPOCH="" UNTIL_EPOCH=""
+  if [[ -n "$WIN_FROM" && -n "$WIN_UNTIL" ]]; then
+    FROM_EPOCH=$(date -u -d "$WIN_FROM" +%s 2>/dev/null || echo "")
+    UNTIL_EPOCH=$(date -u -d "$WIN_UNTIL" +%s 2>/dev/null || echo "")
+  fi
+  if [[ -z "$FROM_EPOCH" || -z "$UNTIL_EPOCH" || "$UNTIL_EPOCH" -le "$FROM_EPOCH" ]]; then
+    echo "::error::missed-tick candidates: invalid window [$SHOW_FROM, $SHOW_UNTIL] (need ISO-8601 UTC YYYY-MM-DDTHH:MM:SSZ, until after from). $STANDS"
+    return 1
+  fi
+  # Observed buckets (per function) from the runs.
+  # #6178 — the SAME null-startedAt guard as the bucketing above: this is the
+  # identical construct, so it carried the identical jq exit-5 crash.
+  local OBSERVED
+  OBSERVED=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" \
+    '[ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) / $period | floor) } ] | unique')
+  local FROM_BUCKET=$(( FROM_EPOCH / CRON_PERIOD ))
+  local UNTIL_BUCKET=$(( UNTIL_EPOCH / CRON_PERIOD ))
+  # Guard the tick loop with a hard cap so a mis-set window cannot spin.
+  local SPAN=$(( UNTIL_BUCKET - FROM_BUCKET + 1 ))
+  if [[ "$SPAN" -lt 1 || "$SPAN" -gt 10000 ]]; then
+    echo "::error::missed-tick candidates: window spans $SPAN ${CRON_PERIOD}s bucket(s), outside [1,10000]; check cron_period_seconds and the window. $STANDS"
+    return 1
+  fi
+  # Function ids come from the host: select them by SHAPE in jq (never a shell glob or word split),
+  # and assign before looping so set -e sees a jq failure.
+  local FNS ALL_N KEEP_N
+  FNS=$(jq -r '[.runs[].functionID | select(type == "string" and test("^[A-Za-z0-9._-]{1,128}$"))] | unique | .[]' <<<"$BODY")
+  ALL_N=$(jq '[.runs[].functionID] | unique | length' <<<"$BODY")
+  KEEP_N=$(jq '[.runs[].functionID | select(type == "string" and test("^[A-Za-z0-9._-]{1,128}$"))] | unique | length' <<<"$BODY")
+  if [[ "$ALL_N" -gt "$KEEP_N" ]]; then
+    echo "::warning::missed-tick candidates: $(( ALL_N - KEEP_N )) function id(s) failed the shape check and were skipped"
+  fi
+  echo "::warning::missed-tick candidates (P2-16, opt-in #6939): UNVERIFIED, NOT a re-fire list. Each line below is a (function UUID, ${CRON_PERIOD}s bucket) in [$WIN_FROM, $WIN_UNTIL] with no run. A line may be an event-driven function or a cron slower than ${CRON_PERIOD}s that was never due in that bucket, and a cron faster than ${CRON_PERIOD}s can hide a miss inside a bucket that has a run. UUIDs have no in-repo name mapping. Before re-firing anything, follow $RUNBOOK."
+  local MISSED=0 fn b HAS TICK_TS
+  while IFS= read -r fn; do
+    if [[ -z "$fn" ]]; then continue; fi
+    for (( b=FROM_BUCKET; b<=UNTIL_BUCKET; b++ )); do
+      HAS=$(echo "$OBSERVED" | jq --arg fn "$fn" --argjson b "$b" 'any(.[]; .fn == $fn and .bucket == $b)')
+      if [[ "$HAS" != "true" ]]; then
+        TICK_TS=$(date -u -d "@$(( b * CRON_PERIOD ))" +%Y-%m-%dT%H:%M:%SZ)
+        echo "  candidate function_id=$fn empty_bucket_start=$TICK_TS"
+        MISSED=$((MISSED + 1))
+      fi
+    done
+  done <<<"$FNS"
+  echo "::notice::missed-tick candidates: $MISSED unverified candidate(s) listed (not a re-fire list; the proper fix is #6940)."
   return 0
 }
 
@@ -2834,49 +2918,9 @@ case "$OP" in
     fi
     echo "::notice::2.6 SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-host double-fire detector — a surviving web-host (colocated) scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The web scheduler host (web-1) is the only colocated scheduler (web-2 scope: see op=execute SEAM 2.2a); op=quiesce-web + the op=execute 2.2 QUIESCED gate are the control against a web-host double-fire — op=verify cannot substitute for it."
 
-    # ---- Missed-tick auto-enumeration (P2-16): ticks that fell in the
-    # quiesce→register gap have no run; AUTO-emit a ready-to-run soleur:trigger-cron
-    # set rather than asking the operator to enumerate. From the recorded window
-    # [CUTOVER_WINDOW_FROM, CUTOVER_WINDOW_UNTIL] we compute the expected tick
-    # buckets at cron_period cadence and diff against the observed run buckets; any
-    # expected bucket with ZERO runs is a missed tick.
-    WIN_FROM="${CUTOVER_WINDOW_FROM:-}"
-    WIN_UNTIL="${CUTOVER_WINDOW_UNTIL:-}"
-    if [[ -z "$WIN_FROM" || -z "$WIN_UNTIL" ]]; then
-      echo "::notice::missed-tick auto-enumeration (P2-16): set CUTOVER_WINDOW_FROM + CUTOVER_WINDOW_UNTIL (ISO-8601, the quiesce→register gap) to auto-emit the trigger-cron list; skipping (window not supplied)."
-    else
-      FROM_EPOCH=$(date -u -d "$WIN_FROM" +%s 2>/dev/null || echo "")
-      UNTIL_EPOCH=$(date -u -d "$WIN_UNTIL" +%s 2>/dev/null || echo "")
-      if [[ -z "$FROM_EPOCH" || -z "$UNTIL_EPOCH" || "$UNTIL_EPOCH" -le "$FROM_EPOCH" ]]; then
-        echo "::error::missed-tick auto-enumeration: invalid window [$WIN_FROM,$WIN_UNTIL]"; exit 1
-      fi
-      # Observed buckets (per function) from the runs.
-      # #6178 — the SAME null-startedAt guard as the bucketing above: this is the
-      # identical construct, so it carried the identical jq exit-5 crash.
-      OBSERVED=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" \
-        '[ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) / $period | floor) } ] | unique')
-      FROM_BUCKET=$(( FROM_EPOCH / CRON_PERIOD ))
-      UNTIL_BUCKET=$(( UNTIL_EPOCH / CRON_PERIOD ))
-      # Guard the tick loop with a hard cap so a mis-set window cannot spin.
-      SPAN=$(( UNTIL_BUCKET - FROM_BUCKET + 1 ))
-      if [[ "$SPAN" -lt 1 || "$SPAN" -gt 10000 ]]; then
-        echo "::error::missed-tick auto-enumeration: window spans $SPAN tick-buckets (out of [1,10000]) — check CRON_PERIOD/window"; exit 1
-      fi
-      echo "::notice::missed-tick auto-enumeration (P2-16): scanning $SPAN tick-bucket(s) in [$WIN_FROM,$WIN_UNTIL] for functions with no run — ready-to-run trigger-cron set:"
-      MISSED=0
-      # Enumerate the DISTINCT functions observed, then find their empty in-window buckets.
-      for fn in $(echo "$BODY" | jq -r '[.runs[].functionID] | unique | .[]'); do
-        for (( b=FROM_BUCKET; b<=UNTIL_BUCKET; b++ )); do
-          HAS=$(echo "$OBSERVED" | jq --arg fn "$fn" --argjson b "$b" 'any(.[]; .fn == $fn and .bucket == $b)')
-          if [[ "$HAS" != "true" ]]; then
-            TICK_TS=$(date -u -d "@$(( b * CRON_PERIOD ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "bucket-$b")
-            echo "  soleur:trigger-cron --function-id $fn --missed-tick $TICK_TS"
-            MISSED=$((MISSED + 1))
-          fi
-        done
-      done
-      echo "::notice::missed-tick auto-enumeration: $MISSED missed tick(s) enumerated (re-fire the list above via soleur:trigger-cron; in-window ticks are not auto-backfilled)"
-    fi
+    # #6939 — the missed-tick report runs AFTER the verdict above and cannot change it (OFF, the
+    # default, never fails; ON fails only on an invalid window). See missed_tick_report().
+    missed_tick_report "${CUTOVER_MISSED_TICK_CANDIDATES:-}" "$BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"
     echo "::notice::op=verify complete"
     ;;
 
