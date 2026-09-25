@@ -12,6 +12,41 @@ related: [8710, 8755, 5274, 8711, 8776, 8211]
 
 # chore(archive-kb): archive the #8710 pin-redeploy and #5274 dirty-journal KB artifacts
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25 (headless, proportional pass). The plan is a rename-only chore, so the
+parallel agent fan-out was not spawned. The pass ran the halt gates and live citation checks
+directly, as follows.
+
+**Halt gates:**
+
+- 4.6 User-Brand Impact passes: the threshold is `none`, a scope-out reason is present, and there
+  are no sensitive paths.
+- 4.7 Observability is skipped, because the change is pure-docs (`knowledge-base/` only).
+- 4.8 PAT grep: no hits.
+- 4.9 UI, 4.10 encryption and 4.11 guard: none triggered.
+- 4.5 network and 4.55 downtime: not triggered.
+
+**Verified live:**
+
+- PRs #8755, #8711, #8757, #8416, #8611 and #8207 exist, with the stated states.
+- Issues #8710 (CLOSED), #5274 (OPEN), #8211 (OPEN), #8776 (OPEN) and #7400 (OPEN) have the stated states.
+- #8416's attribution to the partial-run WARNING in `archive-kb.sh` is confirmed by
+  `git log --grep='#8416' -- plugins/soleur/skills/archive-kb/scripts/archive-kb.sh`, which
+  returns `29d2440d4b`.
+- The `action-required` label exists.
+- The plan cites no AGENTS.md rule ids.
+
+**New considerations:**
+
+1. AC2 originally used an `*8710-pin-redeploy*` glob. That glob would miss the #8710 plan, whose
+   basename has no `8710`. AC2 now names each basename exactly.
+2. AC4's sweep now excludes this PR's own plan and spec dir. They cite the old paths by design, so
+   without the exclusion the sweep would always match them.
+3. Other files that mention `decision-challenges.md` (`apply-web-platform-infra.yml`,
+   `prod-write-defer-gate.sh`) only mention it in comments. None of them read the two moved spec
+   dirs.
+
 ## Overview
 
 Two features merged on 2026-09-24 left their plan and spec directory at the live paths. This PR
