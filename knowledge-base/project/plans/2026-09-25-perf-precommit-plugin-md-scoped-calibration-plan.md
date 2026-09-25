@@ -385,23 +385,23 @@ HIGH-RISK skill reaching `main`, which the required CI checks (`test-bun`, corpu
 
 ## Acceptance Criteria
 
-- [ ] **AC1** `lefthook.yml` `plugin-component-test.run` equals the Phase 2.1 string (checked in
+- [x] **AC1** `lefthook.yml` `plugin-component-test.run` equals the Phase 2.1 string (checked in
       review by reading the parsed value: `bun -e 'const y=Bun.YAML.parse(await Bun.file("lefthook.yml").text()); console.log(y["pre-commit"].commands["plugin-component-test"].run)'`);
       `glob` unchanged; no `skip` key.
-- [ ] **AC2** `bash plugins/soleur/test/hook-git-env-coverage.test.sh` exits 0 and prints
+- [x] **AC2** `bash plugins/soleur/test/hook-git-env-coverage.test.sh` exits 0 and prints
       `SOLEUR_GUARD2_RECEIPT run_lines=32 runners=3` (unset still first; no entry point lost).
-- [ ] **AC3** `bash plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh` passes 5/5 unchanged.
-- [ ] **AC4** Phase 3.1 — scoped run with one `SKILL.md`: green, log `scoped 1/<N>`, wall < 20 s
+- [x] **AC3** `bash plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh` passes 5/5 unchanged.
+- [x] **AC4** Phase 3.1 — scoped run with one `SKILL.md`: green, log `scoped 1/<N>`, wall < 20 s
       (was 127.9 s for the file).
-- [ ] **AC5** Phase 3.2 — two staged `SKILL.md` paths: log `scoped 2/<N>`.
-- [ ] **AC6** Phase 3.3 — agent `.md` only: log `scoped 0/<N>`; both calibration tests reported as
+- [x] **AC5** Phase 3.2 — two staged `SKILL.md` paths: log `scoped 2/<N>`.
+- [x] **AC6** Phase 3.3 — agent `.md` only: log `scoped 0/<N>`; both calibration tests reported as
       `skip` (bun's skip count rises by 2), not `pass`.
-- [ ] **AC7** Phase 3.4 — `CI=1` plus a scope: collection log reads `full <N>/<N>`.
-- [ ] **AC8** `git grep -n SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'`
+- [x] **AC7** Phase 3.4 — `CI=1` plus a scope: collection log reads `full <N>/<N>`.
+- [x] **AC8** `git grep -n SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'`
       lists only `lefthook.yml` and `plugins/soleur/test/skill-security-scan.test.ts`.
-- [ ] **AC9** Dogfood commit staging `ship/SKILL.md`: `plugin-component-test` completes; seconds,
+- [x] **AC9** Dogfood commit staging `ship/SKILL.md`: `plugin-component-test` completes; seconds,
       load average and the `scoped 1/<N>` line recorded in `measurements.md` next to the 176 s baseline.
-- [ ] **AC10** `ship/SKILL.md` byte size does not increase (`wc -c` before/after in `measurements.md`).
+- [x] **AC10** `ship/SKILL.md` byte size does not increase (`wc -c` before/after in `measurements.md`).
 - [ ] **AC11** Required checks pass by name on the exact head SHA, including `skill-security-scan-corpus`
       (triggered by the test-file path) running the unscoped corpus.
 
