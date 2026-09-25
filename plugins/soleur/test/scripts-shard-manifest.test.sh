@@ -71,7 +71,7 @@ DATA="$(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST" || true)"
 # The light job's declared N — same job_block scoping as scripts-shard-runtime-coverage:
 # `^  test-scripts:` does NOT match `test-scripts-heavy:`.
 CI_N="$(awk -v j='^  test-scripts:' '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML" \
-  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)"
+  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)" || true
 
 if [[ "$CI_N" =~ ^[0123456789]+$ ]] && (( 10#$CI_N >= 1 )); then
   check pass "ci.yml test-scripts matrix declares N=$CI_N"
@@ -193,7 +193,7 @@ else
   N_HDR_H="$(grep -m1 '^# n=' "$MANIFEST_HEAVY" | sed 's/^# n=//' || true)"
   DATA_H="$(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST_HEAVY" || true)"
   CI_N_H="$(awk -v j='^  test-scripts-heavy:' '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML" \
-    | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)"
+    | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)" || true || true
 
   if [[ "$CI_N_H" =~ ^[0123456789]+$ ]] && (( 10#$CI_N_H >= 1 )); then
     check pass "ci.yml test-scripts-heavy matrix declares N=$CI_N_H"

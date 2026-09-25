@@ -635,9 +635,9 @@ test_service_pin_matches_repo_unit() {
   # LOCKSTEP note in the helper warns about. A count cannot see a rename; only the KEYS can.
   local svc_dests pins missing extra
   svc_dests=$(awk '/^declare -rA DEST_SPEC=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\/etc\/systemd\/system\//&&!/\.service\.d\//{print}' "$HELPER" \
-    | grep -oE '\["[^"]+"\]' | tr -d '[]"' | sort -u)
+    | grep -oE '\["[^"]+"\]' | tr -d '[]"' | sort -u) || true
   pins=$(awk '/^declare -rA SERVICE_SHA256=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\//{print}' "$HELPER" \
-    | grep -oE '\["[^"]+"\]' | tr -d '[]"' | sort -u)
+    | grep -oE '\["[^"]+"\]' | tr -d '[]"' | sort -u) || true
   # Non-vacuity: both extractions must yield something, or the two set differences below are
   # empty for the wrong reason and this assertion certifies an empty universe.
   assert_eq "the DEST_SPEC full-unit extraction found at least one dest" "yes" \

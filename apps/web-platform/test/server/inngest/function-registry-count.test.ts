@@ -27,8 +27,15 @@ const CRON_MONITORS_TF = resolve(
 const routeSrc = readFileSync(ROUTE_PATH, "utf8");
 const tfSrc = readFileSync(CRON_MONITORS_TF, "utf8");
 
+// Scoped to the `functions: [ … ]` array, not the whole file: a multi-line
+// import in route.ts has the same `  name,` line shape and was counted as a
+// served function (#8803).
 function extractRouteArrayEntries(): string[] {
-  return [...routeSrc.matchAll(/^\s+(\w+),$/gm)].map((m) => m[1]);
+  // Anchored on the serve() call: the file's header comment also contains the
+  // literal "functions: []".
+  const m = routeSrc.match(/\bserve\(\{[\s\S]*?\bfunctions:\s*\[([\s\S]*?)\n\s*\]/);
+  if (!m) throw new Error("fixture: the serve() functions array was not found in route.ts");
+  return [...m[1].matchAll(/^\s+(\w+),$/gm)].map((e) => e[1]);
 }
 
 function listCronFiles(): string[] {
@@ -216,8 +223,15 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   // 68 -> 69: cron-machinery-drain (the weekly issue-flow measurement + drain).
+  // 69 -> 70: agentOnSpawnSettle (#8803, settles orphaned leader-loop runs).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(69);
+    expect(routeEntries.length).toBe(70);
+  });
+
+  // An event function is invisible to the cron-glob guards; an unserved settle
+  // function never runs, and every orphaned spawn stays on "Working" (#8803).
+  it("(a3) agentOnSpawnSettle event function is registered in route.ts", () => {
+    expect(routeEntries).toContain("agentOnSpawnSettle");
   });
 
   // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only

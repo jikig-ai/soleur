@@ -3894,9 +3894,9 @@ unset QSF_M
 # That holds today; if the case arms are reordered, re-anchor these greps to the
 # deploy-inngest block (e.g. via awk between the arm's case label and `;;`).
 TOTAL=$((TOTAL + 1))
-DI_VERIFY_LINE=$(grep -nE '^[[:space:]]*verify_inngest_health[[:space:]]*$' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
-DI_SUCCESS_LINE=$(grep -nE 'SUCCESS: inngest .* deployed' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1)
-DI_FAIL_LINE=$(grep -nE 'final_write_state 1 "inngest_health_failed"' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
+DI_VERIFY_LINE=$(grep -nE '^[[:space:]]*verify_inngest_health[[:space:]]*$' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1) || true
+DI_SUCCESS_LINE=$(grep -nE 'SUCCESS: inngest .* deployed' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1) || true
+DI_FAIL_LINE=$(grep -nE 'final_write_state 1 "inngest_health_failed"' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1) || true
 if [[ -n "$DI_VERIFY_LINE" && -n "$DI_SUCCESS_LINE" && -n "$DI_FAIL_LINE" \
       && "$DI_VERIFY_LINE" -lt "$DI_FAIL_LINE" && "$DI_FAIL_LINE" -lt "$DI_SUCCESS_LINE" ]]; then
   PASS=$((PASS + 1))
@@ -4754,9 +4754,9 @@ unset qp_path qp_count qp_body qp_sha QP_N QP_REF QP_FILES QP_BAD
 # and it still precedes their start. (Owned elsewhere; their own suites prove the behaviour — this
 # pins that the start writer the inventory above counts is still behind the guard.)
 QW_F="$SCRIPT_DIR/inngest-wiped-volume-verify.sh"
-QW_GATE=$(grep -nE '\( "\$unit_active" == inactive \|\| "\$unit_active" == failed \) && "\$unit_enabled" == disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
-QW_ABORT=$(grep -nE 'abort "quiesced_refused"' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
-QW_START=$(grep -nE '^[^#]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_GATE=$(grep -nE '\( "\$unit_active" == inactive \|\| "\$unit_active" == failed \) && "\$unit_enabled" == disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
+QW_ABORT=$(grep -nE 'abort "quiesced_refused"' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
+QW_START=$(grep -nE '^[^#]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
 TOTAL=$((TOTAL + 1))
 if [[ -n "$QW_GATE" && -n "$QW_ABORT" && -n "$QW_START" && "$QW_GATE" -lt "$QW_ABORT" && "$QW_ABORT" -lt "$QW_START" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: inngest-wiped-volume-verify.sh keeps its shape-only quiesced_refused gate ahead of its start (contract §3)"
@@ -4765,8 +4765,8 @@ else
 fi
 QW_F="$SCRIPT_DIR/workspaces-cutover.sh"
 # reconcile: an is-enabled == disabled test ahead of the plain start; dead-man: `= disabled ] || systemctl start` in the sh -c string.
-QW_REC_GATE=$(grep -nE '^[^#]*"\$\(systemctl is-enabled inngest-server\.service[^)]*\)" = disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
-QW_REC_START=$(grep -nE '^[[:space:]]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_REC_GATE=$(grep -nE '^[^#]*"\$\(systemctl is-enabled inngest-server\.service[^)]*\)" = disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
+QW_REC_START=$(grep -nE '^[[:space:]]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
 QW_DEADMAN=$(grep -cE 'is-enabled inngest-server\.service 2>/dev/null\)\\?" = disabled \] \|\| systemctl start inngest-server\.service' "$QW_F" 2>/dev/null || true)
 TOTAL=$((TOTAL + 1))
 if [[ -n "$QW_REC_GATE" && -n "$QW_REC_START" && "$QW_REC_GATE" -lt "$QW_REC_START" && "$QW_DEADMAN" -eq 1 ]]; then

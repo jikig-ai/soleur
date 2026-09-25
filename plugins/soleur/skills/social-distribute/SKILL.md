@@ -472,6 +472,7 @@ Next steps:
 
 - All Discord posting requires explicit user approval before sending -- no auto-send
 - Character limits are enforced during generation, not as a post-hoc check (2000 for Discord, 280 per tweet for X/Twitter, 80 for HN title, 300 for Bluesky, 1300 optimal / 3000 max for LinkedIn Personal and LinkedIn Company Page)
+- Variants are NEW prose, not a copy of checked prose: every factual sentence in a channel that posts automatically (Discord, X, Bluesky, both LinkedIn pages) must be checked against the fact-checked post, and hook compression drifts toward cause-and-effect and "the whole X" claims the post avoided. Run `soleur:marketing:fact-checker` on the distribution file, or diff each variant's factual sentences against the post. Compute every `-- NNN chars` label and the Bluesky length from the final text (Bluesky's 300 includes the URL); never hand-count. **Why:** #8548 — LinkedIn and tweet variants turned two side-by-side defects into a causal claim the checked post had avoided; review rated it High.
 - Discord uses the plain `content` field, not rich embeds
 - JSON-escape all Discord content before inserting into the webhook payload
 - When posting via webhook, always include `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields

@@ -6,6 +6,7 @@ import {
   GitHubApiError,
 } from "@/server/github-api";
 import { isPathInWorkspace } from "@/server/sandbox";
+import { kbGithubUrlPath } from "@/server/kb-github-path";
 import { sanitizeFilename } from "@/server/kb-validation";
 import {
   authenticateAndResolveKbPath,
@@ -22,7 +23,7 @@ export async function DELETE(
   const resolved = await authenticateAndResolveKbPath(request, params);
   if (!resolved.ok) return resolved.response;
   const { ctx } = resolved;
-  const { user, userData, owner, repo, relativePath, filePath } = ctx;
+  const { user, userData, owner, repo, relativePath, filePath, urlPath } = ctx;
 
   try {
     // GET file SHA from GitHub Contents API
@@ -32,7 +33,7 @@ export async function DELETE(
         { sha: string; type: string } | Array<{ sha: string; type: string }>
       >(
         userData.github_installation_id,
-        `/repos/${owner}/${repo}/contents/${filePath}`,
+        `/repos/${owner}/${repo}/contents/${urlPath}`,
       );
 
       // GitHub returns an array for directories
@@ -55,7 +56,7 @@ export async function DELETE(
     try {
       const result = await githubApiDelete<{ commit: { sha: string } }>(
         userData.github_installation_id,
-        `/repos/${owner}/${repo}/contents/${filePath}`,
+        `/repos/${owner}/${repo}/contents/${urlPath}`,
         {
           message: `Delete ${path.basename(relativePath)} via Soleur`,
           sha: fileSha,
@@ -143,6 +144,7 @@ export async function PATCH(
     repo,
     relativePath,
     filePath: oldFilePath,
+    urlPath: oldUrlPath,
     kbRoot,
     ext: oldExt,
   } = ctx;
@@ -201,6 +203,10 @@ export async function PATCH(
   }
 
   const newFilePath = `knowledge-base/${newRelativePath}`;
+  const newUrlPath = kbGithubUrlPath(newRelativePath);
+  if (!newUrlPath) {
+    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+  }
 
   try {
     // 1. GET file blob SHA from Contents API
@@ -210,7 +216,7 @@ export async function PATCH(
         { sha: string; type: string } | Array<{ sha: string; type: string }>
       >(
         userData.github_installation_id,
-        `/repos/${owner}/${repo}/contents/${oldFilePath}`,
+        `/repos/${owner}/${repo}/contents/${oldUrlPath}`,
       );
 
       if (Array.isArray(fileData)) {
@@ -232,7 +238,7 @@ export async function PATCH(
     try {
       await githubApiGet(
         userData.github_installation_id,
-        `/repos/${owner}/${repo}/contents/${newFilePath}`,
+        `/repos/${owner}/${repo}/contents/${newUrlPath}`,
       );
       return NextResponse.json(
         { error: "A file with that name already exists" },

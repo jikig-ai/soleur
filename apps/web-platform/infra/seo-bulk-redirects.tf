@@ -91,6 +91,7 @@ locals {
     "2026-06-01-claude-code-plugin-vs-skill-vs-mcp"                 = "claude-code-plugin-vs-skill-vs-mcp"
     "2026-06-12-loop-engineering-for-your-whole-company"            = "loop-engineering-for-your-whole-company"
     "2026-06-15-best-ai-tools-for-solo-founders-2026"               = "best-ai-tools-for-solo-founders-2026"
+    "2026-09-25-parked-vs-forgotten-ideas"                          = "parked-vs-forgotten-ideas"
   }
 
   # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs
