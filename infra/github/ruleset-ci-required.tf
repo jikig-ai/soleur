@@ -173,7 +173,7 @@ resource "github_repository_ruleset" "ci_required" {
       # --- Tier 3: legal-doc cross-document lockstep gate (#4384, closes the
       # advisory-bypass-via-auto-merge gap that produced #4333). Context
       # string is the JOB name (`enforce`) at
-      # .github/workflows/legal-doc-cross-document-gate.yml:36, NOT the
+      # .github/workflows/pr-quality-guards.yml (jobs.enforce — folded from legal-doc-cross-document-gate.yml, #8902), NOT the
       # workflow display name — per ADR-032 job-name contract. Workflow
       # `paths:` filter removed in the same PR (#4384) so the job posts on
       # every PR; the existing `surface_hit=false` short-circuit (lines
