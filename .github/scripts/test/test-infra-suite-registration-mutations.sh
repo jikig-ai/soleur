@@ -239,7 +239,7 @@ expect_red "M10 drop fail-fast: false" "fail-fast" \
 # M11 -- the aggregator disconnect: -done without `needs: deploy-script-tests`
 # means a red leg alerts nobody.
 expect_red "M11 drop deploy-script-tests from -done needs:" "needs:" \
-  sed -i "s|^    needs: \[deploy-script-tests, deploy-script-tests-fixed\]\$|    needs: [deploy-script-tests-fixed]|" "$SB/$WF_REL"
+  sed -i "s|^    needs: \[detect-changes, deploy-script-tests, deploy-script-tests-fixed\]\$|    needs: [detect-changes, deploy-script-tests-fixed]|" "$SB/$WF_REL"
 
 # M12 -- masking the other direction: `if: false` on the runner step is the same
 # fail-open as continue-on-error.
