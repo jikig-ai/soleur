@@ -816,7 +816,7 @@ filtered. The host holds the Redis AOF with queued user event payloads. This pla
 exposure and a regression would reopen it. If any data port ever answers publicly, the finding goes
 to the CLO (Phase 0.4).
 
-**Brand-survival threshold:** single-user incident. The Phase-3 replaces act on the only copy of
+- **Brand-survival threshold:** single-user incident. The Phase-3 replaces act on the only copy of
 armed reminders (the inngest AOF). Stores are preserved by omission and gate-checked. CPO sign-off
 was approved with conditions, all folded in: the failure modes above, the Phase 0.4 port
 measurement, AC-C3, and the withheld-path P1 issue.
