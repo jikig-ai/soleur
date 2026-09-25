@@ -18,6 +18,39 @@ requires_cpo_signoff: true
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spec.md` exists for this
 one-shot branch.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25 (headless, one-shot).
+**Sections enhanced:** Output contract, Runbook recovery procedure, Observability, Guard Contract
+(both guards), Acceptance Criteria (AC4 and AC5), Test Scenarios, Sharp Edges, Plan Review
+Disposition.
+**Agents:** security-sentinel, test-design-reviewer, observability-coverage-reviewer,
+git-history-analyzer, and a verify-the-negative / self-audit sweep (standard tier). This came after
+a 7-seat plan-review panel and an advisor consult.
+
+### Key improvements
+
+1. **Validate operator- and host-supplied values; stripping them is not enough.** GitHub decodes
+   `%0A` inside annotations, `date -d` accepts `tomorrow`, and `for fn in $(…)` globs. Window values
+   must now match an ISO shape. Function ids are shape-filtered in jq, assigned first so `set -e`
+   sees a failure, and read with `while read`.
+2. **Guard 1 as first drafted would have passed vacuously.** `grep -E '--function-id|…'` is read as
+   an option, and `|| true` plus `-eq 0` then passes on `''`. It now uses `-e` patterns, an exact
+   `'0'` compare, and greps the real files, not the `$WF` view that drops the script preamble.
+3. **The canonical ON case checks the exact sorted candidate set and the footer,** not just a count
+   and a regex, which an off-by-one bucket range would satisfy. All three invalid-window arms are
+   tested, and every rc check is exact.
+4. **Every failure mode cites layer 6**, and there are new runtime failure modes. The runbook's
+   Sentry step reads the check-ins API. `SENTRY_MONITOR_SLUG` replaces an invented `MONITOR_SLUG`.
+
+### New considerations discovered
+
+- `deploy-script-tests` (which hosts the suite) is **not** a required check on `main`, so a red
+  guard is visible but does not block a merge.
+- The verify arm's CI protection for the verdict is behavioural (the existing suite) plus a
+  review-time `cmp` (AC6). There is no permanent byte-identity guard, by design (it would compare
+  main with main after merge).
+
 ## Overview
 
 The `op=verify` arm of the Inngest cutover prints a per-bucket "missed tick" list after its
@@ -88,8 +121,9 @@ about 120 characters, and keeping it whole is what lets AC3 pin it exactly (Kier
 ```
 
 **The inputs are positional arguments, not env globals** (advisor consult). The suite drives the
-ON/OFF matrix by passing arguments. The call site is the only place the env names appear, and one
-exact-line assertion pins it.
+ON/OFF matrix by passing arguments. The call site is the only place `CUTOVER_MISSED_TICK_CANDIDATES`
+appears in the script, and one exact-line assertion pins it. `CUTOVER_WINDOW_FROM` is also read
+by `doublefire_from()`, and that read is unchanged.
 
 **The call is plain, with no `|| exit 1`.** Bash ignores `set -e` inside a function called from a
 `||`/`&&` list, and inside anything that function runs. A trailing `|| exit 1` would therefore let
@@ -118,10 +152,26 @@ missed_tick_report() {
 The gate is a strict string compare. The boolean input only ever sends `true` or `false`, and
 anything that is not exactly `true` means OFF.
 
-**Annotation hygiene (P7).** The window arguments are operator-typed repo vars, and each function
-id comes from the dedicated host's GQL. Both are printed into line-oriented output. Strip CR/LF
-first (`${v//[$'\n\r']/}`), so a crafted value cannot forge a `::notice::` line
-(`plan-sharp-edges`, annotation-injection entry).
+**Input hygiene (P7). Validate; do not just strip.** *[Deepened 2026-09-25, security-sentinel]*
+Stripping CR/LF is not enough, for three reasons. GitHub decodes `%0A`/`%0D`/`%25` inside an
+annotation message, so a value carrying `%0A…` renders a fake second line inside the one notice
+that says "recover ONLY via…". `date -u -d` accepts natural language (`tomorrow`). And the host's
+function ids pass through shell word-splitting and globbing (`for fn in $(…)`), where an id of `*`
+expands to file names. Apply these rules instead:
+
+- **Window values.** A value is used (printed or passed to `date -d`) only when it matches
+  `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`. In OFF, a non-matching value prints as
+  `<invalid>`, is never parsed, and the return is still 0. In ON, a non-matching value takes the
+  invalid-window arm (rc 1, "verdict above STANDS").
+- **Function ids.** Select them in jq, not in the shell, and assign the result before looping, so
+  `set -e` sees a jq failure (observability P2-3):
+  `FNS=$(jq -r '[.runs[].functionID | select(type == "string" and test("^[A-Za-z0-9._-]{1,128}$"))] | unique | .[]' <<<"$BODY")`,
+  then `while IFS= read -r fn; do …; done <<<"$FNS"`. Count the ids that were dropped, and if any
+  were dropped print `::warning::missed-tick candidates: N function id(s) failed the shape check and
+  were skipped`.
+- The OBSERVED jq program is **not** touched (AC8). Only the function-set expression changes, and a
+  UUID or the fixture ids `fn-h`/`fn-d`/`fn-q` all pass the shape check, so the counts of 4 and 7
+  stand.
 
 | State | Window parsed? | Prints | Return |
 |---|---|---|---|
@@ -166,10 +216,14 @@ Spec-flow P0-1 applies here: the default must be safe when step 2 cannot be done
      placed a tick strictly inside the gap window printed by op=verify. A function with no `{ cron: }`
      trigger is event-only and is never missed.
    - (b) The cron's Sentry monitor shows a **missed** check-in for that tick. The slug is the
-     `MONITOR_SLUG` constant in `cron-<name>.ts`, which is not always `cron-<name>` (for example,
+     `SENTRY_MONITOR_SLUG` constant in `cron-<name>.ts`, which is not always `cron-<name>` (for example,
      `cron-workspace-gc` uses `scheduled-workspace-gc`). Check it only after the tick time plus the
      monitor's `checkin_margin_minutes` in `apps/web-platform/infra/sentry/cron-monitors.tf`
-     (spec-flow P1-3). **If the cron has no monitor, no-run cannot be confirmed, so do not re-fire.**
+     (spec-flow P1-3). Read it through the API rather than a dashboard
+     (`hr-no-dashboard-eyeball-pull-data-yourself`). This is the same read
+     `knowledge-base/engineering/operations/runbooks/github-app-drift.md` uses:
+     `curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/?limit=10" | jq -r '.[] | "\(.dateCreated) \(.status)"'`.
+     **If the cron has no monitor, no-run cannot be confirmed, so do not re-fire.**
    - (c) Only then run `soleur:trigger-cron --event cron/<name>.manual-trigger`.
 3. Take particular care with the destructive or user-facing crons (`cron-workspace-gc`,
    `cron-rule-prune`, `cron-action-required-sla`). This is the one place those names are written.
@@ -239,6 +293,13 @@ $TICK_TS"`). What was stale: the file location (the ADR-150 extraction moved it 
 the ADR number (143 → 146). The brief's capability claims about trigger-cron were checked
 against `trigger.sh` itself, not against a consumer.
 
+**Provenance (verified at deepen, git-history-analyzer).**
+
+- The P2-16 block was introduced by `bae1fbebf7` (Phase-2 op=execute cutover, Ref #6178, 2026-07-08) and later touched by `957350d82d` (#6218). It was not introduced by #6933.
+- The body was extracted into the script by `67820a4403` (#7002 / ADR-150).
+- Suite path coverage for the script comes from `4436ba24ca` (#8079).
+- The ADR was renumbered 143 → 146 by `7071166a5a`, after #6919 claimed 143.
+
 **Property List (Phase 0.6b).**
 
 - P1: No line that op=verify (or any op) prints contains a trigger-cron flag the skill does not accept.
@@ -265,8 +326,8 @@ against `trigger.sh` itself, not against a consumer.
   `§ Bounded-outage note`, which is now the single source. Cut to a short pointer.
 - (Plan review) AC6b byte-identity `cmp` of the OBSERVED program → no property → AC8 already runs
   the program against fixtures. Cut.
-- (Plan review) Gate values `TRUE`/`1`/`yes` → no property (a boolean input only sends
-  `true`/`false`) → cut. `""` and `false` remain.
+- (Plan review; reversed at deepen) Gate values `TRUE`/`1`/`yes` were cut, then `TRUE`, `1` and a
+  trailing-space `true` were restored, because they kill a loose-gate mutation (test-design).
 - (Plan review) A per-cron suite test that every scheduled cron has a Sentry monitor (spec-flow P0-1
   fix option) → P4 → covered by the runbook's fail-safe default ("no monitor → do not re-fire"). Cut.
 
@@ -416,7 +477,7 @@ ran at Step 4.5.
   (architecture P1-1/P1-2).
 - The OFF pointer shortened, with the procedure moved into the runbook as the single source and no
   cron names in the script (DHH P1-2, CTO #1/#2, simplicity).
-- A fail-safe runbook default of "no monitor means do not re-fire", the `MONITOR_SLUG` lookup and the
+- A fail-safe runbook default of "no monitor means do not re-fire", the `SENTRY_MONITOR_SLUG` lookup and the
   check-in margin timing (spec-flow P0-1, P1-3).
 - Raw window values printed in the pointer (spec-flow P1-2).
 - A faster-than-bucket note in the ON header (spec-flow P2-6).
@@ -428,7 +489,7 @@ ran at Step 4.5.
 **Cut (simplification, mechanical):**
 
 - AC6b `cmp` of the OBSERVED program (DHH, simplicity; AC8 executes it).
-- `TRUE`/`1`/`yes` gate cases (DHH, simplicity).
+- `TRUE`/`1`/`yes` gate cases (DHH, simplicity). *Reversed by the deepen pass: `TRUE`, `1` and a trailing-space `true` were restored (see below).*
 
 **Kept against a cut recommendation, each with the mutation it kills:**
 
@@ -455,6 +516,27 @@ ran at Step 4.5.
   census test would add upkeep on every new cron.
 - DHH P2-7 (cut the Observability, C4 and Guard Contract sections). Those sections are
   gate-mandated at this threshold.
+
+**Deepen pass (2026-09-25)** — security-sentinel, test-design-reviewer, observability-coverage-reviewer,
+git-history-analyzer and a verify-the-negative sweep. Applied:
+
+- Window values validated against an ISO shape, and function ids validated by shape in jq, then read
+  with `while read` (security P2-1..4). This replaces CR/LF stripping as the P7 mechanism.
+- Guard 1 now greps `$BODY_SH` and `$WF_YAML` directly with `-e` patterns and an exact `'0'`
+  compare, because a bare `-E '--…'` passes vacuously (test-design).
+- The canonical case compares the exact sorted set and the footer; all three invalid-window arms are
+  tested; rc checks are exact; P7 cases for `\r`, `%0A`, `$5` and function ids are added; the table
+  loop runs outside any `if`/`||` (test-design).
+- `TRUE`, `1` and `true` with a trailing space are **restored** as OFF cases. Test-design showed that a `== true*` or
+  `-n && != false` gate survives with only `""`/`false`. This overrides the plan-review cut, and in
+  a table loop each case costs one row.
+- Every failure mode now has a layer-6 citation, and there are new runtime failure modes (ON invalid
+  window, function-id shape skips). The runbook step (b) reads Sentry through the check-ins API, not a
+  dashboard (observability).
+- The "required CI" claim is corrected: `deploy-script-tests` is not in the main ruleset's required
+  contexts (read with `gh api repos/jikig-ai/soleur/rules/branches/main`).
+- The constant is `SENTRY_MONITOR_SLUG`, not `MONITOR_SLUG`, and the "only place the env names
+  appear" claim is now scoped to `CUTOVER_MISSED_TICK_CANDIDATES` (sweep).
 
 **Surfaced to the operator (taste / user-challenge) in
 `knowledge-base/project/specs/feat-one-shot-6939-cutover-missed-tick-defang/decision-challenges.md`:**
@@ -490,14 +572,20 @@ error_reporting:
   fail_loud: "::error::missed-tick candidates: invalid window … the exactly-once verdict above STANDS (ON only; exit 1)"
 failure_modes:
   - mode: "gate inverted or its default flipped, so the default run prints per-function lines again"
-    detection: "infra-validation.yml 'Run cutover-inngest.yml workflow tests' goes red on Guard 2 (behavioural OFF cases + YAML default assertion) on the PR that makes the change"
-    alert_route: "PR check failure (required CI) — blocks merge"
+    detection: "layer 6: workflow run log of infra-validation.yml (job deploy-script-tests, step 'Run cutover-inngest.yml workflow tests') goes red on Guard 2's behavioural OFF cases and YAML default assertion, on the PR that makes the change"
+    alert_route: "red PR check (deploy-script-tests is NOT in the main ruleset's required contexts, so it is visible but does not block merge; review reads it)"
   - mode: "a nonexistent trigger-cron flag reintroduced at any emission site"
-    detection: "Guard 1 file-wide comment-stripped token assertion in the same suite"
-    alert_route: "PR check failure — blocks merge"
+    detection: "layer 6: workflow run log of infra-validation.yml, Guard 1 (comment-stripped token assertion over the whole script plus the YAML)"
+    alert_route: "red PR check (same job, not required)"
   - mode: "env mapping dropped, so the input is silently ignored"
-    detection: "suite asserts the exact mapping line and exactly one ${{ inputs.missed_tick_candidates reference; the failure direction is safe (always OFF)"
-    alert_route: "PR check failure — blocks merge"
+    detection: "layer 6: workflow run log of infra-validation.yml, exact mapping-line and single-reference assertions. The failure is in the safe direction (always OFF)"
+    alert_route: "red PR check (same job, not required)"
+  - mode: "ON with an invalid or out-of-range window, or a window value failing the ISO shape check"
+    detection: "layer 6: ::error:: in the cutover-inngest.yml workflow run log (it says the exactly-once verdict above STANDS). The run concludes red, which is visible without SSH because the script runs on ubuntu-latest"
+    alert_route: "the dispatching operator (run conclusion and annotation)"
+  - mode: "a function id from the host fails the shape check"
+    detection: "layer 6: ::warning:: in the cutover-inngest.yml workflow run log, with the count of skipped ids"
+    alert_route: "the dispatching operator (annotation)"
 logs:
   where: "GitHub Actions run log of cutover-inngest.yml (op=verify)"
   retention: "GitHub Actions default log retention for the repository (90 days)"
@@ -564,10 +652,17 @@ accept.
 
 **Assembly.** Every line either file can print is an emission site. That covers all 14 `case "$OP"`
 arms, every top-level helper, every heredoc/`printf`/`echo`, and the YAML itself. So the chokepoint
-is the **whole comment-stripped body**, read through the suite's reconstructed `$WF` view. It is not
-the `verify)` arm (`VERIFY_ARM_FILE`), because an arm-scoped grep would miss a second emission site
-in `doublefire-probe)`. Non-vacuity: before the grep, a precondition asserts that the file being grepped contains the
-anchor lines `missed_tick_report() {` and the `verify)` case label (two-space indent). Then a mis-pointed or truncated `$BODY_SH`
+is the **whole comment-stripped files**: `$BODY_SH` and `$WF_YAML` each grepped directly, not
+the reconstructed `$WF`. `$WF` drops every script line above `set -euo pipefail` (about 33 lines)
+and re-indents the rest, so a flag in the preamble would be invisible there. It is not the
+`verify)` arm (`VERIFY_ARM_FILE`) either, because an arm-scoped grep would miss a second emission
+site in `doublefire-probe)`. The grep uses `-e` for each pattern
+(`grep -vE '^[[:space:]]*#' "$f" | grep -c -e '--function-id' -e '--missed-tick' || true`). A bare
+`grep -E '--function-id|…'` is read as an option: grep exits 2, `|| true` yields `''`, and
+`[[ '' -eq 0 ]]` passes. The assertion checks that the count equals exactly `0`, using `== '0'`, never
+`-eq`. Non-vacuity: before the grep, a precondition asserts that the file being grepped contains the
+anchor lines `missed_tick_report() {` (column 0) and the `verify)` case label with its two-space indent. Both are
+read from `$BODY_SH`; in `$WF` they are indented and neither matches. Then a mis-pointed or truncated `$BODY_SH`
 cannot make the token count trivially zero. This replaces an earlier line-count floor; a magic
 number would break on a legitimate script split (CTO #5).
 
@@ -619,7 +714,10 @@ per-function loop of its own (no `candidate function_id=` and no `for fn in`).
 **Harness rows.** (H1, suite edit) Move the ON fixture's window outside every run so it has no gaps.
 The `ON emits exactly 4 candidate lines` assertion must go RED. The count comes from the fixture
 (hourly `fn-h` missing one bucket, plus daily `fn-d` missing three), never from the gate value.
-(H2, must-PASS non-canonical) ON with a full-coverage fixture (every observed function has a run in
+The canonical case also compares the **sorted candidate set** exactly (`fn-d 11:00, fn-d 12:00,
+fn-d 13:00, fn-h 12:00`) and checks that the footer says 4. A count plus a regex survives an
+off-by-one bucket range (10–12 also gives 4) and a bucket-end timestamp. A never-incremented
+counter survives a check that only reads the full-coverage footer. (H2, must-PASS non-canonical) ON with a full-coverage fixture (every observed function has a run in
 every window bucket) must print 0 candidate lines, a footer counting 0, and return 0. This shows the
 guard does not reject everything. (H3, must-PASS) OFF with a valid window and the canonical fixture
 must return 0 and print the pointer line, and no fixture id may appear.
@@ -631,13 +729,13 @@ must return 0 and print the pointer line, and no fixture id may appear.
 - [ ] **AC1** Class-wide over every operator-facing surface: `git grep -n -e '--function-id' -e '--missed-tick' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs' ':!**/archive/**' ':!apps/web-platform/infra/cutover-inngest-workflow.test.sh' ':!knowledge-base/engineering/architecture/decisions/ADR-146-trust-anchor-for-cutover-coexistence-window.md'` prints nothing. The two exclusions are deliberate. The suite has to name the forbidden tokens for its guard to check them. ADR-146 § Deferred item 2 quotes the defect as history. Measured before the change, the only hit is `scripts/cutover-inngest.sh` (the `echo` line).
 - [ ] **AC2** The workflow declares input `missed_tick_candidates` with `type: boolean` and `default: false`. It maps `CUTOVER_MISSED_TICK_CANDIDATES: ${{ inputs.missed_tick_candidates }}` in the step env, and `grep -c 'inputs.missed_tick_candidates' .github/workflows/cutover-inngest.yml` prints `1`.
 - [ ] **AC3** `missed_tick_report()` exists as a top-level function with a bare definition line (`grep -cx 'missed_tick_report() {' scripts/cutover-inngest.sh` prints `1`). The call is one whole line: `grep -cxF '    missed_tick_report "${CUTOVER_MISSED_TICK_CANDIDATES:-}" "$BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"' scripts/cutover-inngest.sh` prints `1`. In the comment-stripped `verify)` arm the call comes after the last `exactly-once VERIFIED` echo, and the arm contains no `for fn in` loop.
-- [ ] **AC4** Behavioural, executed by the suite in a table-driven loop: with gate arguments `""` and `false`, the function prints no `candidate function_id=` line, none of the fixture's function ids, and no `--function-id` or `--missed-tick`. It prints the pointer containing `knowledge-base/engineering/operations/runbooks/inngest-server.md` and `Bounded-outage note`, and returns 0, including with a window-from argument of `garbage`. The pointer contains no double quote and no apostrophe.
-- [ ] **AC5** Behavioural: with the gate `true` and the canonical fixture, it prints the UNVERIFIED header and exactly 4 lines matching `^  candidate function_id=[^ ]+ empty_bucket_start=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`, no candidate line contains `soleur:` or `--`, and it returns 0. With the null fixture it returns 0 and prints exactly 7. With an invalid window it returns 1 and the `::error::` line contains `verdict above STANDS`. With one window argument empty it prints a `::warning::` and returns 0. With a full-coverage fixture it prints 0 candidate lines and returns 0.
+- [ ] **AC4** Behavioural, executed by the suite in a table-driven loop (the declared count is derived from the table length, not hard-coded): with gate arguments `""`, `false`, `TRUE`, `1` and `true` followed by one trailing space, the function prints no `candidate function_id=` line, none of the fixture's function ids, and no `--function-id` or `--missed-tick`. It prints the pointer containing `knowledge-base/engineering/operations/runbooks/inngest-server.md` and `Bounded-outage note`, and returns exactly 0, including with a window-from argument of `garbage` (printed as `<invalid>`). The pointer contains no double quote and no apostrophe.
+- [ ] **AC5** Behavioural (every rc check is exact, `== 0` / `== 1`, so a 127 from a missing function or a 5 from a jq crash cannot pass): with the gate `true` and the canonical fixture, it prints the UNVERIFIED header, a footer counting 4, and exactly 4 lines, and the sorted set equals `fn-d@11:00,fn-d@12:00,fn-d@13:00,fn-h@12:00` (each line matching `^  candidate function_id=[^ ]+ empty_bucket_start=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`, ), no candidate line contains `soleur:` or `--`, and it returns 0. With the null fixture it returns 0 and prints exactly 7. For each of three invalid windows (reversed, unparseable / non-ISO such as `tomorrow`, and a span over 10000 buckets) it returns 1, and the `::error::` line contains `verdict above STANDS`. With one window argument empty it prints a `::warning::` and returns 0. With a full-coverage fixture it prints 0 candidate lines and returns 0.
 - [ ] **AC6** The 2.6 verdict code is byte-identical (Kieran P1-3). This is a work/review-time check, not a suite assertion. Run: `cut26() { awk '/# ---- 2.6 exactly-once double-fire check/{f=1} f{sub(/^[[:space:]]+/,""); print} /2.6 SCOPE CAVEAT/{exit}'; }; cmp <(git show origin/main:scripts/cutover-inngest.sh | cut26) <(cut26 < scripts/cutover-inngest.sh)`. It must exit 0, and the cut must be non-empty (`cut26 < scripts/cutover-inngest.sh | wc -l` over 100).
 - [ ] **AC7** `grep -c '# ---- Missed-tick auto-enumeration (P2-16)' scripts/cutover-inngest.sh` prints `1` (ADR-106 content anchor preserved).
 - [ ] **AC8** The existing null-`startedAt` harness still passes unedited: `BUCKET_PROG_N` equals `BUCKET_SITE_N`, is still ≥ 3, and the OBSERVED program still yields 4 pairs.
 - [ ] **AC9** `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` exits 0, with 0 FAIL and a PASS count strictly above the 914 baseline.
-- [ ] **AC10** Runbook: `grep -c 'Re-fire that list' knowledge-base/engineering/operations/runbooks/inngest-server.md` prints `0`. The `### Bounded-outage note` section (up to the next heading) still exists and contains `--event cron/<name>.manual-trigger`, `MONITOR_SLUG`, `checkin_margin_minutes`, `do not re-fire`, and the names `cron-workspace-gc`, `cron-rule-prune`, `cron-action-required-sla`. `scripts/cutover-inngest.sh` contains none of those three cron names in the pointer, so the runbook stays the single source.
+- [ ] **AC10** Runbook: `grep -c 'Re-fire that list' knowledge-base/engineering/operations/runbooks/inngest-server.md` prints `0`. The `### Bounded-outage note` section (up to the next heading) still exists and contains `--event cron/<name>.manual-trigger`, `SENTRY_MONITOR_SLUG`, `checkin_margin_minutes`, `do not re-fire`, and the names `cron-workspace-gc`, `cron-rule-prune`, `cron-action-required-sla`. `scripts/cutover-inngest.sh` contains none of those three cron names in the pointer, so the runbook stays the single source.
 - [ ] **AC11** ADR-146 § Deferred item 2 contains `Interim de-fang landed (#6939`. A new item 5 names the #6939 proper-fix scope and its re-check condition, and the section header count matches the item count. ADR-106 carries the dated location sentence.
 - [ ] **AC12** #6940 has a comment (posted in this PR's lifecycle) adding the #6939 proper fix as a separate item, with the re-check condition from Phase 4.1. The PR body carries `Closes #6939` and `Ref #6940`.
 - [ ] **AC13** No production write, host replace, or live dispatch happens as part of this PR. Verification is the static and behavioural suite only.
@@ -700,7 +798,7 @@ as a regression (CTO #4).
 - Given the gate empty and a window-from argument of `garbage`, when it runs, then rc=0 and the pointer is printed (the window is never parsed).
 - Given the gate `true` and the canonical fixture (no `fn-q`), when it runs, then the header contains `UNVERIFIED` and `NOT a re-fire list`, there are exactly 4 candidate lines (`fn-h`@12:00, `fn-d`@11:00/12:00/13:00), none contains `soleur:` or `--`, and rc=0.
 - Given the gate `true` and a full-coverage fixture, when it runs, then there are 0 candidate lines, the footer reports 0, and rc=0 (must-PASS non-canonical).
-- Given the gate `false` and a window-from argument containing an embedded newline followed by `::notice::FORGED`, when it runs, then no output line starts with `::notice::FORGED` (P7).
+- P7 injection cases (each case also asserts rc `== 0` and that the pointer line is present, so a function that prints nothing cannot pass). With the gate `false`, a window-from value containing `\n::notice::FORGED`, a window-until value containing `\r::notice::FORGED`, and a value containing `%0A` must each print `<invalid>`, and no output line may start with `::notice::FORGED`. With the gate `true` and a fixture whose function ids include `*`, `a\rb` and a 200-character id, none of those ids appears, the shape-check `::warning::` count is 3, and no file name from the working directory appears.
 - Given the gate `true` with the until argument before the from argument, when it runs, then rc=1 and the `::error::` contains `verdict above STANDS`.
 - Given the gate `true` and one window argument empty, when it runs, then a `::warning::` is printed and rc=0.
 - Given the gate `true` and `MTR_NULL_FIXTURE`, when it runs, then it does not crash (jq exit 5 was the #6178 crash class), rc=0, and there are exactly 7 candidate lines.
@@ -742,12 +840,21 @@ as a regression (CTO #4).
 - The issue's "ADR-143" citation is stale (renumbered to ADR-146). Do not edit ADR-143.
 - **Keep the OBSERVED jq invocation byte-identical inside the function.** Bind
   `local BODY="$2" CRON_PERIOD="$3"` at the top of `missed_tick_report()`. That way the moved line
-  still reads `jq -c --argjson period "$CRON_PERIOD"` over `"$BODY"`, and AC6b's `cmp` holds. Renaming
-  to `"$3"` would still pass the suite's count-based extractor but fail `cmp`.
+  still reads `jq -c --argjson period "$CRON_PERIOD"` over `"$BODY"`, and AC8 (which executes this program against fixtures) holds. Renaming
+  to `"$3"` would still pass the suite's count-based extractor, but it breaks the invocation shape the
+  "do not reshape" comment protects.
 - **`set -e` inside a function called from `||`/`&&` is ignored, and so is everything that function
   runs.** This is why the call site is plain (Output contract) and why the suite runs every case
   under `set +e; ( set -euo pipefail; … ) > file; rc=$?; set -e` rather than `$(…) || rc=$?`
   (Phase 1.2).
+- **Do not run the table loop inside `if`, `||` or `assert`.** Bash disables `set -e` for the
+  whole compound command, including a subshell that re-sets it. Capture rc on its own line, then
+  assert on the captured value.
+- **Scope the YAML `default: false` assertion to the `missed_tick_candidates:` input block**
+  (for example `awk '/^      missed_tick_candidates:$/{f=1;next} f&&/^      [a-z_]+:$/{exit} f'`). An
+  unscoped grep is satisfied by any other boolean input.
+- **Known limit of the ordering assertion:** it checks line order only. It cannot tell that the call
+  sits after an `exit`. AC6's review-time `cmp` over the verdict range covers that shape.
 - **GNU `date -u -d` is Linux-only.** The ON arm and its suite cases use it, as the rest of the
   script already does. The suite runs on the Linux `infra-validation.yml` runner. Do not add a macOS
   fallback in this PR; it is not a new portability surface.
