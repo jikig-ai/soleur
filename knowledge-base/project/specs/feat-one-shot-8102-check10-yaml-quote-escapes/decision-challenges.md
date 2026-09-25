@@ -46,4 +46,10 @@ an inline scalar. The one guard that covers those cases is the Q, O and E fixtur
 ### Default if nobody objects
 
 Proceed as planned. To reverse it, move the decode back into the normalize block, and accept
-that P1 cannot see it and that block and fold scalars get decoded too.
+three costs. P1 cannot see a decode there. Block and fold scalars would be decoded as well. And
+the mirror/runtime gap on block, fold and Form B paths reopens: the TS mirror never stripped
+those, while the SKILL.md strip did (architecture review, deepen).
+
+The deepen pass also found that the old last-character rule mis-handled `"cmd" #"tail"`. The
+parser-side scan now decodes exactly YAML's value, which a normalize-block strip cannot do,
+because by then it can no longer tell the command from a trailing YAML comment.
