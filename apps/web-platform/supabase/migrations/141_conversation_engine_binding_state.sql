@@ -5,8 +5,42 @@
 BEGIN;
 
 ALTER TABLE public.conversations
-  ADD COLUMN engine_binding_state text NOT NULL DEFAULT 'legacy'
+  ADD COLUMN engine_binding_state text NOT NULL DEFAULT 'pending'
   CHECK (engine_binding_state IN ('legacy', 'pending', 'bound'));
+
+UPDATE public.conversations AS c
+   SET engine_binding_state = 'bound'
+  FROM public.agent_engine_runs AS r
+ WHERE r.conversation_id = c.id
+   AND r.execution_kind = 'conversation'
+   AND c.engine_binding_state = 'legacy';
+
+UPDATE public.conversations AS c
+   SET engine_binding_state = 'legacy'
+ WHERE c.engine_binding_state = 'pending'
+   AND NOT EXISTS (
+     SELECT 1 FROM public.agent_engine_runs AS r
+      WHERE r.conversation_id = c.id
+        AND r.execution_kind = 'conversation'
+   );
+
+CREATE OR REPLACE FUNCTION public.guard_conversation_engine_binding_state()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF OLD.engine_binding_state IS DISTINCT FROM NEW.engine_binding_state
+     AND current_setting('soleur.engine_binding_rpc', true) IS DISTINCT FROM '1' THEN
+    RAISE EXCEPTION 'conversation engine binding state is immutable' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER conversations_engine_binding_state_immutable
+  BEFORE UPDATE OF engine_binding_state ON public.conversations
+  FOR EACH ROW EXECUTE FUNCTION public.guard_conversation_engine_binding_state();
 
 CREATE OR REPLACE FUNCTION public.bind_agent_engine_run(
   p_workspace_id uuid,
@@ -56,6 +90,7 @@ BEGIN
   RIGHT JOIN (SELECT 1) sentinel ON true
   RETURNING * INTO v_row;
   IF p_conversation_id IS NOT NULL THEN
+    PERFORM set_config('soleur.engine_binding_rpc', '1', true);
     UPDATE public.conversations SET engine_binding_state = 'bound'
      WHERE id = p_conversation_id AND user_id = p_created_by;
   END IF;

@@ -111,6 +111,7 @@ function makeFromDispatcher(): (table: string) => unknown {
             },
             error: null,
           }),
+          maybeSingle: mockMaybeSingle,
           ...tail,
         };
         return eqChain;
@@ -208,6 +209,7 @@ describe("start_session resumeByContextPath", () => {
         id: "existing-conv-123",
         last_active: "2026-04-15T10:00:00Z",
         context_path: "knowledge-base/product/roadmap.md",
+        engine_binding_state: "legacy",
       },
       error: null,
     };

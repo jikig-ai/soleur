@@ -1,5 +1,7 @@
 BEGIN;
 
+DROP TRIGGER IF EXISTS conversations_engine_binding_state_immutable ON public.conversations;
+DROP FUNCTION IF EXISTS public.guard_conversation_engine_binding_state();
 ALTER TABLE public.conversations DROP COLUMN IF EXISTS engine_binding_state;
 
 CREATE OR REPLACE FUNCTION public.bind_agent_engine_run(
@@ -30,6 +32,7 @@ BEGIN
       FROM public.conversations
      WHERE id = p_conversation_id
        AND workspace_id = p_workspace_id
+       AND user_id = p_created_by
   ) THEN
     RAISE EXCEPTION 'conversation does not belong to workspace' USING ERRCODE = '42501';
   END IF;

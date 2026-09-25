@@ -39,6 +39,7 @@ const { rpcSpy, singleSpy, engineRunSpy } = vi.hoisted(() => ({
       status: "active",
       repo_url: "https://github.com/acme/repo.git",
       workspace_id: "a1b2c3d4-0000-4000-8000-000000000123",
+      engine_binding_state: "legacy",
     },
     error: null,
   })),
@@ -181,6 +182,7 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
         status: "active",
         repo_url: "https://github.com/other/repo.git",
         workspace_id: WORKSPACE_ID,
+        engine_binding_state: "legacy",
       },
       error: null,
     });

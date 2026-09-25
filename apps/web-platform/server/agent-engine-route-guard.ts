@@ -24,15 +24,15 @@ export function assertLegacyEngineBinding(binding: unknown): void {
 export async function assertLegacyConversationEngineBinding(
   repository: {
     getConversationRun(conversationId: string): Promise<unknown>;
-    getConversationBindingState?(conversationId: string): Promise<string | null>;
+    getConversationBindingState(conversationId: string): Promise<string | null>;
   },
   conversationId: string,
 ): Promise<void> {
   const persisted = await repository.getConversationRun(conversationId);
-  const state = await repository.getConversationBindingState?.(conversationId);
   // Conversations created before engine bindings were introduced have no run.
   if (persisted === null) {
-    if (state === undefined || state === null || state === "legacy") return;
+    const state = await repository.getConversationBindingState(conversationId);
+    if (state === "legacy") return;
     throw Object.assign(new Error("conversation engine binding is missing"), {
       code: "engine_binding_invalid",
     });
