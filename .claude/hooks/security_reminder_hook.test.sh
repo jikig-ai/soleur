@@ -20,14 +20,14 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-# Preflight: skip with exit 0 if python3 or jq missing.
+# Preflight: a missing tool is UNRESOLVED (exit 3) — not measured, never green (#8616).
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "SKIP: python3 not on PATH"
-  exit 0
+  echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"
+  exit 3
 fi
 if ! command -v jq >/dev/null 2>&1; then
-  echo "SKIP: jq not on PATH"
-  exit 0
+  echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"
+  exit 3
 fi
 if [[ ! -x "$HOOK" ]]; then
   echo "FAIL: $HOOK not executable or missing"

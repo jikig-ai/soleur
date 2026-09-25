@@ -286,6 +286,15 @@ AFFECTED_CLAUDE_HOOKS_HOOK_INPUT_CONTRACT_TEST_SH_PATHS=(
   ".claude/hooks/hook-input-contract.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# .claude/hooks/hook-suite-dep-unresolved.test.sh (#8616) — runs every guarded hook suite
+# with one tool off PATH; its population is derived from the `.claude/hooks/` roots of
+# test-all.sh's SUITE_GLOBS, so any hook-directory change (a suite, a guard, a hook it
+# exercises) is its subject. A directory entry is a prefix edge under the substring match.
+AFFECTED_CLAUDE_HOOKS_HOOK_SUITE_DEP_UNRESOLVED_TEST_SH_PATHS=(
+  ".claude/hooks/"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_CLAUDE_HOOKS_PKILL_SELF_MATCH_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/pkill-self-match-guard.sh"
   ".claude/hooks/pkill-self-match-guard.test.sh"
