@@ -38,6 +38,9 @@ set -euo pipefail
 # kept writing the real ledger. See the helper header.
 . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 
+# Without git the `git grep … || true` sweeps below read as "no hits" and pass (#8616).
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 

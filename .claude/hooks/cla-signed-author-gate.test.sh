@@ -46,8 +46,8 @@ HOOK="$SCRIPT_DIR/cla-signed-author-gate.sh"
 UNSIGNED="noreply@anthropic.com"
 
 PASS=0; FAIL=0; TOTAL=0
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 init_git_repo() {
   local dir="$1"

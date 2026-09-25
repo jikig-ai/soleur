@@ -18,8 +18,8 @@ set -uo pipefail
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/post-dispatch-watch-gate.sh"
 PASS=0; FAIL=0; TOTAL=0
 [[ -x "$HOOK" ]] || { echo "FATAL: hook not executable" >&2; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 : "${WORK:?fixture dir is empty; git -C <empty> would retarget this write}"
