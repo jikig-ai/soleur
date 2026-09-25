@@ -194,7 +194,7 @@ jobs:
           # old wording excluded outright: the pre-merge gate RAN and reported success
           # while scanning nothing. Naming a cause the job did not measure is the
           # defect this PR is closing elsewhere in this same file.
-          body="${body}"$'\n'"The pre-merge gate (\`skill-security-scan-pr-trailer\`) did not block this. This job observes only that the file was added between \`$parent\` and HEAD with no matching override artifact; it does not observe how the merge was performed, so the reason is undetermined here. Check the PR's own check-run history for whether the gate ran, was skipped, or reported success. See plan #2719, R15 mitigation."
+          body="${body}"$'\n'"The pre-merge gate (\`skill-security-scan PR gate\`) did not block this. This job observes only that the file was added between \`$parent\` and HEAD with no matching override artifact; it does not observe how the merge was performed, so the reason is undetermined here. Check the PR's own check-run history for whether the gate ran, was skipped, or reported success. See plan #2719, R15 mitigation."
             # A LOST COMPLIANCE RECORD IS REPORTED, NOT SWALLOWED. The old
             # `|| true` meant a failed `gh issue create` still printed
             # "compliance/critical issue filed" -- an assertion about an artifact
