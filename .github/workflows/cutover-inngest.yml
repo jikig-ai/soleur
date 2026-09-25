@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: "3600"
+      missed_tick_candidates:
+        description: "op=verify only: print the UNVERIFIED per-bucket missed-tick candidates (#6939). NOT a re-fire list; read the run's notice before re-firing anything."
+        required: false
+        type: boolean
+        default: false
   # push trigger scoped to this file forces GitHub to register the workflow in
   # the Actions UI (workflow_dispatch-only workflows can take 30+ min to appear).
   push:
@@ -150,6 +155,10 @@ jobs:
           # Error direction matters: a period LARGER than the real shortest cron
           # collapses legitimate runs into one bucket and reports a PHANTOM double-fire.
           CUTOVER_CRON_PERIOD_SECONDS: ${{ inputs.cron_period_seconds }}
+          # #6939 — opt-in, UNVERIFIED missed-tick candidates for op=verify. The boolean input
+          # arrives as the string "true"/"false"; the script's gate is a strict == "true", so
+          # anything else (including unset) is OFF. Never interpolated into run:.
+          CUTOVER_MISSED_TICK_CANDIDATES: ${{ inputs.missed_tick_candidates }}
           # #6919 — OPTIONAL functionIDs scope for the exactly-once doublefire probe
           # (op=verify 2.6 + op=doublefire-probe). Comma-separated cron fn UUIDs; empty ⇒ ALL
           # functions (the default). A COST lever: it shrinks the scanned POPULATION without
@@ -169,9 +178,9 @@ jobs:
           # exactly-once proof — the verify arm labels it as such.
           #
           # Deliberately DISTINCT from CUTOVER_WINDOW_FROM below: that variable also means "the
-          # quiesce→register gap START" to the missed-tick auto-enumeration, and quiesce precedes
-          # the cutover. Overloading one variable with both meanings would silently re-base the
-          # expected-tick window so the gap ticks stop being enumerated.
+          # quiesce→register gap START" to the opt-in missed-tick candidate list (#6939), and
+          # quiesce precedes the cutover. Overloading one variable with both meanings would
+          # silently re-base the expected-tick window so the gap ticks stop being listed.
           CUTOVER_ANCHOR_FROM: ${{ vars.CUTOVER_ANCHOR_FROM }}
           # #7462 — G3.7's flush-latch pre-filter window (OPTIONAL repo var; the script defaults
           # it to 365d). Mapped here because the gate's REFUSAL names it in its remediation:
@@ -194,8 +203,8 @@ jobs:
           FLUSH_LATCH_SINCE: ${{ vars.FLUSH_LATCH_SINCE }}
           # The quiesce→register window (ISO-8601), OPTIONAL operator repo/env vars, mapped here
           # so the shell actually sees them (GitHub does not export repo vars to the step unless
-          # named). CUTOVER_WINDOW_FROM/UNTIL drive the missed-tick auto-enumeration (P2-16,
-          # below); CUTOVER_WINDOW_FROM additionally serves as doublefire_from()'s LAST-RESORT
+          # named). CUTOVER_WINDOW_FROM/UNTIL bound the opt-in missed-tick candidate list
+          # (P2-16, #6939); CUTOVER_WINDOW_FROM additionally serves as doublefire_from()'s LAST-RESORT
           # anchor source (after the override and the flip-FSM row), never as a wide fallback —
           # with all three unset, op=verify FAILS CLOSED rather than scanning an unanchored window.
           CUTOVER_WINDOW_FROM: ${{ vars.CUTOVER_WINDOW_FROM }}

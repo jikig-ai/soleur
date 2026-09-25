@@ -204,7 +204,9 @@ assert "SEAM directs the arm-flip to the no-SSH op=arm dispatch (#6369)" "grep -
 assert "verify calls the doublefire-probe hook (2.6/P1-12)" "grep -qE 'BASE/inngest-doublefire-probe[?\"]' '$WF'"
 assert "verify preconditions on registry NON-empty (P1-9/P2-17)" "grep -qE 'verify precondition' '$WF'"
 assert "verify buckets by floor(startedAt / cron_period) (no scheduled_tick)" "grep -qE 'fromdateiso8601' '$WF'"
-assert "verify auto-emits the missed-tick trigger-cron list (P2-16)" "grep -qE 'soleur:trigger-cron' '$WF'"
+# (#6939: the old "verify auto-emits the missed-tick trigger-cron list" grep was retired — it
+# matched `soleur:trigger-cron` anywhere, so the new OFF pointer satisfied it too. The executed
+# ON/OFF cases in the #6939 block near the end of this file replace it.)
 assert "workflow contains NO 'scheduled_tick' anywhere (AC-VERIFY)" "! grep -qE 'scheduled_tick' '$WF'"
 
 # D.6 / AC-ROLLBACK (P1-13) — op=rollback re-enables inngest across the host-set via a
@@ -3725,6 +3727,181 @@ assert "#6921 D5 whole-file: no 'LB-routed / LB-reachable / LOAD BALANCER' wordi
 assert "#6921 D5 the tunnel fact the wording rests on still holds: tunnel.tf pins deploy. to web-1" \
   "grep -A2 -F 'hostname = \"deploy.\${var.app_domain_base}\"' '$REPO_ROOT/apps/web-platform/infra/tunnel.tf' | grep -cF 'var.web_hosts[\"web-1\"].private_ip' >/dev/null"
 
+# =====================================================================================
+# #6939 — op=verify missed-tick candidates: OFF by default, never command-shaped.
+#
+# The old block printed `soleur:trigger-cron` with two flags the skill does not accept, one line
+# per empty (function, bucket) pair — including buckets a slower cron was never due in, so acting
+# on the list double-fired the cron. It now lives in missed_tick_report(), gated on the
+# missed_tick_candidates dispatch input (default false). These rows EXECUTE the extracted function.
+# =====================================================================================
+echo "--- #6939 missed-tick candidates (opt-in, never a re-fire list) ---"
+
+# Guard 1 — no nonexistent trigger-cron flag at ANY emission site. Greps the REAL files, not $WF
+# ($WF drops the script preamble above `set -euo pipefail`). `-e` per pattern: a bare
+# `grep -E '--function-id|…'` is parsed as an option, exits 2, and `|| true` then yields '' — so
+# the compare is an exact string '0', never `-eq` (which '' would satisfy).
+MTR_ANCHOR_FN=$(grep -cx 'missed_tick_report() {' "$BODY_SH" || true)
+MTR_ANCHOR_ARM=$(grep -cx '  verify)' "$BODY_SH" || true)
+assert "#6939 guard-1 precondition: the script carries the column-0 definition and the verify) label (fn=$MTR_ANCHOR_FN arm=$MTR_ANCHOR_ARM)" "[[ '$MTR_ANCHOR_FN' == '1' && '$MTR_ANCHOR_ARM' == '1' ]]"
+for _mtr_f in "$BODY_SH" "$WF_YAML"; do
+  _mtr_n=$(grep -vE '^[[:space:]]*#' "$_mtr_f" | grep -c -e '--function-id' -e '--missed-tick' || true)
+  assert "#6939 no non-comment --function-id / --missed-tick in $(basename "$_mtr_f") (got '$_mtr_n')" "[[ '$_mtr_n' == '0' ]]"
+done
+
+# Workflow shape: a boolean input defaulting to false, mapped into env exactly once. The awk is
+# scoped to the input's own block: an unscoped grep is satisfied by any other boolean input.
+MTR_INPUT_BLOCK=$(awk '/^      missed_tick_candidates:$/{f=1;next} f&&/^      [a-z_]+:$/{exit} f&&/^  [^ ]/{exit} f' "$WF_YAML")
+assert "#6939 input missed_tick_candidates is type: boolean" "grep -qE '^[[:space:]]+type:[[:space:]]*boolean\$' <<<\"\$MTR_INPUT_BLOCK\""
+assert "#6939 input missed_tick_candidates defaults to false" "grep -qE '^[[:space:]]+default:[[:space:]]*false\$' <<<\"\$MTR_INPUT_BLOCK\""
+MTR_MAP_N=$(grep -cE '^[[:space:]]+CUTOVER_MISSED_TICK_CANDIDATES: \$\{\{ inputs\.missed_tick_candidates \}\}$' "$WF_YAML" || true)
+assert "#6939 step env maps CUTOVER_MISSED_TICK_CANDIDATES from the input (got '$MTR_MAP_N')" "[[ '$MTR_MAP_N' == '1' ]]"
+MTR_REFS=$(grep -cE '\$\{\{[[:space:]]*inputs\.missed_tick_candidates' "$WF_YAML" || true)
+assert "#6939 exactly one \${{ inputs.missed_tick_candidates reference (env only, never run:) (got '$MTR_REFS')" "[[ '$MTR_REFS' == '1' ]]"
+
+# Call site: one exact plain line. A default (:-true) or a trailing `|| exit 1` (which disables
+# set -e inside the function) both fail the whole-line match.
+MTR_CALL='    missed_tick_report "${CUTOVER_MISSED_TICK_CANDIDATES:-}" "$BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"'
+MTR_CALL_N=$(grep -cxF -- "$MTR_CALL" "$BODY_SH" || true)
+assert "#6939 the call site is the one exact plain line (got '$MTR_CALL_N')" "[[ '$MTR_CALL_N' == '1' ]]"
+MTR_CALL_CT=$(grep -cF 'missed_tick_report' "$VERIFY_ARM_FILE" || true)
+MTR_CALL_LN=$(grep -nF 'missed_tick_report' "$VERIFY_ARM_FILE" | tail -1 | cut -d: -f1 || true)
+MTR_VERDICT_LN=$(grep -nF 'exactly-once VERIFIED' "$VERIFY_ARM_FILE" | tail -1 | cut -d: -f1 || true)
+assert "#6939 verify) calls missed_tick_report exactly once (got '$MTR_CALL_CT')" "[[ '$MTR_CALL_CT' == '1' ]]"
+assert "#6939 the call sits after the LAST exactly-once VERIFIED echo (call=$MTR_CALL_LN verdict=$MTR_VERDICT_LN)" "[[ -n '$MTR_CALL_LN' && -n '$MTR_VERDICT_LN' && '$MTR_CALL_LN' -gt '$MTR_VERDICT_LN' ]]"
+MTR_ARM_LOOP=$(grep -cE 'for fn in|candidate function_id=' "$VERIFY_ARM_FILE" || true)
+assert "#6939 verify) has no per-function loop of its own (got '$MTR_ARM_LOOP')" "[[ '$MTR_ARM_LOOP' == '0' ]]"
+
+# Behavioural cases against the EXTRACTED function (column 0 of $BODY_SH; in $WF it is re-indented).
+MTR_FN="$(mktemp)"; SCRATCH+=("$MTR_FN")
+MTR_OUT="$(mktemp)"; SCRATCH+=("$MTR_OUT")
+MTR_CWD="$(mktemp -d)"; SCRATCH+=("$MTR_CWD")
+: > "$MTR_CWD/mtr-glob-sentinel"   # an id of `*` that reached a shell glob would print this name
+awk '/^missed_tick_report\(\) \{$/,/^\}$/' "$BODY_SH" > "$MTR_FN"
+assert "#6939 missed_tick_report() extraction is non-empty and carries its definition" "[[ -s '$MTR_FN' ]] && grep -qx 'missed_tick_report() {' '$MTR_FN'"
+MTR_CASES=0
+# Runs one case. NEVER call this inside if/||/&&: bash disables set -e for the whole compound,
+# including a subshell that re-sets it, so a function whose own errexit is broken would pass.
+mtr_run() {  # $1 gate  $2 body-json  $3 win-from  $4 win-until  -> $MTR_OUT, $MTR_RC
+  MTR_CASES=$((MTR_CASES + 1))
+  set +e
+  ( cd "$MTR_CWD"; set -euo pipefail; source "$MTR_FN"; missed_tick_report "$1" "$2" 3600 "$3" "$4" ) > "$MTR_OUT" 2>&1
+  MTR_RC=$?
+  set -e
+}
+mtr_cands() { grep -cE '^  candidate ' "$MTR_OUT" || true; }
+
+# Canonical fixture: fn-h (hourly) has no run in the 12:00 bucket; fn-d (daily) ran at 00:00, so
+# every window bucket is empty for it — the never-due class this change labels. The window covers
+# buckets 11, 12 and 13, so ON prints exactly 4 lines. The count comes from the fixture.
+MTR_FIXTURE='{"runs":[
+  {"functionID":"fn-h","startedAt":"2026-07-08T10:00:05Z"},
+  {"functionID":"fn-h","startedAt":"2026-07-08T11:00:03.2Z"},
+  {"functionID":"fn-h","startedAt":"2026-07-08T13:00:01Z"},
+  {"functionID":"fn-d","startedAt":"2026-07-08T00:00:02Z"}]}'
+# The canonical fixture plus fn-q, whose only run has not started. The function set is still
+# `[.runs[].functionID] | unique`, so fn-q contributes 3 more (7). #6940's item 5 (due-tick
+# filtering) is EXPECTED to change this count — that is not a regression.
+MTR_NULL_FIXTURE='{"runs":[
+  {"functionID":"fn-h","startedAt":"2026-07-08T10:00:05Z"},
+  {"functionID":"fn-h","startedAt":"2026-07-08T11:00:03.2Z"},
+  {"functionID":"fn-h","startedAt":"2026-07-08T13:00:01Z"},
+  {"functionID":"fn-d","startedAt":"2026-07-08T00:00:02Z"},
+  {"functionID":"fn-q","startedAt":null}]}'
+MTR_FULL_FIXTURE='{"runs":[
+  {"functionID":"fn-h","startedAt":"2026-07-08T11:00:05Z"},
+  {"functionID":"fn-h","startedAt":"2026-07-08T12:00:03.2Z"},
+  {"functionID":"fn-h","startedAt":"2026-07-08T13:00:01Z"}]}'
+MTR_FROM="2026-07-08T11:30:00Z"
+MTR_UNTIL="2026-07-08T13:30:00Z"
+
+# OFF: every gate value that is not exactly `true`. `TRUE`, `1` and `true ` kill a loose gate
+# (`== true*`, `-n && != false`) that `""`/`false` alone would let survive.
+MTR_OFF_GATES=("" "false" "TRUE" "1" "true ")
+for _mtr_g in "${MTR_OFF_GATES[@]}"; do
+  mtr_run "$_mtr_g" "$MTR_FIXTURE" "$MTR_FROM" "$MTR_UNTIL"
+  _mtr_rc=$MTR_RC
+  _mtr_leak=$(grep -cE 'candidate function_id=|fn-h|fn-d|--function-id|--missed-tick' "$MTR_OUT" || true)
+  _mtr_ptr=$(grep -cF 'missed-tick candidates NOT EMITTED' "$MTR_OUT" || true)
+  _mtr_q=$( { grep -F 'missed-tick candidates NOT EMITTED' "$MTR_OUT" || true; } | tr -cd "'\"" | wc -c | tr -d '[:space:]')
+  assert "#6939 OFF gate=[$_mtr_g]: rc is exactly 0 (got $_mtr_rc)" "[[ '$_mtr_rc' == '0' ]]"
+  assert "#6939 OFF gate=[$_mtr_g]: no candidate line, fixture id or forbidden flag (got $_mtr_leak)" "[[ '$_mtr_leak' == '0' ]]"
+  assert "#6939 OFF gate=[$_mtr_g]: exactly one pointer, with no quote or apostrophe (ptr=$_mtr_ptr quotes=$_mtr_q)" "[[ '$_mtr_ptr' == '1' && '$_mtr_q' == '0' ]]"
+  assert "#6939 OFF gate=[$_mtr_g]: pointer names the runbook section and echoes the window" "grep -qF 'knowledge-base/engineering/operations/runbooks/inngest-server.md' '$MTR_OUT' && grep -qF 'Bounded-outage note' '$MTR_OUT' && grep -qF '[$MTR_FROM, $MTR_UNTIL]' '$MTR_OUT'"
+done
+
+# OFF never parses the window: a malformed one cannot redden a clean verdict run.
+mtr_run "" "$MTR_FIXTURE" "garbage" "$MTR_UNTIL"
+assert "#6939 OFF with window-from=garbage: rc 0, printed as <invalid>, pointer present (rc=$MTR_RC)" "[[ '$MTR_RC' == '0' ]] && grep -qF '[<invalid>, $MTR_UNTIL]' '$MTR_OUT' && grep -qF 'NOT EMITTED' '$MTR_OUT'"
+
+# ON, canonical: the exact sorted candidate set, the footer, and nothing command-shaped. A count
+# plus a regex would survive an off-by-one bucket range or a bucket-END timestamp.
+mtr_run true "$MTR_FIXTURE" "$MTR_FROM" "$MTR_UNTIL"
+_mtr_rc=$MTR_RC
+MTR_SET=$(grep -E '^  candidate ' "$MTR_OUT" | sed -E 's/^  candidate function_id=([^ ]+) empty_bucket_start=2026-07-08T([0-9]{2}:[0-9]{2}):00Z$/\1@\2/' | LC_ALL=C sort | paste -sd, - || true)
+MTR_SHAPE_BAD=$( { grep -E '^  candidate ' "$MTR_OUT" || true; } | grep -cvE '^  candidate function_id=[^ ]+ empty_bucket_start=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' || true)
+MTR_CMDISH=$( { grep -E '^  candidate ' "$MTR_OUT" || true; } | grep -cE 'soleur:|--' || true)
+assert "#6939 ON canonical: rc is exactly 0 (got $_mtr_rc)" "[[ '$_mtr_rc' == '0' ]]"
+assert "#6939 ON canonical: UNVERIFIED warning header that says NOT a re-fire list" "grep -qE '^::warning::.*UNVERIFIED' '$MTR_OUT' && grep -qF 'NOT a re-fire list' '$MTR_OUT'"
+assert "#6939 ON canonical: exact candidate set (got '$MTR_SET')" "[[ '$MTR_SET' == 'fn-d@11:00,fn-d@12:00,fn-d@13:00,fn-h@12:00' ]]"
+assert "#6939 ON canonical: every candidate line has the labelled shape (bad=$MTR_SHAPE_BAD)" "[[ '$MTR_SHAPE_BAD' == '0' ]]"
+assert "#6939 ON canonical: no candidate line carries soleur: or -- (got $MTR_CMDISH)" "[[ '$MTR_CMDISH' == '0' ]]"
+assert "#6939 ON canonical: the footer counts 4" "grep -qE '^::notice::missed-tick candidates: 4 unverified' '$MTR_OUT'"
+
+# ON, null startedAt: no jq exit 5, and exactly 7 (see the fixture comment for why 7).
+mtr_run true "$MTR_NULL_FIXTURE" "$MTR_FROM" "$MTR_UNTIL"
+_mtr_rc=$MTR_RC; _mtr_n=$(mtr_cands)
+assert "#6939 ON null-startedAt: rc exactly 0 and exactly 7 candidates (rc=$_mtr_rc n=$_mtr_n)" "[[ '$_mtr_rc' == '0' && '$_mtr_n' == '7' ]]"
+
+# ON, full coverage (must-PASS, non-canonical): the guard does not reject everything.
+mtr_run true "$MTR_FULL_FIXTURE" "$MTR_FROM" "$MTR_UNTIL"
+_mtr_rc=$MTR_RC; _mtr_n=$(mtr_cands)
+assert "#6939 ON full coverage: rc 0, zero candidates, footer counts 0 (rc=$_mtr_rc n=$_mtr_n)" "[[ '$_mtr_rc' == '0' && '$_mtr_n' == '0' ]] && grep -qE '^::notice::missed-tick candidates: 0 unverified' '$MTR_OUT'"
+
+# ON, invalid windows: reversed, non-ISO (date -d would accept `tomorrow`), and over 10000 buckets.
+# Only the opt-in list fails; the message must say the verdict above STANDS.
+MTR_BAD_WINDOWS=("$MTR_UNTIL|$MTR_FROM|reversed" "tomorrow|$MTR_UNTIL|non-ISO" "2020-01-01T00:00:00Z|$MTR_UNTIL|over-10000-buckets")
+for _mtr_w in "${MTR_BAD_WINDOWS[@]}"; do
+  IFS='|' read -r _mtr_wf _mtr_wu _mtr_wn <<<"$_mtr_w"
+  mtr_run true "$MTR_FIXTURE" "$_mtr_wf" "$_mtr_wu"
+  _mtr_rc=$MTR_RC; _mtr_n=$(mtr_cands)
+  assert "#6939 ON invalid window ($_mtr_wn): rc exactly 1, verdict above STANDS, no candidates (rc=$_mtr_rc n=$_mtr_n)" "[[ '$_mtr_rc' == '1' && '$_mtr_n' == '0' ]] && grep -qE '^::error::.*verdict above STANDS' '$MTR_OUT'"
+done
+
+# ON, window not supplied: a warning, rc 0.
+mtr_run true "$MTR_FIXTURE" "" "$MTR_UNTIL"
+_mtr_rc=$MTR_RC; _mtr_n=$(mtr_cands)
+assert "#6939 ON with one window bound empty: warning, rc 0, no candidates (rc=$_mtr_rc n=$_mtr_n)" "[[ '$_mtr_rc' == '0' && '$_mtr_n' == '0' ]] && grep -qE '^::warning::' '$MTR_OUT'"
+
+# P7 — no operator- or host-supplied value can forge an annotation line. GitHub decodes %0A inside
+# an annotation, so a CR/LF strip is not enough: window values are validated, not sanitised.
+MTR_FORGE=($'x\n::notice::FORGED' $'y\r::notice::FORGED' '%0A::notice::FORGED')
+for _mtr_v in "${MTR_FORGE[@]}"; do
+  mtr_run false "$MTR_FIXTURE" "$_mtr_v" "$_mtr_v"
+  _mtr_rc=$MTR_RC
+  _mtr_forged=$(grep -c 'FORGED' "$MTR_OUT" || true)
+  assert "#6939 P7 OFF forged window value: rc 0, printed as <invalid>, no FORGED text, pointer present (rc=$_mtr_rc forged=$_mtr_forged)" "[[ '$_mtr_rc' == '0' && '$_mtr_forged' == '0' ]] && grep -qF '[<invalid>, <invalid>]' '$MTR_OUT' && grep -qF 'NOT EMITTED' '$MTR_OUT'"
+done
+MTR_LONG_ID=$(printf 'x%.0s' $(seq 1 200))
+MTR_BAD_ID_FIXTURE=$(jq -nc --arg long "$MTR_LONG_ID" '{runs:[
+  {functionID:"*",startedAt:"2026-07-08T12:00:00Z"},
+  {functionID:"a\rb",startedAt:"2026-07-08T12:00:00Z"},
+  {functionID:$long,startedAt:"2026-07-08T12:00:00Z"},
+  {functionID:"fn-h",startedAt:"2026-07-08T11:00:05Z"},
+  {functionID:"fn-h",startedAt:"2026-07-08T12:00:05Z"},
+  {functionID:"fn-h",startedAt:"2026-07-08T13:00:05Z"}]}')
+mtr_run true "$MTR_BAD_ID_FIXTURE" "$MTR_FROM" "$MTR_UNTIL"
+_mtr_rc=$MTR_RC; _mtr_n=$(mtr_cands)
+_mtr_cr=$(tr -cd '\r' < "$MTR_OUT" | wc -c | tr -d '[:space:]')
+_mtr_glob=$(grep -c 'mtr-glob-sentinel' "$MTR_OUT" || true)
+_mtr_long=$(grep -cF "$MTR_LONG_ID" "$MTR_OUT" || true)
+assert "#6939 P7 ON bad function ids: rc 0 and none printed (rc=$_mtr_rc n=$_mtr_n cr=$_mtr_cr glob=$_mtr_glob long=$_mtr_long)" "[[ '$_mtr_rc' == '0' && '$_mtr_n' == '0' && '$_mtr_cr' == '0' && '$_mtr_glob' == '0' && '$_mtr_long' == '0' ]]"
+assert "#6939 P7 ON bad function ids: the shape-check warning counts 3 skipped" "grep -qE '^::warning::missed-tick candidates: 3 function id\\(s\\) failed the shape check' '$MTR_OUT'"
+
+# Anti-vacuity: every declared case actually dispatched (the counter is derived from the tables).
+MTR_DECLARED=$(( ${#MTR_OFF_GATES[@]} + 1 + 1 + 1 + 1 + ${#MTR_BAD_WINDOWS[@]} + 1 + ${#MTR_FORGE[@]} + 1 ))
+assert "#6939 every declared missed_tick_report case ran (ran=$MTR_CASES declared=$MTR_DECLARED)" "[[ '$MTR_CASES' -eq '$MTR_DECLARED' && '$MTR_CASES' -ge 17 ]]"
+
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
 rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
@@ -3789,7 +3966,7 @@ LK_FLIPW=0;  grep -qE 'secrets set INNGEST_CUTOVER_FLIP' "$LUKS_FILE" && LK_FLIP
 # the anchor moved, and the two assertions below require `-n` on each before comparing — so the
 # miss reds THERE, with the value printed, instead of killing the suite here with nothing said.
 LK_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | sed -n '1p' | cut -d: -f1) || true
-LK_LASTG3_LN=$(grep -n 'G3 REFUSING' "$LUKS_FILE" | tail -1 | cut -d: -f1) || true
+LK_LASTG3_LN=$(grep -n 'G3 REFUSING' "$LUKS_FILE" | tail -1 | cut -d: -f1 || true) || true
 LK_TS_LN=$(grep -n 'LK_TS=' "$LUKS_FILE" | sed -n '1p' | cut -d: -f1) || true
 LK_G1READ=0; grep -qE 'doppler secrets get INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --plain' "$LUKS_FILE" && LK_G1READ=1
 # BOTH fail-closed arms, by their DISTINCT sentences: one for "the config could not be read at
@@ -3894,7 +4071,12 @@ _DISPATCHED=$((PASS + FAIL))
 #   (+17), the dt-minus and extra-field decode rows, the 590/610 s and young-but-shipping warning rows,
 #   the rc28/rc6 cause rows, the read/write mask row, 7 one-definition pins, the latch-body pin, the
 #   stub-miss ledger and its positive control; minus one (xfield left the failure loop).
-_EXACT_FLOOR=914
+# 914 -> 964 (+50) #6939 missed-tick de-fang, measured: 51 rows in the #6939 block (guard-1
+#   precondition + 2 file-wide flag rows, 4 workflow-shape rows, 4 call-site rows, the extraction row,
+#   5 OFF gates x 4, the garbage-window row, 6 ON-canonical rows, the null/full rows, 3 invalid-window
+#   rows, the empty-bound row, 3 P7 window rows, 2 P7 function-id rows, the case counter), minus the
+#   retired vacuous `auto-emits the missed-tick trigger-cron list` grep.
+_EXACT_FLOOR=964
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
