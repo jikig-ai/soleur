@@ -692,7 +692,7 @@ if (( _ENUMERATE == 1 )); then
         # Snapshot the child list ONCE: after the parent dies they reparent
         # to init and a second pgrep -P enumerates nothing — a TERM-ignoring
         # wedged child would survive the KILL leg and hold the receipt pipe.
-        _wd_kids="$(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null)"
+        _wd_kids="$(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null || true)"
         for _wd_kid in $_wd_kids; do
           [[ "$_wd_kid" == "$_wd_self" ]] && continue
           kill -TERM "$_wd_kid" 2>/dev/null || true
