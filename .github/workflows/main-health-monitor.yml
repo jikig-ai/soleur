@@ -160,10 +160,10 @@ jobs:
     # Against the `main` shape the tests ceiling is 2.08x; against the branch
     # shape 1.62x. Both clear the stated 1.5x, which is why 40 rather than 35 —
     # the earlier 35 met the policy only on the `main` shape.
-    # Sanity: deploy-script-tests budgets 15 min PER LEG for its full suite set
-    # (sharded K=4 since #8736; this monitor runs the same glob-derived subset
-    # unsharded at max 459 s), so an infra ceiling far below that trips first
-    # here — the intended direction.
+    # Sanity: deploy-script-tests budgets 15 min PER LEG for a quarter of the
+    # suite set (sharded K=4 since #8736); this monitor runs the same
+    # glob-derived set UNSHARDED at ~737 s cold-serial, so an infra ceiling far
+    # below that trips first here — the intended direction.
     #
     # The job ceiling must dominate the SUM of the step ceilings, not the max: with
     # two timed steps, `max + 10` lets the job token trip midway through the second

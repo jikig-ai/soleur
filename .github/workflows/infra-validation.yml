@@ -31,7 +31,7 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
-      # (#8097) Suites under apps/web-platform/test/infra/ are dispatched by deploy-script-tests
+      # (#8097) Suites under apps/web-platform/test/infra/ run inside deploy-script-tests-fixed
       # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
       - "apps/web-platform/test/infra/**"
       # The gate itself. What this actually buys, stated precisely: `detect-changes` maps only
@@ -45,7 +45,7 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
-      # (#8097) Suites under apps/web-platform/test/infra/ are dispatched by deploy-script-tests
+      # (#8097) Suites under apps/web-platform/test/infra/ run inside deploy-script-tests-fixed
       # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
       - "apps/web-platform/test/infra/**"
       - ".github/workflows/infra-validation.yml"
@@ -512,6 +512,9 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          # The legs execute ~140 suite scripts under one token-bearing
+          # checkout — least privilege: nothing in this job pushes.
+          persist-credentials: false
 
       # #6178: the cloud-init-inngest-bootstrap drift-guard (a glob suite on this
       # leg) includes an AC7 terraform-render leg — the behavioral authority for
@@ -609,7 +612,10 @@ jobs:
         with:
           name: suite-timings-infra-${{ strategy.job-index }}
           path: ${{ runner.temp }}/suite-timings.tsv
-          if-no-files-found: ignore
+          # warn, not ignore: a missing feed is a balance-data loss the
+          # manifest regen needs to know about — a warning is visible in the
+          # run UI while a failure here must never recolor a passing leg.
+          if-no-files-found: warn
           retention-days: 14
 
   # The non-globbed half of the old job (#8736): everything that is NOT a
@@ -1018,7 +1024,14 @@ jobs:
                 done
                 if [[ "$other_result" == "cancelled" ]]; then
                   if [[ "$EVENT_NAME" == "pull_request" ]]; then
-                    echo "$shard: SUPERSEDED — the run was cancelled (a newer commit landed)" >&2
+                    # NOTE: this workflow carries no `concurrency:` block, so an
+                    # intra-workflow supersession cannot occur here — a both-
+                    # cancelled pull_request pair is an external actor: the
+                    # GitHub reaper cancelling a superseded queued run (the
+                    # same supersession class ci.yml's concurrency produces
+                    # in-workflow), or a manual cancel. Name the class, not a
+                    # mechanism this file does not have.
+                    echo "$shard: SUPERSEDED-CLASS — the run was cancelled on pull_request (the GitHub reaper retiring a superseded queued run, or a manual cancel — this workflow has no concurrency block of its own)" >&2
                   else
                     echo "$shard: CANCELLED — the whole run was cancelled on a '$EVENT_NAME' event; supersession cannot occur here (cancel-in-progress is pull_request-only), so this is a manual or infra cancellation" >&2
                   fi
@@ -1109,10 +1122,10 @@ jobs:
           terraform_wrapper: false
       - name: Measure rendered registry user_data against Hetzner's 32,768 B cap
         run: bash apps/web-platform/infra/registry-userdata-budget.sh
-      # The suite that pins this measurement (registry-userdata-budget.test.sh) is registered in
-      # `deploy-script-tests`, NOT here -- the infra-suite-registration gate counts only that job,
-      # and run-registered-suites.sh derives its list from it. Registering it here instead would
-      # leave it uncovered by scripts/test-all.sh.
+      # The suite that pins this measurement (registry-userdata-budget.test.sh) is covered by
+      # `deploy-script-tests`, NOT here — since #8736 presence under apps/web-platform/infra/
+      # IS registration: run-registered-suites.sh glob-derives it and a matrix leg executes it.
+      # This job is the MEASUREMENT; the suite is its pin.
 
   # (#7695) The THIRD base64gzip'd host, and the last one without a byte gate. The registry block
   # directly above closes with "the registry host ... had none"; the inngest host had none either,
