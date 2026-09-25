@@ -6,9 +6,11 @@
 // line may send the blog back to the technical register. It pins headings and
 // one routing phrase only — never the note's wording.
 //
-// Guard 2 pins blog-jargon-scan.sh: exit 1 with every hit iff a reader-visible
-// line carries a backtick, a --flag, or a visible #NN; exit 0 otherwise; exit 2
-// on a usage error or an unreadable path. BLOG_SCAN_SCRIPT points the suite at a
+// Guard 2 pins blog-jargon-scan.sh: exit 1 with every hit iff a scanned line
+// (frontmatter title/seoTitle/description incl. folded values, and the body
+// outside JSON-LD blocks, link targets stripped) carries a backtick, a --flag,
+// or a visible #NN; exit 0 otherwise; exit 2 on a usage error or an unreadable
+// path. BLOG_SCAN_SCRIPT points the suite at a
 // copy for mutation runs; the tracked script is never edited in place.
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { resolve, join } from "path";
@@ -126,6 +128,18 @@ describe("Guard 1 — validators (synthesized fixtures)", () => {
     expect(blogHeadingProblems(g).length).toBeGreaterThan(0);
   });
 
+  test("RED: ### Blog under a later ## section, not Channel Notes", () => {
+    const g = GOOD_GUIDE.replace("### Blog\n- b\n", "") + "## Archive\n### Blog\n- b\n";
+    expect(g.match(/^### Blog$/gm)?.length).toBe(1);
+    expect(blogHeadingProblems(g).length).toBeGreaterThan(0);
+  });
+
+  test("RED: ### Blog both in ## Voice and in ## Channel Notes", () => {
+    const g = GOOD_GUIDE.replace("## Voice\n", "## Voice\n### Blog\n- v\n");
+    expect(channelNotesSlice(g).match(/^### Blog$/gm)?.length).toBe(1);
+    expect(blogHeadingProblems(g).length).toBeGreaterThan(0);
+  });
+
   test("RED: no ## Channel Notes heading at all", () => {
     const g = GOOD_GUIDE.replace("## Channel Notes\n", "");
     expect(blogHeadingProblems(g).length).toBeGreaterThan(0);
@@ -180,6 +194,30 @@ describe("Guard 1 — real files", () => {
   test("content-writer SKILL.md: the --audience bullet resolves blogs through the Blog note", () => {
     expect(audienceBulletProblems(readFileSync(CONTENT_WRITER, "utf8"))).toEqual([]);
   });
+
+  test("the Phase 2.4 trigger label is in the Blog note and gated on in content-writer SKILL.md", () => {
+    const label = "**Jargon limits.**";
+    const blog = channelNotesSlice(readFileSync(BRAND_GUIDE, "utf8")).split(/^### Blog$/m)[1] ?? "";
+    const blogNote = blog.split(/^### /m)[0];
+    expect(blogNote).toContain(label);
+    expect(readFileSync(CONTENT_WRITER, "utf8")).toContain("contains the literal label `" + label + "`");
+  });
+
+  test("content-writer SKILL.md invokes the scan by path and never pastes the draft into a heredoc", () => {
+    const skill = readFileSync(CONTENT_WRITER, "utf8");
+    expect(skill).toContain('bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh"');
+    expect(skill).not.toMatch(/<<-?\s*'?DRAFT/);
+  });
+
+  test("brand-guide.md register lines: the blog is General, not Technical", () => {
+    const lines = readFileSync(BRAND_GUIDE, "utf8").split("\n");
+    const tech = lines.filter((l) => l.startsWith("**Technical register**"));
+    const general = lines.filter((l) => l.startsWith("**General register**"));
+    expect(tech).toHaveLength(1);
+    expect(general).toHaveLength(1);
+    expect(tech[0]).not.toMatch(/\bblog\b/i);
+    expect(general[0]).toMatch(/\bblog\b/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -187,38 +225,50 @@ describe("Guard 1 — real files", () => {
 // ---------------------------------------------------------------------------
 
 const RED_FIXTURE = [
-  "---", //                                  1
-  'title: "Fixing the --limit bug"', //      2  hit: --flag
-  'description: "About #42"', //             3  hit: #NN
-  "---", //                                  4
-  "", //                                     5
-  "Run `next` to see it.", //                6  hit: backtick
-  "Plain prose line.", //                    7
-  "Use --force now.", //                     8  hit: --flag
-  "Another plain line.", //                  9
-  "See the issue (#1423) for more.", //      10 hit: #NN
+  "---", //                                          1
+  'title: "Fixing the --limit bug"', //              2  hit: --flag
+  'seoTitle: "Why #77 matters"', //                  3  hit: #NN
+  "description: >-", //                              4
+  "  About #42 and more", //                         5  hit: folded value
+  "---", //                                          6
+  "", //                                             7
+  "Run `next` to see it.", //                        8  hit: backtick
+  "Plain prose line.", //                            9
+  "Use --force now.", //                             10 hit: --flag
+  "See the issue (#1423) for more.", //              11 hit: #NN after (
+  "Try it (--dry-run) today.", //                    12 hit: --flag after (
+  '<script type="application/ld+json">', //         13
+  '{"a": "#99"}', //                                 14 skipped: JSON-LD
+  "</script>", //                                    15
+  "After the schema, run `ls`.", //                  16 hit: body after JSON-LD
   "",
 ].join("\n");
 
 const PASS_FIXTURE = [
   "---",
   'title: "A plain title"',
+  "description: >-",
+  "  A plain folded description",
   'ref: "#123"',
-  "tags: [--not-reader-visible]",
+  'ogImage: "og--x.png"',
   "---",
   "",
   "Prose with a dash -- like this &#8212; and an entity.",
   "Read [the fix](https://github.com/o/r/pull/8536) or [tips](#10-tips), or https://example.com/#12 bare.",
+  "See [wiki](https://en.wikipedia.org/wiki/Foo_(bar)#12), v2#12, foo#42 and ##12.",
   "## A heading",
+  "---",
   "",
   '<script type="application/ld+json">',
   '{"answer": "#123 and `code`"}',
   "</script>",
   "",
+  "After the schema, plain words.",
+  "",
 ].join("\n");
 
 let dir = "";
-const path = (name: string) => join(dir, name);
+const fixturePath = (name: string) => join(dir, name);
 
 function scan(...args: string[]) {
   const r = spawnSync("bash", [SCAN_SCRIPT, ...args], { encoding: "utf8" });
@@ -235,8 +285,8 @@ function hitLines(stdout: string): number[] {
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "blog-scan-"));
-  writeFileSync(path("red.md"), RED_FIXTURE);
-  writeFileSync(path("pass.md"), PASS_FIXTURE);
+  writeFileSync(fixturePath("red.md"), RED_FIXTURE);
+  writeFileSync(fixturePath("pass.md"), PASS_FIXTURE);
 });
 
 afterAll(() => {
@@ -248,15 +298,15 @@ describe("Guard 2 — blog-jargon-scan.sh", () => {
     expect(existsSync(SCAN_SCRIPT)).toBe(true);
   });
 
-  test("RED fixture: exit 1 and exactly lines 2, 3, 6, 8, 10", () => {
-    const r = scan(path("red.md"));
+  test("RED fixture: exit 1 and exactly lines 2, 3, 5, 8, 10, 11, 12, 16", () => {
+    const r = scan(fixturePath("red.md"));
     expect(r.status).toBe(1);
-    expect(r.stdout.trim().length).toBeGreaterThan(0);
-    expect(hitLines(r.stdout)).toEqual([2, 3, 6, 8, 10]);
+    expect(hitLines(r.stdout)).toEqual([2, 3, 5, 8, 10, 11, 12, 16]);
+    expect(r.stdout.split("\n")).toContain("8: Run `next` to see it.");
   });
 
   test("must-PASS fixture: exit 0, nothing printed", () => {
-    const r = scan(path("pass.md"));
+    const r = scan(fixturePath("pass.md"));
     expect(r.stdout).toBe("");
     expect(r.status).toBe(0);
   });
@@ -268,7 +318,7 @@ describe("Guard 2 — blog-jargon-scan.sh", () => {
   });
 
   test("missing file: exit 2 with usage on stderr", () => {
-    const r = scan(path("does-not-exist.md"));
+    const r = scan(fixturePath("does-not-exist.md"));
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/^usage: blog-jargon-scan\.sh/);
   });

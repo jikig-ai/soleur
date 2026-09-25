@@ -27,9 +27,9 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--hea
 
 **Headless defaults for interactive gates:**
 
+- Phase 2.4 (Blog Note Scan): leftover hits after 2 fix cycles, or a scan that could not run, are listed in the Phase 4 report; the draft is never blocked.
 - Phase 3 (User Approval): auto-selects **Accept** when all citations are PASS or SOURCED. When any citation is FAIL, auto-selects **Fix** — removes or replaces the failed claims, re-runs soleur:marketing:fact-checker, and accepts only when all claims pass (max 2 fix cycles, then accepts with UNSOURCED markers for any remaining failures).
 - If citation verification was skipped (soleur:marketing:fact-checker unavailable), auto-selects **Accept** with a warning in the issue.
-- Phase 2.4 (Blog Note Scan): leftover hits after 2 fix cycles, or a scan that could not run, are listed in the Phase 4 report; the draft is never blocked.
 
 ## Phase 0: Prerequisites
 
@@ -66,7 +66,7 @@ Parse the arguments provided after the skill name:
 - `--outline "..."` (optional): article structure as inline text (Markdown list format)
 - `--keywords "kw1, kw2, kw3"` (optional): target keywords, comma-separated
 - `--path <output-path>` (optional): where to write the file
-- `--audience "technical|general"` (optional): audience register from brand guide. `technical` uses engineering vocabulary and developer proof points. `general` uses plain language and business-outcome proof points. Blog posts use the register the brand guide's `## Channel Notes > ### Blog` note names. Without a Blog note they default to `technical`, as before. Landing pages and onboarding content default to `general`. An explicit `--audience` is honored as given.
+- `--audience "technical|general"` (optional): audience register from brand guide. `technical` uses engineering vocabulary and developer proof points. `general` uses plain language and business-outcome proof points. Blog posts use the register the brand guide's `## Channel Notes > ### Blog` note names. Without a Blog note, or when the note names no register, they default to `technical`, as before. Landing pages and onboarding content default to `general`. An explicit `--audience` is honored as given.
 
 **Default output path** (if `--path` not provided): auto-generate from topic slug as `plugins/soleur/docs/blog/YYYY-MM-DD-<slug>.md`.
 
@@ -75,9 +75,9 @@ Parse the arguments provided after the skill name:
 Read the brand guide sections that inform content generation:
 
 1. Read `## Voice` -- apply brand voice, tone, do's and don'ts
-2. Read `## Channel Notes > ### Blog` -- apply every rule in it, including any check it asks for before drafting and any rule for unattended runs (if the section exists). A Blog note never adds an abort or a question: in headless mode, follow its unattended-run rule.
+2. Read `## Channel Notes > ### Blog` -- apply every rule in it, including any check it asks for before drafting and any rule for unattended runs (if the section exists). A Blog note never adds an abort. In headless mode it never adds a question either: follow its unattended-run rule.
 3. Read `## Identity` -- use mission and positioning for content alignment
-4. Resolve the register: `--audience` if set, otherwise the Phase 1 default (the register the Blog note names for blog posts, `technical` for blog posts without a Blog note, `general` for landing pages and onboarding content). Then read `### Audience Voice Profiles` from brand guide and apply that register's vocabulary, explanation depth, and proof point selection rules.
+4. Resolve the register: `--audience` if set, otherwise the Phase 1 default (the register the Blog note names for blog posts, `technical` for blog posts when there is no Blog note or it names no register, `general` for landing pages and onboarding content). Then read `### Audience Voice Profiles` from brand guide and apply that register's vocabulary, explanation depth, and proof point selection rules.
 
 Generate a full article draft that:
 
@@ -131,24 +131,26 @@ Run this phase only when **both** hold:
 
 Otherwise skip it. A project whose Blog note sets no jargon limits gets no scan.
 
-[blog-jargon-scan.sh](./scripts/blog-jargon-scan.sh) flags reader-visible lines (the `title:`, `seoTitle:` and `description:` values, plus the body up to the first JSON-LD block) that carry a backtick, a `--flag`, or a visible issue or PR number. Link targets are not scanned. Write the draft to a temp file and scan it in **one** fenced block, so the cleanup trap belongs to the same shell that allocates the file. Use a quoted heredoc delimiter: drafts contain backticks and `$`, and an unquoted delimiter would execute them and change the text being scanned.
+[blog-jargon-scan.sh](./scripts/blog-jargon-scan.sh) flags reader-visible lines that carry a backtick, a `--flag`, or a visible issue or PR number (`#` plus two or more digits). It reads the `title:`, `seoTitle:` and `description:` values (including folded, multi-line values) and the body, skipping JSON-LD blocks and markdown link targets. That is a **fixed subset** of what a Blog note may ban: file paths, command or skill names, API names and bare numbers are not detected, whatever the note says. Apply the rest of the note's jargon limits yourself while drafting.
 
-```bash
-DRAFT="$(mktemp)" || { echo "blog-jargon-scan unavailable (rc=mktemp)"; exit 0; }
-trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
-cat > "$DRAFT" <<'DRAFT_EOF'
-<full draft text>
-DRAFT_EOF
-rc=0
-bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh" "$DRAFT" || rc=$?
-echo "SCAN_RC=$rc"
-```
+Scan the draft through a file, never by pasting it into a shell command: a heredoc is broken by a draft line equal to its delimiter, and re-pasting the whole draft on every re-scan costs its full length each time.
+
+1. Create a scratch directory: `mktemp -d` (one Bash call; note the printed path).
+2. Write the draft to `<that directory>/draft.md` with the **Write** tool.
+3. Scan it (one Bash call):
+
+   ```bash
+   rc=0; bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh" "<that directory>/draft.md" || rc=$?; echo "SCAN_RC=$rc"
+   ```
+
+4. Apply fixes to the draft file with the **Edit** tool, and re-run step 3. When the phase ends, remove the directory (`rm -rf "<that directory>"`).
 
 The script path is the bare plugin-root anchor, with no fallback (ADR-179): a fallback would resolve into the working repository and execute a file from it.
 
 - **`SCAN_RC=0`:** no hits. Continue.
 - **`SCAN_RC=1`:** rewrite each listed line in plain words, or move the detail into the single closing technical link, whose URL may carry the number. Re-scan, for at most 2 cycles. Keep any hits left after that: interactive runs show them in Phase 3; headless runs list them in the Phase 4 report.
 - **Any other value** (usage error, unreadable file, `127` for a missing script): print `blog-jargon-scan unavailable (rc=<N>)` in the Phase 4 report and continue. Never block a draft on a broken scan.
+- **The Bash call is refused** (a restricted runner, such as a scheduled job allowed only `gh` commands): print `blog-jargon-scan unavailable (denied)` in the Phase 4 report and continue without retrying. The Blog note's jargon limits still apply to the draft.
 
 Re-run this phase every time Phase 2.5 re-runs (after each Phase 3 **Edit** or headless **Fix** cycle), so text rewritten by a citation fix is scanned too.
 
@@ -180,7 +182,7 @@ Re-verification runs after each Edit cycle in Phase 3 -- when the user selects "
 
 ## Phase 3: User Approval
 
-If Phase 2.5 produced a Verification Report, display the summary first (total claims, verified, failed, unsourced), then present the draft with any inline FAIL/UNSOURCED markers visible. If all claims passed, note "All citations verified." If verification was skipped, note "Citation verification was skipped -- manual review recommended."
+If Phase 2.5 produced a Verification Report, display the summary first (total claims, verified, failed, unsourced), then present the draft with any inline FAIL/UNSOURCED markers visible, followed by any Phase 2.4 scan hits left after its fix cycles. If all claims passed, note "All citations verified." If verification was skipped, note "Citation verification was skipped -- manual review recommended."
 
 **If `HEADLESS_MODE=true`:**
 
