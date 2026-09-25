@@ -65,11 +65,10 @@ fail() { printf '  ✗ %s\n' "$1" >&2; fails=$((fails + 1)); }
 echo "settings-hook-exec-bit: every hook named in $SETTINGS must be committed 100755 and be executable on disk"
 
 if ! command -v jq >/dev/null 2>&1; then
-  # Fail, do not skip. Skipping on a missing tool is how a gate becomes
-  # permanently inert on the one machine that needed it.
-  fail "jq is not installed — cannot parse $SETTINGS, so this gate cannot run"
-  echo "FAILED: $fails" >&2
-  exit 1
+  # Not-green (3, UNRESOLVED), never skip. Skipping on a missing tool is how a
+  # gate becomes permanently inert on the one machine that needed it (#8616).
+  echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"
+  exit 3
 fi
 
 if [[ ! -f "$SETTINGS" ]]; then
