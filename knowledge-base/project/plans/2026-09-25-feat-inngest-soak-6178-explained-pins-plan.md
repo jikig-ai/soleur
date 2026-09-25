@@ -18,6 +18,37 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25. **Kept proportionate:** a data-pin change, not a 40-agent fan-out.
+
+**Agents used:**
+
+- `soleur:engineering:review:test-design-reviewer`, which built the planned change in a scratch copy and ran mutants;
+- a `standard`-tier verify-the-negative sweep over 11 factual claims (all confirmed, with file:line);
+- the plan-time learnings researcher, the advisor, and the DHH/Kieran/simplicity/CTO panel (§Plan Review Revisions).
+
+**Mechanical halt gates, all passed:**
+
+- 4.6 User-Brand Impact: present, `aggregate pattern`.
+- 4.7 Observability: five fields present. The `grep` verb is allowlisted, the command has no shell-active bytes, and `expected_output` is a literal.
+- 4.8: no PAT shapes.
+- 4.9 and 4.10: not triggered.
+- 4.11: `lint-guard-contract.py` is green, and the Assembly names the `EXPLAINED` chokepoint, not a member list.
+
+**Key improvements:**
+
+1. **Measured byte budget.** In the scratch build, C26q is **3881 of 4000 bytes**, so only 119 bytes of headroom. The new `why` strings were shortened, and the cap is now 110 bytes. E1 now also runs the suite on the tree merged with #8626, since a text-clean merge can still overflow. DC-2 (window-prefixing each why) is recommended against, because of the measured margin.
+2. **Whole-line why assertions.** A mutant that truncated the new `why` text passed every prefix assertion. AC5 and C26 now use `grep -cxF` on the full line for the three new buckets.
+3. **Two matrix rows added.** Row 10 (the why query loses `select(.explained)`) is caught only by C26c. Row 11 covers a truncated why.
+
+**Verified facts:**
+
+- The sweeper captures `2>&1` and republishes `tail -c 4000` (`sweep-followthroughs.sh`, `out=$(... 2>&1)` and `trimmed_out=`).
+- The dry run logs `exit=$rc` and a 600-byte `DRY_RUN — output tail`, and skips every comment and close.
+- The sweeper's checkout has no `ref:`, so `--ref <branch>` checks out this branch.
+- `refs/remotes/pr8626` is #8626's current head (`847b7e9d9b`).
+
 **PR:** #8835 (draft). **Tracker:** #6178, referenced as `Ref #6178` and never closed. Closing it
 is an operator verb: the ADR-100 `adopting → accepted` flip, a fresh re-read, the snapshot release,
 and then the close. **Production writes:** none. This PR changes probe data, the probe's output
@@ -119,16 +150,16 @@ probe and test bytes as this branch's HEAD (`cmp` equal). #8835 is an OPEN draft
 
 ### Probe (`scripts/followthroughs/inngest-soak-6178.sh`)
 
-1. **Three new pins, inserted directly after the `EXPLAINED='[` line.** Each pin ends with `},`, and the two existing 09-17 pins stay byte-identical. Each new pin carries a `"why"` string. It must be ASCII only, **at most 120 bytes**, with no `'` (the constant is single-quoted) and no `\`. Order the pins by bucket (1491540, 1491719, 1491858). Shape:
+1. **Three new pins, inserted directly after the `EXPLAINED='[` line.** Each pin ends with `},`, and the two existing 09-17 pins stay byte-identical. Each new pin carries a `"why"` string. It must be ASCII only, **at most 110 bytes**, with no `'` (the constant is single-quoted) and no `\`. Order the pins by bucket (1491540, 1491719, 1491858). Shape:
 
    ```text
    {"functionID":"9a26ac57-a722-5c59-9f36-115675eecbad","bucket":1491540,"count":2,
     "ids":["01M2XM4813N3QE97TEZZVW9TT7","01M2XMEM8TZEDVAMRTZSCPWVVZ"],
-    "why":"2026-09-19 20:01Z+20:06Z: two manual triggers (trigger_source=manual), the second an operator retry of the failed first"},
+    "why":"2026-09-19 20:01Z+20:06Z: two manual triggers (trigger_source=manual), an operator retry of a failed run"},
    ```
 
-   Starting points for the other two `why` strings (measured at 119 and 91 bytes):
-   - 1491719: `2026-09-22 catch-up: the 07:00/07:20/07:40 ticks missed with no scheduler, each fired once at op=resume run 35698687536`
+   The measured strings are 104 bytes for 1491540 and 108 and 91 bytes for the other two:
+   - 1491719: `2026-09-22 catch-up: 07:00/07:20/07:40 ticks missed with no scheduler, each fired once at resume 35698687536`
    - 1491858: `2026-09-24 06:00Z scheduled tick plus a manual trigger at 06:12:11Z (trigger_source=manual)`
 
 2. **The two 09-17 pins keep no `why`; their attribution stays `EXPLAINED_WHY`.** That line is not edited. The fallback is one rule in jq (step 4): an explained group whose pin has no `why` prints `EXPLAINED_WHY`. Add one comment line to the pin comment block saying so: only the 09-17 pins omit `why`, and every new pin must carry one. No named-bucket constant and no startup validation are added (cut at plan review, see §Plan Review Revisions). A malformed pin (count ≠ ids length, unsorted ids, a typo in an id) can never match, so it reads UNEXPLAINED. That is the safe direction, and the suite reds on it. A new pin missing its `why` would print the 09-17 text on the wrong bucket, and C26's per-bucket text assertions red on that.
@@ -252,6 +283,8 @@ Downstream, the output window is the sweeper's `tail -c 4000` (`scripts/sweep-fo
 | 7 | drop `why` from one new pin | RED: C26 (that bucket's line carries the 09-17 text instead of its own) |
 | 8 | lengthen the three new `why` strings to 250 bytes | RED: C26q (`reading:` cut from the 4000-byte tail) |
 | 9 | `unique_by(.bucket)` removed | RED: C26's exactly-once count on `bucket=1491374` (two 09-17 groups print it twice) |
+| 10 | the why query drops `select(.explained)` | RED: C26c's `expect_absent "explained_why: bucket=1491719"` (the only case that catches it, so it must not be cut as redundant) |
+| 11 | a new `why` truncated or edited (`.why[0:30]`) | RED: C26's whole-line `grep -cxF` assertions |
 
 **Harness rows:**
 
@@ -340,12 +373,13 @@ reading.
 - [ ] **AC3 (pins exact).**
   - `EXPLAINED` holds exactly five pins.
   - The three new pins carry the brief's functionIDs, buckets (1491540, 1491719, 1491858), counts (2, 3, 2) and sorted ids verbatim. Check: `grep -c` of each of the seven new ULIDs in the probe returns `1`.
-  - Each new `why` is ASCII, at most 120 bytes, and contains no `'` or `\`.
+  - Each new `why` is ASCII, at most 110 bytes, and contains no `'` or `\`.
   - The two 09-17 pin lines are byte-identical to `origin/main`.
 - [ ] **AC4 (exact-set semantics).** C26c (one id of the 1491719 pin mutated) prints `UNEXPLAINED: functionID=26e6836b-97ad-503f-8b08-490d8a2f4ce8 bucket=1491719 (2026-09-22T07:40:00Z–2026-09-22T08:00:00Z) count=3` and reads `SOAK NOT CLEAN`. The existing C5d/C5f stay green.
 - [ ] **AC5 (keyed attribution).**
   - C26 prints exactly one `explained_why: bucket=<b>` (followed by a space) line for each of 1491374, 1491540, 1491719 and 1491858.
-  - Each line starts with its own attribution: `bucket=1491374 2026-09-17T12:40–13:00Z catch-up`, `bucket=1491540 2026-09-19`, `bucket=1491719 2026-09-22`, `bucket=1491858 2026-09-24`.
+  - For 1491540, 1491719 and 1491858, the WHOLE line is asserted: `grep -cxF "explained_why: bucket=<b> <full why>"` returns 1. A prefix check misses a truncated or edited why (test-design review: a `.why[0:30]` mutant passed every prefix assertion).
+  - For 1491374, the line starts `bucket=1491374 2026-09-17T12:40–13:00Z catch-up`.
   - `op=resume run 35223389582` appears exactly once.
   - C26b prints no `bucket=1491374` line and no `op=resume run 35223389582`.
 - [ ] **AC6 (budget).** For C26q (five pins plus one registry-grown function, QUALIFIED, clean arm) and for C26f (five pins plus one UNEXPLAINED group, NOT CLEAN arm), the first line of `printf '%s' "$OUT" | tail -c 4000` starts with `reading:`. Both byte counts are recorded in the PR body.
@@ -362,7 +396,10 @@ reading.
 
 **Evidence, not gates.** These depend on state outside this diff (`cq-ac-must-not-depend-on-concurrent-sessions`). Record each in the PR body. A surprising result is a finding to report, never a reason to change the pins.
 
-- [ ] **E1 (merge-safety with #8626).** Phase 6's `git merge-file` against #8626's then-current head returns 0 with no conflict markers for all three files. If it conflicts, note the hunk in the PR body. Whichever PR lands second resolves it.
+- [ ] **E1 (merge-safety with #8626).**
+  - Phase 6's `git merge-file` against #8626's then-current head returns 0 with no conflict markers for all three files.
+  - Build the merged tree (`git merge-tree --write-tree HEAD refs/remotes/pr8626`) and run the suite once in a scratch worktree of that tree. A text-clean merge can still break the byte budget or the C2 loop.
+  - Record both results. On a conflict, note the hunk in the PR body; whichever PR lands second resolves it.
 - [ ] **E2 (live pre-merge reading, read-only).**
   1. Run `gh workflow run scheduled-followthrough-sweeper.yml --ref feat-one-shot-6178-soak-explained-pins -f dry_run=true` and watch it to completion (per `hr-dispatch-async-must-arm-watch`). `dry_run` skips every comment and close in `scripts/sweep-followthroughs.sh`.
   2. Expect the run log's #6178 line to read `exit=5`, with a `DRY_RUN — output tail` containing `SOAK CLEAN` and `5 explained group(s), 0 UNEXPLAINED`.
@@ -387,11 +424,11 @@ All new cases use `NOW=$NOW_0925`.
 
 | Case | Fixture | Expect |
 |---|---|---|
-| C26 | default + `add_explained` + `add_new_pins` | rc 5; `explained=5 UNEXPLAINED=0`; the three new `explained: functionID=… bucket=… (<window>) count=…` lines with exact windows; one `explained_why: bucket=<b>` (followed by a space) line per bucket (`grep -c` == 1 each), each starting with its own text (AC5); `op=resume run 35223389582` exactly once; no `UNEXPLAINED:`; last line `ACTION REQUIRED: SOAK CLEAN` with `5 explained group(s)` |
+| C26 | default + `add_explained` + `add_new_pins` | rc 5; `explained=5 UNEXPLAINED=0`; the three new `explained: functionID=… bucket=… (<window>) count=…` lines with exact windows; exact whole-line `grep -cxF` == 1 for the three new why lines, plus the 1491374 prefix line (AC5); `op=resume run 35223389582` exactly once; no `UNEXPLAINED:`; last line `ACTION REQUIRED: SOAK CLEAN` with `5 explained group(s)` |
 | C26b | default + `add_new_pins` only | rc 5 `SOAK CLEAN`; `explained=3`; absent `bucket=1491374`; absent `op=resume run 35223389582` |
 | C26c | all five pins, but one id of the **1491719** minter pin with its last char flipped (still ULID-shaped, still unique). This function holds two pins. | rc 5 `SOAK NOT CLEAN`; the exact `UNEXPLAINED: functionID=$MINTER bucket=1491719 (…) count=3` line; absent `explained_why: bucket=1491719`; the 1491374 minter group is still explained |
 | C26f | all five pins + OTHER ×2 at `2026-09-19T20:25:00Z` and `20:30:00Z` (bucket 1491541) | rc 5 `SOAK NOT CLEAN`; `explained=5 UNEXPLAINED=1`; `UNEXPLAINED: functionID=$OTHER bucket=1491541`; the first line of `tail -c 4000` starts `reading:` |
-| C26q | C26 + `registry_fixture 71 "" '["b0000000-0000-4000-8000-000000000001"]'` | rc 5; `(QUALIFIED: 1 unmeasured`; the first line of `printf '%s' "$OUT" \| tail -c 4000` starts `reading:` |
+| C26q | C26 + `registry_fixture 71 "" '["b0000000-0000-4000-8000-000000000001"]'` | rc 5; `(QUALIFIED: 1 unmeasured`; the first line of `printf '%s' "$OUT" \| tail -c 4000` starts `reading:`. The failure message prints the size as `LC_ALL=C wc -c` plus the margin to 4000, never `${#OUT}`, which counts characters while the output holds multibyte `–`, `×` and `→`. |
 | C3 (edit) | unchanged fixture | `explained_why: bucket=1491374 2026-09-17T12:40–13:00Z catch-up`; `op=resume run 35223389582` exactly once |
 
 ## Plan Review Revisions
@@ -431,6 +468,6 @@ The panel was DHH, Kieran, code-simplicity, plus CTO (devex lens), and before th
 - `why` strings sit inside a single-quoted bash string. A `'` closes it, and the file then mis-parses (`probe_unparseable`, rc 3, or worse, a silently different constant). Keep the strings free of `'` and `\`.
 - En-dashes cost 3 bytes against the 4000-byte tail, so keep the new `why` strings ASCII.
 - The why loop needs `[[ -n "$b" ]] || continue` first. `<<<""` still yields one empty line.
-- `unique_by(.bucket)` is correct only while all pins in one bucket share one attribution. Today only 1491374 has two pins, and both fall back. Say so in a code comment.
+- `unique_by(.bucket)` is correct only while all pins in one bucket share one attribution. Today only 1491374 has two pins, and both fall back. Say so in a code comment. (`unique_by(.why)` would give byte-identical output on today's data, because the four attributions differ, so no case distinguishes the two. Bucket is the key the output names.)
 - The test harness's `run()` always pins the clock. New cases pass `NOW=$NOW_0925` explicitly, and none reads the wall clock.
 - Run `npx markdownlint-cli2` on this plan and `tasks.md` before committing (lefthook lints both).

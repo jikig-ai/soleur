@@ -36,5 +36,6 @@ window is printed on the matching `explained:` line directly above. It would als
 20 bytes per line against the sweeper's 4000-byte tail, where the clean-arm estimate is already
 about 3600 bytes.
 
-**Suggested disposition:** optional. Adopt it only if the C26q/C26f measurement leaves at least
-200 bytes of headroom.
+**Suggested disposition:** do not adopt. At deepen-plan, a scratch build measured C26q at 3881 of
+4000 bytes, so only 119 bytes of headroom. The why strings were shortened to 110 bytes or less for
+this reason.

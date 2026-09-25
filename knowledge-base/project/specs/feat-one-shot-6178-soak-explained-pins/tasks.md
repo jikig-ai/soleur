@@ -21,14 +21,14 @@ lane: cross-domain
   - `PROMOTE`, `DRIFT` and `NOW_0925=1790337600`;
   - `PIN_PROMOTE`, `PIN_MINTER2` and `PIN_DRIFT`, holding the production ids with vendor-shaped startedAt values;
   - `add_new_pins()`.
-- 2.2 Add the C26 block after C5 (C26, C26b, C26c, C26f, C26q), following the plan's §Test Scenarios. Include the AC5 per-bucket text assertions and the AC6 `tail -c 4000` first-line assertions.
+- 2.2 Add the C26 block after C5 (C26, C26b, C26c, C26f, C26q), following the plan's §Test Scenarios. Include the AC5 assertions: a whole-line `grep -cxF` for the three new why lines and a prefix check for 1491374. Include the AC6 `tail -c 4000` first-line assertions, with the size reported by `LC_ALL=C wc -c`, never `${#OUT}`.
 - 2.3 Change C3's assertion to `explained_why: bucket=1491374 2026-09-17T12:40–13:00Z catch-up`.
 - 2.4 Extend the header's production-id carve-out to thirteen ids.
 - 2.5 Run the suite. C26, C26b, C26q and the new C3 assertion must fail against the unmodified probe. Save the output for the PR body.
 
 ## 3. GREEN (probe)
 
-- 3.1 Insert the three pins, each with a `why` (ASCII, at most 120 bytes, no `'` or `\`), directly after `EXPLAINED='[`, ordered by bucket.
+- 3.1 Insert the three pins, each with a `why` (ASCII, at most 110 bytes, no `'` or `\`, using the plan's measured strings), directly after `EXPLAINED='[`, ordered by bucket.
 - 3.2 Add one pin-comment line: only the 09-17 pins omit `why`, and they fall back to `EXPLAINED_WHY`.
 - 3.3 `jqv split split`: select the matched pin using the same four inline conjuncts, then carry `why: ($pin.why // "")`.
 - 3.4 Replace the single `explained_why:` print with the `why_rows` query and its loop. The query does the fallback in jq and uses `unique_by(.bucket)`. The loop starts with `[[ -n "$b" ]] || continue`, then an `INT_RE` check, then prints `explained_why: bucket=<b> <text>`.
@@ -45,7 +45,7 @@ lane: cross-domain
 - 5.2 AC7: `grep -nE '^\s*exit (0|1)\b'` on the probe returns nothing.
 - 5.3 AC8: `git diff origin/main` leaves the `EXPLAINED_WHY=`/`SNAPSHOTS=`/verdict-printf lines and the C2 loop untouched.
 - 5.4 AC9: the header phrase "Exactly two such groups" is gone, and ADR-100 has exactly two `Updated 2026-09-25` hits, both inside the 09-19 (#6178) addendum.
-- 5.5 E1 (evidence): `git merge-file` of all three files against #8626's current head.
+- 5.5 E1 (evidence): `git merge-file` of all three files against #8626's current head, then run the suite once on `git merge-tree --write-tree HEAD refs/remotes/pr8626` in a scratch worktree.
 - 5.6 E2 (evidence, read-only): `gh workflow run scheduled-followthrough-sweeper.yml --ref feat-one-shot-6178-soak-explained-pins -f dry_run=true`, watched to completion. Record the #6178 `exit=` value and the output tail.
 - 5.7 Run markdownlint on the plan and this file.
 
