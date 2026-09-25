@@ -26,8 +26,8 @@
 # startedAt,…}], total_count:N}`; `startedAt` carries fractional seconds of MIXED precision on
 # real rows (measured 2026-09-19: none / 3 / 4 / 5 / 6 digits), run ids are 26-char ULIDs, and a
 # FATAL body arrives as prose, not JSON. Values are synthesized (cq-test-fixtures-synthesized-only)
-# except the six explained run ids, which are the production ULIDs the probe pins (they are the
-# pin; a synthetic set could not exercise it).
+# except the thirteen explained run ids, which are the production ULIDs the probe pins (they are
+# the pin; a synthetic set could not exercise it).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -255,6 +255,20 @@ EXPLAINED_MINTER='[{"id":"01M2QPSG3066F4DRDEBX5FCJSC","functionID":"26e6836b-97a
 EXPLAINED_CREDIT='[{"id":"01M2QPSG3C1H3HG443K6JG9Q0V","functionID":"2e625d3c-0207-569f-b10b-567bc685ad5e","startedAt":"2026-09-17T12:52:15.085288Z"},{"id":"01M2QPSGKXBTKVDD358S1GRQ76","functionID":"2e625d3c-0207-569f-b10b-567bc685ad5e","startedAt":"2026-09-17T12:52:15.61412Z"}]'
 add_explained() { append_runs "$(slice_of $MINTER)" "$EXPLAINED_MINTER"; append_runs "$(slice_of $CREDIT)" "$EXPLAINED_CREDIT"; }
 MINTER_BUCKET_WINDOW='2026-09-17T12:40:00Z–2026-09-17T13:00:00Z'
+# The three groups attributed 2026-09-25 (#6178 comment 5829980093): production ids, vendor-shaped startedAt.
+PROMOTE=9a26ac57-a722-5c59-9f36-115675eecbad
+DRIFT=209d5706-72bd-561c-88dc-92d7e23c1849
+NOW_0925=1790337600   # 2026-09-25T12:00:00Z: after SOAK_END, before SOAK_STALE
+PIN_PROMOTE='[{"id":"01M2XM4813N3QE97TEZZVW9TT7","functionID":"9a26ac57-a722-5c59-9f36-115675eecbad","startedAt":"2026-09-19T20:01:08.132534Z"},{"id":"01M2XMEM8TZEDVAMRTZSCPWVVZ","functionID":"9a26ac57-a722-5c59-9f36-115675eecbad","startedAt":"2026-09-19T20:06:48.346911Z"}]'
+PIN_MINTER2='[{"id":"01M341XPCWG79VZZPDJQ9W64KG","functionID":"26e6836b-97ad-503f-8b08-490d8a2f4ce8","startedAt":"2026-09-22T07:57:40.134819Z"},{"id":"01M341XQ4SX2KGWVF5J0XQ9PTG","functionID":"26e6836b-97ad-503f-8b08-490d8a2f4ce8","startedAt":"2026-09-22T07:57:40.890647Z"},{"id":"01M341XQNXQDFJSNW1C5PDP4TH","functionID":"26e6836b-97ad-503f-8b08-490d8a2f4ce8","startedAt":"2026-09-22T07:57:41.438198Z"}]'
+PIN_DRIFT='[{"id":"01M38ZZP4PKKDB2QJ3HB77JTEY","functionID":"209d5706-72bd-561c-88dc-92d7e23c1849","startedAt":"2026-09-24T06:00:00.407387Z"},{"id":"01M390P0W5ZT51H3VDD1M2CTYJ","functionID":"209d5706-72bd-561c-88dc-92d7e23c1849","startedAt":"2026-09-24T06:12:12.29469Z"}]'
+add_new_pins() { append_runs "$(slice_of $PROMOTE)" "$PIN_PROMOTE"; append_runs "$(slice_of $MINTER)" "$PIN_MINTER2"; append_runs "$(slice_of $DRIFT)" "$PIN_DRIFT"; }
+WHY_1491540='explained_why: bucket=1491540 2026-09-19 20:01Z+20:06Z: two manual triggers (trigger_source=manual), an operator retry of a failed run'
+WHY_1491719='explained_why: bucket=1491719 2026-09-22 catch-up: 07:00/07:20/07:40 ticks missed with no scheduler, each fired once at resume 35698687536'
+WHY_1491858='explained_why: bucket=1491858 2026-09-24 06:00Z scheduled tick plus a manual trigger at 06:12:11Z (trigger_source=manual)'
+# tail_head <out>: the first line the sweeper's `tail -c 4000` republishes, plus the byte size and margin.
+tail_head() { printf '%s' "$1" | tail -c 4000 | head -n 1; }
+out_bytes() { printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '; }
 
 # ── C0 registry gate ──────────────────────────────────────────────────────────────────────────
 default_fixtures; run C0
@@ -294,7 +308,7 @@ default_fixtures; add_explained; NOW=$SOAK_END_EPOCH run C3
 expect "C3 exactly the two explained groups (their real run ids) at SOAK_END → clean (rc 5)" 5 "SOAK CLEAN"
 expect "C3 ...the minter group is listed as explained" 5 "explained: functionID=$MINTER bucket=1491374 ($MINTER_BUCKET_WINDOW) count=4"
 expect "C3 ...the credit-probe group is listed as explained" 5 "explained: functionID=$CREDIT bucket=1491374 ($MINTER_BUCKET_WINDOW) count=2"
-expect "C3 ...with the attribution, once" 5 "explained_why: 2026-09-17T12:40–13:00Z catch-up"
+expect "C3 ...with the attribution, keyed to its bucket" 5 "explained_why: bucket=1491374 2026-09-17T12:40–13:00Z catch-up"
 [[ "$(grep -c 'op=resume run 35223389582' <<<"$OUT")" == 1 ]] && pass "C3 ...the attribution is printed exactly once" || fail "C3 attribution printed $(grep -c 'op=resume run 35223389582' <<<"$OUT") times"
 expect "C3 ...reading block counts explained=2" 5 "explained=2 UNEXPLAINED=0"
 expect_absent "C3 ...and no UNEXPLAINED group line" "UNEXPLAINED:"
@@ -338,6 +352,47 @@ default_fixtures; mapfile -t _ids < <(dealt 1); NO_WINDOW_HEAD=1 slice_fixture 1
 expect "C5h a head one second past SOAK_FROM + 2×PERIOD → index_eroded" 3 "reason=index_eroded min_started=2026-09-15T13:20:01Z"
 default_fixtures; append_runs 1 "[{\"id\":\"01M2QUNDERRUN000000000000X\",\"functionID\":\"$(dealt 1 | head -1)\",\"startedAt\":\"2026-09-15T12:39:59Z\"}]"; run C5i
 expect "C5i a run BEFORE the requested from= → window_underrun" 3 "reason=window_underrun min_started=2026-09-15T12:39:59Z"
+
+# ── C26 the three groups attributed 2026-09-25 (exact pins, per-bucket attribution) ─────────
+default_fixtures; add_explained; add_new_pins; NOW=$NOW_0925 run C26
+expect "C26 all five pinned groups → SOAK CLEAN (rc 5)" 5 "ACTION REQUIRED: SOAK CLEAN"
+expect "C26 ...reading block counts explained=5" 5 "explained=5 UNEXPLAINED=0"
+expect "C26 ...the manual-retry group is explained" 5 "explained: functionID=$PROMOTE bucket=1491540 (2026-09-19T20:00:00Z–2026-09-19T20:20:00Z) count=2"
+expect "C26 ...the 09-22 catch-up group is explained" 5 "explained: functionID=$MINTER bucket=1491719 (2026-09-22T07:40:00Z–2026-09-22T08:00:00Z) count=3"
+expect "C26 ...the 09-24 manual-trigger group is explained" 5 "explained: functionID=$DRIFT bucket=1491858 (2026-09-24T06:00:00Z–2026-09-24T06:20:00Z) count=2"
+expect "C26 ...the verdict counts five explained groups" 5 "5 explained group(s), 0 UNEXPLAINED"
+for _w in "$WHY_1491540" "$WHY_1491719" "$WHY_1491858"; do
+  [[ "$(grep -cxF -- "$_w" <<<"$OUT")" == 1 ]] && pass "C26 ...whole attribution line exactly once: ${_w:0:36}" || fail "C26 attribution line not present exactly once: $_w"
+done
+[[ "$(grep -c '^explained_why: bucket=1491374 2026-09-17T12:40–13:00Z catch-up' <<<"$OUT")" == 1 ]] && pass "C26 ...the 09-17 bucket's attribution is printed once for its two groups" || fail "C26 bucket=1491374 attribution printed $(grep -c '^explained_why: bucket=1491374' <<<"$OUT") times"
+[[ "$(grep -c 'op=resume run 35223389582' <<<"$OUT")" == 1 ]] && pass "C26 ...the 09-17 text appears exactly once" || fail "C26 09-17 text printed $(grep -c 'op=resume run 35223389582' <<<"$OUT") times"
+[[ "$(grep -c '^explained_why:' <<<"$OUT")" == 4 ]] && pass "C26 ...exactly four attribution lines (one per explained bucket)" || fail "C26 attribution lines: $(grep -c '^explained_why:' <<<"$OUT"), want 4"
+expect_absent "C26 ...and no UNEXPLAINED group line" "UNEXPLAINED:"
+
+default_fixtures; add_new_pins; NOW=$NOW_0925 run C26b
+expect "C26b the three new pins alone → SOAK CLEAN (rc 5)" 5 "ACTION REQUIRED: SOAK CLEAN"
+expect "C26b ...reading block counts explained=3" 5 "explained=3 UNEXPLAINED=0"
+expect_absent "C26b ...no attribution for the absent 09-17 bucket" "bucket=1491374"
+expect_absent "C26b ...and not the 09-17 text" "op=resume run 35223389582"
+
+# C26c: flip the last character of one 1491719 id — still ULID-shaped and unique, so only the member-set conjunct can reject it.
+default_fixtures; add_explained; append_runs "$(slice_of $PROMOTE)" "$PIN_PROMOTE"; append_runs "$(slice_of $DRIFT)" "$PIN_DRIFT"
+append_runs "$(slice_of $MINTER)" "$(jq -c '.[0].id |= (.[0:25] + "Z")' <<<"$PIN_MINTER2")"; NOW=$NOW_0925 run C26c
+expect "C26c the 09-22 minter pin with ONE id changed → SOAK NOT CLEAN" 5 "SOAK NOT CLEAN"
+expect "C26c ...names that group UNEXPLAINED" 5 "UNEXPLAINED: functionID=$MINTER bucket=1491719 (2026-09-22T07:40:00Z–2026-09-22T08:00:00Z) count=3"
+expect_absent "C26c ...and prints no attribution for its bucket" "explained_why: bucket=1491719"
+expect "C26c ...the 09-17 minter group (same function, other pin) stays explained" 5 "explained: functionID=$MINTER bucket=1491374"
+
+C26F_RUNS='[{"id":"01M2XC26F00000000000000A0A","functionID":"11bb44a3-ae8d-57b0-8d41-e76e57f0277a","startedAt":"2026-09-19T20:25:00Z"},{"id":"01M2XC26F00000000000000B0B","functionID":"11bb44a3-ae8d-57b0-8d41-e76e57f0277a","startedAt":"2026-09-19T20:30:00Z"}]'
+default_fixtures; add_explained; add_new_pins; append_runs "$(slice_of $OTHER)" "$C26F_RUNS"; NOW=$NOW_0925 run C26f
+expect "C26f all five pins + an unrelated fourth group → SOAK NOT CLEAN" 5 "SOAK NOT CLEAN"
+expect "C26f ...reading block counts explained=5 UNEXPLAINED=1" 5 "explained=5 UNEXPLAINED=1"
+expect "C26f ...names the unrelated group" 5 "UNEXPLAINED: functionID=$OTHER bucket=1491541"
+[[ "$(tail_head "$OUT")" == reading:* ]] && pass "C26f ...the NOT CLEAN output fits the sweeper's 4000-byte tail ($(out_bytes "$OUT") B)" || fail "C26f reading: line cut from tail -c 4000: $(out_bytes "$OUT") bytes, margin $((4000 - $(out_bytes "$OUT")))"
+
+default_fixtures; add_explained; add_new_pins; registry_fixture 71 "" '["b0000000-0000-4000-8000-000000000001"]'; NOW=$NOW_0925 run C26q
+expect "C26q the heaviest clean output (QUALIFIED) → SOAK CLEAN" 5 "SOAK CLEAN outside the explained bucket (QUALIFIED: 1 unmeasured"
+[[ "$(tail_head "$OUT")" == reading:* ]] && pass "C26q ...the clean output fits the sweeper's 4000-byte tail ($(out_bytes "$OUT") B)" || fail "C26q reading: line cut from tail -c 4000: $(out_bytes "$OUT") bytes, margin $((4000 - $(out_bytes "$OUT")))"
 
 # ── C6 / C7 unreadable slices ────────────────────────────────────────────────────────────────
 default_fixtures; echo 500 > "$WORK/slice-3.code"; printf '{"error":"boom"}' > "$WORK/slice-3.json"; run C6
