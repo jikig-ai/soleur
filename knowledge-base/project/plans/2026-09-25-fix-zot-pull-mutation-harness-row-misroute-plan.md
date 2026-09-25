@@ -373,13 +373,13 @@ commit pins them. Review is the anchor, and this is declared.
 
 ## Acceptance Criteria
 
-- [ ] **AC1 (RED before GREEN, `cq-write-failing-tests-before`, two ordered cycles).**
+- [x] **AC1 (RED before GREEN, `cq-write-failing-tests-before`, two ordered cycles).**
   (a) Extract the scorer **as-is** (still piped) into `failed_on` and add the self-test. The battery
   aborts with exit 2 on the needle-first probe. Then switch `failed_on` to capture-and-glob, and the self-test passes.
   (b) Add the padded must-PASS row against the **unfixed** guard. It reports
   `BROKE:    g1b-mustpass-padded-pull-item` (guard rc non-zero, no FAIL lines; quote the observed rc). Then fix the splitter,
   and it reports `HELD`. Quote all four outputs in the PR body.
-- [ ] **AC2.** After the fixes: `bash apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh`
+- [x] **AC2.** After the fixes: `bash apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh`
   ends `=== Results: 61/61 mutants killed ===` / `OK`, and
   `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` ends
   `BOOTSTRAP_SUITE_OK unconditional=153 floor=153 total=230 rendered=ran`. This is on a host with
@@ -398,25 +398,25 @@ commit pins them. Review is the anchor, and this is declared.
   simplicity, CTO) cut this from 30 runs. **Non-gating and machine-bound** (Kieran P2-6): record
   `nproc` and the peak load average next to the result. On a machine that cannot reach load ≥ 25, AC1
   alone carries the proof.
-- [ ] **AC4.** Before the fix, the drift guard's own pattern with its comment filter
+- [x] **AC4.** Before the fix, the drift guard's own pattern with its comment filter
   (`git grep -nE '\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' -- <both files> | grep -vE ':[0-9]+:[[:space:]]*#'`)
   reports **4** hits: the guard's three `wf_block` asserts and the battery's scorer. After the fix it
   reports **0**. `bash .claude/hooks/grep-q-pipe-guard.test.sh` PASSes and names both files. With
   `| grep -qF` temporarily reinserted at `failed_on`, it FAILs (Guard 1 row 4). Revert.
-- [ ] **AC5.** Guard 1 rows 1-3 and 5, and Guard 2 rows 1-2, are each driven once at work time (scratch edits,
+- [x] **AC5.** Guard 1 rows 1-3 and 5, and Guard 2 rows 1-2, are each driven once at work time (scratch edits,
   reverted) and red as stated, with the one-line observed output quoted in the PR body. Guard 1 row 4
   and Guard 2 rows 3-4 are covered by AC4 and by the existing landing check. Plan review trimmed this
   from all rows.
-- [ ] **AC6.** `bash plugins/soleur/test/fixture-relative-assert.test.sh` and
+- [x] **AC6.** `bash plugins/soleur/test/fixture-relative-assert.test.sh` and
   `bash scripts/guard-vacuity-floor.test.sh` PASS (baseline regenerated only on the two rows, if
   needed).
-- [ ] **AC7 (CI-form lints, per the one-shot brief).**
+- [x] **AC7 (CI-form lints, per the one-shot brief).**
   `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base HEAD origin/main)"` passes (no
   SKILL.md is touched, so this is a no-op, and that is confirmed rather than assumed). No `.ts` is
   touched, so eslint has nothing to lint: confirm with `git diff --name-only origin/main... | grep -c '\.ts$'` → `0`.
   `shellcheck` is clean on the three touched `.sh` files, at the severity CI uses.
-- [ ] **AC8.** `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-25-fix-zot-pull-mutation-harness-row-misroute-plan.md` exits 0.
-- [ ] **AC9.** The diff touches no file in #8763's set (`run-registered-suites.sh`, `suite-shard-legs.tsv`, …):
+- [x] **AC8.** `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-25-fix-zot-pull-mutation-harness-row-misroute-plan.md` exits 0.
+- [x] **AC9.** The diff touches no file in #8763's set (`run-registered-suites.sh`, `suite-shard-legs.tsv`, …):
   `git diff --name-only origin/main... | grep -cE 'run-registered-suites|suite-shard-legs'` → `0`.
 - [ ] PR body: `Closes #8664`, the reconciliation of the misnamed row, and the ~4 KiB threshold note.
 
@@ -558,3 +558,25 @@ No cross-domain implications detected: this is a change to test-harness and CI t
   one.
 - Editing `.claude/hooks/*.test.sh` may trip a hooks-protection PreToolUse guard. If it does, follow
   the guard's instruction and do not bypass it.
+
+## Implementation Notes (2026-09-25)
+
+Observed outputs, as captured by the work phase:
+
+- **AC1a**, piped `failed_on` with the self-test in place: rc=2, `HARNESS ABORT: scorer self-test: a FAIL line followed by 1 MiB of FAIL output scored NOT found`. Capture-and-glob: the self-test passes.
+- **AC1b**, padded row against the unfixed guard: `BROKE: g1b-mustpass-padded-pull-item … (rc=141)`, no FAIL line, and the log ends at `--- Guard 1b (#6500): per-arm Sentry stage emits (dedicated host) ---`. Battery `60/61`. Against the fixed guard: `HELD`.
+- **AC2**: `=== Results: 61/61 mutants killed ===` / `OK`, and `BOOTSTRAP_SUITE_OK unconditional=153 floor=153 total=230 rendered=ran`.
+- **AC4**: the pattern count over both files is 4 on `origin/main` and 0 on the branch. Reinserting a `| grep -qF` into `failed_on` produces `FAIL: pipe-into-grep-q found in a file #8664 took to zero`.
+- **AC5**. Every row exits with rc=2 unless noted:
+  - Guard 1 row 1 (piped body) → `… scored NOT found`.
+  - Row 2 (`return 0`) and row 3 (unscoped `FAIL`) → `a string present only on a PASS line scored found`.
+  - Row 5a (needle last) → `the needle is not line 2 of its fixture`.
+  - Row 5b (unprefixed filler) → `the fixture lost its FAIL filler after the needle`.
+  - Guard 2 row 1 is the AC1b run.
+  - Guard 2 row 2 (comment rule dropped) → rc=1 `FAIL: G1b: each arm carries exactly ONE soleur-boot-emit call (served 1, missed 2)`.
+- **AC6**: `fixture-relative-assert` 62/62 (no baseline change needed) and `guard-vacuity-floor` 23/23.
+- **AC7**:
+  - `lint-skill-body-budget --base <merge-base>` OK.
+  - 0 `.ts` files.
+  - `shellcheck -S warning` over the three files emits 22 findings, the same count as `origin/main`. All are pre-existing SC2034 on variables read inside `assert`'s eval strings. The two new `WF_*` variables carry a disable annotation.
+- **Sibling scorer sites**: tracked in #8855. `web-host-provisioner-parity-mutation.test.sh` scores on `grep -F "[FAIL]" "$OUT"`, which the plan's `$log`-shaped census would have missed.
