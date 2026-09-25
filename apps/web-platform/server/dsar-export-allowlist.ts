@@ -12,7 +12,7 @@
 // FR8 + R10: the four legal documents (privacy-policy §4.7, GDPR
 // policy §6.1.b, DPD §2.3 + §5.3, compliance-posture) MUST stay in
 // sync with this allowlist. The cross-document CI gate
-// (.github/workflows/pr-quality-guards.yml (jobs.enforce) — Phase 11)
+// (.github/workflows/legal-doc-cross-document-gate.yml — Phase 11)
 // blocks merges that touch dsar-export.ts without touching all four
 // legal docs.
 
