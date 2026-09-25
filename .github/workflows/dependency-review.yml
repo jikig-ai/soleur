@@ -30,9 +30,39 @@ jobs:
   dependency-review:
     runs-on: ubuntu-latest
     steps:
+      # The job is the required context, so it always runs; the ACTION only
+      # runs when the PR touches a dependency manifest. FAIL-OPEN TOWARD
+      # SCANNING: any failure to obtain the file list emits deps=true — a
+      # required check may skip on PROOF, never on uncertainty. The manifest
+      # set is a SUPERSET of every ecosystem dependency-review-action
+      # recognises (npm/yarn/pnpm/bun/deno, pip/pyproject/poetry/setup.py,
+      # go, cargo, bundler/gemspec, composer, maven, gradle, dotnet, nuget,
+      # dart, swift, cocoapods, elixir, conda); when a new ecosystem lands,
+      # extend the regex — a miss means a manifest change skips review.
+      - name: Detect dependency-manifest changes
+        id: detect
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[].filename' 2>/dev/null || true)
+          # '(^|/)name$' so manifests at any depth count; the workflow's own
+          # path self-triggers (gate edits must run the gate).
+          re='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lock|bun\.lockb|deno\.lock|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Pipfile[^/]*|setup\.py|setup\.cfg|go\.mod|go\.sum|go\.work[^/]*|Cargo\.toml|Cargo\.lock|Gemfile[^/]*|[^/]*\.gemspec|composer\.(json|lock)|pom\.xml|[^/]*\.gradle(\.kts)?|gradle\.lockfile|gradle/libs\.versions\.toml|[^/]*\.(csproj|fsproj|vbproj|sln)|packages\.config|pubspec\.(yaml|lock)|Package\.(swift|resolved)|Podfile[^/]*|mix\.(exs|lock)|environment\.yml|conda-lock\.yml)$'
+          if printf '%s\n' "$files" | grep -qE "$re" \
+             || printf '%s\n' "$files" | grep -qE '^\.github/workflows/dependency-review\.yml$' \
+             || [ -z "$files" ]; then
+            echo "deps=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deps=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Dependency Review (pull_request)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.detect.outputs.deps == 'true'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           retry-on-snapshot-warnings: true
