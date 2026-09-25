@@ -108,7 +108,7 @@ function buildSupabaseClient() {
       }
       return Promise.resolve({ data: null, error: null });
     },
-    // The Layer-2 window anchor read (`action_sends.created_at`) terminates in
+    // The Layer-2 window anchor read (`action_sends.clicked_at`) terminates in
     // `.single()`, unlike the sibling reads above which use `.maybeSingle()`.
     single() {
       if (currentTable === "action_sends") {
@@ -448,11 +448,11 @@ beforeEach(() => {
     error: null,
   };
   actionSendsSelectResult = {
-    // created_at is the Layer-2 window anchor (#7774); cancellation_requested_at
+    // clicked_at is the Layer-2 window anchor (#7774); cancellation_requested_at
     // is read by the same table's cancel-check step.
     data: {
       cancellation_requested_at: null,
-      created_at: "2026-09-03T10:00:00.000Z",
+      clicked_at: "2026-09-03T10:00:00.000Z",
     },
     error: null,
   };
@@ -698,7 +698,7 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
         step: makeStep(),
         logger,
       }),
-    ).rejects.toThrow(/could not read action_sends\.created_at/);
+    ).rejects.toThrow(/could not read action_sends\.clicked_at/);
     // Fail-closed means no model spend on an unverifiable window.
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
   });
@@ -726,12 +726,12 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
 
   it("AC10 cancelled_by_operator: cancellation_requested_at NOT NULL → short-circuit", async () => {
     actionSendsSelectResult = {
-      // created_at is present on every real action_sends row and is the
+      // clicked_at is present on every real action_sends row and is the
       // Layer-2 window anchor (#7774); a fixture omitting it models a row
       // the producer cannot emit.
       data: {
         cancellation_requested_at: "2026-05-25T12:00:00Z",
-        created_at: "2026-09-03T10:00:00.000Z",
+        clicked_at: "2026-09-03T10:00:00.000Z",
       },
       error: null,
     };
@@ -866,12 +866,12 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
 
   it("AC3 notify: cancelled_by_operator NEVER notifies (operator-initiated stops are not surprises)", async () => {
     actionSendsSelectResult = {
-      // created_at is present on every real action_sends row and is the
+      // clicked_at is present on every real action_sends row and is the
       // Layer-2 window anchor (#7774); a fixture omitting it models a row
       // the producer cannot emit.
       data: {
         cancellation_requested_at: "2026-05-25T12:00:00Z",
-        created_at: "2026-09-03T10:00:00.000Z",
+        clicked_at: "2026-09-03T10:00:00.000Z",
       },
       error: null,
     };

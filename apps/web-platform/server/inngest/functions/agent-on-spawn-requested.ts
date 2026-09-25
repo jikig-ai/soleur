@@ -441,7 +441,9 @@ export async function agentOnSpawnRequestedHandler({
     });
   }
 
-  // Window anchor for the Layer-2 ceiling. Read from the DB, NOT `new Date()`:
+  // Window anchor for the Layer-2 ceiling: `action_sends.clicked_at`, the row's
+  // insert time (the table has no `created_at`; reading one failed every spawn
+  // from #7774 until #8803's review). Read from the DB, NOT `new Date()`:
   // an Inngest replay re-executes this function body, so a wall-clock anchor
   // would re-derive a different window on every retry and make the ceiling
   // non-deterministic. `step.run` memoizes the DB value, so replays reuse the
@@ -452,20 +454,20 @@ export async function agentOnSpawnRequestedHandler({
       const sb = getServiceClient();
       const { data, error } = await sb
         .from("action_sends")
-        .select("created_at")
+        .select("clicked_at")
         .eq("id", actionSendId)
         .single();
-      if (error || !data?.created_at) {
+      if (error || !data?.clicked_at) {
         // Fail closed, matching the adjacent cap-check and precheck steps: a
         // missing anchor would otherwise silently widen the window back to
         // "all of history", which is the defect this read exists to close.
         throw new Error(
-          `agent-on-spawn: could not read action_sends.created_at for ${actionSendId}: ${
+          `agent-on-spawn: could not read action_sends.clicked_at for ${actionSendId}: ${
             error?.message ?? "no row"
           }`,
         );
       }
-      return data.created_at as string;
+      return data.clicked_at as string;
     },
   );
 
