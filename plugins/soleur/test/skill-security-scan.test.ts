@@ -6,16 +6,17 @@
 //      categories.
 //   2. End-to-end run-scan.sh aggregator produces deterministic verdicts.
 //   3. Calibration corpus check: 0% HIGH-RISK + <5% REVIEW on
-//      plugins/soleur/skills/**/SKILL.md. The pre-commit hook narrows it to the
-//      staged SKILL.md files via SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE; CI ignores
-//      that variable and always scans the full corpus.
+//      plugins/soleur/skills/*/SKILL.md. The pre-commit hook narrows the HIGH-RISK
+//      check to the staged SKILL.md files via SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE
+//      and skips the REVIEW ratio; CI ignores the variable, and a CI-only test plus
+//      an afterAll pin that both calibration tests ran over the full corpus.
 //
 // Run with: `bun test plugins/soleur/test/skill-security-scan.test.ts`
 //
 // SKILL_SECURITY_SCAN_OFFLINE=1 is set for all subprocess calls — supply-chain
 // network access is bypassed in CI.
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -281,6 +282,63 @@ describe("skill-security-scan: load-bearing security scenarios", () => {
   // helper that doesn't fit in this pass. See follow-up issue.
 });
 
+// Pure scoping decision for the calibration describe. Empty/unset scope or CI => full corpus
+// (fail-safe). A staged entry naming a SKILL.md that matches no discovered skill is a
+// producer/path-form drift and throws instead of silently skipping. The drift test keys on the
+// corpus shape (plugins/soleur/skills/<name>/SKILL.md, any prefix) so the codex/devin mirrors
+// under plugins/soleur/<harness>/skills/ are legitimately out of scope, not drift.
+function resolveCalibrationScope(
+  env: Record<string, string | undefined>,
+  all: string[],
+  repoRoot: string,
+): { mode: "full" | "scoped"; skills: string[]; runHighRisk: boolean; runReview: boolean } {
+  const raw = (env.SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE ?? "").trim();
+  if (env.CI || raw === "") return { mode: "full", skills: all, runHighRisk: true, runReview: true };
+  if (/[{}]/.test(raw)) throw new Error(`calibration scope looks unsubstituted: ${raw}`);
+  const staged = new Set(raw.split("\n").map((l) => l.trim()).filter(Boolean));
+  const known = new Set(all.map((a) => relative(repoRoot, a)));
+  const drift = [...staged].filter((p) => /plugins\/soleur\/skills\/[^/\s]+\/SKILL\.md$/.test(p) && !known.has(p));
+  if (drift.length) throw new Error(`calibration scope names SKILL.md not in the corpus: ${drift.join(", ")}`);
+  const skills = all.filter((a) => staged.has(relative(repoRoot, a)));
+  return { mode: "scoped", skills, runHighRisk: skills.length > 0, runReview: false };
+}
+
+describe("resolveCalibrationScope", () => {
+  const root = "/r";
+  const all = ["/r/plugins/soleur/skills/a/SKILL.md", "/r/plugins/soleur/skills/b/SKILL.md"];
+  const S = "SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE";
+  test("unset => full, both tests run", () => {
+    expect(resolveCalibrationScope({}, all, root)).toEqual({ mode: "full", skills: all, runHighRisk: true, runReview: true });
+  });
+  test("CI wins over a set scope", () => {
+    expect(resolveCalibrationScope({ CI: "true", [S]: "plugins/soleur/skills/a/SKILL.md" }, all, root).mode).toBe("full");
+  });
+  test("empty/whitespace scope fails safe to full", () => {
+    expect(resolveCalibrationScope({ [S]: "" }, all, root).mode).toBe("full");
+    expect(resolveCalibrationScope({ [S]: " \n" }, all, root).mode).toBe("full");
+  });
+  test("scoped: exactly the staged SKILL.md (second member counts), REVIEW skipped", () => {
+    const r = resolveCalibrationScope({ [S]: "plugins/soleur/agents/x.md\nplugins/soleur/skills/b/SKILL.md" }, all, root);
+    expect(r).toEqual({ mode: "scoped", skills: [all[1]], runHighRisk: true, runReview: false });
+  });
+  test("scoped with no SKILL.md staged skips HIGH-RISK", () => {
+    const r = resolveCalibrationScope({ [S]: "plugins/soleur/skills/a/references/x.md" }, all, root);
+    expect(r).toMatchObject({ mode: "scoped", skills: [], runHighRisk: false, runReview: false });
+  });
+  test("a harness mirror SKILL.md is out of scope, not drift", () => {
+    const r = resolveCalibrationScope({ [S]: "plugins/soleur/codex/skills/go/SKILL.md" }, all, root);
+    expect(r).toMatchObject({ mode: "scoped", skills: [], runHighRisk: false });
+  });
+  test.each([
+    ["./plugins/soleur/skills/a/SKILL.md"],
+    ["/r/plugins/soleur/skills/a/SKILL.md"],
+    ["plugins/soleur/skills/a/SKILL.md plugins/soleur/skills/b/SKILL.md"],
+    ["{staged_files}"],
+  ])("path-form drift throws: %s", (v) => {
+    expect(() => resolveCalibrationScope({ [S]: v }, all, root)).toThrow();
+  });
+});
+
 describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
   function discoverFirstPartySkills(): string[] {
     const out: string[] = [];
@@ -292,15 +350,24 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
   }
 
   const all = discoverFirstPartySkills();
-  // Set only by lefthook's plugin-component-test (newline-separated staged plugin .md paths).
-  // CI is never scoped: the required checks own the full corpus.
-  const scopeRaw = process.env.SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE;
-  const scoped = scopeRaw !== undefined && !process.env.CI;
-  const staged = new Set((scopeRaw ?? "").split("\n").map((l) => l.trim()).filter(Boolean));
-  const skills = scoped ? all.filter((abs) => staged.has(relative(REPO_ROOT, abs))) : all;
-  console.log(`[skill-security-scan calibration] ${scoped ? "scoped" : "full"} ${skills.length}/${all.length}`);
+  const plan = resolveCalibrationScope(process.env, all, REPO_ROOT);
+  const skills = plan.skills;
+  console.log(`[skill-security-scan calibration] ${plan.mode} ${skills.length}/${all.length}`);
 
-  // Calibration over ~70 skills × ~5 categories/skill is slow; cache results
+  // CI owns the full corpus: pin it so an edit that scopes/empties/skips CI goes red here.
+  const ran = new Set<string>();
+  test.if(!!process.env.CI)("CI calibration is unscoped over a non-empty corpus", () => {
+    expect(plan.mode).toBe("full");
+    expect(skills.length).toBe(all.length);
+    expect(all.length).toBeGreaterThan(50);
+  });
+  afterAll(() => {
+    if (process.env.CI && ran.size !== 2) {
+      throw new Error(`[skill-security-scan calibration] CI ran ${ran.size}/2 calibration tests (${[...ran].join(",")})`);
+    }
+  });
+
+  // Calibration over ~100 skills × ~5 categories/skill is slow; cache results
   // across both tests by running once and asserting both invariants.
   let corpusResults: Map<string, "LOW-RISK" | "REVIEW" | "HIGH-RISK"> | null = null;
   function runCorpus() {
@@ -313,9 +380,10 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
   }
 
   // A scoped run with no staged SKILL.md (agent or references/ edit) skips visibly.
-  test.skipIf(scoped && skills.length === 0)(
+  test.skipIf(!plan.runHighRisk)(
     "0% of first-party SKILL.md emit HIGH-RISK",
     () => {
+      ran.add("high-risk");
       const results = runCorpus();
       const offenders: string[] = [];
       for (const [path, v] of results) {
@@ -333,9 +401,10 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
   );
 
   // The REVIEW ratio is a corpus property; only an unscoped (CI) run can measure it.
-  test.skipIf(scoped)(
+  test.skipIf(!plan.runReview)(
     "<5% of first-party SKILL.md emit REVIEW",
     () => {
+      ran.add("review");
       const results = runCorpus();
       const reviews: string[] = [];
       for (const [path, v] of results) {

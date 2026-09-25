@@ -42,3 +42,19 @@ Each mutation applied to the committed test file, then restored with `git restor
 | M3 | keep first staged path only | 3.2 | `scoped 1/102` [`scoped 2/102`] — RED |
 | M4 | basename match | 3.1 | `scoped 102/102` [`scoped 1/102`] — RED |
 | M5 | drop HIGH-RISK `skipIf` | 3.3 | 1 pass / 1 skip [0 pass / 2 skip] — RED |
+
+## Review round (2026-09-25) — scoping extracted to `resolveCalibrationScope`
+
+Test-design review found the CI side unpinned: `skipIf(true)` on HIGH-RISK or an inverted REVIEW
+skip left CI at rc 0 with the calibration dark. The decision is now a pure helper with 10 unit
+rows, a CI-only "unscoped over a non-empty corpus" test, and an `afterAll` that throws under CI
+unless both calibration tests ran. Mutations run on an untracked copy, `CI=true`:
+
+| Row | Result |
+|---|---|
+| CI control (unmutated) | rc 0, `full 102/102`, 14 pass |
+| MA REVIEW skip inverted | rc 1, `CI ran 1/2 calibration tests (high-risk)` |
+| MB HIGH-RISK `skipIf(true)` | rc 1, `CI ran 1/2 calibration tests (review)` |
+| scoped `ship/SKILL.md` | rc 0, `scoped 1/102`, 1 pass / 2 skip |
+| agent `.md` + codex mirror `SKILL.md` | rc 0, `scoped 0/102`, 3 skip (mirror is out of scope, not drift) |
+| `./`-prefixed SKILL.md (path-form drift) | rc 1, throws `names SKILL.md not in the corpus` |
