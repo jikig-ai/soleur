@@ -134,11 +134,25 @@
 #   bash apps/web-platform/infra/run-registered-suites.sh --enumerate  # machine-readable set
 #   SOLEUR_INFRA_SHARD=1/4 bash …/run-registered-suites.sh         # one CI leg's subset
 #
+# Environment seams (each documented at its use site):
+#   SOLEUR_INFRA_DIR        suite-root override (test fixtures; default
+#                           apps/web-platform/infra — in-repo = git ls-files,
+#                           outside = find)
+#   SOLEUR_INFRA_SHARD      k/N leg selector (malformed/out-of-range = exit 2)
+#   SOLEUR_INFRA_MANIFEST   manifest override: `off`, or an absolute path —
+#                           invalid forms fail closed
+#   SOLEUR_INFRA_TIMINGS    per-suite timing feed path (label<TAB>ms<TAB>verdict;
+#                           consumed by regenerate-shard-manifest.py --group infra)
+#   SOLEUR_SUITE_TIMEOUT_*  per-suite bound override (test seam)
+#   INFRA_ORPHAN_LIST       inject the untracked-scan candidate list (test seam)
+#
 # `--list` prints the derived suite list and the orphan report without executing
 # anything. It exists so this script's own logic (derivation, the zero-guard, the
 # orphan scan) is testable in under a second — a runner whose correctness could
 # only be checked by a 25-minute full run would not, in practice, be checked.
-# SOLEUR_INFRA_DIR overrides the infra directory for the same reason (fixtures).
+# `--enumerate` prints `SUITE_REGISTRATION<TAB><path>` rows for the EXECUTE set
+# (privileged excluded) — it is shard-insensitive by design: the manifest
+# generator consumes the full set for its ⊆ lint.
 #
 # EXIT CONTRACT — THE SHAPE OF THE NON-ZERO IS LOAD-BEARING (#7429).
 #
@@ -203,6 +217,14 @@
 # dispatch marker, not a post-hoc `.meta`), this becomes decidable and should be revisited.
 
 set -uo pipefail
+
+# Version gate FIRST — the derivation below uses bash-4 features (mapfile,
+# declare -A) and the timing code needs bash 5 (EPOCHSECONDS); on bash 3.2 the
+# script would die at mapfile with `unbound variable` instead of this message.
+[[ -n "${EPOCHSECONDS:-}" ]] || {
+  echo "FATAL: bash 5.0+ required (EPOCHSECONDS is unset) — this runner needs a modern bash." >&2
+  exit 2
+}
 
 # Default TMPDIR to /var/tmp (disk-backed), mirroring scripts/test-all.sh.
 #
@@ -276,16 +298,66 @@ SOLEUR_INFRA_DIR="${SOLEUR_INFRA_DIR:-apps/web-platform/infra}"
 # and made registration a second thing to remember — the #7076 blind spot, nine
 # suites (6 subdir + 3 sudo) that CI ran but this runner never derived.
 #
-# `git ls-files` is the source inside the repo: TRACKED files only, so a scratch
-# `.test.sh` nobody committed does not silently register, and the glob result is
-# exactly what a fresh CI checkout will contain. The git pathspec `*` crosses `/`,
-# so the single pattern returns subdirectory suites too. A caller-supplied fixture
-# dir OUTSIDE the tree is invisible to the index and takes the filesystem arm.
+# `git ls-tree HEAD` is the source inside the repo: COMMITTED files only, so a
+# scratch `.test.sh` nobody committed does not silently register, and the glob
+# result is exactly what a fresh CI checkout will contain. `-r` recursion makes
+# subdirectory suites visible. A caller-supplied fixture dir OUTSIDE the tree
+# has no HEAD to consult and takes the filesystem arm.
 if [[ "$SOLEUR_INFRA_DIR" == /* && "$SOLEUR_INFRA_DIR" != "$ROOT/"* ]]; then
   mapfile -t ALL_SUITES < <(find "$SOLEUR_INFRA_DIR" -type f -name '*.test.sh' | LC_ALL=C sort -u)
 else
-  mapfile -t ALL_SUITES < <(git ls-files "${SOLEUR_INFRA_DIR#"$ROOT"/}/*.test.sh" | LC_ALL=C sort -u)
+  # `git ls-tree HEAD`, not `git ls-files`: the index counts STAGED files, so a
+  # `git add`ed-but-uncommitted suite would derive locally while being absent
+  # from every CI checkout — the exact "on one laptop" defect the orphan report
+  # exists to close. HEAD's tree is the committed set CI actually sees.
+  # (ls-tree's pathspec is not a glob engine — list the prefix, filter the
+  # suffix; `-r` recursion is what makes subdirectory suites visible.)
+  mapfile -t ALL_SUITES < <(git ls-tree -r --name-only HEAD -- \
+    "${SOLEUR_INFRA_DIR#"$ROOT"/}" | grep -E '\.test\.sh$' | LC_ALL=C sort -u)
 fi
+
+# A tracked SYMLINK is never a suite: the listing treats mode-120000 entries
+# like files, and `bash "$s"` at dispatch follows the link silently — a symlink
+# out of the repo executes out-of-repo content on a CI leg. Refuse, not skip:
+# a silent skip would deregister the suite by name alone.
+for _s in "${ALL_SUITES[@]}"; do
+  if [[ -L "$_s" ]]; then
+    echo "FATAL: '$_s' is a symlink — a suite is a real file, never a link." >&2
+    echo "       Replace it with the file itself or remove it." >&2
+    exit 2
+  fi
+  case "$_s" in
+    *[[:space:]]*)
+      echo "FATAL: suite path contains whitespace: '$_s' — per-suite capture keys" >&2
+      echo "       and the manifest's label<TAB>leg format cannot carry it." >&2
+      exit 2 ;;
+  esac
+done
+
+# Two name-space invariants the machinery depends on, asserted once at derive
+# time rather than degenerating per-suite:
+#  (a) BASENAMES must be unique — PRIVILEGED_WHY is basename-keyed, so a second
+#      `workspaces-luks-loopback.test.sh` in a subdirectory would inherit the
+#      exclusion and run NOWHERE while the gate's sudo grep stayed satisfied by
+#      the original's step.
+#  (b) LOG KEYS must be unique — the shim munges a path to `a_b.test.sh` for its
+#      .log/.meta/.trow files, so `infra/a/b.test.sh` and `infra/a_b.test.sh`
+#      share one key: interleaved capture, a lost kill-rc, a dropped timing row.
+(( ${#ALL_SUITES[@]} > 0 )) && {
+  _dup="$(printf '%s\n' "${ALL_SUITES[@]##*/}" | LC_ALL=C sort | uniq -d | head -1)"
+  [[ -z "$_dup" ]] || {
+    echo "FATAL: duplicate suite basename '$_dup' — basenames must be unique across" >&2
+    echo "       ${SOLEUR_INFRA_DIR} (PRIVILEGED_WHY and the registration gate key on them)." >&2
+    exit 2
+  }
+  _dup="$(printf '%s\n' "${ALL_SUITES[@]//\//_}" | LC_ALL=C sort | uniq -d | head -1)"
+  [[ -z "$_dup" ]] || {
+    echo "FATAL: two suite paths munge to the same log key '$_dup' — per-suite" >&2
+    echo "       .log/.meta/.trow files would collide. Rename one of them." >&2
+    exit 2
+  }
+  unset _dup
+}
 
 # A silent zero here would print "0 failed" and read as success — the exact
 # false-green this runner exists to end.
@@ -485,6 +557,15 @@ fi
 # captured first: this process still writes the feed at the end, but a nested
 # runner must not scribble on the caller's artifact path mid-run.
 _TIMINGS_OUT="${SOLEUR_INFRA_TIMINGS:-}"
+# The feed is written to `_TIMINGS_OUT` by a bare `>` at end of run — a relative
+# value would write into the repo cwd and a mistaken value would truncate an
+# arbitrary writable file. Same contract as SOLEUR_INFRA_MANIFEST: absolute or
+# absent.
+if [[ -n "$_TIMINGS_OUT" && "$_TIMINGS_OUT" != /* ]]; then
+  echo "ERROR: SOLEUR_INFRA_TIMINGS must be an absolute path" >&2
+  echo "       (got: '$_TIMINGS_OUT') — this runner never normalises cwd." >&2
+  exit 2
+fi
 unset SOLEUR_INFRA_SHARD SOLEUR_INFRA_MANIFEST SOLEUR_INFRA_TIMINGS
 
 # Per-suite bound. The monolithic job's step-level `timeout-minutes` convention
@@ -558,10 +639,10 @@ report_orphans() {
   mapfile -t orphans < <(
     while IFS= read -r f; do
       [[ -n "$f" ]] || continue
-      git ls-files --error-unmatch "$f" >/dev/null 2>&1 || printf '%s\n' "$f"
+      git cat-file -e "HEAD:$f" >/dev/null 2>&1 || printf '%s\n' "$f"
     done < <(
       if [[ -n "${INFRA_ORPHAN_LIST:-}" ]]; then
-        sort -u "$INFRA_ORPHAN_LIST"
+        sort -u -- "$INFRA_ORPHAN_LIST"
       elif [[ "$SOLEUR_INFRA_DIR" == /* && "$SOLEUR_INFRA_DIR" != "$ROOT/"* ]]; then
         # A fixture root (absolute, from `mktemp -d`) is outside the repo, so the
         # untracked check has no index to consult. Emit no candidates rather than
@@ -607,6 +688,12 @@ fi
 # oversubscribing turns a slow run into a flaky one.
 _NPROC=$(nproc 2>/dev/null || echo 4)
 JOBS="${JOBS:-$(( _NPROC < 6 ? _NPROC : 6 ))}"
+# `xargs -P 0` is GNU's UNBOUNDED mode — `JOBS=0` or a non-numeric value silently
+# changes the parallelism contract rather than failing. Refuse them.
+[[ "$JOBS" =~ ^[0-9]+$ ]] && (( JOBS >= 1 )) || {
+  echo "FATAL: JOBS='$JOBS' is not a positive integer — xargs -P 0 means unbounded." >&2
+  exit 2
+}
 
 # ── The instrument (#7376) ────────────────────────────────────────────────────
 #
@@ -661,12 +748,9 @@ DUMP_CAP=40
 # EPOCHSECONDS, not EPOCHREALTIME: it is an integer, so it sidesteps the decimal-separator
 # locale trap entirely. And NO bash-3 fallback — scripts/test-all.sh has one whose behaviour is
 # to resolve elapsed to 0 SILENTLY, which would plant a silent-wrong-value in the only field
-# that can answer "did this suite run far longer than its solo baseline?". This runner already
-# requires bash 4+ (mapfile, above), so fail loud instead.
-[[ -n "${EPOCHSECONDS:-}" ]] || {
-  echo "FATAL: bash 5.0+ required (EPOCHSECONDS is unset) — refusing to record timings as 0." >&2
-  exit 2
-}
+# that can answer "did this suite run far longer than its solo baseline?". The version gate at
+# the top of this file already refused anything below bash 5; EPOCHSECONDS is guaranteed here.
+[[ -n "${EPOCHSECONDS:-}" ]] || exit 2
 
 LOG="$(mktemp)" || { echo "FATAL: mktemp failed for the summary log (TMPDIR=$TMPDIR)" >&2; exit 2; }
 
@@ -699,7 +783,8 @@ SOLEUR_SUITE_LOGDIR="$(mktemp -d -p "$_SUITE_TMP_BASE" infra-suites.XXXXXXXX)" |
   echo "       assertion would then blame a vanished wrapper for a disk problem." >&2
   exit 2
 }
-export SOLEUR_SUITE_LOGDIR
+# Deliberately NOT exported: the shim receives the path as argv ($2) so the
+# counting dir never reaches a suite's environment.
 SOLEUR_RUN_T0="$EPOCHSECONDS"; export SOLEUR_RUN_T0
 
 if (( _SHARD_N > 0 )); then
@@ -735,15 +820,31 @@ fi
 # textual substitution, so `s="{}"` would make a path containing `"`/`$`/backtick executable as
 # code. The derivation regex constrains the basename today, but `$SOLEUR_INFRA_DIR` is caller-
 # supplied, and this script body grew from one line to five.
+#
+# An EMPTY execute set must not reach xargs: `printf '%s\n' "${SUITES[@]}"` on an
+# empty array emits one newline, and `-I{}` would run the shim once with s=""
+# — a phantom suite with an empty log key. Reachable in fixtures where every
+# derived basename is privileged.
+(( ${#SUITES[@]} > 0 )) || {
+  echo "FATAL: the execute set is empty — every derived suite is privileged." >&2
+  echo "       Dispatching would fabricate a phantom suite; refusing." >&2
+  exit 2
+}
 printf '%s\n' "${SUITES[@]}" \
   | xargs -P "$JOBS" -I{} bash -c '
-      s="$1"; key="${s//\//_}"
+      s="$1"; key="${s//\//_}"; logdir="$2"
+      # logdir arrives as argv, not env: a suite must not see the counting dir
+      # in its environment (a forgeable .meta/.trow write is a signal-shaped
+      # lie). NOTE: no apostrophes inside this whole -c string — one truncates
+      # argv and scrambles the shim (measured: `s: unbound variable`).
       # Per-suite bound: the override map arrives as one flat "path=secs" string
       # (assoc arrays do not export); keyed on the repo-relative path. rc=124 is
       # GNU timeout kill — it renders as RED below, naming the suite.
       bound="$SOLEUR_SUITE_TIMEOUT_DEFAULT"
       for kv in $SOLEUR_SUITE_TIMEOUTS; do
-        case "$kv" in "$s="*) bound="${kv##*=}" ;; esac
+        # Literal compare — `case` would glob-match a suite path containing
+        # `*`/`?`/`[` and bind the wrong bound. `${kv%%=*}` is the key half.
+        [[ "${kv%%=*}" == "$s" ]] && bound="${kv##*=}"
       done
       st="$EPOCHSECONDS"
       # ONE call site for the suite itself — the bounder is a prefix, never a
@@ -754,29 +855,30 @@ printf '%s\n' "${SUITES[@]}" \
       else
         set --
       fi
-      "$@" bash "$s" >"$SOLEUR_SUITE_LOGDIR/$key.log" 2>&1; rc=$?
-      printf "%s %s %s\n" "$rc" "$(( EPOCHSECONDS - st ))" "$(( st - SOLEUR_RUN_T0 ))" > "$SOLEUR_SUITE_LOGDIR/$key.meta"
+      "$@" bash "$s" >"$logdir/$key.log" 2>&1; rc=$?
+      printf "%s %s %s\n" "$rc" "$(( EPOCHSECONDS - st ))" "$(( st - SOLEUR_RUN_T0 ))" > "$logdir/$key.meta"
       # Per-suite timings row for the shard-manifest generator feed
       # (label<TAB>ms<TAB>verdict; FAIL rows are excluded by the generator — a
       # suite that did not finish carries a bound-hit timing, not a duration).
       verdict=FAIL; (( rc == 0 )) && verdict=PASS
       printf "%s\t%s\t%s\n" "$s" "$(( (EPOCHSECONDS - st) * 1000 ))" "$verdict" \
-        > "$SOLEUR_SUITE_LOGDIR/$key.trow"
+        > "$logdir/$key.trow"
       if (( rc == 0 )); then
         echo "PASS $s"
       else
         echo "RED  $s"
         # ::error annotation so the Actions run summary names the suite without
-        # opening leg logs. Path is CR/LF-stripped — annotation commands are
-        # line-oriented (a committed filename, but the strip is one expansion).
-        clean="$(printf %s "$s" | tr -d "\r\n")"
+        # opening leg logs. `file=` is a structured property: strip CR/LF (line
+        # injection) AND `:`,`,`,`%` (property/percent-escape injection) — a
+        # committed filename is attacker-controlled in a fork PR.
+        clean="$(printf %s "$s" | tr -d "\r\n:,%")"
         if (( rc == 124 )); then
           echo "::error file=$clean::suite exceeded its ${bound}s bound — see $key.log in the leg artifact"
         else
           echo "::error file=$clean::suite failed (rc=$rc) — see $key.log in the leg artifact"
         fi
       fi
-    ' _ {} \
+    ' _ {} "$SOLEUR_SUITE_LOGDIR" \
   | tee "$LOG"
 
 # READ IMMEDIATELY — PIPESTATUS is clobbered by the next command, and `$?` here is `tee`'s,
