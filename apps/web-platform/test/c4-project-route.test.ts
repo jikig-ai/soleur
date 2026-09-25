@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   mockResolveRepoMeta: vi.fn(),
   mockGithubApiGet: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  mockMirrorWarnWithDebounce: vi.fn(),
   mockLoggerError: vi.fn(),
 }));
 
@@ -46,7 +47,14 @@ vi.mock("@/server/observability", async () => {
   const actual = await vi.importActual<typeof import("@/server/observability")>(
     "@/server/observability",
   );
-  return { ...actual, reportSilentFallback: mocks.mockReportSilentFallback };
+  // `mirrorWarnWithDebounce` MUST be an explicit spy: the real one keeps a
+  // module-level debounce map (it would dedupe across tests), and the
+  // `@sentry/nextjs` mock below has no `captureMessage`.
+  return {
+    ...actual,
+    reportSilentFallback: mocks.mockReportSilentFallback,
+    mirrorWarnWithDebounce: mocks.mockMirrorWarnWithDebounce,
+  };
 });
 
 vi.mock("@/server/logger", () => ({
@@ -77,11 +85,15 @@ const REPO = "soleur";
  */
 function setupGitHub(
   files: Record<string, string>,
-  opts: { listingError?: unknown; blobErrors?: Record<string, unknown> } = {},
+  opts: {
+    listingError?: unknown;
+    blobErrors?: Record<string, unknown>;
+    dir?: string;
+  } = {},
 ) {
   const entries = Object.keys(files).map((name) => ({
     name,
-    path: `knowledge-base/${C4_DIAGRAMS_DIR}/${name}`,
+    path: `knowledge-base/${opts.dir ?? C4_DIAGRAMS_DIR}/${name}`,
     sha: `sha-${name}`,
     type: "file",
   }));
@@ -332,5 +344,158 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
     );
     expect(src).toContain('feature: "c4-project-read"');
     expect(src).toContain('op: "github-read-failed"');
+  });
+});
+
+// #8740: a committed model with elements but no views (written before the
+// server re-render pinned wasm layout, or by a plugin writer — #8861) renders
+// as "View `index` not found in the model." with nothing saying why. The route
+// explains it through the existing diagnostics channel.
+describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => {
+  const CANONICAL_COPY =
+    "This diagram has no views to draw because its saved layout is incomplete. Your diagram source is fine. To fix it, ask the Concierge to add a comment to this diagram's source, then reload the page.";
+  const OTHER_DIR_COPY =
+    "This diagram has no views to draw because its saved layout is incomplete. Your diagram source is fine. To fix it, re-run the diagram export for this folder in your repository, then reload the page.";
+  const CANONICAL_MODEL_PATH = `knowledge-base/${C4_DIAGRAMS_DIR}/model.likec4.json`;
+
+  function zeroViewModel() {
+    return JSON.stringify({ elements: { a: { id: "a" }, b: { id: "b" } }, views: {} });
+  }
+
+  it("T1: elements + empty views → one model-level diagnostic and one debounced warn", async () => {
+    setupGitHub({ "model.c4": "model {}", "model.likec4.json": zeroViewModel() });
+    const res = await callGET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.viewIds).toEqual([]);
+    expect(body.diagnostics).toEqual([
+      { message: CANONICAL_COPY, line: 0, sourceFsPath: "model.likec4.json" },
+    ]);
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledTimes(1);
+    const [err, ctx, key, errorClass] = mocks.mockMirrorWarnWithDebounce.mock.calls[0];
+    expect(err).toBeNull();
+    expect(ctx).toEqual(
+      expect.objectContaining({
+        feature: "c4-project-read",
+        op: "zero-view-model",
+        message: "c4 project read: committed model has elements but no views",
+      }),
+    );
+    expect(ctx).not.toHaveProperty("tags");
+    expect(ctx.extra).toEqual(
+      expect.objectContaining({ modelPath: CANONICAL_MODEL_PATH, elementCount: 2 }),
+    );
+    expect(key).toBe(`ws-1:${CANONICAL_MODEL_PATH}`);
+    expect(errorClass).toBe("c4-project-read:zero-view-model");
+  });
+
+  it("T2: a model with a view → no diagnostic, no warn", async () => {
+    setupGitHub({
+      "model.likec4.json": JSON.stringify({
+        elements: { a: { id: "a" } },
+        views: { index: { id: "index" } },
+      }),
+    });
+    const res = await callGET();
+    const body = await res.json();
+    expect(body.diagnostics).toEqual([]);
+    expect(mocks.mockMirrorWarnWithDebounce).not.toHaveBeenCalled();
+  });
+
+  it("T3: an empty model (no elements, no views) → no false diagnostic", async () => {
+    setupGitHub({ "model.likec4.json": JSON.stringify({ elements: {}, views: {} }) });
+    const res = await callGET();
+    const body = await res.json();
+    expect(body.diagnostics).toEqual([]);
+    expect(mocks.mockMirrorWarnWithDebounce).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["absent views", { elements: { a: { id: "a" } } }, true],
+    ["array views", { elements: { a: { id: "a" } }, views: [] }, true],
+    ["array elements", { elements: ["x"], views: {} }, false],
+    ["string elements", { elements: "xy", views: {} }, false],
+  ])("T4: %s → diagnostic=%s", async (_label, model, expectDiag) => {
+    setupGitHub({ "model.likec4.json": JSON.stringify(model) });
+    const res = await callGET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.diagnostics).toHaveLength(expectDiag ? 1 : 0);
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledTimes(expectDiag ? 1 : 0);
+  });
+
+  it("T5: outside the Concierge-writable folder → the export copy, which does not name the Concierge", async () => {
+    setupGitHub({ "model.likec4.json": zeroViewModel() }, { dir: "product/diagrams" });
+    const res = await callGET("product/diagrams");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.diagnostics).toEqual([
+      { message: OTHER_DIR_COPY, line: 0, sourceFsPath: "model.likec4.json" },
+    ]);
+    expect(body.diagnostics[0].message).not.toContain("Concierge");
+  });
+
+  it.each([
+    "%2e%2e/x",
+    "./x",
+    "a//b",
+    "a/",
+    "a%2Fb",
+    "..",
+    "a/../b",
+    "a/./b",
+    "x\u0001y",
+    "x y",
+    "a?ref=main",
+    "a#b",
+    "a\\b",
+    "/abs",
+    "a".repeat(257),
+  ])("T6: dir %j → 400 with zero GitHub calls", async (dir) => {
+    setupGitHub({ "model.likec4.json": zeroViewModel() });
+    const res = await callGET(dir);
+    expect(res.status).toBe(400);
+    expect(mocks.mockGithubApiGet).not.toHaveBeenCalled();
+  });
+
+  it.each([C4_DIAGRAMS_DIR, "product/v1.2_diagrams", "Architecture Docs/diagrams", "équipe/diagrammes"])(
+    "T6b: dir %j passes validation (spaces and non-ASCII names keep working)",
+    async (dir) => {
+      setupGitHub({ "model.likec4.json": JSON.stringify({ views: { index: {} } }) }, { dir });
+      expect((await callGET(dir)).status).toBe(200);
+    },
+  );
+
+  it("T6c: each dir segment is percent-encoded into the GitHub path, separators kept", async () => {
+    const dir = "Architecture Docs/équipe";
+    setupGitHub({ "model.likec4.json": JSON.stringify({ views: { index: {} } }) }, { dir });
+    await callGET(dir);
+    const listing = mocks.mockGithubApiGet.mock.calls
+      .map((c) => c[1] as string)
+      .find((p) => p.includes("/contents/"));
+    expect(listing).toBe(
+      `/repos/${OWNER}/${REPO}/contents/knowledge-base/Architecture%20Docs/%C3%A9quipe`,
+    );
+  });
+
+  it("T7: the debounce key is the listing's canonical path, not the raw request dir", async () => {
+    setupGitHub({ "model.likec4.json": zeroViewModel() });
+    await callGET();
+    setupGitHub({ "model.likec4.json": zeroViewModel() });
+    await callGET(C4_DIAGRAMS_DIR);
+    const keys = mocks.mockMirrorWarnWithDebounce.mock.calls.map((c) => c[2]);
+    expect(keys).toEqual([`ws-1:${CANONICAL_MODEL_PATH}`, `ws-1:${CANONICAL_MODEL_PATH}`]);
+  });
+
+  it("T8: the zero-view op slug occurs exactly once in the route source", async () => {
+    const fs = await import("node:fs");
+    const url = await import("node:url");
+    const pathMod = await import("node:path");
+    const here = pathMod.dirname(url.fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(
+      pathMod.join(here, "../app/api/kb/c4/project/route.ts"),
+      "utf8",
+    );
+    expect(src.split('op: "zero-view-model"').length - 1).toBe(1);
   });
 });

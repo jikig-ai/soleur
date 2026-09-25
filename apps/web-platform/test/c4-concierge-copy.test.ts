@@ -53,6 +53,18 @@ describe.each([
   });
 });
 
+// #8740: the page tells the user a zero-view model's "saved layout is
+// incomplete"; the Concierge must read the same state the same way and fix it
+// with a harmless `.c4` edit, never by inventing `views` blocks.
+describe("prompt addendum — zero-view model guidance (#8740)", () => {
+  it("names the state, forbids editing views, and names the edit that re-renders", () => {
+    expect(C4_PROMPT_ADDENDUM).toContain("saved layout is incomplete");
+    expect(C4_PROMPT_ADDENDUM).toContain("do not add or change `views` blocks");
+    expect(C4_PROMPT_ADDENDUM).toContain("saving the `.md` page does not re-render");
+    expect(C4_PROMPT_ADDENDUM).toContain("after the user confirms");
+  });
+});
+
 describe("the REGISTERED edit_c4_diagram tool carries exactly the pinned description", () => {
   it("buildC4ConciergeTools(...).description === C4_TOOL_DESCRIPTION", () => {
     const [t] = buildC4ConciergeTools({

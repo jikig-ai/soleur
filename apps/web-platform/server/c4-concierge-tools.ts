@@ -69,7 +69,15 @@ export const C4_PROMPT_ADDENDUM =
   "(the FULL new file contents). It commits the source directly to the " +
   "repo and then re-renders the diagram. " +
   RERENDER_OUTCOME_GUIDANCE +
-  " Do NOT paste DSL into chat for the user to apply.";
+  " Do NOT paste DSL into chat for the user to apply." +
+  // #8740: the page shows the same state as a model-level diagnostic.
+  " If the user reports a blank diagram or the page says the diagram has no " +
+  "views to draw, read `model.likec4.json` in that diagram's folder: a model " +
+  "with elements but an empty `views` means its saved layout is incomplete, " +
+  "not that the source is wrong, so do not add or change `views` blocks. " +
+  "Instead, after the user confirms, add a `//` comment line to one `.c4` " +
+  "file in that folder with `edit_c4_diagram` (saving the `.md` page does not " +
+  "re-render), then tell the user to reload the page.";
 
 type ToolTextResponse = {
   content: Array<{ type: "text"; text: string }>;
