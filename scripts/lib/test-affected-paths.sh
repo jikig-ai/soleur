@@ -555,6 +555,20 @@ AFFECTED_TESTS_SCRIPTS_VECTOR_REDELIVER_WIRING_PATHS=(
   "tests/scripts/test-vector-redeliver-wiring.sh"
 )
 
+# tests/scripts/main-duplicate-skip — the proof script is invoked by workflow
+# steps; derived edges could not reach them, so the five gated workflows are
+# declared here.
+AFFECTED_TESTS_SCRIPTS_MAIN_DUPLICATE_SKIP_PATHS=(
+  ".github/workflows/infra-validation.yml"
+  ".github/workflows/skill-security-scan-corpus.yml"
+  ".github/workflows/tenant-integration.yml"
+  ".github/workflows/validate-vector-config.yml"
+  ".github/workflows/vendor-pin-verify.yml"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/main-push-duplicate-skip.sh"
+  "tests/scripts/test-main-duplicate-skip.sh"
+)
+
 # tests/scripts/registry-delivery-change-mutation-battery — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_REGISTRY_DELIVERY_CHANGE_MUTATION_BATTERY_PATHS=(

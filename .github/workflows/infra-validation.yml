@@ -210,8 +210,16 @@ env:
 jobs:
   detect-changes:
     runs-on: ubuntu-24.04
+    # Job-level permissions REPLACE the workflow-level block for this job, so
+    # the two read scopes the duplicate-proof needs are declared explicitly
+    # here rather than widened workflow-wide (#8919).
+    permissions:
+      contents: read
+      actions: read         # reads this workflow's own runs on the PR head
+      pull-requests: read   # commits/{sha}/pulls association
     outputs:
       directories: ${{ steps.dirs.outputs.directories }}
+      pr_duplicate: ${{ steps.dup.outputs.duplicate }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -285,9 +293,31 @@ jobs:
           fi
           printf 'directories=%s\n' "$DIRS" >> "$GITHUB_OUTPUT"
 
+      # (#8919, item 5) On push: if this run would byte-identically re-run what
+      # the merged PR already proved green on the SAME tree, emit
+      # pr_duplicate=true and let every push-side work job skip. The proof is
+      # upstream: merge_commit_sha bind + tree-SHA equality + this workflow's
+      # green PR run + per-job success. EVERY ambiguity emits false — the
+      # workflow runs. PR/dispatch events emit false unconditionally (the
+      # event gate lives here, not in the script).
+      - name: Prove-or-disprove PR-run duplication (push arm only)
+        id: dup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" != "push" ]]; then
+            echo 'duplicate=false' >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          bash scripts/main-push-duplicate-skip.sh \
+            infra-validation.yml "$MERGE_SHA" \
+            validate deploy-script-tests deploy-script-tests-fixed \
+            >> "$GITHUB_OUTPUT"
+
   validate:
     needs: detect-changes
-    if: needs.detect-changes.outputs.directories != '[]'
+    if: needs.detect-changes.outputs.directories != '[]' && needs.detect-changes.outputs.pr_duplicate != 'true'
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -461,7 +491,12 @@ jobs:
         env:
           DIRS: ${{ needs.detect-changes.outputs.directories }}
           RESULT: ${{ needs.validate.result }}
+          DUP: ${{ needs.detect-changes.outputs.pr_duplicate }}
         run: |
+          if [[ "$DUP" == "true" ]]; then
+            echo "Push run is a proven duplicate of the merged PR's green run on the identical tree; skipping."
+            exit 0
+          fi
           if [[ "$DIRS" == "[]" ]]; then
             echo "No infra directories changed; nothing to validate."
             exit 0
@@ -473,6 +508,8 @@ jobs:
           echo "validate succeeded for: $DIRS"
 
   deploy-script-tests:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.pr_duplicate != 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -643,6 +680,8 @@ jobs:
   # fixture/sandbox/provenance checks. Kept serial and named — these are dozens of
   # seconds, not the tail latency the matrix exists to cut.
   deploy-script-tests-fixed:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.pr_duplicate != 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -998,8 +1037,10 @@ jobs:
   # `timeout-minutes` reads `cancelled`/`failure` identically to a superseded run —
   # the classifier below names which shape it saw instead of guessing.
   deploy-script-tests-done:
-    needs: [deploy-script-tests, deploy-script-tests-fixed]
-    if: always()
+    needs: [detect-changes, deploy-script-tests, deploy-script-tests-fixed]
+    # always() so upstream FAILURES still surface; the conjunct only drops the
+    # aggregator when the whole push run is a proven duplicate (#8919).
+    if: always() && needs.detect-changes.outputs.pr_duplicate != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -1131,7 +1172,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: detect-changes
-    if: needs.detect-changes.outputs.directories != '[]'
+    if: needs.detect-changes.outputs.directories != '[]' && needs.detect-changes.outputs.pr_duplicate != 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
@@ -1160,7 +1201,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: detect-changes
-    if: needs.detect-changes.outputs.directories != '[]'
+    if: needs.detect-changes.outputs.directories != '[]' && needs.detect-changes.outputs.pr_duplicate != 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
@@ -1432,6 +1473,7 @@ jobs:
     needs: [detect-changes, validate, deploy-script-tests-done, registry-userdata-budget, inngest-userdata-budget, infra-validate-required]
     if: |
       always() && github.event_name == 'push' &&
+      needs.detect-changes.outputs.pr_duplicate != 'true' &&
       (needs.validate.result == 'failure' ||
        needs.deploy-script-tests-done.result != 'success' ||
        needs.registry-userdata-budget.result == 'failure' ||
