@@ -34,6 +34,61 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Cheap per-PR file-list probe (~8s, no checkout) gating the five file-scoped
+  # advisory jobs below — a push that cannot touch a surface skips its guard.
+  # FAIL-OPEN: every error path emits 'true' for all surfaces (a gate may skip
+  # on PROOF, never on uncertainty). Advisory-only — the two required jobs keep
+  # no `needs: detect` edge and never read it.
+  detect:
+    name: Detect gated-guard file changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      settings_json: ${{ steps.f.outputs.settings_json }}
+      worktrees: ${{ steps.f.outputs.worktrees }}
+      webplat: ${{ steps.f.outputs.webplat }}
+      client_pii: ${{ steps.f.outputs.client_pii }}
+      sweep: ${{ steps.f.outputs.sweep }}
+    steps:
+      - name: Diff file list → per-surface flags
+        id: f
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          emit() { for v in settings_json worktrees webplat client_pii sweep; do echo "$v=$1"; done >> "$GITHUB_OUTPUT"; }
+          # Gate on exit status, not emptiness: --paginate can emit pages
+          # 1..N then fail — a truncated list is a false-skip. Failure → all-true.
+          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[].filename'); then emit true; exit 0; fi
+          if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$files" ]; then emit true; exit 0; fi
+          # Self/dependency triggers: a change to the checking machinery runs every gate.
+          if printf '%s\n' "$files" | grep -qE '^\.github/workflows/pr-quality-guards\.yml$|^\.github/scripts/'; then emit true; exit 0; fi
+          hit() { printf '%s\n' "$files" | grep -qE "$1" && echo true || echo false; }
+          { # Superset of the gate's `apps/web-platform/(server|app)/` surface — wider is safe.
+            echo "settings_json=$(hit '^\.claude/settings\.json$')"
+            echo "worktrees=$(hit '^\.claude/worktrees/')"
+            echo "webplat=$(hit '^apps/web-platform/')"
+            echo "client_pii=$(hit '^apps/web-platform/(lib|components|app)/')"
+          } >> "$GITHUB_OUTPUT"
+          # sweep-completeness fires iff enforcement-contracts.json itself or a
+          # registered sibling_set trigger changed — fetch the registry at head.
+          enc=$(gh api "repos/$GH_REPO/contents/.github/enforcement-contracts.json?ref=$HEAD_SHA" \
+            --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null \
+            | jq -r '.sibling_sets[].trigger[]' 2>/dev/null || true)
+          # Triggers are literal paths today; a future glob trigger can't be
+          # literal-escaped safely, so treat it as unresolvable → run.
+          if [ -z "$enc" ] || printf '%s\n' "$enc" | grep -qE '[*?\[\{\\\]]'; then
+            echo "sweep=true" >> "$GITHUB_OUTPUT"
+          else
+            extra=$(printf '%s\n' "$enc" | sed 's/[.[\*^$()+?{}|]/\\&/g' | paste -sd'|' -)
+            echo "sweep=$(hit "(^|/)enforcement-contracts\.json$|^(${extra})$")" >> "$GITHUB_OUTPUT"
+          fi
+
   guard-script-fixture-tests:
     name: Bash fixture tests for guard scripts
     runs-on: ubuntu-latest
@@ -44,7 +99,8 @@ jobs:
 
   settings-json-integrity:
     name: Block destructive .claude/settings.json edits
-    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
+    needs: detect
+    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.settings_json == 'true')  # PR-only quality gate; not run on merge_group (#5780)
     runs-on: ubuntu-latest
     steps:
       - name: Check for opt-out label (must be applied by non-author)
@@ -123,7 +179,8 @@ jobs:
 
   stray-worktree-marker-block:
     name: Block .claude/worktrees/ entries in diff
-    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
+    needs: detect
+    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.worktrees == 'true')  # PR-only quality gate; not run on merge_group (#5780)
     runs-on: ubuntu-latest
     steps:
       - name: Check for opt-out label (must be applied by non-author)
@@ -223,7 +280,8 @@ jobs:
 
   userid-bypass-lint:
     name: Block direct userId emissions in apps/web-platform (#3698)
-    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
+    needs: detect
+    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.webplat == 'true')  # PR-only quality gate; not run on merge_group (#5780)
     # Intentionally NO opt-out support. The pino formatters.log rename hook
     # in apps/web-platform/server/logger.ts is the load-bearing defense for
     # the single-user incident threshold per ADR-028 / PA8 §(c)(ii). Future
@@ -342,7 +400,8 @@ jobs:
 
   client-pii-grep:
     name: Block userId/email in extra of direct client Sentry.capture* (#3703)
-    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
+    needs: detect
+    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.client_pii == 'true')  # PR-only quality gate; not run on merge_group (#5780)
     # SIGNAL-QUALITY gate (NOT a security control). The L3 stripUserContextFromEvent
     # beforeSend backstop (sentry.client.config.ts, #3696/#3700) already strips PII
     # at runtime, so production has never been at risk — this surfaces the bypass in
@@ -359,7 +418,8 @@ jobs:
 
   sweep-completeness:
     name: Sibling-set sweep completeness (#5269)
-    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
+    needs: detect
+    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.sweep == 'true')  # PR-only quality gate; not run on merge_group (#5780)
     # Fails a PR that changes a sibling-set's TRIGGER file but leaves a
     # registered DEPENDENT unchanged, per .github/enforcement-contracts.json.
     # Closes the cross-file-drift class mechanically (hr-write-boundary-sentinel-

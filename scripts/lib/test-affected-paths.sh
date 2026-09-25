@@ -714,6 +714,19 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_SCRIPT_TESTS_AGGREGATOR_DIAGNOSIS_TEST_SH_PA
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/ci-path-gating.test.sh — #8897 path-gating pins; derived edges could
+# not reach its two workflow subjects; declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
+  ".github/workflows"
+  ".github/workflows/dependency-review.yml"
+  ".github/workflows/pr-quality-guards.yml"
+  ".github/scripts/check-client-pii-sentry.sh"
+  ".github/scripts/check-settings-integrity.sh"
+  ".github/scripts/check-sweep-completeness.sh"
+  "plugins/soleur/test/ci-path-gating.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/concurrent-ship.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(
