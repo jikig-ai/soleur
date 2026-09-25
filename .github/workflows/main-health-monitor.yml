@@ -118,7 +118,9 @@ jobs:
     # KILLED at 15m, so it measures the OLD CEILING, not the suite. Censored data.
     #
     # WARM vs COLD is the trap here, and it bit the first derivation. Every run on
-    # this branch executes the 92 infra suites TWICE — the branch diff touches
+    # this branch executes the infra suites TWICE (92 when this was written; the
+    # set is glob-derived since #8736 and grows — do not re-pin a count) — the
+    # branch diff touches
     # apps/web-platform/infra/, so `TEST_GROUP=all` fires the nested runner inside
     # the tests step first, and the standalone infra step then runs against an
     # already-warm workspace (~1.9x faster at -P 4). On `main` the nested run does
@@ -136,14 +138,16 @@ jobs:
     # pre-PR `main` runs at 855-875s plus the toolchain fix's added coverage.
     # The ceiling is sized on the LARGER (branch) shape so both satisfy 1.5x.
     #
-    # infra — do NOT use this branch's standalone step (warm). The cold figure
-    # comes from infra-validation.yml's deploy-script-tests legs — since #8736 the
-    # job is a K=4 matrix whose legs run the SAME glob-derived suite set through
-    # run-registered-suites.sh in parallel (per-leg ~6-7 min), so this monitor's
-    # unsharded nested run is the more conservative bound on per-suite duration.
+    # infra — do NOT use this branch's standalone step (warm). The cold figure is
+    # this monitor's own `Run infra suites` step on main: 722 s on run
+    # 32538912885 (2026-08-22, serial JOBS=1 over the then-scraped set). Since
+    # #8736 the execute set is glob-derived — the six previously underivable
+    # subdirectory suites now run here too (~13 s combined, measured locally) —
+    # and per-suite stalls are bounded by the runner's `timeout` wrapper
+    # (default 360 s), so a hung suite can no longer absorb the whole step.
     # (Deliberately not a count: the set is DERIVED by glob and grows —
     # a hardcoded number here rots silently.)
-    #   min 334s   p50 397s   p90 439s   max 459s   (mean 401.5s, sd 33.9s)
+    #   measured 722 s + ~15 s glob delta ≈ 737 s cold serial
     #
     # Rule: roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
     #       tests_step = max(30, roundup5(tests_max * 1.5))
@@ -151,8 +155,8 @@ jobs:
     #       job        = tests_step + infra_step + 5 (setup) + 10 (cancel-token margin)
     # Worked:
     #   tests 24m37s = 24.62 -> x1.5 = 36.93 -> roundup5 40 -> floor 30 -> 40
-    #   infra  7m39s =  7.65 -> x1.5 = 11.48 -> roundup5 15 -> floor 10 -> 15
-    #   job   = 40 + 15 + 5 + 10 = 70        (setup measured 39-54s)
+    #   infra 12m17s = 12.28 -> x1.5 = 18.43 -> roundup5 20 -> floor 10 -> 20
+    #   job   = 40 + 20 + 5 + 10 = 75        (setup measured 39-54s)
     # Against the `main` shape the tests ceiling is 2.08x; against the branch
     # shape 1.62x. Both clear the stated 1.5x, which is why 40 rather than 35 —
     # the earlier 35 met the policy only on the `main` shape.
@@ -178,7 +182,7 @@ jobs:
     #   gh run view <id> --json jobs   # job-level, NOT run-level
     # and note `gh run view --json jobs` reports steps[].conclusion, which
     # `continue-on-error: true` PINS TO success — the verdict is the step `outcome`.
-    timeout-minutes: 70
+    timeout-minutes: 75
 
     steps:
       # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
@@ -332,7 +336,7 @@ jobs:
       - name: Run infra suites
         id: infra
         continue-on-error: true
-        timeout-minutes: 15 # derived (COLD sequential); see the TIMEOUT BUDGET block
+        timeout-minutes: 20 # derived (COLD sequential, measured 722s + glob delta); see the TIMEOUT BUDGET block
         env:
           TEST_GROUP: infra
           # See the JOBS note on the tests step above.

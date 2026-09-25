@@ -59,8 +59,13 @@ was the objection any infra sharding had to answer *with numbers*.
 
 2. **`deploy-script-tests` is a K=4 matrix, `fail-fast: false`, one
    runner invocation per leg** carrying `SOLEUR_INFRA_SHARD=k/4`. The
-   runner executes each leg's subset at `-P min(4, nproc-2)` — bounded
-   parallelism, sized for the 4-vCPU runner it actually gets.
+   runner executes each leg's subset at `-P min(nproc,6)` — 4-wide on the
+   4-vCPU runner it actually gets. Full width is a considered choice, not
+   an oversight: #7376's measured `-P4` flakiness was the tmpfs/live-tree
+   collision class (fixed at source), and per-suite bounds + named RED +
+   `::error` bound the residual blast radius to one attributable suite on
+   one leg. `main-health-monitor` keeps `JOBS:1` because its failure mode
+   is a spurious P1 page, which is worse than a slow leg here.
 
 3. **Attribution moved from step count to verdict lines + artifacts.**
    Per-suite `PASS`/`RED` lines and `::error` annotations name the suite;
@@ -113,7 +118,7 @@ was the objection any infra sharding had to answer *with numbers*.
   cost" objection is measured, not assumed away.
 - The old step-shape contract is retired: nothing may rely on
   `run: bash <suite>.test.sh` appearing in the workflow. The gate, the
-  six self-registration assertions inside suites, and the `work` skill's
+  the self-registration assertions inside twelve suites, and the `work` skill's
   onboarding guidance were all updated in the same change.
 
 ## Alternatives considered

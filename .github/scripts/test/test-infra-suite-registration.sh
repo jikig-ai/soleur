@@ -130,6 +130,35 @@ if (( LEG_ROWS < 1 )) || ! grep -qE 'leg:[[:space:]]*\["1/[0-9]+"' <<< "$JOB_RAW
   fails=$((fails + 1))
 fi
 
+# LEG-SET TOTALITY (ADR-238 Decision 3 — totality is asserted against the declared
+# list, never assumed). A `leg:` list that drops a value (["1/4","2/4","3/4"]) or
+# duplicates one (["1/4","1/4","2/4","4/4"]) leaves a residue class executed by NO
+# leg: every declared leg goes green, the runner's zero-assignment refusal never
+# fires on a leg that was never invoked, and the aggregator sees only the rolled-up
+# success — a silent coverage shrink behind a fully green pipeline. Parse every
+# "k/N" entry: require a single shared N, distinct k values, and exactly N of them.
+LEG_LINE=$(grep -oE 'leg:[[:space:]]*\[[^]]*\]' <<< "$JOB_RAW" | head -1 || true)
+if [[ -n "$LEG_LINE" ]]; then
+  mapfile -t LEGS < <(grep -oE '"[0-9]+/[0-9]+"' <<< "$LEG_LINE" | tr -d '"')
+  LEG_N=""; LEG_BAD=0
+  declare -A LEG_SEEN=()
+  for leg in "${LEGS[@]:-}"; do
+    [[ -n "$leg" ]] || continue
+    k="${leg%%/*}"; n="${leg##*/}"
+    if [[ -z "$LEG_N" ]]; then LEG_N="$n"; elif [[ "$n" != "$LEG_N" ]]; then LEG_BAD=1; fi
+    if [[ -n "${LEG_SEEN[$k]:-}" ]]; then LEG_BAD=1; else LEG_SEEN[$k]=1; fi
+    (( k >= 1 && k <= n )) || LEG_BAD=1
+  done
+  if (( LEG_BAD == 0 )) && [[ -n "$LEG_N" ]] && (( ${#LEGS[@]} == LEG_N )) \
+     && (( ${#LEG_SEEN[@]} == LEG_N )); then
+    : # totality holds: N distinct legs tiling 1..N
+  else
+    err "the \`$JOB\` leg list does not tile 1..N (declared: ${LEGS[*]:-none}) — a"
+    err "  dropped or duplicated leg leaves part of the suite set executed by NO leg."
+    fails=$((fails + 1))
+  fi
+fi
+
 # fail-fast: false — a RED leg must not cancel its siblings; the aggregator needs
 # every leg's verdict and a cancelled sibling's suites never ran (coverage, not
 # just attribution).
@@ -180,7 +209,7 @@ SUITES=()
 while IFS= read -r f; do
   [[ -n "$f" ]] && SUITES+=("$f")
 done < <(git -C "$REPO_ROOT" ls-files \
-  "${INFRA_PREFIX}/*.test.sh" "${INFRA_PREFIX}/**/*.test.sh" | LC_ALL=C sort -u)
+  "${INFRA_PREFIX}/*.test.sh" | LC_ALL=C sort -u)
 
 # Minimum-cardinality guard: a broken enumeration yielding ZERO would pass every
 # per-suite check below while certifying nothing.
@@ -191,7 +220,34 @@ if (( ${#SUITES[@]} < 50 )); then
 fi
 
 declare -A TRACKED=()
-for rel in "${SUITES[@]}"; do TRACKED["${rel##*/}"]=1; done
+declare -A TRACKED_REL=()
+for rel in "${SUITES[@]}"; do TRACKED["${rel##*/}"]=1; TRACKED_REL["$rel"]=1; done
+
+# Manifest coherence: every row in the committed shard manifest must name a
+# DERIVED suite by its full repo-relative path, with a leg inside 1..N of the
+# matrix's own leg list. An off-set row is a balance wart the runner's hash fallback papers
+# over — fail here so drift is surfaced, not silently absorbed. A manifest whose
+# `# n=` header disagrees with the matrix N is the same drift one level up.
+MANIFEST="$REPO_ROOT/apps/web-platform/infra/suite-shard-legs.tsv"
+if [[ -f "$MANIFEST" && -n "${LEG_N:-}" && "$LEG_BAD" -eq 0 ]]; then
+  while IFS=$'\t' read -r mp mleg _; do
+    case "$mp" in "" | "#"*) continue ;; esac
+    if [[ -z "${TRACKED_REL[$mp]+x}" ]]; then
+      err "suite-shard-legs.tsv assigns '$mp', which is not a tracked infra suite"
+      err "  — a stale manifest row. Regenerate: regenerate-shard-manifest.py --group infra --write"
+      fails=$((fails + 1))
+    elif [[ ! "$mleg" =~ ^[0-9]+$ ]] || (( mleg < 1 || mleg > LEG_N )); then
+      err "suite-shard-legs.tsv assigns '$mp' to leg '$mleg', outside 1..$LEG_N —"
+      err "  a leg that does not exist. Regenerate the manifest."
+      fails=$((fails + 1))
+    fi
+  done < "$MANIFEST"
+  if ! grep -qE "^# n=${LEG_N}\$" "$MANIFEST"; then
+    err "suite-shard-legs.tsv's '# n=' header does not match the matrix's leg"
+    err "  count ($LEG_N) — manifest and matrix have drifted."
+    fails=$((fails + 1))
+  fi
+fi
 
 for base in "${!PRIVILEGED[@]}"; do
   if [[ -z "${TRACKED[$base]+x}" ]]; then
@@ -254,6 +310,24 @@ if ! grep -qE 'if: always\(\)' <<< "$DONE_RAW"; then
   err "\`$DONE_JOB\` lacks \`if: always()\` — default needs: semantics render a"
   err "  cancelled/failed upstream as \`skipped\`, which some branch protection"
   err "  treats as success (fail-open)."
+  fails=$((fails + 1))
+fi
+
+# The consumer side: notify-main-failure must read the AGGREGATE's result, not the
+# matrix job's — a cancelled leg makes the matrix `cancelled`, and an alert
+# condition pinned to the matrix's own result string silently restores the #8735
+# blind spot (cancelled != failure under a `== "failure"` test).
+NOTIFY_RAW=$(awk -v j="  notify-main-failure:" '
+  $0 == j {injob=1; print; next}
+  injob && /^  [a-zA-Z0-9_-]+:/ {exit}
+  injob {print}
+' "$WF")
+if [[ -z "$NOTIFY_RAW" ]]; then
+  err "could not slice the \`notify-main-failure\` job out of $WF_REL"
+  fails=$((fails + 1))
+elif ! grep -qE "needs\.deploy-script-tests-done\.result" <<< "$NOTIFY_RAW"; then
+  err "\`notify-main-failure\` does not read \`needs.$DONE_JOB.result\` — a"
+  err "  cancelled leg must reach the push-failure alert path via the aggregator."
   fails=$((fails + 1))
 fi
 

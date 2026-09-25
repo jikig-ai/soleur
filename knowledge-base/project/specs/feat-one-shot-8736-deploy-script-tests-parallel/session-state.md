@@ -19,3 +19,22 @@
 ### Components Invoked
 - `soleur:plan`, `soleur:deepen-plan` (inline SKILL.md execution)
 - `lint-guard-contract.py`, `markdownlint-cli2`, `gh api` step-timing pulls, `git ls-files`/grep sweeps
+
+## Phase: work complete, review in flight (2026-09-24 late)
+
+Commits on the branch:
+- `0ec8d0f7f4` fix(8744): bounded apt retries + diagnostics (ownership + runcmd-rehearsal)
+- `87127d095c` feat(8736): runner glob-derives, SOLEUR_INFRA_SHARD, per-suite timeout+timings
+- `b6298817f7` feat(8736): workflow restructure — K=4 matrix + fixed job + done aggregator;
+  gate rewritten to connection contract (17/17 mutation arms); 12 suite self-checks
+  re-pointed; manifest seeded 143 rows (legs 369-370s); ADR-250 authored; monitor + skill refs
+- `3f2cd7dd5a` feat(8736): followthrough soak probe + stub-gh test (6/6)
+
+All local verification green: run-registered-suites.test.sh 82/82 (19/19 mutants),
+registration gate + mutation battery, lint-orphan 543/543 covered 0 orphans,
+actionlint clean, all 11 re-pointed suites pass standalone, apt fix verified in docker.
+
+Review: classified `code`, design-risk YES → design-validity pass spawned
+(simplicity + architecture + performance seats), then full panel minus deduped lenses.
+Remaining at ship: followthrough directive + `follow-through` label on #8736,
+#8736 comment with measured per-leg fixed cost + chosen K.

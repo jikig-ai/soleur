@@ -252,12 +252,8 @@ SOLEUR_INFRA_DIR="${SOLEUR_INFRA_DIR:-apps/web-platform/infra}"
 # `.test.sh` nobody committed does not silently register, and the glob result is
 # exactly what a fresh CI checkout will contain. The git pathspec `*` crosses `/`,
 # so the single pattern returns subdirectory suites too. A caller-supplied fixture
-# dir OUTSIDE the tree is invisible to the index and takes the filesystem arm;
-# SOLEUR_INFRA_GLOB (a file of paths, one per line) is the explicit override when a
-# test must control the candidate list byte-for-byte.
-if [[ -n "${SOLEUR_INFRA_GLOB:-}" ]]; then
-  mapfile -t ALL_SUITES < "$SOLEUR_INFRA_GLOB"
-elif [[ "$SOLEUR_INFRA_DIR" == /* && "$SOLEUR_INFRA_DIR" != "$ROOT/"* ]]; then
+# dir OUTSIDE the tree is invisible to the index and takes the filesystem arm.
+if [[ "$SOLEUR_INFRA_DIR" == /* && "$SOLEUR_INFRA_DIR" != "$ROOT/"* ]]; then
   mapfile -t ALL_SUITES < <(find "$SOLEUR_INFRA_DIR" -type f -name '*.test.sh' | LC_ALL=C sort -u)
 else
   mapfile -t ALL_SUITES < <(git ls-files "${SOLEUR_INFRA_DIR#"$ROOT"/}/*.test.sh" | LC_ALL=C sort -u)
@@ -457,8 +453,11 @@ fi
 
 # The carriers are consumed above — unset them so a suite that spawns a nested
 # runner (run-registered-suites.test.sh re-executes this file) never inherits a
-# partition it did not ask for (the #7902 lesson on SCRIPTS_SHARD).
-unset SOLEUR_INFRA_SHARD SOLEUR_INFRA_MANIFEST
+# partition it did not ask for (the #7902 lesson on SCRIPTS_SHARD). TIMINGS is
+# captured first: this process still writes the feed at the end, but a nested
+# runner must not scribble on the caller's artifact path mid-run.
+_TIMINGS_OUT="${SOLEUR_INFRA_TIMINGS:-}"
+unset SOLEUR_INFRA_SHARD SOLEUR_INFRA_MANIFEST SOLEUR_INFRA_TIMINGS
 
 # Per-suite bound. The monolithic job's step-level `timeout-minutes` convention
 # becomes the runner's responsibility in the sharded shape — a suite that stalls
@@ -498,6 +497,14 @@ _SUITE_BOUNDS=(
   "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
   "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
   "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
+  # These two carried no step-level bound in the serial job — the 35-min job
+  # ceiling was their only bound. They are the 2nd/3rd-heaviest measured suites
+  # (205 s / 197 s SERIAL, run 36037220776) and now run under -P4 contention,
+  # where the #8688 incident measured docker-adjacent steps at 2.5-3x green on
+  # degraded-runner days. 2.5x puts both over the 360 s default; pin them at
+  # ~2.5x serial so a slow day renders as their own RED, not a leg timeout.
+  "apps/web-platform/infra/infra-config-repush-mutation.test.sh=540"
+  "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh=540"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT
@@ -959,7 +966,7 @@ emit_unaccounted_names() {
 # privileged set get explicit `skip=` rows so the feed names the gap rather than
 # omitting it; the generator's skip=/FAIL exclusions drop them from the balance.
 # BEFORE the logdir reap below — the .trow files live under it.
-if [[ -n "${SOLEUR_INFRA_TIMINGS:-}" ]]; then
+if [[ -n "${_TIMINGS_OUT:-}" ]]; then
   {
     for _t in "$SOLEUR_SUITE_LOGDIR"/*.trow; do
       [[ -e "$_t" ]] || continue
@@ -971,8 +978,8 @@ if [[ -n "${SOLEUR_INFRA_TIMINGS:-}" ]]; then
     if (( ${#PRIV_SUITES[@]} > 0 )); then
       for _s in "${PRIV_SUITES[@]}"; do printf '%s\t0\tskip=privileged\n' "$_s"; done
     fi
-  } > "${SOLEUR_INFRA_TIMINGS}" || \
-    echo "WARNING: could not write timings feed to ${SOLEUR_INFRA_TIMINGS}" >&2
+  } > "${_TIMINGS_OUT}" || \
+    echo "WARNING: could not write timings feed to ${_TIMINGS_OUT}" >&2
 fi
 
 if (( RED == 0 && ${#UNACCOUNTED[@]} == 0 )); then

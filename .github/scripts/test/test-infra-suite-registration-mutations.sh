@@ -62,7 +62,7 @@ cp "$REPO_ROOT/$RUNNER_REL" "$SB/runner.pristine" || setup_die "cp runner pristi
 cp "$REPO_ROOT"/.github/workflows/*.yml "$SB/.github/workflows/" || setup_die "cp workflows"
 
 mapfile -t REAL_SUITES < <(git -C "$REPO_ROOT" ls-files \
-  "${INFRA_PREFIX}/*.test.sh" "${INFRA_PREFIX}/**/*.test.sh" | LC_ALL=C sort -u)
+  "${INFRA_PREFIX}/*.test.sh" | LC_ALL=C sort -u)
 (( ${#REAL_SUITES[@]} >= 50 )) || setup_die "only ${#REAL_SUITES[@]} real suites enumerated"
 
 # The gate also enumerates apps/web-platform/test/infra/*.test.sh (Arm 3b: those
@@ -284,10 +284,36 @@ fi
 rm -f "$SB/$NEWTI"
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add after M15"
 
+# M16 -- drop a leg from the matrix list. Every remaining leg still greens, but
+# the dropped residue class is executed by NO leg — silent coverage shrink.
+# The leg-totality arm (ADR-238 Decision 3) must catch it.
+sed -i 's/leg: \["1\/4", "2\/4", "3\/4", "4\/4"\]/leg: ["1\/4", "2\/4", "3\/4"]/' "$SB/$WF_REL"
+rc=$(run_gate)
+restore_wf
+if [[ "$rc" == "0" ]]; then
+  bad "M16 drop-a-leg: gate stayed GREEN (a residue class runs nowhere)"
+elif grep -qF "does not tile 1..N" "$SB/out.log"; then
+  ok "M16 drop-a-leg: rc=$rc and message names the totality gap"
+else
+  bad "M16 drop-a-leg: rc=$rc but expected message missing: $(tail -3 "$SB/out.log")"
+fi
+
+# M17 -- duplicate a leg: ["1/4","1/4","2/4","4/4"] still tiles nothing for k=3.
+sed -i 's/leg: \["1\/4", "2\/4", "3\/4", "4\/4"\]/leg: ["1\/4", "1\/4", "2\/4", "4\/4"]/' "$SB/$WF_REL"
+rc=$(run_gate)
+restore_wf
+if [[ "$rc" == "0" ]]; then
+  bad "M17 duplicate-leg: gate stayed GREEN (k=3 runs nowhere, k=1 runs twice)"
+elif grep -qF "does not tile 1..N" "$SB/out.log"; then
+  ok "M17 duplicate-leg: rc=$rc and message names the totality gap"
+else
+  bad "M17 duplicate-leg: rc=$rc but expected message missing: $(tail -3 "$SB/out.log")"
+fi
+
 # ---------------------------------------------------------------------------
 # Assertion floor.
 # ---------------------------------------------------------------------------
-MIN_ASSERTS=17
+MIN_ASSERTS=19
 if (( asserts < MIN_ASSERTS )); then
   echo "[FAIL] assertion floor: only $asserts assertion(s) ran, expected >= $MIN_ASSERTS." >&2
   echo "       Rows were removed or short-circuited. Lower the floor deliberately, with a reason." >&2

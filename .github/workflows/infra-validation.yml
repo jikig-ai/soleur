@@ -454,19 +454,19 @@ jobs:
 
   deploy-script-tests:
     runs-on: ubuntu-24.04
-    # `actions: read` is needed by the rung-2 evidence freshness step, which lives in
-    # deploy-script-tests-fixed now — the grant stays here for parity (both jobs carry the
-    # same minimum token surface; see the fixed job for the consuming step).
     permissions:
       contents: read
-      actions: read
     # SHARDED, K=4 (#8736). This job used to run ~146 `run: bash <suite>.test.sh` steps
     # SERIALLY — 1170-1462 s measured, with the ceiling re-derived upward six times in ten
     # weeks because every landed suite added itself serially (8 -> 12 -> 14 -> 15 -> 20 ->
     # 27 -> 35 min). Each matrix leg now runs its quarter of the derived set through
     # apps/web-platform/infra/run-registered-suites.sh, which parallelizes at -P
-    # min(4, nproc-2) and prints per-suite PASS/RED + ::error annotations — attribution is
-    # per-suite, per-leg, never anonymous.
+    # min(nproc,6) = 4 on this runner and prints per-suite PASS/RED + ::error
+    # annotations — attribution is per-suite, per-leg, never anonymous. Full width
+    # is deliberate here: #7376's -P4 flake was the tmpfs/live-tree collision class
+    # (fixed at source; per-suite bounds + named RED bound what remains), and
+    # main-health-monitor keeps JOBS:1 because a spurious P1 page is a worse
+    # failure there than a slow leg is here.
     #
     # REGISTRATION IS NOW THE FILESYSTEM: presence under apps/web-platform/infra/**.test.sh
     # IS registration (ADR-250). The runner derives its execute set by `git ls-files` glob —
@@ -479,14 +479,17 @@ jobs:
     # needed for attribution (mirrors ci.yml's test-scripts matrix).
     #
     # timeout-minutes: measured on this branch before shipping — worst leg ~6.7 min
-    # (403 s suite time + ~60 s fixed), K=4 chosen because K=2 projected ~12.6 min and
-    # K=8 buys ~90 s for +3 min of duplicated fixed cost (ADR-238's objection, measured
-    # at ~60 s per leg: checkout + terraform + cloud-init + nftables + docker assert).
+    # (403 s total = 343 s serial-suite-sum bound + ~60 s fixed), K=4 chosen because
+    # K=2 projected ~12.4 min and K=8 buys ~2.3 min for +4 min of duplicated fixed
+    # cost (ADR-238's objection, measured at ~60 s per leg: checkout + terraform +
+    # cloud-init + nftables + docker assert). The 403 s is the SERIAL bound on a
+    # leg's suite sum — at -P4 the realized wall clock lands lower.
     # 15 min = ~2.2x the measured worst leg — the same convention the old 1.4x serial
     # ceiling used, held against a MEASURED leg rather than a projected whole.
     # Per-suite stalls are bounded INSIDE the leg by the runner's `timeout` wrapper
-    # (default 360 s; the seven suites that carried step-level `timeout-minutes` keep
-    # them as overrides in the runner's bound map).
+    # (default 360 s; the nine override entries in the runner's bound map carry the
+    # step-level `timeout-minutes` forward plus headroom for the two ~200 s suites
+    # that previously had no bound at all).
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -494,40 +497,38 @@ jobs:
         leg: ["1/4", "2/4", "3/4", "4/4"]
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
-      # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
-      # pin against the latest published tag. Without tags the guard self-skips
-      # (visible SKIP, never false-green). detect-changes already uses
-      # fetch-depth: 0 as precedent.
+      # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675 — a glob suite,
+      # executed on this leg by the runner step) can compare the pin against the
+      # latest published tag. Without tags the guard self-skips (visible SKIP,
+      # never false-green). detect-changes already uses fetch-depth: 0 as precedent.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      # #6178: the cloud-init-inngest-bootstrap drift-guard (below) includes an AC7
-      # terraform-render leg — the behavioral authority for the web_colocate_inngest gate
-      # (only a real `terraform templatefile` render exercises the load-bearing `~}`
-      # whitespace-strip). Without terraform on PATH the leg SKIPs; this step makes it
-      # execute (a broken gate then reds this job's log). NOTE: deploy-script-tests is an
-      # advisory job (not in ruleset-ci-required.tf) — this is a visible-red signal, not a
-      # merge-blocking gate. terraform_wrapper: false keeps `terraform console` stdout
-      # byte-clean so the render leg's heredoc-strip (render_yaml_ok, which depends on the
-      # last output line being exactly `EOT`) is not corrupted by the default log wrapper.
-      # terraform_version pinned (#6454): this step was unpinned and floated to latest
-      # while every other setup-terraform here pins env.TERRAFORM_VERSION. The template
-      # fixtures below assert on `terraform console`'s encoding behaviour, so a silent
-      # major bump would red them for a non-reason.
+      # #6178: the cloud-init-inngest-bootstrap drift-guard (a glob suite on this
+      # leg) includes an AC7 terraform-render leg — the behavioral authority for
+      # the web_colocate_inngest gate (only a real `terraform templatefile` render
+      # exercises the load-bearing `~}` whitespace-strip). Without terraform on
+      # PATH the leg SKIPs; this step makes it execute (a broken gate then reds
+      # this job's log). NOTE: deploy-script-tests is an advisory job (not in
+      # ruleset-ci-required.tf) — this is a visible-red signal, not a
+      # merge-blocking gate. terraform_wrapper: false keeps `terraform console`
+      # stdout byte-clean so the render leg's heredoc-strip (render_yaml_ok, which
+      # depends on the last output line being exactly `EOT`) is not corrupted by
+      # the default log wrapper. terraform_version pinned (#6454): this step was
+      # unpinned and floated to latest while every other setup-terraform here pins
+      # env.TERRAFORM_VERSION; leg suites asserting on `terraform console`'s
+      # encoding behaviour would red for a non-reason on a silent major bump.
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      # cloud-init here serves TWO consumers in this job, both of which SKIP or fail
-      # rather than false-green without it:
-      #
-      #  1. (#6446) the render leg in cloud-init-inngest-bootstrap.test.sh runs `cloud-init
-      #     schema` on the RENDERED document. Without the binary the leg SKIPs visibly
-      #     rather than false-greening; this step makes it execute.
-      #  2. (#6454) the validate-infra-templates.sh fixture suite below.
+      # cloud-init serves the glob suites on the leg that SKIP rather than
+      # false-green without it — #6446's render leg in
+      # cloud-init-inngest-bootstrap.test.sh runs `cloud-init schema` on the
+      # RENDERED document, and the zot/cloud-init container legs need it too.
       #
       # Neither replaces the `validate` job's raw-source `Validate cloud-init schema` step —
       # that step is KEPT and directive-stripped (cited by step name, not line number: this
@@ -537,10 +538,10 @@ jobs:
       # kept, an operator call — re-affirmed when #6454 landed the render-then-validate
       # gate. The reasoning and the exit condition for dropping the stripped step live on
       # the step itself.
-      - name: Install cloud-init (render-leg schema check + infra-template fixtures)
+      - name: Install cloud-init (render-leg schema check + container-leg consumers)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          sudo apt-get update -qq -o Acquire::Retries=5
+          sudo apt-get install -y -qq -o Acquire::Retries=5 cloud-init 2>&1 | tail -1
           cloud-init --version
 
       # (#7749) ssl-full-mitigation.test.sh guards the ONE Cloudflare config rule
@@ -555,27 +556,17 @@ jobs:
       # one alike, so it cannot tell a syntax error from its own lack of rights. The suite proves
       # the checker discriminates before trusting it, and skips loudly where it cannot — so this
       # step installs nftables to make that proof possible. Without the install the suite still
-      # runs (run-registered-suites.sh auto-discovers it) but only reaches its extraction and
+      # runs (glob-derived onto a leg) but only reaches its extraction and
       # non-vacuity arms.
-      # The install is a SEPARATE step on purpose. `test-infra-suite-registration.sh` requires
-      # every infra suite to be invoked as a single-line `run: bash <path>` — a multi-line
-      # `run: |` block both fails that gate and DE-REGISTERS the suite from
-      # run-registered-suites.sh, which derives single-line only. Measured here: the first draft
-      # folded the apt-get into the same step, and the suite silently vanished from the local
-      # runner's roster (112 recorded of 121 on disk) while CI would still have run it.
       - name: Install nftables (for the git-data ruleset syntax gate, #7772)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables
+        run: sudo apt-get update -qq -o Acquire::Retries=5 && sudo apt-get install -y -qq -o Acquire::Retries=5 nftables
 
-      # The plugin-seed suite is the ONLY one of the seven needing a real docker daemon, and it
-      # self-skips when docker is absent — which on this job would be a silent SKIP of the only
-      # thing it asserts. This step is the fail-closed half: if the daemon is gone, the job reds
-      # HERE with an unambiguous cause instead of the suite passing vacuously.
-      #
-      # It is a SEPARATE step on purpose. Folding `docker info` into the suite's own step would
-      # make that step a multi-line `run: |`, which the local runner's derivation regex cannot
-      # match — silently re-orphaning the suite from the gate this PR is widening. Keeping the
-      # suite at a single-line `run: bash` also leaves its local docker-less skip intact.
-      - name: Assert docker is available (cloud-init-plugin-seed needs a real daemon)
+      # Many glob-derived suites on the leg consume a real docker daemon (the git-data
+      # fixtures, the zot/cloud-init container legs) and self-skip when it is absent —
+      # which on a leg would be a silent SKIP of the only thing they assert. This step is
+      # the fail-closed half: if the daemon is gone the leg reds HERE with an unambiguous
+      # cause instead of a green run whose docker suites all skipped.
+      - name: Assert docker is available (leg suites need a real daemon)
         run: docker info >/dev/null
 
       - name: Run registered infra suites — leg ${{ matrix.leg }}
@@ -627,54 +618,31 @@ jobs:
       actions: read
     timeout-minutes: 15
     steps:
-      # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
-      # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
-      # pin against the latest published tag. Without tags the guard self-skips
-      # (visible SKIP, never false-green). detect-changes already uses
-      # fetch-depth: 0 as precedent.
+      # fetch-depth: 0 is needed by the provenance/freshness guards below, which
+      # resolve merge-base ranges on the real history. fetch-tags is kept for
+      # parity with the matrix job — no step here consumes tags today.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      # #6178: the cloud-init-inngest-bootstrap drift-guard (below) includes an AC7
-      # terraform-render leg — the behavioral authority for the web_colocate_inngest gate
-      # (only a real `terraform templatefile` render exercises the load-bearing `~}`
-      # whitespace-strip). Without terraform on PATH the leg SKIPs; this step makes it
-      # execute (a broken gate then reds this job's log). NOTE: deploy-script-tests is an
-      # advisory job (not in ruleset-ci-required.tf) — this is a visible-red signal, not a
-      # merge-blocking gate. terraform_wrapper: false keeps `terraform console` stdout
-      # byte-clean so the render leg's heredoc-strip (render_yaml_ok, which depends on the
-      # last output line being exactly `EOT`) is not corrupted by the default log wrapper.
-      # terraform_version pinned (#6454): this step was unpinned and floated to latest
-      # while every other setup-terraform here pins env.TERRAFORM_VERSION. The template
-      # fixtures below assert on `terraform console`'s encoding behaviour, so a silent
-      # major bump would red them for a non-reason.
+      # terraform's consumer in THIS job is fixtures-validate-infra-templates.sh
+      # below (#6454) — it asserts on `terraform console`'s encoding behaviour, so
+      # terraform_wrapper: false keeps stdout byte-clean and the pinned
+      # terraform_version keeps a silent major bump from redboxing it for a
+      # non-reason. (The cloud-init-inngest-bootstrap drift-guard this preamble
+      # used to also serve is a glob suite — it runs on the matrix legs now.)
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      # cloud-init here serves TWO consumers in this job, both of which SKIP or fail
-      # rather than false-green without it:
-      #
-      #  1. (#6446) the render leg in cloud-init-inngest-bootstrap.test.sh runs `cloud-init
-      #     schema` on the RENDERED document. Without the binary the leg SKIPs visibly
-      #     rather than false-greening; this step makes it execute.
-      #  2. (#6454) the validate-infra-templates.sh fixture suite below.
-      #
-      # Neither replaces the `validate` job's raw-source `Validate cloud-init schema` step —
-      # that step is KEPT and directive-stripped (cited by step name, not line number: this
-      # PR's own +lines shift it, and a bare line reference is self-invalidating). An earlier
-      # draft of #6446 deleted it; #6426 landed a different fix on main mid-pipeline (keep
-      # the step, strip the col-0 `%{` lines, schema-check the remainder) and both were
-      # kept, an operator call — re-affirmed when #6454 landed the render-then-validate
-      # gate. The reasoning and the exit condition for dropping the stripped step live on
-      # the step itself.
-      - name: Install cloud-init (render-leg schema check + infra-template fixtures)
+      # cloud-init's consumer in THIS job is the same fixtures suite (#6454); the
+      # leg-side consumers live in the matrix job's preamble.
+      - name: Install cloud-init (infra-template fixtures)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          sudo apt-get update -qq -o Acquire::Retries=5
+          sudo apt-get install -y -qq -o Acquire::Retries=5 cloud-init 2>&1 | tail -1
           cloud-init --version
 
       # #6454. Fixture suite for .github/scripts/validate-infra-templates.sh. It lives
@@ -723,16 +691,10 @@ jobs:
       - name: Run Anthropic-spend alerts drift guard (#8611)
         run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
 
-      # The plugin-seed suite is the ONLY one of the seven needing a real docker daemon, and it
-      # self-skips when docker is absent — which on this job would be a silent SKIP of the only
-      # thing it asserts. This step is the fail-closed half: if the daemon is gone, the job reds
-      # HERE with an unambiguous cause instead of the suite passing vacuously.
-      #
-      # It is a SEPARATE step on purpose. Folding `docker info` into the suite's own step would
-      # make that step a multi-line `run: |`, which the local runner's derivation regex cannot
-      # match — silently re-orphaning the suite from the gate this PR is widening. Keeping the
-      # suite at a single-line `run: bash` also leaves its local docker-less skip intact.
-      - name: Assert docker is available (cloud-init-plugin-seed needs a real daemon)
+      # sandbox-canary-regression (below) is the fixed job's docker consumer — it needs a
+      # real daemon and would fail obscurely without one. This assert reds the job HERE
+      # with an unambiguous cause instead.
+      - name: Assert docker is available (sandbox-canary-regression needs a real daemon)
         run: docker info >/dev/null
 
       # REGISTRATION IS NOT ENVIRONMENT. The loopback suite below is the only workspaces-luks test
@@ -751,8 +713,8 @@ jobs:
       # string-only gate certified it green).
       - name: Run /workspaces LUKS staging-target loopback evidence (#6588 real mkfs + fail-closed mount + source-is-mapper)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cryptsetup-bin
+          sudo apt-get update -qq -o Acquire::Retries=5
+          sudo apt-get install -y -qq -o Acquire::Retries=5 cryptsetup-bin
           sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh
 
       # (#7695) The inngest Redis AOF LUKS apparatus. TWO tiers in one suite: a structural tier
@@ -779,7 +741,7 @@ jobs:
       # sudo here so the privilege requirement is explicit at the call site.
       - name: Run inngest Redis AOF LUKS apparatus evidence (#7695 five blkid arms + boot-2 reopen + mount guard)
         run: |
-          sudo apt-get install -y -qq cryptsetup-bin
+          sudo apt-get install -y -qq -o Acquire::Retries=5 cryptsetup-bin
           sudo bash apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
 
       # (#5274 Phase 3, ADR-239 amendment 2026-09-24) The git-data plaintext count reads the
@@ -793,7 +755,7 @@ jobs:
       - name: Run git-data plaintext snapshot loopback evidence (#5274 dirty-journal forward fix)
         timeout-minutes: 10
         run: |
-          sudo apt-get install -y -qq dmsetup e2fsprogs
+          sudo apt-get install -y -qq -o Acquire::Retries=5 dmsetup e2fsprogs
           sudo bash apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh
 
       # #6578. The probe refuses to emit a verdict on a host whose grep does not

@@ -73,14 +73,13 @@ INFRA_RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
 # Leaving a stale exclusion behind would re-hide the next regression in the
 # very suite that was just repaired.
 #
-# CROSS-CHECKED against the other exclusion list over an overlapping domain,
-# .github/scripts/test/test-infra-suite-registration.sh's EXCLUSIONS (#7402 step 8). That list
-# carries exactly one entry, workspaces-luks-loopback.test.sh, excluded from
-# run-registered-suites.sh's single-line DERIVATION because it needs root and exits 2
-# unprivileged (#7076). That is a statement about local EXECUTION, not about registration:
-# this file asks only "does anything run it?", surface 6 answers yes, and it is therefore
-# COVERED here and must not be excluded. The two lists are disjoint today and one being empty
-# is what keeps them from disagreeing.
+# CROSS-CHECKED historically against the registration gate's old EXCLUSIONS array
+# (#7402 step 8). That array is gone: since #8736 the runner's PRIVILEGED_WHY map
+# is the only exclusion list over this domain — the three root-requiring loopback
+# suites are derived-but-not-executed (the surface-3/--enumerate arm already
+# excludes them) and covered by surface 6's explicit `sudo bash` steps. A
+# privileged pin here would still be wrong for the same reason: this file asks
+# "does anything run it?", and the sudo surface answers yes.
 EXCLUSIONS=()
 
 fails=0

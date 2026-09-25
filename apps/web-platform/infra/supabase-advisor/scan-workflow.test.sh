@@ -12,10 +12,9 @@
 # subject matter, so it does not subsume this file. The earlier wording here, "actionlint
 # runs in ZERO CI workflows (it is a local-only tool here)", is no longer true.)
 #
-# It is wired into .github/workflows/infra-validation.yml as an EXPLICIT step.
-# That workflow hand-enumerates ~50 `run: bash ...test.sh` steps and has no
-# glob/find runner — a new .test.sh is picked up by NOTHING. An unwired guard
-# passes locally and gates nothing on every PR: present, and doing nothing.
+# It reaches CI through the deploy-script-tests matrix legs — presence under
+# apps/web-platform/infra/ IS registration since #8736 (ADR-250), so no explicit
+# step is needed; the checks below pin the runner connection instead.
 # That is the same defect shape this whole gate exists to catch, which is why
 # the wiring is asserted by AC9b rather than assumed.
 #
