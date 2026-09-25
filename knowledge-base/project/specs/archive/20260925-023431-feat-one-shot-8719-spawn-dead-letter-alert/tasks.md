@@ -54,9 +54,9 @@ Plan: `knowledge-base/project/plans/2026-09-25-feat-agent-on-spawn-dead-letter-s
 
 ## Phase 4: Ship and verify
 
-- [ ] 4.1 PR body first line: merging applies the rule (`apply-sentry-infra.yml`) and deploys the
+- [x] 4.1 PR body first line: merging applies the rule (`apply-sentry-infra.yml`) and deploys the
   emitter (`web-platform-release.yml`); `Closes #8719`; render `decision-challenges.md` DC-1/DC-2
-- [ ] 4.2 Comment on #8629 that `server/spawn-dead-letter.ts` joins `server/anthropic-credit.ts` as a
+- [x] 4.2 Comment on #8629 that `server/spawn-dead-letter.ts` joins `server/anthropic-credit.ts` as a
   message-path workaround to revert when the fleet-wide fix lands
 - [x] 4.3 ~~File a tracking issue~~ Fixed inline instead (one line): the `persist-failure` warn was
   the only other handler log line carrying `founderId`, and it goes to the Inngest ctx logger (not
