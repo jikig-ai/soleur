@@ -167,7 +167,7 @@ fi
 # --- The matrix leg list, read from ci.yml ---------------------------------------------------
 #
 # Read as VALUES, not as a count. Mutation row 5 is a matrix listing one leg short of
-# ["1/6".."6/6"] — five legs whose values still say /6 — where leg 6's suites run nowhere and
+# ["1/7".."7/7"] — six legs whose values still say /7 — where leg 7's suites run nowhere and
 # all surviving legs are green. A count-based read cannot see that; the value list can.
 awk '
   /^  test-scripts:$/ { inj=1; next }
