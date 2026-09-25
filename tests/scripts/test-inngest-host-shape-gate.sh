@@ -3,10 +3,10 @@
 # .github/workflows/apply-web-platform-infra.yml, #6894 — ADR-142 Guard 3).
 #
 # The gate grades every resource_changes entry against a per-address permitted-actions table over
-# the job's 17 -target= addresses. Creates are PERMITTED, never REQUIRED.
+# this job's -target addresses. Creates are PERMITTED, never REQUIRED.
 #
 # ONE CASE PER PREDICATE, AND ONE PER FORBIDDEN CELL of the permitted table. Every fixture starts
-# from the REALISTIC base — all 17 addresses present as ["no-op"] (untargeted-but-present is the
+# from the REALISTIC base — every -target address present as ["no-op"] (untargeted-but-present is the
 # live shape) — and changes ONE thing, and every RED asserts the gate's `reason=<token>` rather than
 # merely rc. Must-PASS rows are counted from the file (H2), so a gate stuck at "reject everything"
 # cannot hide behind a RED-only battery.
@@ -126,7 +126,7 @@ if ! gate_harness_selftest; then fails=$((fails + 1)); fi
 
 # ── MUST-PASS ─────────────────────────────────────────────────────────────────────
 build
-check "PASS: all 17 addresses no-op (no create is ever required)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
+check "PASS: every -target address no-op (no create is ever required)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
 all_of '["create"]'
 check "PASS: full from-scratch build (every address create, passphrase pair absent)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
 build 'doppler_secret.inngest_betterstack_logs_token=["update"]'
@@ -184,9 +184,7 @@ red network_touched 'hcloud_server_network.inngest=["forget"]'
 # firewall: no-op | create (an update is an ingress change on a no-inbound host)
 red firewall_touched 'hcloud_firewall.inngest=["update"]'
 red firewall_touched 'hcloud_firewall.inngest=["delete"]'
-# The attachment left the allow-set (#8754: the binding is hcloud_server.inngest.firewall_ids), so
-# any action on it is still refused, now by the global predicates. The update reds out_of_scope;
-# the forget reds forget_present, which precedes out_of_scope in the gate's `order=(…)` array.
+# The attachment left the allow-set (#8754): any action on it is refused by the global predicates.
 red out_of_scope 'hcloud_firewall_attachment.inngest=["update"]'
 red forget_present 'hcloud_firewall_attachment.inngest=["forget"]'
 # generated secrets: no-op | create — a regeneration rotates the host's credentials

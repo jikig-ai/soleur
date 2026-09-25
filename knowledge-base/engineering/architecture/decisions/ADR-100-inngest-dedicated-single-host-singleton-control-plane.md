@@ -1595,39 +1595,52 @@ are closed or dropped by the host itself, not by Hetzner. Host-local nftables an
 boundary on `/api/inngest` were unaffected, but the public-interface control this ADR records
 (Decision, SEC-H1/H2) was absent for the host's whole life.
 
-**The Apply-path constraint bullet (recorded #6197) is amended.** It left the attachment out of
-the `inngest-host-replace` target set on the premise that "server_ids does not change; the next
-full/drift apply reconciles it". That premise had no actor. The drift check only plans, the
-per-merge apply never targeted the attachment, and no other workflow applies it. So every replace
-left the attachment pointing at the destroyed server, until #8754 found it. The bullet's other
-statements (the additive `inngest-host` dispatch cannot replace the host; the scoped
-`inngest-host-replace` dispatch does, and preserves the AOF volume) stand.
+**The premise that kept the attachment out of the replace is withdrawn.** It was not in the
+Apply-path constraint bullet (recorded #6197), which never mentions the attachment. It was in two
+code comments. The old `inngest-host.tf` comment on the attachment said the new host "boots with NO
+hcloud firewall attached until the next full/drift apply reconciles server_ids". The
+`inngest-host-replace-gate.sh` header said `hcloud_firewall_attachment.*` "(server_ids,
+non-ForceNew) does NOT change, so it is DELIBERATELY absent from the allow-set". No actor ever did
+that reconcile: the drift check only plans, the per-merge apply never targeted the attachment, and no
+other workflow applies it. The gap was not new. The 2026-07-20 plan
+(`knowledge-base/project/plans/2026-07-20-feat-inngest-liveness-marker-discriminators-and-registry-probe-op-plan.md`,
+architecture P1-4) recorded that for this reconcile "no such automated path exists", and the gap was
+accepted anyway, on a premise that plan had just shown false. The Apply-path bullet itself stands. Its replace gate now also requires the
+replacement to be born bound to the firewall (`firewall_not_bound`).
 
 **Decision.** The firewall binds through `hcloud_server.inngest.firewall_ids =
 [hcloud_firewall.inngest.id]`. The hcloud provider (v1.63.0) sends `firewall_ids` as
 `opts.Firewalls` inside ServerCreate, so every birth and every `-replace` creates the host with the
 firewall already applied, before first boot. An `hcloud_firewall_attachment` attaches only after
 first boot, even when it is targeted (the difference ADR-145 records). `firewall_ids` is not
-ForceNew, and a later change to it applies in place. The attachment becomes
-`removed { from = hcloud_firewall_attachment.inngest  lifecycle { destroy = false } }`. The
-per-merge `apply` job targets that address so the forget is planned, and the `inngest_host` job
-stops targeting it (its shape gate would refuse a forget; its allow-set is now 17 addresses). This
-change alone moves no host: the live host gains the firewall at its next `inngest-host-replace`.
+ForceNew, and a later change to it applies in place. It is also Optional+Computed, so deleting the
+line detaches nothing and plans nothing. No plan-level check would see that regression, which is why
+Guard 1 in `apps/web-platform/infra/inngest-host.test.sh` exists. The attachment becomes
+`removed { from = hcloud_firewall_attachment.inngest  lifecycle { destroy = false } }`. Under
+`-target`, a `removed` block is planned only if its address is targeted, so the per-merge `apply` job
+targets that address. The `inngest_host` job stops targeting it (its shape gate would refuse a
+forget). The block and the `-target` stay permanently, as the `doppler-write-token.tf` forgets do: a
+`removed` block for an absent address is a no-op tombstone. The rationale for the two `-target`
+lines is in `apply-web-platform-infra-job-rationale.md` (preamble note), per ADR-231.
 
-**The guard.** `apps/web-platform/infra/inngest-host.test.sh` Guard 1 checks the one server block.
-`firewall_ids` must be exactly the inngest firewall, in any layout. No `hcloud_firewall_attachment`
-in any `*.tf` of the root may reference `hcloud_firewall.inngest`, none may be named `inngest`, and
-the firewall resource may carry no `apply_to`. The `removed` block must forget, not destroy.
-Synthesized fixture rows cover M1 to M8 and the H1/H2 layouts. The rationale for the two
-`-target` lines is in `apply-web-platform-infra-job-rationale.md` (preamble note), per ADR-231.
+**Why the live gap does not close in this PR.** Any binding that references
+`hcloud_server.inngest` pulls the server into a `-target` plan. The server there carries the pending
+ForceNew `user_data` replace, so a merge apply could not bind the firewall without replacing the sole
+scheduler. The live host gains the firewall at its next `inngest-host-replace`. Until then two
+dispatches refuse: `inngest-host` (its shape gate reds `server_touched`) and `inngest-volume-recut`
+(its gate reds `inngest_server_touched`, since it must plan zero server actions). The route is the
+replace first, then either of them.
 
 **Alternatives added to the record (both rejected):**
 
 | Alternative | Why rejected |
 |---|---|
 | Target the attachment in the `inngest_host_replace` job and add a gate counter that requires its update | It still leaves a window: the attachment applies after first boot, so the host still boots unfirewalled. It also leaves a partial-failure dead end: a replace that creates the server and then fails on the attachment strands the host unfirewalled, and a retry is another replace. It also adds a gate change and a new recovery route. |
-| Bind by `label_selectors` on the firewall (`apply_to { label_selector = … }`) | Every host here shares the label `app = "soleur-web-platform"`, so this needs a dedicated label. That label becomes a new security-bearing key on a shared label scheme, where any host that carries it gets the deny-all firewall. It also opens a second binding channel that Guard 1 would have to police. |
+| Bind by `label_selectors` on the firewall (`apply_to { label_selector = … }`) | Every production host here shares the label `app = "soleur-web-platform"`, so this needs a dedicated label. That label becomes a new security-bearing key on a shared label scheme, where any host that carries it gets the deny-all firewall. It also opens a second binding channel that Guard 1 would have to police. |
 
-**Still open.** git-data, the registry and the web hosts still bind by attachment, and they re-attach
-inside their replace plans, so each boots briefly before its firewall attaches. Moving them to
-`firewall_ids` is a follow-up recorded on #8754.
+**Guard.** Guard 1 in `apps/web-platform/infra/inngest-host.test.sh` pins the binding, the deny-all
+firewall and the forget; its header lists the properties.
+
+**Still open.** git-data, the registry, grok_dogfood and the web hosts still bind by attachment. They
+re-attach inside their replace plans, so each boots briefly before its firewall attaches. Moving them
+to `firewall_ids` is tracked on #6442.

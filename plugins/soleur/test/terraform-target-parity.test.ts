@@ -3675,10 +3675,11 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
 });
 
 /**
- * #8754: `removed { from = hcloud_firewall_attachment.inngest … }` is planned only when its address is
- * targeted, so the forget must ride the `apply` job's SAVED plan (`terraform plan … -out=tfplan`, the
- * one the destroy guard grades), not the post-bridge `terraform apply`. The block's shape is Guard 1's
- * (inngest-host.test.sh); the inngest_host job's side is the allow === targets check above.
+ * #8754: under -target, `removed { from = hcloud_firewall_attachment.inngest … }` is planned only
+ * if its address is targeted, so the forget must ride the `apply` job's SAVED plan (`terraform plan
+ * … -out=tfplan`, the one the destroy guard grades), not the post-bridge `terraform apply`. The
+ * block's shape is Guard 1's (inngest-host.test.sh); the inngest_host job's side is the
+ * allow === targets check above.
  */
 describe("#8754 inngest firewall attachment forget rides the per-merge saved plan", () => {
   const ADDR = "hcloud_firewall_attachment.inngest";

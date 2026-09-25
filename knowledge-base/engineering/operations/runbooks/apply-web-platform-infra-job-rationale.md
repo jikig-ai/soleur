@@ -32,40 +32,22 @@ under the limit is `plugins/soleur/test/workflow-file-size.test.ts`; the decisio
 RED run of this workflow shows zero jobs, start at
 `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md`.
 
-**Per-merge `-target` note: `hcloud_firewall_attachment.inngest` (#8754).** Added directly here,
-not relocated from the workflow.
-
-The `apply` job's `Terraform plan (allow-list, non-SSH resources only)` step carries
-`-target=hcloud_firewall_attachment.inngest`, and the `inngest_host` job no longer does (#8754,
-ADR-100 2026-09-25 addendum). This note is NOT a relocated comment block, so it has no
-`# Rationale:` pointer in the workflow and sits in this preamble rather than under a `##` heading, outside the
-pointer-to-`##`-heading parity that `workflow-file-size.test.ts` enforces. ADR-231 keeps
-rationale out of the byte-budgeted YAML, and #8754 changed only the two `-target` lines.
-
-The inngest firewall used to be bound by `hcloud_firewall_attachment.inngest`, whose `server_ids`
-held the server id of the day. `inngest_host_replace` never targeted it, so every replace left it
-pointing at a destroyed server, and host 167310350 ran with no Hetzner firewall from its birth.
-The binding now lives on `hcloud_server.inngest.firewall_ids`. The provider applies it inside
-ServerCreate, before first boot, on every birth and every `-replace`.
-
-The old address is a `removed { lifecycle { destroy = false } }` block in `inngest-host.tf`. A
-`removed` block is planned only when its address is targeted (the `doppler-write-token.tf`
-precedent), so:
+**Per-merge `-target` note: `hcloud_firewall_attachment.inngest` (#8754).** The `apply` job's
+`Terraform plan (allow-list, non-SSH resources only)` step targets this address, and the
+`inngest_host` job does not. The address is a `removed { lifecycle { destroy = false } }` forget in
+`inngest-host.tf`; the rationale is the ADR-100 2026-09-25 addendum. Under `-target`, a `removed`
+block is planned only if its address is targeted, so:
 
 - **The per-merge `apply` job targets it.** The first merge apply after #8754 plans a `forget`
   and drops the state entry. No `[ack-destroy]` is needed: `destroy-guard-filter-web-platform.jq`
   excludes a forget from `resource_deletes`, and its `nested_deletes` clauses are scoped to
   Cloudflare types, which an hcloud attachment is not. The live binding is applied to nothing, so
   forgetting it changes no host.
-- **The `inngest_host` job does not target it.** A birth or re-run of that job must never plan a
-  forget, and its shape gate would refuse one (`reason=forget_present`). Its `-target` set is 17
-  addresses, which is exactly `def allow` in `tests/scripts/lib/inngest-host-shape-gate.sh`.
-- **`inngest_host_replace` is unchanged.** Its `-replace=hcloud_server.inngest` creates the new
-  server with `firewall_ids` already set, and `hcloud_firewall.inngest` appears in that plan only
-  as a no-op dependency.
+- **The `inngest_host` job does not target it.** A birth must never plan a forget, and its shape
+  gate refuses one (`reason=forget_present`).
 
-Remove the `removed` block and this `-target` together, once a merge apply has recorded the
-forget. The #8754 plan lists this with the rest of its one-shot adoption scaffolding.
+Keep the `removed` block and this `-target` permanently, as `doppler-write-token.tf` does. Once the
+forget has applied, a `removed` block for an absent address is a no-op tombstone.
 
 ## notify-apply-failure
 

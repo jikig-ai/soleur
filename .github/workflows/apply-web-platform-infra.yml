@@ -1867,10 +1867,10 @@ jobs:
             echo "::error::inngest-host plan-shape gate ABORTED (inngest_host_shape_gate, ADR-142 Guard 3). The reason= token above names the first failing property. NO [ack-destroy] bypass on this path."
             echo "::error::Remediation depends on the reason:"
             echo "::error::  • old_volume_touched / old_attachment_touched → the plan acts on the LIVE plaintext AOF volume or its attachment (a create is legal only alongside a from-scratch server). Do NOT apply: that volume holds the only copy of the armed reminders. Find what forced the change (a size/location/label edit, or the volume leaving state) and revert it."
-            echo "::error::  • server_touched → hcloud_server.inngest would be updated or replaced. A user_data edit force-replaces the host (no ignore_changes=[user_data]) — that is the separately-gated 'inngest-host-replace' dispatch; an in-place update (e.g. server_type) reboots the sole scheduler."
+            echo "::error::  • server_touched → hcloud_server.inngest would be updated or replaced. A user_data edit force-replaces the host (no ignore_changes=[user_data]) — that is the separately-gated 'inngest-host-replace' dispatch; an in-place update (e.g. server_type) reboots the sole scheduler. Or firewall_ids (#8754 — clears at the next inngest-host-replace)."
             echo "::error::  • luks_passphrase_in_graph → random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key appear in this plan. They are per-merge -targeted and nothing in this job's target set depends on them; their presence means the target set or dependency graph changed. Stop — a mint here strands any LUKS header cut from the existing key."
             echo "::error::  • luks_volume_touched / luks_attachment_touched / network_touched / firewall_touched / generated_secret_touched → an update, delete or forget on an address this dispatch may only create. doppler_touched → a Doppler delete/forget."
-            echo "::error::  • forget_present / resource_deletes / nested_deletes / out_of_scope → a state removal, a destroy, a nested-block removal, or an action outside the 18-address -target set. Inspect the plan output below."
+            echo "::error::  • forget_present / resource_deletes / nested_deletes / out_of_scope → a state removal, a destroy, a nested-block removal, or an action outside this job's -target set (== def allow in inngest-host-shape-gate.sh). Inspect the plan output below."
             echo "::error::  • allow_unpartitioned → the gate itself is inconsistent (an allow-set address with no permitted-actions rule). Fix tests/scripts/lib/inngest-host-shape-gate.sh."
             grep -E 'will be created|will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
@@ -2551,9 +2551,8 @@ jobs:
   #   hcloud_server_network.registry     (network.tf — server_id ForceNew → replace; else the
   #                                        new host has no private NIC 10.0.1.30 for web pulls)
   #   hcloud_volume_attachment.registry  (zot-registry.tf — server_id ForceNew → replace)
-  #   hcloud_firewall_attachment.registry (server_ids update-in-place; INTENTIONAL deviation
-  #                                        from inngest — else the new host loses its deny-all
-  #                                        public firewall on first boot)
+  #   hcloud_firewall_attachment.registry (server_ids update-in-place — else it keeps the old
+  #                                        server id; it lands after first boot, ADR-145)
   #   hcloud_volume.registry             (in-scope so the storage volume's pending size update
   #                                        can ride in; the gate PRESERVES it — size-update-only,
   #                                        NEVER delete/forget/replace)
