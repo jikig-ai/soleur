@@ -73,6 +73,11 @@ before changing anything.
    were one run id listed twice with different startedAt, which the probe's `unique_by(.id)`
    collapses. Recovery: dedupe by id before reading. **Prevention:** mirror the probe's own
    bucketing (dedupe by id first) when re-deriving its groups by hand.
+10. **The first route-to-definition target (qa `SKILL.md`) put the skill 706 bytes over its
+   37000-byte body ceiling.** The pre-commit `lint-skill-body-budget` rejected the commit. Recovery:
+   routed the bullet to the follow-through convention runbook, which is the better owner anyway.
+   **Prevention:** check the target skill's headroom before routing (`wc -c` against the lint
+   ceiling), and prefer a runbook or reference owner for domain-scoped guidance.
 
 ## Tags
 
