@@ -104,3 +104,10 @@ FOUR coordinated steps. None of them are SSH (`hr-no-ssh-fallback-in-runbooks`):
 5. **`session-state.md` (untracked one-shot scratch) blocked `cleanup-merged`.** —
    Recovery: `rm` it. **Prevention:** one-off; the next session's idempotent
    cleanup also handles it.
+
+## Addendum — 2026-09-24 (#8747)
+
+Step 1's "tag the commit that carries the change" is superseded: a `vinngest-v*` tag on a commit
+that is not on `main` is now refused by both the publish and the pin bump (ADR-232 §7). Merge the
+carrier-changing PR first, then tag its squash-merge commit on `main` as a new version. See
+`knowledge-base/engineering/operations/runbooks/inngest-server.md` §Bootstrap-image release.

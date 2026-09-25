@@ -241,6 +241,20 @@ check("the pin-reading step is gated to match the build step it feeds",
       pin is not None and pin.get("if") == GUARD,
       repr(pin.get("if")) if pin else "no step with id: pin")
 
+# #8747: the publish-side ancestry refusal. EXACT string: an inverted operand would refuse
+# every legacy backfill (mirror_only builds nothing and cannot move a digest, and the 16
+# off-main versions (v1.1.14, v1.1.24, v1.1.26-v1.1.39) must stay backfillable) while waving every rebuild
+# through. The step that records the built commit feeds the bump's --signed-commit on
+# EVERY path, so it must carry no `if:` at all.
+refuse = next((s for s in steps if s.get("name") == "Refuse a commit that is not on main (#8747)"), None)
+check("the #8747 ancestry refusal is skipped under mirror_only (exact !inputs.mirror_only)",
+      refuse is not None and refuse.get("if") == GUARD,
+      repr(refuse.get("if")) if refuse else "no step named 'Refuse a commit that is not on main (#8747)'")
+record = next((s for s in steps if s.get("name") == "Record the built commit (#8747)"), None)
+check("the built-commit record step runs on every path (no if:)",
+      record is not None and "if" not in record,
+      repr(record.get("if")) if record else "no step named 'Record the built commit (#8747)'")
+
 # NEGATIVE assertion, and the reason it exists: `mirror_only` skips the build, which makes
 # the GHCR login look vestigial to a future reader -- while it is in fact crane's SOLE
 # source of GHCR READ credential. #7203 established the precedent of gating build-path
@@ -458,7 +472,9 @@ if mirror:
 # The Slack degrade step must carry a STATUS FUNCTION. Without one GitHub prepends an
 # implicit success(), so the step is skipped on exactly the mirror_only degrades it exists
 # to report -- the mode that authorises a root-exec digest pin had no push signal at all.
-slack = next((s for s in steps if "slack" in str(s.get("name", "")).lower()), None)
+# Selected by exact NAME: #8747 added a second Slack step (the publish-refused
+# alert), so "first step whose name mentions slack" no longer means this one.
+slack = next((s for s in steps if s.get("name") == "Post to Slack (inngest mirror status)"), None)
 check("the Slack degrade step exists", slack is not None)
 if slack:
     slack_if = str(slack.get("if") or "")
@@ -619,7 +635,7 @@ echo "passed: $pass  failed: $fail"
 # most load-bearing structural checks landed exactly on a floor of 30 and still certified the
 # run. A floor catches total neutering; only a tight one catches attrition. Re-derive it when
 # adding assertions — that is the intended maintenance cost.
-MIN_ASSERTIONS=53
+MIN_ASSERTIONS=62
 if (( pass + fail < MIN_ASSERTIONS )); then
   echo "FAIL - only $((pass + fail)) assertions ran (floor $MIN_ASSERTIONS) — a green run here would be vacuous"
   exit 1
