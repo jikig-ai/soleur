@@ -16,6 +16,14 @@ on:
 permissions:
   contents: read
 
+# Stateless lint gate — a mid-run cancel leaves nothing half-written; a
+# superseding PR push makes every earlier run's verdict stale anyway. The
+# SHA arm is dormant (no push trigger today): if one is ever added, `main`
+# runs still never cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   constraint-gates:
     name: L1 import-boundary gate
