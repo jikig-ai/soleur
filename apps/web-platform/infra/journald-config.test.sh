@@ -130,36 +130,36 @@ BLOCK=$(awk '
 ' "$SERVER_TF")
 assert "block is non-empty" "[[ -n \"\$BLOCK\" ]]"
 assert "triggers_replace hashes journald-soleur.conf (re-delivery on drop-in change; now a join with vector.toml)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)'"
+  "grep -qE 'file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)' <<<\"\$BLOCK\""
 assert "SSH connection block (type=ssh)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"'"
+  "grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"' <<<\"\$BLOCK\""
 # `agent = true` was stale post-#4845: server.tf now uses the dual-context
 # toggle `agent = var.ci_ssh_private_key == null` (operator ssh-agent locally,
 # explicit Doppler key in CI). The conditional regex below cannot false-match
 # the #4829 dual-context comment (which reads literal `agent = true`).
 assert "connection uses the dual-context ssh-agent toggle agent = var.ci_ssh_private_key == null" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null'"
+  "grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null' <<<\"\$BLOCK\""
 assert "connection host = hcloud_server.web[\"web-1\"].ipv4_address" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address'"
+  "grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address' <<<\"\$BLOCK\""
 assert "file provisioner pushes drop-in to /etc/systemd/journald.conf.d/00-soleur.conf" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/etc/systemd/journald\.conf\.d/00-soleur\.conf\"'"
+  "grep -qE 'destination[[:space:]]*=[[:space:]]*\"/etc/systemd/journald\.conf\.d/00-soleur\.conf\"' <<<\"\$BLOCK\""
 # The drop-in dir is NOT created by default on Ubuntu and scp won't create
 # parents — a preceding remote-exec mkdir is load-bearing or the first apply
 # fails. (Regression guard for the review P1.)
 assert "remote-exec creates the drop-in dir before the file provisioner pushes into it" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'mkdir -p /etc/systemd/journald\.conf\.d'"
+  "grep -qE 'mkdir -p /etc/systemd/journald\.conf\.d' <<<\"\$BLOCK\""
 assert "remote-exec creates /var/log/journal" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'mkdir -p /var/log/journal'"
+  "grep -qE 'mkdir -p /var/log/journal' <<<\"\$BLOCK\""
 assert "remote-exec restarts systemd-journald" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'systemctl restart systemd-journald'"
+  "grep -qE 'systemctl restart systemd-journald' <<<\"\$BLOCK\""
 assert "remote-exec flushes the journal" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'journalctl --flush'"
+  "grep -qE 'journalctl --flush' <<<\"\$BLOCK\""
 # Positive post-assertions (fail2ban_tuning pattern): prove persistence took,
 # don't just observe it.
 assert "remote-exec positively asserts /var/log/journal exists" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'test -d /var/log/journal'"
+  "grep -qE 'test -d /var/log/journal' <<<\"\$BLOCK\""
 assert "remote-exec asserts persistent storage via journalctl --header" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'journalctl --header'"
+  "grep -qE 'journalctl --header' <<<\"\$BLOCK\""
 
 # --- AC5: runcmd creates /var/log/journal BEFORE the container starts ---
 echo ""
