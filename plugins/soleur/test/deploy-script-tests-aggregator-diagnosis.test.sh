@@ -172,12 +172,14 @@ fi
 
 echo ""
 # Anti-vacuity floor — a dispatch layer that stops emitting keeps printing
-# 0 failed while certifying nothing.
+# 0 failed while certifying nothing. Exits DIRECTLY: a floor that routes
+# through the counters it guards exits 0 when the counters are neutered
+# (guard-vacuity-floor measured exactly this on this file's first shape).
 MIN_ASSERTS=10
 if (( passes + fails < MIN_ASSERTS )); then
   printf 'FAIL: assertion floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$((passes + fails))" "$MIN_ASSERTS" >&2
-  fails=$((fails + 1))
+  exit 1
 fi
 echo "=== deploy-script-tests-done aggregator: $passes passed, $fails failed ==="
 (( fails == 0 ))

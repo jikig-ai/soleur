@@ -255,10 +255,12 @@ else
 fi
 
 # Anti-vacuity floor — counts pass+fail, same idiom as the sibling batteries.
+# Exits DIRECTLY, not through fails++: a floor enforced through the machinery
+# it guards exits 0 when that machinery is neutered (guard-vacuity-floor).
 MIN_ASSERTS=8
 if (( passes + fails < MIN_ASSERTS )); then
   echo "FAIL: assertion floor: only $((passes + fails)) assertion(s) ran, expected >= $MIN_ASSERTS." >&2
-  fails=$((fails + 1))
+  exit 1
 fi
 
 echo ""
