@@ -27,8 +27,15 @@ const CRON_MONITORS_TF = resolve(
 const routeSrc = readFileSync(ROUTE_PATH, "utf8");
 const tfSrc = readFileSync(CRON_MONITORS_TF, "utf8");
 
+// Scoped to the `functions: [ … ]` array, not the whole file: a multi-line
+// import in route.ts has the same `  name,` line shape and was counted as a
+// served function (#8803).
 function extractRouteArrayEntries(): string[] {
-  return [...routeSrc.matchAll(/^\s+(\w+),$/gm)].map((m) => m[1]);
+  // Anchored on the serve() call: the file's header comment also contains the
+  // literal "functions: []".
+  const m = routeSrc.match(/\bserve\(\{[\s\S]*?\bfunctions:\s*\[([\s\S]*?)\n\s*\]/);
+  if (!m) throw new Error("fixture: the serve() functions array was not found in route.ts");
+  return [...m[1].matchAll(/^\s+(\w+),$/gm)].map((e) => e[1]);
 }
 
 function listCronFiles(): string[] {
