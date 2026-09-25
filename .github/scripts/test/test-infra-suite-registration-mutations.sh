@@ -352,7 +352,7 @@ expect_red_manifest "M21 manifest n= mismatch" "leg count" \
 # M22 -- `if: always()` dropped from -done: default needs: semantics render a
 # cancelled upstream `skipped`, which branch protection can treat as success.
 expect_red "M22 drop if: always() from -done" "always" \
-  sed -i '/^  deploy-script-tests-done:/,/^  [a-z][a-z0-9_-]*:/{/^    if: always()$/d}' "$SB/$WF_REL"
+  sed -i 's|^    if: always() && needs.detect-changes.outputs.pr_duplicate != .true.$|    if: needs.detect-changes.outputs.pr_duplicate != '"'"'true'"'"'|' "$SB/$WF_REL"
 
 # M23 -- notify reads the MATRIX job's result instead of the aggregate's: the
 # #8735 blind spot restored (a cancelled leg passes `== "failure"`).
