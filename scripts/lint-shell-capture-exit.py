@@ -1068,6 +1068,12 @@ def scan(path: str) -> list[tuple[int, str, str]]:
         qs_in_s.append(bool(qstack and qstack[-1] == "sq"))
         qs_in_d.append(bool(qstack and qstack[-1] == "dq"))
         vis, sq, subm, qstack = _quote_scan(text, qstack)
+        # Position-mask alignment is load-bearing (segs, sq lookups, close
+        # keys index by raw position) -- a per-char append bug desyncs
+        # silently, so assert it loud here.
+        assert len(vis) == len(sq) == len(subm) == len(text), (
+            f"mask alignment broke at {path}:{_ln}"
+        )
         vis_lines.append(vis)
         sq_masks.append(sq)
         sub_masks.append(subm)
