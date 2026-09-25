@@ -131,7 +131,7 @@ Hits, with how each is handled:
 | Guard | Applies? | Command / note |
 |---|---|---|
 | `preflight-discoverability-test` G1 (plan-count baseline) | Yes. It is a recursive walk, so the count stays 29 | `cd plugins/soleur && bun test test/preflight-discoverability-test.test.ts -t G1`. Baseline passes on this tree. |
-| `scripts/kb-drift-walker.sh` (broken intra-KB `](x.md)` links; skips `archive/`) | Yes, as a local check. In CI it runs only on a schedule, not as a PR gate | `bash scripts/kb-drift-walker.sh \| jq -c .counts`. Baseline is `{"broken_link":128,"broken_anchor":120}`, all pre-existing. It must not increase. |
+| `scripts/kb-drift-walker.sh` (broken intra-KB markdown links; skips `archive/`) | Yes, as a local check. In CI it runs only on a schedule, not as a PR gate | `bash scripts/kb-drift-walker.sh \| jq -c .counts`. Baseline is `{"broken_link":128,"broken_anchor":120}`, all pre-existing. It must not increase. |
 | secret-scan `rename-guard` | Exempt. Renames from allowlisted paths to allowlisted paths have the archive-kb shape (SKILL.md §Notes) | No label needed |
 | `markdown-lint` (`--repo-sweep`) | No-op. `.markdownlintignore` excludes `knowledge-base/project/` | none |
 | `PROMOTED_FILES` (`scripts/guard-vacuity-floor.test.sh`) | Not touched by this diff | If a `git merge origin/main` conflicts there, resolve it as a **union** of both sides. Never pick one side, and never raise the ratchet. |
@@ -192,28 +192,28 @@ inside `knowledge-base/project/` of already-public planning records.
 
 ## Acceptance Criteria
 
-- [ ] AC1: `git diff --name-status -M origin/main...HEAD` shows exactly 8 `R100` renames. The two
+- [x] AC1: `git diff --name-status -M origin/main...HEAD` shows exactly 8 `R100` renames. The two
       plans go into `knowledge-base/project/plans/archive/<ts>-<name>`, and the six spec files go
       into `knowledge-base/project/specs/archive/<ts>-feat-<slug>/`. The only other entries allowed
       are this PR's own pipeline artifacts: this plan file and
       `knowledge-base/project/specs/feat-one-shot-archive-8710-5274-plans/*`
       (tasks.md, session-state.md, decision-challenges.md).
-- [ ] AC2: `test ! -e` succeeds for all 4 source paths, and this command prints `8` (it printed
+- [x] AC2: `test ! -e` succeeds for all 4 source paths, and this command prints `8` (it printed
       `0` at plan time):
       `git ls-files 'knowledge-base/project/plans/archive/*-2026-09-24-fix-pin-redeploy-gate-keys-on-apply-step-plan.md' 'knowledge-base/project/plans/archive/*-2026-09-24-fix-git-data-plaintext-dirty-journal-dm-snapshot-plan.md' 'knowledge-base/project/specs/archive/*-feat-one-shot-8710-pin-redeploy-plan-only-gate/*' 'knowledge-base/project/specs/archive/*-feat-one-shot-git-data-dirty-journal-dm-snapshot/*' | wc -l`.
       The pattern names each basename exactly, because the #8710 plan's basename contains no `8710`.
-- [ ] AC3: `plans/2026-09-22-feat-git-data-cutover-real-modes-plan.md` and
+- [x] AC3: `plans/2026-09-22-feat-git-data-cutover-real-modes-plan.md` and
       `specs/feat-one-shot-8211-git-data-cutover-real-modes/` are still at their live paths.
-- [ ] AC4: The inbound-reference sweep in Research Insights, run on the final tree, returns only the
+- [x] AC4: The inbound-reference sweep in Research Insights, run on the final tree, returns only the
       preflight-discoverability-test comment. Add two more exclusions to the sweep for this PR's own
       migration records, which must cite the old paths:
       `':!knowledge-base/project/plans/2026-09-25-chore-archive-8710-5274-kb-artifacts-plan.md'`
       and `':!knowledge-base/project/specs/feat-one-shot-archive-8710-5274-plans/**'`.
       The moved self-references are now under `archive/` and are excluded already.
-- [ ] AC5: `cd plugins/soleur && bun test test/preflight-discoverability-test.test.ts -t G1` passes (count stays 29).
-- [ ] AC6: The `bash scripts/kb-drift-walker.sh | jq -c .counts` values are ≤ 128 broken links and
+- [x] AC5: `cd plugins/soleur && bun test test/preflight-discoverability-test.test.ts -t G1` passes (count stays 29).
+- [x] AC6: The `bash scripts/kb-drift-walker.sh | jq -c .counts` values are ≤ 128 broken links and
       ≤ 120 broken anchors.
-- [ ] AC7: #8776 has a comment with the archived path, and a DC-1 `action-required` issue for PR #8711 exists.
+- [x] AC7: #8776 has a comment with the archived path, and a DC-1 `action-required` issue for PR #8711 exists.
 - [ ] AC8: The PR body contains `Ref #5274` and does not match `(Closes|Fixes|Resolves) #5274`.
       Afterwards, `gh issue view 5274 --json state` is still `OPEN`.
 - [ ] AC9 (pre-merge): Every required check reports `pass` **by name** on the exact head SHA.
