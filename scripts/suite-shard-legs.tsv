@@ -307,6 +307,7 @@ scripts/inngest-zot-boot-7462	3
 scripts/inngest-zot-client-authz-6500	3
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
+scripts/lib/inngest-probe-row.test.sh	4
 scripts/lib/legal-base-ref.test.sh	5
 scripts/lib/legal-normalise.test.sh	6
 scripts/lib/repo-write-boundary.test.sh	1
