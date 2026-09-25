@@ -146,6 +146,28 @@ describe("scrubSentryEvent — founderId in Inngest event data (#8719)", () => {
     });
     expect(JSON.stringify(result)).not.toContain(raw);
   });
+
+  // #8803: a lifecycle envelope (inngest/function.failed, inngest/function.cancelled,
+  // agent.spawn.orphaned) nests the ORIGINAL event, so the founder id sits two
+  // levels down, and once more inside `events[]`.
+  test("a lifecycle envelope's nested `event.data.founderId` is hashed at every depth", () => {
+    const raw = "7a1b2c3d-4e5f-4061-8a7b-9c0d1e2f3a4b";
+    const original = { name: "agent.spawn.requested", data: { founderId: raw, actionSendId: "row-1" } };
+    const event = {
+      extra: {
+        "inngest.event_data": {
+          function_id: "soleur-runtime-agent-on-spawn-requested",
+          run_id: "01M3C0B5Z6VQSF5930F1K8GQTN",
+          event: original,
+          events: [original],
+        },
+      },
+    };
+    const result = scrubSentryEvent(event);
+    const text = JSON.stringify(result);
+    expect(text).not.toContain(raw);
+    expect(text.split(expectedHashFor(raw)).length - 1).toBe(2);
+  });
 });
 
 describe("scrubSentryEvent — inbound-email attachment metadata (S1)", () => {

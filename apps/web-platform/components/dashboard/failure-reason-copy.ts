@@ -34,7 +34,8 @@ export interface FailureReasonRow {
    *     leader_max_turns_exceeded → task refinement;
    *     leader_tool_invalid → CTO investigates;
    *     anthropic_request_rejected → the same request fails the same way;
-   *     leader_refused → the model declined the task).
+   *     leader_refused → the model declined the task;
+   *     leader_internal_error → CTO investigates).
    */
   retryEligible: boolean;
 }
@@ -122,6 +123,12 @@ export const FAILURE_REASON_COPY: Record<FailureReason, FailureReasonRow> = {
   leader_class_disabled: {
     copy:
       "Autonomous agent for this card class is not enabled yet. CTO has been notified.",
+    retryEligible: false,
+  },
+  leader_internal_error: {
+    // #8803: the run ended with no recognised cause (a crash, a timeout, an
+    // Inngest-level cancel). Retry cannot re-fire an archived message (#8840).
+    copy: "Something went wrong on our side and this run stopped. CTO has been notified.",
     retryEligible: false,
   },
   cancelled_by_operator: {
