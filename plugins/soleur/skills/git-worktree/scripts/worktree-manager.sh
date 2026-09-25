@@ -2744,9 +2744,209 @@ cleanup_orphan_worktree_dirs() {
   return 0
 }
 
+# --- Session-start orphan-scratch sweep (#7004) ---------------------------------
+# tmpfs-guard.sh was built for a user cron, and a measured host had no crontab
+# installed — the guard never ran. Session start is the trigger this plugin
+# itself controls, so the dead-owner sweep lives at the top of the maintenance
+# block every session already runs. It reclaims ONLY entries that declare an
+# owner (soleur-run.<pid>.* schema or a .soleur-owned marker) whose owner is
+# provably dead, plus a bounded batch of orphaned .git worktrees. Everything
+# else — bare tmp.*, unattributable residue — is out of scope by design.
+#
+# Serialized on the same TMPDIR-independent literal lockfile the guard and the
+# purge take, so the three can never run destructively at once. Contention or
+# a missing classifier skips LOUDLY and returns 0 — a sweep failure must never
+# abort the unrelated maintenance below (repo lock, fetch, reap loop).
+sweep_orphan_scratch_dirs() {
+  local tc_lib="$SCRIPT_DIR/../../../scripts/lib/tmp-classify.sh"
+  if [[ ! -f "$tc_lib" ]]; then
+    echo "SOLEUR_TMP_SWEEP skipped reason=classifier-missing path=$tc_lib"
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  if ! source "$tc_lib"; then
+    echo "SOLEUR_TMP_SWEEP skipped reason=classifier-source-failed path=$tc_lib"
+    return 0
+  fi
+
+  local lockdir="${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/soleur"
+  local lock="$lockdir/tmp-guard.lock" sweep_fd=""
+  mkdir -p "$lockdir" 2>/dev/null || {
+    echo "SOLEUR_TMP_SWEEP skipped reason=lockdir-unwritable path=$lockdir"
+    return 0
+  }
+  if command -v flock >/dev/null 2>&1; then
+    if exec {sweep_fd}>"$lock" 2>/dev/null; then
+      if ! flock -n "$sweep_fd"; then
+        exec {sweep_fd}>&- 2>/dev/null || true
+        echo "SOLEUR_TMP_SWEEP skipped reason=lock-contended lock=$lock"
+        return 0
+      fi
+    else
+      echo "SOLEUR_TMP_SWEEP skipped reason=lockfile-unwritable path=$lock"
+      return 0
+    fi
+  else
+    # A mutating sweep with no serialization races the guard/purge movers —
+    # skip LOUDLY rather than run unserialised.
+    echo "SOLEUR_TMP_SWEEP skipped reason=flock-missing — refusing to run unserialised"
+    return 0
+  fi
+
+  local t0; t0="${EPOCHSECONDS:-$(date +%s)}"
+  local uid; uid="$(id -u)"
+  local bases="${SOLEUR_SWEEP_BASES-/tmp /var/tmp}"
+  if [[ -z "${bases//[[:space:]]/}" ]]; then
+    [[ -n "$sweep_fd" ]] && exec {sweep_fd}>&- 2>/dev/null || true
+    echo "SOLEUR_TMP_SWEEP skipped reason=bases-empty — SOLEUR_SWEEP_BASES='' disables the sweep"
+    return 0
+  fi
+  local age_min="${SOLEUR_SWEEP_AGE_MIN:-1440}"
+  local wt_cap="${SOLEUR_SWEEP_WT_CAP:-50}"
+  local deadline=$(( t0 + ${SOLEUR_SWEEP_TIMEBOX_S:-10} ))
+  # Amortized clock: EPOCHSECONDS is a bash-5 builtin (zero forks); the
+  # `${EPOCHSECONDS:-$(date)}` fallback keeps bash 3.2 correct at one fork
+  # per check. The deadline bounds EVERY arm — the mass-death backlog is
+  # exactly when hundreds of declared-owner candidates exist, and this runs
+  # while the operator waits at session start.
+  now_s() { printf '%s' "${EPOCHSECONDS:-$(date +%s)}"; }
+
+  local reaped=0 quar=0 retained=0 deferred=0 wt_done=0 map_tried=0
+  local base d name verdict fstype dest
+
+  for base in $bases; do
+    [[ -d "$base" ]] || continue
+    # basename via ${d##*/} — a spawn per entry turns a 67k-entry shared base
+    # into a multi-minute session-start stall (measured: 12s for ONE procfs
+    # walk; per-entry subprocesses are the same cost class). -print0 keeps
+    # newline-named entries from splitting into cwd-relative fake candidates.
+    while IFS= read -r -d '' d; do
+      name="${d##*/}"
+      [[ "$name" == *$'\n'* || "$name" == *$'\t'* ]] && { retained=$((retained + 1)); continue; }
+
+      # The .git-FILE arm runs BEFORE protected/name filters AND before the
+      # marker/schema arms — verified registry attribution outranks every
+      # other rung. A marker-bearing dir that is also a registered worktree
+      # MUST take this path: quarantine-moving a registered tree corrupts
+      # the owning repo's .git/worktrees metadata (ADR-250 Consequences).
+      if [[ -f "$d/.git" && ! -L "$d/.git" ]]; then
+        # Bounded worktree batch: classify only while under the cap/timebox.
+        if (( wt_done < wt_cap )) && (( "$(now_s)" < deadline )); then
+          wt_done=$((wt_done + 1))
+          verdict="$(tc_classify_git_dir "$d")"
+          case "$verdict" in
+            registered)
+              if (( "$(tc_tree_age_min "$d")" >= ${SOLEUR_SWEEP_WT_AGE_MIN:-4320} )) \
+                 && tc_worktree_safe_to_remove "$d"; then
+                if _tc_git --git-dir="$(tc_git_main_dir "$d")" worktree remove "$d" 2>/dev/null; then
+                  tc_ledger_append "worktree-remove" "worktrees" "$d" "-"
+                  reaped=$((reaped + 1))
+                else
+                  retained=$((retained + 1))
+                fi
+              else
+                retained=$((retained + 1))
+              fi ;;
+            unregistered)
+              # Same conjuncts the purge applies to this class: age floor +
+              # no live handles + no nested mount. Registry-absence alone is
+              # not proof the tree is idle.
+              if (( "$(tc_tree_age_min "$d")" >= ${SOLEUR_SWEEP_WT_AGE_MIN:-4320} )) \
+                 && ! tc_entry_is_live "$d" "" \
+                 && ! tc_tree_has_mount "$d" \
+                 && dest="$(tc_quarantine_move "$d" "$base" "worktrees" 2>/dev/null)"; then
+                quar=$((quar + 1))
+                tc_ledger_append "move" "worktrees" "$d" "$dest"
+              else
+                retained=$((retained + 1))
+              fi ;;
+            *) retained=$((retained + 1)) ;;   # standalone-clone, unverifiable: never moved
+          esac
+        else
+          deferred=$((deferred + 1))
+        fi
+        continue
+      fi
+
+      # Cheap shape pre-filter — non-gitfile candidates need a declaration.
+      tc_is_protected "$name" && continue
+      case "$name" in
+        soleur-run.*) ;;
+        *) [[ -f "$d/.soleur-owned" ]] || continue ;;
+      esac
+
+      # Deadline bounds the marker/schema arm too — deferred, never rushed.
+      if (( "$(now_s)" >= deadline )); then deferred=$((deferred + 1)); continue; fi
+
+      # Lazy liveness map: built on the first declared-owner candidate, not
+      # unconditionally — a clean host pays nothing for the sweep. Failure
+      # leaves the per-candidate walk fallback in charge (fail-closed).
+      if (( map_tried == 0 )); then
+        map_tried=1
+        # shellcheck disable=SC2086  # space-separated base list — splitting IS the contract
+        tc_build_inuse_map $bases || true
+      fi
+
+      # Single-sourced conjunct chain — same gates as Reaper 3 and the purge:
+      # marker-first owner verification (foreign pid-namespace vetoes the
+      # schema name), dead-owner + live-handles + age floor + no nested
+      # .git (a worktree inside a scratch root is registry-relevant — moving
+      # it corrupts .git/worktrees) + no nested mount.
+      verdict="$(tc_reap_decide "$d" "$age_min")"
+      if [[ "$verdict" != "reap" ]]; then retained=$((retained + 1)); continue; fi
+
+      fstype="$(findmnt -no FSTYPE --target "$base" 2>/dev/null || true)"
+      # Direct delete only for schema-NAMED roots on tmpfs (creation-certain
+      # attribution + mv frees no RAM); marker-only dirs quarantine on every
+      # base. Terminal deletes get an action-time liveness re-walk — the map
+      # is a snapshot.
+      if [[ ( "$fstype" == "tmpfs" || "$fstype" == "ramfs" ) ]] \
+         && tc_schema_owner_pid "$name" >/dev/null 2>&1 \
+         && ! tc_tree_has_live_handles_now "$d"; then
+        if find "$d" -xdev -depth -delete 2>/dev/null; then
+          reaped=$((reaped + 1))
+          tc_ledger_append "delete" "scratch" "$d" "-"
+        else
+          retained=$((retained + 1))
+        fi
+      else
+        if dest="$(tc_quarantine_move "$d" "$base" "scratch" 2>/dev/null)"; then
+          quar=$((quar + 1))
+          tc_ledger_append "move" "scratch" "$d" "$dest"
+        else
+          retained=$((retained + 1))
+        fi
+      fi
+    done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -user "$uid" -print0 2>/dev/null)
+  done
+
+  if [[ -n "$sweep_fd" ]]; then exec {sweep_fd}>&- 2>/dev/null || true; fi
+  local ms=$(( ("$(now_s)" - t0) * 1000 ))
+  echo "SOLEUR_TMP_SWEEP bases=[$bases] reaped=$reaped quarantined=$quar retained=$retained deferred=$deferred wt_scanned=$wt_done ms=$ms"
+  if (( deferred > 0 )); then
+    echo "SWEEP-DEFER: $deferred candidate(s) beyond the ${SOLEUR_SWEEP_TIMEBOX_S:-10}s/${wt_cap}-worktree bound — deferred to the next session start"
+  fi
+  # Drain has no always-on trigger unless the systemd timer is installed or an
+  # operator runs --drain — surface a non-empty quarantine so the bytes don't
+  # sit forever on a host with no scheduled guard.
+  for base in $bases; do
+    if compgen -G "$base/soleur-quarantine.$uid" >/dev/null 2>&1 \
+       && compgen -G "$base/soleur-quarantine.$uid/*/*" >/dev/null 2>&1; then
+      echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --drain or install scripts/tmpfs-guard.timer for TTL draining"
+    fi
+  done
+  return 0
+}
+
 # Clean up worktrees for merged branches (candidates: [gone], merged-to-main, gh-merged;
 # only ancestry or a commit-pinned merged PR licenses a reap — see SOLEUR-GUARD-MERGEEVIDENCE)
 cleanup_merged_worktrees() {
+  # The tmp sweep runs FIRST — before the repo-scoped cleanup-merged lock and
+  # the fetch gate — so lock contention or an offline fetch can never skip it.
+  # `||`-guarded: a sweep failure must not abort the maintenance below.
+  sweep_orphan_scratch_dirs \
+    || headless_or_stderr warn "cleanup-merged: tmp sweep returned non-zero; continuing"
+
   # Serialize concurrent cleanup-merged invocations across sibling sessions.
   # 5s is the operator-perception threshold; longer waits in headless mode
   # are invisible. Skip (don't fail) when contended — the holder will
@@ -3460,6 +3660,9 @@ cleanup_stale_sandbox_tmp() {
 
   # 2) Non-empty sandbox artifacts older than the stale floor, matched by signature.
   while IFS= read -r d; do
+    # Ownership-keyed dirs are the session sweep's jurisdiction — a declared
+    # owner must be judged by the dead-owner conjuncts, not name+signature.
+    [[ -f "$d/.soleur-owned" ]] && continue
     case "$(basename "$d")" in
       claude-creds-copy*) : ;;                       # harness credential copy
       *)

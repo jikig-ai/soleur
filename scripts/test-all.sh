@@ -393,6 +393,23 @@ fi
 # Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# Session scratch root (#7004): allocate <base>/soleur-run.<pid>.XXXXXXXX under
+# the effective TMPDIR's base, export TMPDIR at it so every descendant mktemp
+# lands inside the session root, and write .soleur-owned so Reaper 3 and the
+# session-start sweep can reclaim a dead run's residue without name heuristics.
+# Sourced opportunistically — a missing lib degrades to the pre-#7004 shape,
+# never blocks the gate. The EXIT trap at the acquire site gains
+# `_soleur_scratch_cleanup` (spliced, not a second trap — ADR-129).
+_SCRATCH_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "$TMPDIR" || true
+fi
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+
 # Pin the #6789 contention instrumentation to /tmp, INDEPENDENTLY of TMPDIR above.
 #
 # test-contention.sh binds `TC_TMPDIR="${TC_TMPDIR:-${TMPDIR:-/tmp}}"` at SOURCE time, so
@@ -2797,7 +2814,7 @@ _soleur_inc_cleanup() {
   # test-all-runtime-ceiling and test-all-killed-classification.
   return 0
 }
-trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' EXIT
+trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -3201,6 +3218,14 @@ if want_scripts; then
   # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
   # (age/size/ownership/liveness/protected-path) is asserted in both directions.
   run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
+  # #7004: the tmp backlog purge + shared classifier. It MOVES operator files,
+  # so every ladder rung (marker/schema/git/empty/prefix/protected/liveness)
+  # is asserted in both directions under a sentinel base.
+  run_suite "tests/scripts/tmp-purge" bash tests/scripts/test-tmp-purge.sh
+  # #7004: the session allocator + Reaper 3 + quarantine drain. begin() exports
+  # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
+  # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
+  run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
   # #7537: the orphaned-PROCESS reaper. It SIGNALS processes, so every gate
   # (own-uid, unlinked cwd, unlinked fd/255, self-exclusion, mount/pid
   # namespace, age floor) is asserted in both directions here. Registered
