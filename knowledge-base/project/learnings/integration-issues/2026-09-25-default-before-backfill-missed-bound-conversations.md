@@ -20,13 +20,13 @@ forged INSERTs, and GUC spoofing.
 The migration review also found the runner piped SQL through psql with
 `--single-transaction` but no `-f` or `-c`. PostgreSQL only enables that
 option with one of those inputs. The fix uses `-f -` and leaves migration 142
-without explicit transaction commands, so its body and ledger INSERT share
-one transaction. Older migrations with their own `COMMIT` still need a
-separate audit.
+immutable at the blob already applied on dev. The runner strips an exact outer
+`BEGIN`/`COMMIT` pair before sending the body and ledger INSERT through psql;
+other recognized standalone transaction-control shapes fail closed. Failure injection for ledger
+rollback remains tracked in #8911.
 
 The repair must stay safe under a partial rollback. The paired down file
-leaves the stricter guard in place and keeps corrected rows bound; forward
-reapplication replaces its INSERT trigger in the same transaction. The 141
+leaves the stricter guard in place and keeps corrected rows bound. The 141
 down file drops that trigger if the entire binding feature is rolled back.
 
 ## Session command errors
@@ -48,3 +48,8 @@ down file drops that trigger if the entire binding feature is rolled back.
   the tool rejected that shape. Use one update operation for a full rewrite.
 - A later learning edit used the wrong line wrap in its patch context and
   failed to apply. Re-read the target before retrying a context-sensitive edit.
+- Dev applied the first blob of unmerged migration 142 before review edits;
+  tenant integration then rejected the changed blob. Restore the exact applied
+  bytes and put any later behavior in the runner or a new numbered migration.
+- A multi-file patch for the PR and issue descriptions failed on a long-line
+  context mismatch. Edit each description from its current contents.

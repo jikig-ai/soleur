@@ -25,13 +25,14 @@ describe.skipIf(!ENABLED)("conversation engine binding authority (local)", () =>
     const migration = readFileSync(
       path.join(__dirname, "../../supabase/migrations/142_repair_conversation_engine_binding_backfill.sql"),
       "utf8",
-    );
+    ).replace(/^BEGIN;\s*$/m, "").replace(/^COMMIT;\s*$/m, "");
     const states = await rolledBackRaw(sql, async (t) => {
       const before = await t<{ id: string; engine_binding_state: string }[]>`
         select id, engine_binding_state from public.conversations
         where id in (${ctx.convA}, ${ctx.convA2})`;
       expect(before).toHaveLength(2);
       expect(before.every((row) => row.engine_binding_state === "pending")).toBe(true);
+      await t`drop trigger conversations_engine_binding_state_insert on public.conversations`;
       await t.unsafe(migration);
       return await t<{ id: string; engine_binding_state: string }[]>`
         select id, engine_binding_state from public.conversations
