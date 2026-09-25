@@ -6,6 +6,10 @@ branch: feat-one-shot-archive-8710-5274-plans
 issue: 5274
 type: chore
 lane: cross-domain
+priority: p3-low
+domain: engineering
+brand_survival_threshold: none
+requires_cpo_signoff: false
 draft_pr: 8842
 related: [8710, 8755, 5274, 8711, 8776, 8211]
 ---
@@ -213,6 +217,10 @@ inside `knowledge-base/project/` of already-public planning records.
 - [x] AC5: `cd plugins/soleur && bun test test/preflight-discoverability-test.test.ts -t G1` passes (count stays 29).
 - [x] AC6: The `bash scripts/kb-drift-walker.sh | jq -c .counts` values are ≤ 128 broken links and
       ≤ 120 broken anchors.
+      **Correction (review, 2026-09-25):** the 120 figure holds only where `node_modules` is installed —
+      one learning anchors into `node_modules/@11ty/eleventy/`. A clean tree reads 128/121 at the merge-base,
+      at `origin/main` and at this PR's head. The binding form is a delta: counts must not rise against the
+      merge-base measured in the same environment (they do not: identical in both environments).
 - [x] AC7: #8776 has a comment with the archived path, and a DC-1 `action-required` issue for PR #8711 exists.
 - [ ] AC8: The PR body contains `Ref #5274` and does not match `(Closes|Fixes|Resolves) #5274`.
       Afterwards, `gh issue view 5274 --json state` is still `OPEN`.
