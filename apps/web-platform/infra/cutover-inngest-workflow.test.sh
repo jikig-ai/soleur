@@ -3116,7 +3116,7 @@ mutate_file "rpg dark verdict exits 1" "$BODY_SH" "${_RPG_RANGE}"'s|^\(         
 # DYNAMIC): the dark sub-block and the dark OUTPUT carry none of the reserved triple.
 check_rpg_dark_emits_no_triple() {
   local r out; r="$(_rpg_region_of "$1")"
-  ! awk '/^    if \[\[ "\$CODE" != "200" \]\]; then$/{f=1} f&&/^    else$/{exit} f' "$r" | grep -v '^[[:space:]]*#' | grep -qE 'registry_empty=|function_count=|ids=\[' \
+  ! grep -qE 'registry_empty=|function_count=|ids=\[' <<<"$(awk '/^    if \[\[ "\$CODE" != "200" \]\]; then$/{f=1} f&&/^    else$/{exit} f' "$r" | grep -v '^[[:space:]]*#')" \
     && out="$(render_2_0 "$r" 500 "$FF_BODY" h5 h5)" && ! grep -qE 'registry_empty=|function_count=|ids=\[' <<<"$out"
 }
 mutate_file "rpg warning appends =false to the reserved field" "$BODY_SH" "${_RPG_RANGE}"'s|registry_empty was not measured, because a dark host answers no read\.|registry_empty=false was not measured, because a dark host answers no read.|' check_rpg_dark_emits_no_triple
@@ -3127,18 +3127,18 @@ check_rpg_no_request_body() {
   local code; code="$(mktemp)"; SCRATCH+=("$code")
   awk '/^[[:space:]]+registry-probe\)$/,/^[[:space:]]+rearm\)$/' "$1" > "$code.arms"; SCRATCH+=("$code.arms")
   _probe_arms_code_of "$code.arms" > "$code"
-  ! grep -E '(^|[^a-z-])curl[[:space:]]' "$code" | grep -qE '[[:space:]](-d|-T)([[:space:]]|=)'
+  ! grep -qE '[[:space:]](-d|-T)([[:space:]]|=)' <<<"$(grep -E '(^|[^a-z-])curl[[:space:]]' "$code")" 
 }
 mutate_file "rpg curl gains a request body" "$BODY_SH" "${_RPG_RANGE}"'s|^      "\$BASE/inngest-registry-probe" \|\| echo "000")$|      -d '"'"'{}'"'"' "$BASE/inngest-registry-probe" \|\| echo "000")|' check_rpg_no_request_body
 # Row F — D5 violated: a remedy names op=execute. Property (STATIC): AC8's flat ban reds.
 check_rpg_no_mutating_op() {
-  ! grep -v '^[[:space:]]*#' "$(_rpg_region_of "$1")" | grep -qE 'op=(execute|resume|rollback|arm)([^a-z-]|$)'
+  ! grep -qE 'op=(execute|resume|rollback|arm)([^a-z-]|$)' <<<"$(grep -v '^[[:space:]]*#' "$(_rpg_region_of "$1")")" 
 }
 mutate_file "rpg remedy names op=execute" "$BODY_SH" "${_RPG_RANGE}"'s|Dispatch nothing from here; this op is a read and its answer would describe a host mid-transition\.|Then re-dispatch op=execute.|' check_rpg_no_mutating_op
 # Row G — D8 violated: the done branch reverts to 2.0's remedy. Property (STATIC): AC4's ban on
 # "the cutover already completed" reds.
 check_rpg_done_not_2_0_remedy() {
-  ! awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$(_rpg_region_of "$1")" | grep -v '^[[:space:]]*#' | grep -qE 'the cutover already completed|op=verify|restart-inngest-server'
+  ! grep -qE 'the cutover already completed|op=verify|restart-inngest-server' <<<"$(awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$(_rpg_region_of "$1")" | grep -v '^[[:space:]]*#')" 
 }
 mutate_file "rpg done branch reverts to 2.0 remedy" "$BODY_SH" "${_RPG_RANGE}"'s|^\(              echo "::error::registry-probe REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag reads .done.\.\) Since cutover step 2\.4 this host owns production cron scheduling, so scheduling may be DOWN — the numbered registry-probe: next steps are in this step.s log\."$|\1 done => the cutover already completed: dispatch op=verify."|' check_rpg_done_not_2_0_remedy
 # Row H — M1.2: the probe arm's call renamed. Property: the census (registry-probe=1) reds.
