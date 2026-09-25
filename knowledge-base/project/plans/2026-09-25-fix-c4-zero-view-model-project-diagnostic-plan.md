@@ -32,7 +32,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
    - `?dir=%252e%252e/src` passes today's guard, because `searchParams` decodes the value once to `%2e%2e`. The URL parser then resolves `%2e%2e` as `..`.
    - The result: any active-workspace member can read `.c4`, `README.md` and `model.likec4.json` from any folder of the workspace repo, not only the KB.
    - The new warning's dedup key and `extra` would also have carried this uncanonical value, so the fix is folded in: a per-segment allowlist, plus the dedup key built from GitHub's canonical `modelEntry.path`.
-2. **No Sentry email fires for a new warning-level issue.** The only unfiltered issue-stream rule triggers on `new_high_priority_issue`. The plan no longer claims a first-seen email. The follow-through sweeper's FAIL comment is the push signal for option (c).
+2. **No Sentry email fires for a new warning-level issue.** The only unfiltered issue-stream rule triggers on `new_high_priority_issue`. The plan no longer claims a first-seen email. ~~The follow-through sweeper's FAIL comment is the push signal for option (c).~~ (Superseded in review: the probe was deleted; the Sentry issue is read by hand.)
 3. **Concierge parity (agent-native).**
    - One sentence is added to `C4_PROMPT_ADDENDUM`. It tells the Concierge that a model with elements and no views has an incomplete layout, not a broken source; that it should not add `views` blocks; and that it should write a comment to a `.c4` file, because an `.md` write does not re-render.
    - The route names the Concierge fix only for the canonical diagrams folder, the only folder `edit_c4_diagram` can write.
@@ -476,7 +476,7 @@ None. `gh issue list --label code-review --state open` (81 issues) matched no bo
 - **If this lands broken, the user experiences:** one of these.
   - A false positive: a red "Diagram warnings" strip says the diagram has no views, on a diagram that renders fine.
   - A false negative: the page stays as today, "View `index` not found in the model." with no explanation.
-  - A too-strict `dir` guard returns 400 on a legitimate folder name, so the diagram does not load. The allowlist covers `[A-Za-z0-9._-]` segments; KB folder names are kebab-case.
+  - A too-strict `dir` guard returns 400 on a legitimate folder name, so the diagram does not load. The shipped guard is a per-segment blocklist (empty, `.`, `..` segments; `%`, `\`, `?`, `#`; control characters; 256 cap), not the allowlist first planned, so spaces and non-ASCII folder names still load.
   - The Concierge, following the addendum, writes a comment to the wrong file.
 - **If this leaks, the user's data is exposed via:** nothing new. This PR **closes** a pre-existing read of non-KB folders through `dir` dot-segments. The diagnostic text is static. The warning carries `userIdHash`, the validated `dir` and `modelPath` (the KB path GitHub returns) and an integer, the same data kinds this route already reports.
 - **Brand-survival threshold:** `none`.
@@ -488,21 +488,18 @@ None. `gh issue list --label code-review --state open` (81 issues) matched no bo
 liveness_signal:
   what: "Sentry warning issue 'c4 project read: committed model has elements but no views' (feature=c4-project-read, op=zero-view-model), at most once per workspace+modelPath per 5 minutes per process while a zero-view model is read; permanent read-side detector for a zero-view model from any writer (#8740, #8861)"
   cadence: "on read of a zero-view model; debounced 5 minutes per workspace+modelPath"
-  alert_target: "follow-through sweeper comment on #8740 (FAIL, daily after earliest); no Sentry email (the only unfiltered issue-stream rule is high-priority-only)"
-  configured_in: "apps/web-platform/app/api/kb/c4/project/route.ts (GET) and scripts/followthroughs/c4-zero-view-model-8740.sh"
+  alert_target: "none automated: the follow-through probe was deleted in review (CTO option A); the Sentry issue is read at postmerge and before c4-visualizer is promoted beyond role-dev; no Sentry email (the only unfiltered issue-stream rule is high-priority-only)"
+  configured_in: "apps/web-platform/app/api/kb/c4/project/route.ts (GET)"
 error_reporting:
   destination: "Sentry web-platform project via warnSilentFallback(null, ...) -> captureMessage level=warning with feature/op tags; pino warn -> Vector app_container_warn_filter -> Better Stack"
   fail_loud: "Sentry warning 'c4 project read: committed model has elements but no views' (feature=c4-project-read op=zero-view-model); pino warn line with the same msg"
 failure_modes:
   - mode: "false positive: diagnostic on a model that has views"
     detection: "route rows T2/T4 pre-merge; post-merge, the number of distinct userIdHash/modelPath values on the op=zero-view-model events (read with scripts/sentry-issue.sh) exceeds what a census re-run finds (Sentry layer 4 issue stream, pino layer 2 -> Vector/Better Stack layer 3)"
-    alert_route: "follow-through FAIL comment on #8740; the census re-run is the comparison"
-  - mode: "false negative: a zero-view model served with no diagnostic (probe would PASS by absence)"
+    alert_route: "manual: the census re-run that closes #8740 is the comparison"
+  - mode: "false negative: a zero-view model served with no diagnostic"
     detection: "route rows T1/T4 pin every views shape the census counts as zero ({} and []); post-merge, a census re-run finding a zero-view model while Sentry shows no event on a release at or after the fix (release tag, layer 5)"
     alert_route: "soleur:postmerge Sentry read; #8740 stays open until reconciled"
-  - mode: "follow-through closes #8740 vacuously (sink dead, fix not live, or op slug renamed)"
-    detection: "probe exits 2 unless /health build_sha descends from the probe's introducing commit, exits 3 without an environment:production server-startup event in the window; its .test.sh drift row reads both files (workflow run log of scheduled-followthrough-sweeper.yml + issue comment, layer 6)"
-    alert_route: "sweeper NOT YET / CANNOT ESTABLISH comment on #8740"
   - mode: "new code throws on an odd model shape or dir, turning a 200 into a 503"
     detection: "existing reportSilentFallback op=github-read-failed on the route's outer catch plus logger.error (pino layer 2 -> Better Stack layer 3; Sentry error-level issue); route rows T4/T6 pre-merge"
     alert_route: "Sentry high-priority rule (error-level new issue) -> email, filed under op=github-read-failed"
