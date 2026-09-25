@@ -96,7 +96,7 @@ echo "  (c_case harness canary OK — deliberate FAIL above is expected and subt
 # This is asserted the strongest available way: the dispatch condition is an allowlist of two
 # liveness modes, and NO dedicated-host verdict token appears anywhere in it. That is stronger
 # than "the arm sets no failure_mode", because it holds even if a future edit wires one.
-DISPATCH_IF=$(grep -n "if: (steps.effmode.outputs.failure_mode == 'inngest_down'" "$WF" | head -1) || true
+DISPATCH_IF=$(grep -n "if: (steps.effmode.outputs.failure_mode == 'inngest_down'" "$WF" | sed -n '1p') || true
 assert "the restart dispatch condition still exists (non-vacuity for the rows below)" \
   "[[ -n '$DISPATCH_IF' ]]"
 # `healthy` is deliberately NOT in this list: it is not a dedicated-host-specific token and it
@@ -120,7 +120,7 @@ assert "#7674 the arm never writes failure_mode (it could then reach the restart
 # The natural way to wire this arm into the restart path is `steps.dedicated.outputs.verdict`,
 # which the five failure_mode rows above cannot see. Assert the dispatch condition never mentions
 # the arm at all — the strongest available form, and it covers any verdict token.
-DISPATCH_LINE=$(grep -nF "if: (steps.effmode.outputs.failure_mode == 'inngest_down'" "$WF" | head -1 | cut -d: -f1) || true
+DISPATCH_LINE=$(grep -nF "if: (steps.effmode.outputs.failure_mode == 'inngest_down'" "$WF" | sed -n '1p' | cut -d: -f1) || true
 assert "#7674 the restart dispatch condition was located (non-vacuity for the row below)" \
   "[[ -n '$DISPATCH_LINE' ]]"
 DISPATCH_TXT=$(sed -n "${DISPATCH_LINE}p" "$WF" 2>/dev/null) || true
@@ -219,7 +219,7 @@ run_arm() { # $1 = file of stub rows; echoes the verdict the arm writes to $GITH
     export DEDICATED_HOST=soleur-inngest DEDICATED_HOST_NAME=soleur-inngest-prd PROBE_WINDOW=3h
     bash "$ARM_BODY"
   ) >/dev/null 2>&1
-  grep -oE '^verdict=.*' "$out" 2>/dev/null | head -1 | cut -d= -f2-
+  grep -oE '^verdict=.*' "$out" 2>/dev/null | sed -n '1p' | cut -d= -f2-
 }
 
 fx() { local f; f="$(mktemp)"; SCRATCH+=("$f"); printf '%s\n' "$@" > "$f"; printf '%s' "$f"; }
@@ -310,12 +310,12 @@ assert "#8077 the healthy mode is handled by the if [[ \"\$MODE\" == \"healthy\"
 # `if [[ -z "$fail_mode" ]]`. Declared inside that block, the secret_unset path never assigns it and
 # the output block's read under `set -u` kills the step before it writes failure_mode. (The executed
 # rows in (g) are what catch the mutation; this row names the invariant.)
-DECL_LN=$(grep -nF 'fail_mode=""; fail_detail=""' "$PROBE_NC" | head -1 | cut -d: -f1) || true
+DECL_LN=$(grep -nF 'fail_mode=""; fail_detail=""' "$PROBE_NC" | sed -n '1p' | cut -d: -f1) || true
 assert "#8077 the fail_mode=\"\" declaration line was located (non-vacuity)" "[[ -n '$DECL_LN' ]]"
 DECL_TXT=$(sed -n "${DECL_LN:-0}p" "$PROBE_NC" 2>/dev/null) || true
 assert "#8077 web_quiesced_since=\"\" is declared on the fail_mode=\"\" line" \
   "grep -qF 'web_quiesced_since=\"\"' <<<\"\$DECL_TXT\""
-FIRST_WQ_LN=$(grep -nE 'web_quiesced_since=' "$PROBE_NC" | head -1 | cut -d: -f1) || true
+FIRST_WQ_LN=$(grep -nE 'web_quiesced_since=' "$PROBE_NC" | sed -n '1p' | cut -d: -f1) || true
 assert "#8077 no web_quiesced_since= assignment precedes that declaration (first at ${FIRST_WQ_LN:-none}, decl ${DECL_LN:-none})" \
   "[[ -n '$FIRST_WQ_LN' && '$FIRST_WQ_LN' == '$DECL_LN' ]]"
 
@@ -329,10 +329,10 @@ assert "#8077 the file-issue step's case \"\$FAIL_MODE\" block was located (non-
 assert "#8077 the file-issue step routes inngest_disabled_unattributed to its own class (not *) → down)" \
   "grep -qE '^ *inngest_disabled_unattributed\\) +ISSUE_CLASS=\"disabled-unattributed\"' <<<\"\$FILE_CASE_NC\""
 assert "#8077 the disabled-unattributed issue title carries [ci/inngest-disabled-unattributed] and remedy op=rollback" \
-  "grep -qF 'ISSUE_TITLE=\"[ci/inngest-disabled-unattributed]' '$WF_NC' && awk '/ISSUE_CLASS\" == \"disabled-unattributed\"/{f=1} f&&/op=rollback/{print; exit}' '$WF_NC' | grep -q ."
+  "grep -qF 'ISSUE_TITLE=\"[ci/inngest-disabled-unattributed]' '$WF_NC' && awk '/ISSUE_CLASS\" == \"disabled-unattributed\"/{f=1} f&&/op=rollback/{print; exit}' '$WF_NC' | grep -c . >/dev/null"
 # (vii) The Sentry check-in is `ok` only when the no-live-scheduler alarm did not fire.
 # shellcheck disable=SC2034  # read inside the assert eval string below
-CHECKIN_NC=$(grep -E '^ *status: \$\{\{ \(steps\.effmode\.outcome' "$WF_NC" | head -1)
+CHECKIN_NC=$(grep -E '^ *status: \$\{\{ \(steps\.effmode\.outcome' "$WF_NC" | sed -n '1p')
 assert "#8077 the Sentry check-in status expression was located (non-vacuity)" "[[ -n \"\$CHECKIN_NC\" ]]"
 assert "#8077 the Sentry check-in ok requires steps.nolive.outputs.alarm != 'true'" \
   "grep -qF \"steps.effmode.outcome == 'success' && steps.nolive.outputs.alarm != 'true' && (\" <<<\"\$CHECKIN_NC\""

@@ -126,7 +126,7 @@ ok "$(grep -qxF 'GIT_DATA_ROOT="/mnt/git-data"' "$BS_BODY"; echo $?)" \
   "S1 the served store root is /mnt/git-data (#8211: the mapper's mountpoint, not a staging path)"
 n=$(grep -c '/mnt/git-data-luks' "$BS_BODY" || true)
 ok "$((n != 0))" "S1b the pre-#8211 /mnt/git-data-luks is named nowhere in the script body (got $n)"
-ok "$(grep -qxF 'REPO_ROOT="$GIT_DATA_ROOT/repositories" ' "$BS_BODY" || grep -qE '^REPO_ROOT="\$GIT_DATA_ROOT/repositories"' "$BS_BODY"; echo $?)" \
+ok "$(grep -qxF 'REPO_ROOT="$GIT_DATA_ROOT/repositories" ' "$BS_BODY" || grep -cE '^REPO_ROOT="\$GIT_DATA_ROOT/repositories"' >/dev/null "$BS_BODY"; echo $?)" \
   "S1c REPO_ROOT derives from GIT_DATA_ROOT (the harness prelude mirrors this derivation)"
 ok "$(grep -qE '^PRE_RECEIVE="\$HOOKS_DIR/pre-receive"' "$BS_BODY"; echo $?)" \
   "S1d PRE_RECEIVE derives from HOOKS_DIR (ditto)"
@@ -153,10 +153,10 @@ n=$(grep -c -- '--setrw' "$BS_BODY" || true)
 ok "$((n != 0))" "S6e no blockdev --setrw anywhere in the bootstrap (got $n)"
 ok "$(grep -qxF '  _pt_snap=git-data-pt-snap' "$UNIT_BODY"; echo $?)" "S6f the snapshot name is the fixed git-data-pt-snap (never the LUKS mapper name)"
 # AC2 — READ-ONLY FIRST, by line, in the comment-stripped unit.
-L_SETRO=$(grep -n 'blockdev --setro' "$UNIT_BODY" | head -1 | cut -d: -f1)
-L_CREATE=$(grep -n 'dmsetup create' "$UNIT_BODY" | head -1 | cut -d: -f1)
-L_MOUNT=$(grep -nE '(^|[[:space:];|&(])mount -o' "$UNIT_BODY" | head -1 | cut -d: -f1)
-L_ISLUKS=$(grep -n 'cryptsetup isLuks' "$UNIT_BODY" | head -1 | cut -d: -f1)
+L_SETRO=$(grep -n 'blockdev --setro' "$UNIT_BODY" | sed -n '1p' | cut -d: -f1)
+L_CREATE=$(grep -n 'dmsetup create' "$UNIT_BODY" | sed -n '1p' | cut -d: -f1)
+L_MOUNT=$(grep -nE '(^|[[:space:];|&(])mount -o' "$UNIT_BODY" | sed -n '1p' | cut -d: -f1)
+L_ISLUKS=$(grep -n 'cryptsetup isLuks' "$UNIT_BODY" | sed -n '1p' | cut -d: -f1)
 ok "$([ -n "$L_SETRO" ] && [ -n "$L_CREATE" ] && [ -n "$L_MOUNT" ] && [ -n "$L_ISLUKS" ] && [ "$L_ISLUKS" -lt "$L_SETRO" ] && [ "$L_SETRO" -lt "$L_CREATE" ] && [ "$L_SETRO" -lt "$L_MOUNT" ]; echo $?)" \
   "S6g by line: isLuks ($L_ISLUKS) < blockdev --setro ($L_SETRO) < dmsetup create ($L_CREATE) and < mount ($L_MOUNT)"
 ok "$(grep -qF '_pt_dir="$(mktemp -d -p /dev/shm)"' "$UNIT_BODY"; echo $?)" "S7 the COW and mount parent are a private mktemp -d on /dev/shm (RAM)"
@@ -210,8 +210,8 @@ ok "$(grep -qE 'if timeout [0-9]+ dmsetup remove --retry "\$_pt_snap" ' "$PT_BOD
 TEMPLATE="$DIR/cloud-init-git-data.yml"
 _luks_guard="$(awk '/<<'"'"'LUKSEOF'"'"'/{f=1} f && /git_data_volume_id/ && /git_data_luks_volume_id/ {print; exit}' "$TEMPLATE")"
 ok "$([ -n "$_luks_guard" ]; echo $?)" "S23 the luks_open heredoc carries a guard naming both volume ids"
-L_GUARD=$(grep -nF -- "$_luks_guard" "$TEMPLATE" | head -1 | cut -d: -f1)
-L_ISLUKS_T=$(grep -nF '_isluks_err="$(cryptsetup isLuks "$DEV" 2>&1)"' "$TEMPLATE" | head -1 | cut -d: -f1)
+L_GUARD=$(grep -nF -- "$_luks_guard" "$TEMPLATE" | sed -n '1p' | cut -d: -f1)
+L_ISLUKS_T=$(grep -nF '_isluks_err="$(cryptsetup isLuks "$DEV" 2>&1)"' "$TEMPLATE" | sed -n '1p' | cut -d: -f1)
 ok "$([ -n "$L_GUARD" ] && [ -n "$L_ISLUKS_T" ] && [ "$L_GUARD" -lt "$L_ISLUKS_T" ]; echo $?)" \
   "S23b the id guard precedes the isLuks probe and so every luksFormat (guard at ${L_GUARD:-none}, isLuks at ${L_ISLUKS_T:-none})"
 run_luks_guard() { # <plaintext id> <luks id> -> the guard's exit status
@@ -225,7 +225,7 @@ ok "$(run_luks_guard '' 4343)" "S23e the guard passes an absent plaintext volume
 # The single marker writer, and it sits after every FATAL that must leave the marker absent.
 n=$(grep -c 'mv -f "\$_marker_tmp" "\$STORE_VERIFIED"' "$UNIT_BODY" || true)
 ok "$((n != 1))" "S10 exactly one marker writer in the unit (got $n)"
-L_MARK=$(grep -n 'mv -f "\$_marker_tmp" "\$STORE_VERIFIED"' "$UNIT_BODY" | head -1 | cut -d: -f1)
+L_MARK=$(grep -n 'mv -f "\$_marker_tmp" "\$STORE_VERIFIED"' "$UNIT_BODY" | sed -n '1p' | cut -d: -f1)
 _late=0
 while IFS= read -r _l; do
   [ "${_l%%:*}" -lt "${L_MARK:-0}" ] || _late=1
@@ -241,19 +241,19 @@ ok "$(grep -qF 'findmnt -n -o SOURCE -T "$PRE_RECEIVE"' "$UNIT_BODY"; echo $?)" 
 # The probe, and the ordering that makes it safe. `runuser -u` without -l keeps its caller's
 # environment, so `runuser … env -i` would briefly run a git-uid process still holding
 # GIT_DATA_LUKS_KEY in /proc/<pid>/environ.
-PROBE_LINE=$(grep -n 'SSH_ORIGINAL_COMMAND=boot-probe-0' "$UNIT_BODY" | head -1 | cut -d: -f2-)
+PROBE_LINE=$(grep -n 'SSH_ORIGINAL_COMMAND=boot-probe-0' "$UNIT_BODY" | sed -n '1p' | cut -d: -f2-)
 ok "$([ -n "$PROBE_LINE" ]; echo $?)" "S14 the erasure probe line is present"
 _i_env=$(awk -v s="$PROBE_LINE" 'BEGIN{print index(s, "env -i")}')
 _i_run=$(awk -v s="$PROBE_LINE" 'BEGIN{print index(s, "runuser")}')
 ok "$([ "$_i_env" -gt 0 ] && [ "$_i_run" -gt 0 ] && [ "$_i_env" -lt "$_i_run" ]; echo $?)" \
   "S15 env -i PRECEDES runuser on the probe line (env at col $_i_env, runuser at col $_i_run)" "$PROBE_LINE"
-ok "$(printf '%s\n' "$PROBE_LINE" | grep -qF 'PATH=/usr/bin:/bin'; echo $?)" "S15b the probe pins PATH=/usr/bin:/bin"
-ok "$(printf '%s\n' "$PROBE_LINE" | grep -qF '/usr/sbin/runuser'; echo $?)" \
+ok "$(printf '%s\n' "$PROBE_LINE" | grep -cF 'PATH=/usr/bin:/bin' >/dev/null; echo $?)" "S15b the probe pins PATH=/usr/bin:/bin"
+ok "$(printf '%s\n' "$PROBE_LINE" | grep -cF '/usr/sbin/runuser' >/dev/null; echo $?)" \
   "S15c runuser is named by absolute path — env -i's PATH does not include /usr/sbin"
-ok "$(printf '%s\n' "$PROBE_LINE" | grep -qF -- '-u git --'; echo $?)" "S15d the probe runs as the git transport user"
+ok "$(printf '%s\n' "$PROBE_LINE" | grep -cF -- >/dev/null '-u git --'; echo $?)" "S15d the probe runs as the git transport user"
 ok "$(grep -qF 'rm -f "$STORE_VERIFIED"' "$UNIT_BODY"; echo $?)" "S16 a failed probe removes the marker before the FATAL"
 L_RM=$(grep -n 'rm -f "\$STORE_VERIFIED"' "$UNIT_BODY" | tail -1 | cut -d: -f1)
-L_PFATAL=$(grep -n 'FATAL: erasure_probe=no' "$UNIT_BODY" | head -1 | cut -d: -f1)
+L_PFATAL=$(grep -n 'FATAL: erasure_probe=no' "$UNIT_BODY" | sed -n '1p' | cut -d: -f1)
 ok "$([ -n "$L_RM" ] && [ -n "$L_PFATAL" ] && [ "$L_RM" -lt "$L_PFATAL" ]; echo $?)" \
   "S16b the removal is BEFORE the erasure_probe FATAL (rm at $L_RM, FATAL at $L_PFATAL)"
 # Every new failure pages on a stage Sentry already routes, so issue-alerts.tf is not edited.
@@ -262,7 +262,7 @@ for _r in plaintext_unverified plaintext_residue luks_residue 'fence_on_mapper=n
   ok "$(grep -qF "FATAL: $_r" "$UNIT_BODY"; echo $?)" "S18 the named FATAL reason '$_r' exists in the unit"
 done
 for _b in fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos plaintext_journal; do
-  ok "$(grep -qF "\"$_b=\${_$_b}\"" "$BS_BODY" || grep -qF "$_b=\${_$_b}" "$BS_BODY"; echo $?)" \
+  ok "$(grep -qF "\"$_b=\${_$_b}\"" "$BS_BODY" || grep -cF "$_b=\${_$_b}" >/dev/null "$BS_BODY"; echo $?)" \
     "S19 boot_complete carries $_b (contract C3)"
 done
 # The two output strings the probe and the app-side erasure both read. Byte-exact by contract.
@@ -673,7 +673,7 @@ emit_stage_bootstrap() {
   echo $?
 }
 # first_line <regex> — the calls.log line number of the first match, or 999999 when absent.
-first_line() { local _n; _n=$(grep -nE -- "$1" "$FX/calls.log" | head -1 | cut -d: -f1); echo "${_n:-999999}"; }
+first_line() { local _n; _n=$(grep -nE -- "$1" "$FX/calls.log" | sed -n '1p' | cut -d: -f1); echo "${_n:-999999}"; }
 # P2/P5 teardown: umount (if mounted) -> dmsetup remove -> losetup -d, in that order; no --setrw;
 # no transient device left. $1 = 1 when a mount had succeeded.
 teardown_ok() {

@@ -175,13 +175,13 @@ TOKEN_TF="$SCRIPT_DIR/web-probe-read-token.tf"
 assert "zot .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
   "grep -qE '^Environment=HOME=/root\$' '$SVC'"
 assert "zot .service does NOT source webhook-deploy (deploy-owned; imports /tmp/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'webhook-deploy'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'webhook-deploy' >/dev/null"
 assert "zot .service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'DOPPLER_CONFIG_DIR' >/dev/null"
 assert "zot .service does NOT reference /tmp/.doppler (#6536 clash surface)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c '/tmp/.doppler' >/dev/null"
 assert "zot .service is root-run (no User=deploy without PrivateTmp=true)" \
-  "! grep -qE '^User=deploy' '$SVC' || grep -qE '^PrivateTmp=true' '$SVC'"
+  "! grep -qE '^User=deploy' '$SVC' || grep -cE '^PrivateTmp=true' >/dev/null '$SVC'"
 # Anchor on the token VALUE wiring (web_probes.key), not just the literal DOPPLER_TOKEN= — otherwise
 # dropping the key arg (empty token = the #6548 bug) still matches (test-design review).
 assert "server.tf zot_consumer_probe_install writes DOPPLER_TOKEN=<web_probes.key> into /etc/default/web-zot-consumer-probe" \
@@ -190,9 +190,9 @@ assert "server.tf zot_consumer_probe_install writes DOPPLER_TOKEN=<web_probes.ke
 assert "doppler_service_token.web_probes resource exists" \
   "grep -qE 'resource \"doppler_service_token\" \"web_probes\"' '$TOKEN_TF'"
 assert "web_probes token is read-scoped (access=\"read\") + soleur/prd config" \
-  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -qE 'access[[:space:]]*=[[:space:]]*\"read\"'"
+  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -cE 'access[[:space:]]*=[[:space:]]*\"read\"' >/dev/null"
 assert "web_probes token is scoped to config \"prd\" (the probes run doppler --config prd)" \
-  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -qE 'config[[:space:]]*=[[:space:]]*\"prd\"'"
+  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -cE 'config[[:space:]]*=[[:space:]]*\"prd\"' >/dev/null"
 # Positive-control Source-4 canary — assert it FIRES (behaviorally), not merely that the string exists
 # in the file (a deleted _canary call would leave the string in the function def + comments). Prove
 # three properties: (a) fires on a run with a fresh marker; (b) rate-limits (no re-emit within window);

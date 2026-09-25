@@ -85,8 +85,8 @@ load_profile() {
   CODE="$(sed -E 's/--.*$//' "$1")"
 }
 
-has_code()    { printf '%s' "$CODE" | grep -iqE "$1"; }
-absent_code() { ! printf '%s' "$CODE" | grep -iqE "$1"; }
+has_code()    { printf '%s' "$CODE" | grep -icE "$1" >/dev/null; }
+absent_code() { ! printf '%s' "$CODE" | grep -icE "$1" >/dev/null; }
 # if/then/else helpers (not `A && B || C`, which runs C when B fails — SC2015).
 check_has()     { if has_code "$1";    then ok "[$LABEL] $2"; else bad "[$LABEL] $3"; fi; }
 check_absent()  { if absent_code "$1"; then ok "[$LABEL] $2"; else bad "[$LABEL] $3"; fi; }
@@ -97,7 +97,7 @@ check_no_privileged_revoke() {
   local bad_revoke=0 line
   while IFS= read -r line; do
     [[ "$line" =~ [Rr][Ee][Vv][Oo][Kk][Ee] ]] || continue
-    if printf '%s' "$line" | grep -iqE '\b(postgres|service_role)\b'; then
+    if printf '%s' "$line" | grep -icE '\b(postgres|service_role)\b' >/dev/null; then
       bad_revoke=1
       printf '       offending REVOKE: %s\n' "$(printf '%s' "$line" | tr -s ' ')"
     fi
@@ -221,7 +221,7 @@ profile_0001() {
   local neg_offenders=() nt flat
   flat="$(printf '%s' "$CODE" | tr '\n' ' ' | tr -s ' ')"
   for nt in "${ALLOW_14[@]}" users conversations; do
-    if printf '%s' "$flat" | grep -iqE "to_regclass\('public\.${nt}'\)[[:space:]]+IS[[:space:]]+NOT[[:space:]]+NULL"; then
+    if printf '%s' "$flat" | grep -icE "to_regclass\('public\.${nt}'\)[[:space:]]+IS[[:space:]]+NOT[[:space:]]+NULL" >/dev/null; then
       neg_offenders+=("$nt")
     fi
   done
@@ -243,8 +243,8 @@ profile_0001() {
   # or a REVOKE at the start of a line. Prose REVOKE is mid-line inside a string, so
   # neither alternative can match it — correct by construction, not by luck.
   local guard_off revoke_off
-  guard_off="$(printf '%s' "$CODE" | grep -abioE "to_regclass\('public\.kb_files'\)" | head -1 | cut -d: -f1)"
-  revoke_off="$(printf '%s' "$CODE" | grep -abioE "(EXECUTE[[:space:]]+format\('REVOKE|^[[:space:]]*REVOKE[[:space:]])" | head -1 | cut -d: -f1)"
+  guard_off="$(printf '%s' "$CODE" | grep -abioE "to_regclass\('public\.kb_files'\)" | sed -n '1p' | cut -d: -f1)"
+  revoke_off="$(printf '%s' "$CODE" | grep -abioE "(EXECUTE[[:space:]]+format\('REVOKE|^[[:space:]]*REVOKE[[:space:]])" | sed -n '1p' | cut -d: -f1)"
   if [[ -n "$guard_off" && -n "$revoke_off" && "$guard_off" -lt "$revoke_off" ]]; then
     ok "[$LABEL] negative guard (offset $guard_off) precedes the first REVOKE (offset $revoke_off)"
   else

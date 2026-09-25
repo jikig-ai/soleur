@@ -522,18 +522,23 @@ wf = yaml.safe_load(open(sys.argv[1])) or {}
 on = wf.get("on", wf.get(True)) or {}
 jobs = wf.get("jobs") or {}
 job = jobs.get("deploy-script-tests") or {}
-runs = [str(s.get("run", "")) for s in (job.get("steps") or [])]
+steps = (job.get("steps") or [])
+runs = [str(s.get("run", "")) for s in steps]
+# The shard env must sit ON the runner step — a sibling-step env would satisfy
+# a job-wide scan while the runner leg executes unsharded (the gate's own arm).
+runner_steps = [s for s in steps
+    if str(s.get("run", "")).strip() == "bash apps/web-platform/infra/run-registered-suites.sh"]
 pr_paths = list((on.get("pull_request") or {}).get("paths") or [])
-
-GUARD_SUITE = "apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh"
 
 checks = {
     "job_exists": bool(job),
-    # The literal single-line `run: bash <path>` form is load-bearing beyond registration here:
-    # apps/web-platform/infra/run-registered-suites.sh DERIVES its execute set from this job's
-    # steps with a literal single-line match, so an inline env prefix or a `run: |` block
-    # silently de-registers the suite from the local runner while it still LOOKS registered.
-    "suite_registered": any(r.strip() == f"bash {GUARD_SUITE}" for r in runs),
+    # Since #8736 the registration under test is the CONNECTION, not a per-suite
+    # step: presence under apps/web-platform/infra/ IS registration (the runner
+    # glob-derives it), so this suite runs iff the matrix legs invoke the runner
+    # with the shard wiring. Asserting a literal `run: bash <this file>` step
+    # would assert a shape the contract deliberately removed.
+    "suite_registered": len(runner_steps) == 1
+        and "SOLEUR_INFRA_SHARD" in str(runner_steps[0].get("env", {}) or {}),
     "inventory_wf_path": ".github/workflows/registry-zot-inventory.yml" in pr_paths,
     "dispatch_wf_path": ".github/workflows/registry-zot-inventory-dispatch.yml" in pr_paths,
     "bridge_action_path": ".github/actions/cf-tunnel-registry-bridge/action.yml" in pr_paths,
@@ -544,7 +549,7 @@ PY
 
 assert "infra-validation.yml still has a deploy-script-tests job" \
   "[[ \$(probe_infra job_exists) == 'yes' ]]"
-assert "this suite is registered as a literal single-line \`run: bash <path>\` step" \
+assert "this suite's runner is invoked (with shard wiring) in deploy-script-tests" \
   "[[ \$(probe_infra suite_registered) == 'yes' ]]"
 assert "registry-zot-inventory.yml is in that workflow's pull_request.paths" \
   "[[ \$(probe_infra inventory_wf_path) == 'yes' ]]"

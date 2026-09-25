@@ -188,8 +188,8 @@ else
   grep -qxF "doppler-env-home=root" "$SCRATCH/h1.calls" && ok "H1 doppler runs with HOME=/root" || no "H1 doppler runs with HOME=/root"
   grep -qxF "doppler-env-no-config-dir" "$SCRATCH/h1.calls" && ok "H1 an inherited DOPPLER_CONFIG_DIR is cleared (#6536)" || no "H1 an inherited DOPPLER_CONFIG_DIR is cleared"
   # Ordering: the proof precedes the first write to the file.
-  first_doppler="$(grep -n '^doppler secrets' "$SCRATCH/h1.calls" | head -1 | cut -d: -f1)" || true
-  first_mv="$(grep -n '^mv ' "$SCRATCH/h1.calls" | head -1 | cut -d: -f1)" || true
+  first_doppler="$(grep -n '^doppler secrets' "$SCRATCH/h1.calls" | sed -n '1p' | cut -d: -f1)" || true
+  first_mv="$(grep -n '^mv ' "$SCRATCH/h1.calls" | sed -n '1p' | cut -d: -f1)" || true
   [[ -n "$first_doppler" && -n "$first_mv" && "$first_doppler" -lt "$first_mv" ]] && ok "H1 the token is proven BEFORE the file is replaced" || no "H1 the token is proven BEFORE the file is replaced (doppler@${first_doppler:-none} mv@${first_mv:-none})"
   grep -qxF "[luks-token-refresh] result=ok" "$SCRATCH/h1.out" && ok "H1 prints the ok verdict" || no "H1 prints the ok verdict"
   grep -qxF "logger -t luks-monitor -- SOLEUR_LUKS_HOST_TOKEN_REFRESH result=ok" "$SCRATCH/h1.calls" && ok "H1 the outcome reaches journald under the luks-monitor tag" || no "H1 the outcome reaches journald under the luks-monitor tag"
@@ -197,7 +197,7 @@ else
   [[ "$(leaks h1 "$OLD_TOKEN")" == 0 ]] && ok "H1 the OLD token is in no output and no argv of any program" || no "H1 the OLD token leaked into output or an argv"
   grep -qF "$FIXTURE_KEY" "$SCRATCH/h1.out" && no "H1 the passphrase read back is never printed" || ok "H1 the passphrase read back is never printed"
   grep -q 'STUB-MISS' "$SCRATCH/h1.out" && no "H1 no stub was asked a question it does not model" || ok "H1 no stub was asked a question it does not model"
-  ls "$SCRATCH"/h1.env.* 2>/dev/null | grep -vqE '/h1\.env$' && no "H1 no sibling file (backup or tmp) holding a token is left beside the env file" || ok "H1 no sibling file (backup or tmp) holding a token is left beside the env file"
+  ls "$SCRATCH"/h1.env.* 2>/dev/null | grep -vcE '/h1\.env$' >/dev/null && no "H1 no sibling file (backup or tmp) holding a token is left beside the env file" || ok "H1 no sibling file (backup or tmp) holding a token is left beside the env file"
 
   # H2 — no EnvironmentFile (the live web-1 state on 2026-09-24, #8632's first apply): create it
   # the way workspaces-cutover.sh does (0600 root, token line only), AFTER the token is proven.
@@ -293,12 +293,12 @@ else
   [[ "$(stat -c %a "$SCRATCH/h11.env")" == 600 ]] && ok "H11 the restored file is mode 600" || no "H11 the restored file is mode 600"
 
   # The helper never starts the unit (comment-stripped, so a sentence about it cannot satisfy this).
-  if grep -vE '^[[:space:]]*#' "$HELPER" | grep -qE 'systemctl[[:space:]]+(start|restart)'; then
+  if grep -vE '^[[:space:]]*#' "$HELPER" | grep -cE 'systemctl[[:space:]]+(start|restart)' >/dev/null; then
     no "the helper never starts or restarts a unit"
   else
     ok "the helper never starts or restarts a unit"
   fi
-  if grep -vE '^[[:space:]]*#' "$HELPER" | grep -qE 'doppler[[:space:]]+(run|secrets[[:space:]]+download)'; then
+  if grep -vE '^[[:space:]]*#' "$HELPER" | grep -cE 'doppler[[:space:]]+(run|secrets[[:space:]]+download)' >/dev/null; then
     no "the helper uses only the pinned doppler form (no run, no download)"
   else
     ok "the helper uses only the pinned doppler form (no run, no download)"
