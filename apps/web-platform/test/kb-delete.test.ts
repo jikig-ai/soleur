@@ -257,6 +257,42 @@ describe("DELETE /api/kb/file/[...path]", () => {
     expect(body.error).toMatch(/invalid path/i);
   });
 
+  // 5b. Traversal the filesystem check cannot see: `path.join` treats `%2e%2e`
+  // as a literal name, but fetch's URL parser resolves it as `..`, so the
+  // GitHub DELETE would land outside knowledge-base/. The mocked filesystem
+  // check PASSES here on purpose.
+  test.each([
+    [["x", "%2e%2e", "%2e%2e", "victim.png"]],
+    [["x", ".%2E", "victim.png"]],
+    [["x", ".", "victim.png"]],
+  ])("returns 400 with zero GitHub calls for URL-level traversal %j", async (segments) => {
+    setupFullMocks();
+
+    const req = createRequest(segments, "https://app.soleur.ai");
+    const res = await DELETE(req, { params: createParams(segments) });
+    expect(res.status).toBe(400);
+    expect(mockGithubApiGet).not.toHaveBeenCalled();
+    expect(mockGithubApiDelete).not.toHaveBeenCalled();
+  });
+
+  // 5c. URL-meta characters in a legitimate name are encoded, not
+  // interpolated raw (a raw `#` truncated the path; a raw `?` injected a query).
+  test("encodes each path segment into the GitHub URL", async () => {
+    setupFullMocks();
+
+    const segments = ["My Docs", "C# notes?.png"];
+    const req = createRequest(segments, "https://app.soleur.ai");
+    await DELETE(req, { params: createParams(segments) });
+    const urls = [
+      ...mockGithubApiGet.mock.calls.map((c) => c[1] as string),
+      ...mockGithubApiDelete.mock.calls.map((c) => c[1] as string),
+    ];
+    expect(urls.length).toBeGreaterThan(0);
+    for (const u of urls) {
+      expect(u).toBe("/repos/test-owner/test-repo/contents/knowledge-base/My%20Docs/C%23%20notes%3F.png");
+    }
+  });
+
   // 6. Symlink target
   test("returns 403 for symlink target", async () => {
     setupFullMocks();

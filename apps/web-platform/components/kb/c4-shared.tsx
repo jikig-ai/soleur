@@ -32,6 +32,7 @@ import "@likec4/diagram/styles.css";
 // Soleur re-theme — MUST come after the library styles so it wins on source
 // order (defense-in-depth alongside the scoped-selector specificity in the file).
 import "./c4-theme.css";
+import type { Diagnostic } from "@/lib/c4-model-shape";
 
 // By supplying our own MantineProvider (Lever 1, below) we displace
 // @likec4/diagram's DefaultMantineProvider — which the library renders only when
@@ -51,7 +52,6 @@ const c4MantineTheme = createTheme({
   defaultRadius: "sm",
 });
 
-export type Diagnostic = { message: string; line: number; sourceFsPath: string };
 export type ProjectResponse = {
   dir: string;
   sources: Record<string, string>;
