@@ -181,7 +181,7 @@ per-SHA fixture files, `*/pulls` dispatched before `commits/<sha>`, unfixtured
 argv → exit 64 so a miss fails loudly; call LOG asserted). Registered in
 `scripts/test-all.sh` explicitly — `tests/scripts/` is NOT auto-globbed.
 
-**Mutation matrix (each must drive the suite RED):**
+**Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -193,6 +193,9 @@ argv → exit 64 so a miss fails loudly; call LOG asserted). Registered in
 | 6 | Match required job by `contains` instead of `startswith` | RED — prefix-collision fixture (`deploy-script-tests` vs `deploy-script-tests-done` must not satisfy `deploy-script-tests`) |
 
 ### Guard 2 — ledger job ceilings ratchet, not absorb
+
+**Assembly.** `scripts/pr-fanout-ledger.txt` rows for the five touched
+workflows; `plugins/soleur/test/pr-fanout-ledger.test.sh` A3/A5 checks.
 
 **Property.** Declared jobs ≤ each row's ceiling (`pr-fanout-ledger.test.sh`
 A3). infra-validation/tenant-integration/vendor-pin-verify add steps to
@@ -209,6 +212,11 @@ gating the push arm (#8919)".
 | 3 | Raise a row without consequence text | RED — A-parse/A5 consequence rule |
 
 ### Guard 3 — required contexts, queue arms, and workflow_run consumers untouched
+
+**Assembly.** `infra/github/ruleset-ci-required.tf` (24 contexts),
+`scripts/required-checks.txt`, `workflows:` keys in every
+`.github/workflows/*.yml`, and the five gated files' `on:`/`concurrency`
+blocks.
 
 **Property.** The 24 required contexts (`ruleset-ci-required.tf` +
 `scripts/required-checks.txt`) still report on PRs; `merge_group` arms
@@ -232,6 +240,18 @@ jobs AND does not email ops. `notify-main-failure`'s `!= 'success'` term is
 true under `skipped` → the `pr_duplicate != 'true'` conjunct is load-bearing,
 pinned by a grep-assert in the new test file (assert-anchor form: the conjunct
 line in the job's `if:`).
+
+**Assembly.** `infra-validation.yml` `notify-main-failure` `if:` block;
+`deploy-script-tests-done` aggregator; `tests/scripts/test-main-duplicate-skip.sh`
+Guard-4 grep pin.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Drop `pr_duplicate != 'true'` from `notify-main-failure`'s `if:` | RED — the Guard-4 grep pin reds |
+| 2 | Drop `always()` from `deploy-script-tests-done` | RED — skipped parents hide the aggregate verdict |
+| 3 | Emit `duplicate=true` without verifying `notify-main-failure` coverage | RED-by-review: un-alerted skip drift |
 
 ## Required-check / branch-protection risks
 
