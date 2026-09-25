@@ -600,30 +600,30 @@ The must-PASS content in H2 is:
 
 ## Acceptance Criteria
 
-- [ ] **AC1.** The guide has exactly one `### Blog` heading, and it is inside `## Channel Notes`.
+- [x] **AC1.** The guide has exactly one `### Blog` heading, and it is inside `## Channel Notes`.
   - `grep -c '^### Blog$' knowledge-base/marketing/brand-guide.md` prints `1`.
   - `awk '/^## Channel Notes/{c=1;next} /^## /{c=0} c && /^### Blog$/' knowledge-base/marketing/brand-guide.md | wc -l` prints `1`. Checked at plan time: the same awk prints `1` for `### Discord` today.
   - The line above the heading is the A3 HTML comment naming the test file.
-- [ ] **AC2.** The note carries the eleven labelled bullets from the target text, plus the example-opening pair. The labels are: Reader, Before drafting, Open, Outcome before mechanism, Jargon limits, Proof points, Search, Where technical detail goes, Call to action, Distribution, and Scope. The "Do" example does not contain "simply". This is a one-time check at the work phase; the test does not pin these labels.
-- [ ] **AC3.** `grep -niE 'technical blog' knowledge-base/marketing/brand-guide.md knowledge-base/overview/vision.md` prints nothing. The `**General register**` parenthetical and the Non-technical founders channels cell both name the blog.
-- [ ] **AC4.** content-writer's blog default resolves through the note, with no unconditional technical default left.
+- [x] **AC2.** The note carries the eleven labelled bullets from the target text, plus the example-opening pair. The labels are: Reader, Before drafting, Open, Outcome before mechanism, Jargon limits, Proof points, Search, Where technical detail goes, Call to action, Distribution, and Scope. The "Do" example does not contain "simply". This is a one-time check at the work phase; the test does not pin these labels.
+- [x] **AC3.** `grep -niE 'technical blog' knowledge-base/marketing/brand-guide.md knowledge-base/overview/vision.md` prints nothing. The `**General register**` parenthetical and the Non-technical founders channels cell both name the blog.
+- [x] **AC4.** content-writer's blog default resolves through the note, with no unconditional technical default left.
   - `grep -c 'blog → technical, landing page → general' plugins/soleur/skills/content-writer/SKILL.md` prints `0`.
   - `grep -c 'blog posts default to .technical.' plugins/soleur/skills/content-writer/SKILL.md` prints `0`.
   - The single `` - `--audience` `` bullet contains `## Channel Notes > ### Blog` and does not contain `blog → technical`. This is scoped to the bullet: the whole-file count is already 2 on `origin/main`, so a count check proves little (test-design review).
   - The file contains `## Phase 2.4: Blog Note Scan`. Its trigger names the literal `**Jargon limits.**` label. It says the scan re-runs alongside Phase 2.5. Its other-exit branch prints `blog-jargon-scan unavailable (rc=<N>)` and continues. Its invocation is the bare `bash "${CLAUDE_PLUGIN_ROOT}/skills/content-writer/scripts/blog-jargon-scan.sh"`, with no `:-` fallback: `grep -c 'CLAUDE_PLUGIN_ROOT:-' plugins/soleur/skills/content-writer/SKILL.md` prints `0`.
-- [ ] **AC5.** content-writer gains no new interactive gate: `git diff origin/main -- plugins/soleur/skills/content-writer/SKILL.md | grep -c '^+.*AskUserQuestion'` prints `0`, and `grep -c '^
-- [ ] **AC6.** The scan behaves the same on real files as on the fixtures:
+- [x] **AC5.** content-writer gains no new interactive gate: `git diff origin/main -- plugins/soleur/skills/content-writer/SKILL.md | grep -c '^+.*AskUserQuestion'` prints `0`, and `grep -c '^## Phase 1.5' plugins/soleur/skills/content-writer/SKILL.md` prints `0` (the cut pre-draft step did not come back). *(This AC's text was truncated mid-command in the planning pass; the second clause was completed at work time.)*
+- [x] **AC6.** The scan behaves the same on real files as on the fixtures:
   - on the rejected #8548 draft: `D=$(mktemp); git show origin/feat-content-8548-roadmap-undecided-vs-forgotten:plugins/soleur/docs/blog/2026-09-24-roadmap-undecided-vs-forgotten.md > "$D"; bash plugins/soleur/skills/content-writer/scripts/blog-jargon-scan.sh "$D" | wc -l` prints 20 or more, and exits 1;
   - on `plugins/soleur/docs/blog/2026-06-15-best-ai-tools-for-solo-founders-2026.md`: exits 0;
   - with no argument: exits 2.
-- [ ] **AC7.** `bun test plugins/soleur/test/blog-audience-contract.test.ts` passes.
-- [ ] **AC8.** `grep -c "apply the brand guide's Channel Notes > Blog note" plugins/soleur/skills/ship/SKILL.md` prints `1`, and `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0.
-- [ ] **AC9.** `vision.md` has no "technical blog posts", and `content-strategy.md` Pillar 2 carries the dated #8774 line.
-- [ ] **AC10.** These suites still pass:
+- [x] **AC7.** `bun test plugins/soleur/test/blog-audience-contract.test.ts` passes.
+- [x] **AC8.** `grep -c "apply the brand guide's Channel Notes > Blog note" plugins/soleur/skills/ship/SKILL.md` prints `1`, and `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0.
+- [x] **AC9.** `vision.md` has no "technical blog posts", and `content-strategy.md` Pillar 2 carries the dated #8774 line.
+- [x] **AC10.** These suites still pass:
   - `bun test apps/web-platform/test/server/inngest/cron-weekly-release-digest.test.ts`, the Release Digest lockstep;
   - `bun test plugins/soleur/test/marketing-content-drift.test.ts plugins/soleur/test/scratch-path-collision.test.ts plugins/soleur/test/components.test.ts`;
   - `bun test plugins/soleur/`.
-- [ ] **AC11.** Exactly one handoff comment exists on #8548: `gh issue view 8548 --json comments --jq '[.comments[].body | select(contains("8774-handoff"))] | length'` prints `1`. The check scans every comment and counts the marker, so neither a later comment by someone else nor a pipeline re-run can flip it.
+- [x] **AC11.** Exactly one handoff comment exists on #8548: `gh issue view 8548 --json comments --jq '[.comments[].body | select(contains("8774-handoff"))] | length'` prints `1`. The check scans every comment and counts the marker, so neither a later comment by someone else nor a pipeline re-run can flip it.
 - [ ] **AC12.** The PR body uses `Closes #8774` and `Ref #8548`, never `Closes #8548`. It pre-records the expected CMO Website Framing Review result: "the website already uses the General register; no copy change expected."
 
 ## Domain Review
