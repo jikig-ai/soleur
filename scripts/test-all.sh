@@ -3665,6 +3665,13 @@ if want_scripts; then
   # the defect alarm. The suite also pins FAIL-precedence over PASS, fault-to-TRANSIENT on each
   # of the three queries, and the missing-creds arm (TRANSIENT, never a spurious FAIL page).
   run_suite "scripts/ship-merge-mergebase-verdict-8151" bash scripts/followthroughs/ship-merge-mergebase-verdict-8151.test.sh
+  # #8740: exit-code harness for the C4 zero-view-model close gate. Registered explicitly
+  # (orphan-suite class above). Its exit 0 closes #8740 by proof by absence, so the suite pins
+  # the check order (signal FAIL wins over deploy and sink), the anti-vacuity controls (/health
+  # build_sha must descend from the probe's introducing commit; 0 server-startup events is
+  # CANNOT ESTABLISH, never PASS), shape-before-count on every Sentry body, and a drift row
+  # reading the probe's feature/op constants against route.ts's mirrorWarnWithDebounce call.
+  run_suite "scripts/c4-zero-view-model-8740" bash scripts/followthroughs/c4-zero-view-model-8740.test.sh
   # (#8006 retired 2026-09-24 — issue closed on sweeper PASS; probe script +
   # suite deleted per the script's own RETIREMENT note.)
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
