@@ -16,6 +16,42 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-25. **Mode:** minimal. This is a ~3-line fix, so the pass ran the mandatory
+halt gates, a mechanical verification sweep, one reviewer, and an end-to-end dry run. It did not
+run a full agent fan-out.
+
+**Gates:**
+
+- 4.6 User-Brand Impact: pass. The threshold is `none`, and no Files-to-Edit path matches the sensitive-path regex.
+- 4.7 Observability: pass after one fix. `expected_output` changed from prose to the literal `#8807`, and the `.test.sh` suite-shape proxy hit was argued down (see the Observability section).
+- 4.8 PAT: no hits.
+- 4.11 Guard Contract: `lint-guard-contract.py` green, and the Assembly names the `PATTERN` chokepoint plus a census command.
+- 4.5, 4.55, 4.9, 4.10: not triggered.
+
+**Agents:** `soleur:engineering:review:test-design-reviewer`. The plan-time panel (DHH, Kieran, code-simplicity, CTO, advisor consult) ran during `soleur:plan`.
+
+### Key improvements
+
+1. **End-to-end dry run.** The prescribed edits were applied in a throwaway detached worktree, then removed. Results:
+   - AC1 printed `1`.
+   - AC2 RED showed `3/4` forbidden and `3` fixed, rc 1.
+   - AC3 GREEN printed 3 PASS lines, rc 0.
+   - AC5a listed exactly the 2 infra lines.
+   - AC5b reported `1` and `2`.
+   - AC6 reported `45 passed, 0 failed`.
+   - `git merge-tree` against #8848's head merged cleanly, and the merged file carries both FILES_8664 and #8807.
+2. **Flag-clause coverage.** Bad line 1 now uses plain `-q` and bad line 2 uses `-Eq`. Before this, a PATTERN pinned to `-qE` or to a literal `-q` survived the probe and would stop flagging `x | grep -q y`, the most common real form (test-design P1). Matrix rows 8 and 9.
+3. **Column-0 `||`.** Added as good line 4. Before this, the mutant `(^\|?|[^|])` survived (test-design P1). Matrix row 10.
+4. **Every matrix row re-simulated** against the final 4-bad/4-good probe set. The shipped PATTERN is the only one that PASSes.
+
+### Declined at deepen (with reason)
+
+- **Exact per-file line counts, so that deleting some probe lines goes RED** (test-design P1). Declined. The plan review cut `wc -l` floors as magic numbers coupled to the heredoc length. Deleting a probe line is an edit to this guard's own probe block and shows in review. Recorded as DC-4.
+- **A meta-check that every `git grep -nE` sweep reads `"$PATTERN"`** (test-design P2). Declined. All three sweeps, including #8848's FILES_8664, reference `"$PATTERN"` today, and that is a review-time property. Recorded as DC-4.
+- **A tab or multi-space probe line** (test-design P2). Declined. A hard tab in the plan's code block trips MD010, and a `[[:space:]]` → `[ ]` mutation is not a plausible edit.
+
 ## Overview
 
 `.claude/hooks/grep-q-pipe-guard.test.sh` finds a pipe feeding `grep -q` with
@@ -145,8 +181,8 @@ nothing is expanded under `set -u`):
 
 ```bash
 cat > "$probe/bad.sh" <<'EOF'
-echo "$x" | grep -qE 'p'
-echo "$x"|grep -qE 'p'
+echo "$x" | grep -q 'p'
+echo "$x"|grep -Eq 'p'
 | grep -qE 'p'
 echo "$x" |& grep -qE 'p'
 EOF
@@ -154,6 +190,7 @@ cat > "$probe/good.sh" <<'EOF'
 grep -qE 'p' <<<"$x"
 a || grep -qE 'p' <<<"$x"
      || grep -qE 'p' <<<"$b"; then
+|| grep -qE 'p' <<<"$x"
 EOF
 
 # Every bad line must match (grep -v finds any that do not) and no good line may.
@@ -172,8 +209,8 @@ fi
 
 What each bad line is for:
 
-1. The canonical pipe.
-2. A pipe with no surrounding space. `[^|]` consumes the `"` in front of the bar.
+1. The canonical pipe, with plain `-q`. A pattern pinned to `-qE` misses it.
+2. A pipe with no surrounding space, with `-Eq`. `[^|]` consumes the `"` in front of the bar, and the `q` is not first in the flag cluster, so a pattern pinned to a literal `-q` misses it.
 3. A backslash-continuation line starting at column 0 (the `^` alternative).
 4. `|&`.
 
@@ -182,9 +219,10 @@ The good lines:
 1. The herestring.
 2. The issue's must-NOT-match probe.
 3. The issue's own indented continuation line, verbatim.
+4. A `||` continuation at column 0. A mutant `(^\|?|[^|])` passes lines 2 and 3 and fails only here.
 
 Run `bash .claude/hooks/grep-q-pipe-guard.test.sh` **with the old PATTERN**. It must exit 1 and
-report `3/4` forbidden and `2` fixed (simulated at plan time: `bad=3/4 good=2`).
+report `3/4` forbidden and `3` fixed. This was also measured end to end at deepen time in a throwaway worktree.
 
 ### Phase 2: GREEN (the pattern)
 
@@ -222,20 +260,23 @@ each mutated PATTERN or suite. The shipped block PASSes with rc 0, and every mut
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Revert `PATTERN` to the unanchored `'\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'` | RED: `bad=3/4 good=2` (the `\|&` line is missed, and both `\|\|` lines are wrongly matched) |
+| 1 | Revert `PATTERN` to the unanchored `'\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'` | RED: `bad=3/4 good=3` (the `\|&` line is missed, and all three `\|\|` lines are wrongly matched) |
 | 2 | Drop `&?` | RED: `bad=3/4` (the `\|&` line is missed) |
 | 3 | Replace `(^\|[^\|])` with `[^\|]` (lose the line-start alternative) | RED: `bad=3/4` (the column-0 continuation is missed) |
-| 4 | Guard's own dispatch: `PATTERN='zzz-never'`, or `PATTERN=''` | RED: `bad=0/4`, and for the empty pattern `good=3` |
+| 4 | Guard's own dispatch: `PATTERN='zzz-never'`, or `PATTERN=''` | RED: `bad=0/4`, and for the empty pattern `good=4` |
 | 5 | Second member after a compliant first: a pattern that only matches after `echo` (`echo[^\|]*\|&?…`) | RED: `bad=3/4`. `! grep -qv` catches it. Any-line `grep -q` would not, because line 1 still matches |
 | 6 | "Tighten" to require whitespace before the bar: `(^\|[[:space:]])\|&?…` | RED: `bad=3/4` (the no-space `"$x"\|grep` line is missed) |
-| 7 | Over-broad: drop the pipe, `PATTERN='grep[[:space:]]+-[A-Za-z]*q'` | RED: `good=3` |
+| 7 | Over-broad: drop the pipe, `PATTERN='grep[[:space:]]+-[A-Za-z]*q'` | RED: `good=4` |
+| 8 | Flag clause pinned to `-qE` (`…grep[[:space:]]+-qE`) | RED: `bad=2/4` (plain `-q` and `-Eq` missed). Added at deepen (test-design review) |
+| 9 | Flag clause pinned to a literal `-q` (`…grep[[:space:]]+-q`) | RED: `bad=3/4` (`-Eq` missed). Added at deepen |
+| 10 | Tolerate a column-0 `\|\|`: `(^\|?\|[^\|])\|&?…` | RED: `good=1` (column-0 `\|\|` flagged). Added at deepen |
 
 **Harness rows:**
 
 | # | Suite edit (PATTERN unchanged) | Expected |
 |---|---|---|
 | H1 | Empty `bad.sh` (heredoc body deleted) | RED via `[[ -s bad.sh ]]`. Without it, `! grep -qv` on an empty file passes |
-| H1b | Empty `good.sh` | RED via `[[ -s good.sh ]]`. This file is the only thing protecting P1 |
+| H1b | Empty `good.sh` | RED via `[[ -s good.sh ]]`. Deleting only SOME probe lines is not caught. That was declined at deepen (see Enhancement Summary), because line-count floors were cut at plan review |
 | H2 | Change the bad check back to any-line `grep -qE`, then apply mutation 5 | Goes GREEN. It is recorded to show why the per-line `! grep -qv` form is required |
 | H3 | Must-PASS non-canonical input: good line 3 is the issue's indented continuation, verbatim | Stays unmatched: GREEN |
 
@@ -270,7 +311,12 @@ logs:
   retention: "90 days (GitHub default)"
 discoverability_test:
   command: "bash .claude/hooks/grep-q-pipe-guard.test.sh"
-  expected_output: "PASS: guard pattern matches the forbidden shapes"
+  expected_output: "#8807"
+  # Check 10 tokenizes expected_output and rejects all-whitespace-bearing prose. `#8807` is the
+  # whitespace-free literal that appears only on the probe's PASS line (the FAIL line lacks it).
+  # The `.test.sh` in the command trips deepen-plan 4.7's over-inclusive suite-shape proxy. It is
+  # argued down here: this is one guard file, not a suite, and it runs in 0.12 s (measured),
+  # far inside the 15 s cap. Its PASS line IS the liveness signal named above.
 ```
 
 ## Open Code-Review Overlap
@@ -281,11 +327,11 @@ four class-sweep paths and the string `grep-q-pipe-guard`, and got 0 hits.
 ## Acceptance Criteria
 
 - [ ] **AC1** `grep -cxF "PATTERN='(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'" .claude/hooks/grep-q-pipe-guard.test.sh` prints `1`.
-- [ ] **AC2** RED first. With the Phase 1 probes and the old PATTERN, the suite exits 1 and prints `forbidden lines matched: 3/4` and `fixed lines matched:     2`. With the new PATTERN it exits 0.
+- [ ] **AC2** RED first. With the Phase 1 probes and the old PATTERN, the suite exits 1 and prints `forbidden lines matched: 3/4` and `fixed lines matched:     3`. With the new PATTERN it exits 0.
 - [ ] **AC3** `bash .claude/hooks/grep-q-pipe-guard.test.sh` exits 0 and prints `PASS: no pipe-into-grep-q in .claude/hooks/ non-test code`, `PASS: no pipe-into-grep-q in the two files #7024 took to zero`, and `PASS: guard pattern matches the forbidden shapes`.
 - [ ] **AC4** The probe block is built from the Phase 1 heredocs:
-  - `good.sh` contains `a || grep -qE 'p' <<<"$x"`.
-  - `bad.sh` contains `echo "$x" |& grep -qE 'p'`, `echo "$x"|grep -qE 'p'` and a column-0 `| grep -qE 'p'`.
+  - `good.sh` contains `a || grep -qE 'p' <<<"$x"` and a column-0 `|| grep -qE 'p' <<<"$x"`.
+  - `bad.sh` contains `echo "$x" | grep -q 'p'`, `echo "$x"|grep -Eq 'p'`, a column-0 `| grep -qE 'p'` and `echo "$x" |& grep -qE 'p'`.
   - The check uses `[[ -s … ]]` on both files and `! grep -qvE` for the bad side.
 - [ ] **AC5** Census. `git grep -nE "'\\\\\|(\[\[:space:\]\]\*| \*)grep" -- ':!knowledge-base'` prints exactly two lines, one in `apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh` (the `SHAPE=` literal, acknowledged) and one in `apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh` (the `A3-nopipe` literal, deferred to #8869). Also, `git grep -cF '(^|[^|])\|&?[[:space:]]*grep' -- .claude/hooks/grep-q-pipe-guard.test.sh tests/scripts/test-lint-supabase-deprecated-endpoints.sh` reports `1` and `2`.
 - [ ] **AC6** `bash tests/scripts/test-lint-supabase-deprecated-endpoints.sh` reports `45 passed, 0 failed`.

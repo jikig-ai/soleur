@@ -51,3 +51,23 @@ characters and 1 probe line, and it adds no new red checks.
 only failure this would catch is a hypothetical future switch to `-P`.
 
 **Reopen if:** the sweeps ever change engine or flag (`-P`, `-G`).
+
+## DC-4 — Deepen-pass test-design findings declined
+
+**Classification:** Taste
+
+**Challenge:** The test-design reviewer raised three findings:
+
+- Pin each probe file's exact line count, so that deleting some probe lines goes RED.
+- Assert that every `git grep -nE` sweep reads `"$PATTERN"`.
+- Add a probe line with a tab or multiple spaces.
+
+**Decision:** Declined all three. Plan review had already cut the line-count floors: they are
+magic numbers coupled to the heredoc length, and deleting a probe line is an edit to this guard's
+own probe block that shows in review. Every sweep, including #8848's FILES_8664 block, references
+`"$PATTERN"` today. A tab in the plan's code block trips MD010, and a `[[:space:]]` → `[ ]` edit
+is not a plausible mutation. The two P1s that were adopted (flag-clause coverage and the column-0
+`||` line) close the gaps a real edit could open.
+
+**Reopen if:** a sweep in this file gains its own regex literal, or someone edits the probe
+heredocs in a way the review misses.

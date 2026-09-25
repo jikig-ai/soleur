@@ -13,8 +13,8 @@ issue: 8807
 
 ## 2. Core implementation
 
-- 2.1 RED: in `.claude/hooks/grep-q-pipe-guard.test.sh`, replace the `printf` probes and their check with the Phase 1 block: heredocs with 4 bad and 3 good lines, `[[ -s ]]` on both files, `! grep -qvE` for bad and `! grep -qE` for good. Leave the `# Non-vacuity:` comment and the `probe=`/`trap` lines as they are.
-- 2.2 Run the suite with the old PATTERN. Expect exit 1, `forbidden lines matched: 3/4` and `fixed lines matched:     2` (AC2).
+- 2.1 RED: in `.claude/hooks/grep-q-pipe-guard.test.sh`, replace the `printf` probes and their check with the Phase 1 block: heredocs with 4 bad lines (plain `-q`, no-space `-Eq`, column-0 `|`, `|&`) and 4 good lines (herestring, `a ||`, indented `||`, column-0 `||`), `[[ -s ]]` on both files, `! grep -qvE` for bad and `! grep -qE` for good. Leave the `# Non-vacuity:` comment and the `probe=`/`trap` lines as they are.
+- 2.2 Run the suite with the old PATTERN. Expect exit 1, `forbidden lines matched: 3/4` and `fixed lines matched:     3` (AC2).
 - 2.3 GREEN: set `PATTERN='(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'` and update its comment (Phase 2).
 - 2.4 Sibling: apply the same prefix to both row-10 literals in `tests/scripts/test-lint-supabase-deprecated-endpoints.sh` (Phase 3).
 
