@@ -578,12 +578,12 @@ fi
 # bare-token-over-prose distinction the guard itself is built on.
 qpipe_hits=0
 for f in "$GUARD" "${BASH_SOURCE[0]}"; do
-  n="$(grep -vE '^[[:space:]]*#' "$f" | grep -cE '\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' || true)"
+  n="$(grep -vE '^[[:space:]]*#' "$f" | grep -cE '(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' || true)"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   if [[ "$n" -gt 0 ]]; then
     qpipe_hits=$((qpipe_hits + n))
     echo "  $f: $n mid-pipe \`grep -q\` line(s):" >&2
-    grep -nvE '^[[:space:]]*#' "$f" | grep -E '\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' >&2 || true
+    grep -nvE '^[[:space:]]*#' "$f" | grep -E '(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' >&2 || true
   fi
 done
 if [[ "$qpipe_hits" -eq 0 ]]; then pass; else

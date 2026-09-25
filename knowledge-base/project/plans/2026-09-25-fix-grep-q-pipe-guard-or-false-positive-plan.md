@@ -326,16 +326,16 @@ four class-sweep paths and the string `grep-q-pipe-guard`, and got 0 hits.
 
 ## Acceptance Criteria
 
-- [ ] **AC1** `grep -cxF "PATTERN='(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'" .claude/hooks/grep-q-pipe-guard.test.sh` prints `1`.
-- [ ] **AC2** RED first. With the Phase 1 probes and the old PATTERN, the suite exits 1 and prints `forbidden lines matched: 3/4` and `fixed lines matched:     3`. With the new PATTERN it exits 0.
-- [ ] **AC3** `bash .claude/hooks/grep-q-pipe-guard.test.sh` exits 0 and prints `PASS: no pipe-into-grep-q in .claude/hooks/ non-test code`, `PASS: no pipe-into-grep-q in the two files #7024 took to zero`, and `PASS: guard pattern matches the forbidden shapes`.
-- [ ] **AC4** The probe block is built from the Phase 1 heredocs:
+- [x] **AC1** `grep -cxF "PATTERN='(^|[^|])\|&?[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'" .claude/hooks/grep-q-pipe-guard.test.sh` prints `1`.
+- [x] **AC2** RED first. With the Phase 1 probes and the old PATTERN, the suite exits 1 and prints `forbidden lines matched: 3/4` and `fixed lines matched:     3`. With the new PATTERN it exits 0.
+- [x] **AC3** `bash .claude/hooks/grep-q-pipe-guard.test.sh` exits 0 and prints `PASS: no pipe-into-grep-q in .claude/hooks/ non-test code`, `PASS: no pipe-into-grep-q in the two files #7024 took to zero`, and `PASS: guard pattern matches the forbidden shapes`.
+- [x] **AC4** The probe block is built from the Phase 1 heredocs:
   - `good.sh` contains `a || grep -qE 'p' <<<"$x"` and a column-0 `|| grep -qE 'p' <<<"$x"`.
   - `bad.sh` contains `echo "$x" | grep -q 'p'`, `echo "$x"|grep -Eq 'p'`, a column-0 `| grep -qE 'p'` and `echo "$x" |& grep -qE 'p'`.
   - The check uses `[[ -s … ]]` on both files and `! grep -qvE` for the bad side.
-- [ ] **AC5** Census. `git grep -nE "'\\\\\|(\[\[:space:\]\]\*| \*)grep" -- ':!knowledge-base'` prints exactly two lines, one in `apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh` (the `SHAPE=` literal, acknowledged) and one in `apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh` (the `A3-nopipe` literal, deferred to #8869). Also, `git grep -cF '(^|[^|])\|&?[[:space:]]*grep' -- .claude/hooks/grep-q-pipe-guard.test.sh tests/scripts/test-lint-supabase-deprecated-endpoints.sh` reports `1` and `2`.
-- [ ] **AC6** `bash tests/scripts/test-lint-supabase-deprecated-endpoints.sh` reports `45 passed, 0 failed`.
-- [ ] **AC7** The diff touches no path under `apps/web-platform/infra/`: `git diff --name-only origin/main...HEAD -- apps/web-platform/infra/` prints nothing.
+- [x] **AC5** Census. `git grep -nE "'\\\\\|(\[\[:space:\]\]\*| \*)grep" -- ':!knowledge-base'` prints exactly two lines, one in `apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh` (the `SHAPE=` literal, acknowledged) and one in `apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh` (the `A3-nopipe` literal, deferred to #8869). Also, `git grep -cF '(^|[^|])\|&?[[:space:]]*grep' -- .claude/hooks/grep-q-pipe-guard.test.sh tests/scripts/test-lint-supabase-deprecated-endpoints.sh` reports `1` and `2`.
+- [x] **AC6** `bash tests/scripts/test-lint-supabase-deprecated-endpoints.sh` reports `45 passed, 0 failed`.
+- [x] **AC7** The diff touches no path under `apps/web-platform/infra/`: `git diff --name-only origin/main...HEAD -- apps/web-platform/infra/` prints nothing.
 - [ ] **AC8** The PR body carries `Closes #8807`, names the class-sweep dispositions (including #8869), and notes that #8848 is still open.
 
 ## Test Scenarios
