@@ -45,3 +45,14 @@
 - Ship: Phase 4 battery running detached (LOG=/var/tmp/ship-battery.yey9R4zt.log RCF=/var/tmp/ship-battery.paiYvoyQ.rc). CI 24 pass/10 pending on head; mergeStateStatus BEHIND → resync needed pre-merge.
 - Remaining: battery rc → pr ready → sync BEHIND → merge → deploy-arm wait → post-merge probe re-run → #8978 closure comment.
 - Draft PR #8984 exists for this branch.
+
+
+## FINAL (2026-09-26)
+
+- PR #8984 MERGED (squash sha 9b6b0394), deployed + served on prod.
+- Ship battery: rc=0, 173/523 affected suites pass, 0 fail. CI green on final head.
+- Post-merge probe PASS — measurement posted to #8978 (comment 5850010231).
+- AC NOT met (best cold FCP 1.71s, warm 2.08s) → issue REOPENED with data;
+  new finding: mw-revoke cold-miss leg measured 29.6s (cold-3) — verdict-cache
+  rejection is now worth revisiting on that arm.
+- Deferred: #8985 (mount fan-out), #8926 (getUser sweep), #8993 (orphan runner).
