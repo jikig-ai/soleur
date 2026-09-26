@@ -17,6 +17,6 @@ export async function GET(req: Request) {
     return NextResponse.json({ memberships: [] }, { status: 401 });
   }
   const service = createServiceClient();
-  const memberships = await resolveOrgMemberships(service, userId);
+  const memberships = await resolveOrgMemberships(userId, service);
   return NextResponse.json({ memberships });
 }

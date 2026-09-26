@@ -83,6 +83,31 @@ function collectRoutePaths(dir: string): string[] {
   return paths;
 }
 
+// Same walk for RENDER surfaces (page.tsx / layout.tsx / template.tsx /
+// default.tsx). #8984 extended the minted-identity-header contract to the
+// render path — `resolveIdentity` reads `x-soleur-auth-user-id` via
+// `headers()` inside `app/layout.tsx`, which renders for EVERY page path —
+// so a page path outside the matcher lets a forged header reach a consumer
+// with zero remote verification. This arm makes the render surface as
+// guarded as the route surface (PR #8984 security review).
+function collectRenderPaths(dir: string): string[] {
+  const paths: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      paths.push(...collectRenderPaths(full));
+    } else if (/^(page|layout|template|default)\.[tj]sx?$/.test(entry)) {
+      const rel = relative(APP_ROOT, dir)
+        .split(sep)
+        .filter((seg) => !(seg.startsWith("(") && seg.endsWith(")")))
+        .join("/");
+      paths.push(rel ? `/${rel}` : "/");
+    }
+  }
+  return paths;
+}
+
 // A request-pathname probe for a route path: every bracketed segment becomes
 // a real value, and a bracketed TERMINAL segment gets a value ending in
 // `.png` — the extension-suffix exclusion is the documented bypass surface
@@ -160,6 +185,29 @@ describe("Guard 1 — middleware matcher covers every route handler", () => {
         matchesMiddleware(pathname),
         `${pathname} is NOT matched by config.matcher — an attacker-controlled ` +
           `pathname ending in an image extension bypasses middleware entirely`,
+      ).toBe(true);
+    },
+  );
+
+  // Render-surface arm — every page/layout pathname must traverse middleware
+  // too, now that the minted header reaches `resolveIdentity` via headers().
+  // Deduped (a dir carrying page.tsx + layout.tsx yields one pathname).
+  const renderPaths = Array.from(new Set(collectRenderPaths(APP_ROOT)));
+
+  test("anti-vacuity: the render walk found a non-trivial number of paths", () => {
+    // Dozens of page/layout files exist under app/ — a low floor proves the
+    // walk ran without coupling the test to an exact count.
+    expect(renderPaths.length).toBeGreaterThanOrEqual(20);
+  });
+
+  test.each(renderPaths)(
+    "render path %s traverses middleware (resolveIdentity consumes the minted header)",
+    (pathname) => {
+      expect(
+        matchesMiddleware(pathname),
+        `${pathname} is NOT matched by config.matcher — a forged ` +
+          `x-soleur-auth-user-id would reach resolveIdentity with zero remote ` +
+          `verification on this page's render`,
       ).toBe(true);
     },
   );

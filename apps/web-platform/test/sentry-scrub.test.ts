@@ -194,3 +194,52 @@ describe("scrubSentryEvent — inbound-email attachment metadata (S1)", () => {
     expect(JSON.stringify(result)).not.toContain("court_summons_acme");
   });
 });
+
+describe("scrubSentryEvent — request URL/query sanitization (#8984 tx envelopes)", () => {
+  test("transaction request.url loses query + hash; query_string key dropped", () => {
+    // OAuth `?code=` and implicit-flow `#access_token=` ride request.url;
+    // Sentry mirrors it into request.query_string. The 0.02 tracesSampler
+    // floor made transactions live — previously nothing traced.
+    const event = {
+      type: "transaction",
+      request: {
+        url: "https://app.soleur.ai/callback?code=oauthcode123&state=abc",
+        query_string: "code=oauthcode123&state=abc",
+        headers: { "content-type": "text/html" },
+      },
+    };
+    const result = scrubSentryEvent(event) as {
+      request: { url: string; query_string?: unknown };
+    };
+    expect(result.request.url).toBe("https://app.soleur.ai/callback");
+    expect(result.request.query_string).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("oauthcode123");
+  });
+
+  test.each([
+    "https://app.soleur.ai/invite/tokenABCdef123",
+    "https://app.soleur.ai/shared/secretShareToken999",
+    "https://app.soleur.ai/api/shared/sharetok_f1sh",
+    "https://app.soleur.ai/api/account/export/job-uuid-here-1234",
+  ])("token-bearing path %s → tail reduced to <token>", (url) => {
+    const event = { request: { url } };
+    const result = scrubSentryEvent(event) as { request: { url: string } };
+    expect(result.request.url).toContain("<token>");
+    // The raw credential segment must not survive.
+    const tail = url.split("/").pop()!;
+    expect(JSON.stringify(result)).not.toContain(tail);
+  });
+
+  test("ordinary paths keep their pathname (only query/hash stripped)", () => {
+    const event = {
+      request: { url: "https://app.soleur.ai/api/dashboard/today?foo=bar" },
+    };
+    const result = scrubSentryEvent(event) as { request: { url: string } };
+    expect(result.request.url).toBe("https://app.soleur.ai/api/dashboard/today");
+  });
+
+  test("no request object → event returned unchanged", () => {
+    const event = { message: "boom" };
+    expect(scrubSentryEvent(event)).toEqual({ message: "boom" });
+  });
+});

@@ -34,14 +34,14 @@ export async function GET(request: Request) {
   }
   const supabase = await createClient();
 
-  const hasEffectiveKey = await userHasEffectiveByokKey(userId, {
-    onErrorReturn: false,
-  });
-  const pendingDelegation = await userHasPendingByokDelegation(userId);
-  const isSharedWorkspaceMember = await userIsSharedWorkspaceMember(
-    userId,
-    supabase,
-  );
+  // The three resolvers are independent reads — run them concurrently
+  // (#8978 mount-path slice).
+  const [hasEffectiveKey, pendingDelegation, isSharedWorkspaceMember] =
+    await Promise.all([
+      userHasEffectiveByokKey(userId, { onErrorReturn: false }),
+      userHasPendingByokDelegation(userId),
+      userIsSharedWorkspaceMember(userId, supabase),
+    ]);
 
   return NextResponse.json({
     hasEffectiveKey,

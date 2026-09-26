@@ -52,21 +52,21 @@ describe("sentry.server.config tracesSampler (#8978)", () => {
 
   it("applies the low floor when the header is absent or wrong-valued", async () => {
     const opts = await loadOptions();
-    expect(opts.tracesSampler({ name: "GET /api/x" })).toBeLessThanOrEqual(
-      0.05,
-    );
+    // Exact-value pin: a silent floor drift (0.02 → e.g. 0.05) quadruples
+    // transaction volume — the ceiling comparison would stay green.
+    expect(opts.tracesSampler({ name: "GET /api/x" })).toBe(0.02);
     expect(
       opts.tracesSampler({
         name: "GET /api/x",
         normalizedRequest: { headers: {} },
       }),
-    ).toBeLessThanOrEqual(0.05);
+    ).toBe(0.02);
     expect(
       opts.tracesSampler({
         name: "GET /api/x",
         normalizedRequest: { headers: { "x-perf-probe": "yes" } },
       }),
-    ).toBeLessThanOrEqual(0.05);
+    ).toBe(0.02);
     // A non-zero floor keeps baseline tracing coverage for non-probe traffic.
     expect(opts.tracesSampler({ name: "GET /api/x" })).toBeGreaterThan(0);
   });

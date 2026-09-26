@@ -9,16 +9,23 @@ vi.mock("@/server/observability", () => ({
 // Mutable so a single module instance can simulate presence/absence of the
 // middleware-minted identity header per test. `null` = no minted header (the
 // absent arm). A Headers instance carries the minted value.
-const { mintedRef } = vi.hoisted(() => ({
+const { mintedRef, headersShouldThrow } = vi.hoisted(() => ({
   mintedRef: { current: null as Headers | null },
+  headersShouldThrow: { current: false },
 }));
 
 vi.mock("next/headers", () => ({
-  headers: async () => mintedRef.current ?? new Headers(),
+  headers: async () => {
+    if (headersShouldThrow.current) {
+      throw new Error("headers() called outside a request scope");
+    }
+    return mintedRef.current ?? new Headers();
+  },
 }));
 
 beforeEach(() => {
   mintedRef.current = null;
+  headersShouldThrow.current = false;
 });
 
 function makeJwt(claims: Record<string, unknown>): string {
@@ -341,6 +348,37 @@ describe("resolveIdentity fast path — minted header + local JWT (#8978)", () =
     await expect(resolveIdentity(supabase)).resolves.toMatchObject({
       userId: "abc",
     });
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("headers() throws (non-request scope) → remote re-verify", async () => {
+    headersShouldThrow.current = true;
+    const supabase = fakeSupabase(
+      { id: "abc", email: "remote@test.local" },
+      { data: { role: "prd" }, error: null },
+    );
+    await expect(resolveIdentity(supabase)).resolves.toMatchObject({
+      userId: "abc",
+      email: "remote@test.local",
+    });
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejection arms DID enter the fast path — getSession ran before re-verify", async () => {
+    // Pins that the rejection tests above exercise the fast-path entry (the
+    // mechanism), not merely the fallback contract — without getSession having
+    // been consulted, a deleted `if (mintedUserId)` block would stay green.
+    const supabase = fakeSupabase(
+      { id: "abc" },
+      { data: { role: "prd" }, error: null },
+      null,
+      { data: null, error: null },
+      makeJwt({ sub: "different-sub", email: "x@test.local" }),
+    );
+    mintedRef.current = new Headers({ "x-soleur-auth-user-id": "abc" });
+
+    await resolveIdentity(supabase);
+    expect(supabase.auth.getSession).toHaveBeenCalledTimes(1);
     expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
   });
 

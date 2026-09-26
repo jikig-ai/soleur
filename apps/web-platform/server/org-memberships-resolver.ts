@@ -47,8 +47,8 @@ interface MemberCountRow {
 // via `verifiedUserId`, or the getUser() fallback inside it) — the resolver
 // no longer spends its own auth-server RTT (#8926 mount-path slice).
 export async function resolveOrgMemberships(
-  service: ServiceClient,
   userId: string,
+  service: ServiceClient,
 ): Promise<OrgMembershipSummary[]> {
   const currentOrgId = await resolveCurrentOrganizationId(userId, service);
 

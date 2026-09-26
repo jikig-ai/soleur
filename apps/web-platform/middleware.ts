@@ -238,6 +238,15 @@ export async function middleware(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value),
           );
+          // Propagate the rotated session into the forwarded snapshot:
+          // requestHeaders was cloned BEFORE auth resolved, so without this
+          // downstream cookies()/getSession() see the PRE-refresh token and
+          // pay a second remote refresh (PR #8984 review — the expired-token
+          // cold-session arm this header exists to accelerate).
+          requestHeaders.set(
+            "cookie",
+            request.headers.get("cookie") ?? "",
+          );
           response = NextResponse.next({
             request: { headers: requestHeaders },
           });
@@ -365,8 +374,9 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
   const mwAuthDurMs = performance.now() - mwAuthStart;
 
-  // Server-Timing stage descriptors — emitted on authenticated document
-  // responses only (success path; redirects stay silent).
+  // Server-Timing stage descriptors — emitted on EVERY authenticated
+  // passthrough (documents AND /api/*, #8978; success path only —
+  // redirects stay silent).
   let mwRevokeDurMs = 0;
   let revokeDesc: "hit" | "miss" | "grace" = "grace";
   let mwTcDurMs = 0;
@@ -597,6 +607,10 @@ export async function middleware(request: NextRequest) {
   // never send mode `navigate`, so API/RSC fetches stay non-documents.
   const isDocument =
     fetchMode === "navigate" ||
+    // Defensive belt: the Fetch spec forbids constructing mode:"navigate"
+    // requests and Node middleware always sees "cors", so this arm is inert
+    // here — it exists for runtimes that surface the FetchEvent's mode
+    // (vitest cannot construct it; pinned as untestable, not dead-by-accident).
     request.mode === "navigate" ||
     fetchDest === null ||
     !NON_DOCUMENT_DESTS.has(fetchDest);

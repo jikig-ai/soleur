@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { headers } from "next/headers";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { decodeJwtPayloadUnsafe } from "@/lib/supabase/tenant";
+import { sessionJwtEmailForVerifiedUser } from "@/server/request-auth";
 import { ANON_IDENTITY, type Identity, type Role } from "./server";
 
 export const resolveIdentity = cache(async (
@@ -12,8 +12,9 @@ export const resolveIdentity = cache(async (
   // getUser() RTT. The header is minted only after `getUser()` succeeds in
   // middleware (and is deleted inbound before any exit can forward a forged
   // value), so its presence means this request already authenticated — the
-  // JWT decode just re-reads the claims the session cookie carries. Absent
-  // header / mismatched sub / missing email claim / malformed token ⇒ remote
+  // helper re-reads the claims the session cookie carries, accepting them
+  // only when the token's own `sub` agrees with the minted id. Absent header
+  // / mismatched sub / missing email claim / malformed token ⇒ remote
   // re-verify, never trust (ADR-253 contract unchanged).
   let userId: string | null = null;
   let email: string | null = null;
@@ -28,23 +29,9 @@ export const resolveIdentity = cache(async (
   }
 
   if (mintedUserId) {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const accessToken = sessionData?.session?.access_token;
-    if (accessToken) {
-      try {
-        const payload = decodeJwtPayloadUnsafe(accessToken);
-        // Accept only when the token's own subject AGREES with the minted id
-        // and carries the email claim the Identity needs — any gap re-verifies.
-        if (
-          payload.sub === mintedUserId &&
-          typeof payload.email === "string"
-        ) {
-          userId = mintedUserId;
-          email = payload.email;
-        }
-      } catch {
-        // Malformed JWT — fall through to remote verification.
-      }
+    email = await sessionJwtEmailForVerifiedUser(supabase, mintedUserId);
+    if (email !== null) {
+      userId = mintedUserId;
     }
   }
 

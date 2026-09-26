@@ -174,3 +174,25 @@ Three scoped extensions of Decision items 3–4, plus one measured rejection:
   dominates, so an auth-verdict cache would have bought a bounded-staleness
   liability for a minority tier. Not adopted; the rejection is recorded so a
   future revisit re-runs the probe first.
+
+Review-round extensions on the same amendment (PR #8984 panel):
+
+- **Refreshed session cookies now propagate downstream.** `setAll` syncs the
+  rotated cookie into the forwarded `requestHeaders` snapshot — previously
+  the clone predated auth resolution, so render-path `getSession()` saw the
+  pre-refresh token and paid a second remote refresh on exactly the
+  expired-token cold-session population the fast path targets.
+- **Bounded email-claim staleness.** `pending-invites` and `resolveIdentity`
+  accept the session JWT's `email` claim, which reflects token-mint time —
+  after an email change the claim is stale for ≤ the access-token TTL (~1h),
+  self-healing on refresh. The remote `getUser()` arm stays auth-server-fresh
+  (absent claim / mismatched `sub` / malformed token).
+- **Rejection reasoning, sharpened.** Beyond mw-auth's minority TTFB share,
+  a per-request verdict cache could never accelerate the first cold request
+  (the population this issue is about), and mount-fan-out misses would not
+  coalesce without in-flight dedup — the measured win would have been warm
+  tail-only. The render-path residual (doc TTFB minus `mw-*` legs, up to
+  ~12.7 s) is where the remaining cold time lives; note the attribution rests
+  on document-level arithmetic since the probe's per-request waterfall
+  misread Playwright's `timing()` unit convention at first measurement
+  (fixed in the same PR).

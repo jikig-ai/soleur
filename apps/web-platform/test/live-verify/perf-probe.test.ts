@@ -7,8 +7,29 @@ import {
   safePath,
   classifyRequest,
   summarizeColdApi,
+  durationsFromTiming,
   type NavSample,
 } from "../../scripts/live-verify/perf-probe";
+
+describe("perf-probe durationsFromTiming — Playwright unit convention", () => {
+  // PR #8984 review P1: timing()'s non-startTime fields are RELATIVE to
+  // startTime (epoch ms) with -1 for unavailable — subtracting epoch from
+  // relative zeroed the waterfall.
+  it("treats responseStart/responseEnd as ms-since-request-start", () => {
+    expect(
+      durationsFromTiming({ responseStart: 421.7, responseEnd: 980.3 }),
+    ).toEqual({ durationMs: 980.3, ttfbMs: 421.7 });
+  });
+
+  it("-1 fields mean unavailable → duration -1 / ttfb null", () => {
+    expect(durationsFromTiming({ responseStart: -1, responseEnd: -1 })).toEqual(
+      { durationMs: -1, ttfbMs: null },
+    );
+    expect(durationsFromTiming({ responseStart: 100, responseEnd: -1 })).toEqual(
+      { durationMs: -1, ttfbMs: 100 },
+    );
+  });
+});
 
 describe("perf-probe safePath", () => {
   it("emits allowlisted paths verbatim", () => {
@@ -33,6 +54,18 @@ describe("perf-probe safePath", () => {
     expect(safePath("https://app.soleur.ai/invite/deadbeef")).toBe(
       "<reduced:/invite>",
     );
+  });
+
+  it("a single-segment unknown path emits NO segment — the segment IS the token", () => {
+    expect(safePath("https://app.soleur.ai/SECRETTOKEN")).toBe("<reduced>");
+  });
+
+  it("dashboard chat UUID paths emit with <id> substitution", () => {
+    expect(
+      safePath(
+        "https://app.soleur.ai/dashboard/chat/123e4567-e89b-42d3-a456-426614174000",
+      ),
+    ).toBe("/dashboard/chat/<id>");
   });
 
   it("handles unparsable input without throwing", () => {

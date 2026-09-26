@@ -9,10 +9,12 @@
 // Every request carries `x-perf-probe: 1` so sentry.server.config.ts's
 // tracesSampler arms 1.0 server-side tracing for exactly these requests.
 //
-// Runner: `bun run scripts/live-verify/perf-probe.ts` — same env contract as
-// run.ts (PRODUCTION_URL, NEXT_PUBLIC_SUPABASE_URL/ANON_KEY,
-// LIVE_VERIFY_USER_PASSWORD / _EXPECTED_UID / _EXPECTED_REF, optional
-// LIVE_VERIFY_BROWSER_CHANNEL / _BROWSER_PATH). Read-only by construction: the
+// Runner: `doppler run -c prd -- bun run scripts/live-verify/perf-probe.ts` —
+// same env contract as run.ts (PRODUCTION_URL, NEXT_PUBLIC_SUPABASE_URL/
+// ANON_KEY, LIVE_VERIFY_USER_PASSWORD / _EXPECTED_UID / _EXPECTED_REF,
+// optional LIVE_VERIFY_BROWSER_CHANNEL / _BROWSER_PATH,
+// PERF_PROBE_COLD_SAMPLES default 5, clamped to 25). Read-only by
+// construction: the
 // probe drives navigations only — no writes land, so teardown is session
 // destruction (I-ephemerality) and nothing else. The allowlist invariants are
 // reused verbatim from run.ts: bindProject BEFORE sign-in, verifyPrincipal
@@ -69,7 +71,7 @@ export interface ProbeSummary {
 // its first segment — a full path can carry a token (/shared/<t>, /invite/<t>).
 // `<>` is allowed in the api arm only for the `<id>` substitution this file
 // itself writes (UUID_TAIL_RE runs before this test).
-const EMIT_PATH_RE = /^\/(?:dashboard(?:\/chat(?:\/new|\/[0-9a-f-]{36})?)?|api\/[a-z0-9\-_/<>]+|login|accept-terms|health)$/;
+const EMIT_PATH_RE = /^\/(?:dashboard(?:\/chat(?:\/new|\/(?:<id>|[0-9a-f-]{36}))?)?|api\/[a-z0-9\-_/<>]+|login|accept-terms|health)$/;
 const UUID_TAIL_RE = /[0-9a-f]{8}-[0-9a-f-]{27}/g;
 
 /** Reduce a request URL to an emit-safe path (token-bearing segments stripped). */
@@ -82,7 +84,11 @@ export function safePath(rawUrl: string): string {
   }
   pathname = pathname.replace(UUID_TAIL_RE, "<id>");
   if (EMIT_PATH_RE.test(pathname)) return pathname;
-  return `<reduced:/${pathname.split("/")[1] ?? ""}>`;
+  // A single-segment path IS the thing the reduction exists to hide
+  // (e.g. /TOKEN) — emit no segment at all for it.
+  const first = pathname.split("/")[1] ?? "";
+  if (!first || !pathname.slice(1).includes("/")) return "<reduced>";
+  return `<reduced:/${first}>`;
 }
 
 /** Classify a request as document / api / other for the waterfall buckets. */
@@ -101,6 +107,61 @@ const NAV_PATH = "/dashboard";
 // the measured 8–15s window; give the paint wait headroom, not the AC's target.
 const NAV_TIMEOUT_MS = 60_000;
 const PAINT_SETTLE_MS = 4_000;
+// Renderer round-trips are bounded: a wedged page must degrade to null fields,
+// never hang the probe without a RESULT line (the run.ts #7969/#8092 class).
+const EVAL_BUDGET_MS = 15_000;
+
+/**
+ * Extract wall/TTFB from Playwright's `request.timing()`. EVERY field except
+ * `startTime` is RELATIVE to startTime (startTime itself is epoch ms), and
+ * unavailable fields read -1 — not zero. Exported + pure so the unit suite
+ * pins the unit convention (PR #8984 review: the relative-vs-epoch mix-up
+ * made the waterfall silently empty).
+ */
+export function durationsFromTiming(t: {
+  responseStart: number;
+  responseEnd: number;
+}): { durationMs: number; ttfbMs: number | null } {
+  return {
+    durationMs: t.responseEnd >= 0 ? t.responseEnd : -1,
+    ttfbMs: t.responseStart >= 0 ? t.responseStart : null,
+  };
+}
+
+/** Race a renderer call against a bounded fallback — never hangs. */
+async function bounded<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), EVAL_BUDGET_MS);
+      }),
+    ]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Arm `x-perf-probe: 1` on requests to the prod origin ONLY. A context-wide
+ * `extraHTTPHeaders` would also stamp the header on cross-origin legs
+ * (supabase REST/realtime), forcing CORS preflights that skew the very
+ * waterfall this probe measures (PR #8984 review).
+ */
+async function armProbeHeader(
+  context: import("@playwright/test").BrowserContext,
+  prodOrigin: string,
+): Promise<void> {
+  const base = new URL(prodOrigin).origin;
+  await context.route(`${base}/**`, (route) =>
+    route.continue({
+      headers: { ...route.request().headers(), "x-perf-probe": "1" },
+    }),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Probe driver
@@ -114,37 +175,27 @@ async function captureNavigation(
   const requests: RequestSample[] = [];
   const captures: Promise<unknown>[] = [];
 
-  page.on("response", (response) => {
+  // Capture at requestfinished, not response: responseEnd/responseStart are
+  // only populated once the body completes — at the `response` event they
+  // read -1 and the waterfall lands empty (PR #8984 review).
+  page.on("requestfinished", (req) => {
     captures.push(
       (async () => {
-        const req = response.request();
-        const path = safePath(req.url());
-        const kind = classifyRequest(req.url(), req.resourceType());
+        const resp = await req.response();
         let durationMs = -1;
         let ttfbMs: number | null = null;
         try {
-          const t = await req.timing();
-          // timing() reports zeroed fields for requests the browser didn't
-          // time (e.g. SW-served or pre-renderer) — a real responseEnd strictly
-          // after startTime is the validity test; zeros would misreport as a
-          // 0ms request instead of "unknown".
-          if (t && t.responseEnd > t.startTime) {
-            durationMs = t.responseEnd - t.startTime;
-            ttfbMs =
-              t.responseStart > t.startTime
-                ? t.responseStart - t.startTime
-                : null;
-          }
+          ({ durationMs, ttfbMs } = durationsFromTiming(req.timing()));
         } catch {
           // timing() can throw on aborted/failed requests — keep duration -1.
         }
         requests.push({
-          path,
-          kind,
-          status: response.status(),
+          path: safePath(req.url()),
+          kind: classifyRequest(req.url(), req.resourceType()),
+          status: resp?.status() ?? 0,
           durationMs,
           ttfbMs,
-          serverTiming: response.headers()["server-timing"] ?? null,
+          serverTiming: resp?.headers()["server-timing"] ?? null,
         });
       })(),
     );
@@ -159,11 +210,18 @@ async function captureNavigation(
   await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => undefined);
   await page.waitForTimeout(PAINT_SETTLE_MS);
 
-  // Settle in-flight response listeners so the waterfall is complete.
-  await Promise.allSettled(captures);
+  // Settle in-flight response listeners so the waterfall is complete —
+  // bounded: a streaming/long-lived leg must not hang the probe.
+  await bounded(() => Promise.allSettled(captures), undefined);
 
-  const paint = await page
-    .evaluate(() => {
+  const paint = await bounded<{
+    fcp: number | null;
+    lcp: number | null;
+    domContentLoaded: number | null;
+    ttfb: number | null;
+  }>(
+    () =>
+      page.evaluate(() => {
       const paints = Object.fromEntries(
         performance
           .getEntriesByType("paint")
@@ -188,14 +246,15 @@ async function captureNavigation(
           resolve(null);
         }
       });
-      return lcpPromise.then((lcp) => ({
-        fcp: paints["first-contentful-paint"] ?? null,
-        lcp,
-        domContentLoaded: nav?.domContentLoadedEventEnd ?? null,
-        ttfb: nav?.responseStart ?? null,
-      }));
-    })
-    .catch(() => ({ fcp: null, lcp: null, domContentLoaded: null, ttfb: null }));
+        return lcpPromise.then((lcp) => ({
+          fcp: paints["first-contentful-paint"] ?? null,
+          lcp,
+          domContentLoaded: nav?.domContentLoadedEventEnd ?? null,
+          ttfb: nav?.responseStart ?? null,
+        }));
+      }),
+    { fcp: null, lcp: null, domContentLoaded: null, ttfb: null },
+  );
 
   return {
     label,
@@ -240,14 +299,20 @@ type ProbeOutcome =
   | { kind: "CANT-RUN"; reason: string };
 
 async function drive(
+  // `verified` is intentionally unread: its brand makes the browser launch
+  // unreachable without verifyPrincipal — a call-ordering gate, not data.
   verified: VerifiedPrincipal,
   cfg: Config,
   jar: ReturnType<typeof makeJar>,
 ): Promise<ProbeOutcome> {
+  void verified;
   const prodHost = new URL(cfg.productionUrl).hostname;
-  const coldSamples = Math.max(
-    1,
-    Number.parseInt(process.env.PERF_PROBE_COLD_SAMPLES ?? "5", 10) || 5,
+  const coldSamples = Math.min(
+    25,
+    Math.max(
+      1,
+      Number.parseInt(process.env.PERF_PROBE_COLD_SAMPLES ?? "5", 10) || 5,
+    ),
   );
 
   let browser: Browser | null = null;
@@ -267,10 +332,8 @@ async function drive(
     // Cold passes: a fresh context per sample — no service worker has ever
     // registered in it, so the navigation is pre-SW (the issue's cold shape).
     for (let i = 0; i < coldSamples; i++) {
-      const context = await browser.newContext({
-        extraHTTPHeaders: { "x-perf-probe": "1" },
-        serviceWorkers: "allow",
-      });
+      const context = await browser.newContext({ serviceWorkers: "allow" });
+      await armProbeHeader(context, cfg.productionUrl);
       await context.addCookies(buildInjectedCookies(jar.cookies.entries(), prodHost));
       const page = await context.newPage();
       samples.push(
@@ -281,10 +344,8 @@ async function drive(
 
     // Warm pass: one context, two navigations. Nav A registers + activates the
     // service worker; nav B is SW-controlled (the dominant real-session shape).
-    const warmContext = await browser.newContext({
-      extraHTTPHeaders: { "x-perf-probe": "1" },
-      serviceWorkers: "allow",
-    });
+    const warmContext = await browser.newContext({ serviceWorkers: "allow" });
+    await armProbeHeader(warmContext, cfg.productionUrl);
     await warmContext.addCookies(buildInjectedCookies(jar.cookies.entries(), prodHost));
     const warmPage = await warmContext.newPage();
     await warmPage.goto(`${cfg.productionUrl}${NAV_PATH}`, {
@@ -293,14 +354,16 @@ async function drive(
     });
     // Wait for SW control — bounded so an absent/failed registration degrades
     // to a second cold sample rather than a hang.
-    await warmPage
-      .evaluate(() =>
-        Promise.race([
-          navigator.serviceWorker.ready.then(() => "ready"),
-          new Promise<string>((r) => setTimeout(() => r("timeout"), 15_000)),
-        ]),
-      )
-      .catch(() => "unreadable");
+    await bounded(
+      () =>
+        warmPage.evaluate(() =>
+          Promise.race([
+            navigator.serviceWorker.ready.then(() => "ready"),
+            new Promise<string>((r) => setTimeout(() => r("timeout"), 15_000)),
+          ]),
+        ),
+      "unreadable",
+    );
     samples.push(
       await captureNavigation(warmPage, `${cfg.productionUrl}${NAV_PATH}`, "warm-sw"),
     );
@@ -329,7 +392,7 @@ async function main(): Promise<void> {
   try {
     cfg = readConfig();
   } catch (err) {
-    console.log(`RESULT: CANT-RUN:CONFIG:${(err as Error).message}`);
+    console.log(`RESULT: CANT-RUN:CONFIG:${redact((err as Error).message)}`);
     process.exitCode = 1;
     return;
   }
