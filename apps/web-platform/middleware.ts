@@ -588,21 +588,35 @@ export async function middleware(request: NextRequest) {
   // PUBLIC_PATHS gate), so they never reach this line and keep their
   // bfcache eligibility.
   const fetchDest = request.headers.get("sec-fetch-dest");
-  if (fetchDest === null || !NON_DOCUMENT_DESTS.has(fetchDest)) {
+  const fetchMode = request.headers.get("sec-fetch-mode");
+  // Document-ness keys on the fetch MODE, not only the dest: a service
+  // worker forwarding a navigation (`respondWith(fetch(event.request))`)
+  // keeps `sec-fetch-mode: navigate` while `sec-fetch-dest` degrades to
+  // `empty` — the dest-only gate skipped no-store AND Server-Timing for the
+  // dominant real-session navigation shape (#8969). `fetch()` API calls
+  // never send mode `navigate`, so API/RSC fetches stay non-documents.
+  const isDocument =
+    fetchMode === "navigate" ||
+    request.mode === "navigate" ||
+    fetchDest === null ||
+    !NON_DOCUMENT_DESTS.has(fetchDest);
+
+  // Per-stage Server-Timing (plan §Observability / Phase 0): emitted on
+  // EVERY authenticated passthrough — documents AND /api/* fetches — the
+  // no-SSH instrument that names which tier dominates the cold window
+  // (#8978). mw-revoke desc: hit = verdict cache preempted the RPC, miss =
+  // RPC ran, grace = leg skipped (no token / decode hiccup / no iat) or RPC
+  // errored. mw-tc desc adds "exempt" for TC_EXEMPT_PATHS.
+  response.headers.set(
+    "Server-Timing",
+    `mw-auth;dur=${mwAuthDurMs.toFixed(1)}, ` +
+      `mw-revoke;dur=${mwRevokeDurMs.toFixed(1)};desc=${revokeDesc}, ` +
+      `mw-tc;dur=${mwTcDurMs.toFixed(1)};desc=${tcDesc}`,
+  );
+
+  if (isDocument) {
     response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     response.headers.set("Pragma", "no-cache");
-    // Per-stage Server-Timing (plan §Observability / Phase 0): emitted on
-    // authenticated document responses only — the no-SSH instrument that
-    // proves the serial-RTT collapse post-deploy. mw-revoke desc: hit =
-    // verdict cache preempted the RPC, miss = RPC ran, grace = leg skipped
-    // (no token / decode hiccup / no iat) or RPC errored. mw-tc desc adds
-    // "exempt" for TC_EXEMPT_PATHS.
-    response.headers.set(
-      "Server-Timing",
-      `mw-auth;dur=${mwAuthDurMs.toFixed(1)}, ` +
-        `mw-revoke;dur=${mwRevokeDurMs.toFixed(1)};desc=${revokeDesc}, ` +
-        `mw-tc;dur=${mwTcDurMs.toFixed(1)};desc=${tcDesc}`,
-    );
   }
 
   return withCspHeaders(response, cspValue);

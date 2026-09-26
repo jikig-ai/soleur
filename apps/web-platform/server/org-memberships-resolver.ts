@@ -18,20 +18,6 @@ export interface OrgMembershipSummary {
   hasLogo: boolean;
 }
 
-interface AuthClient {
-  auth: {
-    getUser: () => Promise<{
-      data: {
-        user: {
-          id: string;
-          app_metadata?: Record<string, unknown>;
-        } | null;
-      };
-      error: unknown;
-    }>;
-  };
-}
-
 interface ServiceClient {
   from: (table: string) => unknown;
 }
@@ -57,15 +43,14 @@ interface MemberCountRow {
   user_id: string;
 }
 
+// `userId` arrives already verified by the caller (middleware-minted header
+// via `verifiedUserId`, or the getUser() fallback inside it) — the resolver
+// no longer spends its own auth-server RTT (#8926 mount-path slice).
 export async function resolveOrgMemberships(
-  supabase: AuthClient,
   service: ServiceClient,
+  userId: string,
 ): Promise<OrgMembershipSummary[]> {
-  const userResp = await supabase.auth.getUser();
-  const user = userResp.data?.user;
-  if (!user) return [];
-
-  const currentOrgId = await resolveCurrentOrganizationId(user.id, service);
+  const currentOrgId = await resolveCurrentOrganizationId(userId, service);
 
   // 1. user's memberships → workspace_ids + role
   type MembershipsChain = {
@@ -80,7 +65,7 @@ export async function resolveOrgMemberships(
     service.from("workspace_members") as MembershipsChain
   )
     .select("workspace_id, role")
-    .eq("user_id", user.id);
+    .eq("user_id", userId);
   if (membershipsResp.error || !membershipsResp.data) return [];
   const memberships = membershipsResp.data;
   if (memberships.length === 0) return [];
