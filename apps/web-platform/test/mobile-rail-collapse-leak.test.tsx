@@ -126,14 +126,23 @@ function CollapseProbe() {
 
 async function renderDashboard(pathname: string) {
   pathnameRef.current = pathname;
-  const { default: DashboardLayout } = await import("@/app/(dashboard)/layout");
+  // Phase 6: the (dashboard) layout is an async server component feeding the
+  // client DashboardShell — tests render the shell directly with the props the
+  // layout used to resolve via mount effects (admin check + users row).
+  const { DashboardShell } = await import(
+    "@/app/(dashboard)/dashboard-shell"
+  );
   return render(
     <ThemeProvider>
-      <DashboardLayout>
+      <DashboardShell
+        isAdmin={false}
+        userEmail={null}
+        subscriptionStatus={null}
+      >
         <RailSlotPortal>
           <CollapseProbe />
         </RailSlotPortal>
-      </DashboardLayout>
+      </DashboardShell>
     </ThemeProvider>,
   );
 }
@@ -303,15 +312,15 @@ describe("#7326 — the guided tour reveals the nav drawer it talks about", () =
     // pathname change would shut the drawer one render after it opened —
     // precisely the frame the spotlight needs it open.
     pathnameRef.current = "/dashboard/inbox";
-    const { default: DashboardLayout } = await import("@/app/(dashboard)/layout");
+    const { DashboardShell } = await import("@/app/(dashboard)/dashboard-shell");
     await act(async () => {
       rerender(
         <ThemeProvider>
-          <DashboardLayout>
+          <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
             <RailSlotPortal>
               <CollapseProbe />
             </RailSlotPortal>
-          </DashboardLayout>
+          </DashboardShell>
         </ThemeProvider>,
       );
     });
@@ -327,15 +336,15 @@ describe("#7326 — the guided tour reveals the nav drawer it talks about", () =
     dispatchReveal(false);
 
     pathnameRef.current = "/dashboard/inbox";
-    const { default: DashboardLayout } = await import("@/app/(dashboard)/layout");
+    const { DashboardShell } = await import("@/app/(dashboard)/dashboard-shell");
     await act(async () => {
       rerender(
         <ThemeProvider>
-          <DashboardLayout>
+          <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
             <RailSlotPortal>
               <CollapseProbe />
             </RailSlotPortal>
-          </DashboardLayout>
+          </DashboardShell>
         </ThemeProvider>,
       );
     });

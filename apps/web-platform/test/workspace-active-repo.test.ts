@@ -95,7 +95,7 @@ describe("GET /api/workspace/active-repo", () => {
 
   it("J6: no claim → resolves the personal (solo) workspace repo", async () => {
     state.currentWorkspaceId = null;
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/workspace/active-repo"));
     const json = await res.json();
     expect(json.workspaceId).toBe(SOLO_WS);
     expect(json.repoName).toBe("alice/solo");
@@ -106,7 +106,7 @@ describe("GET /api/workspace/active-repo", () => {
   it("member of the active joined workspace → returns that workspace's repo, never users.repo_url", async () => {
     state.currentWorkspaceId = JOINED_WS;
     state.memberOf = new Set([SOLO_WS, JOINED_WS]);
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/workspace/active-repo"));
     const json = await res.json();
     expect(json.workspaceId).toBe(JOINED_WS);
     expect(json.repoName).toBe("bob/team");
@@ -117,7 +117,7 @@ describe("GET /api/workspace/active-repo", () => {
   it("J5: claim points at a workspace the user no longer belongs to → resets to solo + fellBackToSolo", async () => {
     state.currentWorkspaceId = JOINED_WS;
     state.memberOf = new Set([SOLO_WS]); // removed from JOINED_WS
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/workspace/active-repo"));
     const json = await res.json();
     expect(mockRpc).toHaveBeenCalledWith("set_current_workspace_id", {
       p_workspace_id: SOLO_WS,
@@ -133,7 +133,7 @@ describe("GET /api/workspace/active-repo", () => {
       auth: { getUser: vi.fn(async () => ({ data: { user: null } })) },
       rpc: mockRpc,
     });
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/workspace/active-repo"));
     expect(res.status).toBe(401);
   });
 });

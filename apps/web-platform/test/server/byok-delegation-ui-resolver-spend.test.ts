@@ -169,7 +169,7 @@ function primeTables(byTable: Record<string, Result>): Record<string, Chain> {
   return chains;
 }
 
-const IDENTITY: Identity = { userId: "grantor-1", role: "prd", orgId: "org-1" };
+const IDENTITY: Identity = { userId: "grantor-1", role: "prd", orgId: "org-1", email: null, subscriptionStatus: null };
 
 const NOW = new Date();
 const isoAgo = (hours: number) =>

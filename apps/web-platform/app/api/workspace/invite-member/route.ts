@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   if (!pageData.ok) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  const identity: Identity = { userId: user.id, role: "prd", orgId: pageData.data.organizationId };
+  const identity: Identity = { userId: user.id, role: "prd", orgId: pageData.data.organizationId , email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(pageData.data.organizationId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }

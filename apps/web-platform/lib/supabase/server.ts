@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
@@ -10,7 +11,13 @@ const DEV_PLACEHOLDER_URL = "https://placeholder.supabase.co";
 const DEV_PLACEHOLDER_KEY = "placeholder-anon-key";
 let warnedMissing = false;
 
-export async function createClient() {
+// React cache(): one server render pass shares ONE client. `resolveIdentity`
+// (lib/feature-flags/identity.ts) is already cache()-memoized KEYED ON the
+// client argument — without this wrap, each layout/page built a fresh client
+// and the memo key never matched, so the identity chain re-ran per layout
+// level. `cookies()` is already request-scoped, so per-request memoization
+// of this cookie-reading factory is safe.
+export const createClient = cache(async () => {
   const cookieStore = await cookies();
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
     if (process.env.NODE_ENV === "production") {
@@ -58,4 +65,4 @@ export async function createClient() {
       },
     },
   );
-}
+});

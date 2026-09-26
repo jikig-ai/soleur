@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   const orgId = await resolveCurrentOrganizationId(user.id, supabase);
   if (!orgId) return NextResponse.json({ error: "no_org" }, { status: 403 });
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  const identity: Identity = { userId: user.id, role: "prd", orgId , email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }

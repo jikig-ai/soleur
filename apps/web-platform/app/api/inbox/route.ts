@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import { createClient } from "@/lib/supabase/server";
 import { reportSilentFallback } from "@/server/observability";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
@@ -32,7 +32,7 @@ import { mergeAndRank } from "@/lib/inbox-severity";
 
 export const dynamic = "force-dynamic";
 
-async function getHandler(req: Request, user: User) {
+async function getHandler(req: Request, user: VerifiedUser) {
   const url = new URL(req.url);
   const archived = url.searchParams.get("status") === "archived";
 
