@@ -15,6 +15,24 @@ requires_cpo_signoff: true
 
 # perf(dashboard): cold load misses ≲500ms first-paint AC
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-26
+**Sections enhanced:** Proposed Solution (Phases 0–2), Hypotheses (added), Observability, Files to Edit/Create (added), ADR decision record
+**Research agents used:** sequential-fallback — no Task fan-out in this runtime; deepen-plan halt gates (4.5 network-outage, 4.6 user-brand, 4.7 observability, 4.8 PAT, 4.9 UI-wireframe, 4.10 encryption-posture, 4.11 guard-contract), sharp-edges catalogue, and runtime-shape verification applied inline
+
+### Key Improvements
+
+1. `tracesSampler` verified against installed `@sentry/core` types (`samplingcontext.d.ts`): `normalizedRequest.headers` + `name` are both present in `TracesSamplerSamplingContext`, so header-scoped sampling (`x-perf-probe: 1` → 1.0) is implementable as specified.
+2. `resolveIdentity` fast path pinned to the existing importable precedent `decodeJwtPayloadUnsafe` (`lib/supabase/tenant.ts`) — the Node-runtime sibling of middleware's edge-safe decode; no new helper needed.
+3. Network-outage gate (Phase 4.5) fired on the `connect-timeout` hypothesis: L3 egress to Supabase is verified live by the `/health` keyword probe (`supabase:connected` — the app reaching Supabase IS the monitored signal); see `## Hypotheses`.
+4. `expires_on` corrected inside the Encryption Posture exception to stay within the 90-day Layer-A bound.
+
+### New Considerations Discovered
+
+- The dominant-session measurement surface (SW-proxied navigations) was blind until the #8969 fix — Phase-0 ordering (instrument first) is load-bearing, not ceremony.
+- The warm-FCP ≲500ms arithmetic is thin (measured warm doc TTFB ~0.65s against a 500ms paint budget); recorded as a persisted User-Challenge in `specs/feat-one-shot-8978-cold-load-first-paint/decision-challenges.md` §1.
+
 ## Overview
 
 Post-merge verification of the auth-waterfall collapse (squash `70a75c8`, deployed `v0.302.10`, PR #8903, plan `2026-09-25-perf-dashboard-section-load-latency-plan.md`) confirms the middleware collapse works — `mw-*` Server-Timing descriptors are present with miss→hit behavior — but the ≲500 ms first-paint acceptance criterion (`knowledge-base/project/specs/feat-one-shot-dashboard-load-latency/tasks.md` §7.3) is not met. Measured on the live-verify account: FCP 2.3–4.8s, cold `/api/*` calls 8–15s, authenticated warm document TTFB floor ~0.65s.
@@ -30,6 +48,16 @@ Three measured facts bound the problem:
 - **Cold document nav** (pre-SW activation, #8969 evidence): `mw-auth;dur=301.2, mw-revoke;dur=909.8;desc=miss, mw-tc;dur=298.5;desc=miss` — the middleware legs alone cost ~1.2–1.5s wall when the verdict caches are cold, and the render path then pays `resolveIdentity`'s own remote `auth.getUser()` a second time per document.
 - **Cold `/api/*` 8–15s** is unexplained by the known RTT inventory (middleware getUser + cold verdict misses ≈ 1.5–2s). Something beyond serial-RTT arithmetic dominates — candidates: Supabase TLS/session establishment per cold connection, token refresh on a cold session, connection storms from ~6 concurrent mount fetches, IPv6/connect-timeout fallback signatures, or Supabase-side compute warm-up. No instrument currently sees inside this window: `Server-Timing` is emitted on document responses only, and `tracesSampleRate: 0` in `sentry.server.config.ts`.
 - **SW-proxied navigations are invisible to the instrument** (#8969): `sw.js` forwards navigations with `sec-fetch-dest: empty`, which lands in `NON_DOCUMENT_DESTS` and skips the whole `Server-Timing`/`no-store` block — so the dominant real-session case (every post-first-visit navigation) emits no `mw-*` data, and the probe numbers in the issue may under-report.
+
+## Hypotheses
+
+The issue's four hypotheses, each with its verification artifact or explicit not-verified marker (network-outage checklist ordering: L3 layers verified before L7/service-layer claims):
+
+- **H1 — Cold Supabase connection establishment dominates first `/api/*` hits.** L3 egress: **verified** — `curl -s https://app.soleur.ai/health` returns 200 with the `supabase:connected` keyword pair this session (the monitor's own readiness signal IS a server→Supabase round-trip; egress path is live). L3 DNS/routing: verified by the same probe (the web host resolves and reaches `<ref>.supabase.co` continuously). L7 TLS/proxy: **verified client→edge** (`curl -I https://app.soleur.ai/dashboard` → 307, ~155ms TTFB); **server→Supabase TLS warm-up: not verified — this is the hypothesis under test**, discriminated by Phase-0 Sentry spans (connect time inside `supabase-js` fetch) + the probe's per-request timing. L7 application: warm requests succeed — failure is cold-path-specific by construction.
+- **H2 — Residual serial awaits + ~74 unmigrated route-level `auth.getUser()` sites (Refs #8926).** Verified present: 74 `app/api/**/route.ts` files contain `auth.getUser` (grep count this session); 4 of them are on the dashboard mount path (list-memberships, pending-invites, byok/effective-status, vision). Phase-1 item 6 removes that slice; whether per-call auth RTTs dominate the cold window is what Phase-0 measurement answers.
+- **H3 — SW-proxied navigations bypass the `Server-Timing`/`no-store` block (Refs #8969).** Verified in code (`NON_DOCUMENT_DESTS` gate reads `sec-fetch-dest`; `sw.js` forwards navigations with `mode: navigate`, `dest: empty`) and in production (#8969's measured evidence). Fix folded into Phase-0 item 1 — it is a prerequisite for the measurement arm of the DoD.
+- **H4 — Token refresh on cold session inflating first authenticated round-trips.** Not verified; discriminated by Phase-0 traces (a refresh shows as a `/auth/v1/token?grant_type=refresh_token` span inside `mw-auth`/`rt-*` windows).
+- **H5 (added in deepen — competing root-cause the probe must discriminate):** connect-level stalls between the web host and Supabase edge (IPv6-first connect fallback, TLS session resumption failure, undici pool cold-start across ~6 concurrent mount fetches). Detection: Sentry spans show connect/TLS wall-time per outbound request; an 8–15s signature consistent with a ~10s connect timeout + retry would name this tier directly.
 
 ## Research Insights
 
@@ -88,13 +116,29 @@ Three phases, ordered so measurement precedes irreversible mechanism choice.
 ### Phase 1 — Remove the remaining known fixed tax (independent of diagnosis)
 
 6. **Migrate the four mount-path routes** (`workspace/list-memberships`, `workspace/pending-invites`, `byok/effective-status`, `vision`) from `auth.getUser()` to `verifiedUserId(req)` — the mechanical #8926 slice on the dashboard-critical path. Each site keeps the 401-on-null contract; `vision` POST additionally keeps its existing body validation.
-7. **Kill the render-path duplicate `getUser()`.** `resolveIdentity` gains a fast path: read `x-soleur-auth-user-id` via `headers()` (RSC sees middleware-forwarded request headers) and decode `email` from the session JWT (`getSession()` local read — same decode middleware already performs for `sub`/`iat`); fall back to remote `getUser()` when the header is absent or the JWT claims are missing — absent ⇒ re-verify, never trust (ADR-253 contract unchanged). This removes ~300ms warm / ~1s cold from every document render.
+7. **Kill the render-path duplicate `getUser()`.** `resolveIdentity` gains a fast path: read `x-soleur-auth-user-id` via `headers()` (RSC sees middleware-forwarded request headers) and decode `email`/`sub` from the session JWT via `getSession()` (local read) + the existing importable `decodeJwtPayloadUnsafe` (`lib/supabase/tenant.ts` — the Node-runtime sibling of middleware's edge-safe `decodeJwtPayloadEdgeSafe`; precedent-diff: same 3-segment/atob shape, no new decode helper); fall back to remote `getUser()` when the header is absent or the JWT claims are missing — absent ⇒ re-verify, never trust (ADR-253 contract unchanged). This removes ~300ms warm / ~1s cold from every document render.
 8. **Conditional: positive-only auth-verdict cache** (`mw-auth` leg). IF Phase-0 measurement shows `mw-auth` dominating cold `/api/*` (e.g., per-request `getUser` ~1s+ cold), add an in-process `LRUCache` keyed on the access-token hash → `{userId, email}`, same `MW_VERDICT_TTL_MS = 30_000`, positive-only (only `user != null` stored; `null`/error re-verifies per request). This accepts ≤30s staleness on Supabase-side session revocation — the identical bound the revocation verdict cache already accepts for membership revocation — and **requires the ADR-253 amendment** (§Architecture Decision). If measurement instead shows the cold cost lives inside Supabase TLS/compute warm-up, this cache does not help and is NOT added — the fix would then be connection-level (e.g., a lightweight warm-up hit at boot, or HTTP keep-alive tuning), decided by the measurement.
 
 ### Phase 2 — Verify
 
 9. Run the probe cold + warm against the deployed build; record FCP, TTFB, per-`/api` timings, `mw-*` and trace breakdown.
 10. Update `knowledge-base/project/specs/feat-one-shot-dashboard-load-latency/tasks.md` §7.3 commentary or file the residual if bounds are unmet — the AC demands a *stated, verified* bound even where ≲500ms proves unreachable.
+
+## Files to Edit
+
+- `apps/web-platform/middleware.ts` — document detection on `sec-fetch-mode`/`request.mode` (Phase-0.1); `Server-Timing` emission on authenticated `/api/*` responses (Phase-0.2); conditional auth-verdict `LRUCache` (Phase-1.8, measurement-gated).
+- `apps/web-platform/sentry.server.config.ts` — `tracesSampleRate: 0` → `tracesSampler` (Phase-0.3).
+- `apps/web-platform/lib/feature-flags/identity.ts` — `resolveIdentity` header+JWT fast path (Phase-1.7).
+- `apps/web-platform/app/api/workspace/list-memberships/route.ts`, `apps/web-platform/app/api/workspace/pending-invites/route.ts`, `apps/web-platform/app/api/byok/effective-status/route.ts`, `apps/web-platform/app/api/vision/route.ts` — `verifiedUserId` migration (Phase-1.6).
+- `apps/web-platform/test/middleware.test.ts`, `apps/web-platform/test/middleware.no-store.test.ts`, `apps/web-platform/test/server/request-auth.test.ts`, the identity test suite, the sentry-scrub test — the regression batteries each change carries.
+- `knowledge-base/engineering/architecture/decisions/ADR-253-bounded-freshness-verdict-caching-and-middleware-verified-identity.md` — amendment (either arm; Phase-1.4).
+
+## Files to Create
+
+- `apps/web-platform/scripts/live-verify/perf-probe.ts` — the committed authenticated cold/warm measurement probe (Phase-0.4).
+- `apps/web-platform/test/server/` probe-adjacent unit tests as needed (sentry-scrub transaction handling, tracesSampler arm table).
+
+(No page/layout/template, component, or markup files — the UI-surface glob set is empty by design; client-side mount-fan-out reshaping is deferred to #8985.)
 
 ## Alternative Approaches Considered
 
@@ -182,7 +226,7 @@ exception:
   justification: "intra-process header propagation and ≤30s in-memory verdicts carry no at-rest or in-transit cipher surface; the token-hash key stores no credential material"
   tracking_issue: "#8978"
   reevaluate_when: "the verdict cache grows a persistence path, a cross-process consumer, or key material instead of a token hash"
-  expires_on: 2026-12-26
+  expires_on: 2026-12-24
 ```
 
 ## Guard Contract
@@ -257,6 +301,8 @@ No staged-truth problem — the ADR amendment describes the shipped state in the
 - **Risk — measurement blindness persists:** if the cold 8–15s lives inside Supabase edge/compute (visible only as "gap between mw legs and handler start"), the tier breakdown still lands (Sentry span wall-times) but the fix may be vendor-tier, not code. Recorded as the diagnosis-gated Phase-1 fallback.
 - **Dependency:** #8969 fix is folded in (this plan's Phase-0 item 1 IS its fix sketch); #8926 stays open for the remaining sweep; #3564 (Core Web Vitals infra) acknowledged — this plan's probe is scoped to this AC, not a general CWV platform.
 - **Deferral tracked:** client-side mount-fan-out batching deferred (see Alternative Approaches) — tracking issue #8985, milestone Phase 4.
+- **Risk — forgeable probe header:** `x-perf-probe: 1` is not a secret — any caller can force their own requests into the 1.0 sample arm. Blast radius is bounded (extra transaction volume on traffic the caller already generates; Sentry quota spend is the only cost). If spend matters, additionally gate the sampler on transaction name matching `/api/*` or document paths so the header only arms in-scope surfaces — decide at implementation; either arm is recorded in the PR body.
+- **Verified at deepen (negative-claim pass):** unauthenticated requests can never reach the Server-Timing emission block — `if (!user) return redirectWithCookies("/login")` precedes it (`middleware.ts`, `!user` arm before the emission site), so `/api/*` Server-Timing exposure is confined to the already-authenticated caller.
 
 ## Sharp Edges
 

@@ -16,7 +16,7 @@ Spec lacks valid lane: — no `spec.md` exists for this branch, so `lane:` defau
 ## Phase 1 — Remove known fixed tax
 
 - [ ] 1.1 Migrate `app/api/workspace/list-memberships/route.ts`, `app/api/workspace/pending-invites/route.ts`, `app/api/byok/effective-status/route.ts`, `app/api/vision/route.ts` from `auth.getUser()` to `verifiedUserId(req)` (401 on null; preserve all data-query clients). Update their route tests.
-- [ ] 1.2 `lib/feature-flags/identity.ts`: `resolveIdentity` reads `x-soleur-auth-user-id` via `headers()` and decodes `email`/`sub` from the session JWT (`getSession()` local read — the middleware's own decode pattern); absent header or missing claims → remote `getUser()` fallback, unchanged semantics. Update `test/` identity suites for both arms.
+- [ ] 1.2 `lib/feature-flags/identity.ts`: `resolveIdentity` reads `x-soleur-auth-user-id` via `headers()` and decodes `email`/`sub` from the session JWT (`getSession()` local read + the existing `decodeJwtPayloadUnsafe` from `lib/supabase/tenant.ts` — no new decode helper); absent header or missing claims → remote `getUser()` fallback, unchanged semantics. Update `test/` identity suites for both arms.
 - [ ] 1.3 Conditional (Phase-0-gated): if `mw-auth` dominates cold `/api/*`, add the positive-only auth-verdict `LRUCache` keyed on access-token hash (`MW_VERDICT_TTL_MS = 30_000`, only `user != null` stored) AND amend ADR-253 in the same commit. If rejected by measurement, record rejection + numbers in the PR body; this task is then N/A.
 - [ ] 1.4 Amend `knowledge-base/engineering/architecture/decisions/ADR-253-*.md` — either arm (verdict-cache adoption records the ≤30s auth-staleness bound; rejection arm records the render-path header-consumption extension). Same PR, not a follow-up.
 
