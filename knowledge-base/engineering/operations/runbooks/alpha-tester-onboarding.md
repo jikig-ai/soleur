@@ -409,15 +409,21 @@ Three questions, in this order — the third is the only metric that answers the
 
 All four are executable today on this runbook alone; none wait on code:
 
-- [ ] **File the overdue 2-week checkpoint** for tester #1 (due ~2026-08-20). Aggregate KB growth
+- [x] **File the overdue 2-week checkpoint** for tester #1 (due ~2026-08-20) — filed 2026-09-26
+  as #8981; `checkpoint-tester-1-2026-09-26` (fires 2026-10-10) and `cohort-quiet-tester-1-2026-09-26`
+  (fires 2026-09-29) armed via `scripts/arm-checkpoint.sh`. Remaining: aggregate KB growth
   from the git history + self-reported usage — mark the self-report as such; it decays weekly.
-- [ ] **Send the terms re-notification** (#7459) — the terms sent predate `TC_VERSION` 2.5.0;
-  the standing-step draft below is the text.
+- [ ] **Send the terms re-notification** (#7459) — the terms sent predate `TC_VERSION` 2.5.0
+  (now 2.5.1 — the notice owes both bumps); the standing-step draft below is the text, and a
+  filled-in draft is posted on #7459. Operator sends.
 - [ ] **Create the beta-CRM contact** (owner-authenticated, `/dashboard/crm`) — the write gate is
-  deliberate; do not script around it.
+  deliberate; do not script around it. Verified absent 2026-09-26 (`beta_contacts` company
+  match: 0 rows).
 - [ ] **C9 controller/processor re-run** per #7348 — the legal precondition to tester #2's first
   session; the guided hosted path (tester's own key, their account) is designed to stay Posture A.
+  Still open as of 2026-09-26.
 - [ ] **Retro problem interview** with tester #1 — flagged post-exposure; never pool with #1440.
+  Invite draft posted on #8981; not yet scheduled.
 
 ## Recruitment mix tally
 
