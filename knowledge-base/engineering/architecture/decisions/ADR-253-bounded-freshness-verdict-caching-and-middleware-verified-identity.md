@@ -146,3 +146,53 @@ same ≤30 s bound per isolate — re-evaluate then.
 - Two regression guards (`middleware-matcher-coverage`, positive-only verdict
   store) pin the new trust boundaries in CI.
 - Follow-up issued at ship: migrate remaining `getUser()` route call sites.
+
+## Amendment — 2026-09-26 (#8978)
+
+Three scoped extensions of Decision items 3–4, plus one measured rejection:
+
+- **Render-path header consumption.** `resolveIdentity` (the layout/render
+  chain's identity resolver) now consumes `x-soleur-auth-user-id` the same way
+  route handlers do: when the minted header is present, the caller id is
+  accepted only if the *local* session JWT's own `sub` claim agrees AND the
+  token carries the `email` claim `Identity` requires; every gap (absent
+  header, mismatched `sub`, missing claim, malformed token, no session)
+  falls back to remote `getUser()`. The header remains advisory — the JWT
+  cross-check means a divergent minted value self-invalidates.
+- **`Server-Timing` surface widened.** Emission of `mw-auth` / `mw-revoke` /
+  `mw-tc` is no longer document-only: authenticated `/api/*` responses carry
+  it too, and document classification now keys on fetch mode
+  (`sec-fetch-mode: navigate` or `request.mode === "navigate"`), which closes
+  the service-worker-proxied-navigation blind spot (#8969). `Cache-Control:
+  no-store` remains document-only.
+- **Auth-verdict cache: REJECTED by measurement.** A per-request
+  `getUser()`-verdict cache keyed by access-token hash was conditional on
+  `mw-auth` dominating the cold `/api/*` tax. The committed perf probe
+  (`scripts/live-verify/perf-probe.ts`, 5 cold + 1 warm samples, 2026-09-26)
+  measured `mw-auth` at 0.13–4.38 s against document TTFB of 0.77–13.73 s —
+  the residual post-middleware tier (document render + upstream warmth)
+  dominates, so an auth-verdict cache would have bought a bounded-staleness
+  liability for a minority tier. Not adopted; the rejection is recorded so a
+  future revisit re-runs the probe first.
+
+Review-round extensions on the same amendment (PR #8984 panel):
+
+- **Refreshed session cookies now propagate downstream.** `setAll` syncs the
+  rotated cookie into the forwarded `requestHeaders` snapshot — previously
+  the clone predated auth resolution, so render-path `getSession()` saw the
+  pre-refresh token and paid a second remote refresh on exactly the
+  expired-token cold-session population the fast path targets.
+- **Bounded email-claim staleness.** `pending-invites` and `resolveIdentity`
+  accept the session JWT's `email` claim, which reflects token-mint time —
+  after an email change the claim is stale for ≤ the access-token TTL (~1h),
+  self-healing on refresh. The remote `getUser()` arm stays auth-server-fresh
+  (absent claim / mismatched `sub` / malformed token).
+- **Rejection reasoning, sharpened.** Beyond mw-auth's minority TTFB share,
+  a per-request verdict cache could never accelerate the first cold request
+  (the population this issue is about), and mount-fan-out misses would not
+  coalesce without in-flight dedup — the measured win would have been warm
+  tail-only. The render-path residual (doc TTFB minus `mw-*` legs, up to
+  ~12.7 s) is where the remaining cold time lives; note the attribution rests
+  on document-level arithmetic since the probe's per-request waterfall
+  misread Playwright's `timing()` unit convention at first measurement
+  (fixed in the same PR).

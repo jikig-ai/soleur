@@ -1,10 +1,41 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
 }));
+
+// Mutable so a single module instance can simulate presence/absence of the
+// middleware-minted identity header per test. `null` = no minted header (the
+// absent arm). A Headers instance carries the minted value.
+const { mintedRef, headersShouldThrow } = vi.hoisted(() => ({
+  mintedRef: { current: null as Headers | null },
+  headersShouldThrow: { current: false },
+}));
+
+vi.mock("next/headers", () => ({
+  headers: async () => {
+    if (headersShouldThrow.current) {
+      throw new Error("headers() called outside a request scope");
+    }
+    return mintedRef.current ?? new Headers();
+  },
+}));
+
+beforeEach(() => {
+  mintedRef.current = null;
+  headersShouldThrow.current = false;
+});
+
+function makeJwt(claims: Record<string, unknown>): string {
+  const b64 = (o: unknown) =>
+    btoa(JSON.stringify(o))
+      .replace(/=/g, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+  return `${b64({ alg: "ES256", typ: "JWT" })}.${b64(claims)}.sig`;
+}
 
 import { resolveIdentity } from "./identity";
 import { ANON_IDENTITY } from "./server";
@@ -27,6 +58,7 @@ function fakeSupabase(
     data: null,
     error: null,
   },
+  sessionToken?: string,
 ) {
   const from = vi.fn().mockImplementation((table: string) => {
     if (table === "workspace_members") {
@@ -42,6 +74,14 @@ function fakeSupabase(
       getUser: vi
         .fn()
         .mockResolvedValue({ data: { user: authUser }, error: authError }),
+      // Local cookie read — always present on the real client; returning an
+      // absent session keeps the absent-token arm reachable in tests.
+      getSession: vi.fn().mockResolvedValue({
+        data: {
+          session: sessionToken ? { access_token: sessionToken } : null,
+        },
+        error: null,
+      }),
     },
     from,
   } as unknown as Parameters<typeof resolveIdentity>[0];
@@ -196,7 +236,11 @@ describe("resolveIdentity", () => {
     const pending = resolveIdentity(supabase);
 
     // Exactly one getUser — the auth leg is upstream of the parallel pair.
-    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+    // The minted-header fast path awaits `headers()` first, so the getUser
+    // invocation lands on the next microtask rather than synchronously.
+    await vi.waitFor(() => {
+      expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+    });
 
     // Both selects issued before either resolves.
     await vi.waitFor(() => {
@@ -218,6 +262,136 @@ describe("resolveIdentity", () => {
       role: "dev",
       orgId: "org-9",
     });
+  });
+});
+
+describe("resolveIdentity fast path — minted header + local JWT (#8978)", () => {
+  it("header + JWT sub/email claims → ZERO remote getUser; identity resolved locally", async () => {
+    const supabase = fakeSupabase(
+      { id: "abc", email: "remote@fallback.test" },
+      { data: { role: "dev", subscription_status: "active" }, error: null },
+      null,
+      { data: null, error: null },
+      makeJwt({ sub: "abc", email: "jwt@claim.test", iat: 1_700_000_000 }),
+    );
+    mintedRef.current = new Headers({ "x-soleur-auth-user-id": "abc" });
+
+    await expect(resolveIdentity(supabase)).resolves.toMatchObject({
+      userId: "abc",
+      role: "dev",
+      email: "jwt@claim.test",
+    });
+    // The whole point: no auth-server round trip on a middleware-traversed render.
+    expect(supabase.auth.getUser).not.toHaveBeenCalled();
+  });
+
+  it("header present but JWT sub mismatches the minted id → remote re-verify", async () => {
+    const supabase = fakeSupabase(
+      { id: "real-user", email: "real@test.local" },
+      { data: { role: "prd" }, error: null },
+      null,
+      { data: null, error: null },
+      makeJwt({ sub: "someone-else", email: "other@test.local", iat: 1 }),
+    );
+    mintedRef.current = new Headers({ "x-soleur-auth-user-id": "abc" });
+
+    await expect(resolveIdentity(supabase)).resolves.toMatchObject({
+      userId: "real-user",
+      email: "real@test.local",
+    });
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("header present but JWT lacks the email claim → remote re-verify", async () => {
+    const supabase = fakeSupabase(
+      { id: "abc", email: "remote@test.local" },
+      { data: { role: "prd" }, error: null },
+      null,
+      { data: null, error: null },
+      makeJwt({ sub: "abc", iat: 1 }),
+    );
+    mintedRef.current = new Headers({ "x-soleur-auth-user-id": "abc" });
+
+    await expect(resolveIdentity(supabase)).resolves.toMatchObject({
+      userId: "abc",
+      email: "remote@test.local",
+    });
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("header present but JWT malformed → remote re-verify", async () => {
+    const supabase = fakeSupabase(
+      { id: "abc" },
+      { data: { role: "prd" }, error: null },
+      null,
+      { data: null, error: null },
+      "not-a-jwt",
+    );
+    mintedRef.current = new Headers({ "x-soleur-auth-user-id": "abc" });
+
+    await expect(resolveIdentity(supabase)).resolves.toMatchObject({
+      userId: "abc",
+    });
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("header present but no session token → remote re-verify", async () => {
+    const supabase = fakeSupabase(
+      { id: "abc" },
+      { data: { role: "prd" }, error: null },
+      null,
+      { data: null, error: null },
+      // no sessionToken — getSession returns null session
+    );
+    mintedRef.current = new Headers({ "x-soleur-auth-user-id": "abc" });
+
+    await expect(resolveIdentity(supabase)).resolves.toMatchObject({
+      userId: "abc",
+    });
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("headers() throws (non-request scope) → remote re-verify", async () => {
+    headersShouldThrow.current = true;
+    const supabase = fakeSupabase(
+      { id: "abc", email: "remote@test.local" },
+      { data: { role: "prd" }, error: null },
+    );
+    await expect(resolveIdentity(supabase)).resolves.toMatchObject({
+      userId: "abc",
+      email: "remote@test.local",
+    });
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejection arms DID enter the fast path — getSession ran before re-verify", async () => {
+    // Pins that the rejection tests above exercise the fast-path entry (the
+    // mechanism), not merely the fallback contract — without getSession having
+    // been consulted, a deleted `if (mintedUserId)` block would stay green.
+    const supabase = fakeSupabase(
+      { id: "abc" },
+      { data: { role: "prd" }, error: null },
+      null,
+      { data: null, error: null },
+      makeJwt({ sub: "different-sub", email: "x@test.local" }),
+    );
+    mintedRef.current = new Headers({ "x-soleur-auth-user-id": "abc" });
+
+    await resolveIdentity(supabase);
+    expect(supabase.auth.getSession).toHaveBeenCalledTimes(1);
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("no minted header → remote getUser (the pre-existing absent arm)", async () => {
+    const supabase = fakeSupabase(
+      { id: "abc", email: "remote@test.local" },
+      { data: { role: "prd" }, error: null },
+    );
+    await expect(resolveIdentity(supabase)).resolves.toMatchObject({
+      userId: "abc",
+      email: "remote@test.local",
+    });
+    expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
   });
 });
 

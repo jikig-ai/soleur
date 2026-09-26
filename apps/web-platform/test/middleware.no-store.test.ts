@@ -100,6 +100,20 @@ describe("middleware GAP G — no-store on authenticated documents", () => {
     expect(res.headers.get("cache-control")).toMatch(/no-store/);
   });
 
+  test("authenticated SW-proxied navigation (Sec-Fetch-Dest: empty, Sec-Fetch-Mode: navigate) → no-store (#8969)", async () => {
+    // sw.js forwards navigations via respondWith(fetch(event.request)): dest
+    // degrades to `empty` but mode stays `navigate`. The dest-only gate skipped
+    // no-store for the dominant real-session navigation shape.
+    const res = await middleware(
+      makeRequest("/dashboard/settings", {
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "navigate",
+      }),
+    );
+    expect(res.status).not.toBe(302);
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
   test("authenticated NON-document fetch (Sec-Fetch-Dest: empty, RSC/API) → NOT no-store (Router Cache + API caching untouched)", async () => {
     const res = await middleware(
       makeRequest("/dashboard/settings", { "sec-fetch-dest": "empty" }),
