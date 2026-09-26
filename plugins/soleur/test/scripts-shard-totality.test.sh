@@ -879,27 +879,42 @@ while IFS= read -r _tok; do
     continue
   fi
 
-  # Distinct-legs pin on the REALIZED assignment: the leg_*/hleg_* files above are what the
-  # runner actually enumerated per leg (manifest + hash-fallback composed), so this verifies
-  # the operative placement — not a table that could be disengaged or stale. Two halves on
-  # the same leg file means they run sequentially on one job and the split defeats itself
-  # silently while coverage stays total.
+  # Distinct-legs pin, two reads:
+  #  (a) the COMMITTED manifests — a --rows label must be pinned on a leg distinct from its
+  #      siblings; an unpinned label leaves placement to the cksum fallback, which can put
+  #      both halves on one leg while coverage stays total. Read against the committed TSVs
+  #      regardless of SOLEUR_SHARD_MANIFEST[_HEAVY] overrides — those are fixture seams, and
+  #      a fixture's own manifest says nothing about the committed pins.
+  #  (b) the REALIZED legs (enumerated leg_*/hleg_* files) — only when no manifest override
+  #      is bound: under a fixture manifest the halves legitimately hash-fall wherever the
+  #      fixture sends them (an empty manifest keeping coverage total is a GREEN contract —
+  #      co-location under fallback is wasted leg time, not lost coverage).
   if (( _ranges_n >= 2 )); then
-    _legs_ok=1; : > "$WORK/rs_legs"
+    _legs_ok=1; : > "$WORK/rs_legs"; : > "$WORK/rs_rlegs"
     while IFS=$'\t' read -r _lbl _rr; do
-      _hit="$(grep -lxF "$_lbl" "$WORK"/leg_* "$WORK"/hleg_* 2>/dev/null | head -1)"
-      if [[ -z "$_hit" ]]; then
-        fail "${_tok}: --rows registration '${_lbl}' appears on NO enumerated leg — its placement is unverifiable"
+      _leg="$(awk -F'\t' -v l="$_lbl" '$1 == l { print $2; exit }' "$REPO_ROOT/scripts/suite-shard-legs.tsv" "$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv" 2>/dev/null | head -1)"
+      if [[ -z "$_leg" ]]; then
+        fail "${_tok}: --rows registration '${_lbl}' is not pinned in either shard manifest — its leg is unverifiable (hash-fallback could co-locate the halves)"
         _legs_ok=0; break
       fi
-      basename "$_hit" >> "$WORK/rs_legs"
+      echo "$_leg" >> "$WORK/rs_legs"
+      if [[ -z "${SOLEUR_SHARD_MANIFEST:-}" && -z "${SOLEUR_SHARD_MANIFEST_HEAVY:-}" ]]; then
+        _hit="$(grep -lxF "$_lbl" "$WORK"/leg_* "$WORK"/hleg_* 2>/dev/null | head -1)"
+        [[ -n "$_hit" ]] && basename "$_hit" >> "$WORK/rs_rlegs"
+      fi
     done < "$WORK/rs_flagged"
     if (( _legs_ok == 1 )); then
       _uniq=$(sort -u "$WORK/rs_legs" | wc -l | tr -d ' ')
       if (( _uniq != _ranges_n )); then
-        fail "${_tok}: --rows halves realize onto $(tr '\n' ' ' < "$WORK/rs_legs" | sed 's/ /,/g;s/,$//') — two halves on the same leg defeats the split while coverage stays total"
+        fail "${_tok}: --rows halves pin to legs $(tr '\n' ' ' < "$WORK/rs_legs" | sed 's/ /,/g;s/,$//') — two halves on the same leg defeats the split while coverage stays total"
       else
-        pass "${_tok}: ${_ranges_n} --rows registrations realize onto distinct legs ($(tr '\n' ' ' < "$WORK/rs_legs"))"
+        pass "${_tok}: ${_ranges_n} --rows registrations pin to distinct legs ($(tr '\n' ' ' < "$WORK/rs_legs"))"
+      fi
+      if [[ -s "$WORK/rs_rlegs" ]]; then
+        _runiq=$(sort -u "$WORK/rs_rlegs" | wc -l | tr -d ' ')
+        if (( _runiq != _ranges_n )); then
+          fail "${_tok}: --rows halves REALIZE onto $(tr '\n' ' ' < "$WORK/rs_rlegs" | sed 's/ /,/g;s/,$//') — the committed pins are distinct but the runner's enumerated assignment co-locates them (fallback or manifest disengagement)"
+        fi
       fi
     fi
   fi
