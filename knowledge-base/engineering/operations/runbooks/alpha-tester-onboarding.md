@@ -40,10 +40,27 @@ To determine whether a candidate is already a Claude Code user, check their repo
 been recorded, and that the remaining slots can still reach 3. After #8 the constraint cannot be
 recovered.
 
-Also decide the test surface now, because it determines what Step 6 can measure:
+The test surface is **decided**: testers #2–#10 onboard onto the **hosted web platform**
+(#8880, Approach A). Hosted keeps the cohort's telemetry comparable, is the only surface a
+non-Claude-Code founder can reach, and makes #1442 measurable. Tester #1 remains the sole
+self-hosted-CLI tester — his data is marked CLI-era wherever a finding cites it (see the
+Step 6 caveat), and the CLI surface keeps the local `.soleur/decisions.jsonl` capture for
+route/agent-mix signal.
 
-- **Hosted web platform** — full telemetry; #1442 is measurable.
-- **Self-hosted CLI plugin** — no server-side telemetry; see the Step 6 caveat.
+**Screening question** (append to every recruitment DM): *"Do you currently use Claude Code
+or another AI coding CLI?"* — one line decides which side of the mix tally a candidate lands
+on before any deeper conversation.
+
+**Non-CC first, with a stall valve.** Prioritize non-Claude-Code candidates for testers
+#2–#4 — they carry the surface-thesis signal a CC-only cohort cannot produce. **Fallback:**
+if no non-CC candidate has signed within 2 weeks of a seat opening, onboard the next
+qualified CC tester and keep non-CC outreach running; the ≥3/10 floor still has slack until
+tester #8, and an unbounded stall costs more learning than a sequenced seat.
+
+**Channel attribution.** Record `channel:framing` in `beta_contacts.source` (e.g.
+`dm:warm-intro`, `waitlist:buttondown`, `dm:direct-outbound`) plus the company-level channel
+in the tally row — the cohort funnel's answer to "which channel produces testers" lives
+there, not in analytics.
 
 ---
 
@@ -61,11 +78,16 @@ Thanks for agreeing to be one of Soleur's first alpha testers.
 
 Here's what to expect:
   - We'll do a guided setup session together to get Soleur running on your project.
+    By the end of that first session you'll have one real artifact from your own
+    business — not a demo, something you'd use.
   - After that, you use it however you like for about two weeks - no scripted tasks.
   - At the end we'll do a short call about what worked and what was missing.
   - You can stop at any point, for any reason, and you don't owe us a reason.
 
-Getting set up: [link to setup instructions for their chosen surface]
+Getting set up (takes about ten minutes; we'll do the fiddly part together on the call):
+https://github.com/jikig-ai/soleur/blob/main/plugins/soleur/tester-docs/alpha-tester-setup.md
+
+Our Slack channel for anything that comes up: [Slack channel link — see the Slack step below]
 
 One note on record-keeping: I keep private notes of our conversations so I can
 follow up properly. That's on a legitimate-interest basis, the notes are visible
@@ -189,13 +211,30 @@ Company-level only, per Step 3.
 
 ---
 
-## Step 5 — Run the session and observe
+## Step 5 — Run the guided session (hosted path, testers #2–#10)
 
 > **⛔ Before running anything, apply the hard gate.** See §"Operating rule — whose machine, whose
-> key, whose purpose?" below. In short: use the **tester's** machine and the **tester's** API key, or
-> do not run. A Jikigai-keyed run against tester content needs an Art. 28(3) instrument in place
+> key, whose purpose?" below. In short: the tester uses **their own Anthropic API key** on their
+> own account. A Jikigai-keyed run against tester content needs an Art. 28(3) instrument in place
 > first (`knowledge-base/legal/2026-08-06-alpha-tester-processing-annex.md`, currently unexecuted).
 > This gate is the reason this runbook exists in its present form — it was crossed on 2026-08-06.
+
+**Live on the call, in order.** Each step is a guided pass — you drive, they watch and approve:
+
+1. **Signup** — invite link → accept terms → name the workspace. (Self-serve-OK list the tester
+   can do alone beforehand: terms acceptance, workspace naming, the product tour, joining Slack.)
+2. **Anthropic key — the friction wall.** Walk them through creating their own key at
+   console.anthropic.com (the setup doc has screenshot-level steps). They paste it into
+   `/setup-key`; the platform encrypts it at rest and it never leaves their tenant. Do NOT offer a
+   Jikigai key — that is the Posture B trigger, pending the Side Letter.
+3. **GitHub connect** — connect their repo live. If it stalls, the doc's skip path applies:
+   *"Skip this step — connect later with help."*
+4. **First real question → one artifact.** Have them ask one question about their actual business —
+   a real one, not a demo prompt — and walk out with one artifact they'd genuinely use.
+5. **Day-0 emit verify (CLI-surface testers and dogfooding only).** For a tester on the CLI
+   plugin, run `/soleur:go` once during the session and confirm one line lands in
+   `.soleur/decisions.jsonl` — this is the stale-install detector at day 0, not day 14. Hosted
+   testers have no local plugin; their equivalent signal is the first-conversation funnel stage.
 
 #1441's stated observations. Capture these in `interview_notes` (database, not git):
 
@@ -211,28 +250,82 @@ Company-level only, per Step 3.
 
 Do not demo. If the tester is exploring, let them explore badly — that is the data.
 
+### Slack channel
+
+Create a private `#alpha-tester-<company>` channel in the existing Jikigai workspace before the
+guided session; invite the tester; pin two messages — the setup doc link and a "what to try next"
+note (three starter prompts from the setup doc). Reactive-only cadence: you answer when they post.
+**No scripted broadcasts** — a nudge mid-window converts an unassisted return into an assisted one
+and contaminates the #1442 signal (see the quiet protocol). Quiet periods in the channel are
+*visibility*, not a nudge trigger on their own — the armed `cohort-quiet` check owns that.
+
+### Cohort tag — do it in the same session
+
+After signup, PATCH the tester into the cohort so server-side metrics can filter on them:
+
+```bash
+SECRET=$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)
+curl -fsS -X PATCH "https://app.soleur.ai/api/internal/cohort" \
+  -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" \
+  -d '{"userId":"<their user id>","cohort_key":"alpha"}'
+```
+
+Then record `cohort_key=alpha` in the tally row — the runbook row is the non-PII tag↔cohort map
+`cohort-status` reconciles against. A signup that stays un-tagged is invisible to `?cohort=alpha`
+funnel pulls; the `cohort-quiet` check lists un-tagged recent signups as a safety net.
+
+### Quiet protocol (days 1–10)
+
+The armed `cohort-quiet` check posts a quiet list to the tracking issue at day 3 (and the
+checkpoint is armed the same way — see Step 6). Quiet = no non-failed conversation in ≥3 days, or
+zero conversations at ≥3 days old — the never-activated tester is the highest churn risk and is
+exactly who the predicate exists to catch.
+
+**When a quiet flag fires:** a single human nudge in the Slack channel. Then — the load-bearing
+part — record `nudged_at: YYYY-MM-DD` in the tester's tally row. A nudged tester who later returns
+is **assisted**, not unassisted; at n=10 the checkpoint template discloses which returns were
+assisted so the two signal classes never pool into one number.
+
 ---
 
-## Step 6 — Schedule the 2-week checkpoint now
+## Step 6 — File the tracking issue and arm the reminders now
 
-**File the checkpoint issue during onboarding, not afterwards.** A checkpoint that depends on
-someone remembering is a checkpoint that does not happen.
+**Do both during onboarding, not afterwards.** A checkpoint that depends on someone remembering
+is a checkpoint that does not happen — this is the exact failure tester #1's loop hit.
+
+1. **File the tracking issue** (this is also where the checkpoint comment and the quiet-check
+   report land):
 
 ```bash
 gh issue create \
   --title "checkpoint: 2-week usage review — <Company> (alpha tester #N), due YYYY-MM-DD" \
   --label type/chore \
   --milestone "Phase 4: Validate + Scale" \
-  --body "Two-week unassisted usage checkpoint for #1442. Onboarded YYYY-MM-DD; due YYYY-MM-DD (+14d).
+  --body "Two-week usage checkpoint for #1442. Onboarded YYYY-MM-DD; due YYYY-MM-DD (+14d).
 
 Company-level only — no personal data in this issue.
 
 Check:
+- Cohort funnel: GET /api/admin/analytics?cohort=alpha (admin session)
 - KB growth: git log on the tester's own knowledge-base/ tree
-- Returns and agent-mix: see the measurability caveat below
+- CLI testers: tester runs plugins/soleur/scripts/alpha-metrics.sh and pastes the aggregate
+- Assisted vs unassisted: check nudged_at in the runbook tally row before scoring a return
 
 Then proceed to #1443 (exit interview)."
 ```
+
+2. **Arm the reminders** — one wrapper call posts the 14-day checkpoint comment AND the day-3
+   `cohort-quiet` named-check against that issue:
+
+```bash
+export INNGEST_MANUAL_TRIGGER_SECRET=$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET \
+  -p soleur -c prd --plain)
+bash scripts/arm-checkpoint.sh <N> <tracking-issue-number>
+```
+
+   It prints the armed ids (`checkpoint-tester-N-<date>`, `cohort-quiet-tester-N-<date>`). The issue
+   comments @-mention the operator, and the checkpoint id embeds its fire date — Inngest dedupes
+   on the event id, so a re-armed date under the same id would silently keep the old schedule.
 
 > **Do not use `--label follow-through` here.** That label routes into the automated
 > follow-through sweeper, which requires a `<!-- soleur:followthrough script=… earliest=… -->`
@@ -296,13 +389,44 @@ the cohort on superseded terms.
 >
 > — Jean
 
+## Exit interview (#1443 instrument — run at the checkpoint or end of window)
+
+Three questions, in this order — the third is the only metric that answers the business question:
+
+1. **Which domain leaders did you actually use — and did anything carry over between sessions?**
+   (The compounding probe: multi-domain usage without knowledge-base growth means the compounding
+   thesis is wrong; with it, the value proposition holds.)
+2. **Did any of my check-ins change whether you came back?** — the nudge-disclosure question;
+   reconcile the answer against `nudged_at` in the tally before scoring the return unassisted.
+3. **Willingness to pay.** "Would you pay $49/month for this as it stands? What would make it a
+   yes?" — the roadmap exit criterion needs ≥3 WTP signals out of 10; this ask is where they come
+   from.
+4. **Testimonial opt-in** (CMO ask, recorded in CRM): "If this earned it, would you be willing to
+   be quoted — a sentence or two, with your name and company?" A yes here is marketing inventory;
+   a no costs nothing and tells you something about the experience.
+
+## Tester-#1 repair checklist (owed actions — run these now, off this PR's critical path)
+
+All four are executable today on this runbook alone; none wait on code:
+
+- [ ] **File the overdue 2-week checkpoint** for tester #1 (due ~2026-08-20). Aggregate KB growth
+  from the git history + self-reported usage — mark the self-report as such; it decays weekly.
+- [ ] **Send the terms re-notification** (#7459) — the terms sent predate `TC_VERSION` 2.5.0;
+  the standing-step draft below is the text.
+- [ ] **Create the beta-CRM contact** (owner-authenticated, `/dashboard/crm`) — the write gate is
+  deliberate; do not script around it.
+- [ ] **C9 controller/processor re-run** per #7348 — the legal precondition to tester #2's first
+  session; the guided hosted path (tester's own key, their account) is designed to stay Posture A.
+- [ ] **Retro problem interview** with tester #1 — flagged post-exposure; never pool with #1440.
+
 ## Recruitment mix tally
 
-Update this table at Step 1 of every onboarding.
+Update this table at Step 1 of every onboarding. `cohort_key` and `nudged_at` are what
+`cohort-status` reconciles — keep them filled.
 
-| Tester | Company | Claude Code user? | Surface | Onboarded | Terms |
-|---|---|---|---|---|---|
-| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `superseded-resend-required` (was `sent-awaiting-reply`; the terms sent predate `TC_VERSION` 2.5.0 — see the standing step below; send tracked at #7459) |
+| Tester | Company | Claude Code user? | Surface | Onboarded | Terms | cohort_key | nudged_at |
+|---|---|---|---|---|---|---|---|
+| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `superseded-resend-required` (was `sent-awaiting-reply`; the terms sent predate `TC_VERSION` 2.5.0 — see the standing step below; send tracked at #7459) | — (CLI; no hosted account) | — |
 
 **`Terms` values:** `agreed` (tester replied), `sent-awaiting-reply`, `superseded-resend-required` (a `TC_VERSION` bump landed after the terms were sent; a fresh notice is owed), or `not-required`. Update at
 Step 1. A tester at `sent-awaiting-reply` may still be worked with; a tester at blank has not been

@@ -258,6 +258,7 @@
 1	.github/scripts/test/test-run-all-signal-propagation.sh
 2	plugins/soleur/hooks/stop-hook.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
+2	plugins/soleur/scripts/emit-decision.sh
 5	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
 3	plugins/soleur/scripts/lib/tmp-classify.sh

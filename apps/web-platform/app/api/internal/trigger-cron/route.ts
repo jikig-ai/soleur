@@ -22,9 +22,12 @@
 // Inngest concurrency caps (limit 1, key "cron-platform"), so a replay flood
 // collapses to one extra in-flight run rather than unbounded parallelism.
 
-import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  readInternalBearerSecret,
+  bearerMatches,
+} from "@/lib/internal-auth";
 import { isAllowlistedManualTrigger } from "@/lib/inngest/manual-trigger-allowlist";
 
 // NOTE: the Inngest client is imported DYNAMICALLY inside POST (see below),
@@ -39,28 +42,8 @@ import { isAllowlistedManualTrigger } from "@/lib/inngest/manual-trigger-allowli
 // guard in kb-drift-ingest/route.ts and webhooks/github/route.ts.
 const MAX_BODY_BYTES = 64 * 1024;
 
-function readSecret(): string | null {
-  const v = process.env.INNGEST_MANUAL_TRIGGER_SECRET;
-  return v && v.length > 0 ? v : null;
-}
-
-function bearerMatches(header: string | null, secret: string): boolean {
-  if (!header) return false;
-  // Accept either a bare token or a `Bearer <token>` header — both feed the
-  // same length-guarded constant-time compare, so the lenient fallthrough is
-  // harmless (a non-`Bearer ` header compares verbatim).
-  const token = header.startsWith("Bearer ")
-    ? header.slice("Bearer ".length)
-    : header;
-  const a = Buffer.from(token, "utf8");
-  const b = Buffer.from(secret, "utf8");
-  // Length-guard before timingSafeEqual (it throws on unequal-length buffers).
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
 export async function POST(request: Request) {
-  const secret = readSecret();
+  const secret = readInternalBearerSecret();
   if (!secret) {
     // Fail-closed: indistinguishable-from-absent. 503 (server misconfigured),
     // NOT 401 — distinct from "secret set but Bearer wrong".

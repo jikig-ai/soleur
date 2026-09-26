@@ -90,6 +90,16 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/internal")).toBe(false);
     });
 
+    test("/api/internal/cohort is public (Bearer-gated by route, not Supabase)", () => {
+      // #8880 — the cohort-tag PATCH is an operator curl (cookieless). Without
+      // PUBLIC_PATHS membership the middleware 307s to /login before the
+      // route's own timingSafeEqual gate runs — the route would be dead in
+      // production while every route-level test stays green (#4017 class).
+      expect(PUBLIC_PATHS).toContain("/api/internal/cohort");
+      expect(isPublicPath("/api/internal/cohort")).toBe(true);
+      expect(isPublicPath("/api/internal")).toBe(false);
+    });
+
     test("public path sub-routes are allowed", () => {
       expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
       expect(isPublicPath("/callback/")).toBe(true);

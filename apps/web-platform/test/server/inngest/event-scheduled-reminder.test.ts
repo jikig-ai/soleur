@@ -211,7 +211,7 @@ describe("eventScheduledReminderHandler — named-check", () => {
     // Adding/removing a CHECK_REGISTRY key is a deliberate, code-reviewed change —
     // this exact-set assertion forces that review (a stray/typo'd key fails CI).
     expect(new Set(Object.keys(CHECK_REGISTRY))).toEqual(
-      new Set(["open-silence-issue-count", "sentry-issue-rate"]),
+      new Set(["open-silence-issue-count", "sentry-issue-rate", "cohort-quiet"]),
     );
   });
 });
@@ -583,5 +583,173 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
       expect(s).not.toContain(ENV.SENTRY_ISSUE_RW_TOKEN);
       expect(s).not.toContain("Bearer");
     }
+  });
+});
+
+// --- cohort-quiet named-check (#8880) ---------------------------------------
+//
+// The check queries Supabase via a dynamic import, so the service mock is
+// registered at module top-level; fixtures steer it through two mutable holders.
+
+const { cohortQuietFixtures } = vi.hoisted(() => ({
+  cohortQuietFixtures: {
+    members: { data: null as unknown, error: null as unknown },
+    convs: { data: null as unknown, error: null as unknown },
+    untagged: { data: null as unknown, error: null as unknown },
+  },
+}));
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    from: (table: string) => {
+      // Chainable builder; resolution picks the fixture by which filter ran:
+      // users + eq(cohort_key) → members; users + is(cohort_key,null) → untagged;
+      // conversations → convs.
+      const state = { isNullCohort: false, eqCohort: false };
+      const resolve = () => {
+        if (table === "users") {
+          if (state.isNullCohort) return cohortQuietFixtures.untagged;
+          if (state.eqCohort) return cohortQuietFixtures.members;
+          return { data: [], error: null };
+        }
+        return cohortQuietFixtures.convs;
+      };
+      const builder: Record<string, unknown> = {
+        select: () => builder,
+        eq: (col: string) => {
+          if (col === "cohort_key") state.eqCohort = true;
+          return builder;
+        },
+        is: (col: string) => {
+          if (col === "cohort_key") state.isNullCohort = true;
+          return builder;
+        },
+        in: () => builder,
+        neq: () => builder,
+        gte: () => builder,
+        limit: () => builder,
+        order: () => builder,
+        // Thenable: `await` resolves through the real Promise chain.
+        then(onfulfilled?: ((v: unknown) => unknown) | null, onrejected?: ((r: unknown) => unknown) | null) {
+          return Promise.resolve(resolve()).then(
+            onfulfilled as never,
+            onrejected as never,
+          );
+        },
+      };
+      return builder;
+    },
+  }),
+}));
+
+const DAY = 86_400_000;
+const isoDaysAgo = (d: number) => new Date(Date.now() - d * DAY).toISOString();
+
+function setCohortQuietFixtures(opts: {
+  members?: Array<{ id: string; email: string; created_at: string }>;
+  membersErr?: { message: string } | null;
+  convs?: Array<{ user_id: string; created_at: string; last_active: string | null; status: string }>;
+  convsErr?: { message: string } | null;
+  untagged?: Array<{ email: string; created_at: string }>;
+  untaggedErr?: { message: string } | null;
+}) {
+  cohortQuietFixtures.members = { data: opts.members ?? [], error: opts.membersErr ?? null };
+  cohortQuietFixtures.convs = { data: opts.convs ?? [], error: opts.convsErr ?? null };
+  cohortQuietFixtures.untagged = { data: opts.untagged ?? [], error: opts.untaggedErr ?? null };
+}
+
+describe("CHECK_REGISTRY cohort-quiet", () => {
+  const octokit = { request: vi.fn() };
+  const run = (params?: unknown) =>
+    CHECK_REGISTRY["cohort-quiet"](
+      octokit,
+      params === undefined ? { cohort_key: "alpha" } : (params as Record<string, unknown>),
+    );
+
+  it("fail-closes on missing params.cohort_key", async () => {
+    const res = await run({});
+    expect(res.verdict).toBe("info");
+    expect(res.body).toContain("fail-closed");
+  });
+
+  it("reports a quiet tester who never activated (signup >= 3d, no convs) — by DOMAIN only", async () => {
+    setCohortQuietFixtures({
+      members: [{ id: "u1", email: "jane@acme.example", created_at: isoDaysAgo(5) }],
+      convs: [],
+      untagged: [],
+    });
+    const res = await run();
+    expect(res.verdict).toBe("info");
+    expect(res.body).toContain("acme.example");
+    expect(res.body).not.toContain("jane@");
+    expect(res.body).toContain("never activated");
+  });
+
+  it("does NOT flag a member active inside the quiet window", async () => {
+    setCohortQuietFixtures({
+      members: [{ id: "u1", email: "jane@acme.example", created_at: isoDaysAgo(5) }],
+      convs: [
+        { user_id: "u1", created_at: isoDaysAgo(4), last_active: isoDaysAgo(1), status: "done" },
+      ],
+      untagged: [],
+    });
+    const res = await run();
+    expect(res.body).toContain("No quiet testers");
+    expect(res.body).not.toContain("acme.example");
+  });
+
+  it("a stale-but-recent-enough conversation suppresses quiet; signup age does not", async () => {
+    // The neq("status","failed") filter is in the QUERY — a >3d-stale last_active
+    // keeps the tester quiet even though they activated once.
+    setCohortQuietFixtures({
+      members: [{ id: "u1", email: "jane@acme.example", created_at: isoDaysAgo(5) }],
+      convs: [
+        { user_id: "u1", created_at: isoDaysAgo(4), last_active: isoDaysAgo(4), status: "done" },
+      ],
+      untagged: [],
+    });
+    const res = await run();
+    expect(res.body).toContain("acme.example");
+    expect(res.body).toContain("last active 4d ago");
+  });
+
+  it("members older than the 10d window are owned by the checkpoint, not the quiet probe", async () => {
+    setCohortQuietFixtures({
+      members: [{ id: "u1", email: "jane@acme.example", created_at: isoDaysAgo(30) }],
+      convs: [],
+      untagged: [],
+    });
+    const res = await run();
+    expect(res.body).not.toContain("acme.example");
+    expect(res.body).toContain("No quiet testers");
+  });
+
+  it("empty cohort reports 0 members explicitly, not 'no quiet testers'", async () => {
+    setCohortQuietFixtures({ members: [], convs: [], untagged: [] });
+    const res = await run();
+    expect(res.body).toContain("0 members");
+  });
+
+  it("untagged signups are listed by domain, never by mailbox", async () => {
+    setCohortQuietFixtures({
+      members: [{ id: "u1", email: "jane@acme.example", created_at: isoDaysAgo(2) }],
+      convs: [
+        { user_id: "u1", created_at: isoDaysAgo(1), last_active: isoDaysAgo(1), status: "done" },
+      ],
+      untagged: [{ email: "newuser@bigcorp.example", created_at: isoDaysAgo(1) }],
+    });
+    const res = await run();
+    expect(res.body).toContain("bigcorp.example");
+    expect(res.body).not.toContain("newuser@");
+    expect(res.body).toContain("/api/internal/cohort");
+    expect(res.body).not.toContain("/api/admin/cohort");
+  });
+
+  it("fail-closes with warnSilentFallback when the users read errors", async () => {
+    setCohortQuietFixtures({ membersErr: { message: "db down" } });
+    const res = await run();
+    expect(res.verdict).toBe("info");
+    expect(res.body).toContain("fail-closed");
+    expect(warnSilentFallbackSpy).toHaveBeenCalled();
   });
 });

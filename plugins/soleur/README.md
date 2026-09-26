@@ -23,6 +23,13 @@ claude plugin install soleur@soleur-marketplace
 
 ## The Soleur Workflow
 
+**Local data the plugin writes:** one metadata-only line per `/soleur:go` routing
+decision into `.soleur/decisions.jsonl` at your project root (event names,
+skill/agent labels, timestamps — never prompt text, args, or file paths; the
+directory self-ignores in git and nothing leaves your machine). Opt out with
+`SOLEUR_DISABLE_DECISION_LOG=1`. See
+[ADR-254](../../knowledge-base/engineering/architecture/decisions/ADR-254-tester-owned-local-decision-log.md).
+
 **Codex:** install with `codex plugin marketplace add jikig-ai/soleur --sparse .agents/plugins --sparse plugins/soleur`,
 then `codex plugin add soleur@soleur`. Start a new session, review `/hooks`,
 and use `$soleur:go <intent>`. Codex shares the same skills and agent
@@ -75,7 +82,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 67 |
 | Commands | 3 |
-| Skills | 102 |
+| Skills | 103 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -299,6 +306,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
 | `archive-kb` | Archive knowledge-base artifacts with timestamped prefixes |
 | `cf-token-scope` | Widen a Cloudflare API token's scope via Playwright, then run the ADR-130 retained-scope probe set |
+| `cohort-status` | Print the alpha-tester cohort table: tally, checkpoint state, quiet flags (pull-based, operator-invoked) |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `invoice` | Get paid via your own Stripe account: list who owes you, create/send behind an approval preview, chase overdue (test mode only in v1) |
