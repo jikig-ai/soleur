@@ -72,20 +72,26 @@ contract), refusing — not committing — a zero-view export. Covered sites:
 
 ### FR2: Stale banner derived from server state (PR-B)
 
-`GET /api/kb/c4/project` reports per-`dirPath` staleness derived at read time (committed
-model artifact vs the diagram sources it renders — commit-order comparison first), so a
-client that missed the `rerendered:false` frame still surfaces the banner on mount and on
-Concierge reopen. Reuses the existing `C4Diagnostics` surface — no new visual element.
+`GET /api/kb/c4/project` reports per-`dirPath` staleness derived at read time — a
+**tree-diff**: compare the Contents listing's per-source blob shas (already fetched)
+against the source entries in the newest `model.likec4.json` commit's dir subtree
+(`commits?path=` + `git/trees`, ~3 calls regardless of source count). A mismatch
+(modified, deleted, or added source) means the committed model predates the sources —
+`stale:true`. The banner is therefore a recomputed fact, surviving dropped frames,
+remounts, and out-of-band pushes. Reuses the existing `C4Diagnostics` surface — no new
+visual element beyond flag/dir-aware line-2 copy and `aria-live`.
 
-### FR3: Ordered save outcomes (PR-B)
+### FR3: Authoritative staleness replaces outcome ordering (PR-B)
 
-`writeC4Diagram` mints a monotonic `saveSeq` at save start (`Symbol.for`-keyed `globalThis`
-counter — the module is bundled twice into one process; `Date.now()` floor for restart
-safety). The token rides the PUT response, `WriteC4Result`, `onDiagramSaved`, the
-`c4_diagram_saved` frame (optional field, rolling-deploy convention), and the CustomEvent
-detail. Both client consumers (`c4-workspace.tsx`, `c4-diagram.tsx`) apply an outcome only
-if its `saveSeq` exceeds the last applied for that `dirPath`; the PUT path records its own
-save's seq as the floor for later WS arrivals.
+*Revised at plan review (operator-approved, 2026-09-26):* the issue proposed a monotonic
+`saveSeq` carried through both save paths. Review found the ordering guarantee is
+subsumed once the GET-derived `stale` is authoritative — every outcome application
+already performs `reload()`, which re-reads post-commit truth, so ordering races cannot
+manifest in the banner boolean. The contract instead: **`stale` present in the GET
+response is authoritative for the banner**; `stale` absent leaves existing state
+untouched (derivation failure → never a false banner); save outcomes supply
+`staleDiagnostic` and drive the banner only when `stale` was absent. A superseded-shape
+outcome (`rerendered:false`, no diagnostic) defers to the reload's GET verdict.
 
 ## Technical Requirements
 
@@ -102,31 +108,31 @@ PR-A — archived replay harness, CI install steps). Add zero-view rows to
 `plugins/soleur/test/render-c4-model.test.sh` (stub fixture at ~line 123; bump `cases_run`
 floor).
 
-### TR2: Wire-contract discipline
+### TR2: Response-field discipline (no WS schema change)
 
-Additive optional field only: `lib/types.ts` `WSMessage` variant,
-`lib/ws-zod-schemas.ts` `strictObject` (`.optional()` for one release),
-`lib/c4-constants.ts` `C4DiagramSavedDetail`, PUT response shape. Consumer sweep per
-`hr-type-widening-cross-consumer-grep` / `cq-union-widening-grep-three-patterns` — known
-consumers: `ws-client.ts` re-broadcast, `c4-workspace.tsx` listener, `c4-diagram.tsx`
-listener, `cc-dispatcher.ts` emit, `c4-concierge-tools.ts` `onDiagramSaved`,
-`c4-shared.tsx` `onSaved`. Pin: `saveSeq` carries no user-derived identifier (opaque
-monotonic value — CLO requirement, test-assertable).
+The only wire change is `stale?: boolean` on the GET `/api/kb/c4/project` response —
+absent on derivation failure, never `false` on error. `ProjectResponse` /
+`useC4Project`'s `setData` normalization (`c4-shared.tsx`) must pass it through or the
+mechanism silently no-ops. No `c4_diagram_saved` frame change (no strictObject
+rolling-deploy exposure). Pin: the field carries no user-derived content (a boolean).
 
 ### TR3: Superseded-outcome semantics preserved
 
-`saveSeq` ordering must handle the superseded-render outcome (`rerendered:false`, no
-diagnostic, `server/c4-writer.ts` ~lines 444-474): a superseded save's outcome minted at an
-earlier save start can never resurrect the banner over a newer save. `saveSeq` ordering and
-the existing server-side source-set supersede check (`c4_rerender_superseded`) stay
-distinct mechanisms.
+The supersede shape (`rerendered:false` with no diagnostic, `server/c4-writer.ts`
+~lines 444-474) is distinguishable client-side: such an outcome must not itself set the
+banner — it defers to the reload's GET-derived `stale` (a superseding save's model
+commit is already on GitHub, so GET sees fresh). The `c4_rerender_superseded`
+server-side source-set check and the banner remain distinct mechanisms.
 
 ### TR4: Read-derivation cost bound
 
 Staleness derivation on `GET /api/kb/c4/project` must reuse data the route already fetches
-or one bounded metadata call per `dirPath` — no N+1 per diagram folder. False-stale on a
-content-equal sources revert is acceptable conservative behavior (documented); plan decides
-commit-order vs embedded provenance if the former proves unreliable.
+plus a small bounded set of metadata calls per `dirPath` — the plan's mechanism is 3–4
+calls total regardless of source count (`commits?path=` for the model commit, `git/trees`
+walks for the dir subtree, one tip-age check only when a diff exists). A grace window
+suspends `stale` while the dir tip is younger than the render budget (in-flight two-commit
+window). False-stale on a content-equal sources revert is acceptable conservative
+behavior (documented).
 
 ### TR5: Observability
 
