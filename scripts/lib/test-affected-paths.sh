@@ -100,7 +100,10 @@ ALWAYS_ON_SUITES=(
   "scripts/battery-tag-authorship"
   "scripts/battery-tag-authorship-mutations"
   "scripts/lint-orphan-test-suites"
-  "scripts/lint-orphan-test-suites-mutations"
+  # #8864: the mutation battery split into two --rows halves, each registered separately —
+  # both halves stay always-on (a run_suite diff degrades --affected to the full set anyway).
+  "scripts/lint-orphan-test-suites-mutations-a"
+  "scripts/lint-orphan-test-suites-mutations-b"
   "plugins/soleur/test/fanout-suite-scope.test.sh"
   "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
