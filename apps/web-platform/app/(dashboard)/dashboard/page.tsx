@@ -6,6 +6,7 @@ import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { swrKeys, jsonFetcher } from "@/lib/swr-config";
 import { isRevocationBounce } from "@/lib/auth/revocation-bounce";
+import { reportSilentFallback } from "@/lib/client-observability";
 import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
@@ -163,10 +164,21 @@ export default function DashboardPage() {
     if (res.status === 503) throw new DashFoundationError("provisioning");
     // 404 = no workspace / not connected — fall through to Command Center.
     if (res.status === 404) return { paths: {} };
-    if (!res.ok) throw new DashFoundationError("error");
+    if (!res.ok) {
+      // A non-503 failure renders no dedicated surface (the page falls
+      // through to the inbox shell — accepted per the ungating work), so
+      // without this mirror a sustained foundation-status outage is
+      // operator-invisible: blank UI, no error state, no signal.
+      reportSilentFallback(new DashFoundationError("error"), {
+        feature: "dashboard",
+        op: "foundation-status",
+        extra: { status: res.status },
+      });
+      throw new DashFoundationError("error");
+    }
     const data = await res.json();
     return { paths: (data?.paths as Record<string, PathStat>) ?? {} };
-  }, [router]);
+  }, []);
 
   const { data: foundationData, error: foundationErr } = useSWR(
     DASHBOARD_FOUNDATION_STATUS_KEY,
@@ -258,7 +270,6 @@ export default function DashboardPage() {
       return count ?? 0;
     },
   );
-  const repoDisconnected = noActiveRepo;
   const orphanedCount = orphanCount ?? 0;
 
   const visionExists = foundationPaths["overview/vision.md"]?.exists ?? false;
@@ -470,7 +481,7 @@ export default function DashboardPage() {
         <p className="mb-10 max-w-md text-center text-sm text-soleur-text-secondary">
           Describe your startup idea and your AI organization will get to work.
         </p>
-        {repoDisconnected && orphanedCount > 0 && (
+        {noActiveRepo && orphanedCount > 0 && (
           <p
             data-testid="disconnected-orphans-hint"
             className="mb-6 max-w-md text-center text-xs text-soleur-text-muted"

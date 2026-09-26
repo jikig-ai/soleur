@@ -5,10 +5,13 @@ import { createClient } from "@/lib/supabase/server";
  * verifiedUserId — the middleware-verified caller identity.
  *
  * `x-soleur-auth-user-id` is minted by `apps/web-platform/middleware.ts`
- * AFTER getUser() + the revocation + T&C/billing gates pass, and is
- * unconditionally deleted from inbound headers before any path can forward a
- * client-forged value (including the PUBLIC_PATHS early return). A handler
- * therefore only ever sees the header on a request that traversed
+ * inside the post-`getUser()` block (immediately after auth resolves, before
+ * the revocation/T&C joins — every gate-failure path returns a terminal
+ * redirect/403 that never forwards request headers, so a minted value only
+ * reaches a handler when all gates pass). It is unconditionally deleted from
+ * inbound headers before ANY response — including the /health and
+ * PUBLIC_PATHS early returns — so no exit can forward a client-forged value.
+ * A handler therefore only ever sees the header on a request that traversed
  * middleware — it is a trust signal, never an authorization boundary (RLS +
  * the middleware gates remain that).
  *

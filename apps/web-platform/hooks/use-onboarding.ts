@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
  * Encapsulates onboarding state management: fetch, display, complete, PWA dismiss.
  *
  * Improvements over inline implementation (PR #1451):
- * - Stores the initial getUser() result in a ref to avoid duplicate calls
+ * - Stores the initial getSession() user id in a ref to avoid duplicate calls
  * - Extracts updateUserField() helper for the repeated Supabase update pattern
  * - Separates onboarding concerns from the dashboard page layout
  */
@@ -60,13 +60,18 @@ export function useOnboarding() {
         return;
       }
       userIdRef.current = user.id;
-      supabase
-        .from("users")
-        .select(
-          "onboarding_completed_at, pwa_banner_dismissed_at, runtime_explainer_dismissed_at, tour_completed_at",
-        )
-        .eq("id", user.id)
-        .single()
+      // Promise.resolve() unwraps the PostgREST thenable into a real Promise
+      // so the trailing .catch can arm (a rejected query must release the
+      // onboardingLoaded latch, not pin it forever).
+      Promise.resolve(
+        supabase
+          .from("users")
+          .select(
+            "onboarding_completed_at, pwa_banner_dismissed_at, runtime_explainer_dismissed_at, tour_completed_at",
+          )
+          .eq("id", user.id)
+          .single(),
+      )
         .then(({ data, error }) => {
           if (error) {
             console.error("[onboarding] fetch error:", error.message);
@@ -80,7 +85,19 @@ export function useOnboarding() {
             setTourCompletedAt(data.tour_completed_at ?? null);
           }
           setOnboardingLoaded(true);
+        })
+        .catch((err) => {
+          // A rejected query promise would otherwise leave
+          // onboardingLoaded===false forever — silently pinning the runtime
+          // explainer banner off with no signal.
+          console.error("[onboarding] fetch rejected:", err);
+          setOnboardingLoaded(true);
         });
+    }).catch((err) => {
+      // Same latch-release for a rejected getSession() — never leave the
+      // consumer permanently hidden behind an unsettled read.
+      console.error("[onboarding] session read rejected:", err);
+      setOnboardingLoaded(true);
     });
   }, []);
 

@@ -54,6 +54,10 @@ seconds.
 
    Both caches are **allow-direction only**: every deny/redirect verdict is
    re-computed per request, so fail-closed freshness is preserved exactly.
+   Expiry is **absolute** (write-anchored): `LRUCache.get()` does not refresh
+   `at` on read, so a continuously-hit verdict still dies at write+TTL — a
+   sliding window would void the ≤30 s bound precisely under traffic (the
+   review panel's convergent P1; a hit-path re-`set` is likewise gated out).
 
 3. **Middleware-verified identity header.** Middleware deletes inbound
    `x-soleur-auth-user-id` immediately after cloning the request headers —
@@ -98,9 +102,14 @@ prior row failed the store predicate), so the accept→dashboard path cannot
 stale-bounce.
 
 The `x-soleur-auth-user-id` trust boundary is defended by: (a) unconditional
-delete-before-any-return ordering; (b) a matcher-coverage guard test that walks
-`app/api/**/route.ts` and asserts every handler path traverses middleware;
-(c) the `getUser()` fallback keeping the header advisory.
+delete-before-ANY-return ordering — the strip runs above even the `/health`
+early return; (b) a matcher-coverage guard test that walks `app/**/route.ts`
+(stripping `(group)` segments) and asserts every handler path traverses
+middleware — including attacker-controlled `.png`-suffixed request-pathname
+probes on dynamic-terminal routes, because the matcher's extension exclusion
+is scoped to single-segment filenames + `/icons/` so nested paths like
+`/api/kb/file/x.png` still traverse the gate; (c) the `getUser()` fallback
+keeping the header advisory.
 
 Isolate coherence: the deployment is a single Node process (Hetzner); the
 in-process caches are coherent. At multi-replica scale the worst case is the

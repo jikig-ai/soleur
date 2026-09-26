@@ -25,16 +25,21 @@ export function PaymentWarningBanner({
 }: {
   subscriptionStatus: string | null;
 }) {
-  const [dismissed, setDismissed] = useState(false);
+  // `null` = not yet hydrated — renders nothing until the sessionStorage
+  // read below resolves the dismiss flag. Without the third state the SSR
+  // pass (subscriptionStatus now arrives server-side) ships visible banner
+  // HTML to a user who already dismissed this tab session — a false warning
+  // flash on every first paint.
+  const [dismissed, setDismissed] = useState<boolean | null>(null);
 
   // Hydrate dismiss state from sessionStorage (client-only).
   useEffect(() => {
     try {
-      if (sessionStorage.getItem(BANNER_DISMISS_KEY) === "1") {
-        setDismissed(true);
-      }
+      setDismissed(sessionStorage.getItem(BANNER_DISMISS_KEY) === "1");
     } catch {
-      // sessionStorage unavailable (private mode, etc.) — keep default false.
+      // sessionStorage unavailable (private mode, etc.) — treat as not
+      // dismissed so the warning still shows (fail toward visibility).
+      setDismissed(false);
     }
   }, []);
 
@@ -48,7 +53,7 @@ export function PaymentWarningBanner({
     }
   }
 
-  if (subscriptionStatus !== "past_due" || dismissed) {
+  if (subscriptionStatus !== "past_due" || dismissed !== false) {
     return null;
   }
 

@@ -32,6 +32,7 @@ vi.mock("@sentry/nextjs", () => ({
   addBreadcrumb: vi.fn(),
 }));
 
+import * as Sentry from "@sentry/nextjs";
 import { verifiedUserId } from "@/server/request-auth";
 
 function makeRequest(headers: Record<string, string> = {}): Request {
@@ -57,6 +58,8 @@ describe("verifiedUserId", () => {
     // The whole point of the header: skip the getUser() auth-server RTT.
     expect(mockCreateClient).not.toHaveBeenCalled();
     expect(mockGetUser).not.toHaveBeenCalled();
+    // A present header emits NO absent-header breadcrumb.
+    expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
   });
 
   test("header ABSENT (direct invocation / matcher gap / unit test) → getUser() fallback returns user.id", async () => {
@@ -64,6 +67,12 @@ describe("verifiedUserId", () => {
 
     await expect(verifiedUserId(req)).resolves.toBe("user-from-getuser");
     expect(mockGetUser).toHaveBeenCalledTimes(1);
+    // The absent-header observability contract (plan §Observability): the
+    // fallback emits the diagnosable breadcrumb so a real matcher gap is
+    // visible without SSH.
+    expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "middleware.auth_header.absent" }),
+    );
   });
 
   test("header absent + no session → null (fail-closed: caller 401s)", async () => {

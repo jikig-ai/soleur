@@ -18,16 +18,21 @@ import { LRUCache } from "@/lib/feature-flags/lru-cache";
 // Positive-only verdict caches (Phase 1, plan §Guard Contract Guard 2).
 // TTL-bounded allow-verdicts ONLY — deny/redirect outcomes (revoked === true,
 // tc mismatch, unpaid, any error) are never stored, so every fail-closed
-// branch keeps per-request freshness. In-process Maps: entries live ≤ TTL in
-// isolate RAM and are gone on restart — no persistence substrate (plan
-// §Encryption Posture plaintext-exception). Single-process Hetzner
-// deployment = one middleware isolate, so the caches are coherent.
+// branch keeps per-request freshness. Expiry is absolute (write-anchored —
+// LRUCache does not refresh TTL on read), so an entry lives ≤ TTL in isolate
+// RAM regardless of hit rate and is gone on restart — no persistence
+// substrate (plan §Encryption Posture plaintext-exception). Single-process
+// Hetzner deployment = one middleware isolate, so the caches are coherent.
 const MW_VERDICT_TTL_MS = 30_000;
-const revocationOkCache = new LRUCache<string, true>(2000, MW_VERDICT_TTL_MS);
+// Capacity cap: 2000 entries bounds RAM per cache (~O(100) bytes/entry ⇒
+// <1 MB); past that, oldest allow-verdicts evict early → extra RPCs, never a
+// correctness issue (a miss re-queries).
+const MW_VERDICT_CACHE_MAX = 2_000;
+const revocationOkCache = new LRUCache<string, true>(MW_VERDICT_CACHE_MAX, MW_VERDICT_TTL_MS);
 const tcRowCache = new LRUCache<
   string,
   { tc_accepted_version: string | null; subscription_status: string | null }
->(2000, MW_VERDICT_TTL_MS);
+>(MW_VERDICT_CACHE_MAX, MW_VERDICT_TTL_MS);
 
 // Settled outcome of the revocation leg, which launches concurrently with
 // getUser(). The leg's promise chain ends in an armed .catch so it resolves
@@ -57,7 +62,6 @@ function decodeJwtPayloadEdgeSafe(jwt: string): Record<string, unknown> {
     parts[1].replace(/-/g, "+").replace(/_/g, "/") +
     "=".repeat((4 - (parts[1].length % 4)) % 4);
   try {
-    // atob is available in Edge runtime; Buffer is not.
     const json = atob(padded);
     return JSON.parse(json);
   } catch {
@@ -135,9 +139,16 @@ const NON_DOCUMENT_DESTS = new Set([
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // Strip any client-forged verified-identity header BEFORE any response —
+  // including the /health early return below — so no exit can forward an
+  // attacker-supplied x-soleur-auth-user-id downstream (delete-once-at-
+  // construction is the only ordering that covers all exits).
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.delete("x-soleur-auth-user-id");
+
   // Health check: no HTML rendered, CSP unnecessary
   if (pathname === "/health") {
-    return NextResponse.next();
+    return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
   // Generate per-request nonce for CSP
@@ -172,12 +183,9 @@ export async function middleware(request: NextRequest) {
   // Set nonce and CSP on request headers for Next.js SSR nonce extraction.
   // SECURITY: x-nonce is a request-only header for server-side rendering.
   // Never render it into HTML output or expose it in API responses.
-  const requestHeaders = new Headers(request.headers);
-  // Strip any client-forged verified-identity header BEFORE any early return
-  // (including the PUBLIC_PATHS return below) — every NextResponse.next()
-  // snapshots requestHeaders downstream, so delete-once-at-construction is
-  // the only ordering that covers all exits (plan §Sharp Edges).
-  requestHeaders.delete("x-soleur-auth-user-id");
+  // x-soleur-auth-user-id was already deleted above the /health return —
+  // every NextResponse.next() snapshots requestHeaders downstream, so the
+  // single construction-time delete covers all exits (plan §Sharp Edges).
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", cspValue);
 
@@ -317,14 +325,24 @@ export async function middleware(request: NextRequest) {
       // Promise.resolve() unwraps the PostgREST thenable into a real Promise —
       // its .then() returns PromiseLike (no .catch), so the unwrap is required
       // for the armed-catch shape below, not just cosmetic.
-      revokeOutcomePromise = Promise.resolve(
-        supabase.rpc("check_my_revocation", { p_jwt_iat: iat.toISOString() }),
-      )
+      revokeOutcomePromise = Promise.resolve()
+        // rpc() evaluated inside the chain so a synchronous throw (URL/config
+        // construction) lands in the armed .catch instead of escaping the
+        // middleware with a 500.
+        .then(() =>
+          supabase.rpc("check_my_revocation", { p_jwt_iat: iat.toISOString() }),
+        )
         .then((result): RevocationOutcome => {
           const { data: revokeData, error: revokeError } = result;
           if (revokeError) return { kind: "grace", error: revokeError };
           const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
-          if (row && row.revoked === true) {
+          if (!row) {
+            // An empty payload from a one-row-function is anomalous — treat
+            // as grace (re-query next request, no cache write), not a
+            // cacheable allow.
+            return { kind: "grace", error: new Error("empty_revocation_row") };
+          }
+          if (row.revoked === true) {
             const reason =
               row.reason === "ownership-transferred"
                 ? "ownership-transferred"
@@ -349,7 +367,7 @@ export async function middleware(request: NextRequest) {
 
   // Server-Timing stage descriptors — emitted on authenticated document
   // responses only (success path; redirects stay silent).
-  let mwRevokeDurMs = performance.now() - revokeStart;
+  let mwRevokeDurMs = 0;
   let revokeDesc: "hit" | "miss" | "grace" = "grace";
   let mwTcDurMs = 0;
   let tcDesc: "hit" | "miss" | "grace" | "exempt" = "exempt";
@@ -486,9 +504,9 @@ export async function middleware(request: NextRequest) {
     mwTcDurMs = performance.now() - tcStart;
 
     if (tcError) {
-      // Fail CLOSED. The exempt-path short-circuit at line 126 already
-      // covers /accept-terms + /api/accept-terms + the github-resolve
-      // recovery callback; this branch fires only on non-exempt paths.
+      // Fail CLOSED. The TC_EXEMPT_PATHS short-circuit above already covers
+      // /accept-terms + /api/accept-terms + the github-resolve recovery
+      // callback; this branch fires only on non-exempt paths.
       // Without this redirect, a Supabase outage silently lets every
       // authenticated user reach /dashboard without consent verification
       // — Art. 7(1) demonstrability breach (plan §"User-Brand Impact").
@@ -534,10 +552,13 @@ export async function middleware(request: NextRequest) {
     // passed, and the predicate is re-stated explicitly so no error/unpaid/
     // version-mismatch row can ever be written. An `unpaid` GET request DOES
     // reach this line (unpaid is read-only, not bounced) — the
-    // `!== "unpaid"` clause is load-bearing, not redundant.
+    // `!== "unpaid"` clause is load-bearing, not redundant. `!tcRowHit`
+    // gates the write: re-stamping a served hit would refresh its absolute
+    // expiry and reintroduce the sliding-TTL hole (a perpetually-active
+    // user's verdict would never age).
     if (
-      userRow !== null &&
-      userRow !== undefined &&
+      !tcRowHit &&
+      userRow != null &&
       userRow.tc_accepted_version === TC_VERSION &&
       userRow.subscription_status !== "unpaid"
     ) {
@@ -563,8 +584,9 @@ export async function middleware(request: NextRequest) {
   // < 16.4 still supports bfcache but sends no `Sec-Fetch-*`) is treated as a
   // document and gets `no-store`: FAIL-CLOSED, because a missed no-store on an
   // authenticated document is the exact leak (a shared-device Back restoring
-  // the prior user's shell). Public paths already returned above (:134), so
-  // they never reach this line and keep their bfcache eligibility.
+  // the prior user's shell). Public paths already returned above (the
+  // PUBLIC_PATHS gate), so they never reach this line and keep their
+  // bfcache eligibility.
   const fetchDest = request.headers.get("sec-fetch-dest");
   if (fetchDest === null || !NON_DOCUMENT_DESTS.has(fetchDest)) {
     response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
@@ -587,7 +609,20 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
+  // Exclusions (paths where middleware does NOT run):
+  //  - _next/static|_next/image — build assets
+  //  - favicon.ico / sw.js / icons/ — static public assets
+  //  - single-segment asset filenames ([^/]+\.ext$) — e.g. /logo.png.
+  //
+  // Nested paths ending in an extension are DELIBERATELY NOT excluded:
+  // `/api/kb/file/x.png`, `/dashboard/chat/x.png` etc. reach dynamic route
+  // handlers, and skipping middleware there would bypass the forged-header
+  // strip + revocation/T&C/billing gates (matcher-coverage test pins every
+  // app/**/route.ts handler as covered, including .ext probe pathnames).
+  // A future nested public-assets dir (e.g. /images/) must be added here
+  // or to PUBLIC_PATHS or its unauthenticated fetches will hit the auth
+  // chain.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|sw\\.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon\\.ico|sw\\.js|icons/|[^/]+\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

@@ -117,6 +117,12 @@ export function shouldDropForScope(
     archiveFilter: ArchiveFilter;
   },
 ): boolean {
+  // Disconnected users (repoUrl === null) see NOTHING — mirrors the fetch
+  // path's early return that renders an empty list for repo-less users.
+  // Without this clause a repo-less workspace-visibility row would land on
+  // the shared channel: `conv.repo_url null !== opts.repoUrl null` passes
+  // the (a) check below even though the fetch invariant is an empty list.
+  if (opts.repoUrl === null) return true;
   if ((conv.repo_url ?? null) !== opts.repoUrl) return true;
   if ((conv.workspace_id ?? null) !== opts.workspaceId) return true;
   if (opts.channel === "shared" && conv.visibility !== "workspace") return true;
@@ -237,8 +243,7 @@ export function useConversations(
   );
   const activeRepoRef = useRef<{
     data: { workspaceId: string; repoUrl: string | null } | undefined;
-    error: unknown;
-  }>({ data: undefined, error: undefined });
+  }>({ data: undefined });
   const [activeRepoSettled] = useState(() => {
     let resolve!: () => void;
     const promise = new Promise<void>((r) => {
@@ -247,7 +252,7 @@ export function useConversations(
     return { promise, resolve };
   });
   useEffect(() => {
-    activeRepoRef.current = { data: activeRepoData, error: activeRepoError };
+    activeRepoRef.current = { data: activeRepoData };
     if (activeRepoData !== undefined || activeRepoError !== undefined) {
       activeRepoSettled.resolve();
     }
@@ -375,7 +380,9 @@ export function useConversations(
       setLoading(false);
       return null;
     }
-  }, [statusFilter, domainFilter, archiveFilter, limit]);
+    // activeRepoSettled is a stable useState value — listed for
+    // exhaustive-deps honesty; it never changes identity.
+  }, [statusFilter, domainFilter, archiveFilter, limit, activeRepoSettled]);
 
   // Initial fetch
   useEffect(() => {

@@ -176,7 +176,10 @@ describe("CSP coverage invariant", () => {
       const hasCsp =
         stmt.includes("withCspHeaders") ||
         stmt.includes("redirectWithCookies");
-      const isHealthCheck = stmt.includes("NextResponse.next()");
+      // The /health early return is the one deliberately-CSP-free passthrough
+      // — a bare NextResponse.next(...) (it still forwards the
+      // header-stripped requestHeaders).
+      const isHealthCheck = stmt.startsWith("return NextResponse.next(");
 
       expect(
         hasCsp || isHealthCheck,
@@ -192,9 +195,10 @@ describe("CSP coverage invariant", () => {
         !stmt.includes("redirectWithCookies"),
     );
 
-    // Only the health check should lack CSP
+    // Only the health check should lack CSP — and it must be a bare
+    // NextResponse.next passthrough, not some other unwrapped exit.
     expect(noCspReturns.length).toBe(1);
-    expect(noCspReturns[0]).toContain("NextResponse.next()");
+    expect(noCspReturns[0]).toContain("NextResponse.next(");
   });
 });
 
@@ -462,6 +466,19 @@ describe("x-soleur-auth-user-id trust boundary", () => {
     expect(mockGetUser).not.toHaveBeenCalled();
   });
 
+  test("a forged inbound header on /health never forwards (pre-strip exit closed)", async () => {
+    const res = await middleware(
+      makeAuthRequest("/health", {
+        headers: { "x-soleur-auth-user-id": "forged-client-value" },
+      }),
+    );
+    // /health early-returns before any auth — but the strip runs above it, so
+    // the forwarded request-header snapshot must not carry the forged value.
+    expect(
+      res.headers.get("x-middleware-request-x-soleur-auth-user-id"),
+    ).toBeNull();
+  });
+
   test("a forged inbound header on an authenticated path is overwritten by the VERIFIED user.id", async () => {
     const { userId, iat } = freshCreds();
     seedAuth(userId, iat);
@@ -510,12 +527,19 @@ describe("x-soleur-auth-user-id trust boundary", () => {
   test("delete-before-any-return source pin (Guard 1 row 5)", () => {
     // Belt-and-suspenders with the behavioral cases above: the strip is
     // ordering-load-bearing, so pin the source ordering itself — the delete
-    // must precede the PUBLIC_PATHS early return.
+    // must precede EVERY early return that can forward request headers:
+    // the /health return and the PUBLIC_PATHS gate.
     const src = readFileSync(resolve(__dirname, "../middleware.ts"), "utf-8");
     const deleteIdx = src.indexOf('requestHeaders.delete("x-soleur-auth-user-id")');
+    const healthReturnIdx = src.indexOf('pathname === "/health"');
     const publicReturnIdx = src.indexOf("PUBLIC_PATHS.some");
     expect(deleteIdx, "x-soleur-auth-user-id strip missing from middleware.ts").toBeGreaterThanOrEqual(0);
+    expect(healthReturnIdx).toBeGreaterThanOrEqual(0);
     expect(publicReturnIdx).toBeGreaterThanOrEqual(0);
+    expect(
+      deleteIdx,
+      "strip must run BEFORE the /health early return — it also forwards request headers",
+    ).toBeLessThan(healthReturnIdx);
     expect(
       deleteIdx,
       "strip must run BEFORE the PUBLIC_PATHS early return so a forged header on /login never forwards",
