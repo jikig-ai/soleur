@@ -25,7 +25,7 @@ light group runs K=7. Regenerate the manifests when legs skew or when
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | ~8.1-9.8 min suite time + setup (leg 5 is a single 589 s atomic suite — see Measured history) |
+| `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | interim ~13 min on the -a leg pre-regen; ~9 min predicted equilibrium (the orphan-suite battery is now two `--rows` halves — see Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 2 | battery rows split `--rows 1-12` / `13-24` | ~5 min each + setup |
 

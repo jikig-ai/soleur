@@ -14,8 +14,8 @@
 #   reproducing, inside this harness, the exact vacuity row M6 exists to catch. The
 #   enumeration is asserted non-empty before any row runs.
 #
-#   Synthetic: measured, this worktree is 13,630 tracked files / 258 MB, so fourteen tree
-#   copies would be ~3.6 GB of I/O plus fourteen `git add` of 13.6k files. The sandbox instead
+#   Synthetic: measured, this worktree is 13,630 tracked files / 258 MB, so seventeen tree
+#   copies would be ~4.4 GB of I/O plus seventeen `git add` of 13.6k files. The sandbox instead
 #   holds path-shaped EMPTY files at every tracked `*.test.sh` path (they are never executed —
 #   the linter only ever asks whether something is registered) plus the four real inputs the
 #   linter reads: scripts/test-all.sh, .github/workflows/, apps/web-platform/infra/run-registered-suites.sh
@@ -84,7 +84,7 @@ while (( $# )); do
   case "$1" in
     --rows)
       shift
-      if [[ ! "${1:-}" =~ ^[0123456789]+-[0123456789]+$ ]]; then
+      if [[ ! "${1:-}" =~ ^[0123456789]{1,9}-[0123456789]{1,9}$ ]]; then
         echo "ERROR: --rows requires a decimal range A-B (got '${1:-<missing>}')" >&2
         exit 2
       fi
@@ -311,8 +311,8 @@ mutate_or_die() {
 # because `$?` after a pipe is the LAST element's status — which is how a crash reads as a pass.
 run_lint() {
   local sb="$1"
-  OUT="$SB/.lint-out"
-  bash "$SB/scripts/lint-orphan-test-suites.sh" > "$OUT" 2>&1
+  OUT="$sb/.lint-out"
+  bash "$sb/scripts/lint-orphan-test-suites.sh" > "$OUT" 2>&1
   return $?
 }
 
@@ -347,7 +347,10 @@ require_single_surface() {
   pass "${row} precondition: ${path} is covered by exactly one surface (surface ${found% })"
 }
 
-row() { ROWS=$((ROWS + 1)); echo ""; echo "[$1] $2"; }
+# row() only runs inside worker subshells now — the parent's ROWS counter is rebuilt at
+# aggregation, so it carries no counter side-effect (a worker-local increment would be
+# discarded anyway).
+row() { echo ""; echo "[$1] $2"; }
 
 # Literals the rows anchor on, hoisted so a drift breaks ALL of them at once (loudly, via
 # mutate's DID-NOT-LAND) rather than silently weakening one row.
@@ -700,6 +703,22 @@ assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/no
 #     the ordered replay below, so the floors and the summary see exactly the serial numbers.
 ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
+# JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
+# the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit
+# string (same discipline as SCRIPTS_SHARD's validator in test-all.sh).
+if [[ ! "$JOBS" =~ ^[0123456789]{1,3}$ ]] || (( 10#$JOBS < 1 )); then
+  echo "ERROR: SOLEUR_ORPHAN_MUT_JOBS must be a positive integer (got '$JOBS')" >&2
+  exit 2
+fi
+# Parity: every run_M<ordinal> FUNCTION defined in this file must be listed in ROW_IDS, and
+# vice versa — _site_seq counts list entries, so a defined-but-unlisted row would be a green
+# battery that never runs its mutation.
+_defined="$(grep -oE '^run_M[0123456789]+' "$0" | sed 's/^run_//' | sort -t M -k2 -n | tr '\n' ' ')"
+_listed="$(echo "$ROW_IDS" | tr ' ' '\n' | grep -E '^M' | tr '\n' ' ')"
+if [[ "${_defined% }" != "${_listed% }" ]]; then
+  echo "FATAL(harness): run_M* function definitions [${_defined% }] do not match ROW_IDS M-entries [${_listed% }] — a defined-but-undispatched row is a mutation that runs nowhere" >&2
+  exit 2
+fi
 mkdir -p "$TMP/rows" || harness_die "row-dispatch mkdir"
 # EXEC_IDS is the dispatched set, recorded PARENT-SIDE (worker subshells cannot tick parent
 # state) at the moment each worker spawns. Replay and aggregation iterate it — never
@@ -756,8 +775,17 @@ for _id in "${EXEC_IDS[@]}"; do
     harness_die "row $_id's worker exited without writing counters — its log above carries the FATAL line; the verdict is a broken harness, not a mutation result"
   fi
   read -r _p _f _d _t < "$TMP/rows/$_id.rc"
+  # _p/_f/_d all enter arithmetic below — every field must be digits-only before any (( ))
+  # sees it (an unvalidated numeric field is an arithmetic-evaluation surface).
+  if [[ ! "$_p" =~ ^[0123456789]+$ || ! "$_f" =~ ^[0123456789]+$ ]]; then
+    harness_die "row $_id wrote non-numeric counters ('$_p $_f') — the .rc contract is four whitespace-separated fields"
+  fi
   if [[ ! "${_d:-}" =~ ^[0123456789]+$ ]]; then
     echo "FATAL: row $_id wrote no declared assertion count (3rd .rc field) — a row without an expectation is a floor this battery refuses to estimate" >&2
+    exit 1
+  fi
+  if (( _d < 1 )); then
+    echo "FATAL: row $_id declared a ZERO assertion floor — under-declaring is the silent direction; every mutation row must assert something" >&2
     exit 1
   fi
   if (( _p + _f < _d )); then
@@ -820,7 +848,7 @@ ROWS=$(( ROWS + 1 ))
 # counts. Ported from run-registered-suites.test.sh, the only suite that already had it.
 _ctl_p=$PASS; _ctl_f=$FAIL
 pass "positive control: pass() increments the pass counter"
-fail "positive control: fail() increments the fail counter" "this FAIL line is expected"
+fail "positive control: fail() increments the fail counter (this FAIL line is expected)"
 if (( PASS == _ctl_p + 1 && FAIL == _ctl_f + 1 )); then
   PASS=$_ctl_p; FAIL=$_ctl_f
   pass "positive control: pass()/fail() both move their own counters"
