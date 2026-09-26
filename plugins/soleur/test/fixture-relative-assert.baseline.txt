@@ -428,6 +428,7 @@
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
 1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh
+1	tests/scripts/test-main-duplicate-skip.sh
 1	tests/scripts/test-plan-gate-preamble.sh
 2	tests/scripts/test-registry-heartbeat-poll.sh
 1	tests/scripts/test-registry-luks-recut-gate.sh

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { enrichConversationFixtures } from "./helpers/mock-supabase";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // RED→GREEN regression for plan
 // 2026-06-15-fix-conversations-rail-empty-repo-url-source-divergence.
@@ -107,6 +108,11 @@ const mockChannel = vi.fn().mockReturnValue({
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the hook's auth read is getSession() (local cookie read).
+      getSession: vi.fn().mockResolvedValue({
+        data: { session: { user: { id: "user-1" } } },
+        error: null,
+      }),
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },
         error: null,
@@ -168,6 +174,15 @@ function makeConversationRow(repoUrl: string): Row {
   };
 }
 
+// Phase 5: the active-repo read rides the shared SWR entry
+// (swrKeys.workspaceActiveRepo) — wrap each renderHook in a FRESH SWR cache so
+// one test's resolved route payload cannot leak into the next through the
+// module-level default cache (which would silently substitute a stale repoUrl
+// for this test's own fetch stub).
+const swrWrapper = ({ children }: { children: React.ReactNode }) => (
+  <SwrTestProvider>{children}</SwrTestProvider>
+);
+
 describe("useConversations — repo scope from /api/workspace/active-repo (ADR-044)", () => {
   beforeEach(() => {
     resetState();
@@ -198,7 +213,7 @@ describe("useConversations — repo scope from /api/workspace/active-repo (ADR-0
     vi.stubGlobal("fetch", fetchSpy);
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
+    const { result } = renderHook(() => useConversations(), { wrapper: swrWrapper });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -242,7 +257,7 @@ describe("useConversations — repo scope from /api/workspace/active-repo (ADR-0
     );
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
+    const { result } = renderHook(() => useConversations(), { wrapper: swrWrapper });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -266,7 +281,7 @@ describe("useConversations — repo scope from /api/workspace/active-repo (ADR-0
     );
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
+    const { result } = renderHook(() => useConversations(), { wrapper: swrWrapper });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);

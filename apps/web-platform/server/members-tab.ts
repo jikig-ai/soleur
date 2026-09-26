@@ -52,7 +52,7 @@ export async function resolveMembersTab(): Promise<SettingsTab | null> {
     return null;
   }
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  const identity: Identity = { userId: user.id, role: "prd", orgId, email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) return null;
   return { href: "/dashboard/settings/team", label: "Members" };
 }

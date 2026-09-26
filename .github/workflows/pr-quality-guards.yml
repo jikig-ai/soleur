@@ -3,18 +3,20 @@ name: PR quality guards (#2905)
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  # Merge queue (#5780, second required context added by #7927). TWO jobs here are
-  # required contexts on ruleset 14145388 — `guard-script-fixture-tests` and
-  # `markdown-lint` — and NEITHER has a PR-event dependency, so both run cleanly on
-  # the gh-readonly-queue/main/* temp ref. Every OTHER job is a PR-quality gate keyed
-  # on `github.event.pull_request.*` (PR number, diff, opt-out label) that has no
-  # meaning on a merge candidate — each is gated to `pull_request` below so it does
-  # not run (and spuriously error) on merge_group.
+  # Merge queue (#5780; five required contexts live here post-#8902 fold).
+  # FIVE jobs are required contexts on ruleset 14145388 —
+  # `guard-script-fixture-tests`, `markdown-lint`, and the folded
+  # `dependency-review`, `enforce`, `skill-security-scan` — and NONE has a
+  # PR-event-only dependency (the folded required jobs keep their merge_group
+  # step arms), so all five run cleanly on the gh-readonly-queue/main/* temp
+  # ref. Every OTHER job is a PR-quality gate keyed on
+  # `github.event.pull_request.*` (PR number, diff, opt-out label) that has no
+  # meaning on a merge candidate — each is gated to `pull_request` below so it
+  # does not run (and spuriously error) on merge_group.
   #
-  # DO NOT add an `if:` to either required job. This comment used to say only ONE job
-  # here was required; an author following that would gate the new one to
-  # `pull_request` and the merge queue would sit pending forever, which is the exact
-  # failure its own comment says it is avoiding. Check this list before adding an `if:`.
+  # DO NOT add an `if:` to any required job. An author gating one to
+  # `pull_request` would leave the merge queue pending forever — the exact
+  # failure this comment exists to prevent. Check this list before adding an `if:`.
   merge_group:
 
 permissions:
@@ -64,7 +66,7 @@ jobs:
           # Gate on exit status, not emptiness: --paginate can emit pages
           # 1..N then fail — a truncated list is a false-skip. Failure → all-true.
           if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
-            --jq '.[].filename'); then emit true; exit 0; fi
+            --jq '.[].filename, .[].previous_filename'); then emit true; exit 0; fi
           if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$files" ]; then emit true; exit 0; fi
           # Self/dependency triggers: a change to the checking machinery runs every gate.
           if printf '%s\n' "$files" | grep -qE '^\.github/workflows/pr-quality-guards\.yml$|^\.github/scripts/'; then emit true; exit 0; fi
@@ -476,3 +478,557 @@ jobs:
       # corpus regression, not as a suite failure.
       - name: Prove the gate can still fail (mutation suite)
         run: bash scripts/markdown-lint.test.sh
+
+  # ─── Folded single-job gates (#8902, CI-efficiency item 4) ───────────────────
+  # Each job below was previously its own workflow file; check contexts are
+  # preserved verbatim (job id or name:). Files deleted:
+  #   dependency-review.yml, legal-doc-cross-document-gate.yml,
+  #   skill-security-scan-pr-trailer.yml, constraint-gates.yml,
+  #   pr-auto-close-scanner.yml.
+  # The three required jobs keep NO job-level `if:` (merge_group semantics
+  # preserved); the two advisory PR-only jobs are gated to pull_request.
+
+  dependency-review:
+    # Job-level permissions REPLACE the workflow default (contents/pull-requests
+    # read) — this job needs pull-requests: write for comment-summary-in-pr.
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      # The job is the required context, so it always runs; the ACTION only
+      # runs when the PR touches a dependency manifest. FAIL-OPEN TOWARD
+      # SCANNING: any failure to obtain the file list emits deps=true — a
+      # required check may skip on PROOF, never on uncertainty. The manifest
+      # set is a SUPERSET of every ecosystem dependency-review-action
+      # recognises (npm/yarn/pnpm/bun/deno, pip/pyproject/poetry/setup.py,
+      # go, cargo, bundler/gemspec, composer, maven, gradle, dotnet, nuget,
+      # dart, swift, cocoapods, elixir, conda); when a new ecosystem lands,
+      # extend the regex — a miss means a manifest change skips review.
+      - name: Detect dependency-manifest changes
+        id: detect
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # GATE ON EXIT STATUS, NOT ON EMPTINESS: --paginate streams page
+          # output before a later page can fail — `|| true` would evaluate the
+          # regex against a truncated list (the file beyond the failed page
+          # silently skipped). Any fetch failure emits deps=true.
+          # filename AND previous_filename: a rename-out (package.json ->
+          # x.json) otherwise reports only the new name and false-skips. The
+          # endpoint caps at 3000 files even paginated — beyond the cap a
+          # manifest change is missed; documented bound, not a silent gap.
+          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[].filename, .[].previous_filename'); then
+            echo "deps=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # '(^|/)name$' so manifests at any depth count. ANY workflow file
+          # self-triggers: dependency-review covers the github-actions
+          # ecosystem (`uses:` entries in every .github/workflows/* are
+          # dependency-graph deps — a vuln action added to another workflow
+          # must not skip the gate).
+          re='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lock|bun\.lockb|deno\.lock|deno\.jsonc?|uv\.lock|requirements[^/]*\.txt|requirements/[^/]+\.txt|pyproject\.toml|poetry\.lock|Pipfile[^/]*|setup\.py|setup\.cfg|go\.mod|go\.sum|go\.work[^/]*|Cargo\.toml|Cargo\.lock|Gemfile[^/]*|gems\.(rb|locked)|[^/]*\.gemspec|composer\.(json|lock)|pom\.xml|[^/]*\.gradle(\.kts)?|gradle\.lockfile|gradle/libs\.versions\.toml|[^/]*\.(csproj|fsproj|vbproj|vcxproj|sln|nuspec|podspec)|packages\.(config|lock\.json)|Directory\.(Packages|Build)\.props|pubspec\.(yaml|lock)|Package\.(swift|resolved)|Podfile[^/]*|mix\.(exs|lock)|environment\.ya?ml|conda-lock\.yml)$'
+          if printf '%s\n' "$files" | grep -qE "$re" \
+             || printf '%s\n' "$files" | grep -qE '^\.github/workflows/' \
+             || [ -z "$files" ]; then
+            echo "deps=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deps=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: github.event_name == 'merge_group' || steps.detect.outputs.deps == 'true'
+      - name: Dependency Review (pull_request)
+        if: github.event_name == 'pull_request' && steps.detect.outputs.deps == 'true'
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          retry-on-snapshot-warnings: true
+          fail-on-severity: high
+          fail-on-scopes: runtime
+          license-check: true
+          vulnerability-check: true
+          comment-summary-in-pr: on-failure
+          deny-packages: |
+            pkg:pypi/litellm
+            pkg:npm/event-stream
+      # On merge_group the action cannot auto-derive the commit pair from the
+      # event payload, so base-ref/head-ref are passed explicitly (GitHub-
+      # controlled SHAs). comment-summary-in-pr is omitted — there is no PR to
+      # comment on for a queue candidate.
+      - name: Dependency Review (merge_group)
+        if: github.event_name == 'merge_group'
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          base-ref: ${{ github.event.merge_group.base_sha }}
+          head-ref: ${{ github.event.merge_group.head_sha }}
+          retry-on-snapshot-warnings: true
+          fail-on-severity: high
+          fail-on-scopes: runtime
+          license-check: true
+          vulnerability-check: true
+          deny-packages: |
+            pkg:pypi/litellm
+            pkg:npm/event-stream
+
+  enforce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Enforce legal-doc cross-document lockstep
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # Merge-queue candidate base (a SHA, already an ancestor in the
+          # fetch-depth:0 checkout). GitHub-controlled; quoted in the run: block.
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+
+          # Surfaces whose presence in the diff REQUIRES the four legal
+          # docs to be touched in the same PR. The `paths:` trigger filter
+          # was removed in PR #4384 (required-check promotion); this list
+          # is now the SOLE source of truth for "is this PR DSAR-adjacent".
+          surface_patterns=(
+            'apps/web-platform/server/dsar-export\.ts'
+            'apps/web-platform/server/dsar-export-allowlist\.ts'
+            'apps/web-platform/server/dsar-reauth\.ts'
+            'apps/web-platform/app/api/account/export/'
+            'apps/web-platform/supabase/migrations/041_dsar_export_jobs\.sql'
+            'apps/web-platform/supabase/migrations/042_dsar_exports_storage_bucket\.sql'
+          )
+
+          required_legal_files=(
+            'docs/legal/privacy-policy.md'
+            'docs/legal/gdpr-policy.md'
+            'docs/legal/data-protection-disclosure.md'
+            'knowledge-base/legal/compliance-posture.md'
+          )
+
+          # Collect changed files in the PR diff against the PR base.
+          # BASE_REF arrives via env: + double-quoted in the command so
+          # workflow-injection guidance is honoured.
+          #
+          # NO --depth=1: the three-dot `origin/BASE...HEAD` diff is computed
+          # from the MERGE-BASE of base and HEAD (so it lists only this PR's own
+          # changes, not commits that landed on base since the branch point — a
+          # two-dot diff would mis-flag those unrelated files). A shallow
+          # `--depth=1` fetch brings only base's tip commit, so when base has
+          # advanced past the branch point the merge-base is unreachable and the
+          # diff dies with `fatal: origin/BASE...HEAD: no merge base` (exit 128)
+          # — failing the gate on a branch-history artifact, not a real finding.
+          # Checkout already runs fetch-depth:0, so this fetch is a cheap
+          # incremental that just makes the merge-base reachable.
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            # Merge-queue candidate (#5780): base_sha is an ancestor commit
+            # already present in the fetch-depth:0 checkout — diff directly
+            # against it (no ref to fetch). A vacuous pass here would post a
+            # green `enforce` on the temp ref WITHOUT checking the candidate
+            # (P1-1/P1-5), so an empty base_sha is a HARD failure, never a
+            # fall-through to surface_hit=false.
+            if [ -z "${MERGE_GROUP_BASE_SHA:-}" ]; then
+              echo "::error::merge_group event with empty base_sha — refusing to run the gate vacuously. The legal-doc surface check would be skipped, letting a lockstep regression merge unverified." >&2
+              exit 1
+            fi
+            diff_base="$MERGE_GROUP_BASE_SHA"
+          else
+            git fetch --quiet origin "$BASE_REF"
+            diff_base="origin/${BASE_REF}"
+          fi
+          changed_files=$(git diff --name-only "${diff_base}"...HEAD)
+          echo "Changed files in PR:"
+          echo "$changed_files" | sed 's/^/  /'
+
+          surface_hit=false
+          for pat in "${surface_patterns[@]}"; do
+            if echo "$changed_files" | grep -Eq "$pat"; then
+              surface_hit=true
+              break
+            fi
+          done
+
+          if [ "$surface_hit" = false ]; then
+            echo "No DSAR surface file touched — gate trivially passes."
+            exit 0
+          fi
+
+          echo "DSAR surface file detected; verifying all required legal docs are updated…"
+          missing=()
+          for legal in "${required_legal_files[@]}"; do
+            if ! echo "$changed_files" | grep -Fxq "$legal"; then
+              missing+=("$legal")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Legal-doc cross-document gate FAILED. The PR touches a DSAR-regulated-data surface but is missing updates to:"
+            for f in "${missing[@]}"; do
+              echo "::error::  - $f"
+            done
+            echo ""
+            echo "Per plan rev-2 C8 / AC8 / FR8: the Privacy Policy, GDPR Policy, Data Protection Disclosure, and compliance-posture documents must be updated in the same PR as any change to the DSAR worker, route, migration, or allowlist. Update the four files above (or split the change into two PRs)."
+            exit 1
+          fi
+
+          echo "All four required legal docs are updated. Gate passes."
+
+  skill-security-scan:
+    # DO NOT RENAME — this exact string is referenced as a required check
+    # in CI Required ruleset #14145388, in scripts/required-checks.txt, and
+    # in 5 bot workflows that post synthetic check-runs of this name.
+    # Renaming breaks the merge gate silently. See #3542 R15, Sharp Edge §3.
+    name: skill-security-scan PR gate
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails loudly instead of parking a required check for the
+    # 360-minute GitHub default. #7623 removed the apt-get that actually hung on
+    # 2026-08-19 (127 min on one PR, 125 and 98 on two others, all on the same
+    # `Install jq` step) — but removing THAT step does not bound the NEXT one, and an
+    # unbounded required check is what turned a transient mirror stall into a
+    # three-PR outage with no failure signal. Measured normal runtime here is under a
+    # minute; 10 is generous by two orders of magnitude and still finite.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          # PR head on pull_request; queue-candidate head on merge_group. Both
+          # are GitHub-controlled COMMIT SHAs (not branch refs/labels), so this
+          # is not the untrusted-ref-injection class the hook warns about.
+          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Assert jq present (runner-image dependency — no install, no network)
+        run: jq --version
+
+      - name: Identify added SKILL/agent files in PR diff
+        id: diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          # SEPARATE THE DIFF FROM THE FILTER. These used to be one pipeline
+          # ending in `|| true` -- which exists for grep's no-match exit 1, but
+          # covered the WHOLE pipeline. So an unresolvable BASE_SHA and a
+          # legitimately empty diff produced the identical observable: `added`
+          # empty, no_new_skills=true, gate green having scanned nothing.
+          # Keep the assignment at top level: `if ! local raw=$(cmd)` masks the
+          # status (verified), so this must not be refactored into a helper.
+          # AMR, NOT A. Rename detection is ON by default, so `git mv skills/benign
+          # skills/pwned` + weaponise reports R and `--diff-filter=A` returns EMPTY --
+          # measured end-to-end: the scanner says HIGH-RISK, the gate's added set is [],
+          # no_new_skills=true, BOTH scan steps are if:-skipped, required check GREEN.
+          # Plain M (weaponising a skill in place) escaped the same way. Every counter and
+          # fail-closed branch this PR adds lives INSIDE a step gated on that flag, so the
+          # bypass sat one step upstream of all of it.
+          rc=0
+          raw=$(git diff --name-only --diff-filter=AMRT "$BASE_SHA"..."$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/diff.err") || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::skill-security-scan: git could not resolve the diff for base=$BASE_SHA head=$HEAD_SHA (git exited $rc). Refusing to report a clean scan from a diff that never resolved."
+            cat "${RUNNER_TEMP:-/tmp}/diff.err" >&2 || true
+            exit 1
+          fi
+          # `|| true` survives verbatim HERE, where it covers only grep.
+          added=$(printf '%s\n' "$raw" | \
+            grep -E '^(plugins/soleur/skills/[^/]+/SKILL\.md|plugins/soleur/agents/.+\.md|\.claude/skills/.+/SKILL\.md|\.claude/agents/.+\.md)$' || true)
+          {
+            echo "added<<EOF"
+            echo "$added"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$added" ]; then
+            echo "no_new_skills=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_new_skills=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate override artifacts (if any)
+        if: steps.diff.outputs.no_new_skills == 'false'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          out=$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" || echo '{"matched":[],"invalid_schema":[{"reason":"parser failed"}],"stale_findings":[]}')
+          echo "$out" | jq .
+          if [ "$(echo "$out" | jq '.invalid_schema | length')" -gt 0 ]; then
+            echo "::error::Invalid override artifact(s) in PR. Fix schema before merge."
+            echo "$out" | jq '.invalid_schema'
+            exit 1
+          fi
+          if [ "$(echo "$out" | jq '.stale_findings | length')" -gt 0 ]; then
+            echo "::error::Stale override artifact(s): rule_pack_sha256 mismatch."
+            echo "$out" | jq '.stale_findings'
+            exit 1
+          fi
+
+      - name: Run scanner against each added SKILL/agent
+        if: steps.diff.outputs.no_new_skills == 'false'
+        env:
+          ADDED: ${{ steps.diff.outputs.added }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          CI: 'true'
+        run: |
+          set -euo pipefail
+          # Per-skill override binding (security review P1):
+          # parse-override.sh emits matched[].skill. For each HIGH-RISK
+          # addition derive the slug from the path; require that slug to
+          # appear in matched[]. Any-override acceptance was a P1 bypass —
+          # an attacker landing a malicious skill + a throwaway override
+          # would have passed the previous aggregate-count check.
+          # CAPTURE, THEN PARSE. The old form piped parse-override.sh straight into
+          # jq with 2>/dev/null: a parser that crashed produced an empty matched
+          # set, which is indistinguishable from "no overrides were supplied" --
+          # and an empty matched set is what makes every HIGH-RISK skill look
+          # unapproved OR, combined with the UNKNOWN verdict below, lets the whole
+          # step pass. Capture status and stderr; fail closed on a crash.
+          po_rc=0
+          set +e
+          po_out=$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/po.err")
+          po_rc=$?
+          set -e
+          if [ "$po_rc" -ne 0 ]; then
+            echo "::error::skill-security-scan: parse-override.sh exited $po_rc; refusing to derive an override set from a failed parse."
+            cat "${RUNNER_TEMP:-/tmp}/po.err" >&2 || true
+            exit 1
+          fi
+          matched_skills="$(printf '%s\n' "$po_out" | jq -r '.matched[].skill // empty' | sort -u)"
+          path_to_slug() {
+            local p="$1"
+            case "$p" in
+              plugins/soleur/skills/*/SKILL.md)
+                p="${p#plugins/soleur/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/skills/*/SKILL.md)
+                p="${p#.claude/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/agents/*.md|plugins/soleur/agents/*.md|plugins/soleur/agents/*/*.md|plugins/soleur/agents/*/*/*.md)
+                echo "$(basename "$p" .md)" ;;
+              *) echo "" ;;
+            esac
+          }
+          fail=0
+          scanned=0
+          requested=0
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            requested=$((requested + 1))
+            if [ ! -f "$path" ]; then
+              # A PATH THE DIFF NAMED BUT THE CHECKOUT DOES NOT HAVE is not a
+              # skip -- it is the gate losing its subject. Silently `continue`ing
+              # here is how the step reached `exit 0` having formed zero verdicts.
+              echo "::error file=$path::skill-security-scan: path was reported as added but is not present in the checkout; cannot scan it."
+              fail=1
+              continue
+            fi
+            # CAPTURE THE OUTPUT TO A VARIABLE FIRST, THEN TAKE ITS FIRST LINE.
+            # `head -1` inside a pipeline whose status is read closes the pipe on
+            # the first line; under pipefail the producer takes SIGPIPE and the
+            # pipeline's status stops describing the scanner at all. And the old
+            # `|| echo UNKNOWN` converted BOTH a crash and an unparseable banner
+            # into a verdict the gate then accepted.
+            sc_rc=0
+            set +e
+            sc_out=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>"${RUNNER_TEMP:-/tmp}/scan.err")
+            sc_rc=$?
+            set -e
+            if [ "$sc_rc" -ne 0 ]; then
+              echo "::error file=$path::skill-security-scan: run-scan.sh exited $sc_rc. A scanner that crashed has produced no verdict; this is not a clean skill."
+              cat "${RUNNER_TEMP:-/tmp}/scan.err" >&2 || true
+              fail=1
+              continue
+            fi
+            verdict=$(printf '%s\n' "$sc_out" | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || true)
+            if [ -z "$verdict" ]; then
+              echo "::error file=$path::skill-security-scan: run-scan.sh emitted no recognised verdict (expected HIGH-RISK, REVIEW or LOW-RISK); treating as UNKNOWN and failing closed. First line was: $(printf '%s\n' "$sc_out" | head -1)"
+              cat "${RUNNER_TEMP:-/tmp}/scan.err" >&2 || true
+              fail=1
+              continue
+            fi
+            # COUNTS VERDICTS, NOT ITERATIONS (review). This also incremented inside the
+            # crash and unrecognised-verdict branches above, so `$scanned verdict(s)
+            # produced` asserted something the variable did not measure -- and the
+            # zero-verdict guard below could never be the sole cause of a failure,
+            # because every branch that skipped it had already set fail=1. Now the
+            # counter means what its name and its log line say.
+            scanned=$((scanned + 1))
+            slug=$(path_to_slug "$path")
+            echo "::notice file=$path::skill-security-scan verdict: $verdict (slug=$slug)"
+            if [ "$verdict" = "HIGH-RISK" ]; then
+              if [ -z "$slug" ]; then
+                echo "::error file=$path::HIGH-RISK on path with un-derivable slug"
+                fail=1
+              elif ! echo "$matched_skills" | grep -qFx -- "$slug"; then
+                echo "::error file=$path::HIGH-RISK without matching override artifact (expected skill=$slug under knowledge-base/engineering/security/skill-overrides/)"
+                fail=1
+              fi
+            fi
+          done <<< "$ADDED"
+          # ZERO VERDICTS IS NOT A PASS (#7629 P2b). The step is only reached when
+          # no_new_skills=false -- i.e. the gate believes it has work. Exiting 0
+          # having scanned nothing means the gate reported success about a set it
+          # never examined, which is the failure one level below a wrong verdict.
+          if [ "$requested" -gt 0 ] && [ "$scanned" -eq 0 ]; then
+            echo "::error::skill-security-scan: $requested path(s) were queued for scanning and 0 verdicts were produced. Refusing to report success for a scan that did not happen."
+            fail=1
+          fi
+          echo "skill-security-scan: $scanned verdict(s) produced from $requested queued path(s)."
+          exit $fail
+
+  constraint-gates:
+    if: github.event_name == 'pull_request'  # folded from constraint-gates.yml (PR-only; never had merge_group)
+    name: L1 import-boundary gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect target changes
+        id: changed
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          # No --depth here: a shallow fetch can leave the merge-base unreachable,
+          # making the three-dot diff fail under `set -e` and redden every
+          # non-target PR. checkout already used fetch-depth: 0 (full history).
+          git fetch --no-tags origin "$BASE_REF"
+          if git diff --name-only "origin/${BASE_REF}...HEAD" | grep -qE '^apps/web-platform/'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "apps/web-platform/** unchanged in this PR — constraint-gates passes (no-op)."
+          fi
+
+      - name: Setup Node.js
+        if: steps.changed.outputs.changed == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
+      - name: Install dependencies
+        if: steps.changed.outputs.changed == 'true'
+        working-directory: apps/web-platform
+        run: npm ci --ignore-scripts
+
+      - name: Run constraint gates (fail-closed)
+        if: steps.changed.outputs.changed == 'true'
+        run: bash apps/web-platform/scripts/constraint-gates.sh
+
+  auto-close-scan:
+    if: github.event_name == 'pull_request'  # PR-only gate; never had merge_group
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Scan PR title and body for auto-close keyword + #N
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+
+          # Honor explicit operator opt-out marker.
+          if printf '%s\n' "$PR_BODY" | grep -qF '<!-- auto-close-scanner: confirm -->'; then
+            echo "::notice::PR body contains <!-- auto-close-scanner: confirm --> — scanner skipped per author opt-in."
+            exit 0
+          fi
+
+          TMP_T=$(mktemp); TMP_B=$(mktemp); TMP_C=$(mktemp)
+          printf '%s\n' "$PR_TITLE" > "$TMP_T"
+          printf '%s\n' "$PR_BODY"  > "$TMP_B"
+          # Commit messages feed the squash-merge commit (this repo's default),
+          # which is the text GitHub's auto-close parser reads on merge to main.
+          # A negated keyword in a commit body ("Does not close #N") still fires
+          # the close — the parser is negation-blind — yet a title/body-only scan
+          # misses it. That exact gap closed #5463 twice (#5519, then #5564). The
+          # commit messages are untrusted PR-author input, so they are treated as
+          # data: written to a file, scanned, and backtick-stripped before any
+          # embedding (same model as PR_BODY).
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/commits" \
+            --jq '.[].commit.message' > "$TMP_C" 2>/dev/null || true
+
+          T_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_T")
+          B_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_B")
+          C_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_C")
+
+          if [[ -z "$T_MATCHES_RAW" && -z "$B_MATCHES_RAW" && -z "$C_MATCHES_RAW" ]]; then
+            echo "No auto-close keyword + #N references detected in title, body, or commits."
+            exit 0
+          fi
+
+          # Strip backticks from match output before embedding inside the bot
+          # comment's triple-backtick fences. Without this, an attacker submitting
+          # a PR body containing literal ``` near an auto-close keyword could
+          # break out of the bot comment's code fence and inject arbitrary
+          # Markdown into a github-actions[bot]-authored comment (high apparent
+          # trust, downstream agents read bot comments). See PR #3411 P2-1.
+          T_MATCHES=$(printf '%s' "$T_MATCHES_RAW" | tr -d '`')
+          B_MATCHES=$(printf '%s' "$B_MATCHES_RAW" | tr -d '`')
+          C_MATCHES=$(printf '%s' "$C_MATCHES_RAW" | tr -d '`')
+
+          MSG="auto-close keyword + #N detected in PR title, body, or a commit message. Verify each match is intentional. NOTE: GitHub's parser is negation-blind — 'does not close #N' still closes #N — and commit messages feed the squash-merge commit, so a keyword there auto-closes on merge even if the PR body is clean. If unintentional, edit the PR title/body or reword the commit. To silence this scanner on subsequent body edits, add <!-- auto-close-scanner: confirm --> to the PR body."
+          MSG_SAFE="${MSG//[$'\n\r']/}"
+          echo "::warning::${MSG_SAFE}"
+
+          # Build the comment body with a stable header line so we can match a
+          # prior bot comment for in-place edit (idempotency — see #3407 R3).
+          COMMENT_HEADER='## Auto-close keyword scanner (#3407)'
+          COMMENT_BODY=$(printf '%s\n\n%s\n\n### Title matches\n```\n%s\n```\n\n### Body matches\n```\n%s\n```\n\n### Commit message matches\n```\n%s\n```\n\nIf any match is unintentional, edit the PR title/body or reword the commit. To silence this scanner on subsequent body edits, add `<!-- auto-close-scanner: confirm -->` to the PR body.\n' \
+            "$COMMENT_HEADER" \
+            "$MSG" \
+            "${T_MATCHES:-(none)}" \
+            "${B_MATCHES:-(none)}" \
+            "${C_MATCHES:-(none)}")
+
+          # Find a prior bot comment with the same header → edit in place.
+          # Otherwise post a new comment. Either path keeps the surface to a
+          # single PR-thread comment regardless of edit cadence. `--paginate
+          # ?per_page=100` covers PRs with >30 comments where the prior bot
+          # comment may not be on page 1; without paging we'd silently degrade
+          # to "post a new comment every edit" on long PRs.
+          PRIOR_ID=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq '[.[] | select(.user.login=="github-actions[bot]" and (.body | startswith("## Auto-close keyword scanner")))] | .[0].id // empty')
+
+          if [[ -n "$PRIOR_ID" ]]; then
+            # If the prior comment was deleted between GET and PATCH, fall
+            # through to POST instead of failing the workflow.
+            if ! gh api -X PATCH "repos/$REPO/issues/comments/$PRIOR_ID" \
+              -f "body=$COMMENT_BODY" \
+              >/dev/null 2>&1; then
+              echo "Prior comment $PRIOR_ID PATCH failed (deleted?); posting fresh."
+              gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+                -f "body=$COMMENT_BODY" \
+                >/dev/null
+            else
+              echo "Edited prior scanner comment (id=$PRIOR_ID)."
+            fi
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+              -f "body=$COMMENT_BODY" \
+              >/dev/null
+            echo "Posted new scanner comment."
+          fi
+
+          # Always exit 0 — fail-soft per #3407.
+          exit 0

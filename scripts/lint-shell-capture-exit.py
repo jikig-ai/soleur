@@ -65,10 +65,19 @@ the site explicitly decides what a non-zero exit means. Four finding classes:
                    under `set -e` the command aborts BEFORE the read runs, so the read
                    can only ever see 0. Judged at the COMMAND's line, not the read's --
                    `cmd` then `set +e` then `rc=$?` is the mis-fix, not a fix.
+  S3 (cont.)       the antecedent may also be a compound's closer: `fi`, `done`,
+                   `esac`, or a group `}`/`);` is reclassified as the just-closed
+                   compound -- unprotected, judged armed at the closer. A `}`/`)`
+                   that closed a function DEFINITION is exempt: a definition's
+                   status is the definition's, not an executed command's.
   S4 (leak tail)   a function's last statement is `(( expr )) && act` or
                    `[ expr ]`/`[[ expr ]]`/`test expr && act` with no `||` arm: the
                    false arm returns the TEST's non-zero status to a `set -e` caller,
-                   and a normal "nothing to report" outcome reads as a crash.
+                   and a normal "nothing to report" outcome reads as a crash. All
+                   definition shapes are tracked -- `name() {`, `name() (`,
+                   `function name`, deferred `name()` newline `{`/`(` -- and
+                   closers are recognised at segment granularity (`cmd; }`,
+                   `}; rest`).
 
 S3 has TWO context arms and one fix. `cmd` followed by `rc=$?` is dead when the enclosing
 code runs under plain `set -e`, and FRAGILE when the enclosing function is only ever
@@ -108,30 +117,31 @@ WHAT IS DELIBERATELY NOT FLAGGED (each would be a false positive)
 
 HEURISTIC LIMITS (fail-silent direction, deliberately)
 ------------------------------------------------------
-  * Function bodies are found by `name() {` / `function name` openers and `}`-ONLY
-    closers; a `cmd; }` sharing the tail's line is a miss, `name() (`
-    paren-bodied functions are never tracked for S4, and a `})`-form close is
-    never a pop (the function simply stays open).
-  * `depth` counts raw `(`/`)` characters; pathological paren text (case-arm heads
-    inside multi-line `$( )`, parens in literals) can skew it. Comments and heredoc
-    bodies are already blanked before counting.
-  * A `}`-ONLY line inside a function closes the innermost tracked `{` group; a
-    `{`-bearing line whose closer shares a line with other text can still mis-pop.
-    A `{`-grouped command as the read's antecedent (`{ cmd; rc=$?; }`) is a miss.
-  * A `set` line inside a multi-line SINGLE-quoted string (`bash -c 'set -e; ...'`)
-    still spoofs the state model -- quote context is checked per-line, not across
-    lines.
-  * The statement-segment model splits only on `;`. `x=pre$?` (literal prefix)
-    under-matches; a pipeline as the antecedent is reported whole (`a | b`) rather
-    than per-stage.
+  * The quote tracker is a real context stack (`'`/`"`/`$(`/`(` frames,
+    carried across lines, with `$(`-inside-`"` re-lexing), so most nesting is
+    modelled. Residuals: the code after a mid-line closing quote on a
+    carried-`'`/`"` line is scanned as a continuation of quote state in the
+    per-LINE helpers (`_tail_state`/`_segments` get only the simplified
+    innermost carry), and `$'…'` ANSI-C strings share the `'` tracker while
+    their `\\'`-escape semantics differ -- `$'don\\'t'`-style strings can
+    still resync a line early.
+  * `name() cmd` single-command bodies are never opened (the opener is `{`/`(`
+    only); their tails are a miss.
+  * `;;` inside a `case` arm is not modelled -- an arm tail past `;;` merges
+    into the next segment.
+  * A `{`-grouped command as the read's antecedent (`{ cmd; rc=$?; }`) is a
+    miss -- the group `}`/`;` frame hides the inner command.
+  * Command-position tracking for the frame walk is token-approximate -- a
+    `{`/`(`/`}`/`)` token is structural only at segment start or after an
+    operator/reserved word, which can miss exotic placements.
+  * The statement-segment model splits only on `;` (quote-aware). A pipeline as
+    the antecedent is reported whole (`a | b`) rather than per-stage.
   * `PIPESTATUS` reads after a pipeline are judged live when `set -o pipefail` is
     not armed at the command's line -- the pipeline's status is then its last
     stage's, so earlier stages' failures never trip errexit.
-  * Function tracking keys on `name() {`-shaped openers; `f()\n{` (brace on the
-    next line) and `};`-form group closers outside `}`-only lines are misses.
-  * A multi-line compound's LAST line (`fi`, `done`, `esac`) stays protected --
-    the model tracks lines, not blocks; `if c; then cmd; fi` on ONE line is
-    flagged correctly while the three-line form is a documented miss.
+  * `depth` counts the statement-visible parens: a `(`/`)` inside a literal or
+    escaped (`\\(`) does not move it, but an unclosed `(` inside an UNQUOTED
+    construct (case-arm heads inside multi-line `$( )`) can still skew it.
 """
 
 from __future__ import annotations
@@ -154,7 +164,9 @@ NONZERO_IS_AN_ANSWER = {
 
 # Commands that PRINT a value even when they exit non-zero. `grep -c` prints `0` and exits 1
 # on no-match, which is what makes `|| echo 0` emit two lines instead of one.
-PRINTS_ON_FAILURE_RE = re.compile(r"\bgrep\s+(?:-\w*\s+)*-\w*c|\bgrep\s+(?:-\w*\s+)*--count")
+PRINTS_ON_FAILURE_RE = re.compile(
+    r"\b(?:[a-z]*grep|rg)\s+(?:-\w*\s+)*(?:-\w*c|--count)"
+)
 
 # `X=$(...)`, `X="$(...)"`, plus indexed/attributed forms, and an OPTIONAL trailing decision
 # clause (`|| true`, `|| echo 0`, `&& ...`).
@@ -168,7 +180,8 @@ PRINTS_ON_FAILURE_RE = re.compile(r"\bgrep\s+(?:-\w*\s+)*-\w*c|\bgrep\s+(?:-\w*\
 ASSIGN_SUBST_RE = re.compile(
     r"""(?P<decl>\b(?:local|export|declare|readonly|typeset)\s+(?:-\w+\s+)*)?"""
     r"""(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?="""
-    r"""(?P<q>["']?)\$\((?P<body>.*)\)(?P=q)(?P<tail>\s*(?:\|\||&&|;)\s*\S.*)?\s*;?\s*$"""
+    r"""(?P<q>["']?)[^\s;&|'"()$\\]*\$\((?P<body>.*)\)(?P=q)"""
+    r"""(?P<tail>\s*(?:\|\||&&|;)\s*\S.*)?\s*;?\s*$"""
 )
 
 SET_RE = re.compile(r"^\s*set\s+(.*)$")
@@ -177,22 +190,30 @@ CONTROL_PREFIX_RE = re.compile(
     r"|return|exit|break|continue|local\s+-r)\b"
 )
 HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-# A decision attached to the OUTER command: `... || true`, `|| :`, `|| x=0`, `|| continue`.
-OUTER_DECIDES_RE = re.compile(r"\|\|")
 # `|| echo <literal>` / `|| printf <literal>` -- adds a value rather than choosing one.
 ADDS_A_VALUE_RE = re.compile(r"\|\|\s*(?:echo|printf)\b")
 
 # A read of an exit status, captured into a variable. The VALUE forms: `$?`, `${?}`,
-# `$PIPESTATUS`, `${PIPESTATUS[n]}`, each optionally DOUBLE-quoted. The NAME side
+# `$PIPESTATUS`, `${PIPESTATUS[n]}`, each optionally DOUBLE-quoted and optionally
+# carrying a LITERAL PREFIX -- `x=pre$?` embeds the same read as `x=$?` (the
+# prefix class excludes `$`, quotes, whitespace, shell operators and `\\`, so an
+# escaped `\$` or a single-quoted literal still does not match). The NAME side
 # covers indexed and attributed forms alike: `rc=$?`, `rc="$?"`, `rc[0]=$?`,
-# `declare -i rc=$?`, `local rc=$?`. A SINGLE-quoted value (`rc='$?'`) is a literal
-# two-character string, not a read, and is correctly not matched.
+# `declare -i rc=$?`, `local rc=$?`. A SINGLE-quoted value (`rc='$?'`,
+# `rc='pre$?'`) is a literal string, not a read, and is correctly not matched.
 #
 # This is the ASSIGNMENT anchor only. Bare in-argument reads (`echo "rc=$?"`,
 # `[[ $? -ne 0 ]]`, `exit $?`) are real but noisier (`exit $?` is idiomatic) and stay
 # scoped out -- see the docstring's WHAT IS DELIBERATELY NOT FLAGGED.
 _STATUS = r'"?(?:\$\?|\$\{\?\}|\$\{PIPESTATUS\[[@*a-zA-Z0-9_]+\]\}|\$PIPESTATUS\b)"?'
-READ_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?=" + _STATUS)
+# Literal value prefix before a status read: `x=pre$?`, `x="pre$?"`,
+# `x=$v$?`, `x=${v}$?` all read `?`/`PIPESTATUS` the same. Shell-syntax
+# delimiters stay excluded (`;`/`&`/`|`/`'`/backtick end the word, `\` could
+# escape the read token), but `$`/`{}`/`()`/`"` interior text is fair game.
+_READ_PREFIX = r"[^\s';&|<>\\`]*"
+READ_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?=" + _READ_PREFIX + _STATUS
+)
 
 # A `local`/`declare`/`typeset`/`readonly`/`export` prefix on the read itself -- a
 # modifier of the assignment, not a command whose status the read is about.
@@ -200,16 +221,83 @@ DECL_PREFIX_RE = re.compile(
     r"^(?:local|declare|typeset|readonly|export)(?:\s+-[A-Za-z]+)*\s*$"
 )
 
-# A function opener: `name() {`, `function name {`, `function name() {`. The group
-# carries the function name for S4's predicate-name exemption.
-FUNC_OPEN_RE = re.compile(
-    r"^\s*(?:(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)"
-    r"|function\s+([A-Za-z_][A-Za-z0-9_]*))\s*\{"
+# A `set` verdict inside a `;`-segment, allowing the shell introducers that can
+# precede it (`{ set +e; }`, `then set +e`, `x && set -e`, `time set -e`).
+# Deliberately NOT `(`: `( set -e … )` scopes to the subshell, so a `set` after
+# a `(` opener must NOT touch the outer model.
+_SET_SEG_RE = re.compile(
+    r"^\s*(?:(?:&&|\|\||\||&|!|then|do|else|elif|fi|done|esac|time"
+    r"|coproc|command|builtin|exec|\{)\s+)*set\s+(.*)$"
 )
 
-# A line that is ONLY a closing brace -- the S4 function-body heuristic's closer. A
-# `cmd; }` sharing the tail's line is a documented miss (see the docstring).
-BRACE_CLOSE_RE = re.compile(r"^}\s*$")
+# A function opener: `name() {`, `name() (`, `function name {`,
+# `function name() {`, `function name (`. Group 3 is the opener char (`{` or
+# `(`) so the caller knows which closer the body ends with; groups 1/2 carry
+# the function name for S4's predicate-name exemption.
+FUNC_OPEN_RE = re.compile(
+    r"^\s*(?:(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)"
+    r"|function\s+([A-Za-z_][A-Za-z0-9_]*))\s*([{(])"
+)
+
+# A bare function head with the opener DEFERRED to the next line:
+# `name()`, `name ()`, `function name`, `function name()`. It records a
+# pending function; the next non-blank logical line leading with `{` or `(`
+# opens the body, anything else discards the pending record.
+FUNC_HEAD_RE = re.compile(
+    r"^\s*(?:(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)"
+    r"|function\s+([A-Za-z_][A-Za-z0-9_]*))\s*$"
+)
+
+# A compound's closer word followed only by redirects/`;` or an operator
+# continuation (`fi`, `done < f`, `esac`, `done 2>&1`, `done | tee`,
+# `done && x`). Anything else after the word means the text is not a closer
+# (an `fi x` is malformed shell, not a compound tail) and falls back to the
+# ordinary protection checks.
+_WORD_CLOSER_RE = re.compile(r"^(fi|done|esac)(?=$|[\s;])")
+_REDIRECT_OP_RE = re.compile(r"^(?:[0-9]*[<>]{1,3}|&>>?|>>&?)")
+_REDIRECT_OP_ONLY_RE = re.compile(r"^(?:[0-9]*[<>]{1,3}&?-?|&>>?)$")
+
+
+def _closer_tail_ok(tail: str) -> bool:
+    """A word closer's tail may carry only redirects or an operator
+    continuation. Token-per-token scan -- deliberately NOT one nested regex,
+    which measured exponential backtracking on `done <a <b … ; x` inputs."""
+    toks = tail.replace(";", " ").split()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t in ("|", "|&", "&&", "||", "&"):
+            return True
+        if not _REDIRECT_OP_RE.match(t):
+            return False
+        i += 1
+        # An operator-alone token (`>`, `2>`, `<`) consumes the next word as
+        # its target; `>f`/`2>&1` carry theirs inline.
+        if _REDIRECT_OP_ONLY_RE.fullmatch(t) and i < len(toks):
+            i += 1
+    return True
+
+
+def _closer_head(cand: str) -> str | None:
+    """Return 'word', 'brace' or 'paren' when `cand` is a compound's closer
+    rather than a command, else None.
+
+    `fi`/`done`/`esac` may carry trailing redirects, `;`, and operator
+    continuations. A bare `}`/`};` or `)`/`);` is a GROUP close -- whether it
+    instead closed a function DEFINITION is the caller's frame question
+    (close_info), not decidable from the text. A `)` that is NOT a standalone
+    token (case-arm heads like `start)`, `x=($(cmd))`) is filtered by
+    requiring the `)` to lead the text.
+    """
+    c = cand.strip()
+    m = _WORD_CLOSER_RE.match(c)
+    if m:
+        return "word" if _closer_tail_ok(c[m.end() :]) else None
+    if c.startswith("}"):
+        return "brace"
+    if re.match(r"^\)(?=$|[\s;])", c):
+        return "paren"
+    return None
 
 # The S4 tail shapes: a test builtin whose `&&` sits STRICTLY OUTSIDE the test. `[[ a
 # && b ]]` alone does not match -- the leak is the unguarded `&&` between the test and
@@ -246,10 +334,20 @@ def drop_heredocs(lines: list[str]) -> list[str]:
                 terminator = None
             continue
         out.append(line)
-        # Only opens a heredoc if the `<<` is not itself inside a comment we already blanked.
-        m = HEREDOC_RE.search(line)
-        if m and not line.lstrip().startswith("#"):
+        # `<<` inside a quoted string, a comment tail, or arithmetic
+        # (`x=$((a<<b))`) opens NOTHING: test each candidate position against
+        # the quote-masked text, and require paren depth 0. The name itself is
+        # read from the RAW line (`_unquoted` blanks a `<<'EOF'` delimiter).
+        if "<<" not in line or line.lstrip().startswith("#"):
+            continue
+        uq = _unquoted(line)
+        for m in HEREDOC_RE.finditer(line):
+            if m.start() >= len(uq) or uq[m.start()] != "<":
+                continue
+            if uq[: m.start()].count("(") > uq[: m.start()].count(")"):
+                continue
             terminator = m.group(2)
+            break
     return out
 
 
@@ -343,19 +441,157 @@ def set_errexit_verdict(args: str) -> bool | None:
     return set_verdicts(args).get("errexit")
 
 
-def _unquoted(text: str) -> str:
-    """Quoted spans blanked, so `||`/`&&`/`|` inside `'...'`/`"..."` are not
-    read as operators. A `\\` inside double quotes escapes the next char; a
-    lone unclosed quote blanks to EOL -- both documented limits."""
-    out = []
+def _quote_scan(
+    text: str, qstack: list[str]
+) -> tuple[str, list[bool], list[bool], list[str]]:
+    """One-pass quote tracker over a carried context STACK.
+
+    `qstack` frames, innermost last: `'sq'`/`'dq'` quote spans, `'sub'` a
+    `$(` substitution context, `'paren'` a plain `(` inside a substitution.
+    A `'sub'` frame's interior lexes as CODE even under `'dq'` -- bash
+    re-lexes `"$(cmd 'x' "$y" ...)"`, so quotes there are real toggles, and
+    nested `"$(a "$(b)")"` shapes need an actual stack, not flag pairs.
+
+    Returns `(vis, sq, sub, qstack)` with `qstack` updated in place for
+    the next line:
+
+      * `vis` -- `text` with every position under a `'sq'`/`'dq'` frame
+        blanked (delimiters included) and every comment tail blanked, at
+        preserved positions, so `set`/`;`/`(`/`)` inside either is invisible
+        to the state model and the segmenter.
+      * `sq` -- per-position flags for chars inside a SINGLE-quoted span:
+        `$( )` and `$?` inside `'...'` are data for another interpreter,
+        while inside `"..."` they still expand, so the two interiors differ.
+      * `sub` -- per-position flags for chars inside a `'sub'`/`'paren'`
+        frame (`$(` interior, quoted or not): `$?`/`$()` there belong to the
+        substitution's shell, not this line's statement flow.
+      * positions under `'sub'`/`'paren'` alone are VISIBLE in `vis` -- code
+        in an unquoted `$(` runs under this shell's line-level model.
+
+    Escape rule (adopted from `_heredoc_opener` in
+    lint-workflow-errexit-capture.py): `\\` escapes the next char everywhere
+    except inside single quotes, so `don\\'t` does not open a quote and
+    `"a\\"b"` does not close one. The escaped char is blanked in `vis` too,
+    so `\\;`/`\\(` cannot spoof a boundary or a depth step. An unquoted `#`
+    at a word boundary (see `_is_comment_start`) starts a comment: the rest
+    of the line is blanked, so an apostrophe in `# don't` can never open a
+    phantom string.
+    """
+    vis: list[str] = []
+    sq: list[bool] = []
+    sub: list[bool] = []
     i = 0
-    in_s = in_d = False
-    while i < len(text):
+    n = len(text)
+    # Fast paths: empty stack and no quote/escape/comment chars (the common
+    # case), or a line wholly inside a carried single-quote with no close.
+    if not qstack and not re.search(r"['\"\\#]", text):
+        return text, [False] * n, [False] * n, qstack
+    if qstack == ["sq"] and "'" not in text:
+        return " " * n, [True] * n, [False] * n, qstack
+    while i < n:
         ch = text[i]
-        if ch == "\\" and in_d and i + 1 < len(text):
-            out.append(" ")
+        top = qstack[-1] if qstack else "code"
+        quoted = "sq" in qstack or "dq" in qstack
+        in_sub = "sub" in qstack or "paren" in qstack
+        if top == "sq":
+            sq.append(True)
+            sub.append(in_sub)
+            vis.append(" ")
+            if ch == "'":
+                qstack.pop()
+            i += 1
+            continue
+        if top == "dq":
+            sq.append(False)
+            sub.append(in_sub)
+            vis.append(" ")
+            if ch == "\\" and i + 1 < n:
+                vis.append(" ")
+                sq.append(False)
+                sub.append(in_sub)
+                i += 2
+                continue
+            if ch == '"':
+                qstack.pop()
+                i += 1
+                continue
+            if ch == "$" and i + 1 < n and text[i + 1] == "(":
+                qstack.append("sub")
+                vis.append(" ")
+                sq.append(False)
+                sub.append(True)
+                i += 2
+                continue
+            i += 1
+            continue
+        # code context: real lexing (`top` is 'code'/'sub'/'paren')
+        if ch == "\\" and i + 1 < n:
+            vis.append(ch + " ")
+            sq.extend((False, False))
+            sub.extend((in_sub, in_sub))
             i += 2
             continue
+        if ch == "#" and _is_comment_start(text, i):
+            # Unquoted `#` at a word boundary opens a comment to EOL.
+            vis.extend(" " * (n - i))
+            sq.extend(False for _ in range(n - i))
+            sub.extend([in_sub] * (n - i))
+            break
+        if ch == "'":
+            # The delimiter is part of the quoted span -- masked, sq-flagged.
+            qstack.append("sq")
+            vis.append(" ")
+            sq.append(True)
+            sub.append(in_sub)
+            i += 1
+            continue
+        if ch == '"':
+            qstack.append("dq")
+            vis.append(" ")
+            sq.append(False)
+            sub.append(in_sub)
+            i += 1
+            continue
+        sq.append("sq" in qstack)
+        vis.append(" " if quoted else ch)
+        if ch == "$" and i + 1 < n and text[i + 1] == "(":
+            qstack.append("sub")
+            sub.append(True)
+            vis.append(" ")
+            sq.append(False)
+            sub.append(True)
+            i += 1
+        elif ch == "(" and top != "code":
+            qstack.append("paren")
+            sub.append(True)
+        elif ch == ")" and top in ("sub", "paren"):
+            qstack.pop()
+            sub.append(in_sub)
+        else:
+            sub.append(in_sub)
+        i += 1
+    return "".join(vis), sq, sub, qstack
+
+
+def _unquoted(text: str, in_s: bool = False, in_d: bool = False) -> str:
+    """Quoted interiors blanked (delimiters kept), so `||`/`&&`/`|` inside
+    `'...'`/`"..."` are not read as operators. Same escape rule as
+    `_quote_scan`: `\\` escapes the next char everywhere except inside single
+    quotes -- an unquoted `\\'` can no longer open a phantom string. A lone
+    unclosed quote blanks to EOL (documented limit). `in_s`/`in_d` carry a
+    quote left open by a previous logical line, so a carried-in `'`/`"` is
+    correctly read as CLOSING it, not opening a new one."""
+    out = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and not in_s and i + 1 < len(text):
+            out.append("  " if in_d else ch + " ")
+            i += 2
+            continue
+        if ch == "#" and not in_s and not in_d and _is_comment_start(text, i):
+            # comment tail -- quote chars inside comments do not count for parity
+            break
         if ch == "'" and not in_d:
             in_s = not in_s
             out.append("'")
@@ -370,34 +606,299 @@ def _unquoted(text: str) -> str:
     return "".join(out)
 
 
-def _segments(text: str, start_depth: int = 0) -> list[tuple[str, int]]:
+def _is_comment_start(text: str, i: int) -> bool:
+    """Unquoted `#` at a word boundary opens a comment -- except inside
+    `${#…}` length expansion, where `#` follows `${`."""
+    if text[i] != "#":
+        return False
+    if i == 0:
+        return True
+    prev = text[i - 1]
+    if prev not in " \t;&|(){}<>":
+        return False
+    return not (prev == "{" and i >= 2 and text[i - 2] == "$")
+
+
+def _has_unmasked_op(tail_raw: str, sq_tail: list[bool]) -> bool:
+    """`||`/`&&` present in `tail_raw` at a position not inside a
+    single-quoted span (`sq` position flags for the same slice)."""
+    for m in re.finditer(r"\|\||&&", tail_raw):
+        if not all(sq_tail[m.start() : m.end()]):
+            return True
+    return False
+
+
+def _tail_state(
+    text: str, in_s: bool = False, in_d: bool = False
+) -> tuple[bool, bool, int]:
+    """Scan `text` -- which may OPEN inside a quote carried from a prior
+    logical line (`in_s`/`in_d`) -- and return the quote state and unclosed
+    paren depth at its end. Used to decide whether a read sits inside an
+    unclosed `"`/`'` string or `$(`/`(` group; comment tails stop the scan."""
+    d = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and not in_s and i + 1 < n:
+            i += 2
+            continue
+        if in_s:
+            if ch == "'":
+                in_s = False
+        elif in_d:
+            if ch == '"':
+                in_d = False
+        elif ch == "#" and _is_comment_start(text, i):
+            break
+        elif ch == "'":
+            in_s = True
+        elif ch == '"':
+            in_d = True
+        elif ch == "(":
+            d += 1
+        elif ch == ")" and d:
+            d -= 1
+        i += 1
+    return in_s, in_d, d
+
+
+def _segments(
+    text: str, start_depth: int = 0, in_s: bool = False, in_d: bool = False
+) -> list[tuple[str, int]]:
     """`;`-separated statement segments with the paren depth at each segment's
     START. `;` is the only separator: `|`, `||`, `&&`, `&` belong to the command
     (pipeline stages, operands, `2>&1` redirects), never to boundaries.
     `start_depth` is the outer depth the text begins under, so `;` inside a
     `$(`/`(` group still records depth > 0 for the segments it splits into.
+
+    Quote-aware: a `;` or `(`/`)` inside `'...'`/`"..."` is literal text, and
+    `in_s`/`in_d` carry a quote left open by a previous logical line (a line
+    beginning inside a multi-line string keeps its text in the open quote).
+    An unquoted `#` at a word boundary ends the line (comment tail): `;` or
+    `set` text inside a comment is not a boundary or a verdict.
     """
+    if ";" not in text:
+        # No separator -- one tail segment; internal depth bookkeeping is
+        # unobservable to every caller.
+        tail = text.strip()
+        return [(tail, start_depth)] if tail else []
     segs: list[tuple[str, int]] = []
     d = start_depth
     seg_depth = d
     cur: list[str] = []
-    for ch in text:
-        if ch == ";":
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and not in_s and i + 1 < n:
+            cur.append(ch + text[i + 1])
+            i += 2
+            continue
+        if ch == "#" and not in_s and not in_d and _is_comment_start(text, i):
+            break
+        if ch == "'" and not in_d:
+            in_s = not in_s
+        elif ch == '"' and not in_s:
+            in_d = not in_d
+        elif ch == ";" and not in_s and not in_d:
             seg = "".join(cur).strip()
             if seg:
                 segs.append((seg, seg_depth))
             cur = []
             seg_depth = d
+            i += 1
             continue
-        if ch == "(":
-            d += 1
-        elif ch == ")":
-            d = max(0, d - 1)
+        elif not in_s and not in_d:
+            if ch == "(":
+                d += 1
+            elif ch == ")":
+                d = max(0, d - 1)
         cur.append(ch)
+        i += 1
     tail = "".join(cur).strip()
     if tail:
         segs.append((tail, seg_depth))
     return segs
+
+
+def _segments_pair(
+    text: str, in_s: bool = False, in_d: bool = False
+) -> list[tuple[str, str]]:
+    """`_segments` emitting `(raw_seg, masked_seg)` pairs in ONE pass.
+
+    The masked seg blanks single- AND double-quoted interiors and comment
+    tails; the raw seg keeps original text. Segmenting a line once on masked
+    text and once on raw text misaligns the two lists -- a fully-quoted
+    `;`-segment drops out of the masked list but stays in the raw one -- so
+    consumers that need both take them from this single scan. `in_s`/`in_d`
+    carry a quote left open by a previous logical line.
+    """
+    segs: list[tuple[str, str]] = []
+    cur_r: list[str] = []
+    cur_m: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if in_s:
+            cur_r.append(ch)
+            cur_m.append(" ")
+            if ch == "'":
+                in_s = False
+        elif in_d:
+            cur_r.append(ch)
+            cur_m.append(" ")
+            if ch == "\\" and i + 1 < n:
+                cur_r.append(text[i + 1])
+                cur_m.append(" ")
+                i += 1
+            elif ch == '"':
+                in_d = False
+        elif ch == "#" and _is_comment_start(text, i):
+            break
+        elif ch == "\\" and i + 1 < n:
+            cur_r.append(ch)
+            cur_r.append(text[i + 1])
+            cur_m.append(ch)
+            cur_m.append(" ")
+            i += 1
+        elif ch == "'":
+            in_s = True
+            cur_r.append(ch)
+            cur_m.append(" ")
+        elif ch == '"':
+            in_d = True
+            cur_r.append(ch)
+            cur_m.append(" ")
+        elif ch == ";":
+            m = "".join(cur_m).strip()
+            if m:
+                segs.append(("".join(cur_r).strip(), m))
+            cur_r = []
+            cur_m = []
+        else:
+            cur_r.append(ch)
+            cur_m.append(ch)
+        i += 1
+    m = "".join(cur_m).strip()
+    if m:
+        segs.append(("".join(cur_r).strip(), m))
+    return segs
+
+
+# Command-position inducers for the frame walk: the token AFTER one of these
+# (or at segment start) sits in command position, so a standalone `{`/`(`/`}`
+# there is structural. `for`/`select`/`in` are deliberately absent -- a word
+# after them is a list member, not a command. `;;`/`;&`/`;;&` terminator
+# tokens are handled inline: what follows them is a case PATTERN.
+_CMD_INDUCERS = frozenset(
+    {
+        "&&", "||", "|", "&", "!", "then", "do", "else", "elif", "time",
+        "coproc", "command", "exec", "builtin", "noglob", "eval",
+    }
+)
+_WORD_OPENERS = {
+    "if": "fi",
+    "while": "done",
+    "until": "done",
+    "for": "done",
+    "select": "done",
+    "case": "esac",
+}
+_WORD_CLOSER_TOKENS = frozenset({"fi", "done", "esac"})
+# `{`/`(` immediately after these run in a suppressed-errexit position: the
+# negation marker `!` or a compound's CONDITION head (`if { …; }; then`).
+_SUPPRESS_AFTER = frozenset({"!", "if", "elif", "while", "until"})
+# Gate for the per-line frame walk: only a line carrying a frameable token or
+# delimiter can open/close anything.
+_FRAME_TRIG = re.compile(
+    r"[{}()]|\b(?:if|while|until|for|select|case|fi|done|esac)\b"
+)
+
+
+def _seg_events(mseg: str) -> list[tuple[str, str | None]]:
+    """Structural events in one `;`-segment of MASKED text, in order.
+
+    Each event is `(kind, prev_tok)` with `kind` one of:
+      `{`, `(`        -- group/subshell openers in command position
+      `$(`            -- a `(` opened inside a token (`$(`, `$((`, `x=(`)
+      `}`, `)`        -- group/subshell closers; `)` matches wherever a
+                         standalone `)` token appears
+      `)x`            -- an excess `)` inside a token (a case-arm head `x)`,
+                         an `x=$(a)`/`x=(a)` body close)
+      `if`/`while`/`until`/`for`/`select`/`case` -- compound openers
+      `fi`/`done`/`esac`                         -- compound closers
+    `prev_tok` is the preceding token, for operand/context checks (`! {`,
+    `if { …; }; then` condition heads). Command-position tracking is
+    approximate -- the goal is bookkeeping consistency, not full parsing.
+    """
+    events: list[tuple[str, str | None]] = []
+    cmd_tok = True
+    prev: str | None = None
+    for tok in mseg.split():
+        if cmd_tok and tok in ("{", "("):
+            events.append((tok, prev))
+            prev, cmd_tok = tok, True
+            continue
+        if tok == "}" and cmd_tok:
+            events.append(("}", prev))
+            prev, cmd_tok = tok, True
+            continue
+        if tok == ")":
+            # A standalone `)` can only be a closer -- it is never argument
+            # position inside an open `(`/`$(` frame.
+            events.append((")", prev))
+            prev, cmd_tok = tok, True
+            continue
+        if cmd_tok and tok in _WORD_OPENERS:
+            events.append((tok, prev))
+            prev, cmd_tok = tok, True
+            continue
+        if cmd_tok and tok in _WORD_CLOSER_TOKENS:
+            events.append((tok, prev))
+            prev, cmd_tok = tok, True
+            continue
+        opens = tok.count("(")
+        closes = tok.count(")")
+        for _ in range(opens - closes):
+            events.append(("$(", prev))
+        for _ in range(closes - opens):
+            events.append((")x", prev))
+        prev = tok
+        cmd_tok = tok in _CMD_INDUCERS or closes > opens  # `x)` arm heads
+        if ";;" in tok or tok.endswith(";&"):
+            cmd_tok = False  # a case pattern follows, not a command
+    return events
+
+
+def _first_close(vis_inner: str, closer: str) -> int:
+    """Index of the first `closer` at depth 0 of `vis_inner` (masked text), or
+    -1. `rfind` would land on a LATER same-line closer (`f() { a; } echo ${y}`)
+    and lose the body; depth counting keeps a nested `{ x; }`/`( y )` inside
+    and finds the construct's own end.
+    """
+    open_c = "{" if closer == "}" else "("
+    d = 1
+    for i, ch in enumerate(vis_inner):
+        if ch == open_c:
+            d += 1
+        elif ch == closer:
+            d -= 1
+            if d == 0:
+                return i
+    return -1
+
+
+def _seg_index_of(vstrip: str, charpos: int) -> int:
+    """Which `;`-segment of `vstrip` holds character `charpos`: the count of
+    non-empty segments strictly before it, minus one when the position joins
+    the current segment rather than starting a new one (`a }` vs `a; }`)."""
+    pre = vstrip[:charpos]
+    n = len(_segments(pre))
+    if not pre.rstrip().endswith(";"):
+        n -= 1
+    return max(0, n)
 
 
 def substituted_commands(body: str) -> list[str]:
@@ -408,10 +909,24 @@ def substituted_commands(body: str) -> list[str]:
     inspects every stage, because a repo that sets `-o pipefail` in its house preamble (this
     one does) makes every stage load-bearing.
     """
-    # Anything after a `||` or `&&` is a DECISION, not the question being asked.
-    # Operator chars inside quotes are not operators: `grep 'a||b'` is one stage.
-    head = re.split(r"\|\||&&", _unquoted(body))[0]
-    return [seg.strip() for seg in head.split("|") if seg.strip()]
+    # The substitution's status is its LAST `;`-statement's; within it EVERY
+    # `|`/`||`/`&&` operand is a stage whose non-zero exit can surface:
+    # `x=$(a; grep …)` fails on grep, `x=$(grep -c … || echo 0)` still sees the
+    # grep (S2 double-emit). Operator chars inside quotes are not operators:
+    # `grep 'a||b'` is one stage. A last statement built like `} | tr` or
+    # `) | x` rejoins the group's own segments -- `x=$({ p|grep|wc; } | tr)`
+    # still surfaces the grep under pipefail.
+    segs = _unquoted(body).split(";")
+    tail = segs.pop()
+    while segs and (
+        tail.count("}") > tail.count("{") or tail.count(")") > tail.count("(")
+    ):
+        tail = segs.pop() + ";" + tail
+    return [
+        seg.strip()
+        for seg in re.split(r"\|\||&&|\|", tail)
+        if seg.strip()
+    ]
 
 
 def first_word(cmd: str) -> str:
@@ -474,7 +989,11 @@ def _s3_exempt_command(cmd: str, depth: int = 0) -> bool:
         return True
     if c.startswith(("{", "}")) or c.endswith("{"):
         return True
-    if depth == 0 and re.match(r"^\S+\)", c) and c.count("(") < c.count(")"):
+    if (
+        depth == 0
+        and re.match(r"^\S+\)", c)
+        and _unquoted(c).count("(") < _unquoted(c).count(")")
+    ):
         return True
     return False
 
@@ -509,10 +1028,11 @@ def _s4_check(
 def scan(path: str) -> list[tuple[int, str, str]]:
     """Return (line, code, logical_line) findings for one script.
 
-    Two passes, ported from lint-workflow-errexit-capture.py's scan_body(): pass 1
-    computes the errexit state and unclosed-paren depth BEFORE each logical line;
-    pass 2 judges each construct against the state at ITS line -- the state at the
-    COMMAND's line, not at the read's, because `cmd` then `set +e` then `rc=$?` is the
+    A lexical pass first builds the per-line quote context (`_quote_scan`'s
+    carried stack), then pass 1 computes the errexit state and unclosed-paren
+    depth BEFORE each logical line on the quote-masked text; pass 2 judges
+    each construct against the state at ITS line -- the state at the COMMAND's
+    line, not at the read's, because `cmd` then `set +e` then `rc=$?` is the
     canonical mis-fix and judging at the read would make it invisible.
     """
     try:
@@ -523,6 +1043,55 @@ def scan(path: str) -> list[tuple[int, str, str]]:
     lines = drop_heredocs(strip_comment_lines(raw))
     logical = join_continuations(lines)
 
+    # --- quote model ----------------------------------------------------------
+    # `quote_at[pos]` is True when logical line `pos` BEGINS inside an open
+    # `'…'`/`"…"` string carried from an earlier line; `vis[pos]` is the line's
+    # statement-visible text (every quoted span and every comment tail blanked,
+    # positions preserved); `sq[pos]` flags positions inside a SINGLE-quoted
+    # span (their `$( )`/`$?`/`set` are data for another interpreter -- a
+    # `"…"` interior's are NOT, they still expand in this shell); `qs_in_s`/
+    # `qs_in_d` carry the quote state each line BEGINS under, so a `'`/`"`
+    # opening the line's text correctly reads as CLOSING it.
+    vis_lines: list[str] = []
+    sq_masks: list[list[bool]] = []
+    sub_masks: list[list[bool]] = []
+    quote_at: list[bool] = []
+    qs_in_s: list[bool] = []
+    qs_in_d: list[bool] = []
+    qstack: list[str] = []
+    qstart: int | None = None
+    for pos_i, (_ln, text) in enumerate(logical):
+        quote_at.append("sq" in qstack or "dq" in qstack)
+        # The carried-in state for the per-line helpers, simplified to the
+        # innermost frame: `'`/`"` continuations carry their quote; a
+        # `$(`-in-`"` sub frame lexes as code, so it carries unquoted.
+        qs_in_s.append(bool(qstack and qstack[-1] == "sq"))
+        qs_in_d.append(bool(qstack and qstack[-1] == "dq"))
+        vis, sq, subm, qstack = _quote_scan(text, qstack)
+        # Position-mask alignment is load-bearing (segs, sq lookups, close
+        # keys index by raw position) -- a per-char append bug desyncs
+        # silently, so assert it loud here.
+        assert len(vis) == len(sq) == len(subm) == len(text), (
+            f"mask alignment broke at {path}:{_ln}"
+        )
+        vis_lines.append(vis)
+        sq_masks.append(sq)
+        sub_masks.append(subm)
+        if "sq" in qstack or "dq" in qstack:
+            if not quote_at[-1]:
+                qstart = pos_i
+        else:
+            qstart = None
+    if qstart is not None:
+        # A quote still open at EOF almost certainly was never a quote: re-judge
+        # the whole open-quoted tail as code -- fail toward "scan it", mirroring
+        # the sibling gate's unterminated-heredoc rule.
+        for i in range(qstart, len(logical)):
+            vis_lines[i] = logical[i][1]
+            quote_at[i] = False
+            sq_masks[i] = [False] * len(logical[i][1])
+            sub_masks[i] = [False] * len(logical[i][1])
+
     # --- pass 1: errexit/pipefail state and paren depth before each line ------
     state: list[bool] = []
     pipefail_at: list[bool] = []
@@ -530,108 +1099,256 @@ def scan(path: str) -> list[tuple[int, str, str]]:
     errexit = False
     pipefail = False
     depth = 0  # unclosed `(` -- a `set` inside `$( )`/`( )` is scoped to the subshell
-    for _idx, text in logical:
+    for pos_i, (_idx, text) in enumerate(logical):
         state.append(errexit)
         pipefail_at.append(pipefail)
         depth_at.append(depth)
+        # `vis` blanks only the still-quoted head of a carried-quote line; the
+        # code tail after a mid-line closing quote (`" 2>&1)`) is real code --
+        # its `set` verdicts and paren balance MUST be counted, or the state
+        # model freezes for the rest of the file.
+        vtext = vis_lines[pos_i]
         # `set` verdicts are per-SEGMENT, not just line-initial: `foo; set -e`
         # arms like a line-initial set, while a `set` inside `$( )`/`( )` scopes
         # to the group -- the same depth rule for clears AND arms.
-        for seg, sdep in _segments(text, depth):
-            if sdep != 0:
-                continue
-            m = SET_RE.match(seg)
-            if not m:
-                continue
-            v = set_verdicts(m.group(1))
-            ev = v.get("errexit")
-            if ev is True:
-                errexit = False
-            elif ev is False:
-                errexit = True
-            pv = v.get("pipefail")
-            if pv is True:
-                pipefail = False
-            elif pv is False:
-                pipefail = True
-        depth += text.count("(") - text.count(")")
+        if "set" in vtext:
+            for seg, sdep in _segments(vtext, depth):
+                if sdep != 0:
+                    continue
+                m = _SET_SEG_RE.match(seg)
+                if not m:
+                    continue
+                v = set_verdicts(m.group(1))
+                ev = v.get("errexit")
+                if ev is True:
+                    errexit = False
+                elif ev is False:
+                    errexit = True
+                pv = v.get("pipefail")
+                if pv is True:
+                    pipefail = False
+                elif pv is False:
+                    pipefail = True
+        # Depth counts the statement-visible parens: `(`/`)` inside a literal
+        # (`echo 'a(b'`) or escaped (`x=\(`) do not open groups.
+        depth += vtext.count("(") - vtext.count(")")
         if depth < 0:
             depth = 0
 
     # --- pass 2: S1/S2 captures, S3 dead reads, S4 leaking tails ---------------
     findings: list[tuple[int, str, str]] = []
     s1s2_positions: set[int] = set()  # logical positions that already emitted S1/S2
-    # (name, open_pos, inner_group_depth, same-line body prefix)
-    func_stack: list[tuple[str, int, int, str]] = []
+    # Frame stack: (kind, closer, armed, name, open_pos, open_body). kind is
+    # 'func' (S4 tail judgment on pop), 'group' (`{ }`/`( )`), 'word'
+    # (`if`/`while`/`for`/`case` compounds), or 'subst' (`$(`/`x=(`/`((` opened
+    # inside a token). `armed` records whether the construct ran in a
+    # suppressed-errexit position (`!`-negated, or a condition head like
+    # `if { …; }; then`) so the S3 resolver can tell an armed compound tail
+    # from a suppressed one.
+    frames: list[tuple[str, str, bool, str, int, str]] = []
+    # (pos, seg_idx) -> (kind, armed) for the construct closed at that segment
+    # -- the S3 antecedent resolver consults it: a read after a function
+    # DEFINITION close sees the definition's status (boring, not dead), and a
+    # read after a suppressed construct (`! { … }`) is live.
+    close_info: dict[tuple[int, int], tuple[str, bool]] = {}
+    # A bare `name()` / `function name` head awaiting its deferred opener.
+    pending_name: str | None = None
     last_nonempty: int | None = None
+
+    def _push_inner_events(inner_vis: str) -> None:
+        """Walk the text after a `name() {`/`(` opener for same-line inner
+        opens, so a later `)`/`fi`/`}` matches the inner frame, not the func."""
+        for mseg, _d in _segments(inner_vis):
+            for ev, ptok in _seg_events(mseg):
+                if ev in ("{", "("):
+                    frames.append(("group", "}" if ev == "{" else ")",
+                                   ptok not in _SUPPRESS_AFTER, "", -1, ""))
+                elif ev == "$(":
+                    frames.append(("subst", ")", True, "", -1, ""))
+                elif ev in _WORD_OPENERS:
+                    frames.append(("word", _WORD_OPENERS[ev], ptok != "!",
+                                   "", -1, ""))
+
+    def _pop_func_tail(
+        fr: tuple[str, str, bool, str, int, str],
+        si: int,
+        pairs: list[tuple[str, str]],
+        pos: int,
+        lineno: int,
+    ) -> None:
+        """S4 tail judgment when a 'func' frame pops at (pos, seg si)."""
+        tail = ""
+        tail_lineno = lineno
+        tail_state = False
+        if si > 0 and pairs[si - 1][0].strip():
+            # The tail is the `;`-segment just before this closer on the same
+            # line (`cmd; }`; `}; rest` falls through to the prior line).
+            tail = pairs[si - 1][0].strip()
+            if re.match(r"^[{]|^\(\s", tail):
+                tail = tail[1:].strip()  # a leading `{`/`( ` is the group opener
+            tail_state = state[pos]
+        elif last_nonempty is not None:
+            tail_lineno, t_text = logical[last_nonempty]
+            tsegs = _segments(t_text)
+            tail = tsegs[-1][0].strip() if tsegs else t_text.strip()
+            tail_state = state[last_nonempty]
+            if last_nonempty == fr[4]:
+                # Two-line `f() { tail` form: the tail shares the opener
+                # line; check the part AFTER the opener.
+                osegs = _segments(fr[5])
+                tail = osegs[-1][0].strip() if osegs else fr[5]
+        if tail_state:
+            _s4_check(tail, tail_lineno, fr[3], findings)
 
     for pos, (lineno, text) in enumerate(logical):
         stripped = text.strip()
         if not stripped:
             continue
+        # Statement-visible shadow of `stripped` (quoted spans and comment
+        # tails blanked) at the SAME positions, so an index into one slices
+        # the other.
+        lead = len(text) - len(text.lstrip())
+        vline = vis_lines[pos]
+        vstrip = vline[lead : lead + len(stripped)]
+        sqline = sq_masks[pos]
 
-        if SET_RE.match(text):
-            last_nonempty = pos
-            continue
-
-        # --- function-boundary tracking for S4 --------------------------------
-        # This bookkeeping is ADDITIVE: opener and group lines still run the
-        # S1/S2/S3 checks below (`f() { x=$(grep p f); }` is an S1 on any tree).
-        fm = FUNC_OPEN_RE.match(stripped)
+        # --- function-boundary + construct-frame bookkeeping ------------------
+        # Every POSIX definition shape: `name() {`, `name() (`, `function
+        # name`, and deferred openers (`name()` / `function name` on their own
+        # line, then `{`/`(` on the next). Frame tokens are recognised per
+        # `;`-segment on the masked text in approximate command position --
+        # the first token of a segment or the token after an operator/reserved
+        # word. `${x}`/`{a,b}`, quoted braces and `x)` case-arm heads never
+        # reach this code (masked out or non-standalone). Runs for EVERY line
+        # (top-level constructs produce `close_info` for the S3 resolver) and
+        # BEFORE the `set`-line skip (`set +u; }` still closes a function).
+        def_open = False
+        fm = FUNC_OPEN_RE.match(vstrip)
         if fm:
+            pending_name = None  # a real opener discards any pending head
             func_name = fm.group(1) or fm.group(2)
-            inner = stripped[fm.end():]
-            close = inner.rfind("}")
+            closer = "}" if fm.group(3) == "{" else ")"
+            inner = stripped[fm.end() :]
+            inner_vis = vstrip[fm.end() :]
+            close = _first_close(inner_vis, closer)
             if close != -1:
-                # `name() { ...; }` on one line: the tail is the last `;`-separated
-                # segment before the closer. `;` inside the segment text is a
-                # documented heuristic limit.
-                segments = [s for s in inner[:close].split(";") if s.strip()]
+                # `name() { ...; }` on one line: the tail is the last
+                # `;`-separated segment before the closer.
+                close_info[(pos, _seg_index_of(vstrip, fm.end() + close))] = (
+                    "func",
+                    True,
+                )
+                segments = [s for s, _d in _segments(inner[:close]) if s.strip()]
                 if segments and state[pos]:
                     _s4_check(segments[-1].strip(), lineno, func_name, findings)
             else:
-                func_stack.append((func_name, pos, 0, inner.strip()))
-        elif func_stack and stripped.endswith("{"):
-            # An inner `{` group opener inside the body (`cmd || {`, a bare `{`):
-            # its `}` closes the GROUP, not the function.
-            n, o, g, s0 = func_stack[-1]
-            func_stack[-1] = (n, o, g + 1, s0)
-        elif BRACE_CLOSE_RE.match(stripped) and func_stack:
-            func_name, open_pos, groups, open_body = func_stack[-1]
-            if groups > 0:
-                func_stack[-1] = (func_name, open_pos, groups - 1, open_body)
+                frames.append(("func", closer, True, func_name, pos,
+                               inner.strip()))
+                _push_inner_events(inner_vis)
+            def_open = True
+        elif pending_name is not None and vstrip[:1] in ("{", "("):
+            # Deferred opener: `name()` / `function name` on its own line, then
+            # `{`/`(` leading this one. The opener char chooses the closer.
+            func_name = pending_name
+            pending_name = None
+            closer = "}" if vstrip[0] == "{" else ")"
+            inner = stripped[1:]
+            inner_vis = vstrip[1:]
+            close = _first_close(inner_vis, closer)
+            if close != -1:
+                close_info[(pos, _seg_index_of(vstrip, 1 + close))] = (
+                    "func",
+                    True,
+                )
+                segments = [s for s, _d in _segments(inner[:close]) if s.strip()]
+                if segments and state[pos]:
+                    _s4_check(segments[-1].strip(), lineno, func_name, findings)
             else:
-                func_stack.pop()
-                # The tail is the last logical line before this `}` -- judged against
-                # the state at ITS line, so a `set +e` region disarms it honestly.
-                if last_nonempty is not None and state[last_nonempty]:
-                    t_lineno, t_text = logical[last_nonempty]
-                    tail = t_text.strip()
-                    if last_nonempty == open_pos:
-                        # Two-line `f() { tail` form: the tail shares the opener
-                        # line; check the part AFTER the `{`.
-                        tail = open_body
-                    _s4_check(tail, t_lineno, func_name, findings)
+                frames.append(("func", closer, True, func_name, pos,
+                               inner.strip()))
+                _push_inner_events(inner_vis)
+            def_open = True
+        if not def_open:
+            pending_name = None
+            if "(" in vstrip or vstrip.startswith("function"):
+                head = FUNC_HEAD_RE.match(vstrip)
+                if head:
+                    pending_name = head.group(1) or head.group(2)
+            if frames or _FRAME_TRIG.search(vstrip):
+                # `_segments` on the masked text and `_segments_pair` on the
+                # raw text drop the same (empty-after-masking) segments, so si
+                # aligns; pairs are built lazily only when a func pops.
+                pairs: list[tuple[str, str]] | None = None
+                for si, (mseg, _sd) in enumerate(_segments(vstrip)):
+                    for ev, ptok in _seg_events(mseg):
+                        if ev in ("{", "("):
+                            frames.append(("group", "}" if ev == "{" else ")",
+                                           ptok not in _SUPPRESS_AFTER,
+                                           "", -1, ""))
+                        elif ev == "$(":
+                            frames.append(("subst", ")", True, "", -1, ""))
+                        elif ev in _WORD_OPENERS:
+                            frames.append(("word", _WORD_OPENERS[ev],
+                                           ptok != "!", "", -1, ""))
+                        else:
+                            ct = ")" if ev == ")x" else ev
+                            if frames and frames[-1][1] == ct:
+                                fr = frames.pop()
+                                if fr[0] == "func":
+                                    close_info[(pos, si)] = ("func", True)
+                                    if pairs is None:
+                                        pairs = _segments_pair(
+                                            stripped,
+                                            qs_in_s[pos],
+                                            qs_in_d[pos],
+                                        )
+                                    _pop_func_tail(fr, si, pairs, pos, lineno)
+                                else:
+                                    close_info[(pos, si)] = (fr[0], fr[2])
+
+        if SET_RE.match(vstrip):
+            if not quote_at[pos]:
+                last_nonempty = pos
+            continue
 
         # --- S1/S2: the capture itself must run armed --------------------------
-        if state[pos] and not CONTROL_PREFIX_RE.match(text):
+        # `!`-negated captures never trip errexit (the negation consumes the
+        # status). Reads inside a SINGLE-quoted span are data for another
+        # interpreter (`sq`); inside a double-quoted span `$( )` still runs
+        # under THIS shell's errexit, so those are evaluated.
+        if (
+            state[pos]
+            and not CONTROL_PREFIX_RE.match(vstrip)
+            and not vstrip.startswith("!")
+        ):
             m = ASSIGN_SUBST_RE.search(stripped)
-            if m:
+            if (
+                m
+                and not sqline[lead + m.start("name")]
+                and not sqline[lead + m.start("body")]
+            ):
                 body = m.group("body")
                 stages = substituted_commands(body)
                 if any(first_word(s) in NONZERO_IS_AN_ANSWER for s in stages):
                     # S2 first: a `|| echo`-style guard on a command that already prints
                     # on failure is a WRONG VALUE, and reporting it as a mere abort
                     # risk would misname the defect.
-                    adds_value = ADDS_A_VALUE_RE.search(stripped)
+                    adds_value = ADDS_A_VALUE_RE.search(vstrip)
                     if adds_value and PRINTS_ON_FAILURE_RE.search(body):
                         findings.append((lineno, "S2", stripped))
                         s1s2_positions.add(pos)
                     # `local`/`export`/... return their OWN status, so the substitution
-                    # cannot abort. `... || <anything>` decides; `$( ... || ... )`
-                    # decides inside.
+                    # cannot abort. `... || <anything>` decides; `x=$(cmd) && next`
+                    # puts the assignment in exempt non-final position;
+                    # `$( ... || ... )` decides inside. The outer tail is judged on
+                    # the RAW text gated by the sq mask -- `vstrip` can lose a real
+                    # `||` to a quote-spanning `$(…)` relex limit, while `sq` only
+                    # exempts single-quote interiors.
                     elif not m.group("decl") and not (
-                        OUTER_DECIDES_RE.search(stripped[m.end("body"):])
+                        _has_unmasked_op(
+                            stripped[m.end("body") :],
+                            sqline[lead + m.end("body") :],
+                        )
                         or re.search(r"\|\||&&", _unquoted(body))
                     ):
                         findings.append((lineno, "S1", stripped))
@@ -639,14 +1356,25 @@ def scan(path: str) -> list[tuple[int, str, str]]:
 
         # --- S3: a status read whose command already ran armed -----------------
         # EVERY read on the line is evaluated -- `echo rc=$?; rc2=$?` skips the
-        # first (arg-position) and still judges the second.
+        # first (arg-position) and still judges the second. Reads inside a
+        # single-quoted span (`sq`) are data for another interpreter.
         for anchor in READ_RE.finditer(stripped):
+            if (
+                sqline[lead + anchor.start()]
+                or sub_masks[pos][lead + anchor.start()]
+            ):
+                # single-quoted interior, or inside a `$( … )` substitution --
+                # either way the read does not run in this statement's flow
+                continue
             before = stripped[: anchor.start()].rstrip()
+            vbefore = vline[lead : lead + anchor.start()].rstrip()
             # The read's OWN statement context: the text between the last `;` and
             # the read itself. Only `;` splits statements here -- `|`, `||`, `&&`
             # and `&` belong to the command being resolved (a pipeline, an
-            # operand, a `2>&1` redirect), not to statement boundaries.
-            region = before.split(";")[-1].strip()
+            # operand, a `2>&1` redirect), not to statement boundaries. The
+            # `;` that matters is the last UNQUOTED one (found on `vbefore`,
+            # sliced back out of `before` so the check sees the real text).
+            region = before[vbefore.rfind(";") + 1 :].strip()
 
             if "||" in region or "&&" in region:
                 # The canonical `cmd || rc=$?` protection idiom and the documented
@@ -659,11 +1387,10 @@ def scan(path: str) -> list[tuple[int, str, str]]:
                 # (`f() { rc=$?`, `{ rc=$?`) -- caller-status idiom. `${var}` and
                 # `{a,b}` mid-line are not brace heads.
                 continue
-            q = _unquoted(before)
-            if (
-                q.count("'") % 2 == 1 or q.count('"') % 2 == 1
-                or q.count("(") > q.count(")")
-            ):
+            r_in_s, r_in_d, r_paren = _tail_state(
+                before, qs_in_s[pos], qs_in_d[pos]
+            )
+            if r_in_s or r_in_d or r_paren > 0:
                 # The read sits inside an unclosed QUOTED STRING or `$( )`/`( )` group
                 # opened on this same line: `trap 'rc=$?; ...'`, `bash -c '...'`,
                 # `echo "rc=$?"`, `x=$(cmd; rc=$?; echo $rc)`. It is evaluated by a
@@ -692,13 +1419,13 @@ def scan(path: str) -> list[tuple[int, str, str]]:
             # out=$(cmd); rc=$?` is judged disarmed -- while `cmd; set +e;
             # rc=$?` still fires, because the clear ran AFTER the armed
             # command. A `set` segment inside `$(`/`(` scopes to the group.
-            segs = _segments(before)
+            segs = _segments(before, in_s=qs_in_s[pos], in_d=qs_in_d[pos])
             seg_state: list[bool] = [state[pos]] * len(segs)
             run_state = state[pos]
             clear_idx = -1  # last segment index holding a `set +e` clear
             last_idx = -1
             for idx, (seg, sdep) in enumerate(segs):
-                m_seg_set = SET_RE.match(seg)
+                m_seg_set = _SET_SEG_RE.match(seg)
                 if m_seg_set:
                     ev = set_verdicts(m_seg_set.group(1)).get("errexit")
                     if sdep == 0 and depth_at[pos] == 0:
@@ -711,14 +1438,14 @@ def scan(path: str) -> list[tuple[int, str, str]]:
                 seg_state[idx] = run_state
                 last_idx = idx
 
-            cmd, cmd_pos, cmd_state = None, None, run_state
+            cmd, cmd_pos, cmd_state, cand_si = None, None, run_state, 0
             if last_idx >= 0:
                 # Drop trailing declaration prefixes and `set` statements --
                 # they modify the READ (`cmd; local rc=$?` resolves `cmd`),
                 # they are never the antecedent.
                 while last_idx >= 0 and (
                     DECL_PREFIX_RE.match(segs[last_idx][0])
-                    or SET_RE.match(segs[last_idx][0])
+                    or _SET_SEG_RE.match(segs[last_idx][0])
                 ):
                     last_idx -= 1
             if last_idx >= 0:
@@ -729,22 +1456,68 @@ def scan(path: str) -> list[tuple[int, str, str]]:
                     last_idx -= 1
                     cand = segs[last_idx][0] + ";" + cand
                 cmd, cmd_pos, cmd_state = cand, pos, seg_state[last_idx]
+                cand_si = last_idx
             cleared_after = clear_idx > last_idx
             if cmd is None:
                 for back in range(pos - 1, -1, -1):
+                    if quote_at[back]:
+                        # A line beginning inside a multi-line quote is data
+                        # for another interpreter -- it cannot be the read's
+                        # antecedent (the antecedent is the command whose line
+                        # OPENED the quote).
+                        continue
                     cand = logical[back][1].strip()
-                    if not cand or SET_RE.match(cand):
+                    if not cand:
+                        continue
+                    c_last = _segments(cand)
+                    # A `set`-led line may still carry a construct closer
+                    # (`set +u; }`) -- skip it as an antecedent only when its
+                    # LAST segment is the set itself.
+                    if SET_RE.match(cand) and (
+                        not c_last or _SET_SEG_RE.match(c_last[-1][0])
+                    ):
                         continue
                     cmd, cmd_pos, cmd_state = cand, back, state[back]
+                    cand_si = len(c_last) - 1
                     break
+
+            # A resolved antecedent whose LAST `;`-segment is a compound
+            # closer is the just-closed construct -- judged armed at the
+            # closer's position, symmetric with the already-flagged one-line
+            # `if c; then cmd; fi`. `close_info` records which frame that
+            # closer popped: a function DEFINITION (`cmd; }` counts) is dropped
+            # (a definition's status is boring, not dead) and a SUPPRESSED
+            # construct (`! { … }`, `if { …; }; then` condition) is live, not
+            # dead. When the closer's segment carries further statements
+            # (`}; rest`, `fi; x`), the read is about the LAST segment.
+            compound = False
+            if cmd is not None:
+                c_segs = _segments(cmd)
+                last_ck = _closer_head(c_segs[-1][0])
+                if last_ck is not None:
+                    info = close_info.get((cmd_pos, cand_si))
+                    if info is not None and info[0] == "func":
+                        cmd = None  # function-definition close
+                    elif info is None or info[1]:
+                        compound = True  # armed (or untracked) construct
+                elif _closer_head(c_segs[0][0]) is not None:
+                    if len(c_segs) > 1:
+                        cmd = c_segs[-1][0]
+                    else:
+                        info = close_info.get((cmd_pos, cand_si))
+                        if info is not None and info[0] == "func":
+                            cmd = None
+                        elif info is None or info[1]:
+                            compound = True
 
             if (
                 cmd is not None
                 and cmd_state               # the COMMAND ran armed -- judged at its line
                 and depth_at[pos] == 0      # the read is not inside an open `$( )`/`( )`
                 and cmd_pos not in s1s2_positions  # same defect, one report (S1/S2 won)
-                and not is_protected(cmd)
-                and not _s3_exempt_command(cmd, depth_at[cmd_pos])
+                and (compound
+                     or (not is_protected(cmd)
+                         and not _s3_exempt_command(cmd, depth_at[cmd_pos])))
                 # A PIPESTATUS read is live unless pipefail is armed: without
                 # it a pipeline's status is its LAST stage's, so the earlier
                 # stages' failures never trip errexit and the read sees them.
@@ -771,7 +1544,9 @@ def scan(path: str) -> list[tuple[int, str, str]]:
                 )
                 break  # one S3 finding per line is enough
 
-        last_nonempty = pos
+        if not quote_at[pos]:
+            # A quote-interior line is data -- it can be no one's S4 tail.
+            last_nonempty = pos
 
     return findings
 

@@ -3578,7 +3578,7 @@ export async function dispatchSoleurGo(
       .eq("id", userId)
       .single<{ role: unknown }>();
     const role: Role = roleRow?.role === "dev" ? "dev" : "prd";
-    debugEligible = await isDebugModeAvailable({ userId, role, orgId: null });
+    debugEligible = await isDebugModeAvailable({ userId, role, orgId: null, email: null, subscriptionStatus: null });
   })().catch((err) => {
     reportSilentFallback(err, {
       feature: "cc-dispatcher",

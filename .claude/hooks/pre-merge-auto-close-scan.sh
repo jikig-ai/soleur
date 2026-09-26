@@ -216,7 +216,7 @@ PR_REF=$(printf '%s' "$SCAN" | grep -oE 'gh[[:space:]]+pr[[:space:]]+merge[[:spa
 
 # Title AND body: GitHub pre-fills the squash commit SUBJECT from the PR title,
 # so a title-borne `Closes #N` closes on merge. Both sibling surfaces (/ship
-# Phase 6 and pr-auto-close-scanner.yml) already scan it. No --repo: gh resolves
+# Phase 6 and pr-quality-guards.yml's auto-close-scan job) already scan it. No --repo: gh resolves
 # the repository from the working directory, which also handles SSH-alias
 # remotes, insteadOf rewrites and GH_REPO. Hand-building the slug is what made
 # this arm dead code — the sed kept the trailing `.git` on SSH remotes, gh

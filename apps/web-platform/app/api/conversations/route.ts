@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import { lookupConversationForPath } from "@/server/lookup-conversation-for-path";
 import { validateContextPath } from "@/server/validate-context-path";
@@ -26,7 +26,7 @@ import { withUserRateLimit } from "@/server/with-user-rate-limit";
  *   429 when the authenticated user exceeds 60 req/min (emitted by wrapper)
  *   500 on lookup error (mirrored to Sentry via `reportSilentFallback`)
  */
-async function getHandler(req: Request, user: User) {
+async function getHandler(req: Request, user: VerifiedUser) {
   const url = new URL(req.url);
   const contextPath = validateContextPath(url.searchParams.get("contextPath"));
   if (!contextPath) {

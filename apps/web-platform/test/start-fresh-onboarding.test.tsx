@@ -32,6 +32,12 @@ let userBuilder: ReturnType<typeof buildSupabaseQueryBuilder>;
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the client auth read moved to getSession() (local cookie
+      // read) in both useConversations and useOnboarding.
+      getSession: vi.fn().mockResolvedValue({
+        data: { session: { user: { id: "user-1" } } },
+        error: null,
+      }),
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },
         error: null,
@@ -369,7 +375,11 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     expect(screen.queryByText(/your organization is ready/i)).not.toBeInTheDocument();
   });
 
-  it("falls through to Command Center on API error", async () => {
+  it("falls through to the inbox shell on foundation-status API error", async () => {
+    // Phase-4 render contract (#5654): a non-503 foundation-status failure
+    // leaves foundationData undefined forever, so neither the first-run nor
+    // the command-center-empty branch can fire — the page lands on the inbox
+    // shell instead of stranding on a skeleton or flashing an empty state.
     fetchMock.mockRejectedValueOnce(new Error("Network error"));
 
     const { default: DashboardPage } = await import(
@@ -377,29 +387,52 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     );
     render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
-    // Should fall through to empty state (no foundations visible since KB state unknown)
     await waitFor(() => {
       expect(
-        screen.getByText(/no conversations yet/i),
+        screen.getByRole("heading", { name: /^dashboard$/i }),
       ).toBeInTheDocument();
     });
+    // Filter bar proves the inbox shell (not a gate screen); no foundations
+    // are shown because the KB state is unknown.
+    expect(screen.getByRole("button", { name: "Active" })).toBeInTheDocument();
+    expect(
+      screen.queryByText(/complete these to brief/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/setting up your workspace/i),
+    ).not.toBeInTheDocument();
   });
 });
 
 describe("Start Fresh Onboarding - Conditional Rendering", () => {
-  it("shows loading skeleton while KB tree is fetching", async () => {
-    // Never resolve the fetch
+  it("renders the inbox shell + skeletons immediately while foundation status is pending", async () => {
+    // #5654: first paint is no longer gated on the foundation-status fetch —
+    // a never-resolving request now yields the inbox shell (header + filter
+    // bar + in-flight skeleton rows), not the retired whole-page skeleton.
     fetchMock.mockReturnValueOnce(new Promise(() => {}));
+    // Hold the conversation list in-flight too so the skeleton rows persist
+    // (the rpc mock awaits this builder and never settles).
+    conversationBuilder = new Promise(
+      () => {},
+    ) as unknown as ReturnType<typeof buildSupabaseQueryBuilder>;
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
     render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
-    // Should show skeleton, not the Command Center or first-run view
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /^dashboard$/i }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Active" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archived" })).toBeInTheDocument();
+    // Skeleton rows render while the list is in flight.
+    expect(document.querySelector(".animate-pulse")).toBeInTheDocument();
+    // Neither post-resolve branch can flash while foundation is pending.
     expect(screen.queryByText(/your organization is ready/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/tell your organization/i)).not.toBeInTheDocument();
-    expect(document.querySelector(".animate-pulse")).toBeInTheDocument();
   });
 
   it("first-run view hides leader strip and suggested prompts", async () => {

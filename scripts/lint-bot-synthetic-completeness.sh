@@ -9,7 +9,7 @@ set -euo pipefail
 # auto-merge is permanently blocked.
 #
 # Scope is content-based (since #3548): the lint walks every workflow in
-# .github/workflows/, exempts skill-security-scan-pr-trailer.yml (real CI,
+# .github/workflows/, exempts pr-quality-guards.yml (real CI,
 # not a bot workflow), and applies a two-part predicate:
 #
 #   (1) `gh pr create` appears inside a shell `run:` block (not a prompt:
@@ -156,11 +156,11 @@ has_inline_check_runs_post() {
 }
 
 # Exact-basename match for the CI-not-bot exclusion. Substring matching
-# (`*skill-security-scan-pr-trailer*`) would silently exclude attacker- or
-# typo-introduced files like `evil-skill-security-scan-pr-trailer.yml` or
-# `skill-security-scan-pr-trailer-v2.yml`.
+# (`*pr-quality-guards*`) would silently exclude attacker- or
+# typo-introduced files like `evil-pr-quality-guards.yml` or
+# `pr-quality-guards-v2.yml`.
 is_excluded_workflow() {
-  [[ "$(basename "$1")" == "skill-security-scan-pr-trailer.yml" ]]
+  [[ "$(basename "$1")" == "pr-quality-guards.yml" ]]
 }
 
 # --- Scan workflows ---
@@ -172,7 +172,7 @@ skipped=0
 for file in "$WORKFLOW_DIR"/*.yml; do
   [[ -f "$file" ]] || continue
 
-  # Exclude skill-security-scan-pr-trailer.yml: real CI workflow on
+  # Exclude pr-quality-guards.yml: real CI workflow on
   # pull_request_target, not a bot PR-creator. Matches the exclusion in
   # scripts/audit-bot-codeql-coverage.sh.
   is_excluded_workflow "$file" && continue

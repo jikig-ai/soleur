@@ -13,6 +13,37 @@ import { PUBLIC_PATHS, TC_EXEMPT_PATHS } from "@/lib/routes";
 // + `pino`, breaks edge bundle). Use the lib/ edge-safe variant instead;
 // see `lib/auth/validate-origin.ts:3-7` for the documented constraint.
 import { reportEdgeSilentFallback } from "@/lib/observability-edge";
+import { LRUCache } from "@/lib/feature-flags/lru-cache";
+
+// Positive-only verdict caches (Phase 1, plan §Guard Contract Guard 2).
+// TTL-bounded allow-verdicts ONLY — deny/redirect outcomes (revoked === true,
+// tc mismatch, unpaid, any error) are never stored, so every fail-closed
+// branch keeps per-request freshness. Expiry is absolute (write-anchored —
+// LRUCache does not refresh TTL on read), so an entry lives ≤ TTL in isolate
+// RAM regardless of hit rate and is gone on restart — no persistence
+// substrate (plan §Encryption Posture plaintext-exception). Single-process
+// Hetzner deployment = one middleware isolate, so the caches are coherent.
+const MW_VERDICT_TTL_MS = 30_000;
+// Capacity cap: 2000 entries bounds RAM per cache (~O(100) bytes/entry ⇒
+// <1 MB); past that, oldest allow-verdicts evict early → extra RPCs, never a
+// correctness issue (a miss re-queries).
+const MW_VERDICT_CACHE_MAX = 2_000;
+const revocationOkCache = new LRUCache<string, true>(MW_VERDICT_CACHE_MAX, MW_VERDICT_TTL_MS);
+const tcRowCache = new LRUCache<
+  string,
+  { tc_accepted_version: string | null; subscription_status: string | null }
+>(MW_VERDICT_CACHE_MAX, MW_VERDICT_TTL_MS);
+
+// Settled outcome of the revocation leg, which launches concurrently with
+// getUser(). The leg's promise chain ends in an armed .catch so it resolves
+// to one of these values and NEVER rejects — a redirecting path may leave it
+// un-awaited without producing an unhandled rejection.
+type RevocationOutcome =
+  | { kind: "hit" } // positive-only verdict cache preempted the RPC
+  | { kind: "ok"; cacheKey: string | null } // RPC: revoked === false
+  | { kind: "revoked"; reason: string } // fail-CLOSED bounce
+  | { kind: "grace"; error: unknown } // transient RPC error / throw
+  | { kind: "skipped" }; // no token / decode hiccup / missing iat
 
 // Inline JWT-payload decoder (edge-safe). The canonical decoder lives at
 // `lib/supabase/tenant.ts:decodeJwtPayloadUnsafe` but tenant.ts transitively
@@ -31,7 +62,6 @@ function decodeJwtPayloadEdgeSafe(jwt: string): Record<string, unknown> {
     parts[1].replace(/-/g, "+").replace(/_/g, "/") +
     "=".repeat((4 - (parts[1].length % 4)) % 4);
   try {
-    // atob is available in Edge runtime; Buffer is not.
     const json = atob(padded);
     return JSON.parse(json);
   } catch {
@@ -109,9 +139,16 @@ const NON_DOCUMENT_DESTS = new Set([
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // Strip any client-forged verified-identity header BEFORE any response —
+  // including the /health early return below — so no exit can forward an
+  // attacker-supplied x-soleur-auth-user-id downstream (delete-once-at-
+  // construction is the only ordering that covers all exits).
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.delete("x-soleur-auth-user-id");
+
   // Health check: no HTML rendered, CSP unnecessary
   if (pathname === "/health") {
-    return NextResponse.next();
+    return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
   // Generate per-request nonce for CSP
@@ -146,7 +183,9 @@ export async function middleware(request: NextRequest) {
   // Set nonce and CSP on request headers for Next.js SSR nonce extraction.
   // SECURITY: x-nonce is a request-only header for server-side rendering.
   // Never render it into HTML output or expose it in API responses.
-  const requestHeaders = new Headers(request.headers);
+  // x-soleur-auth-user-id was already deleted above the /health return —
+  // every NextResponse.next() snapshots requestHeaders downstream, so the
+  // single construction-time delete covers all exits (plan §Sharp Edges).
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", cspValue);
 
@@ -210,63 +249,161 @@ export async function middleware(request: NextRequest) {
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // getSession() is a LOCAL cookie read — hoisted BEFORE getUser() so the
+  // revocation leg launches concurrently with the auth-server round trip.
+  // It is retained ONLY to read the raw access-token bytes for the local
+  // `iat`/`sub` decode; getUser() does not expose the token string. This is
+  // NOT the redundant getSession()-after-getUser() re-validation the
+  // @supabase/ssr docs warn against (framework-docs §2.4) — it is a
+  // token-bytes read, not a second auth round trip. (AC4: documented
+  // single getSession() call.)
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData?.session?.access_token;
 
-  // #4307 revocation gate. Runs immediately after getUser() so a removed-
-  // or role-changed member with a still-valid JWT (natural ~1h expiry) is
-  // bounced to /login before any downstream RLS-bound query trusts the
-  // workspace_id claim.
+  // Local decode of sub + iat — both computable before getUser() resolves,
+  // so the verdict-cache check below preempts the RPC without serializing
+  // behind the auth RTT (keying on user.id would defeat the parallelism).
+  let jwtSub: string | null = null;
+  let iatSeconds: number | null = null;
+  let decodeThrew = false;
+  let decodeErr: unknown = null;
+  if (accessToken) {
+    try {
+      const payload = decodeJwtPayloadEdgeSafe(accessToken);
+      if (typeof payload.iat === "number") {
+        iatSeconds = payload.iat;
+      }
+      if (typeof payload.sub === "string") {
+        jwtSub = payload.sub;
+      }
+    } catch (err) {
+      decodeThrew = true;
+      decodeErr = err;
+    }
+  }
+
+  // #4307 revocation gate — the leg launches HERE, concurrently with
+  // getUser(), so a removed- or role-changed member with a still-valid JWT
+  // (natural ~1h expiry) is bounced to /login before any downstream
+  // RLS-bound query trusts the workspace_id claim.
   //
   // Topology:
-  //   - Per-request RPC call (no cache; Vercel edge isolates are non-
-  //     coherent so a per-isolate cache would still leak across regions).
+  //   - Positive-only verdict cache (revocationOkCache, TTL
+  //     MW_VERDICT_TTL_MS): a hit preempts the RPC entirely; only
+  //     `revoked === false` is ever stored (Guard 2), so every deny stays
+  //     per-request fresh. Bounded staleness ≤ TTL on the allow direction
+  //     — the load-bearing data boundary stays RLS `is_workspace_member`
+  //     (ADR-253). Single-process deployment = one coherent isolate.
   //   - GENUINE revocation is fail-CLOSED: a row with revoked=true clears
   //     cookies and redirects to /login. That boundary is non-negotiable
   //     (a silent fall-open would re-leak a removed member's stale JWT).
   //   - TRANSIENT failures are NOT revocations and must NOT log the user
   //     out (2026-06-15 session-disconnect fix). A transient RPC error or a
   //     JWT-decode hiccup grace-falls-through (request allowed, re-checked
-  //     next request) instead of 503-for-all / forced /login. getUser()
-  //     above already authenticated the session against the auth server, so
-  //     "RPC errored" and "can't decode iat" tell us nothing about removal.
+  //     next request) instead of 503-for-all / forced /login. The parallel
+  //     getUser() leg already authenticates the session against the auth
+  //     server, so "RPC errored" and "can't decode iat" tell us nothing
+  //     about removal.
   //   - User-global predicate (plan F5): the RPC is keyed on auth.uid()
   //     alone, NOT current_organization_id — multi-workspace user removed
   //     from one workspace is bounced on ANY context.
+  const revokeStart = performance.now();
+  let revokeOutcomePromise: Promise<RevocationOutcome>;
+  if (!decodeThrew && iatSeconds !== null) {
+    const revokeCacheKey =
+      jwtSub !== null ? `${jwtSub}:${iatSeconds}` : null;
+    if (
+      revokeCacheKey !== null &&
+      revocationOkCache.get(revokeCacheKey) === true
+    ) {
+      revokeOutcomePromise = Promise.resolve({ kind: "hit" });
+    } else {
+      const iat = new Date(iatSeconds * 1000);
+      // Armed .catch: the leg settles to a value and never rejects — a
+      // redirecting path below can leave it un-awaited without producing
+      // an unhandled rejection (plan §Sharp Edges).
+      // Promise.resolve() unwraps the PostgREST thenable into a real Promise —
+      // its .then() returns PromiseLike (no .catch), so the unwrap is required
+      // for the armed-catch shape below, not just cosmetic.
+      revokeOutcomePromise = Promise.resolve()
+        // rpc() evaluated inside the chain so a synchronous throw (URL/config
+        // construction) lands in the armed .catch instead of escaping the
+        // middleware with a 500.
+        .then(() =>
+          supabase.rpc("check_my_revocation", { p_jwt_iat: iat.toISOString() }),
+        )
+        .then((result): RevocationOutcome => {
+          const { data: revokeData, error: revokeError } = result;
+          if (revokeError) return { kind: "grace", error: revokeError };
+          const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
+          if (!row) {
+            // An empty payload from a one-row-function is anomalous — treat
+            // as grace (re-query next request, no cache write), not a
+            // cacheable allow.
+            return { kind: "grace", error: new Error("empty_revocation_row") };
+          }
+          if (row.revoked === true) {
+            const reason =
+              row.reason === "ownership-transferred"
+                ? "ownership-transferred"
+                : row.reason === "role-changed"
+                  ? "role-changed"
+                  : "removed";
+            return { kind: "revoked", reason };
+          }
+          return { kind: "ok", cacheKey: revokeCacheKey };
+        })
+        .catch((error): RevocationOutcome => ({ kind: "grace", error }));
+    }
+  } else {
+    revokeOutcomePromise = Promise.resolve({ kind: "skipped" });
+  }
+
+  const mwAuthStart = performance.now();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const mwAuthDurMs = performance.now() - mwAuthStart;
+
+  // Server-Timing stage descriptors — emitted on authenticated document
+  // responses only (success path; redirects stay silent).
+  let mwRevokeDurMs = 0;
+  let revokeDesc: "hit" | "miss" | "grace" = "grace";
+  let mwTcDurMs = 0;
+  let tcDesc: "hit" | "miss" | "grace" | "exempt" = "exempt";
+
   if (user) {
-    // getUser() (above) is the authentication — it validates the JWT with
-    // the Supabase auth server. getSession() is retained ONLY to read the
-    // raw access-token bytes for the local `iat` decode below; getUser()
-    // does not expose the token string. This is NOT the redundant
-    // getSession()-after-getUser() re-validation the @supabase/ssr docs warn
-    // against (framework-docs §2.4) — it is a token-bytes read, not a second
-    // auth round trip. (AC4: documented single getSession() call.)
-    const { data: sessionData } = await supabase.auth.getSession();
-    const accessToken = sessionData?.session?.access_token;
+    // Verified-identity forwarding (Phase 2): mint AFTER auth resolves, then
+    // RE-ISSUE the carrying next() response. Verified against installed
+    // next@16.3.6 (`handleMiddlewareField` in
+    // node_modules/next/dist/server/web/spec-extension/response.js):
+    // NextResponse.next({ request: { headers } }) snapshots the headers into
+    // x-middleware-request-* AT CONSTRUCTION, so a requestHeaders.set() made
+    // after the response object exists never propagates. Cookies the
+    // supabase setAll callback already wrote onto `response` (token refresh
+    // during getSession/getUser) are carried across verbatim.
+    requestHeaders.set("x-soleur-auth-user-id", user.id);
+    const carryingResponse = NextResponse.next({
+      request: { headers: requestHeaders },
+    });
+    response.cookies.getAll().forEach((cookie) =>
+      carryingResponse.cookies.set(cookie.name, cookie.value, cookie),
+    );
+    response = carryingResponse;
+
     if (accessToken) {
-      let iatSeconds: number | null = null;
-      let decodeThrew = false;
-      try {
-        const payload = decodeJwtPayloadEdgeSafe(accessToken);
-        if (typeof payload.iat === "number") {
-          iatSeconds = payload.iat;
-        }
-      } catch (err) {
-        decodeThrew = true;
+      if (decodeThrew) {
         // Malformed JWT. getUser() already validated the session, so this is
         // a decoder/transport hiccup, NOT a removal — grant GRACE (allow the
         // request through; re-check next request) rather than forcing a
         // logout. Still mirror to Sentry so a real decoder regression is
         // visible without SSH.
-        await reportEdgeSilentFallback(err, {
+        await reportEdgeSilentFallback(decodeErr, {
           feature: "middleware",
           op: "revocation_gate.malformed_jwt",
           extra: { userId: user.id },
         });
-      }
-
-      if (!decodeThrew && iatSeconds === null) {
+      } else if (iatSeconds === null) {
         // Decode succeeded but carried no numeric `iat`. Same grace rationale
         // as malformed_jwt: getUser() validated the session, a missing iat is
         // a token-shape hiccup, not a revocation. Distinct op slug preserved.
@@ -276,49 +413,52 @@ export async function middleware(request: NextRequest) {
           extra: { userId: user.id },
         });
       }
+    }
 
-      // Only run the revocation predicate when we have a usable iat. A decode
-      // hiccup or missing iat grace-falls-through to the normal flow below.
-      if (iatSeconds !== null) {
-        const iat = new Date(iatSeconds * 1000);
-        const { data: revokeData, error: revokeError } = await supabase.rpc(
-          "check_my_revocation",
-          { p_jwt_iat: iat.toISOString() },
-        );
-        if (revokeError) {
-          // Transient revocation-RPC failure (connectivity blip, pool
-          // exhaustion, read-replica lag). Previously fail-CLOSED to 503 for
-          // EVERY authenticated request — a single DB blip became a site-wide
-          // outage / mass forced-logout. Now: GRACE — allow the
-          // otherwise-valid session through and re-check on the next request.
-          // The genuine revoked=true branch below stays fail-CLOSED. Distinct
-          // op slug so operators see transient DB degradation without SSH.
-          //
-          // DELIBERATE divergence from the T&C gate below (~L322), which
-          // fail-OPENs a transient `tcError` by REDIRECTING to /accept-terms.
-          // The two transient-Supabase-error handlers intentionally differ:
-          // revocation is a getUser()-authenticated user whose REMOVAL status
-          // is merely unknown (and RLS `is_workspace_member` still denies a
-          // removed member at the data layer), so we serve the request; T&C is
-          // a consent-demonstrability legal gate where serving /dashboard would
-          // be an Art. 7(1) breach, so we bounce. Not drift — by threat model.
-          await reportEdgeSilentFallback(revokeError, {
-            feature: "middleware",
-            op: "revocation_gate.transient_grace",
-            extra: { userId: user.id },
-          });
-        } else {
-          const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
-          if (row && row.revoked === true) {
-            const reason =
-              row.reason === "ownership-transferred"
-                ? "ownership-transferred"
-                : row.reason === "role-changed" ? "role-changed" : "removed";
-            const params = new URLSearchParams({ revoked: reason });
-            return clearSessionAndRedirect(request, cspValue, "/login", params);
-          }
-        }
-      }
+    // Join the concurrent revocation leg (usually already settled — it has
+    // been in flight since before getUser() was awaited).
+    const revokeOutcome = await revokeOutcomePromise;
+    mwRevokeDurMs = performance.now() - revokeStart;
+    revokeDesc =
+      revokeOutcome.kind === "hit"
+        ? "hit"
+        : revokeOutcome.kind === "ok" || revokeOutcome.kind === "revoked"
+          ? "miss"
+          : "grace";
+
+    if (revokeOutcome.kind === "grace") {
+      // Transient revocation-RPC failure (connectivity blip, pool
+      // exhaustion, read-replica lag). Previously fail-CLOSED to 503 for
+      // EVERY authenticated request — a single DB blip became a site-wide
+      // outage / mass forced-logout. Now: GRACE — allow the
+      // otherwise-valid session through and re-check on the next request.
+      // The genuine revoked=true branch below stays fail-CLOSED. Distinct
+      // op slug so operators see transient DB degradation without SSH.
+      //
+      // DELIBERATE divergence from the T&C gate below, which
+      // fail-OPENs a transient `tcError` by REDIRECTING to /accept-terms.
+      // The two transient-Supabase-error handlers intentionally differ:
+      // revocation is a getUser()-authenticated user whose REMOVAL status
+      // is merely unknown (and RLS `is_workspace_member` still denies a
+      // removed member at the data layer), so we serve the request; T&C is
+      // a consent-demonstrability legal gate where serving /dashboard would
+      // be an Art. 7(1) breach, so we bounce. Not drift — by threat model.
+      await reportEdgeSilentFallback(revokeOutcome.error, {
+        feature: "middleware",
+        op: "revocation_gate.transient_grace",
+        extra: { userId: user.id },
+      });
+    } else if (revokeOutcome.kind === "revoked") {
+      const params = new URLSearchParams({ revoked: revokeOutcome.reason });
+      return clearSessionAndRedirect(request, cspValue, "/login", params);
+    } else if (
+      revokeOutcome.kind === "ok" &&
+      revokeOutcome.cacheKey !== null
+    ) {
+      // Guard 2 (positive-only store): `revoked === false` is the ONLY
+      // verdict that lands here — revoked / RPC-error / decode-hiccup
+      // outcomes never reach a set().
+      revocationOkCache.set(revokeOutcome.cacheKey, true);
     }
   }
 
@@ -342,16 +482,31 @@ export async function middleware(request: NextRequest) {
 
   // Skip T&C check for exempt paths (accept-terms page and API)
   if (!TC_EXEMPT_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
-    const { data: userRow, error: tcError } = await supabase
-      .from("users")
-      .select("tc_accepted_version, subscription_status")
-      .eq("id", user.id)
-      .single();
+    // Positive-only verdict cache (Guard 2): stores ONLY fully-passing rows
+    // (tc_accepted_version === TC_VERSION && subscription_status !==
+    // "unpaid"), so a stale accept→dashboard bounce or a stale unpaid write
+    // block is structurally impossible. A hit is honored only while the
+    // stored version still matches TC_VERSION — a TC_VERSION bump
+    // self-invalidates every entry at READ time with no write path.
+    const tcStart = performance.now();
+    const cachedTcRow = tcRowCache.get(user.id);
+    const tcRowHit =
+      cachedTcRow !== undefined &&
+      cachedTcRow.tc_accepted_version === TC_VERSION;
+    tcDesc = tcRowHit ? "hit" : "miss";
+    const { data: userRow, error: tcError } = tcRowHit
+      ? { data: cachedTcRow, error: null }
+      : await supabase
+          .from("users")
+          .select("tc_accepted_version, subscription_status")
+          .eq("id", user.id)
+          .single();
+    mwTcDurMs = performance.now() - tcStart;
 
     if (tcError) {
-      // Fail CLOSED. The exempt-path short-circuit at line 126 already
-      // covers /accept-terms + /api/accept-terms + the github-resolve
-      // recovery callback; this branch fires only on non-exempt paths.
+      // Fail CLOSED. The TC_EXEMPT_PATHS short-circuit above already covers
+      // /accept-terms + /api/accept-terms + the github-resolve recovery
+      // callback; this branch fires only on non-exempt paths.
       // Without this redirect, a Supabase outage silently lets every
       // authenticated user reach /dashboard without consent verification
       // — Art. 7(1) demonstrability breach (plan §"User-Brand Impact").
@@ -392,6 +547,26 @@ export async function middleware(request: NextRequest) {
         cspValue,
       );
     }
+
+    // Guard 2 (positive-only store): reached only when EVERY gate above
+    // passed, and the predicate is re-stated explicitly so no error/unpaid/
+    // version-mismatch row can ever be written. An `unpaid` GET request DOES
+    // reach this line (unpaid is read-only, not bounced) — the
+    // `!== "unpaid"` clause is load-bearing, not redundant. `!tcRowHit`
+    // gates the write: re-stamping a served hit would refresh its absolute
+    // expiry and reintroduce the sliding-TTL hole (a perpetually-active
+    // user's verdict would never age).
+    if (
+      !tcRowHit &&
+      userRow != null &&
+      userRow.tc_accepted_version === TC_VERSION &&
+      userRow.subscription_status !== "unpaid"
+    ) {
+      tcRowCache.set(user.id, {
+        tc_accepted_version: userRow.tc_accepted_version,
+        subscription_status: userRow.subscription_status,
+      });
+    }
   }
 
   // GAP G (ADR-067 staleTimes amendment): defeat bfcache for authenticated
@@ -409,19 +584,45 @@ export async function middleware(request: NextRequest) {
   // < 16.4 still supports bfcache but sends no `Sec-Fetch-*`) is treated as a
   // document and gets `no-store`: FAIL-CLOSED, because a missed no-store on an
   // authenticated document is the exact leak (a shared-device Back restoring
-  // the prior user's shell). Public paths already returned above (:134), so
-  // they never reach this line and keep their bfcache eligibility.
+  // the prior user's shell). Public paths already returned above (the
+  // PUBLIC_PATHS gate), so they never reach this line and keep their
+  // bfcache eligibility.
   const fetchDest = request.headers.get("sec-fetch-dest");
   if (fetchDest === null || !NON_DOCUMENT_DESTS.has(fetchDest)) {
     response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     response.headers.set("Pragma", "no-cache");
+    // Per-stage Server-Timing (plan §Observability / Phase 0): emitted on
+    // authenticated document responses only — the no-SSH instrument that
+    // proves the serial-RTT collapse post-deploy. mw-revoke desc: hit =
+    // verdict cache preempted the RPC, miss = RPC ran, grace = leg skipped
+    // (no token / decode hiccup / no iat) or RPC errored. mw-tc desc adds
+    // "exempt" for TC_EXEMPT_PATHS.
+    response.headers.set(
+      "Server-Timing",
+      `mw-auth;dur=${mwAuthDurMs.toFixed(1)}, ` +
+        `mw-revoke;dur=${mwRevokeDurMs.toFixed(1)};desc=${revokeDesc}, ` +
+        `mw-tc;dur=${mwTcDurMs.toFixed(1)};desc=${tcDesc}`,
+    );
   }
 
   return withCspHeaders(response, cspValue);
 }
 
 export const config = {
+  // Exclusions (paths where middleware does NOT run):
+  //  - _next/static|_next/image — build assets
+  //  - favicon.ico / sw.js / icons/ — static public assets
+  //  - single-segment asset filenames ([^/]+\.ext$) — e.g. /logo.png.
+  //
+  // Nested paths ending in an extension are DELIBERATELY NOT excluded:
+  // `/api/kb/file/x.png`, `/dashboard/chat/x.png` etc. reach dynamic route
+  // handlers, and skipping middleware there would bypass the forged-header
+  // strip + revocation/T&C/billing gates (matcher-coverage test pins every
+  // app/**/route.ts handler as covered, including .ext probe pathnames).
+  // A future nested public-assets dir (e.g. /images/) must be added here
+  // or to PUBLIC_PATHS or its unauthenticated fetches will hit the auth
+  // chain.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|sw\\.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon\\.ico|sw\\.js|icons/|[^/]+\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

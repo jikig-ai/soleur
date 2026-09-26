@@ -1,0 +1,228 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "text",
+      "id": "t1tle",
+      "x": 0,
+      "y": -96,
+      "name": "title",
+      "fill": "#FFFFFF",
+      "content": "Dashboard Load Latency — render-state transition (desktop, Forge dark)",
+      "fontFamily": "Inter",
+      "fontSize": 26,
+      "fontWeight": "600"
+    },
+    {
+      "type": "text",
+      "id": "t1sub",
+      "x": 0,
+      "y": -56,
+      "name": "sub",
+      "fill": "#848484",
+      "content": "No screen redesign. Only WHICH surface renders while data loads changes: the whole-page skeleton becomes a shell + section-level skeletons, and the nav/banner data arrives in the initial HTML instead of cascading in post-hydration.",
+      "fontFamily": "Inter",
+      "fontSize": 13
+    },
+    {
+      "type": "frame",
+      "id": "stateA",
+      "x": 0,
+      "y": 0,
+      "name": "BEFORE — whole-page skeleton (current)",
+      "width": 380,
+      "height": 300,
+      "fill": "#0E0E10",
+      "cornerRadius": 10,
+      "stroke": { "thickness": 1, "fill": "#27272A" },
+      "layout": "vertical",
+      "gap": 0,
+      "padding": 0,
+      "children": [
+        {
+          "type": "frame",
+          "id": "aLbl",
+          "name": "label-band",
+          "width": "fill_container",
+          "fill": "#161618",
+          "padding": 8,
+          "alignItems": "center",
+          "children": [
+            { "type": "text", "id": "aTxt", "name": "lbl", "fill": "#F5B95F", "content": "T+0s → multi-second: nothing but skeleton", "fontFamily": "Inter", "fontSize": 11, "fontWeight": "600" }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "aBody",
+          "name": "skeleton-body",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 60,
+          "alignItems": "center",
+          "justifyContent": "center",
+          "children": [
+            { "type": "rect", "id": "aSk1", "name": "sk-logo", "width": 44, "height": 44, "fill": "#3A2E18", "cornerRadius": 8 },
+            { "type": "rect", "id": "aSk2", "name": "sk-line1", "width": 180, "height": 12, "fill": "#1F1F22", "cornerRadius": 4 },
+            { "type": "rect", "id": "aSk3", "name": "sk-line2", "width": 240, "height": 10, "fill": "#1F1F22", "cornerRadius": 4 },
+            { "type": "rect", "id": "aSk4", "name": "sk-input", "width": 280, "height": 36, "fill": "#1A1A1D", "cornerRadius": 10 }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "stateB",
+      "x": 420,
+      "y": 0,
+      "name": "AFTER TTFB — chrome + conversations visible, sections load in place",
+      "width": 380,
+      "height": 300,
+      "fill": "#0E0E10",
+      "cornerRadius": 10,
+      "stroke": { "thickness": 1, "fill": "#3B82F6" },
+      "layout": "horizontal",
+      "gap": 0,
+      "padding": 0,
+      "children": [
+        {
+          "type": "frame",
+          "id": "bRail",
+          "name": "nav-rail-rendered",
+          "width": 56,
+          "height": "fill_container",
+          "fill": "#141416",
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 10,
+          "alignItems": "center",
+          "children": [
+            { "type": "ellipse", "id": "bN0", "name": "logo", "width": 22, "height": 22, "fill": "#F5B95F" },
+            { "type": "rect", "id": "bN1", "name": "nav1", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rect", "id": "bN2", "name": "nav2", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rect", "id": "bN3", "name": "nav3", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rect", "id": "bN4", "name": "nav4-admin-in-html", "width": 30, "height": 8, "fill": "#2F3A4A", "cornerRadius": 3 }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "bMain",
+          "name": "content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 16,
+          "children": [
+            { "type": "text", "id": "bH", "name": "h1", "fill": "#F5F5F5", "content": "Dashboard", "fontFamily": "Inter", "fontSize": 17, "fontWeight": "600" },
+            {
+              "type": "frame",
+              "id": "bConv",
+              "name": "conversation-rows-skeleton-or-real",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                { "type": "rect", "id": "bR1", "name": "row1", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
+                { "type": "rect", "id": "bR2", "name": "row2", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
+                { "type": "rect", "id": "bR3", "name": "row3", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "bFound",
+              "name": "foundation-section-local-skeleton",
+              "width": "fill_container",
+              "height": 52,
+              "fill": "#131315",
+              "cornerRadius": 8,
+              "stroke": { "thickness": 1, "fill": "#27272A" },
+              "padding": 10,
+              "alignItems": "center",
+              "children": [
+                { "type": "text", "id": "bFT", "name": "cap", "fill": "#848484", "content": "Foundation checkmarks fill in async — never gates the list", "fontFamily": "Inter", "fontSize": 10 }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "stateC",
+      "x": 840,
+      "y": 0,
+      "name": "RESOLVED — identical to today",
+      "width": 380,
+      "height": 300,
+      "fill": "#0E0E10",
+      "cornerRadius": 10,
+      "stroke": { "thickness": 1, "fill": "#27272A" },
+      "layout": "horizontal",
+      "gap": 0,
+      "padding": 0,
+      "children": [
+        {
+          "type": "frame",
+          "id": "cRail",
+          "name": "nav-rail",
+          "width": 56,
+          "height": "fill_container",
+          "fill": "#141416",
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 10,
+          "alignItems": "center",
+          "children": [
+            { "type": "ellipse", "id": "cN0", "name": "logo", "width": 22, "height": 22, "fill": "#F5B95F" },
+            { "type": "rect", "id": "cN1", "name": "nav1", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rect", "id": "cN2", "name": "nav2", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rect", "id": "cN3", "name": "nav3", "width": 30, "height": 8, "fill": "#2A2A2E", "cornerRadius": 3 },
+            { "type": "rect", "id": "cN4", "name": "nav4", "width": 30, "height": 8, "fill": "#2F3A4A", "cornerRadius": 3 }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "cMain",
+          "name": "content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 16,
+          "children": [
+            { "type": "text", "id": "cH", "name": "h1", "fill": "#F5F5F5", "content": "Dashboard", "fontFamily": "Inter", "fontSize": 17, "fontWeight": "600" },
+            { "type": "rect", "id": "cB", "name": "today-banner", "width": "fill_container", "height": 28, "fill": "#1E2A3A", "cornerRadius": 7 },
+            {
+              "type": "frame",
+              "id": "cConv",
+              "name": "conversation-rows",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                { "type": "rect", "id": "cR1", "name": "row1", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
+                { "type": "rect", "id": "cR2", "name": "row2", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 },
+                { "type": "rect", "id": "cR3", "name": "row3", "width": "fill_container", "height": 34, "fill": "#161618", "cornerRadius": 7 }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "notes",
+      "x": 0,
+      "y": 340,
+      "name": "invariants",
+      "fill": "#A1A1AA",
+      "content": "Invariants: (1) existing users never see the first-run 'Tell your organization what you're building' state while foundation-status or the conversation list is still resolving — the first-run/command-center branch requires both resolved; (2) provisioning (503) and revocation-redirect (401-hold) whole-page states are unchanged; (3) admin nav items + payment banner render inside the initial server HTML — no post-hydration pop-in.",
+      "fontFamily": "Inter",
+      "fontSize": 12,
+      "textGrowth": "fixed-width",
+      "width": 1240
+    }
+  ]
+}
