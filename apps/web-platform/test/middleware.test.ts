@@ -557,7 +557,7 @@ describe("x-soleur-auth-user-id trust boundary", () => {
   });
 });
 
-describe("Server-Timing stage emission (authenticated document responses)", () => {
+describe("Server-Timing stage emission (authenticated passthroughs)", () => {
   test("emits mw-auth / mw-revoke / mw-tc durations on a successful document passthrough", async () => {
     const { userId, iat } = freshCreds();
     seedAuth(userId, iat);

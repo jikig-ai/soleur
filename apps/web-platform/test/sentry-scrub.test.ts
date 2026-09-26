@@ -243,3 +243,19 @@ describe("scrubSentryEvent — request URL/query sanitization (#8984 tx envelope
     expect(scrubSentryEvent(event)).toEqual({ message: "boom" });
   });
 });
+
+describe("scrubSentryEvent — transaction name token reduction", () => {
+  test("GET /invite/<token> transaction name is reduced", () => {
+    const event = { transaction: "GET /invite/rawtokenVALUE9" };
+    const result = scrubSentryEvent(event) as { transaction: string };
+    expect(result.transaction).toBe("GET /invite/<token>");
+    expect(JSON.stringify(result)).not.toContain("rawtokenVALUE9");
+  });
+
+  test("unparsable request.url still loses its query tail", () => {
+    const event = { request: { url: "notaurl?code=abc123" } };
+    const result = scrubSentryEvent(event) as { request: { url: string } };
+    expect(result.request.url).toBe("notaurl");
+    expect(JSON.stringify(result)).not.toContain("abc123");
+  });
+});

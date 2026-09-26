@@ -200,6 +200,22 @@ describe("Guard 1 — middleware matcher covers every route handler", () => {
     expect(renderPaths.length).toBeGreaterThanOrEqual(20);
   });
 
+  const renderProbes = renderPaths
+    .map(dynamicProbe)
+    .filter((p): p is string => p !== null);
+
+  test.each(renderProbes)(
+    "render probe %s traverses middleware (extension suffix must not skip it)",
+    (pathname) => {
+      expect(
+        matchesMiddleware(pathname),
+        `${pathname} is NOT matched by config.matcher — a dynamic page path ` +
+          `ending in an image extension bypasses middleware while ` +
+          `resolveIdentity consumes the minted header on render`,
+      ).toBe(true);
+    },
+  );
+
   test.each(renderPaths)(
     "render path %s traverses middleware (resolveIdentity consumes the minted header)",
     (pathname) => {

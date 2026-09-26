@@ -28,7 +28,7 @@
 - P0.3 `sentry.server.config.ts`: `tracesSampleRate: 0` → `tracesSampler` (probe header `x-perf-probe: 1` → 1.0, else 0.02); added `beforeSendTransaction` → `scrubSentryEvent`. Test: `test/sentry-server-config-traces-sampler.test.ts` (18 tests green).
 - P0.4 `scripts/live-verify/perf-probe.ts` + `test/live-verify/perf-probe.test.ts` (10 tests green). Exports added to `run.ts`: `readConfig`, `makeJar`/`Jar`, `mintSession`. Fix during live run: zeroed `request.timing()` fields → `-1` sentinel.
 - P0.5 measurement done: 5 cold + 1 warm sample posted to #8978 (comment 5848827026). Doc TTFB p50 ≈5.4s / p95 ≈13.7s cold; warm-sw 0.77s. **mw-auth NOT dominant** (0.13–4.38s vs render-path residual up to ~12.7s).
-- P1.6: 4 routes migrated to `verifiedUserId()`; `pending-invites` reads email from local session JWT (remote getUser fallback when absent); `resolveOrgMemberships` signature `(service, userId)` — internal getUser RTT removed, sole caller + test updated.
+- P1.6: 4 routes migrated to `verifiedUserId()`; `pending-invites` reads email from local session JWT (remote getUser fallback when absent); `resolveOrgMemberships` signature `(userId, service)` — internal getUser RTT removed, sole caller + test updated.
 - P1.7: `resolveIdentity` fast path — minted header + local JWT `sub`/`email` decode; any gap → remote getUser. 6 new tests; concurrency test's getUser assertion moved to `vi.waitFor` (headers() await shifts call to next microtask).
 - P1.8: auth-verdict LRUCache **REJECTED** by measurement → not implemented.
 - ADR-253 amendment written (rejection arm + render-path header consumption + Server-Timing widening + SW classification).

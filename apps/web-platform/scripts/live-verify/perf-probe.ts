@@ -200,6 +200,24 @@ async function captureNavigation(
       })(),
     );
   });
+  // Failed legs land in the waterfall too — a request that never completes
+  // is often the interesting one in a cold-load incident (status 0).
+  page.on("requestfailed", (req) => {
+    let durationMs = -1;
+    try {
+      ({ durationMs } = durationsFromTiming(req.timing()));
+    } catch {
+      // timing() can throw on aborted/failed requests — keep duration -1.
+    }
+    requests.push({
+      path: safePath(req.url()),
+      kind: classifyRequest(req.url(), req.resourceType()),
+      status: 0,
+      durationMs,
+      ttfbMs: null,
+      serverTiming: null,
+    });
+  });
 
   const nav = await page.goto(url, {
     waitUntil: "domcontentloaded",
@@ -398,13 +416,13 @@ async function main(): Promise<void> {
   }
 
   const jar = makeJar();
+  let supabase: Awaited<ReturnType<typeof mintSession>> | null = null;
   try {
     bindProject(cfg);
-    const supabase = await mintSession(cfg, jar);
+    supabase = await mintSession(cfg, jar);
     const verified = await verifyPrincipal(supabase, cfg);
 
     const outcome = await drive(verified, cfg, jar);
-    await supabase.auth.signOut().catch(() => undefined);
 
     if (outcome.kind === "PASS") {
       // Redacted summary: every string field passed through redact() so a
@@ -422,6 +440,9 @@ async function main(): Promise<void> {
     console.log(`RESULT: CANT-RUN:${redact((err as Error).message)}`);
     process.exitCode = 1;
   } finally {
+    // Session destruction on EVERY arm — a mintSession/verifyPrincipal/drive
+    // throw must not leave the live-verify principal's refresh token live.
+    if (supabase) await supabase.auth.signOut().catch(() => undefined);
     jar.cookies.clear();
   }
 }
