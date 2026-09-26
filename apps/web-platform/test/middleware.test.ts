@@ -583,6 +583,61 @@ describe("Server-Timing stage emission (authenticated document responses)", () =
     expect(timing).toMatch(/mw-tc;dur=[0-9.]+;desc=miss/);
   });
 
+  test("SW-proxied navigation (dest: empty, mode: navigate) emits Server-Timing + no-store (#8969)", async () => {
+    const { userId, iat } = freshCreds();
+    seedAuth(userId, iat);
+    mockRpc.mockResolvedValue({
+      data: [{ revoked: false, workspace_id: null, reason: null }],
+      error: null,
+    });
+    seedTcRow({
+      tc_accepted_version: tcVersionRef.current,
+      subscription_status: "active",
+    });
+
+    // sw.js forwards navigations with `respondWith(fetch(event.request))`:
+    // the forwarded request keeps `sec-fetch-mode: navigate` but its
+    // `sec-fetch-dest` degrades to `empty`, which previously landed in
+    // NON_DOCUMENT_DESTS and skipped the whole block.
+    const res = await middleware(
+      makeAuthRequest("/dashboard", {
+        headers: { "sec-fetch-dest": "empty", "sec-fetch-mode": "navigate" },
+      }),
+    );
+
+    expect(res.status).not.toBe(302);
+    const timing = res.headers.get("server-timing") ?? "";
+    expect(timing).toMatch(/mw-auth;dur=[0-9.]+/);
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
+  test("authenticated /api/* fetch (dest: empty, mode: cors) emits Server-Timing WITHOUT the document no-store (#8978)", async () => {
+    const { userId, iat } = freshCreds();
+    seedAuth(userId, iat);
+    mockRpc.mockResolvedValue({
+      data: [{ revoked: false, workspace_id: null, reason: null }],
+      error: null,
+    });
+    seedTcRow({
+      tc_accepted_version: tcVersionRef.current,
+      subscription_status: "active",
+    });
+
+    const res = await middleware(
+      makeAuthRequest("/api/workspace/active-repo", {
+        headers: { "sec-fetch-dest": "empty", "sec-fetch-mode": "cors" },
+      }),
+    );
+
+    expect(res.status).not.toBe(302);
+    const timing = res.headers.get("server-timing") ?? "";
+    expect(timing).toMatch(/mw-auth;dur=[0-9.]+/);
+    expect(timing).toMatch(/mw-revoke;dur=[0-9.]+;desc=miss/);
+    // API handlers own their own cache semantics — the document no-store
+    // overwrite must NOT apply to non-document fetches.
+    expect(res.headers.get("cache-control") ?? "").not.toMatch(/no-store/);
+  });
+
   test("a warm second request reports desc=hit on the cached stages", async () => {
     const { userId, iat } = freshCreds();
     seedAuth(userId, iat);
