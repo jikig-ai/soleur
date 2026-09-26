@@ -36,4 +36,12 @@
 ### Pending
 - First commit still blocked: `test-all.sh --affected` PID 3163555 running ~1.5h under repo-global flock (iterating suites; sibling run finished first).
 - Remaining: commit batch (sentry/routes/identity/probe/ADR/tasks), gdpr-gate on cumulative diff, Phase-2 focused checks, push, soleur:review, soleur:qa, soleur:compound, soleur:ship → merge + post-merge probe re-run.
+
+## Review+ship progress (2026-09-26 late)
+
+- Review panel: 10/10 agents returned, all SHIP-WITH-FIXES. Convergent core: pending-invites JWT email lacked `sub === userId` agreement → shared helper `sessionJwtEmailForVerifiedUser` in server/request-auth.ts now enforces it once (identity.ts + route both consume).
+- Review fixes committed (10a05e0443): sentry tx URL/query scrub, matcher-coverage extended to page/layout paths, probe timing()-unit fix (relative ms, capture on requestfinished), bounded evaluates, rotated-cookie propagation in middleware setAll, pending-invites email-unresolved mirror, byok Promise.all, route tests for pending-invites + list-memberships, ADR-253 amendment extensions.
+- Review evidence trailer emitted (297220f1fa, full 10/10 coverage). Learning filed + orphan-runner issue #8993.
+- Ship: Phase 4 battery running detached (LOG=/var/tmp/ship-battery.yey9R4zt.log RCF=/var/tmp/ship-battery.paiYvoyQ.rc). CI 24 pass/10 pending on head; mergeStateStatus BEHIND → resync needed pre-merge.
+- Remaining: battery rc → pr ready → sync BEHIND → merge → deploy-arm wait → post-merge probe re-run → #8978 closure comment.
 - Draft PR #8984 exists for this branch.
