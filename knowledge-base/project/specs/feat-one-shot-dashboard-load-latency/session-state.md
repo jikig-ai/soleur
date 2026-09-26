@@ -43,3 +43,20 @@
 - billing-enforcement.test.ts AC5: distinct user id — positive-only tcRowCache legitimately serves warm pass through DB blip (cold-path contract is what AC5 pins)
 - conversations-rail-insert.test.tsx: unused `url` arg → `_url` (+1 over no-unused-vars baseline)
 - eslint-config ratchet: count now 74 ≤ baseline 74 (verified via full eslint -f json)
+
+## Review Phase
+- Mode: sequential-fallback (10 seats spawned as background subagents on the pushed branch; semgrep ran inline: 79 rules, 0 findings)
+- Seats: code-simplicity, architecture-strategist, performance-oracle (design-validity pass, design-risk set), security-sentinel, pattern-recognition, data-integrity-guardian, test-design (B 8.75/10), code-quality (8.5/10), user-impact, agent-native, structural-enumeration
+- Merge-tree vs origin/main: clean; branch pushed before panel (rf-before-spawning-review-agents-push-the)
+
+### Findings → dispositions
+- P1 (4-seat convergence): LRUCache sliding TTL voided ≤30s verdict bound → FIXED (absolute expiry; tcRowCache.set gated !tcRowHit; _roleCache noted as absolute too); lru-cache.test pins write-anchored expiry through hits
+- P2: matcher extension-suffix bypass on dynamic-terminal routes (unpaid-write/revocation/T&C skip live today) → FIXED (single-segment + icons/ carve-out); Guard-1 extended (app/ walk, group-strip, .png probes, floor 100)
+- P2: foundation non-503 error had no surface + no mirror → Sentry mirror added; past_due banner SSR dismissed-flash → mount-gated; realtime repo-less workspace-visibility insert divergence → shouldDropForScope drops on repoUrl null
+- P3 batch fixed: /health pre-strip return, empty revokeData→grace, rpc sync-throw containment, dead deps/fields/comments, use-onboarding .catch arms, no-store iatSeq flake vector, request-auth breadcrumb assertions, CSP-invariant detector update
+- Deferred: filter-change double-refetch+resubscribe (pre-existing shape → noted), ~70 unmigrated getUser() sites (#8926), isAdmin derivation dedup, flagIdentity factory, isAdmin page .png CSP residual (pages, not handlers)
+
+## Compound Phase
+- Learning: knowledge-base/project/learnings/2026-09-26-the-shared-primitive-not-the-call-site-was-the-bug.md
+- Recurring triage: battery log loss → filed #8940 (meta/machinery); sliding-TTL + matcher bypass + Guard-1 scope → fixed inline; PromiseLike/JSDoc/ADR-pad/test-shape items → recorded in learning's Session Errors
+- Deviation analyst: no hard-rule violations detected; hook-incident log not present in this environment
