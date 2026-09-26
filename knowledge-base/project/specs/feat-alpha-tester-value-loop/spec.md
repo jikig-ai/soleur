@@ -115,13 +115,13 @@ inside the user's repo.
 `.soleur/decisions.jsonl` on the user's machine — append-only, rotated, fail-open
 (exit-0), kill-switch env; lives at the project git root under a `.soleur/.gitignore`
 self-guard (never committed by default). Field-allowlisted schema (NO-ECHO), frozen at
-ADR-253: `{v, ts, event, label, skill, agent_domain, harness, session_id, plugin_sha,
+ADR-254: `{v, ts, event, label, skill, agent_domain, harness, session_id, plugin_sha,
 repo_hash}` — never intent text, args, file paths, or repo names. Harness-tagged;
 capture-rate vs usage-rate divergence disclosed.
 
 > **Supersession note (post-review, PR #8868):** the original TR1 text said "flock'd" —
 > the shipped writer is lock-free (single `printf >>` append). TR2(a)'s `hooks.json`
-> matcher was designed then cut at plan review (see ADR-253 + the plan's cut list) —
+> matcher was designed then cut at plan review (see ADR-254 + the plan's cut list) —
 > the prose-invoked emit at `go.md` is the only recorder on all four harnesses.
 > `session_id` is derived (ppid-hash fallback), not a harness env var — no harness
 > exports one today. The `surface` field was dropped; `v` and `repo_hash` were added.

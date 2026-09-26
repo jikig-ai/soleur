@@ -251,7 +251,7 @@ are workspace-membership with an ordering hazard (conversion-optimizer finding);
      Cloud-mode + grok header boilerplate per skill convention; README component counts
      updated; check `skill-body-budget.json` ceiling-entry convention for new skills at
      work time.
-3.7. `knowledge-base/engineering/architecture/decisions/ADR-253-*.md` (provisional ordinal)
+3.7. `knowledge-base/engineering/architecture/decisions/ADR-254-*.md` (provisional ordinal)
      — tester-owned local decision log: `.soleur/` sink on user machines, prose-directed
      emit (no hooks — uniform 4-harness coverage), field-allowlist NO-ECHO, no egress,
      tester-initiated aggregate export;
@@ -293,7 +293,7 @@ repair checklist — it does not gate tester #2 on the merge.
 - `apps/web-platform/app/api/internal/cohort/route.ts` (+ test)
 - `apps/web-platform/supabase/migrations/141_users_cohort_key.sql`
 - `apps/web-platform/supabase/migrations/141_users_cohort_key.down.sql`
-- `knowledge-base/engineering/architecture/decisions/ADR-253-*.md` (provisional ordinal)
+- `knowledge-base/engineering/architecture/decisions/ADR-254-*.md` (provisional ordinal)
 
 ## Files to Edit
 
@@ -345,7 +345,7 @@ zero matches.
 - [ ] AC11: Tester setup doc exists at `plugins/soleur/tester-docs/alpha-tester-setup.md` and the
       runbook welcome message links to it; immutable legal paragraphs preserved verbatim
       (diff-verified against the prior block).
-- [ ] AC12: `ADR-253-*` exists documenting the decision-log substrate (or ordinal renumbered
+- [ ] AC12: `ADR-254-*` exists documenting the decision-log substrate (or ordinal renumbered
       per collision sweep); `model.c4` gains the `.soleur/` sink line; C4 tests pass.
 - [ ] AC13: Observability discoverability test (`bash
       plugins/soleur/scripts/emit-decision.sh --selfcheck`) prints `SOLEUR_EMIT_OK`.
@@ -485,12 +485,12 @@ The `INNGEST_MANUAL_TRIGGER_SECRET` env already exists for the arming route.
 
 ### ADR
 
-**ADR-253 (provisional ordinal)** — "Tester-owned local decision log (`.soleur/decisions.jsonl`):
+**ADR-254 (provisional ordinal)** — "Tester-owned local decision log (`.soleur/decisions.jsonl`):
 prose-directed emit, field-allowlisted metadata, no egress, tester-initiated aggregate export."
 Records: the `.soleur/` sink convention + `.gitignore` self-guard; hook-vs-prose parity table;
 NO-ECHO contract; the capture-rate ≠ usage-rate disclosure; relationship to the parked
 System-1 eval corpus (enabling action, no eval itself). Authored via `soleur:architecture`;
-if the ordinal collides at merge, renumber + sweep `grep -rn 'ADR-253' knowledge-base/project/{plans,specs}/feat-alpha-tester-value-loop/`.
+if the ordinal collides at merge, renumber + sweep `grep -rn 'ADR-254' knowledge-base/project/{plans,specs}/feat-alpha-tester-value-loop/`.
 
 ### C4 views
 
@@ -587,7 +587,7 @@ Applied (operator-approved):
 - Non-CC stall fallback (2-week valve) in runbook (CPO).
 - Exit-interview section added to runbook v2: WTP $49 + testimonial opt-in + nudge
   disclosure (CPO, closing the only metric that answers the business question).
-- ADR-253 gains surface→instrument table + residency pin (hosted emit on Jikigai infra
+- ADR-254 gains surface→instrument table + residency pin (hosted emit on Jikigai infra
   would break the Posture-A assumption — evaluated, not assumed) (CPO).
 
 Declined: cohort-quiet keeps the `cohort_key IS NULL` signup listing (only automated

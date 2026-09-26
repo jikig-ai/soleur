@@ -41,7 +41,7 @@ date: 2026-09-25
 - [ ] 3.4 `cohort-quiet` in CHECK_REGISTRY — quiet predicate: `GREATEST(created_at,last_active) ≥ 3d` non-failed OR zero-conversations + signup_age ≥ 3d; plus `cohort_key IS NULL` recent-signup list; company-level output to `report_to_issue`
 - [ ] 3.5 `plugins/soleur/scripts/alpha-metrics.sh` + `.test.sh` — aggregates + `SOLEUR_EMIT_ABSENT`/`SOLEUR_EMIT_EMPTY`; awk/grep/sed only
 - [ ] 3.6 `plugins/soleur/skills/cohort-status/SKILL.md` — runbook-table tally + gh-issue stage + derived reminder ids; UNREADABLE-on-failed-read; issue-title sanitizer; description ≤30 words; README counts
-- [ ] 3.7 `ADR-253-*` (provisional) — decision-log substrate, surface→instrument table, residency pin, frozen allowlist
+- [ ] 3.7 `ADR-254-*` (provisional) — decision-log substrate, surface→instrument table, residency pin, frozen allowlist
 - [ ] 3.8 `model.c4` — plugin/hooks container gains `.soleur/` sink line; C4 tests pass
 
 ## Phase 4: Repair verification sweep
