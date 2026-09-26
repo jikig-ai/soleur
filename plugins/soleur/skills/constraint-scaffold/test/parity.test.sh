@@ -4,8 +4,8 @@
 # The dependency-cruiser config and the shared runner are emitted as
 # BYTE-IDENTICAL copies of the skill's templates; the CI workflow is a single
 # `sed __TARGET_DIR__ -> apps/web-platform` substitution of the workflow
-# template; and the repo-root `.github/workflows/constraint-gates.yml` shares the
-# substituted YAML body (different header comment only). ANY edit to a template
+# template; and the repo-root dogfood gate lives folded as `jobs.constraint-gates` inside
+# `.github/workflows/pr-quality-guards.yml` (#8902) — structurally compared to the template job. ANY edit to a template
 # MUST be mirrored into every emitted copy (and vice-versa), or the gate Soleur
 # ships diverges from the gate Soleur tests. This test fails loud on any drift.
 #
@@ -71,18 +71,32 @@ else
   printf '%s\n' "$D" | sed 's/^/    /'
 fi
 
-# 4. repo-root workflow BODY (header comment + blank lines stripped) == the
-#    substituted template body (same strip). The two carry different header
-#    comments by design; the executable YAML body must match exactly.
+# 4. The folded repo-root gate == the template's constraint-gates job. Since
+#    #8902 the dogfood instance lives as `jobs.constraint-gates` inside
+#    `.github/workflows/pr-quality-guards.yml` (the standalone root file was
+#    folded into the shared PR-gates workflow). Structural compare: parse both
+#    sides, drop the fold-added `if:` (PR-only gate — the template file has no
+#    merge_group so the arm is equivalent), and diff canonical YAML.
 strip_body() { grep -vE '^[[:space:]]*#' | grep -vE '^[[:space:]]*$' || true; }
-ROOT_BODY="$(strip_body < "$REPO_ROOT/.github/workflows/constraint-gates.yml")"
-TMPL_BODY="$(printf '%s\n' "$SUBST" | strip_body)"
-D="$(diff <(printf '%s\n' "$ROOT_BODY") <(printf '%s\n' "$TMPL_BODY") 2>&1 || true)"
+D="$(python3 - "$SUBST" "$REPO_ROOT/.github/workflows/pr-quality-guards.yml" <<'PY' 2>&1 || true
+import sys, yaml
+tmpl = yaml.safe_load(sys.argv[1])["jobs"]["constraint-gates"]
+root = yaml.safe_load(open(sys.argv[2]))["jobs"]["constraint-gates"]
+root.pop("if", None)  # fold-added: host file merges merge_group; job is PR-only
+a = yaml.safe_dump(tmpl, sort_keys=True)
+b = yaml.safe_dump(root, sort_keys=True)
+if a != b:
+    import difflib
+    print("\n".join(difflib.unified_diff(a.splitlines(), b.splitlines(),
+          "template.jobs.constraint-gates", "pr-quality-guards.jobs.constraint-gates",
+          lineterm="")))
+PY
+)"
 cases=$((cases + 1))
 if [[ -z "$D" ]]; then
-  pass "repo-root workflow body (comment-stripped) == substituted template body"
+  pass "jobs.constraint-gates in pr-quality-guards.yml == substituted template job"
 else
-  fail "repo-root workflow body DIVERGES from the substituted template body"
+  fail "jobs.constraint-gates in pr-quality-guards.yml DIVERGES from template job"
   printf '%s\n' "$D" | sed 's/^/    /'
 fi
 

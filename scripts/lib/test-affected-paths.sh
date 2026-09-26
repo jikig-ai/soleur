@@ -555,6 +555,20 @@ AFFECTED_TESTS_SCRIPTS_VECTOR_REDELIVER_WIRING_PATHS=(
   "tests/scripts/test-vector-redeliver-wiring.sh"
 )
 
+# tests/scripts/main-duplicate-skip — the proof script is invoked by workflow
+# steps; derived edges could not reach them, so the five gated workflows are
+# declared here.
+AFFECTED_TESTS_SCRIPTS_MAIN_DUPLICATE_SKIP_PATHS=(
+  ".github/workflows/infra-validation.yml"
+  ".github/workflows/skill-security-scan-corpus.yml"
+  ".github/workflows/tenant-integration.yml"
+  ".github/workflows/validate-vector-config.yml"
+  ".github/workflows/vendor-pin-verify.yml"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/main-push-duplicate-skip.sh"
+  "tests/scripts/test-main-duplicate-skip.sh"
+)
+
 # tests/scripts/registry-delivery-change-mutation-battery — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_REGISTRY_DELIVERY_CHANGE_MUTATION_BATTERY_PATHS=(
@@ -669,7 +683,7 @@ AFFECTED_SCRIPTS_MD_TO_MRKDWN_PATHS=(
 # repo paths its suite file names.
 AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
   ".github/workflows/skill-security-scan-postmerge.yml"
-  ".github/workflows/skill-security-scan-pr-trailer.yml"
+  ".github/workflows/pr-quality-guards.yml"
   "plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh"
   "plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh"
   "scripts/guard-vacuity-floor.test.sh"
@@ -718,7 +732,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_SCRIPT_TESTS_AGGREGATOR_DIAGNOSIS_TEST_SH_PA
 # not reach its two workflow subjects; declared from the repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
   ".github/workflows"
-  ".github/workflows/dependency-review.yml"
   ".github/workflows/pr-quality-guards.yml"
   ".github/scripts/check-client-pii-sentry.sh"
   ".github/scripts/check-settings-integrity.sh"
@@ -915,7 +928,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_GENERATOR_TEST_SH_PATHS=
 # plugins/soleur/skills/constraint-scaffold/test/parity.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
-  ".github/workflows/constraint-gates.yml"
+  ".github/workflows/pr-quality-guards.yml"
   ".github/workflows/fix-constraints-stage-a.yml"
   ".github/workflows/fix-constraints-stage-b.yml"
   "apps/web-platform"
