@@ -82,7 +82,7 @@ const SURFACE_GROUPS: readonly string[] = [
   "components/ui/markdown-renderer.tsx",
   "components/ui/sheet.tsx",
   "components/ui/error-card.tsx",
-  "components/ui/outlined-button.tsx",
+  "components/ui/button.tsx",
   "components/ui/card.tsx",
   "components/error-boundary-view.tsx",
   "app/global-error.tsx",

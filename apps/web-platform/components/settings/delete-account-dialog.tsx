@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 
 interface DeleteAccountDialogProps {
   userEmail: string;
@@ -62,13 +63,13 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
 
   if (!isOpen) {
     return (
-      <button
+      <Button
+        variant="danger"
         type="button"
         onClick={() => setIsOpen(true)}
-        className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/50 hover:text-red-300"
       >
         Delete Account
-      </button>
+      </Button>
     );
   }
 
@@ -101,25 +102,28 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
       )}
 
       <div className="flex gap-3">
-        <button
+        <Button
+          variant="danger"
           type="button"
           onClick={handleDelete}
           disabled={!emailMatches || isDeleting}
-          className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+          loading={isDeleting}
+          loadingLabel="Deleting"
         >
-          {isDeleting ? "Deleting..." : "Confirm Deletion"}
-        </button>
-        <button
+          Confirm Deletion
+        </Button>
+        <Button
+          variant="outlined"
           type="button"
           onClick={() => {
             setIsOpen(false);
             setConfirmEmail("");
             setError(null);
           }}
-          className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+          className="text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );

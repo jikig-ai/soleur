@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { TeamMembershipRow } from "@/server/team-membership-resolver";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { DelegationToggle } from "@/components/settings/delegation-toggle";
 import { TransferOwnershipDialog } from "@/components/settings/transfer-ownership-dialog";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -131,27 +133,34 @@ function MemberRow({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [menuOpen]);
 
-  const handleRemove = useCallback(async () => {
-    setMenuOpen(false);
-    if (
-      !window.confirm(
-        `Remove ${member.email} from this workspace? Their in-flight agent runs will be aborted.`,
-      )
-    ) {
-      return;
-    }
-    const res = await fetch("/api/workspace/remove-member", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId, userId: member.userId }),
-    });
-    if (!res.ok) {
-      console.error("[team-membership-list] remove failed:", res.status);
-      window.alert("Failed to remove member. Please try again.");
-      return;
-    }
-    window.location.reload();
-  }, [member.email, member.userId, workspaceId]);
+  // feat-ui-action-feedback: the remove buttons had NO pending guard — a
+  // second click could fire a duplicate POST mid-flight. usePendingAction
+  // supplies disabled + aria-busy; latchOnRedirect holds pending across the
+  // success `window.location.reload()` (the document teardown IS the reset).
+  const { run: handleRemove, pending: removePending } = usePendingAction(
+    async () => {
+      setMenuOpen(false);
+      if (
+        !window.confirm(
+          `Remove ${member.email} from this workspace? Their in-flight agent runs will be aborted.`,
+        )
+      ) {
+        return;
+      }
+      const res = await fetch("/api/workspace/remove-member", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, userId: member.userId }),
+      });
+      if (!res.ok) {
+        console.error("[team-membership-list] remove failed:", res.status);
+        window.alert("Failed to remove member. Please try again.");
+        return;
+      }
+      window.location.reload();
+    },
+    { latchOnRedirect: true },
+  );
 
   // RBAC: the kebab menu holds only owner-only actions (Remove member,
   // Transfer ownership), so it is gated on `isOwner` — Members see no kebab on
@@ -243,21 +252,25 @@ function MemberRow({
         {showActions && (
           <div className="mt-3 flex gap-2 border-t border-soleur-border-default pt-3">
             {isOwner && member.role !== "owner" && (
-              <button
+              <Button
+                variant="outlined"
                 type="button"
                 onClick={() => setTransferDialogOpen(true)}
-                className="flex min-h-11 flex-1 items-center justify-center rounded-md border border-soleur-border-default text-sm font-medium text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
+                className="min-h-11 flex-1 rounded-md text-soleur-text-secondary"
               >
                 Transfer ownership
-              </button>
+              </Button>
             )}
-            <button
+            <Button
+              variant="danger"
               type="button"
               onClick={handleRemove}
-              className="flex min-h-11 flex-1 items-center justify-center rounded-md border border-red-400/40 text-sm font-medium text-red-400 hover:bg-soleur-bg-surface-2"
+              loading={removePending}
+              loadingLabel="Removing"
+              className="min-h-11 flex-1 rounded-md"
             >
               Remove
-            </button>
+            </Button>
           </div>
         )}
 
@@ -336,35 +349,45 @@ function MemberRow({
       <div className="relative w-6" ref={menuRef}>
         {showActions && (
           <>
-            <button
+            <Button
+              variant="ghost"
               type="button"
               aria-label={`Row actions for ${member.email}`}
               onClick={() => setMenuOpen((v) => !v)}
-              className="flex h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+              className="h-6 w-6 text-soleur-text-muted hover:text-soleur-text-primary"
+              style={{ padding: 0 }}
             >
               <span aria-hidden="true">⋯</span>
-            </button>
+            </Button>
             {menuOpen && (
               <div className="absolute right-0 top-7 z-10 w-52 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-1 shadow-lg">
                 {isOwner && member.role !== "owner" && (
-                  <button
+                  <Button
+                    variant="ghost"
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
                       setTransferDialogOpen(true);
                     }}
-                    className="block w-full px-3 py-2 text-left text-sm text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
+                    className="w-full justify-start rounded-none text-left"
                   >
                     Transfer ownership
-                  </button>
+                  </Button>
                 )}
-                <button
+                <Button
+                  variant="ghost"
                   type="button"
                   onClick={handleRemove}
-                  className="block w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-soleur-bg-surface-2"
+                  loading={removePending}
+                  loadingLabel="Removing"
+                  className="w-full justify-start rounded-none text-left"
+                  // text-red-400 loses Tailwind emit-order against the ghost
+                  // variant's text-soleur-text-secondary — keep the destructive
+                  // affordance via the palette variable.
+                  style={{ color: "var(--color-red-400)" }}
                 >
                   Remove member
-                </button>
+                </Button>
               </div>
             )}
           </>

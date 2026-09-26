@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { markReleasesSeen } from "@/lib/releases-seen";
+import { Button } from "@/components/ui/button";
 import { ErrorCard } from "@/components/ui/error-card";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { RefreshShimmer } from "@/components/ui/refresh-shimmer";
@@ -177,7 +178,8 @@ export function ReleasesSurface() {
       {visible.length === 0 ? (
         <div className="py-8 text-sm text-soleur-text-secondary">
           No releases match your search or filter.{" "}
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={() => {
               setQuery("");
@@ -186,7 +188,7 @@ export function ReleasesSurface() {
             className="text-soleur-text-primary underline underline-offset-2 hover:text-amber-400"
           >
             Clear
-          </button>
+          </Button>
         </div>
       ) : (
         <ul className="space-y-4">

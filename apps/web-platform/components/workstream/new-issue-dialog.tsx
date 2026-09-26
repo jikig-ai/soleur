@@ -14,7 +14,7 @@
 // the draft backend is a tracked follow-up; the manual quick-add above is live.
 
 import { useEffect, useRef, useState } from "react";
-import { GoldButton } from "@/components/ui/gold-button";
+import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { CONCIERGE_ONLINE } from "./concierge-flag";
 import type { CreateIssueBody } from "./workstream-writes";
@@ -159,13 +159,14 @@ export function NewIssueDialog({
               aria-label="Describe the issue for Concierge"
               className="mb-2 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-base text-soleur-text-primary placeholder:text-soleur-text-tertiary disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none md:text-sm"
             />
-            <button
+            <Button
+              variant="outlined"
               type="button"
               disabled={!CONCIERGE_ONLINE}
               className="rounded-md border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary disabled:cursor-not-allowed disabled:opacity-60"
             >
               Create with Concierge
-            </button>
+            </Button>
             <p
               id="concierge-offline-note"
               className="mt-2 flex items-center gap-1.5 text-xs text-soleur-text-tertiary"
@@ -179,17 +180,25 @@ export function NewIssueDialog({
           </fieldset>
 
           <div className="flex flex-wrap justify-end gap-2">
-            <button
+            <Button
+              variant="outlined"
               type="button"
               onClick={onClose}
               disabled={submitting}
               className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-2 text-sm font-medium text-soleur-text-primary disabled:opacity-60"
             >
               Cancel
-            </button>
-            <GoldButton type="submit" disabled={!canSubmit}>
-              {submitting ? "Creating…" : "Create issue"}
-            </GoldButton>
+            </Button>
+            <Button
+              variant="gold"
+              type="submit"
+              disabled={!canSubmit}
+              loading={submitting}
+              loadingLabel="Creating"
+              modal
+            >
+              Create issue
+            </Button>
           </div>
       </form>
     </ResponsiveModal>

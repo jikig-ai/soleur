@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import type { GrantorDelegation } from "@/server/byok-delegation-ui-resolver";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { usePendingAction } from "@/hooks/use-pending-action";
+import { Button } from "@/components/ui/button";
 
 interface DelegationFundedPaneProps {
   workspaceId: string;
@@ -44,19 +46,24 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
       .catch(() => setLoading(false));
   }, [workspaceId]);
 
-  const handleRevoke = useCallback(async (delegationId: string) => {
-    if (!window.confirm("Revoke this delegation? The member will lose funded access immediately.")) {
-      return;
-    }
-    const res = await fetch("/api/workspace/delegations", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ delegationId, reason: "grantor_revoke" }),
-    });
-    if (res.ok) {
-      setDelegations((prev) => prev.filter((d) => d.id !== delegationId));
-    }
-  }, []);
+  // feat-ui-action-feedback: the revoke buttons had NO pending guard — a
+  // second click could fire a duplicate DELETE mid-flight. usePendingAction
+  // supplies disabled + aria-busy + a terminating pending episode.
+  const { run: handleRevoke, pending: revokePending } = usePendingAction(
+    async (delegationId: string) => {
+      if (!window.confirm("Revoke this delegation? The member will lose funded access immediately.")) {
+        return;
+      }
+      const res = await fetch("/api/workspace/delegations", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delegationId, reason: "grantor_revoke" }),
+      });
+      if (res.ok) {
+        setDelegations((prev) => prev.filter((d) => d.id !== delegationId));
+      }
+    },
+  );
 
   if (loading) return null;
   if (delegations.length === 0) return null;
@@ -128,13 +135,16 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
                   </p>
                 </div>
               </div>
-              <button
+              <Button
+                variant="danger"
                 type="button"
                 onClick={() => handleRevoke(d.id)}
-                className="mt-3 flex min-h-11 w-full items-center justify-center rounded-md border border-red-400/40 text-sm font-medium text-red-400 hover:bg-soleur-bg-surface-2"
+                loading={revokePending}
+                loadingLabel="Revoking"
+                className="mt-3 min-h-11 w-full"
               >
                 Revoke delegation
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -158,13 +168,16 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
               <span className="text-xs text-soleur-text-secondary">{formatUsd(d.mtdSpentCents)}</span>
               <span className="text-xs text-soleur-text-secondary">{formatUsd(d.capRemainingCents)}</span>
               <span className="text-xs text-soleur-text-muted">{formatLastRun(d.lastInvocationAt)}</span>
-              <button
+              <Button
+                variant="danger"
                 type="button"
                 onClick={() => handleRevoke(d.id)}
-                className="rounded px-2 py-1 text-xs text-red-400 hover:bg-soleur-bg-surface-2"
+                loading={revokePending}
+                loadingLabel="Revoking"
+                className="text-xs"
               >
                 Revoke
-              </button>
+              </Button>
             </div>
           ))}
         </div>

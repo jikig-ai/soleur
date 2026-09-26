@@ -28,6 +28,8 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 
 import { AcknowledgedPill } from "@/components/dashboard/acknowledged-pill";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import {
@@ -96,7 +98,6 @@ export function LeaderLoopStatus({
   const [optimisticStopping, setOptimisticStopping] = useState(false);
   const [undoState, setUndoState] = useState<UndoState>({ kind: "idle" });
   const [cancelError, setCancelError] = useState<string | null>(null);
-  const [resumeError, setResumeError] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchRowRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const refreshCostRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -268,7 +269,13 @@ export function LeaderLoopStatus({
     }
   }
 
-  async function onRetry() {
+  // feat-ui-action-feedback: Retry/Resume run through usePendingAction so the
+  // click produces the pending contract (disabled + aria-busy + spinner at the
+  // 150ms entry delay) and every episode terminates into success or a visible
+  // role="alert". Retry keeps the pre-existing contract that a NON-ok response
+  // surfaces through the next state-matrix update (no throw) — only a network
+  // failure lands on the alert channel.
+  const retryAction = usePendingAction(async () => {
     try {
       const res = await fetch(
         `/api/dashboard/today/${messageId}/send`,
@@ -283,30 +290,28 @@ export function LeaderLoopStatus({
         fetchRow();
       }
     } catch {
-      // Retry errors surface through the next state matrix update; no
-      // dedicated inline error slot.
+      throw new Error("Retry failed — network error");
     }
-  }
+  });
 
   // feat-l5-runaway-guard PR-A: clear the founder's runtime pause. This is
   // the in-product reach for the operator-resume route (the plan's "reachable
   // from the halt banner/email CTA"). Terminal-halt: clearing the pause lets
   // the founder start a FRESH run; it does not resume this halted spawn.
-  async function onResume() {
-    setResumeError(null);
+  const resumeAction = usePendingAction(async () => {
+    let res: Response;
     try {
-      const res = await fetch("/api/dashboard/runtime/resume", {
+      res = await fetch("/api/dashboard/runtime/resume", {
         method: "POST",
       });
-      if (!res.ok) {
-        setResumeError(`Resume failed (${res.status})`);
-        return;
-      }
-      fetchRow();
     } catch {
-      setResumeError("Resume failed — network error");
+      throw new Error("Resume failed — network error");
     }
-  }
+    if (!res.ok) {
+      throw new Error(`Resume failed (${res.status})`);
+    }
+    fetchRow();
+  });
 
   if (!row) {
     // Pre-fetch first-render — agent just acknowledged at the route,
@@ -409,59 +414,81 @@ export function LeaderLoopStatus({
 
       <div className="flex flex-wrap gap-2">
         {state.showStop ? (
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={onStop}
-            disabled={state.stopDisabled || optimisticStopping}
+            disabled={state.stopDisabled}
+            loading={optimisticStopping}
             data-action="leader-stop"
-            className="min-h-[44px] rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm font-medium text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            // surface-2 fill preserved via style — a bg-* class would lose
+            // to the variant's bg-transparent under Tailwind emission order.
+            style={{ background: "var(--color-soleur-bg-surface-2)" }}
+            className="min-h-[44px] rounded-md"
             aria-label="Stop agent"
           >
             Stop
-          </button>
+          </Button>
         ) : null}
 
         {state.showUndo ? (
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={onUndo}
-            disabled={undoState.kind === "pending"}
+            loading={undoState.kind === "pending"}
             data-action="leader-undo"
-            className="min-h-[44px] rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm font-medium text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ background: "var(--color-soleur-bg-surface-2)" }}
+            className="min-h-[44px] rounded-md"
             aria-label="Undo agent action"
           >
             Undo
-          </button>
+          </Button>
         ) : null}
 
         {state.showRetry ? (
-          <button
+          <Button
+            variant="gold"
             type="button"
-            onClick={onRetry}
+            onClick={retryAction.run}
+            loading={retryAction.pending}
             data-action="leader-retry"
-            className="min-h-[44px] rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white"
+            // Amber is the agent-action fill this card family predates the
+            // variant palette — preserved via style (variant bg classes would
+            // lose to bg-transparent under Tailwind's emission order anyway).
+            style={{ background: "var(--color-amber-600)" }}
+            className="min-h-[44px] rounded-md text-white"
             aria-label="Retry agent"
           >
             Retry
-          </button>
+          </Button>
         ) : null}
 
         {state.showResume ? (
-          <button
+          <Button
+            variant="gold"
             type="button"
-            onClick={onResume}
+            onClick={resumeAction.run}
+            loading={resumeAction.pending}
             data-action="leader-resume"
-            className="min-h-[44px] rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white"
+            style={{ background: "var(--color-amber-600)" }}
+            className="min-h-[44px] rounded-md text-white"
             aria-label="Resume run — clear pause"
           >
             Resume
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      {resumeError ? (
+      {retryAction.error ? (
         <p className="text-xs text-red-600" role="alert">
-          {resumeError}
+          {retryAction.error.message}
+        </p>
+      ) : null}
+
+      {resumeAction.error ? (
+        <p className="text-xs text-red-600" role="alert">
+          {resumeAction.error.message}
         </p>
       ) : null}
     </div>

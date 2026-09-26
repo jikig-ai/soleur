@@ -195,13 +195,16 @@ Not applicable — no new persistent store or cross-component connection; pure U
 **Property.** The top bar is visible iff a soft navigation has been in flight ≥150ms, and it clears on route commit (pathname OR searchParams change).
 **Assembly.** The three trigger channels (`NavLink.onNavigate`, `usePendingRouter.push/replace`, `popstate`) plus the completion watcher — the spec must exercise each channel's row, not one canonical path.
 **Mutation matrix.**
-1. Remove the island mount from `app/layout.tsx` → spec reds on every channel row.
-2. Delete the `useSearchParams` watcher → the `workstream?issue=` same-path row reds while pathname rows stay green.
-3. Drop the 150ms entry delay → the "instant nav does not flash" assertion reds (strobe detected).
-4. Remove the ~30s stall timeout → the never-committing-nav row (e.g. push to an unmountable target) leaves the bar up and reds.
-5. Remove the identical-URL no-op in `usePendingRouter` → the active-tab re-click row (`inbox-surface` shape) leaves a stuck bar and reds.
-6. Delete `start()` idempotency → a co-fired `start()` while pending resets the min-visible window; the "bar does not extend on double-trigger" row reds.
-7. *Harness row:* the "bar hidden before click" pre-assertion must PASS on unmutated code — a suite that asserts visibility only can pass while the bar is always-on.
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Remove the island mount from `app/layout.tsx` | spec reds on every channel row |
+| 2 | Delete the `useSearchParams` watcher | the `workstream?issue=` same-path row reds while pathname rows stay green |
+| 3 | Drop the 150ms entry delay | the "instant nav does not flash" assertion reds (strobe detected) |
+| 4 | Remove the ~30s stall timeout | the never-committing-nav row leaves the bar up and reds |
+| 5 | Remove the identical-URL no-op in `usePendingRouter` | the active-tab re-click row (`inbox-surface` shape) leaves a stuck bar and reds |
+| 6 | Delete `start()` idempotency | co-fired `start()` while pending resets the min-visible window; the "bar does not extend on double-trigger" row reds |
+| 7 | Harness row — "bar hidden before click" pre-assertion | must PASS on unmutated code; a suite asserting visibility only can pass while the bar is always-on |
 
 ### Guard 2 — residual-zero button sweep
 
@@ -209,12 +212,15 @@ Not applicable — no new persistent store or cross-component connection; pure U
 **Assembly.** `rg '<button' -g '*.tsx' apps/web-platform/components apps/web-platform/app` — the whole corpus, minus the primitive file itself and the `data-button-exempt`-marked set; NOT the files the sweep happened to touch (an inventory is a snapshot). Re-run on the rebased tree before merge — a sibling landing new native buttons on main must red the gate (arch #6).
 **Enforcement mechanism (cto #1):** `scripts/check-button-primitive-sweep.sh` + a vitest wrapper — modeled on `check-workspace-members-write-sites.sh` — with a **baseline ratchet** (a checked-in count of tolerated native sites that may only decrease), so no new native `<button>` can land during the migration window and partial/domain-sliced PRs stay safe; residual-zero is the convergence target.
 **Mutation matrix.**
-1. Add a native `<button>` not marked `data-button-exempt` → sweep check reds.
-2. Mark one `data-button-exempt=""` → reason-presence assertion reds.
-3. Delete a `loading={pending}` wiring at a migrated mutation site → the pending-contract test reds.
-4. Give `Button` a `type="button"` default → the implicit-submit fixture (a `<form onSubmit>` containing an untyped `<Button>`) reds (kieran #6 / arch #1).
-5. Drop a `data-testid`/`data-tour-id`/`aria-*` passthrough in the primitive → the prop-parity check across migrated sites reds (a dropped `data-tour-id` silently breaks the tour; arch #1).
-6. *Harness row:* a fixture component containing a compliant `<Button loading>` must PASS the same grep — the sweep must not reject everything.
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Add a native `<button>` not marked `data-button-exempt` | sweep check reds |
+| 2 | Mark one `data-button-exempt=""` | reason-presence assertion reds |
+| 3 | Delete a `loading={pending}` wiring at a migrated mutation site | the pending-contract test reds |
+| 4 | Give `Button` a `type="button"` default | the implicit-submit fixture (`<form onSubmit>` + untyped `<Button>`) reds (kieran #6 / arch #1) |
+| 5 | Drop a `data-testid`/`data-tour-id`/`aria-*` passthrough in the primitive | prop-parity check across migrated sites reds (dropped `data-tour-id` silently breaks the tour; arch #1) |
+| 6 | Harness row — compliant `<Button loading>` fixture | must PASS the same grep — the sweep must not reject everything |
 
 ## Acceptance Criteria
 

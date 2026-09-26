@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { subscribeToPush } from "@/lib/push-subscription";
+import { Button } from "@/components/ui/button";
 
 const STORAGE_KEY = "notification-prompt-seen";
 const MAX_SHOWS = 2;
@@ -137,18 +138,20 @@ export function NotificationPrompt({ visible }: NotificationPromptProps) {
         <div className="mt-3 flex items-center gap-3">
           <button
             type="button"
+            data-button-exempt="blue accent CTA — no matching variant (bg-blue-600 would lose to variant bg)"
             onClick={handleEnable}
             className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-blue-500"
           >
             Enable notifications
           </button>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={handleDismiss}
             className="text-sm text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
           >
             Not now
-          </button>
+          </Button>
         </div>
       </div>
       <DismissButton onClick={handleDismiss} />
@@ -158,7 +161,8 @@ export function NotificationPrompt({ visible }: NotificationPromptProps) {
 
 function DismissButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       onClick={onClick}
       className="shrink-0 rounded p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
@@ -168,7 +172,7 @@ function DismissButton({ onClick }: { onClick: () => void }) {
         <line x1="18" y1="6" x2="6" y2="18" />
         <line x1="6" y1="6" x2="18" y2="18" />
       </svg>
-    </button>
+    </Button>
   );
 }
 

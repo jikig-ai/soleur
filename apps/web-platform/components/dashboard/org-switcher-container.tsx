@@ -5,6 +5,7 @@ import { useSWRConfig } from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { clearSwrCache } from "@/lib/swr-config";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
+import { Button } from "@/components/ui/button";
 import { useActiveRepo } from "@/hooks/use-active-repo";
 import { getCurrentWorkspaceId } from "@/lib/session-claims";
 import { reportSilentFallback } from "@/lib/client-observability";
@@ -280,20 +281,20 @@ export function OrgSwitcherContainer({
                 Please try again.
               </p>
               <div className="mt-3 flex gap-2">
-                <button
+                <Button
+                  variant="gold"
                   type="button"
                   onClick={handleConfirm}
-                  className="rounded-md bg-soleur-accent-gold-fg/80 px-3 py-1.5 font-medium text-soleur-text-primary hover:bg-soleur-accent-gold-fg"
                 >
                   Retry
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="outlined"
                   type="button"
                   onClick={handleCancel}
-                  className="rounded-md border border-soleur-border-default px-3 py-1.5 text-soleur-text-muted hover:text-soleur-text-primary"
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </>
           ) : status === "failed_post_rpc" ? (
@@ -311,21 +312,21 @@ export function OrgSwitcherContainer({
               </p>
               <div className="mt-3 flex gap-2">
                 {postRpcRetries < MAX_POST_RPC_RETRIES && (
-                  <button
+                  <Button
+                    variant="outlined"
                     type="button"
                     onClick={handlePostRpcRetry}
-                    className="rounded-md border border-soleur-border-default px-3 py-1.5 text-soleur-text-muted hover:text-soleur-text-primary"
                   >
                     Try again
-                  </button>
+                  </Button>
                 )}
-                <button
+                <Button
+                  variant="gold"
                   type="button"
                   onClick={forceComplete}
-                  className="rounded-md bg-soleur-accent-gold-fg/80 px-3 py-1.5 font-medium text-soleur-text-primary hover:bg-soleur-accent-gold-fg"
                 >
                   Continue
-                </button>
+                </Button>
               </div>
             </>
           ) : status === "switching" || status === "syncing" ? (
@@ -345,20 +346,20 @@ export function OrgSwitcherContainer({
                 Your agents will run against that workspace&apos;s repo.
               </p>
               <div className="mt-3 flex gap-2">
-                <button
+                <Button
+                  variant="gold"
                   type="button"
                   onClick={handleConfirm}
-                  className="rounded-md bg-soleur-accent-gold-fg/80 px-3 py-1.5 font-medium text-soleur-text-primary hover:bg-soleur-accent-gold-fg"
                 >
                   Confirm
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="outlined"
                   type="button"
                   onClick={handleCancel}
-                  className="rounded-md border border-soleur-border-default px-3 py-1.5 text-soleur-text-muted hover:text-soleur-text-primary"
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </>
           )}

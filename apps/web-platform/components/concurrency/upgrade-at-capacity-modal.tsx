@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import * as Sentry from "@sentry/nextjs";
 import type { PlanTier, ConcurrencyCapHitPreamble } from "@/lib/types";
 import { OPEN_UPGRADE_MODAL_EVENT } from "@/lib/ws-client";
@@ -156,14 +157,15 @@ export function UpgradeAtCapacityModal() {
       aria-labelledby="upgrade-at-capacity-title"
     >
       <div data-state={state} className="text-soleur-text-primary">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={close}
           aria-label="Close"
           className="float-right text-soleur-text-muted hover:text-soleur-text-secondary"
         >
           ×
-        </button>
+        </Button>
 
         {state === "loading" && (
           <div data-state="loading">
@@ -178,25 +180,25 @@ export function UpgradeAtCapacityModal() {
             <p className="mt-2 text-sm text-soleur-text-secondary">{copy.subhead}</p>
             <div className="mt-6 flex items-center justify-between">
               {copy.targetTier ? (
-                <button
+                <Button
+                  variant="gold"
                   type="button"
                   onClick={() => startCheckout(copy.targetTier)}
-                  className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
                 >
                   {copy.primaryCtaLabel}
-                </button>
+                </Button>
               ) : (
-                <Link
+                <NavLink
                   href="mailto:jean@soleur.ai"
                   className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
                 >
                   {copy.primaryCtaLabel}
-                </Link>
+                </NavLink>
               )}
               {copy.secondaryLink ? (
-                <Link href={copy.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
+                <NavLink href={copy.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
                   {copy.secondaryLink.label}
-                </Link>
+                </NavLink>
               ) : null}
             </div>
           </div>
@@ -207,16 +209,16 @@ export function UpgradeAtCapacityModal() {
             <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{ERROR_COPY.title}</h2>
             <p className="mt-2 text-sm text-soleur-text-secondary">{ERROR_COPY.body}</p>
             <div className="mt-6 flex items-center justify-between">
-              <button
+              <Button
+                variant="gold"
                 type="button"
                 onClick={() => startCheckout(errorRetryTarget)}
-                className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
               >
                 {ERROR_COPY.primaryCtaLabel}
-              </button>
-              <Link href={ERROR_COPY.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
+              </Button>
+              <NavLink href={ERROR_COPY.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
                 {ERROR_COPY.secondaryLink.label}
-              </Link>
+              </NavLink>
             </div>
           </div>
         )}
@@ -240,19 +242,20 @@ function AdminOverrideBody({ cap, onClose }: { cap: number; onClose: () => void 
       <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{copy.title}</h2>
       <p className="mt-2 text-sm text-soleur-text-secondary">{copy.subhead}</p>
       <div className="mt-6 flex items-center justify-between">
-        <Link
+        <NavLink
           href={copy.primaryCtaHref}
           className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           {copy.primaryCtaLabel}
-        </Link>
-        <button
+        </NavLink>
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClose}
-          className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
+          className="hover:text-soleur-text-primary"
         >
           {copy.secondaryLink.label}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -268,19 +271,20 @@ function EnterpriseCapBody({ cap, onClose }: { cap: number; onClose: () => void 
         50 in parallel is the platform ceiling today. Your Enterprise contract can carry more — let&apos;s size a custom quota against your usage.
       </p>
       <div className="mt-6 flex items-center justify-between">
-        <Link
+        <NavLink
           href="mailto:jean@soleur.ai"
           className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           Contact your account team
-        </Link>
-        <button
+        </NavLink>
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClose}
-          className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
+          className="hover:text-soleur-text-primary"
         >
           Dismiss
-        </button>
+        </Button>
       </div>
     </div>
   );

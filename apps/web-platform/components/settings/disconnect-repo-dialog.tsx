@@ -1,14 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 
 interface DisconnectRepoDialogProps {
   repoName: string;
 }
 
 export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
-  const router = useRouter();
+  const router = usePendingRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,13 +40,14 @@ export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
 
   if (!isOpen) {
     return (
-      <button
+      <Button
+        variant="outlined"
         type="button"
         onClick={() => setIsOpen(true)}
-        className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+        className="text-soleur-text-secondary hover:text-soleur-text-primary"
       >
         Disconnect
-      </button>
+      </Button>
     );
   }
 
@@ -65,24 +67,27 @@ export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
       )}
 
       <div className="flex gap-3">
-        <button
+        <Button
+          variant="outlined"
           type="button"
           onClick={handleDisconnect}
           disabled={isDisconnecting}
-          className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+          loading={isDisconnecting}
+          loadingLabel="Disconnecting"
         >
-          {isDisconnecting ? "Disconnecting..." : "Confirm Disconnect"}
-        </button>
-        <button
+          Confirm Disconnect
+        </Button>
+        <Button
+          variant="outlined"
           type="button"
           onClick={() => {
             setIsOpen(false);
             setError(null);
           }}
-          className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+          className="text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );

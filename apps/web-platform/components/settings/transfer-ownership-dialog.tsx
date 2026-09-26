@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 
 export function TransferOwnershipDialog({
@@ -125,22 +126,27 @@ export function TransferOwnershipDialog({
       )}
 
       <div className="mt-4 flex justify-end gap-3">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClose}
           disabled={loading}
-          className="rounded-md px-4 py-2 text-sm text-soleur-text-secondary hover:text-soleur-text-primary disabled:opacity-50"
+          className="rounded-md hover:text-soleur-text-primary"
         >
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="danger"
           type="button"
           onClick={handleTransfer}
           disabled={!matches || loading}
-          className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+          loading={loading}
+          loadingLabel="Transferring"
+          modal
+          className="rounded-md hover:bg-red-700"
         >
-          {loading ? "Transferring…" : `Transfer ownership to ${targetEmail.split("@")[0]}`}
-        </button>
+          {`Transfer ownership to ${targetEmail.split("@")[0]}`}
+        </Button>
       </div>
     </ResponsiveModal>
   );

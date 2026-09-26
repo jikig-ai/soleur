@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import { CheckCircleIcon } from "@/components/icons";
-import { GoldButton } from "@/components/ui/gold-button";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { ProjectHealthSnapshot } from "@/server/project-scanner";
 
@@ -74,14 +74,15 @@ export function ReadyState({
         </p>
 
         <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-          <GoldButton onClick={onContinue}>Open Dashboard</GoldButton>
-          <button
+          <Button variant="gold" type="button" onClick={onContinue}>Open Dashboard</Button>
+          <Button
+            variant="outlined"
             type="button"
             onClick={onViewKb}
-            className="rounded-lg border border-soleur-border-default px-6 py-3 text-sm font-medium text-soleur-text-secondary transition-colors hover:border-soleur-text-muted hover:text-soleur-text-primary"
+            className="text-soleur-text-secondary hover:border-soleur-text-muted hover:text-soleur-text-primary"
           >
             Review Knowledge Base
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -179,12 +180,12 @@ export function ReadyState({
       {syncConversationId ? (
         <p className="text-xs text-soleur-text-muted">
           Deep analysis in progress —{" "}
-          <Link
+          <NavLink
             href="/dashboard"
             className="text-soleur-accent-gold-fg underline underline-offset-2 hover:text-soleur-accent-gold-text"
           >
             View in Dashboard
-          </Link>
+          </NavLink>
         </p>
       ) : (
         <p className="text-xs text-soleur-text-muted">
@@ -194,14 +195,15 @@ export function ReadyState({
 
       {/* CTAs */}
       <div className="flex items-center justify-center gap-3">
-        <GoldButton onClick={onContinue}>Open Dashboard</GoldButton>
-        <button
+        <Button variant="gold" type="button" onClick={onContinue}>Open Dashboard</Button>
+        <Button
+          variant="outlined"
           type="button"
           onClick={onViewKb}
-          className="rounded-lg border border-soleur-border-default px-6 py-3 text-sm font-medium text-soleur-text-secondary transition-colors hover:border-soleur-text-muted hover:text-soleur-text-primary"
+          className="text-soleur-text-secondary hover:border-soleur-text-muted hover:text-soleur-text-primary"
         >
           Review Knowledge Base
-        </button>
+        </Button>
       </div>
     </div>
   );

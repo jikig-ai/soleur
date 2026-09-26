@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
+import { Button } from "@/components/ui/button";
 import { safeReturnTo } from "@/lib/safe-return-to";
 import {
   type AuthErrorLike,
@@ -125,16 +126,18 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
   return (
     <div className="space-y-3">
       {PROVIDERS.map((provider) => (
-        <button
+        <Button
+          variant="outlined"
           key={provider.id}
           type="button"
           onClick={() => handleOAuth(provider)}
           disabled={loading !== null || disabled}
-          className="flex w-full items-center justify-center gap-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2 disabled:opacity-50"
+          loading={loading === provider.id}
+          className="w-full gap-3"
         >
           {provider.icon}
           Continue with {provider.label}
-        </button>
+        </Button>
       ))}
       {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
     </div>

@@ -18,6 +18,7 @@ import { useState, useTransition } from "react";
 
 import { AcknowledgedPill } from "@/components/dashboard/acknowledged-pill";
 import { LeaderLoopStatus } from "@/components/dashboard/leader-loop-status";
+import { Button } from "@/components/ui/button";
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { useActionSend } from "@/hooks/use-action-send";
 import { humanTitle } from "@/lib/messages/action-class-copy";
@@ -88,11 +89,14 @@ function githubActionTargetLabel(
   return undefined;
 }
 
-const BASE_BUTTON =
-  "min-h-[44px] rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
-
-const SPAWN_BUTTON =
-  "min-h-[44px] rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50";
+// feat-ui-action-feedback: the card family's bespoke chrome (rounded-md,
+// amber-600 fill, px-3 py-2) folded into <Button> at each site. Amber stays
+// via `style` — a bg-amber-600 class would lose to the variant's bg class
+// under Tailwind emission order (bg-transparent sorts last among bg-*).
+const AMBER_ACTION_STYLE = { background: "var(--color-amber-600)" };
+const SURFACE_ACTION_STYLE = {
+  background: "var(--color-soleur-bg-surface-2)",
+};
 
 // PR-I (#4078) — Per-DenyReason copy surfaced when the send route
 // returns 403 with `deny_reason`. `template_unauthorized` is unreachable
@@ -194,31 +198,35 @@ function KbDriftCard({
       ) : null}
       <div className="flex flex-wrap gap-2">
         {isDigest ? (
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={onDismiss}
-            disabled={isDismissing}
+            loading={isDismissing}
             data-action="kb-drift-dismiss"
-            className={`${BASE_BUTTON} border border-soleur-border-default bg-soleur-bg-surface-2 text-soleur-text-secondary`}
+            style={SURFACE_ACTION_STYLE}
+            className="min-h-[44px] rounded-md border border-soleur-border-default text-soleur-text-secondary"
             aria-label="Dismiss digest"
           >
             Dismiss
-          </button>
+          </Button>
         ) : acknowledged ? (
           degraded ? (
             <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
           ) : null
         ) : (
-          <button
+          <Button
+            variant="gold"
             type="button"
             onClick={onSend}
-            disabled={isPending}
+            loading={isPending}
             data-action="kb-drift-fix"
-            className={SPAWN_BUTTON}
+            style={AMBER_ACTION_STYLE}
+            className="min-h-[44px] rounded-md text-white"
             aria-label={label}
           >
             {label}
-          </button>
+          </Button>
         )}
       </div>
       {!isDigest && acknowledged && !degraded ? (
@@ -252,6 +260,7 @@ function GitHubCard({
     artifactUrl,
     degraded,
     confirming,
+    confirmPending,
     onConfirmTyped,
     onCancelConfirm,
   } = useActionSend({ messageId: id, denyReasonCopy: DENY_REASON_COPY });
@@ -304,17 +313,19 @@ function GitHubCard({
             <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
           ) : null
         ) : (
-          <button
+          <Button
+            variant="gold"
             type="button"
             onClick={onSend}
-            disabled={isPending}
+            loading={isPending}
             data-action="github-handle"
             data-button-label={button.label}
-            className={SPAWN_BUTTON}
+            style={AMBER_ACTION_STYLE}
+            className="min-h-[44px] rounded-md text-white"
             aria-label={button.ariaLabel}
           >
             {button.label}
-          </button>
+          </Button>
         )}
       </div>
 
@@ -324,6 +335,8 @@ function GitHubCard({
 
       <TypedConfirmModal
         open={confirming !== null}
+        pending={confirmPending}
+        error={confirming !== null ? error : null}
         recipientExcerpt={confirming?.recipientExcerpt ?? ""}
         contentExcerpt={confirming?.contentExcerpt ?? ""}
         actionClassLabel={confirming ? humanTitle(confirming.actionClass) : ""}
@@ -360,6 +373,7 @@ function StripeCard({
     isPending: isPendingSend,
     error: sendError,
     confirming,
+    confirmPending,
     onConfirmTyped,
     onCancelConfirm,
   } = useActionSend({
@@ -440,39 +454,47 @@ function StripeCard({
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2">
-        <button
+        <Button
+          variant="gold"
           type="button"
           onClick={onSend}
-          disabled={isPending}
+          loading={isPending}
           data-action="send"
-          className={`${BASE_BUTTON} bg-amber-600 text-white`}
+          style={AMBER_ACTION_STYLE}
+          className="min-h-[44px] rounded-md text-white"
           aria-label="Send draft"
         >
           Send
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="outlined"
           type="button"
           onClick={onEdit}
-          disabled={isPending}
+          loading={isPending}
           data-action="edit"
-          className={`${BASE_BUTTON} border border-soleur-border-default bg-soleur-bg-surface-2 text-soleur-text-primary`}
+          style={SURFACE_ACTION_STYLE}
+          className="min-h-[44px] rounded-md"
           aria-label="Edit draft"
         >
           Edit
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="ghost"
           type="button"
           onClick={onDiscard}
-          disabled={isPending}
+          loading={isPending}
           data-action="discard"
-          className={`${BASE_BUTTON} border border-soleur-border-default bg-soleur-bg-surface-2 text-soleur-text-secondary`}
+          style={SURFACE_ACTION_STYLE}
+          className="min-h-[44px] rounded-md border border-soleur-border-default"
           aria-label="Discard draft"
         >
           Discard
-        </button>
+        </Button>
       </div>
       <TypedConfirmModal
         open={confirming !== null}
+        pending={confirmPending}
+        error={confirming !== null ? error : null}
         recipientExcerpt={confirming?.recipientExcerpt ?? ""}
         contentExcerpt={confirming?.contentExcerpt ?? ""}
         actionClassLabel={confirming ? humanTitle(confirming.actionClass) : ""}

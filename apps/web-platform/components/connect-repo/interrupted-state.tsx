@@ -1,8 +1,7 @@
 "use client";
 
 import { AlertTriangleIcon } from "@/components/icons";
-import { GoldButton } from "@/components/ui/gold-button";
-import { OutlinedButton } from "@/components/ui/outlined-button";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 interface InterruptedStateProps {
@@ -36,8 +35,8 @@ export function InterruptedState({ onResume, onStartOver }: InterruptedStateProp
       </Card>
 
       <div className="flex items-center justify-center gap-3">
-        <GoldButton onClick={onResume}>Resume on GitHub</GoldButton>
-        <OutlinedButton onClick={onStartOver}>Start Over</OutlinedButton>
+        <Button variant="gold" type="button" onClick={onResume}>Resume on GitHub</Button>
+        <Button variant="outlined" type="button" onClick={onStartOver}>Start Over</Button>
       </div>
     </div>
   );

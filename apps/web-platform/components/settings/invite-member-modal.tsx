@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { DEFAULT_ORG_NAME, WORKSPACE_NAME_MAX } from "@/lib/workspace-name";
 
@@ -156,14 +157,15 @@ export function InviteMemberModal({
               an existing account.
             </p>
           </div>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={onClose}
             aria-label="Close modal"
             className="text-soleur-text-muted hover:text-soleur-text-primary"
           >
             ✕
-          </button>
+          </Button>
         </div>
 
         {success && (
@@ -288,20 +290,25 @@ export function InviteMemberModal({
         )}
 
         <div className="flex items-center justify-between">
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={onClose}
-            className="px-3 py-2 text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
+            className="hover:text-soleur-text-primary"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="gold"
             type="submit"
             disabled={!attested || !email.trim() || !email.includes("@") || submitting}
-            className="rounded-md bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-soleur-bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90"
+            loading={submitting}
+            loadingLabel="Sending"
+            modal
+            className="rounded-md"
           >
-            {submitting ? "Sending..." : "Send invite"}
-          </button>
+            Send invite
+          </Button>
         </div>
       </form>
     </ResponsiveModal>

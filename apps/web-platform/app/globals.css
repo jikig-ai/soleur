@@ -292,6 +292,53 @@
 }
 
 /*
+ * feat-ui-action-feedback — route-pending bar. Same sweep shape as
+ * refresh-shimmer; the sliver consumes --soleur-accent-gold-fg (per-palette
+ * foreground gold — implementation-brief §0/AC6c) via the
+ * bg-soleur-accent-gold-fg/80 utility in nav-pending-island.tsx.
+ */
+@keyframes nav-pending-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+/* Reduced-motion carve-out mirrors the refresh-shimmer precedent: a static
+   dim sliver instead of the sweep (the bar still marks "in progress"). */
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="nav-pending-bar"] > * {
+    animation: none !important;
+    width: 100% !important;
+    opacity: 0.5;
+  }
+}
+
+/*
+ * feat-ui-action-feedback — global press affordance (implementation-brief
+ * §3.3): every enabled button and in-app anchor gets a ~2% shrink + opacity
+ * dip on :active. Transform, not padding — zero layout shift. The reduced-
+ * motion sweep above already compresses the 120ms transition to ~instant;
+ * the block below suppresses the transform entirely so reduced-motion users
+ * keep only the opacity dip.
+ */
+button:not(:disabled):active,
+a[href]:active {
+  transform: scale(0.98);
+  opacity: 0.9;
+  transition: transform 120ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active,
+  a[href]:active {
+    transform: none;
+  }
+}
+
+/*
  * Widenable nav rail. The dashboard rail (`aside`) carries a persisted width set
  * inline by (dashboard)/layout.tsx whenever the rail is expanded — as `--kb-rail-w`
  * when drilled into KB, or `--main-rail-w` in every other drill state (Dashboard /

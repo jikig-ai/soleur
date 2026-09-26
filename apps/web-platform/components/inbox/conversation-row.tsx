@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
+import { Button } from "@/components/ui/button";
 import { STATUS_LABELS } from "@/lib/types";
 import type { ConversationStatus } from "@/lib/types";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
@@ -62,6 +63,7 @@ function StatusBadge({
     <div ref={ref} className="relative">
       <button
         type="button"
+        data-button-exempt="menu trigger wrapping composite status-badge markup"
         className="min-h-[44px] min-w-[44px] flex items-center cursor-pointer"
         aria-label={`Change status: ${label}`}
         onClick={(e) => {
@@ -79,6 +81,7 @@ function StatusBadge({
           <button
             type="button"
             role="menuitem"
+            data-button-exempt="role=menuitem composite two-line menu row"
             className="flex w-full min-h-[44px] items-center gap-2 px-3 py-2 text-left text-sm text-soleur-text-primary hover:bg-soleur-bg-surface-2"
             onClick={(e) => {
               e.stopPropagation();
@@ -111,7 +114,8 @@ function ArchiveButton({
   onUnarchive: () => void;
 }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       aria-label={isArchived ? "Unarchive conversation" : "Archive conversation"}
       onClick={(e) => {
@@ -130,7 +134,7 @@ function ArchiveButton({
           <path fillRule="evenodd" d="M2 7.5h16l-.811 7.71a2 2 0 01-1.99 1.79H4.802a2 2 0 01-1.99-1.79L2 7.5zM7 11a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1z" clipRule="evenodd" />
         </svg>
       )}
-    </button>
+    </Button>
   );
 }
 
@@ -142,7 +146,7 @@ interface ConversationRowProps {
 }
 
 export function ConversationRow({ conversation, onArchive, onUnarchive, onStatusChange }: ConversationRowProps) {
-  const router = useRouter();
+  const router = usePendingRouter();
   const { getIconPath } = useTeamNames();
   const isDecision = conversation.status === "waiting_for_user";
   const isCompleted = conversation.status === "completed";

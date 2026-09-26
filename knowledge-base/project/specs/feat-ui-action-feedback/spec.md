@@ -31,7 +31,7 @@ Clicking buttons or navigating in `apps/web-platform` produces no visual feedbac
 
 ### FR1: Global route-pending indicator
 
-A 2px gold top bar (RefreshShimmer idiom, `var(--soleur-*)` tokens) mounted in `app/(dashboard)/layout.tsx` outside the ADR-047 swap region. Fires on `<Link>` clicks (patched `NavLink` via `onNavigate`), raw internal `<a href>` (passive capture-phase click listener), `router.push`/`router.replace` (shared `usePendingRouter()` wrapper — covers ⌘K palette and `g`-key navs). ~150–200ms entry delay + minimum-visible duration; completion watcher keys on `usePathname` AND `useSearchParams` (same-path query navs like `workstream?issue=` count). Excludes `window.location.assign` hard navs.
+A 2px gold top bar (RefreshShimmer idiom, `var(--soleur-*)` tokens) mounted ONCE in root `app/layout.tsx` as a Suspense-wrapped island (covers `(dashboard)`, `(auth)`, `(public)`, `invite/`, `shared/` — a dashboard-only mount double-mounts and misses public surfaces; revised at plan review). Fires on `<NavLink>` clicks (`onNavigate`), `router.push`/`router.replace` (shared `usePendingRouter()` wrapper — covers ⌘K palette and `g`-key navs), and `popstate` (Back/Forward). Raw internal anchors convert to `NavLink` in the sweep — no passive document listener (revised at plan review: raw internal `<a>` does a full-load the browser already signals). ~150–200ms entry delay + minimum-visible duration; completion watcher keys on `usePathname` AND `useSearchParams` (same-path query navs like `workstream?issue=` count). Excludes `window.location.assign` hard navs.
 
 ### FR2: Button pending contract via primitive migration
 
@@ -49,7 +49,7 @@ Every mutation-triggering button is disabled during pending. Billing triggers cu
 
 ### TR1: Mounting and theme
 
-Indicator mounts in `(dashboard)/layout.tsx` (client component hosting existing ambient overlays). Brand tokens only (`var(--soleur-*)`); no raw hex; respect the `prefers-reduced-motion` sweep (globals.css:244-253, RefreshShimmer carve-out precedent). Zero layout shift — indicator reserves no layout footprint (fixed, `aria-hidden`).
+Indicator mounts once in root `app/layout.tsx` as a client island (module-level store + `useSyncExternalStore` — no provider wraps `children`; revised at plan review). Brand tokens only (`var(--soleur-*)`); no raw hex; respect the `prefers-reduced-motion` sweep (globals.css:244-253, RefreshShimmer carve-out precedent). Zero layout shift — indicator reserves no layout footprint (fixed, `aria-hidden`).
 
 ### TR2: Verification surfaces
 

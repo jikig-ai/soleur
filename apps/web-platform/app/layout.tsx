@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
+import { Suspense } from "react";
 import { SwRegister } from "./sw-register";
+import { NavPendingIsland } from "@/components/nav/nav-pending-island";
 import { NoFoucScript } from "@/components/theme/no-fouc-script";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { DynamicThemeColor } from "@/components/theme/dynamic-theme-color";
@@ -86,6 +88,11 @@ export default async function RootLayout({
           <DynamicThemeColor />
           <SwRegister />
           <FeatureFlagProvider flags={flags}>{children}</FeatureFlagProvider>
+          {/* feat-ui-action-feedback: ONE route-pending island mount, here in
+              root layout only — never also in (dashboard)/layout.tsx. */}
+          <Suspense fallback={null}>
+            <NavPendingIsland />
+          </Suspense>
         </ThemeProvider>
       </body>
     </html>

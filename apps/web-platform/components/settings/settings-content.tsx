@@ -1,3 +1,4 @@
+import { NavLink } from "@/components/ui/nav-link";
 import { KeyRotationForm } from "./key-rotation-form";
 import { DeleteAccountDialog } from "./delete-account-dialog";
 import { ProjectSetupCard, type RepoStatus } from "./project-setup-card";
@@ -140,12 +141,12 @@ export function SettingsContent({
             Request a copy of your data, view your export history, or contact
             legal@jikigai.com for manual fulfilment of GDPR rights.
           </p>
-          <a
+          <NavLink
             href="/dashboard/settings/privacy"
             className="inline-block rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2"
           >
             Manage privacy
-          </a>
+          </NavLink>
         </div>
       </section>
 

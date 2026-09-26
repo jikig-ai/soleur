@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import useSWR from "swr";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -144,9 +144,9 @@ function Header({ view, onSwitch }: { view: View; onSwitch: (v: View) => void })
           {view === "board" ? (
             <>
               Editing happens in a{" "}
-              <Link href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
+              <NavLink href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
                 chat with your CRO or CPO agent
-              </Link>
+              </NavLink>
               .
             </>
           ) : null}
@@ -168,6 +168,7 @@ function ViewToggle({ view, onSwitch }: { view: View; onSwitch: (v: View) => voi
         <button
           key={v}
           type="button"
+          data-button-exempt="role=tab in tablist — aria-selected segmented Board|Funnel toggle inside a shared bordered control; per-option active tint conflicts with variant base"
           role="tab"
           aria-selected={view === v}
           onClick={() => onSwitch(v)}

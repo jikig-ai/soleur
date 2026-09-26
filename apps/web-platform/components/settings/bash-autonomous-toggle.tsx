@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { Button } from "@/components/ui/button";
 
 /**
  * Issue B part 2 — per-workspace "autonomous mode" toggle for the Concierge.
@@ -90,8 +91,10 @@ export function BashAutonomousToggle({
           role="switch"
           aria-checked={autonomous}
           aria-label="Autonomous mode"
+          aria-busy={loading || undefined}
           disabled={loading}
           onClick={handleToggleClick}
+          data-button-exempt="role=switch composite — fixed h-5 w-9 track + sliding thumb span cannot reduce to Button's padding/radius geometry"
           className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
             autonomous ? "bg-soleur-accent-gold-fg" : "bg-soleur-bg-surface-2"
           } ${loading ? "opacity-50" : ""}`}
@@ -123,22 +126,26 @@ export function BashAutonomousToggle({
             on for repos and accounts you trust.
           </p>
           <div className="flex justify-end gap-2">
-            <button
+            <Button
+              variant="outlined"
               type="button"
               disabled={loading}
               onClick={() => setConfirmOpen(false)}
-              className="rounded-none border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2"
+              className="rounded-none text-xs font-medium"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="gold"
               type="button"
               disabled={loading}
+              loading={loading}
+              loadingLabel="Turning on"
               onClick={handleConfirmEnable}
-              className="rounded-none bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
+              className="rounded-none text-xs font-semibold"
             >
               I understand — turn it on
-            </button>
+            </Button>
           </div>
         </div>
       )}

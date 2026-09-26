@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Button } from "@/components/ui/button";
 import { CancelRetentionModal } from "./cancel-retention-modal";
 
 interface Invoice {
@@ -12,6 +13,9 @@ interface Invoice {
   hostedUrl: string | null;
   pdfUrl: string | null;
 }
+
+// ~8s escalation delay (feat-ui-action-feedback brief §5/§7).
+const ESCALATION_DELAY_MS = 8_000;
 
 interface BillingSectionProps {
   subscriptionStatus: string | null;
@@ -31,6 +35,7 @@ export function BillingSection({
   createdAt,
 }: BillingSectionProps) {
   const [loading, setLoading] = useState(false);
+  const [stillWorking, setStillWorking] = useState(false);
   const [showRetentionModal, setShowRetentionModal] = useState(false);
   const [error, setError] = useState("");
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -61,6 +66,17 @@ export function BillingSection({
     }
   }, [isActive, isPastDue, isUnpaid]);
 
+  // ~8s escalation (feat-ui-action-feedback brief §5): a billing action
+  // pending longer than ESCALATION_DELAY_MS appends "Still working…" to a
+  // polite live region so a slow Stripe redirect never reads as hung.
+  // The timer resets per pending episode — a fast retry gets a fresh clock.
+  useEffect(() => {
+    setStillWorking(false);
+    if (!loading) return;
+    const timer = setTimeout(() => setStillWorking(true), ESCALATION_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [loading]);
+
   async function redirectTo(endpoint: string, fallbackError: string) {
     setLoading(true);
     setError("");
@@ -69,14 +85,20 @@ export function BillingSection({
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || fallbackError);
+        setLoading(false);
         return;
       }
       if (data.url) {
+        // Redirect latch (use-sign-out precedent): once the hard nav is
+        // assigned, `loading` must NEVER reset — the document load tearing
+        // the page down IS the reset. Re-enabling in the gap before the
+        // Stripe redirect commits reopens a double-submit window.
         window.location.href = data.url;
+        return;
       }
+      setLoading(false);
     } catch {
       setError("Something went wrong. Please try again.");
-    } finally {
       setLoading(false);
     }
   }
@@ -144,13 +166,15 @@ export function BillingSection({
               Your account is in read-only mode. Update your payment method to
               restore full access.
             </p>
-            <button
+            <Button
+              variant="danger"
+              type="button"
               onClick={handlePortalRedirect}
-              disabled={loading}
-              className="mt-3 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-50"
+              loading={loading}
+              className="mt-3"
             >
               {loading ? "Redirecting..." : "Resolve Payment"}
-            </button>
+            </Button>
           </div>
         )}
 
@@ -161,13 +185,16 @@ export function BillingSection({
               Your last payment failed. Update your payment method to avoid
               service interruption.
             </p>
-            <button
+            <Button
+              variant="ghost"
+              type="button"
               onClick={handlePortalRedirect}
-              disabled={loading}
-              className="mt-2 text-sm font-medium text-orange-400 hover:text-orange-300"
+              loading={loading}
+              className="mt-2"
+              style={{ color: "var(--color-orange-400)" }}
             >
               Update Payment Method
-            </button>
+            </Button>
           </div>
         )}
 
@@ -179,13 +206,14 @@ export function BillingSection({
             <p className="text-sm text-soleur-text-muted">
               Subscribe to access the full Soleur platform.
             </p>
-            <button
+            <Button
+              variant="gold"
+              type="button"
               onClick={handleSubscribe}
-              disabled={loading}
-              className="rounded-lg bg-soleur-accent-gold-fill px-6 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
+              loading={loading}
             >
               {loading ? "Redirecting..." : "Subscribe"}
-            </button>
+            </Button>
           </div>
         )}
 
@@ -196,13 +224,14 @@ export function BillingSection({
               Your subscription ended
               {formattedPeriodEnd ? ` on ${formattedPeriodEnd}` : ""}.
             </p>
-            <button
+            <Button
+              variant="gold"
+              type="button"
               onClick={handleSubscribe}
-              disabled={loading}
-              className="rounded-lg bg-soleur-accent-gold-fill px-6 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
+              loading={loading}
             >
               {loading ? "Redirecting..." : "Resubscribe"}
-            </button>
+            </Button>
           </div>
         )}
 
@@ -216,12 +245,16 @@ export function BillingSection({
                   Your subscription will end on {formattedPeriodEnd}.
                   You&apos;ll retain full access until then.
                 </p>
-                <button
+                <Button
+                  variant="ghost"
+                  type="button"
                   onClick={handlePortalRedirect}
-                  className="mt-1 text-sm font-medium text-soleur-accent-gold-fg hover:text-soleur-accent-gold-text"
+                  loading={loading}
+                  className="mt-1"
+                  style={{ color: "var(--color-soleur-accent-gold-fg)" }}
                 >
                   Reactivate
-                </button>
+                </Button>
               </div>
             )}
 
@@ -248,25 +281,37 @@ export function BillingSection({
 
             {/* Action buttons */}
             <div className="flex gap-3 pt-2">
-              <button
+              <Button
+                variant="gold"
+                type="button"
                 onClick={handlePortalRedirect}
-                disabled={loading}
-                className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
+                loading={loading}
               >
                 Manage Subscription
-              </button>
+              </Button>
               {!isCancelling && !isUnpaid && (
-                <button
+                <Button
+                  variant="outlined"
+                  type="button"
                   onClick={() => setShowRetentionModal(true)}
-                  className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2"
                 >
                   Cancel Subscription
-                </button>
+                </Button>
               )}
             </div>
           </div>
         )}
 
+        {/* Reserved-space escalation sublabel (brief §5): always mounted
+            so "Still working…" populating causes zero layout shift. */}
+        <p
+          role="status"
+          aria-live="polite"
+          className="mt-4 min-h-5 text-xs text-soleur-text-muted"
+          data-testid="billing-escalation"
+        >
+          {stillWorking ? "Still working…" : ""}
+        </p>
         {error && (
           <p className="mt-4 text-sm text-red-400" role="alert">
             {error}

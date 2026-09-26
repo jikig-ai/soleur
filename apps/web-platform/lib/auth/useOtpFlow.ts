@@ -172,23 +172,26 @@ export function useOtpFlow({
       error = thrown as AuthErrorLike;
     }
 
-    setLoading(false);
-
-    if (error) {
-      console.error("[auth] Supabase error:", error.message);
-      reportSilentFallback(error, {
-        feature: "auth",
-        op: "verifyOtp",
-        extra: {
-          errorCode: error.code,
-          errorName: error.name,
-          status: error.status,
-        },
-      });
-      setError(mapSupabaseAuthError(error));
-    } else {
+    // Redirect latch (use-sign-out precedent): the success path hands off to
+    // `onVerifySuccess` → `window.location.assign` — `loading` must stay true
+    // through the handoff; the document teardown IS the reset. Re-enabling in
+    // the gap before the hard nav commits reopens a double-submit window.
+    if (!error) {
       onVerifySuccess();
+      return;
     }
+    setLoading(false);
+    console.error("[auth] Supabase error:", error.message);
+    reportSilentFallback(error, {
+      feature: "auth",
+      op: "verifyOtp",
+      extra: {
+        errorCode: error.code,
+        errorName: error.name,
+        status: error.status,
+      },
+    });
+    setError(mapSupabaseAuthError(error));
   }
 
   return {

@@ -2,8 +2,7 @@
 
 import { ShieldIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
-import { GoldButton } from "@/components/ui/gold-button";
-import { OutlinedButton } from "@/components/ui/outlined-button";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 interface GitHubRedirectStateProps {
@@ -69,8 +68,8 @@ export function GitHubRedirectState({ onContinue, onBack }: GitHubRedirectStateP
       </Card>
 
       <div className="flex items-center gap-3">
-        <GoldButton onClick={onContinue}>Continue to GitHub</GoldButton>
-        <OutlinedButton onClick={onBack}>Go Back</OutlinedButton>
+        <Button variant="gold" type="button" onClick={onContinue}>Continue to GitHub</Button>
+        <Button variant="outlined" type="button" onClick={onBack}>Go Back</Button>
       </div>
     </div>
   );

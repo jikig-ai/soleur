@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 import { useWebSocket } from "@/lib/ws-client";
 import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -41,6 +42,7 @@ import type {
 } from "@/lib/chat-state-machine";
 import { deriveReconnectView } from "@/lib/chat-state-machine";
 import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
+import { Button } from "@/components/ui/button";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
@@ -205,7 +207,7 @@ export function ChatSurface({
     draftKey,
   } = sidebarProps ?? {};
   const searchParams = useSearchParams();
-  const router = useRouter();
+  const router = usePendingRouter();
   const pathname = usePathname();
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
   const msgParam = searchParams.get("msg");
@@ -791,12 +793,13 @@ export function ChatSurface({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs text-yellow-300">Connection lost. Reconnecting…</span>
-            <button
+            <Button
+              variant="ghost"
               onClick={reconnect}
               className="text-xs text-yellow-400 underline hover:text-yellow-300"
             >
               Retry now
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -816,12 +819,13 @@ export function ChatSurface({
             <span className="text-xs text-red-300">
               Your place is held — your full conversation is intact. Start a new message to resume with full context.
             </span>
-            <button
+            <Button
+              variant="ghost"
               onClick={resumeAfterUnrecoverable}
               className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
             >
               Resume with full context
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -1180,7 +1184,8 @@ export function ChatSurface({
           div (it would scroll away exactly when the user is scrolled up). */}
       <div className="relative shrink-0">
         {showJumpButton && (
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={handleJumpToLatest}
             aria-label="Jump to latest"
@@ -1190,7 +1195,7 @@ export function ChatSurface({
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polyline points="6 9 12 15 18 9" />
             </svg>
-          </button>
+          </Button>
         )}
 
       <div

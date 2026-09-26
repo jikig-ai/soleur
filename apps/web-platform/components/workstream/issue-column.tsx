@@ -103,6 +103,7 @@ export function IssueColumn({
             {!isEmpty ? (
               <button
                 type="button"
+                data-button-exempt="icon-only 20px column expand toggle — Button base px-6/py-3 padding breaks the h-5 w-5 pinned hit-target"
                 aria-label={`Expand ${column.label}`}
                 aria-expanded={false}
                 onClick={() => onToggleCollapse?.(column.status)}
@@ -143,6 +144,7 @@ export function IssueColumn({
                 here — every content column can be collapsed. */}
             <button
               type="button"
+              data-button-exempt="icon-only 20px column collapse toggle — Button base px-6/py-3 padding breaks the h-5 w-5 pinned hit-target"
               aria-label={`Collapse ${column.label}`}
               aria-expanded={true}
               onClick={() => onToggleCollapse?.(column.status)}
