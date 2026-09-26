@@ -692,69 +692,14 @@ else
   fail "TEST_GROUP=all is missing heavy registration(s): $_missing_all — want_scripts_heavy dropped the 'all' arm, so the ship gate and monitor silently lost the most expensive suites"
 fi
 
-# --- The mutation battery's CI row ranges must TILE 1..DECLARED_TOTAL --------------------------
-#
-# The battery's own accounting is per-leg: every matrix leg asserts _row_seq reached
-# DECLARED_TOTAL and EXECUTED == its in-range count. What per-leg accounting cannot see is a
-# GAP between the legs' ranges — a new mutation row plus a bumped DECLARED_TOTAL without a
-# matrix re-split executes in NO CI leg while every leg's own checks stay green (shrink
-# fails closed: B > DECLARED_TOTAL exits 2 in the flag validator; growth is silent).
-# Assert the disjoint contiguous tiling here, where the drift shows up.
-_decl_total="$(grep -m1 '^DECLARED_TOTAL=' "$REPO_ROOT/plugins/soleur/test/scripts-shard-totality-mutations.sh" | cut -d= -f2)"
-awk '
-  /^  shard-totality-mutations:$/ { inj=1; next }
-  inj && /^  [a-z0-9_-]+:$/ { inj=0 }
-  inj && /rows:/ {
-    line=$0
-    gsub(/.*rows:[[:space:]]*\[/, "", line); gsub(/\].*/, "", line)
-    n=split(line, a, ",")
-    for (i=1; i<=n; i++) { gsub(/[" \t]/, "", a[i]); if (a[i] != "") print a[i] }
-  }
-' "$CI_YML" > "$WORK/row_ranges"
-if [[ -z "$_decl_total" || ! "$_decl_total" =~ ^[0123456789]+$ ]]; then
-  fail "could not read DECLARED_TOTAL from the mutation battery — the tiling check is ungrounded"
-elif [[ ! -s "$WORK/row_ranges" ]]; then
-  fail "ci.yml's shard-totality-mutations declares no rows: ranges — the battery is not split as declared (an unsplit job must not ship a --rows contract it ignores)"
-else
-  _expect=1; _tile_ok=1; _tile_why=""
-  while IFS= read -r _rr; do
-    if [[ ! "$_rr" =~ ^([0123456789]+)-([0123456789]+)$ ]]; then
-      _tile_ok=0; _tile_why="malformed range '$_rr'"; break
-    fi
-    _ra=$((10#${BASH_REMATCH[1]})); _rb=$((10#${BASH_REMATCH[2]}))
-    if (( _ra != _expect )); then
-      _tile_ok=0; _tile_why="range '$_rr' starts at $_ra, expected $_expect (gap or overlap)"; break
-    fi
-    _expect=$(( _rb + 1 ))
-  done < "$WORK/row_ranges"
-  if (( _tile_ok == 1 && _expect != _decl_total + 1 )); then
-    _tile_ok=0; _tile_why="ranges end at $((_expect - 1)), DECLARED_TOTAL is $_decl_total — rows $((_expect))..$_decl_total execute in no CI leg"
-  fi
-  if (( _tile_ok == 1 )); then
-    pass "ci.yml mutation row ranges tile 1..$_decl_total contiguously ($(tr '\n' ' ' < "$WORK/row_ranges"))"
-  else
-    fail "mutation row ranges do not tile 1..$_decl_total: $_tile_why — rows outside the union execute nowhere while every leg's own accounting stays green"
-  fi
-fi
-
-# --- run_suite-carried --rows ranges must TILE their battery's DECLARED_TOTAL -----------------
-#
-# The same hole as the ci.yml-matrix check above, at the OTHER split site: a suite split via
-# `run_suite "…-a" bash <file>.test.sh --rows A-B` distributes through the shard manifest —
-# there is no ci.yml `rows:` key to read (#8864). The battery's per-leg equality floors
-# (_site_seq == DECLARED_TOTAL, EXECUTED == range size) cannot see a gap BETWEEN the
-# registered ranges: a DECLARED_TOTAL bump without a re-split runs the new rows in NO leg
-# while every leg's own accounting stays green.
-#
-# EXTRACTION anchors on the run_suite CALL SHAPE and the flag argument — never the label
-# (#7103). Backslash continuations are joined and `#`-onward stripped BEFORE matching, so
-# comment text can neither fabricate nor hide a range. skip_suite lines are declines — never
-# counted. Quantified PER COMMAND TOKEN: a future second --rows suite is checked the day it
-# registers.
+# Shared contiguous-tiling comparator — walks a file of `A-B` ranges and returns whether they
+# tile 1..DECLARED with no gaps or overlaps. NOTE for future callers: ranges must be sorted by
+# lo-bound BEFORE this call, and the caller must not sort a file that could contain malformed
+# entries (a sort key of "-" would reorder them silently).
 _rows_tile_check() {
-  # args: <tag> <ranges-file (one A-B per line)> <declared-total>
+  # args: <ranges-file (one A-B per line)> <declared-total>
   # rc 0 = tiles; rc 1 = _tile_why carries the reason.
-  local _tag="$1" _rf="$2" _decl="$3" _expect=1 _rr _ra _rb
+  local _rf="$1" _decl="$2" _expect=1 _rr _ra _rb
   _tile_why=""
   while IFS= read -r _rr; do
     [[ -n "$_rr" ]] || continue
@@ -776,81 +721,126 @@ _rows_tile_check() {
   return 0
 }
 
-# Extract: <label>\t<command-token>\t<A-B|UNFLAGGED>, one row per run_suite registration whose
-# command is a *.test.sh battery.
+# --- The mutation battery's CI row ranges must TILE 1..DECLARED_TOTAL --------------------------
+#
+# The battery's own accounting is per-leg: every matrix leg asserts _row_seq reached
+# DECLARED_TOTAL and EXECUTED == its in-range count. What per-leg accounting cannot see is a
+# GAP between the legs' ranges — a new mutation row plus a bumped DECLARED_TOTAL without a
+# matrix re-split executes in NO CI leg while every leg's own checks stay green (shrink
+# fails closed: B > DECLARED_TOTAL exits 2 in the flag validator; growth is silent).
+# Assert the disjoint contiguous tiling here, where the drift shows up.
+_decl_total="$(grep -m1 '^DECLARED_TOTAL=' "$REPO_ROOT/plugins/soleur/test/scripts-shard-totality-mutations.sh" | cut -d= -f2)"
 awk '
+  /^  shard-totality-mutations:$/ { inj=1; next }
+  inj && /^  [a-z0-9_-]+:$/ { inj=0 }
+  inj && /rows:/ {
+    line=$0
+    gsub(/.*rows:[[:space:]]*\[/, "", line); gsub(/\].*/, "", line)
+    n=split(line, a, ",")
+    for (i=1; i<=n; i++) { gsub(/[" \t]/, "", a[i]); if (a[i] != "") print a[i] }
+  }
+' "$CI_YML" | sort -t- -k1,1n > "$WORK/row_ranges"
+if [[ -z "$_decl_total" || ! "$_decl_total" =~ ^[0123456789]+$ ]]; then
+  fail "could not read DECLARED_TOTAL from the mutation battery — the tiling check is ungrounded"
+elif [[ ! -s "$WORK/row_ranges" ]]; then
+  fail "ci.yml's shard-totality-mutations declares no rows: ranges — the battery is not split as declared (an unsplit job must not ship a --rows contract it ignores)"
+elif _rows_tile_check "$WORK/row_ranges" "$_decl_total"; then
+  pass "ci.yml mutation row ranges tile 1..$_decl_total contiguously ($(tr '\n' ' ' < "$WORK/row_ranges"))"
+else
+  fail "mutation row ranges do not tile 1..$_decl_total: $_tile_why — rows outside the union execute nowhere while every leg's own accounting stays green"
+fi
+
+# --- run_suite-carried --rows ranges must TILE their battery's DECLARED_TOTAL -----------------
+#
+# The same hole as the ci.yml-matrix check above, at the OTHER split site: a suite split via
+# `run_suite "…-a" bash <file>.test.sh --rows A-B` distributes through the shard manifest —
+# there is no ci.yml `rows:` key to read (#8864). The battery's per-leg equality floors
+# (_site_seq == DECLARED_TOTAL, EXECUTED == range size) cannot see a gap BETWEEN the
+# registered ranges: a DECLARED_TOTAL bump without a re-split runs the new rows in NO leg
+# while every leg's own accounting stays green.
+#
+# EXTRACTION anchors on the run_suite CALL SHAPE and the flag argument — never the label
+# (#7103). Comment lines are dropped BEFORE backslash-continuation joining, so a comment
+# ending in \ cannot swallow a following registration; `#`-onward is stripped before flag
+# matching, so comment text can neither fabricate nor hide a range. skip_suite lines are
+# declines — never counted. Quantified PER COMMAND TOKEN: a future second --rows suite is
+# checked the day it registers — on ANY command shape, not just `bash *.test.sh` (the
+# precedent battery itself is `bash foo-mutations.sh`; an unresolvable command token is
+# emitted as <unresolved> and dies at the DECLARED_TOTAL arm).
+
+# Extract: <label>\t<command-token>\t<A-B|UNFLAGGED>, one row per run_suite registration.
+# UNFLAGGED rows are emitted only for resolvable `bash <file>.sh` commands — an unflagged
+# registration of an unresolvable command carries no checkable DECLARED_TOTAL anyway.
+awk '
+  /^[[:space:]]*#/ { next }
   { line=$0
     while (line ~ /\\[[:space:]]*$/) { sub(/\\[[:space:]]*$/, "", line); if (getline nl) line = line nl; else break }
     if (line !~ /^[[:space:]]*run_suite[[:space:]]/) next
     sub(/#.*/, "", line)
-    if (!match(line, /bash[[:space:]]+"?[A-Za-z0-9._\/-]+\.test\.sh"?/)) next
-    cmd=substr(line, RSTART, RLENGTH); sub(/^bash[[:space:]]+"?/, "", cmd); sub(/"$/, "", cmd)
+    cmd=""
+    if (match(line, /bash[[:space:]]+"?[A-Za-z0-9._\/-]+\.sh"?/)) {
+      cmd=substr(line, RSTART, RLENGTH); sub(/^bash[[:space:]]+"?/, "", cmd); sub(/"$/, "", cmd)
+    }
     label=line; sub(/^[[:space:]]*run_suite[[:space:]]+"?/, "", label); sub(/".*/, "", label)
-    rest=substr(line, RSTART+RLENGTH)
-    if (match(rest, /--rows[[:space:]]+[0123456789]+-[0123456789]+/)) {
-      r=substr(rest, RSTART, RLENGTH); sub(/--rows[[:space:]]+/, "", r)
-      print label "\t" cmd "\t" r
-    } else {
+    if (match(line, /--rows[[:space:]]+[0123456789]+-[0123456789]+/)) {
+      r=substr(line, RSTART, RLENGTH); sub(/--rows[[:space:]]+/, "", r)
+      print label "\t" (cmd != "" ? cmd : "<unresolved>") "\t" r
+    } else if (cmd != "") {
       print label "\t" cmd "\tUNFLAGGED"
     }
   }
 ' "$RUNNER" > "$WORK/run_suite_rows"
 
-# Tokens of interest: any battery file carrying --rows registrations, plus any registered
-# battery file that declares DECLARED_TOTAL (the non-vacuity arm — declaring the contract but
-# shipping no flagged registration is exactly the drift this block exists to redden).
-cut -f2 "$WORK/run_suite_rows" | sort -u > "$WORK/rs_tokens"
-> "$WORK/rs_interesting"
-while IFS= read -r _tok; do
-  _has_decl=0
-  [[ -f "$REPO_ROOT/$_tok" ]] && grep -qE '^DECLARED_TOTAL=[0123456789]+' "$REPO_ROOT/$_tok" && _has_decl=1
-  _has_rows=0
-  awk -F'\t' -v t="$_tok" '$2==t && $3!="UNFLAGGED" {f=1} END{exit !f}' "$WORK/run_suite_rows" && _has_rows=1
-  if (( _has_decl == 1 || _has_rows == 1 )); then
-    echo "$_tok" >> "$WORK/rs_interesting"
-  fi
-done < "$WORK/rs_tokens"
+# Tokens of interest, in two passes (one each), not a per-token rescan:
+#  a) every token with at least one --rows registration
+#  b) every resolvable token whose battery file declares DECLARED_TOTAL — the non-vacuity arm:
+#     declaring the contract while registering unflagged (or registering a ci.yml-split
+#     battery without ranges) is exactly the drift this block exists to redden.
+awk -F'\t' '$3 != "UNFLAGGED" { print $2 }' "$WORK/run_suite_rows" | sort -u > "$WORK/rs_flagged_tokens"
+awk -F'\t' '$2 != "<unresolved>" && $2 != "" { print "'"$REPO_ROOT"'/" $2 }' "$WORK/run_suite_rows" | sort -u > "$WORK/rs_token_files"
+xargs -r -a "$WORK/rs_token_files" grep -lE '^DECLARED_TOTAL=[0123456789]+' 2>/dev/null | sed "s|^$REPO_ROOT/||" | sort -u > "$WORK/rs_decl_tokens" || true
+sort -u "$WORK/rs_flagged_tokens" "$WORK/rs_decl_tokens" > "$WORK/rs_interesting"
 
-_rows_guard_fail=0
 while IFS= read -r _tok; do
   # Per-token state
   awk -F'\t' -v t="$_tok" '$2==t && $3!="UNFLAGGED" {print $1 "\t" $3}' "$WORK/run_suite_rows" > "$WORK/rs_flagged"
   _unflagged_n=$(awk -F'\t' -v t="$_tok" '$2==t && $3=="UNFLAGGED"' "$WORK/run_suite_rows" | wc -l | tr -d ' ')
-  _decl="$(sed -nE 's/^DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?$/\1/p' "$REPO_ROOT/$_tok" | head -1)"
+  _decl="$( [[ -f "$REPO_ROOT/$_tok" ]] && sed -nE 's/^DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?$/\1/p' "$REPO_ROOT/$_tok" | head -1 )"
   _ranges_n=$(wc -l < "$WORK/rs_flagged" | tr -d ' ')
 
   if [[ -z "$_decl" ]]; then
     fail "run_suite carries --rows for ${_tok} but that battery declares no DECLARED_TOTAL — an unsplit job must not ship a --rows contract it ignores"
-    _rows_guard_fail=1; continue
+    continue
   fi
   if (( _ranges_n == 0 )); then
     fail "${_tok} declares DECLARED_TOTAL=${_decl} but its ${_unflagged_n} run_suite registration(s) carry no --rows — the declared split is ignored and every row executes on every registration"
-    _rows_guard_fail=1; continue
+    continue
   fi
   if (( _unflagged_n > 0 )); then
     fail "${_tok} has a MIXED --rows contract: ${_unflagged_n} registration(s) unflagged beside ${_ranges_n} flagged — a dropped flag double-executes rather than loses coverage; state the flag on every registration"
-    _rows_guard_fail=1; continue
+    continue
   fi
 
-  # Sort by lo-bound — registration order in test-all.sh is not the tiling order.
+  # Sort by lo-bound BEFORE validating — registration order in test-all.sh is not the tiling
+  # order, and sort must precede only AFTER the shape filter inside the comparator runs.
   cut -f2 "$WORK/rs_flagged" | sort -t- -k1,1n > "$WORK/rs_ranges_sorted"
-  if _rows_tile_check "$_tok" "$WORK/rs_ranges_sorted" "$_decl"; then
+  if _rows_tile_check "$WORK/rs_ranges_sorted" "$_decl"; then
     pass "${_tok}: --rows ranges tile 1..${_decl} contiguously ($(tr '\n' ' ' < "$WORK/rs_ranges_sorted"))"
   else
     fail "${_tok}: --rows ranges do not tile 1..${_decl}: ${_tile_why} — rows outside the union execute nowhere while every leg's own accounting stays green"
-    _rows_guard_fail=1; continue
+    continue
   fi
 
   # Distinct-legs pin: with >=2 flagged registrations, every label must be tabled in a shard
   # manifest on a leg distinct from its siblings — otherwise the halves can cksum-fall onto
   # the SAME leg, coverage stays total, and the split defeats itself silently.
   if (( _ranges_n >= 2 )); then
-    _legs_ok=1; > "$WORK/rs_legs"
+    _legs_ok=1; : > "$WORK/rs_legs"
     while IFS=$'\t' read -r _lbl _rr; do
-      _leg="$( { grep -F "$_lbl	" "$REPO_ROOT/scripts/suite-shard-legs.tsv" "$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv" 2>/dev/null || true; } | awk -F'\t' '{print $NF}' | head -1)"
+      _leg="$(awk -F'\t' -v l="$_lbl" '$1 == l { print $2; exit }' "$REPO_ROOT/scripts/suite-shard-legs.tsv" "$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv" 2>/dev/null | head -1)"
       if [[ -z "$_leg" ]]; then
         fail "${_tok}: --rows registration '${_lbl}' is not pinned in either shard manifest — its leg is unverifiable (hash-fallback could co-locate the halves)"
-        _legs_ok=0; _rows_guard_fail=1; continue 2
+        _legs_ok=0; break
       fi
       echo "$_leg" >> "$WORK/rs_legs"
     done < "$WORK/rs_flagged"
@@ -858,7 +848,6 @@ while IFS= read -r _tok; do
       _uniq=$(sort -u "$WORK/rs_legs" | wc -l | tr -d ' ')
       if (( _uniq != _ranges_n )); then
         fail "${_tok}: --rows halves pin to $(tr '\n' ' ' < "$WORK/rs_legs" | sed 's/ /,/g;s/,$//') — two halves on the same leg defeats the split while coverage stays total"
-        _rows_guard_fail=1
       else
         pass "${_tok}: ${_ranges_n} --rows registrations pin to distinct legs ($(tr '\n' ' ' < "$WORK/rs_legs"))"
       fi
@@ -875,7 +864,7 @@ fi
 # be neutered to always-succeed and every tiling verdict above is decorative (mirrors the
 # totality_holds positive control upstream).
 printf '1-8\n10-16\n' > "$WORK/rs_control_ranges"
-if _rows_tile_check "positive-control" "$WORK/rs_control_ranges" 16; then
+if _rows_tile_check "$WORK/rs_control_ranges" 16; then
   fail "POSITIVE CONTROL: the --rows tiling comparator reports a gapped union (1-8 + 10-16 vs DECLARED_TOTAL=16) as TILED. It is neutered, so every run_suite --rows verdict above is decorative."
 else
   pass "positive control: the --rows tiling comparator detects the gap (${_tile_why})"

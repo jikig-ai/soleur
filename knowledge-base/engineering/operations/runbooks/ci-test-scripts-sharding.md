@@ -160,7 +160,9 @@ span to the NEXT registered mark.
   (the emptied suite leg), `-a` on leg 3 — one pre-regen run can overshoot
   (~780 s on the -a leg); the first green run carrying both halves'
   timings is the regen input, and the predicted equilibrium worst leg is
-  ~8.5 min ((2989139 ms + ~590 s)/7). Re-splitting later = bump
+  ~9 min ((2989139 ms + ~590 s + ~170 s duplicated preamble)/7 — each
+  half pays the suite's build+control overhead, so the split is ~76%-of-
+  suite per leg, not a halving). Re-splitting later = bump
   DECLARED_TOTAL + move the range boundary in the SAME commit; the battery
   records per-row elapsed seconds in its replay table so the next boundary
   choice is a data lookup.

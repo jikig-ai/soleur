@@ -46,6 +46,10 @@
 # 1..DECLARED_TOTAL is asserted by the tiling block in
 # plugins/soleur/test/scripts-shard-totality.test.sh. No flag runs every row — and
 # `--rows N-N` is the cheap way to iterate on a single row locally.
+#
+# KNOWN SURVIVOR (parity with the precedent): an edit that accepts --rows but drops the value
+# (ROWS_HI left 0) runs all rows on both registrations — coverage stays total and every floor
+# stays green; the shape reddens only as wasted leg time, not as a gap.
 set -uo pipefail
 # repo-write-boundary-sandbox: not-needed this sandbox only ever drives `--print-suite-globs`, which exits above the lib source (#7652)
 
@@ -98,7 +102,10 @@ while (( $# )); do
   esac
   shift
 done
-if (( ROWS_HI != 0 )) && ! (( 1 <= ROWS_LO && ROWS_LO <= ROWS_HI && ROWS_HI <= DECLARED_TOTAL )); then
+# Unconditional bounds: 1 <= A <= B <= DECLARED_TOTAL. Only runs when a flag was given —
+# the no-flag state ROWS_HI=0 is unreachable as a flag value because HI >= LO >= 1, so a
+# passed "0-0"/"N-0" can never silently decode into "all rows".
+if (( _seen_rows_flag == 1 )) && ! (( 1 <= ROWS_LO && ROWS_LO <= ROWS_HI && ROWS_HI <= DECLARED_TOTAL )); then
   echo "ERROR: --rows ${ROWS_LO}-${ROWS_HI} is out of bounds: need 1 <= A <= B <= ${DECLARED_TOTAL} declared rows." >&2
   exit 2
 fi
@@ -688,9 +695,9 @@ assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/no
 #     counters file after the pool drains, replays the row's captured log (which carries the
 #     FATAL line), then dies the same death — the verdict stays "broken harness", never a
 #     phantom pass or a phantom kill.
-#   * PASS/FAIL/ROWS/GLOB_MEMBER_N live in the worker's subshell; each row writes its counters
-#     to $TMP/rows/<id>.rc and the parent aggregates them during the ordered replay below, so
-#     the floors and the summary see exactly the serial numbers.
+#   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
+#     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
+#     the ordered replay below, so the floors and the summary see exactly the serial numbers.
 ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
 mkdir -p "$TMP/rows" || harness_die "row-dispatch mkdir"
@@ -710,14 +717,14 @@ for _id in $ROW_IDS; do
   while (( $(jobs -rp | wc -l) >= JOBS )); do sleep 0.2; done
   (
     trap - EXIT
-    PASS=0; FAIL=0; GLOB_MEMBER_N=0; EXPECTED_ASSERTIONS=
+    PASS=0; FAIL=0; EXPECTED_ASSERTIONS=
     _t0=$SECONDS
     "run_${_id}"
-    # fields: PASS FAIL GLOB_MEMBER_N DECLARED_ASSERTIONS ELAPSED_S. An unset declared field
-    # must not collapse — an empty middle field would shift ELAPSED into _d's slot and report
-    # the WRONG failure ("hollowed" instead of "undeclared"). UNSET is non-numeric, so the
+    # fields: PASS FAIL DECLARED_ASSERTIONS ELAPSED_S. An unset declared field must not
+    # collapse — an empty middle field would shift ELAPSED into _d's slot and report the
+    # WRONG failure ("hollowed" instead of "undeclared"). UNSET is non-numeric, so the
     # aggregation's numeric check FATALs with the true reason.
-    echo "$PASS $FAIL ${GLOB_MEMBER_N:-0} ${EXPECTED_ASSERTIONS:-UNSET} $((SECONDS - _t0))" > "$TMP/rows/$_id.rc"
+    echo "$PASS $FAIL ${EXPECTED_ASSERTIONS:-UNSET} $((SECONDS - _t0))" > "$TMP/rows/$_id.rc"
   ) > "$TMP/rows/$_id.log" 2>&1 &
 done
 wait
@@ -728,11 +735,11 @@ for _id in "${EXEC_IDS[@]}"; do cat "$TMP/rows/$_id.log"; done
 
 # Directory-side audit BEFORE aggregation: the executed-set loops cannot see a rogue .rc — a
 # worker that wrote counters for an undispatched id (a range-gate leak) is invisible to them.
-# Audit the filesystem, not the set: every .rc must belong to a dispatched id, and the counts
-# must agree.
+# Membership, not a count check: every .rc must belong to a dispatched id — a count-equal
+# swap still dies here on the rogue name, and a missing dispatched file dies at the per-row
+# harness_die below.
 _rc_files=( "$TMP/rows/"*.rc )
 if [[ -e "${_rc_files[0]}" ]]; then
-  (( ${#_rc_files[@]} == ${#EXEC_IDS[@]} )) || harness_die "found ${#_rc_files[@]} row counter files but dispatched ${#EXEC_IDS[@]} — the range gate leaked or a worker wrote twice"
   for _f in "${_rc_files[@]}"; do
     _rc_id="${_f##*/}"; _rc_id="${_rc_id%.rc}"
     _known=0
@@ -748,9 +755,9 @@ for _id in "${EXEC_IDS[@]}"; do
   if [[ ! -f "$TMP/rows/$_id.rc" ]]; then
     harness_die "row $_id's worker exited without writing counters — its log above carries the FATAL line; the verdict is a broken harness, not a mutation result"
   fi
-  read -r _p _f _g _d _t < "$TMP/rows/$_id.rc"
+  read -r _p _f _d _t < "$TMP/rows/$_id.rc"
   if [[ ! "${_d:-}" =~ ^[0123456789]+$ ]]; then
-    echo "FATAL: row $_id wrote no declared assertion count (4th .rc field) — a row without an expectation is a floor this battery refuses to estimate" >&2
+    echo "FATAL: row $_id wrote no declared assertion count (3rd .rc field) — a row without an expectation is a floor this battery refuses to estimate" >&2
     exit 1
   fi
   if (( _p + _f < _d )); then
@@ -760,7 +767,6 @@ for _id in "${EXEC_IDS[@]}"; do
   echo "    row $_id: $((_p + _f))/${_d} assertions, ${_t:-?}s"
   PASS=$((PASS + _p)); FAIL=$((FAIL + _f)); ROWS=$((ROWS + 1))
   WORKER_ASSERTS=$((WORKER_ASSERTS + _p + _f))
-  (( _g > 0 )) && GLOB_MEMBER_N=$_g
 done
 
 # --- R1: the linter must not inherit the caller's TEST_GROUP ------------------------------
@@ -836,10 +842,6 @@ fi
 _EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 if (( EXECUTED != _EXPECTED_EXECUTED )); then
   echo "FATAL: ${EXECUTED} rows dispatched, expected ${_EXPECTED_EXECUTED} for --rows ${ROWS_LO}-${ROWS_HI} — the gate mis-selected." >&2
-  exit 1
-fi
-if (( EXECUTED < 1 )); then
-  echo "FATAL: zero rows executed — impossible for any valid --rows range; the gate is miswired (e.g. called inside a worker subshell)." >&2
   exit 1
 fi
 # Conservation over UNCONDITIONAL sites: ROWS counts C0 + executed gated rows + R1 + R1b. A
