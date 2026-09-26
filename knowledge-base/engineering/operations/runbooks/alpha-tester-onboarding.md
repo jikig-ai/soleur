@@ -311,8 +311,15 @@ Check:
 - CLI testers: tester runs plugins/soleur/scripts/alpha-metrics.sh and pastes the aggregate
 - Assisted vs unassisted: check nudged_at in the runbook tally row before scoring a return
 
-Then proceed to #1443 (exit interview)."
+Then proceed to #1443 (exit interview).
+
+Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps"
 ```
+
+   The `Mandated-By:` line is load-bearing, not decoration: the filing gate denies
+   `gh issue create` bodies that name no user-visible consequence, and a checkpoint
+   tracking issue is a mandated post-merge operator-step filing (the same class the
+   rule exists to keep tracked rather than prose). Drop it and the create is refused.
 
 2. **Arm the reminders** — one wrapper call posts the 14-day checkpoint comment AND the day-3
    `cohort-quiet` named-check against that issue:
