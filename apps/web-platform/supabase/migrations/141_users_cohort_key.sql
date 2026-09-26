@@ -8,7 +8,7 @@
 -- WHAT. Nullable `cohort_key` on public.users — the cohort attribution the
 -- invite-token mechanism cannot provide (invite tokens encode workspace
 -- membership, not cohort). Written only by the service role via the
--- /api/admin/cohort PATCH route; migration 006 already REVOKEs authenticated
+-- /api/internal/cohort PATCH route; migration 006 already REVOKEs authenticated
 -- UPDATE on users.
 --
 -- SHAPE. `text` + CHECK `^[a-z0-9-]+$` — free-text tags like `alpha-3` vs
@@ -25,6 +25,6 @@ ALTER TABLE public.users
     CHECK (cohort_key ~ '^[a-z0-9-]+$');
 
 COMMENT ON COLUMN public.users.cohort_key IS
-  'Cohort membership tag (e.g. alpha). Written by service role via /api/admin/cohort only. LAWFUL_BASIS: Art. 6(1)(f).';
+  'Cohort membership tag (e.g. alpha). Written by service role via /api/internal/cohort only. LAWFUL_BASIS: Art. 6(1)(f).';
 
 COMMIT;

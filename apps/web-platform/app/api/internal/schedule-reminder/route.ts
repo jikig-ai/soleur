@@ -16,9 +16,12 @@
 // no issue close/edit/label mutation in v1. Same CSRF-exempt class as
 // trigger-cron / kb-drift-ingest (cookieless, not browser-reachable).
 
-import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  readInternalBearerSecret,
+  bearerMatches,
+} from "@/lib/internal-auth";
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 import {
   validateReminderAction,
@@ -31,11 +34,6 @@ import {
 // `next build` page-data collection.
 
 const MAX_BODY_BYTES = 64 * 1024;
-
-function readSecret(): string | null {
-  const v = process.env.INNGEST_MANUAL_TRIGGER_SECRET;
-  return v && v.length > 0 ? v : null;
-}
 
 // Cutover quiesce (#5450, Phase 2.1): during the SQLite→Postgres+Redis cutover
 // window the operator sets INNGEST_CUTOVER_QUIESCE=1 in Doppler prd so NO new
@@ -64,19 +62,8 @@ function isConnectionRefused(err: unknown): boolean {
   );
 }
 
-function bearerMatches(header: string | null, secret: string): boolean {
-  if (!header) return false;
-  const token = header.startsWith("Bearer ")
-    ? header.slice("Bearer ".length)
-    : header;
-  const a = Buffer.from(token, "utf8");
-  const b = Buffer.from(secret, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
 export async function POST(request: Request) {
-  const secret = readSecret();
+  const secret = readInternalBearerSecret();
   if (!secret) {
     // Fail-closed: 503 (server misconfigured), distinct from 401 (wrong Bearer).
     return NextResponse.json({ error: "Not available" }, { status: 503 });

@@ -29,31 +29,56 @@ export async function GET(request: Request) {
   // cohort_key matches and conversations to those users' ids — applied
   // SERVER-SIDE before the 10k cap so a filtered cohort can never be
   // truncated away by other tenants' rows.
-  const cohort = new URL(request.url).searchParams.get("cohort");
+  const cohortParam = new URL(request.url).searchParams.get("cohort");
+  const cohort =
+    cohortParam && cohortParam.trim().length > 0
+      ? cohortParam.trim().toLowerCase()
+      : null;
 
   const service = createServiceClient();
-  let usersQuery = service
-    .from("users")
-    .select("id, email, created_at, kb_sync_history, workspace_status, cohort_key")
-    .order("created_at", { ascending: true });
-  if (cohort) usersQuery = usersQuery.eq("cohort_key", cohort);
-  const usersResult = await usersQuery;
-  if (usersResult.error) {
-    console.error("[analytics] users query failed:", usersResult.error);
-    return NextResponse.json({ error: "query_failed" }, { status: 500 });
+  const convsBase = () =>
+    service
+      .from("conversations")
+      .select("user_id, domain_leader, status, created_at")
+      .order("created_at", { ascending: true });
+
+  let usersResult, convsResult;
+  if (cohort) {
+    // Scoped: conversations must filter on the cohort's user ids, so the users
+    // query resolves first (sequential is intrinsic here, not a regression).
+    const usersQuery = service
+      .from("users")
+      .select(
+        "id, email, created_at, kb_sync_history, workspace_status, cohort_key",
+      )
+      .order("created_at", { ascending: true })
+      .eq("cohort_key", cohort);
+    usersResult = await usersQuery;
+    if (usersResult.error) {
+      console.error("[analytics] users query failed:", usersResult.error);
+      return NextResponse.json({ error: "query_failed" }, { status: 500 });
+    }
+    const cohortIds = ((usersResult.data ?? []) as UserRow[]).map((u) => u.id);
+    // Empty member set still applies .in() — PostgREST maps in.() to = ANY('{}'),
+    // zero rows, fail-closed: an unscoped leak into a cohort report is impossible.
+    convsResult = await convsBase().in("user_id", cohortIds).limit(10_000);
+  } else {
+    // Unscoped default: keep the original parallel fan-out.
+    [usersResult, convsResult] = await Promise.all([
+      service
+        .from("users")
+        .select(
+          "id, email, created_at, kb_sync_history, workspace_status, cohort_key",
+        )
+        .order("created_at", { ascending: true }),
+      convsBase().limit(10_000),
+    ]);
+    if (usersResult.error) {
+      console.error("[analytics] users query failed:", usersResult.error);
+      return NextResponse.json({ error: "query_failed" }, { status: 500 });
+    }
   }
   const users = (usersResult.data ?? []) as UserRow[];
-
-  // Conversations filtered to cohort members BEFORE the cap; a scoped query
-  // over zero members still needs the .in() (empty array is valid, returns no
-  // rows — never drop the filter or unscoped rows leak into a cohort report).
-  const cohortIds = users.map((u) => u.id);
-  let convsQuery = service
-    .from("conversations")
-    .select("user_id, domain_leader, status, created_at")
-    .order("created_at", { ascending: true });
-  if (cohort) convsQuery = convsQuery.in("user_id", cohortIds);
-  const convsResult = await convsQuery.limit(10_000);
 
   if (convsResult.error) {
     // Mirror the failure so an operator sees it without SSH; the client renders

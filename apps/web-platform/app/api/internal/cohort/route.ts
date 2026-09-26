@@ -15,32 +15,19 @@
 // Registered as a NARROW exact path in lib/routes.ts PUBLIC_PATHS — without
 // it, Supabase middleware 307s the cookie-less caller before this gate runs.
 
-import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { reportSilentFallback } from "@/server/observability";
 import { createServiceClient } from "@/lib/supabase/service";
+import {
+  readInternalBearerSecret,
+  bearerMatches,
+} from "@/lib/internal-auth";
 
 const MAX_BODY_BYTES = 4 * 1024;
 const COHORT_KEY_RE = /^[a-z0-9-]+$/;
 
-function readSecret(): string | null {
-  const v = process.env.INNGEST_MANUAL_TRIGGER_SECRET;
-  return v && v.length > 0 ? v : null;
-}
-
-function bearerMatches(header: string | null, secret: string): boolean {
-  if (!header) return false;
-  const token = header.startsWith("Bearer ")
-    ? header.slice("Bearer ".length)
-    : header;
-  const a = Buffer.from(token, "utf8");
-  const b = Buffer.from(secret, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
 export async function PATCH(request: Request) {
-  const secret = readSecret();
+  const secret = readInternalBearerSecret();
   if (!secret) {
     return NextResponse.json({ error: "Not available" }, { status: 503 });
   }
@@ -66,8 +53,14 @@ export async function PATCH(request: Request) {
 
   const b = body as Record<string, unknown> | null;
   const userId = b?.userId;
-  if (typeof userId !== "string" || userId.length === 0) {
-    return NextResponse.json({ error: "userId required" }, { status: 400 });
+  if (
+    typeof userId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)
+  ) {
+    return NextResponse.json(
+      { error: "userId must be a UUID" },
+      { status: 400 },
+    );
   }
 
   // Normalize before the shape check so `Alpha-01` and `alpha-01` land on the
@@ -83,10 +76,11 @@ export async function PATCH(request: Request) {
 
   try {
     const service = createServiceClient();
-    const { error } = await service
+    const { data, error } = await service
       .from("users")
       .update({ cohort_key: cohortKey })
-      .eq("id", userId);
+      .eq("id", userId)
+      .select("id");
     if (error) {
       reportSilentFallback(new Error(`cohort PATCH failed: ${error.message}`), {
         feature: "internal-cohort",
@@ -94,6 +88,11 @@ export async function PATCH(request: Request) {
         extra: { userId },
       });
       return NextResponse.json({ error: "update_failed" }, { status: 500 });
+    }
+    if (!data || data.length === 0) {
+      // Zero matched rows — a silent ok:true here would let a typo'd userId read
+      // as a successful tag while the tester stays invisible to cohort metrics.
+      return NextResponse.json({ error: "user_not_found" }, { status: 404 });
     }
     return NextResponse.json({ ok: true, userId, cohort_key: cohortKey });
   } catch (err) {

@@ -101,26 +101,37 @@ can point at — near-zero-friction, no assumed Claude Code fluency.
 
 ### FR6: First-session welcome fix
 
-`welcome-hook.sh:16` guard corrected so marketplace-installed projects get the welcome sentinel
-(`#5119` class). Detection must not depend on `plugins/soleur` existing in the project tree.
+`welcome-hook.sh` project-scope guard corrected so marketplace-installed projects get the
+welcome (`#5119` class). Detection must not depend on `plugins/soleur` existing in the
+project tree. Post-review revision (PR #8868): the per-project `.claude/` sentinel was the
+#1383 defect's exact complaint — dedupe now lives in
+`$XDG_STATE_HOME`/`~/.local/state/soleur/welcomed/<repo-hash>` so the hook writes nothing
+inside the user's repo.
 
 ## Technical Requirements
 
 ### TR1: Local decision log
 
-`.soleur/decisions.jsonl` on the user's machine — append-only, flock'd, rotated, fail-open
-(exit-0), kill-switch env; outside the user's git tree is the default, committable by the
-user's own choice only. Field-allowlisted schema (NO-ECHO): `{ts, event, surface, label,
-skill, agent_domain, harness, session_id, plugin_sha}` — never intent text, args, file paths,
-or repo names. Harness-tagged; capture-rate vs usage-rate divergence disclosed.
+`.soleur/decisions.jsonl` on the user's machine — append-only, rotated, fail-open
+(exit-0), kill-switch env; lives at the project git root under a `.soleur/.gitignore`
+self-guard (never committed by default). Field-allowlisted schema (NO-ECHO), frozen at
+ADR-253: `{v, ts, event, label, skill, agent_domain, harness, session_id, plugin_sha,
+repo_hash}` — never intent text, args, file paths, or repo names. Harness-tagged;
+capture-rate vs usage-rate divergence disclosed.
 
-### TR2: Dual-write capture
+> **Supersession note (post-review, PR #8868):** the original TR1 text said "flock'd" —
+> the shipped writer is lock-free (single `printf >>` append). TR2(a)'s `hooks.json`
+> matcher was designed then cut at plan review (see ADR-253 + the plan's cut list) —
+> the prose-invoked emit at `go.md` is the only recorder on all four harnesses.
+> `session_id` is derived (ppid-hash fallback), not a harness env var — no harness
+> exports one today. The `surface` field was dropped; `v` and `repo_hash` were added.
 
-(a) plugin `hooks.json` gains `^(Skill|skill|Task|run_subagent)$` matchers where the harness
-supports hooks (Claude Code; Devin-local with lowercase wire names via `HOOK_TOOL_KIND`);
-(b) `plugins/soleur/scripts/emit-decision.sh` invoked by skill prose at decision points
-(`go.md` route label first — highest-value, cheapest record) covering all four harnesses.
-Divergence between the two halves is itself measurable (drop-sentinel precedent).
+### TR2: Single-path capture (revised)
+
+`plugins/soleur/scripts/emit-decision.sh` invoked by skill prose at decision points
+(`go.md` route label first — highest-value, cheapest record) covering all four
+harnesses. The hook-matcher half was cut: a `hooks.json` Skill/Task matcher would
+double-count the prose emit and cannot fire on Grok anyway.
 
 ### TR3: Checkpoint aggregate pull
 

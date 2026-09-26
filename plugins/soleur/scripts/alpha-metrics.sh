@@ -46,28 +46,31 @@ fi
 INPUT="$(cat "$LOG" "$ROT" 2>/dev/null)"
 
 total="$(printf '%s\n' "$INPUT" | grep -c '^{"v":' )"
+lines="$(printf '%s\n' "$INPUT" | grep -c .)"
+malformed=$((lines - total))
 first="$(printf '%s\n' "$INPUT" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' | sort | head -1)"
 last="$(printf '%s\n' "$INPUT" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' | sort | tail -1)"
 
 echo "=== .soleur/decisions.jsonl aggregate ==="
 echo "records:  $total"
+[ "$malformed" -gt 0 ] && echo "malformed: $malformed line(s) skipped (corrupt log — not counted)"
 echo "first:    ${first:-unknown}"
 echo "last:     ${last:-unknown}"
 echo
 
-count_field() { # $1 = json field name, $2 = label
+count_field() { # $1 = json field name
   printf '%s\n' "$INPUT" \
     | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" \
     | grep -v '^$' \
     | sort | uniq -c | sort -rn \
-    | awk -v l="$2" '{printf "  %-6s %s\n", $1, $2}'
+    | awk '{printf "  %-6s %s\n", $1, $2}'
 }
 
-echo "by event:";        count_field event event
-echo "by label:";        count_field label label
-echo "by skill:";        count_field skill skill
-echo "by agent_domain:"; count_field agent_domain domain
-echo "by harness:";      count_field harness harness
+echo "by event:";        count_field event
+echo "by label:";        count_field label
+echo "by skill:";        count_field skill
+echo "by agent_domain:"; count_field agent_domain
+echo "by harness:";      count_field harness
 
 echo
 echo "Knowledge-base growth (run in this repo):"

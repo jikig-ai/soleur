@@ -34,6 +34,7 @@ import { isRetryable, delay } from "@/server/github-retry";
 import { createChildLogger } from "@/server/logger";
 import {
   mintInstallationToken,
+  ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
   REPO_OWNER,
   REPO_NAME,
   type HandlerArgs,
@@ -306,10 +307,19 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
     };
 
     const cohortKey =
-      typeof params?.cohort_key === "string" && params.cohort_key.length > 0
-        ? params.cohort_key
+      typeof params?.cohort_key === "string" && params.cohort_key.trim().length > 0
+        ? params.cohort_key.trim().toLowerCase()
         : null;
     if (!cohortKey) return failClosed("missing params.cohort_key");
+
+    // PII boundary: the report body is posted to a PUBLIC repo issue, so it
+    // carries company-level identifiers only — the email DOMAIN, never the
+    // mailbox. `jane@acme.com` reports as `acme.com`; that is the same
+    // company-level key the runbook tally table and cohort-status use.
+    const domainOf = (email: string) => {
+      const at = email.lastIndexOf("@");
+      return at > 0 && at < email.length - 1 ? email.slice(at + 1) : "unknown-domain";
+    };
 
     const DAY_MS = 86_400_000;
     const QUIET_DAYS = 3;
@@ -362,22 +372,28 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
 
         for (const m of cohort) {
           const signupAgeDays = (now - new Date(m.created_at).getTime()) / DAY_MS;
-          if (signupAgeDays > WINDOW_DAYS) continue; // checkpoint owns them now
+          if (!Number.isFinite(signupAgeDays) || signupAgeDays > WINDOW_DAYS)
+            continue; // checkpoint owns them now
           const lastMs = lastActiveByUser.get(m.id);
           const quiet =
-            lastMs === undefined
+            lastMs === undefined || !Number.isFinite(lastMs)
               ? signupAgeDays >= QUIET_DAYS // never activated
               : (now - lastMs) / DAY_MS >= QUIET_DAYS;
           if (quiet) {
             quietLines.push(
-              `- ${m.email} — ${
-                lastMs === undefined
+              `- ${domainOf(m.email)} — ${
+                lastMs === undefined || !Number.isFinite(lastMs)
                   ? `never activated (signed up ${Math.floor(signupAgeDays)}d ago)`
                   : `last active ${Math.floor((now - lastMs) / DAY_MS)}d ago`
               }`,
             );
           }
         }
+      } else {
+        // An empty member set is not "everyone active" — say so explicitly.
+        quietLines.push(
+          `(cohort \`${cohortKey}\` has 0 members — is the tag applied? PATCH via /api/internal/cohort)`,
+        );
       }
 
       const { data: untagged, error: uErr } = await supabase
@@ -387,11 +403,12 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
         .gte(
           "created_at",
           new Date(now - UNTAGGED_DAYS * DAY_MS).toISOString(),
-        );
+        )
+        .limit(50);
       if (uErr) return failClosed(`untagged read failed: ${uErr.message.slice(0, 80)}`);
 
       const untaggedLines = ((untagged ?? []) as Array<{ email: string }>).map(
-        (u) => `- ${u.email} (signed up, cohort_key unset — PATCH via /api/admin/cohort)`,
+        (u) => `- ${domainOf(u.email)} (signed up, cohort_key unset — PATCH via /api/internal/cohort)`,
       );
 
       const sections: string[] = [
@@ -457,6 +474,7 @@ export async function eventScheduledReminderHandler({
     return await step.run("post-comment", async () => {
       const token = await mintInstallationToken({
         tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
       });
       const { Octokit } = await import("@octokit/core");
       const octokit = new Octokit({ auth: token });
@@ -503,6 +521,7 @@ export async function eventScheduledReminderHandler({
 
     const token = await mintInstallationToken({
       tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+      permissions: ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
     });
     const { Octokit } = await import("@octokit/core");
     const octokit = new Octokit({ auth: token });

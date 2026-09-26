@@ -38,16 +38,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# shellcheck source=plugins/soleur/scripts/resolve-git-root.sh
-. "$SOCK_DIR/resolve-git-root.sh" 2>/dev/null || exit 0
-[ -d "${GIT_ROOT:-}" ] || exit 0
-
 if [ -n "$SELFCHECK" ]; then
+  # Runs BEFORE git-root resolution so the probe answers "emitter works",
+  # not "am I in a repo" — outside a repo the record path exits silently below.
   echo "SOLEUR_EMIT_OK"
   exit 0
 fi
 
+# shellcheck source=plugins/soleur/scripts/resolve-git-root.sh
+. "$SOCK_DIR/resolve-git-root.sh" 2>/dev/null || exit 0
+[ -d "${GIT_ROOT:-}" ] || exit 0
+
 [ -n "$EVENT" ] || exit 0
+
+# The event enum is frozen at the chokepoint ({route_decision, tool_invocation})
+# — anything else is caller error, not a record. Fail-open per contract.
+case "$EVENT" in
+  route_decision|tool_invocation) ;;
+  *) exit 0 ;;
+esac
 
 # --- derived fields ---------------------------------------------------------
 
@@ -63,7 +72,19 @@ elif [ -n "${DEVIN:-}" ] || [ -n "${DEVIN_HOME:-}" ]; then
 fi
 
 session_id="${CLAUDE_SESSION_ID:-${DEVIN_SESSION_ID:-${CODEX_THREAD_ID:-${GROK_SESSION_ID:-}}}}"
-[ -n "$session_id" ] || session_id="unknown"
+if [ -z "$session_id" ]; then
+  # None of the four harnesses exports a session env var today (the repo's own
+  # learnings measured this — 2026-03-17 PPID note). Derive a session-stable,
+  # non-correlatable id from the parent pid: one emit writer per agent session
+  # shares the same PPID, and hashing keeps the raw pid out of the corpus.
+  if command -v sha256sum >/dev/null 2>&1; then
+    session_id="ppid-$(printf '%s:%s' "$GIT_ROOT" "$PPID" | sha256sum | cut -c1-12)"
+  elif command -v shasum >/dev/null 2>&1; then
+    session_id="ppid-$(printf '%s:%s' "$GIT_ROOT" "$PPID" | shasum -a 256 | cut -c1-12)"
+  else
+    session_id="unknown"
+  fi
+fi
 
 plugin_sha="unknown"
 if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
@@ -101,12 +122,13 @@ fi
 
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
 
-# minimal JSON-string escape: backslash and double-quote only (fields are
-# allowlisted tokens, not free text -- reject anything containing a quote or
-# backslash outright rather than escaping attacker text)
+# field hygiene: values are allowlisted tokens, not free text. Reject outright
+# (rather than escaping) anything containing a quote, backslash, or control
+# character — a newline would split the append-only JSONL record and an ESC
+# would carry terminal-escape injection into alpha-metrics.sh's stdout.
 jesc() {
   case "$1" in
-    *\"*|*\\*) printf '__REDACTED__' ;;
+    *\"*|*\\*|*[[:cntrl:]]*) printf '__REDACTED__' ;;
     *) printf '%s' "$1" ;;
   esac
 }

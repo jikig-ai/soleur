@@ -103,7 +103,7 @@ are workspace-membership with an ordering hazard (conversion-optimizer finding);
 
 | Spec claim | Codebase reality | Plan response |
 |---|---|---|
-| D8 "invite-token attribution, no signup UI" | Workspace-invites are membership grants; keyless invitees bypass `/setup-key` into a disabled product | `users.cohort_key` column (migration 141) + admin PATCH `/api/admin/cohort` set at tester signup |
+| D8 "invite-token attribution, no signup UI" | Workspace-invites are membership grants; keyless invitees bypass `/setup-key` into a disabled product | `users.cohort_key` column (migration 141) + admin PATCH `/api/internal/cohort` set at tester signup |
 | FR3 "owner RPC where platform allows" | `crm_get_contact_detail` writes an access-log row per call (audited egress); CLI has no Supabase session anyway | cohort-status v1 = git-runbook tally + `gh issue` + recorded reminder_ids only; CRM stage noted as an operator-side check |
 | TR2 hook matcher `^(Skill|skill|Task|run_subagent)$` | Hook parity is ~1.5/4 harnesses; a hook matcher adds coverage imbalance + a bash-JSON parser on macOS | Hook path CUT at plan review — prose-directed emit only (uniform coverage; `route_decision` single-writer in go.md) |
 | TR1 `.soleur/` outside git tree | `.soleur/` is gitignored only in THIS repo; tester repos have no guard | emit script also writes `.soleur/.gitignore` containing `*` — committable only via explicit `git add -f` |
@@ -163,7 +163,7 @@ are workspace-membership with an ordering hazard (conversion-optimizer finding);
      Step 6 via a single wrapper `scripts/arm-checkpoint.sh tester-N` (below): POSTs
      `checkpoint-tester-N-<YYYY-MM-DD>` (date embedded — Inngest dedupes on event id, so a
      re-arm at a different fire_at under the same id is a lie-shaped 202) AND arms
-     `cohort-quiet-tester-N` at day-3 in the same call, then appends both reminder_ids to
+     `cohort-quiet-tester-N-<date>` at day-3 in the same call, then appends both reminder_ids to
      the runbook row; issue-comment bodies @mention the operator (comments on closed
      issues notify nobody); (d) day-3/day-7 quiet protocol (threshold
      `daysSinceLastSession ≥ 3` during days 1–10, operator nudge via Slack only if quiet —
@@ -185,7 +185,7 @@ are workspace-membership with an ordering hazard (conversion-optimizer finding);
      args `tester-N`; reads `INNGEST_MANUAL_TRIGGER_SECRET` from env (fail loudly with the
      Doppler read instruction if unset — never hardcode); POSTs the two reminders via the
      internal route; prints the armed reminder_ids (self-describing
-     `checkpoint-tester-N-<date>` / `cohort-quiet-tester-N` convention — cohort-status
+     `checkpoint-tester-N-<date>` / `cohort-quiet-tester-N-<date>` convention — cohort-status
      derives expected ids from the convention; no markdown-table write per review-cut).
      Portable-bash (operator machine may be macOS — same portability contract as 1.1).
 2.3. `plugins/soleur/tester-docs/alpha-tester-setup.md` — tester-facing hosted setup doc (the welcome
@@ -251,7 +251,7 @@ are workspace-membership with an ordering hazard (conversion-optimizer finding);
      Cloud-mode + grok header boilerplate per skill convention; README component counts
      updated; check `skill-body-budget.json` ceiling-entry convention for new skills at
      work time.
-3.7. `knowledge-base/engineering/architecture/decisions/ADR-251-*.md` (provisional ordinal)
+3.7. `knowledge-base/engineering/architecture/decisions/ADR-253-*.md` (provisional ordinal)
      — tester-owned local decision log: `.soleur/` sink on user machines, prose-directed
      emit (no hooks — uniform 4-harness coverage), field-allowlist NO-ECHO, no egress,
      tester-initiated aggregate export;
@@ -290,10 +290,10 @@ repair checklist — it does not gate tester #2 on the merge.
 - `plugins/soleur/skills/cohort-status/SKILL.md`
 - `plugins/soleur/tester-docs/alpha-tester-setup.md`
 - `scripts/arm-checkpoint.sh`
-- `apps/web-platform/app/api/admin/cohort/route.ts` (+ test)
+- `apps/web-platform/app/api/internal/cohort/route.ts` (+ test)
 - `apps/web-platform/supabase/migrations/141_users_cohort_key.sql`
 - `apps/web-platform/supabase/migrations/141_users_cohort_key.down.sql`
-- `knowledge-base/engineering/architecture/decisions/ADR-251-*.md` (provisional ordinal)
+- `knowledge-base/engineering/architecture/decisions/ADR-253-*.md` (provisional ordinal)
 
 ## Files to Edit
 
@@ -321,16 +321,22 @@ zero matches.
       exits 0 with `SOLEUR_DISABLE_DECISION_LOG=1` and writes nothing.
 - [ ] AC2: First write creates `.soleur/.gitignore` whose content is `*`;
       `git status` in the project shows no `.soleur` change.
-- [ ] AC4: `welcome-hook.sh` emits the sentinel + welcome JSON in a git repo WITHOUT a
-      `plugins/soleur` directory; test suite updated and green.
+- [ ] AC4: `welcome-hook.sh` emits the welcome JSON in a git repo WITHOUT a
+      `plugins/soleur` directory AND writes no project-tree artifact — dedupe
+      lives in `XDG_STATE_HOME`/`~/.local/state/soleur/welcomed/<repo-hash>`
+      (post-review change: the in-repo `.claude/` sentinel re-opened #1383);
+      test suite updated and green.
 - [ ] AC5: `bun run` the emit/alpha-metrics test scripts — all green, including a
       `SOLEUR_EMIT_ABSENT` assertion for a missing log.
-- [ ] AC6: `PATCH /api/admin/cohort` sets `users.cohort_key` (admin); non-admin → 403;
+- [ ] AC6: `PATCH /api/internal/cohort` sets `users.cohort_key` gated on the
+      shared `INNGEST_MANUAL_TRIGGER_SECRET` Bearer (missing/wrong secret → 401,
+      unset secret → 503, zero matched rows → 404 — NEVER a silent ok);
       `GET /api/admin/analytics?cohort=alpha` returns funnel/metrics scoped to the cohort.
 - [ ] AC7: Migration 141 applies and its `.down.sql` reverts; column carries the
       `-- LAWFUL_BASIS:` annotation and COMMENT.
-- [ ] AC8: `cohort-quiet` check exists in `CHECK_REGISTRY`, accepts `{cohort, min_days}`,
-      and posts a company-level quiet list to `report_to_issue`.
+- [ ] AC8: `cohort-quiet` check exists in `CHECK_REGISTRY`, accepts `{cohort_key}`,
+      and posts a company-level quiet list (email DOMAINS, never mailboxes —
+      the report lands on a public-repo issue) to `report_to_issue`.
 - [ ] AC9: `soleur:cohort-status` prints a per-tester table (stage, checkpoint armed/fired,
       quiet flag, tally + mix floor); an unreadable source renders `UNREADABLE`, never 0.
 - [ ] AC10: Runbook v2 names the hosted path end-to-end incl. guided-key step, Slack step,
@@ -339,7 +345,7 @@ zero matches.
 - [ ] AC11: Tester setup doc exists at `plugins/soleur/tester-docs/alpha-tester-setup.md` and the
       runbook welcome message links to it; immutable legal paragraphs preserved verbatim
       (diff-verified against the prior block).
-- [ ] AC12: `ADR-251-*` exists documenting the decision-log substrate (or ordinal renumbered
+- [ ] AC12: `ADR-253-*` exists documenting the decision-log substrate (or ordinal renumbered
       per collision sweep); `model.c4` gains the `.soleur/` sink line; C4 tests pass.
 - [ ] AC13: Observability discoverability test (`bash
       plugins/soleur/scripts/emit-decision.sh --selfcheck`) prints `SOLEUR_EMIT_OK`.
@@ -438,16 +444,25 @@ liveness_signal:
   alert_target: tracking issue comments (named-check report_to_issue)
   configured_in: server/inngest/functions/event-scheduled-reminder.ts CHECK_REGISTRY
 error_reporting:
-  destination: drop-sentinel rows inside decisions.jsonl (bounded-flock timeout, disabled-log probe)
-    + named-check FAILURE posts to report_to_issue + SOLEUR_EMIT_ABSENT marker in alpha-metrics output
-  fail_loud: hook/emitter always exit 0 by design; sentinel rows are the loud channel
+  destination: named-check FAILURE posts to report_to_issue + SOLEUR_EMIT_ABSENT
+    marker in alpha-metrics output (the drop-sentinel-row design was cut with
+    the hook matchers — emit-decision.sh is fail-open by contract and writes
+    nothing on failure; malformed lines ARE surfaced by alpha-metrics as a
+    `malformed: N` count so corruption can't masquerade as low usage)
+  fail_loud: emit-decision.sh always exits 0 by design; the checkpoint pull's
+    ABSENT/EMPTY markers are the loud channel
 failure_modes:
-  - mode: stale plugin install (hook matchers absent)
+  - mode: stale plugin install (hook matchers absent / emit never wired)
     detection: SOLEUR_EMIT_ABSENT marker in alpha-metrics output
     alert_route: checkpoint aggregate pull surfaces it to the operator
-  - mode: emit write fails (flock timeout, fs error)
-    detection: drop-sentinel row {event:"drop",reason} appended where writable
-    alert_route: aggregate pull counts drops vs records
+  - mode: emit write fails (fs error, kill-switch, bad event name)
+    detection: SOLEUR_EMIT_EMPTY at pull time; no in-log sentinel exists —
+      the enum/field gates fail-closed-silent BY DESIGN (a guard writing to
+      the sink it guards is a self-DoS)
+    alert_route: aggregate pull; capture-rate divergence disclosed per TR1
+  - mode: corrupt/partial lines in the log
+    detection: alpha-metrics `malformed: N` line
+    alert_route: aggregate pull
   - mode: cohort-quiet check errors (supabase unreachable)
     detection: named-check posts FAILURE body to report_to_issue
     alert_route: issue comment
@@ -470,12 +485,12 @@ The `INNGEST_MANUAL_TRIGGER_SECRET` env already exists for the arming route.
 
 ### ADR
 
-**ADR-251 (provisional ordinal)** — "Tester-owned local decision log (`.soleur/decisions.jsonl`):
+**ADR-253 (provisional ordinal)** — "Tester-owned local decision log (`.soleur/decisions.jsonl`):
 prose-directed emit, field-allowlisted metadata, no egress, tester-initiated aggregate export."
 Records: the `.soleur/` sink convention + `.gitignore` self-guard; hook-vs-prose parity table;
 NO-ECHO contract; the capture-rate ≠ usage-rate disclosure; relationship to the parked
 System-1 eval corpus (enabling action, no eval itself). Authored via `soleur:architecture`;
-if the ordinal collides at merge, renumber + sweep `grep -rn 'ADR-251' knowledge-base/project/{plans,specs}/feat-alpha-tester-value-loop/`.
+if the ordinal collides at merge, renumber + sweep `grep -rn 'ADR-253' knowledge-base/project/{plans,specs}/feat-alpha-tester-value-loop/`.
 
 ### C4 views
 
@@ -507,7 +522,7 @@ at_rest:
     disclosed_as: provider-managed (privacy policy §hosting)
     live_verification: migration COMMENT + LAWFUL_BASIS annotation
 in_transit:
-  - connection: PATCH /api/admin/cohort + GET /api/admin/analytics?cohort=
+  - connection: PATCH /api/internal/cohort + GET /api/admin/analytics?cohort=
     tls: yes (Cloudflare edge → platform, existing)
     cert_verification: on
     does_not_defend: origin-side credential misuse (gated by ADMIN_USER_IDS + service role)
@@ -529,7 +544,7 @@ exception: none
 | T8 | `alpha-metrics.sh` with no log | prints `SOLEUR_EMIT_ABSENT`, exit 0 |
 | T9 | `alpha-metrics.sh` with populated log | per-skill/per-domain counts + first/last ts |
 | T10 | `GET /api/admin/analytics?cohort=alpha` | funnel computed over cohort members only |
-| T11 | `PATCH /api/admin/cohort` as non-admin | 403 |
+| T11 | `PATCH /api/internal/cohort` without the shared secret | 401 |
 | T12 | cohort-quiet check, tester 4d silent | quiet row in report_to_issue comment |
 | T13 | cohort-status with runbook present | tally table + mix floor + armed checkpoint state |
 | T14 | cohort-status with unreadable source | `UNREADABLE` cell, not zero |
@@ -572,7 +587,7 @@ Applied (operator-approved):
 - Non-CC stall fallback (2-week valve) in runbook (CPO).
 - Exit-interview section added to runbook v2: WTP $49 + testimonial opt-in + nudge
   disclosure (CPO, closing the only metric that answers the business question).
-- ADR-251 gains surface→instrument table + residency pin (hosted emit on Jikigai infra
+- ADR-253 gains surface→instrument table + residency pin (hosted emit on Jikigai infra
   would break the Posture-A assumption — evaluated, not assumed) (CPO).
 
 Declined: cohort-quiet keeps the `cohort_key IS NULL` signup listing (only automated

@@ -59,5 +59,11 @@ are no scripted check-ins; I answer when you write.
 
 ## Notes
 
+- **Local decision log:** on your machine the plugin appends one metadata-only line per
+  routing decision to `.soleur/decisions.jsonl` in the project (event names, skill/agent
+  labels, timestamps — never prompt text, args, or file paths; the directory self-ignores
+  in git). Nothing leaves your machine unless you choose to paste the aggregate at a
+  checkpoint (`bash plugins/soleur/scripts/alpha-metrics.sh`). Disable it entirely with
+  `SOLEUR_DISABLE_DECISION_LOG=1`.
 - You can stop at any point, for any reason — just say so.
 - The terms you accepted on signup apply to your use of Soleur on any surface.

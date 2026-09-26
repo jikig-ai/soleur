@@ -12,12 +12,14 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$DIR/emit-decision.sh"
 
+# trap BEFORE sourcing test-helpers.sh so the helpers' composed EXIT trap
+# (<prior>; _soleur_sb_cleanup) stacks on ours instead of being clobbered by it.
+TMP="$(mktemp -d -t emitdec.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
+trap 'rm -rf "$TMP"' EXIT
+
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$DIR/../test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
 set +e -uo pipefail
-
-TMP="$(mktemp -d -t emitdec.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
-trap 'rm -rf "$TMP"' EXIT
 
 passes=0
 fails=0
@@ -88,9 +90,25 @@ assert "quote-bearing label is redacted, not emitted raw" \
 assert "all lines still valid JSON" \
   "node -e 'require(\"fs\").readFileSync(\"$R1/.soleur/decisions.jsonl\",\"utf8\").trim().split(\"\n\").forEach(l=>JSON.parse(l))'"
 
+# --- T3b: control characters can never split a record -----------------------
+
+lines_before="$(wc -l < "$R1/.soleur/decisions.jsonl" | tr -d ' ')"
+( cd "$R1" && bash "$SUT" --event route_decision --label "$(printf 'a\nb')" )
+assert "newline-bearing label is redacted, record stays one line" \
+  "[[ \$(wc -l < '$R1/.soleur/decisions.jsonl' | tr -d ' ') == \$((lines_before + 1)) ]] && grep -q '__REDACTED__' '$R1/.soleur/decisions.jsonl'"
+assert "every line still valid JSON after control-char attempt" \
+  "node -e 'require(\"fs\").readFileSync(\"$R1/.soleur/decisions.jsonl\",\"utf8\").trim().split(\"\n\").forEach(l=>JSON.parse(l))'"
+
+# --- T3c: the frozen event enum is enforced at the chokepoint ----------------
+
+lines_before="$(wc -l < "$R1/.soleur/decisions.jsonl" | tr -d ' ')"
+( cd "$R1" && bash "$SUT" --event not_a_real_event --label x )
+assert "unknown --event writes nothing (enum enforced, fail-open)" \
+  "[[ \$(wc -l < '$R1/.soleur/decisions.jsonl' | tr -d ' ') == \$lines_before ]]"
+
 # --- T4: two concurrent writers each land one clean line ---------------------
 
-( cd "$R2"; bash "$SUT" --event route_decision --label a & bash "$SUT" --event route_decision --label b & wait )
+( cd "$R2" && { bash "$SUT" --event route_decision --label a & bash "$SUT" --event route_decision --label b & wait; } )
 assert "concurrent appends produce two lines" \
   "[[ \$(wc -l < '$R2/.soleur/decisions.jsonl' | tr -d ' ') == 2 ]]"
 assert "both lines valid JSON (no interleave)" \
@@ -117,5 +135,10 @@ NG="$TMP/not-a-repo"; mkdir -p "$NG"
 assert "non-repo write is a no-op" \
   "[[ ! -e '$NG/.soleur' ]]"
 
+out="$(cd "$NG" && bash "$SUT" --selfcheck)"
+assert "--selfcheck works OUTSIDE a repo (probe is repo-independent)" \
+  "[[ '$out' == *SOLEUR_EMIT_OK* ]]"
+
 printf '\n=== emit-decision: %d passed, %d failed (of %d) ===\n' "$passes" "$fails" "$CASES"
-[[ "$fails" -eq 0 ]]
+# Anti-vacuity floor (#7408 class): a suite that ran nothing must not exit green.
+[[ "$fails" -eq 0 && "$CASES" -ge 15 ]]

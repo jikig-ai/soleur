@@ -323,7 +323,7 @@ export INNGEST_MANUAL_TRIGGER_SECRET=$(doppler secrets get INNGEST_MANUAL_TRIGGE
 bash scripts/arm-checkpoint.sh <N> <tracking-issue-number>
 ```
 
-   It prints the armed ids (`checkpoint-tester-N-<date>`, `cohort-quiet-tester-N`). The issue
+   It prints the armed ids (`checkpoint-tester-N-<date>`, `cohort-quiet-tester-N-<date>`). The issue
    comments @-mention the operator, and the checkpoint id embeds its fire date — Inngest dedupes
    on the event id, so a re-armed date under the same id would silently keep the old schedule.
 

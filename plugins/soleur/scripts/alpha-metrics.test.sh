@@ -13,12 +13,14 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$DIR/alpha-metrics.sh"
 EMIT="$DIR/emit-decision.sh"
 
+# trap BEFORE sourcing test-helpers.sh so the helpers' composed EXIT trap
+# (<prior>; _soleur_sb_cleanup) stacks on ours instead of being clobbered by it.
+TMP="$(mktemp -d -t alpham.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
+trap 'rm -rf "$TMP"' EXIT
+
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$DIR/../test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
 set +e -uo pipefail
-
-TMP="$(mktemp -d -t alpham.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
-trap 'rm -rf "$TMP"' EXIT
 
 passes=0
 fails=0
@@ -72,7 +74,7 @@ assert "counts 4 records" "printf '%s' '$out' | grep -q 'records:  *4'"
 assert "per-event count present" "printf '%s' '$out' | grep -A3 'by event:' | grep -q 'route_decision'"
 assert "per-label count shows work=2" "printf '%s' '$out' | grep -A5 'by label:' | grep -qE '^ *2 +work'"
 assert "per-domain count shows ops=1" "printf '%s' '$out' | grep -A4 'by agent_domain:' | grep -q 'ops'"
-assert "per-harness count present" "printf '%s' '$out' | grep -A3 'by harness:' | grep -q 'unknown\|devin\|claude'"
+assert "per-harness count is non-empty" "printf '%s' '$out' | grep -A3 'by harness:' | grep -qE '^ *[0-9]+ +[a-zA-Z]'"
 assert "first/last timestamps printed" "printf '%s' '$out' | grep -q 'first:' && printf '%s' '$out' | grep -q 'last:'"
 assert "KB-growth instruction printed" "printf '%s' '$out' | grep -q 'git log --since'"
 
@@ -84,5 +86,30 @@ printf '{"v":1,"ts":"2026-01-01T00:00:00Z","event":"route_decision","label":"old
 out="$(cd "$RD" && bash "$SUT")"
 assert "rotated lines merge into the count" "printf '%s' '$out' | grep -q 'records:  *2'"
 
+# --- ORDERING: first/last carry VALUES, not just labels ----------------------
+
+RE="$TMP/order"; new_repo order >/dev/null
+mkdir -p "$RE/.soleur"
+printf '%s\n' '{"v":1,"ts":"2026-03-05T00:00:00Z","event":"route_decision","label":"b","skill":"","agent_domain":"","harness":"x","session_id":"s","plugin_sha":"p","repo_hash":"h"}' \
+  '{"v":1,"ts":"2026-03-01T00:00:00Z","event":"route_decision","label":"a","skill":"","agent_domain":"","harness":"x","session_id":"s","plugin_sha":"p","repo_hash":"h"}' \
+  > "$RE/.soleur/decisions.jsonl"
+out="$(cd "$RE" && bash "$SUT")"
+assert "first: carries the EARLIEST ts (not just the label)" \
+  "printf '%s' '$out' | grep -q 'first:    2026-03-01'"
+assert "last: carries the LATEST ts" \
+  "printf '%s' '$out' | grep -q 'last:     2026-03-05'"
+
+# --- CORRUPTION: a malformed line is surfaced, not silently counted ----------
+
+RF="$TMP/bad"; new_repo bad >/dev/null
+mkdir -p "$RF/.soleur"
+printf '%s\n' '{"v":1,"ts":"2026-03-01T00:00:00Z","event":"route_decision","label":"ok","skill":"","agent_domain":"","harness":"x","session_id":"s","plugin_sha":"p","repo_hash":"h"}' \
+  'garbage-not-json' \
+  > "$RF/.soleur/decisions.jsonl"
+out="$(cd "$RF" && bash "$SUT")"
+assert "malformed lines are reported, not silently dropped" \
+  "printf '%s' '$out' | grep -q 'malformed: 1'"
+
 printf '\n=== alpha-metrics: %d passed, %d failed (of %d) ===\n' "$passes" "$fails" "$CASES"
-[[ "$fails" -eq 0 ]]
+# Anti-vacuity floor (#7408 class): a suite that ran nothing must not exit green.
+[[ "$fails" -eq 0 && "$CASES" -ge 15 ]]

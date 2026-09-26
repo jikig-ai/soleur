@@ -1,4 +1,4 @@
-# ADR-251: Tester-owned local decision log (`.soleur/decisions.jsonl`) — prose-directed emit, field-allowlisted, no egress
+# ADR-253: Tester-owned local decision log (`.soleur/decisions.jsonl`) — prose-directed emit, field-allowlisted, no egress
 
 - Status: Accepted
 - Date: 2026-09-25

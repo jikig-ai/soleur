@@ -3,10 +3,6 @@ name: cohort-status
 description: "This skill should be used when the operator asks for the alpha-tester cohort status — recruitment tally, checkpoint state, quiet flags. Pull-based; no dashboard."
 ---
 
-<!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset, resolve the root by IDENTITY: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode.
-<!-- soleur-cloud-mode:end -->
-
 <!-- grok-harness-invoke:start -->
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
@@ -27,9 +23,10 @@ the push path; this skill is for when the operator asks.
    usage review" --json number,title,state,createdAt`. Per-tester checkpoint issues are
    titled `checkpoint: 2-week usage review — <Company> (alpha tester #N), due <date>`.
 3. **Armed reminders** — derived by convention, not read from a store:
-   `checkpoint-tester-N-<YYYY-MM-DD>` and `cohort-quiet-tester-N` exist iff Step 6 of the
-   runbook ran (`arm-checkpoint.sh N <issue>`). A tester row whose tally has no checkpoint
-   issue means arming never happened — report `checkpoint_armed: NO`, do not infer dates.
+   `checkpoint-tester-N-<YYYY-MM-DD>` and `cohort-quiet-tester-N-<YYYY-MM-DD>` exist iff
+   Step 6 of the runbook ran (`arm-checkpoint.sh N <issue>`). A tester row whose tally has
+   no checkpoint issue means arming never happened — report `checkpoint_armed: NO`, do not
+   infer dates.
 
 ## Procedure
 
@@ -42,8 +39,9 @@ the push path; this skill is for when the operator asks.
    - `armed` — `yes` iff a matching checkpoint issue exists (Step 6 files it and arms in
      the same step)
    - `quiet` — only from a POSITIVE read: a tester is `quiet` iff the latest `cohort-quiet`
-     comment on their tracking issue names them. Never mark quiet from absence — absent
-     data is `unknown`, not `quiet`.
+     comment on their tracking issue names their company domain (the check emits
+     company-level identifiers — email domains, never mailboxes). Never mark quiet from
+     absence — absent data is `unknown`, not `quiet`.
    - `nudged_at` — echoed verbatim from the tally row; the checkpoint interview discloses
      assisted-vs-unassisted returns.
 4. **Sanitize every issue title before printing** — `tr -d '\n'` and `tr '|' '/'` (issue
