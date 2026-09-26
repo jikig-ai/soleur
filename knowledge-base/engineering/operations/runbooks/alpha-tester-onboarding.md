@@ -324,7 +324,7 @@ bash scripts/arm-checkpoint.sh <N> <tracking-issue-number>
 ```
 
    It prints the armed ids (`checkpoint-tester-N-<date>`, `cohort-quiet-tester-N-<date>`). The issue
-   comments @-mention the operator, and the checkpoint id embeds its fire date — Inngest dedupes
+   comments @-mention the operator, and the checkpoint id embeds its arm date — Inngest dedupes
    on the event id, so a re-armed date under the same id would silently keep the old schedule.
 
 > **Do not use `--label follow-through` here.** That label routes into the automated
@@ -407,15 +407,16 @@ Three questions, in this order — the third is the only metric that answers the
 
 ## Tester-#1 repair checklist (owed actions — run these now, off this PR's critical path)
 
-All four are executable today on this runbook alone; none wait on code:
+The four remaining items are operator-executable today on this runbook alone; none wait on code:
 
 - [x] **File the overdue 2-week checkpoint** for tester #1 (due ~2026-08-20) — filed 2026-09-26
   as #8981; `checkpoint-tester-1-2026-09-26` (fires 2026-10-10) and `cohort-quiet-tester-1-2026-09-26`
-  (fires 2026-09-29) armed via `scripts/arm-checkpoint.sh`. Remaining: aggregate KB growth
-  from the git history + self-reported usage — mark the self-report as such; it decays weekly.
+  (fires 2026-09-29) armed via `scripts/arm-checkpoint.sh`. Checkpoint execution (aggregate KB
+  growth from the git history + self-reported usage, marked as such — it decays weekly) is
+  tracked on #8981.
 - [ ] **Send the terms re-notification** (#7459) — the terms sent predate `TC_VERSION` 2.5.0
-  (now 2.5.1 — the notice owes both bumps); the standing-step draft below is the text, and a
-  filled-in draft is posted on #7459. Operator sends.
+  (2.5.1 as of 2026-09-26 — the notice owes both bumps; see `tc-version.ts`); the standing step's
+  drafted notice above is the text, and a filled-in draft is posted on #7459. Operator sends.
 - [ ] **Create the beta-CRM contact** (owner-authenticated, `/dashboard/crm`) — the write gate is
   deliberate; do not script around it. Verified absent 2026-09-26 (`beta_contacts` company
   match: 0 rows).
@@ -432,7 +433,7 @@ Update this table at Step 1 of every onboarding. `cohort_key` and `nudged_at` ar
 
 | Tester | Company | Claude Code user? | Surface | Onboarded | Terms | cohort_key | nudged_at |
 |---|---|---|---|---|---|---|---|
-| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `superseded-resend-required` (was `sent-awaiting-reply`; the terms sent predate `TC_VERSION` 2.5.0 — see the standing step below; send tracked at #7459) | — (CLI; no hosted account) | — |
+| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `superseded-resend-required` (was `sent-awaiting-reply`; the terms sent predate `TC_VERSION` 2.5.0 — see the standing step above; send tracked at #7459) | — (CLI; no hosted account) | — |
 
 **`Terms` values:** `agreed` (tester replied), `sent-awaiting-reply`, `superseded-resend-required` (a `TC_VERSION` bump landed after the terms were sent; a fresh notice is owed), or `not-required`. Update at
 Step 1. A tester at `sent-awaiting-reply` may still be worked with; a tester at blank has not been

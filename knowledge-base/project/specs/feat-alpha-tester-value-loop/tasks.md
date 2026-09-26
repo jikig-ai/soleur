@@ -10,7 +10,7 @@ date: 2026-09-25
 
 ## Phase 0: Immediate (operator, parallel — NOT gated on this PR)
 
-- [ ] 0.1 File tester #1's overdue 2-week checkpoint (aggregate KB growth + self-reported usage, disclosed as such)
+- [x] 0.1 File tester #1's overdue 2-week checkpoint — filed 2026-09-26 as #8981, reminders armed (aggregate KB growth + self-reported usage, disclosed as such, lands on #8981)
 - [ ] 0.2 Execute #7459 terms re-notify (TC 2.5.0→2.5.1)
 - [ ] 0.3 Create beta-CRM contact for Skouer (owner-authenticated RPC path — platform is serving)
 - [ ] 0.4 C9 controller/processor re-run per #7348 (precondition to tester #2's first session)
