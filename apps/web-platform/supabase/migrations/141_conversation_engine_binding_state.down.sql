@@ -1,5 +1,6 @@
 BEGIN;
 
+DROP TRIGGER IF EXISTS conversations_engine_binding_state_insert ON public.conversations;
 DROP TRIGGER IF EXISTS conversations_engine_binding_state_immutable ON public.conversations;
 DROP FUNCTION IF EXISTS public.guard_conversation_engine_binding_state();
 ALTER TABLE public.conversations DROP COLUMN IF EXISTS engine_binding_state;
