@@ -70,4 +70,4 @@ Indicator mounts in `(dashboard)/layout.tsx` (client component hosting existing 
 
 ## Visual Design
 
-Wireframes: `knowledge-base/product/design/dashboard/` (see Key Decisions — pending .pen artifact from ux-design-lead).
+Approved wireframe: `knowledge-base/product/design/dashboard/action-feedback-variant-b-instrumented-spec.pen` (screenshots `screenshots/16-19-*.png`) — adopt Variant A's quiet visuals for production. Surfaces covered: route-pending bar (desktop + mobile PWA below safe-area), button pending matrix (idle/pressed/pending × gold/outlined/ghost), typed-confirm modal pending state.

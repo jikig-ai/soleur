@@ -1,0 +1,5 @@
+# Pencil .pen fileToken document IDs (pen.dev CLI v0.3.x embeds a per-document
+# UUID; not a credential). Format: <path>:<rule-id>:<line>
+knowledge-base/product/design/dashboard/action-feedback-variant-a-forge-restraint.pen:generic-api-key:1741
+knowledge-base/product/design/dashboard/action-feedback-variant-b-instrumented-spec.pen:generic-api-key:2111
+knowledge-base/product/design/dashboard/action-feedback-variant-c-ember-glow.pen:generic-api-key:1867

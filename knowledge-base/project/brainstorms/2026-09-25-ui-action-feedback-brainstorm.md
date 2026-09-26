@@ -43,7 +43,7 @@ Full primitive migration (B) was chosen over a layered intercept (A) despite a l
 | Hard navs | Excluded — `window.location.assign` sites (sign-out, org-switch, delete-account) keep hard-nav semantics | ADR-067 Router-Cache isolation invariant is load-bearing |
 | A11y | `aria-busy` + stable accessible name; respect `prefers-reduced-motion` sweep | Existing precedent (`sign-out-confirm-modal.tsx:111`, `review-gate-card.tsx:52`) |
 | Same-path query navs | Indicator fires — watcher keys on `usePathname` AND `useSearchParams` | `workstream?issue=`, `crm?contact=` are real navs |
-| Visual design | `.pen` wireframes via soleur:product:design:ux-design-lead → `knowledge-base/product/design/dashboard/` | `wg-ui-feature-requires-pen-wireframe` mandatory |
+| Visual design | `.pen` wireframes committed: `design/dashboard/action-feedback-variant-{a,b,c}-*.pen` + 12 screenshots; **approved: Variant B (Instrumented Spec)**, adopting A's quiet visuals for production | `wg-ui-feature-requires-pen-wireframe` mandatory; taste recorded (`dashboard/aesthetic-direction = instrumented-spec`) |
 | Visual gate | Headless Playwright spec in `authenticated` project for the nav chrome | ADR-049 |
 | Observability | Nav-duration `performance.now()` signal alongside the provider | `hr-observability-as-plan-quality-gate`; feeds the parallel perf work |
 | Productize candidate | `constraint-scaffold`-style lint rule steering new code to the button primitives | Prevents the 94%-bypass regrowing post-migration |
