@@ -25,7 +25,7 @@ light group runs K=7. Regenerate the manifests when legs skew or when
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | ~8.1-9.8 min suite time + setup (leg 5 is a single 589 s atomic suite — see Measured history) |
+| `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | interim ~13 min on the -a leg pre-regen; ~9 min predicted equilibrium (the orphan-suite battery is now two `--rows` halves — see Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 2 | battery rows split `--rows 1-12` / `13-24` | ~5 min each + setup |
 
@@ -152,6 +152,20 @@ span to the NEXT registered mark.
   from run 36125573947: legs 486–589 s, leg 5 = the atomic
   `lint-orphan-test-suites-mutations` (588.8 s alone — no K splits a single
   suite; the suite-internal split is a deferred follow-up).
+- **2026-09-26 suite-internal `--rows` split (#8864):** the deferred
+  follow-up landed — `lint-orphan-test-suites-mutations` registers as
+  `-a`/`--rows 1-8` and `-b`/`--rows 9-16` (DECLARED_TOTAL=16 in the
+  battery; the union tiles it, asserted by the run_suite-argv tiling block
+  in `scripts-shard-totality.test.sh`). Interim pins: `-b` stays on leg 5
+  (the emptied suite leg), `-a` on leg 3 — one pre-regen run can overshoot
+  (~780 s on the -a leg); the first green run carrying both halves'
+  timings is the regen input, and the predicted equilibrium worst leg is
+  ~9 min ((2989139 ms + ~590 s + ~170 s duplicated preamble)/7 — each
+  half pays the suite's build+control overhead, so the split is ~76%-of-
+  suite per leg, not a halving). Re-splitting later = bump
+  DECLARED_TOTAL + move the range boundary in the SAME commit; the battery
+  records per-row elapsed seconds in its replay table so the next boundary
+  choice is a data lookup.
 
 ## Runner-availability data (why extra legs are not free)
 

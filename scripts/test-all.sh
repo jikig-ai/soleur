@@ -3474,16 +3474,25 @@ if want_scripts; then
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed by this runner.
   run_suite "scripts/rules-loader-stamp-probe" bash scripts/rules-loader-stamp-probe.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
-  # Guard 1 (#7402). The LIVE line above points the linter at this working tree; this one is
-  # its mutation battery, which builds a synthetic git repo and proves each of the eleven rows
-  # reddens. Both are needed for the same reason the legal-corpus pair below states: the unit
-  # suite proves the guard can detect a planted defect, the live line is the only thing that
-  # ever points it at the real repo.
+  # Guard 1 (#7402). The LIVE line above points the linter at this working tree; the pair
+  # below is its mutation battery, which builds a synthetic git repo and proves each of the
+  # sixteen mutation rows reddens. Both are needed for the same reason the legal-corpus pair
+  # below states: the unit suite proves the guard can detect a planted defect, the live line
+  # is the only thing that ever points it at the real repo.
+  #
+  # The battery registers TWICE (#8864): as one ~10-minute atomic suite it was the
+  # test-scripts shard's worst leg, so the `-a`/`-b` halves carry complementary `--rows`
+  # ranges over its DECLARED_TOTAL mutation rows and the shard manifest places them on
+  # different legs. The boundary lives in the FLAG ARGUMENT, never in the label — and the
+  # union of the ranges tiling 1..DECLARED_TOTAL is asserted by
+  # plugins/soleur/test/scripts-shard-totality.test.sh. A DECLARED_TOTAL bump in the battery
+  # must land in the same commit as a re-split of these ranges.
   #
   # NOT added to the linter's own REQUIRED_RUNNERS list: that array holds RUNNERS (files that
   # dispatch other suites), and a `.test.sh` is not one. The `scripts/*.test.sh` walk — now the
   # whole-repo walk — is what keeps THIS line honest.
-  run_suite "scripts/lint-orphan-test-suites-mutations" bash scripts/lint-orphan-test-suites.test.sh
+  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
+  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
@@ -4589,7 +4598,7 @@ fi
 #
 # The three cost-heaviest registrations are gated by want_scripts_heavy, not want_scripts:
 # ci.yml runs them on a dedicated `test-scripts-heavy` matrix so each lands on its own leg,
-# while the lighter scripts group fans out over six legs. TEST_GROUP=all still covers all
+# while the lighter scripts group fans out over seven legs. TEST_GROUP=all still covers all
 # three — want_scripts_heavy's `all` arm is what keeps the ship gate, the lefthook battery
 # and main-health-monitor running them.
 #
