@@ -35,7 +35,7 @@ if [[ "$detect" == "success" && ( "$suite" == "success" || "$suite" == "skipped"
   # cover the verified surface, not everything, or a heavy live-DB suite runs on
   # every PR.)
   if [[ "$suite" == "skipped" ]]; then
-    skipped_msg="tenant-integration PASSED on the SKIPPED arm: the heavy dev-Supabase isolation suite did NOT execute against this tree (detect-changes emitted tenant=false). Its first execution against these changes will therefore be post-merge, on main."
+    skipped_msg="tenant-integration PASSED on the SKIPPED arm: the heavy dev-Supabase isolation suite did NOT execute against this tree (detect-changes emitted tenant=false — no anchored path, a merge_group candidate, or a post-merge push proven duplicate of the merged PR's green run on the identical tree #8919)."
     echo "::notice::$skipped_msg"
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       printf '%s\n' "- :warning: $skipped_msg" >>"$GITHUB_STEP_SUMMARY"

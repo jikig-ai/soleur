@@ -24,7 +24,7 @@ export default async function BillingPage() {
   const service = createServiceClient();
 
   const orgId = await resolveCurrentOrganizationId(user.id, supabase);
-  const identity: Identity = { userId: user.id, role: "prd", orgId: orgId ?? "" };
+  const identity: Identity = { userId: user.id, role: "prd", orgId: orgId ?? "" , email: null, subscriptionStatus: null };
   const byokEnabled = orgId ? await isByokDelegationsEnabled(orgId, identity) : false;
 
   // Solo-pin for the delegation pane (per-user billing model). workspace-scoping

@@ -23,6 +23,25 @@ describe("LRUCache", () => {
     expect(cache.get("a")).toBeUndefined();
   });
 
+  it("expiry is ABSOLUTE — reads do not extend an entry's lifetime", () => {
+    // Security-verdict consumers (middleware verdict caches) pin "staleness
+    // ≤ TTL". If get() refreshed the write anchor, an entry hit continuously
+    // would live forever — a sliding window that voids the bound precisely
+    // under traffic. Pin: N reads inside TTL still die at write+ttlMs.
+    const cache = new LRUCache<string, number>(10, 1000);
+    cache.set("a", 42);
+    // Hit repeatedly with sub-TTL gaps — a sliding window would survive
+    // indefinitely on this access pattern.
+    for (let i = 0; i < 3; i++) {
+      vi.advanceTimersByTime(300);
+      expect(cache.get("a")).toBe(42);
+    }
+    // t=1100: last read was 200ms ago (a sliding window would still hit),
+    // but the entry is 1100ms past its WRITE anchor → expired.
+    vi.advanceTimersByTime(200);
+    expect(cache.get("a")).toBeUndefined();
+  });
+
   it("evicts LRU entry when at capacity", () => {
     const cache = new LRUCache<string, number>(3, 60000);
     cache.set("a", 1);

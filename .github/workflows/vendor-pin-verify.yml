@@ -41,19 +41,25 @@ jobs:
   # detect-changes: decides whether the upstream-blob verification runs
   # (#8203). Cheap — one checkout + one git diff. BASE_REF is only set on
   # pull_request; non-PR events (push to main / workflow_dispatch)
-  # short-circuit to vendor=true (main is the source of truth). BASE_REF is
+  # short-circuit to vendor=true (main is the source of truth) — except a push
+  # proven duplicate of the merged PR's green run (#8919). BASE_REF is
   # passed via env: + quoted "$BASE_REF" per workflow-injection guidance.
   detect-changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # pull-requests/actions read scopes for the push-arm duplicate proof
+    # (#8919); workflow grants contents: read only.
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     outputs:
       vendor: ${{ steps.filter.outputs.vendor }}
     steps:
-      # Checkout only pays for itself on the pull_request arm — the
-      # merge_group and push/dispatch short-circuits below write
-      # $GITHUB_OUTPUT and exit before the diff, so a full-history clone on
-      # those events is pure waste.
-      - if: github.event_name == 'pull_request'
+      # Checkout pays for itself on pull_request (the diff needs the tree) and
+      # on push — the push arm runs scripts/main-push-duplicate-skip.sh for the
+      # duplicate proof (#8919). merge_group short-circuits before it matters.
+      - if: github.event_name == 'pull_request' || github.event_name == 'push'
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           fetch-depth: 0
@@ -61,6 +67,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          MERGE_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
           if [[ "$EVENT_NAME" == "merge_group" ]]; then
@@ -73,9 +81,17 @@ jobs:
             exit 0
           fi
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
-            # push to main / workflow_dispatch: always run (main is source of
-            # truth — a co-edit bypass that slipped a PR must still fail here).
-            printf 'vendor=true\n' >> "$GITHUB_OUTPUT"
+            # push to main / workflow_dispatch: run — UNLESS the push is a
+            # proven duplicate (#8919): the merged PR's head ran
+            # verify-upstream-blobs green on the byte-identical tree. Every
+            # ambiguity fails open to vendor=true.
+            if [[ "$EVENT_NAME" == "push" ]] && \
+               bash scripts/main-push-duplicate-skip.sh vendor-pin-verify.yml "${MERGE_SHA}" verify-upstream-blobs | grep -qx 'duplicate=true'; then
+              echo "::notice::push run is a proven duplicate of the merged PR's green run; suite skipped"
+              printf 'vendor=false\n' >> "$GITHUB_OUTPUT"
+            else
+              printf 'vendor=true\n' >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
           # A git/checkout error (missing origin/$BASE_REF, etc.) must FAIL the

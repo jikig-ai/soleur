@@ -36,6 +36,7 @@ vi.mock("@sentry/nextjs", () => ({
   getCurrentScope: vi.fn(() => ({ setUser: vi.fn() })),
   captureException: vi.fn(),
   captureMessage: vi.fn(),
+  addBreadcrumb: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -60,8 +61,11 @@ async function importHelper() {
   return await import("@/server/with-user-rate-limit");
 }
 
-function makeRequest(): Request {
-  return new Request("https://app.soleur.ai/api/test", { method: "GET" });
+function makeRequest(headers: Record<string, string> = {}): Request {
+  return new Request("https://app.soleur.ai/api/test", {
+    method: "GET",
+    headers,
+  });
 }
 
 function setUser(userId: string | null) {
@@ -219,6 +223,77 @@ describe("withUserRateLimit", () => {
     await wrapped(makeRequest());
     // Exactly ONE getUser call per request: the wrapper's call. Inner
     // handlers receive `user` as a parameter and must not re-auth.
+    expect(mockGetUser).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------
+  // Middleware-verified identity header (perf-dashboard-section-load-latency,
+  // Phase 2). Middleware mints `x-soleur-auth-user-id` after getUser() (and
+  // strips any client-forged inbound copy); `verifiedUserId()` trusts it and
+  // skips the second auth-server round-trip. Without the header (direct
+  // invocation, matcher gap) the wrapper falls back to getUser() — the
+  // fail-closed direction — so the 401/quota contract above is unchanged.
+  // -------------------------------------------------------------------
+
+  test("middleware-verified header present → inner handler receives it and getUser() is NEVER called", async () => {
+    const { withUserRateLimit } = await importHelper();
+    const inner = vi
+      .fn()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
+    const wrapped = withUserRateLimit(inner, {
+      perMinute: 60,
+      feature: "test.header",
+    });
+
+    const res = await wrapped(
+      makeRequest({ "x-soleur-auth-user-id": "mw-verified-user" }),
+    );
+
+    expect(res.status).toBe(200);
+    const [, userArg] = inner.mock.calls[0]!;
+    // The narrowed handler contract is (req, user: { id: string }) — the
+    // middleware-verified id arrives on `user.id`, same shape as before.
+    expect(userArg).toMatchObject({ id: "mw-verified-user" });
+    // Zero auth-server RTT: the header short-circuits getUser entirely.
+    expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  test("header present is the rate-limit key (per-user isolation keys on the verified id)", async () => {
+    const { withUserRateLimit } = await importHelper();
+    const inner = vi.fn().mockResolvedValue(new Response("ok"));
+    const wrapped = withUserRateLimit(inner, {
+      perMinute: 1,
+      feature: "test.header-key",
+    });
+
+    // Two different header identities are independent counters…
+    expect(
+      (await wrapped(makeRequest({ "x-soleur-auth-user-id": "u-a" }))).status,
+    ).toBe(200);
+    expect(
+      (await wrapped(makeRequest({ "x-soleur-auth-user-id": "u-b" }))).status,
+    ).toBe(200);
+    // …and the same identity is limited.
+    expect(
+      (await wrapped(makeRequest({ "x-soleur-auth-user-id": "u-a" }))).status,
+    ).toBe(429);
+    expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  test("header ABSENT → falls back to getUser(); unauthenticated still 401s and inner is never invoked", async () => {
+    const { withUserRateLimit } = await importHelper();
+    setUser(null);
+    const inner = vi.fn();
+    const wrapped = withUserRateLimit(inner, {
+      perMinute: 60,
+      feature: "test.no-header-401",
+    });
+
+    const res = await wrapped(makeRequest());
+    expect(res.status).toBe(401);
+    expect(inner).not.toHaveBeenCalled();
+    // The fallback DID re-verify — absent header is never trusted as "nobody",
+    // it means "ask the auth server".
     expect(mockGetUser).toHaveBeenCalledTimes(1);
   });
 });

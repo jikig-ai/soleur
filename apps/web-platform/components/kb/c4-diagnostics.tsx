@@ -3,15 +3,15 @@
 // The C4 diagnostics / staleness banner. Lives in its own light module (no
 // CodeMirror, Mantine or @likec4/diagram) so tests can render the REAL banner;
 // c4-shared.tsx re-exports it, so every import site is unchanged.
-import type { Diagnostic } from "./c4-shared";
+import { MODEL_LEVEL_LINE, type Diagnostic } from "@/lib/c4-model-shape";
 
 /** Line 2 of the stale strip when the save carried no diagnostic (#8695). The
  *  server returns `rerendered:false` with no reason only when a newer source
- *  change superseded this save's render. Nothing on this page reloads on its
- *  own, and that newer change may never render here (a push from outside
- *  Soleur, or a render that failed), so the copy names the supersede, promises
- *  nothing, and points at the one action that works: Save stays enabled while
- *  the diagram is stale. */
+ *  change superseded this save's render. That newer change may never render
+ *  here — a push from outside Soleur emits no `c4_diagram_saved` frame the
+ *  page can hear (#8739), and a render can fail — so the copy names the
+ *  supersede, promises nothing, and points at the one action that works: Save
+ *  stays enabled while the diagram is stale. */
 export const SUPERSEDED_LINE =
   "A newer change to the diagram source was saved before this one was rendered, so this save did not update the diagram. Save again to render the latest version.";
 
@@ -67,8 +67,12 @@ export function C4Diagnostics({
           </p>
           <ul className="space-y-0.5">
             {diagnostics.slice(0, 8).map((d, i) => (
+              // `line <= MODEL_LEVEL_LINE` is reserved for a diagnostic about the
+              // whole model (the zero-view model, #8740), which has no source
+              // line. A second producer or reader should move to a `kind` field.
               <li key={i}>
-                line {d.line}: {d.message}
+                {d.line > MODEL_LEVEL_LINE ? `line ${d.line}: ` : ""}
+                {d.message}
               </li>
             ))}
           </ul>

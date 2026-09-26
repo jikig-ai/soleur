@@ -24,10 +24,12 @@
 # epilogue rather than claiming coverage it does not have. Read the log: it reports
 # which of those happened, keyed on whether this runner actually ran.
 #
-# The suite list is DERIVED from infra-validation.yml rather than globbed off the
-# directory, so this runner and CI cannot drift: a suite added to the workflow is
-# picked up here automatically, and a suite that exists on disk but was never
-# registered is reported as unregistered rather than silently counted as covered.
+# The suite list is DERIVED by filesystem glob over apps/web-platform/infra/
+# (ADR-252) rather than scraped off the workflow's `run: bash` steps, so this
+# runner and CI cannot drift — literally: presence IS registration, and a suite
+# added on disk is picked up here AND by the deploy-script-tests matrix legs
+# automatically. (The scrape this replaced could not see subdirectory or
+# sudo-invoked suites — the #7076 blind spot.)
 #
 # Serial execution is not viable — 126 derived suites (as-of measurement
 # 2026-09-21, the same vintage as the tooling table below; re-derive rather
@@ -120,19 +122,37 @@
 #     < <(bash apps/web-platform/infra/run-registered-suites.sh --list \
 #         | sed -n 's|^  \(apps/.*\.test\.sh\)$|\1|p') | sort | uniq -c | sort -rn
 #
-# No derived suite invokes sudo (measured: 0) — see the derive-but-do-not-execute discussion
-# in #7076 for why that matters.
+# No EXECUTED suite invokes sudo — the three loopback suites that need root are
+# derived but skipped by the PRIVILEGED bucket below and run in CI under `sudo
+# bash` in deploy-script-tests-fixed (the derive-but-do-not-execute shape #7076
+# asked for).
 #
 # Usage:
 #   bash apps/web-platform/infra/run-registered-suites.sh          # all suites
 #   JOBS=12 bash apps/web-platform/infra/run-registered-suites.sh  # override width
 #   bash apps/web-platform/infra/run-registered-suites.sh --list   # derive only, run nothing
+#   bash apps/web-platform/infra/run-registered-suites.sh --enumerate  # machine-readable set
+#   SOLEUR_INFRA_SHARD=1/4 bash …/run-registered-suites.sh         # one CI leg's subset
+#
+# Environment seams (each documented at its use site):
+#   SOLEUR_INFRA_DIR        suite-root override (test fixtures; default
+#                           apps/web-platform/infra — in-repo = git ls-files,
+#                           outside = find)
+#   SOLEUR_INFRA_SHARD      k/N leg selector (malformed/out-of-range = exit 2)
+#   SOLEUR_INFRA_MANIFEST   manifest override: `off`, or an absolute path —
+#                           invalid forms fail closed
+#   SOLEUR_INFRA_TIMINGS    per-suite timing feed path (label<TAB>ms<TAB>verdict;
+#                           consumed by regenerate-shard-manifest.py --group infra)
+#   SOLEUR_SUITE_TIMEOUT_*  per-suite bound override (test seam)
+#   INFRA_ORPHAN_LIST       inject the untracked-scan candidate list (test seam)
 #
 # `--list` prints the derived suite list and the orphan report without executing
 # anything. It exists so this script's own logic (derivation, the zero-guard, the
 # orphan scan) is testable in under a second — a runner whose correctness could
 # only be checked by a 25-minute full run would not, in practice, be checked.
-# INFRA_WF overrides the workflow path for the same reason (fixtures).
+# `--enumerate` prints `SUITE_REGISTRATION<TAB><path>` rows for the EXECUTE set
+# (privileged excluded) — it is shard-insensitive by design: the manifest
+# generator consumes the full set for its ⊆ lint.
 #
 # EXIT CONTRACT — THE SHAPE OF THE NON-ZERO IS LOAD-BEARING (#7429).
 #
@@ -198,6 +218,14 @@
 
 set -uo pipefail
 
+# Version gate FIRST — the derivation below uses bash-4 features (mapfile,
+# declare -A) and the timing code needs bash 5 (EPOCHSECONDS); on bash 3.2 the
+# script would die at mapfile with `unbound variable` instead of this message.
+[[ -n "${EPOCHSECONDS:-}" ]] || {
+  echo "FATAL: bash 5.0+ required (EPOCHSECONDS is unset) — this runner needs a modern bash." >&2
+  exit 2
+}
+
 # Default TMPDIR to /var/tmp (disk-backed), mirroring scripts/test-all.sh.
 #
 # These suites are the heaviest bulk writers in the repo: several copy the whole
@@ -221,9 +249,12 @@ LIST_ONLY=0
 case "${1:-}" in
   "") ;;
   --list) LIST_ONLY=1 ;;
+  # --enumerate is the machine-readable SUITE_REGISTRATION form (handled after
+  # derivation below); it must be accepted here or the refusal would fire first.
+  --enumerate) ;;
   # Any other argument used to fall through to a FULL battery run (#8705: `--help` started all
-  # 137 suites). Refuse instead: the only accepted argument is --list.
-  *) echo "usage: ${0##*/} [--list]" >&2; exit 64 ;;
+  # 137 suites). Refuse instead: the only accepted arguments are --list and --enumerate.
+  *) echo "usage: ${0##*/} [--list|--enumerate]" >&2; exit 64 ;;
 esac
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -248,88 +279,407 @@ fi
 declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
 cd "$ROOT" || exit 1
 
-WF="${INFRA_WF:-.github/workflows/infra-validation.yml}"
-[[ -f "$WF" ]] || { echo "FATAL: $WF not found — cannot derive the registered suite list." >&2; exit 2; }
-
-# SOLEUR_INFRA_DIR is a TEST SEAM, sibling to INFRA_WF. Namespaced because a bare
+# SOLEUR_INFRA_DIR is a TEST SEAM. Namespaced because a bare
 # INFRA_DIR is already a workflow-level `env:` in apply-sentry-infra.yml and
-# apply-deploy-pipeline-fix.yml — an unrelated job's env must not reach a test seam. The derivation regex below used to hardcode
-# the `apps/web-platform/infra/` prefix, which meant a fixture suite could only be registered
-# by physically creating an executable file IN THE LIVE INFRA DIRECTORY — while every sibling
-# suite is reading that directory. That is precisely the collision #7376 is about, so the
-# tests for this file could not be written without reproducing the bug they guard.
+# apply-deploy-pipeline-fix.yml — an unrelated job's env must not reach a test seam.
+# A fixture root from `mktemp -d` lives OUTSIDE the repo, so the tests for this file
+# never had to write into the live infra directory while sibling suites read it (#7376).
 SOLEUR_INFRA_DIR="${SOLEUR_INFRA_DIR:-apps/web-platform/infra}"
-# Escape it for the ERE below: a fixture root from `mktemp -d` carries `.` characters, which
-# an unescaped interpolation would turn into "any character".
-_DIR_ERE="$(printf '%s' "$SOLEUR_INFRA_DIR" | sed 's/[][\.^$*+?(){}|\\/]/\\&/g')"
-
-mapfile -t SUITES < <(
-  grep -oE "run: bash ${_DIR_ERE}/[A-Za-z0-9._-]+\.test\.sh" "$WF" \
-    | sed 's/run: bash //' | sort -u
-)
-
-# A silent zero here would print "0 failed" and read as success — the exact
-# false-green this runner exists to end.
-(( ${#SUITES[@]} > 0 )) || {
-  echo "FATAL: derived ZERO suites from $WF. The 'run: bash …' step shape changed;" >&2
-  echo "       fix the extraction rather than trusting this run." >&2
+[[ -d "$SOLEUR_INFRA_DIR" ]] || {
+  echo "FATAL: SOLEUR_INFRA_DIR='$SOLEUR_INFRA_DIR' is not a directory — cannot glob" >&2
+  echo "       the registered suite set." >&2
   exit 2
 }
 
-# Report suites present on disk that NO workflow or script references. A test that
-# nothing runs is not coverage, and it fails silently forever — the same
-# false-assurance class as the test-all blind spot above, one level down.
+# Derivation is the FILESYSTEM GLOB, not a workflow `run: bash` scrape (ADR-252):
+# presence under SOLEUR_INFRA_DIR IS registration — a suite on disk is in the
+# execute set unless it carries a justified PRIVILEGED exclusion below. The scrape
+# this replaced could not see subdirectory suites (its basename class excluded `/`)
+# and made registration a second thing to remember — the #7076 blind spot, nine
+# suites (6 subdir + 3 sudo) that CI ran but this runner never derived.
 #
-# Advisory HERE, but no longer advisory ANYWHERE (#7068): every suite this block can print
-# is a hard failure of .github/scripts/test/test-infra-suite-registration.sh, which runs in
-# `guard-script-fixture-tests` — a REQUIRED, merge_group-triggered, path-filter-free check.
-# The chain is exact: a suite is printed here only when its basename appears in no workflow,
-# so no `run: bash <path>` step exists, so that gate's single-line check AND its any-shape
-# fallback both fail. The gate's EXCLUSIONS escape does not rescue it either, because the
-# exclusion arm independently requires an invocation to exist.
+# `git ls-tree HEAD` is the source inside the repo: COMMITTED files only, so a
+# scratch `.test.sh` nobody committed does not silently register, and the glob
+# result is exactly what a fresh CI checkout will contain. `-r` recursion makes
+# subdirectory suites visible. A caller-supplied fixture dir OUTSIDE the tree
+# has no HEAD to consult and takes the filesystem arm.
+if [[ "$SOLEUR_INFRA_DIR" == /* && "$SOLEUR_INFRA_DIR" != "$ROOT/"* ]]; then
+  mapfile -t ALL_SUITES < <(find "$SOLEUR_INFRA_DIR" -type f -name '*.test.sh' | LC_ALL=C sort -u)
+else
+  # `git ls-tree HEAD`, not `git ls-files`: the index counts STAGED files, so a
+  # `git add`ed-but-uncommitted suite would derive locally while being absent
+  # from every CI checkout — the exact "on one laptop" defect the orphan report
+  # exists to close. HEAD's tree is the committed set CI actually sees.
+  # (ls-tree's pathspec is not a glob engine — list the prefix, filter the
+  # suffix; `-r` recursion is what makes subdirectory suites visible.)
+  mapfile -t ALL_SUITES < <(git ls-tree -r --name-only HEAD -- \
+    "${SOLEUR_INFRA_DIR#"$ROOT"/}" | grep -E '\.test\.sh$' | LC_ALL=C sort -u)
+fi
+
+# A tracked SYMLINK is never a suite: the listing treats mode-120000 entries
+# like files, and `bash "$s"` at dispatch follows the link silently — a symlink
+# out of the repo executes out-of-repo content on a CI leg. Refuse, not skip:
+# a silent skip would deregister the suite by name alone.
+for _s in "${ALL_SUITES[@]}"; do
+  if [[ -L "$_s" ]]; then
+    echo "FATAL: '$_s' is a symlink — a suite is a real file, never a link." >&2
+    echo "       Replace it with the file itself or remove it." >&2
+    exit 2
+  fi
+  case "$_s" in
+    *[[:space:]]*)
+      echo "FATAL: suite path contains whitespace: '$_s' — per-suite capture keys" >&2
+      echo "       and the manifest's label<TAB>leg format cannot carry it." >&2
+      exit 2 ;;
+  esac
+done
+
+# Two name-space invariants the machinery depends on, asserted once at derive
+# time rather than degenerating per-suite:
+#  (a) BASENAMES must be unique — PRIVILEGED_WHY is basename-keyed, so a second
+#      `workspaces-luks-loopback.test.sh` in a subdirectory would inherit the
+#      exclusion and run NOWHERE while the gate's sudo grep stayed satisfied by
+#      the original's step.
+#  (b) LOG KEYS must be unique — the shim munges a path to `a_b.test.sh` for its
+#      .log/.meta/.trow files, so `infra/a/b.test.sh` and `infra/a_b.test.sh`
+#      share one key: interleaved capture, a lost kill-rc, a dropped timing row.
+(( ${#ALL_SUITES[@]} > 0 )) && {
+  _dup="$(printf '%s\n' "${ALL_SUITES[@]##*/}" | LC_ALL=C sort | uniq -d | head -1)"
+  [[ -z "$_dup" ]] || {
+    echo "FATAL: duplicate suite basename '$_dup' — basenames must be unique across" >&2
+    echo "       ${SOLEUR_INFRA_DIR} (PRIVILEGED_WHY and the registration gate key on them)." >&2
+    exit 2
+  }
+  _dup="$(printf '%s\n' "${ALL_SUITES[@]//\//_}" | LC_ALL=C sort | uniq -d | head -1)"
+  [[ -z "$_dup" ]] || {
+    echo "FATAL: two suite paths munge to the same log key '$_dup' — per-suite" >&2
+    echo "       .log/.meta/.trow files would collide. Rename one of them." >&2
+    exit 2
+  }
+  unset _dup
+}
+
+# A silent zero here would print "0 failed" and read as success — the exact
+# false-green this runner exists to end.
+(( ${#ALL_SUITES[@]} > 0 )) || {
+  echo "FATAL: derived ZERO suites from ${SOLEUR_INFRA_DIR}/*.test.sh." >&2
+  echo "       If the directory moved, fix the glob; do not trust a run over nothing." >&2
+  exit 2
+}
+
+# PRIVILEGED — derive-but-do-not-execute (#7076). These suites need root
+# (loopback/dm devices, cryptsetup, mkfs) and run in CI via `sudo bash` steps in
+# the deploy-script-tests-fixed job — the registration gate asserts that
+# invocation exists ("the exclusion waives the runner, never the invocation").
+# They are DERIVED here (presence = registration, so they stay counted and
+# visible) but never invoked: a local host without passwordless sudo must not go
+# permanently red on a suite it was never meant to run.
+declare -A PRIVILEGED_WHY=(
+  [git-data-plaintext-snapshot-loopback.test.sh]="dm-snapshot/mkfs evidence needs root (#5274)"
+  [inngest-redis-luks-loopback.test.sh]="LUKS loopback blkid apparatus needs root (#7695)"
+  [workspaces-luks-loopback.test.sh]="cryptsetup loopback needs root (#6588)"
+)
+PRIV_SUITES=()
+SUITES=()
+for _s in "${ALL_SUITES[@]}"; do
+  if [[ -n "${PRIVILEGED_WHY[${_s##*/}]+x}" ]]; then
+    PRIV_SUITES+=("$_s")
+  else
+    SUITES+=("$_s")
+  fi
+done
+unset _s
+_EXECUTABLE_N=${#SUITES[@]}
+
+# SUITE_REGISTRATION enumerate — the machine-readable form the shard-manifest
+# generator (`regenerate-shard-manifest.py --group infra`) consumes for its ⊆
+# lint. Emits the EXECUTE set only: privileged suites are never timed by this
+# runner, so tabling them would red the lint on a row no leg can produce.
+if [[ "${1:-}" == "--enumerate" ]]; then
+  printf 'SUITE_REGISTRATION\t%s\n' "${SUITES[@]}"
+  exit 0
+fi
+
+# SOLEUR_INFRA_SHARD=k/N partitions the execute set across CI matrix legs.
+# Parse contract mirrors SCRIPTS_SHARD in scripts/test-all.sh verbatim: unset =
+# full set (local runs, main-health-monitor), set-but-malformed or out-of-range
+# = exit 2 — never silently run everything or nothing.
+_SHARD_K=0
+_SHARD_N=0
+if [[ -n "${SOLEUR_INFRA_SHARD+x}" ]]; then
+  _shard_raw="${SOLEUR_INFRA_SHARD//[[:space:]]/}"
+  # `[0123456789]`, not `[0-9]`: a collation-dependent class can match a fullwidth
+  # digit that `10#` then fatals on — and bash RESUMES after the `if` with status
+  # 0, leaving k/N=0/0, which reads as "not sharding" and runs the FULL set. An
+  # enumerated class cannot be widened by collation. (Same contract as
+  # SCRIPTS_SHARD's parser; see that comment block for the measured failure.)
+  if [[ ! "$_shard_raw" =~ ^([0123456789]{1,9})/([0123456789]{1,9})$ ]]; then
+    echo "ERROR: SOLEUR_INFRA_SHARD must be k/N with 1 <= k <= N (got: '${SOLEUR_INFRA_SHARD}')." >&2
+    echo "       Unset it to run the full set. A malformed value is never inferred: it fails" >&2
+    echo "       closed rather than silently running everything or nothing." >&2
+    exit 2
+  fi
+  _SHARD_K=$(( 10#${BASH_REMATCH[1]} ))
+  _SHARD_N=$(( 10#${BASH_REMATCH[2]} ))
+  if (( _SHARD_N < 1 || _SHARD_K < 1 || _SHARD_K > _SHARD_N )); then
+    echo "ERROR: SOLEUR_INFRA_SHARD must be k/N with 1 <= k <= N (got: '${SOLEUR_INFRA_SHARD}')." >&2
+    echo "       Unset it to run the full set. A malformed value is never inferred: it fails" >&2
+    echo "       closed rather than silently running everything or nothing." >&2
+    exit 2
+  fi
+  echo "[shard] SOLEUR_INFRA_SHARD resolved k/N = ${_SHARD_K}/${_SHARD_N}"
+fi
+
+# Shard-assignment manifest (ADR-240 pattern): the committed
+# apps/web-platform/infra/suite-shard-legs.tsv maps suite path -> leg from
+# CI-measured durations (sticky-LPT via regenerate-shard-manifest.py --group
+# infra). The runner only READS it — a missing/stale manifest degrades to the
+# positional partition rather than failing, because coverage never depends on
+# the table being present or current.
 #
-# So do not read a NOTE below as optional. This runner still declines to FAIL on it — its job
-# is to run what CI runs, not to police the rest — but the merge will be blocked. Said
-# explicitly because the previous wording ("Advisory, not a failure") was written before that
-# gate existed and would now tell you registration is optional, which is the opposite of true.
+# SOLEUR_INFRA_MANIFEST overrides the default path (mutation-battery seam):
+# `off` disables outright; set-but-empty, non-absolute, or missing all fail
+# closed — an explicit override that cannot be honoured is a programming error,
+# not a degrade. The DEFAULT path being absent IS a degrade.
+_shard_manifest_active=0
+_shard_m_labels=()
+_shard_m_legs=()
+if (( _SHARD_N > 0 )); then
+  _shard_mfile="$ROOT/apps/web-platform/infra/suite-shard-legs.tsv"
+  if [[ -n "${SOLEUR_INFRA_MANIFEST+x}" ]]; then
+    _shard_mval="${SOLEUR_INFRA_MANIFEST-}"
+    if [[ "$_shard_mval" == "off" ]]; then
+      _shard_mfile=""
+    elif [[ -z "$_shard_mval" ]]; then
+      echo "ERROR: SOLEUR_INFRA_MANIFEST is set but empty." >&2
+      echo "       Set it to an absolute manifest path, 'off', or unset it for the" >&2
+      echo "       default $_shard_mfile." >&2
+      exit 2
+    elif [[ "$_shard_mval" != /* ]]; then
+      echo "ERROR: SOLEUR_INFRA_MANIFEST must be an absolute path" >&2
+      echo "       (got: '$_shard_mval') — this runner never normalises cwd." >&2
+      exit 2
+    elif [[ ! -f "$_shard_mval" ]]; then
+      echo "ERROR: SOLEUR_INFRA_MANIFEST points at a file that does not exist:" >&2
+      echo "       '$_shard_mval'" >&2
+      exit 2
+    else
+      _shard_mfile="$_shard_mval"
+    fi
+  elif [[ ! -f "$_shard_mfile" ]]; then
+    echo "[shard] no ${_shard_mfile##*/} manifest — positional assignment" >&2
+    _shard_mfile=""
+  fi
+
+  if [[ -n "$_shard_mfile" ]]; then
+    _shard_mn=""
+    while IFS= read -r _mline; do
+      case "$_mline" in
+        "# n="*) _shard_mn="${_mline#\# n=}"; break ;;
+      esac
+    done < "$_shard_mfile"
+    if [[ ! "$_shard_mn" =~ ^[0123456789]{1,9}$ ]] || (( 10#${_shard_mn} != _SHARD_N )); then
+      echo "[shard] manifest n='${_shard_mn:-<none>}' != SOLEUR_INFRA_SHARD N=${_SHARD_N} — positional assignment" >&2
+    else
+      _shard_mcount=0
+      while IFS=$'\t' read -r _mlbl _mleg _mrest; do
+        case "$_mlbl" in
+          "" | "#"*) continue ;;
+        esac
+        if [[ -n "$_mrest" || ! "$_mleg" =~ ^[0123456789]{1,9}$ ]]; then
+          echo "ERROR: ${_shard_mfile}: malformed row '${_mlbl}' — expected 'suite-path<TAB>leg'" >&2
+          echo "       with leg an integer in 1..${_shard_mn}. Regenerate:" >&2
+          echo "         python3 scripts/regenerate-shard-manifest.py --group infra --write" >&2
+          exit 2
+        fi
+        _mleg=$(( 10#${_mleg} ))
+        if (( _mleg < 1 || _mleg > _shard_mn )); then
+          echo "ERROR: ${_shard_mfile}: '$_mlbl' assigned to leg $_mleg outside 1..${_shard_mn}." >&2
+          echo "       Regenerate: python3 scripts/regenerate-shard-manifest.py --group infra --write" >&2
+          exit 2
+        fi
+        for (( _mdup = 0; _mdup < ${#_shard_m_labels[@]}; _mdup++ )); do
+          if [[ "$_mlbl" == "${_shard_m_labels[_mdup]}" ]]; then
+            echo "ERROR: ${_shard_mfile}: '$_mlbl' listed twice." >&2
+            echo "       Regenerate: python3 scripts/regenerate-shard-manifest.py --group infra --write" >&2
+            exit 2
+          fi
+        done
+        _shard_m_labels+=("$_mlbl")
+        _shard_m_legs+=("$_mleg")
+        _shard_mcount=$(( _shard_mcount + 1 ))
+      done < "$_shard_mfile"
+      _shard_manifest_active=1
+      echo "[shard] manifest assignment active: ${_shard_mcount} suite(s) from ${_shard_mfile}" >&2
+    fi
+  fi
+  unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _mdup _shard_mcount _shard_mval
+
+  # Apply the partition. Manifest rows hit by label; an untabled suite (added
+  # since the last regeneration) hashes deterministically (POSIX cksum), so an
+  # insertion never moves an existing assignment and order is collation-free.
+  # No manifest → positional round-robin over the sorted list.
+  _assigned=()
+  _ord=0
+  for _s in "${SUITES[@]}"; do
+    _ord=$(( _ord + 1 ))
+    if (( _shard_manifest_active == 1 )); then
+      _leg=0
+      for (( _mi = 0; _mi < ${#_shard_m_labels[@]}; _mi++ )); do
+        if [[ "$_s" == "${_shard_m_labels[_mi]}" ]]; then
+          _leg=$(( 10#${_shard_m_legs[_mi]} ))
+          break
+        fi
+      done
+      (( _leg == 0 )) && _leg=$(( ($(printf '%s' "$_s" | cksum | cut -d' ' -f1) % _SHARD_N) + 1 ))
+    else
+      _leg=$(( (_ord - 1) % _SHARD_N + 1 ))
+    fi
+    (( _leg == _SHARD_K )) && _assigned+=("$_s")
+  done
+  SUITES=("${_assigned[@]}")
+  unset _assigned _ord _s _leg _mi
+
+  # Zero-assignment is a REFUSAL, not an empty green leg: a leg that owns
+  # nothing would report "0 failed" and read as coverage.
+  (( ${#SUITES[@]} > 0 )) || {
+    echo "ERROR: shard ${_SHARD_K}/${_SHARD_N} owns ZERO of ${_EXECUTABLE_N} executable suites." >&2
+    echo "       The partition (manifest or positional) assigned nothing to this leg — check" >&2
+    echo "       SOLEUR_INFRA_SHARD and the manifest rather than trusting this run." >&2
+    exit 2
+  }
+  echo "[shard] leg ${_SHARD_K}/${_SHARD_N} owns ${#SUITES[@]} of ${_EXECUTABLE_N} executable suites"
+fi
+
+# The carriers are consumed above — unset them so a suite that spawns a nested
+# runner (run-registered-suites.test.sh re-executes this file) never inherits a
+# partition it did not ask for (the #7902 lesson on SCRIPTS_SHARD). TIMINGS is
+# captured first: this process still writes the feed at the end, but a nested
+# runner must not scribble on the caller's artifact path mid-run.
+_TIMINGS_OUT="${SOLEUR_INFRA_TIMINGS:-}"
+# The feed is written to `_TIMINGS_OUT` by a bare `>` at end of run — a relative
+# value would write into the repo cwd and a mistaken value would truncate an
+# arbitrary writable file. Same contract as SOLEUR_INFRA_MANIFEST: absolute or
+# absent.
+if [[ -n "$_TIMINGS_OUT" && "$_TIMINGS_OUT" != /* ]]; then
+  echo "ERROR: SOLEUR_INFRA_TIMINGS must be an absolute path" >&2
+  echo "       (got: '$_TIMINGS_OUT') — this runner never normalises cwd." >&2
+  exit 2
+fi
+unset SOLEUR_INFRA_SHARD SOLEUR_INFRA_MANIFEST SOLEUR_INFRA_TIMINGS
+
+# Per-suite bound. The monolithic job's step-level `timeout-minutes` convention
+# becomes the runner's responsibility in the sharded shape — a suite that stalls
+# must RED NAMED, never cancel a leg anonymously. Resolved ONCE because this
+# runner also executes on operator hosts, and stock macOS has no `timeout`
+# (the `timeout`→`gtimeout`→absent order mirrors .claude/hooks/memory-backstop.sh).
+TIMEOUT_BIN=""
+for _t in timeout gtimeout; do
+  if command -v "$_t" >/dev/null 2>&1; then
+    TIMEOUT_BIN="$_t"; break
+  fi
+done
+unset _t
+if [[ -z "$TIMEOUT_BIN" ]]; then
+  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    echo "FATAL: no per-suite bounder on PATH (tried: timeout, gtimeout) —" >&2
+    echo "       bounds are mandatory under CI; a suite stall would cancel a leg" >&2
+    echo "       anonymously. Install coreutils and re-run." >&2
+    exit 2
+  fi
+  echo "NOTE: no timeout/gtimeout on PATH — suites run UNBOUNDED locally." >&2
+fi
+export SOLEUR_TIMEOUT_BIN="$TIMEOUT_BIN"
+
+# Default bound + overrides. Default 360s is ~1.75x the heaviest measured suite
+# (205 s, run 36037220776) — generous enough to never false-positive a healthy
+# suite, small enough to bound a hang before the leg's timeout-minutes. The
+# overrides carry forward the monolithic job's step-level `timeout-minutes`
+# verbatim (x60); add an entry when a suite lands that legitimately exceeds the
+# default. Keyed on the repo-relative suite path.
+SOLEUR_SUITE_TIMEOUT_DEFAULT="${SOLEUR_SUITE_TIMEOUT_DEFAULT:-360}"
+_SUITE_BOUNDS=(
+  "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh=600"
+  "apps/web-platform/infra/git-data-cutover-access.test.sh=600"
+  "apps/web-platform/infra/git-data-ownership.test.sh=300"
+  "apps/web-platform/infra/ci-deploy.test.sh=180"
+  "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
+  "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
+  "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
+  # These two carried no step-level bound in the serial job — the 35-min job
+  # ceiling was their only bound. They are the 2nd/3rd-heaviest measured suites
+  # (205 s / 197 s SERIAL, run 36037220776) and now run under -P4 contention,
+  # where the #8688 incident measured docker-adjacent steps at 2.5-3x green on
+  # degraded-runner days. 2.5x puts both over the 360 s default; pin them at
+  # ~2.5x serial so a slow day renders as their own RED, not a leg timeout.
+  "apps/web-platform/infra/infra-config-repush-mutation.test.sh=540"
+  "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh=540"
+)
+export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
+export SOLEUR_SUITE_TIMEOUT_DEFAULT
+
+# Report suite files on disk that the glob did NOT derive — under
+# presence-is-registration that can only mean untracked (git ls-files returns
+# tracked files only). An untracked suite never reaches a fresh CI checkout, so
+# it is coverage that exists on exactly one laptop — the residual form of the
+# "on disk, nothing runs it" defect this scan has always guarded.
 #
-# INFRA_ORPHAN_LIST is a TEST SEAM (#7376) that injects the CANDIDATE list only. The
-# cross-reference below — one `git grep` per basename across workflows/ and scripts/, which is
-# the logic worth testing — still runs for real. It exists because `git ls-files` is
-# index-bound, so the only way to hand this function a candidate it will report was to create
-# a file in the LIVE infra directory and `git add -N` it, mid-run, while every sibling suite
-# read that same directory. See the T5 comment in run-registered-suites.test.sh.
+# Advisory here; the registration gate enforces the tracked side (glob ==
+# derived ∪ exclusions is exact by construction) — said plainly so a NOTE below
+# is not read as optional. This runner declines to FAIL on it: its job is to
+# run what CI runs.
+#
+# INFRA_ORPHAN_LIST is a TEST SEAM (#7376) that injects the CANDIDATE list only.
+# The check itself — `git ls-files --error-unmatch`, which is the tracked-vs-not
+# question being asserted — still runs for real. The seam exists because
+# creating an untracked file in the LIVE infra directory mid-run collides with
+# sibling suites reading that directory (#7376).
 report_orphans() {
   local -a orphans
   mapfile -t orphans < <(
     while IFS= read -r f; do
       [[ -n "$f" ]] || continue
-      git grep -qF -- "$(basename "$f")" -- .github/workflows/ scripts/ || printf '%s\n' "$f"
+      git cat-file -e "HEAD:$f" >/dev/null 2>&1 || printf '%s\n' "$f"
     done < <(
       if [[ -n "${INFRA_ORPHAN_LIST:-}" ]]; then
-        sort -u "$INFRA_ORPHAN_LIST"
-      elif [[ "$SOLEUR_INFRA_DIR" == /* ]]; then
-        # A fixture root (absolute, from `mktemp -d`) is outside the repo, so `git ls-files`
-        # exits fatal on it. Emit no candidates rather than leaking that error into the run log,
-        # where it reads as a real problem with the orphan scan — but SAY SO. A bare `:` here
-        # made "scan skipped" byte-indistinguishable from "no orphans found", which is the
-        # silent-degradation shape this same file goes out of its way to reject elsewhere.
-        echo "NOTE: orphan scan skipped — SOLEUR_INFRA_DIR is outside the repo working tree." >&2
+        sort -u -- "$INFRA_ORPHAN_LIST"
+      elif [[ "$SOLEUR_INFRA_DIR" == /* && "$SOLEUR_INFRA_DIR" != "$ROOT/"* ]]; then
+        # A fixture root (absolute, from `mktemp -d`) is outside the repo, so the
+        # untracked check has no index to consult. Emit no candidates rather than
+        # leaking an error into the run log — but SAY SO: a silent skip is
+        # byte-indistinguishable from "no orphans found".
+        echo "NOTE: untracked-suite scan skipped — SOLEUR_INFRA_DIR is outside the repo working tree." >&2
       else
-        git ls-files "${SOLEUR_INFRA_DIR}/**/*.test.sh" "${SOLEUR_INFRA_DIR}/*.test.sh" | sort -u
+        find "$SOLEUR_INFRA_DIR" -type f -name '*.test.sh' | LC_ALL=C sort -u
       fi
     )
   )
   (( ${#orphans[@]} > 0 )) || return 0
   echo ""
-  echo "NOTE: ${#orphans[@]} suite(s) on disk are referenced by NO workflow or script —"
-  echo "      nothing runs them, in CI or here:"
+  echo "NOTE: ${#orphans[@]} suite(s) on disk are NOT git-tracked — nothing runs them,"
+  echo "      in CI or here (commit them, or they exist on exactly one machine):"
   printf '  %s\n' "${orphans[@]}"
 }
 
 if (( LIST_ONLY )); then
-  echo "Derived ${#SUITES[@]} registered infra suite(s) from ${WF}:"
-  printf '  %s\n' "${SUITES[@]}"
+  echo "Derived ${#ALL_SUITES[@]} registered infra suite(s) from ${SOLEUR_INFRA_DIR}/*.test.sh:"
+  printf '  %s\n' "${ALL_SUITES[@]}"
+  if (( ${#PRIV_SUITES[@]} > 0 )); then
+    echo ""
+    echo "Privileged — derived but NOT executed here (${#PRIV_SUITES[@]}; CI runs them via"
+    echo "'sudo bash' in deploy-script-tests-fixed):"
+    for _s in "${PRIV_SUITES[@]}"; do
+      printf '  SKIP privileged: %s — %s\n' "$_s" "${PRIVILEGED_WHY[${_s##*/}]}"
+    done
+  fi
+  if (( _SHARD_N > 0 )); then
+    echo ""
+    echo "Shard ${_SHARD_K}/${_SHARD_N} execute set: ${#SUITES[@]} of ${_EXECUTABLE_N} suite(s):"
+    printf '  %s\n' "${SUITES[@]}"
+  else
+    echo ""
+    echo "Execute set: ${#SUITES[@]} suite(s)"
+  fi
   report_orphans
   exit 0
 fi
@@ -338,6 +688,12 @@ fi
 # oversubscribing turns a slow run into a flaky one.
 _NPROC=$(nproc 2>/dev/null || echo 4)
 JOBS="${JOBS:-$(( _NPROC < 6 ? _NPROC : 6 ))}"
+# `xargs -P 0` is GNU's UNBOUNDED mode — `JOBS=0` or a non-numeric value silently
+# changes the parallelism contract rather than failing. Refuse them.
+[[ "$JOBS" =~ ^[0-9]+$ ]] && (( JOBS >= 1 )) || {
+  echo "FATAL: JOBS='$JOBS' is not a positive integer — xargs -P 0 means unbounded." >&2
+  exit 2
+}
 
 # ── The instrument (#7376) ────────────────────────────────────────────────────
 #
@@ -392,12 +748,9 @@ DUMP_CAP=40
 # EPOCHSECONDS, not EPOCHREALTIME: it is an integer, so it sidesteps the decimal-separator
 # locale trap entirely. And NO bash-3 fallback — scripts/test-all.sh has one whose behaviour is
 # to resolve elapsed to 0 SILENTLY, which would plant a silent-wrong-value in the only field
-# that can answer "did this suite run far longer than its solo baseline?". This runner already
-# requires bash 4+ (mapfile, above), so fail loud instead.
-[[ -n "${EPOCHSECONDS:-}" ]] || {
-  echo "FATAL: bash 5.0+ required (EPOCHSECONDS is unset) — refusing to record timings as 0." >&2
-  exit 2
-}
+# that can answer "did this suite run far longer than its solo baseline?". The version gate at
+# the top of this file already refused anything below bash 5; EPOCHSECONDS is guaranteed here.
+[[ -n "${EPOCHSECONDS:-}" ]] || exit 2
 
 LOG="$(mktemp)" || { echo "FATAL: mktemp failed for the summary log (TMPDIR=$TMPDIR)" >&2; exit 2; }
 
@@ -430,10 +783,19 @@ SOLEUR_SUITE_LOGDIR="$(mktemp -d -p "$_SUITE_TMP_BASE" infra-suites.XXXXXXXX)" |
   echo "       assertion would then blame a vanished wrapper for a disk problem." >&2
   exit 2
 }
-export SOLEUR_SUITE_LOGDIR
+# Deliberately NOT exported: the shim receives the path as argv ($2) so the
+# counting dir never reaches a suite's environment.
 SOLEUR_RUN_T0="$EPOCHSECONDS"; export SOLEUR_RUN_T0
 
-echo "Running ${#SUITES[@]} registered infra suite(s) with -P ${JOBS}…"
+if (( _SHARD_N > 0 )); then
+  echo "Running ${#SUITES[@]} registered infra suite(s) (shard ${_SHARD_K}/${_SHARD_N} of ${_EXECUTABLE_N}) with -P ${JOBS}…"
+else
+  echo "Running ${#SUITES[@]} registered infra suite(s) with -P ${JOBS}…"
+fi
+if (( ${#PRIV_SUITES[@]} > 0 )); then
+  echo "(${#PRIV_SUITES[@]} privileged suite(s) derived but not executed — CI runs them"
+  echo " via 'sudo bash' in deploy-script-tests-fixed.)"
+fi
 
 # The child still emits `PASS <path>` / `RED  <path>` FIRST and in the same byte shape — every
 # downstream consumer anchors on it.
@@ -458,14 +820,65 @@ echo "Running ${#SUITES[@]} registered infra suite(s) with -P ${JOBS}…"
 # textual substitution, so `s="{}"` would make a path containing `"`/`$`/backtick executable as
 # code. The derivation regex constrains the basename today, but `$SOLEUR_INFRA_DIR` is caller-
 # supplied, and this script body grew from one line to five.
+#
+# An EMPTY execute set must not reach xargs: `printf '%s\n' "${SUITES[@]}"` on an
+# empty array emits one newline, and `-I{}` would run the shim once with s=""
+# — a phantom suite with an empty log key. Reachable in fixtures where every
+# derived basename is privileged.
+(( ${#SUITES[@]} > 0 )) || {
+  echo "FATAL: the execute set is empty — every derived suite is privileged." >&2
+  echo "       Dispatching would fabricate a phantom suite; refusing." >&2
+  exit 2
+}
 printf '%s\n' "${SUITES[@]}" \
   | xargs -P "$JOBS" -I{} bash -c '
-      s="$1"; key="${s//\//_}"
+      s="$1"; key="${s//\//_}"; logdir="$2"
+      # logdir arrives as argv, not env: a suite must not see the counting dir
+      # in its environment (a forgeable .meta/.trow write is a signal-shaped
+      # lie). NOTE: no apostrophes inside this whole -c string — one truncates
+      # argv and scrambles the shim (measured: `s: unbound variable`).
+      # Per-suite bound: the override map arrives as one flat "path=secs" string
+      # (assoc arrays do not export); keyed on the repo-relative path. rc=124 is
+      # GNU timeout kill — it renders as RED below, naming the suite.
+      bound="$SOLEUR_SUITE_TIMEOUT_DEFAULT"
+      for kv in $SOLEUR_SUITE_TIMEOUTS; do
+        # Literal compare — `case` would glob-match a suite path containing
+        # `*`/`?`/`[` and bind the wrong bound. `${kv%%=*}` is the key half.
+        [[ "${kv%%=*}" == "$s" ]] && bound="${kv##*=}"
+      done
       st="$EPOCHSECONDS"
-      bash "$s" >"$SOLEUR_SUITE_LOGDIR/$key.log" 2>&1; rc=$?
-      printf "%s %s %s\n" "$rc" "$(( EPOCHSECONDS - st ))" "$(( st - SOLEUR_RUN_T0 ))" > "$SOLEUR_SUITE_LOGDIR/$key.meta"
-      if (( rc == 0 )); then echo "PASS $s"; else echo "RED  $s"; fi
-    ' _ {} \
+      # ONE call site for the suite itself — the bounder is a prefix, never a
+      # second copy of the invocation (a mutated runner keeps the capture
+      # discipline pinned on this exact line).
+      if [[ -n "$SOLEUR_TIMEOUT_BIN" ]]; then
+        set -- "$SOLEUR_TIMEOUT_BIN" -k 30 "$bound"
+      else
+        set --
+      fi
+      "$@" bash "$s" >"$logdir/$key.log" 2>&1; rc=$?
+      printf "%s %s %s\n" "$rc" "$(( EPOCHSECONDS - st ))" "$(( st - SOLEUR_RUN_T0 ))" > "$logdir/$key.meta"
+      # Per-suite timings row for the shard-manifest generator feed
+      # (label<TAB>ms<TAB>verdict; FAIL rows are excluded by the generator — a
+      # suite that did not finish carries a bound-hit timing, not a duration).
+      verdict=FAIL; (( rc == 0 )) && verdict=PASS
+      printf "%s\t%s\t%s\n" "$s" "$(( (EPOCHSECONDS - st) * 1000 ))" "$verdict" \
+        > "$logdir/$key.trow"
+      if (( rc == 0 )); then
+        echo "PASS $s"
+      else
+        echo "RED  $s"
+        # ::error annotation so the Actions run summary names the suite without
+        # opening leg logs. `file=` is a structured property: strip CR/LF (line
+        # injection) AND `:`,`,`,`%` (property/percent-escape injection) — a
+        # committed filename is attacker-controlled in a fork PR.
+        clean="$(printf %s "$s" | tr -d "\r\n:,%")"
+        if (( rc == 124 )); then
+          echo "::error file=$clean::suite exceeded its ${bound}s bound — see $key.log in the leg artifact"
+        else
+          echo "::error file=$clean::suite failed (rc=$rc) — see $key.log in the leg artifact"
+        fi
+      fi
+    ' _ {} "$SOLEUR_SUITE_LOGDIR" \
   | tee "$LOG"
 
 # READ IMMEDIATELY — PIPESTATUS is clobbered by the next command, and `$?` here is `tee`'s,
@@ -678,6 +1091,31 @@ emit_unaccounted_names() {
 } 2>&1 | sed "s/^/${SENTINEL_PREFIX}/"
 
 (( ${#UNACCOUNTED[@]} == 0 )) || emit_unaccounted_names
+
+# Per-suite timings feed for `regenerate-shard-manifest.py --group infra`: the
+# caller sets SOLEUR_INFRA_TIMINGS to a writable path (CI legs point it at
+# runner.temp and upload it as the suite-timings-infra-<k> artifact). Rows are
+# each child's own `.trow` file, concatenated single-threaded strictly after
+# xargs — never appended by the children (a shared open file description is not
+# PIPE_BUF-atomic). UNACCOUNTED suites (shim killed, no .meta/.trow) and the
+# privileged set get explicit `skip=` rows so the feed names the gap rather than
+# omitting it; the generator's skip=/FAIL exclusions drop them from the balance.
+# BEFORE the logdir reap below — the .trow files live under it.
+if [[ -n "${_TIMINGS_OUT:-}" ]]; then
+  {
+    for _t in "$SOLEUR_SUITE_LOGDIR"/*.trow; do
+      [[ -e "$_t" ]] || continue
+      cat "$_t"
+    done
+    if (( ${#UNACCOUNTED[@]} > 0 )); then
+      for _s in "${UNACCOUNTED[@]}"; do printf '%s\t0\tskip=unaccounted\n' "$_s"; done
+    fi
+    if (( ${#PRIV_SUITES[@]} > 0 )); then
+      for _s in "${PRIV_SUITES[@]}"; do printf '%s\t0\tskip=privileged\n' "$_s"; done
+    fi
+  } > "${_TIMINGS_OUT}" || \
+    echo "WARNING: could not write timings feed to ${_TIMINGS_OUT}" >&2
+fi
 
 if (( RED == 0 && ${#UNACCOUNTED[@]} == 0 )); then
   rm -rf "$SOLEUR_SUITE_LOGDIR"

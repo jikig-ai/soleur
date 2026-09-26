@@ -2331,6 +2331,40 @@ export const realSdkQueryFactory: QueryFactory = async (
           owner,
           repo,
           workspacePath,
+          // #8739 — a successful Concierge `.c4` save pushes a
+          // `c4_diagram_saved` frame on the user's one live socket
+          // (supersedeExistingUserSocket) so an open C4Workspace refetches
+          // and reconciles its stale banner (the "then reload the page"
+          // workaround this frame replaces). A `false` return means the
+          // socket was already gone — concierge collapsed mid-turn or a
+          // transient disconnect — and the live-only frame is lost; the
+          // workspace refetches on concierge reopen / next mount to cover it.
+          onDiagramSaved: ({ dirPath, rerendered, diagnostic }) => {
+            try {
+              defaultSendToClient(args.userId, {
+                type: "c4_diagram_saved",
+                dirPath,
+                rerendered,
+                // The wire schema caps diagnostic at 20000 chars; truncate
+                // emit-side or an oversized render diagnostic fails client
+                // parse and silently drops the frame.
+                diagnostic: diagnostic ? diagnostic.slice(0, 20000) : diagnostic,
+              });
+            } catch (err) {
+              // null first arg, never a real Error — the pino mirror
+              // captures a passed Error first and Sentry drops the tagged
+              // second capture (#8629); err identity lives in `extra`.
+              reportSilentFallback(null, {
+                feature: "cc-dispatcher",
+                op: "c4-saved-notify",
+                extra: {
+                  dirPath,
+                  errName: err instanceof Error ? err.name : "unknown",
+                },
+                message: "c4_diagram_saved frame emit threw",
+              });
+            }
+          },
         });
         c4ToolName = C4_TOOL_FQN;
         c4PromptAddendum = C4_PROMPT_ADDENDUM;
@@ -3544,7 +3578,7 @@ export async function dispatchSoleurGo(
       .eq("id", userId)
       .single<{ role: unknown }>();
     const role: Role = roleRow?.role === "dev" ? "dev" : "prd";
-    debugEligible = await isDebugModeAvailable({ userId, role, orgId: null });
+    debugEligible = await isDebugModeAvailable({ userId, role, orgId: null, email: null, subscriptionStatus: null });
   })().catch((err) => {
     reportSilentFallback(err, {
       feature: "cc-dispatcher",

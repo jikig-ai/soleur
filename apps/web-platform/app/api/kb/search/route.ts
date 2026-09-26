@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { searchKb, KbValidationError } from "@/server/kb-reader";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
 import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
 
-async function getHandler(request: Request, user: User) {
+async function getHandler(request: Request, user: VerifiedUser) {
   const serviceClient = createServiceClient();
   // ADR-044 (#4543): search the ACTIVE workspace's KB, not the caller's own
   // `users` row (an invited member's solo row is empty → 404).

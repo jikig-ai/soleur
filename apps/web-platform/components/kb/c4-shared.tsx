@@ -32,6 +32,7 @@ import "@likec4/diagram/styles.css";
 // Soleur re-theme — MUST come after the library styles so it wins on source
 // order (defense-in-depth alongside the scoped-selector specificity in the file).
 import "./c4-theme.css";
+import type { Diagnostic } from "@/lib/c4-model-shape";
 
 // By supplying our own MantineProvider (Lever 1, below) we displace
 // @likec4/diagram's DefaultMantineProvider — which the library renders only when
@@ -51,7 +52,6 @@ const c4MantineTheme = createTheme({
   defaultRadius: "sm",
 });
 
-export type Diagnostic = { message: string; line: number; sourceFsPath: string };
 export type ProjectResponse = {
   dir: string;
   sources: Record<string, string>;
@@ -90,9 +90,16 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
   useEffect(() => {
     currentEndpoint.current = endpoint;
   }, [endpoint]);
-  const reload = useCallback(async () => {
+  // Whether the hook has ever resolved data. A silent refetch that FAILS must
+  // not replace a rendered diagram with the error view — keep the last-good
+  // model on screen (a transient 5xx on an unsolicited refetch is otherwise a
+  // self-inflicted canvas teardown with no retry).
+  const dataPresent = useRef(false);
+  // #8739 — `silent` refetches without the loading flip: a Concierge save
+  // completing elsewhere must not unmount the canvas to flash a spinner.
+  const reload = useCallback(async (opts?: { silent?: boolean }) => {
     const isCurrent = () => currentEndpoint.current === endpoint;
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
     setError(null);
     try {
       const res = await fetch(endpoint);
@@ -102,6 +109,7 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
       }
       const json = (await res.json()) as Partial<ProjectResponse>;
       if (!isCurrent()) return;
+      dataPresent.current = true;
       setData({
         dir: json.dir ?? dirPath,
         sources: json.sources ?? {},
@@ -110,9 +118,10 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
         diagnostics: json.diagnostics ?? [],
       });
     } catch (e) {
-      if (isCurrent()) setError(e instanceof Error ? e.message : "Failed to load diagram");
+      if (isCurrent() && !(opts?.silent && dataPresent.current))
+        setError(e instanceof Error ? e.message : "Failed to load diagram");
     } finally {
-      if (isCurrent()) setLoading(false);
+      if (isCurrent() && !opts?.silent) setLoading(false);
     }
   }, [dirPath, endpoint]);
 

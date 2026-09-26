@@ -2386,8 +2386,13 @@ run_faithful_sandbox_canary() {
   # a downstream pipe member's (load-bearing under set -euo — mirrors the
   # canary_layer3 logger block).
   set +o pipefail
-  out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"
-  exec_rc=$?
+  # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed docker exec
+  # aborts before the read, leaving the infra classification below unreachable.
+  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"; then
+    exec_rc=0
+  else
+    exec_rc=$?
+  fi
   set -o pipefail
   if [[ "$exec_rc" -ne 0 ]]; then
     # docker/exec/node failure (125 daemon, 126/127 not-exec/not-found) — infra,

@@ -533,8 +533,8 @@ g1_happy() {
   [ "$(post_count app_ghcr_served)$(post_count app_ghcr_fallback)" = 00 ] || why="$why app_ghcr-emitted"
   grep -q 'insecure-registries' "$L_SB/etc/docker/daemon.json" 2>/dev/null || why="$why no-daemon.json"
   # order: zot login precedes the first pull (independent of the stateful stub — H4)
-  local li pi; li=$(grep -n "^login 10.0.1.30:5000" "$L_ORDER" | head -1 | cut -d: -f1)
-  pi=$(grep -n '^pull ' "$L_ORDER" | head -1 | cut -d: -f1)
+  local li pi; li=$(grep -n "^login 10.0.1.30:5000" "$L_ORDER" | sed -n '1p' | cut -d: -f1)
+  pi=$(grep -n '^pull ' "$L_ORDER" | sed -n '1p' | cut -d: -f1)
   { [ -n "$li" ] && [ -n "$pi" ] && [ "$li" -lt "$pi" ]; } || why="$why login-not-before-pull"
   grep -q "^pull ghcr.io/" "$L_ORDER" && why="$why ghcr-pulled"
   token_leak "$L_POST" "$L_SB/run/soleur-stage-detail" "$L_OUT" && why="$why token-leak"
@@ -715,8 +715,8 @@ g2_routed() { local s routed
   done; G2WHY=""; }
 g2_order() {  # the wait precedes the zot login: the login must come after the address appeared
   make_ip converging 10.0.1.11 3; run_seed "$1"
-  local li pi; li=$(grep -n '^login 10.0.1.30' "$L_ORDER" | head -1 | cut -d: -f1)
-  pi=$(grep -n '^ip present' "$L_ORDER" | head -1 | cut -d: -f1)
+  local li pi; li=$(grep -n '^login 10.0.1.30' "$L_ORDER" | sed -n '1p' | cut -d: -f1)
+  pi=$(grep -n '^ip present' "$L_ORDER" | sed -n '1p' | cut -d: -f1)
   [ -n "$li" ] && [ -n "$pi" ] && [ "$pi" -lt "$li" ]; }
 
 g2_ready0 "$DEF" && ok "AC3/G2: address present → 0 sleeps, no private_nic_* emit, nic=ready:0" || no "AC3 ready:$G2WHY"
@@ -943,7 +943,7 @@ c4_miss() {  # the property: fatal emit (the only emit), non-zero, no later pull
   grep -q RUNCMD_CONTINUED <<<"$C4OUT" && why="$why runcmd-continued"
   [ "$(grep '^emit ' "$C4/log" | tr '\n' '|')" = "emit inngest_pull_fatal fatal|" ] || why="$why emits=[$(grep '^emit ' "$C4/log" | tr '\n' '|')]"
   [ "$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")" = 1 ] || why="$why pulls=$(grep -cE '^(timeout [0-9]+ )?pull ' "$C4/log")"
-  grep -q "^pull $C4_ZIREF" "$C4/log" || grep -q "^timeout 180 pull $C4_ZIREF" "$C4/log" || why="$why first-pull-not-zot"
+  grep -q "^pull $C4_ZIREF" "$C4/log" || grep -c "^timeout 180 pull $C4_ZIREF" >/dev/null "$C4/log" || why="$why first-pull-not-zot"
   grep -q '^create ' "$C4/log" && why="$why create-after-miss"
   grep -q '^curl ' "$C4/log" && why="$why probe-on-resolution-path"
   G4WHY="$why"; [ -z "$why" ]
@@ -998,7 +998,7 @@ webcode=$(grep -vE '^[[:space:]]*#' "$SRC"); ingcode=$(grep -vE '^[[:space:]]*#'
 if grep -qF -- 'zot=[' <<<"$webcode"; then ok "parity: 'zot=[' names the zot leg in the web fatal detail"
 else no "parity: 'zot=[' must appear in the code of cloud-init.yml (the per-leg fatal detail)"; fi
 for tok in 'ghcr=[' 'not-attempted'; do
-  if grep -qF -- "$tok" <<<"$webcode" || grep -qF -- "$tok" <<<"$ingcode"; then no "parity: GHCR per-leg token '$tok' is back in the code of cloud-init.yml or cloud-init-inngest.yml (#8036 1d)"
+  if grep -qF -- "$tok" <<<"$webcode" || grep -cF -- >/dev/null "$tok" <<<"$ingcode"; then no "parity: GHCR per-leg token '$tok' is back in the code of cloud-init.yml or cloud-init-inngest.yml (#8036 1d)"
   else ok "parity: GHCR per-leg token '$tok' is in neither template's code (#8036 1d)"; fi
 done
 

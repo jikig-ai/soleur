@@ -92,9 +92,21 @@ export type Identity = {
   userId: string | null;
   role: Role;
   orgId: string | null;
+  // Additive fields for the dashboard chrome server-render (Phase 6,
+  // perf-dashboard-section-load-latency): email comes free from
+  // userData.user.email; subscriptionStatus rides the widened users select.
+  // ANON_IDENTITY keeps literal null for both (no widening of the anon shape).
+  email: string | null;
+  subscriptionStatus: string | null;
 };
 
-export const ANON_IDENTITY: Identity = { userId: null, role: "prd", orgId: null };
+export const ANON_IDENTITY: Identity = {
+  userId: null,
+  role: "prd",
+  orgId: null,
+  email: null,
+  subscriptionStatus: null,
+};
 
 function envIsOn(name: string): boolean {
   return process.env[name] === "1";

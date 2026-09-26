@@ -267,7 +267,7 @@ echo "--- AC6: pin drift-guard vs latest published vinngest-v* tag ---"
 # `|| true`: under `set -euo pipefail` a zero-match grep exits 1 and pipefail
 # would abort the whole script here (before AC6b + the results summary) if the
 # image ref is ever renamed. Let the empty PIN fall through to a clean FAIL.
-PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | sed 's/.*://' || true)
+PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sed -n '1p' | sed 's/.*://' || true)
 # git -C "$SCRIPT_DIR" (NOT `git rev-parse --show-toplevel`, which resolves to
 # the bare-repo parent in a worktree). Any failure (no git, no tags, not a repo)
 # collapses to an empty result → visible SKIP, never a false-green.
@@ -329,7 +329,7 @@ else
   # `|| true` mirrors the PIN extraction above: a rename must FAIL cleanly, not abort
   # the run under pipefail before the results summary.
   DED_CLOUD_INIT="$SCRIPT_DIR/cloud-init-inngest.yml"
-  DED_PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CLOUD_INIT" | head -1 | sed 's/.*://' || true)
+  DED_PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CLOUD_INIT" | sed -n '1p' | sed 's/.*://' || true)
   assert "dedicated-host cloud-init pin ($DED_PIN) matches latest published vinngest-v* tag ($LATEST_TAG)" \
     "[[ '$DED_PIN' == '$LATEST_TAG' ]]"
   if [[ "$DED_PIN" != "$LATEST_TAG" ]]; then
@@ -584,8 +584,8 @@ PY
   # budget is SEQUENTIAL with the downstream cloudflared_ready gate rather than nested inside
   # it. A wait that drifts below the install would spend cloudflared_ready's ~60 s budget and
   # detonate that gate's pre-existing `|| exit 1` — the CF-5 abort this gate exists to prevent.
-  NIC_IDX=$(grep -nF 'soleur-wait-nic 10.0.1.10' "$CONN_ON" | head -1 | cut -d: -f1 || true)
-  INS_IDX=$(grep -nF 'cloudflared service install' "$CONN_ON" | head -1 | cut -d: -f1 || true)
+  NIC_IDX=$(grep -nF 'soleur-wait-nic 10.0.1.10' "$CONN_ON" | sed -n '1p' | cut -d: -f1 || true)
+  INS_IDX=$(grep -nF 'cloudflared service install' "$CONN_ON" | sed -n '1p' | cut -d: -f1 || true)
   assert "rendered NIC wait immediately precedes cloudflared service install" \
     "[[ -n '$NIC_IDX' && -n '$INS_IDX' && \$(( INS_IDX - NIC_IDX )) -eq 1 ]]"
 
@@ -753,7 +753,7 @@ assert "Row6 anti-vacuity: the comment strip preserved line numbering (code file
 # `|| true` on every extraction: under `set -euo pipefail` a zero-match grep would abort the
 # whole script here, before the results summary. Let an empty offset fall through to a
 # clean FAIL (the same convention AC6 above already uses for PIN).
-zg_line() { grep -nE "$1" "$DED_CODE_FILE" | head -1 | cut -d: -f1 || true; }
+zg_line() { grep -nE "$1" "$DED_CODE_FILE" | sed -n '1p' | cut -d: -f1 || true; }
 L_IREF_SEED=$(zg_line '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:')
 L_ZLOGIN=$(zg_line 'docker login "\$ZOT_EP"')
 L_ZPULL=$(zg_line 'docker pull "\$ZIREF"')
@@ -808,10 +808,10 @@ assert "Row1: exactly ONE docker pull code line, and it pulls \"\$ZIREF\" (pulls
 # `crane copy` is digest-preserving, so the SAME @sha256 the build signed resolves on zot. A
 # mutable-tag zot ref would hand a root-executed shell script's identity back to whoever can
 # re-point the tag, over plain HTTP — the pin is the only integrity control on that payload.
-ZG_GHCR_REF=$(grep -oE 'ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' "$DED_CODE_FILE" | head -1 || true)
+ZG_GHCR_REF=$(grep -oE 'ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' "$DED_CODE_FILE" | sed -n '1p' || true)
 ZG_GHCR_DIGEST="${ZG_GHCR_REF##*@}"
-ZG_ZOT_LINE=$(grep -E '^[[:space:]]*ZIREF=' "$DED_CODE_FILE" | head -1 || true)
-ZG_ZOT_DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' <<<"$ZG_ZOT_LINE" | head -1 || true)
+ZG_ZOT_LINE=$(grep -E '^[[:space:]]*ZIREF=' "$DED_CODE_FILE" | sed -n '1p' || true)
+ZG_ZOT_DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' <<<"$ZG_ZOT_LINE" | sed -n '1p' || true)
 assert "Row2: the IREF pin carrier carries a full sha256 digest pin" \
   "[[ '$ZG_GHCR_DIGEST' =~ ^sha256:[0-9a-f]{64}$ ]]"
 assert "Row2: the zot leg carries a full sha256 digest pin (no mutable-tag form)" \
@@ -1028,10 +1028,10 @@ rm -f "$GB_SITES_FILE"
 GB_BASE_PIN=""
 if git -C "$SCRIPT_DIR" rev-parse -q --verify origin/main >/dev/null 2>&1; then
   GB_BASE_PIN="$(git -C "$SCRIPT_DIR" show origin/main:apps/web-platform/infra/cloud-init-inngest.yml 2>/dev/null \
-    | grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' | head -1 || true)"
+    | grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' | sed -n '1p' || true)"
 fi
 GB_HEAD_PIN="$(grep -ohE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' \
-  "$SCRIPT_DIR/cloud-init-inngest.yml" 2>/dev/null | head -1 || true)"
+  "$SCRIPT_DIR/cloud-init-inngest.yml" 2>/dev/null | sed -n '1p' || true)"
 # THE ASSERTION COUNT MUST NOT DEPEND ON THE ENVIRONMENT. An earlier revision put the
 # no-comparable-base case in its own branch emitting ONE assert where the live path emits TWO --
 # so in the zot-pull mutation sandbox (a throwaway `git init` repo with no `origin/main`) the
@@ -1234,7 +1234,7 @@ assert "GuardA: the staged set and the baked set name the SAME files" \
 
 # The tag is read from the pin literal, so the guard FOLLOWS the pin rather than a hardcoded
 # version. A hardcoded tag would drift silently the first time the pin moved.
-GA_PIN_TAG=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/cloud-init-inngest.yml" 2>/dev/null | head -1 | sed 's/.*://' || true)
+GA_PIN_TAG=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/cloud-init-inngest.yml" 2>/dev/null | sed -n '1p' | sed 's/.*://' || true)
 assert "GuardA: the pinned tag was read from the pin literal (found '$GA_PIN_TAG')" \
   "[[ '$GA_PIN_TAG' =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]"
 GA_TAG_REF="vinngest-$GA_PIN_TAG"
@@ -1473,9 +1473,9 @@ assert "NIC-G1 row10: the cloud-init-inngest.yml map binds inngest_private_ip = 
 # that boot the host carried the other address -- and check.py's own OWN_IP then excluded the
 # wrong one. Measured at review. Pin the two copies to each other.
 NG1_TF_IP=$(grep -oE '^[[:space:]]*inngest_private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' "$SCRIPT_DIR/inngest-host.tf" \
-  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p' || true)
 NG1_STUB_IP=$(grep -oE 'inngest_private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' "$SCRIPT_DIR/inngest-userdata-budget.sh" \
-  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p' || true)
 assert "NIC-G1 row10b: the budget stub's inngest_private_ip equals local.inngest_private_ip (tf=${NG1_TF_IP:-none} stub=${NG1_STUB_IP:-none})" \
   "[[ -n \"\$NG1_TF_IP\" && \"\$NG1_TF_IP\" == \"\$NG1_STUB_IP\" ]]"
 
@@ -1856,7 +1856,7 @@ STUB
   g4_has() { grep -qE "$2" "$G4_DIR/$1.log"; }
   g4_count() { grep -cE "$2" "$G4_DIR/$1.log" || true; }
   # line number of the first / last match in a scenario's call log (empty when absent)
-  g4_at() { grep -nE "$2" "$G4_DIR/$1.log" | head -1 | cut -d: -f1 || true; }
+  g4_at() { grep -nE "$2" "$G4_DIR/$1.log" | sed -n '1p' | cut -d: -f1 || true; }
   g4_last() { grep -nE "$2" "$G4_DIR/$1.log" | tail -1 | cut -d: -f1 || true; }
   # EVERY SPELLING OF AN IMAGE OPERATION, not just the canonical one. `docker image pull`,
   # `docker --config DIR pull` and `docker container create` fetch or consume an image exactly as

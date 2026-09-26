@@ -2585,9 +2585,12 @@ if [[ -n "$(probe_wiring "$tmp/wf-tok.yml" "$SCHED")" ]]; then pass "a dropped t
 echo "W-T2: the heavy job drops pull-requests: read -> RED"
 CASES=$((CASES + 1))
 file_mutant "$WF" "$tmp/wf-perm.yml" '
+# Scope to the tenant-integration JOB block: #8919 added a second
+# pull-requests:read on detect-changes for the push-arm duplicate proof.
+i = s.index("  tenant-integration:")
 t = "      pull-requests: read\n"
-assert s.count(t) == 1
-s = s.replace(t, "", 1)
+assert s.count(t, i) == 1
+s = s[:i] + s[i:].replace(t, "", 1)
 '
 if [[ -n "$(probe_wiring "$tmp/wf-perm.yml" "$SCHED")" ]]; then pass "a dropped scope is seen"; else fail "a job without pull-requests: read went unseen"; fi
 
@@ -4103,6 +4106,7 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 133_heartbeat_threshold_backoff.down.sql
 137_byok_cap_breach_audit_row.down.sql
 140_flag_flip_audit_approval_method.down.sql
+141_conversation_engine_binding_state.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \

@@ -192,15 +192,16 @@ for want in "${REQUIRE_WEB1_ORIGIN[@]}"; do
 done
 
 # --- AC3: this guard is actually wired into CI --------------------------------------
-# infra-validation.yml runs explicit `run:` steps — there is NO glob — so an
-# unregistered suite ships as zero coverage. 16 sibling guards assert their own
-# wiring; this one did not (review: pattern-recognition-specialist P2).
+# Since #8736 presence under apps/web-platform/infra/ IS registration — the
+# deploy-script-tests matrix legs glob-derive and run it — so an unregistered
+# suite can no longer ship as zero coverage, and what remains to pin is the
+# CONNECTION: the legs' run-registered-suites.sh invocation.
 if [[ ! -r "$INFRA_VALIDATION" ]]; then
   fail "infra-validation.yml not readable at $INFRA_VALIDATION — cannot verify this guard is wired into CI"
-elif grep -qE 'bash apps/web-platform/infra/tunnel-origin-relative-ingress\.test\.sh' "$INFRA_VALIDATION"; then
-  pass "registered as an explicit step in infra-validation.yml"
+elif grep -qE 'run: bash apps/web-platform/infra/run-registered-suites\.sh' "$INFRA_VALIDATION"; then
+  pass "the suite runner is invoked in infra-validation.yml (glob registration since #8736)"
 else
-  fail "NOT registered in infra-validation.yml — this suite would never run in CI (silent zero coverage)"
+  fail "the suite runner is NOT invoked in infra-validation.yml — no infra suite would run in CI (silent zero coverage)"
 fi
 
 if [[ "$fails" -gt 0 ]]; then

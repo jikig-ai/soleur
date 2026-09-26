@@ -96,11 +96,13 @@
 # distinct typo-guard token, a required reason, a concurrency mutex and a publish-channel check
 # BEFORE the irreversible apply. Nothing equivalent exists for these tokens, so rotating one today
 # means an operator running Terraform locally with `DOPPLER_TOKEN_TF` in hand. That is an operator
-# step, and it is the status quo for all ten sibling `doppler_service_token`s in this root
-# (`git_data`, `registry`, `ghcr_minter`, `kb_drift`, `write`, `inngest_arm`, …), every one of
-# which documents the same bare recipe. It is a family-wide gap rather than one this shape
-# introduces — tracked in issue #7263 so it is fixed for all eleven at once rather than bolted
-# onto this change for one.
+# step, and it is the status quo for all nine sibling `doppler_service_token`s in this root
+# (`git_data`, `registry`, `kb_drift`, `inngest`, `inngest_arm_write`, …). Three of them,
+# `workspaces_luks`, `web_probes` and `ghcr_minter`, now document a rename route instead (a
+# ForceNew `name` change with create_before_destroy, merged with `[ack-destroy]`); the rest
+# document the same bare recipe. The `-replace` arm is a family-wide gap rather than one this
+# shape introduces — tracked in issue #7263 so it is fixed for the whole family at once rather
+# than bolted onto this change for one.
 #
 # NO `lifecycle` BLOCK AND NO `ignore_changes` ON `plaintext_value`, DELIBERATELY. With one, a
 # `-replace=` rotation would mint values that never reached the Actions secret, and the scan would

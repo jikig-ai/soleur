@@ -19,7 +19,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
-import { assertLegacyEngineBinding } from "./agent-engine-route-guard";
+import { assertLegacyConversationEngineBinding, assertLegacyEngineBinding } from "./agent-engine-route-guard";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
@@ -1024,6 +1024,7 @@ async function createConversation(
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
     context_path: contextPath ?? null,
+    engine_binding_state: "pending",
     ...(activeWorkflow !== undefined ? { active_workflow: activeWorkflow } : {}),
   });
 
@@ -1038,7 +1039,7 @@ async function createConversation(
       // visibility-sweep-audit: owner-scoped — 23505 fallback resolves user's own duplicate
       const { data: existing, error: lookupErr } = await tenant
         .from("conversations")
-        .select("id, active_workflow, context_path")
+        .select("id, active_workflow, context_path, engine_binding_state")
         .eq("user_id", userId)
         .eq("repo_url", repoUrl)
         .eq("context_path", contextPath)
@@ -1115,6 +1116,10 @@ async function createConversation(
           "23505 fallback: context_path diverged; first-writer-wins — second-tab path silently discarded",
         );
       }
+      await assertLegacyConversationEngineBinding(
+        new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient),
+        existingRow.id,
+      );
       return existingRow.id;
     }
     throw new Error(`Failed to create conversation: ${error.message}`);
@@ -1840,6 +1845,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
           if (!lookupErr && existing) {
             const row = existing as { id: string; last_active: string };
+            await assertLegacyConversationEngineBinding(
+              new AgentEnginePersistenceRepository(tenantResume as unknown as PersistenceClient),
+              row.id,
+            );
             const { count: messageCount, error: countErr } = await tenantResume
               .from("messages")
               .select("id", { count: "exact", head: true })
@@ -2068,6 +2077,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           sendToClient(userId, { type: "error", message: "Conversation not found" });
           return;
         }
+
+        await assertLegacyConversationEngineBinding(
+          new AgentEnginePersistenceRepository(tenantResumeConv as unknown as PersistenceClient),
+          msg.conversationId,
+        );
 
         // FR1 (#5240) — re-align the agent cwd resolver with the
         // conversation's own workspace on resume. `resolveCurrentWorkspaceId`
@@ -2433,6 +2447,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       }
 
       try {
+        const tenantEngineBinding = await tenantFor(userId, "handleMessage.chat.engine-binding");
+        if (!tenantEngineBinding) throw new Error("conversation engine binding auth probe failed");
+        await assertLegacyConversationEngineBinding(
+          new AgentEnginePersistenceRepository(tenantEngineBinding as unknown as PersistenceClient),
+          session.conversationId!,
+        );
         // Stage 2.12 — route each turn via `parseConversationRouting`.
         // Legacy rows (NULL) flow through the existing agent-runner;
         // sentinel + workflow values dispatch to the soleur-go runner.
@@ -2783,6 +2803,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "usage_update":
     case "fanout_truncated":
     case "context_reset":
+    case "c4_diagram_saved": // #8739 — Concierge diagram-save notice (server→client only)
     case "upgrade_pending":
     case "interactive_prompt":
     case "subagent_spawn":

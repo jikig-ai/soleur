@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import sharp from "sharp";
 import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
@@ -36,7 +36,7 @@ function tooLarge() {
 // POST — upload
 // ---------------------------------------------------------------------------
 
-async function handlePost(req: Request, user: User): Promise<Response> {
+async function handlePost(req: Request, user: VerifiedUser): Promise<Response> {
   const supabase = await createClient();
   const service = createServiceClient();
 
@@ -205,7 +205,7 @@ async function handlePost(req: Request, user: User): Promise<Response> {
 // DELETE — remove
 // ---------------------------------------------------------------------------
 
-async function handleDelete(_req: Request, user: User): Promise<Response> {
+async function handleDelete(_req: Request, user: VerifiedUser): Promise<Response> {
   const supabase = await createClient();
   const service = createServiceClient();
   const workspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
