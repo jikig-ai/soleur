@@ -347,7 +347,8 @@ scripts/lint-legal-scope-block-placement-unit	3
 scripts/lint-migrated-rule-ids-live	7
 scripts/lint-migrated-rule-ids-unit	4
 scripts/lint-orphan-test-suites	1
-scripts/lint-orphan-test-suites-mutations	5
+scripts/lint-orphan-test-suites-mutations-a	3
+scripts/lint-orphan-test-suites-mutations-b	5
 scripts/lint-rule-bodies-live	7
 scripts/lint-rule-ids-live	6
 scripts/lint-shell-capture-exit	3

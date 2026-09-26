@@ -152,6 +152,18 @@ span to the NEXT registered mark.
   from run 36125573947: legs 486–589 s, leg 5 = the atomic
   `lint-orphan-test-suites-mutations` (588.8 s alone — no K splits a single
   suite; the suite-internal split is a deferred follow-up).
+- **2026-09-26 suite-internal `--rows` split (#8864):** the deferred
+  follow-up landed — `lint-orphan-test-suites-mutations` registers as
+  `-a`/`--rows 1-8` and `-b`/`--rows 9-16` (DECLARED_TOTAL=16 in the
+  battery; the union tiles it, asserted by the run_suite-argv tiling block
+  in `scripts-shard-totality.test.sh`). Interim pins: `-b` stays on leg 5
+  (the emptied suite leg), `-a` on leg 3 — one pre-regen run can overshoot
+  (~780 s on the -a leg); the first green run carrying both halves'
+  timings is the regen input, and the predicted equilibrium worst leg is
+  ~8.5 min ((2989139 ms + ~590 s)/7). Re-splitting later = bump
+  DECLARED_TOTAL + move the range boundary in the SAME commit; the battery
+  records per-row elapsed seconds in its replay table so the next boundary
+  choice is a data lookup.
 
 ## Runner-availability data (why extra legs are not free)
 
