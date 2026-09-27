@@ -22,8 +22,9 @@
 # suffix on a seeded PR row emits isCrossRepository:true + a non-bot author.
 #
 # GUARD CONTRACT (plan §Guard Contract). Guard 1 = behavior rows over the
-# script's mutation matrix; Guard 2 = workflow-shape + regex-parity asserts over
-# build-inngest-bootstrap-image.yml. MIN_ASSERTIONS is the suite's own
+# script's mutation matrix; Guard 2 = workflow-shape asserts over
+# build-inngest-bootstrap-image.yml, plus the writer/checker selector
+# byte-equality rows (#8782). MIN_ASSERTIONS is the suite's own
 # anti-vacuity floor (#7068 discipline): a suite whose asserts were deleted can
 # never green itself.
 set -uo pipefail
@@ -1030,12 +1031,12 @@ precond_on_main() { # name tag
     || fail "$1:precondition-on-main" "fixture broken: $2 ancestry rc=$rc, expected 0"
 }
 
-assert_refused() { # name wording — the full stop-point contract of a refusal
-  local name="$1" wording="$2" branches
+assert_refused() { # name wording [stage] — the full stop-point contract of a refusal
+  local name="$1" wording="$2" stage="${3:-ancestry}" branches
   [[ "$LAST_RC" != "0" ]] && pass "$name:nonzero" \
     || fail "$name:nonzero" "rc=0 — refusal did not fire: $(tail -3 "$LAST_OUT" | tr '\n' '|')"
   assert_result "$name:result" error
-  assert_out_has "$name:ancestry-stage" '::error::ancestry:'
+  assert_out_has "$name:${stage}-stage" "::error::${stage}:"
   assert_out_has "$name:wording" "$wording"
   [[ ! -s "$MOCK_CRANE_LOG" ]] && pass "$name:crane-not-called" \
     || fail "$name:crane-not-called" "crane was consulted before the refusal: $(tr '\n' '|' < "$MOCK_CRANE_LOG")"
@@ -1046,32 +1047,48 @@ assert_refused() { # name wording — the full stop-point contract of a refusal
     || fail "$name:no-bump-branch" "origin carries: $branches"
 }
 
+# assert_excluded <name> <off-main-tag> — #8782: an off-main tag is never a
+# candidate, so the run reconciles to the merged max (v1.1.37@DIG_OLD, which
+# main already pins) and ends `noop`. The stop point is stronger than the old
+# refusal's: the off-main tag never reaches crane, no branch and no PR exist,
+# and every pin still reads v1.1.37.
+assert_excluded() {
+  local name="$1" off="$2" branches
+  assert_rc     "$name:exit" 0
+  assert_result "$name:result" noop
+  assert_out_has "$name:target-merged-max" 'target=v1.1.37 '
+  grep -qF -- ":$off" "$MOCK_CRANE_LOG" \
+    && fail "$name:off-main-never-resolved" "crane was asked about $off: $(tr '\n' '|' < "$MOCK_CRANE_LOG")" \
+    || pass "$name:off-main-never-resolved"
+  assert_all_pins "$name:pins" "$F_REPO" v1.1.37 "$DIG_OLD"
+  [[ ! -s "$MOCK_GH_LOG" ]] && pass "$name:gh-not-called" \
+    || fail "$name:gh-not-called" "gh called: $(head -2 "$MOCK_GH_LOG" | tr '\n' '|')"
+  branches=$(git --git-dir="$F_ORIGIN" for-each-ref --format='%(refname)' 'refs/heads/soleur/' 2>/dev/null)
+  [[ -z "$branches" ]] && pass "$name:no-bump-branch" \
+    || fail "$name:no-bump-branch" "origin carries: $branches"
+}
+
 # B1 — the #8747 shape: semver-max tag, annotated, on an unmerged side commit,
-# with a digest SEEDED for it. Seeding the digest is load-bearing: without the
-# check the run would reach `opened`, not a quiet `skipped`.
+# with a digest SEEDED for it. Seeding the digest is load-bearing: a writer
+# that reverted to `tag --list` would reach `opened` on v1.1.38 (loud), not a
+# quiet `skipped`. Since #8782 the tag is EXCLUDED, not refused.
 base_fixture anc-b1
 s=$(side_commit pr-8741 main 'vector download retry')
 seed_tag_at vinngest-v1.1.38 "$s" --annotate
-printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+printf 'v1.1.38\t%s\nv1.1.37\t%s\n' "$DIG_NEW" "$DIG_OLD" >> "$MOCK_CRANE_MAP"
 precond_off_main 'g1b.B1' vinngest-v1.1.38
 run_bump anc-b1 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B1' 'is not an ancestor of main'
-assert_out_has 'g1b.B1:names-tag' 'vinngest-v1.1.38'
-assert_out_has 'g1b.B1:names-commit' "$s"
-assert_out_has 'g1b.B1:remediation-delete' 'git push origin :refs/tags/vinngest-v1.1.38'
-assert_out_has 'g1b.B1:remediation-local-delete' 'git tag -d vinngest-v1.1.38'
-assert_out_has 'g1b.B1:remediation-new-version' 'as a NEW version'
-assert_out_has 'g1b.B1:remediation-no-rerun' 'do not re-run this job'
+assert_excluded 'g1b.B1' v1.1.38
 
 # B2 — the side branch is SQUASH-merged into main with byte-identical content.
-# Content equality must not satisfy the gate: the tag still names a commit main
-# can never reach.
+# Content equality must not make the tag a candidate: it still names a commit
+# main can never reach.
 base_fixture anc-b2
 s=$(side_commit pr-squash main 'squashed change')
 git -C "$F_REPO" checkout -q "$s" -- apps/web-platform/infra/inngest-bootstrap.sh
 fixture_commit "squash-merge of pr-squash"
 seed_tag_at vinngest-v1.1.38 "$s" --annotate
-printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+printf 'v1.1.38\t%s\nv1.1.37\t%s\n' "$DIG_NEW" "$DIG_OLD" >> "$MOCK_CRANE_MAP"
 precond_off_main 'g1b.B2' vinngest-v1.1.38
 if git -C "$F_REPO" diff --quiet "refs/tags/vinngest-v1.1.38^{tree}" HEAD -- apps/web-platform/infra/inngest-bootstrap.sh; then
   pass 'g1b.B2:precondition-content-identical'
@@ -1079,21 +1096,29 @@ else
   fail 'g1b.B2:precondition-content-identical' "fixture broken: squash content differs"
 fi
 run_bump anc-b2 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B2' 'is not an ancestor of main'
+assert_excluded 'g1b.B2' v1.1.38
 
-# B3 — this run published an ON-main tag, but the semver-max target is an
-# off-main tag. The message must name the semver-max tag as the offender, not
-# the tag this run signed.
+# B3 — the #8782 headline: this run published an ON-main tag while an off-main
+# tag sits above it. Before #8782 the off-main tag was the target and this
+# legitimate bump died at `ancestry`; now it is not a candidate, so the bump
+# lands on the on-main tag. The PR branch is also a remote-tracking ref, the
+# shape actions/checkout leaves.
 base_fixture anc-b3
 seed_tag vinngest-v1.1.38
 s=$(side_commit pr-newer main 'newer unmerged')
 seed_tag_at vinngest-v1.1.39 "$s" --annotate
+git -C "$F_REPO" update-ref refs/remotes/origin/pr-newer "$s"
 printf 'v1.1.38\t%s\nv1.1.39\t%s\n' "$DIG_NEW" "$DIG_NEWER" >> "$MOCK_CRANE_MAP"
 precond_on_main 'g1b.B3' vinngest-v1.1.38
 precond_off_main 'g1b.B3' vinngest-v1.1.39
 run_bump anc-b3 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B3' 'vinngest-v1.1.39'
-assert_out_has 'g1b.B3:semver-max-named' 'semver-max'
+assert_rc     'g1b.B3:exit' 0
+assert_result 'g1b.B3:result' opened
+assert_all_pins 'g1b.B3:pins' "$F_REPO" v1.1.38 "$DIG_NEW"
+assert_gh_called 'g1b.B3:merge-armed' 'gh pr merge .* --auto --squash'
+grep -qF -- ':v1.1.39' "$MOCK_CRANE_LOG" \
+  && fail 'g1b.B3:off-main-never-resolved' "crane was asked about v1.1.39" \
+  || pass 'g1b.B3:off-main-never-resolved'
 
 # B4 — an OLDER off-main tag below an on-main semver-max: only the target is
 # judged, so the bump proceeds.
@@ -1141,10 +1166,11 @@ for kind in annotated lightweight; do
   assert_result "g1b.B6-$kind:result" opened
 done
 
-# B7 — the ancestry walk cannot complete: main c1<-c2<-c3 with c2's object
-# deleted, and the tag on a side commit off c1. merge-base exits 128, which
-# must be refused as UNDECIDED — never read as "not an ancestor" (a different
-# remediation) and never as a pass.
+# B7 — the history walk cannot complete: main c1<-c2<-c3 with c2's object
+# deleted, and the tag on a side commit off c1. `git tag --merged HEAD` then
+# exits 0 with an EMPTY list (the damage is reported only on stderr), so the
+# refusal comes from the empty-target die at `resolve` — never read as "not an
+# ancestor" (a different remediation) and never as a pass.
 base_fixture anc-b7
 c1=$(git -C "$F_REPO" rev-parse HEAD)
 main_commit c2; c2=$(git -C "$F_REPO" rev-parse HEAD)
@@ -1158,46 +1184,58 @@ git -C "$F_REPO" rev-parse -q --verify 'refs/tags/vinngest-v1.1.38^{commit}' >/d
 git -C "$F_REPO" cat-file -e "$c2" 2>/dev/null \
   && fail 'g1b.B7:precondition-c2-absent' "fixture broken: c2 still readable" \
   || pass 'g1b.B7:precondition-c2-absent'
-b7rc=0; git -C "$F_REPO" merge-base --is-ancestor 'refs/tags/vinngest-v1.1.38^{commit}' HEAD 2>/dev/null || b7rc=$?
-[[ "$b7rc" == 128 ]] && pass 'g1b.B7:precondition-rc128' \
-  || fail 'g1b.B7:precondition-rc128' "fixture broken: merge-base rc=$b7rc, expected 128"
+[[ -z "$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null)" ]] \
+  && pass 'g1b.B7:precondition-merged-set-empty' \
+  || fail 'g1b.B7:precondition-merged-set-empty' "fixture broken: git tag --merged HEAD still lists tags on a corrupt walk"
 run_bump anc-b7 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B7' 'could not decide'
+assert_refused 'g1b.B7' 'no vinngest-v* tag is merged into' resolve
+assert_out_has 'g1b.B7:names-cause' 'shallow or unreadable'
 grep -qF 'is not an ancestor of main' "$LAST_OUT" \
   && fail 'g1b.B7:not-off-main-wording' "an undecided walk was reported as off-main" \
   || pass 'g1b.B7:not-off-main-wording'
 
 # B7a — the tag exists (annotated tag object intact) but the COMMIT it points
-# at is gone: the peel fails. Refused as tag-not-found, before any walk.
+# at is gone. `git tag --merged` silently drops it, so it is never a candidate:
+# the run reconciles to the merged max and never asks the registry about it.
 base_fixture anc-b7a
 s=$(side_commit pr-gone main 'object will vanish')
 seed_tag_at vinngest-v1.1.38 "$s" --annotate
 git -C "$F_REPO" branch -q -D pr-gone
 rm -f "$F_REPO/.git/objects/${s:0:2}/${s:2}"
-printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+printf 'v1.1.38\t%s\nv1.1.37\t%s\n' "$DIG_NEW" "$DIG_OLD" >> "$MOCK_CRANE_MAP"
 [[ "$(git -C "$F_REPO" tag --list 'vinngest-v1.1.38')" == vinngest-v1.1.38 ]] \
   && pass 'g1b.B7a:precondition-tag-listed' || fail 'g1b.B7a:precondition-tag-listed' "fixture broken"
 git -C "$F_REPO" rev-parse -q --verify 'refs/tags/vinngest-v1.1.38^{commit}' >/dev/null 2>&1 \
   && fail 'g1b.B7a:precondition-peel-fails' "fixture broken: tag still peels" \
   || pass 'g1b.B7a:precondition-peel-fails'
+[[ "$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null)" == vinngest-v1.1.37 ]] \
+  && pass 'g1b.B7a:precondition-merged-set' \
+  || fail 'g1b.B7a:precondition-merged-set' "fixture broken: --merged HEAD is not exactly vinngest-v1.1.37"
 NO_AUTO_SIGNED_COMMIT=1 run_bump anc-b7a --signed-commit "$(git -C "$F_REPO" rev-parse HEAD)" \
   --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B7a' 'tag not found'
+assert_excluded 'g1b.B7a' v1.1.38
 
-# B8 — `refs/vinngest-v1.1.38` points at MAIN and shadows the bare name (git
-# resolves refs/<name> before refs/tags/<name>). Only an explicit refs/tags/
-# resolution judges the real, off-main tag.
+# B8 — the peel must name refs/tags/ explicitly. The target vinngest-v1.1.38 is
+# ON main, while `refs/vinngest-v1.1.38` points at an OFF-main side commit and
+# shadows the bare name (git resolves refs/<name> before refs/tags/<name>). The
+# explicit peel resolves the real tag and the bump opens; a peel regressed to
+# the bare name resolves the side commit and dies at the --signed-commit
+# binding.
 base_fixture anc-b8
-s=$(side_commit pr-shadow main 'shadowed')
-seed_tag_at vinngest-v1.1.38 "$s" --annotate
-git -C "$F_REPO" update-ref refs/vinngest-v1.1.38 main
+main_commit 'b8 target'
+seed_tag_at vinngest-v1.1.38 HEAD --annotate
+s=$(side_commit pr-shadow main 'shadow')
+git -C "$F_REPO" update-ref refs/vinngest-v1.1.38 "$s"
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
-[[ "$(git -C "$F_REPO" rev-parse -q --verify 'vinngest-v1.1.38^{commit}' 2>/dev/null)" == "$(git -C "$F_REPO" rev-parse main)" ]] \
+[[ "$(git -C "$F_REPO" rev-parse -q --verify 'vinngest-v1.1.38^{commit}' 2>/dev/null)" == "$s" ]] \
   && pass 'g1b.B8:precondition-bare-name-shadowed' \
-  || fail 'g1b.B8:precondition-bare-name-shadowed' "fixture broken: bare name does not resolve to main"
-precond_off_main 'g1b.B8' vinngest-v1.1.38
+  || fail 'g1b.B8:precondition-bare-name-shadowed' "fixture broken: bare name does not resolve to the side commit"
+precond_on_main 'g1b.B8' vinngest-v1.1.38
 run_bump anc-b8 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B8' 'is not an ancestor of main'
+assert_rc     'g1b.B8:exit' 0
+assert_result 'g1b.B8:result' opened
+assert_out_has 'g1b.B8:provenance' 'provenance=bound'
+assert_all_pins 'g1b.B8:pins' "$F_REPO" v1.1.38 "$DIG_NEW"
 
 # B9 — a depth-1 clone. The tag IS on main's head, so with the shallow refusal
 # removed merge-base answers 0 and crane gets called: the empty-crane-log
@@ -1215,6 +1253,31 @@ F_REPO="$b9_clone"
   && pass 'g1b.B9:precondition-tag-present' || fail 'g1b.B9:precondition-tag-present' "fixture broken: tag not fetched"
 run_bump anc-b9 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_refused 'g1b.B9' 'shallow'
+
+# B9b (#8782) — the case that makes the shallow check run BEFORE resolution: the
+# target sits BELOW the graft, so `git tag --merged HEAD` silently omits it
+# (rc 0). Resolving first would pick a lower tag or none and misdiagnose it.
+# The needle is unique to the moved check — `shallow` alone also appears in
+# the `resolve` message.
+base_fixture anc-b9b
+main_commit one
+seed_tag_at vinngest-v1.1.38 HEAD --annotate
+main_commit two; main_commit three
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+b9b_clone="$TMP/anc-b9b/shallow"
+git clone -q --depth 1 "file://$F_REPO" "$b9b_clone"
+git -C "$b9b_clone" fetch -q --tags --depth 1 origin 2>/dev/null
+F_REPO="$b9b_clone"
+[[ "$(git -C "$F_REPO" rev-parse --is-shallow-repository)" == true ]] \
+  && pass 'g1b.B9b:precondition-shallow' || fail 'g1b.B9b:precondition-shallow' "fixture broken: clone is not shallow"
+[[ "$(git -C "$F_REPO" tag --list 'vinngest-v1.1.38')" == vinngest-v1.1.38 ]] \
+  && pass 'g1b.B9b:precondition-tag-present' || fail 'g1b.B9b:precondition-tag-present' "fixture broken: tag not fetched"
+git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null | grep -qxF vinngest-v1.1.38 \
+  && fail 'g1b.B9b:precondition-merged-omits-target' "fixture broken: --merged HEAD still sees the target below the graft" \
+  || pass 'g1b.B9b:precondition-merged-omits-target'
+run_bump anc-b9b --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_refused 'g1b.B9b' 'cannot decide which vinngest-v* tags are merged'
 
 # B10 — the re-pointed-tag race: the build signed commit X, and by bump time the
 # tag names a DIFFERENT (on-main) commit. The digest cross-check cannot see
@@ -1255,10 +1318,11 @@ assert_out_has 'g1b.B11-bad:stage' '::error::args:'
 [[ ! -s "$MOCK_CRANE_LOG" ]] && pass 'g1b.B11:crane-not-called' || fail 'g1b.B11:crane-not-called' "crane called"
 
 
-# B12 — the legacy state right after #8747 merged: main PINS the off-main
-# semver-max tag. The refusal must say "do NOT delete" and must NOT print the
-# delete command (deleting the pinned tag breaks AC6/GuardA/zot backfill and,
-# repeated, walks the target down to an older tag).
+# B12 — the legacy state right after #8747 merged: main PINS an off-main tag.
+# Since #8782 that tag can never be the target, so the state shows up as "the
+# pin sits above every merged tag" — the same downgrade refusal as B13. It must
+# say "do NOT delete" and must NOT print the delete command (deleting the pinned
+# tag breaks AC6/GuardA/zot backfill and, repeated, walks the pin down).
 new_fixture_repo anc-b12
 write_fixture_cloud_inits "$F_REPO" v1.1.39 "$DIG_NEWER" v1.1.39 "$DIG_NEWER"
 fixture_commit "pins at legacy off-main v1.1.39"
@@ -1267,16 +1331,20 @@ git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 s=$(side_commit pr-legacy main 'legacy off-main')
 seed_tag_at vinngest-v1.1.39 "$s" --annotate
 printf 'v1.1.25\t%s\nv1.1.39\t%s\n' "$DIG_OLD" "$DIG_NEWER" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" rev-parse -q --verify 'refs/tags/vinngest-v1.1.39^{commit}' >/dev/null \
+  && pass 'g1b.B12:precondition-pinned-tag-resolves' \
+  || fail 'g1b.B12:precondition-pinned-tag-resolves' "fixture broken: vinngest-v1.1.39 does not resolve"
 precond_off_main 'g1b.B12' vinngest-v1.1.39
 run_bump anc-b12 --signed-tag v1.1.25 --signed-digest "$DIG_OLD" --mirror-status ok
-assert_refused 'g1b.B12' 'it is the tag main pins today'
-assert_out_has 'g1b.B12:do-not-delete' 'Do NOT delete or re-cut it'
+assert_refused 'g1b.B12' 'Refusing to author a downgrade' resolve
+assert_out_has 'g1b.B12:do-not-delete' 'Do NOT delete or re-cut'
 grep -qF 'git push origin :refs/tags/vinngest-v1.1.39' "$LAST_OUT" \
   && fail 'g1b.B12:no-delete-command' "the refusal prints a command that deletes the live pin" \
   || pass 'g1b.B12:no-delete-command'
 
 # B13 — the pinned tag was deleted (the cascade B12 prevents), so the
-# semver-max remaining tag sits BELOW the pin: refuse the downgrade.
+# semver-max remaining tag sits BELOW the pin: refuse the downgrade, before the
+# registry is consulted.
 new_fixture_repo anc-b13
 write_fixture_cloud_inits "$F_REPO" v1.1.39 "$DIG_NEWER" v1.1.39 "$DIG_NEWER"
 fixture_commit "pins at v1.1.39 whose tag is gone"
@@ -1284,11 +1352,8 @@ seed_tag vinngest-v1.1.25
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 printf 'v1.1.25\t%s\n' "$DIG_OLD" >> "$MOCK_CRANE_MAP"
 run_bump anc-b13 --signed-tag v1.1.25 --signed-digest "$DIG_OLD" --mirror-status ok
-[[ "$LAST_RC" != 0 ]] && pass 'g1b.B13:nonzero' || fail 'g1b.B13:nonzero' "downgrade v1.1.39 -> v1.1.25 was not refused"
-assert_result  'g1b.B13:result' error
-assert_out_has 'g1b.B13:stage' '::error::resolve:'
-assert_out_has 'g1b.B13:wording' 'Refusing to author a downgrade'
-assert_gh_not_called 'g1b.B13:no-gh' 'gh '
+assert_refused 'g1b.B13' 'Refusing to author a downgrade' resolve
+assert_out_has 'g1b.B13:do-not-delete' 'Do NOT delete or re-cut'
 assert_origin_branch 'g1b.B13:no-branch' 'soleur/inngest-pin-v1.1.25' ABSENT
 
 # B14 — provenance: the tag was re-pointed onto main commit M, but the registry
@@ -1383,8 +1448,45 @@ chmod +x "$B19_BIN/git"
 PATH="$B19_BIN:$PATH" run_bump anc-b19 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_refused 'g1b.B19' 'shallow'
 
+# B20 (#8782) — selection is SEMVER, not lexical: v1.10.0 beats v1.9.0. Both
+# digests are seeded, so a `sort -V` -> `sort` mutant fails legibly (noop on
+# target=v1.9.0) instead of as a quiet `skipped`.
+new_fixture_repo anc-b20
+write_fixture_cloud_inits "$F_REPO" v1.9.0 "$DIG_OLD" v1.9.0 "$DIG_OLD"
+fixture_commit "pins at v1.9.0"
+seed_tag vinngest-v1.9.0
+main_commit 'b20 advance'
+seed_tag_at vinngest-v1.10.0 HEAD --annotate
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf 'v1.9.0\t%s\nv1.10.0\t%s\n' "$DIG_OLD" "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+run_bump anc-b20 --signed-tag v1.10.0 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc     'g1b.B20:exit' 0
+assert_result 'g1b.B20:result' opened
+assert_out_has 'g1b.B20:target' 'target=v1.10.0 '
+assert_all_pins 'g1b.B20:pins' "$F_REPO" v1.10.0 "$DIG_NEW"
+
+# B21 (#8782) — a pre-release name and a four-part name on main are never
+# candidates, even though both sort above v1.1.40. Neither has a seeded digest,
+# so a regex-stage mutant would reach crane for one of them and end `skipped`.
+new_fixture_repo anc-b21
+write_fixture_cloud_inits "$F_REPO" v1.1.40 "$DIG_OLD" v1.1.40 "$DIG_OLD"
+fixture_commit "pins at v1.1.40"
+seed_tag vinngest-v1.1.40
+seed_tag vinngest-v1.2.0-rc1
+seed_tag vinngest-v1.2.0.1
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf 'v1.1.40\t%s\n' "$DIG_OLD" >> "$MOCK_CRANE_MAP"
+run_bump anc-b21 --signed-tag v1.1.40 --signed-digest "$DIG_OLD" --mirror-status ok
+assert_rc     'g1b.B21:exit' 0
+assert_result 'g1b.B21:result' noop
+for bad in v1.2.0-rc1 v1.2.0.1; do
+  grep -qF -- ":$bad" "$MOCK_CRANE_LOG" \
+    && fail "g1b.B21:excluded-$bad" "crane was asked about $bad" \
+    || pass "g1b.B21:excluded-$bad"
+done
+
 echo ""
-echo "=== Guard 2: workflow shape + regex parity ==="
+echo "=== Guard 2: workflow shape + selector byte-equality ==="
 
 check_wf() { # name needle — literal present
   if grep -qF -- "$2" "$WORKFLOW"; then pass "$1"
@@ -1868,14 +1970,54 @@ git -C "$H" update-ref refs/vinngest-v1.2.0 "$m"
 run_step i14 "$H" v1.2.0 "$m"
 step_rc 'g2b.I14:bare-name-shadow-rc1' 1
 
-# Guard 2 row 5: regex parity — the script's tag-selection pipeline is
-# AC6-identical. Both files must carry each literal stage.
-for lit in "tag --list 'vinngest-v*'" "sed 's/^vinngest-//'" "sort -V" "tail -1" '^v[0-9]+\.[0-9]+\.[0-9]+$'; do
-  if [[ -f "$SCRIPT" ]] && grep -qF -- "$lit" "$SCRIPT" && grep -qF -- "$lit" "$CONSUMER"; then
-    pass "g2.parity:$lit"
-  else
-    fail "g2.parity:$lit" "pipeline literal missing from script or consumer"
-  fi
+# Selector byte-equality (#8782, ADR-232 §2): the writer's `TARGET=` block and
+# AC6's `LATEST_TAG=` block must be the SAME 3-line pipeline once the variable
+# name and the dir operand are normalized. The writer's block is exercised by
+# the B rows above, so equality makes the checker behave identically. Blocks are
+# found by structure (start line → first line ending `|| true)`), never by a
+# literal grep a comment could satisfy. The start pattern goes through ENVIRON:
+# `awk -v` processes backslash escapes and breaks the regex.
+SEL_W_RE='^TARGET=\$\(git -C "\$REPO_DIR" tag '
+SEL_C_RE='^LATEST_TAG=\$\(git -C "\$SCRIPT_DIR" tag '
+sel_slice() { # file start-regex
+  RE="$2" awk '$0 ~ ENVIRON["RE"] {on=1} on {print} on && /\|\| true\)[[:space:]]*$/ {exit}' "$1"
+}
+sel_count() { # file regex — lines matching
+  RE="$2" awk '$0 ~ ENVIRON["RE"] {n++} END {print n+0}' "$1"
+}
+SEL_FIX="keep the two 3-line \`git tag --merged HEAD\` selector blocks byte-identical (ADR-232 §2)"
+for side in writer checker; do
+  if [[ "$side" == writer ]]; then f="$SCRIPT"; re="$SEL_W_RE"; else f="$CONSUMER"; re="$SEL_C_RE"; fi
+  n=$(sel_count "$f" "$re")
+  [[ "$n" == 1 ]] && pass "g2.sel:$side-one-start" \
+    || fail "g2.sel:$side-one-start" "$n selector start line(s) in $f, expected 1 — $SEL_FIX"
+  slice=$(sel_slice "$f" "$re")
+  lines=$(grep -c '' <<<"$slice")
+  [[ -n "$slice" && "$lines" == 3 ]] && pass "g2.sel:$side-three-lines" \
+    || fail "g2.sel:$side-three-lines" "selector slice is $lines line(s), expected 3 — $SEL_FIX"
+  grep -qF -- "tag --merged HEAD --list 'vinngest-v*'" <<<"$slice" && pass "g2.sel:$side-merged-head" \
+    || fail "g2.sel:$side-merged-head" "selector does not read tags merged into HEAD — $SEL_FIX"
+  grep -qF -- 'sort -V' <<<"$slice" && pass "g2.sel:$side-sort-v" \
+    || fail "g2.sel:$side-sort-v" "selector does not sort by version — $SEL_FIX"
+done
+# Directional normalization: each side may differ from the other ONLY by its
+# own name and its own dir operand. A checker that used the writer's unset
+# $REPO_DIR keeps it here and fails the diff.
+sel_w=$(sel_slice "$SCRIPT" "$SEL_W_RE" | sed -e 's/^TARGET=/SEL=/' -e 's/"\$REPO_DIR"/"$DIR"/' -e 's/^[[:space:]]*//')
+sel_c=$(sel_slice "$CONSUMER" "$SEL_C_RE" | sed -e 's/^LATEST_TAG=/SEL=/' -e 's/"\$SCRIPT_DIR"/"$DIR"/' -e 's/^[[:space:]]*//')
+if [[ -n "$sel_w" && "$sel_w" == "$sel_c" ]]; then
+  pass 'g2.sel:byte-equal'
+else
+  fail 'g2.sel:byte-equal' "writer and checker selectors differ — $SEL_FIX: $(diff <(printf '%s\n' "$sel_w") <(printf '%s\n' "$sel_c") | tr '\n' '|')"
+fi
+# Consumer wiring: exactly one LATEST_TAG assignment, and BOTH pin asserts read it.
+n=$(sel_count "$CONSUMER" '^[[:space:]]*LATEST_TAG=')
+[[ "$n" == 1 ]] && pass 'g2.sel:checker-one-assignment' \
+  || fail 'g2.sel:checker-one-assignment' "$n LATEST_TAG= assignment(s) in $CONSUMER, expected 1"
+for pv in PIN DED_PIN; do
+  n=$(grep -cF "[[ '\$$pv' == '\$LATEST_TAG' ]]" "$CONSUMER" || true)
+  [[ "$n" == 1 ]] && pass "g2.sel:checker-$pv-reads-selector" \
+    || fail "g2.sel:checker-$pv-reads-selector" "$n assert(s) comparing \$$pv to \$LATEST_TAG, expected 1"
 done
 
 # The script pushes ONLY via x-access-token (the minted installation token) —
