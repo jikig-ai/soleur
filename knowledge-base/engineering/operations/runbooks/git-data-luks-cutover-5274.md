@@ -32,8 +32,12 @@ The real cutover does not exist yet. It is blocked on all of:
   - [ ] Step 2 — rung-2 re-rehearsal, then the evidence-only PR.
   - [ ] Step 3 — `git-data-host-replace` publishes `GIT_DATA_SSH_HOST_KEY`, and the
     `git-data-pin-redeploy.yml` run it triggers loads it (startup line `git_data_pin=present`).
-  - [ ] Step 4 — the strict dry run reads `role=git-data-auth verdict=ok`; then tick this item and flip
-    ADR-237 to `accepted` in a docs PR.
+  - [x] Step 4 — the strict dry run reads `role=git-data-auth verdict=ok`; then tick this item and flip
+    ADR-237 to `accepted` in a docs PR. Done: `git-data-cutover.yml` run
+    [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656) (from `main`,
+    2026-09-25) read `role=git-data-auth verdict=ok` with both hops pinned. The run exited 5 on
+    `verdict=already_cut_over`, a store probe and not a host key. ADR-237 is `accepted` (addendum
+    2026-09-27).
   - [ ] Step 5 — every erasure left pending by the pin window is discharged.
   - [ ] Step 6 — the #5914 follow-up PR deletes the app's unpinned fallback arm and closes #5914.
   - **Flag-flip precondition (hard):** `GIT_DATA_STORE_ENABLED` is never set until the pin is present

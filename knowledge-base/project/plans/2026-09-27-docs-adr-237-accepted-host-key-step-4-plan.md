@@ -287,13 +287,13 @@ data-path change, and no change to any sensitive path.
 
 ## Acceptance Criteria
 
-- [ ] AC1: `awk 'NR==1{next} /^---/{exit} /^status:/{print $2}'` on ADR-237 prints `accepted`.
-- [ ] AC2: `git diff origin/main -- <ADR-237>` shows only additions apart from the one `status:`
+- [x] AC1: `awk 'NR==1{next} /^---/{exit} /^status:/{print $2}'` on ADR-237 prints `accepted`.
+- [x] AC2: `git diff origin/main -- <ADR-237>` shows only additions apart from the one `status:`
   line. The `## Status` paragraph, starting "`adopting`. Implemented by PR #8511", is byte-identical.
-- [ ] AC3: ADR-237 has exactly one `## Addendum — 2026-09-27` heading, and it sits before
+- [x] AC3: ADR-237 has exactly one `## Addendum — 2026-09-27` heading, and it sits before
   `## References`. It contains `36119817656`, `already_cut_over`, `TOFU_ARM present` and `#5914`,
   and does not contain a claim that the run passed. It must use "exited 5" or "failed" wording.
-- [ ] AC4: the runbook's Preconditions Step 4 line starts `- [x] Step 4` and contains
+- [x] AC4: the runbook's Preconditions Step 4 line starts `- [x] Step 4` and contains
   `36119817656`. `git diff` on the runbook touches only that list item.
 - [ ] AC5: the PR diff (`git diff --name-only origin/main...HEAD`) contains only the two edited
   files plus this plan and its `tasks.md`. It contains no `knowledge-base/legal/**` path.

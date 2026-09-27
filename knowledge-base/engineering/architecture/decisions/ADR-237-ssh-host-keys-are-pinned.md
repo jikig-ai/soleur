@@ -1,6 +1,6 @@
 ---
 title: "ADR-237: SSH host keys are pinned"
-status: adopting
+status: accepted
 date: 2026-09-21
 issue: 7226
 supersedes: []
@@ -197,6 +197,39 @@ Also rejected during planning: SSH host certificates or a host CA (the `tls` pro
 OpenSSH certificates, and a CA adds a signing key to guard for no property the plain pin misses), and a
 staged fail-open rollout for the bridge (with the pin file always written, the interim phase checks
 nothing new).
+
+## Addendum — 2026-09-27 (#7226): accepted at post-merge step 4
+
+ADR-237 is `accepted`. The condition in Status is met: `git-data-cutover.yml` run
+[36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656), dispatched from
+`main` at `51a5541a1a` on 2026-09-25, ran with `ssh-strict: true`, pinned both hops
+(`write-known-hosts: pinned web-1 ecdsa-sha2-nistp256 SHA256:ARBTzhY4hCGXKwWZ2j9aOc4zZefBYgAxJncoVglvuok`,
+`write-known-hosts: pinned git-data ssh-ed25519 SHA256:4eErmLfOuKM17zzNd+2so+26zojG0tsv9NMVNCuXpCs`),
+and read `role=web verdict=ok`, `role=git-data-jump verdict=ok` and
+`role=git-data-auth verdict=ok`. The git-data fingerprint equals the published pin
+(`git_data_pin=present fp=SHA256:4eErmLfOuKM17zzNd+2so+26zojG0tsv9NMVNCuXpCs`).
+
+**The run as a whole failed, and not on a host key.** It exited 5 on
+`probe=store-not-cut-over verdict=already_cut_over`, because the store had already been cut over
+on 2026-09-25. That is a store-probe verdict and was read after all three SSH roles had passed.
+Making the proof read `already_cut_over` as a pass is a separate follow-up (git-data-cutover
+PR2). This addendum relies only on the three `role=` lines and the two `pinned` lines. It does
+not claim the run passed.
+
+**Still open, and not conditions of `accepted`:**
+
+- The same run warned `TOFU_ARM present`. The app still carries the unpinned fallback arm
+  (Residuals, "The transitional app arm"). Deleting it is runbook step 6 (#5914), which is a hard
+  precondition for setting `GIT_DATA_STORE_ENABLED`. It was never a condition of this flip.
+- Runbook step 5 (discharging erasures left pending by the pin window) is not done by this run,
+  which stopped before the `store_not_empty` probe.
+
+Effects elsewhere, already written conditionally in those records and not rewritten here: per
+ADR-220's 2026-09-21 amendment, D4's first residual ("Unverified host keys (#7226)") closes, and
+so does the 2026-09-15 residual "Store-probe evidence is unauthenticated until #7226", as to web-1
+standing in for git-data. A pinned key authenticates the host, not its answers, so
+`store_not_empty` and the bounded probes stay. ADR-068's host-key gate (its 2026-09-21
+amendment) is discharged.
 
 ## References
 
