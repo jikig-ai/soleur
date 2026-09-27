@@ -638,3 +638,31 @@ PreToolUse hook.
 - Do not "simplify" the terminator into a negated class (M17), or owner/repo into two segments (M8).
   The mirror uses two segments because it sees **expanded** tokens, while this hook sees the
   unexpanded `$REPO` word.
+
+## Addendum — 2026-09-27 (PR #9088 review round)
+
+A nine-seat review of `154f9a68dd` measured regressions the v3 design shipped
+(main denied, v3 allowed), all fixed in the review commit:
+
+- The segment split cut through **redirect operators** (`2>&1`, `&>`, `>&2`,
+  `<&0`, `>|`) and through an unquoted **`$(a | b)` / backtick** argument,
+  separating the endpoint from its POST flag. The split is now one perl pass
+  that drops redirect operators and splits only at nesting depth 0.
+- **`#`** was missing from the terminator list; gh strips the fragment and
+  POSTs to the collection (measured against a local listener).
+- The new **`(^|[[:space:]])` anchor** on the POST signal was dodged by `\-f`,
+  `${E}-f` and `$E-f`. The signal is unanchored again, as on main.
+- The bash loop forked `grep` **per segment** (a 64 KB, 10.9k-segment command
+  took ~17.5 s; hook timeouts are non-blocking). The whole match now runs in
+  the one perl process; a perl failure falls back to a whole-command match.
+- `--input` moves `-f`/`-F` fields to the query string, so `-f
+  'labels[]=meta/machinery'` beside `--input` credited exit 1 while filing an
+  unlabelled issue. `--input` filings now get their own refusal, and the
+  generic refusal names the exit-1 spelling for the form used.
+
+Corrections to claims above, which describe the base commit `b3d5652e7b`:
+the line numbers are base-commit references; `filingShape()` is the cron
+**mirror**, not an equal — this hook is deliberately wider (unexpanded
+`$VAR` endpoints, `-ftitle=`, `-X=POST`, `--input=`), and the mirror's own
+gaps are recorded on #9089. The suite is 195 rows (floor 195); 15 of the
+review-round rows are RED against `154f9a68dd`.

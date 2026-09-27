@@ -42,9 +42,12 @@ mk_payload() {
 # main-CI until this isolation landed.
 decision_of() {
   local cmd="$1" tmp; tmp="$(mktemp -d)"
-  local out
-  out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)"
+  local out rc=0
+  out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)" || rc=$?
   rm -rf "$tmp"
+  # A non-zero hook exit BLOCKS the tool call in Claude Code (exit 2) or is a
+  # crash -- either way it is not the empty-output allow, so never read it as one.
+  if [[ "$rc" != 0 ]]; then echo "<rc=$rc>"; return; fi
   # An allow is empty hook output (no JSON emitted); normalize to "<none>".
   if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
   echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<none>"' 2>/dev/null || echo "<jq-fail>"
@@ -65,9 +68,12 @@ assert() {
 # isolation as decision_of (non-git tmp CWD, sandboxed incidents).
 reason_of() {
   local cmd="$1" tmp; tmp="$(mktemp -d)"
-  local out
-  out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)"
+  local out rc=0
+  out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)" || rc=$?
   rm -rf "$tmp"
+  # A non-zero hook exit BLOCKS the tool call in Claude Code (exit 2) or is a
+  # crash -- either way it is not the empty-output allow, so never read it as one.
+  if [[ "$rc" != 0 ]]; then echo "<rc=$rc>"; return; fi
   if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
   echo "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // "<none>"' 2>/dev/null || echo "<jq-fail>"
 }
@@ -798,6 +804,8 @@ assert "filing-justification: --body-file reaches exit 2" "<none>" \
   "gh issue create --title t --body-file $BF_OK $MS"
 assert "filing-justification: --body-file reaches exit 3" "<none>" \
   "gh issue create --title t --body-file $BF_MAND $MS"
+assert "filing-justification: gh issue create -F (short --body-file) reaches exit 3" "<none>" \
+  "gh issue create --title t -F $BF_MAND $MS"
 assert "filing-justification: --body-file still refuses inside the inline threshold" "deny" \
   "gh issue create --title t --body-file $BF_SMALL $MS"
 assert "filing-justification: unreadable --body-file fails TOWARD gating" "deny" \
@@ -842,7 +850,9 @@ assert "filing-justification: list-then-label loop is not a filing" "<none>" \
   "for n in \$(gh api repos/jikig-ai/soleur/issues?labels=x --jq '.[].number'); do gh api -X POST repos/jikig-ai/soleur/issues/\$n/labels -f 'labels[]=y'; done"
 assert "filing-justification: list piped into a labelling xargs is not a filing" "<none>" \
   "gh api repos/jikig-ai/soleur/issues --jq '.[].number' | xargs -I{} gh api -X POST repos/jikig-ai/soleur/issues/{}/labels -f 'labels[]=y'"
-assert "filing-justification: a quoted collection GET beside a comment POST is not a filing" "<none>" \
+# Quote-blanking tripwire, not a segmentation row: $SCAN blanks BOTH quoted
+# endpoints, so this stays green with segmentation removed (#9089 territory).
+assert "filing-justification: quoted endpoints on both sides of && are blanked, not a filing" "<none>" \
   'gh api -X POST "repos/jikig-ai/soleur/issues/5/comments" -f body=x && gh api "repos/jikig-ai/soleur/issues?per_page=5"'
 # The collection endpoint still gates in every unquoted spelling gh routes to it.
 assert "filing-justification: collection ?query still gates" "deny" \
@@ -878,8 +888,8 @@ assert "filing-justification: --method=POST gates" "deny" \
   'gh api repos/jikig-ai/soleur/issues --method=POST -f body=y'
 assert "filing-justification: --input (gh defaults to POST) gates" "deny" \
   'gh api repos/jikig-ai/soleur/issues --input b.json'
-assert_reason "filing-justification: an --input denial says the JSON is not read" \
-  "an --input JSON body is not read" \
+assert_reason "filing-justification: an --input filing gets the --input refusal" \
+  "uses --input, so this gate cannot read its body or labels" \
   'gh api repos/jikig-ai/soleur/issues -X POST --input b.json'
 assert "filing-justification: -F title= gates" "deny" \
   'gh api repos/jikig-ai/soleur/issues -F title=x -f body=y'
@@ -901,6 +911,96 @@ assert "filing-justification: an api create inside a heredoc body is prose" "<no
 assert_reason "filing-justification: a later gate still runs after a non-filing gh api" \
   "git stash is not allowed" \
   'gh api repos/jikig-ai/soleur/labels --jq length; git stash'
+
+# --- Review round (#9088): one row per alternation member, so no member of the
+# terminator, POST-signal or splitter lists is covered only by accident.
+assert "filing-justification: endpoint LAST in the command still gates" "deny" \
+  'gh api -X POST -f title=x -f body=y repos/jikig-ai/soleur/issues'
+assert "filing-justification: create inside an unquoted \$(...) gates" "deny" \
+  'n=$(gh api -X POST -f title=x -f body=y repos/jikig-ai/soleur/issues)'
+assert "filing-justification: create inside backticks gates" "deny" \
+  'n=`gh api -X POST -f title=x -f body=y repos/jikig-ai/soleur/issues`'
+assert "filing-justification: collection glued to an input redirect gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues<in.txt -X POST -f title=x -f body=y'
+assert "filing-justification: collection with an escaped ? gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues\?x=1 -X POST -f title=x -f body=y'
+assert "filing-justification: collection #fragment gates (gh strips it)" "deny" \
+  'gh api repos/jikig-ai/soleur/issues#x -f title=x -f body=y'
+assert "filing-justification: -f=title= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -f=title=x -f body=y'
+assert "filing-justification: --field title= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues --field title=x -f body=y'
+assert "filing-justification: --field=title= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues --field=title=x -f body=y'
+assert "filing-justification: --raw-field=title= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues --raw-field=title=x -f body=y'
+assert "filing-justification: --input=file gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues --input=b.json'
+assert "filing-justification: an escaped | does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -f q=a\|b -X POST -f body=y'
+assert "filing-justification: an escaped & does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -f q=a\&b -X POST -f body=y'
+# A redirect's & or | is not a command separator.
+assert "filing-justification: 2>&1 mid-command does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues 2>&1 -X POST -f title=x -f body=y'
+assert "filing-justification: 2>&1 before the endpoint does not split the create" "deny" \
+  'gh api 2>&1 repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y'
+assert "filing-justification: &>file mid-command does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues &>/dev/null -X POST -f title=x -f body=y'
+assert "filing-justification: >&2 mid-command does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues >&2 -X POST -f title=x -f body=y'
+assert "filing-justification: >| mid-command does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues >|/tmp/o -X POST -f title=x -f body=y'
+assert "filing-justification: <&0 mid-command does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues <&0 -X POST -f title=x -f body=y'
+# A $(...) argument's separators belong to the substitution, not the command.
+assert "filing-justification: a piped \$(...) argument does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -f body=$(cat a.md | head -50) -X POST -f title=x'
+assert "filing-justification: a ;-list \$(...) argument does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -f body=$(cat a.md; true) -X POST -f title=x'
+# The POST signal is unanchored: an escape or an empty expansion reaches gh as -f/-X.
+assert "filing-justification: \\-f title= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues \-f title=x -f body=y'
+assert "filing-justification: \${E}-f title= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues ${E}-f title=x -f body=y'
+assert "filing-justification: \$E-X POST gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues $E-X POST -f body=y'
+# Padding cannot hide a create: the whole match is one perl pass, not a fork per segment.
+_pad="$(printf '; true%.0s' $(seq 1 2000))"
+assert "filing-justification: 2000 padding segments do not hide a create" "deny" \
+  "gh api repos/jikig-ai/soleur/labels --jq length${_pad}; gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y"
+# --input moves -f fields to the query string, so a label passed that way is not an exit.
+assert_reason "filing-justification: --input plus -f labels[]=meta/machinery is refused" \
+  "uses --input, so this gate cannot read its body or labels" \
+  "gh api repos/jikig-ai/soleur/issues --input b.json -f 'labels[]=meta/machinery'"
+# The refusal names the exit-1 spelling for the form actually used.
+assert_reason "filing-justification: the api-form refusal names the api label spelling" \
+  "-f labels[]=meta/machinery (the gh api spelling)" \
+  'gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y'
+assert "filing-justification: a piped backtick argument does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -f body=`cat a.md | head -5` -X POST -f title=x'
+assert_reason "filing-justification: the gh issue create refusal keeps the --label spelling" \
+  "add --label meta/machinery. That ledger" \
+  "gh issue create --title t --body b $MS"
+# Must stay ALLOWED: sub-resources and non-issue paths around the new rules.
+assert "filing-justification: sub-resource POST with a trailing 2>&1 is not a filing" "<none>" \
+  "gh api -X POST repos/jikig-ai/soleur/issues/123/labels -f 'labels[]=x' 2>&1"
+assert "filing-justification: sub-resource number glued to >&2 is not a filing" "<none>" \
+  "gh api -X POST -f 'labels[]=x' repos/jikig-ai/soleur/issues/123>&2"
+assert "filing-justification: a redirect target named issues is not a filing" "<none>" \
+  'gh api -X POST repos/jikig-ai/soleur/pulls/5/comments -f body=x >logs/issues'
+assert "filing-justification: a backgrounded list beside a label POST is not a filing" "<none>" \
+  'gh api repos/jikig-ai/soleur/issues --jq length & gh api -X POST repos/jikig-ai/soleur/issues/5/labels -f x=y'
+# Perl unavailable: the fallback is a whole-command match that errs toward gating.
+_nopl="$CM/no-perl"; mkdir -p "$_nopl"
+printf '#!/bin/sh\nexit 127\n' > "$_nopl/perl"; chmod +x "$_nopl/perl"
+_pl_got="$(PATH="$_nopl:$PATH" decision_of 'gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y')"
+TOTAL=$((TOTAL + 1))
+if [[ "$_pl_got" == "deny" ]]; then
+  PASS=$((PASS + 1)); echo "PASS: filing-justification: without perl the fallback still gates a create"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: filing-justification: without perl the fallback still gates a create"; echo "  want: deny  got: $_pl_got"
+fi
 
 # --- Harness rows: the guard's OWN failure modes ---
 #
@@ -1170,8 +1270,10 @@ fi
 # deleting all four left 123/123 green, exactly at the floor. Slack in a floor is
 # attack budget, not padding — bump it in the same commit that adds rows.
 # 127 + 33 CLASS 4 endpoint-scope rows (sub-resource allows, collection denies,
-# newly read POST spellings, segment scoping) = 160.
-MIN_ASSERTIONS=160
+# newly read POST spellings, segment scoping) = 160, + 33 review-round rows (one
+# per terminator/POST-signal/splitter member, redirects, $(...), --input, the
+# api refusal spellings, gh issue create -F, the perl-absent fallback) = 195.
+MIN_ASSERTIONS=195
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2
