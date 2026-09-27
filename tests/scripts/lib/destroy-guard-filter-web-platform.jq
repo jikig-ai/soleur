@@ -38,8 +38,10 @@
 # destroy = false } }` blocks) will trip nested_deletes against this filter
 # because `change.actions = ["forget"]` is excluded only from resource_deletes
 # (the `index("delete")` check) but `before.rules` is populated while `after`
-# is null → positive count. Currently no `removed` blocks in
-# apps/web-platform/infra/; if you add one, the remedy DEPENDS ON THE CONSUMER:
+# is null → positive count. The `removed` blocks in apps/web-platform/infra/
+# today (doppler-write-token.tf, github-app.tf, inngest-host.tf's #8754 attachment
+# forget) are non-Cloudflare types, which the nested_deletes clauses do not match.
+# A forget of a Cloudflare type WOULD trip it; the remedy DEPENDS ON THE CONSUMER:
 #   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
 #   - apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE there (a push
 #     path with no ack token to type past), so the
@@ -48,8 +50,8 @@
 # Prefer the widening: it is the one fix that works for every consumer. Note also
 # that `["forget"]` is counted by NO host_creates arm on any path — a state-drop
 # of hcloud_server/hcloud_volume passes every gate and silently strands the
-# volume (the hazard T49 guards on the retire path). Pre-existing, no `removed`
-# blocks exist today; recorded here so the next author does not rediscover it.
+# volume (the hazard T49 guards on the retire path). Pre-existing; recorded here
+# so the next author does not rediscover it.
 #
 # PROVIDER PIN: cloudflare/cloudflare ~> 4.0 (currently 4.52.7). Two of
 # the six clauses are at risk on a v5 upgrade

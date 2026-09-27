@@ -32,6 +32,23 @@ under the limit is `plugins/soleur/test/workflow-file-size.test.ts`; the decisio
 RED run of this workflow shows zero jobs, start at
 `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md`.
 
+**Per-merge `-target` note: `hcloud_firewall_attachment.inngest` (#8754).** The `apply` job's
+`Terraform plan (allow-list, non-SSH resources only)` step targets this address, and the
+`inngest_host` job does not. The address is a `removed { lifecycle { destroy = false } }` forget in
+`inngest-host.tf`; the rationale is the ADR-100 2026-09-25 addendum. Under `-target`, a `removed`
+block is planned only if its address is targeted, so:
+
+- **The per-merge `apply` job targets it.** The first merge apply after #8754 plans a `forget`
+  and drops the state entry. No `[ack-destroy]` is needed: `destroy-guard-filter-web-platform.jq`
+  excludes a forget from `resource_deletes`, and its `nested_deletes` clauses are scoped to
+  Cloudflare types, which an hcloud attachment is not. The live binding is applied to nothing, so
+  forgetting it changes no host.
+- **The `inngest_host` job does not target it.** A birth must never plan a forget, and its shape
+  gate refuses one (`reason=forget_present`).
+
+Keep the `removed` block and this `-target` permanently, as `doppler-write-token.tf` does. Once the
+forget has applied, a `removed` block for an absent address is a no-op tombstone.
+
 ## notify-apply-failure
 
 --- #7586: a non-green apply run reaches a channel ----------------------------------------
