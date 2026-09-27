@@ -25,10 +25,25 @@ inputs:
     default: 'prd_terraform'
   installation-id:
     description: >
-      soleur-ai App org installation id. Permissions verified 2026-09-19 via
-      `gh api /orgs/jikig-ai/installations`: contents:write +
-      pull_requests:write.
+      soleur-ai App org installation id. The installation's grant, measured
+      2026-09-27 via `gh api /orgs/jikig-ai/installations` (read-only):
+      actions:write, contents:write, pull_requests:write, administration:write,
+      secrets:write, and NO workflows. An unscoped token carries all of that,
+      so a consumer that needs less passes `permissions`/`repositories` below.
     required: true
+  permissions:
+    description: >
+      Optional JSON object narrowing the token, e.g. '{"actions":"write"}'
+      (#4326). Empty (the default) requests the installation's full grant, and
+      the access-token call is then byte-identical to the pre-#4326 one.
+    required: false
+    default: ''
+  repositories:
+    description: >
+      Optional comma list of repository NAMES the token is limited to, e.g.
+      'soleur'. Empty (the default) means every repository of the installation.
+    required: false
+    default: ''
 
 outputs:
   token:
@@ -46,6 +61,8 @@ runs:
         DOPPLER_PROJECT: ${{ inputs.doppler-project }}
         DOPPLER_CONFIG: ${{ inputs.doppler-config }}
         INSTALLATION_ID: ${{ inputs.installation-id }}
+        SCOPE_PERMISSIONS: ${{ inputs.permissions }}
+        SCOPE_REPOSITORIES: ${{ inputs.repositories }}
       run: |
         set -euo pipefail
 
@@ -107,7 +124,23 @@ runs:
         [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
         echo "::add-mask::$JWT"
 
+        # Scope-down (#4326): with either input set, POST a body naming exactly the
+        # permissions and repositories wanted. With both empty SCOPE_ARGS stays empty
+        # and curl gets NO -d at all, so every existing consumer's call is unchanged.
+        SCOPE_ARGS=()
+        if [[ -n "${SCOPE_PERMISSIONS:-}" || -n "${SCOPE_REPOSITORIES:-}" ]]; then
+          scope_body=$(jq -nc --arg perms "${SCOPE_PERMISSIONS:-}" --arg repos "${SCOPE_REPOSITORIES:-}" '
+            (if $repos == "" then {} else
+              {repositories: ($repos | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)))} end)
+            + (if $perms == "" then {} else
+              ($perms | fromjson) as $p
+              | if ($p | type) != "object" then error("permissions must be a JSON object") else {permissions: $p} end
+              end)') || {
+            echo "::error::mint-soleur-ai-app-token: 'permissions' must be a JSON object (e.g. '{\"actions\":\"write\"}') and 'repositories' a comma list."; exit 1; }
+          SCOPE_ARGS=(-d "$scope_body")
+        fi
         INSTALL_TOKEN=$(curl -sS -X POST \
+          ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} \
           -H "Authorization: Bearer $JWT" \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
