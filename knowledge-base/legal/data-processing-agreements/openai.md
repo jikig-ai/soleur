@@ -63,6 +63,21 @@ Until those fields are evidenced, the only permitted use is synthetic or
 explicitly redacted internal qualification under the default-off
 `codex-engine` flag.
 
+## Deployment and flag evidence
+
+On 2026-09-25, release workflow `35927771536` completed the production deploy
+path successfully. The live `/health` endpoint reported a healthy descendant of
+the merged Codex change, and the dashboard smoke test returned HTTP 200. This
+proves deployment and availability of the guarded code path; it does not prove
+provider qualification or authorize customer-content processing.
+
+The live Flagsmith feature `codex-engine` (ID `259236`) remains disabled:
+
+- project default: `false`;
+- development environment (`90722`): `enabled: false`, no segment override;
+- production environment (`90721`): `enabled: false`, no segment override;
+- identity overrides: none reported.
+
 ## User-owned provider path
 
 The web app's `api-key` mode is user-owned: the request is sent under the
