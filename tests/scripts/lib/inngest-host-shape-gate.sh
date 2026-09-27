@@ -13,7 +13,7 @@
 # (an all-no-op plan passes, and so does an empty resource_changes array — nothing would be
 # applied). What the gate refuses is every action outside the per-address permitted table below.
 #
-# ALLOW-SET = EXACTLY the inngest_host job's 18 `-target=` addresses (derived from the workflow,
+# ALLOW-SET = EXACTLY the inngest_host job's `-target=` addresses (derived from the workflow,
 # not retyped; the battery and terraform-target-parity.test.ts both RED if the two drift apart).
 # Every allow-set address belongs to EXACTLY ONE class; `allow_unpartitioned` aborts the gate if an
 # address is in the allow-set with no class (it would be unconstrained) or in a class but not the
@@ -30,9 +30,9 @@
 #   hcloud_volume.inngest_redis_luks            no-op | create            → luks_volume_touched
 #   hcloud_volume_attachment.inngest_redis_luks no-op | create            → luks_attachment_touched
 #   hcloud_server_network.inngest               no-op | create            → network_touched
-#   hcloud_firewall.inngest, hcloud_firewall_attachment.inngest
-#                                               no-op | create            → firewall_touched
-#       (an update is an ingress change on a host that takes no inbound traffic)
+#   hcloud_firewall.inngest                     no-op | create            → firewall_touched
+#       (an update is an ingress change on a host that takes no inbound traffic). The binding is
+#       hcloud_server.inngest.firewall_ids (#8754); the old attachment's forget reds forget_present.
 #   random_id.inngest_{signing,event}_key_dedicated, random_password.inngest_redis_password_dedicated
 #                                               no-op | create            → generated_secret_touched
 #   doppler_project.inngest, doppler_environment.inngest_prd, doppler_secret.*_dedicated,
@@ -99,7 +99,6 @@ inngest_host_shape_gate() {
         "hcloud_volume_attachment.inngest_redis_luks",
         "hcloud_server_network.inngest",
         "hcloud_firewall.inngest",
-        "hcloud_firewall_attachment.inngest",
         "random_id.inngest_signing_key_dedicated",
         "random_id.inngest_event_key_dedicated",
         "random_password.inngest_redis_password_dedicated",
@@ -118,8 +117,7 @@ inngest_host_shape_gate() {
         {r: "luks_volume_touched",      a: ["hcloud_volume.inngest_redis_luks"],            ok: [["no-op"], ["create"]],           with_server_create: false},
         {r: "luks_attachment_touched",  a: ["hcloud_volume_attachment.inngest_redis_luks"], ok: [["no-op"], ["create"]],           with_server_create: false},
         {r: "network_touched",          a: ["hcloud_server_network.inngest"],               ok: [["no-op"], ["create"]],           with_server_create: false},
-        {r: "firewall_touched",         a: ["hcloud_firewall.inngest", "hcloud_firewall_attachment.inngest"],
-                                                                                            ok: [["no-op"], ["create"]],           with_server_create: false},
+        {r: "firewall_touched",         a: ["hcloud_firewall.inngest"],                     ok: [["no-op"], ["create"]],           with_server_create: false},
         {r: "generated_secret_touched", a: ["random_id.inngest_signing_key_dedicated", "random_id.inngest_event_key_dedicated",
                                             "random_password.inngest_redis_password_dedicated"],
                                                                                             ok: [["no-op"], ["create"]],           with_server_create: false},

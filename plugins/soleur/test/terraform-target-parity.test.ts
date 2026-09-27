@@ -1451,7 +1451,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
-  "hcloud_firewall_attachment.inngest",
+  // hcloud_firewall_attachment.inngest left this set (#8754): it is a removed{} forget now.
   "random_id.inngest_signing_key_dedicated",
   "random_id.inngest_event_key_dedicated",
   "random_password.inngest_redis_password_dedicated",
@@ -3666,11 +3666,45 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
     expect(defAllow).not.toBeNull();
     const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
-    expect(targets.length).toBe(18); // non-vacuity floor
+    expect(targets.length).toBe(17); // non-vacuity floor (#8754 dropped the inngest attachment)
     expect(allow).toEqual(targets);
     // The passphrase pair is per-merge -targeted and must never join this allow-set.
     expect(allow).not.toContain("random_password.inngest_redis_luks");
     expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
+});
+
+/**
+ * #8754: under -target, `removed { from = hcloud_firewall_attachment.inngest … }` is planned only
+ * if its address is targeted, so the forget must ride the `apply` job's SAVED plan (`terraform plan
+ * … -out=tfplan`, the one the destroy guard grades), not the post-bridge `terraform apply`. The
+ * block's shape is Guard 1's (inngest-host.test.sh); the inngest_host job's side is the
+ * allow === targets check above.
+ */
+describe("#8754 inngest firewall attachment forget rides the per-merge saved plan", () => {
+  const ADDR = "hcloud_firewall_attachment.inngest";
+  const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
+  // One shell command: its first line through the first line with no trailing backslash.
+  const command = (start: RegExp): string => {
+    const lines = applyJob.split("\n");
+    const i = lines.findIndex((l) => start.test(l));
+    if (i < 0) return "";
+    const end = lines.findIndex((l, j) => j >= i && !/\\\s*$/.test(l));
+    return lines.slice(i, end < 0 ? lines.length : end + 1).join("\n");
+  };
+  const savedPlan = command(/^\s*terraform plan\b.*-out=tfplan/);
+  const postBridge = command(/^\s*terraform apply -auto-approve -input=false \\$/);
+
+  test("the address is -targeted inside the saved-plan command", () => {
+    expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
+    expect(extractAllTargets(savedPlan).has(ADDR)).toBe(true);
+  });
+
+  test("and not in the post-bridge terraform apply, nor in inngest_host_replace", () => {
+    expect(extractAllTargets(postBridge).has("terraform_data.disk_monitor_install")).toBe(true); // non-vacuity
+    expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
   });
 });
 
