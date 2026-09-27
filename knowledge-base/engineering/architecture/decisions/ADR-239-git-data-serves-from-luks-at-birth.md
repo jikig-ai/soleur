@@ -1,6 +1,6 @@
 ---
 title: "ADR-239: git-data serves its store from LUKS at birth"
-status: adopting
+status: accepted
 date: 2026-09-23
 issue: 8211
 supersedes: []
@@ -258,6 +258,32 @@ must run the proof before it acquires the freeze, or pass the proof an expected-
 
 Status stays `adopting` under its unchanged flip rule; the flip is recorded alongside the ADR-220 D1b
 docs PR, which reads the current instance's `boot_complete`.
+
+## Amendment 2026-09-27 — accepted (#8211 PR2, post-merge)
+
+- **The flip rule in Status is met in production.** `hcloud_server.git_data` (Hetzner id
+  `167392038`, created 2026-09-25T09:24:32Z by replace run
+  [36118115758](https://github.com/jikig-ai/soleur/actions/runs/36118115758)) emitted
+  `stage:boot_complete` at 2026-09-25T09:25:30Z reading `luks_mounted=yes fence_on_mapper=yes
+  erasure_probe=yes`. The query is the runbook's host-key step 5 (b), filtered to `host_name`
+  `soleur-git-data` (rehearsal hosts report `soleur-git-data-rehearsal-<run>`), with the raw row
+  printed.
+- **It is the current instance.** Re-read on 2026-09-27: the Hetzner API returns that one server,
+  same id and creation time, and Better Stack holds that one `boot_complete` row since the replace.
+  A newer create would change the id, and an in-place rebuild would add a row.
+- **The rung-2 precondition in Status was met before that replace.** Rehearsal run
+  [36029201848](https://github.com/jikig-ai/soleur/actions/runs/36029201848) (2026-09-24, `main`,
+  `success`) is bound by the committed evidence
+  `apps/web-platform/infra/git-data-rung2-boot-evidence.env` (`Rehearsal host :
+  soleur-git-data-rehearsal-36029201848`, PR #8751). The replace gate refuses without it.
+- **The same row proves the 2026-09-24 amendment in production:** it also reads
+  `plaintext_journal=dirty plaintext_empty=yes`. That amendment named this flip rule as its
+  production proof.
+- **What `accepted` does not change.** `GIT_DATA_STORE_ENABLED` stays off. The flip, the flag-off
+  rollback, the same-version redeploy and the ADR-220 D6 fresh replace remain on #8211. When
+  encryption at rest became active for the Art. 30 register stays #8634's determination.
+
+Dated text above is not rewritten; the Status paragraph keeps the rule this amendment records as met.
 
 ## References
 

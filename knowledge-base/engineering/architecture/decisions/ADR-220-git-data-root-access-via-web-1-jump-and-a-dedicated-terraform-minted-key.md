@@ -655,3 +655,27 @@ probe is now part of it too, because the flip evidence is the run's exit 0: **D1
 from `main` that reads `role=git-data-auth verdict=ok` with the store probes and the fence probe
 clear.** The caveat is unchanged: a pinned host authenticates the host, not the truth of its answers.
 Dated text above is not rewritten.
+
+### 2026-09-27 (#8211 PR2, post-merge): D1b is accepted
+
+- **The D1b condition, as the entry above restates it, is met.** `git-data-cutover.yml` run
+  [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) was dispatched from
+  `main` at `ab4a07e5e0` on 2026-09-27 and concluded `success`. Its job annotations read
+  `role=web`, `role=git-data-jump` and `role=git-data-auth` `verdict=ok`; `probe=store-mounted`,
+  `store-on-mapper`, `store-verified`, `store-empty` and `fence-shape` `verdict=ok`; then
+  `verdict=clear`. Both hops were pinned (ADR-237 `accepted`, PR #9036). Recorded on #5914
+  (issuecomment-5859802570).
+- **History.** The 2026-09-15 form of the condition was first met by run
+  [35119099336](https://github.com/jikig-ai/soleur/actions/runs/35119099336) (2026-09-16, `main` at
+  `2d9177bec2`, `verdict=clear`). That run was unpinned and predates the fence probe. It closed
+  #8189 and #6680, but the D1b flip was not recorded then.
+- **`probe=config` has no `ok` notice.** It annotates only on refusal. The run reached the access
+  gate and ended `verdict=clear`, so it passed.
+- **The caveat stands.** A pinned host authenticates the host, not the truth of its answers, so
+  `store_not_empty` and the bounded probes stay.
+- **D5 for the D1b row.** D1b authenticated hop is `accepted` (2026-09-27). D1a is unchanged.
+  D2–D3 stay `proposed`: their #7226 limb is met (ADR-237 `accepted`), while the #8211 limb and
+  the #8209 limb (ADR-241 residuals R1 and R7) remain. D4 stays standing constraints, except its first residual, which closed when
+  ADR-237 became `accepted`, as the 2026-09-21 entry provides.
+- **The frontmatter stays `proposed`,** the least-advanced status, because D2–D3 are `proposed`.
+  Dated text above is not rewritten.
