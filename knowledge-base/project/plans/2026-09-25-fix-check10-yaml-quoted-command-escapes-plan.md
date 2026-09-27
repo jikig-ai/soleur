@@ -718,34 +718,34 @@ and the exec.
 
 ## Acceptance Criteria
 
-- [ ] AC1. `parse-form-a.awk`'s inline rule emits the decode-contract value. Every row in the
+- [x] AC1. `parse-form-a.awk`'s inline rule emits the decode-contract value. Every row in the
   fixture table produces the "Decoded" column byte-for-byte under gawk **and** mawk (the suite's
   banner test accepts either, so CI may resolve either one). Run mawk locally from a container or
   an installed `mawk`, not only gawk. Code lines use no GNU-only constructs:
   `grep -vE '^[[:space:]]*#' plugins/soleur/skills/preflight/scripts/parse-form-a.awk | grep -cE 'gensub|IGNORECASE|\\x'`
   prints `0`.
-- [ ] AC2. P1 is green with the 17 new rows (`parseCommand` and `runAwk` byte-identical), and
+- [x] AC2. P1 is green with the 17 new rows (`parseCommand` and `runAwk` byte-identical), and
   every Q row equals its expected value (oracle or `DEVIATIONS`).
-- [ ] AC3. The P2 "inline quote stripping" test is gone. The CRLF P2 test is untouched.
-- [ ] AC4. The SKILL.md normalize block contains no quote strip. The new F1d passes.
+- [x] AC3. The P2 "inline quote stripping" test is gone. The CRLF P2 test is untouched.
+- [x] AC4. The SKILL.md normalize block contains no quote strip. The new F1d passes.
   Twin (ii), which injects the #8149 strip into the extracted slice, turns NEST into
   `printf 200`, and that row is permanent. Record the observed hand-mutation line from
   Phase 5 in the PR body as well.
-- [ ] AC5. E passes over every section of fixture 11, and E-fence passes over fixture 12
+- [x] AC5. E passes over every section of fixture 11, and E-fence passes over fixture 12
   (`$CMD === '""'`, no `LAUNDERED`). Twin (i) yields `$CMD` containing `LAUNDERED`, and stderr is
   exactly `CHAIN_DONE` on every E run.
   Run against `origin/main`'s awk and SKILL.md (a scratch copy), E is RED on DQ1, because the
   expected decoded value differs. That is the RED-first evidence (`cq-write-failing-tests-before`).
-- [ ] AC6. `parseExpected` on the DQ2 section returns `a\\b+` (two backslashes: the expected path
+- [x] AC6. `parseExpected` on the DQ2 section returns `a\\b+` (two backslashes: the expected path
   does not decode). `stripQuotes` behaviour is unchanged, which the existing `parseExpected` and
   `parseCredentialsRequired` tests show by staying green.
-- [ ] AC7. `bash plugins/soleur/test/preflight-check10-suite-integrity.test.sh` passes, with the
+- [x] AC7. `bash plugins/soleur/test/preflight-check10-suite-integrity.test.sh` passes, with the
   three floors at the measured green values and the manifest regenerated with `LC_ALL=C sort -u`.
   No manifest line contains `"` or `\`.
-- [ ] AC8. `bun test plugins/soleur/test/preflight-discoverability-test.test.ts plugins/soleur/test/observability-schema-parity.test.ts`
+- [x] AC8. `bun test plugins/soleur/test/preflight-discoverability-test.test.ts plugins/soleur/test/observability-schema-parity.test.ts`
   passes. G1's `BASELINE_DECLARED_PROBES` is unchanged, because this plan declares no
   `credentials_required`.
-- [ ] AC9. In SKILL.md, the diff touches only Step 10.4's Form A table and the normalize block:
+- [x] AC9. In SKILL.md, the diff touches only Step 10.4's Form A table and the normalize block:
   `git diff origin/main...HEAD -- plugins/soleur/skills/preflight/SKILL.md` shows hunks only
   there. Step 10.5, the decision matrix and the `CREDS_REQ` block are unchanged.
 - [ ] AC10. The PR body carries `Closes #8102` and `Closes #7548` (in the body, not the title). A
@@ -943,3 +943,52 @@ the parser. It is persisted to `knowledge-base/project/specs/feat-one-shot-8102-
   #7453).
 - YAML 1.2.2 §7.3.1 (double-quoted escapes) and §7.3.2 (single-quoted `''`), used via the
   `Bun.YAML` oracle at bun 1.4.2.
+
+## Work-phase deviations
+
+Recorded during `soleur:work` (2026-09-27). Each item was measured, not inferred.
+
+1. **`DEVIATIONS` has five keys, not four.** `Bun.YAML.parse` (bun 1.4.2) **throws** on
+   `command: "printf a"#b` ("Unexpected character"), so `NEG-HASH-NOSPACE` needs the same
+   `yaml-invalid-raw` derivation as `NEG-MISMATCH` and `NEG-UNTERMINATED`. The fixture table
+   already labels it "deviation (YAML throws)"; only the key-set list in Guard 1 and in Files
+   to Edit item 4 omitted it. The pinned key set is
+   `NEG-EMPTY, NEG-HASH-NOSPACE, NEG-LF, NEG-MISMATCH, NEG-UNTERMINATED`. Each entry names a
+   derivation RULE (`lf-kept`, `yaml-invalid-raw`, `empty-kept`) rather than a value, so a
+   broken row parked there fails on the rule's precondition as well as on the key set.
+2. **The U+2028 P2 row asserts TS `""`, not `"x"`.** In `INLINE_KEY_RE` (`(\S.*)$`, no `m`
+   flag), `.` cannot match U+2028, so the line never matches as an inline key and
+   `parseCommand` falls through to an empty Form B result. The plan's described mechanism
+   (the fallback's JS `.trim()`) is real for U+00A0, so the row asserts both: awk keeps
+   each line verbatim; TS yields `""` for U+2028 and `"x"` for U+00A0. Both are
+   pre-existing and ASCII-exact decoding does not widen either.
+3. **RED set differed from Implementation Phase 1 in four rows.** Q `NEG-EMPTY` and Q
+   `NEG-UNTERMINATED` were RED on `main`, not green: the TS `stripQuotes` path empties `""`
+   and strips `"printf abc\"`'s outer pair, while the awk left both unchanged. E `NEG-BLOCK`
+   and E `NEG-FOLD` were RED on `main` too: the #8149 strip dequoted their single-line
+   block/fold content (the mirror/runtime gap the plan's Non-Goals says this change
+   closes). E `TRAIL-WS` was GREEN on `main`, not RED: the normalize trim plus the #8149 strip
+   happened to produce `printf a`.
+4. **Ratchet row outside the named files.** `apps/web-platform/test/fixtures/plugin-root-skills-ratchet.tsv`
+   pins the count of `bash scripts/x.sh` mentions in preflight `SKILL.md`. The deleted #8149
+   comment held two of the four, so `plugin-root-anchoring.test.ts` R3/R4 went RED as a
+   stale row in the first commit attempt's affected gate. The row was lowered 4 -> 2, the
+   deletion direction the file's header allows.
+5. **Markdown lint.** The first prose draft used a code span with a leading space
+   (`` ` # comment` ``), which MD038 rejects. It was reworded.
+6. **AC7 "no manifest line contains `"` or `\`"** holds for every line this change adds or
+   edits. One pre-existing line (the CRLF P2 row) contains `\\` and was left untouched.
+7. **Manifest identity gap noticed, not changed.** The four #7453 test names are declared
+   but absent from `check10-test-manifest.txt` (pre-existing). This change did not add them,
+   so the ratcheted `MIN_MANIFEST_LINES` equals the measured 141.
+
+### Observed mutation lines (for the PR body, AC4)
+
+- Re-add the #8149 strip to the SKILL.md normalize block: E `NEST` RED, expected
+  `'printf 200'`, received `printf 200`; F1d and E `NEG-BLOCK`/`NEG-FOLD`/`NEG-EMPTY`/
+  `NEG-UNTERMINATED`/E-fence also RED (7 fail).
+- Minimum length back to 2 (`cq < 2`): Q `NEG-EMPTY` RED (expected `""`, received empty),
+  E `NEG-EMPTY`, E-fence and P1 RED (5 fail).
+- Revert the awk decode (inline rule prints `$0`): P1, 10 Q rows and 10 E rows RED (23 fail).
+- `origin/main`'s awk and SKILL.md in a scratch copy: E `DQ1` RED, expected
+  `printf '%s+' "a b" c`, received `printf '%s+' \"a b\" c` (24 fail).
