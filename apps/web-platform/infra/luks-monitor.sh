@@ -198,12 +198,11 @@ fi
 # unconditionally and never touches $MOUNT (server/index.ts), so it is the one endpoint in the
 # codebase GUARANTEED not to reflect the repointed volume.
 #
-# DEFAULT OFF, set to 1 only by workspaces-luks-verify.yml. The reason is NOT "it is slow": it is
-# that luks-monitor.service:5 carries `RequiresMountsFor=/mnt/data`, which makes the DAILY unit
-# structurally INERT in the reboot hazard (no mount => the unit does not run at all). Default-ON
-# therefore buys zero coverage in exactly the scenario it would be argued for, while adding a retry
-# budget to time-to-page on a real outage. The verify workflow's bare-file path has no such
-# RequiresMountsFor and CAN run in that state, which is why the flag lives there.
+# DEFAULT OFF, set to 1 only by workspaces-luks-verify.yml. The reason is NOT "it is slow": in the
+# reboot hazard (no mount) the daily unit dies earlier, at the not_mounted assert above, so
+# Default-ON buys no coverage in exactly the scenario it would be argued for, while adding a retry
+# budget to time-to-page on a real outage. (Until #8706 the unit carried RequiresMountsFor=/mnt/data
+# and did not run at all without the mount; it is now ordering-only — see luks-monitor.service.)
 #
 # ORDERING IS LOAD-BEARING: this runs BEFORE the heartbeat push below, so a host that is
 # LUKS-correct but cannot serve does not push a healthy beat.

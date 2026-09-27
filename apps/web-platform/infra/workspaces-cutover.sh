@@ -292,9 +292,10 @@ QUIESCE_UNITS="${WORKSPACES_QUIESCE_UNITS:-webhook.service inngest-redis.service
 #    and carries NO RequiresMountsFor, so nothing stops it firing mid-freeze. A reap between the
 #    pass-2 delta rsync and the C1 verify makes `rsync --delete --dry-run` emit a `*deleting` line
 #    — the IDENTICAL abort signature as the redis AOF, on a ~6h duty cycle against a ~20min freeze.
-#  - luks-monitor: read-only, but RequiresMountsFor=/mnt/data means a mid-run instance holds the
-#    mount and trips the now fail-closed G4 (and would block the umount). Armed only by a PRIOR
-#    successful cutover, so absent on a first run — hence best-effort.
+#  - luks-monitor: read-only, but a mid-run instance can hold the mount and trip the now
+#    fail-closed G4 (and would block the umount). Installed and armed by
+#    terraform_data.luks_monitor_install since #8706 (never by a prior cutover in practice), so it
+#    is normally present; stopping it stays best-effort.
 QUIESCE_TIMERS="${WORKSPACES_QUIESCE_TIMERS:-orphan-reaper luks-monitor}"
 FREEZE_HOLDER_CAP="${WORKSPACES_FREEZE_HOLDER_CAP:-40}"
 
@@ -2374,7 +2375,8 @@ if [ "$DRY_RUN" != "1" ]; then
   install -D -m 0644 "${SELF_DIR}/luks-monitor.timer" /etc/systemd/system/luks-monitor.timer 2>/dev/null || true
   # #6649 — persist the prd_workspaces_luks boot token into the luks-monitor EnvironmentFile so the
   # DAILY timer probe (luks-monitor.service) can `doppler secrets get WORKSPACES_LUKS_KEY … --config
-  # prd_workspaces_luks` unattended. cloud-init bakes ONLY SOLEUR_SENTRY_DSN here (no token), and the
+  # prd_workspaces_luks` unattended. The SOLEUR_SENTRY_DSN line is written by cloud-init on a fresh host
+  # and by terraform_data.luks_monitor_install on web-1 (#8706); the
   # cutover carries the token in $DOPPLER_TOKEN (injected via the 0600 stdin .env). Preserve the baked
   # DSN line; write 0600 root. Absent this, the daily probe would emit doppler_unreachable every day.
   if [ -n "${DOPPLER_TOKEN:-}" ]; then

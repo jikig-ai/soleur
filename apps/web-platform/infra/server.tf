@@ -578,6 +578,9 @@ resource "terraform_data" "disk_monitor_install" {
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-disk-monitor-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -659,6 +662,9 @@ resource "terraform_data" "resource_monitor_install" {
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-resource-monitor-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -704,6 +710,9 @@ resource "terraform_data" "container_restart_monitor_install" {
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-container-restart-monitor-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -787,6 +796,9 @@ resource "terraform_data" "private_nic_guard_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-private-nic-guard-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -844,6 +856,9 @@ resource "terraform_data" "zot_consumer_probe_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-zot-consumer-probe-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -916,6 +931,9 @@ resource "terraform_data" "inngest_consumer_probe_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-inngest-consumer-probe-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -981,6 +999,9 @@ resource "terraform_data" "git_data_probe_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-git-data-probe-install-%RAND%.sh"
   }
 
   provisioner "file" {

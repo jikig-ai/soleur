@@ -119,27 +119,36 @@ export const MANIFEST: ManifestEntry[] = [
   },
   {
     name: "workspaces_luks",
-    // #6604 — the daily /workspaces LUKS at-rest probe heartbeat. Its feeder (luks-monitor.timer)
-    // is delivered to web-1 via the CUTOVER CHANNEL (workspaces-cutover.sh, ADR-119 §(e)), NOT
-    // cloud-init boot: web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO
-    // dedicated-host-replace path (re-arming is re-running the cutover channel). Hence
-    // web-host-cron, NOT dedicated-host-boot — the replace_target requirement correctly does not
-    // fire. paused until the operator unpauses at cutover (#6210: verify a real ping first).
+    // #6604 — the daily /workspaces LUKS at-rest probe heartbeat. Two pushers feed it:
+    //   1. luks-monitor.timer on web-1, delivered and armed by terraform_data.luks_monitor_install
+    //      (workspaces-luks.tf) in the per-merge SSH apply (#8706). Until #8706 the only installer
+    //      was the cutover script's tail, which no real cutover reached, so this pusher never ran
+    //      (ADR-119 addendum 2026-09-27; ADR-117 amendment 2026-09-27).
+    //      Terraform is the PRIMARY installer. The cutover tail still installs the same files, so it
+    //      stays a redundant second installer for a future re-cut.
+    //   2. The daily workspaces-luks-verify.yml job, which ships its own copy of luks-monitor.sh.
+    // The shared beat cannot tell them apart. The runtime proof that pusher 1 runs is
+    // logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf).
+    // web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO host-replace path:
+    // web-host-cron, NOT dedicated-host-boot, and the replace_target requirement does not fire.
     arming: "web-host-cron",
     paused: true,
     feeder: {
       kind: "timer",
       evidence: {
-        file: "apps/web-platform/infra/workspaces-cutover.sh",
+        file: "apps/web-platform/infra/workspaces-luks.tf",
         pattern: "systemctl enable --now luks-monitor.timer",
       },
     },
-    // Deferred arming: the monitor is created paused and armed only at the /workspaces LUKS cutover
-    // (#6604, #6210: verify a real ping first). Until then the live-reconcile must NOT nag on a
-    // fed-but-paused mismatch for this row — it is the ADR-117 FED-but-inert state, owned by #6604.
-    arming_pending: { tracking_issue: 6604 },
+    // No `arming_pending`: it is ARMED. This row carried `arming_pending: { tracking_issue: 6604 }`
+    // while the monitor waited for the cutover's first measured beat. The beat has pushed since
+    // 2026-08-04 (runbook workspaces-luks-cutover-6604.md, "Failure signals"), and a read-only
+    // GET /api/v2/heartbeats/478794 on 2026-09-27 (#8706) read soleur-workspaces-luks-prd
+    // `paused:false status:up`. Removal follows OBSERVED arming, not #6604 closing (the
+    // inngest_consumer precedent), so the live reconcile's `fed-but-paused` alarm is re-armed for
+    // this row: a pause from here on is a real finding. `paused: true` above is SOURCE state only.
     exempt_reason:
-      "web-host-resident feeder (luks-monitor.timer on web-1) delivered + armed by the cutover channel (workspaces-cutover.sh), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path (re-arming is re-running the cutover channel). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+      "web-host-resident feeder (luks-monitor.timer on web-1) delivered and armed by the SSH terraform_data provisioner (terraform_data.luks_monitor_install, #8706) as the PRIMARY installer; the cutover script's tail still installs the same files as a redundant second installer for a future re-cut, and web-1 cloud-init boot is NOT a path — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path. The second pusher is the workspaces-luks-verify.yml job; the runtime proof that the host timer fires is logtail_exploration_alert.luks_monitor_host_timer_dark. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
     name: "git_data_prd",

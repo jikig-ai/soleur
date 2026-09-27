@@ -220,6 +220,15 @@ to deploy is to mint a new version.
 > `.server_types.available` at 2026-09-24T18:08Z: `cx33` (id 115) is available in none of the 6
 > datacenters. Web-1 still cannot be redeployed.
 
+> **Re-examined 2026-09-27 (#8706) — the trigger fired again; the exception STANDS.** #8706 installs
+> web-1's daily LUKS probe in place through `terraform_data.luks_monitor_install`: two binaries
+> (`luks-monitor`, `workspaces-luks-emit.sh`), two units (`luks-monitor.service`,
+> `luks-monitor.timer`), a `daemon-reload`, a timer enable, one service start, and one line in
+> `/etc/default/luks-monitor` (`SOLEUR_SENTRY_DSN=`). `/v1/datacenters` `.server_types.available` on
+> 2026-09-27 (measured by the #8706 architecture review): `cx33` (id 115) is available in 0 of the
+> 6 datacenters. Web-1 still cannot be redeployed. See
+> [ADR-119's 2026-09-27 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-27-the-monitor-units-and-the-dsn-line-have-a-terraform-owner-8706).
+
 ## Rejected alternatives
 
 **Convert the Access tokens from Terraform `output`s to `doppler_secret` resources.** This was the
