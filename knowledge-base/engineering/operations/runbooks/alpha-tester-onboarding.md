@@ -218,6 +218,13 @@ Company-level only, per Step 3.
 > own account. A Jikigai-keyed run against tester content needs an Art. 28(3) instrument in place
 > first (`knowledge-base/legal/2026-08-06-alpha-tester-processing-annex.md`, currently unexecuted).
 > This gate is the reason this runbook exists in its present form — it was crossed on 2026-08-06.
+>
+> **⛔ Second gate — repo-connect waits on the Art. 28(3) instrument.** Per the 2026-09-27 C9
+> re-run (`knowledge-base/legal/audits/2026-09-27-tester-2-controller-processor-determination.md`),
+> guided steps 1–2 (signup, key) are clear, but **GitHub-connect must not run until an Art. 28(3)
+> instrument covering hosted workspace processing is in force** (ToS §3b.1's instrument-first
+> commitment; tracked at #7468). Connecting the repo is Posture B trigger 1 — on the hosted path
+> it fires by design, not by accident.
 
 **Live on the call, in order.** Each step is a guided pass — you drive, they watch and approve:
 
@@ -227,8 +234,9 @@ Company-level only, per Step 3.
    console.anthropic.com (the setup doc has screenshot-level steps). They paste it into
    `/setup-key`; the platform encrypts it at rest and it never leaves their tenant. Do NOT offer a
    Jikigai key — that is the Posture B trigger, pending the Side Letter.
-3. **GitHub connect** — connect their repo live. If it stalls, the doc's skip path applies:
-   *"Skip this step — connect later with help."*
+3. **GitHub connect** — connect their repo live. **Gated on the Art. 28(3) instrument** (second
+   gate above — do not run this step until it is in force; #7468). If it stalls, the doc's skip
+   path applies: *"Skip this step — connect later with help."*
 4. **First real question → one artifact.** Have them ask one question about their actual business —
    a real one, not a demo prompt — and walk out with one artifact they'd genuinely use.
 5. **Day-0 emit verify (CLI-surface testers and dogfooding only).** For a tester on the CLI
@@ -427,9 +435,11 @@ The four remaining items are operator-executable today on this runbook alone; no
 - [ ] **Create the beta-CRM contact** (owner-authenticated, `/dashboard/crm`) — the write gate is
   deliberate; do not script around it. Verified absent 2026-09-26 (`beta_contacts` company
   match: 0 rows).
-- [ ] **C9 controller/processor re-run** per #7348 — the legal precondition to tester #2's first
-  session; the guided hosted path (tester's own key, their account) is designed to stay Posture A.
-  Still open as of 2026-09-26.
+- [x] **C9 controller/processor re-run** per #7348 — **done 2026-09-27** for tester #2
+  (`network-sealant`): `knowledge-base/legal/audits/2026-09-27-tester-2-controller-processor-determination.md`.
+  Correction to the line this item used to carry: the hosted path stays Posture A **only for the
+  operator-assisted limb** — repo-connect is Posture B trigger 1 and is gated on the Art. 28(3)
+  instrument (#7468). Onboarding proceeds through Step 4 + guided steps 1–2; connect waits.
 - [ ] **Retro problem interview** with tester #1 — flagged post-exposure; never pool with #1440.
   Invite draft posted on #8981; not yet scheduled.
 
@@ -441,6 +451,7 @@ Update this table at Step 1 of every onboarding. `cohort_key` and `nudged_at` ar
 | Tester | Company | Claude Code user? | Surface | Onboarded | Terms | cohort_key | nudged_at |
 |---|---|---|---|---|---|---|---|
 | #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `superseded-resend-required` (was `sent-awaiting-reply`; the terms sent predate `TC_VERSION` 2.5.0 — see the standing step above; send tracked at #7459) | — (CLI; no hosted account) | — |
+| #2 | network-sealant | pending (screening question) | Hosted platform | pending | — (platform-mediated via accept-terms at signup; Step-2 notice paragraph still owed — it is the Art. 14 CRM notice the platform flow does not give) | — (pending signup) | — |
 
 **`Terms` values:** `agreed` (tester replied), `sent-awaiting-reply`, `superseded-resend-required` (a `TC_VERSION` bump landed after the terms were sent; a fresh notice is owed), or `not-required`. Update at
 Step 1. A tester at `sent-awaiting-reply` may still be worked with; a tester at blank has not been
