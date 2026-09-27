@@ -1,26 +1,25 @@
 # Decision Challenges: feat-one-shot-guardrails-filing-gate-subresource
 
-## DC-1 (taste / scope): split the escape closures into their own PR
+## DC-1 (user-challenge / scope): the quoted-endpoint escape is NOT closed by this PR
 
-- **Raised by:** DHH plan review (P1).
-- **Challenge:** The reported bug turns a deny into an allow (sub-resource POSTs denied). The plan
-  also closes collection-endpoint escapes that exist on `main`, which turns allows into denies:
-  quoted and partially quoted paths, `-XPOST`, `--method=POST`, `--input`, `-F`/`--raw-field`/attached
-  `title=`, and quoted multi-word `title=`. The review argued this PR should do the narrowing only,
-  and that the closures should go to #9089.
-- **Default kept:** the escapes stay closed in this PR. The brief said the narrowing must not leave
-  a bypass for real issue creation, and it named the quoted path `"repos/o/r/issues"` explicitly. The
-  closures are also small: one transform plus the extra spellings, and the redesign removed the
-  false positive that motivated the P1.
-- **What would change it:** an operator decision to keep this PR strictly deny → allow.
+- **The brief said:** make sure the narrowing does not open a bypass for real issue creation, and it
+  named `"repos/o/r/issues"` (quoted) as an example.
+- **What was measured:** the quoted form (and partial quoting, and a quoted multi-word `title=`)
+  **already bypasses the gate on `main`**. `$SCAN` blanks every quoted span. The narrowing does not
+  open it.
+- **What was tried:** two string-level designs that closed it. Both were measured to add
+  regressions:
+  - v1: a nested-quote false positive, found by DHH and Kieran.
+  - v2: six regressions where main denies a create and v2 allows it, plus new false positives on
+    routine list-then-comment commands, all found by the security review.
+- **Decision taken (headless):** close the class properly on #9089 with a shell tokenizer rather
+  than ship a third regex attempt. The DHH plan review recommended this split independently.
+- **What would change it:** an operator decision that the quoted form must be closed in this PR,
+  accepting a tokenizer-sized change (`Text::ParseWords::shellwords`, per-token matching as in
+  `filingShape()`).
 
-## DC-2 (taste): the list-then-label over-fire stays out of scope
+## DC-2 (resolved): the list-then-label loop
 
-- **Raised by:** Kieran plan review (P2).
-- **Challenge:** `for n in $(gh api "repos/R/issues?labels=x" --jq …); do gh api -X POST repos/R/issues/$n/labels …; done`
-  is denied before and after this change. This is the same symptom the brief reported, adding labels
-  to existing issues, when it is done in a loop.
-- **Default kept:** deferred to #9089. Per-segment scoping over a string opens a split-the-flags
-  escape. The recommended fix is a `shellwords` tokenizer.
-- **What would change it:** operators hitting this loop shape often enough to warrant promoting
-  #9089 now.
+- Raised by Kieran and the security review. v3's per-segment matching fixes the unquoted form, and
+  the quoted form (`gh api "repos/R/issues?…"` beside a labels POST) is allowed as on main. Rows pin
+  both. No operator action needed.
