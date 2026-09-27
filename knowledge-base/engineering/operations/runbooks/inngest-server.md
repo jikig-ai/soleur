@@ -2210,8 +2210,8 @@ fail-safe: if you cannot complete one, stop at step 1.
 2. Re-fire only when a skipped tick matters **and** all four checks hold:
    - (a) **You know the gap window.** It runs from the op=execute 2.2 quiesce to the moment the
      dedicated host's functions registered after 2.4, both timestamped in that op=execute run's
-     log (`gh run view <run-id> --log`). `op=verify` echoes `CUTOVER_WINDOW_FROM`/`UNTIL` only if
-     they are set; if you cannot state both ends, stop.
+     log (`gh run view <run-id> --log`). `op=verify` echoes `CUTOVER_WINDOW_FROM`/`UNTIL` when they
+     are set and ISO-shaped, and `<unset>`/`<invalid>` otherwise; if you cannot state both ends, stop.
    - (b) **The cron was due inside it.** Start from cron names, not the UUIDs `op=verify` can list
      (nothing in the repo maps a UUID to a name): for each entry in `EXPECTED_CRON_FUNCTIONS`
      (`apps/web-platform/server/inngest/cron-manifest.ts`), read the `{ cron: }` trigger in
