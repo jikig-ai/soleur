@@ -86,6 +86,7 @@ apps/web-platform/infra/inngest.test.sh	1
 apps/web-platform/infra/journald-config.test.sh	3
 apps/web-platform/infra/lb-weight-gate.test.sh	4
 apps/web-platform/infra/live-verify.tf.test.sh	3
+apps/web-platform/infra/luks-monitor-install.test.sh	1
 apps/web-platform/infra/luks-monitor.test.sh	3
 apps/web-platform/infra/mu1-runbook-cleanup.test.sh	2
 apps/web-platform/infra/nic-wait-gate.test.sh	1

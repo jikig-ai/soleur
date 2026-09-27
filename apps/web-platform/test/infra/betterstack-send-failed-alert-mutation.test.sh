@@ -147,13 +147,16 @@ expect_green_added() {
 # (no slack: a whole check deleted from the guard is a count change, and nothing else sees it)
 # 58 -> 59 at #6894: the guard's NON_PAGING_MARKERS gained the LUKS cutover seam refusal (a bare
 # `logger -t`, user.notice), which adds one census row.
-BASELINE_PASSES=59
+# 59 -> 62 and 6 -> 7 guard cases at #8706: workspaces-luks-emit.sh joins the paging population
+# (its no_dsn / send_failed exits emit SOLEUR_WORKSPACES_LUKS_SEND_FAILED through a crit emit_refusal).
+BASELINE_PASSES=62
+BASELINE_CASES=7
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
 else no "baseline: guard is RED against the UNMUTATED sandbox; every RED below is meaningless. Output: $(<"$OUT")"
   echo "=== betterstack-send-failed-alert mutation: $pass passed, $fail failed ($cases cases) ===" >&2; exit 1; fi
-if grep -qE "^=== Summary: ${BASELINE_PASSES} passed, 0 failed \(6 cases\) ===$" "$OUT"; then ok "baseline: summary is exactly '${BASELINE_PASSES} passed, 0 failed (6 cases)'"
-else no "baseline: summary drifted from '${BASELINE_PASSES} passed, 0 failed (6 cases)' — a check was added or deleted; re-pin deliberately: $(grep '=== Summary' "$OUT")"; fi
+if grep -qE "^=== Summary: ${BASELINE_PASSES} passed, 0 failed \(${BASELINE_CASES} cases\) ===$" "$OUT"; then ok "baseline: summary is exactly '${BASELINE_PASSES} passed, 0 failed (${BASELINE_CASES} cases)'"
+else no "baseline: summary drifted from '${BASELINE_PASSES} passed, 0 failed (${BASELINE_CASES} cases)' — a check was added or deleted; re-pin deliberately: $(grep '=== Summary' "$OUT")"; fi
 
 # ── Predicate anchors ────────────────────────────────────────────────────────────────
 MUT='
@@ -239,13 +242,14 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# SIX explorations carry this line (#6894, #8408's registry_store_not_luks, and #8611's three), and the guard
+# SEVEN explorations carry this line (#6894, #8408's registry_store_not_luks, #8611's three, #8706's
+# luks_monitor_host_timer_dark), and the guard
 # reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the
 # first occurrence in the file. The count is asserted exactly (not `>= 1`), and the first-occurrence
 # premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 6, "anchor"
+assert s.count(old) == 7, "anchor"
 assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"
@@ -360,7 +364,9 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "  # " + old.strip())'
 expect_red "M19 (the crit logger inside disk-monitor.sh's definer commented out)" scripts/disk-monitor.sh "emitter not crit: disk-monitor.sh"
 
-# ── H1a: every emit_refusal CALL deleted from the four units → floor fires ────────────
+# ── H1a: every emit_refusal CALL removed from the five units → floor fires ────────────
+# workspaces-luks-emit.sh (#8706) calls emit_refusal mid-line (`then emit_refusal …`, `|| emit_refusal …`),
+# so each whole call expression, marker literal included, is replaced by the `:` builtin in place.
 h1a_apply() {
   local u
   for u in disk-monitor.sh resource-monitor.sh container-restart-monitor.sh cron-egress-alarm.sh; do
@@ -372,6 +378,13 @@ assert s != before, "no emit_refusal call lines in this unit"'
     mutate "scripts/$u" "$MUT" || return 1
     landed "scripts/$u" || return 1
   done
+  MUT='
+import re
+s, n = re.subn(r"emit_refusal \"SOLEUR_[^\n]*?unspecified\}\"\)\"", ":", s)
+assert n == 2, "expected exactly 2 emit_refusal calls in workspaces-luks-emit.sh"
+assert "SOLEUR_WORKSPACES_LUKS_SEND_FAILED" not in s, "a marker literal survived"'
+  mutate scripts/workspaces-luks-emit.sh "$MUT" || return 1
+  landed scripts/workspaces-luks-emit.sh || return 1
 }
 cases=$((cases + 1)); restore
 if h1a_apply; then
