@@ -1,6 +1,6 @@
 # Tasks — fix #8760 (carried-over jobs) and #9085 (follower lock placement)
 
-Plan (v3, deepened): `knowledge-base/project/plans/2026-09-27-fix-pin-redeploy-gate-ignores-carried-over-jobs-plan.md`
+Plan (v3, deepened): `knowledge-base/project/plans/archive/20260927-213608-2026-09-27-fix-pin-redeploy-gate-ignores-carried-over-jobs-plan.md`
 
 ## Phase 1 — Setup
 

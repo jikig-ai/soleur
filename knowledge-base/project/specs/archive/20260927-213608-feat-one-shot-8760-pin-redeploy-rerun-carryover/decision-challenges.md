@@ -1,6 +1,6 @@
 # Decision challenges — feat-one-shot-8760-pin-redeploy-rerun-carryover
 
-Plan: `knowledge-base/project/plans/2026-09-27-fix-pin-redeploy-gate-ignores-carried-over-jobs-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20260927-213608-2026-09-27-fix-pin-redeploy-gate-ignores-carried-over-jobs-plan.md`.
 The plan was reviewed headless (plan-review: DHH, Kieran, code-simplicity, CTO). Mechanical findings
 were applied. The choices below were not, because each would change the direction the brief set.
 Each can still be taken.
