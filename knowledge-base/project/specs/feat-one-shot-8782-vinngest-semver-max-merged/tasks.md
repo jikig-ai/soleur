@@ -16,18 +16,47 @@ lane: cross-domain
 - 2.1 Replace the literal loop `# Guard 2 row 5: regex parity` with Guard 1: selector byte-equality.
   - 2.1.1 Build an `ENVIRON`-based slicer for the `TARGET=` and `LATEST_TAG=` blocks.
   - 2.1.2 Add the dispatch rows: exactly 1 block per file; 3 lines; contains `tag --merged HEAD --list 'vinngest-v*'`; contains `sort -V`.
-  - 2.1.3 Add the normalized `diff` equality row. Its failure message must name the fix.
-- 2.2 Rewrite the rows whose semantics flip:
-  - 2.2.1 B1, B2, B8 become exclusion rows. Seed `v1.1.37\t$DIG_OLD` explicitly. Expect `noop`, no `v1.1.38` in the crane log, no branch, and pins unchanged.
-  - 2.2.2 B3 becomes `opened` at `v1.1.38`, with auto-merge armed. Add `refs/remotes/origin/pr-newer`.
-  - 2.2.3 B7 becomes a refusal at `resolve`, with the needles `no vinngest-v* tag is merged into` and `shallow or unreadable`. Crane and gh are never called.
-  - 2.2.4 B7a becomes an exclusion row. Seed `v1.1.37`, expect `noop`.
-  - 2.2.5 B12 and B13 become the unified downgrade refusal at `resolve`, with the needles `Refusing to author a downgrade` and `Do NOT delete or re-cut`. B12 has no delete command, and crane is never called.
-- 2.3 Add the new rows:
-  - 2.3.1 B9b: a depth-1 clone where the target tag sits below the graft. Assert the precondition that `--merged` omits it. Expect `assert_refused … 'shallow'`.
-  - 2.3.2 B20: `v1.9.0` → `v1.10.0` is `opened`.
-  - 2.3.3 B21: pre-release and 4-part names are excluded. The pin digest must equal the seeded digest. Expect `noop`.
-- 2.4 Run the suite. Record the expected RED lines: the Guard 1 dispatch rows, B1, B2, B3, B7, B7a, B8, B12, B13. Commit (Phase-1-only commit for AC4).
+  - 2.1.3 Add the equality row with **directional** normalization and a `diff`:
+    - writer: `TARGET=`→`SEL=` and `"$REPO_DIR"`→`"$DIR"` only;
+    - checker: `LATEST_TAG=`→`SEL=` and `"$SCRIPT_DIR"`→`"$DIR"` only;
+    - the failure message names the fix.
+  - 2.1.4 Add the consumer-wiring rows:
+    - exactly one `LATEST_TAG=` assignment, counted with the slicer's own awk pattern;
+    - `grep -cF` shows that both `[[ '$PIN' == '$LATEST_TAG' ]]` and `[[ '$DED_PIN' == '$LATEST_TAG' ]]` appear exactly once.
+- 2.2 Change the `assert_refused` helper to `assert_refused <name> <wording> [stage=ancestry]`.
+- 2.3 Rewrite the rows whose semantics flip. Keep the existing `v1.1.38\t$DIG_NEW` seeds.
+  - 2.3.1 B1 and B2 become exclusion rows:
+    - seed `v1.1.37\t$DIG_OLD` explicitly;
+    - expect `noop`;
+    - no `v1.1.38` in the crane log;
+    - an empty gh log;
+    - no `refs/heads/soleur/*` branch on origin;
+    - pins unchanged.
+  - 2.3.2 Reshape B8 so the **target** tag is shadowed:
+    - `vinngest-v1.1.38` goes on main;
+    - `refs/vinngest-v1.1.38` points at a side commit;
+    - expect `opened`, `provenance=bound`, and pins at `v1.1.38`.
+  - 2.3.3 B3 becomes `opened` at `v1.1.38`, with auto-merge armed. Add `refs/remotes/origin/pr-newer`.
+  - 2.3.4 B7:
+    - `assert_refused … 'no vinngest-v* tag is merged into' resolve`, plus the needle `shallow or unreadable`;
+    - precondition: `git tag --merged HEAD` prints nothing in the fixture.
+  - 2.3.5 B7a becomes an exclusion row:
+    - seed `v1.1.37`, expect `noop`;
+    - precondition: `--merged` prints exactly `vinngest-v1.1.37`.
+  - 2.3.6 B12 and B13:
+    - `assert_refused … 'Refusing to author a downgrade' resolve`, plus the needle `Do NOT delete or re-cut`;
+    - B12 must carry no delete command;
+    - B13 is added coverage only; it already passes today.
+- 2.4 Add the new rows:
+  - 2.4.1 B9b: a depth-1 clone where the target tag sits below the graft.
+    - Precondition: `--merged` omits the tag.
+    - Expect `assert_refused … 'cannot decide which vinngest-v* tags are merged'`.
+  - 2.4.2 B20: `v1.9.0` → `v1.10.0` is `opened`. Seed both `v1.9.0→DIG_OLD` and `v1.10.0→DIG_NEW`.
+  - 2.4.3 B21: pre-release and 4-part names are excluded.
+    - The pin digest must equal the seeded digest.
+    - Expect `noop`.
+    - Check the crane log separately: no `v1.2.0-rc1`, and no `v1.2.0.1`.
+- 2.5 Run the suite and record the expected RED lines: the Guard 1 dispatch rows, B1, B2, B3, B7, B7a, B8, B12. The deepen prototype confirmed this set. Commit (Phase-1-only commit for AC4).
 
 ## 3. GREEN — writer (`.github/scripts/bump-inngest-bootstrap-pin.sh`)
 

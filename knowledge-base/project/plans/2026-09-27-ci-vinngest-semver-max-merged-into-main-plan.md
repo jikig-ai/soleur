@@ -14,6 +14,32 @@ brand_survival_threshold: none
 
 # ci: take the AC6 drift guard and the ADR-232 bump target from the semver-max `vinngest-v*` tag merged into main
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27.
+**Inputs:**
+- plan-review panel: DHH, Kieran, code-simplicity, CTO devex;
+- scoped advisor consult;
+- deepen agents: scratch-clone prototype, `soleur:engineering:review:test-design-reviewer`, cheap-tier claims sweep.
+
+### Key improvements
+
+1. **The rewrite list is now measured, not predicted.** The scratch-clone prototype applied Phases 2 and 3.1 and ran the unmodified suite: 377 pass, 40 fail, across exactly B1, B2, B3, B7, B7a, B8, B12 and the `g2.parity` literal row. No row outside the plan's list fails. B13 already passes (its needles survive), so it leaves the Expected-RED list. B7's new outcome is confirmed: `resolve`, both needles, crane and gh never called. The live AC6 with `--merged HEAD` passes in the clone (pin = merged-max = `v1.1.40`).
+2. **Mechanisms cut at plan-review.** The decidability probe, the signed-tag notice, the deferral narrowing (B22/B23), the AC6 shallow arm, the census row, the old-literal row, the 11-row selector fixture matrix and the `merge-base` call were all removed. The literal parity loop becomes directional byte-equality of the shipped selector blocks.
+3. **Test-design hardening:**
+   - B8 now shadows the **target** tag, so it still tests the bare-name peel.
+   - B9b's needle is unique to the moved shallow check.
+   - B7 and B7a carry git-output preconditions.
+   - `assert_refused` takes a stage argument.
+   - Guard 1 closes its former M7 residual.
+
+### New considerations discovered
+
+- Under `set -u`, the shallow-check message must not reference `TARGET` or `${tag}`: it now runs before either is set.
+- `awk -v` mangles the slicer regex, so the pattern goes through `ENVIRON`.
+- A missing mid-history object makes `git tag --merged` fail **entirely** (empty output, rc 0), even for tags below the hole. A missing tag commit drops only that tag.
+- Every claim swept checks out: the rule IDs, the cited paths, the PR and issue states, the ADR-232 AC7 regex (matches exactly lines 34 and 201, not the 2026-09-24 amendment), the runbook and C4 needle counts (1 each), `deploy-script-tests` absent from any ruleset, the `g1.defer` needles, and the operand-census count staying at 1.
+
 The spec had no valid `lane:`, so this plan defaults to `cross-domain` (TR2 fail-closed). No `spec.md` exists for this one-shot branch.
 
 ## Overview
@@ -192,11 +218,21 @@ ADR-232 §7, the runbook `inngest-server.md` §Bootstrap-image release, and the 
   - the slice is exactly 3 lines;
   - the slice contains `tag --merged HEAD --list 'vinngest-v*'` and `sort -V`.
 - **The equality row:**
-  - Normalize both slices with `sed -e 's/^LATEST_TAG=/SEL=/' -e 's/^TARGET=/SEL=/' -e 's/"\$SCRIPT_DIR"/"$DIR"/' -e 's/"\$REPO_DIR"/"$DIR"/'`.
+  - Normalize **directionally** (test-design finding 6). Otherwise a checker that used the unset `$REPO_DIR` would pass equality while running `git -C ""` in the current directory.
+    - Writer slice: `sed -e 's/^TARGET=/SEL=/' -e 's/"\$REPO_DIR"/"$DIR"/'`.
+    - Checker slice: `sed -e 's/^LATEST_TAG=/SEL=/' -e 's/"\$SCRIPT_DIR"/"$DIR"/'`.
   - Strip leading whitespace per line, then `diff`.
   - On a difference, the failure message prints the diff and the fix: "keep the two 3-line `--merged HEAD` selector blocks byte-identical (ADR-232 §2)". This follows CTO's advice that each dispatch row name its fix.
+  - Verified on the current tree: the ENVIRON slicer returns exactly 3 lines per file, and the normalized pre-change blocks compare EQUAL. So before Phase 2 only the "contains `--merged HEAD`" dispatch rows go red.
+- **Consumer-wiring rows** (these close the former M7 residual; test-design finding 5):
+  - `$CONSUMER` has exactly one `LATEST_TAG=` assignment at any indentation. Count it with the slicer's own awk pattern, not a separate grep, so the count and the slice cannot disagree.
+  - `grep -cF "[[ '\$PIN' == '\$LATEST_TAG' ]]" "$CONSUMER"` = 1.
+  - `grep -cF "[[ '\$DED_PIN' == '\$LATEST_TAG' ]]" "$CONSUMER"` = 1.
 
 **2. Rewrite the #8747 rows whose semantics flip.** The `precond_*` helpers stay, so each fixture still asserts its own precondition.
+
+- **Helper change (test-design finding 4):** `assert_refused <name> <wording> [stage]`, where `stage` defaults to `ancestry`. B7, B12 and B13 pass `resolve`, which replaces their hand-copied refusal asserts. The crane-not-called, gh-not-called and no-bump-branch checks then come for free, including on B13, which D4 relies on.
+- **Keep the existing `v1.1.38\t$DIG_NEW` seeds** in B1, B2 and B8. They make a reverted `--list` writer reach `opened` (loud) rather than `skipped`.
 
 - **B1.** Fixture: the off-main semver-max is signed, and the merged max is `v1.1.37`, which is also the pin.
   - Seed `printf 'v1.1.37\t%s\n' "$DIG_OLD" >> "$MOCK_CRANE_MAP"`.
@@ -205,10 +241,16 @@ ADR-232 §7, the runbook `inngest-server.md` §Bootstrap-image release, and the 
     - the output has `target=v1.1.37`;
     - `MOCK_CRANE_LOG` has **no** `v1.1.38`;
     - the origin has no `soleur/inngest-pin-v1.1.38`;
-    - `assert_all_pins … v1.1.37 "$DIG_OLD"`.
-- **B2** (squash-merged content) and **B8** (bare-name shadow):
-  - the **same explicit seeding** of `v1.1.37\t$DIG_OLD` (Kieran P1);
-  - the same expectations as B1.
+    - `assert_all_pins … v1.1.37 "$DIG_OLD"`;
+    - an **empty gh log**;
+    - **no `refs/heads/soleur/*` branch at all** on the origin. This is test-design finding 7's strongest extra check: `noop` genuinely requires all four refs to equal `v1.1.37@DIG_OLD`.
+- **B2** (squash-merged content): the same explicit `v1.1.37\t$DIG_OLD` seeding (Kieran P1) and the same expectations as B1.
+- **B8 is re-shaped** so it still tests the bare-name peel (test-design finding 1, HIGH). Under exclusion, the old shape was only a copy of B1.
+  - Put `vinngest-v1.1.38` (annotated) **on main** as the target.
+  - Point `refs/vinngest-v1.1.38` at an off-main side commit.
+  - Seed `v1.1.38\t$DIG_NEW`.
+  - Expect `opened`, `provenance=bound`, and pins at `v1.1.38@$DIG_NEW`.
+  - A peel regressed to the bare name `vinngest-${TARGET}^{commit}` resolves the side commit. It then dies at the `SIGNED_COMMIT` binding (stage `ancestry`), turning the row red.
 - **B3.** Fixture: on-main signed `v1.1.38` sits below off-main `v1.1.39`.
   - Also run `update-ref refs/remotes/origin/pr-newer <side>` to match the checkout shape.
   - Expect:
@@ -217,51 +259,56 @@ ADR-232 §7, the runbook `inngest-server.md` §Bootstrap-image release, and the 
     - a `gh pr merge .* --auto --squash` call;
     - a crane log with no `v1.1.39`.
   - This is the issue's headline fix: a legitimate bump no longer dies at `ancestry`.
-- **B7** (corrupt mid-history). Replace `assert_refused … 'could not decide'` with:
-  - nonzero rc and `result=error`;
-  - `::error::resolve:`;
-  - wording `no vinngest-v* tag is merged into`;
-  - wording `shallow or unreadable`;
-  - an empty crane log, no gh call, and no bump branch.
+- **B7** (corrupt mid-history):
+  - Call `assert_refused 'g1b.B7' 'no vinngest-v* tag is merged into' resolve`.
+  - Also require `shallow or unreadable` in the output.
+  - **Precondition row** (test-design finding 3): in the fixture, `git tag --merged HEAD --list 'vinngest-v*' 2>/dev/null` prints nothing. The prototype measured an empty result with rc 0 on git 2.55. Another git version that returned a partial list would then red this precondition clearly instead of producing a misleading refusal failure.
 - **B7a** (the tag's commit object is gone). Make it an exclusion row:
-  - seed `v1.1.37\t$DIG_OLD`;
-  - expect `result=noop`, with no `v1.1.38` in the crane log.
+  - Seed `v1.1.37\t$DIG_OLD`.
+  - Expect `result=noop`, with no `v1.1.38` in the crane log.
+  - **Precondition row:** `git tag --merged HEAD --list 'vinngest-v*' 2>/dev/null` prints exactly `vinngest-v1.1.37` (measured).
 - **B9.** Keep as is.
 - **B9b (new).** Fixture:
   - `base_fixture`, then three `main_commit`s;
   - the target `vinngest-v1.1.38` goes on the first main commit (below the graft);
   - then a depth-1 clone plus `fetch --tags --depth 1`;
   - `precondition-shallow`, plus the precondition that `--merged HEAD` **omits** `vinngest-v1.1.38` in the clone.
-  - Expect `assert_refused 'g1b.B9b' 'shallow'`.
-  - This row turns red if the shallow check is moved back after resolution.
-- **B12** (legacy off-main pin `v1.1.39`, merged tags `{v1.1.25}`). With the unified downgrade refusal, expect:
-  - nonzero rc, `result=error`, `::error::resolve:`;
-  - `Refusing to author a downgrade` and `Do NOT delete or re-cut`;
+  - Expect `assert_refused 'g1b.B9b' 'cannot decide which vinngest-v* tags are merged'`.
+  - The needle is unique to the moved shallow check (test-design finding 2). The bare word `shallow` also appears in the new `resolve` message, so it would stay green under mutation D1.
+  - This row turns red if the shallow check is moved back after resolution. D1 then reddens both the wording row and the stage row.
+- **B12** (legacy off-main pin `v1.1.39`, merged tags `{v1.1.25}`), with the unified downgrade refusal:
+  - `assert_refused 'g1b.B12' 'Refusing to author a downgrade' resolve`;
+  - `Do NOT delete or re-cut` in the output;
   - **no** `git push origin :refs/tags/vinngest-v1.1.39`;
-  - an empty crane log and no gh call.
-  - Add the preconditions: `vinngest-v1.1.39` resolves, and `precond_off_main`.
-- **B13** (pinned tag deleted). Same stage and wording as B12, plus the existing `no-branch` row.
+  - add the preconditions: `vinngest-v1.1.39` resolves, and `precond_off_main`.
+- **B13** (pinned tag deleted). Switch it to `assert_refused 'g1b.B13' 'Refusing to author a downgrade' resolve` and add a `Do NOT delete or re-cut` row.
+  - Per the prototype, its existing six rows already pass. This is added coverage, not a RED driver.
+  - Its new crane-not-called row is what makes mutation D4 reachable.
 - **All other rows are unchanged:** B4–B6, B10, B10b, B11, B14–B19, `g1.defer`, and every `g1.*` / `g2*` row. Re-run them to confirm.
 
 **3. New bump rows:**
 
 - **B20 (semver order).**
   - The pin is `v1.9.0@$DIG_OLD`. Tags `v1.9.0` and `v1.10.0` are both on main.
-  - Signed `v1.10.0`, seeded `v1.10.0\t$DIG_NEW`.
+  - Signed `v1.10.0`.
+  - Seed **both** `v1.9.0\t$DIG_OLD` and `v1.10.0\t$DIG_NEW`. With both seeded, mutation M5 fails legibly as `noop` with `target=v1.9.0`, not as `skipped` (test-design finding 8).
   - Expect `opened`, with pins at `v1.10.0@$DIG_NEW`.
 - **B21 (pre-release and malformed names excluded).**
   - The pin is `v1.1.40@$DIG_OLD`. Main carries `v1.1.40`, `v1.2.0-rc1` and `v1.2.0.1`.
   - Signed `v1.1.40`, seeded `v1.1.40\t$DIG_OLD`. The pin digest must equal the seeded one (Kieran P2).
-  - Expect `noop`, with no `v1.2.0` in the crane log.
+  - Expect `noop`.
+  - Assert on the crane log separately for each excluded name: no `v1.2.0-rc1` and no `v1.2.0.1`.
 
 **4. Raise `MIN_ASSERTIONS`** to the green run's exact count after Phase 2.
 
 **5. Expected RED before Phase 2:**
 
 - the Guard 1 dispatch rows (neither slice contains `--merged HEAD` yet);
-- B1, B2, B3, B7, B7a, B8, B12, B13 (message and stage changes).
+- B1, B2, B3, B7, B7a, B8, B12 (message and stage changes).
 
-B9b, B20 and B21 already pass on the old code. That is expected: they are ratchets against post-switch mutants, not RED drivers.
+This list is confirmed by the deepen-pass prototype: the unmodified suite against the Phase-2/3.1 script failed exactly these rows plus the `g2.parity` literal row that Guard 1 replaces.
+
+B9b, B13, B20 and B21 already pass on the old code. That is expected: they are ratchets against post-switch mutants, not RED drivers.
 
 ### Phase 2: GREEN. Writer (`.github/scripts/bump-inngest-bootstrap-pin.sh`)
 
@@ -464,7 +511,8 @@ A census over `*.sh`/`*.yml` on this branch finds no other `vinngest-v*` latest-
 | M4 | Dispatch: rename `LATEST_TAG=` so the slicer finds no block (guard compares nothing) | Checker dispatch "exactly one start line" |
 | M5 | `sort -V` → `sort` in both blocks (equality still holds) | B20 (selects `v1.9.0`) + dispatch "contains `sort -V`" |
 | M6 | Regex stage deleted in both blocks | B21 (a pre-release/4-part name becomes the target) |
-| M7 | Second member after a compliant first: web assert kept, `DED_PIN` assert compares against a literal | **Residual.** Outside the sliced block. Caught only by AC6 on real tags after the next publish. Recorded, not closed. |
+| M7 | Second member after a compliant first: web assert kept, `DED_PIN` assert compares against a literal | The consumer-wiring row `grep -cF "[[ '\$DED_PIN' == '\$LATEST_TAG' ]]"` = 1 (formerly residual, closed at deepen) |
+| M8 | Checker uses the unset `"$REPO_DIR"` (normalization would have hidden it) | Directional normalization: the checker slice keeps `$REPO_DIR`, so the equality row goes red |
 
 **Harness rows.**
 
@@ -490,7 +538,8 @@ The only write surface, the `sed -i` rewrite, runs strictly after all four.
 
 | # | Mutation | Must go RED via |
 |---|---|---|
-| D1 | Move the shallow check back after resolution | B9b (target silently lower/empty → `resolve` stage, not `ancestry` 'shallow') |
+| D1 | Move the shallow check back after resolution | B9b: target silently lower or empty → stage `resolve`, and the unique needle `cannot decide which vinngest-v* tags are merged` is absent |
+| D7 | Peel regresses to the bare name `vinngest-${TARGET}^{commit}` | B8 (re-shaped): the shadow ref resolves the side commit → the `SIGNED_COMMIT` binding dies |
 | D2 | Drop `--merged HEAD` from the writer | B1/B2/B8 (pins move to the off-main tag), B3 |
 | D3 | Delete the downgrade refusal | B12/B13 (a downgrade PR is opened) |
 | D4 | Move the downgrade refusal after the crane loop | B12/B13 `crane-not-called` rows |
