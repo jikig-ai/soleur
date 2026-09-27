@@ -82,6 +82,10 @@
 #   machine_id_absent                    : heartbeats carry no _MACHINE_ID -> the shipper changed (exit 3)
 #   drift_query_truncated / refusals_query_truncated / boundary_check_truncated : a full page with no finding
 #   drift_query_failed / refusals_query_failed / query_failed / row_decode_failed : read path -> re-run
+#   selector_unavailable                 : (derived boundary only) scripts/lib/inngest-probe-row.sh did not
+#                                          load or failed its selftest -> fix the checkout/lib; nothing measured
+#   selector_failed                      : (derived boundary only) jq exited non-zero applying the probe-row
+#                                          def -> a probe/lib defect; nothing measured
 #   boundary_check_query_failed          : read path of the boundary check -> re-run
 #     (the read-path and truncation rows above exit 2, and 3 once a supplied boundary is > 7 days old)
 #   drift_limit_invalid / limit_invalid  : a malformed FLIP_ROLLOUT_* numeric seam -> unset it (exit 3)
@@ -405,6 +409,24 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
   # betterstack-query.sh interpolates LIMIT into SQL uninterpolated. Shape-check it here rather
   # than extending that unvalidated-env-var class by one more member.
   case "$DERIVE_LIMIT" in ''|*[!0-9]*) DERIVE_LIMIT=5000 ;; esac
+  # #8846 — the ONE probe-row predicate (emitter + anchored marker), loaded HERE at the top of the
+  # derived branch rather than per call inside mine_dt (a lib that ever gains declare/local-scoped
+  # state would otherwise become function-local), and only on this branch: a SUPPLIED boundary
+  # reads no probe rows, so it neither needs the lib nor may be refused for lacking it. The lib
+  # path honours INNGEST_PROBE_ROW_LIB because the test seam runs COPIES of this probe from a temp
+  # dir. THE LOAD CONTRACT (PR #8873 review): unset first, so an INNGEST_PROBE_ROW_JQ inherited from
+  # the environment never survives a source that failed or defined nothing; the selftest proves the
+  # def that loaded rejects the event-log shapes; the source's stderr stays visible. A load failure
+  # is its OWN reason: jq never ran, so it is neither row_decode_failed nor a dark channel.
+  unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
+  _ipr_lib="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
+  # shellcheck source=scripts/lib/inngest-probe-row.sh
+  if ! source "$_ipr_lib" || ! declare -F inngest_probe_row_selftest >/dev/null || ! inngest_probe_row_selftest; then
+    echo "TRANSIENT: reason=selector_unavailable lib=${_ipr_lib} — the shared probe-row predicate did not" >&2
+    echo "           load or failed its selftest, so no boundary can be derived and NOTHING was measured." >&2
+    echo "           This is a defect in this probe's checkout or lib, NOT a statement about the host." >&2
+    exit 2
+  fi
   PIN_FILE="${FLIP_ROLLOUT_PIN_FILE:-$REPO_ROOT/apps/web-platform/infra/cloud-init-inngest.yml}"
   # 4.2: match on the DIGEST ONLY. The live host reports the ZOT ref
   # (10.0.1.30:5000/jikig-ai/...@sha256:...) because cloud-init reassigns IREF="$ZIREF" on a
@@ -429,6 +451,12 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
   # bootstrap image and emits the same marker, and this PR bumps all four pin sites to ONE digest,
   # so a colocated web host would emit rows carrying the pinned digest. Dormant today
   # (web_colocate_inngest defaults false), latent tomorrow.
+  # #8846 — 4.7: the host pair says WHERE a row came from, not WHAT it is. The inngest server's own
+  # event log ships under SYSLOG_IDENTIFIER=doppler on this same host and quotes a probe line (with
+  # its image_ref= token) whenever an issue/PR about the probe is webhooked in; read as a probe row,
+  # that quote derived a false boundary. Rows are selected through the ONE shared predicate
+  # (emitter + anchored marker), loaded at the top of this branch. A jq failure applying it is
+  # selector_failed — never silence.
   mine_dt() {
     local window="$1" term="$2" rows qrc out jrc
     rows="$("$QUERY" --since "$window" --grep "$term" --limit "$DERIVE_LIMIT" 2>/dev/null)"; qrc=$?
@@ -443,26 +471,32 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
     # PIPE (`fromjson? | .raw?`), which is why only the derivation broke.
     # A compile error is not a data condition. Route a jq failure to its own marker so it can never
     # again be read as silence from the host.
+    # `($m | type) == "object"`, not `$m != null`: a `.raw` that decodes to a number or a string
+    # would otherwise reach `$m.host` and abort jq on the whole page (the object guard every other
+    # consumer of the predicate carries).
     out="$(printf '%s\n' "$rows" \
       | jq -R -r --arg h "$FLIP_HOST" --arg hn "$FLIP_HOST_NAME" \
-           '(fromjson?) as $row
+           "$INNGEST_PROBE_ROW_JQ"'
+            (fromjson?) as $row
             | ($row.raw? | fromjson?) as $m
-            | select($m != null)
+            | select(($m | type) == "object")
             | select($m.host == $h and $m.host_name == $hn)
+            | select($m | inngest_probe_row)
             | "\($row.dt)\t\($m.message // "")"' 2>/dev/null)"; jrc=$?
-    if [[ "$jrc" -ne 0 ]]; then printf '__DECODE_FAILED__%s' "$jrc"; return 0; fi
+    if [[ "$jrc" -ne 0 ]]; then printf '__SELECTOR_FAILED__%s' "$jrc"; return 0; fi
     printf '%s' "$out"
   }
-  DERIVE_ROWS="$(mine_dt "$DERIVE_WINDOW" "SOLEUR_INNGEST_SERVER_PROBE")"
+  DERIVE_ROWS="$(mine_dt "$DERIVE_WINDOW" "$INNGEST_PROBE_MARKER")"
   case "$DERIVE_ROWS" in
     __QUERY_FAILED__*)
       echo "TRANSIENT: reason=query_failed rc=${DERIVE_ROWS#__QUERY_FAILED__} — the read path did" >&2
       echo "           not answer, so no boundary could be derived. Nothing was measured." >&2
       exit 2 ;;
-    __DECODE_FAILED__*)
-      echo "TRANSIENT: reason=row_decode_failed rc=${DERIVE_ROWS#__DECODE_FAILED__} jq=$(jq --version 2>/dev/null || echo unknown)" >&2
-      echo "           — jq did not decode the rows, so NOTHING was measured about the host. This is" >&2
-      echo "           a defect in this probe or its environment, NOT a statement about the rollout;" >&2
+    __SELECTOR_FAILED__*)
+      echo "TRANSIENT: reason=selector_failed jq_rc=${DERIVE_ROWS#__SELECTOR_FAILED__} jq=$(jq --version 2>/dev/null || echo unknown)" >&2
+      echo "           — jq exited non-zero applying the probe-row selector, so NOTHING was measured" >&2
+      echo "           about the host. This is a defect in this probe or its environment, NOT a" >&2
+      echo "           statement about the rollout;" >&2
       echo "           reporting it as a dark channel would accuse the host of the probe's own fault." >&2
       exit 2 ;;
   esac
@@ -488,7 +522,7 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
       | grep -oE 'sha256:[0-9a-f]{64}' | sort -u | head -3 | tr '\n' ' ' || true)"
     if [[ -z "$(printf '%s' "$DERIVE_ROWS" | tr -d '[:space:]')" ]]; then
       echo "TRANSIENT: reason=probe_channel_dark window=${DERIVE_WINDOW} — the host emitted NO" >&2
-      echo "           SOLEUR_INNGEST_SERVER_PROBE row at all, so the probe channel itself is the" >&2
+      echo "           ${INNGEST_PROBE_MARKER} row at all, so the probe channel itself is the" >&2
       echo "           unknown here, not the rollout. NOTHING was measured about either." >&2
       exit 2
     fi
