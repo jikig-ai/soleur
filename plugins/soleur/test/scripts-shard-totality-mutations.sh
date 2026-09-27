@@ -246,6 +246,8 @@ chmod +x "$GIT_STUB_DIR/git" || { echo "FATAL: chmod on the git stub failed" >&2
 # measuring the stub rather than the runner. Checked here, before any row runs.
 "$GIT_STUB_DIR/git" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || { echo "FATAL: git stub broke a non-diff verb (rev-parse)" >&2; exit 2; }
+"$GIT_STUB_DIR/git" -C "$REPO_ROOT" ls-files --cached >/dev/null 2>&1 \
+  || { echo "FATAL: git stub broke a non-diff verb (ls-files — the guard's census enumeration rides this path)" >&2; exit 2; }
 [[ -z "$("$GIT_STUB_DIR/git" -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)" ]] \
   || { echo "FATAL: git stub did not blank the diff it exists to blank" >&2; exit 2; }
 
@@ -341,11 +343,13 @@ erow() {
   local id="$1" relpath="$2" content="$3" want="$4" desc="$5" want_sig="${6:-}"
   local full="$REPO_ROOT/$relpath"
   mkdir -p "$(dirname "$full")" || { fail "$id — could not create fixture dir for $relpath"; return; }
+  # Register BEFORE the write: a failed printf can still leave a partial file
+  # behind, and the trap sweep covers every path the row ever created.
+  EPHEMERAL_FILES+=("$full")
   if ! printf '%s\n' "$content" > "$full"; then
     fail "$id — fixture write failed for $relpath"
     return
   fi
-  EPHEMERAL_FILES+=("$full")
 
   local rc; rc=$(guard_rc)
 
@@ -370,7 +374,7 @@ frow() {
   local id="$1" fixture="$2" want="$3" desc="$4"
   local rc
   rc=$(SOLEUR_SHARD_MANIFEST="$fixture" guard_rc)
-  _score_frow_rc "$id" "$rc" "$want" "$desc"
+  _score_row_rc "$id" "$rc" "$want" "$desc"
 }
 
 # The heavy sibling: same contract through SOLEUR_SHARD_MANIFEST_HEAVY, so the
@@ -379,24 +383,7 @@ hfrow() {
   local id="$1" fixture="$2" want="$3" desc="$4"
   local rc
   rc=$(SOLEUR_SHARD_MANIFEST_HEAVY="$fixture" guard_rc)
-  _score_frow_rc "$id" "$rc" "$want" "$desc"
-}
-
-_score_frow_rc() {
-  local id="$1" rc="$2" want="$3" desc="$4"
-  if [[ "$want" == "RED" ]]; then
-    if (( rc != 0 )); then
-      pass "$id — guard went RED as required ($desc)"
-    else
-      fail "$id — SURVIVOR: guard stayed GREEN under '$desc'"
-    fi
-  else
-    if (( rc == 0 )); then
-      pass "$id — guard stayed GREEN as required ($desc)"
-    else
-      fail "$id — guard went RED on a must-PASS input ($desc); it is over-tight: $(tail -3 "$WORK/guard_out" | tr '\n' ' ')"
-    fi
-  fi
+  _score_row_rc "$id" "$rc" "$want" "$desc"
 }
 
 # --- CONTROL: the unmutated tree must be GREEN ----------------------------------------------

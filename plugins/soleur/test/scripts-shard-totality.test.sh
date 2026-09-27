@@ -702,7 +702,7 @@ fi
 # one optional flag argument for `declare -x` shapes; anchored to line-start
 # so `xDECLARED_TOTAL` and `local xDECLARED_TOTAL` cannot false-match. Bare
 # `DECLARED_TOTAL=` still matches (the prefix group is optional).
-_DECL_PREFIX_RE='(export|readonly|local|typeset|declare)([[:space:]]+-[[:alnum:]]+)?[[:space:]]+'
+_DECL_PREFIX_RE='(export|readonly|local|typeset|declare)([[:space:]]+-[[:alnum:]]+)*[[:space:]]+'
 _DECL_ANY_RE="^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL=[0123456789]+"
 _DECL_COUNT_RE="^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL="
 _DECL_READ_RE="s/^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?\$/\\4/p"
@@ -966,11 +966,10 @@ done < "$WORK/rs_interesting"
 # basenames or extensionless files with a shell shebang, `**/fixtures/**`
 # data dirs excluded. An enumeration FAILURE is a verdict, never a silent
 # shrink of the literal side.
+: > "$WORK/dir1_libs"
 if ! git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard -- 'scripts/lib' > "$WORK/dir1_enum_raw" 2>"$WORK/dir1_enum_err"; then
   fail "Direction-1 lib enumeration failed (git ls-files rc=$?): $(head -3 "$WORK/dir1_enum_err" | tr '\n' ' ') — the literal-census population is unknown"
-  : > "$WORK/dir1_libs"
 else
-  : > "$WORK/dir1_libs"
   while IFS= read -r -d '' _lf; do
     case "/$_lf" in */fixtures/*) continue ;; esac
     case "$_lf" in
@@ -1010,30 +1009,38 @@ fi
 # `--exclude-standard`. This is the guard's first `git` call: an enumeration
 # failure fails loudly and an EMPTY census fails closed — a blind census
 # reporting green is the worst outcome here.
+_census_ok=1
+: > "$WORK/decl_census"
 if ! git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard > "$WORK/decl_enum_raw" 2>"$WORK/decl_enum_err"; then
   fail "Direction-2 census enumeration failed (git ls-files rc=$?): $(head -3 "$WORK/decl_enum_err" | tr '\n' ' ') — the census population is unknown, so every reachability verdict below is ungrounded"
-  : > "$WORK/decl_census"
+  _census_ok=0
 else
   : > "$WORK/decl_shell_files"
   while IFS= read -r -d '' _cand; do
     case "/$_cand" in */fixtures/*) continue ;; esac
     case "$_cand" in
-      *.sh|*.bash) printf '%s\n' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files" ;;
+      *.sh|*.bash) printf '%s\0' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files" ;;
       *) if [[ "$_cand" != *.* ]] && head -1 "$REPO_ROOT/$_cand" 2>/dev/null | grep -q '^#!.*\(ba\)\?sh\b'; then
-           printf '%s\n' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files"
+           printf '%s\0' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files"
          fi ;;
     esac
   done < "$WORK/decl_enum_raw"
   if [[ ! -s "$WORK/decl_shell_files" ]]; then
     fail "Direction-2 census enumerated ZERO shell-bearing files — the enumeration is blind and every reachability verdict below is vacuous"
-    : > "$WORK/decl_census"
+    _census_ok=0
   else
-    pass "Direction-2 census enumerated $(wc -l < "$WORK/decl_shell_files" | tr -d ' ') shell-bearing files repo-wide (tracked + untracked, minus fixtures/)"
-    xargs grep -lE "$_DECL_ANY_RE" < "$WORK/decl_shell_files" 2>/dev/null | sort -u > "$WORK/decl_census" || true
+    pass "Direction-2 census enumerated $(tr -cd '\0' < "$WORK/decl_shell_files" | wc -c | tr -d ' ') shell-bearing files repo-wide (tracked + untracked, minus fixtures/)"
+    xargs -0 grep -lE "$_DECL_ANY_RE" < "$WORK/decl_shell_files" 2>/dev/null | sort -u > "$WORK/decl_census" || true
+    if [[ ! -s "$WORK/decl_census" ]]; then
+      # The repo ALWAYS declares ≥2 contracts (this battery's sibling battery and
+      # the lint-orphan battery), so an empty census is not a legal state — it means
+      # the declaration regex drifted blind or the grep step failed silently.
+      fail "DECLARED_TOTAL census is empty — enumeration ran but matched no declarers; the repo always declares at least two --rows contracts, so the declaration regex drifted blind"
+      _census_ok=0
+    fi
   fi
 fi
 grep -oE 'bash[[:space:]]+[A-Za-z0-9._/-]+\.sh[[:space:]]+--rows[[:space:]]+"?\$\{\{[[:space:]]*matrix\.rows' "$CI_YML" | awk '{print $2}' | sort -u > "$WORK/ciyml_rows_files"
-_census_ok=1
 while IFS= read -r _df; do
   _rel="${_df#$REPO_ROOT/}"
   if awk -F'\t' -v t="$_rel" '$2==t {f=1} END{exit !f}' "$WORK/run_suite_rows"; then
