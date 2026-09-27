@@ -1,0 +1,271 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "crmBoard",
+      "x": 0,
+      "y": 0,
+      "name": "01 CRM board — New lead",
+      "clip": true,
+      "width": 1280,
+      "height": 800,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "boardPad",
+          "name": "boardPad",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [28, 32],
+          "children": [
+            {
+              "type": "frame",
+              "id": "headerRow",
+              "name": "headerRow",
+              "width": "fill_container",
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "titleBlock",
+                  "name": "titleBlock",
+                  "layout": "vertical",
+                  "gap": 6,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "title",
+                      "fill": "#ffffff",
+                      "content": "CRM",
+                      "fontFamily": "Inter",
+                      "fontSize": 24,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "subtitle",
+                      "fill": "#848484",
+                      "content": "Read-only board. A new lead is entered in a CRO chat, not on this board.",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "newLead",
+                  "name": "newLead",
+                  "fill": "#c9a962",
+                  "cornerRadius": 8,
+                  "padding": [8, 14],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "newLeadLabel",
+                      "fill": "#0a0a0a",
+                      "content": "New lead",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "columns",
+              "name": "columns",
+              "width": "fill_container",
+              "height": "fill_container",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "colNew",
+                  "name": "col-new",
+                  "width": 200,
+                  "height": "fill_container",
+                  "fill": "#161616",
+                  "cornerRadius": 12,
+                  "padding": 12,
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "colNewLabel",
+                      "fill": "#d4b36a",
+                      "content": "New",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "colQualified",
+                  "name": "col-qualified",
+                  "width": 200,
+                  "height": "fill_container",
+                  "fill": "#161616",
+                  "cornerRadius": 12,
+                  "padding": 12,
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "colQualifiedLabel",
+                      "fill": "#d4b36a",
+                      "content": "Qualified",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "croChat",
+      "x": 1360,
+      "y": 0,
+      "name": "02 CRO new-lead chat",
+      "clip": true,
+      "width": 1280,
+      "height": 800,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "padding": [28, 32],
+      "gap": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "chatTitle",
+          "fill": "#ffffff",
+          "content": "CRO — new CRM lead",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "userBubble",
+          "name": "userBubble",
+          "fill": "#1c1c1c",
+          "cornerRadius": 12,
+          "padding": 12,
+          "width": 640,
+          "children": [
+            {
+              "type": "text",
+              "id": "userText",
+              "fill": "#e8e8e8",
+              "content": "I want to enter a new CRM lead.",
+              "fontFamily": "Inter",
+              "fontSize": 14
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "croBubble",
+          "name": "croBubble",
+          "fill": "#14120c",
+          "cornerRadius": 12,
+          "padding": 16,
+          "width": 760,
+          "layout": "vertical",
+          "gap": 8,
+          "stroke": { "thickness": 1, "fill": "#c9a96266" },
+          "children": [
+            {
+              "type": "text",
+              "id": "croWho",
+              "fill": "#d4b36a",
+              "content": "CRO",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "croAsk",
+              "fill": "#e8e8e8",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "I will record this on the existing contact fields only: name, company, role, source, next action and its date, last contact, amount with currency and amount basis, and expected close. Stage stays New until you say they are qualified. I will not ask for email or a separate qualification framework — those are not columns. Nothing is saved until you approve the write.",
+              "fontFamily": "Inter",
+              "fontSize": 14
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "emptyBoard",
+      "x": 0,
+      "y": 880,
+      "name": "03 CRM empty — New lead",
+      "clip": true,
+      "width": 1280,
+      "height": 640,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "padding": [80, 32],
+      "gap": 16,
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "emptyTitle",
+          "fill": "#ffffff",
+          "content": "No contacts yet",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "500"
+        },
+        {
+          "type": "text",
+          "id": "emptyBody",
+          "fill": "#848484",
+          "content": "Start a CRO chat to enter the first lead. The board stays read-only.",
+          "fontFamily": "Inter",
+          "fontSize": 14
+        },
+        {
+          "type": "frame",
+          "id": "emptyNewLead",
+          "name": "emptyNewLead",
+          "fill": "#c9a962",
+          "cornerRadius": 8,
+          "padding": [8, 14],
+          "children": [
+            {
+              "type": "text",
+              "id": "emptyNewLeadLabel",
+              "fill": "#0a0a0a",
+              "content": "New lead",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "500"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

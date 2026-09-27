@@ -7,7 +7,11 @@ import { basename as pathBasename } from "path";
 import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode } from "@/lib/types";
 import { ByokDelegationError } from "@/server/byok-resolver";
 import type { ConversationContext } from "@/lib/types";
-import { validateConversationContext } from "./context-validation";
+import {
+  crmLeadModePath,
+  isCrmLeadModePath,
+  validateConversationContext,
+} from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   getFreshTenantClient,
@@ -1320,7 +1324,10 @@ export async function dispatchSoleurGoForConversation(
     ReturnType<typeof resolveConciergeDocumentContext>
   > = {};
   const warmCcQuery = hasActiveCcQuery(conversationId);
-  if (context?.path && !warmCcQuery) {
+  // crm-lead is a mode flag. A client path (or the stamped sentinel) is not
+  // a KB document — do not resolve it.
+  const crmLeadTurn = context?.type === "crm-lead" || isCrmLeadModePath(context?.path);
+  if (context?.path && !warmCcQuery && !crmLeadTurn) {
     documentArgs = await resolveConciergeDocumentContext({
       userId,
       contextPath: context.path,
@@ -1340,7 +1347,7 @@ export async function dispatchSoleurGoForConversation(
   // directive builder gracefully falls back to the relative path, which the
   // Bug A2 sandbox fix tolerates for in-workspace files.
   let workspacePath: string | undefined;
-  if (context?.path && !warmCcQuery) {
+  if (context?.path && !warmCcQuery && !crmLeadTurn) {
     try {
       workspacePath = await fetchUserWorkspacePath(userId);
     } catch {
@@ -1350,9 +1357,10 @@ export async function dispatchSoleurGoForConversation(
   }
 
   // #3287 Phase 1 diagnostic — see helper JSDoc.
+  // A crm-lead path is intentionally unresolved; do not report that as a skip.
   emitConciergeDocumentResolutionBreadcrumb({
     conversationId,
-    contextPath: context?.path ?? null,
+    contextPath: crmLeadTurn ? null : (context?.path ?? null),
     hasActiveCcQuery: warmCcQuery,
     documentArgs,
     routingKind: routing.kind,
@@ -1388,6 +1396,7 @@ export async function dispatchSoleurGoForConversation(
     // buildSoleurGoSystemPrompt. Document context (path/content) is unused
     // for this mode (it carries no path).
     routineAuthoring: context?.type === "routine-authoring",
+    crmLead: context?.type === "crm-lead",
     // feat-wire-concierge-support-chat (ADR-113) — resolve the persona from the
     // validated chat context. `"support"` (the in-app support chat) runs the
     // Concierge read-only with the repo-lifecycle gates bypassed and skills scoped
@@ -2351,15 +2360,23 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             : undefined;
           // createConversation handles unique-violation on (user_id, context_path)
           // by resolving to the existing row (two-tab race).
+          // crm-lead stamps `crm-lead/<id>.mode` on the row and the session
+          // cache. A cache hit treats null as defined (`!== undefined`) and
+          // never re-reads the column, so null here would drop the mode.
+          const insertedContextPath =
+            pendingContext?.type === "crm-lead"
+              ? crmLeadModePath(pendingId)
+              : pendingContextPath;
           const resolvedId = await createConversation(
             userId,
             pendingLeader,
             pendingId,
-            pendingContextPath,
+            insertedContextPath,
             initialActiveWorkflow,
             // feat-wire-concierge-support-chat — a support-context session
             // materializes a repo-less kind='support' conversation (never throws
             // on a missing repo; the repo-less support user is exactly who needs help).
+            // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
           );
           session.conversationId = resolvedId;
@@ -2367,10 +2384,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // Seed the routing cache so chat-case on subsequent turns
           // can skip the DB lookup (performance P1-A).
           session.routing = pendingRouting;
-          // Seed the KB context path so chat-case follow-up turns can
-          // rebuild a synthetic ConversationContext for the soleur-go
-          // path (otherwise turn 2+ loses document context).
-          session.contextPath = pendingContextPath ?? null;
+          // Seed the context path so chat-case follow-up turns can rebuild
+          // ConversationContext. For crm-lead this is the mode sentinel,
+          // not a KB path and not null.
+          session.contextPath = insertedContextPath ?? null;
 
           log.info(
             {
@@ -2527,9 +2544,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // injecting the open document. Without this, only the first
           // turn would see the document context (chat-case path serves
           // turn 2+).
-          const chatContext: ConversationContext | undefined = session.contextPath
-            ? { path: session.contextPath, type: "kb-viewer" }
-            : undefined;
+          // Mode sentinel before kb-viewer. A crm-lead path is not a document.
+          const chatContext: ConversationContext | undefined = isCrmLeadModePath(
+            session.contextPath,
+          )
+            ? { type: "crm-lead" }
+            : session.contextPath
+              ? { path: session.contextPath, type: "kb-viewer" }
+              : undefined;
           await dispatchSoleurGoForConversation(
             userId,
             convId,
