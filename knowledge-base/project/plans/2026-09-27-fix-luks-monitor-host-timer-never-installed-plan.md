@@ -545,9 +545,10 @@ Closes #8706 on evidence, per the issue's re-evaluation trigger. Read-only; runs
   change any verdict, class or exit path, and the suite stays green.
 - **[deepen] `workspaces-luks-emit.sh`**: make its two silent exits visible
   (`cq-silent-fallback-must-mirror-to-sentry`): when no DSN resolves (`[ -n "$dsn" ] || return 0`)
-  and when the `curl` to Sentry fails (`|| true`), log `SOLEUR_WORKSPACES_LUKS_EMIT_SKIPPED
-  reason=no_dsn|send_failed` through `logger` under the `luks-monitor` tag (already Vector
-  allowlisted). This is the mechanism that kept host failures out of Sentry for nine weeks. Follow
+  and when the `curl` to Sentry fails (`|| true`), log `SOLEUR_WORKSPACES_LUKS_SEND_FAILED
+  reason=no_dsn|send_failed drift_reason=<slug>` through `logger -p user.crit` under the
+  `luks-monitor` tag (already Vector allowlisted), via an `emit_refusal()` definer, so
+  `logtail_exploration_alert.monitor_send_failed` pages on it. This is the mechanism that kept host failures out of Sentry for nine weeks. Follow
   the file's existing tag convention (the cutover's `LUKS_LOG_TAG="${WORKSPACES_LUKS_LOG_TAG:-luks-monitor}"`
   shape) and confirm `vector-pii-scrub.test.sh`'s channel-B tag derivation stays green, since adding
   a `logger -t` line makes that suite start reading this file.
@@ -764,8 +765,15 @@ failure_modes:
     detection: logs alert fires (no rows at all); heartbeat-live-reconcile and existing Vector monitors
     alert_route: operator email; runbook decode row says "check the pipeline before the host"
   - mode: the alert itself paused or deleted vendor-side
-    detection: reconcile-live-heartbeats.ts logs_alert arm (twice daily, discovers the new resource)
+    detection: >-
+      reconcile-live-heartbeats.ts logs_alert arm (twice daily, discovers the new resource)
+      (layer 6: the reconcile workflow's run log + the filed issue)
     alert_route: SOLEUR_HEARTBEAT_RECONCILE_MISMATCH issue
+  - mode: timer fired, service died before the probe logged (203/EXEC)
+    detection: >-
+      workspaces-luks-verify.yml [unit-state] line, Result=exit-code ExecMainStatus=203 (layer 6)
+      + the host-timer logs alert on the missing OK row (layer 3)
+    alert_route: operator email from the alert ~27 h after the last host OK row
 logs:
   where: >-
     journald on web-1 (SyslogIdentifier=luks-monitor, both logger and stdout copies) shipped by
@@ -995,8 +1003,9 @@ criterion; logged as a user-challenge in `decision-challenges.md`), and the spli
   the PR body say so, so the email is expected rather than alarming.
 - **`incident_cause` must be readable by a non-technical operator** (CTO devex review): what
   happened ("web-1's nightly encryption self-check has not reported in about 27 hours"), why it is
-  not yet a data exposure (the volume is still encrypted; the 04:41 UTC verify job still checks it
-  daily), and the first step (check whether any `luks-monitor` rows arrived at all, because total
+  not yet a data exposure (the 04:41 UTC verify job still checks it daily; review amendment: it no
+  longer claims the volume is still encrypted, because the alert also fires when the host run FAILS
+  an assert), and the first step (check whether any `luks-monitor` rows arrived at all, because total
   silence means the log pipeline, not the host), plus the runbook URL. The runbook decode names one
   no-SSH action per branch: re-run the apply workflow, or run `betterstack-query.sh`.
 - **The cutover's post-canary abort leaves the dead-man armed.** `cleanup()` does not disarm once
@@ -1116,7 +1125,8 @@ criterion; logged as a user-challenge in `decision-challenges.md`), and the spli
 - Given an empty DSN, a symlinked file, a directory at the path, or an unreadable file, when the
   writer runs, then it exits 10, 11, 12 or 13 respectively and the target is unchanged.
 - Given the emit helper with no resolvable DSN, when a drift event is emitted, then a
-  `SOLEUR_WORKSPACES_LUKS_EMIT_SKIPPED reason=no_dsn` line is logged under the `luks-monitor` tag.
+  `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn drift_reason=<slug>` line is logged at
+  `user.crit` under the `luks-monitor` tag.
 - Given the follow-through with two qualifying nights, then it prints no `HOST_TIMER_PASS` and
   exits 1; with three consecutive nights, it prints `HOST_TIMER_PASS nights=3` and exits 0.
 - Given the alert SQL, when the unit conjunct is removed, then the static suite reds (Guard 1 row 1)

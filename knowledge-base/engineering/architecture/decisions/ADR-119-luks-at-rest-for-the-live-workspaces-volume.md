@@ -103,7 +103,7 @@ encrypted volume and silently lost armed Inngest reminders. The writer was not q
 | `${CONTAINER}-canary` | yes, best-effort | shares the same `-v /mnt/data/workspaces:/workspaces` bind mount; an aborted deploy leaves it running |
 | `inngest-redis.service` | **yes (new)** | writes `/mnt/data/redis`; `TimeoutStopSec=30` gives a graceful SIGTERM + AOF flush |
 | `orphan-reaper.{timer,service}` | **yes (new)** | a 6-hourly **root `rm -rf`** over `/mnt/data/workspaces/*.orphaned-*` with **no** `RequiresMountsFor`. Firing between the delta rsync and the verify makes `rsync --delete --dry-run` emit a `*deleting` line — the *identical* C1 abort signature as the AOF, on a 6h duty cycle against a ~20 min freeze |
-| `luks-monitor.{timer,service}` | yes, best-effort | armed by a *prior* successful cutover; `luks-monitor.service` is `RequiresMountsFor=/mnt/data`, so a mid-run instance holds the mount and trips the now fail-closed G4 |
+| `luks-monitor.{timer,service}` | yes, best-effort | armed by a *prior* successful cutover; `luks-monitor.service` is `RequiresMountsFor=/mnt/data`, so a mid-run instance holds the mount and trips the now fail-closed G4 **Superseded 2026-09-27 (#8706):** Terraform arms it now (`terraform_data.luks_monitor_install`), not a prior cutover. And the service is ordering-only now (`After=local-fs.target mnt-data.mount`), not `RequiresMountsFor=`. The quiesce still stops the pair, and G4 still catches a mid-run instance that holds the mount |
 | `inngest-server.service` | **no — deliberately** | `ProtectSystem=strict` + `ReadWritePaths=/var/lib/inngest /var/lock` means it provably cannot **write** `/mnt/data`; `TimeoutStopSec=180` would burn 3 min of a ~10 min freeze for zero quiescence benefit. Reconciled post-freeze instead (clear failed state, start only if inactive). The write claim is **not** a hold claim — `ProtectSystem=strict` makes the mount read-only, not invisible — so the *hold* axis is delegated to G4 by design. |
 
 Timers are stopped as **`<timer> <service>` pairs**: stopping a `.timer` only prevents future
@@ -142,6 +142,15 @@ properties:
 
 - `inngest-redis.service` carries `RequiresMountsFor=/mnt/data`, so it fails **safely** — systemd
   refuses to start it and it lands in `failed`, outliving the run.
+
+  > **Superseded 2026-09-27 (#8706):** "systemd refuses to start it" is not what
+  > `RequiresMountsFor=` does. It is Requires-strength: starting the unit while `/mnt/data` is
+  > unmounted makes systemd START `mnt-data.mount`, which mounts whatever `/etc/fstab` names. The
+  > unit lands in `failed` only if that mount itself fails. On web-1 the fstab can name the
+  > superseded plaintext volume. The #8706 review made `luks-monitor.service` ordering-only for this
+  > reason (`After=local-fs.target mnt-data.mount`, the `inngest-cutover-flip.service` precedent,
+  > #7228). `resume_writers()`'s `mountpoint -q` gate is what actually keeps writers off an
+  > unmounted `$MOUNT`.
 - `webhook.service` carries **no** `RequiresMountsFor`, only `ReadWritePaths=/mnt/data`, so it
   starts **successfully onto the bare root-disk mountpoint directory**. It is the CI deploy
   receiver, so a deploy landing during the incident writes user data into the root filesystem,
@@ -907,6 +916,13 @@ run with the `prd_workspaces_luks`-scoped token. That token cannot read `prd`, s
 unreachable, and the helper then returned without sending. Before this change a host drift event
 on web-1 could not reach Sentry.
 
+> **Qualified 2026-09-27 (#8706 review):** "that token cannot read `prd`, so the fallback is
+> unreachable" is ASSERTED, not measured. It follows from the token's `prd_workspaces_luks` scope,
+> but no run read the fallback with that token. What was measured is the missing DSN line. Since
+> the review, a lost event is visible either way: the helper logs
+> `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn` when no DSN resolves (see the review amendments
+> below).
+
 **Why the installer is in `workspaces-luks.tf`, not `server.tf`.** The units are web-1-only by
 design (§(d)), so a fresh web host must NOT get them. Sections 1 and 2 of
 `web-host-provisioner-parity.test.sh` scan `server.tf` only and require every SSH-written
@@ -957,11 +973,62 @@ env-file line, a `daemon-reload`, a timer enable and one service start change we
 SSH, through Terraform. This rests on ADR-154's standing exception, as the 2026-09-24 token line does:
 web-1 cannot be redeployed, because `cx33` remains unorderable.
 
+> **Qualified 2026-09-27 (#8706 review):** "`cx33` remains unorderable" is re-measured in ADR-154's
+> [Re-examined 2026-09-27 (#8706)](./ADR-154-repair-the-credential-channel-not-the-host.md#consequences)
+> block: available in 0 of 6 datacenters. The exception stands for this change.
+
 **Known gap, not fixed here.** A cutover that aborts after the host canary leaves the dead-man timer
 armed: `cleanup()` does nothing once `CANARY_OK=1`, and both such runs died before
 `disarm_dead_man`. What the dead-man did in July has aged out of log retention. A future re-cut must
 not inherit this silently. It is tracked in #9045. Meanwhile this installer's state print shows the
 dead-man units' state on every fire.
+
+### Review amendments (2026-09-27)
+
+Appended after the 10-agent review of PR #9044. Each item below changes or qualifies a claim above.
+
+- **`RequiresMountsFor=` became `After=`.** `luks-monitor.service` now carries
+  `After=local-fs.target mnt-data.mount`, ordering only. `RequiresMountsFor=/mnt/data` is
+  Requires-strength: starting the unit while `/mnt/data` is unmounted would start `mnt-data.mount`,
+  which mounts whatever `/etc/fstab` names. On web-1 that can be the superseded plaintext volume,
+  served over the only copy. The probe needs no mount to run: it checks `mountpoint -q /mnt/data`
+  and reports `not_mounted` itself. Same downgrade as `inngest-cutover-flip.service` (#7228). This
+  also corrects the §(a) claim that `RequiresMountsFor=` makes systemd "refuse to start" a unit (see
+  the note there).
+- **A cutover-freeze guard (exit 17).** Before it arms, the installer refuses with exit 17 when
+  `workspaces-luks-deadman.timer` reads `SubState=waiting`: a cutover freeze is live. The apply goes
+  red, the resource taints, and the next apply re-fires it. The plan cut an earlier freeze guard.
+  That cut does not apply here. The cut guard keyed on the dead-man reading `active`, and an elapsed
+  transient timer keeps `ActiveState=active`, `SubState=elapsed` until reboot, so an old July
+  dead-man would have blocked every install. `SubState=waiting` is reported only by a live transient
+  timer that has not fired yet, which is exactly a freeze in progress.
+- **Host scope.** The alert predicate gains `AND JSONExtractString(raw, 'host_name') =
+  'soleur-web-platform'`. web-2 (`soleur-web-2`) ships to the same Logs source (measured
+  2026-09-27). Its `incident_cause` no longer says "the volume is still encrypted": the alert also
+  fires when the host run fails an assert. It means "no PASSING host run in about 27 h".
+- **Lost drift events page.** The two exits in `workspaces-luks-emit.sh` that drop a drift event
+  (no DSN resolved; the Sentry POST failed) now log
+  `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn|send_failed drift_reason=<slug>` at
+  `user.crit` through an `emit_refusal()` definer. So `logtail_exploration_alert.monitor_send_failed`
+  pages on them. Sentry is the channel that failed, so the mirror is journal to Vector to Better
+  Stack.
+- **Script cleanup.** Terraform leaves an inline script's full body on the host when it exits
+  non-zero. The DSN writer carries the DSN, so it now removes its own uploaded script
+  (`rm -f -- "$0"`), uses the temp file `$f.dsn.tmp`, and has an EXIT trap. The state print removes
+  the `/root/tf-luks-*.sh` stubs. The installer also deletes stale root-owned `/tmp/terraform_*.sh`
+  older than 60 minutes: pre-#8706 failed runs could leave the token there. It chmods both binaries
+  right after delivery, and its state print adds the `luks-monitor.service` state,
+  `findmnt --fstab /mnt/data`, and `mnt-data.mount`'s `What` and `FragmentPath`.
+- **An empty DSN leaves the timer unarmed.** The DSN writer runs before the arming step. So its
+  exit 10 means that fire does not arm the timer, and the apply stays red until the DSN is fixed.
+  Writer exits: 10 empty DSN, 11 symlink, 12 not a regular file, 13 read error, 14 another line
+  would change, 15 not exactly one DSN line, 16 `mv` failed. Installer exit 17: cutover freeze live.
+- **The DSN fallback claim is asserted.** See the qualification under "The DSN line is the only
+  Sentry path on web-1".
+- **`query_period = 97200` is measured, not assumed.** Better Stack's docs list no bounds. On
+  2026-09-27 a throwaway PAUSED alert was created on the live API with `query_period = 97200`, read
+  back `query_period:97200 confirmation_period:0` (not clamped), and deleted.
+- **The dead-man gap** above is tracked in #9045.
 
 ## References
 

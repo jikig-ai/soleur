@@ -394,6 +394,15 @@ tail has no such check: nothing proves the tail is reachable. Note the parity te
 `-target` in the workflow, dispatch-only jobs included, so "per-merge" is this row's placement, not
 something the test enforces.
 
+> **Corrected 2026-09-27 (#8706 review):** the guard that ties the arming line to live code in a
+> per-merge SSH resource is `apps/web-platform/infra/luks-monitor-install.test.sh` Guard 2, not
+> `terraform-target-parity.test.ts`. Two of its checks carry it: "that occurrence is live code
+> inside the installer" (the arming string occurs once outside comments, inside
+> `terraform_data.luks_monitor_install`), and "the per-merge SSH apply targets
+> terraform_data.luks_monitor_install" (it reads only the `apply` job's SSH step, so a
+> dispatch-only target does not satisfy it). The parity test proves only that the resource is
+> targeted somewhere.
+
 **What it still does not buy.** Being in the apply proves the arming line runs. It does not prove
 the timer then fires. That proof is a runtime signal keyed on the host unit alone,
 `logtail_exploration_alert.luks_monitor_host_timer_dark`, not this guard. The invariant is

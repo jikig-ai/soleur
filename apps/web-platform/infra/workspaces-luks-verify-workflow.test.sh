@@ -650,6 +650,8 @@ case "$*" in
   # workflow command rides along to prove the line prefix keeps remote text inert.
   *"systemctl show"*)
     printf '%s\n' 'LoadState=loaded' 'UnitFileState=enabled' '::error title=forged-unit::verdict=pass'
+    # The runner splits step output on CR as well as LF, so a CR-embedded command is a second line.
+    printf 'ActiveState=x\r::error title=forged-cr::verdict=pass\n'
     exit "${FIXTURE_UNITSTATE_RC:-0}" ;;
 esac
 # The probe invocation: emit the fixture's log body, then exit the fixture's rc.
@@ -705,7 +707,7 @@ EOS
   # `|| true`: no match is an ANSWER here (the assertion below reports it), not a reason for this
   # `set -e` suite to die before it can say which line was missing.
   us_probe_ln="$(grep -n 'luks-monitor.sh' "$us_calls" | grep -v 'tar ' | head -1 | cut -d: -f1)" || true
-  us_show_ln="$(grep -n 'systemctl show -p LoadState,UnitFileState,ActiveState,LastTriggerUSec,Result,ExecMainStatus luks-monitor.timer luks-monitor.service' "$us_calls" | head -1 | cut -d: -f1)" || true
+  us_show_ln="$(grep -n 'systemctl show -p Id,LoadState,UnitFileState,ActiveState,LastTriggerUSec,Result,ExecMainStatus luks-monitor.timer luks-monitor.service' "$us_calls" | head -1 | cut -d: -f1)" || true
   if [[ -n "$us_probe_ln" && -n "$us_show_ln" && "$us_show_ln" -gt "$us_probe_ln" ]] \
      && grep -qxF '[unit-state] UnitFileState=enabled' "$us_calls.stdout"; then
     ok "#8706: the unit-state read runs AFTER the probe and prints prefixed [unit-state] lines"
@@ -716,6 +718,11 @@ EOS
     no "#8706: remote unit-state text reached the log unprefixed — it could issue a workflow command"
   else
     ok "#8706: remote unit-state text is prefixed, so a forged ::workflow-command:: stays inert"
+  fi
+  if tr '\r' '\n' < "$us_calls.stdout" | grep -q '^[[:space:]]*::error title=forged-cr'; then
+    no "#8706: a CR-embedded workflow command in remote unit-state text survives as its own runner line"
+  else
+    ok "#8706: a CR-embedded workflow command in remote unit-state text is stripped before the prefix"
   fi
   expect_class "#8706: the unit-state read does not change a healthy verdict" "pass" "$c_us"
   # Its OWN failure is swallowed: an unreachable/failed read must not move any class or exit path.
@@ -1236,8 +1243,9 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # Set from the green count with a small slack for ordinary additions. Raise it when you add
 # assertions; if this ever fires, the question is which block stopped running, not what number to
 # lower it to.
-# #8706: 132 -> 142 green with the ten unit-state assertions; floor raised 130 -> 140 (same slack).
-WF_MIN_ASSERTIONS=140
+# #8706: 132 -> 143 green with the eleven unit-state assertions (the CR row added at review);
+# floor raised 130 -> 141 (same slack).
+WF_MIN_ASSERTIONS=141
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

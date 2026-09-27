@@ -34,6 +34,9 @@ export LMI_INFRA_DIR="${LMI_INFRA_DIR:-$DIR}"
 export LMI_WF_DIR="${LMI_WF_DIR:-$REPO/.github/workflows}"
 export LMI_EXTRA_SCAN="${LMI_EXTRA_SCAN:-}"
 export LMI_EXTRA_TF="${LMI_EXTRA_TF:-}"
+export LMI_INNGEST_TF="${LMI_INNGEST_TF:-$DIR/inngest-host.tf}"
+export LMI_RUNBOOK="${LMI_RUNBOOK:-$REPO/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md}"
+export LMI_REPO="$REPO"
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -63,7 +66,7 @@ pass=$_p0; fail=$_f0; FAILED=()
 
 command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing\n' >&2; exit 2; }
 python3 -c 'import yaml' 2>/dev/null || { printf '[FATAL] python3 yaml module missing\n' >&2; exit 2; }
-for f in "$LMI_LUKS_TF" "$LMI_ALERTS_TF" "$LMI_WF" "$LMI_MONITOR_SH" "$LMI_CUTOVER_SH"; do
+for f in "$LMI_LUKS_TF" "$LMI_ALERTS_TF" "$LMI_WF" "$LMI_MONITOR_SH" "$LMI_CUTOVER_SH" "$LMI_INNGEST_TF" "$LMI_RUNBOOK"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
@@ -181,13 +184,26 @@ wf = yaml.safe_load(open(E["LMI_WF"]))
 jobs = wf.get("jobs") or {}
 
 # ─────────────────────────────── Guard 1 — the liveness alert ───────────────────────────────
-sql_locals = dict(re.findall(r'(?ms)^\s*([a-z0-9_]+)_sql\s*=\s*<<-SQL\n(.*?)\n\s*SQL\s*$', alerts_raw))
+# Every .tf in the root, not only the alerts file: a luks-monitor exploration placed elsewhere is in
+# the assembly too. The alerts file and workspaces-luks.tf are read through their LMI_* copies.
+def tf_text(path):
+    b = os.path.basename(path)
+    if os.path.abspath(os.path.dirname(path)) == os.path.abspath(E["LMI_INFRA_DIR"]):
+        if b == "betterstack-logs-alerts.tf": return alerts_raw
+        if b == "workspaces-luks.tf": return luks_raw
+    return open(path).read()
+root_tf = sorted(os.path.join(E["LMI_INFRA_DIR"], f) for f in os.listdir(E["LMI_INFRA_DIR"]) if f.endswith(".tf"))
+if E.get("LMI_EXTRA_TF"):
+    root_tf.append(E["LMI_EXTRA_TF"])
+all_tf_raw = "\n".join(tf_text(p) for p in root_tf)
+sql_locals = dict(re.findall(r'(?ms)^\s*([a-z0-9_]+)_sql\s*=\s*<<-SQL\n(.*?)\n\s*SQL\s*$', all_tf_raw))
 UNIT = "JSONExtractString(raw,'_SYSTEMD_UNIT')='luks-monitor.service'"
 EXPECTED = {
     "dt BETWEEN {{start_time}} AND {{end_time}}",
     "JSONExtractString(raw,'SYSLOG_IDENTIFIER')='luks-monitor'",
     UNIT,
     "JSONExtractString(raw,'message') LIKE '%OK: /mnt/data is LUKS-backed%'",
+    "JSONExtractString(raw,'host_name')='soleur-web-platform'",
 }
 
 def norm(s):
@@ -225,13 +241,19 @@ def predicate_ok(sql):
     cs = conjuncts(m.group(1))
     return (len(cs) == len(EXPECTED) and set(cs) == EXPECTED), cs
 
-explorations = blocks(alerts, "logtail_exploration")
+explorations = []
+for p_ in root_tf:
+    explorations += blocks(strip(tf_text(p_)), "logtail_exploration")
 luks_explorations = []
+LUKS_HINT = re.compile(r'luks[-_]monitor|LUKS-backed', re.I)
 for name, body in explorations:
     q = attr(body, "sql_query") or ""
     ref = re.fullmatch(r'replace\(trimspace\(local\.([a-z0-9_]+)_sql\),\s*"/\\\\s\+/",\s*" "\)', q)
+    lref = re.search(r'local\.([a-z0-9_]+?)(?:_sql)?\b', q)
     sql = sql_locals.get(ref.group(1)) if ref else None
-    if "luks-monitor" in q or (sql is not None and "luks-monitor" in sql) or (ref and ref.group(1).startswith("luks_monitor")):
+    named = sql_locals.get(lref.group(1)) if lref else None
+    if LUKS_HINT.search(q) or LUKS_HINT.search(body) or (sql and LUKS_HINT.search(sql)) \
+       or (named and LUKS_HINT.search(named)) or (lref and LUKS_HINT.search(lref.group(1))):
         luks_explorations.append((name, body, ref, sql))
 check("G1: at least one logtail_exploration reads a luks-monitor predicate", len(luks_explorations) >= 1,
       [n for n, *_ in luks_explorations])
@@ -278,8 +300,24 @@ if al:
         qp = cp = ck = -1
     check("G1: query_period + confirmation_period covers a legitimate 24h30m (88200 s) gap between two timer runs",
           qp >= 86400 and qp + cp >= 88200, (qp, cp))
+    check("G1: and pages within about 28 h of the last passing run (query_period + confirmation_period <= 100800)",
+          0 < qp + cp <= 100800, (qp, cp))
+    check("G1: the alert's name is soleur-luks-monitor-host-timer-dark-prd",
+          a.get("name") == '"soleur-luks-monitor-host-timer-dark-prd"', a.get("name"))
+    md = re.search(r'metadata\s*=\s*\{([^}]*)\}', al)
+    check("G1: incident_cause and metadata.runbook both carry the runbook URL local",
+          "${local.luks_monitor_runbook_url}" in (a.get("incident_cause") or "")
+          and md is not None and re.search(r'runbook\s*=\s*local\.luks_monitor_runbook_url\b', md.group(1)) is not None)
     check("G1: evaluated at least hourly (check_period <= 3600)", 0 < ck <= 3600, ck)
-    check("G1: incident_cause points at the runbook section", "host-timer-liveness-alert-8706" in alerts_raw)
+    um = re.search(r'luks_monitor_runbook_url\s*=\s*"([^"]+)"', alerts_raw)
+    frag = um.group(1).rsplit("#", 1)[1] if um and "#" in um.group(1) else None
+    def gh_anchor(h):
+        return re.sub(r'\s', "-", re.sub(r'[^\w\- ]', "", h.strip().lower()))
+    heads = [gh_anchor(m.group(1)) for m in re.finditer(r'(?m)^#{1,6}\s+(.+?)\s*$', open(E["LMI_RUNBOOK"]).read())]
+    check("G1: the runbook URL's fragment is a real heading anchor in the cutover runbook",
+          frag is not None and frag in heads, frag)
+    check("G1: the runbook URL names that runbook file",
+          um is not None and um.group(1).split("#")[0].endswith("/" + os.path.relpath(E["LMI_RUNBOOK"], E["LMI_REPO"])), um.group(1) if um else None)
 
 apply_job = jobs.get("apply") or {}
 main_runs = [str(s.get("run", "")) for s in apply_job.get("steps") or [] if "-target=logtail_exploration" in str(s.get("run", ""))]
@@ -289,14 +327,22 @@ for t in ("logtail_exploration.luks_monitor_host_timer_dark", "logtail_explorati
 
 # Row 10: nothing else starts the unit. Its rows would carry _SYSTEMD_UNIT=luks-monitor.service
 # and mask a dark timer exactly as the verify job's rows did.
-START = re.compile(r'systemctl\b.*\b(start|restart)\b.*\bluks-monitor\.service\b')
+# Every spelling that STARTS the unit: the start-class verbs, `enable --now`, with or without the
+# .service suffix (systemctl treats a bare name as .service), and every unit-file directive that
+# pulls it in. `luks-monitor(?:\.service)?(?![\w.-])` never matches luks-monitor.timer.
+UNIT_RE = r'luks-monitor(?:\.service)?(?![\w.-])'
+START = re.compile(r'\bsystemctl\b.*\b(?:start|restart|reload-or-restart|try-restart|try-reload-or-restart|enable\s+--now|--now\s+enable)\b.*' + UNIT_RE)
+DEP = re.compile(r'^\s*(?:Wants|Requires|Requisite|BindsTo|PartOf|Upholds|OnFailure|OnSuccess|Unit|Also|Triggers)\s*=.*\bluks-monitor\.service\b')
+BUS = re.compile(r'\b(?:busctl|dbus-send|gdbus)\b.*StartUnit.*' + UNIT_RE)
 starters = []
 scan = []
-for root in (E["LMI_INFRA_DIR"], E["LMI_WF_DIR"]):
+SCAN_EXT = (".sh", ".tf", ".yml", ".yaml", ".service", ".timer", ".path", ".socket", ".target", ".conf", ".tftpl", ".tmpl", ".json")
+roots = [E["LMI_INFRA_DIR"], E["LMI_WF_DIR"], os.path.join(E["LMI_REPO"], ".github", "actions"), os.path.join(E["LMI_REPO"], "scripts")]
+for root in roots:
     for dp, dn, fns in os.walk(root):
         dn[:] = [d for d in dn if d not in (".terraform", "node_modules", ".git")]
         for fn in fns:
-            if fn.endswith((".md", ".test.sh", ".test.ts")) or not fn.endswith((".sh", ".tf", ".yml", ".yaml", ".service", ".timer", ".tftpl")):
+            if fn.endswith((".md", ".test.sh", ".test.ts")) or not fn.endswith(SCAN_EXT):
                 continue
             scan.append(os.path.join(dp, fn))
 if E.get("LMI_EXTRA_SCAN"):
@@ -310,10 +356,12 @@ for p in scan:
     except OSError:
         continue
     for n, line in enumerate(lines, 1):
-        code = line.split("#", 1)[0] if p.endswith((".sh", ".yml", ".yaml")) else line
+        # Only FULL-line comments are dropped: a `#` later on a line (a quoted "#x", a URL) must not
+        # hide a start that follows it.
+        code = "" if line.lstrip().startswith("#") else line
         if p.endswith(".tf"):
             code = strip(line)
-        if START.search(code):
+        if START.search(code) or DEP.search(code) or BUS.search(code):
             starters.append("%s:%d" % (os.path.basename(p), n))
 check("G1: scanned the workflow and infra trees (anti-vacuity)", len(scan) >= 50, len(scan))
 check("G1: exactly one line anywhere starts luks-monitor.service — the installer's kick",
@@ -364,10 +412,13 @@ if inst:
           and re.search(r'depends_on\s*=\s*\[[^\]]*terraform_data\.journald_persistent', inst) is not None)
     check("G2: no lifecycle.ignore_changes (a silenced installer is the defect this closes)",
           re.search(r'ignore_changes', inst) is None)
-    PRE = 'nonsensitive(var.sentry_dsn == "" || can(regex("^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$", var.sentry_dsn)))'
+    # The same expression inngest-host.tf applies to var.sentry_dsn, read from that file.
+    ing = strip(open(E["LMI_INNGEST_TF"]).read())
+    ic = re.findall(r'(?m)^\s*condition\s*=\s*(nonsensitive\(var\.sentry_dsn\b.*?)\s*$', ing)
     pre = re.search(r'precondition\s*\{([^}]*)\}', inst)
     cond = attr(pre.group(1), "condition") if pre else None
-    check("G2: the DSN precondition is the strict-class expression inngest-host.tf applies", cond == PRE, cond)
+    check("G2: the DSN precondition is exactly the expression inngest-host.tf applies to var.sentry_dsn",
+          len(ic) == 1 and cond == ic[0], (cond, ic))
 
     # Ordered command stream: (provisioner index, kind, command).
     stream, remote = [], []
@@ -385,8 +436,29 @@ if inst:
                 return n
         return None
     arm = first(lambda c: c == ARM)
-    en = first(lambda c: re.search(r'systemctl\s+is-enabled\b.*luks-monitor\.timer', c) is not None)
-    ac = first(lambda c: re.search(r'systemctl\s+is-active\b.*luks-monitor\.timer', c) is not None)
+    en = first(lambda c: re.fullmatch(r'systemctl is-enabled luks-monitor\.timer', c) is not None)
+    ac = first(lambda c: re.fullmatch(r'systemctl is-active luks-monitor\.timer', c) is not None)
+    dr = first(lambda c: c == "systemctl daemon-reload")
+    frz = first(lambda c: re.search(r'systemctl show -p SubState --value workspaces-luks-deadman\.timer\b', c) is not None
+                and "!= waiting" in c and re.search(r'\bexit 17\b', c) is not None)
+    check("G2: daemon-reload runs before the timer is armed", None not in (dr, arm) and dr < arm, (dr, arm))
+    check("G2: a live cutover freeze (dead-man SubState=waiting) is refused with exit 17 before arming",
+          None not in (frz, arm) and frz < arm, (frz, arm))
+    if arm is not None:
+        aidx = stream[arm][0]
+        acmds = [c for idx, k, c in stream if k == "cmd" and idx == aidx]
+        check("G2: the arm provisioner starts with set -e (its asserts are fatal)", acmds[:1] == ["set -e"], acmds[:1])
+        check("G2: no `|| true` softens an arm-provisioner command", not any("|| true" in c for c in acmds), acmds)
+    # Every binary the cutover tail installs 0755 is chmodded 0755 by a set -e provisioner, before arming.
+    tail_x = {m.group(2) for m in re.finditer(r'(?m)^\s*install -D -m (\d+) "[^"]+" (\S+)', cutover) if m.group(1) == "0755"}
+    chm = [(n, set(c.split()[2:])) for n, (idx, k, c) in enumerate(stream) if k == "cmd" and re.match(r'chmod 0755 ', c)]
+    chm_set = set().union(*[x for _, x in chm]) if chm else set()
+    chm_ok = bool(chm) and all([c for i2, k2, c in stream if k2 == "cmd" and i2 == stream[n][0]][:1] == ["set -e"] for n, _ in chm)
+    check("G2: the installer chmods exactly the tail's 0755 binaries, in a set -e provisioner, before arming",
+          chm_set == tail_x and len(tail_x) == 2 and chm_ok and arm is not None and max(n for n, _ in chm) < arm,
+          (sorted(chm_set), sorted(tail_x)))
+    check("G2: nothing in the installer stops, disables, masks or kills luks-monitor",
+          not any(re.search(r'systemctl\b.*\b(stop|disable|mask|kill)\b.*luks-monitor', c) for i2, k2, c in stream if k2 == "cmd"))
     kicks = [n for n, (idx, k, c) in enumerate(stream) if k == "cmd" and re.search(r'systemctl\b.*\b(start|restart)\b.*luks-monitor\.service', c)]
     check("G2: the installer arms the timer with the exact manifest line", arm is not None)
     check("G2: it asserts is-enabled and is-active after arming", None not in (arm, en, ac) and arm < en and arm < ac, (arm, en, ac))
@@ -412,8 +484,11 @@ if inst:
     check("G2: the state print shows the timer's LoadState/UnitFileState/ActiveState/NextElapse",
           re.search(r'systemctl show -p LoadState,UnitFileState,ActiveState,NextElapseUSecRealtime', state) is not None)
     check("G2: the state print shows the dead-man units", "workspaces-luks-deadman.timer" in state and "workspaces-luks-deadman.service" in state)
-    check("G2: counts-only env-file diagnostics, never a value", "grep -c '^SOLEUR_SENTRY_DSN='" in state
-          and "grep -c '^DOPPLER_TOKEN='" in state and not re.search(r'\bcat\b[^|;]*/etc/default/luks-monitor', state))
+    check("G2: counts-only env-file diagnostics exist", "grep -c '^SOLEUR_SENTRY_DSN='" in state and "grep -c '^DOPPLER_TOKEN='" in state)
+    check("G2: the state print reads luks-monitor.service's own state (catches a 203/EXEC from the kick)",
+          re.search(r'systemctl show -p Id,ActiveState,SubState,Result,ExecMainStatus luks-monitor\.service\b', state) is not None)
+    check("G2: stale root-owned /tmp/terraform_*.sh are removed, but only ones older than 60 min",
+          re.search(r"find /tmp -maxdepth 1 -name 'terraform_\*\.sh' -user root -mmin \+60 -size \+0c -delete", state) is not None)
 
 # The manifest greps the arming string on a view that drops only lines STARTING with "#".
 view = "\n".join(l for l in luks_raw.splitlines() if not l.lstrip().startswith("#"))
@@ -424,6 +499,26 @@ check("G2: and that occurrence is live code inside the installer",
 tok = block(luks, "terraform_data", "luks_monitor_token_install")
 check("G2: the token installer also uploads its inline scripts under /root",
       tok is not None and re.search(r'(?m)^\s*script_path\s*=\s*"/root/[^"]*%RAND%[^"]*"\s*$', tok) is not None)
+# DIAGNOSTICS ALLOWLIST over both installers: in every remote-exec that carries no secret reference,
+# the env file may appear ONLY as a `stat -c '%F %a %U'` or a `grep -c '^KEY='` operand. Anything else
+# (cat, grep ., sed -n p, head, source, awk) could print a value into an unsuppressed apply log.
+DIAG_OK = re.compile(r"stat -c '%F %a %U' /etc/default/luks-monitor|grep -c '\^(?:DOPPLER_TOKEN|SOLEUR_SENTRY_DSN)=' /etc/default/luks-monitor")
+leaks = []
+for nm, bd in (("luks_monitor_install", inst), ("luks_monitor_token_install", tok)):
+    for k, b in provisioners(bd or ""):
+        if k != "remote-exec":
+            continue
+        cmds = [hcl_unescape(c) for c in inline_raw(b)]
+        if any(re.search(r'\$\{(var|doppler_service_token|random_password)\.', c) for c in cmds):
+            continue
+        for c in cmds:
+            if "/etc/default/luks-monitor" in DIAG_OK.sub("", c):
+                leaks.append("%s: %s" % (nm, c))
+check("G2: unsuppressed provisioners touch the env file only through counts-only forms", not leaks, leaks)
+check("G2: each secret-bearing remote-exec deletes its own uploaded script (rm -f -- \"$0\")",
+      all(any(hcl_unescape(c) == 'rm -f -- "$0"' for c in inline_raw(b))
+          for bd in (inst, tok) for k, b in provisioners(bd or "")
+          if k == "remote-exec" and any(re.search(r'\$\{(var|doppler_service_token)\.', c) for c in inline_raw(b))))
 
 ssh_targets = set()
 for s in apply_job.get("steps") or []:
@@ -447,12 +542,16 @@ for p in tf_files:
         for name, body in blocks(s, kind):
             hit = False
             for k, b in provisioners(body):
-                if k == "remote-exec" and "/etc/default/luks-monitor" in b:
+                # Any text of the block that names the file: an inline command, a file provisioner's
+                # destination or content, or a remote-exec script(s) argument.
+                if "/etc/default/luks-monitor" in b:
                     hit = True
-                if k == "file":
-                    sm = re.search(r'source\s*=\s*"\$\{path\.module\}/([^"]+)"', b)
-                    sp = os.path.join(os.path.dirname(p), sm.group(1)) if sm else None
-                    if sp and os.path.isfile(sp) and re.search(r'(?m)^[^#]*/etc/default/luks-monitor', open(sp, errors="replace").read()):
+                # Any script the block ships or runs: a file provisioner's source, or a remote-exec
+                # script / scripts entry, read from disk.
+                for sm in re.finditer(r'(?:source|script)\s*=\s*"\$\{path\.(?:module|root)\}/([^"]+)"|"\$\{path\.(?:module|root)\}/([^"]+)"', b):
+                    rel = sm.group(1) or sm.group(2)
+                    sp = os.path.join(os.path.dirname(p), rel)
+                    if os.path.isfile(sp) and re.search(r'(?m)^[^#]*/etc/default/luks-monitor', open(sp, errors="replace").read()):
                         hit = True
             if hit:
                 writers.add(name)
@@ -507,8 +606,9 @@ scratch = E["LMI_SCRATCH"]
 bindir = os.path.join(scratch, "bin"); os.makedirs(bindir, exist_ok=True)
 real_grep = shutil.which("grep")
 chown_log = os.path.join(scratch, "chown.log")
+chown_argv = os.path.join(scratch, "chown.argv")
 with open(os.path.join(bindir, "chown"), "w") as fh:
-    fh.write('#!/bin/sh\nfor a; do last="$a"; done\nstat -c %%a "$last" >> %s\nexit 0\n' % chown_log)
+    fh.write('#!/bin/sh\nfor a; do last="$a"; done\nstat -c %%a "$last" >> %s\nprintf "%%s\\n" "$*" >> %s\nexit 0\n' % (chown_log, chown_argv))
 with open(os.path.join(bindir, "grep"), "w") as fh:
     fh.write('#!/bin/sh\nfor a; do last="$a"; done\n'
              'if [ -n "${LMI_GREP_FAIL_PATH:-}" ] && [ "$last" = "$LMI_GREP_FAIL_PATH" ]; then echo "grep: $last: Input/output error" >&2; exit 2; fi\n'
@@ -531,13 +631,14 @@ def run(seed=None, dsn=DSN, kind="file", env_extra=None, planted_tmp=None):
     elif kind == "dir":
         os.mkdir(f)
     if planted_tmp == "symlink":
-        os.symlink(victim, f + ".tmp")
+        os.symlink(victim, f + ".dsn.tmp")
     body = script.replace("f=/etc/default/luks-monitor\n", "f=%s\n" % f).replace("@@DSN@@", dsn)
     if "/etc/default/" in body:
         fatal("the scratch-path rewrite did not remove every /etc/default/ reference")
     sp = os.path.join(d, "writer.sh"); open(sp, "w").write(body)
-    if os.path.exists(chown_log):
-        os.remove(chown_log)
+    for lg in (chown_log, chown_argv):
+        if os.path.exists(lg):
+            os.remove(lg)
     env = {"PATH": bindir + ":/usr/bin:/bin", "HOME": d}
     env.update({k: (f if v == "__SELF__" else v) for k, v in (env_extra or {}).items()})
     old = os.umask(0o022)
@@ -548,14 +649,20 @@ def run(seed=None, dsn=DSN, kind="file", env_extra=None, planted_tmp=None):
     content = open(f).read() if os.path.isfile(f) and not os.path.islink(f) else None
     mode = stat.S_IMODE(os.stat(f).st_mode) if content is not None else None
     tmpmodes = open(chown_log).read().split() if os.path.exists(chown_log) else []
+    argv = open(chown_argv).read().splitlines() if os.path.exists(chown_argv) else []
+    leftover = sorted(x for x in os.listdir(d) if x.startswith("luks-monitor.") and x != "luks-monitor")
     return {"rc": p.returncode, "content": content, "mode": mode, "victim": open(victim).read(),
-            "tmpmodes": tmpmodes, "f": f, "err": p.stderr.strip()[-160:], "link": os.path.islink(f)}
+            "tmpmodes": tmpmodes, "argv": argv, "f": f, "err": p.stderr.strip()[-160:],
+            "link": os.path.islink(f), "leftover": leftover, "self_deleted": not os.path.exists(sp)}
 
 L = "SOLEUR_SENTRY_DSN=%s\n" % DSN
 r = run(seed="DOPPLER_TOKEN=x\n")
 check("G3: token-only file -> rc 0, token line kept, exactly one DSN line appended", r["rc"] == 0 and r["content"] == "DOPPLER_TOKEN=x\n" + L, r)
 check("G3: the result is mode 0600", r["mode"] == 0o600, oct(r["mode"] or 0))
 check("G3: the temp file is BORN 0600 even under umask 022 (umask 077 is load-bearing)", r["tmpmodes"] == ["600"], r["tmpmodes"])
+check("G3: the temp file is chowned root:root before it replaces the env file",
+      r["argv"] == ["root:root %s.dsn.tmp" % r["f"]], r["argv"])
+check("G3: the writer deletes its own uploaded script (a refusal cannot leave the DSN on disk)", r["self_deleted"], r)
 
 r1 = run(seed="DOPPLER_TOKEN=x\n")
 r2 = run(seed=r1["content"] or "")
@@ -579,9 +686,10 @@ check("G3: directory at the path -> refused with exit 12", r["rc"] == 12, r)
 
 r = run(seed="DOPPLER_TOKEN=x\n", env_extra={"LMI_GREP_FAIL_PATH": "__SELF__"})
 check("G3: a read error on the file -> refused with exit 13, never an emptied file", r["rc"] == 13 and r["content"] == "DOPPLER_TOKEN=x\n", r)
+check("G3: a refusal leaves no temp copy (of the token line) behind", r["leftover"] == [], r["leftover"])
 
 r = run(seed="DOPPLER_TOKEN=x\n", planted_tmp="symlink")
-check("G3: a planted $f.tmp symlink is removed, never written through", r["rc"] == 0 and r["victim"] == "VICTIM=untouched\n"
+check("G3: a planted temp-file symlink is removed, never written through", r["rc"] == 0 and r["victim"] == "VICTIM=untouched\n"
       and r["content"] == "DOPPLER_TOKEN=x\n" + L, r)
 check("G3: behavioural cases ran (anti-vacuity)", case_n[0] >= 9, case_n[0])
 
@@ -629,8 +737,24 @@ PY
     fi
     got=0
     env "$var=$copy" LMI_MUTANT=1 bash "$SELF" >"$copy.log" 2>&1 || got=$?
+    grade "$label" "$want" "$got" "$copy.log"
+  }
+  # A caught mutation is rc 1 AND the named check's own [FAIL] line; rc alone would credit any
+  # unrelated failure (or a crash) to the row. rc 0 / rc 2 rows are must-PASS / instrument rows.
+  grade() {
+    local label="$1" want="$2" got="$3" log="$4" key exp
+    key="${label%% *}"; exp="${EXPECT_FAIL[$key]:-}"
     mut_rows=$((mut_rows + 1))
-    if [[ "$got" == "$want" ]]; then ok "mutation $label -> rc $got"; else no "mutation $label: want rc $want, got $got (log $(tail -3 "$copy.log" | tr '\n' ' '))"; fi
+    if [[ "$got" != "$want" ]]; then
+      no "mutation $label: want rc $want, got $got (log $(tail -3 "$log" | tr '\n' ' '))"; return
+    fi
+    if [[ "$want" == 1 ]]; then
+      if [[ -z "$exp" ]]; then no "mutation $label: no expected [FAIL] name registered (instrument)"; return; fi
+      if ! grep -F '[FAIL]' "$log" | grep -qF -- "$exp"; then
+        no "mutation $label: rc 1 but not through the named check [$exp]"; return
+      fi
+    fi
+    ok "mutation $label -> rc $got${exp:+ via [$exp]}"
   }
   # extra-file rows: <label> <want> <env-var> <content>
   extra() {
@@ -639,9 +763,29 @@ PY
     printf '%s\n' "$content" > "$f"
     got=0
     env "$var=$f" LMI_MUTANT=1 bash "$SELF" >"$f.log" 2>&1 || got=$?
-    mut_rows=$((mut_rows + 1))
-    if [[ "$got" == "$want" ]]; then ok "mutation $label -> rc $got"; else no "mutation $label: want rc $want, got $got"; fi
+    grade "$label" "$want" "$got" "$f.log"
   }
+  declare -A EXPECT_FAIL=(
+    [G1-1]="keeps the host-unit conjunct" [G1-2]="on_missing_data = treat_as_zero"
+    [G1-4]="covers a legitimate 24h30m" [G1-5a]="predicate is exactly" [G1-5b]="still logs the exact OK needle"
+    [G1-6]="predicate is exactly" [G1-6b]="predicate is exactly" [G1-7]="exploration luks_monitor_extra"
+    [G1-8]="MAIN plan targets logtail_exploration_alert" [G1-9]="watches ITS OWN exploration"
+    [G1-10]="exactly one line anywhere starts" [G1-11]="predicate is exactly" [G1-12]="pages within about 28 h"
+    [G1-13]="incident_cause and metadata.runbook" [G1-14]="exactly one line anywhere starts"
+    [G1-15]="exactly one line anywhere starts" [G1-16]="reads its SQL from a *_sql local"
+    [G1-17]="fragment is a real heading anchor" [G1-H1]="reads its SQL from a *_sql local"
+    [G2-1]="file() trigger operands" [G2-2]="file() trigger operands" [G2-4]="the kick comes after"
+    [G2-7]="arming string occurs exactly once" [G2-8]="install destinations equal"
+    [G2-9]="exactly one start of luks-monitor.service" [G2-10]="luks_monitor_install exists"
+    [G2-11]="arming string occurs exactly once" [G2-12]="SSH apply targets terraform_data.luks_monitor_install"
+    [G2-13]="arm provisioner starts with set -e" [G2-14]="softens an arm-provisioner command"
+    [G2-15]="chmods exactly the tail's 0755 binaries" [G2-16]="cutover freeze" [G2-17]="counts-only forms"
+    [G2-18]="stops, disables, masks or kills" [G2-19]="deletes its own uploaded script"
+    [G3-1]="token-only file" [G3-2]="second run is idempotent" [G3-3]="BORN 0600"
+    [G3-4]="symlink at the path" [G3-5]="only the DSN line changes" [G3-6]="read error on the file"
+    [G3-7]="planted temp-file symlink" [G3-8]="precondition rejects quotes" [G3-9]="env-file writers are exactly"
+    [G3-10]="chowned root:root" [G3-11]="env-file writers are exactly"
+  )
   mut_rows=0
   A="$LMI_ALERTS_TF"; T="$LMI_LUKS_TF"; W="$LMI_WF"
   ARM_LINE="systemctl enable --now luks-monitor.timer"
@@ -694,17 +838,74 @@ resource \"logtail_exploration\" \"luks_monitor_extra\" {
   mutate "G3-4 the symlink refusal removed" 1 LMI_LUKS_TF "$T" "re.sub(r'(?m)^      \"\[ ! -L .*\n', '', s, 1)"
   mutate "G3-5 the = dropped from the filter" 1 LMI_LUKS_TF "$T" "s.replace(\"      \\\"rc=0; grep -v '^SOLEUR_SENTRY_DSN='\", \"      \\\"rc=0; grep -v '^SOLEUR_SENTRY_DSN'\", 1)"
   mutate "G3-6 the read-error arm removed" 1 LMI_LUKS_TF "$T" "re.sub(r'(?m)^      \"\[ \\\\\"\\\$rc\\\\\" -le 1 \].*\n', '', s, 1)"
-  mutate "G3-7 the stale temp file is no longer removed" 1 LMI_LUKS_TF "$T" "re.sub(r'(?m)^      \"rm -f \\\\\"\\\$f\.tmp\\\\\"\",\n', '', s, 1)"
+  mutate "G3-7 the stale temp file is no longer removed" 1 LMI_LUKS_TF "$T" "re.sub(r'(?m)^      \"rm -f \\\\\"\\\$t\\\\\"\",\n', '', s, 1)"
   mutate "G3-8 the precondition widened to [^@/]+ classes" 1 LMI_LUKS_TF "$T" "s.replace('^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+\$', '^https://[^@/]+@[^/]+/[^/?#]+\$', 1)"
   extra "G3-9 a second writer of the env file" 1 LMI_EXTRA_TF 'resource "terraform_data" "rogue" {
   provisioner "remote-exec" {
     inline = ["echo X=1 >> /etc/default/luks-monitor"]
   }
 }' .tf
+  # Review round (2026-09-27): rows for every guard added after the first panel.
+  mutate "G1-11 drop the host_name conjunct (web-2 rows would count)" 1 LMI_ALERTS_TF "$A" "$(cat <<'X'
+s.replace("      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'\n", '', 1)
+X
+)"
+  mutate "G1-12 a 10-day window (pages far too late)" 1 LMI_ALERTS_TF "$A" "s.replace('query_period        = 97200', 'query_period        = 864000', 1)"
+  mutate "G1-13 the incident text loses the runbook link" 1 LMI_ALERTS_TF "$A" "$(cat <<'X'
+s.replace(' Runbook: ${local.luks_monitor_runbook_url}"', ' Runbook: see the cutover runbook"', 1)
+X
+)"
+  extra "G1-14 a suffixless starter (systemctl start luks-monitor)" 1 LMI_EXTRA_SCAN "      - run: ssh web-1 systemctl start luks-monitor"
+  extra "G1-15 a unit that Wants= the service" 1 LMI_EXTRA_SCAN $'[Unit]\nWants=luks-monitor.service' .service
+  extra "G1-16 a luks exploration elsewhere with inline SQL" 1 LMI_EXTRA_TF 'resource "logtail_exploration" "rogue_luks" {
+  name = "x"
+  query {
+    sql_query = "SELECT count(*) AS value FROM {{source}} WHERE JSONExtractString(raw, '"'"'message'"'"') LIKE '"'"'%OK: /mnt/data is LUKS-backed%'"'"'"
+  }
+}' .tf
+  mutate "G1-17 the runbook heading renamed (the email link would dangle)" 1 LMI_RUNBOOK "$LMI_RUNBOOK" "s.replace('### Host-timer liveness alert (#8706)', '### Host timer liveness (#8706)', 1)"
+  mutate "G2-13 the arm step without set -e" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('      "set -e",\n      "[ \\"$(systemctl show -p SubState', '      "[ \\"$(systemctl show -p SubState', 1)
+X
+)"
+  mutate "G2-14 is-enabled softened with || true" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('      "systemctl is-enabled luks-monitor.timer",\n', '      "systemctl is-enabled luks-monitor.timer || true",\n', 1)
+X
+)"
+  mutate "G2-15 the chmod dropped (203/EXEC on the next run)" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('      "chmod 0755 /usr/local/bin/luks-monitor /usr/local/bin/workspaces-luks-emit.sh",\n', '', 1)
+X
+)"
+  mutate "G2-16 the cutover-freeze refusal dropped" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+re.sub(r'(?m)^      "\[ \\"\$\(systemctl show -p SubState.*\n', '', s, 1)
+X
+)"
+  mutate "G2-17 a diagnostic prints the env file's values" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('      "df -P /etc | tail -1 || true",\n', '      "df -P /etc | tail -1 || true",\n      "grep . /etc/default/luks-monitor || true",\n', 1)
+X
+)"
+  mutate "G2-18 the timer disabled after arming" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('      "find /root -maxdepth 1', '      "systemctl disable --now luks-monitor.timer || true",\n      "find /root -maxdepth 1', 1)
+X
+)"
+  mutate "G2-19 the writer keeps its uploaded script (DSN left on disk)" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('      "rm -f -- \\"$0\\"",\n      "umask 077",', '      "umask 077",', 1)
+X
+)"
+  mutate "G3-10 the temp file chowned to a non-root owner" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('      "chown root:root \\"$t\\"",', '      "chown nobody:nogroup \\"$t\\"",', 1)
+X
+)"
+  extra "G3-11 a file provisioner writing the env file by destination" 1 LMI_EXTRA_TF 'resource "terraform_data" "rogue2" {
+  provisioner "file" {
+    content     = "X=1"
+    destination = "/etc/default/luks-monitor"
+  }
+}' .tf
   mutate "G3-H1 the scratch-path rewrite cannot land (instrument)" 2 LMI_LUKS_TF "$T" "s.replace('\"f=/etc/default/luks-monitor\",', '\"f=\\\\\"/etc/default/luks-monitor\\\\\"\",', 1)"
   mutate "G3-H2 the writer split differently across inline entries (must PASS)" 0 LMI_LUKS_TF "$T" "s.replace('      \"umask 077\",\n      \"f=/etc/default/luks-monitor\",\n', '      \"umask 077; f=/etc/default/luks-monitor\",\n', 1)"
-  # A deleted row must not pass silently: 13 Guard 1 + 10 Guard 2 + 11 Guard 3 rows.
-  MUT_ROWS_EXPECTED=34
+  # A deleted row must not pass silently: 20 Guard 1 + 17 Guard 2 + 13 Guard 3 rows.
+  MUT_ROWS_EXPECTED=50
   if [[ "$mut_rows" -ne "$MUT_ROWS_EXPECTED" ]]; then
     printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"
     exit 1
@@ -714,7 +915,7 @@ fi
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # Anti-vacuity floor. The threshold sits on the line directly above its `if`.
-MIN_ASSERTIONS=68
+MIN_ASSERTIONS=85
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1

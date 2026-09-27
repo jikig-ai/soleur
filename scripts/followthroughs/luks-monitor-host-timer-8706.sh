@@ -7,20 +7,30 @@
 # terraform_data.luks_monitor_install. This probe closes #8706 only on evidence that the HOST TIMER
 # fires nightly: three CONSECUTIVE UTC dates each carrying a host-unit `OK:` row in the 00 UTC hour.
 #
-# THE PREDICATE (same conjuncts as logtail_exploration_alert.luks_monitor_host_timer_dark):
+# THE PREDICATE: the conjuncts of logtail_exploration_alert.luks_monitor_host_timer_dark exactly
+# (luks-monitor-host-timer-8706.test.sh extracts them from betterstack-logs-alerts.tf and compares
+# the sets), plus the hour:
 #   SYSLOG_IDENTIFIER = 'luks-monitor'           scopes the scan;
 #   _SYSTEMD_UNIT     = 'luks-monitor.service'   excludes the verify job's SSH-session rows (the
 #                                                masking defect) — the unit's stdout copy of each
 #                                                line always carries it;
 #   message LIKE '%OK: /mnt/data is LUKS-backed%' excludes FAIL (...) and helper rows;
-#   toHour(dt, 'UTC') = 0                        excludes the install-time kick run and a
-#                                                Persistent=true catch-up after a reboot, so only
-#                                                timer-fired runs count.
-# Three consecutive nights, not one, so a single night (or a lucky kick at 00:xx) cannot close it.
+#   host_name         = 'soleur-web-platform'    web-1 only (web-2 ships to the same source);
+#   toHour(dt, 'UTC') = 0                        keeps timer-fired runs and drops a Persistent=true
+#                                                catch-up after a reboot. It drops the install-time
+#                                                kick too UNLESS the SSH apply itself lands in the
+#                                                00 UTC hour; then that kick counts as one night.
+# Three consecutive nights, not one, so a single night (or that one kick) cannot close it alone.
 #
-# POSITIVE CONTROL FIRST. Zero luks-monitor rows of ANY kind in the window means the log channel is
-# dark (Vector/Better Stack), not that the timer failed: the verify job writes rows daily. That is
-# reported as exit 2, never as FAIL and never as PASS.
+# RETIREMENT: once #8706 is closed, delete this script, its suite
+# (luks-monitor-host-timer-8706.test.sh), its run_suite line in scripts/test-all.sh, and the
+# directive on #8706. After a PASS the sweeper keeps re-running closed trackers for a while, and a
+# single night that misses the 00 UTC hour (a reboot catch-up) would read as FAIL and reopen it.
+#
+# POSITIVE CONTROL FIRST. Zero web-1 luks-monitor rows of ANY kind in the last 36 h means the log
+# channel is dark (Vector/Better Stack), not that the timer failed: the verify job writes rows
+# daily. That is reported as exit 2, never as FAIL and never as PASS. 36 h, not the whole window, so
+# a pipeline outage in the last day or two reads as TRANSIENT rather than as a failed timer.
 #
 # OUTPUT RULES. The sweeper posts this output into a public issue comment: dates and counts only,
 # never a row's message, host, or any credential.
@@ -108,6 +118,8 @@ main() {
   # ---- 1. POSITIVE CONTROL: any luks-monitor row at all -------------------------------------------
   out="$(bash "$bq" "SELECT count() AS n FROM ${src}
     WHERE JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
+      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
+      AND dt > now() - INTERVAL 36 HOUR
     FORMAT JSONEachRow" 2>/dev/null)"
   rc=$?
   if [[ "$rc" -ne 0 ]]; then
@@ -121,9 +133,9 @@ main() {
     echo "TRANSIENT: could not parse the positive-control count"
     exit 2
   fi
-  echo "positive_control luks_monitor_rows=${control} window_days=${WINDOW_DAYS}"
+  echo "positive_control luks_monitor_rows=${control} window_hours=36"
   if [[ "$control" -eq 0 ]]; then
-    echo "TRANSIENT: zero luks-monitor rows of any kind in ${WINDOW_DAYS}d — the log channel is dark (the verify job writes rows daily), so the host timer cannot be judged either way"
+    echo "TRANSIENT: zero web-1 luks-monitor rows of any kind in 36h — the log channel is dark (the verify job writes rows daily), so the host timer cannot be judged either way"
     exit 2
   fi
 
@@ -132,6 +144,7 @@ main() {
     WHERE JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
       AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'
       AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%'
+      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
       AND toHour(dt, 'UTC') = 0
     GROUP BY d ORDER BY d FORMAT JSONEachRow" 2>/dev/null)"
   rc=$?

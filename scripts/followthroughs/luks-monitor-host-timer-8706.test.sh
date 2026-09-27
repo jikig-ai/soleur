@@ -104,7 +104,9 @@ else
 fi
 
 # --- 5. control query failure -> exit 2 ---------------------------------------------------------
-fixture '' 1 "$NIGHT1"$'\n'"$NIGHT2"$'\n'"$NIGHT3" 0
+# A VALID control body with a non-zero rc: the rc check alone must refuse it (an empty body would
+# be refused by the parse arm too, and could not tell the two arms apart).
+fixture "$CTRL" 1 "$NIGHT1"$'\n'"$NIGHT2"$'\n'"$NIGHT3" 0
 run_sut
 if [[ "$RC" -eq 2 ]] && ! has 'HOST_TIMER_PASS' && ! has 'FAIL:'; then
   ok "positive-control query failure -> exit 2"
@@ -181,10 +183,6 @@ nights_sql="${SQL#*----}"
 missing=""
 # shellcheck disable=SC2016  # the literal $BS_TABLE tokens are what the probe must send
 for needle in \
-  "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'" \
-  "JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'" \
-  "JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%'" \
-  "toHour(dt, 'UTC') = 0" \
   "toDate(dt, 'UTC')" \
   'remote($BS_TABLE)' \
   's3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1' \
@@ -192,17 +190,74 @@ for needle in \
   [[ "$nights_sql" == *"$needle"* ]] || missing+=" [$needle]"
 done
 if [[ -z "$missing" ]]; then
-  ok "nights SQL carries identifier, unit, OK needle, 00 UTC hour, hot+archive union, 5-day window"
+  ok "nights SQL carries the per-UTC-date grouping, hot+archive union and 5-day window"
 else
   no "nights SQL missing:$missing"
 fi
+
+# PREDICATE PARITY with the alert: the nights WHERE clause (after the source subquery) must be the
+# alert local's conjuncts EXACTLY, plus the 00 UTC hour — a set comparison, so an OR, a NOT, a
+# dropped or an added conjunct all red. Expected values come from betterstack-logs-alerts.tf, never
+# from this probe, so a reworded needle in one file and not the other reds here.
+ALERTS_TF="${LHT_ALERTS_TF:-$HERE/../../apps/web-platform/infra/betterstack-logs-alerts.tf}"
+parity() { # <sql> -> prints OK or a diff line
+  NIGHTS_SQL="$1" ALERTS_TF="$ALERTS_TF" python3 - <<'PYEOF'
+import os, re
+def norm(x):
+    x = " ".join(x.split())
+    return re.sub(r'\s*([(),=])\s*', r'\1', x)
+def conj(where):
+    parts = re.split(r'\s+AND\s+', where)
+    out, skip = [], False
+    for i, p in enumerate(parts):
+        if skip: skip = False; continue
+        if re.search(r'\bBETWEEN\s+\S+\s*$', p) and i + 1 < len(parts):
+            out.append(p + " AND " + parts[i + 1]); skip = True
+        else:
+            out.append(p)
+    return [norm(p) for p in out]
+tf = open(os.environ["ALERTS_TF"]).read()
+m = re.search(r'(?ms)^\s*luks_monitor_host_timer_sql\s*=\s*<<-SQL\n(.*?)\n\s*SQL\s*$', tf)
+if not m:
+    print("NO_ALERT_SQL"); raise SystemExit
+alert = " ".join(m.group(1).split()).split(" WHERE ", 1)[1]
+want = {c for c in conj(alert) if not c.startswith("dt BETWEEN")} | {norm("toHour(dt, 'UTC') = 0")}
+sql = " ".join(os.environ["NIGHTS_SQL"].split())
+# The OUTER WHERE: the last ") WHERE " before GROUP BY (the source subquery has its own WHEREs).
+head = sql.split(" GROUP BY ", 1)[0]
+if ") WHERE " not in head:
+    print("NO_NIGHTS_WHERE"); raise SystemExit
+where = head.rsplit(") WHERE ", 1)[1]
+got = conj(where)
+if len(got) == len(want) and set(got) == want and not re.search(r'\b(OR|NOT)\b', where):
+    print("OK")
+else:
+    print("DIFF want=%s got=%s" % (sorted(want), sorted(got)))
+PYEOF
+}
+p_real="$(parity "$nights_sql")"
+if [[ "$p_real" == OK ]]; then
+  ok "nights WHERE == the alert's conjuncts + the 00 UTC hour (extracted from betterstack-logs-alerts.tf)"
+else
+  no "nights predicate diverges from the alert: $p_real"
+fi
+# The checker must be able to refuse: the masking defect's two spellings, derived from the real SQL.
+or_sql="${nights_sql/AND JSONExtractString(raw, \'_SYSTEMD_UNIT\')/OR JSONExtractString(raw, \'_SYSTEMD_UNIT\')}"
+not_sql="${nights_sql/AND JSONExtractString(raw, \'_SYSTEMD_UNIT\')/AND NOT JSONExtractString(raw, \'_SYSTEMD_UNIT\')}"
+if [[ "$or_sql" != "$nights_sql" && "$not_sql" != "$nights_sql" \
+      && "$(parity "$or_sql")" != OK && "$(parity "$not_sql")" != OK ]]; then
+  ok "the parity check refuses the unit conjunct joined with OR or negated"
+else
+  no "the parity check could not refuse an OR/NOT unit conjunct (or the derivation did not land)"
+fi
 control_sql="${SQL%%----*}"
 # shellcheck disable=SC2016  # literal $BS_TABLE_S3 token
-if [[ "$control_sql" == *"'luks-monitor'"* && "$control_sql" != *"_SYSTEMD_UNIT"* && "$control_sql" != *"toHour"* \
+if [[ "$control_sql" == *"'luks-monitor'"* && "$control_sql" == *"'host_name') = 'soleur-web-platform'"* \
+   && "$control_sql" == *"INTERVAL 36 HOUR"* && "$control_sql" != *"_SYSTEMD_UNIT"* && "$control_sql" != *"toHour"* \
    && "$control_sql" == *'$BS_TABLE_S3'* ]]; then
-  ok "positive-control SQL counts ANY luks-monitor row (no unit/hour conjunct) over hot+archive"
+  ok "positive-control SQL counts ANY web-1 luks-monitor row in 36 h (no unit/hour conjunct) over hot+archive"
 else
-  no "positive-control SQL is narrowed or hot-only: ${control_sql:0:300}"
+  no "positive-control SQL is narrowed, unscoped or hot-only: ${control_sql:0:300}"
 fi
 # Output rule: dates and counts only — never a message needle, credential or host.
 if [[ "$OUT" != *"LUKS-backed"* && "$OUT" != *fixture-pass* && "$OUT" != *bq.example.test* ]]; then
@@ -237,8 +292,8 @@ lcr_case "garbage line" $'2026-09-28\nnot-a-date\n' RC1
 echo ""
 echo "=== luks-monitor-host-timer-8706.test.sh: ${passes} passed, ${fails} failed ==="
 # Non-degeneracy floor: a suite that silently stopped running its cases must not report green.
-if [[ "$passes" -lt 24 ]]; then
-  echo "FAIL: only $passes assertions passed (floor 24) — a case block stopped running" >&2
+if [[ "$passes" -lt 27 ]]; then
+  echo "FAIL: only $passes assertions passed (floor 27) — a case block stopped running" >&2
   exit 1
 fi
 [[ "$fails" -eq 0 ]] || exit 1

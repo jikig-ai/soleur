@@ -703,10 +703,12 @@ resource "logtail_exploration_alert" "claude_cost_capture_dark" {
 # ── #8706: web-1's daily LUKS at-rest probe has stopped reporting ───────────────────────────────
 # luks-monitor.timer never existed on web-1 for nine weeks and nothing noticed: the shared
 # betteruptime_heartbeat.workspaces_luks has a second pusher (workspaces-luks-verify.yml, over SSH)
-# that kept it green. This alert singles out the HOST unit. Under luks-monitor.service every log()
-# line is journaled twice; the stdout copy always carries _SYSTEMD_UNIT=luks-monitor.service
-# (measured 100% on stdout rows; logger rows drop it about half the time). The verify job's rows
-# carry session-N.scope or no unit, so they can never keep this quiet.
+# that kept it green. This alert singles out the HOST unit on web-1. Under luks-monitor.service
+# every log() line is journaled twice; the stdout copy carries _SYSTEMD_UNIT (measured 100% on the
+# stdout rows of sibling web-1 units such as web-private-nic-guard.service, whose SyslogIdentifier
+# also differs from its unit name; luks-monitor.service itself has never run). logger rows drop it
+# about half the time. The verify job's rows carry session-N.scope or no unit, so they can never
+# keep this quiet. host_name scopes it to web-1: web-2 (soleur-web-2) ships to the same source.
 #
 # Window: OnCalendar=daily + RandomizedDelaySec=1800 can space two runs 24h30m (88200 s) apart,
 # so a 24 h window would read empty for up to 30 minutes on a healthy day. 27 h (97200 s) covers it
@@ -716,6 +718,8 @@ resource "logtail_exploration_alert" "claude_cost_capture_dark" {
 # Live-probed 2026-09-27 (7 days, hot+archive): as written 0 (the dark state this pages on);
 # control with the unit swapped for inngest-heartbeat.service and no needle 39228; the unit
 # conjunct dropped 9 (the verify job's OK rows — the unit conjunct is what excludes them).
+# The host_name conjunct was added at review (2026-09-27): stdout rows from web-1 units read
+# host_name='soleur-web-platform', web-2's read 'soleur-web-2' (measured over 2 days).
 locals {
   luks_monitor_host_timer_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
@@ -724,6 +728,7 @@ locals {
       AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
       AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'
       AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%'
+      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
   SQL
 
   luks_monitor_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706"
@@ -773,7 +778,7 @@ resource "logtail_exploration_alert" "luks_monitor_host_timer_dark" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "web-1's nightly encryption self-check (luks-monitor.service) has not reported in about 27 hours. This is not yet a data exposure: the volume is still encrypted, and the daily workspaces-luks-verify job still checks it. First step: check whether ANY luks-monitor rows arrived at all; total silence means the log pipeline, not the host. Runbook: ${local.luks_monitor_runbook_url}"
+  incident_cause = "web-1's nightly encryption self-check (luks-monitor.service) has not recorded a PASSING run in about 27 hours. Either the host check is not running, or it runs and fails one of its checks; a failing check is the incident, so look first for a luks-monitor FAIL row or a workspaces-luks-drift event. First step: check whether ANY luks-monitor rows arrived at all; total silence means the log pipeline, not the host. The daily workspaces-luks-verify job checks the volume independently. Runbook: ${local.luks_monitor_runbook_url}"
   metadata = {
     runbook = local.luks_monitor_runbook_url
   }
