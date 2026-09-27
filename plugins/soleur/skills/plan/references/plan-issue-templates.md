@@ -99,6 +99,10 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
   expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
                    # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
@@ -295,6 +299,10 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
   expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
                    # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
@@ -506,6 +514,10 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
   expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
                    # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
