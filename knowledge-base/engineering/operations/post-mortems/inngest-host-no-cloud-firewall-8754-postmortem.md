@@ -155,3 +155,4 @@ An accepted-residual comment named an actor that never existed. A review found t
 | #8870 | Add a standing no-SSH probe that alarms when any declared host firewall has an empty `applied_to` | open |
 | #6442 | Move web, git-data, registry and grok_dogfood from `hcloud_firewall_attachment` to `firewall_ids` (zero-window recipe posted on the issue) | open |
 | #8867 | Make the Art. 4(12) determination for the 2026-07-27/28 laptop compromise, which closes limb L3 of this incident's determination | open |
+| #9061 | Stop `apply-deploy-pipeline-fix.yml` closing web-platform drift issues it did not resolve: it auto-closed #8754 on 2026-09-25 while this gap was still open, and the next drift run filed duplicate #8908 (added 2026-09-27 by #8754 PR-B, #9062) | open |
