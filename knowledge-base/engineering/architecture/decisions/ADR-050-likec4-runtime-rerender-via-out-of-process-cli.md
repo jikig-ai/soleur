@@ -308,3 +308,39 @@ public share route (`app/api/shared/[token]/c4`) neither shows nor reports the s
 to the tenant repository. #8740 stays open until a read-only census re-run finds no zero-view model:
 a quiet Sentry window is not accepted as repair evidence, because the viewer is flag-gated to
 `role-dev` (`c4-visualizer`) and the affected tenant cannot reach it.
+
+## Addendum — 2026-09-26 (#8966): staleness is derived on every read, not an event
+
+Before this amendment the stale-diagram banner was a losable client `useState` fed by save
+outcomes and `c4_diagram_saved` frames — a dropped frame, a remount, or an out-of-band source
+push left a stale diagram unbannered. `GET /api/kb/c4/project` now DERIVES the verdict on
+every read (`server/c4-staleness.ts`, wired into the project route): the newest
+`model.likec4.json` commit's dir subtree (located in the commit's root tree, one
+`git/trees` call each) is content-diffed against the Contents listing the route already
+fetched. Only likec4 sources (`LIKEC4_SOURCE_EXTENSIONS`) and subdirectory tree shas
+participate — a subdir sha changes iff a nested source changed, so the diff is exact with no
+recursion; `.md` writes, the model file itself, and likec4's ignored dirs can neither flag
+stale nor mask a stale source. This is a sha/set comparison, never date-ordered.
+
+The writer's own two-commit window is the one race left: `c4-writer.ts` commits the `.c4`
+source first and the model in a second commit, so a GET landing between them sees "new
+source, old model" during a save that is SUCCEEDING. A diff whose dir tip is younger than
+the render budget (`STALE_GRACE_MS` = 120 s, sized off `c4-render.ts`'s ~61 s worst-case
+stage+slot+spawn window plus commit/propagation slack) suppresses the verdict — the saver's
+own post-return reload re-reads once the model commit has landed, so the suppression
+self-corrects. Every derivation failure — transport, a truncated root tree that lost the
+dir entry, a dir with no model commit — answers ABSENT and is reported
+(`feature=c4-project-read`, `op=stale-derivation`); absent is never normalized to `false`,
+which would let an underived read clear a banner a dropped frame earned.
+
+Client precedence is a union at render: `stale` present ⇒ authoritative (a `false` clears a
+frame-set banner, a `true` resurrects it on remount or out-of-band push); absent ⇒ the
+frame/outcome state applies, EXCEPT the supersede shape (`rerendered:false` with no
+diagnostic), which never self-sets — a superseding save's model commit is already live.
+`c4-workspace.tsx` and `c4-diagram.tsx` share `staleOutcomeVerdict`/`staleActionLine` in
+`c4-diagnostics.tsx` so the two consumers cannot drift; the banner's line 2 is resolved by
+the `c4-edit` flag and the folder, so flag-off users are pointed at the Concierge (or the
+repo export for non-canonical dirs) instead of a dead Save affordance. No WS schema, PUT, or
+share-route change; the public share route still omits `stale`. The emit site counts all
+three outcomes (`feature=c4-save-outcome`, `outcome=rerendered|rerendered-false|emit-failed`)
+so the silent-fallback incidence is readable as a rate.

@@ -30,6 +30,10 @@ import {
   C4_EDIT_FLAG,
   type C4DiagramSavedDetail,
 } from "@/lib/c4-constants";
+import {
+  staleActionLine,
+  staleOutcomeVerdict,
+} from "@/components/kb/c4-diagnostics";
 
 function ResizeHandle() {
   // Active/drag wash is brand gold (`soleur-accent-gold-fill/70`), grey on hover
@@ -77,8 +81,16 @@ export default function C4Workspace({
     dirPath: string;
     diagnostic: string | null;
   } | null>(null);
-  const stale = staleSave?.dirPath === dirPath;
-  const staleDiagnostic = stale ? staleSave.diagnostic : null;
+  // #8966 — the GET-derived verdict is authoritative when present; the
+  // outcome-driven `staleSave` is only the fallback for a GET that produced
+  // none (derivation failure / no model commit / in-flight save window).
+  // `??` keeps undefined distinct from false: absent is "no information".
+  const stale = data?.stale ?? staleSave?.dirPath === dirPath;
+  const staleDiagnostic = stale
+    ? staleSave?.dirPath === dirPath
+      ? staleSave.diagnostic
+      : null
+    : null;
 
   // The save-outcome transition shared by the Code panel (`onSaved`) and the
   // #8739 Concierge-save event listener: refetch, then reconcile THIS folder's
@@ -89,12 +101,20 @@ export default function C4Workspace({
   const applySavedOutcome = useCallback(
     async (rerendered: boolean, diagnostic?: string | null, silent?: boolean) => {
       await reload({ silent });
+      // #8966: the outcome NEVER overrules a derived verdict — the render-time
+      // `data.stale ?? …` union handles that. The helper only decides what the
+      // outcome contributes as the absent-verdict fallback; a supersede shape
+      // (rerendered:false, no diagnostic) defers entirely — a superseding
+      // save's model commit is already live.
+      const v = staleOutcomeVerdict(rerendered, diagnostic);
       setStaleSave((cur) =>
-        rerendered
-          ? cur?.dirPath === dirPath
-            ? null
-            : cur
-          : { dirPath, diagnostic: diagnostic ?? null },
+        !v.apply
+          ? cur
+          : v.stale
+            ? { dirPath, diagnostic: v.diagnostic }
+            : cur?.dirPath === dirPath
+              ? null
+              : cur,
       );
     },
     [dirPath, reload],
@@ -291,6 +311,7 @@ export default function C4Workspace({
                   hasModel={!!data.dump}
                   stale={stale}
                   staleDiagnostic={staleDiagnostic}
+                  staleAction={staleActionLine(c4EditEnabled, dirPath)}
                 />
                 <div className="relative min-h-0 flex-1">
                   <C4Canvas dump={data.dump} initialViewId={viewId} />

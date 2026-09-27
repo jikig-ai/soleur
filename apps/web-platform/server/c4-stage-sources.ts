@@ -54,7 +54,9 @@ export const LIKEC4_CONFIG_NAMES: readonly string[] = Object.freeze([
 // likec4@1.50.0 `_chunks/binary.mjs`.
 export const LIKEC4_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([".c4", ".likec4", ".like-c4"]);
 // Directories likec4's project crawl excludes (`_chunks/binary.mjs`, `ed`).
-const LIKEC4_IGNORED_DIRS: readonly string[] = Object.freeze(["node_modules", ".git", ".svn", ".yarn", ".pnpm"]);
+// Exported for server/c4-staleness.ts, whose snapshot compare must exclude the
+// same set — churn under them is not a source change.
+export const LIKEC4_IGNORED_DIRS: readonly string[] = Object.freeze(["node_modules", ".git", ".svn", ".yarn", ".pnpm"]);
 
 // Caps and concurrency: plan 2026-09-24 "Technical Considerations" (worst case
 // ~53 API calls per save against the installation's shared 5,000/h budget and
@@ -189,7 +191,9 @@ async function getWithRetry<T>(ref: RepoRef, path: string): Promise<T> {
   }
 }
 
-function isSourceName(rel: string): boolean {
+// Exported for server/c4-staleness.ts — the canonical "would likec4 read this
+// name as a source" predicate; both sides of its snapshot compare filter on it.
+export function isSourceName(rel: string): boolean {
   const base = rel.slice(rel.lastIndexOf("/") + 1);
   // likec4 ignores a file named exactly like an extension (".c4").
   return LIKEC4_SOURCE_EXTENSIONS.some((ext) => base.endsWith(ext) && base !== ext);

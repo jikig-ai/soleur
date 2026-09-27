@@ -85,6 +85,7 @@ import {
 import {
   reportSilentFallback,
   warnSilentFallback,
+  infoSilentFallback,
   mirrorWithDebounce,
   mirrorP0Deduped,
   hashUserId,
@@ -2340,6 +2341,11 @@ export const realSdkQueryFactory: QueryFactory = async (
           // transient disconnect — and the live-only frame is lost; the
           // workspace refetches on concierge reopen / next mount to cover it.
           onDiagramSaved: ({ dirPath, rerendered, diagnostic }) => {
+            // #8966 — count ALL THREE outcomes on the same feature slug: the
+            // silent-fallback incidence is only readable as a rate, and a rate
+            // needs the success denominator next to it. `outcome` is a tag
+            // (low-cardinality, Sentry-queryable), never the op.
+            let outcome = rerendered ? "rerendered" : "rerendered-false";
             try {
               defaultSendToClient(args.userId, {
                 type: "c4_diagram_saved",
@@ -2351,6 +2357,7 @@ export const realSdkQueryFactory: QueryFactory = async (
                 diagnostic: diagnostic ? diagnostic.slice(0, 20000) : diagnostic,
               });
             } catch (err) {
+              outcome = "emit-failed";
               // null first arg, never a real Error — the pino mirror
               // captures a passed Error first and Sentry drops the tagged
               // second capture (#8629); err identity lives in `extra`.
@@ -2364,6 +2371,12 @@ export const realSdkQueryFactory: QueryFactory = async (
                 message: "c4_diagram_saved frame emit threw",
               });
             }
+            infoSilentFallback(null, {
+              feature: "c4-save-outcome",
+              tags: { outcome },
+              extra: { dirPath },
+              message: "c4_diagram_saved frame outcome",
+            });
           },
         });
         c4ToolName = C4_TOOL_FQN;

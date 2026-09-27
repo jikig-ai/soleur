@@ -20,6 +20,10 @@ import {
   C4_EDIT_FLAG,
   type C4DiagramSavedDetail,
 } from "@/lib/c4-constants";
+import {
+  staleActionLine,
+  staleOutcomeVerdict,
+} from "@/components/kb/c4-diagnostics";
 
 export default function C4Diagram({
   viewId,
@@ -46,13 +50,17 @@ export default function C4Diagram({
   // gated behind `c4-edit` (default OFF), composing with the existing `readOnly`
   // gate — the Code tab shows only when `!readOnly && c4EditEnabled`.
   const c4EditEnabled = useOptionalFeatureFlag(C4_EDIT_FLAG);
-  // See c4-workspace.tsx: stale flips true only when the server's post-save
-  // re-render (#4964) failed; on success the reloaded dump is fresh.
-  const [stale, setStale] = useState(false);
+  // See c4-workspace.tsx: the OUTCOME-driven half of the banner — the save's
+  // server re-render (#4964) result when the GET carried no verdict.
+  const [outcomeStale, setOutcomeStale] = useState(false);
   // The save's reason (#8695). onSaved switches to the Diagram tab, unmounting
   // C4CodePanel and its `Saved — <diagnostic>` line, so the banner is the only
   // place left to show it. Every save overwrites it.
   const [staleDiagnostic, setStaleDiagnostic] = useState<string | null>(null);
+  // #8966 — a GET-derived verdict is authoritative when present (remount and
+  // out-of-band pushes surface through it); absent means "no information" and
+  // the outcome state governs. `??` keeps absent distinct from false.
+  const stale = data?.stale ?? outcomeStale;
 
   // #8739 — the embed is a live consumer of the same stale state: a Concierge
   // save elsewhere in the app must refresh it too. Same contract as
@@ -65,8 +73,14 @@ export default function C4Diagram({
       if (d?.dirPath !== dirPath || typeof d.rerendered !== "boolean") return;
       void (async () => {
         await reload({ silent: true });
-        setStale(!d.rerendered);
-        setStaleDiagnostic(d.diagnostic ?? null);
+        // #8966: shared reconcile — a supersede shape (rerendered:false, no
+        // diagnostic) defers to the GET verdict instead of self-setting; a
+        // present `stale` outranks this contribution at render either way.
+        const v = staleOutcomeVerdict(d.rerendered, d.diagnostic ?? null);
+        if (v.apply) {
+          setOutcomeStale(v.stale);
+          setStaleDiagnostic(v.diagnostic);
+        }
       })();
     };
     window.addEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
@@ -123,6 +137,7 @@ export default function C4Diagram({
             hasModel={!!data.dump}
             stale={stale}
             staleDiagnostic={staleDiagnostic}
+            staleAction={staleActionLine(c4EditEnabled, dirPath)}
           />
           {tab === "diagram" && (
             <div className="relative h-[600px] w-full">
@@ -138,8 +153,11 @@ export default function C4Diagram({
                 allowResave={stale}
                 onSaved={async (rerendered, diagnostic) => {
                   await reload();
-                  setStale(!rerendered);
-                  setStaleDiagnostic(diagnostic ?? null);
+                  const v = staleOutcomeVerdict(rerendered, diagnostic);
+                  if (v.apply) {
+                    setOutcomeStale(v.stale);
+                    setStaleDiagnostic(v.diagnostic);
+                  }
                   setTab("diagram");
                 }}
               />
