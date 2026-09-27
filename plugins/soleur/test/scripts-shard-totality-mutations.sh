@@ -4,7 +4,7 @@
 #
 # Guard 1 (plugins/soleur/test/scripts-shard-totality.test.sh) asserts that every scripts-group
 # registration is assigned to exactly one matrix leg. A guard that cannot be driven RED is
-# vacuous, so this battery breaks the partition twenty-seven ways (DECLARED_TOTAL below) and
+# vacuous, so this battery breaks the partition forty-two ways (DECLARED_TOTAL below) and
 # requires the guard to notice each one.
 #
 # HOW THIS BATTERY AVOIDS THE FAILURES ITS OWN CLASS IS KNOWN FOR:
@@ -44,7 +44,9 @@
 # to the repo: every invocation goes through Guard 1, which calls `test-all.sh --enumerate`, and
 # that mode returns at the enumerate terminator BEFORE the repo-write-boundary epilogue and starts
 # no suite at all. The only writes this file performs are its own `cp` snapshot/restore of the
-# runner, which the EXIT trap reverses and which the dirty-tree refusal at the top makes visible.
+# mutation targets and `erow`'s short-lived inert fixtures (created, read once by the guard,
+# deleted in-row, and swept by the EXIT trap) — all reversed on every exit path and made
+# visible by the dirty-tree refusal at the top.
 #
 # If a future row ever runs the runner in EXECUTING mode, this declaration is wrong: copy
 # scripts/lib/repo-write-boundary.sh into the sandbox instead of carrying this marker.
@@ -63,17 +65,18 @@ fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1"; }
 
 # --- --rows A-B: CI splits this battery across matrix legs ------------------------------------
 #
-# ci.yml runs this file twice, once per half of the declared row space, because the
-# serial battery is the longest job in the workflow. `--rows A-B` selects the
-# inclusive range of DECLARED row sites this invocation executes; unset means all.
-# The CONTROL row and instrument self-test are unconditional — they are not numbered
-# row sites and run in every half.
+# ci.yml runs this file three times, once per third of the declared row space,
+# because the serial battery is the longest job in the workflow. `--rows A-B`
+# selects the inclusive range of DECLARED row sites this invocation executes;
+# unset means all.
+# The CONTROL row and instrument self-test are unconditional — they are not
+# numbered row sites and run in every leg.
 #
 # DECLARED_TOTAL is a CONSTANT, pinned here and asserted against the counted row
 # sites at the bottom: a row added without bumping it reds the battery everywhere,
-# which is what keeps the per-half floors honest (each half must see the full
+# which is what keeps the per-leg floors honest (each leg must see the full
 # declared space, not just the sites inside its own range).
-DECLARED_TOTAL=27
+DECLARED_TOTAL=42
 ROWS_LO=1
 ROWS_HI=0        # 0 = unset, meaning "all declared rows"
 while (( $# > 0 )); do
@@ -119,18 +122,33 @@ WORK="$(mktemp -d -t shard-mut.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; 
 PRISTINE_RUNNER="$WORK/test-all.sh.pristine"
 PRISTINE_GUARD="$WORK/guard.pristine"
 PRISTINE_CI="$WORK/ci.yml.pristine"
+PRISTINE_TSV="$WORK/suite-shard-legs.tsv.pristine"
+PRISTINE_ORPHAN="$WORK/lint-orphan.pristine"
 cp "$RUNNER" "$PRISTINE_RUNNER" || { echo "FATAL: pristine copy failed" >&2; exit 2; }
 cp "$GUARD"  "$PRISTINE_GUARD"  || { echo "FATAL: pristine copy failed" >&2; exit 2; }
 cp "$CI_YML" "$PRISTINE_CI"     || { echo "FATAL: pristine copy failed" >&2; exit 2; }
+cp "$REPO_ROOT/scripts/suite-shard-legs.tsv" "$PRISTINE_TSV" \
+  || { echo "FATAL: pristine copy failed" >&2; exit 2; }
+cp "$REPO_ROOT/scripts/lint-orphan-test-suites.test.sh" "$PRISTINE_ORPHAN" \
+  || { echo "FATAL: pristine copy failed" >&2; exit 2; }
 
 restore_all() {
   cp "$PRISTINE_RUNNER" "$RUNNER"
   cp "$PRISTINE_GUARD"  "$GUARD"
   cp "$PRISTINE_CI"     "$CI_YML"
+  cp "$PRISTINE_TSV"  "$REPO_ROOT/scripts/suite-shard-legs.tsv"
+  cp "$PRISTINE_ORPHAN" "$REPO_ROOT/scripts/lint-orphan-test-suites.test.sh"
 }
 # Restore on ANY exit path, including an abort mid-row. Leaving a mutated runner on disk would
-# poison every later suite in the same run.
-trap 'restore_all; rm -rf "$WORK"' EXIT
+# poison every later suite in the same run. EPHEMERAL_FILES are census-tree fixtures an
+# `erow` may not have removed before an abort — the next run's census would report a
+# leftover as an unregistered declarer, so the trap sweeps them (a leak is loud, never
+# silent, and the trap is what keeps it absent).
+trap 'restore_all
+      for _f in "${EPHEMERAL_FILES[@]:-}"; do
+        [[ -n "$_f" ]] && rm -f "$_f" && rmdir "$(dirname "$_f")" 2>/dev/null
+      done
+      rm -rf "$WORK"' EXIT
 
 # REFUSE TO RUN ON A DIRTY TARGET (#7902 review). This battery mutates tracked files in place and
 # restores them from a pristine copy taken at ITS start — so a concurrent edit to any target is
@@ -145,7 +163,9 @@ if [[ "${SHARD_BATTERY_ALLOW_DIRTY:-}" != "1" ]]; then
   _dirty=$(cd "$REPO_ROOT" && git status --porcelain -- \
     scripts/test-all.sh \
     .github/workflows/ci.yml \
-    plugins/soleur/test/scripts-shard-totality.test.sh 2>/dev/null || true)
+    plugins/soleur/test/scripts-shard-totality.test.sh \
+    scripts/suite-shard-legs.tsv \
+    scripts/lint-orphan-test-suites.test.sh 2>/dev/null || true)
   if [[ -n "${_dirty//[[:space:]]/}" ]]; then
     echo "REFUSING: this battery mutates and then RESTORES its targets, which would discard the" >&2
     echo "          uncommitted changes below. Commit or stash them first, or set" >&2
@@ -206,6 +226,9 @@ PY
 GIT_STUB_DIR="$WORK/bin"
 mkdir -p "$GIT_STUB_DIR" || { echo "FATAL: could not create the git-stub dir" >&2; exit 2; }
 REAL_GIT="$(command -v git)" || { echo "FATAL: git not found" >&2; exit 2; }
+# %q-escape before interpolating into the generated script — a quote-bearing
+# path under a hostile PATH would otherwise break the stub's exec line.
+printf -v _real_git_q '%q' "$REAL_GIT" || { echo "FATAL: git path escape failed" >&2; exit 2; }
 cat > "$GIT_STUB_DIR/git" <<EOF
 #!/usr/bin/env bash
 # Find the SUBCOMMAND: skip global options, and note that \`-c\` and \`-C\` each consume the NEXT
@@ -221,13 +244,15 @@ while (( i < \${#args[@]} )); do
     *) break ;;
   esac
 done
-exec "$REAL_GIT" "\$@"
+exec $_real_git_q "\$@"
 EOF
 chmod +x "$GIT_STUB_DIR/git" || { echo "FATAL: chmod on the git stub failed" >&2; exit 2; }
 # The stub must be BOTH inert for non-diff verbs and silent for diff, or the guard it wraps is
 # measuring the stub rather than the runner. Checked here, before any row runs.
 "$GIT_STUB_DIR/git" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || { echo "FATAL: git stub broke a non-diff verb (rev-parse)" >&2; exit 2; }
+"$GIT_STUB_DIR/git" -C "$REPO_ROOT" ls-files --cached >/dev/null 2>&1 \
+  || { echo "FATAL: git stub broke a non-diff verb (ls-files — the guard's census enumeration rides this path)" >&2; exit 2; }
 [[ -z "$("$GIT_STUB_DIR/git" -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)" ]] \
   || { echo "FATAL: git stub did not blank the diff it exists to blank" >&2; exit 2; }
 
@@ -249,6 +274,31 @@ guard_rc() {
   echo $?
 }
 
+# Shared verdict scoring for row()/erow()/frow()/hfrow(): want is RED|GREEN,
+# want_sig (optional) is a fixed string the guard's output MUST contain for a RED
+# verdict to count — it binds the verdict to the named arm, so a red raised by an
+# unrelated arm (or an incidental second failure) can never satisfy the row.
+_score_row_rc() {
+  local id="$1" rc="$2" want="$3" desc="$4" want_sig="${5:-}"
+  if [[ "$want" == "RED" ]]; then
+    if (( rc != 0 )); then
+      if [[ -n "$want_sig" ]] && ! grep -qF "$want_sig" "$WORK/guard_out"; then
+        fail "$id — guard went RED but NOT via the named arm ('$want_sig' absent from guard output): $(tail -3 "$WORK/guard_out" | tr '\n' ' ')"
+      else
+        pass "$id — guard went RED as required ($desc)"
+      fi
+    else
+      fail "$id — SURVIVOR: guard stayed GREEN under '$desc'. Either the fixtures do not exercise the property, or the mutant is equivalent — decide which; do not leave it unlabelled."
+    fi
+  else
+    if (( rc == 0 )); then
+      pass "$id — guard stayed GREEN as required ($desc)"
+    else
+      fail "$id — guard went RED on a must-PASS input ($desc); it is over-tight: $(tail -3 "$WORK/guard_out" | tr '\n' ' ')"
+    fi
+  fi
+}
+
 # One mutation row, end to end: apply -> assert landed -> read verdict -> restore -> re-verify.
 # Optional 7th arg `want_sig`: a fixed string the guard's output MUST contain for a RED
 # verdict to count — binds the verdict to the named arm, so a red raised by an unrelated
@@ -260,6 +310,8 @@ row() {
     "$RUNNER") pristine="$PRISTINE_RUNNER" ;;
     "$GUARD")  pristine="$PRISTINE_GUARD" ;;
     "$CI_YML") pristine="$PRISTINE_CI" ;;
+    "$REPO_ROOT/scripts/suite-shard-legs.tsv") pristine="$PRISTINE_TSV" ;;
+    "$REPO_ROOT/scripts/lint-orphan-test-suites.test.sh") pristine="$PRISTINE_ORPHAN" ;;
     *) fail "$id — unknown file $file"; return ;;
   esac
 
@@ -281,23 +333,57 @@ row() {
     exit 2
   fi
 
-  if [[ "$want" == "RED" ]]; then
-    if (( rc != 0 )); then
-      if [[ -n "$want_sig" ]] && ! grep -qF "$want_sig" "$WORK/guard_out"; then
-        fail "$id — guard went RED but NOT via the named arm ('$want_sig' absent from guard output): $(tail -3 "$WORK/guard_out" | tr '\n' ' ')"
-      else
-        pass "$id — guard went RED as required ($desc)"
-      fi
-    else
-      fail "$id — SURVIVOR: guard stayed GREEN under '$desc'. Either the fixtures do not exercise the property, or the mutant is equivalent — decide which; do not leave it unlabelled."
-    fi
-  else
-    if (( rc == 0 )); then
-      pass "$id — guard stayed GREEN as required ($desc)"
-    else
-      fail "$id — guard went RED on a must-PASS input ($desc); it is over-tight: $(tail -3 "$WORK/guard_out" | tr '\n' ' ')"
-    fi
+  _score_row_rc "$id" "$rc" "$want" "$desc" "$want_sig"
+}
+
+# An ephemeral-fixture row: writes a file INSIDE the census tree that must never
+# be committed (a permanent fixture would red every run — the census reads
+# untracked files too), reads the verdict, removes the file, and asserts the
+# removal. Every created path lands in EPHEMERAL_FILES so the EXIT trap sweeps
+# an abort mid-row (the trap's comment explains why a leak is loud but absent).
+# Fixture content is inert by construction — a declaration line or an uncalled
+# function body; nothing here is sourced or executed.
+EPHEMERAL_FILES=()
+erow() {
+  local id="$1" relpath="$2" content="$3" want="$4" desc="$5" want_sig="${6:-}"
+  local full="$REPO_ROOT/$relpath"
+  # Fixture paths stay inside the census tree — no absolute paths, no `..`
+  # (mirroring the guard's own rejection on extracted command tokens).
+  case "$relpath" in
+    /*|*..*) fail "$id — fixture path '$relpath' escapes the repo root (absolute or '..') — erow fixtures stay inside the census tree"; return ;;
+  esac
+  # Refuse to clobber anything real: printf > would silently truncate a tracked
+  # file or a developer's scratch file and rm -f would then delete it — neither
+  # the pristine set nor the dirty-check watches fixture paths. `-L` catches a
+  # dangling symlink too (it fails -e but printf would follow it).
+  if [[ -e "$full" || -L "$full" ]]; then
+    fail "$id — fixture path $relpath already exists — refusing to clobber a real file"
+    return
   fi
+  mkdir -p "$(dirname "$full")" || { fail "$id — could not create fixture dir for $relpath"; return; }
+  # Register BEFORE the write: a failed printf can still leave a partial file
+  # behind, and the trap sweep covers every path the row ever created.
+  EPHEMERAL_FILES+=("$full")
+  if ! printf '%s\n' "$content" > "$full"; then
+    # Remove NOW as well as on the trap — a leftover fixture sits inside the
+    # census tree and would contaminate every guard invocation after this one.
+    rm -f "$full"; rmdir "$(dirname "$full")" 2>/dev/null || true
+    fail "$id — fixture write failed for $relpath"
+    return
+  fi
+
+  local rc; rc=$(guard_rc)
+
+  rm -f "$full"
+  # rmdir removes the directory ONLY when this row's file was its last occupant —
+  # a dir holding real content survives silently.
+  rmdir "$(dirname "$full")" 2>/dev/null || true
+  if [[ -e "$full" ]]; then
+    echo "FATAL: ephemeral fixture $relpath did not remove — it would poison the next run's census." >&2
+    exit 2
+  fi
+
+  _score_row_rc "$id" "$rc" "$want" "$desc" "$want_sig"
 }
 
 # A fixture-manifest row: point SOLEUR_SHARD_MANIFEST at a synthesized manifest for
@@ -309,7 +395,7 @@ frow() {
   local id="$1" fixture="$2" want="$3" desc="$4"
   local rc
   rc=$(SOLEUR_SHARD_MANIFEST="$fixture" guard_rc)
-  _score_frow_rc "$id" "$rc" "$want" "$desc"
+  _score_row_rc "$id" "$rc" "$want" "$desc"
 }
 
 # The heavy sibling: same contract through SOLEUR_SHARD_MANIFEST_HEAVY, so the
@@ -318,24 +404,7 @@ hfrow() {
   local id="$1" fixture="$2" want="$3" desc="$4"
   local rc
   rc=$(SOLEUR_SHARD_MANIFEST_HEAVY="$fixture" guard_rc)
-  _score_frow_rc "$id" "$rc" "$want" "$desc"
-}
-
-_score_frow_rc() {
-  local id="$1" rc="$2" want="$3" desc="$4"
-  if [[ "$want" == "RED" ]]; then
-    if (( rc != 0 )); then
-      pass "$id — guard went RED as required ($desc)"
-    else
-      fail "$id — SURVIVOR: guard stayed GREEN under '$desc'"
-    fi
-  else
-    if (( rc == 0 )); then
-      pass "$id — guard stayed GREEN as required ($desc)"
-    else
-      fail "$id — guard went RED on a must-PASS input ($desc); it is over-tight: $(tail -3 "$WORK/guard_out" | tr '\n' ' ')"
-    fi
-  fi
+  _score_row_rc "$id" "$rc" "$want" "$desc"
 }
 
 # --- CONTROL: the unmutated tree must be GREEN ----------------------------------------------
@@ -724,6 +793,199 @@ in_range && row "ROWS-SWAP" "$RUNNER" \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
   run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
   GREEN "swapped registration order tiles identically (ranges sort before the tile check)"
+
+# --- Hardening residual rows (#9035) -------------------------------------------------------------
+#
+# The #9027 review mapped the tiling arms' residual windows: Arm A had no
+# committed driver, the `rows:` census and DECLARED_TOTAL readers each knew
+# one spelling, the extractor normalized garbage suffixes silently, and both
+# census scopes were allowlist-narrow. The guard side of every row below is
+# the widening shipped in the same PR — drivers are meaningless without the
+# arms, arms unverifiable without the drivers.
+
+# ROWS-CI-GAP: Arm A's committed driver — widen the last leg's lo-bound so
+# battery row 29 executes in no CI leg (the run_suite ROWS-GAP sibling for
+# the ci.yml matrix). The singleton key stays 1, so the verdict must arrive
+# through the tile check.
+in_range && row "ROWS-CI-GAP" "$CI_YML" \
+  '        rows: ["1-14", "15-28", "29-42"]' \
+  '        rows: ["1-14", "15-28", "30-42"]' \
+  RED "a gapped ci.yml rows: matrix leaves battery row 29 unexecuted in every leg" \
+  'mutation row ranges do not tile'
+
+# ROWS-CI-ORDER (must-PASS): matrix literal order is not tiling order — the
+# extraction sorts ranges by lo-bound, so a reordered list is a permitted
+# non-canonical input. A guard that reds on this is over-tight.
+in_range && row "ROWS-CI-ORDER" "$CI_YML" \
+  '        rows: ["1-14", "15-28", "29-42"]' \
+  '        rows: ["29-42", "1-14", "15-28"]' \
+  GREEN "reordered matrix literals tile identically (ranges sort before the tile check)"
+
+# ROWS-CI-KEY2: a second `rows:`-shaped key anywhere in the workflow must
+# fail the singleton census — the phantom job lands between
+# shard-totality-mutations and grok-fidelity, INSIDE jobs: but outside the
+# guarded block (its `^  zz-…:` boundary flips the extractor's inj flag off
+# before its own rows line, so the census — not the extractor — carries the
+# verdict).
+in_range && row "ROWS-CI-KEY2" "$CI_YML" \
+  '        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
+
+  # Phase F #6325' \
+  '        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
+
+  zz-phantom-rows-job:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rows: ["1-2"]
+    steps:
+      - run: "true"
+
+  # Phase F #6325' \
+  RED "a second canonical rows: key in another job block evades the singleton census" \
+  'rows: matrix keys'
+
+# ROWS-CI-KEY2-SPACE: the same second key spelled `rows :` — the canonical
+# spelling was already caught; the space-tolerant spelling evaded the old
+# `^[[:space:]]+rows:` census regex entirely.
+in_range && row "ROWS-CI-KEY2-SPACE" "$CI_YML" \
+  '        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
+
+  # Phase F #6325' \
+  '        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
+
+  zz-phantom-rows-job:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rows : ["1-2"]
+    steps:
+      - run: "true"
+
+  # Phase F #6325' \
+  RED "a second rows: key spelled 'rows :' evades the singleton census" \
+  'rows: matrix keys'
+
+# ROWS-CI-KEY2-QUOTE: the same second key spelled `"rows":` — the quoted
+# spelling YAML accepts but the old census could not see.
+in_range && row "ROWS-CI-KEY2-QUOTE" "$CI_YML" \
+  '        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
+
+  # Phase F #6325' \
+  '        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
+
+  zz-phantom-rows-job:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        "rows": ["1-2"]
+    steps:
+      - run: "true"
+
+  # Phase F #6325' \
+  RED 'a second rows: key spelled "rows": evades the singleton census' \
+  'rows: matrix keys'
+
+# ROWS-MALFORMED-SUFFIX: the old extractor matched the `[0-9]+-[0-9]+`
+# PREFIX of the flag argument, so `9-16x` extracted as a clean `9-16` and
+# the malformed spec only failed at the battery's own runtime validator —
+# a failure deferred to the surface it was meant to guard. Whole-token
+# capture emits the verbatim token and the malformed-spec arm names it.
+in_range && row "ROWS-MALFORMED-SUFFIX" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16x' \
+  RED "a garbage-suffixed --rows spec normalizes to a clean range instead of failing" \
+  'malformed --rows spec'
+
+# ROWS-MALFORMED-TRISEG: same class, three-segment spec — the prefix match
+# extracted `9-16` and discarded `-24`.
+in_range && row "ROWS-MALFORMED-TRISEG" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16-24' \
+  RED "a three-segment --rows spec normalizes to a clean range instead of failing" \
+  'malformed --rows spec'
+
+# ROWS-UNRESOLVED: `bash` → `sh` drops the registration's resolvable command
+# token, so the extractor emits `<unresolved>` and the DECLARED_TOTAL arm
+# fails it — the resolvable-command requirement is the extraction boundary.
+in_range && row "ROWS-UNRESOLVED" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" sh scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  RED "a non-bash command token leaves the --rows contract unresolvable" \
+  'for <unresolved>'
+
+# ROWS-ALL-UNFLAGGED: drop BOTH --rows flags — every registration unflagged
+# beside a DECLARED_TOTAL declaration is the declared-split-ignored arm
+# (distinct from ROWS-DROP's mixed contract). The two-line anchor pins the
+# -a/-b adjacency the same way ROWS-SWAP's does.
+in_range && row "ROWS-ALL-UNFLAGGED" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
+  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh
+  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
+  RED "every registration unflagged beside a DECLARED_TOTAL declaration" \
+  'carry no --rows'
+
+# DIR1-MIDLINE: `true && run_suite` moves the call off line-start — the
+# extractor cannot see it, but the literal `--rows` remains, so Direction-1
+# reports emit < lit. (The tile arm also fires on the surviving -b range;
+# the want_sig binds the verdict to the census — it names a substring the
+# census arm's FAIL line carries and its PASS line does not.)
+in_range && row "DIR1-MIDLINE" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  '  true && run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  RED "a mid-line run_suite call hides a --rows literal from the extractor" \
+  'test-all.sh/scripts/lib but'
+
+# DIR1-LIBSUBDIR: an ephemeral lib-subdirectory file holding a --rows
+# literal — the old depth-1 `scripts/lib/*.sh` glob never reached it; the
+# recursive enumeration counts it against the extractor. The uncalled
+# function body keeps the fixture inert (nothing sources or executes it).
+in_range && erow "DIR1-LIBSUBDIR" "scripts/lib/zz/x.sh" \
+  '_zz_never_called() {
+  bash scripts/never-registered.test.sh --rows 1-2
+}' \
+  RED "a --rows literal under a lib subdirectory evades the literal census" \
+  'test-all.sh/scripts/lib but'
+
+# LEGS-COLOCATE: pin -b onto -a's leg — the committed-TSV read must report
+# both halves on leg 3 (distinct-legs arm; with no manifest override bound the
+# realized-legs read runs too and co-fails — either signature would do, and
+# `pin to legs` names the committed-pin arm directly).
+in_range && row "LEGS-COLOCATE" "$REPO_ROOT/scripts/suite-shard-legs.tsv" \
+  "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t5')" \
+  "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t3')" \
+  RED "both --rows halves pinned to the same leg defeats the split while coverage stays total" \
+  'pin to legs'
+
+# DECL-SCOPE-FOREIGN: an ephemeral battery under apps/ — outside the old
+# two-tree census — declaring DECLARED_TOTAL while no arm reaches it. The
+# repo-wide enumeration puts it inside the property by construction.
+in_range && erow "DECL-SCOPE-FOREIGN" "apps/zz-decl-scope-battery.sh" \
+  '#!/usr/bin/env bash
+# Unregistered battery fixture — declares the contract where no tiling arm reaches.
+DECLARED_TOTAL=3' \
+  RED "a DECLARED_TOTAL battery outside the census trees evades Direction-2" \
+  'NEITHER run_suite argv nor a ci.yml'
+
+# DECL-PREFIX-CENSUS: an ephemeral battery whose declaration carries an
+# `export` prefix — invisible to every bare-spelling reader — sitting
+# unregistered inside a census tree.
+in_range && erow "DECL-PREFIX-CENSUS" "scripts/zz-decl-prefix-fixture.sh" \
+  '#!/usr/bin/env bash
+# Unregistered battery fixture — prefixed declaration spelling.
+export DECLARED_TOTAL=2' \
+  RED "an export-prefixed DECLARED_TOTAL declaration evades the census" \
+  'NEITHER run_suite argv nor a ci.yml'
+
+# DECL-PREFIX-READER (must-PASS): the same `export` prefix on the
+# REGISTERED battery — census, per-token reader, and decl-line counter all
+# resolve 16, so the guard must stay GREEN end-to-end. A RED-only matrix
+# cannot see over-tightness; this is the tolerance proof.
+in_range && row "DECL-PREFIX-READER" "$REPO_ROOT/scripts/lint-orphan-test-suites.test.sh" \
+  'DECLARED_TOTAL=16   # the gated mutation rows M1..M16; C0/R1/R1b are unconditional' \
+  'export DECLARED_TOTAL=16   # the gated mutation rows M1..M16; C0/R1/R1b are unconditional' \
+  GREEN "an export-prefixed DECLARED_TOTAL resolves identically on the registered battery"
 
 # --- RANGE ACCOUNTING + ASSERTION FLOOR ----------------------------------------------------------
 #
