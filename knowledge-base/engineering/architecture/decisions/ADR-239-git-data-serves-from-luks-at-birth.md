@@ -217,6 +217,35 @@ hash show. Details: `git-data-rung2-rehearsal.md`.
 Status stays `adopting`; the flip rule above is unchanged, and it is also the rule that proves this
 amendment in production.
 
+## Amendment 2026-09-27 — the proof reads the LUKS-served store (#8211 PR2, proof half)
+
+**What changed.** The read-only dry run in `git-data-cutover.sh` asked the pre-PR1 question ("is the
+store still on a plaintext device?"), so after replace run 36118115758 every run refused
+`already_cut_over` before it reached the emptiness count. The store probes now read the layout this
+ADR renders:
+
+- **The polarity is inverted.** `probe=store-on-mapper` refuses any served device other than
+  `LUKS_MAPPER` (`store_not_on_mapper`), because D1 says the render never serves one.
+  `already_cut_over` is retired.
+- **A pass rests on D3's evidence, not on the absence of a refusal.** `probe=store-verified` reads,
+  in one ssh session, that the store is still served by that device, that its filesystem has a
+  UUID, that the wrappers' marker holds that UUID on its first line, and that the freeze sentinel is
+  absent. It is exactly as strict as the wrappers, so a refusal means the wrappers are refusing
+  now. It makes no encryption claim: when encryption at rest became active for the Art. 30 register
+  is #8634's determination.
+- **The ADR-237 addendum's "making the proof read `already_cut_over` as a pass" is discharged by
+  rebuilding the probes, not by passing that verdict.**
+- **The `DRY_RUN=1` probe chain is the `proof`** the rest of PR2 builds on, and it keeps
+  `store_not_empty`.
+
+**What remains of PR2, on #8211:** the flip; the flag-off-only rollback; the same-version redeploy;
+the ADR-220 D6 fresh replace with its LUKS key and volume rotation; and the amendment to ADR-237
+that the fresh replace needs (this ADR and the PR1 plan call it "ADR-237 D6", but ADR-237 has
+decisions 1 to 5 only). The real modes keep refusing `real_cutover_unreconciled`.
+
+Status stays `adopting`. Its flip rule is unchanged; the status flip lands in a docs PR after the
+first `clear` dry run, following the ADR-237 precedent.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-git-data-cutover-real-modes-plan.md`
