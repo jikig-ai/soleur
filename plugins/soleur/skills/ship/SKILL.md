@@ -2249,6 +2249,8 @@ Bash `run_in_background` is forbidden on all harnesses — opaque until completi
 
 **Claude — Monitor tool loop** (Grok: same loop body via AwaitShell/Shell per `pollInstructions()`):
 
+**The plugin root is fixed only in delivered text.** The loader replaced the token in the fence below when the Skill tool delivered this skill; the root for this session is `${CLAUDE_PLUGIN_ROOT}` (a literal token there means you are reading the file on disk). A fence copied from `SKILL.md` on disk — `awk`/`sed`/Read, or a re-read after compaction — keeps the raw token, and a Monitor shell does not export the variable, so the poll opens with `[ship.phase7.precondition] … CLAUDE_PLUGIN_ROOT is unset` and BEHIND auto-sync off. Paste the fence from the delivered text, or prefix the Monitor command with `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` using that path, not a path derived from the checkout. Read the poll's first event.
+
 Use the **Monitor tool** with this shell loop (state-change + heartbeat, max `MAX_POLL_MIN` iterations = `MAX_POLL_MIN` minutes). Beyond the terminal MERGED/CLOSED exits it covers three unmergeable states: **required-check failure** (exit at the first failing required check, named on stdout — Monitor streams stdout only), **BEHIND** (auto-sync main in, up to 6 attempts, then a warning naming either a fast-moving main or a run of failed fetches), and **DIRTY** (server-side conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
 ```bash

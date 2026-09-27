@@ -33,6 +33,10 @@
 #   14. PR set to `#4387` → refused before the poll (exit 2)
 #   15. fetch fails then a push → the hatch counts pushes, so it does not fire
 #   16. sync no-op (exit 11) → sync_noop line, not counted, never "pushed"
+#   17b/17c. DELIVERED text (token substituted literally, spaced root) with a
+#       hostile root exported / the variable unset → the loader's literal wins,
+#       one sync pushes; plus prose pins: both SKILL.md files tell an agent that
+#       copied the fence from disk how to supply the root
 #
 # Every row also asserts: no git call fell through to the mock catch-all, and no
 # temp file (the per-poll snapshot) outlived the block. CLAUDE_PLUGIN_ROOT is a
@@ -1501,7 +1505,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=380
+MIN_VERDICTS=420
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1
