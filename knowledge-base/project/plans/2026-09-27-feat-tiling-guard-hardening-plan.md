@@ -16,6 +16,39 @@ brand_survival_threshold: none
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed); no spec.md exists for this branch because no brainstorm ran.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27
+**Sections enhanced:** Technical Considerations, Guard Contract, Dependencies & Risks
+**Research agents used:** none — this plan ran inside a Devin subagent with no
+Task-spawn capability, so every deepen-plan pass (halt gates 4.6-4.11,
+precedent-diff 4.4, verify-the-negative, self-audit, quality checklist) was
+performed inline by the planning orchestrator with mechanical verification —
+`Reviewed-Coverage: sequential-fallback`, no independent review is claimed.
+
+### Key Improvements (deepen pass)
+
+1. Census precedent verified: `apps/web-platform/infra/web-host-provisioner-parity.test.sh`
+   already enumerates `git -C <repo> ls-files -z --cached --others --exclude-standard`
+   with fail-loud on nonzero rc — the Direction-2 widening adopts that exact
+   form rather than a novel one.
+2. Clean-tree property verified empirically: the recursive comment-stripped
+   `scripts/lib/**` census contains zero `--rows` literals today, so the
+   widened Direction-1 cannot false-positive the existing tree.
+3. New runtime dependency surfaced: the guard gains its first `git` call;
+   the battery's `GIT_STUB_DIR` delegates every non-`diff` verb to the real
+   git, so `guard_rc` exercises the enumeration unchanged.
+
+### New Considerations Discovered
+
+- Ephemeral fixtures must be `.sh`-named to hit the extension arm of the
+  census predicate, and `scripts/lib/zz/` needs `mkdir -p` + dir removal in
+  the trap, not only file removal.
+- The phantom-job injections must land between `shard-totality-mutations`
+  and `grok-fidelity` so the job-block awk's `inj` flag closes on the next
+  `^  [a-z0-9_-]+:$` boundary — keeping the census arm (not the extractor)
+  the verdict's driver.
+
 ## Overview
 
 Harden the `run_suite --rows` tiling guard extended by PR #9027. The three
@@ -200,10 +233,24 @@ drivers:
   minus `**/fixtures/**` data dirs. `git ls-files` is used rather than
   `grep -r`/`find` because it never descends into `.git`, `node_modules`,
   `.worktrees`, or ignored build output — a plain recursive grep would.
+  **Precedent:** `apps/web-platform/infra/web-host-provisioner-parity.test.sh`
+  enumerates its `*.tf` universe with the identical `git -C … ls-files -z
+  --cached --others --exclude-standard` form and fails loudly on nonzero rc —
+  adopt it verbatim (precedent-diff gate 4.4).
   The ephemeral-fixture rows depend on `--others` coverage: an unregistered
   fixture file is untracked, and an untracked file inside a registration tree
   is exactly the pre-commit drift the census exists to see. Enumeration
   failure must fail the guard loudly, never degrade to an empty census.
+- **The guard gains its first `git` call.** It currently execs none; the
+  census adds `git -C "$REPO_ROOT" ls-files`. The battery's `GIT_STUB_DIR`
+  delegates every non-`diff` verb to the real git, so `guard_rc` exercises
+  the enumeration unchanged — but a `git` absence/failure must fail the
+  guard, not degrade to an empty census.
+- **Clean-tree invariance verified (2026-09-27).** The recursive
+  comment-stripped `scripts/lib/**` tree contains zero `--rows A-B` literals
+  (only a stripped comment at `test-affected-paths.sh`), so widening
+  Direction-1 cannot false-positive the existing tree — the CONTROL row
+  stays green by measurement, not assumption.
 - **One shared declaration regex.** Introduce
   `_DECL_RE`/`_DECL_PREFIX_RE` constants near the top of the guard and apply
   them at all four sites (battery ground-read `sed`, per-token `grep -lE`,
@@ -222,8 +269,11 @@ drivers:
   → assert RED + `want_sig` → remove → assert removal; every created path is
   appended to an `EPHEMERAL_FILES` array consumed by the EXIT trap so an
   abort mid-row cannot leak a census-tree file into the next run. Fixture
-  content is inert by construction (a `DECLARED_TOTAL=` line or an uncalled
-  function body) so nothing is sourced or executed.
+  names use `.sh` basenames so they hit the extension arm of the census
+  predicate without needing an exec bit or shebang; `scripts/lib/zz/` needs
+  `mkdir -p` before the write and the trap removes the file AND the now-empty
+  dir. Fixture content is inert by construction (a `DECLARED_TOTAL=` line or
+  an uncalled function body) so nothing is sourced or executed.
 - **Managed-target extension.** `LEGS-COLOCATE` mutates
   `scripts/suite-shard-legs.tsv` and `DECL-PREFIX-READER` mutates
   `scripts/lint-orphan-test-suites.test.sh`; both join the pristine-copy /
@@ -244,7 +294,10 @@ drivers:
   boundary for the phantom-job injections, `DECLARED_TOTAL=16   # the gated
   mutation rows` (unique), the TSV line `…-b\t5`, and the existing `-a`/`-b`
   run_suite lines. Anchors sit on code lines only — never comment text (the
-  2026-09-23 learning).
+  2026-09-23 learning). The phantom-job blocks land between
+  `shard-totality-mutations` and `grok-fidelity` so the job-block awk's `inj`
+  flag closes on the next `^  [a-z0-9_-]+:$` boundary — the singleton census
+  (which reads the whole file) is the verdict's driver, not the extractor.
 - **`want_sig` coverage.** Every RED row carries the 7th-arg signature bound
   to its arm's fail text so a red raised by an unrelated arm cannot satisfy
   the row.
