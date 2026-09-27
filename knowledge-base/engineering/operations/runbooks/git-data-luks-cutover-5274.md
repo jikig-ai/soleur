@@ -32,8 +32,12 @@ The real cutover does not exist yet. It is blocked on all of:
   - [ ] Step 2 — rung-2 re-rehearsal, then the evidence-only PR.
   - [ ] Step 3 — `git-data-host-replace` publishes `GIT_DATA_SSH_HOST_KEY`, and the
     `git-data-pin-redeploy.yml` run it triggers loads it (startup line `git_data_pin=present`).
-  - [ ] Step 4 — the strict dry run reads `role=git-data-auth verdict=ok`; then tick this item and flip
-    ADR-237 to `accepted` in a docs PR.
+  - [x] Step 4 — the strict dry run reads `role=git-data-auth verdict=ok`; then tick this item and flip
+    ADR-237 to `accepted` in a docs PR. Done: `git-data-cutover.yml` run
+    [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656) (from `main`,
+    2026-09-25) read `role=git-data-auth verdict=ok` with both hops pinned. The run exited 5 on
+    `verdict=already_cut_over` — git-data serves the LUKS mapper from boot since replace run
+    36118115758 — a store probe and not a host key. ADR-237 is `accepted` (addendum 2026-09-27).
   - [ ] Step 5 — every erasure left pending by the pin window is discharged.
   - [ ] Step 6 — the #5914 follow-up PR deletes the app's unpinned fallback arm and closes #5914.
   - **Flag-flip precondition (hard):** `GIT_DATA_STORE_ENABLED` is never set until the pin is present
@@ -248,7 +252,9 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
    2. Re-drive the erasure for each id. No per-id erasure trigger exists today, and none is needed
       before the first flag flip: the store cannot hold a repository while the flag has never been on,
       so the step-4 dry run clearing `store_not_empty` (zero repositories) discharges every collected
-      id. Record the ids and that dry run's id on #5914.
+      id. Record the ids and that dry run's id on #5914. **Blocked on #8211 PR2 (2026-09-27):** every
+      dry run now exits 5 on `already_cut_over` before `store_not_empty` is evaluated (run
+      36119817656 is one), so no current dry run discharges any id.
    3. If the dry run reads `store_not_empty`, stop and follow "Store not empty": erasing those
       repositories is the incident's decision.
 6. **The #5914 follow-up PR.** It deletes the app's unpinned fallback arm (`TOFU_FALLBACK_OPTS` and the
