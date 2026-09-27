@@ -317,7 +317,7 @@ Kieran, DHH and code-simplicity reviewed v1 of this plan. The mechanical fixes a
 - **Removed:** the line-number PM1 and the duplicate test tables.
 
 The taste splits are recorded in
-`knowledge-base/project/specs/feat-one-shot-8211-pr2-pm4-docs/decision-challenges.md`.
+`knowledge-base/project/specs/archive/20260927-235347-feat-one-shot-8211-pr2-pm4-docs/decision-challenges.md`.
 
 ## Implementation Phases
 
@@ -485,7 +485,7 @@ four statements:
 - `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (regenerated)
 - `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md` (add lines only)
 
-The pipeline also writes this plan and `knowledge-base/project/specs/feat-one-shot-8211-pr2-pm4-docs/`
+The pipeline also writes this plan and `knowledge-base/project/specs/archive/20260927-235347-feat-one-shot-8211-pr2-pm4-docs/`
 (`tasks.md`, `decision-challenges.md`, and any `session-state.md`), and it may regenerate
 `knowledge-base/INDEX.md`.
 

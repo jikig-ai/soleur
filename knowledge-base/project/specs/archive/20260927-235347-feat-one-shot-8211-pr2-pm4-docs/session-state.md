@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-27-docs-git-data-d1b-accepted-pm4-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260927-235347-2026-09-27-docs-git-data-d1b-accepted-pm4-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 

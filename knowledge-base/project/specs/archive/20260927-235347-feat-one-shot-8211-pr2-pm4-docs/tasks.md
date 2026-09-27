@@ -1,6 +1,6 @@
 # Tasks: #8211 PR2 PM4 docs — ADR-220 D1b and ADR-239 accepted
 
-Plan: `knowledge-base/project/plans/2026-09-27-docs-git-data-d1b-accepted-pm4-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260927-235347-2026-09-27-docs-git-data-d1b-accepted-pm4-plan.md`
 
 ## Phase 1: Setup
 

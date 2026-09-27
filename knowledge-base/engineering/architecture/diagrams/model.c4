@@ -774,8 +774,8 @@ model {
   // — "independent vendor from Sentry. If Sentry itself is degraded ... this monitor still
   // pages." Absent from the model until #6436's review noticed the new sentry->founder edge
   // had claimed exclusivity it does not have.
-  // (#6982) git-data reports its OWN boot correctness. TARGET STATE — the wire exists at
-  // merge but is UNOBSERVED until the birth dispatch.
+  // (#6982) git-data reports its OWN boot correctness. LIVE — observed on the 2026-09-24
+  // production replace (stage=bootstrap FATAL reached Sentry as WEB-PLATFORM-8E).
   gitDataStore -> sentry "Boot-stage fatals and stage markers from a BAKED DSN, with NO Doppler fallback — so the channel still works when Doppler is itself the broken stage, which on this host is the most likely one. This is the interlock's sentinel: the deny-all host has no SSH, no console and no log shipper, so before #6982 a failed boot was readable only from on-host /var/log/cloud-init-output.log, i.e. by nobody. LIVE — observed: the 2026-09-24 production git_data_host_replace's stage=bootstrap FATAL (host_name=soleur-git-data) reached Sentry (WEB-PLATFORM-8E)" {
     technology "curl -> Sentry store API (HTTPS)"
   }
