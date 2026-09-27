@@ -205,12 +205,12 @@ export async function deriveDiagramStale(args: {
         if (!aSet || !cSet) {
           return fail(null, "c4 stale derivation: subdir tree listing truncated", { subdir: k.slice(2) });
         }
-        if (!snapshotsEqual(aSet, cSet)) return trueAfterGrace(args, now, report);
+        if (!snapshotsEqual(aSet, cSet)) return trueAfterGrace(args, now);
       }
       return false;
     }
 
-    return trueAfterGrace(args, now, report);
+    return trueAfterGrace(args, now);
   };
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -263,7 +263,6 @@ async function trueAfterGrace(
     githubDir: string;
   },
   now: () => number,
-  report: typeof reportSilentFallback,
 ): Promise<boolean | undefined> {
   // 4. In-flight window: the writer commits the source first and the model
   //    second, so a dir tip younger than the render budget is a save
