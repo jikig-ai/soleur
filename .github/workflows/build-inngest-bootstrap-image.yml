@@ -119,8 +119,8 @@ jobs:
         # a tag push runs the copy in the TAGGED commit — so a tag cut on a branch
         # forked before a change here runs that branch's older logic.
         # That is why the #8747 ancestry refusal below is defence-in-depth and
-        # the bump script's `ancestry` stage (main's copy) is the authoritative
-        # check. The post-strip regex
+        # the bump script's merged-into-main selection plus its `ancestry` stage
+        # (main's copy, #8782) is the authoritative check. The post-strip regex
         # `^v[0-9]+\.[0-9]+\.[0-9]+$` is byte-identical to the consumer
         # drift-guard's regex (cloud-init-inngest-bootstrap.test.sh) — a parity
         # test asserts it; an inline-equivalent harness unit-tests the logic.
@@ -163,7 +163,9 @@ jobs:
       # checks out an existing tag's tree, which predates any helper (#4700).
       # Skipped under mirror_only: that path builds nothing and cannot move a
       # digest, and refusing it would strand the legacy off-main versions from
-      # zot backfill. The bump script refuses an off-main TARGET on every path.
+      # zot backfill. The bump script never selects an off-main tag as its
+      # target, on any path (#8782) -- judged per run, so an off-main tag must
+      # still be deleted (ADR-232 §7).
       # TAG and HEAD_SHA arrive through env from validated outputs (vX.Y.Z and
       # 40-hex): no expression is interpolated into the body and nothing below
       # prints free text, so no CR/LF can reach an annotation.
@@ -206,8 +208,9 @@ jobs:
           esac
 
       # A refused publish must not be silent: the job fails, the bump job is
-      # skipped (needs: build), and otherwise the only signal is AC6 turning main
-      # red. Gated on the refusal step's own outcome so an unrelated build
+      # skipped (needs: build), and nothing else signals it on main -- since
+      # #8782 AC6 ignores an off-main tag there (it reds only the PR carrying
+      # its commit). Gated on the refusal step's own outcome so an unrelated build
       # failure does not post a misleading "not on main" alert.
       - name: "Post to Slack (publish refused, #8747)"
         if: ${{ failure() && steps.ancestry.outcome == 'failure' }}
@@ -1009,8 +1012,8 @@ jobs:
   # --- #8359 (ADR-232): after a successful publish, rewrite the
   # soleur-inngest-bootstrap cloud-init pin (4 sites across
   # apps/web-platform/infra/cloud-init.yml + cloud-init-inngest.yml) to the
-  # semver-max published tag + registry-resolved digest and open the pin-bump
-  # PR — closing the AC6/Guard-B drift window to one CI cycle instead of
+  # semver-max tag merged into main + registry-resolved digest and open the
+  # pin-bump PR — closing the AC6/Guard-B drift window to one CI cycle instead of
   # "until someone notices a red advisory check".
   #
   # WHY A JOB IN THIS WORKFLOW, not a tag-triggered sibling or a scheduled
@@ -1018,8 +1021,9 @@ jobs:
   # digest and mirror outcome; `needs:` ordering cannot race the image push
   # (a sibling workflow can — it fires on the tag, before the digest exists);
   # and a cron reconciler reintroduces exactly the lag this removes. The
-  # target is the semver-max published tag, not blindly the triggered tag —
-  # a workflow_dispatch re-publish of an older tag correctly no-ops.
+  # target is the semver-max tag merged into main (#8782), not blindly the
+  # triggered tag — a workflow_dispatch re-publish of an older tag reconciles
+  # to it (normally a no-op).
   #
   # All logic lives in .github/scripts/bump-inngest-bootstrap-pin.sh,
   # fixture-tested by .github/scripts/test/test-bump-inngest-bootstrap-pin.sh
@@ -1040,7 +1044,11 @@ jobs:
     # tags both resolve the SAME semver-max target, and the loser finds the
     # branch/PR already open and exits `existing` rather than stacking a
     # duplicate PR. cancel-in-progress stays false — a cancelled run that had
-    # already pushed the branch would strand an un-PRed bump.
+    # already pushed the branch would strand an un-PRed bump. GitHub keeps one
+    # running and one pending run per group; a newly queued run replaces
+    # (cancels) the pending one and never touches the running one. A displaced
+    # run never starts, so it posts no Slack. The runs that remain still
+    # reconcile to the merged max.
     concurrency:
       group: inngest-pin-bump
       cancel-in-progress: false
@@ -1056,8 +1064,9 @@ jobs:
       # `ref: main`, NOT the tag tree: the bump script and the files it edits
       # live on the default branch (contrast with the build job, which must
       # check out the tag's tree to build its image). fetch-depth: 0 +
-      # fetch-tags: true so the script's semver-max tag computation sees the
-      # tag that triggered this run. persist-credentials: false so the
+      # fetch-tags: true are REQUIRED for correctness, not just reachability:
+      # the script selects from `git tag --merged HEAD` and refuses a shallow
+      # checkout (#8782). persist-credentials: false so the
       # GITHUB_TOKEN cannot linger as origin's credential next to an
       # x-access-token push remote.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

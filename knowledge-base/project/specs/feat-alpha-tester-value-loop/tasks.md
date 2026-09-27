@@ -11,10 +11,15 @@ date: 2026-09-25
 ## Phase 0: Immediate (operator, parallel — NOT gated on this PR)
 
 - [x] 0.1 File tester #1's overdue 2-week checkpoint — filed 2026-09-26 as #8981, reminders armed (aggregate KB growth + self-reported usage, disclosed as such, lands on #8981)
-- [ ] 0.2 Execute #7459 terms re-notify (TC 2.5.0→2.5.1)
+- [x] 0.2 Execute #7459 terms re-notify (TC 2.5.0→2.5.1) — sent 2026-09-27 by operator; #7459
+      closed; roster cell → `sent-awaiting-reply` (→ `agreed` on reply)
 - [ ] 0.3 Create beta-CRM contact for Skouer (owner-authenticated RPC path — platform is serving)
-- [ ] 0.4 C9 controller/processor re-run per #7348 (precondition to tester #2's first session)
+- [x] 0.4 C9 controller/processor re-run per #7348 (precondition to tester #2's first session) —
+      done 2026-09-27 for tester #2 `network-sealant`; determination at
+      `knowledge-base/legal/audits/2026-09-27-tester-2-controller-processor-determination.md`.
+      Outcome: CONDITIONAL GO — repo-connect gated on Art. 28(3) instrument (#7468)
 - [ ] 0.5 Retro problem interview with tester #1, flagged post-exposure (never pooled with #1440)
+      — meeting agreed for Friday 2026-10-02; run the #1443 instrument on the call
 
 ## Phase 1: Plugin decision capture + welcome fix
 

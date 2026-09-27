@@ -157,19 +157,51 @@ _bs_read_remedy() {
   echo "::error::$step $label read failed — NOTHING about the dedicated host was measured. This is a read-path fault, not a host verdict; do not proceed and do not SSH the host."
 }
 
+# _fsm_own_rows <tag> — PURE. Raw Better Stack rows on stdin; prints ONE compact JSON object per row
+# that the on-host FSM <tag> itself emitted on the dedicated host: `.raw` decodes to an object whose
+# SYSLOG_IDENTIFIER == <tag> (the FSM's readonly LOG_TAG, a literal at every caller — the same
+# literals Guard 2 in scripts/lib/inngest-probe-row.test.sh pins for the liveness counters) AND whose
+# host / host_name are the pair _current_instance_row_counts pins, AND whose `.message` Better Stack
+# parsed into an OBJECT (measured 2026-09-25: every FSM row's message is an object; the inngest
+# server's event-log rows, emitter `doppler`, carry a STRING message that can QUOTE `"flag":"done"`).
+# Output is the projection {dt, flag, exit_code, reason} — never a raw row. RETURNS jq's rc: an
+# undecodable row is skipped (it cannot confirm anything), a jq failure is non-zero and each caller
+# fails closed on it. Grading a terminal state from a grep over the raw string, with no emitter or
+# host pin, let any row carrying those bytes speak for the FSM (#8873 review).
+_fsm_own_rows() {
+  local tag="${1:-}"
+  [[ -n "$tag" ]] || return 2
+  jq -R -c --arg t "$tag" --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" '
+    fromjson? | select(type == "object")
+    | .dt as $dt
+    | (.raw | if type == "string" then (fromjson? // null) else null end)
+    | select(type == "object" and .SYSLOG_IDENTIFIER == $t and .host == $h and .host_name == $hn)
+    | .message | select(type == "object")
+    | {dt: $dt, flag: .flag, exit_code: .exit_code, reason: .reason}
+  ' 2>/dev/null
+}
+
 confirm_flip_state() {
-  local since="$1" i rows raw rc
+  local since="$1" i rows own rc jrc
   for i in $(seq 1 40); do   # 40 x 15s = 600s (30s on-host timer + FLUSHALL/assert + journald->Vector->BS latency)
     rc=0
     rows=$(_bs_query_rows "$since" inngest-cutover-flip 50) || rc=$?
     if [[ "$rc" -ne 0 ]]; then
       echo "::warning::confirm: betterstack-query.sh returned non-zero (the CONFIRM PATH failed, NOT the on-host FSM) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
     fi
-    raw=$(printf '%s\n' "$rows" | jq -r 'try (.raw) catch empty' 2>/dev/null || true)
-    # aborted first (fail-safe if somehow both terminal flags appear in the window).
-    if printf '%s\n' "$raw" | grep -qE '"flag":"aborted"'; then echo "aborted"; return 0; fi
-    if printf '%s\n' "$raw" | grep -E '"flag":"rolled-back"' | grep -qE '"exit_code":0'; then echo "rolled-back"; return 0; fi
-    if printf '%s\n' "$raw" | grep -E '"flag":"done"' | grep -qE '"exit_code":0'; then echo "done"; return 0; fi
+    # Only the flip FSM's OWN rows on the dedicated host pair are graded (_fsm_own_rows). A local
+    # decode failure confirms nothing this attempt (fail closed) and keeps polling.
+    jrc=0
+    own=$(printf '%s\n' "$rows" | _fsm_own_rows inngest-cutover-flip) || jrc=$?
+    if [[ "$jrc" -ne 0 ]]; then
+      own=""
+      echo "::warning::confirm: the local row filter failed (jq rc=$jrc) — nothing confirmed this attempt; a local jq fault, not an FSM state" >&2
+    fi
+    # aborted first (fail-safe if somehow both terminal flags appear in the window). Keyed on the
+    # emitter's `flag` FIELD plus exit_code 0, never on `reason`.
+    if printf '%s\n' "$own" | jq -e -s 'any(.[]; .flag == "aborted")' >/dev/null 2>&1; then echo "aborted"; return 0; fi
+    if printf '%s\n' "$own" | jq -e -s 'any(.[]; .flag == "rolled-back" and .exit_code == 0)' >/dev/null 2>&1; then echo "rolled-back"; return 0; fi
+    if printf '%s\n' "$own" | jq -e -s 'any(.[]; .flag == "done" and .exit_code == 0)' >/dev/null 2>&1; then echo "done"; return 0; fi
     echo "confirm: awaiting a terminal FSM flag (attempt $i/40 since $since)" >&2
     sleep 15
   done
@@ -211,7 +243,7 @@ FSM_ANCHOR_SINCE="${FSM_ANCHOR_SINCE:-30d}"
 # what actually happened instead of asserting a cause it never established.
 FSM_FAIL_REASON=""
 _flip_transition_dt() {
-  local limit=50 rows n dt rc=0
+  local limit=50 rows n own dt rc=0 jrc=0
   FSM_FAIL_REASON=""
   # TRANSITION REASONS. Derived from inngest-cutover-flip.sh `emit_state` — EVERY reason
   # that is not a `noop-*` heartbeat. `unexpected-exit` is the ERR-trap terminal
@@ -268,13 +300,30 @@ _flip_transition_dt() {
     echo "::warning::anchor-derive: response filled the page (n=$n limit=$limit) — the earliest transition may be truncated away; refusing a possibly-narrower anchor" >&2
     return 1
   fi
+  # EMITTER + HOST PIN (#8873 review). The `--grep` above matches any row that QUOTES a transition
+  # reason; only rows the flip FSM itself emitted on the dedicated host pair are transitions
+  # (_fsm_own_rows). A row from another emitter must never turn "no transition row" (fail closed)
+  # into a derivable anchor — possibly a LATER one than the true coexistence start. The truncation
+  # guard above deliberately counts the WHOLE page: a page filled by any emitter can hide the
+  # earliest real transition just the same. A local filter failure fails closed.
+  own=$(printf '%s\n' "$rows" | _fsm_own_rows inngest-cutover-flip) || jrc=$?
+  if [[ "$jrc" -ne 0 ]]; then
+    FSM_FAIL_REASON="row-filter-failed jq_rc=$jrc"
+    echo "::warning::anchor-derive: the local row filter failed (jq rc=$jrc) — a local jq fault, not an FSM state; refusing to derive an anchor" >&2
+    return 1
+  fi
+  if ! grep -q '^{' <<<"$own"; then
+    FSM_FAIL_REASON="no-transition-row from the flip FSM's own emitter within $FSM_ANCHOR_SINCE (n=$n rows, none SYSLOG_IDENTIFIER=inngest-cutover-flip on $INNGEST_HOST/$INNGEST_HOST_NAME)"
+    echo "::warning::anchor-derive: $n row(s) matched, none emitted by the flip FSM (SYSLOG_IDENTIFIER=inngest-cutover-flip) on $INNGEST_HOST/$INNGEST_HOST_NAME — no transition row within $FSM_ANCHOR_SINCE" >&2
+    return 1
+  fi
   # `sort` makes earliest-selection independent of betterstack-query.sh's outer
   # ORDER BY: a future edit there (or a second consumer wanting newest-first) would
   # otherwise silently flip this to the LATEST transition and narrow the window, with
   # both suites green. ISO-ish `dt` sorts lexicographically == chronologically.
   # `|| true` on the pipeline: `head -1` closing the pipe early SIGPIPEs the producer,
   # which `pipefail` would surface as a spurious failure.
-  dt=$( { printf '%s\n' "$rows" | jq -r 'select(type == "object") | .dt' | sort | head -1; } 2>/dev/null || true)
+  dt=$( { printf '%s\n' "$own" | jq -r 'select(type == "object") | .dt' | sort | head -1; } 2>/dev/null || true)
   # Shape-guard before the value reaches `date -d`: both a parse guard and an
   # injection guard on externally-sourced text.
   if ! [[ "$dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
@@ -517,12 +566,18 @@ _inngest_server_created_epoch() {
   return 0
 }
 
-# _current_instance_row_counts <floor_epoch_s> — PURE. Raw Better Stack rows on stdin; prints ONE
-# line of six integers: <rows> <counted> <host_pair> <pre_floor> <malformed> <skew_suspect> — or
+# _current_instance_row_counts <floor_epoch_s> <tag> — PURE. Raw Better Stack rows on stdin; prints
+# ONE line of six integers: <rows> <counted> <host_pair> <pre_floor> <malformed> <skew_suspect> — or
 # __UNREADABLE__ for a non-decimal floor, or nothing if jq itself fails (the caller warns on both).
-#   rows          decoded row objects returned, from ANY host (the read is capped at --limit 50,
-#                 newest first, so 50 means the window was truncated)
-#   host_pair     rows whose decoded .raw carries host == $INNGEST_HOST and host_name == $INNGEST_HOST_NAME
+# The tag is non-empty by contract: the only caller, _generation_scoped_count, refuses an empty one
+# first (and an empty tag here would match no row, i.e. count 0 — the refusing direction).
+#   rows          decoded row objects returned, from ANY host and ANY emitter (the read is capped at
+#                 --limit 50, newest first, so 50 means the window was truncated)
+#   host_pair     host-pair rows FROM THE EMITTER <tag>: decoded .raw carries host == $INNGEST_HOST,
+#                 host_name == $INNGEST_HOST_NAME AND SYSLOG_IDENTIFIER == <tag> (#8846). The
+#                 Better Stack --grep on the tag matches any row that QUOTES it — the inngest
+#                 server's own event log (emitter `doppler`) quotes it in webhook bodies ~22/day on
+#                 the same host pair — and such a row is not the FSM being alive.
 #   counted       host-pair rows whose event time >= floor AND whose ingest dt >= floor
 #   malformed     host-pair rows with a missing/non-decimal __REALTIME_TIMESTAMP or an unparseable dt
 #                 — excluded, never defaulted (a default is the widening direction)
@@ -532,15 +587,16 @@ _inngest_server_created_epoch() {
 #                 predecessor cannot produce one, so it points at the CURRENT server's clock
 # Counts only; never echoes a row.
 _current_instance_row_counts() {
-  local floor="${1:-}"
+  local floor="${1:-}" tag="${2:-}"
   case "$floor" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
-  jq -R -s -r --argjson f "$floor" --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" '
+  jq -R -s -r --argjson f "$floor" --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" --arg t "$tag" '
     [ split("\n")[] | fromjson? | select(type == "object") ] as $all
     | [ $all[]
       | { dt: .dt, r: (.raw | if type == "string" then (fromjson? // null) else null end) }
       | select((.r | type) == "object" and .r.host == $h and .r.host_name == $hn)
+      | select(.r.SYSLOG_IDENTIFIER == $t)
       | { ts: (.r["__REALTIME_TIMESTAMP"]
                  | if type == "string" and test("\\A[0-9]+\\z") then (try tonumber catch null) else null end),
           dt: (.dt | if type == "string"
@@ -553,8 +609,11 @@ _current_instance_row_counts() {
   ' 2>/dev/null || true
 }
 
-# _generation_scoped_count <floor_epoch_s> <label> — raw rows on stdin; prints the COUNTED token
-# (or __UNREADABLE__) on stdout. On stderr: one ::notice:: carrying the six counters, and — when
+# _generation_scoped_count <floor_epoch_s> <label> <tag> — raw rows on stdin; prints the COUNTED
+# token (or __UNREADABLE__) on stdout. <tag> is the FSM's own emitter (its LOG_TAG, a literal at
+# every caller); only rows journald attributes to it count (#8846). An empty <tag> is a defect in
+# this script, so it refuses with its own warning rather than counting every emitter's rows.
+# On stderr: one ::notice:: carrying the six counters, and — when
 # nothing counted — at most one warning saying which counter explains it: skew_suspect > 0 (the
 # current server IS shipping, its clock is behind), malformed > 0 (rows lost their timestamps), or
 # a server under 600 s old (it has not shipped yet). Each says not to replace the server: a replace
@@ -562,11 +621,15 @@ _current_instance_row_counts() {
 # never lacks the ::warning:: it points at. Built only from validated integers and $INNGEST_HOST;
 # no string from any response reaches an annotation.
 _generation_scoped_count() {
-  local floor="${1:-}" label="${2:-liveness}" line r c p pf m k extra v now age iso
+  local floor="${1:-}" label="${2:-liveness}" tag="${3:-}" line r c p pf m k extra v now age iso
   case "$floor" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
-  line="$(_current_instance_row_counts "$floor")"
+  if [[ -z "$tag" ]]; then
+    echo "::warning::$label: liveness counter called without an emitter tag — a defect in cutover-inngest.sh, not a host state. Nothing was written; file an issue with this run URL." >&2
+    printf '%s' '__UNREADABLE__'; return 0
+  fi
+  line="$(_current_instance_row_counts "$floor" "$tag")"
   read -r r c p pf m k extra <<<"$line" || true
   for v in "$r" "$c" "$p" "$pf" "$m" "$k"; do
     case "$v" in
@@ -651,10 +714,11 @@ _flip_liveness_count() {
     printf '%s' '__UNREADABLE__'
     return 0
   fi
-  # Decode `.raw` first (it is double-encoded), then match the host field literal AND the current
+  # Decode `.raw` first (it is double-encoded), then match the host field literal, this FSM's own
+  # emitter (#8846: --grep also returns rows that merely quote the tag) AND the current
   # generation's two clocks. Counts only; never echoes a row, the standing purity contract of every
   # Better Stack reader here.
-  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-cutover-flip liveness")"
+  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-cutover-flip liveness" "inngest-cutover-flip")"
   case "$n" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
@@ -680,7 +744,7 @@ _luks_liveness_count() {
     printf '%s' '__UNREADABLE__'
     return 0
   fi
-  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-luks-cutover liveness")"
+  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-luks-cutover liveness" "inngest-luks-cutover")"
   case "$n" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
@@ -692,24 +756,33 @@ _luks_liveness_count() {
 # `aborted` is tested FIRST so a window containing both terminals reports the unsafe one.
 # The window is generous because this FSM COPIES the store before it swaps.
 confirm_luks_state() {
-  local since="$1" i rows raw rc
+  local since="$1" i rows own rc jrc
   for i in $(seq 1 60); do   # 60 x 15s = 900s, matching the unit's TimeoutStartSec plus shipping lag
     rc=0
     rows=$(_bs_query_rows "$since" inngest-luks-cutover 100) || rc=$?
     if [[ "$rc" -ne 0 ]]; then
       echo "::warning::confirm: betterstack-query.sh returned non-zero (the CONFIRM PATH failed, NOT the on-host FSM) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
     fi
-    raw=$(printf '%s\n' "$rows" | jq -r 'try (.raw) catch empty' 2>/dev/null || true)
+    # Only the LUKS FSM's OWN rows on the dedicated host pair are graded (_fsm_own_rows): the flip
+    # FSM emits flag=done exit_code=0 too, and the event log can quote either. A local decode
+    # failure confirms nothing this attempt (fail closed) and keeps polling.
+    jrc=0
+    own=$(printf '%s\n' "$rows" | _fsm_own_rows inngest-luks-cutover) || jrc=$?
+    if [[ "$jrc" -ne 0 ]]; then
+      own=""
+      echo "::warning::confirm: the local row filter failed (jq rc=$jrc) — nothing confirmed this attempt; a local jq fault, not an FSM state" >&2
+    fi
     # TRANSITION ROWS ONLY — never the heartbeat. G1 deliberately permits arming from `aborted` and
     # from `rolled-back` (the documented abort -> fix -> re-dispatch loop), and in those states the
     # host emits `{"flag":"aborted","reason":"noop-aborted"}` on its own cadence. Those rows are
     # OLDER than this write but land inside the window, so keying on the flag alone made the first
     # iteration report "the FSM aborted" while the copy was still running — the dispatch asserting
     # an outcome the host never produced. The `reason` field is what separates the two.
-    _transitions() { printf '%s\n' "$raw" | grep -E "\"flag\":\"$1\"" | grep -v '"reason":"noop-'; }
-    if _transitions aborted | grep -q .; then echo "aborted"; return 0; fi
-    if _transitions rolled-back | grep -q .; then echo "rolled-back"; return 0; fi
-    if _transitions done | grep -qE '"exit_code":0'; then echo "done"; return 0; fi
+    _transitions() { printf '%s\n' "$own" | jq -e -s --arg f "$1" \
+      'any(.[]; .flag == $f and ((.reason | type) != "string" or (.reason | startswith("noop-") | not)) and ($f != "done" or .exit_code == 0))' >/dev/null 2>&1; }
+    if _transitions aborted; then echo "aborted"; return 0; fi
+    if _transitions rolled-back; then echo "rolled-back"; return 0; fi
+    if _transitions done; then echo "done"; return 0; fi
     echo "confirm: awaiting a terminal LUKS FSM flag (attempt $i/60 since $since)" >&2
     sleep 15
   done
@@ -796,9 +869,9 @@ doublefire_from() {
   # dead-advice class this change removed from the deadline surfaces, relocated.
   #
   # It is a SEPARATE variable from CUTOVER_WINDOW_FROM on purpose: that one is also
-  # consumed by the missed-tick auto-enumeration as the quiesce→register gap START, and
-  # quiesce PRECEDES the cutover. Overloading it would silently re-base the expected-tick
-  # window so the gap ticks stop being enumerated — the omission half.
+  # consumed by missed_tick_report() as the quiesce→register gap START (it bounds the opt-in
+  # candidate list, #6939), and quiesce PRECEDES the cutover. Overloading it would silently
+  # re-base the expected-tick window so the gap ticks stop being listed — the omission half.
   #
   # An override NARROWS by construction, so it yields a window-limited verdict; the
   # verify arm downgrades VERIFIED accordingly.
@@ -1037,6 +1110,98 @@ g3_decide() {
   return 0
 }
 
+# #6939 — op=verify's missed-tick report. OFF by default: it prints one pointer to the runbook's
+# recovery procedure and no per-function line. ON (the missed_tick_candidates dispatch input)
+# prints UNVERIFIED candidates that are deliberately not command-shaped. The old output was a
+# `soleur:trigger-cron` line per empty (function, bucket) pair, carrying two flags the skill does
+# not accept, and listing buckets a slower cron was never due in, so acting on it double-fired
+# the cron. Naming a candidate and filtering it to due ticks is the proper fix, tracked on #6940.
+# Called with a plain call (no || / &&): bash ignores set -e inside a function called as the
+# non-final part of an &&/|| list, in an if/while condition, or after `!`. A `return 1` here
+# therefore ends the run through set -e; there is no exit at the call site.
+# Same extraction contract as g3_decide: signature and closing brace at column 0, and no column-0 `}`
+# inside the body (the suite awk-extracts it). The UPPERCASE locals are kept from the inline block
+# this replaced.
+# args: $1 gate ("true" = ON)  $2 body-json  $3 cron-period-s  $4 win-from  $5 win-until
+# DO NOT RESHAPE: the P2-16 header below is ADR-106's content anchor, and the OBSERVED jq program
+# must stay single-quoted with no apostrophe and `jq` within 160 characters before it (the suite's
+# perl extractor and null-startedAt harness execute it).
+missed_tick_report() {
+  local BODY="$2" CRON_PERIOD="$3"
+  # ---- Missed-tick auto-enumeration (P2-16): ticks that fell in the
+  # quiesce→register gap have no run. Window values are VALIDATED against the ISO shape, never
+  # just stripped: GitHub decodes %0A inside an annotation, and `date -d` accepts `tomorrow`.
+  local ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+  local WIN_FROM="" WIN_UNTIL="" SHOW_FROM="<unset>" SHOW_UNTIL="<unset>"
+  if [[ -n "$4" ]]; then SHOW_FROM="<invalid>"; fi
+  if [[ -n "$5" ]]; then SHOW_UNTIL="<invalid>"; fi
+  if [[ "$4" =~ $ISO_RE ]]; then WIN_FROM="$4"; SHOW_FROM="$4"; fi
+  if [[ "$5" =~ $ISO_RE ]]; then WIN_UNTIL="$5"; SHOW_UNTIL="$5"; fi
+  local RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-server.md § Bounded-outage note"
+
+  if [[ "$1" != "true" ]]; then
+    # OFF (the default): the window is echoed but never parsed, so a malformed CUTOVER_WINDOW_*
+    # cannot redden a run whose verdict above was clean.
+    echo "::notice::missed-tick candidates NOT EMITTED (default, #6939). A per-bucket list cannot tell a tick that was due from one that was never due, and re-firing a never-due tick double-fires that cron. Gap window as configured: [$SHOW_FROM, $SHOW_UNTIL]. A tick skipped in the gap is the accepted ADR-100 residual. Recover one ONLY via $RUNBOOK. Unverified per-bucket candidates: re-dispatch op=verify with missed_tick_candidates=true. Proper fix: #6940."
+    return 0
+  fi
+
+  if [[ -z "$4" || -z "$5" ]]; then
+    echo "::warning::missed-tick candidates requested (missed_tick_candidates=true) but CUTOVER_WINDOW_FROM and CUTOVER_WINDOW_UNTIL are not both set (the quiesce→register gap, ISO-8601 UTC); no candidates computed."
+    return 0
+  fi
+  local STANDS="Only the opt-in candidate list failed; the exactly-once verdict above STANDS."
+  local FROM_EPOCH="" UNTIL_EPOCH=""
+  if [[ -n "$WIN_FROM" && -n "$WIN_UNTIL" ]]; then
+    FROM_EPOCH=$(date -u -d "$WIN_FROM" +%s 2>/dev/null || echo "")
+    UNTIL_EPOCH=$(date -u -d "$WIN_UNTIL" +%s 2>/dev/null || echo "")
+  fi
+  if [[ -z "$FROM_EPOCH" || -z "$UNTIL_EPOCH" || "$UNTIL_EPOCH" -le "$FROM_EPOCH" ]]; then
+    echo "::error::missed-tick candidates: invalid window [$SHOW_FROM, $SHOW_UNTIL] (need ISO-8601 UTC YYYY-MM-DDTHH:MM:SSZ, until after from). $STANDS"
+    return 1
+  fi
+  # Observed buckets (per function) from the runs.
+  # #6178 — the SAME null-startedAt guard as the bucketing above: this is the
+  # identical construct, so it carried the identical jq exit-5 crash.
+  local OBSERVED
+  OBSERVED=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" \
+    '[ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) / $period | floor) } ] | unique')
+  local FROM_BUCKET=$(( FROM_EPOCH / CRON_PERIOD ))
+  local UNTIL_BUCKET=$(( UNTIL_EPOCH / CRON_PERIOD ))
+  # Guard the tick loop with a hard cap so a mis-set window cannot spin.
+  local SPAN=$(( UNTIL_BUCKET - FROM_BUCKET + 1 ))
+  if [[ "$SPAN" -lt 1 || "$SPAN" -gt 10000 ]]; then
+    echo "::error::missed-tick candidates: window spans $SPAN ${CRON_PERIOD}s bucket(s), outside [1,10000]; check cron_period_seconds and the window. $STANDS"
+    return 1
+  fi
+  # Function ids come from the host: select them by SHAPE in jq (never a shell glob or word split),
+  # and assign before looping so set -e sees a jq failure. \A..\z, not ^..$: jq's $ also matches
+  # before a trailing newline, which would pass "id\n" and print it as a different, real id. One jq
+  # call decides both the kept set and the skipped count, so the two cannot drift apart.
+  local IDS FNS SKIPPED
+  IDS=$(jq -c 'def okid: type == "string" and test("\\A[A-Za-z0-9._-]{1,128}\\z"); [.runs[].functionID] | unique | {keep: map(select(okid)), bad: (map(select(okid | not)) | length)}' <<<"$BODY")
+  FNS=$(jq -r '.keep[]' <<<"$IDS")
+  SKIPPED=$(jq -r '.bad' <<<"$IDS")
+  if [[ "$SKIPPED" -gt 0 ]]; then
+    echo "::warning::missed-tick candidates: $SKIPPED distinct function id value(s) failed the shape check and were skipped"
+  fi
+  echo "::warning::missed-tick candidates (P2-16, opt-in #6939): UNVERIFIED, NOT a re-fire list. Each line below is a (function UUID, ${CRON_PERIOD}s bucket) overlapping [$WIN_FROM, $WIN_UNTIL] with no run; empty_bucket_start is the bucket start and can precede the window. A line may be an event-driven function, a cron slower than ${CRON_PERIOD}s that was never due in that bucket, or a tick the scheduler already drained on restart, and a cron faster than ${CRON_PERIOD}s can hide a miss inside a bucket that has a run. UUIDs have no in-repo name mapping. Before re-firing anything, follow $RUNBOOK."
+  local MISSED=0 fn b HAS TICK_TS
+  while IFS= read -r fn; do
+    if [[ -z "$fn" ]]; then continue; fi
+    for (( b=FROM_BUCKET; b<=UNTIL_BUCKET; b++ )); do
+      HAS=$(echo "$OBSERVED" | jq --arg fn "$fn" --argjson b "$b" 'any(.[]; .fn == $fn and .bucket == $b)')
+      if [[ "$HAS" != "true" ]]; then
+        TICK_TS=$(date -u -d "@$(( b * CRON_PERIOD ))" +%Y-%m-%dT%H:%M:%SZ)
+        echo "  candidate function_id=$fn empty_bucket_start=$TICK_TS"
+        MISSED=$((MISSED + 1))
+      fi
+    done
+  done <<<"$FNS"
+  echo "::notice::missed-tick candidates: $MISSED unverified candidate(s) listed (not a re-fire list; the proper fix is #6940)."
+  return 0
+}
+
 case "$OP" in
   enumerate)
     # GET hook → records JSON in the response body. HMAC over empty body
@@ -1198,7 +1363,7 @@ case "$OP" in
           if [[ "$RPG_PROBE_RC" -ne 0 ]]; then
             _bs_read_remedy probe "$RPG_PROBE_RC" "$RPG_PROBE_ERR" "$RPG_PROBE_ROWS" "registry-probe"
           else
-            echo "::error::registry-probe REFUSED (unreadable): the probe read answered (rc=0) but the dedicated host's newest row could not be graded — rows arrived and did not decode, two rows at the newest dt disagree, or a field is absent/malformed/incoherent. Nothing about the host was measured. If it is a tie, wait one probe period (<= 60 min) and re-dispatch this op; otherwise file an issue with this run URL against inngest-bootstrap.sh. Do NOT SSH the host."
+            echo "::error::registry-probe REFUSED (unreadable): the probe read answered (rc=0) but the dedicated host's newest row could not be graded — rows arrived and did not decode, two rows at the newest dt disagree, a field is absent/malformed/incoherent, or the probe-row selector could not be loaded (the gate's stderr names selector_unavailable lib=<path>) — re-dispatch from a ref that has scripts/lib/inngest-probe-row.sh. Nothing about the host was measured. Check that inngest-host-dark-gate line FIRST: if it names selector_unavailable, the fault is in this checkout, not the host or its emitter. If it is a tie, wait one probe period (<= 60 min) and re-dispatch this op; otherwise file an issue with this run URL against inngest-bootstrap.sh. Do NOT SSH the host."
           fi
           exit 1 ;;
         fsm_unreadable)
@@ -1888,7 +2053,7 @@ case "$OP" in
           if [[ "$PROBE_RC" -ne 0 ]]; then
             _bs_read_remedy probe "$PROBE_RC" "$PROBE_ERR" "$PROBE_ROWS"
           else
-            echo "::error::2.0 REFUSED (unreadable): the probe read answered (rc=0) but the dedicated host's newest row could not be graded — rows arrived but did not decode, two rows at the newest dt disagree, or a field is absent/malformed/incoherent (a truncated row is the #7674 field-order lesson; a numeric registry_fns beside http_code=000 is the emitter contradicting itself). If it is a tie, wait one probe period (<= 60 min) and re-dispatch; otherwise file an issue with this run URL against inngest-bootstrap.sh. Nothing was changed."
+            echo "::error::2.0 REFUSED (unreadable): the probe read answered (rc=0) but the dedicated host's newest row could not be graded — rows arrived but did not decode, two rows at the newest dt disagree, a field is absent/malformed/incoherent (a truncated row is the #7674 field-order lesson; a numeric registry_fns beside http_code=000 is the emitter contradicting itself), or the probe-row selector could not be loaded (the gate's stderr names selector_unavailable lib=<path>) — re-dispatch from a ref that has scripts/lib/inngest-probe-row.sh. Check that inngest-host-dark-gate line FIRST: if it names selector_unavailable, the fault is in this checkout, not the host or its emitter. If it is a tie, wait one probe period (<= 60 min) and re-dispatch; otherwise file an issue with this run URL against inngest-bootstrap.sh. Nothing was changed."
           fi
           exit 1 ;;
         silent)
@@ -2372,7 +2537,7 @@ case "$OP" in
       latched)
         echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared ONLY by recutting the host's /mnt/data volume, never by SSH. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). CORRECTED #6894: `apply_target=inngest-volume-recut` DOES exist (it shipped in #7695) and is the dispatch that clears this latch — but it is refused while the store is populated, and this store measures 442 keys, so it is not available here. The route for a populated store is the ADDITIVE cutover (op=luks-cutover), which PRESERVES /mnt/data and therefore preserves this latch too: it does not clear it either. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
       silent)
-        echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME, stamped and ingested after its Hetzner created time; an earlier server with the same name does not count; the generation ::notice:: above gives the server's age, and any ::warning:: under it says whether it is young, clock-skewed or shipping malformed rows) within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME, so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) — check that before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-cutover-flip, stamped and ingested after its Hetzner created time; an earlier server with the same name does not count; the generation ::notice:: above gives the server's age, and any ::warning:: under it says whether it is young, clock-skewed or shipping malformed rows) within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND SYSLOG_IDENTIFIER=inngest-cutover-flip (the FSM's own emitter tag, #8846), so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) or that the shipper renamed or dropped the SYSLOG_IDENTIFIER field — check both before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
       unreadable)
         echo "::error::op=arm: G3.7 — could not read the flip-FSM markers, or could not identify the current $INNGEST_HOST server (the ::warning:: above names which read failed: Better Stack, the Hetzner generation anchor — including no server named $INNGEST_HOST, a replace in flight — or the local row filter). Refusing FAIL-CLOSED: an unanswered 'has this host already been flushed?' must not be read as 'no', and G6 below confirms the flip over the SAME read path, so an arm dispatched now could not be confirmed either. Fix the read the ::warning:: names (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform, or the Hetzner token) and re-dispatch. Do NOT SSH the host." ;;
       *)
@@ -2834,49 +2999,9 @@ case "$OP" in
     fi
     echo "::notice::2.6 SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-host double-fire detector — a surviving web-host (colocated) scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The web scheduler host (web-1) is the only colocated scheduler (web-2 scope: see op=execute SEAM 2.2a); op=quiesce-web + the op=execute 2.2 QUIESCED gate are the control against a web-host double-fire — op=verify cannot substitute for it."
 
-    # ---- Missed-tick auto-enumeration (P2-16): ticks that fell in the
-    # quiesce→register gap have no run; AUTO-emit a ready-to-run soleur:trigger-cron
-    # set rather than asking the operator to enumerate. From the recorded window
-    # [CUTOVER_WINDOW_FROM, CUTOVER_WINDOW_UNTIL] we compute the expected tick
-    # buckets at cron_period cadence and diff against the observed run buckets; any
-    # expected bucket with ZERO runs is a missed tick.
-    WIN_FROM="${CUTOVER_WINDOW_FROM:-}"
-    WIN_UNTIL="${CUTOVER_WINDOW_UNTIL:-}"
-    if [[ -z "$WIN_FROM" || -z "$WIN_UNTIL" ]]; then
-      echo "::notice::missed-tick auto-enumeration (P2-16): set CUTOVER_WINDOW_FROM + CUTOVER_WINDOW_UNTIL (ISO-8601, the quiesce→register gap) to auto-emit the trigger-cron list; skipping (window not supplied)."
-    else
-      FROM_EPOCH=$(date -u -d "$WIN_FROM" +%s 2>/dev/null || echo "")
-      UNTIL_EPOCH=$(date -u -d "$WIN_UNTIL" +%s 2>/dev/null || echo "")
-      if [[ -z "$FROM_EPOCH" || -z "$UNTIL_EPOCH" || "$UNTIL_EPOCH" -le "$FROM_EPOCH" ]]; then
-        echo "::error::missed-tick auto-enumeration: invalid window [$WIN_FROM,$WIN_UNTIL]"; exit 1
-      fi
-      # Observed buckets (per function) from the runs.
-      # #6178 — the SAME null-startedAt guard as the bucketing above: this is the
-      # identical construct, so it carried the identical jq exit-5 crash.
-      OBSERVED=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" \
-        '[ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) / $period | floor) } ] | unique')
-      FROM_BUCKET=$(( FROM_EPOCH / CRON_PERIOD ))
-      UNTIL_BUCKET=$(( UNTIL_EPOCH / CRON_PERIOD ))
-      # Guard the tick loop with a hard cap so a mis-set window cannot spin.
-      SPAN=$(( UNTIL_BUCKET - FROM_BUCKET + 1 ))
-      if [[ "$SPAN" -lt 1 || "$SPAN" -gt 10000 ]]; then
-        echo "::error::missed-tick auto-enumeration: window spans $SPAN tick-buckets (out of [1,10000]) — check CRON_PERIOD/window"; exit 1
-      fi
-      echo "::notice::missed-tick auto-enumeration (P2-16): scanning $SPAN tick-bucket(s) in [$WIN_FROM,$WIN_UNTIL] for functions with no run — ready-to-run trigger-cron set:"
-      MISSED=0
-      # Enumerate the DISTINCT functions observed, then find their empty in-window buckets.
-      for fn in $(echo "$BODY" | jq -r '[.runs[].functionID] | unique | .[]'); do
-        for (( b=FROM_BUCKET; b<=UNTIL_BUCKET; b++ )); do
-          HAS=$(echo "$OBSERVED" | jq --arg fn "$fn" --argjson b "$b" 'any(.[]; .fn == $fn and .bucket == $b)')
-          if [[ "$HAS" != "true" ]]; then
-            TICK_TS=$(date -u -d "@$(( b * CRON_PERIOD ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "bucket-$b")
-            echo "  soleur:trigger-cron --function-id $fn --missed-tick $TICK_TS"
-            MISSED=$((MISSED + 1))
-          fi
-        done
-      done
-      echo "::notice::missed-tick auto-enumeration: $MISSED missed tick(s) enumerated (re-fire the list above via soleur:trigger-cron; in-window ticks are not auto-backfilled)"
-    fi
+    # #6939 — the missed-tick report runs AFTER the verdict above and cannot change it (OFF, the
+    # default, never fails; ON fails only on an invalid window). See missed_tick_report().
+    missed_tick_report "${CUTOVER_MISSED_TICK_CANDIDATES:-}" "$BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"
     echo "::notice::op=verify complete"
     ;;
 
@@ -3190,7 +3315,7 @@ case "$OP" in
       audible)
         echo "::notice::op=resume: G3 — host is audible ($RS_LIVE_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
       silent)
-        echo "::error::op=resume: G3 REFUSING — ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME, stamped and ingested after its Hetzner created time) within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED. Rows from an earlier server with the same name do not count (the generation ::notice:: above gives counted/pre_floor and the server's age). 'flushed' is acted on ONLY by the on-host 30s timer, so writing it now recovers nothing AND parks the flag in a state op=resume's own G1 rejects as IN-FLIGHT — stranding the only dispatchable re-entry this system has (op=arm is separately refused by G3.7). Refusing BEFORE the write; nothing was changed. Check inngest-cutover-flip.timer and Vector via the SOLEUR_INNGEST_SERVER_PROBE row (it carries server_active and cutover_flag in one line). Only if that ::notice:: shows the server is more than 600s old with counted=0, skew_suspect=0 AND malformed=0 is an inngest-host-replace the path forward, then re-dispatch op=resume; a younger server has simply not shipped yet, skew_suspect > 0 means it IS shipping with a clock behind, and malformed > 0 is a schema change — in each of those, follow the ::warning:: above rather than replace it (a replace resets its created time). Do NOT SSH the host."; exit 1 ;;
+        echo "::error::op=resume: G3 REFUSING — ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-cutover-flip, stamped and ingested after its Hetzner created time) within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED. Only rows the flip FSM itself emitted count (#8846): if the shipper renamed or dropped SYSLOG_IDENTIFIER, a live host reads as silent here — the generation ::notice:: above shows rows=N with host_pair=0 in that case. Rows from an earlier server with the same name do not count (the generation ::notice:: above gives counted/pre_floor and the server's age). 'flushed' is acted on ONLY by the on-host 30s timer, so writing it now recovers nothing AND parks the flag in a state op=resume's own G1 rejects as IN-FLIGHT — stranding the only dispatchable re-entry this system has (op=arm is separately refused by G3.7). Refusing BEFORE the write; nothing was changed. Check inngest-cutover-flip.timer and Vector via the SOLEUR_INNGEST_SERVER_PROBE row (it carries server_active and cutover_flag in one line). Only if that ::notice:: shows the server is more than 600s old with counted=0, skew_suspect=0 AND malformed=0 is an inngest-host-replace the path forward, then re-dispatch op=resume; a younger server has simply not shipped yet, skew_suspect > 0 means it IS shipping with a clock behind, and malformed > 0 is a schema change — in each of those, follow the ::warning:: above rather than replace it (a replace resets its created time). Do NOT SSH the host."; exit 1 ;;
       unreadable)
         echo "::error::op=resume: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names which read failed: the Better Stack query (verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform), the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named $INNGEST_HOST, i.e. a replace in flight), or the local row filter. Fix it, then re-dispatch. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
       *)
@@ -3284,7 +3409,7 @@ case "$OP" in
       audible)
         echo "::notice::op=$OP: G3 — host is audible ($LK_LIVE_N inngest-luks-cutover row(s) from the current $INNGEST_HOST server within $LUKS_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
       silent)
-        echo "::error::op=$OP: G3 REFUSING — ZERO inngest-luks-cutover rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME, stamped and ingested after its Hetzner created time) within $LUKS_LIVENESS_SINCE, while the read path itself SUCCEEDED. Rows from an earlier server with the same name do not count, and a server under 600s old may simply not have shipped yet (the generation ::notice:: above gives its age). Either the host is dark, or the cutover trio never installed — inngest-bootstrap.sh emits reason=install_missing on that path, and the unit polls every 30s once it is installed, so silence here is a real finding. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+        echo "::error::op=$OP: G3 REFUSING — ZERO inngest-luks-cutover rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-luks-cutover, stamped and ingested after its Hetzner created time) within $LUKS_LIVENESS_SINCE, while the read path itself SUCCEEDED. Only rows the LUKS FSM itself emitted count (#8846): a shipper that renamed or dropped SYSLOG_IDENTIFIER reads as silent here too (the generation ::notice:: above then shows rows=N with host_pair=0). Rows from an earlier server with the same name do not count, and a server under 600s old may simply not have shipped yet (the generation ::notice:: above gives its age). Either the host is dark, or the cutover trio never installed — inngest-bootstrap.sh emits reason=install_missing on that path, and the unit polls every 30s once it is installed, so silence here is a real finding. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
       unreadable)
         echo "::error::op=$OP: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names which read failed: the Better Stack query (verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform), the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named $INNGEST_HOST, i.e. a replace in flight), or the local row filter. Fix it, then re-dispatch. Nothing was changed."; exit 1 ;;
       *)

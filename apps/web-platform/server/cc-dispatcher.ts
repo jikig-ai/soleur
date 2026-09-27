@@ -85,6 +85,7 @@ import {
 import {
   reportSilentFallback,
   warnSilentFallback,
+  infoSilentFallback,
   mirrorWithDebounce,
   mirrorP0Deduped,
   hashUserId,
@@ -107,6 +108,7 @@ import {
   SUMMARIZE_TOOL_FQN,
   NARRATION_TEXT_CAP_BYTES,
 } from "./narrate-tool";
+import { buildCrmTools } from "@/server/crm/crm-tools";
 import { updateConversationFor } from "./conversation-writer";
 import {
   getUserServiceTokens,
@@ -746,6 +748,7 @@ function buildRow(
   text: string,
   conversationId: string,
   workspaceId: string,
+  leaderId: string = CC_ROUTER_LEADER_ID,
 ): Record<string, unknown> {
   // #3603 W4 — gated single-read site for `CC_PERSIST_USAGE`. The hot-path
   // env read is intentional: enables runtime rollback flip without a
@@ -772,7 +775,7 @@ function buildRow(
     role: "assistant",
     content: text,
     tool_calls: null,
-    leader_id: CC_ROUTER_LEADER_ID,
+    leader_id: leaderId,
     usage: usageColumn,
   };
   // Omit `status` for the normal completion path — migration 040's
@@ -1637,6 +1640,31 @@ export function handleCcCloseQuery({
 // (one source of truth; no value cache — the active workspace is mutable).
 
 /**
+ * Tool list passed to the soleur_platform `createSdkMcpServer`. Narration,
+ * then c4, then crm_* only when `crmLead` is true. `userId` stays in the
+ * builder closure — it is not a schema key.
+ */
+export function soleurPlatformToolsForTests(args: {
+  userId: string;
+  crmLead: boolean;
+  c4Tools?: readonly { name: string }[];
+}): { name: string }[] {
+  const narration = buildNarrationTools({ userId: args.userId });
+  const c4 = args.c4Tools ?? [];
+  const crm = args.crmLead ? buildCrmTools({ userId: args.userId }) : [];
+  return [...narration, ...c4, ...crm];
+}
+
+/** FQNs canUseTool will tier. Empty unless this dispatch is a crm-lead chat.
+ *  Not added to CC_PATH_ALLOWED_TOOLS: writes stay on the review gate. */
+export function crmLeadPermissionToolNames(crmLead: boolean): string[] {
+  if (!crmLead) return [];
+  return buildCrmTools({ userId: "crm-lead-permission-names" }).map(
+    (tool) => `mcp__soleur_platform__${tool.name}`,
+  );
+}
+
+/**
  * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
  * because workspace path + BYOK key + service tokens are DB-resident.
  * Errors flow up to `soleur-go-runner.ts dispatch`'s `await
@@ -2340,6 +2368,11 @@ export const realSdkQueryFactory: QueryFactory = async (
           // transient disconnect — and the live-only frame is lost; the
           // workspace refetches on concierge reopen / next mount to cover it.
           onDiagramSaved: ({ dirPath, rerendered, diagnostic }) => {
+            // #8966 — count ALL THREE outcomes on the same feature slug: the
+            // silent-fallback incidence is only readable as a rate, and a rate
+            // needs the success denominator next to it. `outcome` is a tag
+            // (low-cardinality, Sentry-queryable), never the op.
+            let outcome = rerendered ? "rerendered" : "rerendered-false";
             try {
               defaultSendToClient(args.userId, {
                 type: "c4_diagram_saved",
@@ -2351,6 +2384,7 @@ export const realSdkQueryFactory: QueryFactory = async (
                 diagnostic: diagnostic ? diagnostic.slice(0, 20000) : diagnostic,
               });
             } catch (err) {
+              outcome = "emit-failed";
               // null first arg, never a real Error — the pino mirror
               // captures a passed Error first and Sentry drops the tagged
               // second capture (#8629); err identity lives in `extra`.
@@ -2364,6 +2398,16 @@ export const realSdkQueryFactory: QueryFactory = async (
                 message: "c4_diagram_saved frame emit threw",
               });
             }
+            // infoSilentFallback on a save path is accepted deliberately:
+            // the emit is per-SAVE (a tool call), never per-request, so the
+            // helper's no-hot-path caveat is satisfied by the call's own
+            // bound — a Concierge edit loop still cannot approach a burst.
+            infoSilentFallback(null, {
+              feature: "c4-save-outcome",
+              tags: { outcome },
+              extra: { dirPath },
+              message: "c4_diagram_saved frame outcome",
+            });
           },
         });
         c4ToolName = C4_TOOL_FQN;
@@ -2374,7 +2418,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     const platformServer = createSdkMcpServer({
       name: "soleur_platform",
       version: "1.0.0",
-      tools: [...buildNarrationTools({ userId: args.userId }), ...c4Tools],
+      // `{ name: string }[]` is the exported contract; the value is the
+      // full tool definitions the SDK server registers.
+      tools: soleurPlatformToolsForTests({
+        userId: args.userId,
+        crmLead: args.crmLead === true,
+        c4Tools,
+      }) as NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>,
     });
     (c4McpServers as Record<string, unknown>).soleur_platform = platformServer;
   }
@@ -2789,7 +2839,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           workspacePath: agentWorkspacePath,
           // Allow the flag-gated edit_c4_diagram through canUseTool (its tier
           // is auto-approve; writeC4Diagram enforces the diagrams-dir scope).
-          platformToolNames: c4ToolName ? [c4ToolName] : [],
+          platformToolNames: [
+            ...(c4ToolName ? [c4ToolName] : []),
+            ...crmLeadPermissionToolNames(args.crmLead === true),
+          ],
           pluginMcpServerNames: [],
           repoOwner: "",
           repoName: "",
@@ -3041,6 +3094,12 @@ export interface DispatchSoleurGoArgs {
    * gate — a trusted system-prompt append, never via context.content.
    */
   routineAuthoring?: boolean;
+  /**
+   * CRM new-lead chat. Registers `buildCrmTools` on this Query only and
+   * forwards the flag to the runner so the prompt is the CRO directive.
+   * Assistant `leader_id` is `cro` via `buildRow` when true. Not a persona.
+   */
+  crmLead?: boolean;
   /**
    * feat-wire-concierge-support-chat (ADR-113). Set to `"support"` by the
    * ws-handler when `chatContext.type === "support"` (the in-app support chat).
@@ -3526,6 +3585,7 @@ export async function dispatchSoleurGo(
   // benign false-positive) and the failure is mirrored — never a false-suppression.
   const registeredPlatformToolNames: string[] = [
     ...CC_REGISTERED_PLATFORM_TOOL_NAMES,
+    ...crmLeadPermissionToolNames(args.crmLead === true),
   ];
   void resolveC4Eligible(userId)
     .then((eligible) => {
@@ -3622,7 +3682,7 @@ export async function dispatchSoleurGo(
     // future caller can't silently produce an empty assistant row.
     if (!text) return;
 
-    const row = buildRow(mode, text, conversationId, conversationWorkspaceId);
+    const row = buildRow(mode, text, conversationId, conversationWorkspaceId, args.crmLead ? "cro" : undefined);
     // PR-C §2.11 (#3244): tenant-scoped assistant-row INSERT. Reuses
     // the `tenant` minted at function entry (above the user-row INSERT) and
     // the `conversationWorkspaceId` read once there (mig 059 member-keyed RLS).
@@ -4176,6 +4236,7 @@ export async function dispatchSoleurGo(
       persistActiveWorkflow,
       sessionId: sessionId ?? undefined,
       routineAuthoring: args.routineAuthoring,
+      crmLead: args.crmLead,
       // feat-wire-concierge-support-chat — forward the support persona to the
       // runner → realSdkQueryFactory (repo-gate bypass + skill/tool scope).
       persona: args.persona,

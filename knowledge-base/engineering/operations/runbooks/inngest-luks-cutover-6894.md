@@ -49,8 +49,15 @@ is the prod-write ack; the token that can write the flag is injected only for th
 
    ```
    doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
-     --since 3h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 20
+     --since 3h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 200 \
+     | jq -R -r 'fromjson? | .raw? | fromjson? | select(type == "object")
+         | select(.host == "soleur-inngest" and .SYSLOG_IDENTIFIER == "inngest-server-probe")
+         | .message | select(type == "string" and startswith("SOLEUR_INNGEST_SERVER_PROBE "))'
    ```
+
+   Read only rows the probe itself emitted (`SYSLOG_IDENTIFIER=inngest-server-probe`). The inngest
+   event log on the same host (`SYSLOG_IDENTIFIER=doppler`) quotes probe lines from GitHub issues about
+   this work, and a quoted line can be the newest row the `--grep` returns (#8846).
 
    On the newest `host_role=dedicated` row: `data_mount_devid` is the PLAINTEXT volume's
    `scsi-0HC_Volume_<id>` alias, `redis_active=active`, and `redis_keys` is a number (not
@@ -144,6 +151,11 @@ The `phase-frozen` row is the freeze start and the `phase-swapped` row is the re
 is up to 120s later, after T3). Anything due inside that window is re-armed the way it was armed —
 there is no backfill, and no dispatch that can synthesise one.
 
+*[2026-09-27, #6939:]* before re-firing a **cron** tick from that window, follow
+`inngest-server.md` § Bounded-outage note. "No backfill" is not safe to assume for crons: ADR-100's
+2026-09-19 addendum measured the scheduler firing each missed tick once on resume, and re-firing a
+drained tick double-fires the cron. That procedure's `routine_runs` check tells the two apart.
+
 ---
 
 ## 5. Close-out after `done`
@@ -152,8 +164,15 @@ there is no backfill, and no dispatch that can synthesise one.
 
    ```
    doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
-     --since 2h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 20
+     --since 2h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 200 \
+     | jq -R -r 'fromjson? | .raw? | fromjson? | select(type == "object")
+         | select(.host == "soleur-inngest" and .SYSLOG_IDENTIFIER == "inngest-server-probe")
+         | .message | select(type == "string" and startswith("SOLEUR_INNGEST_SERVER_PROBE "))'
    ```
+
+   Read only rows the probe itself emitted (`SYSLOG_IDENTIFIER=inngest-server-probe`). The inngest
+   event log on the same host (`SYSLOG_IDENTIFIER=doppler`) quotes probe lines from GitHub issues about
+   this work, and a quoted line can be the newest row the `--grep` returns (#8846).
 
    On the newest `host_role=dedicated` row, `data_mount_devid` must now be the **encrypted** volume's
    alias, `redis_active=active`, and `redis_keys` at least `k_freeze − e_freeze` (volatile keys may have
@@ -238,6 +257,7 @@ it**, and do not act on #8285's expiry until the store is re-cut. A rollback mak
 record it falsifies is reverted in one PR. An agent can do every step; none needs a console.
 
 1. **Confirm the store moved.** The newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row
+   emitted by `inngest-server-probe`
    reads `data_mount_src` other than `/dev/mapper/inngest-redis` (§5 step 1's query). The property
    probe reports this as `rollback_inversion` on #8285, and the wrong-volume alert pages on it.
 2. **Re-pause the wrong-volume alert** with the Doppler override described in §5 step 2

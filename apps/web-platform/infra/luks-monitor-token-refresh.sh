@@ -63,8 +63,9 @@ esac
 [ -L "$ENVF" ] && fail envfile_symlink
 # An ABSENT file is created in step 3, after the proof, with the end state workspaces-cutover.sh
 # leaves (0600 root). #8632's first apply found web-1 without one: cloud-init bakes the DSN
-# line only at a host's birth, and the cutover's write had not survived. Refusing left the host with
-# no token at all while the old one was being revoked (#8706 tracks the missing DSN line).
+# line only at a host's birth, and the cutover's write never ran (ADR-119 2026-09-27). Refusing left the host with
+# no token at all while the old one was being revoked. The DSN line is delivered by
+# terraform_data.luks_monitor_install (#8706).
 created=0
 before=""
 if [ -e "$ENVF" ]; then

@@ -29,10 +29,12 @@ signals + the operator-surface reasons documented there).
 Live standing alarms over this source:
 
 - **`logtail_exploration_alert.monitor_send_failed`** (#8097 / ADR-218, evaluated every 60 s over
-  a 300 s window) — the one Terraform-managed native Better Stack Logs alert, `soleur-monitor-send-failed-prd`. Pages
+  a 300 s window) — the first Terraform-managed native Better Stack Logs alert, `soleur-monitor-send-failed-prd`. Pages
   (team email; `betteruptime_policy.uptime` on the paid tier) on any PRIORITY-2 row whose message
   starts `SOLEUR_` and contains `_SEND_FAILED` or `_REFUSED` — a web-1 monitor unit's own Resend/
   Sentry send failed. `SOLEUR_*_SEND_SKIPPED` and `SOLEUR_*_HALT` never match by construction.
+  Since #8706 it also pages on `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn|send_failed`, which
+  `workspaces-luks-emit.sh` logs at `user.crit` when a LUKS drift event cannot reach Sentry.
   Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; verified through the real apply
   path by `terraform_data.send_failed_alert_probe` + `scripts/followthroughs/send-failed-alert-probe-8097.sh`;
   self-health via the `logs_alert` arm of `reconcile-live-heartbeats.ts`. Runbook:
@@ -52,7 +54,8 @@ Live standing alarms over this source:
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
-  `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row.
+  `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
+  whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
@@ -106,6 +109,18 @@ Live standing alarms over this source:
     again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
     `anthropic-credit-exhausted` Sentry issue alert (the credit probe's own cron monitor is
     routed since #8630 but muted, #8704).
+- **`logtail_exploration_alert.luks_monitor_host_timer_dark`** (#8706, hourly over a trailing 27 h
+  window, `lower_than 1`, missing data counts as zero) — `soleur-luks-monitor-host-timer-dark-prd`.
+  Pages (team email) when no `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` carries
+  `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own
+  nightly LUKS probe has not reported a PASSING run. It is host-scoped to web-1: web-2
+  (`soleur-web-2`) ships to the same source. The daily `workspaces-luks-verify.yml` rows never carry
+  that unit, so they cannot mask it. A host run that fails an assert, or a Vector or Logs-source
+  outage, also trips it. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; the unit it watches is delivered by
+  `terraform_data.luks_monitor_install` (`workspaces-luks.tf`); self-health via the `logs_alert` arm
+  of `reconcile-live-heartbeats.ts`. Runbook and no-SSH decode:
+  [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -205,6 +220,7 @@ List existing connections: `GET https://logs.betterstack.com/api/v1/connections`
   - **The canonical way to read git-data's own source is the environment, not the flag:** `export BS_TABLE=t520508_soleur_git_data_prd_logs` — which is what `scripts/followthroughs/git-data-rung2-evidence-capture.sh` does (its `PIN THE TABLE TO GIT-DATA'S OWN SOURCE` block), so every raw query it issues, and the derived `_s3` sibling, stay on one source by construction. Pinned by the `mode 1:` rows of `tests/scripts/test-betterstack-query-archive.sh`.
 - Always end SELECTs with `FORMAT JSONEachRow` for line-delimited JSON.
 - **(#8296) Three reads that report a false ABSENCE.** `--grep` is a literal `LIKE '%…%'` — `'a\|b'` matches the six-character string, never an alternation; run one grep per term. A tag read with `--limit` lets heartbeats scroll a rare transition row out of the window (the LUKS FSM `cutover-complete` row was "absent" for 30 min while present) — grep the transition REASON, not the tag. And an FSM row's `message` is a JSON OBJECT, so `.message[0:230]` errors and reads as no rows; test `type` before slicing. A negative read must also be bounded AFTER the action's own timestamp with slack: a window ending at `14:50:16` missed a write at `14:50:16.9`.
+- **(#8754) Counting a RARE event (a successful login, a single error class) across a long window: use the event's exact string, one window at a time, and a positive control that proves the window is covered.** `--grep` is a substring `LIKE`, so `Accepted` also matches sshd's `signature algorithm ssh-rsa not in PubkeyAcceptedAlgorithms` REJECTIONS; grep `Accepted publickey` / `session opened for user` instead. A noisy grep (`sshd`) hits `--limit 5000` in every multi-day window, so a count taken from it is a count of the rows returned, not of the rows that exist; the rare string itself returns well under the cap. A zero only means "did not happen" once a common row from the SAME host in the SAME window comes back (for example `Invalid user` with `--limit 50`). If no such row comes back, the window is not covered (the logs were not shipped, or were not retained) and the answer is INCONCLUSIVE, not zero.
 - Columns: `dt` (use for WHERE/ORDER), `raw` (the full log line as text/JSON). **What `dt` measures depends on the emitter.** For the Vector-shipped inngest source it is the warehouse's RECEIVE time, not the host's event time — measured 2026-09-24 (#8759): `dt` equals the `ingest_time` column byte-for-byte, sits ~1 s after the row's own journald `timestamp`, and one HTTP batch shares one `dt`. The host's own clock is inside `raw` (`timestamp`, `__REALTIME_TIMESTAMP`). Before treating `dt` as either clock for a new source, measure it: `SELECT dt, ingest_time, raw … LIMIT 5`.
 - Recent logs: `remote(t520508_..._logs)`. Older than the hot window: `s3Cluster(primary, t520508_..._s3)` with `WHERE _row_type = 1`, `UNION ALL`-combined.
 

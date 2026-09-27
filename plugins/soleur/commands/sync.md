@@ -353,8 +353,12 @@ normal steady state is distinguishable from a refusal.
   parseable dependencies (the diagram is a set of disconnected boxes — the docs
   are the defect, not the run), or a hand-edited file was skipped, or the pinned
   likec4 CLI was unreachable. Surface the reason; do not fail the sync.
-- `status=failed` (exit 1) — likec4 reported a source fault, or produced an empty
-  model. Surface the diagnostic.
+- `status=failed` (exit 1) — likec4 reported a source fault (`source-fault`),
+  produced an empty model (`empty-model`), or produced an elements-but-no-views
+  model (`zero-views` — a layout failure, not a source fault). For
+  `source-fault`/`empty-model`, surface the diagnostic and fix the `.c4`
+  source. For `zero-views`, do NOT edit the `.c4` source — retry the render,
+  then report; the committed artifact is left untouched either way.
 
 **Delivery precondition — state this, do not assume otherwise.** The KB viewer
 reads the diagram from the **GitHub source of truth**, not the on-disk clone

@@ -40,6 +40,8 @@ FAIL=0
 TOTAL=0
 
 die() { echo "HARNESS ABORT: $*" >&2; exit 2; }
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$SCRIPT_DIR/lib/mutation-scorer.sh" || die "could not source mutation-scorer.sh"
 
 WORK="$(mktemp -d -t inngest-zot-mut-XXXXXX)" || die "mktemp -d failed"
 trap 'rm -rf "$WORK"' EXIT
@@ -182,19 +184,10 @@ echo "baseline: guard GREEN on unmutated sandbox ($(grep -oE '[0-9]+/[0-9]+ pass
 echo ""
 
 # failed_on <log> <expected> — 0 iff some `  FAIL`-prefixed line of <log> contains <expected>.
-# The single verdict chokepoint for case_mutate's named-assertion check.
-# Capture, then match in bash — NO PIPE. A reader that stops at its first match leaves the
-# producer writing into a closed pipe; under load the producer takes SIGPIPE, pipefail reports
-# the pipeline failed, and a row that WAS killed on its named assertion scores MISROUTED (#8664).
-# The empty-string guard matters because a glob on "" matches anything. grep rc 1 is "no FAIL
-# lines" (a normal not-found); rc >= 2 is an unreadable log, which is a harness failure.
-failed_on() {
-  local log="$1" expect="$2" fails rc
-  [[ -n "$expect" ]] || die "failed_on: empty expected string"
-  fails="$(grep -E '^  FAIL' "$log")"; rc=$?
-  (( rc > 1 )) && die "failed_on: could not read $log (grep rc=$rc)"
-  [[ "$fails" == *"$expect"* ]]
-}
+# The single verdict chokepoint for case_mutate's named-assertion check. The contract (capture,
+# then match in bash; an empty needle or an unreadable log exits 2) lives in the shared scorer,
+# lib/mutation-scorer.sh (#8664, #8855). The self-test below exercises it through this wrapper.
+failed_on() { mutation_scorer_failed_on "$1" '^  FAIL' "$2"; }
 
 # Scorer self-test (#8664). A row's verdict must be a function of its log's bytes, never of how
 # the machine scheduled the processes reading them. The fixture puts the needle FIRST and ~1 MiB

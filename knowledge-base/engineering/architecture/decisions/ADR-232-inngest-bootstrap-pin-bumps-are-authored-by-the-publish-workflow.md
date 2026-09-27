@@ -26,12 +26,12 @@ Four properties make the obvious implementations wrong:
 **The trigger tag is not the target.** The workflow also fires on re-publish
 of an older tag (backfill). Bumping to the *triggering* tag would let an old
 re-publish silently downgrade the pin. The target must be recomputed as
-semver-max over `vinngest-v*` — the identical pipeline the AC6 drift guard
-uses (`git tag --list 'vinngest-v*' | sed | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$'
-| sort -V | tail -1`). Writer and checker compute "latest" the same way. Since
-§7 (#8747) they can still disagree on whether to *pin* it: when the semver-max
-tag is off main, the writer refuses it while the checker keeps demanding it,
-until #8782 moves both onto tags merged into main.
+semver-max over `vinngest-v*` merged into `main`, with the identical selector
+the AC6 drift guard uses (the `resolve` block of
+`bump-inngest-bootstrap-pin.sh`; a fixture-suite equality row pins the two
+copies). Since #8782 (2026-09-27), on a full-history checkout, writer and
+checker agree on both "latest" and "pinnable": a tag is a candidate only once
+its commit is reachable from the checked-out `HEAD`.
 
 **`GITHUB_TOKEN` cannot author the PR.** GitHub does not fire `pull_request`
 (or `push`) events for commits authored by `GITHUB_TOKEN`, so a bot PR opened
@@ -66,13 +66,15 @@ scheduled reconciler.** `bump-cloud-init-pin` runs in
 the precondition rather than a race; a sibling tag-triggered workflow would
 re-derive what the build already knows, and a cron reconciler would
 reintroduce a bounded drift window — the class being eliminated. Concurrency
-group `inngest-pin-bump` with `cancel-in-progress: false` serializes backfill
-runs without dropping them.
+group `inngest-pin-bump` with `cancel-in-progress: false` serializes bump runs
+and never cancels a running one. With three or more overlapping, GitHub drops
+the intermediate PENDING runs, which is harmless because every run reconciles
+to the merged max (#8782).
 
-**2. The target is semver-max `vinngest-v*`, not the triggering tag.** The
-script re-runs the AC6 tag-selection pipeline against a `fetch-tags` checkout
-of `main`, **refuses a target whose commit is not an ancestor of `main` (§7)**,
-then cross-checks the signed digest against the crane-resolved digest **only
+**2. The target is semver-max `vinngest-v*` merged into `main`, not the
+triggering tag.** The script re-runs the AC6 tag-selection pipeline against a
+`fetch-tags` checkout of `main`, **considering only tags merged into that
+checkout (§7, #8782)**, then cross-checks the signed digest against the crane-resolved digest **only
 when the signed tag equals the semver-max target**. An
 older-tag backfill therefore cannot fail the run on a mismatch that is
 expected-by-construction, and cannot downgrade the pin.
@@ -134,23 +136,31 @@ nobody else is coming to fix it. `result=opened|existing|noop|skipped|error`
 and `$GITHUB_STEP_SUMMARY` make each run's disposition readable without log
 archaeology.
 
-**7. Publish and bump both refuse a tag whose commit is not on `main` (#8747,
-added 2026-09-24).** `vinngest-v1.1.39` was cut on a commit that existed only on
+**7. Publish refuses, and the bump never selects, a tag whose commit is not on
+`main` (#8747, added 2026-09-24; bump side amended 2026-09-27, #8782).** `vinngest-v1.1.39` was cut on a commit that existed only on
 an unmerged PR branch. Its publish built an image from unreviewed bytes, and
 its bump PR merged the pin 93 minutes before the source PR did. Every tag from
 `v1.1.26` to `v1.1.39` had been cut the same way (16 of 44 tags are off `main`:
 those 14 plus `v1.1.14` and `v1.1.24`).
 
-- **The bump's `ancestry` stage is the authoritative check.** It runs before
-  `crane`, resolves `refs/tags/vinngest-<target>^{commit}` explicitly (never
-  the bare name), and refuses when: the checkout is shallow (or git cannot
-  say), the tag does not resolve to a commit, the target is not an ancestor
-  of the `main` checkout, `merge-base` exits other than 0/1, or the tag no
-  longer names the commit the build checked out (below). When the off-main
-  target is the tag `main` pins today, the refusal says so and forbids
-  deleting or re-cutting it; otherwise it tells the operator to delete the tag
-  and cut a NEW version on `main`, never a re-used name. A pin above every
-  remaining tag (a deleted pinned tag) is refused at `resolve` as a downgrade.
+- **The bump excludes off-main tags by construction; that is the
+  authoritative check.** The target is the semver-max over
+  `git tag --merged HEAD` on the `ref: main` checkout, so a tag cut on an
+  unmerged branch is never a candidate (#8782, 2026-09-27). `--merged` fails
+  OPEN on a cut-off or unreadable history — rc 0 either way, tags below a
+  shallow graft simply vanish, and a missing mid-history object is reported
+  only on stderr while the tags above it are still listed — so a shallow
+  checkout (or one where git cannot say) and any walk that writes to stderr
+  are both refused at `ancestry` BEFORE resolution, and an empty merged set
+  (a checkout without tags) is refused at `resolve`. All of this runs before
+  `crane`. The
+  `ancestry` stage then resolves `refs/tags/vinngest-<target>^{commit}`
+  explicitly (never the bare name) and refuses a tag that no longer names the
+  commit the build checked out (below). A pin above every merged tag — a
+  legacy off-main pin, which `--merged` can never select, or a deleted
+  pinned tag — is refused at `resolve` as a downgrade, with a remediation
+  that forbids deleting or re-cutting the pinned tag and says to cut a NEW,
+  higher version on `main`.
   It is authoritative because the bump job checks out `main` and
   runs main's copy of the script. The caveat is that the job's own
   *definition* still comes from the tagged commit's YAML, so this holds only
@@ -179,7 +189,7 @@ those 14 plus `v1.1.14` and `v1.1.24`).
   the tagged commit's YAML (a dispatch runs the copy on the ref it was
   dispatched from), so a branch forked before this change carries no refusal.
   That branch can still build an image. It is not auto-pinned, because the
-  bump refuses it, but it is not inert: see Residuals.
+  bump never selects it, but it is not inert: see Residuals.
 - **`mirror_only` is not refused.** It builds nothing and cannot move a
   digest. Refusing it would permanently strand the legacy off-main versions
   from zot backfill, a rollback path. The bump still judges the target
@@ -189,17 +199,31 @@ those 14 plus `v1.1.14` and `v1.1.24`).
   (the ADR-241 `infra-privileged` plan, #8209). That would run YAML written on
   a branch with Tier-B secrets, loaded before any ancestry step runs. The
   compatible shape is to dispatch the build from `main` (#4326).
+- **"Off main" is a point-in-time verdict.** The build judges the triggering
+  tag once, at push time; the bump and AC6 re-judge reachability on every run.
+  A tag refused as off-main becomes a candidate the moment its commit reaches
+  `main` some other way — a merge-commit or rebase merge of its PR (the
+  repository allows both) — and then it has no image: AC6 reds `main`, and a
+  bump for any older tag defers without self-healing. So an off-main tag must still be
+  DELETED, not left in place; exclusion protects the pin, not the tag set.
 - **Residuals.** An old `main` commit whose code was later reverted passes
   both checks. So does a tag re-pointed between two on-main commits. A
-  hand-authored pin PR to an off-main tag is not covered by either check, and
-  neither is `deploy-inngest-image.yml`, which deploys any published
-  `vX.Y.Z` to the live host by tag with no ancestry check (#8780).
+  hand-authored pin PR to an off-main tag is not covered by the bump; AC6
+  reds it unless the PR (or a branch it descends from) carries the tag's own
+  commit. `deploy-inngest-image.yml` deploys any published `vX.Y.Z` to the
+  live host by tag with no ancestry check (#8780); a gate added there must
+  anchor on `refs/remotes/origin/main`, never on `HEAD`, because a dispatch
+  from a feature branch would make `--merged HEAD` accept that branch's tags.
+- **Version allocation.** A new version must sort above EVERY existing
+  `vinngest-v*` tag, off-main ones included, never merely above the merged
+  max: an off-main name can never be reused (GHCR may hold its image), and
+  #4326's auto-mint must follow the same rule.
 
 **Sequencing.** After this merges, the carrier-changing PR flow is: merge the
 PR first, then tag the squash-merge commit on `main` (runbook
-`inngest-server.md` §Bootstrap-image release). The target stays "semver-max over
-all tags" until #8782 switches the bump and AC6 to tags merged into `main`.
-That switch is safe only after the first on-main re-tag (`v1.1.40`).
+`inngest-server.md` §Bootstrap-image release). The bump and AC6 switched to
+tags merged into `main` on 2026-09-27 (#8782), after `main` re-anchored on the
+on-main `v1.1.40` (`b8817ff1c4`).
 
 ## Alternatives Considered
 
@@ -214,7 +238,9 @@ That switch is safe only after the first on-main re-tag (`v1.1.40`).
 | Auto-merge unconditionally | A degraded zot mirror would merge a pin the dedicated host cannot pull — merging bad state faster is worse than holding a visibly-blocked PR |
 | Fail the run when auto-merge can't arm | A green-PR-open state is recoverable; a failed run that swallowed the PR is not |
 | Bump PR waits for (or is blocked by) the source PR (#8747) | No machine-readable link from a tag to "its" PR exists, and a wait adds a polling surface. Ancestry decides the same property from git alone. |
-| Target = semver-max over `git tag --merged HEAD` now (#8747) | Resolves to `v1.1.25` today (every newer tag is off main), which would open a downgrade PR. Sequenced as #8782, after the `v1.1.40` re-tag. |
+| Target = semver-max over `git tag --merged HEAD` now (#8747) | **Adopted 2026-09-27 (#8782).** Rejected on 2026-09-24 only because it then resolved to `v1.1.25` (every newer tag was off main), which would have opened a downgrade PR; safe once `main` re-anchored on the on-main `v1.1.40`. |
+| Anchor on `git tag --merged origin/main` instead of `HEAD` (#8782) | The writer's `HEAD` already is `main`. In PR CI a tag on the PR's own commit is visible to that PR and to branches descending from it, which is intended (AC6's `#8747:` diagnostic tells the author to delete it; `deploy-script-tests` is advisory). A stale local `origin/main` would mis-select, and one pipeline for writer and checker is simpler. **Re-evaluate when #6766/#6480 makes `deploy-script-tests` required:** a required AC6 would then block stacked PRs on another PR's tag, and the checker should move to `origin/${GITHUB_BASE_REF:-main}`. |
+| Refuse an off-main *signed* tag in the bump (#8782) | Breaks the legacy `mirror_only` rollback path (a backfill of an off-main version must still reconcile the pin), and the build job already refuses a non-`mirror_only` off-main tag. Exclusion from the candidate set already keeps it out of the pin. |
 | Content equality instead of ancestry (#8747) | Tolerates in-PR tagging, but a squash with identical bytes is exactly what reviewers never saw as a commit. Recorded as a decision challenge on the PR. |
 
 ## Consequences
@@ -249,6 +275,29 @@ both. When it IS the pinned tag (the state right after this change merged:
 refusal forbids that and the way out is cutting a new, higher version on
 `main` (the `v1.1.40` re-anchor).
 
+## Amendment 2026-09-27 (#8782)
+
+The bump target and the AC6 drift guard now take the semver-max over
+`vinngest-v*` tags merged into `HEAD`, not over every tag:
+`git tag --merged HEAD --list 'vinngest-v*'`. An off-main tag is excluded by
+construction rather than refused, so it can no longer turn `main` and every
+open PR red, nor block a legitimate bump to the highest on-main tag. §2, §7
+and the Context paragraph are rewritten; the 2026-09-24 amendment above is
+kept as the dated record of the interim state it describes. Three mechanisms
+carry the change:
+
+- History visibility is refused before resolution (§7): a shallow checkout,
+  or any stderr from the `--merged` walk; AC6 refuses both too.
+- One downgrade refusal replaces the legacy-off-main-pin and deleted-pin
+  refusals, and it reads the higher of the two files' pins.
+- The crane-failure deferral fires only for a target newer than the signed
+  tag and not already pinned; every other registry failure is an error.
+- The literal regex-parity rows become an equality check of the two 3-line
+  selector blocks, plus rows pinning how the checker consumes its selector.
+
+Merging it moved no pin: `main` already pinned `v1.1.40`, which is both the
+merged max and the overall max.
+
 ## Verification
 
 - `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh` — fixture suite
@@ -264,15 +313,22 @@ refusal forbids that and the way out is cutting a new, higher version on
   unmerged-branch tag, squash-merged content, off-main semver-max above an
   on-main signed tag, older off-main tag, true merge commit, tag on an older
   main commit, undecidable walk, missing tag commit, bare-name shadow,
-  shallow checkout, re-pointed tag and missing `--signed-commit`. It also
+  shallow checkout, re-pointed tag and missing `--signed-commit`. #8782
+  turns the off-main rows into exclusion rows (the off-main tag never reaches
+  `crane`, no branch, pin unchanged) and adds a target below a shallow graft
+  (B9b), semver order `v1.10.0` > `v1.9.0` (B20), pre-release and four-part
+  names excluded (B21), and the writer/checker selector byte-equality rows. It also
   adds a harness that runs the build job's shipped record and refusal steps
   against fixture repos shaped like an actions/checkout tag checkout, and
   `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh` pins the
   refusal's `mirror_only` gating.
 - `.github/scripts/test/run-all.sh` — suite registered; Bash-only by
   construction for the required merge-group path.
-- `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — AC6/AC6b/
-  Guard B unchanged; this PR does not move the pins.
+- `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — AC6 selects
+  the semver-max tag merged into `HEAD` (#8782) with the writer's selector
+  byte for byte, and its DRIFT diagnostic distinguishes an off-main tag, a pin
+  above every merged tag, and an ordinary missed bump. AC6b and Guard B are
+  unchanged; neither PR moved the pins.
 - `scripts/regenerate-c4-model.sh` + `plugins/soleur/test/c4-model-freshness.test.sh`
   — the write-back is documented on the `github -> soleurMarketplace`
   App-write edge (self-relations are unrepresentable in the DSL).

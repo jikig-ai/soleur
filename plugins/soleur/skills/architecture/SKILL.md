@@ -295,8 +295,10 @@ unregenerated `model.likec4.json` stays stale until someone runs this:
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh"
 
 # Or validate only (line-numbered diagnostics) without rewriting the artifact:
+# --no-use-dot keeps the drift check on the same wasm layout the artifact was
+# rendered with — a dot-layout verdict would disagree with committed bytes.
 cd knowledge-base/engineering/architecture/diagrams
-npx -y likec4@1.50.0 validate .
+npx -y likec4@1.50.0 validate --no-use-dot .
 ```
 
 The pinned `1.50.0` is load-bearing: it MUST match `apps/web-platform/Dockerfile`
@@ -305,13 +307,20 @@ The pinned `1.50.0` is load-bearing: it MUST match `apps/web-platform/Dockerfile
 `c4-likec4-version-pin.test.ts`. Never pin to a floating tag (the unpinned
 `likec4` / a moving release) — a CLI/client schema skew silently corrupts the
 rendered diagram. `render-c4-model.sh` renders
-off-tree and refuses to publish an empty/invalid model, so a broken `.c4` can
-never clobber the good committed artifact.
+off-tree and refuses to publish an empty/invalid/zero-view model, so a broken
+`.c4` or a failed layout can never clobber the good committed artifact.
 
 On success, report element / relationship / view counts (read the
 `elements` / `relations` / `views` key counts from `model.likec4.json`). On
-failure, surface the line-numbered diagnostics and fix the `.c4` source before
-continuing.
+failure, branch on the refusal class — do NOT uniformly "fix the source":
+
+- **Source validation error or empty/degenerate model** — surface the
+  line-numbered diagnostics and fix the `.c4` source before continuing.
+- **"elements but no views — a layout failure"** — the `.c4` source is
+  innocent; editing it cannot help. Read the render log tail the refusal
+  prints, retry the render once, and if it persists reproduce with the
+  `export json --no-use-dot` command the message names, then report the
+  outcome rather than hand-editing the model.
 
 ---
 

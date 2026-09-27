@@ -32,7 +32,12 @@ rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 
 # The 4 allowed replaces (server + 2 id-referencing dependents + the token whose ForceNew
 # access change CAUSES the recreate, #6178), each delete+create.
-SERVER_REPLACE="$(rc_obj 'hcloud_server.inngest' '"delete","create"')"
+# #8754: the replacement server carries the deny-all firewall in firewall_ids at create, and the
+# firewall rides the plan as a no-op dependency whose id the gate reads. Synthesized id.
+FW_ID=424242
+FW_NOOP="{\"address\":\"hcloud_firewall.inngest\",\"change\":{\"actions\":[\"no-op\"],\"before\":{\"id\":\"${FW_ID}\"},\"after\":{\"id\":\"${FW_ID}\"}}}"
+srv_replace() { printf '{"address":"hcloud_server.inngest","change":{"actions":["delete","create"],"after":%s}}' "$1"; }
+SERVER_REPLACE="$(srv_replace "{\"firewall_ids\":[${FW_ID}]}"),${FW_NOOP}"
 NET_REPLACE="$(rc_obj 'hcloud_server_network.inngest' '"delete","create"')"
 VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"delete","create"')"
 TOKEN_REPLACE="$(rc_obj 'doppler_service_token.inngest' '"delete","create"')"
@@ -239,6 +244,26 @@ RCHK "C14: doppler_secret.inngest_redis_luks_key present as no-op => ABORT luks_
 rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks_staging' '"create"')"
 RCHK "C15: a prefix-sharing volume address => ABORT inngest_out_of_scope_changes" 1 "reason=inngest_out_of_scope_changes "
 
+# ── #8754: the replacement server must be BORN bound to hcloud_firewall.inngest ─────────
+# firewall_ids is Optional+Computed, so a config that drops it plans no firewall change at all; the
+# create's `.change.after.firewall_ids` is the one place a replace plan shows the binding. Fail
+# closed when the firewall's id cannot be read from its own plan entry.
+NET_VA="${NET_REPLACE},${VA_REPLACE}"
+rp "$(srv_replace '{"firewall_ids":[]}')" "$FW_NOOP" "$NET_VA"
+RCHK "F1: server create with firewall_ids=[] => ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace '{"firewall_ids":[99]}')" "$FW_NOOP" "$NET_VA"
+RCHK "F2: server create bound to ANOTHER firewall id => ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace '{}')" "$FW_NOOP" "$NET_VA"
+RCHK "F3: server create with firewall_ids absent => ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID},99]}")" "$FW_NOOP" "$NET_VA"
+RCHK "F4: server create bound to the firewall AND another => ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" "$NET_VA"
+RCHK "F5: hcloud_firewall.inngest absent from the plan (id unreadable) => fail-closed ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" '{"address":"hcloud_firewall.inngest","change":{"actions":["no-op"],"before":{},"after":{}}}' "$NET_VA"
+RCHK "F6: the firewall's id unknown in its plan entry => fail-closed ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" "{\"address\":\"hcloud_firewall.inngest\",\"change\":{\"actions\":[\"no-op\"],\"before\":{\"id\":\"${FW_ID}\"},\"after\":null}}" "$NET_VA"
+RCHK "F7 (must-PASS): firewall id read from .before when .after is null => PASS" 0 "inngest_host_replace_gate: PASS"
+
 # EMPTY-EVALUATING COUNTER (Guard 3's row, carried over). Built on the C1 input, where
 # redis_volume_touched is the SOLE catcher: emptied, and without plan_gate_assert_numeric,
 # [[ "" -eq 0 ]] is TRUE and the gate would PASS the resize again.
@@ -275,11 +300,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 33 ]]; then
+if [[ "$_ran" -lt 40 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 33. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 40. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 33)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 40)\n' "$_ran"
 fi
 
 echo ""

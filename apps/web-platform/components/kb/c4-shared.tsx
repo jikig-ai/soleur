@@ -60,6 +60,12 @@ export type ProjectResponse = {
   dump: Record<string, unknown> | null;
   viewIds: string[];
   diagnostics: Diagnostic[];
+  /** #8966 — the DERIVED staleness verdict, present only when the server
+   *  produced one. `undefined` is "no information" (derivation failure, no
+   *  model commit, in-flight save window): the frame/outcome state governs
+   *  then. When present it is authoritative — a `false` clears a frame-set
+   *  banner, a `true` resurrects it on remount or out-of-band source push. */
+  stale?: boolean;
 };
 
 export const Spinner = () => (
@@ -118,6 +124,9 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
         dump: json.dump ?? null,
         viewIds: json.viewIds ?? [],
         diagnostics: json.diagnostics ?? [],
+        // NOT `?? false`: absent means "no verdict" — normalizing to false
+        // would let an underived read clear a banner a dropped frame earned.
+        stale: json.stale,
       });
     } catch (e) {
       if (isCurrent() && !(opts?.silent && dataPresent.current))
@@ -387,18 +396,17 @@ export function C4CodePanel({
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   // Optimistic apply (F-A1): content the user has SUCCESSFULLY saved this
   // session, keyed by file. On a 200 PUT the GitHub commit is the source of
-  // truth, but GET /project reads the on-disk workspace clone, which can lag —
-  // a diverged/un-fast-forwardable clone (self-heal aborts to preserve un-pushed
-  // session work) or Contents-API→fetch replica propagation lag returns the
-  // PRE-edit text. Without this, the `[data, activeFile]` re-seed below clobbers
-  // the editor back to the stale source and the save silently reverts. We keep
-  // the just-saved content as the editor value until the reloaded source catches
-  // up to it. Diagram staleness (the dump half) is surfaced honestly by the
-  // existing Layer-1 banner (#4963) — this only fixes the source revert.
-  // The marker self-clears once `incoming === optimistic` (clone caught up). For
-  // a PERMANENTLY-diverged clone (the H1 liveness gap, tracked in #5221) it
-  // persists for the session, masking external edits to that file until remount —
-  // an accepted trade vs. the silent revert; the next local save re-pins it.
+  // truth, and GET /project reads GitHub — but Contents-API→replica
+  // propagation can lag, returning the PRE-edit text. Without this, the
+  // `[data, activeFile]` re-seed below clobbers the editor back to the stale
+  // source and the save silently reverts. We keep the just-saved content as
+  // the editor value until the reloaded source catches up to it. Diagram
+  // staleness (the dump half) is surfaced honestly by the Layer-1 banner
+  // (#4963, derived server-side by #8966) — this only fixes the source revert.
+  // The marker self-clears once `incoming === optimistic` (the read caught
+  // up). If the served source NEVER catches up it persists for the session,
+  // masking external edits to that file until remount — an accepted trade
+  // vs. the silent revert; the next local save re-pins it.
   const savedContentRef = useRef<Record<string, string>>({});
   // Per-editor font zoom (0 = default 12px), clamped to [10px, 24px]. Drives a
   // CodeMirror theme extension so content + gutter scale together — scoped to

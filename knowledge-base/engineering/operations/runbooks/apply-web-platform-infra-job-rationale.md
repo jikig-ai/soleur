@@ -32,6 +32,23 @@ under the limit is `plugins/soleur/test/workflow-file-size.test.ts`; the decisio
 RED run of this workflow shows zero jobs, start at
 `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md`.
 
+**Per-merge `-target` note: `hcloud_firewall_attachment.inngest` (#8754).** The `apply` job's
+`Terraform plan (allow-list, non-SSH resources only)` step targets this address, and the
+`inngest_host` job does not. The address is a `removed { lifecycle { destroy = false } }` forget in
+`inngest-host.tf`; the rationale is the ADR-100 2026-09-25 addendum. Under `-target`, a `removed`
+block is planned only if its address is targeted, so:
+
+- **The per-merge `apply` job targets it.** The first merge apply after #8754 plans a `forget`
+  and drops the state entry. No `[ack-destroy]` is needed: `destroy-guard-filter-web-platform.jq`
+  excludes a forget from `resource_deletes`, and its `nested_deletes` clauses are scoped to
+  Cloudflare types, which an hcloud attachment is not. The live binding is applied to nothing, so
+  forgetting it changes no host.
+- **The `inngest_host` job does not target it.** A birth must never plan a forget, and its shape
+  gate refuses one (`reason=forget_present`).
+
+Keep the `removed` block and this `-target` permanently, as `doppler-write-token.tf` does. Once the
+forget has applied, a `removed` block for an absent address is a no-op tombstone.
+
 ## notify-apply-failure
 
 --- #7586: a non-green apply run reaches a channel ----------------------------------------
@@ -172,16 +189,17 @@ gives the delivery its own dispatch, scoped to that one address.
      click — and for this job it is the load-bearing one. `workflow_dispatch` runs the
      SELECTED REF's workflow AND its scripts; this job sources its gate from
      ${GITHUB_WORKSPACE} and runs root `remote-exec` on web-1, so without the environment's
-     `deployment_branch_policy` (web-host-birth-environment.tf:63-78) anyone who can
+     `deployment_branch_policy` (web-host-birth-environment.tf, resource
+     `github_repository_environment.web_platform_infra_apply`) anyone who can
      dispatch could point the run at a branch carrying a neutered gate — and the reviewer
      prompt shows a branch NAME, not a diff. A first-step `github.ref` guard was considered
      and rejected as strictly weaker: the guard would itself be supplied by the branch it is
      meant to police.
      THE PIN IS LIVE — measured 2026-08-16, not inherited. The environment carries
      protection_rules ["required_reviewers","branch_policy"] and exactly one deployment
-     branch policy, "main". `github_repository_environment_deployment_policy.web_platform_infra_apply_main`
-     does still show as a pending CREATE in the push plan, but that is a STATE fact
-     (Terraform has not adopted it yet), NOT a liveness one. An earlier revision of this
+     branch policy, "main". Until #8754 the policy showed as a pending CREATE in the push
+     plan (Terraform had not adopted it; see the ADOPTED BY IMPORT note in
+     web-host-birth-environment.tf), and that was a STATE fact, NOT a liveness one. An earlier revision of this
      comment inherited the plan's "the pin is among the changes the wedge is holding" and
      read it as "the pin may not be protecting you" — the opposite of the measurement, and
      understating a security control is the more dangerous direction of that error. When

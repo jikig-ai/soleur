@@ -22,8 +22,8 @@
 #   3. Every RED is attributed to a named check, and the anchor must appear ON A [FAIL] LINE.
 #      Matching anywhere in combined output is weaker than it looks: a guard whose §2 emitted
 #      its findings as plain prints while an unrelated floor supplied the exit code would still
-#      satisfy a substring test. Both greps read a FILE (never a pipe into `grep -q` on the
-#      producer), so the SIGPIPE-fails-open trap in the header does not apply.
+#      satisfy a substring test. The anchor check is mutation_scorer_failed_on
+#      (lib/mutation-scorer.sh), which captures the [FAIL] lines once and matches in bash -- no pipe.
 #   4. TWO POSITIVE CONTROLS, in both directions: a benign edit stays GREEN, and a
 #      legitimately dual-delivered NEW artifact stays GREEN. Without the second, a guard that
 #      over-fires on any addition would score a clean run.
@@ -56,6 +56,11 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
 REAL_INFRA="$ROOT/apps/web-platform/infra"
+# The scorer is located from THIS file, never from the cwd's checkout (`git rev-parse` would load
+# another checkout's copy when run from there).
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mutation-scorer.sh" \
+  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
 [[ -f "$GUARD" ]] || { echo "FATAL: $GUARD not found" >&2; exit 2; }
 
@@ -286,7 +291,7 @@ expect_red() {
   mutations_run=$((mutations_run + 1))
   if run_guard; then
     no "$label: guard still PASSED with the invariant broken -- it cannot detect this"
-  elif grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor'. Either it failed for an unrelated reason
@@ -872,7 +877,7 @@ expect_probe_red() {
   probe_reds=$((probe_reds + 1))
   if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
     no "$label: guard still PASSED with the hygiene rule broken -- the check asserts nothing"
-  elif grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor' -- unrelated reason. Output: $(<"$OUT")"
@@ -1076,8 +1081,8 @@ s = s[:j] + "\n      \"sudo useradd -l -d /usr/local/bin/phantom-useradd.sh svcu
 
 # ── GUARD 2 (#7226, ADR-237): every Terraform connection block pins host_key ─────────────
 # Rows 1-6 of the plan's Guard 2 matrix, each attributed to its own [FAIL] text. Row 3's floor is
-# reached by renaming server.tf's blocks away (ci-ssh-key.tf's and workspaces-luks.tf's blocks
-# remain, so the walk reports 2 -- #8632 added the second). Row 4 edits a DIFFERENT .tf, which only Guard 2's directory walk can see.
+# reached by renaming server.tf's blocks away (ci-ssh-key.tf's block and workspaces-luks.tf's two
+# remain, so the walk reports 3 -- #8632 added the second, #8706 the third). Row 4 edits a DIFFERENT .tf, which only Guard 2's directory walk can see.
 expect_red "G2-1 (host_key deleted from the FIRST block)" server.tf "(host_key x0)" '
 old = "    host_key    = local.web_1_ssh_host_key\n"
 assert old in s
@@ -1091,7 +1096,7 @@ s = s[:i] + s[i + len(old):]
 '
 
 expect_red "G2-3 (floor: the walk stops finding server.tf blocks)" server.tf \
-  "G2: swept only 2 SSH connection blocks" '
+  "G2: swept only 3 SSH connection blocks" '
 assert s.count("  connection {\n") >= 18
 s = s.replace("  connection {\n", "  connexion {\n")
 '
@@ -1200,7 +1205,7 @@ _g2_json_row() { # <label> <json> <expect: red|green> <anchor>
   if run_guard; then
     if [[ "$want" == green ]]; then ok "$label: guard stayed GREEN"
     else no "$label: guard still PASSED -- a .tf.json connection block is invisible to it"; fi
-  elif [[ "$want" == red ]] && grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
+  elif [[ "$want" == red ]] && mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: unexpected verdict (want $want, anchor '$anchor'). Output: $(<"$OUT")"

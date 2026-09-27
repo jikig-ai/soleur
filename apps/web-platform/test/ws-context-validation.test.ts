@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { validateConversationContext } from "@/server/context-validation";
+import {
+  crmLeadModePath,
+  isCrmLeadModePath,
+  validateConversationContext,
+} from "@/server/context-validation";
 
 describe("validateConversationContext", () => {
   it("returns undefined for undefined input", () => {
@@ -221,5 +225,29 @@ describe("validateConversationContext", () => {
         content: 12345,
       }),
     ).toThrow("content must be a string");
+  });
+
+  it("accepts crm-lead context with NO path (mode flag)", () => {
+    const result = validateConversationContext({ type: "crm-lead" });
+    expect(result).toEqual({
+      type: "crm-lead",
+      path: undefined,
+      content: undefined,
+    });
+  });
+
+  it("rejects a crm-lead context whose path is unsafe", () => {
+    expect(() =>
+      validateConversationContext({
+        type: "crm-lead",
+        path: "../x.md",
+      }),
+    ).toThrow("path must be a valid file path");
+  });
+
+  it("recognizes only the crm-lead mode-path shape", () => {
+    expect(isCrmLeadModePath("crm-lead/abc.mode")).toBe(true);
+    expect(isCrmLeadModePath("knowledge-base/overview.md")).toBe(false);
+    expect(crmLeadModePath("abc")).toBe("crm-lead/abc.mode");
   });
 });

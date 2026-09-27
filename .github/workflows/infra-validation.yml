@@ -131,6 +131,9 @@ on:
       - "scripts/cutover-inngest.sh"
       - "tests/scripts/lib/inngest-host-dark-gate.sh"
       - "scripts/lib/betterstack-read-classify.sh"
+      # (#8846) the shared probe-row predicate the dark-gate lib, the cutover liveness counters and
+      # the #7674 watchdog step all source; the classify and cutover suites execute it.
+      - "scripts/lib/inngest-probe-row.sh"
       # (#7761) The same suite's probe-parity loop reads the follow-through probe's DRIFT_GREPS
       # block. Without this path a PR that edits ONLY the probe (dropping a drift term, say)
       # skips the one guard that pins the probe's drift set to the emitter's reason vocabulary.
@@ -558,8 +561,9 @@ jobs:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675 — a glob suite,
       # executed on this leg by the runner step) can compare the pin against the
-      # latest published tag. Without tags the guard self-skips (visible SKIP,
-      # never false-green). detect-changes already uses fetch-depth: 0 as precedent.
+      # latest tag merged into HEAD (#8782). In CI a shallow checkout or an empty
+      # merged set FAILS the guard rather than skipping. detect-changes already
+      # uses fetch-depth: 0 as precedent.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
@@ -1245,6 +1249,11 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      # (#8754) Read-only. A config-driven `import` block still calls the provider Read under
+      # -refresh=false, and GitHub's deployment-branch-policies GET needs Actions read, so without
+      # this the web-platform plan errors on the policy adoption instead of showing it pre-merge.
+      # Only needed while web-host-birth-environment.tf carries its one-shot `import` block (#9060).
+      actions: read
     strategy:
       matrix:
         directory: ${{ fromJSON(needs.detect-changes.outputs.directories) }}
