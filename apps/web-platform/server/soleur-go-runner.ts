@@ -1623,6 +1623,8 @@ interface ActiveQuery {
    * (deployed-env QA: the support agent complains about it in every reply).
    */
   persona: Persona;
+  /** Pinned with the query. Selects the crm-lead wrap postamble. Not a persona. */
+  crmLead: boolean;
   query: Query;
   inputQueue: PushQueue<SDKUserMessage>;
   lastActivityAt: number;
@@ -2547,7 +2549,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     state: ActiveQuery,
     userMessage: string,
   ): void {
-    const wrapped = wrapUserInput(userMessage, state.persona);
+    const wrapped = wrapUserInput(userMessage, state.persona, state.crmLead);
     const sdkUserMessage: SDKUserMessage = {
       type: "user",
       message: {
@@ -2705,6 +2707,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         // ADR-113: pin the persona for the query's lifetime so every queued
         // user message wraps with the matching postamble.
         persona: args.persona ?? "command_center",
+        crmLead: args.crmLead === true,
         query,
         inputQueue,
         lastActivityAt: now(),

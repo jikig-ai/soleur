@@ -7,7 +7,7 @@ import type { ConversationStatus } from "@/lib/types";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 import { relativeTime } from "@/lib/relative-time";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { isCrmLeadModePath } from "@/server/context-validation";
+import { isCrmLeadModePath } from "@/lib/crm/crm-lead-mode";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import { useTeamNames } from "@/hooks/use-team-names";
 
