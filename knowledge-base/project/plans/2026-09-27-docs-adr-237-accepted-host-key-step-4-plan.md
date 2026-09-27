@@ -14,6 +14,42 @@ brand_survival_threshold: none
 
 # docs: flip ADR-237 to `accepted` and tick host-key post-merge step 4
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27. Proportional pass: inline verification only, with no agent fan-out,
+following the operator's direction for a two-file docs change.
+
+### Key Improvements
+
+1. **Probe order checked against the source.** In `apps/web-platform/infra/git-data-cutover.sh`,
+   the `store-not-cut-over` probe (`_store_refuse store-not-cut-over already_cut_over`) runs before
+   `refuse_if_store_not_empty` (`_store_refuse store-empty store_not_empty`). So run 36119817656
+   never evaluated `store_not_empty`, and the addendum's claim that step 5 is still open is correct.
+   Step 5 cannot be ticked from this run, which the Non-Goals already reflect.
+2. **Cross-reference wording now quotes the source.** The addendum's ADR-220 sentence now mirrors
+   ADR-220's own 2026-09-21 amendment text ("as to web-1 standing in for git-data"; "`store_not_empty`
+   and the bounded probes stay") instead of a paraphrase.
+3. **Code-review overlap run for real.** 87 open `code-review` issues, zero matches.
+
+### Gates
+
+- 4.6 User-Brand Impact: pass. Threshold `none`; no file matches the sensitive-path regex, since
+  both files are under `knowledge-base/`.
+- 4.7 Observability: skipped (pure docs; every Files-to-Edit path is under `knowledge-base/`).
+- 4.8 PAT: 0 hits.
+- 4.5, 4.55, 4.9, 4.10 and 4.11 do not fire: no network, cutover, UI, store or guard deliverable.
+  The SSH keywords in this plan describe evidence, not a connectivity fault.
+
+### Verifications (run live on 2026-09-27)
+
+- Run 36119817656: metadata and log lines as quoted in Premise Validation
+  (`gh run view --json` / `--log`).
+- `51a5541a1a` is an ancestor of `origin/main`.
+- PR #8511 `MERGED`. #7226 and #8125 `CLOSED`. #5914 `OPEN`.
+- `plugins/soleur/scripts/admin-merge-ready.sh` exists. `lefthook.yml` defines the `bun-test` and
+  `plugin-component-test` commands that `LEFTHOOK_EXCLUDE` names.
+- Rule id `wg-use-closes-n-in-pr-body-not-title-to` is present in AGENTS.md.
+
 ## Overview
 
 ADR-237 (SSH host keys are pinned) is `adopting`. Its own Status section names the flip condition:
@@ -147,9 +183,9 @@ None. The plan and tasks artifacts are the only additions.
 
 ## Open Code-Review Overlap
 
-None. Neither file is referenced by an open `code-review` issue. Verify at work time with
-`gh issue list --label code-review --state open --json number,body` piped to `jq` with a
-`contains($path)` filter.
+None. Checked on 2026-09-27 against all 87 open `code-review` issues
+(`gh issue list --label code-review --state open --json number,title,body`, then a standalone
+`jq --arg path … 'select(.body // "" | contains($path))'`). No issue body mentions either file.
 
 ## Implementation Phases
 
@@ -186,10 +222,12 @@ None. Neither file is referenced by an open `code-review` issue. Verify at work 
    - Runbook step 5 (discharging erasures left pending by the pin window) is not done by this run,
      which stopped before the `store_not_empty` probe.
 
-   Effects elsewhere, already written conditionally and not rewritten here: ADR-220 D4's first
-   residual and the 2026-09-15 "Store-probe evidence is unauthenticated until #7226" residual close
-   (as to host identity; a pinned key authenticates the host, not its answers). ADR-068's host-key
-   gate is discharged.
+   Effects elsewhere, already written conditionally in those records and not rewritten here: per
+   ADR-220's 2026-09-21 amendment, D4's first residual ("Unverified host keys (#7226)") closes, and
+   so does the 2026-09-15 residual "Store-probe evidence is unauthenticated until #7226", as to web-1
+   standing in for git-data. A pinned key authenticates the host, not its answers, so
+   `store_not_empty` and the bounded probes stay. ADR-068's host-key gate (its 2026-09-21
+   amendment) is discharged.
    ```
 
 ### Phase 2: Runbook
