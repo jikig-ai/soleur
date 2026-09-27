@@ -30,13 +30,17 @@ D4 ssh is NOT overridable by a declaration
 D5 the SKIP-DECLARED fixture classifies without executing
 D5b the advisory fires only when the declared verb IS executable
 D6 the not-allowlisted fixture FAILs without executing
+E ${id} the Step 10.4 chain leaves the decoded command
+E twin i a length-2 decoder twin DOES launder the fence, so E-fence can go red
+E twin ii re-adding the 8149 strip double-decodes NEST, so E NEST can go red
+E-fence an empty quoted command never falls through to the Form B fence
 E1 fold header with no continuations returns empty, not the indicator
 E1 sandbox unavailable => SKIP naming the sandbox, executor never called
 E2 sandbox available => the executor IS reached (E1 is not vacuous)
 EVERY project-agnostic prescription carries the conditional on its own line
 F1 AC1 — Step 10.4 delegates to the extracted gate, not to inline bash
 F1c the runtime normalizes $CMD ONCE, before the gate, the reject and the exec
-F1d the runtime dequotes a YAML-quoted inline scalar inside the normalize window (#8149)
+F1d after normalization no CMD assignment precedes the exec (#8102)
 F2 AC2 — the sandbox carries the load-bearing binds
 F2b AC2 — the sandbox mount set is CLOSED, not merely populated
 F3 AC2 — mount order is load-bearing: --tmpfs /home precedes the repo bind
@@ -68,13 +72,15 @@ N6 blank line inside a block is skipped, scalar continues
 N6 blank line inside a fold is skipped, scalar continues
 N7 a continuation beginning `command:` is CONTENT, not a re-triggered key
 P1 awk and TS agree byte-exactly on every Form-A fixture
+P2 known divergence - a Unicode space after a closing quote (TS fallback, awk verbatim)
 P2 known divergence — CRLF (TS splits on /\\r?\\n/, awk leaves the \\r)
-P2 known divergence — inline quote stripping (TS strips, awk does not)
 P3 every parity fixture is Form-A-only (has `command:`, no fenced block)
 Phase 2 aggregate table includes Discoverability Test Execution row
 Phase 4 prescribes at least one invocation that actually RUNS the battery
 Phase 4 states WHY it stays unsharded
 Phase 4's prescription is imperative, not conditional
+Q ${id} awk and TS emit the YAML value
+Q-ids the fixture sections are exactly the expected cases and the deviation keys are pinned
 R1 block scalar carrying a second command line is rejected (newline is shell-active)
 R2 a folded credentialed command is rejected by the verb allowlist
 R2b the retired denylist's verbs stay rejected, and so do verbs it never named
@@ -89,6 +95,7 @@ Row 7: auth-gated (rc=22, 401 not in expected) → SKIP
 Row 8: PASS (rc=0 OR matching expected) — 401 in '200 or 401'
 S1 does NOT consume a less-indented non-key line (reviewer/executor differential)
 SENSITIVE_PATH_RE literal appears ≥2 times (Check 6 + Check 10)
+Scope parseExpected decodes nothing, the DQ2 expected value keeps both backslashes
 Shared Plan-File Resolution sub-section referenced from ≥3 places (header + 2 callers)
 Step 10.4 delegates to the extracted probe-verb gate (#7393, ex-CPO condition C1)
 Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B

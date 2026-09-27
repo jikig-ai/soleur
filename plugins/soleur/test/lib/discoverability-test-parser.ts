@@ -199,7 +199,14 @@ export function parseCommand(observabilityBlock: string): string {
         continue;
       }
       const inlineKey = line.match(INLINE_KEY_RE);
-      if (inlineKey) return stripQuotes(inlineKey[1].trim());
+      if (inlineKey) {
+        // The decode sees the UNTRIMMED capture, so its quote decision is
+        // ASCII-exact like the awk's. A value it declines falls back to a trim —
+        // NOT stripQuotes(), which would empty `""` and strip the outer pair of
+        // `"a" b "c"` while the awk returns both unchanged.
+        const raw = inlineKey[1];
+        return decodeQuotedScalar(raw) ?? raw.trim();
+      }
       continue;
     }
     // Blank lines are legal inside a scalar and carry no indentation, so this
@@ -557,10 +564,39 @@ export async function classifyDiscoverabilityResult(
   return { result: "PASS" };
 }
 
+/**
+ * Decode a YAML-quoted inline `command:` scalar — mirrors `yaml_inline_scalar()` in
+ * parse-form-a.awk, which is authoritative (if they drift, the awk wins).
+ *
+ * Contract (#8102): the closing quote is the first UNESCAPED quote of the same kind,
+ * and only ASCII `[ \t\r]*` or `[ \t\r]+#…` (a YAML comment) may follow it.
+ * `"…"` decodes `\"` and `\\` in one left-to-right pass; every other backslash
+ * sequence (`\n`, `\t`, …) passes through byte-for-byte, so a shell `\n` never
+ * becomes a real newline that Step 10.5 would reject. `'…'` decodes `''` only.
+ *
+ * Returns null — the caller keeps its fallback — when the value is not quoted, the
+ * pair is unterminated or mismatched, anything else follows the closing quote, or
+ * the body is EMPTY. `""` must stay `""`: decoded to "", the runtime would fall
+ * through to Form B and execute whatever fence follows.
+ *
+ * Used ONLY by parseCommand. `expected_output` and `credentials_required` keep
+ * stripQuotes(), because their runtimes decode nothing.
+ */
+export function decodeQuotedScalar(value: string): string | null {
+  const dq = value.match(/^"((?:[^"\\]|\\.)*)"(?:[ \t\r]*|[ \t\r]+#.*)$/);
+  if (dq) return dq[1].length >= 1 ? dq[1].replace(/\\(["\\])/g, "$1") : null;
+  const sq = value.match(/^'((?:[^']|'')*)'(?:[ \t\r]*|[ \t\r]+#.*)$/);
+  if (sq) return sq[1].length >= 1 ? sq[1].replace(/''/g, "'") : null;
+  return null;
+}
+
 function stripQuotes(value: string): string {
-  // SYMMETRIC pair only, mirroring the runtime's `case` in SKILL.md Step 10.4
-  // (`"…"` or `'…'`). The earlier `^["'](.*)["']$` also stripped a MISMATCHED
-  // pair (`"…'`), which no YAML parser accepts — the mirror was looser than the
-  // string of record and would have PASSed a plan the runtime cannot run.
+  // SYMMETRIC pair only, mirroring the runtime's `CREDS_REQ` case-strip in
+  // SKILL.md Step 10.4 (`"…"` or `'…'`). It decodes NOTHING, on purpose: the
+  // runtimes of its two remaining callers (`expected_output`, `credentials_required`)
+  // do not decode either. The `command:` path decodes through decodeQuotedScalar().
+  // The earlier `^["'](.*)["']$` also stripped a MISMATCHED pair (`"…'`), which no
+  // YAML parser accepts — the mirror was looser than the string of record and would
+  // have PASSed a plan the runtime cannot run.
   return value.replace(/^"(.*)"$|^'(.*)'$/, (_m, d, s) => d ?? s);
 }

@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitCleanEnv } from "./lib/git-clean-env";
 import {
   classifyDiscoverabilityResult,
+  extractAllObservabilityBlocks,
   extractObservabilityBlock,
   matchExpected,
+  normalizeCommand,
   parseCommand,
   parseCredentialsRequired,
   parseExpected,
@@ -610,6 +613,198 @@ function runAwk(block: string): string {
   return new TextDecoder().decode(proc.stdout).replace(/\n$/, "");
 }
 
+// ---------------------------------------------------------------------------
+// #8102 / #7548 — YAML-quoted inline `command:` scalars.
+//
+// Every section of fixture 11 enters the suite ONLY through this ID-keyed loader,
+// so a new section is covered by P1, P3, Q and E with no code change. The ID is
+// the section's leading `# case: <ID>` YAML comment.
+// ---------------------------------------------------------------------------
+const FIXTURE_11 = "11-quoted-inline-scalars.md";
+const FIXTURE_12 = "12-empty-quoted-command-with-fence.md";
+
+const QUOTED_CASES: { id: string; section: string }[] = extractAllObservabilityBlocks(
+  fx(FIXTURE_11),
+).map((section) => ({
+  id: section.match(/^# case: (\S+)$/m)?.[1] ?? "<no-case-id>",
+  section,
+}));
+for (const { id, section } of QUOTED_CASES) reg(id, "both", section);
+
+const EXPECTED_QUOTED_IDS = [
+  "DQ1",
+  "DQ2",
+  "DQ3",
+  "SQ1",
+  "NEST",
+  "PLAIN",
+  "NEG-CROSS-SQ",
+  "NEG-CROSS-DQ",
+  "NEG-BLOCK",
+  "NEG-FOLD",
+  "NEG-LF",
+  "NEG-MISMATCH",
+  "NEG-EMPTY",
+  "NEG-COMMENT-TAIL",
+  "NEG-UNTERMINATED",
+  "NEG-HASH-NOSPACE",
+  "TRAIL-WS",
+];
+
+// The deliberate departures from YAML. KEY-PINNED (Q-ids) and RULE-DERIVED: an
+// entry names a derivation rule, never a free-form expected string, so parking a
+// broken row here fails twice — the key set moves, and the rule's own
+// precondition (YAML throws / YAML yields a real LF / YAML yields "") does not hold.
+type DeviationRule = "lf-kept" | "yaml-invalid-raw" | "empty-kept";
+const DEVIATIONS: Record<string, DeviationRule> = {
+  // `\n` passes through byte-for-byte: a real LF would trip Step 10.5's newline reject.
+  "NEG-LF": "lf-kept",
+  // Not YAML at all: the parser returns the value unchanged.
+  "NEG-MISMATCH": "yaml-invalid-raw",
+  "NEG-UNTERMINATED": "yaml-invalid-raw",
+  "NEG-HASH-NOSPACE": "yaml-invalid-raw",
+  // `""` stays literal: decoding it to "" would fall through to Form B.
+  "NEG-EMPTY": "empty-kept",
+};
+
+const ORACLE_NOTE =
+  "expected value comes from Bun.YAML at the .bun-version pin; if the Bun pin just moved, the oracle moved, not the parser";
+
+/** The raw `command:` value exactly as the file spells it (after the key and its spaces). */
+const rawCommandValue = (section: string): string =>
+  section.match(/^[ \t]*command:[ \t]*(.*)$/m)?.[1] ?? "<no-command-line>";
+
+/**
+ * Bun.YAML's value for discoverability_test.command. Parsed INSIDE the caller's test,
+ * never at module scope: the invalid-YAML rows throw, and a module-scope throw would
+ * abort collection. One clip LF is dropped for the `|` header only (clip chomping).
+ */
+function yamlCommand(section: string): { ok: true; value: string } | { ok: false; error: string } {
+  let doc: unknown;
+  try {
+    doc = Bun.YAML.parse(section);
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+  const v = (doc as { discoverability_test?: { command?: unknown } } | null)?.discoverability_test
+    ?.command;
+  if (typeof v !== "string") return { ok: false, error: `command is ${typeof v}, not a string` };
+  const clip = /^[ \t]*command:[ \t]*\|[ \t]*$/m.test(section) && v.endsWith("\n");
+  return { ok: true, value: clip ? v.slice(0, -1) : v };
+}
+
+/** The contract value for a fixture-11 case: the YAML value, or its derived deviation. */
+function expectedQuoted(id: string, section: string): string {
+  const y = yamlCommand(section);
+  const raw = rawCommandValue(section);
+  switch (DEVIATIONS[id]) {
+    case undefined:
+      if (!y.ok) throw new Error(`${id}: YAML did not parse (${y.error}); ${ORACLE_NOTE}`);
+      return y.value;
+    case "lf-kept": {
+      if (!y.ok) throw new Error(`${id}: lf-kept requires YAML to parse (${y.error})`);
+      expect(y.value.split("\n").length, `${id}: lf-kept requires exactly one real LF in the YAML value`).toBe(2);
+      return y.value.replace("\n", "\\n");
+    }
+    case "yaml-invalid-raw":
+      expect(y.ok, `${id}: yaml-invalid-raw requires YAML to REJECT the value`).toBe(false);
+      return raw;
+    case "empty-kept":
+      if (!y.ok) throw new Error(`${id}: empty-kept requires YAML to parse (${y.error})`);
+      expect(y.value, `${id}: empty-kept requires the YAML value to be empty`).toBe("");
+      expect(raw, `${id}: empty-kept requires the literal empty pair`).toBe('""');
+      return raw;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SKILL.md Step 10.4 slicers, SHARED at module scope (#7453, #8102). Both the
+// #7453 plugin-root describe and the #8102 executed-string rows run these exact
+// SKILL.md lines, so there is one extraction, not two drifting copies.
+// ---------------------------------------------------------------------------
+const PLUGIN_ROOT = join(import.meta.dir, "..");
+const NORMALIZE_ANCHOR = /^CMD="\$\(printf '%s' "\$CMD" \| sed/;
+
+/** FORM_A_AWK= through AWK_RC=$? — the #7453 slice. Callers assert the indices. */
+function formAAwkSlice(lines: string[]): { from: number; to: number; block: string } {
+  const from = lines.findIndex((l) => l.startsWith("FORM_A_AWK="));
+  const to = lines.findIndex((l, i) => i > from && l.startsWith("AWK_RC=$?"));
+  return { from, to, block: lines.slice(from, to + 1).join("\n") };
+}
+
+/**
+ * The executable Step 10.4 chain: FORM_A_AWK= to the end of its fence (the awk
+ * parse, the EXPECTED read and the Form B fallback), then the normalize fence from
+ * its first code line to its closing fence. Anchors are CODE lines resolved through
+ * uniqueIndex, so call this inside a test.
+ */
+function step104Chain(lines: string[]): { parse: string; normalize: string } {
+  const from = uniqueIndex(lines, (l) => l.startsWith("FORM_A_AWK="), "FORM_A_AWK=");
+  const parseEnd = lines.findIndex((l, i) => i > from && l.startsWith("```"));
+  const norm = uniqueIndex(lines, (l) => NORMALIZE_ANCHOR.test(l), "normalize anchor");
+  const normEnd = lines.findIndex((l, i) => i > norm && l.startsWith("```"));
+  expect(parseEnd, "the FORM_A fence must close").toBeGreaterThan(from);
+  expect(norm, "the normalize fence follows the FORM_A fence").toBeGreaterThan(parseEnd);
+  expect(normEnd, "the normalize fence must close").toBeGreaterThan(norm);
+  const parse = lines.slice(from, parseEnd).join("\n");
+  const normalize = lines.slice(norm, normEnd).join("\n");
+  expect(parse).toContain('CMD=$(awk -f "$FORM_A_AWK"');
+  expect(parse).toContain("if [[ -z \"$CMD\" ]]; then");
+  expect(normalize).toContain("sed -e '/^[[:space:]]*#/d'");
+  return { parse, normalize };
+}
+
+/**
+ * Execute the real SKILL.md Step 10.4 chain over one Observability section and
+ * return the `$CMD` it leaves for the verb gate, Step 10.5 and the exec.
+ *
+ * The chain runs under `set -uo pipefail` WITHOUT -e, so a mid-chain failure would
+ * still exit 0 through the final printf. The CHAIN_DONE stderr sentinel is what
+ * proves the chain ran to the end. CLAUDE_PLUGIN_ROOT is overridden explicitly:
+ * a Claude Code session exports the INSTALLED plugin root, which would run the old
+ * installed awk instead of this worktree's.
+ */
+function runChain(
+  section: string,
+  opts: { pluginRoot?: string; editNormalize?: (normalize: string) => string } = {},
+): { rc: number; cmd: string; stderr: string } {
+  const { parse, normalize } = step104Chain(readFileSync(SKILL_PATH, "utf8").split("\n"));
+  const dir = mkdtempSync(join(tmpdir(), "check10-chain-"));
+  try {
+    writeFileSync(join(dir, "preflight-observability.txt"), section);
+    const script = [
+      "set -uo pipefail",
+      `PREFLIGHT_TMP='${dir}'`,
+      parse,
+      opts.editNormalize ? opts.editNormalize(normalize) : normalize,
+      `printf '%s' "$CMD"`,
+      "printf CHAIN_DONE >&2",
+    ].join("\n");
+    const p = Bun.spawnSync({
+      cmd: ["bash", "-c", script],
+      cwd: dir,
+      env: gitCleanEnv({ CLAUDE_PLUGIN_ROOT: opts.pluginRoot ?? PLUGIN_ROOT }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { rc: p.exitCode ?? -1, cmd: p.stdout.toString(), stderr: p.stderr.toString() };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// The #8149 normalize-block strip, verbatim, for twin (ii). It is DELETED from
+// SKILL.md (#8102): the parser decodes once, and this strip on top of it
+// double-decodes `command: "'x'"` into `x`.
+const OLD_8149_STRIP = [
+  "if [[ $CMD != *$'\\n'* ]]; then",
+  '  case "$CMD" in',
+  '    \\"*\\") CMD="${CMD#\\"}"; CMD="${CMD%\\"}" ;;',
+  "    \\'*\\') CMD=\"${CMD#\\'}\"; CMD=\"${CMD%\\'}\" ;;",
+  "  esac",
+  "fi",
+].join("\n");
+
 describe("#6772 F1-F5 — folded scalars parse (permissive)", () => {
   // F1-F3 [both]: all three indicators × with/without a trailing comment.
   // The comment column is load-bearing: anchoring the header regex to a bare
@@ -1067,16 +1262,6 @@ describe("#6772 P1-P3 — awk/TS parity harness", () => {
 
   // P2: known divergences asserted AS KNOWN, so AC8 is not a tautology. A
   // change on either surface reddens here and forces an explicit decision.
-  test("P2 known divergence — inline quote stripping (TS strips, awk does not)", () => {
-    const block = obs(
-      "discoverability_test:",
-      '  command: "curl -fsS https://app.soleur.ai/health"',
-      '  expected_output: "200"',
-    );
-    expect(runAwk(block)).toBe('"curl -fsS https://app.soleur.ai/health"');
-    expect(parseCommand(block)).toBe("curl -fsS https://app.soleur.ai/health");
-  });
-
   test("P2 known divergence — CRLF (TS splits on /\\r?\\n/, awk leaves the \\r)", () => {
     const block = [
       "discoverability_test:",
@@ -1086,6 +1271,20 @@ describe("#6772 P1-P3 — awk/TS parity harness", () => {
     ].join("\r\n");
     expect(runAwk(block)).toBe("curl -fsS https://app.soleur.ai/health\r");
     expect(parseCommand(block)).toBe("curl -fsS https://app.soleur.ai/health");
+  });
+
+  // Pre-existing, NOT widened by #8102: the quote decode is ASCII-exact on both
+  // surfaces ([ \t\r] only), so a Unicode space after the closing quote declines
+  // the decode everywhere. What differs is the mirror's fallback: JS `.trim()`
+  // strips U+00A0, and INLINE_KEY_RE's `.` cannot cross U+2028 at all, while the
+  // awk returns both lines unchanged. Asserted AS KNOWN so a change reddens here.
+  test("P2 known divergence - a Unicode space after a closing quote (TS fallback, awk verbatim)", () => {
+    const lineSep = obs("discoverability_test:", '  command: "x" ', '  expected_output: "200"');
+    expect(runAwk(lineSep)).toBe('"x" ');
+    expect(parseCommand(lineSep)).toBe("");
+    const nbsp = obs("discoverability_test:", '  command: "x" ', '  expected_output: "200"');
+    expect(runAwk(nbsp)).toBe('"x" ');
+    expect(parseCommand(nbsp)).toBe('"x"');
   });
 
   // A CI image swapping mawk for gawk (or busybox awk) surfaces as a NAMED
@@ -1815,22 +2014,23 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     expect(norm, "normalize before the sandboxed exec").toBeLessThan(exec);
   });
 
-  test("F1d the runtime dequotes a YAML-quoted inline scalar inside the normalize window (#8149)", () => {
-    // parse-form-a.awk prints the `command:` line verbatim, so `command: "bash x"`
-    // reached `bash -c` with its quotes and every quoted command died rc=127 while
-    // the verb gate (which dequotes a COPY) passed. The strip must sit AFTER the
-    // trim and BEFORE the gate so every consumer sees the same string.
-    const norm = lines.findIndex((l) => /^CMD="\$\(printf '%s' "\$CMD" \| sed/.test(l));
-    const gate = lines.findIndex((l) => /^PROBE_GATE=/.test(l));
-    const dq = lines.findIndex((l) => /^\s*\\"\*\\"\) CMD="\$\{CMD#\\"\}"; CMD="\$\{CMD%\\"\}" ;;/.test(l));
-    const sq = lines.findIndex((l) => /^\s*\\'\*\\'\) CMD="\$\{CMD#\\'\}"; CMD="\$\{CMD%\\'\}" ;;/.test(l));
-    expect(dq, "double-quote strip arm must exist").toBeGreaterThan(norm);
-    expect(sq, "single-quote strip arm must exist").toBeGreaterThan(norm);
-    expect(dq, "strip before the verb gate").toBeLessThan(gate);
-    expect(sq, "strip before the verb gate").toBeLessThan(gate);
-    // Single-line scalars only: a multi-line block scalar is never dequoted.
-    const guard = lines.findIndex((l, i) => i > norm && i < dq && /^if \[\[ \$CMD != \*\$'\\n'\* \]\]; then$/.test(l));
-    expect(guard, "newline guard must precede the case").toBeGreaterThan(norm);
+  test("F1d after normalization no CMD assignment precedes the exec (#8102)", () => {
+    // The parser decodes a YAML-quoted inline scalar ONCE (parse-form-a.awk). Any
+    // later rewrite of $CMD — the #8149 quote strip, or a decode moved downstream —
+    // double-decodes `command: "'x'"` into `x`, or makes the gate and the exec see
+    // different strings. The E rows execute the normalize fence itself; this scan
+    // covers the window E cannot see, from the normalize anchor to the exec.
+    const norm = uniqueIndex(lines, (l) => NORMALIZE_ANCHOR.test(l), "normalize anchor");
+    const exec = uniqueIndex(lines, (l) => /^DT_OUT=\$\(/.test(l), "DT_OUT=$(");
+    expect(exec, "the exec follows normalization").toBeGreaterThan(norm);
+    const window = stripComments(lines.slice(norm, exec).join("\n"));
+    // Unanchored (an assignment inside a `case` arm is indented), excludes longer
+    // identifiers (`CMD_DEQ=`) and `$CMD`, and counts MATCHES, not lines.
+    const assigns = window.match(/(^|[^A-Za-z0-9_$])CMD\+?=/g) ?? [];
+    expect(assigns.length, `CMD assignments after the normalize anchor: ${JSON.stringify(assigns)}`).toBe(3);
+    expect(window, "no `read ... CMD`").not.toMatch(/(^|[\s;])read\b[^\n]*\sCMD\b/);
+    expect(window, "no `printf -v CMD`").not.toMatch(/printf\s+-v\s*CMD\b/);
+    expect(window, "no declare/local/export of CMD").not.toMatch(/\b(declare|local|export)\b[^\n]*\bCMD\+?=/);
   });
 
   test("F2 AC2 — the sandbox carries the load-bearing binds", () => {
@@ -2508,9 +2708,8 @@ describe("Check 10 Form A block — unset plugin root never executes the checked
 
   const skillText = readFileSync(SKILL_PATH, { encoding: "utf8" });
   const lines = skillText.split("\n");
-  const from = lines.findIndex((l) => l.startsWith("FORM_A_AWK="));
-  const to = lines.findIndex((l, i) => i > from && l.startsWith("AWK_RC=$?"));
-  const block = lines.slice(from, to + 1).join("\n");
+  // Shared module-scope slicer (also executed by the #8102 chain rows).
+  const { from, to, block } = formAAwkSlice(lines);
   const PRE_MIGRATION =
     'FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"';
 
@@ -2566,5 +2765,95 @@ describe("Check 10 Form A block — unset plugin root never executes the checked
     expect(pre).not.toBe(block);
     const r = runBlock(pre);
     expect(r.ledger).toContain("decoy-ran");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8102 / #7548 — quoted inline scalars decode ONCE, in the parser, and the
+// string the real SKILL.md chain leaves in $CMD is the decoded one.
+//
+// Q  — both surfaces (awk runtime, TS mirror) emit the YAML value, per case.
+// E  — the EXECUTED string: the real Step 10.4 fenced bash, extracted and run.
+//      The parity harness used to compare only the gate verdict, which is how
+//      the #8149 strip shipped with its escapes undecoded (#7548).
+// Twins — permanent controls proving E can go red on the two failure modes it
+//      exists for: a Form B fall-through and a double decode.
+// ---------------------------------------------------------------------------
+describe("#8102 quoted inline scalars", () => {
+  test("Q-ids the fixture sections are exactly the expected cases and the deviation keys are pinned", () => {
+    const ids = QUOTED_CASES.map((c) => c.id);
+    expect(new Set(ids)).toEqual(new Set(EXPECTED_QUOTED_IDS));
+    expect(ids.length, "no duplicated case section").toBe(EXPECTED_QUOTED_IDS.length);
+    expect(Object.keys(DEVIATIONS).sort()).toEqual(
+      ["NEG-EMPTY", "NEG-HASH-NOSPACE", "NEG-LF", "NEG-MISMATCH", "NEG-UNTERMINATED"],
+    );
+  });
+
+  for (const { id, section } of QUOTED_CASES) {
+    test(`Q ${id} awk and TS emit the YAML value`, () => {
+      const want = expectedQuoted(id, section);
+      expect(runAwk(section), `${id} awk runtime; ${ORACLE_NOTE}`).toBe(want);
+      expect(parseCommand(section), `${id} TS mirror; ${ORACLE_NOTE}`).toBe(want);
+    });
+  }
+
+  for (const { id, section } of QUOTED_CASES) {
+    test(`E ${id} the Step 10.4 chain leaves the decoded command`, () => {
+      const r = runChain(section);
+      expect(r.rc, `${id} chain rc (stderr: ${r.stderr})`).toBe(0);
+      expect(r.stderr, `${id} the chain must run to its end`).toBe("CHAIN_DONE");
+      expect(r.cmd, `${id} executed string vs the contract value`).toBe(
+        normalizeCommand(expectedQuoted(id, section)),
+      );
+      expect(r.cmd, `${id} executed string vs the TS mirror`).toBe(normalizeCommand(parseCommand(section)));
+    });
+  }
+
+  test("E-fence an empty quoted command never falls through to the Form B fence", () => {
+    const block = extractObservabilityBlock(fx(FIXTURE_12));
+    expect(block, "the fixture carries the fence the row guards against").toContain("printf LAUNDERED");
+    const r = runChain(block);
+    expect(r.rc).toBe(0);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe('""');
+    expect(r.cmd).not.toContain("LAUNDERED");
+    expect(r.cmd).toBe(normalizeCommand(parseCommand(block)));
+    // The literal pair then fails the verb gate as empty, on the mirror as at runtime.
+    expect(rejectReason(r.cmd) ?? "").toMatch(/empty after normalization/);
+  });
+
+  test("E twin i a length-2 decoder twin DOES launder the fence, so E-fence can go red", () => {
+    const block = extractObservabilityBlock(fx(FIXTURE_12));
+    const root = mkdtempSync(join(tmpdir(), "check10-twin-root-"));
+    try {
+      const scripts = join(root, "skills", "preflight", "scripts");
+      mkdirSync(scripts, { recursive: true });
+      const real = readFileSync(AWK_PATH, "utf8");
+      const twin = real.replace("if (cq < 3) return v", "if (cq < 2) return v");
+      expect(twin !== real, "the twin edit must land on the real minimum-length guard").toBe(true);
+      writeFileSync(join(scripts, "parse-form-a.awk"), twin);
+      const r = runChain(block, { pluginRoot: root });
+      expect(r.rc).toBe(0);
+      expect(r.stderr).toBe("CHAIN_DONE");
+      expect(r.cmd).toContain("LAUNDERED");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("E twin ii re-adding the 8149 strip double-decodes NEST, so E NEST can go red", () => {
+    const nest = QUOTED_CASES.find((c) => c.id === "NEST");
+    expect(nest, "NEST section present").toBeDefined();
+    const r = runChain(nest!.section, { editNormalize: (n) => `${n}\n${OLD_8149_STRIP}` });
+    expect(r.rc).toBe(0);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe("printf 200");
+    expect(r.cmd).not.toBe(normalizeCommand(expectedQuoted("NEST", nest!.section)));
+  });
+
+  test("Scope parseExpected decodes nothing, the DQ2 expected value keeps both backslashes", () => {
+    const dq2 = QUOTED_CASES.find((c) => c.id === "DQ2");
+    expect(dq2, "DQ2 section present").toBeDefined();
+    expect(parseExpected(dq2!.section)).toBe(String.raw`a\\b+`);
   });
 });
