@@ -57,7 +57,7 @@
 3	plugins/soleur/skills/preflight/SKILL.md	./scripts/parse-form-a.awk
 1	plugins/soleur/skills/preflight/SKILL.md	./scripts/probe-verb-gate.sh
 1	plugins/soleur/skills/preflight/SKILL.md	bash scripts/foo.sh
-4	plugins/soleur/skills/preflight/SKILL.md	bash scripts/x.sh
+2	plugins/soleur/skills/preflight/SKILL.md	bash scripts/x.sh
 1	plugins/soleur/skills/preflight/SKILL.md	python3 scripts/lint-encryption-posture.py
 1	plugins/soleur/skills/release-announce/SKILL.md	node scripts/md-to-mrkdwn.mjs
 1	plugins/soleur/skills/release-docs/SKILL.md	bash scripts/sync-readme-counts.sh
