@@ -13,9 +13,16 @@
 # its own group, declared on the `redeploy` JOB alone (#9085), which runs only when the `gate`
 # job proceeds. A job skipped by its `if:` never enters the group: an ordinary merge apply's
 # follower (both jobs skipped) and a follower whose gate did not proceed (`redeploy` skipped)
-# can never cancel a pending redeploy. The `gate` job holds no lock, so it always runs and is
-# never cancelled by the group. Within the group a newer pending redeploy replaces an older
-# pending one; the newer one's release loads every pin published before its gate ran.
+# can never cancel a pending redeploy. GitHub's concurrency docs are silent on jobs skipped by
+# `if:`. Measured 2026-09-27 (PR #9084): a `needs`-gated job skipped by its `if:` (run
+# 36344295915) left another run's pending member (36344262803) pending; a proceeding member
+# (control, 36344333068) then replaced it, ending it `cancelled`.
+# The `gate` job holds no lock, so it is never queued behind or cancelled by the group. Within
+# the group a newer pending redeploy replaces an older pending one (which ends `cancelled`);
+# the group does not order redeploys by gate completion. What holds instead: track.sh
+# dispatches the release only once the redeploy job leaves pending, and ci-deploy.sh reads
+# Doppler prd at deploy time, so whichever pending redeploy survives loads every pin published
+# before it deploys.
 #
 # ANY BRANCH: birth and replace are dispatch-only targets, and a dispatch from ANY branch
 # rotates the live key, so every dispatched apply run is gated regardless of head_branch.
@@ -35,8 +42,9 @@
 # pin_published=true and emails ops, and this run goes red if that email is not sent. A partial
 # re-run of the apply run fires a follower again for attempt N >= 2 while carrying over the jobs
 # that already passed; a git-data job that started before attempt N began was carried over from
-# an earlier attempt, whose follower graded (and redeployed) it, so this follower prints
-# verdict=carried_over and does not redeploy (#8760).
+# an earlier attempt, whose follower graded it, so this follower prints verdict=carried_over and
+# does not redeploy (#8760); the carried-over notice tells the operator to confirm that
+# follower's redeploy job succeeded.
 #
 # Recovery: re-run this workflow's failed job (a failed `redeploy` re-runs alone, keeping the
 # gate's outputs), or
@@ -63,7 +71,6 @@ on:
 permissions:
   contents: read
 
-
 jobs:
   gate:
     # Birth and replace are dispatch-only targets, so only a dispatched apply run (from any
@@ -82,7 +89,6 @@ jobs:
     outputs:
       proceed: ${{ steps.gate.outputs.proceed }}
       source_job: ${{ steps.gate.outputs.source_job }}
-      pin_published: ${{ steps.gate.outputs.pin_published }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:

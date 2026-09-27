@@ -68,8 +68,16 @@
 #   GC6  ATT=2, (a) job startedAt Go zero time (b) job startedAt absent     proceed=true, verdict=rotated, no ::error::
 #        (c) run startedAt absent (d) run startedAt with fractional seconds
 #   GC7  ATT=2, carried replace failure, apply success, poll failure        warning, verdict=pin_published
+#   GC7b ATT=2, carried replace failure, apply failure (5b)                 warning, verdict=pin_maybe_published
 #   GC8  ATT=2, job startedAt == run start (must-PASS: same second)         proceed=true, verdict=rotated
 #   GC9  ATT=1, job startedAt one second before run start                   proceed=true, verdict=rotated
+#   GC10 ATT=2, carried replace, apply step renamed (G14 shape)             RED, verdict=unidentified
+#   GC11 ATT=2, carried birth + replace failure, apply success (5a)         warning, verdict=pin_published wins
+#   GC12 ATT=2, carried birth + replace with apply step renamed             RED, verdict=unidentified wins
+#   GC13 ATT=2, carried start but completedAt = run start + 1 s (synthetic) proceed=true, verdict=rotated
+#   GC13b ATT=2, carried start, completedAt absent (synthetic)              proceed=true, verdict=rotated
+#   G23b GC1's document, attempt `2;x` and `2<LF>::warning::INJECTED`       proceed=true, verdict=rotated,
+#        (an invalid attempt is ignored, never consulted, never echoed)     no --attempt, no injected line
 #   HX   harness RED row: a gate whose argv drifts on fail-closed row G5 keeps its exit code, writes
 #        harness.violation, and the loop predicate goes RED
 #   GH   gate stubbed to `exit 0`: every row but the proceed rows must then FAIL its assertion
@@ -309,14 +317,19 @@ _mut_row "$TRACK" view-queued '[[ "$status" == queued ]] && continue' ':' QU
 #
 # Timestamps (#8760) come from a captured fixture, not from literals:
 #   tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json
-# is run 36325677861 attempt 2 (a "re-run failed jobs"), captured 2026-09-27 with
+# is run 36325677861 attempt 2 (a "re-run failed jobs" of an Infra Validation run; carry-over is
+# run-level re-run mechanics and does not depend on the workflow), captured 2026-09-27 with
 #   GH_REPO=jikig-ai/soleur gh run view 36325677861 --attempt 2 --json jobs,startedAt \
 #     | jq -c '{startedAt, jobs: [.jobs[] | select(.name == "detect-changes" or .name == "deploy-script-tests (1/4)")]}'
 # Its run-level startedAt is the attempt's start. `detect-changes` succeeded in attempt 1 and is
-# CARRIED into attempt 2 with its attempt-1 startedAt/completedAt (earlier than the run start);
-# `deploy-script-tests (1/4)` was RE-EXECUTED in attempt 2 (started after the run start). Rows
-# labelled synthetic (GC6 zero time / absent / fractional, GC8 equality, GC9 one-second skew)
-# derive their values from the captured run start or state them.
+# CARRIED into attempt 2 with its attempt-1 startedAt/completedAt (both earlier than the run
+# start); `deploy-script-tests (1/4)` was RE-EXECUTED in attempt 2 (started after the run start).
+# No per-job field tells the attempts apart: the REST job object's `run_attempt` reads 2 even for
+# the carried detect-changes (new id, attempt-1 timestamps), and `gh --json jobs` omits it. Rows
+# labelled synthetic (GC6 zero time / absent / fractional, GC8 equality, GC9 one-second skew, GC13
+# completedAt one second after the run start, GC13b completedAt absent) derive their values from
+# the captured run start or state them. A timestamp that is unparseable or non-positive (Go zero
+# time parses to a NEGATIVE epoch) never proves a carry-over.
 GATE="$REPO_ROOT/.github/actions/dispatch-web-redeploy/source-run-gate.sh"
 GFIX="$REPO_ROOT/tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json"
 BA='Terraform apply (git-data birth)'
@@ -339,6 +352,7 @@ if jq -e --arg r "$RUN_START" --arg c "$CARRIED_START" --arg f "$FRESH_START" -n
   _report "fixture: carried start < run start < re-executed start" ok
 else _report "fixture: carried start < run start < re-executed start" bad; fi
 _fix RUN_START_M1 ".startedAt | fromdateiso8601 - 1 | todateiso8601"  # synthetic (GC9)
+_fix RUN_START_P1 ".startedAt | fromdateiso8601 + 1 | todateiso8601"  # synthetic (GC13)
 # _gjob NAME CONCLUSION [STEP_NAME STEP_CONCLUSION]... -> one job object; "null" -> JSON null.
 # Timestamps: GJ_TS=fresh (default, the re-executed job's) or GJ_TS=carried (the carried job's).
 _gjob() {
@@ -517,11 +531,12 @@ check_G7() { _scenario G7; printf '{"message":"Not Found"}' > "$S/jobs.555.json"
 # --- carried-over jobs (#8760) ---
 _noerr() { ! grep -q '::error::' "$S/out"; }
 # A carried_over row: exit 0, no redeploy, no email, exactly ONE notice naming the attempt and
-# the first carried job, the manual-redeploy command, and no warning/error.
+# the first carried job, what was measured, the check to make and the manual-redeploy command, and
+# no warning/error.
 _carried_over() {  # _carried_over SCRIPT FIRST_CARRIED_JOB
   ATT=2 _gexec "$1" 555 && _noproceed && _nopub && grep -qx 'source_job=' "$S/ghout" \
     && [[ "$(grep -c '::notice::' "$S/out")" == 1 ]] \
-    && grep -q "^::notice::source-run-gate: no redeploy — in run 555 attempt 2 .*: $2 and its apply step succeeded in an EARLIER attempt of this run.*verdict=carried_over\. To redeploy anyway: \`gh workflow run git-data-pin-redeploy.yml --ref main\`\.$" "$S/out" \
+    && grep -q "^::notice::source-run-gate: no redeploy — in run 555 attempt 2 .*: $2 and its apply step succeeded in an EARLIER attempt of this run (the job started and finished before this attempt did).*verdict=carried_over\. Confirm that attempt's follower's redeploy job concluded success; if it did not, redeploy: \`gh workflow run git-data-pin-redeploy.yml --ref main\`\.$" "$S/out" \
     && ! grep -q 'verdict=rotated' "$S/out" && _nowarn && _noerr \
     && grep -qx 'run view 555 --attempt 2 --json jobs,startedAt' "$S/calls.log" && _no_unexpected; }
 # A rotated row under a re-run-shaped document: the pin rotated in THIS attempt (or cannot be
@@ -554,9 +569,10 @@ check_GC5() { _scenario GC5; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carr
     && ! grep -q 'verdict=carried_over' "$S/out" && _nowarn && _no_unexpected; }
 # GC6 (synthetic): an unprovable carry-over grades as today. (a) Go zero time parses to a
 # NEGATIVE epoch; (b) no job startedAt; (c) no run-level startedAt; (d) fractional seconds,
-# which fromdateiso8601 rejects.
+# which fromdateiso8601 rejects. Each row keeps every OTHER conjunct true (the carried completedAt,
+# before the run start), so only the timestamp under test decides.
 check_GC6a() { _scenario GC6a
-  _gdoc "$(_skip git_data_host_create)" "$(_rep success success | jq -c '.startedAt = "0001-01-01T00:00:00Z"')"
+  _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success | jq -c '.startedAt = "0001-01-01T00:00:00Z"')"
   ATT=2 _rotated "$1" git_data_host_replace; }
 check_GC6b() { _scenario GC6b
   _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success | jq -c 'del(.startedAt)')"
@@ -573,17 +589,59 @@ check_GC7() { _scenario GC7; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carr
     && grep -q '^::warning::source-run-gate: .*in run 555.*git_data_host_replace=failure.*verdict=pin_published' "$S/out" \
     && ! grep -q 'verdict=carried_over' "$S/out" && _no_unexpected; }
 # GC8 (must-PASS, synthetic): a job that started in the SAME second as the attempt is not proven
-# earlier (strict <).
+# earlier (strict <). completedAt stays the carried one (before the run start, so before this
+# startedAt: impossible, but it keeps the completedAt conjunct true, so only the start comparison
+# decides).
 check_GC8() { _scenario GC8
-  _gdoc "$(_skip git_data_host_create)" "$(_rep success success | jq -c --arg s "$RUN_START" '.startedAt = $s')"
+  _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success | jq -c --arg s "$RUN_START" '.startedAt = $s')"
   ATT=2 _rotated "$1" git_data_host_replace; }
-# GC9 (synthetic): attempt 1 has no earlier attempt, whatever the clock skew says.
+# GC9 (synthetic): attempt 1 has no earlier attempt, whatever the clock skew says (the job started
+# one second before the run start and finished at the carried completedAt: every timestamp
+# conjunct holds, so only the attempt check decides).
 check_GC9() { _scenario GC9
-  _gdoc "$(_skip git_data_host_create)" "$(_rep success success | jq -c --arg s "$RUN_START_M1" '.startedAt = $s')"
+  _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success | jq -c --arg s "$RUN_START_M1" '.startedAt = $s')"
   ATT=1 _rotated "$1" git_data_host_replace && grep -qx 'run view 555 --attempt 1 --json jobs,startedAt' "$S/calls.log"; }
+_att2() { grep -qx 'run view 555 --attempt 2 --json jobs,startedAt' "$S/calls.log"; }
+# GC7b: a carried RED job whose apply failed keeps its 5b alert (pin MAY be published).
+check_GC7b() { _scenario GC7b; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep failure failure)"
+  ATT=2 _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" \
+    && grep -q '^::warning::source-run-gate: .*in run 555.*git_data_host_replace=failure.*apply=failure.*verdict=pin_maybe_published' "$S/out" \
+    && ! grep -q 'verdict=carried_over' "$S/out" && _att2 && _no_unexpected; }
+_renamed_rep() { _rep success success | sed 's/replace) — both/replace) - both/'; }  # the G14 shape
+# GC10: a carried green job whose apply step cannot be identified still fails closed (row 4 first).
+check_GC10() { _scenario GC10; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _renamed_rep)"
+  ATT=2 _unidentified "$1" && ! grep -q 'verdict=carried_over' "$S/out" && _att2; }
+# GC11: a carried birth does not mask a red replace that published the pin: the warning wins.
+check_GC11() { _scenario GC11; _gdoc "$(GJ_TS=carried _birth success success)" "$(_rep failure success failure)"
+  ATT=2 _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" \
+    && grep -q '^::warning::source-run-gate: .*in run 555.*git_data_host_create=success.*git_data_host_replace=failure.*verdict=pin_published\.' "$S/out" \
+    && ! grep -q 'verdict=carried_over' "$S/out" && _att2 && _no_unexpected; }
+# GC12: a carried birth does not mask an unidentifiable replace: fail closed.
+check_GC12() { _scenario GC12; _gdoc "$(GJ_TS=carried _birth success success)" "$(_renamed_rep)"
+  ATT=2 _unidentified "$1" && ! grep -q 'verdict=carried_over' "$S/out" && _att2; }
+# GC13 (synthetic): a job that started before the attempt but FINISHED after it started is not
+# carried (a carried job finished in its earlier attempt): the completedAt conjunct.
+check_GC13() { _scenario GC13
+  _gdoc "$(_skip git_data_host_create)" \
+    "$(_rep success success | jq -c --arg s "$CARRIED_START" --arg c "$RUN_START_P1" '.startedAt = $s | .completedAt = $c')"
+  ATT=2 _rotated "$1" git_data_host_replace && _att2; }
+# GC13b (synthetic): a carried start with no completedAt proves nothing (the completedAt > 0
+# conjunct).
+check_GC13b() { _scenario GC13b
+  _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success | jq -c 'del(.completedAt)')"
+  ATT=2 _rotated "$1" git_data_host_replace && _att2; }
+# G23b: an invalid attempt on GC1's carried document is ignored: the latest attempt is read,
+# CARRIED is never consulted (so it grades rotated), and the value is never echoed as a workflow
+# command.
+check_G23b() { _scenario G23b; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success)"
+  ATT='2;x' _rotated "$1" git_data_host_replace && grep -qx 'run view 555 --json jobs,startedAt' "$S/calls.log" \
+    && ! grep -q -- '--attempt' "$S/calls.log" \
+    && : > "$S/calls.log" && ATT=$'2\n::warning::INJECTED' _rotated "$1" git_data_host_replace \
+    && grep -qx 'run view 555 --json jobs,startedAt' "$S/calls.log" && ! grep -q -- '--attempt' "$S/calls.log" \
+    && ! grep -q '^::warning::INJECTED' "$S/out"; }
 [[ -r "$GATE" ]] || { _report "source-run-gate.sh readable" bad; }
-for row in G1 G2 G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G20 G21 G22 G23 G24 G25 G10b G15b G26 \
-           GC1 GC1b GC2 GC3 GC4 GC5 GC6a GC6b GC6c GC6d GC7 GC8 GC9; do
+for row in G1 G2 G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G20 G21 G22 G23 G23b G24 G25 G10b G15b G26 \
+           GC1 GC1b GC2 GC3 GC4 GC5 GC6a GC6b GC6c GC6d GC7 GC7b GC8 GC9 GC10 GC11 GC12 GC13 GC13b; do
   if _holds "$row" "$GATE"; then _report "row $row" ok
   else _report "row $row" bad; sed 's/^/    /' "$S/out" >&2; sed 's/^/    calls: /' "$S/calls.log" >&2; fi
 done
@@ -603,7 +661,7 @@ GSTUB="$WORK/gate-stubbed.sh"
 sed '0,/^set -euo pipefail$/s//set -euo pipefail\nexit 0/' "$GATE" > "$GSTUB"
 grep -qx 'exit 0' "$GSTUB" || _report "GH precondition (stub inserted)" bad
 for row in G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G21 G22 G23 G24 G25 G10b G15b G26 \
-           GC1 GC1b GC5 GC7; do
+           GC1 GC1b GC5 GC7 GC7b GC10 GC11 GC12; do
   if _holds "$row" "$GSTUB"; then _report "GH row $row catches a stubbed exit 0" bad "(assertion held against an always-green gate)"
   else _report "GH row $row catches a stubbed exit 0" ok; fi
 done
@@ -634,9 +692,9 @@ _mut_row "$GATE" red-first-apply-match \
 _mut_row "$GATE" raw-conclusion 'a="$(allow "$raw")"' 'a="$raw"' G19
 _mut_row "$GATE" dup-job-quiet 'if (( cnt > 1 )); then v=unidentified' 'if (( cnt > 1 )); then v=not_run' G22
 # Guard 1 (plan 2026-09-27, #8760): a git-data rotation grades carried_over ONLY when its job
-# started before the attempt that fired the follower. Dropping the run-epoch `> 0` check is not
-# listed: with the job epoch > 0, a run epoch <= 0 can never exceed it, so CARRIED stays `no`
-# either way (an equivalent mutant, not a gap).
+# started AND finished before the attempt that fired the follower. Dropping the run-epoch `> 0`
+# check is not listed: with the job epoch > 0, a run epoch <= 0 can never exceed it, so CARRIED
+# stays `no` either way (an equivalent mutant, not a gap).
 _mut_row "$GATE" g1-1-no-demotion 'then v=carried_over; fi' 'then :; fi' GC1
 _mut_row "$GATE" g1-2-lt-to-le '$t < $run' '$t <= $run' GC8
 _mut_row "$GATE" g1-3-no-attempt '[[ "$v" == rotated && "$rerun" == true ]]' '[[ "$v" == rotated ]]' GC4
@@ -646,6 +704,18 @@ _mut_row "$GATE" g1-5-red-branch-carried '1:success) v=pin_published ;;' \
 _mut_row "$GATE" g1-6-no-job-epoch-positive '$t > 0 and ' '' GC6a
 _mut_row "$GATE" g1-7-src-ignores-verdict '[[ "${V[$j]}" == rotated && -z "$src" ]] && src="$j"' \
   '[[ "${AL[$j]}" == success && -z "$src" ]] && src="$j"' GC3
+_mut_row "$GATE" g1-8-no-completed-conjunct ' and $c > 0 and $c < $run' '' GC13
+_mut_row "$GATE" g1-9-no-completed-positive '$c > 0 and ' '' GC13b
+_mut_row "$GATE" g1-5b-maybe-branch-carried '*) v=pin_maybe_published ;;' \
+  '*) v=pin_maybe_published; if [[ "$rerun" == true ]] && _carried "$j"; then v=carried_over; fi ;;' GC7b
+_mut_row "$GATE" g1-10-unidentified-carried '[[ "$v" == rotated && "$rerun" == true ]]' \
+  '[[ ( "$v" == rotated || "$v" == unidentified ) && "$rerun" == true ]]' GC10
+# Equivalent to moving the carried_over arm ahead of the warning arm: the warning yields to it.
+_mut_row "$GATE" g1-11-carried-before-warn 'if [[ "$warn" == true ]]; then' \
+  'if [[ "$warn" == true && -z "$cj" ]]; then' GC11
+_mut_row "$GATE" g1-12-bad-yields-to-carried 'if [[ -n "$bad" ]]; then' 'if [[ -n "$bad" && -z "$cj" ]]; then' GC12
+_mut_row "$GATE" g1-13-invalid-attempt-rerun 'att=(); rerun=false' \
+  'att=(); rerun=false; [[ -n "${SOURCE_RUN_ATTEMPT:-}" && "$SOURCE_RUN_ATTEMPT" != 1 ]] && rerun=true' G23b
 if bash -n "$GATE"; then _report "source-run-gate.sh bash -n" ok; else _report "source-run-gate.sh bash -n" bad; fi
 
 # The stub must itself refuse unexpected argv (else rows could pass on a drifted call).
@@ -664,11 +734,11 @@ if bash -n "$TRACK"; then _report "track.sh bash -n" ok; else _report "track.sh 
 _c="$fail"; _report "reporter canary (expected; unwound)" bad
 (( fail == _c + 1 )) || { printf 'FAIL: the reporter no longer counts a failure\n' >&2; exit 1; }
 fail="$_c"; unset 'FAILURES[-1]'
-# Anti-vacuity floor: the measured assertion count (2026-09-27, #8760: pass + fail of the green run
-# with rows GC1-GC9, HX, their GH entries and the Guard 1 mutations; was 102 on 2026-09-24, #8710).
-# Reported with printf and a direct exit, never through _report, so a neutered reporter cannot
-# silence it.
-FLOOR=130
+# Anti-vacuity floor: the measured assertion count (2026-09-27, #8760 review round: pass + fail of
+# the green run with rows GC1-GC13b and G23b, HX, their GH entries and the Guard 1 mutations g1-1
+# to g1-13; was 130 before the review round, 102 on 2026-09-24, #8710). Reported with printf and a
+# direct exit, never through _report, so a neutered reporter cannot silence it.
+FLOOR=148
 if (( pass + fail < FLOOR )); then
   printf 'FAIL: vacuity floor: only %s assertions ran (floor %s)\n' "$((pass + fail))" "$FLOOR" >&2
   exit 1

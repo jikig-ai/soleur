@@ -56,9 +56,10 @@ Terraform SSH client negotiates ECDSA-P256.
    replace re-mints the key with the host; the birth job mints it. The public half is published as a
    Terraform-owned Doppler `prd` secret, `GIT_DATA_SSH_HOST_KEY` (`doppler_secret.git_data_ssh_host_key`,
    written only after the server exists). When the apply run completes, `git-data-pin-redeploy.yml`
-   (`workflow_run`, job `redeploy`) forces a `web-platform-release` if a birth or replace job **and
-   its `Terraform apply` step (`id: apply`)** both succeeded, and waits for a newer run's deploy
-   to succeed, so the app loads the new pin within about one release cycle. The job conclusion alone
+   (`workflow_run`; job `gate` grades the source run, job `redeploy` dispatches) forces a
+   `web-platform-release` if a birth or replace job **and its `Terraform apply` step (`id: apply`)**
+   both succeeded and the job was not carried over from an earlier attempt (#8760), and waits for a
+   newer run's deploy to succeed, so the app loads the new pin within about one release cycle. The job conclusion alone
    is not evidence of an apply: a `plan_only` rehearsal ends `success` with the apply step skipped,
    so it never redeploys (#8710, amended 2026-09-24). The apply run prints the
    new fingerprint to its job summary and log; a failed redeploy emails ops. Nothing outside Terraform copies the pin, and no per-PR `-target`

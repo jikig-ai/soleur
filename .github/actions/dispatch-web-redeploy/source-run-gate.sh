@@ -36,21 +36,24 @@
 #
 # CARRIED(job) — row 2c's predicate, all of: (1) SOURCE_RUN_ATTEMPT matched ^[1-9][0-9]*$ and is
 # >= 2; (2) the job's startedAt parses (`try fromdateiso8601 catch 0`) to an epoch > 0; (3) the
-# document's run-level startedAt parses the same way to > 0; (4) job epoch < run epoch (strict).
-# It is one jq expression read through its own assignment; a jq failure means `no`, never exit:
-# carried_over is the fail-open direction, so it needs positive proof and anything unparseable
-# (absent, Go zero time, fractional seconds) grades as before, `rotated`. Timestamps are parsed,
-# never string-compared (`"" < "2026-…"` is true in jq). CARRIED is consulted only on the
-# green-job, green-apply arm: row 4 keeps precedence, a carried plan_only stays row 3, and a
-# carried RED job keeps 5a/5b (its alert is never suppressed).
+# document's run-level startedAt parses the same way to > 0; (4) job start epoch < run epoch
+# (strict); (5) the job's completedAt parses the same way to > 0 and (6) is < run epoch (strict).
+# (5)-(6) are defence in depth: a genuinely carried job finished before this attempt started; a
+# job re-executed in this attempt cannot have. It is one jq expression read through its own
+# assignment; a jq failure means `no`, never exit: carried_over is the fail-open direction, so it
+# needs positive proof, and a timestamp that is unparseable or non-positive (absent, fractional
+# seconds, or Go zero time, which parses to a NEGATIVE epoch) grades as before, `rotated`.
+# Timestamps are parsed, never string-compared (`"" < "2026-…"` is true in jq). CARRIED is
+# consulted only on the green-job, green-apply arm: row 4 keeps precedence, a carried plan_only
+# stays row 3, and a carried RED job keeps 5a/5b (its alert is never suppressed).
 #
 # Combination: any job in row 4 (or a duplicated git-data job) exits 1 before emitting outputs.
 # Else any job in row 2 proceeds (birth wins a tie; a carried birth is not row 2, so a fresh
 # replace proceeds). Else any job in 5a/5b takes the warning arm (pin_published=true). Else any
-# job in row 2c takes the carried_over notice. Else the quiet notice arm. 5a/5b do not redeploy: the job is red,
-# and the runbook's recovery for a red boot poll is a read first; the no-source_run_id dispatch
-# redeploys when wanted. Every verdict line carries `in run <id>`, the per-job
-# `<job>=<conclusion>` tokens and one `verdict=` token.
+# job in row 2c takes the carried_over notice. Else the quiet notice arm. 5a/5b do not
+# redeploy: the job is red, and the runbook's recovery for a red boot poll is a read first; the
+# no-source_run_id dispatch redeploys when wanted. Every verdict line carries `in run <id>`, the
+# per-job `<job>=<conclusion>` tokens and one `verdict=` token.
 #
 # This is a correctness gate, not an authorization gate: a branch dispatch controls job and step
 # names, so NO name taken from the API is ever printed — only the constants, N, the allowlisted
@@ -67,15 +70,19 @@
 # attempt N lists EVERY job, including ones that succeeded in an earlier attempt and did not run
 # again: such a job appears with a new id but keeps its earlier startedAt/completedAt and steps,
 # so its green apply step reads as a rotation in attempt N although attempt N-1's follower
-# already graded it and redeployed. Measured on run 36325677861 attempt 2 (2026-09-27): run
-# startedAt 14:41:55Z; carried `detect-changes` 14:26:30Z-14:26:47Z (the same values as in
-# attempt 1); re-executed jobs started 14:44:03Z and later; the API exposes no per-job attempt.
-# Hence CARRIED: a job that started before this attempt did ran in an earlier attempt. A git-data
-# job RE-EXECUTED in attempt N started after it and still grades `rotated`. Captured in
-# tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json.
+# already graded it. Measured on run 36325677861 attempt 2 (2026-09-27), an Infra Validation run
+# (carry-over is run-level re-run mechanics; it does not depend on the workflow): run startedAt
+# 14:41:55Z; carried `detect-changes` 14:26:30Z-14:26:47Z (the same values as in attempt 1);
+# re-executed jobs started 14:44:03Z and later. No per-job field tells the attempts apart: the
+# REST job object's `run_attempt` reads N even for a carried job (detect-changes reads
+# run_attempt 2, with a new id and its attempt-1 timestamps), and `gh --json jobs` omits it.
+# Hence CARRIED: a job that started and finished before this attempt did ran in an earlier
+# attempt. A git-data job RE-EXECUTED in attempt N started after it and still grades `rotated`.
+# Captured in tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json.
 #
-# Env: SOURCE_RUN_ID (required), SOURCE_RUN_ATTEMPT (optional), GH_TOKEN / GH_REPO (consumed by gh),
-#      GITHUB_OUTPUT (receives proceed=true|false, source_job=<name>, pin_published=true|false).
+# Env: SOURCE_RUN_ID (required), SOURCE_RUN_ATTEMPT (optional), GH_TOKEN / GH_REPO (consumed by
+#      gh), GITHUB_OUTPUT (receives proceed=true|false, source_job=<name>,
+#      pin_published=true|false).
 # Tested by tests/scripts/test-dispatch-web-redeploy.sh (rows G*, mutations GM).
 set -euo pipefail
 
@@ -156,13 +163,15 @@ _count() { [[ "$2" =~ ^[0-9]+$ ]] || _unreadable; printf -v "$1" '%s' "$2"; }
 # NOT _q: a jq failure here means `no` (grade as before), never an exit.
 _carried() {
   local r
-  # shellcheck disable=SC2016  # $j/$t/$run are jq variables, not shell expansions
+  # shellcheck disable=SC2016  # $j/$t/$c/$run are jq variables, not shell expansions
   r="$(jq -r --arg j "$1" '
     def epoch: try fromdateiso8601 catch 0;
     (.startedAt | epoch) as $run
     | [.jobs[] | objects | select(.name == $j)] as $m
     | (if ($m | length) == 1 then ($m[0].startedAt | epoch) else 0 end) as $t
-    | if $t > 0 and $run > 0 and $t < $run then "yes" else "no" end' <<<"$doc" 2>/dev/null)" || r=no
+    | (if ($m | length) == 1 then ($m[0].completedAt | epoch) else 0 end) as $c
+    | if $t > 0 and $run > 0 and $t < $run and $c > 0 and $c < $run then "yes" else "no" end
+    ' <<<"$doc" 2>/dev/null)" || r=no
   [[ "$r" == yes ]]
 }
 
@@ -200,11 +209,11 @@ grade "$REPLACE_JOB" "$REPLACE_APPLY"
 # Only the constants and allowlisted values below; never an API-supplied name.
 tokens="${BIRTH_JOB}=${JC[$BIRTH_JOB]:-absent} ${BIRTH_JOB}.apply=${AL[$BIRTH_JOB]:-none} ${REPLACE_JOB}=${JC[$REPLACE_JOB]:-absent} ${REPLACE_JOB}.apply=${AL[$REPLACE_JOB]:-none}"
 
-bad=""; src=""; pub=false; warn=false; skipped_apply=false; carried=false; cj=""
+bad=""; src=""; pub=false; warn=false; skipped_apply=false; cj=""
 for j in "${JOBS[@]}"; do
   [[ "${V[$j]}" == unidentified ]] && bad="${bad:+$bad, }$j"
   [[ "${V[$j]}" == rotated && -z "$src" ]] && src="$j"
-  [[ "${V[$j]}" == carried_over && -z "$cj" ]] && { carried=true; cj="$j"; }  # cj: the first in JOBS order
+  [[ "${V[$j]}" == carried_over && -z "$cj" ]] && cj="$j"  # cj: the first in JOBS order
   [[ "${V[$j]}" == pin_published ]] && pub=true  # the pin WAS published (5a), not merely may be
   [[ "${V[$j]}" == pin_published || "${V[$j]}" == pin_maybe_published ]] && warn=true
   [[ "${V[$j]}" == no_apply ]] && skipped_apply=true
@@ -235,9 +244,10 @@ if [[ "$warn" == true ]]; then
   _emit "proceed=false" "source_job=" "pin_published=${warn}"
   exit 0
 fi
-if [[ "$carried" == true ]]; then
-  # Reached only when rerun=true, so SOURCE_RUN_ATTEMPT passed ^[1-9][0-9]*$ above.
-  echo "::notice::source-run-gate: no redeploy — in run ${rid} attempt ${SOURCE_RUN_ATTEMPT} ${tokens}: ${cj} and its apply step succeeded in an EARLIER attempt of this run (the job started before this attempt did), so that attempt's follower graded it. verdict=carried_over. To redeploy anyway: ${REDEPLOY_CMD}."
+if [[ -n "$cj" ]]; then
+  # Reached only when rerun=true, so SOURCE_RUN_ATTEMPT passed ^[1-9][0-9]*$ above. The gate
+  # measured only the timestamps; it cannot see whether that earlier follower redeployed.
+  echo "::notice::source-run-gate: no redeploy — in run ${rid} attempt ${SOURCE_RUN_ATTEMPT} ${tokens}: ${cj} and its apply step succeeded in an EARLIER attempt of this run (the job started and finished before this attempt did), so that attempt's follower graded it. verdict=carried_over. Confirm that attempt's follower's redeploy job concluded success; if it did not, redeploy: ${REDEPLOY_CMD}."
   _emit "proceed=false" "source_job=" "pin_published=false"
   exit 0
 fi

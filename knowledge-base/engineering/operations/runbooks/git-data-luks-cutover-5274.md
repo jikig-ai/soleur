@@ -245,6 +245,19 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
      gh run view <pin-redeploy-run-id> --json jobs --jq '.jobs[] | select(.name == "redeploy") | .conclusion'
      ```
 
+     If `redeploy` is `skipped` and its gate printed `verdict=carried_over` (source-run-gate: the
+     git-data job was carried over from an earlier attempt of the same apply run), the previous
+     follower owns the redeploy. Find the followers whose gate names the same `in run <id>`:
+
+     ```bash
+     for id in $(gh run list --workflow git-data-pin-redeploy.yml -L 20 --json databaseId --jq '.[].databaseId'); do gh run view "$id" --log | grep -qF "in run <apply-run-id>" && echo "$id"; done
+     ```
+
+     Check the previous one's `redeploy` job with the command above: it must be `success`. If it is
+     not, run `gh workflow run git-data-pin-redeploy.yml --ref main` (no `source_run_id`, so it
+     redeploys unconditionally). If `redeploy` is `cancelled`, a newer follower's pending redeploy
+     replaced it in the lock: check that newer follower's `redeploy` job instead.
+
    - **If the replace failed after the secret published:** re-dispatch the replace. The replace gate
      accepts that plan.
    - **If the replace failed before the new server was created:** state holds the new key, no server,
@@ -260,7 +273,6 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
      ```
 
      If the gate exited 1 with `verdict=unidentified`, or printed `verdict=pin_published` or `verdict=pin_maybe_published`, the same `source_run_id` refuses again.
-     `verdict=carried_over` from source-run-gate means this follower saw a git-data job carried over from an earlier attempt; that attempt's follower owned the redeploy; `gh workflow run git-data-pin-redeploy.yml --ref main` redeploys anyway.
      When the source apply step published a pin, dispatch with **no** `source_run_id` (it redeploys
      unconditionally):
 
@@ -955,8 +967,9 @@ re-mint refusal, which blocks a create of the key while the fingerprint file is 
 **git-data's SSH host key rotates on every replace (ADR-237).** The gated replace job re-mints
 `tls_private_key.git_data_host_ssh` with the host and republishes `GIT_DATA_SSH_HOST_KEY`; the birth
 job mints and publishes it the same way. When that apply run completes with the job and its apply
-step both green, `git-data-pin-redeploy.yml` forces a web release, so the app loads the new pin
-within about one release cycle. No step outside Terraform copies the pin, and no separate rotation
+step both green, and the job was not carried over from an earlier attempt of the run (#8760; that
+attempt's follower owns the redeploy), `git-data-pin-redeploy.yml` forces a web release, so the app
+loads the new pin within about one release cycle. No step outside Terraform copies the pin, and no separate rotation
 input exists. If the redeploy fails (it emails ops), re-run it with
 `gh run rerun <pin-redeploy-run-id> --failed`; if its gate exited 1 with `verdict=unidentified`, or printed `verdict=pin_published` or `verdict=pin_maybe_published` (a red job whose apply published the pin, also emailed), dispatch
 `gh workflow run git-data-pin-redeploy.yml --ref main` with no `source_run_id`. Until it succeeds, erasures page
