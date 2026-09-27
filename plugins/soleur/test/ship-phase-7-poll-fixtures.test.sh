@@ -1090,21 +1090,21 @@ SPACED_ROOT="$SPACED_PARENT/plugin root"
 
 # Literal substitution — a sed/perl replacement carrying `$` is interpolated by the tool.
 substitute_token() {
-  local src="$1" dst="$2" tok='${CLAUDE_PLUGIN_ROOT}' line
-  : > "$dst"
+  local tok='${CLAUDE_PLUGIN_ROOT}' line
   while IFS= read -r line || [[ -n $line ]]; do
-    printf '%s\n' "${line//"$tok"/"$SPACED_ROOT"}" >> "$dst"
-  done < "$src"
+    printf '%s\n' "${line//"$tok"/"$SPACED_ROOT"}"
+  done
 }
 count_of() { grep -oF -- "$1" "$2" | wc -l; }
 SUBST_BLOCK="$(mktemp)"
 _TMP_OWNED+=("$SUBST_BLOCK")
 SUBST_MIRROR="$(mktemp)"
 _TMP_OWNED+=("$SUBST_MIRROR")
+substitute_token < "$BLOCK_FILE" > "$SUBST_BLOCK"
+substitute_token < "$MIRROR_FILE" > "$SUBST_MIRROR"
 for pair in "ship:$BLOCK_FILE:$SUBST_BLOCK" "merge-pr:$MIRROR_FILE:$SUBST_MIRROR"; do
   IFS=: read -r _name _src _dst <<< "$pair"
   _before="$(count_of '${CLAUDE_PLUGIN_ROOT}' "$_src")"
-  substitute_token "$_src" "$_dst"
   _after="$(count_of '${CLAUDE_PLUGIN_ROOT}' "$_dst")"
   _roots="$(count_of "$SPACED_ROOT" "$_dst")"
   if [[ "$_before" -ge 1 && "$_after" -eq 0 && "$_roots" -eq "$_before" ]]; then
