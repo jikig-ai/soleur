@@ -277,6 +277,16 @@ apps/web-platform/server/inngest/functions/cron-workspace-sync-health.ts
 # aggregate stat-view counts + table names — no row data, no PII.
 apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts
 
+# #8880 — event-scheduled-reminder.ts's `cohort-quiet` named check is a
+# cohort-wide sweep (users.eq(cohort_key) + conversations.in(user_id) +
+# un-tagged signup listing) with NO per-tenant key: it runs inside an
+# event-signed Inngest function where no user JWT exists to mint a tenant
+# client from. Same posture as cron-workspace-sync-health / cron-email-ingress
+# — platform-wide read for a platform-owned detector. The emitted report is
+# company-level (email domains, never mailboxes) so the service-role read does
+# not translate into PII egress.
+apps/web-platform/server/inngest/functions/event-scheduled-reminder.ts
+
 # resolve-installation-id.ts was REMOVED from this allowlist in PR #4559
 # (#4558): the #4543 workspace-sibling lookup + the .ilike("repo_url") LIKE
 # fallback were deleted; it now reads the credential ONLY via the membership-

@@ -258,6 +258,7 @@
 1	.github/scripts/test/test-run-all-signal-propagation.sh
 2	plugins/soleur/hooks/stop-hook.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
+2	plugins/soleur/scripts/emit-decision.sh
 5	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
 3	plugins/soleur/scripts/lib/tmp-classify.sh
@@ -371,7 +372,7 @@
 19	scripts/lint-legal-mirror-drift-baseline.test.sh
 9	scripts/lint-legal-registers.test.sh
 78	scripts/lint-legal-scope-block-placement.test.sh
-1	scripts/lint-orphan-test-suites.test.sh
+2	scripts/lint-orphan-test-suites.test.sh
 1	scripts/lint-shell-trace-credential-refusal.test.sh
 25	scripts/lint-workflow-errexit-capture.test.sh
 7	scripts/lint-workflow-install-sites.test.sh
@@ -428,6 +429,7 @@
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
 1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh
+1	tests/scripts/test-main-duplicate-skip.sh
 1	tests/scripts/test-plan-gate-preamble.sh
 2	tests/scripts/test-registry-heartbeat-poll.sh
 1	tests/scripts/test-registry-luks-recut-gate.sh

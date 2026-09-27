@@ -24,7 +24,9 @@ pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); FAILURES+=("$1"); printf 'FAIL: %s\n' "$1" >&2; }
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-DEP="$REPO_ROOT/.github/workflows/dependency-review.yml"
+# Since #8902 the dependency-review job lives folded inside pr-quality-guards.yml;
+# the pins below apply to that file (job `dependency-review`, step `id: detect`).
+DEP="$REPO_ROOT/.github/workflows/pr-quality-guards.yml"
 PQG="$REPO_ROOT/.github/workflows/pr-quality-guards.yml"
 CHECK_SH="$REPO_ROOT/.github/scripts"
 for f in "$DEP" "$PQG"; do

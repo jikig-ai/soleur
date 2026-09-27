@@ -95,7 +95,7 @@ export async function resolveWorkspaceIdentityForSettings(
       .maybeSingle();
     organizationName = orgResp.data?.name ?? null;
 
-    const identity: Identity = { userId: user.id, role: "prd", orgId: organizationId };
+    const identity: Identity = { userId: user.id, role: "prd", orgId: organizationId, email: null, subscriptionStatus: null };
     canRename = await isTeamWorkspaceInviteEnabled(organizationId, identity);
   }
 

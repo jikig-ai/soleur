@@ -55,11 +55,19 @@ jobs:
   # one checkout + one git diff, NO Doppler/dev-Supabase access. Mirrors
   # ci.yml's detect-changes (single boolean output). BASE_REF is only set on
   # pull_request; non-PR events (push to main / workflow_dispatch) short-circuit
-  # to tenant=true (main is the source of truth). BASE_REF is passed via env: +
+  # to tenant=true (main is the source of truth) — EXCEPT a push proven to be a
+  # duplicate of the merged PR's green run on the identical tree (#8919). BASE_REF
+  # is passed via env: +
   # quoted "$BASE_REF" per workflow-injection guidance.
   detect-changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # pull-requests/actions read scopes for the push-arm duplicate proof
+    # (#8919); workflow grants contents: read only.
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     outputs:
       tenant: ${{ steps.filter.outputs.tenant }}
       ledger_guard: ${{ steps.ledger_guard.outputs.state }}
@@ -71,6 +79,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          MERGE_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
           if [[ "$EVENT_NAME" == "merge_group" ]]; then
@@ -84,8 +94,21 @@ jobs:
             exit 0
           fi
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
-            # push to main / workflow_dispatch: always run (main is source of truth).
-            printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
+            # push to main / workflow_dispatch: run — UNLESS the push is a
+            # proven duplicate (#8919): the merged PR's head ran this suite
+            # green on the byte-identical tree. The proof script emits
+            # duplicate=true only when merge_commit_sha binds, trees match,
+            # this workflow's PR run at that head succeeded, AND the
+            # tenant-integration job EXECUTED (skipped ≠ coverage). Every
+            # ambiguity fails open to true. workflow_dispatch stays tenant=true
+            # because the manual event has no PR merge to prove against.
+            if [[ "$EVENT_NAME" == "push" ]] && \
+               bash scripts/main-push-duplicate-skip.sh tenant-integration.yml "${MERGE_SHA}" tenant-integration | grep -qx 'duplicate=true'; then
+              echo "::notice::push run is a proven duplicate of the merged PR's green run; suite skipped"
+              printf 'tenant=false\n' >> "$GITHUB_OUTPUT"
+            else
+              printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
           # A git/checkout error (missing origin/$BASE_REF, etc.) must FAIL the

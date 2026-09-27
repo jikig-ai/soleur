@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
+import { swrKeys, jsonFetcher } from "@/lib/swr-config";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
 
@@ -115,6 +117,12 @@ export function shouldDropForScope(
     archiveFilter: ArchiveFilter;
   },
 ): boolean {
+  // Disconnected users (repoUrl === null) see NOTHING — mirrors the fetch
+  // path's early return that renders an empty list for repo-less users.
+  // Without this clause a repo-less workspace-visibility row would land on
+  // the shared channel: `conv.repo_url null !== opts.repoUrl null` passes
+  // the (a) check below even though the fetch invariant is an empty list.
+  if (opts.repoUrl === null) return true;
   if ((conv.repo_url ?? null) !== opts.repoUrl) return true;
   if ((conv.workspace_id ?? null) !== opts.workspaceId) return true;
   if (opts.channel === "shared" && conv.visibility !== "workspace") return true;
@@ -222,6 +230,34 @@ export function useConversations(
     repoUrlRef.current = repoUrl;
   }, [repoUrl]);
 
+  // Phase 5 (#5533): the active-repo leg rides the SHARED SWR entry
+  // (swrKeys.workspaceActiveRepo) — the dashboard page, the nav badge, and
+  // this hook dedupe to ONE request instead of each issuing their own
+  // fetch("/api/workspace/active-repo"). fetchConversations awaits the
+  // first settlement via the latch below, then reads the latest value
+  // through a ref so the callback identity (and the realtime subscription
+  // that depends on it) does not re-subscribe when SWR revalidates.
+  const { data: activeRepoData, error: activeRepoError } = useSWR(
+    swrKeys.workspaceActiveRepo(),
+    jsonFetcher<{ workspaceId: string; repoUrl: string | null }>,
+  );
+  const activeRepoRef = useRef<{
+    data: { workspaceId: string; repoUrl: string | null } | undefined;
+  }>({ data: undefined });
+  const [activeRepoSettled] = useState(() => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  });
+  useEffect(() => {
+    activeRepoRef.current = { data: activeRepoData };
+    if (activeRepoData !== undefined || activeRepoError !== undefined) {
+      activeRepoSettled.resolve();
+    }
+  }, [activeRepoData, activeRepoError, activeRepoSettled]);
+
   // `background: true` runs a QUIET refetch — it skips the loading/error toggle
   // so a reconcile that already has last-known rows present cannot re-enter the
   // rail's `!loading`-gated empty/error branches and blank/flash the list. Used
@@ -236,14 +272,18 @@ export function useConversations(
     try {
       const supabase = createClient();
 
-      // Get user ID for query filter and Realtime subscription
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData.user) {
+      // Get user ID for query filter and Realtime subscription. getSession()
+      // is the LOCAL cookie read — the former getUser() was a browser→Supabase
+      // RTT for an id-only read (Phase 5). Authorization stays server-side
+      // (middleware + RLS); this is the documented local-read pattern.
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+      const currentUserId = sessionData?.session?.user?.id;
+      if (sessionError || !currentUserId) {
         setError("Authentication required");
         setLoading(false);
         return null;
       }
-      const currentUserId = authData.user.id;
       setUserId(currentUserId);
 
       // Scope the list to the user's CURRENT repo. The source of truth is
@@ -260,18 +300,23 @@ export function useConversations(
       // Disconnected users (repoUrl null) see an empty list — old-repo
       // conversations stay attached to their repo_url and are hidden until the
       // user reconnects that exact URL (2026-04-22 repo-swap isolation plan).
-      const res = await fetch("/api/workspace/active-repo");
-      if (!res.ok) {
-        // Transient route failure — surface an error rather than silently
-        // flashing the empty state (which reads as "you have no conversations").
+      //
+      // Phase 5: read the SHARED SWR entry instead of issuing a private
+      // fetch — page + nav badge + this hook dedupe to one request. Wait for
+      // its first settlement, then read through the ref (keeps this callback
+      // — and the realtime subscription keyed on it — stable across SWR
+      // revalidations). The workspaceId null→id transition ordering is
+      // unchanged: setWorkspaceId still runs here, before the RPC below.
+      await activeRepoSettled.promise;
+      const activeRepo = activeRepoRef.current.data;
+      if (activeRepo === undefined || activeRepo === null) {
+        // SWR resolved an error (or an empty body) — surface the same error
+        // the former `!res.ok` branch produced rather than silently flashing
+        // the empty state (which reads as "you have no conversations").
         setError("Failed to resolve the active repository");
         setLoading(false);
         return null;
       }
-      const activeRepo = (await res.json()) as {
-        workspaceId: string;
-        repoUrl: string | null;
-      };
       // repoUrl is already normalized server-side by the active-repo route.
       const currentRepoUrl = activeRepo.repoUrl ?? null;
       setWorkspaceId(activeRepo.workspaceId ?? null);
@@ -335,7 +380,9 @@ export function useConversations(
       setLoading(false);
       return null;
     }
-  }, [statusFilter, domainFilter, archiveFilter, limit]);
+    // activeRepoSettled is a stable useState value — listed for
+    // exhaustive-deps honesty; it never changes identity.
+  }, [statusFilter, domainFilter, archiveFilter, limit, activeRepoSettled]);
 
   // Initial fetch
   useEffect(() => {

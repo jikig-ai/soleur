@@ -765,7 +765,7 @@ The hook header points here for the authoritative map. In lifecycle order:
 |---|---|---|
 | `follow-through-directive-gate.sh` | `gh issue create --label follow-through` | denies **creating** a tracker without a valid sweeper directive |
 | `/ship` Phase 6 | pre-`gh pr create` | blocks any auto-close match whose issue is outside the PR's intended set — **broader** than this hook's prose arm (it flags standalone closes too) |
-| `pr-auto-close-scanner.yml` | `pull_request` events | **observational only** (always exits 0; its header says so) |
+| `pr-quality-guards.yml` (`auto-close-scan` job, folded #8902) | `pull_request` events | **observational only** (always exits 0; its header says so) |
 | `ship-soak-followthrough-gate.sh` | `gh pr ready` / `merge --auto` | denies when a referenced tracker is **missing** sweeper enrollment |
 | **this hook** | plain `gh pr merge` | denies when a referenced issue **has** the `follow-through` label |
 

@@ -23,9 +23,10 @@ describe.each([
 
   it("never promises a refresh by itself when a diagnostic is present", () => {
     expect(copy).toContain("do NOT tell them the diagram will refresh by itself");
-    // #8695: nothing on the page refreshes by itself, in ANY case — including
-    // the no-diagnostic supersede, whose newer change may never render (a push
-    // from outside Soleur). Same copy as the banner's SUPERSEDED_LINE.
+    // #8695: the save whose re-render was superseded by a newer write never
+    // renders (a push from outside Soleur emits no event the page can hear —
+    // #8739's c4_diagram_saved covers only Concierge saves). Same copy as the
+    // banner's SUPERSEDED_LINE.
     // The only "will update" left is inside the negation pinned below.
     expect(copy).not.toMatch(/shortly/);
     expect([...copy.matchAll(/will update/g)]).toHaveLength(1);
@@ -75,8 +76,18 @@ describe("prompt addendum — zero-view model guidance (#8740)", () => {
   it("keys on the phrase the page's zero-view diagnostic tells the user to say", async () => {
     const fs = await import("node:fs");
     const route = fs.readFileSync(join(APP, "app/api/kb/c4/project/route.ts"), "utf8");
-    expect(route).toContain('"ask the Concierge to re-render this diagram, then reload the page."');
+    expect(route).toContain('"ask the Concierge to re-render this diagram."');
     expect(C4_PROMPT_ADDENDUM).toContain("asks you to re-render a diagram");
+  });
+
+  // #8739 — after a successful edit_c4_diagram the server pushes
+  // c4_diagram_saved and the open editor reloads itself, so the addendum must
+  // not send the user to refresh manually. The OTHER_DIR route copy keeps its
+  // clause: an out-of-app export emits no event the page can hear.
+  it("does not tell the user to reload — the open editor refreshes itself", () => {
+    expect(C4_PROMPT_ADDENDUM).not.toContain("tell the user to reload");
+    expect(C4_PROMPT_ADDENDUM).not.toContain("then reload the page");
+    expect(C4_PROMPT_ADDENDUM).toContain("refreshes itself");
   });
 });
 

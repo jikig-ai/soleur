@@ -156,6 +156,13 @@ function foundationResponse(
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the client auth read moved to getSession() (local cookie
+      // read) in both useConversations and useOnboarding — return the same
+      // user shape on both.
+      getSession: vi.fn().mockResolvedValue({
+        data: { session: { user: { id: "user-1" } } },
+        error: null,
+      }),
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },
         error: null,

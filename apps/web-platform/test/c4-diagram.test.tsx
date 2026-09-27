@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { FeatureFlagProvider } from "@/components/feature-flags/provider";
 import type { FlagName } from "@/lib/feature-flags/server";
 
@@ -20,6 +20,9 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
   };
 }
 
+// Shared spy so the #8739 event tests can assert refetch.
+const embedReload = vi.hoisted(() => vi.fn(async () => {}));
+
 // Mock the shared building blocks so we test C4Diagram's WIRING (lifted `stale`
 // state + tab switch on save), not the real canvas/CodeMirror plumbing.
 vi.mock("@/components/kb/c4-shared", async () => {
@@ -34,7 +37,7 @@ vi.mock("@/components/kb/c4-shared", async () => {
       data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
       error: null,
       loading: false,
-      reload: vi.fn(),
+      reload: embedReload,
     }),
     C4Canvas: () => <div data-testid="c4-canvas" />,
     C4Diagnostics: (props: React.ComponentProps<typeof RealC4Diagnostics>) => (
@@ -75,14 +78,19 @@ vi.mock("@/components/kb/c4-shared", async () => {
 // The copy itself is pinned literally in c4-shared.test.tsx.
 const { SUPERSEDED_LINE: SUPERSEDED } = await import("@/components/kb/c4-diagnostics");
 
-async function renderEmbed(c4Edit = true, readOnly = false) {
+async function renderEmbed(c4Edit = true, readOnly = false, dirPath = DIR) {
   const { default: C4Diagram } = await import("@/components/kb/c4-diagram");
   return render(
     <FeatureFlagProvider flags={flagSnapshot(c4Edit)}>
-      <C4Diagram viewId="index" dirPath="knowledge-base/diagrams" readOnly={readOnly} />
+      <C4Diagram viewId="index" dirPath={dirPath} readOnly={readOnly} />
     </FeatureFlagProvider>,
   );
 }
+
+// Production dirPath shape: KB-relative dirname, no `knowledge-base/` prefix.
+const DIR = "engineering/architecture/diagrams";
+// The DOM event ws-client re-broadcasts on a c4_diagram_saved frame (#8739).
+const { C4_DIAGRAM_SAVED_EVENT } = await import("@/lib/c4-constants");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -180,5 +188,73 @@ describe("C4Diagram (inline embed) — c4-edit flag gates the Code tab (AC4)", (
   it("AC4: composes with readOnly — readOnly + flag ON still hides the Code tab", async () => {
     await renderEmbed(true, true);
     expect(screen.queryByRole("button", { name: "code" })).toBeNull();
+  });
+});
+
+describe("C4Diagram (inline embed) — c4_diagram_saved notice (#8739)", () => {
+  async function fireSaved(detail: {
+    dirPath: string;
+    rerendered: boolean;
+    diagnostic?: string | null;
+  }) {
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(C4_DIAGRAM_SAVED_EVENT, { detail }));
+    });
+  }
+
+  it("a matching rerendered frame refetches SILENTLY and clears the stale banner", async () => {
+    await renderEmbed();
+    // Drive a stale state first via the Code-tab save path.
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    const banner = () => screen.getByTestId("c4-diagnostics");
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    embedReload.mockClear();
+
+    await fireSaved({ dirPath: DIR, rerendered: true, diagnostic: null });
+
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("false"),
+    );
+    expect(embedReload).toHaveBeenCalledWith({ silent: true });
+  });
+
+  it("a matching failed-render frame sets the banner with the server diagnostic", async () => {
+    await renderEmbed();
+    embedReload.mockClear();
+
+    await fireSaved({
+      dirPath: DIR,
+      rerendered: false,
+      diagnostic: "render failed: likec4 parse error",
+    });
+
+    const banner = () => screen.getByTestId("c4-diagnostics");
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe(
+      "render failed: likec4 parse error",
+    );
+    expect(embedReload).toHaveBeenCalledWith({ silent: true });
+  });
+
+  it("a frame for another folder is a no-op", async () => {
+    await renderEmbed();
+    embedReload.mockClear();
+
+    await fireSaved({
+      dirPath: "engineering/other-diagrams",
+      rerendered: true,
+      diagnostic: null,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(embedReload).not.toHaveBeenCalled();
+    expect(
+      screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
+    ).toBe("false");
   });
 });

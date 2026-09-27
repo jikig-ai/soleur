@@ -45,6 +45,13 @@ function makeQuery() {
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the count fetcher reads auth via getSession() (local cookie
+      // read), not getUser().
+      getSession: () =>
+        Promise.resolve({
+          data: { session: mockUser ? { user: mockUser } : null },
+          error: null,
+        }),
       getUser: () => Promise.resolve({ data: { user: mockUser } }),
     },
     from: () => makeQuery(),

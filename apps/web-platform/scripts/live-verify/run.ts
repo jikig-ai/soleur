@@ -98,7 +98,7 @@ export interface Config {
   browserPath?: string;
 }
 
-function readConfig(): Config {
+export function readConfig(): Config {
   const required = (name: string): string => {
     const v = process.env[name];
     if (!v || v.trim() === "") {
@@ -257,11 +257,11 @@ export function bindProject(cfg: Config): void {
 // Mint (server-side, in-memory cookie jar — port of dev-signin/route.ts)
 // ---------------------------------------------------------------------------
 
-interface Jar {
+export interface Jar {
   cookies: Map<string, { value: string; options: CookieOptions }>;
 }
 
-function makeJar(): Jar {
+export function makeJar(): Jar {
   return { cookies: new Map() };
 }
 
@@ -270,7 +270,7 @@ function makeJar(): Jar {
  * SSR client writes into an in-memory jar. Prod cookies are `secure:true`
  * (NOT dev-signin's `secure:false`).
  */
-async function mintSession(
+export async function mintSession(
   cfg: Config,
   jar: Jar,
 ): Promise<ReturnType<typeof createServerClient>> {

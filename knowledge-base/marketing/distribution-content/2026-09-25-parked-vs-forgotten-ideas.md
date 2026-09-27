@@ -3,7 +3,7 @@ title: "Parked or Forgotten? How to Tell Before It Costs You"
 type: pillar
 publish_date: "2026-09-26"
 channels: discord, x, bluesky, linkedin-company, linkedin-personal
-status: scheduled
+status: published
 ---
 
 ## Discord

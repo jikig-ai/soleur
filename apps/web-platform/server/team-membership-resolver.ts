@@ -98,7 +98,7 @@ export async function resolveTeamMembershipPageData(
   }).select("name").eq("id", orgId).single();
   const organizationName: string | null = orgNameResp.data?.name ?? null;
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  const identity: Identity = { userId: user.id, role: "prd", orgId, email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) {
     return { ok: false, reason: "not-found" };
   }

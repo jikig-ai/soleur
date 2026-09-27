@@ -9,6 +9,11 @@
 // the diagrams-dir scope guard (`isC4DiagramPath`) as the hard boundary.
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+// `reportSilentFallback` is statically safe here (unlike `c4-writer`, whose
+// `import "server-only"` guard must stay out of the static graph for vitest —
+// hence the dynamic import in the handler): observability's chain has no
+// server-only module and is already static in cc-dispatcher's graph.
+import { reportSilentFallback } from "@/server/observability";
 // NOTE: `@/server/c4-writer` is imported dynamically inside the handler (not at
 // module top) so its `import "server-only"` guard stays out of the static graph
 // of cc-dispatcher — otherwise every test that loads the real dispatcher would
@@ -83,8 +88,10 @@ export const C4_PROMPT_ADDENDUM =
   "re-render (or confirms after you offer it), re-render by saving the " +
   "SMALLEST `.c4` file in that folder with `edit_c4_diagram`: keep every " +
   "existing line exactly as it is and append one `//` comment line at the " +
-  "end (saving the `.md` page does not re-render); then tell the user to " +
-  "reload the page. For any other folder you cannot re-render it: tell the " +
+  "end (saving the `.md` page does not re-render); an open diagram editor " +
+  "refreshes itself when the save lands — that is only a refetch of the saved " +
+  "model and says nothing about whether this save re-rendered. For " +
+  "any other folder you cannot re-render it: tell the " +
   "user to re-run the diagram export for that folder in their repository.";
 
 type ToolTextResponse = {
@@ -106,6 +113,19 @@ export interface BuildC4ConciergeToolsOpts {
   owner: string;
   repo: string;
   workspacePath: string;
+  /**
+   * #8739 — fired once per successful `writeC4Diagram` so the dispatcher can
+   * push a `c4_diagram_saved` WS frame; the open C4 workspace listens and
+   * reloads itself (and reconciles its stale banner) instead of the user
+   * reloading the page. `dirPath` is the dirname of the written KB-relative
+   * path — derived, not hardcoded, so a future `isC4DiagramPath` widening
+   * stays correct.
+   */
+  onDiagramSaved?: (info: {
+    dirPath: string;
+    rerendered: boolean;
+    diagnostic: string | null;
+  }) => void;
 }
 
 /**
@@ -142,6 +162,38 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
             { error: result.error, code: result.code, status: result.status },
             true,
           );
+        }
+        // #8739 — notify the open workspace on `.c4` writes. `.md` view-embed
+        // saves never re-render, so reporting them `rerendered:true` would let
+        // a stale banner clear while the rendered model still predates the
+        // `.c4` source — emit only for renderable source files. A notify throw
+        // must NEVER break the tool response (the save already committed); the
+        // catch mirrors via reportSilentFallback, statically imported
+        // (observability's chain has no server-only guard).
+        if (opts.onDiagramSaved && args.relativePath.endsWith(".c4")) {
+          try {
+            opts.onDiagramSaved({
+              dirPath: args.relativePath.slice(
+                0,
+                args.relativePath.lastIndexOf("/"),
+              ),
+              rerendered: result.rerendered,
+              diagnostic: result.rerenderDiagnostic ?? null,
+            });
+          } catch (err) {
+            // null first arg — the pino mirror captures a passed Error first
+            // and Sentry drops the tagged second capture (#8629); the thrown
+            // error's identity is preserved in `extra` for triage.
+            reportSilentFallback(null, {
+              feature: "c4-concierge-tools",
+              op: "diagram-saved-notify",
+              extra: {
+                relativePath: args.relativePath,
+                errName: err instanceof Error ? err.name : "unknown",
+              },
+              message: "onDiagramSaved callback threw; the save itself committed",
+            });
+          }
         }
         return textResponse({
           ok: true,

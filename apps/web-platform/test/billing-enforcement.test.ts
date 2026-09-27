@@ -170,6 +170,15 @@ describe("Middleware billing enforcement", () => {
   });
 
   test("query error fails CLOSED — redirects to /accept-terms?error=db_unavailable (AC5)", async () => {
+    // AC5 pins the COLD-path contract: no cached verdict → query → error →
+    // redirect. A distinct user id is required so the positive-only
+    // tcRowCache (populated by the preceding "active user" case for
+    // "user-123") misses — a warm cached pass legitimately serves through
+    // a DB blip for ≤ MW_VERDICT_TTL_MS, which is the designed bounded
+    // staleness, not a fail-closed breach.
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: "user-db-err" } },
+    });
     setupSupabaseClient(null, { message: "connection error" });
 
     const res = await middleware(makeNextRequest("/api/conversations", "POST") as never);

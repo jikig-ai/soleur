@@ -83,6 +83,16 @@ function mockTcSelectOk() {
   mockFrom.mockReturnValue({ select });
 }
 
+// The revocation verdict cache (perf-dashboard-section-load-latency Phase 1)
+// is module-scoped and keyed on `${jwtSub}:${iat}` — so every test in this
+// file needs a UNIQUE iat or an earlier test's `revoked=false` entry would
+// serve the next test's RPC leg from cache and silently skip
+// `check_my_revocation`. `iatSeq` is incremented per test; the USER_ID stays
+// stable (the T&C row cache is keyed on user.id but this file's default row
+// `v0` never satisfies the store predicate).
+let iatSeq = 0;
+let currentIat = 0;
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("NODE_ENV", "production");
@@ -93,9 +103,10 @@ beforeEach(() => {
     data: { user: { id: USER_ID, email: "u@example.com" } },
     error: null,
   });
-  const iat = Math.floor(Date.now() / 1000) - 60;
+  iatSeq += 1;
+  currentIat = 1_700_000_000 + iatSeq * 60;
   mockGetSession.mockResolvedValue({
-    data: { session: { access_token: makeJwt(iat) } },
+    data: { session: { access_token: makeJwt(currentIat) } },
     error: null,
   });
   // Default: not revoked.
@@ -244,5 +255,86 @@ describe("middleware #4307 revocation gate", () => {
     expect(mockRpc).not.toHaveBeenCalled();
     // Should NOT be a 302 to /login (already there).
     expect(res.status).not.toBe(302);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Verdict-cache semantics (perf plan Phase 1 / Guard 2 mutation matrix).
+// The positive-only cache stores ONLY `revoked === false` keyed on
+// `${jwtSub}:${iat}`; revoked=true and RPC-error outcomes must re-query on
+// every request. `currentIat` is per-test unique, so the first request is
+// always a cold miss.
+// ---------------------------------------------------------------------------
+
+describe("middleware revocation verdict cache (positive-only)", () => {
+  test("warm (sub,iat) verdict → second request performs ZERO check_my_revocation RPCs", async () => {
+    // Default mocks: revoked=false + tc row v0 (≠ TC_VERSION) → both requests
+    // land on /accept-terms; the discriminating signal is the RPC call count.
+    const res1 = await middleware(makeRequest("/dashboard"));
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+
+    const res2 = await middleware(makeRequest("/dashboard"));
+
+    // Same (sub, iat) → the cached not-revoked verdict served request 2.
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    // Both requests reached the same downstream gate (no revoked= bounce).
+    expect(res1.headers.get("location") ?? "").not.toContain("revoked=");
+    expect(res2.headers.get("location") ?? "").not.toContain("revoked=");
+    // getUser is the one remaining per-request round-trip — never cached.
+    expect(mockGetUser).toHaveBeenCalledTimes(2);
+  });
+
+  test("revoked=true is NEVER cached — the same (sub,iat) re-queries and still bounces", async () => {
+    mockRpc.mockResolvedValue({
+      data: [
+        {
+          revoked: true,
+          workspace_id: "11111111-1111-1111-1111-111111111111",
+          reason: "removed",
+        },
+      ],
+      error: null,
+    });
+
+    const res1 = await middleware(makeRequest("/dashboard"));
+    expect(res1.status).toBe(302);
+    expect(res1.headers.get("location")).toContain("revoked=removed");
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+
+    // Warm-cache variant of the revoked case: request 2 hits the same
+    // (sub, iat). A cached `revoked=true` would skip the RPC — the bounce must
+    // be re-computed per request (positive-only store), so the RPC runs again.
+    const res2 = await middleware(makeRequest("/dashboard"));
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+    expect(res2.status).toBe(302);
+    expect(res2.headers.get("location")).toContain("revoked=removed");
+  });
+
+  test("transient RPC error graces through AND is never cached — the next request re-queries", async () => {
+    mockRpc
+      .mockResolvedValueOnce({
+        data: null,
+        error: { message: "ECONNRESET", code: "53000" },
+      })
+      .mockResolvedValue({
+        data: [{ revoked: false, workspace_id: null, reason: null }],
+        error: null,
+      });
+
+    const res1 = await middleware(makeRequest("/dashboard"));
+    // Grace: no 503, no revoked= bounce; lands on the T&C gate redirect.
+    expect(res1.status).not.toBe(503);
+    expect(res1.headers.get("location") ?? "").not.toContain("revoked=");
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "ECONNRESET" }),
+      expect.objectContaining({ op: "revocation_gate.transient_grace" }),
+    );
+
+    // The error must NOT have written a verdict: request 2 re-queries and
+    // gets the recovered `revoked=false` answer.
+    const res2 = await middleware(makeRequest("/dashboard"));
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+    expect(res2.headers.get("location") ?? "").not.toContain("revoked=");
   });
 });

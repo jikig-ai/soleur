@@ -36,6 +36,8 @@ const SUPABASE_URL = "https://example.supabase.co";
 const SUPABASE_ANON_KEY = "anon-key";
 const USER_ID = "00000000-0000-0000-0000-000000000001";
 
+let iatSeq = 0;
+
 function makeJwt(iatSeconds: number): string {
   const b64 = (o: unknown) =>
     btoa(JSON.stringify(o)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -59,7 +61,14 @@ beforeEach(() => {
     error: null,
   });
   mockGetSession.mockResolvedValue({
-    data: { session: { access_token: makeJwt(Math.floor(Date.now() / 1000) - 60) } },
+    // Unique iat per test — the module-scope revocationOkCache keys on
+    // (sub, iat), so a shared timestamp would let a warm verdict from an
+    // earlier test skip this test's RPC arm (flake vector the moment a
+    // spy-count assertion lands in this file). 3_000_000_000 is a fixed
+    // epoch+offset; subtracting a per-test sequence keeps keys distinct.
+    data: {
+      session: { access_token: makeJwt(3_000_000_000 - iatSeq++) },
+    },
     error: null,
   });
   mockRpc.mockResolvedValue({
@@ -87,6 +96,20 @@ describe("middleware GAP G — no-store on authenticated documents", () => {
       makeRequest("/dashboard/settings", { "sec-fetch-dest": "document" }),
     );
     // Reached the authenticated passthrough (not a redirect).
+    expect(res.status).not.toBe(302);
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
+  test("authenticated SW-proxied navigation (Sec-Fetch-Dest: empty, Sec-Fetch-Mode: navigate) → no-store (#8969)", async () => {
+    // sw.js forwards navigations via respondWith(fetch(event.request)): dest
+    // degrades to `empty` but mode stays `navigate`. The dest-only gate skipped
+    // no-store for the dominant real-session navigation shape.
+    const res = await middleware(
+      makeRequest("/dashboard/settings", {
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "navigate",
+      }),
+    );
     expect(res.status).not.toBe(302);
     expect(res.headers.get("cache-control")).toMatch(/no-store/);
   });
