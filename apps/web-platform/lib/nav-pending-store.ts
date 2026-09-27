@@ -125,6 +125,9 @@ function forceStopStalledEpisode(): void {
  * Open a pending episode. Idempotent: a no-op while an episode is pending AND
  * during the ~400ms min-visible hold after commit — a second start inside the
  * hold is ignored until the bar is fully hidden (brief §1 step 5, ux #8).
+ * Consequence: a genuinely slow nav initiated inside the hold gets no bar
+ * AND no telemetry row (nav_duration_ms emits only on stop of an open
+ * episode) — accepted trade-off, it under-counts exactly the slow navs.
  * Arms the ~30s stall timeout: a hung RSC fetch or never-committing trigger
  * can never leave a permanent bar (spec-flow C1).
  */
@@ -149,11 +152,14 @@ export function startNavPending(t: NavPendingTrigger): void {
 
 // Layer 5 telemetry — `nav_duration_ms` per committed soft nav. sanitize.ts
 // allowlists props to `["path"]` and no route-pattern normalizer exists, so
-// `path` carries only `nav:<trigger>:<section>` — trigger ∈ link|router|
-// popstate, section ∈ a fixed first-segment enum (never a concrete path —
-// token segments aren't masked by the server scrubber; plan Layer 5 / kieran
-// #5). Per-episode durations ride the Sentry breadcrumb on stalls; tail-drop
-// under the 120/min analytics throttle is accepted — the signal needs trends.
+// `path` carries only `nav:<trigger>:<section>:<bucket>` — trigger ∈
+// link|router|popstate, section ∈ a fixed first-segment enum (never a
+// concrete path — token segments aren't masked by the server scrubber; plan
+// Layer 5 / kieran #5), and bucket is a coarse elapsed-time band (a raw ms
+// value would need a sanitize allowlist change and leaks precision the
+// signal doesn't need — trends live in the bucket distribution). Stalls ride
+// the Sentry breadcrumb; tail-drop under the 120/min analytics throttle is
+// accepted — the signal needs trends, not completeness.
 const NAV_SECTIONS = new Set([
   "dashboard",
   "connect-repo",
@@ -164,11 +170,22 @@ const NAV_SECTIONS = new Set([
   "internal",
 ]);
 
-function emitNavTelemetry(episodeTrigger: NavPendingTrigger | null): void {
+function navDurationBucket(elapsedMs: number): string {
+  if (elapsedMs < 400) return "lt400ms";
+  if (elapsedMs < 1_000) return "lt1s";
+  if (elapsedMs < 5_000) return "lt5s";
+  return "ge5s";
+}
+
+function emitNavTelemetry(
+  episodeTrigger: NavPendingTrigger | null,
+  episodeStartedAt: number,
+): void {
   const segment = window.location.pathname.split("/")[1] ?? "";
   const section = NAV_SECTIONS.has(segment) ? segment : "other";
+  const bucket = navDurationBucket(Date.now() - episodeStartedAt);
   void track("nav_duration_ms", {
-    path: `nav:${episodeTrigger ?? "programmatic"}:${section}`,
+    path: `nav:${episodeTrigger ?? "programmatic"}:${section}:${bucket}`,
   });
 }
 
@@ -176,11 +193,18 @@ function emitNavTelemetry(episodeTrigger: NavPendingTrigger | null): void {
  * Close the pending episode on route commit (or abort). Before the entry
  * delay elapses this cancels silently — fast navs produce no flash (AC2).
  * Once visible, the bar holds for the remainder of the min-visible window.
+ *
+ * Known edge (accepted): the island's watcher fires on ANY searchParams
+ * delta, including native `history.pushState` drawer-state writes
+ * (crm-surface `?contact=`, workstream-board `?issue=`) — a pushState landing
+ * while an unrelated episode is open commits it early (bar hides mid-nav).
+ * Low-frequency race; layering gating on episode-target-vs-committed-location
+ * would reintroduce UrlObject tracking for a cosmetic blink.
  */
 export function stopNavPending(): void {
   if (phase === "idle" || phase === "holding") return;
   clearTimer("stall");
-  emitNavTelemetry(trigger);
+  emitNavTelemetry(trigger, startedAt);
   if (phase === "pending") {
     clearTimer("entry");
     phase = "idle";
@@ -209,6 +233,10 @@ type UrlObjectLike = {
 /** `next/link`-compatible href: string or UrlObject. */
 export type NavPendingHref = string | UrlObjectLike;
 
+// The `query`-record branch is unexercised today (no caller passes a
+// UrlObject) but must stay: NavLink's href type is next/link's, and a
+// `{pathname, query}` caller that hit a stubbed serializer would get a
+// wrong same-doc verdict — silent, and it skips the bar.
 function searchSuffix(href: UrlObjectLike): string {
   if (typeof href.search === "string" && href.search) {
     return href.search.startsWith("?") ? href.search : `?${href.search}`;

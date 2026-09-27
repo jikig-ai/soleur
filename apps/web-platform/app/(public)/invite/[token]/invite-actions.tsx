@@ -32,7 +32,8 @@ export function InviteActions({
   // BOTH controls disable (`busy` below) so a decline can never race an
   // accept on the same invitation.
   // Accept latches on redirect — success ends in window.location.assign
-  // (cross-workspace boundary) so pending must not release mid-nav.
+  // (cross-workspace boundary) so pending must not release mid-nav. latch()
+  // is explicit: only the nav path is terminal, every earlier path throws.
   const accept = usePendingAction(
     async () => {
       let res: Response;
@@ -57,9 +58,9 @@ export function InviteActions({
       // PREVIOUS workspace's RSC. Hard-nav to wipe it (mirrors the workspace
       // switch in components/dashboard/org-switcher-container.tsx); a soft push
       // would render the prior workspace's cached content under the new tenant.
+      accept.latch();
       window.location.assign("/dashboard/settings/team");
     },
-    { latchOnRedirect: true },
   );
 
   const decline = usePendingAction(async () => {

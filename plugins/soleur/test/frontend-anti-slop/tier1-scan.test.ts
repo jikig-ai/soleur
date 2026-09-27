@@ -249,6 +249,18 @@ describe("frontend-anti-slop tier1-scan: per-file disable comment", () => {
     expect(set.has("GRADIENT-TEXT")).toBe(true);
     expect(set.has("TRANSITION-ALL")).toBe(true);
   });
+
+  test("disable comment works in JSX, CSS, and line-comment forms", () => {
+    const src = `
+      {/* anti-slop:disable GRADIENT-TEXT reason="jsx form" */}
+      /* anti-slop:disable TRANSITION-ALL reason="css form" */
+      // anti-slop:disable BRAND-RAW-HEX reason="line-comment form"
+    `;
+    const set = disabledRulesInFile(src);
+    expect(set.has("GRADIENT-TEXT")).toBe(true);
+    expect(set.has("TRANSITION-ALL")).toBe(true);
+    expect(set.has("BRAND-RAW-HEX")).toBe(true);
+  });
 });
 
 describe("frontend-anti-slop tier1-scan: calibration baseline", () => {

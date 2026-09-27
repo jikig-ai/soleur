@@ -39,6 +39,8 @@
 
 import { useState, useTransition } from "react";
 
+import { reportSilentFallback } from "@/lib/client-observability";
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import type { DenyReason } from "@/server/templates/is-template-authorized";
 
 export interface ConfirmationPayload {
@@ -100,11 +102,28 @@ export function useActionSend(
     typed_value: string;
     expected_draft_preview_hash: string;
   }) {
+    // Pending must always terminate (spec FR2): an unbounded POST would lock
+    // the typed-confirm modal open with every dismiss vector inert. Abort at
+    // the watchdog horizon so the transition resolves into the in-modal
+    // role="alert" error path instead.
     return fetch(`/api/dashboard/today/${messageId}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(extra ?? {}),
+      signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
     });
+  }
+
+  function sendFailureMessage(err: unknown): string {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      reportSilentFallback(err, {
+        feature: "ui-action-feedback",
+        op: "action-send-timeout",
+        message: `send POST exceeded ${PENDING_WATCHDOG_MS}ms — aborted`,
+      });
+      return "Send timed out — please try again";
+    }
+    return "Send failed — network error";
   }
 
   function handle200(json: {
@@ -193,8 +212,8 @@ export function useActionSend(
           }
         }
         setError(`Send failed (${res.status})`);
-      } catch {
-        setError("Send failed — network error");
+      } catch (err) {
+        setError(sendFailureMessage(err));
       }
     });
   }
@@ -238,8 +257,8 @@ export function useActionSend(
           return;
         }
         setError(`Send failed (${res.status})`);
-      } catch {
-        setError("Send failed — network error");
+      } catch (err) {
+        setError(sendFailureMessage(err));
       }
     });
   }

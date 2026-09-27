@@ -1,5 +1,6 @@
 "use client";
 
+// anti-slop:disable BRAND-RAW-HEX reason="third-party OAuth provider brand marks — Google/Microsoft logo colors are spec-fixed and cannot tokenize"
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";

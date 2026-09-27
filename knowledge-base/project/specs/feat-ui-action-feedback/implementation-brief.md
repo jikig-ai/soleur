@@ -136,7 +136,7 @@ One `forwardRef` `Button` primitive (`components/ui/button.tsx`): `variant: "gol
 Lifecycle: **idle → `:active`** (pressed affordance, 120ms) **→ `loading=true`** (disabled+aria-busy+opacity dip immediately, spinner at +150ms) **→ resolve**: pending cleared, spinner unmounts, control re-enabled; **→ reject**: pending cleared, control re-enabled, `error` surfaces `role="alert"` (P3 — pending always terminates).
 
 - **Focus contract (ux #1, blocking):** `usePendingAction` restores focus to the control on resolve when `activeElement` collapsed to `<body>` — the disabled-flip otherwise destroys keyboard place on every submit.
-- **Redirect latch (spec-flow C4):** on `window.location.*` redirects, pending **never resets in `finally`** — `opts.latchOnRedirect` is the typed default (`use-sign-out.ts`/`upgrade-at-capacity-modal` precedent; `billing-section.tsx` `redirectTo` gets fixed).
+- **Redirect latch (spec-flow C4):** on `window.location.*` redirects, pending **never resets in `finally`** — `latch()` is called explicitly inside the asyncFn immediately before the hard nav (`use-sign-out.ts`/`upgrade-at-capacity-modal` precedent; `billing-section.tsx` `redirectTo` consumes the hook). Terminality is explicit — a resolve path that does not navigate releases normally.
 - **Granularity:** pending is shared per logical action-group (billing's coupled buttons share one flag); per-control flags only where actions are independent.
 - Under `prefers-reduced-motion` the spinner is **static** (global sweep kills `animate-spin` — accepted precedent: the cmdk spinner's static gold ring reads as "in progress").
 
@@ -223,7 +223,7 @@ Not drawn in the pen — plan-derived, binding.
 | Spinner size | **`h-3.5 w-3.5` (14px)** | `SpinnerIcon`, `currentColor` + per-variant color class |
 | Press | **`scale-[0.98]` + `opacity-90`, 120ms** | transform suppressed under reduced-motion |
 | Pending opacity | **0.55** (page) / **0.65** (modal surfaces) / **0.5** (inert siblings: locked input, Cancel) | |
-| Telemetry | `track("nav_duration_ms", {path: "nav:<trigger>:<section>"})` | trigger ∈ `link\|router\|popstate`; section ∈ fixed first-segment enum (dashboard\|kb\|chat\|settings\|inbox\|workstream\|crm\|releases\|connect-repo\|shared\|invite\|auth) — never a concrete path; `performance.now()` at start/stop; durations ride the Sentry breadcrumb |
+| Telemetry | `track("nav_duration_ms", {path: "nav:<trigger>:<section>:<bucket>"})` | trigger ∈ `link\|router\|popstate`; section ∈ fixed first-segment enum (dashboard\|connect-repo\|shared\|invite\|login\|signup\|internal\|other — the actual first-segment set); bucket ∈ coarse elapsed band (`lt400ms\|lt1s\|lt5s\|ge5s`) so the event carries a duration signal without a sanitize allowlist change; stall detail rides the Sentry breadcrumb |
 
 ---
 

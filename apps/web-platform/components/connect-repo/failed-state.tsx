@@ -145,11 +145,10 @@ export function FailedState({
   // current_workspace_id JWT claim (ADR-044 Decision.3), then a HARD navigation
   // to /dashboard converges server components onto the durable truth. Redirecting
   // WITHOUT the refresh would land on the stale prior-claim workspace.
-  // feat-ui-action-feedback redirect latch (brief §3.6 / spec-flow C4): every
-  // resolve path here either hard-navs (location.assign) or hands back to the
-  // parent via onRetry (this component unmounts), so a success-latch can never
-  // strand a disabled button on screen — and the window between assign() and
-  // the document teardown can never re-enable the CTA into a second RPC.
+  // feat-ui-action-feedback redirect latch (brief §3.6 / spec-flow C4): the
+  // only terminal resolve path is the hard nav to /dashboard — latch() marks
+  // it explicitly. The onRetry paths resolve and release normally, which is
+  // also correct if onRetry did NOT unmount us (the CTA simply recovers).
   const switchAction = usePendingAction(
     async () => {
       if (!existingWorkspaceId) {
@@ -187,9 +186,9 @@ export function FailedState({
           "refreshSession failed after set_current_workspace_id committed — converging forward via hard nav",
       });
     }
+    switchAction.latch();
     window.location.assign("/dashboard");
     },
-    { latchOnRedirect: true },
   );
 
   const handlePrimary = () => {

@@ -37,7 +37,7 @@ function SetupKeyForm() {
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
-  // latchOnRedirect: a successful skip ends in window.location.assign — the
+  // latch(): a successful skip ends in window.location.assign — the
   // pending flag must never release in the gap before the hard nav commits.
   const skip = usePendingAction(
     async () => {
@@ -58,9 +58,9 @@ function SetupKeyForm() {
       // GAP E (ADR-067 staleTimes): terminal entry into /dashboard (or a
       // safeReturnTo-sanitized invite target) — hard-nav to wipe the Router
       // Cache. The intermediate hop to /connect-repo below stays a soft push.
+      skip.latch();
       window.location.assign(redirectTo ?? "/dashboard");
     },
-    { latchOnRedirect: true },
   );
   const skipping = skip.pending;
 

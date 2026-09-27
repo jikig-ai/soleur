@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
+import { PENDING_ESCALATION_MS } from "@/lib/pending-timing";
 import { CancelRetentionModal } from "./cancel-retention-modal";
 
 interface Invoice {
@@ -15,7 +17,7 @@ interface Invoice {
 }
 
 // ~8s escalation delay (feat-ui-action-feedback brief §5/§7).
-const ESCALATION_DELAY_MS = 8_000;
+const ESCALATION_DELAY_MS = PENDING_ESCALATION_MS;
 
 interface BillingSectionProps {
   subscriptionStatus: string | null;
@@ -34,7 +36,6 @@ export function BillingSection({
   serviceTokenCount,
   createdAt,
 }: BillingSectionProps) {
-  const [loading, setLoading] = useState(false);
   const [stillWorking, setStillWorking] = useState(false);
   const [showRetentionModal, setShowRetentionModal] = useState(false);
   const [error, setError] = useState("");
@@ -66,6 +67,37 @@ export function BillingSection({
     }
   }, [isActive, isPastDue, isUnpaid]);
 
+  // feat-ui-action-feedback: usePendingAction supplies the pending contract
+  // the hand-rolled version lacked — a hung /api/checkout POST previously
+  // left every billing control disabled forever (no watchdog). latch() marks
+  // ONLY the hard-nav path terminal; every error path releases so the user
+  // can retry (cq-silent-fallback: hangs still report via the watchdog).
+  const { run: redirectTo, pending: loading, latch } = usePendingAction(
+    async (endpoint: string, fallbackError: string) => {
+      setError("");
+      let res: Response;
+      try {
+        res = await fetch(endpoint, { method: "POST" });
+      } catch {
+        setError("Something went wrong. Please try again.");
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || fallbackError);
+        return;
+      }
+      if (data.url) {
+        // Redirect latch (use-sign-out precedent): once the hard nav is
+        // assigned, `loading` must NEVER reset — the document load tearing
+        // the page down IS the reset. Re-enabling in the gap before the
+        // Stripe redirect commits reopens a double-submit window.
+        latch();
+        window.location.href = data.url;
+      }
+    },
+  );
+
   // ~8s escalation (feat-ui-action-feedback brief §5): a billing action
   // pending longer than ESCALATION_DELAY_MS appends "Still working…" to a
   // polite live region so a slow Stripe redirect never reads as hung.
@@ -76,32 +108,6 @@ export function BillingSection({
     const timer = setTimeout(() => setStillWorking(true), ESCALATION_DELAY_MS);
     return () => clearTimeout(timer);
   }, [loading]);
-
-  async function redirectTo(endpoint: string, fallbackError: string) {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch(endpoint, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || fallbackError);
-        setLoading(false);
-        return;
-      }
-      if (data.url) {
-        // Redirect latch (use-sign-out precedent): once the hard nav is
-        // assigned, `loading` must NEVER reset — the document load tearing
-        // the page down IS the reset. Re-enabling in the gap before the
-        // Stripe redirect commits reopens a double-submit window.
-        window.location.href = data.url;
-        return;
-      }
-      setLoading(false);
-    } catch {
-      setError("Something went wrong. Please try again.");
-      setLoading(false);
-    }
-  }
 
   const handlePortalRedirect = () =>
     redirectTo("/api/billing/portal", "Failed to open billing portal");

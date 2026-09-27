@@ -5,20 +5,25 @@ import { reportSilentFallback } from "@/lib/client-observability";
 
 export const PENDING_WATCHDOG_MS = 30_000;
 
-export type PendingActionOptions = {
-  latchOnRedirect?: boolean;
-};
-
 export type PendingAction<A extends unknown[]> = {
   run: (...args: A) => void;
   pending: boolean;
   error: Error | null;
-  pendingRef: { current: boolean };
+  /**
+   * Mark the in-flight episode terminal: the asyncFn ends in a hard
+   * navigation or an unmount of the invoking surface, so `pending` must NOT
+   * release on resolve — the document teardown (or unmount) IS the reset.
+   * Call `latch()` immediately before `window.location.*` (or the unmounting
+   * callback). Terminality is explicit, never inferred from resolution: an
+   * asyncFn that resolves without navigating (a confirm-cancel, a handled
+   * !res.ok) releases normally, and a latched episode still reports to Sentry
+   * if it outlives the watchdog — the promised teardown never arrived.
+   */
+  latch: () => void;
 };
 
 export function usePendingAction<A extends unknown[] = []>(
   asyncFn: (...args: A) => Promise<unknown> | unknown,
-  opts?: PendingActionOptions,
 ): PendingAction<A> {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -27,7 +32,6 @@ export function usePendingAction<A extends unknown[] = []>(
   const latchedRef = useRef(false);
   const invokerRef = useRef<HTMLElement | null>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latchOnRedirect = opts?.latchOnRedirect === true;
 
   const clearWatchdog = useCallback(() => {
     if (watchdogRef.current != null) {
@@ -63,6 +67,10 @@ export function usePendingAction<A extends unknown[] = []>(
     setPending(false);
   }, [clearWatchdog]);
 
+  const latch = useCallback(() => {
+    latchedRef.current = true;
+  }, []);
+
   const run = useCallback(
     (...args: A) => {
       if (pendingRef.current || latchedRef.current) return;
@@ -80,33 +88,42 @@ export function usePendingAction<A extends unknown[] = []>(
         reportSilentFallback(null, {
           feature: "ui-action-feedback",
           op: "pending-watchdog",
+          extra: { latched: String(latchedRef.current) },
           message: "usePendingAction pending exceeded 30s — hung action",
         });
+        // A latched episode is NOT released — the promised document teardown
+        // may still be in flight, and re-enabling in that gap reopens the
+        // double-submit window the latch exists to close.
         if (!latchedRef.current) {
           pendingRef.current = false;
           setPending(false);
         }
       }, PENDING_WATCHDOG_MS);
 
+      // The transition's own isPending is deliberately discarded — `pending`
+      // is the episode state (covers the whole async flight), not the render
+      // window; the transition exists so asyncFn's internal state updates
+      // can't trigger a Suspense fallback mid-flight.
       startTransition(async () => {
-        let succeeded = false;
+        let failed = false;
         try {
           await asyncFn(...args);
-          succeeded = true;
         } catch (err) {
+          failed = true;
           setError(err instanceof Error ? err : new Error(String(err)));
         } finally {
-          clearWatchdog();
-          if (latchOnRedirect && succeeded) {
-            latchedRef.current = true;
-          } else {
+          // A failed episode always releases — the user must be able to
+          // retry. A latched-and-resolved episode keeps pending through
+          // teardown and keeps the watchdog armed, so a latch() whose
+          // navigation never lands still produces a Sentry signal.
+          if (failed || !latchedRef.current) {
             release();
           }
         }
       });
     },
-    [asyncFn, latchOnRedirect, clearWatchdog, release],
+    [asyncFn, clearWatchdog, release],
   );
 
-  return { run, pending, error, pendingRef };
+  return { run, pending, error, latch };
 }

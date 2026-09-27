@@ -13,9 +13,18 @@ import { isSameDocTarget, startNavPending } from "@/lib/nav-pending-store";
 
 type AppRouter = ReturnType<typeof useRouter>;
 
-export function usePendingRouter(): AppRouter {
+// Explicit six-method surface — members NOT listed here (e.g. bfcacheId,
+// experimental_gesturePush) do not pass through: a future nav-shaped member
+// must be wrapped deliberately, not forwarded sight-unseen (review P3 — the
+// forwarded-but-unconsumed members only existed to satisfy a shape test).
+export type PendingRouter = Pick<
+  AppRouter,
+  "push" | "replace" | "back" | "forward" | "refresh" | "prefetch"
+>;
+
+export function usePendingRouter(): PendingRouter {
   const router = useRouter();
-  return useMemo<AppRouter>(
+  return useMemo<PendingRouter>(
     () => ({
       push: (href, options) => {
         if (!isSameDocTarget(href)) startNavPending("router");
@@ -33,19 +42,6 @@ export function usePendingRouter(): AppRouter {
       forward: () => router.forward(),
       refresh: () => router.refresh(),
       prefetch: (href, options) => router.prefetch(href, options),
-      get bfcacheId() {
-        return router.bfcacheId;
-      },
-      ...(router.experimental_gesturePush
-        ? {
-            experimental_gesturePush: (
-              href: string,
-              options?: Parameters<
-                NonNullable<AppRouter["experimental_gesturePush"]>
-              >[1],
-            ) => router.experimental_gesturePush?.(href, options),
-          }
-        : {}),
     }),
     [router],
   );

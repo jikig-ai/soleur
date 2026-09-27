@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { PENDING_ESCALATION_MS } from "@/lib/pending-timing";
 
 // ~8s escalation delay (feat-ui-action-feedback brief §5): sign-out is one of
 // the named irreversible-path surfaces — a pending episode older than this
 // appends "Still working…" to a polite live region so a slow sign-out never
 // reads as hung.
-const ESCALATION_DELAY_MS = 8_000;
+const ESCALATION_DELAY_MS = PENDING_ESCALATION_MS;
 
 interface SignOutConfirmModalProps {
   open: boolean;

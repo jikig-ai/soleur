@@ -46,20 +46,28 @@ covers SWR revalidation only, not route transitions.
    force-stops + breadcrumbs; `start()` is a no-op while pending AND through
    the ~400ms min-visible hold.
 4. **Hard-nav boundary pinned**: `window.location.*` stays untouched; its
-   ~45+ sites are enumerated as never-reset pending latches
-   (`usePendingAction(fn, { latchOnRedirect: true })`).
+   sites are enumerated as never-reset pending latches via the explicit
+   `latch()` on `usePendingAction(fn)` — called inside the asyncFn
+   immediately before the hard nav. Terminality is explicit, never inferred
+   from resolution: a confirm-cancel or handled `!res.ok` resolve path
+   releases normally.
 5. **Enforcement**: `scripts/check-button-primitive-sweep.sh` + vitest
    wrapper — a baseline ratchet (the native-`<button>` count may only
    decrease) plus `data-button-exempt="<reason>"` as the in-code exemption
-   chokepoint (a doc-only list drifts from the DOM). `import Link from
-   "next/link"` is the greppable violation seam.
+   chokepoint (a doc-only list drifts from the DOM); and
+   `scripts/check-nav-channel-sweep.sh` + vitest wrapper — `import Link from
+   "next/link"` outside nav-link.tsx, `router.push/replace/back/forward` on
+   a raw `useRouter`, and literal internal `<a href="/…">` anchors are the
+   greppable violation seams.
 
 ## Conventions this ADR records
 
-- **Exemption budget**: `data-button-exempt` sites bounded at ~15% of the
-  corpus; past that, variant coverage is re-evaluated rather than the list
-  growing — the exemption list must not become the escape hatch that
-  re-creates the two-convention status quo.
+- **Exemption budget**: `data-button-exempt` sites bounded at ~17% of the
+  corpus (51 sites at sweep-landing — mostly ARIA-role composites and
+  composite-content rows the primitives deliberately don't absorb; restated
+  from the ~15% estimate at review). Past that, variant coverage is
+  re-evaluated rather than the list growing — the exemption list must not
+  become the escape hatch that re-creates the two-convention status quo.
 - **Revert unit**: per-tier domain-grouped commits. A mid-flight tier
   rollback marks surviving native sites `data-button-exempt="revert-pending"`
   so the sentinel stays green during the temporary coexistence.
@@ -84,7 +92,10 @@ covers SWR revalidation only, not route transitions.
 
 - Every future button/route-link authors through the primitives; new native
   `<button>` or raw `next/link` imports red the sentinel in review.
-- A truly hung mutation (>30s) leaves the control disabled until reload —
-  accepted residual; the watchdog emits a Sentry breadcrumb.
+- A truly hung mutation (>30s) reports a `pending-watchdog` Sentry event and
+  releases the control; latched (post-hard-nav) episodes report tagged
+  `latched: "true"` but stay latched — the teardown may still be in flight.
+  The typed-confirm send POST aborts at the same horizon so the modal can
+  never lock open.
 - `/api/checkout` idempotency is server-deferred to #8918; the client latch
   is the mitigation in the interim.

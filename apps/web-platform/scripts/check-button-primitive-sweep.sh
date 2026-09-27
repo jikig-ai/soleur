@@ -29,8 +29,10 @@ cd "$APP_ROOT"
 
 PRIMITIVE_PATH="components/ui/button.tsx"
 
-# may only decrease; regenerate via the grep below
-NATIVE_BUTTON_BASELINE="${BUTTON_SWEEP_BASELINE:-308}"
+# may only decrease; regenerate via the grep below. Post-sweep corpus is 51
+# exempt-marked native sites — the baseline must equal the SHIPPED count, not
+# the pre-migration corpus, or the ratchet can never fire.
+NATIVE_BUTTON_BASELINE="${BUTTON_SWEEP_BASELINE:-51}"
 
 # Space-separated git pathspecs relative to apps/web-platform; overridable
 # for scratch-fixture verification (BUTTON_SWEEP_PATHS="sweep-fixture/*.tsx").
@@ -59,7 +61,10 @@ while IFS= read -r site; do
   total=$((total + 1))
 
   # Slice the tag body: from the `<button` line until the line whose `>`
-  # closes it (arrow `=>` inside props stripped first), capped at 20 lines.
+  # closes it (arrow `=>` inside props stripped first), capped at 20 lines —
+  # a `<button` tag with >20 attribute lines would read as unmarked; that
+  # shape doesn't occur in the corpus and an exempt marker that far down the
+  # tag is a readability problem in its own right.
   tag_text=""
   while IFS= read -r l; do
     tag_text+="$l"$'\n'

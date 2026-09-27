@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams, usePathname } from "next/navigation";
 import { usePendingRouter } from "@/hooks/use-pending-router";
+import { NavLink } from "@/components/ui/nav-link";
 import { useWebSocket } from "@/lib/ws-client";
 import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -744,7 +745,7 @@ export function ChatSurface({
       {isFull && (
         <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
           <div className="flex min-w-0 items-center gap-3">
-            <a
+            <NavLink
               href="/dashboard"
               aria-label="Back to dashboard"
               className="flex shrink-0 items-center text-soleur-text-secondary hover:text-soleur-text-primary md:hidden"
@@ -752,7 +753,7 @@ export function ChatSurface({
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6" />
               </svg>
-            </a>
+            </NavLink>
 
             {activeLeaderIds.length > 0 && (
               <span className="min-w-0 truncate text-sm text-soleur-text-secondary md:hidden">

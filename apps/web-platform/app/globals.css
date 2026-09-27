@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* anti-slop:disable BRAND-RAW-HEX reason="token-definition file — literal hex defines the --soleur-* token layer (parity with brand-hex-commit-gate is_token_def exemption)" */
 /*
  * Tailwind v4 dark variant — pin to our data-theme contract. Default
  * Tailwind v4 resolves `dark:*` via `prefers-color-scheme: dark`, which
@@ -292,19 +293,12 @@
 }
 
 /*
- * feat-ui-action-feedback — route-pending bar. Same sweep shape as
- * refresh-shimmer; the sliver consumes --soleur-accent-gold-fg (per-palette
+ * feat-ui-action-feedback — route-pending bar. Reuses the `refresh-shimmer`
+ * keyframes verbatim (the island's animate-[refresh-shimmer_…] arbitrary
+ * utility); the sliver consumes --soleur-accent-gold-fg (per-palette
  * foreground gold — implementation-brief §0/AC6c) via the
  * bg-soleur-accent-gold-fg/80 utility in nav-pending-island.tsx.
  */
-@keyframes nav-pending-shimmer {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(400%);
-  }
-}
 
 /* Reduced-motion carve-out mirrors the refresh-shimmer precedent: a static
    dim sliver instead of the sweep (the bar still marks "in progress"). */

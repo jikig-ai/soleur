@@ -135,9 +135,10 @@ function MemberRow({
 
   // feat-ui-action-feedback: the remove buttons had NO pending guard — a
   // second click could fire a duplicate POST mid-flight. usePendingAction
-  // supplies disabled + aria-busy; latchOnRedirect holds pending across the
-  // success `window.location.reload()` (the document teardown IS the reset).
-  const { run: handleRemove, pending: removePending } = usePendingAction(
+  // supplies disabled + aria-busy; latch() marks ONLY the reload path
+  // terminal — the confirm-cancel and !res.ok early returns resolve and
+  // release normally (a resolution-inferred latch would brick the button).
+  const { run: handleRemove, pending: removePending, latch } = usePendingAction(
     async () => {
       setMenuOpen(false);
       if (
@@ -157,9 +158,9 @@ function MemberRow({
         window.alert("Failed to remove member. Please try again.");
         return;
       }
+      latch();
       window.location.reload();
     },
-    { latchOnRedirect: true },
   );
 
   // RBAC: the kebab menu holds only owner-only actions (Remove member,

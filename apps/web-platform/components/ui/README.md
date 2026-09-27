@@ -20,18 +20,18 @@ The single native-button replacement. All ~310 legacy `<button>` sites migrate o
 
 ## `usePendingAction` (`hooks/use-pending-action.ts`)
 
-`usePendingAction(asyncFn, opts?) → { run, pending, error, pendingRef }`.
+`usePendingAction(asyncFn) → { run, pending, error, latch }`.
 
-- `run(...)` executes `asyncFn` inside a React transition; a second `run()` while pending is a no-op (`pendingRef` covers the click-to-first-render sync gap before `disabled` paints).
+- `run(...)` executes `asyncFn` inside a React transition; a second `run()` while pending is a no-op (an internal ref covers the click-to-first-render sync gap before `disabled` paints).
 - `error` (`Error | null`) is for callers to render via `role="alert"` — a pending state must always terminate into success or a visible, announced error.
-- `opts.latchOnRedirect` is for `window.location.*` redirect callers (billing-section's `redirectTo` is the canonical case): once the action resolves, pending never resets — the hard nav owns teardown. Failure still releases + surfaces `error`.
+- `latch()` is for `window.location.*` redirect callers (billing-section's `redirectTo` is the canonical case): call it inside `asyncFn` immediately before the hard nav — terminality is explicit, never inferred from resolution. A resolve without `latch()` releases normally (a confirm-cancel or handled `!res.ok` path must NOT brick the control); a latched episode keeps pending through teardown and still reports to Sentry if the nav never lands. Failure always releases + surfaces `error`.
 - On resolve, focus is restored to the invoking control when the disabled-flip collapsed `activeElement` to `<body>`.
-- A ~30s watchdog (`PENDING_WATCHDOG_MS`) mirrors a hung action to Sentry via `reportSilentFallback` and releases the control — a permanently disabled button is the failure mode this contract exists to remove.
+- A ~30s watchdog (`PENDING_WATCHDOG_MS`) mirrors a hung action to Sentry via `reportSilentFallback` and releases the control — a permanently disabled button is the failure mode this contract exists to remove. Latched episodes report (tagged `latched: "true"`) but stay latched — teardown may still be in flight.
 - Granularity: pending is shared per logical action-group (coupled buttons share one flag); per-control flags only where actions are independent.
 
 ## `data-button-exempt` — exemption process
 
-Genuinely bespoke buttons (toggle/`aria-pressed` groups, cmdk items, composite inner markup) keep native `<button>` with `data-button-exempt="<non-empty reason>"` **on the tag** — the DOM attribute is the chokepoint; a doc-only list drifts on day one. Empty or non-literal reasons fail the sentinel. Exemptions are bounded by a **~15% budget** of the corpus; past that, variant coverage is re-evaluated rather than the list growing.
+Genuinely bespoke buttons (toggle/`aria-pressed` groups, cmdk items, composite inner markup) keep native `<button>` with `data-button-exempt="<non-empty reason>"` **on the tag** — the DOM attribute is the chokepoint; a doc-only list drifts on day one. Empty or non-literal reasons fail the sentinel. Exemptions measured ~17% of the corpus at sweep-landing (51 sites — mostly ARIA-role composites and composite-content rows the primitives deliberately don't absorb); the budget is restated at that level, and growth past it re-evaluates variant coverage rather than letting the list grow silently.
 
 ## Sentinel
 

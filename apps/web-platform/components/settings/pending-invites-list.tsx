@@ -97,7 +97,7 @@ export function PendingInvitesList({
                   <span
                     className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${
                       invite.role === "owner"
-                        ? "bg-[#2563eb]/10 text-[#2563eb]"
+                        ? "bg-blue-600/10 text-blue-600"
                         : "bg-soleur-bg-surface-2 text-soleur-text-muted"
                     }`}
                   >

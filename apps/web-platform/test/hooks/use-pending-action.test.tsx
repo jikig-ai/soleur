@@ -49,7 +49,6 @@ describe("usePendingAction", () => {
       result.current.run();
     });
     expect(fn).toHaveBeenCalledTimes(1);
-    expect(result.current.pendingRef.current).toBe(true);
   });
 
   it("rejection surfaces an Error on the error channel and releases pending", async () => {
@@ -70,29 +69,72 @@ describe("usePendingAction", () => {
     expect(result.current.error?.message).toBe("plain string");
   });
 
-  it("latchOnRedirect never resets pending once the action resolves", async () => {
+  it("latch() never resets pending once the action resolves", async () => {
     const d = deferred();
     const { result } = renderHook(() =>
-      usePendingAction(() => d.promise, { latchOnRedirect: true }),
+      usePendingAction(async () => {
+        result.current.latch();
+        await d.promise;
+      }),
     );
     act(() => result.current.run());
     await act(async () => d.resolve());
     expect(result.current.pending).toBe(true);
-    expect(result.current.pendingRef.current).toBe(true);
     // The latch also blocks re-runs — the redirect owns the teardown.
     act(() => result.current.run());
     expect(result.current.pending).toBe(true);
   });
 
-  it("latchOnRedirect still releases pending on failure", async () => {
+  it("a resolve without latch() releases pending — terminality is explicit, never inferred", async () => {
+    // Regression for the resolution-inferred latch: an asyncFn with a
+    // non-navigating success path (confirm-cancel, handled !res.ok) must NOT
+    // leave the control latched.
+    const d = deferred();
+    const fn = vi.fn(async () => {
+      await d.promise;
+      // no latch() — models team-membership-list's confirm-cancel return
+    });
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => result.current.run());
+    await act(async () => d.resolve());
+    expect(result.current.pending).toBe(false);
+    // And re-runs still work — a released control is not gated.
+    act(() => result.current.run());
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("latch() still releases pending on failure", async () => {
     const d = deferred();
     const { result } = renderHook(() =>
-      usePendingAction(() => d.promise, { latchOnRedirect: true }),
+      usePendingAction(async () => {
+        result.current.latch();
+        await d.promise;
+      }),
     );
     act(() => result.current.run());
     await act(async () => d.reject(new Error("boom")));
     expect(result.current.pending).toBe(false);
     expect(result.current.error?.message).toBe("boom");
+  });
+
+  it("a latched episode still reports at the watchdog horizon — teardown never arrived", () => {
+    vi.useFakeTimers();
+    const d = deferred();
+    const { result } = renderHook(() =>
+      usePendingAction(async () => {
+        result.current.latch();
+        await d.promise;
+      }),
+    );
+    act(() => result.current.run());
+    act(() => d.resolve());
+    // Resolve doesn't release (latched) but the watchdog stays armed.
+    act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS));
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(reportSilentFallback).mock.calls[0][1].extra,
+    ).toMatchObject({ latched: "true" });
+    expect(result.current.pending).toBe(true);
   });
 
   it("watchdog mirrors a hung action to Sentry and releases pending at ~30s", () => {

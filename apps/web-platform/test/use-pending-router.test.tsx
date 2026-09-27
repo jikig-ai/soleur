@@ -89,9 +89,8 @@ describe("usePendingRouter", () => {
     expect(isSameDocTarget).not.toHaveBeenCalled();
   });
 
-  it("exposes the full router shape, including bfcacheId", () => {
+  it("exposes exactly the six wrapped router methods — nothing else passes through", () => {
     const { result } = renderHook(() => usePendingRouter());
-    expect(result.current.bfcacheId).toBe("bf-test-id");
     for (const key of [
       "push",
       "replace",
@@ -102,5 +101,16 @@ describe("usePendingRouter", () => {
     ] as const) {
       expect(typeof result.current[key]).toBe("function");
     }
+    // Members not in the contract are absent, not forwarded: a future
+    // nav-shaped member (e.g. bfcacheId, experimental_gesturePush) must be
+    // wrapped deliberately.
+    expect(Object.keys(result.current).sort()).toEqual([
+      "back",
+      "forward",
+      "prefetch",
+      "push",
+      "refresh",
+      "replace",
+    ]);
   });
 });

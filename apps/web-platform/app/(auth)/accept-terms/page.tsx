@@ -20,10 +20,10 @@ export default function AcceptTermsPage() {
       ? "We're having trouble verifying your account. Please try again in a moment — if the problem persists, we've been alerted."
       : "";
 
-  // latchOnRedirect: on success the action ends in window.location.assign —
+  // latch(): on success the action ends in window.location.assign —
   // pending must never reset in the gap before the hard nav commits (a
   // finally-reset would reopen the double-submit window mid-redirect).
-  const { run: runAcceptance, pending, error } = usePendingAction(
+  const { run: runAcceptance, pending, error, latch } = usePendingAction(
     async () => {
       // Forward a post-acceptance destination (e.g. /invite/<token> threaded
       // from signup) so an invited user lands on the invite once T&C is
@@ -56,9 +56,9 @@ export default function AcceptTermsPage() {
       // onboarding funnel — hard-nav so every funnel exit uniformly wipes the
       // App Router Router Cache (the server-returned `redirect` is trusted, and
       // may itself be a terminal /dashboard entry).
+      latch();
       window.location.assign(redirect || "/setup-key");
     },
-    { latchOnRedirect: true },
   );
 
   function handleSubmit(e: React.FormEvent) {

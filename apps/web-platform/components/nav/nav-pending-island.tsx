@@ -1,10 +1,10 @@
 "use client";
 
 // feat-ui-action-feedback (implementation-brief §1 desktop / §2 mobile PWA) —
-// the ONE mount of the route-pending bar, mounted in root `app/layout.tsx`
-// inside <Suspense fallback={null}> (never also in (dashboard)/layout.tsx —
-// spec-flow C2). The useSearchParams consumer is Suspense-wrapped here
-// internally; the root layout is already dynamic so the wrap is hygiene.
+// the ONE mount of the route-pending bar, mounted bare in root
+// `app/layout.tsx` (never also in (dashboard)/layout.tsx — spec-flow C2).
+// The useSearchParams consumer is Suspense-wrapped here internally, so the
+// mount site needs no wrapper.
 //
 // §2: the fixed bar pins to `env(safe-area-inset-top, 0px)` so it renders
 // below the iOS notch/status strip; on non-notch contexts it resolves 0 —
@@ -42,7 +42,7 @@ function NavPendingBar() {
           data-testid="nav-pending-bar"
           className="pointer-events-none fixed inset-x-0 top-[env(safe-area-inset-top,0px)] z-50 h-[2px] overflow-hidden"
         >
-          <div className="h-full w-1/3 animate-[nav-pending-shimmer_1.1s_ease-in-out_infinite] bg-soleur-accent-gold-fg/80" />
+          <div className="h-full w-1/3 animate-[refresh-shimmer_1.1s_ease-in-out_infinite] bg-soleur-accent-gold-fg/80" />
         </div>
       ) : null}
     </>
