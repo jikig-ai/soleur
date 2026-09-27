@@ -70,3 +70,52 @@ None. (Deepen agents ran sequential-fallback — no Task fan-out in this runtime
 Re-verified under simulated inherited-root env: affected 43/43,
 killed-classification 77/77, orphan-log-retention 22/22, lint-orphan
 68+44+32, kb-security 10/10.
+
+### Review round (PR #9034) — ALL P2s RESOLVED, commit `d9e93bb2e6` pushed
+
+Panel: design-validity + security + data-integrity + performance + arch +
+code-quality + patterns + git-history + semgrep (in-line, 0 findings).
+Notable results: history HIGH narrative fidelity; security no P1/P2
+(header model airtight); all red fixed inline.
+
+Fixes landed in `d9e93bb2e6` (18 files):
+- `boundedAuthGetUser` shared helper — verifiedUserId fallback,
+  resolveIdentity fallback, email fallbacks (checkout/decline-invite/
+  pending-invites → census keepers 8→5); timeout breadcrumb; reject→null.
+- middleware getSession() raced (hidden remote refresh on expired token)
+  → session_get.timeout/threw ops; sessionJwtEmailForVerifiedUser bounded
+  internally (session-jwt-email.session_timeout).
+- Helper sweep: kb-route-helpers → verifiedUserId (holds Request);
+  dsar-reauth/team-membership/workspace-identity/members-tab → bounded.
+- Watchdog: children TERM→grace→KILL before runner-TERM (EXIT-trap disarm
+  can't abort escalation); runner-death arm (polls runner, reaps
+  snapshotted children, exits — closes gone-but-held-pipe deadlock);
+  _wd_descendants transitive reap (grandchildren held lock fd); suite-log
+  probe-create (SIGPIPE phantom-KILLED); durable-copy WARNING; LOG_DIR
+  scratch validation; in-flight clear after copy; --help docs.
+- decline-invite: both-emails-non-null guard (null===null authz hole).
+- Bounded fail-open: MW_GRACE_STRIKE_LIMIT=20 per-sub LRU — sustained
+  outage escalates to /login?error=revocation_unavailable (session
+  preserved); op revocation_gate.grace_window_exceeded; ok resets.
+- Dedup joiner own bound + op revocation_gate.dedup_joiner_timeout.
+- Warmer consumes body; heartbeat guarded. RPC bound 8s→10s (T&C headroom).
+- Env bounds Math.max(…,1). Census regex widened + honest scope comment.
+- verifiedUserId docblock: deliberate single-control residual recorded.
+
+Test deltas: bounded-legs +3 (joiner op, session timeout, strike
+escalation — now 11); identity +2 (16); orphan-test SLEEPTOK scoping.
+Verified: tsc clean; ~360 targeted assertions green incl. orphan 22/22,
+killed-classification 77/77 (inherited-root), middleware family 74/74.
+
+Deferred items (filed/recorded):
+- RPC NULL invitee_email hole (check_my_revocation fn) — noted, sibling
+  surface, needs SQL diff (deferred, tracked in decline-invite comment).
+- Leader-side shared-promise residual — leader bound = postgrest abort;
+  abort-ignoring leader keeps its request pending (documented, worst-
+  case shape; joiners bounded).
+- Durable-log GC — documented residual (var/tmp hygiene).
+- ADR advisory (watchdog/FD contract) — comments + test file carry the
+  contract; full ADR deferred to a docs pass.
+
+Remaining: post-deploy live probe re-run (Phase 2 acceptance evidence),
+PR ready/merge, post-merge verify. PR #9034 remains draft.
