@@ -66,8 +66,10 @@ scheduled reconciler.** `bump-cloud-init-pin` runs in
 the precondition rather than a race; a sibling tag-triggered workflow would
 re-derive what the build already knows, and a cron reconciler would
 reintroduce a bounded drift window — the class being eliminated. Concurrency
-group `inngest-pin-bump` with `cancel-in-progress: false` serializes backfill
-runs without dropping them.
+group `inngest-pin-bump` with `cancel-in-progress: false` serializes bump runs
+and never cancels a running one. With three or more overlapping, GitHub drops
+the intermediate PENDING runs, which is harmless because every run reconciles
+to the merged max (#8782).
 
 **2. The target is semver-max `vinngest-v*` merged into `main`, not the
 triggering tag.** The script re-runs the AC6 tag-selection pipeline against a
