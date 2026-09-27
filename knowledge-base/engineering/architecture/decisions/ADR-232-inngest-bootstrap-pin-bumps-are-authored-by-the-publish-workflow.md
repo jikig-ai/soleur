@@ -1,4 +1,4 @@
-# ADR-232: The `vinngest-v*` publish workflow authors its own cloud-init pin-bump PRs, authenticated as the `soleur-ai` App — never `GITHUB_TOKEN`, never a direct push to main
+# ADR-232: The `vinngest-v*` publish workflow authors its own cloud-init pin-bump PRs, authenticated as the `soleur-ai` App — never `GITHUB_TOKEN` for the PR write, never a direct push to main
 
 - **Date:** 2026-09-19
 
@@ -225,13 +225,73 @@ PR first, then tag the squash-merge commit on `main` (runbook
 tags merged into `main` on 2026-09-27 (#8782), after `main` re-anchored on the
 on-main `v1.1.40` (`b8817ff1c4`).
 
+**8. Auto-mint on `main` (#4326, amended 2026-09-27).** A push to `main` that
+changes what the image would contain mints the next tag and publishes it, with
+no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
+`.github/scripts/mint-inngest-bootstrap-tag.sh`; the script owns every decision.
+
+- **Decision.** BASE is the semver-max `vinngest-v*` tag merged into `HEAD`,
+  chosen by the §2 selector, byte for byte. Mint iff `HEAD`'s image inputs
+  differ from BASE's. The inputs are the carriers (the union of both sides'
+  `cp` staging lines), the four baked pins (`inngest_cli_version`,
+  `inngest_cli_sha256`, `vector_version`, `vector_sha256`, read with the build
+  step's own patterns) and the Dockerfile heredoc. `HEAD`'s extraction is
+  fail-closed: no carriers, a `cp`/`COPY` disagreement, anything but exactly
+  one heredoc, or an empty inngest pin is a `decide` fatal, never a `noop`.
+  Comparing against a tag, not the push's `before` SHA, is what makes a
+  dropped, skipped or failed run self-heal on the next qualifying push.
+- **Allocation.** One patch above the numeric `X.Y.Z` prefix of EVERY
+  `vinngest-v*` name on the remote (`git ls-remote`), suffixed or not (§7
+  "Version allocation"). A component longer than 6 digits is refused.
+- **Tag.** An annotated tag object plus its ref, created over REST with the
+  job's `GITHUB_TOKEN`. GitHub starts no workflow from a `GITHUB_TOKEN` event,
+  so the tag's `push: tags` trigger stays silent and the image builds exactly
+  once. A tag that already peels to `HEAD` on the remote (a human or a
+  concurrent run) ends `noop` and creates nothing.
+- **Dispatch.** `build-inngest-bootstrap-image.yml` is dispatched from `main`
+  with `inputs.ref=<tag>`, once and never retried: a retry after a lost 2xx
+  could start a second build and move the digest. The credential is the
+  `soleur-ai` App installation token, minted only after the tag exists and
+  scoped to `actions:write` on `soleur` through the composite's new
+  `permissions`/`repositories` inputs. This is the "dispatch the build from
+  main" shape §7 names as the one compatible with #8209.
+- **Failures** are stage-named (`args|ancestry|resolve|decide|allocate|tag|dispatch`)
+  and post to Slack. A failed dispatch prints the one agent-runnable recovery,
+  `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`,
+  and never suggests deleting the tag, which is now the merged max.
+- **Residuals.**
+  - **R1:** unconfirmed whether GitHub refuses a tag ref on a commit that
+    changes `.github/workflows/*` when the token lacks `workflows`. If it does,
+    the run ends `reason=workflows-permission`, creates nothing, and the
+    fallback is a hand-tag.
+  - **R6:** a future tag ruleset on `vinngest-v*` needs a bypass for the
+    GitHub Actions integration.
+  - **R9:** build-step inputs outside the heredoc (the `curl` download URL, the
+    `docker build` flags) are not compared.
+  - **R10:** the dispatch runs `main`'s workflow copy at dispatch time; if
+    `main` moves in the seconds between checkout and dispatch, the next
+    qualifying push re-decides.
+  - **R12:** two auto-mints in flight can leave a bump PR held (the
+    `inngest-pin-bump` group keeps one pending job, so the surviving bump can
+    target the newer tag with signed≠target). Recovery is a digest-preserving
+    `mirror_only` dispatch of the max tag (runbook recovery table).
+- **Depends on strict ancestry (#8798).** A content-equality rule would
+  re-admit in-PR tags, and with them a second publish of the same content.
+- **Naming constraint (#8781).** A pre-merge candidate build must not use
+  names under `refs/tags/vinngest-v*`, or it would enter this allocation.
+- **After #8209.** Any human-created tag fires `push: tags`, which runs on
+  the tag ref. Once #8209 binds the bump job to a main-only environment, the
+  manual fallback is `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`,
+  never a hand-tag. Removing `push: tags` from the build (alternative A5
+  below) is a prerequisite of #8209.
+
 ## Alternatives Considered
 
 | Alternative | Why not |
 |---|---|
 | Tag-triggered sibling workflow (`on: push tags: vinngest-v*`) | Re-derives tag/digest the build job already has; races the image push it must follow |
 | Scheduled reconciler cron | Reintroduces a bounded drift window — the class being eliminated — and adds an always-on surface for a publish-cadence event |
-| `GITHUB_TOKEN` writes | Token-authored pushes fire no `pull_request` events; the PR would never run required checks and could never merge |
+| `GITHUB_TOKEN` writes | Token-authored pushes fire no `pull_request` events; the PR would never run required checks and could never merge. **Scoped to the PR write (#4326):** for the §8 tag write the same event suppression is WANTED, because it keeps the tag's `push: tags` run silent. |
 | PAT | Personal credential, repo-wide reach, no installation boundary — ruled out by hr-github-app-auth-not-pat |
 | Direct push to `main` | Bypasses required review/checks for a credential class (the App token) that exists precisely so writes stay auditable |
 | Bump to the triggering tag | Older-tag backfill would silently downgrade the pin; semver-max recompute is the only target the AC6 guard also accepts |
@@ -239,7 +299,17 @@ on-main `v1.1.40` (`b8817ff1c4`).
 | Fail the run when auto-merge can't arm | A green-PR-open state is recoverable; a failed run that swallowed the PR is not |
 | Bump PR waits for (or is blocked by) the source PR (#8747) | No machine-readable link from a tag to "its" PR exists, and a wait adds a polling surface. Ancestry decides the same property from git alone. |
 | Target = semver-max over `git tag --merged HEAD` now (#8747) | **Adopted 2026-09-27 (#8782).** Rejected on 2026-09-24 only because it then resolved to `v1.1.25` (every newer tag was off main), which would have opened a downgrade PR; safe once `main` re-anchored on the on-main `v1.1.40`. |
-| Anchor on `git tag --merged origin/main` instead of `HEAD` (#8782) | The writer's `HEAD` already is `main`. In PR CI a tag on the PR's own commit is visible to that PR and to branches descending from it, which is intended (AC6's `#8747:` diagnostic tells the author to delete it; `deploy-script-tests` is advisory). A stale local `origin/main` would mis-select, and one pipeline for writer and checker is simpler. **Re-evaluate when #6766/#6480 makes `deploy-script-tests` required:** a required AC6 would then block stacked PRs on another PR's tag, and the checker should move to `origin/${GITHUB_BASE_REF:-main}`. |
+| Anchor on `git tag --merged origin/main` instead of `HEAD` (#8782) | The writer's `HEAD` already is `main`. In PR CI a tag on the PR's own commit is visible to that PR and to branches descending from it, which is intended (AC6's `#8747:` diagnostic tells the author to delete it; `deploy-script-tests` is advisory). A stale local `origin/main` would mis-select, and one pipeline for writer and checker is simpler. **Re-evaluate when #6766/#6480 makes `deploy-script-tests` required:** a required AC6 would then block stacked PRs on another PR's tag, and the checker should move to `origin/${GITHUB_BASE_REF:-main}`. That move, together with a Guard A exemption for a PR's own carrier change, is tracked as the named prerequisite #9081 (§8 closes only the `main`-side window). |
+| §8: create the tag with the App token and let `push: tags` build it (#4326) | Works, but the run executes on the TAG ref, which #8209's main-only environment would refuse. |
+| §8: App-token tag AND a dispatch | The App-created tag fires `push: tags` too, so the tag builds twice and the second build moves the GHCR digest. |
+| §8: `GITHUB_TOKEN` for both the tag and the dispatch | Mechanically sufficient (`workflow_dispatch` is exempt from the suppression). Not adopted because the operator's direction names the App token; recorded as decision challenge DC1 on the PR. The switch is mechanical: drop the App mint and give the job `actions: write`. |
+| §8: skip auto-minted tags inside the build's push path by actor, then dispatch | Adds a gate keyed on an undocumented actor format; one more failure surface. |
+| §8: remove `push: tags` and dispatch every build (A5) | Changes the manual release flow; belongs with #8209, which must retire tag-ref bump runs anyway. |
+| §8: detect change by push diff (`before..after`) | Loses events: a replaced pending run, the >3,000-file paths skip, a failed run. Tag-vs-HEAD self-heals. |
+| §8: carriers only, not pins or recipe | An `inngest_cli_version` or `alpine` bump would merge and never ship; Guard A sees neither. |
+| §8: whole-file diff of `inngest.tf`, `vector.tf` and the build workflow | Every unrelated Terraform or comment edit would mint a release and open a bump PR. |
+| §8: runs-list self-heal plus a dispatch retry | The runs list lags a dispatch, so the lookup can itself double-build. Recovery is one printed `gh workflow run` line. |
+| §8: roll back the tag when the dispatch fails | After a lost 2xx the build may already hold the tag; deleting it burns a name GHCR may hold (§7). |
 | Refuse an off-main *signed* tag in the bump (#8782) | Breaks the legacy `mirror_only` rollback path (a backfill of an off-main version must still reconcile the pin), and the build job already refuses a non-`mirror_only` off-main tag. Exclusion from the candidate set already keeps it out of the pin. |
 | Content equality instead of ancestry (#8747) | Tolerates in-PR tagging, but a squash with identical bytes is exactly what reviewers never saw as a commit. Recorded as a decision challenge on the PR. |
 
@@ -251,10 +321,26 @@ on-main `v1.1.40` (`b8817ff1c4`).
   carrier, the window now starts when that PR merges and lasts until someone
   tags `main`, because an in-PR tag is refused (§7). `main-health-monitor` may
   file `ci/main-broken` inside it; the signal is truthful. #4326
-  (auto-mint on infra push to `main`) closes it.
+  (auto-mint on infra push to `main`) closes it. **Amended 2026-09-27
+  (#4326):** with §8 the window is one mint + build + bump cycle. A missed
+  mint run for a carrier change is still caught by Guard A and AC6 on `main`;
+  one for a pin- or recipe-only change is not, and neither is a mint failure
+  when Slack is unset (#9082).
 - A second repository-write surface exists for the `soleur-ai` App token
   (the first is the `apply-github-infra` manifest/ruleset write). Both are
   least-scope: contents write to this repo, no `main` bypass, PR-mediated.
+  **Corrected 2026-09-27 (#4326):** the sentence above overstates it. The
+  installation's grant is measured, not least-scope (`actions`, `contents`,
+  `pull_requests`, `administration` and `secrets` write, no `workflows`), and
+  an unscoped token carries all of it. §8 adds a third CI write surface that
+  is not PR-mediated: a tag created with `GITHUB_TOKEN`, and a build dispatch
+  by the App scoped to `actions:write` on `soleur`.
+- **The human tag was a second content review, and §8 removes it (#4326).**
+  Ancestry, the revision label and the mirror gate check where a tag sits,
+  not what the image contains. After §8, anything merged to `main` that
+  changes an image input becomes a published image and an auto-merged pin
+  bump with no human step; the PR review of the carrier change is the only
+  content review. No `main` ruleset bypass lets an unreviewed commit land.
 - Human edits on a bot branch are preserved, not clobbered — the operator
   keeps a takeover path that the automation respects.
 - The old failure mode (advisory check red until noticed) remains as the
@@ -298,6 +384,20 @@ carry the change:
 Merging it moved no pin: `main` already pinned `v1.1.40`, which is both the
 merged max and the overall max.
 
+## Amendment 2026-09-27 (#4326)
+
+Added §8: auto-mint on `main`, the decision, allocation, tag and dispatch
+rules, and residuals R1, R6, R9, R10 and R12. Also added: the #8798 and #8781
+constraints and the #8209 fallback line; the §8 rows in Alternatives, where the
+`GITHUB_TOKEN writes` row is now scoped to the PR write; a correction of the
+Consequences least-scope sentence; and the removed-human-review consequence.
+The title's "never `GITHUB_TOKEN`" is scoped to the PR write. The
+2026-09-24 Sequencing paragraph in §7 is kept as the dated record: the manual
+tag it describes is now the fallback, and the runbook's recovery table says
+when to use it. The first post-merge run (this change's own merge) decides
+`noop`; the mint arm's live proof is the next carrier-changing merge (plan
+AC14, pending until observed).
+
 ## Verification
 
 - `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh` — fixture suite
@@ -322,6 +422,20 @@ merged max and the overall max.
   against fixture repos shaped like an actions/checkout tag checkout, and
   `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh` pins the
   refusal's `mirror_only` gating.
+- `.github/scripts/test/test-mint-inngest-bootstrap-tag.sh` (§8, #4326) —
+  fixture suite over a real working clone and bare origin, with a `gh` fake
+  that replays the REST contracts (a real `git mktag` tag object, 422s derived
+  from the origin's state). It pins: the decision rows (first and last
+  carrier, each pin, recipe, carrier added and removed, bump-merge `noop`,
+  comment-only edits, fail-closed extraction); allocation above off-main,
+  suffixed and `v1.10`-vs-`v1.9` tags, including a 7-digit refusal and a
+  concurrent human tag; tag and dispatch failures; per-mode credential
+  isolation and the xtrace refusal; and parity with the §2 selector, Guard A's
+  extractor and the build step's pin patterns. It also pins the mint
+  workflow's triggers, job gate, checkout and per-step token binding, and the
+  composite's scope-down body. A temp-copy mutation battery covers the
+  comparator, the remote tag source, the version sort and the re-read order.
+  **Pending:** AC14, the first live mint.
 - `.github/scripts/test/run-all.sh` — suite registered; Bash-only by
   construction for the required merge-group path.
 - `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — AC6 selects
