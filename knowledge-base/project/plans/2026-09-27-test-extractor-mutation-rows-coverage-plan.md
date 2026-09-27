@@ -14,6 +14,41 @@ brand_survival_threshold: none
 
 # test: committed extractor-mutation coverage for the run_suite --rows tiling arm
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27
+**Sections enhanced:** Observability (real 5-field schema replaces the skip note — deepen-plan
+Phase 4.7's trigger fires on any non-doc Files-to-Edit, so the block is required even though
+the deliverable is test machinery), Technical Considerations (precedent pin for multi-line
+anchors), Research Insights (verify-the-negative sweep results)
+**Research agents used:** sequential-fallback — no Task fan-out in this runtime; deepen-plan
+halt gates (4.6 User-Brand, 4.7 Observability, 4.8 PAT, 4.9 UI-wireframe, 4.10 Encryption,
+4.11 Guard Contract via `lint-guard-contract.py`), citation verification, and the
+verify-the-negative sweep were discharged inline by the orchestrator
+
+### Key Improvements
+
+1. `## Observability` now carries the full 5-field schema — Phase 4.7's trigger inspects
+   Files-to-Edit and fires on `plugins/soleur/test/*.sh` + `.github/workflows/ci.yml`
+   (non-doc paths); a prose skip note would HALT at the `liveness_signal` field check.
+2. Multi-line anchor for `ROWS-SWAP` verified against in-file precedent (ROW5C/ROW7/M5 use
+   the same shape), and every quoted anchor string verified byte-exact against current HEAD
+   (`scripts/test-all.sh:3494-3495` — present post-init-commit `e0927dbd24`).
+3. All cited issue/PR numbers resolved live: #8990 OPEN, #8864 CLOSED, #8967 MERGED (the
+   split PR), #8659/#7942 OPEN (code-review overlap, dispositions recorded), `d453170127` on
+   `origin/main`.
+4. Discoverability probe chosen to survive preflight Check 10's shell-metachar reject:
+   `grep -c 'DECLARED_TOTAL=27' …` — no `|`/`&`/quotes-alternation; asserts the bumped pin.
+
+### New Considerations Discovered
+
+- The pipeline init commit `e0927dbd24` landed mid-session and brought the branch onto the
+  `d453170127`-bearing main tip — the plan now records both the stale-start and current
+  states so a stale checkout is diagnosed at Phase 0 rather than at `ANCHOR MISSING` rows.
+- `fixture-relative-assert.baseline.txt` pins a flagged-operand count of 10 for the battery
+  file; the new `row()` calls add no `cp`/`mv`/`rm` operands so no baseline regen is expected
+  (AC6 keeps the check honest).
+
 ## Overview
 
 `plugins/soleur/test/scripts-shard-totality.test.sh` gained a `run_suite`-argv tiling arm on
@@ -185,9 +220,20 @@ in_range && row "ROWS-SWAP" "$RUNNER" \
 
 - **Anchor uniqueness** (learning `2026-09-23-…-mutation-anchor-can-match-inside-your-own-comment`):
   every anchor above carries the unique `-mutations-b` (or paired `-a`) label; verified exactly
-  one occurrence each in `origin/main`'s `scripts/test-all.sh`. `mutate()` fails closed
-  (`ANCHOR MISSING`/`ANCHOR AMBIGUOUS`) on drift, so a stale anchor reports measured-NOTHING,
-  never a silent green.
+  one occurrence each at current HEAD (`scripts/test-all.sh:3494-3495`). `mutate()` fails
+  closed (`ANCHOR MISSING`/`ANCHOR AMBIGUOUS`) on drift, so a stale anchor reports
+  measured-NOTHING, never a silent green.
+- **Precedent-diff (Phase 4.4):** the `in_range && row "ID" "$RUNNER" 'old' 'new' VERDICT "desc"`
+  shape has 13 in-file precedents (ROW1..ROW10, ROW5C, ROW7, ROW8, HARNESS, MUSTPASS); the
+  ROWS-SWAP multi-line anchor copies the ROW5C/ROW7/M5 two-line-anchor form verbatim — no new
+  mechanics, no novel pattern.
+- **Verify-the-negative sweep (Phase 4.45):** the plan's negative claims were probed — the
+  battery does not `source test-helpers.sh` (grep empty; #8659 does not reach this file), the
+  battery file is not
+  in its own dirty-tree refusal set (only `test-all.sh`, `ci.yml`, the guard are), no existing
+  `in_range` site mutates a `--rows` registration (24 sites enumerated), `MIN_ROWS=45` is
+  untouched (guard file not edited), and no `cp`/`mv`/`rm`/`redirect` operands appear in the
+  new rows (baseline count expected unchanged).
 - **Dirty-tree refusal:** the battery refuses to run when `scripts/test-all.sh`, `ci.yml`, or
   the guard have uncommitted changes — commit (or the pipeline's commit cadence) before running
   it locally. The battery's own file is not one of the three checked paths, so editing it
@@ -211,10 +257,41 @@ in_range && row "ROWS-SWAP" "$RUNNER" \
 
 ## Observability
 
-Skipped per plan Phase 2.9 — Files-to-Edit are `plugins/soleur/test/` and
-`.github/workflows/ci.yml`, not code-class files under `apps/*/server|src|infra/` or
-`plugins/*/scripts/`, and no new infrastructure surface is introduced. The deliverable's own
-signal is the CI job's exit code, which is the thing being tested.
+Required by deepen-plan Phase 4.7: the Files-to-Edit list contains non-doc paths
+(`plugins/soleur/test/*.sh`, `.github/workflows/ci.yml`), so the gate applies even though the
+deliverable is test machinery rather than a production surface. The signals below are the CI
+job's own verdict machinery — the thing this plan exists to prove works.
+
+```yaml
+liveness_signal:
+  what: "shard-totality-mutations CI job verdict — two legs, rows 1-14 and 15-27"
+  cadence: "per-PR and per-main-push via .github/workflows/ci.yml"
+  alert_target: "required-check red on the PR / red main run (no external paging)"
+  configured_in: ".github/workflows/ci.yml — shard-totality-mutations job block"
+
+error_reporting:
+  destination: "GitHub Actions job log of the failing leg"
+  fail_loud: "battery prints 'FAIL: <id> — SURVIVOR: …' or 'VERDICT: N of M rows FAILED' and exits nonzero"
+
+failure_modes:
+  - mode: "mutation anchor drift — the run_suite -a/-b lines are renamed or reshaped"
+    detection: "the row's mutate() fails 'ANCHOR MISSING' and the row reports measured-NOTHING (a FAIL, never a silent pass)"
+    alert_route: "red shard-totality-mutations leg on whichever PR drifted the anchor"
+  - mode: "DECLARED_TOTAL / ci.yml rows-matrix desplit (bump without re-split, or vice versa)"
+    detection: "battery's declared-row-drift check reds every leg; the guard's ci.yml tiling arm reds independently"
+    alert_route: "red leg + red scripts-shard-totality suite"
+  - mode: "guard regression that keeps the tiling arm green over broken registrations"
+    detection: "ROWS-GAP / ROWS-DROP report SURVIVOR (guard stayed GREEN under a broken fixture)"
+    alert_route: "red leg on the PR that regressed the extractor"
+
+logs:
+  where: "GitHub Actions job log — every row prints a '  PASS:' / '  FAIL:' line"
+  retention: "GitHub default workflow-log retention"
+
+discoverability_test:
+  command: grep -c 'DECLARED_TOTAL=27' plugins/soleur/test/scripts-shard-totality-mutations.sh
+  expected_output: "1"
+```
 
 ## Guard Contract
 
