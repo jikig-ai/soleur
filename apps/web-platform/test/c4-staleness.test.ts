@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Derived staleness for GET /api/kb/c4/project (#8966 PR-B). The banner becomes
-// a RECOMPUTED fact: the newest `model.likec4.json` commit's dir-subtree is
-// content-diffed against the current Contents listing (already fetched by the
-// route), so a dropped `c4_diagram_saved` frame, a remount, or an out-of-band
-// source push can no longer lose the banner.
+// a RECOMPUTED fact: the newest `model.likec4.json` commit's dir listing —
+// fetched via `contents/<dir>?ref=<commitSha>` — is content-diffed against the
+// current Contents listing (already fetched by the route), so a dropped
+// `c4_diagram_saved` frame, a remount, or an out-of-band source push can no
+// longer lose the banner.
 //
 // The comparator is pure — this suite pins set/sha semantics directly against
 // it, and drives the orchestrator through an injected GitHub `get` so the call
-// plan (commits → root tree → dir subtree → grace-window tip) is covered
-// without a network.
+// plan (commits → at-commit contents → per-subdir recursive trees → grace tip)
+// is covered without a network.
 
 import {
   STALE_GRACE_MS,
@@ -18,21 +19,20 @@ import {
   snapshotsEqual,
 } from "@/server/c4-staleness";
 
-const DIR_RAW = "knowledge-base/engineering/architecture/diagrams";
-const DIR_ENC = DIR_RAW; // canonical dir has no chars needing per-segment encoding
+const DIR = "knowledge-base/engineering/architecture/diagrams"; // canonical dir — no chars needing per-segment encoding
 
 // ─── sourceSnapshot: which listing entries participate in the compare ─────────
 
 describe("sourceSnapshot — the likec4-relevant content of a dir listing", () => {
   it("keys source files and subdir tree shas; drops .md, model.likec4.json, and likec4-ignored dirs", () => {
     const snap = sourceSnapshot([
-      { name: "model.c4", kind: "file", sha: "s1" },
-      { name: "extra.likec4", kind: "file", sha: "s2" },
-      { name: "dots.like-c4", kind: "file", sha: "s3" },
-      { name: "README.md", kind: "file", sha: "s4" },
-      { name: "model.likec4.json", kind: "file", sha: "s5" },
-      { name: "nested", kind: "dir", sha: "d1" },
-      { name: "node_modules", kind: "dir", sha: "d2" },
+      { name: "model.c4", type: "file", sha: "s1" },
+      { name: "extra.likec4", type: "file", sha: "s2" },
+      { name: "dots.like-c4", type: "file", sha: "s3" },
+      { name: "README.md", type: "file", sha: "s4" },
+      { name: "model.likec4.json", type: "file", sha: "s5" },
+      { name: "nested", type: "dir", sha: "d1" },
+      { name: "node_modules", type: "dir", sha: "d2" },
     ]);
     expect(snap.get("f:model.c4")).toBe("s1");
     expect(snap.get("f:extra.likec4")).toBe("s2");
@@ -45,7 +45,7 @@ describe("sourceSnapshot — the likec4-relevant content of a dir listing", () =
   });
 
   it("ignores a file named exactly like an extension (`.c4`)", () => {
-    const snap = sourceSnapshot([{ name: ".c4", kind: "file", sha: "s1" }]);
+    const snap = sourceSnapshot([{ name: ".c4", type: "file", sha: "s1" }]);
     expect(snap.size).toBe(0);
   });
 });
@@ -90,8 +90,10 @@ describe("snapshotsEqual — the comparator", () => {
     // Neither side keys non-source files, so a README churn cannot flip the
     // verdict in either direction.
     expect(
-      snapshotsEqual(sourceSnapshot([{ name: "README.md", kind: "file", sha: "a" }]),
-        sourceSnapshot([{ name: "README.md", kind: "file", sha: "b" }])),
+      snapshotsEqual(
+        sourceSnapshot([{ name: "README.md", type: "file", sha: "a" }]),
+        sourceSnapshot([{ name: "README.md", type: "file", sha: "b" }]),
+      ),
     ).toBe(true);
   });
 });
@@ -116,36 +118,30 @@ const MODEL_COMMIT = {
   commit: { tree: { sha: "tree-root" }, committer: { date: "2026-09-20T00:00:00Z" } },
 };
 
-// A repo where the dir subtree at model-commit time had sources {a.c4, spec.c4}
-// and the current listing still matches → not stale.
+// A repo whose dir listing at the model commit had sources {a.c4, spec.c4}
+// and whose current listing still matches → not stale.
 function wiredRepo(over: {
   commits?: Responder;
   dirCommits?: Responder;
-  rootTree?: Responder;
-  subtree?: Responder;
+  atCommit?: Responder;
+  trees?: Record<string, Responder>;
 } = {}) {
   const calls: Call[] = [];
   const get = fakeGet(
     {
-      [`/commits?path=${DIR_ENC}/model.likec4.json`]: over.commits ?? (() => [MODEL_COMMIT]),
-      [`/commits?path=${DIR_ENC}&per_page=1`]: over.dirCommits ?? (() => [
+      [`/commits?path=${DIR}/model.likec4.json`]: over.commits ?? (() => [MODEL_COMMIT]),
+      [`/commits?path=${DIR}&per_page=1`]: over.dirCommits ?? (() => [
         { sha: "tip", commit: { committer: { date: "2020-01-01T00:00:00Z" } } },
       ]),
-      [`/git/trees/tree-root`]:
-        over.rootTree ??
-        (() => ({
-          tree: [{ path: DIR_RAW, type: "tree", sha: "tree-dir" }],
-        })),
-      [`/git/trees/tree-dir`]:
-        over.subtree ??
-        (() => ({
-          tree: [
-            { path: "a.c4", type: "blob", sha: "sa" },
-            { path: "spec.c4", type: "blob", sha: "ss" },
-            { path: "model.likec4.json", type: "blob", sha: "sm" },
-            { path: "README.md", type: "blob", sha: "sr" },
-          ],
-        })),
+      [`/contents/${DIR}?ref=commit-model`]:
+        over.atCommit ??
+        (() => [
+          { name: "a.c4", type: "file", sha: "sa" },
+          { name: "spec.c4", type: "file", sha: "ss" },
+          { name: "model.likec4.json", type: "file", sha: "sm" },
+          { name: "README.md", type: "file", sha: "sr" },
+        ]),
+      ...(over.trees ?? {}),
     },
     calls,
   );
@@ -158,26 +154,24 @@ function wiredRepo(over: {
   return { calls, get, currentEntries };
 }
 
+const ARGS = {
+  installationId: 1,
+  owner: "o",
+  repo: "r",
+  githubDir: DIR,
+};
+
 describe("deriveDiagramStale", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("identical source set+shas → stale:false (model.likec4.json / .md shas never enter the compare)", async () => {
     const { calls, get, currentEntries } = wiredRepo();
-    const v = await deriveDiagramStale({
-      get,
-      installationId: 1,
-      owner: "o",
-      repo: "r",
-      githubDir: DIR_ENC,
-      githubDirRaw: DIR_RAW,
-      currentEntries,
-    });
+    const v = await deriveDiagramStale({ get, ...ARGS, currentEntries });
     expect(v).toBe(false);
-    // Clean path is bounded: model-commit lookup + root tree + dir subtree.
+    // Clean path is bounded: model-commit lookup + at-commit dir listing.
     expect(calls).toEqual([
-      `/repos/o/r/commits?path=${DIR_ENC}/model.likec4.json&per_page=1`,
-      `/repos/o/r/git/trees/tree-root?recursive=1`,
-      `/repos/o/r/git/trees/tree-dir`,
+      `/repos/o/r/commits?path=${DIR}/model.likec4.json&per_page=1`,
+      `/repos/o/r/contents/${DIR}?ref=commit-model`,
     ]);
   });
 
@@ -185,8 +179,7 @@ describe("deriveDiagramStale", () => {
     const { get, currentEntries } = wiredRepo();
     currentEntries[0] = { name: "a.c4", type: "file", sha: "sa-CHANGED" };
     const v = await deriveDiagramStale({
-      get, installationId: 1, owner: "o", repo: "r",
-      githubDir: DIR_ENC, githubDirRaw: DIR_RAW, currentEntries,
+      get, ...ARGS, currentEntries,
       now: () => Date.parse("2026-09-26T00:00:00Z"),
     });
     expect(v).toBe(true);
@@ -196,8 +189,7 @@ describe("deriveDiagramStale", () => {
     const { get, currentEntries } = wiredRepo();
     currentEntries.push({ name: "new.likec4", type: "file", sha: "sn" });
     const v = await deriveDiagramStale({
-      get, installationId: 1, owner: "o", repo: "r",
-      githubDir: DIR_ENC, githubDirRaw: DIR_RAW, currentEntries,
+      get, ...ARGS, currentEntries,
       now: () => Date.parse("2026-09-26T00:00:00Z"),
     });
     expect(v).toBe(true);
@@ -207,8 +199,7 @@ describe("deriveDiagramStale", () => {
     const { get, currentEntries } = wiredRepo();
     const kept = currentEntries.filter((e) => e.name !== "spec.c4");
     const v = await deriveDiagramStale({
-      get, installationId: 1, owner: "o", repo: "r",
-      githubDir: DIR_ENC, githubDirRaw: DIR_RAW, currentEntries: kept,
+      get, ...ARGS, currentEntries: kept,
       now: () => Date.parse("2026-09-26T00:00:00Z"),
     });
     expect(v).toBe(true);
@@ -225,9 +216,7 @@ describe("deriveDiagramStale", () => {
     });
     currentEntries[0] = { name: "a.c4", type: "file", sha: "sa-CHANGED" };
     const v = await deriveDiagramStale({
-      get, installationId: 1, owner: "o", repo: "r",
-      githubDir: DIR_ENC, githubDirRaw: DIR_RAW, currentEntries,
-      now: () => now,
+      get, ...ARGS, currentEntries, now: () => now,
     });
     expect(v).toBeUndefined();
   });
@@ -241,51 +230,206 @@ describe("deriveDiagramStale", () => {
     });
     currentEntries[0] = { name: "a.c4", type: "file", sha: "sa-CHANGED" };
     const v = await deriveDiagramStale({
-      get, installationId: 1, owner: "o", repo: "r",
-      githubDir: DIR_ENC, githubDirRaw: DIR_RAW, currentEntries,
-      now: () => now,
+      get, ...ARGS, currentEntries, now: () => now,
     });
     expect(v).toBe(true);
   });
 
-  it("no model commit at all (pre-render dir) → ABSENT, and no trees calls are issued", async () => {
+  it("no model commit at all (pre-render dir) → ABSENT, and no listing call is issued", async () => {
     const { calls, get, currentEntries } = wiredRepo({ commits: () => [] });
-    const v = await deriveDiagramStale({
-      get, installationId: 1, owner: "o", repo: "r",
-      githubDir: DIR_ENC, githubDirRaw: DIR_RAW, currentEntries,
-    });
+    const v = await deriveDiagramStale({ get, ...ARGS, currentEntries });
     expect(v).toBeUndefined();
-    expect(calls.filter((c) => c.includes("/git/trees/"))).toEqual([]);
+    expect(calls).toEqual([`/repos/o/r/commits?path=${DIR}/model.likec4.json&per_page=1`]);
   });
 
-  it("a truncated root tree that lost the dir entry → ABSENT + reportSilentFallback (never a false verdict)", async () => {
+  it("an at-commit listing that is not a directory → ABSENT + report (never a false verdict)", async () => {
     const { get, currentEntries } = wiredRepo({
-      rootTree: () => ({ truncated: true, tree: [{ path: "apps", type: "tree", sha: "t1" }] }),
+      atCommit: () => ({ type: "file", sha: "x" }), // the dir was a file then
     });
     const report = vi.fn();
     const v = await deriveDiagramStale({
-      get, installationId: 1, owner: "o", repo: "r",
-      githubDir: DIR_ENC, githubDirRaw: DIR_RAW, currentEntries,
-      report: report as never,
+      get, ...ARGS, currentEntries, report: report as never,
     });
     expect(v).toBeUndefined();
     expect(report).toHaveBeenCalledTimes(1);
   });
 
-  it("any GitHub failure → ABSENT + reportSilentFallback with the stale-derivation op", async () => {
+  it("any GitHub failure → ABSENT + report with the stale-derivation op", async () => {
     const { get, currentEntries } = wiredRepo({
       commits: () => { throw new Error("rate limited"); },
     });
     const report = vi.fn();
     const v = await deriveDiagramStale({
-      get, installationId: 1, owner: "o", repo: "r",
-      githubDir: DIR_ENC, githubDirRaw: DIR_RAW, currentEntries,
-      report: report as never,
+      get, ...ARGS, currentEntries, report: report as never,
     });
     expect(v).toBeUndefined();
     expect(report).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ feature: "c4-project-read", op: "stale-derivation" }),
     );
+  });
+
+  it("a deadline overrun → ABSENT + report (the GET must not wait on a slow GitHub day)", async () => {
+    const calls: Call[] = [];
+    const get = async <T>(_inst: number, path: string): Promise<T> => {
+      calls.push(path);
+      return new Promise<T>(() => {}); // never resolves
+    };
+    const report = vi.fn();
+    const v = await deriveDiagramStale({
+      get, ...ARGS, currentEntries: [],
+      deadlineMs: 25,
+      report: report as never,
+    });
+    expect(v).toBeUndefined();
+    expect(report).toHaveBeenCalledWith(
+      null, // the deadline failure carries no thrown error by design
+      expect.objectContaining({ op: "stale-derivation" }),
+    );
+  });
+
+  // ─── the subdir recursion: non-source nested churn is not stale ──────────
+
+  it("a nested .md churn (subdir tree sha moved, no source moved) → stale:false", async () => {
+    const { get, currentEntries, calls } = wiredRepo({
+      atCommit: () => [
+        { name: "a.c4", type: "file", sha: "sa" },
+        { name: "spec.c4", type: "file", sha: "ss" },
+        { name: "nested", type: "dir", sha: "d1" },
+      ],
+      trees: {
+        // Both sides' nested trees differ ONLY in a .md blob — the recursion
+        // keys isSourceName paths only, so the compare is equal.
+        "/git/trees/d1": () => ({
+          tree: [
+            { path: "n.c4", type: "blob", sha: "sn1" },
+            { path: "README.md", type: "blob", sha: "m1" },
+          ],
+        }),
+        "/git/trees/d2": () => ({
+          tree: [
+            { path: "n.c4", type: "blob", sha: "sn1" },
+            { path: "README.md", type: "blob", sha: "m2-CHANGED" },
+          ],
+        }),
+      },
+    });
+    currentEntries.push({ name: "nested", type: "dir", sha: "d2" });
+    const v = await deriveDiagramStale({
+      get, ...ARGS, currentEntries,
+      now: () => Date.parse("2026-09-26T00:00:00Z"),
+    });
+    expect(v).toBe(false);
+    // The recursion issued exactly one tree call per side.
+    expect(calls.filter((c) => c.includes("/git/trees/"))).toEqual([
+      `/repos/o/r/git/trees/d1?recursive=1`,
+      `/repos/o/r/git/trees/d2?recursive=1`,
+    ]);
+  });
+
+  it("a nested SOURCE change (subdir tree sha moved, source blob changed) → stale:true", async () => {
+    const { get, currentEntries } = wiredRepo({
+      atCommit: () => [
+        { name: "a.c4", type: "file", sha: "sa" },
+        { name: "nested", type: "dir", sha: "d1" },
+      ],
+      trees: {
+        "/git/trees/d1": () => ({ tree: [{ path: "deep/n.c4", type: "blob", sha: "sn1" }] }),
+        "/git/trees/d2": () => ({ tree: [{ path: "deep/n.c4", type: "blob", sha: "sn2" }] }),
+      },
+    });
+    currentEntries.splice(2, currentEntries.length - 2); // drop model/json+md for clarity
+    currentEntries.push({ name: "nested", type: "dir", sha: "d2" });
+    const v = await deriveDiagramStale({
+      get, ...ARGS, currentEntries,
+      now: () => Date.parse("2026-09-26T00:00:00Z"),
+    });
+    expect(v).toBe(true);
+  });
+
+  it("a new subdir containing only non-source files → stale:false", async () => {
+    const { get, currentEntries } = wiredRepo({
+      atCommit: () => [
+        { name: "a.c4", type: "file", sha: "sa" },
+        { name: "spec.c4", type: "file", sha: "ss" },
+      ],
+      trees: {
+        "/git/trees/d2": () => ({
+          tree: [
+            { path: "notes.md", type: "blob", sha: "m1" },
+            { path: "node_modules", type: "tree", sha: "x" },
+          ],
+        }),
+      },
+    });
+    currentEntries.push({ name: "docs", type: "dir", sha: "d2" });
+    const v = await deriveDiagramStale({
+      get, ...ARGS, currentEntries,
+      now: () => Date.parse("2026-09-26T00:00:00Z"),
+    });
+    expect(v).toBe(false);
+  });
+
+  it("a new subdir CONTAINING a source → stale:true", async () => {
+    const { get, currentEntries } = wiredRepo({
+      trees: {
+        "/git/trees/d2": () => ({
+          tree: [{ path: "extra.c4", type: "blob", sha: "se" }],
+        }),
+      },
+    });
+    currentEntries.push({ name: "more", type: "dir", sha: "d2" });
+    const v = await deriveDiagramStale({
+      get, ...ARGS, currentEntries,
+      now: () => Date.parse("2026-09-26T00:00:00Z"),
+    });
+    expect(v).toBe(true);
+  });
+
+  it("a nested source inside an ignored dir (node_modules under a subdir) cannot flag stale", async () => {
+    const { get, currentEntries } = wiredRepo({
+      atCommit: () => [
+        { name: "a.c4", type: "file", sha: "sa" },
+        { name: "spec.c4", type: "file", sha: "ss" },
+        { name: "pkg", type: "dir", sha: "d1" },
+      ],
+      trees: {
+        // Sources live only under a nested node_modules — invisible to likec4.
+        "/git/trees/d1": () => ({
+          tree: [{ path: "node_modules/x.c4", type: "blob", sha: "i1" }],
+        }),
+        "/git/trees/d2": () => ({
+          tree: [{ path: "node_modules/x.c4", type: "blob", sha: "i2" }],
+        }),
+      },
+    });
+    currentEntries.push({ name: "pkg", type: "dir", sha: "d2" });
+    const v = await deriveDiagramStale({
+      get, ...ARGS, currentEntries,
+      now: () => Date.parse("2026-09-26T00:00:00Z"),
+    });
+    expect(v).toBe(false);
+  });
+
+  it("a truncated subdir tree → ABSENT + report (a non-answer, never a verdict)", async () => {
+    const { get, currentEntries } = wiredRepo({
+      atCommit: () => [
+        { name: "a.c4", type: "file", sha: "sa" },
+        { name: "spec.c4", type: "file", sha: "ss" },
+        { name: "nested", type: "dir", sha: "d1" },
+      ],
+      trees: {
+        "/git/trees/d1": () => ({ truncated: true }),
+        "/git/trees/d2": () => ({ tree: [] }),
+      },
+    });
+    currentEntries.push({ name: "nested", type: "dir", sha: "d2" });
+    const report = vi.fn();
+    const v = await deriveDiagramStale({
+      get, ...ARGS, currentEntries, report: report as never,
+      now: () => Date.parse("2026-09-26T00:00:00Z"),
+    });
+    expect(v).toBeUndefined();
+    expect(report).toHaveBeenCalledTimes(1);
   });
 });

@@ -2371,6 +2371,10 @@ export const realSdkQueryFactory: QueryFactory = async (
                 message: "c4_diagram_saved frame emit threw",
               });
             }
+            // infoSilentFallback on a save path is accepted deliberately:
+            // the emit is per-SAVE (a tool call), never per-request, so the
+            // helper's no-hot-path caveat is satisfied by the call's own
+            // bound — a Concierge edit loop still cannot approach a burst.
             infoSilentFallback(null, {
               feature: "c4-save-outcome",
               tags: { outcome },

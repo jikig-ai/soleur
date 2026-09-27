@@ -199,7 +199,10 @@ export function isSourceName(rel: string): boolean {
   return LIKEC4_SOURCE_EXTENSIONS.some((ext) => base.endsWith(ext) && base !== ext);
 }
 
-function underIgnoredDir(rel: string): boolean {
+// Exported for server/c4-staleness.ts — the ignored-dir check must apply at
+// EVERY depth, matching likec4's crawl (a nested node_modules is as invisible
+// to it as a top-level one).
+export function underIgnoredDir(rel: string): boolean {
   return rel.split("/").slice(0, -1).some((seg) => LIKEC4_IGNORED_DIRS.includes(seg));
 }
 

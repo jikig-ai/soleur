@@ -59,7 +59,14 @@ export default function C4Diagram({
   const [staleDiagnostic, setStaleDiagnostic] = useState<string | null>(null);
   // #8966 — a GET-derived verdict is authoritative when present (remount and
   // out-of-band pushes surface through it); absent means "no information" and
-  // the outcome state governs. `??` keeps absent distinct from false.
+  // the outcome state governs. A present verdict also RETIRES the fallback —
+  // a later ABSENT answer must not resurrect a banner the verdict overrode.
+  useEffect(() => {
+    if (data?.stale !== undefined) {
+      setOutcomeStale(false);
+      setStaleDiagnostic(null);
+    }
+  }, [data?.stale]);
   const stale = data?.stale ?? outcomeStale;
 
   // #8739 — the embed is a live consumer of the same stale state: a Concierge

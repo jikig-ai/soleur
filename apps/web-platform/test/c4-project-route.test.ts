@@ -100,8 +100,12 @@ function setupGitHub(
     /** Commits response for `commits?path=<dir>` (the grace-window tip probe,
      *  issued only when the source sets diff). */
     dirCommits?: unknown[];
-    /** `git/trees/{sha}` responses keyed by sha — root tree (may carry
-     *  `?recursive=1`) and dir subtree share the arm. */
+    /** The dir listing AT the model commit, served for `contents/<dir>?ref=…`.
+     *  Defaults to the HEAD `entries` — identical listings derive stale:false.
+     *  Set it to a different listing to derive stale:true. */
+    atCommitEntries?: unknown;
+    /** `git/trees/{sha}?recursive=1` responses keyed by sha — issued only to
+     *  compare the SOURCE sets of subdirs whose tree shas differ. */
     trees?: Record<string, unknown>;
   } = {},
 ) {
@@ -114,6 +118,7 @@ function setupGitHub(
   mocks.mockGithubApiGet.mockImplementation(async (_inst: number, p: string) => {
     if (p.includes("/contents/")) {
       if (opts.listingError) throw opts.listingError;
+      if (p.includes("?ref=")) return opts.atCommitEntries ?? entries;
       return entries;
     }
     if (p.includes("/commits?path=")) {
@@ -575,50 +580,44 @@ describe("GET /api/kb/c4/project — derived staleness (#8966)", () => {
     elements: { a: { id: "a" } },
     views: { index: { id: "index" } },
   });
-  // The commits payload the derivation reads for the model file: sha M carries
-  // the root tree; the dir subtree entry inside it resolves the as-rendered
-  // source set.
+  // The commits payload the derivation reads for the model file: its sha is
+  // the `?ref=` the at-commit Contents listing is fetched under.
   function armDerivation(over: {
     dir?: string;
-    /** Source entries at model-commit time (name→sha; blobs only). */
+    /** Source entries at model-commit time (name→sha; files only). */
     atCommit?: Record<string, string>;
+    /** Raw override for the at-commit Contents response (e.g. a non-array). */
+    atCommitRaw?: unknown;
     dirCommits?: unknown[];
     trees?: Record<string, unknown>;
   } = {}) {
-    const ghDir = `knowledge-base/${over.dir ?? C4_DIAGRAMS_DIR}`;
     return {
+      dir: over.dir,
       modelCommits: [
         {
           sha: "model-commit",
-          commit: {
-            tree: { sha: "root-tree" },
-            committer: { date: "2026-09-20T00:00:00Z" },
-          },
+          commit: { committer: { date: "2026-09-20T00:00:00Z" } },
         },
       ],
       // Old dir tip — outside the render-budget grace window.
       dirCommits: over.dirCommits ?? [
         { sha: "tip", commit: { committer: { date: "2020-01-01T00:00:00Z" } } },
       ],
-      trees: over.trees ?? {
-        "root-tree": {
-          tree: [{ path: ghDir, type: "tree", sha: "dir-tree" }],
-        },
-        "dir-tree": {
-          tree: Object.entries(over.atCommit ?? {}).map(([name, sha]) => ({
-            path: name,
-            type: "blob",
-            sha,
-          })),
-        },
-      },
+      atCommitEntries:
+        over.atCommitRaw ??
+        Object.entries(over.atCommit ?? {}).map(([name, sha]) => ({
+          name,
+          type: "file",
+          sha,
+        })),
+      trees: over.trees,
     };
   }
   const SOURCE = 'model {\n  a = element "A TEST"\n}';
   const files = { "model.c4": SOURCE, "model.likec4.json": MODEL };
   const calls = () => mocks.mockGithubApiGet.mock.calls.map((c) => c[1] as string);
 
-  it("D1: the derivation actually runs — commits + git/trees calls are issued, not a dead arm", async () => {
+  it("D1: the derivation actually runs — commits + at-commit contents calls are issued, not a dead arm", async () => {
     setupGitHub(files, armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }));
     const res = await callGET();
     expect(res.status).toBe(200);
@@ -626,8 +625,9 @@ describe("GET /api/kb/c4/project — derived staleness (#8966)", () => {
     expect(paths).toContain(
       `/repos/${OWNER}/${REPO}/commits?path=${GHDIR}/model.likec4.json&per_page=1`,
     );
-    expect(paths).toContain(`/repos/${OWNER}/${REPO}/git/trees/root-tree?recursive=1`);
-    expect(paths).toContain(`/repos/${OWNER}/${REPO}/git/trees/dir-tree`);
+    expect(paths).toContain(`/repos/${OWNER}/${REPO}/contents/${GHDIR}?ref=model-commit`);
+    // No root-tree walk — the at-commit listing is one Contents call.
+    expect(paths.filter((p) => p.includes("/git/trees/"))).toEqual([]);
   });
 
   it("D2: identical source set at model-commit time → stale:false present (not merely absent)", async () => {
@@ -703,31 +703,33 @@ describe("GET /api/kb/c4/project — derived staleness (#8966)", () => {
     expect(res.status).toBe(200); // the READ still succeeds — derivation is additive
     const body = await res.json();
     expect("stale" in body).toBe(false);
-    expect(mocks.mockReportSilentFallback).toHaveBeenCalledWith(
+    // The report is debounced per (installation, dir) — a persistently
+    // failing derivation must not be a Sentry event per page load (#8966).
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         feature: "c4-project-read",
         op: "stale-derivation",
       }),
+      expect.anything(),
+      "stale-derivation",
     );
   });
 
-  it("D7: a truncated model-commit tree that lost the dir entry → stale ABSENT + report", async () => {
+  it("D7: an at-commit listing that is not a directory → stale ABSENT + report", async () => {
     setupGitHub(
       files,
-      armDerivation({
-        trees: {
-          "root-tree": { truncated: true, tree: [{ path: "apps", type: "tree", sha: "t" }] },
-        },
-      }),
+      armDerivation({ atCommitRaw: { type: "file", sha: "x" } }),
     );
     const body = await (await callGET()).json();
     expect("stale" in body).toBe(false);
-    // No real Error exists for a truncated-tree miss — the emit carries null
+    // No real Error exists for a non-directory listing — the emit carries null
     // first arg (the pino-mirror convention, #8629).
-    expect(mocks.mockReportSilentFallback).toHaveBeenCalledWith(
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
       null,
       expect.objectContaining({ op: "stale-derivation" }),
+      expect.anything(),
+      "stale-derivation",
     );
   });
 

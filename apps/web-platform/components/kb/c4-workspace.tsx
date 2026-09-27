@@ -85,12 +85,18 @@ export default function C4Workspace({
   // outcome-driven `staleSave` is only the fallback for a GET that produced
   // none (derivation failure / no model commit / in-flight save window).
   // `??` keeps undefined distinct from false: absent is "no information".
-  const stale = data?.stale ?? staleSave?.dirPath === dirPath;
-  const staleDiagnostic = stale
-    ? staleSave?.dirPath === dirPath
-      ? staleSave.diagnostic
-      : null
-    : null;
+  // A present verdict also RETIRES the fallback — otherwise a later ABSENT
+  // answer would resurrect a banner the last verdict already overrode.
+  useEffect(() => {
+    if (data?.stale !== undefined) setStaleSave(null);
+  }, [data?.stale]);
+  const derivedStale = data?.stale;
+  const stale =
+    derivedStale !== undefined ? derivedStale : staleSave?.dirPath === dirPath;
+  // A diagnostic is outcome state — the retirement effect already dropped any
+  // stale-era one, so a `staleSave` present here post-dates the verdict.
+  const staleDiagnostic =
+    stale && staleSave?.dirPath === dirPath ? staleSave.diagnostic : null;
 
   // The save-outcome transition shared by the Code panel (`onSaved`) and the
   // #8739 Concierge-save event listener: refetch, then reconcile THIS folder's

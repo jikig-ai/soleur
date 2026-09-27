@@ -718,6 +718,28 @@ describe("C4Workspace — GET-derived staleness precedence (#8966)", () => {
     expect(strip).toBeTruthy();
     expect(strip?.textContent).toContain("out of date");
   });
+
+  it("D-C9: a present verdict RETIRES the fallback — a later ABSENT GET must not resurrect a cleared banner", async () => {
+    // Earn the banner (absent verdict + failing save outcome).
+    await renderC4WithHeader(true, true, DIR);
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    // A verdict arrives and clears it — and the fallback with it.
+    reloadState.derived = false;
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("false"),
+    );
+    // A later GET answers ABSENT (grace window / derivation failure): the
+    // retired staleSave must not resurrect the banner.
+    reloadState.derived = undefined;
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("false");
+  });
 });
 
 describe("C4Workspace — c4-edit flag gates the Code tab (AC3/AC10)", () => {

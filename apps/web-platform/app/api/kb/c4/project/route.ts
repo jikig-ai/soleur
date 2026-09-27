@@ -333,8 +333,6 @@ export async function GET(request: Request) {
         owner,
         repo,
         githubDir,
-        // `git/trees` entry paths are the RAW (unencoded) form.
-        githubDirRaw: `knowledge-base/${requestedDir}`,
         currentEntries: entries,
       }),
     ]);
