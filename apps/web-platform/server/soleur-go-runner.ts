@@ -95,6 +95,7 @@ import type { DocumentExtractMeta } from "./kb-document-resolver";
 import { FULL_TEXT_CAP_BYTES } from "./kb-document-resolver";
 import { isPathInWorkspace } from "./sandbox";
 import { selectChapter } from "./pdf-chapter-router";
+import { CRM_LEAD_DIRECTIVE } from "./crm-lead-directive";
 import { SUPPORT_SYSTEM_DIRECTIVE } from "./support-directive";
 import type { Persona } from "./workspace-mode";
 // Type-only import — re-added 2026-05-11 (bundle PR
@@ -975,6 +976,11 @@ export interface DispatchArgs {
    */
   routineAuthoring?: boolean;
   /**
+   * CRM new-lead chat. Forwarded to QueryFactoryArgs (crm_* tools) and to
+   * `buildSoleurGoSystemPrompt` (CRO directive). Not a persona value.
+   */
+  crmLead?: boolean;
+  /**
    * feat-wire-concierge-support-chat (ADR-113). `"support"` runs the Concierge
    * as read-only in-app help: support prompt (buildSoleurGoSystemPrompt branch),
    * SDK skills scoped to kb-search, write/fan-out tools disallowed, and the
@@ -1055,6 +1061,8 @@ export interface QueryFactoryArgs {
   /** #5402 — routines authoring mode flag; realSdkQueryFactory appends the
    *  ROUTINE_AUTHORING_DIRECTIVE to the system prompt when true. */
   routineAuthoring?: boolean;
+  /** CRM new-lead chat. realSdkQueryFactory registers crm_* tools when true. */
+  crmLead?: boolean;
   /** feat-wire-concierge-support-chat (ADR-113) — support persona. When
    *  "support", realSdkQueryFactory bypasses the repo-lifecycle gates, runs
    *  cwd=getPluginPath() read-only, scopes SDK skills to kb-search, and pins the
@@ -1279,6 +1287,12 @@ export interface BuildSoleurGoSystemPromptArgs {
    * Undefined / "command_center" = the Command Center router (unchanged).
    */
   persona?: Persona;
+  /**
+   * CRM new-lead chat. When true, the builder returns the CRO directive
+   * and does not emit the Command Center `/soleur:go` routing line.
+   * Checked before the support persona branch. Not a persona value.
+   */
+  crmLead?: boolean;
 }
 
 // Hoisted: parity with agent-runner.ts MAX_INLINE_BYTES (~12-15K tokens).
@@ -1303,6 +1317,13 @@ const PDF_INLINE_EXCLUSION_CLAUSE =
 export function buildSoleurGoSystemPrompt(
   args: BuildSoleurGoSystemPromptArgs = {},
 ): string {
+  // CRM new-lead replaces the router baseline (the baseline says to dispatch
+  // `/soleur:go`). Checked before support so the two short-circuits cannot
+  // stack. Not a persona value — permission-callback only special-cases support.
+  if (args.crmLead) {
+    return CRM_LEAD_DIRECTIVE;
+  }
+
   // Support persona short-circuit (ADR-113). Emits the Soleur Support prompt
   // instead of the Command Center router — no `/soleur:go` routing, no artifact
   // or sticky-workflow scoping. The SUPPORT_SYSTEM_DIRECTIVE is the trusted,
@@ -2579,7 +2600,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
             documentExtractMeta: args.documentExtractMeta,
             workspacePath: args.workspacePath,
             // Support persona short-circuits the builder to the support prompt.
+            // crmLead is checked first inside the builder and replaces it.
             persona: args.persona,
+            crmLead: args.crmLead,
           }),
           resumeSessionId,
           pluginPath,
@@ -2587,6 +2610,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           userId,
           conversationId,
           routineAuthoring: args.routineAuthoring,
+          crmLead: args.crmLead,
           // feat-wire-concierge-support-chat — forward the support persona so
           // realSdkQueryFactory bypasses repo gates + scopes skills/tools.
           persona: args.persona,
