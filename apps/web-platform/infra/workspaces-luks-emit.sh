@@ -34,6 +34,12 @@
 #         (or `source` it and call `workspaces_luks_emit`). ALWAYS returns 0 — a paging emit must
 #         never itself brick a boot or a cutover step (fail-open, like _sentry_emit).
 
+# #7797: this file reads the Sentry DSN, so it refuses xtrace like its two sourcing callers
+# (luks-monitor.sh, workspaces-cutover.sh), which refuse first — sourced from them it is a no-op.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # Strip `"` and `\` (JSON-structural) then any non-printable BEFORE interpolation into the Sentry
 # body — host id is cloud-metadata, not attacker-controlled, but a stray backslash/newline would
 # corrupt the envelope.

@@ -2466,7 +2466,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // HCLOUD_TOKEN from Doppler soleur/prd_terraform. NO SUBSTITUTE: Hetzner exposes a firewall's
   // `applied_to` set only through the authenticated API, and the unauthenticated alternative (a TCP
   // connect to the host's port 22) needs a public IP that changes on every replace. Genuine.
-  const BASELINE_DECLARED_PROBES = 31;
+  // #8706 (2026-09-27): +1 (31 -> 32, after #8754 took 30 -> 31) for `2026-09-27-fix-luks-monitor-host-timer-never-installed-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (it was a `>-` fold, which the reader treats as no declaration). TRUTH: the probe
+  // (`scripts/followthroughs/luks-monitor-host-timer-8706.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
+  // NO SUBSTITUTE: the evidence is web-1's luks-monitor.service journald rows in the Logs warehouse,
+  // which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 32;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
