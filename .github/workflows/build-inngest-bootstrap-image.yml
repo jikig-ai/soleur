@@ -1,6 +1,10 @@
 name: Build inngest-bootstrap OCI image
 
-# Triggered on `vinngest-vX.Y.Z` tag pushes. Builds a scratch-based image
+# Triggered on `vinngest-vX.Y.Z` tag pushes, and by workflow_dispatch. Since #4326
+# (ADR-232 §8) the usual first publish of a tag is a DISPATCH from main:
+# mint-inngest-bootstrap-tag.yml cuts the tag with GITHUB_TOKEN (which fires no
+# `push: tags` run) and dispatches this workflow from main with inputs.ref=<tag>.
+# A hand-pushed tag still runs here on the tag ref, as before. Builds a scratch-based image
 # embedding the pinned inngest-cli binary + inngest-bootstrap.sh + a minimal
 # entrypoint shim. The deploy webhook fires:
 #   `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap vX.Y.Z`
@@ -15,12 +19,15 @@ on:
   push:
     tags:
       - 'vinngest-v*.*.*'
-  # workflow_dispatch re-publishes an EXISTING vinngest-v* tag (escape hatch
-  # for a CVE base-image rebuild of an already-released version). It takes the
+  # workflow_dispatch publishes an EXISTING vinngest-v* tag: the FIRST publish of
+  # an auto-minted tag (#4326 — dispatched once from main; that run is the only
+  # build of the tag), or an escape-hatch re-publish (a CVE base-image rebuild of
+  # an already-released version). It takes the
   # tag name as `ref` — NOT a free-form version — so it can never mint a
   # tagless image that blinds the cloud-init drift-guard (#4692 / #4676 AC6).
   #
-  # CAUTION on the default (rebuild) path: it re-runs `docker build` and pushes the SAME
+  # CAUTION on the default (rebuild) path, for a tag that already has a build: it re-runs
+  # `docker build` and pushes the SAME
   # tag, so the tag's GHCR digest MOVES. Anything pinning that tag by @sha256 —
   # cloud-init-inngest.yml pins the dedicated host's payload — is pinned to bytes the tag
   # no longer points at. Use `mirror_only` when the goal is only to get an already-published
