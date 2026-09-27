@@ -757,7 +757,7 @@ else
 fi
 
 # Wire check on the SAME job block: the `rows:` key must reach the run step as an
-# interpolation. A literal `run: bash … --rows "1-12"` would execute one slice on EVERY leg
+# interpolation. A literal `run: bash … --rows "1-14"` would execute one slice on EVERY leg
 # while the declared matrix stays green — same "declared ≠ received" class the SCRIPTS_SHARD
 # wire pin upstream exists for.
 _rows_wire=$(awk '
