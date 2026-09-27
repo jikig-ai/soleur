@@ -1332,7 +1332,7 @@ jobs:
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     runs-on: ubuntu-latest
-    # TWO-LEG ROW SPLIT (#8006 phase 2). The battery declares 24 numbered row
+    # TWO-LEG ROW SPLIT (#8006 phase 2). The battery declares 27 numbered row
     # sites and takes `--rows A-B`; each leg runs its half plus the unconditional
     # control and instrument self-test. The battery's own DECLARED_TOTAL pin is
     # what keeps the halves honest — a row added without bumping it reds BOTH
@@ -1342,8 +1342,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rows: ["1-12", "13-24"]
-    # Sized above the measured need, not at it: the serial 24-row battery
+        rows: ["1-14", "15-27"]
+    # Sized above the measured need, not at it: the serial 27-row battery
     # measured ~9.5 min as a single job; halving the row space plus the
     # parallelized enumerate children inside the guard puts each leg near
     # ~5 min. A timeout kill must never fire below a duration the repo calls

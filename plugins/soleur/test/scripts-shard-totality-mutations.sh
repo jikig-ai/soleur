@@ -4,7 +4,7 @@
 #
 # Guard 1 (plugins/soleur/test/scripts-shard-totality.test.sh) asserts that every scripts-group
 # registration is assigned to exactly one matrix leg. A guard that cannot be driven RED is
-# vacuous, so this battery breaks the partition twenty-four ways (DECLARED_TOTAL below) and
+# vacuous, so this battery breaks the partition twenty-seven ways (DECLARED_TOTAL below) and
 # requires the guard to notice each one.
 #
 # HOW THIS BATTERY AVOIDS THE FAILURES ITS OWN CLASS IS KNOWN FOR:
@@ -73,7 +73,7 @@ fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1"; }
 # sites at the bottom: a row added without bumping it reds the battery everywhere,
 # which is what keeps the per-half floors honest (each half must see the full
 # declared space, not just the sites inside its own range).
-DECLARED_TOTAL=24
+DECLARED_TOTAL=27
 ROWS_LO=1
 ROWS_HI=0        # 0 = unset, meaning "all declared rows"
 while (( $# > 0 )); do
@@ -682,6 +682,37 @@ in_range && row "MUSTPASS" "$CI_YML" \
     timeout-minutes: 59
     # No setup-node' \
   GREEN "an unrelated ceiling edit that changes no assignment"
+
+# --- run_suite --rows tiling arm: committed extractor mutations (#8990) ------------------
+#
+# The guard's run_suite-argv tiling arm (awk extractor + _rows_tile_check over the
+# `--rows A-B` flags on the lint-orphan-test-suites-mutations -a/-b registrations) shipped
+# with a committed POSITIVE control but no committed row mutating a --rows registration
+# end-to-end. These rows drive the extraction chain red through scripts/test-all.sh.
+
+# ROWS-GAP: shrink the -b range so battery row 9 executes in no leg. The tile check
+# reports "range '10-16' starts at 10, expected 9 (gap or overlap)".
+in_range && row "ROWS-GAP" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 10-16' \
+  RED "a gapped --rows range leaves battery row 9 unexecuted in every leg"
+
+# ROWS-DROP: remove the flag so -b registers UNFLAGGED beside flagged -a — the
+# MIXED-contract arm must fire (a dropped flag double-executes rather than loses coverage).
+in_range && row "ROWS-DROP" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
+  RED "a dropped --rows flag yields a MIXED flagged/unflagged contract"
+
+# ROWS-SWAP (must-PASS): registration order is not tiling order — the extractor sorts
+# ranges by lo-bound, so swapping the -a/-b lines is a permitted non-canonical input.
+# A guard that reds on this is over-tight; a RED-only matrix cannot see that.
+in_range && row "ROWS-SWAP" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
+  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
+  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  GREEN "swapped registration order tiles identically (ranges sort before the tile check)"
 
 # --- RANGE ACCOUNTING + ASSERTION FLOOR ----------------------------------------------------------
 #
