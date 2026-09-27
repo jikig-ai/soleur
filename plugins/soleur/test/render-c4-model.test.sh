@@ -133,6 +133,34 @@ else
   fail "CI-formatted diagnostic slipped through: rc=$_rc — $_out"
 fi
 
+# ── Elements-but-no-views is a LAYOUT failure, refused like the server gate ─────
+# likec4 emits at least `index` on any successful layout, so a non-empty-elements
+# model with zero views is the container/graphviz-fallback failure shape (#8861),
+# never a fault in the user's .c4 source — and it must never publish. This stub
+# emits NO diagnostic, so the diagnostic gate cannot catch it; the views gate can.
+_stub2="$SANDBOX/stubbin-noviews"; assert_fixture_dir "$_stub2"; mkdir -p "$_stub2"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && out="$2"; shift; done\n'
+  printf 'printf %s | tee "$out" >/dev/null\n' "'{\"elements\":{\"a\":{}},\"relations\":{},\"views\":{}}'"
+} > "$_stub2/npx"
+chmod +x "$_stub2/npx"
+_zv="$SANDBOX/zeroviews"; assert_fixture_dir "$_zv"; mkdir -p "$_zv/$DIAG"
+printf 'model {}\n' > "$_zv/$DIAG/m.c4"
+_rc=0; _out="$(PATH="$_stub2:$PATH" bash "$RENDERER" --root "$_zv" 2>&1)" || _rc=$?
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_rc" -ne 0 && "$_out" == *"no views"* && ! -e "$_zv/$DIAG/model.likec4.json" ]]; then
+  pass "an elements-but-no-views model is refused as a layout failure (nothing published)"
+else
+  fail "zero-view model slipped through: rc=$_rc published=$([[ -e "$_zv/$DIAG/model.likec4.json" ]] && echo yes || echo no) — $_out"
+fi
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_out" != *"Fix the .c4 source"* ]]; then
+  pass "the zero-view refusal does not blame the .c4 source"
+else
+  fail "zero-view refusal misdirects to a source fix: $_out"
+fi
+
 # ── Every extension likec4 compiles counts as a source (.c4, .likec4, .like-c4) ─────────────
 for _ext in likec4 like-c4; do
   _xr="$SANDBOX/ext-$_ext"; assert_fixture_dir "$_xr"; mkdir -p "$_xr/$DIAG"
@@ -218,7 +246,7 @@ fi
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=19
+_min_cases=21
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

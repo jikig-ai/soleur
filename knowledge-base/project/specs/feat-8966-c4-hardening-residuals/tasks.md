@@ -7,33 +7,33 @@ Derived from `knowledge-base/project/plans/2026-09-26-c4-hardening-residuals-pla
 ## Phase 1 — PR-A: writer parity
 
 ### 1.1 Flag + gate parity
-- [ ] 1.1.1 `plugins/soleur/scripts/render-c4-model.sh`: add `--no-use-dot` to the npx
+- [x] 1.1.1 `plugins/soleur/scripts/render-c4-model.sh`: add `--no-use-dot` to the npx
       `export json` invocation (:115); add `jq -e '(.views | length) > 0'` refusal beside
       the elements gate (:143) with the #8740 rationale comment.
-- [ ] 1.1.2 `plugins/soleur/scripts/generate-c4-from-components.ts`: `"--no-use-dot"` in
+- [x] 1.1.2 `plugins/soleur/scripts/generate-c4-from-components.ts`: `"--no-use-dot"` in
       the spawnSync argv (:260).
-- [ ] 1.1.3 `plugins/soleur/lib/c4-from-components.ts`: `countModelJson` gains `views`;
+- [x] 1.1.3 `plugins/soleur/lib/c4-from-components.ts`: `countModelJson` gains `views`;
       `assessRender` gains `viewCount` input + `zero-views` status between element and
       relationship checks; audit `C4_MARKER_FIELDS`/`zeroCounts` ripple; fix the
       `toEqual` assertions at `test/c4-from-components.test.ts:308,315-316`.
 
 ### 1.2 Guard + tests
-- [ ] 1.2.1 `plugins/soleur/test/c4-canonical.test.ts`: extend the writer census
+- [x] 1.2.1 `plugins/soleur/test/c4-canonical.test.ts`: extend the writer census
       (:217-243) — per-member `--no-use-dot` (both invocation spellings incl.
       `export json --no-use-dot -o`) + views-gate marker (`views | length` in `.sh`,
       `viewCount` at the `.ts` writer's `assessRender` call site). Keep the floor
       assertion on the three known members; note the app-side `RENDER_SCRIPT` ownership.
-- [ ] 1.2.2 Mutation-verify the Guard Contract matrix (5 rows: drop flag, drop
+- [x] 1.2.2 Mutation-verify the Guard Contract matrix (5 rows: drop flag, drop
       `viewCount` arg, add non-compliant writer, vacuous census, comment-only fixture
       must-PASS).
-- [ ] 1.2.3 `plugins/soleur/test/render-c4-model.test.sh`: zero-view row on the stub
+- [x] 1.2.3 `plugins/soleur/test/render-c4-model.test.sh`: zero-view row on the stub
       fixture (:123); bump `cases_run` floor (:221-224).
 
 ### 1.3 Docs
-- [ ] 1.3.1 `plugins/soleur/skills/architecture/references/likec4-reference.md`: pin
+- [x] 1.3.1 `plugins/soleur/skills/architecture/references/likec4-reference.md`: pin
       literal `likec4@1.50.0` + `--no-use-dot` on BOTH :112 (`validate`) and :113
       (`export`).
-- [ ] 1.3.2 ADR-050 2026-09-25 addendum: supersede banner (plugin parity landed).
+- [x] 1.3.2 ADR-050 2026-09-25 addendum: supersede banner (plugin parity landed).
 
 ### 1.4 PR-A close-out
 - [ ] 1.4.1 PR body: `Closes #8861` + `Ref #8966`; run plugin test suite +

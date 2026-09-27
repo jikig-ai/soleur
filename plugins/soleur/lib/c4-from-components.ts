@@ -447,28 +447,46 @@ export function generateViewPage(viewId = "generatedComponents"): string {
  * Non-object shapes yield 0 rather than throwing: likec4 can emit a null/array
  * field, and a bare `Object.keys` on those would silently produce a wrong count.
  */
-export function countModelJson(json: string): { elements: number; relationships: number } {
+export function countModelJson(json: string): {
+  elements: number;
+  relationships: number;
+  views: number;
+} {
   try {
     const model = JSON.parse(json) as Record<string, unknown>;
     const size = (v: unknown) =>
       v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v).length : 0;
-    return { elements: size(model.elements), relationships: size(model.relations) };
+    return {
+      elements: size(model.elements),
+      relationships: size(model.relations),
+      views: size(model.views),
+    };
   } catch {
-    return { elements: 0, relationships: 0 };
+    return { elements: 0, relationships: 0, views: 0 };
   }
 }
 
 /**
- * The three gates. Order matters: a source fault is a hard failure regardless of
- * counts, an empty model is a failure, and only then is a zero-relationship model
- * classified — as `degraded`, never `failed`. The docs are the defect there, not
- * the run, and failing the sync over it would punish the tester for a corpus
- * Soleur itself taught them to write.
+ * The gates. Order matters: a source fault is a hard failure regardless of
+ * counts, an empty model is a failure, a zero-view model is a LAYOUT failure
+ * (#8861 — a successful layout always emits at least `index`, so this is the
+ * graphviz-fallback/container shape, never the user's source), and only then is
+ * a zero-relationship model classified — as `degraded`, never `failed`. The
+ * docs are the defect there, not the run, and failing the sync over it would
+ * punish the tester for a corpus Soleur itself taught them to write.
  */
 export function assessRender(input: {
   diagnostics: string;
   /** Elements in the RENDERED model (the whole diagrams dir). Validates non-degeneracy. */
   elementCount: number;
+  /**
+   * Views in the RENDERED model — the #8861 gate, mirroring c4-render.ts's
+   * `counts.views === 0`. Elements-but-no-views means the layout engine failed,
+   * so a zero here is `failed`, and it is checked before the
+   * generatedRelationships degrade so a broken layout is never published as a
+   * "link-free corpus".
+   */
+  viewCount: number;
   /** Relationships in the RENDERED model. Reported, but NOT the gate — see below. */
   relationshipCount: number;
   /**
@@ -496,6 +514,13 @@ export function assessRender(input: {
   }
   if (input.elementCount === 0) {
     return { status: "failed", reason: "empty-model", detail: "likec4 produced an empty/degenerate model" };
+  }
+  if (input.viewCount === 0) {
+    return {
+      status: "failed",
+      reason: "zero-views",
+      detail: "likec4 produced a model with elements but no views — a layout failure, not a source fault",
+    };
   }
   if (input.generatedRelationships === 0) {
     return {

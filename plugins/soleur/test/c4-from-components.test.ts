@@ -169,14 +169,14 @@ describe("buildEdges", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 1.3 — the three validation gates
+// 1.3 — the validation gates
 // ---------------------------------------------------------------------------
 
-describe("assessRender — three gates", () => {
+describe("assessRender — the validation gates", () => {
   const clean = { diagnostics: "workspace: /tmp/x\ndone\n" };
-  // Default the gate input to non-zero so each existing case keeps exercising the
-  // arm it was written for; the gate itself is pinned by its own cases below.
-  const g = (n: number) => ({ generatedRelationships: n });
+  // Default the gate inputs to non-zero so each existing case keeps exercising
+  // the arm it was written for; each gate is pinned by its own cases below.
+  const g = (n: number) => ({ generatedRelationships: n, viewCount: 1 });
 
   it("reports ok when elements and relationships are both non-zero", () => {
     expect(assessRender({ ...clean, ...g(3), elementCount: 3, relationshipCount: 3 }).status).toBe("ok");
@@ -214,6 +214,25 @@ describe("assessRender — three gates", () => {
 
   it("reports failed on an empty model", () => {
     expect(assessRender({ ...clean, ...g(0), elementCount: 0, relationshipCount: 0 }).status).toBe("failed");
+  });
+
+  // #8861 — the zero-view gate. A successful layout always emits at least
+  // `index` even with no `views {}` block in the source, so elements-but-no-
+  // views is OUR layout failing (e.g. a graphviz-mode fallback inside a
+  // container that lacks it), never a defect in the user's source — and a
+  // zero-view model must never publish over the committed artifact.
+  it("reports failed with reason zero-views when the model has elements but no views", () => {
+    const v = assessRender({ ...clean, ...g(3), elementCount: 3, relationshipCount: 3, viewCount: 0 });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toBe("zero-views");
+  });
+
+  it("fires the zero-views gate BEFORE the no-generated-relationships degrade", () => {
+    // Ordering is load-bearing: a zero-view render is a FAILED layout, not a
+    // link-free corpus — degrading it would publish the broken model.
+    const v = assessRender({ ...clean, ...g(0), elementCount: 3, relationshipCount: 0, viewCount: 0 });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toBe("zero-views");
   });
 
   it("reports failed when the diagnostic stream carries a source fault", () => {
@@ -261,7 +280,7 @@ describe("likec4 diagnostics under CI", () => {
   const E = "\x1b";
   const ciInvalid = `${E}[2m15:32:23.971${E}[0m ${E}[1m${E}[31mERROR${E}[0m ${E}[1m${E}[36mlikec4${E}[0m Invalid /r/m.c4`;
   const ciLine = `    ${E}[2mLine 4: ${E}[22m${E}[31mExpecting token${E}[39m`;
-  const g = { elementCount: 3, relationshipCount: 1, generatedRelationships: 1 };
+  const g = { elementCount: 3, relationshipCount: 1, generatedRelationships: 1, viewCount: 1 };
 
   it("fails a CI-formatted `Invalid` line on its own (no Line row to lean on)", () => {
     expect(assessRender({ diagnostics: ciInvalid, ...g }).status).toBe("failed");
@@ -295,12 +314,14 @@ describe("countModelJson — pinned against a REAL likec4 artifact", () => {
     "utf8",
   );
 
-  it("reads a non-zero element AND relationship count from Soleur's own model", () => {
+  it("reads a non-zero element, relationship AND view count from Soleur's own model", () => {
     const counts = countModelJson(realModel);
     // Deliberately not literal counts — those drift with every model edit. The
-    // claim under test is that BOTH keys resolve, which a wrong key cannot satisfy.
+    // claim under test is that ALL THREE keys resolve, which a wrong key cannot
+    // satisfy. `views` feeds the assessRender zero-views gate (#8861).
     expect(counts.elements).toBeGreaterThan(0);
     expect(counts.relationships).toBeGreaterThan(0);
+    expect(counts.views).toBeGreaterThan(0);
   });
 
   it("agrees with the artifact's own top-level keys", () => {
@@ -308,14 +329,16 @@ describe("countModelJson — pinned against a REAL likec4 artifact", () => {
     expect(countModelJson(realModel)).toEqual({
       elements: Object.keys(parsed.elements).length,
       relationships: Object.keys(parsed.relations).length,
+      views: Object.keys(parsed.views).length,
     });
   });
 
   it("returns zeros for malformed or non-object payloads rather than throwing", () => {
-    expect(countModelJson("not json")).toEqual({ elements: 0, relationships: 0 });
-    expect(countModelJson('{"elements":null,"relations":[]}')).toEqual({
+    expect(countModelJson("not json")).toEqual({ elements: 0, relationships: 0, views: 0 });
+    expect(countModelJson('{"elements":null,"relations":[],"views":null}')).toEqual({
       elements: 0,
       relationships: 0,
+      views: 0,
     });
   });
 });

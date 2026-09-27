@@ -290,6 +290,11 @@ editor is open does not reload it (#8739).
 
 ## Addendum — 2026-09-25 (#8740): zero-view models detected on read
 
+> **Superseded in part 2026-09-26 (#8861):** the plugin writers named below now carry
+> `--no-use-dot` and a views-nonempty gate, and the writer census in
+> `plugins/soleur/test/c4-canonical.test.ts` pins both per writer. The read-side
+> detection below remains load-bearing for zero-view models committed before the fix.
+
 The 2026-09-24 "zero-view models refused" gate covers the server writer (`server/c4-render.ts`)
 only. The plugin writers (`plugins/soleur/scripts/render-c4-model.sh`,
 `generate-c4-from-components.ts`) still run `likec4 export json` without `--no-use-dot` or a views

@@ -228,7 +228,10 @@ describe("repo wiring", () => {
         .split("\n")
         .filter((l) => !/^\s*(\/\/|#|\*)/.test(l))
         .join("\n");
-    const INVOKES = /["']export["'],\s*["']json["']|\bexport json -o\b/;
+    // Both invocation spellings, including the post-#8861 `export json
+    // --no-use-dot -o` form — a census that only matched the bare spelling
+    // would lose the .sh writer the moment the flag landed.
+    const INVOKES = /["']export["'],\s*["']json["']|\bexport json\b[^\n]*?\s-o\b/;
     const writers = r.stdout.trim().split("\n").filter(Boolean).filter((f) => INVOKES.test(code(f)));
     // Floor: the three known writers. An empty census would pass vacuously.
     expect(writers.sort()).toEqual(
@@ -240,6 +243,33 @@ describe("repo wiring", () => {
     );
     const unrouted = writers.filter((f) => !/c4-canonical/.test(code(f)));
     expect(unrouted).toEqual([]);
+
+    // #8861 parity: every writer also pins the wasm layout engine and refuses a
+    // zero-view export. Inside a container likec4 1.50.0 defaults `use-dot` to
+    // the graphviz binary (`default:isInsideContainer()` in its CLI), so an
+    // unpinned writer emits dot-layout bytes that diverge from the server's —
+    // or no layout at all when graphviz is absent, which is the zero-view
+    // commit shape. Both spellings count as carrying the flag: the shell's
+    // `export json --no-use-dot -o` and an argv `"--no-use-dot"` element.
+    const HAS_FLAG = /\bexport json --no-use-dot\b|["']--no-use-dot["']/;
+    // The views-gate anchor differs per writer, so each names its own and a
+    // writer absent from this map fails closed:
+    //   .sh        — the `jq -e '(.views | length) > 0'` probe beside the
+    //                element-count gate
+    //   c4-render  — `counts.views === 0` (c4ModelCounts) at the post-parse gate
+    //   producer   — the gate lives in lib/c4-from-components.ts, so the pin is
+    //                `viewCount:` supplied at the writer's assessRender call site
+    // This plugin suite deliberately asserts on the app-side writer too: the
+    // census owns all three writers (#8542), so it owns their parity.
+    const VIEWS_GATE: Record<string, RegExp> = {
+      "plugins/soleur/scripts/render-c4-model.sh": /\.views \| length\) > 0/,
+      "apps/web-platform/server/c4-render.ts": /counts\.views === 0/,
+      "plugins/soleur/scripts/generate-c4-from-components.ts": /assessRender\(\{[\s\S]*?viewCount:/,
+    };
+    const missingFlag = writers.filter((f) => !HAS_FLAG.test(code(f)));
+    expect(missingFlag).toEqual([]);
+    const missingViewsGate = writers.filter((f) => !(VIEWS_GATE[f]?.test(code(f)) ?? false));
+    expect(missingViewsGate).toEqual([]);
   });
 
   test("the apps copy is a byte-identical mirror of the plugin module", () => {

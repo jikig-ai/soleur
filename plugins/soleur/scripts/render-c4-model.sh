@@ -112,7 +112,7 @@ RENDER_LOG="$TMP/render.log"
 # ANSI-coloured reporter that the anchored DIAG_RE below cannot match, and a syntax error
 # would then publish a truncated model at rc 0 (measured under CI=true). ANSI is also
 # stripped from the log as a second line of defence.
-if ! ( cd "$DIAGRAMS_DIR" && env -u CI -u FORCE_COLOR NO_COLOR=1 npx -y --ignore-scripts "likec4@${LIKEC4_VERSION}" export json -o "$TMP/model.likec4.json" . ) >"$RENDER_LOG" 2>&1; then
+if ! ( cd "$DIAGRAMS_DIR" && env -u CI -u FORCE_COLOR NO_COLOR=1 npx -y --ignore-scripts "likec4@${LIKEC4_VERSION}" export json --no-use-dot -o "$TMP/model.likec4.json" . ) >"$RENDER_LOG" 2>&1; then
   echo "ERROR: likec4 export exited non-zero — refusing to overwrite $OUT" >&2
   cat "$RENDER_LOG" >&2
   exit 1
@@ -145,8 +145,16 @@ if ! jq -e '(.elements | length) > 0' "$TMP/model.likec4.json" >/dev/null 2>&1; 
   echo "       Fix the .c4 source (run: cd $DIAGRAMS_DIR && npx -y likec4@${LIKEC4_VERSION} validate .)" >&2
   exit 1
 fi
+# Elements-but-no-views is OUR layout failing, never the user's source (#8740):
+# a successful layout always emits at least `index`, even with no `views {}`
+# block. The server writer (c4-render.ts) gates identically; both keep a
+# graphviz-fallback or broken layout from publishing over the good artifact.
+if ! jq -e '(.views | length) > 0' "$TMP/model.likec4.json" >/dev/null 2>&1; then
+  echo "ERROR: likec4 produced a model with elements but no views — a layout failure — refusing to overwrite $OUT" >&2
+  exit 1
+fi
 
-# Canonicalize AFTER both gates (never instead of them): one JSON value per
+# Canonicalize AFTER all gates (never instead of them): one JSON value per
 # line with every view `hash` blanked, so git can merge two regenerations whose
 # edits touch different values (ADR-235, #8542). Node serializes, never jq —
 # jq reformats numbers. The web app (c4-render.ts) and the plugin
