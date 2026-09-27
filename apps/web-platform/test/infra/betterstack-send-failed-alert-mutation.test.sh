@@ -35,6 +35,10 @@ ROOT="$(git rev-parse --show-toplevel)" || exit 2
 # as lint-orphan-test-suites.test.sh's LINT_ORPHAN_TARGET_OVERRIDE). CI never sets it.
 GUARD="${SFA_GUARD_OVERRIDE:-$ROOT/apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh}"
 INFRA="$ROOT/apps/web-platform/infra"
+# The scorer is located from THIS file, never from the cwd's checkout.
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../infra" && pwd)/lib/mutation-scorer.sh" \
+  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 [[ -f "$GUARD" ]] || { echo "FATAL: guard not found at $GUARD" >&2; exit 2; }
 
 # The guard's seams are its INPUT CONTRACT. Every input this battery sandboxes must be reachable
@@ -97,10 +101,8 @@ open(p, 'w').write(s)
 PYEOF
 }
 landed() { ! cmp -s "$SB/$1" "$PR/$1"; }
-attributed() { # <anchor>... -> 0 when every anchor is on a [FAIL] line of $OUT
-  local a
-  for a in "$@"; do grep -F '[FAIL]' "$OUT" | grep -qF -- "$a" || return 1; done
-}
+# <anchor>... -> 0 when every anchor is on a [FAIL] line of $OUT. Zero anchors aborts (exit 2).
+attributed() { mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$@"; }
 
 # expect_red <label> <file> <anchor>... -- the mutation script is read from MUT
 expect_red() {
