@@ -692,6 +692,21 @@ else
   fail "TEST_GROUP=all is missing heavy registration(s): $_missing_all — want_scripts_heavy dropped the 'all' arm, so the ship gate and monitor silently lost the most expensive suites"
 fi
 
+# Shared DECLARED_TOTAL readers — ONE spelling for all five read sites (battery
+# ground-read sed, per-token grep -lE, per-token sed reader, _decl_lines
+# counter, Direction-2 census grep), so a keyworded declaration lands inside
+# every reader's population rather than satisfying a subset of them (#9035 —
+# `export`/`readonly`/`local`-prefixed declarations evaded all four readers,
+# each of which knew only the bare spelling). The keyword whitelist is a closed
+# set — export|readonly|local|typeset|declare — followed by whitespace, with
+# one optional flag argument for `declare -x` shapes; anchored to line-start
+# so `xDECLARED_TOTAL` and `local xDECLARED_TOTAL` cannot false-match. Bare
+# `DECLARED_TOTAL=` still matches (the prefix group is optional).
+_DECL_PREFIX_RE='(export|readonly|local|typeset|declare)([[:space:]]+-[[:alnum:]]+)?[[:space:]]+'
+_DECL_ANY_RE="^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL=[0123456789]+"
+_DECL_COUNT_RE="^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL="
+_DECL_READ_RE="s/^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?\$/\\4/p"
+
 # Shared contiguous-tiling comparator — walks a file of `A-B` ranges and returns whether they
 # tile 1..DECLARED with no gaps or overlaps. NOTE for future callers: ranges must be sorted by
 # lo-bound BEFORE this call, the input must be newline-terminated (a `read` loop drops an
@@ -735,7 +750,14 @@ _rows_tile_check() {
 # matrix re-split executes in NO CI leg while every leg's own checks stay green (shrink
 # fails closed: B > DECLARED_TOTAL exits 2 in the flag validator; growth is silent).
 # Assert the disjoint contiguous tiling here, where the drift shows up.
-_decl_total="$(sed -nE 's/^DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?$/\1/p' "$REPO_ROOT/plugins/soleur/test/scripts-shard-totality-mutations.sh" | head -1)"
+_decl_total="$(sed -nE "$_DECL_READ_RE" "$REPO_ROOT/plugins/soleur/test/scripts-shard-totality-mutations.sh" | head -1)"
+# Spelling-tolerant canonicalization: every `rows:`-shaped key — canonical
+# `rows:`, space-tolerant `rows :`, quoted `"rows":`/`'rows':`, column-0 — is
+# rewritten to the canonical key BEFORE the job-block awk extracts and the
+# singleton census counts. ONE regex feeds both readers, so a second key
+# spelled differently cannot satisfy one arm while evading the other (#9035).
+sed -E 's/^[[:space:]]*["'"'"']?rows["'"'"']?[[:space:]]*:/rows:/' "$CI_YML" > "$WORK/ci_rows_canon" \
+  || { echo "FATAL: ci.yml rows-key canonicalization failed" >&2; exit 2; }
 awk '
   /^  shard-totality-mutations:$/ { inj=1; next }
   inj && /^  [a-z0-9_-]+:$/ { inj=0 }
@@ -745,7 +767,7 @@ awk '
     n=split(line, a, ",")
     for (i=1; i<=n; i++) { gsub(/[" \t]/, "", a[i]); if (a[i] != "") print a[i] }
   }
-' "$CI_YML" | sort -t- -k1,1n > "$WORK/row_ranges"
+' "$WORK/ci_rows_canon" | sort -t- -k1,1n > "$WORK/row_ranges"
 if [[ -z "$_decl_total" || ! "$_decl_total" =~ ^[0123456789]+$ ]]; then
   fail "could not read DECLARED_TOTAL from the mutation battery — the tiling check is ungrounded"
 elif [[ ! -s "$WORK/row_ranges" ]]; then
@@ -775,7 +797,7 @@ fi
 # Singleton census: this arm is anchored on the ONE ci.yml rows: matrix. A second rows: key
 # splitting another battery would arrive unguarded — its arrival must be loud here, not
 # silently outside the property.
-_rows_keys=$(grep -cE '^[[:space:]]+rows:' "$CI_YML" || true)
+_rows_keys=$(grep -cE '^rows:' "$WORK/ci_rows_canon" || true)
 if (( _rows_keys == 1 )); then
   pass "ci.yml carries exactly one rows: matrix key — the arm's singleton scope is current"
 else
@@ -818,7 +840,7 @@ awk '
       if (cmd ~ /\.\./) cmd=""
     }
     label=line; sub(/^[[:space:]]*run_suite[[:space:]]+"?/, "", label); sub(/".*/, "", label)
-    if (match(line, /--rows[[:space:]]+[0123456789]{1,9}-[0123456789]{1,9}/)) {
+    if (match(line, /--rows[[:space:]]+[^[:space:]"]+/)) {
       r=substr(line, RSTART, RLENGTH); sub(/--rows[[:space:]]+/, "", r)
       print label "\t" (cmd != "" ? cmd : "<unresolved>") "\t" r
     } else if (cmd != "") {
@@ -838,7 +860,7 @@ _token_files=()
 while IFS= read -r _f; do _token_files+=("$_f"); done < "$WORK/rs_token_files"
 : > "$WORK/rs_decl_tokens"
 if (( ${#_token_files[@]} > 0 )); then
-  grep -lE '^DECLARED_TOTAL=[0123456789]+' "${_token_files[@]}" 2>/dev/null | sed -e "s|^${REPO_ROOT}/||" | sort -u > "$WORK/rs_decl_tokens" || true
+  grep -lE "$_DECL_ANY_RE" "${_token_files[@]}" 2>/dev/null | sed -e "s|^${REPO_ROOT}/||" | sort -u > "$WORK/rs_decl_tokens" || true
 fi
 sort -u "$WORK/rs_flagged_tokens" "$WORK/rs_decl_tokens" > "$WORK/rs_interesting"
 
@@ -846,10 +868,10 @@ while IFS= read -r _tok; do
   # Per-token state
   awk -F'\t' -v t="$_tok" '$2==t && $3!="UNFLAGGED" {print $1 "\t" $3}' "$WORK/run_suite_rows" > "$WORK/rs_flagged"
   _unflagged_n=$(awk -F'\t' -v t="$_tok" '$2==t && $3=="UNFLAGGED"' "$WORK/run_suite_rows" | wc -l | tr -d ' ')
-  _decl="$( [[ -f "$REPO_ROOT/$_tok" ]] && sed -nE 's/^DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?$/\1/p' "$REPO_ROOT/$_tok" | head -1 )"
+  _decl="$( [[ -f "$REPO_ROOT/$_tok" ]] && sed -nE "$_DECL_READ_RE" "$REPO_ROOT/$_tok" | head -1 )"
   _ranges_n=$(wc -l < "$WORK/rs_flagged" | tr -d ' ')
 
-  _decl_lines="$( [[ -f "$REPO_ROOT/$_tok" ]] && grep -cE '^DECLARED_TOTAL=' "$REPO_ROOT/$_tok" || echo 0 )"
+  _decl_lines="$( [[ -f "$REPO_ROOT/$_tok" ]] && grep -cE "$_DECL_COUNT_RE" "$REPO_ROOT/$_tok" || echo 0 )"
   if [[ "$_decl_lines" != "0" && "$_decl_lines" != "1" ]]; then
     fail "${_tok} assigns DECLARED_TOTAL ${_decl_lines} times — bash honors the LAST assignment but this guard reads the first; reconcile to exactly one file-scope declaration"
     continue
@@ -865,6 +887,16 @@ while IFS= read -r _tok; do
   fi
   if (( _unflagged_n > 0 )); then
     fail "${_tok} has a MIXED --rows contract: ${_unflagged_n} registration(s) unflagged beside ${_ranges_n} flagged — a dropped flag double-executes rather than loses coverage; state the flag on every registration"
+    continue
+  fi
+
+  # Whole-token capture emits the VERBATIM flag argument, so a garbage suffix or
+  # triseg spec (`9-16x`, `9-16-24`) reaches here instead of normalizing to a
+  # clean range inside the extractor. Fail it by name BEFORE sorting — the
+  # comparator's header forbids sorting a file that can hold malformed entries.
+  _bad_spec="$(cut -f2 "$WORK/rs_flagged" | grep -vE '^[0123456789]+-[0123456789]+$' | head -1)"
+  if [[ -n "$_bad_spec" ]]; then
+    fail "${_tok}: malformed --rows spec '${_bad_spec}' — the flag argument must be a bare A-B range; a malformed spec would have normalized silently under the prefix-matching extractor this replaces"
     continue
   fi
 
@@ -926,7 +958,30 @@ done < "$WORK/rs_interesting"
 # inside) must have been extracted as a flagged row. A range inside a non-line-start
 # `x && run_suite …`, an `eval`, a doubled `--rows` on one line, or a heredoc would leave the
 # checked population silently while the extractor stays green.
-_lit_n=$( { sed 's/#.*//' "$RUNNER"; sed 's/#.*//' "$REPO_ROOT"/scripts/lib/*.sh 2>/dev/null; } | grep -oE -- '--rows[[:space:]]+[0123456789]{1,9}-[0123456789]{1,9}' | wc -l | tr -d ' ')
+# The lib side of the literal census is RECURSIVE — the old `scripts/lib/*.sh`
+# glob reached only depth-1 .sh basenames, so a lib subdirectory file or an
+# extensionless shell file held `--rows` literals outside the count (#9035).
+# Enumeration contract mirrors Direction-2 below: git's tracked +
+# untracked-non-ignored set (the pre-commit drift surface), `*.sh`/`*.bash`
+# basenames or extensionless files with a shell shebang, `**/fixtures/**`
+# data dirs excluded. An enumeration FAILURE is a verdict, never a silent
+# shrink of the literal side.
+if ! git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard -- 'scripts/lib' > "$WORK/dir1_enum_raw" 2>"$WORK/dir1_enum_err"; then
+  fail "Direction-1 lib enumeration failed (git ls-files rc=$?): $(head -3 "$WORK/dir1_enum_err" | tr '\n' ' ') — the literal-census population is unknown"
+  : > "$WORK/dir1_libs"
+else
+  : > "$WORK/dir1_libs"
+  while IFS= read -r -d '' _lf; do
+    case "/$_lf" in */fixtures/*) continue ;; esac
+    case "$_lf" in
+      *.sh|*.bash) printf '%s\0' "$REPO_ROOT/$_lf" >> "$WORK/dir1_libs" ;;
+      *) if [[ "$_lf" != *.* ]] && head -1 "$REPO_ROOT/$_lf" 2>/dev/null | grep -q '^#!.*\(ba\)\?sh\b'; then
+           printf '%s\0' "$REPO_ROOT/$_lf" >> "$WORK/dir1_libs"
+         fi ;;
+    esac
+  done < "$WORK/dir1_enum_raw"
+fi
+_lit_n=$( { sed 's/#.*//' "$RUNNER"; while IFS= read -r -d '' _lf; do sed 's/#.*//' "$_lf"; done < "$WORK/dir1_libs"; } | grep -oE -- '--rows[[:space:]]+[0123456789]{1,9}-[0123456789]{1,9}' | wc -l | tr -d ' ')
 _emit_n=$(awk -F'\t' '$3 != "UNFLAGGED"' "$WORK/run_suite_rows" | wc -l | tr -d ' ')
 if (( _lit_n == _emit_n )); then
   pass "literal census: ${_lit_n} '--rows A-B' occurrences in test-all.sh+scripts/lib, all ${_emit_n} extracted"
@@ -938,7 +993,45 @@ fi
 # reachable by one of the two tiling arms — a --rows battery glob-registered via
 # `run_suite "$f"`, registered via a non-bash command shape, or invoked from a sourced lib is
 # invisible to the extractor and lands HERE.
-grep -rlE '^[[:space:]]*DECLARED_TOTAL=[0123456789]+' "$REPO_ROOT/scripts" "$REPO_ROOT/plugins/soleur/test" 2>/dev/null | sort -u > "$WORK/decl_census"
+# The declaration census is REPO-WIDE, not a two-directory allowlist — a battery
+# under tests/, apps/, infra/, or a future tree is inside the property by
+# construction (#9035: the old `grep -rlE` over `scripts` + `plugins/soleur/test`
+# let a foreign-tree declarer evade entirely). The declaration is the contract.
+# Enumeration is `git ls-files --cached --others --exclude-standard` (precedent:
+# apps/web-platform/infra/web-host-provisioner-parity.test.sh enumerates its
+# `*.tf` universe with the identical form and fails loudly on nonzero rc) ∩
+# shell predicate — `*.sh`/`*.bash` basename, or extensionless file with a
+# shell shebang — minus `**/fixtures/**` data dirs. NOTE the `--others` arm:
+# an unregistered fixture file is untracked, and an untracked file inside the
+# enumeration tree is exactly the pre-commit drift this census exists to see —
+# a scratch `.sh` declaring DECLARED_TOTAL under a developer's tree reds the
+# guard locally, which is intended (the declaration is the contract), and
+# ignored paths (node_modules, .worktrees, build output) stay outside by
+# `--exclude-standard`. This is the guard's first `git` call: an enumeration
+# failure fails loudly and an EMPTY census fails closed — a blind census
+# reporting green is the worst outcome here.
+if ! git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard > "$WORK/decl_enum_raw" 2>"$WORK/decl_enum_err"; then
+  fail "Direction-2 census enumeration failed (git ls-files rc=$?): $(head -3 "$WORK/decl_enum_err" | tr '\n' ' ') — the census population is unknown, so every reachability verdict below is ungrounded"
+  : > "$WORK/decl_census"
+else
+  : > "$WORK/decl_shell_files"
+  while IFS= read -r -d '' _cand; do
+    case "/$_cand" in */fixtures/*) continue ;; esac
+    case "$_cand" in
+      *.sh|*.bash) printf '%s\n' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files" ;;
+      *) if [[ "$_cand" != *.* ]] && head -1 "$REPO_ROOT/$_cand" 2>/dev/null | grep -q '^#!.*\(ba\)\?sh\b'; then
+           printf '%s\n' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files"
+         fi ;;
+    esac
+  done < "$WORK/decl_enum_raw"
+  if [[ ! -s "$WORK/decl_shell_files" ]]; then
+    fail "Direction-2 census enumerated ZERO shell-bearing files — the enumeration is blind and every reachability verdict below is vacuous"
+    : > "$WORK/decl_census"
+  else
+    pass "Direction-2 census enumerated $(wc -l < "$WORK/decl_shell_files" | tr -d ' ') shell-bearing files repo-wide (tracked + untracked, minus fixtures/)"
+    xargs grep -lE "$_DECL_ANY_RE" < "$WORK/decl_shell_files" 2>/dev/null | sort -u > "$WORK/decl_census" || true
+  fi
+fi
 grep -oE 'bash[[:space:]]+[A-Za-z0-9._/-]+\.sh[[:space:]]+--rows[[:space:]]+"?\$\{\{[[:space:]]*matrix\.rows' "$CI_YML" | awk '{print $2}' | sort -u > "$WORK/ciyml_rows_files"
 _census_ok=1
 while IFS= read -r _df; do
@@ -975,7 +1068,7 @@ fi
 #
 # Reported with printf + exit 1, NEVER through fail() — the helper this floor exists to
 # backstop is exactly the thing one edit disarms (ADR-193).
-MIN_ROWS=45
+MIN_ROWS=46
 TOTAL=$(( PASS + FAIL ))
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The suite did not run to completion, so its verdict is not evidence.\n' "$TOTAL" "$MIN_ROWS" >&2
