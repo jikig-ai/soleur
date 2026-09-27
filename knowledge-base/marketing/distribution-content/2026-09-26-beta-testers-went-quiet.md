@@ -3,7 +3,7 @@ title: "Your First Beta Testers Went Quiet. Now What?"
 type: pillar
 publish_date: "2026-09-27"
 channels: discord, x, bluesky, linkedin-company, linkedin-personal
-status: scheduled
+status: published
 ---
 
 ## Discord
