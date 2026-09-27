@@ -574,7 +574,7 @@ deliberately out of the diff, and #8634 owns Art. 30 activation.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1. Workflow: comment-only and on target.**
+- [x] **AC1. Workflow: comment-only and on target.**
   - The YAML is equal to base:
 
     ```bash
@@ -587,17 +587,17 @@ deliberately out of the diff, and #8634 owns Art. 30 activation.
   - `grep -cF 'This dry run is the' .github/workflows/git-data-cutover.yml` prints `1` (the closing
     sentence that names the dry run as the `proof`).
   - `grep -cF 'mounted on a plaintext device' .github/workflows/git-data-cutover.yml` prints `0`.
-- [ ] **AC2. ADR-220 is append-only.**
+- [x] **AC2. ADR-220 is append-only.**
   - `git diff --numstat origin/main...HEAD -- <ADR-220> | awk '{print $2}'` prints `0`.
   - `grep -cF '### 2026-09-27 (#8211 PR2, post-merge): D1b is accepted' <ADR-220>` prints `1`.
   - `grep -m1 '^status:' <ADR-220>` prints `status: proposed`.
-- [ ] **AC3. ADR-239 flips, and nothing else is removed.**
+- [x] **AC3. ADR-239 flips, and nothing else is removed.**
   - `git diff --numstat origin/main...HEAD -- <ADR-239> | awk '{print $2}'` prints `1`.
   - `git diff origin/main...HEAD -- <ADR-239> | grep -E '^-([^-]|$)|^--[^-]'` prints exactly
     `-status: adopting`.
   - `grep -m1 '^status:' <ADR-239>` prints `status: accepted`.
   - `grep -cF '## Amendment 2026-09-27 — accepted (#8211 PR2, post-merge)' <ADR-239>` prints `1`.
-- [ ] **AC4. C4.**
+- [x] **AC4. C4.**
   - `git grep -c 'TARGET until ADR-220 D1b' -- knowledge-base/engineering/architecture/diagrams/`
     prints nothing.
   - `git grep -c 'no host serves the store until the forward fix' -- knowledge-base/engineering/architecture/diagrams/`
@@ -606,11 +606,11 @@ deliberately out of the diff, and #8634 owns Art. 30 activation.
     prints `…model.c4:1`.
   - `bash plugins/soleur/test/c4-model-freshness.test.sh` and
     `bash plugins/soleur/test/c4-count-parity.test.sh` are green.
-- [ ] **AC5. Runbook: add-only, exact ticks.**
+- [x] **AC5. Runbook: add-only, exact ticks.**
   - `git diff --numstat origin/main...HEAD -- <runbook> | awk '{print $2}'` prints `0`.
   - `grep -cF -- '- [x] #7226 — closed 2026-09-22 by PR #8511' <runbook>` prints `1`.
   - `grep -c '35119099336' <runbook>` prints `1`, and `grep -c '36339208990' <runbook>` prints `1`.
-- [ ] **AC6.** `bash scripts/markdown-lint.sh <ADR-220> <ADR-239> <runbook>` exits 0.
+- [x] **AC6.** `bash scripts/markdown-lint.sh <ADR-220> <ADR-239> <runbook>` exits 0.
 
 ## Test Scenarios
 
