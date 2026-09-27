@@ -941,8 +941,33 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 (`hr-no-ssh-fallback-in-runbooks`). Full context + gotchas:
 `knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md`.
 
-1. **Push an ANNOTATED `vinngest-vX.Y.Z` tag on the squash-merge commit on `main`,
-   after the PR that changes the carrier has merged** (the repo forces annotated tags — a
+1. **The tag is minted automatically (#4326, ADR-232 §8).** When a push to `main` changes an
+   image input (a `cp`-staged carrier, one of the four baked pins in `inngest.tf` /
+   `vector.tf`, or the Dockerfile heredoc), `mint-inngest-bootstrap-tag.yml` cuts the next
+   `vinngest-vX.Y.Z` on that commit as `github-actions[bot]` (one patch above EVERY existing
+   `vinngest-v*` tag) and dispatches `build-inngest-bootstrap-image.yml` from `main`. That run
+   builds, SHA-verifies and pushes the image. It does NOT deploy. There is nothing to do in
+   this step unless the mint run failed: read its stage-named `::error::` and
+   `result=`/`reason=` lines and use the recovery table below. To see what the mint would
+   decide, run `git fetch --tags origin && bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run`.
+
+   **Manual fallback, in this order.** First re-run the decision. It is idempotent: it mints
+   only when the inputs still differ from the newest merged tag, and it builds once:
+
+   ```
+   gh workflow run mint-inngest-bootstrap-tag.yml --ref main
+   ```
+
+   Hand-tag only after `reason=workflows-permission` (residual R1), and only when no
+   `vinngest-v*` tag already points at the merge commit. A second tag on one commit means a
+   second build. Check with
+   `git ls-remote --tags origin 'refs/tags/vinngest-v*'` (compare the `^{}` lines against
+   the commit). Once #8209 lands, a hand-pushed tag runs on the tag ref and the bump job
+   cannot run there, so the fallback becomes the `gh workflow run` line above only.
+
+   **Hand-tag:** push an ANNOTATED `vinngest-vX.Y.Z` tag, one patch above every existing
+   `vinngest-v*` tag, on the squash-merge commit on `main`, after the PR that changes the
+   carrier has merged (the repo forces annotated tags — a
    bare `git tag <name> <sha>` fails `fatal: no tag message?`):
 
    ```
@@ -994,11 +1019,28 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    own publish may still be running).
 
    **Carrier-changing PR flow.** Merge the PR that changes a baked carrier first. Its
-   `deploy-script-tests` GuardA row is red on the PR, which is expected and advisory. Then
-   tag the squash-merge commit (above). The publish passes the ancestry check, and the
+   `deploy-script-tests` GuardA row is red on the PR, which is expected and advisory (the
+   PR-side exemption is #9081). The merge itself mints the tag and dispatches the build
+   (above); tag by hand only per the fallback. The publish passes the ancestry check, and the
    automated bump PR (step 2) auto-merges when the zot mirror is healthy. `main`'s GuardA is
-   red from the merge until that bump lands; #4326 (auto-mint on infra push) closes the gap.
+   red from the merge until that bump lands, which is now one mint + build + bump cycle.
    A candidate image can no longer be built from an unmerged PR (#8781).
+
+   **Auto-mint recovery table** (`mint-inngest-bootstrap-tag.yml`; every row is a
+   `gh` command or a code fix, never SSH):
+
+   | Signal | Action |
+   |---|---|
+   | `::error::decide:` (`no-carriers`, `cardinality`, `recipe-blocks`, `pin-empty`, `comparator-selftest`) | The mint's extractor drifted from the build workflow (a refactor of the `cp`/`COPY` lines, the heredoc or the pin files). Fix `.github/scripts/mint-inngest-bootstrap-tag.sh` so it reads the new shape; its parity rows name the authority to follow. Then re-run the mint. |
+   | `::error::ancestry:` | The mint's checkout lost history (shallow, or an unreadable object). Re-run the mint; the workflow checks out `fetch-depth: 0`. |
+   | `::error::allocate:` | A remote tag breaks allocation (e.g. a component longer than 6 digits). Delete that tag per ADR-232 §7, then re-run the mint. |
+   | `::error::tag:` with `reason=workflows-permission` | GitHub refused the tag ref for a missing `workflows` permission (R1). Hand-tag the merge commit (above), only if no `vinngest-v*` tag points at it yet. |
+   | `::error::tag:` with any other reason (`http-422` and so on) | Nothing was published. Re-run the mint; it re-decides from a fresh read of the remote tags. |
+   | `::error::dispatch:` | The tag exists and is the merged max. Run the line the step printed, exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. Never delete or reuse the tag. |
+   | The build or the bump failed after a successful dispatch | Re-run that build run (it posts its own Slack). |
+   | R12: a bump PR held with signed ≠ target after two auto-mints in flight | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max-tag> -f mirror_only=true` (digest-preserving; the bump re-arms auto-merge). |
+   | A later run ends `result=noop` with `::notice::base=<tag>`, but that tag has no build run | An earlier dispatch was lost. Run `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once. |
+   | R8: `base=` names a tag that reached `main` through a merge commit and has no image | Delete that tag per ADR-232 §7 (it is off-main content), then re-run the mint. |
 
    **Rolling back** to an older image — including the legacy off-main versions (`v1.1.14`,
    `v1.1.24`, `v1.1.26`–`v1.1.39`) — is done by re-cutting the old content on `main` as a
