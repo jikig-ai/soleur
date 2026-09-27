@@ -224,9 +224,8 @@ wrong instant" in a single off-box event.
 
 ## Deferred
 
-Items 1, 3, 4 and 5 are tracked by **#6940**; item 2, the missed-tick defect found alongside
-them, is **#6939**. (This line read "All three" while the list held four items; corrected
-2026-09-25 when item 5 was added.)
+All three are tracked by **#6940**; the missed-tick defect found alongside them is **#6939**.
+*[2026-09-25, #6939:]* item 5, added below, is also tracked by **#6940**.
 
 1. **Registry-sourced missed-tick discovery.** After computing `registry_ids − observed`,
    issue a **second** doublefire-probe call scoped `function_ids=<zero-run set>` over a
@@ -270,6 +269,8 @@ them, is **#6939**. (This line read "All three" while the list held four items; 
    cron-expression parser, so it did not fit the #6939 de-fang. Separate from item 1, which is
    slow-cron discovery. **Re-eval trigger:** before the next production `op=verify` dispatch
    against a newly cut-over dedicated host, whatever `missed_tick_candidates` is set to.
+   This trigger also covers item 1's, which the default-off gate made dormant: both need the same
+   registry-probe extension.
 
 ## Alternatives Considered
 

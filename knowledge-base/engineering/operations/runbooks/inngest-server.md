@@ -1907,6 +1907,7 @@ ADR-100, amendment 2026-09-14.
    `missed_tick_candidates=true` adds UNVERIFIED `candidate function_id=… empty_bucket_start=…`
    lines. They are **not** a re-fire list: a line can be an event-driven function or a bucket a
    slower cron was never due in, and re-firing one double-fires that cron.
+   To get them: `gh workflow run cutover-inngest.yml -f op=verify -f cron_period_seconds=1200 -f missed_tick_candidates=true`.
 
    > **`op=verify` caveats — read before trusting the verdict:**
    > - **Reads only the dedicated host (P2-a).** The doublefire-probe reads **only the dedicated
@@ -2191,32 +2192,58 @@ parent plan's **accepted bounded residual** (ADR-100: a fully zero-downtime swit
 impossible under the single-writer constraint — two schedulers on prod Postgres would
 double-fire every cron, strictly worse than a brief gap). The flip oneshot restarts inngest
 **in place** (pre-installed during dark, so the window is bounded by the restart + app-redeploy,
-target < 5 min — NOT a cold OCI pull). Ticks missed in-window are not backfilled.
+target < 5 min — NOT a cold OCI pull). **Do not assume a missed tick stays missed:** ADR-100's
+2026-09-19 addendum measured the scheduler firing each missed tick exactly once when it resumed
+after a 76-minute gap, so a tick skipped in the window may already have been drained on restart.
 
 **Recovering a skipped tick (#6939).** `op=verify` does not print a re-fire list. A per-bucket
-list cannot tell a tick that was due from one that was never due, and re-firing a never-due tick
-double-fires that cron. The default is safe when you cannot complete step 2:
+list cannot tell a tick that was due from one that was never due, and re-firing a tick that was
+never due, or one the scheduler already drained, double-fires that cron. Every step below is
+fail-safe: if you cannot complete one, stop at step 1.
 
 1. **Default: do nothing.** A tick skipped in the gap is the accepted residual above, and the
-   cron's next scheduled tick runs normally.
-2. Re-fire only when a skipped tick matters **and** all three checks hold:
-   - (a) The cron's own schedule (the `{ cron: }` trigger in
-     `apps/web-platform/server/inngest/functions/cron-<name>.ts`) put a tick strictly inside the
-     gap window that `op=verify` printed. A function with no `{ cron: }` trigger is event-only
-     and is never missed.
-   - (b) The cron's Sentry monitor shows a **missed** check-in for that tick. The slug is the
-     `SENTRY_MONITOR_SLUG` constant in `cron-<name>.ts`, which is not always `cron-<name>` (for
-     example `cron-workspace-gc` uses `scheduled-workspace-gc`). Read it only after the tick time
-     plus that monitor's `checkin_margin_minutes` in `apps/web-platform/infra/sentry/cron-monitors.tf`,
-     and read it through the API, not a dashboard:
-     `curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/?limit=10" | jq -r '.[] | "\(.dateCreated) \(.status)"'`.
-     **If the cron has no monitor, no-run cannot be confirmed, so do not re-fire.**
-   - (c) Only then run `soleur:trigger-cron --event cron/<name>.manual-trigger`.
-3. Take particular care with the destructive or user-facing crons: `cron-workspace-gc`,
-   `cron-rule-prune` and `cron-action-required-sla` (a duplicate SLA notification reaches a user).
+   cron's next scheduled tick runs normally. For a low-frequency cron that next tick can be far
+   off (`cron-rule-prune` is quarterly). Monitored crons page on their own: each Sentry monitor in
+   `apps/web-platform/infra/sentry/cron-monitors.tf` opens an issue on a missed check-in
+   (`failure_issue_threshold`), so a miss that matters surfaces without this procedure.
+2. Re-fire only when a skipped tick matters **and** all four checks hold:
+   - (a) **You know the gap window.** It runs from the op=execute 2.2 quiesce to the moment the
+     dedicated host's functions registered after 2.4, both timestamped in that op=execute run's
+     log (`gh run view <run-id> --log`). `op=verify` echoes `CUTOVER_WINDOW_FROM`/`UNTIL` only if
+     they are set; if you cannot state both ends, stop.
+   - (b) **The cron was due inside it.** Start from cron names, not the UUIDs `op=verify` can list
+     (nothing in the repo maps a UUID to a name): for each entry in `EXPECTED_CRON_FUNCTIONS`
+     (`apps/web-platform/server/inngest/cron-manifest.ts`), read the `{ cron: }` trigger in
+     `apps/web-platform/server/inngest/functions/cron-<name>.ts` and keep only the crons whose
+     schedule put a tick strictly inside the window. A function with no `{ cron: }` trigger is
+     event-only and is never missed.
+   - (c) **No run has been recorded for that tick since.** Wait until the dedicated host has
+     resumed (so any drain has happened), then read the run log, which is the record every cron in
+     `EXPECTED_CRON_FUNCTIONS` writes (`routine_id` is the fnId):
+     `doppler run -p soleur -c prd -- sh -c 'psql "$DATABASE_URL_POOLER" -Atc "$0"' "select started_at, status, trigger_source from public.routine_runs where routine_id = 'cron-<name>' and started_at >= '<tick>' order by started_at"`
+     (the `sh -c` is load-bearing: without it your own shell expands the variable before Doppler
+     sets it).
+     Any row means the tick ran (or was drained): do not re-fire.
+   - (d) **Its Sentry monitor agrees.** The slug is usually `scheduled-<name>` (the
+     `SENTRY_MONITOR_SLUG` constant in `cron-<name>.ts`); if that file has no constant, look the
+     monitor up by name in `cron-monitors.tf` before concluding there is none. Read the check-ins
+     after the tick plus that monitor's `checkin_margin_minutes`, through the API and with the
+     read token (`SENTRY_AUTH_TOKEN` returns 403 for this read):
+     `doppler run -p soleur -c prd -- bash -c 'curl -sS --fail-with-body -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/?per_page=100"' | jq -r 'if type == "array" then .[] | select(.environment == "production") | "\(.expectedTime) \(.status)" else error("sentry read failed") end'`.
+     Require a `missed` row whose `expectedTime` is the tick, and no `ok`, `in_progress` or `error`
+     row after it (a finished run whose heartbeat was lost also reads `missed`, which is why step
+     (c) comes first). An API
+     error, or no monitor at all, means the tick cannot be confirmed as missed: do not re-fire.
+3. Only then fire it, the way `soleur:trigger-cron` recommends: confirm the event is allowlisted
+   with `--list`, run `--event cron/<name>.manual-trigger --dry-run`, then run it without
+   `--dry-run`. Take particular care with the destructive or user-facing crons:
+   `cron-workspace-gc`, `cron-rule-prune` and `cron-action-required-sla` (a duplicate SLA
+   notification reaches a user).
 
-The opt-in `missed_tick_candidates=true` lines are keyed by function UUID, which has no in-repo
-name mapping. Naming them and filtering them to due ticks is the proper fix, tracked on #6940.
+The opt-in `missed_tick_candidates=true` lines are keyed by function UUID and are an input to step
+2(b) at most, never a list to fire. Naming them and filtering them to due ticks is the proper fix,
+tracked on #6940. Before dispatching `op=verify` against a newly cut-over dedicated host, check
+whether #6940 has landed (ADR-146 § Deferred item 5).
 
 ## Concurrency conventions
 

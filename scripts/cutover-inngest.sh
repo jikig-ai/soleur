@@ -1043,10 +1043,16 @@ g3_decide() {
 # `soleur:trigger-cron` line per empty (function, bucket) pair, carrying two flags the skill does
 # not accept, and listing buckets a slower cron was never due in, so acting on it double-fired
 # the cron. Naming a candidate and filtering it to due ticks is the proper fix, tracked on #6940.
-# Called with a plain call (no || / &&): bash ignores set -e inside a function called from a list.
+# Called with a plain call (no || / &&): bash ignores set -e inside a function called as the
+# non-final part of an &&/|| list, in an if/while condition, or after `!`. A `return 1` here
+# therefore ends the run through set -e; there is no exit at the call site.
+# Same extraction contract as g3_decide: signature and closing brace at column 0, and no column-0 `}`
+# inside the body (the suite awk-extracts it). The UPPERCASE locals are kept from the inline block
+# this replaced.
 # args: $1 gate ("true" = ON)  $2 body-json  $3 cron-period-s  $4 win-from  $5 win-until
-# DO NOT RESHAPE: the P2-16 header below is ADR-106's content anchor; the OBSERVED jq call must keep
-# its `jq -c --argjson period "$CRON_PERIOD"` shape (the suite's perl extractor + null harness).
+# DO NOT RESHAPE: the P2-16 header below is ADR-106's content anchor, and the OBSERVED jq program
+# must stay single-quoted with no apostrophe and `jq` within 160 characters before it (the suite's
+# perl extractor and null-startedAt harness execute it).
 missed_tick_report() {
   local BODY="$2" CRON_PERIOD="$3"
   # ---- Missed-tick auto-enumeration (P2-16): ticks that fell in the
@@ -1096,15 +1102,17 @@ missed_tick_report() {
     return 1
   fi
   # Function ids come from the host: select them by SHAPE in jq (never a shell glob or word split),
-  # and assign before looping so set -e sees a jq failure.
-  local FNS ALL_N KEEP_N
-  FNS=$(jq -r '[.runs[].functionID | select(type == "string" and test("^[A-Za-z0-9._-]{1,128}$"))] | unique | .[]' <<<"$BODY")
-  ALL_N=$(jq '[.runs[].functionID] | unique | length' <<<"$BODY")
-  KEEP_N=$(jq '[.runs[].functionID | select(type == "string" and test("^[A-Za-z0-9._-]{1,128}$"))] | unique | length' <<<"$BODY")
-  if [[ "$ALL_N" -gt "$KEEP_N" ]]; then
-    echo "::warning::missed-tick candidates: $(( ALL_N - KEEP_N )) function id(s) failed the shape check and were skipped"
+  # and assign before looping so set -e sees a jq failure. \A..\z, not ^..$: jq's $ also matches
+  # before a trailing newline, which would pass "id\n" and print it as a different, real id. One jq
+  # call decides both the kept set and the skipped count, so the two cannot drift apart.
+  local IDS FNS SKIPPED
+  IDS=$(jq -c 'def okid: type == "string" and test("\\A[A-Za-z0-9._-]{1,128}\\z"); [.runs[].functionID] | unique | {keep: map(select(okid)), bad: (map(select(okid | not)) | length)}' <<<"$BODY")
+  FNS=$(jq -r '.keep[]' <<<"$IDS")
+  SKIPPED=$(jq -r '.bad' <<<"$IDS")
+  if [[ "$SKIPPED" -gt 0 ]]; then
+    echo "::warning::missed-tick candidates: $SKIPPED distinct function id value(s) failed the shape check and were skipped"
   fi
-  echo "::warning::missed-tick candidates (P2-16, opt-in #6939): UNVERIFIED, NOT a re-fire list. Each line below is a (function UUID, ${CRON_PERIOD}s bucket) in [$WIN_FROM, $WIN_UNTIL] with no run. A line may be an event-driven function or a cron slower than ${CRON_PERIOD}s that was never due in that bucket, and a cron faster than ${CRON_PERIOD}s can hide a miss inside a bucket that has a run. UUIDs have no in-repo name mapping. Before re-firing anything, follow $RUNBOOK."
+  echo "::warning::missed-tick candidates (P2-16, opt-in #6939): UNVERIFIED, NOT a re-fire list. Each line below is a (function UUID, ${CRON_PERIOD}s bucket) overlapping [$WIN_FROM, $WIN_UNTIL] with no run; empty_bucket_start is the bucket start and can precede the window. A line may be an event-driven function, a cron slower than ${CRON_PERIOD}s that was never due in that bucket, or a tick the scheduler already drained on restart, and a cron faster than ${CRON_PERIOD}s can hide a miss inside a bucket that has a run. UUIDs have no in-repo name mapping. Before re-firing anything, follow $RUNBOOK."
   local MISSED=0 fn b HAS TICK_TS
   while IFS= read -r fn; do
     if [[ -z "$fn" ]]; then continue; fi

@@ -54,7 +54,7 @@ on:
         type: string
         default: "3600"
       missed_tick_candidates:
-        description: "op=verify only: print the UNVERIFIED per-bucket missed-tick candidates (#6939). NOT a re-fire list; read the run's notice before re-firing anything."
+        description: "op=verify only: print the UNVERIFIED per-bucket missed-tick candidates (#6939). NOT a re-fire list; follow the inngest-server runbook Bounded-outage note before re-firing any cron."
         required: false
         type: boolean
         default: false
