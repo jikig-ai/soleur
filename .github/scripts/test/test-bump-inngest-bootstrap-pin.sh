@@ -2124,27 +2124,42 @@ done
 
 # Verdict-helper self-test (#8782 review): assert_excluded and assert_refused
 # decide their rows' verdicts, so a neuter inside either (a check replaced by a
-# bare `pass`) keeps every count and the floor intact. Drive each once with a
-# state that MUST fail, require FAIL to move, then unwind the counters. Output
-# is discarded so the log carries no FAIL line for an expected failure; the
-# verdict is reported directly, never through the helpers under test.
-st_p=$PASS st_f=$FAIL
-LAST_OUT="$TMP/selftest.out"; : > "$LAST_OUT"
-LAST_GOUT="$TMP/selftest.gout"; printf 'result=error\n' > "$LAST_GOUT"
-LAST_RC=1
-{ assert_excluded 'selftest.excluded' v1.1.99; } >/dev/null 2>&1
-st_ex=$((FAIL - st_f))
-PASS=$st_p FAIL=$st_f
-printf 'result=noop\n' > "$LAST_GOUT"; LAST_RC=0
-{ assert_refused 'selftest.refused' 'a wording that is not in the output' resolve; } >/dev/null 2>&1
-st_rf=$((FAIL - st_f))
-PASS=$st_p FAIL=$st_f
-if (( st_ex >= 3 && st_rf >= 4 )); then
-  pass 'selftest:verdict-helpers-can-fail'
-else
-  printf 'FAIL [selftest:verdict-helpers-can-fail]: assert_excluded moved FAIL by %s (want >=3), assert_refused by %s (want >=4)\n' "$st_ex" "$st_rf"
+# bare `pass`) keeps every count and the floor intact. Each helper is driven in
+# two HERMETIC bad states, each failing an exact, disjoint subset of its checks;
+# the FAIL delta must equal that subset's size, so neutering any single check
+# moves it. Output is discarded (an expected failure must not print a FAIL
+# line) and the verdict is reported directly, never through the helpers.
+st_run() { # <expected-delta> <label> <helper call...>
+  local want="$1" label="$2" p0=$PASS f0=$FAIL got; shift 2
+  { "$@"; } >/dev/null 2>&1
+  got=$((FAIL - f0)); PASS=$p0 FAIL=$f0
+  [[ "$got" == "$want" ]] && return 0
+  printf 'FAIL [selftest:%s]: FAIL moved by %s, expected exactly %s\n' "$label" "$got" "$want"
   exit 1
-fi
+}
+LAST_OUT="$TMP/selftest.out"; LAST_GOUT="$TMP/selftest.gout"
+# State A — the verdict checks fail, the side-effect checks pass: a clean
+# fixture (pins v1.1.37@DIG_OLD, empty crane and gh logs, no bump branch).
+base_fixture selftest-a
+: > "$LAST_OUT"
+printf 'result=error\n' > "$LAST_GOUT"; LAST_RC=1
+st_run 3 excluded-verdict assert_excluded 'selftest.ex-a' v1.1.99   # exit, result, target
+printf 'result=noop\n' > "$LAST_GOUT"; LAST_RC=0
+st_run 4 refused-verdict assert_refused 'selftest.rf-a' 'wording absent' resolve   # nonzero, result, stage, wording
+# State B — the verdict checks pass, the side-effect checks fail: pins moved
+# to v1.1.38, the off-main tag reached crane, gh was called, a branch exists.
+new_fixture_repo selftest-b
+write_fixture_cloud_inits "$F_REPO" v1.1.38 "$DIG_NEW" v1.1.38 "$DIG_NEW"
+fixture_commit "selftest-b"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main HEAD:refs/heads/soleur/selftest
+printf 'crane digest ghcr.io/x:v1.1.99\n' > "$MOCK_CRANE_LOG"
+printf 'gh pr list\n' > "$MOCK_GH_LOG"
+printf 'target=v1.1.37 resolved=x\n::error::resolve: wording present\n' > "$LAST_OUT"
+printf 'result=noop\n' > "$LAST_GOUT"; LAST_RC=0
+st_run 4 excluded-side-effects assert_excluded 'selftest.ex-b' v1.1.99   # crane, per-file pins, gh, branch
+printf 'result=error\n' > "$LAST_GOUT"; LAST_RC=1
+st_run 3 refused-side-effects assert_refused 'selftest.rf-b' 'wording present' resolve   # crane, gh, branch
+pass 'selftest:verdict-helpers-can-fail'
 
 # ---------------------------------------------------------------------------
 echo ""
