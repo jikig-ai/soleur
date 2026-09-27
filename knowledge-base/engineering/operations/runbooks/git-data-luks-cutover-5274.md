@@ -17,9 +17,11 @@ The real cutover does not exist yet. It is blocked on all of:
 
 - **#8211** — rebuild the real modes on real mechanisms (freeze model, same-version redeploy, rollback
   split, `web-1-swap` membership, the endpoint guard for the copy). **Split in two.** PR1 (PR #8564,
-  ADR-239) moves the store onto the LUKS mapper at boot and ships the store assertion; it builds no
-  real mode. The real modes (`proof`, `flip`, and a flag-off-only `rollback`) are PR2, which also
-  carries the ADR-220 D6 fresh replace with its `GIT_DATA_LUKS_KEY` and volume rotation. See
+  ADR-239) moved the store onto the LUKS mapper at boot and shipped the store assertion. PR2's proof
+  half (ADR-239 amendment 2026-09-27) rebuilt the dry run's store probes for that layout: the
+  read-only dispatch below **is** the `proof`. Still open on #8211: the `flip`, the flag-off-only
+  `rollback`, the same-version redeploy, and the ADR-220 D6 fresh replace with its
+  `GIT_DATA_LUKS_KEY` and volume rotation. See
   [The LUKS-serving render](#the-luks-serving-render-pr1-of-8211).
 - **#8209** — evict the repo-secret-reachable credentials from `prd_terraform` (its own ADR).
 - **#7226 / #5914** — pin the SSH host keys of web-1 and git-data (ADR-237). Staged; the open items
@@ -38,6 +40,7 @@ The real cutover does not exist yet. It is blocked on all of:
     2026-09-25) read `role=git-data-auth verdict=ok` with both hops pinned. The run exited 5 on
     `verdict=already_cut_over` — git-data serves the LUKS mapper from boot since replace run
     36118115758 — a store probe and not a host key. ADR-237 is `accepted` (addendum 2026-09-27).
+    That verdict was retired by #8211 PR2's proof half: the probes now require the mapper.
   - [ ] Step 5 — every erasure left pending by the pin window is discharged.
   - [ ] Step 6 — the #5914 follow-up PR deletes the app's unpinned fallback arm and closes #5914.
   - **Flag-flip precondition (hard):** `GIT_DATA_STORE_ENABLED` is never set until the pin is present
@@ -86,11 +89,23 @@ any remote call.
    blocks are strict, each under its own `HostKeyAlias` and algorithm (ECDSA-P256 for web-1, ED25519
    for git-data); the `ProxyCommand` resolves to the web-1 block, so the jump hop is pinned too.
 7. **Script.** The access gate (`role=web`, `role=git-data-jump`, `role=git-data-auth`; exit 3 on any
-   non-ok, including `verdict=host_key_mismatch reason=<changed|unknown|alg>`), then three
-   fail-closed store probes (exit 5): `old_store_unmounted`, `already_cut_over`, `store_not_empty`,
-   or `probe_failed rc=<n>` when a probe could not be answered. The store-empty probe
-   re-checks, in the same remote command, that the store root is still the device the first probe read;
-   a dangling symlink or a missing repositories directory is `probe_failed`, never a zero count.
+   non-ok, including `verdict=host_key_mismatch reason=<changed|unknown|alg>`), then four
+   fail-closed store probes (exit 5), in order:
+   - `probe=store-mounted`: the store root is mounted on a device (`old_store_unmounted`);
+   - `probe=store-on-mapper`: that device is the LUKS mapper `/dev/mapper/git-data`
+     (`store_not_on_mapper`; ADR-239 D1 says the render never serves anything else);
+   - `probe=store-verified`, in one ssh session: the store is still served by that device, the
+     mounted filesystem has a UUID, the bootstrap's marker `/etc/git-data/store-verified` (the one
+     every store wrapper requires, ADR-239 D3) holds that UUID on its first line, and the freeze
+     sentinel `/mnt/git-data/.cutover-freeze` is absent (`store_unverified reason=<no_fs_uuid|marker_absent|marker_mismatch>`,
+     or `cutover_frozen`). It follows symlinks exactly as the wrappers do, so any refusal here
+     means the wrappers are refusing on the host right now;
+   - `probe=store-empty`: zero `*.git` entries (`store_not_empty`).
+
+   A probe that could not be answered is `probe_failed rc=<n>`. The store-verified and store-empty
+   probes re-check, in the same remote command, that the store root is still the device the first
+   probe read; a dangling symlink or a missing repositories directory is `probe_failed`, never a
+   zero count.
    Then the **fence probe** (#8101, exit 5). It checks what a push actually depends on:
    - a real `root:git 750` hooks directory, under a root-owned parent nobody else can write;
    - a real `root:root 755` `pre-receive` that the `git` user can read and execute;
@@ -102,9 +117,11 @@ any remote call.
    `probe_failed rc=<n>|reason=arg_<name>`. It checks the fence's shape, not which hook is installed.
 8. Teardown, always.
 
-Exit 0 means: root authenticated end to end, the plaintext store is mounted from a device that is not
-the LUKS mapper, and it holds zero repositories, and a push would run a root-owned `pre-receive` of
-the planted shape from that store. Before PR #8511 a compromised web-1 could forge
+Exit 0 means: root authenticated end to end; the store is served by the LUKS mapper, with the
+bootstrap's store marker bound to its filesystem; it is not frozen; it holds zero `*.git` entries;
+and a push would run a root-owned `pre-receive` of the planted shape from that store. It does **not**
+determine when encryption at rest became active for the Art. 30 register: that determination is
+#8634's, and this dry run leaves it alone. Before PR #8511 a compromised web-1 could forge
 that answer (ADR-220 D4). With both hops pinned (ADR-237), web-1 can no longer stand in for
 git-data. A pinned key authenticates the host, not the truth of its answer: a compromised git-data
 can still answer falsely, which is why the probes stay bounded and fail-closed.
@@ -249,14 +266,57 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
    flag flip:
    1. Collect every repository id from `erasure_outcome` events since the PR #8511 merge, with the
       sweep query under "Store not empty" (step 3 there), widening its period to cover the merge.
-   2. Re-drive the erasure for each id. No per-id erasure trigger exists today, and none is needed
-      before the first flag flip: the store cannot hold a repository while the flag has never been on,
-      so the step-4 dry run clearing `store_not_empty` (zero repositories) discharges every collected
-      id. Record the ids and that dry run's id on #5914. **Blocked on #8211 PR2 (2026-09-27):** every
-      dry run now exits 5 on `already_cut_over` before `store_not_empty` is evaluated (run
-      36119817656 is one), so no current dry run discharges any id.
-   3. If the dry run reads `store_not_empty`, stop and follow "Store not empty": erasing those
-      repositories is the incident's decision.
+   2. Dispatch `git-data-cutover.yml` from `main` (after the #8211 PR2 proof-half merge and its
+      release deploy). No per-id erasure trigger exists today, and none is needed before the first
+      flag flip: the store cannot hold a repository while the flag has never been on. **Only a run
+      ending `verdict=clear` discharges the collected ids**, and only with all three of these
+      recorded. If any one cannot be read, nothing is discharged.
+      - **(a) The served LUKS store.** The run's `clear`: `probe=store-on-mapper`,
+        `probe=store-verified`, `probe=store-empty` and `probe=fence-shape` all read `verdict=ok`.
+      - **(b) The retained plaintext volume.** Read the **current** instance's `boot_complete` line
+        from Better Stack; it must read `plaintext_empty=yes`. Record it with the replace run that
+        produced the instance (36118115758 unless a later one ran), and show with `gh run list`
+        over the replace and create workflows that no run falls between that replace and the
+        proof. The marker alone is not this evidence: a same-instance bootstrap re-run that FATALs
+        before it removes the marker can leave an older one in place, so the `boot_complete` line is
+        what binds (b). The volume has been kernel-read-only and never mounted since (ADR-239 D2).
+        If the line cannot be read (for example, Better Stack retention expired), nothing is
+        discharged.
+      - **(c) The flag was never on, since before either volume existed.** Record the run's flag
+        precheck line, then extend "Two reads to record", read 2: page `doppler configs logs` for
+        `GIT_DATA_STORE_ENABLED` back past the `created` time of the **older** of
+        `hcloud_volume.git_data` and `hcloud_volume.git_data_luks` (read both from the Hetzner API,
+        read-only, and record them), across **every** Doppler config the web containers load, not
+        only `prd`. This read is required: the counts see entries, not freed blocks, so a
+        repository written and then deleted would be invisible to them, and only the flag's
+        history since the volumes were created excludes one. If the paging cannot reach that time,
+        nothing is discharged.
+
+      Record on #5914, using this template:
+
+      ```text
+      git-data store Art. 17 discharge (#5914, host-key step 5)
+      proof run: <run id>  dispatched: <UTC>  head SHA: <sha>
+      notices (9): <the ::notice lines, each cited by the ##[group]Run step that printed it>
+      flag precheck line: <line>   oldest Doppler log entry reached: <date> (configs: <list>)
+      volumes created: git_data <UTC>, git_data_luks <UTC>
+      instance: replace run <id>  boot_complete: <line>
+      Sentry sweep: 2026-09-22T12:07:01Z (the PR #8511 merge) to <clearing run start>,
+        "Store not empty" step-3 query widened to that window, pagination read to the end,
+        <n> distinct repository ids: <ids>
+      outcome: git-data store (op=git-data-bare-repo-erasure): no data held; nothing to erase
+      earliest request: <date>  Art. 12(3) deadline: <date>
+      ```
+
+      Write "no data held; nothing to erase", never "erased". The user's copy in web-1's
+      `/workspaces` is erased by a separate operation, and this record must not read as covering
+      it. Requests after the window end need no discharge here: a verified store with a published
+      pin answers each one live, as a normal erasure outcome.
+   3. Any verdict other than `clear` follows its verdict-map row; only `clear` discharges. After
+      the row's remedy, re-dispatch **once**. A repeat of the same verdict opens an incident
+      instead of a loop, and step 5 resumes with one re-dispatch after the incident closes. If the
+      Art. 12(3) deadline is at risk, escalate to the CLO. A `store_not_empty` read stops here and
+      follows "Store not empty": erasing those repositories is the incident's decision.
 6. **The #5914 follow-up PR.** It deletes the app's unpinned fallback arm (`TOFU_FALLBACK_OPTS` and the
    `null`-pin path), removes `git-auth.ts` from the no-TOFU guard's allow-list
    (`tests/scripts/test-no-tofu-ssh.sh`), and closes #5914. Gate it on the positive step-3 startup line
@@ -558,14 +618,16 @@ escalate to the CLO rather than rushing G3.
 | The `prd` read token is empty | `verdict=flag_token_absent` (exit 5) | The `DOPPLER_TOKEN_PRD` repo secret is unset or not passed to this run. Restore it, then re-dispatch. |
 | The flag read failed | `verdict=flag_read_failed reason=<word>` (exit 5) | `network`: re-dispatch. `auth_invalid`, `forbidden`, `config_not_found`, `scope_mismatch`: the token behind `DOPPLER_TOKEN_PRD` is revoked, lacks `prd` read, or resolves another config; replace it, then re-dispatch. `unknown`: re-dispatch once, then open an issue. |
 | The flag is already on | `verdict=flag_already_true` (exit 5) | **Incident.** See "Flag already on" below. |
-| The store root is not mounted on a device | `verdict=old_store_unmounted` (exit 5) | Read the host's git-data boot events in Sentry before anything else; both volumes are retained. **Before** the step-3 replace this means the plaintext volume did not mount, and the remedy is to re-dispatch the replace. **After** it, the mapper did not mount, which is a boot FATAL: follow "If the fresh host fails a boot check after step 3" and do not re-dispatch a replace first. |
-| The store root is already the LUKS mapper, **after** the ADR-237 step-3 replace | `verdict=already_cut_over` (exit 5) | **Expected until PR2.** PR #8564 makes the mapper the serving device from boot, and the dry run still asks the pre-PR1 question. PR2 generalizes `proof` to read it as a pass. Nothing to do. |
-| The store root is already the LUKS mapper, **before** the step-3 replace | `verdict=already_cut_over` (exit 5) | The live host predates PR #8564 and should still be serving the plaintext volume, so something changed the mount outside the render. Open an incident. |
-| The store holds repositories | `verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. |
+| The store root is not mounted on a device | `probe=store-mounted verdict=old_store_unmounted` (exit 5) | Read the host's git-data boot events in Sentry before anything else; both volumes are retained. **Before** the step-3 replace this means the plaintext volume did not mount, and the remedy is to re-dispatch the replace. **After** it, the mapper did not mount, which is a boot FATAL: follow "If the fresh host fails a boot check after step 3" and do not re-dispatch a replace first. |
+| **Incident, served device wrong** — the store root is served by something other than the LUKS mapper | `probe=store-on-mapper verdict=store_not_on_mapper` (exit 5) | The ADR-239 render cannot produce this. Read the current instance's boot_complete line and its `stage:bootstrap` events first, then follow "If the fresh host fails a boot check after step 3". Never re-dispatch a replace before that read. |
+| **Wrappers refusing now** — the bootstrap's store marker is missing or unbound | `probe=store-verified verdict=store_unverified reason=no_fs_uuid\|marker_absent\|marker_mismatch` (exit 5) | Every provision, erasure and push is refusing on the host. Sweep Sentry for the Art. 17 refusals it opened, with the query under "Store not empty" (step 3), then follow "If the fresh host fails a boot check after step 3". `no_fs_uuid`: the mounted filesystem reports no UUID. `marker_absent`: the marker is missing, empty or not a file — a boot FATAL removes it, so read the boot events. `marker_mismatch`: the marker names another filesystem — a mapper reopened on another volume, a writer defect, or tampering; a mismatch with no boot FATAL is a Breach-triage trigger. |
+| **Frozen** — the freeze sentinel exists | `probe=store-verified verdict=cutover_frozen` (exit 5) | Provision, remove, the transport wrapper (pushes and fetches) and pre-receive all refuse now. Nothing writes the sentinel today and nothing removes it, it sits on the retained LUKS volume, and SSH is barred. Open an incident (Breach-triage trigger) and escalate to the CLO, because the Art. 12(3) clock runs. The removal is a reviewed hotfix PR under that incident; it is not gated on #5914 or the rest of #8211. Host-key step 5 resumes by its step-5.3 rule. |
+| **Probe could not be answered** — store-on-mapper or store-verified | `probe=store-verified verdict=probe_failed rc=5\|6\|16`, or `reason=arg_root\|arg_marker`; `probe=store-on-mapper verdict=probe_failed reason=arg_mapper` (exit 5) | `rc=5`: `findmnt` could not read the store's source or its filesystem UUID. `rc=6`: the store source changed, or something was over-mounted, between the probes. `rc=16`: `head` could not read the marker. Re-dispatch once; a repeat is an incident. `reason=arg_mapper\|arg_root\|arg_marker`: the probe was called with an unsafe `LUKS_MAPPER`, `OLD_ROOT` or `STORE_VERIFIED` — a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row below. |
+| The store holds repositories | `probe=store-empty verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. |
 | A probe could not be answered | `verdict=probe_failed rc=<n>` (exit 5) | `rc=124`: the 30 s bound expired; re-dispatch. `rc=255`: ssh transport failed; read the heartbeat, then re-dispatch. `rc=141`: the answer was larger than the cap. `rc=96`: the answer did not match the expected pattern. Any `probe_failed` from the store-empty probe can also mean the store root changed device between probes, is a dangling symlink, or has no repositories directory. None of these is transient, and an empty store on its expected device produces none of them: do not re-dispatch in a loop; open an incident. No `rc`: the first probe left nothing for the second to compare; re-dispatch once. |
-| The pre-receive fence is not intact | `verdict=fence_not_intact reason=<word>` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
-| The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_<name>` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
-| A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do; the real modes are PR2 of #8211. |
+| The pre-receive fence is not intact | `probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent\|hooks_dir_owner\|hook_absent\|hook_owner\|hooks_parent_writable\|hook_not_runnable_by_git\|hooks_path_mismatch\|transport_pin_mismatch\|hooks_wrong_source` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
+| The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
+| A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do. The dry run is the `proof`; the flip and the flag-off-only rollback remain on #8211. |
 | The fresh host could not verify the retained plaintext volume | Better Stack / Sentry `stage:bootstrap` `FATAL: plaintext_unverified reason=<mount\|source\|journal\|umount\|snapshot>` | Since 2026-09-24 (#5274) the volume is set kernel read-only and read through a throwaway dm snapshot, never mounted itself. `source` = the device is not the plaintext volume (not a block device, LUKS, has holders or no sysfs entry, its device number changed, the snapshot's origin is another device) or the mount is not the snapshot, or `repositories` on the snapshot is not a real directory; `snapshot` = the read-only flag or the snapshot apparatus failed (journal geometry, loop, `dmsetup create`, an invalidated COW, a previous run's snapshot still present, unreadable sector counters); `mount` = the snapshot did not mount or its tree is unreadable; `journal` = the journal did not replay cleanly into the snapshot (still needs recovery, `with errors`, `errors_count` after replay differs from the volume's historical error count, or it moved during the count); `umount` = a transient device could not be torn down. **One `snapshot` FATAL is an incident, not a refusal:** `… was written or discarded (sectors a b -> c d)` means the retained volume's written- or discarded-sector counters moved during the read — open an incident (Breach-triage trigger) and route to the CLO; every other FATAL here wrote nothing. The FATAL detail carries `kernel=<overflow\|jbd2\|ext4-error\|none> cow=<used/total>`. No store marker exists, so every erasure refuses. A repeated journal-class FATAL on the production volume routes to the #8571 wipe decision and the CLO, never to another replace. Follow "If the fresh host fails a boot check after step 3". |
 | The retained plaintext volume holds repository entries | `FATAL: plaintext_residue count=<n>` | **Stop.** The data is read-only on a retained volume. Escalate to the CLO, bump #8571 (copy mode) and block the wipe. Do not wipe or replace. See the residue paragraph in "If the fresh host fails a boot check after step 3". |
 | The LUKS volume itself holds repository entries | `FATAL: luks_residue count=<n>` | An adopted volume carries content this register has not recorded. No marker is written and the host serves nothing. Treat it as "Store not empty": open an incident and route it to the CLO before any erasure or wipe. |
