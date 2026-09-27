@@ -310,7 +310,10 @@ indistinguishable from a fixed host; #6425 cost 16 hours of false alarms to exac
 > verdict, and a scan of recent unit refusals. Note the pin is the conjunction
 > `host=soleur-inngest` **AND** `host_role=dedicated`: web-1 also emits
 > `SOLEUR_INNGEST_SERVER_PROBE` with `host_name=soleur-inngest-prd`, so filtering on the
-> marker or on `host_name` selects the wrong machine while looking right.
+> marker or on `host_name` selects the wrong machine while looking right. The script also
+> selects by emitter (`SYSLOG_IDENTIFIER=inngest-server-probe`, through
+> `scripts/lib/inngest-probe-row.sh`): the inngest event log on the same host
+> (`SYSLOG_IDENTIFIER=doppler`) quotes probe lines from GitHub issues about this work (#8846).
 >
 > **Exit codes are the contract — branch on them, and do NOT treat `rc != 0` as "host down".**
 > The distinction between *the host is bad* and *I could not measure the host* is the entire
@@ -463,10 +466,16 @@ After `terraform apply` against a fresh `hcloud_server.web`, the inngest-server 
 
 ```bash
 doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
-  --since 24h --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 50 \
-  | jq -R -r 'fromjson? | .raw? | fromjson?
-      | select(.host=="soleur-inngest" and .host_name=="soleur-inngest-prd") | .message?'
+  --since 24h --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 500 \
+  | jq -R -r 'fromjson? | .raw? | fromjson? | select(type == "object")
+      | select(.host=="soleur-inngest" and .host_name=="soleur-inngest-prd")
+      | select(.SYSLOG_IDENTIFIER=="inngest-server-probe")
+      | .message | select(type == "string" and startswith("SOLEUR_INNGEST_SERVER_PROBE "))'
 ```
+
+Select by emitter as well as host. The inngest event log on this host (`SYSLOG_IDENTIFIER=doppler`)
+quotes probe lines from GitHub issue webhooks, so a host-only filter can return a quoted line as the
+newest row (#8846; it filed false P1s #8833/#8834).
 
 `server_active=inactive` together with `cutover_flag=rollback` or `cutover_flag=rolled-back` means
 the host was **told to stop and obeyed**: `inngest-cutover-flip.sh`'s `rollback` arm calls
