@@ -103,7 +103,8 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // green. That matters beyond this sentinel: Guard 1 intersects against
 // collectSshProvisioned(), so a narrowed set silently narrows the guard too.
 // Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
-const MIN_SSH_PROVISIONED = 17;
+// #8706: raised 17 -> 18 for terraform_data.luks_monitor_install (workspaces-luks.tf).
+const MIN_SSH_PROVISIONED = 18;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
