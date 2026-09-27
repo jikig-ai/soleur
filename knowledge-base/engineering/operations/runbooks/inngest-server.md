@@ -4,6 +4,8 @@ Operator-facing runbook for the self-hosted Inngest server provisioned by `apps/
 
 Per ADR-030 the Inngest server runs as a single-host durable trigger layer serving `:8288` (event ingestion) and `:8289` (admin API). **This intro previously said "SQLite-backed" and "bound to `127.0.0.1`" and both were stale — see ADR-030's 2026-06-17 and 2026-09-03 amendments.** CORRECTED 2026-09-03 (#7695, CLO determination): the socket-bind claim was true at authoring and ceased to be true on 2026-05-19 (#4017) — the bridge-networked `soleur-web-platform` container cannot register its SDK against a loopback-bound server, so `inngest-bootstrap.sh`'s ExecStart binds `--host 0.0.0.0` unconditionally. The conclusion survives on three different controls: a zero-rule deny-all `hcloud_firewall.inngest` on the public interface, a host-local nftables chain scoping `:8288`/`:8289` to the web hosts' private addresses, and — the one that actually restricts the personal-data-bearing surface — Inngest's own software gating of `/v1/*` to loopback-origin requests, measured 2026-05-31 (#4708) and independent of the bind. The rest of this file already described the current posture; only this opening sentence did not. On the same Hetzner host that runs the Web Platform. The CFO autonomous-draft pipeline (#3940) emits events to this server via `apps/web-platform/server/inngest/client.ts`.
 
+> **Correction 2026-09-25 (#8754):** Of the three controls named above, the first (the zero-rule deny-all `hcloud_firewall.inngest`) was not attached to the host in service when that paragraph was written. It was also unattached for most of the period since the first scoped host replacement on 2026-07-09: from 2026-07-09 to 2026-07-31, from 2026-08-12 to 2026-09-09, and from 2026-09-09 to at least the 2026-09-25 measurement. Once the change tracked in #8754 merges, the binding lives on `hcloud_server.inngest.firewall_ids`, and the host in service gains it at its next `inngest-host-replace`. Until the post-replace check passes, treat these as the controls in force: the host-local nftables chain (`:8288`/`:8289` only) and Inngest's `/v1/*` loopback gating. Treat TCP 22 as reachable from the internet. **Post-replace check (Hetzner API, no SSH):** the new server's `public_net.firewalls` lists 11269127 with status `applied`, and firewall 11269127's `applied_to` lists that server's id. After that check passes, append a dated "restored" marker here and at the records listed in `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md` (§Post-replace verification).
+
 ## Quick reference
 
 | Concern | Procedure |
@@ -1899,8 +1901,13 @@ ADR-100, amendment 2026-09-14.
    It reaches the dedicated GQL over the private net via `/hooks/inngest-doublefire-probe`
    (P1-12 — the runner cannot curl `10.0.1.40` directly), buckets every run by
    `(functionID, floor(startedAt / cron_period))`, and fails if any bucket has >1 run
-   (double-fire). It also auto-emits the missed-tick `soleur:trigger-cron` list for ticks that
-   fell in the quiesce→register gap (P2-16). Re-fire that list via `soleur:trigger-cron`.
+   (double-fire). By default it then prints one `missed-tick candidates NOT EMITTED` notice
+   pointing to [§ Bounded-outage note](#bounded-outage-note), which is the only recovery path for
+   a tick skipped in the quiesce→register gap (P2-16, #6939). Dispatching with
+   `missed_tick_candidates=true` adds UNVERIFIED `candidate function_id=… empty_bucket_start=…`
+   lines. They are **not** a re-fire list: a line can be an event-driven function or a bucket a
+   slower cron was never due in, and re-firing one double-fires that cron.
+   To get them: `gh workflow run cutover-inngest.yml -f op=verify -f cron_period_seconds=1200 -f missed_tick_candidates=true`.
 
    > **`op=verify` caveats — read before trusting the verdict:**
    > - **Reads only the dedicated host (P2-a).** The doublefire-probe reads **only the dedicated
@@ -2185,8 +2192,59 @@ parent plan's **accepted bounded residual** (ADR-100: a fully zero-downtime swit
 impossible under the single-writer constraint — two schedulers on prod Postgres would
 double-fire every cron, strictly worse than a brief gap). The flip oneshot restarts inngest
 **in place** (pre-installed during dark, so the window is bounded by the restart + app-redeploy,
-target < 5 min — NOT a cold OCI pull). Ticks missed in-window are not backfilled; `op=verify`
-enumerates them for `soleur:trigger-cron` re-fire.
+target < 5 min — NOT a cold OCI pull). **Do not assume a missed tick stays missed:** ADR-100's
+2026-09-19 addendum measured the scheduler firing each missed tick exactly once when it resumed
+after a 76-minute gap, so a tick skipped in the window may already have been drained on restart.
+
+**Recovering a skipped tick (#6939).** `op=verify` does not print a re-fire list. A per-bucket
+list cannot tell a tick that was due from one that was never due, and re-firing a tick that was
+never due, or one the scheduler already drained, double-fires that cron. Every step below is
+fail-safe: if you cannot complete one, stop at step 1.
+
+1. **Default: do nothing.** A tick skipped in the gap is the accepted residual above, and the
+   cron's next scheduled tick runs normally. For a low-frequency cron that next tick can be far
+   off (`cron-rule-prune` is quarterly). Monitored crons page on their own: each Sentry monitor in
+   `apps/web-platform/infra/sentry/cron-monitors.tf` opens an issue once its
+   `failure_issue_threshold` of missed check-ins is reached (1 for most), so a miss that matters
+   usually surfaces without this procedure.
+2. Re-fire only when a skipped tick matters **and** all four checks hold:
+   - (a) **You know the gap window.** It runs from the op=execute 2.2 quiesce to the moment the
+     dedicated host's functions registered after 2.4, both timestamped in that op=execute run's
+     log (`gh run view <run-id> --log`). `op=verify` echoes `CUTOVER_WINDOW_FROM`/`UNTIL` when they
+     are set and ISO-shaped, and `<unset>`/`<invalid>` otherwise; if you cannot state both ends, stop.
+   - (b) **The cron was due inside it.** Start from cron names, not the UUIDs `op=verify` can list
+     (nothing in the repo maps a UUID to a name): for each entry in `EXPECTED_CRON_FUNCTIONS`
+     (`apps/web-platform/server/inngest/cron-manifest.ts`), read the `{ cron: }` trigger in
+     `apps/web-platform/server/inngest/functions/cron-<name>.ts` and keep only the crons whose
+     schedule put a tick strictly inside the window. A function with no `{ cron: }` trigger is
+     event-only and is never missed.
+   - (c) **No run has been recorded for that tick since.** Wait until the dedicated host has
+     resumed (so any drain has happened), then read the run log, which is the record every cron in
+     `EXPECTED_CRON_FUNCTIONS` writes (`routine_id` is the fnId):
+     `doppler run -p soleur -c prd -- sh -c 'psql "$DATABASE_URL_POOLER" -Atc "$0"' "select started_at, status, trigger_source from public.routine_runs where routine_id = 'cron-<name>' and started_at >= '<tick>' order by started_at"`
+     (the `sh -c` is load-bearing: without it your own shell expands the variable before Doppler
+     sets it).
+     Any row means the tick ran (or was drained): do not re-fire.
+   - (d) **Its Sentry monitor agrees.** The slug is usually `scheduled-<name>` (the
+     `SENTRY_MONITOR_SLUG` constant in `cron-<name>.ts`); if that file has no constant, look the
+     monitor up by name in `cron-monitors.tf` before concluding there is none. Read the check-ins
+     after the tick plus that monitor's `checkin_margin_minutes`, through the API with the
+     IaC read token (verified live 2026-09-27; this repo reads Sentry with `SENTRY_IAC_AUTH_TOKEN`):
+     `doppler run -p soleur -c prd -- bash -c 'curl -sS --fail-with-body -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/?per_page=100"' | jq -r 'if type == "array" then .[] | select(.environment == "production") | "\(.expectedTime) \(.status)" else error("sentry read failed") end'`.
+     Require a `missed` row whose `expectedTime` is the tick, and no `ok`, `in_progress` or `error`
+     row after it (a finished run whose heartbeat was lost also reads `missed`, which is why step
+     (c) comes first). An API
+     error, or no monitor at all, means the tick cannot be confirmed as missed: do not re-fire.
+3. Only then fire it, the way `soleur:trigger-cron` recommends: confirm the event is allowlisted
+   with `--list`, run `--event cron/<name>.manual-trigger --dry-run`, then run it without
+   `--dry-run`. Take particular care with the destructive or user-facing crons:
+   `cron-workspace-gc`, `cron-rule-prune` and `cron-action-required-sla` (a duplicate SLA
+   notification reaches a user).
+
+The opt-in `missed_tick_candidates=true` lines are keyed by function UUID and are an input to step
+2(b) at most, never a list to fire. Naming them and filtering them to due ticks is the proper fix,
+tracked on #6940. Before dispatching `op=verify` against a newly cut-over dedicated host, check
+whether #6940 has landed (ADR-146 § Deferred item 5).
 
 ## Concurrency conventions
 
@@ -2292,8 +2350,8 @@ Per ADR-033 (per-tenant scope grants), the env flag `SOLEUR_FR5_ENABLED` is no l
 2. **Migrations 048 + 049 applied to prd Supabase.** Verify via `psql` (or Supabase MCP):
 
    ```bash
-   doppler run -p soleur -c prd -- psql "$DATABASE_URL_POOLER" -c '\d+ public.scope_grants'
-   doppler run -p soleur -c prd -- psql "$DATABASE_URL_POOLER" -c '\d public.users' | grep runtime_explainer_dismissed_at
+   doppler run -p soleur -c prd -- sh -c 'psql "$DATABASE_URL_POOLER" -c "$0"' '\d+ public.scope_grants'
+   doppler run -p soleur -c prd -- sh -c 'psql "$DATABASE_URL_POOLER" -c "$0"' '\d public.users' | grep runtime_explainer_dismissed_at
    ```
 
    Expected shape: 7 columns on `scope_grants`, RLS enabled, 2 WORM triggers (`scope_grants_no_update`, `scope_grants_no_delete`), 1 partial index (`scope_grants_active_idx`), 3 RPCs (`grant_action_class`, `revoke_action_class`, `anonymise_scope_grants`) with explicit `REVOKE EXECUTE FROM PUBLIC, anon` and the correct `GRANT EXECUTE TO` for each role.

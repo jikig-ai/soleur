@@ -103,12 +103,22 @@ jobs:
           # R/M and left the added set empty, skipping the audit entirely.
           dif_rc=0
           set +e
-          raw=$(git diff --name-only --diff-filter=AMRT "$parent"...HEAD 2>"${RUNNER_TEMP:-/tmp}/diff.err")
+          raw=$(git -c core.quotePath=false diff --name-only --diff-filter=AMRT "$parent"...HEAD 2>"${RUNNER_TEMP:-/tmp}/diff.err")
           dif_rc=$?
           set -e
           if [ "$dif_rc" -ne 0 ]; then
             echo "::error::skill-security-scan postmerge: git could not resolve the diff $parent...HEAD (git exited $dif_rc)."
             cat "${RUNNER_TEMP:-/tmp}/diff.err" >&2 || true
+            exit 1
+          fi
+          # QUOTED PATHS. Without `-c core.quotePath=false` git wraps any non-ASCII path in
+          # double quotes with octal escapes, so `plugins/soleur/agents/café.md` never matched
+          # the `^plugins/...` filter below and a weaponised agent skipped this gate. Even with
+          # it, git still quotes a path containing a tab, newline, `"` or `\`; refuse those
+          # rather than let them fall out of the scan set.
+          if printf '%s\n' "$raw" | grep -qE '^"(plugins/soleur/(skills|agents)/|\.claude/(skills|agents)/)'; then
+            echo "::error::skill-security-scan postmerge: a quoted path (tab, newline, quote or backslash in the name) under a scanned skill/agent directory cannot be scanned safely; rename it."
+            printf '%s\n' "$raw" | grep -E '^"' >&2 || true
             exit 1
           fi
           added=$(printf '%s\n' "$raw" | \
