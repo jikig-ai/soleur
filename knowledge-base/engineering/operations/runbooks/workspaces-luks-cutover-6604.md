@@ -183,7 +183,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `rc=3` `workspace_count_shortfall` | `readiness` **p0** | Fewer workspaces than the baseline | **Data-recovery incident on sole-copy data.** Halt and escalate. Do not wipe anything |
    | `rc=3` `workspace_count_baseline_missing` | `unavailable` | No baseline persisted (or a `0`/non-numeric one) | Seed it once (above). Fail-closed by design |
    | `rc=3` `workspace_count_unreadable` | `unavailable` | The workspaces root could not be listed | Permission/IO fault on the root. Not a shrink; fix perms and re-dispatch |
-   | `rc=3` `readiness_helper_unavailable` | `unavailable` | `workspaces-luks-emit.sh` missing/stale on the host | The assert cannot run; this run proves nothing. Reinstall via the cutover channel |
+   | `rc=3` `readiness_helper_unavailable` | `unavailable` | `workspaces-luks-emit.sh` missing/stale on the host | The assert cannot run; this run proves nothing. The verify job ships the helper beside the probe, so check its bundle-ship step first. The host copy (`/usr/local/bin/workspaces-luks-emit.sh`) is delivered by `terraform_data.luks_monitor_install` since #8706: re-run `apply-web-platform-infra.yml` |
    | `rc=1` `not_mounted` | `drift` | `/mnt/data` is not a mountpoint at all | **Encryption is not in effect** — the volume never attached, or was unmounted. Read §Rollback before re-cutting |
    | `rc=1` `mapper_absent` | `drift` | The mount source is the mapper path but `/dev/mapper/workspaces` does not exist | **Encryption is not in effect.** Same path as `mount_not_mapper` |
    | `rc=1` `cryptsetup_status_missing` | `unavailable` | The mapper node exists and IS serving the mount, but `cryptsetup status` failed | **Tooling/parse fault, not plaintext.** Reached only after mountpoint, mount-source and mapper-node checks all passed, so at-rest encryption is in effect. Check `cryptsetup` on the host |
@@ -249,8 +249,9 @@ The host reads `WORKSPACES_LUKS_KEY` with the `prd_workspaces_luks` service toke
 `/etc/default/luks-monitor`. Terraform owns that token (`doppler_service_token.workspaces_luks` in
 `apps/web-platform/infra/workspaces-luks.tf`) AND its delivery to web-1
 (`terraform_data.luks_monitor_token_install`, triggered only by the token's hash). A rotation is
-therefore one code change and one merge, with no dispatch. Line ownership is recorded in ADR-119's
-2026-09-24 addendum.
+therefore one code change and one merge, with no dispatch. The `SOLEUR_SENTRY_DSN=` line in the same
+file is delivered by `terraform_data.luks_monitor_install` (#8706); a rotation keeps it. Line
+ownership is recorded in ADR-119's 2026-09-24 and 2026-09-27 addenda.
 
 1. **Change the token's `name`** (or `-replace` it). The plan must show exactly: one replace of
    `doppler_service_token.workspaces_luks` (create before destroy), one in-place update of
@@ -264,6 +265,9 @@ therefore one code change and one merge, with no dispatch. Line ownership is rec
    byte for byte, and the original is restored on any mismatch). It never starts
    `luks-monitor.service`. Avoid merging between 04:30 and 05:00 UTC, so a scheduled
    `workspaces-luks-verify` run does not start with the old secret and finish after it is revoked.
+   Also avoid merging between 00:00 and 00:35 UTC. The host timer fires in that window, and a host
+   run that reads the token file while the old token is being revoked emits `doppler_unreachable`.
+   Both windows apply to token-rotating merges only.
 3. **Evidence, each readable without SSH:**
    - The apply run's SSH step is green (workflow run log, layer 6):
      `gh run list --workflow apply-web-platform-infra.yml --branch main -L1 --json databaseId,conclusion`.
@@ -321,14 +325,19 @@ T0 remount + replay from LUKS", never a total loss.
   `paused = true` behind `lifecycle { ignore_changes = [paused] }`, so a re-pause survives every
   apply and is invisible in a plan). Un-pausing does not need the UI:
   `curl -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"paused":false}' https://uptime.betterstack.com/api/v2/heartbeats/478794`
-  **Margin, because it is thinner than it looks.** Two independent pushers feed this heartbeat: the
-  host unit (`luks-monitor.timer`, `OnCalendar=daily` + `RandomizedDelaySec=1800`) and the daily
-  verify at 04:41 UTC. Together the largest gap is ~20h, comfortably inside the 25h window. But the
-  host unit ALONE can space two pushes up to **24h30m** apart at opposite jitter extremes, against a
-  25h window — about 30 minutes of headroom. So if the scheduled verify is ever paused, dropped, or
-  retired, this heartbeat moves from comfortable to marginal, and a slow probe or a `Persistent=true`
-  catch-up after a reboot can tip it into a false `down`. Widen `grace` before removing the verify,
-  not after the first spurious page.
+  **Margin, because it is thinner than it looks.** Until #8706 this heartbeat had ONE pusher, the
+  daily verify (scheduled 04:41 UTC; GitHub started it between 09:31 and 13:48 UTC on 2026-09-24..27),
+  because the host unit was never installed (see ADR-119's
+  [2026-09-27 addendum](../../architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-27-the-monitor-units-and-the-dsn-line-have-a-terraform-owner-8706)).
+  Now it has two: the host unit (`luks-monitor.timer`, `OnCalendar=daily` +
+  `RandomizedDelaySec=1800`, installed by `terraform_data.luks_monitor_install`) and the verify.
+  Together the largest gap is ~20h, inside the 25h window. The host unit ALONE can space two pushes
+  up to **24h30m** apart at opposite jitter extremes, against a 25h window: about 30 minutes of
+  headroom. So if the scheduled verify is ever paused, dropped or retired, a slow probe or a
+  `Persistent=true` catch-up after a reboot can tip this heartbeat into a false `down`. Widen
+  `grace` before removing the verify, not after the first spurious page. The shared heartbeat cannot
+  tell the two pushers apart, so a green beat says nothing about the host unit. The only
+  host-specific signal is the [host-timer liveness alert](#host-timer-liveness-alert-8706).
   Two things it still does not cover, so do not over-read a green heartbeat. It is
   `policy_id`-gated on the paid tier (`var.betterstack_paid_tier`); on the free tier it alerts by
   **email only** and does not page. And the readyz/inventory dimension has no host-side coverage at
@@ -353,8 +362,60 @@ T0 remount + replay from LUKS", never a total loss.
   and `gh issue list --label ci/luks-verify --label action-required --state open`
   (the `action-required` filter excludes the `luks/class-selftest` rehearsal issues).
   **It is a compensating control, not a replacement for the heartbeat.** It runs on GitHub's
-  scheduler, which drops runs (#4189), and it cannot see a host-side probe that stops between its
-  own fires — which is exactly what the heartbeat exists to catch. The run-that-never-fires mode is
+  scheduler, which drops runs (#4189). It also cannot see the host unit stop, and because it pushes
+  the same heartbeat, it keeps that heartbeat `up` when the host unit is dark. The
+  [host-timer liveness alert](#host-timer-liveness-alert-8706) catches that. The run-that-never-fires mode is
   covered one layer out by the `workspaces-luks-verify` Sentry Crons monitor, which pages on two
   consecutive missed or errored check-ins.
+- **Better Stack logs alert `soleur-luks-monitor-host-timer-dark-prd`** (#8706) — the host unit has
+  not reported a good run in about 27 h. See the next section.
 - **`betteruptime_monitor.app`** — a refused container (failed unlock) is a hard down.
+
+### Host-timer liveness alert (#8706)
+
+**What it means.** `soleur-luks-monitor-host-timer-dark-prd`
+(`logtail_exploration_alert.luks_monitor_host_timer_dark` in
+`apps/web-platform/infra/betterstack-logs-alerts.tf`) fires when the trailing 27 h holds no
+`OK: /mnt/data is LUKS-backed` row from `_SYSTEMD_UNIT=luks-monitor.service`. It is evaluated
+hourly and alerts by email. The verify job's rows never carry that unit, so they cannot keep it
+quiet. The volume is still encrypted and the daily verify job still checks it; what is missing is
+web-1's own nightly check. A Vector or Better Stack Logs outage also trips it, because then no row
+arrives at all.
+
+**On the merge that creates it**, one email can fire before the first host row lands. The installer
+starts one probe run a few minutes after the alert is created, and the alert resolves within about
+an hour of that row.
+
+**Read it back without a dashboard.** Raw SQL through `scripts/betterstack-query.sh`, hot and
+archive together:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
+SELECT toDate(dt) AS day,
+       JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AS host_unit,
+       multiIf(JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%', 'ok',
+               JSONExtractString(raw, 'message') LIKE '%FAIL (%', 'fail', 'other') AS kind,
+       count() AS n
+FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+      UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+WHERE dt > now() - INTERVAL 3 DAY
+  AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
+GROUP BY day, host_unit, kind ORDER BY day FORMAT JSONEachRow"
+```
+
+The alert's own predicate is the `host_unit=1, kind=ok` cell: `SYSLOG_IDENTIFIER = 'luks-monitor'`
+AND `_SYSTEMD_UNIT = 'luks-monitor.service'` AND the message contains
+`OK: /mnt/data is LUKS-backed`.
+
+**Decode, one no-SSH action per branch:**
+
+| What the query shows | Where the fault is | Action |
+|---|---|---|
+| No `luks-monitor` rows at all, in any cell | The log pipeline (Vector or the Logs source), not the host | Check the pipeline first. The verify job's run log still shows its own verdict: `gh run list --workflow=workspaces-luks-verify.yml --limit 3` |
+| `host_unit=0` rows present (the verify job), no `host_unit=1` rows | The host unit is not running | Dispatch `gh workflow run workspaces-luks-verify.yml`, then read its unit-state line: `gh run view <id> --log \| grep UnitFileState`. Also read the latest `apply-web-platform-infra.yml` run: the installer prints the unit state into its SSH step log (`gh run view <id> --log \| grep -E 'UnitFileState\|NextElapse'`). If that SSH step was red, re-run it: the tainted installer re-fires. If it was green and the state now reads other than `enabled` / `active`, something on the host changed it; a re-fire needs a merge that changes the installer's trigger |
+| `host_unit=1`, `kind=fail` rows | The host probe runs and fails an assert | Read the Sentry `workspaces-luks-drift` event (its `reason` field), then the [verdict table](#verdict--operator-action) above |
+
+**A bad `SENTRY_DSN` rotation.** An empty value fails only `terraform_data.luks_monitor_install`
+(exit 10 in its SSH step). A malformed non-empty value fails its precondition at plan time, which
+stops the whole per-merge SSH apply step until the DSN in Doppler `prd_terraform` is fixed. The
+reasoning is in ADR-119's 2026-09-27 addendum.

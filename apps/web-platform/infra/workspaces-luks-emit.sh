@@ -266,9 +266,27 @@ wl_count_workspace_dirs() {
   printf '%s' "$n"
 }
 
+# #8706 — the two exits below that drop a drift event (no DSN resolved; the Sentry POST failed) used
+# to be SILENT, which is how host failures stayed out of Sentry for nine weeks
+# (cq-silent-fallback-must-mirror-to-sentry: Sentry is the channel that failed, so the mirror is the
+# journal -> Vector -> Better Stack channel instead). One marker, reason CODE only: never the DSN,
+# never a host path. `drift_reason` is the caller's WL_REASON slug, scrubbed like every envelope field.
+# stderr copy for the run log (the verify job runs the probe with its output captured); stdout is
+# left untouched for callers. `|| true` on both, so logging can never change the return value.
+# Called only INSIDE workspaces_luks_emit's subshell, where LUKS_LOG_TAG is assigned.
+_wl_emit_skipped() {
+  local row
+  row="SOLEUR_WORKSPACES_LUKS_EMIT_SKIPPED reason=$1 drift_reason=$(_wl_scrub "${WL_REASON:-unspecified}")"
+  logger -t "${LUKS_LOG_TAG:-luks-monitor}" -- "$row" 2>/dev/null || true
+  echo "[${LUKS_LOG_TAG:-luks-monitor}] $row" >&2 || true
+}
+
 workspaces_luks_emit() {
   ( set +e
     local level dsn key shost proj host body
+    # Real assignment, workspaces-cutover.sh's shape; read by _wl_emit_skipped's own-line `logger -t`.
+    # Inside the subshell, so a sourcing caller's own LUKS_LOG_TAG/LOG_TAG is never touched.
+    LUKS_LOG_TAG="${WORKSPACES_LUKS_LOG_TAG:-luks-monitor}"
     level="$(_wl_scrub "${WL_LEVEL:-fatal}")"
     [ -n "$level" ] || level=fatal
 
@@ -284,7 +302,7 @@ workspaces_luks_emit() {
             || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
             || true)
     fi
-    [ -n "$dsn" ] || return 0
+    if [ -z "$dsn" ]; then _wl_emit_skipped no_dsn; return 0; fi
 
     key=$(printf '%s' "$dsn" | sed -E 's#https://([^@]+)@.*#\1#')
     shost=$(printf '%s' "$dsn" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
@@ -326,7 +344,7 @@ workspaces_luks_emit() {
     curl -m 10 --retry 3 -sf -X POST "https://$shost/api/$proj/store/" \
       -H 'Content-Type: application/json' \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$key" \
-      -d "$body" >/dev/null 2>&1 || true
+      -d "$body" >/dev/null 2>&1 || _wl_emit_skipped send_failed
   ) || true
   return 0
 }

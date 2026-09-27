@@ -1,0 +1,722 @@
+#!/usr/bin/env bash
+#
+# #8706 — guards for the Terraform-owned delivery of web-1's daily LUKS at-rest probe and the
+# Better Stack alert that proves it runs. Plan:
+# knowledge-base/project/plans/2026-09-27-fix-luks-monitor-host-timer-never-installed-plan.md
+# (§Guard Contract).
+#
+#   Guard 1 — logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf):
+#     the predicate counts ONLY the host unit's own `OK:` rows (_SYSTEMD_UNIT=luks-monitor.service),
+#     so the verify job's SSH-driven rows can never keep it quiet — that masking is how the timer
+#     stayed dark for nine weeks. Silence must page (treat_as_zero, lower_than 1) and the window must
+#     cover a legitimate 24h30m gap between two timer runs.
+#   Guard 2 — terraform_data.luks_monitor_install (workspaces-luks.tf): every delivered file is a
+#     trigger operand, the destinations match the cutover tail's, the SSH apply targets it, and the
+#     one probe kick is non-blocking and comes after the timer is armed and asserted.
+#   Guard 3 — the inline DSN writer in that resource, run BEHAVIOURALLY: the exact bytes that ship
+#     are decoded from the HCL and executed under sh against scratch files.
+#
+# Mutation rows live at the bottom. They mutate COPIES and re-run this file against them through
+# the LMI_* overrides, so tracked files are never written. rc 1 = the mutation was caught; rc 2 = a
+# broken instrument, never counted as a catch.
+set -uo pipefail
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$DIR/../../.." && pwd)"
+SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
+export LMI_LUKS_TF="${LMI_LUKS_TF:-$DIR/workspaces-luks.tf}"
+export LMI_ALERTS_TF="${LMI_ALERTS_TF:-$DIR/betterstack-logs-alerts.tf}"
+export LMI_WF="${LMI_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
+export LMI_MONITOR_SH="${LMI_MONITOR_SH:-$DIR/luks-monitor.sh}"
+export LMI_CUTOVER_SH="${LMI_CUTOVER_SH:-$DIR/workspaces-cutover.sh}"
+export LMI_INFRA_DIR="${LMI_INFRA_DIR:-$DIR}"
+export LMI_WF_DIR="${LMI_WF_DIR:-$REPO/.github/workflows}"
+export LMI_EXTRA_SCAN="${LMI_EXTRA_SCAN:-}"
+export LMI_EXTRA_TF="${LMI_EXTRA_TF:-}"
+
+pass=0; fail=0; FAILED=()
+ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
+no() { fail=$((fail + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
+
+# P1b (#7708) — byte-identical to every other tracked copy; the P1a suite pins that.
+# `$(cd X && pwd)` prints an absolute path but yields EMPTY when the cd fails, which would root
+# $TF at `/` — and mutate_red() below writes to $TF on every row.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+# INSTRUMENT SELF-TEST — both helpers must move their own counter before any verdict is trusted.
+_p0=$pass; _f0=$fail
+{ ok "self-test"; no "self-test"; } >/dev/null
+if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[@]}" -ne 1 ]; then
+  printf '[FATAL] instrument self-test: ok()/no() did not each move their counter\n' >&2; exit 2
+fi
+pass=$_p0; fail=$_f0; FAILED=()
+
+command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing\n' >&2; exit 2; }
+python3 -c 'import yaml' 2>/dev/null || { printf '[FATAL] python3 yaml module missing\n' >&2; exit 2; }
+for f in "$LMI_LUKS_TF" "$LMI_ALERTS_TF" "$LMI_WF" "$LMI_MONITOR_SH" "$LMI_CUTOVER_SH"; do
+  [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
+done
+
+SCRATCH="$(mktemp -d)"
+assert_fixture_dir "$SCRATCH"
+trap 'rm -rf "$SCRATCH"' EXIT
+export LMI_SCRATCH="$SCRATCH"
+
+rc=0
+python3 - > "$SCRATCH/verdicts.tsv" <<'PY' || rc=$?
+import os, re, stat, subprocess, sys, shutil
+import yaml
+
+E = os.environ
+out = []
+def check(name, cond, detail=""):
+    out.append(("ok" if cond else "no", name, " ".join(str(detail).split())[:240]))
+def fatal(msg):
+    for v in out:
+        print("\t".join(v))
+    print("FATAL\t" + msg)
+    sys.exit(2)
+
+def strip(src):
+    # Remove # and // comments outside double-quoted strings, line by line.
+    res = []
+    for line in src.splitlines():
+        buf, q, i = [], False, 0
+        while i < len(line):
+            ch = line[i]
+            if ch == '"' and (i == 0 or line[i - 1] != "\\"):
+                q = not q
+            if not q and (ch == "#" or line.startswith("//", i)):
+                break
+            buf.append(ch); i += 1
+        res.append("".join(buf))
+    return "\n".join(res)
+
+def balanced(src, start):
+    # src[start-1] is the opening "{"; return the body up to its matching "}".
+    depth, i = 1, start
+    while i < len(src) and depth:
+        depth += {"{": 1, "}": -1}.get(src[i], 0); i += 1
+    return src[start:i - 1]
+
+def block(src, kind, name):
+    # EXACT header: a renamed resource (luks_monitor_install_v2) must not be found, and the
+    # token installer (luks_monitor_token_install) must never be mistaken for this one.
+    m = re.search(r'(?m)^resource\s+"%s"\s+"%s"\s*\{' % (re.escape(kind), re.escape(name)), src)
+    return balanced(src, m.end()) if m else None
+
+def blocks(src, kind):
+    return [(m.group(1), balanced(src, m.end()))
+            for m in re.finditer(r'(?m)^resource\s+"%s"\s+"([A-Za-z0-9_]+)"\s*\{' % re.escape(kind), src)]
+
+def provisioners(body):
+    res = []
+    for m in re.finditer(r'provisioner\s+"(file|remote-exec)"\s*\{', body):
+        res.append((m.group(1), balanced(body, m.end())))
+    return res
+
+STR = r'"((?:[^"\\]|\\.)*)"'
+def inline_raw(pbody):
+    m = re.search(r'inline\s*=\s*\[', pbody)
+    if not m:
+        return []
+    depth, i = 1, m.end()
+    while i < len(pbody) and depth:
+        c = pbody[i]
+        if c == '"':
+            j = i + 1
+            while j < len(pbody) and pbody[j] != '"':
+                j += 2 if pbody[j] == "\\" else 1
+            i = j + 1; continue
+        depth += {"[": 1, "]": -1}.get(c, 0); i += 1
+    return re.findall(STR, pbody[m.end():i - 1])
+
+def hcl_unescape(s):
+    # HCL string escapes. Anything outside this set is a broken instrument, never a guess.
+    res, i = [], 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\":
+            n = s[i + 1] if i + 1 < len(s) else ""
+            if n == "\\": res.append("\\")
+            elif n == '"': res.append('"')
+            elif n == "n": res.append("\n")
+            else: fatal("unknown HCL escape \\%s in %r" % (n, s))
+            i += 2; continue
+        res.append(c); i += 1
+    return "".join(res)
+
+def attr(body, key):
+    m = re.search(r'(?m)^\s*%s\s*=\s*(.+?)\s*$' % re.escape(key), body)
+    return m.group(1) if m else None
+
+def top_level(body):
+    # Attribute lines at depth 0 of a block body (nested blocks such as escalation_target excluded).
+    res, depth = {}, 0
+    for line in body.splitlines():
+        if depth == 0:
+            m = re.match(r'^\s*([A-Za-z_]+)\s*=\s*(.+?)\s*$', line)
+            if m:
+                res[m.group(1)] = m.group(2)
+        depth += line.count("{") - line.count("}")
+    return res
+
+luks_raw = open(E["LMI_LUKS_TF"]).read()
+luks = strip(luks_raw)
+alerts_raw = open(E["LMI_ALERTS_TF"]).read()
+alerts = strip(alerts_raw)
+monitor = open(E["LMI_MONITOR_SH"]).read()
+cutover = open(E["LMI_CUTOVER_SH"]).read()
+wf = yaml.safe_load(open(E["LMI_WF"]))
+jobs = wf.get("jobs") or {}
+
+# ─────────────────────────────── Guard 1 — the liveness alert ───────────────────────────────
+sql_locals = dict(re.findall(r'(?ms)^\s*([a-z0-9_]+)_sql\s*=\s*<<-SQL\n(.*?)\n\s*SQL\s*$', alerts_raw))
+UNIT = "JSONExtractString(raw,'_SYSTEMD_UNIT')='luks-monitor.service'"
+EXPECTED = {
+    "dt BETWEEN {{start_time}} AND {{end_time}}",
+    "JSONExtractString(raw,'SYSLOG_IDENTIFIER')='luks-monitor'",
+    UNIT,
+    "JSONExtractString(raw,'message') LIKE '%OK: /mnt/data is LUKS-backed%'",
+}
+
+def norm(s):
+    s = " ".join(s.split())
+    return re.sub(r'\s*([(),=])\s*', r'\1', s)
+
+EXPECTED = {norm(x) for x in EXPECTED}
+UNIT = norm(UNIT)
+
+def conjuncts(where):
+    parts, depth, cur, toks = [], 0, [], re.split(r'(\s+AND\s+|[()])', where)
+    for t in toks:
+        if t == "(": depth += 1
+        if t == ")": depth -= 1
+        if depth == 0 and re.fullmatch(r'\s+AND\s+', t or ""):
+            parts.append("".join(cur)); cur = []
+        else:
+            cur.append(t or "")
+    parts.append("".join(cur))
+    merged, skip = [], False
+    for i, p in enumerate(parts):
+        if skip:
+            skip = False; continue
+        if re.search(r'\bBETWEEN\s+\S+\s*$', p) and i + 1 < len(parts):
+            merged.append(p.strip() + " AND " + parts[i + 1].strip()); skip = True
+        else:
+            merged.append(p.strip())
+    return [norm(p) for p in merged]
+
+def predicate_ok(sql):
+    flat = " ".join(sql.split())
+    m = re.fullmatch(r'SELECT toDateTime\(\{\{end_time\}\}\) AS time, count\(\*\) AS value FROM \{\{source\}\} WHERE (.*)', flat)
+    if not m:
+        return False, "head is not the count-per-window shape: " + flat[:120]
+    cs = conjuncts(m.group(1))
+    return (len(cs) == len(EXPECTED) and set(cs) == EXPECTED), cs
+
+explorations = blocks(alerts, "logtail_exploration")
+luks_explorations = []
+for name, body in explorations:
+    q = attr(body, "sql_query") or ""
+    ref = re.fullmatch(r'replace\(trimspace\(local\.([a-z0-9_]+)_sql\),\s*"/\\\\s\+/",\s*" "\)', q)
+    sql = sql_locals.get(ref.group(1)) if ref else None
+    if "luks-monitor" in q or (sql is not None and "luks-monitor" in sql) or (ref and ref.group(1).startswith("luks_monitor")):
+        luks_explorations.append((name, body, ref, sql))
+check("G1: at least one logtail_exploration reads a luks-monitor predicate", len(luks_explorations) >= 1,
+      [n for n, *_ in luks_explorations])
+for name, body, ref, sql in luks_explorations:
+    check("G1: exploration %s reads its SQL from a *_sql local (whitespace-collapsed)" % name, ref is not None and sql is not None,
+          attr(body, "sql_query"))
+    if sql is not None:
+        good, detail = predicate_ok(sql)
+        check("G1: exploration %s's predicate is exactly identifier AND unit AND OK-needle AND window (no OR, no negation)" % name,
+              good, detail)
+        check("G1: exploration %s keeps the host-unit conjunct (the verify job's rows must never satisfy it)" % name,
+              UNIT in (conjuncts(" ".join(sql.split()).split(" WHERE ", 1)[1]) if " WHERE " in " ".join(sql.split()) else []))
+
+dark = block(alerts, "logtail_exploration", "luks_monitor_host_timer_dark")
+check("G1: logtail_exploration.luks_monitor_host_timer_dark exists", dark is not None)
+if dark:
+    check("G1: it reads local.luks_monitor_host_timer_sql",
+          re.search(r'local\.luks_monitor_host_timer_sql\b', attr(dark, "sql_query") or "") is not None, attr(dark, "sql_query"))
+    vb = re.search(r'variable\s*\{([^}]*)\}', dark)
+    vbody = vb.group(1) if vb else ""
+    check("G1: its source variable is the prd Vector source (not another source)",
+          re.search(r'(?m)^\s*values\s*=\s*\[\s*local\.vector_prd_source_id\s*\]\s*$', vbody) is not None, vbody)
+    check("G1: its name is soleur-luks-monitor-host-timer-dark-prd",
+          attr(dark, "name") == '"soleur-luks-monitor-host-timer-dark-prd"', attr(dark, "name"))
+
+needle_in_sh = re.search(r'(?m)^\s*log "OK: /mnt/data is LUKS-backed \(', monitor) is not None
+check("G1: luks-monitor.sh still logs the exact OK needle the predicate matches", needle_in_sh)
+
+al = block(alerts, "logtail_exploration_alert", "luks_monitor_host_timer_dark")
+check("G1: logtail_exploration_alert.luks_monitor_host_timer_dark exists", al is not None)
+if al:
+    a = top_level(al)
+    check("G1: the alert watches ITS OWN exploration",
+          a.get("exploration_id") == "logtail_exploration.luks_monitor_host_timer_dark.id", a.get("exploration_id"))
+    check("G1: threshold alert, lower_than 1 (zero rows pages)",
+          a.get("alert_type") == '"threshold"' and a.get("operator") == '"lower_than"' and a.get("value") == "1",
+          (a.get("alert_type"), a.get("operator"), a.get("value")))
+    check("G1: on_missing_data = treat_as_zero (silence FIRES)", a.get("on_missing_data") == '"treat_as_zero"', a.get("on_missing_data"))
+    check("G1: paused = false", a.get("paused") == "false", a.get("paused"))
+    check("G1: email = true", a.get("email") == "true", a.get("email"))
+    try:
+        qp, cp, ck = int(a.get("query_period", "x")), int(a.get("confirmation_period", "0")), int(a.get("check_period", "x"))
+    except ValueError:
+        qp = cp = ck = -1
+    check("G1: query_period + confirmation_period covers a legitimate 24h30m (88200 s) gap between two timer runs",
+          qp >= 86400 and qp + cp >= 88200, (qp, cp))
+    check("G1: evaluated at least hourly (check_period <= 3600)", 0 < ck <= 3600, ck)
+    check("G1: incident_cause points at the runbook section", "host-timer-liveness-alert-8706" in alerts_raw)
+
+apply_job = jobs.get("apply") or {}
+main_runs = [str(s.get("run", "")) for s in apply_job.get("steps") or [] if "-target=logtail_exploration" in str(s.get("run", ""))]
+for t in ("logtail_exploration.luks_monitor_host_timer_dark", "logtail_exploration_alert.luks_monitor_host_timer_dark"):
+    check("G1: the push-triggered apply job's MAIN plan targets %s" % t,
+          any(re.search(r'(?m)^\s*-target=%s(\s*\\)?\s*$' % re.escape(t), r) for r in main_runs))
+
+# Row 10: nothing else starts the unit. Its rows would carry _SYSTEMD_UNIT=luks-monitor.service
+# and mask a dark timer exactly as the verify job's rows did.
+START = re.compile(r'systemctl\b.*\b(start|restart)\b.*\bluks-monitor\.service\b')
+starters = []
+scan = []
+for root in (E["LMI_INFRA_DIR"], E["LMI_WF_DIR"]):
+    for dp, dn, fns in os.walk(root):
+        dn[:] = [d for d in dn if d not in (".terraform", "node_modules", ".git")]
+        for fn in fns:
+            if fn.endswith((".md", ".test.sh", ".test.ts")) or not fn.endswith((".sh", ".tf", ".yml", ".yaml", ".service", ".timer", ".tftpl")):
+                continue
+            scan.append(os.path.join(dp, fn))
+if E.get("LMI_EXTRA_SCAN"):
+    scan.append(E["LMI_EXTRA_SCAN"])
+for p in scan:
+    try:
+        if os.path.basename(p) == "workspaces-luks.tf" and os.path.dirname(os.path.abspath(p)) == os.path.abspath(E["LMI_INFRA_DIR"]):
+            lines = luks_raw.splitlines()
+        else:
+            lines = open(p, errors="replace").read().splitlines()
+    except OSError:
+        continue
+    for n, line in enumerate(lines, 1):
+        code = line.split("#", 1)[0] if p.endswith((".sh", ".yml", ".yaml")) else line
+        if p.endswith(".tf"):
+            code = strip(line)
+        if START.search(code):
+            starters.append("%s:%d" % (os.path.basename(p), n))
+check("G1: scanned the workflow and infra trees (anti-vacuity)", len(scan) >= 50, len(scan))
+check("G1: exactly one line anywhere starts luks-monitor.service — the installer's kick",
+      len(starters) == 1 and starters[0].startswith("workspaces-luks.tf:"), starters)
+
+# ─────────────────────────────── Guard 2 — the installer ───────────────────────────────
+inst = block(luks, "terraform_data", "luks_monitor_install")
+check("G2: terraform_data.luks_monitor_install exists (exact header)", inst is not None)
+ARM = "systemctl enable --now luks-monitor.timer"
+KICK = re.compile(r'^systemctl\s+(?:--no-block\s+start|start\s+--no-block)\s+luks-monitor\.service$')
+writer_cmds = None
+if inst:
+    trig = attr(inst, "triggers_replace") or ""
+    # triggers_replace spans several lines; take everything up to its closing "]))".
+    tm = re.search(r'triggers_replace\s*=\s*sha256\(join\(",",\s*\[(.*?)\]\)\)', inst, re.S)
+    ops = tm.group(1) if tm else ""
+    trig_files = set(re.findall(r'file\("\$\{path\.module\}/([^"]+)"\)', ops))
+    check("G2: triggers_replace is sha256(join(...)) over file() operands", tm is not None and len(trig_files) >= 1, trig)
+    check("G2: the DSN hash is a trigger operand (a DSN rotation re-writes the line)",
+          "nonsensitive(sha256(var.sentry_dsn))" in ops, ops)
+    provs = provisioners(inst)
+    files = [(re.search(r'source\s*=\s*"([^"]+)"', b), re.search(r'destination\s*=\s*"([^"]+)"', b)) for k, b in provs if k == "file"]
+    srcs = [s.group(1) for s, d in files if s]
+    src_names = set(re.sub(r'^\$\{path\.module\}/', "", s) for s in srcs)
+    check("G2: every file provisioner ships from ${path.module}", all(s.startswith("${path.module}/") for s in srcs), srcs)
+    check("G2: file() trigger operands == file provisioner sources (a delivered file that is not hashed is never re-delivered)",
+          trig_files == src_names and len(src_names) == 4, (sorted(trig_files), sorted(src_names)))
+    # Destinations must match the cutover tail's, or the two installers drift.
+    emit = re.search(r'(?m)^EMIT="\$\{SELF_DIR\}/([^"]+)"', cutover)
+    tail = {}
+    for m in re.finditer(r'(?m)^\s*install -D -m \d+ "([^"]+)" (\S+)', cutover):
+        s = m.group(1)
+        s = emit.group(1) if (s == "$EMIT" and emit) else re.sub(r'^\$\{SELF_DIR\}/', "", s)
+        tail[s] = m.group(2)
+    mine = {re.sub(r'^\$\{path\.module\}/', "", s.group(1)): d.group(1) for s, d in files if s and d}
+    check("G2: install destinations equal the cutover tail's for the same sources",
+          len(tail) == 4 and mine == tail, (mine, tail))
+
+    conn = re.search(r'connection\s*\{([^}]*)\}', inst)
+    cb = conn.group(1) if conn else ""
+    check("G2: the connection dials web-1 as root", re.search(r'(?m)^\s*host\s*=\s*hcloud_server\.web\["web-1"\]\.ipv4_address\s*$', cb) is not None
+          and re.search(r'(?m)^\s*user\s*=\s*"root"\s*$', cb) is not None, cb)
+    check("G2: the connection pins web-1's host key", re.search(r'(?m)^\s*host_key\s*=\s*local\.web_1_ssh_host_key\s*$', cb) is not None)
+    check("G2: inline scripts upload under /root, not world-readable /tmp",
+          re.search(r'(?m)^\s*script_path\s*=\s*"/root/[^"]*%RAND%[^"]*"\s*$', cb) is not None, cb)
+    check("G2: depends_on serializes after the token installer and the Vector reload",
+          re.search(r'depends_on\s*=\s*\[[^\]]*terraform_data\.luks_monitor_token_install', inst) is not None
+          and re.search(r'depends_on\s*=\s*\[[^\]]*terraform_data\.journald_persistent', inst) is not None)
+    check("G2: no lifecycle.ignore_changes (a silenced installer is the defect this closes)",
+          re.search(r'ignore_changes', inst) is None)
+    PRE = 'nonsensitive(var.sentry_dsn == "" || can(regex("^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$", var.sentry_dsn)))'
+    pre = re.search(r'precondition\s*\{([^}]*)\}', inst)
+    cond = attr(pre.group(1), "condition") if pre else None
+    check("G2: the DSN precondition is the strict-class expression inngest-host.tf applies", cond == PRE, cond)
+
+    # Ordered command stream: (provisioner index, kind, command).
+    stream, remote = [], []
+    for idx, (k, b) in enumerate(provs):
+        if k == "file":
+            stream.append((idx, "file", b))
+        else:
+            cmds = inline_raw(b)
+            remote.append((idx, cmds))
+            for c in cmds:
+                stream.append((idx, "cmd", c))
+    def first(pred):
+        for n, (idx, k, c) in enumerate(stream):
+            if k == "cmd" and pred(c):
+                return n
+        return None
+    arm = first(lambda c: c == ARM)
+    en = first(lambda c: re.search(r'systemctl\s+is-enabled\b.*luks-monitor\.timer', c) is not None)
+    ac = first(lambda c: re.search(r'systemctl\s+is-active\b.*luks-monitor\.timer', c) is not None)
+    kicks = [n for n, (idx, k, c) in enumerate(stream) if k == "cmd" and re.search(r'systemctl\b.*\b(start|restart)\b.*luks-monitor\.service', c)]
+    check("G2: the installer arms the timer with the exact manifest line", arm is not None)
+    check("G2: it asserts is-enabled and is-active after arming", None not in (arm, en, ac) and arm < en and arm < ac, (arm, en, ac))
+    check("G2: exactly one start of luks-monitor.service, and it is --no-block",
+          len(kicks) == 1 and KICK.match(stream[kicks[0]][2]) is not None, [stream[k][2] for k in kicks])
+    check("G2: the kick comes after the arm and both asserts",
+          len(kicks) == 1 and None not in (arm, en, ac) and kicks[0] > max(arm, en, ac), (arm, en, ac, kicks))
+    lastfile = max([n for n, (i, k, c) in enumerate(stream) if k == "file"] or [10**9])
+    check("G2: every file is delivered before the timer is armed", arm is not None and lastfile < arm, (lastfile, arm))
+    dsn_provs = [(idx, cmds) for idx, cmds in remote if any("var.sentry_dsn" in c for c in cmds)]
+    check("G2: exactly one remote-exec carries var.sentry_dsn (the DSN writer)", len(dsn_provs) == 1, len(dsn_provs))
+    if len(dsn_provs) == 1:
+        widx = dsn_provs[0][0]
+        armidx = stream[arm][0] if arm is not None else -1
+        check("G2: the DSN line is written before the timer is armed (the first run can reach Sentry)", widx < armidx, (widx, armidx))
+        for idx, cmds in remote:
+            if idx != widx:
+                check("G2: remote-exec #%d carries no var./sensitive reference (its output stays visible)" % idx,
+                      not any(re.search(r'\$\{(var|doppler_service_token|random_password)\.', c) for c in cmds))
+        writer_cmds = dsn_provs[0][1]
+    widx = dsn_provs[0][0] if len(dsn_provs) == 1 else None
+    state = " ".join(c for idx, cmds in remote if idx != widx for c in cmds)
+    check("G2: the state print shows the timer's LoadState/UnitFileState/ActiveState/NextElapse",
+          re.search(r'systemctl show -p LoadState,UnitFileState,ActiveState,NextElapseUSecRealtime', state) is not None)
+    check("G2: the state print shows the dead-man units", "workspaces-luks-deadman.timer" in state and "workspaces-luks-deadman.service" in state)
+    check("G2: counts-only env-file diagnostics, never a value", "grep -c '^SOLEUR_SENTRY_DSN='" in state
+          and "grep -c '^DOPPLER_TOKEN='" in state and not re.search(r'\bcat\b[^|;]*/etc/default/luks-monitor', state))
+
+# The manifest greps the arming string on a view that drops only lines STARTING with "#".
+view = "\n".join(l for l in luks_raw.splitlines() if not l.lstrip().startswith("#"))
+check("G2: the arming string occurs exactly once outside full-line comments (heartbeat manifest evidence)",
+      view.count(ARM) == 1, view.count(ARM))
+check("G2: and that occurrence is live code inside the installer",
+      inst is not None and ('"%s",' % ARM) in inst)
+tok = block(luks, "terraform_data", "luks_monitor_token_install")
+check("G2: the token installer also uploads its inline scripts under /root",
+      tok is not None and re.search(r'(?m)^\s*script_path\s*=\s*"/root/[^"]*%RAND%[^"]*"\s*$', tok) is not None)
+
+ssh_targets = set()
+for s in apply_job.get("steps") or []:
+    run = str(s.get("run", ""))
+    if "terraform_data.web_1_host_key_probe" in run:
+        ssh_targets |= set(re.findall(r"-target=(terraform_data\.[a-z0-9_]+)", run))
+check("G2: the per-merge SSH apply targets terraform_data.luks_monitor_install",
+      "terraform_data.luks_monitor_install" in ssh_targets, sorted(ssh_targets)[:4])
+
+# ─────────────────────────────── Guard 3 — the DSN writer ───────────────────────────────
+# Census: every Terraform-driven writer of the env file, including through a delivered script.
+tf_files = [os.path.join(E["LMI_INFRA_DIR"], f) for f in sorted(os.listdir(E["LMI_INFRA_DIR"])) if f.endswith(".tf")]
+if E.get("LMI_EXTRA_TF"):
+    tf_files.append(E["LMI_EXTRA_TF"])
+writers = set()
+for p in tf_files:
+    s = strip(open(p).read())
+    if os.path.abspath(p) == os.path.abspath(os.path.join(E["LMI_INFRA_DIR"], "workspaces-luks.tf")):
+        s = luks
+    for kind in ("terraform_data", "null_resource"):
+        for name, body in blocks(s, kind):
+            hit = False
+            for k, b in provisioners(body):
+                if k == "remote-exec" and "/etc/default/luks-monitor" in b:
+                    hit = True
+                if k == "file":
+                    sm = re.search(r'source\s*=\s*"\$\{path\.module\}/([^"]+)"', b)
+                    sp = os.path.join(os.path.dirname(p), sm.group(1)) if sm else None
+                    if sp and os.path.isfile(sp) and re.search(r'(?m)^[^#]*/etc/default/luks-monitor', open(sp, errors="replace").read()):
+                        hit = True
+            if hit:
+                writers.add(name)
+check("G3: the env-file writers are exactly the token installer and this installer",
+      writers == {"luks_monitor_token_install", "luks_monitor_install"}, sorted(writers))
+
+# The precondition's regex, applied to hostile DSNs. It is interpolated into a single-quoted shell
+# printf and the file is SOURCED as root, so a quote, $( ) or backtick must never pass.
+pre_re = None
+if inst:
+    m = re.search(r'can\(regex\("([^"]+)", var\.sentry_dsn\)\)', inst)
+    # Terraform's regex() is RE2, whose "$" matches only at the very end of the text; Python's also
+    # matches before a final newline, so translate the trailing anchor or a DSN ending in "\n" reads
+    # as accepted here while Terraform rejects it.
+    pre_re = re.sub(r'\$$', r'\\Z', hcl_unescape(m.group(1))) if m else None
+check("G3: the precondition carries a regex this guard can read", pre_re is not None)
+if pre_re:
+    good = "https://0123456789abcdef@o0.ingest.example.io/42"
+    bad = ["https://k@h/1'; id; '", "https://$(id)@h.example/1", "https://`id`@h.example/1",
+           "https://k@h.example/1 ", "https://k@h.example/1\n", "http://k@h.example/1", "https://k@h.example/abc"]
+    check("G3: the precondition accepts a well-formed DSN", re.search(pre_re, good) is not None)
+    check("G3: the precondition rejects quotes, $( ), backticks, whitespace and non-numeric projects",
+          all(re.search(pre_re, b) is None for b in bad), [b for b in bad if re.search(pre_re, b)])
+
+# Behavioural: run the shipped bytes. A missing installer block is a Guard 2 verdict (RED); a
+# present block with no extractable writer is a broken instrument (rc 2).
+if writer_cmds is None and inst is None:
+    check("G3: the DSN writer can be run (the installer block is missing, so it cannot)", False)
+    for v in out:
+        print("\t".join(v))
+    sys.exit(0)
+if writer_cmds is None:
+    fatal("no DSN writer extracted — Guard 3 cannot run")
+DSN = "https://0123456789abcdef@o0.ingest.example.io/42"
+decoded, subs = [], 0
+for c in writer_cmds:
+    d = hcl_unescape(c)
+    n = d.count("${var.sentry_dsn}")
+    subs += n
+    d = d.replace("${var.sentry_dsn}", "\0DSN\0")
+    if "${" in d.replace("$${", "") or "%{" in d.replace("%%{", ""):
+        fatal("an unexpected template sequence in the writer: %r" % c)
+    d = d.replace("$${", "${").replace("%%{", "%{").replace("\0DSN\0", "@@DSN@@")
+    decoded.append(d)
+if subs != 1:
+    fatal("var.sentry_dsn must appear exactly once in the writer, saw %d" % subs)
+script = "\n".join(decoded) + "\n"
+if script.count("f=/etc/default/luks-monitor\n") != 1:
+    fatal("the scratch-path rewrite anchor f=/etc/default/luks-monitor is not present exactly once")
+
+scratch = E["LMI_SCRATCH"]
+bindir = os.path.join(scratch, "bin"); os.makedirs(bindir, exist_ok=True)
+real_grep = shutil.which("grep")
+chown_log = os.path.join(scratch, "chown.log")
+with open(os.path.join(bindir, "chown"), "w") as fh:
+    fh.write('#!/bin/sh\nfor a; do last="$a"; done\nstat -c %%a "$last" >> %s\nexit 0\n' % chown_log)
+with open(os.path.join(bindir, "grep"), "w") as fh:
+    fh.write('#!/bin/sh\nfor a; do last="$a"; done\n'
+             'if [ -n "${LMI_GREP_FAIL_PATH:-}" ] && [ "$last" = "$LMI_GREP_FAIL_PATH" ]; then echo "grep: $last: Input/output error" >&2; exit 2; fi\n'
+             'exec %s "$@"\n' % real_grep)
+for b in ("chown", "grep"):
+    os.chmod(os.path.join(bindir, b), 0o755)
+shell = shutil.which("dash") or shutil.which("sh")
+
+case_n = [0]
+def run(seed=None, dsn=DSN, kind="file", env_extra=None, planted_tmp=None):
+    case_n[0] += 1
+    d = os.path.join(scratch, "case%d" % case_n[0]); os.makedirs(d)
+    f = os.path.join(d, "luks-monitor")
+    victim = os.path.join(d, "victim")
+    open(victim, "w").write("VICTIM=untouched\n")
+    if kind == "file" and seed is not None:
+        open(f, "w").write(seed); os.chmod(f, 0o600)
+    elif kind == "symlink":
+        os.symlink(victim, f)
+    elif kind == "dir":
+        os.mkdir(f)
+    if planted_tmp == "symlink":
+        os.symlink(victim, f + ".tmp")
+    body = script.replace("f=/etc/default/luks-monitor\n", "f=%s\n" % f).replace("@@DSN@@", dsn)
+    if "/etc/default/" in body:
+        fatal("the scratch-path rewrite did not remove every /etc/default/ reference")
+    sp = os.path.join(d, "writer.sh"); open(sp, "w").write(body)
+    if os.path.exists(chown_log):
+        os.remove(chown_log)
+    env = {"PATH": bindir + ":/usr/bin:/bin", "HOME": d}
+    env.update({k: (f if v == "__SELF__" else v) for k, v in (env_extra or {}).items()})
+    old = os.umask(0o022)
+    try:
+        p = subprocess.run([shell, sp], env=env, capture_output=True, text=True, timeout=30)
+    finally:
+        os.umask(old)
+    content = open(f).read() if os.path.isfile(f) and not os.path.islink(f) else None
+    mode = stat.S_IMODE(os.stat(f).st_mode) if content is not None else None
+    tmpmodes = open(chown_log).read().split() if os.path.exists(chown_log) else []
+    return {"rc": p.returncode, "content": content, "mode": mode, "victim": open(victim).read(),
+            "tmpmodes": tmpmodes, "f": f, "err": p.stderr.strip()[-160:], "link": os.path.islink(f)}
+
+L = "SOLEUR_SENTRY_DSN=%s\n" % DSN
+r = run(seed="DOPPLER_TOKEN=x\n")
+check("G3: token-only file -> rc 0, token line kept, exactly one DSN line appended", r["rc"] == 0 and r["content"] == "DOPPLER_TOKEN=x\n" + L, r)
+check("G3: the result is mode 0600", r["mode"] == 0o600, oct(r["mode"] or 0))
+check("G3: the temp file is BORN 0600 even under umask 022 (umask 077 is load-bearing)", r["tmpmodes"] == ["600"], r["tmpmodes"])
+
+r1 = run(seed="DOPPLER_TOKEN=x\n")
+r2 = run(seed=r1["content"] or "")
+check("G3: a second run is idempotent (still exactly one DSN line)", r2["rc"] == 0 and r2["content"] == "DOPPLER_TOKEN=x\n" + L, r2)
+
+r = run(seed="B=2\nSOLEUR_SENTRY_DSN=https://old@o0.ingest.example.io/1\nSOLEUR_SENTRY_DSN_X=keep\nDOPPLER_TOKEN=x")
+check("G3: only the DSN line changes; SOLEUR_SENTRY_DSN_X= and every other line survive in order (no trailing newline seed)",
+      r["rc"] == 0 and r["content"] == "B=2\nSOLEUR_SENTRY_DSN_X=keep\nDOPPLER_TOKEN=x\n" + L, r)
+
+r = run(seed=None)
+check("G3: absent file -> created 0600 holding only the DSN line", r["rc"] == 0 and r["content"] == L and r["mode"] == 0o600, r)
+
+r = run(seed="DOPPLER_TOKEN=x\n", dsn="")
+check("G3: empty DSN -> refused with exit 10, file unchanged", r["rc"] == 10 and r["content"] == "DOPPLER_TOKEN=x\n", r)
+
+r = run(kind="symlink")
+check("G3: symlink at the path -> refused with exit 11, target untouched", r["rc"] == 11 and r["link"] and r["victim"] == "VICTIM=untouched\n", r)
+
+r = run(kind="dir")
+check("G3: directory at the path -> refused with exit 12", r["rc"] == 12, r)
+
+r = run(seed="DOPPLER_TOKEN=x\n", env_extra={"LMI_GREP_FAIL_PATH": "__SELF__"})
+check("G3: a read error on the file -> refused with exit 13, never an emptied file", r["rc"] == 13 and r["content"] == "DOPPLER_TOKEN=x\n", r)
+
+r = run(seed="DOPPLER_TOKEN=x\n", planted_tmp="symlink")
+check("G3: a planted $f.tmp symlink is removed, never written through", r["rc"] == 0 and r["victim"] == "VICTIM=untouched\n"
+      and r["content"] == "DOPPLER_TOKEN=x\n" + L, r)
+check("G3: behavioural cases ran (anti-vacuity)", case_n[0] >= 9, case_n[0])
+
+for v in out:
+    print("\t".join(v))
+PY
+if [ "$rc" -ne 0 ]; then
+  cat "$SCRATCH/verdicts.tsv"
+  printf '[FATAL] the checker exited %s — a broken instrument, not a verdict\n' "$rc" >&2
+  exit 2
+fi
+_before=$((pass + fail)); verdict_lines=0
+while IFS=$'\t' read -r v name detail; do
+  [[ -n "${v:-}" ]] || continue
+  verdict_lines=$((verdict_lines + 1))
+  if [[ "$v" == ok ]]; then ok "$name"; else no "$name${detail:+ ($detail)}"; fi
+done < "$SCRATCH/verdicts.tsv"
+# Accounting conservation: every verdict the checker printed must have moved exactly one counter.
+if [[ $((pass + fail - _before)) -ne "$verdict_lines" ]]; then
+  printf '[FATAL] %s verdicts read but the counters moved %s — ok()/no() were tampered with\n' "$verdict_lines" "$((pass + fail - _before))" >&2
+  exit 2
+fi
+
+# ─────────────────────────────── mutation rows ───────────────────────────────
+# Each row edits a COPY (asserting the edit landed) and re-runs this file against it. Skipped in
+# the child run, so rows never recurse.
+if [[ -z "${LMI_MUTANT:-}" ]]; then
+  MUT="$SCRATCH/mut"
+  mkdir -p "$MUT"
+  assert_fixture_dir "$MUT"
+  # mutate <label> <want-rc> <env-var> <source> <python replace expr on s>
+  mutate() {
+    local label="$1" want="$2" var="$3" src="$4" expr="$5" copy got
+    copy="$MUT/$(basename "$src").$RANDOM$RANDOM"
+    if ! MUT_SRC="$src" MUT_DST="$copy" MUT_EXPR="$expr" python3 - <<'PY'
+import os, sys
+s = open(os.environ["MUT_SRC"]).read()
+t = eval(os.environ["MUT_EXPR"], {"s": s, "re": __import__("re")})
+if t == s:
+    print("mutation did not land", file=sys.stderr); sys.exit(3)
+open(os.environ["MUT_DST"], "w").write(t)
+PY
+    then
+      no "mutation $label: could not be applied (instrument)"; return
+    fi
+    got=0
+    env "$var=$copy" LMI_MUTANT=1 bash "$SELF" >"$copy.log" 2>&1 || got=$?
+    mut_rows=$((mut_rows + 1))
+    if [[ "$got" == "$want" ]]; then ok "mutation $label -> rc $got"; else no "mutation $label: want rc $want, got $got (log $(tail -3 "$copy.log" | tr '\n' ' '))"; fi
+  }
+  # extra-file rows: <label> <want> <env-var> <content>
+  extra() {
+    local label="$1" want="$2" var="$3" content="$4" f got
+    f="$MUT/extra.$RANDOM$RANDOM${5:-.yml}"
+    printf '%s\n' "$content" > "$f"
+    got=0
+    env "$var=$f" LMI_MUTANT=1 bash "$SELF" >"$f.log" 2>&1 || got=$?
+    mut_rows=$((mut_rows + 1))
+    if [[ "$got" == "$want" ]]; then ok "mutation $label -> rc $got"; else no "mutation $label: want rc $want, got $got"; fi
+  }
+  mut_rows=0
+  A="$LMI_ALERTS_TF"; T="$LMI_LUKS_TF"; W="$LMI_WF"
+  ARM_LINE="systemctl enable --now luks-monitor.timer"
+  SHOW_LINE="systemctl show -p LoadState,UnitFileState,ActiveState,NextElapseUSecRealtime,LastTriggerUSec luks-monitor.timer --no-pager || true"
+  UNITC="      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'\n"
+  # Guard 1
+  mutate "G1-1 drop the host-unit conjunct" 1 LMI_ALERTS_TF "$A" "s.replace(\"$UNITC\", '', 1)"
+  mutate "G1-2 on_missing_data no longer treat_as_zero" 1 LMI_ALERTS_TF "$A" "re.sub(r'(luks_monitor_host_timer_dark\" \{(?:.|\n)*?on_missing_data\s*=\s*)\"treat_as_zero\"', r'\1\"keep_last_value\"', s, 1)"
+  mutate "G1-4 query_period 86400 with confirmation 0" 1 LMI_ALERTS_TF "$A" "s.replace('query_period        = 97200', 'query_period        = 86400', 1)"
+  mutate "G1-5a reword the needle in the SQL only" 1 LMI_ALERTS_TF "$A" "s.replace(\"'%OK: /mnt/data is LUKS-backed%'\", \"'%OK: /mnt/data is encrypted%'\", 1)"
+  mutate "G1-5b reword the OK line in luks-monitor.sh only" 1 LMI_MONITOR_SH "$LMI_MONITOR_SH" "s.replace('log \"OK: /mnt/data is LUKS-backed (', 'log \"OK: /mnt/data is encrypted (', 1)"
+  mutate "G1-6 join the unit conjunct with OR" 1 LMI_ALERTS_TF "$A" "s.replace(\"      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'\", \"      OR JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'\", 1)"
+  mutate "G1-6b negate the unit conjunct" 1 LMI_ALERTS_TF "$A" "s.replace(\"'_SYSTEMD_UNIT') = 'luks-monitor.service'\", \"'_SYSTEMD_UNIT') != 'luks-monitor.service'\", 1)"
+  mutate "G1-7 a second luks-monitor exploration lacking the unit conjunct" 1 LMI_ALERTS_TF "$A" "s + '''
+locals {
+  luks_monitor_extra_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
+  SQL
+}
+resource \"logtail_exploration\" \"luks_monitor_extra\" {
+  name = \"x\"
+  query {
+    sql_query = replace(trimspace(local.luks_monitor_extra_sql), \"/\\\\\\\\s+/\", \" \")
+  }
+}
+'''"
+  mutate "G1-8 alert target dropped from the MAIN plan" 1 LMI_WF "$W" "re.sub(r'(?m)^\s*-target=logtail_exploration_alert\.luks_monitor_host_timer_dark \\\\\n', '', s, 1)"
+  mutate "G1-9 the alert watches another exploration" 1 LMI_ALERTS_TF "$A" "s.replace('exploration_id = logtail_exploration.luks_monitor_host_timer_dark.id', 'exploration_id = logtail_exploration.claude_cost_capture_dark.id', 1)"
+  extra "G1-10 a second starter of luks-monitor.service" 1 LMI_EXTRA_SCAN "      - run: ssh web-1 systemctl start luks-monitor.service"
+  mutate "G1-H1 the SQL local renamed away (extractor finds nothing)" 1 LMI_ALERTS_TF "$A" "s.replace('  luks_monitor_host_timer_sql = <<-SQL', '  luks_monitor_host_timer_sqlx = <<-SQL', 1)"
+  mutate "G1-H2 conjuncts reordered and reflowed (must PASS)" 0 LMI_ALERTS_TF "$A" "s.replace(\"      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'\n$UNITC\", \"      AND JSONExtractString( raw,'_SYSTEMD_UNIT' )   =   'luks-monitor.service'\n      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'\n\", 1)"
+  # Guard 2
+  mutate "G2-1 the timer is no longer a trigger operand" 1 LMI_LUKS_TF "$T" "s.replace('    file(\"\${path.module}/luks-monitor.timer\"),\n', '', 1)"
+  mutate "G2-2 a fifth, unhashed file provisioner" 1 LMI_LUKS_TF "$T" "s.replace('    destination = \"/etc/systemd/system/luks-monitor.timer\"\n  }\n', '    destination = \"/etc/systemd/system/luks-monitor.timer\"\n  }\n  provisioner \"file\" {\n    source      = \"\${path.module}/luks-monitor-token-refresh.sh\"\n    destination = \"/usr/local/bin/x\"\n  }\n', 1)"
+  mutate "G2-4 the kick moved above the arm" 1 LMI_LUKS_TF "$T" "s.replace('      \"$ARM_LINE\",\n', '      \"systemctl start --no-block luks-monitor.service\",\n      \"$ARM_LINE\",\n', 1).replace('      \"systemctl start --no-block luks-monitor.service\",\n    ]', '    ]', 1)"
+  mutate "G2-7 the arming line moved into a comment" 1 LMI_LUKS_TF "$T" "s.replace('      \"$ARM_LINE\",\n', '      # \"$ARM_LINE\",\n', 1)"
+  mutate "G2-8 a destination drifts from the cutover tail" 1 LMI_LUKS_TF "$T" "s.replace('destination = \"/usr/local/bin/luks-monitor\"', 'destination = \"/usr/local/bin/luks-monitor.sh\"', 1)"
+  mutate "G2-9 a second, blocking start in the state print" 1 LMI_LUKS_TF "$T" "s.replace('      \"$SHOW_LINE\",\n', '      \"$SHOW_LINE\",\n      \"systemctl start luks-monitor.service\",\n', 1)"
+  mutate "G2-10 the resource renamed" 1 LMI_LUKS_TF "$T" "s.replace('resource \"terraform_data\" \"luks_monitor_install\" {', 'resource \"terraform_data\" \"luks_monitor_install_v2\" {', 1)"
+  mutate "G2-11 a trailing comment repeats the arming string" 1 LMI_LUKS_TF "$T" "s.replace('      \"$ARM_LINE\",\n', '      \"$ARM_LINE\", # $ARM_LINE\n', 1)"
+  mutate "G2-12 the SSH apply stops targeting the installer" 1 LMI_WF "$W" "re.sub(r'(?m)^\s*-target=terraform_data\.luks_monitor_install( \\\\)?\n', '', s, 1)"
+  mutate "G2-H2 trigger reorder, an extra echo, swapped kick flags (must PASS)" 0 LMI_LUKS_TF "$T" "s.replace('    file(\"\${path.module}/luks-monitor.sh\"),\n    file(\"\${path.module}/workspaces-luks-emit.sh\"),\n', '    file(\"\${path.module}/workspaces-luks-emit.sh\"),\n    file(\"\${path.module}/luks-monitor.sh\"),\n', 1).replace('      \"$SHOW_LINE\",\n', '      \"echo state\",\n      \"$SHOW_LINE\",\n', 1).replace('systemctl start --no-block luks-monitor.service', 'systemctl --no-block start luks-monitor.service', 1)"
+  # Guard 3
+  mutate "G3-1 the filter drops the token line" 1 LMI_LUKS_TF "$T" "s.replace(\"      \\\"rc=0; grep -v '^SOLEUR_SENTRY_DSN='\", \"      \\\"rc=0; grep -v '^DOPPLER_TOKEN='\", 1)"
+  mutate "G3-2 no filter: the old DSN line is carried over" 1 LMI_LUKS_TF "$T" "s.replace(\"      \\\"rc=0; grep -v '^SOLEUR_SENTRY_DSN=' \\\\\\\"\$f\\\\\\\" > \", \"      \\\"rc=0; cat \\\\\\\"\$f\\\\\\\" > \", 1)"
+  mutate "G3-3 umask 077 removed" 1 LMI_LUKS_TF "$T" "s.replace('      \"umask 077\",\n', '', 1)"
+  mutate "G3-4 the symlink refusal removed" 1 LMI_LUKS_TF "$T" "re.sub(r'(?m)^      \"\[ ! -L .*\n', '', s, 1)"
+  mutate "G3-5 the = dropped from the filter" 1 LMI_LUKS_TF "$T" "s.replace(\"      \\\"rc=0; grep -v '^SOLEUR_SENTRY_DSN='\", \"      \\\"rc=0; grep -v '^SOLEUR_SENTRY_DSN'\", 1)"
+  mutate "G3-6 the read-error arm removed" 1 LMI_LUKS_TF "$T" "re.sub(r'(?m)^      \"\[ \\\\\"\\\$rc\\\\\" -le 1 \].*\n', '', s, 1)"
+  mutate "G3-7 the stale temp file is no longer removed" 1 LMI_LUKS_TF "$T" "re.sub(r'(?m)^      \"rm -f \\\\\"\\\$f\.tmp\\\\\"\",\n', '', s, 1)"
+  mutate "G3-8 the precondition widened to [^@/]+ classes" 1 LMI_LUKS_TF "$T" "s.replace('^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+\$', '^https://[^@/]+@[^/]+/[^/?#]+\$', 1)"
+  extra "G3-9 a second writer of the env file" 1 LMI_EXTRA_TF 'resource "terraform_data" "rogue" {
+  provisioner "remote-exec" {
+    inline = ["echo X=1 >> /etc/default/luks-monitor"]
+  }
+}' .tf
+  mutate "G3-H1 the scratch-path rewrite cannot land (instrument)" 2 LMI_LUKS_TF "$T" "s.replace('\"f=/etc/default/luks-monitor\",', '\"f=\\\\\"/etc/default/luks-monitor\\\\\"\",', 1)"
+  mutate "G3-H2 the writer split differently across inline entries (must PASS)" 0 LMI_LUKS_TF "$T" "s.replace('      \"umask 077\",\n      \"f=/etc/default/luks-monitor\",\n', '      \"umask 077; f=/etc/default/luks-monitor\",\n', 1)"
+  # A deleted row must not pass silently: 13 Guard 1 + 10 Guard 2 + 11 Guard 3 rows.
+  MUT_ROWS_EXPECTED=34
+  if [[ "$mut_rows" -ne "$MUT_ROWS_EXPECTED" ]]; then
+    printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"
+    exit 1
+  fi
+fi
+
+printf '\n%s passed, %s failed\n' "$pass" "$fail"
+
+# Anti-vacuity floor. The threshold sits on the line directly above its `if`.
+MIN_ASSERTIONS=68
+if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
+  exit 1
+fi
+[[ "$fail" -eq 0 ]] || exit 1

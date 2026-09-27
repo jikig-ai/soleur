@@ -457,6 +457,73 @@ else
   no "a heartbeat fault exited 1 — it would file the p0 at-rest drift verdict"
 fi
 
+# ===========================================================================
+# (z) #8706 — the emit helper's two drop paths are VISIBLE. `[ -n "$dsn" ] || return 0` and the
+# Sentry curl's `|| true` were silent, which kept host drift out of Sentry for nine weeks. Each now
+# logs SOLEUR_WORKSPACES_LUKS_EMIT_SKIPPED under the luks-monitor tag (Vector-allowlisted). Driven
+# for real: the helper is sourced by a caller under `set -euo pipefail` (luks-monitor.sh's and the
+# cutover's options) with PATH-shimmed logger/doppler/curl, and logger records its argv.
+# The baked-DSN path is a fixed host path with no seam, so on a host that HAS a readable
+# /etc/default/luks-monitor the no-DSN case is unreachable and is reported as skipped.
+# ===========================================================================
+EM_DIR="$RUN_SCRATCH/emit-skip"; mkdir -p "$EM_DIR/bin"
+cat > "$EM_DIR/bin/logger" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$EM_LOG"
+STUB
+cat > "$EM_DIR/bin/doppler" <<'STUB'
+#!/usr/bin/env bash
+[ -n "${EM_DSN:-}" ] || exit 1
+printf '%s' "$EM_DSN"
+STUB
+cat > "$EM_DIR/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'curl\n' >> "$EM_CALLS"
+exit "${EM_CURL_RC:-0}"
+STUB
+chmod +x "$EM_DIR"/bin/*
+# Synthesized DSN (cq-test-fixtures-synthesized-only): hex key, .example host.
+EM_FAKE_DSN="https://0123456789abcdef0123456789abcdef@o0.ingest.example/0"
+# shellcheck disable=SC2016  # the bash -c body expands $EMIT in the CHILD, by design
+em_run() {
+  : > "$EM_DIR/logger.log"; : > "$EM_DIR/calls.log"
+  EM_OUT="$(
+    env -u SOLEUR_SENTRY_DSN -u WORKSPACES_LUKS_LOG_TAG "$@" \
+      PATH="$EM_DIR/bin:$PATH" EM_LOG="$EM_DIR/logger.log" EM_CALLS="$EM_DIR/calls.log" EMIT="$EMIT" \
+      bash -c 'set -euo pipefail; . "$EMIT"; WL_REASON=mapper_absent workspaces_luks_emit; echo "EMIT_RC=$?"' 2>&1
+  )"; EM_RC=$?
+}
+if [ -r /etc/default/luks-monitor ]; then
+  ok "emit skip-marker cases skipped: this host has a readable /etc/default/luks-monitor (fixed path, no seam)"
+else
+  # (z1) no DSN resolvable -> no_dsn marker under the luks-monitor tag; no Sentry POST; caller continues.
+  em_run EM_DSN=
+  if [ "$EM_RC" -eq 0 ] && [[ "$EM_OUT" == *"EMIT_RC=0"* ]] \
+    && grep -qxF -- "-t luks-monitor -- SOLEUR_WORKSPACES_LUKS_EMIT_SKIPPED reason=no_dsn drift_reason=mapper_absent" "$EM_DIR/logger.log" \
+    && ! grep -q curl "$EM_DIR/calls.log"; then
+    ok "emit with no resolvable DSN logs SOLEUR_WORKSPACES_LUKS_EMIT_SKIPPED reason=no_dsn under -t luks-monitor and returns 0 under set -euo pipefail"
+  else
+    no "emit no-DSN drop is not visible (rc=$EM_RC, logger=[$(cat "$EM_DIR/logger.log")]): ${EM_OUT:0:200}"
+  fi
+  # (z2) DSN resolves but the POST fails -> send_failed marker, the DSN/key never logged.
+  em_run EM_DSN="$EM_FAKE_DSN" EM_CURL_RC=22
+  if [ "$EM_RC" -eq 0 ] && [[ "$EM_OUT" == *"EMIT_RC=0"* ]] \
+    && grep -qxF -- "-t luks-monitor -- SOLEUR_WORKSPACES_LUKS_EMIT_SKIPPED reason=send_failed drift_reason=mapper_absent" "$EM_DIR/logger.log" \
+    && ! grep -qF '0123456789abcdef' "$EM_DIR/logger.log" && [[ "$EM_OUT" != *0123456789abcdef* ]]; then
+    ok "emit with a failed Sentry POST logs reason=send_failed (no DSN/key in the row) and returns 0"
+  else
+    no "emit send-failure drop is not visible or leaks the DSN (rc=$EM_RC, logger=[$(cat "$EM_DIR/logger.log")]): ${EM_OUT:0:200}"
+  fi
+  # (z3) POSITIVE CONTROL: DSN resolves and the POST succeeds -> the POST happens and NO skip marker.
+  # Without this, (z1)/(z2) pass against a helper that logs the marker unconditionally.
+  em_run EM_DSN="$EM_FAKE_DSN" EM_CURL_RC=0
+  if [ "$EM_RC" -eq 0 ] && grep -q curl "$EM_DIR/calls.log" && ! grep -qF EMIT_SKIPPED "$EM_DIR/logger.log"; then
+    ok "emit with a DSN and a successful POST sends and logs no skip marker (positive control)"
+  else
+    no "emit success path wrong (rc=$EM_RC, posts=$(grep -c curl "$EM_DIR/calls.log"), logger=[$(cat "$EM_DIR/logger.log")])"
+  fi
+fi
+
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1

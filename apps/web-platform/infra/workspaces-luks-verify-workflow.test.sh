@@ -645,6 +645,12 @@ case "$*" in
     exit 0 ;;
   *WORKSPACES_COUNT=*) exit 0 ;;
   *tar\ xzf*) exit 0 ;;
+  # (#8706) the informational unit-state read. Its own arm, so it never falls through to the probe
+  # arm below (which would replay FIXTURE_PROBE_LOG and FIXTURE_PROBE_RC a second time). A forged
+  # workflow command rides along to prove the line prefix keeps remote text inert.
+  *"systemctl show"*)
+    printf '%s\n' 'LoadState=loaded' 'UnitFileState=enabled' '::error title=forged-unit::verdict=pass'
+    exit "${FIXTURE_UNITSTATE_RC:-0}" ;;
 esac
 # The probe invocation: emit the fixture's log body, then exit the fixture's rc.
 [[ -n "${FIXTURE_PROBE_LOG:-}" ]] && printf '%s\n' "$FIXTURE_PROBE_LOG"
@@ -677,6 +683,7 @@ EOS
     FIXTURE_EXISTING_BASELINE="${EXISTING:-}" \
     FIXTURE_BASELINE_READ_RC="${READRC:-0}" \
     ALARM_SELFTEST="${SELFTEST:-}" \
+    FIXTURE_UNITSTATE_RC="${USRC:-0}" \
       FIXTURE_HOSTKEY_FAIL="${HKFAIL:-0}" \
       bash -e "${REASSERT:-$SCRATCH/reassert.sh}" >"$calls.stdout" 2>&1 || rc=$?
     printf '%s\n' "$rc" > "$calls.rc"
@@ -691,6 +698,45 @@ EOS
 
   c_pass=$(PRC=0 PLOG="$READYZ_OK" HEALTH=200 drive)
   expect_class "POSITIVE CONTROL: healthy scheduled run" "pass" "$c_pass"
+
+  # --- (#8706) the informational unit-state line: present, AFTER the probe, and verdict-neutral ---
+  us_calls="$SCRATCH/calls.unitstate"
+  c_us=$(CALLS="$us_calls" PRC=0 PLOG="$READYZ_OK" HEALTH=200 drive)
+  # `|| true`: no match is an ANSWER here (the assertion below reports it), not a reason for this
+  # `set -e` suite to die before it can say which line was missing.
+  us_probe_ln="$(grep -n 'luks-monitor.sh' "$us_calls" | grep -v 'tar ' | head -1 | cut -d: -f1)" || true
+  us_show_ln="$(grep -n 'systemctl show -p LoadState,UnitFileState,ActiveState,LastTriggerUSec,Result,ExecMainStatus luks-monitor.timer luks-monitor.service' "$us_calls" | head -1 | cut -d: -f1)" || true
+  if [[ -n "$us_probe_ln" && -n "$us_show_ln" && "$us_show_ln" -gt "$us_probe_ln" ]] \
+     && grep -qxF '[unit-state] UnitFileState=enabled' "$us_calls.stdout"; then
+    ok "#8706: the unit-state read runs AFTER the probe and prints prefixed [unit-state] lines"
+  else
+    no "#8706: the unit-state read is missing, precedes the probe, or is unprefixed (probe_ln=${us_probe_ln:-none} show_ln=${us_show_ln:-none})"
+  fi
+  if grep -q '^::error title=forged-unit' "$us_calls.stdout"; then
+    no "#8706: remote unit-state text reached the log unprefixed — it could issue a workflow command"
+  else
+    ok "#8706: remote unit-state text is prefixed, so a forged ::workflow-command:: stays inert"
+  fi
+  expect_class "#8706: the unit-state read does not change a healthy verdict" "pass" "$c_us"
+  # Its OWN failure is swallowed: an unreachable/failed read must not move any class or exit path.
+  for us_rc in 1 255; do
+    c_usf=$(CALLS="$SCRATCH/calls.unitstate-fail-$us_rc" USRC="$us_rc" PRC=0 PLOG="$READYZ_OK" HEALTH=200 drive)
+    expect_class "#8706: a unit-state read failing rc=$us_rc leaves a healthy run" "pass" "$c_usf"
+    if [[ "$(cat "$SCRATCH/calls.unitstate-fail-$us_rc.rc")" == 0 ]]; then
+      ok "#8706: a unit-state read failing rc=$us_rc leaves the step exit 0"
+    else
+      no "#8706: a unit-state read failing rc=$us_rc changed the step exit ($(cat "$SCRATCH/calls.unitstate-fail-$us_rc.rc"))"
+    fi
+    c_usd=$(CALLS="$SCRATCH/calls.unitstate-drift-$us_rc" USRC="$us_rc" PRC=1 PLOG='[luks-monitor] FAIL (mount_not_mapper) src=/dev/sdb' HEALTH=200 drive)
+    expect_class "#8706: a unit-state read failing rc=$us_rc leaves an at-rest verdict" "drift" "$c_usd"
+  done
+  # Skipped on a transport failure: one bounded-ssh wait is enough when the tunnel is down.
+  c_us255=$(CALLS="$SCRATCH/calls.unitstate-t255" PRC=255 PLOG="" HEALTH=200 drive)
+  if [[ "$c_us255" == unavailable ]] && ! grep -q 'systemctl show' "$SCRATCH/calls.unitstate-t255"; then
+    ok "#8706: the unit-state read is skipped on an rc-255 transport failure (class unchanged)"
+  else
+    no "#8706: the unit-state read ran on an rc-255 transport failure, or the class moved (${c_us255:-<none>})"
+  fi
 
   # THE AT-REST CLASS REQUIRES A RECOGNISED REASON. This fixture used to be `PRC=2 PLOG=""`, i.e.
   # a non-zero rc with NO parseable reason — which pinned the old negative gate ("anything not
@@ -1190,7 +1236,8 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # Set from the green count with a small slack for ordinary additions. Raise it when you add
 # assertions; if this ever fires, the question is which block stopped running, not what number to
 # lower it to.
-WF_MIN_ASSERTIONS=130
+# #8706: 132 -> 142 green with the ten unit-state assertions; floor raised 130 -> 140 (same slack).
+WF_MIN_ASSERTIONS=140
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

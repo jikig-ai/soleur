@@ -699,3 +699,87 @@ resource "logtail_exploration_alert" "claude_cost_capture_dark" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #8706: web-1's daily LUKS at-rest probe has stopped reporting ───────────────────────────────
+# luks-monitor.timer never existed on web-1 for nine weeks and nothing noticed: the shared
+# betteruptime_heartbeat.workspaces_luks has a second pusher (workspaces-luks-verify.yml, over SSH)
+# that kept it green. This alert singles out the HOST unit. Under luks-monitor.service every log()
+# line is journaled twice; the stdout copy always carries _SYSTEMD_UNIT=luks-monitor.service
+# (measured 100% on stdout rows; logger rows drop it about half the time). The verify job's rows
+# carry session-N.scope or no unit, so they can never keep this quiet.
+#
+# Window: OnCalendar=daily + RandomizedDelaySec=1800 can space two runs 24h30m (88200 s) apart,
+# so a 24 h window would read empty for up to 30 minutes on a healthy day. 27 h (97200 s) covers it
+# with margin. Pages about 27 h after the last good host run; a Vector or Logs-source outage trips
+# it too (the runbook's decode says to check the pipeline before the host).
+#
+# Live-probed 2026-09-27 (7 days, hot+archive): as written 0 (the dark state this pages on);
+# control with the unit swapped for inngest-heartbeat.service and no needle 39228; the unit
+# conjunct dropped 9 (the verify job's OK rows — the unit conjunct is what excludes them).
+locals {
+  luks_monitor_host_timer_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
+      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'
+      AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%'
+  SQL
+
+  luks_monitor_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706"
+}
+
+resource "logtail_exploration" "luks_monitor_host_timer_dark" {
+  name      = "soleur-luks-monitor-host-timer-dark-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.luks_monitor_host_timer_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "luks_monitor_host_timer_dark" {
+  exploration_id = logtail_exploration.luks_monitor_host_timer_dark.id
+  name           = "soleur-luks-monitor-host-timer-dark-prd"
+
+  alert_type          = "threshold"
+  operator            = "lower_than"
+  value               = 1
+  check_period        = 3600
+  query_period        = 97200
+  confirmation_period = 0
+  recovery_period     = 3600
+  # A missing value must read as 0 so silence FIRES (the claude_cost_capture_dark precedent).
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "web-1's nightly encryption self-check (luks-monitor.service) has not reported in about 27 hours. This is not yet a data exposure: the volume is still encrypted, and the daily workspaces-luks-verify job still checks it. First step: check whether ANY luks-monitor rows arrived at all; total silence means the log pipeline, not the host. Runbook: ${local.luks_monitor_runbook_url}"
+  metadata = {
+    runbook = local.luks_monitor_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

@@ -478,6 +478,18 @@ jobs:
           cat "$probe_log"
           echo "luks-monitor probe rc=$probe_rc"
 
+          # (#8706) INFORMATIONAL ONLY — the host timer/service unit state, for the runbook's no-SSH
+          # decode (`gh run view <id> --log | grep UnitFileState`). A unit stopped before its probe
+          # runs (203/EXEC, a failed RequiresMountsFor, a disabled timer) logs under
+          # SYSLOG_IDENTIFIER=systemd, which Vector does not ship, so this line is the daily read.
+          # OUTSIDE the classifier: it touches none of probe_rc/probe_log/ssh_rc/ssh_err/reason and
+          # no GITHUB_OUTPUT, its own failure is swallowed (`|| true`), and it is skipped on a
+          # transport failure (rc 255) so it cannot add another bounded-ssh wait there. stdin from
+          # /dev/null; stderr dropped; every line prefixed so remote text can never start a
+          # `::workflow-command::`.
+          # shellcheck disable=SC2086
+          [[ "$probe_rc" -eq 255 ]] || { ${WEB_HOST_SSH} "$WEB_HOST" 'systemctl show -p LoadState,UnitFileState,ActiveState,LastTriggerUSec,Result,ExecMainStatus luks-monitor.timer luks-monitor.service --no-pager' </dev/null 2>/dev/null | sed 's/^/[unit-state] /'; } || true
+
           # App-level liveness over the full public HTTPS path, RETRIED to an attempt bound.
           #
           # This is the one probe in the feature that cannot share the on-host helper

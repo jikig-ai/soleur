@@ -178,6 +178,10 @@ resource "terraform_data" "luks_monitor_token_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706 — Terraform uploads each inline script before running it; the default /tmp path is
+    # world-readable, and the second remote-exec carries the token. A connection-only edit does
+    # not touch triggers_replace, so this line does not re-fire the installer.
+    script_path = "/root/tf-luks-token-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -197,6 +201,149 @@ resource "terraform_data" "luks_monitor_token_install" {
       "systemctl list-timers luks-monitor.timer --no-pager || true",
       "systemctl show -p UnitFileState,ActiveState,LastTriggerUSec luks-monitor.timer --no-pager || true",
       "systemctl show -p Result,ExecMainStatus,ExecMainExitTimestamp luks-monitor.service --no-pager || true",
+    ]
+  }
+}
+
+# #8706 — deliver and arm web-1's daily LUKS at-rest probe. The cutover's install tail was the
+# only installer, and no real cutover ever reached it (ADR-119 2026-09-27 addendum), so the timer,
+# its service and /usr/local/bin/luks-monitor never existed on web-1. This resource owns them now,
+# plus the SOLEUR_SENTRY_DSN= line in /etc/default/luks-monitor (the token installer above keeps
+# the DOPPLER_TOKEN= line; each writer keeps the other's line byte for byte).
+#
+# Web-1 only, like its sibling, which is why it lives here and not in server.tf: a fresh web host
+# must NOT get these units (ADR-119 §(d)).
+#
+# The file hashes ARE the trigger, deliberately (unlike the token installer): an edit to the probe
+# must re-deliver the probe. The cost: any edit to the shared workspaces-luks-emit.sh re-installs
+# on web-1 and starts one probe run. The DSN hash re-writes the line on a DSN rotation.
+#
+# The one probe start is `--no-block`: the apply never waits on or fails with the probe, so mount,
+# escrow or readyz faults still cannot redden a merge (ADR-119 2026-09-24). Delivery faults do: the
+# is-enabled / is-active asserts. The runtime proof that the timer fires is
+# logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf).
+resource "terraform_data" "luks_monitor_install" {
+  # Serializes the two writers of /etc/default/luks-monitor, and reloads Vector before the first
+  # run (git_data_probe_install's probe-first ordering). depends_on orders; it never re-fires.
+  depends_on = [terraform_data.luks_monitor_token_install, terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/luks-monitor.sh"),
+    file("${path.module}/workspaces-luks-emit.sh"),
+    file("${path.module}/luks-monitor.service"),
+    file("${path.module}/luks-monitor.timer"),
+    nonsensitive(sha256(var.sentry_dsn)),
+  ]))
+
+  lifecycle {
+    # The inngest-host.tf expression, not server.tf's looser shape check: the value lands in a
+    # single-quoted shell printf and in a file that workspaces-luks-emit.sh SOURCES as root, so a
+    # quote, $( ) or backtick must never pass. Empty is allowed here on purpose: a precondition
+    # failure stops every resource in the -target-scoped SSH apply, so the host refuses it instead
+    # (the writer's exit 10), which fails only this resource.
+    precondition {
+      condition     = nonsensitive(var.sentry_dsn == "" || can(regex("^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$", var.sentry_dsn)))
+      error_message = "var.sentry_dsn (TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN) is not a well-formed Sentry DSN (https://<key>@<host>/<project>). Refusing to write it into web-1's /etc/default/luks-monitor, which is sourced as root. The value is not shown."
+    }
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
+    # Inline scripts upload here instead of world-readable /tmp: the DSN writer carries the DSN.
+    script_path = "/root/tf-luks-monitor-%RAND%.sh"
+  }
+
+  # Straight into place, at the cutover tail's destinations exactly (luks-monitor-install.test.sh
+  # pins both sides). A failure part-way taints the resource; the next apply re-delivers all four.
+  provisioner "file" {
+    source      = "${path.module}/luks-monitor.sh"
+    destination = "/usr/local/bin/luks-monitor"
+  }
+  provisioner "file" {
+    source      = "${path.module}/workspaces-luks-emit.sh"
+    destination = "/usr/local/bin/workspaces-luks-emit.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/luks-monitor.service"
+    destination = "/etc/systemd/system/luks-monitor.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/luks-monitor.timer"
+    destination = "/etc/systemd/system/luks-monitor.timer"
+  }
+
+  # Env-file state BEFORE the write: type/mode/owner and line COUNTS only, never a value. No var.
+  # reference, so Terraform does not suppress this output.
+  provisioner "remote-exec" {
+    inline = [
+      "echo \"luks-monitor envfile before: $(stat -c '%F %a %U' /etc/default/luks-monitor 2>/dev/null || echo absent)\"",
+      "echo \"luks-monitor envfile before: DOPPLER_TOKEN=$(grep -c '^DOPPLER_TOKEN=' /etc/default/luks-monitor 2>/dev/null || true) SOLEUR_SENTRY_DSN=$(grep -c '^SOLEUR_SENTRY_DSN=' /etc/default/luks-monitor 2>/dev/null || true)\"",
+      "df -P /etc | tail -1",
+    ]
+  }
+
+  # The DSN line writer. Its output is suppressed (var.sentry_dsn is sensitive), so every refusal
+  # has its own exit status, which Terraform still reports: 10 empty DSN, 11 symlink, 12 not a
+  # regular file, 13 read error, 14 another line would change, 15 not exactly one DSN line, 16 mv.
+  # POSIX sh (dash on web-1). The pattern keeps the "=", so SOLEUR_SENTRY_DSN_X= survives. Behaviour
+  # is pinned by running these exact bytes in luks-monitor-install.test.sh (Guard 3).
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "umask 077",
+      "f=/etc/default/luks-monitor",
+      "d='${var.sentry_dsn}'",
+      "[ -n \"$d\" ] || exit 10",
+      "[ ! -L \"$f\" ] || exit 11",
+      "[ ! -e \"$f\" ] || [ -f \"$f\" ] || exit 12",
+      "rm -f \"$f.tmp\"",
+      "[ -e \"$f\" ] || : > \"$f\"",
+      "rc=0; grep -v '^SOLEUR_SENTRY_DSN=' \"$f\" > \"$f.tmp\" || rc=$?",
+      "[ \"$rc\" -le 1 ] || { rm -f \"$f.tmp\"; exit 13; }",
+      "printf 'SOLEUR_SENTRY_DSN=%s\\n' \"$d\" >> \"$f.tmp\"",
+      "[ \"$(grep -v '^SOLEUR_SENTRY_DSN=' \"$f.tmp\" | cksum)\" = \"$(grep -v '^SOLEUR_SENTRY_DSN=' \"$f\" | cksum)\" ] || { rm -f \"$f.tmp\"; exit 14; }",
+      "[ \"$(grep -c '^SOLEUR_SENTRY_DSN=' \"$f.tmp\")\" = 1 ] || { rm -f \"$f.tmp\"; exit 15; }",
+      "chown root:root \"$f.tmp\"",
+      "mv \"$f.tmp\" \"$f\" || exit 16",
+      "chmod 600 \"$f\"",
+    ]
+  }
+
+  # Env-file state AFTER the write (expect DOPPLER_TOKEN=1 SOLEUR_SENTRY_DSN=1, mode 600, owner root).
+  provisioner "remote-exec" {
+    inline = [
+      "echo \"luks-monitor envfile after: $(stat -c '%F %a %U' /etc/default/luks-monitor 2>/dev/null || echo absent)\"",
+      "echo \"luks-monitor envfile after: DOPPLER_TOKEN=$(grep -c '^DOPPLER_TOKEN=' /etc/default/luks-monitor 2>/dev/null || true) SOLEUR_SENTRY_DSN=$(grep -c '^SOLEUR_SENTRY_DSN=' /etc/default/luks-monitor 2>/dev/null || true)\"",
+    ]
+  }
+
+  # Arm, assert, then kick one run. The kick comes LAST: a same-day host-unit row instead of
+  # waiting for midnight, and --no-block so the apply never waits on the probe.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod 0755 /usr/local/bin/luks-monitor /usr/local/bin/workspaces-luks-emit.sh",
+      "systemctl daemon-reload",
+      "systemctl enable --now luks-monitor.timer",
+      "systemctl is-enabled luks-monitor.timer",
+      "systemctl is-active luks-monitor.timer",
+      "systemctl start --no-block luks-monitor.service",
+    ]
+  }
+
+  # State into the apply log. NextElapseUSecRealtime prints host-local time with its zone, which is
+  # the measurement that the 00:00-00:30 window is UTC. The dead-man units are shown on every fire
+  # (#9045).
+  provisioner "remote-exec" {
+    inline = [
+      "systemctl list-timers luks-monitor.timer --no-pager || true",
+      "systemctl show -p LoadState,UnitFileState,ActiveState,NextElapseUSecRealtime,LastTriggerUSec luks-monitor.timer --no-pager || true",
+      "systemctl show -p ActiveState,SubState,Result workspaces-luks-deadman.timer workspaces-luks-deadman.service --no-pager || true",
     ]
   }
 }
