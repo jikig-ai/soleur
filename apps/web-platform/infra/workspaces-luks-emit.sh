@@ -14,7 +14,8 @@
 #  `doppler secrets get` ONLY. Copying that verbatim reintroduces the exact circular trap this
 #  emit exists to page on — the "Doppler unreachable ⇒ passphrase absent ⇒ mapper never opens"
 #  mode would lose its DSN by the SAME cause and go dark. So this reads the BAKED DSN first
-#  (/etc/default/luks-monitor, written root:root 0600 by cloud-init.yml), and only falls back to
+#  (/etc/default/luks-monitor, 0600 root: cloud-init.yml writes the DSN line on a fresh host,
+#  terraform_data.luks_monitor_install on web-1 since #8706), and only falls back to
 #  Doppler if the bake is somehow empty. The bake survives a total Doppler outage.
 #
 #  DP-8 (feature+op tags): the Sentry drift PAGE depends ENTIRELY on the direct-curl envelope
@@ -268,23 +269,24 @@ wl_count_workspace_dirs() {
 
 # #8706 — the two exits below that drop a drift event (no DSN resolved; the Sentry POST failed) used
 # to be SILENT, which is how host failures stayed out of Sentry for nine weeks
-# (cq-silent-fallback-must-mirror-to-sentry: Sentry is the channel that failed, so the mirror is the
-# journal -> Vector -> Better Stack channel instead). One marker, reason CODE only: never the DSN,
-# never a host path. `drift_reason` is the caller's WL_REASON slug, scrubbed like every envelope field.
-# stderr copy for the run log (the verify job runs the probe with its output captured); stdout is
-# left untouched for callers. `|| true` on both, so logging can never change the return value.
-# Called only INSIDE workspaces_luks_emit's subshell, where LUKS_LOG_TAG is assigned.
-_wl_emit_skipped() {
-  local row
-  row="SOLEUR_WORKSPACES_LUKS_EMIT_SKIPPED reason=$1 drift_reason=$(_wl_scrub "${WL_REASON:-unspecified}")"
-  logger -t "${LUKS_LOG_TAG:-luks-monitor}" -- "$row" 2>/dev/null || true
-  echo "[${LUKS_LOG_TAG:-luks-monitor}] $row" >&2 || true
+# (cq-silent-fallback-must-mirror-to-sentry). Sentry is the channel that failed, so the mirror is
+# the journal -> Vector -> Better Stack channel, at crit: SOLEUR_*_SEND_FAILED at PRIORITY 2 is what
+# logtail_exploration_alert.monitor_send_failed pages on (betterstack-logs-alerts.tf), and this
+# definer follows that alert's emitter contract (betterstack-send-failed-alert.test.sh §2). Both
+# exits lose a drift event, so both page. Reason CODE only: never the DSN, never a host path;
+# `drift_reason` is the caller's WL_REASON slug, scrubbed like every envelope field. stderr copy for
+# the run log (the verify job captures the probe's output); stdout is left untouched for callers.
+# `|| true` on both, so logging can never change the return value. Called only INSIDE
+# workspaces_luks_emit's subshell, where LUKS_LOG_TAG is assigned.
+emit_refusal() {
+  printf '[%s] %s\n' "${LUKS_LOG_TAG:-luks-monitor}" "$1" >&2 || true
+  logger -p user.crit -t "${LUKS_LOG_TAG:-luks-monitor}" -- "$1" 2>/dev/null || true
 }
 
 workspaces_luks_emit() {
   ( set +e
     local level dsn key shost proj host body
-    # Real assignment, workspaces-cutover.sh's shape; read by _wl_emit_skipped's own-line `logger -t`.
+    # Real assignment, workspaces-cutover.sh's shape; read by emit_refusal's own-line `logger -t`.
     # Inside the subshell, so a sourcing caller's own LUKS_LOG_TAG/LOG_TAG is never touched.
     LUKS_LOG_TAG="${WORKSPACES_LUKS_LOG_TAG:-luks-monitor}"
     level="$(_wl_scrub "${WL_LEVEL:-fatal}")"
@@ -302,7 +304,7 @@ workspaces_luks_emit() {
             || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
             || true)
     fi
-    if [ -z "$dsn" ]; then _wl_emit_skipped no_dsn; return 0; fi
+    if [ -z "$dsn" ]; then emit_refusal "SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn drift_reason=$(_wl_scrub "${WL_REASON:-unspecified}")"; return 0; fi
 
     key=$(printf '%s' "$dsn" | sed -E 's#https://([^@]+)@.*#\1#')
     shost=$(printf '%s' "$dsn" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
@@ -344,7 +346,8 @@ workspaces_luks_emit() {
     curl -m 10 --retry 3 -sf -X POST "https://$shost/api/$proj/store/" \
       -H 'Content-Type: application/json' \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$key" \
-      -d "$body" >/dev/null 2>&1 || _wl_emit_skipped send_failed
+      -d "$body" >/dev/null 2>&1 \
+      || emit_refusal "SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=send_failed drift_reason=$(_wl_scrub "${WL_REASON:-unspecified}")"
   ) || true
   return 0
 }

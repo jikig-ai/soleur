@@ -2,7 +2,14 @@
 # #6604 — the DAILY /workspaces LUKS at-rest probe (luks-monitor.sh). oneshot, timer-fired.
 Description=Daily /workspaces LUKS at-rest escrow + header probe (#6604)
 # Only meaningful once /mnt/data is the LUKS mapper mount; do not race the mount at boot.
-RequiresMountsFor=/mnt/data
+# ORDERING ONLY, deliberately not RequiresMountsFor= (#8706 review; same downgrade as
+# inngest-cutover-flip.service, #7228). RequiresMountsFor= is Requires-strength: starting this
+# unit while /mnt/data is unmounted would START mnt-data.mount, i.e. mount whatever /etc/fstab
+# names — on web-1 the superseded plaintext volume — and serve stale data over the only copy.
+# The probe needs no mount to run: it checks `mountpoint -q /mnt/data` itself and reports
+# not_mounted, which a systemd dependency failure (logged under the unshipped `systemd` tag)
+# never would. After= keeps the boot ordering and never pulls the mount in.
+After=local-fs.target mnt-data.mount
 After=network-online.target
 Wants=network-online.target
 
@@ -14,7 +21,8 @@ Type=oneshot
 SyslogIdentifier=luks-monitor
 # DOPPLER_TOKEN (the prd_workspaces_luks service token) + SOLEUR_SENTRY_DSN (baked). The token line
 # was first written by the cutover and is now owned by terraform_data.luks_monitor_token_install
-# (ADR-119 2026-09-24 addendum); the DSN half is baked by cloud-init so a Doppler outage still pages.
+# (ADR-119 2026-09-24 addendum); the DSN line is written by terraform_data.luks_monitor_install on
+# web-1 (cloud-init writes it only at a fresh host's birth), so a Doppler outage still pages.
 EnvironmentFile=-/etc/default/luks-monitor
 # HOME must be set for the root doppler CLI (it writes/reads its config dir under $HOME); a root
 # systemd unit has no HOME by default, so `doppler secrets get` dies "$HOME is not defined" and the
