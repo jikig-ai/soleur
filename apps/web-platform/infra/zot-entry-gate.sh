@@ -26,8 +26,8 @@
 #
 # Phase-3 entry gate (#6122/ADR-096): assert that BOTH platform images' currently-deployed
 # tags resolve in the self-hosted zot registry BEFORE the pull-site flip is relied on. This
-# is the RUNTIME expression of the dark-launch gate — it can only PASS once the operator has
-# provisioned (task 1.8) + backfilled (task 1.9) zot, which is exactly why the flip "trails
+# is the RUNTIME expression of the dark-launch gate — it can only PASS once zot exists and holds
+# both images (plan tasks 1.8 and 1.9, both long done), which is exactly why the flip "trails
 # dual-push by >= 1 release" (plan Phase 3). A non-zero exit BLOCKS the flip.
 #
 # Usage:  zot-entry-gate.sh <web-tag> <inngest-tag>
@@ -42,6 +42,9 @@
 #       1 = one or both missing (BLOCK the flip — backfill first);
 #       2 = zot unreachable / cred missing (TRANSIENT — cannot decide, do NOT flip).
 set -uo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 WEB_TAG="${1:?usage: zot-entry-gate.sh <web-tag> <inngest-tag>}"
 INNGEST_TAG="${2:?usage: zot-entry-gate.sh <web-tag> <inngest-tag>}"
@@ -72,7 +75,7 @@ _ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribu
 # manifest_resolves <repo> <tag> → true iff a manifest HEAD returns HTTP 200.
 manifest_resolves() {
   local repo="$1" tag="$2" code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$ZOT_USER:$ZOT_TOKEN" \
+  code="$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$ZOT_USER:$ZOT_TOKEN" \
     -H "Accept: $_ACCEPT" -I "http://$ZOT_URL/v2/$repo/manifests/$tag" 2>/dev/null || echo 000)"
   [ "$code" = "200" ]
 }

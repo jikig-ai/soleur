@@ -97,6 +97,9 @@ const TF_FORGOTTEN_ADDRESS: Record<string, string> = {
 // SHARED App — every re-consenting installation grants packages:read, so a private-key
 // leak reads every consenting tenant's packages (documented in ADR-088 Consequences;
 // requires_cpo_signoff). Plane-c activation needs org-owner re-consent (AC10).
+// #8714 task 5.4 deleted the minter, so the grant has NO consumer. It stays declared until the
+// live App drops it too: a manifest-only removal reads as permission_unexpected_grant to
+// cron-github-app-drift-guard (server/github/manifest-diff.ts).
 // #6657: `pages: write` added so cron-gh-pages-cert-reissue can PUT /repos/{owner}/
 // {repo}/pages (the custom-domain cname toggle that re-orders the bad_authz cert).
 // live-fire proved `administration:write` alone 403s "Resource not accessible by
@@ -178,8 +181,8 @@ describe("github-app-manifest.json symbol parity", () => {
   });
 
   test("default_permissions.packages === 'read' (minter needs read, never write)", () => {
-    // #6031 (ADR-088): the cron-ghcr-token-minter mints a `packages:read` token.
-    // The exact-key-set test only checks keys, not values — lock the value so a
+    // #6031 (ADR-088) added `packages:read` for the since-deleted minter (#8714 5.4); the
+    // grant stays until the live App drops it. The exact-key-set test only checks keys, not values — lock the value so a
     // silent bump to `packages:write` (a major supply-chain escalation: write =
     // publish/delete packages) fails CI, not review.
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;

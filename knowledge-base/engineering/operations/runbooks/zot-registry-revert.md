@@ -14,8 +14,9 @@ last_reviewed: 2026-09-24
 >
 > This runbook was written when GHCR was a warm break-glass registry, and the whole revert
 > rests on that. It no longer is. GHCR's read credential is a **revoked** classic PAT
-> (`GET api.github.com/user` → **401**) and the pull-token minter is **disabled**
-> (`GHCR_MINTER_DISABLED=true`; minting → **403 `DENIED`**). Unsetting `ZOT_REGISTRY_URL`
+> (`GET api.github.com/user` → **401**) and the pull-token minter is **deleted** (disabled from
+> July with `GHCR_MINTER_DISABLED=true`, minting → **403 `DENIED`**; removed with the PAT's Doppler
+> keys by ADR-096 task 5.4, #8714). Unsetting `ZOT_REGISTRY_URL`
 > today does not move hosts onto a working fallback — it moves them onto a registry that
 > **cannot authenticate at all**, turning "zot is degraded" into "nothing can pull".
 >
@@ -396,8 +397,8 @@ Effect, with no further action:
 **The sweep is one-way and reverting the code does not undo it.** Since #8036 1c every deploy
 removes any `ghcr.io` entry from the deploy docker config. Reverting the PR restores the code but
 not the credential: the pre-1c prelude would re-run `docker login ghcr.io` with a PAT revoked
-since 2026-07-29, a failed login writes no `auths` entry, and `GHCR_MINTER_DISABLED=true` means no
-replacement can be minted. Plan on that being gone for good.
+since 2026-07-29, a failed login writes no `auths` entry, and the minter no longer exists (deleted
+by ADR-096 task 5.4, #8714), so no replacement can be minted. Plan on that being gone for good.
 
 Re-arm later by re-adding the secret (the Terraform `doppler_secret.zot_registry_url` will
 re-create it on the next operator apply, or set it manually):

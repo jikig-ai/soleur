@@ -10,8 +10,9 @@
 # `doppler run --config prd` (the soleur-inngest project resolves from
 # EnvironmentFile=/etc/default/inngest-server, #6555), so BETTERSTACK_LOGS_TOKEN must live in
 # the ISOLATED soleur-inngest project's `prd` root config — it currently exists only in
-# soleur/prd (the co-located web host reads it there). This mirrors ghcr-read-credential.tf:
-# a `doppler_secret` whose value comes from a sensitive, no-default var sourced from Doppler
+# soleur/prd (the co-located web host reads it there). This follows the operator-minted shape
+# github-app.tf also uses: a `doppler_secret` whose value comes from a sensitive var (here with no
+# default) sourced from Doppler
 # `prd_terraform` (Approach B — only the one 24-char token enters terraform.tfstate, NOT the
 # ~116-secret soleur/prd map a `data.doppler_secrets` mirror would materialize).
 #
@@ -39,7 +40,7 @@ resource "doppler_secret" "inngest_betterstack_logs_token" {
 
   lifecycle {
     # Value churn (rotation) is managed at the source of truth (Better Stack / Doppler),
-    # not this file — mirrors ghcr-read-credential.tf / github-app.tf. The isolation
+    # not this file — mirrors github-app.tf. The isolation
     # self-check keys on the NAME, so a rotate is safe (the name persists).
     ignore_changes = [value]
   }

@@ -8,6 +8,11 @@ supersedes: "ADR-087 D1 (credential-provisioning choice only; ADR-087 Design B�
 
 # ADR-088: Control-plane installation-token minter for private-GHCR reads
 
+> **IMPLEMENTATION DELETED (2026-09-27, #8714 / ADR-096 task 5.4).** `cron-ghcr-token-minter`,
+> `ghcr-minter-doppler-token.tf` (the `ghcr-minter-write-*` read/write service token and
+> `GHCR_MINTER_DOPPLER_TOKEN`) and `ghcr-read-credential.tf` (`GHCR_READ_USER` / `GHCR_READ_TOKEN`)
+> are removed; see ADR-096's 2026-09-27 amendment for what remains.
+
 > **SUPERSEDED (2026-07-06, #6122).** This ADR's chosen mechanism — a control-plane minter
 > issuing **GitHub App installation tokens** for private-GHCR `docker pull` — was proven
 > **infeasible**: a GitHub App installation token can `docker login ghcr.io` but `docker pull`
