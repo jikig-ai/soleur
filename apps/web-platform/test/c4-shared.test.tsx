@@ -395,6 +395,38 @@ describe("useC4Project — a superseded same-endpoint reload is discarded", () =
     );
     expect(result.current.loading).toBe(false);
   });
+
+  it("a superseded non-silent reload still clears loading when the superseding fetch is silent", async () => {
+    const resolvers = deferredFetch(["mount-read", "stale-read", "fresh-read"]);
+    const { result } = renderHook(() => useC4Project("d"));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    // Settle the initial mount fetch first so `loading` is a clean slate.
+    await act(async () => {
+      resolvers[0]();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // A non-silent reload claims the spinner, then a silent refetch supersedes
+    // it — save outcomes refetch silently (#8739).
+    act(() => {
+      void result.current.reload();
+    });
+    expect(result.current.loading).toBe(true);
+    act(() => {
+      void result.current.reload({ silent: true });
+    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(3));
+    // The superseded non-silent fetch resolves: it must still clear the
+    // spinner it owns — the silent fetch never claimed it.
+    await act(async () => {
+      resolvers[1]();
+    });
+    expect(result.current.loading).toBe(false);
+    await act(async () => {
+      resolvers[2]();
+    });
+    expect(result.current.data?.sources["model.c4"]).toBe("fresh-read");
+    expect(result.current.loading).toBe(false);
+  });
 });
 
 // #8966 — the derived verdict must survive the response normalization intact:
