@@ -117,7 +117,7 @@
 # STATE STORAGE — THIRTEEN KEYS, AND A FOURTEENTH COPY OF ALL OF THEM. Each token's `key` is
 # Computed + Sensitive + write-once, so the cleartext lands in `terraform.tfstate` on the R2 backend
 # (`soleur-terraform-state`; server-side encrypted, TLS-only — see `main.tf`), the same posture the
-# other ten `doppler_service_token` keys in this root already have.
+# other eight `doppler_service_token` keys in this root already have.
 #
 # What is NOT the same posture, and what this paragraph used to omit: `github_actions_secret
 # .doppler_token_drift_map` carries `plaintext_value` — the WHOLE JSON map — so the state also holds

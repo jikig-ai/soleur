@@ -180,7 +180,7 @@ describe("github-app-manifest.json symbol parity", () => {
     expect(m.default_permissions?.checks).toBe("write");
   });
 
-  test("default_permissions.packages === 'read' (minter needs read, never write)", () => {
+  test("default_permissions.packages === 'read', never write (grant awaiting removal, #8714)", () => {
     // #6031 (ADR-088) added `packages:read` for the since-deleted minter (#8714 5.4); the
     // grant stays until the live App drops it. The exact-key-set test only checks keys, not values — lock the value so a
     // silent bump to `packages:write` (a major supply-chain escalation: write =

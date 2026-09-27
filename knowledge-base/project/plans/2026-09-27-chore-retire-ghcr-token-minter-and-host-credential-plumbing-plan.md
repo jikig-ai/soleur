@@ -148,8 +148,11 @@ the infra-privileged census, `supabase/` (no migration or seed names the routine
 ### Live state (names only, never values)
 
 - Doppler `soleur`: `GHCR_READ_TOKEN`, `GHCR_READ_USER`, `GHCR_MINTER_DOPPLER_TOKEN`,
-  `GHCR_MINTER_DISABLED` present in `prd` and, with identical value hashes (inherited), in
-  `prd_terraform`, `prd_ghcr`, `prd_scheduled`. Absent from `dev`, `ci`, `soleur-inngest/prd`,
+  `GHCR_MINTER_DISABLED` present in `prd` and, with identical value hashes, in
+  `prd_terraform`, `prd_ghcr`, `prd_scheduled`. [Updated 2026-09-27, review] Identical hashes do not
+  prove inheritance: the structural review read Doppler's log and found `prd_terraform` holds its
+  OWN `GHCR_READ_USER`/`GHCR_READ_TOKEN` entries (written 2026-07-05, before `prd` root had them), so
+  a root delete likely leaves those two there. Tracked on #9080. Absent from `dev`, `ci`, `soleur-inngest/prd`,
   `soleur-registry/prd`, `soleur-infra-privileged/prd`.
 - `GHCR_MINTER_DISABLED` is NOT Terraform-managed. After this PR no code reads it; deleting it is a
   manual prd write and is left for an explicit operator go-ahead (Deferrals).
@@ -214,6 +217,8 @@ the infra-privileged census, `supabase/` (no migration or seed names the routine
   evidence.
 
 ## Deferrals
+
+[Updated 2026-09-27] Both deferrals below are consolidated on #9080.
 
 - **Remove the four bare `-target` lines** (and this PR's parity describe rows that require them)
   once the merge apply shows the destroys applied. Same class as the `zot_heartbeat_url_prd` item on
@@ -313,21 +318,41 @@ by `commandIn`/`extractAllTargets`), and every `*.tf` file under `apps/web-platf
 
 **Mutation matrix.**
 
-1. Delete any one of the four `-target` lines -> RED (the address is not in `planTargets`).
-2. Restore `resource "doppler_secret" "ghcr_read_token"` in any `.tf` -> RED.
-3. Add a `removed { from = doppler_service_token.ghcr_minter ... }` block -> RED.
-4. Declare a second resource with `name = "GHCR_MINTER_DOPPLER_TOKEN"` under another address
-   (after a compliant first check) -> RED.
-5. Re-add `variable "ghcr_read_user"` -> RED.
-6. Dispatch: point the describe at an empty target set -> the non-vacuity assertion
-   (`planTargets.has("doppler_secret.zot_pull_token")` is false there; use a known always-targeted
-   address such as `doppler_secret.github_app_id`) goes RED.
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Delete one of the four `-target` lines | RED (address absent from `planTargets`) |
+| 2 | Target an address with an instance key (`-target=doppler_secret.ghcr_read_token[0]`) | RED (bare-target row) |
+| 3 | Restore `resource "doppler_secret" "ghcr_read_token"` in any `.tf` | RED |
+| 4 | Add `removed { from = doppler_service_token.ghcr_minter ... }` | RED |
+| 5 | A second resource publishing `name = "GHCR_MINTER_DOPPLER_TOKEN"` | RED |
+| 6 | A module-subdirectory resource naming `ghcr_read_token` in any spelling | RED (recursive no-mention row) |
+| 7 | Re-add `variable "ghcr_read_user"` | RED |
+| 8 | Dispatch: the describe reads a job with no targets | RED (`github_app_id` non-vacuity) |
 
 **Harness rows.** Must-PASS: the real tree after the change. RED on the suite side: removing the
 `test(` from the describe lowers the count below the raised `TEST_FLOOR`.
 
 **Anchor.** The addresses are literals in the test and the workflow; one diff could edit both, which
 is accepted here because the post-merge verification reads the live apply log, not the test.
+
+### Guard 2 — the census allows a deleted resource block only as a listed, bare-targeted intended destroy
+
+**Property.** `tests/scripts/test-infra-privileged-tier-census.sh` G4c refuses any resource block the base declares and HEAD deletes without a `removed` block, EXCEPT an address listed in `INTENDED_DESTROYS` that its root's apply still targets bare and that is not the App identity pair (G4f).
+
+**Assembly.** The census's `orphans` loop over `GUARD4_ROOTS`, `root_targets` (every `-target=` in every apply step, keyed by working dir), `INTENDED_DESTROYS` and `G4_PROTECTED` in the same file.
+
+**Mutation matrix.**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Listed address deleted with no `-target=` line (M-g4-7) | RED (G4c) |
+| 2 | Listed address deleted and bare-targeted (M-g4-6) | GREEN (accept arm) |
+| 3 | `doppler_secret.github_app_id` added to `INTENDED_DESTROYS` | RED (G4f) |
+| 4 | Unlisted address deleted with no `removed` block (existing M-g4-3) | RED (G4c) |
+
+**Harness rows.** The census's control fixture must stay green (H0); `MUTANT_FLOOR` 30 and `FLOOR` 88 are the measured counts.
+
+**Anchor.** The allowance is a literal list in the suite; a merge-base diff reviewer sees any entry added.
 
 ## Acceptance Criteria
 

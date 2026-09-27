@@ -219,6 +219,7 @@ describe("Inngest function registry — drift guards", () => {
   // UPDATE this number when adding/removing Inngest functions.
   // 68 -> 69: cron-machinery-drain (the weekly issue-flow measurement + drain).
   // 69 -> 70: agentOnSpawnSettle (#8803, settles orphaned leader-loop runs).
+  // 70 -> 69: cron-ghcr-token-minter deleted (#8714, ADR-096 task 5.4).
   it("(a) route.ts functions array has expected count", () => {
     expect(routeEntries.length).toBe(69);
   });

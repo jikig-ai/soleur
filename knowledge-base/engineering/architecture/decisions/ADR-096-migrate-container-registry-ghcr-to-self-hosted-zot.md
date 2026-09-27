@@ -1657,10 +1657,21 @@ recorded.
 ### What this does NOT do
 
 - **It does not remove the four `-target` lines.** They plan the deletes; once applied they plan
-  nothing, and a follow-up removes them.
-- **Non-Terraform residue stays:** `GHCR_MINTER_DISABLED` in Doppler `soleur/prd` (a dead flag with
-  no reader), the `prd_ghcr` branch config, and the App manifest's `packages: read` grant (a
-  manifest-only removal reads as `permission_unexpected_grant` to the drift guard while the live App
-  still has it). Tracked in a follow-up issue.
+  nothing, and #9080 removes them (with the parity describe and the census `INTENDED_DESTROYS`
+  entries that pin them).
+- **Non-Terraform residue stays (#9080):** `GHCR_MINTER_DISABLED` in Doppler `soleur/prd`, the
+  `prd_ghcr` branch config, `prd_terraform`'s own `GHCR_READ_*` entries if they outlive the root
+  delete, and the App manifest's `packages: read` grant (a manifest-only removal reads as
+  `permission_unexpected_grant` to the drift guard while the live App still has it).
+- **`GHCR_MINTER_DISABLED` is load-bearing until no rollback-eligible image carries the minter.**
+  Every image built before this change still reads it; a canary rollback, `op=rollback` or a revert
+  that brings one back without the flag runs the minter, which pages `GHCR_MINTER_DOPPLER_TOKEN not
+  set` every 20 minutes because that token is destroyed here.
+- **A revert restores code, not credentials.** Re-adding `var.ghcr_read_*` (no default) after the
+  destroy fails every plan of this root if `prd_terraform` no longer carries the values, and
+  re-creates a read/write `prd` service token if it does. Roll back app code only.
+- **The #6178 soak probe keeps the minter in its population** (`RETIRED_IDS` in
+  `scripts/followthroughs/inngest-soak-6178.sh`): its in-window runs are still scanned, and its
+  absence from the registry is not read as `registry_drift`.
 - **5.3b-iii and 5.6 are unchanged** (the anonymous `ghcr.io` pulls, the egress allow, and this
   ADR's status flip).

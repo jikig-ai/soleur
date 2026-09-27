@@ -3,7 +3,7 @@ title: Revert the zot pull-site flip to GHCR-primary (RETRACTED — no host-side
 issue: "#6122"
 adr: ADR-096
 severity: P1 (deploy/boot path)
-last_reviewed: 2026-09-24
+last_reviewed: 2026-09-27
 ---
 
 # Revert the zot pull-site flip → GHCR-primary (#6122 / ADR-096)

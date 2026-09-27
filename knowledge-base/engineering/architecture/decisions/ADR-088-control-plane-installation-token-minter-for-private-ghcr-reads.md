@@ -8,11 +8,6 @@ supersedes: "ADR-087 D1 (credential-provisioning choice only; ADR-087 Design Bâ€
 
 # ADR-088: Control-plane installation-token minter for private-GHCR reads
 
-> **IMPLEMENTATION DELETED (2026-09-27, #8714 / ADR-096 task 5.4).** `cron-ghcr-token-minter`,
-> `ghcr-minter-doppler-token.tf` (the `ghcr-minter-write-*` read/write service token and
-> `GHCR_MINTER_DOPPLER_TOKEN`) and `ghcr-read-credential.tf` (`GHCR_READ_USER` / `GHCR_READ_TOKEN`)
-> are removed; see ADR-096's 2026-09-27 amendment for what remains.
-
 > **SUPERSEDED (2026-07-06, #6122).** This ADR's chosen mechanism â€” a control-plane minter
 > issuing **GitHub App installation tokens** for private-GHCR `docker pull` â€” was proven
 > **infeasible**: a GitHub App installation token can `docker login ghcr.io` but `docker pull`
@@ -50,6 +45,11 @@ supersedes: "ADR-087 D1 (credential-provisioning choice only; ADR-087 Design Bâ€
 > exist** â€” only a personal one. That turns "restore a GHCR credential and keep the mirror
 > warn-only" from a reversible preference into a structurally unavailable option, which is
 > exactly the distinction a future reader needs in order not to re-open it.
+
+> **IMPLEMENTATION DELETED (2026-09-27, #8714 / ADR-096 task 5.4).** `cron-ghcr-token-minter`,
+> `ghcr-minter-doppler-token.tf` (the `ghcr-minter-write-*` read/write service token and
+> `GHCR_MINTER_DOPPLER_TOKEN`) and `ghcr-read-credential.tf` (`GHCR_READ_USER` / `GHCR_READ_TOKEN`)
+> are removed; see ADR-096's 2026-09-27 amendment for what remains.
 
 ## Context
 

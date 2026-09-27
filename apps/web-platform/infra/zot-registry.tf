@@ -306,7 +306,8 @@ resource "doppler_service_token" "registry" {
 # --- Client/CI-facing secrets: the shared `prd` config ---------------------------------
 # Web hosts (pull) + CI (push) read these from `prd`, their existing runtime/deploy config.
 # TF owns the values → NO ignore_changes: a Terraform-generated value must reach Doppler in the
-# same apply (unlike an operator-minted value, e.g. github-app.tf, which carries ignore_changes).
+# same apply (unlike an operator-minted value, e.g. resend.tf's resend_receiving_api_key, which
+# carries ignore_changes = [value]).
 resource "doppler_secret" "zot_registry_url" {
   project    = "soleur"
   config     = "prd"

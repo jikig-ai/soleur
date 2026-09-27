@@ -53,9 +53,16 @@ _doppler_get() {
   command -v doppler >/dev/null 2>&1 || return 0
   doppler secrets get "$1" --plain --project soleur --config prd 2>/dev/null || true
 }
-ZOT_URL="${ZOT_REGISTRY_URL:-$(_doppler_get ZOT_REGISTRY_URL)}"
-ZOT_USER="${ZOT_PULL_USER:-$(_doppler_get ZOT_PULL_USER)}"
-ZOT_TOKEN="${ZOT_PULL_TOKEN:-$(_doppler_get ZOT_PULL_TOKEN)}"
+# ALL-OR-NOTHING: the three values come from the environment only when ALL three are set, else ALL
+# from Doppler. A per-variable fallback let an env-only ZOT_REGISTRY_URL steer the Doppler-read pull
+# credential to an arbitrary host over plain HTTP.
+if [ -n "${ZOT_REGISTRY_URL:-}" ] && [ -n "${ZOT_PULL_USER:-}" ] && [ -n "${ZOT_PULL_TOKEN:-}" ]; then
+  ZOT_URL="$ZOT_REGISTRY_URL" ZOT_USER="$ZOT_PULL_USER" ZOT_TOKEN="$ZOT_PULL_TOKEN"
+else
+  ZOT_URL="$(_doppler_get ZOT_REGISTRY_URL)"
+  ZOT_USER="$(_doppler_get ZOT_PULL_USER)"
+  ZOT_TOKEN="$(_doppler_get ZOT_PULL_TOKEN)"
+fi
 
 if [ -z "$ZOT_URL" ] || [ -z "$ZOT_USER" ] || [ -z "$ZOT_TOKEN" ]; then
   echo "zot-entry-gate: ZOT_REGISTRY_URL/PULL_USER/PULL_TOKEN not all present — cannot decide (TRANSIENT)" >&2
@@ -65,7 +72,7 @@ fi
 # Reachability probe first, so a down registry is a TRANSIENT (exit 2), distinct from a
 # reachable registry that is simply MISSING the tag (a real FAIL / exit 1). A live OCI
 # registry answers /v2/ with 200 (open) or 401 (auth); an unreachable host yields non-zero.
-if ! curl -s -o /dev/null --max-time 5 "http://$ZOT_URL/v2/"; then
+if ! curl --disable --noproxy '*' -s -o /dev/null --max-time 5 "http://$ZOT_URL/v2/"; then
   echo "zot-entry-gate: zot /v2/ unreachable at $ZOT_URL — cannot decide (TRANSIENT)" >&2
   exit 2
 fi
