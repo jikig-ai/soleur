@@ -21,7 +21,7 @@ shell says nothing about it).
 
 ## Mutation battery after the review fixes (pristine-copy restore, landing asserted per row)
 
-Control: 449 pass, 0 fail (`MIN_VERDICTS=449`, the exact total).
+Control: 451 pass, 0 fail (`MIN_VERDICTS=451`, the exact total).
 
 | Row | Mutation | Result |
 |---|---|---|
@@ -37,6 +37,7 @@ Control: 449 pass, 0 fail (`MIN_VERDICTS=449`, the exact total).
 | F | notice instruction inverted | KILLED (17-prose) |
 | G, H | notice moved to end of file / into a fence comment | KILLED (17-prose region) |
 | I | ship resolver call unquoted | KILLED (17d) |
+| R | in-fence recovery loses "never a path built from the working directory" | KILLED (13b) |
 | J | `--help` probe unquoted | KILLED (17b, 17c) |
 | H1, H2, H3 | substitution replaces nothing / EVIL_ROOT emptied / space removed | KILLED |
 
@@ -52,3 +53,11 @@ controls) and the mock layer.
   (baseline), lint-trap-tempfile-ownership, guard-vacuity-floor — all rc 0.
 - `test-all.sh --affected` was queued behind sibling worktrees' runs (ticket 26), so it was stopped.
   The substitute set above was chosen by shape; CI's full battery is the merge gate.
+
+## QA: constrained dry run of the prose
+
+A subagent with no delivered skill text followed both paragraphs from disk. It found no contradiction
+but three gaps, all fixed before ship: the in-fence recovery did not forbid the checkout's own
+`plugins/soleur` (which passes every fence check), did not say to stop the running Monitor before
+re-arming, and "re-invoke the skill" read as re-running ship from Phase 0 (merge-pr lacked the option).
+Scenario 13b now pins the recovery text in both blocks' runtime output.

@@ -1042,6 +1042,7 @@ gh() {
 EOF
 SCEN_ROOT='unset' run_scenario_both "13b-plugin-root-unset" "$SCEN13B" \
   "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '/scripts/sync-pr-behind\.sh': CLAUDE_PLUGIN_ROOT is unset
+CLAUDE_PLUGIN_ROOT is unset \(Claude Code/Grok: .*stop this Monitor, then re-arm .*Base directory line cut at its last /skills/, never a path built from the working directory\)
 \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
   "BEHIND detected|auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
 rm -f "$SCEN13B"
@@ -1187,7 +1188,7 @@ PROSE_FRAGS=(
   'The plugin root is fixed only in delivered text'
   "the root for this session is \`$ROOT_TOKEN\`"
   'Paste the fence from the delivered text, or prefix the Monitor command with `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` using that path, quoted.'
-  "The root is ONLY that printed path or the Skill tool's \`Base directory for this skill:\` line cut at its last \`/skills/\`"
+  "The root is ONLY that printed path or a soleur skill's \`Base directory for this skill:\` line (Skill tool) cut at its last \`/skills/\`"
   'never a path built from the working directory'
   'never guess'
 )
@@ -1569,7 +1570,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=449
+MIN_VERDICTS=451
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1
