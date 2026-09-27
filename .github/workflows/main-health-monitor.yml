@@ -187,9 +187,10 @@ jobs:
     steps:
       # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
       # deploy-script-tests job. The cloud-init-inngest-bootstrap drift guard
-      # compares its pin against the latest published tag; without tags it
-      # self-skips — and a self-skip is printed as PASS by the infra runner, so
-      # the coverage this workflow is adding would be silently absent.
+      # compares its pin against the latest tag merged into HEAD (#8782); a
+      # shallow checkout hides older tags from `git tag --merged`, so in CI a
+      # shallow or tagless checkout FAILS the guard rather than skipping -- this
+      # job would go red on checkout wiring, not on real drift.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
