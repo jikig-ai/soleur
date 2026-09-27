@@ -49,7 +49,11 @@
 #   - Rotated 2026-09-25 from `ghcr-minter-write` (slug 61c939b5…), readable via the leaked
 #     web-probes-read token until 2026-09-24T21:44:28Z (#8705). ADR-096 task 5.4 (#8714) retires
 #     this file.
-# Verify: bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh --retired-slug 61c939b5 --retired-name ghcr-minter-write --name-prefix ghcr-minter-write- --not-before 2026-09-24T21:44:28Z
+#   - An unrelated merge's apply (run 36142758324, 2026-09-25T13:45Z) refreshed 61c939b5 as
+#     missing and re-minted an intermediate `ghcr-minter-write` (slug a315b598…, never used, never
+#     readable by the leaked token); the renamed token replaces that one. Its delete needed a
+#     recovery `[ack-destroy]` merge (#8737).
+# Verify: bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh --retired-slug a315b598 --retired-name ghcr-minter-write --name-prefix ghcr-minter-write- --not-before 2026-09-24T21:44:28Z
 #
 # autonomy-considered: provider-mint-applied (doppler_service_token).
 # dev intentionally NOT provisioned — hosts read `--config prd` only (hr-dev-prd-distinct).
