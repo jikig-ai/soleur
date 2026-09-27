@@ -35,8 +35,9 @@ ROOT="$(git rev-parse --show-toplevel)" || exit 2
 # as lint-orphan-test-suites.test.sh's LINT_ORPHAN_TARGET_OVERRIDE). CI never sets it.
 GUARD="${SFA_GUARD_OVERRIDE:-$ROOT/apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh}"
 INFRA="$ROOT/apps/web-platform/infra"
+# The scorer is located from THIS file, never from the cwd's checkout.
 # shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
-source "$INFRA/lib/mutation-scorer.sh" \
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../infra" && pwd)/lib/mutation-scorer.sh" \
   || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 [[ -f "$GUARD" ]] || { echo "FATAL: guard not found at $GUARD" >&2; exit 2; }
 

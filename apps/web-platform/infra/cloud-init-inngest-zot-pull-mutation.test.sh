@@ -40,10 +40,8 @@ FAIL=0
 TOTAL=0
 
 die() { echo "HARNESS ABORT: $*" >&2; exit 2; }
-SCORER_LIB="$SCRIPT_DIR/lib/mutation-scorer.sh"
-[ -f "$SCORER_LIB" ] && [ -r "$SCORER_LIB" ] || die "mutation scorer missing or unreadable at $SCORER_LIB"
 # shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
-source "$SCORER_LIB" || die "could not source mutation-scorer.sh"
+source "$SCRIPT_DIR/lib/mutation-scorer.sh" || die "could not source mutation-scorer.sh"
 
 WORK="$(mktemp -d -t inngest-zot-mut-XXXXXX)" || die "mktemp -d failed"
 trap 'rm -rf "$WORK"' EXIT

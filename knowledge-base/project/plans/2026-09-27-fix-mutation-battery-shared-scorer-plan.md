@@ -679,3 +679,14 @@ No deferrals are created by this plan.
 - Inside the `grep -E` ERE, alternation is a bare `|`. A markdown table forces `\|`, which in `grep -E` is a literal pipe and matches nothing; the conversion snippets are in a code block for that reason.
 - `discoverability_test.command` must contain none of `| ; & < > $` or a backtick (preflight Check 10's shell-active reject); the chosen `bash apps/web-platform/infra/lib/mutation-scorer.test.sh` has none.
 - No file in `FILES_8855` may contain the forbidden piped shape, including the lib test, which is why the positive control runs once at implementation (AC7) rather than living in a file.
+
+## Review Addendum — 2026-09-27 (PR #9033 review panel)
+
+Corrections to this plan, recorded here rather than edited in place:
+
+- §Premise Validation says #8763 rewrote `| grep -qF --` in "18 infra test files". `git show 50ae36eff7` shows **13** files (27 lines).
+- §Guard says the cut consumer-contract checks each guarded a regression that "fails closed already". Measured false: replacing a battery's call with `if false` left it `OK: 20/20` with a row pointing at a needle the guard never prints. The pin is reinstated as a behavioural wire suite, `apps/web-platform/infra/lib/mutation-scorer-consumers.test.sh`. It runs every battery that sources the lib with `MUTATION_SCORER_PROBE` set and requires each one to reach the scorer. The pipe guard also derives the sourcing files and fails on any it does not pin.
+- §Guard item 6 says "7 real pre-PR site spellings". The seven sites use **6** distinct spellings.
+- "The one site that still has the live SIGPIPE flake is betterstack" holds for web-platform. Two more piped `grep -q` scorers exist in `plugins/` and `scripts/` (#7005).
+- zot-pull (a lib consumer) is pinned in FILES_8664. That pass now also runs `PATTERN_PIPED_SCORER`.
+- The lib now refuses a needle containing a newline and reads logs with `grep -a`. The self-test gained S5b (first needle missing), S15 (option-shaped needle), S16a/b (the escaped `\[FAIL\]` ERE), S17 (newline needle) and S18 (NUL byte), and dropped S5a (a duplicate of S1). Its instrument check now drives `want_rc`/`want_abort` with inputs that must fail.

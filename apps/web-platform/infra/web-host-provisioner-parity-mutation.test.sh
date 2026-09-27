@@ -22,8 +22,8 @@
 #   3. Every RED is attributed to a named check, and the anchor must appear ON A [FAIL] LINE.
 #      Matching anywhere in combined output is weaker than it looks: a guard whose §2 emitted
 #      its findings as plain prints while an unrelated floor supplied the exit code would still
-#      satisfy a substring test. Both greps read a FILE (never a pipe into `grep -q` on the
-#      producer), so the SIGPIPE-fails-open trap in the header does not apply.
+#      satisfy a substring test. The anchor check is mutation_scorer_failed_on
+#      (lib/mutation-scorer.sh), which captures the [FAIL] lines once and matches in bash -- no pipe.
 #   4. TWO POSITIVE CONTROLS, in both directions: a benign edit stays GREEN, and a
 #      legitimately dual-delivered NEW artifact stays GREEN. Without the second, a guard that
 #      over-fires on any addition would score a clean run.
@@ -56,8 +56,10 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
 REAL_INFRA="$ROOT/apps/web-platform/infra"
+# The scorer is located from THIS file, never from the cwd's checkout (`git rev-parse` would load
+# another checkout's copy when run from there).
 # shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
-source "$REAL_INFRA/lib/mutation-scorer.sh" \
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mutation-scorer.sh" \
   || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
 [[ -f "$GUARD" ]] || { echo "FATAL: $GUARD not found" >&2; exit 2; }

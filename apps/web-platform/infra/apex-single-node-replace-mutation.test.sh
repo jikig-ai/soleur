@@ -45,12 +45,12 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
-source "$SCRIPT_DIR/lib/mutation-scorer.sh" \
-  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 GUARD="$SCRIPT_DIR/apex-single-node-replace.test.sh"
 SRC_APPLY="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$SCRIPT_DIR/lib/mutation-scorer.sh" \
+  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 SRC_VALID="$REPO_ROOT/.github/workflows/infra-validation.yml"
 
 for required in "$GUARD" "$SRC_APPLY" "$SRC_VALID"; do

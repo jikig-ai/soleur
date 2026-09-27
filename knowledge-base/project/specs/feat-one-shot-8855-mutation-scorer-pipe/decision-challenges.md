@@ -21,7 +21,9 @@ reviewer's suggestion unapplied. Nothing needs doing unless you disagree.
 **Why:**
 
 - Issue #8855's own follow-up comment lists this site.
-- It is now the only site in the repo that still has the random-failure bug this issue is about.
+- It is the only web-platform mutation battery that still has the random-failure bug this issue is about.
+  Two more piped `grep -q` row scorers sit outside web-platform (`plugins/soleur/test/hook-input-classification-mutation.test.sh`
+  and `scripts/battery-tag-authorship-mutations.test.sh`); those are #7005's scope.
 - The six named sites lost that bug when #8763 merged.
 - Closing #8855 without it would leave the issue's recorded scope half done.
 
