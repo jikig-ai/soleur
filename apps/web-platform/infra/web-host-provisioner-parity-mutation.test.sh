@@ -56,6 +56,9 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
 REAL_INFRA="$ROOT/apps/web-platform/infra"
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$REAL_INFRA/lib/mutation-scorer.sh" \
+  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
 [[ -f "$GUARD" ]] || { echo "FATAL: $GUARD not found" >&2; exit 2; }
 
@@ -286,7 +289,7 @@ expect_red() {
   mutations_run=$((mutations_run + 1))
   if run_guard; then
     no "$label: guard still PASSED with the invariant broken -- it cannot detect this"
-  elif grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor'. Either it failed for an unrelated reason
@@ -872,7 +875,7 @@ expect_probe_red() {
   probe_reds=$((probe_reds + 1))
   if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
     no "$label: guard still PASSED with the hygiene rule broken -- the check asserts nothing"
-  elif grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor' -- unrelated reason. Output: $(<"$OUT")"
@@ -1200,7 +1203,7 @@ _g2_json_row() { # <label> <json> <expect: red|green> <anchor>
   if run_guard; then
     if [[ "$want" == green ]]; then ok "$label: guard stayed GREEN"
     else no "$label: guard still PASSED -- a .tf.json connection block is invisible to it"; fi
-  elif [[ "$want" == red ]] && grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
+  elif [[ "$want" == red ]] && mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: unexpected verdict (want $want, anchor '$anchor'). Output: $(<"$OUT")"

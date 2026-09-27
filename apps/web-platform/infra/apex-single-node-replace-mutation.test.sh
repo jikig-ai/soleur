@@ -45,6 +45,9 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$SCRIPT_DIR/lib/mutation-scorer.sh" \
+  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 GUARD="$SCRIPT_DIR/apex-single-node-replace.test.sh"
 SRC_APPLY="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
@@ -175,7 +178,12 @@ score() {
       return
     fi
     # ATTRIBUTION: the guard went red, but on THIS row's case?
-    if [[ "$expect" != "-" ]] && ! grep -E '^  FAIL|^\[VACUITY\]|^\[FATAL\]' "$WORK/out.txt" | grep -cF -- >/dev/null "$expect"; then
+    # A RED row must name its case: `-` would skip attribution and score KILLED on any failure.
+    if [[ "$expect" == "-" ]]; then
+      verdict 1 "$id: a RED row must name the case it expects (got '-')"
+      return
+    fi
+    if ! mutation_scorer_failed_on "$WORK/out.txt" '^  FAIL|^\[VACUITY\]|^\[FATAL\]' "$expect"; then
       verdict 1 "$id MISROUTED (exit $rc, but not on the case this row targets: '$expect')"
       return
     fi

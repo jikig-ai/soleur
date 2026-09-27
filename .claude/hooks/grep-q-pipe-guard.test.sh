@@ -23,6 +23,13 @@
 # #8664 added the zot-pull mutation battery and the guard it mutates:
 #   apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 #   apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
+# #8855 added the shared row scorer and the five batteries that route their verdicts through it:
+#   apps/web-platform/infra/lib/mutation-scorer.sh
+#   apps/web-platform/infra/{apex-single-node-replace,ssl-full-mitigation,www-apex-canonicalizer,
+#     web-host-provisioner-parity}-mutation.test.sh
+#   apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh
+# Those files need a third pattern: #8763 rewrote their scorers from `| grep -qF --` to
+# `| grep -cF --`, which PATTERN does not see, so a PATTERN-only pin would pass on a revert.
 # The REST of scripts/ and plugins/ is still out of scope — ~800 sites repo-wide,
 # tracked in #7005. #7024 was a slice of that corpus, not a peer of it.
 #
@@ -61,6 +68,9 @@ PATTERN='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Z
 # seen by a line search; #8664's splitter shape is held by the battery's
 # g1b-mustpass-padded-pull-item row and its positive control instead.
 PATTERN_AWK_EXIT='(^|[^|])\|&?[[:space:]]*awk[^|]*[^[:alnum:]_]exit([^[:alnum:]_]|$)'
+# A pipe into a grep whose flags end in `--` — the signature every piped row scorer shares
+# (`| grep -qF -- "$x"`, `| grep -cF -- >/dev/null "$x"`), whatever its early-exit flags (#8855).
+PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+--([[:space:]]|$)'
 # Not matched (no instance in the scanned paths today): command/env/\grep/egrep wrappers,
 # grep inside { }, a pipe split across lines, and `| head` (the #8664 files keep 19 one-line
 # `| head -1` sites whose producers are single short writes). Widening is tracked in #7005.
@@ -68,7 +78,7 @@ PATTERN_AWK_EXIT='(^|[^|])\|&?[[:space:]]*awk[^|]*[^[:alnum:]_]exit([^[:alnum:]_
 # A PATTERN that does not compile must not read as "no hits": every grep below
 # folds exit 2 into exit 1 (`|| true`, `! grep`), so it would pass all three
 # checks having scanned nothing (#8807 review).
-for _pat in "$PATTERN" "$PATTERN_AWK_EXIT"; do
+for _pat in "$PATTERN" "$PATTERN_AWK_EXIT" "$PATTERN_PIPED_SCORER"; do
   rc=0; grep -E -- "$_pat" </dev/null >/dev/null 2>&1 || rc=$?
   if [[ "$rc" -ne 1 ]]; then
     echo "UNRESOLVED: a guard pattern does not compile as an ERE (grep rc=$rc) — this suite asserted nothing"
@@ -138,16 +148,26 @@ FILES_8664=(
   'apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh'
   'apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh'
 )
+# The shared scorer and every battery that sources it (#8855). Change together: this array, the
+# `!= 6` member count below, and the consumer note in the lib's header.
+FILES_8855=(
+  'apps/web-platform/infra/lib/mutation-scorer.sh'
+  'apps/web-platform/infra/apex-single-node-replace-mutation.test.sh'
+  'apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh'
+  'apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh'
+  'apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh'
+  'apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh'
+)
 # Every pinned file must be tracked: a git grep over a renamed or deleted path returns nothing,
 # which would switch its pin off without a word. The member count is pinned for the same reason.
 missing_pins=""
-for f in "${FILES_7024[@]}" "${FILES_8664[@]}"; do
+for f in "${FILES_7024[@]}" "${FILES_8664[@]}" "${FILES_8855[@]}"; do
   git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || missing_pins="$missing_pins $f"
 done
-if [[ -n "$missing_pins" ]] || (( ${#FILES_7024[@]} != 2 || ${#FILES_8664[@]} != 2 )); then
+if [[ -n "$missing_pins" ]] || (( ${#FILES_7024[@]} != 2 || ${#FILES_8664[@]} != 2 || ${#FILES_8855[@]} != 6 )); then
   FAIL=1
   echo "FAIL: a pinned file is not tracked, or a pin list lost a member, so its pin covers nothing:${missing_pins:- (member count changed)}"
-  echo "  If a file was renamed, update FILES_7024/FILES_8664 in this file to the new path; do not delete the entry."
+  echo "  If a file was renamed, update FILES_7024/FILES_8664/FILES_8855 in this file to the new path; do not delete the entry."
 fi
 hits_8664="$(git grep -nE "$PATTERN|$PATTERN_AWK_EXIT" -- "${FILES_8664[@]}" \
   | grep -vE ':[0-9]+:[[:space:]]*#' || true)"
@@ -166,6 +186,20 @@ if [[ -n "$hits_8664" ]]; then
   echo "  Capture into a variable and match in bash, or use a herestring."
 else
   echo "PASS: grep-q-zero-8664-pass (zot-pull battery and its guard)"
+fi
+
+# The shared row scorer and the batteries that route through it (#8855). All three patterns;
+# same comment filter as the #7024 and #8664 passes; no opt-out marker.
+hits_8855="$(git grep -nE "$PATTERN|$PATTERN_AWK_EXIT|$PATTERN_PIPED_SCORER" -- "${FILES_8855[@]}" \
+  | grep -vE ':[0-9]+:[[:space:]]*#' || true)"
+if [[ -n "$hits_8855" ]]; then
+  FAIL=1
+  echo "FAIL: a piped row scorer found in a file #8855 took to zero"
+  echo "$hits_8855" | sed 's/^/  /'
+  echo
+  echo "  Score through mutation_scorer_failed_on (apps/web-platform/infra/lib/mutation-scorer.sh)."
+else
+  echo "PASS: grep-q-zero-8855-pass (scorer lib and five batteries)"
 fi
 
 # Non-vacuity: the pattern must actually match the shape it forbids. Without
@@ -196,6 +230,22 @@ cat > "$probe/good-awk.sh" <<'EOF'
 awk '/p/ { exit }' "$f"
 a || awk '/p/ { exit }' "$f"
 EOF
+# The pre-#8855 scorer spellings, and lines from the same files that must not match.
+cat > "$probe/bad-scorer.sh" <<'EOF'
+    if [[ "$expect" != "-" ]] && ! grep -E '^  FAIL|^\[VACUITY\]|^\[FATAL\]' "$WORK/out.txt" | grep -cF -- >/dev/null "$expect"; then
+  if ! grep -E '^  FAIL|^\[FATAL\]' "$log" | grep -cF -- >/dev/null "$expect"; then
+  elif grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
+  elif [[ "$want" == red ]] && grep -F "[FAIL]" "$OUT" | grep -cF -- >/dev/null "$anchor"; then
+  for a in "$@"; do grep -F '[FAIL]' "$OUT" | grep -qF -- "$a" || return 1; done
+  grep -E '^  FAIL' "$log" | grep -qF -- "$expect"
+EOF
+cat > "$probe/good-scorer.sh" <<'EOF'
+printf '%s' "$m" | grep -cF 'www.soleur.ai' >/dev/null
+  | grep -v '/\.terraform/' | sed 's/x/y/'
+a || grep -qF -- "$x" <<<"$y"
+mutation_scorer_failed_on "$log" '^  FAIL' "$e"
+grep -qF -- "$a" "$f"
+EOF
 
 # Every bad line must match and no good line may, compared as COUNTS: a grep error
 # prints no count, so it can never equal the line total or 0 (a negated `grep -q`
@@ -206,8 +256,13 @@ bad_hits=$(grep -cE -- "$PATTERN" "$probe/bad.sh" || true)
 good_hits=$(grep -cE -- "$PATTERN" "$probe/good.sh" || true)
 awk_bad_hits=$(grep -cE -- "$PATTERN_AWK_EXIT" "$probe/bad-awk.sh" || true)
 awk_good_hits=$(grep -cE -- "$PATTERN_AWK_EXIT" "$probe/good-awk.sh" || true)
+scorer_bad_lines=$(wc -l < "$probe/bad-scorer.sh")
+scorer_bad_hits=$(grep -cE -- "$PATTERN_PIPED_SCORER" "$probe/bad-scorer.sh" || true)
+scorer_good_hits=$(grep -cE -- "$PATTERN_PIPED_SCORER" "$probe/good-scorer.sh" || true)
 if [[ "$bad_lines" -gt 0 && "$bad_hits" == "$bad_lines" && -s "$probe/good.sh" && "$good_hits" == 0 \
-      && "$awk_bad_hits" == 1 && "$awk_good_hits" == 0 ]]; then
+      && "$awk_bad_hits" == 1 && "$awk_good_hits" == 0 \
+      && "$scorer_bad_lines" -gt 0 && "$scorer_bad_hits" == "$scorer_bad_lines" \
+      && -s "$probe/good-scorer.sh" && "$scorer_good_hits" == 0 ]]; then
   echo "PASS: guard pattern matches the forbidden shapes and not the fixed shapes (incl. || herestrings, #8807)"
 else
   FAIL=1
@@ -215,6 +270,7 @@ else
   echo "  forbidden lines matched: ${bad_hits:-<grep error>}/$bad_lines (want all)"
   echo "  fixed lines matched:     ${good_hits:-<grep error>} (want 0)"
   echo "  piped awk exit matched:  ${awk_bad_hits:-<grep error>}/1, fixed awk: ${awk_good_hits:-<grep error>} (want 0)"
+  echo "  piped scorer matched:    ${scorer_bad_hits:-<grep error>}/$scorer_bad_lines, fixed: ${scorer_good_hits:-<grep error>} (want 0)"
 fi
 
 exit "$FAIL"

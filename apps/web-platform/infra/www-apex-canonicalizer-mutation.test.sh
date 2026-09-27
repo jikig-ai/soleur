@@ -61,6 +61,8 @@ FAIL=0
 TOTAL=0
 
 die() { printf 'HARNESS ABORT: %s\n' "$*" >&2; exit 2; }
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$SCRIPT_DIR/lib/mutation-scorer.sh" || die "could not source mutation-scorer.sh"
 
 WORK="$(mktemp -d -t wac-mutation-XXXXXX)" || die "mktemp -d failed"
 trap 'rm -rf "$WORK"' EXIT
@@ -505,7 +507,7 @@ BASE_RC="$(run_guard "$SANDBOX" "$BASE_LOG")"
 if [[ "$BASE_RC" != "0" ]]; then
   printf 'HARNESS ABORT: the guard is not green on an UNMUTATED sandbox (rc=%s).\n' "$BASE_RC" >&2
   printf 'Every mutation row below would report RED for a reason that is not its mutation.\n' >&2
-  grep -E '^  FAIL|^\[FATAL\]' "$BASE_LOG" >&2 | head -20
+  grep -E '^  FAIL|^\[FATAL\]' "$BASE_LOG" | head -20 >&2
   exit 2
 fi
 printf '=== www-apex-canonicalizer mutation battery (#7640) ===\n'
@@ -553,11 +555,10 @@ case_row() {
     printf '            (b) the mutant is EQUIVALENT — prove no verdict changes, and say so here.\n'
     return
   fi
-  # `grep -qF -- "$expect"`: the END-OF-OPTIONS marker is load-bearing, not decoration. Two
-  # of the rows below expect a case naming `--branch` / `--project-name`, and without `--`
-  # grep parses the expectation as an option, exits 2, and the row reports MISROUTED against
-  # a guard that named its case correctly. Measured on the first run of this file.
-  if ! grep -E '^  FAIL|^\[FATAL\]' "$log" | grep -cF -- >/dev/null "$expect"; then
+  # Two of the rows below expect a case naming `--branch` / `--project-name`. The scorer hands
+  # the needle to a quoted bash match, never to grep, so an option-shaped expectation is literal
+  # (a grep without `--` once parsed it as an option, exited 2 and scored MISROUTED).
+  if ! mutation_scorer_failed_on "$log" '^  FAIL|^\[FATAL\]' "$expect"; then
     FAIL=$((FAIL + 1))
     printf '  MISROUTED: %-9s the guard went RED, but NOT on the case this row targets.\n' "$id"
     printf '             expected a failure naming: %s\n' "$expect"
