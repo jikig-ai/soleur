@@ -202,18 +202,23 @@ nothing new).
 
 ADR-237 is `accepted`. The condition in Status is met: `git-data-cutover.yml` run
 [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656), dispatched from
-`main` at `51a5541a1a` on 2026-09-25, ran with `ssh-strict: true`, pinned both hops
+`main` at `51a5541a1a` on 2026-09-25, ran both hops under `StrictHostKeyChecking yes` against a
+known_hosts holding only the pins (the bridge's `WEB_HOST_SSH` and the `Write git-data ssh_config`
+step's `gd-ssh-config`, each with `GlobalKnownHostsFile /dev/null`), pinned both hops
 (`write-known-hosts: pinned web-1 ecdsa-sha2-nistp256 SHA256:ARBTzhY4hCGXKwWZ2j9aOc4zZefBYgAxJncoVglvuok`,
 `write-known-hosts: pinned git-data ssh-ed25519 SHA256:4eErmLfOuKM17zzNd+2so+26zojG0tsv9NMVNCuXpCs`),
 and read `role=web verdict=ok`, `role=git-data-jump verdict=ok` and
-`role=git-data-auth verdict=ok`. The git-data fingerprint equals the published pin
-(`git_data_pin=present fp=SHA256:4eErmLfOuKM17zzNd+2so+26zojG0tsv9NMVNCuXpCs`).
+`role=git-data-auth verdict=ok`. The git-data pin came from the flag precheck's read of the published
+`prd` pin (`git_data_pin=present fp=SHA256:4eErmLfOuKM17zzNd+2so+26zojG0tsv9NMVNCuXpCs`); the known_hosts
+was written from that same read, so the two fingerprints match by construction. What proves the host
+served that key is `role=git-data-auth verdict=ok` under strict checking.
 
 **The run as a whole failed, and not on a host key.** It exited 5 on
-`probe=store-not-cut-over verdict=already_cut_over`, because the store had already been cut over
-on 2026-09-25. That is a store-probe verdict and was read after all three SSH roles had passed.
-Making the proof read `already_cut_over` as a pass is a separate follow-up (git-data-cutover
-PR2). This addendum relies only on the three `role=` lines and the two `pinned` lines. It does
+`probe=store-not-cut-over verdict=already_cut_over`, because git-data already serves the LUKS mapper
+at `/mnt/git-data` from boot (ADR-239, PR1 of #8211), delivered by replace run
+[36118115758](https://github.com/jikig-ai/soleur/actions/runs/36118115758) 18 minutes earlier. No data
+moved; the store has never held a repository. That is a store-probe verdict and was read after all
+three SSH roles had passed. Making the proof read `already_cut_over` as a pass is #8211 PR2. This addendum relies only on the three `role=` lines and the two `pinned` lines. It does
 not claim the run passed.
 
 **Still open, and not conditions of `accepted`:**
@@ -222,7 +227,11 @@ not claim the run passed.
   (Residuals, "The transitional app arm"). Deleting it is runbook step 6 (#5914), which is a hard
   precondition for setting `GIT_DATA_STORE_ENABLED`. It was never a condition of this flip.
 - Runbook step 5 (discharging erasures left pending by the pin window) is not done by this run,
-  which stopped before the `store_not_empty` probe.
+  which stopped before the `store_not_empty` probe. Every dry run stops there until #8211 PR2, so
+  step 5 is blocked on it.
+- Runbook steps 1–3 stay unticked. Step 3's own criterion (the app's startup line
+  `git_data_pin=present` after the pin redeploy) is not verified here; the `git_data_pin` line above
+  is the CI precheck's read of Doppler, not the running app.
 
 Effects elsewhere, already written conditionally in those records and not rewritten here: per
 ADR-220's 2026-09-21 amendment, D4's first residual ("Unverified host keys (#7226)") closes, and

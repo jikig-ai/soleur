@@ -14,6 +14,13 @@ brand_survival_threshold: none
 
 # docs: flip ADR-237 to `accepted` and tick host-key post-merge step 4
 
+> **Review correction (2026-09-27, PR #9036).** Two claims below are superseded; the shipped ADR-237
+> addendum carries the corrected wording. (1) `ssh-strict: true` is an input of the run's
+> `actions/checkout` step (log line 53), not a host-key control; the strict evidence is
+> `StrictHostKeyChecking yes` in the bridge's `WEB_HOST_SSH` and the `gd-ssh-config` step. (2)
+> `already_cut_over` does not mean data was cut over: git-data serves the LUKS mapper from boot since
+> replace run 36118115758 (ADR-239, PR1 of #8211); the store has never held a repository.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-09-27. Proportional pass: inline verification only, with no agent fan-out,
