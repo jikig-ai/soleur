@@ -2,6 +2,7 @@
 // One view per C4 level. `view <id> of <element>` gives LikeC4 automatic
 // clickable drill-down: in the context view the `platform` box drills into
 // `containers`; in `containers` the `plugin` box drills into `components`.
+// last-verified: 2026-09-27
 views {
 
   // ---- C4 L1: System Context --------------------------------------------
@@ -91,7 +92,7 @@ views {
       platform.plugin.snapshotGuard, playwrightMcp,
       platform.engine.claude, platform.engine.hooks, platform.plugin.kb,
       platform.engine.claude.registry, platform.engine.claude.binding, platform.engine.claude.adapter,
-      platform.engine.claude.factory, platform.engine.claude.composition,
+      platform.engine.claude.factory, platform.engine.claude.composition, platform.engine.claude.codexAdapter,
       // #7332: BOTH endpoints of an edge must be in a view's include list or the
       // edge does not render. `sync -> connectedRepoKb` and
       // `architecture -> connectedRepoKb` live here because this is the only
