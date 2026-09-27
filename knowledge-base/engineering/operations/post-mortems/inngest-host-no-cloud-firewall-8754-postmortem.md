@@ -31,7 +31,7 @@ The data ports stayed off the internet because of independent host-local control
 
 ## Status
 
-resolved (2026-09-27). The fix (PR #8831) binds the firewall at server creation. The `inngest-host-replace` of 2026-09-27 created the host in service with the firewall applied, and the Hetzner API check passed (see Recovery verification). The follow-ups that stay open are tracked in Action Items & Follow-ups.
+resolved (2026-09-27). The fix (PR #8831) binds the firewall at server creation. The `inngest-host-replace` of 2026-09-27 created the host in service with the firewall applied, and the Hetzner API check passed (see Recovery verification). Limb L3 of the legal determination (#8867) remains open, and the other follow-ups are tracked in Action Items & Follow-ups.
 
 ## Symptom
 
@@ -56,7 +56,7 @@ The web-platform drift plan (#8754) showed `hcloud_firewall_attachment.inngest` 
 | human | 2026-07-31 10:34 | A full apply (run 30623984560) re-binds the firewall during the laptop-compromise response. |
 | agent | 2026-08-12 22:21 | A replace leaves the next host unfirewalled. |
 | human | 2026-09-09 08:40 | Run 34330222965 re-binds. |
-| agent | 2026-09-09 15:14 | A replace leaves the next host unfirewalled (the current interval). |
+| agent | 2026-09-09 15:14 | A replace leaves the next host unfirewalled (interval 3). |
 | agent | 2026-09-25 | Drift triage (#8754) measures the gap live. PR #8831 binds the firewall through `hcloud_server.firewall_ids`. |
 | agent-with-ack | 2026-09-27 14:56 | `inngest-host-replace` run 36327637204 (from `main` at 517bf59d85, after PR #8831 and PR #8873) creates server 167651172 with firewall 11269127 applied at creation and deletes server 167310350. Interval 3 ends. |
 | agent | 2026-09-27 15:02 | The Hetzner API check passes (see Recovery verification). |
@@ -91,7 +91,7 @@ PR #8831:
 
 ## Recovery verification
 
-Pending, and to be recorded after the next `inngest-host-replace` (Hetzner API, no SSH):
+Prescribed on 2026-09-25, to be recorded after the next `inngest-host-replace` (Hetzner API, no SSH):
 
 - the new server's `public_net.firewalls` lists 11269127 with status `applied`;
 - firewall 11269127's `applied_to` lists that server's id.

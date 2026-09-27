@@ -179,8 +179,8 @@ ships a deletion API (adopt it) or extends the window (re-balance).
 > server 167651172, created 2026-09-27 14:56:48 UTC) with the firewall applied at creation, and
 > deleted server 167310350. Measured through the Hetzner API at about 15:02 UTC, the new server lists
 > firewall 11269127 with status `applied`, and the firewall's `applied_to` lists server 167651172.
-> The cloud-firewall layer is in force from that time, and the third interval ends at about
-> 2026-09-27 14:56 UTC. The rest of that interval's SSH log was read at the same time (Better Stack,
+> The cloud-firewall layer is in force from the new host's creation, and the third interval ends at
+> about 2026-09-27 14:56 UTC. The rest of that interval's SSH log was read afterwards (Better Stack,
 > 2026-09-25 00:00 UTC to 2026-09-27 15:10 UTC). It records no successful SSH login and no opened
 > session on the host. Five rows from the host contain the phrase `Accepted publickey`; they come
 > from its Inngest event log, not from sshd. The conclusion above is unchanged. The details are in

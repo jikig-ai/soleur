@@ -25,7 +25,7 @@ open). That is about 65 of 78 days, with public sshd for the whole period. A 202
 found this ("no such automated path exists"); the response was to correct the comment, not to change
 the mechanism.
 
-> **Superseded 2026-09-27:** the third interval is no longer open. `inngest-host-replace` run
+> **Superseded 2026-09-27 (#8754):** the third interval is no longer open. `inngest-host-replace` run
 > 36327637204 created the replacement host (server 167651172) with firewall 11269127 applied at
 > creation, and the Hetzner API check passed at about 15:02Z. The interval ended at about
 > 2026-09-27 14:56 UTC. See the 2026-09-27 addendum of

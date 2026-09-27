@@ -309,17 +309,23 @@ prescribes, and the interval-3 re-read that item 1 of the 2026-09-25 addendum re
      #8846 self-poisoning class. **sshd `Accepted publickey` from `soleur-inngest`: 0.**
    - `session opened for user`: 16 rows, all from `soleur-web-platform`. **From `soleur-inngest`:
      0.**
-   - Coverage: the host's journal was shipping throughout. sshd `preauth` rows from
-     `soleur-inngest` per 12 h window: 1527, 1363, 2131, 1837 and 1806 (the last window ends at
-     15:10Z). Coverage verdict: Better Stack, sshd rows from host `soleur-inngest`, the whole
-     window.
+   - Coverage: the host's journal was shipping. sshd `preauth` rows from `soleur-inngest`, in
+     five 12 h query windows as recorded with the read: 1527, 1363, 2131, 1837 and 1806 (the last
+     window ends at 15:10Z). At the tail, 141 sshd rows from the host fall in 14:00–14:56Z.
+     Coverage verdict as recorded with the read: Better Stack, sshd rows from host
+     `soleur-inngest`, the whole window.
+   - Method: this re-read counts rows that contain the exact phrase from the host and then
+     separates them by identifier. The 2026-09-25 read counted sshd rows. The five 11:17Z rows
+     are not sshd rows, so they are not something the earlier read missed.
 
    Both counts are zero, so nothing flips under §If the finding flips.
 5. **Effect on this determination: none.** NO PERSONAL-DATA BREACH ESTABLISHED; Art. 33 No;
    Art. 34 No. L1 is RESOLVED for interval 2 and for the whole of interval 3. L1 for interval 1
    and L2 for destroyed hosts stay INCONCLUSIVE. L3 stays PROVISIONAL pending #8867. Under
    §Conditions, the REQUIRED replace and post-replace check are discharged. The REQUIRED L3
-   close-out is not.
+   close-out is not. The clause (o) staleness tracked in #8872 was to be fixed only after this
+   check passed (§Conditions, PROCESS — published documents); that precondition is now met, and
+   the fix is a separate change.
 6. **Where the marker is carried.** Restored markers dated 2026-09-27 are appended at:
    - the Art. 30 PA-13 §(e) and §(g) TOM (11)(a) markers;
    - the 2026-09-25 row of `knowledge-base/legal/breach-register.md`;
@@ -327,4 +333,9 @@ prescribes, and the interval-3 re-read that item 1 of the 2026-09-25 addendum re
    - `knowledge-base/engineering/operations/runbooks/inngest-server.md`;
    - both ADR-030 corrections, and ADR-100's 2026-09-25 addendum;
    - the counsel review `2026-09-counsel-review-8754.md` (its re-evaluation trigger (1));
-   - the post-mortem `inngest-host-no-cloud-firewall-8754-postmortem.md`.
+   - the post-mortem `inngest-host-no-cloud-firewall-8754-postmortem.md`;
+   - the learning `2026-09-25-an-accepted-residual-named-an-actor-that-never-existed.md`.
+
+   The Art. 30 PA-13 §(g) TOM (11)(b) cell also carries a marker added 2026-09-27 under #8872:
+   the dedicated host has been the serving substrate since the 2026-09-15 cutover, and the
+   nftables load was measured on host 167310350 only, not on host 167651172.
