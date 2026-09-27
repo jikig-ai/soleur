@@ -17,6 +17,48 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27
+**Sections enhanced:** 6 (Phase 1, Phase 3, Phase 4, Phase 5, Observability, Acceptance Criteria)
+**Agents used:**
+
+- `soleur:engineering:review:architecture-strategist`;
+- a verify-the-claims pass (general-purpose, `standard` tier), which re-ran every attribution and
+  every AC against the pre-edit tree, including live Hetzner and Better Stack re-reads;
+- halt gates 4.6, 4.7, 4.8, 4.9, 4.10, 4.11 and 4.55.
+
+### Key Improvements
+
+1. **A stale C4 claim was found (P1).** The `gitDataStore` element still says "no host serves the
+   store until the forward fix (#5274) boots". The fix booted on 2026-09-25, and that boot is the
+   ADR-239 evidence. Phase 5 step 4 now corrects the claim, and AC4 asserts its absence.
+2. **The ADR-220 entry is now complete:**
+   - why `probe=config` has no notice;
+   - the verbatim 2026-09-27 caveat;
+   - the D4 first residual closed through ADR-237;
+   - the D2–D3 #7226 limb now met.
+3. **The ADR-239 amendment now cites more evidence:**
+   - the committed rung-2 evidence file (`git-data-rung2-boot-evidence.env`) for the rehearsal
+     precondition;
+   - the discharge of the 2026-09-24 amendment's production proof (`plaintext_journal=dirty
+     plaintext_empty=yes`).
+4. **Phase 1 re-reads the boot line as well as the Hetzner server,** because an in-place rebuild
+   keeps the server id.
+5. **An `## Observability` block now satisfies Phase 4.7.** A `.github/workflows` path is not
+   pure-docs to that gate. The block has a probe-verb-gated `grep` probe.
+
+### New Considerations Discovered
+
+- The verify pass confirmed every PR, issue, run, SHA and quoted-anchor claim. It corrected two
+  minor facts: the annotation list order, and the count of suites that read the workflow (8).
+- The pass reported that host-key item 4 already carries a Done record. This was checked and is
+  wrong: the only 36119817656 citation is in the Preconditions `[x] Step 4` sub-item, so Phase 6
+  step 2 stays.
+- The halt gates found nothing to stop on. There are no PAT-shaped variables, no UI surface, no
+  new store or connection, no guard deliverable and no downtime operation. User-Brand Impact is
+  present with a scoped-out `none`.
+
 ## Overview
 
 This is the post-merge docs PR (PM4) for #8211 PR2. The proof-half PR (#9048) merged. Its
@@ -132,8 +174,8 @@ none of the target files (checked with `git diff --stat 2b41ad60e4 origin/main -
 - **Annotations** (`gh api repos/jikig-ai/soleur/check-runs/108675849067/annotations`; the API lists
   newest first): nine notices, namely `verdict=clear`, then `probe=fence-shape`, `store-empty`,
   `store-verified`, `store-on-mapper` and `store-mounted`, then `role=git-data-auth`,
-  `git-data-jump` and `web`, every one `verdict=ok`. They are followed by the expected
-  `TOFU_ARM present` warning and a Node 20 deprecation warning.
+  `git-data-jump` and `web`, every one `verdict=ok`. There are also two warnings: the expected
+  `TOFU_ARM present` (listed last) and a Node 20 deprecation (listed first).
 - **Pinned lines, cited by the step that printed each one:**
   - `write-known-hosts: pinned web-1 ecdsa-sha2-nistp256 SHA256:ARBTzhY4hCGXKwWZ2j9aOc4zZefBYgAxJncoVglvuok`
     was printed in the `CF Tunnel SSH bridge` step and again in the `Write git-data ssh_config` step.
@@ -186,9 +228,10 @@ none of the target files (checked with `git diff --stat 2b41ad60e4 origin/main -
   declined these for lack of per-step records.
 - **Appending the 36339208990 re-read to the already-ticked `[x] Step 4` sub-item:** cut (plan
   review). That item is ADR-237 evidence, and the new run is recorded where it belongs.
-- **Re-reading immutable evidence at work time** (the run's conclusion, its annotations, the
-  2026-09-25 boot line): cut (plan review). Those were read at plan time and are quoted above. Only
-  the mutable fact is re-read: that no newer git-data host exists.
+- **Re-reading immutable evidence at work time** (the run's conclusion and its annotations): cut
+  (plan review). Those were read at plan time and are quoted above. Only the mutable facts are
+  re-read: that no newer git-data host exists, and that no newer boot exists. The second read was
+  restored at deepen-plan, because an in-place rebuild keeps the Hetzner id.
 - **Post-merge PM1 (a status re-read) and PM2 (a comment on #8211):** cut. `Ref #8211`
   cross-links, and the squash merge carries the same bytes.
 - **Run ids in the C4 label:** cut. The ADR-220 amendment is the single home of the evidence.
@@ -283,9 +326,15 @@ The taste splits are recorded in
 1. Run `git fetch origin pull/9048/head`, then check
    `git cat-file -e 0f5cf8934f^{commit}`.
 2. Confirm that `git diff 0f5cf8934f HEAD -- .github/workflows/git-data-cutover.yml` prints nothing.
-3. Confirm that no newer git-data host exists. Re-run the Hetzner `GET` (the exact command is in
-   Research Insights). It must still return id `167392038` created `2026-09-25T09:24:32Z`. If it
-   differs, ADR-239 must not flip on the 2026-09-25 boot line: stop and re-plan Phase 4.
+3. Confirm that no newer git-data host or boot exists. Two reads (the exact commands are in
+   Research Insights):
+   - The Hetzner `GET` must still return id `167392038`, created `2026-09-25T09:24:32Z`.
+   - The Better Stack `boot_complete` query must still return exactly one row, at
+     `2026-09-25 09:25:30`. An in-place rebuild keeps the id but boots again, so a newer row would
+     mean a different current boot.
+
+   If either read differs, ADR-239 must not flip on the 2026-09-25 boot line: stop and re-plan
+   Phase 4.
 
 ### Phase 2 — workflow header (re-apply the held-back text)
 
@@ -322,8 +371,14 @@ four statements:
   [35119099336](https://github.com/jikig-ai/soleur/actions/runs/35119099336) on 2026-09-16. That run
   was unpinned and predates the fence probe. It closed #8189 and #6680, but the flip was not
   recorded then.
-- **D5, restated for this row only:** D1b authenticated hop is `accepted` (2026-09-27). D1a is
-  unchanged. D2–D3 stay `proposed` under the 2026-09-22 restatement. D4 stays standing constraints.
+- **`probe=config`** emits no `ok` notice, because it annotates only on refusal. It passed: the
+  run reached the access gate and ended `verdict=clear`.
+- **The caveat, as restated on 2026-09-27:** a pinned host authenticates the host, not the truth
+  of its answers, so `store_not_empty` and the bounded probes stay.
+- **D5, restated for the D1b row:** D1b authenticated hop is `accepted` (2026-09-27). D1a is
+  unchanged. D2–D3 stay `proposed`: their #7226 limb is now met (ADR-237 `accepted`), while the
+  #8211 limb and ADR-241 R1/R7 remain. D4 stays standing constraints, except its first residual,
+  which closed when ADR-237 became `accepted` (per the 2026-09-21 entry).
 - **The frontmatter stays `proposed`,** because D2–D3 are `proposed`. Dated text above is
   unchanged.
 
@@ -339,6 +394,12 @@ four statements:
      `luks_mounted=yes fence_on_mapper=yes erasure_probe=yes`. The query was the runbook's host-key
      step 5 (b), with the raw row printed.
    - **It is the current instance.** No git-data replace or create has succeeded since.
+   - **The rung-2 precondition in Status is met.** Rehearsal run 36029201848 is bound by the
+     committed evidence `apps/web-platform/infra/git-data-rung2-boot-evidence.env` ("Rehearsal host
+     : soleur-git-data-rehearsal-36029201848", landed by PR #8751). The replace gate refuses without
+     it.
+   - **The same row proves the 2026-09-24 amendment in production:** `plaintext_journal=dirty
+     plaintext_empty=yes`. That amendment named this flip rule as its production proof.
    - **What `accepted` does not change:** `GIT_DATA_STORE_ENABLED` stays off. The flip, the
      flag-off rollback, the redeploy and the ADR-220 D6 rotation remain on #8211.
 
@@ -358,10 +419,22 @@ four statements:
 
    This is a taste call, kept: the LIVE authentication claim depends on those pins, and the old
    clause presents them as pending. See `decision-challenges.md`.
-4. **Regenerate.** Run `bash scripts/regenerate-c4-model.sh` and commit `model.likec4.json`.
-5. **C4 completeness.** All three `.c4` files were read:
-   - In `model.c4`, only this edge's truth changes. The `claude -> gitDataStore` "TARGET state …
-     store is empty until the LUKS cutover" label concerns the store's contents, and it stays true.
+4. **The `gitDataStore` element description (deepen-plan, architecture review).** It still says
+   "…FATALed on that volume's dirty journal, so no host serves the store until the forward fix
+   (#5274) boots." The forward fix booted on 2026-09-25, and that boot is the evidence ADR-239
+   flips on. Replace `, so no host serves the store until the forward fix (#5274) boots.` with:
+   `; the forward fix (ADR-239 amendment 2026-09-24) booted 2026-09-25 (replace run 36118115758)
+   and serves the still-empty store from the LUKS mapper (ADR-239 accepted 2026-09-27).`
+5. **Regenerate.** Run `bash scripts/regenerate-c4-model.sh` and commit `model.likec4.json`.
+6. **C4 completeness.** All three `.c4` files were read:
+   - In `model.c4`, the truth of two things changes: this edge, and the `gitDataStore`
+     description's "no host serves the store" clause (step 4).
+   - The `claude -> gitDataStore` "TARGET state … store is empty until the LUKS cutover" label
+     concerns the store's contents, and it stays true.
+   - The `gitDataStore -> betterstack` label's "Post-#8178 read path: TARGET state, unobserved
+     until the first post-merge git-data dispatch" is stale (#8178 is closed, and two replaces have
+     polled that channel since). It is not a D1b or ADR-239 marker, so it is seen and left alone
+     here.
    - In `views.c4` and `spec.c4`, nothing changes.
    - Actors, systems, containers and access relationships are all unchanged.
    - No cardinality is added, and `c4-count-parity` must stay green.
@@ -459,7 +532,36 @@ No soak. Both flips rest on evidence that already exists.
 
 ## Observability
 
-Skipped (Phase 2.9): docs plus a comment-only workflow edit, with no code-class path.
+This PR changes no runtime surface: the workflow edit is comment-only (AC1 proves YAML equality).
+The block exists because deepen-plan Phase 4.7 counts any `.github/workflows/*.yml` path as
+non-docs. It declares the existing signals that the records point at.
+
+```yaml
+liveness_signal:
+  what: "git-data-cutover.yml run conclusion plus its check-run notices (role=*, probe=*, verdict=clear)"
+  cadence: "on dispatch only (workflow_dispatch; this PR adds no trigger)"
+  alert_target: "the dispatching session reads the annotations; no page (read-only proof)"
+  configured_in: ".github/workflows/git-data-cutover.yml (unchanged by this PR except header comments)"
+error_reporting:
+  destination: "GitHub Actions job annotations (::notice/::warning/::error) on the cutover job"
+  fail_loud: "yes: any non-clear verdict exits non-zero and reds the run"
+failure_modes:
+  - mode: "the re-applied header text drifts from the proof's real checks"
+    detection: "AC1 greps plus YAML equality at PR time"
+    alert_route: "red required check on the PR"
+  - mode: "the C4 model is edited without regenerating model.likec4.json"
+    detection: "plugins/soleur/test/c4-model-freshness.test.sh in CI"
+    alert_route: "red required check on the PR"
+logs:
+  where: "GitHub Actions run logs for git-data-cutover.yml"
+  retention: "GitHub default Actions log retention"
+discoverability_test:
+  command: "grep -c -F -e 'ADR-220 D1b accepted 2026-09-27' knowledge-base/engineering/architecture/diagrams/model.c4"
+  expected_output: "2"
+```
+
+The probe passed `plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh` (rc 0). It prints `0`
+before the edit, and `2` after it (the comment line and the label).
 
 ## Domain Review
 
@@ -498,6 +600,8 @@ deliberately out of the diff, and #8634 owns Art. 30 activation.
 - [ ] **AC4. C4.**
   - `git grep -c 'TARGET until ADR-220 D1b' -- knowledge-base/engineering/architecture/diagrams/`
     prints nothing.
+  - `git grep -c 'no host serves the store until the forward fix' -- knowledge-base/engineering/architecture/diagrams/`
+    prints nothing.
   - `git grep -c 'Transport and root authentication LIVE (ADR-220 D1b accepted 2026-09-27)' -- knowledge-base/engineering/architecture/diagrams/model.c4`
     prints `…model.c4:1`.
   - `bash plugins/soleur/test/c4-model-freshness.test.sh` and
@@ -511,7 +615,7 @@ deliberately out of the diff, and #8634 owns Art. 30 activation.
 ## Test Scenarios
 
 The Acceptance Criteria are the scenarios. CI additionally runs every suite that reads the workflow
-file (`git grep -l git-data-cutover.yml -- '*.test.*'`, about ten files) and the
+file (`git grep -l git-data-cutover.yml -- '*.test.*'`, 8 files) and the
 `apps/web-platform/test/c4-*.test.ts` render and syntax suites. All of them must be green on the
 head SHA.
 
