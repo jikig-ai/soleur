@@ -10,7 +10,7 @@
 # `terraform apply` also writes it and fires no gate; ADR-237 D2 covers that path. A job
 # conclusion is NOT evidence of an apply — a `plan_only=true` rehearsal of the replace ends
 # `success` with the apply step `skipped` (#8710). So the gate reads the apply STEP of each job
-# from the one jobs document `gh run view <id> --json jobs` returns. The API carries no step
+# from the one document `gh run view <id> --json jobs,startedAt` returns. The API carries no step
 # `id`, so the step is matched by its exact `name:` (the two *_APPLY constants below; parity
 # test PT1 in plugins/soleur/test/terraform-target-parity.test.ts binds them to the workflow).
 #
@@ -24,6 +24,7 @@
 #   1b     not success      steps is an empty array               quiet notice (environment     verdict=not_run
 #                                                                 refusal, cancelled pending)
 #   4      success          N != 1, or A not success/skipped      exit 1, fail closed           verdict=unidentified
+#   2c     success          A == success, N == 1, and CARRIED     quiet notice, no redeploy     verdict=carried_over
 #   2      success          A == success                          proceed: the pin rotated      verdict=rotated
 #   3      any              A == skipped                          quiet notice, no apply ran    verdict=no_apply
 #   5a     not success      A == success                          warning: the pin WAS          verdict=pin_published
@@ -33,25 +34,45 @@
 #   (5a and 5b both set output pin_published=true, which emails ops: a red job that may have
 #   published the pin is the state where the run ends green while erasures break.)
 #
+# CARRIED(job) — row 2c's predicate, all of: (1) SOURCE_RUN_ATTEMPT matched ^[1-9][0-9]*$ and is
+# >= 2; (2) the job's startedAt parses (`try fromdateiso8601 catch 0`) to an epoch > 0; (3) the
+# document's run-level startedAt parses the same way to > 0; (4) job epoch < run epoch (strict).
+# It is one jq expression read through its own assignment; a jq failure means `no`, never exit:
+# carried_over is the fail-open direction, so it needs positive proof and anything unparseable
+# (absent, Go zero time, fractional seconds) grades as before, `rotated`. Timestamps are parsed,
+# never string-compared (`"" < "2026-…"` is true in jq). CARRIED is consulted only on the
+# green-job, green-apply arm: row 4 keeps precedence, a carried plan_only stays row 3, and a
+# carried RED job keeps 5a/5b (its alert is never suppressed).
+#
 # Combination: any job in row 4 (or a duplicated git-data job) exits 1 before emitting outputs.
-# Else any job in row 2 proceeds (birth wins a tie). Else any job in 5a/5b takes the warning
-# arm (pin_published=true). Else the quiet notice arm. 5a/5b do not redeploy: the job is red,
+# Else any job in row 2 proceeds (birth wins a tie; a carried birth is not row 2, so a fresh
+# replace proceeds). Else any job in 5a/5b takes the warning arm (pin_published=true). Else any
+# job in row 2c takes the carried_over notice. Else the quiet notice arm. 5a/5b do not redeploy: the job is red,
 # and the runbook's recovery for a red boot poll is a read first; the no-source_run_id dispatch
 # redeploys when wanted. Every verdict line carries `in run <id>`, the per-job
 # `<job>=<conclusion>` tokens and one `verdict=` token.
 #
 # This is a correctness gate, not an authorization gate: a branch dispatch controls job and step
 # names, so NO name taken from the API is ever printed — only the constants, N, the allowlisted
-# conclusions and the validated run id.
+# conclusions, the validated run id and (in the carried_over line only) the validated attempt.
 #
 # FAIL CLOSED when the source run cannot be read: a non-numeric run id, `gh run view`
 # failing, output that is not exactly one {jobs:[...]} document, or any jq evaluation failing
-# exits 1. "Could not read" must never read as "nothing to do" — a missed redeploy leaves the
-# app on a stale pin. Every jq read is a checked assignment in this shell, never a nested
-# $(...) (whose failure errexit does not see).
+# exits 1 (except CARRIED, above, whose failure means `no`). "Could not read" must never read as
+# "nothing to do" — a missed redeploy leaves the app on a stale pin. Every jq read is a checked
+# assignment in this shell, never a nested $(...) (whose failure errexit does not see).
 #
-# The jobs are read for SOURCE_RUN_ATTEMPT when it is a number (the attempt that fired this
-# run), else for the latest attempt: a re-run in progress must not be graded for an earlier one.
+# CARRIED-OVER JOBS (#8760). The document is read for SOURCE_RUN_ATTEMPT when it is a number
+# (the attempt that fired this run), else for the latest attempt. After a "re-run failed jobs",
+# attempt N lists EVERY job, including ones that succeeded in an earlier attempt and did not run
+# again: such a job appears with a new id but keeps its earlier startedAt/completedAt and steps,
+# so its green apply step reads as a rotation in attempt N although attempt N-1's follower
+# already graded it and redeployed. Measured on run 36325677861 attempt 2 (2026-09-27): run
+# startedAt 14:41:55Z; carried `detect-changes` 14:26:30Z-14:26:47Z (the same values as in
+# attempt 1); re-executed jobs started 14:44:03Z and later; the API exposes no per-job attempt.
+# Hence CARRIED: a job that started before this attempt did ran in an earlier attempt. A git-data
+# job RE-EXECUTED in attempt N started after it and still grades `rotated`. Captured in
+# tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json.
 #
 # Env: SOURCE_RUN_ID (required), SOURCE_RUN_ATTEMPT (optional), GH_TOKEN / GH_REPO (consumed by gh),
 #      GITHUB_OUTPUT (receives proceed=true|false, source_job=<name>, pin_published=true|false).
@@ -95,9 +116,12 @@ if [[ ! "$rid" =~ ^[0-9]+$ ]]; then
   echo "::error::source-run-gate: the source run id is not a plain number; cannot decide whether the pin rotated (fail closed)."
   exit 1
 fi
-att=()
-[[ "${SOURCE_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]] && att=(--attempt "$SOURCE_RUN_ATTEMPT")
-if ! doc="$(gh run view "$rid" "${att[@]}" --json jobs)"; then
+att=(); rerun=false  # rerun: a validated attempt >= 2, the only reads CARRIED is consulted for
+if [[ "${SOURCE_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]]; then
+  att=(--attempt "$SOURCE_RUN_ATTEMPT")
+  if (( SOURCE_RUN_ATTEMPT >= 2 )); then rerun=true; fi
+fi
+if ! doc="$(gh run view "$rid" "${att[@]}" --json jobs,startedAt)"; then
   echo "::error::source-run-gate: could not read the jobs of run ${rid}; cannot decide whether the pin rotated (fail closed). Re-run this job."
   exit 1
 fi
@@ -128,6 +152,19 @@ _q() {
 }
 # _count VAR VALUE -> VAR = VALUE, which must be a plain number (else fail closed).
 _count() { [[ "$2" =~ ^[0-9]+$ ]] || _unreadable; printf -v "$1" '%s' "$2"; }
+# _carried JOB -> 0 when CARRIED(JOB) holds (header; the caller checks the attempt), else 1.
+# NOT _q: a jq failure here means `no` (grade as before), never an exit.
+_carried() {
+  local r
+  # shellcheck disable=SC2016  # $j/$t/$run are jq variables, not shell expansions
+  r="$(jq -r --arg j "$1" '
+    def epoch: try fromdateiso8601 catch 0;
+    (.startedAt | epoch) as $run
+    | [.jobs[] | objects | select(.name == $j)] as $m
+    | (if ($m | length) == 1 then ($m[0].startedAt | epoch) else 0 end) as $t
+    | if $t > 0 and $run > 0 and $t < $run then "yes" else "no" end' <<<"$doc" 2>/dev/null)" || r=no
+  [[ "$r" == yes ]]
+}
 
 declare -A V=() JC=() AL=()  # per job: verdict, allowlisted job conclusion, apply label
 grade() {  # grade JOB APPLY_STEP_NAME -> V/JC/AL[JOB]
@@ -150,6 +187,8 @@ grade() {  # grade JOB APPLY_STEP_NAME -> V/JC/AL[JOB]
   elif [[ "${JC[$j]}" != success && "$st" == 0 ]]; then v=not_run
   elif [[ "${JC[$j]}" == success ]]; then
     case "$n:$a" in 1:success) v=rotated ;; 1:skipped) v=no_apply ;; *) v=unidentified ;; esac
+    # Row 2c: the green apply belongs to an EARLIER attempt of this run (CARRIED, header).
+    if [[ "$v" == rotated && "$rerun" == true ]] && _carried "$j"; then v=carried_over; fi
   else
     case "$n:$a" in 1:skipped) v=no_apply ;; 1:success) v=pin_published ;; *) v=pin_maybe_published ;; esac
   fi
@@ -161,10 +200,11 @@ grade "$REPLACE_JOB" "$REPLACE_APPLY"
 # Only the constants and allowlisted values below; never an API-supplied name.
 tokens="${BIRTH_JOB}=${JC[$BIRTH_JOB]:-absent} ${BIRTH_JOB}.apply=${AL[$BIRTH_JOB]:-none} ${REPLACE_JOB}=${JC[$REPLACE_JOB]:-absent} ${REPLACE_JOB}.apply=${AL[$REPLACE_JOB]:-none}"
 
-bad=""; src=""; pub=false; warn=false; skipped_apply=false
+bad=""; src=""; pub=false; warn=false; skipped_apply=false; carried=false; cj=""
 for j in "${JOBS[@]}"; do
   [[ "${V[$j]}" == unidentified ]] && bad="${bad:+$bad, }$j"
   [[ "${V[$j]}" == rotated && -z "$src" ]] && src="$j"
+  [[ "${V[$j]}" == carried_over && -z "$cj" ]] && { carried=true; cj="$j"; }  # cj: the first in JOBS order
   [[ "${V[$j]}" == pin_published ]] && pub=true  # the pin WAS published (5a), not merely may be
   [[ "${V[$j]}" == pin_published || "${V[$j]}" == pin_maybe_published ]] && warn=true
   [[ "${V[$j]}" == no_apply ]] && skipped_apply=true
@@ -193,6 +233,12 @@ if [[ "$warn" == true ]]; then
     _summary "- ${tokens} in run ${rid}: verdict=pin_maybe_published — pin may be published; dispatch git-data-pin-redeploy.yml with NO source_run_id (${REDEPLOY_CMD}) to redeploy unconditionally."
   fi
   _emit "proceed=false" "source_job=" "pin_published=${warn}"
+  exit 0
+fi
+if [[ "$carried" == true ]]; then
+  # Reached only when rerun=true, so SOURCE_RUN_ATTEMPT passed ^[1-9][0-9]*$ above.
+  echo "::notice::source-run-gate: no redeploy — in run ${rid} attempt ${SOURCE_RUN_ATTEMPT} ${tokens}: ${cj} and its apply step succeeded in an EARLIER attempt of this run (the job started before this attempt did), so that attempt's follower graded it. verdict=carried_over. To redeploy anyway: ${REDEPLOY_CMD}."
+  _emit "proceed=false" "source_job=" "pin_published=false"
   exit 0
 fi
 if [[ "$skipped_apply" == true ]]; then

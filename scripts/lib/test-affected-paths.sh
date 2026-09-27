@@ -1119,6 +1119,7 @@ AFFECTED_TESTS_SCRIPTS_DISPATCH_WEB_REDEPLOY_PATHS=(
   ".github/actions/dispatch-web-redeploy/"
   ".github/workflows/git-data-pin-redeploy.yml"
   "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json"
   "tests/scripts/test-dispatch-web-redeploy.sh"
 )
 

@@ -237,11 +237,12 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
      fingerprint the source apply run printed (go/no-go below). A green follower does not by itself
      mean a redeploy happened: since #8710 its gate proceeds only when the job **and** its apply step
      both succeeded, and otherwise does not redeploy (green with a notice or warning, red when it
-     cannot decide). Check that its
-     `Dispatch web-platform-release and wait for its deploy` step is `success`, not `skipped`:
+     cannot decide). The follower has two jobs: `gate` grades the source run, and `redeploy`
+     dispatches the release only when the gate proceeds; when it does not, `redeploy` is `skipped`.
+     Check that its `redeploy` job is `success`, not `skipped`:
 
      ```bash
-     gh run view <pin-redeploy-run-id> --json jobs --jq '.jobs[0].steps[] | select(.name | startswith("Dispatch web-platform-release")) | .conclusion'
+     gh run view <pin-redeploy-run-id> --json jobs --jq '.jobs[] | select(.name == "redeploy") | .conclusion'
      ```
 
    - **If the replace failed after the secret published:** re-dispatch the replace. The replace gate
@@ -259,6 +260,7 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
      ```
 
      If the gate exited 1 with `verdict=unidentified`, or printed `verdict=pin_published` or `verdict=pin_maybe_published`, the same `source_run_id` refuses again.
+     `verdict=carried_over` from source-run-gate means this follower saw a git-data job carried over from an earlier attempt; that attempt's follower owned the redeploy; `gh workflow run git-data-pin-redeploy.yml --ref main` redeploys anyway.
      When the source apply step published a pin, dispatch with **no** `source_run_id` (it redeploys
      unconditionally):
 
@@ -673,7 +675,7 @@ amendment 2026-09-24).
 | # | Dispatch | Precondition | Clean means |
 |---|---|---|---|
 | G1 | `git-data-rung2-rehearsal.yml` `dry_run=false` (paid) | the fix PR merged | the run concludes `success`, and its evidence lands through an evidence-only PR |
-| G2 | `apply-web-platform-infra.yml` `apply_target=git-data-host-replace plan_only=true` | the evidence PR merged **and** `gh issue view 8710 --json state,closedByPullRequestsReferences` shows #8710 closed by a merged PR (otherwise this rehearsal fires a production redeploy again) | the job's destroy-guard (`git_data_host_replace_gate`, `tests/scripts/lib/git-data-host-replace-gate.sh` — the single source for which addresses a replace may touch; neither volume is among them) admits the plan and the run concludes `success`, and the pin-redeploy run it triggered did not redeploy: find it with `for id in $(gh run list --workflow git-data-pin-redeploy.yml --created ">=<G2 start>" --json databaseId --jq '.[].databaseId'); do gh run view "$id" --log \| grep -F "in run <G2 run id>" \| grep -q 'verdict=no_apply' && echo "$id"; done`, then `gh run view <that id> --json jobs --jq '.jobs[0].steps[] \| select(.name \| startswith("Dispatch web-platform-release")) \| .conclusion'` prints `skipped`. For reference, run 35979304442 planned `6 to add, 1 to change, 4 to destroy` because `tls_private_key.git_data_host_ssh` and `doppler_secret.git_data_ssh_host_key` were not yet in state; with both in state the counts differ, so compare against the gate, never against that line. (Check amended 2026-09-24 by #8710: the pin-redeploy run always starts, so read its verdict rather than its absence.) |
+| G2 | `apply-web-platform-infra.yml` `apply_target=git-data-host-replace plan_only=true` | the evidence PR merged **and** `gh issue view 8710 --json state,closedByPullRequestsReferences` shows #8710 closed by a merged PR (otherwise this rehearsal fires a production redeploy again) | the job's destroy-guard (`git_data_host_replace_gate`, `tests/scripts/lib/git-data-host-replace-gate.sh` — the single source for which addresses a replace may touch; neither volume is among them) admits the plan and the run concludes `success`, and the pin-redeploy run it triggered did not redeploy: find it with `for id in $(gh run list --workflow git-data-pin-redeploy.yml --created ">=<G2 start>" --json databaseId --jq '.[].databaseId'); do gh run view "$id" --log \| grep -F "in run <G2 run id>" \| grep -q 'verdict=no_apply' && echo "$id"; done`, then `gh run view <that id> --json jobs --jq '.jobs[] \| select(.name == "redeploy") \| .conclusion'` prints `skipped` (the gate did not proceed, so its `redeploy` job never ran). For reference, run 35979304442 planned `6 to add, 1 to change, 4 to destroy` because `tls_private_key.git_data_host_ssh` and `doppler_secret.git_data_ssh_host_key` were not yet in state; with both in state the counts differ, so compare against the gate, never against that line. (Check amended 2026-09-24 by #8710: the pin-redeploy run always starts, so read its verdict rather than its absence.) |
 | G3 | the same, real (one attempt) | G2 read clean | GO, below |
 | G4 | `git-data-cutover.yml` strict dry run | G3's `boot_complete` | `role=git-data-auth verdict=ok` |
 

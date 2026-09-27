@@ -51,13 +51,28 @@
 #   G10b birth failure, apply success                                       warning, verdict=pin_published, birth recovery
 #   G15b replace failure, apply step skipped AND an apply-named success     warning, apply=matched_2, verdict=pin_maybe_published
 #   G26  birth failure+apply failure, replace failure+apply success         warning, verdict=pin_published, pin_published=true
-#   G23  SOURCE_RUN_ATTEMPT=2 (and a non-numeric attempt)                   jobs read for attempt 2 (latest when invalid)
+#   G23  SOURCE_RUN_ATTEMPT=2 (and a non-numeric attempt)                   jobs,startedAt read for attempt 2 (latest when invalid)
 #   G24  in-progress run as gh prints it: conclusions ""                    token =null, verdict=pin_maybe_published
 #   G25  two JSON documents (the first a non-array jobs)                     RED, "no readable jobs array" (fail closed)
 #   G5   `gh run view` fails                                                RED (fail closed)
 #   G6   source run id non-numeric (never echoed)                           RED, no gh call
 #   G7   jobs output not a {jobs:[...]} document                            RED (fail closed)
-#   GH   gate stubbed to `exit 0`: every row but G1/G2/G20 must then FAIL its assertion
+# Carried-over jobs (#8760): a partial re-run lists a job that succeeded in an EARLIER attempt
+# again, with its old timestamps. "carried" / "fresh" / "run start" = the captured fixture's values.
+#   GC1  ATT=2, replace success+apply success, carried                      quiet, verdict=carried_over, no redeploy
+#   GC1b ATT=2, birth AND replace carried                                   carried_over, notice names the birth
+#   GC2  ATT=2, replace fresh (must-PASS: a real rotation in a re-run)      proceed=true, verdict=rotated
+#   GC3  ATT=2, birth carried, replace fresh                                proceed=true, source_job=replace
+#   GC4  no attempt, GC1's document (must-PASS: the manual arm)             proceed=true, verdict=rotated
+#   GC5  ATT=2, carried replace with apply skipped                          verdict=no_apply
+#   GC6  ATT=2, (a) job startedAt Go zero time (b) job startedAt absent     proceed=true, verdict=rotated, no ::error::
+#        (c) run startedAt absent (d) run startedAt with fractional seconds
+#   GC7  ATT=2, carried replace failure, apply success, poll failure        warning, verdict=pin_published
+#   GC8  ATT=2, job startedAt == run start (must-PASS: same second)         proceed=true, verdict=rotated
+#   GC9  ATT=1, job startedAt one second before run start                   proceed=true, verdict=rotated
+#   HX   harness RED row: a gate whose argv drifts on fail-closed row G5 keeps its exit code, writes
+#        harness.violation, and the loop predicate goes RED
+#   GH   gate stubbed to `exit 0`: every row but the proceed rows must then FAIL its assertion
 #   GM   named gate mutations (Guard Contract): each must turn its row RED
 set -euo pipefail
 
@@ -87,6 +102,8 @@ mkdir -p "$WORK/bin"
 # Scenario dir ($STUB_DIR): baseline.out / baseline.rc, dispatch.rc, runs.<tick>.json
 # (the last present tick repeats), jobs.<id>.<tick>.json falling back to jobs.<id>.json
 # (<tick> = the number of poll-list calls so far). Every call is appended to calls.log.
+# `run view <id> --json jobs` is track.sh's call; `run view <id> [--attempt N] --json jobs,startedAt`
+# is source-run-gate.sh's. view.rc fails all three.
 cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 d="${STUB_DIR:?}"
@@ -105,7 +122,8 @@ case "$*" in
 esac
 if [[ "$1 $2" == "run view" && "$3" =~ ^[0-9]+$ ]] \
    && { { [[ $# -eq 5 && "$4 $5" == "--json jobs" ]]; } \
-        || { [[ $# -eq 7 && "$4" == --attempt && "$5" =~ ^[0-9]+$ && "$6 $7" == "--json jobs" ]]; }; }; then
+        || { [[ $# -eq 5 && "$4 $5" == "--json jobs,startedAt" ]]; } \
+        || { [[ $# -eq 7 && "$4" == --attempt && "$5" =~ ^[0-9]+$ && "$6 $7" == "--json jobs,startedAt" ]]; }; }; then
   [[ -f "$d/view.rc" ]] && exit "$(cat "$d/view.rc")"
   t=$(cat "$d/tick" 2>/dev/null || echo 0)
   if [[ -f "$d/jobs.$3.$t.json" ]]; then cat "$d/jobs.$3.$t.json"
@@ -136,7 +154,8 @@ _jobs() {  # _jobs ID JOBNAME CONCLUSION [TICK]; CONCLUSION "null" writes a JSON
   printf '{"jobs":[{"name":"release / build","conclusion":"success"},{"name":"%s","conclusion":%s},{"name":"live-verify","conclusion":"success"}]}' "$2" "$c" \
     > "$S/jobs.$1${4:+.$4}.json"
 }
-_scenario() { S="$WORK/s-$1"; rm -rf "$S"; mkdir -p "$S"; : > "$S/calls.log"
+# Every row starts with no attempt: a row that wants one sets ATT on its own _gexec call.
+_scenario() { unset ATT; S="$WORK/s-$1"; rm -rf "$S"; mkdir -p "$S"; : > "$S/calls.log"
   printf '[{"databaseId":100,"status":"completed","conclusion":"success","event":"push"}]' > "$S/baseline.out"; }
 
 # _exec SCRIPT -> rc, output in $S/out
@@ -260,12 +279,17 @@ open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))
 PY
   echo "$m"
 }
+# _holds ROW SCRIPT: the row's assertion holds AND the gh stub saw no unexpected argv (the
+# harness.violation marker _gexec writes; track.sh rows never write it).
+_holds() { "check_$1" "$2" && [[ ! -e "$S/harness.violation" ]]; }
 _mut_row() {  # _mut_row SRC NAME FROM TO ROW
   local m
   if ! m="$(_mutant "$1" "$2" "$3" "$4")"; then _report "M $2 (mutation site present once)" bad; return; fi
+  # The mutation must have landed: a mutant byte-identical to its source proves nothing.
+  if cmp -s "$1" "$m"; then _report "M $2 (mutation landed)" bad; return; fi
   # A mutant that does not parse would red every row for the wrong reason.
   if ! bash -n "$m" 2>/dev/null; then _report "M $2 (mutant parses)" bad; return; fi
-  if "check_$5" "$m"; then _report "M $2 turns row $5 RED" bad "(row held against the mutant)"
+  if _holds "$5" "$m"; then _report "M $2 turns row $5 RED" bad "(row held against the mutant)"
   else _report "M $2 turns row $5 RED" ok; fi
 }
 _mut_row "$TRACK" pending-final '*) ;;' '*) FINAL[$id]="pending" ;;' N
@@ -282,14 +306,52 @@ _mut_row "$TRACK" view-queued '[[ "$status" == queued ]] && continue' ':' QU
 # G24 uses. The "null" -> JSON null mapping below models a raw API null, which gh does not print. The two apply-step names are copied byte-for-byte from the `id: apply` steps of
 # apply-web-platform-infra.yml (the replace name carries U+2014), NOT read from the gate, so a
 # gate-side rename reds these rows too.
+#
+# Timestamps (#8760) come from a captured fixture, not from literals:
+#   tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json
+# is run 36325677861 attempt 2 (a "re-run failed jobs"), captured 2026-09-27 with
+#   GH_REPO=jikig-ai/soleur gh run view 36325677861 --attempt 2 --json jobs,startedAt \
+#     | jq -c '{startedAt, jobs: [.jobs[] | select(.name == "detect-changes" or .name == "deploy-script-tests (1/4)")]}'
+# Its run-level startedAt is the attempt's start. `detect-changes` succeeded in attempt 1 and is
+# CARRIED into attempt 2 with its attempt-1 startedAt/completedAt (earlier than the run start);
+# `deploy-script-tests (1/4)` was RE-EXECUTED in attempt 2 (started after the run start). Rows
+# labelled synthetic (GC6 zero time / absent / fractional, GC8 equality, GC9 one-second skew)
+# derive their values from the captured run start or state them.
 GATE="$REPO_ROOT/.github/actions/dispatch-web-redeploy/source-run-gate.sh"
+GFIX="$REPO_ROOT/tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json"
 BA='Terraform apply (git-data birth)'
 RA='Terraform apply (git-data-host -replace) — both-volumes-preserved assert'
-_gjob() {  # _gjob NAME CONCLUSION [STEP_NAME STEP_CONCLUSION]... -> one job object; "null" -> JSON null
-  jq -cn --arg n "$1" --arg c "$2" '
+_fix() {  # _fix VAR JQ_FILTER -> VAR = one non-empty value read from the fixture, else abort
+  local __v
+  __v="$(jq -er "$2" "$GFIX")" || { printf 'FAIL: fixture read %s\n' "$2" >&2; exit 1; }
+  [[ -n "$__v" && "$__v" != *$'\n'* ]] || { printf 'FAIL: fixture read %s is not one value\n' "$2" >&2; exit 1; }
+  printf -v "$1" '%s' "$__v"
+}
+[[ -r "$GFIX" ]] || { echo "FAIL: fixture not readable at $GFIX" >&2; exit 1; }
+_fix RUN_START '.startedAt'
+_fix CARRIED_START '.jobs[] | select(.name == "detect-changes") | .startedAt'
+_fix CARRIED_DONE '.jobs[] | select(.name == "detect-changes") | .completedAt'
+_fix FRESH_START '.jobs[] | select(.name == "deploy-script-tests (1/4)") | .startedAt'
+_fix FRESH_DONE '.jobs[] | select(.name == "deploy-script-tests (1/4)") | .completedAt'
+# The fixture must still show the shape the rows rely on: carried < run start < fresh.
+if jq -e --arg r "$RUN_START" --arg c "$CARRIED_START" --arg f "$FRESH_START" -n \
+     '($c | fromdateiso8601) < ($r | fromdateiso8601) and ($r | fromdateiso8601) < ($f | fromdateiso8601)' >/dev/null; then
+  _report "fixture: carried start < run start < re-executed start" ok
+else _report "fixture: carried start < run start < re-executed start" bad; fi
+_fix RUN_START_M1 ".startedAt | fromdateiso8601 - 1 | todateiso8601"  # synthetic (GC9)
+# _gjob NAME CONCLUSION [STEP_NAME STEP_CONCLUSION]... -> one job object; "null" -> JSON null.
+# Timestamps: GJ_TS=fresh (default, the re-executed job's) or GJ_TS=carried (the carried job's).
+_gjob() {
+  local sa ca
+  case "${GJ_TS:-fresh}" in
+    fresh) sa="$FRESH_START"; ca="$FRESH_DONE" ;;
+    carried) sa="$CARRIED_START"; ca="$CARRIED_DONE" ;;
+    *) printf 'FATAL: _gjob: unknown timestamp profile %s\n' "$GJ_TS" >&2; return 2 ;;
+  esac
+  jq -cn --arg n "$1" --arg c "$2" --arg sa "$sa" --arg ca "$ca" '
     def v: if . == "null" then null else . end;
     $ARGS.positional as $p
-    | {name: $n, status: "completed", conclusion: ($c | v),
+    | {name: $n, status: "completed", conclusion: ($c | v), startedAt: $sa, completedAt: $ca,
        steps: [range(0; $p | length; 2) as $i
                | {name: $p[$i], conclusion: ($p[$i + 1] | v), number: ($i / 2 + 1), status: "completed"}]}' \
     --args "${@:3}"
@@ -310,17 +372,25 @@ _birth() {  # _birth JOB_CONCLUSION APPLY_CONCLUSION [POLL_CONCLUSION] [PLAN_CON
     "$BA" "$2" "Poll for the git-data boot-completion signal" "$poll" "Dispatch summary" success
 }
 _skip() { _gjob "$1" skipped; }  # a job the run skipped: `steps: []`
-_gdoc() {  # _gdoc JOB_JSON... -> $S/jobs.555.json (a preflight job first, as in every real run)
+# _gdoc JOB_JSON... -> $S/jobs.555.json (a preflight job first, as in every real run). The run-level
+# startedAt is the captured run start; GD_START overrides it, GD_START=__absent__ removes it.
+_gdoc() {
   assert_fixture_dir "$S"
-  jq -cn '{jobs: ([{name: "preflight", status: "completed", conclusion: "success",
-                    steps: [{name: "Set up job", conclusion: "success", number: 1, status: "completed"}]}]
-                  + $ARGS.positional)}' --jsonargs "$@" > "$S/jobs.555.json"
+  jq -cn --arg st "${GD_START:-$RUN_START}" --arg sa "$FRESH_START" --arg ca "$FRESH_DONE" '
+    (if $st == "__absent__" then {} else {startedAt: $st} end)
+    + {jobs: ([{name: "preflight", status: "completed", conclusion: "success", startedAt: $sa, completedAt: $ca,
+                steps: [{name: "Set up job", conclusion: "success", number: 1, status: "completed"}]}]
+              + $ARGS.positional)}' --jsonargs "$@" > "$S/jobs.555.json"
 }
-_gexec() {  # _gexec SCRIPT RUN_ID -> rc; stdout+stderr in $S/out, outputs in $S/ghout
+# _gexec SCRIPT RUN_ID -> rc; stdout+stderr in $S/out, outputs in $S/ghout. Any UNEXPECTED gh argv
+# writes $S/harness.violation, which the G/GH/GM loops check (_holds). The return code is left
+# alone, so a fail-closed row (`! _gexec`) cannot flip green on a drifted call shape.
+_gexec() {
   local rc=0; : > "$S/ghout"
   STUB_DIR="$S" PATH="$WORK/bin:$PATH" SOURCE_RUN_ID="$2" SOURCE_RUN_ATTEMPT="${ATT:-}" \
     GITHUB_OUTPUT="$S/ghout" GITHUB_STEP_SUMMARY="$S/summary" \
     bash "$1" >"$S/out" 2>&1 || rc=$?
+  if grep -q '^UNEXPECTED' "$S/calls.log"; then : > "$S/harness.violation"; fi
   return "$rc"
 }
 _noproceed() { grep -qx 'proceed=false' "$S/ghout" && ! grep -q 'proceed=true' "$S/ghout"; }
@@ -421,9 +491,9 @@ check_G26() { _scenario G26; _gdoc "$(_birth failure failure)" "$(_rep failure s
     && _no_unexpected; }
 # G23: the jobs are read for the attempt that fired the run; a non-numeric attempt is ignored.
 check_G23() { _scenario G23; _gdoc "$(_skip git_data_host_create)" "$(_rep success skipped)"
-  ATT=2 _gexec "$1" 555 && grep -qx 'run view 555 --attempt 2 --json jobs' "$S/calls.log" \
+  ATT=2 _gexec "$1" 555 && grep -qx 'run view 555 --attempt 2 --json jobs,startedAt' "$S/calls.log" \
     && grep -q 'verdict=no_apply' "$S/out" && _no_unexpected \
-    && : > "$S/calls.log" && ATT='2;x' _gexec "$1" 555 && grep -qx 'run view 555 --json jobs' "$S/calls.log" \
+    && : > "$S/calls.log" && ATT='2;x' _gexec "$1" 555 && grep -qx 'run view 555 --json jobs,startedAt' "$S/calls.log" \
     && _no_unexpected; }
 # G24: an in-progress replace read mid-run, as gh prints it (conclusion "" on job and step).
 check_G24() { _scenario G24
@@ -444,16 +514,97 @@ check_G6() { _scenario G6
     && ! grep -q 'abc' "$S/out" && _no_unexpected; }
 check_G7() { _scenario G7; printf '{"message":"Not Found"}' > "$S/jobs.555.json"
   ! _gexec "$1" 555 && ! grep -q 'proceed=true' "$S/ghout" && grep -q 'fail closed' "$S/out" && _no_unexpected; }
+# --- carried-over jobs (#8760) ---
+_noerr() { ! grep -q '::error::' "$S/out"; }
+# A carried_over row: exit 0, no redeploy, no email, exactly ONE notice naming the attempt and
+# the first carried job, the manual-redeploy command, and no warning/error.
+_carried_over() {  # _carried_over SCRIPT FIRST_CARRIED_JOB
+  ATT=2 _gexec "$1" 555 && _noproceed && _nopub && grep -qx 'source_job=' "$S/ghout" \
+    && [[ "$(grep -c '::notice::' "$S/out")" == 1 ]] \
+    && grep -q "^::notice::source-run-gate: no redeploy — in run 555 attempt 2 .*: $2 and its apply step succeeded in an EARLIER attempt of this run.*verdict=carried_over\. To redeploy anyway: \`gh workflow run git-data-pin-redeploy.yml --ref main\`\.$" "$S/out" \
+    && ! grep -q 'verdict=rotated' "$S/out" && _nowarn && _noerr \
+    && grep -qx 'run view 555 --attempt 2 --json jobs,startedAt' "$S/calls.log" && _no_unexpected; }
+# A rotated row under a re-run-shaped document: the pin rotated in THIS attempt (or cannot be
+# proven carried), so the gate redeploys as before.
+_rotated() {  # _rotated SCRIPT SOURCE_JOB  (ATT comes from the caller)
+  _gexec "$1" 555 && grep -qx 'proceed=true' "$S/ghout" && grep -qx "source_job=$2" "$S/ghout" && _nopub \
+    && grep -q '^::notice::source-run-gate: .*in run 555.*verdict=rotated' "$S/out" \
+    && ! grep -q 'verdict=carried_over' "$S/out" && _nowarn && _noerr && _no_unexpected; }
+# GC1 (#8760, run 36325677861's shape): the replace succeeded in attempt 1 and is carried into
+# attempt 2; attempt 1's follower already graded it.
+check_GC1() { _scenario GC1; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success)"
+  _carried_over "$1" git_data_host_replace; }
+check_GC1b() { _scenario GC1b
+  _gdoc "$(GJ_TS=carried _birth success success)" "$(GJ_TS=carried _rep success success)"
+  _carried_over "$1" git_data_host_create; }
+# GC2 (must-PASS): a git-data job RE-EXECUTED in the re-run is a real rotation.
+check_GC2() { _scenario GC2; _gdoc "$(_skip git_data_host_create)" "$(_rep success success)"
+  ATT=2 _rotated "$1" git_data_host_replace; }
+# GC3: a carried birth does not shadow a fresh replace: proceed, sourced from the replace.
+check_GC3() { _scenario GC3; _gdoc "$(GJ_TS=carried _birth success success)" "$(_rep success success)"
+  ATT=2 _rotated "$1" git_data_host_replace && grep -q 'git_data_host_create=success' "$S/out"; }
+# GC4 (must-PASS): the manual arm (no attempt) reads the latest attempt and grades GC1's
+# document exactly as before the fix.
+check_GC4() { _scenario GC4; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success)"
+  _rotated "$1" git_data_host_replace && grep -qx 'run view 555 --json jobs,startedAt' "$S/calls.log"; }
+# GC5: CARRIED is consulted only on the green-apply arm: a carried plan_only stays no_apply.
+check_GC5() { _scenario GC5; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success skipped)"
+  ATT=2 _gexec "$1" 555 && _noproceed && _nopub \
+    && grep -q '^::notice::source-run-gate: .*no apply ran.*in run 555.*verdict=no_apply' "$S/out" \
+    && ! grep -q 'verdict=carried_over' "$S/out" && _nowarn && _no_unexpected; }
+# GC6 (synthetic): an unprovable carry-over grades as today. (a) Go zero time parses to a
+# NEGATIVE epoch; (b) no job startedAt; (c) no run-level startedAt; (d) fractional seconds,
+# which fromdateiso8601 rejects.
+check_GC6a() { _scenario GC6a
+  _gdoc "$(_skip git_data_host_create)" "$(_rep success success | jq -c '.startedAt = "0001-01-01T00:00:00Z"')"
+  ATT=2 _rotated "$1" git_data_host_replace; }
+check_GC6b() { _scenario GC6b
+  _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success | jq -c 'del(.startedAt)')"
+  ATT=2 _rotated "$1" git_data_host_replace; }
+check_GC6c() { _scenario GC6c
+  GD_START=__absent__ _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success)"
+  ATT=2 _rotated "$1" git_data_host_replace && ! grep -q '"startedAt":"'"$RUN_START"'"' "$S/jobs.555.json"; }
+check_GC6d() { _scenario GC6d
+  GD_START="${RUN_START%Z}.5Z" _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep success success)"
+  ATT=2 _rotated "$1" git_data_host_replace; }
+# GC7: a carried RED job keeps its alert (5a): the pin was published and ops must be emailed.
+check_GC7() { _scenario GC7; _gdoc "$(_skip git_data_host_create)" "$(GJ_TS=carried _rep failure success failure)"
+  ATT=2 _gexec "$1" 555 && _noproceed && grep -qx 'pin_published=true' "$S/ghout" \
+    && grep -q '^::warning::source-run-gate: .*in run 555.*git_data_host_replace=failure.*verdict=pin_published' "$S/out" \
+    && ! grep -q 'verdict=carried_over' "$S/out" && _no_unexpected; }
+# GC8 (must-PASS, synthetic): a job that started in the SAME second as the attempt is not proven
+# earlier (strict <).
+check_GC8() { _scenario GC8
+  _gdoc "$(_skip git_data_host_create)" "$(_rep success success | jq -c --arg s "$RUN_START" '.startedAt = $s')"
+  ATT=2 _rotated "$1" git_data_host_replace; }
+# GC9 (synthetic): attempt 1 has no earlier attempt, whatever the clock skew says.
+check_GC9() { _scenario GC9
+  _gdoc "$(_skip git_data_host_create)" "$(_rep success success | jq -c --arg s "$RUN_START_M1" '.startedAt = $s')"
+  ATT=1 _rotated "$1" git_data_host_replace && grep -qx 'run view 555 --attempt 1 --json jobs,startedAt' "$S/calls.log"; }
 [[ -r "$GATE" ]] || { _report "source-run-gate.sh readable" bad; }
-for row in G1 G2 G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G20 G21 G22 G23 G24 G25 G10b G15b G26; do
-  if "check_$row" "$GATE"; then _report "row $row" ok
+for row in G1 G2 G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G20 G21 G22 G23 G24 G25 G10b G15b G26 \
+           GC1 GC1b GC2 GC3 GC4 GC5 GC6a GC6b GC6c GC6d GC7 GC8 GC9; do
+  if _holds "$row" "$GATE"; then _report "row $row" ok
   else _report "row $row" bad; sed 's/^/    /' "$S/out" >&2; sed 's/^/    calls: /' "$S/calls.log" >&2; fi
 done
+# HX (harness RED row): a gate whose source argv drifts (a typo the stub does not answer) on
+# fail-closed row G5 still exits 1, so its return code alone cannot catch the drift; the
+# harness.violation marker must, and the loop predicate must then go RED.
+if HXG="$(_mutant "$GATE" hx-argv-typo '--json jobs,startedAt)' '--json jobz,startedAt)')" && ! cmp -s "$GATE" "$HXG"; then
+  _scenario HX; _gdoc "$(_birth success success)"; echo 1 > "$S/view.rc"
+  if ! _gexec "$HXG" 555 && grep -q 'fail closed' "$S/out"; then _report "HX drifted argv keeps the fail-closed exit code" ok
+  else _report "HX drifted argv keeps the fail-closed exit code" bad; fi
+  if [[ -e "$S/harness.violation" ]]; then _report "HX drifted argv writes harness.violation" ok
+  else _report "HX drifted argv writes harness.violation" bad; fi
+  if _holds G5 "$HXG"; then _report "HX loop predicate reds row G5 on a drifted argv" bad "(held)"
+  else _report "HX loop predicate reds row G5 on a drifted argv" ok; fi
+else _report "HX (argv typo landed in the gate copy)" bad; fi
 GSTUB="$WORK/gate-stubbed.sh"
 sed '0,/^set -euo pipefail$/s//set -euo pipefail\nexit 0/' "$GATE" > "$GSTUB"
 grep -qx 'exit 0' "$GSTUB" || _report "GH precondition (stub inserted)" bad
-for row in G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G21 G22 G23 G24 G25 G10b G15b G26; do
-  if "check_$row" "$GSTUB"; then _report "GH row $row catches a stubbed exit 0" bad "(assertion held against an always-green gate)"
+for row in G3 G3b G5 G6 G7 G9 G9b G10 G11 G12 G14 G15 G16 G18 G19 G21 G22 G23 G24 G25 G10b G15b G26 \
+           GC1 GC1b GC5 GC7; do
+  if _holds "$row" "$GSTUB"; then _report "GH row $row catches a stubbed exit 0" bad "(assertion held against an always-green gate)"
   else _report "GH row $row catches a stubbed exit 0" ok; fi
 done
 # GM: named mutations of the gate (Guard Contract, plan 2026-09-24 #8710). Each FROM occurs exactly
@@ -482,26 +633,42 @@ _mut_row "$GATE" red-first-apply-match \
   'case "$(( n > 0 )):$a" in 1:skipped) v=no_apply ;; 1:success) v=pin_published ;; *) v=pin_maybe_published ;; esac' G15b
 _mut_row "$GATE" raw-conclusion 'a="$(allow "$raw")"' 'a="$raw"' G19
 _mut_row "$GATE" dup-job-quiet 'if (( cnt > 1 )); then v=unidentified' 'if (( cnt > 1 )); then v=not_run' G22
-bash -n "$GATE" && _report "source-run-gate.sh bash -n" ok || _report "source-run-gate.sh bash -n" bad
+# Guard 1 (plan 2026-09-27, #8760): a git-data rotation grades carried_over ONLY when its job
+# started before the attempt that fired the follower. Dropping the run-epoch `> 0` check is not
+# listed: with the job epoch > 0, a run epoch <= 0 can never exceed it, so CARRIED stays `no`
+# either way (an equivalent mutant, not a gap).
+_mut_row "$GATE" g1-1-no-demotion 'then v=carried_over; fi' 'then :; fi' GC1
+_mut_row "$GATE" g1-2-lt-to-le '$t < $run' '$t <= $run' GC8
+_mut_row "$GATE" g1-3-no-attempt '[[ "$v" == rotated && "$rerun" == true ]]' '[[ "$v" == rotated ]]' GC4
+_mut_row "$GATE" g1-4-attempt-ge-1 '(( SOURCE_RUN_ATTEMPT >= 2 ))' '(( SOURCE_RUN_ATTEMPT >= 1 ))' GC9
+_mut_row "$GATE" g1-5-red-branch-carried '1:success) v=pin_published ;;' \
+  '1:success) v=pin_published; if [[ "$rerun" == true ]] && _carried "$j"; then v=carried_over; fi ;;' GC7
+_mut_row "$GATE" g1-6-no-job-epoch-positive '$t > 0 and ' '' GC6a
+_mut_row "$GATE" g1-7-src-ignores-verdict '[[ "${V[$j]}" == rotated && -z "$src" ]] && src="$j"' \
+  '[[ "${AL[$j]}" == success && -z "$src" ]] && src="$j"' GC3
+if bash -n "$GATE"; then _report "source-run-gate.sh bash -n" ok; else _report "source-run-gate.sh bash -n" bad; fi
 
 # The stub must itself refuse unexpected argv (else rows could pass on a drifted call).
 _scenario stub
 if STUB_DIR="$S" "$WORK/bin/gh" run list --workflow other.yml >/dev/null 2>&1; then
   _report "gh stub rejects unexpected argv" bad
 else
-  rc=$?; [[ $rc -eq 64 ]] && _report "gh stub rejects unexpected argv (exit 64)" ok || _report "gh stub exit code" bad "(got $rc)"
+  rc=$?
+  if [[ $rc -eq 64 ]]; then _report "gh stub rejects unexpected argv (exit 64)" ok; else _report "gh stub exit code" bad "(got $rc)"; fi
 fi
 
-bash -n "$TRACK" && _report "track.sh bash -n" ok || _report "track.sh bash -n" bad
+if bash -n "$TRACK"; then _report "track.sh bash -n" ok; else _report "track.sh bash -n" bad; fi
 
 # Reporter canary: a reporter rewritten to count every verdict as a pass after the start-up
 # self-test would keep the floor satisfied. One known-bad report must still move `fail`.
 _c="$fail"; _report "reporter canary (expected; unwound)" bad
 (( fail == _c + 1 )) || { printf 'FAIL: the reporter no longer counts a failure\n' >&2; exit 1; }
 fail="$_c"; unset 'FAILURES[-1]'
-# Anti-vacuity floor: the measured assertion count (2026-09-24, #8710). Reported with printf and a
-# direct exit, never through _report, so a neutered reporter cannot silence it.
-FLOOR=102
+# Anti-vacuity floor: the measured assertion count (2026-09-27, #8760: pass + fail of the green run
+# with rows GC1-GC9, HX, their GH entries and the Guard 1 mutations; was 102 on 2026-09-24, #8710).
+# Reported with printf and a direct exit, never through _report, so a neutered reporter cannot
+# silence it.
+FLOOR=130
 if (( pass + fail < FLOOR )); then
   printf 'FAIL: vacuity floor: only %s assertions ran (floor %s)\n' "$((pass + fail))" "$FLOOR" >&2
   exit 1
