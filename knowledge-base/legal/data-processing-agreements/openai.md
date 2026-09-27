@@ -1,7 +1,7 @@
 ---
 vendor: OpenAI
 role: proposed processor for Codex web-agent customer-content processing
-status_snapshot_date: 2026-09-23
+status_snapshot_date: 2026-09-25
 customer_content_status: blocked
 clo_disposition: pending
 user_owned_provider_path: documented-in-product; vendor-account-terms-apply
@@ -65,18 +65,19 @@ explicitly redacted internal qualification under the default-off
 
 ## Deployment and flag evidence
 
-On 2026-09-25, release workflow `35927771536` completed the production deploy
-path successfully. The live `/health` endpoint reported a healthy descendant of
-the merged Codex change, and the dashboard smoke test returned HTTP 200. This
-proves deployment and availability of the guarded code path; it does not prove
-provider qualification or authorize customer-content processing.
+On 2026-09-25, release workflow run `35927771536` completed the production
+deploy path successfully. The live `/health` endpoint reported a healthy build
+of the run's head commit `e9d571145a5`, and the dashboard smoke test returned
+HTTP 200. This proves deployment and availability of the guarded code path;
+it does not prove provider qualification or authorize customer-content
+processing.
 
 The live Flagsmith feature `codex-engine` (ID `259236`) remains disabled:
 
 - project default: `false`;
 - development environment (`90722`): `enabled: false`, no segment override;
 - production environment (`90721`): `enabled: false`, no segment override;
-- identity overrides: none reported.
+- identity overrides: none returned by the Flagsmith read.
 
 ## User-owned provider path
 
