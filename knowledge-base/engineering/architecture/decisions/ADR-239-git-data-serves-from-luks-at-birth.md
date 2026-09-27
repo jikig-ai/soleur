@@ -267,7 +267,7 @@ docs PR, which reads the current instance's `boot_complete`.
   `stage:boot_complete` at 2026-09-25T09:25:30Z reading `luks_mounted=yes fence_on_mapper=yes
   erasure_probe=yes`. The query is the runbook's host-key step 5 (b), filtered to `host_name`
   `soleur-git-data` (rehearsal hosts report `soleur-git-data-rehearsal-<run>`), with the raw row
-  printed.
+  printed. The raw row and the Hetzner read are recorded on #8211 (issuecomment-5860128868).
 - **It is the current instance.** Re-read on 2026-09-27: the Hetzner API returns that one server,
   same id and creation time, and Better Stack holds that one `boot_complete` row since the replace.
   A newer create would change the id, and an in-place rebuild would add a row.

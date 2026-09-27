@@ -285,7 +285,7 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
 4. **Strict dry run.** Dispatch `git-data-cutover.yml` from `main`. It must read
    `role=git-data-auth verdict=ok` with both hops pinned. Then tick the #7226 item under Preconditions
    and flip ADR-237 to `accepted` in a docs PR.
-   **Done (2026-09-25):** run [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656) read `role=git-data-auth verdict=ok` with both hops pinned (it exited 5 on the since-retired `already_cut_over` store probe; see Preconditions); ADR-237 `accepted` (PR #9036).
+   **Done:** run [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656) (2026-09-25) read `role=git-data-auth verdict=ok` with both hops pinned (it exited 5 on `probe=store-not-cut-over verdict=already_cut_over`, a store probe since retired); re-met clean by run [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) (2026-09-27, `verdict=clear`). ADR-237 `accepted` 2026-09-27 (PR #9036); see Preconditions.
 5. **Discharge the erasures left pending.** After the pin is fixed (step 3 GO) and before step 6 or any
    flag flip:
    1. Collect the repository ids from Sentry: every `op:git-data-bare-repo-erasure` event since the

@@ -609,7 +609,9 @@ deliberately out of the diff, and #8634 owns Art. 30 activation.
 - [x] **AC5. Runbook: add-only, exact ticks.**
   - `git diff --numstat origin/main...HEAD -- <runbook> | awk '{print $2}'` prints `0`.
   - `grep -cF -- '- [x] #7226 — closed 2026-09-22 by PR #8511' <runbook>` prints `1`.
-  - `grep -c '35119099336' <runbook>` prints `1`, and `grep -c '36339208990' <runbook>` prints `1`.
+  - `grep -c '35119099336' <runbook>` prints `1`, and `grep -c '36339208990' <runbook>` prints `2`
+    (amended at review: the host-key step 4 Done line also cites the clean re-run, per the #5914
+    comment that names 36339208990 as that step's run too).
 - [x] **AC6.** `bash scripts/markdown-lint.sh <ADR-220> <ADR-239> <runbook>` exits 0.
 
 ## Test Scenarios

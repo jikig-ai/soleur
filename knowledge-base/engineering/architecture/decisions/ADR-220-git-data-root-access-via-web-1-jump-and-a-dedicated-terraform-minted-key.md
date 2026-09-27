@@ -212,6 +212,9 @@ replay the root login.
 > **Superseded 2026-09-15 (#8189), as to the D1b and D2–D3 rows:** their flip conditions are restated
 > in the Amendment log, "D5".
 
+> **Superseded 2026-09-27 (#8211 PR2, post-merge), as to the D1b row's status:** D1b is `accepted`.
+> See the Amendment log, "2026-09-27 (#8211 PR2, post-merge): D1b is accepted".
+
 ### D6 — Sequencing
 
 **This PR** ships D1a's wiring and a fail-closed access gate; the change list is in the plan
@@ -660,11 +663,13 @@ Dated text above is not rewritten.
 
 - **The D1b condition, as the entry above restates it, is met.** `git-data-cutover.yml` run
   [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) was dispatched from
-  `main` at `ab4a07e5e0` on 2026-09-27 and concluded `success`. Its job annotations read
+  `main` at `ab4a07e5e0` on 2026-09-27 and concluded `success`. Its notice annotations read
   `role=web`, `role=git-data-jump` and `role=git-data-auth` `verdict=ok`; `probe=store-mounted`,
   `store-on-mapper`, `store-verified`, `store-empty` and `fence-shape` `verdict=ok`; then
   `verdict=clear`. Both hops were pinned (ADR-237 `accepted`, PR #9036). Recorded on #5914
-  (issuecomment-5859802570).
+  (issuecomment-5859802570). The same run warned `TOFU_ARM present`: the app's unpinned git-data
+  fallback arm (#5914, host-key step 6) is untouched by this flip and still gates
+  `GIT_DATA_STORE_ENABLED`.
 - **History.** The 2026-09-15 form of the condition was first met by run
   [35119099336](https://github.com/jikig-ai/soleur/actions/runs/35119099336) (2026-09-16, `main` at
   `2d9177bec2`, `verdict=clear`). That run was unpinned and predates the fence probe. It closed
@@ -675,7 +680,8 @@ Dated text above is not rewritten.
   `store_not_empty` and the bounded probes stay.
 - **D5 for the D1b row.** D1b authenticated hop is `accepted` (2026-09-27). D1a is unchanged.
   D2–D3 stay `proposed`: their #7226 limb is met (ADR-237 `accepted`), while the #8211 limb and
-  the #8209 limb (ADR-241 residuals R1 and R7) remain. D4 stays standing constraints, except its first residual, which closed when
-  ADR-237 became `accepted`, as the 2026-09-21 entry provides.
+  the #8209 limb (ADR-241 residuals R1 and R7) remain. D4 stays standing constraints, except its
+  first residual, which closed at host-key post-merge step 4 (run 36119817656, 2026-09-25), as the
+  2026-09-21 entry provides; ADR-237 recorded it `accepted` on 2026-09-27.
 - **The frontmatter stays `proposed`,** the least-advanced status, because D2–D3 are `proposed`.
   Dated text above is not rewritten.
