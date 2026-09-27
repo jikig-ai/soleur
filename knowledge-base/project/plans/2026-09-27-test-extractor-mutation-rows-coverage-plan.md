@@ -187,14 +187,16 @@ become 25-27), plus the two same-commit knock-ons the battery's own contract dem
 in_range && row "ROWS-GAP" "$RUNNER" \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 10-16' \
-  RED "a gapped --rows range leaves battery row 9 unexecuted in every leg"
+  RED "a gapped --rows range leaves battery row 9 unexecuted in every leg" \
+  'scripts/lint-orphan-test-suites.test.sh: --rows ranges do not tile'
 
 # ROWS-DROP: remove the flag so -b registers UNFLAGGED beside flagged -a — the
 # MIXED-contract arm must fire (a dropped flag double-executes rather than loses coverage).
 in_range && row "ROWS-DROP" "$RUNNER" \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
-  RED "a dropped --rows flag yields a MIXED flagged/unflagged contract"
+  RED "a dropped --rows flag yields a MIXED flagged/unflagged contract" \
+  'MIXED --rows contract'
 
 # ROWS-SWAP (must-PASS): registration order is not tiling order — the extractor sorts
 # ranges by lo-bound, so swapping the -a/-b lines is a permitted non-canonical input.
@@ -225,8 +227,8 @@ in_range && row "ROWS-SWAP" "$RUNNER" \
   measured-NOTHING, never a silent green.
 - **Precedent-diff (Phase 4.4):** the `in_range && row "ID" "$RUNNER" 'old' 'new' VERDICT "desc"`
   shape has 13 in-file precedents (ROW1..ROW10, ROW5C, ROW7, ROW8, HARNESS, MUSTPASS); the
-  ROWS-SWAP multi-line anchor copies the ROW5C/ROW7/M5 two-line-anchor form verbatim — no new
-  mechanics, no novel pattern.
+  ROWS-SWAP multi-line anchor copies the ROW5C/M5 two-line-anchor form verbatim (ROW7 extends
+  the same technique to four lines) — no new mechanics, no novel pattern.
 - **Verify-the-negative sweep (Phase 4.45):** the plan's negative claims were probed — the
   battery does not `source test-helpers.sh` (grep empty; #8659 does not reach this file), the
   battery file is not
@@ -238,9 +240,10 @@ in_range && row "ROWS-SWAP" "$RUNNER" \
   the guard have uncommitted changes — commit (or the pipeline's commit cadence) before running
   it locally. The battery's own file is not one of the three checked paths, so editing it
   first is fine.
-- **Leg cost:** +3 rows ≈ +36 s on the second leg (24-row serial measured ~9.5 min on the
-  predecessor). The `15-27` leg becomes the heavier one (13 vs 14 rows) — still far under the
-  `timeout-minutes: 30` budget.
+- **Leg cost:** +3 rows ≈ +72 s serial (24-row battery measured ~9.5 min ⇒ ~24 s/row); per
+  leg the net is leg-1 +2 rows (absorbs 13-14) and leg-2 +1 (sheds two, gains three), and
+  `1-14` remains the larger leg by count (14 vs 13) — still far under the
+  `timeout-minutes: 30` budget either way.
 - **No new registration:** the battery is invoked from its own ci.yml job, not via `run_suite`
   in `test-all.sh`, so no shard-manifest pin changes are needed.
 - **`fixture-relative-assert` baseline:** the new rows contain no `cp`/`mv`/`rm`/redirect

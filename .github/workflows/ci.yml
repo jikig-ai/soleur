@@ -1343,8 +1343,8 @@ jobs:
       fail-fast: false
       matrix:
         rows: ["1-14", "15-27"]
-    # Sized above the measured need, not at it: the serial 27-row battery
-    # measured ~9.5 min as a single job; halving the row space plus the
+    # Sized above the measured need, not at it: the serial battery measured
+    # ~9.5 min as a single job at 24 rows (~24 s/row → ~11 min at 27); halving the row space plus the
     # parallelized enumerate children inside the guard puts each leg near
     # ~5 min. A timeout kill must never fire below a duration the repo calls
     # legitimate.
