@@ -4,7 +4,7 @@
 #
 # Guard 1 (plugins/soleur/test/scripts-shard-totality.test.sh) asserts that every scripts-group
 # registration is assigned to exactly one matrix leg. A guard that cannot be driven RED is
-# vacuous, so this battery breaks the partition twenty-four ways (DECLARED_TOTAL below) and
+# vacuous, so this battery breaks the partition twenty-seven ways (DECLARED_TOTAL below) and
 # requires the guard to notice each one.
 #
 # HOW THIS BATTERY AVOIDS THE FAILURES ITS OWN CLASS IS KNOWN FOR:
@@ -73,7 +73,7 @@ fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1"; }
 # sites at the bottom: a row added without bumping it reds the battery everywhere,
 # which is what keeps the per-half floors honest (each half must see the full
 # declared space, not just the sites inside its own range).
-DECLARED_TOTAL=24
+DECLARED_TOTAL=27
 ROWS_LO=1
 ROWS_HI=0        # 0 = unset, meaning "all declared rows"
 while (( $# > 0 )); do
@@ -250,8 +250,11 @@ guard_rc() {
 }
 
 # One mutation row, end to end: apply -> assert landed -> read verdict -> restore -> re-verify.
+# Optional 7th arg `want_sig`: a fixed string the guard's output MUST contain for a RED
+# verdict to count — binds the verdict to the named arm, so a red raised by an unrelated
+# arm (or an incidental second failure) can never satisfy the row.
 row() {
-  local id="$1" file="$2" old="$3" new="$4" want="$5" desc="$6"
+  local id="$1" file="$2" old="$3" new="$4" want="$5" desc="$6" want_sig="${7:-}"
   local pristine
   case "$file" in
     "$RUNNER") pristine="$PRISTINE_RUNNER" ;;
@@ -280,7 +283,11 @@ row() {
 
   if [[ "$want" == "RED" ]]; then
     if (( rc != 0 )); then
-      pass "$id — guard went RED as required ($desc)"
+      if [[ -n "$want_sig" ]] && ! grep -qF "$want_sig" "$WORK/guard_out"; then
+        fail "$id — guard went RED but NOT via the named arm ('$want_sig' absent from guard output): $(tail -3 "$WORK/guard_out" | tr '\n' ' ')"
+      else
+        pass "$id — guard went RED as required ($desc)"
+      fi
     else
       fail "$id — SURVIVOR: guard stayed GREEN under '$desc'. Either the fixtures do not exercise the property, or the mutant is equivalent — decide which; do not leave it unlabelled."
     fi
@@ -682,6 +689,41 @@ in_range && row "MUSTPASS" "$CI_YML" \
     timeout-minutes: 59
     # No setup-node' \
   GREEN "an unrelated ceiling edit that changes no assignment"
+
+# --- run_suite --rows tiling arm: committed extractor mutations (#8990) ------------------
+#
+# The guard's run_suite-argv tiling arm (awk extractor + _rows_tile_check over the
+# `--rows A-B` flags on the lint-orphan-test-suites-mutations -a/-b registrations) shipped
+# with a committed POSITIVE control but no committed row mutating a --rows registration
+# end-to-end. These rows drive the extraction chain red through scripts/test-all.sh.
+
+# ROWS-GAP: shrink the -b range so battery row 9 executes in no leg. The tile check
+# reports "range '10-16' starts at 10, expected 9 (gap or overlap)".
+in_range && row "ROWS-GAP" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 10-16' \
+  RED "a gapped --rows range leaves battery row 9 unexecuted in every leg" \
+  'scripts/lint-orphan-test-suites.test.sh: --rows ranges do not tile'
+
+# ROWS-DROP: remove the flag so -b registers UNFLAGGED beside flagged -a — the
+# MIXED-contract arm must fire (a dropped flag double-executes rather than loses coverage).
+in_range && row "ROWS-DROP" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
+  RED "a dropped --rows flag yields a MIXED flagged/unflagged contract" \
+  'MIXED --rows contract'
+
+# ROWS-SWAP (must-PASS): registration order is not tiling order — the extractor sorts
+# ranges by lo-bound, so swapping the -a/-b lines is a permitted non-canonical input.
+# A guard that reds on this is over-tight; a RED-only matrix cannot see that.
+# The two-line anchor also pins the -a/-b ADJACENCY: a comment inserted between the
+# registration lines misses this anchor (ANCHOR MISSING) while GAP/DROP still land.
+in_range && row "ROWS-SWAP" "$RUNNER" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
+  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
+  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  GREEN "swapped registration order tiles identically (ranges sort before the tile check)"
 
 # --- RANGE ACCOUNTING + ASSERTION FLOOR ----------------------------------------------------------
 #

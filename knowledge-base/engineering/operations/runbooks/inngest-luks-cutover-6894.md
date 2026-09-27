@@ -144,6 +144,11 @@ The `phase-frozen` row is the freeze start and the `phase-swapped` row is the re
 is up to 120s later, after T3). Anything due inside that window is re-armed the way it was armed —
 there is no backfill, and no dispatch that can synthesise one.
 
+*[2026-09-27, #6939:]* before re-firing a **cron** tick from that window, follow
+`inngest-server.md` § Bounded-outage note. "No backfill" is not safe to assume for crons: ADR-100's
+2026-09-19 addendum measured the scheduler firing each missed tick once on resume, and re-firing a
+drained tick double-fires the cron. That procedure's `routine_runs` check tells the two apart.
+
 ---
 
 ## 5. Close-out after `done`
