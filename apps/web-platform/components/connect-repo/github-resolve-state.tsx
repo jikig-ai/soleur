@@ -7,9 +7,11 @@ import { Card } from "@/components/ui/card";
 interface GitHubResolveStateProps {
   onContinue: () => void;
   onBack: () => void;
+  /** feat-ui-action-feedback: Continue triggers a server-redirect hard nav. */
+  navPending?: boolean;
 }
 
-export function GitHubResolveState({ onContinue, onBack }: GitHubResolveStateProps) {
+export function GitHubResolveState({ onContinue, onBack, navPending }: GitHubResolveStateProps) {
   return (
     <div className="mx-auto max-w-lg space-y-8">
       <div className="space-y-4 text-center">
@@ -43,8 +45,8 @@ export function GitHubResolveState({ onContinue, onBack }: GitHubResolveStatePro
       </Card>
 
       <div className="flex items-center gap-3">
-        <Button variant="gold" type="button" onClick={onContinue}>Continue with GitHub</Button>
-        <Button variant="outlined" type="button" onClick={onBack}>Go Back</Button>
+        <Button variant="gold" type="button" onClick={onContinue} disabled={navPending} loading={navPending} loadingLabel="Continue with GitHub">Continue with GitHub</Button>
+        <Button variant="outlined" type="button" onClick={onBack} disabled={navPending}>Go Back</Button>
       </div>
     </div>
   );

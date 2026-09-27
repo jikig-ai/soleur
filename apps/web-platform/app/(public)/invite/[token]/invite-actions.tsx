@@ -46,7 +46,7 @@ export function InviteActions({
       } catch {
         throw new Error("Network error. Please try again.");
       }
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
           reasonToMessage(data.error) || "Failed to accept invitation",
@@ -74,7 +74,7 @@ export function InviteActions({
     } catch {
       throw new Error("Network error. Please try again.");
     }
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(
         reasonToMessage(data.error) || "Failed to decline invitation",

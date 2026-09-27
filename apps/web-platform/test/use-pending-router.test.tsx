@@ -84,7 +84,8 @@ describe("usePendingRouter", () => {
     result.current.prefetch("/inbox");
     expect(routerMock.back).toHaveBeenCalledTimes(1);
     expect(routerMock.forward).toHaveBeenCalledTimes(1);
-    expect(routerMock.prefetch).toHaveBeenCalledWith("/inbox", undefined);
+    expect(routerMock.prefetch).toHaveBeenCalledTimes(1);
+    expect(routerMock.prefetch).toHaveBeenCalledWith("/inbox");
     expect(startNavPending).not.toHaveBeenCalled();
     expect(isSameDocTarget).not.toHaveBeenCalled();
   });

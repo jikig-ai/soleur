@@ -10,6 +10,8 @@ interface ReadyStateProps {
   repoName: string;
   onContinue: () => void;
   onViewKb: () => void;
+  /** feat-ui-action-feedback: both CTAs trigger terminal hard navs. */
+  navPending?: boolean;
   healthSnapshot?: ProjectHealthSnapshot | null;
   /** When set, a sync conversation is actively running — show deep analysis status. */
   syncConversationId?: string | null;
@@ -33,6 +35,7 @@ export function ReadyState({
   onViewKb,
   healthSnapshot,
   syncConversationId,
+  navPending,
 }: ReadyStateProps) {
   if (!healthSnapshot) {
     return (
@@ -74,10 +77,11 @@ export function ReadyState({
         </p>
 
         <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-          <Button variant="gold" type="button" onClick={onContinue}>Open Dashboard</Button>
+          <Button variant="gold" type="button" onClick={onContinue} disabled={navPending} loading={navPending} loadingLabel="Open Dashboard">Open Dashboard</Button>
           <Button
             variant="outlined"
             type="button"
+            disabled={navPending}
             onClick={onViewKb}
             className="text-soleur-text-secondary hover:border-soleur-text-muted hover:text-soleur-text-primary"
           >
@@ -195,10 +199,11 @@ export function ReadyState({
 
       {/* CTAs */}
       <div className="flex items-center justify-center gap-3">
-        <Button variant="gold" type="button" onClick={onContinue}>Open Dashboard</Button>
+        <Button variant="gold" type="button" onClick={onContinue} disabled={navPending} loading={navPending} loadingLabel="Open Dashboard">Open Dashboard</Button>
         <Button
           variant="outlined"
           type="button"
+          disabled={navPending}
           onClick={onViewKb}
           className="text-soleur-text-secondary hover:border-soleur-text-muted hover:text-soleur-text-primary"
         >

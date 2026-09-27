@@ -54,13 +54,23 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
       if (!window.confirm("Revoke this delegation? The member will lose funded access immediately.")) {
         return;
       }
-      const res = await fetch("/api/workspace/delegations", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delegationId, reason: "grantor_revoke" }),
-      });
+      let res: Response;
+      try {
+        res = await fetch("/api/workspace/delegations", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ delegationId, reason: "grantor_revoke" }),
+        });
+      } catch {
+        // The hook releases pending on resolve either way — surface the
+        // failure so the release isn't a silent dead click.
+        window.alert("Couldn't revoke the delegation — network error. Try again.");
+        return;
+      }
       if (res.ok) {
         setDelegations((prev) => prev.filter((d) => d.id !== delegationId));
+      } else {
+        window.alert(`Couldn't revoke the delegation (${res.status}). Try again.`);
       }
     },
   );

@@ -148,11 +148,20 @@ function MemberRow({
       ) {
         return;
       }
-      const res = await fetch("/api/workspace/remove-member", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceId, userId: member.userId }),
-      });
+      let res: Response;
+      try {
+        res = await fetch("/api/workspace/remove-member", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspaceId, userId: member.userId }),
+        });
+      } catch {
+        // The hook releases pending on resolve — surface the failure so the
+        // release isn't a silent dead click (the error slot is not rendered
+        // on this surface).
+        window.alert("Failed to remove member — network error. Please try again.");
+        return;
+      }
       if (!res.ok) {
         console.error("[team-membership-list] remove failed:", res.status);
         window.alert("Failed to remove member. Please try again.");

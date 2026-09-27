@@ -7,9 +7,11 @@ import { Card } from "@/components/ui/card";
 interface InterruptedStateProps {
   onResume: () => void;
   onStartOver: () => void;
+  /** feat-ui-action-feedback: Resume triggers an external OAuth hard nav. */
+  navPending?: boolean;
 }
 
-export function InterruptedState({ onResume, onStartOver }: InterruptedStateProps) {
+export function InterruptedState({ onResume, onStartOver, navPending }: InterruptedStateProps) {
   return (
     <div className="mx-auto max-w-lg space-y-8 text-center">
       <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/10">
@@ -35,8 +37,8 @@ export function InterruptedState({ onResume, onStartOver }: InterruptedStateProp
       </Card>
 
       <div className="flex items-center justify-center gap-3">
-        <Button variant="gold" type="button" onClick={onResume}>Resume on GitHub</Button>
-        <Button variant="outlined" type="button" onClick={onStartOver}>Start Over</Button>
+        <Button variant="gold" type="button" onClick={onResume} disabled={navPending} loading={navPending} loadingLabel="Resume on GitHub">Resume on GitHub</Button>
+        <Button variant="outlined" type="button" onClick={onStartOver} disabled={navPending}>Start Over</Button>
       </div>
     </div>
   );

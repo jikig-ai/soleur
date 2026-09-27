@@ -75,25 +75,32 @@ export function BillingSection({
   const { run: redirectTo, pending: loading, latch } = usePendingAction(
     async (endpoint: string, fallbackError: string) => {
       setError("");
-      let res: Response;
       try {
-        res = await fetch(endpoint, { method: "POST" });
+        const res = await fetch(endpoint, { method: "POST" });
+        // res.json() inside the try: a non-JSON error body (CDN/proxy HTML
+        // page, truncated response) throws — it must land in the catch, not
+        // in the hook's error slot nobody renders.
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || fallbackError);
+          return;
+        }
+        if (data.url) {
+          // Redirect latch (use-sign-out precedent): once the hard nav is
+          // assigned, `loading` must NEVER reset — the document load tearing
+          // the page down IS the reset. Re-enabling in the gap before the
+          // Stripe redirect commits reopens a double-submit window.
+          latch();
+          window.location.href = data.url;
+          return;
+        }
+        // res.ok with no url: /api/checkout returns {clientSecret, url:null}
+        // for embedded sessions — a host-page caller gets a silent dead
+        // click without this branch (pending must terminate into success OR
+        // a visible error; neither happened).
+        setError("Checkout is temporarily unavailable — please try again.");
       } catch {
         setError("Something went wrong. Please try again.");
-        return;
-      }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || fallbackError);
-        return;
-      }
-      if (data.url) {
-        // Redirect latch (use-sign-out precedent): once the hard nav is
-        // assigned, `loading` must NEVER reset — the document load tearing
-        // the page down IS the reset. Re-enabling in the gap before the
-        // Stripe redirect commits reopens a double-submit window.
-        latch();
-        window.location.href = data.url;
       }
     },
   );
@@ -177,9 +184,10 @@ export function BillingSection({
               type="button"
               onClick={handlePortalRedirect}
               loading={loading}
+              loadingLabel="Redirecting"
               className="mt-3"
             >
-              {loading ? "Redirecting..." : "Resolve Payment"}
+              Resolve Payment
             </Button>
           </div>
         )}
@@ -217,8 +225,9 @@ export function BillingSection({
               type="button"
               onClick={handleSubscribe}
               loading={loading}
+              loadingLabel="Redirecting"
             >
-              {loading ? "Redirecting..." : "Subscribe"}
+              Subscribe
             </Button>
           </div>
         )}
@@ -235,8 +244,9 @@ export function BillingSection({
               type="button"
               onClick={handleSubscribe}
               loading={loading}
+              loadingLabel="Redirecting"
             >
-              {loading ? "Redirecting..." : "Resubscribe"}
+              Resubscribe
             </Button>
           </div>
         )}

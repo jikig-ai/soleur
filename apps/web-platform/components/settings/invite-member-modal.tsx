@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { DEFAULT_ORG_NAME, WORKSPACE_NAME_MAX } from "@/lib/workspace-name";
 
@@ -38,7 +39,6 @@ export function InviteMemberModal({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "owner">("member");
   const [attested, setAttested] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
@@ -58,18 +58,19 @@ export function InviteMemberModal({
       setEmail("");
       setRole("member");
       setAttested(false);
-      setSubmitting(false);
       setError(null);
       setSuccess(false);
       setWorkspaceName("");
     }
   }, [open]);
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!attested || !email.trim() || !email.includes("@") || submitting) return;
-      setSubmitting(true);
+  // feat-ui-action-feedback: shared pending contract. latch() holds pending
+  // across the 1.5s success→reload window — the reload IS the terminal
+  // teardown, and releasing at resolve would re-enable the submit behind
+  // the success state.
+  const { run: runSubmit, pending: submitting, latch } = usePendingAction(
+    async () => {
+      if (!attested || !email.trim() || !email.includes("@")) return;
       setError(null);
       try {
         // AC6: opportunistic first-invite rename. Best-effort — a rename
@@ -109,31 +110,24 @@ export function InviteMemberModal({
                 ? "This person is already a workspace member."
                 : body.error || `Invite failed (${res.status})`;
           setError(msg);
-          setSubmitting(false);
           return;
         }
         setSuccess(true);
+        latch();
         setTimeout(() => {
           onClose();
           window.location.reload();
         }, 1500);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
-        setSubmitting(false);
       }
     },
-    [
-      email,
-      role,
-      attested,
-      submitting,
-      workspaceId,
-      onClose,
-      showNameField,
-      organizationId,
-      workspaceName,
-    ],
   );
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    runSubmit();
+  }
 
   return (
     <ResponsiveModal

@@ -17,12 +17,19 @@ export function NavLink({ onNavigate, ...props }: NavLinkProps) {
     <Link
       {...props}
       onNavigate={(event) => {
-        // Consumer runs FIRST: a vetoing onNavigate calls
-        // event.preventDefault() (the only member Next's NavigateEvent
-        // exposes — there is no defaultPrevented getter), so the bar must
-        // arm after the consumer has had its say, not before.
-        onNavigate?.(event);
-        if (!isSameDocTarget(props.href)) startNavPending("link");
+        // Consumer runs first AND vetoes count: Next's NavigateEvent exposes
+        // only preventDefault() (no defaultPrevented getter), so wrap it —
+        // a vetoed nav never commits and must not arm a phantom bar that
+        // strands to the 30s stall.
+        let vetoed = false;
+        onNavigate?.({
+          ...event,
+          preventDefault() {
+            vetoed = true;
+            event.preventDefault();
+          },
+        });
+        if (!vetoed && !isSameDocTarget(props.href)) startNavPending("link");
       }}
     />
   );

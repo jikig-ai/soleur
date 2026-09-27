@@ -8,10 +8,12 @@ import { Card } from "@/components/ui/card";
 interface NoProjectsStateProps {
   onUpdateAccess: () => void;
   onBack: () => void;
+  /** feat-ui-action-feedback: Update Access triggers an external OAuth hard nav. */
+  navPending?: boolean;
   onRefresh?: () => void;
 }
 
-export function NoProjectsState({ onUpdateAccess, onBack, onRefresh }: NoProjectsStateProps) {
+export function NoProjectsState({ onUpdateAccess, onBack, onRefresh, navPending }: NoProjectsStateProps) {
   return (
     <div className="mx-auto max-w-lg space-y-6">
       <div className="flex items-center gap-3">
@@ -35,14 +37,14 @@ export function NoProjectsState({ onUpdateAccess, onBack, onRefresh }: NoProject
       </Card>
 
       <div className="flex items-center gap-3">
-        <Button variant="gold" type="button" onClick={onUpdateAccess}>Update Access on GitHub</Button>
+        <Button variant="gold" type="button" onClick={onUpdateAccess} disabled={navPending} loading={navPending} loadingLabel="Update Access on GitHub">Update Access on GitHub</Button>
         {onRefresh && (
           <Button variant="outlined" type="button" onClick={onRefresh}>
             <RefreshIcon className="mr-1.5 inline h-4 w-4" />
             Refresh
           </Button>
         )}
-        <Button variant="outlined" type="button" onClick={onBack}>Go Back</Button>
+        <Button variant="outlined" type="button" onClick={onBack} disabled={navPending}>Go Back</Button>
       </div>
     </div>
   );

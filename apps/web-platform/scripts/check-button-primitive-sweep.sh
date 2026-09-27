@@ -36,7 +36,7 @@ NATIVE_BUTTON_BASELINE="${BUTTON_SWEEP_BASELINE:-51}"
 
 # Space-separated git pathspecs relative to apps/web-platform; overridable
 # for scratch-fixture verification (BUTTON_SWEEP_PATHS="sweep-fixture/*.tsx").
-SWEEP_PATHS="${BUTTON_SWEEP_PATHS:-components/*.tsx app/*.tsx}"
+SWEEP_PATHS="${BUTTON_SWEEP_PATHS:-components/*.tsx app/*.tsx hooks/*.tsx}"
 
 # -----------------------------------------------------------------------------
 # Discovery: enumerate every native <button> site

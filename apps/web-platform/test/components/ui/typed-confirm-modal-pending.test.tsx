@@ -18,6 +18,11 @@ import { render, screen, fireEvent, waitFor, act, cleanup } from "@testing-libra
 
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { useActionSend } from "@/hooks/use-action-send";
+import { reportSilentFallback } from "@/lib/client-observability";
+
+vi.mock("@/lib/client-observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
 
 const BASE_PROPS = {
   open: true,
@@ -197,6 +202,9 @@ describe("useActionSend + TypedConfirmModal — pending episode", () => {
     render(<SendHarness />);
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByRole("dialog");
+    // Flush the modal's mount effect — it setValue("")s on open and can land
+    // AFTER findByRole resolves, racing the typing below into a reset.
+    await act(async () => {});
     fireEvent.change(screen.getByTestId("typed-confirm-input"), {
       target: { value: "SEND" },
     });
@@ -299,6 +307,43 @@ describe("useActionSend + TypedConfirmModal — pending episode", () => {
       second.resolve(resp(200, {}));
     });
     await screen.findByText("Acknowledged");
+  });
+
+  it("a hung send POST terminates into a timeout error + Sentry mirror, dismiss vectors live again", async () => {
+    // The AbortSignal.timeout in postSend is the ONLY mechanism that ends a
+    // truly-hung episode — deleting it would previously have passed green.
+    await openConfirmAndType();
+    fetchMock.mockRejectedValueOnce(
+      new DOMException("The operation timed out.", "TimeoutError"),
+    );
+
+    fireEvent.click(screen.getByTestId("typed-confirm-submit"));
+
+    // Termination: in-modal timeout error announced, controls live again
+    // (the transition's isPending clears a tick after the alert paints).
+    await screen.findByRole("alert");
+    expect(screen.getByRole("alert")).toHaveTextContent(/timed out/i);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("typed-confirm-cancel")).not.toBeDisabled();
+      expect(screen.getByTestId("typed-confirm-submit")).not.toBeDisabled();
+    });
+    // Sentry mirror under the timeout op.
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "action-send-timeout" }),
+    );
+  });
+
+  it("a network rejection terminates into the generic send error", async () => {
+    await openConfirmAndType();
+    fetchMock.mockRejectedValueOnce(new Error("fetch failed"));
+
+    fireEvent.click(screen.getByTestId("typed-confirm-submit"));
+
+    await screen.findByRole("alert");
+    expect(screen.getByRole("alert")).toHaveTextContent(/network error/i);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("409 already_sent resolves to acknowledged with no error surface", async () => {

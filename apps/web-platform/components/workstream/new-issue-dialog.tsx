@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { CONCIERGE_ONLINE } from "./concierge-flag";
 import type { CreateIssueBody } from "./workstream-writes";
@@ -30,47 +31,44 @@ export function NewIssueDialog({
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  // Synchronous single-flight guard — state flips are async, so a second submit
-  // in the same tick would still fire without this ref.
-  const inFlight = useRef(false);
+
+  // feat-ui-action-feedback: the bespoke inFlight-ref + submitting pair is
+  // exactly the contract usePendingAction owns (single-flight ref gate,
+  // watchdog, focus restore) — two mechanisms for one guarantee.
+  const { run: runSubmit, pending: submitting } = usePendingAction(
+    async () => {
+      if (title.trim().length === 0) return;
+      setError(null);
+      try {
+        await onSubmit({
+          title: title.trim(),
+          ...(description.trim() ? { body: description.trim() } : {}),
+        });
+        onClose();
+      } catch {
+        // Board already rolled back the optimistic card + toasted; keep the
+        // form values so the user can retry without re-typing.
+        setError("Couldn't create the issue. Please try again.");
+      }
+    },
+  );
 
   useEffect(() => {
     if (open) {
       setTitle("");
       setDescription("");
-      setSubmitting(false);
       setError(null);
-      inFlight.current = false;
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
 
   const canSubmit = title.trim().length > 0 && !submitting;
 
-  async function handleSubmit(e?: React.FormEvent) {
+  function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
-    if (inFlight.current) return; // single-flight: block the double-fire
-    if (title.trim().length === 0) return;
-    inFlight.current = true;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await onSubmit({
-        title: title.trim(),
-        ...(description.trim() ? { body: description.trim() } : {}),
-      });
-      onClose();
-    } catch {
-      // Board already rolled back the optimistic card + toasted; keep the form
-      // values so the user can retry without re-typing.
-      setError("Couldn't create the issue. Please try again.");
-    } finally {
-      inFlight.current = false;
-      setSubmitting(false);
-    }
+    runSubmit();
   }
 
   return (
@@ -79,7 +77,7 @@ export function NewIssueDialog({
       // Preserve the pre-refactor single-flight guard: don't let Escape dismiss
       // while a create is in flight (backdrop is already disabled below).
       onClose={() => {
-        if (!inFlight.current) onClose();
+        if (!submitting) onClose();
       }}
       closeOnBackdrop={true}
       desktopMaxWidth="max-w-md"

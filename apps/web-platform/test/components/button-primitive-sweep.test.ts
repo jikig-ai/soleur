@@ -32,4 +32,21 @@ describe("button primitive sweep sentinel (#8917 Guard 2)", () => {
     }
     expect(result.status).toBe(0);
   });
+
+  // Positive-mutation coverage: a tracked native <button> with no
+  // data-button-exempt MUST fail — the baseline could otherwise pass
+  // vacuously if the discovery grep silently broke.
+  it("fails on a planted unexempted native button", () => {
+    const result = spawnSync("bash", [SCRIPT_PATH], {
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        BUTTON_SWEEP_PATHS: "test/fixtures/button-primitive-violation.tsx",
+        BUTTON_SWEEP_BASELINE: "1",
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("FAIL");
+  });
 });

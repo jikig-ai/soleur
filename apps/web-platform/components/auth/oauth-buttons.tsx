@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { safeReturnTo } from "@/lib/safe-return-to";
 import {
   type AuthErrorLike,
@@ -69,7 +70,7 @@ const PROVIDERS: ProviderConfig[] = [
 
 export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
   const searchParams = useSearchParams();
-  const [loading, setLoading] = useState<Provider | null>(null);
+  const [pendingProvider, setPendingProvider] = useState<Provider | null>(null);
   const [error, setError] = useState("");
 
   // Thread a validated redirectTo (e.g. /invite/<token>) through the OAuth
@@ -77,52 +78,59 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
   // once the user is fully onboarded. Rejected/absent → no next param.
   const nextParam = safeReturnTo(searchParams.get("redirectTo"));
 
-  async function handleOAuth(provider: ProviderConfig) {
-    setLoading(provider.id);
-    setError("");
+  // feat-ui-action-feedback: the OAuth handoff is a hard nav the Supabase
+  // client performs — latch() marks success terminal so pending can never
+  // release into the redirect gap, and the watchdog covers a hung
+  // signInWithOAuth (GoTrue stall previously bricked all four buttons).
+  const { run: handleOAuth, latch } = usePendingAction(
+    async (provider: ProviderConfig) => {
+      setError("");
 
-    const callbackUrl = nextParam
-      ? `${window.location.origin}/callback?next=${encodeURIComponent(nextParam)}`
-      : `${window.location.origin}/callback`;
+      const callbackUrl = nextParam
+        ? `${window.location.origin}/callback?next=${encodeURIComponent(nextParam)}`
+        : `${window.location.origin}/callback`;
 
-    const supabase = createClient();
-    let error: AuthErrorLike | null = null;
-    try {
-      ({ error } = await supabase.auth.signInWithOAuth({
-        provider: provider.id,
-        options: {
-          redirectTo: callbackUrl,
-          ...(provider.scopes && { scopes: provider.scopes }),
-        },
-      }));
-    } catch (thrown) {
-      // Transport failure (fetch reject) before the redirect — route it
-      // through the same mapping layer for recoverable copy.
-      error = thrown as AuthErrorLike;
-    }
-
-    if (error) {
-      console.error("[auth] Supabase OAuth error:", error.message);
-      // Forward only typed enum/int fields in `extra` — error.message can embed
-      // the user's email or other PII and Sentry is a shared cross-tenant
-      // project. The raw error is captured via Sentry.captureException, so the
-      // message is scrubbed by sentry.client.config beforeSend, not omitted
-      // here. Provider tag distinguishes Google/Apple/GitHub/Azure.
-      reportSilentFallback(error, {
-        feature: "auth",
-        op: "signInWithOAuth",
-        extra: {
+      const supabase = createClient();
+      let error: AuthErrorLike | null = null;
+      try {
+        ({ error } = await supabase.auth.signInWithOAuth({
           provider: provider.id,
-          errorCode: error.code,
-          errorName: error.name,
-          status: error.status,
-        },
-      });
-      setError(mapSupabaseAuthError(error));
-      setLoading(null);
-    }
-    // On success, the browser redirects — no state cleanup needed
-  }
+          options: {
+            redirectTo: callbackUrl,
+            ...(provider.scopes && { scopes: provider.scopes }),
+          },
+        }));
+      } catch (thrown) {
+        // Transport failure (fetch reject) before the redirect — route it
+        // through the same mapping layer for recoverable copy.
+        error = thrown as AuthErrorLike;
+      }
+
+      if (error) {
+        console.error("[auth] Supabase OAuth error:", error.message);
+        // Forward only typed enum/int fields in `extra` — error.message can embed
+        // the user's email or other PII and Sentry is a shared cross-tenant
+        // project. The raw error is captured via Sentry.captureException, so the
+        // message is scrubbed by sentry.client.config beforeSend, not omitted
+        // here. Provider tag distinguishes Google/Apple/GitHub/Azure.
+        reportSilentFallback(error, {
+          feature: "auth",
+          op: "signInWithOAuth",
+          extra: {
+            provider: provider.id,
+            errorCode: error.code,
+            errorName: error.name,
+            status: error.status,
+          },
+        });
+        setError(mapSupabaseAuthError(error));
+        setPendingProvider(null);
+        return;
+      }
+      // On success, the browser redirects — no state cleanup needed
+      latch();
+    },
+  );
 
   return (
     <div className="space-y-3">
@@ -131,9 +139,12 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
           variant="outlined"
           key={provider.id}
           type="button"
-          onClick={() => handleOAuth(provider)}
-          disabled={loading !== null || disabled}
-          loading={loading === provider.id}
+          onClick={() => {
+            setPendingProvider(provider.id);
+            handleOAuth(provider);
+          }}
+          disabled={pendingProvider !== null || disabled}
+          loading={pendingProvider === provider.id}
           className="w-full gap-3"
         >
           {provider.icon}

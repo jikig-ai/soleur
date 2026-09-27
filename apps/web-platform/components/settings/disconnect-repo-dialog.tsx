@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { usePendingRouter } from "@/hooks/use-pending-router";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface DisconnectRepoDialogProps {
   repoName: string;
@@ -11,32 +12,38 @@ interface DisconnectRepoDialogProps {
 export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
   const router = usePendingRouter();
   const [isOpen, setIsOpen] = useState(false);
-  const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleDisconnect() {
-    setIsDisconnecting(true);
-    setError(null);
+  // feat-ui-action-feedback: shared pending contract — a hung DELETE
+  // previously stranded the disabled Confirm with no watchdog. No latch():
+  // success is a SOFT push (the nav bar owns feedback to commit), so the
+  // episode releases normally on resolve.
+  const { run: handleDisconnect, pending: isDisconnecting } = usePendingAction(
+    async () => {
+      setError(null);
 
-    try {
-      const res = await fetch("/api/repo/disconnect", {
-        method: "DELETE",
-      });
-
-      const data = await res.json();
+      let res: Response;
+      let data: { ok?: boolean; error?: string } = {};
+      try {
+        res = await fetch("/api/repo/disconnect", {
+          method: "DELETE",
+        });
+        // res.json() inside the try — a non-JSON error body throws into the
+        // catch, not into the hook's error slot nobody renders.
+        data = await res.json();
+      } catch {
+        setError("Network error. Please try again.");
+        return;
+      }
 
       if (!res.ok || !data.ok) {
         setError(data.error || "Failed to disconnect. Please try again.");
-        setIsDisconnecting(false);
         return;
       }
 
       router.push("/connect-repo");
-    } catch {
-      setError("Network error. Please try again.");
-      setIsDisconnecting(false);
-    }
-  }
+    },
+  );
 
   if (!isOpen) {
     return (
@@ -84,6 +91,7 @@ export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
             setIsOpen(false);
             setError(null);
           }}
+          disabled={isDisconnecting}
           className="text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           Cancel

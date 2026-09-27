@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 
 function timeUntilExpiry(expiresAt: string): string {
   const diff = new Date(expiresAt).getTime() - Date.now();
@@ -52,6 +53,10 @@ export function PendingInvitesList({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ workspaceId, invitationId: invite.id }),
+        // feat-ui-action-feedback: bound the flight — a hung POST would
+        // leave this row's Cancel disabled forever (per-row pending has no
+        // watchdog of its own).
+        signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
       });
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean };
       // Commit removal only once the server confirms — never a silent no-op.

@@ -294,6 +294,11 @@ export default function DashboardPage() {
   // ---------------------------------------------------------------------------
 
   const [firstRunAttachments, setFirstRunAttachments] = useState<FirstRunAttachment[]>([]);
+  // feat-ui-action-feedback: the exempt send submit had no re-entry guard —
+  // a second Enter before the soft nav commits re-fires completeOnboarding +
+  // the vision POST. Ref (sync) + state (visual disable).
+  const [sendSubmitting, setSendSubmitting] = useState(false);
+  const sendSubmittingRef = useRef(false);
   const [attachError, setAttachError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -376,10 +381,13 @@ export default function DashboardPage() {
   const handleFirstRunSend = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      if (sendSubmittingRef.current) return;
       const form = e.currentTarget;
       const input = form.elements.namedItem("idea") as HTMLInputElement;
       const message = input?.value?.trim();
       if (!message && firstRunAttachments.length === 0) return;
+      sendSubmittingRef.current = true;
+      setSendSubmitting(true);
       completeOnboarding();
 
       // Store pending files for the chat page to upload after conversation creation
@@ -594,7 +602,9 @@ export default function DashboardPage() {
             <button
               type="submit"
               data-button-exempt="flat amber-600 send affordance inside the composite attach/input/send box — fill is not a Button variant"
-              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500"
+              disabled={sendSubmitting}
+              aria-busy={sendSubmitting}
+              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-60"
               aria-label="Send message"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

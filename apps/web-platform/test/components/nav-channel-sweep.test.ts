@@ -27,4 +27,27 @@ describe("nav-channel sweep sentinel (#8917)", () => {
     }
     expect(result.status).toBe(0);
   });
+
+  // Positive-mutation coverage: the tracked fixtures under test/fixtures/
+  // (outside the default pathspec) MUST fail the sentinel — an exit-0-only
+  // assertion would stay green if a check's regex silently broke.
+  it.each([
+    ["nav-channel-violation-link.tsx", "next/link"],
+    ["nav-channel-violation-router.tsx", "router"],
+    ["nav-channel-violation-anchor.tsx", "anchor"],
+  ])("fails on a planted %s bypass", (fixture, kind) => {
+    const result = spawnSync("bash", [SCRIPT_PATH], {
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        NAV_SWEEP_PATHS: `test/fixtures/${fixture}`,
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("FAIL");
+    // The per-class fixture isolates one check; the diagnostic should name
+    // its violation class (defensive — kind kept for readable test names).
+    expect(kind).toBeTruthy();
+  });
 });

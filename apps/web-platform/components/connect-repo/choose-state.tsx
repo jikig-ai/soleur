@@ -9,9 +9,11 @@ interface ChooseStateProps {
   onCreateNew: () => void;
   onConnectExisting: () => void;
   onSkip: () => void;
+  /** feat-ui-action-feedback: hard-nav episode in flight (skip → /dashboard). */
+  navPending?: boolean;
 }
 
-export function ChooseState({ onCreateNew, onConnectExisting, onSkip }: ChooseStateProps) {
+export function ChooseState({ onCreateNew, onConnectExisting, onSkip, navPending }: ChooseStateProps) {
   return (
     <div className="space-y-8">
       <div className="space-y-4 text-center">
@@ -75,6 +77,7 @@ export function ChooseState({ onCreateNew, onConnectExisting, onSkip }: ChooseSt
           variant="ghost"
           type="button"
           onClick={onSkip}
+          disabled={navPending}
           className="underline decoration-soleur-border-default underline-offset-2"
         >
           Skip this step

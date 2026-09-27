@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
 import { usePendingRouter } from "@/hooks/use-pending-router";
 import { safeReturnTo } from "@/lib/safe-return-to";
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 
 type Status = "idle" | "checking" | "valid" | "invalid" | "error";
 
@@ -74,6 +75,10 @@ function SetupKeyForm() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key }),
+        // feat-ui-action-feedback: pending must always terminate — a hung
+        // POST leaves status="checking" forever, disabling BOTH onboarding
+        // exits (Save + Set up later). Abort into the error arm instead.
+        signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
       });
 
       if (!res.ok) {

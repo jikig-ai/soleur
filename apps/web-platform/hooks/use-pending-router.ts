@@ -41,7 +41,10 @@ export function usePendingRouter(): PendingRouter {
       back: () => router.back(),
       forward: () => router.forward(),
       refresh: () => router.refresh(),
-      prefetch: (href, options) => router.prefetch(href, options),
+      prefetch: (href, options) =>
+        options === undefined
+          ? router.prefetch(href)
+          : router.prefetch(href, options),
     }),
     [router],
   );

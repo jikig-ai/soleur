@@ -6,21 +6,20 @@ type CapturedOnNavigate = ((event: { preventDefault: () => void }) => void) | un
 
 // Stand-in Link: renders a real anchor, forwards every prop, and fires the
 // Next `onNavigate` contract on click (SPA same-origin navigations only).
+const { linkPropsSpy } = vi.hoisted(() => ({ linkPropsSpy: vi.fn() }));
+
 vi.mock("next/link", () => ({
   __esModule: true,
-  default: ({
-    onNavigate,
-    children,
-    href,
-    prefetch: _prefetch,
-    ...rest
-  }: {
+  default: (props: {
     onNavigate?: CapturedOnNavigate;
     children?: React.ReactNode;
     href: unknown;
     prefetch?: unknown;
     [key: string]: unknown;
-  }) => (
+  }) => {
+    linkPropsSpy(props);
+    const { onNavigate, children, href, prefetch: _prefetch, ...rest } = props;
+    return (
     <a
       href={typeof href === "string" ? href : "#mock-url-object"}
       {...rest}
@@ -31,7 +30,8 @@ vi.mock("next/link", () => ({
     >
       {children}
     </a>
-  ),
+    );
+  },
 }));
 
 vi.mock("@/lib/nav-pending-store", () => ({
@@ -81,6 +81,31 @@ describe("NavLink", () => {
       expect.objectContaining({ preventDefault: expect.any(Function) }),
     );
     expect(startNavPending).toHaveBeenCalledWith("link");
+  });
+
+  it("wires the trigger through onNavigate, NOT onClick", () => {
+    // Contract pin: the bar MUST fire from Next's onNavigate (SPA
+    // same-origin navs only). If NavLink ever regresses to passing onClick,
+    // modifier-key/new-tab clicks would arm a bar for a nav that never
+    // commits — and this suite would stay green because the mock anchor
+    // fires onNavigate on click. Assert the prop shape instead.
+    render(<NavLink href="/inbox">Inbox</NavLink>);
+    const props = linkPropsSpy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(props.onNavigate).toBeInstanceOf(Function);
+    expect(props.onClick).toBeUndefined();
+  });
+
+  it("a vetoing onNavigate suppresses the bar — a vetoed nav never commits", () => {
+    render(
+      <NavLink
+        href="/inbox"
+        onNavigate={(e) => e.preventDefault()}
+      >
+        Inbox
+      </NavLink>,
+    );
+    fireEvent.click(screen.getByRole("link", { name: "Inbox" }));
+    expect(startNavPending).not.toHaveBeenCalled();
   });
 
   it("passes Link/anchor props through untouched", () => {

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 interface PendingInviteBannerProps {
@@ -18,23 +19,33 @@ export function PendingInviteBanner({
 }: PendingInviteBannerProps) {
   const router = useRouter();
   const [dismissed, setDismissed] = useState(false);
-  const [loading, setLoading] = useState<"accept" | "decline" | null>(null);
   // feat-ui-action-feedback: a pending episode must terminate into success or
   // a visible, announced error — Sentry-only reporting left the founder with
   // a silent dead click.
   const [actionError, setActionError] = useState<string | null>(null);
 
-  if (dismissed) return null;
-
-  async function handleAccept() {
-    setLoading("accept");
-    setActionError(null);
-    try {
-      const res = await fetch("/api/workspace/accept-invite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invitationId }),
-      });
+  // The old hand-rolled version claimed a redirect latch in a comment but
+  // cleared loading in `finally` — the latch only held by accident of
+  // setDismissed unmounting the banner. usePendingAction makes it real:
+  // latch() marks the hard-nav path terminal; every error path releases.
+  const { run: handleAccept, pending: acceptPending, latch } = usePendingAction(
+    async () => {
+      setActionError(null);
+      let res: Response;
+      try {
+        res = await fetch("/api/workspace/accept-invite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invitationId }),
+        });
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "workspace-invitations",
+          op: "accept",
+        });
+        setActionError("Couldn't accept the invite — network error. Try again.");
+        return;
+      }
       if (res.ok) {
         // Hide the banner immediately AND navigate. Without setDismissed the
         // banner can re-mount before the server-side invite resolver re-fetches
@@ -49,9 +60,9 @@ export function PendingInviteBanner({
         // current route; siblings would serve prior-workspace content). Mirrors
         // the sibling accept path in invite/[token]/invite-actions.tsx and the
         // workspace switch in components/dashboard/org-switcher-container.tsx.
+        // latch() — the hard nav owns teardown; never re-enable in the gap.
+        latch();
         window.location.assign("/dashboard/settings/team");
-        // Redirect latch (brief §3.6): the hard nav owns teardown — never
-        // re-enable the buttons in the gap before the document loads.
         return;
       }
       reportSilentFallback(
@@ -59,26 +70,27 @@ export function PendingInviteBanner({
         { feature: "workspace-invitations", op: "accept" },
       );
       setActionError(`Couldn't accept the invite (${res.status}) — try again.`);
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "workspace-invitations",
-        op: "accept",
-      });
-      setActionError("Couldn't accept the invite — network error. Try again.");
-    } finally {
-      setLoading(null);
-    }
-  }
+    },
+  );
 
-  async function handleDecline() {
-    setLoading("decline");
-    setActionError(null);
-    try {
-      const res = await fetch("/api/workspace/decline-invite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invitationId }),
-      });
+  const { run: handleDecline, pending: declinePending } = usePendingAction(
+    async () => {
+      setActionError(null);
+      let res: Response;
+      try {
+        res = await fetch("/api/workspace/decline-invite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invitationId }),
+        });
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "workspace-invitations",
+          op: "decline",
+        });
+        setActionError("Couldn't decline the invite — network error. Try again.");
+        return;
+      }
       if (res.ok) {
         setDismissed(true);
         router.refresh();
@@ -89,16 +101,12 @@ export function PendingInviteBanner({
         );
         setActionError(`Couldn't decline the invite (${res.status}) — try again.`);
       }
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "workspace-invitations",
-        op: "decline",
-      });
-      setActionError("Couldn't decline the invite — network error. Try again.");
-    } finally {
-      setLoading(null);
-    }
-  }
+    },
+  );
+
+  const loading = acceptPending ? "accept" : declinePending ? "decline" : null;
+
+  if (dismissed) return null;
 
   return (
     <div className="flex flex-wrap items-center justify-between border-b border-soleur-accent-gold-fg/20 bg-soleur-accent-gold-fill/10 px-4 py-3">

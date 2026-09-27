@@ -7,9 +7,10 @@ import {
 
 // feat-ui-action-feedback (#8917) Guard 1 — the nav-pending bar is visible iff a
 // soft navigation has been in flight past the 150ms entry delay, and it clears
-// on route commit (pathname OR searchParams change). Exercises all three
-// trigger channels (NavLink, usePendingRouter, popstate) plus the no-flash and
-// no-stuck-bar contracts. Timed behaviors are driven by delaying the target
+// on route commit (pathname OR searchParams change). Exercises two of the
+// three trigger channels in-browser (NavLink click, popstate via goBack);
+// usePendingRouter is covered at unit level (test/use-pending-router.test.tsx).
+// Timed behaviors are driven by delaying the target
 // route's RSC/document fetch via page.route — never by racing real latency.
 
 const BAR = (page: Page) => page.getByTestId("nav-pending-bar");

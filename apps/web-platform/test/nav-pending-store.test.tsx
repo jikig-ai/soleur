@@ -8,7 +8,7 @@ import { reportSilentFallback } from "@/lib/client-observability";
 import {
   PENDING_ENTRY_DELAY_MS,
   PENDING_MIN_VISIBLE_MS,
-  PENDING_STALL_MS,
+  NAV_STALL_MS,
   getNavLastLocation,
   getNavPendingSnapshot,
   isSameDocTarget,
@@ -33,7 +33,7 @@ function settle() {
   stopNavPending();
   vi.advanceTimersByTime(PENDING_MIN_VISIBLE_MS + 1);
   stopNavPending();
-  vi.advanceTimersByTime(PENDING_STALL_MS + 1);
+  vi.advanceTimersByTime(NAV_STALL_MS + 1);
   stopNavPending();
 }
 
@@ -140,7 +140,7 @@ describe("nav-pending-store", () => {
   it("force-stops and reports to Sentry after the ~30s stall timeout (spec-flow C1)", () => {
     startNavPending("popstate");
     vi.advanceTimersByTime(PENDING_ENTRY_DELAY_MS);
-    vi.advanceTimersByTime(PENDING_STALL_MS - PENDING_ENTRY_DELAY_MS);
+    vi.advanceTimersByTime(NAV_STALL_MS - PENDING_ENTRY_DELAY_MS);
     const snap = getNavPendingSnapshot();
     expect(snap.pending).toBe(false);
     expect(snap.visible).toBe(false);
@@ -156,7 +156,7 @@ describe("nav-pending-store", () => {
     startNavPending("link");
     vi.advanceTimersByTime(PENDING_ENTRY_DELAY_MS);
     stopNavPending();
-    vi.advanceTimersByTime(PENDING_STALL_MS + 1000);
+    vi.advanceTimersByTime(NAV_STALL_MS + 1000);
     expect(reportSilentFallback).not.toHaveBeenCalled();
   });
 

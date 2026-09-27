@@ -71,18 +71,18 @@ describe("usePendingAction", () => {
 
   it("latch() never resets pending once the action resolves", async () => {
     const d = deferred();
-    const { result } = renderHook(() =>
-      usePendingAction(async () => {
-        result.current.latch();
-        await d.promise;
-      }),
-    );
+    const fn = vi.fn(async () => {
+      result.current.latch();
+      await d.promise;
+    });
+    const { result } = renderHook(() => usePendingAction(fn));
     act(() => result.current.run());
     await act(async () => d.resolve());
     expect(result.current.pending).toBe(true);
     // The latch also blocks re-runs — the redirect owns the teardown.
     act(() => result.current.run());
     expect(result.current.pending).toBe(true);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("a resolve without latch() releases pending — terminality is explicit, never inferred", async () => {
@@ -115,6 +115,10 @@ describe("usePendingAction", () => {
     await act(async () => d.reject(new Error("boom")));
     expect(result.current.pending).toBe(false);
     expect(result.current.error?.message).toBe("boom");
+    // A failed latched episode is non-terminal — the latch resets, so the
+    // released control is genuinely retryable, not enabled-but-dead.
+    act(() => result.current.run());
+    expect(result.current.pending).toBe(true);
   });
 
   it("a latched episode still reports at the watchdog horizon — teardown never arrived", () => {
@@ -131,6 +135,11 @@ describe("usePendingAction", () => {
     // Resolve doesn't release (latched) but the watchdog stays armed.
     act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS));
     expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    // The higher-severity latched class gets its own op — separately
+    // queryable from a plain hung action.
+    expect(
+      vi.mocked(reportSilentFallback).mock.calls[0][1].op,
+    ).toBe("pending-watchdog-latch-held");
     expect(
       vi.mocked(reportSilentFallback).mock.calls[0][1].extra,
     ).toMatchObject({ latched: "true" });
@@ -146,6 +155,57 @@ describe("usePendingAction", () => {
     act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS));
     expect(reportSilentFallback).toHaveBeenCalledTimes(1);
     expect(result.current.pending).toBe(false);
+  });
+
+  it("a retry clears a stale error — re-run resets the error channel", async () => {
+    const d1 = deferred();
+    const d2 = deferred();
+    const fn = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(() => d1.promise)
+      .mockImplementationOnce(() => d2.promise);
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => result.current.run());
+    await act(async () => d1.reject(new Error("first")));
+    expect(result.current.error?.message).toBe("first");
+    act(() => result.current.run());
+    expect(result.current.error).toBeNull();
+    await act(async () => d2.resolve());
+  });
+
+  it("unmount clears the watchdog — no post-unmount Sentry report", () => {
+    vi.useFakeTimers();
+    const never = new Promise<void>(() => {});
+    const { result, unmount } = renderHook(() => usePendingAction(() => never));
+    act(() => result.current.run());
+    expect(result.current.pending).toBe(true);
+    unmount();
+    act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS + 1000));
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("a watchdog-released zombie cannot release the retried episode", async () => {
+    // Episode A hangs; the watchdog releases pending at 30s. The user
+    // retries → episode B. When A's asyncFn finally settles, its finally
+    // must NOT clear B's pending/watchdog — the zombie is superseded.
+    vi.useFakeTimers();
+    const dA = deferred();
+    const dB = deferred();
+    let calls = 0;
+    const fn = vi.fn(() => (calls++ === 0 ? dA.promise : dB.promise));
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => result.current.run());           // A
+    act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS));
+    expect(result.current.pending).toBe(false); // A watchdog-released
+    act(() => result.current.run());           // B
+    expect(result.current.pending).toBe(true);
+    // A settles late — its finally is a zombie and must not touch B.
+    await act(async () => dA.resolve());
+    expect(result.current.pending).toBe(true);
+    // B's own lifecycle still completes.
+    await act(async () => dB.resolve());
+    expect(result.current.pending).toBe(false);
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
   });
 
   it("restores focus to the invoking control on resolve when it collapsed to body", async () => {

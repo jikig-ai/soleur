@@ -191,13 +191,22 @@ export function FailedState({
     },
   );
 
+  // feat-ui-action-feedback: the reinstall CTA issues a hard nav OUTSIDE
+  // switchAction.run() — without its own episode the primary Button stays
+  // armed through the OAuth redirect commit (double-click fires two kicks,
+  // zero visual feedback). Same latch contract: nav owns teardown.
+  const reinstall = usePendingAction(async () => {
+    reinstall.latch();
+    window.location.assign("/api/repo/install");
+  });
+
   const handlePrimary = () => {
     if (!copy || copy.primaryCta.action === "retry") {
       onRetry();
       return;
     }
     if (copy.primaryCta.action === "reinstall") {
-      window.location.href = "/api/repo/install";
+      reinstall.run();
       return;
     }
     if (copy.primaryCta.action === "switch") {
@@ -267,7 +276,8 @@ export function FailedState({
           variant="gold"
           type="button"
           onClick={handlePrimary}
-          loading={switchAction.pending}
+          disabled={switchAction.pending || reinstall.pending}
+          loading={switchAction.pending || reinstall.pending}
         >
           {copy?.primaryCta.label ?? "Try Again"}
         </Button>

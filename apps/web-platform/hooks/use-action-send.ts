@@ -40,6 +40,8 @@
 import { useState, useTransition } from "react";
 
 import { reportSilentFallback } from "@/lib/client-observability";
+// Shared 30s termination horizon with the pending watchdog — one clock for
+// every "hung request must not hold the UI" path in the feature.
 import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import type { DenyReason } from "@/server/templates/is-template-authorized";
 
@@ -265,6 +267,9 @@ export function useActionSend(
 
   function onCancelConfirm() {
     // Never cleared mid-flight — Cancel is inert while the POST is out.
+    // Belt-and-suspenders: the modal already makes every dismiss vector
+    // inert while confirmPending, so this guard is unreachable in practice —
+    // kept as defense if a future consumer wires onCancelConfirm loosely.
     if (confirmPending) return;
     setConfirming(null);
   }

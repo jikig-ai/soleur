@@ -12,7 +12,7 @@
 
 import { track } from "@/lib/analytics-client";
 import { reportSilentFallback } from "@/lib/client-observability";
-import { NAV_MIN_VISIBLE_MS, PENDING_ENTRY_DELAY_MS } from "@/lib/pending-timing";
+import { NAV_MIN_VISIBLE_MS, NAV_STALL_MS, PENDING_ENTRY_DELAY_MS } from "@/lib/pending-timing";
 
 export type NavPendingTrigger = "link" | "router" | "popstate";
 
@@ -20,8 +20,8 @@ export type NavPendingTrigger = "link" | "router" | "popstate";
 // values live in lib/pending-timing.ts (the button spinner delay consumes the
 // same 150ms); re-exported here so nav-pending consumers have one import site.
 export { PENDING_ENTRY_DELAY_MS };
+export { NAV_STALL_MS };
 export const PENDING_MIN_VISIBLE_MS = NAV_MIN_VISIBLE_MS;
-export const PENDING_STALL_MS = 30_000;
 
 type NavPendingPhase = "idle" | "pending" | "visible" | "holding";
 
@@ -40,6 +40,25 @@ const IDLE_SNAPSHOT: NavPendingSnapshot = {
   trigger: null,
   startedAt: null,
 };
+
+// First-segment section enum — shared by telemetry AND the stall report's
+// extras so neither ever carries a concrete path (token segments aren't
+// masked by any scrubber, and Sentry `extra` values get no value-level
+// scrubbing — only `message`/`exception.value` do).
+const NAV_SECTIONS = new Set([
+  "dashboard",
+  "connect-repo",
+  "shared",
+  "invite",
+  "login",
+  "signup",
+  "internal",
+]);
+
+function navSectionOf(pathname: string): string {
+  const segment = pathname.split("/")[1] ?? "";
+  return NAV_SECTIONS.has(segment) ? segment : "other";
+}
 
 let phase: NavPendingPhase = "idle";
 let trigger: NavPendingTrigger | null = null;
@@ -111,10 +130,18 @@ function forceStopStalledEpisode(): void {
   trigger = null;
   emit();
   try {
-    reportSilentFallback("nav-pending episode stalled", {
+    reportSilentFallback(null, {
       feature: "nav-pending",
       op: "stall-timeout",
-      extra: { trigger: stalledTrigger, startedAt: stalledSince, lastLocation },
+      message: "nav-pending episode stalled",
+      // lastLocationSection, NOT the raw pathname+search — a stall after an
+      // /invite/<token> or ?code= nav would otherwise ship a bearer token or
+      // OAuth params into Sentry extras (extras are not value-scrubbed).
+      extra: {
+        trigger: stalledTrigger,
+        startedAt: stalledSince,
+        lastLocationSection: navSectionOf(lastLocation.split("?")[0] ?? ""),
+      },
     });
   } catch {
     console.warn("[nav-pending] stalled episode force-stopped", stalledTrigger);
@@ -146,7 +173,7 @@ export function startNavPending(t: NavPendingTrigger): void {
   stallTimer = setTimeout(() => {
     stallTimer = null;
     forceStopStalledEpisode();
-  }, PENDING_STALL_MS);
+  }, NAV_STALL_MS);
   emit();
 }
 
@@ -160,16 +187,6 @@ export function startNavPending(t: NavPendingTrigger): void {
 // signal doesn't need — trends live in the bucket distribution). Stalls ride
 // the Sentry breadcrumb; tail-drop under the 120/min analytics throttle is
 // accepted — the signal needs trends, not completeness.
-const NAV_SECTIONS = new Set([
-  "dashboard",
-  "connect-repo",
-  "shared",
-  "invite",
-  "login",
-  "signup",
-  "internal",
-]);
-
 function navDurationBucket(elapsedMs: number): string {
   if (elapsedMs < 400) return "lt400ms";
   if (elapsedMs < 1_000) return "lt1s";
@@ -181,8 +198,7 @@ function emitNavTelemetry(
   episodeTrigger: NavPendingTrigger | null,
   episodeStartedAt: number,
 ): void {
-  const segment = window.location.pathname.split("/")[1] ?? "";
-  const section = NAV_SECTIONS.has(segment) ? segment : "other";
+  const section = navSectionOf(window.location.pathname);
   const bucket = navDurationBucket(Date.now() - episodeStartedAt);
   void track("nav_duration_ms", {
     path: `nav:${episodeTrigger ?? "programmatic"}:${section}:${bucket}`,

@@ -21,6 +21,7 @@ import { LeaderLoopStatus } from "@/components/dashboard/leader-loop-status";
 import { Button } from "@/components/ui/button";
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { useActionSend } from "@/hooks/use-action-send";
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import { humanTitle } from "@/lib/messages/action-class-copy";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
 import type { DenyReason } from "@/server/templates/is-template-authorized";
@@ -154,6 +155,9 @@ function KbDriftCard({
       try {
         const res = await fetch(`/api/dashboard/today/${id}/discard`, {
           method: "POST",
+          // feat-ui-action-feedback: bound the flight — a hung POST leaves
+          // the transition isPending forever, bricking every card control.
+          signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
         if (res.status !== 200) {
           setArchived(false);
@@ -395,6 +399,7 @@ function StripeCard({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ draft_preview: next }),
+          signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
         if (res.status === 200) {
           setDraft(next);
@@ -414,6 +419,9 @@ function StripeCard({
       try {
         const res = await fetch(`/api/dashboard/today/${id}/discard`, {
           method: "POST",
+          // feat-ui-action-feedback: bound the flight — a hung POST leaves
+          // the transition isPending forever, bricking every card control.
+          signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
         if (res.status !== 200) {
           setArchived(false);

@@ -8,9 +8,11 @@ import { Card } from "@/components/ui/card";
 interface GitHubRedirectStateProps {
   onContinue: () => void;
   onBack: () => void;
+  /** feat-ui-action-feedback: Continue triggers an external OAuth hard nav. */
+  navPending?: boolean;
 }
 
-export function GitHubRedirectState({ onContinue, onBack }: GitHubRedirectStateProps) {
+export function GitHubRedirectState({ onContinue, onBack, navPending }: GitHubRedirectStateProps) {
   return (
     <div className="mx-auto max-w-lg space-y-8">
       <div className="space-y-4 text-center">
@@ -68,8 +70,8 @@ export function GitHubRedirectState({ onContinue, onBack }: GitHubRedirectStateP
       </Card>
 
       <div className="flex items-center gap-3">
-        <Button variant="gold" type="button" onClick={onContinue}>Continue to GitHub</Button>
-        <Button variant="outlined" type="button" onClick={onBack}>Go Back</Button>
+        <Button variant="gold" type="button" onClick={onContinue} disabled={navPending} loading={navPending} loadingLabel="Continue to GitHub">Continue to GitHub</Button>
+        <Button variant="outlined" type="button" onClick={onBack} disabled={navPending}>Go Back</Button>
       </div>
     </div>
   );

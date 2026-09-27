@@ -51,7 +51,7 @@ export default function AcceptTermsPage() {
         );
       }
 
-      const { redirect } = await res.json();
+      const { redirect } = await res.json().catch(() => ({}));
       // GAP E (ADR-067 staleTimes): recording T&C advances the authenticated
       // onboarding funnel — hard-nav so every funnel exit uniformly wipes the
       // App Router Router Cache (the server-returned `redirect` is trusted, and
@@ -121,7 +121,11 @@ export default function AcceptTermsPage() {
               required
               checked={accepted}
               onChange={(e) => setAccepted(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-soleur-border-default bg-soleur-bg-surface-1"
+              // feat-ui-action-feedback (consent): lock the ack while the
+              // POST is in flight — a live checkbox mid-commit reads as
+              // revocable consent, but the record is already submitted.
+              disabled={pending}
+              className="mt-0.5 h-4 w-4 rounded border-soleur-border-default bg-soleur-bg-surface-1 disabled:opacity-50"
             />
             <span>
               I agree to the{" "}

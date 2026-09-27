@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "@/components/ui/nav-link";
 import { Button } from "@/components/ui/button";
 import * as Sentry from "@sentry/nextjs";
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import type { PlanTier, ConcurrencyCapHitPreamble } from "@/lib/types";
 import { OPEN_UPGRADE_MODAL_EVENT } from "@/lib/ws-client";
 import { PLAN_LIMITS } from "@/lib/plan-limits";
@@ -105,7 +106,13 @@ export function UpgradeAtCapacityModal() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ targetTier }),
-        signal: ctrl.signal,
+        // Bound the flight so a hung POST cannot park the modal in the
+        // loading state forever — the compositing clock races with the
+        // caller's own close-abort, whichever fires first.
+        signal: AbortSignal.any([
+          ctrl.signal,
+          AbortSignal.timeout(PENDING_WATCHDOG_MS),
+        ]),
       });
       if (!res.ok) {
         Sentry.captureMessage(
@@ -118,10 +125,14 @@ export function UpgradeAtCapacityModal() {
       const body = (await res.json()) as { url?: string | null; clientSecret?: string | null };
       if (body.url) {
         window.location.href = body.url;
+        return;
       }
+      // res.ok with no url: /api/checkout returns url:null on embedded
+      // sessions — without this arm the modal sits in "loading" forever.
       // Embedded-mode wiring (clientSecret → EmbeddedCheckoutProvider) is a
       // follow-up; the server sets ui_mode='embedded' so when the React
       // provider is installed this branch mounts it inline.
+      setState("error");
     } catch (err) {
       // Swallowing here used to be silent; mirror to Sentry so transient
       // network failures on the upgrade path are observable. Aborts from
