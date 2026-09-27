@@ -15,6 +15,61 @@ lane: cross-domain
 
 # fix: infra mutation batteries score rows through one shared capture-then-match scorer
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27.
+
+**Sections enhanced:** Lib self-test, Guard Contract (Guard 1), Consumer conversions, AC7 and AC8.
+
+**Agents used:**
+
+- `soleur:engineering:review:test-design-reviewer`
+- `soleur:engineering:review:pattern-recognition-specialist`
+- a verify-the-negative pass (standard tier)
+- a hands-on prototype of the lib in the session scratchpad, measured against every mutant below
+
+### Key Improvements
+
+1. **Self-test gaps closed.**
+   - New row S1b puts the needles on different failure lines. It kills a `grep -m1` capture and a
+     dropped `-E`, both measured surviving v1.
+   - S11 (uncompilable ERE) is restored. The v1 trim let a `[[ -r ]]` precheck plus `rc <= 2`
+     survive (measured: S10 = 2, S11 = 1).
+   - The alternation ERE is now used in S1, as the real callers use it.
+2. **Count pin hardened.**
+   - Abort rows assert in the parent shell.
+   - They also require the `HARNESS ABORT: mutation_scorer:` stderr text.
+   - `EXPECTED` counts assertion calls, not table rows.
+   - An `INSTRUMENT BROKEN` counter check runs first.
+   - `ALL PASS` prints only after the pin passes.
+3. **Repo conventions adopted.**
+   - The repo-root `# shellcheck source=` form; `source-path=` has no precedent in the repo.
+   - two-space-indented PASS/FAIL lines that the infra runner's `MARKER_ERE` surfaces.
+   - Exit 2 for a set-up fault, never 3.
+   - The `scratch-root.test.sh` temp-dir and trap pattern.
+   - File modes 100644 for the lib and 100755 for the test.
+   - Consumers that already define `die` use it for the source abort.
+4. **AC7 executes distinct axes.**
+   - Guard 1 rows 1, 3, 6 and 11; Guard 2 rows 3 and 7.
+   - An instrument-control run comes first.
+   - Only rc 1 counts as a kill.
+
+### New Considerations Discovered
+
+- `pipefail` in the self-test's `set` line is load-bearing. Without it, the old `| grep -qF` shape
+  returns 0 on S1 and survives. It is now pinned by harness row (f).
+- The verify-the-negative pass confirmed all eight negative claims:
+  - the call sites run in the battery's own shell;
+  - no RED row names `-`;
+  - no kill row has an empty expectation;
+  - the scorer-shape pattern hits exactly 7 lines;
+  - no `.tf` file is edited;
+  - the guard has 4 existing PASS lines;
+  - the zot-pull abort rows still see rc 2 through the wrapper;
+  - `--list` prints each path indented by two spaces.
+- Prototype measurements: 5 scorer calls on the 1.26 MB fixture take 0.27 s in total. An
+  errexit-caller miss returns cleanly. shellcheck is clean.
+
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 ## Overview
@@ -155,10 +210,10 @@ advisor consult ran before it. Mechanical findings were applied:
 - **Both simplification seats fired on the same guard items; the fix was to delete them.** Cut:
   - Routing presence, the same-shell pin and the lib-test presence pin.
   - The lib test's standing positive control, and with it the `ALLOW_MARKER` carve-out.
-  - Eight self-test rows (S3, S4, S11, S12, S13, S15, S16, S1-PC).
+  - Eight self-test rows (S3, S4, S11, S12, S13, S15, S16, S1-PC). Deepen later restored S11 and added S1b.
   - The empty-ERE check and the refuse-execution line.
   - Plan v1's no-pipe AC and census AC.
-  - AC9 (the display fix stays in the diff).
+  - The v1 display-fix AC (the fix itself stays in the diff).
   - AC7 was cut down to five matrix rows.
 - **CTO (applied):**
   - The lib header states its scope and that every consumer must be listed in `FILES_8855`.
@@ -233,8 +288,14 @@ which is harmless).
 
 ### Consumer conversions (7 sites + 1 wrapper)
 
-Each consumer sources the lib once, near the top, after its root variable exists, with shellcheck
-directives so `shellcheck -x` can follow it, and aborts if the source fails:
+Each consumer sources the lib once, near the top, after its root variable exists. It carries the
+repo-root shellcheck directive so `shellcheck -x` can follow the source, and it aborts if the source
+fails. The abort differs by file:
+
+- ssl, www and zot-pull already define `die` (exit 2), so they use `|| die "could not source mutation-scorer.sh"`.
+- zot-pull also checks the path first, following its lines 64–68 (`[ -f ] && [ -r ] || die`), and
+  places the source line **before** `failed_on()` and its self-test calls.
+- apex, parity and betterstack have no `die`, so they use the inline form:
 
 ```bash
 # shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
@@ -335,10 +396,30 @@ piped `grep` (CTO: they would belong beside the scorer, not in this guard).
 
 ### Lib self-test — `apps/web-platform/infra/lib/mutation-scorer.test.sh`
 
-Registered by presence (ADR-252). Sources the lib from `$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mutation-scorer.sh`
-with `# shellcheck source=mutation-scorer.sh` and `# shellcheck source-path=SCRIPTDIR`. Fixtures live
-under one `mktemp -d` whose EXIT trap is registered before the first fixture is written. Uses
-`set -uo pipefail`.
+Registered by presence (ADR-252), committed as mode `100755`. It sources the lib from
+`$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mutation-scorer.sh`, with the repo-root directive form
+`# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh`. That is the form
+`apex-origin-probe.sh` and `cutover-verify.sh` use; no infra file uses `source-path=`.
+
+Set-up and conventions:
+
+- `set -uo pipefail`. **`pipefail` is load-bearing:** without it, Guard 1 row 1 (the old
+  `| grep -qF` shape) returns 0 on S1 and survives (measured during deepen).
+- Temp dir, following the `scripts/lib/scratch-root.test.sh` pattern, in this order:
+  - `T="$(mktemp -d …)" || exit 2`
+  - `[[ "$T" == /* && -d "$T" && ! -L "$T" ]]`
+  - `trap 'rm -rf -- "$T"' EXIT INT TERM`
+
+  Do not source `test-helpers.sh`.
+- Report lines: `pass(){ echo "  PASS: $1"; …; }` and `fail(){ echo "  FAIL: $1"; …; }`, with the row id
+  in the label (for example a line reading "FAIL: S6 …" after the two-space indent). That shape matches `run-registered-suites.sh`'s
+  `MARKER_ERE`, so a red run shows the failing row.
+- Exit codes: 0 green, 1 any row failure or count-pin mismatch, 2 set-up fault (`HARNESS ABORT: …`,
+  for example the S1 fixture lost its needle-on-line-2 shape or its ≥ 1 MiB tail). Never 3 — that is
+  the runner's own "suite was killed" code.
+- Instrument check first (as `trusted-verdict.test.sh` does): call `pass` and `fail` once each on
+  throwaway labels, confirm both counters moved, reset them, and exit 2 with `INSTRUMENT BROKEN`
+  otherwise.
 
 Trimmed at plan review: the zot-pull self-test already exercises the needle-first / PASS-scope /
 empty-needle / unreadable-log cases *through the lib*, and www's live `--branch` rows exercise
@@ -346,7 +427,8 @@ option-shaped needles. This file keeps the lib's own unit, plus what a single-ne
 
 | Row | Input | Expected |
 |---|---|---|
-| S1 needle-first | the zot-pull fixture shape, each line starting with two spaces: line 1 is a PASS line reading "PASS: SELFTEST-ONLY-ON-PASS would  FAIL if unscoped", line 2 is "FAIL: SELFTEST-TARGET", then 20,000 "FAIL: filler …" lines. Also assert the bytes **after** the needle line are ≥ 1,048,576 (pin the cause, not the file size) | rc 0 |
+| S1 needle-first | the zot-pull fixture shape, where every PASS/FAIL line starts with two spaces: line 1 is a PASS line reading "PASS: SELFTEST-ONLY-ON-PASS would  FAIL if unscoped", line 2 is "FAIL: SELFTEST-TARGET", then 20,000 "FAIL: filler …" lines, then a last line that starts at column 0 with "[FATAL] SELFTEST-LAST-FATAL". Call it with the real ssl/www alternation ERE (`^  FAIL` or `^\[FATAL\]`, written in the file with a bare pipe exactly as in the Consumer conversions code block). Also assert the bytes **after** the needle line are ≥ 1,048,576 (pin the cause, not the file size) | rc 0 |
+| S1b needles on different lines | S1 fixture, needles `SELFTEST-TARGET` and `SELFTEST-LAST-FATAL` (first FAIL line and the last, `[FATAL]`-prefixed line) with the alternation ERE | rc 0 — kills a `grep -m1` capture, a "same line" rewrite, and a dropped `-E` |
 | S2 PASS-scope | needle `SELFTEST-ONLY-ON-PASS` on the S1 fixture | rc exactly 1 |
 | S5 second needle missing | first needle present, second absent | rc exactly 1 |
 | S6 no failure lines | log with only PASS lines (grep rc 1) | rc exactly **1**, not 2 |
@@ -354,16 +436,26 @@ option-shaped needles. This file keeps the lib's own unit, plus what a single-ne
 | S8 empty second needle | `X ""` | exit 2 |
 | S9 zero needles | 2 args | exit 2 |
 | S10 unreadable log | nonexistent path | exit 2 |
+| S11 uncompilable ERE | `'('` on the S1 fixture | exit 2 — restored at deepen: a `[[ -r $log ]]` precheck plus `rc <= 2` passes S10 yet returns 1 here |
 | S14 glob-metachar needle | `[ab]*`: absent literally while `a` is present → rc exactly 1; present literally → rc 0 | as stated |
 
 Every rc-1 row is paired with an rc-0 row on the same fixture (S2/S1, S5 with a first-needle-only
-call, S14's two halves). Each asserts rc is exactly `1` and not `2`. Abort rows run the call inside
-`( … )` so the self-test survives the exit. The suite ends with an exact count pin
-(`(( pass == EXPECTED && fail == 0 ))`, else exit 1) and prints exactly
-`mutation-scorer self-test: ALL PASS` on success. That literal is the discoverability probe below.
+call, S14's two halves). Each asserts rc is exactly `1` and not `2`.
+
+Abort rows (S7–S11) run the call as `rc=0; ( mutation_scorer_failed_on … ) 2>"$T/err" || rc=$?`.
+They assert in the **parent** shell, so no `pass`/`fail` increment is lost inside the subshell, and
+each requires both of these:
+
+- `rc == 2`;
+- `$T/err` contains `HARNESS ABORT: mutation_scorer:`. A bare rc 2 could be bash misuse.
+
+`EXPECTED` counts **assertion calls**, not table rows: S1, S14 and the paired rc-0 calls each make
+more than one. The suite ends with `(( pass == EXPECTED && fail == 0 ))`, else exit 1. Only after
+that pin passes does it print exactly `mutation-scorer self-test: ALL PASS`. That literal is the
+discoverability probe below.
 
 No positive control line lives in this file. The old piped shape is exercised once, at
-implementation time, by Guard 1 matrix row 1 (AC8). Measured in this session: `| grep -qF` on
+implementation time, by Guard 1 matrix row 1 (AC7). Measured in this session: `| grep -qF` on
 the S1 fixture returned 141 in 30/30 runs. A standing positive control would test grep, not the lib,
 and would require an opt-out in the pipe guard.
 
@@ -411,7 +503,7 @@ failure_modes:
     detection: .claude/hooks/grep-q-pipe-guard.test.sh FILES_8855 pass (PATTERN or PATTERN_PIPED_SCORER)
     alert_route: RED check on the PR
   - mode: the lib is edited back into an early-exit or rc-folding shape
-    detection: mutation-scorer.test.sh rows S1, S6-S10 (deterministic), plus zot-pull's own scorer self-test, which runs through the lib
+    detection: mutation-scorer.test.sh rows S1, S1b, S6-S11 (deterministic), plus zot-pull's own scorer self-test, which runs through the lib
     alert_route: RED check on the PR
 logs:
   where: GitHub Actions run logs for infra-validation.yml and the test-all run that executes .claude/hooks suites
@@ -438,17 +530,22 @@ discoverability_test:
 | 3 | Delete the empty-needle loop | RED (S7, S8) |
 | 4 | Keep the empty check but apply it only to the FIRST needle (second-member row) | RED (S8) |
 | 5 | Loop `return 0` after the first matching needle | RED (S5) |
-| 6 | Replace the ERE argument with `.` inside the lib (lose the failure-line scope) | RED (S2) |
+| 6 | Replace the ERE argument with `.` inside the lib (lose the failure-line scope) | RED (S2: line 1 is a PASS line carrying the needle) |
 | 7 | Change `(( rc <= 1 ))` to `(( rc <= 2 ))` | RED (S10) |
 | 8 | Unquote the needle in the glob (`*$needle*`) | RED (S14) |
 | 9 | Replace the whole function body with `return 0` | RED (S2, S5, S6) |
 | 10 | Replace the whole function body with `return 1` | RED (S1) |
+| 11 | Capture with `grep -m1 -E` (stop after the first failure line) | RED (S1b) |
+| 12 | Drop `-E` from the capture (in a basic regex a bare pipe is a literal character, so the alternation stops matching) | RED (S1, S1b) |
+| 13 | Add a `[[ -r $log ]] \|\| _mutation_scorer_abort` precheck and relax to `(( rc <= 2 ))` | RED (S11) |
 
 **Harness rows.**
 
 - (a) Delete S1's filler loop so the fixture is 2 lines. The bytes-after-needle floor goes RED, so the suite pins the cause, not only the verdict.
 - (b) Delete any one row. The exact `pass == EXPECTED` count pin fails.
 - (c) Make the suite source a stub lib whose function is `return 0`. S2, S5 and S6 go RED.
+- (e) Move an abort row's `pass`/`fail` call inside its `( … )`. Its increment is lost, and the exact `pass == EXPECTED` pin goes RED.
+- (f) Delete `pipefail` from the suite's `set` line, then apply matrix row 1. The row now survives. This shows `pipefail` is doing the work, and that the suite's `set` line is part of the contract.
 - (d) Must-PASS non-canonical input: S14's literal-present half is a needle with glob metacharacters. It differs from the canonical S1 needle in a way the contract permits, and must stay GREEN.
 
 **Anchor.** The self-test's expectations are literal rows in the same file as the fixtures, so one diff could weaken both. The outside anchor is zot-pull's pre-existing scorer self-test. It runs through the lib after this PR, and it is pinned by the guard's `failed_on "$SELFTEST_LOG" SELFTEST-TARGET` presence check, which this PR does not edit.
@@ -492,8 +589,12 @@ discoverability_test:
 - [ ] AC4 Each of the six consumer files has ≥ 1 non-comment `mutation_scorer_failed_on` line. In zot-pull, `failed_on` is a one-line wrapper and the scorer self-test block is byte-unchanged: `git diff origin/main...HEAD -- apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh` touches only the `failed_on` definition, its comment, and the added `source` lines.
 - [ ] AC5 All six batteries exit 0 with row totals unchanged. The pinned totals are apex `EXPECTED_ROWS=31`, www `EXPECTED_ROWS=28` and betterstack `EXPECTED_ROWS=36`. ssl, parity and zot-pull must report the same totals as on `origin/main`. Record the before and after totals in the PR body.
 - [ ] AC6 `bash .claude/hooks/grep-q-pipe-guard.test.sh` exits 0 and prints `PASS: grep-q-zero-8855-pass …`. The four pre-existing PASS lines still print.
-- [ ] AC7 These matrix rows are executed against a detached worktree at the branch HEAD: Guard 1 rows 1, 2 and 3, and Guard 2 rows 1 and 3. Each must be observed RED and then restored. Record the observed output line for each row in the PR body. Guard 1 row 1 doubles as the positive control, showing the S1 fixture exposes the early-exit defect.
-- [ ] AC8 `shellcheck -x apps/web-platform/infra/lib/mutation-scorer.sh apps/web-platform/infra/lib/mutation-scorer.test.sh` exits 0, with no SC1091 because the `source=` directives resolve. `python3 scripts/lint-trap-tempfile-ownership.py apps/web-platform/infra/lib/mutation-scorer.test.sh` exits 0.
+- [ ] AC7 These matrix rows are executed against a detached worktree at the branch HEAD. The pristine self-test and pristine guard must each exit 0 first (instrument control).
+  - Guard 1 rows 1, 3, 6 and 11.
+  - Guard 2 rows 3 and 7.
+
+  Only rc 1 counts as a killed mutant; rc 2 or 127 is an instrument fault. Every row must be observed RED and then restored. The Guard 2 row 3 RED output must name the `_g2_json_row` line number, proving it was the third parity site that was reverted and not the first. Record each row's observed output line in the PR body. Guard 1 row 1 doubles as the positive control, showing the S1 fixture exposes the early-exit defect.
+- [ ] AC8 Run from the repo root: `shellcheck -x apps/web-platform/infra/lib/mutation-scorer.sh apps/web-platform/infra/lib/mutation-scorer.test.sh` exits 0. There must be no SC1091, because the repo-root `source=` directives resolve. This is a local check only; no workflow runs shellcheck over `infra/*.sh`. `python3 scripts/lint-trap-tempfile-ownership.py apps/web-platform/infra/lib/mutation-scorer.test.sh` also exits 0. `git ls-files -s` shows the lib at mode `100644` and the test at mode `100755`.
 - [ ] AC9 The first line of the PR #9033 body answers "does merging this alone mutate production?". The answer is no. Merging fires the target-scoped `apply-web-platform-infra.yml`, because the diff is under `apps/web-platform/infra/**`, but it changes no `.tf`, so the apply is expected to plan zero changes. The body also:
   - carries `Closes #8855` and `Closes #8871`;
   - states that #8871 choice 1 is fulfilled by this PR, and that choice 2 (the 19 `| head -1` reads) stays accepted as-is;
