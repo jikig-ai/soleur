@@ -32,10 +32,14 @@ function NavPendingBar() {
     <>
       {/* §6: "Loading" is announced only when the bar becomes visible — never
           at start(), or warm-cache navs spam a status with no visible feedback
-          (ux #5). The region persists; only its text toggles. */}
-      <div role="status" className="sr-only">
-        {visible ? "Loading" : null}
-      </div>
+          (ux #5). The region itself mounts with the bar: a permanently-mounted
+          empty role="status" collides with every page that asserts its own
+          status elements (otp-login's count-0 checks). */}
+      {visible ? (
+        <div role="status" className="sr-only">
+          Loading
+        </div>
+      ) : null}
       {visible ? (
         <div
           aria-hidden="true"

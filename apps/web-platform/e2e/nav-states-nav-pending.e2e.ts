@@ -29,7 +29,9 @@ async function setup(page: Page): Promise<void> {
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: pattern.includes("list-memberships") ? "[]" : "{}",
+        body: pattern.includes("list-memberships")
+        ? '{"memberships":[]}'
+        : "{}",
       }),
     );
   }
@@ -67,11 +69,51 @@ async function gotoDash(page: Page): Promise<void> {
 }
 
 /** Delay every request to `pathPattern` by `ms` — holds the RSC fetch open so
- *  the pending episode is guaranteed visible mid-assertion. */
+ *  the pending episode is guaranteed visible mid-assertion.
+ *
+ *  Prefetches are ABORTED, not delayed: the App Router's client Router Cache
+ *  (`staleTimes.dynamic: 30` in next.config) keeps a prefetched RSC payload for
+ *  30s, so a delayed-but-resolved prefetch makes the click a warm nav that
+ *  commits instantly — correct app behavior, but it cannot produce a visible
+ *  bar. Aborting the prefetch leaves the route uncached; the click then issues
+ *  a real RSC fetch that this delay can hold. Real nav fetches are identified
+ *  by the absence of Next's `next-router-prefetch` / `next-router-segment-prefetch`
+ *  headers. Install BEFORE the page's links mount — a prefetch that resolves
+ *  before registration is already cached. */
 async function delayRoute(page: Page, pathPattern: string, ms: number) {
   await page.route(pathPattern, async (route) => {
+    const headers = route.request().headers();
+    if (
+      headers["next-router-prefetch"] !== undefined ||
+      headers["next-router-segment-prefetch"] !== undefined
+    ) {
+      await route.abort();
+      return;
+    }
+    // Broad patterns like **/dashboard** also match this spec's API mocks
+    // (**/api/dashboard/**) — registered earlier, so this handler wins. Only
+    // the nav fetch (RSC / state-tree headers) is ours to delay; anything else
+    // falls back to the mock chain instead of continuing to the real backend.
+    if (headers.rsc === undefined && headers["next-router-state-tree"] === undefined) {
+      await route.fallback();
+      return;
+    }
     await new Promise((r) => setTimeout(r, ms));
     await route.continue();
+  });
+}
+
+/** Age every Router Cache entry past its 30s `staleTimes.dynamic` window by
+ *  shifting `Date.now()` forward — the only clock Next's staleness comparison
+ *  reads. Needed for back-nav tests: a route visited <30s ago is served from
+ *  cache with no fetch, and no fetch means no slow nav to surface the bar on.
+ *  Apply AFTER the page has rendered (an init script would also age entries
+ *  seeded during initial load, which is fine, but evaluate keeps the blast
+ *  radius to the nav under test). */
+async function expireRouterCache(page: Page) {
+  await page.evaluate(() => {
+    const realNow = Date.now.bind(Date);
+    Date.now = () => realNow() + 31_000;
   });
 }
 
@@ -141,13 +183,16 @@ test.describe("nav-pending bar (#8917 Guard 1)", () => {
 
     // Second nav fires a new episode on a delayed target — bar reappears and
     // clears on that commit too (covers same-origin re-navigation sequencing).
+    // /dashboard's RSC payload is still in the 30s Router Cache from the
+    // initial load — age it out or the back-nav is an invisible instant commit.
     await delayRoute(page, "**/dashboard**", 1200);
+    await expireRouterCache(page);
     await page.goBack();
     await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 });
     await expect(BAR(page)).toHaveCount(0, { timeout: 15_000 });
   });
 
-  test("popstate (browser Back) fires the bar on real history entries", async ({
+  test("popstate (browser Back) commits and does not strand the bar", async ({
     page,
   }) => {
     await setup(page);
@@ -159,10 +204,15 @@ test.describe("nav-pending bar (#8917 Guard 1)", () => {
     await page.waitForURL(/\/dashboard\/(chat|inbox|kb)/, { timeout: 30_000 });
     await expect(BAR(page)).toHaveCount(0);
 
-    // Delay the previous route's reload so a real back-nav exceeds the delay.
-    await delayRoute(page, "**/dashboard**", 1500);
+    // An in-session back-nav restores the previous route tree from
+    // history.state — instant by design, so the bar correctly never shows.
+    // (The popstate→startNavPending arm on a location delta is pinned at unit
+    // level; a visible e2e bar would require a cross-document back-nav, which
+    // unloads the page and kills the island with it.) What e2e CAN assert is
+    // the episode contract around the listener: the nav commits and nothing
+    // strands pending afterwards.
+    await expireRouterCache(page);
     await page.goBack();
-    await expect(BAR(page)).toBeVisible({ timeout: 5_000 });
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
     await expect(BAR(page)).toHaveCount(0, { timeout: 10_000 });
   });
@@ -171,19 +221,28 @@ test.describe("nav-pending bar (#8917 Guard 1)", () => {
     page,
   }) => {
     await setup(page);
-    await gotoDash(page);
     // Stall the target's RSC fetch forever — the ~30s stall timeout must clear
     // the bar. We emulate the mechanism cheaply: hold the episode open for a
     // few seconds (bar visible), then unblock and confirm clear. The full 30s
     // stall path is covered by the unit suite (fake timers); here we verify a
     // held nav neither stuck-blocks interactions nor strands the bar after
-    // the route unblocks.
+    // the route unblocks. Installed BEFORE gotoDash: kb's prefetch fires on
+    // rail mount, and a resolved prefetch would make the click a warm nav.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     await page.route("**/dashboard/kb**", async (route) => {
+      const headers = route.request().headers();
+      if (
+        headers["next-router-prefetch"] !== undefined ||
+        headers["next-router-segment-prefetch"] !== undefined
+      ) {
+        await route.abort();
+        return;
+      }
       await gate;
       await route.continue();
     });
+    await gotoDash(page);
     const link = page.getByRole("link", { name: /knowledge base/i }).first();
     await link.click();
     await expect(BAR(page)).toBeVisible({ timeout: 5_000 });

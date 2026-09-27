@@ -64,7 +64,9 @@ describe("NavPendingIsland", () => {
     expect(screen.queryByTestId("nav-pending-bar")).toBeNull();
     act(() => vi.advanceTimersByTime(PENDING_ENTRY_DELAY_MS - 1));
     expect(screen.queryByTestId("nav-pending-bar")).toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent(/^$/);
+    // The region mounts with the bar — an always-on empty status would
+    // collide with other pages' global role="status" assertions.
+    expect(screen.queryByRole("status")).toBeNull();
     act(() => vi.advanceTimersByTime(1));
     const bar = screen.getByTestId("nav-pending-bar");
     expect(bar).toHaveAttribute("aria-hidden", "true");
