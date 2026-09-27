@@ -27,7 +27,7 @@ light group runs K=7. Regenerate the manifests when legs skew or when
 |---|---|---|---|
 | `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | interim ~13 min on the -a leg pre-regen; ~9 min predicted equilibrium (the orphan-suite battery is now two `--rows` halves — see Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
-| `shard-totality-mutations` | 2 | battery rows split `--rows 1-14` / `15-27` | ~5 min each + setup |
+| `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
 Heavy legs (manifest-assigned, sticky-LPT over measured durations):
 `1/3` → `tests/scripts/registry-gate-mutation-battery`,

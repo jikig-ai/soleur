@@ -4,7 +4,7 @@
 #
 # Guard 1 (plugins/soleur/test/scripts-shard-totality.test.sh) asserts that every scripts-group
 # registration is assigned to exactly one matrix leg. A guard that cannot be driven RED is
-# vacuous, so this battery breaks the partition twenty-seven ways (DECLARED_TOTAL below) and
+# vacuous, so this battery breaks the partition forty-two ways (DECLARED_TOTAL below) and
 # requires the guard to notice each one.
 #
 # HOW THIS BATTERY AVOIDS THE FAILURES ITS OWN CLASS IS KNOWN FOR:
@@ -44,7 +44,9 @@
 # to the repo: every invocation goes through Guard 1, which calls `test-all.sh --enumerate`, and
 # that mode returns at the enumerate terminator BEFORE the repo-write-boundary epilogue and starts
 # no suite at all. The only writes this file performs are its own `cp` snapshot/restore of the
-# runner, which the EXIT trap reverses and which the dirty-tree refusal at the top makes visible.
+# mutation targets and `erow`'s short-lived inert fixtures (created, read once by the guard,
+# deleted in-row, and swept by the EXIT trap) — all reversed on every exit path and made
+# visible by the dirty-tree refusal at the top.
 #
 # If a future row ever runs the runner in EXECUTING mode, this declaration is wrong: copy
 # scripts/lib/repo-write-boundary.sh into the sandbox instead of carrying this marker.
@@ -224,6 +226,9 @@ PY
 GIT_STUB_DIR="$WORK/bin"
 mkdir -p "$GIT_STUB_DIR" || { echo "FATAL: could not create the git-stub dir" >&2; exit 2; }
 REAL_GIT="$(command -v git)" || { echo "FATAL: git not found" >&2; exit 2; }
+# %q-escape before interpolating into the generated script — a quote-bearing
+# path under a hostile PATH would otherwise break the stub's exec line.
+printf -v _real_git_q '%q' "$REAL_GIT" || { echo "FATAL: git path escape failed" >&2; exit 2; }
 cat > "$GIT_STUB_DIR/git" <<EOF
 #!/usr/bin/env bash
 # Find the SUBCOMMAND: skip global options, and note that \`-c\` and \`-C\` each consume the NEXT
@@ -239,7 +244,7 @@ while (( i < \${#args[@]} )); do
     *) break ;;
   esac
 done
-exec "$REAL_GIT" "\$@"
+exec $_real_git_q "\$@"
 EOF
 chmod +x "$GIT_STUB_DIR/git" || { echo "FATAL: chmod on the git stub failed" >&2; exit 2; }
 # The stub must be BOTH inert for non-diff verbs and silent for diff, or the guard it wraps is
@@ -269,10 +274,10 @@ guard_rc() {
   echo $?
 }
 
-# Shared verdict scoring for row()/erow(): want is RED|GREEN, want_sig (optional)
-# is a fixed string the guard's output MUST contain for a RED verdict to count —
-# it binds the verdict to the named arm, so a red raised by an unrelated arm (or
-# an incidental second failure) can never satisfy the row.
+# Shared verdict scoring for row()/erow()/frow()/hfrow(): want is RED|GREEN,
+# want_sig (optional) is a fixed string the guard's output MUST contain for a RED
+# verdict to count — it binds the verdict to the named arm, so a red raised by an
+# unrelated arm (or an incidental second failure) can never satisfy the row.
 _score_row_rc() {
   local id="$1" rc="$2" want="$3" desc="$4" want_sig="${5:-}"
   if [[ "$want" == "RED" ]]; then
@@ -342,11 +347,27 @@ EPHEMERAL_FILES=()
 erow() {
   local id="$1" relpath="$2" content="$3" want="$4" desc="$5" want_sig="${6:-}"
   local full="$REPO_ROOT/$relpath"
+  # Fixture paths stay inside the census tree — no absolute paths, no `..`
+  # (mirroring the guard's own rejection on extracted command tokens).
+  case "$relpath" in
+    /*|*..*) fail "$id — fixture path '$relpath' escapes the repo root (absolute or '..') — erow fixtures stay inside the census tree"; return ;;
+  esac
+  # Refuse to clobber anything real: printf > would silently truncate a tracked
+  # file or a developer's scratch file and rm -f would then delete it — neither
+  # the pristine set nor the dirty-check watches fixture paths. `-L` catches a
+  # dangling symlink too (it fails -e but printf would follow it).
+  if [[ -e "$full" || -L "$full" ]]; then
+    fail "$id — fixture path $relpath already exists — refusing to clobber a real file"
+    return
+  fi
   mkdir -p "$(dirname "$full")" || { fail "$id — could not create fixture dir for $relpath"; return; }
   # Register BEFORE the write: a failed printf can still leave a partial file
   # behind, and the trap sweep covers every path the row ever created.
   EPHEMERAL_FILES+=("$full")
   if ! printf '%s\n' "$content" > "$full"; then
+    # Remove NOW as well as on the trap — a leftover fixture sits inside the
+    # census tree and would contaminate every guard invocation after this one.
+    rm -f "$full"; rmdir "$(dirname "$full")" 2>/dev/null || true
     fail "$id — fixture write failed for $relpath"
     return
   fi
@@ -908,12 +929,13 @@ in_range && row "ROWS-ALL-UNFLAGGED" "$RUNNER" \
 # DIR1-MIDLINE: `true && run_suite` moves the call off line-start — the
 # extractor cannot see it, but the literal `--rows` remains, so Direction-1
 # reports emit < lit. (The tile arm also fires on the surviving -b range;
-# the want_sig binds the verdict to the census.)
+# the want_sig binds the verdict to the census — it names a substring the
+# census arm's FAIL line carries and its PASS line does not.)
 in_range && row "DIR1-MIDLINE" "$RUNNER" \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
   '  true && run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
   RED "a mid-line run_suite call hides a --rows literal from the extractor" \
-  'literal census'
+  'test-all.sh/scripts/lib but'
 
 # DIR1-LIBSUBDIR: an ephemeral lib-subdirectory file holding a --rows
 # literal — the old depth-1 `scripts/lib/*.sh` glob never reached it; the
@@ -924,12 +946,12 @@ in_range && erow "DIR1-LIBSUBDIR" "scripts/lib/zz/x.sh" \
   bash scripts/never-registered.test.sh --rows 1-2
 }' \
   RED "a --rows literal under a lib subdirectory evades the literal census" \
-  'literal census'
+  'test-all.sh/scripts/lib but'
 
 # LEGS-COLOCATE: pin -b onto -a's leg — the committed-TSV read must report
-# both halves on leg 3 (distinct-legs arm; the realized-legs read is skipped
-# here because no manifest override is bound and the committed pins are what
-# the merge ships).
+# both halves on leg 3 (distinct-legs arm; with no manifest override bound the
+# realized-legs read runs too and co-fails — either signature would do, and
+# `pin to legs` names the committed-pin arm directly).
 in_range && row "LEGS-COLOCATE" "$REPO_ROOT/scripts/suite-shard-legs.tsv" \
   "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t5')" \
   "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t3')" \

@@ -699,13 +699,23 @@ fi
 # `export`/`readonly`/`local`-prefixed declarations evaded all four readers,
 # each of which knew only the bare spelling). The keyword whitelist is a closed
 # set — export|readonly|local|typeset|declare — followed by whitespace, with
-# one optional flag argument for `declare -x` shapes; anchored to line-start
+# zero-or-more flag/assignment arguments for `declare -x` or
+# `export FOO=1 DECLARED_TOTAL=` shapes; anchored to line-start
 # so `xDECLARED_TOTAL` and `local xDECLARED_TOTAL` cannot false-match. Bare
 # `DECLARED_TOTAL=` still matches (the prefix group is optional).
-_DECL_PREFIX_RE='(export|readonly|local|typeset|declare)([[:space:]]+-[[:alnum:]]+)*[[:space:]]+'
-_DECL_ANY_RE="^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL=[0123456789]+"
+# Detection sites use _DECL_COUNT_RE (any RHS — a non-numeric declaration is
+# still the contract; the per-token arm then fails it loudly on the unreadable
+# value). Extraction sites use _DECL_READ_RE, whose captured group is the
+# digit value.
+_DECL_PREFIX_RE='(export|readonly|local|typeset|declare)([[:space:]]+(-[a-zA-Z]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*))*[[:space:]]+'
 _DECL_COUNT_RE="^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL="
-_DECL_READ_RE="s/^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?\$/\\4/p"
+_DECL_READ_RE="s/^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?\$/\\5/p"
+
+# Shell-file census predicate, shared by both enumeration loops — `*.sh`/`*.bash`
+# basename, or extensionless file whose first line is a shell shebang. Deliberately
+# over-inclusive (dash/zsh/fish also match): a foreign-shell declarer belongs in
+# the census population — the loud direction.
+_SH_SHEBANG_RE='^#!.*(ba)?sh\b'
 
 # Shared contiguous-tiling comparator — walks a file of `A-B` ranges and returns whether they
 # tile 1..DECLARED with no gaps or overlaps. NOTE for future callers: ranges must be sorted by
@@ -827,7 +837,7 @@ fi
 # registration of an unresolvable command carries no checkable DECLARED_TOTAL anyway.
 # Command tokens containing `..` are rejected — the token later indexes $REPO_ROOT/… file
 # reads, and path traversal has no legitimate spelling here.
-awk '
+awk -v "tokre=--rows[[:space:]]+[^[:space:]\"']+" '
   { line=$0; sub(/#.*/, "", line)
     while (line ~ /\\[[:space:]]*$/) {
       sub(/\\[[:space:]]*$/, "", line)
@@ -840,7 +850,7 @@ awk '
       if (cmd ~ /\.\./) cmd=""
     }
     label=line; sub(/^[[:space:]]*run_suite[[:space:]]+"?/, "", label); sub(/".*/, "", label)
-    if (match(line, /--rows[[:space:]]+[^[:space:]"]+/)) {
+    if (match(line, tokre)) {
       r=substr(line, RSTART, RLENGTH); sub(/--rows[[:space:]]+/, "", r)
       print label "\t" (cmd != "" ? cmd : "<unresolved>") "\t" r
     } else if (cmd != "") {
@@ -860,7 +870,7 @@ _token_files=()
 while IFS= read -r _f; do _token_files+=("$_f"); done < "$WORK/rs_token_files"
 : > "$WORK/rs_decl_tokens"
 if (( ${#_token_files[@]} > 0 )); then
-  grep -lE "$_DECL_ANY_RE" "${_token_files[@]}" 2>/dev/null | sed -e "s|^${REPO_ROOT}/||" | sort -u > "$WORK/rs_decl_tokens" || true
+  grep -lE "$_DECL_COUNT_RE" "${_token_files[@]}" 2>/dev/null | sed -e "s|^${REPO_ROOT}/||" | sort -u > "$WORK/rs_decl_tokens" || true
 fi
 sort -u "$WORK/rs_flagged_tokens" "$WORK/rs_decl_tokens" > "$WORK/rs_interesting"
 
@@ -871,7 +881,14 @@ while IFS= read -r _tok; do
   _decl="$( [[ -f "$REPO_ROOT/$_tok" ]] && sed -nE "$_DECL_READ_RE" "$REPO_ROOT/$_tok" | head -1 )"
   _ranges_n=$(wc -l < "$WORK/rs_flagged" | tr -d ' ')
 
-  _decl_lines="$( [[ -f "$REPO_ROOT/$_tok" ]] && grep -cE "$_DECL_COUNT_RE" "$REPO_ROOT/$_tok" || echo 0 )"
+  # grep -c prints 0 AND exits 1 on no match — `|| echo 0` would append a second
+  # line, so count explicitly instead of chaining (a "0\n0" here misroutes to
+  # the multi-assignment arm).
+  if [[ -f "$REPO_ROOT/$_tok" ]]; then
+    _decl_lines="$(grep -cE "$_DECL_COUNT_RE" "$REPO_ROOT/$_tok" || true)"
+  else
+    _decl_lines=0
+  fi
   if [[ "$_decl_lines" != "0" && "$_decl_lines" != "1" ]]; then
     fail "${_tok} assigns DECLARED_TOTAL ${_decl_lines} times — bash honors the LAST assignment but this guard reads the first; reconcile to exactly one file-scope declaration"
     continue
@@ -900,9 +917,9 @@ while IFS= read -r _tok; do
     continue
   fi
 
-  # Sort by lo-bound — registration order in test-all.sh is not the tiling order. The awk
-  # extractor only emits `^[0-9]+-[0-9]+$` shapes, so sorting cannot reorder malformed
-  # entries (the hazard the comparator's header warns about).
+  # Sort by lo-bound — registration order in test-all.sh is not the tiling order. The
+  # malformed-spec arm directly above is what keeps non-`^[0-9]+-[0-9]+$` entries out of
+  # this file — sorting a malformed set is the hazard the comparator's header warns about.
   cut -f2 "$WORK/rs_flagged" | sort -t- -k1,1n > "$WORK/rs_ranges_sorted"
   if _rows_tile_check "$WORK/rs_ranges_sorted" "$_decl"; then
     pass "${_tok}: --rows ranges tile 1..${_decl} contiguously ($(tr '\n' ' ' < "$WORK/rs_ranges_sorted"))"
@@ -967,20 +984,27 @@ done < "$WORK/rs_interesting"
 # data dirs excluded. An enumeration FAILURE is a verdict, never a silent
 # shrink of the literal side.
 : > "$WORK/dir1_libs"
-if ! git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard -- 'scripts/lib' > "$WORK/dir1_enum_raw" 2>"$WORK/dir1_enum_err"; then
-  fail "Direction-1 lib enumeration failed (git ls-files rc=$?): $(head -3 "$WORK/dir1_enum_err" | tr '\n' ' ') — the literal-census population is unknown"
+git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard -- 'scripts/lib' > "$WORK/dir1_enum_raw" 2>"$WORK/dir1_enum_err"
+_d1rc=$?
+if (( _d1rc != 0 )); then
+  fail "Direction-1 lib enumeration failed (git ls-files rc=$_d1rc): $(head -3 "$WORK/dir1_enum_err" | tr '\n' ' ') — the literal-census population is unknown"
 else
   while IFS= read -r -d '' _lf; do
     case "/$_lf" in */fixtures/*) continue ;; esac
+    # Regular files only — a FIFO/device under --others would block the readers below.
+    [[ -f "$REPO_ROOT/$_lf" ]] || continue
     case "$_lf" in
       *.sh|*.bash) printf '%s\0' "$REPO_ROOT/$_lf" >> "$WORK/dir1_libs" ;;
-      *) if [[ "$_lf" != *.* ]] && head -1 "$REPO_ROOT/$_lf" 2>/dev/null | grep -q '^#!.*\(ba\)\?sh\b'; then
+      *) if [[ "${_lf##*/}" != *.* ]] && head -1 "$REPO_ROOT/$_lf" 2>/dev/null | grep -qE "$_SH_SHEBANG_RE"; then
            printf '%s\0' "$REPO_ROOT/$_lf" >> "$WORK/dir1_libs"
          fi ;;
     esac
   done < "$WORK/dir1_enum_raw"
+  if [[ ! -s "$WORK/dir1_libs" ]]; then
+    fail "Direction-1 lib enumeration returned ZERO shell-bearing files — scripts/lib is empty, renamed, or the pathspec drifted; the literal census would cover only the runner"
+  fi
 fi
-_lit_n=$( { sed 's/#.*//' "$RUNNER"; while IFS= read -r -d '' _lf; do sed 's/#.*//' "$_lf"; done < "$WORK/dir1_libs"; } | grep -oE -- '--rows[[:space:]]+[0123456789]{1,9}-[0123456789]{1,9}' | wc -l | tr -d ' ')
+_lit_n=$( { sed 's/#.*//' "$RUNNER"; while IFS= read -r -d '' _lf; do sed 's/#.*//' "$_lf"; done < "$WORK/dir1_libs"; } | grep -oE -- '--rows[[:space:]]+[0123456789]+-[0123456789]+' | wc -l | tr -d ' ')
 _emit_n=$(awk -F'\t' '$3 != "UNFLAGGED"' "$WORK/run_suite_rows" | wc -l | tr -d ' ')
 if (( _lit_n == _emit_n )); then
   pass "literal census: ${_lit_n} '--rows A-B' occurrences in test-all.sh+scripts/lib, all ${_emit_n} extracted"
@@ -1011,16 +1035,20 @@ fi
 # reporting green is the worst outcome here.
 _census_ok=1
 : > "$WORK/decl_census"
-if ! git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard > "$WORK/decl_enum_raw" 2>"$WORK/decl_enum_err"; then
-  fail "Direction-2 census enumeration failed (git ls-files rc=$?): $(head -3 "$WORK/decl_enum_err" | tr '\n' ' ') — the census population is unknown, so every reachability verdict below is ungrounded"
+git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard > "$WORK/decl_enum_raw" 2>"$WORK/decl_enum_err"
+_d2rc=$?
+if (( _d2rc != 0 )); then
+  fail "Direction-2 census enumeration failed (git ls-files rc=$_d2rc): $(head -3 "$WORK/decl_enum_err" | tr '\n' ' ') — the census population is unknown, so every reachability verdict below is ungrounded"
   _census_ok=0
 else
   : > "$WORK/decl_shell_files"
   while IFS= read -r -d '' _cand; do
     case "/$_cand" in */fixtures/*) continue ;; esac
+    # Regular files only — a FIFO/device under --others would block the readers below.
+    [[ -f "$REPO_ROOT/$_cand" ]] || continue
     case "$_cand" in
       *.sh|*.bash) printf '%s\0' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files" ;;
-      *) if [[ "$_cand" != *.* ]] && head -1 "$REPO_ROOT/$_cand" 2>/dev/null | grep -q '^#!.*\(ba\)\?sh\b'; then
+      *) if [[ "${_cand##*/}" != *.* ]] && head -1 "$REPO_ROOT/$_cand" 2>/dev/null | grep -qE "$_SH_SHEBANG_RE"; then
            printf '%s\0' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files"
          fi ;;
     esac
@@ -1030,8 +1058,12 @@ else
     _census_ok=0
   else
     pass "Direction-2 census enumerated $(tr -cd '\0' < "$WORK/decl_shell_files" | wc -c | tr -d ' ') shell-bearing files repo-wide (tracked + untracked, minus fixtures/)"
-    xargs -0 grep -lE "$_DECL_ANY_RE" < "$WORK/decl_shell_files" 2>/dev/null | sort -u > "$WORK/decl_census" || true
-    if [[ ! -s "$WORK/decl_census" ]]; then
+    if xargs -0 grep -lE "$_DECL_COUNT_RE" < "$WORK/decl_shell_files" 2>"$WORK/decl_grep_err" | sort -u > "$WORK/decl_census"; then
+      : # matches found — census populated
+    elif [[ -s "$WORK/decl_grep_err" ]]; then
+      fail "Direction-2 declaration grep reported errors: $(head -3 "$WORK/decl_grep_err" | tr '\n' ' ') — the census may be partially enumerated, so every reachability verdict below is ungrounded"
+      _census_ok=0
+    elif [[ ! -s "$WORK/decl_census" ]]; then
       # The repo ALWAYS declares ≥2 contracts (this battery's sibling battery and
       # the lint-orphan battery), so an empty census is not a legal state — it means
       # the declaration regex drifted blind or the grep step failed silently.

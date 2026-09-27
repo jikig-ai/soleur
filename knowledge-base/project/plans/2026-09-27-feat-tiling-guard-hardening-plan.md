@@ -188,7 +188,7 @@ machinery is bespoke to this repo, and two directly-on-point learnings exist.
 | `rows:` singleton census is spelling-fragile | Confirmed — `^[[:space:]]+rows:` misses `rows :`, `"rows":`, column-0 | Spelling-tolerant key regex + three committed drivers |
 | Direction-2 scope is two trees | Confirmed — census greps `scripts/` + `plugins/soleur/test/`; `tests/`, `apps/`, `infra/`, `test/`, `spike/`, `bin/`, `todos/` exist outside it | Tracked-file repo-wide census via `git ls-files` |
 | `scripts/lib/*.sh` non-recursive | Confirmed — `frontmatter-strip/strip.sh` and `fixtures/` sit outside the glob | Recursive lib-tree enumeration with shell predicate |
-| `DECLARED_TOTAL` spelling variants evade | Confirmed — `^DECLARED_TOTAL=`/`^[[:space:]]*DECLARED_TOTAL=` reject keyword prefixes at all four read sites | One shared prefix-tolerant regex constant applied at all sites |
+| `DECLARED_TOTAL` spelling variants evade | Confirmed — `^DECLARED_TOTAL=`/`^[[:space:]]*DECLARED_TOTAL=` reject keyword prefixes at all five read sites | One shared prefix-tolerant regex constant applied at all sites |
 | Garbage-suffix ranges normalize silently | Confirmed — `match()` at the extractor takes the `9-16` prefix of `9-16x`/`9-16-24` | Whole-token capture + malformed-spec fail arm |
 | Sub-arms lack committed rows | Confirmed — no row exercises `<unresolved>`, all-unflagged, Direction-1, or the legs pin | Six new committed rows |
 
@@ -213,7 +213,7 @@ drivers:
 1. **Widen the guard** (`scripts-shard-totality.test.sh`): spelling-tolerant
    `rows:`-key census and job-block extraction; whole-token `--rows` capture
    with a dedicated malformed-spec fail; a shared prefix-tolerant
-   `DECLARED_TOTAL` regex applied at all four read sites; recursive
+   `DECLARED_TOTAL` regex applied at all five read sites; recursive
    scripts/lib enumeration for Direction-1; tracked-file repo-wide Direction-2
    census with an empty-census fail.
 2. **Drive every widened arm** (`scripts-shard-totality-mutations.sh` +
