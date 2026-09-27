@@ -85,6 +85,10 @@ const reloadState = vi.hoisted(() => ({
   // #8739: count refetches so a c4_diagram_saved DOM event can be asserted to
   // reach useC4Project's reload. `vi.clearAllMocks` in beforeEach resets it.
   reload: vi.fn(),
+  // #8966: the GET's derived staleness verdict, read by the mocked data on
+  // every render — set before an action to model what the reload's GET
+  // answered. `undefined` = absent (no verdict), NOT false.
+  derived: undefined as boolean | undefined,
 }));
 
 vi.mock("@/components/kb/c4-shared", async () => {
@@ -97,17 +101,32 @@ vi.mock("@/components/kb/c4-shared", async () => {
   );
   return {
     Spinner: () => <div>loading</div>,
-    useC4Project: () => ({
-      data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
-      error: null,
-      loading: false,
-      // A test can hold the reload open (reloadGate) to model a save that is
-      // still in flight when the user navigates.
-      reload: (...args: unknown[]) => {
-        reloadState.reload(...args);
-        return reloadState.gate ?? Promise.resolve();
-      },
-    }),
+    useC4Project: () => {
+      // #8966: the verdict arrives via data — mount reads `derived` as the
+      // initial GET's answer; each reload re-reads it as that GET's answer.
+      // Stateful so a post-save reload applies the verdict a test staged —
+      // the real hook setData's the fresh payload; a static mock would leave
+      // `data.stale` reading the stale mount value forever.
+      const [data, setData] = useState(() => ({
+        dump: { foo: 1 },
+        diagnostics: [] as never[],
+        sources: { "model.c4": "x" } as Record<string, string>,
+        stale: reloadState.derived,
+      }));
+      return {
+        data,
+        error: null,
+        loading: false,
+        // A test can hold the reload open (reloadGate) to model a save that is
+        // still in flight when the user navigates.
+        reload: (...args: unknown[]) => {
+          reloadState.reload(...args);
+          return (reloadState.gate ?? Promise.resolve()).then(() =>
+            setData((d) => ({ ...d, stale: reloadState.derived })),
+          );
+        },
+      };
+    },
     C4Canvas: () => <div data-testid="c4-canvas" />,
     // Expose the `stale` prop so the staleness-wiring test can assert C4Workspace
     // flips it to true after a save (the lifted-state honesty signal).
@@ -241,6 +260,7 @@ function stubViewport(mobile: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  reloadState.derived = undefined;
 });
 
 afterEach(() => {
@@ -292,7 +312,7 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
     expect(screen.getByTestId("kb-chat-content")).toBeTruthy();
   });
 
-  it("C4-C6: a successful re-render does NOT flag stale; a failed re-render does (Layer 2)", async () => {
+  it("C4-C6: a successful re-render does NOT flag stale; a failed re-render WITH a reason does (Layer 2)", async () => {
     await renderC4WithHeader();
     // Fresh load — no edit yet, banner absent.
     expect(
@@ -309,8 +329,10 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
       ).toBe("false"),
     );
 
-    // Save where the re-render failed (rerendered:false) → stale banner shows.
-    fireEvent.click(screen.getByTestId("c4-save-fail"));
+    // Save where the re-render failed WITH a reason → stale banner shows.
+    // (A reasonless rerendered:false is the supersede shape — #8966 defers it
+    // to the GET verdict; see the derived-staleness block below.)
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
     await waitFor(() =>
       expect(
         screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
@@ -342,16 +364,21 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
     expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
     expect(screen.queryByText("Diagram not updated: x")).toBeNull();
 
-    // Reason again, then a no-reason failure REPLACES it with the supersede line.
+    // Reason again, then a no-reason failure (the supersede shape — #8966):
+    // with no GET verdict it DEFERS — the prior diagnostic and banner persist
+    // untouched rather than being replaced by the supersede line.
     fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
     await waitFor(() =>
       expect(screen.getByText("Diagram not updated: x")).toBeTruthy(),
     );
     fireEvent.click(screen.getByTestId("c4-save-fail"));
-    await waitFor(() => expect(screen.getByText(SUPERSEDED)).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 0));
     expect(banner().getAttribute("data-stale")).toBe("true");
-    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
-    expect(screen.queryByText("Diagram not updated: x")).toBeNull();
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe(
+      "diagram not updated: x",
+    );
+    expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
+    expect(screen.queryByText(SUPERSEDED)).toBeNull();
   });
 
   it("C4-C8 (#8695): a folder change resets the banner; returning does not resurrect it", async () => {
@@ -564,6 +591,154 @@ describe("C4Workspace — c4_diagram_saved Concierge-save notice (#8739)", () =>
       ),
     );
     expect(reloadState.reload).toHaveBeenLastCalledWith({ silent: true });
+  });
+});
+
+// #8966 — the derived verdict is authoritative when present; the frame/save
+// outcome is the fallback for a GET that produced none. The mock's
+// `reloadState.derived` models what the LAST GET answered (`undefined` =
+// absent, "no verdict" — NOT false).
+describe("C4Workspace — GET-derived staleness precedence (#8966)", () => {
+  const DIR = "engineering/architecture/diagrams"; // canonical, KB-relative
+  const banner = () => screen.getByTestId("c4-diagnostics");
+  const CONCIERGE_LINE = "Ask the Concierge to re-render this diagram.";
+
+  async function fireSaved(detail: {
+    dirPath: string;
+    rerendered: boolean;
+    diagnostic?: string | null;
+  }) {
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(C4_DIAGRAM_SAVED_EVENT, { detail }));
+    });
+  }
+
+  it("D-C1: a remount resurrects the banner from a stale:true GET — no frame, no save needed", async () => {
+    reloadState.derived = true;
+    await renderC4WithHeader(true, true, DIR);
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(screen.getByText(/out of date/i)).toBeTruthy();
+  });
+
+  it("D-C2: stale:false on the GET clears a frame-set banner — present is authoritative", async () => {
+    // Banner first, on an absent verdict…
+    await renderC4WithHeader(true, true, DIR);
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    // …then the next GET derives clean. The supersede-shaped frame would defer
+    // on its own, but the verdict settles it.
+    reloadState.derived = false;
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("false"),
+    );
+  });
+
+  it("D-C3: stale:true outranks even a rerendered:true frame — ordering subsume, not edge order", async () => {
+    reloadState.derived = true;
+    await renderC4WithHeader(true, true, DIR);
+    await fireSaved({ dirPath: DIR, rerendered: true, diagnostic: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("true");
+  });
+
+  it("D-C4: a supersede-shape frame with an ABSENT verdict leaves existing state untouched", async () => {
+    await renderC4WithHeader(true, true, DIR);
+    // No prior banner → supersede cannot create one (a superseding save's
+    // model commit is already live; self-setting would lie).
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("false");
+    // An EARNED banner is not cleared by a supersede either — the reason it
+    // gave may still be true.
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe(
+      "diagram not updated: x",
+    );
+  });
+
+  it("D-C5: a diagnostic frame under a stale verdict keeps the reason; flag-off canonical dir gets the Concierge line instead", async () => {
+    reloadState.derived = true;
+    await renderC4WithHeader(true, true, DIR);
+    await fireSaved({
+      dirPath: DIR,
+      rerendered: false,
+      diagnostic: "rate limited",
+    });
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale-diagnostic")).toBe(
+        "rate limited",
+      ),
+    );
+    // Same verdict with no outcome diagnostic → the resolved action line.
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    // (flag ON → supersede line stays the action copy)
+    expect(screen.getByText(/out of date/i)).toBeTruthy();
+  });
+
+  it("D-C6: flag OFF + canonical dir → the banner's action is the Concierge, not Save", async () => {
+    reloadState.derived = true;
+    await renderC4WithHeader(true, false, DIR);
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    expect(screen.getByText(CONCIERGE_LINE)).toBeTruthy();
+    // A flag-off banner must not point at the dead Save affordance.
+    expect(screen.queryByText(SUPERSEDED)).toBeNull();
+  });
+
+  it("D-C7: flag OFF + non-canonical dir → the export line (Concierge cannot write there)", async () => {
+    reloadState.derived = true;
+    await renderC4WithHeader(true, false, "product/diagrams");
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    expect(
+      screen.getByText(
+        /re-run the diagram export for this folder/i,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(CONCIERGE_LINE)).toBeNull();
+  });
+
+  it("D-C8: the amber strip announces itself (aria-live) — a derived verdict appears with no user action", async () => {
+    reloadState.derived = true;
+    await renderC4WithHeader(true, true, DIR);
+    const strip = document.querySelector('[aria-live="polite"]');
+    expect(strip).toBeTruthy();
+    expect(strip?.textContent).toContain("out of date");
+  });
+
+  it("D-C9: a present verdict RETIRES the fallback — a later ABSENT GET must not resurrect a cleared banner", async () => {
+    // Earn the banner (absent verdict + failing save outcome).
+    await renderC4WithHeader(true, true, DIR);
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    // A verdict arrives and clears it — and the fallback with it.
+    reloadState.derived = false;
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("false"),
+    );
+    // A later GET answers ABSENT (grace window / derivation failure): the
+    // retired staleSave must not resurrect the banner.
+    reloadState.derived = undefined;
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("false");
   });
 });
 

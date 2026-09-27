@@ -22,6 +22,9 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
 
 // Shared spy so the #8739 event tests can assert refetch.
 const embedReload = vi.hoisted(() => vi.fn(async () => {}));
+// #8966: the GET's derived staleness verdict, read into `data.stale` on every
+// render. `undefined` = absent ("no verdict") — NOT false.
+const embedStale = vi.hoisted(() => ({ value: undefined as boolean | undefined }));
 
 // Mock the shared building blocks so we test C4Diagram's WIRING (lifted `stale`
 // state + tab switch on save), not the real canvas/CodeMirror plumbing.
@@ -34,7 +37,12 @@ vi.mock("@/components/kb/c4-shared", async () => {
   return {
     Spinner: () => <div>loading</div>,
     useC4Project: () => ({
-      data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
+      data: {
+        dump: { foo: 1 },
+        diagnostics: [],
+        sources: { "model.c4": "x" },
+        stale: embedStale.value,
+      },
       error: null,
       loading: false,
       reload: embedReload,
@@ -94,6 +102,7 @@ const { C4_DIAGRAM_SAVED_EVENT } = await import("@/lib/c4-constants");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  embedStale.value = undefined;
 });
 
 describe("C4Diagram (inline embed) — staleness wiring (Layer 2)", () => {
@@ -116,10 +125,10 @@ describe("C4Diagram (inline embed) — staleness wiring (Layer 2)", () => {
     ).toBe("false");
   });
 
-  it("a failed re-render flags stale", async () => {
+  it("a failed re-render WITH a reason flags stale (a reasonless supersede defers — #8966)", async () => {
     await renderEmbed();
     fireEvent.click(screen.getByRole("button", { name: "code" }));
-    fireEvent.click(screen.getByTestId("c4-save-fail"));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
 
     await waitFor(() =>
       expect(
@@ -157,7 +166,9 @@ describe("C4Diagram (inline embed) — stale reason survives the tab switch (#86
     expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
     expect(screen.queryByText("Diagram not updated: x")).toBeNull();
 
-    // Reason again, then a no-reason failure replaces it with the supersede line.
+    // Reason again, then a no-reason failure — the supersede shape (#8966):
+    // with no GET verdict it defers, leaving the prior diagnostic banner
+    // untouched rather than swapping to the supersede line.
     fireEvent.click(screen.getByRole("button", { name: "code" }));
     fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
     await waitFor(() =>
@@ -165,10 +176,14 @@ describe("C4Diagram (inline embed) — stale reason survives the tab switch (#86
     );
     fireEvent.click(screen.getByRole("button", { name: "code" }));
     fireEvent.click(screen.getByTestId("c4-save-fail"));
-    await waitFor(() => expect(screen.getByText(SUPERSEDED)).toBeTruthy());
-    expect(screen.getByTestId("c4-canvas")).toBeTruthy();
-    expect(banner().getAttribute("data-stale-diagnostic")).toBe("");
-    expect(screen.queryByText("Diagram not updated: x")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("c4-canvas")).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(banner().getAttribute("data-stale-diagnostic")).toBe(
+      "diagram not updated: x",
+    );
+    expect(screen.getByText("Diagram not updated: x")).toBeTruthy();
+    expect(screen.queryByText(SUPERSEDED)).toBeNull();
   });
 });
 
@@ -256,5 +271,65 @@ describe("C4Diagram (inline embed) — c4_diagram_saved notice (#8739)", () => {
     expect(
       screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
     ).toBe("false");
+  });
+});
+
+// #8966 — same contract as the workspace consumer: a present GET verdict is
+// authoritative; the outcome is the fallback for an absent one; a
+// supersede-shape outcome defers.
+describe("C4Diagram (inline embed) — GET-derived staleness precedence (#8966)", () => {
+  async function fireSaved(detail: {
+    dirPath: string;
+    rerendered: boolean;
+    diagnostic?: string | null;
+  }) {
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(C4_DIAGRAM_SAVED_EVENT, { detail }));
+    });
+  }
+  const banner = () => screen.getByTestId("c4-diagnostics");
+
+  it("a stale:true GET shows the banner on mount — no frame, no save (out-of-band push)", async () => {
+    embedStale.value = true;
+    await renderEmbed();
+    expect(banner().getAttribute("data-stale")).toBe("true");
+    expect(screen.getByText(/out of date/i)).toBeTruthy();
+  });
+
+  it("a stale:true GET outranks a rerendered:true frame", async () => {
+    embedStale.value = true;
+    await renderEmbed();
+    await fireSaved({ dirPath: DIR, rerendered: true, diagnostic: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("true");
+  });
+
+  it("a supersede-shape frame with no verdict cannot create or clear the banner", async () => {
+    await renderEmbed();
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("false");
+
+    // …but an earned banner survives it too.
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail-diag"));
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    await fireSaved({ dirPath: DIR, rerendered: false, diagnostic: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(banner().getAttribute("data-stale")).toBe("true");
+  });
+
+  it("flag OFF + canonical dir → the banner's action is the Concierge (Save is a dead affordance)", async () => {
+    embedStale.value = true;
+    await renderEmbed(false);
+    await waitFor(() =>
+      expect(banner().getAttribute("data-stale")).toBe("true"),
+    );
+    expect(
+      screen.getByText("Ask the Concierge to re-render this diagram."),
+    ).toBeTruthy();
+    expect(screen.queryByText(SUPERSEDED)).toBeNull();
   });
 });

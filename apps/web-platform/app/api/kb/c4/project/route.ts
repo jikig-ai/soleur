@@ -8,6 +8,7 @@ import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { githubApiGet, GitHubApiError } from "@/server/github-api";
 import { kbGithubUrlPath } from "@/server/kb-github-path";
 import { mirrorWarnWithDebounce, reportSilentFallback } from "@/server/observability";
+import { deriveDiagramStale } from "@/server/c4-staleness";
 import {
   C4_DIAGRAMS_DIR,
   C4_SOURCE_EXT,
@@ -301,8 +302,16 @@ export async function GET(request: Request) {
           (e.name.endsWith(C4_SOURCE_EXT) || e.name === "README.md"),
       )
       .sort((a, b) => a.name.localeCompare(b.name));
-    const fetched = await Promise.all(
-      sourceEntries.map(async (entry) => {
+    // #8966: the stale banner is a RECOMPUTED fact, not a losable event. The
+    // newest model.likec4.json commit's dir subtree is content-diffed against
+    // the listing already in hand — survives dropped c4_diagram_saved frames,
+    // remounts, and out-of-band source pushes. `undefined` means "no verdict"
+    // (derivation failure, no model commit, or the in-flight save window) and
+    // is reported + omitted, NEVER normalized to false. Runs concurrent with
+    // the source fetch — both read `entries`, neither needs the other.
+    const [fetched, stale] = await Promise.all([
+      Promise.all(
+        sourceEntries.map(async (entry) => {
         try {
           const body = await fetchBlobUtf8(installationId, owner, repo, entry.sha);
           return [entry.name, body] as const;
@@ -316,13 +325,31 @@ export async function GET(request: Request) {
           );
           return null;
         }
+        }),
+      ),
+      deriveDiagramStale({
+        get: githubApiGet,
+        installationId,
+        owner,
+        repo,
+        githubDir,
+        currentEntries: entries,
       }),
-    );
+    ]);
     const sources: Record<string, string> = {};
     for (const kv of fetched) if (kv) sources[kv[0]] = kv[1];
 
     return NextResponse.json(
-      { dir: requestedDir, sources, dump, viewIds, diagnostics },
+      {
+        dir: requestedDir,
+        sources,
+        dump,
+        viewIds,
+        diagnostics,
+        // Present only on a produced verdict — absent is "no information", and
+        // the client's frame/outcome state governs then (see c4-staleness.ts).
+        ...(stale !== undefined ? { stale } : {}),
+      },
       { status: 200, headers: { "Cache-Control": "private, no-cache" } },
     );
   } catch (error) {
