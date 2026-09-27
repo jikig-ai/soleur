@@ -283,17 +283,24 @@ PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" 
 # Refuse it first, exactly as the bump does. A subshell rather than `git -C`
 # keeps this read out of the fixture-operand census (see the diagnostic below).
 AC6_SHALLOW=$( (cd "$SCRIPT_DIR" && git rev-parse --is-shallow-repository) 2>/dev/null || true)
+# The second fail-open shape: a missing mid-history object leaves --merged at
+# rc 0 with a TRUNCATED set, reported only on stderr. Refuse it with the
+# shallow case, as the bump's walk_err pre-walk does, so drift is never
+# diagnosed from a partial set.
+AC6_WALK_ERR=$( (cd "$SCRIPT_DIR" && git tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null) || true)
 # git -C "$SCRIPT_DIR" (NOT `git rev-parse --show-toplevel`, which resolves to
 # the bare-repo parent in a worktree). Any failure (no git, no tags, not a repo)
 # collapses to an empty result → visible SKIP, never a false-green.
 LATEST_TAG=$(git -C "$SCRIPT_DIR" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null \
   | sed 's/^vinngest-//' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
   | sort -V | tail -1 || true)
-if [[ "$AC6_SHALLOW" != "false" ]]; then
+if [[ "$AC6_SHALLOW" != "false" || -n "$AC6_WALK_ERR" ]]; then
   if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
-    assert "vinngest-v* merged set readable in CI (history is not shallow)" "false"
+    assert "vinngest-v* merged set readable in CI (history is not shallow or truncated)" "false"
     echo "        is-shallow-repository='${AC6_SHALLOW:-<empty>}': git tag --merged HEAD cannot see tags"
     echo "        below the graft — verify fetch-depth: 0 on deploy-script-tests in infra-validation.yml."
+    [[ -z "$AC6_WALK_ERR" ]] \
+      || echo "        walk stderr (unreadable history): $(tr '\n' ' ' <<<"$AC6_WALK_ERR" | cut -c1-200)"
   else
     echo "  SKIP: shallow or unreadable checkout (is-shallow-repository='${AC6_SHALLOW:-<empty>}');"
     echo "        drift comparison skipped (CI checks out full history via fetch-depth: 0)."

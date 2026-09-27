@@ -284,7 +284,10 @@ if [[ "$rc" -ne 0 ]]; then
     summary "### inngest-bootstrap pin bump"$'\n\n'"Deferred: \`${TARGET}\` (the semver-max merged tag) is newer than this run's signed tag \`${SIGNED_TAG}\`; its own publish resolves the pin. If that publish died before pushing the image, republish \`vinngest-${TARGET}\` — deferral alone does not self-heal."
     exit 0
   fi
-  die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err")"
+  # A merged target with no image is the "off main is a point-in-time verdict"
+  # case (ADR-232 §7): a tag refused at push time and merged later. Name the
+  # remedy, since every later publish lands here until the image exists.
+  die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err") — if vinngest-${TARGET} never published an image (its build refused or died before pushing), republish vinngest-${TARGET} (workflow_dispatch); it is merged into main, so never delete it"
 fi
 RESOLVED=$(grep -oE '^sha256:[0-9a-f]{64}$' "$WORK/digest" | head -1 || true)
 [[ -n "$RESOLVED" ]] \

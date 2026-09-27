@@ -64,7 +64,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=483   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=487   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1537,6 +1537,7 @@ run_bump anc-b23 --signed-tag v1.1.36 --signed-digest "$DIG_OLD" --mirror-status
 assert_result  'g1b.B23:result' error
 assert_out_has 'g1b.B23:stage' '::error::resolve:'
 assert_out_has 'g1b.B23:names-crane' 'crane digest'
+assert_out_has 'g1b.B23:remedy' 'republish vinngest-v1.1.37 (workflow_dispatch)'
 
 # B24 (#8782 review) — this run signed an off-main tag ABOVE the merged-max
 # target (not pinned), and the registry fails for the target. The target is
@@ -1554,6 +1555,9 @@ run_bump anc-b24 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status
 [[ "$LAST_RC" != 0 ]] && pass 'g1b.B24:nonzero' || fail 'g1b.B24:nonzero' "registry failure on an older target was deferred"
 assert_result  'g1b.B24:result' error
 assert_out_has 'g1b.B24:stage' '::error::resolve:'
+# The merged target v1.1.37 is the one with no image, so the remedy names IT,
+# never the signed tag: every later publish dies here until it is republished.
+assert_out_has 'g1b.B24:remedy' 'republish vinngest-v1.1.37 (workflow_dispatch)'
 
 echo ""
 echo "=== Guard 2: workflow shape + selector byte-equality ==="
@@ -2102,6 +2106,17 @@ done
 n=$(awk '/^# --- AC6:/{on=1} /^# --- AC6b:/{on=0} on && /^[[:space:]]*assert "[^"]*" "false"[[:space:]]*$/{n++} END{print n+0}' "$CONSUMER")
 [[ "$n" == 2 ]] && pass 'g2.sel:checker-ci-arms-fail' \
   || fail 'g2.sel:checker-ci-arms-fail' "$n AC6 CI arm(s) assert \"false\", expected 2 (shallow + empty merged set)"
+# The checker mirrors the writer's walk_err refusal: a truncated --merged set
+# (rc 0, stderr only) must reach the shallow/unreadable arm, never the drift
+# diagnosis. Pin the stderr read and its use in that arm's condition, each as a
+# whole code line inside the AC6 block.
+for want in \
+  "AC6_WALK_ERR=\$( (cd \"\$SCRIPT_DIR\" && git tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null) || true)" \
+  'if [[ "$AC6_SHALLOW" != "false" || -n "$AC6_WALK_ERR" ]]; then'; do
+  n=$(W="$want" awk '/^# --- AC6:/{on=1} /^# --- AC6b:/{on=0} on && $0==ENVIRON["W"]{n++} END{print n+0}' "$CONSUMER")
+  [[ "$n" == 1 ]] && pass "g2.sel:checker-walk-err:${want:0:12}" \
+    || fail "g2.sel:checker-walk-err:${want:0:12}" "$n whole-line match(es) in AC6 for: $want"
+done
 
 # The script pushes ONLY via x-access-token (the minted installation token) —
 # never a bare https or ssh remote.
