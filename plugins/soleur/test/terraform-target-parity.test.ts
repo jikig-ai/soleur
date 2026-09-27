@@ -3785,10 +3785,10 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(res).toMatch(/^\s*prevent_destroy\s*=\s*true\s*$/m);
     expect(allTf).not.toMatch(/^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main"\s*\{/m);
     const imp = block(src, /^import\s*\{/m);
-    expect(imp).toMatch(new RegExp(`^\\s*to\\s*=\\s*${NEW.replace(/\./g, "\\.")}\\s*$`, "m"));
+    expect(imp).toMatch(new RegExp(`^\\s*to\\s*=\\s*${escapeRe(NEW)}\\s*$`, "m"));
     expect(imp).toMatch(/^\s*id\s*=\s*"soleur:web-platform-infra-apply:49861552"\s*$/m);
     const rem = block(src, /^removed\s*\{/m);
-    expect(rem).toMatch(new RegExp(`^\\s*from\\s*=\\s*${OLD.replace(/\./g, "\\.")}\\s*$`, "m"));
+    expect(rem).toMatch(new RegExp(`^\\s*from\\s*=\\s*${escapeRe(OLD)}\\s*$`, "m"));
     expect(rem).toMatch(/^\s*destroy\s*=\s*false\s*$/m);
   });
 
