@@ -28,6 +28,7 @@ The real cutover does not exist yet. It is blocked on all of:
 - **#7226 / #5914** — pin the SSH host keys of web-1 and git-data (ADR-237). Staged; the open items
   are the [host-key pinning post-merge sequence](#host-key-pinning-post-merge-sequence-7226-5914)
   below:
+  - [x] #7226 — closed 2026-09-22 by PR #8511; ADR-237 is `accepted` (PR #9036, host-key step 4).
   - [x] Mechanism: PR #8511 (pending merge at the time of writing). The CI bridge, the Terraform
     `connection` blocks and this workflow's two hops are strict; git-data's key is Terraform-minted
     and rotated on every replace; the app's transport pins when a pin is published.
@@ -158,6 +159,7 @@ Each prod step needs explicit authorization for that step. A menu acknowledgemen
 4. **Private-NIC readiness read** (below). It must read `up`.
 5. **Dry run.** Dispatch `git-data-cutover.yml` from `main` and approve. It must read
    `role=git-data-auth verdict=ok`, clear the store probes and the fence probe, and exit 0.
+   **Done:** first met by run [35119099336](https://github.com/jikig-ai/soleur/actions/runs/35119099336) (2026-09-16, before the fence probe and host-key pinning); met as now worded by run [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) (2026-09-27, `verdict=clear`, #5914 issuecomment-5859802570).
 
 ### Private-NIC readiness read (step 4)
 
@@ -283,6 +285,7 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
 4. **Strict dry run.** Dispatch `git-data-cutover.yml` from `main`. It must read
    `role=git-data-auth verdict=ok` with both hops pinned. Then tick the #7226 item under Preconditions
    and flip ADR-237 to `accepted` in a docs PR.
+   **Done:** run [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656) (2026-09-25) read `role=git-data-auth verdict=ok` with both hops pinned (it exited 5 on `probe=store-not-cut-over verdict=already_cut_over`, a store probe since retired); re-met clean by run [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) (2026-09-27, `verdict=clear`). ADR-237 `accepted` 2026-09-27 (PR #9036); see Preconditions.
 5. **Discharge the erasures left pending.** After the pin is fixed (step 3 GO) and before step 6 or any
    flag flip:
    1. Collect the repository ids from Sentry: every `op:git-data-bare-repo-erasure` event since the
