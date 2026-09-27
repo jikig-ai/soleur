@@ -14,17 +14,21 @@ lane: cross-domain
 
 ## 2. RED: fixture rows (`plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`)
 
-- [ ] 2.1 Add one prose-pin row for each file, `ship/SKILL.md` and `merge-pr/SKILL.md`. Each is a `grep -qF` for the fragment `` the root for this session is `${CLAUDE_PLUGIN_ROOT}` ``.
-- [ ] 2.2 Build `SUBST_BLOCK` and `SUBST_MIRROR` by replacing the token with `$PLUGIN_COPY`, the way the loader does.
-  - [ ] 2.2.1 Use a literal replacement only: no `sed` or `perl` whose replacement text contains `$`.
-  - [ ] 2.2.2 Register both files in `_TMP_OWNED`.
-  - [ ] 2.2.3 Assert that the replacement landed: the token count after is 0, and the path count is at least 1.
-- [ ] 2.3 Add row `17b-delivered-decoy`, modelled on scenario 9.
-  - [ ] 2.3.1 Set `SCEN_ROOT="$EVIL_ROOT"`.
-  - [ ] 2.3.2 Run it on both blocks, using the fifth argument of `run_scenario`.
-  - [ ] 2.3.3 Expect the per-block success line: `auto-sync 1 pushed` for the ship block and `auto-sync 1/6 pushed` for the mirror.
-  - [ ] 2.3.4 Forbid `[ship.phase7.precondition]` and `does not name soleur`.
-- [ ] 2.4 Run the suite. The prose pins should be RED and 17b GREEN, because the existing binding is already correct. Note this in the PR body.
+Place every new row after scenario 13c (`EVIL_ROOT` is defined there) and after the mirror-parity loop.
+
+- [ ] 2.1 Build a spaced root: `SPACED_PARENT=$(mktemp -d)` and `SPACED_ROOT="$SPACED_PARENT/plugin root"`, a copy of `$PLUGIN_COPY`. Register it in `_TMP_OWNED` and call `assert_fixture_dir`. Hard-fail unless `[[ -d "$EVIL_ROOT" ]]`.
+- [ ] 2.2 Build `SUBST_BLOCK` and `SUBST_MIRROR` by replacing the token with `$SPACED_ROOT` as a literal, using bash `${line//"$tok"/"$SPACED_ROOT"}` with no `sed` or `perl`. Register both in `_TMP_OWNED`.
+  - [ ] 2.2.1 Check that the replacement landed, counting occurrences (`grep -oF … | wc -l`):
+    - the token count after is 0;
+    - the root count equals the token count before, and is at least 1;
+    - the rewritten `SYNC_ROOT="$(set +u; printf '%s' "<SPACED_ROOT>")"` line is present.
+- [ ] 2.3 Create a fresh `mktemp` mocks file from `${SYNC_MOCKS}`, because scenario 9 deletes its own. Use forbid set `SUCCESS_FORBID|\[ship\.phase7\.precondition\]|does not name soleur`.
+- [ ] 2.4 Add row `17b-delivered-decoy`, with `SCEN_ROOT="$EVIL_ROOT"`, on both blocks (`run_scenario` fifth argument). Match the per-block success line: `auto-sync 1 pushed` for ship and `auto-sync 1/6 pushed` for the mirror.
+- [ ] 2.5 Add row `17c-delivered-unset`, with `SCEN_ROOT=unset`, on both blocks and with the same expectations.
+- [ ] 2.6 Add prose pins after the parity loop. For each SKILL.md, run `grep -qF` with two single-quoted fragments:
+  - `` the root for this session is `${CLAUDE_PLUGIN_ROOT}` ``
+  - `` export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` using that path ``
+- [ ] 2.7 Run the suite. Expect the pins to be RED and 17b and 17c to be GREEN, since the existing binding is already correct. Record this in the PR body as proof of the diagnosis.
 
 ## 3. GREEN: skill prose (the fences stay byte-identical)
 
@@ -34,8 +38,8 @@ lane: cross-domain
 
 ## 4. Verify
 
-- [ ] 4.1 Rerun the fixture suite: all green. Raise `MIN_VERDICTS` to the new total, and update the scenario list in the header comment.
-- [ ] 4.2 Run the Guard Contract mutations M1–M5 and H1, all expected RED, and H2, expected GREEN. Revert each with `git checkout -- <file>`, never `git stash`. Put the results table in the PR body.
+- [ ] 4.1 Rerun the fixture suite: all green. Set `MIN_VERDICTS` to the **exact** new total, and add 17b, 17c and the pins to the scenario list in the header comment.
+- [ ] 4.2 Run Guard Contract mutations M1–M7 and harness edits H1–H2. Each should go RED while its named control stays GREEN; scenario 13c is the negative control. Revert each with `git checkout -- <file>`, never `git stash`. Put the results table in the PR body.
 - [ ] 4.3 `cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts`
 - [ ] 4.4 `python3 scripts/lint-skill-body-budget.py --base origin/main`
 - [ ] 4.5 `bash scripts/plugin-root-anchor-debt.sh` should print `anchor-debt-files=0`.
