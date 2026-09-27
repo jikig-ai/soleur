@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # bump-inngest-bootstrap-pin.sh — move the soleur-inngest-bootstrap cloud-init
-# pin to the semver-max published vinngest-v* tag + registry-resolved digest,
+# pin to the semver-max vinngest-v* tag merged into main + registry-resolved digest,
 # and open (or reuse) the pin-bump PR. Invoked by the bump-cloud-init-pin job of
 # build-inngest-bootstrap-image.yml after a successful publish (#8359, ADR-232).
 #
-# WHY THE TARGET MUST BE ON MAIN (#8747, ADR-232 §7). A tag cut on an open
-# PR's commit built an image of unreviewed bytes and this script pinned it: the
-# bump PR merged 93 minutes before its source PR did. The `ancestry` stage
-# refuses a target whose commit main cannot reach, BEFORE the registry is
-# consulted, binds the pin to the commit the build job checked out
+# WHY THE TARGET MUST BE ON MAIN (#8747, #8782, ADR-232 §7). A tag cut on an
+# open PR's commit built an image of unreviewed bytes and this script pinned it:
+# the bump PR merged 93 minutes before its source PR did. Since #8782 an
+# off-main tag is never a CANDIDATE: the target is chosen only from tags merged
+# into the `ref: main` checkout (`git tag --merged HEAD`), so an unmerged tag
+# can neither be pinned nor block a legitimate bump below it. `--merged` fails
+# OPEN on a cut-off or unreadable history, so both are refused BEFORE resolution
+# (see the history-visibility block). The script then binds the pin to the
+# commit the build job checked out
 # (--signed-commit), and requires the resolved image's
 # org.opencontainers.image.revision label to name the target's commit — so a
 # registry image left behind by an off-main build cannot be pinned under a tag
@@ -21,8 +25,9 @@
 #
 # WHY THE TARGET IS THE SEMVER-MAX TAG, NEVER THE TRIGGERED TAG. The drift
 # guard (AC6 in cloud-init-inngest-bootstrap.test.sh) compares the pin against
-# `git tag --list 'vinngest-v*' | sort -V | tail -1` — the pipeline below is
-# byte-identical, and a parity assert in the fixture suite pins it. A
+# the semver-max (`sort -V | tail -1`) of the vinngest-v* tags merged into HEAD
+# — the resolve pipeline below is byte-identical, and the fixture suite's
+# selector byte-equality rows pin it. A
 # workflow_dispatch re-publish or mirror_only backfill of an OLDER tag must
 # therefore bump to the max (or noop), never open a downgrade PR.
 #
@@ -183,72 +188,71 @@ else
   PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
 fi
 
-# --- resolve: semver-max tag + registry digest -------------------------------
-# AC6-IDENTICAL PIPELINE — test-bump-inngest-bootstrap-pin.sh's parity asserts
-# pin each literal against cloud-init-inngest-bootstrap.test.sh.
-TARGET=$(git -C "$REPO_DIR" tag --list 'vinngest-v*' 2>/dev/null \
+# --- ancestry (history visibility): refuse a shallow checkout first ----------
+# `git tag --merged HEAD` exits 0 on a shallow checkout and silently drops every
+# tag below the graft (measured, #8782), so resolving first could pick a LOWER
+# target — or none — and misdiagnose it. Refused unless the answer is exactly
+# `false`: a git that errors quietly prints nothing. Nothing here may name
+# TARGET or a tag: neither exists yet, and `set -u` would abort with no result=.
+shallow=$(git -C "$REPO_DIR" rev-parse --is-shallow-repository 2>/dev/null || true)
+[[ "$shallow" == "false" ]] \
+  || die ancestry "cannot decide which vinngest-v* tags are merged into main: the checkout is shallow (is-shallow-repository='${shallow:-<empty>}') — tags below the graft are invisible to git tag --merged; the bump job needs fetch-depth: 0"
+# A missing mid-history object is the same fail-open one level down: `git tag
+# --merged` still exits 0, reports `error: Could not read <sha>` ONLY on stderr,
+# and lists just the tags above the break (measured, #8782) — a truncated set
+# whose max can be wrong. Any stderr from the walk is refused, before the
+# selector below (which must discard stderr to stay AC6-identical) runs.
+walk_err=$(git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null || true)
+[[ -z "$walk_err" ]] \
+  || die ancestry "cannot decide which vinngest-v* tags are merged into main: git tag --merged reported an unreadable history ($(tr '\n' ' ' <<<"$walk_err" | cut -c1-200)) — refusing rather than selecting from a truncated tag set"
+
+# --- resolve: semver-max merged tag + registry digest -------------------------
+# AC6-IDENTICAL PIPELINE — test-bump-inngest-bootstrap-pin.sh's selector
+# byte-equality rows require this 3-line block to equal AC6's in
+# cloud-init-inngest-bootstrap.test.sh (ADR-232 §2). HEAD is the `ref: main`
+# checkout, so only tags merged into main are candidates (#8782).
+TARGET=$(git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null \
   | sed 's/^vinngest-//' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
   | sort -V | tail -1 || true)
 [[ -n "$TARGET" ]] \
-  || die resolve "no vinngest-v* git tags reachable — checkout needs fetch-depth: 0 + fetch-tags: true"
-# The tag main pins today (first ref in the web-host file). Read here, before
-# the ancestry stage, because the refusal's remediation depends on it: the
-# pinned tag must never be deleted or re-cut (#8747).
-PIN_TAG=$(grep -hoE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$F_WEB" 2>/dev/null | head -1 | sed 's/.*bootstrap://' || true)
+  || die resolve "no vinngest-v* tag is merged into HEAD (the ref: main checkout) — nothing can be pinned; the checkout needs fetch-tags: true"
+# The highest tag main pins today, over BOTH files: the downgrade refusal below
+# must see a dedicated-host pin that sits above the web-host one.
+PIN_TAG=$( { grep -hoE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$F_WEB" 2>/dev/null | head -1
+  grep -hoE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$F_DED" 2>/dev/null | head -1; } \
+  | sed 's/.*bootstrap://' | sort -V | tail -1 || true)
 
-# --- ancestry: the target's commit must be reachable from main (#8747) --------
-# Runs BEFORE crane on purpose: an off-main semver-max tag whose publish was
-# refused has no image, and the unresolved-digest arm below would call that
-# "publish still in flight" and exit `skipped` — the wrong diagnosis, green.
-# HEAD is the `ref: main` checkout the bump PR is based on.
-target_on_main() {
-  local tag="vinngest-${TARGET}" shallow tag_c rc=0 who mb_err
-  # Refused unless the answer is exactly `false`: a cut-off history can report a
-  # real ancestor as rc 1, and a git that errors quietly prints nothing.
-  shallow=$(git -C "$REPO_DIR" rev-parse --is-shallow-repository 2>/dev/null || true)
-  [[ "$shallow" == "false" ]] \
-    || die ancestry "cannot decide whether ${tag} is on main: the checkout is shallow (is-shallow-repository='${shallow:-<empty>}') — a cut-off history can report a real ancestor as off-main; the bump job needs fetch-depth: 0"
+# --- ancestry: bind the merged target to the commit the build built ----------
+# `--merged HEAD` above already proved the target is on main (#8782), so this
+# stage does not walk history: it resolves the tag to its commit and, when this
+# run published the target, requires that to be the commit the build checked
+# out. Runs BEFORE crane on purpose, like every refusal here.
+bind_target_commit() {
+  local tag="vinngest-${TARGET}" tag_c
   # refs/tags/ explicitly, never the bare name: git resolves refs/<name> before
   # refs/tags/<name>, so a bare lookup can be answered by a different ref.
+  # Defensive: `--merged` lists only tags whose commit it read, so this cannot
+  # normally fail; it stays fail-closed rather than trusting that.
   tag_c=$(git -C "$REPO_DIR" rev-parse -q --verify "refs/tags/${tag}^{commit}" 2>/dev/null) \
     || die ancestry "tag not found: refs/tags/${tag} does not resolve to a commit in this checkout"
-  mb_err=$(git -C "$REPO_DIR" merge-base --is-ancestor "$tag_c" HEAD 2>&1) || rc=$?
-  case "$rc" in
-    0) : ;;
-    1)
-      if [[ "$SIGNED_TAG" == "$TARGET" ]]; then
-        who="${tag}, the tag this run published,"
-      else
-        who="the semver-max tag ${tag} (not vinngest-${SIGNED_TAG}, the tag this run published)"
-      fi
-      if [[ "$TARGET" == "$PIN_TAG" ]]; then
-        # The legacy state right after #8747 merged: main pins an off-main tag.
-        # Deleting or re-cutting it would break the live pin (AC6, GuardA, zot
-        # backfill) and, repeated, walk the target down to an older tag.
-        die ancestry "${who} is on commit ${tag_c}, which is not an ancestor of main, and it is the tag main pins today (a legacy off-main pin, #8747). Do NOT delete or re-cut it. Re-anchor instead: tag a NEW, higher version on main's latest commit (git tag -a vinngest-vX.Y.Z <main-sha> -m '...' && git push origin vinngest-vX.Y.Z); that tag push runs its own publish and bump. Do not re-run this job."
-      fi
-      die ancestry "${who} is on commit ${tag_c}, which is not an ancestor of main: it was cut on an unmerged branch, and pinning it would ship unreviewed bytes (#8747). Delete it (git push origin :refs/tags/${tag}; git tag -d ${tag}), wait for the source PR to merge, then tag its squash-merge commit on main as a NEW version, never a re-used name (git tag -a vinngest-vX.Y.Z <main-sha> -m '...' && git push origin vinngest-vX.Y.Z). That tag push runs its own publish and bump; do not re-run this job."
-      ;;
-    *)
-      die ancestry "could not decide whether ${tag} (commit ${tag_c}) is on main: git merge-base exited ${rc} ($(tr '\n' ' ' <<<"${mb_err:-no stderr}" | cut -c1-200)) — refusing rather than guessing"
-      ;;
-  esac
   # Bind to the commit the build BUILT. The digest cross-check cannot see a tag
   # re-pointed while its first run was in flight: both digests are that run's.
   if [[ "$SIGNED_TAG" == "$TARGET" && "$tag_c" != "$SIGNED_COMMIT" ]]; then
     die ancestry "${tag} now names commit ${tag_c}, but this run's build signed commit ${SIGNED_COMMIT} — the tag was re-pointed after the build; refusing to pin a digest built from a different commit. Re-publish ${tag}."
   fi
   TARGET_COMMIT="$tag_c"
-  echo "ancestry: ${tag} (commit ${tag_c}) is on main"
+  echo "ancestry: ${tag} (commit ${tag_c}) is merged into main"
 }
-TARGET_COMMIT=""
-target_on_main
+bind_target_commit
 
-# A pin above every remaining tag means a pinned tag was deleted. The semver-max
-# target would then be a DOWNGRADE, which this script promises never to author
-# (header); refuse it rather than walk production back to an older image.
+# A pin above every merged tag means main pins a tag that is either off main (a
+# legacy #8747 pin, which `--merged` can never select) or was deleted. The
+# semver-max target would then be a DOWNGRADE, which this script promises never
+# to author (header). Both states share one safe remediation, and it must never
+# be "delete the pinned tag": that breaks AC6, GuardA and the zot backfill, and
+# repeated it walks the pin down.
 if [[ -n "$PIN_TAG" && "$(printf '%s\n%s\n' "$PIN_TAG" "$TARGET" | sort -V | tail -1)" != "$TARGET" ]]; then
-  die resolve "main pins ${PIN_TAG}, which is above every remaining vinngest-v* tag (semver-max ${TARGET}) — the pinned tag was deleted. Refusing to author a downgrade. Restore vinngest-${PIN_TAG} or tag a NEW, higher version on main."
+  die resolve "main pins ${PIN_TAG}, which is above every vinngest-v* tag merged into main (semver-max ${TARGET}) — its tag is either off main (a legacy #8747 pin) or was deleted. Refusing to author a downgrade. Do NOT delete or re-cut the pinned tag. Tag a NEW, higher version on main's latest commit (git tag -a vinngest-vX.Y.Z <main-sha> -m '...' && git push origin vinngest-vX.Y.Z); that tag push runs its own publish and bump."
 fi
 
 WORK=$(mktemp -d)
@@ -262,19 +266,28 @@ for attempt in 1 2 3; do
   [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 2 ))
 done
 if [[ "$rc" -ne 0 ]]; then
-  if [[ "$SIGNED_TAG" != "$TARGET" ]]; then
-    # Defer, don't page: the semver-max tag is NEWER than the tag this run
-    # published, so that tag's own publish is probably still in flight and its
-    # bump will reconcile the pin. BUT a tag outlives a failed build — if that
-    # publish died before pushing its image, this deferral does NOT self-heal:
-    # every later non-max run skips here while the AC6 drift guard stays red
-    # (main-health-monitor escalates to a ci/main-broken issue).
-    echo "::warning::crane could not resolve ${IMAGE}:${TARGET} (signed=${SIGNED_TAG}) — deferring to that tag's own publish; if that publish is dead, republish vinngest-${TARGET} or delete the tag — this deferral does not self-heal"
+  # Defer ONLY when the target is a NEWER tag than this run published and main
+  # does not already pin it: only then is its own publish plausibly in flight.
+  # A backfill of an older tag, a signed tag that is not merged into main, and a
+  # target main already pins all have a target whose publish finished long ago,
+  # so a registry failure there is an error, not "someone else will fix it".
+  if [[ "$(printf '%s\n%s\n' "$SIGNED_TAG" "$TARGET" | sort -V | tail -1)" == "$TARGET" \
+        && "$SIGNED_TAG" != "$TARGET" && "$TARGET" != "$PIN_TAG" ]]; then
+    # BUT a tag outlives a failed build — if that publish died before pushing
+    # its image, this deferral does NOT self-heal: every later non-max run skips
+    # here while the AC6 drift guard stays red (main-health-monitor escalates to
+    # a ci/main-broken issue). The target is merged into main, so republishing
+    # it passes the build's ancestry check; never delete it (its name cannot be
+    # reused, and deleting a merged tag is not the fix).
+    echo "::warning::crane could not resolve ${IMAGE}:${TARGET} (signed=${SIGNED_TAG}) — deferring to that newer tag's own publish; if that publish is dead, republish vinngest-${TARGET} (workflow_dispatch) — this deferral does not self-heal"
     emit_result skipped
-    summary "### inngest-bootstrap pin bump"$'\n\n'"Deferred: \`${TARGET}\` is ahead of this run's signed tag \`${SIGNED_TAG}\`; its own publish resolves the pin. If that publish died before pushing the image, republish \`vinngest-${TARGET}\` or delete the tag — deferral alone does not self-heal."
+    summary "### inngest-bootstrap pin bump"$'\n\n'"Deferred: \`${TARGET}\` (the semver-max merged tag) is newer than this run's signed tag \`${SIGNED_TAG}\`; its own publish resolves the pin. If that publish died before pushing the image, republish \`vinngest-${TARGET}\` — deferral alone does not self-heal."
     exit 0
   fi
-  die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err")"
+  # A merged target with no image is the "off main is a point-in-time verdict"
+  # case (ADR-232 §7): a tag refused at push time and merged later. Name the
+  # remedy, since every later publish lands here until the image exists.
+  die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err") — if vinngest-${TARGET} never published an image (its build refused or died before pushing), republish vinngest-${TARGET} (workflow_dispatch); it is merged into main, so never delete it"
 fi
 RESOLVED=$(grep -oE '^sha256:[0-9a-f]{64}$' "$WORK/digest" | head -1 || true)
 [[ -n "$RESOLVED" ]] \
@@ -287,7 +300,7 @@ if [[ "$SIGNED_TAG" == "$TARGET" ]]; then
   [[ "$SIGNED_DIGEST" == "$RESOLVED" ]] \
     || die resolve "signed digest ${SIGNED_DIGEST} != registry-resolved ${RESOLVED} for ${TARGET} — sign/drift divergence is a stop-the-line event"
 else
-  echo "::notice::signed tag ${SIGNED_TAG} is not the semver-max target ${TARGET} (dispatch/mirror_only backfill) — skipping the signed-vs-resolved digest cross-check"
+  echo "::notice::signed tag ${SIGNED_TAG} is not the semver-max target ${TARGET} (dispatch/mirror_only backfill, or the signed tag is not merged into main) — skipping the signed-vs-resolved digest cross-check"
 fi
 echo "target=${TARGET} resolved=${RESOLVED}"
 
@@ -511,7 +524,7 @@ elif [[ -n "$PR_NUM" && "$RESULT_KIND" == "opened" ]]; then
   if [[ "$PROVENANCE" != "bound" ]]; then
     hold_reason="\`${RESOLVED}\` carries no \`org.opencontainers.image.revision\` label, so nothing ties it to commit \`${TARGET_COMMIT}\` (#8747); confirm its provenance"
   elif [[ "$SIGNED_TAG" != "$TARGET" ]]; then
-    hold_reason="this publish signed non-max tag \`${SIGNED_TAG}\`; the max tag's zot state is attested by its own publish"
+    hold_reason="this publish signed \`${SIGNED_TAG}\`, which is not the pin target \`${TARGET}\`; the target's zot state is attested by its own publish"
   else
     hold_reason="the zot mirror reported \`mirror_status=${MIRROR_STATUS:-unset}\` for this publish"
   fi

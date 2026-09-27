@@ -643,3 +643,15 @@ entry records what changes in them.
 - **Unchanged.** D1a, D1b, D2, D3, D4 and D5 are untouched. The access path, the dedicated root key
   and the read credential are the same; ADR-239 changes what the host serves, not how CI reaches
   root on it.
+
+### 2026-09-27 (#8211 PR2): the store probes read the LUKS-served store
+
+The probe chain is now a configuration check (`probe=config`), then `store-mounted`,
+`store-on-mapper`, one ssh session reporting `store-verified` and `store-empty`, then `fence-shape`
+([ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md), amendment 2026-09-27). One of the "three
+store probes" the D5 row for D1b names is retired, so that flip condition is restated. **Departing
+from the 2026-09-21 entry**, which judged D1b on the access gate and the store probes only, the fence
+probe is now part of it too, because the flip evidence is the run's exit 0: **D1b flips on a dispatch
+from `main` that reads `role=git-data-auth verdict=ok` with the store probes and the fence probe
+clear.** The caveat is unchanged: a pinned host authenticates the host, not the truth of its answers.
+Dated text above is not rewritten.

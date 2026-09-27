@@ -24,6 +24,7 @@ const {
   mockGetUserServiceTokens,
   mockPatchWorkspacePermissions,
   mockReportSilentFallback,
+  mockInfoSilentFallback,
   mockSendToClient,
   mockBuildAgentEnv,
   mockBuildAgentSandboxConfig,
@@ -53,6 +54,7 @@ const {
   mockGetUserServiceTokens: vi.fn(),
   mockPatchWorkspacePermissions: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  mockInfoSilentFallback: vi.fn(),
   mockSendToClient: vi.fn(),
   mockBuildAgentEnv: vi.fn(),
   mockBuildAgentSandboxConfig: vi.fn(),
@@ -220,6 +222,7 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  infoSilentFallback: mockInfoSilentFallback,
   // #5733 — reportAgentReadinessSelfStop pre-hashes the workspace id via hashUserId.
   hashUserId: (s: string) => `hash-${s}`,
   // #3369: mirrorWithDebounce extracted to observability.
@@ -524,6 +527,51 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         rerendered: true,
         diagnostic: null,
       }),
+    );
+    // #8966 — the emit is counted with its outcome: the silent-fallback
+    // incidence is a rate, and a rate needs the success denominator.
+    expect(mockInfoSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "c4-save-outcome",
+        tags: { outcome: "rerendered" },
+      }),
+    );
+  });
+
+  // #8966 — the rerendered:false arm counts too (the numerator of the rate).
+  it("a non-rerendered edit_c4_diagram counts outcome=rerendered-false on the same feature slug", async () => {
+    mockGetCurrentRepoUrl.mockResolvedValueOnce(
+      "https://github.com/acme/kb-repo",
+    );
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockResolveC4FlagEnabled.mockResolvedValueOnce(true);
+
+    await realSdkQueryFactory(makeArgs());
+    const tools =
+      mockQuery.mock.calls[0][0].options.mcpServers.soleur_platform.tools;
+    const c4 = (tools ?? []).find(
+      (t: { name: string }) => t.name === "edit_c4_diagram",
+    );
+    mockWriteC4Diagram.mockResolvedValueOnce({
+      ok: true,
+      commitSha: "abc123",
+      rerendered: false,
+      rerenderDiagnostic: "render failed",
+    });
+    await c4.handler({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+
+    await vi.waitFor(() =>
+      expect(mockInfoSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({
+          feature: "c4-save-outcome",
+          tags: { outcome: "rerendered-false" },
+        }),
+      ),
     );
   });
 

@@ -240,6 +240,11 @@ standing in for git-data. A pinned key authenticates the host, not its answers, 
 `store_not_empty` and the bounded probes stay. ADR-068's host-key gate (its 2026-09-21
 amendment) is discharged.
 
+> **2026-09-27 (#8211 PR2, proof half):** the store probes were rebuilt for the LUKS-served store
+> ([ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md), amendment 2026-09-27), so the dry run no
+> longer stops at `already_cut_over`. Post-merge step 5 is unblocked on the first `verdict=clear` run;
+> its procedure is host-key step 5 in the LUKS cutover runbook.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md`

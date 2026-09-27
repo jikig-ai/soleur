@@ -109,9 +109,13 @@ includes.
 ## Validate
 
 ```bash
-npx -y likec4@latest validate .                 # parse + check references
-npx -y likec4@latest export json -o "$(mktemp)" .  # element/relation/view counts
+npx -y likec4@1.50.0 validate --no-use-dot .                 # parse + check references
+npx -y likec4@1.50.0 export json --no-use-dot -o "$(mktemp)" .  # element/relation/view counts
 ```
+
+Pin the version every writer pins (`likec4@1.50.0`, the `LIKEC4_VERSION` constant) and always pass
+`--no-use-dot`: inside a container likec4 defaults to the graphviz `dot` binary, which produces a
+different layout than the server's wasm render — or, without graphviz, a zero-view model.
 
 Export to a temp path, as above, never into the diagrams directory. Never write raw `export json`
 output onto the committed `model.likec4.json`. Every writer publishes the canonical
