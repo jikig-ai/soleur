@@ -273,3 +273,58 @@ This addendum amends nothing above. It narrows three statements and records two 
    Art. 33(2) notice are re-derived from the Inngest function manifest before any notice is sent.
 4. **Pointers.** The RECOMMENDED drift assertion (§Conditions) is tracked in #8870. The clause (o)
    staleness named under §PROCESS — published documents is tracked in #8872.
+
+## Addendum — 2026-09-27 (restored marker: the post-replace check passed; interval 3 is closed)
+
+This addendum amends nothing above. It records the check that §Post-replace verification
+prescribes, and the interval-3 re-read that item 1 of the 2026-09-25 addendum requires.
+
+1. **The replace.** `inngest-host-replace` run 36327637204 was dispatched from `main` at
+   517bf59d85, after PR #8831 and PR #8873 merged, and concluded `success`. The cutover resume
+   (`cutover-inngest.yml`, `op=resume`, run 36327875467) succeeded and finished at
+   2026-09-27T15:29:49Z.
+2. **The post-replace check (Hetzner API, GET only, measured at about 15:02Z).** Both conditions
+   of §Post-replace verification hold:
+   - the new server 167651172 (`soleur-inngest`, created 2026-09-27T14:56:48Z, `running`, public
+     IPv4 95.217.161.110) has `public_net.firewalls` = [11269127: `applied`];
+   - firewall 11269127 (`soleur-inngest`, 0 rules) has `applied_to` = [server 167651172].
+
+   The old server 167310350 returns 404: it is deleted. As corroboration outside the check, TCP
+   connects from the operator workstation to 95.217.161.110 on ports 22, 8288 and 6379 all timed
+   out after 8 s. They were dropped, not refused, which is consistent with the deny-all firewall.
+3. **Interval 3 ends at the replace.** The old host was deleted at about 14:56Z on 2026-09-27. Its
+   replacement was created with the firewall applied inside ServerCreate. Interval 3 therefore ran
+   from 2026-09-09 15:14 UTC to about 2026-09-27 14:56 UTC. This closes the "at least 2026-09-25"
+   end in the frontmatter `exposure_window` and in §The measured intervals. The log side shows the
+   same change: shipped sshd rows from host `soleur-inngest` were 141 for 14:00–14:56Z and 0 for
+   15:00–16:30Z (queried at 16:01Z).
+4. **L1, the interval-3 tail (2026-09-25 addendum, item 1).** Better Stack, exact strings, per-day
+   windows, limit 5000, no window saturated. The window is 2026-09-25T00:00:00Z to
+   2026-09-27T15:10:00Z. It starts before the 2026-09-25 read, so the overlap is conservative, and
+   it ends after the post-replace measurement.
+   - `Accepted publickey`: 21 rows. 16 are from `soleur-web-platform`. 5 are from host
+     `soleur-inngest` (2026-09-25T11:17:13–14Z), and none of them is an sshd row. All five carry
+     `SYSLOG_IDENTIFIER=doppler` in unit `inngest-server.service`. They are Inngest event-log rows
+     for GitHub webhooks (issue opened, labeled, milestoned) whose bodies quote the phrase: the
+     #8846 self-poisoning class. **sshd `Accepted publickey` from `soleur-inngest`: 0.**
+   - `session opened for user`: 16 rows, all from `soleur-web-platform`. **From `soleur-inngest`:
+     0.**
+   - Coverage: the host's journal was shipping throughout. sshd `preauth` rows from
+     `soleur-inngest` per 12 h window: 1527, 1363, 2131, 1837 and 1806 (the last window ends at
+     15:10Z). Coverage verdict: Better Stack, sshd rows from host `soleur-inngest`, the whole
+     window.
+
+   Both counts are zero, so nothing flips under §If the finding flips.
+5. **Effect on this determination: none.** NO PERSONAL-DATA BREACH ESTABLISHED; Art. 33 No;
+   Art. 34 No. L1 is RESOLVED for interval 2 and for the whole of interval 3. L1 for interval 1
+   and L2 for destroyed hosts stay INCONCLUSIVE. L3 stays PROVISIONAL pending #8867. Under
+   §Conditions, the REQUIRED replace and post-replace check are discharged. The REQUIRED L3
+   close-out is not.
+6. **Where the marker is carried.** Restored markers dated 2026-09-27 are appended at:
+   - the Art. 30 PA-13 §(e) and §(g) TOM (11)(a) markers;
+   - the 2026-09-25 row of `knowledge-base/legal/breach-register.md`;
+   - the correction blocks of the two DPIA screenings and the LIA;
+   - `knowledge-base/engineering/operations/runbooks/inngest-server.md`;
+   - both ADR-030 corrections, and ADR-100's 2026-09-25 addendum;
+   - the counsel review `2026-09-counsel-review-8754.md` (its re-evaluation trigger (1));
+   - the post-mortem `inngest-host-no-cloud-firewall-8754-postmortem.md`.
