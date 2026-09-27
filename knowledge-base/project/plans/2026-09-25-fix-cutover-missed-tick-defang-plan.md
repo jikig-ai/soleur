@@ -551,6 +551,18 @@ git-history-analyzer and a verify-the-negative sweep. Applied:
   re-fire lines for ticks that were never due. Acting on one double-fires a cron: a duplicate
   `cron-action-required-sla` notification email to a user, or a second `cron-workspace-gc` /
   `cron-rule-prune` sweep over a user's workspace or rules.
+- **If the recovery procedure is followed on weak evidence, the user experiences the same
+  double-fire.** *[Added at review, 2026-09-27.]* A Sentry `missed` check-in is not proof a tick
+  never ran: the heartbeat is best-effort, and ADR-100's 2026-09-19 addendum measured the
+  scheduler draining each missed tick once on resume. Mitigation: the runbook now requires no
+  `routine_runs` row for the cron since the tick (read after the host has resumed) before the
+  Sentry check, matches the Sentry row by `expectedTime`, and treats any read error as "do not
+  re-fire". Both reads were verified live.
+- **If a skipped tick that matters is never recovered, the user experiences a missing run** (for
+  example a quarterly `cron-rule-prune`). Scoped out: the list is off by default by design, and
+  a monitored cron opens a Sentry issue once its `failure_issue_threshold` of missed check-ins is
+  reached (1 for most monitors, measured 68 of 71); unmonitored crons keep the accepted ADR-100
+  residual.
 - **If this leaks, the user's data is exposed via:** no new vector. The output is function UUIDs and
   bucket timestamps only (AC-NOBODY holds), the input is a boolean, and it reaches the shell only
   through `env:`, never interpolated into `run:`.

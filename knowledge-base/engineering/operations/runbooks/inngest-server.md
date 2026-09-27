@@ -2204,8 +2204,9 @@ fail-safe: if you cannot complete one, stop at step 1.
 1. **Default: do nothing.** A tick skipped in the gap is the accepted residual above, and the
    cron's next scheduled tick runs normally. For a low-frequency cron that next tick can be far
    off (`cron-rule-prune` is quarterly). Monitored crons page on their own: each Sentry monitor in
-   `apps/web-platform/infra/sentry/cron-monitors.tf` opens an issue on a missed check-in
-   (`failure_issue_threshold`), so a miss that matters surfaces without this procedure.
+   `apps/web-platform/infra/sentry/cron-monitors.tf` opens an issue once its
+   `failure_issue_threshold` of missed check-ins is reached (1 for most), so a miss that matters
+   usually surfaces without this procedure.
 2. Re-fire only when a skipped tick matters **and** all four checks hold:
    - (a) **You know the gap window.** It runs from the op=execute 2.2 quiesce to the moment the
      dedicated host's functions registered after 2.4, both timestamped in that op=execute run's
