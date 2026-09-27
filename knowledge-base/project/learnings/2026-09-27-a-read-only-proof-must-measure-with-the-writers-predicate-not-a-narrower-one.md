@@ -95,6 +95,8 @@ the proof passes a stricter-looking check that sees less. Two consequences:
    because the machine was contended (user constraint). Recovery: CI is the gate.
    **Prevention:** watch the runtime job by name on the head SHA before merge.
 
+9. **The runbook's dispatch step selected a `web-platform-release` run with `gh run list --commit <merge-sha>` and named no arm.** CI's `workflow-run-deploy-invariants` G8 caught it: each merge produces both a push run and a deploy run, so the unnamed selection reads the wrong one about half the time. Recovery: the step now uses `deploy-arm.sh find --wait` + `served`. **Prevention:** when prose tells someone to wait for a deploy, cite `plugins/soleur/scripts/deploy-arm.sh`, never a bare `gh run list`. Before pushing a runbook edit, run `plugins/soleur/test/workflow-run-deploy-invariants.test.sh`: it scans `knowledge-base/`, so no file-selected suite set picks it up.
+
 ## Tags
 
 category: security-issues

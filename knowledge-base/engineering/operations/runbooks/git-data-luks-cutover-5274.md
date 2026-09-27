@@ -282,8 +282,9 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       This repository and its Actions logs are public, and `workspace_id` is `auth.users.id`. The
       record carries counts and Sentry issue ids only.
    2. Dispatch `git-data-cutover.yml` from `main`, after the #8211 PR2 proof-half merge and its
-      `web-platform-release.yml` deploy have concluded (`gh run list --workflow web-platform-release.yml
-      --commit <merge-sha>`; waiting keeps the dry run off a host mid-redeploy). No per-id erasure
+      release deploy have concluded (`bash plugins/soleur/scripts/deploy-arm.sh find --wait
+      <merge-sha>` prints `DEPLOY=success`, and `deploy-arm.sh served <merge-sha>` prints `CONTAINS`;
+      waiting keeps the dry run off a host mid-redeploy). No per-id erasure
       trigger exists today, and none is needed before the first flag flip: the store cannot hold a
       repository while the flag has never been on.
 
