@@ -731,6 +731,7 @@ jobs:
               -target=github_repository_environment.workspaces_luks_cutover \
               -target=github_repository_environment.web_platform_infra_apply \
               -target=github_repository_environment_deployment_policy.web_platform_infra_apply_main \
+              -target=github_repository_environment_deployment_policy.web_platform_infra_apply_main_adopted \
               -target=github_repository_environment_deployment_policy.inngest_cutover_main \
               -target=github_repository_environment.infra_privileged \
               -target=github_repository_environment_deployment_policy.infra_privileged_main \
@@ -773,6 +774,9 @@ jobs:
               -target=betteruptime_heartbeat.inngest_prd \
               -target=betteruptime_policy.inngest \
               -target=doppler_secret.inngest_heartbeat_url_prd \
+              -target=betteruptime_heartbeat.git_data_prd \
+              -target=doppler_secret.git_data_heartbeat_url_prd \
+              -target=doppler_secret.zot_heartbeat_url_prd \
               -target=random_password.inngest_redis_password_prd \
               -target=doppler_secret.inngest_redis_password_prd \
               -target=github_actions_secret.supabase_access_token \

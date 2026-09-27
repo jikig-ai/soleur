@@ -74,7 +74,7 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-const TEST_FLOOR = 222;
+const TEST_FLOOR = 233;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1250,8 +1250,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.git_data",
   "hcloud_firewall.git_data",
   "hcloud_firewall_attachment.git_data",
-  "betteruptime_heartbeat.git_data_prd",
-  "doppler_secret.git_data_heartbeat_url_prd",
+  // betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd left this set
+  // (#8754): the "operator full apply" route they were excluded for no longer exists, so they ride
+  // the per-merge -target list, where the same apply's arm step measures a beat before arming. The
+  // birth route still refuses them (GIT_DATA_BIRTH_REFUSED).
   // #5274 Phase 3 (ADR-068) — the multi-host cluster's new resources all ride the
   // operator's MAINTENANCE-WINDOW apply, exactly like hcloud_server.web + the
   // git-data keys above, NOT the #5566 per-PR-CI class:
@@ -1260,10 +1262,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   - the spread placement group attaches to the RUNNING hcloud_server.web and
   //     forces a power-off reboot — a maintenance-window apply, same class as the
   //     host it groups;
-  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets belong to
-  //     the web-host cluster (SANs = web host private IPs) and ride the same
-  //     cluster apply (doppler_secret, not the CI-published token types the test
-  //     forces).
+  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets are
+  //     count-gated on var.host_proxy_tls_enabled (default false, #8754 / ADR-118
+  //     amendment) and exist only after the multi-host flip, which must move all
+  //     four to a -target list in the same change (doppler_secret, not the
+  //     CI-published token types the test forces).
   "tls_private_key.git_remove",
   "doppler_secret.git_remove_ssh_private_key",
   "hcloud_placement_group.web_spread",
@@ -1360,10 +1363,9 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.workspaces_luks_key",
   "hcloud_volume.workspaces_luks",
   "hcloud_volume_attachment.workspaces_luks",
-  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
-  // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
-  // (both excluded, applied together by the operator apply; the heartbeat is paused until the
-  // operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
+  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret (the
+  // same class the git-data heartbeat pair was until #8754 moved it to the per-merge -target list;
+  // this heartbeat is paused until the operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
   // rides the gated cutover -target set — so it does not affect the cutover destroy-guard.
   "betteruptime_heartbeat.workspaces_luks",
   "doppler_secret.workspaces_luks_heartbeat_url",
@@ -1414,7 +1416,8 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // doppler_secret.zot_heartbeat_url_prd removed (#6438 B3): it was a reserved-but-inert secret for
   // a never-built off-host probe; the web-host consumer probe now mints its own per-host heartbeat +
   // URL secret (betteruptime_heartbeat.web_zot_consumer / doppler_secret.web_zot_consumer_url, which
-  // DO ride the per-PR -target list), so this exclusion is obsolete.
+  // DO ride the per-PR -target list). The orphaned secret itself is destroyed by a bare per-merge
+  // -target (#8754, pinned by the PR-B describe below), so it needs no exclusion.
   "doppler_service_token.registry",
   // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
   // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
@@ -1466,13 +1469,12 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // the additive inngest_host dispatch job (stripDispatchJobs excludes that job from the
   // coverage set, so this exclusions entry — not the -target line — is the load-bearing coverage).
   "doppler_secret.inngest_betterstack_logs_token",
-  // #6780 (ADR-134) — the promoted config-refresh digest pointer, minted into the ISOLATED
-  // soleur-inngest/prd project (inngest-config-digest.tf). DELIBERATELY has NO per-PR CI -target:
-  // the boot isolation self-check on soleur-inngest/prd is EXACT-SET, so this secret can be applied
-  // ONLY atomically with the cloud-init regex+floor admission that rides the #6178 cutover — a
-  // per-PR apply would brick the sole scheduler at its next boot. Rides the operator/cutover apply,
-  // exactly like the sibling isolated-inngest secrets above; `doppler_secret`, not a CI-published
-  // token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
+  // #6780 (ADR-135) — the promoted config-refresh digest pointer, minted into the ISOLATED
+  // soleur-inngest/prd project (inngest-config-digest.tf). No per-PR -target: it is count-gated on a
+  // non-empty TF_VAR (#8754), and promotion is a separate-principal apply (HARD-6) whose route is not
+  // built yet (#9060). The cloud-init regex already admits the name; the remaining coupling is the
+  // isolation floor 5->6 bump, which rides the first promotion. `doppler_secret`, not a
+  // CI-published token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
   // independent and carries a normal -target — see apply-web-platform-infra.yml.)
   "doppler_secret.inngest_config_digest",
   "doppler_service_token.inngest",
@@ -3676,6 +3678,21 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
 });
 
 /**
+ * One shell command out of a job block: its first line (the first line matching `start`) through
+ * the first line with no trailing backslash. `\\$`, not `\\\s*$`: bash does not continue a line
+ * whose backslash is followed by a space, so neither does this. Throws unless exactly one line
+ * matches, so a second matching command can never silently become the one under test.
+ */
+function commandIn(jobBlock: string, start: RegExp): string {
+  const lines = jobBlock.split("\n");
+  const hits = lines.filter((l) => start.test(l)).length;
+  if (hits !== 1) throw new Error(`commandIn: ${hits} lines match ${start}, expected exactly 1`);
+  const i = lines.findIndex((l) => start.test(l));
+  const end = lines.findIndex((l, j) => j >= i && !/\\$/.test(l));
+  return lines.slice(i, end < 0 ? lines.length : end + 1).join("\n");
+}
+
+/**
  * #8754: under -target, `removed { from = hcloud_firewall_attachment.inngest … }` is planned only
  * if its address is targeted, so the forget must ride the `apply` job's SAVED plan (`terraform plan
  * … -out=tfplan`, the one the destroy guard grades), not the post-bridge `terraform apply`. The
@@ -3685,16 +3702,8 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
 describe("#8754 inngest firewall attachment forget rides the per-merge saved plan", () => {
   const ADDR = "hcloud_firewall_attachment.inngest";
   const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
-  // One shell command: its first line through the first line with no trailing backslash.
-  const command = (start: RegExp): string => {
-    const lines = applyJob.split("\n");
-    const i = lines.findIndex((l) => start.test(l));
-    if (i < 0) return "";
-    const end = lines.findIndex((l, j) => j >= i && !/\\\s*$/.test(l));
-    return lines.slice(i, end < 0 ? lines.length : end + 1).join("\n");
-  };
-  const savedPlan = command(/^\s*terraform plan\b.*-out=tfplan/);
-  const postBridge = command(/^\s*terraform apply -auto-approve -input=false \\$/);
+  const savedPlan = commandIn(applyJob, /^\s*terraform plan\b.*-out=tfplan/);
+  const postBridge = commandIn(applyJob, /^\s*terraform apply -auto-approve -input=false \\$/);
 
   test("the address is -targeted inside the saved-plan command", () => {
     expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
@@ -3706,6 +3715,155 @@ describe("#8754 inngest firewall attachment forget rides the per-merge saved pla
     expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
+  });
+});
+
+/**
+ * #8754 PR-B: the standing drift tail. Every address below sat in every drift report since #7316
+ * because no workflow could apply it (classification: the #8754 plan's per-resource table). The
+ * per-merge SAVED plan is the route that now converges the ones that should exist, so the positive
+ * rows read that command. The negative rows ("never targeted", "never overridden") read the whole
+ * write surface: every workflow that plans this root, in either `-target` spelling.
+ */
+describe("#8754 PR-B standing tail converges on the per-merge saved plan", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(stripComments(extractJobBlock(wf, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+  const planTargets = extractAllTargets(savedPlan);
+  // Every workflow that runs terraform against this root, comment-stripped.
+  const writeSurface = [WEB_PLATFORM_WORKFLOW, DEPLOY_PIPELINE_FIX_WORKFLOW]
+    .map((p) => stripComments(readFileSync(p, "utf8")))
+    .join("\n");
+  // Terraform accepts `-target=ADDR` and `-target ADDR`; extractAllTargets sees only the first.
+  // The leading `[a-z]` skips `--target 127.0.0.1:5000`-style flags of other tools.
+  const anyFormTargets = new Set(
+    [...writeSurface.matchAll(/(?<![\w-])--?target(?:=|\s+)['"]?([a-z][a-z0-9_]*\.[A-Za-z0-9_]+)/g)].map((m) => m[1]),
+  );
+  const tf = (name: string): string => stripComments(readFileSync(join(INFRA_DIR, name), "utf8"));
+  // The body of the first top-level block whose header matches, brace-matched. "" when absent, so
+  // a renamed or deleted block reds the row that reads it instead of passing on nothing.
+  const block = (text: string, header: RegExp): string => {
+    const m = header.exec(text);
+    if (!m) return "";
+    let depth = 0;
+    for (let i = text.indexOf("{", m.index); i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}" && --depth === 0) return text.slice(m.index, i + 1);
+    }
+    return "";
+  };
+  const allTf = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const missingFrom = (addrs: string[], set: Set<string>): string[] => addrs.filter((a) => !set.has(a));
+  const presentIn = (addrs: string[], set: Set<string>): string[] => addrs.filter((a) => set.has(a));
+
+  test("the saved plan and the write surface are found (non-vacuity), and no config hides in *.tf.json", () => {
+    expect(planTargets.has("cloudflare_bot_management.soleur_ai")).toBe(true);
+    expect(planTargets.size).toBeGreaterThan(100);
+    expect(anyFormTargets.has("cloudflare_bot_management.soleur_ai")).toBe(true);
+    // listInfraTfFiles reads *.tf only; Terraform also loads *.tf.json, where a resource or a
+    // removed block would escape every row below.
+    expect(readdirSync(INFRA_DIR).filter((f) => f.endsWith(".tf.json"))).toEqual([]);
+  });
+
+  test("the git-data heartbeat pair is per-merge targeted, no longer an exclusion, and still refused by the birth", () => {
+    const pair = ["betteruptime_heartbeat.git_data_prd", "doppler_secret.git_data_heartbeat_url_prd"];
+    const birth = extractAllTargets(extractJobBlock(wf, "git_data_host_create"));
+    expect(birth.has("hcloud_server.git_data")).toBe(true); // non-vacuity
+    expect(missingFrom(pair, planTargets)).toEqual([]);
+    expect(pair.filter((a) => OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    expect(presentIn(pair, birth)).toEqual([]);
+  });
+
+  test("the deployment policy is adopted by import into a NEW, destroy-proof address and the phantom address is forgotten", () => {
+    const OLD = "github_repository_environment_deployment_policy.web_platform_infra_apply_main";
+    const NEW = `${OLD}_adopted`;
+    const src = tf("web-host-birth-environment.tf");
+    // Both addresses ride the saved plan: an import or a removed block is planned only when its
+    // address is targeted, and the old address must be targeted for its forget to be planned.
+    expect(missingFrom([OLD, NEW], planTargets)).toEqual([]);
+    const res = block(src, /^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main_adopted"\s*\{/m);
+    expect(res).toMatch(/^\s*branch_pattern\s*=\s*"main"\s*$/m);
+    // The adopting merge carries a count-based [ack-destroy]; this keeps it off the pin.
+    expect(res).toMatch(/^\s*prevent_destroy\s*=\s*true\s*$/m);
+    expect(allTf).not.toMatch(/^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main"\s*\{/m);
+    const imp = block(src, /^import\s*\{/m);
+    expect(imp).toMatch(new RegExp(`^\\s*to\\s*=\\s*${escapeRe(NEW)}\\s*$`, "m"));
+    expect(imp).toMatch(/^\s*id\s*=\s*"soleur:web-platform-infra-apply:49861552"\s*$/m);
+    const rem = block(src, /^removed\s*\{/m);
+    expect(rem).toMatch(new RegExp(`^\\s*from\\s*=\\s*${escapeRe(OLD)}\\s*$`, "m"));
+    expect(rem).toMatch(/^\s*destroy\s*=\s*false\s*$/m);
+  });
+
+  test("the orphaned ZOT_HEARTBEAT_URL secret is destroyed by a bare -target, never kept or forgotten", () => {
+    const ADDR = "doppler_secret.zot_heartbeat_url_prd";
+    expect(planTargets.has(ADDR)).toBe(true);
+    // A bare target on an address with no configuration plans its DESTROY. A resource block (under
+    // this address or any other that names the secret) would keep the value in Doppler prd; a
+    // removed block would forget it and leave the value there too.
+    expect(allTf).toContain('resource "doppler_secret" "zot_pull_token"'); // non-vacuity
+    expect(allTf).not.toMatch(/resource\s+"doppler_secret"\s+"zot_heartbeat_url_prd"/);
+    expect(allTf).not.toMatch(/^\s*name\s*=\s*"ZOT_HEARTBEAT_URL"\s*$/m);
+    expect(allTf).not.toMatch(/from\s*=\s*doppler_secret\.zot_heartbeat_url_prd\b/);
+  });
+
+  test("bot management declares the live SBFM values and does not ignore them", () => {
+    const res = block(tf("bot-management.tf"), /^resource\s+"cloudflare_bot_management"\s+"soleur_ai"\s*\{/m);
+    expect(res).toMatch(/^\s*fight_mode\s*=\s*false\s*$/m); // non-vacuity
+    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*"allow"\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*"allow"\s*$/m);
+    // Declared, not ignored: a dashboard flip to "block" must stay visible as drift.
+    expect(res).not.toMatch(/ignore_changes/);
+  });
+
+  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default false", () => {
+    const src = tf("proxy-tls.tf");
+    const quartet: Array<[string, string]> = [
+      ["tls_private_key", "proxy_server"],
+      ["tls_self_signed_cert", "proxy_server"],
+      ["doppler_secret", "proxy_tls_key"],
+      ["doppler_secret", "proxy_tls_cert"],
+    ];
+    const ungated = quartet
+      .filter(([type, name]) => !/^\s*count\s*=\s*var\.host_proxy_tls_enabled\s*\?\s*1\s*:\s*0\s*$/m.test(
+        block(src, new RegExp(`^resource\\s+"${type}"\\s+"${name}"\\s*\\{`, "m")),
+      ))
+      .map(([type, name]) => `${type}.${name}`);
+    expect(ungated).toEqual([]);
+    const v = block(tf("variables.tf"), /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
+    expect(v).toMatch(/^\s*type\s*=\s*bool\s*$/m);
+    expect(v).toMatch(/^\s*default\s*=\s*false\s*$/m);
+  });
+
+  test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
+    const res = block(tf("inngest-config-digest.tf"), /^resource\s+"doppler_secret"\s+"inngest_config_digest"\s*\{/m);
+    expect(res).toMatch(/^\s*count\s*=\s*var\.inngest_config_digest\s*!=\s*""\s*\?\s*1\s*:\s*0\s*$/m);
+    const v = block(tf("variables.tf"), /^variable\s+"inngest_config_digest"\s*\{/m);
+    expect(v).toMatch(/^\s*default\s*=\s*""\s*$/m);
+  });
+
+  test("no workflow targets the gated resources or overrides their gate variables", () => {
+    const gated = [
+      "tls_private_key.proxy_server",
+      "tls_self_signed_cert.proxy_server",
+      "doppler_secret.proxy_tls_key",
+      "doppler_secret.proxy_tls_cert",
+      "doppler_secret.inngest_config_digest",
+    ];
+    expect(presentIn(gated, anyFormTargets)).toEqual([]);
+    expect(gated.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    // A `-var`/TF_VAR_ override in a workflow would flip the gate without touching variables.tf.
+    expect(writeSurface).not.toMatch(/\bhost_proxy_tls_enabled\b/);
+    expect(writeSurface).not.toMatch(/-var[= ]+['"]?inngest_config_digest=|TF_VAR_inngest_config_digest/);
+  });
+
+  test("the infra-validation plan job can read deployment policies, and gains no write scope", () => {
+    const iv = parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows/infra-validation.yml"), "utf8")) as {
+      jobs: Record<string, { permissions?: Record<string, string> }>;
+    };
+    const perms = iv.jobs.plan?.permissions ?? {};
+    expect(perms.actions).toBe("read");
+    expect(perms.contents).toBe("read");
+    const writes = Object.entries(perms).filter(([, v]) => v === "write").map(([k]) => k);
+    expect(writes).toEqual(["pull-requests"]);
   });
 });
 

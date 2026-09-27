@@ -422,7 +422,10 @@ before editing `.tf`.
       policy address, and `- doppler_secret.zot_heartbeat_url_prd`. There must be **no**
       `cloudflare_bot_management` entry. Any other address halts verification and is classified.
 2.3 After 2B, read the arm step's verdict for `git-data-prd`. ARMED and rolled-back-to-paused both
-    leave no drift. Record a rollback on #6548.
+    leave no drift, but a rollback also fails the arm step (red apply, ops email) and repeats on
+    every later merge until a beat lands. Record a rollback on #6548. (Measured before merge,
+    2026-09-27: both web hosts logged `GIT_DATA_HEARTBEAT_URL unset — reachable but cannot ping`
+    every 60 s, so the feeder should beat within the 200 s arm window.)
 2.4 After each merge, dispatch `scheduled-terraform-drift.yml` by hand. It is a read-only plan, and
     its Inngest cron trigger shares the #8833 outage. Post the residual on #8754 and re-check the
     issue's state.

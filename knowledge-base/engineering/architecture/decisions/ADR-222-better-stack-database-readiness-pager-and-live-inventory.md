@@ -214,9 +214,10 @@ arm checks declared alerts only and does not report undeclared ones.
   fail), both keep `"supabase":"connected"` and do not page, although users cannot sign in or
   save.
 - **A hand-made replacement of an untargeted heartbeat is read as managed.** Heartbeats join on
-  name, and the reconcile has no tfstate access. The four heartbeats in the parity test's
-  `OPERATOR_APPLIED_EXCLUSIONS` (`git_data_prd`, `workspaces_luks`, `registry_prd`,
-  `registry_disk_prd`) have no per-merge `-target`. A vendor-side replacement of one of them that
+  name, and the reconcile has no tfstate access. The heartbeats in the parity test's
+  `OPERATOR_APPLIED_EXCLUSIONS` have no per-merge `-target`: four when this was written
+  (`git_data_prd`, `workspaces_luks`, `registry_prd`, `registry_disk_prd`), three since
+  `git_data_prd` moved to the per-merge list in #8754. A vendor-side replacement of one of them that
   reuses the declared name matches its declaration and is not reported.
 - **Only uptime monitors and heartbeats are inventoried.** Status pages, on-call calendars,
   escalation policies, webhooks and undeclared Logs alerts (such as the paused
