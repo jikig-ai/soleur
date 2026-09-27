@@ -130,7 +130,7 @@ git grep -nIiE 'ghcr[_-]read|ghcr[_-]minter|ghcr-token-minter|ghcr_token|GHCR_US
 | `.github/workflows/reusable-release.yml:908,1248` | historical-record-leave (why the release does not use GHCR reads) |
 | `.github/workflows/apply-web-platform-infra.yml:3380,3990`, `scripts/registry-restore-from-ghcr.sh`, `scripts/registry-pull-path-health.sh` (`GHCR_USER`/`GHCR_TOKEN` = the Actions `GITHUB_TOKEN`) | keep — a different credential (CI-side restore source, ADR-169) |
 | `scripts/followthroughs/ghcr-read-retired-8036.sh` + test, `suite-shard-legs.tsv`, `test-all.sh`, `sweep-followthroughs.sh`, `zot-login-gate-erofs-repaired-6565.sh` | keep — journald probe of the #8036 1c deploy path, reads no Doppler key |
-| `scripts/followthroughs/inngest-soak-6178.sh` | historical-record-leave (explains a past catch-up window) |
+| `scripts/followthroughs/inngest-soak-6178.sh` | [Updated at review] **edit**: the name-grep hit is a historical comment, but the probe pins the minter by UUID in `inngest-soak-6178.function-ids.txt`; `RETIRED_IDS` added (review P1) |
 | `scripts/lint-followthrough-varq-ban.sh:35`, `scripts/rotate-sentry-actions-ro-token.sh:209` | historical-record-leave (examples in comments; both files are shell-lint baselined, so a drive-by edit owes unrelated debt) |
 | `plugins/soleur/test/preflight-discoverability-test.test.ts:2735` | historical-record-leave (a plan-file count note) |
 | `apps/web-platform/infra/doppler-config-inventory.txt` `prd_ghcr`, `scripts/check-cloudflare-token-drift.test.sh` fixtures | keep — the `prd_ghcr` config still exists live; its removal is deferred |
