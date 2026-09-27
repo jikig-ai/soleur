@@ -477,11 +477,27 @@ fi
 # both shapes. The MILESTONE arm below stays scoped to `gh issue create` --
 # `gh api` takes no --milestone flag, so requiring one there would deny every
 # legitimate API filing.
+# Endpoint scope: only the issues COLLECTION (`repos/<o>/<r>/issues`, optional
+# trailing `/` and `?query`) creates an issue -- a POST to `issues/<N>/labels`,
+# `/comments` or `/assignees` edits an existing one and is not a filing. The
+# endpoint and its POST signal must share one command segment, so a command that
+# lists issues and then labels them is not a filing either. The source is $SCAN,
+# so a QUOTED endpoint is invisible here (pre-existing; tokenizer fix on #9089).
+# Owner/repo stays ONE word so an unexpanded `$REPO` still matches; the
+# terminator is a closed list, and `$`/`}` are accepted only with no `/` before
+# them (`issues$QS` gates, `issues/$N/labels` does not). Mirror that must agree:
+# filingShape() in apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs.
 _gh_create=0; _gh_api_issue=0
 grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN" && _gh_create=1
-grep -qE 'gh\s+api\b[^|]*\brepos/[^[:space:]]+/issues\b' <<<"$SCAN" \
-  && grep -qE '(-X|--method)[[:space:]]+POST|-f[[:space:]]+title=|--field[[:space:]]+title=' <<<"$SCAN" \
-  && _gh_api_issue=1
+if grep -qE 'gh\s+api\b' <<<"$SCAN"; then
+  _api_segs="$(printf '%s' "$SCAN" | perl -0777 -pe 's/\\\n/ /g; s/\\[;&|]/_/g; s/&&|\|\||[;&|]/\n/g' 2>/dev/null)" \
+    || _api_segs="$SCAN"
+  while IFS= read -r _api_seg; do
+    grep -qE 'gh\s+api\b.*\brepos/[^[:space:]]+/issues(/?([?[:space:]()<>`\\]|$)|[$}])' <<<"$_api_seg" \
+      && grep -qE '(^|[[:space:]])((-X|--method)[[:space:]=]*POST\b|--input([[:space:]=]|$)|(-f|-F)[[:space:]=]*title=|(--field|--raw-field)[[:space:]=]+title=)' <<<"$_api_seg" \
+      && { _gh_api_issue=1; break; }
+  done <<<"$_api_segs"
+fi
 if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
   # Exempt issue creation targeting an EXTERNAL repo (--repo owner/name where
   # owner is not our org). The constitution backlog-hygiene rule applies only to
@@ -706,7 +722,10 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
     while (( _fj_bi < ${#_repo_toks[@]} )); do
       _fj_bt="${_repo_toks[$_fj_bi]}"
       case "$_fj_bt" in
-        --body-file|-F) _fj_bf="${_repo_toks[$((_fj_bi + 1))]:-}" ;;
+        --body-file) _fj_bf="${_repo_toks[$((_fj_bi + 1))]:-}" ;;
+        # -F is --body-file only for `gh issue create`; for `gh api` it is a
+        # typed field (`-F title=x`), and reading it as a path mis-refuses.
+        -F) [[ "$_gh_create" == 1 ]] && _fj_bf="${_repo_toks[$((_fj_bi + 1))]:-}" ;;
         --body-file=*)  _fj_bf="${_fj_bt#--body-file=}" ;;
       esac
       _fj_bi=$((_fj_bi + 1))
@@ -820,7 +839,7 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
       jq -n '{
         hookSpecificOutput: {
           hookEventName: "PreToolUse", permissionDecision: "deny",
-          permissionDecisionReason: "BLOCKED: this filing names no user-visible consequence. Take ONE of three exits. (1) It is a finding about Soleur own verification machinery -- add --label meta/machinery. That ledger is excluded from the operator digest and from user-facing drains, and is the honest home for a guard/gate/ledger/probe finding. (2) It affects something a user receives -- add two lines to the body: `User-Impact: <named route, page, component, CLI command, email or document>` and `Fix-Size: <N> lines / <M> files` measured, not estimated. (3) A rule mandates the filing -- add `Mandated-By: <rule-id>` ON ITS OWN LINE in the body (the merge-boundary gate anchors it whole-line, so a claim written mid-sentence or in the title passes here and is refused there). \"The guard is imperfect\" is exit 1, not exit 2."
+          permissionDecisionReason: "BLOCKED: this filing names no user-visible consequence. Take ONE of three exits. (1) It is a finding about Soleur own verification machinery -- add --label meta/machinery. That ledger is excluded from the operator digest and from user-facing drains, and is the honest home for a guard/gate/ledger/probe finding. (2) It affects something a user receives -- add two lines to the body: `User-Impact: <named route, page, component, CLI command, email or document>` and `Fix-Size: <N> lines / <M> files` measured, not estimated. (3) A rule mandates the filing -- add `Mandated-By: <rule-id>` ON ITS OWN LINE in the body (the merge-boundary gate anchors it whole-line, so a claim written mid-sentence or in the title passes here and is refused there). \"The guard is imperfect\" is exit 1, not exit 2. On the gh api form, exit (1) is spelled `-f labels[]=meta/machinery`, and an --input JSON body is not read: pass the body with -f instead."
         }
       }'
       exit 0

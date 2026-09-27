@@ -482,24 +482,24 @@ Measured:
 
 ## Acceptance Criteria
 
-- [ ] `bash .claude/hooks/guardrails.test.sh` prints `Total: 160  Pass: 160  Fail: 0`, and
+- [x] `bash .claude/hooks/guardrails.test.sh` prints `Total: 160  Pass: 160  Fail: 0`, and
       `MIN_ASSERTIONS=160`.
-- [ ] The new rows are RED-before-GREEN against the **base** hook. Put
+- [x] The new rows are RED-before-GREEN against the **base** hook. Put
       `git show b3d5652e7b:.claude/hooks/guardrails.sh` and `git show b3d5652e7b:.claude/hooks/lib/…`
       into a scratch copy of the **whole** `.claude/hooks/` directory, never into the worktree.
       Pinning the SHA keeps the count stable if main moves. Every `FAIL:` line must be a new row,
       and there must be 18 of them. The other 15 already pass on main and pin non-regression. A hook
       copied without `lib/` emits nothing, and every row then reads as an allow.
-- [ ] The differential corpus (Test Scenarios step 2), run against the same base copy:
+- [x] The differential corpus (Test Scenarios step 2), run against the same base copy:
   - every deny → allow flip is a sub-resource path, `issues.json`, or `issues;`;
   - every allow → deny flip is a collection shape;
   - no `-X GET` command is denied.
-- [ ] `grep -cE '^[^#]*_gh_api_issue=' .claude/hooks/guardrails.sh` returns `2` (the initializer
+- [x] `grep -cE '^[^#]*_gh_api_issue=' .claude/hooks/guardrails.sh` returns `2` (the initializer
       plus the single assignment).
-- [ ] `bash -n .claude/hooks/guardrails.sh` passes, and
+- [x] `bash -n .claude/hooks/guardrails.sh` passes, and
       `python3 scripts/lint-shell-capture-exit.py .claude/hooks/guardrails.sh` reports 0 new
       findings.
-- [ ] `git diff --name-only origin/main...HEAD -- .claude/ apps/` lists exactly
+- [x] `git diff --name-only origin/main...HEAD -- .claude/ apps/` lists exactly
       `.claude/hooks/guardrails.sh` and `.claude/hooks/guardrails.test.sh`.
 
 ## Test Scenarios

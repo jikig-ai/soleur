@@ -823,6 +823,85 @@ assert "filing-justification: gh api GET issues is untouched" "<none>" \
 assert "filing-justification: gh api POST to another endpoint is untouched" "<none>" \
   'gh api -X POST repos/jikig-ai/soleur/labels -f name=x'
 
+# --- CLASS 4 endpoint scope: only the COLLECTION endpoint creates an issue.
+# `repos/[^[:space:]]+/issues\b` spanned `/`, so a POST to an EXISTING issue's
+# sub-resource (labels, comments, assignees) was denied as a new filing.
+assert "filing-justification: POST to issues/<N>/labels is not a filing" "<none>" \
+  "gh api -X POST repos/jikig-ai/soleur/issues/123/labels -f 'labels[]=type/bug'"
+assert "filing-justification: POST to issues/<N>/comments is not a filing" "<none>" \
+  'gh api -X POST repos/jikig-ai/soleur/issues/123/comments -f body=hi'
+assert "filing-justification: --method POST to issues/<N>/assignees is not a filing" "<none>" \
+  "gh api --method POST repos/jikig-ai/soleur/issues/123/assignees -f 'assignees[]=me'"
+assert "filing-justification: templated \$REPO/\$N sub-resource POST is not a filing" "<none>" \
+  "gh api -X POST repos/\$REPO/issues/\$N/labels -f 'labels[]=x'"
+assert "filing-justification: {number} placeholder sub-resource POST is not a filing" "<none>" \
+  "gh api -X POST repos/{owner}/{repo}/issues/{number}/labels --input l.json"
+# The endpoint and the POST signal must sit in the SAME command segment, so
+# listing issues and labelling them in one command is not a filing.
+assert "filing-justification: list-then-label loop is not a filing" "<none>" \
+  "for n in \$(gh api repos/jikig-ai/soleur/issues?labels=x --jq '.[].number'); do gh api -X POST repos/jikig-ai/soleur/issues/\$n/labels -f 'labels[]=y'; done"
+assert "filing-justification: list piped into a labelling xargs is not a filing" "<none>" \
+  "gh api repos/jikig-ai/soleur/issues --jq '.[].number' | xargs -I{} gh api -X POST repos/jikig-ai/soleur/issues/{}/labels -f 'labels[]=y'"
+assert "filing-justification: a quoted collection GET beside a comment POST is not a filing" "<none>" \
+  'gh api -X POST "repos/jikig-ai/soleur/issues/5/comments" -f body=x && gh api "repos/jikig-ai/soleur/issues?per_page=5"'
+# The collection endpoint still gates in every unquoted spelling gh routes to it.
+assert "filing-justification: collection ?query still gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues?x=1 -X POST -f title=x -f body=y'
+assert "filing-justification: collection trailing slash still gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues/ -X POST -f title=x -f body=y'
+assert "filing-justification: leading-slash /repos path still gates" "deny" \
+  'gh api /repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y'
+assert "filing-justification: full api.github.com URL still gates" "deny" \
+  'gh api https://api.github.com/repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y'
+assert "filing-justification: {owner}/{repo} placeholders still gate" "deny" \
+  'gh api repos/{owner}/{repo}/issues -X POST -f title=x -f body=y'
+assert "filing-justification: a single \$REPO word still gates" "deny" \
+  'gh api repos/$REPO/issues -X POST -f title=x -f body=y'
+assert "filing-justification: a variable glued after the collection still gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues$QS -X POST -f title=x -f body=y'
+assert "filing-justification: \${EP:-…} default-expansion endpoint still gates" "deny" \
+  'gh api ${EP:-repos/jikig-ai/soleur/issues} -X POST -f title=x -f body=y'
+assert "filing-justification: collection path glued to a redirect still gates" "deny" \
+  'gh api -X POST -f title=x -f body=y repos/jikig-ai/soleur/issues>out.json'
+assert "filing-justification: a quoted pipe in --jq does not split the create" "deny" \
+  "gh api -X POST --jq '.number|tostring' repos/jikig-ai/soleur/issues -f title=x -f body=y"
+assert "filing-justification: an escaped separator does not split the create" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -f x=\; -X POST -f body=y'
+assert "filing-justification: create after a sub-resource POST still gates" "deny" \
+  "gh api -X POST repos/jikig-ai/soleur/issues/5/labels -f 'labels[]=x' && gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y"
+assert "filing-justification: backslash-continued gh api gates" "deny" \
+  $'gh api \\\n  repos/jikig-ai/soleur/issues \\\n  -X POST -f title=x -f body=y'
+# POST spellings gh honours that the trigger did not read (measured on main: all ALLOWED).
+assert "filing-justification: -XPOST gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -XPOST -f body=y'
+assert "filing-justification: --method=POST gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues --method=POST -f body=y'
+assert "filing-justification: --input (gh defaults to POST) gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues --input b.json'
+assert_reason "filing-justification: an --input denial says the JSON is not read" \
+  "an --input JSON body is not read" \
+  'gh api repos/jikig-ai/soleur/issues -X POST --input b.json'
+assert "filing-justification: -F title= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -F title=x -f body=y'
+assert_reason "filing-justification: -F title= is refused for the justification, not as a --body-file" \
+  "names no user-visible consequence" \
+  'gh api repos/jikig-ai/soleur/issues -X POST -F title=x -f body=y'
+assert "filing-justification: api -F title= with a Mandated-By body reaches exit 3" "<none>" \
+  "gh api repos/jikig-ai/soleur/issues -X POST -F title=x -f 'body=Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps'"
+assert "filing-justification: --raw-field title= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues --raw-field title=x -f body=y'
+assert "filing-justification: attached short flag -ftitle= gates" "deny" \
+  'gh api repos/jikig-ai/soleur/issues -ftitle=x -f body=y'
+# Prose stays prose: quoted spans and heredoc bodies are blanked ($SCAN).
+assert "filing-justification: sub-resource POST whose body names the collection path is not a filing" "<none>" \
+  'gh api -X POST repos/jikig-ai/soleur/issues/5/comments -f body="use gh api repos/jikig-ai/soleur/issues -X POST to file"'
+assert "filing-justification: an api create inside a heredoc body is prose" "<none>" \
+  $'cat > /tmp/soleur-note.md <<\'EOF\'\nrun: gh api repos/jikig-ai/soleur/issues -X POST -f title=x\nEOF\ngh api repos/jikig-ai/soleur/labels --jq length'
+# The segment loop must not end the hook: gates after CLASS 4 still run.
+assert_reason "filing-justification: a later gate still runs after a non-filing gh api" \
+  "git stash is not allowed" \
+  'gh api repos/jikig-ai/soleur/labels --jq length; git stash'
+
 # --- Harness rows: the guard's OWN failure modes ---
 #
 # Row H1 — FAIL TOWARD GATING when the shared taxonomy is unreadable. A gate
@@ -1090,7 +1169,9 @@ fi
 # while the suite ran 127, so the four config rows this PR adds had zero cover:
 # deleting all four left 123/123 green, exactly at the floor. Slack in a floor is
 # attack budget, not padding — bump it in the same commit that adds rows.
-MIN_ASSERTIONS=127
+# 127 + 33 CLASS 4 endpoint-scope rows (sub-resource allows, collection denies,
+# newly read POST spellings, segment scoping) = 160.
+MIN_ASSERTIONS=160
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2
