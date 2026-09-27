@@ -110,9 +110,13 @@ mkdir -p "$FIXTURES"
 printf '#!/usr/bin/env bash\nexit 0\n'                              > "$FIXTURES/ok.sh"
 printf '#!/usr/bin/env bash\necho MARKER-FAIL-FX\nexit 1\n'         > "$FIXTURES/failfx.sh"
 printf '#!/usr/bin/env bash\necho MARKER-KILLED-FX\nkill -TERM $$\n' > "$FIXTURES/killedfx.sh"
-# The sleep duration is a UNIQUE token (617s) so fixture-process sweeps can
-# match it without touching an unrelated `sleep 60` on a shared box.
-printf '#!/usr/bin/env bash\necho MARKER-SLEEP-FX\nsleep 617\n'      > "$FIXTURES/sleepfx.sh"
+# The sleep duration is a UNIQUE-per-run token ($$-suffixed) so
+# fixture-process sweeps can match it without touching an unrelated
+# `sleep 60` on a shared box OR a parallel run of this same test in a
+# sibling worktree — the bare `sleep <secs>` cmdline carries no fixture
+# path, so the token is the only discriminator.
+SLEEPTOK="617.$$"
+printf '#!/usr/bin/env bash\necho MARKER-SLEEP-FX\nsleep %s\n' "$SLEEPTOK" > "$FIXTURES/sleepfx.sh"
 
 build_sandbox() {  # build_sandbox <out-dir> <arm>
   local dir="$1" arm="$2"
@@ -227,10 +231,10 @@ fi
 # reparent) — that is pre-existing behaviour the #8993 watchdog addresses only
 # on the parent-death path. Clean the fixture's leftovers HERE so the
 # Part-B sweep below cannot match a process this arm left behind.
-for leftover in $(pgrep -f 'sleepfx\.sh' 2>/dev/null); do
+for leftover in $(pgrep -f "$FIXTURES/sleepfx\.sh" 2>/dev/null); do
   kill -KILL "$leftover" 2>/dev/null || true
 done
-pkill -f 'sleep 617' 2>/dev/null || true
+pkill -f "sleep $SLEEPTOK" 2>/dev/null || true
 
 # Clean run: no durable artifacts.
 DURABLE_C="$TMP/durable-c"
@@ -290,7 +294,7 @@ else
     pass "orphaned runner is terminated after parent death"
   fi
   # Children were killed too — no suite/tee survives reparented.
-  leftover="$(pgrep -f "sleepfx.sh" 2>/dev/null | head -1)"
+  leftover="$(pgrep -f "$FIXTURES/sleepfx.sh" 2>/dev/null | head -1)"
   if [[ -n "$leftover" ]]; then
     fail "in-flight suite child survived the orphan reap (pid $leftover)"
     kill -KILL "$leftover" 2>/dev/null || true
@@ -303,9 +307,10 @@ else
     fail "no '#8993' orphan line in runner output"
   fi
 fi
-# The watchdog sweeps the runner's DIRECT children (pgrep -P): the suite's
-# own `sleep 617` grandchild reparents and lingers — sweep it here.
-pkill -f 'sleep 617' 2>/dev/null || true
+# The watchdog sweeps TRANSITIVE descendants (the _wd_descendants awk
+# walk): the suite's own `sleep $SLEEPTOK` grandchild should already be
+# reaped — sweep anyway, belt-and-braces on a shared box.
+pkill -f "sleep $SLEEPTOK" 2>/dev/null || true
 
 # B2: a live parent is never reaped — the run completes normally.
 SBX_E="$TMP/sbx-e"

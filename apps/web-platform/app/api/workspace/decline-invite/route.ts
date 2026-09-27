@@ -5,6 +5,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { declineWorkspaceInvitation } from "@/server/workspace-invitations";
 import {
   verifiedUserId,
+  boundedAuthGetUser,
   sessionJwtEmailForVerifiedUser,
 } from "@/server/request-auth";
 
@@ -45,13 +46,16 @@ export async function POST(request: Request) {
       // supply it, re-verify remotely (same pattern as pending-invites).
       let callerEmail = await sessionJwtEmailForVerifiedUser(supabase, userId);
       if (callerEmail === null) {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        callerEmail = user?.email ?? null;
+        const userData = await boundedAuthGetUser(supabase);
+        callerEmail = userData?.user?.email ?? null;
       }
+      // BOTH sides must be present: anonymized invitations null
+      // invitee_email and a claim-miss JWT yields null callerEmail —
+      // `undefined === undefined` would match any caller on an erased row.
       isInvitee =
-        invRow.invitee_email?.toLowerCase() === callerEmail?.toLowerCase();
+        callerEmail !== null &&
+        invRow.invitee_email != null &&
+        invRow.invitee_email.toLowerCase() === callerEmail.toLowerCase();
     }
 
     if (!isInvitee) {

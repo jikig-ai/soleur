@@ -11,6 +11,7 @@ import { PG_UNIQUE_VIOLATION, sqlStateFromError } from "@/lib/postgres-errors";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
 import {
   verifiedUserId,
+  boundedAuthGetUser,
   sessionJwtEmailForVerifiedUser,
   boundedAuthGetUser,
 } from "@/server/request-auth";
@@ -223,8 +224,8 @@ export async function POST(request: Request) {
     customerEmail =
       (await sessionJwtEmailForVerifiedUser(supabase, userId)) ?? undefined;
     if (customerEmail === undefined) {
-      customerEmail =
-        (await boundedAuthGetUser(supabase))?.user?.email ?? undefined;
+      const userData2 = await boundedAuthGetUser(supabase);
+      customerEmail = userData2?.user?.email ?? undefined;
     }
   }
 

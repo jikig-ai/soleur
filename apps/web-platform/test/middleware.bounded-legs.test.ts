@@ -45,10 +45,10 @@ vi.mock("@/lib/observability-edge", () => ({
 }));
 
 import { middleware } from "@/middleware";
+import { TC_VERSION } from "@/lib/legal/tc-version";
 
 const SUPABASE_URL = "https://example.supabase.co";
 const SUPABASE_ANON_KEY = "anon-key";
-const TC_VERSION = "9.9.9-test";
 
 // postgrest-js's settled abort shape (PostgrestBuilder then-catch, the
 // !shouldThrowOnError arm): an abort resolves to an error OBJECT.
@@ -139,7 +139,9 @@ describe("bounded Supabase legs (Guard 1)", () => {
     seedTcOk();
 
     const res = await middleware(makeAuthRequest("/dashboard"));
-    expect(res.status).not.toBe(302);
+    // Pass-through contract directly: no redirect AT ALL — `not.toBe(302)`
+    // would still pass a wrong 307 bounce (the only 302 is the revoked one).
+    expect(res.headers.get("location")).toBeNull();
     // Second request: verdict cache hit preempts the RPC entirely.
     await middleware(makeAuthRequest("/dashboard"));
     expect(mockRpc).toHaveBeenCalledTimes(1);
@@ -160,7 +162,7 @@ describe("bounded Supabase legs (Guard 1)", () => {
     seedTcOk();
 
     const res = await middleware(makeAuthRequest("/dashboard"));
-    expect(res.status).not.toBe(302);
+    expect(res.headers.get("location")).toBeNull();
 
     const calls = mockReportEdgeSilentFallback.mock.calls.filter(
       (c) => (c[1] as { op?: string }).op === "revocation_gate.rpc_timeout",
@@ -244,8 +246,92 @@ describe("bounded Supabase legs (Guard 1)", () => {
     });
     const results = await pending;
 
-    for (const res of results) expect(res.status).not.toBe(302);
+    for (const res of results)
+      expect(res.headers.get("location")).toBeNull();
     expect(mockRpc).toHaveBeenCalledTimes(1);
+  });
+
+  test("dedup joiner bound: a never-settling shared promise resolves grace with op=dedup_joiner_timeout", async () => {
+    const { userId, iat } = freshCreds();
+    seedAuth(userId, iat);
+    // The leader's abortSignal returns a promise that NEVER resolves —
+    // not even on abort — the worst case the joiner bound exists for.
+    mockRpc.mockReturnValue({
+      abortSignal: () => new Promise(() => {}),
+    });
+    seedTcOk();
+
+    // The LEADER still waits on the shared promise — only joiners carry
+    // the independent bound — so its middleware call stays pending (the
+    // documented leader-side residual: the leader's own bound is the
+    // postgrest abort, which this mock deliberately ignores).
+    const leader = middleware(makeAuthRequest("/dashboard"));
+    void leader;
+    const results = await Promise.all([
+      middleware(makeAuthRequest("/dashboard")),
+      middleware(makeAuthRequest("/dashboard")),
+    ]);
+    for (const res of results)
+      expect(res.headers.get("location")).toBeNull();
+    const calls = mockReportEdgeSilentFallback.mock.calls.filter(
+      (c) =>
+        (c[1] as { op?: string }).op ===
+        "revocation_gate.dedup_joiner_timeout",
+    );
+    expect(calls.length).toBe(2);
+  });
+
+  test("a stalled getSession() is bounded — revocation skipped, request proceeds, op=session_get.timeout", async () => {
+    const { userId, iat } = freshCreds();
+    seedAuth(userId, iat);
+    mockGetSession.mockReturnValue(new Promise(() => {})); // never resolves
+    seedTcOk();
+
+    const res = await middleware(makeAuthRequest("/dashboard"));
+    expect(res.headers.get("location")).toBeNull();
+    // getUser() still verifies — the session leg timing out must not
+    // bounce the request.
+    expect(mockGetUser).toHaveBeenCalledTimes(1);
+    const calls = mockReportEdgeSilentFallback.mock.calls.filter(
+      (c) => (c[1] as { op?: string }).op === "session_get.timeout",
+    );
+    expect(calls.length).toBe(1);
+  });
+
+  test("grace strikes escalate: a sustained outage fails closed past the strike limit", async () => {
+    const { userId, iat } = freshCreds();
+    seedAuth(userId, iat);
+    // Every RPC resolves a transient error — the sustained-outage shape the
+    // strike counter exists for (grace is never verdict-cached, so each
+    // request re-issues: RPCs == requests).
+    mockRpc.mockReturnValue({
+      abortSignal: () =>
+        Promise.resolve({
+          data: null,
+          error: { message: "boom", hint: "", code: "500", details: "" },
+        }),
+    });
+    seedTcOk();
+
+    // The first MW_GRACE_STRIKE_LIMIT-1 landings all proceed (fail-open
+    // preserved within the window).
+    for (let i = 0; i < 19; i++) {
+      const r = await middleware(makeAuthRequest("/dashboard"));
+      expect(r.headers.get("location")).toBeNull();
+    }
+    // The 20th escalates — /login with the session PRESERVED (deny now,
+    // not clearSession: credentials are not destroyed during an outage).
+    const res = await middleware(makeAuthRequest("/dashboard"));
+    expect(res.headers.get("location") ?? "").toContain("/login");
+    expect(res.headers.get("location") ?? "").toContain(
+      "revocation_unavailable",
+    );
+    const calls = mockReportEdgeSilentFallback.mock.calls.filter(
+      (c) =>
+        (c[1] as { op?: string }).op ===
+        "revocation_gate.grace_window_exceeded",
+    );
+    expect(calls.length).toBe(1);
   });
 
   test("dedup entry is removed on settle — a post-settle cache-cold request issues a fresh RPC", async () => {
@@ -266,6 +352,13 @@ describe("bounded Supabase legs (Guard 1)", () => {
     await middleware(makeAuthRequest("/dashboard"));
     await middleware(makeAuthRequest("/dashboard"));
     expect(mockRpc).toHaveBeenCalledTimes(2);
+    // Non-abort-shaped errors report transient_grace — the arm the abort
+    // detector must NOT conflate with its own timeout op.
+    const calls = mockReportEdgeSilentFallback.mock.calls.filter(
+      (c) =>
+        (c[1] as { op?: string }).op === "revocation_gate.transient_grace",
+    );
+    expect(calls.length).toBe(2);
   });
 });
 

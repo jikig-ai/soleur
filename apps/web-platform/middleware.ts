@@ -37,21 +37,41 @@ const revocationOkCache = new LRUCache<string, true>(MW_VERDICT_CACHE_MAX, MW_VE
 // `{ error: { hint: "Request was aborted (timeout or manual cancellation)" } }`
 // (PostgrestBuilder then-catch, !shouldThrowOnError) — no rejection — so the
 // existing error arms (revocation grace / tcError fail-closed / identity
-// degrade) absorb the timeout with no new verdict semantics. 8 s clears the
-// largest observed legit cold miss (6.9 s, probe cold-5) while capping the
-// 26–30 s stall class; 10 s bounds the auth-server RTT (2.6–4.9 s recurring).
+// degrade) absorb the timeout with no new verdict semantics. 10 s clears
+// the largest observed legit cold miss (6.9 s, probe cold-5) with ~45%
+// headroom — the T&C select's timeout lands on a user-visible
+// db_unavailable bounce, so it must not abort slow-but-completing reads —
+// while still capping the 26–30 s stall class; 10 s likewise bounds the
+// auth-server RTT (2.6–4.9 s recurring).
 // Read lazily (per call) so a test can pin a short bound via env stub; the
 // literal `||` keeps 0/absent on the default.
 const mwRpcTimeoutMs = () =>
-  Number(process.env.SOLEUR_MW_RPC_TIMEOUT_MS) || 8_000;
+  Math.max(Number(process.env.SOLEUR_MW_RPC_TIMEOUT_MS) || 10_000, 1);
 const mwAuthTimeoutMs = () =>
-  Number(process.env.SOLEUR_MW_AUTH_TIMEOUT_MS) || 10_000;
+  Math.max(Number(process.env.SOLEUR_MW_AUTH_TIMEOUT_MS) || 10_000, 1);
 
 // In-flight dedup for revocation misses (#8978): concurrent requests on the
 // same `${sub}:${iat}` cold cache were each issuing their own RPC — the
 // mount fan-out amplified one cold upstream stall N-fold. Sharing the
 // PROMISE shares work, never verdicts: positive-only cache rules unchanged.
 const revocationInFlight = new Map<string, Promise<RevocationOutcome>>();
+
+// Bounded fail-open (PR #9034 data-integrity review): grace outcomes are
+// never verdict-cached, so a SUSTAINED upstream outage would land every
+// request on grace forever — a member revoked mid-session keeps access
+// indefinitely while the `revoked` verdict can't land. A per-sub strike
+// counter caps the window: consecutive grace outcomes escalate to
+// fail-closed (a /login bounce that PRESERVES the session — deny access
+// temporarily, never destroy credentials during an outage). Keyed on
+// `sub`, not `${sub}:${iat}` — a rotated session must not reset the
+// strikes that bound its own risk. An `ok` outcome resets. 8× the verdict
+// TTL keeps strikes alive across a request-sparse outage without
+// accumulating stale counts after recovery.
+const MW_GRACE_STRIKE_LIMIT = 20;
+const revocationGraceStrikes = new LRUCache<string, number>(
+  MW_VERDICT_CACHE_MAX,
+  MW_VERDICT_TTL_MS * 8,
+);
 
 // postgrest-js settles an abort as an error OBJECT (never a rejection):
 // { message: "<Name>: <msg>", hint: "Request was aborted …", code: "" }.
@@ -294,16 +314,59 @@ export async function middleware(request: NextRequest) {
     },
   );
 
-  // getSession() is a LOCAL cookie read — hoisted BEFORE getUser() so the
-  // revocation leg launches concurrently with the auth-server round trip.
-  // It is retained ONLY to read the raw access-token bytes for the local
-  // `iat`/`sub` decode; getUser() does not expose the token string. This is
-  // NOT the redundant getSession()-after-getUser() re-validation the
-  // @supabase/ssr docs warn against (framework-docs §2.4) — it is a
-  // token-bytes read, not a second auth round trip. (AC4: documented
-  // single getSession() call.)
-  const { data: sessionData } = await supabase.auth.getSession();
-  const accessToken = sessionData?.session?.access_token;
+  // getSession() is a LOCAL cookie read on the warm path — hoisted BEFORE
+  // getUser() so the revocation leg launches concurrently with the
+  // auth-server round trip. It is retained ONLY to read the raw
+  // access-token bytes for the local `iat`/`sub` decode; getUser() does not
+  // expose the token string. This is NOT the redundant
+  // getSession()-after-getUser() re-validation the @supabase/ssr docs warn
+  // against (framework-docs §2.4) — it is a token-bytes read, not a second
+  // auth round trip. (AC4: documented single getSession() call.)
+  //
+  // COLD-path caveat (arch review, PR #9034): on an EXPIRED token
+  // `__loadSession()` performs a remote `/auth/v1/token` refresh inside
+  // getSession() — an unbounded leg ahead of every bound below, exactly on
+  // the idle-then-cold shape this PR attacks. Race it against the same
+  // bound: a timeout yields `accessToken = undefined` → revocation leg
+  // `skipped`, and getUser() still verifies inside its own race — the
+  // pre-hoist behavior, not a hang. The raced loser may still finish its
+  // refresh in the background; its cookie writes land via setAll only when
+  // it wins before the check below.
+  let _sessionTimer: ReturnType<typeof setTimeout> | undefined;
+  const sessionOutcome = await Promise.race([
+    supabase.auth
+      .getSession()
+      .then((r) => ({ kind: "ok" as const, data: r.data }))
+      .catch((err) => ({ kind: "threw" as const, error: err as unknown })),
+    new Promise<{ kind: "timeout" }>((resolve) => {
+      _sessionTimer = setTimeout(
+        () => resolve({ kind: "timeout" }),
+        mwAuthTimeoutMs(),
+      );
+    }),
+  ]);
+  clearTimeout(_sessionTimer);
+  const accessToken =
+    sessionOutcome.kind === "ok"
+      ? (sessionOutcome.data?.session?.access_token ?? undefined)
+      : undefined;
+  if (sessionOutcome.kind !== "ok") {
+    // Named ops: every other bound in this file distinguishes its timeout
+    // arm — a refresh stall inside getSession must surface as its own
+    // signature, not silently degrade to "skipped" (cq-silent-fallback).
+    void reportEdgeSilentFallback(
+      sessionOutcome.kind === "threw" ? sessionOutcome.error : null,
+      {
+        feature: "middleware",
+        op:
+          sessionOutcome.kind === "timeout"
+            ? "session_get.timeout"
+            : "session_get.threw",
+        message:
+          "getSession() remote-refresh leg exceeded the bound — access token unavailable; revocation leg skipped, getUser() still verifies",
+      },
+    );
+  }
 
   // Local decode of sub + iat — both computable before getUser() resolves,
   // so the verdict-cache check below preempts the RPC without serializing
@@ -371,60 +434,80 @@ export async function middleware(request: NextRequest) {
         // Join the identical in-flight miss — dedup shares the RPC work,
         // never the verdict: every joiner independently applies the
         // positive-only store/arm rules to the shared outcome.
-        revokeOutcomePromise = inFlight;
-      } else {
-      const iat = new Date(iatSeconds * 1000);
-      // Armed .catch: the leg settles to a value and never rejects — a
-      // redirecting path below can leave it un-awaited without producing
-      // an unhandled rejection (plan §Sharp Edges).
-      // Promise.resolve() unwraps the PostgREST thenable into a real Promise —
-      // its .then() returns PromiseLike (no .catch), so the unwrap is required
-      // for the armed-catch shape below, not just cosmetic.
-      const started: Promise<RevocationOutcome> = Promise.resolve()
-        // rpc() evaluated inside the chain so a synchronous throw (URL/config
-        // construction) lands in the armed .catch instead of escaping the
-        // middleware with a 500.
-        .then(() =>
-          supabase
-            .rpc("check_my_revocation", { p_jwt_iat: iat.toISOString() })
-            // MW_RPC_TIMEOUT_MS bound: an abort resolves as a PostgREST
-            // error object → the `revokeError` arm below → grace.
-            .abortSignal(AbortSignal.timeout(mwRpcTimeoutMs())),
-        )
-        .then((result): RevocationOutcome => {
-          const { data: revokeData, error: revokeError } = result;
-          if (revokeError) return { kind: "grace", error: revokeError };
-          const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
-          if (!row) {
-            // An empty payload from a one-row-function is anomalous — treat
-            // as grace (re-query next request, no cache write), not a
-            // cacheable allow.
-            return { kind: "grace", error: new Error("empty_revocation_row") };
-          }
-          if (row.revoked === true) {
-            const reason =
-              row.reason === "ownership-transferred"
-                ? "ownership-transferred"
-                : row.reason === "role-changed"
-                  ? "role-changed"
-                  : "removed";
-            return { kind: "revoked", reason };
-          }
-          return { kind: "ok", cacheKey: revokeCacheKey };
-        })
-        .catch((error): RevocationOutcome => ({ kind: "grace", error }));
-      if (revokeCacheKey !== null) {
-        // Track until settle: the entry is deleted on settlement so a LATER
-        // request (post-settle, still verdict-cache-cold) issues a fresh RPC.
-        const tracked = started.finally(() => {
-          revocationInFlight.delete(revokeCacheKey);
+        // The joiner carries its OWN bound: if the shared promise never
+        // settles despite the leader's abort (a signal the transport did
+        // not honor), every joiner would hang with it AND the map entry
+        // would pin forever. The race reclassifies that residual as grace —
+        // the same arm a fresh RPC abort would land on.
+        let joinerTimer: ReturnType<typeof setTimeout> | undefined;
+        revokeOutcomePromise = Promise.race<RevocationOutcome>([
+          inFlight,
+          new Promise<RevocationOutcome>((resolve) => {
+            joinerTimer = setTimeout(
+              () =>
+                resolve({
+                  kind: "grace",
+                  error: new Error("dedup_joiner_timeout"),
+                }),
+              mwRpcTimeoutMs(),
+            );
+          }),
+        ]).finally(() => {
+          clearTimeout(joinerTimer);
         });
-        revocationInFlight.set(revokeCacheKey, tracked);
-        revokeOutcomePromise = tracked;
       } else {
-        revokeOutcomePromise = started;
-      }
-      }
+        const iat = new Date(iatSeconds * 1000);
+        // Armed .catch: the leg settles to a value and never rejects — a
+        // redirecting path below can leave it un-awaited without producing
+        // an unhandled rejection (plan §Sharp Edges).
+        // Promise.resolve() unwraps the PostgREST thenable into a real Promise —
+        // its .then() returns PromiseLike (no .catch), so the unwrap is required
+        // for the armed-catch shape below, not just cosmetic.
+        const started: Promise<RevocationOutcome> = Promise.resolve()
+          // rpc() evaluated inside the chain so a synchronous throw (URL/config
+          // construction) lands in the armed .catch instead of escaping the
+          // middleware with a 500.
+          .then(() =>
+            supabase
+              .rpc("check_my_revocation", { p_jwt_iat: iat.toISOString() })
+              // MW_RPC_TIMEOUT_MS bound: an abort resolves as a PostgREST
+              // error object → the `revokeError` arm below → grace.
+              .abortSignal(AbortSignal.timeout(mwRpcTimeoutMs())),
+          )
+          .then((result): RevocationOutcome => {
+            const { data: revokeData, error: revokeError } = result;
+            if (revokeError) return { kind: "grace", error: revokeError };
+            const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
+            if (!row) {
+              // An empty payload from a one-row-function is anomalous — treat
+              // as grace (re-query next request, no cache write), not a
+              // cacheable allow.
+              return { kind: "grace", error: new Error("empty_revocation_row") };
+            }
+            if (row.revoked === true) {
+              const reason =
+                row.reason === "ownership-transferred"
+                  ? "ownership-transferred"
+                  : row.reason === "role-changed"
+                    ? "role-changed"
+                    : "removed";
+              return { kind: "revoked", reason };
+            }
+            return { kind: "ok", cacheKey: revokeCacheKey };
+          })
+          .catch((error): RevocationOutcome => ({ kind: "grace", error }));
+        if (revokeCacheKey !== null) {
+          // Track until settle: the entry is deleted on settlement so a LATER
+          // request (post-settle, still verdict-cache-cold) issues a fresh RPC.
+          const tracked = started.finally(() => {
+            revocationInFlight.delete(revokeCacheKey);
+          });
+          revocationInFlight.set(revokeCacheKey, tracked);
+          revokeOutcomePromise = tracked;
+        } else {
+          revokeOutcomePromise = started;
+        }
+        }
     }
   } else {
     revokeOutcomePromise = Promise.resolve({ kind: "skipped" });
@@ -554,12 +637,45 @@ export async function middleware(request: NextRequest) {
         // A bounded-wait timeout lands here as a PostgREST abort-shaped
         // error object — tag it distinct from transient-RPC errors so an
         // upstream stall pattern is visible without decoding the message.
-        op: isAbortShapedError(revokeOutcome.error)
-          ? "revocation_gate.rpc_timeout"
-          : "revocation_gate.transient_grace",
+        // The dedup joiner's own timeout is NOT abort-shaped (it is our
+        // marker Error) and gets its own op — a never-settling shared
+        // promise is a third failure class, not generic grace.
+        op:
+          revokeOutcome.error instanceof Error &&
+          revokeOutcome.error.message === "dedup_joiner_timeout"
+            ? "revocation_gate.dedup_joiner_timeout"
+            : isAbortShapedError(revokeOutcome.error)
+              ? "revocation_gate.rpc_timeout"
+              : "revocation_gate.transient_grace",
         extra: { userId: user.id },
       });
-    } else if (revokeOutcome.kind === "revoked") {
+      // Fail-open is BOUNDED, not open-ended: count consecutive grace
+      // outcomes for this subject and escalate past the limit — a member
+      // revoked mid-session would otherwise ride grace indefinitely while
+      // the upstream can't answer (data-integrity review, PR #9034). The
+      // bounce preserves the session: deny now, recover on the next
+      // healthy verdict.
+      const strikes = (revocationGraceStrikes.get(user.id) ?? 0) + 1;
+      revocationGraceStrikes.set(user.id, strikes);
+      if (strikes >= MW_GRACE_STRIKE_LIMIT) {
+        await reportEdgeSilentFallback(revokeOutcome.error, {
+          feature: "middleware",
+          op: "revocation_gate.grace_window_exceeded",
+          message:
+            "revocation grace strike limit reached — failing closed until the RPC answers",
+          extra: { userId: user.id, strikes },
+        });
+        const params = new URLSearchParams();
+        params.set("error", "revocation_unavailable");
+        return redirectWithCookies("/login", params);
+      }
+    } else {
+      // Any non-grace outcome means the RPC answered — the outage is over
+      // for this subject; reset the strike counter (LRUCache exposes no
+      // delete — a 0 entry is the clean state and expires on its own TTL).
+      revocationGraceStrikes.set(user.id, 0);
+    }
+    if (revokeOutcome.kind === "revoked") {
       const params = new URLSearchParams({ revoked: revokeOutcome.reason });
       return clearSessionAndRedirect(request, cspValue, "/login", params);
     } else if (

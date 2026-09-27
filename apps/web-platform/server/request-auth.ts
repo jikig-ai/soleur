@@ -18,6 +18,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * middleware — it is a trust signal, never an authorization boundary (RLS +
  * the middleware gates remain that).
  *
+ * Deliberate single-control note (PR #9034 review): this function trusts
+ * the header VERBATIM — no local JWT `sub` cross-check the way
+ * `sessionJwtEmailForVerifiedUser` adds for the email leg. The boundary is
+ * (a) the inbound strip + mint ordering above, and (b) the
+ * middleware-matcher-coverage census, which walks every app/** /route.ts
+ * structurally against the matcher. A matcher regression is the one
+ * forgery class that would reach here — flagged as residual rather than
+ * adding a getSession decode per request.
+ *
  * Fail-closed fallback: an absent/empty header NEVER trusts anything — the
  * fallback re-verifies via `auth.getUser()` (direct unit-test invocation,
  * dev paths, any future matcher gap). Absent header ⇒ re-verify, never
@@ -47,17 +56,69 @@ export async function verifiedUserId(req: Request): Promise<string | null> {
     data: { op: "middleware.auth_header.absent" },
   });
   const supabase = await createClient();
+  const data = await boundedAuthGetUser(supabase);
   // `data` is tolerated as null (a GoTrue error response yields
   // `{data: null, error}`): fail CLOSED to null, never destructure-throw.
-  const { data } = await supabase.auth.getUser();
   return data?.user?.id ?? null;
+}
+
+// Bounded remote re-verify (#8978 review): every `auth.getUser()` fallback
+// leg is a remote GoTrue call — the same 20–38 s cold-stall class the
+// middleware bound kills. GoTrue exposes no `.abortSignal()`, so the bound
+// is a `Promise.race` identical in shape to the middleware one; a timeout
+// resolves `null` so callers land on their existing fail-closed arms
+// (verifiedUserId → null, resolveIdentity → ANON_IDENTITY). Read lazily so
+// a test can pin a short bound via env stub.
+const authGetUserTimeoutMs = () =>
+  Math.max(Number(process.env.SOLEUR_AUTH_GETUSER_TIMEOUT_MS) || 10_000, 1);
+
+// Structural minimum — the helper only calls `.auth.getUser()`, so the
+// service-resolver `AuthClient` shapes (narrower than SupabaseClient, e.g.
+// `error: unknown`) are accepted without a cast or signature changes.
+export type BoundedAuthUser = { id: string; email?: string | null };
+
+export async function boundedAuthGetUser(supabase: {
+  auth: {
+    getUser: () => Promise<{
+      data: { user: BoundedAuthUser | null };
+      error: unknown;
+    }>;
+  };
+}): Promise<{ user: BoundedAuthUser | null } | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const result = await Promise.race([
+    // A REJECTING getUser is also a remote leg failing — collapse it to the
+    // same null arm as the timeout so route handlers 401 rather than 500.
+    supabase.auth
+      .getUser()
+      .then((r) => r.data)
+      .catch(() => null),
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), authGetUserTimeoutMs());
+    }),
+  ]);
+  clearTimeout(timer);
+  if (result === null) {
+    // Distinct from "getUser returned null": a bounded-wait timeout or a
+    // rejecting leg means the AUTH SERVER stalled — mirror it so an
+    // upstream stall pattern is visible without SSH (same class as the
+    // middleware's mw_auth.timeout op).
+    Sentry.addBreadcrumb({
+      category: "middleware",
+      message: "auth.getuser.bounded_timeout",
+      level: "warning",
+      data: { op: "auth.getuser.bounded_timeout" },
+    });
+  }
+  return result;
 }
 
 /**
  * sessionJwtEmailForVerifiedUser — read the caller's email from the LOCAL
- * session JWT (cookie decode via `getSession()` — no auth-server RTT), but
- * ONLY when the token's own `sub` claim agrees with the already-verified
- * user id the caller holds.
+ * session JWT (cookie decode via `getSession()` — no auth-server RTT on the
+ * warm path; an expired token triggers a bounded remote refresh inside the
+ * call), but ONLY when the token's own `sub` claim agrees with the
+ * already-verified user id the caller holds.
  *
  * The sub cross-check is the load-bearing part (PR #8984 review): a
  * header-minted id and a session cookie can diverge across rotation races,
@@ -72,11 +133,34 @@ export async function sessionJwtEmailForVerifiedUser(
 ): Promise<string | null> {
   // getSession() can throw (storage lock timeout, corrupt cookie chunk) —
   // any throw or gap returns null so the caller re-verifies remotely rather
-  // than crashing the render/handler (PR #8984 review).
+  // than crashing the render/handler (PR #8984 review). On an EXPIRED token
+  // it also performs a remote `/auth/v1/token` refresh inside the call —
+  // "local" only on the warm path — so it carries the same bound as every
+  // other auth-server leg (cq-silent-fallback mirrors the timeout arm).
   let accessToken: string | undefined;
+  let sessionTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const { data: sessionData } = await supabase.auth.getSession();
+    const sessionData = await Promise.race([
+      supabase.auth
+        .getSession()
+        .then((r) => r.data)
+        .catch(() => null),
+      new Promise<null>((resolve) => {
+        sessionTimer = setTimeout(
+          () => resolve(null),
+          authGetUserTimeoutMs(),
+        );
+      }),
+    ]);
+    clearTimeout(sessionTimer);
     accessToken = sessionData?.session?.access_token;
+    if (sessionData === null) {
+      reportSilentFallback(null, {
+        feature: "request-auth",
+        op: "session-jwt-email.session_timeout",
+        message: "getSession() remote-refresh leg exceeded the bound in email fast path",
+      });
+    }
   } catch {
     return null;
   }

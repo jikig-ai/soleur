@@ -8,18 +8,27 @@ import { resolve, join, relative } from "node:path";
 // round-trip per request just to learn the caller's user id. Middleware now
 // mints `x-soleur-auth-user-id` (verified once, propagated on the request),
 // and `verifiedUserId(req)` (server/request-auth.ts) consumes it — the remote
-// call survives only inside the helper's fail-closed fallback.
+// call survives only inside the helper's bounded fail-closed fallback.
 //
-// This census walks every `app/api/** /route.ts` and asserts the exact set of
-// files that still call `auth.getUser(`. Any NEW route-level call site added
-// outside this allowlist fails CI — the author must either migrate to
+// This census walks every `app/** /route.ts` (API handlers AND page-route
+// surfaces — a handler anywhere under app/ is the same remote-call shape)
+// and asserts the exact set of files still matching
+// /auth\s*\.\s*getUser\s*\(/. Any NEW route-level call site added outside
+// this allowlist fails CI — the author must either migrate to
 // verifiedUserId(req) or justify the keep here.
 //
-// The detector is textual: a file counts when its source contains
-// `auth.getUser(` (the `.auth.` receiver narrows out unrelated getUser()
-// helpers such as Stripe/Supabase-admin calls, which use getUserById).
+// Detector scope, stated honestly: the regex covers whitespace variants of
+// the direct `auth.getUser(` spelling only. Aliased receivers
+// (`const { getUser } = supabase.auth`), computed access
+// (`auth["getUser"]`), and indirection through a non-route.ts helper are
+// NOT caught — widening to those would need the type checker, and the
+// ratchet's job is to make new direct call sites loud, not to be a proof.
+// Non-route surfaces (page.tsx/layout.tsx/server-action modules) carry
+// their own getUser sites by design — they do not accept a Request, so
+// verifiedUserId(req) is not a drop-in there and they are out of scope.
 
-const API_ROOT = resolve(__dirname, "../../app/api");
+const APP_ROOT = resolve(__dirname, "../../app");
+const GETUSER_RE = /auth\s*\.\s*getUser\s*\(/;
 
 function* walkRouteFiles(dir: string): Generator<string> {
   for (const entry of readdirSync(dir)) {
@@ -34,15 +43,15 @@ function* walkRouteFiles(dir: string): Generator<string> {
 
 function routeFilesContainingGetUser(): string[] {
   const hits: string[] = [];
-  for (const abs of walkRouteFiles(API_ROOT)) {
-    if (readFileSync(abs, "utf-8").includes("auth.getUser(")) {
-      hits.push(relative(API_ROOT, abs).split("\\").join("/"));
+  for (const abs of walkRouteFiles(APP_ROOT)) {
+    if (GETUSER_RE.test(readFileSync(abs, "utf-8"))) {
+      hits.push(relative(APP_ROOT, abs).split("\\").join("/"));
     }
   }
   return hits.sort();
 }
 
-// KEEPERS — each entry must carry its reason. Two shapes:
+// KEEPERS — each entry must carry its reason. Three shapes:
 //
 //   (a) Rich Supabase user fields the minted header cannot supply
 //       (user_metadata, identities beyond id, etc.) — getUser() stays the
@@ -51,25 +60,29 @@ function routeFilesContainingGetUser(): string[] {
 //       sessionJwtEmailForVerifiedUser(supabase, userId): the remote call
 //       remains ONLY as the fallback when the local session JWT cannot supply
 //       an email claim for the verified id.
+//   (c) A verification that must be FRESH for semantic reasons — the
+//       middleware-minted id verifies the INCOMING session, and these
+//       keepers verify a NEW one (post-exchange) or re-authenticate the
+//       caller as part of a credential challenge.
 const GETUSER_KEEPERS = new Set<string>([
-  // (b) Stripe `customer_email` prefill — resolved lazily and only when the
-  // user has no stored stripe_customer_id; JWT email first, remote fallback.
-  "checkout/route.ts",
+  // (c) OAuth/magic-link exchange: getUser() verifies the session the code
+  // exchange just MINTED — not the incoming request, which carried no valid
+  // session for middleware to verify. A minted header cannot exist yet.
+  "(auth)/callback/route.ts",
+  // (c) Password re-auth: the endpoint's whole purpose is a fresh credential
+  // challenge (signInWithPassword with the getUser-supplied email); the
+  // minted id identifies the session but the email must come from the
+  // current remote record.
+  "(dashboard)/dashboard/settings/privacy/reauth/route.ts",
   // (a) GitHub App install: consumes user.user_metadata?.full_name AND
   // user.email for the onboarding record — richer than the header carries.
-  "repo/setup/route.ts",
+  "api/repo/setup/route.ts",
   // (a) Invite acceptance consumes user.user_metadata?.full_name AND
   // user.email (member display name + invitee_email leg).
-  "workspace/accept-invite/route.ts",
-  // (b) invitee_email leg of the isInvitee check — JWT email first, remote
-  // fallback (mirrors pending-invites).
-  "workspace/decline-invite/route.ts",
+  "api/workspace/accept-invite/route.ts",
   // (a) Consumes user.user_metadata?.full_name AND user.email for the
   // inviter display + invitee record.
-  "workspace/invite-member/route.ts",
-  // (b) invitee_email listing — JWT email first, remote fallback (the
-  // original pattern the other (b) keepers mirror).
-  "workspace/pending-invites/route.ts",
+  "api/workspace/invite-member/route.ts",
 ]);
 
 describe("route-level supabase.auth.getUser() census (#8926)", () => {
@@ -84,14 +97,15 @@ describe("route-level supabase.auth.getUser() census (#8926)", () => {
         `New call sites must use verifiedUserId(req) (server/request-auth.ts) ` +
         `which consumes the middleware-minted x-soleur-auth-user-id header. ` +
         `Only add a keeper here when the route needs Supabase user fields the ` +
-        `header cannot carry (user_metadata, identities) or an email the ` +
-        `session JWT cannot supply — and document the reason above.`,
+        `header cannot carry (user_metadata, identities), an email the ` +
+        `session JWT cannot supply, or a deliberately FRESH verification ` +
+        `(auth exchange, credential challenge) — and document the reason.`,
     ).toEqual(expected);
   });
 
   it("every keeper still exists on disk (allowlist is not stale)", () => {
     for (const rel of GETUSER_KEEPERS) {
-      const abs = join(API_ROOT, rel);
+      const abs = join(APP_ROOT, rel);
       expect(
         statSync(abs, { throwIfNoEntry: false })?.isFile() ?? false,
         `Keeper ${rel} no longer exists — remove it from GETUSER_KEEPERS.`,

@@ -1,7 +1,10 @@
 import { cache } from "react";
 import { headers } from "next/headers";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { sessionJwtEmailForVerifiedUser } from "@/server/request-auth";
+import {
+  boundedAuthGetUser,
+  sessionJwtEmailForVerifiedUser,
+} from "@/server/request-auth";
 import { ANON_IDENTITY, type Identity, type Role } from "./server";
 
 // Bounded wait on the remote selects below (#8978): cold-upstream stalls of
@@ -10,7 +13,7 @@ import { ANON_IDENTITY, type Identity, type Role } from "./server";
 // than hanging the document. Generous vs the ~100–300 ms warm-path reads.
 // Read lazily so a test can pin a short bound via env stub.
 const identitySelectTimeoutMs = () =>
-  Number(process.env.SOLEUR_IDENTITY_SELECT_TIMEOUT_MS) || 8_000;
+  Math.max(Number(process.env.SOLEUR_IDENTITY_SELECT_TIMEOUT_MS) || 8_000, 1);
 
 export const resolveIdentity = cache(async (
   supabase: SupabaseClient,
@@ -44,8 +47,12 @@ export const resolveIdentity = cache(async (
   }
 
   if (userId === null) {
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
-    if (userErr || !userData.user) return ANON_IDENTITY;
+    // Bounded remote re-verify (#8978 review): this fallback is remote
+    // GoTrue inside the document render — the same stall class the bounded
+    // selects below kill — so it carries the same shared bound rather than
+    // hanging the render unboundedly on a matcher-gap/claim-miss.
+    const userData = await boundedAuthGetUser(supabase);
+    if (!userData?.user) return ANON_IDENTITY;
     userId = userData.user.id;
     email = userData.user.email ?? null;
   }

@@ -1,4 +1,5 @@
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { boundedAuthGetUser } from "@/server/request-auth";
 import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 
 // Server-only resolver for the General settings page's workspace-identity
@@ -60,8 +61,8 @@ export async function resolveWorkspaceIdentityForSettings(
   supabase: AuthClient,
   service: ServiceClient,
 ): Promise<WorkspaceIdentity | null> {
-  const userResp = await supabase.auth.getUser();
-  const user = userResp.data?.user;
+  const userData = await boundedAuthGetUser(supabase);
+  const user = userData?.user;
   if (!user) return null;
 
   // The SAME id the upload route's persist targets (AC: read == write target).

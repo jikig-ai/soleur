@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -392,6 +392,80 @@ describe("resolveIdentity fast path — minted header + local JWT (#8978)", () =
       email: "remote@test.local",
     });
     expect(supabase.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveIdentity bounded selects (#8978)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("stalled selects land on the degrade arm — the bound's BEHAVIOR, not just the source census", async () => {
+    vi.stubEnv("SOLEUR_IDENTITY_SELECT_TIMEOUT_MS", "50");
+    // A select chain whose terminal resolves ONLY on the armed abort —
+    // postgrest's documented shape (error object, no rejection).
+    const abortErr = {
+      data: null,
+      error: {
+        message: "TimeoutError: signal timed out",
+        hint: "Request was aborted (timeout or manual cancellation)",
+      },
+    };
+    const stalledChain = () => {
+      const chain: Record<string, unknown> = {};
+      for (const m of ["select", "eq", "neq", "not", "in", "is", "order", "limit"]) {
+        chain[m] = vi.fn(() => chain);
+      }
+      chain.abortSignal = vi.fn((sig: AbortSignal) => ({
+        single: vi.fn(
+          () =>
+            new Promise((r) =>
+              sig.addEventListener("abort", () => r(abortErr)),
+            ),
+        ),
+      }));
+      return chain;
+    };
+    const supabase = {
+      auth: {
+        getUser: vi
+          .fn()
+          .mockResolvedValue({ data: { user: { id: "stall-uid" } }, error: null }),
+        getSession: vi
+          .fn()
+          .mockResolvedValue({ data: { session: null }, error: null }),
+      },
+      from: vi.fn(() => stalledChain()),
+    };
+    const id = await resolveIdentity(
+      supabase as unknown as Parameters<typeof resolveIdentity>[0],
+    );
+    // Degrade arm: prd/null fields while the verified userId survives —
+    // an unbounded select would hang this test past the 50 ms stub.
+    expect(id).toMatchObject({
+      userId: "stall-uid",
+      role: "prd",
+      orgId: null,
+      subscriptionStatus: null,
+    });
+  });
+
+  it("a timed-out remote getUser fallback lands on ANON_IDENTITY, bounded", async () => {
+    vi.stubEnv("SOLEUR_AUTH_GETUSER_TIMEOUT_MS", "50");
+    const supabase = {
+      auth: {
+        getUser: vi.fn().mockReturnValue(new Promise(() => {})), // never resolves
+        getSession: vi
+          .fn()
+          .mockResolvedValue({ data: { session: null }, error: null }),
+      },
+      from: vi.fn(() => mockQueryChain(null)),
+    };
+    await expect(
+      resolveIdentity(
+        supabase as unknown as Parameters<typeof resolveIdentity>[0],
+      ),
+    ).resolves.toEqual(ANON_IDENTITY);
   });
 });
 

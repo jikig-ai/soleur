@@ -60,10 +60,14 @@ export async function supabaseEdgeWarmerTick(
     // GET /rest/v1/ serves the PostgREST OpenAPI root — the cheapest request
     // that exercises edge routing + compute. The anon key authenticates the
     // edge path exactly as a real request does; no user data is touched.
-    await fetchImpl(`${supabaseUrl}/rest/v1/`, {
+    const res = await fetchImpl(`${supabaseUrl}/rest/v1/`, {
       headers: { apikey: anonKey },
       signal: AbortSignal.timeout(tickTimeoutMs),
     });
+    // Consume the body: an unconsumed body pins the socket in undici (out of
+    // the pool until GC), which would make every tick pay a fresh TCP+TLS —
+    // churn instead of the warmth this mechanism exists to amortize.
+    await res.arrayBuffer();
     return performance.now() - start;
   } catch (err) {
     // The tick promise must NEVER reject — a throwing logger would produce
@@ -113,16 +117,23 @@ export function startSupabaseEdgeWarmer(opts: EdgeWarmerOptions = {}) {
       tickTimeoutMs,
       fetchImpl,
     ).then((durMs) => {
-      tickCount += 1;
-      if (durMs !== null && tickCount % HEARTBEAT_EVERY_N_TICKS === 0) {
-        log.info(
-          {
-            op: "supabase_edge_warmer.tick",
-            durMs: Math.round(durMs),
-            ticks: tickCount,
-          },
-          "supabase edge warm-up heartbeat",
-        );
+      // The continuation must not throw either — a throwing logger inside
+      // `.then` would reject the chained promise unobserved (the same
+      // never-crash contract the tick body honours).
+      try {
+        tickCount += 1;
+        if (durMs !== null && tickCount % HEARTBEAT_EVERY_N_TICKS === 0) {
+          log.info(
+            {
+              op: "supabase_edge_warmer.tick",
+              durMs: Math.round(durMs),
+              ticks: tickCount,
+            },
+            "supabase edge warm-up heartbeat",
+          );
+        }
+      } catch {
+        // logging failure — swallowed per the never-throw contract
       }
     });
   }, intervalMs);

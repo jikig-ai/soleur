@@ -301,6 +301,14 @@ Modes (local default is --affected; CI always runs the full battery):
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
 
+Run machinery (#8993/#8940): the parent-death watchdog self-terminates an
+orphaned run plus its suite children — SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 opts
+out (deliberate backgrounding), SOLEUR_TEST_ALL_WD_POLL_S sets its poll
+interval (default 1, floor 1). Each suite tees to a per-run scratch log;
+non-ok classes copy it under
+${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/ and print
+log=<path> on the summary line — SOLEUR_TEST_ALL_LOG_DIR relocates it.
+
 Enumerate modes die at a hard wall-clock deadline — SOLEUR_ENUM_DEADLINE_S
 seconds (default 900); a deleted-cwd walk exits 4, it never spins.
 USAGE
@@ -1587,8 +1595,17 @@ run_suite() {
   # missing log store must never change the run itself.
   local _suite_log=""
   if [[ -n "$_suite_log_dir" ]]; then
-    mkdir -p "$_suite_log_dir" 2>/dev/null || true
-    _suite_log="$_suite_log_dir/${label//\//__}.log"
+    local _candidate="$_suite_log_dir/${label//\//__}.log"
+    # Probe-create BEFORE teeing: an unwritable log store would leave tee with
+    # a dead output, the suite would take SIGPIPE on its first write, and a
+    # healthy suite would classify phantom-KILLED (rc 141) with no log at
+    # all. A missing store degrades to the unchanged bare-exec path instead.
+    if mkdir -p "$_suite_log_dir" 2>/dev/null \
+       && : >"$_candidate" 2>/dev/null; then
+      _suite_log="$_candidate"
+    else
+      printf 'WARNING: suite log store unwritable — %s runs without tee capture (#8940)\n' "$label" >&2
+    fi
   fi
   # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
   # it discards WHICH non-zero the suite returned, which is precisely the
@@ -1600,7 +1617,6 @@ run_suite() {
   if [[ -n "$_suite_log" ]]; then
     _suite_log_in_flight="$_suite_log"
     "$@" 2>&1 | tee "$_suite_log" || rc=${PIPESTATUS[0]}
-    _suite_log_in_flight=""
   else
     "$@" || rc=$?
   fi
@@ -1636,8 +1652,16 @@ run_suite() {
     if mkdir -p "$_durable_log_dir" 2>/dev/null \
        && cp "$_suite_log" "$_durable_path" 2>/dev/null; then
       _log_field=" log=$_durable_path"
+    else
+      # A retention failure must be loud: silently omitting `log=` makes it
+      # indistinguishable from "nothing to retain" (#8940's own defect class).
+      printf 'WARNING: durable copy failed — %s log only at %s until scratch cleanup (#8940)\n' "$label" "$_suite_log" >&2
     fi
   fi
+  # Clear AFTER the retention copy: a TERM in the pipeline→copy window would
+  # otherwise lose the just-failed suite's log — the retention arm's exact
+  # purpose (#8940). The trap reads this variable, not the local.
+  _suite_log_in_flight=""
   # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
   # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
   # microseconds substring (a leading zero would otherwise trigger octal).
@@ -2946,7 +2970,10 @@ _ceiling_declined=0
 # executing — the EXIT trap retains it durably when the run dies mid-suite.
 # _RUN_WD_PID: the #8993 parent-death watchdog subshell; disarmed by the
 # EXIT trap. _durable_log_dir: outside the session scratch root so the
-# artifact survives `_soleur_scratch_cleanup`.
+# artifact survives `_soleur_scratch_cleanup`. Known residual: nothing
+# reaps it — failing-suite logs accumulate under SOLEUR_SCRATCH_BASE for
+# the box's normal /var/tmp hygiene to reclaim; accepted (only non-ok
+# suites produce files).
 _suite_log_in_flight=""
 _RUN_WD_PID=""
 _durable_log_dir="${SOLEUR_TEST_ALL_LOG_DIR:-${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs}/$(basename -- "$PWD")-$$-${EPOCHSECONDS:-0}"
@@ -2961,7 +2988,22 @@ _suite_log_dir=""
 if [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" \
    && "${SOLEUR_SCRATCH_OWNER_PID:-}" == "$$" ]]; then
   _suite_log_dir="${SOLEUR_SCRATCH_SESSION_ROOT}/suite-logs"
+elif [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" \
+   && -z "${SOLEUR_SCRATCH_OWNER_PID:-}" ]]; then
+  # SESSION_ROOT set with NO owner pid at all is not the nested-runner
+  # shape (begin() always pairs the two) — it is a hand-exported root, and
+  # the battery is about to run bare with no durable logs. Say so.
+  printf '[note] suite tee capture skipped — SOLEUR_SCRATCH_SESSION_ROOT exported without SOLEUR_SCRATCH_OWNER_PID (#8940)\n' >&2
 fi
+# A durable dir pointing INSIDE the scratch root would name files the
+# _soleur_scratch_cleanup deletes at exit — the `log=` path would fabricate
+# at read time. Relocate rather than refuse: the override's intent survives.
+case "${_durable_log_dir}/" in
+  "${SOLEUR_SCRATCH_SESSION_ROOT:-\0}/"* )
+    _durable_log_dir="${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/$(basename -- "$PWD")-$$-${EPOCHSECONDS:-0}"
+    printf '[note] SOLEUR_TEST_ALL_LOG_DIR inside the scratch root — relocated to %s (#8940)\n' "$_durable_log_dir" >&2
+    ;;
+esac
 
 # The ceiling is resolved ONCE, here, rather than re-parsed inside run_suite on each of its
 # ~194 invocations. Three defects collapse into this single evaluation:
@@ -3094,6 +3136,28 @@ _run_wd_disarm() {
   fi
 }
 
+# Transitive descendants of the given pids, excluding the watchdog's own
+# subtree. `pgrep -P` enumerates ONE generation — a suite's vitest/worker
+# grandchildren inherit the same lock fd and would survive a direct-child
+# sweep, still holding the #8993 lock the reap exists to release. Walks the
+# ps table once: a pid prints when its ancestor chain reaches a root before
+# reaching the excluded pid.
+_wd_descendants() {  # _wd_descendants <exclude-pid> <root-pid...>
+  local _excl="$1"; shift
+  ps -eo pid=,ppid= 2>/dev/null | awk -v roots="$*" -v excl="$_excl" '
+    { pp[$1] = $2 }
+    END {
+      n = split(roots, R, " ")
+      for (p in pp) {
+        for (a = p; a != ""; a = pp[a]) {
+          if (a == excl) break
+          for (i = 1; i <= n; i++)
+            if (a == R[i] && p != a) { print p; a = ""; break }
+        }
+      }
+    }'
+}
+
 # #8940 — a run terminated MID-SUITE never reaches the classification block
 # that would copy the suite's tee'd log out of the scratch root, so the
 # trap is the only place that arm is reachable. Runs BEFORE
@@ -3191,7 +3255,31 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
     # SIGPIPE must not kill the watchdog mid-fire: the run's stderr reader is
     # often already gone on exactly the path that needs the kill.
     trap '' PIPE
+    _wd_kids=""
     while :; do
+      # Refresh the direct-child snapshot every poll — it is the ONLY record
+      # of the runner's suite children once the runner is dead (they
+      # reparent to init and pgrep -P on a dead pid enumerates nothing).
+      _wd_kids="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+      # Runner liveness FIRST: a runner-side untrappable death (SIGKILL/OOM)
+      # while the parent lives leaves this subshell holding the inherited
+      # stdout/stderr fds — a gone-but-held-pipe deadlock between a dead
+      # run's watchdog and a live parent whose pipe reader never sees EOF.
+      # The snapshot's children still hold the inherited lock fd — reap
+      # them, then exit: there is no runner left to signal.
+      if ! kill -0 "$_RUN_WD_TOP_PID" 2>/dev/null; then
+        printf 'ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' >&2 || true
+        _wd_kids="$(_wd_descendants "$_wd_self" $_wd_kids)"
+        for _wd_kid in $_wd_kids; do
+          kill -TERM "$_wd_kid" 2>/dev/null || true
+        done
+        sleep 2 & _wd_sleep=$!
+        wait "$_wd_sleep" 2>/dev/null || true
+        for _wd_kid in $_wd_kids; do
+          kill -KILL "$_wd_kid" 2>/dev/null || true
+        done
+        exit 0
+      fi
       # Parent liveness = alive AND not-zombie AND (when we captured a
       # baseline) the SAME process — pid reuse after parent death must not
       # read as "parent still alive".
@@ -3213,19 +3301,24 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       # Announce FIRST: the runner's own EXIT trap disarms this watchdog,
       # so a printf issued after the runner's TERM races our own teardown.
       printf 'ERROR: parent process gone — orphaned test-all run terminating itself and in-flight suite children (#8993)\n' >&2 || true
-      _wd_kids="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+      # Escalate the CHILDREN to completion BEFORE signaling the runner:
+      # TERM → grace → KILL. The runner's EXIT trap disarms this watchdog,
+      # so a runner-TERM sent first lets a TERM-resistant suite child (the
+      # wedge class the reap exists for) survive holding the inherited lock
+      # fd — the disarm would land mid-grace and the -9 leg would never run.
+      _wd_kids="$(_wd_descendants "$_wd_self" "$_RUN_WD_TOP_PID")"
       for _wd_kid in $_wd_kids; do
-        [[ "$_wd_kid" == "$_wd_self" ]] && continue
         kill -TERM "$_wd_kid" 2>/dev/null || true
+      done
+      sleep 3 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+      for _wd_kid in $_wd_kids; do
+        kill -KILL "$_wd_kid" 2>/dev/null || true
       done
       kill -TERM "$_RUN_WD_TOP_PID" 2>/dev/null || true
       sleep 5 & _wd_sleep=$!
       wait "$_wd_sleep" 2>/dev/null || true
       kill -KILL "$_RUN_WD_TOP_PID" 2>/dev/null || true
-      for _wd_kid in $_wd_kids; do
-        [[ "$_wd_kid" == "$_wd_self" ]] && continue
-        kill -KILL "$_wd_kid" 2>/dev/null || true
-      done
     fi
   ) &
   _RUN_WD_PID=$!

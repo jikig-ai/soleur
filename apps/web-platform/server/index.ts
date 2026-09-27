@@ -84,6 +84,9 @@ app.prepare().then(() => {
   // #8978 — hold the Supabase edge (undici/TLS pool + PostgREST compute)
   // warm between requests; Phase-0 spans measured 20–38 s cold-upstream
   // stalls on per-request PostgREST/auth legs. Failure-tolerant, unref'd.
+  // Deliberately NOT captured for the shutdown stop-list: unref'd + a
+  // fire-and-forget 10 s-bounded tick can never block exit (unlike the
+  // reaper/clock timers that ARE stopped below).
   startSupabaseEdgeWarmer();
 
   const server = createServer(async (req, res) => {
