@@ -99,4 +99,32 @@ describe("likec4 CLI / client-renderer version parity", () => {
     expect(ci).not.toMatch(/likec4@latest/);
     expect(monitor).not.toMatch(/likec4@latest/);
   });
+
+  // #8861 doc surfaces: the recipes agents copy VERBATIM pin literal
+  // `likec4@<version>` — without a census they drift on the next bump and an
+  // agent in a customer repo renders with a stale CLI (the same skew class
+  // the executable surfaces above are pinned against).
+  it("agent-facing likec4 recipes pin the same version and never float @latest", () => {
+    const dockerfile = read("Dockerfile");
+    const cliVersion = dockerfile.match(
+      /npm install -g likec4@([0-9][^\s"'`]*)/,
+    )![1];
+
+    const DOC_SURFACES = [
+      "plugins/soleur/skills/architecture/references/likec4-reference.md",
+      "plugins/soleur/skills/architecture/SKILL.md",
+    ];
+    for (const path of DOC_SURFACES) {
+      const doc = readRepo(path);
+      const pins = [...doc.matchAll(/likec4@([0-9][^\s"'`]*)/g)];
+      expect(
+        pins.length,
+        `${path} must pin a literal likec4@<version>`,
+      ).toBeGreaterThan(0);
+      for (const m of pins) {
+        expect(m[1], `${path} pins a stale likec4 version`).toBe(cliVersion);
+      }
+      expect(doc, `${path} must not float @latest`).not.toMatch(/likec4@latest/);
+    }
+  });
 });
