@@ -602,7 +602,7 @@ After this change only on-main tags are candidates, a strict subset of what was 
   - `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
   - `(cd apps/web-platform && npx vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts)` passes. The runner comes from `apps/web-platform/package.json` `"test": "vitest"`.
 - [x] **AC10.** `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-27-ci-vinngest-semver-max-merged-into-main-plan.md` exits 0.
-- [ ] **AC11.** CI: `deploy-script-tests` (all legs) and `pr-quality-guards` are green on the PR. `git diff --name-only origin/main...HEAD -- .github/workflows` is empty.
+- [ ] **AC11.** CI: `deploy-script-tests` (all legs) and `pr-quality-guards` are green on the PR. No workflow BEHAVIOUR changes: any `.github/workflows` diff is comment-only (amended at review, 2026-09-27 — stale selector comments were corrected), verified by parsed-YAML equality against the merge-base.
 - [ ] **AC12.** The first line of the PR body reads: "Merging this alone mutates no production state: no pin moves (main already pins the merged-max `v1.1.40`), no Terraform/`paths:`-triggered apply fires, and the new selection first runs on the next `vinngest-v*` publish."
 
 ## Domain Review
