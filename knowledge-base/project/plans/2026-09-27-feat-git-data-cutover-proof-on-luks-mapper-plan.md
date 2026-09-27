@@ -15,6 +15,64 @@ lane: cross-domain
 
 # git-data cutover: the read-only proof passes on a verified LUKS-served store
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27
+
+**Sections enhanced:**
+
+- Technical Approach (Phases 1-5);
+- Host-key step 5 evidence chain;
+- Does merging mutate production;
+- Observability;
+- Guard Contract;
+- Acceptance Criteria;
+- Test Scenarios;
+- Risks.
+
+**Agents used:**
+
+- soleur:engineering:review:security-sentinel
+- soleur:engineering:review:test-design-reviewer
+- soleur:engineering:review:observability-coverage-reviewer
+- soleur:engineering:review:user-impact-reviewer
+- soleur:engineering:research:git-history-analyzer
+- a verify-the-negative and post-edit self-audit sweep
+
+These came on top of the plan-phase panel: learnings-researcher, cto (twice), clo, cpo,
+spec-flow-analyzer (twice), a scoped advisor, dhh-rails-reviewer, kieran-rails-reviewer,
+code-simplicity-reviewer and architecture-strategist.
+
+### Key Improvements
+
+1. **The step-5 Art. 17 evidence chain is fail-closed.**
+   - (b) binds to the instance's `boot_complete` line and the replace-run chain, not to the marker.
+   - (c) pages the flag history back past the older volume's creation, across every Doppler config
+     the web containers load.
+   - The discharge wording is scoped to the git-data store.
+   - An unreadable line or a short paging discharges nothing.
+2. **Floors are exact.** Both checks use `-ne`, and `MUTANT_FLOOR` is computed from the matrices
+   before it is measured. A missing matrix row can no longer be baked into the floor.
+3. **RB checks the script-to-runbook coverage in both directions**, with two independent producers,
+   and has its own mutants. P3 parity runs over copied directories and has mutants too.
+4. **Security:**
+   - the remote prefix is plain `%q` assignments, with `fz` single-quoted;
+   - `LUKS_MAPPER` is validated (`arg_mapper`);
+   - the operator's approval is the single human input for PM1;
+   - a workflow-command injection row (VINJ) was added.
+5. **Observability:** every failure mode cites layer 6 (the workflow-run log), and the false-clear
+   mode is covered by the mutants going RED in CI.
+
+### New Considerations Discovered
+
+- A marker from an earlier bootstrap run can outlive a failed re-run, so the marker alone is never
+  the binding evidence.
+- Counting entries cannot see a repository that was written and then deleted. Only the flag's
+  history since the volume was created excludes one.
+- The earlier "precedent" commit 707c7d072d was wrong: that release failed. The production-effect
+  claim now rests on the release workflow's own `path_filter`.
+- The `origin/main` base is 2619b4f5f8. e99a0b8b81 is this branch's init commit.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -60,11 +118,11 @@ map). The flip, rollback, redeploy and D6 replace stay open on #8211 as its foll
 
 ## Research Reconciliation — Spec vs. Codebase
 
-| Claim (task / prior docs) | Reality on `origin/main` (e99a0b8b81) | Plan response |
+| Claim (task / prior docs) | Reality on `origin/main` (2619b4f5f8) | Plan response |
 |---|---|---|
 | "Make the proof step treat `already_cut_over` as a pass" | A bare flip of `!=` to `=` would pass any mapper-named source, including a non-crypt dm device or a mapper whose bootstrap FATALed before writing the marker. | The flip is paired with the `store-verified` probe. A pass needs the mapper, the bootstrap's marker bound to the mounted filesystem, and no freeze sentinel. |
 | Header comment "expected until PR2 rebuilds the proof" (`git-data-cutover.sh:34`) | #8211's issue body never says "PR2". PR2 is defined in the PR1 plan's Phase B, as five parts. | This PR is the proof half. The rest stays tracked on #8211. The split is recorded in an ADR-239 amendment and in the script header. |
-| Tests pin exit 5 at S5/G2 (`case_mapper`, lines ~663/697) and R7 (~2002) | Also pinned: AC2's exact remote timeline and annotation set (`src=/dev/sdb`, `store-not-cut-over`), H5 main order, mutants `g2-no-cut-over` and `g5-raw-capture` (their sed anchors match the deleted lines), FSRC and `f-m17` (`/dev/nvme1n1`, `/dev/sdb`), P2 (it pins the `OLD_ROOT` line, comment included), runtime R5/R5b/R5c/R7/RFSRC, and both floors. | Every pinned site is in Files to Edit (below), and the floors are re-derived. |
+| Tests pin exit 5 at S5/G2 (`case_mapper`, lines ~663/697) and R7 (~2002) | Also pinned: AC2's exact remote timeline and annotation set (`src=/dev/sdb`, `store-not-cut-over`), H5 main order, mutants `g2-no-cut-over` and `g5-raw-capture` (their sed anchors match the deleted lines), FSRC and `f-m17` (`/dev/nvme1n1`, `/dev/sdb`), P2 (it pins the `OLD_ROOT` line, comment included), runtime R5/R5b/R5c/R7/RFSRC (this plan deletes RFSRC), and both floors. | Every pinned site is in Files to Edit (below), and the floors are re-derived. |
 | Runbook step 5 "Blocked on #8211 PR2" | Correct. Step 5.2 also names "the step-4 dry run clearing `store_not_empty`", which never happened. | Rewrite step 5.2 to name a post-merge dry run, and add the new verdicts to the verdict map. |
 | C4: "the run only reads the store (mounted, not cut over, empty)" (`model.c4`, the git-data-cutover edge) | This becomes false. | Edit the edge prose and regenerate `model.likec4.json`. |
 
@@ -236,7 +294,8 @@ All edits are in `apps/web-platform/infra/git-data-cutover-access.test.sh`.
    - It answers positional `-no SOURCE <path>` from `SHIM_FINDMNT_S`. The default is the mapper; a
      two-line value simulates an over-mount.
 3. **An `r=*` arm in the `ssh` shim**, for the new probe command. It is keyed on the command's first
-   token, the way `d=` and `h=` are. `SHIM_VERIFY=ok|r<n>|line2|empty|exec` mirrors `SHIM_FENCE`.
+   token, the way `d=` and `h=` are. `SHIM_VERIFY=ok|r<n>|line2|empty|notok|exec` mirrors `SHIM_FENCE`. `SHIM_VERIFY_STDERR` injects
+   remote stderr for the injection row.
    The default is `ok`, so pre-existing rows keep reaching the count and the fence.
 4. **`VX-*` (executed) rows always set fixture values.** They set `OLD_ROOT` to a fixture root
    under `$T` and `STORE_VERIFIED` to a fixture file under `$T`. They must never read the CI
@@ -248,8 +307,8 @@ All edits are in `apps/web-platform/infra/git-data-cutover-access.test.sh`.
      - `src=/dev/mapper/git-data` replaces `src=/dev/sdb` in the count and the fence;
      - it has 7 SSH lines, 7 `timeout` entries and 7 `/dev/null` stdins.
    - AC2's annotation set has 9 lines: 3 access, `store-mounted`, `store-on-mapper`,
-     `store-verified`, `store-empty`, `fence-shape`, and `verdict=clear`. Neither the mapper name,
-     the UUID fixture nor the marker content is printed.
+     `store-verified`, `store-empty`, `fence-shape`, and `verdict=clear`. The mapper device name is
+     never printed. RVM covers the UUID and the marker content at runtime.
    - H5 `case_main_order`: the literal call list and its regex alternation are updated together.
      The list is `refuse_real_modes,resolve_roster,access_gate,refuse_if_unmounted,refuse_if_not_on_mapper,refuse_if_store_unverified,refuse_if_store_not_empty,refuse_if_fence_not_intact`.
    - FSRC becomes the alt-mapper unit row: `LUKS_MAPPER=/dev/mapper/gd-alt SHIM_FINDMNT=mapperalt`
@@ -282,13 +341,33 @@ Add every unit row in the Test Scenarios table, plus:
      transport-wrapper (`${MOUNT_ROOT}`).
    - Each floor is paired with set identity. Each definer must yield a non-empty value, because two
      empty extractions never compare equal.
+   - Write the check as `case_parity <script> <dir>`, run over a **copied** directory, because
+     tracked definers must never be mutated in place. Each of these mutants must go RED
+     (test-design P1-5):
+     - the script's `LUKS_MAPPER` default flipped;
+     - one definer copy's `STORE_VERIFIED` flipped;
+     - an extra definer added with a different default.
    - Name the override-variable difference in a comment. The wrappers read
      `GIT_DATA_STORE_VERIFIED` and `GIT_DATA_CUTOVER_FREEZE`. The proof ignores those, because a
      host-side override is invisible to it.
-2. **RB: runbook coverage.** Every verdict and reason word the script emits must appear in the
-   runbook's verdict map. The words are extracted from `_store_refuse` and `_store_emit` call sites
-   and from the `reason=` arms of the `case` mappings. The row passes only on a positive count equal
-   to the extracted total. This keeps the script and the runbook from drifting apart (CTO, devex).
+2. **RB: runbook coverage, checked in both directions** (CTO devex; test-design P0-2).
+   - **Scope.** The store-probe verdict and reason words. Access-gate words and
+     `real_cutover_unreconciled` do not go through `_store_*`, and the row says so.
+   - **Producer 1 (script).** Tokenize the `_store_refuse` and `_store_emit` lines with `read -ra`,
+     keeping the literal `[a-z_]+` tokens in positions 2 and 4. Add every `reason=([a-z_]+)` from the
+     `case` arms.
+   - **Producer 2 (observed).** The union of the `STORE … verdict=X( reason=Y)?` lines printed by
+     every unit row.
+   - **The two producers must yield equal sets, and each must equal a pinned count.**
+   - **Runbook side.** Read only the verdict-map section, with an awk flag range between its heading
+     and the next `##` heading. Match with word boundaries (`[^A-Za-z0-9_]`), so `a|b|c` cells match.
+   - **Forward:** every script word appears in the map.
+   - **Reverse:** every store-probe word in the map is emitted by the script. This is what catches a
+     stale `already_cut_over` row.
+   - **Mutants.** `case_rb <script> <runbook>` runs on copies, and each of these must go RED:
+     - drop one word from the runbook copy;
+     - add a new `_store_refuse` word to the script copy;
+     - rename a `reason=` word in a script-copy `case` arm.
 
 ### Phase 3 — the script (GREEN)
 
@@ -301,6 +380,9 @@ Add every unit row in the Test Scenarios table, plus:
    - The `LUKS_MAPPER` comment becomes "the device that must serve the store".
 2. **Replace `refuse_if_cut_over` with `refuse_if_not_on_mapper`** (probe `store-on-mapper`).
    - An empty `STORE_SOURCE` is `probe_failed`.
+   - First, before the comparison, `LUKS_MAPPER` must match `^/dev/[A-Za-z0-9/_.-]+$`, else
+     `probe=store-on-mapper verdict=probe_failed reason=arg_mapper`. It is an environment-overridable
+     value, and a control byte would make `%q` emit a bash-only `$'…'` form (security P2-a).
    - Anything not string-equal to `$LUKS_MAPPER` is `store_not_on_mapper`.
    - Otherwise the result is `ok`.
 3. **Add `refuse_if_store_unverified`** (probe `store-verified`).
@@ -312,10 +394,13 @@ Add every unit row in the Test Scenarios table, plus:
      regex and reason words:
      - `OLD_ROOT` must match `^/[A-Za-z0-9/_.-]+$`, else `reason=arg_root`;
      - `STORE_VERIFIED` must match the same regex, else `reason=arg_marker`.
-   - `LUKS_MAPPER` is only compared as a `%q`-quoted string and is never an argv, so it needs no
-     validation.
+   - **The prefix is plain `%q` assignments only: `"r=$qr; src=$qs; mk=$qm"`** (security P1-a).
+     - `src` is `STORE_SOURCE`. It is re-checked locally against `^/dev/[A-Za-z0-9/_.-]+$` right
+       before `printf %q`, as `refuse_if_store_not_empty` does.
+     - `fz="$r/.cutover-freeze"` is its own **single-quoted** array element, so `$r` can never
+       expand on the runner.
 
-   The remote command, in order, after the prefix `r=…; src=…; mk=…; fz="$r/.cutover-freeze"`:
+   The remote command, in order, after that prefix:
 
    ```sh
    s=$(findmnt -no SOURCE "$r") || exit 5; [ "$s" = "$src" ] || exit 6
@@ -398,8 +483,11 @@ Then run `python3 scripts/lint-shell-capture-exit.py apps/web-platform/infra/git
    - R5c's login counts become web 7 and gd 5.
    - R7 is inverted: `/dev/sdb` reads `store_not_on_mapper`.
    - **RVM** (new): a real marker mismatch reads `store_unverified reason=marker_mismatch`. It is the
-     one row that carries a remote refusal code through real OpenSSH. It runs **last** among the
-     store rows and restores the marker afterwards.
+     one row that carries a remote refusal code through real OpenSSH.
+     - The marker is restored by a trap, not by row order.
+     - RVM also asserts that the run's whole output contains neither the fixture UUID nor the marker
+       bytes. This is the stderr-path leak check (observability P2).
+   - **RVM2** (new): a canonical run right after RVM must clear, which proves the restore worked.
    - RFSRC is **deleted**. MAP-ALT (unit) holds the must-PASS non-canonical property, and the
      runtime `drive2` passes no `LUKS_MAPPER`.
 3. **`RUNTIME_ROWS`** is set to the counted row total.
@@ -417,8 +505,16 @@ Then run `python3 scripts/lint-shell-capture-exit.py apps/web-platform/infra/git
      `refuse_if_store_unverified` range.
 2. **Add every Guard 1 and Guard 2 matrix row and harness row.** Each goes through `mutate()` with an
    exact diff-line count.
-3. **Floors.** Run `GDC_SKIP_RUNTIME=1 bash apps/web-platform/infra/git-data-cutover-access.test.sh`
-   **once**, after Phase 4, when `RUNTIME_ROWS` is final.
+3. **Floors are exact, and `MUTANT_FLOOR` is computed independently** (test-design P0-1).
+   - First compute the expected `MUTANT_FLOOR` from the plan's matrices: the existing rows, minus
+     the rows this plan re-anchors (count each re-anchored row once), plus the Guard 1 and Guard 2
+     rows, the harness rows, the RB mutants and the P3 mutants.
+   - Change both checks from `-lt` to **`-ne`**. Every skip path adds `RUNTIME_ROWS`, so the totals
+     are the same in every environment. In CI, `-ne` also proves `RUNTIME_ROWS` equals the rows that
+     actually ran.
+   - Run `GDC_SKIP_RUNTIME=1 bash apps/web-platform/infra/git-data-cutover-access.test.sh` **once**,
+     after Phase 4, when `RUNTIME_ROWS` is final. The measured `MUTANTS_RUN` must equal the computed
+     value before it is written. A mismatch means a matrix row is missing or extra.
    - Set `MUTANT_FLOOR` to the measured `MUTANTS_RUN`.
    - Set `FLOOR` to the measured `passes + fails + SKIPPED` of a green run.
    - Restate the per-section ledger comment from the measured counts. Never adjust by a guessed
@@ -449,15 +545,29 @@ Then run `python3 scripts/lint-shell-capture-exit.py apps/web-platform/infra/git
        counts plus the flag history:
        - **(a) the served LUKS store.** The run's `clear`: `store-on-mapper`, `store-verified`,
          `store-empty` and `fence-shape` all `verdict=ok`.
-       - **(b) the retained plaintext volume.** The `boot_complete` line of the **current**
-         instance reads `plaintext_empty=yes`. That is replace run 36118115758 unless a later
-         replace ran. Read it from Better Stack. The bound marker proves that boot passed its
-         full-entry counts (`plaintext_residue`, `luks_residue`), and the volume has been
-         kernel-read-only and never mounted since (ADR-239 D2).
-       - **(c) the flag was never on since that boot.** Take the same run's precheck line, and page
-         `doppler configs logs` for `GIT_DATA_STORE_ENABLED` back past the boot. This is the
-         existing "Two reads to record", read 2. It is **required**, because (a) counts `*.git` and
-         the boot counted every entry, and the flag history closes that gap.
+       - **(b) the retained plaintext volume.** Read the `boot_complete` line of the **current**
+         instance from Better Stack. It must read `plaintext_empty=yes`.
+         - Record it together with its replace run id (36118115758 unless a later one ran).
+         - Run `gh run list` over the replace and create workflows, and show that no run falls
+           between that replace and the proof.
+         - A bound marker proves only that *some* bootstrap run on this filesystem passed its
+           full-entry counts. A re-run that FATALs before `rm -f "$STORE_VERIFIED"` can leave an
+           older marker. So the `boot_complete` line is the binding evidence, not the marker
+           (user-impact F3, F5).
+         - The volume has been kernel-read-only and never mounted since (ADR-239 D2).
+         - **If the line cannot be read, for example because Better Stack retention expired,
+           nothing is discharged.**
+       - **(c) the flag was never on, since before either volume existed.** Take the same run's
+         precheck line, then page `doppler configs logs` for `GIT_DATA_STORE_ENABLED`.
+         - Page back past the `created` time of the **older** of `hcloud_volume.git_data` and
+           `git_data_luks`. Read both times from the Hetzner API (read-only) and record them.
+         - Page every Doppler config the web containers load, not only `prd`. A branch config
+           would not appear in the `prd` log (user-impact F2).
+         - This extends the existing "Two reads to record", read 2. It is **required**. The counts
+           see entries, not freed blocks, so a repository written and deleted earlier would be
+           invisible to them. Only the flag's history since volume creation excludes it
+           (user-impact F1).
+         - If the paging cannot reach that time, nothing is discharged.
      - **A fill-in template for the #5914 record:**
        - the run id, dispatch time, head SHA, and the nine `::notice` lines;
        - the precheck line and the oldest Doppler log entry reached;
@@ -465,7 +575,9 @@ Then run `python3 scripts/lint-shell-capture-exit.py apps/web-platform/infra/git
        - the Sentry sweep window, from 2026-09-22T12:07:01Z (the #8511 merge) to the clearing
          run's start. Run it with the existing "Store not empty" step-3 query, widened to that
          window. Note that pagination was read to the end, and give the distinct id count.
-       - the wording "no data held; nothing to erase", never "erased";
+       - the scoped wording "git-data store (`op=git-data-bare-repo-erasure`): no data held;
+         nothing to erase", never "erased". The user's copy in web-1 `/workspaces` is erased by a
+         separate operation, and this record must not read as covering it (user-impact F4);
        - the earliest request date and the Art. 12(3) deadline it implies.
 
        Requests after the window end need no discharge here: a verified store with a published pin
@@ -550,8 +662,9 @@ and the docker runtime arm is required under `CI=true`. Cheap local checks only:
 redeploy.**
 
 - **`web-platform-release.yml`** fires on `apps/web-platform/**`. The merge cuts a release, and its
-  `workflow_run` arm deploys that release, taking `web-1-swap`. Commit 707c7d072d is a precedent:
-  it touched only infra tests and ended `deploy: success`. The deployed app code is unchanged.
+  `workflow_run` arm deploys that release, taking `web-1-swap`. The in-run `check_changed` gate uses
+  `path_filter: "apps/web-platform/ plugins/soleur/ …"` (`web-platform-release.yml`), so a change
+  under `apps/web-platform/infra/` counts as changed. The deployed app code is unchanged.
 - **`apply-web-platform-infra.yml`** fires on `apps/web-platform/infra/**`, but its plan reaches no
   changed resource. `git-data-cutover.sh` and its suite are bound into no `user_data` and no
   `file()`, and there is no `fileset()` or hash trigger. `git grep -n 'git-data-cutover'
@@ -612,20 +725,23 @@ error_reporting:
   fail_loud: "exit 5 with '::error title=git-data-cutover store::probe=<name> verdict=<word>[ reason=<word>]'"
 failure_modes:
   - mode: "store served by a non-mapper device"
-    detection: "probe=store-on-mapper verdict=store_not_on_mapper (exit 5)"
+    detection: "probe=store-on-mapper verdict=store_not_on_mapper (exit 5) (layer 6: workflow-run log, ::error:: annotation)"
     alert_route: "failed run; runbook verdict-map row (incident, boot events first)"
   - mode: "filesystem UUID empty, or the bootstrap's marker absent or unbound (wrappers refusing now)"
-    detection: "probe=store-verified verdict=store_unverified reason=no_fs_uuid|marker_absent|marker_mismatch"
+    detection: "probe=store-verified verdict=store_unverified reason=no_fs_uuid|marker_absent|marker_mismatch (layer 6: workflow-run log, ::error:: annotation)"
     alert_route: "failed run; runbook row routes to the boot-FATAL recovery and the Art. 17 sweep"
   - mode: "freeze sentinel present with no writer"
-    detection: "probe=store-verified verdict=cutover_frozen"
+    detection: "probe=store-verified verdict=cutover_frozen (layer 6: workflow-run log, ::error:: annotation)"
     alert_route: "failed run; runbook row opens an incident with CLO escalation and a reviewed hotfix remover"
-  - mode: "probe could not be answered"
-    detection: "probe=store-verified verdict=probe_failed rc=<n>"
+  - mode: "probe could not be answered, or was called with an unsafe argument"
+    detection: "probe=store-on-mapper|store-verified verdict=probe_failed rc=<n>|reason=arg_mapper|arg_root|arg_marker (layer 6: workflow-run log, ::error:: annotation)"
     alert_route: "failed run; the runbook row maps each rc"
   - mode: "script and runbook drift (a new verdict word with no runbook row)"
-    detection: "suite row RB fails in CI"
+    detection: "suite row RB fails in CI (layer 6: CI workflow-run log, required check)"
     alert_route: "red required check on the PR"
+  - mode: "a false clear (a refusal swallowed, reordered or loosened), the brand-critical case"
+    detection: "the Guard 1 and Guard 2 mutant rows go RED in CI (layer 6: CI workflow-run log, required check)"
+    alert_route: "red required check on the PR; the change cannot merge"
 logs:
   where: "GitHub Actions run log and check-run annotations (gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations)"
   retention: "GitHub Actions log retention (90 days)"
@@ -663,8 +779,9 @@ second chokepoint: `main`'s call list, pinned by `case_main_order`.
 | 1 | Polarity reverted: `[ "$STORE_SOURCE" = "$LUKS_MAPPER" ]` becomes `!=` | RED (`case_not_mapper`, AC2) |
 | 2 | Own dispatch: delete `refuse_if_not_on_mapper` from `main` | RED (`case_main_order`, `case_not_mapper`) |
 | 3 | Second member: the equality loosened to a prefix match (`[[ $STORE_SOURCE == /dev/mapper/* ]]`), tested with `SHIM_FINDMNT=mapperpre` | RED (MAP-PRE) |
-| 4 | REORDER: the on-mapper call moved after `refuse_if_store_not_empty`. Observed inside the window by a plaintext source plus `SHIM_COUNT=one`, which must read `store_not_on_mapper`, never `store_not_empty` | RED (ORD, `case_main_order`) |
+| 4 | REORDER: the on-mapper call moved after `refuse_if_store_not_empty`. Observed inside the window by a plaintext source plus `SHIM_COUNT=one` and an explicit `SHIM_VERIFY=ok`, which must read `store_not_on_mapper`, never `store_not_empty` | RED (ORD, `case_main_order`) |
 | 5 | The refusal swallowed: `_store_refuse store-on-mapper store_not_on_mapper` becomes `_store_emit …` | RED (`case_not_mapper`: rc 0, not 5) |
+| 6 | The `arg_mapper` check deleted | RED (ARG-mapper: `LUKS_MAPPER=$'/dev/x\n'` must be `reason=arg_mapper`) |
 
 **Harness rows.**
 
@@ -688,8 +805,8 @@ are followed exactly as the wrappers follow them.
 rc-to-verdict `case`. Each check is one array element. There are three chokepoints: the array, the
 `case`, and the anchored `^ok$` pattern passed to `gd_capture`.
 
-**Mutation matrix** (the sed for every row is scoped to the `refuse_if_store_unverified` function
-range):
+**Mutation matrix.** The sed for every row except row 1 is scoped to the `refuse_if_store_unverified`
+function range. Row 1 edits `main`, by design.
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -697,16 +814,21 @@ range):
 | 2 | Own dispatch: the probe "passes" without reading (`GD_CAPTURED=ok` in place of its `gd_capture` call) | RED (canned V22) |
 | 3 | Second member after a compliant first: drop the marker equality, keeping presence | RED (VX-mismatch) |
 | 4 | Second member: drop the freeze element | RED (VX-frozen) |
-| 5 | Empty equals empty: delete `[ -n "$fu" ]` and `[ -s "$mk" ]` | RED (VX-nouuid: must be `no_fs_uuid`, never ok) |
+| 5a | Empty equals empty: delete `[ -n "$fu" ]` | RED (VX-nouuid: must be `no_fs_uuid`, never ok) |
+| 5b | Delete `[ -s "$mk" ]` alone | RED (VX-emptymk: must be `marker_absent`) |
 | 6 | Delete the same-session source re-check (exit 6) | RED (VX-overmount) |
 | 7 | Anchor loosened: `gd_capture '.*'` | RED (`SHIM_VERIFY=empty` must be `probe_failed rc=96`) |
 | 8 | An instrument failure rendered as state: rc 16 mapped to `marker_absent` | RED (V16 must be `probe_failed rc=16`) |
-| 9 | `[ -f "$mk" ]` dropped, leaving `-s` only | RED (VX-dirmk: a directory marker must be `marker_absent`) |
+| 9 | `[ -f "$mk" ]` dropped, leaving `-s` only | RED (VX-dirmk: a **non-empty** directory at the marker path must be `marker_absent`. An empty directory can have size 0 on some filesystems, which would let the mutant survive) |
 | 10 | The `*)` arm deleted from the `case` | RED (V127 must be `probe_failed rc=127`) |
+| 11 | The anchor loosened from `^ok$` to `ok` | RED (`SHIM_VERIFY=notok` answers `nok`, which must be `probe_failed rc=96`) |
+| 12 | The local `arg_root`/`arg_marker` check deleted | RED (ARG rows) |
 
 **Harness rows.**
 
 - **RED:** the `ssh` shim's `r=` arm hardwired to `ok`. The canned negative rows go RED.
+- **RED:** the `findmnt` shim's UUID branch collapsed into SOURCE. VX-ok goes RED.
+- **RED:** the positional SOURCE answer ignores `SHIM_FINDMNT_S`. VX-overmount goes RED.
 - **Must-PASS, non-canonical:**
   - VX-2line: a marker whose first line is the UUID, followed by a second line;
   - VX-symlinkok: a marker that is a symlink to a file with the right UUID.
@@ -780,7 +902,9 @@ land in the PM4 docs PR, following the precedent of the ADR-237 flip in #9036.
     - the runbook's Preconditions step-4 history record.
 - [ ] **AC2.** With the canonical shims, the script exits 0. The canonical shims give a mapper
   source, a bound marker, no freeze, a count of 0 and an ok fence.
-  - It emits exactly the 9 `::notice` lines listed in Phase 1, ending in `verdict=clear`.
+  - It emits exactly the 9 `::notice` lines listed in Phase 1, ending in `verdict=clear`. The
+    mapper device name is never printed. The UUID and marker never reach the local process under
+    canned shims, so their non-printing is proven by RVM, not here.
   - Its remote timeline equals the expected file: 7 SSH calls, each `timeout`-bounded with a
     `/dev/null` stdin.
 - [ ] **AC3.** A plaintext source (`/dev/sdb`) exits 5 with
@@ -790,9 +914,11 @@ land in the PM4 docs PR, following the precedent of the ADR-237 flip in #9036.
   no `d=` command and no `h=` command is dialed:
   - `store_unverified reason=no_fs_uuid|marker_absent|marker_mismatch`;
   - `cutover_frozen`;
-  - `probe_failed rc=5|6|16|96|127|255`.
+  - `probe_failed rc=5|6|16|96|127|255`;
+  - a remote stderr carrying `::error::` and `::add-mask::` lines (VINJ): no annotation beyond the
+    fixed verdict appears.
 
-  `reason=arg_root|arg_marker` additionally asserts that no `r=` command is dialed.
+  `reason=arg_mapper|arg_root|arg_marker` additionally asserts that no `r=` command is dialed.
 - [ ] **AC5.** Every Guard 1 and Guard 2 matrix row and harness row runs through `mutate()`, lands
   on its exact diff-line count, and its named case goes RED. The existing `f-m2` and `f-m16` mutants
   still land on 2 lines each.
@@ -803,7 +929,9 @@ land in the PM4 docs PR, following the precedent of the ADR-237 flip in #9036.
   - R5c reads web 7 / gd 5.
   - R6, RF2, RFINC, RF17 and RF18 still read their original verdicts on the mapper fixture.
   - R7 reads `store_not_on_mapper`.
-  - RVM reads `reason=marker_mismatch`.
+  - RVM reads `reason=marker_mismatch`, and its output contains neither the fixture UUID nor the
+    marker bytes.
+  - RVM2 clears after the trap restore.
 - [ ] **AC8.** `DRY_RUN=0`, `ROLLBACK=1` and `CONFIRM_WIPE=1` still refuse `real_cutover_unreconciled`
   with an empty timeline. The existing G7 rows are unchanged and green.
 - [ ] **AC9.** Runbook:
@@ -836,11 +964,20 @@ land in the PM4 docs PR, following the precedent of the ADR-237 flip in #9036.
   3. Capture the run id: `gh run list --workflow git-data-cutover.yml --limit 1 --json databaseId`.
   4. Arm a watch on it (`hr-dispatch-async-must-arm-watch`).
 
-  The job waits on the `web-platform-infra-apply` environment approval. `prevent_self_review` is
-  false and the operator is its reviewer. The run is read-only, so the session may approve it
-  through `POST /repos/jikig-ai/soleur/actions/runs/<id>/pending_deployments` if it holds reviewer
-  rights. Otherwise that approval is the single human input. A run still unapproved at the end of
-  the session is cancelled (`gh run cancel <id>`), because it holds the `git-data-state` group.
+  The job then waits on the `web-platform-infra-apply` environment approval. **The operator's
+  approval is the single human input** (security P1-b). The approval is what hands the job
+  `DOPPLER_TOKEN_PRD` and the git-data root key, so "the script is read-only" does not bound what
+  it authorizes (`hr-menu-option-ack-not-prod-write-auth`).
+
+  The session may approve through `POST /repos/jikig-ai/soleur/actions/runs/<id>/pending_deployments`
+  only with the operator's explicit in-session consent for this run, and only after checking that:
+  - the run's `path` is `.github/workflows/git-data-cutover.yml`;
+  - it is `event=workflow_dispatch` on `head_branch=main`;
+  - its `head_sha` equals the merge SHA;
+  - its actor is the session's own.
+
+  A run still unapproved at the end of the session is cancelled (`gh run cancel <id>`), because it
+  holds the `git-data-state` group.
 - [ ] **PM2.** Get the job id with `gh run view <id> --json jobs --jq '.jobs[0].databaseId'`, then
   read the annotations with `gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations`.
   - Expect exactly the nine `::notice` lines of AC2.
@@ -875,7 +1012,9 @@ image.
 | V5/V6/V16/V127/V255 | `SHIM_VERIFY=r5/r6/r16/r127/r255` | `probe_failed rc=<n>` |
 | Vline2/Vempty | a second line, or an empty answer | `probe_failed rc=96`; the canary is never printed |
 | VX-ok | executed: bound marker, no sentinel | ok |
-| VX-nomk / VX-emptymk / VX-dirmk | marker missing, empty, or a directory | `reason=marker_absent` |
+| VX-nomk / VX-emptymk / VX-dirmk | marker missing, empty, or a non-empty directory | `reason=marker_absent` |
+| Vnotok | `SHIM_VERIFY=notok` (answers `nok`) | `probe_failed rc=96` |
+| VINJ | `SHIM_VERIFY=r22` with `SHIM_VERIFY_STDERR` carrying `::error::x` and `::add-mask::y` | `reason=marker_mismatch`; no extra annotation; the injected lines appear only behind `probe-stderr:` inside the `::stop-commands::` span |
 | VX-symlinkok (must-PASS) | the marker is a symlink to a file with the right UUID | ok (the wrappers accept it) |
 | VX-mismatch | the marker's first line differs from `SHIM_FINDMNT_UUID` | `reason=marker_mismatch` |
 | VX-crlf | marker `<uuid>\r\n` | `reason=marker_mismatch` (the wrappers refuse it too) |
@@ -886,12 +1025,14 @@ image.
 | VX-frozen | a `.cutover-freeze` file under the fixture root | `cutover_frozen` |
 | VX-frozen-dangling (must-PASS) | a dangling `.cutover-freeze` symlink | ok (the wrappers test `-e` too) |
 | ARG | an unsafe `OLD_ROOT`; an unsafe `STORE_VERIFIED` | `probe_failed reason=arg_root / arg_marker`; no `r=` dialed |
-| P3 | parity with every derived definer | equal; floors 5, 5, 4 and 6, with set identity |
-| RB | every emitted verdict and reason word | present in the runbook verdict map |
+| ARG-mapper | `LUKS_MAPPER` holding a newline, or `/dev/x;y` | `probe=store-on-mapper verdict=probe_failed reason=arg_mapper`; no `r=` dialed |
+| P3 | parity with every derived definer | equal; floors 5, 5, 4 and 6, with set identity; the three P3 mutants go RED |
+| RB | the store-probe word sets, in both directions | script set = observed set = runbook-map set; the three RB mutants go RED |
 | R5/R5b/R5c | runtime canonical | exit 0; the exact 7-line command list; logins web 7 / gd 5 |
 | R6, RF2, RFINC, RF17, RF18 | runtime, on the mapper fixture | their original verdicts |
 | R7 | runtime `/dev/sdb` | `store_not_on_mapper` |
-| RVM | runtime marker mismatch (marker restored afterwards) | `reason=marker_mismatch` |
+| RVM | runtime marker mismatch (marker restored by a trap) | `reason=marker_mismatch`; no UUID or marker bytes in the output |
+| RVM2 | runtime canonical, right after RVM | exit 0 |
 
 ## Domain Review
 
@@ -1007,6 +1148,17 @@ scope dissolved with them:
 - "call the wrappers' helper" cut, because no helper exists and running a wrapper is a write path;
 - verdict words, not exit codes, are the mapping key.
 
+**Deepen-plan revisions:**
+
+- security: the prefix construction, `arg_mapper`, the PM1 approval gating, VINJ, and the
+  stale-marker and two-`findmnt` risks;
+- test-design: exact `-ne` floors, a computed `MUTANT_FLOOR`, RB in both directions with mutants,
+  P3 mutants, the row 5 split, a non-empty `dirmk`, the shim-dispatch harness rows, `notok`, and
+  the RVM trap plus RVM2;
+- observability: layer-6 citations and the false-clear failure mode;
+- user-impact: F1-F5 in step 5.2;
+- git-history: the corrected base SHA, and 707c7d072d dropped.
+
 **Taste and User-Challenge decisions** are persisted to
 `knowledge-base/project/specs/feat-one-shot-8211-pr2-cutover-proof-already-cut-over/decision-challenges.md`:
 
@@ -1014,6 +1166,15 @@ scope dissolved with them:
 - keeping the freeze probe (DHH: future scaffolding).
 
 ## Risks and Sharp Edges
+
+- **A stale marker could outlive a failed bootstrap re-run.** `git-data-bootstrap.sh` removes the
+  marker only after its early FATAL points: the key guard, luksOpen and the mapper. A replace always
+  starts on a fresh root disk, so this cannot happen across a replace. It could happen only on a
+  same-instance re-run. Step 5.2(b) therefore binds the evidence to the instance's `boot_complete`
+  line and the replace-run chain, never to the marker alone (security P2-b, user-impact F5).
+- **The source and the UUID come from two `findmnt` calls.** Stacked mounts fail closed: the SOURCE
+  read returns several lines, which exits 6. The reason word then names "source changed or
+  over-mounted", which is accurate enough to route the incident (security P2-c).
 
 - **The suite is the only proof of this change before production.** Its sed mutants anchor on exact
   line text, so they are written after the Phase 3 text exists and are scoped by function range. A
