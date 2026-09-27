@@ -1065,6 +1065,88 @@ SCEN_ROOT="$EVIL_ROOT" run_scenario_both "13c-plugin-json-not-soleur" "$SCEN13C"
 rm -f "$SCEN13C"
 
 # ---------------------------------------------------------------------------
+# Scenarios 17b/17c — the DELIVERED text. Every row above sources the fence as it
+# sits on disk, with the token raw and the root supplied by the environment. The
+# Skill tool delivers it with the loader's literal path in place of the token, and
+# a Monitor shell exports nothing. These rows substitute the token the way the
+# loader does (literally, into a root whose path contains a space, so an unquoted
+# binding word-splits), then run with a hostile decoy exported (17b) and with the
+# variable unset (17c, the real Monitor shape). Both must reach scenario 9's
+# success line: the loader's literal wins over the environment. Scenario 13c is
+# the negative control — the same decoy against the raw fence is refused.
+# Placed after 13c on purpose: EVIL_ROOT is defined there.
+# ---------------------------------------------------------------------------
+[[ -d "${EVIL_ROOT:-}" ]] || { fail "EVIL_ROOT missing (17b placed before 13c?)"; exit 1; }
+SPACED_PARENT="$(mktemp -d)"
+assert_fixture_dir "$SPACED_PARENT"
+_TMP_OWNED+=("$SPACED_PARENT")
+SPACED_ROOT="$SPACED_PARENT/plugin root"
+{ mkdir -p "$SPACED_ROOT" && cp -R "$PLUGIN_COPY/." "$SPACED_ROOT/"; } \
+  || { printf 'FATAL: could not copy the plugin root into %s\n' "$SPACED_ROOT" >&2; exit 1; }
+
+# Literal substitution — a sed/perl replacement carrying `$` is interpolated by the tool.
+substitute_token() {
+  local src="$1" dst="$2" tok='${CLAUDE_PLUGIN_ROOT}' line
+  : > "$dst"
+  while IFS= read -r line || [[ -n $line ]]; do
+    printf '%s\n' "${line//"$tok"/"$SPACED_ROOT"}" >> "$dst"
+  done < "$src"
+}
+count_of() { grep -oF -- "$1" "$2" | wc -l; }
+SUBST_BLOCK="$(mktemp)"
+_TMP_OWNED+=("$SUBST_BLOCK")
+SUBST_MIRROR="$(mktemp)"
+_TMP_OWNED+=("$SUBST_MIRROR")
+for pair in "ship:$BLOCK_FILE:$SUBST_BLOCK" "merge-pr:$MIRROR_FILE:$SUBST_MIRROR"; do
+  IFS=: read -r _name _src _dst <<< "$pair"
+  _before="$(count_of '${CLAUDE_PLUGIN_ROOT}' "$_src")"
+  substitute_token "$_src" "$_dst"
+  _after="$(count_of '${CLAUDE_PLUGIN_ROOT}' "$_dst")"
+  _roots="$(count_of "$SPACED_ROOT" "$_dst")"
+  if [[ "$_before" -ge 1 && "$_after" -eq 0 && "$_roots" -eq "$_before" ]]; then
+    pass "[17-subst:$_name] token replaced literally ($_before occurrence(s), 0 left)"
+  else
+    fail "[17-subst:$_name] substitution did not land: before=$_before after=$_after roots=$_roots"
+  fi
+  if grep -qF -- "SYNC_ROOT=\"\$(set +u; printf '%s' \"$SPACED_ROOT\")\"" "$_dst"; then
+    pass "[17-subst:$_name] binding line carries the literal root"
+  else
+    fail "[17-subst:$_name] rewritten SYNC_ROOT= binding line not found"
+  fi
+done
+
+# A fresh mocks file: scenario 9 deletes its own.
+SCEN17="$(mktemp)"
+_TMP_OWNED+=("$SCEN17")
+cat > "$SCEN17" <<EOF
+${SYNC_MOCKS}
+EOF
+DELIVERED_FORBID="$SUCCESS_FORBID|\[ship\.phase7\.precondition\]|does not name soleur"
+for _row in "17b-delivered-decoy:$EVIL_ROOT" "17c-delivered-unset:unset"; do
+  _label="${_row%%:*}"; _root="${_row#*:}"
+  SCEN_ROOT="$_root" run_scenario "$_label:ship" "$SCEN17" \
+    "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" \
+    "$DELIVERED_FORBID" "$SUBST_BLOCK"
+  SCEN_ROOT="$_root" run_scenario "$_label:merge-pr" "$SCEN17" \
+    "\[1/60\] auto-sync 1/6 pushed" \
+    "$DELIVERED_FORBID" "$SUBST_MIRROR"
+done
+rm -f "$SCEN17"
+
+# Prose pins: an agent that takes the fence from the file on disk (raw token) is
+# told how to supply the root. Single-quoted so the harness never expands the token.
+for _md in "$SKILL" "$MIRROR"; do
+  for _frag in 'the root for this session is `${CLAUDE_PLUGIN_ROOT}`' \
+               'export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` using that path'; do
+    if grep -qF -- "$_frag" "$_md"; then
+      pass "[17-prose:$(basename "$(dirname "$_md")")] carries: $_frag"
+    else
+      fail "[17-prose:$(basename "$(dirname "$_md")")] missing: $_frag"
+    fi
+  done
+done
+
+# ---------------------------------------------------------------------------
 # Scenario 14 — a pasted `#4387` (or any non-digit PR) is refused before the poll
 # starts: unvalidated, `bash "$SYNC_SNAP" #4387 --step || sync_rc=$?` comments out
 # the rc capture and the arm prints a false "pushed".
