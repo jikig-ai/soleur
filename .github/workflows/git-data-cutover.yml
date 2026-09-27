@@ -7,15 +7,13 @@
 #   2. the git-data root read token is published;
 #   3. root on git-data accepts the Terraform-minted root key through the web-1 jump
 #      (git-data-cutover.sh › access_gate);
-#   4. the store is served by the LUKS mapper with the bootstrap's store marker bound to it, is
-#      not frozen, and its repositories directory holds no entry (git-data-cutover.sh store
-#      probes, read in one ssh session, ADR-239).
+#   4. the store is mounted on a plaintext device, not already the LUKS mapper, and holds no
+#      repository (git-data-cutover.sh store probes).
 #   5. a push would run a root-owned pre-receive of the planted shape: ownership, the git
 #      user's access, the transport wrapper's pin and core.hooksPath, on the store device
 #      (git-data-cutover.sh › refuse_if_fence_not_intact, #8101; shape, not content).
 # The real cutover, rollback and wipe were deleted from the script: their freeze and reload
-# called systemd units that do not exist. This dry run is the `proof`; the flip and rollback
-# are rebuilt on real mechanisms in #8211.
+# called systemd units that do not exist. They are rebuilt on real mechanisms in #8211.
 #
 # Reach model (ADR-220, #6680). The GH runner egress IP is not in var.admin_ips, so it cannot
 # dial either host's :22 directly. The CF Tunnel carries ONE SSH ingress, to web-1; the bridge
