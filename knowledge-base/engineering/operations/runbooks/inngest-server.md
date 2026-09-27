@@ -2228,8 +2228,8 @@ fail-safe: if you cannot complete one, stop at step 1.
    - (d) **Its Sentry monitor agrees.** The slug is usually `scheduled-<name>` (the
      `SENTRY_MONITOR_SLUG` constant in `cron-<name>.ts`); if that file has no constant, look the
      monitor up by name in `cron-monitors.tf` before concluding there is none. Read the check-ins
-     after the tick plus that monitor's `checkin_margin_minutes`, through the API and with the
-     read token (`SENTRY_AUTH_TOKEN` returns 403 for this read):
+     after the tick plus that monitor's `checkin_margin_minutes`, through the API with the
+     IaC read token (verified live 2026-09-27; this repo reads Sentry with `SENTRY_IAC_AUTH_TOKEN`):
      `doppler run -p soleur -c prd -- bash -c 'curl -sS --fail-with-body -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/?per_page=100"' | jq -r 'if type == "array" then .[] | select(.environment == "production") | "\(.expectedTime) \(.status)" else error("sentry read failed") end'`.
      Require a `missed` row whose `expectedTime` is the tick, and no `ok`, `in_progress` or `error`
      row after it (a finished run whose heartbeat was lost also reads `missed`, which is why step
@@ -2350,8 +2350,8 @@ Per ADR-033 (per-tenant scope grants), the env flag `SOLEUR_FR5_ENABLED` is no l
 2. **Migrations 048 + 049 applied to prd Supabase.** Verify via `psql` (or Supabase MCP):
 
    ```bash
-   doppler run -p soleur -c prd -- psql "$DATABASE_URL_POOLER" -c '\d+ public.scope_grants'
-   doppler run -p soleur -c prd -- psql "$DATABASE_URL_POOLER" -c '\d public.users' | grep runtime_explainer_dismissed_at
+   doppler run -p soleur -c prd -- sh -c 'psql "$DATABASE_URL_POOLER" -c "$0"' '\d+ public.scope_grants'
+   doppler run -p soleur -c prd -- sh -c 'psql "$DATABASE_URL_POOLER" -c "$0"' '\d public.users' | grep runtime_explainer_dismissed_at
    ```
 
    Expected shape: 7 columns on `scope_grants`, RLS enabled, 2 WORM triggers (`scope_grants_no_update`, `scope_grants_no_delete`), 1 partial index (`scope_grants_active_idx`), 3 RPCs (`grant_action_class`, `revoke_action_class`, `anonymise_scope_grants`) with explicit `REVOKE EXECUTE FROM PUBLIC, anon` and the correct `GRANT EXECUTE TO` for each role.
