@@ -76,6 +76,34 @@ whether the destroy guard would accept the replace.
    **Prevention:** when waiting on background agents, end with a `<stop>BLOCKED: …</stop>` line,
    not a first-person promise.
 
+## Addendum — 2026-09-27 (#8737, PR #9029): revoke-first has a race, and the listing lags
+
+Key Insight 2 above is incomplete and, as written, misleading. What happened:
+
+- The orphan revoke (~13:40Z on 2026-09-25) and a sibling merge's per-merge apply (run
+  36142758324, 13:45Z) overlapped. That apply refreshed the Terraform-tracked token `61c939b5`
+  as **deleted**, dropped it from state and minted an intermediate `ghcr-minter-write`
+  (`a315b598`) under the OLD name — before #8852 merged.
+- The token listing (`GET /v3/configs/config/tokens`) read at ~14:48Z still showed `61c939b5`
+  and did not yet show `a315b598`. Revoke-first was decided on that stale view, so #8852's
+  merge apply planned to replace `a315b598` (1 destroy, no `[ack-destroy]`) and HALTed — and
+  every later `main` apply halted with it for two days until recovery PR #9029 merged with
+  `[ack-destroy]`.
+
+Corrections:
+
+1. **Revoke-first only removes the ack if no other apply refreshes state between the revoke
+   and the rotation's merge.** On a repo where every merge runs the targeted apply, any
+   unrelated merge in that window re-mints the token under whatever name `main` still
+   declares, and the rotation then needs an ack after all. Revoke immediately before the
+   rotation's merge (lock group idle, other merges held), or accept `[ack-destroy]`.
+2. **Take the Terraform-tracked slug from the apply log (`Refreshing state... [id=…]`), not
+   from the listing.** The listing lags the provider; one read is not evidence of absence or
+   presence. Re-read after any write and prefer the run log's id.
+3. Separately: a deploy restarting the app container right after an apply showed `/health`
+   `supabase: "error"` intermittently for ~3 minutes, then steady `connected`; Management API
+   health was `ACTIVE_HEALTHY` throughout. Re-probe past warm-up before calling it an outage.
+
 ## Tags
 
 category: security-issues
