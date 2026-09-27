@@ -184,6 +184,12 @@ map). The flip, rollback, redeploy and D6 replace stay open on #8211 as its foll
   differ. The chain "marker bound, so the boot's full count was 0; the flag has been off since; now
   `*.git` = 0" covers the difference. Changing the count would alter an existing verdict for no new
   property (CTO).
+  > **Reversed at code review, 2026-09-27 (CTO ruling A2/B/C).** The discharge record says "no
+  > repository held", which is a statement about every entry, and the bootstrap already treats a
+  > partial `x/` as user data; no production `clear` had been recorded against the mapper yet, so no
+  > historical verdict flips. The count now uses `_repo_count`'s rule (every direct entry except
+  > `.*.init.lock` and `lost+found`), runs in the SAME ssh session as the store-verified facts (with
+  > the wrappers' `stat -c %m` containing-mount check), and both probes use `findmnt --mountpoint`.
 - A new standalone "freeze-absent" probe with its own SSH session. It is folded into the
   `store-verified` session, because one login attests the whole verified state.
 
@@ -1070,16 +1076,24 @@ review cut those mechanisms.
 
 **Status:** reviewed.
 
-**Assessment.** The evidence is adequate with conditions, all applied:
+**Assessment.** The evidence is adequate with conditions, all applied. Restated at code review
+(CLO ruling, 2026-09-27), superseding the plan-time list:
 
-- the discharge rests on the two measured volume counts, plus the flag history, which spec-flow
-  made required;
-- the #5914 record carries the run and replace ids, the precheck line and a bounded sweep window;
-- it uses the wording "no data held; nothing to erase", and records the Art. 12(3) deadline;
-- only `clear` discharges;
+- the discharge rests on (a) the proof's count, (b) `boot_complete` with `plaintext_volume=present
+  plaintext_empty=yes served_repos=0`, (c) the flag history since the older volume's creation, and
+  (d) a per-id lock-file classification from Sentry;
+- the record says "no repository held; nothing to erase", never "erased" or "no data held", states
+  what each count skipped, and names the lock-file class it does not cover (#9066);
+- no `auth.users.id`, and no hash of one, appears on #5914 or any public surface; the ids stay in
+  Sentry `extra.gitDataRepoId`;
+- unreadable evidence posts a NOT DISCHARGED record and opens a `clo-attestation` issue due 7 days
+  before the earliest Art. 12(3) deadline;
+- the window ends at the record; later requests close only on `erased`; the first flip requires a
+  per-id re-erasure path (#8211);
 - no text implies encryption-at-rest activation; it points at #8634.
 
-There is no impact on the Art. 30 register or on legal documents.
+There is no change to the legal documents in this PR. §10.3(b) is re-ruled if #9066 slips past the
+first flip.
 
 ### Product/UX Gate
 

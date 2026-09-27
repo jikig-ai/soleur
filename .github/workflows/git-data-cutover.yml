@@ -8,7 +8,8 @@
 #   3. root on git-data accepts the Terraform-minted root key through the web-1 jump
 #      (git-data-cutover.sh › access_gate);
 #   4. the store is served by the LUKS mapper with the bootstrap's store marker bound to it, is
-#      not frozen, and holds no repository (git-data-cutover.sh store probes, ADR-239).
+#      not frozen, and its repositories directory holds no entry (git-data-cutover.sh store
+#      probes, read in one ssh session, ADR-239).
 #   5. a push would run a root-owned pre-receive of the planted shape: ownership, the git
 #      user's access, the transport wrapper's pin and core.hooksPath, on the store device
 #      (git-data-cutover.sh › refuse_if_fence_not_intact, #8101; shape, not content).

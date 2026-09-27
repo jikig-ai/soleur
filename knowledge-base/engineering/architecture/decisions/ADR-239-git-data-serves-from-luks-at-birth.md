@@ -227,11 +227,21 @@ ADR renders:
 - **The polarity is inverted.** `probe=store-on-mapper` refuses any served device other than
   `LUKS_MAPPER` (`store_not_on_mapper`), because D1 says the render never serves one.
   `already_cut_over` is retired.
-- **A pass rests on D3's evidence, not on the absence of a refusal.** `probe=store-verified` reads,
-  in one ssh session, that the store is still served by that device, that its filesystem has a
-  UUID, that the wrappers' marker holds that UUID on its first line, and that the freeze sentinel is
-  absent. It is exactly as strict as the wrappers, so a refusal means the wrappers are refusing
-  now. It makes no encryption claim: when encryption at rest became active for the Art. 30 register
+- **A pass rests on D3's evidence, read at one instant.** One ssh session reports two probes.
+  `probe=store-verified`: the store is still served by that device (`findmnt --mountpoint`, the
+  wrappers' own query), the freeze sentinel is absent (read first), the filesystem has a UUID, and the
+  wrappers' marker holds that UUID on its first line. `probe=store-empty`: `repositories/`'s
+  containing mount is the store root (the wrappers' `stat -c %m` check), and it holds no entry except
+  the lock dotfiles and `lost+found` — the bootstrap's own `_repo_count` rule, not only `*.git`.
+  Reading everything in one session removes the window in which a mapper could be reopened on another
+  volume between reads.
+- **Never stricter than the wrappers.** A `store_unverified` means every wrapper refuses now;
+  `cutover_frozen` means provision, remove, the transport wrapper and pre-receive do (gc does not read
+  the sentinel). The probes read as root while the wrappers run as git, so a permission fault can make
+  the wrappers refuse where the proof passes; the git-user path is attested by `boot_complete
+  erasure_probe=yes` and the fence probe's `runuser` checks, not by this proof.
+- **Configuration is checked before anything is printed or dialed** (`probe=config`).
+- **It makes no encryption claim:** when encryption at rest became active for the Art. 30 register
   is #8634's determination.
 - **The ADR-237 addendum's "making the proof read `already_cut_over` as a pass" is discharged by
   rebuilding the probes, not by passing that verdict.**
@@ -239,12 +249,15 @@ ADR renders:
   `store_not_empty`.
 
 **What remains of PR2, on #8211:** the flip; the flag-off-only rollback; the same-version redeploy;
-the ADR-220 D6 fresh replace with its LUKS key and volume rotation; and the amendment to ADR-237
-that the fresh replace needs (this ADR and the PR1 plan call it "ADR-237 D6", but ADR-237 has
-decisions 1 to 5 only). The real modes keep refusing `real_cutover_unreconciled`.
+the in-container `git_data_store=` startup line on every web host (the per-host proof); the ADR-220 D6
+fresh replace with its LUKS key and volume rotation; the amendment to ADR-237 that the fresh replace
+needs (this ADR and the PR1 plan call it "ADR-237 D6", but ADR-237 has decisions 1 to 5 only); a freeze
+writer; and pin-fault paging (#8572). The real modes keep refusing `real_cutover_unreconciled`.
+**Forward coupling:** the proof refuses `cutover_frozen`, so when the flip gains a freeze writer it
+must run the proof before it acquires the freeze, or pass the proof an expected-frozen parameter.
 
-Status stays `adopting`. Its flip rule is unchanged; the status flip lands in a docs PR after the
-first `clear` dry run, following the ADR-237 precedent.
+Status stays `adopting` under its unchanged flip rule; the flip is recorded alongside the ADR-220 D1b
+docs PR, which reads the current instance's `boot_complete`.
 
 ## References
 

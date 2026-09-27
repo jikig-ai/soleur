@@ -155,7 +155,7 @@ if [ "$c" = "true" ]; then
   exit 0
 fi
 case "$c" in
-  "findmnt -no SOURCE "*)
+  "findmnt -n -o SOURCE --mountpoint "*)
     case "${SHIM_FINDMNT:-mapper}" in
       mapper)    printf '/dev/mapper/git-data\n' ;;
       plain)     printf '/dev/sdb\n' ;;
@@ -171,24 +171,24 @@ case "$c" in
       hang)   exec sleep 30 ;;
     esac
     exit 0 ;;
-  "d="*)
-    case "${SHIM_COUNT:-zero}" in
-      zero)    printf '0\n' ;;
-      one)     printf '1\n' ;;
-      zero2nl) printf '0\n\n' ;;
-      err)     echo "find: cannot open directory: Permission denied" >&2; exit 4 ;;
-      exec)    exec bash -c "$c" ;;
-    esac
-    exit 0 ;;
   "r="*)
+    # The store session: the store-verified facts, then the entry count, in one command.
+    # SHIM_VERIFY answers the session as a whole; with the default `ok`, SHIM_COUNT picks the count.
     [ -n "${SHIM_VERIFY_STDERR:-}" ] && printf '%s' "$SHIM_VERIFY_STDERR" >&2
     case "${SHIM_VERIFY:-ok}" in
-      ok)    printf 'ok\n' ;;
+      ok)
+        case "${SHIM_COUNT:-zero}" in
+          zero)    printf '0\n' ;;
+          one)     printf '1\n' ;;
+          zero2nl) printf '0\n\n' ;;
+          err)     echo "find: cannot open directory: Permission denied" >&2; exit 4 ;;
+        esac ;;
       r255)  echo "ssh: connect to host 10.0.1.20 port 22: Connection timed out" >&2; exit 255 ;;
       r*)    exit "${SHIM_VERIFY#r}" ;;
-      line2) printf 'ok\nCANARY-VERIFY-LINE-2\n' ;;
+      line2) printf '0\nCANARY-VERIFY-LINE-2\n' ;;
       empty) : ;;
       notok) printf 'nok\n' ;;
+      x0)    printf 'x0\n' ;;
       exec)  exec bash -c "$c" ;;
     esac
     exit 0 ;;
@@ -206,41 +206,53 @@ case "$c" in
 esac
 exit "${SHIM_REMOTE_RC:-1}"
 SHIM
-# findmnt: reached ONLY by the store-verified, count or fence command when SHIM_VERIFY=exec /
-# SHIM_COUNT=exec / SHIM_FENCE=exec runs the remote bytes locally.
-# `-no UUID <path>` answers SHIM_FINDMNT_UUID (default a synthesized UUID; `empty` answers nothing,
-# `fail` exits 1). Positional `-no SOURCE <path>` answers SHIM_FINDMNT_S (default the mapper; a
-# two-line value simulates a stacked mount).
+# findmnt: reached ONLY by the store session or the fence command when SHIM_VERIFY=exec /
+# SHIM_FENCE=exec runs the remote bytes locally.
+# `-o UUID --mountpoint <path>` answers SHIM_FINDMNT_UUID (default the synthesized FIX_UUID; `empty`
+# answers nothing, `fail` exits 1). `-o SOURCE --mountpoint <path>` answers SHIM_FINDMNT_S (default
+# the mapper; a two-line value simulates a stacked mount).
 # `-T <path>` answers the source that path lives on: SHIM_FINDMNT_T (default the mount probe's
 # mapper), or `fail` for a findmnt that cannot resolve it.
 # The fence command asks for the hooks dir and pre-receive separately: SHIM_FINDMNT_TH / _TP
 # answer those two paths (each defaulting to SHIM_FINDMNT_T), so each comparison is drivable alone.
-cat > "$BIN/findmnt" <<'SHIM'
+FIX_UUID=6d1f0c2e-8b4a-4f3e-9a7d-2c5e8b1f4a90   # the findmnt shim's default UUID answer
+cat > "$BIN/findmnt" <<SHIM
 #!/usr/bin/env bash
-if [ "${1:-}" = -no ] && [ "${2:-}" = UUID ]; then
-  case "${SHIM_FINDMNT_UUID:-6d1f0c2e-8b4a-4f3e-9a7d-2c5e8b1f4a90}" in
+if [ "\$*" = "-n -o UUID --mountpoint \${!#}" ]; then
+  u="\${SHIM_FINDMNT_UUID:-$FIX_UUID}"
+  case "\$u" in
     empty) exit 0 ;;
     fail)  echo "findmnt: cannot read UUID" >&2; exit 1 ;;
-    *)     printf '%s\n' "${SHIM_FINDMNT_UUID:-6d1f0c2e-8b4a-4f3e-9a7d-2c5e8b1f4a90}"; exit 0 ;;
+    *)     printf '%s\\n' "\$u"; exit 0 ;;
   esac
 fi
-if [ "${3:-}" != -T ]; then printf '%s\n' "${SHIM_FINDMNT_S:-/dev/mapper/git-data}"; exit 0; fi
-a="${SHIM_FINDMNT_T:-/dev/mapper/git-data}"
-case "${!#}" in
-  */hooks) a="${SHIM_FINDMNT_TH:-$a}" ;;
-  */pre-receive) a="${SHIM_FINDMNT_TP:-$a}" ;;
+if [ "\$*" = "-n -o SOURCE --mountpoint \${!#}" ]; then printf '%s\\n' "\${SHIM_FINDMNT_S:-/dev/mapper/git-data}"; exit 0; fi
+[ "\${3:-}" = -T ] || { echo "findmnt-shim: unexpected argv: \$*" >&2; exit 64; }
+a="\${SHIM_FINDMNT_T:-/dev/mapper/git-data}"
+case "\${!#}" in
+  */hooks) a="\${SHIM_FINDMNT_TH:-\$a}" ;;
+  */pre-receive) a="\${SHIM_FINDMNT_TP:-\$a}" ;;
 esac
-case "$a" in
+case "\$a" in
   fail) echo "findmnt: can't find target" >&2; exit 1 ;;
-  *) printf '%s\n' "$a" ;;
+  *) printf '%s\\n' "\$a" ;;
 esac
 SHIM
 # stat / git / runuser: reached ONLY by the fence command under SHIM_FENCE=exec (the script itself
 # calls none of them). A CI user cannot own a root:git tree, so these answer for the paths the
 # fence command reads; an unset answer falls through to the real binary.
 REAL_STAT="$(command -v stat)" || { printf 'FAIL SETUP: stat not found\n' >&2; exit 1; }
+# The store session asks `stat -c %m <repositories>` for its containing mount: SHIM_STAT_M answers
+# (`fail` exits 1); unset, the answer is the resolved OLD_ROOT the case ran with, i.e. "on the root".
 cat > "$BIN/stat" <<SHIM
 #!/usr/bin/env bash
+if [ "\${1:-}" = -c ] && [ "\${2:-}" = %m ]; then
+  case "\${SHIM_STAT_M:-}" in
+    fail) echo "stat: cannot statx" >&2; exit 1 ;;
+    "")   readlink -f "\${OLD_ROOT:-/mnt/git-data}"; exit 0 ;;
+    *)    printf '%s\\n' "\$SHIM_STAT_M"; exit 0 ;;
+  esac
+fi
 [ "\${SHIM_STAT_FAIL:-0}" = 1 ] && { echo "stat: cannot statx" >&2; exit 1; }
 case "\${!#}" in
   */hooks) v="\${SHIM_STAT_H-}" ;;
@@ -300,11 +312,11 @@ tl_line() { grep -nE -- "$1" "$TLF" | head -1 | cut -d: -f1; }
 has_access() { grep -qE "^\[git-data-cutover\] ACCESS role=$1 host=[^ ]+ verdict=$2( |$)" "$OUT"; }
 has_store() { grep -qE "^\[git-data-cutover\] STORE probe=$1 verdict=$2( |$)" "$OUT"; }
 # Any remote that is not a read: LUKS/mount/rsync/systemd/sentinel shapes, or any doppler call.
-# findmnt is a READ (the store probe) and is deliberately not in this list. It matches `mountpoint`
-# and `test -f`, which is why the store-verified probe uses positional findmnt and `[ -f`: do not
-# widen this helper or switch the probe to --mountpoint without narrowing the other.
-mutating() { grep -qE '^ssh .*(cryptsetup|mountpoint|rsync|systemctl|rm -f|touch |test -f|(^| )u?mount )|^doppler ' "$TLF"; }
-no_count_probe() { ! grep -qE '^ssh .* d=' "$TLF"; }
+# findmnt is a READ (the store probe) and is deliberately not in this list. `mountpoint` matches as
+# the mountpoint(1) command, not as findmnt's `--mountpoint` option (the MM rows below pin both).
+mutating() { grep -qE '^ssh .*(cryptsetup|(^|[^-])mountpoint|rsync|systemctl|rm -f|touch |test -f|(^| )u?mount )|^doppler ' "$TLF"; }
+# The count runs inside the store session (r=…), after its store-verified checks.
+no_count_probe() { ! grep -qE '^ssh .* 10\.0\.1\.20 r=' "$TLF"; }
 # Detail text for a failure, neutralised so a failing row cannot raise a real annotation.
 ctx() { printf 'rc=%s | out: %s | tl: %s' "$RC" "$(tail -c 600 "$OUT" | tr '\n' '|')" "$(tr '\n' '|' < "$TLF" | cut -c1-400)" | sed 's/::/: :/g; s/##\[/#-#[/g'; }
 
@@ -397,7 +409,7 @@ else fail "X2: a non-255 auth failure was not caught" "$(ctx)"; fi
 # S11 / H3 / row 2 — all ok, two-host roster, key set: the first store probe FOLLOWS every access probe.
 run_case s11 "${KEYED[@]}" WEB_HOSTS="10.0.1.10 10.0.1.11"
 _w1="$(tl_line ' 10\.0\.1\.10 true$')"; _w2="$(tl_line ' 10\.0\.1\.11 true$')"; _j="$(tl_line ' -W 10\.0\.1\.20:22 ')"
-_a="$(tl_line '^ssh -F /fixture/gd-ssh-config .* 10\.0\.1\.20 true$')"; _m="$(tl_line ' findmnt -no SOURCE ')"
+_a="$(tl_line '^ssh -F /fixture/gd-ssh-config .* 10\.0\.1\.20 true$')"; _m="$(tl_line ' findmnt -n -o SOURCE --mountpoint ')"
 if [ -n "$_w1" ] && [ -n "$_w2" ] && [ -n "$_j" ] && [ -n "$_a" ] && [ -n "$_m" ] \
    && [ "$_w1" -lt "$_w2" ] && [ "$_w2" -lt "$_j" ] && [ "$_j" -lt "$_a" ] && [ "$_a" -lt "$_m" ] \
    && has_access git-data-auth ok && [ "$RC" = 0 ]; then
@@ -642,9 +654,8 @@ cat > "$T/ac2.expected" <<'EXP'
 ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 10.0.1.10 true
 ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 -W 10.0.1.20:22 10.0.1.10
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 true
-ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -no SOURCE /mnt/git-data
-ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 r=/mnt/git-data; src=/dev/mapper/git-data; mk=/etc/git-data/store-verified; fz="$r/.cutover-freeze"; s=$(findmnt -no SOURCE "$r") || exit 5; [ "$s" = "$src" ] || exit 6; fu=$(findmnt -no UUID "$r") || exit 5; [ -n "$fu" ] || exit 24; [ -f "$mk" ] && [ -s "$mk" ] || exit 21; m=$(head -n 1 "$mk") || exit 16; [ "$m" = "$fu" ] || exit 22; [ ! -e "$fz" ] || exit 23; echo ok
-ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 d=/mnt/git-data/repositories; src=/dev/mapper/git-data; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; s=$(findmnt -no SOURCE -T "$d") || exit 5; [ "$s" = "$src" ] || exit 6; n=$(find -H "$d" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo "${#n}"
+ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -n -o SOURCE --mountpoint /mnt/git-data
+ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 r=/mnt/git-data; src=/dev/mapper/git-data; mk=/etc/git-data/store-verified; d=/mnt/git-data/repositories; fz="$r/.cutover-freeze"; s=$(findmnt -n -o SOURCE --mountpoint "$r") || exit 5; [ "$s" = "$src" ] || exit 6; [ ! -e "$fz" ] || exit 23; fu=$(findmnt -n -o UUID --mountpoint "$r") || exit 5; [ -n "$fu" ] || exit 24; [ -f "$mk" ] && [ -s "$mk" ] || exit 21; m=$(head -n 1 "$mk") || exit 16; [ "$m" = "$fu" ] || exit 22; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; dr=$(readlink -f "$d") && rr=$(readlink -f "$r") && t=$(stat -c %m "$dr") || exit 9; [ "$t" = "$rr" ] || exit 8; n=$(find -H "$d" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf .) || exit 4; echo "${#n}"
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 h=/mnt/git-data/hooks; p="$h/pre-receive"; src=/dev/mapper/git-data; sp=/mnt/git-data/hooks; w=/usr/local/bin/git-data-transport-wrapper.sh; [ -L "$h" ] && exit 10; [ -d "$h" ] || exit 10; [ -L "$p" ] && exit 12; [ -f "$p" ] && [ -x "$p" ] || exit 12; oh=$(stat -c '%U:%G %a' "$h") || exit 16; op=$(stat -c '%U:%G %a' "$p") || exit 16; [ "$oh" = "root:git 750" ] || exit 11; [ "$op" = "root:root 755" ] || exit 13; pp=$(stat -c '%U %a' "${h%/*}") || exit 16; case "$pp" in "root "[0-7][0145][0145]|"root "[0-7][0-7][0145][0145]) ;; *) exit 19 ;; esac; runuser -u git -- true || exit 16; runuser -u git -- test -r "$p" && runuser -u git -- test -x "$p" || exit 17; v=$(env -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM git config --system --includes --get core.hooksPath); g=$?; [ "$g" -le 1 ] || exit 16; [ "$v" = "$sp" ] || exit 14; grep -qxF -- HOOKS_DIR=\"\$\{GIT_DATA_HOOKS_DIR:-/mnt/git-data/hooks\}\" "$w" && grep -qxF -- exec\ git\ -c\ \"core.hooksPath=\$\{HOOKS_DIR\}\"\ \"\$\{verb#git-\}\"\ \"\$repo_real\" "$w" || exit 18; s=$(findmnt -no SOURCE -T "$h") || exit 5; [ "$s" = "$src" ] || exit 15; s=$(findmnt -no SOURCE -T "$p") || exit 5; [ "$s" = "$src" ] || exit 15; echo ok
 EXP
 # case_ac2_timeline <run-name> — the recorded remote timeline equals the expected file exactly.
@@ -662,14 +673,14 @@ case_ac2_clear() {
     && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT"
 }
 if case_ac2_clear; then
-  pass "AC2: key present, the LUKS mapper serving, the marker bound, not frozen, empty store, fence intact -> exit 0 with all four store probes and the fence probe ok"
+  pass "AC2: key present, the LUKS mapper serving, the marker bound, not frozen, empty store, fence intact -> exit 0 with every store probe and the fence probe ok"
 else fail "AC2: the canonical read-only proof did not exit 0 clear" "$(ctx)"; fi
 if [ "$_ac2_diff_rc" = 0 ]; then
-  pass "AC2: diff of the recorded remote timeline against the expected file is empty (web, jump, auth, findmnt, store-verified, count, fence — nothing else)"
+  pass "AC2: diff of the recorded remote timeline against the expected file is empty (web, jump, auth, findmnt, the store session, fence — nothing else)"
 else fail "AC2: the remote timeline differs from the expected file" "$(tr '\n' '|' < "$T/ac2.diff" | cut -c1-500)"; fi
-if [ "$(grep '^timeout ' "$TLF" | paste -sd' ' -)" = "timeout 30 timeout 25 timeout 30 timeout 30 timeout 30 timeout 30 timeout 30" ] \
-   && [ "$(grep -c '^ssh-stdin /dev/null$' "$TLF")" = 7 ] && [ "$(grep -c '^ssh-stdin ' "$TLF")" = 7 ]; then
-  pass "AC2/G5: every remote call is bounded (30/25/30/30/30/30/30) with stdin /dev/null"
+if [ "$(grep '^timeout ' "$TLF" | paste -sd' ' -)" = "timeout 30 timeout 25 timeout 30 timeout 30 timeout 30 timeout 30" ] \
+   && [ "$(grep -c '^ssh-stdin /dev/null$' "$TLF")" = 6 ] && [ "$(grep -c '^ssh-stdin ' "$TLF")" = 6 ]; then
+  pass "AC2/G5: every remote call is bounded (30/25/30/30/30/30) with stdin /dev/null"
 else fail "AC2/G5: a remote call lost its bound or its /dev/null stdin" "$(tr '\n' '|' < "$TLF" | cut -c1-500)"; fi
 if [ "$(grep -E '^::' "$OUT")" = "::notice title=git-data-cutover access::role=web verdict=ok
 ::notice title=git-data-cutover access::role=git-data-jump verdict=ok
@@ -748,58 +759,81 @@ run_case g2noeol "${KEYED[@]}" SHIM_FINDMNT=noeol
 if [ "$RC" = 0 ] && has_store store-mounted ok && has_store store-on-mapper ok; then pass "H2: a mapper source with no trailing newline is accepted (the count row covers one trailing newline)"
 else fail "H2: a source without a trailing newline was refused" "$(ctx)"; fi
 
-# The count command EXECUTED against a synthesized store (SHIM_COUNT=exec runs the remote bytes
-# locally), so the missing / not-a-directory / symlink semantics are the command's own.
-_store() { # <name> — a fresh fixture store root under $T
+# The store session EXECUTED against a synthesized store (SHIM_VERIFY=exec runs the remote bytes
+# locally), so the missing / not-a-directory / symlink / mount semantics are the command's own. Every
+# root carries a bound marker at <root>/store-verified, so the count stage is reached.
+_store() { # <name> — a fresh fixture store root under $T, with a bound marker
   assert_fixture_dir "$T/store-$1"
   rm -rf "$T/store-$1"; mkdir -p "$T/store-$1" || { printf 'FAIL SETUP: mkdir store\n' >&2; exit 1; }
+  printf '%s\n' "$FIX_UUID" > "$T/store-$1/store-verified" || { printf 'FAIL SETUP: marker\n' >&2; exit 1; }
   printf '%s' "$T/store-$1"
+}
+# case_store_exec <root> <run-name> [VAR=value ...] — the store session executed over <root>.
+case_store_exec() {
+  local sr="$1" nm="$2"; shift 2
+  run_case "$nm" "${KEYED[@]}" SHIM_VERIFY=exec OLD_ROOT="$sr" STORE_VERIFIED="$sr/store-verified" "$@"
 }
 # `_store`'s own guard runs inside `$( )`, where `exit` kills only the subshell and the caller
 # binds "" — so each binding is re-guarded HERE, in the shell that performs the writes.
 case_missing_repos() { # a mounted root with no repositories dir: bootstrap always creates it
   local sr
   sr="$(_store missing)"; assert_fixture_dir "$sr"
-  run_case g2missing "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$sr"
-  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=7' "$OUT"
+  case_store_exec "$sr" g2missing
+  [ "$RC" = 5 ] && has_store store-verified ok && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=7' "$OUT"
 }
-case_other_source() { # the repositories dir lives on a different source than the one accepted
+case_other_mount() { # the repositories dir's containing mount is not the store root
   local sr
-  sr="$(_store othersrc)"; assert_fixture_dir "$sr"; mkdir -p "$sr/repositories"
-  run_case g2othersrc "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$sr" SHIM_FINDMNT_T=/dev/sdc
-  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=6' "$OUT"
+  sr="$(_store othermnt)"; assert_fixture_dir "$sr"; mkdir -p "$sr/repositories"
+  case_store_exec "$sr" g2othermnt SHIM_STAT_M=/elsewhere
+  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=8' "$OUT"
 }
 if case_missing_repos; then pass "S7/H2: a mounted root with NO repositories dir -> probe_failed rc=7 (git-data-bootstrap.sh creates it; absent is abnormal, never a count of 0)"
 else fail "S7/H2: a missing repositories dir was not probe_failed rc=7" "$(ctx)"; fi
-if case_other_source; then pass "S7e: repositories on a different source (findmnt -T /dev/sdc != the mapper) -> probe_failed rc=6"
-else fail "S7e: a count on a different source was accepted" "$(ctx)"; fi
-_sr="$(_store tfail)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories"
-run_case g2tfail "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr" SHIM_FINDMNT_T=fail
-if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=5' "$OUT"; then
-  pass "S7f: findmnt -T unable to resolve the repositories source -> probe_failed rc=5"
-else fail "S7f: an unresolvable source was not probe_failed rc=5" "$(ctx)"; fi
-_sr="$(_store dangling)"; assert_fixture_dir "$_sr"; ln -s "$T/store-dangling-nowhere" "$_sr/repositories"
-run_case g2dangling "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
+if case_other_mount; then pass "S7e: repositories whose containing mount is not the store root (a second mount over it) -> probe_failed rc=8"
+else fail "S7e: a count on another mount was accepted" "$(ctx)"; fi
+_sr="$(_store mfail)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories"
+case_store_exec "$_sr" g2mfail SHIM_STAT_M=fail
+if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=9' "$OUT"; then
+  pass "S7f: stat unable to resolve the repositories mount -> probe_failed rc=9"
+else fail "S7f: an unresolvable mount was not probe_failed rc=9" "$(ctx)"; fi
+_sr="$(_store dangling)"; assert_fixture_dir "$_sr"; ln -s "$_sr/nowhere" "$_sr/repositories"
+case_store_exec "$_sr" g2dangling
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=3' "$OUT"; then
   pass "S7g: a dangling repositories symlink -> probe_failed rc=3, never a count of 0"
 else fail "S7g: a dangling symlink was not probe_failed rc=3" "$(ctx)"; fi
 _sr="$(_store other)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories/notes" && : > "$_sr/repositories/x.gitx" && : > "$_sr/repositories/README"
-run_case g2other "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
-if [ "$RC" = 0 ] && has_store store-empty ok; then pass "S7b: entries that are not *.git do not count -> exit 0"
-else fail "S7b: non-repository entries were counted" "$(ctx)"; fi
+_S7B_ROOT="$_sr"
+case_any_entry() { case_store_exec "$_S7B_ROOT" g2other; [ "$RC" = 5 ] && has_store store-empty store_not_empty; }
+if case_any_entry; then pass "S7b: entries that are not *.git count too (the bootstrap's _repo_count rule: a partial x/ is user data) -> store_not_empty"
+else fail "S7b: a non-*.git entry under repositories/ was not counted" "$(ctx)"; fi
+_sr="$(_store locks)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories/lost+found" && : > "$_sr/repositories/.boot-probe-0.init.lock" && : > "$_sr/repositories/.ws-9.init.lock"
+_S7H_ROOT="$_sr"
+case_locks_skipped() { case_store_exec "$_S7H_ROOT" g2locks; [ "$RC" = 0 ] && has_store store-empty ok; }
+if case_locks_skipped; then pass "S7h (must-PASS): lock dotfiles and lost+found do not count (the bootstrap's exclusions) -> clear"
+else fail "S7h: a lock dotfile or lost+found was counted" "$(ctx)"; fi
 _sr="$(_store realrepo)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories/ws-1.git"
-run_case g2realrepo "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
+case_store_exec "$_sr" g2realrepo
 if [ "$RC" = 5 ] && has_store store-empty store_not_empty; then pass "S6b: one real *.git entry under the store -> store_not_empty"
 else fail "S6b: a real repository entry was not counted" "$(ctx)"; fi
-_sr="$(_store symlink)"; assert_fixture_dir "$_sr"; mkdir -p "$T/store-symlink-target/ws-2.git" && ln -s "$T/store-symlink-target" "$_sr/repositories"
-run_case g2symlink "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
+_sr="$(_store symlink)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/target/ws-2.git" && ln -s "$_sr/target" "$_sr/repositories"
+case_store_exec "$_sr" g2symlink
 if [ "$RC" = 5 ] && has_store store-empty store_not_empty; then pass "S7c: a symlinked repositories dir is followed (find -H) -> store_not_empty"
 else fail "S7c: a symlinked repositories dir hid a repository" "$(ctx)"; fi
 _sr="$(_store notdir)"; assert_fixture_dir "$_sr"; : > "$_sr/repositories"
-run_case g2notdir "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
+case_store_exec "$_sr" g2notdir
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=3' "$OUT"; then
   pass "S7d: a repositories path that is not a directory -> probe_failed rc=3"
 else fail "S7d: a non-directory repositories path was not a probe error" "$(ctx)"; fi
+# P4 — the count's exclusions are the bootstrap's `_repo_count` exclusions, both sides exactly once.
+case_count_parity() { # <script> <bootstrap>
+  local sx bx
+  sx="$(grep -oE "find -H [^)]*-printf \." "$1" | grep -oE "! -name [^ ]+" | tr -d "'" | LC_ALL=C sort | paste -sd' ' -)"
+  bx="$(awk '/^_repo_count\(\) \{/,/^\}/' "$2" | grep -oE "! -name [^ ]+" | tr -d "'" | LC_ALL=C sort | paste -sd' ' -)"
+  COUNT_PARITY_DETAIL="script=[$sx] bootstrap=[$bx]"
+  [ -n "$sx" ] && [ "$sx" = "$bx" ] && [ "$(grep -cE "find -H [^)]*-printf \." "$1")" = 1 ]
+}
+if case_count_parity "$SCRIPT" "$DIR/git-data-bootstrap.sh"; then pass "P4: the count skips exactly what the bootstrap's _repo_count skips ($COUNT_PARITY_DETAIL)"
+else fail "P4: the count's exclusions drifted from the bootstrap's _repo_count" "$COUNT_PARITY_DETAIL"; fi
 
 if case_verb_census "$SCRIPT"; then pass "G2 census: no rsync/cryptsetup/mount/umount/mkfs/touch/rm -rf/systemctl/doppler/web_ssh or deleted cutover function in the script ($CENSUS_DETAIL)"
 else fail "G2 census: a mutating verb or deleted function survives" "$CENSUS_DETAIL"; fi
@@ -808,17 +842,43 @@ else fail "G2 census: a mutating verb or deleted function survives" "$CENSUS_DET
 case_main_order() { # <script>
   local main calls
   main="$(awk '/^main\(\) \{/{m=1; next} m && /^\}/{exit} m' "$1" | sed -E 's/^[[:space:]]*#.*$//' | grep -vE '^[[:space:]]*$')"
-  calls="$(printf '%s\n' "$main" | grep -oE '^[[:space:]]*(refuse_real_modes|resolve_roster|access_gate|refuse_if_unmounted|refuse_if_not_on_mapper|refuse_if_store_unverified|refuse_if_store_not_empty|refuse_if_fence_not_intact)[[:space:]]*$' | tr -d ' ' | paste -sd, -)"
+  calls="$(printf '%s\n' "$main" | grep -oE '^[[:space:]]*(refuse_real_modes|resolve_roster|refuse_if_config_unsafe|access_gate|refuse_if_unmounted|refuse_if_not_on_mapper|refuse_if_store_unverified_or_not_empty|refuse_if_fence_not_intact)[[:space:]]*$' | tr -d ' ' | paste -sd, -)"
   ORDER_DETAIL="$calls"
-  [ "$calls" = "refuse_real_modes,resolve_roster,access_gate,refuse_if_unmounted,refuse_if_not_on_mapper,refuse_if_store_unverified,refuse_if_store_not_empty,refuse_if_fence_not_intact" ] \
+  [ "$calls" = "refuse_real_modes,resolve_roster,refuse_if_config_unsafe,access_gate,refuse_if_unmounted,refuse_if_not_on_mapper,refuse_if_store_unverified_or_not_empty,refuse_if_fence_not_intact" ] \
     && [ "$(grep -cE '(\$\(|`|\||&&)[^#]*(access_gate|refuse_if_|refuse_real_modes)|(access_gate|refuse_if_[a-z_]+|refuse_real_modes)[[:space:]]*(\|\||&&|\|)' "$1" || true)" = 0 ]
 }
-if case_main_order "$SCRIPT"; then pass "H5: main() runs refuse_real_modes, resolve_roster, access_gate, then the four store probes and the fence probe in order, each once, never wrapped"
+if case_main_order "$SCRIPT"; then pass "H5: main() runs refuse_real_modes, resolve_roster, the config check, access_gate, then the store probes and the fence probe in order, each once, never wrapped"
 else fail "H5: main() order/shape is wrong" "calls=[$ORDER_DETAIL]"; fi
+
+# ── CONFIG — every configurable path is a safe literal before anything is printed or dialed ──
+# case_config <label> <reason> <VAR=value> — probe=config refuses, NOTHING is dialed (not even the
+# access gate), and the raw value never reaches the output.
+case_config() {
+  local label="$1" reason="$2" kv="$3"
+  run_case "cfg-$label" "${KEYED[@]}" "$kv"
+  CONFIG_VALUE="${kv#*=}"
+  [ "$RC" = 5 ] && grep -qxF "[git-data-cutover] STORE probe=config verdict=probe_failed reason=$reason" "$OUT" \
+    && [ "$(tl_ssh)" = 0 ] && ! grep -qF -- "${CONFIG_VALUE:-@@none@@}" "$OUT"
+}
+case_arg_root() { case_config root-semi arg_root 'OLD_ROOT=/x;touch /tmp/p'; }
+case_arg_marker() { case_config marker-rel arg_marker STORE_VERIFIED=rel/marker; }
+case_arg_mapper_nl() { case_config mapper-nl arg_mapper "LUKS_MAPPER=$(printf '/dev/x\nqz7w')"; }
+case_arg_subdir() { case_config subdir-slash arg_subdir 'REPO_SUBDIR=a/b'; }
+for spec in "root-semi|arg_root|OLD_ROOT=/x;touch /tmp/p" "root-nl|arg_root|OLD_ROOT=$(printf '/mnt/x\n::error::forged')" \
+            "marker-rel|arg_marker|STORE_VERIFIED=rel/marker" "marker-semi|arg_marker|STORE_VERIFIED=/etc/x;y" \
+            "marker-nl|arg_marker|STORE_VERIFIED=$(printf '/etc/x\nqz7w')" \
+            "mapper-nl|arg_mapper|LUKS_MAPPER=$(printf '/dev/x\nqz7w')" "mapper-semi|arg_mapper|LUKS_MAPPER=/dev/x;y" \
+            "subdir-slash|arg_subdir|REPO_SUBDIR=a/b" "subdir-dotdot|arg_subdir|REPO_SUBDIR=.." "subdir-nl|arg_subdir|REPO_SUBDIR=$(printf 'sub7q\nqz7w')" \
+            "wrapper-rel|arg_wrapper|TRANSPORT_WRAPPER=rel/wrapper"; do
+  IFS='|' read -r -d '' _lbl _why _kv <<< "$spec" || true
+  _kv="${_kv%$'\n'}"
+  if case_config "$_lbl" "$_why" "$_kv"; then pass "CFG ($_lbl): an unsafe value -> probe=config probe_failed reason=$_why, nothing dialed, the value never printed"
+  else fail "CFG ($_lbl): an unsafe configured value was not refused before any dial, or was printed" "$(ctx)"; fi
+done
 
 # ── GUARD 1 — the store is served by the configured LUKS mapper (ADR-239 D1) ──────────
 # case_ord — a plaintext source AND a non-empty count: the on-mapper refusal must win, so moving the
-# call after the count is observable (it would read store_not_empty).
+# call after the store session is observable (it would read store_not_empty).
 case_ord() {
   run_case g1ord "${KEYED[@]}" SHIM_FINDMNT=plain SHIM_COUNT=one SHIM_VERIFY=ok
   [ "$RC" = 5 ] && has_store store-on-mapper store_not_on_mapper && ! grep -q 'store_not_empty' "$OUT"
@@ -827,55 +887,63 @@ case_map_pre() { # a mapper whose name merely STARTS with the configured one
   run_case g1pre "${KEYED[@]}" SHIM_FINDMNT=mapperpre
   [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-on-mapper verdict=store_not_on_mapper' "$OUT" && no_verify_probe
 }
-case_arg_mapper() { # <label> <value> — an unsafe LUKS_MAPPER is refused before any further probe
-  run_case "g1arg-$1" "${KEYED[@]}" LUKS_MAPPER="$2"
-  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-on-mapper verdict=probe_failed reason=arg_mapper' "$OUT" && no_verify_probe && no_count_probe
-}
 if case_ord; then pass "ORD: a plaintext source with a non-empty store reads store_not_on_mapper, never store_not_empty"
 else fail "ORD: the on-mapper refusal did not come first" "$(ctx)"; fi
 if case_map_pre; then pass "MAP-PRE: /dev/mapper/git-data-plain is not the configured mapper -> store_not_on_mapper (string equality, not a prefix)"
 else fail "MAP-PRE: a mapper sharing the configured prefix was accepted" "$(ctx)"; fi
-case_arg_mapper_nl() { case_arg_mapper nl $'/dev/x\n'; }
-if case_arg_mapper_nl; then pass "ARG-mapper (newline): LUKS_MAPPER holding a newline -> probe_failed reason=arg_mapper, nothing further dialed"
-else fail "ARG-mapper (newline): an unsafe LUKS_MAPPER was not refused" "$(ctx)"; fi
-if case_arg_mapper semi '/dev/x;y'; then pass "ARG-mapper (;): LUKS_MAPPER=/dev/x;y -> probe_failed reason=arg_mapper, nothing further dialed"
-else fail "ARG-mapper (;): an unsafe LUKS_MAPPER was not refused" "$(ctx)"; fi
 
 # ── GUARD 2 — a pass is backed by the bootstrap's verified-store evidence (ADR-239 D3) ──
-FIX_UUID=6d1f0c2e-8b4a-4f3e-9a7d-2c5e8b1f4a90   # the findmnt shim's default UUID answer
-# case_verify <mode> <expected-verdict> [VAR=value ...] — SHIM_VERIFY=<mode> (canned remote answer):
-# exit 5, the exact store-verified line, and neither the count nor the fence is dialed.
+# case_verify <mode> <expected-verdict> [VAR=value ...] — SHIM_VERIFY=<mode> (canned session answer)
+# refused at the store-verified stage: exit 5, the exact line, no store-empty line, no fence dialed.
 case_verify() {
   local mode="$1" want="$2"; shift 2
   run_case "v-$mode" "${KEYED[@]}" SHIM_VERIFY="$mode" "$@"
   [ "$RC" = 5 ] && has_store store-on-mapper ok \
     && grep -qxF "[git-data-cutover] STORE probe=store-verified verdict=$want" "$OUT" \
-    && no_count_probe && no_fence_probe && ! grep -q 'verdict=clear' "$OUT"
+    && ! grep -q 'probe=store-empty' "$OUT" && no_fence_probe && ! grep -q 'verdict=clear' "$OUT"
+}
+# case_verify_empty <mode> <expected-verdict> — refused at the store-empty stage: every store-verified
+# fact held (its ok line), then the exact store-empty line, no fence dialed.
+case_verify_empty() {
+  local mode="$1" want="$2"; shift 2
+  run_case "ve-$mode" "${KEYED[@]}" SHIM_VERIFY="$mode" "$@"
+  [ "$RC" = 5 ] && has_store store-verified ok \
+    && grep -qxF "[git-data-cutover] STORE probe=store-empty verdict=$want" "$OUT" && no_fence_probe
 }
 case_v21() { case_verify r21 "store_unverified reason=marker_absent"; }
 case_v22() { case_verify r22 "store_unverified reason=marker_mismatch"; }
 case_v16() { case_verify r16 "probe_failed rc=16"; }
 case_v127() { case_verify r127 "probe_failed rc=127"; }
+case_v8() { case_verify_empty r8 "probe_failed rc=8"; }
 for spec in "V24:r24:store_unverified reason=no_fs_uuid" "V21:r21:store_unverified reason=marker_absent" \
             "V22:r22:store_unverified reason=marker_mismatch" "V23:r23:cutover_frozen" \
             "V5:r5:probe_failed rc=5" "V6:r6:probe_failed rc=6" "V16:r16:probe_failed rc=16" \
             "V127:r127:probe_failed rc=127" "V255:r255:probe_failed rc=255"; do
   IFS=: read -r _id _m _w <<< "$spec"
-  if case_verify "$_m" "$_w"; then pass "$_id ($_m): remote exit ${_m#r} -> $_w, exit 5; count and fence never dialed"
-  else fail "$_id ($_m): expected $_w" "$(ctx)"; fi
+  if case_verify "$_m" "$_w"; then pass "$_id ($_m): remote exit ${_m#r} -> store-verified $_w, exit 5; no store-empty verdict, fence never dialed"
+  else fail "$_id ($_m): expected store-verified $_w" "$(ctx)"; fi
+done
+for spec in "VE3:r3:probe_failed rc=3" "VE4:r4:probe_failed rc=4" "VE7:r7:probe_failed rc=7" \
+            "VE8:r8:probe_failed rc=8" "VE9:r9:probe_failed rc=9"; do
+  IFS=: read -r _id _m _w <<< "$spec"
+  if case_verify_empty "$_m" "$_w"; then pass "$_id ($_m): remote exit ${_m#r} is the count stage -> store-verified ok, then store-empty $_w"
+  else fail "$_id ($_m): expected store-verified ok then store-empty $_w" "$(ctx)"; fi
 done
 if grep -qxF '::error title=git-data-cutover store::probe=store-verified verdict=store_unverified reason=marker_mismatch' "$T/v-r22.out"; then
   pass "V22: the reason word reaches the ::error annotation"
 else fail "V22: the reason word did not reach the annotation" "$(grep -E '^::' "$T/v-r22.out" | tr '\n' '|' | sed 's/::/: :/g')"; fi
-if case_verify line2 "probe_failed rc=96" && ! grep -q 'CANARY-VERIFY-LINE-2' "$OUT"; then
-  pass "Vline2: an answer with an injected second line is probe_failed rc=96 and the canary is never printed"
-else fail "Vline2: a multi-line store-verified answer was accepted or printed" "$(ctx)"; fi
-case_vempty() { case_verify empty "probe_failed rc=96"; }
-case_vnotok() { case_verify notok "probe_failed rc=96"; }
-if case_vempty; then pass "Vempty: an empty exit-0 answer is probe_failed rc=96"
+if case_verify_empty line2 "probe_failed rc=96" && ! grep -q 'CANARY-VERIFY-LINE-2' "$OUT"; then
+  pass "Vline2: an answer with an injected second line is store-empty probe_failed rc=96 and the canary is never printed"
+else fail "Vline2: a multi-line session answer was accepted or printed" "$(ctx)"; fi
+case_vempty() { case_verify_empty empty "probe_failed rc=96"; }
+case_vnotok() { case_verify_empty notok "probe_failed rc=96"; }
+case_vx0() { case_verify_empty x0 "probe_failed rc=96"; }
+if case_vempty; then pass "Vempty: an empty exit-0 answer is store-empty probe_failed rc=96"
 else fail "Vempty: an empty answer was accepted" "$(ctx)"; fi
-if case_vnotok; then pass "Vnotok: an exit-0 answer 'nok' is probe_failed rc=96 (the anchor is ^ok\$, not 'ok')"
-else fail "Vnotok: a non-ok answer was accepted" "$(ctx)"; fi
+if case_vnotok; then pass "Vnotok: an exit-0 answer 'nok' is store-empty probe_failed rc=96"
+else fail "Vnotok: a non-count answer was accepted" "$(ctx)"; fi
+if case_vx0; then pass "Vx0: an exit-0 answer 'x0' is store-empty probe_failed rc=96 (the anchor is ^[0-9]+\$, not [0-9]+)"
+else fail "Vx0: a count with a leading non-digit was accepted" "$(ctx)"; fi
 # VINJ — hostile remote stderr on a refusal cannot raise an annotation of its own.
 run_case vinj "${KEYED[@]}" SHIM_VERIFY=r22 SHIM_VERIFY_STDERR=$'::error::x\n::add-mask::y\n'
 if [ "$RC" = 5 ] && has_store store-verified store_unverified \
@@ -888,82 +956,88 @@ if [ "$RC" = 5 ] && has_store store-verified store_unverified \
    && grep -qxF '[git-data-cutover] probe-stderr: ::error::x' "$OUT" && grep -qE '^::stop-commands::[0-9a-f]{16,}$' "$OUT"; then
   pass "VINJ: remote stderr carrying ::error:: and ::add-mask:: appears only behind probe-stderr: inside the stop-commands span; the only annotations are the fixed ones"
 else fail "VINJ: remote stderr raised an annotation or escaped its span" "$(grep -E '^::' "$OUT" | tr '\n' '|' | sed 's/::/: :/g')"; fi
-# ARG — unsafe OLD_ROOT / STORE_VERIFIED are refused locally, before the session is dialed.
-case_arg_verify() { # <label> <reason> <VAR=value>
-  run_case "varg-$1" "${KEYED[@]}" "$3"
-  [ "$RC" = 5 ] && grep -qxF "[git-data-cutover] STORE probe=store-verified verdict=probe_failed reason=$2" "$OUT" && no_verify_probe && no_count_probe
-}
-case_arg_root() { case_arg_verify root arg_root 'OLD_ROOT=/x;touch /tmp/p'; }
-case_arg_marker() { case_arg_verify marker arg_marker STORE_VERIFIED=rel/marker; }
-if case_arg_root; then pass "ARG (root): OLD_ROOT='/x;touch /tmp/p' -> store-verified probe_failed reason=arg_root, no session dialed"
-else fail "ARG (root): an unsafe OLD_ROOT reached the store-verified session" "$(ctx)"; fi
-if case_arg_marker; then pass "ARG (marker): STORE_VERIFIED=rel/marker -> probe_failed reason=arg_marker, no session dialed"
-else fail "ARG (marker): an unsafe STORE_VERIFIED reached the store-verified session" "$(ctx)"; fi
 
-# VX — the store-verified command EXECUTED (SHIM_VERIFY=exec runs the remote bytes locally) against a
-# fixture root and a fixture marker under $T; it never reads the runner's /mnt/git-data or /etc/git-data.
-_vxroot() { # <name> — a fresh fixture root; the marker path is <root>.mk
+# VX — the store session EXECUTED (SHIM_VERIFY=exec runs the remote bytes locally) against a fixture
+# root holding an empty repositories dir and its marker at <root>/store-verified; it never reads the
+# runner's /mnt/git-data or /etc/git-data, and every fixture path lives inside the guarded root.
+_vxroot() { # <name> — a fresh fixture root
   assert_fixture_dir "$T/vx-$1"
-  rm -rf "$T/vx-$1" "$T/vx-$1.mk"; mkdir -p "$T/vx-$1" || { printf 'FAIL SETUP: mkdir vx root\n' >&2; exit 1; }
+  rm -rf "$T/vx-$1"; mkdir -p "$T/vx-$1/repositories" || { printf 'FAIL SETUP: mkdir vx root\n' >&2; exit 1; }
   printf '%s' "$T/vx-$1"
 }
 # case_vx <root> <expected> [VAR=value ...] — `ok` must clear with exit 0; anything else is the exact
-# store-verified line, exit 5, nothing further dialed.
+# store-verified line, exit 5, no store-empty verdict and no fence dialed.
 case_vx() {
   local root="$1" want="$2" nm; shift 2
   nm="vx-$(basename "$root")"
-  run_case "$nm" "${KEYED[@]}" SHIM_VERIFY=exec OLD_ROOT="$root" STORE_VERIFIED="$root.mk" "$@"
-  if [ "$want" = ok ]; then [ "$RC" = 0 ] && has_store store-verified ok && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT"
-  else [ "$RC" = 5 ] && grep -qxF "[git-data-cutover] STORE probe=store-verified verdict=$want" "$OUT" && no_count_probe && no_fence_probe; fi
+  run_case "$nm" "${KEYED[@]}" SHIM_VERIFY=exec OLD_ROOT="$root" STORE_VERIFIED="$root/store-verified" "$@"
+  if [ "$want" = ok ]; then [ "$RC" = 0 ] && has_store store-verified ok && has_store store-empty ok && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT"
+  else [ "$RC" = 5 ] && grep -qxF "[git-data-cutover] STORE probe=store-verified verdict=$want" "$OUT" && ! grep -q 'probe=store-empty' "$OUT" && no_fence_probe; fi
 }
-_r="$(_vxroot ok)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r.mk"; _VX_OK="$_r"
+_r="$(_vxroot ok)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r/store-verified"; _VX_OK="$_r"
 case_vx_ok() { case_vx "$_VX_OK" ok; }
-if case_vx_ok; then pass "VX-ok: a marker whose first line is the mounted filesystem's UUID, no freeze sentinel -> store-verified ok, exit 0"
+if case_vx_ok; then pass "VX-ok: a marker whose first line is the mounted filesystem's UUID, no freeze sentinel, an empty repositories dir on the root -> exit 0"
 else fail "VX-ok: a bound marker did not clear" "$(ctx)"; fi
 _r="$(_vxroot nomk)"; assert_fixture_dir "$_r"
 if case_vx "$_r" "store_unverified reason=marker_absent"; then pass "VX-nomk: no marker -> reason=marker_absent"
 else fail "VX-nomk: a missing marker was not marker_absent" "$(ctx)"; fi
-_r="$(_vxroot emptymk)"; assert_fixture_dir "$_r"; : > "$_r.mk"; _VX_EMPTYMK="$_r"
+_r="$(_vxroot emptymk)"; assert_fixture_dir "$_r"; : > "$_r/store-verified"; _VX_EMPTYMK="$_r"
 case_vx_emptymk() { case_vx "$_VX_EMPTYMK" "store_unverified reason=marker_absent"; }
 if case_vx_emptymk; then pass "VX-emptymk: an empty marker -> reason=marker_absent"
 else fail "VX-emptymk: an empty marker was not marker_absent" "$(ctx)"; fi
 # A NON-empty directory: an empty one can report size 0 and would not tell [ -f ] from [ -s ].
-_r="$(_vxroot dirmk)"; assert_fixture_dir "$_r"; mkdir -p "$_r.mk" && printf '%s\n' "$FIX_UUID" > "$_r.mk/inner"; _VX_DIRMK="$_r"
+_r="$(_vxroot dirmk)"; assert_fixture_dir "$_r"; mkdir -p "$_r/store-verified" && printf '%s\n' "$FIX_UUID" > "$_r/store-verified/inner"; _VX_DIRMK="$_r"
 case_vx_dirmk() { case_vx "$_VX_DIRMK" "store_unverified reason=marker_absent"; }
 if case_vx_dirmk; then pass "VX-dirmk: a non-empty directory at the marker path -> reason=marker_absent"
 else fail "VX-dirmk: a directory at the marker path was not marker_absent" "$(ctx)"; fi
-_r="$(_vxroot symlinkok)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r.target" && ln -s "$_r.target" "$_r.mk"
+_r="$(_vxroot symlinkok)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r/marker-target" && ln -s "$_r/marker-target" "$_r/store-verified"
 if case_vx "$_r" ok; then pass "VX-symlinkok (must-PASS): a marker that is a symlink to a bound file clears (the wrappers follow it too)"
 else fail "VX-symlinkok: a symlinked bound marker was refused (stricter than the wrappers)" "$(ctx)"; fi
-_r="$(_vxroot mismatch)"; assert_fixture_dir "$_r"; printf '%s\n' 0b3e9f71-5c2d-4a8e-8f16-7d4c2a9e1b05 > "$_r.mk"; _VX_MISMATCH="$_r"
+_r="$(_vxroot mismatch)"; assert_fixture_dir "$_r"; printf '%s\n' 0b3e9f71-5c2d-4a8e-8f16-7d4c2a9e1b05 > "$_r/store-verified"; _VX_MISMATCH="$_r"
 case_vx_mismatch() { case_vx "$_VX_MISMATCH" "store_unverified reason=marker_mismatch"; }
 if case_vx_mismatch; then pass "VX-mismatch: a marker naming another filesystem -> reason=marker_mismatch"
 else fail "VX-mismatch: an unbound marker was accepted" "$(ctx)"; fi
-_r="$(_vxroot crlf)"; assert_fixture_dir "$_r"; printf '%s\r\n' "$FIX_UUID" > "$_r.mk"
-if case_vx "$_r" "store_unverified reason=marker_mismatch"; then pass "VX-crlf: a marker '<uuid>\\r' -> reason=marker_mismatch (the wrappers refuse it too)"
+_r="$(_vxroot crlf)"; assert_fixture_dir "$_r"; printf '%s\r\n' "$FIX_UUID" > "$_r/store-verified"
+if case_vx "$_r" "store_unverified reason=marker_mismatch"; then pass "VX-crlf: a marker '<uuid>\\r' -> reason=marker_mismatch (head -n 1 keeps the \\r, as in the wrappers)"
 else fail "VX-crlf: a CRLF marker was accepted" "$(ctx)"; fi
-_r="$(_vxroot twoline)"; assert_fixture_dir "$_r"; printf '%s\nsecond\n' "$FIX_UUID" > "$_r.mk"
+_r="$(_vxroot twoline)"; assert_fixture_dir "$_r"; printf '%s\nsecond\n' "$FIX_UUID" > "$_r/store-verified"
 if case_vx "$_r" ok; then pass "VX-2line (must-PASS): a bound first line followed by a second line clears (the wrappers read head -n 1)"
 else fail "VX-2line: a bound first line with a trailing line was refused" "$(ctx)"; fi
 # Empty equals empty: a filesystem with no UUID and a marker whose first line is empty.
-_r="$(_vxroot nouuid)"; assert_fixture_dir "$_r"; printf '\n' > "$_r.mk"; _VX_NOUUID="$_r"
+_r="$(_vxroot nouuid)"; assert_fixture_dir "$_r"; printf '\n' > "$_r/store-verified"; _VX_NOUUID="$_r"
 case_vx_nouuid() { case_vx "$_VX_NOUUID" "store_unverified reason=no_fs_uuid" SHIM_FINDMNT_UUID=empty; }
 if case_vx_nouuid; then pass "VX-nouuid: no filesystem UUID and a marker with an empty first line -> reason=no_fs_uuid, never ok"
 else fail "VX-nouuid: an empty UUID matched an empty marker line" "$(ctx)"; fi
-_r="$(_vxroot uuidfail)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r.mk"
+_r="$(_vxroot uuidfail)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r/store-verified"
 if case_vx "$_r" "probe_failed rc=5" SHIM_FINDMNT_UUID=fail; then pass "VX-uuidfail: findmnt unable to read the UUID -> probe_failed rc=5"
 else fail "VX-uuidfail: a failed UUID read was not probe_failed rc=5" "$(ctx)"; fi
-_r="$(_vxroot overmount)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r.mk"; _VX_OVERMOUNT="$_r"
+_r="$(_vxroot overmount)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r/store-verified"; _VX_OVERMOUNT="$_r"
 case_vx_overmount() { case_vx "$_VX_OVERMOUNT" "probe_failed rc=6" SHIM_FINDMNT_S=$'/dev/mapper/git-data\n/dev/sdb'; }
 if case_vx_overmount; then pass "VX-overmount: a second mount stacked on the store root (two SOURCE lines) -> probe_failed rc=6"
 else fail "VX-overmount: a stacked mount was accepted" "$(ctx)"; fi
-_r="$(_vxroot frozen)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r.mk" && : > "$_r/.cutover-freeze"; _VX_FROZEN="$_r"
+_r="$(_vxroot frozen)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r/store-verified" && : > "$_r/.cutover-freeze"; _VX_FROZEN="$_r"
 case_vx_frozen() { case_vx "$_VX_FROZEN" cutover_frozen; }
 if case_vx_frozen; then pass "VX-frozen: a .cutover-freeze sentinel under the store root -> cutover_frozen"
 else fail "VX-frozen: a frozen store was accepted" "$(ctx)"; fi
-_r="$(_vxroot frozendangling)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r.mk" && ln -s "$T/vx-nowhere-7c1e" "$_r/.cutover-freeze"
+# Frozen AND unverified: the freeze is read first, so the operator gets the frozen row.
+_r="$(_vxroot frozennomk)"; assert_fixture_dir "$_r"; : > "$_r/.cutover-freeze"; _VX_FROZEN_NOMK="$_r"
+case_vx_frozen_nomk() { case_vx "$_VX_FROZEN_NOMK" cutover_frozen; }
+if case_vx_frozen_nomk; then pass "VX-frozen-nomk: frozen and missing its marker -> cutover_frozen (the freeze is read before the marker)"
+else fail "VX-frozen-nomk: a frozen store with no marker did not read cutover_frozen" "$(ctx)"; fi
+_r="$(_vxroot frozendangling)"; assert_fixture_dir "$_r"; printf '%s\n' "$FIX_UUID" > "$_r/store-verified" && ln -s "$_r/nowhere" "$_r/.cutover-freeze"
 if case_vx "$_r" ok; then pass "VX-frozen-dangling (must-PASS): a dangling .cutover-freeze symlink clears (the wrappers test -e too)"
 else fail "VX-frozen-dangling: a dangling sentinel symlink was refused (stricter than the wrappers)" "$(ctx)"; fi
+# MM — mutating() still catches mountpoint(1) in every command position, and only findmnt's option
+# form is exempt.
+for spec in "ok|ssh x 10.0.1.20 mountpoint -q /mnt/git-data" "ok|ssh x 10.0.1.20 /usr/bin/mountpoint -q /mnt/git-data" \
+            "ok|ssh x 10.0.1.20 true; mountpoint -q /x" "ok|ssh x 10.0.1.20 a && mountpoint /x" "ok|ssh x 10.0.1.20 v=\$(mountpoint -q /x)" \
+            "no|ssh x 10.0.1.20 findmnt -n -o SOURCE --mountpoint /mnt/git-data"; do
+  IFS='|' read -r _want _line <<< "$spec"
+  printf '%s\n' "$_line" > "$T/mm.tl"
+  _got=no; TLF="$T/mm.tl" mutating && _got=ok
+  if [ "$_got" = "$_want" ]; then pass "MM ($_want): mutating() on [$_line]"
+  else fail "MM: mutating() read [$_line] as $_got, expected $_want"; fi
+done
 
 # ── FENCE PROBE (#8101) — a push would run a root-owned pre-receive of the planted shape ──
 # In every negative row the fence probe is the ONLY refusal: the four store probes read ok first.
@@ -1187,57 +1261,73 @@ case_pin_parity() { # <script> <wrapper>
 if case_pin_parity "$SCRIPT" "$DIR/git-data-transport-wrapper.sh"; then pass "P2: the wrapper lines the probe requires are exactly the hooks default and the command-line pin git-data-transport-wrapper.sh carries"
 else fail "P2: the probe's expected wrapper pin drifted from git-data-transport-wrapper.sh" "$(grep -nE '^HOOKS_DIR=|^exec git' "$DIR/git-data-transport-wrapper.sh" | tr '\n' '|')"; fi
 
-# F16c — an unsafe TRANSPORT_WRAPPER is refused as arg_wrapper through the whole script.
-run_case f16c "${KEYED[@]}" TRANSPORT_WRAPPER=rel/wrapper
-if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=fence-shape verdict=probe_failed reason=arg_wrapper' "$OUT" && no_fence_probe; then
-  pass "F16c: TRANSPORT_WRAPPER=rel/wrapper -> fence-shape probe_failed reason=arg_wrapper, the fence never dialed"
-else fail "F16c: an unsafe TRANSPORT_WRAPPER was not refused" "$(ctx)"; fi
+# (An unsafe TRANSPORT_WRAPPER through the whole script is refused by the config check: CFG wrapper-rel.)
 # P3 — the defaults the proof compares against equal every wrapper's. The definer populations are
 # DERIVED over git-data-*.sh (never listed by hand), excluding the suites and the cutover script, and
-# each floor is paired with set identity, so a new definer with its own default reds. The wrappers
-# read GIT_DATA_STORE_DEVICE / GIT_DATA_STORE_VERIFIED / GIT_DATA_CUTOVER_FREEZE overrides; the
-# proof ignores them, because a host-side override is invisible to it.
+# each is paired with set identity, so a new definer with its own default reds. A definer may assign
+# each name exactly ONCE in any form (plain, indented, readonly, export, declare): a later
+# reassignment would override the default this row compares. The freeze path must be rooted in the
+# SAME file's own root variable. The wrappers read GIT_DATA_STORE_DEVICE / GIT_DATA_STORE_VERIFIED /
+# GIT_DATA_CUTOVER_FREEZE / GIT_DATA_REPO_ROOT overrides; the proof ignores them, because a
+# host-side override is invisible to it.
+_p3_assigns() { # <file> <name> — how many times the file assigns <name>, in any declaration form
+  grep -cE "^[[:space:]]*((readonly|export|local|declare([[:space:]]+-[a-zA-Z]+)?)[[:space:]]+)?$2=" "$1" || true
+}
 case_parity() { # <script> <dir>
-  local script="$1" dir="$2" f v bad="" mapper mk root fz dev_set=() mk_set=() fz_set=() root_set=()
+  local script="$1" dir="$2" f b v n rootvar rootval bad="" mapper mk root fz repos dev_set=() mk_set=() fz_set=() root_set=() repo_set=()
   mapper="$(sed -nE 's/^LUKS_MAPPER="\$\{LUKS_MAPPER:-([^}]*)\}".*$/\1/p' "$script")"
   mk="$(sed -nE 's/^STORE_VERIFIED="\$\{STORE_VERIFIED:-([^}]*)\}".*$/\1/p' "$script")"
   root="$(sed -nE 's/^OLD_ROOT="\$\{OLD_ROOT:-([^}]*)\}".*$/\1/p' "$script")"
+  repos="$root/$(sed -nE 's/^REPO_SUBDIR="\$\{REPO_SUBDIR:-([^}]*)\}".*$/\1/p' "$script")"
   fz="$(sed -nE "s/^    'fz=\"\\\$r(\/[^\"]+)\"'\$/\1/p" "$script")"
   for f in "$dir"/git-data-*.sh; do
     case "$f" in *.test.sh|*/git-data-cutover.sh) continue ;; esac
-    if grep -qE '^STORE_DEVICE=' "$f"; then
-      dev_set+=("$(basename "$f")")
+    b="$(basename "$f")"
+    for v in STORE_DEVICE STORE_VERIFIED cutover_freeze MOUNT_ROOT GIT_DATA_ROOT REPO_ROOT; do
+      n="$(_p3_assigns "$f" "$v")"
+      [ "$n" -le 1 ] || bad="$bad $b:$v-assigned-${n}x"
+    done
+    rootvar=""; rootval=""
+    if [ "$(_p3_assigns "$f" MOUNT_ROOT)$(_p3_assigns "$f" GIT_DATA_ROOT)" != 00 ]; then
+      root_set+=("$b")
+      rootvar="$(sed -nE 's/^(MOUNT_ROOT|GIT_DATA_ROOT)=.*$/\1/p' "$f" | head -n 1)"
+      rootval="$(sed -nE 's/^(MOUNT_ROOT|GIT_DATA_ROOT)="(\$\{[A-Z_]+:-)?(\/[^}"]*)\}?"$/\3/p' "$f")"
+      { [ -n "$rootval" ] && [ "$rootval" = "$root" ]; } || bad="$bad $b:root=[$rootval]"
+    fi
+    if [ "$(_p3_assigns "$f" STORE_DEVICE)" != 0 ]; then
+      dev_set+=("$b")
       v="$(sed -nE 's/^STORE_DEVICE="\$\{GIT_DATA_STORE_DEVICE:-([^}]*)\}"$/\1/p' "$f")"
-      { [ -n "$v" ] && [ "$v" = "$mapper" ]; } || bad="$bad $(basename "$f"):STORE_DEVICE=[$v]"
+      { [ -n "$v" ] && [ "$v" = "$mapper" ]; } || bad="$bad $b:STORE_DEVICE=[$v]"
     fi
-    if grep -qE '^STORE_VERIFIED=' "$f"; then
-      mk_set+=("$(basename "$f")")
+    if [ "$(_p3_assigns "$f" STORE_VERIFIED)" != 0 ]; then
+      mk_set+=("$b")
       v="$(sed -nE 's/^STORE_VERIFIED="\$\{GIT_DATA_STORE_VERIFIED:-([^}]*)\}"$/\1/p' "$f")"
-      { [ -n "$v" ] && [ "$v" = "$mk" ]; } || bad="$bad $(basename "$f"):STORE_VERIFIED=[$v]"
+      { [ -n "$v" ] && [ "$v" = "$mk" ]; } || bad="$bad $b:STORE_VERIFIED=[$v]"
     fi
-    if grep -qE '^cutover_freeze=' "$f"; then
-      fz_set+=("$(basename "$f")")
-      v="$(sed -nE 's/^cutover_freeze="\$\{GIT_DATA_CUTOVER_FREEZE:-\$\{(MOUNT_ROOT|GIT_DATA_ROOT)\}(\/[^}]*)\}"$/\2/p' "$f")"
-      { [ -n "$v" ] && [ "$v" = "$fz" ]; } || bad="$bad $(basename "$f"):cutover_freeze=[$v]"
+    if [ "$(_p3_assigns "$f" cutover_freeze)" != 0 ]; then
+      fz_set+=("$b")
+      # Rooted in THIS file's own root variable, never in one it does not set.
+      v=""; [ -z "$rootvar" ] || v="$(sed -nE "s/^cutover_freeze=\"\\\$\\{GIT_DATA_CUTOVER_FREEZE:-\\\$\\{${rootvar}\\}(\\/[^}]*)\\}\"\$/\\1/p" "$f")"
+      { [ -n "$v" ] && [ "$v" = "$fz" ]; } || bad="$bad $b:cutover_freeze=[$v]"
     fi
-    if grep -qE '^(MOUNT_ROOT|GIT_DATA_ROOT)=' "$f"; then
-      root_set+=("$(basename "$f")")
-      v="$(sed -nE 's/^(MOUNT_ROOT|GIT_DATA_ROOT)="(\$\{[A-Z_]+:-)?(\/[^}"]*)\}?"$/\3/p' "$f")"
-      { [ -n "$v" ] && [ "$v" = "$root" ]; } || bad="$bad $(basename "$f"):root=[$v]"
+    if [ "$(_p3_assigns "$f" REPO_ROOT)" != 0 ]; then
+      repo_set+=("$b")
+      v="$(sed -nE 's/^REPO_ROOT="\$\{GIT_DATA_REPO_ROOT:-([^}]*)\}"$/\1/p; s/^REPO_ROOT="\$(GIT_DATA_ROOT|MOUNT_ROOT)(\/[^" ]*)".*$/\1 \2/p' "$f")"
+      case "$v" in "$rootvar "*) v="$rootval${v#"$rootvar "}" ;; esac
+      { [ -n "$v" ] && [ "$v" = "$repos" ]; } || bad="$bad $b:REPO_ROOT=[$v]"
     fi
   done
-  PARITY3_DETAIL="mapper=[$mapper] marker=[$mk] root=[$root] freeze=[$fz] device={${dev_set[*]}} marker={${mk_set[*]}} freeze={${fz_set[*]}} root={${root_set[*]}} bad=[${bad# }]"
+  PARITY3_DETAIL="mapper=[$mapper] marker=[$mk] root=[$root] repos=[$repos] freeze=[$fz] device={${dev_set[*]}} marker={${mk_set[*]}} freeze={${fz_set[*]}} root={${root_set[*]}} repo={${repo_set[*]}} bad=[${bad# }]"
   local five="git-data-bootstrap.sh git-data-gc.sh git-data-provision.sh git-data-remove.sh git-data-transport-wrapper.sh"
-  [ -n "$mapper" ] && [ -n "$mk" ] && [ -n "$root" ] && [ -n "$fz" ] && [ -z "$bad" ] \
-    && [ "${#dev_set[@]}" = 5 ] && [ "${dev_set[*]}" = "$five" ] \
-    && [ "${#mk_set[@]}" = 5 ] && [ "${mk_set[*]}" = "$five" ] \
-    && [ "${#fz_set[@]}" = 4 ] && [ "${fz_set[*]}" = "git-data-pre-receive.sh git-data-provision.sh git-data-remove.sh git-data-transport-wrapper.sh" ] \
-    && [ "${#root_set[@]}" = 6 ] && [ "${root_set[*]}" = "git-data-bootstrap.sh git-data-gc.sh git-data-pre-receive.sh git-data-provision.sh git-data-remove.sh git-data-transport-wrapper.sh" ]
+  [ -n "$mapper" ] && [ -n "$mk" ] && [ -n "$root" ] && [ -n "$fz" ] && [ "$repos" != "$root/" ] && [ -z "$bad" ] \
+    && [ "${dev_set[*]}" = "$five" ] && [ "${mk_set[*]}" = "$five" ] && [ "${repo_set[*]}" = "$five" ] \
+    && [ "${fz_set[*]}" = "git-data-pre-receive.sh git-data-provision.sh git-data-remove.sh git-data-transport-wrapper.sh" ] \
+    && [ "${root_set[*]}" = "git-data-bootstrap.sh git-data-gc.sh git-data-pre-receive.sh git-data-provision.sh git-data-remove.sh git-data-transport-wrapper.sh" ]
 }
 # P3 runs over a COPIED directory, so its mutants never touch a tracked definer.
-mkdir -p "$T/p3" || { printf 'FAIL SETUP: mkdir p3\n' >&2; exit 1; }
+assert_fixture_dir "$T/p3"; mkdir -p "$T/p3" || { printf 'FAIL SETUP: mkdir p3\n' >&2; exit 1; }
 cp "$DIR"/git-data-*.sh "$T/p3/" || { printf 'FAIL SETUP: copy p3 definers\n' >&2; exit 1; }
-if case_parity "$SCRIPT" "$T/p3"; then pass "P3: LUKS_MAPPER, STORE_VERIFIED, the freeze suffix and OLD_ROOT equal every derived definer's default (5/5/4/6, set identity) ($PARITY3_DETAIL)"
+if case_parity "$SCRIPT" "$T/p3"; then pass "P3: LUKS_MAPPER, STORE_VERIFIED, the freeze suffix, OLD_ROOT and OLD_ROOT/REPO_SUBDIR equal every derived definer's single default (5/5/4/6/5, set identity) ($PARITY3_DETAIL)"
 else fail "P3: the proof's defaults drifted from the wrappers'" "$PARITY3_DETAIL"; fi
 
 # Doppler is never called by any case above (the shim logs every call).
@@ -1264,7 +1354,7 @@ case_capture_census() { # <script>
     !skip' | grep -nE '"\$\{(inv|gdinv)\[@\]\}"|\$\{?GIT_DATA_SSH|\$\{?WEB_HOST_SSH' || true)"
   calls="$(printf '%s\n' "$code" | grep -cE '^[[:space:]]+gd_capture ' || true)"
   CAPTURE_DETAIL="calls=$calls outside=[$(printf '%s' "$outside" | tr '\n' '|' | cut -c1-300)]"
-  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 4 ]
+  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 3 ]
 }
 if case_line2; then pass "S8a/G5: a findmnt answer with an injected second line is probe_failed rc=96 and neither line is printed"
 else fail "S8a/G5: a multi-line captured value was accepted or printed" "$(ctx)"; fi
@@ -1274,7 +1364,7 @@ run_case g5big "${KEYED[@]}" SHIM_FINDMNT=big
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" && ! grep -q 'aaaaaaaaaa' "$OUT"; then
   pass "G5: a 5005-byte answer that would match once truncated is refused (cap 4096), never printed"
 else fail "G5: an oversized answer was truncated into an accepted value, or printed" "$(ctx)"; fi
-if case_capture_census "$SCRIPT"; then pass "G5 census: exactly four gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
+if case_capture_census "$SCRIPT"; then pass "G5 census: exactly three gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
 else fail "G5 census: a raw capture or a stray invocation exists" "$CAPTURE_DETAIL"; fi
 
 # ── GUARD 7 — real modes are refused before any remote call ───────────────────────────
@@ -1777,38 +1867,53 @@ if case_teardown "$T/steps/teardown.sh"; then
   pass "TD: the teardown body, executed, removes the root key, the ssh_config, the CI keyfile, the known_hosts and the pin (both 0444), kills cloudflared and deletes the NAT rule"
 else fail "TD: the executed teardown left key material or the bridge behind" "$TD_DETAIL"; fi
 
-# ── RB — every store-probe word has a runbook row, and every store row names a word the script emits ──
+# ── RB — every store-probe word has a runbook row, and every verdict-map row names a live word ──
 # Scope: the store and fence probes' verdict and reason words (everything through _store_*). The
-# access gate's words and real_cutover_unreconciled do not go through _store_* and are out of scope.
-# Two independent producers must agree: the script's text, and what the unit rows above observed.
+# access gate's words and real_cutover_unreconciled do not go through _store_*; they are held to the
+# repo-wide emitter check below only. Two independent producers must agree: the script's text, and
+# what the unit rows above observed. RB therefore runs AFTER every unit row and BEFORE the mutants:
+# the observed set is a snapshot of $T/*.out at this point.
 RUNBOOK="$ROOT/knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md"
 _rb_script_words() { # <script> — sorted, unique
   local code i
   local -a toks
   code="$(sed -E 's/^[[:space:]]*#.*$//' "$1")"
   { printf '%s\n' "$code" | { grep -oE '_store_(refuse|emit) [^;|]*' || true; } | while read -ra toks; do
-      for i in 2 4; do if [[ "${toks[$i]:-}" =~ ^[a-z_]+$ ]]; then printf '%s\n' "${toks[$i]}"; fi; done
+      for i in 2 4; do if [[ "${toks[$i]:-}" =~ ^[a-z0-9_]+$ ]]; then printf '%s\n' "${toks[$i]}"; fi; done
     done
-    printf '%s\n' "$code" | sed -nE 's/^[[:space:]]+[0-9]+\) reason=([a-z_]+) ;;$/\1/p'
+    printf '%s\n' "$code" | sed -nE 's/^[[:space:]]+[0-9]+\) reason=([a-z0-9_]+) ;;$/\1/p'
   } | { grep -vxE 'ok|' || true; } | LC_ALL=C sort -u
 }
-cat "$T"/*.out 2>/dev/null | sed -nE 's/^\[git-data-cutover\] STORE probe=[a-z-]+ verdict=([a-z_]+)( rc=[0-9]+)?( reason=([a-z_]+))?$/\1 \4/p' \
-  | tr ' ' '\n' | { grep -vxE 'ok|' || true; } | LC_ALL=C sort -u > "$T/rb.observed"
+_rb_observed_lines() { cat "$T"/*.out 2>/dev/null | sed -nE 's/^\[git-data-cutover\] STORE probe=([a-z-]+) verdict=([a-z0-9_]+)( rc=[0-9]+)?( reason=([a-z0-9_]+))?$/\1 \2 \5/p'; }
+_rb_observed_lines | cut -d' ' -f2- | tr ' ' '\n' | { grep -vxE 'ok|' || true; } | LC_ALL=C sort -u > "$T/rb.observed"
+_rb_observed_lines | awk '$2 != "ok" { print $1, $2 }' | LC_ALL=C sort -u > "$T/rb.pairs"
 _rb_map() { awk '/^## Verdict map$/ { m = 1; next } m && /^## / { exit } m' "$1"; }
-case_rb() { # <script> <runbook>
-  local sw ow map rev w miss="" extra=""
-  sw="$(_rb_script_words "$1")"; ow="$(cat "$T/rb.observed")"; map="$(_rb_map "$2")"
+# case_rb <script> <runbook> [observed-words-file] — four independent checks, each with its own mutant:
+#   sw=ow     the script's words equal the observed words (an extractor miss, or a word no row emits)
+#   miss      every script word appears in the verdict map
+#   extra     every verdict=/reason= word on ANY map row is emitted by something in the repo (a stale
+#             row such as a retired verdict fails here whatever spelling the row uses)
+#   pairs     every probe=P verdict=V pair a map row names was observed from the script
+case_rb() {
+  local sw ow map w p v miss="" extra="" badpair="" pairs
+  sw="$(_rb_script_words "$1")"; ow="$(cat "${3:-$T/rb.observed}")"; map="$(_rb_map "$2")"
   for w in $sw; do grep -qE "(^|[^A-Za-z0-9_])${w}([^A-Za-z0-9_]|\$)" <<< "$map" || miss="$miss $w"; done
-  # Reverse: the words a store-probe row (its cell names probe=store-* or probe=fence-shape) offers.
-  rev="$(printf '%s\n' "$map" | { grep -E '^\|.*probe=(store-[a-z-]+|fence-shape)' || true; } \
-    | { grep -oE 'verdict=[a-z_]+|reason=<?[a-z_]+(\\?\|[a-z_]+)*|`[a-z]+_[a-z_]+`' || true; } \
-    | sed -E 's/^(verdict|reason)=<?//; s/`//g; s/\\//g' | tr '|' '\n' | { grep -vxE 'ok|' || true; } | LC_ALL=C sort -u)"
-  for w in $rev; do grep -qxF -- "$w" <<< "$sw" || extra="$extra $w"; done
-  RB_DETAIL="script=$(wc -w <<< "$sw") observed=$(wc -w <<< "$ow") store-rows=$(wc -w <<< "$rev") missing-from-map=[${miss# }] not-emitted=[${extra# }] diff=[$(diff <(printf '%s\n' "$sw") <(printf '%s\n' "$ow") | grep -E '^[<>]' | tr '\n' ' ')]"
-  [ -n "$sw" ] && [ "$sw" = "$ow" ] && [ "$(wc -w <<< "$sw")" = 25 ] && [ -n "$rev" ] && [ -z "$miss" ] && [ -z "$extra" ]
+  for w in $(printf '%s\n' "$map" | { grep -E '^\|' || true; } \
+      | { grep -oE 'verdict=[a-z0-9_]+|reason=<?[a-z0-9_]+(\\?\|[a-z0-9_]+)*' || true; } \
+      | sed -E 's/^(verdict|reason)=<?//; s/\\//g' | tr '|' '\n' | { grep -vxE 'ok|' || true; } | LC_ALL=C sort -u); do
+    grep -qxF -- "$w" <<< "$sw" && continue
+    git -C "$ROOT" grep -qwF -- "$w" -- ':!*.md' ':!*.test.*' ':!knowledge-base' 2>/dev/null || extra="$extra $w"
+  done
+  pairs="$(printf '%s\n' "$map" | { grep -oE 'probe=[a-z-]+ verdict=[a-z0-9_]+' || true; } | sed -E 's/^probe=//; s/ verdict=/ /' | LC_ALL=C sort -u)"
+  while read -r p v; do
+    [ -n "$p" ] || continue
+    grep -qxF -- "$p $v" "$T/rb.pairs" || badpair="$badpair $p:$v"
+  done <<< "$pairs"
+  RB_DETAIL="script=$(wc -w <<< "$sw") observed=$(wc -w <<< "$ow") map-pairs=$(grep -c . <<< "$pairs") missing-from-map=[${miss# }] not-emitted=[${extra# }] unobserved-pairs=[${badpair# }] diff=[$(diff <(printf '%s\n' "$sw") <(printf '%s\n' "$ow") | grep -E '^[<>]' | tr '\n' ' ')]"
+  [ -n "$sw" ] && [ "$sw" = "$ow" ] && [ -n "$pairs" ] && [ -z "$miss" ] && [ -z "$extra" ] && [ -z "$badpair" ]
 }
 [ -f "$RUNBOOK" ] || { printf 'FAIL SETUP: %s not found\n' "$RUNBOOK" >&2; exit 1; }
-if case_rb "$SCRIPT" "$RUNBOOK"; then pass "RB: the script's 25 store-probe words equal the words the unit rows observed, each has a verdict-map row, and every store row's word is emitted ($RB_DETAIL)"
+if case_rb "$SCRIPT" "$RUNBOOK"; then pass "RB: the script's store-probe words equal the observed words, each has a verdict-map row, every map row's word has an emitter, and every probe/verdict pair the map names was observed ($RB_DETAIL)"
 else fail "RB: the store-probe words, the observed words and the runbook verdict map disagree" "$RB_DETAIL"; fi
 
 # ── MUTANTS ───────────────────────────────────────────────────────────────────────────
@@ -1866,10 +1971,7 @@ fi
 if mutate c1-transport-as-unmounted "$SCRIPT" 2 's#^    \*\) _store_refuse store-mounted probe_failed "\$rc" ;;$#    *) _store_refuse store-mounted old_store_unmounted "$rc" ;;#'; then
   CASE_SCRIPT="$MUTANT" mutant_red c1-transport-as-unmounted case_mount_transport
 fi
-# C3 row 1 — drop the mount-identity check from the count command.
-if mutate c3-no-source-identity "$SCRIPT" 2 's#\[ \\"\\\$s\\" = \\"\\\$src\\" \] \|\| exit 6; ##'; then
-  CASE_SCRIPT="$MUTANT" mutant_red c3-no-source-identity case_other_source
-fi
+# C3 row 1 is Guard 2 row 13 (g2v-13-no-target): the count's mount check.
 # C3 row 2 — count a missing repositories dir as 0.
 if mutate c3-missing-as-zero "$SCRIPT" 2 's#then exit 7; fi#then echo 0; exit 0; fi#'; then
   CASE_SCRIPT="$MUTANT" mutant_red c3-missing-as-zero case_missing_repos
@@ -2038,8 +2140,8 @@ fi
 if mutate g1-3-prefix "$SCRIPT" 2 's#^  \[ "\$STORE_SOURCE" = "\$LUKS_MAPPER" \] \|\| (_store_refuse store-on-mapper store_not_on_mapper)$#  [[ $STORE_SOURCE == /dev/mapper/* ]] || \1#'; then
   CASE_SCRIPT="$MUTANT" mutant_red g1-3-prefix case_map_pre
 fi
-# G1-4 — REORDER: the on-mapper call after the count.
-if mutate g1-4-reorder "$SCRIPT" 2 '/^  refuse_if_not_on_mapper$/d; s#^  refuse_if_store_not_empty$#&\n  refuse_if_not_on_mapper#'; then
+# G1-4 — REORDER: the on-mapper call after the store session.
+if mutate g1-4-reorder "$SCRIPT" 2 '/^  refuse_if_not_on_mapper$/d; s#^  refuse_if_store_unverified_or_not_empty$#&\n  refuse_if_not_on_mapper#'; then
   CASE_SCRIPT="$MUTANT" mutant_red g1-4-reorder case_ord
 fi
 # G1-5 — the refusal swallowed into an emit.
@@ -2058,15 +2160,31 @@ if mutate g1-h-shim-plain "$BIN/ssh" 2 's#case "\$\{SHIM_FINDMNT:-mapper\}" in#c
   BIN="$_hb" mutant_red g1-h-shim-plain case_ac2_run
 fi
 
-# Guard 2 (ADR-239 D3) — a pass is backed by the bootstrap's verified-store evidence. Every row but
-# row 1 is scoped to refuse_if_store_unverified's own range.
-_G2R='/^refuse_if_store_unverified\(\) \{/,/^\}/'
-# G2-1 — own dispatch: the probe is never called.
-if mutate g2v-1-no-dispatch "$SCRIPT" 1 '/^  refuse_if_store_unverified$/d'; then
+# Config — every configurable path is checked before anything is printed or dialed.
+# CFG-1 — the check runs after the access gate: a config fault would dial first.
+if mutate cfg-1-after-access "$SCRIPT" 2 '/^  refuse_if_config_unsafe$/d; s#^  access_gate$#&\n  refuse_if_config_unsafe#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red cfg-1-after-access case_arg_root
+fi
+# CFG-2 / CFG-3 / CFG-4 — one check deleted each.
+if mutate cfg-2-no-arg-root "$SCRIPT" 1 '/^  \[\[ "\$OLD_ROOT" =~ .* arg_root$/d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red cfg-2-no-arg-root case_arg_root
+fi
+if mutate cfg-3-no-arg-marker "$SCRIPT" 1 '/^  \[\[ "\$STORE_VERIFIED" =~ /d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red cfg-3-no-arg-marker case_arg_marker
+fi
+if mutate cfg-4-no-arg-subdir "$SCRIPT" 1 '/^  \[\[ "\$REPO_SUBDIR" =~ /d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red cfg-4-no-arg-subdir case_arg_subdir
+fi
+
+# Guard 2 (ADR-239 D3) — a pass is backed by the bootstrap's verified-store evidence, and the count
+# is read in the same session. Every row but the dispatch rows is scoped to the function's range.
+_G2R='/^refuse_if_store_unverified_or_not_empty\(\) \{/,/^\}/'
+# G2-1 — own dispatch: the session is never run.
+if mutate g2v-1-no-dispatch "$SCRIPT" 1 '/^  refuse_if_store_unverified_or_not_empty$/d'; then
   CASE_SCRIPT="$MUTANT" mutant_red g2v-1-no-dispatch case_v21
 fi
-# G2-2 — the probe "passes" without reading.
-if mutate g2v-2-no-read "$SCRIPT" 2 "${_G2R}s#^  gd_capture '\\^ok\\\$' .*\$#  GD_CAPTURED=ok#"; then
+# G2-2 — the session "passes" without reading.
+if mutate g2v-2-no-read "$SCRIPT" 2 "${_G2R}s#^  gd_capture '\\^\\[0-9\\]\\+\\\$' .*\$#  GD_CAPTURED=0#"; then
   CASE_SCRIPT="$MUTANT" mutant_red g2v-2-no-read case_v22
 fi
 # G2-3 — second member after a compliant first: the marker equality dropped, presence kept.
@@ -2090,7 +2208,7 @@ if mutate g2v-6-no-source "$SCRIPT" 1 "${_G2R}{/^    '\\[ \"\\\$s\" = \"\\\$src\
   CASE_SCRIPT="$MUTANT" mutant_red g2v-6-no-source case_vx_overmount
 fi
 # G2-7 — the answer anchor loosened to anything.
-if mutate g2v-7-any-answer "$SCRIPT" 2 "${_G2R}s#^  gd_capture '\\^ok\\\$' #  gd_capture '.*' #"; then
+if mutate g2v-7-any-answer "$SCRIPT" 2 "${_G2R}s#^  gd_capture '\\^\\[0-9\\]\\+\\\$' #  gd_capture '.*' #"; then
   CASE_SCRIPT="$MUTANT" mutant_red g2v-7-any-answer case_vempty
 fi
 # G2-8 — an instrument failure (remote 16) rendered as a store state.
@@ -2101,67 +2219,115 @@ fi
 if mutate g2v-9-no-file-test "$SCRIPT" 2 "${_G2R}s#^    '\\[ -f \"\\\$mk\" \\] && \\[ -s \"\\\$mk\" \\] \\|\\| exit 21'\$#    '[ -s \"\$mk\" ] || exit 21'#"; then
   CASE_SCRIPT="$MUTANT" mutant_red g2v-9-no-file-test case_vx_dirmk
 fi
-# G2-10 — the explicit catch-all arm deleted: an unknown rc would fall through to ok.
+# G2-10 — the explicit catch-all arm deleted: an unknown rc would fall through.
 if mutate g2v-10-no-default "$SCRIPT" 1 "${_G2R}{/^    \\*\\) _store_refuse store-verified probe_failed \"\\\$rc\" ;;\$/d}"; then
   CASE_SCRIPT="$MUTANT" mutant_red g2v-10-no-default case_v127
 fi
-# G2-11 — the anchor loosened from ^ok\$ to ok.
-if mutate g2v-11-unanchored "$SCRIPT" 2 "${_G2R}s#^  gd_capture '\\^ok\\\$' #  gd_capture 'ok' #"; then
-  CASE_SCRIPT="$MUTANT" mutant_red g2v-11-unanchored case_vnotok
+# G2-11 — the anchor loosened from ^[0-9]+$ to [0-9]+.
+if mutate g2v-11-unanchored "$SCRIPT" 2 "${_G2R}s#^  gd_capture '\\^\\[0-9\\]\\+\\\$' #  gd_capture '[0-9]+' #"; then
+  CASE_SCRIPT="$MUTANT" mutant_red g2v-11-unanchored case_vx0
 fi
-# G2-12a / 12b — the local argument checks deleted.
-if mutate g2v-12a-no-arg-root "$SCRIPT" 1 '/^  \[\[ "\$OLD_ROOT" =~ .* arg_root$/d'; then
-  CASE_SCRIPT="$MUTANT" mutant_red g2v-12a-no-arg-root case_arg_root
+# G2-12 — a count-stage rc attributed to the verify stage.
+if mutate g2v-12-stage-attribution "$SCRIPT" 2 "${_G2R}s#^    0\\|3\\|4\\|7\\|8\\|9\\|96\\) ;;\$#    0|3|4|7|9|96) ;;#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red g2v-12-stage-attribution case_v8
 fi
-if mutate g2v-12b-no-arg-marker "$SCRIPT" 1 '/^  \[\[ "\$STORE_VERIFIED" =~ /d'; then
-  CASE_SCRIPT="$MUTANT" mutant_red g2v-12b-no-arg-marker case_arg_marker
+# G2-13 — the containing-mount check dropped: a count over a second mount would read.
+if mutate g2v-13-no-target "$SCRIPT" 1 "${_G2R}{/^    '\\[ \"\\\$t\" = \"\\\$rr\" \\] \\|\\| exit 8'\$/d}"; then
+  CASE_SCRIPT="$MUTANT" mutant_red g2v-13-no-target case_other_mount
 fi
-# G2-H1 (harness) — the ssh shim's store-verified arm hardwired to ok: the canned negatives go RED.
+# G2-14 — the count narrowed back to *.git names only.
+if mutate g2v-14-git-only "$SCRIPT" 2 "${_G2R}s#! -name '\\.\\*\\.init\\.lock' ! -name lost\\+found#-name '*.git'#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red g2v-14-git-only case_any_entry
+fi
+# G2-15 — the lock dotfiles no longer skipped (a lock dotfile would read as a repository).
+if mutate g2v-15-locks-counted "$SCRIPT" 2 "${_G2R}s#! -name '\\.\\*\\.init\\.lock' ##"; then
+  CASE_SCRIPT="$MUTANT" mutant_red g2v-15-locks-counted case_locks_skipped
+fi
+# G2-16 — REORDER: the freeze read after the marker (a frozen host missing its marker would read
+# marker_absent and send the operator to the wrong row).
+if mutate g2v-16-freeze-late "$SCRIPT" 2 "${_G2R}{/^    '\\[ ! -e \"\\\$fz\" \\] \\|\\| exit 23'\$/d; s#^    '\\[ \"\\\$m\" = \"\\\$fu\" \\] \\|\\| exit 22'\$#&\\n    '[ ! -e \"\$fz\" ] || exit 23'#}"; then
+  CASE_SCRIPT="$MUTANT" mutant_red g2v-16-freeze-late case_vx_frozen_nomk
+fi
+# G2-17 — the count's exclusions drift from the bootstrap's (lost+found dropped).
+if mutate g2v-17-count-parity "$SCRIPT" 2 "${_G2R}s# ! -name lost\\+found##"; then
+  mutant_red g2v-17-count-parity case_count_parity "$MUTANT" "$DIR/git-data-bootstrap.sh"
+fi
+# G2-H1 (harness) — the ssh shim's session arm hardwired to ok: the canned negatives go RED.
 if mutate g2v-h1-shim-always-ok "$BIN/ssh" 2 's#^    case "\$\{SHIM_VERIFY:-ok\}" in$#    case ok in#'; then
   _hb="$(_harness_bin g2h1 ssh)"; assert_fixture_dir "$_hb"
   BIN="$_hb" mutant_red g2v-h1-shim-always-ok case_v22
 fi
 # G2-H2 (harness) — the findmnt shim's UUID branch collapsed into SOURCE.
-if mutate g2v-h2-no-uuid-branch "$BIN/findmnt" 2 's#^if \[ "\$\{1:-\}" = -no \] && \[ "\$\{2:-\}" = UUID \]; then$#if false; then#'; then
+if mutate g2v-h2-no-uuid-branch "$BIN/findmnt" 2 's#^if \[ "\$\*" = "-n -o UUID --mountpoint \$\{!\#\}" \]; then$#if false; then#'; then
   _hb="$(_harness_bin g2h2 findmnt)"; assert_fixture_dir "$_hb"
   BIN="$_hb" mutant_red g2v-h2-no-uuid-branch case_vx_ok
 fi
-# G2-H3 (harness) — the positional SOURCE answer ignores SHIM_FINDMNT_S.
+# G2-H3 (harness) — the SOURCE answer ignores SHIM_FINDMNT_S.
 if mutate g2v-h3-fixed-source "$BIN/findmnt" 2 's#"\$\{SHIM_FINDMNT_S:-/dev/mapper/git-data\}"#/dev/mapper/git-data#'; then
   _hb="$(_harness_bin g2h3 findmnt)"; assert_fixture_dir "$_hb"
   BIN="$_hb" mutant_red g2v-h3-fixed-source case_vx_overmount
 fi
-
-# RB — the drift row must see a word missing from the map, a new script word, and a renamed reason.
-if mutate rb-1-drop-map-word "$RUNBOOK" 2 '/^## Verdict map$/,/^## The boot reopen/s#marker_mismatch#marker_gone#g'; then
-  mutant_red rb-1-drop-map-word case_rb "$SCRIPT" "$MUTANT"
-fi
-if mutate rb-2-new-script-word "$SCRIPT" 1 's#^  _store_emit store-on-mapper ok$#  [ -n "$STORE_SOURCE" ] || _store_refuse store-on-mapper store_vanished\n&#'; then
-  mutant_red rb-2-new-script-word case_rb "$MUTANT" "$RUNBOOK"
-fi
-if mutate rb-3-renamed-reason "$SCRIPT" 2 's#^    24\) reason=no_fs_uuid ;;$#    24) reason=no_fs_uid ;;#'; then
-  mutant_red rb-3-renamed-reason case_rb "$MUTANT" "$RUNBOOK"
+# G2-H4 (harness) — the stat shim's containing-mount answer ignores SHIM_STAT_M.
+if mutate g2v-h4-fixed-mount "$BIN/stat" 2 's#^    \*\)    printf .%s\\n. "\$SHIM_STAT_M"; exit 0 ;;$#    *)    readlink -f "${OLD_ROOT:-/mnt/git-data}"; exit 0 ;;#'; then
+  _hb="$(_harness_bin g2h4 stat)"; assert_fixture_dir "$_hb"
+  BIN="$_hb" mutant_red g2v-h4-fixed-mount case_other_mount
 fi
 
-# P3 — over copied directories: the script's default moved alone, one definer moved alone, and a
-# new definer with a different default each red the parity row.
+# RB — one row per check, each tripping ONLY that check.
+# RB-1 (miss) — a script word deleted from the map copy, no other word added.
+if mutate rb-1-miss "$RUNBOOK" 2 '/^\| \*\*Tampering signal\*\*/s# reason=marker_mismatch`#`#'; then
+  mutant_red rb-1-miss case_rb "$SCRIPT" "$MUTANT"
+fi
+# RB-2 (extra) — a stale row in the old spelling, naming a retired verdict and no probe.
+if mutate rb-2-stale-row "$RUNBOOK" 1 '/^\| The store holds repositories \|/i | The store root is already the LUKS mapper | `verdict=already_cut_over` (exit 5) | Nothing to do. |'; then
+  mutant_red rb-2-stale-row case_rb "$SCRIPT" "$MUTANT"
+fi
+# RB-3 (sw=ow) — a word the unit rows observed goes missing from the observed set.
+if mutate rb-3-observed-drop "$T/rb.observed" 1 '/^no_fs_uuid$/d'; then
+  mutant_red rb-3-observed-drop case_rb "$SCRIPT" "$RUNBOOK" "$MUTANT"
+fi
+# RB-4 (pairs) — a map row names a verdict under the wrong probe.
+if mutate rb-4-wrong-probe "$RUNBOOK" 2 's#`probe=store-verified verdict=cutover_frozen`#`probe=store-mounted verdict=cutover_frozen`#'; then
+  mutant_red rb-4-wrong-probe case_rb "$SCRIPT" "$MUTANT"
+fi
+# RB-5 — a new script refusal word (several checks) and RB-6 — a renamed reason (several checks).
+if mutate rb-5-new-script-word "$SCRIPT" 1 's#^  _store_emit store-on-mapper ok$#  [ -n "$STORE_SOURCE" ] || _store_refuse store-on-mapper store_vanished\n&#'; then
+  mutant_red rb-5-new-script-word case_rb "$MUTANT" "$RUNBOOK"
+fi
+if mutate rb-6-renamed-reason "$SCRIPT" 2 's#^    24\) reason=no_fs_uuid ;;$#    24) reason=no_fs_uid ;;#'; then
+  mutant_red rb-6-renamed-reason case_rb "$MUTANT" "$RUNBOOK"
+fi
+
+# P3 — over copied directories, one row per property.
 _p3dir() { # <name> — a fresh copy of the pristine p3 tree
   local d="$T/p3-$1"
   assert_fixture_dir "$d"
   rm -rf "$d"; mkdir -p "$d" && cp "$T"/p3/git-data-*.sh "$d/" || { printf 'FAIL SETUP: p3 dir %s\n' "$1" >&2; exit 1; }
   printf '%s' "$d"
 }
+# p3_red <name> <file-in-p3> <expected-diff-lines> <sed> [dest-basename] — a mutated copy of one
+# definer placed into a fresh p3 tree (under dest-basename when given); case_parity must go RED.
+p3_red() {
+  local name="$1" src="$2" want="$3" expr="$4" dest="${5:-$(basename "$2")}" pd
+  if mutate "$name" "$src" "$want" "$expr"; then
+    pd="$(_p3dir "$name")"; assert_fixture_dir "$pd"
+    cp "$MUTANT" "$pd/$dest" || { printf 'FAIL SETUP: p3 %s\n' "$name" >&2; exit 1; }
+    mutant_red "$name" case_parity "$SCRIPT" "$pd"
+  fi
+}
 if mutate p3-1-script-mapper "$SCRIPT" 2 's#^LUKS_MAPPER="\$\{LUKS_MAPPER:-/dev/mapper/git-data\}"#LUKS_MAPPER="${LUKS_MAPPER:-/dev/mapper/gd}"#'; then
   mutant_red p3-1-script-mapper case_parity "$MUTANT" "$T/p3"
 fi
-if mutate p3-2-definer-marker "$T/p3/git-data-gc.sh" 2 's#^STORE_VERIFIED="\$\{GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified\}"$#STORE_VERIFIED="${GIT_DATA_STORE_VERIFIED:-/etc/git-data/verified}"#'; then
-  _pd="$(_p3dir m2)"; assert_fixture_dir "$_pd"; cp "$MUTANT" "$_pd/git-data-gc.sh" || { printf 'FAIL SETUP: p3 m2\n' >&2; exit 1; }
-  mutant_red p3-2-definer-marker case_parity "$SCRIPT" "$_pd"
-fi
-if mutate p3-3-extra-definer "$T/p3/git-data-luks-reopen.sh" 1 '1s#$#\nSTORE_DEVICE="${GIT_DATA_STORE_DEVICE:-/dev/mapper/other}"#'; then
-  _pd="$(_p3dir m3)"; assert_fixture_dir "$_pd"; cp "$MUTANT" "$_pd/git-data-luks-reopen.sh" || { printf 'FAIL SETUP: p3 m3\n' >&2; exit 1; }
-  mutant_red p3-3-extra-definer case_parity "$SCRIPT" "$_pd"
-fi
+p3_red p3-2-definer-marker "$T/p3/git-data-gc.sh" 2 's#^STORE_VERIFIED="\$\{GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified\}"$#STORE_VERIFIED="${GIT_DATA_STORE_VERIFIED:-/etc/git-data/verified}"#'
+p3_red p3-3-extra-definer "$T/p3/git-data-luks-reopen.sh" 1 '1s#$#\nSTORE_DEVICE="${GIT_DATA_STORE_DEVICE:-/dev/mapper/other}"#'
+# p3-4 — the freeze path rooted in a variable the file never sets.
+p3_red p3-4-freeze-foreign-root "$T/p3/git-data-provision.sh" 2 's#^cutover_freeze="\$\{GIT_DATA_CUTOVER_FREEZE:-\$\{MOUNT_ROOT\}/\.cutover-freeze\}"$#cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${GIT_DATA_ROOT}/.cutover-freeze}"#'
+# p3-5 — a later plain reassignment overrides the compared default.
+p3_red p3-5-shadow-reassignment "$T/p3/git-data-gc.sh" 1 '/^STORE_DEVICE="\$\{GIT_DATA_STORE_DEVICE:-/a STORE_DEVICE="/dev/sdb"'
+# p3-6 — set identity alone: a new definer whose every value is correct.
+p3_red p3-6-new-definer "$T/p3/git-data-gc.sh" 1 '1s#$#\n\# a copy under a new name#' git-data-zz-copy.sh
+# p3-7 — the wrappers' repositories root moved alone.
+p3_red p3-7-repo-root "$T/p3/git-data-remove.sh" 2 's#^REPO_ROOT="\$\{GIT_DATA_REPO_ROOT:-/mnt/git-data/repositories\}"$#REPO_ROOT="${GIT_DATA_REPO_ROOT:-/mnt/git-data/repos}"#'
 }
 
 # ── RUNTIME ARM — real OpenSSH (pinned ubuntu:24.04) ─────────────────────────────────
@@ -2284,11 +2450,13 @@ row ip_ok "$ipok"
 ssh-keygen -q -t ed25519 -N '' -f /tmp/ci && ssh-keygen -q -t ed25519 -N '' -f /tmp/gdroot
 install -m 600 /tmp/ci.pub /etc/ssh/ak-web && install -m 600 /tmp/gdroot.pub /etc/ssh/ak-gd
 mkdir -p /fixture /rt && : > /out/remote.log
-# The store-verified probe also asks `findmnt -no UUID <root>`: that one answers /fixture/findmnt.uuid.
+# The store session also asks `findmnt -n -o UUID --mountpoint <root>`: that one answers /fixture/findmnt.uuid.
+# /mnt/git-data is an anonymous volume, i.e. a REAL mount point, so the session's own
+# `stat -c %m` containing-mount check runs for real; it is emptied with find, never removed.
 cat > /usr/local/sbin/findmnt <<'F'
 #!/bin/bash
 printf 'findmnt %s\n' "$*" >> /out/remote.log
-if [ "$1" = -no ] && [ "$2" = UUID ]; then cat /fixture/findmnt.uuid; else cat /fixture/findmnt.out; fi
+if [ "$3" = UUID ]; then cat /fixture/findmnt.uuid; else cat /fixture/findmnt.out; fi
 exit "$(cat /fixture/findmnt.rc)"
 F
 cat > /usr/local/sbin/find <<'F'
@@ -2335,12 +2503,12 @@ drive2() { # label [runner-temp]
 U=4f1c2a9e-7b3d-4e8a-9c6f-2d5b8a1e0c73
 printf '%s\n' "$U" > /fixture/findmnt.uuid
 mkdir -p /etc/git-data && printf '%s\n' "$U" > /etc/git-data/store-verified
-printf '/dev/mapper/git-data\n' > /fixture/findmnt.out; echo 0 > /fixture/findmnt.rc; rm -rf /mnt/git-data; mkdir -p /mnt/git-data/repositories; plant_fence
+printf '/dev/mapper/git-data\n' > /fixture/findmnt.out; echo 0 > /fixture/findmnt.rc; find /mnt/git-data -mindepth 1 -delete; mkdir -p /mnt/git-data/repositories; plant_fence
 drive2 r5
 drive2 rhkg /rt2
 mkdir -p /mnt/git-data/repositories/ws-1.git
 drive2 r6
-printf '/dev/sdb\n' > /fixture/findmnt.out; rm -rf /mnt/git-data
+printf '/dev/sdb\n' > /fixture/findmnt.out; find /mnt/git-data -mindepth 1 -delete
 drive2 r7
 printf '/dev/mapper/git-data\n' > /fixture/findmnt.out; install -m 600 /tmp/ci.pub /etc/ssh/ak-gd
 drive2 r8
@@ -2374,7 +2542,7 @@ DRV
   : > "$T/rt/out/rows"
   # Bounded: a hung driver must fail this arm loudly, never eat the CI job's clock.
   _cname="gdc-access-$$-${RANDOM}"
-  timeout -k 10 480 docker run --rm --cap-add NET_ADMIN --name "$_cname" -v "$T/rt/drive.sh:/work/drive.sh:ro" \
+  timeout -k 10 480 docker run --rm --cap-add NET_ADMIN --name "$_cname" -v /mnt/git-data -v "$T/rt/drive.sh:/work/drive.sh:ro" \
     -v "$T/rt/git-data-cutover.sh:/work/git-data-cutover.sh:ro" -v "$T/rt/sshcfg.sh:/work/sshcfg.sh:ro" -v "$T/rt/wrapper.sh:/work/wrapper.sh:ro" \
     -v "$T/rt/wkh.sh:/work/wkh.sh:ro" -v "$T/rt/web-inv.tmpl:/work/web-inv.tmpl:ro" \
     -v "$T/rt/out:/out" "$UBUNTU_BASE" bash /work/drive.sh > "$T/rt/stdout" 2>&1
@@ -2416,20 +2584,19 @@ DRV
       && pass "R5-fixture: 10.0.1.10/10.0.1.20 bound in the container and the workflow's ssh_config writer ran (rc 0)" || fail "R5-fixture: address binding or the ssh_config writer failed" "ip=$(_rv ip_ok) sshcfg=$(_rv sshcfg_rc) $(tr '\n' '|' < "$T/rt/out/sshcfg.out" 2>/dev/null | sed 's/::/: :/g')"
     { [ "$(_rv r5_rc)" = 0 ] && _acc r5 web ok && _acc r5 git-data-jump ok && _acc r5 git-data-auth ok && _sto r5 store-mounted ok && _sto r5 store-on-mapper ok && _sto r5 store-verified ok && _sto r5 store-empty ok && _sto r5 fence-shape ok; } \
       && pass "R5a/AC2 runtime: real OpenSSH through the generated ssh_config, BOTH hops strictly pinned — access ok x3, store probes ok x4 (the mapper, a bound marker), fence ok on a real root:git 0750 tree, exit 0" || fail "R5a: the end-to-end read-only proof did not exit 0" "rc=$(_rv r5_rc) $(_rctx r5)"
-    [ "$(cat "$T/rt/out/r5.remote" 2>/dev/null)" = "findmnt -no SOURCE /mnt/git-data
-findmnt -no SOURCE /mnt/git-data
-findmnt -no UUID /mnt/git-data
-findmnt -no SOURCE -T /mnt/git-data/repositories
-find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 -name *.git -printf .
+    [ "$(cat "$T/rt/out/r5.remote" 2>/dev/null)" = "findmnt -n -o SOURCE --mountpoint /mnt/git-data
+findmnt -n -o SOURCE --mountpoint /mnt/git-data
+findmnt -n -o UUID --mountpoint /mnt/git-data
+find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! -name .*.init.lock ! -name lost+found -printf .
 findmnt -no SOURCE -T /mnt/git-data/hooks
 findmnt -no SOURCE -T /mnt/git-data/hooks/pre-receive" ] \
-      && pass "R5b: on git-data the commands observed are exactly the mount read, the store-verified session's source and UUID reads, the findmnt -T source re-check, the count and the fence's two findmnt -T reads" || fail "R5b: unexpected remote commands" "$(tr '\n' '|' < "$T/rt/out/r5.remote" 2>/dev/null)"
-    { [ "$(_rv r5_web_accepted)" = 7 ] && [ "$(_rv r5_gd_accepted)" = 5 ]; } \
-      && pass "R5c: web-1 accepted 7 CI-key logins (web, jump, and the ProxyCommand hop of auth/findmnt/store-verified/count/fence); git-data accepted 5 root-key logins" || fail "R5c: login counts differ" "web=$(_rv r5_web_accepted) gd=$(_rv r5_gd_accepted)"
+      && pass "R5b: on git-data the commands observed are exactly the mount read, the store session's source and UUID reads and its count, and the fence's two findmnt -T reads" || fail "R5b: unexpected remote commands" "$(tr '\n' '|' < "$T/rt/out/r5.remote" 2>/dev/null)"
+    { [ "$(_rv r5_web_accepted)" = 6 ] && [ "$(_rv r5_gd_accepted)" = 4 ]; } \
+      && pass "R5c: web-1 accepted 6 CI-key logins (web, jump, and the ProxyCommand hop of auth/findmnt/store session/fence); git-data accepted 4 root-key logins" || fail "R5c: login counts differ" "web=$(_rv r5_web_accepted) gd=$(_rv r5_gd_accepted)"
     { [ "$(_rv r6_rc)" = 5 ] && _sto r6 store-empty store_not_empty; } \
       && pass "R6a: a real ws-1.git under /mnt/git-data/repositories -> store_not_empty, exit 5" || fail "R6a: a non-empty store passed" "rc=$(_rv r6_rc) $(_rctx r6)"
-    grep -qxF "find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 -name *.git -printf ." "$T/rt/out/r6.remote" \
-      && pass "R6b: the count ran on git-data as find -H … -name *.git" || fail "R6b: the count command differs" "$(tr '\n' '|' < "$T/rt/out/r6.remote" 2>/dev/null)"
+    grep -qxF "find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! -name .*.init.lock ! -name lost+found -printf ." "$T/rt/out/r6.remote" \
+      && pass "R6b: the count ran on git-data as find -H … with the bootstrap's exclusions" || fail "R6b: the count command differs" "$(tr '\n' '|' < "$T/rt/out/r6.remote" 2>/dev/null)"
     { [ "$(_rv r7_rc)" = 5 ] && _sto r7 store-on-mapper store_not_on_mapper; } \
       && pass "R7: a plaintext /dev/sdb source -> store_not_on_mapper, exit 5" || fail "R7: a store not served by the mapper passed" "rc=$(_rv r7_rc) $(_rctx r7)"
     { [ "$(_rv r8_rc)" = 3 ] && grep -qE 'role=git-data-auth host=10\.0\.1\.20 verdict=failed rc=[0-9]+ reason=auth_refused$' "$T/rt/out/r8.out"; } \
@@ -2462,26 +2629,26 @@ fi
 # Both checks are EXACT (-ne): a floor below the count it measures is slack a deletion can spend,
 # and every skip path adds RUNTIME_ROWS, so the totals are the same in every environment (under
 # CI, -ne also proves RUNTIME_ROWS equals the runtime rows that actually ran).
-# MUTANT_FLOOR, computed from the matrices before it was measured (#8211 PR2 proof half): the 47
-# rows before it (Guard 2 x4, Guard 5 x4, Guard 6 x1, Guard 7 x3, C1 x1, C3 x2, C7 x4, Fence x19,
-# H4 x9), less g2-no-cut-over, which is Guard 1 row 2 now (g5-raw-capture, f-m2, f-m16 and f-m17
-# were re-anchored, each counted once) = 46; plus Guard 1 rows 1-6 and its harness row = 7;
-# Guard 2 rows 1-4, 5a, 5b, 6-11, 12a, 12b = 14 and its three harness rows = 3; RB x3; P3 x3 = 76.
-# Measured 76 on the first run after the runtime arm was final. Guard 3's four rows live with the
-# census in tests/scripts/test-git-data-root-token-census.sh.
-MUTANT_FLOOR=76
+# MUTANT_FLOOR, computed from the matrices before it was measured (#8211 PR2 proof half, restated at
+# code review): the 47 rows before it (Guard 2 x4, Guard 5 x4, Guard 6 x1, Guard 7 x3, C1 x1, C3 x2,
+# C7 x4, Fence x19, H4 x9), less g2-no-cut-over (now Guard 1 row 2) and c3-no-source-identity (now
+# Guard 2 row 13); g5-raw-capture, c3-missing-as-zero, f-m2, f-m16 and f-m17 were re-anchored, each
+# counted once = 45. Plus Guard 1 rows 1-6 and its harness row = 7; config rows 1-4 = 4; Guard 2
+# rows 1-17 = 17 plus 4 harness rows plus the count-parity row = 22; RB rows 1-6 = 6; P3 rows 1-7 = 7.
+# Total 91, measured 91 on the first run after the runtime arm was final. Guard 3's four rows live
+# with the census in tests/scripts/test-git-data-root-token-census.sh.
+MUTANT_FLOOR=91
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
-# Assertion FLOOR, restated from a measured run after the #8211 PR2 proof half: mutants 76 x 2 = 152;
-# runtime 27 (RFSRC deleted; RVM and RVM2 added); everything else 223 — the script's unit rows
-# (access gate, H4, AC2, Guard 1 and Guard 2 incl. the VX executed rows, the fence probe, P1-P3,
-# RB, Guard 5, Guard 7), the bridge export set, the 31 workflow YAML verdicts and the executed
-# workflow steps. The proof half added 36 unit rows: ORD, MAP-PRE, ARG-mapper x2, V x9 plus the V22
-# annotation, Vline2/Vempty/Vnotok, VINJ, ARG x2, VX x13, F16c, P3 and RB.
-# Total 402 — exact, not a margin: removing or adding an assertion on purpose costs one edit here.
-FLOOR=402
+# Assertion FLOOR, restated from a measured run after the #8211 PR2 proof half's code review:
+# mutants 91 x 2 = 182; runtime 27 (RFSRC deleted; RVM and RVM2 added); everything else 244 — the
+# script's unit rows (access gate, H4, AC2, CFG x11, Guard 1, Guard 2 incl. the canned V/VE rows and
+# the executed VX and count rows, the MM rows, the fence probe, P1-P4, RB, Guard 5, Guard 7), the
+# bridge export set, the 31 workflow YAML verdicts and the executed workflow steps.
+# Total 453 — exact, not a margin: removing or adding an assertion on purpose costs one edit here.
+FLOOR=453
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

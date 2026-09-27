@@ -7,18 +7,26 @@
 # state ADR-239 renders and a flag flip would start from:
 #   1. access_gate (ADR-220): web-1 answers, `ssh -W` through web-1 reaches git-data's sshd,
 #      and root on git-data accepts the root key. Any non-ok verdict exits 3.
-#   2. four store probes, each fail-closed; every remote read goes through gd_capture:
-#        refuse_if_unmounted         `findmnt -no SOURCE $OLD_ROOT` must name a /dev/ device
-#        refuse_if_not_on_mapper     ...and that device must be $LUKS_MAPPER (ADR-239 D1: the
-#                                    render never serves anything else). A local comparison.
-#        refuse_if_store_unverified  in ONE ssh session: the store is still served by that
-#                                    device, the mounted filesystem has a UUID, $STORE_VERIFIED
-#                                    (the wrappers' marker, ADR-239 D3) is a non-empty file whose
-#                                    first line is that UUID, and $OLD_ROOT/.cutover-freeze is
-#                                    absent. Symlinks are followed exactly as the wrappers follow
-#                                    them, so this probe is never stricter than they are.
-#        refuse_if_store_not_empty   $OLD_REPOS must be a directory on that SAME source
-#                                    (`findmnt -T`) holding zero `*.git` entries
+#   2. the configuration check, then the store probes, each fail-closed; every remote read goes
+#      through gd_capture:
+#        refuse_if_config_unsafe      OLD_ROOT, REPO_SUBDIR, STORE_VERIFIED, LUKS_MAPPER and
+#                                     TRANSPORT_WRAPPER are safe literals, BEFORE any of them is
+#                                     printed or dialed (probe=config, probe_failed reason=arg_*)
+#        refuse_if_unmounted          `findmnt --mountpoint $OLD_ROOT` must name a /dev/ device
+#        refuse_if_not_on_mapper      ...and that device must be $LUKS_MAPPER (ADR-239 D1: the
+#                                     render never serves anything else). A local comparison.
+#        refuse_if_store_unverified_or_not_empty
+#                                     in ONE ssh session, so every fact is read at one instant:
+#                                     the store is still served by that device; the freeze
+#                                     sentinel $OLD_ROOT/.cutover-freeze is absent; the mounted
+#                                     filesystem has a UUID; $STORE_VERIFIED (the wrappers'
+#                                     marker, ADR-239 D3) is a non-empty file whose first line is
+#                                     that UUID; $OLD_REPOS is a directory whose containing mount
+#                                     is $OLD_ROOT (the wrappers' `stat -c %m` check); and it holds
+#                                     no entry at all except the provision/remove lock dotfiles
+#                                     and lost+found (the bootstrap's own `_repo_count` rule).
+#                                     It emits two lines, probe=store-verified and
+#                                     probe=store-empty, each exit code attributed to its stage.
 #      A refusal exits 5 with a fixed verdict word. A read that could not be completed
 #      (transport, timeout, oversized or multi-line answer) is `probe_failed rc=<n>`, never
 #      a store-state verdict. The store-verified words:
@@ -28,17 +36,21 @@
 #        cutover_frozen                           the freeze sentinel exists
 #        probe_failed rc=5|6|16                   findmnt failed | the source changed or was
 #                                                 over-mounted since store-mounted | head failed
-#        probe_failed reason=arg_root|arg_marker  an unsafe OLD_ROOT or STORE_VERIFIED
-#      and store-on-mapper refuses store_not_on_mapper, or probe_failed reason=arg_mapper for
-#      an unsafe LUKS_MAPPER. Every store_unverified or cutover_frozen verdict means the
-#      wrappers are refusing on the host right now.
+#      and the store-empty words: store_not_empty, or probe_failed rc=3|4|7|8|9|96 (see the
+#      function). Every store_unverified verdict means every store wrapper refuses on the host
+#      now; cutover_frozen means provision, remove, the transport wrapper and pre-receive do
+#      (gc does not read the sentinel). The probes read as root while the wrappers run as git,
+#      so a permission fault can make the wrappers refuse where this proof passes: the proof is
+#      never STRICTER than the wrappers. The git-user path is attested separately, by the
+#      bootstrap's boot_complete erasure_probe=yes and by the fence probe's runuser checks.
 #   3. the fence probe (#8101), refuse_if_fence_not_intact: the pre-receive fence the bootstrap
 #      plants is a real root:git 750 hooks directory under a root-owned, non-writable parent,
 #      holding a real root:root 755 pre-receive the git user can run; the installed transport
 #      wrapper pins pushes to it and the system core.hooksPath names it; and it sits on the
 #      accepted store device. It checks the fence's SHAPE, not which hook is installed.
 # Exit 0 means: access ok; the store is served by the LUKS mapper with the bootstrap's store
-# marker bound to its filesystem; it is not frozen; it holds zero `*.git` entries; and a push
+# marker bound to its filesystem; it is not frozen; its repositories directory holds no entry
+# (lock dotfiles and lost+found excepted, as in the bootstrap's `_repo_count`); and a push
 # would run a root-owned pre-receive of the planted shape. It does NOT determine when
 # encryption at rest became active for the Art. 30 register; that determination is #8634's.
 #
@@ -50,8 +62,8 @@
 # nothing to copy, because the store has never held a repository. PR2's proof half rebuilt the
 # store probes for that layout (ADR-239 amendment 2026-09-27): the DRY_RUN=1 probe chain IS the
 # `proof` the rest of PR2 builds on. The flip, the flag-off-only rollback, the same-version
-# redeploy and the ADR-220 D6 fresh replace remain on #8211, so a caller that asks for a real
-# mode (DRY_RUN other than 1, ROLLBACK or CONFIRM_WIPE other than 0) is refused with
+# redeploy, the per-host in-container `git_data_store=` startup line and the ADR-220 D6 fresh
+# replace remain on #8211, so a caller that asks for a real mode (DRY_RUN other than 1, ROLLBACK or CONFIRM_WIPE other than 0) is refused with
 # `verdict=real_cutover_unreconciled` (exit 5) BEFORE any remote call.
 # Defaults: DRY_RUN=1, ROLLBACK=0, CONFIRM_WIPE=0 (unset or empty takes the default).
 #
@@ -80,6 +92,8 @@
 # Exit codes: 0 clear; 1 internal error (die: the access gate's mktemp failed); 3 access gate;
 # 5 refusal (real mode, store probe, fence probe); 78 xtrace refusal.
 set -euo pipefail
+# Every regex below is a byte-class check; a UTF-8 locale would widen [A-Za-z] to letters beyond ASCII.
+export LC_ALL=C
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
@@ -365,7 +379,7 @@ refuse_if_unmounted() {
   step "store probe: $OLD_ROOT is mounted on a device"
   local rc=0 q
   printf -v q '%q' "$OLD_ROOT"
-  gd_capture '^[][A-Za-z0-9/_.:@+=-]*$' "findmnt -no SOURCE $q" || rc=$?
+  gd_capture '^[][A-Za-z0-9/_.:@+=-]*$' "findmnt -n -o SOURCE --mountpoint $q" || rc=$?
   case "$rc" in
     0) ;;
     1) _store_refuse store-mounted old_store_unmounted "$rc" ;;
@@ -376,58 +390,88 @@ refuse_if_unmounted() {
   _store_emit store-mounted ok
 }
 
+# The configuration check. Every configurable path the probes print or send to git-data is a safe
+# literal BEFORE the first `step` line or remote read, so no value can become a workflow command on
+# stdout or an option/metacharacter on the remote side. The fence probe keeps its own argument
+# checks, because it is also called with explicit arguments (the #8211 fresh-root reuse).
+refuse_if_config_unsafe() {
+  [[ "$OLD_ROOT" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse config probe_failed "" arg_root
+  [[ "$REPO_SUBDIR" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || _store_refuse config probe_failed "" arg_subdir
+  [[ "$STORE_VERIFIED" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse config probe_failed "" arg_marker
+  [[ "$LUKS_MAPPER" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse config probe_failed "" arg_mapper
+  [[ "$TRANSPORT_WRAPPER" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse config probe_failed "" arg_wrapper
+}
+
 # ADR-239 D1: the render serves $LUKS_MAPPER at the store root from boot, so any other device
-# there is an incident, never a state to proceed from. LUKS_MAPPER is overridable, so it is
-# validated before the comparison: a control byte would also make %q emit a bash-only form.
+# there is an incident, never a state to proceed from.
 refuse_if_not_on_mapper() {
   step "store probe: $OLD_ROOT is served by the LUKS mapper"
-  [[ "$LUKS_MAPPER" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse store-on-mapper probe_failed "" arg_mapper
   [ -n "$STORE_SOURCE" ] || _store_refuse store-on-mapper probe_failed
   [ "$STORE_SOURCE" = "$LUKS_MAPPER" ] || _store_refuse store-on-mapper store_not_on_mapper
   _store_emit store-on-mapper ok
 }
 
-# The pass rests on the bootstrap's evidence, never on the absence of a refusal. One ssh
-# session reads, in this order, and exits with the first failure:
+# The pass rests on the bootstrap's evidence, never on the absence of a refusal, and every fact is
+# read in ONE ssh session so no fact can change between two reads. The session exits with the first
+# failure; the exit code names the stage and the verdict:
+#   store-verified
 #    5  findmnt could not read the source or the UUID           probe_failed rc=5
 #    6  the source is not the one store-mounted accepted
 #       (it changed, or a second mount is stacked on the root)  probe_failed rc=6
+#   23  the freeze sentinel exists                              cutover_frozen
 #   24  the mounted filesystem reports no UUID                  reason=no_fs_uuid
 #   21  the marker is absent, empty, or not a file              reason=marker_absent
 #   16  head could not read the marker                          probe_failed rc=16
 #   22  the marker's first line is not that UUID                reason=marker_mismatch
-#   23  the freeze sentinel exists                              cutover_frozen
-# The marker and freeze tests are as strict as the wrappers' own (`[ -s ]`, `head -n 1`,
-# `[ -e ]`, all following symlinks): a refusal here means the wrappers refuse now too. The
-# prefix is plain %q assignments; every other element is single-quoted, so nothing expands on
-# the runner. Positional findmnt (not --mountpoint) keeps the suite's mutating() census exact.
-refuse_if_store_unverified() {
-  local rc=0 reason="" cmd qr qs qm
+#   store-empty (reached only after every store-verified fact held)
+#    3  $OLD_REPOS is a dangling symlink, or not a directory    probe_failed rc=3
+#    7  $OLD_REPOS is missing (the bootstrap always creates it) probe_failed rc=7
+#    9  readlink or stat could not resolve it                   probe_failed rc=9
+#    8  its containing mount is not $OLD_ROOT (a second mount
+#       on repositories/ would hide what lies under it)         probe_failed rc=8
+#    4  find failed                                             probe_failed rc=4
+# The only output is the entry count, printed last, so rc 0 means every check above held. Any
+# other rc (gd_capture's own, transport, timeout) is probe_failed under store-verified; a
+# malformed answer (96) on rc 0 can only be the count, so it is probe_failed under store-empty.
+# The freeze is read before the marker: a frozen store is refused as frozen, whatever its marker.
+# The marker and freeze tests follow symlinks as the wrappers' `[ -s ]`, `head -n 1` and `[ -e ]`
+# do; the extra `[ -f ]` only names a non-file marker marker_absent (the wrappers refuse it too).
+# The count is the bootstrap's `_repo_count` rule: every direct entry, not only `*.git`, since a
+# partial `x/` is user data too. `find -H` follows a symlinked $OLD_REPOS itself, never the
+# entries under it. The prefix is plain %q assignments; every other element is single-quoted, so
+# nothing expands on the runner.
+refuse_if_store_unverified_or_not_empty() {
+  local rc=0 reason="" cmd qr qs qm qd
   local -a c
-  [[ "$OLD_ROOT" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse store-verified probe_failed "" arg_root
-  [[ "$STORE_VERIFIED" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse store-verified probe_failed "" arg_marker
   [[ "$STORE_SOURCE" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse store-verified probe_failed
-  step "store probe: the bootstrap's store marker is bound to the filesystem at $OLD_ROOT, and the store is not frozen"
+  step "store probes: the bootstrap's store marker is bound to $OLD_ROOT, it is not frozen, and $OLD_REPOS holds nothing"
   printf -v qr '%q' "$OLD_ROOT"
   printf -v qs '%q' "$STORE_SOURCE"
   printf -v qm '%q' "$STORE_VERIFIED"
+  printf -v qd '%q' "$OLD_REPOS"
   c=(
-    "r=$qr; src=$qs; mk=$qm"
+    "r=$qr; src=$qs; mk=$qm; d=$qd"
     'fz="$r/.cutover-freeze"'
-    's=$(findmnt -no SOURCE "$r") || exit 5'
+    's=$(findmnt -n -o SOURCE --mountpoint "$r") || exit 5'
     '[ "$s" = "$src" ] || exit 6'
-    'fu=$(findmnt -no UUID "$r") || exit 5'
+    '[ ! -e "$fz" ] || exit 23'
+    'fu=$(findmnt -n -o UUID --mountpoint "$r") || exit 5'
     '[ -n "$fu" ] || exit 24'
     '[ -f "$mk" ] && [ -s "$mk" ] || exit 21'
     'm=$(head -n 1 "$mk") || exit 16'
     '[ "$m" = "$fu" ] || exit 22'
-    '[ ! -e "$fz" ] || exit 23'
-    'echo ok'
+    'if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi'
+    'if [ ! -e "$d" ]; then exit 7; fi'
+    '[ -d "$d" ] || exit 3'
+    'dr=$(readlink -f "$d") && rr=$(readlink -f "$r") && t=$(stat -c %m "$dr") || exit 9'
+    '[ "$t" = "$rr" ] || exit 8'
+    "n=\$(find -H \"\$d\" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf .) || exit 4"
+    'echo "${#n}"'
   )
   printf -v cmd '%s; ' "${c[@]}"
-  gd_capture '^ok$' "${cmd%; }" || rc=$?
+  gd_capture '^[0-9]+$' "${cmd%; }" || rc=$?
   case "$rc" in
-    0) ;;
+    0|3|4|7|8|9|96) ;;
     21) reason=marker_absent ;;
     22) reason=marker_mismatch ;;
     24) reason=no_fs_uuid ;;
@@ -436,26 +480,6 @@ refuse_if_store_unverified() {
   esac
   [ -z "$reason" ] || _store_refuse store-verified store_unverified "" "$reason"
   _store_emit store-verified ok
-}
-
-# One remote command whose only output is the count, run in ONE ssh session so the source it
-# checks is the source it counts on. Every abnormal shape is a probe error (remote exit code),
-# never a count of 0:
-#   3  $OLD_REPOS is a dangling symlink, or exists but is not a directory
-#   7  $OLD_REPOS is missing: git-data-bootstrap.sh creates it on every boot, so a mounted
-#      root without it is not an empty store
-#   5  `findmnt -T` could not resolve the source $OLD_REPOS lives on
-#   6  that source differs from the one refuse_if_unmounted accepted (another volume
-#      underneath, or a remount between the two ssh sessions)
-#   4  find failed
-# `find -H` follows a symlinked $OLD_REPOS itself, never the entries under it.
-refuse_if_store_not_empty() {
-  step "store probe: $OLD_REPOS holds no repositories"
-  local rc=0 q qs
-  [[ "$STORE_SOURCE" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse store-empty probe_failed
-  printf -v q '%q' "$OLD_REPOS"
-  printf -v qs '%q' "$STORE_SOURCE"
-  gd_capture '^[0-9]+$' "d=$q; src=$qs; if [ -L \"\$d\" ] && [ ! -e \"\$d\" ]; then exit 3; fi; if [ ! -e \"\$d\" ]; then exit 7; fi; [ -d \"\$d\" ] || exit 3; s=\$(findmnt -no SOURCE -T \"\$d\") || exit 5; [ \"\$s\" = \"\$src\" ] || exit 6; n=\$(find -H \"\$d\" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo \"\${#n}\"" || rc=$?
   [ "$rc" -eq 0 ] || _store_refuse store-empty probe_failed "$rc"
   [[ "$GD_CAPTURED" =~ ^0+$ ]] || _store_refuse store-empty store_not_empty
   _store_emit store-empty ok
@@ -560,14 +584,14 @@ refuse_if_fence_not_intact() {
 main() {
   refuse_real_modes
   resolve_roster
-  log "starting git-data read-only proof (access gate, four store probes, then the fence probe; no host is changed)"
+  refuse_if_config_unsafe
+  log "starting git-data read-only proof (access gate, the store probes, then the fence probe; no host is changed)"
   access_gate
   refuse_if_unmounted
   refuse_if_not_on_mapper
-  refuse_if_store_unverified
-  refuse_if_store_not_empty
+  refuse_if_store_unverified_or_not_empty
   refuse_if_fence_not_intact
-  log "read-only proof clear: access ok, served by the LUKS mapper, the bootstrap's store marker bound to its filesystem, not frozen, zero *.git entries, fence in place for pushes"
+  log "read-only proof clear: access ok, served by the LUKS mapper, the bootstrap's store marker bound to its filesystem, not frozen, no entry in the repositories directory, fence in place for pushes"
   echo "::notice title=git-data-cutover store::verdict=clear"
 }
 
