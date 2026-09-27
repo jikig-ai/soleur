@@ -208,7 +208,7 @@ describe("resolveIdentity", () => {
 
     const makePendingChain = (d: { promise: Promise<unknown> }) => {
       const chain: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "order", "limit"]) {
+      for (const m of ["select", "eq", "order", "limit", "abortSignal"]) {
         chain[m] = vi.fn(() => chain);
       }
       chain.single = vi.fn(() => d.promise);

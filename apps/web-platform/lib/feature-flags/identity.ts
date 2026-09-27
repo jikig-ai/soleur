@@ -4,6 +4,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { sessionJwtEmailForVerifiedUser } from "@/server/request-auth";
 import { ANON_IDENTITY, type Identity, type Role } from "./server";
 
+// Bounded wait on the remote selects below (#8978): cold-upstream stalls of
+// 20–37 s were measured on this pair; the bound reclassifies a stall into the
+// pre-existing `error || !data` degrade arm (prd role, null fields) rather
+// than hanging the document. Generous vs the ~100–300 ms warm-path reads.
+// Read lazily so a test can pin a short bound via env stub.
+const identitySelectTimeoutMs = () =>
+  Number(process.env.SOLEUR_IDENTITY_SELECT_TIMEOUT_MS) || 8_000;
+
 export const resolveIdentity = cache(async (
   supabase: SupabaseClient,
 ): Promise<Identity> => {
@@ -44,12 +52,19 @@ export const resolveIdentity = cache(async (
   // The two selects are independent — run them concurrently (Phase 3,
   // perf-dashboard-section-load-latency). The users select is extended to
   // `subscription_status` so the dashboard layout can server-render the
-  // payment banners without a post-hydration mount effect.
+  // payment banners without a post-hydration mount effect. Both carry a
+  // bounded wait (#8978): post-merge Sentry spans measured these two
+  // selects stalling 20–37 s on a cold upstream — an abort resolves as a
+  // PostgREST error object, landing on the EXISTING degrade arm below
+  // (role:"prd", orgId/subscriptionStatus null) instead of hanging the
+  // document render. userId/email are unaffected — both come from the
+  // minted-header fast path or the remote getUser() above.
   const [{ data, error }, { data: memberData }] = await Promise.all([
     supabase
       .from("users")
       .select("role, subscription_status")
       .eq("id", userId)
+      .abortSignal(AbortSignal.timeout(identitySelectTimeoutMs()))
       .single<{ role: unknown; subscription_status: string | null }>(),
     supabase
       .from("workspace_members")
@@ -57,6 +72,7 @@ export const resolveIdentity = cache(async (
       .eq("user_id", userId)
       .order("created_at", { ascending: true })
       .limit(1)
+      .abortSignal(AbortSignal.timeout(identitySelectTimeoutMs()))
       .single<{ workspace_id: string; workspaces: { organization_id: string } }>(),
   ]);
 

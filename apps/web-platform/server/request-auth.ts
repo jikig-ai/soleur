@@ -47,10 +47,10 @@ export async function verifiedUserId(req: Request): Promise<string | null> {
     data: { op: "middleware.auth_header.absent" },
   });
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return user?.id ?? null;
+  // `data` is tolerated as null (a GoTrue error response yields
+  // `{data: null, error}`): fail CLOSED to null, never destructure-throw.
+  const { data } = await supabase.auth.getUser();
+  return data?.user?.id ?? null;
 }
 
 /**

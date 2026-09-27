@@ -29,6 +29,42 @@ const MW_VERDICT_TTL_MS = 30_000;
 // correctness issue (a miss re-queries).
 const MW_VERDICT_CACHE_MAX = 2_000;
 const revocationOkCache = new LRUCache<string, true>(MW_VERDICT_CACHE_MAX, MW_VERDICT_TTL_MS);
+
+// Bounds on every remote Supabase leg (#8978 residual cold tiers): the
+// post-merge probe measured 20–38 s stalls on individual PostgREST/auth
+// calls — a stalled upstream must degrade onto an EXISTING verdict arm,
+// never hang the document. postgrest-js resolves an abort as
+// `{ error: { hint: "Request was aborted (timeout or manual cancellation)" } }`
+// (PostgrestBuilder then-catch, !shouldThrowOnError) — no rejection — so the
+// existing error arms (revocation grace / tcError fail-closed / identity
+// degrade) absorb the timeout with no new verdict semantics. 8 s clears the
+// largest observed legit cold miss (6.9 s, probe cold-5) while capping the
+// 26–30 s stall class; 10 s bounds the auth-server RTT (2.6–4.9 s recurring).
+// Read lazily (per call) so a test can pin a short bound via env stub; the
+// literal `||` keeps 0/absent on the default.
+const mwRpcTimeoutMs = () =>
+  Number(process.env.SOLEUR_MW_RPC_TIMEOUT_MS) || 8_000;
+const mwAuthTimeoutMs = () =>
+  Number(process.env.SOLEUR_MW_AUTH_TIMEOUT_MS) || 10_000;
+
+// In-flight dedup for revocation misses (#8978): concurrent requests on the
+// same `${sub}:${iat}` cold cache were each issuing their own RPC — the
+// mount fan-out amplified one cold upstream stall N-fold. Sharing the
+// PROMISE shares work, never verdicts: positive-only cache rules unchanged.
+const revocationInFlight = new Map<string, Promise<RevocationOutcome>>();
+
+// postgrest-js settles an abort as an error OBJECT (never a rejection):
+// { message: "<Name>: <msg>", hint: "Request was aborted …", code: "" }.
+// gotrue/Promise.race surfaces land as DOMException name "TimeoutError".
+function isAbortShapedError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { message?: unknown; hint?: unknown; name?: unknown };
+  if (typeof e.hint === "string" && e.hint.includes("aborted")) return true;
+  if (e.name === "TimeoutError" || e.name === "AbortError") return true;
+  return (
+    typeof e.message === "string" && /^(TimeoutError|AbortError)\b/.test(e.message)
+  );
+}
 const tcRowCache = new LRUCache<
   string,
   { tc_accepted_version: string | null; subscription_status: string | null }
@@ -327,6 +363,16 @@ export async function middleware(request: NextRequest) {
     ) {
       revokeOutcomePromise = Promise.resolve({ kind: "hit" });
     } else {
+      const inFlight =
+        revokeCacheKey !== null
+          ? revocationInFlight.get(revokeCacheKey)
+          : undefined;
+      if (inFlight !== undefined) {
+        // Join the identical in-flight miss — dedup shares the RPC work,
+        // never the verdict: every joiner independently applies the
+        // positive-only store/arm rules to the shared outcome.
+        revokeOutcomePromise = inFlight;
+      } else {
       const iat = new Date(iatSeconds * 1000);
       // Armed .catch: the leg settles to a value and never rejects — a
       // redirecting path below can leave it un-awaited without producing
@@ -334,12 +380,16 @@ export async function middleware(request: NextRequest) {
       // Promise.resolve() unwraps the PostgREST thenable into a real Promise —
       // its .then() returns PromiseLike (no .catch), so the unwrap is required
       // for the armed-catch shape below, not just cosmetic.
-      revokeOutcomePromise = Promise.resolve()
+      const started: Promise<RevocationOutcome> = Promise.resolve()
         // rpc() evaluated inside the chain so a synchronous throw (URL/config
         // construction) lands in the armed .catch instead of escaping the
         // middleware with a 500.
         .then(() =>
-          supabase.rpc("check_my_revocation", { p_jwt_iat: iat.toISOString() }),
+          supabase
+            .rpc("check_my_revocation", { p_jwt_iat: iat.toISOString() })
+            // MW_RPC_TIMEOUT_MS bound: an abort resolves as a PostgREST
+            // error object → the `revokeError` arm below → grace.
+            .abortSignal(AbortSignal.timeout(mwRpcTimeoutMs())),
         )
         .then((result): RevocationOutcome => {
           const { data: revokeData, error: revokeError } = result;
@@ -363,16 +413,62 @@ export async function middleware(request: NextRequest) {
           return { kind: "ok", cacheKey: revokeCacheKey };
         })
         .catch((error): RevocationOutcome => ({ kind: "grace", error }));
+      if (revokeCacheKey !== null) {
+        // Track until settle: the entry is deleted on settlement so a LATER
+        // request (post-settle, still verdict-cache-cold) issues a fresh RPC.
+        const tracked = started.finally(() => {
+          revocationInFlight.delete(revokeCacheKey);
+        });
+        revocationInFlight.set(revokeCacheKey, tracked);
+        revokeOutcomePromise = tracked;
+      } else {
+        revokeOutcomePromise = started;
+      }
+      }
     }
   } else {
     revokeOutcomePromise = Promise.resolve({ kind: "skipped" });
   }
 
   const mwAuthStart = performance.now();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Bound the auth-server RTT (Phase-1.4 arm fires: the Phase-0 probe
+  // measured recurring multi-second getUser() stalls — 2.6–4.9 s on 4/6
+  // samples). A timeout lands on TODAY'S failure arm verbatim — user ===
+  // null → /login redirect — reclassified earlier, not a new verdict. The
+  // raced loser settles in the background: its setAll cookie writes mutate
+  // closure state only, never the already-returned redirect. A synchronous
+  // THROW is not reclassified — it keeps today's propagate-to-500 semantics.
+  let mwAuthTimer: ReturnType<typeof setTimeout> | undefined;
+  const authOutcome = await Promise.race([
+    supabase.auth
+      .getUser()
+      .then((result) => ({ kind: "resolved" as const, result }))
+      .catch((error) => ({ kind: "threw" as const, error })),
+    new Promise<{ kind: "timeout" }>((resolve) => {
+      mwAuthTimer = setTimeout(
+        () => resolve({ kind: "timeout" }),
+        mwAuthTimeoutMs(),
+      );
+    }),
+  ]);
+  clearTimeout(mwAuthTimer);
   const mwAuthDurMs = performance.now() - mwAuthStart;
+  if (authOutcome.kind === "threw") {
+    throw authOutcome.error;
+  }
+  if (authOutcome.kind === "timeout") {
+    // Distinct op so an auth-server stall is visible without SSH — same
+    // redirect consequence as a getUser error, named separately.
+    await reportEdgeSilentFallback(
+      new Error("mw-auth getUser exceeded MW_AUTH_TIMEOUT_MS"),
+      {
+        feature: "middleware",
+        op: "mw_auth.timeout",
+      },
+    );
+  }
+  const user =
+    authOutcome.kind === "resolved" ? authOutcome.result.data.user : null;
 
   // Server-Timing stage descriptors — emitted on EVERY authenticated
   // passthrough (documents AND /api/*, #8978; success path only —
@@ -455,7 +551,12 @@ export async function middleware(request: NextRequest) {
       // be an Art. 7(1) breach, so we bounce. Not drift — by threat model.
       await reportEdgeSilentFallback(revokeOutcome.error, {
         feature: "middleware",
-        op: "revocation_gate.transient_grace",
+        // A bounded-wait timeout lands here as a PostgREST abort-shaped
+        // error object — tag it distinct from transient-RPC errors so an
+        // upstream stall pattern is visible without decoding the message.
+        op: isAbortShapedError(revokeOutcome.error)
+          ? "revocation_gate.rpc_timeout"
+          : "revocation_gate.transient_grace",
         extra: { userId: user.id },
       });
     } else if (revokeOutcome.kind === "revoked") {
@@ -510,6 +611,11 @@ export async function middleware(request: NextRequest) {
           .from("users")
           .select("tc_accepted_version, subscription_status")
           .eq("id", user.id)
+          // MW_RPC_TIMEOUT_MS bound: an abort resolves as a PostgREST
+          // error object → the fail-closed tcError arm below
+          // (/accept-terms?error=db_unavailable) — compliance posture
+          // unchanged, the ~30 s stall class becomes a ~8 s bounce.
+          .abortSignal(AbortSignal.timeout(mwRpcTimeoutMs()))
           .single();
     mwTcDurMs = performance.now() - tcStart;
 

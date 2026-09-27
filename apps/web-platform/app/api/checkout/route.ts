@@ -9,6 +9,11 @@ import type { PlanTier } from "@/lib/types";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { PG_UNIQUE_VIOLATION, sqlStateFromError } from "@/lib/postgres-errors";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
+import {
+  verifiedUserId,
+  sessionJwtEmailForVerifiedUser,
+  boundedAuthGetUser,
+} from "@/server/request-auth";
 import logger from "@/server/logger";
 
 const VALID_TARGET_TIERS: PlanTier[] = ["solo", "startup", "scale", "enterprise"];
@@ -103,11 +108,9 @@ export async function POST(request: Request) {
   if (!valid) return rejectCsrf("api/checkout", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -132,7 +135,7 @@ export async function POST(request: Request) {
   const { data: userData } = await supabase
     .from("users")
     .select("stripe_customer_id, subscription_status")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
   if (userData?.subscription_status === "active" && !targetTier) {
@@ -150,7 +153,7 @@ export async function POST(request: Request) {
       feature: "checkout",
       op: "create-session",
       message: `NEXT_PUBLIC_APP_URL unset; checkout origin fallback to ${APP_URL_FALLBACK}`,
-      extra: { userId: user.id },
+      extra: { userId },
     });
   }
   const appOrigin = appUrl ?? APP_URL_FALLBACK;
@@ -162,7 +165,7 @@ export async function POST(request: Request) {
   if (!resolvedPriceId) {
     if (!targetTier) {
       logger.warn(
-        { userId: user.id },
+        { userId },
         "Legacy checkout: STRIPE_PRICE_ID missing and no targetTier provided",
       );
     }
@@ -176,7 +179,7 @@ export async function POST(request: Request) {
     // Surface a single deprecation log per request — we'll remove the
     // STRIPE_PRICE_ID fallback once the front-end is fully on targetTier.
     logger.warn(
-      { userId: user.id },
+      { userId },
       "Legacy checkout: STRIPE_PRICE_ID env-var path is deprecated; pass targetTier",
     );
   }
@@ -206,13 +209,32 @@ export async function POST(request: Request) {
   const service = getServiceClient();
   const stripe = getStripe();
 
+  // `customer_email` is only consulted when there is no stored Stripe
+  // customer. Resolve it from the local session JWT (accepted only when the
+  // token's `sub` agrees with the verified id — the helper enforces the
+  // check); if the JWT cannot supply it, re-verify remotely with a bounded
+  // GoTrue call (#8978 sweep — the unbounded getUser fallback is the same
+  // cold-stall class as the middleware leg). Mint-time staleness (~1h
+  // access-token TTL) is acceptable for a Stripe prefill the user can edit
+  // in the checkout form (same pattern as pending-invites; ADR-253
+  // amendment 2026-09-26).
+  let customerEmail: string | undefined;
+  if (!userData?.stripe_customer_id) {
+    customerEmail =
+      (await sessionJwtEmailForVerifiedUser(supabase, userId)) ?? undefined;
+    if (customerEmail === undefined) {
+      customerEmail =
+        (await boundedAuthGetUser(supabase))?.user?.email ?? undefined;
+    }
+  }
+
   for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt++) {
     // .select("created_at") returns the inserted row's timestamp — a free
     // fencing token (fresh DEFAULT now() per claim) for the UPDATE and the
     // release-DELETE below.
     const { data: claim, error: claimErr } = await service
       .from("pending_checkout_sessions")
-      .insert({ user_id: user.id, target_tier: resolvedTier })
+      .insert({ user_id: userId, target_tier: resolvedTier })
       .select("created_at")
       .single();
 
@@ -224,13 +246,13 @@ export async function POST(request: Request) {
           {
             ...(userData?.stripe_customer_id
               ? { customer: userData.stripe_customer_id }
-              : { customer_email: user.email }),
+              : { customer_email: customerEmail }),
             mode: "subscription",
             ui_mode: "embedded",
             line_items: [{ price: resolvedPriceId, quantity: 1 }],
             return_url: returnUrl,
             metadata: {
-              supabase_user_id: user.id,
+              supabase_user_id: userId,
               target_tier: resolvedTier,
             },
           },
@@ -242,8 +264,8 @@ export async function POST(request: Request) {
       } catch (err) {
         // Release OUR claim before the 5xx so a retry re-enters cleanly
         // (mirrors releaseDedupRow() in the webhook route).
-        await releaseClaim(service, user.id, claim.created_at, "create-release");
-        return checkoutError(err, "create-session", { userId: user.id });
+        await releaseClaim(service, userId, claim.created_at, "create-release");
+        return checkoutError(err, "create-session", { userId: userId });
       }
 
       // Record the session so a racing marker-hit can retrieve it, fenced
@@ -259,7 +281,7 @@ export async function POST(request: Request) {
       const { data: updated, error: updateErr } = await service
         .from("pending_checkout_sessions")
         .update({ session_id: session.id })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("created_at", claim.created_at)
         .select("user_id");
 
@@ -268,14 +290,14 @@ export async function POST(request: Request) {
           await stripe.checkout.sessions.expire(session.id);
         } catch (expireErr) {
           logger.warn(
-            { err: expireErr, userId: user.id, sessionId: session.id },
+            { err: expireErr, userId: userId, sessionId: session.id },
             "checkout: expire of unrecorded session failed — session self-expires per Stripe TTL",
           );
         }
         if (updateErr) {
-          await releaseClaim(service, user.id, claim.created_at, "record-release");
+          await releaseClaim(service, userId, claim.created_at, "record-release");
           return checkoutError(updateErr, "session-record", {
-            userId: user.id,
+            userId: userId,
           });
         }
         return checkoutInProgress();
@@ -293,7 +315,7 @@ export async function POST(request: Request) {
       return checkoutError(
         claimErr ?? new Error("claim insert returned neither row nor error"),
         "claim-insert",
-        { userId: user.id },
+        { userId: userId },
       );
     }
 
@@ -301,11 +323,11 @@ export async function POST(request: Request) {
     const { data: marker, error: markerErr } = await service
       .from("pending_checkout_sessions")
       .select("session_id, target_tier, created_at")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .maybeSingle();
 
     if (markerErr) {
-      return checkoutError(markerErr, "marker-select", { userId: user.id });
+      return checkoutError(markerErr, "marker-select", { userId: userId });
     }
     if (!marker) {
       // The marker vanished between the 23505 and our SELECT (sibling
@@ -321,7 +343,7 @@ export async function POST(request: Request) {
         // Fail-closed: reclaiming on a transient Stripe outage would let a
         // second session coexist with the open first — the exact defect
         // this table exists to close. Marker is left untouched.
-        return checkoutError(err, "session-retrieve", { userId: user.id });
+        return checkoutError(err, "session-retrieve", { userId: userId });
       }
 
       const isTerminal = existing.status !== "open";
@@ -330,11 +352,11 @@ export async function POST(request: Request) {
         if (existing.client_secret) {
           // Defense-in-depth on a bearer capability: only hand back the
           // secret when the recorded session was created FOR this user.
-          if (existing.metadata?.supabase_user_id !== user.id) {
+          if (existing.metadata?.supabase_user_id !== userId) {
             return checkoutError(
               new Error("checkout session metadata/user mismatch"),
               "session-ownership",
-              { userId: user.id, sessionId: marker.session_id },
+              { userId: userId, sessionId: marker.session_id },
             );
           }
           // Join the sibling's session instead of erroring — the second
@@ -358,7 +380,7 @@ export async function POST(request: Request) {
         const completedMs = Date.now() - existing.created * 1000;
         if (completedMs < FRESH_COMPLETION_MS) {
           logger.info(
-            { userId: user.id, sessionId: marker.session_id, completedMs },
+            { userId: userId, sessionId: marker.session_id, completedMs },
             "checkout: suppressing reclaim of a freshly-completed session",
           );
           return checkoutCompleted();
@@ -378,7 +400,7 @@ export async function POST(request: Request) {
           await stripe.checkout.sessions.expire(marker.session_id);
         } catch (err) {
           return checkoutError(err, "session-expire", {
-            userId: user.id,
+            userId: userId,
             sessionId: marker.session_id,
           });
         }
@@ -387,20 +409,20 @@ export async function POST(request: Request) {
       const { data: reclaimed, error: delErr } = await service
         .from("pending_checkout_sessions")
         .delete()
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("session_id", marker.session_id)
         .select("user_id");
       if (delErr) {
         // Delete truly failed (not just fenced out) — do not proceed to a
         // second create with the old marker still live.
-        return checkoutError(delErr, "marker-reclaim", { userId: user.id });
+        return checkoutError(delErr, "marker-reclaim", { userId: userId });
       }
       if ((reclaimed?.length ?? 0) === 0) {
         // Marker changed under us — a sibling owns the reclaim/claim now.
         continue;
       }
       logger.warn(
-        { userId: user.id, sessionId: marker.session_id, status: existing.status },
+        { userId: userId, sessionId: marker.session_id, status: existing.status },
         "checkout: reclaiming completed/expired/wrong-tier marker",
       );
       continue;
@@ -419,19 +441,19 @@ export async function POST(request: Request) {
     // Crashed-claim residue — fenced reclaim (identity: null session_id +
     // created_at) and retry once.
     logger.warn(
-      { userId: user.id, markerAgeMs },
+      { userId: userId, markerAgeMs },
       "checkout: reclaiming stale null-session marker",
     );
     const { data: reclaimed, error: delErr } = await service
       .from("pending_checkout_sessions")
       .delete()
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .is("session_id", null)
       .eq("created_at", marker.created_at)
       .select("user_id");
     if (delErr) {
       return checkoutError(delErr, "marker-reclaim-stale", {
-        userId: user.id,
+        userId: userId,
       });
     }
     if ((reclaimed?.length ?? 0) === 0) {

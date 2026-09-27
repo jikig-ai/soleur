@@ -1576,11 +1576,34 @@ run_suite() {
   _repo_last_suite="$label"
   local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
+  # #8940 — tee every suite's combined output into a per-suite file inside the
+  # session scratch root. The scratch root is deleted by
+  # _soleur_scratch_cleanup at run exit, which is exactly the loss window the
+  # issue names; a non-ok classification below copies the file to
+  # _durable_log_dir (outside the scratch root) and the summary line prints
+  # the durable path. Skipped/declined suites return before this point, so no
+  # artifact exists for a suite that never ran. When the scratch lib did not
+  # allocate a session root the tee is skipped and the suite runs bare — a
+  # missing log store must never change the run itself.
+  local _suite_log=""
+  if [[ -n "$_suite_log_dir" ]]; then
+    mkdir -p "$_suite_log_dir" 2>/dev/null || true
+    _suite_log="$_suite_log_dir/${label//\//__}.log"
+  fi
   # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
   # it discards WHICH non-zero the suite returned, which is precisely the
   # information needed to tell a terminated suite from a failed one.
+  # PIPESTATUS[0] reads the SUITE's rc through the tee — the pipeline's own rc
+  # would be tee's without pipefail. The `||` arm neutralises set -e AND pipefail
+  # in one shape; PIPESTATUS inside the `||` operand still names the pipeline.
   local rc=0
-  "$@" || rc=$?
+  if [[ -n "$_suite_log" ]]; then
+    _suite_log_in_flight="$_suite_log"
+    "$@" 2>&1 | tee "$_suite_log" || rc=${PIPESTATUS[0]}
+    _suite_log_in_flight=""
+  else
+    "$@" || rc=$?
+  fi
   # An ABORTING classifier is its own degradation and must not be absorbed into
   # the ordinary `failed` bucket: that would make a broken classifier — which can
   # mis-bucket every subsequent suite — indistinguishable from one honest test
@@ -1601,6 +1624,20 @@ run_suite() {
     *)      echo "WARNING: suite_exit_class returned unrecognized class '$status' for rc=$rc (classifier exit=$cls_rc); counting as FAILED." >&2
             status="failed"; failed=$((failed + 1)) ;;
   esac
+  # #8940 — retain a non-ok suite's tee'd log OUTSIDE the session scratch
+  # root: the scratch root is deleted at run exit, so a failure diagnosis
+  # that lives only inside it dies with the run. The durable path is printed
+  # on the suite's summary line below via `_log_field`; a suite that never
+  # produced output (skipped, declined, stillborn before the tee) has no
+  # file and prints no field.
+  local _log_field=""
+  if [[ "$status" != "ok" && -n "$_suite_log" && -f "$_suite_log" ]]; then
+    local _durable_path="$_durable_log_dir/${label//\//__}.log"
+    if mkdir -p "$_durable_log_dir" 2>/dev/null \
+       && cp "$_suite_log" "$_durable_path" 2>/dev/null; then
+      _log_field=" log=$_durable_path"
+    fi
+  fi
   # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
   # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
   # microseconds substring (a leading zero would otherwise trigger octal).
@@ -1646,7 +1683,7 @@ run_suite() {
     local _kb; _kb="$(_suite_budget_ms "$label")"
     local _bnote=""
     [[ -n "$_kb" ]] && _bnote=" This suite declares a ${_kb}ms budget, so compare the elapsed above against it before treating the duration as anomalous."
-    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}" >&2
+    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}${_log_field}" >&2
     printf '%s\t%d\tKILLED%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
     # rc 97 is the git-location tripwire (#7833), not an assertion failure. It means the runner
@@ -1657,10 +1694,10 @@ run_suite() {
     # "distinctive… attributable at a glance", and that was not true of the one runner in this repo
     # that classifies exit codes.
     if (( rc == 97 )); then
-      echo "[TRIPWIRE] $label (rc=97, ${elapsed_ms}ms) — the runner aborted on an inherited git-location environment; its coverage was NOT obtained. Fix the entry point that started it (see the FATAL block above for the exact unset), then re-run. This is not a failing assertion." >&2
+      echo "[TRIPWIRE] $label (rc=97, ${elapsed_ms}ms) — the runner aborted on an inherited git-location environment; its coverage was NOT obtained. Fix the entry point that started it (see the FATAL block above for the exact unset), then re-run. This is not a failing assertion.${_log_field}" >&2
       printf '%s\t%d\tTRIPWIRE%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     else
-      echo "[FAIL] $label (${elapsed_ms}ms)" >&2
+      echo "[FAIL] $label (${elapsed_ms}ms)${_log_field}" >&2
       printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     fi
   fi
@@ -2899,6 +2936,33 @@ _RUN_START_EPOCH="${EPOCHSECONDS:-0}"
 _ceiling_tripped=0
 _ceiling_declined=0
 
+# --- #8940 / #8993 state ---------------------------------------------------
+# Declared HERE, at top level, for the same splice-window reason as the
+# ceiling state above: run_suite and the EXIT trap live inside the region
+# sibling suites splice into their sandboxes, so a variable first assigned
+# below the acquire statement would be unbound there under `set -u`.
+#
+# _suite_log_in_flight: path of the tee'd log for the suite currently
+# executing — the EXIT trap retains it durably when the run dies mid-suite.
+# _RUN_WD_PID: the #8993 parent-death watchdog subshell; disarmed by the
+# EXIT trap. _durable_log_dir: outside the session scratch root so the
+# artifact survives `_soleur_scratch_cleanup`.
+_suite_log_in_flight=""
+_RUN_WD_PID=""
+_durable_log_dir="${SOLEUR_TEST_ALL_LOG_DIR:-${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs}/$(basename -- "$PWD")-$$-${EPOCHSECONDS:-0}"
+# Ownership, not presence: the exported SOLEUR_SCRATCH_SESSION_ROOT is
+# inherited by every nested runner a suite spawns (sandbox copies, fixture
+# invocations), and begin() deliberately keeps the parent's root for them.
+# A nested run taking the tee path would BOTH write into the parent's log
+# dir AND — measured — silently skip the else-branch the sandbox splices
+# replace (the affected suite asserted on missing RAN receipts precisely
+# this way). The allocating run is identified by the lib's own owner pid.
+_suite_log_dir=""
+if [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" \
+   && "${SOLEUR_SCRATCH_OWNER_PID:-}" == "$$" ]]; then
+  _suite_log_dir="${SOLEUR_SCRATCH_SESSION_ROOT}/suite-logs"
+fi
+
 # The ceiling is resolved ONCE, here, rather than re-parsed inside run_suite on each of its
 # ~194 invocations. Three defects collapse into this single evaluation:
 #
@@ -3010,7 +3074,43 @@ _enum_wd_disarm() {
     wait "$_ENUM_WD_PID" 2>/dev/null || true
   fi
 }
-trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm' EXIT
+
+# The #8993 run-path watchdog's disarm mirrors _enum_wd_disarm exactly: TERM,
+# a bounded stat!=Z poll for the live-trap exit, then KILL. Without it a
+# normal run's exit leaks the watchdog subshell's tracked sleep holding an
+# inherited stdout pipe open for up to _RUN_WD_POLL_S past process death —
+# the enumerate watchdog's own failure shape, one level up.
+_run_wd_disarm() {
+  if [[ -n "${_RUN_WD_PID:-}" ]]; then
+    kill "$_RUN_WD_PID" 2>/dev/null || true
+    local _d=0
+    while (( _d < 20 )) \
+      && kill -0 "$_RUN_WD_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_RUN_WD_PID" 2>/dev/null)" != Z* ]]; do
+      sleep 0.1; _d=$(( _d + 1 ))
+    done
+    kill -KILL "$_RUN_WD_PID" 2>/dev/null || true
+    wait "$_RUN_WD_PID" 2>/dev/null || true
+  fi
+}
+
+# #8940 — a run terminated MID-SUITE never reaches the classification block
+# that would copy the suite's tee'd log out of the scratch root, so the
+# trap is the only place that arm is reachable. Runs BEFORE
+# _soleur_scratch_cleanup in the trap chain — that cleanup deletes the
+# scratch root the source file lives in.
+_run_log_retain() {
+  local src="${_suite_log_in_flight:-}"
+  [[ -n "$src" && -f "$src" ]] || return 0
+  if mkdir -p "$_durable_log_dir" 2>/dev/null; then
+    local dst="$_durable_log_dir/$(basename -- "$src")"
+    if cp "$src" "$dst" 2>/dev/null; then
+      printf '[suite-log] mid-termination retention: %s\n' "$dst" >&2 || true
+    fi
+  fi
+  return 0
+}
+trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -3038,6 +3138,98 @@ trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _
 # verbatim in a comment takes the count above one and breaks every sandbox build before a single
 # assertion runs — which is why the prose above describes them instead of reproducing them.
 if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
+
+# --- Orphan watchdog, normal run path (#8993) --------------------------------
+#
+# The enumerate watchdog above covers --enumerate/--print-affected-set; the
+# NORMAL run path had no parent-death coverage at all — a runner orphaned
+# while QUEUED on the advisory lock, or mid-suite, kept running with nobody
+# to read the result and held the repo-global lock for the rest of its
+# suite list (observed: a lefthook-spawned run surviving its `git commit`
+# parent for hours, serializing every sibling worktree's gate behind it).
+#
+# Shape mirrors _ENUM_WATCHDOG, with two adaptations for a watch on the
+# PARENT rather than the runner itself:
+#   * $PPID is captured at SCRIPT scope — inside the watchdog subshell $PPID
+#     would be the runner, not its parent.
+#   * The parent's lstart is also captured at arm time and re-checked on every
+#     poll: a dead parent's pid can be RECYCLED by an unrelated process, and a
+#     recycled pid answers kill -0 with stat != Z — the lstart comparison is
+#     what closes that hole (the enumerate watchdog needed it only at fire
+#     time because its kill target is the runner, not the parent).
+# A zombie or reparented-dead parent fires the same way as a dead one:
+# `ps -o stat=` reports Z for an unreaped corpse.
+#
+# On fire: in-flight suite children are killed BEFORE the runner — a wedged
+# suite child inherits the lock fd (no CLOEXEC) so terminating the runner
+# alone releases nothing; killing children first is also what keeps the
+# suite's tee'd log writer from outliving the run. The child list is
+# snapshotted ONCE — after the runner dies the children reparent to init and
+# a second pgrep -P enumerates nothing. SOLEUR_TEST_ALL_WD_POLL_S pins the
+# poll interval for tests.
+_RUN_WD_POLL_S="${SOLEUR_TEST_ALL_WD_POLL_S:-1}"
+# 0 is not a valid floor — `sleep 0` busy-spins the poll into a CPU burn.
+[[ "$_RUN_WD_POLL_S" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_POLL_S >= 1 )) || _RUN_WD_POLL_S=1
+# Opt-out, stated rather than hidden: SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 skips the
+# arm for a caller that deliberately backgrounds this runner (a supervising
+# wrapper that must outlive the launcher). Silence here would make "watchdog
+# fired" and "watchdog never armed" indistinguishable.
+if [[ "${SOLEUR_TEST_ALL_ALLOW_ORPHAN:-}" == "1" ]]; then
+  printf '[contention] BANNER SOLEUR_TEST_ALL_ORPHAN_WATCHDOG_DISABLED — parent-death watchdog opted out via SOLEUR_TEST_ALL_ALLOW_ORPHAN=1; an orphaned run will hold the advisory lock until it finishes or is reaped.\n' >&2
+elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
+  _RUN_WD_TOP_PID=$$
+  _RUN_WD_PARENT_PID=$PPID
+  _RUN_WD_PARENT_LSTART="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+  _RUN_WD_TOP_LSTART="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+  (
+    _wd_sleep=""
+    # Nested bash's $PPID is THIS subshell's pid — the portable spelling
+    # (bash 3.2 lacks $BASHPID; the enumerate watchdog above uses the same
+    # idiom). Needed to exclude the watchdog itself from the child sweep.
+    _wd_self="$(bash -c 'echo "$PPID"')"
+    trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
+    # SIGPIPE must not kill the watchdog mid-fire: the run's stderr reader is
+    # often already gone on exactly the path that needs the kill.
+    trap '' PIPE
+    while :; do
+      # Parent liveness = alive AND not-zombie AND (when we captured a
+      # baseline) the SAME process — pid reuse after parent death must not
+      # read as "parent still alive".
+      kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null || break
+      _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+      [[ "$_wd_pstat" == Z* ]] && break
+      if [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
+        _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+        [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && break
+      fi
+      sleep "$_RUN_WD_POLL_S" & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+    done
+    # Parent is gone (or unverifiably recycled). Runner identity check before
+    # the kill — same pid-reuse discipline as the enumerate watchdog.
+    _wd_now="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+    if [[ -z "$_RUN_WD_TOP_LSTART" || -z "$_wd_now" \
+        || "$_wd_now" == "$_RUN_WD_TOP_LSTART" ]]; then
+      # Announce FIRST: the runner's own EXIT trap disarms this watchdog,
+      # so a printf issued after the runner's TERM races our own teardown.
+      printf 'ERROR: parent process gone — orphaned test-all run terminating itself and in-flight suite children (#8993)\n' >&2 || true
+      _wd_kids="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+      for _wd_kid in $_wd_kids; do
+        [[ "$_wd_kid" == "$_wd_self" ]] && continue
+        kill -TERM "$_wd_kid" 2>/dev/null || true
+      done
+      kill -TERM "$_RUN_WD_TOP_PID" 2>/dev/null || true
+      sleep 5 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+      kill -KILL "$_RUN_WD_TOP_PID" 2>/dev/null || true
+      for _wd_kid in $_wd_kids; do
+        [[ "$_wd_kid" == "$_wd_self" ]] && continue
+        kill -KILL "$_wd_kid" 2>/dev/null || true
+      done
+    fi
+  ) &
+  _RUN_WD_PID=$!
+fi
 
 tc_acquire "test-all"
 
@@ -4460,6 +4652,12 @@ if want_scripts; then
   # want_bun for the same reason as its neighbours — it shells out to python3 to build its
   # sandbox, and `test-scripts` is the shard documented as "bash + python3".
   run_suite "scripts/test-all-killed-classification" bash scripts/test-all-killed-classification.test.sh
+  # #8993 + #8940: the run-path parent-death watchdog and durable per-suite
+  # failure output. Drives sandbox copies (python3 splice, same builder
+  # discipline as killed-classification), sends real signals, and kills a
+  # real parent — the behaviour under test IS process supervision, so the
+  # fixtures are live processes, not mocked functions.
+  run_suite "scripts/test-all-orphan-log-retention" bash scripts/test-all-orphan-log-retention.test.sh
   # The #7545 pre-launch capacity signal: the verdict, --capacity, the wait
   # heartbeat and re-sample, and the diff-justification report. Registered
   # EXPLICITLY beside its neighbours for the same reason they state — repo-root

@@ -18,3 +18,55 @@ None. (Deepen agents ran sequential-fallback — no Task fan-out in this runtime
 - plugins/soleur/skills/plan/SKILL.md (phases 0-7)
 - plugins/soleur/skills/deepen-plan/SKILL.md (halt gates 4.5-4.11)
 - scripts/lint-guard-contract.py, markdownlint-cli2, gh CLI, live curl probes
+
+## Work Phase (2026-09-27)
+
+### Phase 0 — DONE
+- Probe re-run: PASS (5 cold + 1 warm, chromium workaround). Cold TTFB 2.5–43.4 s; measurement table posted to #8978 (comment-5855962627) + PR #9034.
+- Sentry spans named the tier: `check_my_revocation` 26.4–28.5 s, `resolveIdentity` `users`/`workspace_members` 20.7–37.5 s, `auth/v1/user` 3–6 s, `user_session_state` 12.5 s — all remote Supabase stalls, no queueing. Conditional in-surface probe skipped (0.3) — spans already discriminated.
+- `AbortSignal.timeout` available (smoke: `function true`).
+
+### Phase 1 — DONE (all arms fired)
+- Bounds: `SOLEUR_MW_RPC_TIMEOUT_MS` (8 s) on revocation RPC + T&C select via postgrest `abortSignal` → existing grace/`db_unavailable` arms; `op=revocation_gate.rpc_timeout` via `isAbortShapedError`.
+- `SOLEUR_MW_AUTH_TIMEOUT_MS` (10 s Promise.race) on `getUser()` — arm fired (recurring 2.6–4.9 s stalls); timeout → `!user`→/login; throws still propagate; `op=mw_auth.timeout`.
+- `SOLEUR_IDENTITY_SELECT_TIMEOUT_MS` (8 s) on `resolveIdentity` users/workspace_members → existing degrade arm.
+- Revocation in-flight dedup `Map<key, Promise>` (children share work, not verdicts; deleted on settle).
+- `server/supabase-edge-warmer.ts`: ~18 s bounded `GET /rest/v1/` anon-key tick, unref'd, failure-tolerant, ~6 min heartbeat. Wired in `server/index.ts` after boot checks.
+- ADR-253 second amendment committed.
+- Tests: `test/middleware.bounded-legs.test.ts` (8: timeout→grace/db_unavailable/login, dedup 6→1 RPC, census row-4) + `test/server/supabase-edge-warmer.test.ts` (6: never-throw, bounded, armed/disarmed, heartbeat) — all green; mock surfaces updated (rpc `abortSignal` wrapper, `eq` abortSignal pass-through, `mockQueryChain.abortSignal`).
+
+### Phase 3 — DONE (subagent dc5f5bd4)
+- 71 → 6 `auth.getUser` route files. ~65 migrated to `verifiedUserId(req)`.
+- Keepers: `repo/setup`, `workspace/{accept-invite,invite-member}` (user_metadata); `checkout`, `workspace/{decline-invite,pending-invites}` (email claim fast path, getUser fallback).
+- `test/server/route-getuser-census.test.ts` ratchets the 6-entry allowlist. `request-auth.ts` fails closed on `{data:null}`. tsc clean; 68 route test files green.
+
+### Phase 4 — DONE
+- `test-all.sh` run-path parent-death watchdog (pre-`tc_acquire` arm; zombie stat + lstart pid-reuse guards; children TERM'd before runner; `SOLEUR_TEST_ALL_ALLOW_ORPHAN=1` announced opt-out; EXIT-trap disarm).
+- #8940: `run_suite` tees into scratch root; non-ok classes copy to `SOLEUR_TEST_ALL_LOG_DIR`-overridable durable dir + `log=<path>` on summary lines; EXIT-trap retains in-flight logs before scratch cleanup.
+- `scripts/test-all-orphan-log-retention.test.sh`: 22 assertions, all green. Sibling suites re-verified: killed-classification 77, runtime-ceiling 23, test-contention 163.
+- Registered in the runner's explicit registration block.
+
+### Gate note
+- Commit gate degraded to MODE=full (runner-changed) → sibling-full-run refusal fired (3 sibling gates in flight); retried with `SOLEUR_ALLOW_FULL_GATE=1` per the banner's sanctioned override; gate queued ~26 min inside `tc_acquire` at write time. Watchdog observed armed+polling on the real run (production-shaped confirmation of the #8993 arm site).
+
+### Gate round-1 postmortem (all 6 reds root-caused + fixed)
+
+1. `scripts/test-all-affected` (every arm ran=0, missing rec-* files): the exported
+   `SOLEUR_SCRATCH_SESSION_ROOT` is inherited by nested runner sandboxes; my
+   `_suite_log_dir` keyed on presence → sandboxes took the NEW tee branch →
+   the splice-replaced `  "$@" || rc=$?` RAN-record else-branch never ran.
+   Fix: owner-gate — `_suite_log_dir` only when `SOLEUR_SCRATCH_OWNER_PID == $$`
+   (a nested run keeps the parent's root by design and must not tee into it).
+2. `scripts/test-all-killed-classification` AC9 byte-shape: same leak — sandbox
+   emitted `log=` on the [FAIL] line. Owner-gate restores the anchor path.
+3. `lint-orphan-test-suites` + mutations-a/b: new suite was UNCLASSIFIED →
+   registered `scripts/test-all-orphan-log-retention` as a runner-SUT
+   always-on suite in `test-affected-paths.sh`.
+4. `apps/web-platform [unit]` kb-security census: `hasInlineAuth` only
+   matched `supabase.auth.getUser` → accept `verifiedUserId(` (stronger check).
+5. Hermeticity: my test's sandbox invocations now `env -u` the three
+   SOLEUR_SCRATCH_* vars so they self-allocate under an outer gate.
+
+Re-verified under simulated inherited-root env: affected 43/43,
+killed-classification 77/77, orphan-log-retention 22/22, lint-orphan
+68+44+32, kb-security 10/10.

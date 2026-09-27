@@ -30,6 +30,7 @@ import { verifyPluginMountOnce } from "./plugin-mount-check";
 import { assertSingleReplicaInvariant } from "./single-replica-assertion";
 import { emitTeamWorkspaceInviteBootBreadcrumb } from "./team-workspace-boot";
 import { logGitDataHostKeyPinAtStartup } from "./git-data-replication";
+import { startSupabaseEdgeWarmer } from "./supabase-edge-warmer";
 import {
   buildHealthResponse,
   buildInternalMetricsResponse,
@@ -80,6 +81,10 @@ app.prepare().then(() => {
   // #7226 — one warn-level line (git_data_pin=present fp=SHA256:… | absent | invalid):
   // the positive evidence that this release loaded the git-data host-key pin. Never throws.
   logGitDataHostKeyPinAtStartup();
+  // #8978 — hold the Supabase edge (undici/TLS pool + PostgREST compute)
+  // warm between requests; Phase-0 spans measured 20–38 s cold-upstream
+  // stalls on per-request PostgREST/auth legs. Failure-tolerant, unref'd.
+  startSupabaseEdgeWarmer();
 
   const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);
