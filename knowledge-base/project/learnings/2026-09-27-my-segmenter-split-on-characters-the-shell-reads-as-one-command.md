@@ -145,6 +145,11 @@ original had closed.
     (pre-existing). Recovery: it now reports `<rc=N>`.
     - **Prevention:** a harness that treats empty output as the success verdict
       must also check the exit code.
+12. **The compound commit failed `lint-skill-body-budget`.** Routing a note to
+    `review/SKILL.md` took the file 311 bytes over its ceiling, because it had
+    about 19 bytes of headroom. Recovery: the note stays in this learning only.
+    - **Prevention:** before routing an edit to a large skill, run
+      `lint-skill-body-budget` on the target, or check its headroom.
 
 ## Tags
 category: security-issues
